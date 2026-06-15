@@ -142038,7 +142038,200 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
   const previousQueueLoadedScopeRaw = trimQueueStr(st.__queue_loaded_scope || st.__queue_scope || st.__queue_loaded_identity || '');
   const previousQueueLoadedScope = /^(timesheet|contract_week):/i.test(previousQueueLoadedScopeRaw) ? queueScope : previousQueueLoadedScopeRaw;
   const previousSelectionBelongsToOwnerIdentity = !isOwnerQueueRefresh || !previousQueueLoadedScope || previousQueueLoadedScope === queueScope;
-  const previousActiveId = previousSelectionBelongsToOwnerIdentity ? String(st.active_queue_id || '').trim() : '';
+  const shouldUseBulkProcessQueueAnchor = !!(
+    (ownerKind === 'bulk_process' || ownerState === bulkProcessState || options.preserve_last_viewed_queue === true || options.preserveLastViewedQueue === true) &&
+    !(ownerKind === 'bulk_authorise' || ownerState === bulkAuthoriseState)
+  );
+  const cleanQueueStorageKey = (value = '') => trimQueueStr(value).replace(/^\/+/, '');
+  const parseQueueMetaObject = (input) => {
+    if (!input) return {};
+    if (typeof input === 'string') {
+      try {
+        const parsed = JSON.parse(input);
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+    return (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
+  };
+  const getQueueRowIdentity = (rowInput = {}) => {
+    const row = (rowInput && typeof rowInput === 'object') ? rowInput : {};
+    const meta = parseQueueMetaObject(row.meta_json || row.metaJson || row.meta || row.queue_meta || row.queueMeta);
+    return trimQueueStr(
+      row.id ||
+      row.queue_id ||
+      row.queueId ||
+      row.manual_timesheet_queue_id ||
+      row.manualTimesheetQueueId ||
+      meta.id ||
+      meta.queue_id ||
+      meta.queueId ||
+      meta.manual_timesheet_queue_id ||
+      meta.manualTimesheetQueueId ||
+      ''
+    );
+  };
+  const getQueueRowStorageKey = (rowInput = {}) => {
+    const row = (rowInput && typeof rowInput === 'object') ? rowInput : {};
+    const meta = parseQueueMetaObject(row.meta_json || row.metaJson || row.meta || row.queue_meta || row.queueMeta);
+    return cleanQueueStorageKey(
+      row.storage_key ||
+      row.storageKey ||
+      row.file_key ||
+      row.fileKey ||
+      row.download_storage_key ||
+      row.downloadStorageKey ||
+      row.r2_key ||
+      row.r2Key ||
+      meta.storage_key ||
+      meta.storageKey ||
+      meta.file_key ||
+      meta.fileKey ||
+      meta.download_storage_key ||
+      meta.downloadStorageKey ||
+      meta.r2_key ||
+      meta.r2Key ||
+      ''
+    );
+  };
+  const parseQueueSelectionKey = (selectionKeyInput = '') => {
+    const raw = trimQueueStr(selectionKeyInput || '');
+    if (!raw || !raw.startsWith('queue|')) return null;
+    const parts = raw.split('|');
+    if ((parts[0] || '').toLowerCase() !== 'queue') return null;
+    const queueId = trimQueueStr(parts[1] || '');
+    const storageKey = cleanQueueStorageKey(parts.slice(2).join('|') || '');
+    if (!queueId || !storageKey) return null;
+    return { queue_id: queueId, storage_key: storageKey, selection_key: `queue|${queueId}|${storageKey}` };
+  };
+  const buildQueueSelectionKey = (rowInput = null, fallbackSelectionKey = '') => {
+    const parsed = parseQueueSelectionKey(fallbackSelectionKey || '');
+    const row = (rowInput && typeof rowInput === 'object') ? rowInput : {};
+    const queueId = getQueueRowIdentity(row) || parsed?.queue_id || '';
+    const storageKey = getQueueRowStorageKey(row) || parsed?.storage_key || '';
+    if (!queueId || !storageKey) return '';
+    return `queue|${queueId}|${storageKey}`;
+  };
+  const findQueueRowIndexByIdentity = (rowsInput = [], queueIdInput = '', storageKeyInput = '', allowIdOnly = false) => {
+    const rows = Array.isArray(rowsInput) ? rowsInput : [];
+    const queueId = trimQueueStr(queueIdInput || '');
+    const storageKey = cleanQueueStorageKey(storageKeyInput || '');
+    if (!queueId) return -1;
+    const exactIndex = rows.findIndex((row) => getQueueRowIdentity(row) === queueId && (!storageKey || getQueueRowStorageKey(row) === storageKey));
+    if (exactIndex >= 0 && (storageKey || allowIdOnly)) return exactIndex;
+    if (!storageKey && allowIdOnly) return rows.findIndex((row) => getQueueRowIdentity(row) === queueId);
+    return -1;
+  };
+  const normaliseQueueAnchor = (anchorInput = null) => {
+    if (!anchorInput || typeof anchorInput !== 'object') return null;
+    const parsed = parseQueueSelectionKey(anchorInput.selection_key || anchorInput.selectionKey || '');
+    const queueId = trimQueueStr(anchorInput.queue_id || anchorInput.queueId || anchorInput.active_queue_id || parsed?.queue_id || '');
+    const storageKey = cleanQueueStorageKey(anchorInput.storage_key || anchorInput.storageKey || anchorInput.active_queue_storage_key || anchorInput.activeQueueStorageKey || parsed?.storage_key || '');
+    const activeIndexRaw = anchorInput.index ?? anchorInput.active_queue_index ?? anchorInput.activeQueueIndex;
+    const index = Number.isFinite(Number(activeIndexRaw)) ? Number(activeIndexRaw) : -1;
+    const queueIdOrder = Array.isArray(anchorInput.queue_id_order)
+      ? anchorInput.queue_id_order.map((id) => trimQueueStr(id || '')).filter(Boolean)
+      : [];
+    const queueSelectionOrder = Array.isArray(anchorInput.queue_selection_order)
+      ? anchorInput.queue_selection_order.map((key) => parseQueueSelectionKey(key || '')?.selection_key || '').filter(Boolean)
+      : [];
+    if (!queueId && !storageKey && index < 0 && !queueIdOrder.length && !queueSelectionOrder.length) return null;
+    return {
+      queue_id: queueId,
+      storage_key: storageKey,
+      index,
+      selection_key: queueId && storageKey ? `queue|${queueId}|${storageKey}` : (parsed?.selection_key || ''),
+      queue_scope: trimQueueStr(anchorInput.queue_scope || anchorInput.queueScope || queueScope) || queueScope,
+      queue_id_order: queueIdOrder,
+      queue_selection_order: queueSelectionOrder
+    };
+  };
+  const findFirstQueueAnchor = (...anchors) => {
+    for (const anchor of anchors) {
+      const normalised = normaliseQueueAnchor(anchor);
+      if (normalised) return normalised;
+    }
+    return null;
+  };
+  const resolveAnchorToQueueRow = (rowsInput = [], anchorInput = null) => {
+    const rows = Array.isArray(rowsInput) ? rowsInput : [];
+    if (!rows.length) return { item: null, index: -1, reason: 'empty' };
+    const anchor = normaliseQueueAnchor(anchorInput);
+    if (!anchor) return { item: null, index: -1, reason: 'no-anchor' };
+    const exactIndex = findQueueRowIndexByIdentity(rows, anchor.queue_id, anchor.storage_key, !anchor.storage_key);
+    if (exactIndex >= 0) return { item: rows[exactIndex], index: exactIndex, reason: 'exact' };
+
+    let preferredIndex = Number.isFinite(Number(anchor.index)) ? Number(anchor.index) : -1;
+    if (preferredIndex < 0 && anchor.selection_key && Array.isArray(anchor.queue_selection_order)) {
+      preferredIndex = anchor.queue_selection_order.indexOf(anchor.selection_key);
+    }
+    if (preferredIndex < 0 && anchor.queue_id && Array.isArray(anchor.queue_id_order)) {
+      preferredIndex = anchor.queue_id_order.indexOf(anchor.queue_id);
+    }
+    if (preferredIndex >= 0 && rows[preferredIndex]) return { item: rows[preferredIndex], index: preferredIndex, reason: 'same-index-next' };
+    if (preferredIndex > 0) {
+      const previousIndex = Math.min(rows.length - 1, preferredIndex - 1);
+      if (rows[previousIndex]) return { item: rows[previousIndex], index: previousIndex, reason: 'previous-index' };
+    }
+    return { item: null, index: -1, reason: 'not-found' };
+  };
+  const rememberQueueAnchor = (itemInput = null, anchorOptions = {}) => {
+    if (!shouldUseBulkProcessQueueAnchor) return null;
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : null;
+    const optsAnchor = normaliseQueueAnchor(anchorOptions || {});
+    const queueId = getQueueRowIdentity(item || {}) || optsAnchor?.queue_id || '';
+    const storageKey = getQueueRowStorageKey(item || {}) || optsAnchor?.storage_key || '';
+    if (!queueId || !storageKey) return null;
+    const rows = Array.isArray(st.queue_rows) ? st.queue_rows : [];
+    const rowIndex = findQueueRowIndexByIdentity(rows, queueId, storageKey, false);
+    const explicitIndex = Number.isFinite(Number(anchorOptions?.index)) ? Number(anchorOptions.index) : -1;
+    const anchor = {
+      queue_id: queueId,
+      storage_key: storageKey,
+      index: rowIndex >= 0 ? rowIndex : explicitIndex,
+      selection_key: `queue|${queueId}|${storageKey}`,
+      queue_scope: queueScope,
+      queue_id_order: rows.map((row) => getQueueRowIdentity(row)).filter(Boolean),
+      queue_selection_order: rows.map((row) => buildQueueSelectionKey(row)).filter(Boolean),
+      captured_at: new Date().toISOString(),
+      reason: trimQueueStr(anchorOptions?.reason || 'queue-refresh') || 'queue-refresh'
+    };
+    const targets = [];
+    const addTarget = (target) => {
+      if (target && typeof target === 'object' && !targets.includes(target)) targets.push(target);
+    };
+    addTarget(st);
+    addTarget(ownerState);
+    addTarget(ownerState?.evidence_pane_state);
+    addTarget(window.modalCtx?.bulkProcessState?.evidence_pane_state);
+    for (const target of targets) {
+      target.__last_viewed_queue_anchor = { ...anchor };
+      target.__bulk_process_last_viewed_queue_anchor = { ...anchor };
+    }
+    return anchor;
+  };
+  const clearQueuePreviewSelectionIfQueue = () => {
+    const activeTab = trimQueueStr(st.active_tab || ownerState?.evidence_pane_state?.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const targetIsQueue = !!parseQueueSelectionKey(st.__preview_target_key || '');
+    const requestedIsQueue = !!parseQueueSelectionKey(st.__preview_load_requested_target_key || '');
+    if (activeTab !== 'queue' && !targetIsQueue && !requestedIsQueue) return;
+    st.__preview_target_key = '';
+    st.__preview_load_requested_target_key = '';
+    st.__preview_signed_url = '';
+    st.__preview_signed_url_stored_at_ms = 0;
+    st.__preview_signed_url_expires_at_ms = 0;
+  };
+  const previousQueueRows = Array.isArray(st.queue_rows) ? st.queue_rows : [];
+  const previousSelectionKey = buildQueueSelectionKey(st.active_queue_item || {}, st.__preview_target_key || st.__preview_load_requested_target_key || '');
+  const previousSelection = parseQueueSelectionKey(previousSelectionKey || '');
+  const previousActiveId = previousSelectionBelongsToOwnerIdentity
+    ? (previousSelection?.queue_id || getQueueRowIdentity(st.active_queue_item || {}) || trimQueueStr(st.active_queue_id || ''))
+    : '';
+  const previousActiveStorageKey = previousSelectionBelongsToOwnerIdentity
+    ? (previousSelection?.storage_key || getQueueRowStorageKey(st.active_queue_item || {}))
+    : '';
+  const previousActiveIndex = findQueueRowIndexByIdentity(previousQueueRows, previousActiveId, previousActiveStorageKey, true);
   const previousPage = Number(st.active_pdf_page || 1) || 1;
   const previousZoom = Number(st.active_zoom || 1) || 1;
   if (isOwnerQueueRefresh && !previousSelectionBelongsToOwnerIdentity) {
@@ -142052,21 +142245,24 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     st.__queue_loaded_identity = '';
   }
   const progressionContext = (previousSelectionBelongsToOwnerIdentity && st.__bulk_process_progression_context && typeof st.__bulk_process_progression_context === 'object')
-    ? {
-        queue_id_order: Array.isArray(st.__bulk_process_progression_context.queue_id_order)
-          ? st.__bulk_process_progression_context.queue_id_order.map((id) => String(id || '').trim()).filter(Boolean)
-          : [],
-        active_queue_id: String(st.__bulk_process_progression_context.active_queue_id || '').trim(),
-        active_queue_index: Number.isFinite(Number(st.__bulk_process_progression_context.active_queue_index))
-          ? Number(st.__bulk_process_progression_context.active_queue_index)
-          : -1,
-        active_queue_storage_key: String(st.__bulk_process_progression_context.active_queue_storage_key || '').trim()
-      }
+    ? normaliseQueueAnchor(st.__bulk_process_progression_context)
     : null;
+  const durableQueueAnchor = shouldUseBulkProcessQueueAnchor
+    ? findFirstQueueAnchor(
+        options.last_viewed_queue_anchor,
+        options.lastViewedQueueAnchor,
+        st.__last_viewed_queue_anchor,
+        st.__bulk_process_last_viewed_queue_anchor,
+        ownerState?.evidence_pane_state?.__last_viewed_queue_anchor,
+        ownerState?.evidence_pane_state?.__bulk_process_last_viewed_queue_anchor,
+        progressionContext,
+        { queue_id: previousActiveId, storage_key: previousActiveStorageKey, index: previousActiveIndex, selection_key: previousSelectionKey, queue_scope: queueScope }
+      )
+    : progressionContext;
   const queueSignatureFor = (rows) => JSON.stringify(
     (Array.isArray(rows) ? rows : []).map((row) => ({
-      id: String(row?.id || '').trim(),
-      r2_key: String(row?.r2_key || row?.storage_key || '').trim(),
+      id: getQueueRowIdentity(row),
+      storage_key: getQueueRowStorageKey(row),
       status: String(row?.status || '').trim(),
       rotation: Number(row?.last_rotation_deg || row?.rotation_degrees || row?.rotation_deg || 0) || 0,
       updated_at: String(row?.updated_at || row?.uploaded_at_utc || row?.created_at || '').trim()
@@ -142077,11 +142273,9 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
   const normalizeQueueItem = (row) => {
     const item = (row && typeof row === 'object') ? { ...(row || {}) } : {};
 
-    let meta = item.meta_json;
-    if (typeof meta === 'string') {
-      try { meta = JSON.parse(meta); } catch { meta = null; }
-    }
-    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) meta = {};
+    const meta = parseQueueMetaObject(item.meta_json || item.metaJson || item.meta || item.queue_meta || item.queueMeta);
+    const queueId = getQueueRowIdentity(item);
+    const storageKey = getQueueRowStorageKey(item);
 
     const filename =
       String(
@@ -142137,8 +142331,10 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
 
     return {
       ...item,
-      id: String(item.id || '').trim(),
-      r2_key: String(item.r2_key || '').trim() || null,
+      id: queueId,
+      queue_id: item.queue_id || item.queueId || queueId || null,
+      r2_key: storageKey || null,
+      storage_key: storageKey || null,
       original_filename: filename,
       filename,
       display_name: filename,
@@ -142205,51 +142401,9 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
   };
 
 
-  const chooseSamePositionOrPreviousItem = (rows) => {
-    if (!progressionContext || !Array.isArray(rows) || !rows.length) return null;
-    const preferredIndex = Number.isFinite(Number(progressionContext.active_queue_index))
-      ? Number(progressionContext.active_queue_index)
-      : -1;
-    if (preferredIndex < 0) return null;
-    if (rows[preferredIndex]) return rows[preferredIndex];
-    const previousIndex = Math.min(rows.length - 1, Math.max(0, preferredIndex - 1));
-    return rows[previousIndex] || rows[rows.length - 1] || null;
-  };
+  const chooseSamePositionOrPreviousItem = (rows) => resolveAnchorToQueueRow(rows, durableQueueAnchor).item || null;
 
-  const chooseNextRelativeItem = (rows) => {
-    if (!progressionContext || !Array.isArray(progressionContext.queue_id_order) || !progressionContext.queue_id_order.length) {
-      return null;
-    }
-    const nextMap = new Map();
-    for (const item of rows) {
-      const id = String(item?.id || '').trim();
-      if (id) nextMap.set(id, item);
-    }
-
-    let anchorIndex = progressionContext.active_queue_id
-      ? progressionContext.queue_id_order.indexOf(progressionContext.active_queue_id)
-      : -1;
-
-    if (anchorIndex < 0 && Number.isFinite(Number(progressionContext.active_queue_index)) && Number(progressionContext.active_queue_index) >= 0) {
-      anchorIndex = Number(progressionContext.active_queue_index);
-    }
-
-    if (anchorIndex < 0) return null;
-
-    for (let idx = anchorIndex + 1; idx < progressionContext.queue_id_order.length; idx += 1) {
-      const wantedId = String(progressionContext.queue_id_order[idx] || '').trim();
-      if (!wantedId) continue;
-      if (nextMap.has(wantedId)) return nextMap.get(wantedId);
-    }
-
-    for (let idx = Math.min(anchorIndex - 1, progressionContext.queue_id_order.length - 1); idx >= 0; idx -= 1) {
-      const wantedId = String(progressionContext.queue_id_order[idx] || '').trim();
-      if (!wantedId) continue;
-      if (nextMap.has(wantedId)) return nextMap.get(wantedId);
-    }
-
-    return null;
-  };
+  const chooseNextRelativeItem = (rows) => resolveAnchorToQueueRow(rows, progressionContext || durableQueueAnchor).item || null;
 
   const doRefresh = async () => {
     const res = await authFetch(API(`/api/manual-timesheet-queue?status=${encodeURIComponent(queueStatus)}`), {
@@ -142281,21 +142435,42 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
       return st;
     }
 
-    let nextActive =
-      previousActiveId
-        ? (normalizedRows.find((r) => String(r.id) === previousActiveId) || null)
-        : null;
+    let nextActive = null;
+    let nextActiveResolution = 'none';
+    if (previousActiveId) {
+      const exactIndex = findQueueRowIndexByIdentity(normalizedRows, previousActiveId, previousActiveStorageKey, !previousActiveStorageKey);
+      if (exactIndex >= 0) {
+        nextActive = normalizedRows[exactIndex] || null;
+        nextActiveResolution = 'previous-exact';
+      }
+    }
 
-    const usedRelativeProgression = !nextActive && !!previousActiveId && !!progressionContext;
-    if (!nextActive && usedRelativeProgression) {
+    if (!nextActive && durableQueueAnchor) {
+      const resolved = resolveAnchorToQueueRow(normalizedRows, durableQueueAnchor);
+      nextActive = resolved.item || null;
+      nextActiveResolution = resolved.reason || 'anchor';
+    }
+
+    if (!nextActive && progressionContext) {
       nextActive = chooseSamePositionOrPreviousItem(normalizedRows) || chooseNextRelativeItem(normalizedRows);
+      nextActiveResolution = nextActive ? 'progression' : nextActiveResolution;
     }
 
     if (!nextActive) {
       nextActive = normalizedRows[0] || null;
-      st.active_pdf_page = 1;
-      st.active_zoom = 1;
-    } else if (usedRelativeProgression && String(nextActive.id || '') !== previousActiveId) {
+      nextActiveResolution = nextActive ? 'first' : 'empty';
+    }
+
+    const nextActiveId = nextActive ? getQueueRowIdentity(nextActive) : '';
+    const nextActiveStorageKey = nextActive ? getQueueRowStorageKey(nextActive) : '';
+    const sameSelection = !!(
+      nextActive &&
+      previousActiveId &&
+      nextActiveId === previousActiveId &&
+      (!previousActiveStorageKey || nextActiveStorageKey === previousActiveStorageKey)
+    );
+
+    if (!nextActive || !sameSelection) {
       st.active_pdf_page = 1;
       st.active_zoom = 1;
     } else {
@@ -142303,7 +142478,6 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
       st.active_zoom = previousZoom;
     }
 
-    const nextActiveId = nextActive ? String(nextActive.id || '').trim() : '';
     const nextRotationDeg = nextActive ? (Number(nextActive.last_rotation_deg || 0) || 0) : 0;
     const nextPage = nextActive ? Number(st.active_pdf_page || 1) || 1 : 1;
     const nextZoom = nextActive ? Number(st.active_zoom || 1) || 1 : 1;
@@ -142311,6 +142485,7 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
       !force &&
       previousQueueSignature === normalizedQueueSignature &&
       String(previousActiveId || '') === String(nextActiveId || '') &&
+      String(previousActiveStorageKey || '') === String(nextActiveStorageKey || '') &&
       Number(previousPage || 1) === Number(nextPage || 1) &&
       Number(previousZoom || 1) === Number(nextZoom || 1) &&
       Number(st.active_rotation_deg || 0) === Number(nextRotationDeg || 0)
@@ -142327,6 +142502,7 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
         st.__queue_loading = false;
         st.__queue_last_error = '';
       }
+      if (nextActive) rememberQueueAnchor(nextActive, { index: findQueueRowIndexByIdentity(normalizedRows, nextActiveId, nextActiveStorageKey, true), reason: 'refresh-unchanged' });
       mirrorGlobalQueueStateToLiveOwnerPane();
       L('UNCHANGED RESULT', {
         queue_count: normalizedRows.length,
@@ -142345,10 +142521,12 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
       st.active_pdf_page = 1;
       st.active_zoom = 1;
       st.active_rotation_deg = 0;
+      clearQueuePreviewSelectionIfQueue();
     } else {
       st.active_queue_id = nextActiveId;
       st.active_queue_item = JSON.parse(JSON.stringify(nextActive));
       st.active_rotation_deg = nextRotationDeg;
+      rememberQueueAnchor(nextActive, { index: findQueueRowIndexByIdentity(normalizedRows, nextActiveId, nextActiveStorageKey, true), reason: `refresh-${nextActiveResolution || 'active'}` });
 
       if (!Number.isFinite(Number(st.active_pdf_page)) || Number(st.active_pdf_page) < 1) {
         st.active_pdf_page = 1;
@@ -142413,6 +142591,8 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     }
   }
 }
+
+
 
 async function wireTimesheetImportsViewer(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][IMPORTS][VIEWER]');
@@ -171053,7 +171233,6 @@ function bindBulkProcessManualEditor(state) {
 
 
 
-
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -171080,7 +171259,7 @@ function bindBulkProcessPreviewPane(state) {
           __queue_loaded: false,
           __queue_loaded_scope: 'global:QUEUED',
           __queue_scope: 'global:QUEUED',
-          __queue_loading_scope: '',
+          __queue_loading_ascope: '',
           __queue_count_loading_scope: '',
           __queue_loaded_identity: '',
           __queue_loading: false,
@@ -171417,6 +171596,164 @@ function bindBulkProcessPreviewPane(state) {
       pane.__queue_loaded === true &&
       trimStr(pane.__queue_loaded_scope || pane.__queue_scope || '').toLowerCase() === scope.toLowerCase()
     );
+  };
+
+  const parseQueuePreviewSelectionKeyForLastViewedAnchor = (selectionKeyInput = '') => {
+    const key = normalisePreviewSelectionKey(selectionKeyInput || '');
+    if (!key || !key.startsWith('queue|')) return null;
+    const parts = key.split('|');
+    const queueId = trimStr(parts[1] || '');
+    const storageKey = trimStr(parts.slice(2).join('|') || '').replace(/^\/+/, '');
+    if (!queueId || !storageKey) return null;
+    return { queueId, storageKey, selectionKey: `queue|${queueId}|${storageKey}` };
+  };
+
+  const getQueueRowIdentityForLastViewedAnchor = (itemInput = {}) => {
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+    const meta = parseBulkProcessPreviewEvidenceMeta(item);
+    return trimStr(
+      item.id ||
+      item.queue_id ||
+      item.queueId ||
+      item.manual_timesheet_queue_id ||
+      item.manualTimesheetQueueId ||
+      meta.id ||
+      meta.queue_id ||
+      meta.queueId ||
+      meta.manual_timesheet_queue_id ||
+      meta.manualTimesheetQueueId ||
+      ''
+    );
+  };
+
+  const buildQueueSelectionKeyForLastViewedAnchor = (itemInput = null, fallbackSelectionKey = '') => {
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : null;
+    const parsed = parseQueuePreviewSelectionKeyForLastViewedAnchor(fallbackSelectionKey || '');
+    const queueId = trimStr(getQueueRowIdentityForLastViewedAnchor(item || {}) || parsed?.queueId || '');
+    const storageKey = trimStr(resolvePreviewFileCacheKey(item || {}, parsed?.selectionKey || fallbackSelectionKey || '') || parsed?.storageKey || '').replace(/^\/+/, '');
+    if (!queueId || !storageKey) return '';
+    return buildPreviewSelectionKey('queue', queueId, storageKey);
+  };
+
+  const findQueueRowIndexForLastViewedAnchor = (rowsInput = [], queueIdInput = '', storageKeyInput = '') => {
+    const rows = Array.isArray(rowsInput) ? rowsInput : [];
+    const queueId = trimStr(queueIdInput || '');
+    const storageKey = trimStr(storageKeyInput || '').replace(/^\/+/, '');
+    if (!queueId || !storageKey) return -1;
+    return rows.findIndex((row) => getQueueRowIdentityForLastViewedAnchor(row) === queueId && resolvePreviewFileCacheKey(row) === storageKey);
+  };
+
+  const getLastViewedQueueAnchor = () => {
+    const anchors = [
+      pane.__last_viewed_queue_anchor,
+      pane.__bulk_process_last_viewed_queue_anchor,
+      st.__last_viewed_queue_anchor,
+      st.__bulk_process_last_viewed_queue_anchor
+    ];
+    for (const anchor of anchors) {
+      if (anchor && typeof anchor === 'object') return anchor;
+    }
+    return null;
+  };
+
+  const captureLastViewedQueueAnchor = (queueItemInput = null, anchorOptions = {}) => {
+    const opts = (anchorOptions && typeof anchorOptions === 'object') ? anchorOptions : {};
+    const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    let item = (queueItemInput && typeof queueItemInput === 'object') ? queueItemInput : null;
+    const parsedSelection = parseQueuePreviewSelectionKeyForLastViewedAnchor(opts.selectionKey || opts.selection_key || pane.__preview_target_key || pane.__preview_load_requested_target_key || '');
+    if (!item && parsedSelection) {
+      const idx = findQueueRowIndexForLastViewedAnchor(rows, parsedSelection.queueId, parsedSelection.storageKey);
+      if (idx >= 0) item = rows[idx] || null;
+    }
+    if (!item && pane.active_queue_item && typeof pane.active_queue_item === 'object') item = pane.active_queue_item;
+    const selectionKey = buildQueueSelectionKeyForLastViewedAnchor(item, parsedSelection?.selectionKey || opts.selectionKey || opts.selection_key || '');
+    const parsed = parseQueuePreviewSelectionKeyForLastViewedAnchor(selectionKey || parsedSelection?.selectionKey || '');
+    const queueId = trimStr(parsed?.queueId || getQueueRowIdentityForLastViewedAnchor(item || {}) || '');
+    const storageKey = trimStr(parsed?.storageKey || resolvePreviewFileCacheKey(item || {}, selectionKey) || '').replace(/^\/+/, '');
+    if (!queueId || !storageKey) return null;
+    const resolvedIndex = findQueueRowIndexForLastViewedAnchor(rows, queueId, storageKey);
+    const explicitIndex = Number.isFinite(Number(opts.index)) ? Number(opts.index) : -1;
+    const index = resolvedIndex >= 0 ? resolvedIndex : explicitIndex;
+    const queueScope = trimStr(opts.queueScope || opts.queue_scope || getPreviewQueueScope() || 'global:QUEUED') || 'global:QUEUED';
+    const queueIdOrder = rows.map((row) => getQueueRowIdentityForLastViewedAnchor(row)).filter(Boolean);
+    const queueSelectionOrder = rows.map((row) => buildQueueSelectionKeyForLastViewedAnchor(row)).filter(Boolean);
+    return {
+      queue_id: queueId,
+      storage_key: storageKey,
+      index,
+      selection_key: `queue|${queueId}|${storageKey}`,
+      queue_scope: queueScope,
+      queue_id_order: queueIdOrder,
+      queue_selection_order: queueSelectionOrder,
+      captured_at: new Date().toISOString(),
+      reason: trimStr(opts.reason || 'queue-preview') || 'queue-preview'
+    };
+  };
+
+  const rememberLastViewedQueueImage = (queueItemInput = null, anchorOptions = {}) => {
+    const opts = (anchorOptions && typeof anchorOptions === 'object') ? anchorOptions : {};
+    if (getPreviewOwnerKind() !== 'bulk_process' || isCurrentBulkAuthorisePreviewSurface()) return null;
+    const anchor = captureLastViewedQueueAnchor(queueItemInput, opts);
+    if (!anchor) return null;
+    pane.__last_viewed_queue_anchor = { ...anchor };
+    pane.__bulk_process_last_viewed_queue_anchor = { ...anchor };
+    st.__last_viewed_queue_anchor = { ...anchor };
+    st.__bulk_process_last_viewed_queue_anchor = { ...anchor };
+    return anchor;
+  };
+
+  const resolveLastViewedQueueAnchorRow = (rowsInput = [], anchorInput = null) => {
+    const rows = Array.isArray(rowsInput) ? rowsInput : [];
+    if (!rows.length) return { item: null, index: -1, reason: 'empty' };
+    const anchor = (anchorInput && typeof anchorInput === 'object') ? anchorInput : getLastViewedQueueAnchor();
+    if (!anchor) return { item: null, index: -1, reason: 'no-anchor' };
+    const queueId = trimStr(anchor.queue_id || anchor.queueId || '');
+    const storageKey = trimStr(anchor.storage_key || anchor.storageKey || '').replace(/^\/+/, '');
+    const exactIndex = findQueueRowIndexForLastViewedAnchor(rows, queueId, storageKey);
+    if (exactIndex >= 0) return { item: rows[exactIndex], index: exactIndex, reason: 'exact' };
+    const preferredIndex = Number.isFinite(Number(anchor.index)) ? Math.max(0, Number(anchor.index)) : -1;
+    if (preferredIndex >= 0 && rows[preferredIndex]) return { item: rows[preferredIndex], index: preferredIndex, reason: 'same-index-next' };
+    if (preferredIndex > 0) {
+      const previousIndex = Math.min(rows.length - 1, preferredIndex - 1);
+      if (rows[previousIndex]) return { item: rows[previousIndex], index: previousIndex, reason: 'previous-index' };
+    }
+    return { item: null, index: -1, reason: 'not-found' };
+  };
+
+  const restoreLastViewedQueueImage = (restoreOptions = {}) => {
+    const opts = (restoreOptions && typeof restoreOptions === 'object') ? restoreOptions : {};
+    if (getPreviewOwnerKind() !== 'bulk_process' || isCurrentBulkAuthorisePreviewSurface()) return null;
+    const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (activeTab !== 'queue' && opts.force !== true) return null;
+    const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    if (!rows.length) {
+      pane.active_queue_id = null;
+      pane.active_queue_item = null;
+      if (activeTab === 'queue') {
+        pane.__preview_target_key = '';
+        pane.__preview_load_requested_target_key = '';
+        pane.__preview_signed_url = '';
+        pane.__preview_signed_url_stored_at_ms = 0;
+        pane.__preview_signed_url_expires_at_ms = 0;
+      }
+      return null;
+    }
+    const resolved = resolveLastViewedQueueAnchorRow(rows, opts.anchor || null);
+    const item = resolved.item || null;
+    if (!item) return null;
+    const selectionKey = buildQueueSelectionKeyForLastViewedAnchor(item);
+    const queueId = getQueueRowIdentityForLastViewedAnchor(item);
+    if (!selectionKey || !queueId) return null;
+    const previousSelection = buildQueueSelectionKeyForLastViewedAnchor(pane.active_queue_item, pane.__preview_target_key || pane.__preview_load_requested_target_key || '');
+    pane.active_queue_id = queueId;
+    pane.active_queue_item = { ...(deep(item) || {}) };
+    if (previousSelection && previousSelection !== selectionKey) pane.active_pdf_page = 1;
+    pane.__queue_manual_override = true;
+    pane.__queue_manual_override_identity = '';
+    pane.__queue_manual_override_scope = getPreviewQueueScope();
+    if (opts.markRequested !== false) markPreviewLoadRequested(selectionKey);
+    rememberLastViewedQueueImage(item, { selectionKey, index: resolved.index, reason: opts.reason || resolved.reason || 'queue-anchor-restore' });
+    return pane.active_queue_item;
   };
 
   pane.__preview_presign_inflight = (pane.__preview_presign_inflight && typeof pane.__preview_presign_inflight === 'object') ? pane.__preview_presign_inflight : {};
@@ -172479,6 +172816,12 @@ function bindBulkProcessPreviewPane(state) {
     pane.__preview_last_committed_at = new Date().toISOString();
     pane.__preview_last_committed_selection_key = selectionKey;
     pane.__preview_last_committed_file_key = fileKey;
+    if (selectionKey.startsWith('queue|')) {
+      rememberLastViewedQueueImage(previewItem, {
+        selectionKey,
+        reason: opts.reason || 'preview-commit'
+      });
+    }
     pane.__preview_loading = false;
     pane.__preview_error = '';
     clearBulkAuthorisePendingAttachedForPreviewCommit(selectionKey);
@@ -173093,6 +173436,13 @@ function bindBulkProcessPreviewPane(state) {
   const markPreviewLoadRequested = (selectionKey = '') => {
     const key = trimStr(selectionKey || '');
     pane.__preview_load_requested_target_key = key || '__AUTO__';
+    const queueKey = normalisePreviewSelectionKey(key || '');
+    if (queueKey && queueKey.startsWith('queue|')) {
+      rememberLastViewedQueueImage(pane.active_queue_item || null, {
+        selectionKey: queueKey,
+        reason: 'preview-load-requested'
+      });
+    }
   };
 
   const isBulkAuthoriseLivePreviewTargetStillCurrent = (previewStateInput = null, selectionKeyInput = '', fileKeyInput = '', liveTargetOptions = {}) => {
@@ -173717,21 +174067,39 @@ function bindBulkProcessPreviewPane(state) {
     const previousItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
     const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
     if (activeTab !== 'queue') return previousItem || null;
-    const previousId = trimStr(pane.active_queue_id || previousItem?.id || previousItem?.queue_id || '');
     if (!queueLoadedForScope) {
       return previousItem || null;
     }
     const queueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
-    const wanted = previousId;
-    let active = wanted ? (queueRows.find((row) => trimStr(row?.id || row?.queue_id || '') === wanted) || null) : null;
+    if (!queueRows.length) {
+      restoreLastViewedQueueImage({ reason: 'sync-queue-empty' });
+      return null;
+    }
+
+    const previousSelectionKey = buildQueueSelectionKeyForLastViewedAnchor(previousItem, pane.__preview_target_key || pane.__preview_load_requested_target_key || '');
+    const previousParsed = parseQueuePreviewSelectionKeyForLastViewedAnchor(previousSelectionKey || '');
+    let active = previousParsed
+      ? (queueRows.find((row) => getQueueRowIdentityForLastViewedAnchor(row) === previousParsed.queueId && resolvePreviewFileCacheKey(row) === previousParsed.storageKey) || null)
+      : null;
+
+    if (!active) {
+      active = restoreLastViewedQueueImage({ reason: 'sync-queue-anchor', markRequested: false }) || null;
+      if (active) return pane.active_queue_item;
+    }
+
     if (!active) active = queueRows[0] || null;
     if (!active) {
       pane.active_queue_id = null;
       pane.active_queue_item = null;
       return null;
     }
-    pane.active_queue_id = trimStr(active.id || active.queue_id || '') || null;
+
+    pane.active_queue_id = getQueueRowIdentityForLastViewedAnchor(active) || null;
     pane.active_queue_item = { ...deep(active) };
+    rememberLastViewedQueueImage(pane.active_queue_item, {
+      selectionKey: buildQueueSelectionKeyForLastViewedAnchor(pane.active_queue_item),
+      reason: 'sync-queue-item'
+    });
     return pane.active_queue_item;
   };
 
@@ -174717,8 +175085,8 @@ function bindBulkProcessPreviewPane(state) {
     }
     if (activeTab === 'queue' && queueRows.length === 0) {
       return {
-        label: 'No images left in queue',
-        message: 'No images left in queue.'
+        label: 'No image available',
+        message: 'No image available'
       };
     }
     if (activeTab === 'attached' && attachedRows.length === 0) {
@@ -175764,23 +176132,32 @@ function bindBulkProcessPreviewPane(state) {
         return { mode, rows, idx, activeId: activeKey };
       }
       const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
-      const activeId = trimStr(pane.active_queue_id || getQueueRowIdentity(pane.active_queue_item || {}) || '');
-      const idx = rows.findIndex((item) => getQueueRowIdentity(item) === activeId);
-      return { mode, rows, idx, activeId };
+      const activeSelectionKey = buildQueueSelectionKeyForLastViewedAnchor(pane.active_queue_item || {}, pane.__preview_target_key || pane.__preview_load_requested_target_key || '');
+      const activeQueueId = trimStr(pane.active_queue_id || getQueueRowIdentityForLastViewedAnchor(pane.active_queue_item || {}) || getQueueRowIdentity(pane.active_queue_item || {}) || '');
+      const activeStorageKey = resolvePreviewFileCacheKey(pane.active_queue_item || {}, activeSelectionKey);
+      const idx = activeSelectionKey ? rows.findIndex((item) => buildQueueSelectionKeyForLastViewedAnchor(item) === activeSelectionKey) : -1;
+      return { mode, rows, idx, activeId: activeSelectionKey, activeQueueId, activeStorageKey };
     };
 
     const refreshQueueBeforeSourceNavigation = async (beforeSet = null) => {
       const before = beforeSet || getSourceSet();
       if (!before || before.mode !== 'queue' || typeof refreshTimesheetImportsQueue !== 'function') return getSourceSet();
-      const activeId = trimStr(before.activeId || pane.active_queue_id || '');
-      const activeStorageKey = resolvePreviewFileCacheKey(pane.active_queue_item || {}) || '';
+      const activeId = trimStr(before.activeQueueId || pane.active_queue_id || '');
+      const activeStorageKey = trimStr(before.activeStorageKey || resolvePreviewFileCacheKey(pane.active_queue_item || {}) || '').replace(/^\/+/, '');
       pane.__bulk_process_progression_context = {
         queue_id_order: (Array.isArray(before.rows) ? before.rows : []).map((row) => getQueueRowIdentity(row)).filter(Boolean),
+        queue_selection_order: (Array.isArray(before.rows) ? before.rows : []).map((row) => buildQueueSelectionKeyForLastViewedAnchor(row)).filter(Boolean),
         active_queue_id: activeId,
         active_queue_index: Number.isInteger(before.idx) ? before.idx : -1,
         active_queue_storage_key: activeStorageKey,
+        selection_key: trimStr(before.activeId || ''),
         reason: 'preview-source-nav'
       };
+      rememberLastViewedQueueImage(pane.active_queue_item || null, {
+        selectionKey: trimStr(before.activeId || ''),
+        index: Number.isInteger(before.idx) ? before.idx : -1,
+        reason: 'preview-source-nav-before-refresh'
+      });
       const queueScope = getPreviewQueueScope();
       await refreshTimesheetImportsQueue(pane, {
         ownerState: st,
@@ -175788,6 +176165,8 @@ function bindBulkProcessPreviewPane(state) {
         active_identity: getActiveIdentity(),
         queue_scope: queueScope,
         status: trimStr(queueScope.split(':')[1] || 'QUEUED').toUpperCase() || 'QUEUED',
+        last_viewed_queue_anchor: getLastViewedQueueAnchor(),
+        preserve_last_viewed_queue: true,
         suppressWhileBusy: false,
         force: true,
         allowWithoutActiveIdentity: true
@@ -175817,8 +176196,9 @@ function bindBulkProcessPreviewPane(state) {
         if (before.mode === 'queue') {
           live = await refreshQueueBeforeSourceNavigation(before);
           refreshedForQueue = true;
-          const beforeActiveId = trimStr(before.activeId || '');
-          const oldStillExists = !!(beforeActiveId && live.rows.some((row) => getQueueRowIdentity(row) === beforeActiveId));
+          const beforeActiveId = trimStr(before.activeQueueId || '');
+          const beforeStorageKey = trimStr(before.activeStorageKey || '').replace(/^\/+/, '');
+          const oldStillExists = !!(beforeActiveId && beforeStorageKey && live.rows.some((row) => getQueueRowIdentityForLastViewedAnchor(row) === beforeActiveId && resolvePreviewFileCacheKey(row) === beforeStorageKey));
           if (!oldStillExists && live.idx >= 0) {
             await rerenderWorkbench('preview-source-nav-reconciled');
             return;
@@ -175846,8 +176226,9 @@ function bindBulkProcessPreviewPane(state) {
           pane.__active_attached_preview_target = nextSelectionKey;
           markPreviewLoadRequested(nextSelectionKey);
         } else {
-          const nextId = getQueueRowIdentity(next);
-          if (!nextId || nextId === trimStr(pane.active_queue_id || '')) return;
+          const nextId = getQueueRowIdentityForLastViewedAnchor(next) || getQueueRowIdentity(next);
+          const nextSelectionKey = buildQueueSelectionKeyForLastViewedAnchor(next) || getSelectionSignature('queue', next);
+          if (!nextId || !nextSelectionKey || nextSelectionKey === buildQueueSelectionKeyForLastViewedAnchor(pane.active_queue_item || {}, pane.__preview_target_key || pane.__preview_load_requested_target_key || '')) return;
           pane.active_tab = 'queue';
           pane.__attached_manual_override = false;
           pane.__queue_manual_override = true;
@@ -175856,7 +176237,12 @@ function bindBulkProcessPreviewPane(state) {
           pane.active_queue_id = nextId;
           pane.active_queue_item = { ...(deep(next) || {}) };
           pane.active_pdf_page = 1;
-          markPreviewLoadRequested(getSelectionSignature('queue', next));
+          rememberLastViewedQueueImage(pane.active_queue_item, {
+            selectionKey: nextSelectionKey,
+            index: live.idx + delta,
+            reason: 'preview-source-nav-select'
+          });
+          markPreviewLoadRequested(nextSelectionKey);
         }
         await rerenderWorkbench('preview-source-nav');
       });
@@ -176879,6 +177265,12 @@ function bindBulkProcessPreviewPane(state) {
 
     const previewFileCacheKey = fileKey;
     const previewSelectionKey = buildPreviewSelectionKey(previewState.activeTab, previewTargetId, previewFileCacheKey);
+    if (previewState.activeTab === 'queue' && previewSelectionKey) {
+      rememberLastViewedQueueImage(previewItem, {
+        selectionKey: previewSelectionKey,
+        reason: 'preview-render-stage'
+      });
+    }
     const previewRenderKey = `${previewSelectionKey}|p:${activePage}|r:${rotationDeg}|z:${zoom}`;
     const previewUrl = isPdf ? `${trimStr(pane.__preview_signed_url || '')}#page=${activePage}&zoom=page-width` : '';
 
@@ -177684,6 +178076,8 @@ function bindBulkProcessPreviewPane(state) {
     warnPreview('bind failed', e);
   });
 }
+
+
 
 
 function renderBulkProcessDockedEvidenceViewer(state) {
@@ -179790,26 +180184,71 @@ function renderBulkProcessEvidencePane(state) {
     const parts = key.split('|');
     return { key, queueId: trimStr(parts[1] || ''), storageKey: trimStr(parts.slice(2).join('|') || '').replace(/^\/+/, '') };
   };
+  const buildRenderQueueSelectionKey = (itemInput = {}) => {
+    const queueId = getRenderQueueId(itemInput);
+    const storageKey = getRenderEvidenceFileKey(itemInput);
+    if (!queueId || !storageKey) return '';
+    return `queue|${queueId}|${storageKey}`;
+  };
   const resolveDisplayedQueueRowForRender = () => {
-    if (!queueLoadedForScope || activeTab !== 'queue') return { item: null, index: -1, total: queueRows.length, selectionKey: '' };
-    const target = parseRenderQueueSelectionKey(pane.__preview_target_key || '');
-    const requested = parseRenderQueueSelectionKey(pane.__preview_load_requested_target_key || '');
-    const signedUrl = trimStr(pane.__preview_signed_url || '');
-    if (!target || !signedUrl) return { item: null, index: -1, total: queueRows.length, selectionKey: target?.key || '' };
-    if (requested && requested.key && requested.key !== target.key) return { item: null, index: -1, total: queueRows.length, selectionKey: target.key };
-    const activeQueueId = trimStr(pane.active_queue_id || '');
-    if (activeQueueId && activeQueueId !== target.queueId) return { item: null, index: -1, total: queueRows.length, selectionKey: target.key };
+    const total = queueRows.length;
+    if (!queueLoadedForScope || activeTab !== 'queue') return { item: null, index: -1, total, selectionKey: '' };
+
+    const findByIdentity = (identityInput = null) => {
+      const identity = identityInput && typeof identityInput === 'object' ? identityInput : null;
+      const queueId = trimStr(identity?.queueId || identity?.queue_id || '');
+      const storageKey = trimStr(identity?.storageKey || identity?.storage_key || '').replace(/^\/+/, '');
+      if (!queueId || !storageKey) return { item: null, index: -1, selectionKey: identity?.key || '' };
+      const index = queueRows.findIndex((item) => getRenderQueueId(item) === queueId && getRenderEvidenceFileKey(item) === storageKey);
+      if (index < 0) return { item: null, index: -1, selectionKey: identity?.key || `queue|${queueId}|${storageKey}` };
+      return { item: queueRows[index], index, selectionKey: `queue|${queueId}|${storageKey}` };
+    };
+
     const activeItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    const candidates = [];
+    const pushCandidate = (candidate) => {
+      if (!candidate) return;
+      const key = normaliseRenderQueueSelectionKey(candidate.key || '');
+      const parsed = key ? parseRenderQueueSelectionKey(key) : null;
+      const queueId = trimStr(candidate.queueId || candidate.queue_id || parsed?.queueId || '');
+      const storageKey = trimStr(candidate.storageKey || candidate.storage_key || parsed?.storageKey || '').replace(/^\/+/, '');
+      if (!queueId || !storageKey) return;
+      const normalized = { queueId, storageKey, key: `queue|${queueId}|${storageKey}`, source: candidate.source || '' };
+      if (!candidates.some((item) => item.key === normalized.key)) candidates.push(normalized);
+    };
+
+    pushCandidate({ ...parseRenderQueueSelectionKey(pane.__preview_target_key || ''), source: 'preview-target' });
+    pushCandidate({ ...parseRenderQueueSelectionKey(pane.__preview_load_requested_target_key || ''), source: 'preview-requested' });
     if (activeItem) {
-      const activeItemId = getRenderQueueId(activeItem);
-      const activeItemStorageKey = getRenderEvidenceFileKey(activeItem);
-      if ((activeItemId && activeItemId !== target.queueId) || (activeItemStorageKey && activeItemStorageKey !== target.storageKey)) {
-        return { item: null, index: -1, total: queueRows.length, selectionKey: target.key };
-      }
+      pushCandidate({
+        queueId: trimStr(pane.active_queue_id || getRenderQueueId(activeItem) || ''),
+        storageKey: getRenderEvidenceFileKey(activeItem),
+        key: buildRenderQueueSelectionKey({ ...activeItem, id: trimStr(pane.active_queue_id || getRenderQueueId(activeItem) || '') || getRenderQueueId(activeItem) }),
+        source: 'active-queue-item'
+      });
     }
-    const index = queueRows.findIndex((item) => getRenderQueueId(item) === target.queueId && getRenderEvidenceFileKey(item) === target.storageKey);
-    if (index < 0) return { item: null, index: -1, total: queueRows.length, selectionKey: target.key };
-    return { item: queueRows[index], index, total: queueRows.length, selectionKey: target.key };
+
+    const anchor = [
+      pane.__last_viewed_queue_anchor,
+      pane.__bulk_process_last_viewed_queue_anchor,
+      st.__last_viewed_queue_anchor,
+      st.__bulk_process_last_viewed_queue_anchor
+    ].find((item) => item && typeof item === 'object') || null;
+    if (anchor) {
+      pushCandidate({
+        queueId: anchor.queue_id || anchor.queueId || '',
+        storageKey: anchor.storage_key || anchor.storageKey || '',
+        key: anchor.selection_key || anchor.selectionKey || '',
+        source: 'last-viewed-anchor'
+      });
+    }
+
+    for (const candidate of candidates) {
+      const resolved = findByIdentity(candidate);
+      if (resolved.index >= 0) return { ...resolved, total };
+    }
+
+    return { item: null, index: -1, total, selectionKey: candidates[0]?.key || '' };
   };
   const displayedQueueRenderState = resolveDisplayedQueueRowForRender();
   const activeQueueItem = displayedQueueRenderState.item || null;
@@ -179822,6 +180261,8 @@ function renderBulkProcessEvidencePane(state) {
             ? `0/${Number(fallbackKnownQueueCount)}`
             : 'Not loaded'));
   const queueNavEnabled = !!(activeTab === 'queue' && queueLoadedForScope && !queueLoading && activeQueueItem && displayedQueueIndex >= 0);
+  const queuePrevEnabled = !!(queueNavEnabled && displayedQueueIndex > 0);
+  const queueNextEnabled = !!(queueNavEnabled && displayedQueueIndex < queueRows.length - 1);
 
   const getRenderAttachedId = (itemInput = {}) => {
     const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
@@ -180320,8 +180761,8 @@ function renderBulkProcessEvidencePane(state) {
     <div class="card" id="bulkProcessEvidencePaneRoot" style="padding:6px 7px;overflow:visible;">
       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:center;">
         <div style="display:flex;gap:5px;align-items:center;justify-content:flex-start;flex-wrap:wrap;">
-          <button type="button" class="btn btn-outline" id="bpQueuePrevBtn" ${queueNavEnabled ? '' : 'disabled'}>Previous</button>
-          <button type="button" class="btn btn-outline" id="bpQueueNextBtn" ${queueNavEnabled ? '' : 'disabled'}>Next</button>
+          <button type="button" class="btn btn-outline" id="bpQueuePrevBtn" ${queuePrevEnabled ? '' : 'disabled'}>Previous</button>
+          <button type="button" class="btn btn-outline" id="bpQueueNextBtn" ${queueNextEnabled ? '' : 'disabled'}>Next</button>
           <span class="mini" style="opacity:.85;">${activeTab === 'attached' ? `Attached evidence - ${enc(String(attachedRows.length || 0))}` : `Images in Queue ${enc(queueCountLabel)}`}</span>
         </div>
         <div role="tablist" aria-label="Evidence source" style="display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;">
@@ -180348,8 +180789,6 @@ function renderBulkProcessEvidencePane(state) {
     </div>
   `);
 }
-
-
 
 
 function ensureBulkAuthoriseManualDraftState(state) {
@@ -181821,7 +182260,6 @@ function ensureBulkAuthoriseManualDraftState(state) {
 }
 
 
-
 function bindBulkProcessEvidencePane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -182114,6 +182552,164 @@ function bindBulkProcessEvidencePane(state) {
     const fileKey = cleanAttachedEvidenceFileKey(parts.slice(2).join('|') || '');
     if (!fileKey) return '';
     return `attached|${targetId || fileKey}|${fileKey}`;
+  };
+
+  const parseQueuePreviewSelectionKeyForEvidencePaneAnchor = (selectionKeyInput = '') => {
+    const raw = trimStr(selectionKeyInput || '');
+    if (!raw || raw === '__AUTO__') return null;
+    const parts = raw.split('|');
+    const tab = trimStr(parts[0] || '').toLowerCase();
+    if (tab !== 'queue') return null;
+    const queueId = trimStr(parts[1] || '');
+    const storageKey = cleanAttachedEvidenceFileKey(parts.slice(2).join('|') || '');
+    if (!queueId || !storageKey) return null;
+    return { queueId, storageKey, selectionKey: `queue|${queueId}|${storageKey}` };
+  };
+
+  const getQueueItemIdForLastViewedAnchor = (itemInput = {}) => {
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+    const meta = parseEvidenceMetaObject(item.meta_json || item.metaJson || item.meta || item.queue_meta || item.queueMeta);
+    return pickFirst(
+      item.id,
+      item.queue_id,
+      item.queueId,
+      item.manual_timesheet_queue_id,
+      item.manualTimesheetQueueId,
+      meta.id,
+      meta.queue_id,
+      meta.queueId,
+      meta.manual_timesheet_queue_id,
+      meta.manualTimesheetQueueId
+    );
+  };
+
+  const buildQueuePreviewSelectionKeyForEvidencePaneAnchor = (itemInput = null, fallbackSelectionKey = '') => {
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : null;
+    const parsed = parseQueuePreviewSelectionKeyForEvidencePaneAnchor(fallbackSelectionKey || '');
+    const queueId = getQueueItemIdForLastViewedAnchor(item || {}) || parsed?.queueId || '';
+    const storageKey = getAttachedEvidenceFileKey(item || {}) || parsed?.storageKey || '';
+    if (!queueId || !storageKey) return '';
+    return `queue|${queueId}|${storageKey}`;
+  };
+
+  const findQueueRowIndexForEvidencePaneAnchor = (rowsInput = [], queueIdInput = '', storageKeyInput = '') => {
+    const rows = Array.isArray(rowsInput) ? rowsInput : [];
+    const queueId = trimStr(queueIdInput || '');
+    const storageKey = cleanAttachedEvidenceFileKey(storageKeyInput || '');
+    if (!queueId || !storageKey) return -1;
+    return rows.findIndex((row) => getQueueItemIdForLastViewedAnchor(row) === queueId && getAttachedEvidenceFileKey(row) === storageKey);
+  };
+
+  const getQueueScopeForEvidencePaneAnchor = () => {
+    const status = upper(pane.__queue_status || 'QUEUED') || 'QUEUED';
+    const raw = trimStr(pane.__queue_scope || pane.__queue_loaded_scope || `global:${status}`) || `global:${status}`;
+    return raw.toLowerCase().startsWith('global:') ? raw : `global:${upper(raw) || status}`;
+  };
+
+  const getLastViewedQueueAnchorForEvidencePane = () => {
+    const anchors = [
+      pane.__last_viewed_queue_anchor,
+      pane.__bulk_process_last_viewed_queue_anchor,
+      st.__last_viewed_queue_anchor,
+      st.__bulk_process_last_viewed_queue_anchor
+    ];
+    for (const anchor of anchors) {
+      if (anchor && typeof anchor === 'object') return anchor;
+    }
+    return null;
+  };
+
+  const rememberLastViewedQueueItemForEvidencePane = (queueItemInput = null, anchorOptions = {}) => {
+    if (isBulkAuthoriseContext) return null;
+    const opts = (anchorOptions && typeof anchorOptions === 'object') ? anchorOptions : {};
+    const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    let item = (queueItemInput && typeof queueItemInput === 'object') ? queueItemInput : null;
+    const parsedSelection = parseQueuePreviewSelectionKeyForEvidencePaneAnchor(opts.selectionKey || opts.selection_key || pane.__preview_target_key || pane.__preview_load_requested_target_key || '');
+    if (!item && parsedSelection) {
+      const idx = findQueueRowIndexForEvidencePaneAnchor(rows, parsedSelection.queueId, parsedSelection.storageKey);
+      if (idx >= 0) item = rows[idx] || null;
+    }
+    if (!item && pane.active_queue_item && typeof pane.active_queue_item === 'object') item = pane.active_queue_item;
+    const selectionKey = buildQueuePreviewSelectionKeyForEvidencePaneAnchor(item, parsedSelection?.selectionKey || opts.selectionKey || opts.selection_key || '');
+    const parsed = parseQueuePreviewSelectionKeyForEvidencePaneAnchor(selectionKey || parsedSelection?.selectionKey || '');
+    const queueId = trimStr(parsed?.queueId || getQueueItemIdForLastViewedAnchor(item || {}) || '');
+    const storageKey = cleanAttachedEvidenceFileKey(parsed?.storageKey || getAttachedEvidenceFileKey(item || {}) || '');
+    if (!queueId || !storageKey) return null;
+    const rowIndex = findQueueRowIndexForEvidencePaneAnchor(rows, queueId, storageKey);
+    const explicitIndex = Number.isFinite(Number(opts.index)) ? Number(opts.index) : -1;
+    const anchor = {
+      queue_id: queueId,
+      storage_key: storageKey,
+      index: rowIndex >= 0 ? rowIndex : explicitIndex,
+      selection_key: `queue|${queueId}|${storageKey}`,
+      queue_scope: trimStr(opts.queueScope || opts.queue_scope || getQueueScopeForEvidencePaneAnchor() || 'global:QUEUED') || 'global:QUEUED',
+      queue_id_order: rows.map((row) => getQueueItemIdForLastViewedAnchor(row)).filter(Boolean),
+      queue_selection_order: rows.map((row) => buildQueuePreviewSelectionKeyForEvidencePaneAnchor(row)).filter(Boolean),
+      captured_at: new Date().toISOString(),
+      reason: trimStr(opts.reason || 'evidence-pane-queue') || 'evidence-pane-queue'
+    };
+    pane.__last_viewed_queue_anchor = { ...anchor };
+    pane.__bulk_process_last_viewed_queue_anchor = { ...anchor };
+    st.__last_viewed_queue_anchor = { ...anchor };
+    st.__bulk_process_last_viewed_queue_anchor = { ...anchor };
+    return anchor;
+  };
+
+  const resolveLastViewedQueueRowForEvidencePane = (rowsInput = [], anchorInput = null) => {
+    const rows = Array.isArray(rowsInput) ? rowsInput : [];
+    if (!rows.length) return { item: null, index: -1, reason: 'empty' };
+    const anchor = (anchorInput && typeof anchorInput === 'object') ? anchorInput : getLastViewedQueueAnchorForEvidencePane();
+    if (!anchor) return { item: null, index: -1, reason: 'no-anchor' };
+    const queueId = trimStr(anchor.queue_id || anchor.queueId || '');
+    const storageKey = cleanAttachedEvidenceFileKey(anchor.storage_key || anchor.storageKey || '');
+    const exactIndex = findQueueRowIndexForEvidencePaneAnchor(rows, queueId, storageKey);
+    if (exactIndex >= 0) return { item: rows[exactIndex], index: exactIndex, reason: 'exact' };
+    const preferredIndex = Number.isFinite(Number(anchor.index)) ? Math.max(0, Number(anchor.index)) : -1;
+    if (preferredIndex >= 0 && rows[preferredIndex]) return { item: rows[preferredIndex], index: preferredIndex, reason: 'same-index-next' };
+    if (preferredIndex > 0) {
+      const previousIndex = Math.min(rows.length - 1, preferredIndex - 1);
+      if (rows[previousIndex]) return { item: rows[previousIndex], index: previousIndex, reason: 'previous-index' };
+    }
+    return { item: null, index: -1, reason: 'not-found' };
+  };
+
+  const restoreLastViewedQueueItemForEvidencePane = (restoreOptions = {}) => {
+    if (isBulkAuthoriseContext) return null;
+    const opts = (restoreOptions && typeof restoreOptions === 'object') ? restoreOptions : {};
+    const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (!rows.length) {
+      pane.active_queue_id = null;
+      pane.active_queue_item = null;
+      if (activeTab === 'queue' || opts.forceClearPreview === true) {
+        pane.__preview_target_key = '';
+        pane.__preview_load_requested_target_key = '';
+        pane.__preview_signed_url = '';
+        pane.__preview_signed_url_stored_at_ms = 0;
+        pane.__preview_signed_url_expires_at_ms = 0;
+      }
+      return null;
+    }
+    const resolved = resolveLastViewedQueueRowForEvidencePane(rows, opts.anchor || null);
+    const item = resolved.item || null;
+    if (!item) return null;
+    const queueId = getQueueItemIdForLastViewedAnchor(item);
+    const selectionKey = buildQueuePreviewSelectionKeyForEvidencePaneAnchor(item);
+    if (!queueId || !selectionKey) return null;
+    const previousSelectionKey = buildQueuePreviewSelectionKeyForEvidencePaneAnchor(pane.active_queue_item || {}, pane.__preview_target_key || pane.__preview_load_requested_target_key || '');
+    pane.active_queue_id = queueId;
+    pane.active_queue_item = { ...(deep(item) || {}) };
+    if (previousSelectionKey && previousSelectionKey !== selectionKey) pane.active_pdf_page = 1;
+    pane.__queue_manual_override = true;
+    pane.__queue_manual_override_identity = '';
+    pane.__queue_manual_override_scope = getQueueScopeForEvidencePaneAnchor();
+    if (opts.markRequested !== false) pane.__preview_load_requested_target_key = selectionKey;
+    rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item, {
+      selectionKey,
+      index: resolved.index,
+      reason: opts.reason || resolved.reason || 'queue-anchor-restore'
+    });
+    return pane.active_queue_item;
   };
 
   const isAttachedEvidenceFallbackRow = (item) => !!(
@@ -182443,6 +183039,7 @@ function bindBulkProcessEvidencePane(state) {
     if ((!item || !getAttachedEvidenceFileKey(item)) && opts.allowFirst !== false) item = fallbackRows[0] || null;
     if (!item || (!isBulkAuthoriseContext && !getAttachedEvidenceFileKey(item))) {
       if (opts.forceAttached === true) {
+        rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item || null, { reason: 'select-attached-empty-before-switch' });
         pane.active_tab = 'attached';
         pane.active_attached_id = null;
         pane.active_attached_item = null;
@@ -182472,6 +183069,7 @@ function bindBulkProcessEvidencePane(state) {
     if (!selectedTargetId || !selectedFileKey || !selectedSelectionKey) return null;
 
     const previousTarget = normaliseAttachedPreviewSelectionKey(pane.__active_attached_preview_target || pane.__preview_target_key || '');
+    rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item || null, { reason: 'select-attached-before-switch' });
     pane.active_tab = 'attached';
     pane.active_attached_id = selectedTargetId || null;
     pane.active_attached_item = { ...deep(selected) };
@@ -182976,6 +183574,8 @@ function bindBulkProcessEvidencePane(state) {
         active_identity: activeIdentity,
         queue_scope: queueScope,
         status: trimStr(queueScope.split(':')[1] || 'QUEUED').toUpperCase() || 'QUEUED',
+        last_viewed_queue_anchor: getLastViewedQueueAnchorForEvidencePane(),
+        preserve_last_viewed_queue: !isBulkAuthoriseContext,
         suppressWhileBusy: true,
         force: !!opts.force,
         allowWithoutActiveIdentity: queueScope.toLowerCase().startsWith('global:')
@@ -183011,33 +183611,57 @@ function bindBulkProcessEvidencePane(state) {
     }
 
     pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
-    const wanted = trimStr(pane.active_queue_id || previewBefore.active_queue_id || '');
-    let active = wanted ? (pane.queue_rows.find((x) => trimStr(x?.id || x?.queue_id || '') === wanted) || null) : null;
+    const requestedQueueSelection = buildQueuePreviewSelectionKeyForEvidencePaneAnchor(
+      pane.active_queue_item || previewBefore.active_queue_item || {},
+      pane.__preview_target_key || pane.__preview_load_requested_target_key || previewBefore.__preview_target_key || previewBefore.__preview_load_requested_target_key || ''
+    );
+    const requestedQueue = parseQueuePreviewSelectionKeyForEvidencePaneAnchor(requestedQueueSelection || '');
+    let active = requestedQueue
+      ? (pane.queue_rows.find((row) => getQueueItemIdForLastViewedAnchor(row) === requestedQueue.queueId && getAttachedEvidenceFileKey(row) === requestedQueue.storageKey) || null)
+      : null;
+
+    if (!pane.queue_rows.length) {
+      restoreLastViewedQueueItemForEvidencePane({ reason: 'sync-queue-empty', forceClearPreview: true });
+      return { didLoad, active: null, empty: true };
+    }
 
     if (!active && previewBefore.active_queue_item && !pane.__queue_loaded) {
-      pane.active_queue_id = previewBefore.active_queue_id || null;
+      pane.active_queue_id = previewBefore.active_queue_id || getQueueItemIdForLastViewedAnchor(previewBefore.active_queue_item) || null;
       pane.active_queue_item = previewBefore.active_queue_item ? deep(previewBefore.active_queue_item) : null;
+      rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item, { selectionKey: requestedQueueSelection, reason: 'sync-queue-preserve-unloaded' });
       return { didLoad, active: pane.active_queue_item, preserved: true };
     }
 
     if (!active && previewBefore.active_queue_item && opts.allowSelectFallback !== true && opts.force !== true && isQueueLoadedForIdentity(activeIdentity, queueScope)) {
-      pane.active_queue_id = previewBefore.active_queue_id || null;
+      pane.active_queue_id = previewBefore.active_queue_id || getQueueItemIdForLastViewedAnchor(previewBefore.active_queue_item) || null;
       pane.active_queue_item = previewBefore.active_queue_item ? deep(previewBefore.active_queue_item) : null;
       pane.__preview_target_key = previewBefore.__preview_target_key || pane.__preview_target_key || '';
       pane.__preview_signed_url = previewBefore.__preview_signed_url || pane.__preview_signed_url || '';
       pane.__preview_load_requested_target_key = previewBefore.__preview_load_requested_target_key || pane.__preview_load_requested_target_key || '';
       pane.__active_attached_preview_target = previewBefore.__active_attached_preview_target || pane.__active_attached_preview_target || '';
+      rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item, { selectionKey: requestedQueueSelection, reason: 'sync-queue-preserve-loaded' });
       return { didLoad, active: pane.active_queue_item, preserved: true };
     }
 
     if (!active) {
+      const restored = restoreLastViewedQueueItemForEvidencePane({ reason: 'sync-queue-anchor', markRequested: trimStr(pane.active_tab || 'queue').toLowerCase() !== 'attached' });
+      active = restored || null;
+    }
+
+    if (!active) {
       const beforeRows = Array.isArray(previewBefore?.queue_rows) ? previewBefore.queue_rows : [];
-      const beforeIndex = beforeRows.findIndex((item) => trimStr(item?.id || item?.queue_id || '') === wanted);
+      const wanted = trimStr(requestedQueue?.queueId || pane.active_queue_id || previewBefore.active_queue_id || '');
+      const wantedStorage = cleanAttachedEvidenceFileKey(requestedQueue?.storageKey || getAttachedEvidenceFileKey(previewBefore.active_queue_item || {}) || '');
+      const beforeIndex = beforeRows.findIndex((item) => getQueueItemIdForLastViewedAnchor(item) === wanted && (!wantedStorage || getAttachedEvidenceFileKey(item) === wantedStorage));
       const fallbackIndex = beforeIndex >= 0 ? Math.min(beforeIndex, Math.max(0, pane.queue_rows.length - 1)) : 0;
       active = pane.queue_rows[fallbackIndex] || (fallbackIndex > 0 ? pane.queue_rows[fallbackIndex - 1] : null) || pane.queue_rows[0] || null;
     }
-    pane.active_queue_id = active ? (trimStr(active.id || active.queue_id || '') || null) : null;
+
+    pane.active_queue_id = active ? (getQueueItemIdForLastViewedAnchor(active) || null) : null;
     pane.active_queue_item = active ? { ...deep(active) } : null;
+    if (pane.active_queue_item) {
+      rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item, { reason: 'sync-queue-active' });
+    }
 
     const selectionAfter = getPreviewSelectionKeyForPane();
     if (isValidPreviewSelectionKey(selectionBefore) && isBlankPreviewSelectionKey(selectionAfter)) {
@@ -183051,23 +183675,26 @@ function bindBulkProcessEvidencePane(state) {
     const syncQueueSelectionOnly = () => {
     pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
     markQueueStatePendingForActiveIdentity('syncQueueSelectionOnly-active-identity-check');
-    const wanted = trimStr(pane.active_queue_id || '');
     const previousItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
     const activeIdentity = trimStr(getActiveIdentity() || '');
     const queueScope = getQueueScope();
     const queueLoadedForCurrentScope = isQueueLoadedForIdentity(activeIdentity, queueScope);
-    let active = wanted ? (pane.queue_rows.find((x) => trimStr(x?.id || x?.queue_id || '') === wanted) || null) : null;
-    if (!active && previousItem && pane.__queue_loaded !== true && !queueLoadedForCurrentScope) return previousItem;
-    if (!active) active = pane.queue_rows[0] || null;
+    const wantedSelection = buildQueuePreviewSelectionKeyForEvidencePaneAnchor(previousItem || {}, pane.__preview_target_key || pane.__preview_load_requested_target_key || '');
+    const wanted = parseQueuePreviewSelectionKeyForEvidencePaneAnchor(wantedSelection || '');
+    let active = wanted ? (pane.queue_rows.find((row) => getQueueItemIdForLastViewedAnchor(row) === wanted.queueId && getAttachedEvidenceFileKey(row) === wanted.storageKey) || null) : null;
+    if (!active && previousItem && pane.__queue_loaded !== true && !queueLoadedForCurrentScope) {
+      rememberLastViewedQueueItemForEvidencePane(previousItem, { selectionKey: wantedSelection, reason: 'sync-queue-selection-preserve-unloaded' });
+      return previousItem;
+    }
+    if (!active) active = restoreLastViewedQueueItemForEvidencePane({ reason: 'sync-queue-selection-anchor', markRequested: false }) || null;
+    if (!active && !isBulkAuthoriseContext) active = pane.queue_rows[0] || null;
     if (!active) {
-      if (pane.__queue_loaded === true) {
-        pane.active_queue_id = null;
-        pane.active_queue_item = null;
-      }
+      if (pane.__queue_loaded === true) restoreLastViewedQueueItemForEvidencePane({ reason: 'sync-queue-selection-empty', forceClearPreview: true });
       return pane.active_queue_item || null;
     }
-    pane.active_queue_id = trimStr(active.id || active.queue_id || '') || null;
+    pane.active_queue_id = getQueueItemIdForLastViewedAnchor(active) || null;
     pane.active_queue_item = { ...deep(active) };
+    rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item, { reason: 'sync-queue-selection-active' });
     return pane.active_queue_item;
   };
 
@@ -184334,9 +184961,12 @@ function bindBulkProcessEvidencePane(state) {
         pane.__queue_manual_override = true;
         pane.__queue_manual_override_identity = '';
         pane.__queue_manual_override_scope = getQueueScope();
+        restoreLastViewedQueueItemForEvidencePane({ reason: 'queue-tab-before-load', markRequested: true });
         try {
           await ensureQueueLoadedForActiveTab();
+          restoreLastViewedQueueItemForEvidencePane({ reason: 'queue-tab-after-load', markRequested: true });
           reconcileEvidenceState();
+          restoreLastViewedQueueItemForEvidencePane({ reason: 'queue-tab-after-reconcile', markRequested: true });
           const afterSignature = capturePaneSignature();
           if (beforeSignature !== afterSignature) {
             await rerenderWorkbench(`evidence-queue-tab${reason ? `-${reason}` : ''}`);
@@ -184354,6 +184984,7 @@ function bindBulkProcessEvidencePane(state) {
       attachedTabBtn.addEventListener('click', async () => {
         const beforeSignature = capturePaneSignature();
         pane.__attached_manual_override = true;
+        rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item || null, { reason: 'attached-tab-before-switch' });
         pane.__queue_manual_override = false;
         pane.__queue_manual_override_identity = '';
         pane.__queue_manual_override_scope = '';
@@ -184988,10 +185619,11 @@ function bindBulkProcessEvidencePane(state) {
           pane.active_queue_item = { ...(deep(returned) || {}) };
           pane.active_pdf_page = 1;
           const queueFileKey = getAttachedEvidenceFileKey(returned);
-          const queueSelectionKey = queueFileKey ? `queue|${pane.active_queue_id || queueFileKey}|${queueFileKey}` : '';
+          const queueSelectionKey = buildQueuePreviewSelectionKeyForEvidencePaneAnchor(returned);
           pane.__preview_target_key = queueSelectionKey;
           pane.__preview_load_requested_target_key = queueSelectionKey;
           pane.__preview_signed_url = '';
+          rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item, { selectionKey: queueSelectionKey, reason: 'returned-evidence-queue-select' });
           return true;
         };
 
@@ -185047,6 +185679,8 @@ function bindBulkProcessEvidencePane(state) {
                     force: true,
                     queue_scope: getQueueScope(),
                     status: getQueueScope().split(':')[1] || 'QUEUED',
+                    last_viewed_queue_anchor: getLastViewedQueueAnchorForEvidencePane(),
+                    preserve_last_viewed_queue: !isBulkAuthoriseContext,
                     allowWithoutActiveIdentity: true
                   });
                   pane.__queue_loaded = true;
@@ -185117,6 +185751,8 @@ function bindBulkProcessEvidencePane(state) {
                     force: true,
                     queue_scope: getQueueScope(),
                     status: getQueueScope().split(':')[1] || 'QUEUED',
+                    last_viewed_queue_anchor: getLastViewedQueueAnchorForEvidencePane(),
+                    preserve_last_viewed_queue: !isBulkAuthoriseContext,
                     allowWithoutActiveIdentity: true
                   });
                   pane.__queue_loaded = true;
@@ -185316,6 +185952,7 @@ function bindBulkProcessEvidencePane(state) {
               kind
             });
             if (!isBulkAuthoriseContext) {
+              rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item || queueItem || null, { reason: 'attach-success-before-attached' });
               pane.active_tab = 'attached';
               pane.__attached_manual_override = true;
               pane.__queue_manual_override = false;
@@ -185496,6 +186133,7 @@ function bindBulkProcessEvidencePane(state) {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
+
 
 
 function normaliseBankingPayOperationProgress(operationPayload = {}) {
@@ -190130,6 +190768,7 @@ async function bankingPayProviderSubmitReviewResolve(input, maybeOptions = {}) {
 
 
 
+
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   const st = (state && typeof state === 'object') ? state : {};
@@ -192038,6 +192677,306 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
 
 
+  const getQueueItemIdForReconcileAnchor = (itemInput = {}) => {
+
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+
+    const meta = parseObjectMaybeJson(item.meta_json || item.metaJson || item.meta || item.queue_meta || item.queueMeta);
+
+    return trimStr(
+
+      item.id ||
+
+      item.queue_id ||
+
+      item.queueId ||
+
+      item.manual_timesheet_queue_id ||
+
+      item.manualTimesheetQueueId ||
+
+      meta.id ||
+
+      meta.queue_id ||
+
+      meta.queueId ||
+
+      meta.manual_timesheet_queue_id ||
+
+      meta.manualTimesheetQueueId ||
+
+      ''
+
+    );
+
+  };
+
+
+
+  const getQueueItemStorageKeyForReconcileAnchor = (itemInput = {}) => {
+
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+
+    const meta = parseObjectMaybeJson(item.meta_json || item.metaJson || item.meta || item.queue_meta || item.queueMeta);
+
+    return safeStorageKey(
+
+      item.storage_key ||
+
+      item.storageKey ||
+
+      item.file_key ||
+
+      item.fileKey ||
+
+      item.download_storage_key ||
+
+      item.downloadStorageKey ||
+
+      item.r2_key ||
+
+      item.r2Key ||
+
+      meta.storage_key ||
+
+      meta.storageKey ||
+
+      meta.file_key ||
+
+      meta.fileKey ||
+
+      meta.download_storage_key ||
+
+      meta.downloadStorageKey ||
+
+      meta.r2_key ||
+
+      meta.r2Key ||
+
+      ''
+
+    );
+
+  };
+
+
+
+  const parseQueueSelectionKeyForReconcileAnchor = (selectionKeyInput = '') => {
+
+    const raw = trimStr(selectionKeyInput || '');
+
+    if (!raw || !raw.startsWith('queue|')) return null;
+
+    const parts = raw.split('|');
+
+    if ((parts[0] || '').toLowerCase() !== 'queue') return null;
+
+    const queueId = trimStr(parts[1] || '');
+
+    const storageKey = safeStorageKey(parts.slice(2).join('|') || '');
+
+    if (!queueId || !storageKey) return null;
+
+    return { queue_id: queueId, storage_key: storageKey, selection_key: `queue|${queueId}|${storageKey}` };
+
+  };
+
+
+
+  const buildQueueSelectionKeyForReconcileAnchor = (itemInput = null, fallbackSelectionKey = '') => {
+
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : null;
+
+    const parsed = parseQueueSelectionKeyForReconcileAnchor(fallbackSelectionKey || '');
+
+    const queueId = getQueueItemIdForReconcileAnchor(item || {}) || parsed?.queue_id || '';
+
+    const storageKey = getQueueItemStorageKeyForReconcileAnchor(item || {}) || parsed?.storage_key || '';
+
+    if (!queueId || !storageKey) return '';
+
+    return `queue|${queueId}|${storageKey}`;
+
+  };
+
+
+
+  const findQueueRowIndexForReconcileAnchor = (rowsInput = [], queueIdInput = '', storageKeyInput = '', allowIdOnly = false) => {
+
+    const rows = Array.isArray(rowsInput) ? rowsInput : [];
+
+    const queueId = trimStr(queueIdInput || '');
+
+    const storageKey = safeStorageKey(storageKeyInput || '');
+
+    if (!queueId) return -1;
+
+    const exactIndex = rows.findIndex((item) => getQueueItemIdForReconcileAnchor(item) === queueId && (!storageKey || getQueueItemStorageKeyForReconcileAnchor(item) === storageKey));
+
+    if (exactIndex >= 0 && (storageKey || allowIdOnly)) return exactIndex;
+
+    if (!storageKey && allowIdOnly) return rows.findIndex((item) => getQueueItemIdForReconcileAnchor(item) === queueId);
+
+    return -1;
+
+  };
+
+
+
+  const getLastViewedQueueAnchorForReconcile = () => {
+
+    const anchors = [
+
+      pane.__last_viewed_queue_anchor,
+
+      pane.__bulk_process_last_viewed_queue_anchor,
+
+      st.__last_viewed_queue_anchor,
+
+      st.__bulk_process_last_viewed_queue_anchor
+
+    ];
+
+    for (const anchor of anchors) {
+
+      if (anchor && typeof anchor === 'object') return anchor;
+
+    }
+
+    return null;
+
+  };
+
+
+
+  const normaliseQueueAnchorForReconcile = (anchorInput = null) => {
+
+    if (!anchorInput || typeof anchorInput !== 'object') return null;
+
+    const parsed = parseQueueSelectionKeyForReconcileAnchor(anchorInput.selection_key || anchorInput.selectionKey || '');
+
+    const queueId = trimStr(anchorInput.queue_id || anchorInput.queueId || anchorInput.active_queue_id || parsed?.queue_id || '');
+
+    const storageKey = safeStorageKey(anchorInput.storage_key || anchorInput.storageKey || anchorInput.active_queue_storage_key || anchorInput.activeQueueStorageKey || parsed?.storage_key || '');
+
+    const indexRaw = anchorInput.index ?? anchorInput.active_queue_index ?? anchorInput.activeQueueIndex;
+
+    const index = Number.isFinite(Number(indexRaw)) ? Number(indexRaw) : -1;
+
+    if (!queueId && !storageKey && index < 0) return null;
+
+    return { queue_id: queueId, storage_key: storageKey, index, selection_key: queueId && storageKey ? `queue|${queueId}|${storageKey}` : (parsed?.selection_key || '') };
+
+  };
+
+
+
+  const rememberLastViewedQueueForReconcile = (queueItemInput = null, anchorOptions = {}) => {
+
+    if (isBulkAuthoriseTimesheets) return null;
+
+    const opts = (anchorOptions && typeof anchorOptions === 'object') ? anchorOptions : {};
+
+    const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+
+    let item = (queueItemInput && typeof queueItemInput === 'object') ? queueItemInput : null;
+
+    const parsed = parseQueueSelectionKeyForReconcileAnchor(opts.selectionKey || opts.selection_key || pane.__preview_target_key || pane.__preview_load_requested_target_key || '');
+
+    if (!item && parsed) {
+
+      const rowIndex = findQueueRowIndexForReconcileAnchor(rows, parsed.queue_id, parsed.storage_key, false);
+
+      if (rowIndex >= 0) item = rows[rowIndex] || null;
+
+    }
+
+    if (!item && pane.active_queue_item && typeof pane.active_queue_item === 'object') item = pane.active_queue_item;
+
+    const selectionKey = buildQueueSelectionKeyForReconcileAnchor(item, parsed?.selection_key || opts.selectionKey || opts.selection_key || '');
+
+    const resolved = parseQueueSelectionKeyForReconcileAnchor(selectionKey || '');
+
+    const queueId = resolved?.queue_id || getQueueItemIdForReconcileAnchor(item || {});
+
+    const storageKey = resolved?.storage_key || getQueueItemStorageKeyForReconcileAnchor(item || {});
+
+    if (!queueId || !storageKey) return null;
+
+    const rowIndex = findQueueRowIndexForReconcileAnchor(rows, queueId, storageKey, false);
+
+    const explicitIndex = Number.isFinite(Number(opts.index)) ? Number(opts.index) : -1;
+
+    const queueScopeForAnchor = trimStr(pane.__queue_loaded_scope || pane.__queue_scope || 'global:QUEUED') || 'global:QUEUED';
+
+    const anchor = {
+
+      queue_id: queueId,
+
+      storage_key: storageKey,
+
+      index: rowIndex >= 0 ? rowIndex : explicitIndex,
+
+      selection_key: `queue|${queueId}|${storageKey}`,
+
+      queue_scope: queueScopeForAnchor,
+
+      queue_id_order: rows.map((row) => getQueueItemIdForReconcileAnchor(row)).filter(Boolean),
+
+      queue_selection_order: rows.map((row) => buildQueueSelectionKeyForReconcileAnchor(row)).filter(Boolean),
+
+      captured_at: new Date().toISOString(),
+
+      reason: trimStr(opts.reason || 'reconcile-queue') || 'reconcile-queue'
+
+    };
+
+    pane.__last_viewed_queue_anchor = { ...anchor };
+
+    pane.__bulk_process_last_viewed_queue_anchor = { ...anchor };
+
+    st.__last_viewed_queue_anchor = { ...anchor };
+
+    st.__bulk_process_last_viewed_queue_anchor = { ...anchor };
+
+    return anchor;
+
+  };
+
+
+
+  const resolveLastViewedQueueForReconcile = (rowsInput = [], anchorInput = null) => {
+
+    const rows = Array.isArray(rowsInput) ? rowsInput : [];
+
+    if (!rows.length) return { item: null, index: -1, reason: 'empty' };
+
+    const anchor = normaliseQueueAnchorForReconcile(anchorInput || getLastViewedQueueAnchorForReconcile());
+
+    if (!anchor) return { item: null, index: -1, reason: 'no-anchor' };
+
+    const exactIndex = findQueueRowIndexForReconcileAnchor(rows, anchor.queue_id, anchor.storage_key, !anchor.storage_key);
+
+    if (exactIndex >= 0) return { item: rows[exactIndex], index: exactIndex, reason: 'exact' };
+
+    const preferredIndex = Number.isFinite(Number(anchor.index)) ? Number(anchor.index) : -1;
+
+    if (preferredIndex >= 0 && rows[preferredIndex]) return { item: rows[preferredIndex], index: preferredIndex, reason: 'same-index-next' };
+
+    if (preferredIndex > 0) {
+
+      const previousIndex = Math.min(rows.length - 1, preferredIndex - 1);
+
+      if (rows[previousIndex]) return { item: rows[previousIndex], index: previousIndex, reason: 'previous-index' };
+
+    }
+
+    return { item: null, index: -1, reason: 'not-found' };
+
+  };
+
+
+
   const getSelectionIdentity = (paneState) => {
 
     const paneObj = (paneState && typeof paneState === 'object') ? paneState : {};
@@ -192070,19 +193009,19 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     }
 
-    const queueId = trimStr(
+    const queueSelectionKey = buildQueueSelectionKeyForReconcileAnchor(
 
-      paneObj.active_queue_id ||
+      activeItem || {},
 
-      paneObj.active_queue_item?.id ||
-
-      paneObj.active_queue_item?.queue_id ||
-
-      ''
+      paneObj.__preview_target_key || paneObj.__preview_load_requested_target_key || ''
 
     );
 
-    const fileKey = safeStorageKey(activeItem?.storage_key || activeItem?.r2_key || activeItem?.file_key || activeItem?.download_storage_key || '');
+    const parsedQueueSelection = parseQueueSelectionKeyForReconcileAnchor(queueSelectionKey || '');
+
+    const queueId = parsedQueueSelection?.queue_id || trimStr(paneObj.active_queue_id || getQueueItemIdForReconcileAnchor(activeItem || {}) || '');
+
+    const fileKey = parsedQueueSelection?.storage_key || getQueueItemStorageKeyForReconcileAnchor(activeItem || {});
 
     return {
 
@@ -192094,7 +193033,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
       file_key: fileKey,
 
-      key: `queue|${queueId}|${fileKey}`
+      key: queueId && fileKey ? `queue|${queueId}|${fileKey}` : `queue|${queueId}|${fileKey}`
 
     };
 
@@ -192129,6 +193068,20 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     __preview_signed_url_cache: (pane.__preview_signed_url_cache && typeof pane.__preview_signed_url_cache === 'object') ? deep(pane.__preview_signed_url_cache) : pane.__preview_signed_url_cache
 
   };
+
+  if (previewSelectionAtStart.mode === 'queue' && previewSelectionAtStart.queue_id && previewSelectionAtStart.file_key) {
+
+    rememberLastViewedQueueForReconcile(previewStateAtStart.active_queue_item || null, {
+
+      selectionKey: previewSelectionAtStart.key,
+
+      reason: 'reconcile-start'
+
+    });
+
+  }
+
+
 
   const activeIdentityAtStart = getActiveIdentity();
 
@@ -195346,29 +196299,79 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     const queueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
 
-    const currentQueueId = trimStr(
+    const currentSelectionKey = buildQueueSelectionKeyForReconcileAnchor(
 
-      pane.active_queue_id ||
+      pane.active_queue_item || {},
 
-      pane.active_queue_item?.id ||
-
-      pane.active_queue_item?.queue_id ||
-
-      ''
+      pane.__preview_target_key || pane.__preview_load_requested_target_key || ''
 
     );
 
-    let activeQueue = currentQueueId
+    const currentSelection = parseQueueSelectionKeyForReconcileAnchor(currentSelectionKey || '');
 
-      ? (queueRows.find((item) => trimStr(item?.id || item?.queue_id || '') === currentQueueId) || null)
+    let activeQueue = currentSelection
+
+      ? (queueRows.find((item) => getQueueItemIdForReconcileAnchor(item) === currentSelection.queue_id && getQueueItemStorageKeyForReconcileAnchor(item) === currentSelection.storage_key) || null)
 
       : null;
 
-    if (!activeQueue) activeQueue = queueRows[0] || null;
+    let activeQueueIndex = activeQueue ? findQueueRowIndexForReconcileAnchor(queueRows, currentSelection.queue_id, currentSelection.storage_key, false) : -1;
 
-    pane.active_queue_id = activeQueue ? trimStr(activeQueue.id || activeQueue.queue_id || '') : null;
+    if (!activeQueue) {
 
-    pane.active_queue_item = activeQueue ? { ...(deep(activeQueue) || {}) } : null;
+      const resolvedQueue = resolveLastViewedQueueForReconcile(queueRows);
+
+      activeQueue = resolvedQueue.item || null;
+
+      activeQueueIndex = resolvedQueue.index;
+
+    }
+
+    if (!activeQueue && queueRows.length) {
+
+      activeQueue = queueRows[0] || null;
+
+      activeQueueIndex = activeQueue ? 0 : -1;
+
+    }
+
+    if (!activeQueue) {
+
+      pane.active_queue_id = null;
+
+      pane.active_queue_item = null;
+
+      pane.__preview_target_key = '';
+
+      pane.__preview_load_requested_target_key = '';
+
+      pane.__preview_signed_url = '';
+
+      pane.__preview_signed_url_stored_at_ms = 0;
+
+      pane.__preview_signed_url_expires_at_ms = 0;
+
+    } else {
+
+      pane.active_queue_id = getQueueItemIdForReconcileAnchor(activeQueue) || null;
+
+      pane.active_queue_item = { ...(deep(activeQueue) || {}) };
+
+      const activeQueueSelectionKey = buildQueueSelectionKeyForReconcileAnchor(activeQueue);
+
+      pane.__preview_load_requested_target_key = activeQueueSelectionKey || pane.__preview_load_requested_target_key || '';
+
+      rememberLastViewedQueueForReconcile(pane.active_queue_item, {
+
+        selectionKey: activeQueueSelectionKey,
+
+        index: activeQueueIndex,
+
+        reason: 'reconcile-queue-active'
+
+      });
+
+    }
 
   }
 
@@ -195564,6 +196567,12 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     preservedExistingPreview = true;
 
+    if (previewSelectionAtStart.mode === 'queue' && previewSelectionAtStart.queue_id && previewSelectionAtStart.file_key) {
+
+      rememberLastViewedQueueForReconcile(pane.active_queue_item || null, { selectionKey: previewSelectionAtStart.key, reason: 'reconcile-preserved-queue-preview' });
+
+    }
+
   } else if (selectedPreviewChanged) {
 
     if (typeof pane.__abortPreviewPresignRequests === 'function') {
@@ -195573,6 +196582,8 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     }
 
     const nextAttachedSelectionKey = (nextSelection.mode === 'attached' && nextSelection.file_key && nextSelection.key) ? nextSelection.key : '';
+
+    const nextQueueSelectionKey = (nextSelection.mode === 'queue' && nextSelection.queue_id && nextSelection.file_key && nextSelection.key) ? nextSelection.key : '';
 
     pane.__preview_signed_url = '';
 
@@ -195587,6 +196598,16 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       pane.__preview_load_requested_target_key = nextAttachedSelectionKey;
 
       pane.__active_attached_preview_target = nextAttachedSelectionKey;
+
+    } else if (nextQueueSelectionKey) {
+
+      pane.__preview_target_key = nextQueueSelectionKey;
+
+      pane.__preview_load_requested_target_key = nextQueueSelectionKey;
+
+      pane.__active_attached_preview_target = '';
+
+      rememberLastViewedQueueForReconcile(pane.active_queue_item || null, { selectionKey: nextQueueSelectionKey, reason: 'reconcile-preview-queue-selection' });
 
     } else {
 
@@ -196199,9 +197220,6 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   };
 
 }
-
-
-
 
 
 async function rerenderBulkProcessWorkbench(state, logPrefix) {
