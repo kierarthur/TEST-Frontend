@@ -201019,8 +201019,8 @@ async function handleBulkProcessProcess(state) {
      const timesheetId = trimStr(active?.timesheetId || active?.currentTimesheetId || active?.expectedTimesheetId || '');
     const expectedTimesheetId = trimStr(active?.expectedTimesheetId || active?.timesheetId || active?.currentTimesheetId || '');
     const contractWeekId = trimStr(active?.contractWeekId || active?.contract_week_id || '');
-    const shouldStageToContractWeek = !!(active?.isWeekly === true && contractWeekId);
-    const shouldAttachToTimesheet = !!(!shouldStageToContractWeek && timesheetId && expectedTimesheetId);
+    const shouldStageToContractWeek = false;
+    const shouldAttachToTimesheet = !!(active?.isDaily === true && timesheetId && expectedTimesheetId);
 
     if (!queueId || !storageKey || !queueItem || queueKind !== 'TIMESHEET' || (!shouldAttachToTimesheet && !shouldStageToContractWeek)) {
       sigLog('QUEUE-EVIDENCE-MOVE-SKIP', {
@@ -205291,7 +205291,7 @@ async function handleBulkProcessProcess(state) {
     const selectedQueueBeforeProcessQueueId = trimStr(previewedQueueForAutoAttach?.queueId || '');
     const selectedQueueBeforeProcessStorageKey = trimStr(previewedQueueForAutoAttach?.storageKey || evidenceStorageKeyOf(previewedQueueForAutoAttach?.item || '') || '').replace(/^\/+/, '');
     const selectedQueueBeforeProcessKind = selectedQueueTimesheetBeforeProcess ? 'TIMESHEET' : trimStr(previewedQueueForAutoAttach?.kind || '');
-    const willStageQueueTimesheetViaWeeklyProcess = !!(
+    const willPassQueueTimesheetToWeeklyProcess = !!(
       selectedQueueTimesheetBeforeProcess &&
       active.isWeekly === true &&
       !!activeContractWeekId &&
@@ -205302,12 +205302,29 @@ async function handleBulkProcessProcess(state) {
       selectedQueueTimesheetBeforeProcess &&
       !hasRealTimesheetBeforeQueueAttach &&
       !suppressTimesheetAutoAttachForProcess &&
-      (
-        (active.isDaily === true && !!activeTimesheetId && !!expectedTimesheetId) ||
-        willStageQueueTimesheetViaWeeklyProcess
-      )
+      active.isDaily === true &&
+      !!activeTimesheetId &&
+      !!expectedTimesheetId
     );
-    const deferredWeeklyQueueTimesheetItem = willStageQueueTimesheetViaWeeklyProcess ? deep(previewedQueueForAutoAttach.item || {}) : null;
+    const deferredWeeklyQueueTimesheetItem = willPassQueueTimesheetToWeeklyProcess ? deep(previewedQueueForAutoAttach.item || {}) : null;
+    const weeklyQueueTimesheetMaterialisationInstruction = (() => {
+      if (!willPassQueueTimesheetToWeeklyProcess || !deferredWeeklyQueueTimesheetItem) return null;
+      const queueId = trimStr(evidenceQueueIdOf(deferredWeeklyQueueTimesheetItem) || selectedQueueBeforeProcessQueueId || '');
+      const storageKey = trimStr(evidenceStorageKeyOf(deferredWeeklyQueueTimesheetItem) || selectedQueueBeforeProcessStorageKey || '').replace(/^\/+/, '');
+      if (!queueId || !storageKey) return null;
+      return {
+        queue_id: queueId,
+        storage_key: storageKey,
+        kind: 'TIMESHEET',
+        contract_week_id: activeContractWeekId || active.contractWeekId || null,
+        preview_selection_key: previewedQueueForAutoAttach?.selectionKey || null,
+        preview_identity: previewedQueueForAutoAttach?.previewIdentity || null,
+        active_identity: previewedQueueForAutoAttach?.activeIdentity || null,
+        queue_index: Number.isFinite(Number(previewedQueueForAutoAttach?.index)) ? Number(previewedQueueForAutoAttach.index) : null,
+        queue_total: Number.isFinite(Number(previewedQueueForAutoAttach?.total)) ? Number(previewedQueueForAutoAttach.total) : null,
+        source: 'bulk_process_displayed_queue_preview'
+      };
+    })();
     stateAudit('queue-evidence-mutation-decision', {
       preview_authoritative_queue_before_refresh: stateAuditClone(previewedQueueBeforeRefresh || null),
       preview_authoritative_timesheet_before_refresh: stateAuditClone(previewedQueueTimesheetBeforeRefresh || null),
@@ -205318,7 +205335,8 @@ async function handleBulkProcessProcess(state) {
       selected_queue_id: selectedQueueBeforeProcessQueueId || null,
       selected_queue_storage_key: selectedQueueBeforeProcessStorageKey || null,
       selected_queue_kind: selectedQueueBeforeProcessKind || null,
-      stage_queue_timesheet_via_weekly_process: willStageQueueTimesheetViaWeeklyProcess,
+      pass_queue_timesheet_to_weekly_process: willPassQueueTimesheetToWeeklyProcess,
+      weekly_queue_timesheet_materialisation_instruction: weeklyQueueTimesheetMaterialisationInstruction ? stateAuditClone(weeklyQueueTimesheetMaterialisationInstruction) : null,
       will_attach_or_stage_queue_item: willAttachOrStageQueueItem
     });
     if (previewedQueueBeforeRefresh && previewedQueueBeforeRefresh.hadQueuePreview === true && previewedQueueForAutoAttach?.ok !== true && !willAttachOrStageQueueItem) {
@@ -205329,7 +205347,16 @@ async function handleBulkProcessProcess(state) {
         kind: previewedQueueBeforeRefresh.kind || previewedQueueTimesheetBeforeRefresh?.kind || null
       });
     }
-    if (willAttachOrStageQueueItem && !willStageQueueTimesheetViaWeeklyProcess) {
+      if (willPassQueueTimesheetToWeeklyProcess) {
+      sigLog('QUEUE-ATTACH-DEFER-TO-WEEKLY-PROCESS', {
+        reason: 'weekly-process-backend-must-materialise-displayed-queue-timesheet-atomically',
+        queue_id: selectedQueueBeforeProcessQueueId || null,
+        storage_key: selectedQueueBeforeProcessStorageKey || null,
+        queue_kind: selectedQueueBeforeProcessKind || null,
+        contract_week_id: trimStr(activeContractWeekId || '') || null
+      });
+    }
+    if (willAttachOrStageQueueItem) {
       await assertNoExternalProcessBaselineChangeBeforeControlledMutation(active, 'before-process-queue-evidence-attach');
     }
 
@@ -205342,8 +205369,8 @@ async function handleBulkProcessProcess(state) {
         currentTimesheetId: activeTimesheetId,
         contractWeekId: activeContractWeekId,
         expectedTimesheetId,
-        isWeekly: active.isWeekly === true,
-        isDaily: active.isDaily === true,
+        isWeekly: false,
+        isDaily: true,
         suppressTimesheetAutoAttach: suppressTimesheetAutoAttachForProcess,
         suppressReason: processTimesheetImageProtection.reason
       }, previewedQueueForAutoAttach);
@@ -205351,11 +205378,11 @@ async function handleBulkProcessProcess(state) {
     }
     sigLog('AFTER-EVIDENCE-MUTATION-CALL', {
       evidence_mutated: evidenceMutated === true,
-      staged_weekly_queue_timesheet: willStageQueueTimesheetViaWeeklyProcess === true,
+      weekly_queue_timesheet_deferred_to_backend: willPassQueueTimesheetToWeeklyProcess === true,
       active_signature: trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '') || null
     });
-    stateAudit('after-evidence-mutation-call', { evidence_mutated: evidenceMutated === true, staged_weekly_queue_timesheet: willStageQueueTimesheetViaWeeklyProcess === true, active_signature: trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '') || null });
-       if (evidenceMutated) {
+    stateAudit('after-evidence-mutation-call', { evidence_mutated: evidenceMutated === true, weekly_queue_timesheet_deferred_to_backend: willPassQueueTimesheetToWeeklyProcess === true, active_signature: trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '') || null });
+         if (evidenceMutated) {
       active = await refreshActiveAfterEvidenceMutation(previousRowKey, preservedStateCtxBeforeEvidenceMutation, 'bulk-process-process-evidence-mutated');
       active = await refreshControlledProcessStatusHeaderBaselineAfterMutation(
         active,
@@ -205385,50 +205412,6 @@ async function handleBulkProcessProcess(state) {
     }
 
      let processEvidenceRowsForSubmit = collectCanonicalRealEvidenceRowsForProcess(active);
-    if (willStageQueueTimesheetViaWeeklyProcess && deferredWeeklyQueueTimesheetItem) {
-      const deferredQueueId = trimStr(evidenceQueueIdOf(deferredWeeklyQueueTimesheetItem) || selectedQueueBeforeProcessQueueId || '');
-      const deferredStorageKey = trimStr(evidenceStorageKeyOf(deferredWeeklyQueueTimesheetItem) || selectedQueueBeforeProcessStorageKey || '').replace(/^\/+/, '');
-      const alreadyIncluded = processEvidenceRowsForSubmit.some((item) => {
-        const itemQueueId = trimStr(evidenceQueueIdOf(item) || '');
-        const itemStorageKey = trimStr(evidenceStorageKeyOf(item) || '').replace(/^\/+/, '');
-        return !!(
-          evidenceKindOf(item) === 'TIMESHEET' &&
-          (
-            (deferredQueueId && itemQueueId && itemQueueId === deferredQueueId) ||
-            (deferredStorageKey && itemStorageKey && itemStorageKey === deferredStorageKey)
-          )
-        );
-      });
-      if (!alreadyIncluded && deferredQueueId && deferredStorageKey) {
-        processEvidenceRowsForSubmit = [
-          ...processEvidenceRowsForSubmit,
-          {
-            ...deep(deferredWeeklyQueueTimesheetItem),
-            id: deferredQueueId,
-            queue_id: deferredQueueId,
-            manual_timesheet_queue_id: deferredQueueId,
-            kind: 'TIMESHEET',
-            evidence_kind: 'TIMESHEET',
-            staged_kind: 'TIMESHEET',
-            storage_key: deferredStorageKey,
-            file_key: deferredStorageKey,
-            download_storage_key: deferredStorageKey,
-            r2_key: deferredStorageKey,
-            row_key: previousRowKey || rowKeyOf(active.row) || null,
-            contract_week_id: activeContractWeekId || active.contractWeekId || null,
-            timesheet_id: null,
-            current_timesheet_id: null,
-            is_staged_context: true,
-            staged: true,
-            status: 'STAGED',
-            source_label: 'Staged',
-            source_badge: 'Staged',
-            __bulk_process_displayed_queue_preview: true,
-            __bulk_process_preview_selection_key: previewedQueueForAutoAttach?.selectionKey || null
-          }
-        ];
-      }
-    }
     let processEvidencePatchForSubmit = buildProcessEvidenceAuthorityPatch(processEvidenceRowsForSubmit, { active });
     let missingEvidenceKindsBeforeSubmit = getMissingRequiredProcessEvidenceKinds(active, processEvidenceRowsForSubmit);
     stateAudit('submit-evidence-readiness-initial', {
@@ -205690,6 +205673,14 @@ async function handleBulkProcessProcess(state) {
         attached_evidence: processEvidenceRowsForSubmit.map((item) => deep(item)),
         staged_evidence: processEvidenceRowsForSubmit.filter((item) => item?.is_staged_context === true || upper(item?.status || '') === 'STAGED').map((item) => deep(item)),
         contract_week_staged_evidence: processEvidenceRowsForSubmit.filter((item) => item?.is_staged_context === true || upper(item?.status || '') === 'STAGED').map((item) => deep(item)),
+        ...(weeklyQueueTimesheetMaterialisationInstruction ? {
+          queue_timesheet_materialisation: deep(weeklyQueueTimesheetMaterialisationInstruction),
+          selected_queue_timesheet: deep(weeklyQueueTimesheetMaterialisationInstruction),
+          selected_queue_timesheet_queue_id: weeklyQueueTimesheetMaterialisationInstruction.queue_id || null,
+          selected_queue_timesheet_storage_key: weeklyQueueTimesheetMaterialisationInstruction.storage_key || null,
+          selected_queue_timesheet_kind: 'TIMESHEET',
+          selected_queue_timesheet_preview_selection_key: weeklyQueueTimesheetMaterialisationInstruction.preview_selection_key || null
+        } : {}),
         ...(suppressTimesheetEvidenceForSubmit === true ? {
           suppress_timesheet_evidence_materialisation: true,
           suppressTimesheetEvidenceMaterialisation: true,
@@ -205716,10 +205707,11 @@ async function handleBulkProcessProcess(state) {
           affected_row_count: Array.isArray(processResult?.affected_rows) ? processResult.affected_rows.length : 0
         });
       }
-      if (willStageQueueTimesheetViaWeeklyProcess) {
-        sigLog('QUEUE-STAGED-BEFORE-WEEKLY-PROCESS', {
-          reason: 'displayed-queue-timesheet-staged-before-process-sql-materialises-on-success',
+      if (willPassQueueTimesheetToWeeklyProcess) {
+        sigLog('QUEUE-PASSED-TO-WEEKLY-PROCESS', {
+          reason: 'displayed-queue-timesheet-passed-to-backend-for-atomic-weekly-process-materialisation',
           queue_id: selectedQueueBeforeProcessQueueId || null,
+          storage_key: selectedQueueBeforeProcessStorageKey || null,
           queue_kind: selectedQueueBeforeProcessKind || 'TIMESHEET',
           contract_week_id: trimStr(activeContractWeekId || '') || null
         });
