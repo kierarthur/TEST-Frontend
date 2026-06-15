@@ -171233,7 +171233,6 @@ function bindBulkProcessManualEditor(state) {
 
 
 
-
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -171465,9 +171464,11 @@ function bindBulkProcessPreviewPane(state) {
     await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][PREVIEW]');
   };
 
-  const rerenderWorkbench = async (reason = 'preview-pane') => {
+  const rerenderWorkbench = async (reason = 'preview-pane', rerenderOptions = {}) => {
+    const opts = (rerenderOptions && typeof rerenderOptions === 'object') ? rerenderOptions : {};
+    const force = opts.force === true;
     if (typeof st.__rerenderWorkbench === 'function') {
-      await st.__rerenderWorkbench({ reason: trimStr(reason || 'preview-pane') || 'preview-pane', force: false });
+      await st.__rerenderWorkbench({ reason: trimStr(reason || 'preview-pane') || 'preview-pane', force });
       return;
     }
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PREVIEW]');
@@ -176237,6 +176238,48 @@ function bindBulkProcessPreviewPane(state) {
       return getSourceSet();
     };
 
+    const commitSourceNavigationPreviewTarget = (selectionKeyInput = '', reason = 'preview-source-nav-selection') => {
+      const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || '');
+      if (!selectionKey || isBlankPreviewSelectionKey(selectionKey)) return false;
+      const previousTargetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+      const previousRequestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+      const selectionChanged = !!(
+        previousTargetKey !== selectionKey ||
+        (previousRequestedKey && previousRequestedKey !== selectionKey)
+      );
+      if (selectionChanged) {
+        if (typeof pane.__abortPreviewPresignRequests === 'function') {
+          try {
+            pane.__abortPreviewPresignRequests(reason, {
+              force: true,
+              userSelectionChanged: true
+            });
+          } catch {}
+        }
+        pane.__preview_signed_url = '';
+        pane.__preview_signed_url_stored_at_ms = 0;
+        pane.__preview_signed_url_expires_at_ms = 0;
+        pane.__preview_same_selection_recovery_key = '';
+        pane.__preview_signed_retry_key = '';
+        pane.__preview_signed_retry_count = 0;
+        if (pane.__preview_signed_retry_timer) {
+          try { window.clearTimeout(pane.__preview_signed_retry_timer); } catch {}
+          pane.__preview_signed_retry_timer = null;
+        }
+        if (pane.__preview_recovery_timer) {
+          try { window.clearTimeout(pane.__preview_recovery_timer); } catch {}
+          pane.__preview_recovery_timer = null;
+        }
+        pane.__preview_recovery_key = '';
+        pane.__preview_recovery_attempt = 0;
+      }
+      pane.__preview_target_key = selectionKey;
+      pane.__preview_load_requested_target_key = selectionKey;
+      pane.__preview_error = '';
+      if (selectionKey.startsWith('attached|')) pane.__active_attached_preview_target = selectionKey;
+      return true;
+    };
+
     const bindSourceNav = (btnId, delta) => {
       const btn = document.getElementById(btnId);
       if (!btn || btn.dataset.bound === '1') return;
@@ -176255,13 +176298,18 @@ function bindBulkProcessPreviewPane(state) {
           const beforeStorageKey = trimStr(before.activeStorageKey || '').replace(/^\/+/, '');
           const oldStillExists = !!(beforeActiveId && beforeStorageKey && live.rows.some((row) => getQueueRowIdentityForLastViewedAnchor(row) === beforeActiveId && resolvePreviewFileCacheKey(row) === beforeStorageKey));
           if (!oldStillExists && live.idx >= 0) {
-            await rerenderWorkbench('preview-source-nav-reconciled');
+            const reconciledSelectionKey = normalisePreviewSelectionKey(live.activeId || buildQueueSelectionKeyForLastViewedAnchor(live.activeItem || null));
+            if (reconciledSelectionKey) {
+              commitSourceNavigationPreviewTarget(reconciledSelectionKey, 'preview-source-nav-reconciled');
+              markPreviewLoadRequested(reconciledSelectionKey);
+            }
+            await rerenderWorkbench('preview-source-nav-reconciled', { force: true });
             return;
           }
         }
         const canGo = live.idx >= 0 && ((delta < 0 && live.idx > 0) || (delta > 0 && live.idx < live.rows.length - 1));
         if (!canGo) {
-          if (refreshedForQueue) await rerenderWorkbench('preview-source-nav-refresh-only');
+          if (refreshedForQueue) await rerenderWorkbench('preview-source-nav-refresh-only', { force: true });
           return;
         }
         const next = live.rows[live.idx + delta] || null;
@@ -176270,8 +176318,8 @@ function bindBulkProcessPreviewPane(state) {
           const nextFileKey = resolvePreviewFileCacheKey(next);
           const nextId = resolvePreviewAttachedTargetId(next) || nextFileKey;
           const nextSelectionKey = normalisePreviewSelectionKey(getSelectionSignature('attached', next));
-          const currentSelectionKey = normalisePreviewSelectionKey(getSelectionSignature('attached', pane.active_attached_item));
-          if (!nextId || !nextFileKey || !nextSelectionKey || nextSelectionKey === currentSelectionKey) return;
+          const currentSelectionKey = normalisePreviewSelectionKey(live.activeId || getSelectionSignature('attached', pane.active_attached_item));
+          if (!nextId || !nextFileKey || !nextSelectionKey || (currentSelectionKey && nextSelectionKey === currentSelectionKey)) return;
           pane.active_tab = 'attached';
           pane.__attached_manual_override = true;
           pane.__queue_manual_override = false;
@@ -176279,11 +176327,13 @@ function bindBulkProcessPreviewPane(state) {
           pane.active_attached_item = { ...(deep(next) || {}) };
           pane.active_attached_pdf_page = 1;
           pane.__active_attached_preview_target = nextSelectionKey;
+          commitSourceNavigationPreviewTarget(nextSelectionKey, 'preview-attached-source-nav-select');
           markPreviewLoadRequested(nextSelectionKey);
         } else {
           const nextId = getQueueRowIdentityForLastViewedAnchor(next) || getQueueRowIdentity(next);
           const nextSelectionKey = buildQueueSelectionKeyForLastViewedAnchor(next) || getSelectionSignature('queue', next);
-          if (!nextId || !nextSelectionKey || nextSelectionKey === buildQueueSelectionKeyForLastViewedAnchor(pane.active_queue_item || {}, pane.__preview_target_key || pane.__preview_load_requested_target_key || '')) return;
+          const currentQueueSelectionKey = normalisePreviewSelectionKey(live.activeId || buildQueueSelectionKeyForLastViewedAnchor(pane.active_queue_item || {}, pane.__preview_target_key || pane.__preview_load_requested_target_key || ''));
+          if (!nextId || !nextSelectionKey || (currentQueueSelectionKey && nextSelectionKey === currentQueueSelectionKey)) return;
           pane.active_tab = 'queue';
           pane.__attached_manual_override = false;
           pane.__queue_manual_override = true;
@@ -176297,9 +176347,10 @@ function bindBulkProcessPreviewPane(state) {
             index: live.idx + delta,
             reason: 'preview-source-nav-select'
           });
+          commitSourceNavigationPreviewTarget(nextSelectionKey, 'preview-source-nav-select');
           markPreviewLoadRequested(nextSelectionKey);
         }
-        await rerenderWorkbench('preview-source-nav');
+        await rerenderWorkbench('preview-source-nav', { force: true });
       });
     };
     bindSourceNav('bpQueuePrevBtn', -1);
