@@ -182925,27 +182925,44 @@ function bindBulkProcessEvidencePane(state) {
     );
   };
 
-  const getAttachedEvidenceId = (item) => {
+const getAttachedEvidenceId = (item) => {
     if (!item || typeof item !== 'object') return '';
     const meta = parseEvidenceMetaObject(item.meta_json || item.metaJson || item.meta || item.queue_meta || item.queueMeta);
     const fileKey = getAttachedEvidenceFileKey(item);
     const sourceLabel = upper(item.source_label || item.sourceLabel || item.source_badge || item.sourceBadge || item.source || meta.source_label || meta.sourceLabel || meta.source_badge || meta.sourceBadge || meta.source || '');
+    const statusLabel = upper(item.status || item.queue_status || meta.status || '');
     const contractWeekId = pickFirst(item.contract_week_id, item.contractWeekId, meta.contract_week_id, meta.contractWeekId, meta.week_id, meta.weekId);
     const timesheetId = pickFirst(item.timesheet_id, item.timesheetId, item.current_timesheet_id, item.currentTimesheetId, meta.timesheet_id, meta.timesheetId, meta.current_timesheet_id, meta.currentTimesheetId);
     const queueIdentity = pickFirst(item.queue_id, item.queueId, item.manual_timesheet_queue_id, item.manualTimesheetQueueId, item.manual_queue_id, item.manualQueueId, meta.queue_id, meta.queueId, meta.manual_timesheet_queue_id, meta.manualTimesheetQueueId, meta.manual_queue_id, meta.manualQueueId);
+    const evidenceIdentity = pickFirst(item.evidence_id, item.evidenceId, item.timesheet_evidence_id, item.timesheetEvidenceId, meta.evidence_id, meta.evidenceId, meta.timesheet_evidence_id, meta.timesheetEvidenceId);
+    const rawId = pickFirst(item.id, meta.id);
+    const rawIdLooksLikeEvidence = !!(rawId && rawId !== queueIdentity && rawId !== fileKey && !/^synthetic-attached:/i.test(rawId));
+    const realEvidenceAuthority = !!(
+      evidenceIdentity ||
+      item.__bulk_process_real_evidence_authority === true ||
+      String(item.__bulk_process_real_evidence_authority || '').trim().toLowerCase() === 'true' ||
+      sourceLabel === 'ATTACHED' ||
+      sourceLabel === 'ATTACHED EVIDENCE' ||
+      statusLabel === 'ATTACHED' ||
+      (timesheetId && rawIdLooksLikeEvidence)
+    );
     const staged = !!(
-      item.is_staged_context === true ||
-      item.staged === true ||
-      sourceLabel === 'STAGED' ||
-      upper(item.status || item.queue_status || meta.status || '') === 'STAGED' ||
-      pickFirst(item.staged_kind, item.stagedKind, meta.staged_kind, meta.stagedKind) ||
-      (contractWeekId && !timesheetId && queueIdentity)
+      !realEvidenceAuthority &&
+      (
+        item.is_staged_context === true ||
+        item.staged === true ||
+        sourceLabel === 'STAGED' ||
+        statusLabel === 'STAGED' ||
+        (pickFirst(item.staged_kind, item.stagedKind, meta.staged_kind, meta.stagedKind) && !timesheetId) ||
+        (contractWeekId && !timesheetId && queueIdentity)
+      )
     );
     if (staged) {
-      return pickFirst(queueIdentity, item.id, meta.id, fileKey);
+      return pickFirst(queueIdentity, rawId, fileKey);
     }
-    return pickFirst(item.evidence_id, item.evidenceId, item.timesheet_evidence_id, item.timesheetEvidenceId, meta.evidence_id, meta.evidenceId, meta.timesheet_evidence_id, meta.timesheetEvidenceId, item.id, queueIdentity, fileKey);
+    return pickFirst(evidenceIdentity, rawIdLooksLikeEvidence ? rawId : '', rawId, queueIdentity, fileKey);
   };
+
 
   const buildAttachedPreviewSelectionKey = (item) => {
     const fileKey = getAttachedEvidenceFileKey(item);
@@ -189726,7 +189743,6 @@ function getBulkProcessRecordIdentityFromState(state) {
   return null;
 }
 
-
 function installBulkProcessModalCtxPatch(state, options = {}) {
   const deep = (v) => {
     try { return JSON.parse(JSON.stringify(v)); } catch { return v; }
@@ -189941,6 +189957,101 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     ? `timesheet:${canonicalTimesheetId}`
     : (canonicalContractWeekId ? `contract_week:${canonicalContractWeekId}` : getBulkProcessRecordIdentityFromState(st)));
 
+  const syncBulkProcessIdentitySurfaces = (ctxLike = window.modalCtx) => {
+    const identity = trimStr(currentIdentity || getBulkProcessRecordIdentityFromState(st) || '');
+    const identityIsTimesheet = /^timesheet:/i.test(identity || '');
+    const identityIsContractWeek = /^contract_week:/i.test(identity || '');
+    const identityTimesheetId = identityIsTimesheet ? trimStr(identity.replace(/^timesheet:/i, '')) : '';
+    const identityContractWeekId = identityIsContractWeek ? trimStr(identity.replace(/^contract_week:/i, '')) : '';
+    const modalTimesheetId = identityTimesheetId || canonicalTimesheetId || null;
+    const modalContractWeekId = identityIsTimesheet
+      ? null
+      : (identityContractWeekId || canonicalContractWeekId || null);
+    const canonicalRowKey = identity || trimStr(st.active_row_key || st.activeRowKey || activeIdentityParts.rowKey || '') || null;
+
+    st.__bulkProcessRecordIdentity = identity || null;
+    st.activeRecordIdentity = identity || null;
+    st.activeTimesheetId = modalTimesheetId || null;
+    st.activeContractWeekId = modalContractWeekId || null;
+    if (canonicalRowKey) {
+      st.active_row_key = canonicalRowKey;
+      st.activeRowKey = canonicalRowKey;
+      st.selected_row_keys = [canonicalRowKey];
+      st.selectedRowKeys = [canonicalRowKey];
+    }
+
+    const target = (ctxLike && typeof ctxLike === 'object') ? ctxLike : null;
+    if (target) {
+      target.__bulkProcessRecordIdentity = identity || null;
+      target.activeRecordIdentity = identity || null;
+      target.activeTimesheetId = modalTimesheetId || null;
+      target.activeContractWeekId = modalContractWeekId || null;
+      if (canonicalRowKey) {
+        target.active_row_key = canonicalRowKey;
+        target.activeRowKey = canonicalRowKey;
+        target.rowKey = canonicalRowKey;
+      }
+      target.bulkProcessState = st;
+      if (activeCtx.state && typeof activeCtx.state === 'object') target.timesheetState = activeCtx.state;
+
+      target.formState = (target.formState && typeof target.formState === 'object')
+        ? target.formState
+        : { main: {}, pay: {} };
+      target.formState.__forId = identity || null;
+      if (!target.formState.main || typeof target.formState.main !== 'object') target.formState.main = {};
+      if (!target.formState.pay || typeof target.formState.pay !== 'object') target.formState.pay = {};
+
+      if (target.form && typeof target.form === 'object') target.form.forId = identity || null;
+      target.form_forId = identity || null;
+
+      if (target.data && typeof target.data === 'object') {
+        if (canonicalRowKey) target.data.row_key = canonicalRowKey;
+        if (identityIsTimesheet) {
+          target.data.id = modalTimesheetId || target.data.id || null;
+          target.data.timesheet_id = modalTimesheetId || null;
+          target.data.current_timesheet_id = modalTimesheetId || null;
+          target.data.contract_week_id = canonicalContractWeekId || target.data.contract_week_id || null;
+        } else if (identityIsContractWeek) {
+          target.data.id = modalContractWeekId || null;
+          target.data.timesheet_id = null;
+          target.data.current_timesheet_id = null;
+          target.data.contract_week_id = modalContractWeekId || null;
+        }
+      }
+    }
+
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (fr && String(fr.kind || '') === 'bulk-process-workbench') {
+        fr._ctxRef = target || window.modalCtx || fr._ctxRef;
+        fr.__bulkProcessRecordIdentity = identity || null;
+        fr.activeRecordIdentity = identity || null;
+        fr.activeTimesheetId = modalTimesheetId || null;
+        fr.activeContractWeekId = modalContractWeekId || null;
+        fr.formForId = identity || null;
+        if (canonicalRowKey) {
+          fr.active_row_key = canonicalRowKey;
+          fr.activeRowKey = canonicalRowKey;
+          fr.rowKey = canonicalRowKey;
+        }
+        if (fr.ctx && typeof fr.ctx === 'object') {
+          fr.ctx.__bulkProcessRecordIdentity = identity || null;
+          fr.ctx.activeRecordIdentity = identity || null;
+          fr.ctx.activeTimesheetId = modalTimesheetId || null;
+          fr.ctx.activeContractWeekId = modalContractWeekId || null;
+          if (canonicalRowKey) {
+            fr.ctx.active_row_key = canonicalRowKey;
+            fr.ctx.activeRowKey = canonicalRowKey;
+            fr.ctx.rowKey = canonicalRowKey;
+          }
+          if (fr.ctx.formState && typeof fr.ctx.formState === 'object') fr.ctx.formState.__forId = identity || null;
+          if (fr.ctx.form && typeof fr.ctx.form === 'object') fr.ctx.form.forId = identity || null;
+          fr.ctx.form_forId = identity || null;
+        }
+      }
+    } catch {}
+  };
+
   const evidenceOrActionBelongsToDifferentIdentity = (sourceLike = {}) => {
     if (!sourceLike || typeof sourceLike !== 'object' || !currentIdentity) return false;
     const candidates = [];
@@ -190078,6 +190189,7 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     targetCtx.__bulkProcessRecordIdentity = currentIdentity;
     targetCtx.__bulkProcessRouteKind = routeKindNow || prevRouteKind || null;
     targetCtx.__bulkProcessExplicitNoTimesheet = explicitNoTimesheet;
+    syncBulkProcessIdentitySurfaces(targetCtx);
     window.modalCtx = targetCtx;
     console.debug('[TS][BULK-PROCESS][IDENTITY][CTX-PATCH]', {
       prevForId,
@@ -190218,6 +190330,7 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     fs.pay = {};
   }
   window.modalCtx.formState = fs;
+  syncBulkProcessIdentitySurfaces(window.modalCtx);
 
   console.debug('[TS][BULK-PROCESS][IDENTITY][CTX-PATCH]', {
     prevForId,
@@ -190239,6 +190352,8 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     }
   } catch {}
 }
+
+
 
 
 function extractBulkProcessSummaryIdentity(input = {}) {
@@ -193280,9 +193395,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   syncBulkProcessHydrationIdentityForActiveRow();
 
-
-
-  const getAttachedSelectionParts = (item) => {
+const getAttachedSelectionParts = (item) => {
 
     const itemObj = (item && typeof item === 'object') ? item : {};
 
@@ -193292,15 +193405,79 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     if (!fileKey) return { attached_id: '', file_key: '', key: '' };
 
-    const sourceLabel = upper(itemObj.source_label || itemObj.source_badge || itemObj.source || meta.source_label || meta.source_badge || meta.source || '');
+    const pickSelectionPart = (...values) => {
 
-    const staged = !!(itemObj.is_staged_context === true || sourceLabel === 'STAGED' || upper(itemObj.status || itemObj.queue_status || meta.status || '') === 'STAGED' || trimStr(itemObj.staged_kind || itemObj.stagedKind || meta.staged_kind || meta.stagedKind || ''));
+      for (const value of values) {
 
-    const attachedId = staged
+        const clean = trimStr(value || '');
 
-      ? trimStr(itemObj.queue_id || itemObj.queueId || itemObj.manual_timesheet_queue_id || itemObj.manualTimesheetQueueId || itemObj.manual_queue_id || itemObj.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || meta.manualQueueId || itemObj.id || meta.id || fileKey || '')
+        if (clean) return clean;
 
-      : trimStr(itemObj.evidence_id || itemObj.evidenceId || itemObj.timesheet_evidence_id || itemObj.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || meta.timesheet_evidence_id || meta.timesheetEvidenceId || itemObj.id || itemObj.queue_id || itemObj.queueId || fileKey || '');
+      }
+
+      return '';
+
+    };
+
+    const sourceLabel = upper(itemObj.source_label || itemObj.sourceLabel || itemObj.source_badge || itemObj.sourceBadge || itemObj.source || meta.source_label || meta.sourceLabel || meta.source_badge || meta.sourceBadge || meta.source || '');
+
+    const statusLabel = upper(itemObj.status || itemObj.queue_status || meta.status || '');
+
+    const queueId = pickSelectionPart(itemObj.queue_id, itemObj.queueId, itemObj.manual_timesheet_queue_id, itemObj.manualTimesheetQueueId, itemObj.manual_queue_id, itemObj.manualQueueId, meta.queue_id, meta.queueId, meta.manual_timesheet_queue_id, meta.manualTimesheetQueueId, meta.manual_queue_id, meta.manualQueueId);
+
+    const evidenceId = pickSelectionPart(itemObj.evidence_id, itemObj.evidenceId, itemObj.timesheet_evidence_id, itemObj.timesheetEvidenceId, meta.evidence_id, meta.evidenceId, meta.timesheet_evidence_id, meta.timesheetEvidenceId);
+
+    const rawId = pickSelectionPart(itemObj.id, meta.id);
+
+    const timesheetId = pickSelectionPart(itemObj.timesheet_id, itemObj.timesheetId, itemObj.current_timesheet_id, itemObj.currentTimesheetId, meta.timesheet_id, meta.timesheetId, meta.current_timesheet_id, meta.currentTimesheetId);
+
+    const rawIdLooksLikeEvidence = !!(rawId && rawId !== queueId && rawId !== fileKey && !/^synthetic-attached:/i.test(rawId));
+
+    const realEvidenceAuthority = !!(
+
+      evidenceId ||
+
+      itemObj.__bulk_process_real_evidence_authority === true ||
+
+      boolish(itemObj.__bulk_process_real_evidence_authority) ||
+
+      sourceLabel === 'ATTACHED' ||
+
+      sourceLabel === 'ATTACHED EVIDENCE' ||
+
+      statusLabel === 'ATTACHED' ||
+
+      (timesheetId && rawIdLooksLikeEvidence)
+
+    );
+
+    const staged = !!(
+
+      !realEvidenceAuthority &&
+
+      (
+
+        itemObj.is_staged_context === true ||
+
+        sourceLabel === 'STAGED' ||
+
+        statusLabel === 'STAGED' ||
+
+        (trimStr(itemObj.staged_kind || itemObj.stagedKind || meta.staged_kind || meta.stagedKind || '') && !timesheetId)
+
+      )
+
+    );
+
+    const attachedId = realEvidenceAuthority
+
+      ? pickSelectionPart(evidenceId, rawIdLooksLikeEvidence ? rawId : '', rawId, fileKey)
+
+      : (staged
+
+          ? pickSelectionPart(queueId, rawId, fileKey)
+
+          : pickSelectionPart(evidenceId, rawIdLooksLikeEvidence ? rawId : '', rawId, queueId, fileKey));
 
     return { attached_id: attachedId || fileKey, file_key: fileKey, key: `attached|${attachedId || fileKey}|${fileKey}` };
 
