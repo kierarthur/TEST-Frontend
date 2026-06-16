@@ -200153,7 +200153,6 @@ async function handleBulkProcessSave(state) {
 }
 
 
-
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -201607,6 +201606,51 @@ async function handleBulkProcessProcess(state) {
     if (protection.hasCanonicalTimesheetEvidence === true) return false;
     return hasDisplayedQueueTimesheetEvidenceForProcess(active, { requireSignedUrl: true, requireQueueRow: true, requireAvailable: true });
   };
+
+  const getProcessQueueTimesheetAutoAttachEligibility = (activeInput = null, protectionInput = null, editabilityInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const protection = (protectionInput && typeof protectionInput === 'object') ? protectionInput : getBulkProcessTimesheetImageProtection(active);
+    const edit = (editabilityInput && typeof editabilityInput === 'object')
+      ? editabilityInput
+      : ((typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : {});
+    const policy = getBulkProcessDomainPolicyForActive(active) || {};
+    const reasons = [];
+
+    if (protection.suppressTimesheetAutoAttach === true) reasons.push(protection.reason || 'timesheet-auto-attach-suppressed-by-route');
+
+    const isAdditionalManualRoute = !!(edit.isAdditionalManualRoute === true || policy.isAdditionalManualRoute === true || policy.supportsUnprocessedExpenseDraft === true || policy.hasContractWeekExpenseDraftTarget === true);
+    if (processRowIsImportDerivedForGating(active) && isAdditionalManualRoute !== true) reasons.push('import-derived-or-import-authoritative');
+
+    if (edit.isImportAuthoritativeCurrent === true && isAdditionalManualRoute !== true) reasons.push('import-authoritative-current-route');
+    if (edit.hasAnyLockBlocker === true || edit.isLockedByInvoice === true || edit.isPaid === true || edit.isAuthorisedBlocked === true || edit.reviewOnly === true) reasons.push('editability-lock-or-review-only');
+    if (edit.canProcess === false && processRowHasNonEvidenceHardBlockForGating(active)) reasons.push('locked-paid-authorised-invoice-or-status-protected');
+    if (edit.canProcess === false && !shouldIgnoreEvidenceDerivedProcessDisable(edit, active)) reasons.push('process-not-currently-allowed');
+
+    const canManageEvidenceSignals = [
+      policy.canManageEvidence,
+      policy.canManageTimesheetEvidence,
+      policy.canAttachTimesheetEvidence,
+      policy.canMutateTimesheetEvidence,
+      policy.canManageManualEvidence,
+      edit.canManageEvidence,
+      edit.can_manage_evidence,
+      edit.canAttachEvidence,
+      edit.can_attach_evidence,
+      edit.canMutateEvidence,
+      edit.can_mutate_evidence
+    ];
+    if (canManageEvidenceSignals.some((value) => value === false)) reasons.push('evidence-mutation-not-allowed');
+
+    return {
+      allowed: reasons.length === 0,
+      reasons,
+      reason: reasons[0] || '',
+      protection,
+      editability: edit,
+      policy,
+      isAdditionalManualRoute
+    };
+  };
   const buildCanonicalProcessActiveRowForSubmit = (activeInput = null, evidencePatchInput = null) => {
     const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     const row = deep(active.row || st.active_row || {}) || {};
@@ -201959,11 +202003,14 @@ async function handleBulkProcessProcess(state) {
       return Array.isArray(payload.missing) || Array.isArray(payload.missing_evidence) || Array.isArray(payload.missingEvidence);
     });
   };
-  const confirmNoEvidence = async (active) => {
-    st.__bulk_process_confirmed_without_timesheet_image = false;
-    st.__bulk_process_suppress_timesheet_materialisation_for_no_image = false;
-    let reconciledActive = reconcileProcessEvidenceTruth(active, { reason: 'before-no-evidence-confirm' });
-    let authoritativeEvidenceRows = collectCanonicalRealEvidenceRowsForProcess(reconciledActive);
+  const confirmNoEvidence = async (active, confirmOptions = {}) => {
+    const opts = (confirmOptions && typeof confirmOptions === 'object') ? confirmOptions : {};
+    if (opts.resetNoTimesheetConfirmationState === true) {
+      st.__bulk_process_confirmed_without_timesheet_image = false;
+      st.__bulk_process_suppress_timesheet_materialisation_for_no_image = false;
+    }
+    let reconciledActive = reconcileProcessEvidenceTruth(active, { reason: trimStr(opts.reason || opts.phase || '') || 'before-no-evidence-confirm' });
+    let authoritativeEvidenceRows = collectProcessEvidenceRowsForSubmitWithAuthority(reconciledActive, collectCanonicalRealEvidenceRowsForProcess(reconciledActive));
     let requiredExpenseKinds = getRequiredExpenseEvidenceKindsForProcess(reconciledActive);
     let missingExpenseKinds = getMissingRequiredProcessEvidenceKinds(reconciledActive, authoritativeEvidenceRows);
     const evidenceExpectation = hasProcessEvidenceExpectation(reconciledActive);
@@ -201972,7 +202019,7 @@ async function handleBulkProcessProcess(state) {
       const hydrated = await requestNarrowProcessEvidenceHydration(reconciledActive, 'before-process-evidence-required-check');
       if (hydrated === true) {
         reconciledActive = reconcileProcessEvidenceTruth(readActive(), { reason: 'after-process-evidence-required-hydration' });
-        authoritativeEvidenceRows = collectCanonicalRealEvidenceRowsForProcess(reconciledActive);
+        authoritativeEvidenceRows = collectProcessEvidenceRowsForSubmitWithAuthority(reconciledActive, collectCanonicalRealEvidenceRowsForProcess(reconciledActive));
         requiredExpenseKinds = getRequiredExpenseEvidenceKindsForProcess(reconciledActive);
         missingExpenseKinds = getMissingRequiredProcessEvidenceKinds(reconciledActive, authoritativeEvidenceRows);
       }
@@ -201994,15 +202041,21 @@ async function handleBulkProcessProcess(state) {
       return true;
     }
 
-    const displayedQueueTimesheet = resolveDisplayedQueuePreviewForProcess(reconciledActive, {
-      requireSignedUrl: true,
-      requireQueueRow: true,
-      requireTimesheet: true,
-      assumeQueueTimesheet: true,
-      requireAvailable: true
-    });
-    if (displayedQueueTimesheet.ok === true && noTimesheetImageProtection.suppressTimesheetAutoAttach !== true) {
+    if (opts.skipTimesheetNoImageWarning === true || st.__bulk_process_confirmed_without_timesheet_image === true || st.__bulk_process_suppress_timesheet_materialisation_for_no_image === true) {
       return true;
+    }
+
+    if (opts.allowDisplayedQueueTimesheetShortcut !== false) {
+      const displayedQueueTimesheet = resolveDisplayedQueuePreviewForProcess(reconciledActive, {
+        requireSignedUrl: true,
+        requireQueueRow: true,
+        requireTimesheet: true,
+        assumeQueueTimesheet: true,
+        requireAvailable: true
+      });
+      if (displayedQueueTimesheet.ok === true && noTimesheetImageProtection.suppressTimesheetAutoAttach !== true) {
+        return true;
+      }
     }
 
     st.__bulk_process_last_process_block_reason = 'NO_TIMESHEET_EVIDENCE_WARNING';
@@ -203519,6 +203572,189 @@ async function handleBulkProcessProcess(state) {
       canonical.push(item);
     }
     return canonical;
+  };
+
+  const buildProcessOwnedQueueTimesheetEvidenceAuthority = (mutationResultInput = {}, activeInput = null, previewAuthorityInput = null, rollbackContextInput = null) => {
+    const result = (mutationResultInput && typeof mutationResultInput === 'object') ? mutationResultInput : {};
+    const activeForAuthority = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const previewAuthority = (previewAuthorityInput && typeof previewAuthorityInput === 'object') ? previewAuthorityInput : {};
+    const rollbackContext = (rollbackContextInput && typeof rollbackContextInput === 'object') ? rollbackContextInput : {};
+    const previewItem = (previewAuthority.item && typeof previewAuthority.item === 'object') ? previewAuthority.item : {};
+    const evidenceItem = (result.evidence_item && typeof result.evidence_item === 'object')
+      ? result.evidence_item
+      : ((result.evidenceItem && typeof result.evidenceItem === 'object') ? result.evidenceItem : {});
+    const activeIdentity = resolveProcessRecordIdentityParts(activeForAuthority);
+    const evidenceId = trimStr(
+      result.evidence_id || result.evidenceId ||
+      evidenceItem.evidence_id || evidenceItem.evidenceId || evidenceItem.id ||
+      rollbackContext.evidence_id || ''
+    );
+    const queueId = trimStr(
+      result.queue_id || result.queueId ||
+      previewAuthority.queueId || previewAuthority.queue_id ||
+      rollbackContext.queue_id || evidenceQueueIdOf(previewItem) || evidenceQueueIdOf(evidenceItem) || ''
+    );
+    const storageKey = trimStr(
+      result.storage_key || result.storageKey ||
+      evidenceItem.storage_key || evidenceItem.storageKey ||
+      previewAuthority.storageKey || previewAuthority.storage_key ||
+      rollbackContext.storage_key || evidenceStorageKeyOf(previewItem) || evidenceStorageKeyOf(evidenceItem) || ''
+    ).replace(/^\/+/, '');
+    const timesheetId = trimStr(
+      result.timesheet_id || result.timesheetId ||
+      evidenceItem.timesheet_id || evidenceItem.timesheetId || evidenceItem.current_timesheet_id || evidenceItem.currentTimesheetId ||
+      rollbackContext.timesheet_id || activeIdentity.timesheetId || activeIdentity.currentTimesheetId || ''
+    );
+    const expectedTimesheetId = trimStr(rollbackContext.expected_timesheet_id || result.expected_timesheet_id || result.expectedTimesheetId || timesheetId || '');
+    const rowKey = trimStr(rollbackContext.row_key || evidenceItem.row_key || evidenceItem.rowKey || activeIdentity.rowKey || activeForAuthority.row?.row_key || st.active_row_key || '');
+    const contractWeekId = trimStr(evidenceItem.contract_week_id || evidenceItem.contractWeekId || activeIdentity.contractWeekId || activeForAuthority.contractWeekId || rollbackContext.contract_week_id || '');
+    if (!evidenceId || !storageKey || !timesheetId) return null;
+
+    const originalQueueItem = deep(previewItem || {});
+    const evidenceRow = {
+      ...originalQueueItem,
+      ...deep(evidenceItem || {}),
+      id: evidenceId,
+      evidence_id: evidenceId,
+      evidenceId,
+      timesheet_evidence_id: evidenceId,
+      timesheetEvidenceId: evidenceId,
+      queue_id: queueId || null,
+      queueId: queueId || null,
+      manual_timesheet_queue_id: queueId || null,
+      manualTimesheetQueueId: queueId || null,
+      kind: 'TIMESHEET',
+      evidence_kind: 'TIMESHEET',
+      evidenceKind: 'TIMESHEET',
+      storage_key: storageKey,
+      storageKey,
+      file_key: storageKey,
+      fileKey: storageKey,
+      download_storage_key: storageKey,
+      downloadStorageKey: storageKey,
+      r2_key: storageKey,
+      r2Key: storageKey,
+      timesheet_id: timesheetId,
+      timesheetId,
+      current_timesheet_id: timesheetId,
+      currentTimesheetId: timesheetId,
+      expected_timesheet_id: expectedTimesheetId || timesheetId,
+      expectedTimesheetId: expectedTimesheetId || timesheetId,
+      row_key: rowKey || null,
+      rowKey: rowKey || null,
+      contract_week_id: contractWeekId || null,
+      contractWeekId: contractWeekId || null,
+      status: 'ATTACHED',
+      source_label: 'Attached',
+      source_badge: 'Attached',
+      source: 'bulk_process_process',
+      bulk_process: true,
+      preview_selection_key: previewAuthority.selectionKey || rollbackContext.preview_selection_key || null,
+      preview_identity: previewAuthority.previewIdentity || rollbackContext.preview_identity || null,
+      active_identity: previewAuthority.activeIdentity || rollbackContext.active_identity || null,
+      __bulk_process_process_owned_queue_attach: true,
+      __bulk_process_real_evidence_authority: true,
+      __bulk_process_original_queue_item: originalQueueItem
+    };
+
+    return {
+      queue_id: queueId || null,
+      evidence_id: evidenceId,
+      timesheet_id: timesheetId,
+      expected_timesheet_id: expectedTimesheetId || timesheetId,
+      storage_key: storageKey,
+      kind: 'TIMESHEET',
+      row_key: rowKey || null,
+      contract_week_id: contractWeekId || null,
+      source: 'bulk_process_process',
+      preview_selection_key: previewAuthority.selectionKey || rollbackContext.preview_selection_key || null,
+      preview_identity: previewAuthority.previewIdentity || rollbackContext.preview_identity || null,
+      active_identity: previewAuthority.activeIdentity || rollbackContext.active_identity || null,
+      attached: result.attached !== false,
+      queue_item_consumed: result.queue_item_consumed === true || result.consumed_queue_item === true || result.consumedQueueItem === true || result.queueItemConsumed === true,
+      original_queue_item: originalQueueItem,
+      evidence_row: evidenceRow,
+      restored: false
+    };
+  };
+
+  const collectProcessEvidenceRowsForSubmitWithAuthority = (activeInput = null, rowsInput = null) => {
+    const activeForRows = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const baseRows = collectCanonicalRealEvidenceRowsForProcess(activeForRows, rowsInput);
+    const authority = processResolvedTimesheetEvidenceForSubmit;
+    if (!authority || authority.restored === true) return baseRows;
+    const authorityRow = (authority.evidence_row && typeof authority.evidence_row === 'object') ? authority.evidence_row : authority;
+    if (evidenceKindOf(authorityRow) !== 'TIMESHEET') return baseRows;
+    if (!hasRealProcessEvidenceIdentity(authorityRow, activeForRows)) return baseRows;
+
+    const authorityEvidenceId = evidenceIdOf(authorityRow);
+    const authorityStorageKey = evidenceStorageKeyOf(authorityRow).toLowerCase();
+    const alreadyPresent = baseRows.some((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const itemEvidenceId = evidenceIdOf(item);
+      const itemStorageKey = evidenceStorageKeyOf(item).toLowerCase();
+      return !!(
+        (authorityEvidenceId && itemEvidenceId && authorityEvidenceId === itemEvidenceId) ||
+        (authorityStorageKey && itemStorageKey && authorityStorageKey === itemStorageKey && evidenceKindOf(item) === 'TIMESHEET')
+      );
+    });
+    return alreadyPresent ? baseRows : [...baseRows, authorityRow];
+  };
+
+  const adoptProcessOwnedQueueTimesheetEvidenceAuthorityForAttempt = (activeInput = null, reason = 'process-owned-queue-timesheet-authority') => {
+    if (!processResolvedTimesheetEvidenceForSubmit || processResolvedTimesheetEvidenceForSubmit.restored === true) return activeInput || readActive();
+    const activeForPatch = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const rows = collectProcessEvidenceRowsForSubmitWithAuthority(activeForPatch);
+    const patch = buildProcessEvidenceAuthorityPatch(rows, { active: activeForPatch });
+    if (patch.hasAnyEvidence !== true) return activeForPatch;
+
+    const patchTarget = (target) => {
+      if (!target || typeof target !== 'object') return;
+      applyProcessEvidenceAuthorityPatch(target, patch);
+      coerceDailyProcessGenericEvidenceBadgeToTimesheet(target);
+    };
+    [
+      st.active_row,
+      st.active_details,
+      st.active_context,
+      st.active_context?.details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx,
+      st.active_ctx?.details,
+      st.active_ctx?.state,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row,
+      window.modalCtx?.data,
+      window.modalCtx?.timesheetState,
+      window.modalCtx?.timesheetDetails,
+      activeForPatch.row,
+      activeForPatch.details,
+      activeForPatch.ctx?.row,
+      activeForPatch.ctx?.data_row,
+      activeForPatch.stateCtx
+    ].forEach(patchTarget);
+
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    if (pane) {
+      pane.attached_rows = rows.map((item) => deep(item));
+      pane.attached_all_rows = rows.map((item) => deep(item));
+      pane.__attached_loaded = true;
+      pane.__evidence_loaded = true;
+      pane.__requires_evidence_hydration = false;
+      pane.__bulk_process_process_owned_queue_evidence_id = processResolvedTimesheetEvidenceForSubmit.evidence_id || '';
+      pane.__bulk_process_process_owned_queue_storage_key = processResolvedTimesheetEvidenceForSubmit.storage_key || '';
+      pane.__bulk_process_process_owned_queue_authority_reason = trimStr(reason || '') || 'process-owned-queue-timesheet-authority';
+    }
+
+    sigLog('PROCESS-OWNED-QUEUE-TIMESHEET-AUTHORITY-ADOPTED', {
+      reason: trimStr(reason || '') || null,
+      evidence_id: processResolvedTimesheetEvidenceForSubmit.evidence_id || null,
+      queue_id: processResolvedTimesheetEvidenceForSubmit.queue_id || null,
+      storage_key: processResolvedTimesheetEvidenceForSubmit.storage_key || null,
+      rows_for_submit_count: rows.length
+    });
+    return activeForPatch;
   };
   const buildProcessEvidenceAuthorityPatch = (rowsInput = [], patchOptions = {}) => {
     const opts = (patchOptions && typeof patchOptions === 'object') ? patchOptions : {};
@@ -205099,6 +205335,7 @@ async function handleBulkProcessProcess(state) {
   let processAutoAttachedQueueEvidenceForRollback = null;
   let processBackendQueueEvidenceForRefresh = null;
   let processSelectedQueueEvidenceForFailureMapping = null;
+  let processResolvedTimesheetEvidenceForSubmit = null;
   let processSubmitSucceededForRollback = false;
 
   const normaliseProcessQueueEvidenceSnapshot = (snapshotInput = null) => {
@@ -205178,6 +205415,9 @@ async function handleBulkProcessProcess(state) {
         throw new Error(trimStr(rb?.error || rb?.message || 'Timesheet image rollback did not confirm that the image was returned to the queue.'));
       }
       rollbackContext.restored = true;
+      if (processResolvedTimesheetEvidenceForSubmit && processResolvedTimesheetEvidenceForSubmit.evidence_id === rollbackContext.evidence_id) {
+        processResolvedTimesheetEvidenceForSubmit.restored = true;
+      }
     } catch (rollbackErr) {
       rollbackFailedText = trimStr(rollbackErr?.message || rollbackErr || 'Timesheet image rollback failed.');
     }
@@ -205222,6 +205462,8 @@ async function handleBulkProcessProcess(state) {
   };
 
   try {
+    st.__bulk_process_confirmed_without_timesheet_image = false;
+    st.__bulk_process_suppress_timesheet_materialisation_for_no_image = false;
     sigLog('START', {
       dirty: (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty,
       loading: !!st.loading,
@@ -205411,7 +205653,8 @@ async function handleBulkProcessProcess(state) {
     expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
     processTimesheetImageProtection = getBulkProcessTimesheetImageProtection(active);
 
-    let suppressTimesheetAutoAttachForProcess = processTimesheetImageProtection.suppressTimesheetAutoAttach === true;
+    let queueTimesheetAutoAttachEligibility = getProcessQueueTimesheetAutoAttachEligibility(active, processTimesheetImageProtection, editability);
+    let suppressTimesheetAutoAttachForProcess = queueTimesheetAutoAttachEligibility.allowed !== true;
     let hasRealTimesheetBeforeQueueAttach = hasCanonicalTimesheetEvidenceForProcess(active);
     let previewedQueueBeforeRefresh = null;
     let previewedQueueTimesheetBeforeRefresh = null;
@@ -205440,7 +205683,8 @@ async function handleBulkProcessProcess(state) {
         activeContractWeekId = active.contractWeekId;
         expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
         processTimesheetImageProtection = getBulkProcessTimesheetImageProtection(active);
-        suppressTimesheetAutoAttachForProcess = processTimesheetImageProtection.suppressTimesheetAutoAttach === true;
+        queueTimesheetAutoAttachEligibility = getProcessQueueTimesheetAutoAttachEligibility(active, processTimesheetImageProtection, editability);
+        suppressTimesheetAutoAttachForProcess = queueTimesheetAutoAttachEligibility.allowed !== true;
         hasRealTimesheetBeforeQueueAttach = hasCanonicalTimesheetEvidenceForProcess(active);
 
         if (!hasRealTimesheetBeforeQueueAttach && !suppressTimesheetAutoAttachForProcess) {
@@ -205544,6 +205788,7 @@ async function handleBulkProcessProcess(state) {
       preview_authoritative_queue_for_auto_attach: stateAuditClone(previewedQueueForAutoAttach || null),
       has_real_timesheet_before_queue_attach: hasRealTimesheetBeforeQueueAttach === true,
       suppress_timesheet_auto_attach: suppressTimesheetAutoAttachForProcess,
+      queue_timesheet_auto_attach_eligibility: stateAuditClone(queueTimesheetAutoAttachEligibility || null),
       selected_queue_timesheet_before_process: selectedQueueTimesheetBeforeProcess,
       selected_queue_id: selectedQueueBeforeProcessQueueId || null,
       selected_queue_storage_key: selectedQueueBeforeProcessStorageKey || null,
@@ -205560,6 +205805,46 @@ async function handleBulkProcessProcess(state) {
         kind: previewedQueueBeforeRefresh.kind || previewedQueueTimesheetBeforeRefresh?.kind || null
       });
     }
+
+    const shouldRunPreAttachNoTimesheetEvidenceConfirmation = !!(
+      !hasRealTimesheetBeforeQueueAttach &&
+      !selectedQueueTimesheetBeforeProcess &&
+      !willAttachOrStageQueueItem &&
+      !willPassQueueTimesheetToWeeklyProcess &&
+      processTimesheetImageProtection.suppressTimesheetAutoAttach !== true &&
+      queueTimesheetAutoAttachEligibility.allowed === true
+    );
+    if (shouldRunPreAttachNoTimesheetEvidenceConfirmation) {
+      stateAudit('before-pre-attach-confirm-no-evidence', {
+        reason: 'no-real-timesheet-evidence-and-no-authoritative-queue-preview',
+        has_real_timesheet_before_queue_attach: hasRealTimesheetBeforeQueueAttach === true,
+        selected_queue_timesheet_before_process: selectedQueueTimesheetBeforeProcess === true,
+        will_attach_or_stage_queue_item: willAttachOrStageQueueItem === true,
+        pass_queue_timesheet_to_weekly_process: willPassQueueTimesheetToWeeklyProcess === true,
+        queue_timesheet_auto_attach_eligible: queueTimesheetAutoAttachEligibility.allowed === true,
+        queue_timesheet_auto_attach_eligibility_reason: queueTimesheetAutoAttachEligibility.reason || null
+      });
+      const preAttachEvidenceOk = await confirmNoEvidence(active, {
+        phase: 'pre-attach-no-queue-timesheet-evidence',
+        reason: 'pre-attach-no-queue-timesheet-evidence',
+        allowDisplayedQueueTimesheetShortcut: false
+      });
+      stateAudit('after-pre-attach-confirm-no-evidence', { evidence_ok: preAttachEvidenceOk === true, error_text: trimStr(st.error_text || '') || null });
+      if (!preAttachEvidenceOk) {
+        const originalBlockMessage = st.error_text || 'Process cancelled.';
+        if (st.__bulk_process_last_process_block_reason === 'EXPENSE_EVIDENCE_REQUIRED') {
+          await showBulkProcessProcessBlockedModal(originalBlockMessage);
+        }
+        await rerenderBulkProcessWorkbenchAfterProcessBlock('process-cancelled-before-queue-attach');
+        stateAudit('return:block:pre-attach-evidence-confirm-false', {
+          error_text: trimStr(st.error_text || '') || null,
+          last_block_reason: trimStr(st.__bulk_process_last_process_block_reason || '') || null
+        });
+        GE();
+        return { ok: false, error: originalBlockMessage, message: originalBlockMessage, evidenceRequired: st.__bulk_process_last_process_block_reason === 'EXPENSE_EVIDENCE_REQUIRED' };
+      }
+    }
+
       if (willPassQueueTimesheetToWeeklyProcess) {
       sigLog('QUEUE-ATTACH-DEFER-TO-WEEKLY-PROCESS', {
         reason: 'weekly-process-backend-must-materialise-displayed-queue-timesheet-atomically',
@@ -205599,10 +205884,32 @@ async function handleBulkProcessProcess(state) {
           evidence_id: rollbackEvidenceId,
           queue_id: selectedQueueBeforeProcessQueueId || trimStr(queueEvidenceMutationResult?.queue_id || queueEvidenceMutationResult?.queueId || ''),
           storage_key: selectedQueueBeforeProcessStorageKey || trimStr(queueEvidenceMutationResult?.storage_key || queueEvidenceMutationResult?.storageKey || ''),
+          kind: 'TIMESHEET',
           row_key: previousRowKey || null,
+          contract_week_id: activeContractWeekId || null,
           preview_selection_key: previewedQueueForAutoAttach?.selectionKey || null,
+          preview_identity: previewedQueueForAutoAttach?.previewIdentity || null,
+          active_identity: previewedQueueForAutoAttach?.activeIdentity || null,
+          original_queue_item: deep(previewedQueueForAutoAttach?.item || {}),
+          source: 'bulk_process_process',
           restored: false
         };
+        processResolvedTimesheetEvidenceForSubmit = buildProcessOwnedQueueTimesheetEvidenceAuthority(
+          queueEvidenceMutationResult,
+          active,
+          previewedQueueForAutoAttach,
+          processAutoAttachedQueueEvidenceForRollback
+        );
+        if (!processResolvedTimesheetEvidenceForSubmit) {
+          throw new Error('The currently previewed Timesheet image was attached, but Process could not build authoritative evidence state from the returned evidence id. Processing has stopped so the image cannot be left half-attached.');
+        }
+        processSelectedQueueEvidenceForFailureMapping = {
+          ...(processSelectedQueueEvidenceForFailureMapping || {}),
+          ...deep(processResolvedTimesheetEvidenceForSubmit),
+          direct_attach_to_existing_timesheet: true,
+          backend_weekly_materialisation: false
+        };
+        active = adoptProcessOwnedQueueTimesheetEvidenceAuthorityForAttempt(active, 'after-process-queue-attach-response');
       }
     }
     sigLog('AFTER-EVIDENCE-MUTATION-CALL', {
@@ -205618,6 +205925,9 @@ async function handleBulkProcessProcess(state) {
         'bulk-process-process-after-evidence-status-header',
         { skipScalarCompatibility: false }
       );
+      if (processResolvedTimesheetEvidenceForSubmit && processResolvedTimesheetEvidenceForSubmit.restored !== true) {
+        active = adoptProcessOwnedQueueTimesheetEvidenceAuthorityForAttempt(active, 'after-process-evidence-mutation-refresh');
+      }
       activeTimesheetId = active.timesheetId;
       activeContractWeekId = active.contractWeekId;
       expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
@@ -205630,8 +205940,23 @@ async function handleBulkProcessProcess(state) {
     }
 
     active = reconcileProcessEvidenceTruth(active, { reason: 'before-evidence-confirm' });
-    stateAudit('before-confirm-no-evidence', { evidence_rows_count: collectCanonicalRealEvidenceRowsForProcess(active).length, evidence_expectation: hasProcessEvidenceExpectation(active) });
-    const evidenceOk = await confirmNoEvidence(active);
+    if (processResolvedTimesheetEvidenceForSubmit && processResolvedTimesheetEvidenceForSubmit.restored !== true) {
+      active = adoptProcessOwnedQueueTimesheetEvidenceAuthorityForAttempt(active, 'before-post-attach-evidence-confirm');
+    }
+    stateAudit('before-confirm-no-evidence', {
+      evidence_rows_count: collectProcessEvidenceRowsForSubmitWithAuthority(active).length,
+      evidence_expectation: hasProcessEvidenceExpectation(active),
+      process_owned_timesheet_evidence: stateAuditClone(processResolvedTimesheetEvidenceForSubmit || null)
+    });
+    const evidenceOk = await confirmNoEvidence(active, {
+      phase: 'post-attach-evidence-confirm',
+      reason: 'post-attach-evidence-confirm',
+      allowDisplayedQueueTimesheetShortcut: evidenceMutated !== true,
+      skipTimesheetNoImageWarning: !!(
+        (processResolvedTimesheetEvidenceForSubmit && processResolvedTimesheetEvidenceForSubmit.restored !== true) ||
+        (queueTimesheetAutoAttachEligibility.allowed !== true && processTimesheetImageProtection.suppressTimesheetAutoAttach !== true)
+      )
+    });
     stateAudit('after-confirm-no-evidence', { evidence_ok: evidenceOk === true, error_text: trimStr(st.error_text || '') || null });
     if (!evidenceOk) {
       const originalBlockMessage = st.error_text || 'Process cancelled.';
@@ -205652,7 +205977,7 @@ async function handleBulkProcessProcess(state) {
       return { ok: false, error: st.error_text || originalBlockMessage, message: st.error_text || originalBlockMessage, evidenceRequired: st.__bulk_process_last_process_block_reason === 'EXPENSE_EVIDENCE_REQUIRED', queueRollbackFailed: rollbackBeforeReturn?.ok === false };
     }
 
-     let processEvidenceRowsForSubmit = collectCanonicalRealEvidenceRowsForProcess(active);
+     let processEvidenceRowsForSubmit = collectProcessEvidenceRowsForSubmitWithAuthority(active);
     let processEvidencePatchForSubmit = buildProcessEvidenceAuthorityPatch(processEvidenceRowsForSubmit, { active });
     let missingEvidenceKindsBeforeSubmit = getMissingRequiredProcessEvidenceKinds(active, processEvidenceRowsForSubmit);
     stateAudit('submit-evidence-readiness-initial', {
@@ -205660,7 +205985,8 @@ async function handleBulkProcessProcess(state) {
       evidence_rows_for_submit: processEvidenceRowsForSubmit.slice(0, 8).map(stateAuditEvidenceSummary),
       patch_has_any_evidence: processEvidencePatchForSubmit.hasAnyEvidence === true,
       patch_attached_evidence_count: processEvidencePatchForSubmit.attachedEvidenceCount || 0,
-      missing_evidence_kinds_before_submit: missingEvidenceKindsBeforeSubmit.slice()
+      missing_evidence_kinds_before_submit: missingEvidenceKindsBeforeSubmit.slice(),
+      process_owned_timesheet_evidence: stateAuditClone(processResolvedTimesheetEvidenceForSubmit || null)
     });
     const suppressTimesheetEvidenceExpectationForSubmit = !!(
       processTimesheetImageProtection.suppressTimesheetAutoAttach === true ||
@@ -205678,7 +206004,10 @@ async function handleBulkProcessProcess(state) {
         activeTimesheetId = active.timesheetId;
         activeContractWeekId = active.contractWeekId;
         expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
-        processEvidenceRowsForSubmit = collectCanonicalRealEvidenceRowsForProcess(active);
+        if (processResolvedTimesheetEvidenceForSubmit && processResolvedTimesheetEvidenceForSubmit.restored !== true) {
+          active = adoptProcessOwnedQueueTimesheetEvidenceAuthorityForAttempt(active, 'after-submit-evidence-hydration');
+        }
+        processEvidenceRowsForSubmit = collectProcessEvidenceRowsForSubmitWithAuthority(active);
         processEvidencePatchForSubmit = buildProcessEvidenceAuthorityPatch(processEvidenceRowsForSubmit, { active });
         missingEvidenceKindsBeforeSubmit = getMissingRequiredProcessEvidenceKinds(active, processEvidenceRowsForSubmit);
         stateAudit('submit-evidence-hydration:after-success', { evidence_rows_for_submit_count: processEvidenceRowsForSubmit.length, missing_evidence_kinds_before_submit: missingEvidenceKindsBeforeSubmit.slice() });
@@ -206166,6 +206495,9 @@ async function handleBulkProcessProcess(state) {
             throw new Error(trimStr(rb?.error || rb?.message || 'Timesheet image rollback did not confirm that the image was returned to the queue.'));
           }
           processAutoAttachedQueueEvidenceForRollback.restored = true;
+          if (processResolvedTimesheetEvidenceForSubmit && processResolvedTimesheetEvidenceForSubmit.evidence_id === processAutoAttachedQueueEvidenceForRollback.evidence_id) {
+            processResolvedTimesheetEvidenceForSubmit.restored = true;
+          }
         } catch (rollbackErr) {
           processErrorRollbackFailed = true;
           rollbackFailedText = trimStr(rollbackErr?.message || rollbackErr || 'Timesheet image rollback failed.');
@@ -206279,8 +206611,6 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
-
-
 
 
 
