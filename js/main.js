@@ -141825,8 +141825,6 @@ async function wireTimesheetImportsUpload(state) {
     window.__tsImportsGlobalDropGuardBound = true;
   }
 }
-
-
 async function refreshTimesheetImportsQueue(state, opts = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][IMPORTS][QUEUE][REFRESH]');
   GC('refreshTimesheetImportsQueue');
@@ -162869,7 +162867,6 @@ function renderBulkProcessPreviewPane(state) {
   `);
 }
 
-
 async function openBulkProcessWorkbench(seed = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][OPEN]');
   GC('openBulkProcessWorkbench');
@@ -164925,7 +164922,8 @@ async function openBulkProcessWorkbench(seed = {}) {
     const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
     const rowKey = trimStr(row.row_key || row.new_row_key || row.current_row_key || '');
     const tsId = trimStr(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
-    const cwId = trimStr(row.contract_week_id || row.contractWeekId || '');
+    const rawCwId = trimStr(row.contract_week_id || row.contractWeekId || '');
+    const cwId = /^timesheet:/i.test(rowKey || '') && (!rawCwId || rawCwId === tsId) ? '' : rawCwId;
     const identity = rowKey || (tsId ? `timesheet:${tsId}` : (cwId ? `contract_week:${cwId}` : ''));
     return { rowKey, tsId, cwId, identity };
   };
@@ -168955,8 +168953,6 @@ function classifyBulkProcessEditability(ctxInput) {
   };
 }
 
-
-
 function bindBulkProcessManualEditor(state) {
   const st = (state && typeof state === 'object') ? state : null;
   if (!st) return;
@@ -168995,6 +168991,33 @@ function bindBulkProcessManualEditor(state) {
   };
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const upper = (v) => trimStr(v).toUpperCase();
+  const hasOwnManualContractField = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const readExplicitManualContractWeekId = (...sources) => {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      const contractWeekObj = (source.contract_week && typeof source.contract_week === 'object') ? source.contract_week : null;
+      const contractWeekCamelObj = (source.contractWeek && typeof source.contractWeek === 'object') ? source.contractWeek : null;
+      const candidates = [];
+      if (hasOwnManualContractField(source, 'contract_week_id')) candidates.push(source.contract_week_id);
+      if (hasOwnManualContractField(source, 'contractWeekId')) candidates.push(source.contractWeekId);
+      if (contractWeekObj && hasOwnManualContractField(contractWeekObj, 'id')) candidates.push(contractWeekObj.id);
+      if (contractWeekCamelObj && hasOwnManualContractField(contractWeekCamelObj, 'id')) candidates.push(contractWeekCamelObj.id);
+      for (const candidate of candidates) {
+        const clean = trimStr(candidate || '');
+        if (clean) return clean;
+      }
+    }
+    return '';
+  };
+  const normaliseManualContractWeekIdForContext = ({ rowKey = '', timesheetId = '', freshSources = [], fallbackSources = [] } = {}) => {
+    const key = trimStr(rowKey || '');
+    const tsId = trimStr(timesheetId || '');
+    const isTimesheetIdentity = /^timesheet:/i.test(key || '') || (!!tsId && !/^contract_week:/i.test(key || ''));
+    const freshCandidate = readExplicitManualContractWeekId(...freshSources);
+    if (isTimesheetIdentity) return freshCandidate && freshCandidate !== tsId ? freshCandidate : null;
+    const fallbackCandidate = readExplicitManualContractWeekId(...freshSources, ...fallbackSources);
+    return fallbackCandidate || null;
+  };
   const isActionBusy = () => !!(st.loading || st.saving || st.processing || st.unprocessing);
   const getBulkProcessOwnerToken = () => trimStr(
     st.__bulk_process_modal_open_token ||
@@ -169164,7 +169187,12 @@ function bindBulkProcessManualEditor(state) {
     const currentTimesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
     const requestedTimesheetId = trimStr(row.requested_timesheet_id || row.timesheet_id || currentTimesheetId || '');
     const expectedTimesheetId = trimStr(row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || currentTimesheetId || '');
-    const contractWeekId = trimStr(row.contract_week_id || row.contractWeekId || '');
+    const contractWeekId = normaliseManualContractWeekIdForContext({
+      rowKey: requestedRowKey,
+      timesheetId: currentTimesheetId || requestedTimesheetId || expectedTimesheetId,
+      freshSources: /^timesheet:/i.test(requestedRowKey || '') || currentTimesheetId || requestedTimesheetId || expectedTimesheetId ? [] : [row],
+      fallbackSources: /^timesheet:/i.test(requestedRowKey || '') || currentTimesheetId || requestedTimesheetId || expectedTimesheetId ? [] : [previousDetails, previousDetails?.contract_week]
+    }) || '';
 
     const fetchEditorLayerContext = async () => {
       const qs = new URLSearchParams();
@@ -169228,11 +169256,26 @@ function bindBulkProcessManualEditor(state) {
         ? contextPayload.data_row
         : ((contextPayload.row && typeof contextPayload.row === 'object') ? contextPayload.row : row);
       const rowPatch = (contextPayload.row_patch && typeof contextPayload.row_patch === 'object') ? contextPayload.row_patch : {};
+      const detailsPayload = (contextPayload.details && typeof contextPayload.details === 'object') ? deep(contextPayload.details) : {};
+      const nextDetailsTimesheetId = trimStr(contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || payloadRow.current_timesheet_id || payloadRow.timesheet_id || rowPatch.current_timesheet_id || rowPatch.timesheet_id || row.current_timesheet_id || row.timesheet_id || '');
+      const nextDetailsContractWeekId = normaliseManualContractWeekIdForContext({
+        rowKey: contextPayload.row_key || payloadRow.row_key || rowPatch.row_key || requestedRowKey,
+        timesheetId: nextDetailsTimesheetId,
+        freshSources: [contextPayload, detailsPayload, detailsPayload.contract_week, payloadRow, rowPatch],
+        fallbackSources: /^timesheet:/i.test(trimStr(contextPayload.row_key || payloadRow.row_key || rowPatch.row_key || requestedRowKey || '') || '') || nextDetailsTimesheetId ? [] : [row]
+      });
       const nextRow = {
         ...(row && typeof row === 'object' ? deep(row) : {}),
         ...(payloadRow && typeof payloadRow === 'object' ? deep(payloadRow) : {}),
         ...(rowPatch && typeof rowPatch === 'object' ? deep(rowPatch) : {})
       };
+      if (/^timesheet:/i.test(trimStr(contextPayload.row_key || payloadRow.row_key || rowPatch.row_key || requestedRowKey || '') || '') || nextDetailsTimesheetId) {
+        nextRow.contract_week_id = nextDetailsContractWeekId;
+        nextRow.contractWeekId = nextDetailsContractWeekId;
+      } else if (nextDetailsContractWeekId) {
+        nextRow.contract_week_id = nextDetailsContractWeekId;
+        nextRow.contractWeekId = nextDetailsContractWeekId;
+      }
       const liveRowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
       const nextRowKey = rowKeyOf(nextRow) || trimStr(nextRow.row_key || requestedRowKey || '');
       if (requestedRowKey && liveRowKey && requestedRowKey !== liveRowKey) {
@@ -169243,7 +169286,6 @@ function bindBulkProcessManualEditor(state) {
         return false;
       }
 
-      const detailsPayload = (contextPayload.details && typeof contextPayload.details === 'object') ? deep(contextPayload.details) : {};
       const related = ensureBulkProcessRelatedContract(
         (detailsPayload.related && typeof detailsPayload.related === 'object')
           ? deep(detailsPayload.related)
@@ -169254,13 +169296,23 @@ function bindBulkProcessManualEditor(state) {
         detailsPayload
       );
 
+      const finalNextDetailsContractWeekId = normaliseManualContractWeekIdForContext({
+        rowKey: nextRowKey,
+        timesheetId: nextDetailsTimesheetId,
+        freshSources: [contextPayload, detailsPayload, detailsPayload.contract_week, payloadRow, rowPatch],
+        fallbackSources: /^timesheet:/i.test(nextRowKey || '') || nextDetailsTimesheetId ? [] : [nextRow]
+      });
+
       const nextDetails = {
         ...((previousDetails && typeof previousDetails === 'object') ? deep(previousDetails) : {}),
         ...(detailsPayload && typeof detailsPayload === 'object' ? deep(detailsPayload) : {}),
         current_timesheet_id: contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || nextRow.current_timesheet_id || nextRow.timesheet_id || null,
         requested_timesheet_id: contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || nextRow.requested_timesheet_id || nextRow.timesheet_id || null,
         expected_timesheet_id: contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || nextRow.expected_timesheet_id || nextRow.current_timesheet_id || nextRow.timesheet_id || null,
-        contract_week_id: contextPayload.contract_week_id || detailsPayload.contract_week_id || nextRow.contract_week_id || null,
+        contract_week_id: finalNextDetailsContractWeekId,
+        contract_week: finalNextDetailsContractWeekId
+          ? ((detailsPayload.contract_week && typeof detailsPayload.contract_week === 'object') ? deep(detailsPayload.contract_week) : { id: finalNextDetailsContractWeekId })
+          : null,
         evidence: previousEvidenceRows,
         evidence_loaded: previousEvidenceLoaded,
         related: deep(related),
@@ -169859,10 +169911,17 @@ function bindBulkProcessManualEditor(state) {
     st.selected_row_keys = nextKey ? [nextKey] : [];
 
     const fallbackRelated = buildFallbackRelated(st.active_row, st.active_details || {});
+    const nextActiveTimesheetIdForDetails = firstNonEmpty(st.active_row.current_timesheet_id, st.active_row.timesheet_id) || '';
+    const nextActiveContractWeekIdForDetails = normaliseManualContractWeekIdForContext({
+      rowKey: nextKey || rowKeyOf(st.active_row) || '',
+      timesheetId: nextActiveTimesheetIdForDetails,
+      freshSources: /^timesheet:/i.test(nextKey || '') || nextActiveTimesheetIdForDetails ? [] : [st.active_row],
+      fallbackSources: []
+    });
     st.active_details = {
       ...(st.active_details && typeof st.active_details === 'object' ? deep(st.active_details) : {}),
-      current_timesheet_id: firstNonEmpty(st.active_row.current_timesheet_id, st.active_row.timesheet_id) || null,
-      contract_week_id: firstNonEmpty(st.active_row.contract_week_id) || null,
+      current_timesheet_id: nextActiveTimesheetIdForDetails || null,
+      contract_week_id: nextActiveContractWeekIdForDetails,
       sheet_scope: st.active_row.sheet_scope || null,
       summary_stage: st.active_row.summary_stage || st.active_row.processing_status || null,
       route_type: st.active_row.route_type || null,
@@ -170137,8 +170196,15 @@ function bindBulkProcessManualEditor(state) {
     );
     if (targetContractWeekId) {
       const byContractWeek = rows.find((row) => {
-        const rowWeekId = trimStr(row?.contract_week_id || row?.id || '');
         const rowKey = trimStr(row?.row_key || '');
+        const rowTimesheetId = trimStr(row?.current_timesheet_id || row?.timesheet_id || '');
+        const rowKeyContractWeekId = /^contract_week:/i.test(rowKey || '')
+          ? trimStr(rowKey.replace(/^contract_week:/i, ''))
+          : '';
+        const rowIdContractWeekCandidate = (!rowTimesheetId && !/^timesheet:/i.test(rowKey || ''))
+          ? trimStr(row?.id || '')
+          : '';
+        const rowWeekId = trimStr(row?.contract_week_id || row?.contractWeekId || rowKeyContractWeekId || rowIdContractWeekCandidate || '');
         return (rowWeekId && rowWeekId === targetContractWeekId) || rowKey === `contract_week:${targetContractWeekId}`;
       });
       if (byContractWeek) return byContractWeek;
@@ -170314,9 +170380,16 @@ function bindBulkProcessManualEditor(state) {
       await refreshActiveContextInPlace();
     } catch (refreshErr) {
       const fallbackRelated = buildFallbackRelated(row, {});
+      const fallbackTimesheetIdForDetails = firstNonEmpty(row.current_timesheet_id, row.timesheet_id) || '';
+      const fallbackContractWeekIdForDetails = normaliseManualContractWeekIdForContext({
+        rowKey: rowKey || rowKeyOf(row) || '',
+        timesheetId: fallbackTimesheetIdForDetails,
+        freshSources: /^timesheet:/i.test(rowKey || '') || fallbackTimesheetIdForDetails ? [] : [row],
+        fallbackSources: []
+      });
       st.active_details = {
-        current_timesheet_id: firstNonEmpty(row.current_timesheet_id, row.timesheet_id) || null,
-        contract_week_id: firstNonEmpty(row.contract_week_id) || null,
+        current_timesheet_id: fallbackTimesheetIdForDetails || null,
+        contract_week_id: fallbackContractWeekIdForDetails,
         sheet_scope: row.sheet_scope || row.period_type || null,
         summary_stage: row.summary_stage || row.bulk_process_bucket || row.processing_status || 'UNPROCESSED',
         tools_stage: row.tools_stage || row.summary_stage || row.bulk_process_bucket || row.processing_status || 'UNPROCESSED',
@@ -170330,8 +170403,8 @@ function bindBulkProcessManualEditor(state) {
           week_ending_date: row.week_ending_date || row.contract_week_ending_date || null,
           qr_status: row.qr_status || null
         } : null,
-        contract_week: row.contract_week_id ? {
-          id: row.contract_week_id,
+        contract_week: fallbackContractWeekIdForDetails ? {
+          id: fallbackContractWeekIdForDetails,
           week_ending_date: row.contract_week_ending_date || row.week_ending_date || null,
           submission_mode_snapshot: row.submission_mode_snapshot || row.submission_mode || 'MANUAL'
         } : null,
@@ -171315,8 +171388,6 @@ function bindBulkProcessManualEditor(state) {
     }
   }
 }
-
-
 
 
 function bindBulkProcessPreviewPane(state) {
@@ -173894,6 +173965,24 @@ function bindBulkProcessPreviewPane(state) {
     return String(url);
   };
 
+  const readPreviewAttachedExplicitContractWeekId = (...sources) => {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      const contractWeekObj = (source.contract_week && typeof source.contract_week === 'object') ? source.contract_week : null;
+      const contractWeekCamelObj = (source.contractWeek && typeof source.contractWeek === 'object') ? source.contractWeek : null;
+      const candidates = [];
+      if (Object.prototype.hasOwnProperty.call(source, 'contract_week_id')) candidates.push(source.contract_week_id);
+      if (Object.prototype.hasOwnProperty.call(source, 'contractWeekId')) candidates.push(source.contractWeekId);
+      if (contractWeekObj && Object.prototype.hasOwnProperty.call(contractWeekObj, 'id')) candidates.push(contractWeekObj.id);
+      if (contractWeekCamelObj && Object.prototype.hasOwnProperty.call(contractWeekCamelObj, 'id')) candidates.push(contractWeekCamelObj.id);
+      for (const candidate of candidates) {
+        const clean = trimStr(candidate || '');
+        if (clean) return clean;
+      }
+    }
+    return '';
+  };
+
   const syncAttachedRows = () => {
     if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
       reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
@@ -173905,7 +173994,28 @@ function bindBulkProcessPreviewPane(state) {
     }
     const activeRowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
     const activeTimesheetId = trimStr(st.active_row?.timesheet_id || st.active_row?.current_timesheet_id || st.active_row?.requested_timesheet_id || st.active_details?.current_timesheet_id || st.active_details?.timesheet?.timesheet_id || st.active_context?.row?.timesheet_id || st.active_context?.row?.current_timesheet_id || st.active_ctx?.row?.timesheet_id || st.active_ctx?.row?.current_timesheet_id || '');
-    const activeContractWeekId = trimStr(st.active_row?.contract_week_id || st.active_row?.contractWeekId || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || st.active_context?.row?.contract_week_id || st.active_context?.data_row?.contract_week_id || st.active_ctx?.row?.contract_week_id || st.active_ctx?.data_row?.contract_week_id || '');
+    const activeIdentityIsTimesheetForAttached = /^timesheet:/i.test(activeRowKey || '') || (!!activeTimesheetId && !/^contract_week:/i.test(activeRowKey || ''));
+    const activeContractWeekId = (() => {
+      if (activeIdentityIsTimesheetForAttached) {
+        const freshCandidate = readPreviewAttachedExplicitContractWeekId(
+          st.active_row,
+          st.active_context?.row,
+          st.active_context?.data_row,
+          st.active_ctx?.row,
+          st.active_ctx?.data_row
+        );
+        return freshCandidate && freshCandidate !== activeTimesheetId ? freshCandidate : '';
+      }
+      return readPreviewAttachedExplicitContractWeekId(
+        st.active_row,
+        st.active_details,
+        st.active_details?.contract_week,
+        st.active_context?.row,
+        st.active_context?.data_row,
+        st.active_ctx?.row,
+        st.active_ctx?.data_row
+      );
+    })();
     const activeIsContractWeekOnly = !!(
       activeContractWeekId &&
       !activeTimesheetId &&
@@ -173927,7 +174037,7 @@ function bindBulkProcessPreviewPane(state) {
         const rowTsId = trimStr(row.timesheet_id || row.current_timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
         if (activeTimesheetId && rowTsId && rowTsId === activeTimesheetId) return true;
         const rowCwId = trimStr(row.contract_week_id || row.contractWeekId || '');
-        if (activeContractWeekId && rowCwId && rowCwId === activeContractWeekId) return true;
+        if (!activeIdentityIsTimesheetForAttached && activeContractWeekId && rowCwId && rowCwId === activeContractWeekId) return true;
         return false;
       }) || null;
     };
@@ -173941,6 +174051,13 @@ function bindBulkProcessPreviewPane(state) {
         const fileKey = trimStr(artifact?.storage_key || artifact?.storageKey || artifact?.file_key || artifact?.fileKey || artifact?.download_storage_key || artifact?.downloadStorageKey || artifact?.r2_key || artifact?.r2Key || container.primary_artifact_storage_key || hints.primary_artifact_storage_key || '').replace(/^\/+/, '');
         if (!fileKey) continue;
         const primaryId = trimStr(artifact?.id || artifact?.evidence_id || artifact?.evidenceId || artifact?.queue_id || artifact?.queueId || container.primary_artifact_id || hints.primary_artifact_id || '');
+        const artifactTimesheetId = trimStr(artifact?.timesheet_id || artifact?.timesheetId || container.timesheet_id || container.current_timesheet_id || activeTimesheetId || '');
+        const artifactRawContractWeekId = activeIdentityIsTimesheetForAttached
+          ? readPreviewAttachedExplicitContractWeekId(artifact || {})
+          : readPreviewAttachedExplicitContractWeekId(artifact || {}, container, hints);
+        const artifactContractWeekId = activeIdentityIsTimesheetForAttached
+          ? (artifactRawContractWeekId && artifactRawContractWeekId !== artifactTimesheetId && artifactRawContractWeekId !== activeTimesheetId ? artifactRawContractWeekId : '')
+          : (artifactRawContractWeekId || activeContractWeekId || '');
         rows.push({
           ...(artifact || {}),
           id: primaryId || fileKey,
@@ -173953,8 +174070,8 @@ function bindBulkProcessPreviewPane(state) {
           download_storage_key: fileKey,
           r2_key: fileKey,
           row_key: container.row_key || activeRowKey || null,
-          timesheet_id: container.timesheet_id || container.current_timesheet_id || activeTimesheetId || null,
-          contract_week_id: container.contract_week_id || container.contractWeekId || activeContractWeekId || null,
+          timesheet_id: artifactTimesheetId || null,
+          contract_week_id: artifactContractWeekId || null,
           __primary_artifact_fallback: true
         });
       }
@@ -173988,7 +174105,8 @@ function bindBulkProcessPreviewPane(state) {
         const hasIdentity = !!(rowKey || timesheetId || contractWeekId);
         const matchesRowKey = !!(rowKey && activeRowKey && rowKey === activeRowKey);
         const matchesTimesheet = !!(timesheetId && activeTimesheetId && timesheetId === activeTimesheetId);
-        const matchesContractWeek = !!(contractWeekId && activeContractWeekId && contractWeekId === activeContractWeekId);
+        if (activeIdentityIsTimesheetForAttached && contractWeekId && !timesheetId && (!rowKey || rowKey !== activeRowKey)) return null;
+        const matchesContractWeek = !!(!activeIdentityIsTimesheetForAttached && contractWeekId && activeContractWeekId && contractWeekId === activeContractWeekId);
         if (hasIdentity && !(matchesRowKey || matchesTimesheet || matchesContractWeek)) return null;
         if (!hasIdentity && sourceInfo.trustedActive !== true) return null;
         if (timesheetId && activeContractWeekId && !activeTimesheetId) return null;
@@ -174014,7 +174132,7 @@ function bindBulkProcessPreviewPane(state) {
         queue_id: queueIdentity || (staged ? id : '') || null,
         manual_timesheet_queue_id: trimStr(raw.manual_timesheet_queue_id || raw.manualTimesheetQueueId || raw.manual_queue_id || raw.manualQueueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || meta.manualQueueId || '') || null,
         row_key: rowKey || activeRowKey || null,
-        contract_week_id: contractWeekId || (staged ? activeContractWeekId : (activeContractWeekId || null)),
+        contract_week_id: activeIdentityIsTimesheetForAttached ? (timesheetId && contractWeekId && contractWeekId !== activeTimesheetId && contractWeekId !== timesheetId ? contractWeekId : null) : (contractWeekId || (staged ? activeContractWeekId : (activeContractWeekId || null))),
         timesheet_id: staged ? null : (timesheetId || activeTimesheetId || null),
         kind,
         staged_kind: staged ? kind : raw.staged_kind,
@@ -174040,10 +174158,12 @@ function bindBulkProcessPreviewPane(state) {
       const fileKey = resolvePreviewFileCacheKey(item);
       if (!fileKey) return [];
       const kind = upper(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || item.stagedKind || meta.kind || meta.evidence_kind || meta.evidenceKind || '') || 'OTHER';
-      const contractWeekId = trimStr(item.contract_week_id || item.contractWeekId || meta.contract_week_id || meta.contractWeekId || meta.week_id || activeContractWeekId || '');
+      const contractWeekId = trimStr(item.contract_week_id || item.contractWeekId || meta.contract_week_id || meta.contractWeekId || meta.week_id || (activeIdentityIsTimesheetForAttached ? '' : activeContractWeekId) || '');
       const timesheetId = trimStr(item.timesheet_id || item.timesheetId || item.current_timesheet_id || item.currentTimesheetId || meta.timesheet_id || meta.timesheetId || activeTimesheetId || '');
       const rowKey = trimStr(item.row_key || item.rowKey || meta.row_key || meta.rowKey || activeRowKey || '');
-      const scope = contractWeekId ? `cw:${contractWeekId}` : (timesheetId ? `ts:${timesheetId}` : (rowKey ? `row:${rowKey}` : 'row:unknown'));
+      const scope = activeIdentityIsTimesheetForAttached
+        ? (timesheetId ? `ts:${timesheetId}` : (rowKey ? `row:${rowKey}` : 'row:unknown'))
+        : (contractWeekId ? `cw:${contractWeekId}` : (timesheetId ? `ts:${timesheetId}` : (rowKey ? `row:${rowKey}` : 'row:unknown')));
       const ids = [
         item.id,
         meta.id,
@@ -174199,10 +174319,13 @@ function bindBulkProcessPreviewPane(state) {
     const currentTimesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || st.active_details?.current_timesheet_id || st.active_details?.timesheet?.timesheet_id || '');
     const requestedTimesheetId = trimStr(row.requested_timesheet_id || row.timesheet_id || currentTimesheetId || '');
     const expectedTimesheetId = trimStr(row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || currentTimesheetId || '');
-    const rawContractWeekId = trimStr(row.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
     const rowKeyIsTimesheet = /^timesheet:/i.test(rowKey || '');
     const rowKeyIsContractWeek = /^contract_week:/i.test(rowKey || '');
     const timesheetIdentityForContext = trimStr(currentTimesheetId || requestedTimesheetId || expectedTimesheetId || '');
+    const rowExplicitContractWeekId = trimStr(row.contract_week_id || row.contractWeekId || '');
+    const rawContractWeekId = rowKeyIsTimesheet
+      ? ''
+      : trimStr(rowExplicitContractWeekId || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
     const contractWeekId = (() => {
       if (!rawContractWeekId) return '';
       if (rowKeyIsTimesheet) return '';
@@ -174317,7 +174440,32 @@ function bindBulkProcessPreviewPane(state) {
     }
 
     const rowKey = trimStr(row?.row_key || '');
-    const timesheetId = trimStr(row?.current_timesheet_id || row?.timesheet_id || row?.id || '');
+    const timesheetId = trimStr(row?.current_timesheet_id || row?.timesheet_id || row?.requested_timesheet_id || row?.expected_timesheet_id || '');
+    const isTimesheetRowForContractWeek = /^timesheet:/i.test(rowKey || '') || !!timesheetId;
+    const readFreshContractWeekIdForPreview = (...sources) => {
+      for (const source of sources) {
+        if (!source || typeof source !== 'object') continue;
+        const contractWeekObj = (source.contract_week && typeof source.contract_week === 'object') ? source.contract_week : null;
+        const candidates = [];
+        if (Object.prototype.hasOwnProperty.call(source, 'contract_week_id')) candidates.push(source.contract_week_id);
+        if (Object.prototype.hasOwnProperty.call(source, 'contractWeekId')) candidates.push(source.contractWeekId);
+        if (contractWeekObj && Object.prototype.hasOwnProperty.call(contractWeekObj, 'id')) candidates.push(contractWeekObj.id);
+        for (const candidate of candidates) {
+          const clean = trimStr(candidate || '');
+          if (clean) return clean;
+        }
+      }
+      return '';
+    };
+    const normaliseContractWeekIdForPreviewContext = ({ rowKey: rowKeyInput = rowKey, timesheetId: timesheetIdInput = timesheetId, freshSources = [], fallbackSources = [] } = {}) => {
+      const key = trimStr(rowKeyInput || '');
+      const tsId = trimStr(timesheetIdInput || '');
+      const isTimesheetIdentity = /^timesheet:/i.test(key || '') || (!!tsId && !/^contract_week:/i.test(key || ''));
+      const freshCandidate = readFreshContractWeekIdForPreview(...freshSources);
+      if (isTimesheetIdentity) return freshCandidate && freshCandidate !== tsId ? freshCandidate : null;
+      const fallbackCandidate = readFreshContractWeekIdForPreview(...freshSources, ...fallbackSources);
+      return fallbackCandidate || null;
+    };
     const metadataOnly = opts.previewMetadataOnly === true || opts.preview_metadata_only === true || opts.metadataOnly === true;
     logPreview('[ATTACHED-REFRESH][START]', {
       reason,
@@ -174329,8 +174477,18 @@ function bindBulkProcessPreviewPane(state) {
     if (metadataOnly) {
       const attachedRows = syncAttachedRows();
       const existingDetails = (st.active_details && typeof st.active_details === 'object') ? deep(st.active_details) : {};
+      const metadataOnlyContractWeekId = normaliseContractWeekIdForPreviewContext({
+        rowKey: rowKey,
+        timesheetId,
+        freshSources: isTimesheetRowForContractWeek ? [] : [row],
+        fallbackSources: isTimesheetRowForContractWeek ? [] : [existingDetails, existingDetails.contract_week]
+      });
       st.active_details = {
         ...existingDetails,
+        contract_week_id: metadataOnlyContractWeekId,
+        contract_week: metadataOnlyContractWeekId
+          ? ((existingDetails.contract_week && typeof existingDetails.contract_week === 'object') ? deep(existingDetails.contract_week) : { id: metadataOnlyContractWeekId })
+          : null,
         evidence: Array.isArray(attachedRows) ? deep(attachedRows) : (Array.isArray(existingDetails.evidence) ? deep(existingDetails.evidence) : []),
         related: (existingDetails.related && typeof existingDetails.related === 'object')
           ? deep(existingDetails.related)
@@ -174406,11 +174564,28 @@ function bindBulkProcessPreviewPane(state) {
       ? contextPayload.data_row
       : ((contextPayload.row && typeof contextPayload.row === 'object') ? contextPayload.row : null);
     const rowPatch = (contextPayload.row_patch && typeof contextPayload.row_patch === 'object') ? contextPayload.row_patch : {};
+    const detailsPayload = (contextPayload.details && typeof contextPayload.details === 'object') ? deep(contextPayload.details) : {};
+    const payloadDataRow = (contextPayload.data_row && typeof contextPayload.data_row === 'object') ? contextPayload.data_row : {};
+    const freshContextTimesheetId = trimStr(contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || payloadDataRow.current_timesheet_id || payloadDataRow.timesheet_id || payloadRow?.current_timesheet_id || payloadRow?.timesheet_id || rowPatch.current_timesheet_id || rowPatch.timesheet_id || row?.current_timesheet_id || row?.timesheet_id || '');
+    const freshContextRowKey = trimStr(contextPayload.row_key || payloadDataRow.row_key || payloadRow?.row_key || rowPatch.row_key || row?.row_key || rowKey || '');
+    const refreshedContractWeekId = normaliseContractWeekIdForPreviewContext({
+      rowKey: freshContextRowKey,
+      timesheetId: freshContextTimesheetId,
+      freshSources: [contextPayload, detailsPayload, detailsPayload.contract_week, payloadDataRow, payloadRow, rowPatch],
+      fallbackSources: /^timesheet:/i.test(freshContextRowKey || '') || freshContextTimesheetId ? [] : [row]
+    });
     const mergedRow = {
       ...(row && typeof row === 'object' ? deep(row) : {}),
       ...(payloadRow && typeof payloadRow === 'object' ? deep(payloadRow) : {}),
       ...(rowPatch && typeof rowPatch === 'object' ? deep(rowPatch) : {})
     };
+    if (/^timesheet:/i.test(freshContextRowKey || '') || freshContextTimesheetId) {
+      mergedRow.contract_week_id = refreshedContractWeekId;
+      mergedRow.contractWeekId = refreshedContractWeekId;
+    } else if (refreshedContractWeekId) {
+      mergedRow.contract_week_id = refreshedContractWeekId;
+      mergedRow.contractWeekId = refreshedContractWeekId;
+    }
     const activeRowKey = trimStr(st?.active_row?.row_key || rowKey || '');
     const mergedRowKey = trimStr(mergedRow.row_key || activeRowKey || '');
     if (!activeRowKey || !mergedRowKey || activeRowKey === mergedRowKey) {
@@ -174426,7 +174601,6 @@ function bindBulkProcessPreviewPane(state) {
       return;
     }
 
-    const detailsPayload = (contextPayload.details && typeof contextPayload.details === 'object') ? deep(contextPayload.details) : {};
     const evidenceRows = Array.isArray(contextPayload.evidence)
       ? deep(contextPayload.evidence)
       : (Array.isArray(detailsPayload.evidence) ? deep(detailsPayload.evidence) : []);
@@ -174484,7 +174658,10 @@ function bindBulkProcessPreviewPane(state) {
       current_timesheet_id: existingDetails.current_timesheet_id || contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
       requested_timesheet_id: existingDetails.requested_timesheet_id || contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
       expected_timesheet_id: existingDetails.expected_timesheet_id || contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-      contract_week_id: existingDetails.contract_week_id || contextPayload.contract_week_id || detailsPayload.contract_week_id || mergedRow.contract_week_id || null,
+      contract_week_id: refreshedContractWeekId,
+      contract_week: refreshedContractWeekId
+        ? ((detailsPayload.contract_week && typeof detailsPayload.contract_week === 'object') ? deep(detailsPayload.contract_week) : ((existingDetails.contract_week && typeof existingDetails.contract_week === 'object') ? { ...deep(existingDetails.contract_week), id: refreshedContractWeekId } : { id: refreshedContractWeekId }))
+        : null,
       evidence: evidenceRows,
       evidence_loaded: true,
       evidence_authoritative: true,
@@ -174511,7 +174688,11 @@ function bindBulkProcessPreviewPane(state) {
         evidence_authoritative: true,
         context_profile: preservedProfile,
         profile: preservedProfile,
-        loaded_layers: loadedLayers
+        loaded_layers: loadedLayers,
+        contract_week_id: refreshedContractWeekId,
+        contract_week: refreshedContractWeekId
+          ? ((detailsPayload.contract_week && typeof detailsPayload.contract_week === 'object') ? deep(detailsPayload.contract_week) : { id: refreshedContractWeekId })
+          : null
       },
       evidence: evidenceRows,
       evidence_loaded: true,
@@ -174587,7 +174768,14 @@ function bindBulkProcessPreviewPane(state) {
     if (!activeRowKey) return;
 
     const activeTimesheetId = trimStr(st.active_row?.timesheet_id || st.active_row?.current_timesheet_id || st.active_details?.current_timesheet_id || st.active_details?.timesheet?.timesheet_id || '');
-    const activeContractWeekId = trimStr(st.active_row?.contract_week_id || st.active_row?.contractWeekId || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
+    const activeIdentityIsTimesheetForEvidencePresence = /^timesheet:/i.test(activeRowKey || '') || (!!activeTimesheetId && !/^contract_week:/i.test(activeRowKey || ''));
+    const activeContractWeekId = (() => {
+      if (activeIdentityIsTimesheetForEvidencePresence) {
+        const freshCandidate = readPreviewAttachedExplicitContractWeekId(st.active_row, st.active_context?.row, st.active_context?.data_row, st.active_ctx?.row, st.active_ctx?.data_row);
+        return freshCandidate && freshCandidate !== activeTimesheetId ? freshCandidate : '';
+      }
+      return readPreviewAttachedExplicitContractWeekId(st.active_row, st.active_details, st.active_details?.contract_week, st.active_context?.row, st.active_context?.data_row, st.active_ctx?.row, st.active_ctx?.data_row);
+    })();
     const matchingDatasetRow = (() => {
       const rows = [
         ...(Array.isArray(st.dataset?.unprocessed_rows) ? st.dataset.unprocessed_rows : []),
@@ -174604,7 +174792,7 @@ function bindBulkProcessPreviewPane(state) {
         const rowTsId = trimStr(row.timesheet_id || row.current_timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
         if (activeTimesheetId && rowTsId && rowTsId === activeTimesheetId) return true;
         const rowCwId = trimStr(row.contract_week_id || row.contractWeekId || '');
-        if (activeContractWeekId && rowCwId && rowCwId === activeContractWeekId) return true;
+        if (!activeIdentityIsTimesheetForEvidencePresence && activeContractWeekId && rowCwId && rowCwId === activeContractWeekId) return true;
         return false;
       }) || null;
     })();
@@ -174830,22 +175018,25 @@ function bindBulkProcessPreviewPane(state) {
     const itemTimesheetId = trimStr(item.timesheet_id || item.timesheetId || item.current_timesheet_id || item.currentTimesheetId || item.requested_timesheet_id || item.expected_timesheet_id || '');
     if (activeTimesheetId && itemTimesheetId) return activeTimesheetId === itemTimesheetId;
 
-    const activeContractWeekId = trimStr(
-      st.active_row?.contract_week_id ||
-      st.active_row?.contractWeekId ||
-      st.active_details?.contract_week_id ||
-      st.active_details?.contract_week?.id ||
-      st.active_ctx?.row?.contract_week_id ||
-      st.active_ctx?.row?.contractWeekId ||
-      st.active_context?.row?.contract_week_id ||
-      st.active_context?.row?.contractWeekId ||
-      st.active_context?.data_row?.contract_week_id ||
-      st.active_context?.data_row?.contractWeekId ||
-      window.modalCtx?.data?.contract_week_id ||
-      window.modalCtx?.data?.contractWeekId ||
-      ''
-    );
+    const activeRowKeyForCompatibility = trimStr(st.active_row_key || st.active_row?.row_key || window.modalCtx?.data?.row_key || '');
+    const activeIdentityIsTimesheetForCompatibility = /^timesheet:/i.test(activeRowKeyForCompatibility || '') || (!!activeTimesheetId && !/^contract_week:/i.test(activeRowKeyForCompatibility || ''));
+    const activeContractWeekId = (() => {
+      if (activeIdentityIsTimesheetForCompatibility) {
+        const freshCandidate = readPreviewAttachedExplicitContractWeekId(st.active_row, st.active_context?.row, st.active_context?.data_row, st.active_ctx?.row, st.active_ctx?.data_row);
+        return freshCandidate && freshCandidate !== activeTimesheetId ? freshCandidate : '';
+      }
+      return readPreviewAttachedExplicitContractWeekId(
+        st.active_row,
+        st.active_details,
+        st.active_details?.contract_week,
+        st.active_ctx?.row,
+        st.active_context?.row,
+        st.active_context?.data_row,
+        window.modalCtx?.data
+      );
+    })();
     const itemContractWeekId = trimStr(item.contract_week_id || item.contractWeekId || item.current_contract_week_id || item.currentContractWeekId || item.expected_contract_week_id || item.expectedContractWeekId || '');
+    if (activeIdentityIsTimesheetForCompatibility && itemContractWeekId && !itemTimesheetId) return false;
     if (activeContractWeekId && itemContractWeekId) return activeContractWeekId === itemContractWeekId;
 
     return false;
@@ -175621,14 +175812,13 @@ function bindBulkProcessPreviewPane(state) {
         ''
       );
       const hasTimesheetIdentity = !!(timesheetId || expectedTimesheetId || itemTimesheetId || activeIsTimesheetRow || activeSheetScope === 'DAILY');
-      const rawContractWeekId = trimStr(
-        itemObj.contract_week_id ||
-        itemObj.contractWeekId ||
-        st.active_row?.contract_week_id ||
-        st.active_details?.contract_week_id ||
-        st.active_details?.contract_week?.id ||
-        ''
-      );
+      const rawContractWeekId = (() => {
+        const itemCandidate = readPreviewAttachedExplicitContractWeekId(itemObj);
+        if (hasTimesheetIdentity) {
+          return '';
+        }
+        return itemCandidate || readPreviewAttachedExplicitContractWeekId(st.active_row, st.active_details, st.active_details?.contract_week);
+      })();
       const contractWeekId = (hasTimesheetIdentity && rawContractWeekId && (rawContractWeekId === timesheetId || rawContractWeekId === expectedTimesheetId || rawContractWeekId === itemTimesheetId))
         ? ''
         : rawContractWeekId;
@@ -178447,8 +178637,6 @@ function bindBulkProcessPreviewPane(state) {
 }
 
 
-
-
 function renderBulkProcessDockedEvidenceViewer(state) {
   const st = (state && typeof state === 'object') ? state : {};
   const dv = (st.dockedEvidenceViewer && typeof st.dockedEvidenceViewer === 'object') ? st.dockedEvidenceViewer : {};
@@ -180390,9 +180578,6 @@ function renderBulkProcessSelectedSummaryStrip(state) {
   `);
 }
 
-
-
-
 function renderBulkProcessEvidencePane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -180778,6 +180963,73 @@ function renderBulkProcessEvidencePane(state) {
     activeCtx?.state?.evidence_loaded === true ||
     evidenceContextProfile === 'evidence'
   );
+  const evidenceRefreshPendingForRender = () => !!(
+    !renderIsBulkAuthoriseContext &&
+    (st.__bulk_process_evidence_refresh_pending === true ||
+      st.__bulk_process_post_attach_rebase_pending === true ||
+      pane.__bulk_process_evidence_refresh_pending === true ||
+      pane.__requires_evidence_hydration === true)
+  );
+  const storageKeyPresentInQueueForRender = (storageKeyInput = '') => {
+    const storageKey = trimStr(storageKeyInput || '').replace(/^\/+/, '').toLowerCase();
+    if (!storageKey || !Array.isArray(queueRows)) return false;
+    return queueRows.some((item) => getRenderEvidenceFileKey(item || {}).toLowerCase() === storageKey);
+  };
+  const renderContainers = () => [activeRow, activeContext?.row, activeContext?.data_row, activeContext?.details, activeContext, activeDetails, activeCtx?.row, activeCtx?.data_row, activeCtx?.state, activeCtx].filter((item) => item && typeof item === 'object');
+  const authoritativeEvidenceEmptyForRender = () => {
+    if (renderIsBulkAuthoriseContext) return false;
+    const containers = renderContainers();
+    const hasLoadedEvidenceSignal = !!(
+      evidenceLayerAuthoritative ||
+      containers.some((container) => container.evidence_loaded === true || container.evidence_authoritative === true || container.include_evidence === true || container.evidence_rows_loaded === true)
+    );
+    if (!hasLoadedEvidenceSignal) return false;
+    const evidenceArrays = [];
+    for (const container of containers) {
+      for (const field of ['evidence', 'evidence_rows', 'evidenceRows', 'attached_evidence', 'attachedEvidence']) {
+        if (Array.isArray(container[field])) evidenceArrays.push(container[field]);
+      }
+    }
+    if (evidenceArrays.some((rows) => rows.length > 0)) return false;
+    const counts = containers.map((container) => Number(container.attached_evidence_count || container.attachedEvidenceCount || container.evidence_count || container.evidenceCount || container.evidence_rows_count || container.evidenceRowsCount || 0) || 0);
+    if (counts.some((count) => count > 0)) return false;
+    const hasArtifactSignal = containers.some((container) => trimStr(
+      container.manual_pdf_r2_key ||
+      container.manualPdfR2Key ||
+      container.uploaded_pdf_r2_key ||
+      container.uploadedPdfR2Key ||
+      container.primary_artifact_storage_key ||
+      container.primaryArtifactStorageKey ||
+      container.primary_artifact?.storage_key ||
+      container.primaryArtifact?.storage_key ||
+      ''
+    ));
+    return !hasArtifactSignal;
+  };
+  const paneAttachedFallbackAllowedForRender = () => !!(
+    renderIsBulkAuthoriseContext ||
+    (!authoritativeEvidenceEmptyForRender() && !evidenceRefreshPendingForRender())
+  );
+  const removedEvidenceItemMatchesForRender = (itemInput = {}) => {
+    if (renderIsBulkAuthoriseContext || !itemInput || typeof itemInput !== 'object') return false;
+    if (typeof bulkProcessRemovedEvidenceTombstonesMatchItem !== 'function') return false;
+    const tombstones = []
+      .concat(Array.isArray(pane.__removed_attached_evidence_tombstones) ? pane.__removed_attached_evidence_tombstones : [])
+      .concat(Array.isArray(pane.__bulk_process_removed_evidence_tombstones) ? pane.__bulk_process_removed_evidence_tombstones : [])
+      .concat(Array.isArray(st.__removed_attached_evidence_tombstones) ? st.__removed_attached_evidence_tombstones : [])
+      .concat(Array.isArray(st.__bulk_process_removed_evidence_tombstones) ? st.__bulk_process_removed_evidence_tombstones : []);
+    if (!tombstones.length) return false;
+    try {
+      return bulkProcessRemovedEvidenceTombstonesMatchItem(itemInput, tombstones, {
+        row_key: activeRowKey || null,
+        timesheet_id: activeRealTimesheetId || null,
+        contract_week_id: activeContractWeekId || null,
+        kind: normaliseRenderKind(itemInput.kind || itemInput.evidence_kind || itemInput.staged_kind || '') || null
+      });
+    } catch {
+      return false;
+    }
+  };
   const findMatchingDatasetRowForRender = () => {
     const rows = [
       ...(Array.isArray(st.dataset?.unprocessed_rows) ? st.dataset.unprocessed_rows : []),
@@ -180797,6 +181049,7 @@ function renderBulkProcessEvidencePane(state) {
   };
 
   const buildPrimaryArtifactFallbackRowsForRender = (matchingDatasetRow = null) => {
+    if (!renderIsBulkAuthoriseContext && (authoritativeEvidenceEmptyForRender() || evidenceRefreshPendingForRender())) return [];
     const containers = [activeRow, activeContext?.row, activeContext?.data_row, activeDetails, activeContext?.details, activeCtx?.row, activeCtx?.data_row, activeCtx?.state, matchingDatasetRow];
     const rows = [];
     for (const container of containers) {
@@ -180805,8 +181058,20 @@ function renderBulkProcessEvidencePane(state) {
       const artifact = (container.primary_artifact && typeof container.primary_artifact === 'object') ? container.primary_artifact : ((hints.primary_artifact && typeof hints.primary_artifact === 'object') ? hints.primary_artifact : null);
       const storageKey = trimStr(artifact?.storage_key || artifact?.file_key || artifact?.download_storage_key || artifact?.r2_key || container.primary_artifact_storage_key || hints.primary_artifact_storage_key || '').replace(/^\/+/, '');
       if (!storageKey) continue;
+      if (!renderIsBulkAuthoriseContext && storageKeyPresentInQueueForRender(storageKey)) continue;
       const primaryId = trimStr(artifact?.id || artifact?.evidence_id || artifact?.queue_id || container.primary_artifact_id || hints.primary_artifact_id || '');
       const kind = normaliseRenderKind(artifact?.kind || artifact?.evidence_kind || container.primary_artifact_kind || hints.primary_artifact_kind || '') || 'OTHER';
+      const fileNameFromStorageKey = storageKey.split('/').filter(Boolean).pop() || '';
+      const primaryIsSystemArtifact = /^sys:/i.test(primaryId || '');
+      const artifactDisplayName = trimStr(artifact?.display_name || artifact?.displayName || artifact?.filename || artifact?.original_filename || artifact?.originalFilename || '');
+      const containerDisplayMatchesArtifact = !primaryIsSystemArtifact && !!(
+        (trimStr(container.primary_artifact_id || hints.primary_artifact_id || '') && trimStr(container.primary_artifact_id || hints.primary_artifact_id || '') === primaryId) ||
+        (trimStr(container.primary_artifact_storage_key || hints.primary_artifact_storage_key || '').replace(/^\/+/, '') && trimStr(container.primary_artifact_storage_key || hints.primary_artifact_storage_key || '').replace(/^\/+/, '') === storageKey)
+      );
+      const containerDisplayName = containerDisplayMatchesArtifact ? trimStr(container.primary_artifact_display_name || hints.primary_artifact_display_name || '') : '';
+      const displayName = artifactDisplayName || containerDisplayName || (kind === 'TIMESHEET' ? (fileNameFromStorageKey || 'Timesheet PDF') : (fileNameFromStorageKey || 'Evidence'));
+      const fallbackItem = { ...(artifact || {}), storage_key: storageKey, file_key: storageKey, id: primaryId || storageKey, evidence_id: primaryId || null, kind };
+      if (removedEvidenceItemMatchesForRender(fallbackItem)) continue;
       rows.push({
         ...(artifact || {}),
         id: primaryId || storageKey,
@@ -180814,8 +181079,8 @@ function renderBulkProcessEvidencePane(state) {
         queue_id: trimStr(artifact?.queue_id || '') || null,
         kind,
         staged_kind: kind,
-        display_name: trimStr(artifact?.display_name || artifact?.filename || container.primary_artifact_display_name || hints.primary_artifact_display_name || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
-        filename: trimStr(artifact?.filename || artifact?.display_name || container.primary_artifact_display_name || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
+        display_name: displayName,
+        filename: artifactDisplayName || displayName,
         storage_key: storageKey || null,
         r2_key: storageKey || null,
         file_key: storageKey || null,
@@ -180847,8 +181112,8 @@ function renderBulkProcessEvidencePane(state) {
       { rows: evidenceLayerAuthoritative ? activeContext?.evidence : null, trustedActive: true },
       { rows: evidenceLayerAuthoritative ? activeContext?.details?.evidence : null, trustedActive: true },
       { rows: evidenceLayerAuthoritative ? activeDetails?.evidence : null, trustedActive: true },
-      { rows: pane.attached_rows, trustedActive: false },
-      { rows: pane.attached_all_rows, trustedActive: false },
+      { rows: paneAttachedFallbackAllowedForRender() ? pane.attached_rows : null, trustedActive: false },
+      { rows: paneAttachedFallbackAllowedForRender() ? pane.attached_all_rows : null, trustedActive: false },
       { rows: evidenceLayerAuthoritative ? window.modalCtx?.timesheetState?.evidence : null, trustedActive: false }
     ];
     const rows = [];
@@ -180864,6 +181129,7 @@ function renderBulkProcessEvidencePane(state) {
       const itemQueueIdRaw = trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || itemMeta.queue_id || itemMeta.queueId || itemMeta.manual_timesheet_queue_id || itemMeta.manualTimesheetQueueId || itemMeta.manual_queue_id || itemMeta.manualQueueId || '');
       const storageKey = getRenderEvidenceFileKey(item);
       if (!storageKey) return;
+      if (!renderIsBulkAuthoriseContext && (storageKeyPresentInQueueForRender(storageKey) || removedEvidenceItemMatchesForRender(item))) return;
       const isStaged = !!(
         item.is_staged_context === true ||
         sourceLabel === 'STAGED' ||
@@ -180957,7 +181223,13 @@ function renderBulkProcessEvidencePane(state) {
     }
     return rows;
   };
-  const attachedRows = collectAttachedRowsForRender();
+  const attachedRows = authoritativeEvidenceEmptyForRender() ? [] : collectAttachedRowsForRender();
+  if (!renderIsBulkAuthoriseContext && authoritativeEvidenceEmptyForRender()) {
+    pane.attached_rows = [];
+    pane.attached_all_rows = [];
+    pane.active_attached_item = null;
+    pane.active_attached_id = null;
+  }
   if (
     !renderIsBulkAuthoriseContext &&
     attachedRows.length > 0 &&
@@ -181202,6 +181474,8 @@ function renderBulkProcessEvidencePane(state) {
     </div>
   `);
 }
+
+
 
 
 function ensureBulkAuthoriseManualDraftState(state) {
@@ -184644,13 +184918,32 @@ const getAttachedEvidenceId = (item) => {
         mergedRow,
         existingDetails
       );
+      const attachedRefreshRowKey = trimStr(mergedRow.row_key || st.active_row_key || activeRowKey || '');
+      const attachedRefreshTimesheetId = trimStr(existingDetails.current_timesheet_id || contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || '');
+      const attachedRefreshHasOwnContractWeek = !!(
+        Object.prototype.hasOwnProperty.call(contextPayload, 'contract_week_id') ||
+        Object.prototype.hasOwnProperty.call(detailsPayload, 'contract_week_id') ||
+        Object.prototype.hasOwnProperty.call(mergedRow, 'contract_week_id') ||
+        Object.prototype.hasOwnProperty.call(mergedRow, 'contractWeekId')
+      );
+      const attachedRefreshContractWeekCandidate = trimStr(
+        (Object.prototype.hasOwnProperty.call(contextPayload, 'contract_week_id') ? contextPayload.contract_week_id : '') ||
+        (Object.prototype.hasOwnProperty.call(detailsPayload, 'contract_week_id') ? detailsPayload.contract_week_id : '') ||
+        (Object.prototype.hasOwnProperty.call(mergedRow, 'contract_week_id') ? mergedRow.contract_week_id : '') ||
+        (Object.prototype.hasOwnProperty.call(mergedRow, 'contractWeekId') ? mergedRow.contractWeekId : '') ||
+        (!/^timesheet:/i.test(attachedRefreshRowKey || '') ? existingDetails.contract_week_id : '') ||
+        ''
+      );
+      const attachedRefreshContractWeekId = (/^timesheet:/i.test(attachedRefreshRowKey || '') && (!attachedRefreshHasOwnContractWeek || attachedRefreshContractWeekCandidate === attachedRefreshTimesheetId))
+        ? null
+        : (attachedRefreshContractWeekCandidate || null);
 
       st.active_details = {
         ...existingDetails,
         current_timesheet_id: existingDetails.current_timesheet_id || contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
         requested_timesheet_id: existingDetails.requested_timesheet_id || contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
         expected_timesheet_id: existingDetails.expected_timesheet_id || contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-        contract_week_id: existingDetails.contract_week_id || contextPayload.contract_week_id || detailsPayload.contract_week_id || mergedRow.contract_week_id || null,
+        contract_week_id: attachedRefreshContractWeekId,
         evidence: evidenceRows,
         evidence_loaded: true,
         evidence_authoritative: true,
@@ -184958,7 +185251,73 @@ const getAttachedEvidenceId = (item) => {
       ) &&
       (activeBulkProcessStageForAttachedEvidence === 'PROCESSED' || activeProcessingStageForAttachedEvidence === 'PROCESSED')
     );
+    const evidenceRefreshPendingForAuthoritativeAttachedEvidence = () => !!(
+      !isBulkAuthoriseContext &&
+      (st.__bulk_process_evidence_refresh_pending === true ||
+        st.__bulk_process_post_attach_rebase_pending === true ||
+        pane.__bulk_process_evidence_refresh_pending === true ||
+        pane.__requires_evidence_hydration === true)
+    );
+    const storageKeyPresentInQueueForAuthoritativeAttachedEvidence = (storageKeyInput = '') => {
+      const storageKey = cleanAttachedEvidenceFileKey(storageKeyInput || '').toLowerCase();
+      const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+      if (!storageKey || !rows.length) return false;
+      return rows.some((item) => getAttachedEvidenceFileKey(item || {}).toLowerCase() === storageKey);
+    };
+    const activeAuthoritativeEvidenceEmpty = () => {
+      if (isBulkAuthoriseContext) return false;
+      const containers = [activeRow, activeContext?.row, activeContext?.data_row, activeContext?.details, activeContext, activeDetails, activeCtx?.row, activeCtx?.data_row, activeCtx?.state, activeCtx]
+        .filter((item) => item && typeof item === 'object');
+      const loaded = !!(
+        activeEvidenceAuthoritative ||
+        containers.some((container) => container.evidence_loaded === true || container.evidence_authoritative === true || container.include_evidence === true || container.evidence_rows_loaded === true)
+      );
+      if (!loaded) return false;
+      const arrays = [];
+      for (const container of containers) {
+        for (const field of ['evidence', 'evidence_rows', 'evidenceRows', 'attached_evidence', 'attachedEvidence']) {
+          if (Array.isArray(container[field])) arrays.push(container[field]);
+        }
+      }
+      if (arrays.some((rows) => rows.length > 0)) return false;
+      if (containers.some((container) => Number(container.attached_evidence_count || container.attachedEvidenceCount || container.evidence_count || container.evidenceCount || container.evidence_rows_count || container.evidenceRowsCount || 0) > 0)) return false;
+      if (containers.some((container) => pickFirst(
+        container.manual_pdf_r2_key,
+        container.manualPdfR2Key,
+        container.uploaded_pdf_r2_key,
+        container.uploadedPdfR2Key,
+        container.primary_artifact_storage_key,
+        container.primaryArtifactStorageKey,
+        container.primary_artifact?.storage_key,
+        container.primaryArtifact?.storage_key
+      ))) return false;
+      return true;
+    };
+    const paneAttachedRowsAllowedForAuthoritativeEvidence = () => !!(
+      isBulkAuthoriseContext ||
+      (!activeAuthoritativeEvidenceEmpty() && !evidenceRefreshPendingForAuthoritativeAttachedEvidence())
+    );
+    const removedEvidenceItemMatchesForAuthoritativeAttachedEvidence = (itemInput = {}) => {
+      if (isBulkAuthoriseContext || !itemInput || typeof itemInput !== 'object' || typeof bulkProcessRemovedEvidenceTombstonesMatchItem !== 'function') return false;
+      const tombstones = []
+        .concat(Array.isArray(pane.__removed_attached_evidence_tombstones) ? pane.__removed_attached_evidence_tombstones : [])
+        .concat(Array.isArray(pane.__bulk_process_removed_evidence_tombstones) ? pane.__bulk_process_removed_evidence_tombstones : [])
+        .concat(Array.isArray(st.__removed_attached_evidence_tombstones) ? st.__removed_attached_evidence_tombstones : [])
+        .concat(Array.isArray(st.__bulk_process_removed_evidence_tombstones) ? st.__bulk_process_removed_evidence_tombstones : []);
+      if (!tombstones.length) return false;
+      try {
+        return bulkProcessRemovedEvidenceTombstonesMatchItem(itemInput, tombstones, {
+          row_key: activeScope.rowKey || null,
+          timesheet_id: activeScope.timesheetId || null,
+          contract_week_id: activeScope.contractWeekId || null,
+          kind: normaliseEvidenceKind(itemInput.kind || itemInput.evidence_kind || itemInput.staged_kind || '') || null
+        });
+      } catch {
+        return false;
+      }
+    };
     const buildPrimaryArtifactFallbackRows = (...containers) => {
+      if (activeAuthoritativeEvidenceEmpty() || evidenceRefreshPendingForAuthoritativeAttachedEvidence()) return [];
       const rows = [];
       for (const container of containers) {
         if (!container || typeof container !== 'object') continue;
@@ -184978,8 +185337,20 @@ const getAttachedEvidenceId = (item) => {
           ''
         );
         if (!storageKey) continue;
+        if (storageKeyPresentInQueueForAuthoritativeAttachedEvidence(storageKey)) continue;
         const primaryId = pickFirst(artifact?.id, artifact?.evidence_id, artifact?.evidenceId, artifact?.queue_id, artifact?.queueId, container.primary_artifact_id, hints.primary_artifact_id);
         const kind = normaliseEvidenceKind(artifact?.kind || artifact?.evidence_kind || artifact?.evidenceKind || container.primary_artifact_kind || hints.primary_artifact_kind || '') || 'OTHER';
+        const fileNameFromStorageKey = storageKey.split('/').filter(Boolean).pop() || '';
+        const primaryIsSystemArtifact = /^sys:/i.test(primaryId || '');
+        const artifactDisplayName = pickFirst(artifact?.display_name, artifact?.displayName, artifact?.filename, artifact?.original_filename, artifact?.originalFilename);
+        const containerDisplayMatchesArtifact = !primaryIsSystemArtifact && !!(
+          (primaryId && pickFirst(container.primary_artifact_id, hints.primary_artifact_id) === primaryId) ||
+          (pickFirst(container.primary_artifact_storage_key, hints.primary_artifact_storage_key) && cleanAttachedEvidenceFileKey(pickFirst(container.primary_artifact_storage_key, hints.primary_artifact_storage_key)) === storageKey)
+        );
+        const containerDisplayName = containerDisplayMatchesArtifact ? pickFirst(container.primary_artifact_display_name, hints.primary_artifact_display_name) : '';
+        const displayName = artifactDisplayName || containerDisplayName || (kind === 'TIMESHEET' ? (fileNameFromStorageKey || 'Timesheet PDF') : (fileNameFromStorageKey || 'Evidence'));
+        const fallbackItem = { ...(artifact ? deep(artifact) : {}), id: primaryId || storageKey, evidence_id: primaryId || null, storage_key: storageKey, file_key: storageKey, kind };
+        if (removedEvidenceItemMatchesForAuthoritativeAttachedEvidence(fallbackItem)) continue;
         rows.push({
           ...(artifact ? deep(artifact) : {}),
           id: primaryId || storageKey,
@@ -184987,9 +185358,9 @@ const getAttachedEvidenceId = (item) => {
           queue_id: pickFirst(artifact?.queue_id, artifact?.queueId) || null,
           kind,
           staged_kind: kind,
-          display_name: pickFirst(artifact?.display_name, artifact?.displayName, artifact?.filename, container.primary_artifact_display_name, hints.primary_artifact_display_name) || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
-          filename: pickFirst(artifact?.filename, artifact?.display_name, artifact?.displayName, container.primary_artifact_display_name) || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
-          original_filename: pickFirst(artifact?.original_filename, artifact?.originalFilename, artifact?.filename, artifact?.display_name, artifact?.displayName, container.primary_artifact_display_name) || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
+          display_name: displayName,
+          filename: artifactDisplayName || displayName,
+          original_filename: pickFirst(artifact?.original_filename, artifact?.originalFilename) || artifactDisplayName || displayName,
           storage_key: storageKey,
           r2_key: storageKey,
           file_key: storageKey,
@@ -185022,6 +185393,13 @@ const getAttachedEvidenceId = (item) => {
       }) || null;
     })();
     const primaryArtifactFallbackRows = buildPrimaryArtifactFallbackRows(activeRow, activeContext?.row, activeContext?.data_row, activeDetails, activeContext?.details, activeCtx?.row, activeCtx?.data_row, activeCtx?.state, matchingDatasetRow);
+    if (activeAuthoritativeEvidenceEmpty()) {
+      pane.attached_rows = [];
+      pane.attached_all_rows = [];
+      pane.active_attached_item = null;
+      pane.active_attached_id = null;
+      return [];
+    }
     const sources = [
       ...(activeEvidenceAuthoritative ? [
         { rows: activeRow?.evidence, trustedActive: true },
@@ -185036,8 +185414,8 @@ const getAttachedEvidenceId = (item) => {
         { rows: window.modalCtx?.timesheetState?.evidence, trustedActive: false }
       ] : []),
       { rows: primaryArtifactFallbackRows, trustedActive: true, fallback: true },
-      { rows: pane.attached_rows, trustedActive: false },
-      { rows: pane.attached_all_rows, trustedActive: false },
+      { rows: paneAttachedRowsAllowedForAuthoritativeEvidence() ? pane.attached_rows : null, trustedActive: false },
+      { rows: paneAttachedRowsAllowedForAuthoritativeEvidence() ? pane.attached_all_rows : null, trustedActive: false },
       ...(includeBulkAuthoriseSources ? [
         { rows: window.modalCtx?.bulkAuthoriseState?.evidence_pane_state?.attached_rows, trustedActive: false },
         { rows: window.modalCtx?.bulkAuthoriseState?.evidence_pane_state?.attached_all_rows, trustedActive: false },
@@ -185059,6 +185437,8 @@ const getAttachedEvidenceId = (item) => {
       const itemContractWeekId = pickFirst(item.contract_week_id, item.contractWeekId, meta.contract_week_id, meta.contractWeekId, meta.week_id, meta.weekId);
       const itemSourceLabel = upper(item.source_label || item.sourceLabel || item.source_badge || item.sourceBadge || item.source || meta.source_label || meta.sourceLabel || meta.source_badge || meta.sourceBadge || meta.source || '');
       const queueIdentity = pickFirst(item.queue_id, item.queueId, item.manual_timesheet_queue_id, item.manualTimesheetQueueId, item.manual_queue_id, item.manualQueueId, meta.queue_id, meta.queueId, meta.manual_timesheet_queue_id, meta.manualTimesheetQueueId, meta.manual_queue_id, meta.manualQueueId);
+      const itemStorageKeyForMutationGuard = getAttachedEvidenceFileKey(item);
+      if (!isBulkAuthoriseContext && (storageKeyPresentInQueueForAuthoritativeAttachedEvidence(itemStorageKeyForMutationGuard) || removedEvidenceItemMatchesForAuthoritativeAttachedEvidence(item))) return;
       const looksStaged = !!(
         item.is_staged_context === true ||
         itemSourceLabel === 'STAGED' ||
@@ -189839,7 +190219,8 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
       if (!rowKey && parts.rowKey) rowKey = parts.rowKey;
       if (/^timesheet:/i.test(rowKey)) {
         timesheetId = trimStr(rowKey.replace(/^timesheet:/i, '')) || timesheetId || parts.timesheetId;
-        if (!contractWeekId && parts.contractWeekId) contractWeekId = parts.contractWeekId;
+        const genuineContractWeekCandidate = trimStr(parts.contractWeekId || '');
+        if (!contractWeekId && genuineContractWeekCandidate && genuineContractWeekCandidate !== timesheetId) contractWeekId = genuineContractWeekCandidate;
         continue;
       }
       if (/^contract_week:/i.test(rowKey)) {
@@ -189863,7 +190244,30 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
 
   const activeIdentityParts = combineActiveModalCtxIdentityParts();
   const activeIdentity = trimStr(activeIdentityParts.identity || getBulkProcessRecordIdentityFromState(st) || '');
+  const activeIdentityIsTimesheet = /^timesheet:/i.test(activeIdentity || '') || (!!activeIdentityParts.timesheetId && !/^contract_week:/i.test(activeIdentity || ''));
+  const activeIdentityTimesheetId = activeIdentityIsTimesheet
+    ? (trimStr(activeIdentity.replace(/^timesheet:/i, '')) || activeIdentityParts.timesheetId || null)
+    : null;
   const activeIdentityIsContractWeek = /^contract_week:/i.test(activeIdentity) || (!!activeIdentityParts.contractWeekId && !activeIdentityParts.timesheetId);
+
+  const hasOwnModalCtxField = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const readExplicitModalCtxContractWeekId = (sourceLike = {}) => {
+    const source = (sourceLike && typeof sourceLike === 'object') ? sourceLike : {};
+    const contractWeekObj = (source.contract_week && typeof source.contract_week === 'object') ? source.contract_week : null;
+    const contractWeekCamelObj = (source.contractWeek && typeof source.contractWeek === 'object') ? source.contractWeek : null;
+    const candidates = [];
+    if (hasOwnModalCtxField(source, 'contract_week_id')) candidates.push(source.contract_week_id);
+    if (hasOwnModalCtxField(source, 'contractWeekId')) candidates.push(source.contractWeekId);
+    if (hasOwnModalCtxField(source, 'current_contract_week_id')) candidates.push(source.current_contract_week_id);
+    if (hasOwnModalCtxField(source, 'currentContractWeekId')) candidates.push(source.currentContractWeekId);
+    if (contractWeekObj && hasOwnModalCtxField(contractWeekObj, 'id')) candidates.push(contractWeekObj.id);
+    if (contractWeekCamelObj && hasOwnModalCtxField(contractWeekCamelObj, 'id')) candidates.push(contractWeekCamelObj.id);
+    for (const value of candidates) {
+      const clean = trimStr(value || '');
+      if (clean) return clean;
+    }
+    return '';
+  };
 
   const dataMatchesActiveIdentity = (sourceLike = {}, optionsForMatch = {}) => {
     const cfg = (optionsForMatch && typeof optionsForMatch === 'object') ? optionsForMatch : {};
@@ -189902,14 +190306,44 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     ? activeCtx.data
     : ((activeCtx.state && typeof activeCtx.state === 'object') ? activeCtx.state : {});
 
-  const detailsContractWeekId = trimStr(
-    activeIdentityParts.contractWeekId ||
-    details.contract_week_id ||
-    details.contract_week?.id ||
-    ctxData.contract_week_id ||
-    patchData.contract_week_id ||
-    ''
-  ) || null;
+  const resolveFreshTimesheetRelatedContractWeekId = () => {
+    if (!activeIdentityIsTimesheet) return '';
+    const timesheetId = trimStr(activeIdentityTimesheetId || activeIdentityParts.timesheetId || '');
+    const freshSources = [
+      activeCtx.details,
+      activeCtx.data,
+      activeCtx.state,
+      activeCtx.row,
+      patchDataMatchesActive && rawPatchData ? rawPatchData : null
+    ];
+    for (const source of freshSources) {
+      if (!source || typeof source !== 'object') continue;
+      const candidate = readExplicitModalCtxContractWeekId(source);
+      if (!candidate || candidate === timesheetId) continue;
+      const parts = readModalCtxIdentityParts(source);
+      const sourceRowKey = trimStr(parts.rowKey || '');
+      const sourceRowKeyTimesheetId = /^timesheet:/i.test(sourceRowKey || '') ? trimStr(sourceRowKey.replace(/^timesheet:/i, '')) : '';
+      const sourceRowKeyIsContractWeek = /^contract_week:/i.test(sourceRowKey || '');
+      if (parts.timesheetId && parts.timesheetId !== timesheetId) continue;
+      if (sourceRowKeyTimesheetId && sourceRowKeyTimesheetId !== timesheetId) continue;
+      if (sourceRowKeyIsContractWeek && !parts.timesheetId) continue;
+      if (!parts.timesheetId && !sourceRowKeyTimesheetId && !sourceRowKey) continue;
+      return candidate;
+    }
+    return '';
+  };
+
+  const timesheetRelatedContractWeekId = resolveFreshTimesheetRelatedContractWeekId();
+  const detailsContractWeekId = activeIdentityIsTimesheet
+    ? (timesheetRelatedContractWeekId || null)
+    : (trimStr(
+        activeIdentityParts.contractWeekId ||
+        details.contract_week_id ||
+        details.contract_week?.id ||
+        ctxData.contract_week_id ||
+        patchData.contract_week_id ||
+        ''
+      ) || null);
 
   const detailsHasCurrentTimesheet = Object.prototype.hasOwnProperty.call(details, 'current_timesheet_id');
   const detailsHasTimesheetObject = Object.prototype.hasOwnProperty.call(details, 'timesheet');
@@ -189945,13 +190379,15 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
         ) || null
       );
 
-  const canonicalContractWeekId = trimStr(
-    detailsContractWeekId ||
-    activeIdentityParts.contractWeekId ||
-    ctxData.contract_week_id ||
-    patchData.contract_week_id ||
-    ''
-  ) || null;
+  const canonicalContractWeekId = activeIdentityIsTimesheet
+    ? (timesheetRelatedContractWeekId || null)
+    : (trimStr(
+        detailsContractWeekId ||
+        activeIdentityParts.contractWeekId ||
+        ctxData.contract_week_id ||
+        patchData.contract_week_id ||
+        ''
+      ) || null);
 
   const currentIdentity = activeIdentity || (canonicalTimesheetId
     ? `timesheet:${canonicalTimesheetId}`
@@ -189967,6 +190403,9 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     const modalContractWeekId = identityIsTimesheet
       ? null
       : (identityContractWeekId || canonicalContractWeekId || null);
+    const modalDataContractWeekIdForSync = identityIsTimesheet
+      ? (timesheetRelatedContractWeekId || null)
+      : modalContractWeekId;
     const canonicalRowKey = identity || trimStr(st.active_row_key || st.activeRowKey || activeIdentityParts.rowKey || '') || null;
 
     st.__bulkProcessRecordIdentity = identity || null;
@@ -190010,7 +190449,8 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
           target.data.id = modalTimesheetId || target.data.id || null;
           target.data.timesheet_id = modalTimesheetId || null;
           target.data.current_timesheet_id = modalTimesheetId || null;
-          target.data.contract_week_id = canonicalContractWeekId || target.data.contract_week_id || null;
+          target.data.contract_week_id = modalDataContractWeekIdForSync || null;
+          target.data.contractWeekId = modalDataContractWeekIdForSync || null;
         } else if (identityIsContractWeek) {
           target.data.id = modalContractWeekId || null;
           target.data.timesheet_id = null;
@@ -190232,15 +190672,18 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     ? window.modalCtx.data
     : {};
 
-  window.modalCtx.data.id = canonicalTimesheetId || canonicalContractWeekId || null;
+  const modalDataContractWeekId = /^timesheet:/i.test(currentIdentity || '') ? (timesheetRelatedContractWeekId || null) : (canonicalContractWeekId || null);
+  window.modalCtx.data.id = canonicalTimesheetId || modalDataContractWeekId || null;
   window.modalCtx.data.timesheet_id = canonicalTimesheetId || null;
   window.modalCtx.data.current_timesheet_id = canonicalTimesheetId || null;
-  window.modalCtx.data.contract_week_id = canonicalContractWeekId || null;
+  window.modalCtx.data.contract_week_id = modalDataContractWeekId;
+  window.modalCtx.data.contractWeekId = modalDataContractWeekId;
   Object.assign(window.modalCtx.data, collectFreshActiveEvidenceFields());
-  window.modalCtx.data.id = canonicalTimesheetId || canonicalContractWeekId || null;
+  window.modalCtx.data.id = canonicalTimesheetId || modalDataContractWeekId || null;
   window.modalCtx.data.timesheet_id = canonicalTimesheetId || null;
   window.modalCtx.data.current_timesheet_id = canonicalTimesheetId || null;
-  window.modalCtx.data.contract_week_id = canonicalContractWeekId || null;
+  window.modalCtx.data.contract_week_id = modalDataContractWeekId;
+  window.modalCtx.data.contractWeekId = modalDataContractWeekId;
 
   if (explicitNoTimesheet && canonicalContractWeekId) {
     const cwSubmissionSnapshot = trimStr(
@@ -190352,7 +190795,6 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     }
   } catch {}
 }
-
 
 
 
@@ -191442,8 +191884,6 @@ async function bankingPayProviderSubmitReviewResolve(input, maybeOptions = {}) {
 
   return normalised;
 }
-
-
 
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
@@ -194643,6 +195083,90 @@ const getAttachedSelectionParts = (item) => {
 
 
 
+
+  const evidenceRefreshPendingForReconcile = () => !!(
+    st.__bulk_process_evidence_refresh_pending === true ||
+    st.__bulk_process_post_attach_rebase_pending === true ||
+    pane.__bulk_process_evidence_refresh_pending === true ||
+    pane.__requires_evidence_hydration === true
+  );
+
+  const storageKeyPresentInQueueForActive = (storageKeyInput = '') => {
+    const key = safeStorageKey(storageKeyInput).toLowerCase();
+    if (!key) return false;
+    const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    return rows.some((row) => {
+      if (!row || typeof row !== 'object') return false;
+      const meta = parseObjectMaybeJson(row.meta_json || row.metaJson || row.meta || row.queue_meta || row.queueMeta);
+      const rowKey = safeStorageKey(row.storage_key || row.storageKey || row.r2_key || row.r2Key || row.file_key || row.fileKey || row.download_storage_key || row.downloadStorageKey || meta.storage_key || meta.storageKey || meta.r2_key || meta.r2Key || meta.file_key || meta.fileKey || '');
+      return !!(rowKey && rowKey.toLowerCase() === key);
+    });
+  };
+
+  const currentAuthoritativeContextHasArtifactSignal = () => {
+    const containers = [
+      st.active_row,
+      st.active_context,
+      st.active_context?.details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_details,
+      st.active_ctx,
+      st.active_ctx?.details,
+      st.active_ctx?.state,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row
+    ];
+    const hasStorageSignal = (source) => {
+      if (!source || typeof source !== 'object') return false;
+      const hints = (source.artifact_hints && typeof source.artifact_hints === 'object') ? source.artifact_hints : {};
+      const artifact = (source.primary_artifact && typeof source.primary_artifact === 'object')
+        ? source.primary_artifact
+        : ((source.primaryArtifact && typeof source.primaryArtifact === 'object') ? source.primaryArtifact : ((hints.primary_artifact && typeof hints.primary_artifact === 'object') ? hints.primary_artifact : null));
+      return !!(
+        Number(source.attached_evidence_count || source.evidence_count || 0) > 0 ||
+        source.has_any_evidence === true ||
+        source.has_attached_evidence === true ||
+        safeStorageKey(source.manual_pdf_r2_key || source.manualPdfR2Key || '') ||
+        safeStorageKey(source.uploaded_pdf_r2_key || source.uploadedPdfR2Key || '') ||
+        safeStorageKey(source.primary_artifact_storage_key || source.primaryArtifactStorageKey || hints.primary_artifact_storage_key || hints.primaryArtifactStorageKey || '') ||
+        safeStorageKey(artifact?.storage_key || artifact?.storageKey || artifact?.file_key || artifact?.fileKey || artifact?.download_storage_key || artifact?.downloadStorageKey || artifact?.r2_key || artifact?.r2Key || '')
+      );
+    };
+    return containers.some(hasStorageSignal);
+  };
+
+  const isAuthoritativeEvidenceEmptyForActive = () => !!(
+    !isBulkAuthoriseTimesheets &&
+    evidenceLoadedAuthority &&
+    evidenceLoadedContextIdentityMatchesActiveForReconcile(
+      st.active_context,
+      st.active_context?.details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_details,
+      st.active_ctx,
+      st.active_ctx?.details,
+      st.active_ctx?.state
+    ) &&
+    evidenceArraysExplicitlyPresentAndEmptyForReconcile(
+      st.active_context,
+      st.active_context?.details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_details,
+      st.active_ctx,
+      st.active_ctx?.details,
+      st.active_ctx?.state
+    ) &&
+    !currentAuthoritativeContextHasArtifactSignal()
+  );
+
+  const paneAttachedFallbackAllowedForReconcile = () => !!(
+    isBulkAuthoriseTimesheets ||
+    (!isAuthoritativeEvidenceEmptyForActive() && !removalTombstonesActive && !evidenceRefreshPendingForReconcile())
+  );
+
   const getMatchingDatasetRowForEvidence = () => {
 
     const identity = selectedRowIdentityParts();
@@ -194943,6 +195467,8 @@ const getAttachedSelectionParts = (item) => {
 
     if (!isBulkAuthoriseTimesheets && evidenceExpectation && explicitNoTimesheetRow) return [];
 
+    if (!isBulkAuthoriseTimesheets && (isAuthoritativeEvidenceEmptyForActive() || evidenceRefreshPendingForReconcile())) return [];
+
     const containers = [
 
       st.active_row,
@@ -195005,6 +195531,20 @@ const getAttachedSelectionParts = (item) => {
 
       if (!storageKey) continue;
 
+      if (!isBulkAuthoriseTimesheets && storageKeyPresentInQueueForActive(storageKey)) continue;
+
+      if (!isBulkAuthoriseTimesheets && removedTombstonesMatchStorageKey(storageKey, activeRemovedEvidenceTombstones, {
+
+        kind: kind || null,
+
+        row_key: identity.rowKey || null,
+
+        timesheet_id: identity.timesheetId || null,
+
+        contract_week_id: identity.contractWeekId || null
+
+      })) continue;
+
       const hasRealFallbackIdentity = !!(
 
         artifactEvidenceId ||
@@ -195029,6 +195569,38 @@ const getAttachedSelectionParts = (item) => {
 
       seenFallbacks.add(key);
 
+      const fileNameFromStorageKey = trimStr(storageKey.split('/').filter(Boolean).pop() || '');
+
+      const primaryIsSystemArtifact = /^sys:/i.test(primaryId || '');
+
+      const artifactDisplayName = trimStr(artifact?.display_name || artifact?.displayName || artifact?.filename || artifact?.original_filename || artifact?.originalFilename || '');
+
+      const containerDisplayMatchesArtifact = !!(
+
+        !primaryIsSystemArtifact &&
+
+        (
+
+          safeStorageKey(container.primary_artifact_storage_key || container.primaryArtifactStorageKey || '') === storageKey ||
+
+          safeStorageKey(hints.primary_artifact_storage_key || hints.primaryArtifactStorageKey || '') === storageKey ||
+
+          (primaryId && (trimStr(container.primary_artifact_id || container.primaryArtifactId || '') === primaryId || trimStr(hints.primary_artifact_id || hints.primaryArtifactId || '') === primaryId))
+
+        )
+
+      );
+
+      const containerDisplayName = containerDisplayMatchesArtifact ? trimStr(container.primary_artifact_display_name || container.primaryArtifactDisplayName || hints.primary_artifact_display_name || hints.primaryArtifactDisplayName || '') : '';
+
+      const safeFallbackName = kind === 'TIMESHEET'
+
+        ? (fileNameFromStorageKey || 'Timesheet PDF')
+
+        : (fileNameFromStorageKey || 'Evidence');
+
+      const displayName = artifactDisplayName || containerDisplayName || safeFallbackName;
+
       rows.push({
 
         ...(artifact ? deep(artifact) : {}),
@@ -195043,9 +195615,9 @@ const getAttachedSelectionParts = (item) => {
 
         staged_kind: kind || undefined,
 
-        display_name: trimStr(artifact?.display_name || artifact?.filename || container.primary_artifact_display_name || hints.primary_artifact_display_name || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
+        display_name: displayName,
 
-        filename: trimStr(artifact?.filename || artifact?.display_name || container.primary_artifact_display_name || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
+        filename: artifactDisplayName || displayName,
 
         storage_key: storageKey || null,
 
@@ -195109,9 +195681,9 @@ const getAttachedSelectionParts = (item) => {
 
       { rows: (isBulkAuthoriseTimesheets || evidenceLoadedAuthority) ? st.active_details?.evidence : null, scope: 'active_details', currentContext: true },
 
-      { rows: pane.attached_rows, scope: 'pane_attached_rows', currentContext: false },
+      { rows: paneAttachedFallbackAllowedForReconcile() ? pane.attached_rows : null, scope: 'pane_attached_rows', currentContext: false },
 
-      { rows: pane.attached_all_rows, scope: 'pane_attached_all_rows', currentContext: false },
+      { rows: paneAttachedFallbackAllowedForReconcile() ? pane.attached_all_rows : null, scope: 'pane_attached_all_rows', currentContext: false },
 
       { rows: (isBulkAuthoriseTimesheets || evidenceLoadedAuthority) ? window.modalCtx?.timesheetState?.evidence : null, scope: 'modal_timesheet_state', currentContext: false }
 
@@ -196011,7 +196583,25 @@ const getAttachedSelectionParts = (item) => {
 
   }
 
-  const selectedRowArtifactKeyRaw = safeStorageKey(readSelectedRowTimesheetArtifactKey());
+  if (!isBulkAuthoriseTimesheets && isAuthoritativeEvidenceEmptyForActive()) {
+
+    attachedAllRows = [];
+
+    syntheticAttachedFallbackRows = [];
+
+  }
+
+  const selectedRowArtifactKeyCandidate = safeStorageKey(readSelectedRowTimesheetArtifactKey());
+
+  const selectedRowArtifactKeyRaw = (!isBulkAuthoriseTimesheets && (
+
+    isAuthoritativeEvidenceEmptyForActive() ||
+
+    evidenceRefreshPendingForReconcile() ||
+
+    storageKeyPresentInQueueForActive(selectedRowArtifactKeyCandidate)
+
+  )) ? '' : selectedRowArtifactKeyCandidate;
 
   const selectedRowIdentity = selectedRowIdentityParts();
 
@@ -196269,7 +196859,21 @@ const getAttachedSelectionParts = (item) => {
 
     const storageKey = getItemStorageKey(item);
 
-    if (evidenceId || queueId) return true;
+    if (evidenceId) return true;
+
+    if (queueId) {
+
+      const sourceLabel = upper(item.source_label || item.source_badge || item.source || meta.source_label || meta.source_badge || meta.source || '');
+
+      const status = upper(item.status || item.queue_status || meta.status || meta.queue_status || '');
+
+      const queueOnly = !evidenceId && (status === 'QUEUED' || sourceLabel === 'QUEUE' || sourceLabel === 'QUEUED' || sourceLabel === 'IMPORT_QUEUE' || sourceLabel === 'TIMESHEET_QUEUE');
+
+      if (queueOnly) return false;
+
+      return !!(item.is_staged_context === true && !timesheetIdForRemovalMatch(item));
+
+    }
 
     if (genericId && genericId !== storageKey && !/^synthetic-attached:/i.test(genericId)) return true;
 
@@ -198068,7 +198672,6 @@ const getAttachedSelectionParts = (item) => {
 
 
 
-
 async function rerenderBulkProcessWorkbench(state, logPrefix) {
   const prefix = String(logPrefix || '[TS][BULK-PROCESS]');
   const st = (state && typeof state === 'object') ? state : null;
@@ -198583,7 +199186,16 @@ async function handleBulkProcessSave(state) {
     const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
     const rowKey = trimStr(row.row_key || row.new_row_key || '');
     const timesheetId = trimStr(row.timesheet_id || row.current_timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
-    const contractWeekId = trimStr(row.contract_week_id || row.contractWeekId || row.id || '');
+    const rowKeyContractWeekId = /^contract_week:/i.test(rowKey || '')
+      ? trimStr(rowKey.replace(/^contract_week:/i, ''))
+      : '';
+    const rowIdContractWeekCandidate = (!timesheetId && !/^timesheet:/i.test(rowKey || ''))
+      ? trimStr(row.id || '')
+      : '';
+    const rawContractWeekId = trimStr(row.contract_week_id || row.contractWeekId || rowKeyContractWeekId || rowIdContractWeekCandidate || '');
+    const contractWeekId = /^timesheet:/i.test(rowKey || '') && (!rawContractWeekId || rawContractWeekId === timesheetId)
+      ? ''
+      : rawContractWeekId;
     return { rowKey, timesheetId, contractWeekId };
   };
   const saveEvidenceItemMatchesRowIdentity = (itemLike = {}, rowLike = {}) => {
@@ -198646,6 +199258,34 @@ async function handleBulkProcessSave(state) {
     ).filter((item) => saveEvidenceItemMatchesRowIdentity(item, targetRow));
   };
 
+  const hasOwnSaveContractField = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const readExplicitContractWeekIdForSave = (...sources) => {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      const contractWeekObj = (source.contract_week && typeof source.contract_week === 'object') ? source.contract_week : null;
+      const contractWeekCamelObj = (source.contractWeek && typeof source.contractWeek === 'object') ? source.contractWeek : null;
+      const candidates = [];
+      if (hasOwnSaveContractField(source, 'contract_week_id')) candidates.push(source.contract_week_id);
+      if (hasOwnSaveContractField(source, 'contractWeekId')) candidates.push(source.contractWeekId);
+      if (contractWeekObj && hasOwnSaveContractField(contractWeekObj, 'id')) candidates.push(contractWeekObj.id);
+      if (contractWeekCamelObj && hasOwnSaveContractField(contractWeekCamelObj, 'id')) candidates.push(contractWeekCamelObj.id);
+      for (const candidate of candidates) {
+        const clean = trimStr(candidate || '');
+        if (clean) return clean;
+      }
+    }
+    return '';
+  };
+  const normaliseContractWeekIdForSaveContext = ({ rowKey = '', timesheetId = '', freshSources = [], fallbackSources = [] } = {}) => {
+    const key = trimStr(rowKey || '');
+    const tsId = trimStr(timesheetId || '');
+    const isTimesheetIdentity = /^timesheet:/i.test(key || '') || (!!tsId && !/^contract_week:/i.test(key || ''));
+    const freshCandidate = readExplicitContractWeekIdForSave(...freshSources);
+    if (isTimesheetIdentity) return freshCandidate && freshCandidate !== tsId ? freshCandidate : null;
+    const fallbackCandidate = readExplicitContractWeekIdForSave(...freshSources, ...fallbackSources);
+    return fallbackCandidate || null;
+  };
+
   const buildFallbackRelated = (rowObj, detailsObj) => {
     const row = (rowObj && typeof rowObj === 'object') ? rowObj : {};
     const details = (detailsObj && typeof detailsObj === 'object') ? detailsObj : {};
@@ -198703,12 +199343,20 @@ async function handleBulkProcessSave(state) {
       const clean = trimStr(value);
       if (clean) qs.set(key, clean);
     };
-    add('row_key', row.row_key || st.active_row_key || '');
-    add('timesheet_id', row.current_timesheet_id || row.timesheet_id || st.active_details?.current_timesheet_id || st.active_details?.timesheet?.timesheet_id || '');
+    const refreshContextRowKeyForSave = trimStr(row.row_key || st.active_row_key || '');
+    const refreshContextTimesheetIdForSave = trimStr(row.current_timesheet_id || row.timesheet_id || st.active_details?.current_timesheet_id || st.active_details?.timesheet?.timesheet_id || '');
+    const refreshContextContractWeekIdForSave = normaliseContractWeekIdForSaveContext({
+      rowKey: refreshContextRowKeyForSave,
+      timesheetId: refreshContextTimesheetIdForSave,
+      freshSources: /^timesheet:/i.test(refreshContextRowKeyForSave || '') || refreshContextTimesheetIdForSave ? [] : [row],
+      fallbackSources: /^timesheet:/i.test(refreshContextRowKeyForSave || '') || refreshContextTimesheetIdForSave ? [] : [st.active_details, st.active_details?.contract_week]
+    }) || '';
+    add('row_key', refreshContextRowKeyForSave);
+    add('timesheet_id', refreshContextTimesheetIdForSave);
     add('current_timesheet_id', row.current_timesheet_id || row.timesheet_id || st.active_details?.current_timesheet_id || '');
     add('requested_timesheet_id', row.requested_timesheet_id || row.timesheet_id || st.active_details?.requested_timesheet_id || '');
     add('expected_timesheet_id', row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || st.active_details?.expected_timesheet_id || '');
-    add('contract_week_id', row.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
+    add('contract_week_id', refreshContextContractWeekIdForSave);
     qs.set('profile', profile);
     qs.set('context_profile', profile);
     qs.set('include_evidence', includeEvidence ? 'true' : 'false');
@@ -198914,13 +199562,29 @@ async function handleBulkProcessSave(state) {
       return true;
     }
 
+    const saveContextRowKeyForContractWeek = trimStr(mergedRow.row_key || st.active_row_key || '');
+    const saveContextTimesheetIdForContractWeek = trimStr(payload.current_timesheet_id || detailsPayload.current_timesheet_id || dataRow?.current_timesheet_id || dataRow?.timesheet_id || rowPatch?.current_timesheet_id || rowPatch?.timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || '');
+    const saveContextContractWeekId = normaliseContractWeekIdForSaveContext({
+      rowKey: saveContextRowKeyForContractWeek,
+      timesheetId: saveContextTimesheetIdForContractWeek,
+      freshSources: [payload, detailsPayload, detailsPayload.contract_week, dataRow, rowPatch],
+      fallbackSources: /^timesheet:/i.test(saveContextRowKeyForContractWeek || '') || saveContextTimesheetIdForContractWeek ? [] : [mergedRow]
+    });
+    if (/^timesheet:/i.test(saveContextRowKeyForContractWeek || '') || saveContextTimesheetIdForContractWeek) {
+      mergedRow.contract_week_id = saveContextContractWeekId;
+      mergedRow.contractWeekId = saveContextContractWeekId;
+    } else if (saveContextContractWeekId) {
+      mergedRow.contract_week_id = saveContextContractWeekId;
+      mergedRow.contractWeekId = saveContextContractWeekId;
+    }
+
     st.active_details = {
       ...previousDetails,
       ...detailsPayload,
       current_timesheet_id: payload.current_timesheet_id || detailsPayload.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
       requested_timesheet_id: payload.requested_timesheet_id || detailsPayload.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
       expected_timesheet_id: payload.expected_timesheet_id || detailsPayload.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-      contract_week_id: payload.contract_week_id || detailsPayload.contract_week_id || mergedRow.contract_week_id || null,
+      contract_week_id: saveContextContractWeekId,
       evidence: evidenceRows,
       related,
       profile,
@@ -199060,11 +199724,16 @@ async function handleBulkProcessSave(state) {
   };
 
   const makeRowKey = (rowLike) => {
+    const explicitRowKey = trimStr(rowLike?.row_key || rowLike?.new_row_key || '');
+    if (/^timesheet:/i.test(explicitRowKey || '')) return explicitRowKey;
     const tsId = trimStr(rowLike?.timesheet_id || rowLike?.current_timesheet_id || '');
     if (tsId) return `timesheet:${tsId}`;
-    const cwId = trimStr(rowLike?.contract_week_id || rowLike?.id || '');
+    if (/^contract_week:/i.test(explicitRowKey || '')) return explicitRowKey;
+    const cwId = trimStr(rowLike?.contract_week_id || rowLike?.contractWeekId || '');
     if (cwId) return `contract_week:${cwId}`;
-    return trimStr(rowLike?.row_key || '');
+    const rowIdContractWeekCandidate = !/^timesheet:/i.test(explicitRowKey || '') ? trimStr(rowLike?.id || '') : '';
+    if (rowIdContractWeekCandidate) return `contract_week:${rowIdContractWeekCandidate}`;
+    return explicitRowKey;
   };
 
   const findRowLocation = (datasetObj, rowKey) => {
@@ -199104,18 +199773,19 @@ async function handleBulkProcessSave(state) {
       ''
     ) || null;
 
-    const nextContractWeekId = trimStr(
-      out.contract_week_id ||
-      payloadContractWeek?.id ||
-      dataRow.contract_week_id ||
-      rowPatch.contract_week_id ||
-      detailBase?.contract_week_id ||
-      detailBase?.contract_week?.id ||
-      summaryRowHint.contract_week_id ||
-      rowBase.contract_week_id ||
-      rowBase.id ||
-      ''
-    ) || null;
+    const payloadRowKeyForContractWeek = trimStr(rowPatch.row_key || dataRow.row_key || summaryRowHint.row_key || rowBase.row_key || '');
+    const payloadRowKeyContractWeekId = /^contract_week:/i.test(payloadRowKeyForContractWeek || '')
+      ? trimStr(payloadRowKeyForContractWeek.replace(/^contract_week:/i, ''))
+      : '';
+    const payloadRowIdContractWeekCandidate = (!nextTimesheetId && !/^timesheet:/i.test(payloadRowKeyForContractWeek || ''))
+      ? trimStr(rowBase.id || '')
+      : '';
+    const nextContractWeekId = normaliseContractWeekIdForSaveContext({
+      rowKey: payloadRowKeyForContractWeek,
+      timesheetId: nextTimesheetId || '',
+      freshSources: [out, payloadContractWeek, dataRow, rowPatch, summaryRowHint],
+      fallbackSources: /^timesheet:/i.test(payloadRowKeyForContractWeek || '') || nextTimesheetId ? [] : [detailBase, rowBase, { contract_week_id: payloadRowKeyContractWeekId || payloadRowIdContractWeekCandidate }]
+    });
 
     const nextBucket = upper(bucketHint || rowBase.bulk_process_bucket || rowBase.summary_stage || '');
 
@@ -199126,6 +199796,7 @@ async function handleBulkProcessSave(state) {
       ...rowPatch,
       timesheet_id: nextTimesheetId,
       contract_week_id: nextContractWeekId,
+      contractWeekId: nextContractWeekId,
       id: nextTimesheetId || nextContractWeekId || summaryRowHint.id || rowBase.id || null,
       row_key: nextTimesheetId ? `timesheet:${nextTimesheetId}` : (nextContractWeekId ? `contract_week:${nextContractWeekId}` : trimStr(rowPatch.row_key || dataRow.row_key || summaryRowHint.row_key || rowBase.row_key || '') || null),
       stable_row_id: nextTimesheetId || nextContractWeekId || rowBase.stable_row_id || null,
@@ -199248,7 +199919,13 @@ async function handleBulkProcessSave(state) {
 
     if (out.contract_week && typeof out.contract_week === 'object') {
       nextDetails.contract_week = deep(out.contract_week);
-      nextDetails.contract_week_id = out.contract_week_id || out.contract_week.id || rowPatched.contract_week_id || null;
+      nextDetails.contract_week_id = normaliseContractWeekIdForSaveContext({
+        rowKey: rowPatched.row_key || '',
+        timesheetId: rowPatched.current_timesheet_id || rowPatched.timesheet_id || '',
+        freshSources: [out, out.contract_week, rowPatched],
+        fallbackSources: []
+      });
+      if (!nextDetails.contract_week_id) nextDetails.contract_week = null;
     }
     if (Object.prototype.hasOwnProperty.call(out, 'timesheet')) {
       nextDetails.timesheet = out.timesheet && typeof out.timesheet === 'object' ? deep(out.timesheet) : null;
@@ -199308,7 +199985,16 @@ async function handleBulkProcessSave(state) {
     if (!target || typeof target !== 'object') return false;
     const targetRowKey = trimStr(target.row_key || target.new_row_key || makeRowKey(target) || '');
     const targetTimesheetId = trimStr(target.current_timesheet_id || target.timesheet_id || target.requested_timesheet_id || target.expected_timesheet_id || target.timesheet?.timesheet_id || '');
-    const targetContractWeekId = trimStr(target.contract_week_id || target.contractWeekId || target.contract_week?.id || target.id || '');
+    const targetRowKeyContractWeekId = /^contract_week:/i.test(targetRowKey || '')
+      ? trimStr(targetRowKey.replace(/^contract_week:/i, ''))
+      : '';
+    const targetRowIdContractWeekCandidate = (!targetTimesheetId && !/^timesheet:/i.test(targetRowKey || ''))
+      ? trimStr(target.id || '')
+      : '';
+    const targetContractWeekCandidate = trimStr(target.contract_week_id || target.contractWeekId || target.contract_week?.id || targetRowKeyContractWeekId || targetRowIdContractWeekCandidate || '');
+    const targetContractWeekId = /^timesheet:/i.test(targetRowKey || '') && (!targetContractWeekCandidate || targetContractWeekCandidate === targetTimesheetId)
+      ? ''
+      : targetContractWeekCandidate;
     const rowKey = trimStr(identity.rowKey || identity.row_key || '');
     const timesheetId = trimStr(identity.timesheetId || identity.timesheet_id || '');
     const expectedTimesheetId = trimStr(identity.expectedTimesheetId || identity.expected_timesheet_id || '');
@@ -200700,7 +201386,6 @@ async function handleBulkProcessSave(state) {
   }
 }
 
-
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -200727,6 +201412,35 @@ async function handleBulkProcessProcess(state) {
   const BULK_PROCESS_NO_TIMESHEET_EVIDENCE_WARNING = 'You are processing a timesheet without any timesheet image selected, are you sure you want to continue?';
   const BULK_PROCESS_MISSING_PREVIEW_QUEUE_IMAGE_MESSAGE = 'This timesheet image no longer exists and therefore the timesheet cannot be processed with this image. Please find another image and try again.';
   const pickObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? deep(value) : {};
+  const hasOwnProcessContractField = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const readExplicitProcessContractWeekId = (...sources) => {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      const contractWeekObj = (source.contract_week && typeof source.contract_week === 'object') ? source.contract_week : null;
+      const contractWeekCamelObj = (source.contractWeek && typeof source.contractWeek === 'object') ? source.contractWeek : null;
+      const candidates = [];
+      if (hasOwnProcessContractField(source, 'contract_week_id')) candidates.push(source.contract_week_id);
+      if (hasOwnProcessContractField(source, 'contractWeekId')) candidates.push(source.contractWeekId);
+      if (hasOwnProcessContractField(source, 'current_contract_week_id')) candidates.push(source.current_contract_week_id);
+      if (hasOwnProcessContractField(source, 'currentContractWeekId')) candidates.push(source.currentContractWeekId);
+      if (contractWeekObj && hasOwnProcessContractField(contractWeekObj, 'id')) candidates.push(contractWeekObj.id);
+      if (contractWeekCamelObj && hasOwnProcessContractField(contractWeekCamelObj, 'id')) candidates.push(contractWeekCamelObj.id);
+      for (const candidate of candidates) {
+        const clean = trimStr(candidate || '');
+        if (clean) return clean;
+      }
+    }
+    return '';
+  };
+  const normaliseProcessContractWeekId = ({ rowKey = '', timesheetId = '', freshSources = [], fallbackSources = [] } = {}) => {
+    const key = trimStr(rowKey || '');
+    const tsId = trimStr(timesheetId || '');
+    const isTimesheetIdentity = /^timesheet:/i.test(key || '') || (!!tsId && !/^contract_week:/i.test(key || ''));
+    const freshCandidate = readExplicitProcessContractWeekId(...freshSources);
+    if (isTimesheetIdentity) return freshCandidate && freshCandidate !== tsId ? freshCandidate : null;
+    const fallbackCandidate = readExplicitProcessContractWeekId(...freshSources, ...fallbackSources);
+    return fallbackCandidate || null;
+  };
   let activeProcessMutationKey = '';
   let activeProcessMutationToken = '';
   const lifecycleMutationMap = () => {
@@ -200768,7 +201482,12 @@ async function handleBulkProcessProcess(state) {
     return {
       row_key: trimStr(row.row_key || st.active_row_key || dataRow.row_key || ''),
       timesheet_id: trimStr(row.timesheet_id || row.current_timesheet_id || dataRow.timesheet_id || dataRow.current_timesheet_id || ''),
-      contract_week_id: trimStr(row.contract_week_id || dataRow.contract_week_id || ''),
+      contract_week_id: normaliseProcessContractWeekId({
+        rowKey: row.row_key || st.active_row_key || dataRow.row_key || '',
+        timesheetId: row.timesheet_id || row.current_timesheet_id || dataRow.timesheet_id || dataRow.current_timesheet_id || '',
+        freshSources: [row, dataRow],
+        fallbackSources: []
+      }) || '',
       active_row_signature: trimStr(st.active_row?.row_signature || ''),
       active_ctx_row_signature: trimStr(ctxRow.row_signature || ''),
       active_context_row_signature: trimStr(activeContextRow.row_signature || ''),
@@ -201003,7 +201722,12 @@ async function handleBulkProcessProcess(state) {
     const submissionMode = upper(timesheet.submission_mode || row.submission_mode || row.submission_mode_snapshot || contractWeek.submission_mode_snapshot || datasetLifecycleRow?.submission_mode || datasetLifecycleRow?.submission_mode_snapshot || '');
     const timesheetId = activeTimesheetId;
     const expectedTimesheetId = trimStr(row.expected_timesheet_id || details.expected_timesheet_id || details.current_timesheet_id || timesheet.timesheet_id || row.current_timesheet_id || row.timesheet_id || '');
-    const contractWeekId = trimStr(details.contract_week_id || contractWeek.id || row.contract_week_id || '');
+    const contractWeekId = normaliseProcessContractWeekId({
+      rowKey: activeRowKey,
+      timesheetId: timesheetId,
+      freshSources: /^timesheet:/i.test(activeRowKey || '') || timesheetId ? [row, ctx.row, ctx.data_row, stateCtx, stateCtx.row, stateCtx.data_row] : [details, contractWeek, row],
+      fallbackSources: /^timesheet:/i.test(activeRowKey || '') || timesheetId ? [] : [details, contractWeek, row]
+    }) || '';
     const isDaily = periodType === 'DAILY' || sheetScope === 'DAILY';
     const isWeekly = periodType === 'WEEKLY' || sheetScope === 'WEEKLY' || !!contractWeekId;
     return { ctx, row, details, stateCtx, timesheet, tsfin, contractWeek, sheetScope, periodType, submissionMode, timesheetId, expectedTimesheetId, contractWeekId, isDaily, isWeekly };
@@ -201044,7 +201768,12 @@ async function handleBulkProcessProcess(state) {
     const rowPatch = pickObject(src.row_patch || dataRow);
     const merged = { ...deep(baseRow || {}), ...dataRow, ...rowPatch };
     const currentTimesheetId = trimStr(src.current_timesheet_id || src.timesheet_id || src.timesheet?.timesheet_id || merged.current_timesheet_id || merged.timesheet_id || '');
-    const contractWeekId = trimStr(src.contract_week_id || src.contract_week?.id || merged.contract_week_id || '');
+    const contractWeekId = normaliseProcessContractWeekId({
+      rowKey: src.row_key || src.new_row_key || merged.row_key || '',
+      timesheetId: currentTimesheetId,
+      freshSources: [src, src.contract_week, dataRow, rowPatch],
+      fallbackSources: currentTimesheetId ? [] : [merged]
+    }) || '';
     const rowKey = trimStr(src.row_key || src.new_row_key || merged.row_key || (currentTimesheetId ? `timesheet:${currentTimesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : '')));
     const bucket = upper(src.bulk_process_bucket || merged.bulk_process_bucket || fallbackBucket || 'PROCESSED') === 'UNPROCESSED' ? 'UNPROCESSED' : 'PROCESSED';
     return {
@@ -201053,7 +201782,7 @@ async function handleBulkProcessProcess(state) {
       timesheet_id: currentTimesheetId || merged.timesheet_id || null,
       current_timesheet_id: currentTimesheetId || merged.current_timesheet_id || merged.timesheet_id || null,
       expected_timesheet_id: trimStr(src.expected_timesheet_id || merged.expected_timesheet_id || currentTimesheetId || '') || null,
-      contract_week_id: contractWeekId || merged.contract_week_id || null,
+      contract_week_id: contractWeekId || null,
       current_version: src.current_version ?? src.current_timesheet_version ?? merged.current_version ?? merged.timesheet_version ?? null,
       processing_status: src.processing_status ?? src.new_status ?? merged.processing_status ?? null,
       bulk_process_bucket: bucket,
@@ -201106,7 +201835,12 @@ async function handleBulkProcessProcess(state) {
     const merged = { ...dataRow, ...rowPatch };
     const bucketTransition = (src.bucket_transition && typeof src.bucket_transition === 'object') ? src.bucket_transition : {};
     const currentTimesheetId = trimStr(src.current_timesheet_id || src.timesheet_id || src.timesheet?.timesheet_id || merged.current_timesheet_id || merged.timesheet_id || '');
-    const contractWeekId = trimStr(src.contract_week_id || src.contract_week?.id || merged.contract_week_id || '');
+    const contractWeekId = normaliseProcessContractWeekId({
+      rowKey: src.row_key || src.new_row_key || merged.row_key || '',
+      timesheetId: currentTimesheetId,
+      freshSources: [src, src.contract_week, dataRow, rowPatch],
+      fallbackSources: currentTimesheetId ? [] : [merged]
+    }) || '';
     const rowKey = trimStr(src.row_key || src.new_row_key || merged.row_key || (currentTimesheetId ? `timesheet:${currentTimesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : '')));
     const rowSignature = trimStr(src.backend_row_signature || src.mutation_row_signature || src.row_signature || merged.backend_row_signature || merged.mutation_row_signature || merged.row_signature || '');
     const bucket = upper(src.bulk_process_bucket || merged.bulk_process_bucket || bucketTransition.to || bucketTransition.after || (currentTimesheetId ? 'PROCESSED' : 'UNPROCESSED'));
@@ -201129,7 +201863,12 @@ async function handleBulkProcessProcess(state) {
     }
     const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     const timesheetId = trimStr(src.current_timesheet_id || src.timesheet_id || src.timesheet?.timesheet_id || active?.timesheetId || active?.row?.timesheet_id || active?.row?.current_timesheet_id || '');
-    const contractWeekId = trimStr(src.contract_week_id || src.contract_week?.id || active?.contractWeekId || active?.row?.contract_week_id || '');
+    const contractWeekId = normaliseProcessContractWeekId({
+      rowKey: src.row_key || src.new_row_key || rowKeyOf(active?.row || {}) || previousRowKeyInput || '',
+      timesheetId,
+      freshSources: [src, src.contract_week],
+      fallbackSources: timesheetId ? [] : [active?.row]
+    }) || '';
     const rowKey = trimStr(src.row_key || src.new_row_key || (timesheetId ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : rowKeyOf(active?.row || {}) || previousRowKeyInput || '')));
     return [{
       row_key: rowKey || null,
@@ -201145,7 +201884,12 @@ async function handleBulkProcessProcess(state) {
     const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     const baseRow = pickObject(active?.row || st.active_row || {});
     const timesheetId = trimStr(src.current_timesheet_id || src.timesheet_id || baseRow.current_timesheet_id || baseRow.timesheet_id || '');
-    const contractWeekId = trimStr(src.contract_week_id || baseRow.contract_week_id || '');
+    const contractWeekId = normaliseProcessContractWeekId({
+      rowKey: src.row_key || src.new_row_key || rowKeyOf(baseRow) || previousRowKeyInput || '',
+      timesheetId,
+      freshSources: [src, src.contract_week],
+      fallbackSources: timesheetId ? [] : [baseRow]
+    }) || '';
     const rowKey = trimStr(src.row_key || src.new_row_key || (timesheetId ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : rowKeyOf(baseRow) || previousRowKeyInput || '')));
     const backendSignature = trimStr(src.backend_row_signature || src.mutation_row_signature || src.row_signature || baseRow.backend_row_signature || baseRow.row_signature || '');
     return {
@@ -201155,7 +201899,7 @@ async function handleBulkProcessProcess(state) {
       timesheet_id: timesheetId || baseRow.timesheet_id || null,
       current_timesheet_id: timesheetId || baseRow.current_timesheet_id || baseRow.timesheet_id || null,
       expected_timesheet_id: timesheetId || baseRow.expected_timesheet_id || null,
-      contract_week_id: contractWeekId || baseRow.contract_week_id || null,
+      contract_week_id: contractWeekId || null,
       current_version: src.current_version ?? src.current_timesheet_version ?? baseRow.current_version ?? null,
       processing_status: src.processing_status || src.new_processing_status || baseRow.processing_status || null,
       new_processing_status: src.new_processing_status || src.processing_status || baseRow.new_processing_status || null,
@@ -201771,7 +202515,12 @@ async function handleBulkProcessProcess(state) {
       reason: trimStr(reason || '') || null,
       row_key: key,
       timesheet_id: trimStr(identityForRefresh.timesheetId || identityForRefresh.currentTimesheetId || '') || null,
-      contract_week_id: trimStr(identityForRefresh.contractWeekId || '') || null,
+      contract_week_id: normaliseProcessContractWeekId({
+        rowKey: key,
+        timesheetId: identityForRefresh.timesheetId || identityForRefresh.currentTimesheetId || '',
+        freshSources: [identityForRefresh],
+        fallbackSources: []
+      }) || null,
       before_signature: trimStr(activeBeforeRefresh.row?.backend_row_signature || activeBeforeRefresh.row?.row_signature || activeBeforeRefresh.ctx?.row?.backend_row_signature || activeBeforeRefresh.ctx?.row?.row_signature || st.active_row?.backend_row_signature || st.active_row?.row_signature || '') || null
     });
     if (typeof refreshTimesheetLifecycleAffectedRows !== 'function') {
@@ -201783,7 +202532,12 @@ async function handleBulkProcessProcess(state) {
       current_timesheet_id: identityForRefresh.currentTimesheetId || identityForRefresh.timesheetId || null,
       requested_timesheet_id: identityForRefresh.requestedTimesheetId || identityForRefresh.timesheetId || null,
       expected_timesheet_id: identityForRefresh.expectedTimesheetId || identityForRefresh.currentTimesheetId || identityForRefresh.timesheetId || null,
-      contract_week_id: identityForRefresh.contractWeekId || null,
+      contract_week_id: normaliseProcessContractWeekId({
+        rowKey: key,
+        timesheetId: identityForRefresh.timesheetId || identityForRefresh.currentTimesheetId || '',
+        freshSources: [identityForRefresh],
+        fallbackSources: []
+      }) || null,
       context: 'bulk_process'
     }], {
       context: 'bulk_process',
@@ -201990,6 +202744,52 @@ async function handleBulkProcessProcess(state) {
       window.modalCtx?.timesheetDetails
     ].some(processContainerHasEvidenceExpectation);
   };
+  const processEvidenceContextIsLoadedForActive = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    const profileIsEvidence = (value) => {
+      const clean = trimStr(value || '').toLowerCase();
+      return clean === 'evidence' || clean === 'full';
+    };
+    return [
+      active.row,
+      active.details,
+      active.ctx,
+      active.stateCtx,
+      st.active_row,
+      st.active_details,
+      st.active_context,
+      st.active_context?.details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx,
+      st.active_ctx?.details,
+      st.active_ctx?.state,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row,
+      window.modalCtx?.data,
+      window.modalCtx?.timesheetState,
+      window.modalCtx?.timesheetDetails
+    ].some((container) => !!(
+      container &&
+      typeof container === 'object' &&
+      (
+        container.evidence_loaded === true ||
+        container.evidence_authoritative === true ||
+        container.include_evidence === true ||
+        profileIsEvidence(container.profile) ||
+        profileIsEvidence(container.context_profile) ||
+        profileIsEvidence(container.evidence_context_profile)
+      )
+    )) || !!(
+      pane &&
+      (
+        pane.__evidence_loaded === true ||
+        pane.__attached_loaded === true
+      )
+    );
+  };
+
   const processRowIsImportDerivedForGating = (activeInput = null) => {
     const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     const sources = [
@@ -203198,7 +203998,12 @@ async function handleBulkProcessProcess(state) {
     const details = (active.details && typeof active.details === 'object') ? active.details : ((st.active_details && typeof st.active_details === 'object') ? st.active_details : {});
     const rowKey = trimStr(row.row_key || st.active_row_key || st.active_context?.row_key || st.active_context?.row?.row_key || st.active_context?.data_row?.row_key || '');
     const timesheetId = trimStr(active.timesheetId || row.timesheet_id || row.current_timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || details.current_timesheet_id || details.requested_timesheet_id || details.expected_timesheet_id || details.timesheet?.timesheet_id || '');
-    const contractWeekId = trimStr(active.contractWeekId || row.contract_week_id || row.contractWeekId || details.contract_week_id || details.contract_week?.id || '');
+    const contractWeekId = normaliseProcessContractWeekId({
+      rowKey,
+      timesheetId,
+      freshSources: /^timesheet:/i.test(rowKey || '') || timesheetId ? [active, row, st.active_context?.row, st.active_context?.data_row, st.active_ctx?.row, st.active_ctx?.data_row] : [active, row, details, details.contract_week],
+      fallbackSources: /^timesheet:/i.test(rowKey || '') || timesheetId ? [] : [details, details.contract_week]
+    }) || '';
     return { rowKey, timesheetId, currentTimesheetId: trimStr(row.current_timesheet_id || details.current_timesheet_id || timesheetId || ''), contractWeekId };
   };
 
@@ -203709,8 +204514,10 @@ async function handleBulkProcessProcess(state) {
     const itemRowKey = trimStr(itemParts.rowKey || '');
     const itemTimesheetId = trimStr(itemParts.timesheetId || '');
     const itemContractWeekId = trimStr(itemParts.contractWeekId || '');
+    const activeIdentityIsTimesheet = /^timesheet:/i.test(activeRowKey || '') || !!activeTimesheetId;
     if (itemRowKey && activeRowKey && itemRowKey !== activeRowKey) return false;
     if (itemTimesheetId && activeTimesheetId && itemTimesheetId !== activeTimesheetId) return false;
+    if (activeIdentityIsTimesheet && itemContractWeekId && !itemTimesheetId && (!itemRowKey || itemRowKey !== activeRowKey)) return false;
     if (itemContractWeekId && activeContractWeekId && itemContractWeekId !== activeContractWeekId) return false;
     if (itemTimesheetId && activeContractWeekId && !activeTimesheetId) return false;
     if (itemContractWeekId && activeTimesheetId && !activeContractWeekId) return false;
@@ -203741,9 +204548,12 @@ async function handleBulkProcessProcess(state) {
     const queueId = evidenceQueueIdOf(item);
     const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || '');
     const kind = evidenceKindOf(item) || evidenceKindOf(parent) || 'EXPENSE';
+    const activeIdentityForEvidence = resolveProcessRecordIdentityParts(activeInput);
+    const activeIdentityIsTimesheetForEvidence = /^timesheet:/i.test(activeIdentityForEvidence.rowKey || '') || !!trimStr(activeIdentityForEvidence.timesheetId || activeIdentityForEvidence.currentTimesheetId || '');
     const rowKey = trimStr(item.row_key || item.rowKey || meta.row_key || meta.rowKey || parent.row_key || parent.rowKey || parentMeta.row_key || parentMeta.rowKey || activeInput?.row?.row_key || st.active_row_key || '');
-    const contractWeekId = trimStr(item.contract_week_id || item.contractWeekId || meta.contract_week_id || meta.contractWeekId || meta.week_id || parent.contract_week_id || parent.contractWeekId || parentMeta.contract_week_id || parentMeta.contractWeekId || activeInput?.contractWeekId || activeInput?.contract_week_id || '');
     const timesheetId = trimStr(item.timesheet_id || item.timesheetId || item.current_timesheet_id || item.currentTimesheetId || meta.timesheet_id || meta.current_timesheet_id || parent.timesheet_id || parent.current_timesheet_id || parent.timesheetId || parent.currentTimesheetId || activeInput?.timesheetId || activeInput?.expectedTimesheetId || '');
+    const rawContractWeekId = trimStr(item.contract_week_id || item.contractWeekId || meta.contract_week_id || meta.contractWeekId || meta.week_id || parent.contract_week_id || parent.contractWeekId || parentMeta.contract_week_id || parentMeta.contractWeekId || (activeIdentityIsTimesheetForEvidence ? '' : (activeInput?.contractWeekId || activeInput?.contract_week_id || '')));
+    const contractWeekId = activeIdentityIsTimesheetForEvidence && !timesheetId ? '' : (rawContractWeekId && rawContractWeekId !== timesheetId ? rawContractWeekId : '');
     const displayName = trimStr(item.display_name || item.displayName || item.filename || item.original_filename || item.originalFilename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : `${kind.charAt(0)}${kind.slice(1).toLowerCase()} evidence`);
     return {
       ...(deep(item) || {}),
@@ -203786,12 +204596,14 @@ async function handleBulkProcessProcess(state) {
     const activeEvidenceIdentity = resolveProcessRecordIdentityParts(active);
     const withActiveEvidenceIdentity = (parentInput = {}) => {
       const parent = (parentInput && typeof parentInput === 'object') ? parentInput : {};
+      const activeEvidenceIdentityIsTimesheet = /^timesheet:/i.test(activeEvidenceIdentity.rowKey || '') || !!trimStr(activeEvidenceIdentity.timesheetId || activeEvidenceIdentity.currentTimesheetId || '');
+      const parentContractWeekId = trimStr(parent.contract_week_id || parent.contractWeekId || '');
       return {
         ...parent,
         row_key: trimStr(parent.row_key || parent.rowKey || '') || activeEvidenceIdentity.rowKey || active.row?.row_key || st.active_row_key || null,
         timesheet_id: trimStr(parent.timesheet_id || parent.timesheetId || parent.current_timesheet_id || parent.currentTimesheetId || '') || activeEvidenceIdentity.timesheetId || activeEvidenceIdentity.currentTimesheetId || null,
         current_timesheet_id: trimStr(parent.current_timesheet_id || parent.currentTimesheetId || parent.timesheet_id || parent.timesheetId || '') || activeEvidenceIdentity.currentTimesheetId || activeEvidenceIdentity.timesheetId || null,
-        contract_week_id: trimStr(parent.contract_week_id || parent.contractWeekId || '') || activeEvidenceIdentity.contractWeekId || null
+        contract_week_id: activeEvidenceIdentityIsTimesheet ? null : (parentContractWeekId || activeEvidenceIdentity.contractWeekId || null)
       };
     };
     const out = [];
@@ -203955,7 +204767,12 @@ async function handleBulkProcessProcess(state) {
           r2_key: primaryStorage,
           display_name: primary?.display_name || primary?.filename || source.primary_artifact_display_name || hints.primary_artifact_display_name || '',
           row_key: source.row_key || active.row?.row_key || st.active_row_key || null,
-          contract_week_id: primary?.contract_week_id || source.contract_week_id || source.contractWeekId || active.contractWeekId || null,
+          contract_week_id: normaliseProcessContractWeekId({
+            rowKey: source.row_key || active.row?.row_key || st.active_row_key || '',
+            timesheetId: primary?.timesheet_id || source.timesheet_id || source.current_timesheet_id || active.timesheetId || '',
+            freshSources: [primary, source],
+            fallbackSources: (primary?.timesheet_id || source.timesheet_id || source.current_timesheet_id || active.timesheetId) ? [] : [active]
+          }) || null,
           timesheet_id: primary?.timesheet_id || source.timesheet_id || source.current_timesheet_id || active.timesheetId || null,
           __primary_artifact_fallback: true,
           is_primary_artifact_fallback: true
@@ -204212,7 +205029,12 @@ async function handleBulkProcessProcess(state) {
     );
     const expectedTimesheetId = trimStr(rollbackContext.expected_timesheet_id || result.expected_timesheet_id || result.expectedTimesheetId || timesheetId || '');
     const rowKey = trimStr(rollbackContext.row_key || evidenceItem.row_key || evidenceItem.rowKey || activeIdentity.rowKey || activeForAuthority.row?.row_key || st.active_row_key || '');
-    const contractWeekId = trimStr(evidenceItem.contract_week_id || evidenceItem.contractWeekId || activeIdentity.contractWeekId || activeForAuthority.contractWeekId || rollbackContext.contract_week_id || '');
+    const contractWeekId = normaliseProcessContractWeekId({
+      rowKey,
+      timesheetId,
+      freshSources: [result, evidenceItem],
+      fallbackSources: timesheetId ? [] : [activeIdentity, activeForAuthority, rollbackContext]
+    }) || '';
     if (!evidenceId || !storageKey || !timesheetId) return null;
 
     const originalQueueItem = deep(previewItem || {});
@@ -204634,7 +205456,7 @@ async function handleBulkProcessProcess(state) {
       reason: trimStr(reason || '') || null,
       row_key: key,
       timesheet_id: trimStr(refreshIdentity.timesheetId || refreshIdentity.currentTimesheetId || '') || null,
-      contract_week_id: trimStr(refreshIdentity.contractWeekId || '') || null
+      contract_week_id: null
     });
     const affectedRefresh = await refreshTimesheetLifecycleAffectedRows([{
       row_key: key,
@@ -204642,7 +205464,7 @@ async function handleBulkProcessProcess(state) {
       current_timesheet_id: refreshIdentity.currentTimesheetId || refreshIdentity.timesheetId || null,
       requested_timesheet_id: refreshIdentity.requestedTimesheetId || refreshIdentity.timesheetId || null,
       expected_timesheet_id: refreshIdentity.expectedTimesheetId || refreshIdentity.currentTimesheetId || refreshIdentity.timesheetId || null,
-      contract_week_id: refreshIdentity.contractWeekId || null,
+      contract_week_id: null,
       context: 'bulk_process'
     }], {
       context: 'bulk_process',
@@ -205572,7 +206394,7 @@ async function handleBulkProcessProcess(state) {
       current_timesheet_id: timesheetId,
       requested_timesheet_id: timesheetId,
       expected_timesheet_id: timesheetId,
-      contract_week_id: trimStr(identity.contractWeekId || active.contractWeekId || active.row?.contract_week_id || '') || null,
+      contract_week_id: null,
       context: 'bulk_process'
     }], {
       context: 'bulk_process',
@@ -206675,23 +207497,29 @@ async function handleBulkProcessProcess(state) {
       return { ok: false, error: st.error_text || message, message: st.error_text || message, evidenceRequired: true, missing: missingEvidenceKindsBeforeSubmit, queueRollbackFailed: rollbackBeforeReturn?.ok === false };
     }
     if (hasProcessEvidenceExpectation(active) && processEvidenceRowsForSubmit.length === 0 && suppressTimesheetEvidenceExpectationForSubmit !== true) {
-      const message = 'Evidence is expected for this row but the evidence rows have not loaded yet. Please refresh the evidence pane and try again.';
+      const evidenceContextLoadedEmpty = processEvidenceContextIsLoadedForActive(active);
+      const message = evidenceContextLoadedEmpty
+        ? 'No processable evidence is attached to this row. The visible preview is not process evidence; attach the required evidence or refresh the evidence pane if this is unexpected.'
+        : 'Evidence is expected for this row but the evidence rows have not loaded yet. Please refresh the evidence pane and try again.';
+      const blockReason = evidenceContextLoadedEmpty ? 'EVIDENCE_EXPECTED_EMPTY' : 'EVIDENCE_EXPECTED_NOT_LOADED';
+      const rollbackReason = evidenceContextLoadedEmpty ? 'process-blocked-evidence-expected-empty' : 'process-blocked-evidence-expected-not-loaded';
       st.error_text = message;
-      st.__bulk_process_last_process_block_reason = 'EVIDENCE_EXPECTED_NOT_LOADED';
-      const rollbackBeforeReturn = await rollbackProcessAutoAttachedQueueEvidenceForBlockingReturn('process-blocked-evidence-expected-not-loaded', message);
+      st.__bulk_process_last_process_block_reason = blockReason;
+      const rollbackBeforeReturn = await rollbackProcessAutoAttachedQueueEvidenceForBlockingReturn(rollbackReason, message);
       if (rollbackBeforeReturn.ok !== true) {
         st.error_text = rollbackBeforeReturn.message || message;
         await showBulkProcessProcessBlockedModal(st.error_text, rollbackBeforeReturn.rollbackFailed ? 'Timesheet image rollback failed' : 'Image Queue refresh failed');
       } else {
         await showBulkProcessProcessBlockedModal(message);
       }
-      await rerenderBulkProcessWorkbenchAfterProcessBlock('process-blocked-evidence-expected-not-loaded');
-      stateAudit('return:block:evidence-expected-not-loaded', {
+      await rerenderBulkProcessWorkbenchAfterProcessBlock(rollbackReason);
+      stateAudit(evidenceContextLoadedEmpty ? 'return:block:evidence-expected-empty' : 'return:block:evidence-expected-not-loaded', {
         message: st.error_text || message,
+        evidence_context_loaded_empty: evidenceContextLoadedEmpty,
         queue_auto_attach_rollback: stateAuditClone(rollbackBeforeReturn || null)
       });
       GE();
-      return { ok: false, error: st.error_text || message, message: st.error_text || message, evidenceRequired: true, missing: [], queueRollbackFailed: rollbackBeforeReturn?.ok === false };
+      return { ok: false, error: st.error_text || message, message: st.error_text || message, evidenceRequired: true, missing: [], queueRollbackFailed: rollbackBeforeReturn?.ok === false, evidenceLoadedEmpty: evidenceContextLoadedEmpty };
     }
     let processResult = null;
     if (active.isDaily && active.submissionMode === 'MANUAL' && activeTimesheetId) {
@@ -207269,7 +208097,6 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
-
 
 function normaliseBulkProcessRemovedEvidenceKind(value) {
   const trimStr = (v) => String(v == null ? '' : v).trim();
@@ -211436,7 +212263,6 @@ function applyBulkTimesheetRowPatches(state, patches, options = {}) {
 }
 
 
-
 function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}) {
   const st = (state && typeof state === 'object') ? state : {};
   const opts = (options && typeof options === 'object') ? options : {};
@@ -211473,6 +212299,8 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
   const timesheetIds = new Set();
   const contractWeekIds = new Set();
   const rowSignatures = new Set();
+  const evidenceIds = new Set();
+  const queueIds = new Set();
   const oldStorageKeys = new Set();
   const newStorageKeys = new Set();
   const allStorageKeys = new Set();
@@ -211540,6 +212368,32 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
   addArray(rowSignatures, hints.row_signatures);
   addArray(rowSignatures, hints.rowSignatures);
 
+  addArray(evidenceIds, patch.evidence_id);
+  addArray(evidenceIds, patch.evidenceId);
+  addArray(evidenceIds, patch.evidence_ids);
+  addArray(evidenceIds, patch.evidenceIds);
+  addArray(evidenceIds, patch.timesheet_evidence_id);
+  addArray(evidenceIds, patch.timesheetEvidenceId);
+  addArray(evidenceIds, patch.removed_evidence_id);
+  addArray(evidenceIds, patch.removedEvidenceId);
+  addArray(evidenceIds, hints.evidence_id);
+  addArray(evidenceIds, hints.evidenceId);
+  addArray(evidenceIds, hints.evidence_ids);
+  addArray(evidenceIds, hints.evidenceIds);
+  addArray(evidenceIds, hints.timesheet_evidence_id);
+  addArray(evidenceIds, hints.timesheetEvidenceId);
+
+  addArray(queueIds, patch.queue_id);
+  addArray(queueIds, patch.queueId);
+  addArray(queueIds, patch.queue_ids);
+  addArray(queueIds, patch.queueIds);
+  addArray(queueIds, patch.import_queue_id);
+  addArray(queueIds, patch.importQueueId);
+  addArray(queueIds, hints.queue_id);
+  addArray(queueIds, hints.queueId);
+  addArray(queueIds, hints.queue_ids);
+  addArray(queueIds, hints.queueIds);
+
   addArray(oldStorageKeys, patch.old_storage_key);
   addArray(oldStorageKeys, patch.oldStorageKey);
   addArray(oldStorageKeys, patch.previous_storage_key);
@@ -211579,6 +212433,18 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
 
   for (const value of oldStorageKeys) addValue(allStorageKeys, value);
   for (const value of newStorageKeys) addValue(allStorageKeys, value);
+  addArray(allStorageKeys, patch.storage_key);
+  addArray(allStorageKeys, patch.storageKey);
+  addArray(allStorageKeys, patch.storage_keys);
+  addArray(allStorageKeys, patch.storageKeys);
+  addArray(allStorageKeys, patch.removed_storage_key);
+  addArray(allStorageKeys, patch.removedStorageKey);
+  addArray(allStorageKeys, patch.returned_storage_key);
+  addArray(allStorageKeys, patch.returnedStorageKey);
+  addArray(allStorageKeys, hints.storage_key);
+  addArray(allStorageKeys, hints.storageKey);
+  addArray(allStorageKeys, hints.storage_keys);
+  addArray(allStorageKeys, hints.storageKeys);
 
   const flagValue = function flagValue() {
     for (let i = 0; i < arguments.length; i += 1) {
@@ -211763,16 +212629,24 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
     for (const timesheetId of timesheetIds) if (timesheetId && text.includes(timesheetId)) return true;
     for (const weekId of contractWeekIds) if (weekId && text.includes(weekId)) return true;
     for (const sig of rowSignatures) if (sig && text.includes(sig)) return true;
+    for (const evidenceId of evidenceIds) if (evidenceId && text.includes(evidenceId)) return true;
+    for (const queueId of queueIds) if (queueId && text.includes(queueId)) return true;
 
     if (isPlainObject(entry)) {
-      const entryRowKey = stringFirst(entry.row_key, entry.rowKey, entry.row && entry.row.row_key, entry.data_row && entry.data_row.row_key);
+      const nested = (entry.value && typeof entry.value === 'object') ? entry.value : {};
+      const meta = (entry.meta && typeof entry.meta === 'object') ? entry.meta : {};
+      const entryRowKey = stringFirst(entry.row_key, entry.rowKey, entry.row && entry.row.row_key, entry.data_row && entry.data_row.row_key, nested.row_key, nested.rowKey, nested.row && nested.row.row_key, meta.row_key, meta.rowKey);
       if (entryRowKey && rowKeys.has(entryRowKey)) return true;
-      const entryTimesheetId = stringFirst(entry.current_timesheet_id, entry.timesheet_id, entry.row && entry.row.current_timesheet_id, entry.row && entry.row.timesheet_id, entry.data_row && entry.data_row.current_timesheet_id, entry.data_row && entry.data_row.timesheet_id);
+      const entryTimesheetId = stringFirst(entry.current_timesheet_id, entry.timesheet_id, entry.row && entry.row.current_timesheet_id, entry.row && entry.row.timesheet_id, entry.data_row && entry.data_row.current_timesheet_id, entry.data_row && entry.data_row.timesheet_id, nested.current_timesheet_id, nested.timesheet_id, nested.row && nested.row.timesheet_id, meta.current_timesheet_id, meta.timesheet_id);
       if (entryTimesheetId && timesheetIds.has(entryTimesheetId)) return true;
-      const entryWeekId = stringFirst(entry.contract_week_id, entry.row && entry.row.contract_week_id, entry.data_row && entry.data_row.contract_week_id);
+      const entryWeekId = stringFirst(entry.contract_week_id, entry.row && entry.row.contract_week_id, entry.data_row && entry.data_row.contract_week_id, nested.contract_week_id, nested.contractWeekId, nested.row && nested.row.contract_week_id, meta.contract_week_id, meta.contractWeekId);
       if (entryWeekId && contractWeekIds.has(entryWeekId)) return true;
-      const entrySignature = stringFirst(entry.row_signature, entry.row && entry.row.row_signature, entry.data_row && entry.data_row.row_signature);
+      const entrySignature = stringFirst(entry.row_signature, entry.row && entry.row.row_signature, entry.data_row && entry.data_row.row_signature, nested.row_signature, nested.rowSignature, meta.row_signature, meta.rowSignature);
       if (entrySignature && rowSignatures.has(entrySignature)) return true;
+      const entryEvidenceId = stringFirst(entry.evidence_id, entry.evidenceId, entry.timesheet_evidence_id, entry.timesheetEvidenceId, entry.id, nested.evidence_id, nested.evidenceId, nested.timesheet_evidence_id, nested.timesheetEvidenceId, nested.id, meta.evidence_id, meta.evidenceId, meta.timesheet_evidence_id, meta.timesheetEvidenceId);
+      if (entryEvidenceId && evidenceIds.has(entryEvidenceId)) return true;
+      const entryQueueId = stringFirst(entry.queue_id, entry.queueId, entry.import_queue_id, entry.importQueueId, nested.queue_id, nested.queueId, nested.import_queue_id, nested.importQueueId, meta.queue_id, meta.queueId);
+      if (entryQueueId && queueIds.has(entryQueueId)) return true;
     }
     return false;
   };
@@ -211839,14 +212713,42 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
     return false;
   };
 
+  const identityTokenMatches = (candidate, set) => {
+    const text = trimStr(candidate);
+    if (!text) return false;
+    for (const value of set) {
+      if (value && (text === value || text.includes(value) || value.includes(text))) return true;
+    }
+    return false;
+  };
+  const evidenceIdMatches = (candidate) => identityTokenMatches(candidate, evidenceIds);
+  const queueIdMatches = (candidate) => identityTokenMatches(candidate, queueIds);
+  const previewEntryMatchesMutation = (key, entry) => {
+    const nested = isPlainObject(entry) && isPlainObject(entry.value) ? entry.value : {};
+    const meta = isPlainObject(entry) && isPlainObject(entry.meta) ? entry.meta : {};
+    const entryStorage = isPlainObject(entry)
+      ? stringFirst(entry.storage_key, entry.r2_key, entry.file_key, entry.fileKey, entry.url, entry.signed_url, entry.primary_artifact_storage_key, nested.storage_key, nested.r2_key, nested.file_key, nested.fileKey, meta.storage_key, meta.r2_key)
+      : '';
+    const entryEvidenceId = isPlainObject(entry)
+      ? stringFirst(entry.evidence_id, entry.evidenceId, entry.timesheet_evidence_id, entry.timesheetEvidenceId, entry.id, nested.evidence_id, nested.evidenceId, nested.timesheet_evidence_id, nested.timesheetEvidenceId, nested.id, meta.evidence_id, meta.evidenceId)
+      : '';
+    const entryQueueId = isPlainObject(entry)
+      ? stringFirst(entry.queue_id, entry.queueId, entry.import_queue_id, entry.importQueueId, nested.queue_id, nested.queueId, nested.import_queue_id, nested.importQueueId, meta.queue_id, meta.queueId)
+      : '';
+    return !!(
+      storageKeyMatches(key) ||
+      storageKeyMatches(entryStorage) ||
+      evidenceIdMatches(key) ||
+      evidenceIdMatches(entryEvidenceId) ||
+      queueIdMatches(key) ||
+      queueIdMatches(entryQueueId)
+    );
+  };
+
   const clearStorageCache = (cache) => {
     if (!cache || typeof cache !== 'object') return;
     for (const key of Object.keys(cache)) {
-      const entry = cache[key];
-      const entryStorage = isPlainObject(entry)
-        ? stringFirst(entry.storage_key, entry.r2_key, entry.url, entry.signed_url, entry.primary_artifact_storage_key)
-        : '';
-      if (storageKeyMatches(key) || storageKeyMatches(entryStorage)) {
+      if (previewEntryMatchesMutation(key, cache[key])) {
         try {
           delete cache[key];
           result.invalidated_preview_entries += 1;
@@ -211855,21 +212757,59 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
     }
   };
 
+  const paneItemMatchesMutation = (item) => {
+    if (!item || typeof item !== 'object') return false;
+    const meta = (item.meta && typeof item.meta === 'object') ? item.meta : {};
+    const storage = stringFirst(item.storage_key, item.storageKey, item.file_key, item.fileKey, item.r2_key, item.r2Key, item.primary_artifact_storage_key, item.primaryArtifactStorageKey, meta.storage_key, meta.file_key, meta.r2_key);
+    const evidenceId = stringFirst(item.evidence_id, item.evidenceId, item.timesheet_evidence_id, item.timesheetEvidenceId, item.id, item.attached_id, item.attachedId, meta.evidence_id, meta.evidenceId, meta.timesheet_evidence_id, meta.timesheetEvidenceId);
+    const queueId = stringFirst(item.queue_id, item.queueId, item.import_queue_id, item.importQueueId, meta.queue_id, meta.queueId);
+    return !!(
+      storageKeyMatches(storage) ||
+      evidenceIdMatches(evidenceId) ||
+      queueIdMatches(queueId)
+    );
+  };
+
+  const filterPaneRowsForMutation = (rows) => {
+    if (!Array.isArray(rows)) return rows;
+    return rows.filter((item) => !paneItemMatchesMutation(item));
+  };
+
   const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
   if (pane) {
     clearStorageCache(pane.__preview_signed_url_cache);
+    clearStorageCache(pane.__preview_signed_url_meta_by_cache_key);
+    clearStorageCache(pane.__preview_signed_url_context_by_cache_key);
+    clearStorageCache(pane.__preview_signed_url_owner_by_cache_key);
+    clearStorageCache(pane.__preview_failed_signed_url_by_target);
+    clearStorageCache(pane.__preview_image_retry_by_target);
     clearStorageCache(pane.__preview_presign_inflight);
     clearStorageCache(pane.__image_cache);
     clearStorageCache(pane.__pdf_page_cache);
 
+    if (evidenceChanged || explicitEvidenceTrue || force) {
+      pane.attached_rows = filterPaneRowsForMutation(pane.attached_rows);
+      pane.attached_all_rows = filterPaneRowsForMutation(pane.attached_all_rows);
+      if (paneItemMatchesMutation(pane.active_attached_item)) pane.active_attached_item = null;
+      if (paneItemMatchesMutation(pane.active_preview_item)) pane.active_preview_item = null;
+      const activeAttachedId = stringFirst(pane.active_attached_id, pane.activeAttachedId, pane.__active_attached_id, pane.__active_attached_preview_target);
+      if (evidenceIdMatches(activeAttachedId) || queueIdMatches(activeAttachedId) || storageKeyMatches(activeAttachedId)) {
+        pane.active_attached_id = '';
+        pane.activeAttachedId = '';
+        pane.__active_attached_id = '';
+      }
+    }
+
     const activeStorageKey = stringFirst(
       pane.active_attached_item && (pane.active_attached_item.storage_key || pane.active_attached_item.r2_key),
       pane.active_queue_item && (pane.active_queue_item.storage_key || pane.active_queue_item.r2_key),
+      pane.active_preview_item && (pane.active_preview_item.storage_key || pane.active_preview_item.r2_key),
       pane.__preview_load_requested_target_key,
       pane.__preview_target_key,
-      pane.__active_attached_preview_target
+      pane.__active_attached_preview_target,
+      pane.active_attached_id
     );
-    if (activeStorageKey && storageKeyMatches(activeStorageKey)) {
+    if (activeStorageKey && (storageKeyMatches(activeStorageKey) || evidenceIdMatches(activeStorageKey) || queueIdMatches(activeStorageKey))) {
       if (typeof pane.__abortPreviewPresignRequests === 'function') {
         try {
           pane.__abortPreviewPresignRequests('bulk-timesheet-patch-storage-changed');
@@ -211914,6 +212854,7 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
 
   return result;
 }
+
 
 
 function renderBulkAuthoriseCompactSummary(input = {}) {
@@ -220537,7 +221478,6 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
   return { ok: true };
 }
 
-
 async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][ROW-CHANGE]');
@@ -220674,7 +221614,13 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     const timesheetId = stateAuditTrim(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
 
-    const contractWeekId = stateAuditTrim(row.contract_week_id || row.contractWeekId || row.contract_week?.id || row.id || '');
+    const rowKeyContractWeekId = /^contract_week:/i.test(rowKey || '') ? stateAuditTrim(rowKey.replace(/^contract_week:/i, '')) : '';
+
+    const rowIdContractWeekCandidate = (!timesheetId && !/^timesheet:/i.test(rowKey || '')) ? stateAuditTrim(row.id || '') : '';
+
+    const rawContractWeekId = stateAuditTrim(row.contract_week_id || row.contractWeekId || row.contract_week?.id || rowKeyContractWeekId || rowIdContractWeekCandidate || '');
+
+    const contractWeekId = /^timesheet:/i.test(rowKey || '') && (!rawContractWeekId || rawContractWeekId === timesheetId) ? '' : rawContractWeekId;
 
     return {
 
@@ -221268,7 +222214,9 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     const timesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
 
-    const contractWeekId = trimStr(row.contract_week_id || '');
+    const rawContractWeekId = trimStr(row.contract_week_id || row.contractWeekId || '');
+
+    const contractWeekId = /^timesheet:/i.test(rowKey || '') && (!rawContractWeekId || rawContractWeekId === timesheetId) ? '' : rawContractWeekId;
 
     return {
 
@@ -221282,6 +222230,34 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     };
 
+  };
+
+  const hasOwnRowChangeContractField = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const readExplicitContractWeekIdRowChange = (...sources) => {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      const contractWeekObj = (source.contract_week && typeof source.contract_week === 'object') ? source.contract_week : null;
+      const contractWeekCamelObj = (source.contractWeek && typeof source.contractWeek === 'object') ? source.contractWeek : null;
+      const candidates = [];
+      if (hasOwnRowChangeContractField(source, 'contract_week_id')) candidates.push(source.contract_week_id);
+      if (hasOwnRowChangeContractField(source, 'contractWeekId')) candidates.push(source.contractWeekId);
+      if (contractWeekObj && hasOwnRowChangeContractField(contractWeekObj, 'id')) candidates.push(contractWeekObj.id);
+      if (contractWeekCamelObj && hasOwnRowChangeContractField(contractWeekCamelObj, 'id')) candidates.push(contractWeekCamelObj.id);
+      for (const candidate of candidates) {
+        const clean = trimStr(candidate || '');
+        if (clean) return clean;
+      }
+    }
+    return '';
+  };
+  const normaliseContractWeekIdForRowChangeContext = ({ rowKey = '', timesheetId = '', freshSources = [], fallbackSources = [] } = {}) => {
+    const key = trimStr(rowKey || '');
+    const tsId = trimStr(timesheetId || '');
+    const isTimesheetIdentity = /^timesheet:/i.test(key || '') || (!!tsId && !/^contract_week:/i.test(key || ''));
+    const freshCandidate = readExplicitContractWeekIdRowChange(...freshSources);
+    if (isTimesheetIdentity) return freshCandidate && freshCandidate !== tsId ? freshCandidate : null;
+    const fallbackCandidate = readExplicitContractWeekIdRowChange(...freshSources, ...fallbackSources);
+    return fallbackCandidate || null;
   };
 
   const identitiesCompatible = (expected = {}, actual = {}) => {
@@ -222057,7 +223033,11 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     const rowTsId = trimStr(row.timesheet_id || row.current_timesheet_id || row.requested_timesheet_id || '');
 
-    const rowCwId = trimStr(row.contract_week_id || row.id || '');
+    const rowKeyContractWeekId = /^contract_week:/i.test(rowKey || '') ? trimStr(rowKey.replace(/^contract_week:/i, '')) : '';
+
+    const rowIdContractWeekCandidate = (!rowTsId && !/^timesheet:/i.test(rowKey || '')) ? trimStr(row.id || '') : '';
+
+    const rowCwId = trimStr(row.contract_week_id || row.contractWeekId || rowKeyContractWeekId || rowIdContractWeekCandidate || '');
 
     if (wantedIdentity.timesheetId && rowTsId && rowTsId === wantedIdentity.timesheetId) return true;
 
@@ -222479,7 +223459,14 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     const activeTimesheetId = trimStr(activeIdentityParts.timesheetId || st.active_row?.timesheet_id || st.active_row?.current_timesheet_id || st.active_details?.current_timesheet_id || st.active_details?.timesheet?.timesheet_id || '');
 
-    const activeContractWeekId = trimStr(activeIdentityParts.contractWeekId || st.active_row?.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
+    const activeIdentityIsTimesheetForEvidenceRows = /^timesheet:/i.test(activeRowKey || '') || (!!activeTimesheetId && !/^contract_week:/i.test(activeRowKey || ''));
+
+    const activeContractWeekId = normaliseContractWeekIdForRowChangeContext({
+      rowKey: activeRowKey,
+      timesheetId: activeTimesheetId,
+      freshSources: activeIdentityIsTimesheetForEvidenceRows ? [st.active_row] : [st.active_row, st.active_details, st.active_details?.contract_week],
+      fallbackSources: activeIdentityIsTimesheetForEvidenceRows ? [] : [st.active_details, st.active_details?.contract_week]
+    }) || '';
 
 
 
@@ -222517,7 +223504,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
       const rowKey = trimStr(item.row_key || item.rowKey || '');
 
-      const scope = contractWeekId ? `cw:${contractWeekId}` : (timesheetId ? `ts:${timesheetId}` : (rowKey ? `row:${rowKey}` : (activeContractWeekId ? `cw:${activeContractWeekId}` : (activeTimesheetId ? `ts:${activeTimesheetId}` : (activeRowKey ? `row:${activeRowKey}` : 'row:unknown')))));
+      const scope = (contractWeekId && !activeIdentityIsTimesheetForEvidenceRows) ? `cw:${contractWeekId}` : (timesheetId ? `ts:${timesheetId}` : (rowKey ? `row:${rowKey}` : ((!activeIdentityIsTimesheetForEvidenceRows && activeContractWeekId) ? `cw:${activeContractWeekId}` : (activeTimesheetId ? `ts:${activeTimesheetId}` : (activeRowKey ? `row:${activeRowKey}` : 'row:unknown')))));
 
       const meta = parseBulkProcessRowChangeMeta(item.meta_json || item.metaJson || item.meta || item.queue_meta || item.queueMeta);
 
@@ -222721,6 +223708,8 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
         if (timesheetIdRaw && activeTimesheetId && timesheetIdRaw !== activeTimesheetId) return;
 
+        if (activeIdentityIsTimesheetForEvidenceRows && contractWeekId && !timesheetIdRaw && !(rowKey && activeRowKey && rowKey === activeRowKey)) return;
+
         if (contractWeekId && activeContractWeekId && contractWeekId !== activeContractWeekId) return;
 
         if (!activeTimesheetId && activeContractWeekId && timesheetIdRaw) return;
@@ -222773,7 +223762,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
         r2_key: fileKey,
 
-        contract_week_id: contractWeekId || (stagedMatchesActiveContractWeek ? activeContractWeekId : null),
+        contract_week_id: activeIdentityIsTimesheetForEvidenceRows ? (timesheetId && contractWeekId && contractWeekId !== activeTimesheetId && contractWeekId !== timesheetId ? contractWeekId : null) : (contractWeekId || (stagedMatchesActiveContractWeek ? activeContractWeekId : null)),
 
         timesheet_id: stagedMatchesActiveContractWeek ? null : (timesheetId || activeTimesheetId || null),
 
@@ -224239,15 +225228,27 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     if (signature) return signature;
 
+    const rowKey = trimStr(row.row_key || '');
+
+    const timesheetId = trimStr(row.timesheet_id || row.current_timesheet_id || row.requested_timesheet_id || '');
+
+    const rowKeyContractWeekId = /^contract_week:/i.test(rowKey || '') ? trimStr(rowKey.replace(/^contract_week:/i, '')) : '';
+
+    const rowIdContractWeekCandidate = (!timesheetId && !/^timesheet:/i.test(rowKey || '')) ? trimStr(row.id || '') : '';
+
+    const rawContractWeekId = trimStr(row.contract_week_id || row.contractWeekId || rowKeyContractWeekId || rowIdContractWeekCandidate || '');
+
+    const contractWeekId = /^timesheet:/i.test(rowKey || '') && (!rawContractWeekId || rawContractWeekId === timesheetId) ? '' : rawContractWeekId;
+
     return JSON.stringify({
 
-      row_key: trimStr(row.row_key || ''),
+      row_key: rowKey,
 
-      timesheet_id: trimStr(row.timesheet_id || row.current_timesheet_id || row.requested_timesheet_id || ''),
+      timesheet_id: timesheetId,
 
       expected_timesheet_id: trimStr(row.expected_timesheet_id || ''),
 
-      contract_week_id: trimStr(row.contract_week_id || row.id || ''),
+      contract_week_id: contractWeekId,
 
       summary_stage: trimStr(row.summary_stage || row.processing_status || ''),
 
@@ -225427,17 +226428,16 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
       );
 
-      const activeContractWeekId = trimStr(
+      const activeIdentityIsTimesheetForEvidenceMatch = /^timesheet:/i.test(activeRowKey || '') || (!!activeTimesheetId && !/^contract_week:/i.test(activeRowKey || ''));
 
-        st.active_row?.contract_week_id ||
+      const activeContractWeekId = normaliseContractWeekIdForRowChangeContext({
+        rowKey: activeRowKey,
+        timesheetId: activeTimesheetId,
+        freshSources: activeIdentityIsTimesheetForEvidenceMatch ? [st.active_row] : [st.active_row, st.active_details, st.active_details?.contract_week, currentCw],
+        fallbackSources: activeIdentityIsTimesheetForEvidenceMatch ? [] : [st.active_details, st.active_details?.contract_week, currentCw]
+      }) || '';
 
-        st.active_details?.contract_week_id ||
-
-        currentCw.id ||
-
-        ''
-
-      );
+      if (activeIdentityIsTimesheetForEvidenceMatch && itemContractWeekId && !itemTimesheetId) return false;
 
       return !!(
 
@@ -225777,17 +226777,23 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
     );
 
-    const activeContractWeekIdForAttachedPanePreserve = trimStr(
+    const activeIdentityIsTimesheetForAttachedPanePreserve = /^timesheet:/i.test(activeRowKeyForAttachedPanePreserve || '') || (!!activeTimesheetIdForAttachedPanePreserve && !/^contract_week:/i.test(activeRowKeyForAttachedPanePreserve || ''));
 
-      st.active_row?.contract_week_id ||
+    const activeContractWeekIdForAttachedPanePreserve = activeIdentityIsTimesheetForAttachedPanePreserve
 
-      st.active_details?.contract_week_id ||
+      ? ''
 
-      currentCw.id ||
+      : trimStr(
 
-      ''
+          st.active_row?.contract_week_id ||
 
-    );
+          st.active_details?.contract_week_id ||
+
+          currentCw.id ||
+
+          ''
+
+        );
 
     const existingAttachedPaneRowsForPreserve = [
 
@@ -225813,7 +226819,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
         (itemTimesheetId && activeTimesheetIdForAttachedPanePreserve && itemTimesheetId === activeTimesheetIdForAttachedPanePreserve) ||
 
-        (itemContractWeekId && activeContractWeekIdForAttachedPanePreserve && itemContractWeekId === activeContractWeekIdForAttachedPanePreserve)
+        (!activeIdentityIsTimesheetForAttachedPanePreserve && itemContractWeekId && activeContractWeekIdForAttachedPanePreserve && itemContractWeekId === activeContractWeekIdForAttachedPanePreserve)
 
       );
 
@@ -227130,6 +228136,21 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
     }
 
     let dataRow = mergeBulkProcessRowAuthoritySignals(row, { ...row, ...payloadRow, ...payloadDataRow, ...topLevelRowData, ...rowPatch });
+    const dataRowRowKeyForContractWeek = trimStr(payload.row_key || payloadDataRow.row_key || payloadRow.row_key || rowPatch.row_key || dataRow.row_key || row.row_key || '');
+    const dataRowTimesheetIdForContractWeek = trimStr(payload.current_timesheet_id || detailsInput.current_timesheet_id || payloadDataRow.current_timesheet_id || payloadDataRow.timesheet_id || payloadRow.current_timesheet_id || payloadRow.timesheet_id || rowPatch.current_timesheet_id || rowPatch.timesheet_id || dataRow.current_timesheet_id || dataRow.timesheet_id || '');
+    const dataRowContractWeekIdForContext = normaliseContractWeekIdForRowChangeContext({
+      rowKey: dataRowRowKeyForContractWeek,
+      timesheetId: dataRowTimesheetIdForContractWeek,
+      freshSources: [payload, detailsInput, detailsInput.contract_week, payloadDataRow, payloadRow, topLevelRowData, rowPatch],
+      fallbackSources: /^timesheet:/i.test(dataRowRowKeyForContractWeek || '') || dataRowTimesheetIdForContractWeek ? [] : [row]
+    });
+    if (/^timesheet:/i.test(dataRowRowKeyForContractWeek || '') || dataRowTimesheetIdForContractWeek) {
+      dataRow.contract_week_id = dataRowContractWeekIdForContext;
+      dataRow.contractWeekId = dataRowContractWeekIdForContext;
+    } else if (dataRowContractWeekIdForContext) {
+      dataRow.contract_week_id = dataRowContractWeekIdForContext;
+      dataRow.contractWeekId = dataRowContractWeekIdForContext;
+    }
 
     const resolveBulkProcessContextStage = (...sources) => {
 
@@ -227487,7 +228508,14 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
     const timesheetId = trimStr(payload.current_timesheet_id || detailsInput.current_timesheet_id || detailsInput.timesheet?.timesheet_id || dataRow.current_timesheet_id || dataRow.timesheet_id || '') || null;
 
-    const contractWeekId = trimStr(payload.contract_week_id || detailsInput.contract_week_id || detailsInput.contract_week?.id || dataRow.contract_week_id || dataRow.id || '') || null;
+    const contextRowKeyForDetails = trimStr(payload.row_key || dataRow.row_key || dataRow.new_row_key || row.row_key || '');
+
+    const contractWeekId = normaliseContractWeekIdForRowChangeContext({
+      rowKey: contextRowKeyForDetails,
+      timesheetId,
+      freshSources: [payload, detailsInput, detailsInput.contract_week, payloadDataRow, payloadRow, topLevelRowData, rowPatch],
+      fallbackSources: /^timesheet:/i.test(contextRowKeyForDetails || '') || timesheetId ? [] : [dataRow, { contract_week_id: /^contract_week:/i.test(contextRowKeyForDetails || '') ? dataRow.id : '' }]
+    });
 
     const rawDetails = {
 
@@ -227775,7 +228803,12 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
         expected_timesheet_id: row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || null,
 
-        contract_week_id: row.contract_week_id || null,
+        contract_week_id: normaliseContractWeekIdForRowChangeContext({
+          rowKey: row.row_key || '',
+          timesheetId: row.current_timesheet_id || row.timesheet_id || '',
+          freshSources: /^timesheet:/i.test(row.row_key || '') || trimStr(row.current_timesheet_id || row.timesheet_id || '') ? [] : [row],
+          fallbackSources: []
+        }),
 
         row_key: row.row_key || null,
 
@@ -227785,7 +228818,12 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
           current_timesheet_id: row.current_timesheet_id || row.timesheet_id || null,
 
-          contract_week_id: row.contract_week_id || null,
+          contract_week_id: normaliseContractWeekIdForRowChangeContext({
+            rowKey: row.row_key || '',
+            timesheetId: row.current_timesheet_id || row.timesheet_id || '',
+            freshSources: /^timesheet:/i.test(row.row_key || '') || trimStr(row.current_timesheet_id || row.timesheet_id || '') ? [] : [row],
+            fallbackSources: []
+          }),
 
           sheet_scope: row.sheet_scope || null,
 
@@ -227921,7 +228959,12 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
     add('expected_timesheet_id', row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || '');
 
-    add('contract_week_id', row.contract_week_id || '');
+    add('contract_week_id', normaliseContractWeekIdForRowChangeContext({
+      rowKey: row.row_key || requestIdentity || '',
+      timesheetId: row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || '',
+      freshSources: /^timesheet:/i.test(trimStr(row.row_key || requestIdentity || '') || '') || trimStr(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || '') ? [] : [row],
+      fallbackSources: []
+    }) || '');
 
     const profile = trimStr(loadOpts.profile || loadOpts.context_profile || 'status_header').toLowerCase() || 'status_header';
 
@@ -228051,7 +229094,9 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
       current_timesheet_id: payload.current_timesheet_id || payload.timesheet_id || payload.data_row?.current_timesheet_id || payload.data_row?.timesheet_id || payload.row?.current_timesheet_id || payload.row?.timesheet_id,
 
-      contract_week_id: payload.contract_week_id || payload.data_row?.contract_week_id || payload.row?.contract_week_id
+      contract_week_id: (/^timesheet:/i.test(trimStr(payload.row_key || payload.data_row?.row_key || payload.row?.row_key || '') || '') && trimStr(payload.contract_week_id || payload.data_row?.contract_week_id || payload.row?.contract_week_id || '') === trimStr(payload.current_timesheet_id || payload.timesheet_id || payload.data_row?.current_timesheet_id || payload.data_row?.timesheet_id || payload.row?.current_timesheet_id || payload.row?.timesheet_id || ''))
+        ? null
+        : (payload.contract_week_id || payload.data_row?.contract_week_id || payload.row?.contract_week_id)
 
     });
 
@@ -228127,7 +229172,12 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
       current_timesheet_id: trimStr(row.current_timesheet_id || row.timesheet_id || ''),
 
-      contract_week_id: trimStr(row.contract_week_id || ''),
+      contract_week_id: normaliseContractWeekIdForRowChangeContext({
+        rowKey: row.row_key || '',
+        timesheetId: row.current_timesheet_id || row.timesheet_id || '',
+        freshSources: /^timesheet:/i.test(row.row_key || '') || trimStr(row.current_timesheet_id || row.timesheet_id || '') ? [] : [row],
+        fallbackSources: []
+      }) || '',
 
       row_signature: buildRowCacheSignature(row),
 
