@@ -191067,7 +191067,6 @@ async function bankingPayProviderSubmitReviewResolve(input, maybeOptions = {}) {
 
 
 
-
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   const st = (state && typeof state === 'object') ? state : {};
@@ -191966,6 +191965,12 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     if (!item || typeof item !== 'object' || !tombstone) return false;
 
+    if (typeof bulkProcessRemovedEvidenceTombstoneMatchesItem === 'function') {
+
+      try { return bulkProcessRemovedEvidenceTombstoneMatchesItem(item, tombstone); } catch {}
+
+    }
+
     const itemIds = evidenceIdsForRemovalMatch(item);
 
     const itemStorageKey = storageKeyForRemovalMatch(item).toLowerCase();
@@ -192012,11 +192017,17 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
 
 
-  const removedTombstonesMatchStorageKey = (storageKeyInput = '', tombstonesInput = []) => {
+  const removedTombstonesMatchStorageKey = (storageKeyInput = '', tombstonesInput = [], matchOptions = {}) => {
 
     const key = safeStorageKey(storageKeyInput).toLowerCase();
 
     if (!key) return false;
+
+    if (typeof bulkProcessRemovedEvidenceTombstonesMatchStorageKey === 'function') {
+
+      try { return bulkProcessRemovedEvidenceTombstonesMatchStorageKey(key, tombstonesInput, matchOptions); } catch {}
+
+    }
 
     const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
 
@@ -192032,13 +192043,17 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
 
+    const mode = trimStr(selection.mode || '').toLowerCase();
+
+    if (mode === 'queue' || (!selection.attached_id && selection.queue_id)) return false;
+
     const itemLike = {
 
-      id: selection.attached_id || selection.queue_id || '',
+      id: selection.attached_id || '',
 
       evidence_id: selection.attached_id || '',
 
-      queue_id: selection.queue_id || '',
+      queue_id: '',
 
       storage_key: selection.file_key || ''
 
@@ -192618,7 +192633,11 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
 
 
-  const activeRemovedEvidenceTombstones = isBulkAuthoriseTimesheets ? [] : collectActiveRemovedEvidenceTombstones();
+  const activeRemovedEvidenceTombstones = isBulkAuthoriseTimesheets
+    ? []
+    : (typeof collectBulkProcessRemovedEvidenceTombstones === 'function'
+      ? collectBulkProcessRemovedEvidenceTombstones(st, pane)
+      : collectActiveRemovedEvidenceTombstones());
 
   const removalTombstonesActive = activeRemovedEvidenceTombstones.length > 0;
 
@@ -192626,9 +192645,33 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   if (removalTombstonesActive) {
 
+    if (typeof applyBulkProcessRemovedEvidenceTombstones === 'function') {
+
+      try {
+
+        const applyResult = applyBulkProcessRemovedEvidenceTombstones(st, {
+
+          tombstones: activeRemovedEvidenceTombstones,
+
+          reason: 'reconcile-context-refresh'
+
+        });
+
+        removedEvidencePrunedFromContext = removedEvidencePrunedFromContext || applyResult?.changed === true;
+
+      } catch (err) {
+
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][STATE] shared tombstone prune failed during reconcile', err);
+
+      }
+
+    }
+
     const containersToPrune = [
 
       pane,
+
+      st.active_row,
 
       st.active_details,
 
@@ -192636,11 +192679,21 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
       st.active_context?.details,
 
+      st.active_context?.row,
+
+      st.active_context?.data_row,
+
       st.active_ctx,
 
       st.active_ctx?.details,
 
       st.active_ctx?.state,
+
+      st.active_ctx?.row,
+
+      st.active_ctx?.data_row,
+
+      window.modalCtx,
 
       window.modalCtx?.timesheetState,
 
@@ -192659,6 +192712,22 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       }
 
     }
+
+    try {
+
+      if (Array.isArray(window.__modalStack)) {
+
+        for (const frame of window.__modalStack) {
+
+          [frame, frame?.ctx, frame?.modalCtx, frame?.modal_ctx, frame?.context, frame?.state, frame?.bulkProcessState, frame?.data]
+
+            .forEach((container) => { if (pruneRemovedTombstonesFromContainer(container, activeRemovedEvidenceTombstones)) removedEvidencePrunedFromContext = true; });
+
+        }
+
+      }
+
+    } catch {}
 
   }
 
@@ -193394,9 +193463,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
       removedTombstonesMatchSelection(previewSelectionAtStart, activeRemovedEvidenceTombstones) ||
 
-      removedTombstonesMatchItem(previewStateAtStart.active_attached_item, activeRemovedEvidenceTombstones) ||
-
-      removedTombstonesMatchItem(previewStateAtStart.active_queue_item, activeRemovedEvidenceTombstones)
+      removedTombstonesMatchItem(previewStateAtStart.active_attached_item, activeRemovedEvidenceTombstones)
 
     )
 
@@ -195506,13 +195573,51 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   const selectedRowArtifactKeyRaw = safeStorageKey(readSelectedRowTimesheetArtifactKey());
 
-  const selectedRowArtifactKey = (!isBulkAuthoriseTimesheets && removedTombstonesMatchStorageKey(selectedRowArtifactKeyRaw, activeRemovedEvidenceTombstones))
-
-    ? ''
-
-    : selectedRowArtifactKeyRaw;
-
   const selectedRowIdentity = selectedRowIdentityParts();
+
+  const selectedRowArtifactSupersededByAttachedEvidence = !!(
+
+    selectedRowArtifactKeyRaw &&
+
+    !isBulkAuthoriseTimesheets &&
+
+    activeRemovedEvidenceTombstones.length &&
+
+    typeof bulkProcessEvidenceItemSupersedesAnyRemovedEvidenceTombstone === 'function' &&
+
+    attachedAllRows.some((item) => {
+
+      const itemKey = safeStorageKey(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || '').toLowerCase();
+
+      return itemKey && itemKey === selectedRowArtifactKeyRaw.toLowerCase() && bulkProcessEvidenceItemSupersedesAnyRemovedEvidenceTombstone(item, activeRemovedEvidenceTombstones);
+
+    })
+
+  );
+
+  const selectedRowArtifactKeyTombstoned = !!(
+
+    selectedRowArtifactKeyRaw &&
+
+    !isBulkAuthoriseTimesheets &&
+
+    !selectedRowArtifactSupersededByAttachedEvidence &&
+
+    removedTombstonesMatchStorageKey(selectedRowArtifactKeyRaw, activeRemovedEvidenceTombstones, {
+
+      kind: 'TIMESHEET',
+
+      row_key: selectedRowIdentity.rowKey || null,
+
+      timesheet_id: selectedRowIdentity.timesheetId || null,
+
+      contract_week_id: selectedRowIdentity.contractWeekId || null
+
+    })
+
+  );
+
+  const selectedRowArtifactKey = selectedRowArtifactKeyTombstoned ? '' : selectedRowArtifactKeyRaw;
 
   const selectedRowHasTimesheetIdentity = !!(
 
@@ -197519,6 +197624,9 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   };
 
 }
+
+
+
 
 
 async function rerenderBulkProcessWorkbench(state, logPrefix) {
