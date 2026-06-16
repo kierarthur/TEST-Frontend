@@ -171505,7 +171505,6 @@ function bindBulkProcessManualEditor(state) {
     }
   }
 }
-
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -171582,6 +171581,8 @@ function bindBulkProcessPreviewPane(state) {
   const qa = (sel) => Array.from(root.querySelectorAll(sel));
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const upper = (v) => trimStr(v).toUpperCase();
+  const isSystemContractWeekPdfArtifactIdForPreviewBind = (value) => /^sys:contract_week_pdf:/i.test(trimStr(value || ''));
+  const safeSystemTimesheetArtifactDisplayNameForPreviewBind = () => 'Uploaded timesheet PDF';
   const deep = (v) => {
     try { return JSON.parse(JSON.stringify(v)); } catch { return v; }
   };
@@ -171686,13 +171687,16 @@ function bindBulkProcessPreviewPane(state) {
     const itemId = resolveActiveBulkProcessPreviewEvidenceId(item);
     const fileKey = resolveActiveBulkProcessPreviewFileKey(item);
     const currentSelectionKey = `${tab}|${itemId}|${fileKey}`;
-    const targetKey = trimStr(pane.__preview_target_key || '');
+    const targetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
     const liveSigned = trimStr(pane.__preview_signed_url || '');
-    if (liveSigned && targetKey && targetKey === currentSelectionKey) return liveSigned;
-    if (liveSigned && targetKey && fileKey && targetKey.endsWith(`|${fileKey}`)) return liveSigned;
-    const cached = fileKey ? trimStr(getCachedSignedUrlForPreview(fileKey, capturePreviewCommitSnapshot(null, { reason: 'docked-signed-url' })) || '') : '';
+    const snapshot = capturePreviewCommitSnapshot(null, { reason: 'docked-signed-url' });
+    const liveSignedUsable = !!(liveSigned && isSignedUrlUsableForPreview(liveSigned, fileKey, currentSelectionKey, snapshot));
+    if (liveSignedUsable && targetKey && targetKey === currentSelectionKey) return liveSigned;
+    if (liveSignedUsable && targetKey && fileKey && targetKey.endsWith(`|${fileKey}`)) return liveSigned;
+    const cached = fileKey ? trimStr(getCachedSignedUrlForPreview(fileKey, snapshot) || '') : '';
     if (cached) return cached;
-    return trimStr(item.signed_url || item.preview_url || '');
+    const itemSignedUrl = trimStr(item.signed_url || item.preview_url || '');
+    return isSignedUrlUsableForPreview(itemSignedUrl, fileKey, currentSelectionKey, snapshot) ? itemSignedUrl : '';
   };
   const activeRowKeyNow = trimStr(st.active_row_key || st.active_row?.row_key || '');
   const activePreviewItemNow = resolveActiveBulkProcessPreviewItem();
@@ -172910,6 +172914,8 @@ function bindBulkProcessPreviewPane(state) {
     const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
     const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || snapshotInput?.selectionKey || '');
     if (selectionKey && isSignedUrlMarkedFailedForTarget(selectionKey, signedUrl)) return false;
+    const signedUrlStorageKey = resolveSignedUrlStorageKeyForPreview(signedUrl);
+    if (fileKey && signedUrlStorageKey && signedUrlStorageKey !== fileKey) return false;
     const meta = getSignedUrlMetaForPreview(fileKey, snapshotInput, signedUrl);
     return !isSignedUrlExpiredForPreview(signedUrl, meta);
   };
@@ -174145,6 +174151,32 @@ function bindBulkProcessPreviewPane(state) {
       }, 'presign-response');
       return '';
     }
+    const signedUrlStorageKey = resolveSignedUrlStorageKeyForPreview(url);
+    if (signedUrlStorageKey && expectedResponseKey && signedUrlStorageKey !== expectedResponseKey) {
+      logBulkAuthorisePresignTargetRejection(snapshot, {
+        ok: false,
+        reason: 'signed-url-file-key-mismatch',
+        selectionKey: trimStr(snapshot.selectionKey || ''),
+        fileKey: expectedResponseKey,
+        responseKey: signedUrlStorageKey,
+        signedUrlPresent: true
+      }, 'presign-response');
+      return '';
+    }
+    const signedUrlMeta = buildSignedUrlMetaForPreview(url, snapshot);
+    if (isSignedUrlExpiredForPreview(url, signedUrlMeta)) {
+      clearCachedSignedUrlForPreview(expectedResponseKey || cleanKey, snapshot, url);
+      logBulkAuthorisePresignTargetRejection(snapshot, {
+        ok: false,
+        reason: 'signed-url-expired-before-presign-return',
+        selectionKey: trimStr(snapshot.selectionKey || ''),
+        fileKey: expectedResponseKey,
+        responseKey,
+        signedUrlPresent: true,
+        expiresAtMs: Number(signedUrlMeta.expiresAtMs || 0) || 0
+      }, 'presign-response');
+      return '';
+    }
     const presignSnapshotCurrentAfterResponse = isPreviewCommitSnapshotCurrent(snapshot, {
       requireSelectionUnchanged: true,
       requireFileKeyUnchanged: true,
@@ -174263,6 +174295,7 @@ function bindBulkProcessPreviewPane(state) {
         const fileKey = trimStr(artifact?.storage_key || artifact?.storageKey || artifact?.file_key || artifact?.fileKey || artifact?.download_storage_key || artifact?.downloadStorageKey || artifact?.r2_key || artifact?.r2Key || container.primary_artifact_storage_key || hints.primary_artifact_storage_key || '').replace(/^\/+/, '');
         if (!fileKey) continue;
         const primaryId = trimStr(artifact?.id || artifact?.evidence_id || artifact?.evidenceId || artifact?.queue_id || artifact?.queueId || container.primary_artifact_id || hints.primary_artifact_id || '');
+        const primaryIsSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForPreviewBind(primaryId);
         const artifactTimesheetId = trimStr(artifact?.timesheet_id || artifact?.timesheetId || container.timesheet_id || container.current_timesheet_id || activeTimesheetId || '');
         const artifactRawContractWeekId = activeIdentityIsTimesheetForAttached
           ? readPreviewAttachedExplicitContractWeekId(artifact || {})
@@ -174275,8 +174308,15 @@ function bindBulkProcessPreviewPane(state) {
           id: primaryId || fileKey,
           evidence_id: primaryId || null,
           kind: artifact?.kind || artifact?.evidence_kind || artifact?.evidenceKind || container.primary_artifact_kind || hints.primary_artifact_kind || 'OTHER',
-          display_name: artifact?.display_name || artifact?.displayName || artifact?.filename || container.primary_artifact_display_name || hints.primary_artifact_display_name || 'Evidence',
-          filename: artifact?.filename || artifact?.display_name || artifact?.displayName || container.primary_artifact_display_name || 'Evidence',
+          display_name: primaryIsSystemContractWeekPdfArtifact
+            ? safeSystemTimesheetArtifactDisplayNameForPreviewBind()
+            : (artifact?.display_name || artifact?.displayName || artifact?.filename || container.primary_artifact_display_name || hints.primary_artifact_display_name || 'Evidence'),
+          filename: primaryIsSystemContractWeekPdfArtifact
+            ? safeSystemTimesheetArtifactDisplayNameForPreviewBind()
+            : (artifact?.filename || artifact?.display_name || artifact?.displayName || container.primary_artifact_display_name || 'Evidence'),
+          original_filename: primaryIsSystemContractWeekPdfArtifact
+            ? safeSystemTimesheetArtifactDisplayNameForPreviewBind()
+            : (artifact?.original_filename || artifact?.originalFilename || artifact?.filename || artifact?.display_name || artifact?.displayName || container.primary_artifact_display_name || 'Evidence'),
           storage_key: fileKey,
           file_key: fileKey,
           download_storage_key: fileKey,
@@ -174326,7 +174366,10 @@ function bindBulkProcessPreviewPane(state) {
       const id = resolvePreviewAttachedTargetId({ ...raw, storage_key: fileKey, file_key: fileKey }) || fileKey;
       if (!id) return null;
       const kind = upper(raw.kind || raw.evidence_kind || raw.evidenceKind || raw.staged_kind || raw.stagedKind || meta.staged_kind || meta.stagedKind || meta.kind || meta.evidence_kind || meta.evidenceKind || '') || 'OTHER';
-      const displayName = trimStr(raw.display_name || raw.displayName || raw.filename || raw.original_filename || raw.originalFilename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence');
+      const isSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForPreviewBind(id || raw.id || raw.evidence_id || raw.timesheet_evidence_id || meta.id || meta.evidence_id || '');
+      const displayName = isSystemContractWeekPdfArtifact
+        ? safeSystemTimesheetArtifactDisplayNameForPreviewBind()
+        : (trimStr(raw.display_name || raw.displayName || raw.filename || raw.original_filename || raw.originalFilename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'));
       const sourceLabelOut = (() => {
         const value = trimStr(raw.source_label || meta.source_label || '');
         if (!value || upper(value) === 'STAGED' || upper(value) === 'ATTACHED') return null;
@@ -174349,8 +174392,8 @@ function bindBulkProcessPreviewPane(state) {
         kind,
         staged_kind: staged ? kind : raw.staged_kind,
         display_name: displayName,
-        filename: trimStr(raw.filename || raw.display_name || raw.displayName || raw.original_filename || '') || displayName,
-        original_filename: trimStr(raw.original_filename || raw.originalFilename || raw.filename || raw.display_name || raw.displayName || '') || displayName,
+        filename: isSystemContractWeekPdfArtifact ? displayName : (trimStr(raw.filename || raw.display_name || raw.displayName || raw.original_filename || '') || displayName),
+        original_filename: isSystemContractWeekPdfArtifact ? displayName : (trimStr(raw.original_filename || raw.originalFilename || raw.filename || raw.display_name || raw.displayName || '') || displayName),
         storage_key: fileKey,
         file_key: fileKey,
         download_storage_key: fileKey,
@@ -177810,8 +177853,17 @@ function bindBulkProcessPreviewPane(state) {
         stateRef: st
       };
 
+      const signedUrlStorageKeyForLiveCommit = resolveSignedUrlStorageKeyForPreview(signedUrl);
+      if (signedUrlStorageKeyForLiveCommit && liveFileKey && signedUrlStorageKeyForLiveCommit !== liveFileKey) {
+        return reject('signed-url-file-key-mismatch', { signedUrlStorageKey: signedUrlStorageKeyForLiveCommit, liveFileKey });
+      }
+      const signedUrlMetaForLiveCommit = buildSignedUrlMetaForPreview(signedUrl, commitSnapshot);
+      if (isSignedUrlExpiredForPreview(signedUrl, signedUrlMetaForLiveCommit)) {
+        clearCachedSignedUrlForPreview(liveFileKey, commitSnapshot, signedUrl);
+        return reject('signed-url-expired-before-live-commit', { expiresAtMs: signedUrlMetaForLiveCommit.expiresAtMs || 0 });
+      }
       const cacheKeyWritten = setCachedSignedUrlForPreview(liveFileKey, signedUrl, commitSnapshot);
-      const committedMeta = getSignedUrlMetaForPreview(liveFileKey, commitSnapshot, signedUrl) || buildSignedUrlMetaForPreview(signedUrl, commitSnapshot);
+      const committedMeta = getSignedUrlMetaForPreview(liveFileKey, commitSnapshot, signedUrl) || signedUrlMetaForLiveCommit;
       const cacheContext = {
         ownerKind: 'bulk_authorise',
         ownerToken: trimStr(commitSnapshot.ownerToken || ''),
@@ -178948,6 +179000,7 @@ function bindBulkProcessPreviewPane(state) {
     warnPreview('bind failed', e);
   });
 }
+
 
 
 function renderBulkProcessDockedEvidenceViewer(state) {
@@ -183265,6 +183318,7 @@ function ensureBulkAuthoriseManualDraftState(state) {
   return controller;
 }
 
+
 function bindBulkProcessEvidencePane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -183325,6 +183379,8 @@ function bindBulkProcessEvidencePane(state) {
   const deep = (v) => { try { return JSON.parse(JSON.stringify(v)); } catch { return v; } };
   const upper = (v) => String(v == null ? '' : v).trim().toUpperCase();
   const trimStr = (v) => String(v == null ? '' : v).trim();
+  const isSystemContractWeekPdfArtifactIdForEvidenceBind = (value) => /^sys:contract_week_pdf:/i.test(trimStr(value || ''));
+  const safeSystemTimesheetArtifactDisplayNameForEvidenceBind = () => 'Uploaded timesheet PDF';
   const retirePreviewSignedUrlStateAfterEvidenceMutation = (targetInput = {}, retireOptions = {}) => {
     const target = (targetInput && typeof targetInput === 'object') ? targetInput : {};
     const opts = (retireOptions && typeof retireOptions === 'object') ? retireOptions : {};
@@ -183917,7 +183973,12 @@ const getAttachedEvidenceId = (item) => {
     const storageKey = getAttachedEvidenceFileKey({ ...fb, ...raw, meta_json: { ...fbMeta, ...rawMeta } });
     if (!storageKey) return null;
     const queueId = pickFirst(raw.queue_id, raw.queueId, raw.manual_timesheet_queue_id, raw.manualTimesheetQueueId, raw.manual_queue_id, raw.manualQueueId, rawMeta.queue_id, rawMeta.queueId, rawMeta.manual_timesheet_queue_id, rawMeta.manualTimesheetQueueId, rawMeta.manual_queue_id, raw.id, fb.queue_id, fb.queueId, fb.manual_timesheet_queue_id, fb.manualTimesheetQueueId, fb.manual_queue_id, fb.id, storageKey);
-    const filename = pickFirst(raw.display_name, raw.displayName, raw.filename, raw.original_filename, raw.originalFilename, fb.display_name, fb.displayName, fb.filename, fb.original_filename, fb.originalFilename) || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence');
+    const id = queueId || pickFirst(raw.id, fb.id, storageKey);
+    if (!id || !storageKey) return null;
+    const isSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForEvidenceBind(id);
+    const filename = isSystemContractWeekPdfArtifact
+      ? safeSystemTimesheetArtifactDisplayNameForEvidenceBind()
+      : (pickFirst(raw.display_name, raw.displayName, raw.filename, raw.original_filename, raw.originalFilename, fb.display_name, fb.displayName, fb.filename, fb.original_filename, fb.originalFilename) || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'));
     const mimeType = pickFirst(raw.mime_type, raw.mimeType, raw.content_type, raw.contentType, fb.mime_type, fb.mimeType, fb.content_type, fb.contentType);
     const contentHash = pickFirst(raw.content_hash, raw.contentHash, fb.content_hash, fb.contentHash);
     const uploadedAtUtc = pickFirst(raw.uploaded_at_utc, raw.uploadedAtUtc, raw.uploaded_at, raw.uploadedAt, fb.uploaded_at_utc, fb.uploadedAtUtc, fb.uploaded_at, fb.uploadedAt) || null;
@@ -183926,8 +183987,6 @@ const getAttachedEvidenceId = (item) => {
     const rotationRaw = pickFirst(raw.rotation_degrees, raw.rotationDegrees, raw.last_rotation_deg, raw.lastRotationDeg, fb.rotation_degrees, fb.rotationDegrees, fb.last_rotation_deg, fb.lastRotationDeg);
     const rotationNum = Number(rotationRaw || 0);
     const rotationDegrees = Number.isFinite(rotationNum) ? rotationNum : 0;
-    const id = queueId || pickFirst(raw.id, fb.id, storageKey);
-    if (!id || !storageKey) return null;
 
     const previewMode = deriveEvidencePreviewMode({ ...fb, ...raw, mime_type: mimeType, r2_key: storageKey, storage_key: storageKey, filename });
     const normalised = {
@@ -183943,7 +184002,7 @@ const getAttachedEvidenceId = (item) => {
       staged_kind: kind,
       display_name: filename,
       filename,
-      original_filename: pickFirst(raw.original_filename, raw.originalFilename, fb.original_filename, fb.originalFilename, filename) || filename,
+      original_filename: isSystemContractWeekPdfArtifact ? filename : (pickFirst(raw.original_filename, raw.originalFilename, fb.original_filename, fb.originalFilename, filename) || filename),
       storage_key: storageKey,
       r2_key: storageKey,
       file_key: storageKey,
@@ -183986,7 +184045,10 @@ const getAttachedEvidenceId = (item) => {
     const id = evidenceId || queueId || storageKey;
     if (!id || (!storageKey && !isBulkAuthoriseContext)) return null;
 
-    const filename = pickFirst(raw.display_name, raw.displayName, raw.filename, raw.original_filename, raw.originalFilename, fb.display_name, fb.displayName, fb.filename, fb.original_filename, fb.originalFilename) || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence');
+    const isSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForEvidenceBind(id);
+    const filename = isSystemContractWeekPdfArtifact
+      ? safeSystemTimesheetArtifactDisplayNameForEvidenceBind()
+      : (pickFirst(raw.display_name, raw.displayName, raw.filename, raw.original_filename, raw.originalFilename, fb.display_name, fb.displayName, fb.filename, fb.original_filename, fb.originalFilename) || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'));
     const mimeType = pickFirst(raw.mime_type, raw.mimeType, raw.content_type, raw.contentType, fb.mime_type, fb.mimeType, fb.content_type, fb.contentType);
     const rotationRaw = pickFirst(raw.rotation_degrees, raw.rotationDegrees, raw.last_rotation_deg, raw.lastRotationDeg, fb.rotation_degrees, fb.rotationDegrees, fb.last_rotation_deg, fb.lastRotationDeg);
     const rotationNum = Number(rotationRaw || 0);
@@ -184006,7 +184068,7 @@ const getAttachedEvidenceId = (item) => {
       kind,
       display_name: filename,
       filename,
-      original_filename: pickFirst(raw.original_filename, raw.originalFilename, fb.original_filename, fb.originalFilename, filename) || filename,
+      original_filename: isSystemContractWeekPdfArtifact ? filename : (pickFirst(raw.original_filename, raw.originalFilename, fb.original_filename, fb.originalFilename, filename) || filename),
       storage_key: storageKey || null,
       r2_key: storageKey || null,
       file_key: storageKey || null,
@@ -185751,13 +185813,16 @@ const getAttachedEvidenceId = (item) => {
         const kind = normaliseEvidenceKind(artifact?.kind || artifact?.evidence_kind || artifact?.evidenceKind || container.primary_artifact_kind || hints.primary_artifact_kind || '') || 'OTHER';
         const fileNameFromStorageKey = storageKey.split('/').filter(Boolean).pop() || '';
         const primaryIsSystemArtifact = /^sys:/i.test(primaryId || '');
-        const artifactDisplayName = pickFirst(artifact?.display_name, artifact?.displayName, artifact?.filename, artifact?.original_filename, artifact?.originalFilename);
+        const primaryIsSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForEvidenceBind(primaryId);
+        const artifactDisplayName = primaryIsSystemContractWeekPdfArtifact ? '' : pickFirst(artifact?.display_name, artifact?.displayName, artifact?.filename, artifact?.original_filename, artifact?.originalFilename);
         const containerDisplayMatchesArtifact = !primaryIsSystemArtifact && !!(
           (primaryId && pickFirst(container.primary_artifact_id, hints.primary_artifact_id) === primaryId) ||
           (pickFirst(container.primary_artifact_storage_key, hints.primary_artifact_storage_key) && cleanAttachedEvidenceFileKey(pickFirst(container.primary_artifact_storage_key, hints.primary_artifact_storage_key)) === storageKey)
         );
         const containerDisplayName = containerDisplayMatchesArtifact ? pickFirst(container.primary_artifact_display_name, hints.primary_artifact_display_name) : '';
-        const displayName = artifactDisplayName || containerDisplayName || (kind === 'TIMESHEET' ? (fileNameFromStorageKey || 'Timesheet PDF') : (fileNameFromStorageKey || 'Evidence'));
+        const displayName = primaryIsSystemContractWeekPdfArtifact
+          ? safeSystemTimesheetArtifactDisplayNameForEvidenceBind()
+          : (artifactDisplayName || containerDisplayName || (kind === 'TIMESHEET' ? (fileNameFromStorageKey || 'Timesheet PDF') : (fileNameFromStorageKey || 'Evidence')));
         const fallbackItem = { ...(artifact ? deep(artifact) : {}), id: primaryId || storageKey, evidence_id: primaryId || null, storage_key: storageKey, file_key: storageKey, kind };
         if (removedEvidenceItemMatchesForAuthoritativeAttachedEvidence(fallbackItem)) continue;
         rows.push({
@@ -185769,9 +185834,7 @@ const getAttachedEvidenceId = (item) => {
           staged_kind: kind,
           display_name: displayName,
           filename: displayName,
-
-        original_filename: displayName,
-          original_filename: pickFirst(artifact?.original_filename, artifact?.originalFilename) || artifactDisplayName || displayName,
+          original_filename: primaryIsSystemContractWeekPdfArtifact ? displayName : (pickFirst(artifact?.original_filename, artifact?.originalFilename) || artifactDisplayName || displayName),
           storage_key: storageKey,
           r2_key: storageKey,
           file_key: storageKey,
@@ -187509,7 +187572,6 @@ const getAttachedEvidenceId = (item) => {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
-
 
 
 
