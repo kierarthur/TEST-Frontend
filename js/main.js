@@ -258964,125 +258964,548 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
   }
 }
 
-
 function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
   const invData = (invoiceData && typeof invoiceData === 'object')
     ? invoiceData
     : invoiceModalGetInvoiceData(modalCtx);
 
-  const pickUrl = (e) => {
-    if (!e || typeof e !== 'object') return '';
-    return String(
-      e.url ||
-      e.file_url ||
-      e.signed_url ||
-      e.download_url ||
-      e.public_url ||
-      e.link ||
-      ''
-    ).trim();
+  const safeStr = (value) => String(value == null ? '' : value).trim();
+
+  const pickFirst = (...values) => {
+    for (const value of values) {
+      const s = safeStr(value);
+      if (s) return s;
+    }
+    return '';
   };
 
-  const pickName = (e) => {
-    if (!e || typeof e !== 'object') return '';
-    return String(
-      e.display_name ||
-      e.filename ||
-      e.file_name ||
-      e.name ||
-      e.title ||
-      e.kind ||
-      'Evidence'
-    ).trim();
+  const getMeta = (ev) => {
+    if (ev && ev.meta_json && typeof ev.meta_json === 'object' && !Array.isArray(ev.meta_json)) return ev.meta_json;
+    if (ev && ev.metadata && typeof ev.metadata === 'object' && !Array.isArray(ev.metadata)) return ev.metadata;
+    if (ev && ev.meta && typeof ev.meta === 'object' && !Array.isArray(ev.meta)) return ev.meta;
+    return {};
   };
 
-  const pickTs = (e) => {
-    if (!e || typeof e !== 'object') return '';
-    return String(
-      e.created_at ||
-      e.uploaded_at ||
-      e.ts_utc ||
-      e.created_at_utc ||
-      ''
-    ).trim();
+  const directUrl = (ev) => {
+    const meta = getMeta(ev);
+    return pickFirst(
+      ev?.url,
+      ev?.file_url,
+      ev?.signed_url,
+      ev?.download_url,
+      ev?.public_url,
+      ev?.link,
+      ev?.href,
+      ev?.view_url,
+      ev?.preview_url,
+      meta.url,
+      meta.file_url,
+      meta.signed_url,
+      meta.download_url,
+      meta.public_url,
+      meta.link,
+      meta.href,
+      meta.view_url,
+      meta.preview_url
+    );
   };
 
-  const fmtTs = (iso) => {
+  const storageKey = (ev) => {
+    const meta = getMeta(ev);
+    return pickFirst(
+      ev?.download_storage_key,
+      ev?.storage_key,
+      ev?.file_key,
+      ev?.r2_key,
+      ev?.storageKey,
+      ev?.downloadStorageKey,
+      ev?.fileKey,
+      ev?.r2Key,
+      meta.download_storage_key,
+      meta.storage_key,
+      meta.file_key,
+      meta.r2_key,
+      meta.storageKey,
+      meta.downloadStorageKey,
+      meta.fileKey,
+      meta.r2Key
+    ).replace(/^\/+/, '').trim();
+  };
+
+  const hasViewableEvidence = (ev) => !!(directUrl(ev) || storageKey(ev));
+
+  const evidenceActionUrl = async (ev) => {
+    const url = directUrl(ev);
+    if (url) return url;
+
+    const key = storageKey(ev);
+    if (!key) return '';
+
+    const presRes = await authFetch(API('/api/files/presign-download'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key })
+    });
+
+    const presText = await presRes.text().catch(() => '');
+    if (!presRes.ok) throw new Error(presText || 'Failed to presign download URL');
+
+    let presJson = null;
+    try { presJson = presText ? JSON.parse(presText) : {}; } catch { presJson = {}; }
+
+    return pickFirst(
+      presJson?.url,
+      presJson?.signed_url,
+      presJson?.download_url,
+      presJson?.public_url
+    );
+  };
+
+  const getUploadedDt = (ev) => {
+    const meta = getMeta(ev);
+    return pickFirst(
+      ev?.uploaded_at_utc,
+      ev?.uploadedAtUtc,
+      ev?.uploaded_at,
+      ev?.uploadedAt,
+      ev?.date_uploaded,
+      ev?.dateUploaded,
+      ev?.created_at,
+      ev?.createdAt,
+      ev?.created_at_utc,
+      ev?.createdAtUtc,
+      ev?.staged_at_utc,
+      ev?.stagedAtUtc,
+      ev?.attached_at_utc,
+      ev?.attachedAtUtc,
+      ev?.ts_utc,
+      meta.uploaded_at_utc,
+      meta.uploadedAtUtc,
+      meta.uploaded_at,
+      meta.created_at,
+      meta.created_at_utc,
+      meta.staged_at_utc,
+      meta.attached_at_utc,
+      meta.ts_utc
+    );
+  };
+
+  const formatEvidenceDate = (iso) => {
     if (!iso) return '—';
-    try { return fmtLondonTs(iso); } catch { return String(iso); }
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+
+    try {
+      const s = d.toLocaleDateString('en-GB', {
+        timeZone: 'Europe/London',
+        weekday: 'short',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      });
+      return String(s).replace(',', '').replace(/\s+/g, ' ').trim();
+    } catch {
+      return d.toISOString().slice(0, 10);
+    }
   };
 
-  const renderList = (arr) => {
-    const list = Array.isArray(arr) ? arr : [];
-    if (!list.length) return `<div class="text-muted">No evidence attached.</div>`;
+  const formatEvidenceTime = (iso) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
 
-    const rows = list.map((e) => {
-      const name = pickName(e);
-      const ts = fmtTs(pickTs(e));
-      const url = pickUrl(e);
+    try {
+      const t = d.toLocaleTimeString('en-GB', {
+        timeZone: 'Europe/London',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      });
+      const clean = String(t).replace(/\s+/g, '').trim();
+      return clean ? `${clean}hrs` : '—';
+    } catch {
+      const hhmm = d.toISOString().slice(11, 16);
+      return hhmm ? `${hhmm}hrs` : '—';
+    }
+  };
 
-      const link = url
-        ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Download</a>`
-        : `<span class="text-muted">—</span>`;
+  const typeLabel = (ev) => {
+    const meta = getMeta(ev);
+    const raw = pickFirst(
+      ev?.kind,
+      ev?.type,
+      ev?.evidence_type,
+      ev?.evidenceType,
+      ev?.category,
+      ev?.document_type,
+      ev?.documentType,
+      meta.kind,
+      meta.type,
+      meta.evidence_type,
+      meta.evidenceType,
+      ev?.__invoice_evidence_default_kind
+    );
 
-      return `
-        <tr>
-          <td>${escapeHtml(name)}</td>
-          <td class="text-muted small">${escapeHtml(ts)}</td>
-          <td class="text-end">${link}</td>
-        </tr>
-      `;
-    }).join('');
+    const k = raw.trim().toUpperCase();
+    if (!k) return 'Unknown';
 
-    return `
-      <div class="table-responsive">
-        <table class="table table-sm align-middle" style="margin:0;">
-          <thead>
-            <tr>
-              <th>File</th>
-              <th>Uploaded</th>
-              <th class="text-end">Link</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows}
-          </tbody>
-        </table>
-      </div>
+    const map = {
+      TIMESHEET: 'Timesheet',
+      MILEAGE: 'Mileage',
+      TRAVEL: 'Travel',
+      ACCOMMODATION: 'Accommodation',
+      OTHER: 'Other',
+      QR: 'QR',
+      PDF: 'PDF',
+      ELECTRONIC_SIGNATURES: 'Electronic signatures',
+      HEALTHROSTER: 'HealthRoster',
+      NHSP: 'NHSP',
+      AUTHORISATION: 'Timesheet Authorisation',
+      AUTHORIZATION: 'Timesheet Authorisation'
+    };
+
+    if (map[k]) return map[k];
+
+    return raw
+      .replace(/[_-]+/g, ' ')
+      .toLowerCase()
+      .replace(/\b\w/g, (m) => m.toUpperCase());
+  };
+
+  const filenameLabel = (ev) => {
+    const meta = getMeta(ev);
+    const kindU = pickFirst(ev?.kind, ev?.type, meta.kind, meta.type).toUpperCase();
+    if (kindU === 'AUTHORISATION' || kindU === 'AUTHORIZATION') return '—';
+
+    const directName = pickFirst(
+      ev?.filename,
+      ev?.file_name,
+      ev?.fileName,
+      ev?.display_name,
+      ev?.displayName,
+      ev?.name,
+      ev?.title,
+      ev?.original_filename,
+      ev?.originalFilename,
+      meta.filename,
+      meta.file_name,
+      meta.fileName,
+      meta.display_name,
+      meta.displayName,
+      meta.original_filename,
+      meta.originalFilename
+    );
+    if (directName) return directName;
+
+    const key = storageKey(ev);
+    if (key) {
+      const parts = key.split('/');
+      const base = parts[parts.length - 1] || '';
+      if (base) return base;
+    }
+
+    const url = directUrl(ev);
+    if (url) {
+      try {
+        const u = new URL(url, window.location.href);
+        const parts = String(u.pathname || '').split('/');
+        const base = decodeURIComponent(parts[parts.length - 1] || '').trim();
+        if (base) return base;
+      } catch {}
+    }
+
+    return '—';
+  };
+
+  const uploadedByLabel = (ev) => {
+    const meta = getMeta(ev);
+    const kindU = pickFirst(ev?.kind, ev?.type, meta.kind, meta.type).toUpperCase();
+
+    if (kindU === 'AUTHORISATION' || kindU === 'AUTHORIZATION') {
+      return pickFirst(meta.actor_display, meta.actorDisplay, ev?.actor_display, ev?.actorDisplay) || 'System';
+    }
+
+    const by = pickFirst(
+      ev?.staged_by_display,
+      ev?.stagedByDisplay,
+      ev?.uploaded_by_display,
+      ev?.uploadedByDisplay,
+      ev?.created_by_display,
+      ev?.createdByDisplay,
+      ev?.uploaded_by_name,
+      ev?.uploadedByName,
+      ev?.created_by_name,
+      ev?.createdByName,
+      ev?.user_display,
+      ev?.userDisplay,
+      ev?.actor_display,
+      ev?.actorDisplay,
+      meta.staged_by_display,
+      meta.uploaded_by_display,
+      meta.created_by_display,
+      meta.uploaded_by_name,
+      meta.created_by_name,
+      meta.actor_display
+    );
+    if (by) return by;
+
+    if (ev?.system === true || ev?.is_system === true || meta.system === true || meta.is_system === true) return 'System';
+    return '—';
+  };
+
+  const sourceLabel = (ev) => {
+    const meta = getMeta(ev);
+    const explicit = pickFirst(
+      ev?.source_badge,
+      ev?.sourceBadge,
+      ev?.source_label,
+      ev?.sourceLabel,
+      meta.source_badge,
+      meta.sourceBadge,
+      meta.source_label,
+      meta.sourceLabel
+    );
+    if (explicit) return explicit;
+
+    const kindU = pickFirst(ev?.kind, ev?.type, meta.kind, meta.type).toUpperCase();
+    if (kindU === 'AUTHORISATION' || kindU === 'AUTHORIZATION') return 'System';
+    if (ev?.system === true || ev?.is_system === true || meta.system === true || meta.is_system === true) return 'System';
+    if (ev?.is_staged_context === true || ev?.staged === true || meta.is_staged_context === true) return 'Staged';
+    return 'Attached';
+  };
+
+  const pageCountLabel = (ev) => {
+    const meta = getMeta(ev);
+    const candidates = [
+      ev?.page_count,
+      ev?.pdf_page_count,
+      ev?.pageCount,
+      ev?.pdfPageCount,
+      ev?.pages,
+      ev?.num_pages,
+      ev?.numPages,
+      meta.page_count,
+      meta.pdf_page_count,
+      meta.pageCount,
+      meta.pdfPageCount,
+      meta.pages,
+      meta.num_pages,
+      meta.numPages
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate == null || candidate === '') continue;
+      const n = Number(candidate);
+      if (Number.isFinite(n) && n > 0) return String(Math.trunc(n));
+    }
+    return '—';
+  };
+
+  const rawTimesheetEvidence = Array.isArray(invData?.timesheet_evidence) ? invData.timesheet_evidence : [];
+  const rawOtherEvidence = Array.isArray(invData?.evidence_other) ? invData.evidence_other : [];
+  const rawLegacyEvidence = Array.isArray(invData?.evidence) ? invData.evidence : [];
+
+  const rawRows = (() => {
+    const rows = [];
+
+    if (rawTimesheetEvidence.length || rawOtherEvidence.length) {
+      rawTimesheetEvidence.forEach((ev) => rows.push({ ...(ev || {}), __invoice_evidence_default_kind: 'TIMESHEET' }));
+      rawOtherEvidence.forEach((ev) => rows.push({ ...(ev || {}), __invoice_evidence_default_kind: 'OTHER' }));
+      return rows;
+    }
+
+    rawLegacyEvidence.forEach((ev) => rows.push({ ...(ev || {}), __invoice_evidence_default_kind: 'TIMESHEET' }));
+    return rows;
+  })();
+
+  const evidenceRows = (() => {
+    const seen = new Set();
+    const out = [];
+
+    rawRows.forEach((ev, idx) => {
+      if (!ev || typeof ev !== 'object') return;
+
+      const keyParts = [
+        safeStr(ev.id),
+        storageKey(ev),
+        directUrl(ev),
+        filenameLabel(ev),
+        getUploadedDt(ev),
+        typeLabel(ev)
+      ].filter(Boolean);
+
+      const dedupeKey = keyParts.join('||') || `row:${idx}`;
+      if (seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+
+      out.push({
+        ...ev,
+        __invoice_evidence_row_id: `inv-ev-${out.length}`
+      });
+    });
+
+    return out;
+  })();
+
+  try {
+    window.__invoiceEvidenceRows = evidenceRows;
+    window.__invoiceEvidenceOpen = async (rowToken, action) => {
+      const token = safeStr(rowToken);
+      const item = (Array.isArray(window.__invoiceEvidenceRows) ? window.__invoiceEvidenceRows : [])
+        .find((entry) => entry && safeStr(entry.__invoice_evidence_row_id) === token) || null;
+
+      if (!item) {
+        window.__toast && window.__toast('Evidence item not found');
+        return;
+      }
+
+      try {
+        const url = await evidenceActionUrl(item);
+        if (!url) {
+          window.__toast && window.__toast('No downloadable file for this evidence item');
+          return;
+        }
+
+        const mode = safeStr(action).toLowerCase();
+        if (mode === 'view' && typeof showModal === 'function') {
+          const filename = filenameLabel(item);
+          const safeUrl = escapeHtml(url);
+          const safeFilename = escapeHtml(filename && filename !== '—' ? filename : 'Evidence');
+
+          showModal(
+            `Evidence — ${safeFilename}`,
+            [{ key: 'preview', title: 'Preview' }],
+            () => `
+              <div class="tabc">
+                <div class="card">
+                  <div class="row">
+                    <label>Download</label>
+                    <div class="controls">
+                      <a class="pill"
+                         href="${safeUrl}"
+                         target="_blank"
+                         rel="noopener noreferrer"
+                         style="display:inline-block;border:1px solid var(--line);background:transparent;color:inherit;padding:6px 10px;border-radius:999px;text-decoration:none;">
+                        Open / Download
+                      </a>
+                    </div>
+                  </div>
+                </div>
+                <div class="card" style="margin-top:10px;">
+                  <div class="row">
+                    <label>Preview</label>
+                    <div class="controls" style="width:100%;">
+                      <iframe
+                        src="${safeUrl}"
+                        style="width:100%;height:560px;border:1px solid var(--line);border-radius:8px;background:#000;"
+                      ></iframe>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `,
+            null,
+            false,
+            undefined,
+            { kind: 'invoice-evidence-viewer', showSave: false, showApply: false, noParentGate: true, forceEdit: true }
+          );
+          return;
+        }
+
+        window.open(url, '_blank', 'noopener,noreferrer');
+      } catch (err) {
+        const msg = String(err?.message || err || 'Failed to open evidence');
+        if (window.__toast) window.__toast(msg);
+        else alert(msg);
+      }
+    };
+  } catch {}
+
+  const rowsHtml = evidenceRows.length
+    ? evidenceRows.map((ev) => {
+        const rowToken = ev.__invoice_evidence_row_id;
+        const uploadedDt = getUploadedDt(ev);
+        const canOpen = hasViewableEvidence(ev);
+
+        const viewBtn = canOpen
+          ? `
+            <button type="button"
+                    class="btn mini subtle"
+                    style="background:transparent;border:1px solid rgba(255,255,255,.18);"
+                    onclick="window.__invoiceEvidenceOpen && window.__invoiceEvidenceOpen('${escapeHtml(rowToken)}', 'view')">
+              View
+            </button>
+          `
+          : '';
+
+        const downloadBtn = canOpen
+          ? `
+            <button type="button"
+                    class="btn mini subtle"
+                    style="background:transparent;border:1px solid rgba(255,255,255,.18);"
+                    onclick="window.__invoiceEvidenceOpen && window.__invoiceEvidenceOpen('${escapeHtml(rowToken)}', 'download')">
+              Download
+            </button>
+          `
+          : '';
+
+        return `
+          <tr data-invoice-evidence-row="${escapeHtml(rowToken)}">
+            <td>${escapeHtml(filenameLabel(ev))}</td>
+            <td>${escapeHtml(typeLabel(ev))}</td>
+            <td><span class="pill">${escapeHtml(sourceLabel(ev))}</span></td>
+            <td>${escapeHtml(pageCountLabel(ev))}</td>
+            <td>${escapeHtml(formatEvidenceDate(uploadedDt))}</td>
+            <td>${escapeHtml(formatEvidenceTime(uploadedDt))}</td>
+            <td>${escapeHtml(uploadedByLabel(ev))}</td>
+            <td style="text-align:right; white-space:nowrap;">
+              ${viewBtn}
+              ${downloadBtn}
+            </td>
+          </tr>
+        `;
+      }).join('')
+    : `
+      <tr>
+        <td colspan="8" class="mini" style="opacity:.85;">
+          No evidence attached.
+        </td>
+      </tr>
     `;
-  };
 
-  const tsEvidence = Array.isArray(invData?.timesheet_evidence) ? invData.timesheet_evidence : [];
-  const otherEvidence = Array.isArray(invData?.evidence_other) ? invData.evidence_other : [];
-  const legacyEvidence = Array.isArray(invData?.evidence) ? invData.evidence : [];
-
-  const hasAny = (tsEvidence.length + otherEvidence.length + legacyEvidence.length) > 0;
-
-  // Fallback: if timesheet_evidence and evidence_other are empty, use legacy evidence as "Timesheet Evidence"
-  const useLegacyAsFallback = (!tsEvidence.length && !otherEvidence.length && legacyEvidence.length);
-
-  const blockTimesheet = useLegacyAsFallback ? legacyEvidence : tsEvidence;
-  const blockOther = useLegacyAsFallback ? [] : otherEvidence;
-
-  if (!hasAny) {
-    return `<div class="text-muted">No evidence attached.</div>`;
-  }
+  const tableHtml = `
+    <div class="scrollable-evidence" style="max-height:380px; overflow-y:auto;">
+      <table class="ts-evidence-table" style="width:100%; border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Filename</th>
+            <th style="text-align:left;">Type</th>
+            <th style="text-align:left;">Source</th>
+            <th style="text-align:left;">Pages</th>
+            <th style="text-align:left;">Date Uploaded</th>
+            <th style="text-align:left;">Time</th>
+            <th style="text-align:left;">Uploaded by</th>
+            <th style="text-align:right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+  `;
 
   return `
-    <div class="p-2">
-      <div class="mb-3">
-        <div class="fw-semibold mb-2">Timesheet Evidence</div>
-        ${renderList(blockTimesheet)}
-      </div>
-
-      <div class="mb-2">
-        <div class="fw-semibold mb-2">Other Evidence</div>
-        ${blockOther.length ? renderList(blockOther) : `<div class="text-muted">No evidence attached.</div>`}
+    <div class="tabc invoice-evidence-tab" style="height:100%; display:flex; flex-direction:column;">
+      <div class="card" style="flex:1; overflow:hidden;">
+        <div class="row">
+          <label>Evidence</label>
+          <div class="controls" style="width:100%;">
+            ${tableHtml}
+          </div>
+        </div>
       </div>
     </div>
   `;
 }
-
 
 function renderInvoiceModalHistoryTab(modalCtx, invoiceData) {
   const invData = (invoiceData && typeof invoiceData === 'object')
@@ -294699,6 +295122,8 @@ function escCloseRelatedMenu(ev){
 // Create & show a context menu near (x,y)
 // ========================= showRelatedMenu (FIXED) =========================
 // Create & show a context menu near (x,y)
+
+
 function showRelatedMenu(x, y, counts, entity, id){
   closeRelatedMenu();
 
@@ -294762,8 +295187,18 @@ function showRelatedMenu(x, y, counts, entity, id){
     it.style.borderRadius = '8px';
     it.style.cursor = disabled ? 'default' : 'pointer';
     it.style.opacity = disabled ? '.6' : '1';
-    it.onmouseenter = ()=>{ if (!disabled) it.style.background = 'rgba(255,255,255,06)'; };
-    it.onmouseleave = ()=>{ it.style.background = 'transparent'; };
+    it.style.color = disabled ? '#94a3b8' : '#f8fafc';
+    it.style.transition = 'background .12s ease, color .12s ease';
+    it.onmouseenter = ()=>{
+      if (!disabled) {
+        it.style.background = 'var(--hover, rgba(79,70,229,.18))';
+        it.style.color = '#ffffff';
+      }
+    };
+    it.onmouseleave = ()=>{
+      it.style.background = 'transparent';
+      it.style.color = disabled ? '#94a3b8' : '#f8fafc';
+    };
 
     if (!disabled) {
       it.onclick = async (ev)=>{
@@ -294868,6 +295303,7 @@ function showRelatedMenu(x, y, counts, entity, id){
 
   menu.addEventListener('click', ev => ev.stopPropagation());
 }
+
 
 
 // ===== Quick search =====
