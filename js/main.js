@@ -175620,24 +175620,88 @@ function bindBulkProcessPreviewPane(state) {
         trimStr(target.evidenceEvidenceId || ''),
         trimStr(target.evidenceQueueId || '')
       ].filter(Boolean)));
-      const storageKey = trimStr(target.storageKey || '').replace(/^\/+/, '');
-      const kind = upper(target.kind || '');
+      const backendResponse = (target.backendResponse && typeof target.backendResponse === 'object')
+        ? target.backendResponse
+        : ((target.backend_response && typeof target.backend_response === 'object') ? target.backend_response : {});
+      const storageKey = trimStr(
+        target.storageKey ||
+        target.storage_key ||
+        target.returned_storage_key ||
+        target.returnedStorageKey ||
+        backendResponse.returned_storage_key ||
+        backendResponse.returnedStorageKey ||
+        backendResponse.storage_key ||
+        backendResponse.storageKey ||
+        ''
+      ).replace(/^\/+/, '');
+      const queueId = trimStr(
+        target.queueId ||
+        target.queue_id ||
+        target.returned_queue_id ||
+        target.returnedQueueId ||
+        target.evidenceQueueId ||
+        backendResponse.queue_id ||
+        backendResponse.queueId ||
+        backendResponse.returned_queue_id ||
+        backendResponse.returnedQueueId ||
+        backendResponse.removed_attached_queue_id ||
+        backendResponse.removedAttachedQueueId ||
+        ''
+      );
+      const kind = upper(
+        target.kind ||
+        target.evidence_kind ||
+        target.returned_evidence_kind ||
+        target.returnedEvidenceKind ||
+        backendResponse.returned_evidence_kind ||
+        backendResponse.returnedEvidenceKind ||
+        backendResponse.evidence_kind ||
+        backendResponse.evidenceKind ||
+        backendResponse.kind ||
+        ''
+      );
+      const action = trimStr(target.action || target.remove_action || backendResponse.action || '').toLowerCase();
       return {
         ...target,
-        evidenceId: trimStr(target.evidenceId || ''),
-        ids,
+        evidenceId: trimStr(target.evidenceId || target.evidence_id || backendResponse.returned_evidence_id || backendResponse.returnedEvidenceId || ''),
+        ids: Array.from(new Set([...ids, queueId].filter(Boolean))),
+        queueId,
         storageKey,
         storageKeyLower: storageKey.toLowerCase(),
         kind,
-        rowKey: trimStr(target.rowKey || ''),
-        timesheetId: trimStr(target.timesheetId || ''),
-        contractWeekId: trimStr(target.contractWeekId || '')
+        action,
+        backendResponse,
+        rowKey: trimStr(target.rowKey || target.row_key || ''),
+        timesheetId: trimStr(target.timesheetId || target.timesheet_id || backendResponse.returned_from_timesheet_id || backendResponse.returnedFromTimesheetId || ''),
+        contractWeekId: trimStr(target.contractWeekId || target.contract_week_id || backendResponse.returned_from_contract_week_id || backendResponse.returnedFromContractWeekId || '')
       };
     };
     const removedEvidenceTargetMatchesItem = (itemInput, targetInput) => {
       const item = (itemInput && typeof itemInput === 'object') ? itemInput : null;
       const target = normaliseRemovedEvidenceTarget(targetInput);
       if (!item || (!target.ids.length && !target.storageKeyLower)) return false;
+      if (typeof bulkProcessRemovedEvidenceTombstonesMatchItem === 'function') {
+        try {
+          return bulkProcessRemovedEvidenceTombstonesMatchItem(item, [{
+            evidence_id: target.evidenceId || null,
+            evidence_ids: target.ids.slice(),
+            ids: target.ids.slice(),
+            queue_id: target.queueId || target.evidenceQueueId || null,
+            storage_key: target.storageKey || null,
+            kind: target.kind || null,
+            row_key: target.rowKey || null,
+            timesheet_id: target.timesheetId || null,
+            contract_week_id: target.contractWeekId || null,
+            action: target.action || 'return-to-queue',
+            backendResponse: target.backendResponse || null
+          }], {
+            row_key: target.rowKey || null,
+            timesheet_id: target.timesheetId || null,
+            contract_week_id: target.contractWeekId || null,
+            kind: target.kind || null
+          });
+        } catch {}
+      }
       const itemIds = [
         trimStr(item.id || ''),
         trimStr(item.evidence_id || ''),
@@ -175647,6 +175711,8 @@ function bindBulkProcessPreviewPane(state) {
       ].filter(Boolean);
       if (target.ids.length && itemIds.some((value) => target.ids.includes(value))) return true;
       const itemStorageKey = storageKeyOf(item).toLowerCase();
+      const itemKind = kindOf(item);
+      if (target.kind && itemKind && itemKind !== target.kind) return false;
       return !!(target.storageKeyLower && itemStorageKey && itemStorageKey === target.storageKeyLower);
     };
     const filterRemovedEvidenceTargetFromList = (listInput, targetInput) => {
@@ -175694,16 +175760,54 @@ function bindBulkProcessPreviewPane(state) {
       }
       return changed;
     };
-    const rememberBulkProcessRemovedEvidenceTarget = (targetInput) => {
-      const target = normaliseRemovedEvidenceTarget(targetInput);
+    const rememberBulkProcessRemovedEvidenceTarget = (targetInput, rememberOptions = {}) => {
+      const opts = (rememberOptions && typeof rememberOptions === 'object') ? rememberOptions : {};
+      const target = normaliseRemovedEvidenceTarget({
+        ...(targetInput || {}),
+        action: opts.action || targetInput?.action || 'return-to-queue',
+        backendResponse: opts.backendResponse || targetInput?.backendResponse || targetInput?.backend_response || null
+      });
+      if (typeof rememberBulkProcessRemovedEvidenceTombstone === 'function') {
+        try {
+          const tombstone = rememberBulkProcessRemovedEvidenceTombstone(st, {
+            ...(targetInput || {}),
+            ...target,
+            evidence_id: target.evidenceId || target.evidenceEvidenceId || null,
+            evidence_ids: target.ids.slice(),
+            ids: target.ids.slice(),
+            queue_id: target.queueId || target.evidenceQueueId || null,
+            storage_key: target.storageKey || null,
+            kind: target.kind || null,
+            row_key: target.rowKey || null,
+            timesheet_id: target.timesheetId || null,
+            contract_week_id: target.contractWeekId || null,
+            action: target.action || opts.action || 'return-to-queue',
+            backendResponse: opts.backendResponse || target.backendResponse || null
+          }, {
+            ...opts,
+            action: target.action || opts.action || 'return-to-queue',
+            backendResponse: opts.backendResponse || target.backendResponse || null
+          });
+          if (tombstone) {
+            target.__removedEvidenceTombstone = tombstone;
+            target.__bulk_process_removed_evidence_tombstone = tombstone;
+          }
+          return target;
+        } catch (err) {
+          if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PREVIEW] removed evidence tombstone helper failed', err);
+        }
+      }
       const tombstone = {
         evidence_id: target.evidenceId || null,
         ids: target.ids.slice(),
+        queue_id: target.queueId || null,
+        queue_ids: target.queueId ? [target.queueId] : [],
         storage_key: target.storageKey || null,
         kind: target.kind || null,
         row_key: target.rowKey || null,
         timesheet_id: target.timesheetId || null,
         contract_week_id: target.contractWeekId || null,
+        action: target.action || opts.action || 'return-to-queue',
         removed_at_ms: Date.now(),
         removed_at_utc: new Date().toISOString()
       };
@@ -175714,18 +175818,22 @@ function bindBulkProcessPreviewPane(state) {
           : [];
         const matchesTombstone = (existing) => {
           const existingIds = Array.isArray(existing?.ids) ? existing.ids.map(trimStr).filter(Boolean) : [];
+          const existingQueueIds = Array.isArray(existing?.queue_ids) ? existing.queue_ids.map(trimStr).filter(Boolean) : [];
           const existingStorage = trimStr(existing?.storage_key || '').replace(/^\/+/, '').toLowerCase();
           return !!(
             (target.ids.length && existingIds.some((value) => target.ids.includes(value))) ||
-            (target.storageKeyLower && existingStorage && existingStorage === target.storageKeyLower)
+            (target.queueId && existingQueueIds.includes(target.queueId)) ||
+            (target.storageKeyLower && existingStorage && existingStorage === target.storageKeyLower && (!target.kind || !existing.kind || upper(existing.kind || '') === target.kind))
           );
         };
         const nextRows = rows.filter((existing) => !matchesTombstone(existing)).slice(-24);
         nextRows.push(tombstone);
         owner.__removed_attached_evidence_tombstones = nextRows;
+        owner.__bulk_process_removed_evidence_tombstones = nextRows.slice();
       };
       upsertTombstone(pane);
       upsertTombstone(st);
+      target.__removedEvidenceTombstone = tombstone;
       return target;
     };
     const applyRemovedEvidenceTargetToBulkProcessState = (targetInput, applyOptions = {}) => {
@@ -175734,7 +175842,8 @@ function bindBulkProcessPreviewPane(state) {
       if (isBulkAuthoriseRemoveContext()) return { skipped: true, reason: 'bulk-authorise-context', activeSelectionRemoved: false, listChanged: false };
       if (!target.ids.length && !target.storageKeyLower) return { skipped: true, reason: 'missing-target', activeSelectionRemoved: false, listChanged: false };
 
-      rememberBulkProcessRemovedEvidenceTarget(target);
+      const rememberedTarget = rememberBulkProcessRemovedEvidenceTarget(target, opts);
+      const activeTombstone = rememberedTarget?.__removedEvidenceTombstone || rememberedTarget?.__bulk_process_removed_evidence_tombstone || null;
 
       const activeBeforeItem = (pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null;
       const activeBeforeId = trimStr(pane.active_attached_id || activeBeforeItem?.id || activeBeforeItem?.evidence_id || activeBeforeItem?.queue_id || '');
@@ -175765,12 +175874,19 @@ function bindBulkProcessPreviewPane(state) {
         : filteredAttachedRows.rows.slice();
 
       const containers = [
+        pane,
+        st.active_row,
         st.active_details,
         st.active_context,
         st.active_context?.details,
+        st.active_context?.row,
+        st.active_context?.data_row,
         st.active_ctx,
         st.active_ctx?.details,
         st.active_ctx?.state,
+        st.active_ctx?.row,
+        st.active_ctx?.data_row,
+        window.modalCtx,
         window.modalCtx?.timesheetState,
         window.modalCtx?.timesheetDetails,
         window.modalCtx?.data
@@ -175778,6 +175894,17 @@ function bindBulkProcessPreviewPane(state) {
       let contextChanged = false;
       for (const container of containers) {
         if (pruneRemovedEvidenceTargetFromObject(container, target)) contextChanged = true;
+      }
+      if (typeof applyBulkProcessRemovedEvidenceTombstones === 'function') {
+        try {
+          const applyResult = applyBulkProcessRemovedEvidenceTombstones(st, {
+            tombstones: activeTombstone ? [activeTombstone] : [target],
+            reason: trimStr(opts.reason || '') || 'removed-evidence-local-prune'
+          });
+          contextChanged = contextChanged || applyResult?.changed === true;
+        } catch (err) {
+          if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PREVIEW] removed evidence global prune failed', err);
+        }
       }
 
       if (target.storageKey) {
@@ -175944,6 +176071,7 @@ function bindBulkProcessPreviewPane(state) {
 
     try {
       const action = confirmRes?.confirmed === true ? 'delete' : 'return-to-queue';
+      let evidenceMutationResponse = null;
       logRemoveEvent({
         event: 'remove-mutation-start',
         action,
@@ -175959,12 +176087,12 @@ function bindBulkProcessPreviewPane(state) {
           const weekId = capturedTarget.contractWeekId;
           if (!weekId) throw new Error('Contract week id missing.');
           if (!capturedTarget.evidenceId) throw new Error('Evidence id missing.');
-          await deleteContractWeekStagedEvidence(String(weekId), String(capturedTarget.evidenceId), {});
+          evidenceMutationResponse = await deleteContractWeekStagedEvidence(String(weekId), String(capturedTarget.evidenceId), {});
         } else {
           const tsId = capturedTarget.timesheetId;
           if (!tsId) throw new Error('Timesheet id missing.');
           if (!capturedTarget.evidenceId) throw new Error('Evidence id missing.');
-          await apiDeleteJson('/api/timesheets/' + encodeURIComponent(String(tsId)) + '/evidence/' + encodeURIComponent(String(capturedTarget.evidenceId)), {
+          evidenceMutationResponse = await apiDeleteJson('/api/timesheets/' + encodeURIComponent(String(tsId)) + '/evidence/' + encodeURIComponent(String(capturedTarget.evidenceId)), {
             expected_timesheet_id: capturedTarget.expectedTimesheetId || tsId
           });
         }
@@ -175973,16 +176101,57 @@ function bindBulkProcessPreviewPane(state) {
           const weekId = capturedTarget.contractWeekId;
           if (!weekId) throw new Error('Contract week id missing.');
           if (!capturedTarget.evidenceId) throw new Error('Evidence id missing.');
-          await returnContractWeekStagedEvidenceToQueue(String(weekId), String(capturedTarget.evidenceId), {});
+          evidenceMutationResponse = await returnContractWeekStagedEvidenceToQueue(String(weekId), String(capturedTarget.evidenceId), {});
         } else {
           const tsId = capturedTarget.timesheetId;
           if (!tsId) throw new Error('Timesheet id missing.');
           if (!capturedTarget.evidenceId) throw new Error('Evidence id missing.');
-          await returnTimesheetEvidenceToQueue(String(tsId), String(capturedTarget.evidenceId), {
+          evidenceMutationResponse = await returnTimesheetEvidenceToQueue(String(tsId), String(capturedTarget.evidenceId), {
             expected_timesheet_id: capturedTarget.expectedTimesheetId || tsId
           });
         }
       }
+
+      const mutationTarget = normaliseRemovedEvidenceTarget({
+        ...capturedTarget,
+        action,
+        backendResponse: evidenceMutationResponse || null,
+        queueId: trimStr(
+          evidenceMutationResponse?.queue_id ||
+          evidenceMutationResponse?.queueId ||
+          evidenceMutationResponse?.returned_queue_id ||
+          evidenceMutationResponse?.returnedQueueId ||
+          evidenceMutationResponse?.removed_attached_queue_id ||
+          evidenceMutationResponse?.removedAttachedQueueId ||
+          capturedTarget.evidenceQueueId ||
+          ''
+        ),
+        evidenceQueueId: trimStr(
+          evidenceMutationResponse?.queue_id ||
+          evidenceMutationResponse?.queueId ||
+          evidenceMutationResponse?.returned_queue_id ||
+          evidenceMutationResponse?.returnedQueueId ||
+          capturedTarget.evidenceQueueId ||
+          ''
+        ),
+        storageKey: trimStr(
+          evidenceMutationResponse?.returned_storage_key ||
+          evidenceMutationResponse?.returnedStorageKey ||
+          evidenceMutationResponse?.storage_key ||
+          evidenceMutationResponse?.storageKey ||
+          capturedTarget.storageKey ||
+          ''
+        ),
+        kind: trimStr(
+          evidenceMutationResponse?.returned_evidence_kind ||
+          evidenceMutationResponse?.returnedEvidenceKind ||
+          evidenceMutationResponse?.evidence_kind ||
+          evidenceMutationResponse?.evidenceKind ||
+          evidenceMutationResponse?.kind ||
+          capturedTarget.kind ||
+          ''
+        )
+      });
 
       if (typeof refreshTimesheetImportsQueue === 'function') {
         await refreshTimesheetImportsQueue(pane, {
@@ -176001,8 +176170,10 @@ function bindBulkProcessPreviewPane(state) {
       pane.__queue_loading = false;
       pane.__queue_loading_scope = '';
       pane.__queue_last_error = '';
-      const immediateLocalRemoveResult = applyRemovedEvidenceTargetToBulkProcessState(capturedTarget, {
-        reason: `post-${action}-local-prune-before-refresh`
+      const immediateLocalRemoveResult = applyRemovedEvidenceTargetToBulkProcessState(mutationTarget, {
+        reason: `post-${action}-local-prune-before-refresh`,
+        action,
+        backendResponse: evidenceMutationResponse || null
       });
       if (window.__LOG_MODAL === true && !immediateLocalRemoveResult.skipped) {
         console.log('[TS][BULK-PROCESS][PREVIEW]', {
@@ -176010,7 +176181,8 @@ function bindBulkProcessPreviewPane(state) {
           phase: 'before-refresh',
           action,
           evidenceId: capturedTarget.evidenceId,
-          storageKey: capturedTarget.storageKey || null,
+          storageKey: mutationTarget.storageKey || capturedTarget.storageKey || null,
+          queueId: mutationTarget.queueId || null,
           activeSelectionRemoved: immediateLocalRemoveResult.activeSelectionRemoved,
           remainingAttachedCount: immediateLocalRemoveResult.remainingAttachedCount
         });
@@ -176025,7 +176197,7 @@ function bindBulkProcessPreviewPane(state) {
         pane.active_queue_id = null;
         pane.active_queue_item = null;
       }
-      if (trimStr(pane.active_attached_id || '') === capturedTarget.evidenceId || trimStr(pane.__preview_target_key || '').includes(`|${capturedTarget.evidenceId}|`)) {
+      if (trimStr(pane.active_attached_id || '') === capturedTarget.evidenceId || trimStr(pane.active_attached_id || '') === mutationTarget.evidenceId || trimStr(pane.__preview_target_key || '').includes(`|${capturedTarget.evidenceId}|`) || (mutationTarget.evidenceId && trimStr(pane.__preview_target_key || '').includes(`|${mutationTarget.evidenceId}|`))) {
         pane.__preview_target_key = '';
         pane.__preview_signed_url = '';
         pane.__preview_load_requested_target_key = '';
@@ -176058,8 +176230,10 @@ function bindBulkProcessPreviewPane(state) {
       } else {
         syncAttachedRows();
       }
-      const postRefreshLocalRemoveResult = applyRemovedEvidenceTargetToBulkProcessState(capturedTarget, {
-        reason: `post-${action}-local-prune-after-refresh`
+      const postRefreshLocalRemoveResult = applyRemovedEvidenceTargetToBulkProcessState(mutationTarget, {
+        reason: `post-${action}-local-prune-after-refresh`,
+        action,
+        backendResponse: evidenceMutationResponse || null
       });
       syncActiveRowEvidencePresence();
       if (window.__LOG_MODAL === true && !postRefreshLocalRemoveResult.skipped) {
@@ -176068,7 +176242,8 @@ function bindBulkProcessPreviewPane(state) {
           phase: 'after-refresh',
           action,
           evidenceId: capturedTarget.evidenceId,
-          storageKey: capturedTarget.storageKey || null,
+          storageKey: mutationTarget.storageKey || capturedTarget.storageKey || null,
+          queueId: mutationTarget.queueId || null,
           activeSelectionRemoved: postRefreshLocalRemoveResult.activeSelectionRemoved,
           remainingAttachedCount: postRefreshLocalRemoveResult.remainingAttachedCount
         });
@@ -176101,6 +176276,8 @@ function bindBulkProcessPreviewPane(state) {
       await rerenderWorkbench('preview-attached-remove-error');
     }
   };
+
+
 
   const renderToolbar = (previewState, previewItem, previewSelectionKey, previewRenderKey, signedUrl, isPdf, pageCount, activePage, rotationDeg, zoom) => {
     const toolbar = q('#bulkProcessPreviewToolbar');
@@ -201270,6 +201447,29 @@ async function handleBulkProcessProcess(state) {
       throw new Error(message);
     }
 
+    if (typeof clearBulkProcessRemovedEvidenceTombstonesForAttachedEvidence === 'function') {
+      try {
+        clearBulkProcessRemovedEvidenceTombstonesForAttachedEvidence(st, {
+          ...(exactQueueItem || {}),
+          ...(result || {}),
+          id: trimStr(result?.evidence_id || result?.evidenceId || result?.id || '') || null,
+          evidence_id: trimStr(result?.evidence_id || result?.evidenceId || '') || null,
+          queue_id: queueId,
+          queueId,
+          kind: 'TIMESHEET',
+          evidence_kind: 'TIMESHEET',
+          storage_key: trimStr(result?.storage_key || result?.storageKey || storageKey || ''),
+          file_key: trimStr(result?.storage_key || result?.storageKey || storageKey || ''),
+          r2_key: trimStr(result?.storage_key || result?.storageKey || storageKey || ''),
+          timesheet_id: timesheetId || null,
+          current_timesheet_id: timesheetId || null,
+          row_key: trimStr(active?.row_key || active?.rowKey || active?.row?.row_key || st.active_row_key || st.active_row?.row_key || '') || null
+        }, { reason: 'process-queue-attach-supersedes-removed-evidence', apply: false });
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] queue attach tombstone supersede failed', err);
+      }
+    }
+
     await refreshBulkProcessQueueForProcess(active, shouldStageToContractWeek ? 'process-after-preview-queue-stage' : 'process-after-preview-queue-attach', livePreviewAfterRefresh);
     const refreshedPane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
     const stillQueued = findProcessQueueRowByIdStorage(refreshedPane?.queue_rows || [], queueId, storageKey);
@@ -203310,6 +203510,15 @@ async function handleBulkProcessProcess(state) {
   const collectCurrentEvidenceRowsForProcess = (activeInput = null) => {
     const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    const activeRemovedEvidenceTombstonesForProcess = (() => {
+      try {
+        if (typeof collectBulkProcessRemovedEvidenceTombstones === 'function') return collectBulkProcessRemovedEvidenceTombstones(st, pane);
+      } catch {}
+      return [];
+    })();
+    if (activeRemovedEvidenceTombstonesForProcess.length && typeof applyBulkProcessRemovedEvidenceTombstones === 'function') {
+      try { applyBulkProcessRemovedEvidenceTombstones(st, { tombstones: activeRemovedEvidenceTombstonesForProcess, reason: 'process-collect-current-evidence' }); } catch {}
+    }
     const matchingDatasetRow = findMatchingDatasetRowForProcess(active);
     const activeEvidenceIdentity = resolveProcessRecordIdentityParts(active);
     const withActiveEvidenceIdentity = (parentInput = {}) => {
@@ -203433,6 +203642,16 @@ async function handleBulkProcessProcess(state) {
     const addOne = (item, parent = {}) => {
       const normalised = normaliseProcessEvidenceRow(item, parent, active);
       if (!normalised) return;
+      if (activeRemovedEvidenceTombstonesForProcess.length && typeof bulkProcessRemovedEvidenceTombstonesMatchItem === 'function') {
+        try {
+          if (bulkProcessRemovedEvidenceTombstonesMatchItem(normalised, activeRemovedEvidenceTombstonesForProcess, {
+            row_key: activeEvidenceIdentity.rowKey || active.row?.row_key || st.active_row_key || null,
+            timesheet_id: activeEvidenceIdentity.timesheetId || activeEvidenceIdentity.currentTimesheetId || null,
+            contract_week_id: activeEvidenceIdentity.contractWeekId || null,
+            kind: evidenceKindOf(normalised) || null
+          })) return;
+        } catch {}
+      }
       const storageKey = evidenceStorageKeyOf(normalised);
       if (!storageKey) return;
       const existingIndex = out.findIndex((candidate) => rowsAliasCollisionForProcess(candidate, normalised));
@@ -203519,6 +203738,16 @@ async function handleBulkProcessProcess(state) {
       const storageKey = evidenceStorageKeyOf(item).toLowerCase();
       if (!storageKey) return false;
       if (isWeakPrimaryArtifactFallbackForProcess(item) || isSyntheticAttachedEvidenceItem(item)) return false;
+      if (activeRemovedEvidenceTombstonesForProcess.length && typeof bulkProcessRemovedEvidenceTombstonesMatchItem === 'function') {
+        try {
+          if (bulkProcessRemovedEvidenceTombstonesMatchItem(item, activeRemovedEvidenceTombstonesForProcess, {
+            row_key: activeEvidenceIdentity.rowKey || active.row?.row_key || st.active_row_key || null,
+            timesheet_id: activeEvidenceIdentity.timesheetId || activeEvidenceIdentity.currentTimesheetId || null,
+            contract_week_id: activeEvidenceIdentity.contractWeekId || null,
+            kind: evidenceKindOf(item) || null
+          })) return false;
+        } catch {}
+      }
       return true;
     });
   };
@@ -203646,6 +203875,11 @@ async function handleBulkProcessProcess(state) {
     if (!storageKey) return false;
     if (isSyntheticAttachedEvidenceItem(item)) return false;
     if (!processEvidenceItemMatchesActive(item, activeInput)) return false;
+    try {
+      const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+      const tombstones = (typeof collectBulkProcessRemovedEvidenceTombstones === 'function') ? collectBulkProcessRemovedEvidenceTombstones(st, pane) : [];
+      if (tombstones.length && typeof bulkProcessRemovedEvidenceTombstonesMatchItem === 'function' && bulkProcessRemovedEvidenceTombstonesMatchItem(item, tombstones, { kind: evidenceKindOf(item) || null })) return false;
+    } catch {}
     const meta = processEvidenceMetaOf(item);
     const status = upper(item.status || item.queue_status || meta.status || meta.queue_status || '');
     if (status === 'QUEUED' || status === 'STAGED' || status === 'DISCARDED') return false;
@@ -203869,6 +204103,9 @@ async function handleBulkProcessProcess(state) {
     const activeForPatch = opts.active || opts.activeInput || readActive();
     const rawRows = Array.isArray(rowsInput) ? rowsInput : collectCurrentEvidenceRowsForProcess(activeForPatch);
     const evidenceRows = collectCanonicalRealEvidenceRowsForProcess(activeForPatch, rawRows);
+    if (evidenceRows.length && typeof clearBulkProcessRemovedEvidenceTombstonesForAttachedEvidence === 'function') {
+      try { clearBulkProcessRemovedEvidenceTombstonesForAttachedEvidence(st, evidenceRows, { reason: 'process-authority-valid-evidence-supersedes-tombstone', apply: false }); } catch {}
+    }
     const evidenceBadges = buildDynamicProcessEvidenceBadges(evidenceRows, opts.extraBadges || opts.extra_badges || []);
     const explicitNoTimesheetRow = isAuthoritativeNoTimesheetRequiredProcessRow(activeForPatch);
     const realNonTimesheetRows = evidenceRows.filter((item) => evidenceKindOf(item) !== 'TIMESHEET');
@@ -203978,6 +204215,10 @@ async function handleBulkProcessProcess(state) {
     if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
       try { reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch (err) { if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] evidence reconciliation degraded', err); }
     }
+    let removedEvidencePruneForProcess = null;
+    if (typeof applyBulkProcessRemovedEvidenceTombstones === 'function') {
+      try { removedEvidencePruneForProcess = applyBulkProcessRemovedEvidenceTombstones(st, { reason: 'process-reconcile-evidence-truth' }); } catch (err) { if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] evidence tombstone prune degraded', err); }
+    }
     const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     const noTimesheetPatch = buildProcessNoTimesheetAuthorityPatch(active);
     const evidenceRows = collectCurrentEvidenceRowsForProcess(active);
@@ -204003,6 +204244,14 @@ async function handleBulkProcessProcess(state) {
       window.modalCtx?.timesheetState,
       window.modalCtx?.timesheetDetails
     ].forEach((target) => patchTarget(target));
+    try {
+      if (Array.isArray(window.__modalStack)) {
+        for (const frame of window.__modalStack) {
+          [frame, frame?.ctx, frame?.modalCtx, frame?.modal_ctx, frame?.context, frame?.state, frame?.bulkProcessState, frame?.data]
+            .forEach((target) => patchTarget(target));
+        }
+      }
+    } catch {}
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
     if (pane && patch.evidenceRows.length) {
       pane.attached_rows = patch.evidenceRows.map((item) => deep(item));
@@ -204026,6 +204275,8 @@ async function handleBulkProcessProcess(state) {
       evidence_count: patch.evidenceRows.length,
       evidence_kinds: Array.from(new Set(patch.evidenceRows.map((item) => evidenceKindOf(item)).filter(Boolean))),
       no_timesheet_patch: !!noTimesheetPatch,
+      removed_tombstones_pruned: removedEvidencePruneForProcess?.changed === true,
+      removed_tombstones_count: Array.isArray(removedEvidencePruneForProcess?.tombstones) ? removedEvidencePruneForProcess.tombstones.length : 0,
       active_row_route_type: trimStr(st.active_row?.route_type || '') || null,
       active_row_client_is_nhsp: st.active_row?.client_is_nhsp === true,
       active_row_has_any_evidence: st.active_row?.has_any_evidence === true,
@@ -205523,6 +205774,24 @@ async function handleBulkProcessProcess(state) {
         throw new Error(trimStr(rb?.error || rb?.message || 'Timesheet image rollback did not confirm that the image was returned to the queue.'));
       }
       rollbackContext.restored = true;
+      if (typeof rememberBulkProcessRemovedEvidenceTombstone === 'function') {
+        try {
+          rememberBulkProcessRemovedEvidenceTombstone(st, {
+            ...(rollbackContext.evidence_row || {}),
+            evidence_id: rollbackContext.evidence_id || rollbackContext.evidence_row?.evidence_id || rollbackContext.evidence_row?.id || null,
+            evidenceId: rollbackContext.evidence_id || rollbackContext.evidence_row?.evidence_id || rollbackContext.evidence_row?.id || null,
+            queue_id: rb?.queue_id || rb?.queueId || rb?.returned_queue_id || rollbackContext.queue_id || null,
+            storage_key: rb?.returned_storage_key || rb?.returnedStorageKey || rb?.storage_key || rb?.storageKey || rollbackContext.storage_key || null,
+            kind: 'TIMESHEET',
+            timesheet_id: rollbackContext.timesheet_id || rollbackContext.evidence_row?.timesheet_id || null,
+            row_key: rollbackContext.row_key || rollbackContext.evidence_row?.row_key || st.active_row_key || st.active_row?.row_key || null,
+            action: 'return-to-queue',
+            backendResponse: rb || null
+          }, { action: 'return-to-queue', backendResponse: rb || null, reason: `${rollbackReason}-queue-auto-attach-rollback` });
+        } catch (err) {
+          if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] rollback tombstone remember failed', err);
+        }
+      }
       if (processResolvedTimesheetEvidenceForSubmit && processResolvedTimesheetEvidenceForSubmit.evidence_id === rollbackContext.evidence_id) {
         processResolvedTimesheetEvidenceForSubmit.restored = true;
       }
@@ -206603,6 +206872,24 @@ async function handleBulkProcessProcess(state) {
             throw new Error(trimStr(rb?.error || rb?.message || 'Timesheet image rollback did not confirm that the image was returned to the queue.'));
           }
           processAutoAttachedQueueEvidenceForRollback.restored = true;
+          if (typeof rememberBulkProcessRemovedEvidenceTombstone === 'function') {
+            try {
+              rememberBulkProcessRemovedEvidenceTombstone(st, {
+                ...(processAutoAttachedQueueEvidenceForRollback.evidence_row || {}),
+                evidence_id: processAutoAttachedQueueEvidenceForRollback.evidence_id || processAutoAttachedQueueEvidenceForRollback.evidence_row?.evidence_id || processAutoAttachedQueueEvidenceForRollback.evidence_row?.id || null,
+                evidenceId: processAutoAttachedQueueEvidenceForRollback.evidence_id || processAutoAttachedQueueEvidenceForRollback.evidence_row?.evidence_id || processAutoAttachedQueueEvidenceForRollback.evidence_row?.id || null,
+                queue_id: rb?.queue_id || rb?.queueId || rb?.returned_queue_id || processAutoAttachedQueueEvidenceForRollback.queue_id || null,
+                storage_key: rb?.returned_storage_key || rb?.returnedStorageKey || rb?.storage_key || rb?.storageKey || processAutoAttachedQueueEvidenceForRollback.storage_key || null,
+                kind: 'TIMESHEET',
+                timesheet_id: processAutoAttachedQueueEvidenceForRollback.timesheet_id || processAutoAttachedQueueEvidenceForRollback.evidence_row?.timesheet_id || null,
+                row_key: processAutoAttachedQueueEvidenceForRollback.row_key || processAutoAttachedQueueEvidenceForRollback.evidence_row?.row_key || st.active_row_key || st.active_row?.row_key || null,
+                action: 'return-to-queue',
+                backendResponse: rb || null
+              }, { action: 'return-to-queue', backendResponse: rb || null, reason: 'process-error-queue-auto-attach-rollback' });
+            } catch (err) {
+              if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] error rollback tombstone remember failed', err);
+            }
+          }
           if (processResolvedTimesheetEvidenceForSubmit && processResolvedTimesheetEvidenceForSubmit.evidence_id === processAutoAttachedQueueEvidenceForRollback.evidence_id) {
             processResolvedTimesheetEvidenceForSubmit.restored = true;
           }
@@ -206719,6 +207006,1165 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
+
+
+function normaliseBulkProcessRemovedEvidenceKind(value) {
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const kind = trimStr(value).toUpperCase();
+  if (!kind) return '';
+  if (kind === 'TS') return 'TIMESHEET';
+  if (kind === 'MILE' || kind === 'MILES') return 'MILEAGE';
+  if (kind === 'ACCOM') return 'ACCOMMODATION';
+  if (kind === 'EXPENSE' || kind === 'EXPENSES') return 'EXPENSE';
+  return kind;
+}
+
+function parseBulkProcessEvidenceMetaObject(value) {
+  if (!value) return {};
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+    } catch {}
+  }
+  return {};
+}
+
+function safeBulkProcessEvidenceStorageKey(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+  if (lower === 'null' || lower === 'undefined' || lower === 'none' || lower === '[object object]') return '';
+  return raw.replace(/^\/+/, '');
+}
+
+function bulkProcessBuildEvidenceBadgesForRows(rowsInput = []) {
+  const rows = Array.isArray(rowsInput) ? rowsInput : [];
+  try {
+    if (typeof buildDynamicEvidenceBadgesForRows === 'function') {
+      return buildDynamicEvidenceBadgesForRows(rows).map((badge) => ({ ...(badge || {}) }));
+    }
+  } catch {}
+  const counts = new Map();
+  for (const row of rows) {
+    const kind = normaliseBulkProcessRemovedEvidenceKind(
+      row?.kind || row?.evidence_kind || row?.evidenceKind || row?.staged_kind || row?.stagedKind || ''
+    ) || 'EVIDENCE';
+    counts.set(kind, (counts.get(kind) || 0) + 1);
+  }
+  return Array.from(counts.entries()).map(([kind, count]) => ({ kind, count, present: count > 0, has_evidence: count > 0 }));
+}
+
+function bulkProcessEvidenceMetaOf(itemInput = {}) {
+  const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+  return parseBulkProcessEvidenceMetaObject(
+    item.meta_json ||
+    item.metaJson ||
+    item.meta ||
+    item.queue_meta ||
+    item.queueMeta ||
+    item.source_context ||
+    item.sourceContext ||
+    item.source_json ||
+    item.sourceJson ||
+    null
+  );
+}
+
+function bulkProcessEvidenceIdentityParts(itemInput = {}) {
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+  const meta = bulkProcessEvidenceMetaOf(item);
+  const unique = (values) => Array.from(new Set(values.map((value) => trimStr(value || '')).filter(Boolean)));
+  const evidenceIds = unique([
+    item.evidence_id,
+    item.evidenceId,
+    item.timesheet_evidence_id,
+    item.timesheetEvidenceId,
+    item.removed_evidence_id,
+    item.removedEvidenceId,
+    item.returned_evidence_id,
+    item.returnedEvidenceId,
+    meta.evidence_id,
+    meta.evidenceId,
+    meta.timesheet_evidence_id,
+    meta.timesheetEvidenceId,
+    meta.removed_evidence_id,
+    meta.removedEvidenceId,
+    meta.returned_evidence_id,
+    meta.returnedEvidenceId
+  ]);
+  const queueIds = unique([
+    item.queue_id,
+    item.queueId,
+    item.manual_timesheet_queue_id,
+    item.manualTimesheetQueueId,
+    item.manual_queue_id,
+    item.manualQueueId,
+    item.manual_queue_row_id,
+    item.manualQueueRowId,
+    item.returned_queue_id,
+    item.returnedQueueId,
+    meta.queue_id,
+    meta.queueId,
+    meta.manual_timesheet_queue_id,
+    meta.manualTimesheetQueueId,
+    meta.manual_queue_id,
+    meta.manualQueueId,
+    meta.manual_queue_row_id,
+    meta.manualQueueRowId,
+    meta.returned_queue_id,
+    meta.returnedQueueId
+  ]);
+  const genericIds = unique([
+    item.id,
+    item.evidenceItemId,
+    item.evidence_item_id,
+    item.row_id,
+    item.rowId,
+    meta.id,
+    meta.evidenceItemId,
+    meta.evidence_item_id
+  ]);
+  const storageKey = safeBulkProcessEvidenceStorageKey(
+    item.storage_key ||
+    item.storageKey ||
+    item.r2_key ||
+    item.r2Key ||
+    item.file_key ||
+    item.fileKey ||
+    item.download_storage_key ||
+    item.downloadStorageKey ||
+    item.preview_storage_key ||
+    item.previewStorageKey ||
+    item.returned_storage_key ||
+    item.returnedStorageKey ||
+    meta.storage_key ||
+    meta.storageKey ||
+    meta.r2_key ||
+    meta.r2Key ||
+    meta.file_key ||
+    meta.fileKey ||
+    meta.download_storage_key ||
+    meta.downloadStorageKey ||
+    meta.preview_storage_key ||
+    meta.previewStorageKey ||
+    meta.returned_storage_key ||
+    meta.returnedStorageKey ||
+    ''
+  );
+  const kind = normaliseBulkProcessRemovedEvidenceKind(
+    item.kind ||
+    item.evidence_kind ||
+    item.evidenceKind ||
+    item.staged_kind ||
+    item.stagedKind ||
+    item.returned_evidence_kind ||
+    item.returnedEvidenceKind ||
+    meta.kind ||
+    meta.evidence_kind ||
+    meta.evidenceKind ||
+    meta.staged_kind ||
+    meta.stagedKind ||
+    meta.returned_evidence_kind ||
+    meta.returnedEvidenceKind ||
+    ''
+  );
+  const rowKey = trimStr(
+    item.row_key ||
+    item.rowKey ||
+    item.bulk_process_row_key ||
+    item.bulkProcessRowKey ||
+    item.timesheet_row_key ||
+    item.timesheetRowKey ||
+    item.returned_from_row_key ||
+    item.returnedFromRowKey ||
+    meta.row_key ||
+    meta.rowKey ||
+    meta.bulk_process_row_key ||
+    meta.bulkProcessRowKey ||
+    meta.timesheet_row_key ||
+    meta.timesheetRowKey ||
+    meta.returned_from_row_key ||
+    meta.returnedFromRowKey ||
+    ''
+  );
+  const timesheetId = trimStr(
+    item.timesheet_id ||
+    item.timesheetId ||
+    item.current_timesheet_id ||
+    item.currentTimesheetId ||
+    item.requested_timesheet_id ||
+    item.requestedTimesheetId ||
+    item.expected_timesheet_id ||
+    item.expectedTimesheetId ||
+    item.returned_from_timesheet_id ||
+    item.returnedFromTimesheetId ||
+    item.timesheet?.timesheet_id ||
+    meta.timesheet_id ||
+    meta.timesheetId ||
+    meta.current_timesheet_id ||
+    meta.currentTimesheetId ||
+    meta.requested_timesheet_id ||
+    meta.requestedTimesheetId ||
+    meta.expected_timesheet_id ||
+    meta.expectedTimesheetId ||
+    meta.returned_from_timesheet_id ||
+    meta.returnedFromTimesheetId ||
+    ''
+  );
+  const contractWeekId = trimStr(
+    item.contract_week_id ||
+    item.contractWeekId ||
+    item.current_contract_week_id ||
+    item.currentContractWeekId ||
+    item.expected_contract_week_id ||
+    item.expectedContractWeekId ||
+    item.returned_from_contract_week_id ||
+    item.returnedFromContractWeekId ||
+    item.contract_week?.id ||
+    meta.contract_week_id ||
+    meta.contractWeekId ||
+    meta.current_contract_week_id ||
+    meta.currentContractWeekId ||
+    meta.expected_contract_week_id ||
+    meta.expectedContractWeekId ||
+    meta.returned_from_contract_week_id ||
+    meta.returnedFromContractWeekId ||
+    meta.week_id ||
+    meta.weekId ||
+    ''
+  );
+  const status = normaliseBulkProcessRemovedEvidenceKind(item.status || item.queue_status || meta.status || meta.queue_status || '');
+  return { evidenceIds, queueIds, genericIds, storageKey, storageKeyLower: storageKey.toLowerCase(), kind, rowKey, timesheetId, contractWeekId, status };
+}
+
+function normaliseBulkProcessRemovedEvidenceTombstone(rawInput = {}, normaliseOptions = {}) {
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const raw = (rawInput && typeof rawInput === 'object') ? rawInput : {};
+  const opts = (normaliseOptions && typeof normaliseOptions === 'object') ? normaliseOptions : {};
+  const response = (opts.backendResponse && typeof opts.backendResponse === 'object')
+    ? opts.backendResponse
+    : ((raw.backendResponse && typeof raw.backendResponse === 'object') ? raw.backendResponse : {});
+  const meta = bulkProcessEvidenceMetaOf(raw);
+  const responseMeta = bulkProcessEvidenceMetaOf(response);
+  const unique = (values) => Array.from(new Set(values.map((value) => trimStr(value || '')).filter(Boolean)));
+  const evidenceIds = unique([
+    raw.evidence_id,
+    raw.evidenceId,
+    raw.evidenceIdValue,
+    raw.evidenceIdInput,
+    raw.evidenceIdOfTarget,
+    raw.evidenceIdOriginal,
+    raw.evidenceIdRemoved,
+    raw.evidenceIdReturned,
+    raw.evidenceItemId,
+    raw.evidence_item_id,
+    raw.evidenceEvidenceId,
+    raw.timesheet_evidence_id,
+    raw.timesheetEvidenceId,
+    raw.returned_evidence_id,
+    raw.returnedEvidenceId,
+    response.evidence_id,
+    response.evidenceId,
+    response.returned_evidence_id,
+    response.returnedEvidenceId,
+    responseMeta.returned_evidence_id,
+    responseMeta.returnedEvidenceId,
+    meta.evidence_id,
+    meta.evidenceId,
+    meta.returned_evidence_id,
+    meta.returnedEvidenceId,
+    ...(Array.isArray(raw.evidence_ids) ? raw.evidence_ids : []),
+    ...(Array.isArray(raw.evidenceIds) ? raw.evidenceIds : []),
+    ...(Array.isArray(raw.ids) ? raw.ids : [])
+  ]);
+  const queueIds = unique([
+    raw.queue_id,
+    raw.queueId,
+    raw.evidenceQueueId,
+    raw.manual_timesheet_queue_id,
+    raw.manualTimesheetQueueId,
+    raw.manual_queue_id,
+    raw.manualQueueId,
+    raw.returned_queue_id,
+    raw.returnedQueueId,
+    response.queue_id,
+    response.queueId,
+    response.returned_queue_id,
+    response.returnedQueueId,
+    response.removed_attached_queue_id,
+    response.removedAttachedQueueId,
+    responseMeta.queue_id,
+    responseMeta.queueId,
+    responseMeta.returned_queue_id,
+    responseMeta.returnedQueueId,
+    meta.queue_id,
+    meta.queueId,
+    meta.returned_queue_id,
+    meta.returnedQueueId,
+    ...(Array.isArray(raw.queue_ids) ? raw.queue_ids : []),
+    ...(Array.isArray(raw.queueIds) ? raw.queueIds : [])
+  ]);
+  const storageKey = safeBulkProcessEvidenceStorageKey(
+    raw.storage_key ||
+    raw.storageKey ||
+    raw.storageKeyRaw ||
+    raw.r2_key ||
+    raw.r2Key ||
+    raw.file_key ||
+    raw.fileKey ||
+    raw.returned_storage_key ||
+    raw.returnedStorageKey ||
+    response.storage_key ||
+    response.storageKey ||
+    response.r2_key ||
+    response.r2Key ||
+    response.returned_storage_key ||
+    response.returnedStorageKey ||
+    responseMeta.storage_key ||
+    responseMeta.storageKey ||
+    responseMeta.returned_storage_key ||
+    responseMeta.returnedStorageKey ||
+    meta.storage_key ||
+    meta.storageKey ||
+    meta.returned_storage_key ||
+    meta.returnedStorageKey ||
+    ''
+  );
+  const nowMs = Date.now();
+  const removedAtMs = Number(raw.removed_at_ms || raw.removedAtMs || raw.returned_at_ms || raw.returnedAtMs || 0) || nowMs;
+  const action = trimStr(opts.action || raw.action || raw.remove_action || raw.removeAction || response.action || '').toLowerCase() || 'return-to-queue';
+  const kind = normaliseBulkProcessRemovedEvidenceKind(
+    raw.kind ||
+    raw.evidence_kind ||
+    raw.evidenceKind ||
+    raw.staged_kind ||
+    raw.stagedKind ||
+    raw.returned_evidence_kind ||
+    raw.returnedEvidenceKind ||
+    response.kind ||
+    response.evidence_kind ||
+    response.evidenceKind ||
+    response.returned_evidence_kind ||
+    response.returnedEvidenceKind ||
+    responseMeta.returned_evidence_kind ||
+    responseMeta.returnedEvidenceKind ||
+    meta.kind ||
+    meta.evidence_kind ||
+    meta.evidenceKind ||
+    meta.returned_evidence_kind ||
+    meta.returnedEvidenceKind ||
+    ''
+  );
+  return {
+    evidence_id: evidenceIds[0] || null,
+    evidence_ids: evidenceIds,
+    ids: evidenceIds.slice(),
+    queue_id: queueIds[0] || null,
+    queue_ids: queueIds,
+    storage_key: storageKey || null,
+    storage_key_lower: storageKey.toLowerCase(),
+    kind: kind || null,
+    row_key: trimStr(raw.row_key || raw.rowKey || raw.bulk_process_row_key || raw.bulkProcessRowKey || response.row_key || response.rowKey || meta.row_key || meta.rowKey || '') || null,
+    timesheet_id: trimStr(raw.timesheet_id || raw.timesheetId || raw.current_timesheet_id || raw.currentTimesheetId || raw.expected_timesheet_id || raw.expectedTimesheetId || response.timesheet_id || response.current_timesheet_id || response.requested_timesheet_id || response.returned_from_timesheet_id || response.returnedFromTimesheetId || meta.timesheet_id || meta.current_timesheet_id || meta.returned_from_timesheet_id || '') || null,
+    contract_week_id: trimStr(raw.contract_week_id || raw.contractWeekId || raw.current_contract_week_id || raw.currentContractWeekId || response.contract_week_id || response.contractWeekId || response.returned_from_contract_week_id || response.returnedFromContractWeekId || meta.contract_week_id || meta.contractWeekId || meta.returned_from_contract_week_id || '') || null,
+    action,
+    removed_at_ms: removedAtMs,
+    removed_at_utc: trimStr(raw.removed_at_utc || raw.removedAtUtc || raw.returned_at_utc || raw.returnedAtUtc || response.returned_to_queue_at_utc || response.returnedAtUtc || '') || new Date(removedAtMs).toISOString()
+  };
+}
+
+function collectBulkProcessRemovedEvidenceTombstones(stateInput = null, paneInput = null, collectOptions = {}) {
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const st = (stateInput && typeof stateInput === 'object') ? stateInput : {};
+  const pane = (paneInput && typeof paneInput === 'object')
+    ? paneInput
+    : ((st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null);
+  const opts = (collectOptions && typeof collectOptions === 'object') ? collectOptions : {};
+  const maxAgeMs = Number(opts.maxAgeMs || opts.max_age_ms || 6 * 60 * 60 * 1000) || (6 * 60 * 60 * 1000);
+  const nowMs = Date.now();
+  const rawRows = [];
+  const addOwner = (owner) => {
+    if (!owner || typeof owner !== 'object') return;
+    if (Array.isArray(owner.__bulk_process_removed_evidence_tombstones)) rawRows.push(...owner.__bulk_process_removed_evidence_tombstones);
+    if (Array.isArray(owner.__removed_attached_evidence_tombstones)) rawRows.push(...owner.__removed_attached_evidence_tombstones);
+  };
+  addOwner(pane);
+  addOwner(st);
+  try { addOwner(window.modalCtx); } catch {}
+  try {
+    if (Array.isArray(window.__modalStack)) {
+      for (const frame of window.__modalStack) {
+        addOwner(frame);
+        addOwner(frame?.ctx);
+        addOwner(frame?.modalCtx);
+        addOwner(frame?.modal_ctx);
+        addOwner(frame?.context);
+        addOwner(frame?.state);
+        addOwner(frame?.bulkProcessState);
+      }
+    }
+  } catch {}
+  const seen = new Set();
+  const out = [];
+  for (const raw of rawRows) {
+    const tombstone = normaliseBulkProcessRemovedEvidenceTombstone(raw);
+    if (!tombstone.evidence_ids.length && !tombstone.queue_ids.length && !tombstone.storage_key_lower) continue;
+    if (tombstone.removed_at_ms && nowMs - tombstone.removed_at_ms > maxAgeMs) continue;
+    const key = [
+      tombstone.action || '',
+      tombstone.evidence_ids.join(','),
+      tombstone.queue_ids.join(','),
+      tombstone.storage_key_lower || '',
+      tombstone.kind || '',
+      tombstone.row_key || '',
+      tombstone.timesheet_id || '',
+      tombstone.contract_week_id || ''
+    ].join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(tombstone);
+  }
+  if (rawRows.length) {
+    const persistRows = out.map((row) => ({
+      evidence_id: row.evidence_id || null,
+      evidence_ids: row.evidence_ids.slice(),
+      ids: row.evidence_ids.slice(),
+      queue_id: row.queue_id || null,
+      queue_ids: row.queue_ids.slice(),
+      storage_key: row.storage_key || null,
+      kind: row.kind || null,
+      row_key: row.row_key || null,
+      timesheet_id: row.timesheet_id || null,
+      contract_week_id: row.contract_week_id || null,
+      action: row.action || 'return-to-queue',
+      removed_at_ms: row.removed_at_ms || nowMs,
+      removed_at_utc: row.removed_at_utc || new Date(row.removed_at_ms || nowMs).toISOString()
+    }));
+    const persistOwner = (owner) => {
+      if (!owner || typeof owner !== 'object') return;
+      owner.__bulk_process_removed_evidence_tombstones = persistRows.slice(-50);
+      owner.__removed_attached_evidence_tombstones = persistRows.slice(-50);
+    };
+    persistOwner(st);
+    persistOwner(pane);
+    try { persistOwner(window.modalCtx); } catch {}
+  }
+  return out;
+}
+
+function bulkProcessRemovedEvidenceIdentityScopeMatches(itemParts, tombstone) {
+  if (!itemParts || !tombstone) return false;
+  const itemRowKey = itemParts.rowKey || '';
+  const itemTimesheetId = itemParts.timesheetId || '';
+  const itemContractWeekId = itemParts.contractWeekId || '';
+  if (tombstone.row_key && itemRowKey && itemRowKey !== tombstone.row_key) return false;
+  if (tombstone.timesheet_id && itemTimesheetId && itemTimesheetId !== tombstone.timesheet_id) return false;
+  if (tombstone.contract_week_id && itemContractWeekId && itemContractWeekId !== tombstone.contract_week_id) return false;
+  if (tombstone.timesheet_id && !itemTimesheetId && itemContractWeekId && !tombstone.contract_week_id) return false;
+  if (tombstone.contract_week_id && !itemContractWeekId && itemTimesheetId && !tombstone.timesheet_id) return false;
+  return true;
+}
+
+function bulkProcessRemovedEvidenceKindScopeMatches(itemKindInput, tombstoneKindInput) {
+  const itemKind = normaliseBulkProcessRemovedEvidenceKind(itemKindInput || '');
+  const tombstoneKind = normaliseBulkProcessRemovedEvidenceKind(tombstoneKindInput || '');
+  if (!tombstoneKind || !itemKind) return true;
+  if (itemKind === tombstoneKind) return true;
+  const genericKinds = new Set(['OTHER', 'EVIDENCE', 'EXPENSE']);
+  if (genericKinds.has(itemKind) || genericKinds.has(tombstoneKind)) return true;
+  return false;
+}
+
+function bulkProcessEvidenceItemSupersedesRemovedTombstone(itemInput = {}, tombstoneInput = {}) {
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+  const tombstone = normaliseBulkProcessRemovedEvidenceTombstone(tombstoneInput);
+  if (!tombstone.storage_key_lower) return false;
+  const parts = bulkProcessEvidenceIdentityParts(item);
+  if (!parts.storageKeyLower || parts.storageKeyLower !== tombstone.storage_key_lower) return false;
+  if (!bulkProcessRemovedEvidenceIdentityScopeMatches(parts, tombstone)) return false;
+  if (!bulkProcessRemovedEvidenceKindScopeMatches(parts.kind, tombstone.kind)) return false;
+  const status = normaliseBulkProcessRemovedEvidenceKind(parts.status || item.status || item.queue_status || '');
+  if (status === 'QUEUED' || status === 'STAGED' || status === 'DISCARDED' || status === 'RETURNED') return false;
+  const validEvidenceIds = parts.evidenceIds.filter((id) => !!id && !/^synthetic-attached:/i.test(id));
+  if (!validEvidenceIds.length) {
+    const genericEvidenceIds = parts.genericIds.filter((id) => {
+      if (!id || /^synthetic-attached:/i.test(id)) return false;
+      if (parts.queueIds.includes(id)) return false;
+      if (id === parts.storageKey) return false;
+      if (/^(timesheet|contract_week|row):/i.test(id)) return false;
+      if (/^files\//i.test(id)) return false;
+      return true;
+    });
+    validEvidenceIds.push(...genericEvidenceIds);
+  }
+  if (!validEvidenceIds.length) return false;
+  return validEvidenceIds.some((id) => !tombstone.evidence_ids.includes(id));
+}
+
+function bulkProcessEvidenceItemSupersedesAnyRemovedEvidenceTombstone(itemInput = {}, tombstonesInput = []) {
+  const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
+  return tombstones.some((tombstone) => bulkProcessEvidenceItemSupersedesRemovedTombstone(itemInput, tombstone));
+}
+
+function bulkProcessRemovedEvidenceTombstoneMatchesItem(itemInput = {}, tombstoneInput = {}, matchOptions = {}) {
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const item = (itemInput && typeof itemInput === 'object') ? itemInput : null;
+  if (!item) return false;
+  const tombstone = normaliseBulkProcessRemovedEvidenceTombstone(tombstoneInput);
+  if (!tombstone.evidence_ids.length && !tombstone.queue_ids.length && !tombstone.storage_key_lower) return false;
+  const opts = (matchOptions && typeof matchOptions === 'object') ? matchOptions : {};
+  const parts = bulkProcessEvidenceIdentityParts(item);
+  if (!bulkProcessRemovedEvidenceIdentityScopeMatches(parts, tombstone)) return false;
+  if (!bulkProcessRemovedEvidenceKindScopeMatches(parts.kind, tombstone.kind)) return false;
+  if (bulkProcessEvidenceItemSupersedesRemovedTombstone(item, tombstone)) return false;
+
+  const status = normaliseBulkProcessRemovedEvidenceKind(parts.status || item.status || item.queue_status || '');
+  const isQueuedLike = status === 'QUEUED' || status === 'STAGED' || status === 'DISCARDED' || status === 'RETURNED';
+  const itemEvidenceIds = parts.evidenceIds.slice();
+  const genericIds = parts.genericIds.filter((id) => {
+    if (!id) return false;
+    if (parts.queueIds.includes(id)) return false;
+    if (id === parts.storageKey) return false;
+    if (/^synthetic-attached:/i.test(id)) return false;
+    if (/^(timesheet|contract_week|row):/i.test(id)) return false;
+    if (/^files\//i.test(id)) return false;
+    if (/^manual[_-]?timesheet[_-]?queue:/i.test(id)) return false;
+    return true;
+  });
+  if (!isQueuedLike) itemEvidenceIds.push(...genericIds);
+
+  const evidenceIdMatches = !!(tombstone.evidence_ids.length && itemEvidenceIds.some((value) => tombstone.evidence_ids.includes(value)));
+  if (evidenceIdMatches) return true;
+
+  const queueIdMatches = !!(tombstone.queue_ids.length && parts.queueIds.some((value) => tombstone.queue_ids.includes(value)));
+  const storageMatches = !!(tombstone.storage_key_lower && parts.storageKeyLower && parts.storageKeyLower === tombstone.storage_key_lower);
+  if (queueIdMatches && (isQueuedLike || !itemEvidenceIds.length || opts.allowQueueIdMatch === true)) return true;
+  if (!storageMatches) return false;
+  if (itemEvidenceIds.length) return false;
+  return true;
+}
+
+function bulkProcessRemovedEvidenceTombstonesMatchItem(itemInput = {}, tombstonesInput = [], matchOptions = {}) {
+  const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
+  return tombstones.some((tombstone) => bulkProcessRemovedEvidenceTombstoneMatchesItem(itemInput, tombstone, matchOptions));
+}
+
+function bulkProcessRemovedEvidenceTombstonesMatchStorageKey(storageKeyInput = '', tombstonesInput = [], matchOptions = {}) {
+  const storageKey = safeBulkProcessEvidenceStorageKey(storageKeyInput).toLowerCase();
+  if (!storageKey) return false;
+  const opts = (matchOptions && typeof matchOptions === 'object') ? matchOptions : {};
+  const itemLike = {
+    storage_key: storageKey,
+    kind: opts.kind || opts.evidence_kind || '',
+    row_key: opts.row_key || opts.rowKey || opts.row?.row_key || opts.row?.rowKey || '',
+    timesheet_id: opts.timesheet_id || opts.timesheetId || opts.row?.timesheet_id || opts.row?.current_timesheet_id || '',
+    contract_week_id: opts.contract_week_id || opts.contractWeekId || opts.row?.contract_week_id || ''
+  };
+  return bulkProcessRemovedEvidenceTombstonesMatchItem(itemLike, tombstonesInput, opts);
+}
+
+function filterBulkProcessRemovedEvidenceTombstonesFromRows(rowsInput = [], tombstonesInput = [], filterOptions = {}) {
+  const rows = Array.isArray(rowsInput) ? rowsInput : [];
+  const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
+  if (!rows.length || !tombstones.length) return { rows: rows.slice(), removed: false };
+  const next = [];
+  let removed = false;
+  for (const row of rows) {
+    if (bulkProcessRemovedEvidenceTombstonesMatchItem(row, tombstones, filterOptions)) {
+      removed = true;
+      continue;
+    }
+    next.push(row);
+  }
+  return { rows: next, removed };
+}
+
+function bulkProcessContainerIdentityMatchesTombstone(containerInput = {}, tombstoneInput = {}) {
+  const container = (containerInput && typeof containerInput === 'object') ? containerInput : {};
+  const tombstone = normaliseBulkProcessRemovedEvidenceTombstone(tombstoneInput);
+  const parts = bulkProcessEvidenceIdentityParts(container);
+  if (!tombstone.row_key && !tombstone.timesheet_id && !tombstone.contract_week_id) return true;
+  if (tombstone.row_key && parts.rowKey && parts.rowKey === tombstone.row_key) return true;
+  if (tombstone.timesheet_id && parts.timesheetId && parts.timesheetId === tombstone.timesheet_id) return true;
+  if (tombstone.contract_week_id && parts.contractWeekId && parts.contractWeekId === tombstone.contract_week_id) return true;
+  return false;
+}
+
+function recomputeBulkProcessEvidenceContainerFlags(container, recomputeOptions = {}) {
+  if (!container || typeof container !== 'object') return false;
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const arrayKeys = ['evidence', 'attached_rows', 'attached_all_rows', 'evidence_rows', 'attached_evidence', 'attachments', 'staged_evidence', 'staged_rows', 'contract_week_staged_evidence'];
+  const rows = [];
+  const seen = new Set();
+  const changedBecause = (recomputeOptions && typeof recomputeOptions === 'object') ? recomputeOptions : {};
+  const hasExplicitEvidenceArray = arrayKeys.some((key) => Array.isArray(container[key]));
+  const hasEvidenceArrayProperty = arrayKeys.some((key) => Object.prototype.hasOwnProperty.call(container, key));
+  const usableGenericEvidenceIds = (partsInput = {}) => {
+    const parts = (partsInput && typeof partsInput === 'object') ? partsInput : {};
+    const storageKey = trimStr(parts.storageKey || '');
+    const queueIds = Array.isArray(parts.queueIds) ? parts.queueIds : [];
+    return (Array.isArray(parts.genericIds) ? parts.genericIds : []).filter((id) => {
+      if (!id || /^synthetic-attached:/i.test(id)) return false;
+      if (queueIds.includes(id)) return false;
+      if (storageKey && id === storageKey) return false;
+      if (/^(timesheet|contract_week|row):/i.test(id)) return false;
+      if (/^files\//i.test(id)) return false;
+      if (/^manual[_-]?timesheet[_-]?queue:/i.test(id)) return false;
+      return true;
+    });
+  };
+  const evidenceRowsRepresentSameArtifact = (leftPartsInput = {}, rightPartsInput = {}) => {
+    const leftParts = (leftPartsInput && typeof leftPartsInput === 'object') ? leftPartsInput : {};
+    const rightParts = (rightPartsInput && typeof rightPartsInput === 'object') ? rightPartsInput : {};
+    const leftEvidenceIds = Array.isArray(leftParts.evidenceIds) ? leftParts.evidenceIds : [];
+    const rightEvidenceIds = Array.isArray(rightParts.evidenceIds) ? rightParts.evidenceIds : [];
+    if (leftEvidenceIds.length && rightEvidenceIds.some((id) => leftEvidenceIds.includes(id))) return true;
+    const leftQueueIds = Array.isArray(leftParts.queueIds) ? leftParts.queueIds : [];
+    const rightQueueIds = Array.isArray(rightParts.queueIds) ? rightParts.queueIds : [];
+    if (leftQueueIds.length && rightQueueIds.some((id) => leftQueueIds.includes(id))) return true;
+    const leftKind = normaliseBulkProcessRemovedEvidenceKind(leftParts.kind || '');
+    const rightKind = normaliseBulkProcessRemovedEvidenceKind(rightParts.kind || '');
+    const kindsCompatible = !leftKind || !rightKind || leftKind === rightKind || bulkProcessRemovedEvidenceKindScopeMatches(leftKind, rightKind);
+    if (leftParts.storageKeyLower && rightParts.storageKeyLower && leftParts.storageKeyLower === rightParts.storageKeyLower && kindsCompatible) return true;
+    const leftGenericIds = usableGenericEvidenceIds(leftParts);
+    const rightGenericIds = usableGenericEvidenceIds(rightParts);
+    if (!leftParts.storageKeyLower && !rightParts.storageKeyLower && kindsCompatible && leftGenericIds.length && rightGenericIds.some((id) => leftGenericIds.includes(id))) return true;
+    return false;
+  };
+  const evidenceRowScoreForRecompute = (itemInput = {}, partsInput = null) => {
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+    const parts = partsInput || bulkProcessEvidenceIdentityParts(item);
+    let score = 0;
+    const validEvidenceIds = (Array.isArray(parts.evidenceIds) ? parts.evidenceIds : []).filter((id) => id && !/^synthetic-attached:/i.test(id));
+    const validGenericIds = usableGenericEvidenceIds(parts);
+    if (validEvidenceIds.length) score += 1000;
+    if (validGenericIds.length) score += 250;
+    if (Array.isArray(parts.queueIds) && parts.queueIds.length) score += 100;
+    if (parts.storageKey) score += 50;
+    if (parts.kind) score += 25;
+    if (parts.rowKey || parts.timesheetId || parts.contractWeekId) score += 10;
+    if (trimStr(item.display_name || item.displayName || item.filename || item.original_filename || '')) score += 5;
+    if (item.is_primary_artifact_fallback === true || item.__primary_artifact_fallback === true) score -= 25;
+    return score;
+  };
+  const mergeEvidenceRowsForRecompute = (existingInput = {}, incomingInput = {}, preferIncoming = false) => {
+    const existing = (existingInput && typeof existingInput === 'object') ? existingInput : {};
+    const incoming = (incomingInput && typeof incomingInput === 'object') ? incomingInput : {};
+    const merged = preferIncoming ? { ...existing, ...incoming } : { ...incoming, ...existing };
+    const mergedStorageKey = safeBulkProcessEvidenceStorageKey(
+      (preferIncoming ? incoming.storage_key : existing.storage_key) ||
+      (preferIncoming ? incoming.storageKey : existing.storageKey) ||
+      (preferIncoming ? incoming.r2_key : existing.r2_key) ||
+      (preferIncoming ? incoming.r2Key : existing.r2Key) ||
+      (preferIncoming ? incoming.file_key : existing.file_key) ||
+      (preferIncoming ? incoming.fileKey : existing.fileKey) ||
+      (preferIncoming ? incoming.download_storage_key : existing.download_storage_key) ||
+      (preferIncoming ? incoming.downloadStorageKey : existing.downloadStorageKey) ||
+      (preferIncoming ? existing.storage_key : incoming.storage_key) ||
+      (preferIncoming ? existing.storageKey : incoming.storageKey) ||
+      (preferIncoming ? existing.r2_key : incoming.r2_key) ||
+      (preferIncoming ? existing.r2Key : incoming.r2Key) ||
+      (preferIncoming ? existing.file_key : incoming.file_key) ||
+      (preferIncoming ? existing.fileKey : incoming.fileKey) ||
+      (preferIncoming ? existing.download_storage_key : incoming.download_storage_key) ||
+      (preferIncoming ? existing.downloadStorageKey : incoming.downloadStorageKey) ||
+      ''
+    );
+    const mergedKind = normaliseBulkProcessRemovedEvidenceKind(
+      (preferIncoming ? incoming.kind : existing.kind) ||
+      (preferIncoming ? incoming.evidence_kind : existing.evidence_kind) ||
+      (preferIncoming ? incoming.evidenceKind : existing.evidenceKind) ||
+      (preferIncoming ? incoming.staged_kind : existing.staged_kind) ||
+      (preferIncoming ? incoming.stagedKind : existing.stagedKind) ||
+      (preferIncoming ? existing.kind : incoming.kind) ||
+      (preferIncoming ? existing.evidence_kind : incoming.evidence_kind) ||
+      (preferIncoming ? existing.evidenceKind : incoming.evidenceKind) ||
+      (preferIncoming ? existing.staged_kind : incoming.staged_kind) ||
+      (preferIncoming ? existing.stagedKind : incoming.stagedKind) ||
+      ''
+    );
+    const mergedEvidenceId = trimStr(
+      (preferIncoming ? incoming.evidence_id : existing.evidence_id) ||
+      (preferIncoming ? incoming.evidenceId : existing.evidenceId) ||
+      (preferIncoming ? incoming.timesheet_evidence_id : existing.timesheet_evidence_id) ||
+      (preferIncoming ? incoming.timesheetEvidenceId : existing.timesheetEvidenceId) ||
+      (preferIncoming ? existing.evidence_id : incoming.evidence_id) ||
+      (preferIncoming ? existing.evidenceId : incoming.evidenceId) ||
+      (preferIncoming ? existing.timesheet_evidence_id : incoming.timesheet_evidence_id) ||
+      (preferIncoming ? existing.timesheetEvidenceId : incoming.timesheetEvidenceId) ||
+      ''
+    );
+    const mergedQueueId = trimStr(
+      (preferIncoming ? incoming.queue_id : existing.queue_id) ||
+      (preferIncoming ? incoming.queueId : existing.queueId) ||
+      (preferIncoming ? incoming.manual_timesheet_queue_id : existing.manual_timesheet_queue_id) ||
+      (preferIncoming ? incoming.manualTimesheetQueueId : existing.manualTimesheetQueueId) ||
+      (preferIncoming ? existing.queue_id : incoming.queue_id) ||
+      (preferIncoming ? existing.queueId : incoming.queueId) ||
+      (preferIncoming ? existing.manual_timesheet_queue_id : incoming.manual_timesheet_queue_id) ||
+      (preferIncoming ? existing.manualTimesheetQueueId : incoming.manualTimesheetQueueId) ||
+      ''
+    );
+    if (mergedStorageKey) {
+      merged.storage_key = mergedStorageKey;
+      merged.file_key = mergedStorageKey;
+      merged.r2_key = mergedStorageKey;
+    }
+    if (mergedKind) {
+      merged.kind = mergedKind;
+      merged.evidence_kind = mergedKind;
+    }
+    if (mergedEvidenceId) merged.evidence_id = mergedEvidenceId;
+    if (mergedQueueId) merged.queue_id = mergedQueueId;
+    if (!trimStr(merged.id || '')) merged.id = mergedEvidenceId || mergedQueueId || mergedStorageKey || null;
+    return merged;
+  };
+  const addEvidenceRow = (itemInput) => {
+    if (!itemInput || typeof itemInput !== 'object') return;
+    const parts = bulkProcessEvidenceIdentityParts(itemInput);
+    if (!parts.storageKey && !parts.evidenceIds.length && !parts.queueIds.length && !parts.genericIds.length) return;
+    const existingIndex = rows.findIndex((existing) => evidenceRowsRepresentSameArtifact(parts, bulkProcessEvidenceIdentityParts(existing)));
+    if (existingIndex >= 0) {
+      const existing = rows[existingIndex];
+      const existingParts = bulkProcessEvidenceIdentityParts(existing);
+      const preferIncoming = evidenceRowScoreForRecompute(itemInput, parts) > evidenceRowScoreForRecompute(existing, existingParts);
+      rows[existingIndex] = mergeEvidenceRowsForRecompute(existing, itemInput, preferIncoming);
+      return;
+    }
+    const key = [parts.evidenceIds.join(','), usableGenericEvidenceIds(parts).join(','), parts.queueIds.join(','), parts.storageKeyLower, parts.kind].join('|');
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push(itemInput);
+  };
+  const addRows = (list) => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) addEvidenceRow(item);
+  };
+  const addPrimaryArtifact = (artifactInput = null, holderInput = {}, addOptions = {}) => {
+    const artifactHasObject = !!(artifactInput && typeof artifactInput === 'object');
+    const artifact = artifactHasObject ? artifactInput : {};
+    const holder = (holderInput && typeof holderInput === 'object') ? holderInput : {};
+    const opts = (addOptions && typeof addOptions === 'object') ? addOptions : {};
+    const allowHolderFallback = artifactHasObject || opts.allowHolderFallback === true;
+    if (!artifactHasObject && !allowHolderFallback) return;
+    const storageKey = safeBulkProcessEvidenceStorageKey(
+      artifact.storage_key ||
+      artifact.storageKey ||
+      artifact.r2_key ||
+      artifact.r2Key ||
+      artifact.file_key ||
+      artifact.fileKey ||
+      artifact.download_storage_key ||
+      artifact.downloadStorageKey ||
+      (allowHolderFallback ? holder.primary_artifact_storage_key : '') ||
+      (allowHolderFallback ? holder.primaryArtifactStorageKey : '') ||
+      (allowHolderFallback ? holder.storage_key : '') ||
+      (allowHolderFallback ? holder.storageKey : '') ||
+      ''
+    );
+    const id = trimStr(
+      artifact.evidence_id ||
+      artifact.evidenceId ||
+      artifact.timesheet_evidence_id ||
+      artifact.timesheetEvidenceId ||
+      artifact.id ||
+      artifact.queue_id ||
+      artifact.queueId ||
+      (allowHolderFallback ? holder.primary_artifact_id : '') ||
+      (allowHolderFallback ? holder.primaryArtifactId : '') ||
+      ''
+    );
+    const kind = normaliseBulkProcessRemovedEvidenceKind(
+      artifact.kind ||
+      artifact.evidence_kind ||
+      artifact.evidenceKind ||
+      artifact.staged_kind ||
+      artifact.stagedKind ||
+      (allowHolderFallback ? holder.primary_artifact_kind : '') ||
+      (allowHolderFallback ? holder.primaryArtifactKind : '') ||
+      (allowHolderFallback ? holder.kind : '') ||
+      (allowHolderFallback ? holder.evidence_kind : '') ||
+      (allowHolderFallback ? holder.evidenceKind : '') ||
+      ''
+    );
+    if (!storageKey && !id) return;
+    addEvidenceRow({
+      ...artifact,
+      id: id || artifact.id || storageKey || null,
+      evidence_id: trimStr(artifact.evidence_id || artifact.evidenceId || artifact.timesheet_evidence_id || artifact.timesheetEvidenceId || '') || (id && !trimStr(artifact.queue_id || artifact.queueId || '') ? id : null),
+      queue_id: trimStr(artifact.queue_id || artifact.queueId || '') || null,
+      kind: kind || artifact.kind || artifact.evidence_kind || null,
+      evidence_kind: kind || artifact.evidence_kind || artifact.kind || null,
+      storage_key: storageKey || artifact.storage_key || null,
+      file_key: storageKey || artifact.file_key || null,
+      r2_key: storageKey || artifact.r2_key || null,
+      display_name: trimStr(artifact.display_name || artifact.displayName || artifact.filename || artifact.original_filename || (allowHolderFallback ? holder.primary_artifact_display_name : '') || (allowHolderFallback ? holder.primaryArtifactDisplayName : '') || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence')
+    });
+  };
+  for (const key of arrayKeys) addRows(container[key]);
+  addPrimaryArtifact(container.primary_artifact, container);
+  addPrimaryArtifact(container.primaryArtifact, container);
+  if (container.artifact_hints && typeof container.artifact_hints === 'object') {
+    addPrimaryArtifact(container.artifact_hints.primary_artifact, container.artifact_hints);
+    addPrimaryArtifact(container.artifact_hints.primaryArtifact, container.artifact_hints);
+    if (!container.artifact_hints.primary_artifact && !container.artifact_hints.primaryArtifact) addPrimaryArtifact(null, container.artifact_hints, { allowHolderFallback: true });
+  }
+  if (!container.primary_artifact && !container.primaryArtifact) addPrimaryArtifact(null, container, { allowHolderFallback: true });
+  if (!changedBecause.force && !hasEvidenceArrayProperty) return false;
+  const primary = rows.find((item) => normaliseBulkProcessRemovedEvidenceKind(item?.kind || item?.staged_kind || item?.evidence_kind || item?.evidenceKind || '') === 'TIMESHEET') || rows[0] || null;
+  const primaryParts = primary ? bulkProcessEvidenceIdentityParts(primary) : null;
+  const badges = bulkProcessBuildEvidenceBadgesForRows(rows);
+  const previousEvidenceMeta = (container.evidence_meta && typeof container.evidence_meta === 'object') ? container.evidence_meta : {};
+  const nextEvidenceLoaded = !!(
+    hasExplicitEvidenceArray ||
+    container.evidence_loaded === true ||
+    previousEvidenceMeta.evidence_loaded === true ||
+    changedBecause.forceEvidenceArray === true ||
+    changedBecause.forceEvidenceLoaded === true
+  );
+  const nextEvidenceAuthoritative = !!(
+    hasExplicitEvidenceArray ||
+    container.evidence_authoritative === true ||
+    previousEvidenceMeta.evidence_authoritative === true ||
+    changedBecause.forceEvidenceArray === true ||
+    changedBecause.forceAuthoritative === true
+  );
+  const nextIncludeEvidence = !!(
+    hasExplicitEvidenceArray ||
+    container.include_evidence === true ||
+    previousEvidenceMeta.include_evidence === true ||
+    changedBecause.forceEvidenceArray === true ||
+    changedBecause.forceIncludeEvidence === true
+  );
+  container.has_any_evidence = rows.length > 0;
+  container.has_attached_evidence = rows.length > 0;
+  container.attached_evidence_count = rows.length;
+  container.evidence_count = rows.length;
+  container.evidence_badges = badges.map((badge) => ({ ...(badge || {}) }));
+  if (Object.prototype.hasOwnProperty.call(container, 'evidence') || changedBecause.forceEvidenceArray === true) {
+    container.evidence = rows.map((item) => {
+      try { return JSON.parse(JSON.stringify(item)); } catch { return item; }
+    });
+    container.evidence_loaded = true;
+    container.evidence_authoritative = true;
+    container.include_evidence = true;
+  }
+  container.primary_artifact = primary ? (() => { try { return JSON.parse(JSON.stringify(primary)); } catch { return primary; } })() : null;
+  container.primary_artifact_id = primary ? (primaryParts.evidenceIds[0] || primaryParts.genericIds[0] || primaryParts.queueIds[0] || null) : null;
+  container.primary_artifact_kind = primary ? (primaryParts.kind || null) : null;
+  container.primary_artifact_storage_key = primary ? (primaryParts.storageKey || null) : null;
+  container.primary_artifact_preview_mode = primary ? (primary.preview_mode || primary.preview_kind || null) : null;
+  container.evidence_meta = {
+    ...previousEvidenceMeta,
+    evidence_loaded: nextEvidenceLoaded,
+    evidence_authoritative: nextEvidenceAuthoritative,
+    include_evidence: nextIncludeEvidence,
+    has_any_evidence: rows.length > 0,
+    has_attached_evidence: rows.length > 0,
+    attached_evidence_count: rows.length,
+    evidence_count: rows.length,
+    evidence_badges: badges.map((badge) => ({ ...(badge || {}) }))
+  };
+  container.artifact_hints = {
+    ...((container.artifact_hints && typeof container.artifact_hints === 'object') ? container.artifact_hints : {}),
+    has_any_evidence: rows.length > 0,
+    attached_evidence_count: rows.length,
+    primary_artifact_id: primary ? (primaryParts.evidenceIds[0] || primaryParts.genericIds[0] || primaryParts.queueIds[0] || null) : null,
+    primary_artifact_kind: primary ? (primaryParts.kind || null) : null,
+    primary_artifact_storage_key: primary ? (primaryParts.storageKey || null) : null,
+    primary_artifact_preview_mode: primary ? (primary.preview_mode || primary.preview_kind || null) : null,
+    primary_artifact: primary ? (() => { try { return JSON.parse(JSON.stringify(primary)); } catch { return primary; } })() : null,
+    evidence_badges: badges.map((badge) => ({ ...(badge || {}) }))
+  };
+  return true;
+}
+
+
+function pruneBulkProcessRemovedEvidenceTombstonesFromContainer(containerInput = null, tombstonesInput = [], pruneOptions = {}) {
+  const container = (containerInput && typeof containerInput === 'object') ? containerInput : null;
+  const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
+  if (!container || !tombstones.length) return false;
+  const opts = (pruneOptions && typeof pruneOptions === 'object') ? pruneOptions : {};
+  const seen = opts.seen instanceof Set ? opts.seen : new Set();
+  const depth = Number(opts.depth || 0) || 0;
+  if (depth > 5 || seen.has(container)) return false;
+  seen.add(container);
+  let changed = false;
+  const arrayKeys = ['evidence', 'attached_rows', 'attached_all_rows', 'evidence_rows', 'attached_evidence', 'attachments', 'staged_evidence', 'staged_rows', 'contract_week_staged_evidence'];
+  for (const key of arrayKeys) {
+    if (!Array.isArray(container[key])) continue;
+    const filtered = filterBulkProcessRemovedEvidenceTombstonesFromRows(container[key], tombstones, opts);
+    if (filtered.removed) {
+      container[key] = filtered.rows;
+      if (key === 'evidence') {
+        container.evidence_loaded = true;
+        container.evidence_authoritative = true;
+        container.include_evidence = true;
+      }
+      changed = true;
+    }
+  }
+
+  const clearIfStorageMatches = (holder, key, tombstoneKind = '') => {
+    if (!holder || typeof holder !== 'object' || !Object.prototype.hasOwnProperty.call(holder, key)) return false;
+    const storageKey = safeBulkProcessEvidenceStorageKey(holder[key]);
+    if (!storageKey) return false;
+    const itemLike = {
+      storage_key: storageKey,
+      kind: tombstoneKind || holder.primary_artifact_kind || holder.primaryArtifactKind || holder.kind || holder.evidence_kind || '',
+      row_key: holder.row_key || holder.rowKey || container.row_key || container.rowKey || '',
+      timesheet_id: holder.timesheet_id || holder.current_timesheet_id || container.timesheet_id || container.current_timesheet_id || '',
+      contract_week_id: holder.contract_week_id || container.contract_week_id || ''
+    };
+    if (!bulkProcessRemovedEvidenceTombstonesMatchItem(itemLike, tombstones, opts)) return false;
+    holder[key] = null;
+    return true;
+  };
+
+  for (const key of ['manual_pdf_r2_key', 'manualPdfR2Key', 'uploaded_pdf_r2_key', 'uploadedPdfR2Key']) {
+    if (clearIfStorageMatches(container, key, 'TIMESHEET')) changed = true;
+  }
+  if (container.timesheet && typeof container.timesheet === 'object') {
+    for (const key of ['manual_pdf_r2_key', 'manualPdfR2Key', 'uploaded_pdf_r2_key', 'uploadedPdfR2Key']) {
+      if (clearIfStorageMatches(container.timesheet, key, 'TIMESHEET')) changed = true;
+    }
+  }
+
+  const primaryKind = normaliseBulkProcessRemovedEvidenceKind(container.primary_artifact_kind || container.primaryArtifactKind || container.primary_artifact?.kind || container.primaryArtifact?.kind || container.artifact_hints?.primary_artifact_kind || container.artifact_hints?.primaryArtifactKind || '');
+  for (const key of ['primary_artifact_storage_key', 'primaryArtifactStorageKey']) {
+    if (clearIfStorageMatches(container, key, primaryKind)) changed = true;
+  }
+  if (container.artifact_hints && typeof container.artifact_hints === 'object') {
+    for (const key of ['primary_artifact_storage_key', 'primaryArtifactStorageKey']) {
+      if (clearIfStorageMatches(container.artifact_hints, key, primaryKind)) changed = true;
+    }
+  }
+  for (const artifactKey of ['primary_artifact', 'primaryArtifact']) {
+    const artifact = container[artifactKey];
+    if (artifact && typeof artifact === 'object' && bulkProcessRemovedEvidenceTombstonesMatchItem(artifact, tombstones, opts)) {
+      container[artifactKey] = null;
+      changed = true;
+    }
+  }
+  if (container.artifact_hints && typeof container.artifact_hints === 'object') {
+    for (const artifactKey of ['primary_artifact', 'primaryArtifact']) {
+      const artifact = container.artifact_hints[artifactKey];
+      if (artifact && typeof artifact === 'object' && bulkProcessRemovedEvidenceTombstonesMatchItem(artifact, tombstones, opts)) {
+        container.artifact_hints[artifactKey] = null;
+        changed = true;
+      }
+    }
+  }
+
+  for (const childKey of ['details', 'state', 'row', 'data_row', 'timesheet', 'contract_week', 'evidence_meta', 'artifact_hints']) {
+    if (container[childKey] && typeof container[childKey] === 'object') {
+      if (pruneBulkProcessRemovedEvidenceTombstonesFromContainer(container[childKey], tombstones, { ...opts, seen, depth: depth + 1 })) changed = true;
+    }
+  }
+  if (changed) recomputeBulkProcessEvidenceContainerFlags(container, { force: true });
+  return changed;
+}
+
+function applyBulkProcessRemovedEvidenceTombstones(stateInput = null, applyOptions = {}) {
+  const st = (stateInput && typeof stateInput === 'object') ? stateInput : {};
+  st.evidence_pane_state = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
+  const pane = st.evidence_pane_state;
+  const opts = (applyOptions && typeof applyOptions === 'object') ? applyOptions : {};
+  const tombstones = Array.isArray(opts.tombstones) && opts.tombstones.length
+    ? opts.tombstones.map((row) => normaliseBulkProcessRemovedEvidenceTombstone(row))
+    : collectBulkProcessRemovedEvidenceTombstones(st, pane, opts);
+  if (!tombstones.length) return { changed: false, tombstones: [], containers_pruned: 0, dataset_rows_pruned: 0 };
+  let containersPruned = 0;
+  let datasetRowsPruned = 0;
+  const pruneContainer = (container) => {
+    if (!container || typeof container !== 'object') return;
+    if (pruneBulkProcessRemovedEvidenceTombstonesFromContainer(container, tombstones, opts)) containersPruned += 1;
+  };
+  [
+    pane,
+    st.active_row,
+    st.active_details,
+    st.active_context,
+    st.active_context?.details,
+    st.active_context?.row,
+    st.active_context?.data_row,
+    st.active_ctx,
+    st.active_ctx?.details,
+    st.active_ctx?.state,
+    st.active_ctx?.row,
+    st.active_ctx?.data_row
+  ].forEach(pruneContainer);
+  try {
+    [window.modalCtx, window.modalCtx?.data, window.modalCtx?.timesheetState, window.modalCtx?.timesheetDetails, window.modalCtx?.bulkProcessState].forEach(pruneContainer);
+  } catch {}
+  try {
+    if (Array.isArray(window.__modalStack)) {
+      for (const frame of window.__modalStack) {
+        [frame, frame?.ctx, frame?.modalCtx, frame?.modal_ctx, frame?.context, frame?.state, frame?.bulkProcessState, frame?.data].forEach(pruneContainer);
+      }
+    }
+  } catch {}
+
+  const rowMatchesAnyTombstone = (row) => tombstones.some((tombstone) => bulkProcessContainerIdentityMatchesTombstone(row, tombstone));
+  const pruneRowArray = (rows) => {
+    if (!Array.isArray(rows)) return;
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      if (!rowMatchesAnyTombstone(row)) continue;
+      const before = JSON.stringify([
+        row.evidence,
+        row.attached_evidence,
+        row.primary_artifact_storage_key,
+        row.manual_pdf_r2_key,
+        row.artifact_hints?.primary_artifact_storage_key
+      ]);
+      pruneContainer(row);
+      const after = JSON.stringify([
+        row.evidence,
+        row.attached_evidence,
+        row.primary_artifact_storage_key,
+        row.manual_pdf_r2_key,
+        row.artifact_hints?.primary_artifact_storage_key
+      ]);
+      if (before !== after) datasetRowsPruned += 1;
+    }
+  };
+  const ds = (st.dataset && typeof st.dataset === 'object') ? st.dataset : null;
+  if (ds) {
+    for (const key of Object.keys(ds)) {
+      if (!Array.isArray(ds[key])) continue;
+      if (!/(^|_)(rows|items|records)$/i.test(key) && !/(unprocessed|processed|visible|filtered|selected|all)/i.test(key)) continue;
+      pruneRowArray(ds[key]);
+    }
+  }
+  for (const cacheKey of ['row_cache', 'rowCache', 'rows_by_key', 'rowsByKey', 'timesheet_row_cache', 'timesheetRowCache', '__row_cache', '__bulk_process_row_cache']) {
+    const cache = st[cacheKey];
+    if (!cache || typeof cache !== 'object' || Array.isArray(cache)) continue;
+    for (const value of Object.values(cache)) {
+      if (value && typeof value === 'object' && rowMatchesAnyTombstone(value)) pruneContainer(value);
+    }
+  }
+  return {
+    changed: containersPruned > 0 || datasetRowsPruned > 0,
+    tombstones,
+    containers_pruned: containersPruned,
+    dataset_rows_pruned: datasetRowsPruned
+  };
+}
+
+function rememberBulkProcessRemovedEvidenceTombstone(stateInput = null, targetInput = {}, rememberOptions = {}) {
+  const st = (stateInput && typeof stateInput === 'object') ? stateInput : {};
+  st.evidence_pane_state = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
+  const pane = st.evidence_pane_state;
+  const opts = (rememberOptions && typeof rememberOptions === 'object') ? rememberOptions : {};
+  const tombstone = normaliseBulkProcessRemovedEvidenceTombstone(targetInput, opts);
+  if (!tombstone.evidence_ids.length && !tombstone.queue_ids.length && !tombstone.storage_key_lower) return null;
+  const upsertOwner = (owner) => {
+    if (!owner || typeof owner !== 'object') return;
+    const existing = [
+      ...(Array.isArray(owner.__bulk_process_removed_evidence_tombstones) ? owner.__bulk_process_removed_evidence_tombstones : []),
+      ...(Array.isArray(owner.__removed_attached_evidence_tombstones) ? owner.__removed_attached_evidence_tombstones : [])
+    ].map((row) => normaliseBulkProcessRemovedEvidenceTombstone(row));
+    const sameTombstone = (row) => {
+      const idOverlap = tombstone.evidence_ids.length && row.evidence_ids.some((id) => tombstone.evidence_ids.includes(id));
+      const queueOverlap = tombstone.queue_ids.length && row.queue_ids.some((id) => tombstone.queue_ids.includes(id));
+      const sameScopedStorage = !!(
+        tombstone.storage_key_lower &&
+        row.storage_key_lower === tombstone.storage_key_lower &&
+        (row.kind || '') === (tombstone.kind || '') &&
+        (row.row_key || '') === (tombstone.row_key || '') &&
+        (row.timesheet_id || '') === (tombstone.timesheet_id || '') &&
+        (row.contract_week_id || '') === (tombstone.contract_week_id || '') &&
+        (row.action || '') === (tombstone.action || '')
+      );
+      return !!(idOverlap || queueOverlap || sameScopedStorage);
+    };
+    const next = existing.filter((row) => !sameTombstone(row)).slice(-49);
+    next.push(tombstone);
+    const persist = next.map((row) => ({
+      evidence_id: row.evidence_id || null,
+      evidence_ids: row.evidence_ids.slice(),
+      ids: row.evidence_ids.slice(),
+      queue_id: row.queue_id || null,
+      queue_ids: row.queue_ids.slice(),
+      storage_key: row.storage_key || null,
+      kind: row.kind || null,
+      row_key: row.row_key || null,
+      timesheet_id: row.timesheet_id || null,
+      contract_week_id: row.contract_week_id || null,
+      action: row.action || 'return-to-queue',
+      removed_at_ms: row.removed_at_ms || Date.now(),
+      removed_at_utc: row.removed_at_utc || new Date(row.removed_at_ms || Date.now()).toISOString()
+    }));
+    owner.__bulk_process_removed_evidence_tombstones = persist;
+    owner.__removed_attached_evidence_tombstones = persist;
+  };
+  upsertOwner(st);
+  upsertOwner(pane);
+  try { upsertOwner(window.modalCtx); } catch {}
+  try {
+    if (Array.isArray(window.__modalStack)) {
+      const top = window.__modalStack[window.__modalStack.length - 1];
+      upsertOwner(top);
+      upsertOwner(top?.ctx);
+      upsertOwner(top?.modalCtx);
+      upsertOwner(top?.bulkProcessState);
+    }
+  } catch {}
+  applyBulkProcessRemovedEvidenceTombstones(st, { ...opts, tombstones: [tombstone] });
+  return tombstone;
+}
+
+function clearBulkProcessRemovedEvidenceTombstonesForAttachedEvidence(stateInput = null, evidenceInput = {}, clearOptions = {}) {
+  const st = (stateInput && typeof stateInput === 'object') ? stateInput : {};
+  const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+  const items = Array.isArray(evidenceInput) ? evidenceInput : [evidenceInput];
+  const opts = (clearOptions && typeof clearOptions === 'object') ? clearOptions : {};
+  let removed = 0;
+  const clearOwner = (owner) => {
+    if (!owner || typeof owner !== 'object') return;
+    const existing = [
+      ...(Array.isArray(owner.__bulk_process_removed_evidence_tombstones) ? owner.__bulk_process_removed_evidence_tombstones : []),
+      ...(Array.isArray(owner.__removed_attached_evidence_tombstones) ? owner.__removed_attached_evidence_tombstones : [])
+    ].map((row) => normaliseBulkProcessRemovedEvidenceTombstone(row));
+    if (!existing.length) return;
+    const next = existing.filter((tombstone) => !items.some((item) => bulkProcessEvidenceItemSupersedesRemovedTombstone(item, tombstone)));
+    removed += existing.length - next.length;
+    const persist = next.map((row) => ({
+      evidence_id: row.evidence_id || null,
+      evidence_ids: row.evidence_ids.slice(),
+      ids: row.evidence_ids.slice(),
+      queue_id: row.queue_id || null,
+      queue_ids: row.queue_ids.slice(),
+      storage_key: row.storage_key || null,
+      kind: row.kind || null,
+      row_key: row.row_key || null,
+      timesheet_id: row.timesheet_id || null,
+      contract_week_id: row.contract_week_id || null,
+      action: row.action || 'return-to-queue',
+      removed_at_ms: row.removed_at_ms || Date.now(),
+      removed_at_utc: row.removed_at_utc || new Date(row.removed_at_ms || Date.now()).toISOString()
+    }));
+    owner.__bulk_process_removed_evidence_tombstones = persist;
+    owner.__removed_attached_evidence_tombstones = persist;
+  };
+  [st, pane].forEach(clearOwner);
+  try { clearOwner(window.modalCtx); } catch {}
+  try {
+    if (Array.isArray(window.__modalStack)) {
+      for (const frame of window.__modalStack) {
+        [frame, frame?.ctx, frame?.modalCtx, frame?.bulkProcessState].forEach(clearOwner);
+      }
+    }
+  } catch {}
+  if (removed > 0 && opts.apply !== false) applyBulkProcessRemovedEvidenceTombstones(st, { reason: opts.reason || 'clear-superseded-removed-evidence-tombstone' });
+  return { cleared: removed > 0, removed };
+}
+
 
 
 
