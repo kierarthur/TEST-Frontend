@@ -163506,6 +163506,50 @@ async function openBulkProcessWorkbench(seed = {}) {
     return '';
   };
 
+  const scoreBulkProcessOpenRowEvidenceStrength = (rowLike = {}) => {
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const evidenceRows = [
+      ...(Array.isArray(row.evidence) ? row.evidence : []),
+      ...(Array.isArray(row.attached_evidence) ? row.attached_evidence : [])
+    ];
+    const fileKeyOfEvidence = (itemLike = {}) => trimStr(
+      itemLike?.storage_key ||
+      itemLike?.storageKey ||
+      itemLike?.file_key ||
+      itemLike?.fileKey ||
+      itemLike?.download_storage_key ||
+      itemLike?.downloadStorageKey ||
+      itemLike?.r2_key ||
+      itemLike?.r2Key ||
+      itemLike?.primary_artifact_storage_key ||
+      itemLike?.primaryArtifactStorageKey ||
+      ''
+    ).replace(/^\/+/, '');
+    const evidenceLikeRows = evidenceRows.filter((item) => item && typeof item === 'object' && fileKeyOfEvidence(item));
+    let score = evidenceLikeRows.length * 900;
+    score += Math.max(0, Number(row.attached_evidence_count || 0) || 0) * 120;
+    score += Math.max(0, Number(row.evidence_count || 0) || 0) * 100;
+    if (boolishOpen(row.evidence_loaded) === true || boolishOpen(row.evidence_authoritative) === true || boolishOpen(row.include_evidence) === true) score += 250;
+    if (boolishOpen(row.has_any_evidence) === true || boolishOpen(row.has_attached_evidence) === true) score += 220;
+    if (trimStr(row.primary_artifact_storage_key || row.primaryArtifactStorageKey || '')) score += 200;
+    if (row.primary_artifact && typeof row.primary_artifact === 'object' && fileKeyOfEvidence(row.primary_artifact)) score += 180;
+    if (trimStr(row.manual_pdf_r2_key || row.uploaded_pdf_r2_key || '')) score += 140;
+    const primaryKind = bulkProcessUpper(row.primary_artifact_kind || row.primaryArtifactKind || row.primary_artifact?.kind || row.primary_artifact?.evidence_kind || '');
+    if (primaryKind === 'TIMESHEET' || primaryKind === 'TS') score += 60;
+    const badges = Array.isArray(row.evidence_badges) ? row.evidence_badges : (Array.isArray(row.evidence_meta?.evidence_badges) ? row.evidence_meta.evidence_badges : []);
+    for (const badge of badges) {
+      if (!badge || typeof badge !== 'object') continue;
+      const present = boolishOpen(badge.present) === true || boolishOpen(badge.has_evidence) === true || (Number(badge.count || 0) || 0) > 0;
+      if (!present) continue;
+      score += 80 + Math.max(0, Number(badge.count || 0) || 0) * 20;
+      const kind = bulkProcessUpper(badge.kind || badge.evidence_kind || badge.type || '');
+      if (kind === 'TIMESHEET' || kind === 'TS') score += 40;
+    }
+    const profile = bulkProcessUpper(row.profile || row.context_profile || row.row_context_profile || '');
+    if ((profile === 'EDITOR' || profile === 'STATUS_HEADER' || profile === 'HEADER') && !evidenceLikeRows.length && !trimStr(row.primary_artifact_storage_key || row.manual_pdf_r2_key || row.uploaded_pdf_r2_key || '')) score -= 50;
+    return score;
+  };
+
   const findBulkProcessDatasetRowForIdentityOpen = (identityOrRow = '') => {
     const identity = typeof identityOrRow === 'string'
       ? trimStr(identityOrRow)
@@ -163514,7 +163558,7 @@ async function openBulkProcessWorkbench(seed = {}) {
     const rows = getAllRows(state.dataset);
     const wantedTimesheetId = /^timesheet:/i.test(identity) ? trimStr(identity.replace(/^timesheet:/i, '')) : '';
     const wantedContractWeekId = /^contract_week:/i.test(identity) ? trimStr(identity.replace(/^contract_week:/i, '')) : '';
-    return rows.find((row) => {
+    const matchingRows = rows.filter((row) => {
       if (!row || typeof row !== 'object') return false;
       const rowIdentity = getBulkProcessRowIdentityKeyOpen(row);
       if (rowIdentity && rowIdentity === identity) return true;
@@ -163523,7 +163567,11 @@ async function openBulkProcessWorkbench(seed = {}) {
       const rowContractWeekId = trimStr(row.contract_week_id || row.contractWeekId || '');
       if (wantedContractWeekId && rowContractWeekId && rowContractWeekId === wantedContractWeekId) return true;
       return false;
-    }) || null;
+    });
+    if (!matchingRows.length) return null;
+    return matchingRows
+      .map((row, index) => ({ row, index, score: scoreBulkProcessOpenRowEvidenceStrength(row) }))
+      .sort((left, right) => (right.score - left.score) || (left.index - right.index))[0]?.row || null;
   };
 
   const getBulkProcessEvidenceFileKeyOpen = (itemLike = {}) => {
@@ -164284,7 +164332,7 @@ async function openBulkProcessWorkbench(seed = {}) {
   const stripNonAuthoritativeEvidenceClearsOpen = (fragment) => {
     if (!fragment || typeof fragment !== 'object') return fragment;
     const out = Array.isArray(fragment) ? fragment.map((item) => deep(item)) : { ...fragment };
-    ['has_any_evidence', 'has_attached_evidence', 'attached_evidence_count', 'evidence_count', 'evidence_badges', 'evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence', 'evidence_loaded', 'evidence_authoritative', 'include_evidence', 'primary_artifact', 'primary_artifact_id', 'primary_artifact_kind', 'primary_artifact_storage_key', 'primary_artifact_preview_mode'].forEach((key) => {
+    ['has_any_evidence', 'has_attached_evidence', 'attached_evidence_count', 'evidence_count', 'evidence_badges', 'evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence', 'evidence_loaded', 'evidence_authoritative', 'include_evidence', 'primary_artifact', 'primary_artifact_id', 'primary_artifact_kind', 'primary_artifact_storage_key', 'primary_artifact_preview_mode', 'manual_pdf_r2_key', 'uploaded_pdf_r2_key', 'manual_pdf_storage_key', 'uploaded_pdf_storage_key'].forEach((key) => {
       if (!Object.prototype.hasOwnProperty.call(out, key)) return;
       const value = out[key];
       const shouldStrip = value === false || value == null || value === '' || (typeof value === 'number' && value <= 0) || (Array.isArray(value) && (value.length === 0 || (key === 'evidence_badges' && isAllFalseEvidenceBadgesOpen(value)))) || (key === 'primary_artifact' && value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) || ((key === 'evidence_loaded' || key === 'evidence_authoritative' || key === 'include_evidence') && value !== true);
@@ -164612,10 +164660,10 @@ async function openBulkProcessWorkbench(seed = {}) {
     };
     const ds = (state.dataset && typeof state.dataset === 'object') ? state.dataset : null;
     if (ds) {
-      ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(ds, key));
+      ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_unprocessed_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(ds, key));
       if (ds.sections && typeof ds.sections === 'object') Object.keys(ds.sections).forEach((key) => patchCollection(ds.sections, key));
     }
-    ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(state, key));
+    ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_unprocessed_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(state, key));
   };
 
   const applyBulkProcessActiveEvidenceTruthOpen = (rowKey, evidenceSources = [], options = {}) => {
@@ -164686,7 +164734,16 @@ async function openBulkProcessWorkbench(seed = {}) {
     }
     const pane = (state.evidence_pane_state && typeof state.evidence_pane_state === 'object') ? state.evidence_pane_state : null;
     if (pane) {
+      const buildAttachedSelectionKeyOpen = (itemLike = {}) => {
+        const fileKey = getBulkProcessEvidenceFileKeyOpen(itemLike);
+        if (!fileKey) return '';
+        const id = getBulkProcessEvidenceIdOpen(itemLike) || fileKey;
+        return `attached|${id}|${fileKey}`;
+      };
       const currentAttachedId = trimStr(pane.active_attached_id || '');
+      const currentPreviewAttachedKey = trimStr(pane.__active_attached_preview_target || pane.__preview_target_key || '').toLowerCase().startsWith('attached|')
+        ? trimStr(pane.__active_attached_preview_target || pane.__preview_target_key || '')
+        : '';
       pane.attached_rows = evidenceRows.map((item) => deep(item));
       pane.attached_all_rows = evidenceRows.map((item) => deep(item));
       pane.__attached_loaded = true;
@@ -164694,30 +164751,61 @@ async function openBulkProcessWorkbench(seed = {}) {
       pane.__requires_evidence_hydration = false;
       const stillSelected = currentAttachedId
         ? evidenceRows.find((item) => getBulkProcessEvidenceIdOpen(item) === currentAttachedId || trimStr(item.id || '') === currentAttachedId) || null
-        : null;
+        : (currentPreviewAttachedKey ? evidenceRows.find((item) => buildAttachedSelectionKeyOpen(item) === currentPreviewAttachedKey) || null : null);
+      const activeIdentityText = trimStr(targetIdentity.identity || targetIdentity.rowKey || activeKey || '');
+      const manualOverrideIdentity = trimStr(pane.__attached_manual_override_identity || '');
+      const manualOverrideBelongsToActiveRow = !!(
+        pane.__attached_manual_override === true &&
+        stillSelected &&
+        manualOverrideIdentity &&
+        activeIdentityText &&
+        manualOverrideIdentity === activeIdentityText
+      );
       const explicitNoTimesheetActiveRow = rowLooksExplicitNoTimesheetManualAdjustmentOpen(state.active_row || {});
       const realNonTimesheetRows = evidenceRows.filter((item) => normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || '') !== 'TIMESHEET' && hasGenuineBulkProcessEvidenceIdentityOpen(item));
-      if (explicitNoTimesheetActiveRow && realNonTimesheetRows.length) {
-        const nextAttached = stillSelected || realNonTimesheetRows[0] || null;
+      const primaryStorageKey = getBulkProcessEvidenceFileKeyOpen({
+        storage_key: state.active_row?.primary_artifact_storage_key || state.active_row?.manual_pdf_r2_key || state.active_row?.uploaded_pdf_r2_key || evidenceAuthorityPatch.primaryArtifactStorageKey || ''
+      });
+      const primaryKind = normaliseBulkProcessEvidenceKindOpen(state.active_row?.primary_artifact_kind || evidenceAuthorityPatch.primaryArtifactKind || '');
+      const canonicalAttached = explicitNoTimesheetActiveRow && realNonTimesheetRows.length
+        ? realNonTimesheetRows[0]
+        : ((primaryStorageKey
+            ? evidenceRows.find((item) => getBulkProcessEvidenceFileKeyOpen(item) === primaryStorageKey && (!primaryKind || normaliseBulkProcessEvidenceKindOpen(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || '') === primaryKind))
+              || evidenceRows.find((item) => getBulkProcessEvidenceFileKeyOpen(item) === primaryStorageKey)
+            : null)
+          || evidenceRows.find((item) => normaliseBulkProcessEvidenceKindOpen(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || '') === 'TIMESHEET' && !isBulkProcessFallbackEvidenceRowOpen(item))
+          || evidenceRows.find((item) => !isBulkProcessFallbackEvidenceRowOpen(item))
+          || evidenceRows[0]
+          || null);
+      const nextAttached = manualOverrideBelongsToActiveRow ? stillSelected : canonicalAttached;
+      if (nextAttached) {
+        const nextKey = buildAttachedSelectionKeyOpen(nextAttached);
         pane.active_tab = 'attached';
-        pane.__attached_manual_override = true;
+        pane.__attached_manual_override = !!manualOverrideBelongsToActiveRow;
+        pane.__attached_manual_override_identity = manualOverrideBelongsToActiveRow ? activeIdentityText : '';
         pane.__queue_manual_override = false;
         pane.__queue_manual_override_identity = '';
         pane.__queue_manual_override_scope = '';
-        pane.active_attached_id = nextAttached ? getBulkProcessEvidenceIdOpen(nextAttached) : null;
-        pane.active_attached_item = nextAttached ? deep(nextAttached) : null;
-        if (nextAttached) {
-          pane.pending_attach_kind = normaliseBulkProcessEvidenceKindOpen(nextAttached.kind || nextAttached.staged_kind || '') || pane.pending_attach_kind || '';
+        pane.active_queue_id = null;
+        pane.active_queue_item = null;
+        pane.active_attached_id = getBulkProcessEvidenceIdOpen(nextAttached) || null;
+        pane.active_attached_item = deep(nextAttached);
+        pane.__active_attached_preview_target = nextKey;
+        pane.__preview_target_key = nextKey;
+        pane.__preview_load_requested_target_key = nextKey;
+        if (currentPreviewAttachedKey && currentPreviewAttachedKey !== nextKey) {
+          pane.__preview_signed_url = '';
+          pane.__preview_signed_url_stored_at_ms = 0;
+          pane.__preview_signed_url_expires_at_ms = 0;
         }
-        if (!Number.isFinite(Number(pane.active_attached_pdf_page)) || Number(pane.active_attached_pdf_page) < 1) pane.active_attached_pdf_page = 1;
-      } else if (trimStr(pane.active_tab || '').toLowerCase() === 'attached') {
-        const nextAttached = stillSelected || evidenceRows[0] || null;
-        pane.active_attached_id = nextAttached ? getBulkProcessEvidenceIdOpen(nextAttached) : null;
-        pane.active_attached_item = nextAttached ? deep(nextAttached) : null;
-        if (!Number.isFinite(Number(pane.active_attached_pdf_page)) || Number(pane.active_attached_pdf_page) < 1) pane.active_attached_pdf_page = 1;
-      } else if (stillSelected) {
-        pane.active_attached_id = getBulkProcessEvidenceIdOpen(stillSelected) || currentAttachedId || null;
-        pane.active_attached_item = deep(stillSelected);
+        pane.pending_attach_kind = normaliseBulkProcessEvidenceKindOpen(nextAttached.kind || nextAttached.staged_kind || '') || pane.pending_attach_kind || '';
+        if (!Number.isFinite(Number(pane.active_attached_pdf_page)) || Number(pane.active_attached_pdf_page) < 1 || (currentPreviewAttachedKey && currentPreviewAttachedKey !== nextKey)) pane.active_attached_pdf_page = 1;
+      } else {
+        pane.__attached_manual_override = false;
+        pane.__attached_manual_override_identity = '';
+        pane.active_attached_id = null;
+        pane.active_attached_item = null;
+        pane.__active_attached_preview_target = '';
       }
     }
     patchBulkProcessRowCollectionsForActiveEvidenceOpen(activeKey, evidenceAuthorityPatch);
@@ -168295,8 +168383,6 @@ async function openBulkProcessWorkbench(seed = {}) {
 
   GE();
 }
-
-
 
 
 
@@ -209707,7 +209793,6 @@ function renderBulkAuthorisePreviewPane(state) {
 
 
 
-
 async function handleBulkProcessUnprocess(state) {
   const { LOGM, L, GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][BULK-PROCESS][UNPROCESS]')
@@ -209801,6 +209886,9 @@ async function handleBulkProcessUnprocess(state) {
   const applyLocalAffectedRows = (rowsInput = [], mutationResult = {}) => {
     if (!Array.isArray(rowsInput) || !rowsInput.length) return { applied: false, activeRow: null, rows: [] };
     const ds = ensureDataset();
+    const previousActiveRow = pickObject(st.active_row || {});
+    const previousEvidenceRows = Array.isArray(previousActiveRow.evidence) ? clone(previousActiveRow.evidence) : [];
+    const previousEvidenceBadges = Array.isArray(previousActiveRow.evidence_badges) ? clone(previousActiveRow.evidence_badges) : [];
     const rows = rowsInput.map((row) => {
       const out = pickObject(row);
       const rowKey = rowKeyOf(out);
@@ -209808,23 +209896,82 @@ async function handleBulkProcessUnprocess(state) {
       const bucket = deriveBucket(out);
       out.bulk_process_bucket = bucket;
       out.summary_stage = bucket;
+      if (bucket === 'UNPROCESSED') {
+        out.processing_status = firstString(out.processing_status, out.new_processing_status, mutationResult.new_processing_status, mutationResult.processing_status, 'UNPROCESSED');
+        out.new_processing_status = firstString(out.new_processing_status, out.processing_status, 'UNPROCESSED');
+        out.can_process = out.can_process === false ? false : true;
+        out.can_unprocess = false;
+      }
       return out;
     }).filter((row) => row && rowKeyOf(row));
 
-    const removeFromBuckets = (identity) => {
-      ds.unprocessed_rows = ds.unprocessed_rows.filter((candidate) => !rowMatchesIdentity(candidate, identity));
-      ds.processed_rows = ds.processed_rows.filter((candidate) => !rowMatchesIdentity(candidate, identity));
+    const listKeys = [
+      'unprocessed_rows',
+      'processed_rows',
+      'processed_eligible_rows',
+      'authorised_eligible_rows',
+      'visible_rows',
+      'visible_unprocessed_rows',
+      'visible_processed_rows',
+      'visible_processed_eligible_rows',
+      'visible_authorised_eligible_rows',
+      'rows'
+    ];
+    const uniqueByIdentity = (items = []) => {
+      const seen = new Set();
+      const out = [];
+      for (const item of Array.isArray(items) ? items : []) {
+        const key = rowKeyOf(item);
+        const dedupeKey = key || JSON.stringify({
+          ts: firstString(item?.current_timesheet_id, item?.timesheet_id, item?.requested_timesheet_id, item?.expected_timesheet_id),
+          cw: firstString(item?.contract_week_id, item?.contractWeekId)
+        });
+        if (!dedupeKey || seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        out.push(item);
+      }
+      return out;
     };
+    const removeFromContainer = (container, identity, previousRowKey = '') => {
+      if (!container || typeof container !== 'object') return;
+      for (const key of listKeys) {
+        if (Array.isArray(container[key])) {
+          container[key] = container[key].filter((candidate) => {
+            if (previousRowKey && rowKeyOf(candidate) === previousRowKey) return false;
+            return !rowMatchesIdentity(candidate, identity);
+          });
+        }
+      }
+      if (container.sections && typeof container.sections === 'object') {
+        Object.keys(container.sections).forEach((sectionKey) => {
+          if (Array.isArray(container.sections[sectionKey])) {
+            container.sections[sectionKey] = container.sections[sectionKey].filter((candidate) => {
+              if (previousRowKey && rowKeyOf(candidate) === previousRowKey) return false;
+              return !rowMatchesIdentity(candidate, identity);
+            });
+          }
+        });
+      }
+    };
+    const addToContainer = (container, row, bucket) => {
+      if (!container || typeof container !== 'object') return;
+      const rowClone = clone(row);
+      if (bucket === 'UNPROCESSED') {
+        if (Array.isArray(container.unprocessed_rows)) container.unprocessed_rows = uniqueByIdentity([rowClone, ...container.unprocessed_rows]);
+        if (container.sections && Array.isArray(container.sections.UNPROCESSED)) container.sections.UNPROCESSED = uniqueByIdentity([clone(row), ...container.sections.UNPROCESSED]);
+      } else {
+        if (Array.isArray(container.processed_rows)) container.processed_rows = uniqueByIdentity([rowClone, ...container.processed_rows]);
+        if (container.sections && Array.isArray(container.sections.PROCESSED)) container.sections.PROCESSED = uniqueByIdentity([clone(row), ...container.sections.PROCESSED]);
+      }
+    };
+
     for (const row of rows) {
       const previousRowKey = firstString(row.previous_row_key, row.previousRowKey, mutationResult.previous_row_key, mutationResult.old_row_key);
-      if (previousRowKey) {
-        ds.unprocessed_rows = ds.unprocessed_rows.filter((candidate) => rowKeyOf(candidate) !== previousRowKey);
-        ds.processed_rows = ds.processed_rows.filter((candidate) => rowKeyOf(candidate) !== previousRowKey);
-      }
-      removeFromBuckets(row);
+      removeFromContainer(ds, row, previousRowKey);
+      removeFromContainer(st, row, previousRowKey);
       const bucket = deriveBucket(row);
-      if (bucket === 'UNPROCESSED') ds.unprocessed_rows.unshift(clone(row));
-      else ds.processed_rows.unshift(clone(row));
+      addToContainer(ds, row, bucket);
+      addToContainer(st, row, bucket);
     }
 
     const activeIdentity = {
@@ -209835,41 +209982,50 @@ async function handleBulkProcessUnprocess(state) {
     const activeRow = rows.find((row) => rowMatchesIdentity(row, activeIdentity) || rowMatchesIdentity(row, mutationResult) || firstString(row.previous_row_key) === activeIdentity.row_key) || rows[0] || null;
     if (activeRow) {
       const rowKey = rowKeyOf(activeRow);
-      st.active_row = clone(activeRow);
+      const mergedActiveRow = {
+        ...previousActiveRow,
+        ...clone(activeRow)
+      };
+      if ((!Array.isArray(mergedActiveRow.evidence) || !mergedActiveRow.evidence.length) && previousEvidenceRows.length) mergedActiveRow.evidence = clone(previousEvidenceRows);
+      if ((!Array.isArray(mergedActiveRow.evidence_badges) || !mergedActiveRow.evidence_badges.length) && previousEvidenceBadges.length) mergedActiveRow.evidence_badges = clone(previousEvidenceBadges);
+      if (!firstString(mergedActiveRow.manual_pdf_r2_key) && firstString(previousActiveRow.manual_pdf_r2_key)) mergedActiveRow.manual_pdf_r2_key = previousActiveRow.manual_pdf_r2_key;
+      if (!firstString(mergedActiveRow.uploaded_pdf_r2_key) && firstString(previousActiveRow.uploaded_pdf_r2_key)) mergedActiveRow.uploaded_pdf_r2_key = previousActiveRow.uploaded_pdf_r2_key;
+      st.active_row = clone(mergedActiveRow);
       st.active_row_key = rowKey;
       st.activeRowKey = rowKey;
       st.selected_row_keys = rowKey ? [rowKey] : [];
-      const contractWeekId = firstString(activeRow.contract_week_id, activeRow.contractWeekId);
-      const timesheetId = firstString(activeRow.current_timesheet_id, activeRow.timesheet_id);
+      const contractWeekId = firstString(mergedActiveRow.contract_week_id, mergedActiveRow.contractWeekId);
+      const timesheetId = firstString(mergedActiveRow.current_timesheet_id, mergedActiveRow.timesheet_id);
       st.activeTimesheetId = timesheetId || null;
       st.activeContractWeekId = contractWeekId || null;
       st.activeRecordIdentity = rowKey || '';
       st.__bulkProcessRecordIdentity = rowKey || '';
+      const activeEvidenceRows = Array.isArray(mergedActiveRow.evidence) ? clone(mergedActiveRow.evidence) : [];
       st.active_details = {
         current_timesheet_id: timesheetId || null,
         requested_timesheet_id: timesheetId || null,
         expected_timesheet_id: timesheetId || null,
         contract_week_id: contractWeekId || null,
-        summary_stage: activeRow.summary_stage || activeRow.bulk_process_bucket || null,
-        tools_stage: activeRow.tools_stage || activeRow.processing_status || activeRow.bulk_process_bucket || null,
-        timesheet: timesheetId ? { timesheet_id: timesheetId, sheet_scope: activeRow.sheet_scope || activeRow.period_type || null, submission_mode: activeRow.submission_mode || null } : null,
-        contract_week: contractWeekId ? { id: contractWeekId, week_ending_date: activeRow.week_ending_date || activeRow.contract_week_ending_date || null, submission_mode_snapshot: activeRow.submission_mode_snapshot || null } : null,
-        tsfin: timesheetId ? { processing_status: activeRow.processing_status || null, total_hours: activeRow.total_hours ?? null, total_pay_ex_vat: activeRow.total_pay_ex_vat ?? null, total_charge_ex_vat: activeRow.total_charge_ex_vat ?? null, margin_ex_vat: activeRow.margin_ex_vat ?? null } : null,
-        evidence: [],
+        summary_stage: mergedActiveRow.summary_stage || mergedActiveRow.bulk_process_bucket || null,
+        tools_stage: mergedActiveRow.tools_stage || mergedActiveRow.processing_status || mergedActiveRow.bulk_process_bucket || null,
+        timesheet: timesheetId ? { timesheet_id: timesheetId, sheet_scope: mergedActiveRow.sheet_scope || mergedActiveRow.period_type || null, submission_mode: mergedActiveRow.submission_mode || null } : null,
+        contract_week: contractWeekId ? { id: contractWeekId, week_ending_date: mergedActiveRow.week_ending_date || mergedActiveRow.contract_week_ending_date || null, submission_mode_snapshot: mergedActiveRow.submission_mode_snapshot || null } : null,
+        tsfin: timesheetId ? { processing_status: mergedActiveRow.processing_status || null, total_hours: mergedActiveRow.total_hours ?? null, total_pay_ex_vat: mergedActiveRow.total_pay_ex_vat ?? null, total_charge_ex_vat: mergedActiveRow.total_charge_ex_vat ?? null, margin_ex_vat: mergedActiveRow.margin_ex_vat ?? null } : null,
+        evidence: activeEvidenceRows,
         related: {},
         profile: 'status_header',
         context_profile: 'status_header',
         header_loaded: true,
         header_only: true,
         editor_loaded: false,
-        evidence_loaded: false,
+        evidence_loaded: activeEvidenceRows.length > 0,
         full_loaded: false,
         schedule_pending: true,
         loaded_layers: ['header']
       };
       st.active_ctx = {
-        row: clone(activeRow),
-        data_row: clone(activeRow),
+        row: clone(mergedActiveRow),
+        data_row: clone(mergedActiveRow),
         details: clone(st.active_details),
         state: {},
         profile: 'status_header',
@@ -209877,20 +210033,20 @@ async function handleBulkProcessUnprocess(state) {
         header_loaded: true,
         header_only: true,
         editor_loaded: false,
-        evidence_loaded: false,
+        evidence_loaded: activeEvidenceRows.length > 0,
         full_loaded: false,
         is_hydrated: false,
         hydration_required: true,
         context_stale: true,
         row_key: rowKey,
-        row_signature: firstString(activeRow.backend_row_signature, activeRow.row_signature)
+        row_signature: firstString(mergedActiveRow.backend_row_signature, mergedActiveRow.row_signature)
       };
       st.active_context = clone(st.active_ctx);
       st.__active_context_is_minimal = true;
       if (!st.formState || typeof st.formState !== 'object') st.formState = {};
       st.formState.__forId = rowKey || '';
       if (window.modalCtx && window.modalCtx.bulkProcessState === st) {
-        window.modalCtx.data = clone(activeRow);
+        window.modalCtx.data = clone(mergedActiveRow);
         window.modalCtx.timesheetDetails = clone(st.active_details);
         window.modalCtx.activeRecordIdentity = rowKey || '';
         window.modalCtx.__bulkProcessRecordIdentity = rowKey || '';
@@ -210061,10 +210217,10 @@ async function handleBulkProcessUnprocess(state) {
         row_signature: rowSignature || undefined,
         bulk_process: true,
         context: 'bulk_process',
-        response_context: 'minimal_lifecycle_mutation',
-        minimal_lifecycle_mutation: true,
-        suppressAffectedRowRefresh: true,
-        suppressModalAdoption: true
+        response_context: 'bulk_process_lifecycle_mutation',
+        minimal_lifecycle_mutation: false,
+        suppressAffectedRowRefresh: false,
+        suppressModalAdoption: false
       });
     } else {
       if (typeof deleteManualTimesheetAndReopenWeek !== 'function') throw new Error('Weekly manual unprocess helper is not available.');
@@ -210080,10 +210236,10 @@ async function handleBulkProcessUnprocess(state) {
         suppressSummaryMutation: true,
         suppressPlannedWeekSummaryRefresh: true,
         suppressStagedEvidenceRefresh: true,
-        suppressModalAdoption: true,
-        suppressAffectedRowRefresh: true,
-        response_context: 'minimal_lifecycle_mutation',
-        minimal_lifecycle_mutation: true
+        suppressModalAdoption: false,
+        suppressAffectedRowRefresh: false,
+        response_context: 'bulk_process_lifecycle_mutation',
+        minimal_lifecycle_mutation: false
       });
     }
 
@@ -210099,6 +210255,13 @@ async function handleBulkProcessUnprocess(state) {
       current_timesheet_id: isDailyManual ? timesheetId : null,
       contract_week_id: contractWeekId || resultObj.contract_week_id || null,
       row_key: isDailyManual ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : null),
+      processing_status: firstString(resultObj.new_processing_status, resultObj.processing_status, 'UNPROCESSED'),
+      new_processing_status: firstString(resultObj.new_processing_status, resultObj.processing_status, 'UNPROCESSED'),
+      bucket: 'UNPROCESSED',
+      bulk_process_bucket: 'UNPROCESSED',
+      summary_stage: 'UNPROCESSED',
+      can_process: true,
+      can_unprocess: false,
       context: 'bulk_process'
     };
     if (!Array.isArray(resultObj.affected_rows) || !resultObj.affected_rows.length) {
@@ -210129,6 +210292,9 @@ async function handleBulkProcessUnprocess(state) {
         : (Array.isArray(affectedRefresh?.rows) ? affectedRefresh.rows : []);
       if (refreshedRows.length) {
         localApply = applyLocalAffectedRows(refreshedRows, resultObj);
+      } else if (Array.isArray(resultObj.affected_rows) && resultObj.affected_rows.length) {
+        const lifecycleRows = resultObj.affected_rows.filter((row) => firstString(row?.processing_status, row?.new_processing_status, row?.bulk_process_bucket, row?.summary_stage, row?.bucket));
+        if (lifecycleRows.length) localApply = applyLocalAffectedRows(lifecycleRows, resultObj);
       }
       if (affectedRefresh && affectedRefresh.ok === false) {
         throw new Error(firstString(affectedRefresh.error, affectedRefresh.message, 'Affected row refresh failed; row state may be stale.'));
@@ -210137,7 +210303,16 @@ async function handleBulkProcessUnprocess(state) {
       affectedRefreshError = refreshErr;
       st.lifecycle_refresh_failed = true;
       st.lifecycle_refresh_error = firstString(refreshErr?.message, affectedRefresh?.error, affectedRefresh?.message, 'Affected row refresh failed; row state may be stale.');
-      if (st.active_row && typeof st.active_row === 'object') {
+      if (!localApply.applied && Array.isArray(resultObj.affected_rows) && resultObj.affected_rows.length) {
+        const lifecycleRows = resultObj.affected_rows.filter((row) => firstString(row?.processing_status, row?.new_processing_status, row?.bulk_process_bucket, row?.summary_stage, row?.bucket));
+        if (lifecycleRows.length) {
+          localApply = applyLocalAffectedRows(lifecycleRows, resultObj);
+          affectedRefreshError = null;
+          st.lifecycle_refresh_fallback_applied = true;
+          st.lifecycle_refresh_error = firstString(st.lifecycle_refresh_error, 'Affected-row refresh failed; lifecycle fallback was applied from mutation response.');
+        }
+      }
+      if (st.active_row && typeof st.active_row === 'object' && !localApply.applied) {
         st.active_row.row_stale = true;
         st.active_row.refresh_required = true;
       }
@@ -210203,7 +210378,6 @@ async function handleBulkProcessUnprocess(state) {
     }
   }
 }
-
 
 
 function applyBulkTimesheetRowPatches(state, patches, options = {}) {
@@ -220187,7 +220361,6 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
 }
 
 
-
 async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][ROW-CHANGE]');
@@ -223331,6 +223504,66 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
 
 
+  const scoreBulkProcessRowEvidenceStrengthRowChange = (rowLike = {}) => {
+
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+
+    let score = 0;
+
+    const rowEvidence = Array.isArray(row.evidence) ? row.evidence : [];
+
+    const rowAttachedEvidence = Array.isArray(row.attached_evidence) ? row.attached_evidence : [];
+
+    const evidenceLikeRows = [...rowEvidence, ...rowAttachedEvidence].filter((item) => item && typeof item === 'object' && cleanEvidenceStorageKeyRowChange(getEvidenceFileKeyFromAnyRowChange(item)));
+
+    const genuineEvidenceRows = evidenceLikeRows.filter((item) => hasGenuineEvidenceIdentityRowChange(item));
+
+    score += genuineEvidenceRows.length * 1000;
+
+    score += Math.max(0, Number(row.attached_evidence_count || 0) || 0) * 120;
+
+    score += Math.max(0, Number(row.evidence_count || 0) || 0) * 100;
+
+    if (boolishRowChange(row.evidence_loaded) === true || boolishRowChange(row.evidence_authoritative) === true || boolishRowChange(row.include_evidence) === true) score += 250;
+
+    if (boolishRowChange(row.has_any_evidence) === true || boolishRowChange(row.has_attached_evidence) === true) score += 220;
+
+    if (cleanEvidenceStorageKeyRowChange(row.primary_artifact_storage_key || row.primaryArtifactStorageKey || '')) score += 200;
+
+    if (row.primary_artifact && typeof row.primary_artifact === 'object' && cleanEvidenceStorageKeyRowChange(getEvidenceFileKeyFromAnyRowChange(row.primary_artifact))) score += 180;
+
+    if (cleanEvidenceStorageKeyRowChange(row.manual_pdf_r2_key || row.uploaded_pdf_r2_key || '')) score += 140;
+
+    const primaryKind = normaliseBulkProcessEvidenceKindRowChange(row.primary_artifact_kind || row.primaryArtifactKind || row.primary_artifact?.kind || row.primary_artifact?.evidence_kind || '');
+
+    if (primaryKind === 'TIMESHEET') score += 60;
+
+    const badges = Array.isArray(row.evidence_badges) ? row.evidence_badges : (Array.isArray(row.evidence_meta?.evidence_badges) ? row.evidence_meta.evidence_badges : []);
+
+    for (const badge of badges) {
+
+      if (!badge || typeof badge !== 'object') continue;
+
+      const present = boolishRowChange(badge.present) === true || boolishRowChange(badge.has_evidence) === true || (Number(badge.count || 0) || 0) > 0;
+
+      if (!present) continue;
+
+      score += 80 + Math.max(0, Number(badge.count || 0) || 0) * 20;
+
+      if (normaliseBulkProcessEvidenceKindRowChange(badge.kind || badge.evidence_kind || badge.type || '') === 'TIMESHEET') score += 40;
+
+    }
+
+    const profile = upper(row.profile || row.context_profile || row.row_context_profile || '');
+
+    if ((profile === 'EDITOR' || profile === 'STATUS_HEADER' || profile === 'HEADER') && !evidenceLikeRows.length && !cleanEvidenceStorageKeyRowChange(row.primary_artifact_storage_key || row.manual_pdf_r2_key || row.uploaded_pdf_r2_key || '')) score -= 50;
+
+    return score;
+
+  };
+
+
+
   const findBulkProcessDatasetRowForRowChange = (identityOrRow = '') => {
 
     const identity = typeof identityOrRow === 'string'
@@ -223345,7 +223578,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     const wantedCw = /^contract_week:/i.test(identity) ? trimStr(identity.replace(/^contract_week:/i, '')) : '';
 
-    return allRows.find((row) => {
+    const matchingRows = allRows.filter((row) => {
 
       if (!row || typeof row !== 'object') return false;
 
@@ -223363,7 +223596,15 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
       return false;
 
-    }) || null;
+    });
+
+    if (!matchingRows.length) return null;
+
+    return matchingRows
+
+      .map((row, index) => ({ row, index, score: scoreBulkProcessRowEvidenceStrengthRowChange(row) }))
+
+      .sort((left, right) => (right.score - left.score) || (left.index - right.index))[0]?.row || null;
 
   };
 
@@ -223511,9 +223752,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
       const previousSelectionKey = buildBulkProcessAttachedSelectionKeyRowChange(paneObj.active_attached_item || {});
 
-      const explicitAttachedMode = !!(trimStr(paneObj.active_tab || '').toLowerCase() === 'attached' || paneObj.__attached_manual_override === true);
-
-      const previousTargetKey = cleanEvidenceStorageKeyRowChange(paneObj.__active_attached_preview_target || paneObj.__preview_target_key || '').startsWith('attached|')
+      const previousTargetKey = trimStr(paneObj.__active_attached_preview_target || paneObj.__preview_target_key || '').toLowerCase().startsWith('attached|')
 
         ? trimStr(paneObj.__active_attached_preview_target || paneObj.__preview_target_key || '')
 
@@ -223535,75 +223774,95 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
         : null;
 
-      if (explicitAttachedMode) {
+      const activeIdentityText = trimStr(targetIdentity.identity || targetIdentity.rowKey || activeKey || '');
 
-        const nextAttached = stillSelected || evidenceRows[0] || null;
+      const manualOverrideIdentity = trimStr(paneObj.__attached_manual_override_identity || '');
 
-        if (nextAttached) {
+      const manualOverrideBelongsToActiveRow = !!(
 
-          const nextKey = buildBulkProcessAttachedSelectionKeyRowChange(nextAttached);
+        paneObj.__attached_manual_override === true &&
 
-          const nextId = getBulkProcessEvidenceIdRowChange(nextAttached);
+        stillSelected &&
 
-          paneObj.active_tab = 'attached';
+        manualOverrideIdentity &&
 
-          paneObj.__attached_manual_override = true;
+        activeIdentityText &&
 
-          paneObj.__queue_manual_override = false;
+        manualOverrideIdentity === activeIdentityText
 
-          paneObj.__queue_manual_override_identity = '';
+      );
 
-          paneObj.__queue_manual_override_scope = '';
+      const primaryStorageKey = cleanEvidenceStorageKeyRowChange(st.active_row?.primary_artifact_storage_key || st.active_row?.manual_pdf_r2_key || st.active_row?.uploaded_pdf_r2_key || evidenceAuthorityPatch.primaryArtifactStorageKey || '');
 
-          paneObj.active_attached_id = nextId || null;
+      const primaryKind = normaliseBulkProcessEvidenceKindRowChange(st.active_row?.primary_artifact_kind || evidenceAuthorityPatch.primaryArtifactKind || '');
 
-          paneObj.active_attached_item = deep(nextAttached);
+      const canonicalAttached = (primaryStorageKey
 
-          paneObj.__active_attached_preview_target = nextKey;
+        ? evidenceRows.find((item) => cleanEvidenceStorageKeyRowChange(getBulkProcessEvidenceFileKeyRowChange(item)) === primaryStorageKey && (!primaryKind || normaliseBulkProcessEvidenceKindRowChange(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || '') === primaryKind))
 
-          paneObj.__preview_target_key = nextKey;
+          || evidenceRows.find((item) => cleanEvidenceStorageKeyRowChange(getBulkProcessEvidenceFileKeyRowChange(item)) === primaryStorageKey)
 
-          paneObj.__preview_load_requested_target_key = nextKey;
+        : null)
 
-          if (wantedSelectionKey && wantedSelectionKey !== nextKey) {
+        || evidenceRows.find((item) => normaliseBulkProcessEvidenceKindRowChange(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || '') === 'TIMESHEET' && !isFallbackEvidenceRowChange(item))
 
-            paneObj.__preview_signed_url = '';
+        || evidenceRows.find((item) => !isFallbackEvidenceRowChange(item))
 
-            paneObj.__preview_signed_url_stored_at_ms = 0;
+        || evidenceRows[0]
 
-            paneObj.__preview_signed_url_expires_at_ms = 0;
+        || null;
 
-          }
+      const nextAttached = manualOverrideBelongsToActiveRow ? stillSelected : canonicalAttached;
 
-          if (!Number.isFinite(Number(paneObj.active_attached_pdf_page)) || Number(paneObj.active_attached_pdf_page) < 1 || (wantedSelectionKey && wantedSelectionKey !== nextKey)) paneObj.active_attached_pdf_page = 1;
+      if (nextAttached) {
 
-        } else {
+        const nextKey = buildBulkProcessAttachedSelectionKeyRowChange(nextAttached);
 
-          paneObj.active_attached_id = null;
+        const nextId = getBulkProcessEvidenceIdRowChange(nextAttached);
 
-          paneObj.active_attached_item = null;
+        paneObj.active_tab = 'attached';
 
-          paneObj.active_attached_pdf_page = 1;
+        paneObj.__attached_manual_override = !!manualOverrideBelongsToActiveRow;
 
-          paneObj.__active_attached_preview_target = '';
+        paneObj.__attached_manual_override_identity = manualOverrideBelongsToActiveRow ? activeIdentityText : '';
 
-          paneObj.__preview_target_key = '';
+        paneObj.__queue_manual_override = false;
 
-          paneObj.__preview_load_requested_target_key = '';
+        paneObj.__queue_manual_override_identity = '';
+
+        paneObj.__queue_manual_override_scope = '';
+
+        paneObj.active_queue_id = null;
+
+        paneObj.active_queue_item = null;
+
+        paneObj.active_attached_id = nextId || null;
+
+        paneObj.active_attached_item = deep(nextAttached);
+
+        paneObj.__active_attached_preview_target = nextKey;
+
+        paneObj.__preview_target_key = nextKey;
+
+        paneObj.__preview_load_requested_target_key = nextKey;
+
+        if (wantedSelectionKey && wantedSelectionKey !== nextKey) {
 
           paneObj.__preview_signed_url = '';
 
+          paneObj.__preview_signed_url_stored_at_ms = 0;
+
+          paneObj.__preview_signed_url_expires_at_ms = 0;
+
         }
 
-      } else if (stillSelected) {
-
-        paneObj.active_attached_id = getBulkProcessEvidenceIdRowChange(stillSelected) || null;
-
-        paneObj.active_attached_item = deep(stillSelected);
-
-        paneObj.__active_attached_preview_target = buildBulkProcessAttachedSelectionKeyRowChange(stillSelected);
+        if (!Number.isFinite(Number(paneObj.active_attached_pdf_page)) || Number(paneObj.active_attached_pdf_page) < 1 || (wantedSelectionKey && wantedSelectionKey !== nextKey)) paneObj.active_attached_pdf_page = 1;
 
       } else {
+
+        paneObj.__attached_manual_override = false;
+
+        paneObj.__attached_manual_override_identity = '';
 
         paneObj.active_attached_id = null;
 
@@ -223612,6 +223871,12 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         paneObj.active_attached_pdf_page = 1;
 
         paneObj.__active_attached_preview_target = '';
+
+        paneObj.__preview_target_key = '';
+
+        paneObj.__preview_load_requested_target_key = '';
+
+        paneObj.__preview_signed_url = '';
 
       }
 
@@ -223651,13 +223916,13 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     if (ds) {
 
-      ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(ds, key));
+      ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_unprocessed_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(ds, key));
 
       if (ds.sections && typeof ds.sections === 'object') Object.keys(ds.sections).forEach((key) => patchCollection(ds.sections, key));
 
     }
 
-    ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(st, key));
+    ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_unprocessed_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(st, key));
 
     return evidenceAuthorityPatch;
 
@@ -226145,7 +226410,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
     const out = Array.isArray(fragment) ? fragment.map((item) => deep(item)) : { ...fragment };
 
-    const clearKeys = ['has_any_evidence', 'has_attached_evidence', 'attached_evidence_count', 'evidence_count', 'evidence_badges', 'evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence', 'evidence_loaded', 'evidence_authoritative', 'include_evidence', 'primary_artifact', 'primary_artifact_id', 'primary_artifact_kind', 'primary_artifact_storage_key', 'primary_artifact_preview_mode'];
+    const clearKeys = ['has_any_evidence', 'has_attached_evidence', 'attached_evidence_count', 'evidence_count', 'evidence_badges', 'evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence', 'evidence_loaded', 'evidence_authoritative', 'include_evidence', 'primary_artifact', 'primary_artifact_id', 'primary_artifact_kind', 'primary_artifact_storage_key', 'primary_artifact_preview_mode', 'manual_pdf_r2_key', 'uploaded_pdf_r2_key', 'manual_pdf_storage_key', 'uploaded_pdf_storage_key'];
 
     for (const key of clearKeys) {
 
@@ -228063,7 +228328,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
   const wantedIdentity = parseWantedRowIdentity(wantedKey);
 
-  let nextRow = allRows.find((row) => rowMatchesIdentity(row, wantedIdentity)) || null;
+  let nextRow = findBulkProcessDatasetRowForRowChange(wantedKey) || allRows.find((row) => rowMatchesIdentity(row, wantedIdentity)) || null;
 
   if (!nextRow && forceRefresh) {
 
@@ -228482,7 +228747,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
       clearEvidenceContextStoresForRowChange({ targetIdentity: getIdentityPartsFromRow(nextRow), rowKey: cacheKey });
 
-      clearPreviewAndAttachedState({ clearPreview: !suppressPreviewRefresh, identityChanged: true });
+      clearPreviewAndAttachedState({ clearPreview: !suppressPreviewRefresh, identityChanged: true, clearQueueSelection: true, reason: 'row-change-identity-rebase' });
 
     }
 
@@ -229708,8 +229973,6 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
   }
 
 }
-
-
 
 function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, options = {}) {
   const deep = (v) => {
@@ -260517,7 +260780,6 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
     };
   }
 }
-
 function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
   const invData = (invoiceData && typeof invoiceData === 'object')
     ? invoiceData
@@ -260981,25 +261243,33 @@ function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
         const uploadedDt = getUploadedDt(ev);
         const canOpen = hasViewableEvidence(ev);
 
+        const safeRowToken = escapeHtml(rowToken);
+
         const viewBtn = canOpen
           ? `
-            <button type="button"
-                    class="btn mini subtle"
-                    style="background:transparent;border:1px solid rgba(255,255,255,.18);"
-                    onclick="window.__invoiceEvidenceOpen && window.__invoiceEvidenceOpen('${escapeHtml(rowToken)}', 'view')">
+            <a href="#"
+               role="button"
+               class="btn mini subtle invoice-evidence-action"
+               data-invoice-evidence-action="view"
+               data-invoice-evidence-row-token="${safeRowToken}"
+               style="display:inline-block;background:transparent;border:1px solid rgba(255,255,255,.18);text-decoration:none;"
+               onclick="event.preventDefault(); event.stopPropagation(); window.__invoiceEvidenceOpen && window.__invoiceEvidenceOpen('${safeRowToken}', 'view'); return false;">
               View
-            </button>
+            </a>
           `
           : '';
 
         const downloadBtn = canOpen
           ? `
-            <button type="button"
-                    class="btn mini subtle"
-                    style="background:transparent;border:1px solid rgba(255,255,255,.18);"
-                    onclick="window.__invoiceEvidenceOpen && window.__invoiceEvidenceOpen('${escapeHtml(rowToken)}', 'download')">
+            <a href="#"
+               role="button"
+               class="btn mini subtle invoice-evidence-action"
+               data-invoice-evidence-action="download"
+               data-invoice-evidence-row-token="${safeRowToken}"
+               style="display:inline-block;background:transparent;border:1px solid rgba(255,255,255,.18);text-decoration:none;"
+               onclick="event.preventDefault(); event.stopPropagation(); window.__invoiceEvidenceOpen && window.__invoiceEvidenceOpen('${safeRowToken}', 'download'); return false;">
               Download
-            </button>
+            </a>
           `
           : '';
 
