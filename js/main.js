@@ -162039,7 +162039,6 @@ function ensureBulkProcessRelatedContract(relatedObj, rowObj, detailsObj) {
   };
 }
 
-
 function renderBulkProcessPreviewPane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -162114,6 +162113,106 @@ function renderBulkProcessPreviewPane(state) {
   const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
   const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
   const upper = (v) => trimStr(v).toUpperCase();
+  const isSystemContractWeekPdfArtifactIdForPreview = (value) => /^sys:contract_week_pdf:/i.test(trimStr(value || ''));
+  const safeSystemTimesheetArtifactDisplayNameForPreview = () => 'Uploaded timesheet PDF';
+  const base64UrlDecodeToStringForPreviewRender = (valueInput = '') => {
+    const value = trimStr(valueInput || '');
+    if (!value) return '';
+    try {
+      const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
+      if (typeof atob === 'function') return decodeURIComponent(Array.prototype.map.call(atob(padded), (ch) => '%' + ('00' + ch.charCodeAt(0).toString(16)).slice(-2)).join(''));
+    } catch {}
+    try {
+      const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
+      if (typeof atob === 'function') return atob(padded);
+    } catch {}
+    return '';
+  };
+  const decodeSignedUrlTokenPayloadForPreviewRender = (signedUrlInput = '') => {
+    const signedUrlValue = trimStr(signedUrlInput || '');
+    if (!signedUrlValue) return null;
+    try {
+      const urlObj = new URL(signedUrlValue, window.location?.origin || 'http://localhost');
+      const token = trimStr(urlObj.searchParams.get('token') || '');
+      if (!token) return null;
+      const parts = token.split('.').map((part) => trimStr(part)).filter(Boolean);
+      const candidates = [];
+      if (parts.length >= 3) candidates.push(parts[1]);
+      if (parts.length >= 1) candidates.push(parts[0]);
+      for (const part of candidates) {
+        const decoded = base64UrlDecodeToStringForPreviewRender(part);
+        if (!decoded) continue;
+        try {
+          const parsed = JSON.parse(decoded);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+        } catch {}
+      }
+    } catch {}
+    return null;
+  };
+  const normaliseSignedUrlExpiryMsForPreviewRender = (rawValue) => {
+    if (rawValue == null || rawValue === '') return 0;
+    if (typeof rawValue === 'string' && /[T:-]/.test(rawValue)) {
+      const parsedMs = Date.parse(rawValue);
+      if (Number.isFinite(parsedMs) && parsedMs > 0) return parsedMs;
+    }
+    const num = Number(rawValue || 0) || 0;
+    if (!num) return 0;
+    if (num > 100000000000) return num;
+    if (num > 1000000000) return num * 1000;
+    return 0;
+  };
+  const parseBulkProcessPreviewRenderAmzDateMs = (valueInput = '') => {
+    const value = trimStr(valueInput || '');
+    const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/i.exec(value);
+    if (!m) return 0;
+    const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+    return Number.isFinite(ms) ? ms : 0;
+  };
+  const resolveSignedUrlExplicitExpiryMsForPreviewRender = (signedUrlInput = '') => {
+    const signedUrlValue = trimStr(signedUrlInput || '');
+    if (!signedUrlValue) return 0;
+    try {
+      const urlObj = new URL(signedUrlValue, window.location?.origin || 'http://localhost');
+      const params = urlObj.searchParams;
+      const amzDateMs = parseBulkProcessPreviewRenderAmzDateMs(params.get('X-Amz-Date') || params.get('x-amz-date') || '');
+      const amzExpires = Number(params.get('X-Amz-Expires') || params.get('x-amz-expires') || 0) || 0;
+      if (amzDateMs && amzExpires > 0) return amzDateMs + (amzExpires * 1000);
+      const tokenPayload = decodeSignedUrlTokenPayloadForPreviewRender(signedUrlValue);
+      const tokenExpiry = normaliseSignedUrlExpiryMsForPreviewRender(tokenPayload?.exp ?? tokenPayload?.expires ?? tokenPayload?.expires_at ?? tokenPayload?.expiry ?? tokenPayload?.e);
+      if (tokenExpiry) return tokenExpiry;
+      for (const key of ['exp', 'expires', 'Expires', 'expires_at', 'expiry', 'e']) {
+        const expiryMs = normaliseSignedUrlExpiryMsForPreviewRender(params.get(key));
+        if (expiryMs) return expiryMs;
+      }
+    } catch {}
+    return 0;
+  };
+  const resolveStorageKeyFromSignedUrlForPreviewRender = (signedUrlInput = '') => {
+    const signedUrlValue = trimStr(signedUrlInput || '');
+    if (!signedUrlValue) return '';
+    try {
+      const urlObj = new URL(signedUrlValue, window.location?.origin || 'http://localhost');
+      const keyParam = trimStr(urlObj.searchParams.get('key') || '').replace(/^\/+/, '');
+      if (keyParam) return keyParam;
+      const tokenPayload = decodeSignedUrlTokenPayloadForPreviewRender(signedUrlValue);
+      return trimStr(tokenPayload?.storage_key || tokenPayload?.storageKey || tokenPayload?.file_key || tokenPayload?.fileKey || tokenPayload?.key || '').replace(/^\/+/, '');
+    } catch {}
+    return '';
+  };
+  const isSignedUrlUsableForPreviewRender = (signedUrlInput = '', expectedFileKeyInput = '') => {
+    const signedUrlValue = trimStr(signedUrlInput || '');
+    if (!signedUrlValue) return false;
+    const expectedFileKey = trimStr(expectedFileKeyInput || '').replace(/^\/+/, '');
+    const signedStorageKey = resolveStorageKeyFromSignedUrlForPreviewRender(signedUrlValue);
+    if (expectedFileKey && signedStorageKey && signedStorageKey !== expectedFileKey) return false;
+    const explicitExpiryMs = Number(resolveSignedUrlExplicitExpiryMsForPreviewRender(signedUrlValue) || pane.__preview_signed_url_expires_at_ms || 0) || 0;
+    const now = Date.now();
+    if (explicitExpiryMs && (now + 30000) >= explicitExpiryMs) return false;
+    const storedAtMs = Number(pane.__preview_signed_url_stored_at_ms || 0) || 0;
+    if (!explicitExpiryMs && storedAtMs && (now - storedAtMs) >= (55 * 60 * 1000)) return false;
+    return true;
+  };
   const activeContextOptions = (activeCtx.__context_options && typeof activeCtx.__context_options === 'object') ? activeCtx.__context_options : {};
   const activeContextProfile = trimStr(
     st.active_context_profile ||
@@ -162312,7 +162411,9 @@ function renderBulkProcessPreviewPane(state) {
     const attachedId = getPreviewAttachedId(item) || storageKey;
     if (!attachedId) return null;
     const kind = normalisePreviewEvidenceKind(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || item.stagedKind || meta.staged_kind || meta.stagedKind || meta.kind || '') || 'OTHER';
-    const displayName = trimStr(item.display_name || item.displayName || item.filename || item.original_filename || item.originalFilename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence');
+    const rawDisplayName = trimStr(item.display_name || item.displayName || item.filename || item.original_filename || item.originalFilename || '');
+    const isSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForPreview(attachedId || item.id || item.evidence_id || item.timesheet_evidence_id || '');
+    const displayName = isSystemContractWeekPdfArtifact ? safeSystemTimesheetArtifactDisplayNameForPreview() : (rawDisplayName || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'));
     return {
       ...(item || {}),
       id: attachedId || storageKey || null,
@@ -162325,8 +162426,8 @@ function renderBulkProcessPreviewPane(state) {
       kind,
       staged_kind: staged ? kind : (item.staged_kind || item.stagedKind || null),
       display_name: displayName,
-      filename: trimStr(item.filename || item.display_name || item.original_filename || '') || displayName,
-      original_filename: trimStr(item.original_filename || item.originalFilename || item.filename || item.display_name || '') || displayName,
+      filename: isSystemContractWeekPdfArtifact ? displayName : (trimStr(item.filename || item.display_name || item.original_filename || '') || displayName),
+      original_filename: isSystemContractWeekPdfArtifact ? displayName : (trimStr(item.original_filename || item.originalFilename || item.filename || item.display_name || '') || displayName),
       storage_key: storageKey || null,
       file_key: storageKey || null,
       download_storage_key: storageKey || null,
@@ -162413,13 +162514,19 @@ function renderBulkProcessPreviewPane(state) {
       const primaryStorage = trimStr(primary?.storage_key || primary?.file_key || primary?.download_storage_key || primary?.r2_key || container.primary_artifact_storage_key || hints.primary_artifact_storage_key || '').replace(/^\/+/, '');
       if (!primaryStorage) continue;
       const primaryId = trimStr(primary?.id || primary?.evidence_id || primary?.queue_id || container.primary_artifact_id || hints.primary_artifact_id || '');
+      const primaryKind = primary?.kind || primary?.evidence_kind || container.primary_artifact_kind || hints.primary_artifact_kind || 'OTHER';
+      const primaryIsSystemContractWeekPdf = isSystemContractWeekPdfArtifactIdForPreview(primaryId);
+      const primaryDisplayName = primaryIsSystemContractWeekPdf
+        ? safeSystemTimesheetArtifactDisplayNameForPreview()
+        : (trimStr(primary?.display_name || primary?.filename || container.primary_artifact_display_name || hints.primary_artifact_display_name || '') || 'Evidence');
       add({
         ...(primary || {}),
         id: primaryId || primaryStorage,
         evidence_id: primaryId || null,
-        kind: primary?.kind || primary?.evidence_kind || container.primary_artifact_kind || hints.primary_artifact_kind || 'OTHER',
-        display_name: primary?.display_name || primary?.filename || container.primary_artifact_display_name || hints.primary_artifact_display_name || 'Evidence',
-        filename: primary?.filename || primary?.display_name || container.primary_artifact_display_name || 'Evidence',
+        kind: primaryKind,
+        display_name: primaryDisplayName,
+        filename: primaryDisplayName,
+        original_filename: primaryDisplayName,
         storage_key: primaryStorage,
         file_key: primaryStorage,
         download_storage_key: primaryStorage,
@@ -162677,7 +162784,13 @@ function renderBulkProcessPreviewPane(state) {
   let requestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
   let targetMatchesSelection = !!(previewSelectionKey && targetKey === previewSelectionKey);
   let requestedMatchesOrBlank = !requestedKey || requestedKey === previewSelectionKey;
-  let hasCurrentSignedUrl = !!(signedUrl && targetMatchesSelection && requestedMatchesOrBlank);
+  let hasCurrentSignedUrl = !!(signedUrl && targetMatchesSelection && requestedMatchesOrBlank && isSignedUrlUsableForPreviewRender(signedUrl, previewFileKey));
+  if (signedUrl && targetMatchesSelection && requestedMatchesOrBlank && !hasCurrentSignedUrl) {
+    pane.__preview_signed_url = '';
+    pane.__preview_signed_url_stored_at_ms = 0;
+    pane.__preview_signed_url_expires_at_ms = 0;
+    signedUrl = '';
+  }
   if (hasCurrentSignedUrl && !requestedKey) {
     requestedKey = previewSelectionKey;
     pane.__preview_load_requested_target_key = previewSelectionKey;
@@ -162704,7 +162817,7 @@ function renderBulkProcessPreviewPane(state) {
     const liveSignedUrl = trimStr(livePane.__preview_signed_url || '');
     const liveTargetKey = normalisePreviewSelectionKey(livePane.__preview_target_key || '');
     let liveRequestedKey = normalisePreviewSelectionKey(livePane.__preview_load_requested_target_key || '');
-    const liveTargetMatchesSelection = !!(liveSignedUrl && liveTargetKey === previewSelectionKey);
+    const liveTargetMatchesSelection = !!(liveSignedUrl && liveTargetKey === previewSelectionKey && isSignedUrlUsableForPreviewRender(liveSignedUrl, previewFileKey));
     const liveRequestedMatchesSelection = !liveRequestedKey || liveRequestedKey === previewSelectionKey;
     if (liveTargetMatchesSelection && liveRequestedMatchesSelection) {
       signedUrl = liveSignedUrl;
@@ -162866,6 +162979,10 @@ function renderBulkProcessPreviewPane(state) {
     </div>
   `);
 }
+
+
+
+
 
 async function openBulkProcessWorkbench(seed = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][OPEN]');
@@ -171389,7 +171506,6 @@ function bindBulkProcessManualEditor(state) {
   }
 }
 
-
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -171425,6 +171541,7 @@ function bindBulkProcessPreviewPane(state) {
           __preview_signed_url_meta_by_cache_key: {},
           __preview_failed_signed_url_by_target: {},
           __preview_image_retry_by_target: {},
+          __preview_pdf_retry_by_target: {},
           __preview_presign_inflight: {},
           __preview_target_key: '',
           __preview_signed_url: '',
@@ -171920,6 +172037,7 @@ function bindBulkProcessPreviewPane(state) {
   pane.__preview_signed_url_meta_by_cache_key = (pane.__preview_signed_url_meta_by_cache_key && typeof pane.__preview_signed_url_meta_by_cache_key === 'object') ? pane.__preview_signed_url_meta_by_cache_key : {};
   pane.__preview_failed_signed_url_by_target = (pane.__preview_failed_signed_url_by_target && typeof pane.__preview_failed_signed_url_by_target === 'object') ? pane.__preview_failed_signed_url_by_target : {};
   pane.__preview_image_retry_by_target = (pane.__preview_image_retry_by_target && typeof pane.__preview_image_retry_by_target === 'object') ? pane.__preview_image_retry_by_target : {};
+  pane.__preview_pdf_retry_by_target = (pane.__preview_pdf_retry_by_target && typeof pane.__preview_pdf_retry_by_target === 'object') ? pane.__preview_pdf_retry_by_target : {};
   pane.__preview_signed_url_stored_at_ms = Number(pane.__preview_signed_url_stored_at_ms || 0) || 0;
   pane.__preview_signed_url_expires_at_ms = Number(pane.__preview_signed_url_expires_at_ms || 0) || 0;
   pane.__preview_load_requested_target_key = trimStr(pane.__preview_load_requested_target_key || '');
@@ -172634,6 +172752,69 @@ function bindBulkProcessPreviewPane(state) {
     return Number.isFinite(ms) ? ms : 0;
   };
 
+  const base64UrlDecodeToStringForPreview = (valueInput = '') => {
+    const value = trimStr(valueInput || '');
+    if (!value) return '';
+    try {
+      const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
+      if (typeof atob === 'function') return decodeURIComponent(Array.prototype.map.call(atob(padded), (ch) => '%' + ('00' + ch.charCodeAt(0).toString(16)).slice(-2)).join(''));
+    } catch {}
+    try {
+      const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
+      if (typeof atob === 'function') return atob(padded);
+    } catch {}
+    return '';
+  };
+
+  const decodeSignedUrlTokenPayloadForPreview = (signedUrlInput = '') => {
+    const signedUrl = trimStr(signedUrlInput || '');
+    if (!signedUrl) return null;
+    try {
+      const urlObj = new URL(signedUrl, window.location?.origin || 'http://localhost');
+      const token = trimStr(urlObj.searchParams.get('token') || '');
+      if (!token) return null;
+      const parts = token.split('.').map((part) => trimStr(part)).filter(Boolean);
+      const candidates = [];
+      if (parts.length >= 3) candidates.push(parts[1]);
+      if (parts.length >= 1) candidates.push(parts[0]);
+      for (const part of candidates) {
+        const decoded = base64UrlDecodeToStringForPreview(part);
+        if (!decoded) continue;
+        try {
+          const parsed = JSON.parse(decoded);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+        } catch {}
+      }
+    } catch {}
+    return null;
+  };
+
+  const normaliseSignedUrlExpiryMsForPreview = (rawValue) => {
+    if (rawValue == null || rawValue === '') return 0;
+    if (typeof rawValue === 'string' && /[T:-]/.test(rawValue)) {
+      const parsedMs = Date.parse(rawValue);
+      if (Number.isFinite(parsedMs) && parsedMs > 0) return parsedMs;
+    }
+    const num = Number(rawValue || 0) || 0;
+    if (!num) return 0;
+    if (num > 100000000000) return num;
+    if (num > 1000000000) return num * 1000;
+    return 0;
+  };
+
+  const resolveSignedUrlStorageKeyForPreview = (signedUrlInput = '') => {
+    const signedUrl = trimStr(signedUrlInput || '');
+    if (!signedUrl) return '';
+    try {
+      const urlObj = new URL(signedUrl, window.location?.origin || 'http://localhost');
+      const keyParam = trimStr(urlObj.searchParams.get('key') || '').replace(/^\/+/, '');
+      if (keyParam) return keyParam;
+      const tokenPayload = decodeSignedUrlTokenPayloadForPreview(signedUrl);
+      return trimStr(tokenPayload?.storage_key || tokenPayload?.storageKey || tokenPayload?.file_key || tokenPayload?.fileKey || tokenPayload?.key || '').replace(/^\/+/, '');
+    } catch {}
+    return '';
+  };
+
   const resolveSignedUrlExplicitExpiryMs = (signedUrlInput = '') => {
     const signedUrl = trimStr(signedUrlInput || '');
     if (!signedUrl) return 0;
@@ -172645,19 +172826,13 @@ function bindBulkProcessPreviewPane(state) {
       const amzDateMs = parseBulkProcessAmzDateMs(amzDate);
       if (amzDateMs && amzExpires > 0) return amzDateMs + (amzExpires * 1000);
 
-      const expValues = [
-        params.get('exp'),
-        params.get('expires'),
-        params.get('Expires'),
-        params.get('expires_at'),
-        params.get('expiry'),
-        params.get('e')
-      ];
-      for (const raw of expValues) {
-        const num = Number(raw || 0) || 0;
-        if (!num) continue;
-        if (num > 100000000000) return num;
-        if (num > 1000000000) return num * 1000;
+      const tokenPayload = decodeSignedUrlTokenPayloadForPreview(signedUrl);
+      const tokenExpiryMs = normaliseSignedUrlExpiryMsForPreview(tokenPayload?.exp ?? tokenPayload?.expires ?? tokenPayload?.expires_at ?? tokenPayload?.expiry ?? tokenPayload?.e);
+      if (tokenExpiryMs) return tokenExpiryMs;
+
+      for (const key of ['exp', 'expires', 'Expires', 'expires_at', 'expiry', 'e']) {
+        const expiryMs = normaliseSignedUrlExpiryMsForPreview(params.get(key));
+        if (expiryMs) return expiryMs;
       }
     } catch {}
     return 0;
@@ -172744,10 +172919,37 @@ function bindBulkProcessPreviewPane(state) {
     const signedUrl = trimStr(signedUrlInput || '');
     if (!fileKey && !signedUrl) return;
     const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : capturePreviewCommitSnapshot(null, { reason: 'cache-clear' });
-    const cacheKeys = [fileKey, fileKey ? getPreviewOwnerCacheKey(fileKey, snap) : ''].filter(Boolean);
-    cacheKeys.forEach((cacheKey) => {
+    const ownerCacheKey = fileKey ? getPreviewOwnerCacheKey(fileKey, snap) : '';
+    const keyNeedles = [fileKey, ownerCacheKey].map((value) => trimStr(value || '').toLowerCase()).filter(Boolean);
+    const signedStorageKey = resolveSignedUrlStorageKeyForPreview(signedUrl).toLowerCase();
+    if (signedStorageKey) keyNeedles.push(signedStorageKey);
+    const shouldClearCacheKey = (cacheKeyInput = '') => {
+      const cacheKey = trimStr(cacheKeyInput || '');
+      if (!cacheKey) return false;
+      const cacheKeyLower = cacheKey.toLowerCase();
       const cachedUrl = trimStr(pane.__preview_signed_url_cache?.[cacheKey] || '');
-      if (signedUrl && cachedUrl && cachedUrl !== signedUrl) return;
+      if (signedUrl && cachedUrl && cachedUrl !== signedUrl) {
+        const cachedStorageKey = resolveSignedUrlStorageKeyForPreview(cachedUrl).toLowerCase();
+        if (!cachedStorageKey || (signedStorageKey && cachedStorageKey !== signedStorageKey)) return false;
+      }
+      return keyNeedles.some((needle) => needle && cacheKeyLower.includes(needle));
+    };
+    const mapNames = [
+      '__preview_signed_url_cache',
+      '__preview_signed_url_meta_by_cache_key',
+      '__preview_signed_url_context_by_cache_key',
+      '__preview_signed_url_owner_by_cache_key'
+    ];
+    const keysToClear = new Set();
+    for (const mapName of mapNames) {
+      const map = pane[mapName];
+      if (!map || typeof map !== 'object') continue;
+      Object.keys(map).forEach((cacheKey) => {
+        if (shouldClearCacheKey(cacheKey)) keysToClear.add(cacheKey);
+      });
+    }
+    [fileKey, ownerCacheKey].filter(Boolean).forEach((cacheKey) => keysToClear.add(cacheKey));
+    keysToClear.forEach((cacheKey) => {
       try { delete pane.__preview_signed_url_cache[cacheKey]; } catch {}
       try { delete pane.__preview_signed_url_meta_by_cache_key[cacheKey]; } catch {}
       try { delete pane.__preview_signed_url_context_by_cache_key[cacheKey]; } catch {}
@@ -172962,6 +173164,16 @@ function bindBulkProcessPreviewPane(state) {
     const previewItem = (previewState.previewItem && typeof previewState.previewItem === 'object') ? previewState.previewItem : livePreviewState.previewItem;
     const fileKey = resolvePreviewFileCacheKey(previewItem, selectionKey) || commitSnapshotFileKey || resolvePreviewFileCacheKey(livePreviewState.previewItem, selectionKey);
     if (!fileKey) return reject('missing-file-key');
+
+    const signedUrlStorageKeyForCommit = resolveSignedUrlStorageKeyForPreview(signedUrl);
+    if (signedUrlStorageKeyForCommit && signedUrlStorageKeyForCommit !== fileKey) {
+      return reject('signed-url-file-key-mismatch', { signedUrlStorageKey: signedUrlStorageKeyForCommit, fileKey });
+    }
+    const signedUrlMetaForCommit = buildSignedUrlMetaForPreview(signedUrl, commitSnapshot);
+    if (isSignedUrlExpiredForPreview(signedUrl, signedUrlMetaForCommit)) {
+      clearCachedSignedUrlForPreview(fileKey, commitSnapshot, signedUrl);
+      return reject('signed-url-expired-before-commit', { expiresAtMs: signedUrlMetaForCommit.expiresAtMs || 0 });
+    }
 
     setCachedSignedUrlForPreview(fileKey, signedUrl, commitSnapshot);
     const committedMeta = getSignedUrlMetaForPreview(fileKey, commitSnapshot, signedUrl) || buildSignedUrlMetaForPreview(signedUrl, commitSnapshot);
@@ -173328,7 +173540,7 @@ function bindBulkProcessPreviewPane(state) {
     const zoom = Number(previewState.zoom || 1) || 1;
     const rotationDeg = Number(previewState.rotationDeg || 0) || 0;
     const activePage = Math.max(1, Number(previewState.activePdfPage || 1) || 1);
-    const pageCount = Number(previewState.pageCount || 0) || 0;
+    const pageCount = Math.max(1, Number(previewState.pageCount || 1) || 1);
     const previewRenderKey = `${previewSelectionKey}|${signedUrl}|${zoom}|${rotationDeg}|${activePage}`;
 
     renderToolbar(previewState, previewItem, previewSelectionKey, previewRenderKey, signedUrl, isPdf, pageCount, activePage, rotationDeg, zoom);
@@ -176197,6 +176409,8 @@ function bindBulkProcessPreviewPane(state) {
         try { delete pane.__preview_signed_url_owner_by_cache_key[selectionKey]; } catch {}
         try { delete pane.__preview_failed_signed_url_by_target[selectionKey]; } catch {}
         try { delete pane.__preview_image_retry_by_target[getImageRetryKeyForPreview(selectionKey, target.storageKey)]; } catch {}
+        try { delete pane.__preview_pdf_retry_by_target[getPdfRetryKeyForPreview(selectionKey, target.storageKey)]; } catch {}
+        try { delete pane.pdf_page_by_target?.[selectionKey]; } catch {}
       }
 
       if (activeSelectionRemoved) {
@@ -176558,14 +176772,16 @@ function bindBulkProcessPreviewPane(state) {
   const renderToolbar = (previewState, previewItem, previewSelectionKey, previewRenderKey, signedUrl, isPdf, pageCount, activePage, rotationDeg, zoom) => {
     const toolbar = q('#bulkProcessPreviewToolbar');
     if (!toolbar) return;
+    const safePageCount = isPdf ? Math.max(1, Number(pageCount || 1) || 1) : 0;
+    const safeActivePage = isPdf ? Math.max(1, Math.min(Math.max(1, Number(activePage || 1) || 1), safePageCount)) : Math.max(1, Number(activePage || 1) || 1);
     toolbar.innerHTML = [
       `<button type="button" class="btn btn-outline" id="bulkProcessPreviewZoomOutBtn">−</button>`,
       `<button type="button" class="btn btn-outline" id="bulkProcessPreviewZoomInBtn">+</button>`,
       `<button type="button" class="btn btn-outline" id="bulkProcessPreviewRotateLeftBtn" title="Rotate left" aria-label="Rotate left">↺</button>`,
       `<button type="button" class="btn btn-outline" id="bulkProcessPreviewRotateRightBtn" title="Rotate right" aria-label="Rotate right">↻</button>`,
-      isPdf ? `<button type="button" class="btn btn-outline" id="bulkProcessPreviewPagePrevBtn" ${activePage > 1 ? '' : 'disabled'}>Prev page</button>` : '',
-      isPdf ? `<span class="mini" id="bulkProcessPreviewPageLabel">Page ${enc(String(activePage))} of ${enc(String(pageCount))}</span>` : '',
-      isPdf ? `<button type="button" class="btn btn-outline" id="bulkProcessPreviewPageNextBtn" ${activePage < pageCount ? '' : 'disabled'}>Next page</button>` : '',
+      isPdf ? `<button type="button" class="btn btn-outline" id="bulkProcessPreviewPagePrevBtn" ${safeActivePage > 1 ? '' : 'disabled'}>Prev page</button>` : '',
+      isPdf ? `<span class="mini" id="bulkProcessPreviewPageLabel">Page ${enc(String(safeActivePage))} of ${enc(String(safePageCount))}</span>` : '',
+      isPdf ? `<button type="button" class="btn btn-outline" id="bulkProcessPreviewPageNextBtn" ${safeActivePage < safePageCount ? '' : 'disabled'}>Next page</button>` : '',
       `<button type="button" class="btn btn-outline" id="bulkProcessPreviewOpenLargeBtn">Open larger</button>`
     ].filter(Boolean).join('');
 
@@ -177092,6 +177308,8 @@ function bindBulkProcessPreviewPane(state) {
     return `${selectionKey}|${fileKey}`;
   };
 
+  const getPdfRetryKeyForPreview = (selectionKeyInput = '', fileKeyInput = '') => getImageRetryKeyForPreview(selectionKeyInput, fileKeyInput);
+
   const bindImagePreviewLoadGuards = (img, signedUrlInput = '', previewFileCacheKeyInput = '', previewSelectionKeyInput = '', previewRenderKeyInput = '') => {
     if (!img) return;
     const signedUrl = trimStr(signedUrlInput || '');
@@ -177197,6 +177415,97 @@ function bindBulkProcessPreviewPane(state) {
     }, 80);
   };
 
+  const bindPdfPreviewLoadGuards = (frame, signedUrlInput = '', previewFileCacheKeyInput = '', previewSelectionKeyInput = '', previewRenderKeyInput = '') => {
+    if (!frame) return;
+    const signedUrl = trimStr(signedUrlInput || '');
+    const previewFileCacheKey = trimStr(previewFileCacheKeyInput || '').replace(/^\/+/, '');
+    const previewSelectionKey = normalisePreviewSelectionKey(previewSelectionKeyInput || '');
+    const previewRenderKey = trimStr(previewRenderKeyInput || '');
+    if (!signedUrl || !previewFileCacheKey || !previewSelectionKey) return;
+
+    frame.setAttribute('data-bp-preview-signed-url', signedUrl);
+    frame.setAttribute('data-bp-preview-load-guard-key', previewRenderKey || `${previewSelectionKey}|${signedUrl}`);
+
+    const retryKey = getPdfRetryKeyForPreview(previewSelectionKey, previewFileCacheKey);
+    const stillCurrentPdfTarget = () => {
+      if (!frame.isConnected || !root.contains(frame)) return false;
+      const liveFrame = q('#bulkProcessPdfPreviewFrame');
+      if (liveFrame && liveFrame !== frame) return false;
+      const liveSelection = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+      const liveTarget = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+      const liveRequested = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+      const liveItem = resolveActiveBulkProcessPreviewItem();
+      const liveFileKey = resolvePreviewFileCacheKey(liveItem, liveSelection);
+      const liveSignedUrl = trimStr(pane.__preview_signed_url || '');
+      const frameSelection = normalisePreviewSelectionKey(frame.getAttribute('data-bp-preview-selection-key') || previewSelectionKey);
+      const frameFileKey = trimStr(frame.getAttribute('data-bp-preview-file-key') || previewFileCacheKey).replace(/^\/+/, '');
+      return !!(
+        liveSelection === previewSelectionKey &&
+        frameSelection === previewSelectionKey &&
+        (!liveTarget || liveTarget === previewSelectionKey) &&
+        (!liveRequested || liveRequested === previewSelectionKey) &&
+        liveFileKey === previewFileCacheKey &&
+        frameFileKey === previewFileCacheKey &&
+        (!liveSignedUrl || liveSignedUrl === signedUrl)
+      );
+    };
+
+    const clearSuccessfulPdfLoadState = () => {
+      if (!stillCurrentPdfTarget()) return;
+      try { delete pane.__preview_pdf_retry_by_target[retryKey]; } catch {}
+      const failed = pane.__preview_failed_signed_url_by_target?.[previewSelectionKey];
+      const failedUrl = typeof failed === 'string' ? failed : trimStr(failed?.url || '');
+      if (!failedUrl || failedUrl === signedUrl) {
+        try { delete pane.__preview_failed_signed_url_by_target[previewSelectionKey]; } catch {}
+      }
+      pane.__preview_error = '';
+    };
+
+    const recoverFailedPdfLoad = (reason = 'pdf-load-failed') => {
+      if (!stillCurrentPdfTarget()) return;
+      const attempts = Number(pane.__preview_pdf_retry_by_target?.[retryKey] || 0) || 0;
+      if (attempts >= 1) {
+        pane.__preview_error = trimStr(reason || 'pdf-load-failed');
+        const stageNow = q('#bulkProcessPreviewStage');
+        if (stageNow && stageNow.contains(frame)) {
+          stageNow.innerHTML = `<span class="mini" style="opacity:.75;">${enc('PDF preview failed to load. Select the file again to retry.')}</span>`;
+        }
+        logPreviewCommitEvent(captureBulkAuthorisePreviewSnapshot(getPreviewState()), {
+          event: 'pdf-load-retry-skipped',
+          reason,
+          selectionKey: previewSelectionKey,
+          fileKey: previewFileCacheKey,
+          retryAttempts: attempts
+        });
+        return;
+      }
+
+      pane.__preview_pdf_retry_by_target[retryKey] = attempts + 1;
+      const snapshot = capturePreviewCommitSnapshot(getPreviewState(), { reason: `pdf-load-failed-${reason}` });
+      const invalidated = invalidateSignedUrlForPreviewTarget(previewSelectionKey, previewFileCacheKey, signedUrl, reason, { snapshot });
+      if (!invalidated) return;
+      const stageNow = q('#bulkProcessPreviewStage');
+      if (stageNow && stageNow.contains(frame)) {
+        stageNow.innerHTML = `<span class="mini" style="opacity:.75;">${enc('Preview is loading…')}</span>`;
+      }
+      logPreviewCommitEvent(captureBulkAuthorisePreviewSnapshot(getPreviewState()), {
+        event: 'pdf-load-retry-presign',
+        reason,
+        selectionKey: previewSelectionKey,
+        fileKey: previewFileCacheKey,
+        retryAttempts: attempts + 1
+      });
+      Promise.resolve().then(async () => {
+        if (!isActiveBind()) return;
+        await renderStage();
+      }).catch((e) => warnPreview('[PDF-LOAD-RECOVERY]', e));
+    };
+
+    frame.onload = clearSuccessfulPdfLoadState;
+    frame.onerror = () => recoverFailedPdfLoad('pdf-onerror');
+    try { frame.addEventListener('error', () => recoverFailedPdfLoad('pdf-error-event'), { once: true }); } catch {}
+  };
+
   const renderImageStage = (stage, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
     const existingWrap = q('#bulkProcessImagePreviewWrap');
     const existingImg = q('#bulkProcessImagePreviewEl');
@@ -177270,6 +177579,7 @@ function bindBulkProcessPreviewPane(state) {
       }
       existingFrame.style.transform = `scale(${zoom}) rotate(${rotationDeg}deg)`;
       existingFrame.style.transformOrigin = 'center center';
+      bindPdfPreviewLoadGuards(existingFrame, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
       return;
     }
 
@@ -177308,6 +177618,7 @@ function bindBulkProcessPreviewPane(state) {
         ></iframe>
       </div>
     `;
+    bindPdfPreviewLoadGuards(q('#bulkProcessPdfPreviewFrame'), signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
   };
 
 
@@ -177384,6 +177695,7 @@ function bindBulkProcessPreviewPane(state) {
       if (existingSrc !== previewUrl) existingFrame.setAttribute('src', previewUrl);
       existingFrame.style.transform = `scale(${zoom}) rotate(${rotationDeg}deg)`;
       existingFrame.style.transformOrigin = 'center center';
+      bindPdfPreviewLoadGuards(existingFrame, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
       return;
     }
 
@@ -177422,6 +177734,7 @@ function bindBulkProcessPreviewPane(state) {
         ></iframe>
       </div>
     `;
+    bindPdfPreviewLoadGuards(stage.querySelector('#bulkProcessPdfPreviewFrame'), signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
   };
 
   const commitAndRenderBulkAuthoriseLivePresignResult = async (commitContext = {}) => {
@@ -180578,6 +180891,8 @@ function renderBulkProcessSelectedSummaryStrip(state) {
   `);
 }
 
+
+
 function renderBulkProcessEvidencePane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -180628,6 +180943,8 @@ function renderBulkProcessEvidencePane(state) {
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const upper = (v) => trimStr(v).toUpperCase();
   const hasOpenValue = (v) => trimStr(v) !== '';
+  const isSystemContractWeekPdfArtifactIdForEvidenceRender = (value) => /^sys:contract_week_pdf:/i.test(trimStr(value || ''));
+  const safeSystemTimesheetArtifactDisplayNameForEvidenceRender = () => 'Uploaded timesheet PDF';
   const isBulkAuthoriseContext = renderIsBulkAuthoriseContext;
   const bulkAuthoriseTimesheetsContext = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
     ? resolveBulkAuthoriseTimesheetsEvidenceContext(st)
@@ -181063,13 +181380,14 @@ function renderBulkProcessEvidencePane(state) {
       const kind = normaliseRenderKind(artifact?.kind || artifact?.evidence_kind || container.primary_artifact_kind || hints.primary_artifact_kind || '') || 'OTHER';
       const fileNameFromStorageKey = storageKey.split('/').filter(Boolean).pop() || '';
       const primaryIsSystemArtifact = /^sys:/i.test(primaryId || '');
-      const artifactDisplayName = trimStr(artifact?.display_name || artifact?.displayName || artifact?.filename || artifact?.original_filename || artifact?.originalFilename || '');
+      const primaryIsSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForEvidenceRender(primaryId);
+      const artifactDisplayName = primaryIsSystemContractWeekPdfArtifact ? '' : trimStr(artifact?.display_name || artifact?.displayName || artifact?.filename || artifact?.original_filename || artifact?.originalFilename || '');
       const containerDisplayMatchesArtifact = !primaryIsSystemArtifact && !!(
         (trimStr(container.primary_artifact_id || hints.primary_artifact_id || '') && trimStr(container.primary_artifact_id || hints.primary_artifact_id || '') === primaryId) ||
         (trimStr(container.primary_artifact_storage_key || hints.primary_artifact_storage_key || '').replace(/^\/+/, '') && trimStr(container.primary_artifact_storage_key || hints.primary_artifact_storage_key || '').replace(/^\/+/, '') === storageKey)
       );
       const containerDisplayName = containerDisplayMatchesArtifact ? trimStr(container.primary_artifact_display_name || hints.primary_artifact_display_name || '') : '';
-      const displayName = artifactDisplayName || containerDisplayName || (kind === 'TIMESHEET' ? (fileNameFromStorageKey || 'Timesheet PDF') : (fileNameFromStorageKey || 'Evidence'));
+      const displayName = primaryIsSystemContractWeekPdfArtifact ? safeSystemTimesheetArtifactDisplayNameForEvidenceRender() : (artifactDisplayName || containerDisplayName || (kind === 'TIMESHEET' ? (fileNameFromStorageKey || 'Timesheet PDF') : (fileNameFromStorageKey || 'Evidence')));
       const fallbackItem = { ...(artifact || {}), storage_key: storageKey, file_key: storageKey, id: primaryId || storageKey, evidence_id: primaryId || null, kind };
       if (removedEvidenceItemMatchesForRender(fallbackItem)) continue;
       rows.push({
@@ -181080,7 +181398,8 @@ function renderBulkProcessEvidencePane(state) {
         kind,
         staged_kind: kind,
         display_name: displayName,
-        filename: artifactDisplayName || displayName,
+        filename: displayName,
+        original_filename: displayName,
         storage_key: storageKey || null,
         r2_key: storageKey || null,
         file_key: storageKey || null,
@@ -181170,7 +181489,9 @@ function renderBulkProcessEvidencePane(state) {
       const attachedId = getRenderAttachedId({ ...item, storage_key: storageKey, file_key: storageKey }) || evidenceId || queueId || storageKey;
       if (!attachedId || !storageKey) return;
       const kind = normaliseRenderKind(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || item.stagedKind || itemMeta.kind || itemMeta.evidence_kind || itemMeta.evidenceKind || '') || 'OTHER';
-      const displayName = trimStr(item.display_name || item.displayName || item.filename || item.original_filename || item.originalFilename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence');
+      const isSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForEvidenceRender(attachedId || item.id || evidenceId || '');
+      const rawDisplayName = trimStr(item.display_name || item.displayName || item.filename || item.original_filename || item.originalFilename || '');
+      const displayName = isSystemContractWeekPdfArtifact ? safeSystemTimesheetArtifactDisplayNameForEvidenceRender() : (rawDisplayName || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'));
       const normalised = {
         ...(item || {}),
         id: attachedId,
@@ -181180,8 +181501,8 @@ function renderBulkProcessEvidencePane(state) {
         kind,
         staged_kind: isStaged ? kind : (item.staged_kind || item.stagedKind || null),
         display_name: displayName,
-        filename: trimStr(item.filename || item.display_name || item.original_filename || '') || displayName,
-        original_filename: trimStr(item.original_filename || item.originalFilename || item.filename || item.display_name || '') || displayName,
+        filename: isSystemContractWeekPdfArtifact ? displayName : (trimStr(item.filename || item.display_name || item.original_filename || '') || displayName),
+        original_filename: isSystemContractWeekPdfArtifact ? displayName : (trimStr(item.original_filename || item.originalFilename || item.filename || item.display_name || '') || displayName),
         storage_key: storageKey,
         r2_key: storageKey,
         file_key: storageKey,
@@ -181474,8 +181795,6 @@ function renderBulkProcessEvidencePane(state) {
     </div>
   `);
 }
-
-
 
 
 function ensureBulkAuthoriseManualDraftState(state) {
@@ -183006,6 +183325,96 @@ function bindBulkProcessEvidencePane(state) {
   const deep = (v) => { try { return JSON.parse(JSON.stringify(v)); } catch { return v; } };
   const upper = (v) => String(v == null ? '' : v).trim().toUpperCase();
   const trimStr = (v) => String(v == null ? '' : v).trim();
+  const retirePreviewSignedUrlStateAfterEvidenceMutation = (targetInput = {}, retireOptions = {}) => {
+    const target = (targetInput && typeof targetInput === 'object') ? targetInput : {};
+    const opts = (retireOptions && typeof retireOptions === 'object') ? retireOptions : {};
+    const storageKey = trimStr(target.storageKey || target.fileKey || target.storage_key || target.file_key || '').replace(/^\/+/, '');
+    const selectionKeys = new Set([
+      target.selectionKey,
+      target.attachedSelectionKey,
+      pane.__active_attached_preview_target,
+      pane.__preview_target_key,
+      pane.__preview_load_requested_target_key
+    ].map((value) => trimStr(value || '')).filter(Boolean));
+    const ids = new Set([
+      target.attachedId,
+      target.evidenceId,
+      target.queueId,
+      target.id,
+      target.evidence_id,
+      target.queue_id
+    ].map((value) => trimStr(value || '')).filter(Boolean));
+    const storageNeedle = storageKey.toLowerCase();
+    const matchesTarget = (valueInput = '') => {
+      const value = trimStr(valueInput || '');
+      if (!value) return false;
+      const lower = value.toLowerCase();
+      if (storageNeedle && lower.includes(storageNeedle)) return true;
+      for (const key of selectionKeys) {
+        if (key && (value === key || lower.includes(key.toLowerCase()))) return true;
+      }
+      for (const id of ids) {
+        if (id && lower.includes(id.toLowerCase())) return true;
+      }
+      return false;
+    };
+    const clearMatchingMapKeys = (mapName) => {
+      const map = pane[mapName];
+      if (!map || typeof map !== 'object') return;
+      Object.keys(map).forEach((key) => {
+        const val = map[key];
+        const valUrl = typeof val === 'string' ? val : trimStr(val?.url || '');
+        if (matchesTarget(key) || matchesTarget(valUrl)) {
+          try { delete map[key]; } catch {}
+        }
+      });
+    };
+    [
+      '__preview_signed_url_cache',
+      '__preview_signed_url_meta_by_cache_key',
+      '__preview_signed_url_context_by_cache_key',
+      '__preview_signed_url_owner_by_cache_key',
+      '__preview_failed_signed_url_by_target',
+      '__preview_image_retry_by_target',
+      '__preview_pdf_retry_by_target',
+      'pdf_page_by_target'
+    ].forEach(clearMatchingMapKeys);
+    const inflight = pane.__preview_presign_inflight;
+    if (inflight && typeof inflight === 'object') {
+      Object.keys(inflight).forEach((key) => {
+        if (!matchesTarget(key)) return;
+        try { inflight[key]?.abortController?.abort?.(); } catch {}
+        try { inflight[key]?.controller?.abort?.(); } catch {}
+        try { delete inflight[key]; } catch {}
+      });
+    }
+    const shouldClearActivePreviewTarget = (targetKeyInput = '') => {
+      const targetKey = trimStr(targetKeyInput || '');
+      if (!targetKey) return false;
+      if (opts.preserveQueueSelection === true && /^queue\|/i.test(targetKey)) return false;
+      return matchesTarget(targetKey);
+    };
+    const currentSignedUrl = trimStr(pane.__preview_signed_url || '');
+    if (currentSignedUrl && (matchesTarget(currentSignedUrl) || shouldClearActivePreviewTarget(pane.__preview_target_key) || shouldClearActivePreviewTarget(pane.__preview_load_requested_target_key))) {
+      pane.__preview_signed_url = '';
+      pane.__preview_signed_url_stored_at_ms = 0;
+      pane.__preview_signed_url_expires_at_ms = 0;
+    }
+    if (shouldClearActivePreviewTarget(pane.__preview_target_key)) pane.__preview_target_key = '';
+    if (shouldClearActivePreviewTarget(pane.__preview_load_requested_target_key)) pane.__preview_load_requested_target_key = '';
+    if (shouldClearActivePreviewTarget(pane.__active_attached_preview_target)) pane.__active_attached_preview_target = '';
+    if (opts.clearAttachedTarget !== false && (matchesTarget(pane.active_attached_id) || matchesTarget(getAttachedEvidenceFileKey(pane.active_attached_item || {})))) {
+      pane.active_attached_id = null;
+      pane.active_attached_item = null;
+      pane.active_attached_pdf_page = 1;
+    }
+    pane.active_pdf_page = 1;
+    try {
+      if (typeof window.__bulkProcessRetirePreviewSignedUrlState === 'function') {
+        window.__bulkProcessRetirePreviewSignedUrlState({ ...target, storageKey, fileKey: storageKey }, { ...opts, pane, state: st });
+      }
+    } catch {}
+  };
 
   const getActiveEvidenceDomainPolicy = () => {
     if (typeof classifyTimesheetEditDomains !== 'function') return null;
@@ -185359,7 +185768,9 @@ const getAttachedEvidenceId = (item) => {
           kind,
           staged_kind: kind,
           display_name: displayName,
-          filename: artifactDisplayName || displayName,
+          filename: displayName,
+
+        original_filename: displayName,
           original_filename: pickFirst(artifact?.original_filename, artifact?.originalFilename) || artifactDisplayName || displayName,
           storage_key: storageKey,
           r2_key: storageKey,
@@ -186579,9 +186990,12 @@ const getAttachedEvidenceId = (item) => {
           pane.active_pdf_page = 1;
           const queueFileKey = getAttachedEvidenceFileKey(returned);
           const queueSelectionKey = buildQueuePreviewSelectionKeyForEvidencePaneAnchor(returned);
+          retirePreviewSignedUrlStateAfterEvidenceMutation(targetForPrune, { reason: 'returned-evidence-queue-select', preserveQueueSelection: true, clearAttachedTarget: true });
           pane.__preview_target_key = queueSelectionKey;
           pane.__preview_load_requested_target_key = queueSelectionKey;
           pane.__preview_signed_url = '';
+          pane.__preview_signed_url_stored_at_ms = 0;
+          pane.__preview_signed_url_expires_at_ms = 0;
           rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item, { selectionKey: queueSelectionKey, reason: 'returned-evidence-queue-select' });
           return true;
         };
@@ -186630,6 +187044,8 @@ const getAttachedEvidenceId = (item) => {
                     });
                   }
                 }
+
+                retirePreviewSignedUrlStateAfterEvidenceMutation(targetForPrune, { reason: `evidence-${action}-success`, preserveQueueSelection: action === 'return-to-queue', clearAttachedTarget: true });
 
                 if (typeof refreshTimesheetImportsQueue === 'function') {
                   await refreshTimesheetImportsQueue(pane, {
@@ -186703,6 +187119,7 @@ const getAttachedEvidenceId = (item) => {
                     });
                   }
                 }
+                retirePreviewSignedUrlStateAfterEvidenceMutation(targetForPrune, { reason: `evidence-${action}-success`, preserveQueueSelection: action === 'return-to-queue', clearAttachedTarget: true });
                 if (typeof refreshTimesheetImportsQueue === 'function') {
                   await refreshTimesheetImportsQueue(pane, {
                     ownerState: st,
@@ -187092,6 +187509,7 @@ const getAttachedEvidenceId = (item) => {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
+
 
 
 
@@ -191885,6 +192303,7 @@ async function bankingPayProviderSubmitReviewResolve(input, maybeOptions = {}) {
   return normalised;
 }
 
+
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   const st = (state && typeof state === 'object') ? state : {};
@@ -191920,6 +192339,26 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     const s = trimStr(value).toLowerCase();
 
     return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+
+  };
+
+  const isSystemContractWeekPdfArtifactIdForReconcile = (value) => /^sys:contract_week_pdf:/i.test(trimStr(value || ''));
+
+  const safeSystemTimesheetArtifactDisplayNameForReconcile = () => 'Uploaded timesheet PDF';
+
+  const cleanPrimaryArtifactDisplayNameForReconcile = (artifactIdInput = '', kindInput = '', storageKeyInput = '', ...nameCandidates) => {
+
+    if (isSystemContractWeekPdfArtifactIdForReconcile(artifactIdInput)) return safeSystemTimesheetArtifactDisplayNameForReconcile();
+
+    const explicit = nameCandidates.map((value) => trimStr(value || '')).find(Boolean);
+
+    if (explicit) return explicit;
+
+    const fileNameFromStorageKey = trimStr(storageKeyInput || '').split('/').filter(Boolean).pop() || '';
+
+    const kind = normaliseEvidenceKindForReconcile(kindInput || '');
+
+    return kind === 'TIMESHEET' ? (fileNameFromStorageKey || 'Timesheet PDF') : (fileNameFromStorageKey || 'Evidence');
 
   };
 
@@ -195573,7 +196012,9 @@ const getAttachedSelectionParts = (item) => {
 
       const primaryIsSystemArtifact = /^sys:/i.test(primaryId || '');
 
-      const artifactDisplayName = trimStr(artifact?.display_name || artifact?.displayName || artifact?.filename || artifact?.original_filename || artifact?.originalFilename || '');
+      const primaryIsSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForReconcile(primaryId);
+
+      const artifactDisplayName = primaryIsSystemContractWeekPdfArtifact ? '' : trimStr(artifact?.display_name || artifact?.displayName || artifact?.filename || artifact?.original_filename || artifact?.originalFilename || '');
 
       const containerDisplayMatchesArtifact = !!(
 
@@ -195599,7 +196040,7 @@ const getAttachedSelectionParts = (item) => {
 
         : (fileNameFromStorageKey || 'Evidence');
 
-      const displayName = artifactDisplayName || containerDisplayName || safeFallbackName;
+      const displayName = primaryIsSystemContractWeekPdfArtifact ? safeSystemTimesheetArtifactDisplayNameForReconcile() : (artifactDisplayName || containerDisplayName || safeFallbackName);
 
       rows.push({
 
@@ -198215,6 +198656,12 @@ const getAttachedSelectionParts = (item) => {
 
       'primary_artifact_storage_key',
 
+      'primary_artifact_display_name',
+
+      'primary_artifact_mime_type',
+
+      'primary_artifact_source',
+
       'primary_artifact_preview_mode'
 
     ]) {
@@ -198393,6 +198840,12 @@ const getAttachedSelectionParts = (item) => {
 
     container.primary_artifact_storage_key = null;
 
+    container.primary_artifact_display_name = null;
+
+    container.primary_artifact_mime_type = null;
+
+    container.primary_artifact_source = null;
+
     container.primary_artifact_preview_mode = null;
 
     container.evidence_meta = {
@@ -198430,6 +198883,12 @@ const getAttachedSelectionParts = (item) => {
       primary_artifact_kind: null,
 
       primary_artifact_storage_key: null,
+
+      primary_artifact_display_name: null,
+
+      primary_artifact_mime_type: null,
+
+      primary_artifact_source: null,
 
       primary_artifact_preview_mode: null,
 
@@ -198495,13 +198954,75 @@ const getAttachedSelectionParts = (item) => {
 
       container.evidence_badges = evidenceBadges.map((badge) => ({ ...badge }));
 
-      container.primary_artifact = primaryEvidence ? deep(primaryEvidence) : null;
+      const primaryArtifactForContainer = primaryEvidence ? deep(primaryEvidence) : null;
+
+      const primaryDisplayName = primaryEvidence
+
+        ? cleanPrimaryArtifactDisplayNameForReconcile(
+
+            primaryId,
+
+            primaryKind,
+
+            primaryStorageKey,
+
+            primaryEvidence.display_name,
+
+            primaryEvidence.displayName,
+
+            primaryEvidence.filename,
+
+            primaryEvidence.original_filename,
+
+            primaryEvidence.originalFilename
+
+          )
+
+        : null;
+
+      const primaryMimeType = primaryEvidence ? (trimStr(primaryEvidence.mime_type || primaryEvidence.content_type || primaryEvidence.type || '') || null) : null;
+
+      const primarySource = primaryEvidence ? (trimStr(primaryEvidence.source || primaryEvidence.source_label || primaryEvidence.source_badge || '') || null) : null;
+
+      if (primaryArtifactForContainer) {
+
+        primaryArtifactForContainer.id = primaryId || primaryArtifactForContainer.id || primaryStorageKey || null;
+
+        primaryArtifactForContainer.evidence_id = trimStr(primaryArtifactForContainer.evidence_id || primaryArtifactForContainer.timesheet_evidence_id || primaryId || '') || null;
+
+        primaryArtifactForContainer.kind = primaryKind || primaryArtifactForContainer.kind || null;
+
+        primaryArtifactForContainer.storage_key = primaryStorageKey || primaryArtifactForContainer.storage_key || null;
+
+        primaryArtifactForContainer.file_key = primaryStorageKey || primaryArtifactForContainer.file_key || null;
+
+        primaryArtifactForContainer.download_storage_key = primaryStorageKey || primaryArtifactForContainer.download_storage_key || null;
+
+        primaryArtifactForContainer.display_name = primaryDisplayName || primaryArtifactForContainer.display_name || null;
+
+        primaryArtifactForContainer.filename = primaryDisplayName || primaryArtifactForContainer.filename || null;
+
+        primaryArtifactForContainer.original_filename = primaryDisplayName || primaryArtifactForContainer.original_filename || null;
+
+        if (primaryMimeType) primaryArtifactForContainer.mime_type = primaryMimeType;
+
+        if (primarySource) primaryArtifactForContainer.source = primarySource;
+
+      }
+
+      container.primary_artifact = primaryArtifactForContainer;
 
       container.primary_artifact_id = primaryId || null;
 
       container.primary_artifact_kind = primaryKind || null;
 
       container.primary_artifact_storage_key = primaryStorageKey || null;
+
+      container.primary_artifact_display_name = primaryDisplayName || null;
+
+      container.primary_artifact_mime_type = primaryMimeType || null;
+
+      container.primary_artifact_source = primarySource || null;
 
       container.primary_artifact_preview_mode = primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || null) : null;
 
@@ -198541,9 +199062,15 @@ const getAttachedSelectionParts = (item) => {
 
         primary_artifact_storage_key: primaryStorageKey || null,
 
+        primary_artifact_display_name: primaryDisplayName || null,
+
+        primary_artifact_mime_type: primaryMimeType || null,
+
+        primary_artifact_source: primarySource || null,
+
         primary_artifact_preview_mode: primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || null) : null,
 
-        primary_artifact: primaryEvidence ? deep(primaryEvidence) : null,
+        primary_artifact: primaryArtifactForContainer ? deep(primaryArtifactForContainer) : null,
 
         evidence_badges: evidenceBadges.map((badge) => ({ ...badge }))
 
@@ -198668,7 +199195,6 @@ const getAttachedSelectionParts = (item) => {
   };
 
 }
-
 
 
 
