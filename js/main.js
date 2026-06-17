@@ -179647,7 +179647,6 @@ function bindBulkProcessPreviewPane(state) {
 }
 
 
-
 function renderBulkProcessDockedEvidenceViewer(state) {
   const st = (state && typeof state === 'object') ? state : {};
   const dv = (st.dockedEvidenceViewer && typeof st.dockedEvidenceViewer === 'object') ? st.dockedEvidenceViewer : {};
