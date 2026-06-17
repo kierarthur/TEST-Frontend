@@ -28184,6 +28184,12 @@ async function bankingPayPreview(pay_date) {
       'rows',
       'ready_preview_lines',
       'readyPreviewLines',
+      'blocked_for_pay',
+      'blockedForPay',
+      'blocked_for_pay_now',
+      'blockedForPayNow',
+      'blocked_now',
+      'blockedNow',
       'blocked_preview_lines',
       'blockedPreviewLines',
       'hidden_preview_lines',
@@ -28192,6 +28198,8 @@ async function bankingPayPreview(pay_date) {
       'payeCandidates',
       'non_paye_payees',
       'nonPayePayees',
+      'cases_resolutions',
+      'casesResolutions',
       'case_resolution_states',
       'caseResolutionStates'
     ];
@@ -28206,8 +28214,18 @@ async function bankingPayPreview(pay_date) {
       'rows',
       'ready_preview_lines',
       'readyPreviewLines',
+      'blocked_for_pay',
+      'blockedForPay',
+      'blocked_for_pay_now',
+      'blockedForPayNow',
+      'blocked_now',
+      'blockedNow',
       'blocked_preview_lines',
       'blockedPreviewLines',
+      'cases_resolutions',
+      'casesResolutions',
+      'case_resolution_states',
+      'caseResolutionStates',
       'hidden_preview_lines',
       'hiddenPreviewLines'
     ];
@@ -28805,44 +28823,46 @@ async function bankingPayPreview(pay_date) {
         previewDataPreview.componentStateCache.canonical_preview_lines = safeRows;
       }
     } else if (normalisedSection === 'blocked_for_pay') {
-      wiz.workbench.blocked_for_pay_now = safeRows;
-      wiz.workbench.blocked_now = safeRows;
-      wiz.workbench.blocked_preview_lines = safeRows;
-      wiz.preview.componentStateCache.blocked_for_pay_now = safeRows;
-      wiz.preview.componentStateCache.blocked_now = safeRows;
-      wiz.preview.componentStateCache.blocked_preview_lines = safeRows;
-      wiz.decisions.blocked_for_pay_now = safeRows;
-      wiz.decisions.blocked_now = safeRows;
-      wiz.decisions.blocked_preview_lines = safeRows;
-      if (previewData) {
-        previewData.blocked_for_pay_now = safeRows;
-        previewData.blocked_now = safeRows;
-        previewData.blocked_preview_lines = safeRows;
-      }
+      const blockedKeys = [
+        'blocked_for_pay',
+        'blockedForPay',
+        'blocked_for_pay_now',
+        'blockedForPayNow',
+        'blocked_now',
+        'blockedNow',
+        'blocked_preview_lines',
+        'blockedPreviewLines'
+      ];
+      const assignBlockedRows = (target) => {
+        if (!isPlainObject(target)) return;
+        for (const key of blockedKeys) target[key] = safeRows;
+      };
+      assignBlockedRows(wiz.workbench);
+      assignBlockedRows(wiz.preview.componentStateCache);
+      assignBlockedRows(wiz.decisions);
+      if (previewData) assignBlockedRows(previewData);
       if (previewDataPreview) {
-        previewDataPreview.blocked_for_pay_now = safeRows;
-        previewDataPreview.blocked_now = safeRows;
-        previewDataPreview.blocked_preview_lines = safeRows;
-        previewDataPreview.componentStateCache.blocked_for_pay_now = safeRows;
-        previewDataPreview.componentStateCache.blocked_now = safeRows;
-        previewDataPreview.componentStateCache.blocked_preview_lines = safeRows;
+        assignBlockedRows(previewDataPreview);
+        assignBlockedRows(previewDataPreview.componentStateCache);
       }
     } else if (normalisedSection === 'cases_resolutions') {
-      wiz.workbench.case_resolution_states = safeRows;
-      wiz.workbench.cases_resolutions = safeRows;
-      wiz.preview.componentStateCache.case_resolution_states = safeRows;
-      wiz.preview.componentStateCache.cases_resolutions = safeRows;
-      wiz.decisions.case_resolution_states = safeRows;
-      wiz.decisions.cases_resolutions = safeRows;
-      if (previewData) {
-        previewData.case_resolution_states = safeRows;
-        previewData.cases_resolutions = safeRows;
-      }
+      const caseKeys = [
+        'case_resolution_states',
+        'caseResolutionStates',
+        'cases_resolutions',
+        'casesResolutions'
+      ];
+      const assignCaseRows = (target) => {
+        if (!isPlainObject(target)) return;
+        for (const key of caseKeys) target[key] = safeRows;
+      };
+      assignCaseRows(wiz.workbench);
+      assignCaseRows(wiz.preview.componentStateCache);
+      assignCaseRows(wiz.decisions);
+      if (previewData) assignCaseRows(previewData);
       if (previewDataPreview) {
-        previewDataPreview.case_resolution_states = safeRows;
-        previewDataPreview.cases_resolutions = safeRows;
-        previewDataPreview.componentStateCache.case_resolution_states = safeRows;
-        previewDataPreview.componentStateCache.cases_resolutions = safeRows;
+        assignCaseRows(previewDataPreview);
+        assignCaseRows(previewDataPreview.componentStateCache);
       }
     }
   };
@@ -28888,22 +28908,31 @@ async function bankingPayPreview(pay_date) {
       componentStateCache.ready_preview_lines = safeRows;
       componentStateCache.canonical_preview_lines = safeRows;
     } else if (normalisedSection === 'blocked_for_pay') {
-      synthetic.blocked_for_pay_now = safeRows;
-      synthetic.blocked_now = safeRows;
-      synthetic.blocked_preview_lines = safeRows;
-      preview.blocked_for_pay_now = safeRows;
-      preview.blocked_now = safeRows;
-      preview.blocked_preview_lines = safeRows;
-      componentStateCache.blocked_for_pay_now = safeRows;
-      componentStateCache.blocked_now = safeRows;
-      componentStateCache.blocked_preview_lines = safeRows;
+      for (const key of [
+        'blocked_for_pay',
+        'blockedForPay',
+        'blocked_for_pay_now',
+        'blockedForPayNow',
+        'blocked_now',
+        'blockedNow',
+        'blocked_preview_lines',
+        'blockedPreviewLines'
+      ]) {
+        synthetic[key] = safeRows;
+        preview[key] = safeRows;
+        componentStateCache[key] = safeRows;
+      }
     } else if (normalisedSection === 'cases_resolutions') {
-      synthetic.case_resolution_states = safeRows;
-      synthetic.cases_resolutions = safeRows;
-      preview.case_resolution_states = safeRows;
-      preview.cases_resolutions = safeRows;
-      componentStateCache.case_resolution_states = safeRows;
-      componentStateCache.cases_resolutions = safeRows;
+      for (const key of [
+        'case_resolution_states',
+        'caseResolutionStates',
+        'cases_resolutions',
+        'casesResolutions'
+      ]) {
+        synthetic[key] = safeRows;
+        preview[key] = safeRows;
+        componentStateCache[key] = safeRows;
+      }
     }
     return synthetic;
   };
@@ -29004,6 +29033,41 @@ async function bankingPayPreview(pay_date) {
     const emptySections = {};
     const errors = [];
     const combinedRows = [];
+    const forcePreviewPageRefetch = opts.force_preview_page_refetch === true || opts.forcePreviewPageRefetch === true;
+    const getExpectedSectionRowCount = (sectionName) => {
+      const section = normalisePreviewPageSectionName(sectionName);
+      const countSources = [
+        storedContext.section_counts_json,
+        storedContext.sectionCountsJson,
+        storedContext.section_counts,
+        storedContext.sectionCounts,
+        progressObj.section_counts_json,
+        progressObj.sectionCountsJson,
+        progressObj.section_counts,
+        progressObj.sectionCounts,
+        sourcePayload?.section_counts_json,
+        sourcePayload?.sectionCountsJson,
+        sourcePayload?.section_counts,
+        sourcePayload?.sectionCounts,
+        sourcePayload?.progress?.section_counts_json,
+        sourcePayload?.progress?.sectionCountsJson,
+        sourcePayload?.progress?.section_counts,
+        sourcePayload?.progress?.sectionCounts
+      ];
+      const aliasesBySection = {
+        canonical_preview_lines: ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows'],
+        blocked_for_pay: ['blocked_for_pay', 'blocked_items', 'blocked_preview_lines', 'blocked_now'],
+        cases_resolutions: ['cases_resolutions', 'case_resolution_states', 'case_resolutions']
+      };
+      let best = 0;
+      for (const counts of countSources) {
+        if (!isPlainObject(counts)) continue;
+        for (const key of aliasesBySection[section] || [section]) {
+          best = Math.max(best, countLikeValue(counts[key]));
+        }
+      }
+      return best;
+    };
 
     for (const requiredSection of requiredRowBackedPreviewSections) {
       if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) break;
@@ -29013,7 +29077,11 @@ async function bankingPayPreview(pay_date) {
       const cachedRows = getPreviewPageRows(cachedPage);
       const cachedVersion = cachedPage?.session_version ?? cachedPage?.sessionVersion ?? null;
       const storedVersion = storedContext.session_version ?? wiz.workbench.session_version ?? null;
-      const cachedUsable = !!(cachedPage && (Array.isArray(cachedPage.rows) || Array.isArray(cachedPage.items)) && (cachedVersion === null || storedVersion === null || String(cachedVersion) === String(storedVersion)));
+      const expectedSectionRowCount = getExpectedSectionRowCount(section);
+      const cachedHasRowsArray = !!(cachedPage && (Array.isArray(cachedPage.rows) || Array.isArray(cachedPage.items)));
+      const cachedVersionMatches = !!(cachedVersion === null || storedVersion === null || String(cachedVersion) === String(storedVersion));
+      const cachedEmptyButProgressExpectsRows = expectedSectionRowCount > 0 && cachedRows.length <= 0;
+      const cachedUsable = !!(cachedPage && cachedHasRowsArray && cachedVersionMatches && !cachedEmptyButProgressExpectsRows && !forcePreviewPageRefetch);
       if (cachedUsable) {
         page = cachedPage;
       } else {
@@ -30302,7 +30370,6 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
-
 
 
 
@@ -39753,6 +39820,10 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 }
 
 // Full replacement for renderPayNewBatchWizard from FRONTEND 10052026.js
+
+
+
+
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -39973,6 +40044,18 @@ function renderPayNewBatchWizard() {
       pushRows(pageLike.previewRows);
       pushRows(pageLike.ready_preview_lines);
       pushRows(pageLike.readyPreviewLines);
+      pushRows(pageLike.blocked_for_pay);
+      pushRows(pageLike.blockedForPay);
+      pushRows(pageLike.blocked_for_pay_now);
+      pushRows(pageLike.blockedForPayNow);
+      pushRows(pageLike.blocked_now);
+      pushRows(pageLike.blockedNow);
+      pushRows(pageLike.blocked_preview_lines);
+      pushRows(pageLike.blockedPreviewLines);
+      pushRows(pageLike.cases_resolutions);
+      pushRows(pageLike.casesResolutions);
+      pushRows(pageLike.case_resolution_states);
+      pushRows(pageLike.caseResolutionStates);
       pushRows(pageLike.canonical_preview_lines);
       pushRows(pageLike.canonicalPreviewLines);
     };
@@ -40007,10 +40090,18 @@ function renderPayNewBatchWizard() {
           'ready_to_pay_now',
           'draftable_now',
           'ready_preview_lines',
+          'blocked_for_pay',
+          'blockedForPay',
           'blocked_for_pay_now',
+          'blockedForPayNow',
           'blocked_now',
+          'blockedNow',
           'blocked_preview_lines',
+          'blockedPreviewLines',
+          'cases_resolutions',
+          'casesResolutions',
           'case_resolution_states',
+          'caseResolutionStates',
           'blocked_case_states',
           'hidden_preview_lines',
           'hidden_indefinite_snoozes',
@@ -40026,10 +40117,18 @@ function renderPayNewBatchWizard() {
         'ready_to_pay_now',
         'draftable_now',
         'ready_preview_lines',
+        'blocked_for_pay',
+        'blockedForPay',
         'blocked_for_pay_now',
+        'blockedForPayNow',
         'blocked_now',
+        'blockedNow',
         'blocked_preview_lines',
+        'blockedPreviewLines',
+        'cases_resolutions',
+        'casesResolutions',
         'case_resolution_states',
+        'caseResolutionStates',
         'blocked_case_states',
         'hidden_preview_lines',
         'hidden_indefinite_snoozes',
@@ -40070,7 +40169,17 @@ function renderPayNewBatchWizard() {
     blocked_for_pay_now: [],
     hidden_indefinite_snoozes: [],
     ready_preview_lines: [],
+    blocked_for_pay: [],
+    blockedForPay: [],
+    blocked_for_pay_now: [],
+    blockedForPayNow: [],
+    blocked_now: [],
+    blockedNow: [],
     blocked_preview_lines: [],
+    blockedPreviewLines: [],
+    cases_resolutions: [],
+    casesResolutions: [],
+    caseResolutionStates: [],
     hidden_preview_lines: []
   });
 
@@ -42520,9 +42629,24 @@ function renderPayNewBatchWizard() {
       pushUniquePreviewRows(rows, seen, pageLike.rows, `page:${fallbackSection || pageLike.section || pageLike.resolved_section || pageLike.requested_section || 'rows'}`);
       pushUniquePreviewRows(rows, seen, pageLike.items, `page:${fallbackSection || pageLike.section || pageLike.resolved_section || pageLike.requested_section || 'items'}`);
       pushUniquePreviewRows(rows, seen, pageLike.canonical_preview_lines, `page:${fallbackSection || 'canonical_preview_lines'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.canonicalPreviewLines, `page:${fallbackSection || 'canonicalPreviewLines'}`);
       pushUniquePreviewRows(rows, seen, pageLike.ready_preview_lines, `page:${fallbackSection || 'ready_preview_lines'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.readyPreviewLines, `page:${fallbackSection || 'readyPreviewLines'}`);
       pushUniquePreviewRows(rows, seen, pageLike.ready_to_pay_now, `page:${fallbackSection || 'ready_to_pay_now'}`);
       pushUniquePreviewRows(rows, seen, pageLike.preview_rows, `page:${fallbackSection || 'preview_rows'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.previewRows, `page:${fallbackSection || 'previewRows'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.blocked_for_pay, `page:${fallbackSection || 'blocked_for_pay'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.blockedForPay, `page:${fallbackSection || 'blockedForPay'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.blocked_for_pay_now, `page:${fallbackSection || 'blocked_for_pay_now'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.blockedForPayNow, `page:${fallbackSection || 'blockedForPayNow'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.blocked_now, `page:${fallbackSection || 'blocked_now'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.blockedNow, `page:${fallbackSection || 'blockedNow'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.blocked_preview_lines, `page:${fallbackSection || 'blocked_preview_lines'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.blockedPreviewLines, `page:${fallbackSection || 'blockedPreviewLines'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.cases_resolutions, `page:${fallbackSection || 'cases_resolutions'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.casesResolutions, `page:${fallbackSection || 'casesResolutions'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.case_resolution_states, `page:${fallbackSection || 'case_resolution_states'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.caseResolutionStates, `page:${fallbackSection || 'caseResolutionStates'}`);
     };
     const pushCacheRoot = (cacheRoot) => {
       if (Array.isArray(cacheRoot)) {
@@ -42580,6 +42704,10 @@ function renderPayNewBatchWizard() {
     : ((previewDataPreview.component_state_cache && typeof previewDataPreview.component_state_cache === 'object') ? previewDataPreview.component_state_cache : null);
   const previewReadyPageRows = collectRowsFromPageCaches(wiz.workbench, ['ready_to_pay', 'ready_preview_lines']);
   const previewDataReadyPageRows = collectRowsFromPageCaches(previewDataRoot, ['ready_to_pay', 'ready_preview_lines']);
+  const previewBlockedPageRows = collectRowsFromPageCaches(wiz.workbench, ['blocked_for_pay', 'blocked_items', 'blocked_preview_lines', 'blocked_now']);
+  const previewDataBlockedPageRows = collectRowsFromPageCaches(previewDataRoot, ['blocked_for_pay', 'blocked_items', 'blocked_preview_lines', 'blocked_now']);
+  const previewCasePageRows = collectRowsFromPageCaches(wiz.workbench, ['cases_resolutions', 'case_resolution_states', 'case_resolutions']);
+  const previewDataCasePageRows = collectRowsFromPageCaches(previewDataRoot, ['cases_resolutions', 'case_resolution_states', 'case_resolutions']);
   const previewPageRows = collectRowsFromPageCaches(wiz.workbench, ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows']);
   const previewDataPageRows = collectRowsFromPageCaches(previewDataRoot, ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows']);
 
@@ -42698,28 +42826,94 @@ function renderPayNewBatchWizard() {
     ],
     cases: [
       { name: 'wiz.preview.componentStateCache.case_resolution_states', rows: componentStateCache.case_resolution_states },
+      { name: 'wiz.preview.componentStateCache.caseResolutionStates', rows: componentStateCache.caseResolutionStates },
+      { name: 'wiz.preview.componentStateCache.cases_resolutions', rows: componentStateCache.cases_resolutions },
+      { name: 'wiz.preview.componentStateCache.casesResolutions', rows: componentStateCache.casesResolutions },
       { name: 'wiz.decisions.case_resolution_states', rows: wiz.decisions.case_resolution_states },
+      { name: 'wiz.decisions.caseResolutionStates', rows: wiz.decisions.caseResolutionStates },
+      { name: 'wiz.decisions.cases_resolutions', rows: wiz.decisions.cases_resolutions },
+      { name: 'wiz.decisions.casesResolutions', rows: wiz.decisions.casesResolutions },
       { name: 'wiz.preview.data.preview.componentStateCache.case_resolution_states', rows: previewDataComponentStateCache?.case_resolution_states },
+      { name: 'wiz.preview.data.preview.componentStateCache.caseResolutionStates', rows: previewDataComponentStateCache?.caseResolutionStates },
+      { name: 'wiz.preview.data.preview.componentStateCache.cases_resolutions', rows: previewDataComponentStateCache?.cases_resolutions },
+      { name: 'wiz.preview.data.preview.componentStateCache.casesResolutions', rows: previewDataComponentStateCache?.casesResolutions },
       { name: 'wiz.preview.data.preview.case_resolution_states', rows: previewDataPreview.case_resolution_states },
+      { name: 'wiz.preview.data.preview.caseResolutionStates', rows: previewDataPreview.caseResolutionStates },
+      { name: 'wiz.preview.data.preview.cases_resolutions', rows: previewDataPreview.cases_resolutions },
+      { name: 'wiz.preview.data.preview.casesResolutions', rows: previewDataPreview.casesResolutions },
       { name: 'wiz.workbench.case_resolution_states', rows: wiz.workbench.case_resolution_states },
+      { name: 'wiz.workbench.caseResolutionStates', rows: wiz.workbench.caseResolutionStates },
+      { name: 'wiz.workbench.cases_resolutions', rows: wiz.workbench.cases_resolutions },
+      { name: 'wiz.workbench.casesResolutions', rows: wiz.workbench.casesResolutions },
       { name: 'pv.case_resolution_states', rows: pv?.case_resolution_states },
+      { name: 'pv.caseResolutionStates', rows: pv?.caseResolutionStates },
+      { name: 'pv.cases_resolutions', rows: pv?.cases_resolutions },
+      { name: 'pv.casesResolutions', rows: pv?.casesResolutions },
+      { name: 'page.cache.cases_resolutions', rows: previewCasePageRows },
+      { name: 'preview.data.page.cache.cases_resolutions', rows: previewDataCasePageRows },
       { name: 'pv.canonical_preview_lines', rows: pv?.canonical_preview_lines },
       { name: 'wiz.workbench.canonical_preview_lines', rows: wiz.workbench.canonical_preview_lines },
       { name: 'page.cache.canonical_preview_lines', rows: previewPageRows }
     ],
     blocked: [
+      { name: 'wiz.preview.componentStateCache.blocked_for_pay', rows: componentStateCache.blocked_for_pay },
+      { name: 'wiz.preview.componentStateCache.blockedForPay', rows: componentStateCache.blockedForPay },
       { name: 'wiz.preview.componentStateCache.blocked_for_pay_now', rows: componentStateCache.blocked_for_pay_now },
+      { name: 'wiz.preview.componentStateCache.blockedForPayNow', rows: componentStateCache.blockedForPayNow },
       { name: 'wiz.preview.componentStateCache.blocked_now', rows: componentStateCache.blocked_now },
+      { name: 'wiz.preview.componentStateCache.blockedNow', rows: componentStateCache.blockedNow },
       { name: 'wiz.preview.componentStateCache.blocked_preview_lines', rows: componentStateCache.blocked_preview_lines },
+      { name: 'wiz.preview.componentStateCache.blockedPreviewLines', rows: componentStateCache.blockedPreviewLines },
+      { name: 'wiz.decisions.blocked_for_pay', rows: wiz.decisions.blocked_for_pay },
+      { name: 'wiz.decisions.blockedForPay', rows: wiz.decisions.blockedForPay },
       { name: 'wiz.decisions.blocked_for_pay_now', rows: wiz.decisions.blocked_for_pay_now },
+      { name: 'wiz.decisions.blockedForPayNow', rows: wiz.decisions.blockedForPayNow },
       { name: 'wiz.decisions.blocked_now', rows: wiz.decisions.blocked_now },
+      { name: 'wiz.decisions.blockedNow', rows: wiz.decisions.blockedNow },
       { name: 'wiz.decisions.blocked_preview_lines', rows: wiz.decisions.blocked_preview_lines },
+      { name: 'wiz.decisions.blockedPreviewLines', rows: wiz.decisions.blockedPreviewLines },
+      { name: 'wiz.preview.data.preview.componentStateCache.blocked_for_pay', rows: previewDataComponentStateCache?.blocked_for_pay },
+      { name: 'wiz.preview.data.preview.componentStateCache.blockedForPay', rows: previewDataComponentStateCache?.blockedForPay },
       { name: 'wiz.preview.data.preview.componentStateCache.blocked_for_pay_now', rows: previewDataComponentStateCache?.blocked_for_pay_now },
+      { name: 'wiz.preview.data.preview.componentStateCache.blockedForPayNow', rows: previewDataComponentStateCache?.blockedForPayNow },
       { name: 'wiz.preview.data.preview.componentStateCache.blocked_now', rows: previewDataComponentStateCache?.blocked_now },
+      { name: 'wiz.preview.data.preview.componentStateCache.blockedNow', rows: previewDataComponentStateCache?.blockedNow },
       { name: 'wiz.preview.data.preview.componentStateCache.blocked_preview_lines', rows: previewDataComponentStateCache?.blocked_preview_lines },
+      { name: 'wiz.preview.data.preview.componentStateCache.blockedPreviewLines', rows: previewDataComponentStateCache?.blockedPreviewLines },
+      { name: 'wiz.preview.data.preview.blocked_for_pay', rows: previewDataPreview.blocked_for_pay },
+      { name: 'wiz.preview.data.preview.blockedForPay', rows: previewDataPreview.blockedForPay },
+      { name: 'wiz.preview.data.preview.blocked_for_pay_now', rows: previewDataPreview.blocked_for_pay_now },
+      { name: 'wiz.preview.data.preview.blockedForPayNow', rows: previewDataPreview.blockedForPayNow },
+      { name: 'wiz.preview.data.preview.blocked_now', rows: previewDataPreview.blocked_now },
+      { name: 'wiz.preview.data.preview.blockedNow', rows: previewDataPreview.blockedNow },
+      { name: 'wiz.preview.data.preview.blocked_preview_lines', rows: previewDataPreview.blocked_preview_lines },
+      { name: 'wiz.preview.data.preview.blockedPreviewLines', rows: previewDataPreview.blockedPreviewLines },
+      { name: 'pv.componentStateCache.blocked_for_pay', rows: previewComponentStateCache?.blocked_for_pay },
+      { name: 'pv.componentStateCache.blockedForPay', rows: previewComponentStateCache?.blockedForPay },
       { name: 'pv.componentStateCache.blocked_for_pay_now', rows: previewComponentStateCache?.blocked_for_pay_now },
+      { name: 'pv.componentStateCache.blockedForPayNow', rows: previewComponentStateCache?.blockedForPayNow },
       { name: 'pv.componentStateCache.blocked_now', rows: previewComponentStateCache?.blocked_now },
+      { name: 'pv.componentStateCache.blockedNow', rows: previewComponentStateCache?.blockedNow },
       { name: 'pv.componentStateCache.blocked_preview_lines', rows: previewComponentStateCache?.blocked_preview_lines },
+      { name: 'pv.componentStateCache.blockedPreviewLines', rows: previewComponentStateCache?.blockedPreviewLines },
+      { name: 'pv.blocked_for_pay', rows: pv?.blocked_for_pay },
+      { name: 'pv.blockedForPay', rows: pv?.blockedForPay },
+      { name: 'pv.blocked_for_pay_now', rows: pv?.blocked_for_pay_now },
+      { name: 'pv.blockedForPayNow', rows: pv?.blockedForPayNow },
+      { name: 'pv.blocked_now', rows: pv?.blocked_now },
+      { name: 'pv.blockedNow', rows: pv?.blockedNow },
+      { name: 'pv.blocked_preview_lines', rows: pv?.blocked_preview_lines },
+      { name: 'pv.blockedPreviewLines', rows: pv?.blockedPreviewLines },
+      { name: 'wiz.workbench.blocked_for_pay', rows: wiz.workbench.blocked_for_pay },
+      { name: 'wiz.workbench.blockedForPay', rows: wiz.workbench.blockedForPay },
+      { name: 'wiz.workbench.blocked_for_pay_now', rows: wiz.workbench.blocked_for_pay_now },
+      { name: 'wiz.workbench.blockedForPayNow', rows: wiz.workbench.blockedForPayNow },
+      { name: 'wiz.workbench.blocked_now', rows: wiz.workbench.blocked_now },
+      { name: 'wiz.workbench.blockedNow', rows: wiz.workbench.blockedNow },
+      { name: 'wiz.workbench.blocked_preview_lines', rows: wiz.workbench.blocked_preview_lines },
+      { name: 'wiz.workbench.blockedPreviewLines', rows: wiz.workbench.blockedPreviewLines },
+      { name: 'page.cache.blocked_for_pay', rows: previewBlockedPageRows },
+      { name: 'preview.data.page.cache.blocked_for_pay', rows: previewDataBlockedPageRows },
       { name: 'pv.canonical_preview_lines', rows: pv?.canonical_preview_lines },
       { name: 'wiz.workbench.canonical_preview_lines', rows: wiz.workbench.canonical_preview_lines },
       { name: 'page.cache.canonical_preview_lines', rows: previewPageRows }
@@ -44229,8 +44423,6 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
-
-
 
 
 
@@ -102204,6 +102396,7 @@ function computePayWorkbenchSessionSignature(input = null) {
 }
 
 
+
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -102300,10 +102493,12 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     blocked_preview_lines: [],
     hidden_preview_lines: [],
     blocked_for_pay: [],
+    blockedForPay: [],
     blockedForPayNow: [],
     blockedNow: [],
     blockedPreviewLines: [],
     cases_resolutions: [],
+    casesResolutions: [],
     caseResolutionStates: []
   });
   const getComponentStateCache = (payload) => {
@@ -102349,8 +102544,18 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     'rows',
     'ready_preview_lines',
     'readyPreviewLines',
+    'blocked_for_pay',
+    'blockedForPay',
+    'blocked_for_pay_now',
+    'blockedForPayNow',
+    'blocked_now',
+    'blockedNow',
     'blocked_preview_lines',
     'blockedPreviewLines',
+    'cases_resolutions',
+    'casesResolutions',
+    'case_resolution_states',
+    'caseResolutionStates',
     'hidden_preview_lines',
     'hiddenPreviewLines'
   ];
@@ -102363,8 +102568,18 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     'rows',
     'ready_preview_lines',
     'readyPreviewLines',
+    'blocked_for_pay',
+    'blockedForPay',
+    'blocked_for_pay_now',
+    'blockedForPayNow',
+    'blocked_now',
+    'blockedNow',
     'blocked_preview_lines',
     'blockedPreviewLines',
+    'cases_resolutions',
+    'casesResolutions',
+    'case_resolution_states',
+    'caseResolutionStates',
     'hidden_preview_lines',
     'hiddenPreviewLines'
   ];
@@ -102389,6 +102604,8 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
         'draftableNow',
         'ready_to_pay_now',
         'readyToPayNow',
+        'blocked_for_pay',
+        'blockedForPay',
         'blocked_now',
         'blockedNow',
         'blocked_for_pay_now',
@@ -102397,6 +102614,10 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
         'readyPreviewLines',
         'blocked_preview_lines',
         'blockedPreviewLines',
+        'cases_resolutions',
+        'casesResolutions',
+        'case_resolution_states',
+        'caseResolutionStates',
         'hidden_preview_lines',
         'hiddenPreviewLines'
       ]) {
@@ -102610,6 +102831,8 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
         'draftableNow',
         'ready_to_pay_now',
         'readyToPayNow',
+        'blocked_for_pay',
+        'blockedForPay',
         'blocked_now',
         'blockedNow',
         'blocked_for_pay_now',
@@ -102618,6 +102841,10 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
         'readyPreviewLines',
         'blocked_preview_lines',
         'blockedPreviewLines',
+        'cases_resolutions',
+        'casesResolutions',
+        'case_resolution_states',
+        'caseResolutionStates',
         'hidden_preview_lines',
         'hiddenPreviewLines'
       ]) {
@@ -103408,6 +103635,9 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     readyPreviewLines.length > 0 ||
     canonicalPreviewLines.length > 0 ||
     previewRows.length > 0 ||
+    blockedForPayRows.length > 0 ||
+    caseResolutionRows.length > 0 ||
+    hiddenPreviewLines.length > 0 ||
     mergedPreviewPageRows.length > 0
   );
   const friendlyPreviewProgressText = () => {
@@ -103783,8 +104013,6 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
 
   return normalizedEnvelope;
 }
-
-
 
 
 function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = null) {
