@@ -200101,7 +200101,92 @@ const getAttachedSelectionParts = (item) => {
 
     applyEvidenceTruthToContainer(st.active_ctx?.state);
 
-    stateAudit('container-evidence-truth-applied', { evidence_truth_rows_count: evidenceTruthRows.length });
+    const activeTimesheetIdForEvidenceTruth = trimStr(
+      st.active_row?.timesheet_id ||
+      st.active_row?.current_timesheet_id ||
+      st.active_details?.current_timesheet_id ||
+      st.active_details?.timesheet_id ||
+      st.active_context?.timesheet_id ||
+      st.active_context?.current_timesheet_id ||
+      st.active_ctx?.state?.timesheet_id ||
+      st.active_ctx?.state?.current_timesheet_id ||
+      ''
+    );
+    const activeRowKeyForEvidenceTruth = trimStr(
+      st.active_row_key ||
+      st.active_row?.row_key ||
+      st.active_context?.row_key ||
+      st.active_ctx?.state?.row_key ||
+      (activeTimesheetIdForEvidenceTruth ? `timesheet:${activeTimesheetIdForEvidenceTruth}` : '') ||
+      ''
+    );
+    const sameActiveEvidenceTruthContainer = (container) => {
+      if (!container || typeof container !== 'object') return false;
+      const timesheetId = trimStr(
+        container.timesheet_id ||
+        container.current_timesheet_id ||
+        container.expected_timesheet_id ||
+        container.requested_timesheet_id ||
+        container.timesheet?.timesheet_id ||
+        container.details?.current_timesheet_id ||
+        container.state?.timesheet_id ||
+        container.state?.current_timesheet_id ||
+        ''
+      );
+      const rowKey = trimStr(
+        container.row_key ||
+        container.rowKey ||
+        container.active_row_key ||
+        container.activeRowKey ||
+        container.row?.row_key ||
+        container.data_row?.row_key ||
+        container.state?.row_key ||
+        ''
+      );
+      if (activeTimesheetIdForEvidenceTruth && timesheetId) return timesheetId === activeTimesheetIdForEvidenceTruth;
+      if (activeTimesheetIdForEvidenceTruth && rowKey) return rowKey === `timesheet:${activeTimesheetIdForEvidenceTruth}`;
+      if (activeRowKeyForEvidenceTruth && rowKey) return rowKey === activeRowKeyForEvidenceTruth;
+      return false;
+    };
+    const applyEvidenceTruthToSameActiveMirror = (container) => {
+      if (!sameActiveEvidenceTruthContainer(container)) return;
+      applyEvidenceTruthToContainer(container);
+    };
+
+    [
+      window.modalCtx?.data,
+      window.modalCtx?.timesheetState,
+      window.modalCtx?.timesheetDetails,
+      window.modalCtx?.active_row,
+      window.modalCtx?.state,
+      window.modalCtx?.bulkProcessState?.active_row
+    ].forEach(applyEvidenceTruthToSameActiveMirror);
+
+    try {
+      if (Array.isArray(window.__modalStack)) {
+        for (const frame of window.__modalStack) {
+          [
+            frame?.data,
+            frame?._ctxRef?.data,
+            frame?._ctxRef?.timesheetState,
+            frame?._ctxRef?.timesheetDetails,
+            frame?._ctxRef?.active_row,
+            frame?._ctxRef?.bulkProcessState?.active_row,
+            frame?.ctx?.data,
+            frame?.modalCtx?.data,
+            frame?.modal_ctx?.data,
+            frame?.context?.data,
+            frame?.state?.active_row,
+            frame?.bulkProcessState?.active_row
+          ].forEach(applyEvidenceTruthToSameActiveMirror);
+        }
+      }
+    } catch {}
+
+    stateAudit('container-evidence-truth-applied', {
+      evidence_truth_rows_count: evidenceTruthRows.length,
+      modal_evidence_truth_mirrors_considered: true
+    });
 
   } else if (!isBulkAuthoriseTimesheets && allowEvidenceClear) {
 
@@ -200198,6 +200283,8 @@ const getAttachedSelectionParts = (item) => {
   };
 
 }
+
+
 
 async function rerenderBulkProcessWorkbench(state, logPrefix) {
   const prefix = String(logPrefix || '[TS][BULK-PROCESS]');
@@ -207707,6 +207794,232 @@ async function handleBulkProcessProcess(state) {
     }
   };
 
+  const fetchProcessEvidenceContextRowForProcessedPatch = async (rowInput = null, reason = 'after-process-evidence-authority') => {
+    const row = (rowInput && typeof rowInput === 'object') ? rowInput : {};
+    const rowKey = rowKeyOf(row) || trimStr(row.row_key || row.rowKey || '');
+    const timesheetId = trimStr(row.timesheet_id || row.current_timesheet_id || row.expected_timesheet_id || row.requested_timesheet_id || '');
+    const contractWeekId = normaliseProcessContractWeekId({
+      rowKey,
+      timesheetId,
+      freshSources: [row],
+      fallbackSources: timesheetId ? [] : [row]
+    }) || '';
+    if (!rowKey && !timesheetId && !contractWeekId) return null;
+    if (typeof authFetch !== 'function' || typeof API !== 'function') return null;
+
+    const qs = new URLSearchParams();
+    if (rowKey) qs.set('row_key', rowKey);
+    if (timesheetId) {
+      qs.set('timesheet_id', timesheetId);
+      qs.set('current_timesheet_id', timesheetId);
+      qs.set('requested_timesheet_id', timesheetId);
+      qs.set('expected_timesheet_id', timesheetId);
+    } else if (contractWeekId) {
+      qs.set('contract_week_id', contractWeekId);
+    }
+    qs.set('profile', 'evidence');
+    qs.set('context_profile', 'evidence');
+    qs.set('include_evidence', 'true');
+    qs.set('include_compare', 'false');
+    qs.set('include_import_source_rows', 'false');
+
+    try {
+      const res = await authFetch(API(`/api/timesheets/bulk-process-row-context?${qs.toString()}`));
+      let payload = null;
+      try { payload = await res.json(); } catch { payload = null; }
+      if (!res.ok || !payload || payload.ok === false) {
+        sigWarn('POST-PROCESS-EVIDENCE-CONTEXT-FETCH-DEGRADED', {
+          reason: trimStr(reason || '') || null,
+          row_key: rowKey || null,
+          timesheet_id: timesheetId || null,
+          status: res.status || null,
+          error: trimStr(payload?.error || payload?.message || '') || null
+        });
+        return null;
+      }
+      const contextRow = (payload.row && typeof payload.row === 'object')
+        ? payload.row
+        : ((payload.data_row && typeof payload.data_row === 'object') ? payload.data_row : payload);
+      sigLog('POST-PROCESS-EVIDENCE-CONTEXT-FETCH-DONE', {
+        reason: trimStr(reason || '') || null,
+        row_key: rowKey || null,
+        timesheet_id: timesheetId || null,
+        has_row: !!contextRow,
+        has_evidence: Array.isArray(contextRow?.evidence) && contextRow.evidence.length > 0,
+        primary_artifact_id: trimStr(contextRow?.primary_artifact?.id || contextRow?.primary_artifact_id || '') || null,
+        primary_artifact_kind: trimStr(contextRow?.primary_artifact?.kind || contextRow?.primary_artifact_kind || '') || null
+      });
+      return contextRow || null;
+    } catch (err) {
+      sigWarn('POST-PROCESS-EVIDENCE-CONTEXT-FETCH-DEGRADED', {
+        reason: trimStr(reason || '') || null,
+        row_key: rowKey || null,
+        timesheet_id: timesheetId || null,
+        message: String(err?.message || err || '')
+      });
+      return null;
+    }
+  };
+
+  const hydrateProcessResultEvidenceAuthorityForProcessedPatch = async (patchedRowInput = null, processResultInput = null, currentPatchInput = null, hydrateOptions = {}) => {
+    const patchedRow = (patchedRowInput && typeof patchedRowInput === 'object') ? patchedRowInput : null;
+    if (!patchedRow) return currentPatchInput || null;
+    const currentPatch = (currentPatchInput && typeof currentPatchInput === 'object') ? currentPatchInput : null;
+    if (currentPatch?.hasAnyEvidence === true && Array.isArray(currentPatch.evidenceRows) && currentPatch.evidenceRows.length > 0) return currentPatch;
+
+    const patchedTimesheetId = trimStr(patchedRow.timesheet_id || patchedRow.current_timesheet_id || patchedRow.expected_timesheet_id || patchedRow.requested_timesheet_id || '');
+    const patchedRowKey = rowKeyOf(patchedRow) || trimStr(patchedRow.row_key || '');
+    if (!patchedTimesheetId || !/^timesheet:/i.test(patchedRowKey || '')) return currentPatch || null;
+
+    const src = (processResultInput && typeof processResultInput === 'object') ? processResultInput : {};
+    const shouldHydrate = !!(
+      processBackendQueueEvidenceForRefresh ||
+      processAutoAttachedQueueEvidenceForRollback ||
+      src.evidence_authoritative === true ||
+      src.has_any_evidence === true ||
+      Number(src.attached_evidence_count || 0) > 0 ||
+      Number(src.evidence_count || 0) > 0 ||
+      Array.isArray(src.attached_evidence) ||
+      Array.isArray(src.evidence) ||
+      trimStr(src.primary_artifact_id || src.primary_artifact?.id || src.primary_artifact_storage_key || '')
+    );
+    if (!shouldHydrate) return currentPatch || null;
+
+    const contextRow = await fetchProcessEvidenceContextRowForProcessedPatch(patchedRow, hydrateOptions.reason || 'after-process-success-immediate-evidence-authority');
+    if (!contextRow) return currentPatch || null;
+
+    const activeForHydratedPatch = {
+      ...readActive(),
+      row: {
+        ...deep(patchedRow),
+        ...deep(contextRow),
+        row_key: patchedRowKey,
+        timesheet_id: patchedTimesheetId,
+        current_timesheet_id: patchedTimesheetId
+      },
+      details: {
+        ...(readActive().details || {}),
+        ...deep(contextRow),
+        current_timesheet_id: patchedTimesheetId,
+        timesheet_id: patchedTimesheetId
+      },
+      timesheetId: patchedTimesheetId,
+      expectedTimesheetId: patchedTimesheetId,
+      contractWeekId: trimStr(contextRow.contract_week_id || patchedRow.contract_week_id || patchedRow.contractWeekId || '') || null
+    };
+
+    const rows = collectCanonicalRealEvidenceRowsForProcess(activeForHydratedPatch);
+    const patch = buildProcessEvidenceAuthorityPatch(rows, { active: activeForHydratedPatch });
+    if (patch.hasAnyEvidence !== true || !patch.evidenceRows.length) return currentPatch || null;
+
+    const targetMatchesHydratedTimesheet = (target) => {
+      if (!target || typeof target !== 'object') return false;
+      const targetTs = trimStr(target.timesheet_id || target.current_timesheet_id || target.expected_timesheet_id || target.requested_timesheet_id || target.timesheet?.timesheet_id || target.details?.current_timesheet_id || '');
+      const targetKey = trimStr(target.row_key || target.rowKey || target.active_row_key || target.activeRowKey || target.row?.row_key || target.data_row?.row_key || '');
+      return !!(
+        (targetTs && targetTs === patchedTimesheetId) ||
+        (targetKey && targetKey === `timesheet:${patchedTimesheetId}`)
+      );
+    };
+    const applyPatchToTarget = (target) => {
+      if (!targetMatchesHydratedTimesheet(target)) return;
+      applyProcessEvidenceAuthorityPatch(target, patch);
+      coerceDailyProcessGenericEvidenceBadgeToTimesheet(target);
+      ensureProcessRowUsesCanonicalTimesheetIdentity(target, `timesheet:${patchedTimesheetId}`);
+    };
+
+    applyProcessEvidenceAuthorityPatch(patchedRow, patch);
+    coerceDailyProcessGenericEvidenceBadgeToTimesheet(patchedRow);
+    ensureProcessRowUsesCanonicalTimesheetIdentity(patchedRow, `timesheet:${patchedTimesheetId}`);
+    [
+      st.active_row,
+      st.active_details,
+      st.active_context,
+      st.active_context?.details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx,
+      st.active_ctx?.details,
+      st.active_ctx?.state,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row,
+      window.modalCtx?.data,
+      window.modalCtx?.timesheetState,
+      window.modalCtx?.timesheetDetails
+    ].forEach(applyPatchToTarget);
+
+    try {
+      if (Array.isArray(window.__modalStack)) {
+        for (const frame of window.__modalStack) {
+          [
+            frame?.data,
+            frame?._ctxRef?.data,
+            frame?._ctxRef?.timesheetState,
+            frame?._ctxRef?.timesheetDetails,
+            frame?._ctxRef?.bulkProcessState?.active_row,
+            frame?.ctx?.data,
+            frame?.modalCtx?.data,
+            frame?.modal_ctx?.data,
+            frame?.context?.data,
+            frame?.state?.active_row,
+            frame?.bulkProcessState?.active_row
+          ].forEach(applyPatchToTarget);
+        }
+      }
+    } catch {}
+
+    try {
+      const dataset = ensureDataset();
+      for (const bucketName of ['unprocessed_rows', 'processed_rows', 'rows']) {
+        if (!Array.isArray(dataset[bucketName])) continue;
+        dataset[bucketName] = dataset[bucketName].map((row) => {
+          if (!targetMatchesHydratedTimesheet(row)) return row;
+          const next = { ...row };
+          applyProcessEvidenceAuthorityPatch(next, patch);
+          coerceDailyProcessGenericEvidenceBadgeToTimesheet(next);
+          return ensureProcessRowUsesCanonicalTimesheetIdentity(next, `timesheet:${patchedTimesheetId}`);
+        });
+      }
+    } catch {}
+
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    if (pane && patch.evidenceRows.length) {
+      pane.attached_rows = patch.evidenceRows.map((item) => deep(item));
+      pane.attached_all_rows = patch.evidenceRows.map((item) => deep(item));
+      pane.__attached_loaded = true;
+      pane.__evidence_loaded = true;
+      pane.__requires_evidence_hydration = false;
+      if (trimStr(pane.active_tab || '').toLowerCase() === 'attached' || pane.__attached_manual_override === true) {
+        const nextAttached = patch.evidenceRows[0] || null;
+        if (nextAttached) {
+          const nextAttachedEvidenceId = evidenceIdOf(nextAttached) || trimStr(nextAttached.id || nextAttached.evidence_id || '');
+          const nextAttachedStorageKey = evidenceStorageKeyOf(nextAttached);
+          if (nextAttachedEvidenceId && nextAttachedStorageKey) {
+            const nextAttachedTarget = `attached|${nextAttachedEvidenceId}|${nextAttachedStorageKey}`;
+            pane.active_tab = 'attached';
+            pane.__attached_manual_override = true;
+            pane.__queue_manual_override = false;
+            pane.active_attached_id = nextAttachedEvidenceId;
+            pane.active_attached_item = deep(nextAttached);
+            pane.__active_attached_preview_target = nextAttachedTarget;
+            pane.__preview_target_key = nextAttachedTarget;
+            pane.__preview_load_requested_target_key = nextAttachedTarget;
+          }
+        }
+      }
+    }
+
+    sigLog('POST-PROCESS-EVIDENCE-AUTHORITY-HYDRATED', {
+      reason: trimStr(hydrateOptions.reason || '') || null,
+      timesheet_id: patchedTimesheetId,
+      row_key: patchedRowKey,
+      evidence_count: patch.evidenceRows.length,
+      evidence_kinds: Array.from(new Set(patch.evidenceRows.map((item) => evidenceKindOf(item)).filter(Boolean)))
+    });
+    return patch;
+  };
+
+
   const awaitPostAttachEvidenceRebaseBeforeProcess = async (activeInput = null) => {
     let active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     if (!needsPostAttachEvidenceRebaseBeforeProcess(active)) return active;
@@ -210681,6 +210994,15 @@ async function handleBulkProcessProcess(state) {
         }
       } catch {}
     }
+    processEvidencePatchForSubmit = (await hydrateProcessResultEvidenceAuthorityForProcessedPatch(
+      patchedRow,
+      processResult,
+      processEvidencePatchForSubmit,
+      { reason: 'after-process-success-before-completion-render' }
+    )) || processEvidencePatchForSubmit;
+    if (processEvidencePatchForSubmit.hasAnyEvidence === true) {
+      applyProcessEvidenceAuthorityPatch(patchedRow, processEvidencePatchForSubmit);
+    }
     coerceDailyProcessGenericEvidenceBadgeToTimesheet(patchedRow);
     stateAudit('apply-patch:after', { previous_row_key: previousRowKey || null, patched_row: stateAuditRowSummary(patchedRow || {}) });
     invalidateCaches(processResult, patchedRow, previousRowKey);
@@ -210965,6 +211287,7 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
+
 
 
 function normaliseBulkProcessRemovedEvidenceKind(value) {
