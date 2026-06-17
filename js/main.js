@@ -327828,7 +327828,7 @@ async function resendQrTimesheetEmail(timesheetId) {
   } catch {}
 
   // -----------------------------
-  // ✅ New backend response handling (result: NEW_ISSUED / RESENT / REISSUED)
+  // ✅ New backend response  handling (result: NEW_ISSUED / RESENT / REISSUED)
   // -----------------------------
   try {
     const resultU = String(json?.result || '').toUpperCase();
