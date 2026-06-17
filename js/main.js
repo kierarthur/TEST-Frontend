@@ -39752,6 +39752,7 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
   );
 }
 
+// Full replacement for renderPayNewBatchWizard from FRONTEND 10052026.js
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -41508,7 +41509,7 @@ function renderPayNewBatchWizard() {
     if (hasBankMissing || hasUmbrellaInactive) return '';
 
     const canAccept = validEntity && hasExactTargetHash && hasNameBlock && !hasOverride && nameMismatchLike;
-    const canRunNameCheck = validEntity && hasExactTargetHash && hasNameBlock && !hasOverride && !nameMismatchLike;
+    const canRunNameCheck = validEntity && hasExactTargetHash && hasNameBlock && !nameGateSatisfied && !nameMismatchLike;
     const canEnsurePayeeMap = validEntity && hasExactTargetHash && hasMapBlock && nameGateSatisfied && !canAccept && !canRunNameCheck;
 
     if (!canAccept && !canRunNameCheck && !canEnsurePayeeMap) return '';
@@ -41536,7 +41537,7 @@ function renderPayNewBatchWizard() {
         <button
           type="button"
           class="btn btn-xs btn-outline"
-          data-action="banking:pay:ensurePayeeMap"
+          data-action="banking:pay:runBankNameCheck"
           data-entity-kind="${enc(entityKind)}"
           data-entity-id="${enc(entityId)}"
           data-bank-details-hash="${enc(bankDetailsHash)}"
@@ -74732,6 +74733,7 @@ function renderBankingAlertPreferencesPanel() {
 
 
 
+// Full replacement for attachBankingModalDelegatedHandlers from FRONTEND 10052026.js
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -74849,7 +74851,35 @@ function attachBankingModalDelegatedHandlers() {
       const bank_details_hash = String(ds('bankDetailsHash') || dget('data-bank-details-hash') || '').trim();
       const provider = String(ds('provider') || dget('data-provider') || '').trim();
       const env0 = String(ds('env') || dget('data-env') || '').trim();
-      return { entity_kind, entity_id, bank_details_hash, provider, env0 };
+      const candidate_id = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+      const preview_row_id = String(ds('previewRowId') || dget('data-preview-row-id') || '').trim();
+      return { entity_kind, entity_id, bank_details_hash, provider, env0, candidate_id, preview_row_id };
+    };
+
+    const showBankingPayNoticeModal = async ({
+      title = 'Banking Pay updated',
+      message = 'Banking Pay will refresh now.',
+      kind = 'import-summary-ui-confirm-banking-pay-notice'
+    } = {}) => {
+      const confirmFn =
+        (typeof openUiConfirmModal === 'function')
+          ? openUiConfirmModal
+          : ((typeof window !== 'undefined' && typeof window.openUiConfirmModal === 'function')
+              ? window.openUiConfirmModal.bind(window)
+              : null);
+
+      if (!confirmFn) {
+        toast(String(message || title || 'Banking Pay will refresh now.'));
+        return;
+      }
+
+      await confirmFn({
+        title: String(title || 'Banking Pay updated'),
+        message: String(message || 'Banking Pay will refresh now.'),
+        confirm_label: 'OK',
+        hide_cancel: true,
+        kind
+      });
     };
        const refreshPayWorkbench = async ({ reason = 'PAY_AFFECTING_ACTION', mode = 'SOFT' } = {}) => {
       const requestedMode = String(mode || 'SOFT').trim().toUpperCase();
@@ -75164,6 +75194,55 @@ function attachBankingModalDelegatedHandlers() {
         decisionsNow.dirty_candidate_ids = [...wiz.workbench.dirty_candidate_ids];
         decisionsNow.pending_candidate_jobs = deep(wiz.workbench.pending_candidate_jobs);
       } catch {}
+    };
+
+    const refreshPayWorkbenchAfterCandidateAction = async ({
+      candidateId = '',
+      result = null,
+      reason = 'PAY_AFFECTING_ACTION',
+      mode = 'SOFT'
+    } = {}) => {
+      const resultObj = (result && typeof result === 'object') ? result : {};
+      const refreshHint = (resultObj.refresh_hint && typeof resultObj.refresh_hint === 'object') ? resultObj.refresh_hint : {};
+      const candidateIdText = String(
+        candidateId ||
+        resultObj.candidate_id ||
+        resultObj.candidateId ||
+        refreshHint.candidate_id ||
+        refreshHint.candidateId ||
+        ''
+      ).trim();
+      const sessionId = String(
+        resultObj.workbench_session_id ||
+        resultObj.workbenchSessionId ||
+        refreshHint.workbench_session_id ||
+        refreshHint.workbenchSessionId ||
+        getCurrentWorkbenchSessionId() ||
+        ''
+      ).trim();
+
+      let candidateSettled = false;
+      if (candidateIdText && sessionId && typeof pollPayWorkbenchCandidateUntilSettled === 'function') {
+        try {
+          markCandidatePendingLocal(
+            candidateIdText,
+            resultObj.fast_lane || resultObj.queue_result || resultObj.queued_job_metadata || resultObj
+          );
+          await safeRerender(null);
+        } catch {}
+
+        try {
+          await pollPayWorkbenchCandidateUntilSettled(sessionId, candidateIdText, {
+            updateState: true,
+            source: 'attachBankingModalDelegatedHandlers.refreshPayWorkbenchAfterCandidateAction'
+          });
+          candidateSettled = true;
+          await safeRerender(null);
+        } catch {}
+      }
+
+      await refreshPayWorkbench({ reason, mode });
+      return { ok: true, candidate_settled: candidateSettled };
     };
 
     const runWorkbenchCandidateMutation = async ({ candidateId, mutate }) => {
@@ -78947,13 +79026,30 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         toast('Snooze id is required.');
         return;
       }
-      await apiPostJson('/api/banking/pay/snooze/clear', { snooze_id: sid });
+
+      const workbenchSessionId = getCurrentWorkbenchSessionId();
+      const payload = { snooze_id: sid };
+      if (workbenchSessionId) payload.workbench_session_id = workbenchSessionId;
+
+      const clearResult = await apiPostJson('/api/banking/pay/snooze/clear', payload);
       try {
         if (typeof loadLoansSnoozes === 'function') {
           await loadLoansSnoozes({ force: true });
         }
       } catch {}
-      await refreshPayWorkbench({ reason: 'SNOOZE_CHANGED', mode: 'SOFT' });
+
+      await showBankingPayNoticeModal({
+        title: 'Snooze removed',
+        message: 'Snooze removed successfully.\nBanking Pay will refresh this candidate now.',
+        kind: 'import-summary-ui-confirm-banking-pay-unsnooze-cleared'
+      });
+
+      await refreshPayWorkbenchAfterCandidateAction({
+        candidateId: clearResult?.candidate_id || '',
+        result: clearResult,
+        reason: 'SNOOZE_CHANGED',
+        mode: 'SOFT'
+      });
     };
 
     const mapPreviewLineToSnoozeSeed = () => {
@@ -79685,7 +79781,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       return;
     }
     if (a === 'banking:pay:acceptBankDetails') {
-      const { entity_kind, entity_id, bank_details_hash, provider, env0 } = getBankActionContext();
+      const { entity_kind, entity_id, bank_details_hash, provider, env0, candidate_id } = getBankActionContext();
 
       if (!entity_kind || !(entity_kind === 'CANDIDATE' || entity_kind === 'UMBRELLA')) { toast('entity_kind must be CANDIDATE or UMBRELLA'); return; }
       if (!entity_id) { toast('entity_id is required'); return; }
@@ -79725,7 +79821,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (!reason) { toast('Reason is required.'); return; }
 
       try {
-        await apiPostJson('/api/banking/pay/bank-name-check/override', {
+        const overrideResult = await apiPostJson('/api/banking/pay/bank-name-check/override', {
           provider: provider || null,
           env: env0 || null,
           entity_kind,
@@ -79734,7 +79830,12 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           reason
         });
 
-        await refreshPayWorkbench();
+        await refreshPayWorkbenchAfterCandidateAction({
+          candidateId: candidate_id || (entity_kind === 'CANDIDATE' ? entity_id : ''),
+          result: overrideResult,
+          reason: 'BANK_NAME_CHECK_OVERRIDE',
+          mode: 'SOFT'
+        });
       } catch (e) {
         let handled = false;
         try {
@@ -79748,15 +79849,68 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       return;
     }
 
-    if (a === 'banking:pay:ensurePayeeMap') {
-      const { entity_kind, entity_id, bank_details_hash, provider, env0 } = getBankActionContext();
+    if (a === 'banking:pay:runBankNameCheck' || a === 'banking:pay:ensurePayeeReadiness') {
+      const { entity_kind, entity_id, bank_details_hash, provider, env0, candidate_id } = getBankActionContext();
 
       if (!entity_kind || !(entity_kind === 'CANDIDATE' || entity_kind === 'UMBRELLA')) { toast('entity_kind must be CANDIDATE or UMBRELLA'); return; }
       if (!entity_id) { toast('entity_id is required'); return; }
       if (!bank_details_hash) { toast('bank_details_hash is required'); return; }
 
       try {
-        await apiPostJson('/api/banking/pay/payee-map/ensure', {
+        const workbenchSessionId = getCurrentWorkbenchSessionId();
+        const readinessResult = await apiPostJson('/api/banking/pay/payee-readiness/ensure', {
+          provider: provider || null,
+          env: env0 || null,
+          entity_kind,
+          entity_id,
+          bank_details_hash,
+          candidate_id: candidate_id || (entity_kind === 'CANDIDATE' ? entity_id : null),
+          workbench_session_id: workbenchSessionId || null
+        });
+
+        const nameStatus = String(readinessResult?.name_check?.status || '').trim().toUpperCase();
+        const payeeMapPresent = readinessResult?.payee_map?.present === true;
+        const failedCount = Number(readinessResult?.readiness?.failed_count || 0);
+        const message = (nameStatus === 'PASS' && payeeMapPresent)
+          ? 'Bank/name check passed and the bank account has been set up.\nBanking Pay will refresh this candidate now.'
+          : (['FAIL', 'NEAR_MATCH', 'UNAVAILABLE'].includes(nameStatus) || failedCount > 0)
+            ? 'Bank/name check completed and needs review.\nBanking Pay will refresh this candidate now.'
+            : 'Bank/name check has been submitted.\nBanking Pay will refresh this candidate now.';
+
+        await showBankingPayNoticeModal({
+          title: 'Bank/name check',
+          message,
+          kind: 'import-summary-ui-confirm-banking-pay-name-check-run'
+        });
+
+        await refreshPayWorkbenchAfterCandidateAction({
+          candidateId: candidate_id || (entity_kind === 'CANDIDATE' ? entity_id : ''),
+          result: readinessResult,
+          reason: 'PAYEE_READINESS_ENSURE',
+          mode: 'SOFT'
+        });
+      } catch (e) {
+        let handled = false;
+        try {
+          if (typeof bankingHandleApiError === 'function') {
+            bankingHandleApiError(e, { action: 'PAYEE_READINESS_ENSURE', scope: null, batchId: null, errorPath: ['ui', 'globalError'] });
+            handled = true;
+          }
+        } catch {}
+        if (!handled) toast(String(e?.message || e || 'Unable to run bank/name check.'));
+      }
+      return;
+    }
+
+    if (a === 'banking:pay:ensurePayeeMap') {
+      const { entity_kind, entity_id, bank_details_hash, provider, env0, candidate_id } = getBankActionContext();
+
+      if (!entity_kind || !(entity_kind === 'CANDIDATE' || entity_kind === 'UMBRELLA')) { toast('entity_kind must be CANDIDATE or UMBRELLA'); return; }
+      if (!entity_id) { toast('entity_id is required'); return; }
+      if (!bank_details_hash) { toast('bank_details_hash is required'); return; }
+
+      try {
+        const payeeMapResult = await apiPostJson('/api/banking/pay/payee-map/ensure', {
           provider: provider || null,
           env: env0 || null,
           entity_kind,
@@ -79764,7 +79918,12 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           bank_details_hash
         });
 
-        await refreshPayWorkbench();
+        await refreshPayWorkbenchAfterCandidateAction({
+          candidateId: candidate_id || (entity_kind === 'CANDIDATE' ? entity_id : ''),
+          result: payeeMapResult,
+          reason: 'PAYEE_MAP_ENSURE',
+          mode: 'SOFT'
+        });
       } catch (e) {
         const rawMessage = String(e?.message || e || '').trim();
 
@@ -79838,7 +79997,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     }
 
     if (a === 'banking:pay:bankNameCheckSetOverride') {
-      const { entity_kind, entity_id, bank_details_hash, provider, env0 } = getBankActionContext();
+      const { entity_kind, entity_id, bank_details_hash, provider, env0, candidate_id } = getBankActionContext();
       const reason = String(ds('reason') || dget('data-reason') || '').trim();
 
       if (!entity_kind || !(entity_kind === 'CANDIDATE' || entity_kind === 'UMBRELLA')) { toast('entity_kind must be CANDIDATE or UMBRELLA'); return; }
@@ -79847,7 +80006,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (!reason) { toast('reason is required'); return; }
 
       try {
-        await apiPostJson('/api/banking/pay/bank-name-check/override', {
+        const overrideResult = await apiPostJson('/api/banking/pay/bank-name-check/override', {
           provider: provider || null,
           env: env0 || null,
           entity_kind,
@@ -79856,7 +80015,12 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           reason
         });
 
-        await refreshPayWorkbench();
+        await refreshPayWorkbenchAfterCandidateAction({
+          candidateId: candidate_id || (entity_kind === 'CANDIDATE' ? entity_id : ''),
+          result: overrideResult,
+          reason: 'BANK_NAME_CHECK_OVERRIDE',
+          mode: 'SOFT'
+        });
       } catch (e) {
         let handled = false;
         try {
@@ -79871,14 +80035,14 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     }
 
     if (a === 'banking:pay:bankNameCheckClearOverride') {
-      const { entity_kind, entity_id, bank_details_hash, provider, env0 } = getBankActionContext();
+      const { entity_kind, entity_id, bank_details_hash, provider, env0, candidate_id } = getBankActionContext();
 
       if (!entity_kind || !(entity_kind === 'CANDIDATE' || entity_kind === 'UMBRELLA')) { toast('entity_kind must be CANDIDATE or UMBRELLA'); return; }
       if (!entity_id) { toast('entity_id is required'); return; }
       if (!bank_details_hash) { toast('bank_details_hash is required'); return; }
 
       try {
-        await apiPostJson('/api/banking/pay/bank-name-check/clear-override', {
+        const clearOverrideResult = await apiPostJson('/api/banking/pay/bank-name-check/clear-override', {
           provider: provider || null,
           env: env0 || null,
           entity_kind,
@@ -79886,7 +80050,12 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           bank_details_hash
         });
 
-        await refreshPayWorkbench();
+        await refreshPayWorkbenchAfterCandidateAction({
+          candidateId: candidate_id || (entity_kind === 'CANDIDATE' ? entity_id : ''),
+          result: clearOverrideResult,
+          reason: 'BANK_NAME_CHECK_CLEAR_OVERRIDE',
+          mode: 'SOFT'
+        });
       } catch (e) {
         let handled = false;
         try {
@@ -83297,8 +83466,6 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
   return { ok: true };
 }
-
-
 
 
 
