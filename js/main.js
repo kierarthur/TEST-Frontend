@@ -225361,7 +225361,13 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     if (/^contract_week:/i.test(activeKey || '') && activeTimesheetId) return false;
 
-    if (activeTimesheetId && modalData && !modalTimesheetId && /^contract_week:/i.test(trimStr(modalIdentity.rowKey || modalData.row_key || '') || activeKey)) return false;
+    if (activeTimesheetId && modalData) {
+
+      if (!modalTimesheetId) return false;
+
+      if (modalTimesheetId !== activeTimesheetId) return false;
+
+    }
 
     if (activeIdentity.rowKey && activeKey && activeIdentity.rowKey !== activeKey) return false;
 
