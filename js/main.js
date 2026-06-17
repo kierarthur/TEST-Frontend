@@ -208244,6 +208244,662 @@ async function handleBulkProcessProcess(state) {
   let processResolvedTimesheetEvidenceForSubmit = null;
   let processSubmitSucceededForRollback = false;
 
+
+  const cleanupProcessAutoAttachedQueueRollbackFrontendState = (rollbackContextInput = {}, backendResponseInput = {}, cleanupReason = 'process-rollback-return-to-queue', cleanupOptions = {}) => {
+    const rollbackContext = (rollbackContextInput && typeof rollbackContextInput === 'object') ? rollbackContextInput : {};
+    const backendResponse = (backendResponseInput && typeof backendResponseInput === 'object') ? backendResponseInput : {};
+    const opts = (cleanupOptions && typeof cleanupOptions === 'object') ? cleanupOptions : {};
+    const cleanReason = trimStr(cleanupReason || 'process-rollback-return-to-queue') || 'process-rollback-return-to-queue';
+    const evidenceId = trimStr(
+      rollbackContext.evidence_id || rollbackContext.evidenceId || rollbackContext.timesheet_evidence_id || rollbackContext.timesheetEvidenceId ||
+      backendResponse.returned_evidence_id || backendResponse.returnedEvidenceId || backendResponse.evidence_id || backendResponse.evidenceId || ''
+    );
+    const queueId = trimStr(
+      backendResponse.queue_id || backendResponse.queueId || backendResponse.returned_queue_id || backendResponse.returnedQueueId ||
+      rollbackContext.queue_id || rollbackContext.queueId || rollbackContext.expected_queue_id || rollbackContext.expectedQueueId || ''
+    );
+    const storageKey = trimStr(
+      backendResponse.returned_storage_key || backendResponse.returnedStorageKey || backendResponse.storage_key || backendResponse.storageKey ||
+      rollbackContext.storage_key || rollbackContext.storageKey || rollbackContext.expected_storage_key || rollbackContext.expectedStorageKey || ''
+    ).replace(/^\/+/, '');
+    const storageKeyLower = storageKey.toLowerCase();
+    const timesheetId = trimStr(
+      rollbackContext.timesheet_id || rollbackContext.timesheetId || rollbackContext.expected_timesheet_id || rollbackContext.expectedTimesheetId ||
+      backendResponse.current_timesheet_id || backendResponse.currentTimesheetId || backendResponse.timesheet_id || backendResponse.timesheetId || ''
+    );
+    const rowKey = normaliseProcessAttachAuthorityRowKeyForProcess(
+      rollbackContext.row_key || rollbackContext.rowKey || st.active_row_key || st.active_row?.row_key || '',
+      timesheetId
+    );
+    const kind = 'TIMESHEET';
+    const attachedSelectionKey = evidenceId && storageKey ? `attached|${evidenceId}|${storageKey}` : '';
+    const queueSelectionKey = queueId && storageKey ? `queue|${queueId}|${storageKey}` : '';
+    const returnedAt = new Date().toISOString();
+    const result = {
+      ok: false,
+      skipped: false,
+      reason: cleanReason,
+      evidence_id: evidenceId || null,
+      queue_id: queueId || null,
+      storage_key: storageKey || null,
+      timesheet_id: timesheetId || null,
+      row_key: rowKey || null,
+      pane_changed: false,
+      context_changed: false,
+      dataset_changed: false,
+      modal_changed: false,
+      modal_stack_changed: false,
+      cache_cleared: false,
+      tombstone_recorded: false,
+      selected_returned_queue: false
+    };
+
+    if (!evidenceId || !timesheetId || !storageKey || !rowKey) {
+      result.ok = false;
+      result.skipped = true;
+      result.skip_reason = 'missing-rollback-identity';
+      sigWarn('PROCESS-QUEUE-AUTO-ATTACH-ROLLBACK-FRONTEND-CLEANUP-SKIP', {
+        reason: result.skip_reason,
+        evidence_id: evidenceId || null,
+        timesheet_id: timesheetId || null,
+        row_key: rowKey || null,
+        storage_key: storageKey || null,
+        queue_id: queueId || null
+      });
+      return result;
+    }
+
+    const targetIdentity = processAttachAuthorityIdentityOfPartsForProcess({ rowKey, timesheetId });
+    if (targetIdentity.isStrictTimesheetRow !== true) {
+      result.ok = false;
+      result.skipped = true;
+      result.skip_reason = 'rollback-target-not-strict-timesheet-row';
+      sigWarn('PROCESS-QUEUE-AUTO-ATTACH-ROLLBACK-FRONTEND-CLEANUP-SKIP', {
+        reason: result.skip_reason,
+        evidence_id: evidenceId,
+        timesheet_id: timesheetId,
+        row_key: rowKey,
+        storage_key: storageKey,
+        queue_id: queueId || null
+      });
+      return result;
+    }
+
+    const identityFromContainer = (containerInput = {}) => {
+      const container = (containerInput && typeof containerInput === 'object') ? containerInput : {};
+      const meta = processEvidenceMetaOf(container);
+      const row = (container.row && typeof container.row === 'object') ? container.row : {};
+      const dataRow = (container.data_row && typeof container.data_row === 'object') ? container.data_row : {};
+      const details = (container.details && typeof container.details === 'object') ? container.details : {};
+      const stateObj = (container.state && typeof container.state === 'object') ? container.state : {};
+      const timesheetObj = (container.timesheet && typeof container.timesheet === 'object') ? container.timesheet : {};
+      const timesheetIdValue = trimStr(
+        container.timesheet_id || container.timesheetId || container.current_timesheet_id || container.currentTimesheetId || container.expected_timesheet_id || container.expectedTimesheetId ||
+        meta.timesheet_id || meta.timesheetId || meta.current_timesheet_id || meta.currentTimesheetId || meta.expected_timesheet_id || meta.expectedTimesheetId ||
+        row.timesheet_id || row.timesheetId || row.current_timesheet_id || row.currentTimesheetId || row.expected_timesheet_id || row.expectedTimesheetId ||
+        dataRow.timesheet_id || dataRow.timesheetId || dataRow.current_timesheet_id || dataRow.currentTimesheetId || dataRow.expected_timesheet_id || dataRow.expectedTimesheetId ||
+        details.timesheet_id || details.timesheetId || details.current_timesheet_id || details.currentTimesheetId || details.expected_timesheet_id || details.expectedTimesheetId ||
+        stateObj.timesheet_id || stateObj.timesheetId || stateObj.current_timesheet_id || stateObj.currentTimesheetId || stateObj.expected_timesheet_id || stateObj.expectedTimesheetId ||
+        timesheetObj.timesheet_id || timesheetObj.timesheetId || timesheetObj.current_timesheet_id || timesheetObj.currentTimesheetId || ''
+      );
+      const rowKeyValue = trimStr(
+        container.row_key || container.rowKey || container.new_row_key || container.newRowKey || meta.row_key || meta.rowKey ||
+        row.row_key || row.rowKey || row.new_row_key || row.newRowKey || dataRow.row_key || dataRow.rowKey || dataRow.new_row_key || dataRow.newRowKey ||
+        details.row_key || details.rowKey || stateObj.row_key || stateObj.rowKey || ''
+      );
+      return {
+        rowKey: normaliseProcessAttachAuthorityRowKeyForProcess(rowKeyValue, timesheetIdValue),
+        timesheetId: timesheetIdValue
+      };
+    };
+
+    const identityMatchesRollback = (partsInput = {}) => {
+      const parts = (partsInput && typeof partsInput === 'object') ? partsInput : {};
+      const candidateRowKey = trimStr(parts.rowKey || parts.row_key || '');
+      const candidateTimesheetId = trimStr(parts.timesheetId || parts.timesheet_id || parts.current_timesheet_id || parts.currentTimesheetId || '');
+      if (candidateRowKey && rowKey && candidateRowKey !== rowKey) return false;
+      if (candidateTimesheetId && timesheetId && candidateTimesheetId !== timesheetId) return false;
+      return !!((candidateRowKey && candidateRowKey === rowKey) || (candidateTimesheetId && candidateTimesheetId === timesheetId));
+    };
+
+    const liveActive = (() => { try { return readActive(); } catch { return {}; } })();
+    const livePartsRaw = resolveProcessRecordIdentityParts(liveActive);
+    const liveMatchesRollback = identityMatchesRollback({
+      rowKey: livePartsRaw.rowKey || rowKeyOf(st.active_row || {}) || st.active_row_key || '',
+      timesheetId: livePartsRaw.timesheetId || livePartsRaw.currentTimesheetId || livePartsRaw.expectedTimesheetId || st.active_row?.timesheet_id || st.active_row?.current_timesheet_id || ''
+    });
+    if (!liveMatchesRollback) {
+      const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+      if (pane) pane.__requires_evidence_hydration = true;
+      result.ok = false;
+      result.skipped = true;
+      result.skip_reason = 'live-active-row-identity-changed';
+      sigWarn('PROCESS-QUEUE-AUTO-ATTACH-ROLLBACK-FRONTEND-CLEANUP-SKIP', {
+        reason: result.skip_reason,
+        evidence_id: evidenceId,
+        row_key: rowKey,
+        timesheet_id: timesheetId,
+        live_row_key: trimStr(livePartsRaw.rowKey || rowKeyOf(st.active_row || {}) || st.active_row_key || '') || null,
+        live_timesheet_id: trimStr(livePartsRaw.timesheetId || livePartsRaw.currentTimesheetId || st.active_row?.timesheet_id || st.active_row?.current_timesheet_id || '') || null
+      });
+      return result;
+    }
+
+    const itemIdentityCompatible = (itemInput = {}) => {
+      const itemParts = getProcessEvidenceIdentityParts(itemInput || {});
+      const itemRowKey = trimStr(itemParts.rowKey || '');
+      const itemTimesheetId = trimStr(itemParts.timesheetId || '');
+      if (itemRowKey && itemRowKey !== rowKey) return false;
+      if (itemTimesheetId && itemTimesheetId !== timesheetId) return false;
+      return true;
+    };
+
+    const itemMatchesRollbackEvidence = (itemInput = {}, allowScopedFallback = false) => {
+      const item = (itemInput && typeof itemInput === 'object') ? itemInput : null;
+      if (!item) return false;
+      const itemEvidenceIds = [
+        item.evidence_id,
+        item.evidenceId,
+        item.timesheet_evidence_id,
+        item.timesheetEvidenceId,
+        item.id
+      ].map((value) => trimStr(value || '')).filter(Boolean);
+      if (evidenceId && itemEvidenceIds.includes(evidenceId)) return true;
+      if (!allowScopedFallback) return false;
+      if (!itemIdentityCompatible(item)) return false;
+      const itemStorageKey = evidenceStorageKeyOf(item).toLowerCase();
+      if (!itemStorageKey || itemStorageKey !== storageKeyLower) return false;
+      const itemKind = evidenceKindOf(item) || kind;
+      if (itemKind && itemKind !== kind) return false;
+      return true;
+    };
+
+    const filterEvidenceRows = (rowsInput = []) => {
+      const sourceRows = Array.isArray(rowsInput) ? rowsInput : [];
+      const rows = [];
+      let removed = false;
+      for (const row of sourceRows) {
+        if (itemMatchesRollbackEvidence(row, true)) {
+          removed = true;
+          continue;
+        }
+        rows.push(row);
+      }
+      return { rows, removed };
+    };
+
+    const objectPrimaryArtifactMatchesRollback = (targetInput = {}) => {
+      const target = (targetInput && typeof targetInput === 'object') ? targetInput : {};
+      const hints = (target.artifact_hints && typeof target.artifact_hints === 'object') ? target.artifact_hints : {};
+      const primary = (target.primary_artifact && typeof target.primary_artifact === 'object') ? target.primary_artifact : {};
+      const hintsPrimary = (hints.primary_artifact && typeof hints.primary_artifact === 'object') ? hints.primary_artifact : {};
+      const candidates = [
+        primary,
+        hintsPrimary,
+        {
+          id: target.primary_artifact_id || target.primaryArtifactId || hints.primary_artifact_id || hints.primaryArtifactId || '',
+          evidence_id: target.primary_artifact_id || target.primaryArtifactId || hints.primary_artifact_id || hints.primaryArtifactId || '',
+          kind: target.primary_artifact_kind || target.primaryArtifactKind || hints.primary_artifact_kind || hints.primaryArtifactKind || '',
+          storage_key: target.primary_artifact_storage_key || target.primaryArtifactStorageKey || hints.primary_artifact_storage_key || hints.primaryArtifactStorageKey || ''
+        }
+      ];
+      return candidates.some((candidate) => itemMatchesRollbackEvidence(candidate, true));
+    };
+
+    const writeEvidenceRowsPatchToTarget = (targetInput, rowsInput = []) => {
+      const target = (targetInput && typeof targetInput === 'object') ? targetInput : null;
+      if (!target) return false;
+      const rawRows = Array.isArray(rowsInput) ? rowsInput : [];
+      const patch = buildProcessEvidenceAuthorityPatch(rawRows, { active: readActive() });
+      const hasAny = patch.hasAnyEvidence === true;
+      const count = Number(patch.attachedEvidenceCount || patch.evidenceRows.length || 0) || 0;
+      const evidenceBadges = Array.isArray(patch.evidenceBadges) ? patch.evidenceBadges.map((badge) => ({ ...badge })) : [];
+      target.evidence = rawRows.map((item) => deep(item));
+      target.evidence_loaded = true;
+      target.evidence_authoritative = true;
+      target.include_evidence = true;
+      target.has_any_evidence = hasAny;
+      target.has_attached_evidence = hasAny;
+      target.attached_evidence_count = count;
+      target.evidence_count = count;
+      target.evidence_badges = evidenceBadges.map((badge) => ({ ...badge }));
+      target.evidence_meta = {
+        ...((target.evidence_meta && typeof target.evidence_meta === 'object') ? target.evidence_meta : {}),
+        evidence_loaded: true,
+        evidence_authoritative: true,
+        include_evidence: true,
+        has_any_evidence: hasAny,
+        has_attached_evidence: hasAny,
+        attached_evidence_count: count,
+        evidence_count: count,
+        evidence_badges: evidenceBadges.map((badge) => ({ ...badge }))
+      };
+      target.artifact_hints = {
+        ...((target.artifact_hints && typeof target.artifact_hints === 'object') ? target.artifact_hints : {}),
+        has_any_evidence: hasAny,
+        attached_evidence_count: count,
+        primary_artifact_id: hasAny ? (patch.primaryArtifactId || null) : null,
+        primary_artifact_kind: hasAny ? (patch.primaryArtifactKind || null) : null,
+        primary_artifact_storage_key: hasAny ? (patch.primaryArtifactStorageKey || null) : null,
+        primary_artifact_display_name: hasAny ? (patch.primaryArtifactDisplayName || null) : null,
+        primary_artifact_mime_type: hasAny ? (patch.primaryArtifactMimeType || null) : null,
+        primary_artifact_source: hasAny ? (patch.primaryArtifactSource || null) : null,
+        primary_artifact_preview_mode: hasAny ? (patch.primaryArtifactPreviewMode || null) : null,
+        primary_artifact: hasAny && patch.primaryEvidence ? deep(patch.primaryEvidence) : null,
+        evidence_badges: evidenceBadges.map((badge) => ({ ...badge }))
+      };
+      target.primary_artifact = hasAny && patch.primaryEvidence ? deep(patch.primaryEvidence) : null;
+      target.primary_artifact_id = hasAny ? (patch.primaryArtifactId || null) : null;
+      target.primary_artifact_kind = hasAny ? (patch.primaryArtifactKind || null) : null;
+      target.primary_artifact_storage_key = hasAny ? (patch.primaryArtifactStorageKey || null) : null;
+      target.primary_artifact_display_name = hasAny ? (patch.primaryArtifactDisplayName || null) : null;
+      target.primary_artifact_mime_type = hasAny ? (patch.primaryArtifactMimeType || null) : null;
+      target.primary_artifact_source = hasAny ? (patch.primaryArtifactSource || null) : null;
+      target.primary_artifact_preview_mode = hasAny ? (patch.primaryArtifactPreviewMode || null) : null;
+      if (target.action_flags && typeof target.action_flags === 'object') {
+        target.action_flags = {
+          ...target.action_flags,
+          has_any_evidence: hasAny,
+          has_attached_evidence: hasAny,
+          attached_evidence_count: count,
+          evidence_count: count,
+          evidence_badges: evidenceBadges.map((badge) => ({ ...badge })),
+          primary_artifact: hasAny && patch.primaryEvidence ? deep(patch.primaryEvidence) : null,
+          primary_artifact_id: hasAny ? (patch.primaryArtifactId || null) : null,
+          primary_artifact_kind: hasAny ? (patch.primaryArtifactKind || null) : null,
+          primary_artifact_storage_key: hasAny ? (patch.primaryArtifactStorageKey || null) : null,
+          primary_artifact_preview_mode: hasAny ? (patch.primaryArtifactPreviewMode || null) : null
+        };
+      }
+      if (hasAny) {
+        try { reconcileProcessActionFlagsWithEvidenceTruth(target, patch); } catch {}
+        try { coerceDailyProcessGenericEvidenceBadgeToTimesheet(target); } catch {}
+      }
+      return true;
+    };
+
+    const patchEvidenceContainer = (targetInput, label = '') => {
+      const target = (targetInput && typeof targetInput === 'object') ? targetInput : null;
+      if (!target) return false;
+      if (!identityMatchesRollback(identityFromContainer(target))) return false;
+      const evidenceRows = Array.isArray(target.evidence) ? target.evidence : [];
+      const filtered = filterEvidenceRows(evidenceRows);
+      const primaryMatches = objectPrimaryArtifactMatchesRollback(target);
+      if (!filtered.removed && !primaryMatches) return false;
+      writeEvidenceRowsPatchToTarget(target, filtered.rows);
+      if (label) result.patched_containers = [...(result.patched_containers || []), label];
+      return true;
+    };
+
+    const rememberRollbackTombstone = () => {
+      if (typeof rememberBulkProcessRemovedEvidenceTombstone !== 'function') return false;
+      try {
+        const tombstone = rememberBulkProcessRemovedEvidenceTombstone(st, {
+          ...(rollbackContext.evidence_row || {}),
+          evidence_id: evidenceId,
+          evidenceId,
+          timesheet_evidence_id: evidenceId,
+          timesheetEvidenceId: evidenceId,
+          queue_id: queueId || null,
+          storage_key: storageKey,
+          kind,
+          timesheet_id: timesheetId,
+          row_key: rowKey,
+          action: 'return-to-queue',
+          returned_at_utc: returnedAt,
+          source: 'process_rollback_return_to_queue',
+          backendResponse: backendResponse || null
+        }, {
+          action: 'return-to-queue',
+          backendResponse: backendResponse || null,
+          reason: cleanReason,
+          source: 'process_rollback_return_to_queue'
+        });
+        result.tombstone_recorded = !!tombstone || true;
+        return true;
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] rollback frontend tombstone remember failed', err);
+        return false;
+      }
+    };
+
+    rememberRollbackTombstone();
+
+    if (processResolvedTimesheetEvidenceForSubmit && trimStr(processResolvedTimesheetEvidenceForSubmit.evidence_id || processResolvedTimesheetEvidenceForSubmit.timesheet_evidence_id || '') === evidenceId) {
+      processResolvedTimesheetEvidenceForSubmit.restored = true;
+      if (processResolvedTimesheetEvidenceForSubmit.evidence_row && typeof processResolvedTimesheetEvidenceForSubmit.evidence_row === 'object') {
+        processResolvedTimesheetEvidenceForSubmit.evidence_row.__bulk_process_returned_to_queue = true;
+        processResolvedTimesheetEvidenceForSubmit.evidence_row.__bulk_process_returned_to_queue_at = returnedAt;
+      }
+    }
+
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    const selectionMatchesReturnedAttached = (selectionKeyInput = '') => {
+      const key = normaliseProcessPreviewSelectionKey(selectionKeyInput || '');
+      if (!key) return false;
+      const parsed = parseProcessPreviewSelectionKey(key);
+      if (!parsed || parsed.tab !== 'attached') return false;
+      if (evidenceId && parsed.targetId === evidenceId) return true;
+      if (storageKey && parsed.storageKey === storageKey && /^synthetic-attached:/i.test(parsed.targetId || '')) return true;
+      if (storageKey && parsed.storageKey === storageKey && queueId && parsed.targetId === queueId) return true;
+      return false;
+    };
+    const selectionIsStaleQueueForReturnedStorage = (selectionKeyInput = '') => {
+      const key = normaliseProcessPreviewSelectionKey(selectionKeyInput || '');
+      if (!key) return false;
+      const parsed = parseProcessPreviewSelectionKey(key);
+      if (!parsed || parsed.tab !== 'queue') return false;
+      if (!storageKey || parsed.storageKey !== storageKey) return false;
+      return !!(queueId && parsed.targetId && parsed.targetId !== queueId);
+    };
+    const selectionShouldClear = (selectionKeyInput = '') => selectionMatchesReturnedAttached(selectionKeyInput) || selectionIsStaleQueueForReturnedStorage(selectionKeyInput);
+    const cacheKeyMatchesReturnedTarget = (keyInput = '') => {
+      const key = trimStr(keyInput || '');
+      if (!key) return false;
+      const lower = key.toLowerCase();
+      const attachedLower = attachedSelectionKey.toLowerCase();
+      if (attachedLower && lower === attachedLower) return true;
+      if (evidenceId && lower.includes(evidenceId.toLowerCase())) return true;
+      if (storageKeyLower && (lower === storageKeyLower || lower.endsWith(`|${storageKeyLower}`))) return true;
+      if (storageKeyLower && lower.includes('attached|') && lower.includes(storageKeyLower)) return true;
+      return false;
+    };
+    const deleteMatchingCacheEntries = (owner, propertyName) => {
+      const store = owner && owner[propertyName];
+      if (!store) return false;
+      let changed = false;
+      try {
+        if (store instanceof Map) {
+          Array.from(store.keys()).forEach((key) => {
+            if (cacheKeyMatchesReturnedTarget(key)) {
+              store.delete(key);
+              changed = true;
+            }
+          });
+          return changed;
+        }
+      } catch {}
+      if (typeof store === 'object') {
+        Object.keys(store).forEach((key) => {
+          if (cacheKeyMatchesReturnedTarget(key)) {
+            try { delete store[key]; changed = true; } catch {}
+          }
+        });
+      }
+      return changed;
+    };
+
+    const clearPanePreviewAndCacheState = (clearCurrentPreview = false) => {
+      if (!pane) return false;
+      let changed = false;
+      for (const propertyName of [
+        '__preview_signed_url_cache',
+        '__preview_signed_url_meta_by_cache_key',
+        '__preview_signed_url_context_by_cache_key',
+        '__preview_signed_url_owner_by_cache_key',
+        '__preview_failed_signed_url_by_target',
+        '__preview_image_retry_by_target',
+        '__preview_pdf_retry_by_target',
+        '__preview_presign_inflight',
+        'pdf_page_by_target'
+      ]) {
+        changed = deleteMatchingCacheEntries(pane, propertyName) || changed;
+      }
+      if (clearCurrentPreview) {
+        pane.__preview_signed_url = '';
+        pane.__preview_signed_url_stored_at_ms = 0;
+        pane.__preview_signed_url_expires_at_ms = 0;
+        pane.__preview_signed_url_storage_key = '';
+        pane.__preview_last_committed_file_key = '';
+        pane.__preview_same_selection_recovery_key = '';
+        pane.__preview_signed_retry_key = '';
+        pane.__preview_signed_retry_count = 0;
+        if (pane.__preview_signed_retry_timer) {
+          try { window.clearTimeout(pane.__preview_signed_retry_timer); } catch {}
+          pane.__preview_signed_retry_timer = null;
+        }
+        if (pane.__preview_recovery_timer) {
+          try { window.clearTimeout(pane.__preview_recovery_timer); } catch {}
+          pane.__preview_recovery_timer = null;
+        }
+        pane.__preview_recovery_key = '';
+        pane.__preview_recovery_attempt = 0;
+        changed = true;
+      }
+      if (typeof pane.__abortPreviewPresignRequests === 'function') {
+        try {
+          pane.__abortPreviewPresignRequests('process-rollback-return-to-queue', {
+            force: true,
+            artifactRemoved: true,
+            userSelectionChanged: true
+          });
+        } catch {}
+      }
+      result.cache_cleared = result.cache_cleared || changed;
+      return changed;
+    };
+
+    const patchPane = () => {
+      if (!pane) return false;
+      const paneIdentityCandidates = [
+        trimStr(pane.__active_identity || ''),
+        trimStr(pane.__evidence_owner_identity || ''),
+        trimStr(pane.__attached_loaded_identity || ''),
+        trimStr(pane.__preview_identity || ''),
+        trimStr(pane.__preview_request_owner_identity || '')
+      ].filter(Boolean);
+      const paneIdentityMismatch = paneIdentityCandidates.some((identity) => identity !== rowKey);
+      if (paneIdentityMismatch) {
+        pane.__requires_evidence_hydration = true;
+        sigWarn('PROCESS-QUEUE-AUTO-ATTACH-ROLLBACK-FRONTEND-PANE-CLEANUP-SKIP', {
+          reason: 'pane-owner-identity-mismatch',
+          evidence_id: evidenceId,
+          row_key: rowKey,
+          pane_identities: paneIdentityCandidates.slice(0, 8)
+        });
+        return false;
+      }
+      let changed = false;
+      const filteredAttachedRows = filterEvidenceRows(pane.attached_rows);
+      const filteredAttachedAllRows = filterEvidenceRows(pane.attached_all_rows);
+      if (filteredAttachedRows.removed || !Array.isArray(pane.attached_rows)) {
+        pane.attached_rows = filteredAttachedRows.rows.map((item) => deep(item));
+        changed = true;
+      }
+      if (filteredAttachedAllRows.removed || !Array.isArray(pane.attached_all_rows)) {
+        pane.attached_all_rows = filteredAttachedAllRows.rows.length || !filteredAttachedRows.rows.length
+          ? filteredAttachedAllRows.rows.map((item) => deep(item))
+          : filteredAttachedRows.rows.map((item) => deep(item));
+        changed = true;
+      }
+      const activeItem = (pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null;
+      const activeSelectionRemoved = !!(
+        itemMatchesRollbackEvidence(activeItem, true) ||
+        trimStr(pane.active_attached_id || '') === evidenceId ||
+        selectionShouldClear(pane.__active_attached_preview_target || '') ||
+        selectionShouldClear(pane.__preview_target_key || '') ||
+        selectionShouldClear(pane.__preview_load_requested_target_key || '')
+      );
+      const targetFieldsBefore = [pane.__active_attached_preview_target, pane.__preview_target_key, pane.__preview_load_requested_target_key].map((value) => normaliseProcessPreviewSelectionKey(value || ''));
+      if (selectionShouldClear(pane.__active_attached_preview_target || '')) {
+        pane.__active_attached_preview_target = '';
+        changed = true;
+      }
+      if (selectionShouldClear(pane.__preview_target_key || '')) {
+        pane.__preview_target_key = '';
+        changed = true;
+      }
+      if (selectionShouldClear(pane.__preview_load_requested_target_key || '')) {
+        pane.__preview_load_requested_target_key = '';
+        changed = true;
+      }
+      const clearedTargetField = targetFieldsBefore.some((value) => value && selectionShouldClear(value));
+      clearPanePreviewAndCacheState(activeSelectionRemoved || clearedTargetField);
+      if (activeSelectionRemoved) {
+        const remainingRows = Array.isArray(pane.attached_rows) ? pane.attached_rows : [];
+        const nextAttached = remainingRows.find((row) => evidenceKindOf(row) === 'TIMESHEET') || remainingRows[0] || null;
+        if (nextAttached) {
+          const nextEvidenceId = evidenceIdOf(nextAttached) || trimStr(nextAttached.id || '');
+          const nextStorageKey = evidenceStorageKeyOf(nextAttached);
+          const nextSelectionKey = nextEvidenceId && nextStorageKey ? `attached|${nextEvidenceId}|${nextStorageKey}` : '';
+          pane.active_tab = 'attached';
+          pane.__attached_manual_override = true;
+          pane.__queue_manual_override = false;
+          pane.active_queue_id = null;
+          pane.active_queue_item = null;
+          pane.active_attached_id = nextEvidenceId || null;
+          pane.active_attached_item = deep(nextAttached);
+          pane.active_attached_pdf_page = 1;
+          if (nextSelectionKey) {
+            pane.__active_attached_preview_target = nextSelectionKey;
+            pane.__preview_target_key = nextSelectionKey;
+            pane.__preview_load_requested_target_key = nextSelectionKey;
+          }
+        } else {
+          const returnedQueueRow = opts.selectReturnedQueueIfConfirmed && queueId && storageKey
+            ? findProcessQueueRowByIdStorage(pane.queue_rows || [], queueId, storageKey)
+            : null;
+          const returnedQueueAvailable = !!(returnedQueueRow && isProcessQueueItemStillAvailable(returnedQueueRow));
+          pane.active_attached_id = null;
+          pane.active_attached_item = null;
+          pane.active_attached_pdf_page = 1;
+          pane.__attached_manual_override = false;
+          pane.__active_attached_preview_target = '';
+          if (returnedQueueAvailable && queueSelectionKey) {
+            pane.active_tab = 'queue';
+            pane.__queue_manual_override = true;
+            pane.active_queue_id = queueId;
+            pane.active_queue_item = deep(returnedQueueRow);
+            pane.__preview_target_key = queueSelectionKey;
+            pane.__preview_load_requested_target_key = queueSelectionKey;
+            pane.__preview_signed_url = '';
+            pane.__preview_signed_url_stored_at_ms = 0;
+            pane.__preview_signed_url_expires_at_ms = 0;
+            result.selected_returned_queue = true;
+          } else {
+            pane.active_tab = trimStr(pane.active_tab || '') === 'attached' ? 'queue' : pane.active_tab;
+            pane.__preview_target_key = '';
+            pane.__preview_load_requested_target_key = '';
+          }
+        }
+        changed = true;
+      }
+      if (trimStr(pane.__bulk_process_process_owned_queue_evidence_id || '') === evidenceId) pane.__bulk_process_process_owned_queue_evidence_id = '';
+      if (trimStr(pane.__bulk_process_process_owned_queue_storage_key || '').replace(/^\/+/, '') === storageKey) pane.__bulk_process_process_owned_queue_storage_key = '';
+      pane.__requires_evidence_hydration = false;
+      result.pane_changed = result.pane_changed || changed;
+      return changed;
+    };
+
+    if (patchPane()) result.pane_changed = true;
+
+    const patchContainers = (entries, bucketName) => {
+      let changed = false;
+      for (const [label, target] of entries) {
+        if (patchEvidenceContainer(target, label)) changed = true;
+      }
+      if (changed && bucketName) result[bucketName] = true;
+      return changed;
+    };
+
+    patchContainers([
+      ['st.active_row', st.active_row],
+      ['st.active_details', st.active_details],
+      ['st.active_context', st.active_context],
+      ['st.active_context.details', st.active_context?.details],
+      ['st.active_context.row', st.active_context?.row],
+      ['st.active_context.data_row', st.active_context?.data_row],
+      ['st.active_ctx', st.active_ctx],
+      ['st.active_ctx.details', st.active_ctx?.details],
+      ['st.active_ctx.state', st.active_ctx?.state],
+      ['st.active_ctx.row', st.active_ctx?.row],
+      ['st.active_ctx.data_row', st.active_ctx?.data_row]
+    ], 'context_changed');
+
+    const dataset = (st.dataset && typeof st.dataset === 'object') ? st.dataset : null;
+    if (dataset) {
+      for (const collectionName of ['unprocessed_rows', 'processed_rows', 'rows']) {
+        const rowsCollection = Array.isArray(dataset[collectionName]) ? dataset[collectionName] : [];
+        rowsCollection.forEach((row, index) => {
+          if (patchEvidenceContainer(row, `st.dataset.${collectionName}[${index}]`)) result.dataset_changed = true;
+        });
+      }
+    }
+    for (const collectionName of ['unprocessed_rows', 'processed_rows', 'rows']) {
+      const rowsCollection = Array.isArray(st[collectionName]) ? st[collectionName] : [];
+      rowsCollection.forEach((row, index) => {
+        if (patchEvidenceContainer(row, `st.${collectionName}[${index}]`)) result.dataset_changed = true;
+      });
+    }
+
+    try {
+      if (window.modalCtx && window.modalCtx.bulkProcessState === st) {
+        const modalHeaderIdentity = trimStr(window.modalCtx.__bulkProcessRecordIdentity || window.modalCtx.activeRecordIdentity || '');
+        const modalHeaderTimesheetId = trimStr(window.modalCtx.activeTimesheetId || '');
+        const modalHeaderMatches = !(modalHeaderIdentity || modalHeaderTimesheetId) || identityMatchesRollback({ rowKey: modalHeaderIdentity, timesheetId: modalHeaderTimesheetId });
+        if (modalHeaderMatches) {
+          const modalChanged = patchContainers([
+            ['window.modalCtx.data', window.modalCtx.data],
+            ['window.modalCtx.timesheetState', window.modalCtx.timesheetState],
+            ['window.modalCtx.timesheetDetails', window.modalCtx.timesheetDetails]
+          ], 'modal_changed');
+          result.modal_changed = result.modal_changed || modalChanged;
+        }
+      }
+      if (Array.isArray(window.__modalStack)) {
+        for (let i = 0; i < window.__modalStack.length; i += 1) {
+          const frame = window.__modalStack[i];
+          if (!frame || typeof frame !== 'object') continue;
+          const frameChanged = patchContainers([
+            [`window.__modalStack[${i}].data`, frame.data],
+            [`window.__modalStack[${i}]._ctxRef.data`, frame._ctxRef?.data],
+            [`window.__modalStack[${i}]._ctxRef.timesheetState`, frame._ctxRef?.timesheetState],
+            [`window.__modalStack[${i}]._ctxRef.timesheetDetails`, frame._ctxRef?.timesheetDetails],
+            [`window.__modalStack[${i}].timesheetState`, frame.timesheetState],
+            [`window.__modalStack[${i}].timesheetDetails`, frame.timesheetDetails]
+          ], 'modal_stack_changed');
+          result.modal_stack_changed = result.modal_stack_changed || frameChanged;
+        }
+      }
+    } catch {}
+
+    if (typeof applyBulkProcessRemovedEvidenceTombstones === 'function') {
+      try {
+        const applyResult = applyBulkProcessRemovedEvidenceTombstones(st, {
+          reason: `${cleanReason}-frontend-cleanup`,
+          tombstones: [{
+            evidence_id: evidenceId,
+            timesheet_evidence_id: evidenceId,
+            ids: [evidenceId].filter(Boolean),
+            queue_id: queueId || null,
+            queue_ids: queueId ? [queueId] : [],
+            storage_key: storageKey,
+            kind,
+            row_key: rowKey,
+            timesheet_id: timesheetId,
+            action: 'return-to-queue',
+            source: 'process_rollback_return_to_queue'
+          }]
+        });
+        if (applyResult?.changed === true) {
+          result.context_changed = true;
+          result.dataset_changed = true;
+        }
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] rollback frontend tombstone apply failed', err);
+      }
+    }
+
+    result.ok = true;
+    stateAudit('process-queue-auto-attach-rollback-frontend-cleanup', {
+      reason: cleanReason,
+      cleanup: stateAuditClone(result),
+      backend_response: stateAuditClone(backendResponse || null)
+    });
+    sigLog('PROCESS-QUEUE-AUTO-ATTACH-ROLLBACK-FRONTEND-CLEANUP', result);
+    return result;
+  };
+
   const normaliseProcessQueueEvidenceSnapshot = (snapshotInput = null) => {
     const snapshot = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : {};
     const queueId = trimStr(
@@ -208305,6 +208961,7 @@ async function handleBulkProcessProcess(state) {
     const rollbackReason = trimStr(reason || 'process-block-before-submit') || 'process-block-before-submit';
     let rollbackFailedText = '';
     let refreshFailedText = '';
+    let rollbackResponse = null;
 
     try {
       if (typeof returnTimesheetEvidenceToQueue !== 'function') {
@@ -208320,6 +208977,7 @@ async function handleBulkProcessProcess(state) {
       if (!rb || rb.ok === false || rb.returned_to_queue === false) {
         throw new Error(trimStr(rb?.error || rb?.message || 'Timesheet image rollback did not confirm that the image was returned to the queue.'));
       }
+      rollbackResponse = rb;
       rollbackContext.restored = true;
       if (typeof rememberBulkProcessRemovedEvidenceTombstone === 'function') {
         try {
@@ -208342,6 +209000,9 @@ async function handleBulkProcessProcess(state) {
       if (processResolvedTimesheetEvidenceForSubmit && processResolvedTimesheetEvidenceForSubmit.evidence_id === rollbackContext.evidence_id) {
         processResolvedTimesheetEvidenceForSubmit.restored = true;
       }
+      cleanupProcessAutoAttachedQueueRollbackFrontendState(rollbackContext, rb, `${rollbackReason}-backend-return-confirmed`, {
+        selectReturnedQueueIfConfirmed: false
+      });
     } catch (rollbackErr) {
       rollbackFailedText = trimStr(rollbackErr?.message || rollbackErr || 'Timesheet image rollback failed.');
     }
@@ -208353,6 +209014,11 @@ async function handleBulkProcessProcess(state) {
         rollbackContext,
         'available'
       );
+      if (!rollbackFailedText && rollbackResponse) {
+        cleanupProcessAutoAttachedQueueRollbackFrontendState(rollbackContext, rollbackResponse, `${rollbackReason}-queue-refresh-confirmed`, {
+          selectReturnedQueueIfConfirmed: true
+        });
+      }
     } catch (refreshErr) {
       refreshFailedText = trimStr(refreshErr?.message || refreshErr || 'Image Queue refresh failed after rollback.');
     }
@@ -209420,6 +210086,7 @@ async function handleBulkProcessProcess(state) {
         } catch {}
       } else {
         let rollbackFailedText = '';
+        let rollbackResponse = null;
         try {
           const rb = await returnTimesheetEvidenceToQueue(processAutoAttachedQueueEvidenceForRollback.timesheet_id, processAutoAttachedQueueEvidenceForRollback.evidence_id, {
             expected_timesheet_id: processAutoAttachedQueueEvidenceForRollback.expected_timesheet_id || processAutoAttachedQueueEvidenceForRollback.timesheet_id,
@@ -209431,6 +210098,7 @@ async function handleBulkProcessProcess(state) {
           if (!rb || rb.ok === false || rb.returned_to_queue === false) {
             throw new Error(trimStr(rb?.error || rb?.message || 'Timesheet image rollback did not confirm that the image was returned to the queue.'));
           }
+          rollbackResponse = rb;
           processAutoAttachedQueueEvidenceForRollback.restored = true;
           if (typeof rememberBulkProcessRemovedEvidenceTombstone === 'function') {
             try {
@@ -209453,6 +210121,9 @@ async function handleBulkProcessProcess(state) {
           if (processResolvedTimesheetEvidenceForSubmit && processResolvedTimesheetEvidenceForSubmit.evidence_id === processAutoAttachedQueueEvidenceForRollback.evidence_id) {
             processResolvedTimesheetEvidenceForSubmit.restored = true;
           }
+          cleanupProcessAutoAttachedQueueRollbackFrontendState(processAutoAttachedQueueEvidenceForRollback, rb, 'process-error-queue-auto-attach-rollback-backend-return-confirmed', {
+            selectReturnedQueueIfConfirmed: false
+          });
         } catch (rollbackErr) {
           processErrorRollbackFailed = true;
           rollbackFailedText = trimStr(rollbackErr?.message || rollbackErr || 'Timesheet image rollback failed.');
@@ -209465,6 +210136,11 @@ async function handleBulkProcessProcess(state) {
             processAutoAttachedQueueEvidenceForRollback,
             'available'
           );
+          if (!rollbackFailedText && rollbackResponse) {
+            cleanupProcessAutoAttachedQueueRollbackFrontendState(processAutoAttachedQueueEvidenceForRollback, rollbackResponse, 'process-error-queue-auto-attach-rollback-queue-refresh-confirmed', {
+              selectReturnedQueueIfConfirmed: true
+            });
+          }
         } catch (refreshErr) {
           processErrorQueueRefreshFailed = true;
           const refreshFailedText = trimStr(refreshErr?.message || refreshErr || 'Image Queue refresh failed after rollback.');
@@ -209566,6 +210242,7 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
+
 
 
 function normaliseBulkProcessRemovedEvidenceKind(value) {
