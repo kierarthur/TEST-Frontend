@@ -162087,7 +162087,6 @@ function ensureBulkProcessRelatedContract(relatedObj, rowObj, detailsObj) {
   };
 }
 
-
 function renderBulkProcessPreviewPane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -162376,20 +162375,24 @@ function renderBulkProcessPreviewPane(state) {
       trimStr(item.staged_kind || item.stagedKind || meta.staged_kind || meta.stagedKind || '')
     );
     if (staged) {
-      return trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || item.id || meta.id || getPreviewEvidenceFileKey(item) || '');
+      const fileKeyForStaged = getPreviewEvidenceFileKey(item);
+      const stagedTargetId = trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || '');
+      if (!stagedTargetId || stagedTargetId === fileKeyForStaged || /^synthetic-attached:/i.test(stagedTargetId) || /^files\//i.test(stagedTargetId)) return '';
+      return stagedTargetId;
     }
     const fileKey = getPreviewEvidenceFileKey(item);
     const rawId = trimStr(item.id || meta.id || '');
+    const queueIdentity = trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || '');
     const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || '');
-    const queueId = trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || meta.queue_id || meta.queueId || '');
-    const rawIdLooksAuthoritative = !!(rawId && rawId !== fileKey && !/^files\//i.test(rawId) && !/^synthetic-attached:/i.test(rawId));
-    return trimStr(evidenceId || (rawIdLooksAuthoritative ? rawId : '') || queueId || '');
+    const safeEvidenceId = !!(evidenceId && evidenceId !== fileKey && evidenceId !== queueIdentity && !/^files\//i.test(evidenceId) && !/^synthetic-attached:/i.test(evidenceId)) ? evidenceId : '';
+    const rawIdLooksAuthoritative = !!(rawId && rawId !== fileKey && rawId !== queueIdentity && !/^files\//i.test(rawId) && !/^synthetic-attached:/i.test(rawId));
+    return trimStr(safeEvidenceId || (rawIdLooksAuthoritative ? rawId : '') || '');
   };
   const buildPreviewAttachedSelectionKeyFromItem = (itemInput = {}) => {
     const fileKey = getPreviewEvidenceFileKey(itemInput || {});
     if (!fileKey) return '';
     const targetId = getPreviewAttachedId(itemInput || {});
-    if (!targetId || targetId === fileKey) return '';
+    if (!targetId || targetId === fileKey || /^synthetic-attached:/i.test(targetId) || /^files\//i.test(targetId)) return '';
     return `attached|${targetId}|${fileKey}`;
   };
   const normalisePreviewAttachedSelectionKeyFromRaw = (selectionKeyInput = '') => {
@@ -162400,7 +162403,7 @@ function renderBulkProcessPreviewPane(state) {
     if (tab !== 'attached') return '';
     const targetId = trimStr(parts[1] || '');
     const fileKey = trimStr(parts.slice(2).join('|') || '').replace(/^\/+/, '');
-    if (!fileKey || !targetId || targetId === fileKey) return '';
+    if (!fileKey || !targetId || targetId === fileKey || /^synthetic-attached:/i.test(targetId) || /^files\//i.test(targetId)) return '';
     return `attached|${targetId}|${fileKey}`;
   };
   const getPreviewAttachedAliasKeys = (itemInput = {}) => {
@@ -162491,7 +162494,7 @@ function renderBulkProcessPreviewPane(state) {
       if (rowKeyMismatch || timesheetMismatch || contractWeekMismatch || itemRowKey || itemTimesheetId) return null;
     }
     const attachedId = isSystemContractWeekPdfArtifact ? systemContractWeekPdfArtifactId : getPreviewAttachedId(item);
-    if (!attachedId || attachedId === storageKey) return null;
+    if (!attachedId || attachedId === storageKey || /^files\//i.test(attachedId) || /^synthetic-attached:/i.test(attachedId)) return null;
     const kind = normalisePreviewEvidenceKind(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || item.stagedKind || meta.staged_kind || meta.stagedKind || meta.kind || '') || 'OTHER';
     const rawDisplayName = trimStr(item.display_name || item.displayName || item.filename || item.original_filename || item.originalFilename || '');
     const displayName = isSystemContractWeekPdfArtifact ? safeSystemTimesheetArtifactDisplayNameForPreview() : (rawDisplayName || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'));
@@ -162500,17 +162503,20 @@ function renderBulkProcessPreviewPane(state) {
           .map((value) => trimStr(value || ''))
           .find((value) => value && !isSystemContractWeekPdfArtifactIdForPreview(value) && !/^synthetic-attached:/i.test(value) && value !== storageKey) || ''
       : '';
+    const realAttachedEvidenceId = isSystemContractWeekPdfArtifact ? (realEvidenceIdForSystemArtifact || '') : (staged ? '' : attachedId);
+    const stagedQueueId = isSystemContractWeekPdfArtifact ? '' : (staged ? trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || attachedId || '') : '');
+    const stagedManualQueueId = isSystemContractWeekPdfArtifact ? '' : (staged ? trimStr(item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || stagedQueueId || '') : '');
     return {
       ...(item || {}),
       id: attachedId || storageKey || null,
-      evidence_id: isSystemContractWeekPdfArtifact ? (realEvidenceIdForSystemArtifact || null) : (staged ? null : (trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || '') || null)),
-      evidenceId: isSystemContractWeekPdfArtifact ? (realEvidenceIdForSystemArtifact || null) : (staged ? null : (trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || '') || null)),
-      timesheet_evidence_id: isSystemContractWeekPdfArtifact ? (realEvidenceIdForSystemArtifact || null) : (staged ? null : (trimStr(item.timesheet_evidence_id || item.timesheetEvidenceId || item.evidence_id || item.evidenceId || '') || null)),
-      timesheetEvidenceId: isSystemContractWeekPdfArtifact ? (realEvidenceIdForSystemArtifact || null) : (staged ? null : (trimStr(item.timesheet_evidence_id || item.timesheetEvidenceId || item.evidence_id || item.evidenceId || '') || null)),
-      queue_id: isSystemContractWeekPdfArtifact ? null : (trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || (staged ? attachedId : '') || '') || null),
-      queueId: isSystemContractWeekPdfArtifact ? null : (trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || (staged ? attachedId : '') || '') || null),
-      manual_timesheet_queue_id: isSystemContractWeekPdfArtifact ? null : (trimStr(item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || '') || null),
-      manualTimesheetQueueId: isSystemContractWeekPdfArtifact ? null : (trimStr(item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || '') || null),
+      evidence_id: realAttachedEvidenceId || null,
+      evidenceId: realAttachedEvidenceId || null,
+      timesheet_evidence_id: realAttachedEvidenceId || null,
+      timesheetEvidenceId: realAttachedEvidenceId || null,
+      queue_id: stagedQueueId || null,
+      queueId: stagedQueueId || null,
+      manual_timesheet_queue_id: stagedManualQueueId || null,
+      manualTimesheetQueueId: stagedManualQueueId || null,
       row_key: trimStr(item.row_key || item.rowKey || meta.row_key || activeRowKeyForPreview || '') || null,
       contract_week_id: contractWeekId || (staged ? activeContractWeekIdForPreview : null),
       timesheet_id: staged ? null : (timesheetId || activeTimesheetIdForPreview || null),
@@ -162608,11 +162614,15 @@ function renderBulkProcessPreviewPane(state) {
       const primary = (container.primary_artifact && typeof container.primary_artifact === 'object') ? container.primary_artifact : ((hints.primary_artifact && typeof hints.primary_artifact === 'object') ? hints.primary_artifact : null);
       const primaryStorage = trimStr(primary?.storage_key || primary?.file_key || primary?.download_storage_key || primary?.r2_key || container.primary_artifact_storage_key || hints.primary_artifact_storage_key || '').replace(/^\/+/, '');
       if (!primaryStorage) continue;
-      const primaryId = trimStr(primary?.id || primary?.evidence_id || primary?.timesheet_evidence_id || primary?.queue_id || container.primary_artifact_id || hints.primary_artifact_id || '');
+      const primaryEvidenceId = trimStr(primary?.evidence_id || primary?.evidenceId || primary?.timesheet_evidence_id || primary?.timesheetEvidenceId || '');
+      const primaryObjectId = trimStr(primary?.id || container.primary_artifact_id || hints.primary_artifact_id || '');
+      const primaryQueueId = trimStr(primary?.queue_id || primary?.queueId || primary?.manual_timesheet_queue_id || primary?.manualTimesheetQueueId || '');
+      const primaryId = trimStr(primaryEvidenceId || primaryObjectId || '');
       const primaryKind = primary?.kind || primary?.evidence_kind || container.primary_artifact_kind || hints.primary_artifact_kind || '';
       const normalisedPrimaryKind = normalisePreviewEvidenceKind(primaryKind);
       const primaryIsSystemContractWeekPdf = isSystemContractWeekPdfArtifactIdForPreview(primaryId);
-      const primaryHasAuthoritativeId = !!(primaryId && primaryId !== primaryStorage && !/^files\//i.test(primaryId) && !/^synthetic-attached:/i.test(primaryId));
+      const primaryObjectIdLooksAuthoritative = !!(primaryObjectId && primaryObjectId !== primaryStorage && primaryObjectId !== primaryQueueId && !/^files\//i.test(primaryObjectId) && !/^synthetic-attached:/i.test(primaryObjectId));
+      const primaryHasAuthoritativeId = !!(primaryEvidenceId || primaryObjectIdLooksAuthoritative);
       if (!primaryIsSystemContractWeekPdf && !primaryHasAuthoritativeId) continue;
       if (!primaryIsSystemContractWeekPdf && (!normalisedPrimaryKind || normalisedPrimaryKind === 'EVIDENCE')) continue;
       const primaryDisplayName = primaryIsSystemContractWeekPdf
@@ -162714,7 +162724,7 @@ function renderBulkProcessPreviewPane(state) {
     const tab = trimStr(tabInput || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
     const targetId = trimStr(targetIdInput || '').replace(/^\/+/, '');
     const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
-    if (tab === 'attached' && (!fileKey || !targetId || targetId === fileKey)) return '';
+    if (tab === 'attached' && (!fileKey || !targetId || targetId === fileKey || /^files\//i.test(targetId) || /^synthetic-attached:/i.test(targetId))) return '';
     return `${tab}|${targetId || fileKey}|${fileKey}`;
   };
   const normalisePreviewSelectionKey = (selectionKeyInput = '') => {
@@ -162724,7 +162734,7 @@ function renderBulkProcessPreviewPane(state) {
     const tab = trimStr(parts[0] || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
     const targetId = trimStr(parts[1] || '');
     const fileKey = trimStr(parts.slice(2).join('|') || '').replace(/^\/+/, '');
-    if (tab === 'attached' && (!fileKey || !targetId || targetId === fileKey)) return '';
+    if (tab === 'attached' && (!fileKey || !targetId || targetId === fileKey || /^files\//i.test(targetId) || /^synthetic-attached:/i.test(targetId))) return '';
     return buildPreviewSelectionKey(tab, targetId || fileKey, fileKey);
   };
 
@@ -163106,6 +163116,7 @@ function renderBulkProcessPreviewPane(state) {
     </div>
   `);
 }
+
 
 
 async function openBulkProcessWorkbench(seed = {}) {
@@ -171632,6 +171643,8 @@ function bindBulkProcessManualEditor(state) {
 }
 
 
+
+
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -171807,9 +171820,18 @@ function bindBulkProcessPreviewPane(state) {
       trimStr(item?.staged_kind || item?.stagedKind || meta.staged_kind || meta.stagedKind || '')
     );
     if (staged) {
-      return trimStr(item?.queue_id || item?.queueId || item?.manual_timesheet_queue_id || item?.manualTimesheetQueueId || item?.manual_queue_id || item?.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || item?.id || meta.id || resolveActiveBulkProcessPreviewFileKey(item) || '');
+      const fileKeyForStaged = resolveActiveBulkProcessPreviewFileKey(item);
+      const stagedTargetId = trimStr(item?.queue_id || item?.queueId || item?.manual_timesheet_queue_id || item?.manualTimesheetQueueId || item?.manual_queue_id || item?.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || '');
+      if (!stagedTargetId || stagedTargetId === fileKeyForStaged || /^files\//i.test(stagedTargetId) || /^synthetic-attached:/i.test(stagedTargetId)) return '';
+      return stagedTargetId;
     }
-    return trimStr(item?.evidence_id || item?.evidenceId || item?.timesheet_evidence_id || item?.timesheetEvidenceId || item?.id || item?.queue_id || item?.queueId || item?.manual_timesheet_queue_id || item?.manualTimesheetQueueId || meta.evidence_id || meta.evidenceId || meta.queue_id || meta.queueId || resolveActiveBulkProcessPreviewFileKey(item) || '');
+    const fileKey = resolveActiveBulkProcessPreviewFileKey(item);
+    const queueIdentity = trimStr(item?.queue_id || item?.queueId || item?.manual_timesheet_queue_id || item?.manualTimesheetQueueId || item?.manual_queue_id || item?.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || '');
+    const rawId = trimStr(item?.id || meta.id || '');
+    const evidenceId = trimStr(item?.evidence_id || item?.evidenceId || item?.timesheet_evidence_id || item?.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || '');
+    const safeEvidenceId = !!(evidenceId && evidenceId !== fileKey && evidenceId !== queueIdentity && !/^files\//i.test(evidenceId) && !/^synthetic-attached:/i.test(evidenceId)) ? evidenceId : '';
+    const rawIdLooksAuthoritative = !!(rawId && rawId !== fileKey && rawId !== queueIdentity && !/^files\//i.test(rawId) && !/^synthetic-attached:/i.test(rawId));
+    return trimStr(safeEvidenceId || (rawIdLooksAuthoritative ? rawId : '') || '');
   };
   const resolveBulkProcessDockedSignedUrl = (previewItem) => {
     const item = (previewItem && typeof previewItem === 'object') ? previewItem : null;
@@ -171965,13 +171987,16 @@ function bindBulkProcessPreviewPane(state) {
       trimStr(item.staged_kind || item.stagedKind || meta.staged_kind || meta.stagedKind || '')
     );
     if (staged) {
-      return trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || item.id || meta.id || fileKey || '');
+      const stagedTargetId = trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || '');
+      if (!stagedTargetId || stagedTargetId === fileKey || /^files\//i.test(stagedTargetId) || /^synthetic-attached:/i.test(stagedTargetId)) return '';
+      return stagedTargetId;
     }
     const rawId = trimStr(item.id || meta.id || '');
+    const queueIdentity = trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || '');
     const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || '');
-    const queueId = trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || meta.queue_id || meta.queueId || '');
-    const rawIdLooksAuthoritative = !!(rawId && rawId !== fileKey && !/^files\//i.test(rawId) && !/^synthetic-attached:/i.test(rawId));
-    return trimStr(evidenceId || (rawIdLooksAuthoritative ? rawId : '') || queueId || '');
+    const safeEvidenceId = !!(evidenceId && evidenceId !== fileKey && evidenceId !== queueIdentity && !/^files\//i.test(evidenceId) && !/^synthetic-attached:/i.test(evidenceId)) ? evidenceId : '';
+    const rawIdLooksAuthoritative = !!(rawId && rawId !== fileKey && rawId !== queueIdentity && !/^files\//i.test(rawId) && !/^synthetic-attached:/i.test(rawId));
+    return trimStr(safeEvidenceId || (rawIdLooksAuthoritative ? rawId : '') || '');
   };
   const resolvePreviewItemTargetIdForMode = (modeInput = 'queue', itemInput = null, fileKeyInput = '') => {
     const mode = trimStr(modeInput || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
@@ -171989,7 +172014,7 @@ function bindBulkProcessPreviewPane(state) {
     const targetId = trimStr(targetIdInput || '');
     const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
     if (tab === 'attached') {
-      if (!fileKey || !targetId || targetId === fileKey) return '';
+      if (!fileKey || !targetId || targetId === fileKey || /^files\//i.test(targetId) || /^synthetic-attached:/i.test(targetId)) return '';
       return `attached|${targetId}|${fileKey}`;
     }
     return `${tab}|${targetId}|${fileKey}`;
@@ -172001,8 +172026,8 @@ function bindBulkProcessPreviewPane(state) {
     const tab = trimStr(parts[0] || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
     const targetId = trimStr(parts[1] || '');
     const fileKey = trimStr(parts.slice(2).join('|') || '').replace(/^\/+/, '');
-    if (tab === 'attached' && (!fileKey || !targetId || targetId === fileKey)) return '';
-    return buildPreviewSelectionKey(tab, targetId || (tab === 'attached' ? fileKey : ''), fileKey);
+    if (tab === 'attached' && (!fileKey || !targetId || targetId === fileKey || /^files\//i.test(targetId) || /^synthetic-attached:/i.test(targetId))) return '';
+    return buildPreviewSelectionKey(tab, targetId || (tab === 'attached' ? '' : ''), fileKey);
   };
   const getPreviewQueueScope = (scopeValue = '') => {
     const status = upper(pane.__queue_status || 'QUEUED') || 'QUEUED';
@@ -174434,8 +174459,13 @@ function bindBulkProcessPreviewPane(state) {
         const artifact = (container.primary_artifact && typeof container.primary_artifact === 'object') ? container.primary_artifact : ((hints.primary_artifact && typeof hints.primary_artifact === 'object') ? hints.primary_artifact : null);
         const fileKey = trimStr(artifact?.storage_key || artifact?.storageKey || artifact?.file_key || artifact?.fileKey || artifact?.download_storage_key || artifact?.downloadStorageKey || artifact?.r2_key || artifact?.r2Key || container.primary_artifact_storage_key || hints.primary_artifact_storage_key || '').replace(/^\/+/, '');
         if (!fileKey) continue;
-        const primaryId = trimStr(artifact?.id || artifact?.evidence_id || artifact?.evidenceId || artifact?.queue_id || artifact?.queueId || container.primary_artifact_id || hints.primary_artifact_id || '');
+        const primaryEvidenceId = trimStr(artifact?.evidence_id || artifact?.evidenceId || artifact?.timesheet_evidence_id || artifact?.timesheetEvidenceId || '');
+        const primaryObjectId = trimStr(artifact?.id || container.primary_artifact_id || hints.primary_artifact_id || '');
+        const primaryQueueId = trimStr(artifact?.queue_id || artifact?.queueId || artifact?.manual_timesheet_queue_id || artifact?.manualTimesheetQueueId || '');
+        const primaryId = trimStr(primaryEvidenceId || primaryObjectId || '');
         const primaryIsSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForPreviewBind(primaryId);
+        const primaryObjectIdLooksAuthoritative = !!(primaryObjectId && primaryObjectId !== fileKey && primaryObjectId !== primaryQueueId && !/^files\//i.test(primaryObjectId) && !/^synthetic-attached:/i.test(primaryObjectId));
+        if (!primaryIsSystemContractWeekPdfArtifact && !primaryEvidenceId && !primaryObjectIdLooksAuthoritative) continue;
         const artifactTimesheetId = trimStr(artifact?.timesheet_id || artifact?.timesheetId || container.timesheet_id || container.current_timesheet_id || activeTimesheetId || '');
         const artifactRawContractWeekId = activeIdentityIsTimesheetForAttached
           ? readPreviewAttachedExplicitContractWeekId(artifact || {})
@@ -174504,7 +174534,7 @@ function bindBulkProcessPreviewPane(state) {
         if (timesheetId && activeContractWeekId && !activeTimesheetId) return null;
       }
       const id = resolvePreviewAttachedTargetId({ ...raw, storage_key: fileKey, file_key: fileKey });
-      if (!id || id === fileKey) return null;
+      if (!id || id === fileKey || /^files\//i.test(id) || /^synthetic-attached:/i.test(id)) return null;
       const kind = upper(raw.kind || raw.evidence_kind || raw.evidenceKind || raw.staged_kind || raw.stagedKind || meta.staged_kind || meta.stagedKind || meta.kind || meta.evidence_kind || meta.evidenceKind || '') || 'OTHER';
       const isSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForPreviewBind(id || raw.id || raw.evidence_id || raw.timesheet_evidence_id || meta.id || meta.evidence_id || '');
       const displayName = isSystemContractWeekPdfArtifact
@@ -174520,17 +174550,20 @@ function bindBulkProcessPreviewPane(state) {
         if (!value || upper(value) === 'STAGED' || upper(value) === 'ATTACHED') return null;
         return value;
       })();
+      const realAttachedEvidenceId = staged ? '' : id;
+      const stagedQueueIdentity = staged ? (queueIdentity || id || '') : '';
+      const stagedManualQueueIdentity = staged ? trimStr(raw.manual_timesheet_queue_id || raw.manualTimesheetQueueId || raw.manual_queue_id || raw.manualQueueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || meta.manualQueueId || stagedQueueIdentity || '') : '';
       const normalised = {
         ...(deep(raw) || {}),
         id: id || null,
-        evidence_id: staged ? null : (trimStr(raw.evidence_id || raw.evidenceId || raw.timesheet_evidence_id || raw.timesheetEvidenceId || '') || null),
-        queue_id: queueIdentity || (staged ? id : '') || null,
-        manual_timesheet_queue_id: trimStr(raw.manual_timesheet_queue_id || raw.manualTimesheetQueueId || raw.manual_queue_id || raw.manualQueueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || meta.manualQueueId || '') || null,
+        evidence_id: realAttachedEvidenceId || null,
+        queue_id: stagedQueueIdentity || null,
+        manual_timesheet_queue_id: stagedManualQueueIdentity || null,
         row_key: rowKey || activeRowKey || null,
         contract_week_id: activeIdentityIsTimesheetForAttached ? (timesheetId && contractWeekId && contractWeekId !== activeTimesheetId && contractWeekId !== timesheetId ? contractWeekId : null) : (contractWeekId || (staged ? activeContractWeekId : (activeContractWeekId || null))),
         timesheet_id: staged ? null : (timesheetId || activeTimesheetId || null),
         kind,
-        staged_kind: staged ? kind : raw.staged_kind,
+        staged_kind: staged ? kind : null,
         display_name: displayName,
         filename: isSystemContractWeekPdfArtifact ? displayName : (trimStr(raw.filename || raw.display_name || raw.displayName || raw.original_filename || '') || displayName),
         original_filename: isSystemContractWeekPdfArtifact ? displayName : (trimStr(raw.original_filename || raw.originalFilename || raw.filename || raw.display_name || raw.displayName || '') || displayName),
@@ -174540,7 +174573,9 @@ function bindBulkProcessPreviewPane(state) {
         r2_key: fileKey,
         source_label: sourceLabelOut,
         source_badge: sourceBadgeOut,
-        is_staged_context: staged ? true : !!raw.is_staged_context,
+        staged: staged ? true : false,
+        is_staged: staged ? true : false,
+        is_staged_context: staged ? true : false,
         __attached_selection_key: ''
       };
       normalised.__attached_selection_key = buildPreviewSelectionKey('attached', id, fileKey);
@@ -179217,8 +179252,6 @@ function bindBulkProcessPreviewPane(state) {
 }
 
 
-
-
 function renderBulkProcessDockedEvidenceViewer(state) {
   const st = (state && typeof state === 'object') ? state : {};
   const dv = (st.dockedEvidenceViewer && typeof st.dockedEvidenceViewer === 'object') ? st.dockedEvidenceViewer : {};
@@ -180171,6 +180204,10 @@ function bindBulkProcessLists(state) {
   });
 }
 
+
+
+
+
 function renderBulkProcessLists(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -180184,12 +180221,45 @@ function renderBulkProcessLists(state) {
 
   const st = (state && typeof state === 'object') ? state : {};
   const activeRowKey = String(st.active_row_key || '').trim();
+  const trimBulkProcessListValue = (value) => String(value == null ? '' : value).trim();
+  const concreteTimesheetIdForBulkProcessListRow = (row) => trimBulkProcessListValue(
+    row?.current_timesheet_id ||
+    row?.currentTimesheetId ||
+    row?.timesheet_id ||
+    row?.timesheetId ||
+    row?.requested_timesheet_id ||
+    row?.requestedTimesheetId ||
+    row?.expected_timesheet_id ||
+    row?.expectedTimesheetId ||
+    row?.timesheet?.timesheet_id ||
+    row?.timesheet?.timesheetId ||
+    ''
+  );
+  const contractWeekIdForBulkProcessListRow = (row) => trimBulkProcessListValue(
+    row?.contract_week_id ||
+    row?.contractWeekId ||
+    row?.contract_week?.id ||
+    row?.contractWeek?.id ||
+    ''
+  );
+  const canonicalBulkProcessListRowKey = (row, fallbackKey = '') => {
+    const timesheetId = concreteTimesheetIdForBulkProcessListRow(row);
+    if (timesheetId) return `timesheet:${timesheetId}`;
+    const rawKey = trimBulkProcessListValue(row?.row_key || row?.rowKey || row?.new_row_key || row?.newRowKey || fallbackKey || '');
+    if (rawKey) return rawKey;
+    const contractWeekId = contractWeekIdForBulkProcessListRow(row);
+    return contractWeekId ? `contract_week:${contractWeekId}` : '';
+  };
+  const canonicalActiveRowKey = canonicalBulkProcessListRowKey(st.active_row || {}, activeRowKey || st.activeRowKey || '');
   const sortState = (st.sort_state && typeof st.sort_state === 'object') ? st.sort_state : {};
   const orderedKeys = Array.isArray(sortState.ordered_row_keys) ? sortState.ordered_row_keys.map((x) => String(x || '').trim()).filter(Boolean) : [];
 
   const priorityMap = new Map();
   orderedKeys.forEach((k, idx) => {
-    if (k) priorityMap.set(k, idx);
+    if (!k) return;
+    priorityMap.set(k, idx);
+    const bareTimesheetMatch = /^timesheet:/i.test(k) ? k.replace(/^timesheet:/i, '') : '';
+    if (bareTimesheetMatch) priorityMap.set(`timesheet:${bareTimesheetMatch}`, idx);
   });
 
   const splitCandidateName = (row) => {
@@ -180221,8 +180291,10 @@ function renderBulkProcessLists(state) {
     ).trim();
 
   const defaultCompare = (a, b) => {
-    const pa = priorityMap.has(String(a?.row_key || '')) ? priorityMap.get(String(a?.row_key || '')) : null;
-    const pb = priorityMap.has(String(b?.row_key || '')) ? priorityMap.get(String(b?.row_key || '')) : null;
+    const aKey = canonicalBulkProcessListRowKey(a);
+    const bKey = canonicalBulkProcessListRowKey(b);
+    const pa = priorityMap.has(aKey) ? priorityMap.get(aKey) : (priorityMap.has(String(a?.row_key || '')) ? priorityMap.get(String(a?.row_key || '')) : null);
+    const pb = priorityMap.has(bKey) ? priorityMap.get(bKey) : (priorityMap.has(String(b?.row_key || '')) ? priorityMap.get(String(b?.row_key || '')) : null);
 
     if (pa != null || pb != null) {
       if (pa == null) return 1;
@@ -180243,7 +180315,7 @@ function renderBulkProcessLists(state) {
     if (na.surname !== nb.surname) return na.surname.localeCompare(nb.surname, undefined, { sensitivity: 'base' });
     if (na.given !== nb.given) return na.given.localeCompare(nb.given, undefined, { sensitivity: 'base' });
 
-    return String(a?.row_key || '').localeCompare(String(b?.row_key || ''));
+    return canonicalBulkProcessListRowKey(a).localeCompare(canonicalBulkProcessListRowKey(b));
   };
 
   const normaliseEvidenceBadgeKindForDisplay = (value) => {
@@ -180314,8 +180386,9 @@ function renderBulkProcessLists(state) {
   };
 
   const renderRow = (row, sectionName) => {
-    const rowKey = String(row?.row_key || '').trim();
-    const isActive = rowKey && rowKey === activeRowKey;
+    const rowKey = canonicalBulkProcessListRowKey(row);
+    const rawRowKey = String(row?.row_key || '').trim();
+    const isActive = !!(rowKey && (rowKey === canonicalActiveRowKey || rowKey === activeRowKey || rawRowKey === canonicalActiveRowKey));
     const candidateText =
       String(row?.candidate_name || row?.candidate_display_name || row?.occupant_key_norm || '—').trim() || '—';
     const clientText =
@@ -180415,7 +180488,6 @@ function renderBulkProcessLists(state) {
     </div>
   `);
 }
-
 
 
 
@@ -181184,6 +181256,8 @@ function renderBulkProcessSelectedSummaryStrip(state) {
 }
 
 
+
+
 function renderBulkProcessEvidencePane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -181492,17 +181566,22 @@ function renderBulkProcessEvidencePane(state) {
       hasOpenValue(meta.stagedKind) ||
       (!!contractWeekId && !timesheetId && !!queueId)
     );
-    if (staged) return trimStr(queueId || item.id || meta.id || fileKey || '');
+    if (staged) {
+      const stagedTargetId = trimStr(queueId || item.id || meta.id || '');
+      if (!stagedTargetId || stagedTargetId === fileKey || /^files\//i.test(stagedTargetId) || /^synthetic-attached:/i.test(stagedTargetId)) return '';
+      return stagedTargetId;
+    }
     const rawId = trimStr(item.id || meta.id || '');
     const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || '');
-    const rawIdLooksAuthoritative = !!(rawId && rawId !== fileKey && !/^files\//i.test(rawId) && !/^synthetic-attached:/i.test(rawId));
-    return trimStr(evidenceId || (rawIdLooksAuthoritative ? rawId : '') || queueId || '');
+    const safeEvidenceId = !!(evidenceId && evidenceId !== queueId && evidenceId !== fileKey && !/^files\//i.test(evidenceId) && !/^synthetic-attached:/i.test(evidenceId)) ? evidenceId : '';
+    const rawIdLooksAuthoritative = !!(rawId && rawId !== queueId && rawId !== fileKey && !/^files\//i.test(rawId) && !/^synthetic-attached:/i.test(rawId));
+    return trimStr(safeEvidenceId || (rawIdLooksAuthoritative ? rawId : '') || '');
   };
   const buildRenderAttachedSelectionKey = (itemInput = {}) => {
     const fileKey = getRenderEvidenceFileKey(itemInput || {});
     if (!fileKey) return '';
     const itemId = getRenderAttachedId(itemInput || {});
-    if (!itemId || itemId === fileKey) return '';
+    if (!itemId || itemId === fileKey || /^files\//i.test(itemId) || /^synthetic-attached:/i.test(itemId)) return '';
     return `attached|${itemId}|${fileKey}`;
   };
   const normaliseRenderAttachedSelectionKey = (selectionKeyInput = '') => {
@@ -181513,7 +181592,7 @@ function renderBulkProcessEvidencePane(state) {
     if (tab !== 'attached') return '';
     const targetId = trimStr(parts[1] || '');
     const fileKey = trimStr(parts.slice(2).join('|') || '').replace(/^\/+/, '');
-    if (!fileKey || !targetId || targetId === fileKey) return '';
+    if (!fileKey || !targetId || targetId === fileKey || /^files\//i.test(targetId) || /^synthetic-attached:/i.test(targetId)) return '';
     return `attached|${targetId}|${fileKey}`;
   };
   const getRenderEvidenceAliasKeys = (itemInput = {}) => {
@@ -181697,7 +181776,8 @@ function renderBulkProcessEvidencePane(state) {
       const primaryIsSystemArtifact = /^sys:/i.test(primaryId || '');
       const primaryIsSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForEvidenceRender(primaryId);
       const realArtifactEvidenceId = primaryIsSystemContractWeekPdfArtifact ? '' : trimStr(artifact?.evidence_id || artifact?.evidenceId || artifact?.timesheet_evidence_id || artifact?.timesheetEvidenceId || '');
-      const primaryIsRealAttachedEvidence = !!(realArtifactEvidenceId && !/^synthetic-attached:/i.test(realArtifactEvidenceId) && !/^sys:/i.test(realArtifactEvidenceId));
+      const primaryIsRealAttachedEvidence = !!(realArtifactEvidenceId && realArtifactEvidenceId !== storageKey && !/^files\//i.test(realArtifactEvidenceId) && !/^synthetic-attached:/i.test(realArtifactEvidenceId) && !/^sys:/i.test(realArtifactEvidenceId));
+      if (!renderIsBulkAuthoriseContext && !primaryIsSystemContractWeekPdfArtifact && !primaryIsRealAttachedEvidence) continue;
       if (!renderIsBulkAuthoriseContext && storageKeyPresentInQueueForRender(storageKey) && !primaryIsSystemContractWeekPdfArtifact && !primaryIsRealAttachedEvidence) continue;
       const artifactDisplayName = primaryIsSystemContractWeekPdfArtifact ? '' : trimStr(artifact?.display_name || artifact?.displayName || artifact?.filename || artifact?.original_filename || artifact?.originalFilename || '');
       const containerDisplayMatchesArtifact = !primaryIsSystemArtifact && !!(
@@ -181817,10 +181897,15 @@ function renderBulkProcessEvidencePane(state) {
       }
 
       const rawEvidenceIdForRender = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || '');
-      const evidenceId = trimStr((isStaged || itemIsSystemContractWeekPdfArtifactByIdentity) ? '' : (rawEvidenceIdForRender || item.id || ''));
       const queueId = itemIsSystemContractWeekPdfArtifactByIdentity ? '' : trimStr(itemQueueIdRaw || (isStaged ? item.id : '') || '');
-      const attachedId = getRenderAttachedId({ ...item, storage_key: storageKey, file_key: storageKey, is_staged_context: itemIsSystemContractWeekPdfArtifactByIdentity ? false : item.is_staged_context }) || evidenceId || queueId || storageKey;
+      const rawIdForRender = trimStr(item.id || itemMeta.id || '');
+      const safeRawEvidenceIdForRender = !!(rawEvidenceIdForRender && rawEvidenceIdForRender !== queueId && rawEvidenceIdForRender !== storageKey && !/^files\//i.test(rawEvidenceIdForRender) && !/^synthetic-attached:/i.test(rawEvidenceIdForRender)) ? rawEvidenceIdForRender : '';
+      const rawIdLooksAuthoritativeForRender = !!(rawIdForRender && rawIdForRender !== queueId && rawIdForRender !== storageKey && !/^files\//i.test(rawIdForRender) && !/^synthetic-attached:/i.test(rawIdForRender));
+      const evidenceId = trimStr((isStaged || itemIsSystemContractWeekPdfArtifactByIdentity) ? '' : (safeRawEvidenceIdForRender || (rawIdLooksAuthoritativeForRender ? rawIdForRender : '') || ''));
+      const attachedId = getRenderAttachedId({ ...item, storage_key: storageKey, file_key: storageKey, is_staged_context: itemIsSystemContractWeekPdfArtifactByIdentity ? false : item.is_staged_context }) || evidenceId || (isStaged ? queueId : '') || '';
       if (!attachedId || !storageKey) return;
+      if (!itemIsSystemContractWeekPdfArtifactByIdentity && (!isStaged && (attachedId === storageKey || /^files\//i.test(attachedId) || /^synthetic-attached:/i.test(attachedId)))) return;
+      if (isStaged && (attachedId === storageKey || /^files\//i.test(attachedId) || /^synthetic-attached:/i.test(attachedId))) return;
       const kind = normaliseRenderKind(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || item.stagedKind || itemMeta.kind || itemMeta.evidence_kind || itemMeta.evidenceKind || '') || 'OTHER';
       const isSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForEvidenceRender(attachedId || item.id || evidenceId || '');
       const rawDisplayName = trimStr(item.display_name || item.displayName || item.filename || item.original_filename || item.originalFilename || '');
@@ -181828,12 +181913,12 @@ function renderBulkProcessEvidencePane(state) {
       const normalised = {
         ...(item || {}),
         id: attachedId,
-        queue_id: itemIsSystemContractWeekPdfArtifactByIdentity ? null : (queueId || item.queue_id || null),
-        manual_timesheet_queue_id: itemIsSystemContractWeekPdfArtifactByIdentity ? null : (trimStr(item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || itemMeta.manual_timesheet_queue_id || itemMeta.manualTimesheetQueueId || '') || null),
+        queue_id: (!isStaged && evidenceId) || itemIsSystemContractWeekPdfArtifactByIdentity ? null : (queueId || item.queue_id || null),
+        manual_timesheet_queue_id: (!isStaged && evidenceId) || itemIsSystemContractWeekPdfArtifactByIdentity ? null : (trimStr(item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || itemMeta.manual_timesheet_queue_id || itemMeta.manualTimesheetQueueId || '') || null),
         evidence_id: (isStaged || itemIsSystemContractWeekPdfArtifactByIdentity) ? null : (evidenceId || null),
         timesheet_evidence_id: (isStaged || itemIsSystemContractWeekPdfArtifactByIdentity) ? null : (trimStr(item.timesheet_evidence_id || item.timesheetEvidenceId || evidenceId || '') || null),
         kind,
-        staged_kind: isStaged ? kind : (item.staged_kind || item.stagedKind || null),
+        staged_kind: isStaged ? kind : null,
         display_name: displayName,
         filename: isSystemContractWeekPdfArtifact ? displayName : (trimStr(item.filename || item.display_name || item.original_filename || '') || displayName),
         original_filename: isSystemContractWeekPdfArtifact ? displayName : (trimStr(item.original_filename || item.originalFilename || item.filename || item.display_name || '') || displayName),
@@ -181846,9 +181931,9 @@ function renderBulkProcessEvidencePane(state) {
         timesheet_id: isStaged ? null : (itemTimesheetId || trimStr(activeRealTimesheetId || '') || null),
         source_label: isBulkAuthoriseContext ? (isStaged ? 'Staged' : (trimStr(item.source_label || '') || 'Attached')) : (trimStr(item.source_label || '') || null),
         source_badge: isBulkAuthoriseContext ? (isStaged ? 'Staged' : (trimStr(item.source_badge || '') || 'Attached')) : (trimStr(item.source_badge || '') || null),
-        is_staged_context: itemIsSystemContractWeekPdfArtifactByIdentity ? false : (isStaged === true ? true : !!item.is_staged_context),
-        staged: itemIsSystemContractWeekPdfArtifactByIdentity ? false : !!item.staged,
-        is_staged: itemIsSystemContractWeekPdfArtifactByIdentity ? false : !!item.is_staged,
+        is_staged_context: itemIsSystemContractWeekPdfArtifactByIdentity ? false : isStaged,
+        staged: itemIsSystemContractWeekPdfArtifactByIdentity ? false : isStaged,
+        is_staged: itemIsSystemContractWeekPdfArtifactByIdentity ? false : isStaged,
         __system_contract_week_pdf_artifact: itemIsSystemContractWeekPdfArtifactByIdentity === true,
         __attached_selection_key: ''
       };
@@ -182132,8 +182217,6 @@ function renderBulkProcessEvidencePane(state) {
     </div>
   `);
 }
-
-
 
 
 function ensureBulkAuthoriseManualDraftState(state) {
@@ -183963,13 +184046,14 @@ const getAttachedEvidenceId = (item) => {
     const contractWeekId = pickFirst(item.contract_week_id, item.contractWeekId, meta.contract_week_id, meta.contractWeekId, meta.week_id, meta.weekId);
     const timesheetId = pickFirst(item.timesheet_id, item.timesheetId, item.current_timesheet_id, item.currentTimesheetId, meta.timesheet_id, meta.timesheetId, meta.current_timesheet_id, meta.currentTimesheetId);
     const queueIdentity = pickFirst(item.queue_id, item.queueId, item.manual_timesheet_queue_id, item.manualTimesheetQueueId, item.manual_queue_id, item.manualQueueId, meta.queue_id, meta.queueId, meta.manual_timesheet_queue_id, meta.manualTimesheetQueueId, meta.manual_queue_id, meta.manualQueueId);
-    const evidenceIdentity = pickFirst(item.evidence_id, item.evidenceId, item.timesheet_evidence_id, item.timesheetEvidenceId, meta.evidence_id, meta.evidenceId, meta.timesheet_evidence_id, meta.timesheetEvidenceId);
+    const evidenceIdentityRaw = pickFirst(item.evidence_id, item.evidenceId, item.timesheet_evidence_id, item.timesheetEvidenceId, meta.evidence_id, meta.evidenceId, meta.timesheet_evidence_id, meta.timesheetEvidenceId);
+    const evidenceIdentity = !!(evidenceIdentityRaw && evidenceIdentityRaw !== queueIdentity && evidenceIdentityRaw !== fileKey && !/^files\//i.test(evidenceIdentityRaw) && !/^synthetic-attached:/i.test(evidenceIdentityRaw)) ? evidenceIdentityRaw : '';
     const rawId = pickFirst(item.id, meta.id);
-    const systemContractWeekPdfId = [rawId, evidenceIdentity, item.id, item.evidence_id, item.evidenceId, item.timesheet_evidence_id, item.timesheetEvidenceId, meta.id, meta.evidence_id, meta.evidenceId]
+    const systemContractWeekPdfId = [rawId, evidenceIdentityRaw, item.id, item.evidence_id, item.evidenceId, item.timesheet_evidence_id, item.timesheetEvidenceId, meta.id, meta.evidence_id, meta.evidenceId]
       .map((value) => trimStr(value || ''))
       .find((value) => isSystemContractWeekPdfArtifactIdForEvidenceBind(value)) || '';
     if (systemContractWeekPdfId) return systemContractWeekPdfId;
-    const rawIdLooksLikeEvidence = !!(rawId && rawId !== queueIdentity && rawId !== fileKey && !/^synthetic-attached:/i.test(rawId));
+    const rawIdLooksLikeEvidence = !!(rawId && rawId !== queueIdentity && rawId !== fileKey && !/^files\//i.test(rawId) && !/^synthetic-attached:/i.test(rawId));
     const realEvidenceAuthority = !!(
       evidenceIdentity ||
       item.__bulk_process_real_evidence_authority === true ||
@@ -183991,9 +184075,11 @@ const getAttachedEvidenceId = (item) => {
       )
     );
     if (staged) {
-      return pickFirst(queueIdentity, rawId, fileKey);
+      const stagedTargetId = pickFirst(queueIdentity);
+      if (!stagedTargetId || stagedTargetId === fileKey || /^files\//i.test(stagedTargetId) || /^synthetic-attached:/i.test(stagedTargetId)) return '';
+      return stagedTargetId;
     }
-    return pickFirst(evidenceIdentity, rawIdLooksLikeEvidence ? rawId : '', queueIdentity);
+    return pickFirst(evidenceIdentity, rawIdLooksLikeEvidence ? rawId : '');
   };
 
 
@@ -184001,7 +184087,7 @@ const getAttachedEvidenceId = (item) => {
     const fileKey = getAttachedEvidenceFileKey(item);
     if (!fileKey) return '';
     const targetId = getAttachedEvidenceId(item);
-    if (!targetId || targetId === fileKey) return '';
+    if (!targetId || targetId === fileKey || /^files\//i.test(targetId) || /^synthetic-attached:/i.test(targetId)) return '';
     return `attached|${targetId}|${fileKey}`;
   };
 
@@ -184013,9 +184099,49 @@ const getAttachedEvidenceId = (item) => {
     if (tab !== 'attached') return '';
     const targetId = trimStr(parts[1] || '');
     const fileKey = cleanAttachedEvidenceFileKey(parts.slice(2).join('|') || '');
-    if (!fileKey || !targetId || targetId === fileKey) return '';
+    if (!fileKey || !targetId || targetId === fileKey || /^files\//i.test(targetId) || /^synthetic-attached:/i.test(targetId)) return '';
     return `attached|${targetId}|${fileKey}`;
   };
+
+  const sanitiseManualTimesheetQueueMetaForEvidencePane = (rowInput = {}) => {
+    const row = (rowInput && typeof rowInput === 'object') ? deep(rowInput) : {};
+    const meta = parseEvidenceMetaObject(row.meta_json || row.metaJson || row.meta || row.queue_meta || row.queueMeta);
+    const staleCurrentAuthorityKeys = [
+      'active_identity',
+      'preview_identity',
+      'materialised_to_timesheet_id',
+      'materialised_storage_key',
+      'materialised_from_process_preview',
+      'selected_queue_timesheet_materialisation',
+      'attached_storage_key',
+      'attached_from_process',
+      'attached_kind',
+      'attached_to_timesheet_id',
+      'attached_at_utc',
+      'preview_selection_key',
+      'process_claimed_at_utc'
+    ];
+    const previous = (meta.return_queue_previous_meta && typeof meta.return_queue_previous_meta === 'object' && !Array.isArray(meta.return_queue_previous_meta))
+      ? { ...meta.return_queue_previous_meta }
+      : {};
+    let moved = false;
+    staleCurrentAuthorityKeys.forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(meta, key)) return;
+      if (!Object.prototype.hasOwnProperty.call(previous, key)) previous[key] = meta[key];
+      try { delete meta[key]; } catch { meta[key] = undefined; }
+      moved = true;
+    });
+    if (moved) {
+      meta.return_queue_previous_meta = previous;
+      meta.queue_meta_sanitised_on_frontend = true;
+      meta.queue_meta_sanitised_on_frontend_at = new Date().toISOString();
+      row.meta_json = meta;
+      row.metaJson = meta;
+    }
+    return row;
+  };
+
+  const sanitiseManualTimesheetQueueRowsForEvidencePane = (rowsInput = []) => (Array.isArray(rowsInput) ? rowsInput : []).map((row) => sanitiseManualTimesheetQueueMetaForEvidencePane(row));
 
   const parseQueuePreviewSelectionKeyForEvidencePaneAnchor = (selectionKeyInput = '') => {
     const raw = trimStr(selectionKeyInput || '');
@@ -184358,12 +184484,14 @@ const getAttachedEvidenceId = (item) => {
       fbMeta.timesheet_evidence_id,
       fbMeta.timesheetEvidenceId
     ].map((value) => trimStr(value || '')).find((value) => isSystemContractWeekPdfArtifactIdForEvidenceBind(value)) || '';
-    const explicitEvidenceId = pickFirst(raw.evidence_id, raw.evidenceId, raw.timesheet_evidence_id, raw.timesheetEvidenceId, rawMeta.evidence_id, rawMeta.evidenceId, rawMeta.timesheet_evidence_id, rawMeta.timesheetEvidenceId, fb.evidence_id, fb.evidenceId, fb.timesheet_evidence_id, fb.timesheetEvidenceId, fbMeta.evidence_id, fbMeta.evidenceId, fbMeta.timesheet_evidence_id, fbMeta.timesheetEvidenceId);
+    const explicitEvidenceIdRaw = pickFirst(raw.evidence_id, raw.evidenceId, raw.timesheet_evidence_id, raw.timesheetEvidenceId, rawMeta.evidence_id, rawMeta.evidenceId, rawMeta.timesheet_evidence_id, rawMeta.timesheetEvidenceId, fb.evidence_id, fb.evidenceId, fb.timesheet_evidence_id, fb.timesheetEvidenceId, fbMeta.evidence_id, fbMeta.evidenceId, fbMeta.timesheet_evidence_id, fbMeta.timesheetEvidenceId);
     const rawIdentityId = pickFirst(raw.id, rawMeta.id, fb.id, fbMeta.id);
-    const evidenceId = systemContractWeekPdfId || explicitEvidenceId || rawIdentityId;
+    const queueId = systemContractWeekPdfId ? '' : pickFirst(raw.queue_id, raw.queueId, raw.manual_timesheet_queue_id, raw.manualTimesheetQueueId, raw.manual_queue_id, raw.manualQueueId, rawMeta.queue_id, rawMeta.queueId, rawMeta.manual_timesheet_queue_id, rawMeta.manualTimesheetQueueId, rawMeta.manual_queue_id, fb.queue_id, fb.queueId, fb.manual_timesheet_queue_id, fb.manualTimesheetQueueId, fb.manual_queue_id, fbMeta.queue_id, fbMeta.queueId, fbMeta.manual_timesheet_queue_id, fbMeta.manualTimesheetQueueId);
+    const explicitEvidenceId = !!(explicitEvidenceIdRaw && explicitEvidenceIdRaw !== queueId && explicitEvidenceIdRaw !== storageKey && !/^files\//i.test(explicitEvidenceIdRaw) && !/^synthetic-attached:/i.test(explicitEvidenceIdRaw)) ? explicitEvidenceIdRaw : '';
+    const rawIdentityLooksLikeEvidence = !!(rawIdentityId && rawIdentityId !== queueId && rawIdentityId !== storageKey && !/^files\//i.test(rawIdentityId) && !/^synthetic-attached:/i.test(rawIdentityId));
+    const evidenceId = systemContractWeekPdfId || explicitEvidenceId || (rawIdentityLooksLikeEvidence ? rawIdentityId : '');
     const isSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForEvidenceBind(evidenceId);
-    const queueId = isSystemContractWeekPdfArtifact ? '' : pickFirst(raw.queue_id, raw.queueId, raw.manual_timesheet_queue_id, raw.manualTimesheetQueueId, raw.manual_queue_id, raw.manualQueueId, rawMeta.queue_id, rawMeta.queueId, rawMeta.manual_timesheet_queue_id, rawMeta.manualTimesheetQueueId, rawMeta.manual_queue_id, fb.queue_id, fb.queueId, fb.manual_timesheet_queue_id, fb.manualTimesheetQueueId, fb.manual_queue_id, fbMeta.queue_id, fbMeta.queueId, fbMeta.manual_timesheet_queue_id, fbMeta.manualTimesheetQueueId);
-    const id = evidenceId || queueId || storageKey;
+    const id = evidenceId || (isBulkAuthoriseContext ? (queueId || storageKey) : '');
     if (!id || (!storageKey && !isBulkAuthoriseContext)) return null;
 
     const filename = isSystemContractWeekPdfArtifact
@@ -184387,13 +184515,13 @@ const getAttachedEvidenceId = (item) => {
       evidenceId: isSystemContractWeekPdfArtifact ? null : (evidenceId || null),
       timesheet_evidence_id: isSystemContractWeekPdfArtifact ? null : (evidenceId || null),
       timesheetEvidenceId: isSystemContractWeekPdfArtifact ? null : (evidenceId || null),
-      queue_id: isSystemContractWeekPdfArtifact ? null : (queueId || null),
-      queueId: isSystemContractWeekPdfArtifact ? null : (queueId || null),
-      manual_timesheet_queue_id: isSystemContractWeekPdfArtifact ? null : (manualTimesheetQueueId || null),
-      manualTimesheetQueueId: isSystemContractWeekPdfArtifact ? null : (manualTimesheetQueueId || null),
+      queue_id: isSystemContractWeekPdfArtifact || evidenceId ? null : (queueId || null),
+      queueId: isSystemContractWeekPdfArtifact || evidenceId ? null : (queueId || null),
+      manual_timesheet_queue_id: isSystemContractWeekPdfArtifact || evidenceId ? null : (manualTimesheetQueueId || null),
+      manualTimesheetQueueId: isSystemContractWeekPdfArtifact || evidenceId ? null : (manualTimesheetQueueId || null),
       kind,
-      staged_kind: isSystemContractWeekPdfArtifact ? null : (pickFirst(raw.staged_kind, raw.stagedKind, fb.staged_kind, fb.stagedKind) || null),
-      stagedKind: isSystemContractWeekPdfArtifact ? null : (pickFirst(raw.stagedKind, raw.staged_kind, fb.stagedKind, fb.staged_kind) || null),
+      staged_kind: isSystemContractWeekPdfArtifact || evidenceId ? null : (pickFirst(raw.staged_kind, raw.stagedKind, fb.staged_kind, fb.stagedKind) || null),
+      stagedKind: isSystemContractWeekPdfArtifact || evidenceId ? null : (pickFirst(raw.stagedKind, raw.staged_kind, fb.stagedKind, fb.staged_kind) || null),
       display_name: filename,
       filename,
       original_filename: isSystemContractWeekPdfArtifact ? filename : (pickFirst(raw.original_filename, raw.originalFilename, fb.original_filename, fb.originalFilename, filename) || filename),
@@ -184410,9 +184538,9 @@ const getAttachedEvidenceId = (item) => {
       status: isSystemContractWeekPdfArtifact ? null : (pickFirst(raw.status, rawMeta.status, fb.status, fbMeta.status) || null),
       source_label: sourceLabel,
       source_badge: sourceBadge,
-      staged: isSystemContractWeekPdfArtifact ? false : (raw.staged === true || fb.staged === true ? true : undefined),
-      is_staged: isSystemContractWeekPdfArtifact ? false : (raw.is_staged === true || fb.is_staged === true ? true : undefined),
-      is_staged_context: isSystemContractWeekPdfArtifact ? false : (raw.is_staged_context === true ? true : !!fb.is_staged_context),
+      staged: isSystemContractWeekPdfArtifact || evidenceId ? false : (raw.staged === true || fb.staged === true ? true : undefined),
+      is_staged: isSystemContractWeekPdfArtifact || evidenceId ? false : (raw.is_staged === true || fb.is_staged === true ? true : undefined),
+      is_staged_context: isSystemContractWeekPdfArtifact || evidenceId ? false : (raw.is_staged_context === true ? true : !!fb.is_staged_context),
       __attached_selection_key: ''
     };
     normalised.__attached_selection_key = buildAttachedPreviewSelectionKey(normalised);
@@ -185150,7 +185278,7 @@ const getAttachedEvidenceId = (item) => {
       }
     }
 
-    pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    pane.queue_rows = sanitiseManualTimesheetQueueRowsForEvidencePane(Array.isArray(pane.queue_rows) ? pane.queue_rows : []);
     const requestedQueueSelection = buildQueuePreviewSelectionKeyForEvidencePaneAnchor(
       pane.active_queue_item || previewBefore.active_queue_item || {},
       pane.__preview_target_key || pane.__preview_load_requested_target_key || previewBefore.__preview_target_key || previewBefore.__preview_load_requested_target_key || ''
@@ -185213,7 +185341,7 @@ const getAttachedEvidenceId = (item) => {
   };
 
     const syncQueueSelectionOnly = () => {
-    pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    pane.queue_rows = sanitiseManualTimesheetQueueRowsForEvidencePane(Array.isArray(pane.queue_rows) ? pane.queue_rows : []);
     markQueueStatePendingForActiveIdentity('syncQueueSelectionOnly-active-identity-check');
     const previousItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
     const activeIdentity = trimStr(getActiveIdentity() || '');
@@ -185248,7 +185376,7 @@ const getAttachedEvidenceId = (item) => {
     if (activeIdentity) markQueueStatePendingForActiveIdentity('ensureQueueLoadedForActiveTab-active-identity-check');
     const queueLoadedForScope = isQueueLoadedForIdentity(activeIdentity, queueScope);
 
-    pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    pane.queue_rows = sanitiseManualTimesheetQueueRowsForEvidencePane(Array.isArray(pane.queue_rows) ? pane.queue_rows : []);
 
     if (!isOwnerSnapshotCurrent(ownerSnapshot)) return false;
 
@@ -186220,6 +186348,11 @@ const getAttachedEvidenceId = (item) => {
         const fileNameFromStorageKey = storageKey.split('/').filter(Boolean).pop() || '';
         const primaryIsSystemArtifact = /^sys:/i.test(primaryId || '');
         const primaryIsSystemContractWeekPdfArtifact = isSystemContractWeekPdfArtifactIdForEvidenceBind(primaryId);
+        const primaryEvidenceIdForAuthority = primaryIsSystemContractWeekPdfArtifact ? '' : pickFirst(artifact?.evidence_id, artifact?.evidenceId, artifact?.timesheet_evidence_id, artifact?.timesheetEvidenceId);
+        const primaryObjectIdForAuthority = primaryIsSystemContractWeekPdfArtifact ? '' : pickFirst(artifact?.id, container.primary_artifact_id, hints.primary_artifact_id);
+        const primaryQueueIdForAuthority = pickFirst(artifact?.queue_id, artifact?.queueId, artifact?.manual_timesheet_queue_id, artifact?.manualTimesheetQueueId);
+        const primaryObjectLooksAuthoritative = !!(primaryObjectIdForAuthority && primaryObjectIdForAuthority !== storageKey && primaryObjectIdForAuthority !== primaryQueueIdForAuthority && !/^files\//i.test(primaryObjectIdForAuthority) && !/^synthetic-attached:/i.test(primaryObjectIdForAuthority));
+        if (!primaryIsSystemContractWeekPdfArtifact && !primaryEvidenceIdForAuthority && !primaryObjectLooksAuthoritative) continue;
         const artifactDisplayName = primaryIsSystemContractWeekPdfArtifact ? '' : pickFirst(artifact?.display_name, artifact?.displayName, artifact?.filename, artifact?.original_filename, artifact?.originalFilename);
         const containerDisplayMatchesArtifact = !primaryIsSystemArtifact && !!(
           (primaryId && pickFirst(container.primary_artifact_id, hints.primary_artifact_id) === primaryId) ||
@@ -186231,10 +186364,10 @@ const getAttachedEvidenceId = (item) => {
           : (artifactDisplayName || containerDisplayName || (kind === 'TIMESHEET' ? (fileNameFromStorageKey || 'Timesheet PDF') : (fileNameFromStorageKey || 'Evidence')));
         const fallbackItem = {
           ...(artifact ? deep(artifact) : {}),
-          id: primaryId || storageKey,
-          evidence_id: primaryIsSystemContractWeekPdfArtifact ? null : (primaryId || null),
-          timesheet_evidence_id: primaryIsSystemContractWeekPdfArtifact ? null : (primaryId || null),
-          queue_id: primaryIsSystemContractWeekPdfArtifact ? null : (pickFirst(artifact?.queue_id, artifact?.queueId) || null),
+          id: primaryIsSystemContractWeekPdfArtifact ? primaryId : (primaryEvidenceIdForAuthority || primaryObjectIdForAuthority || primaryId || null),
+          evidence_id: primaryIsSystemContractWeekPdfArtifact ? null : (primaryEvidenceIdForAuthority || primaryObjectIdForAuthority || null),
+          timesheet_evidence_id: primaryIsSystemContractWeekPdfArtifact ? null : (primaryEvidenceIdForAuthority || primaryObjectIdForAuthority || null),
+          queue_id: null,
           storage_key: storageKey,
           file_key: storageKey,
           kind,
@@ -186247,15 +186380,15 @@ const getAttachedEvidenceId = (item) => {
         if (removedEvidenceItemMatchesForAuthoritativeAttachedEvidence(fallbackItem)) continue;
         rows.push({
           ...(artifact ? deep(artifact) : {}),
-          id: primaryId || storageKey,
-          evidence_id: primaryIsSystemContractWeekPdfArtifact ? null : (primaryId || null),
-          evidenceId: primaryIsSystemContractWeekPdfArtifact ? null : (primaryId || null),
-          timesheet_evidence_id: primaryIsSystemContractWeekPdfArtifact ? null : (primaryId || null),
-          timesheetEvidenceId: primaryIsSystemContractWeekPdfArtifact ? null : (primaryId || null),
-          queue_id: primaryIsSystemContractWeekPdfArtifact ? null : (pickFirst(artifact?.queue_id, artifact?.queueId) || null),
-          queueId: primaryIsSystemContractWeekPdfArtifact ? null : (pickFirst(artifact?.queue_id, artifact?.queueId) || null),
-          manual_timesheet_queue_id: primaryIsSystemContractWeekPdfArtifact ? null : (pickFirst(artifact?.manual_timesheet_queue_id, artifact?.manualTimesheetQueueId, artifact?.manual_queue_id, artifact?.manualQueueId) || null),
-          manualTimesheetQueueId: primaryIsSystemContractWeekPdfArtifact ? null : (pickFirst(artifact?.manual_timesheet_queue_id, artifact?.manualTimesheetQueueId, artifact?.manual_queue_id, artifact?.manualQueueId) || null),
+          id: primaryIsSystemContractWeekPdfArtifact ? primaryId : (primaryEvidenceIdForAuthority || primaryObjectIdForAuthority || primaryId || null),
+          evidence_id: primaryIsSystemContractWeekPdfArtifact ? null : (primaryEvidenceIdForAuthority || primaryObjectIdForAuthority || null),
+          evidenceId: primaryIsSystemContractWeekPdfArtifact ? null : (primaryEvidenceIdForAuthority || primaryObjectIdForAuthority || null),
+          timesheet_evidence_id: primaryIsSystemContractWeekPdfArtifact ? null : (primaryEvidenceIdForAuthority || primaryObjectIdForAuthority || null),
+          timesheetEvidenceId: primaryIsSystemContractWeekPdfArtifact ? null : (primaryEvidenceIdForAuthority || primaryObjectIdForAuthority || null),
+          queue_id: null,
+          queueId: null,
+          manual_timesheet_queue_id: null,
+          manualTimesheetQueueId: null,
           kind,
           staged_kind: primaryIsSystemContractWeekPdfArtifact ? null : kind,
           stagedKind: primaryIsSystemContractWeekPdfArtifact ? null : kind,
@@ -192803,6 +192936,8 @@ async function bankingPayProviderSubmitReviewResolve(input, maybeOptions = {}) {
   return normalised;
 }
 
+
+
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   const st = (state && typeof state === 'object') ? state : {};
@@ -194305,11 +194440,13 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     if (!storageKey) return null;
 
+    if (!isBulkAuthoriseTimesheets) return null;
+
     const identity = selectedRowIdentityParts();
 
     const hasTimesheetIdentity = !!(trimStr(identity.timesheetId || '') || /^timesheet:/i.test(trimStr(identity.rowKey || '')));
 
-    if (!isBulkAuthoriseTimesheets && !hasTimesheetIdentity) return null;
+    if (!hasTimesheetIdentity) return null;
 
     const rowKey = trimStr(identity.rowKey || st.active_row_key || st.active_row?.row_key || 'row');
 
@@ -194803,13 +194940,15 @@ const getAttachedSelectionParts = (item) => {
 
     const queueId = pickSelectionPart(itemObj.queue_id, itemObj.queueId, itemObj.manual_timesheet_queue_id, itemObj.manualTimesheetQueueId, itemObj.manual_queue_id, itemObj.manualQueueId, meta.queue_id, meta.queueId, meta.manual_timesheet_queue_id, meta.manualTimesheetQueueId, meta.manual_queue_id, meta.manualQueueId);
 
-    const evidenceId = pickSelectionPart(itemObj.evidence_id, itemObj.evidenceId, itemObj.timesheet_evidence_id, itemObj.timesheetEvidenceId, meta.evidence_id, meta.evidenceId, meta.timesheet_evidence_id, meta.timesheetEvidenceId);
+    const evidenceIdRaw = pickSelectionPart(itemObj.evidence_id, itemObj.evidenceId, itemObj.timesheet_evidence_id, itemObj.timesheetEvidenceId, meta.evidence_id, meta.evidenceId, meta.timesheet_evidence_id, meta.timesheetEvidenceId);
+
+    const evidenceId = !!(evidenceIdRaw && evidenceIdRaw !== queueId && evidenceIdRaw !== fileKey && !/^files\//i.test(evidenceIdRaw) && !/^synthetic-attached:/i.test(evidenceIdRaw)) ? evidenceIdRaw : '';
 
     const rawId = pickSelectionPart(itemObj.id, meta.id);
 
     const timesheetId = pickSelectionPart(itemObj.timesheet_id, itemObj.timesheetId, itemObj.current_timesheet_id, itemObj.currentTimesheetId, meta.timesheet_id, meta.timesheetId, meta.current_timesheet_id, meta.currentTimesheetId);
 
-    const rawIdLooksLikeEvidence = !!(rawId && rawId !== queueId && rawId !== fileKey && !/^synthetic-attached:/i.test(rawId));
+    const rawIdLooksLikeEvidence = !!(rawId && rawId !== queueId && rawId !== fileKey && !/^files\//i.test(rawId) && !/^synthetic-attached:/i.test(rawId));
 
     const realEvidenceAuthority = !!(
 
@@ -194855,13 +194994,13 @@ const getAttachedSelectionParts = (item) => {
 
           ? pickSelectionPart(queueId, rawId, fileKey)
 
-          : pickSelectionPart(evidenceId, rawIdLooksLikeEvidence ? rawId : '', rawId, queueId, fileKey));
+          : pickSelectionPart(evidenceId, rawIdLooksLikeEvidence ? rawId : ''));
 
     const safeAttachedId = trimStr(attachedId || '');
 
     if (!safeAttachedId || (!realEvidenceAuthority && !staged && safeAttachedId === fileKey)) return { attached_id: '', file_key: fileKey, key: '' };
 
-    if (safeAttachedId === fileKey) return { attached_id: '', file_key: fileKey, key: '' };
+    if (safeAttachedId === fileKey || /^files\//i.test(safeAttachedId) || /^synthetic-attached:/i.test(safeAttachedId)) return { attached_id: '', file_key: fileKey, key: '' };
 
     return { attached_id: safeAttachedId, file_key: fileKey, key: `attached|${safeAttachedId}|${fileKey}` };
 
@@ -196489,15 +196628,25 @@ const getAttachedSelectionParts = (item) => {
 
       })) continue;
 
+      const primaryIsSystemContractWeekPdfForAuthority = isSystemContractWeekPdfArtifactIdForReconcile(primaryId);
+
+      const objectIdLooksLikeRealFallbackAuthority = !!(
+
+        (containerPrimaryId && containerPrimaryId !== storageKey && containerPrimaryId !== artifactQueueId && !/^files\//i.test(containerPrimaryId) && !/^synthetic-attached:/i.test(containerPrimaryId)) ||
+
+        (artifactGenericId && artifactGenericId !== storageKey && artifactGenericId !== artifactQueueId && !/^files\//i.test(artifactGenericId) && !/^synthetic-attached:/i.test(artifactGenericId))
+
+      );
+
       const hasRealFallbackIdentity = !!(
 
         artifactEvidenceId ||
 
-        artifactQueueId ||
+        primaryIsSystemContractWeekPdfForAuthority ||
 
-        (containerPrimaryId && containerPrimaryId !== storageKey) ||
+        objectIdLooksLikeRealFallbackAuthority ||
 
-        (artifactGenericId && artifactGenericId !== storageKey && !/^synthetic-attached:/i.test(artifactGenericId))
+        (isBulkAuthoriseTimesheets && artifactQueueId)
 
       );
 
@@ -197271,9 +197420,21 @@ const getAttachedSelectionParts = (item) => {
 
       const queueId = trimStr(queueIdCandidate || (stagedContextMatchesActiveContractWeek ? item.id : '') || '');
 
-      const evidenceId = stagedContextMatchesActiveContractWeek ? '' : trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || item.id || '');
+      const explicitEvidenceIdRaw = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || '');
 
-      const normalizedId = stagedContextMatchesActiveContractWeek ? (queueId || item.id || storageKey) : (item.id || item.evidence_id || evidenceId || queueId || storageKey);
+      const rawIdentityId = trimStr(item.id || itemMeta.id || '');
+
+      const safeExplicitEvidenceId = !!(explicitEvidenceIdRaw && explicitEvidenceIdRaw !== queueId && explicitEvidenceIdRaw !== storageKey && !/^files\//i.test(explicitEvidenceIdRaw) && !/^synthetic-attached:/i.test(explicitEvidenceIdRaw)) ? explicitEvidenceIdRaw : '';
+
+      const rawIdentityLooksLikeEvidence = !!(rawIdentityId && rawIdentityId !== queueId && rawIdentityId !== storageKey && !/^files\//i.test(rawIdentityId) && !/^synthetic-attached:/i.test(rawIdentityId));
+
+      const evidenceId = stagedContextMatchesActiveContractWeek ? '' : trimStr(safeExplicitEvidenceId || (rawIdentityLooksLikeEvidence ? rawIdentityId : '') || '');
+
+      if (!isBulkAuthoriseTimesheets && !stagedContextMatchesActiveContractWeek && !evidenceId) return;
+
+      const normalizedId = stagedContextMatchesActiveContractWeek ? (queueId || item.id || storageKey) : (evidenceId || (isBulkAuthoriseTimesheets ? (queueId || storageKey) : ''));
+
+      if (!normalizedId) return;
 
       const kind = rawKind;
 
@@ -197283,11 +197444,11 @@ const getAttachedSelectionParts = (item) => {
 
         id: normalizedId,
 
-        evidence_id: stagedContextMatchesActiveContractWeek ? null : (item.evidence_id || item.evidenceId || evidenceId || null),
+        evidence_id: stagedContextMatchesActiveContractWeek ? null : (evidenceId || null),
 
-        queue_id: queueId || item.queue_id || null,
+        queue_id: stagedContextMatchesActiveContractWeek ? (queueId || item.queue_id || null) : (evidenceId ? null : (queueId || item.queue_id || null)),
 
-        manual_timesheet_queue_id: trimStr(item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || itemMeta.manual_timesheet_queue_id || itemMeta.manualTimesheetQueueId || itemMeta.manual_queue_id || '') || null,
+        manual_timesheet_queue_id: stagedContextMatchesActiveContractWeek ? (trimStr(item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || itemMeta.manual_timesheet_queue_id || itemMeta.manualTimesheetQueueId || itemMeta.manual_queue_id || '') || null) : (evidenceId ? null : (trimStr(item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || itemMeta.manual_timesheet_queue_id || itemMeta.manualTimesheetQueueId || itemMeta.manual_queue_id || '') || null)),
 
         row_key: itemRowKey || activeRowKeyForEvidence || item.row_key || null,
 
@@ -197295,11 +197456,15 @@ const getAttachedSelectionParts = (item) => {
 
         timesheet_id: stagedContextMatchesActiveContractWeek ? null : (itemTimesheetId || activeTimesheetId || item.timesheet_id || null),
 
-        is_staged_context: stagedContextMatchesActiveContractWeek ? true : !!item.is_staged_context,
+        is_staged_context: stagedContextMatchesActiveContractWeek ? true : false,
+
+        staged: stagedContextMatchesActiveContractWeek ? true : false,
+
+        is_staged: stagedContextMatchesActiveContractWeek ? true : false,
 
         kind,
 
-        staged_kind: stagedContextMatchesActiveContractWeek ? kind : item.staged_kind,
+        staged_kind: stagedContextMatchesActiveContractWeek ? kind : null,
 
         display_name: trimStr(item.display_name || item.displayName || item.filename || item.original_filename || item.originalFilename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
 
@@ -197727,9 +197892,17 @@ const getAttachedSelectionParts = (item) => {
 
       ];
 
-    } else {
+    } else if (isBulkAuthoriseTimesheets) {
 
       attachedAllRows = [selectedRowSyntheticAttachedItem, ...attachedAllRows];
+
+      syntheticAttachedFallbackRows = [selectedRowSyntheticAttachedItem, ...syntheticAttachedFallbackRows];
+
+    } else {
+
+      pane.__requires_evidence_hydration = true;
+
+      pane.__synthetic_attached_fallback_suppressed = true;
 
       syntheticAttachedFallbackRows = [selectedRowSyntheticAttachedItem, ...syntheticAttachedFallbackRows];
 
@@ -197787,6 +197960,40 @@ const getAttachedSelectionParts = (item) => {
 
   };
 
+  if (!isBulkAuthoriseTimesheets) {
+
+    const syntheticOrPrimaryFallbackRowsForBulkProcess = attachedAllRows.filter((item) => isSyntheticAttachedPaneItem(item));
+
+    if (syntheticOrPrimaryFallbackRowsForBulkProcess.length) {
+
+      syntheticAttachedFallbackRows = [
+
+        ...syntheticOrPrimaryFallbackRowsForBulkProcess.map((item) => ({ ...(deep(item) || {}), __synthetic_attached_fallback: true })),
+
+        ...syntheticAttachedFallbackRows
+
+      ];
+
+      attachedAllRows = attachedAllRows.filter((item) => !isSyntheticAttachedPaneItem(item));
+
+      pane.__requires_evidence_hydration = true;
+
+      pane.__synthetic_attached_fallback_suppressed = true;
+
+      stateAudit('synthetic-attached-fallback-filtered-for-bulk-process', {
+
+        removed_count: syntheticOrPrimaryFallbackRowsForBulkProcess.length,
+
+        removed_rows: syntheticOrPrimaryFallbackRowsForBulkProcess.slice(0, 8).map(stateAuditEvidenceSummary)
+
+      });
+
+    }
+
+  }
+
+
+
   const hasRealEvidenceIdentityForReconcile = (item) => {
 
     if (!item || typeof item !== 'object') return false;
@@ -197828,6 +198035,86 @@ const getAttachedSelectionParts = (item) => {
   };
 
 
+
+  const normaliseRealAttachedEvidenceMirrorForReconcile = (itemInput = {}) => {
+
+    const item = (itemInput && typeof itemInput === 'object') ? deep(itemInput) : {};
+
+    const storageKey = getItemStorageKey(item);
+
+    const meta = parseObjectMaybeJson(item.meta_json || item.metaJson || item.meta || item.queue_meta || item.queueMeta);
+
+    const queueIdForAuthority = trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || meta.manualQueueId || '');
+
+    const evidenceIdRaw = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || meta.timesheet_evidence_id || meta.timesheetEvidenceId || item.id || meta.id || '');
+
+    const evidenceId = !!(evidenceIdRaw && evidenceIdRaw !== queueIdForAuthority && evidenceIdRaw !== storageKey && !/^synthetic-attached:/i.test(evidenceIdRaw) && !/^files\//i.test(evidenceIdRaw)) ? evidenceIdRaw : '';
+
+    if (!storageKey || !evidenceId) return item;
+
+    const activeIdentity = selectedRowIdentityParts();
+
+    const activeTimesheetId = trimStr(activeIdentity.timesheetId || item.timesheet_id || item.current_timesheet_id || '');
+
+    const activeRowKey = activeTimesheetId ? `timesheet:${activeTimesheetId}` : trimStr(activeIdentity.rowKey || item.row_key || '');
+
+    item.id = evidenceId;
+
+    item.evidence_id = evidenceId;
+
+    item.timesheet_evidence_id = evidenceId;
+
+    item.queue_id = null;
+
+    item.queueId = null;
+
+    item.manual_timesheet_queue_id = null;
+
+    item.manualTimesheetQueueId = null;
+
+    item.manual_queue_id = null;
+
+    item.manualQueueId = null;
+
+    item.is_staged_context = false;
+
+    item.staged = false;
+
+    item.is_staged = false;
+
+    item.__synthetic_attached_fallback = false;
+
+    item.is_synthetic_attached_fallback = false;
+
+    item.__primary_artifact_fallback = false;
+
+    item.is_primary_artifact_fallback = false;
+
+    if (activeTimesheetId) {
+
+      item.timesheet_id = activeTimesheetId;
+
+      item.current_timesheet_id = activeTimesheetId;
+
+      item.row_key = activeRowKey;
+
+    }
+
+    item.storage_key = storageKey;
+
+    item.r2_key = storageKey;
+
+    item.file_key = storageKey;
+
+    item.download_storage_key = storageKey;
+
+    return item;
+
+  };
+
+
+
+  attachedAllRows = attachedAllRows.map((item) => hasRealEvidenceIdentityForReconcile(item) ? normaliseRealAttachedEvidenceMirrorForReconcile(item) : item);
 
   let realAttachedRowsForAuthority = attachedAllRows.filter((item) => hasRealEvidenceIdentityForReconcile(item));
 
@@ -197978,6 +198265,50 @@ const getAttachedSelectionParts = (item) => {
     pane.attached_rows = attachedAllRows.map((item) => ({ ...(deep(item) || {}) }));
 
     stateAudit('pane-attached-rows-update:applied-attached-rows', { attached_all_rows_count: attachedAllRows.length, pane_after_update: stateAuditPaneSummary() });
+
+  } else if (!isBulkAuthoriseTimesheets && (pane.active_attached_id || pane.active_attached_item || /^attached\|/i.test(trimStr(pane.__preview_target_key || '')) || /^attached\|/i.test(trimStr(pane.__active_attached_preview_target || '')))) {
+
+    const activeAttachedIdText = trimStr(pane.active_attached_id || pane.active_attached_item?.id || pane.active_attached_item?.evidence_id || '');
+
+    const activeAttachedStorage = safeStorageKey(pane.active_attached_item?.storage_key || pane.active_attached_item?.r2_key || pane.active_attached_item?.file_key || '');
+
+    const activeAttachedInvalid = !!(
+
+      /^synthetic-attached:/i.test(activeAttachedIdText) ||
+
+      (activeAttachedStorage && (activeAttachedIdText === activeAttachedStorage || /^files\//i.test(activeAttachedIdText))) ||
+
+      /^attached\|synthetic-attached:/i.test(trimStr(pane.__preview_target_key || '')) ||
+
+      /^attached\|synthetic-attached:/i.test(trimStr(pane.__active_attached_preview_target || ''))
+
+    );
+
+    if (activeAttachedInvalid) {
+
+      pane.active_attached_id = null;
+
+      pane.active_attached_item = null;
+
+      pane.active_attached_pdf_page = 1;
+
+      pane.__active_attached_preview_target = '';
+
+      if (/^attached\|/i.test(trimStr(pane.__preview_target_key || ''))) pane.__preview_target_key = '';
+
+      if (/^attached\|/i.test(trimStr(pane.__preview_load_requested_target_key || ''))) pane.__preview_load_requested_target_key = '';
+
+      pane.__preview_signed_url = '';
+
+      pane.__preview_signed_url_stored_at_ms = 0;
+
+      pane.__preview_signed_url_expires_at_ms = 0;
+
+      pane.__requires_evidence_hydration = true;
+
+      stateAudit('pane-attached-rows-update:cleared-invalid-active-attached', { active_attached_id: activeAttachedIdText || null, active_attached_storage: activeAttachedStorage || null, pane_after_clear: stateAuditPaneSummary() });
+
+    }
 
   } else if (allowEvidenceClear) {
 
@@ -198199,7 +198530,7 @@ const getAttachedSelectionParts = (item) => {
 
       pane.__queue_manual_override_scope = '';
 
-    } else if (hasSyntheticTimesheetFallback && (isBulkAuthoriseTimesheets || selectedRowHasTimesheetIdentity)) {
+    } else if (isBulkAuthoriseTimesheets && hasSyntheticTimesheetFallback && selectedRowHasTimesheetIdentity) {
 
       resolvedSource = 'attached';
 
@@ -198361,7 +198692,7 @@ const getAttachedSelectionParts = (item) => {
 
     const fileKey = safeStorageKey(parts.slice(2).join('|') || '');
 
-    if (!fileKey || !targetId || targetId === fileKey) return '';
+    if (!fileKey || !targetId || targetId === fileKey || /^files\//i.test(targetId) || /^synthetic-attached:/i.test(targetId)) return '';
 
     return `attached|${targetId}|${fileKey}`;
 
@@ -199700,8 +200031,6 @@ const getAttachedSelectionParts = (item) => {
   };
 
 }
-
-
 
 async function rerenderBulkProcessWorkbench(state, logPrefix) {
   const prefix = String(logPrefix || '[TS][BULK-PROCESS]');
@@ -202416,6 +202745,7 @@ async function handleBulkProcessSave(state) {
     return { ok: false, error: st.error_text };
   }
 }
+
 
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
@@ -205137,8 +205467,8 @@ async function handleBulkProcessProcess(state) {
       return `queue|${targetId}|${storageKey}`;
     }
     if (tab === 'attached') {
-      if (!storageKey) return '';
-      return `attached|${targetId || storageKey}|${storageKey}`;
+      if (!storageKey || !targetId || targetId === storageKey || /^files\//i.test(targetId) || /^synthetic-attached:/i.test(targetId)) return '';
+      return `attached|${targetId}|${storageKey}`;
     }
     return '';
   };
@@ -210207,17 +210537,39 @@ async function handleBulkProcessProcess(state) {
         container.has_attached_evidence === true ||
         Number(container.attached_evidence_count || 0) > 0 ||
         Number(container.evidence_count || 0) > 0 ||
-        trimStr(container.primary_artifact_storage_key || container.artifact_hints?.primary_artifact_storage_key || container.primary_artifact?.storage_key || container.primary_artifact?.file_key || container.primary_artifact?.r2_key || '') !== '' ||
         (Array.isArray(container.evidence) && container.evidence.length > 0) ||
         (Array.isArray(container.attached_evidence) && container.attached_evidence.length > 0) ||
         (Array.isArray(container.attachedRows) && container.attachedRows.length > 0) ||
         hasPositiveEvidenceBadge(container);
     });
-    const processPatchEvidenceSource = {
+    const processPatchEvidenceSource = ensureProcessRowUsesCanonicalTimesheetIdentity({
       ...pickObject(processResult?.data_row || processResult?.row || processResult?.summary_row_hint),
       ...pickObject(processResult?.row_patch || processResult?.patch),
       ...pickObject(patchedRow)
-    };
+    }, rowKeyOf(patchedRow) || previousRowKey || '');
+    try {
+      ensureProcessRowUsesCanonicalTimesheetIdentity(patchedRow, rowKeyOf(patchedRow) || previousRowKey || '');
+      const canonicalPatchedKey = rowKeyOf(patchedRow);
+      const ds = ensureDataset();
+      for (const bucketName of ['unprocessed_rows', 'processed_rows']) {
+        if (!Array.isArray(ds[bucketName])) continue;
+        ds[bucketName] = ds[bucketName].map((row) => {
+          if (!row || typeof row !== 'object') return row;
+          const rowTsId = trimStr(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
+          const patchedTsId = trimStr(patchedRow.current_timesheet_id || patchedRow.timesheet_id || '');
+          const rowCwId = trimStr(row.contract_week_id || row.contractWeekId || '');
+          const patchedCwId = trimStr(patchedRow.contract_week_id || patchedRow.contractWeekId || '');
+          const rawKey = rowKeyOf(row);
+          const matchesPatchedRow = !!(
+            (canonicalPatchedKey && rawKey && rawKey === canonicalPatchedKey) ||
+            (patchedTsId && rowTsId && rowTsId === patchedTsId) ||
+            (previousRowKey && rawKey && rawKey === previousRowKey) ||
+            (patchedCwId && rowCwId && rowCwId === patchedCwId && patchedTsId)
+          );
+          return matchesPatchedRow ? ensureProcessRowUsesCanonicalTimesheetIdentity({ ...row, ...deep(patchedRow) }, canonicalPatchedKey || rawKey) : row;
+        });
+      }
+    } catch {}
     const processFromContractWeekToTimesheet = previousRowKey.startsWith('contract_week:') && rowKeyOf(patchedRow).startsWith('timesheet:');
     const processStorageKeysMoved = readArray(processCacheHints.old_storage_keys).length > 0 ||
       readArray(processCacheHints.new_storage_keys).length > 0 ||
@@ -210446,8 +210798,6 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
-
-
 
 
 function normaliseBulkProcessRemovedEvidenceKind(value) {
