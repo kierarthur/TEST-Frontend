@@ -52677,8 +52677,7 @@ function renderBankingPaymentSettingsTab() {
 }
 
 
-
-async function contractWeekManualDraftUpsert(weekId, payload) {
+async function contractWeekManualDraftUpsert(weekId, payload, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][MANUAL-DRAFT-UPsert]');
   GC('contractWeekManualDraftUpsert');
 
@@ -52832,11 +52831,60 @@ async function contractWeekManualDraftUpsert(weekId, payload) {
   // Use apiPostJson for consistent error shape + status handling
   const json = await apiPostJson(urlPath, safePayload);
 
+  const optionBag = (options && typeof options === 'object') ? options : {};
+  const skipTargetSummaryRefresh = !!(
+    optionBag.skipSummaryRefresh === true ||
+    optionBag.suppressSummaryRefresh === true ||
+    safePayload.skip_summary_refresh === true ||
+    safePayload.suppress_summary_refresh === true ||
+    safePayload.skipSummaryRefresh === true ||
+    safePayload.suppressSummaryRefresh === true
+  );
+
+  if (!skipTargetSummaryRefresh && typeof refreshContractWeekSummaryAfterPlannedChange === 'function') {
+    try {
+      let summaryCtx = null;
+      if (optionBag.summaryCtx && typeof optionBag.summaryCtx === 'object') summaryCtx = optionBag.summaryCtx;
+      else if (optionBag.summary_context && typeof optionBag.summary_context === 'object') summaryCtx = optionBag.summary_context;
+      else if (safePayload.summary_ctx && typeof safePayload.summary_ctx === 'object') summaryCtx = safePayload.summary_ctx;
+      else if (safePayload.summaryContext && typeof safePayload.summaryContext === 'object') summaryCtx = safePayload.summaryContext;
+      else if (window?.modalCtx?.__summaryCtx && typeof window.modalCtx.__summaryCtx === 'object') summaryCtx = window.modalCtx.__summaryCtx;
+      else if (typeof captureSummaryContextForModalOpen === 'function') summaryCtx = captureSummaryContextForModalOpen();
+
+      const responseRowHint = (() => {
+        const candidates = [
+          json?.summary_row_hint,
+          json?.summaryRowHint,
+          json?.summary_row,
+          json?.summaryRow,
+          json?.row_patch,
+          json?.rowPatch,
+          json?.row,
+          json?.contract_week,
+          json?.contractWeek
+        ];
+        for (const candidate of candidates) {
+          if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) return candidate;
+        }
+        return null;
+      })();
+
+      const refreshCtx = {
+        ...(summaryCtx || {}),
+        source: optionBag.source || safePayload.source || 'contractWeekManualDraftUpsert',
+        ...(responseRowHint ? { summary_row_hint: responseRowHint } : {})
+      };
+
+      await refreshContractWeekSummaryAfterPlannedChange(weekId, refreshCtx);
+    } catch (summaryRefreshErr) {
+      console.warn('[TS][MANUAL-DRAFT-UPsert] planned contract-week summary refresh failed (non-fatal)', summaryRefreshErr);
+    }
+  }
+
   L('RESULT', json);
   GE();
   return json;
 }
-
 
 
 
@@ -317871,6 +317919,29 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
     const raw = String(v).trim().toLowerCase();
     return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
   };
+  const pickFreshString = (...values) => {
+    for (const value of values) {
+      const clean = trim(value);
+      if (clean) return clean;
+    }
+    return '';
+  };
+  const pickFreshFiniteNumber = (...values) => {
+    for (const value of values) {
+      if (value == null || value === '') continue;
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  };
+  const pickFreshBoolishNullable = (...values) => {
+    for (const value of values) {
+      if (value == null || value === '') continue;
+      return boolish(value);
+    }
+    return null;
+  };
+  const safeObj = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
 
   const revokedAt = trim(detTs.revoked_at || details.revoked_at || '');
   const authorisedAtServer = revokedAt ? '' : trim(detTs.authorised_at_server || details.authorised_at_server || '');
@@ -317969,6 +318040,193 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
   const subModeEff = hasTsNow ? subModeTs : cwModeSnapshot;
   const hasWeekNow = !!(resolvedContractWeekId || detCw.id || details.contract_week_id);
 
+  const effectiveRoute = safeObj(details.effective);
+  const actionFlagRoute = safeObj(details.action_flags);
+  const freshRouteType = pickFreshString(
+    details.route_type,
+    effectiveRoute.route_type,
+    actionFlagRoute.route_type,
+    detCw.route_type,
+    detTs.route_type
+  );
+  const freshRouteDisplay = pickFreshString(
+    details.route_display,
+    effectiveRoute.route_display,
+    actionFlagRoute.route_display,
+    detCw.route_display,
+    detTs.route_display
+  );
+  const freshRouteFamily = pickFreshString(
+    details.route_family,
+    effectiveRoute.route_family,
+    actionFlagRoute.route_family,
+    detCw.route_family,
+    detTs.route_family
+  );
+  const freshRouteSubfamily = pickFreshString(
+    details.route_subfamily,
+    effectiveRoute.route_subfamily,
+    actionFlagRoute.route_subfamily,
+    detCw.route_subfamily,
+    detTs.route_subfamily
+  );
+  const freshUnderlyingFamily = pickFreshString(
+    details.underlying_channel_family,
+    effectiveRoute.underlying_channel_family,
+    actionFlagRoute.underlying_channel_family,
+    detCw.underlying_channel_family,
+    detTs.underlying_channel_family
+  );
+  const plannedWeekModeForRoute = (!hasTsNow && hasWeekNow) ? upper(cwModeSnapshot || subModeEff) : '';
+  const plannedFallbackRouteType = plannedWeekModeForRoute ? `WEEKLY_${plannedWeekModeForRoute}` : '';
+  const plannedFallbackRouteFamily = plannedWeekModeForRoute === 'MANUAL'
+    ? 'MANUAL_NON_QR'
+    : (plannedWeekModeForRoute === 'ELECTRONIC' ? 'ELECTRONIC' : '');
+  let routeTypeNow = freshRouteType || plannedFallbackRouteType || (hasTsNow ? trim(mc.data?.route_type || '') : '');
+  let routeDisplayNow = freshRouteDisplay || (plannedWeekModeForRoute ? (typeof buildWeeklyRouteDisplayFromMode === 'function' ? buildWeeklyRouteDisplayFromMode(plannedWeekModeForRoute) : plannedWeekModeForRoute) : '') || (hasTsNow ? trim(mc.data?.route_display || '') : '');
+  let routeFamilyNow = freshRouteFamily || plannedFallbackRouteFamily || (hasTsNow ? trim(mc.data?.route_family || '') : '');
+  let routeSubfamilyNow = freshRouteSubfamily || plannedFallbackRouteFamily || (hasTsNow ? trim(mc.data?.route_subfamily || '') : '');
+  let underlyingFamilyNow = freshUnderlyingFamily || plannedFallbackRouteFamily || (hasTsNow ? trim(mc.data?.underlying_channel_family || '') : '');
+  let importAuthoritativeNow = pickFreshBoolishNullable(
+    details.is_import_authoritative,
+    effectiveRoute.is_import_authoritative,
+    actionFlagRoute.is_import_authoritative,
+    detCw.is_import_authoritative,
+    detTs.is_import_authoritative
+  );
+  let isAdjustmentNow = pickFreshBoolishNullable(
+    details.is_adjustment,
+    effectiveRoute.is_adjustment,
+    actionFlagRoute.is_adjustment,
+    detCw.is_adjustment,
+    detTs.is_adjustment
+  );
+  const additionalSeqNow = pickFreshFiniteNumber(
+    details.additional_seq,
+    details.contract_week_additional_seq,
+    effectiveRoute.additional_seq,
+    actionFlagRoute.additional_seq,
+    detCw.additional_seq,
+    detTs.additional_seq
+  );
+  const noTimesheetRequiredNow = pickFreshBoolishNullable(
+    details.client_no_timesheet_required,
+    details.no_timesheet_required,
+    effectiveRoute.client_no_timesheet_required,
+    effectiveRoute.no_timesheet_required,
+    actionFlagRoute.client_no_timesheet_required,
+    actionFlagRoute.no_timesheet_required,
+    detCw.client_no_timesheet_required,
+    detCw.no_timesheet_required,
+    detTs.client_no_timesheet_required,
+    detTs.no_timesheet_required
+  );
+  const routeAuthorityTextNow = [
+    routeTypeNow,
+    routeDisplayNow,
+    routeFamilyNow,
+    routeSubfamilyNow,
+    underlyingFamilyNow,
+    freshRouteType,
+    freshRouteDisplay,
+    freshRouteFamily,
+    freshRouteSubfamily,
+    freshUnderlyingFamily,
+    plannedFallbackRouteType,
+    plannedFallbackRouteFamily
+  ].map(upper).filter(Boolean).join('|');
+  const routeLooksAdditionalManualNow = !!(
+    isAdjustmentNow === true ||
+    (additionalSeqNow != null && Number(additionalSeqNow) > 0) ||
+    routeAuthorityTextNow.includes('_ADJUSTMENT') ||
+    routeAuthorityTextNow.includes('MANUAL_ADDITIONAL') ||
+    routeAuthorityTextNow.includes('ADDITIONAL_MANUAL')
+  );
+  const routeLooksProtectedImportNow = !!(
+    routeLooksAdditionalManualNow !== true &&
+    (
+      noTimesheetRequiredNow === true ||
+      routeAuthorityTextNow.includes('NO_TIMESHEET_REQUIRED') ||
+      routeAuthorityTextNow.includes('IMPORT_AUTHORITATIVE') ||
+      routeAuthorityTextNow.includes('WEEKLY_NHSP') ||
+      routeAuthorityTextNow.includes('WEEKLY_HEALTHROSTER') ||
+      routeAuthorityTextNow.includes('HEALTHROSTER_SELF_BILL')
+    )
+  );
+  const routeValueLooksElectronicOrQr = (value) => {
+    const u = upper(value);
+    if (!u) return false;
+    if (u.includes('MANUAL_NON_QR') || u === 'NON_QR' || u.endsWith('_NON_QR')) return false;
+    return u === 'ELECTRONIC' || u.includes('ELECTRONIC') || u === 'QR' || u.includes('QR_') || u.endsWith('_QR');
+  };
+  const manualModeNow = !!(
+    subModeEff === 'MANUAL' ||
+    subModeTs === 'MANUAL' ||
+    cwModeSnapshot === 'MANUAL' ||
+    plannedWeekModeForRoute === 'MANUAL' ||
+    routeAuthorityTextNow.includes('MANUAL_NON_QR')
+  );
+  const manualRefreshRouteAuthoritativeNow = !!(manualModeNow && !routeLooksProtectedImportNow);
+
+  if (manualRefreshRouteAuthoritativeNow) {
+    const manualFallbackRouteType = routeLooksAdditionalManualNow
+      ? (sheetScope === 'WEEKLY' ? 'WEEKLY_MANUAL_ADJUSTMENT' : 'MANUAL_ADJUSTMENT')
+      : (sheetScope === 'WEEKLY' ? 'WEEKLY_MANUAL' : 'MANUAL');
+    if (!routeTypeNow || routeValueLooksElectronicOrQr(routeTypeNow)) routeTypeNow = manualFallbackRouteType;
+    if (!routeDisplayNow || routeValueLooksElectronicOrQr(routeDisplayNow)) {
+      routeDisplayNow = (sheetScope === 'WEEKLY' && typeof buildWeeklyRouteDisplayFromMode === 'function')
+        ? buildWeeklyRouteDisplayFromMode('MANUAL')
+        : 'Manual';
+    }
+    routeFamilyNow = 'MANUAL_NON_QR';
+    routeSubfamilyNow = 'MANUAL_NON_QR';
+    underlyingFamilyNow = 'MANUAL_NON_QR';
+    importAuthoritativeNow = false;
+    if (isAdjustmentNow == null && routeLooksAdditionalManualNow) isAdjustmentNow = true;
+  }
+
+  const patchManualRouteSurfaceAfterRefresh = (surface, patchOpts = {}) => {
+    if (!manualRefreshRouteAuthoritativeNow || !surface || typeof surface !== 'object' || Array.isArray(surface)) return false;
+    const patch = (patchOpts && typeof patchOpts === 'object') ? patchOpts : {};
+    surface.route_type = routeTypeNow || surface.route_type || null;
+    surface.route_display = routeDisplayNow || surface.route_display || null;
+    surface.route_family = routeFamilyNow || surface.route_family || null;
+    surface.route_subfamily = routeSubfamilyNow || surface.route_subfamily || null;
+    surface.underlying_channel_family = underlyingFamilyNow || surface.underlying_channel_family || null;
+    surface.is_import_authoritative = false;
+    surface.import_authoritative = false;
+    surface.submitted_electronically = false;
+    surface.is_electronic = false;
+    surface.is_qr = false;
+    surface.qr_status = 'MANUAL';
+    if (patch.submissionMode) surface.submission_mode = patch.submissionMode;
+    if (patch.submissionModeSnapshot) surface.submission_mode_snapshot = patch.submissionModeSnapshot;
+    if (patch.cwSubmissionModeSnapshot) surface.cw_submission_mode_snapshot = patch.cwSubmissionModeSnapshot;
+    if (isAdjustmentNow != null) surface.is_adjustment = isAdjustmentNow;
+    if (additionalSeqNow != null) surface.additional_seq = additionalSeqNow;
+    return true;
+  };
+
+  if (manualRefreshRouteAuthoritativeNow) {
+    details.effective = (details.effective && typeof details.effective === 'object' && !Array.isArray(details.effective)) ? details.effective : {};
+    details.action_flags = (details.action_flags && typeof details.action_flags === 'object' && !Array.isArray(details.action_flags)) ? details.action_flags : {};
+    patchManualRouteSurfaceAfterRefresh(details, {
+      submissionMode: hasTsNow ? 'MANUAL' : null,
+      cwSubmissionModeSnapshot: hasWeekNow ? 'MANUAL' : null
+    });
+    patchManualRouteSurfaceAfterRefresh(details.effective, {
+      submissionMode: hasTsNow ? 'MANUAL' : null,
+      cwSubmissionModeSnapshot: hasWeekNow ? 'MANUAL' : null
+    });
+    patchManualRouteSurfaceAfterRefresh(details.action_flags, {
+      submissionMode: hasTsNow ? 'MANUAL' : null,
+      cwSubmissionModeSnapshot: hasWeekNow ? 'MANUAL' : null
+    });
+    patchManualRouteSurfaceAfterRefresh(details.timesheet, { submissionMode: hasTsNow ? 'MANUAL' : null });
+    patchManualRouteSurfaceAfterRefresh(details.contract_week, { submissionModeSnapshot: hasWeekNow ? 'MANUAL' : null });
+    if (hasWeekNow) details.cw_submission_mode_snapshot = 'MANUAL';
+  }
+
   mc.data = {
     ...(mc.data && typeof mc.data === 'object' ? mc.data : {}),
     id: resolvedTimesheetId || resolvedContractWeekId || mc.data?.id || null,
@@ -317995,6 +318253,14 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
     invoice_segments_total: details.invoice_segments_total ?? mc.data?.invoice_segments_total ?? null,
     invoice_segments_locked: details.invoice_segments_locked ?? mc.data?.invoice_segments_locked ?? null,
     invoice_segments_unlocked: details.invoice_segments_unlocked ?? mc.data?.invoice_segments_unlocked ?? null,
+    route_type: routeTypeNow || null,
+    route_display: routeDisplayNow || null,
+    route_family: routeFamilyNow || null,
+    route_subfamily: routeSubfamilyNow || null,
+    underlying_channel_family: underlyingFamilyNow || null,
+    is_import_authoritative: importAuthoritativeNow,
+    is_adjustment: isAdjustmentNow,
+    additional_seq: additionalSeqNow,
     ready_to_pay: (typeof details.ready_to_pay === 'boolean') ? details.ready_to_pay : null,
     total_hours: detTsfin.total_hours ?? null,
     total_pay_ex_vat: detTsfin.total_pay_ex_vat ?? null,
@@ -318020,6 +318286,14 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
   mc.timesheetMeta.revoked_at = revokedAt || null;
   mc.timesheetMeta.expected_timesheet_id = resolvedTimesheetId || null;
   mc.timesheetMeta.contract_week_id = resolvedContractWeekId || null;
+  mc.timesheetMeta.route_type = routeTypeNow || null;
+  mc.timesheetMeta.route_display = routeDisplayNow || null;
+  mc.timesheetMeta.route_family = routeFamilyNow || null;
+  mc.timesheetMeta.route_subfamily = routeSubfamilyNow || null;
+  mc.timesheetMeta.underlying_channel_family = underlyingFamilyNow || null;
+  mc.timesheetMeta.is_import_authoritative = importAuthoritativeNow;
+  mc.timesheetMeta.is_adjustment = isAdjustmentNow;
+  mc.timesheetMeta.additional_seq = additionalSeqNow;
 
   try {
     const detailInvoiceMap = (typeof normaliseTimesheetInvoiceNoMap === 'function')
