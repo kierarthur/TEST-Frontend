@@ -26409,7 +26409,6 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
   return { filename, rowCount: exportRows.length };
 }
 
-
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -29031,43 +29030,142 @@ async function bankingPayPreview(pay_date) {
     const sectionPages = {};
     const loadedSections = {};
     const emptySections = {};
+    const refetchedSections = [];
+    const reusedSections = [];
+    const invalidatedSections = {};
     const errors = [];
     const combinedRows = [];
     const forcePreviewPageRefetch = opts.force_preview_page_refetch === true || opts.forcePreviewPageRefetch === true;
+    const maxRefreshAttemptsPerSignal = 2;
+    const requestFreshnessRequired = !!(
+      forcePreviewPageRefetch ||
+      softRefresh ||
+      loadFirstPage ||
+      (previewUserInitiated && !previewBackground)
+    );
+    const currentSessionVersion = (
+      progressObj.session_version ??
+      progressObj.sessionVersion ??
+      sourcePayload?.progress?.session_version ??
+      sourcePayload?.progress?.sessionVersion ??
+      sourcePayload?.session_version ??
+      sourcePayload?.sessionVersion ??
+      sourcePayload?.session?.session_version ??
+      sourcePayload?.session?.sessionVersion ??
+      storedContext.session_version ??
+      storedContext.sessionVersion ??
+      wiz.workbench.session_version ??
+      null
+    );
+    const readyForFreshPages = !!(
+      workbenchProgressLooksReady(sourcePayload) ||
+      workbenchProgressLooksReady(progressObj) ||
+      workbenchProgressLooksReady(sourcePayload?.progress) ||
+      sourcePayload?.ready === true ||
+      sourcePayload?.ready_flag === true ||
+      progressObj.ready === true ||
+      progressObj.ready_flag === true
+    );
+    const parseCountMap = (value) => {
+      if (isPlainObject(value)) return value;
+      if (typeof value !== 'string' || !trimStr(value)) return null;
+      try {
+        const parsed = JSON.parse(value);
+        return isPlainObject(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    };
+    const countSignalFromSources = (sources, keys) => {
+      for (const sourceLike of sources) {
+        const source = parseCountMap(sourceLike);
+        if (!source) continue;
+        for (const key of keys) {
+          if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+          const value = source[key];
+          if (value === null || value === undefined || value === '') continue;
+          return { known: true, count: countLikeValue(value) };
+        }
+      }
+      return { known: false, count: 0 };
+    };
+    const sectionCountSources = [
+      progressObj.section_counts_json,
+      progressObj.sectionCountsJson,
+      progressObj.section_counts,
+      progressObj.sectionCounts,
+      sourcePayload?.progress?.section_counts_json,
+      sourcePayload?.progress?.sectionCountsJson,
+      sourcePayload?.progress?.section_counts,
+      sourcePayload?.progress?.sectionCounts,
+      sourcePayload?.section_counts_json,
+      sourcePayload?.sectionCountsJson,
+      sourcePayload?.section_counts,
+      sourcePayload?.sectionCounts,
+      sourcePayload?.session?.section_counts_json,
+      sourcePayload?.session?.sectionCountsJson,
+      sourcePayload?.session?.section_counts,
+      sourcePayload?.session?.sectionCounts,
+      sourcePayload?.preview?.section_counts_json,
+      sourcePayload?.preview?.sectionCountsJson,
+      sourcePayload?.preview?.section_counts,
+      sourcePayload?.preview?.sectionCounts,
+      storedContext.section_counts_json,
+      storedContext.sectionCountsJson,
+      storedContext.section_counts,
+      storedContext.sectionCounts,
+      wiz.workbench?.progress?.section_counts_json,
+      wiz.workbench?.progress?.sectionCountsJson,
+      wiz.workbench?.progress?.section_counts,
+      wiz.workbench?.progress?.sectionCounts,
+      wiz.workbench?.progress_counts?.section_counts_json,
+      wiz.workbench?.progress_counts?.sectionCountsJson,
+      wiz.workbench?.progress_counts?.section_counts,
+      wiz.workbench?.progress_counts?.sectionCounts,
+      wiz.preview?.data?.progress?.section_counts_json,
+      wiz.preview?.data?.progress?.sectionCountsJson,
+      wiz.preview?.data?.progress?.section_counts,
+      wiz.preview?.data?.progress?.sectionCounts,
+      wiz.preview?.data?.progress_counts?.section_counts_json,
+      wiz.preview?.data?.progress_counts?.sectionCountsJson,
+      wiz.preview?.data?.progress_counts?.section_counts,
+      wiz.preview?.data?.progress_counts?.sectionCounts
+    ];
+    const progressCountSources = [
+      progressObj,
+      sourcePayload?.progress,
+      sourcePayload,
+      sourcePayload?.session,
+      sourcePayload?.preview,
+      storedContext,
+      wiz.workbench?.progress,
+      wiz.workbench?.progress_counts,
+      wiz.preview?.data?.progress,
+      wiz.preview?.data?.progress_counts
+    ];
+    const previewRowCountSignal = countSignalFromSources(progressCountSources, ['preview_row_count', 'preview_rows_count', 'row_count']);
+    const selectedRowCountSignal = countSignalFromSources(progressCountSources, ['selected_row_count', 'selected_rows_count']);
     const getExpectedSectionRowCount = (sectionName) => {
       const section = normalisePreviewPageSectionName(sectionName);
-      const countSources = [
-        storedContext.section_counts_json,
-        storedContext.sectionCountsJson,
-        storedContext.section_counts,
-        storedContext.sectionCounts,
-        progressObj.section_counts_json,
-        progressObj.sectionCountsJson,
-        progressObj.section_counts,
-        progressObj.sectionCounts,
-        sourcePayload?.section_counts_json,
-        sourcePayload?.sectionCountsJson,
-        sourcePayload?.section_counts,
-        sourcePayload?.sectionCounts,
-        sourcePayload?.progress?.section_counts_json,
-        sourcePayload?.progress?.sectionCountsJson,
-        sourcePayload?.progress?.section_counts,
-        sourcePayload?.progress?.sectionCounts
-      ];
       const aliasesBySection = {
         canonical_preview_lines: ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows'],
         blocked_for_pay: ['blocked_for_pay', 'blocked_items', 'blocked_preview_lines', 'blocked_now'],
         cases_resolutions: ['cases_resolutions', 'case_resolution_states', 'case_resolutions']
       };
-      let best = 0;
-      for (const counts of countSources) {
-        if (!isPlainObject(counts)) continue;
-        for (const key of aliasesBySection[section] || [section]) {
-          best = Math.max(best, countLikeValue(counts[key]));
-        }
-      }
-      return best;
+      return countSignalFromSources(sectionCountSources, aliasesBySection[section] || [section]);
     };
+    const getPageCountSignal = (pageLike, keys) => countSignalFromSources([pageLike], keys);
+    const buildSectionFreshnessSignature = (section, expectedCountSignal) => JSON.stringify({
+      session_id: sessionIdText,
+      session_version: currentSessionVersion === null || currentSessionVersion === undefined ? null : String(currentSessionVersion),
+      ready: readyForFreshPages,
+      expected_count: expectedCountSignal.known ? expectedCountSignal.count : null,
+      preview_row_count: expectedCountSignal.known ? null : (previewRowCountSignal.known ? previewRowCountSignal.count : null),
+      selected_row_count: section === 'canonical_preview_lines' && selectedRowCountSignal.known
+        ? selectedRowCountSignal.count
+        : null,
+      refresh_request: requestFreshnessRequired ? requestToken : null
+    });
 
     for (const requiredSection of requiredRowBackedPreviewSections) {
       if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) break;
@@ -29076,15 +29174,80 @@ async function bankingPayPreview(pay_date) {
       const cachedPage = existingPageMap[section] || null;
       const cachedRows = getPreviewPageRows(cachedPage);
       const cachedVersion = cachedPage?.session_version ?? cachedPage?.sessionVersion ?? null;
-      const storedVersion = storedContext.session_version ?? wiz.workbench.session_version ?? null;
       const expectedSectionRowCount = getExpectedSectionRowCount(section);
+      const sectionFreshnessSignature = buildSectionFreshnessSignature(section, expectedSectionRowCount);
+      const cachedFreshnessSignature = trimStr(cachedPage?.__cloudtms_row_backed_freshness_signature || '');
+      const cachedSignalMatches = cachedFreshnessSignature === sectionFreshnessSignature;
+      const cachedRefreshAttemptsRaw = Number(cachedPage?.__cloudtms_row_backed_refresh_attempts ?? 0);
+      const cachedRefreshAttemptsForSignal = cachedSignalMatches && Number.isFinite(cachedRefreshAttemptsRaw)
+        ? Math.max(0, Math.trunc(cachedRefreshAttemptsRaw))
+        : 0;
+      let refreshAttemptsForSignal = cachedRefreshAttemptsForSignal;
       const cachedHasRowsArray = !!(cachedPage && (Array.isArray(cachedPage.rows) || Array.isArray(cachedPage.items)));
-      const cachedVersionMatches = !!(cachedVersion === null || storedVersion === null || String(cachedVersion) === String(storedVersion));
-      const cachedEmptyButProgressExpectsRows = expectedSectionRowCount > 0 && cachedRows.length <= 0;
-      const cachedUsable = !!(cachedPage && cachedHasRowsArray && cachedVersionMatches && !cachedEmptyButProgressExpectsRows && !forcePreviewPageRefetch);
+      const cachedVersionMatches = !!(
+        cachedVersion === null ||
+        cachedVersion === undefined ||
+        currentSessionVersion === null ||
+        currentSessionVersion === undefined ||
+        String(cachedVersion) === String(currentSessionVersion)
+      );
+      const cachedLimitRaw = Number(cachedPage?.limit ?? limit);
+      const cachedLimit = Number.isFinite(cachedLimitRaw) ? Math.max(1, Math.min(100, Math.trunc(cachedLimitRaw))) : limit;
+      const expectedRowsOnCachedPage = expectedSectionRowCount.known
+        ? Math.min(expectedSectionRowCount.count, cachedLimit)
+        : null;
+      const cachedCountDiffersFromExpected = expectedRowsOnCachedPage !== null && cachedRows.length !== expectedRowsOnCachedPage;
+      const canonicalSelectedLowerBound = section === 'canonical_preview_lines' && selectedRowCountSignal.known
+        ? Math.min(selectedRowCountSignal.count, cachedLimit)
+        : 0;
+      const cachedBelowSelectedLowerBound = canonicalSelectedLowerBound > 0 && cachedRows.length < canonicalSelectedLowerBound;
+      const cachedReturnedCount = getPageCountSignal(cachedPage, ['returned_count', 'returnedCount']);
+      const cachedReturnedCountMismatch = cachedReturnedCount.known && cachedRows.length !== cachedReturnedCount.count;
+      const cachedKnownCount = getPageCountSignal(cachedPage, ['known_count', 'knownCount']);
+      const cachedKnownRowsOnPage = cachedKnownCount.known ? Math.min(cachedKnownCount.count, cachedLimit) : null;
+      const cachedKnownCountMismatch = cachedKnownRowsOnPage !== null && cachedRows.length !== cachedKnownRowsOnPage;
+      const freshnessMustMatch = !!(
+        requestFreshnessRequired ||
+        readyForFreshPages ||
+        expectedSectionRowCount.known ||
+        (!expectedSectionRowCount.known && previewRowCountSignal.known) ||
+        (section === 'canonical_preview_lines' && selectedRowCountSignal.known)
+      );
+      const cachedFreshnessMatches = !freshnessMustMatch || cachedSignalMatches;
+      const cacheDataMismatch = !!(
+        !cachedVersionMatches ||
+        cachedCountDiffersFromExpected ||
+        cachedBelowSelectedLowerBound ||
+        cachedReturnedCountMismatch ||
+        cachedKnownCountMismatch
+      );
+      const mismatchRefreshRequired = cacheDataMismatch && (
+        !cachedSignalMatches ||
+        cachedRefreshAttemptsForSignal < maxRefreshAttemptsPerSignal
+      );
+      const freshnessRefreshRequired = freshnessMustMatch && !cachedFreshnessMatches;
+      const staleReasons = [];
+      if (!cachedPage) staleReasons.push('CACHE_MISSING');
+      if (cachedPage && !cachedHasRowsArray) staleReasons.push('ROWS_ARRAY_MISSING');
+      if (cachedPage && !cachedVersionMatches) staleReasons.push('SESSION_VERSION_CHANGED');
+      if (cachedPage && cachedCountDiffersFromExpected) staleReasons.push('EXPECTED_SECTION_COUNT_CHANGED');
+      if (cachedPage && cachedBelowSelectedLowerBound) staleReasons.push('SELECTED_ROW_COUNT_EXCEEDS_CACHE');
+      if (cachedPage && cachedReturnedCountMismatch) staleReasons.push('RETURNED_COUNT_MISMATCH');
+      if (cachedPage && cachedKnownCountMismatch) staleReasons.push('KNOWN_COUNT_MISMATCH');
+      if (cachedPage && freshnessRefreshRequired) staleReasons.push(readyForFreshPages ? 'READY_FRESHNESS_REQUIRED' : 'COUNT_OR_REFRESH_FRESHNESS_CHANGED');
+      if (forcePreviewPageRefetch) staleReasons.push('FORCED_REFETCH');
+      const cachedUsable = !!(
+        cachedPage &&
+        cachedHasRowsArray &&
+        !mismatchRefreshRequired &&
+        !freshnessRefreshRequired &&
+        !forcePreviewPageRefetch
+      );
       if (cachedUsable) {
         page = cachedPage;
+        reusedSections.push(section);
       } else {
+        invalidatedSections[section] = staleReasons;
         try {
           page = await bankingPayWorkbenchSessionGetPreviewPage(sessionIdText, section, {
             limit,
@@ -29092,6 +29255,8 @@ async function bankingPayPreview(pay_date) {
             current_session_id: sessionIdText,
             source: opts.source || 'bankingPayPreview.requiredPreviewSections'
           });
+          refreshAttemptsForSignal = cachedSignalMatches ? cachedRefreshAttemptsForSignal + 1 : 1;
+          refetchedSections.push(section);
         } catch (pageError) {
           errors.push({ section, message: trimStr(pageError?.message || pageError || '') || 'Preview section could not be loaded.' });
           continue;
@@ -29100,6 +29265,10 @@ async function bankingPayPreview(pay_date) {
       if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) break;
       const normalisedPage = normalisePreviewPagePayloadForState(page, section);
       normalisedPage.session_id = sessionIdText;
+      normalisedPage.__cloudtms_row_backed_freshness_signature = sectionFreshnessSignature;
+      normalisedPage.__cloudtms_row_backed_expected_count = expectedSectionRowCount.known ? expectedSectionRowCount.count : null;
+      normalisedPage.__cloudtms_row_backed_ready = readyForFreshPages;
+      normalisedPage.__cloudtms_row_backed_refresh_attempts = refreshAttemptsForSignal;
       const rows = getPreviewPageRows(normalisedPage);
       applyPreviewPagePayloadToState(normalisedPage, sourcePayload);
       sectionPages[section] = normalisedPage;
@@ -29119,6 +29288,9 @@ async function bankingPayPreview(pay_date) {
       multi_section_preview_loaded: true,
       requested_sections: requiredRowBackedPreviewSections.slice(),
       loaded_sections: Object.keys(loadedSections),
+      refetched_sections: refetchedSections,
+      reused_sections: reusedSections,
+      invalidated_sections: invalidatedSections,
       empty_sections: Object.keys(emptySections).filter((section) => emptySections[section]),
       section_pages: sectionPages,
       pages_by_section: sectionPages,
@@ -30370,6 +30542,8 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
+
+
 
 
 
