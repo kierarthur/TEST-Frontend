@@ -26409,6 +26409,8 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
   return { filename, rowCount: exportRows.length };
 }
 
+
+
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -26431,31 +26433,26 @@ async function bankingPayPreview(pay_date) {
   const options = isPlainObject(pay_date) ? pay_date : { pay_date };
   const requestedPayDate = trimStr(options.pay_date || options.payDate || '');
   const requestedCandidateId = trimStr(options.candidate_id || options.candidateId || options.candidate_filter_id || options.candidateFilterId || '');
+  const optionDirtyCandidateIds = Array.from(new Set(
+    asArray(options.dirty_candidate_ids || options.dirtyCandidateIds)
+      .map((value) => trimStr(value))
+      .filter(Boolean)
+  )).slice(0, 25);
+  const optionPendingCandidateIds = Array.from(new Set(
+    asArray(options.pending_candidate_ids || options.pendingCandidateIds)
+      .map((value) => trimStr(value))
+      .filter(Boolean)
+  )).slice(0, 25);
+  const replacementPendingCandidateIds = Array.from(new Set([
+    ...optionPendingCandidateIds,
+    ...optionDirtyCandidateIds
+  ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 25);
   const replacementSessionId = trimStr(options.replacement_session_id || options.replacementSessionId || '');
   const replacementSessionSignature = trimStr(options.replacement_session_signature || options.replacementSessionSignature || '');
   const replacementSnapshotRunId = trimStr(options.replacement_snapshot_run_id || options.replacementSnapshotRunId || '');
   const replacementSessionVersion = (options.replacement_session_version !== undefined && options.replacement_session_version !== null)
     ? options.replacement_session_version
     : ((options.replacementSessionVersion !== undefined && options.replacementSessionVersion !== null) ? options.replacementSessionVersion : null);
-  const optionDirtyCandidateIds = Array.from(new Set(
-    asArray(options.dirty_candidate_ids || options.dirtyCandidateIds)
-      .map((value) => trimStr(value))
-      .filter(Boolean)
-  )).slice(0, 100);
-  const optionPendingCandidateIds = Array.from(new Set(
-    asArray(options.pending_candidate_ids || options.pendingCandidateIds)
-      .map((value) => trimStr(value))
-      .filter(Boolean)
-  )).slice(0, 100);
-  const replacementPendingCandidateIds = Array.from(new Set([
-    ...optionPendingCandidateIds,
-    ...optionDirtyCandidateIds
-  ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 100);
-  const replacementRefreshJobIds = Array.from(new Set(
-    asArray(options.refresh_job_ids || options.refreshJobIds)
-      .map((value) => trimStr(value))
-      .filter(Boolean)
-  )).slice(0, 100);
   const createdPayBatchIdsForPostMutation = Array.from(new Set([
     ...(Array.isArray(options.created_pay_batch_ids) ? options.created_pay_batch_ids : []),
     ...(Array.isArray(options.createdPayBatchIds) ? options.createdPayBatchIds : [])
@@ -26468,12 +26465,9 @@ async function bankingPayPreview(pay_date) {
   const ORDINARY_BANKING_CUTOFF_SENTINEL = '9999-12-31';
   const previewMode = trimStr(options.mode || options.previewMode || options.preview_mode || '').toUpperCase();
   const sourceSessionId = trimStr(options.source_session_id || options.sourceSessionId || '');
-  const sourceSessionAlreadyDiscarded = options.source_session_already_discarded === true || options.sourceSessionAlreadyDiscarded === true;
   const sourceSnapshotRunId = trimStr(options.source_snapshot_run_id || options.sourceSnapshotRunId || '');
   const sourceSessionSignature = trimStr(options.source_session_signature || options.sourceSessionSignature || '');
   let obsoleteSessionIds = Array.from(new Set([
-    ...(Array.isArray(options.obsolete_session_ids) ? options.obsolete_session_ids : []),
-    ...(Array.isArray(options.obsoleteSessionIds) ? options.obsoleteSessionIds : []),
     sourceSessionId
   ].map((value) => trimStr(value)).filter(Boolean)));
   const rawMutationContext = trimStr(
@@ -26485,43 +26479,25 @@ async function bankingPayPreview(pay_date) {
     options.resetAction ||
     ''
   ).toUpperCase();
-  const previewReopenRequiredOption = options.preview_reopen_required === true || options.previewReopenRequired === true;
   const hasCreateSuccessEvidence = !!(
     rawMutationContext === 'CREATE_DRAFT_SUCCESS' ||
     rawMutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' ||
-    previewMode === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' ||
     createdPayBatchIdsForPostMutation.length > 0
   );
   const hasCancelSuccessEvidence = !!(
     rawMutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' ||
-    rawMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' ||
-    previewMode === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN'
+    rawMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH'
   );
-  const hasBatchMutationContext = !!(
-    hasCreateSuccessEvidence ||
-    hasCancelSuccessEvidence ||
-    /(^|_)(DRAFT|BATCH|PAY_BATCH)(_|$)/.test(rawMutationContext)
-  );
-  const hasDirtyCandidatesWithBatchMutation = hasBatchMutationContext && (optionDirtyCandidateIds.length > 0 || optionPendingCandidateIds.length > 0 || replacementRefreshJobIds.length > 0);
-  const hasPreviewReopenWithSourceSession = previewReopenRequiredOption && !!sourceSessionId;
-  const requiresPostMutationRebase = hasCreateSuccessEvidence || hasCancelSuccessEvidence || hasPreviewReopenWithSourceSession || hasDirtyCandidatesWithBatchMutation;
-  const forceNewSession = options.force_new_session === true || options.forceNewSession === true || previewMode === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' || previewMode === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN' || requiresPostMutationRebase;
-  const discardSourceSessionRequested = options.discard_source_session === true || options.discardSourceSession === true || forceNewSession || requiresPostMutationRebase;
-  const discardSourceSession = sourceSessionAlreadyDiscarded ? false : discardSourceSessionRequested;
-  const ignoreReplacementSession = options.ignore_replacement_session === true || options.ignoreReplacementSession === true || forceNewSession || requiresPostMutationRebase;
   const mutationContext = hasCreateSuccessEvidence
     ? 'CREATE_DRAFT_SUCCESS'
     : (hasCancelSuccessEvidence
         ? 'CANCEL_DELETE_DRAFT_SUCCESS'
         : rawMutationContext);
-  const isPostDraftCreateRefresh = mutationContext === 'CREATE_DRAFT_SUCCESS' || mutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' || previewMode === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN';
-  const isPostDraftCancelRefresh = mutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' || mutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' || previewMode === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN';
-  const isPostMutationRefresh = isPostDraftCreateRefresh || isPostDraftCancelRefresh || forceNewSession || discardSourceSession || requiresPostMutationRebase;
-  const replacementPreviewReopen = !ignoreReplacementSession && (previewReopenRequiredOption || options.mode === 'POST_ACTION_REOPEN');
-  const hardSessionReload = options.hard_session_reload === true || options.hardSessionReload === true || options.mode === 'HARD_SESSION_RELOAD' || forceNewSession || discardSourceSession || requiresPostMutationRebase;
+  const isPostDraftCreateRefresh = mutationContext === 'CREATE_DRAFT_SUCCESS' || mutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH';
+  const isPostDraftCancelRefresh = mutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' || mutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH';
+  const isPostMutationRefresh = isPostDraftCreateRefresh || isPostDraftCancelRefresh || (!!replacementSessionId && !!sourceSessionId);
   const softRefresh = options.soft_refresh === true || options.softRefresh === true || options.mode === 'SOFT_REFRESH';
-  const candidateScopedRefresh = options.candidate_scoped_refresh === true || options.candidateScopedRefresh === true || !!requestedCandidateId;
-  const useReplacementSessionBootstrap = !!replacementSessionId && !ignoreReplacementSession && !isPostMutationRefresh;
+  const useReplacementSessionBootstrap = !!replacementSessionId;
   const previewSilent = options.silent === true || options.silent === 'true';
   const previewBackground = options.background === true || options.background === 'true' || previewMode === 'BACKGROUND' || previewMode === 'SILENT' || previewMode === 'POST_ACTION_REOPEN' || isPostMutationRefresh;
   const previewUserInitiated = (
@@ -26581,11 +26557,29 @@ async function bankingPayPreview(pay_date) {
   wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
   obsoleteSessionIds = Array.from(new Set([
     ...obsoleteSessionIds,
-    ...(Array.isArray(wiz.workbench.__obsolete_workbench_session_ids) ? wiz.workbench.__obsolete_workbench_session_ids : []),
-    ...(Array.isArray(wiz.workbench.__obsolete_progress_session_ids) ? wiz.workbench.__obsolete_progress_session_ids : []),
-    ...(Array.isArray(wiz.decisions?.__obsolete_workbench_session_ids) ? wiz.decisions.__obsolete_workbench_session_ids : []),
-    ...(Array.isArray(wiz.decisions?.__obsolete_progress_session_ids) ? wiz.decisions.__obsolete_progress_session_ids : [])
+    trimStr(wiz.workbench.source_session_id || '')
   ].map((value) => trimStr(value)).filter(Boolean)));
+
+  if (replacementPendingCandidateIds.length > 0 || requestedCandidateId) {
+    const visibleDirtyIds = Array.from(new Set([
+      ...replacementPendingCandidateIds,
+      requestedCandidateId
+    ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 25);
+    wiz.workbench.pending_candidate_ids = Array.from(new Set([
+      ...(Array.isArray(wiz.workbench.pending_candidate_ids) ? wiz.workbench.pending_candidate_ids : []),
+      ...visibleDirtyIds
+    ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 25);
+    wiz.workbench.dirty_candidate_ids = Array.from(new Set([
+      ...(Array.isArray(wiz.workbench.dirty_candidate_ids) ? wiz.workbench.dirty_candidate_ids : []),
+      ...visibleDirtyIds
+    ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 25);
+    if (wiz.decisions && typeof wiz.decisions === 'object') {
+      wiz.decisions.pending_candidate_ids = [...wiz.workbench.pending_candidate_ids];
+      wiz.decisions.dirty_candidate_ids = [...wiz.workbench.dirty_candidate_ids];
+    }
+    wiz.workbench.__candidate_refresh_page_reread_pending = true;
+    wiz.preview.status_text = 'Refreshing changed payment details in the background.';
+  }
 
   const presentPreviewFriendlyError = async (friendly, fallbackTitle = 'Payment preview could not be loaded', fallbackMessage = 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.') => {
     if (!previewUserInitiated || previewSilent || previewBackground) return;
@@ -26795,6 +26789,45 @@ async function bankingPayPreview(pay_date) {
   };
   const suppliedSessionSignature = trimStr(options.session_signature || options.sessionSignature || '');
   const computedSessionSignature = computeCurrentSessionSignature();
+  const sessionIdFromPageCaches = (...cacheValues) => {
+    for (const cacheValue of cacheValues) {
+      if (!isPlainObject(cacheValue)) continue;
+      for (const entry of Object.values(cacheValue)) {
+        if (!isPlainObject(entry)) continue;
+        const entrySessionId = trimStr(
+          entry.session_id ||
+          entry.sessionId ||
+          entry.page?.session_id ||
+          entry.page?.sessionId ||
+          entry.data?.session_id ||
+          entry.data?.sessionId ||
+          ''
+        );
+        if (entrySessionId) return entrySessionId;
+      }
+    }
+    return '';
+  };
+  const existingSessionBoundLocalSessionId = trimStr(
+    wiz.workbench.session_id ||
+    wiz.decisions?.session_id ||
+    existingPreviewSessionForSession.session_id ||
+    existingPreviewEnvelopeForSession.session_id ||
+    sessionIdFromPageCaches(
+      wiz.workbench.preview_page_cache,
+      wiz.workbench.previewPageCache,
+      wiz.workbench.page_cache,
+      wiz.workbench.pageCache,
+      wiz.workbench.preview_pages,
+      wiz.workbench.previewPages,
+      wiz.preview.preview_page_cache,
+      wiz.preview.previewPageCache,
+      wiz.preview.page_cache,
+      wiz.preview.pageCache,
+      wiz.preview.pages
+    ) ||
+    ''
+  );
   const existingWorkbenchSessionId = trimStr(wiz.workbench.session_id || '');
   const existingWorkbenchSessionSignature = trimStr(wiz.workbench.session_signature || '');
   const existingWorkbenchPayDate = trimStr(
@@ -26842,10 +26875,7 @@ async function bankingPayPreview(pay_date) {
     requestedSessionSignatureMismatch ||
     computedSessionSignatureMismatch
   );
-  const willOpenNewWorkbenchSession = !useReplacementSessionBootstrap && (
-    forceNewSession ||
-    discardSourceSession ||
-    hardSessionReload ||
+  const shouldAttachSharedWorkbenchSession = !useReplacementSessionBootstrap && (
     !existingWorkbenchSessionId ||
     activeWorkbenchContextMismatch ||
     obsoleteSessionIds.includes(existingWorkbenchSessionId)
@@ -26857,122 +26887,6 @@ async function bankingPayPreview(pay_date) {
     return suppliedSessionSignature || computedSessionSignature || (activeWorkbenchContextMismatch ? '' : existingWorkbenchSessionSignature);
   })();
 
-  const resetWorkbenchStateForFreshSession = (reason) => {
-    const priorSessionId = trimStr(wiz.workbench.session_id || '');
-    const priorSessionSignature = trimStr(wiz.workbench.session_signature || '');
-    const priorPayDate = trimStr(wiz.workbench.pay_date || wiz.pay_date || pay.pay_date || pay.selectedPayDate || '');
-    const nextObsoleteSessionIds = Array.from(new Set([
-      ...obsoleteSessionIds,
-      priorSessionId,
-      sourceSessionId
-    ].map((value) => trimStr(value)).filter(Boolean)));
-    obsoleteSessionIds = nextObsoleteSessionIds;
-
-    wiz.preview.data = null;
-    wiz.preview.readiness = null;
-    wiz.preview.candidateDebtInfo = {};
-    wiz.preview.failure = null;
-    wiz.preview.summary = null;
-    wiz.preview.preview_page_cache = {};
-    wiz.preview.previewPageCache = {};
-    wiz.preview.page_cache = {};
-    wiz.preview.pageCache = {};
-    wiz.preview.pages = {};
-    wiz.preview.componentStateCache = {
-      case_resolution_states: [],
-      blocked_case_states: [],
-      safe_case_states: [],
-      reusable_component_resolutions: {},
-      stale_component_resolutions: {},
-      draftable_now: [],
-      blocked_now: [],
-      ready_to_pay_now: [],
-      blocked_for_pay_now: [],
-      hidden_indefinite_snoozes: [],
-      ready_preview_lines: [],
-      blocked_preview_lines: [],
-      hidden_preview_lines: []
-    };
-
-    wiz.workbench.session_id = '';
-    wiz.workbench.snapshot_run_id = null;
-    wiz.workbench.session_version = null;
-    wiz.workbench.session_signature = '';
-    wiz.workbench.pay_date = effectivePayDate;
-    wiz.workbench.week_ending_cutoff_date = weekEndingCutoffDate;
-    wiz.workbench.week_ending_cutoff = weekEndingCutoffDate;
-    wiz.workbench.server_selected_preview_row_ids = [];
-    wiz.workbench.server_selected_preview_row_ids_provided = false;
-    wiz.workbench.pending_candidate_ids = [];
-    wiz.workbench.failed_candidate_ids = [];
-    wiz.workbench.pending_candidate_rows = [];
-    wiz.workbench.failed_candidate_rows = [];
-    wiz.workbench.pending_candidate_jobs = [];
-    wiz.workbench.dirty_candidate_ids = [];
-    wiz.workbench.case_resolution_states = [];
-    wiz.workbench.canonical_preview_lines = [];
-    wiz.workbench.payees = [];
-    wiz.workbench.summary = {};
-    wiz.workbench.preview_page_cache = {};
-    wiz.workbench.previewPageCache = {};
-    wiz.workbench.page_cache = {};
-    wiz.workbench.pageCache = {};
-    wiz.workbench.preview_pages = {};
-    wiz.workbench.previewPages = {};
-    wiz.workbench.__obsolete_progress_session_ids = nextObsoleteSessionIds;
-    wiz.workbench.__obsolete_workbench_session_ids = nextObsoleteSessionIds;
-    wiz.workbench.__active_progress_session_id = null;
-    wiz.workbench.__active_workbench_session_id = null;
-    wiz.workbench.preview_reopen_required = isPostMutationRefresh || previewReopenRequiredOption || false;
-    wiz.workbench.create_draft_refresh_pending = true;
-    wiz.workbench.stale_session_replaced_reason = trimStr(reason) || 'SESSION_CONTEXT_CHANGED';
-    wiz.workbench.replaced_session_snapshot = {
-      session_id: priorSessionId || null,
-      session_signature: priorSessionSignature || null,
-      pay_date: priorPayDate || null
-    };
-
-    wiz.decisions = (typeof normalizePayWizardDecisionState === 'function')
-      ? normalizePayWizardDecisionState(wiz.decisions)
-      : ((wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {});
-    wiz.decisions.session_id = '';
-    wiz.decisions.snapshot_run_id = null;
-    wiz.decisions.session_version = null;
-    wiz.decisions.session_signature = '';
-    wiz.decisions.pay_date = effectivePayDate;
-    wiz.decisions.week_ending_cutoff_date = weekEndingCutoffDate;
-    wiz.decisions.week_ending_cutoff = weekEndingCutoffDate;
-    wiz.decisions.server_selected_preview_row_ids = [];
-    wiz.decisions.server_selected_preview_row_ids_provided = false;
-    wiz.decisions.selected_preview_row_ids = [];
-    wiz.decisions.pending_candidate_ids = [];
-    wiz.decisions.failed_candidate_ids = [];
-    wiz.decisions.pending_candidate_rows = [];
-    wiz.decisions.failed_candidate_rows = [];
-    wiz.decisions.pending_candidate_jobs = [];
-    wiz.decisions.dirty_candidate_ids = [];
-    wiz.decisions.case_resolution_states = [];
-    wiz.decisions.blocked_case_states = [];
-    wiz.decisions.safe_case_states = [];
-    wiz.decisions.reusable_component_resolutions = {};
-    wiz.decisions.stale_component_resolutions = {};
-    wiz.decisions.draftable_now = [];
-    wiz.decisions.blocked_now = [];
-    wiz.decisions.ready_to_pay_now = [];
-    wiz.decisions.blocked_for_pay_now = [];
-    wiz.decisions.hidden_indefinite_snoozes = [];
-    wiz.decisions.__obsolete_progress_session_ids = nextObsoleteSessionIds;
-    wiz.decisions.__obsolete_workbench_session_ids = nextObsoleteSessionIds;
-    wiz.decisions.create_draft_refresh_pending = true;
-
-    wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
-    wiz.local_selected_preview_row_ids_dirty = false;
-  };
-
-  if (willOpenNewWorkbenchSession && (existingWorkbenchSessionId || isPostMutationRefresh)) {
-    resetWorkbenchStateForFreshSession(isPostMutationRefresh ? (mutationContext || 'POST_MUTATION_DISCARD_AND_REOPEN') : (activeWorkbenchContextMismatch ? 'SESSION_CONTEXT_CHANGED' : 'HARD_SESSION_RELOAD'));
-  }
-
   wiz.pay_date = effectivePayDate;
   wiz.pay_date_raw = effectivePayDate;
   pay.pay_date = effectivePayDate;
@@ -26982,51 +26896,230 @@ async function bankingPayPreview(pay_date) {
   pay.week_ending_cutoff_date = weekEndingCutoffDate;
   pay.week_ending_cutoff_date_raw = weekEndingCutoffDate;
 
-  const openPayload = {
-    pay_date: effectivePayDate,
-    week_ending_cutoff_date: weekEndingCutoffDate,
-    session_signature: sessionSignatureHint,
-    filters_json: openFiltersJson,
-    seed_limit: 100,
-    progress_mode: 'LIGHT',
-    mode: 'BOOTSTRAP',
-    include_preview: false,
-    bootstrap_only: true
-  };
-  if (forceNewSession || discardSourceSessionRequested) {
-    openPayload.force_new_session = true;
-    openPayload.discard_source_session = discardSourceSession === true;
-    openPayload.source_session_already_discarded = sourceSessionAlreadyDiscarded === true;
-    openPayload.source_session_id = sourceSessionId || existingWorkbenchSessionId || null;
-    openPayload.obsolete_session_ids = [...obsoleteSessionIds];
-    openPayload.mutation_context = mutationContext || (isPostDraftCreateRefresh ? 'CREATE_DRAFT_SUCCESS' : (isPostDraftCancelRefresh ? 'CANCEL_DELETE_DRAFT_SUCCESS' : null));
-    openPayload.created_pay_batch_ids = [...createdPayBatchIdsForPostMutation];
-    openPayload.dirty_candidate_ids = [...optionDirtyCandidateIds];
-    openPayload.pending_candidate_ids = [...optionPendingCandidateIds];
-    openPayload.refresh_job_ids = [...replacementRefreshJobIds];
-  }
-
-
-  if (useReplacementSessionBootstrap) {
-    wiz.workbench.session_id = replacementSessionId;
-    wiz.workbench.snapshot_run_id = replacementSnapshotRunId || wiz.workbench.snapshot_run_id || null;
-    wiz.workbench.session_version = replacementSessionVersion ?? wiz.workbench.session_version ?? null;
-    wiz.workbench.session_signature = replacementSessionSignature || sessionSignatureHint || wiz.workbench.session_signature || '';
-  }
-
   const requestEpoch = Number.isFinite(Number(wiz.preview.preview_epoch)) ? (Number(wiz.preview.preview_epoch) + 1) : 1;
   wiz.preview.preview_epoch = requestEpoch;
   const requestToken = `banking-pay-preview:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
+  const openPayload = {
+    pay_date: effectivePayDate,
+    week_ending_cutoff: weekEndingCutoffDate,
+    session_signature: sessionSignatureHint,
+    filters_json: openFiltersJson,
+    request_token: requestToken
+  };
+  // Normal workbench opens are shared-session attaches only. Mutation/replacement context is handled by the dedicated backend replacement RPC.
+
   wiz.preview.__request_token = requestToken;
   wiz.workbench.__preview_refresh_request_token = requestToken;
   const isLatestRequest = () => trimStr(wiz?.preview?.__request_token || '') === requestToken;
   const getCurrentWorkbenchSessionId = () => trimStr(wiz?.workbench?.session_id || '');
+  const getCurrentSessionBoundLocalSessionId = () => trimStr(
+    wiz?.workbench?.session_id ||
+    wiz?.decisions?.session_id ||
+    wiz?.preview?.data?.session_id ||
+    wiz?.preview?.data?.session?.session_id ||
+    sessionIdFromPageCaches(
+      wiz?.workbench?.preview_page_cache,
+      wiz?.workbench?.previewPageCache,
+      wiz?.workbench?.page_cache,
+      wiz?.workbench?.pageCache,
+      wiz?.workbench?.preview_pages,
+      wiz?.workbench?.previewPages,
+      wiz?.preview?.preview_page_cache,
+      wiz?.preview?.previewPageCache,
+      wiz?.preview?.page_cache,
+      wiz?.preview?.pageCache,
+      wiz?.preview?.pages
+    ) ||
+    ''
+  );
+  const blankSessionBoundComponentStateCache = () => ({
+    case_resolution_states: [],
+    blocked_case_states: [],
+    safe_case_states: [],
+    reusable_component_resolutions: {},
+    stale_component_resolutions: {},
+    draftable_now: [],
+    blocked_now: [],
+    ready_to_pay_now: [],
+    blocked_for_pay_now: [],
+    hidden_indefinite_snoozes: [],
+    ready_preview_lines: [],
+    blocked_preview_lines: [],
+    hidden_preview_lines: []
+  });
+  const collectSessionIdsFromPageCaches = (...cacheValues) => {
+    const out = [];
+    const push = (value) => {
+      const text = trimStr(value);
+      if (text) out.push(text);
+    };
+    for (const cacheValue of cacheValues) {
+      if (!isPlainObject(cacheValue)) continue;
+      push(cacheValue.session_id || cacheValue.sessionId || cacheValue.page?.session_id || cacheValue.page?.sessionId || cacheValue.data?.session_id || cacheValue.data?.sessionId || '');
+      for (const entry of Object.values(cacheValue)) {
+        if (!isPlainObject(entry)) continue;
+        push(
+          entry.session_id ||
+          entry.sessionId ||
+          entry.page?.session_id ||
+          entry.page?.sessionId ||
+          entry.data?.session_id ||
+          entry.data?.sessionId ||
+          ''
+        );
+      }
+    }
+    return Array.from(new Set(out.map((value) => trimStr(value)).filter(Boolean)));
+  };
+  const clearSessionBoundLocalStateForAuthoritativeSessionChange = (nextSessionIdLike, reason = '') => {
+    const nextSessionIdText = trimStr(nextSessionIdLike);
+    if (!nextSessionIdText) return false;
+    wiz.preview = isPlainObject(wiz.preview) ? wiz.preview : {};
+    wiz.workbench = isPlainObject(wiz.workbench) ? wiz.workbench : {};
+    wiz.decisions = isPlainObject(wiz.decisions) ? wiz.decisions : {};
+
+    const existingSessionIds = Array.from(new Set([
+      wiz.workbench.session_id,
+      wiz.workbench.__active_progress_session_id,
+      wiz.workbench.__active_workbench_session_id,
+      wiz.decisions.session_id,
+      wiz.preview.data?.session_id,
+      wiz.preview.data?.session?.session_id,
+      ...collectSessionIdsFromPageCaches(
+        wiz.workbench.preview_page_cache,
+        wiz.workbench.previewPageCache,
+        wiz.workbench.page_cache,
+        wiz.workbench.pageCache,
+        wiz.workbench.preview_pages,
+        wiz.workbench.previewPages,
+        wiz.preview.preview_page_cache,
+        wiz.preview.previewPageCache,
+        wiz.preview.page_cache,
+        wiz.preview.pageCache,
+        wiz.preview.pages,
+        wiz.preview.data?.preview_page_cache,
+        wiz.preview.data?.previewPageCache,
+        wiz.preview.data?.page_cache,
+        wiz.preview.data?.preview?.preview_page_cache,
+        wiz.preview.data?.preview?.previewPageCache,
+        wiz.preview.data?.preview?.page_cache
+      )
+    ].map((value) => trimStr(value)).filter(Boolean)));
+
+    if (!existingSessionIds.some((sessionIdText) => sessionIdText && sessionIdText !== nextSessionIdText)) return false;
+
+    const clearObjectKeys = (target, keys, replacementValue = {}) => {
+      if (!isPlainObject(target)) return;
+      for (const key of keys) target[key] = Array.isArray(replacementValue) ? [] : {};
+    };
+
+    clearObjectKeys(wiz.preview, ['preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages', 'preview_pages', 'previewPages']);
+    clearObjectKeys(wiz.workbench, ['preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'preview_pages', 'previewPages', 'required_preview_sections_loaded', 'requiredPreviewSectionsLoaded', 'required_preview_sections_empty', 'requiredPreviewSectionsEmpty']);
+    if (isPlainObject(wiz.preview.data)) {
+      clearObjectKeys(wiz.preview.data, ['preview_pages', 'previewPageCache', 'preview_page_cache', 'page_cache', 'pageCache']);
+      if (isPlainObject(wiz.preview.data.preview)) clearObjectKeys(wiz.preview.data.preview, ['preview_pages', 'previewPageCache', 'preview_page_cache', 'page_cache', 'pageCache']);
+    }
+
+    wiz.preview.first_page_applied = false;
+    wiz.preview.preview_ready_visual = false;
+    wiz.preview.ready_empty = false;
+    wiz.preview.pageData = null;
+    wiz.preview.page_data = null;
+    wiz.preview.readiness = null;
+    wiz.preview.candidateDebtInfo = {};
+    wiz.preview.failure = null;
+    wiz.preview.componentStateCache = blankSessionBoundComponentStateCache();
+
+    const previewDataSessionId = trimStr(wiz.preview.data?.session_id || wiz.preview.data?.session?.session_id || '');
+    if (!previewDataSessionId || previewDataSessionId !== nextSessionIdText) wiz.preview.data = null;
+
+    for (const key of [
+      'canonical_preview_lines',
+      'preview_rows',
+      'ready_preview_lines',
+      'blocked_for_pay',
+      'blocked_for_pay_now',
+      'blocked_preview_lines',
+      'case_resolution_states',
+      'cases_resolutions',
+      'pending_candidate_ids',
+      'failed_candidate_ids',
+      'dirty_candidate_ids',
+      'pending_candidate_rows',
+      'failed_candidate_rows',
+      'pending_candidate_jobs',
+      'selected_preview_row_ids',
+      'server_selected_preview_row_ids',
+      'payees'
+    ]) wiz.workbench[key] = [];
+    wiz.workbench.server_selected_preview_row_ids_provided = false;
+    wiz.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wiz.workbench.summary = {};
+    wiz.workbench.initial_page = null;
+    wiz.workbench.initial_page_metadata = null;
+    wiz.workbench.required_preview_sections_summary = null;
+    wiz.workbench.__candidate_refresh_page_reread_pending = false;
+
+    for (const key of [
+      'canonical_preview_lines',
+      'preview_rows',
+      'ready_preview_lines',
+      'blocked_for_pay',
+      'blocked_for_pay_now',
+      'blocked_preview_lines',
+      'case_resolution_states',
+      'cases_resolutions',
+      'blocked_case_states',
+      'safe_case_states',
+      'draftable_now',
+      'blocked_now',
+      'ready_to_pay_now',
+      'hidden_indefinite_snoozes',
+      'pending_candidate_ids',
+      'failed_candidate_ids',
+      'dirty_candidate_ids',
+      'pending_candidate_rows',
+      'failed_candidate_rows',
+      'pending_candidate_jobs',
+      'selected_preview_row_ids',
+      'server_selected_preview_row_ids'
+    ]) wiz.decisions[key] = [];
+    wiz.decisions.reusable_component_resolutions = {};
+    wiz.decisions.stale_component_resolutions = {};
+    wiz.decisions.server_selected_preview_row_ids_provided = false;
+    wiz.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wiz.local_selected_preview_row_ids_dirty = false;
+    wiz.workbench.stale_session_replaced_reason = trimStr(reason) || 'AUTHORITATIVE_SESSION_CHANGED';
+    return true;
+  };
   const isSameWorkbenchSession = (expectedSessionId) => {
     const expectedSessionIdText = trimStr(expectedSessionId);
     const currentSessionIdText = getCurrentWorkbenchSessionId();
     return !!expectedSessionIdText && !!currentSessionIdText && currentSessionIdText === expectedSessionIdText;
   };
   const shouldAbortDetachedSettler = (expectedSessionId) => !isLatestRequest() || !isSameWorkbenchSession(expectedSessionId);
+
+  const makeLightProgressReadOptions = (expectedSessionId, source) => ({
+    staleSessionGuard: true,
+    expectedSessionId: trimStr(expectedSessionId),
+    requestToken,
+    isLatestRequest: () => isLatestRequest(),
+    getCurrentSessionId: () => getCurrentWorkbenchSessionId(),
+    userInitiated: false,
+    silent: true,
+    background: true,
+    source: trimStr(source) || 'bankingPayPreview.progress'
+  });
+
+  const makeWorkbenchSessionReadOptions = (source, replacementAdoption = false) => ({
+    userInitiated: false,
+    silent: true,
+    background: true,
+    replacement_adoption: replacementAdoption === true,
+    source: trimStr(source) || 'bankingPayPreview.sessionRead'
+  });
 
   const applyFailure = async (error) => {
     const failureAction = isPostDraftCreateRefresh
@@ -27469,9 +27562,8 @@ async function bankingPayPreview(pay_date) {
       code,
       http_status: status || null,
       message,
-      session_id: getCurrentWorkbenchSessionId() || replacementSessionId || null,
+      session_id: replacementSessionId || getCurrentWorkbenchSessionId() || null,
       source_session_id: sourceSessionId || null,
-      obsolete_session_ids: [...obsoleteSessionIds],
       mutation_context: mutationContext || null,
       post_mutation_context: mutationContext || null,
       raw_error: (() => {
@@ -27482,6 +27574,14 @@ async function bankingPayPreview(pay_date) {
   const normalisePreviewRebaseCode = (value) => normalizePreviewFailureCode(value);
   const isRebaseRequiredPayload = (payload) => {
     const obj = isPlainObject(payload) ? payload : {};
+    const replacementId = trimStr(obj.replacement_session_id || obj.replacementSessionId || obj.progress?.replacement_session_id || obj.progress?.replacementSessionId || '');
+    const activeSessionId = trimStr(obj.session_id || obj.sessionId || obj.progress?.session_id || obj.progress?.sessionId || '');
+    const replacementAlreadyAdopted = !!(
+      replacementId &&
+      activeSessionId === replacementId &&
+      (obj.adopted_replacement_session === true || obj.progress?.adopted_replacement_session === true)
+    );
+    if (replacementAlreadyAdopted) return false;
     const code = normalisePreviewRebaseCode(obj.error_code || obj.code || obj.reason_code || obj.reason || '');
     return obj.rebase_required === true || obj.requires_new_session === true || staleSessionFailureCodes.has(code);
   };
@@ -27516,7 +27616,6 @@ async function bankingPayPreview(pay_date) {
     return false;
   };
   const isReturnedSessionObsolete = (payload) => {
-    if (!forceNewSession && !discardSourceSession && !isPostMutationRefresh) return false;
     const ctx = extractWorkbenchContextFromPayload(payload);
     return isReturnedWorkbenchContextObsolete(ctx);
   };
@@ -27538,7 +27637,7 @@ async function bankingPayPreview(pay_date) {
     const ctx = extractWorkbenchContextFromPayload(obj);
     if (!isUsablePostMutationReplacementContext(ctx)) return false;
     if (payloadHasFullPreviewData(obj) || isReadyEmptyPayload(obj)) return false;
-    if (isRebaseRequiredPayload(obj)) return false;
+    if (isRebaseRequiredPayload(obj) || explicitReplacementPayloadIsInactive(obj)) return false;
     const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
     const statusText = trimStr(
       obj.status ||
@@ -27601,30 +27700,109 @@ async function bankingPayPreview(pay_date) {
     rebase_required: true,
     requires_new_session: true,
     source_session_id: sourceSessionId || null,
-    obsolete_session_ids: [...obsoleteSessionIds],
     mutation_context: mutationContext || null,
     message
   });
-  const discardSourceSessionIfPossible = async () => {
-    if (sourceSessionAlreadyDiscarded) return;
-    const discardId = sourceSessionId || existingWorkbenchSessionId || '';
-    if (!discardId || typeof bankingPayWorkbenchSessionDiscard !== 'function') return;
-    try {
-      await bankingPayWorkbenchSessionDiscard(discardId, {
-        reason: mutationContext || previewMode || 'PREVIEW_FORCE_NEW_SESSION',
-        source: 'bankingPayPreview',
-        force_new_session: true,
-        discard_source_session: true
-      });
-    } catch (discardError) {
-      const discardCode = normalisePreviewRebaseCode(discardError?.error_code || discardError?.code || discardError?.payload?.error_code || discardError?.json?.error_code || '');
-      const discardMessage = trimStr(discardError?.user_message || discardError?.message || discardError?.error || '');
-      const acceptableDiscardFailure = staleSessionFailureCodes.has(discardCode) || /already\s+discarded|not\s+open|not\s+found|stale|obsolete/i.test(discardMessage);
-      if (!acceptableDiscardFailure) throw discardError;
-    }
+
+  const getExplicitReplacementSessionIdFromPayload = (payloadLike) => {
+    const obj = isPlainObject(payloadLike) ? payloadLike : {};
+    const progressObj = isPlainObject(obj.progress) ? obj.progress : {};
+    return trimStr(
+      obj.replacement_session_id ||
+      obj.replacementSessionId ||
+      progressObj.replacement_session_id ||
+      progressObj.replacementSessionId ||
+      ''
+    );
   };
-  const openFreshWorkbenchSession = async ({ allowRetry = true } = {}) => {
-    if (discardSourceSession) await discardSourceSessionIfPossible();
+
+  const explicitReplacementPayloadIsInactive = (payloadLike) => {
+    const obj = isPlainObject(payloadLike) ? payloadLike : {};
+    const progressObj = isPlainObject(obj.progress) ? obj.progress : {};
+    const replacementId = getExplicitReplacementSessionIdFromPayload(obj);
+    if (!replacementId) return false;
+    const activeSessionId = trimStr(obj.session_id || obj.sessionId || progressObj.session_id || progressObj.sessionId || '');
+    const adoptedReplacement = obj.adopted_replacement_session === true || progressObj.adopted_replacement_session === true;
+    const activeSessionObsolete = obj.active_session_obsolete === true || progressObj.active_session_obsolete === true;
+    const rebaseRequired = !!(
+      (obj.rebase_required === true || obj.requires_new_session === true || progressObj.rebase_required === true || progressObj.requires_new_session === true) &&
+      !adoptedReplacement
+    );
+    const statusText = trimStr(
+      obj.replacement_session_status ||
+      obj.replacementSessionStatus ||
+      progressObj.replacement_session_status ||
+      progressObj.replacementSessionStatus ||
+      (activeSessionId === replacementId ? (obj.session_status || obj.sessionStatus || progressObj.session_status || progressObj.sessionStatus || '') : '')
+    ).toUpperCase();
+    const phaseText = trimStr(
+      obj.replacement_progress_state ||
+      obj.replacementProgressState ||
+      progressObj.replacement_progress_state ||
+      progressObj.replacementProgressState ||
+      (activeSessionId === replacementId ? (obj.phase || obj.progress_state || obj.status || progressObj.phase || progressObj.progress_state || progressObj.status || '') : '')
+    ).toUpperCase();
+    return !!(
+      activeSessionObsolete ||
+      rebaseRequired ||
+      ['DISCARDED', 'DISCARDING', 'CANCELLED', 'CANCELED', 'CLOSED', 'ARCHIVED', 'FAILED', 'ERROR'].includes(statusText) ||
+      ['FAILED', 'ERROR', 'REBASE_REQUIRED', 'OBSOLETE_SESSION', 'STALE_SESSION', 'WORKBENCH_SESSION_DISCARDED'].includes(phaseText)
+    );
+  };
+
+  const adoptExplicitReplacementFromPayload = async (payloadLike, reason = 'REPLACEMENT_SESSION_RETURNED') => {
+    const replacementId = getExplicitReplacementSessionIdFromPayload(payloadLike);
+    if (!replacementId) return null;
+    if (explicitReplacementPayloadIsInactive(payloadLike)) return null;
+    const currentSessionId = getCurrentSessionBoundLocalSessionId();
+    if (currentSessionId && currentSessionId === replacementId) return explicitReplacementPayloadIsInactive(payloadLike) ? null : payloadLike;
+
+    let replacementPayload = null;
+    if (typeof bankingPayWorkbenchSessionGet === 'function') {
+      replacementPayload = await bankingPayWorkbenchSessionGet(replacementId, {
+        userInitiated: false,
+        silent: true,
+        background: true,
+        replacement_adoption: true
+      });
+      if (
+        !isPlainObject(replacementPayload) ||
+        explicitReplacementPayloadIsInactive(replacementPayload) ||
+        isRebaseRequiredPayload(replacementPayload) ||
+        isReturnedSessionObsolete(replacementPayload)
+      ) {
+        return null;
+      }
+    }
+
+    const payloadForAdoption = isPlainObject(replacementPayload) ? replacementPayload : (isPlainObject(payloadLike) ? payloadLike : {});
+    clearSessionBoundLocalStateForAuthoritativeSessionChange(replacementId, reason);
+    wiz.workbench.session_id = replacementId;
+    wiz.workbench.replacement_session_id = replacementId;
+    wiz.workbench.source_session_id = trimStr(payloadForAdoption.source_session_id || payloadLike?.source_session_id || sourceSessionId || currentSessionId || '') || null;
+    wiz.workbench.stale_session_replaced_reason = trimStr(reason) || 'REPLACEMENT_SESSION_RETURNED';
+    const sessionVersionForAdoption = payloadForAdoption.session_version ?? payloadForAdoption.replacement_session_version ?? payloadLike?.replacement_session_version ?? null;
+    const snapshotRunIdForAdoption = trimStr(payloadForAdoption.snapshot_run_id || payloadForAdoption.replacement_snapshot_run_id || payloadLike?.replacement_snapshot_run_id || '');
+    const sessionSignatureForAdoption = trimStr(payloadForAdoption.session_signature || payloadForAdoption.replacement_session_signature || payloadLike?.replacement_session_signature || '');
+    if (sessionVersionForAdoption !== null && sessionVersionForAdoption !== undefined) wiz.workbench.session_version = sessionVersionForAdoption;
+    if (snapshotRunIdForAdoption) wiz.workbench.snapshot_run_id = snapshotRunIdForAdoption;
+    if (sessionSignatureForAdoption) wiz.workbench.session_signature = sessionSignatureForAdoption;
+    if (wiz.decisions && typeof wiz.decisions === 'object') {
+      wiz.decisions.session_id = replacementId;
+      if (sessionVersionForAdoption !== null && sessionVersionForAdoption !== undefined) wiz.decisions.session_version = sessionVersionForAdoption;
+      if (snapshotRunIdForAdoption) wiz.decisions.snapshot_run_id = snapshotRunIdForAdoption;
+      if (sessionSignatureForAdoption) wiz.decisions.session_signature = sessionSignatureForAdoption;
+    }
+    return {
+      ...payloadForAdoption,
+      ok: payloadForAdoption.ok !== false,
+      session_id: replacementId,
+      adopted_replacement_session: true,
+      rebase_required: false,
+      requires_new_session: false
+    };
+  };
+  const attachCurrentSharedWorkbenchSession = async () => {
     let openedSessionPayload;
     try {
       openedSessionPayload = await bankingPayWorkbenchSessionOpen(openPayload);
@@ -27636,34 +27814,9 @@ async function bankingPayPreview(pay_date) {
       }
       throw openErr;
     }
-    let openedPayloadUsablePostMutationReplacement = isUsablePostMutationPendingReplacementPayload(openedSessionPayload);
-    if (openedPayloadUsablePostMutationReplacement) {
-      stampPendingReplacementWorkbenchContext(openedSessionPayload);
-    }
-    let openedFailure = detectPreviewFailureEnvelope(openedSessionPayload);
-    const openedFailureCode = normalisePreviewRebaseCode(openedFailure?.error_code || openedFailure?.code || '');
-    if (openedFailure && staleSessionFailureCodes.has(openedFailureCode)) {
-      if (allowRetry && !isPostMutationRefresh && (sourceSessionId || existingWorkbenchSessionId)) {
-        await discardSourceSessionIfPossible();
-        try {
-          openedSessionPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: discardSourceSession === true, source_session_already_discarded: sourceSessionAlreadyDiscarded === true });
-        } catch (retryOpenErr) {
-          if (isNonFatalPostMutationPreviewError(retryOpenErr)) {
-            const pendingPayload = makePostMutationPendingPreviewPayload(retryOpenErr, 'PENDING_REFRESH');
-            applyDeferredPreviewStateFromPayload(pendingPayload);
-            return pendingPayload;
-          }
-          throw retryOpenErr;
-        }
-        openedPayloadUsablePostMutationReplacement = isUsablePostMutationPendingReplacementPayload(openedSessionPayload);
-        if (openedPayloadUsablePostMutationReplacement) {
-          stampPendingReplacementWorkbenchContext(openedSessionPayload);
-        }
-        openedFailure = detectPreviewFailureEnvelope(openedSessionPayload);
-      }
-    }
+    const openedFailure = detectPreviewFailureEnvelope(openedSessionPayload);
     if (openedFailure) {
-      const failureCode = normalisePreviewRebaseCode(openedFailure.error_code || openedFailure.code || openedFailureCode || '');
+      const failureCode = normalisePreviewRebaseCode(openedFailure.error_code || openedFailure.code || '');
       if (isPostMutationRefresh && postMutationNonFatalPreviewCodes.has(failureCode)) {
         const pendingRebasePayload = {
           ...makeRebaseRequiredPayload(failureCode || 'REBASE_REQUIRED', trimStr(openedFailure.message || openedFailure.user_message || openedFailure.error || 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.')),
@@ -27676,44 +27829,8 @@ async function bankingPayPreview(pay_date) {
       }
       throwPreviewFailureEnvelope(openedFailure, 'BANKING_PAY_PREVIEW_FAILED');
     }
-    openedPayloadUsablePostMutationReplacement = isUsablePostMutationPendingReplacementPayload(openedSessionPayload);
+    const openedPayloadUsablePostMutationReplacement = isUsablePostMutationPendingReplacementPayload(openedSessionPayload);
     if (openedPayloadUsablePostMutationReplacement) {
-      stampPendingReplacementWorkbenchContext(openedSessionPayload);
-    }
-    if ((isRebaseRequiredPayload(openedSessionPayload) || isReturnedSessionObsolete(openedSessionPayload)) && !openedPayloadUsablePostMutationReplacement) {
-      if (allowRetry && !isPostMutationRefresh && (sourceSessionId || existingWorkbenchSessionId)) {
-        await discardSourceSessionIfPossible();
-        let retriedPayload;
-        try {
-          retriedPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: discardSourceSession === true, source_session_already_discarded: sourceSessionAlreadyDiscarded === true });
-        } catch (retryRebaseErr) {
-          if (isNonFatalPostMutationPreviewError(retryRebaseErr)) {
-            const pendingPayload = makePostMutationPendingPreviewPayload(retryRebaseErr, 'PENDING_REFRESH');
-            applyDeferredPreviewStateFromPayload(pendingPayload);
-            return pendingPayload;
-          }
-          throw retryRebaseErr;
-        }
-        const retriedFailure = detectPreviewFailureEnvelope(retriedPayload);
-        if (retriedFailure) throwPreviewFailureEnvelope(retriedFailure, 'BANKING_PAY_PREVIEW_FAILED');
-        if (isRebaseRequiredPayload(retriedPayload) || isReturnedSessionObsolete(retriedPayload)) {
-          throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
-        }
-        return retriedPayload;
-      }
-      if (isPostMutationRefresh) {
-        const pendingRebasePayload = {
-          ...makeRebaseRequiredPayload('REBASE_REQUIRED'),
-          pending_refresh: true,
-          preview_refresh_pending: true,
-          progress_only: true
-        };
-        applyDeferredPreviewStateFromPayload(pendingRebasePayload);
-        return pendingRebasePayload;
-      }
-      throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
-    }
-    if (openedPayloadUsablePostMutationReplacement || (isPostMutationRefresh && !payloadHasFullPreviewData(openedSessionPayload) && !isReadyEmptyPayload(openedSessionPayload) && !isRebaseRequiredPayload(openedSessionPayload) && !isReturnedSessionObsolete(openedSessionPayload))) {
       stampPendingReplacementWorkbenchContext(openedSessionPayload);
     }
     return openedSessionPayload;
@@ -27722,7 +27839,7 @@ async function bankingPayPreview(pay_date) {
   const isTerminalWorkbenchJobStatus = (status) => {
     const s = trimStr(status).toUpperCase();
     if (!s) return false;
-    return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'READY_EMPTY', 'SETTLED', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
+    return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'READY_EMPTY', 'MATERIALISED', 'MATERIALIZED', 'SETTLED', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
   };
 
   const workbenchProgressLooksReady = (payload) => {
@@ -27759,17 +27876,18 @@ async function bankingPayPreview(pay_date) {
     const progressSource = isPlainObject(progressObj.progress) ? progressObj.progress : progressObj;
     const sampleLimitRaw = Number(progressSource.sample_limit || progressObj.sample_limit || 25);
     const sampleLimit = Number.isFinite(sampleLimitRaw) ? Math.max(1, Math.min(25, Math.trunc(sampleLimitRaw))) : 25;
-    const explicitRows = Array.isArray(progressSource.candidate_status_rows)
-      ? progressSource.candidate_status_rows
-      : (Array.isArray(progressSource.candidate_statuses)
-          ? progressSource.candidate_statuses
-          : (Array.isArray(progressSource.sample_candidate_rows)
-              ? progressSource.sample_candidate_rows
-              : (Array.isArray(progressSource.sample_rows)
-                  ? progressSource.sample_rows
-                  : (Array.isArray(progressSource.pending_candidate_jobs)
-                      ? progressSource.pending_candidate_jobs
-                      : (Array.isArray(progressSource.pendingCandidateJobs) ? progressSource.pendingCandidateJobs : [])))));
+    const explicitRows = [
+      progressSource.candidate_status_rows,
+      progressSource.candidate_statuses,
+      progressSource.candidate_sample_rows,
+      progressSource.candidate_sample_rows_json,
+      progressObj.candidate_sample_rows,
+      progressObj.candidate_sample_rows_json,
+      progressSource.sample_candidate_rows,
+      progressSource.sample_rows,
+      progressSource.pending_candidate_jobs,
+      progressSource.pendingCandidateJobs
+    ].find((value) => Array.isArray(value)) || [];
     const rows = explicitRows.filter((row) => isPlainObject(row)).slice(0, sampleLimit);
     if (rows.length > 0) return rows;
 
@@ -27800,7 +27918,7 @@ async function bankingPayPreview(pay_date) {
   };
 
   const pendingJobIdFromRow = (row) => trimStr(row?.pending_job_id || row?.pendingJobId || row?.latest_job_id || row?.latestJobId || row?.job_id || row?.jobId || row?.id || '');
-  const jobStatusFromRow = (row) => trimStr(row?.latest_job_status || row?.latestJobStatus || row?.job_status || row?.jobStatus || row?.status || row?.phase || row?.state || '');
+  const jobStatusFromRow = (row) => trimStr(row?.latest_job_status || row?.latestJobStatus || row?.job_status || row?.jobStatus || row?.status || row?.new_status || row?.candidate_status || row?.phase || row?.state || '');
   const candidateIdFromPendingRow = (row) => trimStr(row?.candidate_id || row?.candidateId || '');
   const isActiveWorkbenchPendingJobRow = (row) => {
     if (!isPlainObject(row)) return false;
@@ -27826,13 +27944,18 @@ async function bankingPayPreview(pay_date) {
     const rawPendingCandidateIds = Array.isArray(progressObj.pending_candidate_ids)
       ? Array.from(new Set(progressObj.pending_candidate_ids.map((x) => trimStr(x)).filter(Boolean))).slice(0, sampleLimit)
       : [];
-    const failedCandidateIds = Array.isArray(progressObj.failed_candidate_ids)
-      ? Array.from(new Set(progressObj.failed_candidate_ids.map((x) => trimStr(x)).filter(Boolean))).slice(0, sampleLimit)
-      : [];
     const candidateStatusRows = progressCandidateStatusRows.filter((row) => isPlainObject(row)).slice(0, sampleLimit);
+    const failedCandidateIds = Array.from(new Set([
+      ...(Array.isArray(progressObj.failed_candidate_ids)
+        ? progressObj.failed_candidate_ids.map((x) => trimStr(x)).filter(Boolean)
+        : []),
+      ...candidateStatusRows
+        .filter((row) => ['FAILED', 'ERROR'].includes(jobStatusFromRow(row).toUpperCase()))
+        .map((row) => candidateIdFromPendingRow(row))
+        .filter(Boolean)
+    ])).slice(0, sampleLimit);
     const activeRows = candidateStatusRows.filter((row) => isActiveWorkbenchPendingJobRow(row));
     const activeCandidateIds = Array.from(new Set(activeRows.map((row) => candidateIdFromPendingRow(row)).filter(Boolean)));
-    const activeCandidateSet = new Set(activeCandidateIds);
     const candidateRowsById = new Map();
     for (const row of candidateStatusRows) {
       const candidateIdText = candidateIdFromPendingRow(row);
@@ -27882,7 +28005,7 @@ async function bankingPayPreview(pay_date) {
         latest_job_type: trimStr(row?.latest_job_type || row?.latestJobType || row?.job_type || row?.jobType || '') || null,
         latest_job_status: latestJobStatus || null,
         job_status: latestJobStatus || null,
-        candidate_status: trimStr(row?.status || row?.state || '') || null,
+        candidate_status: trimStr(row?.status || row?.new_status || row?.candidate_status || row?.state || '') || null,
         latest_job_attempt_count: Number.isFinite(Number(row?.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
         latest_job_max_attempts: Number.isFinite(Number(row?.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
         latest_error_json: (row?.latest_error_json && typeof row.latest_error_json === 'object' && !Array.isArray(row.latest_error_json))
@@ -28117,8 +28240,24 @@ async function bankingPayPreview(pay_date) {
     );
   };
 
-  const clearPreviewRowsForDeferredPostMutation = (statusText = '') => {
-    if (!isPostMutationRefresh) return;
+  const clearPreviewRowsForDeferredPostMutation = (statusText = '', payloadLike = null) => {
+    if (!isPostMutationRefresh) return false;
+    const activeSessionId = getCurrentWorkbenchSessionId();
+    const previewSessionId = trimStr(
+      wiz.preview.data?.session_id ||
+      wiz.preview.data?.session?.session_id ||
+      ''
+    );
+    const payloadSessionId = getPayloadSessionId(payloadLike);
+    const shouldClearSessionRows = !!(
+      previewSessionId &&
+      (
+        (activeSessionId && previewSessionId !== activeSessionId) ||
+        (payloadSessionId && previewSessionId !== payloadSessionId)
+      )
+    );
+    wiz.preview.status_text = trimStr(statusText || wiz.preview.status_text || 'Preparing payment preview candidates.');
+    if (!shouldClearSessionRows) return false;
     wiz.preview.data = null;
     wiz.preview.readiness = null;
     wiz.preview.candidateDebtInfo = {};
@@ -28145,7 +28284,6 @@ async function bankingPayPreview(pay_date) {
     wiz.preview.page_cache = {};
     wiz.preview.previewPageCache = {};
     wiz.preview.preview_page_cache = {};
-    wiz.preview.status_text = trimStr(statusText || wiz.preview.status_text || 'Preparing payment preview candidates.');
     wiz.workbench.canonical_preview_lines = [];
     wiz.workbench.preview_rows = [];
     wiz.workbench.ready_preview_lines = [];
@@ -28163,6 +28301,7 @@ async function bankingPayPreview(pay_date) {
       wiz.decisions.blocked_now = [];
       wiz.decisions.blocked_for_pay_now = [];
     }
+    return true;
   };
 
   const isReadyEmptyPayload = (payload) => {
@@ -28382,7 +28521,7 @@ async function bankingPayPreview(pay_date) {
     );
     if (rebaseOrObsolete) {
       const statusText = trimStr(progressObj.status_text || obj.status_text || obj.message || 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.');
-      clearPreviewRowsForDeferredPostMutation(statusText);
+      clearPreviewRowsForDeferredPostMutation(statusText, obj);
       wiz.workbench.create_draft_refresh_pending = true;
       wiz.workbench.preview_reopen_required = true;
       wiz.workbench.__post_mutation_preview_refresh_failed = false;
@@ -28407,7 +28546,7 @@ async function bankingPayPreview(pay_date) {
     if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = activePending;
     wiz.preview.loading = activePending;
     if (activePending && isPostMutationRefresh) {
-      clearPreviewRowsForDeferredPostMutation(trimStr(progressObj.status_text || obj.status_text || 'Preparing payment preview candidates.'));
+      clearPreviewRowsForDeferredPostMutation(trimStr(progressObj.status_text || obj.status_text || 'Preparing payment preview candidates.'), obj);
       wiz.preview.error = '';
       wiz.preview.failure = null;
       wiz.preview.status_text = trimStr(progressObj.status_text || obj.status_text || 'Preparing payment preview candidates.');
@@ -28416,68 +28555,6 @@ async function bankingPayPreview(pay_date) {
   };
 
 
-  const applyReplacementPendingState = (force = false) => {
-    if (!useReplacementSessionBootstrap) return;
-    if (!replacementPendingCandidateIds.length && !replacementRefreshJobIds.length) return;
-
-    const currentPendingCandidateIds = Array.isArray(wiz.workbench.pending_candidate_ids)
-      ? Array.from(new Set(wiz.workbench.pending_candidate_ids.map((value) => trimStr(value)).filter(Boolean)))
-      : [];
-    const currentPendingJobs = Array.isArray(wiz.workbench.pending_candidate_jobs)
-      ? wiz.workbench.pending_candidate_jobs.filter((row) => isPlainObject(row))
-      : [];
-
-    if (!force && currentPendingCandidateIds.length > 0) return;
-
-    const pendingJobRows = replacementRefreshJobIds.map((jobId, index) => ({
-      candidate_id: replacementPendingCandidateIds[index] || null,
-      pending_job_id: jobId,
-      job_id: jobId,
-      latest_job_type: 'SESSION_CANDIDATE_RECOMPUTE',
-      status: 'QUEUED',
-      latest_error_json: null
-    }));
-    const mergedDirtyCandidateIds = Array.from(new Set([
-      ...replacementPendingCandidateIds,
-      ...(Array.isArray(wiz.workbench.dirty_candidate_ids) ? wiz.workbench.dirty_candidate_ids.map((value) => trimStr(value)).filter(Boolean) : [])
-    ]));
-    const nowIso = new Date().toISOString();
-
-    wiz.workbench.pending_candidate_ids = [...replacementPendingCandidateIds];
-    wiz.workbench.failed_candidate_ids = Array.isArray(wiz.workbench.failed_candidate_ids)
-      ? Array.from(new Set(wiz.workbench.failed_candidate_ids.map((value) => trimStr(value)).filter(Boolean)))
-      : [];
-    wiz.workbench.pending_candidate_rows = Array.isArray(wiz.workbench.pending_candidate_rows) ? wiz.workbench.pending_candidate_rows : [];
-    wiz.workbench.pending_candidate_jobs = pendingJobRows;
-    wiz.workbench.dirty_candidate_ids = mergedDirtyCandidateIds;
-    wiz.workbench.last_progress_at = nowIso;
-
-    if (wiz.decisions && typeof wiz.decisions === 'object') {
-      wiz.decisions.pending_candidate_ids = [...replacementPendingCandidateIds];
-      wiz.decisions.pending_candidate_jobs = deep(pendingJobRows) || [];
-      wiz.decisions.dirty_candidate_ids = [...mergedDirtyCandidateIds];
-      wiz.decisions.last_progress_at = nowIso;
-    }
-
-    if (wiz.preview && isPlainObject(wiz.preview.data)) {
-      wiz.preview.data.pending_candidate_ids = [...replacementPendingCandidateIds];
-      wiz.preview.data.pending_candidate_jobs = deep(pendingJobRows) || [];
-      wiz.preview.data.dirty_candidate_ids = [...mergedDirtyCandidateIds];
-      wiz.preview.data.last_progress_at = nowIso;
-      if (isPlainObject(wiz.preview.data.session)) {
-        wiz.preview.data.session.pending_candidate_ids = [...replacementPendingCandidateIds];
-        wiz.preview.data.session.pending_candidate_jobs = deep(pendingJobRows) || [];
-        wiz.preview.data.session.dirty_candidate_ids = [...mergedDirtyCandidateIds];
-        wiz.preview.data.session.last_progress_at = nowIso;
-      }
-      if (isPlainObject(wiz.preview.data.preview)) {
-        wiz.preview.data.preview.pending_candidate_ids = [...replacementPendingCandidateIds];
-        wiz.preview.data.preview.pending_candidate_jobs = deep(pendingJobRows) || [];
-        wiz.preview.data.preview.dirty_candidate_ids = [...mergedDirtyCandidateIds];
-        wiz.preview.data.preview.last_progress_at = nowIso;
-      }
-    }
-  };
 
   const rerenderQuietly = async () => {
     try {
@@ -28518,11 +28595,15 @@ async function bankingPayPreview(pay_date) {
   const storeWorkbenchBootstrapContextFromPayload = (payload, reason = '') => {
     const obj = isPlainObject(payload) ? payload : {};
     const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
+    if (explicitReplacementPayloadIsInactive(obj)) return null;
     const ctx = extractWorkbenchContextFromPayload(obj);
     if (isPostMutationRefresh && isReturnedWorkbenchContextObsolete(ctx)) return null;
 
     const sessionIdText = trimStr(ctx.session_id || obj.session_id || progressObj.session_id || '');
     if (!sessionIdText) return null;
+
+    const priorSessionId = getCurrentSessionBoundLocalSessionId();
+    clearSessionBoundLocalStateForAuthoritativeSessionChange(sessionIdText, reason);
 
     const stableSessionSignature = trimStr(ctx.session_signature || obj.session_signature || progressObj.session_signature || sessionSignatureHint || computedSessionSignature || suppliedSessionSignature || '');
     const stablePayDate = trimStr(ctx.pay_date || obj.pay_date || progressObj.pay_date || effectivePayDate);
@@ -29145,6 +29226,20 @@ async function bankingPayPreview(pay_date) {
     ];
     const previewRowCountSignal = countSignalFromSources(progressCountSources, ['preview_row_count', 'preview_rows_count', 'row_count']);
     const selectedRowCountSignal = countSignalFromSources(progressCountSources, ['selected_row_count', 'selected_rows_count']);
+    const progressCounterVersion = (() => {
+      for (const source of progressCountSources) {
+        if (!isPlainObject(source)) continue;
+        const value = source.progress_counter_version ?? source.progressCounterVersion;
+        if (value !== null && value !== undefined && trimStr(value) !== '') return String(value);
+      }
+      return null;
+    })();
+    const activePendingForPageRefresh = !!(
+      payloadHasActivePendingWorkbenchWork(sourcePayload) ||
+      payloadHasActivePendingWorkbenchWork(progressObj) ||
+      hasActiveWorkbenchPendingWork()
+    );
+    const settledForFreshPages = readyForFreshPages && !activePendingForPageRefresh;
     const getExpectedSectionRowCount = (sectionName) => {
       const section = normalisePreviewPageSectionName(sectionName);
       const aliasesBySection = {
@@ -29158,10 +29253,11 @@ async function bankingPayPreview(pay_date) {
     const buildSectionFreshnessSignature = (section, expectedCountSignal) => JSON.stringify({
       session_id: sessionIdText,
       session_version: currentSessionVersion === null || currentSessionVersion === undefined ? null : String(currentSessionVersion),
-      ready: readyForFreshPages,
-      expected_count: expectedCountSignal.known ? expectedCountSignal.count : null,
-      preview_row_count: expectedCountSignal.known ? null : (previewRowCountSignal.known ? previewRowCountSignal.count : null),
-      selected_row_count: section === 'canonical_preview_lines' && selectedRowCountSignal.known
+      settled: settledForFreshPages,
+      progress_counter_version: settledForFreshPages ? progressCounterVersion : null,
+      expected_count: settledForFreshPages && expectedCountSignal.known ? expectedCountSignal.count : null,
+      preview_row_count: settledForFreshPages && !expectedCountSignal.known && previewRowCountSignal.known ? previewRowCountSignal.count : null,
+      selected_row_count: settledForFreshPages && section === 'canonical_preview_lines' && selectedRowCountSignal.known
         ? selectedRowCountSignal.count
         : null,
       refresh_request: requestFreshnessRequired ? requestToken : null
@@ -29193,11 +29289,11 @@ async function bankingPayPreview(pay_date) {
       );
       const cachedLimitRaw = Number(cachedPage?.limit ?? limit);
       const cachedLimit = Number.isFinite(cachedLimitRaw) ? Math.max(1, Math.min(100, Math.trunc(cachedLimitRaw))) : limit;
-      const expectedRowsOnCachedPage = expectedSectionRowCount.known
+      const expectedRowsOnCachedPage = settledForFreshPages && expectedSectionRowCount.known
         ? Math.min(expectedSectionRowCount.count, cachedLimit)
         : null;
       const cachedCountDiffersFromExpected = expectedRowsOnCachedPage !== null && cachedRows.length !== expectedRowsOnCachedPage;
-      const canonicalSelectedLowerBound = section === 'canonical_preview_lines' && selectedRowCountSignal.known
+      const canonicalSelectedLowerBound = settledForFreshPages && section === 'canonical_preview_lines' && selectedRowCountSignal.known
         ? Math.min(selectedRowCountSignal.count, cachedLimit)
         : 0;
       const cachedBelowSelectedLowerBound = canonicalSelectedLowerBound > 0 && cachedRows.length < canonicalSelectedLowerBound;
@@ -29208,10 +29304,7 @@ async function bankingPayPreview(pay_date) {
       const cachedKnownCountMismatch = cachedKnownRowsOnPage !== null && cachedRows.length !== cachedKnownRowsOnPage;
       const freshnessMustMatch = !!(
         requestFreshnessRequired ||
-        readyForFreshPages ||
-        expectedSectionRowCount.known ||
-        (!expectedSectionRowCount.known && previewRowCountSignal.known) ||
-        (section === 'canonical_preview_lines' && selectedRowCountSignal.known)
+        settledForFreshPages
       );
       const cachedFreshnessMatches = !freshnessMustMatch || cachedSignalMatches;
       const cacheDataMismatch = !!(
@@ -29234,7 +29327,7 @@ async function bankingPayPreview(pay_date) {
       if (cachedPage && cachedBelowSelectedLowerBound) staleReasons.push('SELECTED_ROW_COUNT_EXCEEDS_CACHE');
       if (cachedPage && cachedReturnedCountMismatch) staleReasons.push('RETURNED_COUNT_MISMATCH');
       if (cachedPage && cachedKnownCountMismatch) staleReasons.push('KNOWN_COUNT_MISMATCH');
-      if (cachedPage && freshnessRefreshRequired) staleReasons.push(readyForFreshPages ? 'READY_FRESHNESS_REQUIRED' : 'COUNT_OR_REFRESH_FRESHNESS_CHANGED');
+      if (cachedPage && freshnessRefreshRequired) staleReasons.push(settledForFreshPages ? 'SETTLED_FRESHNESS_REQUIRED' : 'EXPLICIT_REFRESH_REQUIRED');
       if (forcePreviewPageRefetch) staleReasons.push('FORCED_REFETCH');
       const cachedUsable = !!(
         cachedPage &&
@@ -29266,8 +29359,8 @@ async function bankingPayPreview(pay_date) {
       const normalisedPage = normalisePreviewPagePayloadForState(page, section);
       normalisedPage.session_id = sessionIdText;
       normalisedPage.__cloudtms_row_backed_freshness_signature = sectionFreshnessSignature;
-      normalisedPage.__cloudtms_row_backed_expected_count = expectedSectionRowCount.known ? expectedSectionRowCount.count : null;
-      normalisedPage.__cloudtms_row_backed_ready = readyForFreshPages;
+      normalisedPage.__cloudtms_row_backed_expected_count = settledForFreshPages && expectedSectionRowCount.known ? expectedSectionRowCount.count : null;
+      normalisedPage.__cloudtms_row_backed_ready = settledForFreshPages;
       normalisedPage.__cloudtms_row_backed_refresh_attempts = refreshAttemptsForSignal;
       const rows = getPreviewPageRows(normalisedPage);
       applyPreviewPagePayloadToState(normalisedPage, sourcePayload);
@@ -29337,14 +29430,17 @@ async function bankingPayPreview(pay_date) {
 
   const stampPendingReplacementWorkbenchContext = (payload) => {
     if (!isPostMutationRefresh) return null;
+    if (explicitReplacementPayloadIsInactive(payload)) return null;
     const ctx = extractWorkbenchContextFromPayload(payload);
     if (!ctx.session_id) return null;
     const usablePostMutationReplacementContext = isUsablePostMutationReplacementContext(ctx);
-    if (!usablePostMutationReplacementContext && isReturnedWorkbenchContextObsolete(ctx)) return null;
+    if (!usablePostMutationReplacementContext) return null;
 
     const stableSessionSignature = ctx.session_signature || sessionSignatureHint || computedSessionSignature || suppliedSessionSignature || '';
     const stablePayDate = ctx.pay_date || effectivePayDate;
     const stableCutoffDate = ctx.week_ending_cutoff_date || weekEndingCutoffDate;
+
+    if (ctx.session_id) clearSessionBoundLocalStateForAuthoritativeSessionChange(ctx.session_id, 'PENDING_REPLACEMENT_SESSION_RETURNED');
 
     wiz.workbench.session_id = ctx.session_id;
     if (ctx.snapshot_run_id) wiz.workbench.snapshot_run_id = ctx.snapshot_run_id;
@@ -29433,6 +29529,8 @@ async function bankingPayPreview(pay_date) {
     const stableSessionSignature = ctx.session_signature || sessionSignatureHint || computedSessionSignature || suppliedSessionSignature || '';
     const stablePayDate = ctx.pay_date || effectivePayDate;
     const stableCutoffDate = ctx.week_ending_cutoff_date || weekEndingCutoffDate;
+
+    if (ctx.session_id) clearSessionBoundLocalStateForAuthoritativeSessionChange(ctx.session_id, 'AUTHORITATIVE_SESSION_CHANGED');
 
     if (ctx.session_id) wiz.workbench.session_id = ctx.session_id;
     if (ctx.snapshot_run_id) wiz.workbench.snapshot_run_id = ctx.snapshot_run_id;
@@ -29888,13 +29986,10 @@ async function bankingPayPreview(pay_date) {
       let progressPayload = null;
       if (typeof bankingPayWorkbenchSessionGetProgress === 'function') {
         try {
-          progressPayload = await bankingPayWorkbenchSessionGetProgress(pollSessionId, {
-            obsolete_session_ids: [...obsoleteSessionIds],
-            source_session_id: sourceSessionId || null,
-            mutation_context: mutationContext || null,
-            force_new_session: forceNewSession,
-            post_mutation_context: mutationContext || null
-          });
+          progressPayload = await bankingPayWorkbenchSessionGetProgress(
+            pollSessionId,
+            makeLightProgressReadOptions(pollSessionId, 'bankingPayPreview.postMutationPoll')
+          );
         } catch (progressErr) {
           const progressErrText = [
             trimStr(progressErr?.message || ''),
@@ -29923,8 +30018,7 @@ async function bankingPayPreview(pay_date) {
             pending_refresh: true,
             status: 'PENDING_REFRESH',
             error: progressErr,
-            session_id: pollSessionId,
-            mutation_context: mutationContext || null
+            session_id: pollSessionId
           };
         }
       }
@@ -29949,13 +30043,10 @@ async function bankingPayPreview(pay_date) {
       if (shouldFetchFull && typeof bankingPayWorkbenchSessionGet === 'function') {
         let fullPayload;
         try {
-          fullPayload = await bankingPayWorkbenchSessionGet(pollSessionId, {
-            obsolete_session_ids: [...obsoleteSessionIds],
-            source_session_id: sourceSessionId || null,
-            force_new_session: forceNewSession,
-            mutation_context: mutationContext || null,
-            post_mutation_context: mutationContext || null
-          });
+          fullPayload = await bankingPayWorkbenchSessionGet(
+            pollSessionId,
+            makeWorkbenchSessionReadOptions('bankingPayPreview.postMutationPoll', true)
+          );
         } catch (fullErr) {
           if (isNonFatalPostMutationPreviewError(fullErr)) {
             fullPayload = makePostMutationPendingPreviewPayload(fullErr, 'PENDING_REFRESH');
@@ -30084,14 +30175,10 @@ async function bankingPayPreview(pay_date) {
 
         let progressPayload = null;
         if (typeof bankingPayWorkbenchSessionGetProgress === 'function') {
-          progressPayload = await bankingPayWorkbenchSessionGetProgress(resumeSessionId, {
-            obsolete_session_ids: [...obsoleteSessionIds],
-            source_session_id: sourceSessionId || null,
-            mutation_context: mutationContext || null,
-            force_new_session: forceNewSession,
-            post_mutation_context: mutationContext || null,
-            source: 'bankingPayPreview.postMutationResumePoll'
-          });
+          progressPayload = await bankingPayWorkbenchSessionGetProgress(
+            resumeSessionId,
+            makeLightProgressReadOptions(resumeSessionId, 'bankingPayPreview.postMutationResumePoll')
+          );
           consecutiveErrors = 0;
           if (isPlainObject(progressPayload?.progress)) syncProgressIntoState(progressPayload.progress);
           else if (isPlainObject(progressPayload)) syncProgressIntoState(progressPayload);
@@ -30108,14 +30195,10 @@ async function bankingPayPreview(pay_date) {
         if (shouldFetchFull && typeof bankingPayWorkbenchSessionGet === 'function') {
           let fullPayload;
           try {
-            fullPayload = await bankingPayWorkbenchSessionGet(resumeSessionId, {
-              obsolete_session_ids: [...obsoleteSessionIds],
-              source_session_id: sourceSessionId || null,
-              force_new_session: forceNewSession,
-              mutation_context: mutationContext || null,
-              post_mutation_context: mutationContext || null,
-              source: 'bankingPayPreview.postMutationResumePoll'
-            });
+            fullPayload = await bankingPayWorkbenchSessionGet(
+              resumeSessionId,
+              makeWorkbenchSessionReadOptions('bankingPayPreview.postMutationResumePoll', true)
+            );
             consecutiveErrors = 0;
           } catch (fullErr) {
             if (isNonFatalPostMutationPreviewError(fullErr)) {
@@ -30161,7 +30244,6 @@ async function bankingPayPreview(pay_date) {
   };
 
   const startOrResumeWorkbenchSessionPoll = (sessionIdLike = '', reason = 'WORKBENCH_SESSION_POLL', seedPayload = null) => {
-    if (candidateScopedRefresh) return false;
     if (typeof window === 'undefined' || typeof window.setTimeout !== 'function') return false;
     if (typeof bankingPayWorkbenchSessionGetProgress !== 'function') return false;
     const sessionIdText = trimStr(sessionIdLike || getCurrentWorkbenchSessionId() || '');
@@ -30208,14 +30290,10 @@ async function bankingPayPreview(pay_date) {
         let progressPayload = null;
         if (attemptIndex === 0 && isPlainObject(seedPayload?.progress)) progressPayload = seedPayload.progress;
         if (!progressPayload) {
-          progressPayload = await bankingPayWorkbenchSessionGetProgress(sessionIdText, {
-            obsolete_session_ids: [...obsoleteSessionIds],
-            source_session_id: sourceSessionId || null,
-            force_new_session: forceNewSession,
-            mutation_context: mutationContext || null,
-            progress_mode: 'LIGHT',
-            source: 'bankingPayPreview.sessionPoll'
-          });
+          progressPayload = await bankingPayWorkbenchSessionGetProgress(
+            sessionIdText,
+            makeLightProgressReadOptions(sessionIdText, 'bankingPayPreview.sessionPoll')
+          );
         }
         if (shouldAbortPoll()) {
           clearPollToken();
@@ -30245,6 +30323,9 @@ async function bankingPayPreview(pay_date) {
           const page = await maybeLoadFirstPreviewPageForPayload({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj, session_id: sessionIdText });
           const pageRows = Array.isArray(page?.rows) ? page.rows : (Array.isArray(page?.items) ? page.items : []);
           pageLoaded = pageLoaded || pageRows.length > 0;
+          if (page && wiz.workbench.__candidate_refresh_page_reread_pending === true) {
+            wiz.workbench.__candidate_refresh_page_reread_pending = false;
+          }
         }
         if (fingerprint !== lastFingerprint || rowsAvailable || readyNow) {
           lastFingerprint = fingerprint;
@@ -30288,7 +30369,6 @@ async function bankingPayPreview(pay_date) {
   const maybeAutoSettlePendingCandidates = async () => {
     const expectedSessionId = getCurrentWorkbenchSessionId();
     if (!expectedSessionId) return null;
-    if (candidateScopedRefresh) return null;
     startOrResumeWorkbenchSessionPoll(expectedSessionId, 'MAYBE_AUTO_SETTLE_PENDING_CANDIDATES');
     return null;
   };
@@ -30297,24 +30377,14 @@ async function bankingPayPreview(pay_date) {
     let responsePayload;
     let didFullPreviewLoad = false;
 
-    if (candidateScopedRefresh && !isPostMutationRefresh && !willOpenNewWorkbenchSession && trimStr(wiz.workbench.session_id) && !isObsoleteSessionId(wiz.workbench.session_id) && requestedCandidateId) {
-      responsePayload = await bankingPayWorkbenchSessionGetCandidate(wiz.workbench.session_id, requestedCandidateId);
-      const responsePayloadFailure = detectPreviewFailureEnvelope(responsePayload);
-      if (responsePayloadFailure) {
-        throwPreviewFailureEnvelope(responsePayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
-      }
-      if (!isLatestRequest()) return deep(wiz.preview.data);
-      mergePayWorkbenchCandidatePreviewIntoState(responsePayload, stLocal);
-    } else if (useReplacementSessionBootstrap && trimStr(replacementSessionId) && !isObsoleteSessionId(replacementSessionId) && typeof bankingPayWorkbenchSessionGet === 'function') {
-      responsePayload = await bankingPayWorkbenchSessionGet(replacementSessionId, {
-        obsolete_session_ids: [...obsoleteSessionIds],
-        source_session_id: sourceSessionId || null,
-        force_new_session: forceNewSession,
-        mutation_context: mutationContext || null
-      });
+    if (useReplacementSessionBootstrap && trimStr(replacementSessionId) && !isObsoleteSessionId(replacementSessionId) && typeof bankingPayWorkbenchSessionGet === 'function') {
+      responsePayload = await bankingPayWorkbenchSessionGet(
+        replacementSessionId,
+        makeWorkbenchSessionReadOptions('bankingPayPreview.replacementBootstrap', true)
+      );
       if (isRebaseRequiredPayload(responsePayload) || isReturnedSessionObsolete(responsePayload)) {
-        resetWorkbenchStateForFreshSession('REPLACEMENT_SESSION_OBSOLETE');
-        responsePayload = await openFreshWorkbenchSession();
+        const adoptedReplacementPayload = await adoptExplicitReplacementFromPayload(responsePayload, 'REPLACEMENT_SESSION_OBSOLETE');
+        responsePayload = adoptedReplacementPayload || await attachCurrentSharedWorkbenchSession();
       }
       const replacementSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (replacementSessionPayloadFailure) {
@@ -30330,10 +30400,9 @@ async function bankingPayPreview(pay_date) {
       didFullPreviewLoad = previewApplyLoaded(applyResult);
       if (!didFullPreviewLoad) {
         applyDeferredPreviewStateFromPayload(responsePayload);
-        applyReplacementPendingState(false);
       }
-    } else if (willOpenNewWorkbenchSession) {
-      responsePayload = await openFreshWorkbenchSession();
+    } else if (shouldAttachSharedWorkbenchSession) {
+      responsePayload = await attachCurrentSharedWorkbenchSession();
       const openedSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (openedSessionPayloadFailure) {
         if (isPostMutationRefresh && (isPostMutationPreviewPayloadPending(openedSessionPayloadFailure) || isRebaseRequiredPayload(openedSessionPayloadFailure))) {
@@ -30348,15 +30417,13 @@ async function bankingPayPreview(pay_date) {
       didFullPreviewLoad = previewApplyLoaded(applyResult);
       if (!didFullPreviewLoad) applyDeferredPreviewStateFromPayload(responsePayload);
     } else if ((softRefresh || trimStr(wiz.workbench.session_id)) && !isObsoleteSessionId(wiz.workbench.session_id)) {
-      responsePayload = await bankingPayWorkbenchSessionGet(wiz.workbench.session_id, {
-        obsolete_session_ids: [...obsoleteSessionIds],
-        source_session_id: sourceSessionId || null,
-        force_new_session: forceNewSession,
-        mutation_context: mutationContext || null
-      });
+      responsePayload = await bankingPayWorkbenchSessionGet(
+        wiz.workbench.session_id,
+        makeWorkbenchSessionReadOptions('bankingPayPreview.currentSession', false)
+      );
       if (isRebaseRequiredPayload(responsePayload) || isReturnedSessionObsolete(responsePayload)) {
-        resetWorkbenchStateForFreshSession('EXISTING_SESSION_OBSOLETE');
-        responsePayload = await openFreshWorkbenchSession();
+        const adoptedReplacementPayload = await adoptExplicitReplacementFromPayload(responsePayload, 'EXISTING_SESSION_OBSOLETE');
+        responsePayload = adoptedReplacementPayload || await attachCurrentSharedWorkbenchSession();
       }
       const existingSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (existingSessionPayloadFailure) {
@@ -30372,7 +30439,7 @@ async function bankingPayPreview(pay_date) {
       didFullPreviewLoad = previewApplyLoaded(applyResult);
       if (!didFullPreviewLoad) applyDeferredPreviewStateFromPayload(responsePayload);
     } else {
-      responsePayload = await openFreshWorkbenchSession();
+      responsePayload = await attachCurrentSharedWorkbenchSession();
       const fallbackOpenedSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (fallbackOpenedSessionPayloadFailure) {
         if (isPostMutationRefresh && (isPostMutationPreviewPayloadPending(fallbackOpenedSessionPayloadFailure) || isRebaseRequiredPayload(fallbackOpenedSessionPayloadFailure))) {
@@ -30391,11 +30458,20 @@ async function bankingPayPreview(pay_date) {
     if (!isLatestRequest()) return deep(wiz.preview.data);
 
     if (useReplacementSessionBootstrap && !didFullPreviewLoad) {
-      applyReplacementPendingState(false);
     }
 
     if (isPostMutationRefresh && !didFullPreviewLoad) {
-      const postMutationPollOutcome = await pollPostMutationWorkbenchSessionUntilSettled(responsePayload);
+      const immediatePostMutationPage = await maybeLoadFirstPreviewPageForPayload(responsePayload);
+      if (immediatePostMutationPage) {
+        const immediateRows = Array.isArray(immediatePostMutationPage.rows)
+          ? immediatePostMutationPage.rows
+          : (Array.isArray(immediatePostMutationPage.items) ? immediatePostMutationPage.items : []);
+        if (immediateRows.length > 0 || workbenchProgressLooksReady(responsePayload) || workbenchProgressLooksReady(responsePayload?.progress)) {
+          didFullPreviewLoad = immediateRows.length > 0 || didFullPreviewLoad;
+          if (wiz.workbench.__candidate_refresh_page_reread_pending === true) wiz.workbench.__candidate_refresh_page_reread_pending = false;
+        }
+      }
+      const postMutationPollOutcome = didFullPreviewLoad ? null : await pollPostMutationWorkbenchSessionUntilSettled(responsePayload);
       if (postMutationPollOutcome && postMutationPollOutcome.didFullPreviewLoad === true) {
         didFullPreviewLoad = true;
       }
@@ -30408,7 +30484,10 @@ async function bankingPayPreview(pay_date) {
     }
 
     try {
-      await maybeLoadFirstPreviewPageForPayload(responsePayload);
+      const pageLoadForFinalPayload = await maybeLoadFirstPreviewPageForPayload(responsePayload);
+      if (pageLoadForFinalPayload && wiz.workbench.__candidate_refresh_page_reread_pending === true) {
+        wiz.workbench.__candidate_refresh_page_reread_pending = false;
+      }
     } catch {}
 
     const sessionForPoll = getCurrentWorkbenchSessionId();
@@ -30417,12 +30496,7 @@ async function bankingPayPreview(pay_date) {
     }
 
     const activePendingWorkbenchWork = hasActiveWorkbenchPendingWork();
-    const replacementBootstrapHintPending = !!(
-      useReplacementSessionBootstrap &&
-      !didFullPreviewLoad &&
-      (replacementPendingCandidateIds.length > 0 || replacementRefreshJobIds.length > 0)
-    );
-    const replacementPendingWork = !!(replacementBootstrapHintPending || (useReplacementSessionBootstrap && activePendingWorkbenchWork));
+    const replacementPendingWork = !!(useReplacementSessionBootstrap && activePendingWorkbenchWork);
 
     if (replacementPendingWork || activePendingWorkbenchWork) {
       wiz.preview.loading = true;
@@ -30542,8 +30616,6 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
-
-
 
 
 
@@ -75880,18 +75952,12 @@ const ensurePayWizardDecisionState = () => {
   return decisions;
 }
 const resetPayPreviewAndDecisions = async (options = {}) => {
-  const trimStr = (v) => String(v == null ? '' : v).trim();
-  const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
-  const cloneJson = (v) => {
-    try {
-      return JSON.parse(JSON.stringify(v));
-    } catch {
-      return null;
-    }
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const cloneJson = (value) => {
+    try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
   };
-  const uniqTrimmed = (arr) => Array.isArray(arr)
-    ? Array.from(new Set(arr.map((x) => trimStr(x)).filter(Boolean)))
-    : [];
+  const uniqueStrings = (values) => Array.from(new Set((Array.isArray(values) ? values : []).map((value) => trimStr(value)).filter(Boolean)));
   const blankComponentStateCache = () => ({
     case_resolution_states: [],
     blocked_case_states: [],
@@ -75907,1120 +75973,369 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     blocked_preview_lines: [],
     hidden_preview_lines: []
   });
-  const getWizardState = () => {
+  const getState = () => {
     try {
       if (typeof bankingGetState === 'function') {
-        const got = bankingGetState();
-        if (got && typeof got === 'object') return got;
+        const state = bankingGetState();
+        if (state && typeof state === 'object') return state;
       }
     } catch {}
     try {
-      if (window.modalCtx && typeof window.modalCtx === 'object') {
-        window.modalCtx.banking = (window.modalCtx.banking && typeof window.modalCtx.banking === 'object') ? window.modalCtx.banking : {};
-        return window.modalCtx.banking;
-      }
-    } catch {}
-    return null;
+      const state = typeof window !== 'undefined' ? window.modalCtx?.banking : null;
+      return state && typeof state === 'object' ? state : null;
+    } catch {
+      return null;
+    }
   };
-  const stLocal = getWizardState();
-  if (!stLocal || typeof stLocal !== 'object') return null;
+  const state = getState();
+  if (!state || typeof state !== 'object') return null;
+  state.pay = isPlainObject(state.pay) ? state.pay : {};
+  state.pay.draftWizard = isPlainObject(state.pay.draftWizard) ? state.pay.draftWizard : {};
+  const wizard = state.pay.draftWizard;
+  wizard.preview = isPlainObject(wizard.preview) ? wizard.preview : {};
+  wizard.workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
+  wizard.decisions = isPlainObject(wizard.decisions) ? wizard.decisions : {};
 
-  stLocal.pay = (stLocal.pay && typeof stLocal.pay === 'object') ? stLocal.pay : {};
-  stLocal.pay.draftWizard = (stLocal.pay.draftWizard && typeof stLocal.pay.draftWizard === 'object') ? stLocal.pay.draftWizard : {};
-  const wiz = stLocal.pay.draftWizard;
-
-  const requestedModeRaw = trimStr(options.mode || options.reset_mode || 'FULL_LOCAL_RESET').toUpperCase();
-  const rawMutationContext = trimStr(
-    options.mutation_context ||
-    options.mutationContext ||
-    options.reason ||
-    options.reset_reason ||
-    options.action ||
-    options.resetAction ||
+  const source = isPlainObject(options) ? options : {};
+  const requestedMode = trimStr(source.mode || source.reset_mode || source.resetMode || '').toUpperCase();
+  const replacementSessionId = trimStr(source.replacement_session_id || source.replacementSessionId || '');
+  const replacementSessionVersion = source.replacement_session_version ?? source.replacementSessionVersion ?? null;
+  const replacementSessionSignature = trimStr(source.replacement_session_signature || source.replacementSessionSignature || '');
+  const replacementSnapshotRunId = trimStr(source.replacement_snapshot_run_id || source.replacementSnapshotRunId || '');
+  const explicitSourceSessionId = trimStr(source.source_session_id || source.sourceSessionId || '');
+  const currentSessionId = trimStr(wizard.workbench.session_id || wizard.decisions.session_id || wizard.preview.data?.session_id || wizard.preview.data?.session?.session_id || '');
+  const currentSessionVersion = wizard.workbench.session_version ?? wizard.decisions.session_version ?? wizard.preview.data?.session_version ?? null;
+  const currentSessionSignature = trimStr(wizard.workbench.session_signature || wizard.decisions.session_signature || wizard.preview.data?.session_signature || '');
+  const currentSnapshotRunId = trimStr(wizard.workbench.snapshot_run_id || wizard.decisions.snapshot_run_id || wizard.preview.data?.snapshot_run_id || '');
+  const currentPayDate = trimStr(
+    source.pay_date ||
+    source.payDate ||
+    source.contextOverrides?.pay_date ||
+    source.context_overrides?.pay_date ||
+    wizard.pay_date ||
+    state.pay.pay_date ||
+    state.pay.selectedPayDate ||
+    wizard.workbench.pay_date ||
     ''
-  ).toUpperCase();
-  const rawPayloadEvidence = (() => {
-    const values = [];
-    const append = (value) => {
-      const s = trimStr(value).toUpperCase();
-      if (s) values.push(s);
-    };
-    append(requestedModeRaw);
-    append(rawMutationContext);
-    append(options.reason);
-    append(options.reset_reason);
-    append(options.action);
-    append(options.resetAction);
-    append(options.payload?.reason);
-    append(options.payload?.mutation_context);
-    append(options.payload?.mutationContext);
-    append(options.payload?.status);
-    append(options.payload?.classification);
-    append(options.post_create_refresh?.reason);
-    append(options.postCreateRefresh?.reason);
-    append(options.post_cancel_refresh?.reason);
-    append(options.postCancelRefresh?.reason);
-    append(options.snapshot_rebuild?.reason);
-    append(options.snapshotRebuild?.reason);
-    if (Array.isArray(options.created_pay_batch_ids) && options.created_pay_batch_ids.length > 0) append('CREATED_PAY_BATCH_IDS_PRESENT');
-    if (Array.isArray(options.createdPayBatchIds) && options.createdPayBatchIds.length > 0) append('CREATED_PAY_BATCH_IDS_PRESENT');
-    if (options.selected_pay_batch_id || options.selectedPayBatchId) append('SELECTED_PAY_BATCH_ID_PRESENT');
-    return values.join('|');
-  })();
-  const hasCreateSuccessEvidence = !!(
-    requestedModeRaw === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' ||
-    /(^|\|)(CREATE_DRAFT_SUCCESS|POST_DRAFT_CREATE|DRAFT_CREATED|CREATED_PAY_BATCH_IDS_PRESENT)(\||$)/.test(rawPayloadEvidence)
   );
-  const hasCancelSuccessEvidence = !!(
-    requestedModeRaw === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN' ||
-    /(^|\|)(CANCEL_DELETE_DRAFT_SUCCESS|POST_DRAFT_CANCEL|DRAFT_CANCELLED|DRAFT_CANCELED|PAY_BATCH_CANCELLED|PAY_BATCH_CANCELED|BATCH_CANCELLED|BATCH_CANCELED)(\||$)/.test(rawPayloadEvidence)
-  );
-  const effectiveRequestedModeRaw = hasCancelSuccessEvidence
-    ? 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN'
-    : (hasCreateSuccessEvidence ? 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' : requestedModeRaw);
-  const mode = {
-    SOFT: 'SOFT_REFRESH',
-    SOFT_REFRESH: 'SOFT_REFRESH',
-    HARD: 'HARD_SESSION_RELOAD',
-    HARD_RELOAD: 'HARD_SESSION_RELOAD',
-    HARD_SESSION_RELOAD: 'HARD_SESSION_RELOAD',
-    POST_ACTION_REOPEN: 'POST_ACTION_REOPEN',
-    POST_DRAFT_CREATE_DISCARD_AND_REOPEN: 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN',
-    POST_DRAFT_CANCEL_DISCARD_AND_REOPEN: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
-    DISCARD: 'DISCARD_SESSION',
-    DISCARD_SESSION: 'DISCARD_SESSION',
-    FULL: 'FULL_LOCAL_RESET',
-    FULL_RESET: 'FULL_LOCAL_RESET',
-    FULL_LOCAL_RESET: 'FULL_LOCAL_RESET',
-    CLEAR: 'CLEAR_ALL_DECISIONS',
-    CLEAR_ALL_DECISIONS: 'CLEAR_ALL_DECISIONS'
-  }[effectiveRequestedModeRaw] || 'FULL_LOCAL_RESET';
-
-  const isPostDraftCreateDiscardAndReopen = mode === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN';
-  const isPostDraftCancelDiscardAndReopen = mode === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN';
-  const isPostMutationDiscardAndReopen = isPostDraftCreateDiscardAndReopen || isPostDraftCancelDiscardAndReopen;
-  const mutationContext = isPostDraftCreateDiscardAndReopen
-    ? 'CREATE_DRAFT_SUCCESS'
-    : (isPostDraftCancelDiscardAndReopen
-        ? 'CANCEL_DELETE_DRAFT_SUCCESS'
-        : rawMutationContext);
-  const postMutationFriendlyContext = isPostDraftCreateDiscardAndReopen
-    ? 'POST_DRAFT_CREATE_PREVIEW_REFRESH'
-    : (isPostDraftCancelDiscardAndReopen ? 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' : mutationContext);
-
-  const currentPayDate = trimStr(options.pay_date || options.payDate || wiz.pay_date || stLocal.pay?.pay_date || stLocal.pay?.selectedPayDate || '');
-  const currentWeekEndingCutoffDate = trimStr(
-    options.week_ending_cutoff_date ||
-    options.weekEndingCutoffDate ||
-    wiz.week_ending_cutoff_date ||
-    wiz.week_ending_cutoff_date_raw ||
-    stLocal.pay?.week_ending_cutoff_date ||
-    stLocal.pay?.week_ending_cutoff_date_raw ||
-    wiz.workbench?.week_ending_cutoff_date ||
-    wiz.decisions?.week_ending_cutoff_date ||
-    ''
+  const currentCutoff = trimStr(
+    source.week_ending_cutoff ||
+    source.week_ending_cutoff_date ||
+    source.contextOverrides?.week_ending_cutoff ||
+    source.contextOverrides?.week_ending_cutoff_date ||
+    source.context_overrides?.week_ending_cutoff ||
+    source.context_overrides?.week_ending_cutoff_date ||
+    wizard.week_ending_cutoff_date ||
+    wizard.workbench.week_ending_cutoff ||
+    wizard.workbench.week_ending_cutoff_date ||
+    '9999-12-31'
   ) || '9999-12-31';
-  const currentSessionSignature = trimStr(wiz.workbench?.session_signature || wiz.decisions?.session_signature || '');
-  const replacementSessionId = trimStr(options.replacement_session_id || options.replacementSessionId || '');
-  const replacementSessionSignature = trimStr(options.replacement_session_signature || options.replacementSessionSignature || '');
-  const replacementSnapshotRunId = trimStr(options.replacement_snapshot_run_id || options.replacementSnapshotRunId || '');
-  const replacementSessionVersion = (options.replacement_session_version !== undefined && options.replacement_session_version !== null)
-    ? options.replacement_session_version
-    : ((options.replacementSessionVersion !== undefined && options.replacementSessionVersion !== null) ? options.replacementSessionVersion : null);
-  const pendingCandidateIds = uniqTrimmed(options.pending_candidate_ids || options.pendingCandidateIds || options.dirty_candidate_ids || options.dirtyCandidateIds);
-  const dirtyCandidateIds = uniqTrimmed(options.dirty_candidate_ids || options.dirtyCandidateIds || options.pending_candidate_ids || options.pendingCandidateIds);
-  const refreshJobIds = uniqTrimmed(options.refresh_job_ids || options.refreshJobIds);
-  const nextSessionSignature = (() => {
-    if (mode === 'POST_ACTION_REOPEN' && replacementSessionSignature) return replacementSessionSignature;
-    if (mode === 'CLEAR_ALL_DECISIONS') return currentSessionSignature;
-    try {
-      if (typeof computePayWorkbenchSessionSignature === 'function') {
-        return String(computePayWorkbenchSessionSignature(options.contextOverrides || null)).trim();
-      }
-    } catch {}
-    return '';
-  })();
+  const mutationContext = trimStr(source.mutation_context || source.mutationContext || source.reason || source.reset_reason || source.resetReason || requestedMode).toUpperCase();
+  const clearAllRequested = ['CLEAR', 'CLEAR_ALL', 'CLEAR_ALL_DECISIONS'].includes(requestedMode);
+  const replacementRequested = !!replacementSessionId || [
+    'POST_ACTION_REOPEN',
+    'POST_DRAFT_CREATE_DISCARD_AND_REOPEN',
+    'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+    'ADOPT_RETURNED_REPLACEMENT_SESSION'
+  ].includes(requestedMode);
+  const mode = clearAllRequested
+    ? 'CLEAR_ALL_DECISIONS'
+    : (replacementRequested ? 'ADOPT_RETURNED_REPLACEMENT_SESSION' : 'ATTACH_CURRENT_SHARED_SESSION');
 
-  const ensureDecisionState = (typeof ensurePayWizardDecisionState === 'function')
-    ? ensurePayWizardDecisionState
-    : (() => (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {});
-  const decisions = ensureDecisionState();
-  const markExplicitNoPreviewSelection = ({ refreshPending = false } = {}) => {
-    try {
-      wiz.decisions = decisions;
-      wiz.decisions.selected_preview_row_ids = [];
-      wiz.decisions.server_selected_preview_row_ids = [];
-      wiz.decisions.server_selected_preview_row_ids_provided = true;
-      wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
-      wiz.local_selected_preview_row_ids_dirty = false;
-      wiz.lastCreateDraftResult = null;
-      wiz.createDraftBusy = false;
-      wiz.createDraftError = '';
-      wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
-      wiz.workbench.server_selected_preview_row_ids = [];
-      wiz.workbench.server_selected_preview_row_ids_provided = true;
-      wiz.workbench.create_draft_refresh_pending = refreshPending === true;
-      wiz.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
-      wiz.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
-      wiz.decisions.preview_request_seq = 0;
-      wiz.decisions.pay_context_dirty = refreshPending === true;
-      if (refreshPending === true) {
-        wiz.workbench.canonical_preview_lines = [];
-        wiz.workbench.payees = [];
-        wiz.workbench.summary = {};
-        wiz.workbench.pending_candidate_rows = [];
-        wiz.workbench.failed_candidate_rows = [];
-        wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
-        wiz.preview.data = null;
-        wiz.preview.loading = true;
-        wiz.preview.error = '';
-        wiz.preview.failure = null;
-        wiz.preview.componentStateCache = blankComponentStateCache();
-        wiz.preview.pageData = null;
-        wiz.preview.page_data = null;
-        wiz.preview.pages = {};
-        wiz.preview.pageCache = {};
-        wiz.preview.page_cache = {};
-        wiz.preview.previewPageCache = {};
-        wiz.preview.preview_page_cache = {};
-        wiz.preview.status_text = postMutationRefreshingMessage;
-        wiz.preview.preview_source = isPostMutationDiscardAndReopen ? 'post_mutation_rebase' : 'reset';
-        wiz.decisions.case_resolution_states = [];
-        wiz.decisions.blocked_case_states = [];
-        wiz.decisions.safe_case_states = [];
-        wiz.decisions.reusable_component_resolutions = {};
-        wiz.decisions.stale_component_resolutions = {};
-        wiz.decisions.draftable_now = [];
-        wiz.decisions.blocked_now = [];
-        wiz.decisions.ready_to_pay_now = [];
-        wiz.decisions.blocked_for_pay_now = [];
-        wiz.decisions.hidden_indefinite_snoozes = [];
-      }
-    } catch {}
-  };
-
-  const explicitSourceSessionId = trimStr(options.source_session_id || options.sourceSessionId || '');
-  const sourceSessionAlreadyDiscarded = options.source_session_already_discarded === true || options.sourceSessionAlreadyDiscarded === true;
-  const sessionIdBeforeReset = trimStr(
-    options.session_id ||
-    options.sessionId ||
-    explicitSourceSessionId ||
-    wiz.workbench?.session_id ||
-    decisions.session_id ||
-    ''
-  );
-  const obsoleteSessionIds = Array.from(new Set([
-    ...(Array.isArray(options.obsolete_session_ids) ? options.obsolete_session_ids : []),
-    ...(Array.isArray(options.obsoleteSessionIds) ? options.obsoleteSessionIds : []),
-    explicitSourceSessionId,
-    isPostMutationDiscardAndReopen ? sessionIdBeforeReset : ''
-  ].map((value) => trimStr(value)).filter(Boolean)));
-
-  const markWorkbenchProgressSessionObsolete = (sourceSessionId, replacementId, reasonText) => {
-    const sourceId = trimStr(sourceSessionId);
-    const replacementSessionIdText = trimStr(replacementId);
-    const reason = trimStr(reasonText) || 'WORKBENCH_SESSION_REPLACED';
-    const nowIso = new Date().toISOString();
-
-    const appendObsoleteSession = (target) => {
-      if (!target || typeof target !== 'object') return;
-      const existing = Array.isArray(target.__obsolete_progress_session_ids)
-        ? target.__obsolete_progress_session_ids.map((x) => trimStr(x)).filter(Boolean)
-        : [];
-      const next = sourceId && sourceId !== replacementSessionIdText
-        ? Array.from(new Set([...existing, sourceId]))
-        : existing;
-      target.__obsolete_progress_session_ids = next;
-      target.__obsolete_workbench_session_ids = next;
-      target.__active_progress_session_id = replacementSessionIdText || null;
-      target.__active_workbench_session_id = replacementSessionIdText || null;
-      target.__progress_obsolete_reason = reason;
-      target.__progress_obsolete_at_utc = nowIso;
-      target.__workbench_session_generation = Number.isFinite(Number(target.__workbench_session_generation))
-        ? Number(target.__workbench_session_generation) + 1
-        : 1;
-      target.__progress_poll_generation = target.__workbench_session_generation;
-
-      for (const key of [
-        '__progress_poll_timer',
-        '__progressPollTimer',
-        '__workbench_progress_timer',
-        '__workbenchProgressTimer',
-        '__candidate_progress_timer',
-        '__candidateProgressTimer'
-      ]) {
-        try {
-          const timer = target[key];
-          if (timer) {
-            clearTimeout(timer);
-            clearInterval(timer);
-          }
-          target[key] = null;
-        } catch {}
-      }
-
-      for (const key of [
-        '__progress_poll_in_flight',
-        '__workbench_progress_in_flight',
-        '__candidate_progress_in_flight',
-        'progress_poll_in_flight',
-        'workbench_progress_in_flight'
-      ]) {
-        try { target[key] = false; } catch {}
-      }
-
-      try { target.__preview_refresh_request_token = ''; } catch {}
-    };
-
-    try { appendObsoleteSession(stLocal.pay); } catch {}
-    try { appendObsoleteSession(wiz); } catch {}
-    try { appendObsoleteSession(wiz.workbench); } catch {}
-    try { appendObsoleteSession(wiz.decisions); } catch {}
-    try { appendObsoleteSession(wiz.preview); } catch {}
-    try { appendObsoleteSession(decisions); } catch {}
-  };
-
-  if (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) {
-    markWorkbenchProgressSessionObsolete(
-      explicitSourceSessionId || sessionIdBeforeReset,
-      isPostMutationDiscardAndReopen ? '' : replacementSessionId,
-      trimStr(mutationContext || options.reason || options.reset_reason || mode) || mode
-    );
-  }
-
-
-  const normalizePreviewResetErrorCode = (value) => {
-    const raw = trimStr(value).toUpperCase();
-    if (!raw) return '';
-    const compact = raw.replace(/^ERROR[:\s]+/, '').replace(/^CODE[:\s]+/, '').replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-    if (!compact || /^[0-9]{5}$/.test(compact) || /^P[0-9A-Z]{4}$/.test(compact)) return '';
-    if (compact === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
-    if (compact === 'WORKBENCH_SESSION_MISSING') return 'WORKBENCH_SESSION_NOT_FOUND';
-    return compact;
-  };
-
-  const stringifyPreviewResetErrorValue = (value) => {
-    try {
-      if (value === null || value === undefined) return '';
-      if (typeof value === 'string') return value;
-      if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
-      if (value instanceof Error) return String(value.message || value.name || '');
-      return JSON.stringify(value);
-    } catch {
-      try { return String(value || ''); } catch { return ''; }
+  const applyContextOverrides = () => {
+    const overrides = isPlainObject(source.contextOverrides)
+      ? source.contextOverrides
+      : (isPlainObject(source.context_overrides) ? source.context_overrides : {});
+    if (Object.prototype.hasOwnProperty.call(overrides, 'candidate_filter_id')) wizard.candidate_filter_id = trimStr(overrides.candidate_filter_id);
+    if (Object.prototype.hasOwnProperty.call(overrides, 'client_filter_id')) wizard.client_filter_id = trimStr(overrides.client_filter_id);
+    if (isPlainObject(overrides.filters_json)) wizard.filters_json = cloneJson(overrides.filters_json) || {};
+    if (trimStr(overrides.pay_date)) {
+      wizard.pay_date = trimStr(overrides.pay_date);
+      state.pay.pay_date = wizard.pay_date;
+      state.pay.selectedPayDate = wizard.pay_date;
     }
   };
+  applyContextOverrides();
 
-  const parsePreviewResetEmbeddedObject = (value) => {
-    if (isPlainObject(value)) return value;
-    const text = trimStr(value);
-    if (!text) return null;
-    try {
-      const parsed = JSON.parse(text);
-      if (isPlainObject(parsed)) return parsed;
-    } catch {}
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        const parsed = JSON.parse(text.slice(start, end + 1));
-        if (isPlainObject(parsed)) return parsed;
-      } catch {}
-    }
-    return null;
+  const clearSessionBoundCaches = (oldSessionId, nextSessionId) => {
+    const oldId = trimStr(oldSessionId);
+    const nextId = trimStr(nextSessionId);
+    if (!oldId || !nextId || oldId === nextId) return false;
+    const previewDataSessionId = trimStr(wizard.preview.data?.session_id || wizard.preview.data?.session?.session_id || '');
+    for (const key of ['preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages', 'preview_pages', 'previewPages']) wizard.preview[key] = {};
+    wizard.preview.first_page_applied = false;
+    wizard.preview.preview_ready_visual = false;
+    wizard.preview.ready_empty = false;
+    if (!previewDataSessionId || previewDataSessionId === oldId) wizard.preview.data = null;
+    wizard.preview.readiness = null;
+    wizard.preview.candidateDebtInfo = {};
+    wizard.preview.componentStateCache = blankComponentStateCache();
+    for (const key of ['preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'preview_pages', 'previewPages']) wizard.workbench[key] = {};
+    for (const key of [
+      'canonical_preview_lines',
+      'preview_rows',
+      'ready_preview_lines',
+      'blocked_for_pay',
+      'blocked_for_pay_now',
+      'blocked_preview_lines',
+      'case_resolution_states',
+      'cases_resolutions',
+      'pending_candidate_ids',
+      'failed_candidate_ids',
+      'dirty_candidate_ids',
+      'pending_candidate_rows',
+      'failed_candidate_rows',
+      'pending_candidate_jobs'
+    ]) wizard.workbench[key] = [];
+    wizard.workbench.summary = {};
+    for (const key of [
+      'canonical_preview_lines',
+      'preview_rows',
+      'ready_preview_lines',
+      'blocked_for_pay',
+      'blocked_for_pay_now',
+      'blocked_preview_lines',
+      'case_resolution_states',
+      'cases_resolutions',
+      'blocked_case_states',
+      'safe_case_states',
+      'draftable_now',
+      'blocked_now',
+      'ready_to_pay_now',
+      'hidden_indefinite_snoozes',
+      'pending_candidate_ids',
+      'failed_candidate_ids',
+      'dirty_candidate_ids',
+      'pending_candidate_rows',
+      'failed_candidate_rows',
+      'pending_candidate_jobs',
+      'selected_preview_row_ids',
+      'server_selected_preview_row_ids'
+    ]) wizard.decisions[key] = [];
+    wizard.decisions.reusable_component_resolutions = {};
+    wizard.decisions.stale_component_resolutions = {};
+    wizard.decisions.server_selected_preview_row_ids_provided = false;
+    wizard.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wizard.local_selected_preview_row_ids_dirty = false;
+    return true;
   };
 
-  const extractPreviewResetFailure = (errorValue, fallbackCode = 'BANKING_PAY_PREVIEW_FAILED') => {
-    const knownCodes = [
-      'BATCH_STALE',
-      'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
-      'WORKBENCH_SESSION_NOT_FOUND',
-      'WORKBENCH_SESSION_INVALID',
-      'STALE_SESSION',
-      'OBSOLETE_SESSION',
-      'BANKING_PAY_PREVIEW_FAILED',
-      'BANKING_PAY_WORKBENCH_DISCARD_FAILED',
-      'BANKING_PAY_WORKBENCH_CLEAR_REFRESH_PENDING',
-      'BANKING_PAY_WORKBENCH_CLEAR_FAILED'
-    ];
-    const queue = [];
-    const seenObjects = new Set();
-    const seenStrings = new Set();
-    const findings = [];
-    const rawMessages = [];
-    const enqueue = (candidate) => {
-      if (candidate === null || candidate === undefined) return;
-      if (typeof candidate === 'string') {
-        const text = candidate.trim();
-        if (!text || seenStrings.has(text)) return;
-        seenStrings.add(text);
-        queue.push(text);
-        return;
-      }
-      if (typeof candidate === 'object') {
-        if (seenObjects.has(candidate)) return;
-        seenObjects.add(candidate);
-      }
-      queue.push(candidate);
-    };
-    const addFinding = (payload, code, directKnown = false) => {
-      const normalizedCode = normalizePreviewResetErrorCode(code || fallbackCode);
-      if (!normalizedCode) return;
-      findings.push({
-        code: normalizedCode,
-        payload: isPlainObject(payload) ? payload : { message: stringifyPreviewResetErrorValue(payload) },
-        priority: normalizedCode === 'BATCH_STALE' ? 100 : (directKnown ? 80 : 40)
-      });
-    };
+  const markExplicitNoSelection = () => {
+    wizard.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wizard.local_selected_preview_row_ids_dirty = false;
+    wizard.workbench.server_selected_preview_row_ids = [];
+    wizard.workbench.server_selected_preview_row_ids_provided = true;
+    wizard.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wizard.decisions.selected_preview_row_ids = [];
+    wizard.decisions.server_selected_preview_row_ids = [];
+    wizard.decisions.server_selected_preview_row_ids_provided = true;
+    wizard.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+  };
 
-    enqueue(errorValue);
-    while (queue.length) {
-      const item = queue.shift();
-      if (item instanceof Error) {
-        enqueue({
-          name: item.name,
-          message: item.message,
-          code: item.code,
-          error_code: item.error_code,
-          payload: item.payload,
-          json: item.json,
-          body: item.body,
-          backendPayload: item.backendPayload,
-          response_json: item.response_json,
-          raw_response_text: item.raw_response_text,
-          technical_message: item.technical_message,
-          details: item.details,
-          detail: item.detail,
-          reason: item.reason,
-          cause: item.cause
-        });
-        continue;
-      }
-      if (typeof item === 'string') {
-        const text = item.trim();
-        if (text) rawMessages.push(text);
-        const parsed = parsePreviewResetEmbeddedObject(text);
-        if (parsed) enqueue(parsed);
-        const upper = text.toUpperCase();
-        for (const knownCode of knownCodes) {
-          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
-          if (pattern.test(upper)) addFinding({ message: text }, knownCode, true);
-        }
-        continue;
-      }
-      if (!isPlainObject(item)) continue;
-      const directCode = normalizePreviewResetErrorCode(item.error_code || item.errorCode || item.code || item.error || '');
-      if (directCode) addFinding(item, directCode, knownCodes.map((code) => normalizePreviewResetErrorCode(code)).includes(directCode));
-      if (item.ok === false && !directCode) addFinding(item, fallbackCode, false);
-      for (const key of [
-        'error_code', 'errorCode', 'code', 'error', 'message', 'details', 'detail', 'reason', 'hint',
-        'body', 'json', 'payload', 'backendPayload', 'data', 'cause', 'response', 'result',
-        'technical_message', 'technicalMessage', 'rpc_error', 'rpcError', 'original_error', 'originalError',
-        'inner_error', 'innerError', 'friendly_error', 'friendlyError', 'raw_response_text'
-      ]) {
-        const nested = item[key];
-        enqueue(nested);
-        const parsed = parsePreviewResetEmbeddedObject(nested);
-        if (parsed) enqueue(parsed);
-      }
-      if (Array.isArray(item.errors)) item.errors.forEach(enqueue);
+  const adoptReplacementLocally = () => {
+    if (!replacementSessionId) return false;
+    const oldId = explicitSourceSessionId || currentSessionId;
+    clearSessionBoundCaches(oldId, replacementSessionId);
+    wizard.workbench.session_id = replacementSessionId;
+    wizard.workbench.source_session_id = oldId || null;
+    wizard.workbench.replacement_session_id = replacementSessionId;
+    wizard.workbench.adopted_replacement_session = true;
+    wizard.workbench.stale_session_replaced_reason = mutationContext || 'ADOPT_RETURNED_REPLACEMENT_SESSION';
+    if (replacementSessionVersion !== null && replacementSessionVersion !== undefined) wizard.workbench.session_version = replacementSessionVersion;
+    if (replacementSessionSignature) wizard.workbench.session_signature = replacementSessionSignature;
+    if (replacementSnapshotRunId) {
+      wizard.workbench.snapshot_run_id = replacementSnapshotRunId;
+      wizard.workbench.source_snapshot_run_id = replacementSnapshotRunId;
     }
+    wizard.decisions.session_id = replacementSessionId;
+    wizard.decisions.source_session_id = oldId || null;
+    if (replacementSessionVersion !== null && replacementSessionVersion !== undefined) wizard.decisions.session_version = replacementSessionVersion;
+    if (replacementSessionSignature) wizard.decisions.session_signature = replacementSessionSignature;
+    if (replacementSnapshotRunId) wizard.decisions.snapshot_run_id = replacementSnapshotRunId;
+    return true;
+  };
 
-    findings.sort((a, b) => b.priority - a.priority);
-    const best = findings[0] || null;
+  const readOutcome = (payload = null, extra = {}) => {
+    const previewData = isPlainObject(wizard.preview.data) ? wizard.preview.data : {};
+    const progress = isPlainObject(payload?.progress)
+      ? payload.progress
+      : (isPlainObject(wizard.workbench.progress) ? wizard.workbench.progress : {});
+    const readyEmpty = wizard.preview.ready_empty === true || previewData.ready_empty === true || previewData.preview?.ready_empty === true || progress.ready_empty === true;
+    const ready = readyEmpty || previewData.ready === true || previewData.ready_flag === true || progress.ready === true || progress.ready_flag === true || wizard.preview.first_page_applied === true;
+    const error = trimStr(wizard.preview.error || '');
+    const outcome = error ? 'error' : (readyEmpty ? 'ready_empty' : (ready ? 'ready' : 'pending'));
     return {
-      code: best ? best.code : (normalizePreviewResetErrorCode(fallbackCode) || 'BANKING_PAY_PREVIEW_FAILED'),
-      payload: best ? best.payload : null,
-      raw_message: rawMessages.find(Boolean) || stringifyPreviewResetErrorValue(errorValue)
-    };
-  };
-
-  const normalisePreviewResetFriendlyError = (errorValue, fallbackCode = 'BANKING_PAY_PREVIEW_FAILED', context = {}) => {
-    const contextObj = isPlainObject(context) ? context : {};
-    const failure = extractPreviewResetFailure(errorValue, fallbackCode);
-    const code = normalizePreviewResetErrorCode(failure.code || fallbackCode) || normalizePreviewResetErrorCode(fallbackCode) || 'BANKING_PAY_PREVIEW_FAILED';
-    const action = trimStr(contextObj.action || postMutationFriendlyContext || 'PREVIEW').toUpperCase();
-    const isPostCreateRefresh = action === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' || action === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' || action === 'CREATE_DRAFT_SUCCESS';
-    const isPostCancelRefresh = action === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' || action === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN' || action === 'CANCEL_DELETE_DRAFT_SUCCESS';
-    const isDiscard = action === 'DISCARD_SESSION' || code === 'BANKING_PAY_WORKBENCH_DISCARD_FAILED';
-    const isStaleOrSession = new Set(['BATCH_STALE', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID', 'STALE_SESSION', 'OBSOLETE_SESSION']).has(code);
-    const title = isDiscard
-      ? 'Payment preview could not be updated'
-      : (isStaleOrSession ? 'Payment preview needs refreshing' : 'Payment preview could not be refreshed');
-    const message = isPostCreateRefresh
-      ? 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.'
-      : (isPostCancelRefresh
-          ? 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.'
-          : (isDiscard
-              ? 'CloudTMS could not discard this preview session. Refresh Banking and try again.'
-              : (isStaleOrSession
-                  ? 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.'
-                  : 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.')));
-    const backendPayload = isPlainObject(contextObj.backendPayload)
-      ? contextObj.backendPayload
-      : (isPlainObject(errorValue?.payload)
-          ? errorValue.payload
-          : (isPlainObject(errorValue?.json)
-              ? errorValue.json
-              : (isPlainObject(failure.payload) ? failure.payload : null)));
-    const normalized = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(errorValue, backendPayload || failure.payload || null, {
-          action: isDiscard ? 'DISCARD_SESSION' : (action || 'PREVIEW'),
-          fallbackCode: code,
-          fallbackTitle: title,
-          fallbackMessage: message,
-          userInitiated: false,
-          silent: true,
-          background: true,
-          showModal: false,
-          payload: backendPayload || failure.payload || undefined,
-          backendPayload: backendPayload || failure.payload || undefined,
-          technical_message: failure.raw_message || ''
-        })
-      : null;
-
-    return {
-      ...((normalized && typeof normalized === 'object') ? normalized : {}),
-      ok: false,
-      error_code: code,
-      code,
-      title,
-      message,
-      user_message: message,
-      error: message,
-      can_retry: true,
-      show_modal: false,
-      friendly_error: {
-        ...((normalized?.friendly_error && typeof normalized.friendly_error === 'object') ? normalized.friendly_error : {}),
-        code,
-        error_code: code,
-        title,
-        message,
-        show_modal: false
-      },
-      backendPayload: backendPayload || failure.payload || null,
-      technical_message: failure.raw_message || normalized?.technical_message || code
-    };
-  };
-
-  const previewResetNonFatalPostMutationStatuses = new Set([404, 409, 410, 423, 425, 500, 502, 503, 504]);
-  const extractPreviewResetHttpStatus = (value) => {
-    const candidates = [
-      value?.status,
-      value?.http_status,
-      value?.httpStatus,
-      value?.status_code,
-      value?.statusCode,
-      value?.payload?.status,
-      value?.payload?.http_status,
-      value?.payload?.status_code,
-      value?.json?.status,
-      value?.json?.http_status,
-      value?.json?.status_code,
-      value?.backendPayload?.status,
-      value?.backendPayload?.http_status,
-      value?.backendPayload?.status_code,
-      value?.response?.status
-    ];
-    for (const candidate of candidates) {
-      const n = Number(candidate);
-      if (Number.isFinite(n)) return Math.trunc(n);
-    }
-    return 0;
-  };
-  const looksFatalPreviewResetFailure = (value) => {
-    const text = [
-      stringifyPreviewResetErrorValue(value),
-      stringifyPreviewResetErrorValue(value?.payload),
-      stringifyPreviewResetErrorValue(value?.json),
-      stringifyPreviewResetErrorValue(value?.backendPayload),
-      stringifyPreviewResetErrorValue(value?.response),
-      stringifyPreviewResetErrorValue(value?.message),
-      stringifyPreviewResetErrorValue(value?.technical_message || value?.technicalMessage)
-    ].join('\n').toUpperCase();
-    if (!text) return false;
-    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
-    if (text.includes('RLS') || text.includes('ROW LEVEL SECURITY') || text.includes('POLICY')) return true;
-    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
-    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
-    if (text.includes('SQLSTATE') || text.includes('SQL STATE') || text.includes('POSTGRES') || text.includes('SUPABASE') || text.includes('POSTGREST')) return true;
-    if (text.includes('INVALID INPUT SYNTAX') || text.includes('AMBIGUOUS') || text.includes('CONSTRAINT') || text.includes('VIOLATES')) return true;
-    if (/\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|INDEX)\b[^\n]*\b(DOES NOT EXIST|NOT FOUND|IS AMBIGUOUS)\b/.test(text)) return true;
-    return false;
-  };
-  const isRetryablePostMutationPreviewResetFailure = (errorValue, friendly = null) => {
-    if (!isPostMutationDiscardAndReopen) return false;
-    if (looksFatalPreviewResetFailure(errorValue) || looksFatalPreviewResetFailure(friendly)) return false;
-    const status = extractPreviewResetHttpStatus(errorValue) || extractPreviewResetHttpStatus(friendly);
-    if (previewResetNonFatalPostMutationStatuses.has(status)) return true;
-    const code = normalizePreviewResetErrorCode(
-      errorValue?.error_code ||
-      errorValue?.code ||
-      errorValue?.payload?.error_code ||
-      errorValue?.payload?.code ||
-      errorValue?.json?.error_code ||
-      errorValue?.json?.code ||
-      friendly?.error_code ||
-      friendly?.code ||
-      ''
-    );
-    return ['BATCH_STALE', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID', 'STALE_SESSION', 'OBSOLETE_SESSION'].includes(code);
-  };
-
-  const setPreviewResetFriendlyError = (errorValue, fallbackCode = 'BANKING_PAY_PREVIEW_FAILED', context = {}) => {
-    const friendly = normalisePreviewResetFriendlyError(errorValue, fallbackCode, context);
-    const message = trimStr(friendly.user_message || friendly.message || friendly.error || 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.');
-    const code = trimStr(friendly.error_code || friendly.code || fallbackCode) || fallbackCode;
-    const retryablePostMutationFailure = isRetryablePostMutationPreviewResetFailure(errorValue, friendly);
-    try {
-      wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
-      wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
-      if (retryablePostMutationFailure) {
-        wiz.preview.loading = true;
-        wiz.preview.error = '';
-        wiz.preview.friendlyError = null;
-        wiz.preview.failure = null;
-        wiz.preview.data = null;
-        wiz.preview.readiness = null;
-        wiz.preview.candidateDebtInfo = {};
-        wiz.preview.componentStateCache = blankComponentStateCache();
-        wiz.preview.pageData = null;
-        wiz.preview.page_data = null;
-        wiz.preview.pages = {};
-        wiz.preview.pageCache = {};
-        wiz.preview.page_cache = {};
-        wiz.preview.previewPageCache = {};
-        wiz.preview.preview_page_cache = {};
-        wiz.preview.status_text = postMutationRefreshingMessage;
-        wiz.preview.preview_source = 'post_mutation_rebase';
-        wiz.workbench.create_draft_refresh_pending = true;
-        wiz.workbench.preview_reopen_required = true;
-        wiz.workbench.__post_mutation_preview_refresh_failed = false;
-        wiz.workbench.__post_mutation_preview_refresh_error_code = code;
-        wiz.workbench.__post_mutation_preview_refresh_error_message = message;
-      } else {
-        wiz.preview.loading = false;
-        wiz.preview.error = message;
-        wiz.preview.friendlyError = friendly;
-        wiz.preview.failure = {
-          preview_unavailable: context && context.previewUnavailable === true,
-          can_retry: true,
-          error: {
-            code,
-            message
-          }
-        };
-        if (isPostMutationDiscardAndReopen) {
-          wiz.workbench.create_draft_refresh_pending = false;
-          wiz.workbench.preview_reopen_required = true;
-          wiz.workbench.__post_mutation_preview_refresh_failed = true;
-          wiz.workbench.__post_mutation_preview_refresh_failed_at_utc = new Date().toISOString();
-          wiz.workbench.__post_mutation_preview_refresh_error_code = code;
-          wiz.workbench.__post_mutation_preview_refresh_error_message = message;
-        }
-      }
-    } catch {}
-    return friendly;
-  };
-
-  const postMutationRefreshingMessage = isPostDraftCreateDiscardAndReopen
-    ? 'Payment draft was created. CloudTMS is refreshing the payment preview.'
-    : (isPostDraftCancelDiscardAndReopen
-        ? 'Draft was cancelled. CloudTMS is refreshing the payment preview.'
-        : 'CloudTMS is refreshing the payment preview.');
-
-  const isTerminalPreviewResetJobStatus = (status) => {
-    const s = trimStr(status).toUpperCase();
-    if (!s) return false;
-    return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
-  };
-
-  const hasActivePreviewResetPendingWork = () => {
-    try {
-      const candidateIds = [
-        ...(Array.isArray(wiz?.workbench?.pending_candidate_ids) ? wiz.workbench.pending_candidate_ids : []),
-        ...(Array.isArray(decisions?.pending_candidate_ids) ? decisions.pending_candidate_ids : []),
-        ...(Array.isArray(wiz?.workbench?.dirty_candidate_ids) ? wiz.workbench.dirty_candidate_ids : []),
-        ...(Array.isArray(decisions?.dirty_candidate_ids) ? decisions.dirty_candidate_ids : [])
-      ].map((value) => trimStr(value)).filter(Boolean);
-      if (candidateIds.length > 0) return true;
-
-      const jobs = [
-        ...(Array.isArray(wiz?.workbench?.pending_candidate_jobs) ? wiz.workbench.pending_candidate_jobs : []),
-        ...(Array.isArray(decisions?.pending_candidate_jobs) ? decisions.pending_candidate_jobs : [])
-      ].filter((job) => isPlainObject(job));
-      return jobs.some((job) => {
-        const jobId = trimStr(job.pending_job_id || job.pendingJobId || job.job_id || job.jobId || job.id || '');
-        const status = trimStr(job.latest_job_status || job.latestJobStatus || job.job_status || job.jobStatus || job.status || job.candidate_status || job.candidateStatus || '');
-        return !!jobId && !isTerminalPreviewResetJobStatus(status);
-      });
-    } catch {
-      return false;
-    }
-  };
-
-  const readPreviewResetSessionId = () => {
-    try {
-      const previewData = isPlainObject(wiz?.preview?.data) ? wiz.preview.data : {};
-      const previewSession = isPlainObject(previewData.session) ? previewData.session : {};
-      const previewPayload = isPlainObject(previewData.preview) ? previewData.preview : {};
-      return trimStr(
-        wiz?.workbench?.session_id ||
-        decisions?.session_id ||
-        previewData.session_id ||
-        previewData.sessionId ||
-        previewSession.session_id ||
-        previewSession.sessionId ||
-        previewPayload.session_id ||
-        previewPayload.sessionId ||
-        ''
-      );
-    } catch {
-      return '';
-    }
-  };
-
-  const isPreviewResetSessionObsolete = (sessionIdLike) => {
-    const sessionIdText = trimStr(sessionIdLike);
-    if (!sessionIdText) return false;
-    if (obsoleteSessionIds.includes(sessionIdText)) return true;
-    if (explicitSourceSessionId && sessionIdText === explicitSourceSessionId) return true;
-    if (sessionIdBeforeReset && isPostMutationDiscardAndReopen && sessionIdText === sessionIdBeforeReset) return true;
-    try {
-      const workbenchObsolete = Array.isArray(wiz?.workbench?.__obsolete_workbench_session_ids) ? wiz.workbench.__obsolete_workbench_session_ids : [];
-      const progressObsolete = Array.isArray(wiz?.workbench?.__obsolete_progress_session_ids) ? wiz.workbench.__obsolete_progress_session_ids : [];
-      return [...workbenchObsolete, ...progressObsolete].map((value) => trimStr(value)).filter(Boolean).includes(sessionIdText);
-    } catch {
-      return false;
-    }
-  };
-
-  const inferPreviewResetOutcome = (fallbackOutcome = 'pending') => {
-    try {
-      const previewState = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
-      const workbenchState = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
-      const sessionId = readPreviewResetSessionId();
-      const hasPreviewData = isPlainObject(previewState.data);
-      const previewData = hasPreviewData ? previewState.data : {};
-      const previewPayload = isPlainObject(previewData.preview) ? previewData.preview : {};
-      const hasReadyEmpty = previewState.ready_empty === true || previewData.ready_empty === true || previewData.readyEmpty === true || previewPayload.ready_empty === true || previewPayload.readyEmpty === true;
-      const hasError = !!trimStr(previewState.error || previewState.failure?.error?.message || previewState.friendlyError?.message || previewState.friendlyError?.user_message || '');
-      if (hasError) return 'error';
-      if (hasReadyEmpty) return 'ready_empty';
-      if (isPostMutationDiscardAndReopen && sessionId && isPreviewResetSessionObsolete(sessionId)) return 'rebase_required';
-      if (
-        previewState.loading === true ||
-        workbenchState.create_draft_refresh_pending === true ||
-        workbenchState.preview_reopen_required === true ||
-        hasActivePreviewResetPendingWork()
-      ) {
-        return 'pending';
-      }
-      if (hasPreviewData) {
-        if (!isPostMutationDiscardAndReopen) return 'ready';
-        return sessionId && !isPreviewResetSessionObsolete(sessionId) ? 'ready' : 'rebase_required';
-      }
-      return trimStr(fallbackOutcome || 'pending').toLowerCase() || 'pending';
-    } catch {
-      return trimStr(fallbackOutcome || 'pending').toLowerCase() || 'pending';
-    }
-  };
-
-  const buildPreviewResetOutcome = (fallbackOutcome = 'pending', extra = {}) => {
-    const extraObj = isPlainObject(extra) ? extra : {};
-    const sessionId = trimStr(extraObj.session_id || extraObj.sessionId || readPreviewResetSessionId() || '');
-    const outcome = trimStr(extraObj.outcome || extraObj.refresh_outcome || inferPreviewResetOutcome(fallbackOutcome)).toLowerCase() || 'pending';
-    const previewSource = trimStr(extraObj.preview_source || extraObj.previewSource || (isPostMutationDiscardAndReopen ? 'post_mutation_rebase' : mode.toLowerCase())) || 'resetPayPreviewAndDecisions';
-    const decisionSnapshot = isPlainObject(decisions) ? (cloneJson(decisions) || decisions) : {};
-    return {
-      ...decisionSnapshot,
+      ok: !error,
       outcome,
-      refresh_outcome: outcome,
       status: outcome,
-      session_id: sessionId || null,
-      mutation_context: mutationContext || null,
-      preview_source: previewSource,
-      source_session_id: explicitSourceSessionId || sessionIdBeforeReset || null,
-      obsolete_session_ids: [...obsoleteSessionIds],
-      pending_candidate_ids: [...pendingCandidateIds],
-      dirty_candidate_ids: [...dirtyCandidateIds],
-      refresh_job_ids: [...refreshJobIds],
-      preview_reopen_required: !!(wiz?.workbench?.preview_reopen_required === true),
-      preview_refresh_pending: outcome === 'pending' || outcome === 'rebase_required',
+      refresh_outcome: outcome,
+      preview_refresh_outcome: outcome,
+      mode,
+      session_id: trimStr(wizard.workbench.session_id || wizard.decisions.session_id || payload?.session_id || '') || null,
+      source_session_id: explicitSourceSessionId || (mode === 'ADOPT_RETURNED_REPLACEMENT_SESSION' ? currentSessionId : null) || null,
+      replacement_session_id: mode === 'ADOPT_RETURNED_REPLACEMENT_SESSION' ? (replacementSessionId || null) : null,
+      session_version: wizard.workbench.session_version ?? payload?.session_version ?? null,
+      snapshot_run_id: trimStr(wizard.workbench.snapshot_run_id || payload?.snapshot_run_id || '') || null,
+      ready,
+      ready_empty: readyEmpty,
+      pending: outcome === 'pending',
+      preview_refresh_pending: outcome === 'pending',
       preview_refresh_failed: outcome === 'error',
-      decisions: decisionSnapshot
+      error: error || null,
+      mutation_context: mutationContext || null,
+      decisions: cloneJson(wizard.decisions) || wizard.decisions,
+      ...extra
     };
   };
 
-
-  if (mode === 'CLEAR_ALL_DECISIONS') {
-    wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {
-      data: null,
-      loading: false,
-      error: '',
-      readiness: null,
-      candidateDebtInfo: {},
-      failure: null,
-      componentStateCache: blankComponentStateCache(),
-      context_signature: currentSessionSignature || trimStr(decisions.context_signature || ''),
-      preview_epoch: Number.isFinite(Number(decisions.preview_epoch)) ? Number(decisions.preview_epoch) + 1 : 1
-    };
-    wiz.preview.loading = true;
-    wiz.preview.error = '';
-    wiz.preview.failure = null;
-    markExplicitNoPreviewSelection({ refreshPending: true });
-
-    if (sessionIdBeforeReset && typeof bankingPayWorkbenchSessionClearAllDecisions === 'function') {
-      try {
-        const clearPayload = isPlainObject(options.payload) ? cloneJson(options.payload) || {} : {};
-        const clearResponse = await bankingPayWorkbenchSessionClearAllDecisions(sessionIdBeforeReset, clearPayload);
-        const clearRequeueJobIds = uniqTrimmed(clearResponse?.requeue_job_ids || clearResponse?.refresh_job_ids);
-        const clearPendingCandidateIds = uniqTrimmed(clearResponse?.requeue_candidate_ids || clearResponse?.pending_candidate_ids || clearResponse?.dirty_candidate_ids);
-        const clearRequiresRefresh = clearResponse?.state_changed === true || clearRequeueJobIds.length > 0 || clearPendingCandidateIds.length > 0;
-        if (typeof applyPayWorkbenchPreviewToState === 'function') {
-          applyPayWorkbenchPreviewToState(clearResponse, stLocal);
-        }
-        markExplicitNoPreviewSelection({ refreshPending: clearRequiresRefresh });
-        try {
-          if (typeof recomputePayWizardLiveTruth === 'function') {
-            recomputePayWizardLiveTruth();
-          }
-        } catch {}
-        if (clearRequiresRefresh && currentPayDate && typeof bankingPayPreview === 'function') {
-          let clearRefreshSucceeded = false;
-          try {
-            await bankingPayPreview({
-              pay_date: currentPayDate,
-              week_ending_cutoff_date: currentWeekEndingCutoffDate,
-              mode: 'HARD_SESSION_RELOAD',
-              hard_session_reload: true,
-              source_session_id: sessionIdBeforeReset,
-              dirty_candidate_ids: [...clearPendingCandidateIds],
-              pending_candidate_ids: [...clearPendingCandidateIds],
-              refresh_job_ids: [...clearRequeueJobIds]
-            });
-            clearRefreshSucceeded = true;
-          } catch (refreshErr) {
-            setPreviewResetFriendlyError(refreshErr, 'BANKING_PAY_PREVIEW_FAILED', {
-              action: 'PREVIEW',
-              stage: 'clear_all_refresh',
-              previewUnavailable: false
-            });
-          }
-          markExplicitNoPreviewSelection({ refreshPending: !clearRefreshSucceeded });
-        }
-        try {
-          if (typeof bankingRerender === 'function') {
-            await bankingRerender(null);
-          }
-        } catch {}
-        wiz.preview.loading = false;
-        return buildPreviewResetOutcome();
-      } catch (e) {
-        setPreviewResetFriendlyError(e, 'BANKING_PAY_PREVIEW_FAILED', {
-          action: 'PREVIEW',
-          stage: 'clear_all_decisions',
-          previewUnavailable: true
-        });
-        wiz.preview.loading = false;
-        return buildPreviewResetOutcome();
-      }
-    }
-
-    if (!currentPayDate) {
-      wiz.preview.loading = false;
-      return buildPreviewResetOutcome();
-    }
-
-    let fallbackRefreshSucceeded = false;
-    try {
-      if (typeof bankingPayPreview === 'function') {
-        await bankingPayPreview({
-          pay_date: currentPayDate,
-          week_ending_cutoff_date: currentWeekEndingCutoffDate,
-          mode: 'HARD_SESSION_RELOAD',
-          hard_session_reload: true
-        });
-        fallbackRefreshSucceeded = true;
-      }
-    } catch (refreshErr) {
-      setPreviewResetFriendlyError(refreshErr, 'BANKING_PAY_PREVIEW_FAILED', {
-        action: 'PREVIEW',
-        stage: 'fallback_clear_all_refresh',
-        previewUnavailable: false
-      });
-    }
-    markExplicitNoPreviewSelection({ refreshPending: !fallbackRefreshSucceeded });
-    wiz.preview.loading = false;
-    return buildPreviewResetOutcome();
-  }
-    wiz.preview = {
-    data: null,
-    loading: (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen),
-    error: '',
-    readiness: null,
-    candidateDebtInfo: {},
-    failure: null,
-    componentStateCache: blankComponentStateCache(),
-    pageData: null,
-    page_data: null,
-    pages: {},
-    pageCache: {},
-    page_cache: {},
-    previewPageCache: {},
-    preview_page_cache: {},
-    status_text: (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) ? postMutationRefreshingMessage : '',
-    preview_source: isPostMutationDiscardAndReopen ? 'post_mutation_rebase' : mode.toLowerCase(),
-    context_signature: nextSessionSignature || trimStr(decisions.context_signature || ''),
-    preview_epoch: Number.isFinite(Number(decisions.preview_epoch)) ? Number(decisions.preview_epoch) + 1 : 1
+  const rerender = async () => {
+    try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
   };
 
-  wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
-  const preserveLocalSelection = (mode === 'SOFT_REFRESH');
-
-  wiz.workbench.server_selected_preview_row_ids = [];
-  wiz.workbench.server_selected_preview_row_ids_provided = false;
-
-  if (mode === 'FULL_LOCAL_RESET' || mode === 'DISCARD_SESSION' || mode === 'HARD_SESSION_RELOAD' || mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) {
-    wiz.workbench.session_id = null;
-    wiz.workbench.snapshot_run_id = null;
-    wiz.workbench.session_version = null;
-    wiz.workbench.server_selected_preview_row_ids = [];
-    wiz.workbench.server_selected_preview_row_ids_provided = false;
-    wiz.workbench.pending_candidate_ids = [];
-    wiz.workbench.failed_candidate_ids = [];
-    wiz.workbench.pending_candidate_rows = [];
-    wiz.workbench.failed_candidate_rows = [];
-    wiz.workbench.dirty_candidate_ids = [];
-    wiz.workbench.pending_candidate_jobs = [];
-    wiz.workbench.case_resolution_states = [];
-    wiz.workbench.canonical_preview_lines = [];
-    wiz.workbench.preview_rows = [];
-    wiz.workbench.ready_preview_lines = [];
-    wiz.workbench.preview_pages = {};
-    wiz.workbench.preview_page_cache = {};
-    wiz.workbench.pageCache = {};
-    wiz.workbench.payees = [];
-    wiz.workbench.summary = {};
-  }
-
-  if (mode === 'POST_ACTION_REOPEN') {
-    wiz.workbench.session_id = replacementSessionId || null;
-    wiz.workbench.snapshot_run_id = replacementSnapshotRunId || null;
-    wiz.workbench.session_version = replacementSessionVersion ?? null;
-    wiz.workbench.session_signature = replacementSessionSignature || nextSessionSignature || '';
-    wiz.workbench.pending_candidate_ids = [...pendingCandidateIds];
-    wiz.workbench.failed_candidate_ids = [];
-    wiz.workbench.pending_candidate_rows = [];
-    wiz.workbench.failed_candidate_rows = [];
-    wiz.workbench.dirty_candidate_ids = Array.from(new Set([...dirtyCandidateIds, ...pendingCandidateIds]));
-    wiz.workbench.pending_candidate_jobs = refreshJobIds.map((jobId, index) => ({
-      pending_job_id: jobId,
-      job_id: jobId,
-      candidate_id: pendingCandidateIds[index] || dirtyCandidateIds[index] || null,
-      latest_job_type: 'SESSION_CANDIDATE_RECOMPUTE',
-      status: 'QUEUED'
-    }));
-    wiz.workbench.__active_progress_session_id = replacementSessionId || null;
-    wiz.workbench.__active_workbench_session_id = replacementSessionId || null;
-    wiz.workbench.__source_session_id_replaced = explicitSourceSessionId || sessionIdBeforeReset || null;
-    wiz.workbench.__post_action_reopen_at_utc = new Date().toISOString();
-    wiz.workbench.__progress_poll_generation = Number.isFinite(Number(wiz.workbench.__progress_poll_generation))
-      ? Number(wiz.workbench.__progress_poll_generation)
-      : Number(wiz.workbench.__workbench_session_generation || 1);
-  }
-
-  if (isPostMutationDiscardAndReopen) {
-    wiz.workbench.session_id = null;
-    wiz.workbench.snapshot_run_id = null;
-    wiz.workbench.session_version = null;
-    wiz.workbench.session_signature = '';
-    wiz.workbench.pending_candidate_ids = [...pendingCandidateIds];
-    wiz.workbench.failed_candidate_ids = [];
-    wiz.workbench.pending_candidate_rows = [];
-    wiz.workbench.failed_candidate_rows = [];
-    wiz.workbench.dirty_candidate_ids = Array.from(new Set([...dirtyCandidateIds, ...pendingCandidateIds]));
-    wiz.workbench.pending_candidate_jobs = refreshJobIds.map((jobId, index) => ({
-      pending_job_id: jobId,
-      job_id: jobId,
-      candidate_id: pendingCandidateIds[index] || dirtyCandidateIds[index] || null,
-      latest_job_type: 'SESSION_CANDIDATE_RECOMPUTE',
-      status: 'QUEUED'
-    }));
-    wiz.workbench.__active_progress_session_id = null;
-    wiz.workbench.__active_workbench_session_id = null;
-    wiz.workbench.__source_session_id_discarded = explicitSourceSessionId || sessionIdBeforeReset || null;
-    wiz.workbench.__obsolete_progress_session_ids = obsoleteSessionIds;
-    wiz.workbench.__obsolete_workbench_session_ids = obsoleteSessionIds;
-    wiz.workbench.__post_mutation_discard_reopen_at_utc = new Date().toISOString();
-    wiz.workbench.__post_mutation_context = mutationContext || mode;
-    wiz.workbench.__progress_poll_generation = Number.isFinite(Number(wiz.workbench.__progress_poll_generation))
-      ? Number(wiz.workbench.__progress_poll_generation)
-      : Number(wiz.workbench.__workbench_session_generation || 1);
-  }
-
-  decisions.session_id = wiz.workbench.session_id || null;
-  decisions.snapshot_run_id = wiz.workbench.snapshot_run_id || null;
-  decisions.session_version = wiz.workbench.session_version ?? null;
-  decisions.session_signature = nextSessionSignature || wiz.workbench.session_signature || decisions.session_signature || '';
-  decisions.server_selected_preview_row_ids = [];
-  decisions.server_selected_preview_row_ids_provided = false;
-  decisions.dirty_candidate_ids = (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen)
-    ? Array.from(new Set([...dirtyCandidateIds, ...pendingCandidateIds]))
-    : [];
-  decisions.pending_candidate_ids = (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) ? [...pendingCandidateIds] : [];
-  decisions.pending_candidate_jobs = (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen)
-    ? (cloneJson(wiz.workbench.pending_candidate_jobs) || [])
-    : [];
-  decisions.case_resolution_states = (mode === 'SOFT_REFRESH') ? decisions.case_resolution_states : [];
-  decisions.canonical_preview_lines = [];
-  decisions.preview_rows = [];
-  decisions.ready_preview_lines = [];
-  decisions.preview_pages = {};
-  decisions.preview_page_cache = {};
-  decisions.pageCache = {};
-  decisions.blocked_case_states = (mode === 'SOFT_REFRESH') ? decisions.blocked_case_states : [];
-  decisions.safe_case_states = (mode === 'SOFT_REFRESH') ? decisions.safe_case_states : [];
-  decisions.reusable_component_resolutions = (mode === 'SOFT_REFRESH') ? decisions.reusable_component_resolutions : {};
-  decisions.stale_component_resolutions = (mode === 'SOFT_REFRESH') ? decisions.stale_component_resolutions : {};
-  decisions.draftable_now = [];
-  decisions.blocked_now = [];
-  decisions.ready_to_pay_now = [];
-  decisions.blocked_for_pay_now = [];
-  decisions.hidden_indefinite_snoozes = [];
-  decisions.selected_preview_row_ids = preserveLocalSelection ? decisions.selected_preview_row_ids : [];
-  decisions.preview_epoch = Number.isFinite(Number(decisions.preview_epoch)) ? Number(decisions.preview_epoch) + 1 : 1;
-  decisions.preview_request_seq = 0;
-  decisions.pay_context_dirty = true;
-  decisions.dirty_reason = mode;
-  decisions.modal_valid = false;
-  decisions.active_modal_epoch = null;
-  if (!preserveLocalSelection) {
-    const resetSelectionMode = isPostMutationDiscardAndReopen ? 'EXPLICIT_NONE' : 'IMPLICIT_ALL';
-    wiz.selected_preview_row_mode = resetSelectionMode;
-    wiz.local_selected_preview_row_ids_dirty = false;
-    decisions.selected_preview_row_mode = resetSelectionMode;
-    wiz.workbench.selected_preview_row_ids = [];
-    wiz.workbench.selected_preview_row_mode = resetSelectionMode;
-    if (isPostMutationDiscardAndReopen) {
-      decisions.server_selected_preview_row_ids = [];
-      decisions.server_selected_preview_row_ids_provided = true;
-      wiz.workbench.server_selected_preview_row_ids = [];
-      wiz.workbench.server_selected_preview_row_ids_provided = true;
-    }
-  }
-  wiz.createDraftBusy = false;
-  wiz.createDraftError = '';
-  wiz.lastCreateDraftResult = null;
-  wiz.pendingPayModalReturn = null;
-  wiz.lastPreviewFailure = null;
-
-  if (mode === 'DISCARD_SESSION') {
-    if (sessionIdBeforeReset && typeof bankingPayWorkbenchSessionDiscard === 'function') {
-      try {
-        await bankingPayWorkbenchSessionDiscard(sessionIdBeforeReset, {});
-      } catch (e) {
-        setPreviewResetFriendlyError(e, 'BANKING_PAY_WORKBENCH_DISCARD_FAILED', {
-          action: 'DISCARD_SESSION',
-          stage: 'discard_session',
-          previewUnavailable: false
-        });
-      }
-    }
-    return buildPreviewResetOutcome();
-  }
-
-  if (isPostMutationDiscardAndReopen && !sourceSessionAlreadyDiscarded && sessionIdBeforeReset && typeof bankingPayWorkbenchSessionDiscard === 'function') {
-    try {
-      await bankingPayWorkbenchSessionDiscard(sessionIdBeforeReset, {
-        reason: mutationContext || mode,
-        source: 'resetPayPreviewAndDecisions',
-        force_new_session: true,
-        discard_source_session: true
-      });
-    } catch (e) {
-      const discardCode = trimStr(e?.error_code || e?.code || e?.payload?.error_code || e?.json?.error_code || '').toUpperCase();
-      const discardMessage = trimStr(e?.user_message || e?.message || e?.error || '');
-      const acceptableDiscardFailure = (
-        discardCode === 'OBSOLETE_SESSION' ||
-        discardCode === 'STALE_SESSION' ||
-        discardCode === 'WORKBENCH_SESSION_NOT_FOUND' ||
-        discardCode === 'WORKBENCH_SESSION_NOT_OPEN' ||
-        discardCode === 'WORKBENCH_SESSION_DISCARDED' ||
-        /already\s+discarded|not\s+open|not\s+found|stale|obsolete/i.test(discardMessage)
-      );
-      if (!acceptableDiscardFailure) {
-        setPreviewResetFriendlyError(e, 'BANKING_PAY_WORKBENCH_DISCARD_FAILED', {
-          action: postMutationFriendlyContext || 'DISCARD_SESSION',
-          stage: 'post_mutation_discard_source_session',
-          previewUnavailable: false
-        });
-      }
-    }
-  }
-
-  if (mode === 'FULL_LOCAL_RESET') {
-    return buildPreviewResetOutcome();
-  }
-
-  if (!currentPayDate) {
-    return buildPreviewResetOutcome();
-  }
-
-  if (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) {
-    try {
-      if (typeof recomputePayWizardLiveTruth === 'function') {
-        recomputePayWizardLiveTruth();
-      }
-    } catch {}
-    try {
-      if (typeof bankingRerender === 'function') {
-        await bankingRerender(null);
-      }
-    } catch {}
-  }
+  wizard.preview.loading = true;
+  wizard.preview.error = '';
+  wizard.preview.failure = null;
 
   try {
-    if (typeof bankingPayPreview === 'function') {
-      await bankingPayPreview({
-        pay_date: currentPayDate,
-        week_ending_cutoff_date: currentWeekEndingCutoffDate,
-        mode: mode,
-        hard_session_reload: mode === 'HARD_SESSION_RELOAD' || isPostMutationDiscardAndReopen,
-        soft_refresh: mode === 'SOFT_REFRESH',
-        replacement_session_id: (mode === 'POST_ACTION_REOPEN' && !isPostMutationDiscardAndReopen) ? (replacementSessionId || null) : null,
-        replacement_session_signature: (mode === 'POST_ACTION_REOPEN' && !isPostMutationDiscardAndReopen) ? (replacementSessionSignature || null) : null,
-        replacement_snapshot_run_id: (mode === 'POST_ACTION_REOPEN' && !isPostMutationDiscardAndReopen) ? (replacementSnapshotRunId || null) : null,
-        replacement_session_version: (mode === 'POST_ACTION_REOPEN' && !isPostMutationDiscardAndReopen) ? replacementSessionVersion : null,
-        dirty_candidate_ids: (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) ? [...dirtyCandidateIds] : [],
-        pending_candidate_ids: (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) ? [...pendingCandidateIds] : [],
-        refresh_job_ids: (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) ? [...refreshJobIds] : [],
-        preview_reopen_required: mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen,
-        force_new_session: isPostMutationDiscardAndReopen || options.force_new_session === true || options.forceNewSession === true,
-        discard_source_session: isPostMutationDiscardAndReopen || options.discard_source_session === true || options.discardSourceSession === true,
-        source_session_already_discarded: isPostMutationDiscardAndReopen ? true : sourceSessionAlreadyDiscarded,
-        ignore_replacement_session: isPostMutationDiscardAndReopen || options.ignore_replacement_session === true || options.ignoreReplacementSession === true,
-        source_session_id: explicitSourceSessionId || sessionIdBeforeReset || null,
-        source_snapshot_run_id: trimStr(options.source_snapshot_run_id || options.sourceSnapshotRunId || ''),
-        source_session_version: options.source_session_version ?? options.sourceSessionVersion ?? null,
-        source_session_signature: trimStr(options.source_session_signature || options.sourceSessionSignature || ''),
-        obsolete_session_ids: [...obsoleteSessionIds],
-        mutation_context: mutationContext || postMutationFriendlyContext || null,
-        created_pay_batch_ids: uniqTrimmed(options.created_pay_batch_ids || options.createdPayBatchIds),
-        selected_pay_batch_id: trimStr(options.selected_pay_batch_id || options.selectedPayBatchId || '') || null,
-        selected_preview_row_ids: uniqTrimmed(options.selected_preview_row_ids || options.selectedPreviewRowIds)
+    if (mode === 'CLEAR_ALL_DECISIONS') {
+      if (!currentSessionId || typeof bankingPayWorkbenchSessionClearAllDecisions !== 'function') {
+        wizard.preview.loading = false;
+        await rerender();
+        return readOutcome(null, {
+          clear_all_decisions: true,
+          clear_skipped: true,
+          clear_skip_reason: !currentSessionId ? 'WORKBENCH_SESSION_ID_MISSING' : 'CLEAR_ALL_DECISIONS_HELPER_UNAVAILABLE'
+        });
+      }
+      const clearPayload = isPlainObject(source.payload) ? (cloneJson(source.payload) || {}) : {};
+      if (!Object.prototype.hasOwnProperty.call(clearPayload, 'expected_session_version') && currentSessionVersion !== null && currentSessionVersion !== undefined) {
+        clearPayload.expected_session_version = currentSessionVersion;
+      }
+      if (!Object.prototype.hasOwnProperty.call(clearPayload, 'reason') && trimStr(source.reason || source.reset_reason)) {
+        clearPayload.reason = trimStr(source.reason || source.reset_reason);
+      }
+      const clearResult = await bankingPayWorkbenchSessionClearAllDecisions(currentSessionId, clearPayload);
+      markExplicitNoSelection();
+      if (clearResult?.session_version !== null && clearResult?.session_version !== undefined) {
+        wizard.workbench.session_version = clearResult.session_version;
+        wizard.decisions.session_version = clearResult.session_version;
+      }
+      const pendingCandidateIds = uniqueStrings(clearResult?.requeue_candidate_ids || clearResult?.pending_candidate_ids || clearResult?.dirty_candidate_ids || []);
+      wizard.workbench.pending_candidate_ids = pendingCandidateIds.slice(0, 25);
+      wizard.workbench.dirty_candidate_ids = [...wizard.workbench.pending_candidate_ids];
+      wizard.decisions.pending_candidate_ids = [...wizard.workbench.pending_candidate_ids];
+      wizard.decisions.dirty_candidate_ids = [...wizard.workbench.dirty_candidate_ids];
+      let refreshed = null;
+      if (currentPayDate && typeof bankingPayPreview === 'function') {
+        refreshed = await bankingPayPreview({
+          pay_date: currentPayDate,
+          week_ending_cutoff: currentCutoff,
+          mode: 'ATTACH_CURRENT_SHARED_SESSION',
+          soft_refresh: true,
+          background: true,
+          silent: true,
+          userInitiated: false,
+          source: 'resetPayPreviewAndDecisions.clearAll'
+        });
+      }
+      wizard.preview.loading = false;
+      await rerender();
+      return readOutcome(refreshed, {
+        clear_all_decisions: true,
+        clear_result: cloneJson(clearResult) || clearResult,
+        server_session_retained: true
       });
     }
-  } catch (previewErr) {
-    setPreviewResetFriendlyError(previewErr, 'BANKING_PAY_PREVIEW_FAILED', {
-      action: postMutationFriendlyContext || 'PREVIEW',
-      stage: 'final_preview_reload',
-      previewUnavailable: false
+
+    let previewResult = null;
+    if (mode === 'ADOPT_RETURNED_REPLACEMENT_SESSION' && replacementSessionId) {
+      adoptReplacementLocally();
+      if (typeof bankingPayPreview === 'function') {
+        previewResult = await bankingPayPreview({
+          pay_date: currentPayDate,
+          week_ending_cutoff: currentCutoff,
+          replacement_session_id: replacementSessionId,
+          replacement_session_version: replacementSessionVersion,
+          replacement_session_signature: replacementSessionSignature || null,
+          replacement_snapshot_run_id: replacementSnapshotRunId || null,
+          source_session_id: explicitSourceSessionId || currentSessionId || null,
+          mutation_context: mutationContext || 'ADOPT_RETURNED_REPLACEMENT_SESSION',
+          mode: 'ADOPT_RETURNED_REPLACEMENT_SESSION',
+          background: true,
+          silent: true,
+          userInitiated: false,
+          load_first_page: true,
+          source: 'resetPayPreviewAndDecisions.adoptReplacement'
+        });
+      } else if (typeof bankingPayWorkbenchSessionGet === 'function') {
+        previewResult = await bankingPayWorkbenchSessionGet(replacementSessionId, {
+          background: true,
+          silent: true,
+          replacement_adoption: true,
+          source: 'resetPayPreviewAndDecisions.adoptReplacement'
+        });
+      }
+      wizard.preview.loading = false;
+      await rerender();
+      return readOutcome(previewResult, {
+        adopted_replacement_session: true,
+        old_session_caches_cleared: !!(currentSessionId && currentSessionId !== replacementSessionId),
+        server_session_replaced_by_server: true
+      });
+    }
+
+    if (typeof bankingPayPreview === 'function') {
+      previewResult = await bankingPayPreview({
+        pay_date: currentPayDate,
+        week_ending_cutoff: currentCutoff,
+        mode: 'ATTACH_CURRENT_SHARED_SESSION',
+        soft_refresh: true,
+        background: source.background !== false,
+        silent: source.silent !== false,
+        userInitiated: source.userInitiated === true || source.user_initiated === true,
+        load_first_page: source.load_first_page === true || source.loadFirstPage === true,
+        source: 'resetPayPreviewAndDecisions.attachCurrent'
+      });
+    } else if (currentSessionId && typeof bankingPayWorkbenchSessionGet === 'function') {
+      previewResult = await bankingPayWorkbenchSessionGet(currentSessionId, {
+        background: true,
+        silent: true,
+        source: 'resetPayPreviewAndDecisions.attachCurrent'
+      });
+    }
+    wizard.preview.loading = false;
+    await rerender();
+    return readOutcome(previewResult, {
+      attached_current_shared_session: true,
+      server_session_retained: true,
+      local_reset_did_not_replace_server_work: true
+    });
+  } catch (error) {
+    const message = trimStr(error?.user_message || error?.message || error || 'Payment preview could not be refreshed.');
+    wizard.preview.loading = false;
+    wizard.preview.error = message;
+    wizard.preview.failure = {
+      preview_unavailable: mode !== 'CLEAR_ALL_DECISIONS',
+      can_retry: true,
+      error: {
+        code: trimStr(error?.error_code || error?.code || 'BANKING_PAY_PREVIEW_FAILED') || 'BANKING_PAY_PREVIEW_FAILED',
+        message
+      }
+    };
+    await rerender();
+    return readOutcome(null, {
+      ok: false,
+      outcome: 'error',
+      status: 'error',
+      refresh_outcome: 'error',
+      preview_refresh_outcome: 'error',
+      error: message,
+      error_code: trimStr(error?.error_code || error?.code || 'BANKING_PAY_PREVIEW_FAILED') || 'BANKING_PAY_PREVIEW_FAILED'
     });
   }
-
-  return buildPreviewResetOutcome();
 };
+
 
 
 
@@ -105197,375 +104512,349 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
 }
 
 
-
-
-
-
 async function bankingPayWorkbenchSessionOpen(payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const cloneJson = (value) => {
     try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
   };
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const toCount = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+  };
   const parseJsonResponse = async (res) => {
     const text = await res.text().catch(() => '');
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
-  const toNumber = (value) => {
-    const n = Number(value);
-    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
-  };
-  const normaliseProgress = (raw, fallbackSessionId = '') => {
-    const obj = isPlainObject(raw) ? raw : {};
-    const progress = isPlainObject(obj.progress) ? obj.progress : obj;
-    const sampleLimit = 25;
-    const candidateStatusRows = (Array.isArray(progress.candidate_status_rows)
-      ? (cloneJson(progress.candidate_status_rows) || [])
-      : (Array.isArray(progress.candidate_statuses)
-          ? (cloneJson(progress.candidate_statuses) || [])
-          : (Array.isArray(progress.sample_candidate_rows) ? (cloneJson(progress.sample_candidate_rows) || []) : []))).slice(0, sampleLimit);
-    const pendingJobIds = (Array.isArray(progress.pending_job_ids)
-      ? (cloneJson(progress.pending_job_ids) || [])
-      : (Array.isArray(obj.pending_job_ids) ? (cloneJson(obj.pending_job_ids) || []) : [])).slice(0, sampleLimit);
-    const recentJobs = (Array.isArray(progress.recent_jobs)
-      ? (cloneJson(progress.recent_jobs) || [])
-      : (Array.isArray(obj.recent_jobs) ? (cloneJson(obj.recent_jobs) || []) : [])).slice(0, sampleLimit);
-    const pendingCandidateIdsRaw = Array.isArray(progress.pending_candidate_ids)
-      ? progress.pending_candidate_ids
-      : (Array.isArray(obj.pending_candidate_ids) ? obj.pending_candidate_ids : candidateStatusRows.filter((row) => trimStr(row?.status).toUpperCase() === 'PENDING').map((row) => row?.candidate_id));
-    const failedCandidateIdsRaw = Array.isArray(progress.failed_candidate_ids)
-      ? progress.failed_candidate_ids
-      : (Array.isArray(obj.failed_candidate_ids) ? obj.failed_candidate_ids : candidateStatusRows.filter((row) => trimStr(row?.status).toUpperCase() === 'FAILED').map((row) => row?.candidate_id));
-    const pendingCandidateIds = Array.from(new Set(pendingCandidateIdsRaw.map((value) => trimStr(value)).filter(Boolean))).slice(0, sampleLimit);
-    const failedCandidateIds = Array.from(new Set(failedCandidateIdsRaw.map((value) => trimStr(value)).filter(Boolean))).slice(0, sampleLimit);
-    const pendingCandidateJobs = candidateStatusRows.map((row) => {
-      const candidateId = trimStr(row?.candidate_id || '');
-      const pendingJobId = trimStr(row?.pending_job_id || row?.latest_job_id || row?.job_id || '');
-      const latestJobStatus = trimStr(row?.latest_job_status || row?.job_status || '');
-      return {
-        candidate_id: candidateId,
-        pending_job_id: pendingJobId,
-        latest_job_id: trimStr(row?.latest_job_id || pendingJobId || '') || null,
-        latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
-        latest_job_status: latestJobStatus || null,
-        job_status: latestJobStatus || trimStr(row?.status || '') || null,
-        candidate_status: trimStr(row?.status || '') || null,
-        latest_job_attempt_count: Number.isFinite(Number(row?.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
-        latest_job_max_attempts: Number.isFinite(Number(row?.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
-        latest_job_last_error_json: (row?.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json))
-          ? cloneJson(row.latest_job_last_error_json)
-          : ((row?.last_error_json && typeof row.last_error_json === 'object' && !Array.isArray(row.last_error_json)) ? cloneJson(row.last_error_json) : null)
-      };
-    }).filter((row) => row.candidate_id && row.pending_job_id).slice(0, sampleLimit);
-    const isTerminalJobStatus = (status) => {
-      const s = trimStr(status).toUpperCase();
-      if (!s) return false;
-      return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
-    };
-    const hasActivePendingJobEvidence = pendingJobIds.length > 0 || pendingCandidateJobs.some((job) => {
-      const jobId = trimStr(job?.pending_job_id || job?.job_id || '');
-      const status = trimStr(job?.latest_job_status || job?.job_status || job?.status || job?.candidate_status || '');
-      return !!jobId && !isTerminalJobStatus(status);
-    });
-    const total = toNumber(progress.total_candidates ?? progress.total_candidate_count ?? progress.total_count ?? progress.total ?? progress.candidate_count ?? obj.total_candidates ?? obj.candidate_count);
-    const failed = toNumber(progress.failed_candidates ?? progress.failed_candidate_count ?? progress.failed_count ?? progress.failed ?? obj.failed_candidates ?? obj.failed_count ?? failedCandidateIds.length);
-    const completed = toNumber(progress.completed_candidates ?? progress.ready_candidates ?? progress.ready_candidate_count ?? progress.completed_count ?? progress.ready_count ?? progress.completed ?? obj.completed_candidates ?? obj.ready_candidates);
-    const pendingFromPayload = progress.pending_candidates ?? progress.pending_candidate_count ?? progress.pending_count ?? progress.pending ?? obj.pending_candidates ?? obj.pending_count;
-    const pending = Number.isFinite(Number(pendingFromPayload)) ? toNumber(pendingFromPayload) : Math.max(0, total - completed - failed, pendingCandidateIds.length);
-    const explicitReadyEmptyFlag = progress.ready_empty === true || progress.readyEmpty === true || obj.ready_empty === true || obj.readyEmpty === true;
-    const explicitReadyFlag = explicitReadyEmptyFlag || progress.ready_flag === true || progress.ready === true || obj.ready_flag === true || obj.ready === true;
-    const explicitNotReadyFlag = !explicitReadyEmptyFlag && (progress.ready_flag === false || progress.ready === false || obj.ready_flag === false || obj.ready === false);
-    const readyFlag = explicitReadyEmptyFlag || explicitReadyFlag || (!explicitNotReadyFlag && total > 0 && pending <= 0 && failed <= 0 && !hasActivePendingJobEvidence);
-    const phase = trimStr(progress.phase || progress.current_phase || progress.status_phase || obj.phase || obj.current_phase || (readyFlag ? 'READY' : 'REFRESHING'));
-    const statusText = trimStr(progress.status_text || progress.message || progress.statusText || obj.status_text || obj.message || (readyFlag ? 'Preview ready' : 'Preparing payment preview candidates.'));
-    return {
-      session_id: trimStr(obj.session_id || progress.session_id || fallbackSessionId),
-      snapshot_run_id: trimStr(obj.snapshot_run_id || progress.snapshot_run_id || ''),
-      session_version: obj.session_version ?? progress.session_version ?? null,
-      session_signature: trimStr(obj.session_signature || progress.session_signature || ''),
-      total_candidates: total,
-      completed_candidates: completed,
-      ready_candidates: completed,
-      pending_candidates: pending,
-      failed_candidates: failed,
-      pending_candidate_ids: pendingCandidateIds,
-      failed_candidate_ids: failedCandidateIds,
-      candidate_status_rows: candidateStatusRows,
-      candidate_statuses: candidateStatusRows,
-      pending_job_ids: pendingJobIds,
-      recent_jobs: recentJobs,
-      pending_candidate_jobs: pendingCandidateJobs,
-      ready_flag: !!readyFlag,
-      ready: !!readyFlag,
-      ready_empty: explicitReadyEmptyFlag || (!!readyFlag && total <= 0),
-      requires_paging: progress.requires_paging === true || progress.requiresPaging === true || obj.requires_paging === true || obj.requiresPaging === true || progress.large_preview === true || progress.largePreview === true || obj.large_preview === true || obj.largePreview === true,
-      large_preview: progress.large_preview === true || progress.largePreview === true || obj.large_preview === true || obj.largePreview === true,
-      available_sections: Array.isArray(progress.available_sections || obj.available_sections) ? (cloneJson(progress.available_sections || obj.available_sections) || []) : [],
-      recommended_page_size: Number.isFinite(Number(progress.recommended_page_size || obj.recommended_page_size)) ? Math.max(1, Math.min(100, Math.trunc(Number(progress.recommended_page_size || obj.recommended_page_size)))) : null,
-      initial_page_metadata: (progress.initial_page_metadata && typeof progress.initial_page_metadata === 'object' && !Array.isArray(progress.initial_page_metadata))
-        ? (cloneJson(progress.initial_page_metadata) || progress.initial_page_metadata)
-        : ((obj.initial_page_metadata && typeof obj.initial_page_metadata === 'object' && !Array.isArray(obj.initial_page_metadata)) ? (cloneJson(obj.initial_page_metadata) || obj.initial_page_metadata) : null),
-      initial_page: (progress.initial_page && typeof progress.initial_page === 'object' && !Array.isArray(progress.initial_page))
-        ? (cloneJson(progress.initial_page) || progress.initial_page)
-        : ((obj.initial_page && typeof obj.initial_page === 'object' && !Array.isArray(obj.initial_page)) ? (cloneJson(obj.initial_page) || obj.initial_page) : null),
-      phase,
-      status_text: statusText,
-      progress: cloneJson(progress) || progress,
-      raw: cloneJson(obj) || obj
-    };
-  };
-  const normaliseOpenPayload = (json) => {
-    const payloadObj = isPlainObject(json) ? json : {};
-    const progress = normaliseProgress(payloadObj, payloadObj.session_id || payloadObj.session?.session_id || '');
-    const sessionObj = isPlainObject(payloadObj.session) ? payloadObj.session : {};
-    const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : null;
-    const bootstrapOnly = payloadObj.bootstrap_only === true || payloadObj.preview_bootstrap === true || payloadObj.large_preview === true || previewObj?.bootstrap_only === true;
-    const readyEmptyFlag = payloadObj.ready_empty === true || payloadObj.readyEmpty === true || progress.ready_empty === true;
-    const readyFlag = readyEmptyFlag || payloadObj.ready === true || payloadObj.ready_flag === true || progress.ready_flag === true || progress.ready === true;
-    return {
-      ok: payloadObj.ok !== false,
-      ...(cloneJson(payloadObj) || {}),
-      mutation_context: trimStr(payloadObj.mutation_context || payloadObj.mutationContext || payload?.mutation_context || payload?.mutationContext || '') || null,
-      source_session_id: trimStr(payloadObj.source_session_id || payloadObj.sourceSessionId || payload?.source_session_id || payload?.sourceSessionId || '') || null,
-      obsolete_session_ids: Array.from(new Set([
-        ...(Array.isArray(payloadObj.obsolete_session_ids) ? payloadObj.obsolete_session_ids : []),
-        ...(Array.isArray(payloadObj.obsoleteSessionIds) ? payloadObj.obsoleteSessionIds : []),
-        ...(Array.isArray(payload?.obsolete_session_ids) ? payload.obsolete_session_ids : []),
-        ...(Array.isArray(payload?.obsoleteSessionIds) ? payload.obsoleteSessionIds : [])
-      ].map((value) => trimStr(value)).filter(Boolean))),
-      created_pay_batch_ids: Array.from(new Set([
-        ...(Array.isArray(payloadObj.created_pay_batch_ids) ? payloadObj.created_pay_batch_ids : []),
-        ...(Array.isArray(payloadObj.createdPayBatchIds) ? payloadObj.createdPayBatchIds : []),
-        ...(Array.isArray(payload?.created_pay_batch_ids) ? payload.created_pay_batch_ids : []),
-        ...(Array.isArray(payload?.createdPayBatchIds) ? payload.createdPayBatchIds : [])
-      ].map((value) => trimStr(value)).filter(Boolean))),
-      dirty_candidate_ids: Array.from(new Set([
-        ...(Array.isArray(payloadObj.dirty_candidate_ids) ? payloadObj.dirty_candidate_ids : []),
-        ...(Array.isArray(payloadObj.dirtyCandidateIds) ? payloadObj.dirtyCandidateIds : []),
-        ...(Array.isArray(payload?.dirty_candidate_ids) ? payload.dirty_candidate_ids : []),
-        ...(Array.isArray(payload?.dirtyCandidateIds) ? payload.dirtyCandidateIds : [])
-      ].map((value) => trimStr(value)).filter(Boolean))),
-      pending_candidate_ids: Array.from(new Set([
-        ...progress.pending_candidate_ids,
-        ...(Array.isArray(payloadObj.pending_candidate_ids) ? payloadObj.pending_candidate_ids : []),
-        ...(Array.isArray(payloadObj.pendingCandidateIds) ? payloadObj.pendingCandidateIds : []),
-        ...(Array.isArray(payload?.pending_candidate_ids) ? payload.pending_candidate_ids : []),
-        ...(Array.isArray(payload?.pendingCandidateIds) ? payload.pendingCandidateIds : [])
-      ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 25),
-      refresh_job_ids: Array.from(new Set([
-        ...progress.pending_job_ids,
-        ...(Array.isArray(payloadObj.refresh_job_ids) ? payloadObj.refresh_job_ids : []),
-        ...(Array.isArray(payloadObj.refreshJobIds) ? payloadObj.refreshJobIds : []),
-        ...(Array.isArray(payload?.refresh_job_ids) ? payload.refresh_job_ids : []),
-        ...(Array.isArray(payload?.refreshJobIds) ? payload.refreshJobIds : [])
-      ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 25),
-      session_id: trimStr(payloadObj.session_id || sessionObj.session_id || progress.session_id),
-      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || sessionObj.snapshot_run_id || progress.snapshot_run_id),
-      session_version: payloadObj.session_version ?? sessionObj.session_version ?? progress.session_version,
-      session_signature: trimStr(payloadObj.session_signature || sessionObj.session_signature || progress.session_signature),
-      ready: !!readyFlag,
-      ready_flag: !!readyFlag,
-      ready_empty: readyEmptyFlag || (!!readyFlag && progress.total_candidates <= 0),
-      deferred: !readyFlag,
-      progress_only: !readyFlag || bootstrapOnly || (!previewObj && !readyEmptyFlag),
-      progress,
-      candidate_counts: {
-        total: progress.total_candidates,
-        completed: progress.completed_candidates,
-        ready: progress.ready_candidates,
-        pending: progress.pending_candidates,
-        failed: progress.failed_candidates
-      },
-      requires_paging: payloadObj.requires_paging === true || payloadObj.requiresPaging === true || progress.requires_paging === true || progress.requiresPaging === true || payloadObj.large_preview === true || payloadObj.largePreview === true || progress.large_preview === true || progress.largePreview === true || bootstrapOnly,
-      large_preview: payloadObj.large_preview === true || payloadObj.largePreview === true || progress.large_preview === true || progress.largePreview === true || bootstrapOnly,
-      initial_page_metadata: (payloadObj.initial_page_metadata && typeof payloadObj.initial_page_metadata === 'object' && !Array.isArray(payloadObj.initial_page_metadata))
-        ? (cloneJson(payloadObj.initial_page_metadata) || payloadObj.initial_page_metadata)
-        : ((payloadObj.preview_page_metadata && typeof payloadObj.preview_page_metadata === 'object' && !Array.isArray(payloadObj.preview_page_metadata))
-            ? (cloneJson(payloadObj.preview_page_metadata) || payloadObj.preview_page_metadata)
-            : ((progress.initial_page_metadata && typeof progress.initial_page_metadata === 'object' && !Array.isArray(progress.initial_page_metadata)) ? (cloneJson(progress.initial_page_metadata) || progress.initial_page_metadata) : null)),
-      initial_page: (payloadObj.initial_page && typeof payloadObj.initial_page === 'object' && !Array.isArray(payloadObj.initial_page))
-        ? (cloneJson(payloadObj.initial_page) || payloadObj.initial_page)
-        : ((payloadObj.preview_page && typeof payloadObj.preview_page === 'object' && !Array.isArray(payloadObj.preview_page))
-            ? (cloneJson(payloadObj.preview_page) || payloadObj.preview_page)
-            : ((progress.initial_page && typeof progress.initial_page === 'object' && !Array.isArray(progress.initial_page)) ? (cloneJson(progress.initial_page) || progress.initial_page) : null)),
-      preview: readyFlag && previewObj && !bootstrapOnly ? (cloneJson(previewObj) || previewObj) : null,
-      bootstrap_only: !!bootstrapOnly,
-      preview_bootstrap: !!bootstrapOnly,
-      available_sections: Array.isArray(payloadObj.available_sections || previewObj?.available_sections) ? cloneJson(payloadObj.available_sections || previewObj.available_sections) || [] : [],
-      recommended_page_size: Number.isFinite(Number(payloadObj.recommended_page_size || previewObj?.recommended_page_size)) ? Math.max(1, Math.min(100, Math.trunc(Number(payloadObj.recommended_page_size || previewObj?.recommended_page_size)))) : null,
-      pending_candidate_ids: Array.from(new Set([
-        ...progress.pending_candidate_ids,
-        ...(Array.isArray(payloadObj.pending_candidate_ids) ? payloadObj.pending_candidate_ids : []),
-        ...(Array.isArray(payloadObj.pendingCandidateIds) ? payloadObj.pendingCandidateIds : []),
-        ...(Array.isArray(payload?.pending_candidate_ids) ? payload.pending_candidate_ids : []),
-        ...(Array.isArray(payload?.pendingCandidateIds) ? payload.pendingCandidateIds : [])
-      ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 25),
-      failed_candidate_ids: progress.failed_candidate_ids,
-      candidate_status_rows: progress.candidate_status_rows,
-      candidate_statuses: progress.candidate_statuses,
-      pending_job_ids: progress.pending_job_ids,
-      refresh_job_ids: Array.from(new Set([
-        ...progress.pending_job_ids,
-        ...(Array.isArray(payloadObj.refresh_job_ids) ? payloadObj.refresh_job_ids : []),
-        ...(Array.isArray(payloadObj.refreshJobIds) ? payloadObj.refreshJobIds : []),
-        ...(Array.isArray(payload?.refresh_job_ids) ? payload.refresh_job_ids : []),
-        ...(Array.isArray(payload?.refreshJobIds) ? payload.refreshJobIds : [])
-      ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 25),
-      recent_jobs: progress.recent_jobs,
-      pending_candidate_jobs: progress.pending_candidate_jobs,
-      phase: progress.phase,
-      status_text: progress.status_text,
-      server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids || previewObj?.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids || previewObj.server_selected_preview_row_ids) || [] : [],
-      server_selected_preview_row_ids_provided: payloadObj.server_selected_preview_row_ids_provided === true || previewObj?.server_selected_preview_row_ids_provided === true || sessionObj.server_selected_preview_row_ids_provided === true
-    };
-  };
-  const sanitiseWorkbenchOpenRequestPayload = (sourcePayload) => {
-    const out = isPlainObject(sourcePayload) ? (cloneJson(sourcePayload) || { ...sourcePayload }) : {};
-    const omittedLargeScopeArrays = [];
-    const capMetadataArrays = (target, pathLabel) => {
-      if (!isPlainObject(target)) return;
-      for (const key of ['dirty_candidate_ids', 'dirtyCandidateIds', 'created_pay_batch_ids', 'createdPayBatchIds', 'refresh_job_ids', 'refreshJobIds', 'obsolete_session_ids', 'obsoleteSessionIds']) {
-        if (Array.isArray(target[key])) target[key] = target[key].map((value) => trimStr(value)).filter(Boolean).slice(0, 100);
-      }
-      for (const key of ['candidate_ids', 'candidateIds', 'scope_candidate_ids', 'scopeCandidateIds', 'pending_candidate_ids', 'pendingCandidateIds', 'failed_candidate_ids', 'failedCandidateIds', 'timesheet_ids', 'timesheetIds', 'selected_timesheet_ids', 'selectedTimesheetIds', 'targeted_timesheet_ids', 'targetedTimesheetIds', 'linked_timesheet_ids', 'linkedTimesheetIds']) {
-        if (!Array.isArray(target[key])) continue;
-        const cleaned = target[key].map((value) => trimStr(value)).filter(Boolean);
-        if (cleaned.length > 100) {
-          delete target[key];
-          omittedLargeScopeArrays.push(`${pathLabel}${key}`);
-        } else {
-          target[key] = cleaned.slice(0, 100);
-        }
-      }
-    };
-    capMetadataArrays(out, '');
-    for (const nestedKey of ['filters_json', 'filtersJson', 'filters', 'preview_decisions_json', 'previewDecisionsJson', 'preview_decisions', 'previewDecisions']) {
-      if (isPlainObject(out[nestedKey])) capMetadataArrays(out[nestedKey], `${nestedKey}.`);
-    }
-    if (omittedLargeScopeArrays.length) {
-      out.row_backed_scope_required = true;
-      out.large_scope_arrays_omitted = Array.from(new Set(omittedLargeScopeArrays));
-      out.preview_context_mode = out.preview_context_mode || out.context_mode || 'SUMMARY';
-    }
-    return out;
+  const unwrapEnvelope = (value) => {
+    let out = value;
+    try {
+      if (Array.isArray(out) && out.length === 1 && isPlainObject(out[0])) out = out[0];
+      if (isPlainObject(out) && isPlainObject(out.data)) out = { ...out.data, ok: out.ok !== false };
+      if (Array.isArray(out) && out.length === 1 && isPlainObject(out[0])) out = out[0];
+    } catch {}
+    return isPlainObject(out) ? out : {};
   };
   const makeApiPayloadError = (json, status, fallbackMessage) => {
-    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
-    const message = trimStr(payloadObj.user_message || payloadObj.message || payloadObj.error || fallbackMessage || `Request failed (${status})`) || `Request failed (${status})`;
-    const err = new Error(message);
-    err.status = status;
-    err.payload = json;
-    err.json = json;
-    err.response_json = cloneJson(json) || json;
-    const code = trimStr(payloadObj.error_code || payloadObj.code || '');
+    const source = isPlainObject(json) ? json : { raw_response: json };
+    const message = trimStr(source.user_message || source.message || source.error || fallbackMessage || `Request failed (${status})`) || `Request failed (${status})`;
+    const error = new Error(message);
+    error.status = status;
+    error.payload = json;
+    error.json = json;
+    error.response_json = cloneJson(json) || json;
+    const code = trimStr(source.error_code || source.errorCode || source.code || '');
     if (code) {
-      err.code = code;
-      err.error_code = code;
+      error.code = code;
+      error.error_code = code;
     }
-    return err;
+    return error;
+  };
+  const boundedSampleRows = (source) => {
+    const src = isPlainObject(source) ? source : {};
+    const rows = [
+      src.candidate_sample_rows,
+      src.candidate_sample_rows_json,
+      src.candidate_status_rows,
+      src.candidate_statuses,
+      src.sample_candidate_rows,
+      src.sample_rows
+    ].find((value) => Array.isArray(value)) || [];
+    return rows.filter((row) => isPlainObject(row)).slice(0, 25).map((row) => cloneJson(row) || row);
+  };
+  const normaliseProgress = (value, fallback = {}) => {
+    const envelope = unwrapEnvelope(value);
+    const src = isPlainObject(envelope.progress) ? envelope.progress : envelope;
+    const sectionCounts = isPlainObject(src.section_counts)
+      ? (cloneJson(src.section_counts) || {})
+      : (isPlainObject(src.section_counts_json) ? (cloneJson(src.section_counts_json) || {}) : {});
+    const candidateSampleRows = boundedSampleRows({ ...envelope, ...src });
+    const phase = trimStr(src.phase || src.progress_state || envelope.phase || envelope.progress_state || '');
+    const phaseUpper = phase.toUpperCase();
+    const failedCount = toCount(src.failed_candidates ?? src.failed_count ?? src.scope_failed_count ?? envelope.failed_candidates ?? envelope.failed_count);
+    const failedLineUnits = toCount(src.line_units_failed ?? src.line_units_error ?? envelope.line_units_failed ?? envelope.line_units_error);
+    const failed = failedCount > 0 || failedLineUnits > 0 || phaseUpper === 'FAILED' || phaseUpper === 'ERROR';
+    const obsolete = src.session_obsolete === true || envelope.session_obsolete === true || src.obsolete === true || envelope.obsolete === true;
+    const ready = !failed && !obsolete && (
+      src.ready === true ||
+      src.ready_flag === true ||
+      envelope.ready === true ||
+      envelope.ready_flag === true ||
+      phaseUpper === 'READY' ||
+      phaseUpper === 'READY_EMPTY'
+    );
+    const readyEmpty = ready && (src.ready_empty === true || envelope.ready_empty === true || phaseUpper === 'READY_EMPTY');
+    const rowsAvailable = !obsolete && (src.rows_available === true || src.has_materialised_preview_rows === true || envelope.rows_available === true || toCount(src.preview_row_count ?? envelope.preview_row_count) > 0);
+    const runningMarkerKeys = ['still_running', 'pending_refresh', 'refresh_pending', 'preview_refresh_pending'];
+    const runningMarkerPresent = runningMarkerKeys.some((key) => Object.prototype.hasOwnProperty.call(src, key) || Object.prototype.hasOwnProperty.call(envelope, key));
+    const explicitRunning = src.still_running === true || envelope.still_running === true || src.pending_refresh === true || envelope.pending_refresh === true || src.refresh_pending === true || envelope.refresh_pending === true || src.preview_refresh_pending === true || envelope.preview_refresh_pending === true;
+    const stillRunning = !ready && !failed && !obsolete && (runningMarkerPresent ? explicitRunning : !['READY', 'READY_EMPTY', 'FAILED', 'ERROR'].includes(phaseUpper));
+    return {
+      ...src,
+      ok: envelope.ok !== false,
+      session_id: trimStr(envelope.session_id || src.session_id || fallback.session_id || '') || null,
+      snapshot_run_id: trimStr(envelope.snapshot_run_id || envelope.source_snapshot_run_id || src.snapshot_run_id || src.source_snapshot_run_id || fallback.snapshot_run_id || '') || null,
+      source_snapshot_run_id: trimStr(envelope.source_snapshot_run_id || src.source_snapshot_run_id || envelope.snapshot_run_id || src.snapshot_run_id || fallback.snapshot_run_id || '') || null,
+      session_version: envelope.session_version ?? envelope.version ?? src.session_version ?? src.version ?? fallback.session_version ?? null,
+      session_signature: trimStr(envelope.session_signature || src.session_signature || fallback.session_signature || '') || null,
+      pay_date: trimStr(envelope.pay_date || src.pay_date || fallback.pay_date || '') || null,
+      week_ending_cutoff: trimStr(envelope.week_ending_cutoff || envelope.week_ending_cutoff_date || src.week_ending_cutoff || src.week_ending_cutoff_date || fallback.week_ending_cutoff || '') || null,
+      week_ending_cutoff_date: trimStr(envelope.week_ending_cutoff_date || envelope.week_ending_cutoff || src.week_ending_cutoff_date || src.week_ending_cutoff || fallback.week_ending_cutoff || '') || null,
+      progress_counter_version: envelope.progress_counter_version ?? src.progress_counter_version ?? null,
+      progress_state: trimStr(envelope.progress_state || src.progress_state || src.phase || fallback.progress_state || '') || null,
+      phase: phase || (ready ? 'READY' : (failed ? 'FAILED' : 'REFRESHING_CANDIDATES')),
+      status_text: trimStr(src.status_text || envelope.status_text || src.message || envelope.message || (ready ? 'Payment preview is ready.' : 'Payment preview is preparing in the background.')),
+      scope_seed_complete: src.scope_seed_complete === true || envelope.scope_seed_complete === true,
+      total_candidates: toCount(src.total_candidates ?? src.candidate_count ?? src.total_count ?? src.scope_total_count ?? envelope.total_candidates ?? envelope.total_count),
+      total_count: toCount(src.total_count ?? src.total_candidates ?? src.candidate_count ?? src.scope_total_count ?? envelope.total_count ?? envelope.total_candidates),
+      seeded_candidates: toCount(src.seeded_candidates ?? src.seeded_count ?? src.scope_seeded_count ?? envelope.seeded_candidates ?? envelope.seeded_count),
+      ready_candidates: toCount(src.ready_candidates ?? src.completed_candidates ?? src.ready_count ?? src.scope_ready_count ?? envelope.ready_candidates ?? envelope.completed_candidates),
+      completed_candidates: toCount(src.completed_candidates ?? src.ready_candidates ?? src.completed_count ?? src.scope_ready_count ?? envelope.completed_candidates ?? envelope.ready_candidates),
+      pending_candidates: toCount(src.pending_candidates ?? src.pending_count ?? src.scope_pending_count ?? envelope.pending_candidates ?? envelope.pending_count),
+      failed_candidates: toCount(src.failed_candidates ?? src.failed_count ?? src.scope_failed_count ?? envelope.failed_candidates ?? envelope.failed_count),
+      line_units_total: toCount(src.line_units_total ?? envelope.line_units_total),
+      line_units_complete: toCount(src.line_units_complete ?? envelope.line_units_complete),
+      line_units_pending: toCount(src.line_units_pending ?? envelope.line_units_pending),
+      line_units_ready: toCount(src.line_units_ready ?? envelope.line_units_ready),
+      line_units_failed: toCount(src.line_units_failed ?? src.line_units_error ?? envelope.line_units_failed ?? envelope.line_units_error),
+      line_units_error: toCount(src.line_units_failed ?? src.line_units_error ?? envelope.line_units_failed ?? envelope.line_units_error),
+      preview_row_count: toCount(src.preview_row_count ?? envelope.preview_row_count),
+      selected_row_count: toCount(src.selected_row_count ?? envelope.selected_row_count),
+      section_counts: sectionCounts,
+      section_counts_json: sectionCounts,
+      candidate_sample_rows: candidateSampleRows,
+      candidate_sample_rows_json: candidateSampleRows,
+      candidate_status_rows: candidateSampleRows,
+      candidate_statuses: candidateSampleRows,
+      ready,
+      ready_flag: ready,
+      ready_empty: readyEmpty,
+      rows_available: rowsAvailable,
+      has_materialised_preview_rows: rowsAvailable,
+      selected_rows_available: src.selected_rows_available === true || envelope.selected_rows_available === true || toCount(src.selected_row_count ?? envelope.selected_row_count) > 0,
+      still_running: stillRunning,
+      pending_refresh: stillRunning,
+      refresh_pending: stillRunning,
+      preview_refresh_pending: stillRunning,
+      requires_paging: true,
+      read_only: true
+    };
+  };
+  const clearSessionBoundCaches = (wizard, oldSessionId, nextSessionId) => {
+    const oldId = trimStr(oldSessionId);
+    const nextId = trimStr(nextSessionId);
+    if (!oldId || !nextId || oldId === nextId || !wizard || typeof wizard !== 'object') return false;
+    wizard.preview = isPlainObject(wizard.preview) ? wizard.preview : {};
+    wizard.workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
+    wizard.decisions = isPlainObject(wizard.decisions) ? wizard.decisions : {};
+    const preview = wizard.preview;
+    const workbench = wizard.workbench;
+    const decisions = wizard.decisions;
+    const previewDataSessionId = trimStr(preview.data?.session_id || preview.data?.session?.session_id || '');
+    for (const key of ['preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages', 'preview_pages', 'previewPages']) preview[key] = {};
+    preview.first_page_applied = false;
+    preview.preview_ready_visual = false;
+    preview.ready_empty = false;
+    preview.pageData = null;
+    preview.page_data = null;
+    preview.readiness = null;
+    preview.candidateDebtInfo = {};
+    preview.failure = null;
+    preview.componentStateCache = {
+      case_resolution_states: [],
+      blocked_case_states: [],
+      safe_case_states: [],
+      reusable_component_resolutions: {},
+      stale_component_resolutions: {},
+      draftable_now: [],
+      blocked_now: [],
+      ready_to_pay_now: [],
+      blocked_for_pay_now: [],
+      hidden_indefinite_snoozes: [],
+      ready_preview_lines: [],
+      blocked_preview_lines: [],
+      hidden_preview_lines: []
+    };
+    if (!previewDataSessionId || previewDataSessionId === oldId) preview.data = null;
+    for (const key of ['preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'preview_pages', 'previewPages', 'required_preview_sections_loaded', 'requiredPreviewSectionsLoaded', 'required_preview_sections_empty', 'requiredPreviewSectionsEmpty']) workbench[key] = {};
+    for (const key of ['canonical_preview_lines', 'preview_rows', 'ready_preview_lines', 'blocked_for_pay', 'blocked_for_pay_now', 'blocked_preview_lines', 'case_resolution_states', 'cases_resolutions', 'pending_candidate_ids', 'failed_candidate_ids', 'dirty_candidate_ids', 'pending_candidate_rows', 'failed_candidate_rows', 'pending_candidate_jobs', 'selected_preview_row_ids', 'server_selected_preview_row_ids', 'payees']) workbench[key] = [];
+    workbench.server_selected_preview_row_ids_provided = false;
+    workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+    workbench.summary = {};
+    workbench.initial_page = null;
+    workbench.initial_page_metadata = null;
+    workbench.required_preview_sections_summary = null;
+    workbench.__candidate_refresh_page_reread_pending = false;
+    for (const key of ['canonical_preview_lines', 'preview_rows', 'ready_preview_lines', 'blocked_for_pay', 'blocked_for_pay_now', 'blocked_preview_lines', 'case_resolution_states', 'cases_resolutions', 'blocked_case_states', 'safe_case_states', 'draftable_now', 'blocked_now', 'ready_to_pay_now', 'hidden_indefinite_snoozes', 'pending_candidate_ids', 'failed_candidate_ids', 'dirty_candidate_ids', 'pending_candidate_rows', 'failed_candidate_rows', 'pending_candidate_jobs', 'selected_preview_row_ids', 'server_selected_preview_row_ids']) decisions[key] = [];
+    decisions.reusable_component_resolutions = {};
+    decisions.stale_component_resolutions = {};
+    decisions.server_selected_preview_row_ids_provided = false;
+    decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wizard.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wizard.local_selected_preview_row_ids_dirty = false;
+    return true;
+  };
+  const adoptAuthoritativeSession = (openPayload, requestToken = '') => {
+    const source = isPlainObject(openPayload) ? openPayload : {};
+    const nextSessionId = trimStr(source.session_id || source.session?.session_id || source.open?.session_id || '');
+    if (!uuidRe.test(nextSessionId)) return false;
+    try {
+      const state = typeof bankingGetState === 'function'
+        ? bankingGetState()
+        : ((typeof window !== 'undefined' && window.modalCtx?.banking) ? window.modalCtx.banking : null);
+      if (!state || typeof state !== 'object') return false;
+      state.pay = isPlainObject(state.pay) ? state.pay : {};
+      state.pay.draftWizard = isPlainObject(state.pay.draftWizard) ? state.pay.draftWizard : {};
+      const wizard = state.pay.draftWizard;
+      wizard.workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
+      wizard.preview = isPlainObject(wizard.preview) ? wizard.preview : {};
+      wizard.decisions = isPlainObject(wizard.decisions) ? wizard.decisions : {};
+      const expectedToken = trimStr(requestToken);
+      const liveToken = trimStr(wizard.preview.__request_token || wizard.workbench.__preview_refresh_request_token || '');
+      if (expectedToken && liveToken && expectedToken !== liveToken) return false;
+      const currentSessionId = trimStr(wizard.workbench.session_id || wizard.decisions.session_id || wizard.preview.data?.session_id || wizard.preview.data?.session?.session_id || '');
+      clearSessionBoundCaches(wizard, currentSessionId, nextSessionId);
+      const progress = isPlainObject(source.progress) ? source.progress : {};
+      const snapshotRunId = trimStr(source.snapshot_run_id || source.source_snapshot_run_id || source.session?.snapshot_run_id || source.session?.source_snapshot_run_id || progress.snapshot_run_id || progress.source_snapshot_run_id || '') || null;
+      const sessionVersion = source.session_version ?? source.version ?? source.session?.session_version ?? progress.session_version ?? null;
+      const sessionSignature = trimStr(source.session_signature || source.session?.session_signature || progress.session_signature || '');
+      const payDate = trimStr(source.pay_date || source.session?.pay_date || progress.pay_date || '');
+      const cutoff = trimStr(source.week_ending_cutoff || source.week_ending_cutoff_date || source.session?.week_ending_cutoff || progress.week_ending_cutoff || '');
+      wizard.workbench.session_id = nextSessionId;
+      wizard.workbench.snapshot_run_id = snapshotRunId;
+      wizard.workbench.source_snapshot_run_id = snapshotRunId;
+      if (sessionVersion !== null && sessionVersion !== undefined) wizard.workbench.session_version = sessionVersion;
+      if (sessionSignature) wizard.workbench.session_signature = sessionSignature;
+      if (payDate) wizard.workbench.pay_date = payDate;
+      if (cutoff) {
+        wizard.workbench.week_ending_cutoff = cutoff;
+        wizard.workbench.week_ending_cutoff_date = cutoff;
+      }
+      wizard.workbench.progress = cloneJson(progress) || progress;
+      wizard.workbench.progress_state = trimStr(progress.progress_state || progress.phase || source.progress_state || '');
+      wizard.workbench.progress_counter_version = progress.progress_counter_version ?? source.progress_counter_version ?? null;
+      wizard.workbench.last_progress_at = new Date().toISOString();
+      wizard.decisions.session_id = nextSessionId;
+      wizard.decisions.snapshot_run_id = snapshotRunId;
+      if (sessionVersion !== null && sessionVersion !== undefined) wizard.decisions.session_version = sessionVersion;
+      if (sessionSignature) wizard.decisions.session_signature = sessionSignature;
+      if (payDate) wizard.decisions.pay_date = payDate;
+      if (cutoff) {
+        wizard.decisions.week_ending_cutoff = cutoff;
+        wizard.decisions.week_ending_cutoff_date = cutoff;
+      }
+      return true;
+    } catch {
+      return false;
+    }
   };
 
-  const uiOptions = isPlainObject(payload?.ui_options) ? payload.ui_options : (isPlainObject(payload) ? payload : {});
-  const userInitiated = uiOptions.userInitiated === true || uiOptions.user_initiated === true || uiOptions.showModal === true || uiOptions.show_modal === true;
-  const silent = uiOptions.silent === true || uiOptions.silent === 'true';
-  const background = uiOptions.background === true || uiOptions.background === 'true';
-  const forceNewSession = payload?.force_new_session === true || payload?.forceNewSession === true;
-  const discardSourceSession = payload?.discard_source_session === true || payload?.discardSourceSession === true;
-  const sourceSessionId = trimStr(payload?.source_session_id || payload?.sourceSessionId || '');
-  const obsoleteSessionIds = Array.from(new Set([
-    ...(Array.isArray(payload?.obsolete_session_ids) ? payload.obsolete_session_ids : []),
-    ...(Array.isArray(payload?.obsoleteSessionIds) ? payload.obsoleteSessionIds : []),
-    sourceSessionId
-  ].map((value) => trimStr(value)).filter(Boolean)));
-  const mutationContext = trimStr(payload?.mutation_context || payload?.mutationContext || '');
-  const staleCodes = new Set(['OBSOLETE_SESSION', 'STALE_SESSION', 'REBASE_REQUIRED', 'WORKBENCH_SESSION_NOT_OPEN', 'WORKBENCH_SESSION_DISCARDED', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID']);
-  const normaliseOpenCode = (value) => trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-  const serialiseErrorPayloadForOpen = (value) => {
-    try {
-      if (value == null) return '';
-      if (typeof value === 'string') return value;
-      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-      return JSON.stringify(value);
-    } catch {
-      try { return String(value || ''); } catch { return ''; }
-    }
+  const input = isPlainObject(payload) ? payload : {};
+  const payDate = trimStr(input.pay_date || input.payDate || input.payment_date || input.paymentDate || '');
+  const weekEndingCutoff = trimStr(input.week_ending_cutoff || input.weekEndingCutoff || input.week_ending_cutoff_date || input.weekEndingCutoffDate || '') || '9999-12-31';
+  const filtersJson = cloneJson((isPlainObject(input.filters_json) ? input.filters_json : null) || (isPlainObject(input.filters) ? input.filters : null) || {}) || {};
+  const sessionSignature = trimStr(input.session_signature || input.sessionSignature || '');
+  const requestToken = trimStr(input.request_token || input.requestToken || '');
+  const userInitiated = input.userInitiated === true || input.user_initiated === true || input.showModal === true || input.show_modal === true;
+  const silent = input.silent === true || input.silent === 'true';
+  const background = input.background === true || input.background === 'true';
+
+  if (!payDate) throw new Error('bankingPayWorkbenchSessionOpen: pay_date is required');
+  if (!sessionSignature) throw new Error('bankingPayWorkbenchSessionOpen: session_signature is required');
+
+  const requestPayload = {
+    pay_date: payDate,
+    week_ending_cutoff: weekEndingCutoff,
+    filters_json: filtersJson,
+    session_signature: sessionSignature
   };
-  const looksFatalOpenFailure = (value) => {
-    const text = serialiseErrorPayloadForOpen(value).toUpperCase();
-    if (!text) return false;
-    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
-    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
-    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
-    return false;
-  };
-  const shouldTreatOpenStatusAsRebase = (status) => {
-    const n = Number(status);
-    if (!Number.isFinite(n)) return false;
-    if (n === 401 || n === 403) return false;
-    return [404, 409, 410, 423, 425, 500, 502, 503, 504].includes(Math.trunc(n));
-  };
-  const isObsoleteSessionId = (sessionIdLike) => {
-    const sessionIdText = trimStr(sessionIdLike);
-    return !!sessionIdText && (sessionIdText === sourceSessionId || obsoleteSessionIds.includes(sessionIdText));
-  };
-  const makeRebaseRequiredPayload = (returnedSessionId = '', code = 'OBSOLETE_SESSION_REUSED', message = 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.') => ({
-    ok: false,
-    error_code: code,
-    code,
-    rebase_required: true,
-    requires_new_session: true,
-    session_id: trimStr(returnedSessionId) || null,
-    source_session_id: sourceSessionId || null,
-    obsolete_session_ids: [...obsoleteSessionIds],
-    mutation_context: mutationContext || null,
-    message
-  });
 
   try {
     if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
-    const requestPayload = {
-      ...sanitiseWorkbenchOpenRequestPayload(payload),
-      seed_limit: Math.max(1, Math.min(100, Math.trunc(Number(payload?.seed_limit || payload?.seedLimit || 100) || 100))),
-      progress_mode: 'LIGHT',
-      mode: payload?.mode || 'BOOTSTRAP',
-      include_preview: payload?.include_preview === true,
-      bootstrap_only: payload?.bootstrap_only !== false
-    };
-    if (forceNewSession) requestPayload.force_new_session = true;
-    if (discardSourceSession) requestPayload.discard_source_session = true;
-    if (sourceSessionId) requestPayload.source_session_id = sourceSessionId;
-    if (obsoleteSessionIds.length) requestPayload.obsolete_session_ids = [...obsoleteSessionIds];
-    if (mutationContext) requestPayload.mutation_context = mutationContext;
-
-    const res = await authFetch(API('/api/banking/pay/workbench/session/open'), {
+    const fetchOptions = {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(requestPayload)
+    };
+    if (input.signal) fetchOptions.signal = input.signal;
+    const response = await authFetch(API('/api/banking/pay/workbench/session/open'), fetchOptions);
+    const json = await parseJsonResponse(response);
+    if (!response.ok) throw makeApiPayloadError(json, response.status, `Request failed (${response.status})`);
+    const envelope = unwrapEnvelope(json);
+    if (envelope.ok === false) throw makeApiPayloadError(envelope, 409, trimStr(envelope.message || envelope.error || '') || 'Workbench session could not be opened.');
+
+    const sessionObj = isPlainObject(envelope.session) ? envelope.session : {};
+    const openObj = isPlainObject(envelope.open) ? envelope.open : {};
+    const progress = normaliseProgress(isPlainObject(envelope.progress) ? envelope.progress : (Object.keys(openObj).length ? openObj : envelope), {
+      session_id: trimStr(envelope.session_id || sessionObj.session_id || openObj.session_id || ''),
+      snapshot_run_id: trimStr(envelope.snapshot_run_id || envelope.source_snapshot_run_id || sessionObj.snapshot_run_id || openObj.snapshot_run_id || openObj.source_snapshot_run_id || ''),
+      session_version: envelope.session_version ?? sessionObj.session_version ?? openObj.session_version ?? openObj.version ?? null,
+      session_signature: trimStr(envelope.session_signature || sessionObj.session_signature || openObj.session_signature || sessionSignature),
+      pay_date: trimStr(envelope.pay_date || sessionObj.pay_date || openObj.pay_date || payDate),
+      week_ending_cutoff: trimStr(envelope.week_ending_cutoff || sessionObj.week_ending_cutoff || openObj.week_ending_cutoff || weekEndingCutoff)
     });
-    const json = await parseJsonResponse(res);
-    if (!res.ok) {
-      const code = normaliseOpenCode(json?.error_code || json?.code || '');
-      if (
-        (forceNewSession || discardSourceSession) &&
-        (
-          staleCodes.has(code) ||
-          (shouldTreatOpenStatusAsRebase(res.status) && !looksFatalOpenFailure(json))
-        )
-      ) {
-        return makeRebaseRequiredPayload(sourceSessionId || '', code || 'REBASE_REQUIRED', trimStr(json?.message || json?.error || '') || 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.');
+    const sessionId = trimStr(envelope.session_id || sessionObj.session_id || openObj.session_id || progress.session_id || '');
+    if (!uuidRe.test(sessionId)) throw makeApiPayloadError(envelope, 500, 'Workbench session open did not return a valid session ID.');
+    const snapshotRunId = trimStr(envelope.snapshot_run_id || envelope.source_snapshot_run_id || sessionObj.snapshot_run_id || sessionObj.source_snapshot_run_id || openObj.snapshot_run_id || openObj.source_snapshot_run_id || progress.snapshot_run_id || '') || null;
+    const sessionVersion = envelope.session_version ?? sessionObj.session_version ?? openObj.session_version ?? openObj.version ?? progress.session_version ?? null;
+    const action = trimStr(envelope.action || openObj.action || (envelope.work_queued === true || openObj.work_queued === true ? 'WORKBENCH_SESSION_CREATED' : 'WORKBENCH_SESSION_ATTACHED')).toUpperCase();
+    if (!['WORKBENCH_SESSION_ATTACHED', 'WORKBENCH_SESSION_CREATED'].includes(action)) {
+      throw makeApiPayloadError(envelope, 500, 'Workbench session open returned an invalid action.');
+    }
+    const workQueued = envelope.work_queued === true || openObj.work_queued === true || action === 'WORKBENCH_SESSION_CREATED';
+    const output = {
+      ...envelope,
+      ok: true,
+      session_id: sessionId,
+      snapshot_run_id: snapshotRunId,
+      source_snapshot_run_id: trimStr(envelope.source_snapshot_run_id || openObj.source_snapshot_run_id || snapshotRunId || '') || null,
+      session_version: sessionVersion,
+      session_signature: trimStr(envelope.session_signature || sessionObj.session_signature || openObj.session_signature || sessionSignature) || sessionSignature,
+      pay_date: trimStr(envelope.pay_date || sessionObj.pay_date || openObj.pay_date || payDate) || payDate,
+      week_ending_cutoff: trimStr(envelope.week_ending_cutoff || envelope.week_ending_cutoff_date || sessionObj.week_ending_cutoff || openObj.week_ending_cutoff || weekEndingCutoff) || weekEndingCutoff,
+      week_ending_cutoff_date: trimStr(envelope.week_ending_cutoff_date || envelope.week_ending_cutoff || sessionObj.week_ending_cutoff || openObj.week_ending_cutoff || weekEndingCutoff) || weekEndingCutoff,
+      action,
+      work_queued: workQueued,
+      shared_session: true,
+      attach_only_open: true,
+      open_is_attach_only: true,
+      authoritative_session: true,
+      inline_drain_attempted: false,
+      drain_attempted: false,
+      decision_sync_attempted: false,
+      progress,
+      preview_summary: isPlainObject(envelope.preview_summary) ? (cloneJson(envelope.preview_summary) || envelope.preview_summary) : progress,
+      ready: progress.ready === true,
+      ready_flag: progress.ready === true,
+      ready_empty: progress.ready_empty === true,
+      rows_available: progress.rows_available === true,
+      requires_paging: true,
+      session: {
+        ...sessionObj,
+        session_id: sessionId,
+        snapshot_run_id: snapshotRunId,
+        source_snapshot_run_id: trimStr(envelope.source_snapshot_run_id || openObj.source_snapshot_run_id || snapshotRunId || '') || null,
+        session_version: sessionVersion,
+        session_signature: trimStr(envelope.session_signature || sessionObj.session_signature || openObj.session_signature || sessionSignature) || sessionSignature,
+        pay_date: trimStr(envelope.pay_date || sessionObj.pay_date || openObj.pay_date || payDate) || payDate,
+        week_ending_cutoff: trimStr(envelope.week_ending_cutoff || envelope.week_ending_cutoff_date || sessionObj.week_ending_cutoff || openObj.week_ending_cutoff || weekEndingCutoff) || weekEndingCutoff,
+        week_ending_cutoff_date: trimStr(envelope.week_ending_cutoff_date || envelope.week_ending_cutoff || sessionObj.week_ending_cutoff || openObj.week_ending_cutoff || weekEndingCutoff) || weekEndingCutoff
       }
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
-    }
-    const openedPayload = normaliseOpenPayload(json);
-    const returnedSessionId = trimStr(openedPayload.session_id || openedPayload.session?.session_id || '');
-    if ((forceNewSession || discardSourceSession) && isObsoleteSessionId(returnedSessionId)) {
-      return makeRebaseRequiredPayload(returnedSessionId);
-    }
-    return openedPayload;
+    };
+    adoptAuthoritativeSession(output, requestToken);
+    return output;
   } catch (error) {
-    const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: mutationContext || 'WORKBENCH_SESSION_OPEN', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated, silent, background, showModal: userInitiated && !silent && !background })
+    const friendly = typeof bankingNormalizeApiError === 'function'
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, {
+          action: 'WORKBENCH_SESSION_OPEN',
+          fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+          userInitiated,
+          silent,
+          background,
+          showModal: userInitiated && !silent && !background
+        })
       : null;
     if (typeof bankingBuildEnrichedFriendlyError === 'function') {
       throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking workbench session open failed');
@@ -105573,6 +104862,11 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
     throw error;
   }
 }
+
+
+
+
+
 
 function operationCanAdvance(operationState) {
   const source = operationState && typeof operationState === 'object' && !Array.isArray(operationState) ? operationState : {};
@@ -106768,523 +106062,539 @@ function bankingBuildEnrichedFriendlyError(originalError, friendly, fallbackMess
   return err;
 }
 
-
 async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const cloneJson = (value) => {
     try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
   };
-  const parseJsonResponse = async (res) => {
-    const text = await res.text().catch(() => '');
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const toCount = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.max(0, Math.trunc(number)) : 0;
+  };
+  const parseJsonResponse = async (response) => {
+    const text = await response.text().catch(() => '');
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
+  const unwrapEnvelope = (value) => {
+    let payload = value;
+    try {
+      if (Array.isArray(payload) && payload.length === 1 && isPlainObject(payload[0])) payload = payload[0];
+      if (isPlainObject(payload) && isPlainObject(payload.data)) payload = { ...payload.data, ok: payload.ok !== false };
+      if (Array.isArray(payload) && payload.length === 1 && isPlainObject(payload[0])) payload = payload[0];
+    } catch {}
+    return isPlainObject(payload) ? payload : {};
+  };
   const makeApiPayloadError = (json, status, fallbackMessage) => {
-    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
-    const message = trimStr(payloadObj.user_message || payloadObj.message || payloadObj.error || fallbackMessage || `Request failed (${status})`) || `Request failed (${status})`;
-    const err = new Error(message);
-    err.status = status;
-    err.payload = json;
-    err.json = json;
-    err.response_json = cloneJson(json) || json;
-    const code = trimStr(payloadObj.error_code || payloadObj.code || '');
+    const payload = isPlainObject(json) ? json : { raw_response: json };
+    const message = trimStr(payload.user_message || payload.message || payload.error || fallbackMessage || `Request failed (${status})`) || `Request failed (${status})`;
+    const error = new Error(message);
+    error.status = status;
+    error.payload = json;
+    error.json = json;
+    error.response_json = cloneJson(json) || json;
+    const code = trimStr(payload.error_code || payload.errorCode || payload.code || '');
     if (code) {
-      err.code = code;
-      err.error_code = code;
+      error.code = code;
+      error.error_code = code;
     }
-    return err;
+    return error;
   };
-  const sessionIdText = trimStr(sessionId);
-  if (!sessionIdText) throw new Error('bankingPayWorkbenchSessionGet: sessionId is required');
-  const allowFullPreview = options?.allow_full_preview === true || options?.allowFullPreview === true;
-
-  const readSharedWorkbenchPostMutationContext = () => {
-    try {
-      const mc = (typeof window !== 'undefined' && window && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-      const payState = (mc && String(mc.entity || '') === 'banking' && mc.banking && mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : null;
-      const wizard = (payState && payState.draftWizard && typeof payState.draftWizard === 'object') ? payState.draftWizard : null;
-      const workbench = (wizard && wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
-      const decisions = (wizard && wizard.decisions && typeof wizard.decisions === 'object') ? wizard.decisions : {};
-      const preview = (wizard && wizard.preview && typeof wizard.preview === 'object') ? wizard.preview : {};
-      const previewData = (preview.data && typeof preview.data === 'object' && !Array.isArray(preview.data)) ? preview.data : {};
-      const previewSession = (previewData.session && typeof previewData.session === 'object' && !Array.isArray(previewData.session)) ? previewData.session : {};
-      const arr = (...values) => Array.from(new Set(values.flatMap((value) => Array.isArray(value) ? value : []).map((value) => trimStr(value)).filter(Boolean)));
-      const sourceId = trimStr(
-        workbench.__source_session_id_discarded ||
-        workbench.__source_session_id_replaced ||
-        decisions.__source_session_id_discarded ||
-        preview.__post_create_source_session_id ||
-        preview.__post_cancel_source_session_id ||
-        ''
-      );
-      return {
-        session_id: trimStr(workbench.session_id || decisions.session_id || previewData.session_id || previewSession.session_id || ''),
-        source_session_id: sourceId,
-        obsolete_session_ids: arr(
-          workbench.__obsolete_workbench_session_ids,
-          workbench.__obsolete_progress_session_ids,
-          decisions.__obsolete_workbench_session_ids,
-          decisions.__obsolete_progress_session_ids,
-          preview.__obsolete_workbench_session_ids,
-          preview.__obsolete_progress_session_ids,
-          sourceId ? [sourceId] : []
-        ),
-        mutation_context: trimStr(
-          workbench.__post_mutation_context ||
-          decisions.__post_mutation_context ||
-          preview.__post_mutation_context ||
-          ''
-        ).toUpperCase(),
-        created_pay_batch_ids: arr(workbench.__post_create_created_pay_batch_ids, preview.__post_create_created_pay_batch_ids),
-        dirty_candidate_ids: arr(workbench.dirty_candidate_ids, workbench.dirtyCandidateIds, decisions.dirty_candidate_ids, decisions.dirtyCandidateIds),
-        pending_candidate_ids: arr(workbench.pending_candidate_ids, workbench.pendingCandidateIds, decisions.pending_candidate_ids, decisions.pendingCandidateIds),
-        refresh_job_ids: arr(
-          workbench.refresh_job_ids,
-          workbench.refreshJobIds,
-          decisions.refresh_job_ids,
-          decisions.refreshJobIds,
-          Array.isArray(workbench.pending_candidate_jobs) ? workbench.pending_candidate_jobs.map((job) => job && (job.pending_job_id || job.job_id || job.id)) : [],
-          Array.isArray(decisions.pending_candidate_jobs) ? decisions.pending_candidate_jobs.map((job) => job && (job.pending_job_id || job.job_id || job.id)) : []
-        ),
-        preview_reopen_required: !!(
-          workbench.preview_reopen_required === true ||
-          workbench.create_draft_refresh_pending === true ||
-          workbench.__post_mutation_preview_refresh_failed === true ||
-          decisions.create_draft_refresh_pending === true ||
-          preview.__post_create_refresh_pending === true ||
-          preview.__post_cancel_refresh_pending === true
-        )
-      };
-    } catch {
-      return {};
-    }
+  const boundedSampleRows = (payload, progress) => {
+    const rows = [
+      payload.candidate_sample_rows,
+      payload.candidate_sample_rows_json,
+      payload.candidate_status_rows,
+      payload.candidate_statuses,
+      progress.candidate_sample_rows,
+      progress.candidate_sample_rows_json,
+      progress.candidate_status_rows,
+      progress.candidate_statuses,
+      progress.sample_candidate_rows,
+      progress.sample_rows
+    ].find((value) => Array.isArray(value)) || [];
+    return rows.filter((row) => isPlainObject(row)).slice(0, 25).map((row) => cloneJson(row) || row);
   };
-  const sharedPostMutationContext = readSharedWorkbenchPostMutationContext();
-  const sourceSessionId = trimStr(options?.source_session_id || options?.sourceSessionId || sharedPostMutationContext.source_session_id || '');
-  const replacementSessionId = trimStr(options?.replacement_session_id || options?.replacementSessionId || sharedPostMutationContext.session_id || ((sessionIdText && sessionIdText !== sourceSessionId) ? sessionIdText : '') || '');
-  const obsoleteSessionIds = Array.from(new Set([
-    ...(Array.isArray(options?.obsolete_session_ids) ? options.obsolete_session_ids : []),
-    ...(Array.isArray(options?.obsoleteSessionIds) ? options.obsoleteSessionIds : []),
-    ...(Array.isArray(sharedPostMutationContext.obsolete_session_ids) ? sharedPostMutationContext.obsolete_session_ids : []),
-    sourceSessionId
-  ].map((value) => trimStr(value)).filter(Boolean)));
-  const rawMutationContext = trimStr(
-    options?.mutation_context ||
-    options?.mutationContext ||
-    options?.reason ||
-    options?.reset_reason ||
-    options?.action ||
-    options?.resetAction ||
-    sharedPostMutationContext.mutation_context ||
-    ''
-  ).toUpperCase();
-  const createdPayBatchIds = Array.from(new Set([
-    ...(Array.isArray(options?.created_pay_batch_ids) ? options.created_pay_batch_ids : []),
-    ...(Array.isArray(options?.createdPayBatchIds) ? options.createdPayBatchIds : []),
-    ...(Array.isArray(sharedPostMutationContext.created_pay_batch_ids) ? sharedPostMutationContext.created_pay_batch_ids : [])
-  ].map((value) => trimStr(value)).filter(Boolean)));
-  const dirtyCandidateIds = Array.from(new Set([
-    ...(Array.isArray(options?.dirty_candidate_ids) ? options.dirty_candidate_ids : []),
-    ...(Array.isArray(options?.dirtyCandidateIds) ? options.dirtyCandidateIds : []),
-    ...(Array.isArray(options?.pending_candidate_ids) ? options.pending_candidate_ids : []),
-    ...(Array.isArray(options?.pendingCandidateIds) ? options.pendingCandidateIds : []),
-    ...(Array.isArray(sharedPostMutationContext.dirty_candidate_ids) ? sharedPostMutationContext.dirty_candidate_ids : []),
-    ...(Array.isArray(sharedPostMutationContext.pending_candidate_ids) ? sharedPostMutationContext.pending_candidate_ids : [])
-  ].map((value) => trimStr(value)).filter(Boolean)));
-  const refreshJobIds = Array.from(new Set([
-    ...(Array.isArray(options?.refresh_job_ids) ? options.refresh_job_ids : []),
-    ...(Array.isArray(options?.refreshJobIds) ? options.refreshJobIds : []),
-    ...(Array.isArray(sharedPostMutationContext.refresh_job_ids) ? sharedPostMutationContext.refresh_job_ids : [])
-  ].map((value) => trimStr(value)).filter(Boolean)));
-  const previewReopenRequired = options?.preview_reopen_required === true || options?.previewReopenRequired === true || sharedPostMutationContext.preview_reopen_required === true;
-  const hasCreateSuccessEvidence = rawMutationContext === 'CREATE_DRAFT_SUCCESS' || rawMutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' || rawMutationContext === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' || createdPayBatchIds.length > 0;
-  const hasCancelSuccessEvidence = rawMutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' || rawMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' || rawMutationContext === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN';
-  const hasBatchMutationContext = hasCreateSuccessEvidence || hasCancelSuccessEvidence || /(^|_)(DRAFT|BATCH|PAY_BATCH)(_|$)/.test(rawMutationContext);
-  const hasDirtyCandidatesWithBatchMutation = hasBatchMutationContext && (dirtyCandidateIds.length > 0 || refreshJobIds.length > 0);
-  const hasPreviewReopenWithSourceSession = previewReopenRequired && !!sourceSessionId;
-  const mutationContext = hasCreateSuccessEvidence
-    ? 'CREATE_DRAFT_SUCCESS'
-    : (hasCancelSuccessEvidence ? 'CANCEL_DELETE_DRAFT_SUCCESS' : rawMutationContext);
-  const forceNewSession = options?.force_new_session === true || options?.forceNewSession === true || hasCreateSuccessEvidence || hasCancelSuccessEvidence || hasPreviewReopenWithSourceSession || hasDirtyCandidatesWithBatchMutation;
-  const discardSourceSession = options?.discard_source_session === true || options?.discardSourceSession === true || forceNewSession;
-  const staleCodes = new Set(['OBSOLETE_SESSION', 'STALE_SESSION', 'REBASE_REQUIRED', 'WORKBENCH_SESSION_NOT_OPEN', 'WORKBENCH_SESSION_DISCARDED', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID']);
-  const normaliseSessionCode = (value) => trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-  const serialiseSessionErrorPayload = (value) => {
-    try {
-      if (value == null) return '';
-      if (typeof value === 'string') return value;
-      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-      return JSON.stringify(value);
-    } catch {
-      try { return String(value || ''); } catch { return ''; }
-    }
+  const phaseFromState = (value, fallback = 'REFRESHING_CANDIDATES') => {
+    const state = trimStr(value).toUpperCase();
+    if (!state) return fallback;
+    if (state === 'MATERIALIZING_PREVIEW_ROWS') return 'MATERIALISING_PREVIEW_ROWS';
+    if (state === 'DIRTY') return 'REFRESHING_CANDIDATES';
+    return state;
   };
-  const looksFatalSessionFailure = (value) => {
-    const text = serialiseSessionErrorPayload(value).toUpperCase();
-    if (!text) return false;
-    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
-    if (text.includes('RLS') || text.includes('ROW LEVEL SECURITY') || text.includes('POLICY')) return true;
-    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
-    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
-    if (text.includes('SQLSTATE') || text.includes('SQL STATE') || text.includes('POSTGRES') || text.includes('SUPABASE') || text.includes('POSTGREST')) return true;
-    if (text.includes('INVALID INPUT SYNTAX') || text.includes('AMBIGUOUS') || text.includes('CONSTRAINT') || text.includes('VIOLATES')) return true;
-    if (/\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|INDEX)\b[^\n]*\b(DOES NOT EXIST|NOT FOUND|IS AMBIGUOUS)\b/.test(text)) return true;
-    return false;
-  };
-  const shouldTreatSessionStatusAsRebase = (status) => {
-    const n = Number(status);
-    if (!Number.isFinite(n)) return false;
-    if (n === 401 || n === 403) return false;
-    return [404, 409, 410, 423, 425, 500, 502, 503, 504].includes(Math.trunc(n));
-  };
-  const isObsoleteSessionId = (value) => {
-    const id = trimStr(value);
-    return !!id && obsoleteSessionIds.includes(id);
-  };
-  const makeRebaseRequiredPayload = (code = 'REBASE_REQUIRED', message = 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.') => ({
-    ok: false,
-    error_code: code,
-    code,
-    rebase_required: true,
-    requires_new_session: true,
-    pending_refresh: true,
-    refresh_pending: true,
-    preview_refresh_pending: true,
-    session_id: sessionIdText,
-    replacement_session_id: replacementSessionId || null,
-    source_session_id: sourceSessionId || null,
-    obsolete_session_ids: [...obsoleteSessionIds],
-    mutation_context: mutationContext || null,
-    post_mutation_context: mutationContext || null,
-    dirty_candidate_ids: dirtyCandidateIds.slice(0, 25),
-    pending_candidate_ids: dirtyCandidateIds.slice(0, 25),
-    refresh_job_ids: refreshJobIds.slice(0, 25),
-    ready: false,
-    ready_flag: false,
-    ready_empty: false,
-    deferred: true,
-    progress_only: true,
-    bootstrap_only: false,
-    message
-  });
-  const isRebaseRequiredPayload = (payload) => {
-    const obj = isPlainObject(payload) ? payload : {};
-    const code = normaliseSessionCode(obj.error_code || obj.code || obj.reason_code || '');
-    return obj.rebase_required === true || obj.requires_new_session === true || staleCodes.has(code);
-  };
-  const progressIndicatesPendingOrProgressOnly = (progress) => {
-    const p = isPlainObject(progress) ? progress : {};
-    const phase = normaliseSessionCode(p.phase || p.current_phase || p.status_phase || p.status || '');
-    if (p.progress_only === true || p.deferred === true || p.pending_refresh === true || p.refreshing === true || p.requires_paging === true || p.requiresPaging === true || p.large_preview === true || p.largePreview === true) return true;
-    if (['PENDING', 'REFRESHING', 'REFRESHING_CANDIDATES', 'SNAPSHOT_REFRESH_PENDING', 'SNAPSHOT_REBUILD_PENDING', 'WORKBENCH_REFRESH_PENDING', 'WORKBENCH_JOBS_RUNNING', 'PROGRESS_ONLY'].includes(phase)) return true;
-    return !(p.ready_empty === true || p.ready_flag === true || p.ready === true);
-  };
+  const normaliseLightProgress = (json, requestedSessionId) => {
+    const payload = unwrapEnvelope(json);
+    const source = isPlainObject(payload.progress) ? payload.progress : payload;
+    const sourceSessionId = trimStr(payload.session_id || source.session_id || requestedSessionId);
+    const sourceObsolete = payload.session_obsolete === true || source.session_obsolete === true || payload.obsolete === true || source.obsolete === true;
+    const replacementSessionId = trimStr(payload.replacement_session_id || source.replacement_session_id || '');
+    const replacementAvailable = sourceObsolete && uuidRe.test(replacementSessionId);
+    const useReplacement = replacementAvailable;
 
-  const isPostMutationContext = !!(mutationContext || forceNewSession || discardSourceSession || obsoleteSessionIds.length > 0 || previewReopenRequired || hasDirtyCandidatesWithBatchMutation);
+    const sourceSectionCounts = cloneJson(
+      isPlainObject(source.section_counts)
+        ? source.section_counts
+        : (isPlainObject(source.section_counts_json) ? source.section_counts_json : {})
+    ) || {};
+    const sourceTotal = toCount(source.total_candidates ?? source.candidate_count ?? source.total_count ?? source.scope_total_count ?? source.scope_total);
+    const sourceReadyCount = toCount(source.ready_candidates ?? source.completed_candidates ?? source.ready_count ?? source.completed_count ?? source.scope_ready_count ?? source.scope_ready);
+    const sourceFailedCount = toCount(source.failed_candidates ?? source.failed_count ?? source.scope_failed_count ?? source.scope_failed);
+    const explicitSourcePending = source.pending_candidates ?? source.pending_count ?? source.scope_pending_count ?? source.scope_pending;
+    const sourcePendingCount = Number.isFinite(Number(explicitSourcePending))
+      ? toCount(explicitSourcePending)
+      : Math.max(0, sourceTotal - sourceReadyCount - sourceFailedCount);
+    const sourceLineUnitsTotal = toCount(source.line_units_total ?? source.total_line_units ?? source.line_unit_count);
+    const sourceLineUnitsReady = toCount(source.line_units_ready ?? source.ready_line_units);
+    const sourceLineUnitsPending = toCount(source.line_units_pending ?? source.pending_line_units);
+    const sourceLineUnitsFailed = toCount(source.line_units_failed ?? source.line_units_error ?? source.error_line_units);
+    const sourcePreviewRowCount = toCount(source.preview_row_count ?? source.preview_rows_count ?? source.row_count);
+    const sourceSelectedRowCount = toCount(source.selected_row_count ?? source.selected_rows_count);
+    const sourcePhase = phaseFromState(source.phase || source.current_phase || source.progress_state || payload.progress_state || payload.status || '', sourcePreviewRowCount > 0 ? 'PARTIAL_READY' : 'REFRESHING_CANDIDATES');
+    const sourceFailed = sourceFailedCount > 0 || sourceLineUnitsFailed > 0 || sourcePhase === 'FAILED' || sourcePhase === 'ERROR';
+    const sourceReady = !sourceObsolete && !sourceFailed && (source.ready === true || source.ready_flag === true || source.ready_empty === true || payload.ready === true || payload.ready_flag === true || sourcePhase === 'READY' || sourcePhase === 'READY_EMPTY');
+    const sourceReadyEmpty = sourceReady && (source.ready_empty === true || payload.ready_empty === true || sourcePhase === 'READY_EMPTY');
+    const sourceRowsAvailable = !sourceObsolete && (source.rows_available === true || source.has_materialised_preview_rows === true || payload.rows_available === true || sourcePreviewRowCount > 0);
 
-  if (isObsoleteSessionId(sessionIdText)) {
-    return makeRebaseRequiredPayload('OBSOLETE_SESSION');
-  }
+    const replacementPhase = phaseFromState(payload.replacement_progress_state || source.replacement_progress_state || '', 'REFRESHING_CANDIDATES');
+    const replacementStatus = trimStr(payload.replacement_session_status || source.replacement_session_status || '');
+    const replacementStatusUpper = replacementStatus.toUpperCase();
+    const replacementIsActive = useReplacement && (!replacementStatusUpper || replacementStatusUpper === 'OPEN');
+    const replacementFailed = useReplacement && (
+      replacementPhase === 'FAILED' ||
+      replacementPhase === 'ERROR' ||
+      !replacementIsActive
+    );
+    const replacementReady = replacementIsActive && (replacementPhase === 'READY' || replacementPhase === 'READY_EMPTY');
+    const replacementReadyEmpty = replacementReady && replacementPhase === 'READY_EMPTY';
+    const candidateSampleRows = useReplacement ? [] : boundedSampleRows(payload, source);
+    const sessionId = useReplacement ? replacementSessionId : sourceSessionId;
+    const sessionVersion = useReplacement
+      ? (payload.replacement_session_version ?? source.replacement_session_version ?? null)
+      : (payload.session_version ?? payload.version ?? source.session_version ?? source.version ?? null);
+    const snapshotRunId = useReplacement
+      ? (trimStr(payload.replacement_snapshot_run_id || source.replacement_snapshot_run_id || '') || null)
+      : (trimStr(payload.source_snapshot_run_id || payload.snapshot_run_id || source.source_snapshot_run_id || source.snapshot_run_id || '') || null);
+    const sessionSignature = useReplacement
+      ? (trimStr(payload.replacement_session_signature || source.replacement_session_signature || '') || null)
+      : (trimStr(payload.session_signature || source.session_signature || '') || null);
+    const payDate = useReplacement
+      ? (trimStr(payload.replacement_pay_date || source.replacement_pay_date || '') || null)
+      : (trimStr(payload.pay_date || source.pay_date || '') || null);
+    const cutoff = useReplacement
+      ? (trimStr(payload.replacement_week_ending_cutoff || source.replacement_week_ending_cutoff || '') || null)
+      : (trimStr(payload.week_ending_cutoff || payload.week_ending_cutoff_date || source.week_ending_cutoff || source.week_ending_cutoff_date || '') || null);
+    const progressCounterVersion = useReplacement
+      ? (payload.replacement_progress_counter_version ?? source.replacement_progress_counter_version ?? null)
+      : (payload.progress_counter_version ?? source.progress_counter_version ?? null);
+    const progressState = useReplacement
+      ? (trimStr(payload.replacement_progress_state || source.replacement_progress_state || replacementPhase) || replacementPhase)
+      : (trimStr(payload.progress_state || source.progress_state || sourcePhase) || sourcePhase);
+    const activeProgressState = useReplacement && !replacementIsActive ? 'REBASE_REQUIRED' : progressState;
+    const activePhase = useReplacement && !replacementIsActive ? 'REBASE_REQUIRED' : (useReplacement ? replacementPhase : sourcePhase);
+    const ready = useReplacement ? replacementReady : sourceReady;
+    const readyEmpty = useReplacement ? replacementReadyEmpty : sourceReadyEmpty;
+    const rowsAvailable = useReplacement ? false : sourceRowsAvailable;
+    const activeSessionObsolete = sourceObsolete && (!replacementAvailable || !replacementIsActive);
+    const sourceRunningMarkerKeys = ['still_running', 'pending_refresh', 'refresh_pending', 'preview_refresh_pending'];
+    const sourceRunningMarkerPresent = sourceRunningMarkerKeys.some((key) => Object.prototype.hasOwnProperty.call(source, key) || Object.prototype.hasOwnProperty.call(payload, key));
+    const sourceExplicitRunning = source.still_running === true || payload.still_running === true || source.pending_refresh === true || payload.pending_refresh === true || source.refresh_pending === true || payload.refresh_pending === true || source.preview_refresh_pending === true || payload.preview_refresh_pending === true;
+    const stillRunning = useReplacement
+      ? (!replacementReady && !replacementFailed)
+      : (!sourceObsolete && !sourceReady && !sourceFailed && (sourceRunningMarkerPresent ? sourceExplicitRunning : !['READY', 'READY_EMPTY', 'FAILED', 'ERROR'].includes(sourcePhase)));
 
-  if ((forceNewSession || discardSourceSession || hasPreviewReopenWithSourceSession) && (!sourceSessionId || sessionIdText === sourceSessionId)) {
-    return makeRebaseRequiredPayload('REBASE_REQUIRED');
-  }
-
-  try {
-    const progress = (typeof bankingPayWorkbenchSessionGetProgress === 'function')
-      ? await bankingPayWorkbenchSessionGetProgress(sessionIdText, {
-          ...options,
-          staleSessionGuard: options.staleSessionGuard,
-          enforceActiveSession: options.enforceActiveSession,
-          obsolete_session_ids: [...obsoleteSessionIds],
-          source_session_id: sourceSessionId || '',
-          force_new_session: forceNewSession,
-          discard_source_session: discardSourceSession,
-          preview_reopen_required: previewReopenRequired,
-          mutation_context: mutationContext || null,
-          dirty_candidate_ids: dirtyCandidateIds.slice(0, 25),
-          refresh_job_ids: refreshJobIds.slice(0, 25),
-          created_pay_batch_ids: [...createdPayBatchIds]
-        })
-      : null;
-
-    if (isRebaseRequiredPayload(progress)) {
-      return progress;
-    }
-
-    if (progress && progress.ready_empty === true) {
-      return {
-        ok: true,
-        session_id: sessionIdText,
-        replacement_session_id: replacementSessionId || null,
-        snapshot_run_id: trimStr(progress.snapshot_run_id || ''),
-        session_version: progress.session_version ?? null,
-        session_signature: trimStr(progress.session_signature || ''),
-        ready: true,
-        ready_flag: true,
-        ready_empty: true,
-        deferred: false,
-        pending_refresh: false,
-        refresh_pending: false,
-        preview_refresh_pending: false,
-        progress_only: false,
-        bootstrap_only: false,
-        mutation_context: mutationContext || null,
-        post_mutation_context: mutationContext || null,
-        source_session_id: sourceSessionId || null,
-        obsolete_session_ids: [...obsoleteSessionIds],
-        dirty_candidate_ids: dirtyCandidateIds.slice(0, 25),
-        refresh_job_ids: refreshJobIds.slice(0, 25),
-        progress,
-        candidate_counts: {
-          total: 0,
-          completed: 0,
-          ready: 0,
-          pending: 0,
-          failed: 0
-        },
-        pending_candidate_ids: [],
-        failed_candidate_ids: [],
-        preview: null
-      };
-    }
-
-    if (progress && progress.ready_empty !== true && (progress.requires_paging === true || progress.requiresPaging === true || progress.large_preview === true || progress.largePreview === true) && !allowFullPreview) {
-      return {
-        ok: true,
-        session_id: sessionIdText,
-        replacement_session_id: replacementSessionId || null,
-        mutation_context: mutationContext || null,
-        post_mutation_context: mutationContext || null,
-        source_session_id: sourceSessionId || null,
-        obsolete_session_ids: [...obsoleteSessionIds],
-        dirty_candidate_ids: dirtyCandidateIds.slice(0, 25),
-        refresh_job_ids: refreshJobIds.slice(0, 25),
-        progress_only: true,
-        requires_paging: true,
-        large_preview: true,
-        pending_refresh: progress.pending_refresh === true || progress.refresh_pending === true || progress.preview_refresh_pending === true,
-        refresh_pending: progress.pending_refresh === true || progress.refresh_pending === true || progress.preview_refresh_pending === true,
-        preview_refresh_pending: progress.pending_refresh === true || progress.refresh_pending === true || progress.preview_refresh_pending === true,
-        ready: progress.ready_flag === true || progress.ready === true,
-        ready_flag: progress.ready_flag === true || progress.ready === true,
-        ready_empty: false,
-        deferred: true,
-        progress,
-        candidate_counts: {
-          total: progress.total_candidates || 0,
-          completed: progress.completed_candidates || progress.ready_candidates || 0,
-          ready: progress.ready_candidates || progress.completed_candidates || 0,
-          pending: progress.pending_candidates || 0,
-          failed: progress.failed_candidates || 0
-        },
-        pending_candidate_ids: Array.isArray(progress.pending_candidate_ids) ? (cloneJson(progress.pending_candidate_ids) || []).slice(0, 25) : [],
-        failed_candidate_ids: Array.isArray(progress.failed_candidate_ids) ? (cloneJson(progress.failed_candidate_ids) || []).slice(0, 25) : [],
-        session_version: progress.session_version ?? null,
-        session_signature: trimStr(progress.session_signature || ''),
-        snapshot_run_id: trimStr(progress.snapshot_run_id || ''),
-        available_sections: Array.isArray(progress.available_sections) ? cloneJson(progress.available_sections) || [] : [],
-        recommended_page_size: Number.isFinite(Number(progress.recommended_page_size)) ? Math.max(1, Math.min(100, Math.trunc(Number(progress.recommended_page_size)))) : null,
-        preview: null
-      };
-    }
-
-    if (progress && progress.ready_empty !== true && progressIndicatesPendingOrProgressOnly(progress)) {
-      const progressReady = isPostMutationContext ? false : (progress.ready_flag === true || progress.ready === true);
-      return {
-        ok: true,
-        session_id: sessionIdText,
-        replacement_session_id: replacementSessionId || null,
-        mutation_context: mutationContext || null,
-        post_mutation_context: mutationContext || null,
-        source_session_id: sourceSessionId || null,
-        obsolete_session_ids: [...obsoleteSessionIds],
-        dirty_candidate_ids: dirtyCandidateIds.slice(0, 25),
-        refresh_job_ids: refreshJobIds.slice(0, 25),
-        progress_only: true,
-        pending_refresh: true,
-        refresh_pending: true,
-        preview_refresh_pending: true,
-        ready: progressReady,
-        ready_flag: progressReady,
-        ready_empty: false,
-        deferred: !progressReady,
-        progress,
-        candidate_counts: {
-          total: progress.total_candidates || 0,
-          completed: progress.completed_candidates || progress.ready_candidates || 0,
-          ready: progress.ready_candidates || progress.completed_candidates || 0,
-          pending: progress.pending_candidates || 0,
-          failed: progress.failed_candidates || 0
-        },
-        pending_candidate_ids: Array.isArray(progress.pending_candidate_ids) ? (cloneJson(progress.pending_candidate_ids) || []).slice(0, 25) : [],
-        failed_candidate_ids: Array.isArray(progress.failed_candidate_ids) ? (cloneJson(progress.failed_candidate_ids) || []).slice(0, 25) : [],
-        session_version: progress.session_version ?? null,
-        session_signature: trimStr(progress.session_signature || ''),
-        snapshot_run_id: trimStr(progress.snapshot_run_id || '')
-      };
-    }
-
-    if (!allowFullPreview) {
-      return {
-        ok: true,
-        session_id: sessionIdText,
-        replacement_session_id: replacementSessionId || null,
-        mutation_context: mutationContext || null,
-        post_mutation_context: mutationContext || null,
-        source_session_id: sourceSessionId || null,
-        obsolete_session_ids: [...obsoleteSessionIds],
-        dirty_candidate_ids: dirtyCandidateIds.slice(0, 25),
-        refresh_job_ids: refreshJobIds.slice(0, 25),
-        progress_only: true,
-        requires_paging: true,
-        large_preview: true,
-        pending_refresh: false,
-        refresh_pending: false,
-        preview_refresh_pending: false,
-        ready: progress?.ready_flag === true || progress?.ready === true,
-        ready_flag: progress?.ready_flag === true || progress?.ready === true,
-        ready_empty: false,
-        deferred: true,
-        progress: progress || null,
-        candidate_counts: {
-          total: progress?.total_candidates || 0,
-          completed: progress?.completed_candidates || progress?.ready_candidates || 0,
-          ready: progress?.ready_candidates || progress?.completed_candidates || 0,
-          pending: progress?.pending_candidates || 0,
-          failed: progress?.failed_candidates || 0
-        },
-        pending_candidate_ids: Array.isArray(progress?.pending_candidate_ids) ? (cloneJson(progress.pending_candidate_ids) || []).slice(0, 25) : [],
-        failed_candidate_ids: Array.isArray(progress?.failed_candidate_ids) ? (cloneJson(progress.failed_candidate_ids) || []).slice(0, 25) : [],
-        session_version: progress?.session_version ?? null,
-        session_signature: trimStr(progress?.session_signature || ''),
-        snapshot_run_id: trimStr(progress?.snapshot_run_id || ''),
-        preview: null
-      };
-    }
-
-    if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
-    const summaryQuery = new URLSearchParams();
-    summaryQuery.set('mode', 'SUMMARY');
-    summaryQuery.set('include_preview', 'false');
-    const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}?${summaryQuery.toString()}`));
-    const json = await parseJsonResponse(res);
-    if (!res.ok) {
-      const code = normaliseSessionCode(json?.error_code || json?.code || '');
-      if (
-        staleCodes.has(code) ||
-        (isPostMutationContext && shouldTreatSessionStatusAsRebase(res.status) && !looksFatalSessionFailure(json))
-      ) return makeRebaseRequiredPayload(code || 'REBASE_REQUIRED', trimStr(json?.message || json?.error || '') || undefined);
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
-    }
-    if (isPlainObject(json) && json.ok === false) {
-      const code = normaliseSessionCode(json.error_code || json.code || '');
-      if (staleCodes.has(code) || json.rebase_required === true || json.requires_new_session === true) return makeRebaseRequiredPayload(code || 'REBASE_REQUIRED', trimStr(json.message || json.error || '') || undefined);
-      throw makeApiPayloadError(json, 400, 'Request failed (400)');
-    }
-
-    const payloadObj = isPlainObject(json) ? json : {};
-    const returnedSessionId = trimStr(payloadObj.session_id || payloadObj.session?.session_id || payloadObj.preview?.session_id || sessionIdText);
-    if ((forceNewSession || obsoleteSessionIds.length > 0) && isObsoleteSessionId(returnedSessionId)) {
-      return makeRebaseRequiredPayload('OBSOLETE_SESSION');
-    }
-    const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : payloadObj;
-    const bootstrapOnly = payloadObj.bootstrap_only === true || payloadObj.preview_bootstrap === true || payloadObj.large_preview === true || previewObj.bootstrap_only === true;
-
-    if (bootstrapOnly) {
-      const bootstrapPending = isPostMutationContext;
-      return {
-        ok: true,
-        ...(cloneJson(payloadObj) || {}),
-        session_id: trimStr(payloadObj.session_id || previewObj.session_id || sessionIdText),
-        replacement_session_id: replacementSessionId || null,
-        snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || progress?.snapshot_run_id || ''),
-        session_version: payloadObj.session_version ?? previewObj.session_version ?? progress?.session_version ?? null,
-        session_signature: trimStr(payloadObj.session_signature || previewObj.session_signature || progress?.session_signature || ''),
-        ready: bootstrapPending ? false : true,
-        ready_flag: bootstrapPending ? false : true,
-        ready_empty: false,
-        pending_refresh: bootstrapPending,
-        refresh_pending: bootstrapPending,
-        preview_refresh_pending: bootstrapPending,
-        progress_only: true,
-        bootstrap_only: true,
-        preview_bootstrap: true,
-        large_preview: payloadObj.large_preview === true || previewObj.large_preview === true,
-        progress: progress || null,
-        available_sections: Array.isArray(payloadObj.available_sections || previewObj.available_sections) ? cloneJson(payloadObj.available_sections || previewObj.available_sections) || [] : [],
-        recommended_page_size: Number.isFinite(Number(payloadObj.recommended_page_size || previewObj.recommended_page_size)) ? Math.max(1, Math.min(100, Math.trunc(Number(payloadObj.recommended_page_size || previewObj.recommended_page_size)))) : null,
-        preview: null,
-        mutation_context: mutationContext || null,
-        post_mutation_context: mutationContext || null,
-        source_session_id: sourceSessionId || null,
-        obsolete_session_ids: [...obsoleteSessionIds],
-        dirty_candidate_ids: dirtyCandidateIds.slice(0, 25),
-        pending_candidate_ids: dirtyCandidateIds.slice(0, 25),
-        refresh_job_ids: refreshJobIds.slice(0, 25)
-      };
-    }
-
-    const fullPreviewObj = cloneJson(previewObj) || previewObj;
-    if (isPlainObject(fullPreviewObj)) {
-      fullPreviewObj.ready = true;
-      fullPreviewObj.ready_flag = true;
-      fullPreviewObj.ready_empty = payloadObj.ready_empty === true || previewObj.ready_empty === true;
-      fullPreviewObj.deferred = false;
-      fullPreviewObj.pending_refresh = false;
-      fullPreviewObj.refresh_pending = false;
-      fullPreviewObj.preview_refresh_pending = false;
-      fullPreviewObj.progress_only = false;
-      fullPreviewObj.bootstrap_only = false;
-    }
+    const progress = {
+      ...(useReplacement ? {} : source),
+      ok: payload.ok !== false,
+      session_id: sessionId || null,
+      source_session_id: useReplacement ? (sourceSessionId || null) : (trimStr(payload.source_session_id || source.source_session_id || '') || null),
+      snapshot_run_id: snapshotRunId,
+      source_snapshot_run_id: trimStr(payload.source_snapshot_run_id || source.source_snapshot_run_id || payload.snapshot_run_id || source.snapshot_run_id || '') || null,
+      session_version: sessionVersion,
+      session_signature: sessionSignature,
+      pay_date: payDate,
+      week_ending_cutoff: cutoff,
+      week_ending_cutoff_date: cutoff,
+      session_status: useReplacement ? (replacementStatus || null) : (trimStr(payload.session_status || source.session_status || payload.status || source.status || '') || null),
+      progress_counter_version: progressCounterVersion,
+      progress_state: activeProgressState,
+      phase: activePhase,
+      status_text: useReplacement
+        ? (replacementReady
+            ? (replacementReadyEmpty ? 'No payable rows found.' : 'Payment preview is ready.')
+            : (replacementFailed
+                ? (!replacementIsActive
+                    ? 'Payment preview replacement is no longer active.'
+                    : 'Payment preview replacement could not be prepared.')
+                : 'Payment preview replacement is preparing in the background.'))
+        : (trimStr(source.status_text || payload.status_text || source.message || payload.message || '') || (sourceFailed
+            ? 'Payment preview could not be prepared for every candidate.'
+            : (sourceReady ? 'Payment preview is ready.' : 'Payment preview is preparing in the background.'))),
+      scope_seed_complete: useReplacement ? false : source.scope_seed_complete === true,
+      total_candidates: useReplacement ? 0 : sourceTotal,
+      total_count: useReplacement ? 0 : sourceTotal,
+      ready_candidates: useReplacement ? 0 : sourceReadyCount,
+      completed_candidates: useReplacement ? 0 : sourceReadyCount,
+      completed_count: useReplacement ? 0 : sourceReadyCount,
+      pending_candidates: useReplacement ? 0 : sourcePendingCount,
+      pending_count: useReplacement ? 0 : sourcePendingCount,
+      failed_candidates: useReplacement ? 0 : sourceFailedCount,
+      failed_count: useReplacement ? 0 : sourceFailedCount,
+      line_units_total: useReplacement ? 0 : sourceLineUnitsTotal,
+      line_units_ready: useReplacement ? 0 : sourceLineUnitsReady,
+      line_units_pending: useReplacement ? 0 : sourceLineUnitsPending,
+      line_units_failed: useReplacement ? 0 : sourceLineUnitsFailed,
+      line_units_error: useReplacement ? 0 : sourceLineUnitsFailed,
+      preview_row_count: useReplacement ? 0 : sourcePreviewRowCount,
+      selected_row_count: useReplacement ? 0 : sourceSelectedRowCount,
+      section_counts: useReplacement ? {} : sourceSectionCounts,
+      section_counts_json: useReplacement ? {} : sourceSectionCounts,
+      candidate_sample_rows: candidateSampleRows,
+      candidate_sample_rows_json: candidateSampleRows,
+      candidate_status_rows: candidateSampleRows,
+      candidate_statuses: candidateSampleRows,
+      ready,
+      ready_flag: ready,
+      ready_empty: readyEmpty,
+      rows_available: rowsAvailable,
+      has_materialised_preview_rows: rowsAvailable,
+      selected_rows_available: useReplacement ? false : (source.selected_rows_available === true || sourceSelectedRowCount > 0),
+      still_running: stillRunning,
+      pending_refresh: stillRunning,
+      refresh_pending: stillRunning,
+      preview_refresh_pending: stillRunning,
+      requires_paging: true,
+      session_obsolete: sourceObsolete,
+      source_session_obsolete: sourceObsolete,
+      active_session_obsolete: activeSessionObsolete,
+      obsolete: sourceObsolete,
+      replacement_available: replacementAvailable && replacementIsActive,
+      replacement_session_id: replacementAvailable ? replacementSessionId : null,
+      replacement_session_version: payload.replacement_session_version ?? source.replacement_session_version ?? null,
+      replacement_session_signature: trimStr(payload.replacement_session_signature || source.replacement_session_signature || '') || null,
+      replacement_pay_date: trimStr(payload.replacement_pay_date || source.replacement_pay_date || '') || null,
+      replacement_week_ending_cutoff: trimStr(payload.replacement_week_ending_cutoff || source.replacement_week_ending_cutoff || '') || null,
+      replacement_snapshot_run_id: trimStr(payload.replacement_snapshot_run_id || source.replacement_snapshot_run_id || '') || null,
+      replacement_session_status: replacementStatus || null,
+      replacement_progress_state: trimStr(payload.replacement_progress_state || source.replacement_progress_state || '') || null,
+      replacement_progress_counter_version: payload.replacement_progress_counter_version ?? source.replacement_progress_counter_version ?? null,
+      adopted_replacement_session: replacementAvailable && replacementIsActive,
+      rebase_required: activeSessionObsolete,
+      requires_new_session: activeSessionObsolete,
+      read_only: true
+    };
 
     return {
-      ok: true,
-      ...(cloneJson(payloadObj) || {}),
-      preview: fullPreviewObj,
-      session_id: trimStr(payloadObj.session_id || previewObj.session_id || sessionIdText),
-      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || progress?.snapshot_run_id || ''),
-      session_version: payloadObj.session_version ?? previewObj.session_version ?? progress?.session_version ?? null,
-      session_signature: trimStr(payloadObj.session_signature || previewObj.session_signature || progress?.session_signature || ''),
-      ready: true,
-      ready_flag: true,
-      ready_empty: payloadObj.ready_empty === true || previewObj.ready_empty === true,
-      deferred: false,
-      pending_refresh: false,
-      refresh_pending: false,
-      preview_refresh_pending: false,
-      progress_only: false,
-      bootstrap_only: false,
-      progress: progress || null,
-      mutation_context: mutationContext || null,
-      post_mutation_context: mutationContext || null,
-      replacement_session_id: replacementSessionId || null,
-      source_session_id: sourceSessionId || null,
-      obsolete_session_ids: [...obsoleteSessionIds],
-      dirty_candidate_ids: dirtyCandidateIds.slice(0, 25),
-      refresh_job_ids: refreshJobIds.slice(0, 25),
-      pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) ? (cloneJson(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) || []).slice(0, 25) : [],
-      failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) ? (cloneJson(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) || []).slice(0, 25) : [],
-      server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) || [] : []
+      payload,
+      source,
+      progress,
+      sourceSessionId,
+      replacementSessionId,
+      replacementAvailable
     };
-  } catch (error) {
-    const errorCode = normaliseSessionCode(error?.error_code || error?.code || error?.payload?.error_code || error?.json?.error_code || '');
-    if (
-      staleCodes.has(errorCode) ||
-      (isPostMutationContext && shouldTreatSessionStatusAsRebase(error?.status || 0) && !looksFatalSessionFailure(error?.payload || error?.json || error))
-    ) {
-      return makeRebaseRequiredPayload(errorCode || 'REBASE_REQUIRED', trimStr(error?.user_message || error?.message || '') || undefined);
+  };
+  const readCurrentSessionId = (context = {}) => {
+    try {
+      if (typeof options.getCurrentSessionId === 'function') {
+        const explicit = trimStr(options.getCurrentSessionId(context));
+        if (uuidRe.test(explicit)) return explicit;
+      }
+    } catch {}
+    try {
+      const state = typeof bankingGetState === 'function'
+        ? bankingGetState()
+        : ((typeof window !== 'undefined' && window.modalCtx?.banking) ? window.modalCtx.banking : null);
+      const current = trimStr(state?.pay?.draftWizard?.workbench?.session_id || '');
+      if (uuidRe.test(current)) return current;
+    } catch {}
+    return '';
+  };
+  const requestedSessionId = trimStr(sessionId);
+  if (!uuidRe.test(requestedSessionId)) throw new Error('bankingPayWorkbenchSessionGet: sessionId is required');
+  const expectedSessionId = (() => {
+    const candidate = trimStr(options.expectedSessionId ?? options.expected_session_id ?? requestedSessionId);
+    return uuidRe.test(candidate) ? candidate : requestedSessionId;
+  })();
+  const requestToken = Object.prototype.hasOwnProperty.call(options, 'requestToken')
+    ? options.requestToken
+    : (Object.prototype.hasOwnProperty.call(options, 'request_token') ? options.request_token : null);
+  const staleGuardEnabled = options.staleSessionGuard === true
+    || options.stale_session_guard === true
+    || options.enforceActiveSession === true
+    || options.enforce_active_session === true
+    || typeof options.getCurrentSessionId === 'function'
+    || typeof options.isLatestRequest === 'function'
+    || typeof options.shouldAbort === 'function';
+  const makeStaleGuardError = (reason, phase, currentSessionId = '') => {
+    const error = new Error('Workbench session response is stale.');
+    error.status = 409;
+    error.code = 'STALE_SESSION';
+    error.error_code = 'STALE_SESSION';
+    error.payload = {
+      ok: false,
+      aborted: true,
+      code: 'STALE_SESSION',
+      error_code: 'STALE_SESSION',
+      reason,
+      phase,
+      session_id: requestedSessionId,
+      expected_session_id: expectedSessionId,
+      current_session_id: trimStr(currentSessionId) || null,
+      request_token: requestToken ?? null
+    };
+    error.json = error.payload;
+    return error;
+  };
+  const evaluateStaleGuard = (phase) => {
+    if (!staleGuardEnabled) return null;
+    const context = {
+      phase,
+      session_id: requestedSessionId,
+      expected_session_id: expectedSessionId,
+      request_token: requestToken
+    };
+    try {
+      if (typeof options.shouldAbort === 'function' && options.shouldAbort(context) === true) return makeStaleGuardError('ABORTED_BY_GUARD', phase, readCurrentSessionId(context));
+    } catch {}
+    try {
+      if (typeof options.isLatestRequest === 'function' && options.isLatestRequest(context) === false) return makeStaleGuardError('STALE_REQUEST', phase, readCurrentSessionId(context));
+    } catch {}
+    const currentSessionId = readCurrentSessionId(context);
+    if (uuidRe.test(currentSessionId) && uuidRe.test(expectedSessionId) && currentSessionId !== expectedSessionId) return makeStaleGuardError('STALE_SESSION', phase, currentSessionId);
+    return null;
+  };
+  const clearSessionBoundCaches = (wizard, oldSessionId, nextSessionId) => {
+    const oldId = trimStr(oldSessionId);
+    const nextId = trimStr(nextSessionId);
+    if (!oldId || !nextId || oldId === nextId || !wizard || typeof wizard !== 'object') return false;
+    wizard.preview = isPlainObject(wizard.preview) ? wizard.preview : {};
+    wizard.workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
+    wizard.decisions = isPlainObject(wizard.decisions) ? wizard.decisions : {};
+    const preview = wizard.preview;
+    const workbench = wizard.workbench;
+    const decisions = wizard.decisions;
+    const previewDataSessionId = trimStr(preview.data?.session_id || preview.data?.session?.session_id || '');
+    for (const key of ['preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages', 'preview_pages', 'previewPages']) preview[key] = {};
+    preview.first_page_applied = false;
+    preview.preview_ready_visual = false;
+    preview.ready_empty = false;
+    preview.pageData = null;
+    preview.page_data = null;
+    preview.readiness = null;
+    preview.candidateDebtInfo = {};
+    preview.failure = null;
+    preview.componentStateCache = {
+      case_resolution_states: [],
+      blocked_case_states: [],
+      safe_case_states: [],
+      reusable_component_resolutions: {},
+      stale_component_resolutions: {},
+      draftable_now: [],
+      blocked_now: [],
+      ready_to_pay_now: [],
+      blocked_for_pay_now: [],
+      hidden_indefinite_snoozes: [],
+      ready_preview_lines: [],
+      blocked_preview_lines: [],
+      hidden_preview_lines: []
+    };
+    if (!previewDataSessionId || previewDataSessionId === oldId) preview.data = null;
+    for (const key of ['preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'preview_pages', 'previewPages', 'required_preview_sections_loaded', 'requiredPreviewSectionsLoaded', 'required_preview_sections_empty', 'requiredPreviewSectionsEmpty']) workbench[key] = {};
+    for (const key of ['canonical_preview_lines', 'preview_rows', 'ready_preview_lines', 'blocked_for_pay', 'blocked_for_pay_now', 'blocked_preview_lines', 'case_resolution_states', 'cases_resolutions', 'pending_candidate_ids', 'failed_candidate_ids', 'dirty_candidate_ids', 'pending_candidate_rows', 'failed_candidate_rows', 'pending_candidate_jobs', 'selected_preview_row_ids', 'server_selected_preview_row_ids', 'payees']) workbench[key] = [];
+    workbench.server_selected_preview_row_ids_provided = false;
+    workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+    workbench.summary = {};
+    workbench.initial_page = null;
+    workbench.initial_page_metadata = null;
+    workbench.required_preview_sections_summary = null;
+    workbench.__candidate_refresh_page_reread_pending = false;
+    for (const key of ['canonical_preview_lines', 'preview_rows', 'ready_preview_lines', 'blocked_for_pay', 'blocked_for_pay_now', 'blocked_preview_lines', 'case_resolution_states', 'cases_resolutions', 'blocked_case_states', 'safe_case_states', 'draftable_now', 'blocked_now', 'ready_to_pay_now', 'hidden_indefinite_snoozes', 'pending_candidate_ids', 'failed_candidate_ids', 'dirty_candidate_ids', 'pending_candidate_rows', 'failed_candidate_rows', 'pending_candidate_jobs', 'selected_preview_row_ids', 'server_selected_preview_row_ids']) decisions[key] = [];
+    decisions.reusable_component_resolutions = {};
+    decisions.stale_component_resolutions = {};
+    decisions.server_selected_preview_row_ids_provided = false;
+    decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wizard.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wizard.local_selected_preview_row_ids_dirty = false;
+    return true;
+  };
+  const adoptProgress = (normalised) => {
+    const progress = normalised.progress;
+    if (progress && progress.active_session_obsolete === true && progress.adopted_replacement_session !== true) return false;
+    const nextSessionId = trimStr(progress.session_id || '');
+    if (!uuidRe.test(nextSessionId)) return false;
+    try {
+      const state = typeof bankingGetState === 'function'
+        ? bankingGetState()
+        : ((typeof window !== 'undefined' && window.modalCtx?.banking) ? window.modalCtx.banking : null);
+      if (!state || typeof state !== 'object') return false;
+      state.pay = isPlainObject(state.pay) ? state.pay : {};
+      state.pay.draftWizard = isPlainObject(state.pay.draftWizard) ? state.pay.draftWizard : {};
+      const wizard = state.pay.draftWizard;
+      wizard.workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
+      wizard.preview = isPlainObject(wizard.preview) ? wizard.preview : {};
+      wizard.decisions = isPlainObject(wizard.decisions) ? wizard.decisions : {};
+      const currentSessionId = trimStr(wizard.workbench.session_id || wizard.decisions.session_id || wizard.preview.data?.session_id || wizard.preview.data?.session?.session_id || '');
+      if (currentSessionId && currentSessionId !== requestedSessionId && currentSessionId !== nextSessionId) return false;
+      clearSessionBoundCaches(wizard, currentSessionId || requestedSessionId, nextSessionId);
+      wizard.workbench.session_id = nextSessionId;
+      wizard.workbench.snapshot_run_id = progress.snapshot_run_id || null;
+      wizard.workbench.source_snapshot_run_id = progress.source_snapshot_run_id || progress.snapshot_run_id || null;
+      if (progress.session_version !== null && progress.session_version !== undefined) wizard.workbench.session_version = progress.session_version;
+      if (progress.session_signature) wizard.workbench.session_signature = progress.session_signature;
+      if (progress.pay_date) wizard.workbench.pay_date = progress.pay_date;
+      if (progress.week_ending_cutoff) {
+        wizard.workbench.week_ending_cutoff = progress.week_ending_cutoff;
+        wizard.workbench.week_ending_cutoff_date = progress.week_ending_cutoff;
+      }
+      wizard.workbench.progress = cloneJson(progress) || progress;
+      wizard.workbench.progress_state = progress.progress_state || progress.phase || null;
+      wizard.workbench.progress_counter_version = progress.progress_counter_version ?? null;
+      wizard.workbench.candidate_sample_rows = cloneJson(progress.candidate_sample_rows) || [];
+      wizard.workbench.pending_candidate_ids = (progress.candidate_sample_rows || []).filter((row) => ['PENDING', 'DIRTY', 'QUEUED', 'RUNNING', 'PROCESSING'].includes(trimStr(row?.status || row?.candidate_status).toUpperCase())).map((row) => trimStr(row?.candidate_id)).filter(Boolean).slice(0, 25);
+      wizard.workbench.failed_candidate_ids = (progress.candidate_sample_rows || []).filter((row) => ['FAILED', 'ERROR'].includes(trimStr(row?.status || row?.candidate_status).toUpperCase())).map((row) => trimStr(row?.candidate_id)).filter(Boolean).slice(0, 25);
+      wizard.workbench.dirty_candidate_ids = Array.from(new Set([...wizard.workbench.pending_candidate_ids, ...wizard.workbench.failed_candidate_ids]));
+      wizard.workbench.progress_counts = {
+        total_candidates: progress.total_candidates,
+        ready_candidates: progress.ready_candidates,
+        pending_candidates: progress.pending_candidates,
+        failed_candidates: progress.failed_candidates,
+        line_units_total: progress.line_units_total,
+        line_units_ready: progress.line_units_ready,
+        line_units_pending: progress.line_units_pending,
+        line_units_failed: progress.line_units_failed,
+        preview_row_count: progress.preview_row_count,
+        selected_row_count: progress.selected_row_count,
+        ready: progress.ready === true,
+        ready_flag: progress.ready === true,
+        ready_empty: progress.ready_empty === true,
+        rows_available: progress.rows_available === true,
+        phase: progress.phase,
+        status_text: progress.status_text,
+        section_counts: cloneJson(progress.section_counts) || {}
+      };
+      wizard.workbench.last_progress_at = new Date().toISOString();
+      wizard.workbench.session_obsolete = progress.active_session_obsolete === true;
+      wizard.workbench.source_session_obsolete = progress.source_session_obsolete === true;
+      wizard.workbench.source_session_id = progress.source_session_id || (normalised.replacementAvailable ? normalised.sourceSessionId : null);
+      wizard.workbench.replacement_session_id = progress.replacement_session_id || null;
+      wizard.workbench.replacement_session_version = progress.replacement_session_version ?? null;
+      wizard.workbench.adopted_replacement_session = progress.adopted_replacement_session === true;
+      wizard.decisions.session_id = nextSessionId;
+      wizard.decisions.snapshot_run_id = progress.snapshot_run_id || null;
+      if (progress.session_version !== null && progress.session_version !== undefined) wizard.decisions.session_version = progress.session_version;
+      if (progress.session_signature) wizard.decisions.session_signature = progress.session_signature;
+      if (progress.pay_date) wizard.decisions.pay_date = progress.pay_date;
+      if (progress.week_ending_cutoff) {
+        wizard.decisions.week_ending_cutoff = progress.week_ending_cutoff;
+        wizard.decisions.week_ending_cutoff_date = progress.week_ending_cutoff;
+      }
+      wizard.decisions.progress_counts = cloneJson(wizard.workbench.progress_counts) || {};
+      wizard.decisions.dirty_candidate_ids = [...wizard.workbench.dirty_candidate_ids];
+      return true;
+    } catch {
+      return false;
     }
-    const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: mutationContext || 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
+  };
+
+  try {
+    const beforeRequestError = evaluateStaleGuard('before_request');
+    if (beforeRequestError) throw beforeRequestError;
+    if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
+    const fetchOptions = {};
+    if (options.signal) fetchOptions.signal = options.signal;
+    const response = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(requestedSessionId)}`), fetchOptions);
+    const json = await parseJsonResponse(response);
+    if (!response.ok) throw makeApiPayloadError(json, response.status, `Request failed (${response.status})`);
+    const envelope = unwrapEnvelope(json);
+    if (envelope.ok === false) throw makeApiPayloadError(envelope, 409, trimStr(envelope.message || envelope.error || '') || 'Workbench session is not available.');
+    const afterResponseError = evaluateStaleGuard('after_response');
+    if (afterResponseError) throw afterResponseError;
+
+    const normalised = normaliseLightProgress(envelope, requestedSessionId);
+    const progress = normalised.progress;
+    const previewSummarySource = isPlainObject(envelope.preview_summary) ? envelope.preview_summary : {};
+    const output = {
+      ...(progress.adopted_replacement_session === true ? {} : envelope),
+      ok: true,
+      session_id: progress.session_id || requestedSessionId,
+      source_session_id: progress.source_session_id || (progress.adopted_replacement_session === true ? requestedSessionId : null),
+      snapshot_run_id: progress.snapshot_run_id,
+      source_snapshot_run_id: progress.source_snapshot_run_id,
+      session_version: progress.session_version,
+      session_signature: progress.session_signature,
+      pay_date: progress.pay_date,
+      week_ending_cutoff: progress.week_ending_cutoff,
+      week_ending_cutoff_date: progress.week_ending_cutoff_date,
+      ready: progress.ready === true,
+      ready_flag: progress.ready === true,
+      ready_empty: progress.ready_empty === true,
+      rows_available: progress.rows_available === true,
+      requires_paging: true,
+      progress,
+      source_progress: cloneJson(normalised.source) || normalised.source,
+      preview_summary: {
+        ...previewSummarySource,
+        ok: true,
+        session_id: progress.session_id || requestedSessionId,
+        progress_only: true,
+        requires_paging: true,
+        ready: progress.ready === true,
+        ready_flag: progress.ready === true,
+        ready_empty: progress.ready_empty === true,
+        rows_available: progress.rows_available === true,
+        section_counts: cloneJson(progress.section_counts) || {},
+        session_obsolete: progress.session_obsolete === true,
+        replacement_session_id: progress.replacement_session_id || null,
+        replacement_session_version: progress.replacement_session_version ?? null
+      },
+      sections: cloneJson(progress.section_counts) || {},
+      cursors: cloneJson(envelope.cursors || progress.cursors || progress.preview_cursors || {}) || {},
+      selected_summary: envelope.selected_summary || progress.selected_summary || progress.selection_summary || null,
+      session_obsolete: progress.session_obsolete === true,
+      source_session_obsolete: progress.source_session_obsolete === true,
+      active_session_obsolete: progress.active_session_obsolete === true,
+      obsolete: progress.session_obsolete === true,
+      replacement_available: progress.replacement_available === true,
+      replacement_session_id: progress.replacement_session_id || null,
+      replacement_session_version: progress.replacement_session_version ?? null,
+      replacement_session_signature: progress.replacement_session_signature || null,
+      replacement_pay_date: progress.replacement_pay_date || null,
+      replacement_week_ending_cutoff: progress.replacement_week_ending_cutoff || null,
+      replacement_snapshot_run_id: progress.replacement_snapshot_run_id || null,
+      replacement_session_status: progress.replacement_session_status || null,
+      replacement_progress_state: progress.replacement_progress_state || null,
+      replacement_progress_counter_version: progress.replacement_progress_counter_version ?? null,
+      adopted_replacement_session: progress.adopted_replacement_session === true,
+      rebase_required: progress.rebase_required === true,
+      requires_new_session: progress.requires_new_session === true,
+      get_is_read_only: true,
+      read_only: true,
+      drain_attempted: false,
+      recompute_attempted: false
+    };
+    adoptProgress(normalised);
+    return output;
+  } catch (error) {
+    const friendly = typeof bankingNormalizeApiError === 'function'
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, {
+          action: 'WORKBENCH_SESSION_GET',
+          fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+          userInitiated: options.userInitiated === true || options.user_initiated === true,
+          silent: options.silent === true || options.silent === 'true',
+          background: options.background === true || options.background === 'true',
+          showModal: (options.userInitiated === true || options.user_initiated === true) && !(options.silent === true || options.silent === 'true') && !(options.background === true || options.background === 'true')
+        })
       : null;
     if (typeof bankingBuildEnrichedFriendlyError === 'function') {
-      throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview could not be refreshed');
+      throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking workbench session could not be read');
     }
     throw error;
   }
 }
+
+
+
 
 async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -107637,22 +106947,30 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, op
 }
 
 
-
-
 async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const cloneJson = (value) => {
     try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
   };
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const toCount = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+  };
   const parseJsonResponse = async (res) => {
     const text = await res.text().catch(() => '');
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
-  const toNumber = (value) => {
-    const n = Number(value);
-    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+  const unwrapEnvelope = (payloadLike) => {
+    let payloadObj = payloadLike;
+    try {
+      if (Array.isArray(payloadObj) && payloadObj.length === 1 && isPlainObject(payloadObj[0])) payloadObj = payloadObj[0];
+      if (isPlainObject(payloadObj) && isPlainObject(payloadObj.data)) payloadObj = { ...payloadObj.data, ok: payloadObj.ok !== false };
+      if (Array.isArray(payloadObj) && payloadObj.length === 1 && isPlainObject(payloadObj[0])) payloadObj = payloadObj[0];
+    } catch {}
+    return isPlainObject(payloadObj) ? payloadObj : {};
   };
   const makeApiPayloadError = (json, status, fallbackMessage) => {
     const payloadObj = isPlainObject(json) ? json : { raw_response: json };
@@ -107662,446 +106980,575 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     err.payload = json;
     err.json = json;
     err.response_json = cloneJson(json) || json;
-    const code = trimStr(payloadObj.error_code || payloadObj.code || '');
+    const code = trimStr(payloadObj.error_code || payloadObj.errorCode || payloadObj.code || '');
     if (code) {
       err.code = code;
       err.error_code = code;
     }
     return err;
   };
-  const normaliseProgress = (json, fallbackSessionId) => {
-    const payloadObj = isPlainObject(json) ? json : {};
-    const src = isPlainObject(payloadObj.progress) ? payloadObj.progress : payloadObj;
-    const sampleLimitRaw = Number(options?.sample_limit || options?.sampleLimit || src.sample_limit || payloadObj.sample_limit || 25);
-    const sampleLimit = Number.isFinite(sampleLimitRaw) ? Math.max(1, Math.min(25, Math.trunc(sampleLimitRaw))) : 25;
-    const candidateStatusRows = (Array.isArray(payloadObj.candidate_status_rows || src.candidate_status_rows)
-      ? (cloneJson(payloadObj.candidate_status_rows || src.candidate_status_rows) || [])
-      : (Array.isArray(payloadObj.candidate_statuses || src.candidate_statuses)
-          ? (cloneJson(payloadObj.candidate_statuses || src.candidate_statuses) || [])
-          : (Array.isArray(payloadObj.sample_candidate_rows || src.sample_candidate_rows) ? (cloneJson(payloadObj.sample_candidate_rows || src.sample_candidate_rows) || []) : []))).slice(0, sampleLimit);
-    const pendingCandidateIds = Array.isArray(payloadObj.pending_candidate_ids || src.pending_candidate_ids)
-      ? (cloneJson(payloadObj.pending_candidate_ids || src.pending_candidate_ids) || []).slice(0, sampleLimit)
-      : candidateStatusRows.filter((row) => trimStr(row?.status).toUpperCase() === 'PENDING').map((row) => trimStr(row?.candidate_id)).filter(Boolean);
-    const failedCandidateIds = Array.isArray(payloadObj.failed_candidate_ids || src.failed_candidate_ids)
-      ? (cloneJson(payloadObj.failed_candidate_ids || src.failed_candidate_ids) || []).slice(0, sampleLimit)
-      : candidateStatusRows.filter((row) => trimStr(row?.status).toUpperCase() === 'FAILED').map((row) => trimStr(row?.candidate_id)).filter(Boolean);
-    const pendingJobIds = Array.isArray(payloadObj.pending_job_ids || src.pending_job_ids) ? (cloneJson(payloadObj.pending_job_ids || src.pending_job_ids) || []).slice(0, sampleLimit) : [];
-    const recentJobs = Array.isArray(payloadObj.recent_jobs || src.recent_jobs) ? (cloneJson(payloadObj.recent_jobs || src.recent_jobs) || []).slice(0, sampleLimit) : [];
-    const pendingCandidateJobs = candidateStatusRows.map((row) => {
-      const candidateId = trimStr(row?.candidate_id || '');
-      const pendingJobId = trimStr(row?.pending_job_id || row?.latest_job_id || row?.job_id || '');
-      const latestJobStatus = trimStr(row?.latest_job_status || row?.job_status || '');
-      return {
-        candidate_id: candidateId,
-        pending_job_id: pendingJobId,
-        latest_job_id: trimStr(row?.latest_job_id || pendingJobId || '') || null,
-        latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
-        latest_job_status: latestJobStatus || null,
-        job_status: latestJobStatus || trimStr(row?.status || '') || null,
-        candidate_status: trimStr(row?.status || '') || null,
-        latest_job_attempt_count: Number.isFinite(Number(row?.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
-        latest_job_max_attempts: Number.isFinite(Number(row?.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
-        latest_job_last_error_json: (row?.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json))
-          ? cloneJson(row.latest_job_last_error_json)
-          : ((row?.last_error_json && typeof row.last_error_json === 'object' && !Array.isArray(row.last_error_json)) ? cloneJson(row.last_error_json) : null)
-      };
-    }).filter((row) => row.candidate_id && row.pending_job_id).slice(0, sampleLimit);
-    const isTerminalJobStatus = (status) => {
-      const s = trimStr(status).toUpperCase();
-      if (!s) return false;
-      return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
-    };
-    const hasActiveNonTerminalPendingJobEvidence = pendingCandidateJobs.some((job) => {
-      const jobId = trimStr(job?.pending_job_id || job?.job_id || '');
-      const status = trimStr(job?.latest_job_status || job?.job_status || job?.status || job?.candidate_status || '');
-      return !!jobId && !isTerminalJobStatus(status);
-    });
-    const total = toNumber(src.total_candidates ?? src.total_candidate_count ?? src.total_count ?? src.total ?? src.candidate_count);
-    const completed = toNumber(src.completed_candidates ?? src.ready_candidates ?? src.completed_count ?? src.ready_count ?? src.completed);
-    const failed = toNumber(src.failed_candidates ?? src.failed_candidate_count ?? src.failed_count ?? src.failed ?? failedCandidateIds.length);
-    const pendingRaw = src.pending_candidates ?? src.pending_candidate_count ?? src.pending_count ?? src.pending;
-    const pending = Number.isFinite(Number(pendingRaw)) ? toNumber(pendingRaw) : Math.max(0, total - completed - failed, pendingCandidateIds.length);
-    const lineUnitsTotal = toNumber(src.line_units_total ?? src.total_line_units ?? src.line_unit_count);
-    const lineUnitsComplete = toNumber(src.line_units_complete ?? src.completed_line_units ?? src.line_units_completed);
-    const lineUnitsPending = toNumber(src.line_units_pending ?? src.pending_line_units ?? src.line_unitsPending);
-    const lineUnitsReady = toNumber(src.line_units_ready ?? src.ready_line_units ?? src.line_unitsReady);
-    const lineUnitsError = toNumber(src.line_units_error ?? src.line_units_failed ?? src.error_line_units ?? src.line_unitsError);
-    const previewRowCount = toNumber(src.preview_row_count ?? src.preview_rows_count ?? src.row_count ?? src.rows_count);
-    const selectedRowCount = toNumber(src.selected_row_count ?? src.selected_rows_count);
-    const queuedJobs = toNumber(src.queued_jobs ?? src.queued_job_count);
-    const runningJobs = toNumber(src.running_jobs ?? src.running_job_count);
-    const sectionCounts = isPlainObject(src.section_counts) ? (cloneJson(src.section_counts) || {}) : {};
-    const rowsAvailable = src.rows_available === true || src.has_materialised_preview_rows === true || previewRowCount > 0 || toNumber(sectionCounts.canonical_preview_lines) > 0 || toNumber(sectionCounts.ready_to_pay) > 0 || toNumber(sectionCounts.ready_preview_lines) > 0 || toNumber(sectionCounts.preview_rows) > 0;
-    const selectedRowsAvailable = src.selected_rows_available === true || selectedRowCount > 0;
-    const explicitReadyFlag = src.ready_flag === true || src.ready === true || payloadObj.ready_flag === true || payloadObj.ready === true;
-    const explicitReadyEmptyFlag = src.ready_empty === true || src.readyEmpty === true || payloadObj.ready_empty === true || payloadObj.readyEmpty === true;
-    const explicitNotReadyFlag = src.ready_flag === false || src.ready === false || payloadObj.ready_flag === false || payloadObj.ready === false;
-    const rawPhaseCode = normaliseProgressCode(src.phase || src.current_phase || src.status_phase || src.status || payloadObj.phase || payloadObj.current_phase || payloadObj.status || '');
-    const isTerminalProgressPhase = (phase) => ['READY', 'READY_EMPTY', 'SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE'].includes(normaliseProgressCode(phase));
-    const terminalProgressPhase = isTerminalProgressPhase(rawPhaseCode);
-    const progressOnlyFlag = src.progress_only === true || payloadObj.progress_only === true;
-    const bootstrapOnlyFlag = src.bootstrap_only === true || payloadObj.bootstrap_only === true || src.preview_bootstrap === true || payloadObj.preview_bootstrap === true;
-    const explicitPendingFlag = src.pending_refresh === true || payloadObj.pending_refresh === true || src.refresh_pending === true || payloadObj.refresh_pending === true || src.preview_refresh_pending === true || payloadObj.preview_refresh_pending === true;
-    const activeBackendCounters = lineUnitsPending > 0 || queuedJobs > 0 || runningJobs > 0;
-    const staleReadyOrRowsOnlySignal = !!((explicitReadyFlag || explicitReadyEmptyFlag || terminalProgressPhase || rowsAvailable) && !activeBackendCounters && !hasActiveNonTerminalPendingJobEvidence);
-    const pendingJobIdsIndicateActiveWork = pendingJobIds.length > 0 && !staleReadyOrRowsOnlySignal;
-    const hasActivePendingJobEvidence = hasActiveNonTerminalPendingJobEvidence || pendingJobIdsIndicateActiveWork;
-    const progressOnlyPending = !terminalProgressPhase && !rowsAvailable && !explicitReadyFlag && !explicitReadyEmptyFlag && (progressOnlyFlag || bootstrapOnlyFlag || rawPhaseCode === 'PROGRESS_ONLY' || rawPhaseCode === 'BOOTSTRAP_ONLY');
-    const phasePending = !terminalProgressPhase && ['REFRESHING_CANDIDATES', 'SEEDING_SCOPE', 'SEEDING_LINE_WORK', 'PROCESSING_LINE_WORK', 'MATERIALISING_PREVIEW_ROWS', 'PARTIAL_READY', 'SNAPSHOT_REFRESH_PENDING', 'WORKBENCH_REFRESH_PENDING', 'SNAPSHOT_REBUILD_PENDING', 'WORKBENCH_JOBS_RUNNING', 'WAIT_FOR_WORKER', 'PROCESS_LINE_WORK_CHUNK', 'MATERIALISE_PREVIEW_ROWS_CHUNK', 'PENDING_REFRESH', 'PREVIEW_REFRESH_PENDING'].includes(rawPhaseCode) && !staleReadyOrRowsOnlySignal;
-    const explicitPendingRefreshIndicatesActiveWork = explicitPendingFlag && !staleReadyOrRowsOnlySignal;
-    const hasActivePendingCandidateIds = pendingCandidateIds.length > 0 && !explicitReadyFlag && !explicitReadyEmptyFlag && !terminalProgressPhase && !(rowsAvailable && !activeBackendCounters && !hasActivePendingJobEvidence);
-    const hasRealBackendWorkPending = () => !!(
-      explicitPendingRefreshIndicatesActiveWork ||
-      progressOnlyPending ||
-      phasePending ||
-      activeBackendCounters ||
-      hasActivePendingCandidateIds ||
-      hasActivePendingJobEvidence ||
-      (isPostMutationContext && dirtyCandidateIds.length > 0 && !explicitReadyFlag && !explicitReadyEmptyFlag && !terminalProgressPhase && !rowsAvailable)
+  const stripHeavyArrays = (source) => {
+    const src = isPlainObject(source) ? source : {};
+    const out = { ...src };
+    for (const key of [
+      'scope_candidate_ids',
+      'pending_candidate_ids',
+      'failed_candidate_ids',
+      'pending_job_ids',
+      'recent_jobs',
+      'all_job_rows',
+      'canonical_preview_lines_json',
+      'effective_canonical_preview_lines_json',
+      'timesheet_snapshots_json',
+      'payees',
+      'candidates',
+      'canonical_lines',
+      'preview_rows'
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(out, key)) delete out[key];
+    }
+    for (const key of [
+      'sample_rows',
+      'candidate_samples',
+      'candidate_sample_rows',
+      'candidate_sample_rows_json',
+      'candidate_status_rows',
+      'candidate_statuses'
+    ]) {
+      if (Array.isArray(out[key])) out[key] = out[key].slice(0, 25);
+    }
+    return out;
+  };
+  const firstArray = (...values) => {
+    for (const value of values) {
+      if (Array.isArray(value)) return value;
+    }
+    return [];
+  };
+  const normaliseCandidateSampleRows = (payloadObj, src, useReplacement) => {
+    if (useReplacement) return [];
+    const rows = firstArray(
+      payloadObj.candidate_sample_rows,
+      payloadObj.candidate_sample_rows_json,
+      payloadObj.candidate_status_rows,
+      payloadObj.candidate_statuses,
+      src.candidate_sample_rows,
+      src.candidate_sample_rows_json,
+      src.candidate_status_rows,
+      src.candidate_statuses,
+      src.sample_candidate_rows,
+      src.sample_rows
     );
-    const backendWorkPending = hasRealBackendWorkPending();
-    const pendingRefresh = backendWorkPending;
-    const deriveReadyFlag = () => {
-      if (explicitReadyEmptyFlag || explicitReadyFlag || terminalProgressPhase) return true;
-      if (backendWorkPending) return false;
-      if (rowsAvailable) return true;
-      if (explicitNotReadyFlag) return false;
-      if (total > 0 && pending <= 0 && failed <= 0 && lineUnitsPending <= 0 && queuedJobs <= 0 && runningJobs <= 0 && !hasActivePendingJobEvidence) return true;
-      if (lineUnitsTotal > 0 && lineUnitsComplete >= lineUnitsTotal && lineUnitsPending <= 0 && queuedJobs <= 0 && runningJobs <= 0 && !hasActivePendingJobEvidence) return true;
-      return false;
-    };
-    const readyFlag = deriveReadyFlag();
-    const readyEmptyFlag = explicitReadyEmptyFlag || (!isPostMutationContext && !pendingRefresh && !!readyFlag && total <= 0 && previewRowCount <= 0 && !rowsAvailable);
-    const phase = trimStr(src.phase || src.current_phase || src.status_phase || payloadObj.phase || payloadObj.current_phase || (readyFlag ? 'READY' : (rowsAvailable ? 'PARTIAL_READY' : 'REFRESHING')));
-    const statusText = trimStr(src.status_text || src.statusText || src.message || payloadObj.status_text || payloadObj.message || (readyFlag ? 'Preview ready' : 'Preparing payment preview candidates.'));
-    return {
+    return rows
+      .filter((row) => isPlainObject(row))
+      .slice(0, 25)
+      .map((row) => {
+        const status = trimStr(
+          row.status ||
+          row.new_status ||
+          row.candidate_status ||
+          row.state ||
+          ''
+        );
+        return {
+          ...(cloneJson(row) || row),
+          ...(status ? { status, candidate_status: status } : {})
+        };
+      });
+  };
+  const phaseFromProgressState = (value, fallback = 'REFRESHING_CANDIDATES') => {
+    const state = trimStr(value).toUpperCase();
+    if (!state) return fallback;
+    if (state === 'READY' || state === 'READY_EMPTY') return state;
+    if (state === 'MATERIALISING_PREVIEW_ROWS' || state === 'MATERIALIZING_PREVIEW_ROWS') return 'MATERIALISING_PREVIEW_ROWS';
+    if (state === 'PROCESSING_LINE_WORK') return 'PROCESSING_LINE_WORK';
+    if (state === 'DIRTY') return 'REFRESHING_CANDIDATES';
+    if (state === 'FAILED' || state === 'ERROR') return 'FAILED';
+    return state;
+  };
+  const normaliseProgress = (json, fallbackSessionId = '') => {
+    const payloadObj = unwrapEnvelope(json);
+    const src = isPlainObject(payloadObj.progress) ? payloadObj.progress : payloadObj;
+    const sourceSessionId = trimStr(payloadObj.session_id || src.session_id || fallbackSessionId || '');
+    const replacementSessionId = trimStr(payloadObj.replacement_session_id || src.replacement_session_id || '');
+    const sourceSessionObsolete = payloadObj.session_obsolete === true || src.session_obsolete === true || payloadObj.obsolete === true || src.obsolete === true;
+    const replacementAvailable = sourceSessionObsolete && uuidRe.test(replacementSessionId);
+    const useReplacement = replacementAvailable;
+
+    const sourceSnapshotRunId = trimStr(payloadObj.source_snapshot_run_id || src.source_snapshot_run_id || payloadObj.snapshot_run_id || src.snapshot_run_id || '') || null;
+    const replacementSnapshotRunId = trimStr(payloadObj.replacement_snapshot_run_id || src.replacement_snapshot_run_id || '') || null;
+    const replacementSessionSignature = trimStr(payloadObj.replacement_session_signature || src.replacement_session_signature || '') || null;
+    const replacementPayDate = trimStr(payloadObj.replacement_pay_date || src.replacement_pay_date || '') || null;
+    const replacementWeekEndingCutoff = trimStr(payloadObj.replacement_week_ending_cutoff || src.replacement_week_ending_cutoff || '') || null;
+    const replacementProgressState = trimStr(payloadObj.replacement_progress_state || src.replacement_progress_state || '');
+    const replacementSessionStatus = trimStr(payloadObj.replacement_session_status || src.replacement_session_status || '');
+    const replacementProgressCounterVersion = payloadObj.replacement_progress_counter_version ?? src.replacement_progress_counter_version ?? null;
+
+    const sectionCountsSource = isPlainObject(src.section_counts)
+      ? src.section_counts
+      : (isPlainObject(src.section_counts_json) ? src.section_counts_json : {});
+    const sourceSectionCounts = cloneJson(sectionCountsSource) || {};
+    const sourceTotal = toCount(src.total_candidates ?? src.candidate_count ?? src.total_count ?? src.scope_total_count ?? src.scope_total ?? 0);
+    const sourceCompleted = toCount(src.completed_candidates ?? src.ready_candidates ?? src.completed_count ?? src.ready_count ?? src.scope_ready_count ?? src.scope_ready ?? 0);
+    const sourceFailed = toCount(src.failed_candidates ?? src.failed_count ?? src.scope_failed_count ?? src.scope_failed ?? 0);
+    const sourcePendingRaw = src.pending_candidates ?? src.pending_count ?? src.scope_pending_count ?? src.scope_pending;
+    const sourcePending = Number.isFinite(Number(sourcePendingRaw)) ? toCount(sourcePendingRaw) : Math.max(0, sourceTotal - sourceCompleted - sourceFailed);
+    const sourcePreviewRowCount = toCount(src.preview_row_count ?? src.preview_rows_count ?? src.row_count ?? 0);
+    const sourceSelectedRowCount = toCount(src.selected_row_count ?? src.selected_rows_count ?? 0);
+    const sourceLineUnitsPending = toCount(src.line_units_pending ?? src.pending_line_units ?? 0);
+    const sourceLineUnitsReady = toCount(src.line_units_ready ?? src.ready_line_units ?? 0);
+    const sourceLineUnitsFailed = toCount(src.line_units_failed ?? src.line_units_error ?? src.error_line_units ?? 0);
+    const sourceQueuedJobs = toCount(src.queued_jobs ?? src.queued_job_count ?? 0);
+    const sourceRunningJobs = toCount(src.running_jobs ?? src.running_job_count ?? 0);
+    const sourcePhase = phaseFromProgressState(
+      src.phase || src.current_phase || src.progress_state || payloadObj.phase || payloadObj.status || '',
+      sourcePreviewRowCount > 0 ? 'PARTIAL_READY' : 'REFRESHING_CANDIDATES'
+    );
+    const sourcePhaseUpper = sourcePhase.toUpperCase();
+    const sourceRowsAvailable = !sourceSessionObsolete && (
+      src.rows_available === true ||
+      src.has_materialised_preview_rows === true ||
+      sourcePreviewRowCount > 0 ||
+      toCount(sourceSectionCounts.canonical_preview_lines) > 0 ||
+      toCount(sourceSectionCounts.ready_to_pay) > 0 ||
+      toCount(sourceSectionCounts.preview_rows) > 0
+    );
+    const sourceBackendReady = !sourceSessionObsolete && (
+      src.ready === true ||
+      src.ready_flag === true ||
+      src.ready_empty === true ||
+      payloadObj.ready === true ||
+      payloadObj.ready_flag === true ||
+      sourcePhaseUpper === 'READY' ||
+      sourcePhaseUpper === 'READY_EMPTY'
+    );
+    const sourceHasActiveWork = sourceLineUnitsPending > 0 || sourceLineUnitsReady > 0 || sourceQueuedJobs > 0 || sourceRunningJobs > 0 || sourcePending > 0 || src.scope_seed_complete === false;
+    const sourceReady = sourceBackendReady && !sourceHasActiveWork && sourceFailed <= 0 && sourceLineUnitsFailed <= 0;
+    const sourceReadyEmpty = !sourceSessionObsolete && (
+      src.ready_empty === true ||
+      payloadObj.ready_empty === true ||
+      (sourceReady && sourceTotal <= 0 && sourcePreviewRowCount <= 0)
+    );
+
+    const replacementPhase = phaseFromProgressState(replacementProgressState, 'REFRESHING_CANDIDATES');
+    const replacementPhaseUpper = replacementPhase.toUpperCase();
+    const replacementSessionStatusUpper = replacementSessionStatus.toUpperCase();
+    const replacementIsActive = useReplacement && (!replacementSessionStatusUpper || replacementSessionStatusUpper === 'OPEN');
+    const replacementFailed = useReplacement && (
+      replacementPhaseUpper === 'FAILED' ||
+      replacementPhaseUpper === 'ERROR' ||
+      !replacementIsActive
+    );
+    const replacementReady = replacementIsActive && (replacementPhaseUpper === 'READY' || replacementPhaseUpper === 'READY_EMPTY');
+    const replacementReadyEmpty = replacementReady && replacementPhaseUpper === 'READY_EMPTY';
+    const replacementStillRunning = useReplacement && !replacementReady && !replacementFailed;
+
+    const sessionId = useReplacement ? replacementSessionId : sourceSessionId;
+    const snapshotRunId = useReplacement ? replacementSnapshotRunId : sourceSnapshotRunId;
+    const sessionVersion = useReplacement
+      ? (payloadObj.replacement_session_version ?? src.replacement_session_version ?? null)
+      : (payloadObj.session_version ?? src.session_version ?? null);
+    const sessionSignature = useReplacement
+      ? replacementSessionSignature
+      : (trimStr(payloadObj.session_signature || src.session_signature || '') || null);
+    const payDate = useReplacement
+      ? replacementPayDate
+      : (trimStr(payloadObj.pay_date || src.pay_date || '') || null);
+    const weekEndingCutoff = useReplacement
+      ? replacementWeekEndingCutoff
+      : (trimStr(payloadObj.week_ending_cutoff || src.week_ending_cutoff || payloadObj.week_ending_cutoff_date || src.week_ending_cutoff_date || '') || null);
+    const progressCounterVersion = useReplacement
+      ? replacementProgressCounterVersion
+      : (payloadObj.progress_counter_version ?? src.progress_counter_version ?? null);
+    const progressState = useReplacement
+      ? (replacementProgressState || replacementPhase)
+      : (trimStr(payloadObj.progress_state || src.progress_state || sourcePhase) || sourcePhase);
+    const activeProgressState = useReplacement && !replacementIsActive ? 'REBASE_REQUIRED' : progressState;
+    const phase = useReplacement && !replacementIsActive ? 'REBASE_REQUIRED' : (useReplacement ? replacementPhase : sourcePhase);
+    const total = useReplacement ? 0 : sourceTotal;
+    const completed = useReplacement ? 0 : sourceCompleted;
+    const failed = useReplacement ? 0 : sourceFailed;
+    const pending = useReplacement ? 0 : sourcePending;
+    const previewRowCount = useReplacement ? 0 : sourcePreviewRowCount;
+    const selectedRowCount = useReplacement ? 0 : sourceSelectedRowCount;
+    const lineUnitsPending = useReplacement ? 0 : sourceLineUnitsPending;
+    const lineUnitsReady = useReplacement ? 0 : sourceLineUnitsReady;
+    const lineUnitsFailed = useReplacement ? 0 : sourceLineUnitsFailed;
+    const queuedJobs = useReplacement ? 0 : sourceQueuedJobs;
+    const runningJobs = useReplacement ? 0 : sourceRunningJobs;
+    const sectionCounts = useReplacement ? {} : sourceSectionCounts;
+    const rowsAvailable = useReplacement ? false : sourceRowsAvailable;
+    const ready = useReplacement ? replacementReady : sourceReady;
+    const readyEmpty = useReplacement ? replacementReadyEmpty : sourceReadyEmpty;
+    const stillRunning = useReplacement ? replacementStillRunning : (!sourceSessionObsolete && !sourceReady && (sourceHasActiveWork || !sourceBackendReady));
+    const activeSessionObsolete = sourceSessionObsolete && (!replacementAvailable || !replacementIsActive);
+    const candidateSampleRows = normaliseCandidateSampleRows(payloadObj, src, useReplacement);
+    const statusText = useReplacement
+      ? (replacementReady
+          ? (replacementReadyEmpty ? 'No payable rows found.' : 'Payment preview is ready.')
+          : (replacementFailed
+              ? (!replacementIsActive
+                  ? 'Payment preview replacement is no longer active.'
+                  : 'Payment preview replacement could not be prepared.')
+              : 'Payment preview replacement is preparing in the background.'))
+      : trimStr(src.status_text || payloadObj.status_text || src.message || payloadObj.message || (sourceFailed ? 'Payment preview could not be prepared for every candidate.' : (sourceReady ? 'Payment preview is ready.' : 'Payment preview is preparing in the background.')));
+    const nextRecommendedAction = useReplacement
+      ? (replacementReady ? 'READ_PREVIEW_PAGE' : (replacementFailed ? 'REVIEW_ERRORS' : 'WAIT_FOR_WORKER'))
+      : trimStr(src.next_recommended_action || payloadObj.next_recommended_action || (sourceFailed ? 'REVIEW_ERRORS' : (sourceReady ? 'READ_PREVIEW_PAGE' : 'WAIT_FOR_WORKER')));
+
+    const activeProgress = stripHeavyArrays({
+      ...(useReplacement ? {} : src),
       ok: payloadObj.ok !== false,
-      ...(cloneJson(payloadObj) || {}),
-      session_id: trimStr(payloadObj.session_id || src.session_id || fallbackSessionId),
-      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || src.snapshot_run_id || ''),
-      session_version: payloadObj.session_version ?? src.session_version ?? null,
-      session_signature: trimStr(payloadObj.session_signature || src.session_signature || ''),
+      session_id: sessionId || null,
+      source_session_id: useReplacement ? (sourceSessionId || null) : (trimStr(payloadObj.source_session_id || src.source_session_id || '') || null),
+      snapshot_run_id: snapshotRunId,
+      source_snapshot_run_id: sourceSnapshotRunId,
+      session_version: sessionVersion,
+      session_signature: sessionSignature,
+      pay_date: payDate,
+      week_ending_cutoff: weekEndingCutoff,
+      week_ending_cutoff_date: weekEndingCutoff,
+      session_status: useReplacement ? (replacementSessionStatus || null) : (trimStr(payloadObj.session_status || payloadObj.status || src.session_status || '') || null),
+      progress_counter_version: progressCounterVersion,
+      progress_state: progressState,
+      phase,
+      status_text: statusText,
+      next_recommended_action: nextRecommendedAction,
       total_candidates: total,
+      total_count: total,
       completed_candidates: completed,
+      completed_count: completed,
       ready_candidates: completed,
       pending_candidates: pending,
+      pending_count: pending,
       failed_candidates: failed,
-      seeded_candidates: toNumber(src.seeded_candidates ?? src.seeded_candidate_count ?? src.seeded_count),
-      line_units_total: lineUnitsTotal,
-      line_units_complete: lineUnitsComplete,
+      failed_count: failed,
       line_units_pending: lineUnitsPending,
       line_units_ready: lineUnitsReady,
-      line_units_error: lineUnitsError,
+      line_units_failed: lineUnitsFailed,
+      line_units_error: lineUnitsFailed,
+      queued_jobs: queuedJobs,
+      running_jobs: runningJobs,
       preview_row_count: previewRowCount,
       selected_row_count: selectedRowCount,
       section_counts: sectionCounts,
-      queued_jobs: queuedJobs,
-      running_jobs: runningJobs,
+      section_counts_json: sectionCounts,
+      candidate_sample_rows: candidateSampleRows,
+      candidate_sample_rows_json: candidateSampleRows,
+      candidate_status_rows: candidateSampleRows,
+      candidate_statuses: candidateSampleRows,
       rows_available: rowsAvailable,
       has_materialised_preview_rows: rowsAvailable,
-      selected_rows_available: selectedRowsAvailable,
-      backend_work_pending: backendWorkPending,
-      visual_pending: backendWorkPending,
-      sample_limit: sampleLimit,
-      ready_flag: !!readyFlag,
-      ready: !!readyFlag,
-      ready_empty: readyEmptyFlag,
-      pending_refresh: pendingRefresh,
-      refresh_pending: pendingRefresh,
-      preview_refresh_pending: pendingRefresh,
-      deferred: pendingRefresh && !readyFlag,
-      progress_only: pendingRefresh,
-      bootstrap_only: pendingRefresh && bootstrapOnlyFlag,
-      mutation_context: mutationContext || null,
-      post_mutation_context: mutationContext || null,
-      source_session_id: sourceSessionId || null,
-      obsolete_session_ids: [...obsoleteSessionIds],
-      dirty_candidate_ids: dirtyCandidateIds.slice(0, 25),
-      refresh_job_ids: refreshJobIds.slice(0, 25),
-      available_sections: Array.isArray(src.available_sections) ? (cloneJson(src.available_sections) || []) : [],
-      pageable_sections: Array.isArray(src.pageable_sections) ? (cloneJson(src.pageable_sections) || []) : [],
-      primary_preview_section: trimStr(src.primary_preview_section || 'canonical_preview_lines') || 'canonical_preview_lines',
-      ready_to_pay_section: trimStr(src.ready_to_pay_section || 'canonical_preview_lines') || 'canonical_preview_lines',
-      preview_rows_section: trimStr(src.preview_rows_section || 'canonical_preview_lines') || 'canonical_preview_lines',
-      recommended_page_size: toNumber(src.recommended_page_size || 100) || 100,
-      next_recommended_action: trimStr(src.next_recommended_action || src.next_action || '') || null,
-      phase,
-      status_text: statusText,
-      candidate_status_rows: candidateStatusRows,
-      candidate_statuses: candidateStatusRows,
-      pending_candidate_ids: pendingCandidateIds,
-      failed_candidate_ids: failedCandidateIds,
-      pending_job_ids: pendingJobIds,
-      recent_jobs: recentJobs,
-      pending_candidate_jobs: pendingCandidateJobs,
-      progress: cloneJson(src) || src
-    };
+      selected_rows_available: !activeSessionObsolete && (useReplacement ? false : (src.selected_rows_available === true || selectedRowCount > 0)),
+      ready,
+      ready_flag: ready,
+      ready_empty: readyEmpty,
+      still_running: stillRunning,
+      pending_refresh: stillRunning,
+      refresh_pending: stillRunning,
+      preview_refresh_pending: stillRunning,
+      requires_paging: true,
+      session_obsolete: sourceSessionObsolete,
+      source_session_obsolete: sourceSessionObsolete,
+      active_session_obsolete: activeSessionObsolete,
+      obsolete: sourceSessionObsolete,
+      replacement_available: replacementAvailable && replacementIsActive,
+      replacement_session_id: replacementAvailable ? replacementSessionId : null,
+      replacement_session_version: payloadObj.replacement_session_version ?? src.replacement_session_version ?? null,
+      replacement_session_signature: replacementSessionSignature,
+      replacement_pay_date: replacementPayDate,
+      replacement_week_ending_cutoff: replacementWeekEndingCutoff,
+      replacement_snapshot_run_id: replacementSnapshotRunId,
+      replacement_session_status: replacementSessionStatus || null,
+      replacement_progress_state: replacementProgressState || null,
+      replacement_progress_counter_version: replacementProgressCounterVersion,
+      adopted_replacement_session: replacementAvailable && replacementIsActive,
+      rebase_required: activeSessionObsolete,
+      requires_new_session: activeSessionObsolete,
+      read_only: true
+    });
+
+    return stripHeavyArrays({
+      ...activeProgress,
+      progress: activeProgress,
+      source_progress: stripHeavyArrays(src),
+      raw: stripHeavyArrays(payloadObj)
+    });
   };
-
-
-  const sessionIdText = trimStr(sessionId);
-  if (!sessionIdText) throw new Error('bankingPayWorkbenchSessionGetProgress: sessionId is required');
-
-  const readSharedWorkbenchPostMutationContext = () => {
+  const clearLocalSessionCachesForNewSession = (workbench, preview, oldSessionId, nextSessionId) => {
+    const oldId = trimStr(oldSessionId || '');
+    const nextId = trimStr(nextSessionId || '');
+    if (!oldId || !nextId || oldId === nextId) return false;
     try {
-      const mc = (typeof window !== 'undefined' && window && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-      const payState = (mc && String(mc.entity || '') === 'banking' && mc.banking && mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : null;
-      const wizard = (payState && payState.draftWizard && typeof payState.draftWizard === 'object') ? payState.draftWizard : null;
-      const workbench = (wizard && wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
-      const decisions = (wizard && wizard.decisions && typeof wizard.decisions === 'object') ? wizard.decisions : {};
-      const preview = (wizard && wizard.preview && typeof wizard.preview === 'object') ? wizard.preview : {};
-      const previewData = (preview.data && typeof preview.data === 'object' && !Array.isArray(preview.data)) ? preview.data : {};
-      const previewSession = (previewData.session && typeof previewData.session === 'object' && !Array.isArray(previewData.session)) ? previewData.session : {};
-      const arr = (...values) => Array.from(new Set(values.flatMap((value) => Array.isArray(value) ? value : []).map((value) => trimStr(value)).filter(Boolean)));
-      const sourceId = trimStr(
-        workbench.__source_session_id_discarded ||
-        workbench.__source_session_id_replaced ||
-        decisions.__source_session_id_discarded ||
-        preview.__post_create_source_session_id ||
-        preview.__post_cancel_source_session_id ||
+      if (isPlainObject(preview)) {
+        preview.preview_page_cache = {};
+        preview.previewPageCache = {};
+        preview.page_cache = {};
+        preview.pageCache = {};
+        preview.pages = {};
+        preview.first_page_applied = false;
+        const previewDataSessionId = trimStr(preview.data?.session_id || preview.data?.session?.session_id || '');
+        if (!previewDataSessionId || previewDataSessionId === oldId) preview.data = null;
+        preview.readiness = null;
+        preview.candidateDebtInfo = {};
+        preview.failure = null;
+      }
+      if (isPlainObject(workbench)) {
+        workbench.preview_page_cache = {};
+        workbench.previewPageCache = {};
+        workbench.page_cache = {};
+        workbench.pageCache = {};
+        workbench.preview_pages = {};
+        workbench.previewPages = {};
+        workbench.canonical_preview_lines = [];
+        workbench.preview_rows = [];
+        workbench.ready_preview_lines = [];
+        workbench.payees = [];
+        workbench.summary = {};
+      }
+    } catch {}
+    return true;
+  };
+  const readCurrentWorkbenchSessionId = (context = {}) => {
+    try {
+      if (typeof options.getCurrentSessionId === 'function') {
+        const explicit = trimStr(options.getCurrentSessionId(context));
+        if (uuidRe.test(explicit)) return explicit;
+      }
+    } catch {}
+    try {
+      const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+      const current = trimStr(st?.pay?.draftWizard?.workbench?.session_id || '');
+      if (uuidRe.test(current)) return current;
+    } catch {}
+    return '';
+  };
+  const expectedSessionId = (() => {
+    const raw = trimStr(options.expectedSessionId ?? options.expected_session_id ?? sessionId);
+    return uuidRe.test(raw) ? raw : trimStr(sessionId);
+  })();
+  const requestToken = Object.prototype.hasOwnProperty.call(options, 'requestToken')
+    ? options.requestToken
+    : (Object.prototype.hasOwnProperty.call(options, 'request_token') ? options.request_token : null);
+  const staleGuardEnabled = !!(
+    options.staleSessionGuard === true ||
+    options.stale_session_guard === true ||
+    options.enforceActiveSession === true ||
+    options.enforce_active_session === true ||
+    typeof options.getCurrentSessionId === 'function' ||
+    typeof options.isLatestRequest === 'function' ||
+    typeof options.shouldAbort === 'function'
+  );
+  const makeStaleGuardError = (reason, phase, currentSessionId = '') => {
+    const code = reason === 'OBSOLETE_SESSION' ? 'OBSOLETE_SESSION' : 'STALE_SESSION';
+    const err = new Error(code === 'OBSOLETE_SESSION' ? 'Workbench session is obsolete.' : 'Workbench session response is stale.');
+    err.status = 409;
+    err.code = code;
+    err.error_code = code;
+    err.payload = {
+      ok: false,
+      aborted: true,
+      code,
+      error_code: code,
+      reason,
+      phase,
+      session_id: trimStr(sessionId) || null,
+      expected_session_id: expectedSessionId || null,
+      current_session_id: trimStr(currentSessionId) || null,
+      request_token: requestToken ?? null
+    };
+    err.json = err.payload;
+    return err;
+  };
+  const evaluateStaleGuard = (phase) => {
+    if (!staleGuardEnabled) return null;
+    const context = {
+      phase,
+      session_id: trimStr(sessionId),
+      expected_session_id: expectedSessionId,
+      request_token: requestToken
+    };
+    try {
+      if (typeof options.shouldAbort === 'function' && options.shouldAbort(context) === true) {
+        return makeStaleGuardError('ABORTED_BY_GUARD', phase, readCurrentWorkbenchSessionId(context));
+      }
+    } catch {}
+    try {
+      if (typeof options.isLatestRequest === 'function' && options.isLatestRequest(context) === false) {
+        return makeStaleGuardError('STALE_REQUEST', phase, readCurrentWorkbenchSessionId(context));
+      }
+    } catch {}
+    const currentSessionId = readCurrentWorkbenchSessionId(context);
+    if (uuidRe.test(currentSessionId) && uuidRe.test(expectedSessionId) && currentSessionId !== expectedSessionId) {
+      return makeStaleGuardError('STALE_SESSION', phase, currentSessionId);
+    }
+    return null;
+  };
+  const adoptWorkbenchSession = (payloadObj, requestedSessionId = '') => {
+    const src = isPlainObject(payloadObj) ? payloadObj : {};
+    const nextSessionId = trimStr(src.session_id || src.replacement_session_id || '');
+    if (!uuidRe.test(nextSessionId)) return false;
+    if (src.active_session_obsolete === true && src.adopted_replacement_session !== true) return false;
+    try {
+      const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+      if (!st || typeof st !== 'object') return false;
+      st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+      st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+      const wiz = st.pay.draftWizard;
+      wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
+      wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
+      wiz.decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {};
+      const currentSessionId = trimStr(
+        wiz.workbench.session_id ||
+        wiz.preview.data?.session_id ||
+        wiz.preview.data?.session?.session_id ||
         ''
       );
-      return {
-        session_id: trimStr(workbench.session_id || decisions.session_id || previewData.session_id || previewSession.session_id || ''),
-        source_session_id: sourceId,
-        obsolete_session_ids: arr(
-          workbench.__obsolete_workbench_session_ids,
-          workbench.__obsolete_progress_session_ids,
-          decisions.__obsolete_workbench_session_ids,
-          decisions.__obsolete_progress_session_ids,
-          preview.__obsolete_workbench_session_ids,
-          preview.__obsolete_progress_session_ids,
-          sourceId ? [sourceId] : []
-        ),
-        mutation_context: trimStr(
-          workbench.__post_mutation_context ||
-          decisions.__post_mutation_context ||
-          preview.__post_mutation_context ||
-          ''
-        ).toUpperCase(),
-        created_pay_batch_ids: arr(workbench.__post_create_created_pay_batch_ids, preview.__post_create_created_pay_batch_ids),
-        dirty_candidate_ids: arr(workbench.dirty_candidate_ids, workbench.dirtyCandidateIds, decisions.dirty_candidate_ids, decisions.dirtyCandidateIds),
-        pending_candidate_ids: arr(workbench.pending_candidate_ids, workbench.pendingCandidateIds, decisions.pending_candidate_ids, decisions.pendingCandidateIds),
-        refresh_job_ids: arr(
-          workbench.refresh_job_ids,
-          workbench.refreshJobIds,
-          decisions.refresh_job_ids,
-          decisions.refreshJobIds,
-          Array.isArray(workbench.pending_candidate_jobs) ? workbench.pending_candidate_jobs.map((job) => job && (job.pending_job_id || job.job_id || job.id)) : [],
-          Array.isArray(decisions.pending_candidate_jobs) ? decisions.pending_candidate_jobs.map((job) => job && (job.pending_job_id || job.job_id || job.id)) : []
-        ),
-        preview_reopen_required: !!(
-          workbench.preview_reopen_required === true ||
-          workbench.create_draft_refresh_pending === true ||
-          workbench.__post_mutation_preview_refresh_failed === true ||
-          decisions.create_draft_refresh_pending === true ||
-          preview.__post_create_refresh_pending === true ||
-          preview.__post_cancel_refresh_pending === true
-        )
+      const requestedId = trimStr(requestedSessionId || src.source_session_id || '');
+      if (currentSessionId && requestedId && currentSessionId !== requestedId && currentSessionId !== nextSessionId) return false;
+      clearLocalSessionCachesForNewSession(wiz.workbench, wiz.preview, currentSessionId, nextSessionId);
+
+      wiz.workbench.session_id = nextSessionId;
+      wiz.workbench.snapshot_run_id = trimStr(src.snapshot_run_id || wiz.workbench.snapshot_run_id || '') || null;
+      if (src.session_version !== undefined && src.session_version !== null) wiz.workbench.session_version = src.session_version;
+      wiz.workbench.session_signature = trimStr(src.session_signature || wiz.workbench.session_signature || '');
+      wiz.workbench.pay_date = trimStr(src.pay_date || wiz.workbench.pay_date || st.pay.pay_date || '');
+      wiz.workbench.week_ending_cutoff = trimStr(src.week_ending_cutoff || src.week_ending_cutoff_date || wiz.workbench.week_ending_cutoff || wiz.workbench.week_ending_cutoff_date || '') || null;
+      wiz.workbench.week_ending_cutoff_date = wiz.workbench.week_ending_cutoff;
+      wiz.workbench.last_progress_at = new Date().toISOString();
+      wiz.workbench.session_obsolete = src.active_session_obsolete === true;
+      wiz.workbench.source_session_obsolete = src.source_session_obsolete === true || src.session_obsolete === true;
+      wiz.workbench.source_session_id = trimStr(src.source_session_id || '') || null;
+      wiz.workbench.replacement_session_id = trimStr(src.replacement_session_id || '') || null;
+      wiz.workbench.replacement_session_version = src.replacement_session_version ?? null;
+      wiz.workbench.adopted_replacement_session = src.adopted_replacement_session === true;
+      wiz.workbench.progress = cloneJson(src.progress || src) || src.progress || src;
+      wiz.workbench.progress_state = trimStr(src.progress_state || src.phase || '');
+      wiz.workbench.progress_counter_version = src.progress_counter_version ?? null;
+      wiz.workbench.candidate_sample_rows = cloneJson(src.candidate_sample_rows || src.candidate_status_rows || []) || [];
+      wiz.workbench.progress_counts = {
+        total_candidates: toCount(src.total_candidates ?? src.total_count),
+        ready_candidates: toCount(src.ready_candidates ?? src.completed_candidates ?? src.completed_count),
+        pending_candidates: toCount(src.pending_candidates ?? src.pending_count),
+        failed_candidates: toCount(src.failed_candidates ?? src.failed_count),
+        line_units_pending: toCount(src.line_units_pending),
+        line_units_ready: toCount(src.line_units_ready),
+        line_units_failed: toCount(src.line_units_failed ?? src.line_units_error),
+        preview_row_count: toCount(src.preview_row_count),
+        selected_row_count: toCount(src.selected_row_count),
+        ready: src.ready === true,
+        ready_flag: src.ready_flag === true,
+        ready_empty: src.ready_empty === true,
+        rows_available: src.rows_available === true,
+        phase: trimStr(src.phase || src.progress_state || ''),
+        status_text: trimStr(src.status_text || '')
       };
+
+      wiz.decisions.session_id = nextSessionId;
+      wiz.decisions.snapshot_run_id = wiz.workbench.snapshot_run_id;
+      if (src.session_version !== undefined && src.session_version !== null) wiz.decisions.session_version = src.session_version;
+      wiz.decisions.session_signature = wiz.workbench.session_signature;
+      wiz.decisions.pay_date = wiz.workbench.pay_date;
+      wiz.decisions.week_ending_cutoff = wiz.workbench.week_ending_cutoff;
+      wiz.decisions.week_ending_cutoff_date = wiz.workbench.week_ending_cutoff_date;
+      wiz.decisions.progress_counts = cloneJson(wiz.workbench.progress_counts) || {};
+
+      if (isPlainObject(wiz.preview.data)) {
+        const previewSessionId = trimStr(wiz.preview.data.session_id || wiz.preview.data.session?.session_id || '');
+        if (!previewSessionId || previewSessionId === nextSessionId) {
+          wiz.preview.data.session_id = nextSessionId;
+          wiz.preview.data.snapshot_run_id = wiz.workbench.snapshot_run_id;
+          wiz.preview.data.session_version = wiz.workbench.session_version;
+          wiz.preview.data.session_signature = wiz.workbench.session_signature;
+          wiz.preview.data.progress = cloneJson(src.progress || src) || src.progress || src;
+        }
+      }
+      return true;
     } catch {
-      return {};
+      return false;
     }
   };
-  const sharedPostMutationContext = readSharedWorkbenchPostMutationContext();
-  const sourceSessionId = trimStr(options?.source_session_id || options?.sourceSessionId || sharedPostMutationContext.source_session_id || '');
-  const obsoleteSessionIds = Array.from(new Set([
-    ...(Array.isArray(options?.obsolete_session_ids) ? options.obsolete_session_ids : []),
-    ...(Array.isArray(options?.obsoleteSessionIds) ? options.obsoleteSessionIds : []),
-    ...(Array.isArray(sharedPostMutationContext.obsolete_session_ids) ? sharedPostMutationContext.obsolete_session_ids : []),
-    sourceSessionId
-  ].map((value) => trimStr(value)).filter(Boolean)));
-  const rawMutationContext = trimStr(
-    options?.mutation_context ||
-    options?.mutationContext ||
-    options?.reason ||
-    options?.reset_reason ||
-    options?.action ||
-    options?.resetAction ||
-    sharedPostMutationContext.mutation_context ||
-    ''
-  ).toUpperCase();
-  const createdPayBatchIds = Array.from(new Set([
-    ...(Array.isArray(options?.created_pay_batch_ids) ? options.created_pay_batch_ids : []),
-    ...(Array.isArray(options?.createdPayBatchIds) ? options.createdPayBatchIds : []),
-    ...(Array.isArray(sharedPostMutationContext.created_pay_batch_ids) ? sharedPostMutationContext.created_pay_batch_ids : [])
-  ].map((value) => trimStr(value)).filter(Boolean)));
-  const dirtyCandidateIds = Array.from(new Set([
-    ...(Array.isArray(options?.dirty_candidate_ids) ? options.dirty_candidate_ids : []),
-    ...(Array.isArray(options?.dirtyCandidateIds) ? options.dirtyCandidateIds : []),
-    ...(Array.isArray(options?.pending_candidate_ids) ? options.pending_candidate_ids : []),
-    ...(Array.isArray(options?.pendingCandidateIds) ? options.pendingCandidateIds : []),
-    ...(Array.isArray(sharedPostMutationContext.dirty_candidate_ids) ? sharedPostMutationContext.dirty_candidate_ids : []),
-    ...(Array.isArray(sharedPostMutationContext.pending_candidate_ids) ? sharedPostMutationContext.pending_candidate_ids : [])
-  ].map((value) => trimStr(value)).filter(Boolean)));
-  const refreshJobIds = Array.from(new Set([
-    ...(Array.isArray(options?.refresh_job_ids) ? options.refresh_job_ids : []),
-    ...(Array.isArray(options?.refreshJobIds) ? options.refreshJobIds : []),
-    ...(Array.isArray(sharedPostMutationContext.refresh_job_ids) ? sharedPostMutationContext.refresh_job_ids : [])
-  ].map((value) => trimStr(value)).filter(Boolean)));
-  const previewReopenRequired = options?.preview_reopen_required === true || options?.previewReopenRequired === true || sharedPostMutationContext.preview_reopen_required === true;
-  const hasCreateSuccessEvidence = rawMutationContext === 'CREATE_DRAFT_SUCCESS' || rawMutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' || rawMutationContext === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' || createdPayBatchIds.length > 0;
-  const hasCancelSuccessEvidence = rawMutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' || rawMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' || rawMutationContext === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN';
-  const hasBatchMutationContext = hasCreateSuccessEvidence || hasCancelSuccessEvidence || /(^|_)(DRAFT|BATCH|PAY_BATCH)(_|$)/.test(rawMutationContext);
-  const hasDirtyCandidatesWithBatchMutation = hasBatchMutationContext && (dirtyCandidateIds.length > 0 || refreshJobIds.length > 0);
-  const mutationContext = hasCreateSuccessEvidence
-    ? 'CREATE_DRAFT_SUCCESS'
-    : (hasCancelSuccessEvidence ? 'CANCEL_DELETE_DRAFT_SUCCESS' : rawMutationContext);
-  const forceNewSession = options?.force_new_session === true || options?.forceNewSession === true || hasCreateSuccessEvidence || hasCancelSuccessEvidence || (previewReopenRequired && !!sourceSessionId) || hasDirtyCandidatesWithBatchMutation;
-  const discardSourceSession = options?.discard_source_session === true || options?.discardSourceSession === true || forceNewSession;
-  const staleCodes = new Set(['OBSOLETE_SESSION', 'STALE_SESSION', 'REBASE_REQUIRED', 'WORKBENCH_SESSION_NOT_OPEN', 'WORKBENCH_SESSION_DISCARDED', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID']);
-  const normaliseProgressCode = (value) => trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-  const serialiseProgressErrorPayload = (value) => {
-    try {
-      if (value == null) return '';
-      if (typeof value === 'string') return value;
-      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-      return JSON.stringify(value);
-    } catch {
-      try { return String(value || ''); } catch { return ''; }
-    }
-  };
-  const looksFatalProgressFailure = (value) => {
-    const text = serialiseProgressErrorPayload(value).toUpperCase();
-    if (!text) return false;
-    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
-    if (text.includes('RLS') || text.includes('ROW LEVEL SECURITY') || text.includes('POLICY')) return true;
-    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
-    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
-    if (text.includes('SQLSTATE') || text.includes('SQL STATE') || text.includes('POSTGRES') || text.includes('SUPABASE') || text.includes('POSTGREST')) return true;
-    if (text.includes('INVALID INPUT SYNTAX') || text.includes('AMBIGUOUS') || text.includes('CONSTRAINT') || text.includes('VIOLATES')) return true;
-    if (/\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|INDEX)\b[^\n]*\b(DOES NOT EXIST|NOT FOUND|IS AMBIGUOUS)\b/.test(text)) return true;
-    return false;
-  };
 
-  const shouldTreatProgressStatusAsRebase = (status) => {
-    const n = Number(status);
-    if (!Number.isFinite(n)) return false;
-    if (n === 401 || n === 403) return false;
-    return [404, 409, 410, 423, 425, 500, 502, 503, 504].includes(Math.trunc(n));
-  };
-  const isObsoleteSessionId = (value) => {
-    const id = trimStr(value);
-    return !!id && obsoleteSessionIds.includes(id);
-  };
-  const isPostCancelProgressContext = hasCancelSuccessEvidence || mutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' || rawMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' || rawMutationContext === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN';
-  const postMutationRebaseStatusText = isPostCancelProgressContext
-    ? 'Draft was cancelled. Refreshing payment preview.'
-    : 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.';
-  const makeRebaseRequiredProgress = (code = 'REBASE_REQUIRED', message = postMutationRebaseStatusText) => ({
-    ok: false,
-    error_code: code,
-    code,
-    rebase_required: true,
-    requires_new_session: true,
-    pending_refresh: true,
-    refresh_pending: true,
-    preview_refresh_pending: true,
-    fatal: false,
-    session_id: sessionIdText,
-    source_session_id: sourceSessionId || null,
-    obsolete_session_ids: [...obsoleteSessionIds],
-    mutation_context: mutationContext || null,
-    post_mutation_context: mutationContext || null,
-    dirty_candidate_ids: dirtyCandidateIds.slice(0, 25),
-    pending_candidate_ids: dirtyCandidateIds.slice(0, 25),
-    refresh_job_ids: refreshJobIds.slice(0, 25),
-    ready: false,
-    ready_flag: false,
-    ready_empty: false,
-    deferred: true,
-    progress_only: true,
-    total_candidates: dirtyCandidateIds.length,
-    completed_candidates: 0,
-    ready_candidates: 0,
-    pending_candidates: dirtyCandidateIds.length,
-    failed_candidates: 0,
-    failed_candidate_ids: [],
-    candidate_status_rows: [],
-    candidate_statuses: [],
-    pending_job_ids: [],
-    recent_jobs: [],
-    pending_candidate_jobs: [],
-    phase: 'REBASE_REQUIRED',
-    status_text: message,
-    message
-  });
-
-  const isPostMutationContext = !!(mutationContext || forceNewSession || discardSourceSession || obsoleteSessionIds.length > 0 || previewReopenRequired || hasDirtyCandidatesWithBatchMutation);
-  const isGenericRetryablePostMutationProgressFailure = (value, codeLike = '') => {
-    if (!isPostMutationContext) return false;
-    if (looksFatalProgressFailure(value)) return false;
-    const code = normaliseProgressCode(
-      codeLike ||
-      value?.error_code ||
-      value?.errorCode ||
-      value?.code ||
-      value?.payload?.error_code ||
-      value?.payload?.code ||
-      value?.json?.error_code ||
-      value?.json?.code ||
-      ''
-    );
-    if (staleCodes.has(code)) return true;
-    if (['BANKING_ACTION_FAILED', 'BANKING_PAY_PREVIEW_FAILED', 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', 'BANKING_PAY_PREVIEW_REFRESH_FAILED'].includes(code)) return true;
-    const text = serialiseProgressErrorPayload(value).toUpperCase();
-    if (!text) return false;
-    if (/PREVIEW\s+COULD\s+NOT\s+BE\s+LOADED/.test(text)) return true;
-    if (/PAYMENT\s+PREVIEW\s+COULD\s+NOT\s+BE\s+LOADED/.test(text)) return true;
-    if (/PAYMENT\s+PREVIEW\s+COULD\s+NOT\s+BE\s+REFRESHED/.test(text)) return true;
-    if (/CLOUDTMS\s+COULD\s+NOT\s+CALCULATE\s+THE\s+PAYMENT\s+PREVIEW/.test(text)) return true;
-    return false;
-  };
-
-  if (isObsoleteSessionId(sessionIdText)) {
-    return makeRebaseRequiredProgress('OBSOLETE_SESSION');
-  }
-
-  if ((forceNewSession || discardSourceSession || (previewReopenRequired && !!sourceSessionId)) && (!sourceSessionId || sessionIdText === sourceSessionId)) {
-    return makeRebaseRequiredProgress('REBASE_REQUIRED');
-  }
+  const sessionIdText = trimStr(sessionId);
+  if (!uuidRe.test(sessionIdText)) throw new Error('bankingPayWorkbenchSessionGetProgress: sessionId is required');
 
   try {
+    const beforeRequestError = evaluateStaleGuard('before_request');
+    if (beforeRequestError) throw beforeRequestError;
+
     if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
-    const progressQuery = new URLSearchParams();
-    progressQuery.set('mode', 'LIGHT');
-    progressQuery.set('sample_limit', '25');
-    const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/progress?${progressQuery.toString()}`));
+    const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/progress`));
     const json = await parseJsonResponse(res);
-    if (!res.ok) {
-      const code = normaliseProgressCode(json?.error_code || json?.code || '');
-      if (
-        staleCodes.has(code) ||
-        isGenericRetryablePostMutationProgressFailure(json, code) ||
-        (isPostMutationContext && shouldTreatProgressStatusAsRebase(res.status) && !looksFatalProgressFailure(json))
-      ) {
-        return makeRebaseRequiredProgress(code || 'REBASE_REQUIRED', trimStr(json?.message || json?.error || '') || undefined);
-      }
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
-    }
-    if (isPlainObject(json) && json.ok === false) {
-      const code = normaliseProgressCode(json.error_code || json.code || '');
-      if (staleCodes.has(code) || json.rebase_required === true || json.requires_new_session === true || isGenericRetryablePostMutationProgressFailure(json, code)) {
-        return makeRebaseRequiredProgress(code || 'REBASE_REQUIRED', trimStr(json.message || json.error || '') || undefined);
-      }
-    }
-    const progress = normaliseProgress(json, sessionIdText);
-    const returnedSessionId = trimStr(progress.session_id || '');
-    if ((forceNewSession || obsoleteSessionIds.length > 0) && isObsoleteSessionId(returnedSessionId)) {
-      return makeRebaseRequiredProgress('OBSOLETE_SESSION');
-    }
-    return progress;
+    if (!res.ok) throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+    if (isPlainObject(json) && json.ok === false) throw makeApiPayloadError(json, 409, trimStr(json.message || json.error || '') || 'Workbench session is not available.');
+
+    const afterResponseError = evaluateStaleGuard('after_response');
+    if (afterResponseError) throw afterResponseError;
+
+    const envelope = unwrapEnvelope(json);
+    const progress = normaliseProgress(envelope, sessionIdText);
+    const effectiveSessionId = trimStr(progress.session_id || sessionIdText);
+    const previewSummarySource = progress.adopted_replacement_session === true
+      ? progress.progress
+      : (envelope.preview_summary || envelope.preview || progress.progress || progress);
+    const previewSummary = stripHeavyArrays(previewSummarySource);
+    const out = stripHeavyArrays({
+      ...(progress.adopted_replacement_session === true ? {} : envelope),
+      ...progress,
+      ok: envelope.ok !== false,
+      session_id: effectiveSessionId,
+      source_session_id: progress.source_session_id || (effectiveSessionId !== sessionIdText ? sessionIdText : null),
+      snapshot_run_id: progress.snapshot_run_id,
+      source_snapshot_run_id: progress.source_snapshot_run_id,
+      session_version: progress.session_version,
+      session_signature: progress.session_signature,
+      pay_date: progress.pay_date,
+      week_ending_cutoff: progress.week_ending_cutoff,
+      week_ending_cutoff_date: progress.week_ending_cutoff_date,
+      ready: progress.ready === true,
+      ready_flag: progress.ready === true,
+      ready_empty: progress.ready_empty === true,
+      requires_paging: true,
+      progress: progress.progress || progress,
+      source_progress: progress.source_progress || null,
+      preview_summary: previewSummary,
+      sections: previewSummary.sections || previewSummary.section_counts || progress.section_counts || {},
+      cursors: previewSummary.cursors || progress.cursors || progress.preview_cursors || {},
+      selected_summary: previewSummary.selected_summary || progress.selected_summary || progress.selection_summary || null,
+      session_obsolete: progress.session_obsolete === true,
+      source_session_obsolete: progress.source_session_obsolete === true,
+      active_session_obsolete: progress.active_session_obsolete === true,
+      obsolete: progress.obsolete === true || progress.session_obsolete === true,
+      replacement_available: progress.replacement_available === true,
+      replacement_session_id: progress.replacement_session_id || null,
+      replacement_session_version: progress.replacement_session_version ?? null,
+      replacement_session_signature: progress.replacement_session_signature || null,
+      replacement_pay_date: progress.replacement_pay_date || null,
+      replacement_week_ending_cutoff: progress.replacement_week_ending_cutoff || null,
+      replacement_snapshot_run_id: progress.replacement_snapshot_run_id || null,
+      adopted_replacement_session: progress.adopted_replacement_session === true,
+      rebase_required: progress.rebase_required === true,
+      requires_new_session: progress.requires_new_session === true,
+      progress_is_read_only: true,
+      read_only: true,
+      drain_attempted: false,
+      recompute_attempted: false
+    });
+
+    const beforeStateApplyError = evaluateStaleGuard('before_state_apply');
+    if (beforeStateApplyError) throw beforeStateApplyError;
+    adoptWorkbenchSession(out, sessionIdText);
+    return out;
   } catch (error) {
-    const errorCode = normaliseProgressCode(error?.error_code || error?.code || error?.payload?.error_code || error?.json?.error_code || '');
-    if (
-      staleCodes.has(errorCode) ||
-      isGenericRetryablePostMutationProgressFailure(error, errorCode) ||
-      (isPostMutationContext && shouldTreatProgressStatusAsRebase(error?.status || 0) && !looksFatalProgressFailure(error?.payload || error?.json || error))
-    ) {
-      return makeRebaseRequiredProgress(errorCode || 'REBASE_REQUIRED', trimStr(error?.user_message || error?.message || '') || undefined);
-    }
     const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: mutationContext || 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, {
+          action: 'PREVIEW',
+          fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+          userInitiated: options?.userInitiated === true || options?.user_initiated === true,
+          silent: options?.silent === true || options?.silent === 'true',
+          background: options?.background === true || options?.background === 'true',
+          showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true')
+        })
       : null;
     if (typeof bankingBuildEnrichedFriendlyError === 'function') {
       throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview progress could not be refreshed');
@@ -108109,6 +107556,8 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     throw error;
   }
 }
+
+
 
 
 async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload = {}) {
@@ -112567,17 +112016,22 @@ const maybeAutoloadPayWorkbench = async () => {
   if (!stillActive()) return;
 
   try {
+    const trimStr = (value) => String(value == null ? '' : value).trim();
+    const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
     const bankingState = window.modalCtx?.banking;
     if (!bankingState || typeof bankingState !== 'object') return;
 
-    bankingState.pay = (bankingState.pay && typeof bankingState.pay === 'object') ? bankingState.pay : {};
-    bankingState.pay.draftWizard = (bankingState.pay.draftWizard && typeof bankingState.pay.draftWizard === 'object') ? bankingState.pay.draftWizard : {};
-    bankingState.pay.draftWizard.preview = (bankingState.pay.draftWizard.preview && typeof bankingState.pay.draftWizard.preview === 'object') ? bankingState.pay.draftWizard.preview : {};
+    bankingState.pay = isPlainObject(bankingState.pay) ? bankingState.pay : {};
+    bankingState.pay.draftWizard = isPlainObject(bankingState.pay.draftWizard) ? bankingState.pay.draftWizard : {};
+    bankingState.pay.draftWizard.preview = isPlainObject(bankingState.pay.draftWizard.preview) ? bankingState.pay.draftWizard.preview : {};
+    bankingState.pay.draftWizard.workbench = isPlainObject(bankingState.pay.draftWizard.workbench) ? bankingState.pay.draftWizard.workbench : {};
+    bankingState.ui = isPlainObject(bankingState.ui) ? bankingState.ui : {};
 
-    if (bankingState.ui && bankingState.ui.__pay_autoload_done === true) return;
-    if (bankingState.ui && typeof bankingState.ui === 'object') bankingState.ui.__pay_autoload_done = true;
+    if (bankingState.ui.__pay_autoload_done === true) return;
+    bankingState.ui.__pay_autoload_done = true;
 
-    const { payDateIso: payDateHintIso } = ensurePayWizardDefaults();
+    const defaults = typeof ensurePayWizardDefaults === 'function' ? ensurePayWizardDefaults() : {};
+    const payDateHintIso = trimStr(defaults?.payDateIso || '');
     const canonicalAutoloadPayDate = (() => {
       const raw = trimStr(
         bankingState.pay?.draftWizard?.pay_date ||
@@ -112600,7 +112054,7 @@ const maybeAutoloadPayWorkbench = async () => {
     try { await safeRerender(); } catch {}
 
     const autoloadToken = `banking-pay-autoload:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    try { bankingState.pay.draftWizard.__autoload_token = autoloadToken; } catch {}
+    bankingState.pay.draftWizard.__autoload_token = autoloadToken;
     const autoloadStillCurrent = () => !!(
       stillActive() &&
       window.modalCtx?.banking === bankingState &&
@@ -112608,16 +112062,15 @@ const maybeAutoloadPayWorkbench = async () => {
     );
 
     const listPromise = Promise.resolve().then(async () => {
-      if (!autoloadStillCurrent()) return null;
-      if (typeof bankingPayBatchesList !== 'function') return null;
-      const limRaw = Number(bankingState.pay?.list?.limit);
-      const lim = Number.isFinite(limRaw) ? Math.max(1, Math.min(50, Math.trunc(limRaw))) : 50;
-      const off = Number.isFinite(Number(bankingState.pay?.list?.offset)) ? Math.max(0, Math.trunc(Number(bankingState.pay.list.offset))) : 0;
+      if (!autoloadStillCurrent() || typeof bankingPayBatchesList !== 'function') return null;
+      const limitRaw = Number(bankingState.pay?.list?.limit);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50, Math.trunc(limitRaw))) : 50;
+      const offset = Number.isFinite(Number(bankingState.pay?.list?.offset)) ? Math.max(0, Math.trunc(Number(bankingState.pay.list.offset))) : 0;
       const status = trimStr(bankingState.pay?.list?.statusFilter || '');
-      return await bankingPayBatchesList({
+      return bankingPayBatchesList({
         status,
-        limit: lim,
-        offset: off,
+        limit,
+        offset,
         silent: true,
         reportError: false,
         userInitiated: false,
@@ -112630,22 +112083,17 @@ const maybeAutoloadPayWorkbench = async () => {
     }).catch(() => null);
 
     const previewPromise = Promise.resolve().then(async () => {
-      if (!autoloadStillCurrent()) return null;
-      if (typeof bankingPayPreview !== 'function') return null;
-      const previewOpts = {
-        mode: 'BOOTSTRAP_OPEN',
-        bootstrap_only: true,
-        progress_only: true,
-        load_first_page: false,
-        hard_session_reload: false,
-        soft_refresh: true,
+      if (!autoloadStillCurrent() || typeof bankingPayPreview !== 'function') return null;
+      const previewOptions = {
+        mode: 'ATTACH_CURRENT_SHARED_SESSION',
         background: true,
         silent: true,
         userInitiated: false,
+        load_first_page: true,
         source: 'maybeAutoloadPayWorkbench'
       };
-      if (canonicalAutoloadPayDate) previewOpts.pay_date = canonicalAutoloadPayDate;
-      return await bankingPayPreview(previewOpts);
+      if (canonicalAutoloadPayDate) previewOptions.pay_date = canonicalAutoloadPayDate;
+      return bankingPayPreview(previewOptions);
     }).catch(() => null);
 
     Promise.resolve(listPromise).then(async () => {
@@ -112658,57 +112106,96 @@ const maybeAutoloadPayWorkbench = async () => {
       try { await safeRerender(); } catch {}
     }).catch(() => {});
 
-    try {
-      bankingState.pay.refreshWorkbench = async (opts = {}) => {
-        if (!stillActive()) return null;
-        const wiz = bankingState.pay?.draftWizard || {};
-        const payDate = trimStr(opts.pay_date || wiz.pay_date || bankingState.pay?.pay_date || bankingState.pay?.selectedPayDate || payDateHintIso || '');
-        if (!payDate) return null;
+    bankingState.pay.refreshWorkbench = async (opts = {}) => {
+      if (!stillActive()) return null;
+      const wizard = bankingState.pay?.draftWizard || {};
+      const payDate = trimStr(opts.pay_date || opts.payDate || wizard.pay_date || bankingState.pay?.pay_date || bankingState.pay?.selectedPayDate || payDateHintIso || '');
+      if (!payDate) return null;
 
-        if (trimStr(opts.candidate_id || '') && typeof bankingPayWorkbenchSessionGetCandidate === 'function' && typeof mergePayWorkbenchCandidatePreviewIntoState === 'function' && trimStr(wiz.workbench?.session_id || '')) {
-          const candidatePreview = await bankingPayWorkbenchSessionGetCandidate(trimStr(wiz.workbench.session_id || ''), trimStr(opts.candidate_id || ''), {
-            limit: Math.min(100, Math.max(1, Number(opts.limit || 100) || 100)),
-            mode: 'SUMMARY',
-            source: 'refreshWorkbench.candidate'
-          });
-          mergePayWorkbenchCandidatePreviewIntoState(candidatePreview, bankingState);
-          try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
-          await safeRerender();
-          return candidatePreview;
+      const currentSessionId = trimStr(wizard.workbench?.session_id || '');
+      const candidateId = trimStr(opts.candidate_id || opts.candidateId || '');
+      const source = trimStr(opts.source || (candidateId ? 'refreshWorkbench.candidateMutation' : 'refreshWorkbench')) || 'refreshWorkbench';
+      const existingPromise = wizard.workbench?.__observational_refresh_promise;
+
+      if (candidateId) {
+        wizard.workbench.pending_candidate_ids = Array.from(new Set([
+          ...(Array.isArray(wizard.workbench.pending_candidate_ids) ? wizard.workbench.pending_candidate_ids : []),
+          candidateId
+        ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 25);
+        wizard.workbench.dirty_candidate_ids = Array.from(new Set([
+          ...(Array.isArray(wizard.workbench.dirty_candidate_ids) ? wizard.workbench.dirty_candidate_ids : []),
+          candidateId
+        ].map((value) => trimStr(value)).filter(Boolean))).slice(0, 25);
+        wizard.preview = isPlainObject(wizard.preview) ? wizard.preview : {};
+        wizard.preview.loading = true;
+        wizard.preview.error = '';
+        wizard.preview.failure = null;
+        wizard.preview.status_text = 'Refreshing changed payment details in the background.';
+        wizard.preview.progress_only = true;
+        wizard.workbench.__candidate_refresh_page_reread_pending = true;
+      }
+
+      if (existingPromise && typeof existingPromise.then === 'function') {
+        if (candidateId) {
+          try { await safeRerender(); } catch {}
         }
+        return existingPromise;
+      }
 
+      const refreshPromise = Promise.resolve().then(async () => {
         if (typeof bankingPayPreview === 'function') {
-          return await bankingPayPreview({
+          return bankingPayPreview({
             pay_date: payDate,
-            hard_session_reload: opts.hard_session_reload === true,
-            mode: opts.hard_session_reload === true ? 'HARD_SESSION_RELOAD' : 'SOFT_REFRESH',
-            soft_refresh: opts.hard_session_reload !== true,
-            bootstrap_only: opts.full_preview !== true,
-            progress_only: opts.full_preview !== true,
-            load_first_page: opts.load_first_page === true,
+            mode: 'ATTACH_CURRENT_SHARED_SESSION',
+            soft_refresh: true,
             background: opts.background !== false,
             silent: opts.silent !== false,
-            source: 'refreshWorkbench'
+            userInitiated: opts.userInitiated === true || opts.user_initiated === true,
+            load_first_page: opts.load_first_page === true || opts.loadFirstPage === true || candidateId !== '',
+            candidate_id: candidateId || null,
+            candidate_mutation_refresh: candidateId !== '',
+            source
           });
         }
 
-        if (typeof bankingPayWorkbenchSessionGet === 'function' && typeof applyPayWorkbenchPreviewToState === 'function' && trimStr(wiz.workbench?.session_id || '') && opts.hard_session_reload !== true) {
-          const previewPayload = await bankingPayWorkbenchSessionGet(trimStr(wiz.workbench.session_id || ''), {
-            mode: 'SUMMARY',
-            allow_full_preview: opts.full_preview === true,
-            source: 'refreshWorkbench.summary'
+        if (currentSessionId && typeof bankingPayWorkbenchSessionGetProgress === 'function') {
+          return bankingPayWorkbenchSessionGetProgress(currentSessionId, {
+            background: true,
+            silent: true,
+            source,
+            staleSessionGuard: true,
+            expectedSessionId: currentSessionId,
+            getCurrentSessionId: () => trimStr(bankingState.pay?.draftWizard?.workbench?.session_id || '')
           });
-          applyPayWorkbenchPreviewToState(previewPayload, bankingState);
-          try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
-          await safeRerender();
-          return previewPayload;
+        }
+
+        if (currentSessionId && typeof bankingPayWorkbenchSessionGet === 'function') {
+          return bankingPayWorkbenchSessionGet(currentSessionId, {
+            background: true,
+            silent: true,
+            source,
+            staleSessionGuard: true,
+            expectedSessionId: currentSessionId,
+            getCurrentSessionId: () => trimStr(bankingState.pay?.draftWizard?.workbench?.session_id || '')
+          });
         }
 
         return null;
-      };
-    } catch {}
+      }).finally(() => {
+        try {
+          if (wizard.workbench?.__observational_refresh_promise === refreshPromise) wizard.workbench.__observational_refresh_promise = null;
+        } catch {}
+      });
+
+      wizard.workbench.__observational_refresh_promise = refreshPromise;
+      const result = await refreshPromise;
+      try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
+      try { await safeRerender(); } catch {}
+      return result;
+    };
   } catch {}
 };
+
 
 
 function buildTimesheetSummaryFilterSpec(input = {}) {
