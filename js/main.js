@@ -58457,8 +58457,6 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
 
 
 
-
-
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -59565,47 +59563,166 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const syncChildCsvEvidenceFromData = (data) => {
     const d = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
     const b = (d.batch && typeof d.batch === 'object' && !Array.isArray(d.batch)) ? d.batch : {};
+    const summary = (d.execution_summary && typeof d.execution_summary === 'object' && !Array.isArray(d.execution_summary))
+      ? d.execution_summary
+      : ((d.executionSummary && typeof d.executionSummary === 'object' && !Array.isArray(d.executionSummary))
+          ? d.executionSummary
+          : ((b.execution_summary && typeof b.execution_summary === 'object' && !Array.isArray(b.execution_summary))
+              ? b.execution_summary
+              : ((b.executionSummary && typeof b.executionSummary === 'object' && !Array.isArray(b.executionSummary)) ? b.executionSummary : {})));
     const csvSummary = (d.bank_csv_export_json && typeof d.bank_csv_export_json === 'object' && !Array.isArray(d.bank_csv_export_json))
       ? d.bank_csv_export_json
-      : ((b.bank_csv_export_json && typeof b.bank_csv_export_json === 'object' && !Array.isArray(b.bank_csv_export_json)) ? b.bank_csv_export_json : null);
+      : ((d.bankCsvExportJson && typeof d.bankCsvExportJson === 'object' && !Array.isArray(d.bankCsvExportJson))
+          ? d.bankCsvExportJson
+          : ((b.bank_csv_export_json && typeof b.bank_csv_export_json === 'object' && !Array.isArray(b.bank_csv_export_json))
+              ? b.bank_csv_export_json
+              : ((b.bankCsvExportJson && typeof b.bankCsvExportJson === 'object' && !Array.isArray(b.bankCsvExportJson)) ? b.bankCsvExportJson : null)));
     const ev = (typeof deriveBankingPayBankCsvEvidence === 'function')
       ? deriveBankingPayBankCsvEvidence(data)
       : { generated_at_utc: null };
+    const sources = [d, b, summary, csvSummary || {}];
+    const routeContract = getAuthoritativePaymentCapabilityContract(data);
+    const firstValueForCsv = (...keys) => {
+      for (const source of sources) {
+        const obj = childPlainObject(source);
+        for (const key of keys) {
+          if (!childObjectHasKey(obj, key)) continue;
+          const value = obj[key];
+          if (value === undefined) continue;
+          return value;
+        }
+      }
+      return undefined;
+    };
+    const firstValueForCsvEvidence = (...keys) => {
+      for (const source of [csvSummary || {}, d, b, summary]) {
+        const obj = childPlainObject(source);
+        for (const key of keys) {
+          if (!childObjectHasKey(obj, key)) continue;
+          const value = obj[key];
+          if (value === undefined) continue;
+          return value;
+        }
+      }
+      return undefined;
+    };
+    const firstValueForCurrentProjection = (...keys) => {
+      for (const source of [summary, d, b, csvSummary || {}]) {
+        const obj = childPlainObject(source);
+        for (const key of keys) {
+          if (!childObjectHasKey(obj, key)) continue;
+          const value = obj[key];
+          if (value === undefined) continue;
+          return value;
+        }
+      }
+      return undefined;
+    };
     child.csv = (child.csv && typeof child.csv === 'object') ? child.csv : {};
     child.csv.generated_at_utc =
       ev.generated_at_utc ||
-      csvSummary?.generated_at_utc ||
-      d.csv_file_generated_at_utc ||
-      b.csv_file_generated_at_utc ||
+      firstValueForCsv('generated_at_utc', 'generatedAtUtc', 'csv_file_generated_at_utc', 'csvFileGeneratedAtUtc') ||
       null;
     child.csv.filename =
       ev.filename ||
-      csvSummary?.filename ||
-      d.csv_filename ||
-      b.csv_filename ||
+      firstValueForCsvEvidence('filename', 'csv_filename', 'csvFilename') ||
       child.csv.filename ||
       '';
+    child.csv.scope = String(firstValueForCsvEvidence('scope', 'requested_scope', 'requestedScope', 'pay_channel_scope', 'payChannelScope') || child.csv.scope || '').trim().toUpperCase() || null;
+    child.csv.pay_channel_scope = child.csv.scope;
+    child.csv.payChannelScope = child.csv.scope;
     child.csv.row_count =
       ev.row_count ??
-      csvSummary?.row_count ??
-      d.csv_row_count ??
-      b.csv_row_count ??
+      firstValueForCsvEvidence('row_count', 'rowCount', 'csv_row_count', 'csvRowCount') ??
       child.csv.row_count ??
       null;
     child.csv.total_amount =
       ev.total_amount ??
-      csvSummary?.total_amount ??
-      d.csv_total_amount ??
-      b.csv_total_amount ??
+      firstValueForCsvEvidence('total_amount', 'totalAmount', 'csv_total_amount', 'csvTotalAmount') ??
       child.csv.total_amount ??
       null;
+    child.csv.bank_csv_generated = childReadTriStateBool(firstValueForCsv('bank_csv_generated', 'bankCsvGenerated'));
+    child.csv.bankCsvGenerated = child.csv.bank_csv_generated;
+    child.csv.bank_csv_current = childReadTriStateBool(firstValueForCsv('bank_csv_current', 'bankCsvCurrent'));
+    child.csv.bankCsvCurrent = child.csv.bank_csv_current;
+    child.csv.bank_csv_stale_reason = String(firstValueForCsv('bank_csv_stale_reason', 'bankCsvStaleReason') || '').trim() || null;
+    child.csv.bankCsvStaleReason = child.csv.bank_csv_stale_reason;
+    child.csv.zero_row_export = childReadTriStateBool(firstValueForCsv('zero_row_export', 'zeroRowExport', 'bank_csv_zero_row', 'bankCsvZeroRow', 'zero_row_bank_csv', 'zeroRowBankCsv'));
+    child.csv.zeroRowExport = child.csv.zero_row_export;
+    child.csv.no_bank_payment_required = childReadTriStateBool(firstValueForCsv('no_bank_payment_required', 'noBankPaymentRequired', 'header_only_or_empty_body', 'headerOnlyOrEmptyBody'));
+    child.csv.noBankPaymentRequired = child.csv.no_bank_payment_required;
+    child.csv.no_bank_payment_execution_eligible = childReadTriStateBool(firstValueForCsv('no_bank_payment_execution_eligible', 'noBankPaymentExecutionEligible', 'batch_wide_no_bank_payment_execution_eligible', 'batchWideNoBankPaymentExecutionEligible'));
+    child.csv.noBankPaymentExecutionEligible = child.csv.no_bank_payment_execution_eligible;
+    child.csv.batch_wide_no_bank_payment_execution_eligible = child.csv.no_bank_payment_execution_eligible;
+    child.csv.batchWideNoBankPaymentExecutionEligible = child.csv.no_bank_payment_execution_eligible;
+    child.csv.scoped_no_transfer_execution_eligible = childReadTriStateBool(firstValueForCsv('scoped_no_transfer_execution_eligible', 'scopedNoTransferExecutionEligible', 'scoped_no_transfer_execution', 'scopedNoTransferExecution'));
+    child.csv.scopedNoTransferExecutionEligible = child.csv.scoped_no_transfer_execution_eligible;
+    child.csv.explicit_zero_no_bank_scope_eligible = childReadTriStateBool(firstValueForCsv('explicit_zero_no_bank_scope_eligible', 'explicitZeroNoBankScopeEligible', 'allow_explicit_zero_no_bank_scopes', 'allowExplicitZeroNoBankScopes'));
+    child.csv.explicitZeroNoBankScopeEligible = child.csv.explicit_zero_no_bank_scope_eligible;
+    child.csv.all_required_paye_explicit_zero = childReadTriStateBool(firstValueForCsv('all_required_paye_explicit_zero', 'allRequiredPayeExplicitZero'));
+    child.csv.allRequiredPayeExplicitZero = child.csv.all_required_paye_explicit_zero;
+    child.csv.payment_projection_invalid = childReadTriStateBool(firstValueForCsv('payment_projection_invalid', 'paymentProjectionInvalid'));
+    child.csv.paymentProjectionInvalid = child.csv.payment_projection_invalid;
+    child.csv.stored_paye_net_state_hash = String(firstValueForCsvEvidence('stored_paye_net_state_hash', 'storedPayeNetStateHash', 'paye_net_state_hash', 'payeNetStateHash') || '').trim() || null;
+    child.csv.storedPayeNetStateHash = child.csv.stored_paye_net_state_hash;
+    child.csv.current_paye_net_state_hash = String(firstValueForCurrentProjection('current_paye_net_state_hash', 'currentPayeNetStateHash', 'current_scoped_paye_net_state_hash', 'currentScopedPayeNetStateHash', 'scoped_paye_net_state_hash', 'scopedPayeNetStateHash') || '').trim() || null;
+    child.csv.currentPayeNetStateHash = child.csv.current_paye_net_state_hash;
+    child.csv.scoped_paye_net_state_hash = String(firstValueForCurrentProjection('scoped_paye_net_state_hash', 'scopedPayeNetStateHash', 'current_scoped_paye_net_state_hash', 'currentScopedPayeNetStateHash', 'current_paye_net_state_hash', 'currentPayeNetStateHash') || '').trim() || null;
+    child.csv.scopedPayeNetStateHash = child.csv.scoped_paye_net_state_hash;
+    child.csv.stored_bank_payment_projection_hash = String(firstValueForCsvEvidence('stored_bank_payment_projection_hash', 'storedBankPaymentProjectionHash', 'bank_payment_projection_hash', 'bankPaymentProjectionHash') || '').trim() || null;
+    child.csv.storedBankPaymentProjectionHash = child.csv.stored_bank_payment_projection_hash;
+    child.csv.current_bank_payment_projection_hash = String(firstValueForCurrentProjection('current_bank_payment_projection_hash', 'currentBankPaymentProjectionHash', 'current_scoped_bank_payment_projection_hash', 'currentScopedBankPaymentProjectionHash', 'scoped_bank_payment_projection_hash', 'scopedBankPaymentProjectionHash') || '').trim() || null;
+    child.csv.currentBankPaymentProjectionHash = child.csv.current_bank_payment_projection_hash;
+    child.csv.scoped_bank_payment_projection_hash = String(firstValueForCurrentProjection('scoped_bank_payment_projection_hash', 'scopedBankPaymentProjectionHash', 'current_scoped_bank_payment_projection_hash', 'currentScopedBankPaymentProjectionHash', 'current_bank_payment_projection_hash', 'currentBankPaymentProjectionHash') || '').trim() || null;
+    child.csv.scopedBankPaymentProjectionHash = child.csv.scoped_bank_payment_projection_hash;
+    child.csv.global_paye_net_state_hash = String(firstValueForCsv('global_paye_net_state_hash', 'globalPayeNetStateHash', 'current_global_paye_net_state_hash', 'currentGlobalPayeNetStateHash') || '').trim() || null;
+    child.csv.globalPayeNetStateHash = child.csv.global_paye_net_state_hash;
+    child.csv.global_bank_payment_projection_hash = String(firstValueForCsv('global_bank_payment_projection_hash', 'globalBankPaymentProjectionHash', 'all_scope_bank_payment_projection_hash', 'allScopeBankPaymentProjectionHash') || '').trim() || null;
+    child.csv.globalBankPaymentProjectionHash = child.csv.global_bank_payment_projection_hash;
+    for (const [field, aliases] of Object.entries({
+      global_missing_explicit_paye_input_count: ['global_missing_explicit_paye_input_count', 'globalMissingExplicitPayeInputCount', 'missing_explicit_paye_input_count', 'missingExplicitPayeInputCount'],
+      global_explicit_zero_count: ['global_explicit_zero_count', 'globalExplicitZeroCount', 'explicit_zero_count', 'explicitZeroCount'],
+      global_positive_bank_payment_count: ['global_positive_bank_payment_count', 'globalPositiveBankPaymentCount', 'positive_bank_payment_count', 'positiveBankPaymentCount'],
+      global_invalid_payment_row_count: ['global_invalid_payment_row_count', 'globalInvalidPaymentRowCount', 'invalid_payment_row_count', 'invalidPaymentRowCount'],
+      scoped_missing_explicit_paye_input_count: ['scoped_missing_explicit_paye_input_count', 'scopedMissingExplicitPayeInputCount'],
+      scoped_explicit_zero_count: ['scoped_explicit_zero_count', 'scopedExplicitZeroCount'],
+      scoped_positive_bank_payment_count: ['scoped_positive_bank_payment_count', 'scopedPositiveBankPaymentCount'],
+      scoped_invalid_payment_row_count: ['scoped_invalid_payment_row_count', 'scopedInvalidPaymentRowCount']
+    })) {
+      const n = childFirstNonNegativeIntegerFromKeys(sources, aliases);
+      child.csv[field] = n;
+      child.csv[field.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = n;
+    }
+    child.csv.payment_route_capabilities = routeContract.payment_route_capabilities;
+    child.csv.paymentRouteCapabilities = routeContract.payment_route_capabilities;
+    child.csv.route_capabilities = routeContract.route_capabilities;
+    child.csv.routeCapabilities = routeContract.route_capabilities;
+    child.csv.execute_capability = routeContract.execute_any;
+    child.csv.executeCapability = routeContract.execute_any;
     child.csv.evidence_summary = {
       ...(child.csv.evidence_summary && typeof child.csv.evidence_summary === 'object' ? child.csv.evidence_summary : {}),
       ...(csvSummary || {}),
       generated_at_utc: child.csv.generated_at_utc,
       filename: child.csv.filename,
+      scope: child.csv.scope,
+      pay_channel_scope: child.csv.scope,
       row_count: child.csv.row_count,
-      total_amount: child.csv.total_amount
+      total_amount: child.csv.total_amount,
+      bank_csv_current: child.csv.bank_csv_current,
+      bank_csv_stale_reason: child.csv.bank_csv_stale_reason,
+      zero_row_export: child.csv.zero_row_export,
+      no_bank_payment_required: child.csv.no_bank_payment_required,
+      no_bank_payment_execution_eligible: child.csv.no_bank_payment_execution_eligible,
+      batch_wide_no_bank_payment_execution_eligible: child.csv.batch_wide_no_bank_payment_execution_eligible,
+      scoped_no_transfer_execution_eligible: child.csv.scoped_no_transfer_execution_eligible,
+      explicit_zero_no_bank_scope_eligible: child.csv.explicit_zero_no_bank_scope_eligible,
+      all_required_paye_explicit_zero: child.csv.all_required_paye_explicit_zero,
+      payment_projection_invalid: child.csv.payment_projection_invalid,
+      scoped_paye_net_state_hash: child.csv.scoped_paye_net_state_hash,
+      scoped_bank_payment_projection_hash: child.csv.scoped_bank_payment_projection_hash,
+      global_paye_net_state_hash: child.csv.global_paye_net_state_hash,
+      global_bank_payment_projection_hash: child.csv.global_bank_payment_projection_hash,
+      payment_route_capabilities: child.csv.payment_route_capabilities
     };
   };
   const deriveTransfers = (data) => {
@@ -59640,6 +59757,333 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       if (Number.isFinite(n)) return n;
     }
     return null;
+  };
+
+
+  const childPlainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+
+  const childReadTriStateBool = (value) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (value === 1) return true;
+    if (value === 0) return false;
+    if (value === null || value === undefined) return null;
+    const text = String(value).trim().toLowerCase();
+    if (!text) return null;
+    if (['true', 't', '1', 'yes', 'y', 'on', 'allowed', 'enabled'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off', 'denied', 'disabled', 'blocked'].includes(text)) return false;
+    return null;
+  };
+
+  const childObjectHasKey = (obj, key) => !!(obj && typeof obj === 'object' && !Array.isArray(obj) && Object.prototype.hasOwnProperty.call(obj, key));
+
+  const childFirstPresentValue = (...entries) => {
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || entry.length < 2) continue;
+      const [obj, key] = entry;
+      if (childObjectHasKey(obj, key)) return obj[key];
+    }
+    return undefined;
+  };
+
+  const childFirstNonBlankTextFromKeys = (sources, keys) => {
+    const sourceList = Array.isArray(sources) ? sources : [sources];
+    const keyList = Array.isArray(keys) ? keys : [keys];
+    for (const source of sourceList) {
+      const obj = childPlainObject(source);
+      for (const key of keyList) {
+        if (!childObjectHasKey(obj, key)) continue;
+        const text = String(obj[key] == null ? '' : obj[key]).trim();
+        if (text) return text;
+      }
+    }
+    return '';
+  };
+
+  const childFirstNumberFromKeys = (sources, keys) => {
+    const sourceList = Array.isArray(sources) ? sources : [sources];
+    const keyList = Array.isArray(keys) ? keys : [keys];
+    for (const source of sourceList) {
+      const obj = childPlainObject(source);
+      for (const key of keyList) {
+        if (!childObjectHasKey(obj, key)) continue;
+        const value = obj[key];
+        if (value === null || value === undefined || String(value).trim() === '') continue;
+        const n = Number(value);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+    return null;
+  };
+
+  const childFirstNonNegativeIntegerFromKeys = (sources, keys) => {
+    const n = childFirstNumberFromKeys(sources, keys);
+    return n === null ? null : Math.max(0, Math.trunc(n));
+  };
+
+  const getChildDataAndBatchObjects = (data) => {
+    const d = childPlainObject(data);
+    const b = childPlainObject(d.batch);
+    const summary = childPlainObject(d.execution_summary || d.executionSummary || b.execution_summary || b.executionSummary);
+    const csv = childPlainObject(d.bank_csv_export_json || d.bankCsvExportJson || b.bank_csv_export_json || b.bankCsvExportJson || child.csv?.evidence_summary);
+    return { d, b, summary, csv, sources: [d, b, summary, csv] };
+  };
+
+  const getRouteCapabilityContainer = (data) => {
+    const { d, b, summary } = getChildDataAndBatchObjects(data);
+    const containers = [
+      d.payment_route_capabilities,
+      d.paymentRouteCapabilities,
+      b.payment_route_capabilities,
+      b.paymentRouteCapabilities,
+      summary.payment_route_capabilities,
+      summary.paymentRouteCapabilities,
+      child.csv?.payment_route_capabilities,
+      child.csv?.paymentRouteCapabilities,
+      child.csv?.route_capabilities,
+      child.csv?.routeCapabilities
+    ];
+    for (const container of containers) {
+      if (container && typeof container === 'object' && !Array.isArray(container)) return container;
+    }
+    return {};
+  };
+
+  const routeCapabilityAliases = {
+    bank_csv: ['bank_csv', 'bankCsv', 'bank_csv_file', 'bankCsvFile', 'csv_export', 'csvExport'],
+    standard_execution: ['standard_execution', 'standardExecution', 'standard_bank', 'standardBank', 'standard_bank_execution', 'standardBankExecution', 'provider_execution', 'providerExecution'],
+    csv_settlement: ['csv_settlement', 'csvSettlement', 'manual_csv', 'manualCsv', 'manual_settlement', 'manualSettlement'],
+    external_settlement: ['external_settlement', 'externalSettlement', 'external_manual', 'externalManual']
+  };
+
+  const directCapabilityKeysByRoute = {
+    bank_csv: {
+      allow: ['can_create_bank_csv_file', 'canCreateBankCsvFile', 'bank_csv_allowed', 'bankCsvAllowed', 'csv_export_allowed', 'csvExportAllowed'],
+      deny: ['bank_csv_disabled', 'bankCsvDisabled', 'csv_export_disabled', 'csvExportDisabled', 'bank_csv_blocked', 'bankCsvBlocked']
+    },
+    standard_execution: {
+      allow: ['can_start_standard_execution', 'canStartStandardExecution', 'native_execution_available', 'nativeExecutionAvailable', 'standard_execution_allowed', 'standardExecutionAllowed', 'can_execute', 'canExecute', 'execute_allowed', 'executeAllowed'],
+      deny: ['standard_execution_disabled', 'standardExecutionDisabled', 'standard_bank_execution_disabled', 'standardBankExecutionDisabled', 'execute_disabled', 'executeDisabled']
+    },
+    csv_settlement: {
+      allow: ['can_start_csv_settlement', 'canStartCsvSettlement', 'csv_settlement_allowed', 'csvSettlementAllowed', 'manual_csv_settlement_allowed', 'manualCsvSettlementAllowed'],
+      deny: ['csv_settlement_disabled', 'csvSettlementDisabled', 'manual_csv_settlement_disabled', 'manualCsvSettlementDisabled']
+    },
+    external_settlement: {
+      allow: ['can_start_external_settlement', 'canStartExternalSettlement', 'external_settlement_allowed', 'externalSettlementAllowed'],
+      deny: ['external_settlement_disabled', 'externalSettlementDisabled']
+    }
+  };
+
+  const directCapabilityReasonKeysByRoute = {
+    bank_csv: ['bank_csv_disabled_reason', 'bankCsvDisabledReason', 'bank_csv_stale_reason', 'bankCsvStaleReason', 'disabled_reason', 'disabledReason', 'message'],
+    standard_execution: ['standard_execution_disabled_reason', 'standardExecutionDisabledReason', 'execute_disabled_reason', 'executeDisabledReason', 'disabled_reason', 'disabledReason', 'message'],
+    csv_settlement: ['csv_settlement_disabled_reason', 'csvSettlementDisabledReason', 'execute_disabled_reason', 'executeDisabledReason', 'disabled_reason', 'disabledReason', 'message'],
+    external_settlement: ['external_settlement_disabled_reason', 'externalSettlementDisabledReason', 'execute_disabled_reason', 'executeDisabledReason', 'disabled_reason', 'disabledReason', 'message']
+  };
+
+  const directCapabilityReasonCodeKeysByRoute = {
+    bank_csv: ['bank_csv_disabled_reason_code', 'bankCsvDisabledReasonCode', 'bank_csv_stale_reason', 'bankCsvStaleReason', 'disabled_reason_code', 'disabledReasonCode', 'code'],
+    standard_execution: ['standard_execution_disabled_reason_code', 'standardExecutionDisabledReasonCode', 'execute_disabled_reason_code', 'executeDisabledReasonCode', 'disabled_reason_code', 'disabledReasonCode', 'code'],
+    csv_settlement: ['csv_settlement_disabled_reason_code', 'csvSettlementDisabledReasonCode', 'execute_disabled_reason_code', 'executeDisabledReasonCode', 'disabled_reason_code', 'disabledReasonCode', 'code'],
+    external_settlement: ['external_settlement_disabled_reason_code', 'externalSettlementDisabledReasonCode', 'execute_disabled_reason_code', 'executeDisabledReasonCode', 'disabled_reason_code', 'disabledReasonCode', 'code']
+  };
+
+  const readCapabilityObjectState = (capabilityObject) => {
+    const obj = childPlainObject(capabilityObject);
+    if (!Object.keys(obj).length) return null;
+    for (const key of ['allowed', 'enabled', 'can_execute', 'canExecute', 'available']) {
+      if (!childObjectHasKey(obj, key)) continue;
+      const parsed = childReadTriStateBool(obj[key]);
+      if (parsed !== null) return parsed;
+    }
+    for (const key of ['disabled', 'blocked', 'denied']) {
+      if (!childObjectHasKey(obj, key)) continue;
+      const parsed = childReadTriStateBool(obj[key]);
+      if (parsed === true) return false;
+      if (parsed === false) return true;
+    }
+    return null;
+  };
+
+  const getBackendRouteCapability = (data, routeKey) => {
+    const route = String(routeKey || '').trim();
+    const { d, b, summary, csv, sources } = getChildDataAndBatchObjects(data);
+    const container = getRouteCapabilityContainer(data);
+    const aliases = routeCapabilityAliases[route] || [route];
+    let sourceObject = null;
+    let state = null;
+    let sourceKey = '';
+    for (const alias of aliases) {
+      if (!childObjectHasKey(container, alias)) continue;
+      const candidate = container[alias];
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+        const parsed = readCapabilityObjectState(candidate);
+        if (parsed !== null) {
+          state = parsed;
+          sourceObject = candidate;
+          sourceKey = `payment_route_capabilities.${alias}`;
+          break;
+        }
+      } else {
+        const parsed = childReadTriStateBool(candidate);
+        if (parsed !== null) {
+          state = parsed;
+          sourceObject = container;
+          sourceKey = `payment_route_capabilities.${alias}`;
+          break;
+        }
+      }
+    }
+    const directKeys = directCapabilityKeysByRoute[route] || { allow: [], deny: [] };
+    if (state === null) {
+      for (const source of [d, b, summary, csv]) {
+        const obj = childPlainObject(source);
+        for (const key of directKeys.allow) {
+          if (!childObjectHasKey(obj, key)) continue;
+          const parsed = childReadTriStateBool(obj[key]);
+          if (parsed !== null) {
+            state = parsed;
+            sourceObject = obj;
+            sourceKey = key;
+            break;
+          }
+        }
+        if (state !== null) break;
+        for (const key of directKeys.deny) {
+          if (!childObjectHasKey(obj, key)) continue;
+          const parsed = childReadTriStateBool(obj[key]);
+          if (parsed === true) {
+            state = false;
+            sourceObject = obj;
+            sourceKey = key;
+            break;
+          }
+          if (parsed === false) {
+            state = true;
+            sourceObject = obj;
+            sourceKey = key;
+            break;
+          }
+        }
+        if (state !== null) break;
+      }
+    }
+    const sourceForReason = sourceObject || {};
+    const reasonCode = childFirstNonBlankTextFromKeys(
+      [sourceForReason, d, b, summary, csv],
+      directCapabilityReasonCodeKeysByRoute[route] || ['disabled_reason_code', 'disabledReasonCode', 'code']
+    );
+    const reason = childFirstNonBlankTextFromKeys(
+      [sourceForReason, d, b, summary, csv],
+      directCapabilityReasonKeysByRoute[route] || ['disabled_reason', 'disabledReason', 'message']
+    );
+    return {
+      route,
+      state,
+      allowed: state === true,
+      denied: state === false,
+      absent: state === null,
+      reason_code: reasonCode || '',
+      reasonCode: reasonCode || '',
+      reason: reason || '',
+      message: reason || '',
+      source_key: sourceKey || '',
+      sourceKey: sourceKey || '',
+      raw: sourceObject || null,
+      has_signal: state !== null || !!sourceKey
+    };
+  };
+
+  const getAnyExecuteRouteCapability = (data) => {
+    const standard = getBackendRouteCapability(data, 'standard_execution');
+    const csv = getBackendRouteCapability(data, 'csv_settlement');
+    const external = getBackendRouteCapability(data, 'external_settlement');
+    const routes = [standard, csv, external];
+    const allowedRoute = routes.find((route) => route.state === true);
+    if (allowedRoute) return { ...allowedRoute, route: 'execute_any', selected_route: allowedRoute.route, routes, state: true, allowed: true, denied: false, absent: false };
+    const explicitRoutes = routes.filter((route) => route.state !== null);
+    if (explicitRoutes.length > 0 && explicitRoutes.every((route) => route.state === false)) {
+      const firstReason = explicitRoutes.find((route) => route.reason || route.reason_code) || explicitRoutes[0];
+      return { ...firstReason, route: 'execute_any', selected_route: '', routes, state: false, allowed: false, denied: true, absent: false };
+    }
+    const { d, b, summary, csv: csvEvidence } = getChildDataAndBatchObjects(data);
+    const generalAllow = childFirstPresentValue(
+      [d, 'execute_allowed'], [d, 'executeAllowed'], [d, 'can_execute'], [d, 'canExecute'],
+      [b, 'execute_allowed'], [b, 'executeAllowed'], [b, 'can_execute'], [b, 'canExecute'],
+      [summary, 'execute_allowed'], [summary, 'executeAllowed'], [summary, 'can_execute'], [summary, 'canExecute'],
+      [csvEvidence, 'execute_allowed'], [csvEvidence, 'executeAllowed']
+    );
+    const generalAllowParsed = childReadTriStateBool(generalAllow);
+    const generalDisabled = childFirstPresentValue(
+      [d, 'execute_disabled'], [d, 'executeDisabled'],
+      [b, 'execute_disabled'], [b, 'executeDisabled'],
+      [summary, 'execute_disabled'], [summary, 'executeDisabled']
+    );
+    const generalDisabledParsed = childReadTriStateBool(generalDisabled);
+    if (generalDisabledParsed === true) {
+      const reasonCode = childFirstNonBlankTextFromKeys([d, b, summary], ['execute_disabled_reason_code', 'executeDisabledReasonCode']);
+      const reason = childFirstNonBlankTextFromKeys([d, b, summary], ['execute_disabled_reason', 'executeDisabledReason']);
+      return { route: 'execute_any', selected_route: '', routes, state: false, allowed: false, denied: true, absent: false, reason_code: reasonCode, reason, message: reason };
+    }
+    if (generalAllowParsed !== null) return { route: 'execute_any', selected_route: '', routes, state: generalAllowParsed, allowed: generalAllowParsed === true, denied: generalAllowParsed === false, absent: false, reason_code: '', reason: '', message: '' };
+    if (explicitRoutes.length > 0 && explicitRoutes.every((route) => route.state === false)) {
+      const firstReason = explicitRoutes.find((route) => route.reason || route.reason_code) || explicitRoutes[0];
+      return { ...firstReason, route: 'execute_any', selected_route: '', routes, state: false, allowed: false, denied: true, absent: false };
+    }
+    return { route: 'execute_any', selected_route: '', routes, state: null, allowed: false, denied: false, absent: true, reason_code: '', reason: '', message: '' };
+  };
+
+  const getAuthoritativePaymentCapabilityContract = (data) => {
+    const bankCsv = getBackendRouteCapability(data, 'bank_csv');
+    const standard = getBackendRouteCapability(data, 'standard_execution');
+    const csvSettlement = getBackendRouteCapability(data, 'csv_settlement');
+    const externalSettlement = getBackendRouteCapability(data, 'external_settlement');
+    const executeAny = getAnyExecuteRouteCapability(data);
+    const routes = { bank_csv: bankCsv, standard_execution: standard, csv_settlement: csvSettlement, external_settlement: externalSettlement };
+    const hasAnyRouteSignal = [bankCsv, standard, csvSettlement, externalSettlement].some((capability) => capability.state !== null || capability.has_signal === true);
+    const hasAnyExecuteRouteSignal = [standard, csvSettlement, externalSettlement].some((capability) => capability.state !== null || capability.has_signal === true);
+    const { sources } = getChildDataAndBatchObjects(data);
+    const bankCsvCurrent = childReadTriStateBool(childFirstPresentValue(...sources.flatMap((source) => [[source, 'bank_csv_current'], [source, 'bankCsvCurrent']])));
+    const bankCsvGenerated = childReadTriStateBool(childFirstPresentValue(...sources.flatMap((source) => [[source, 'bank_csv_generated'], [source, 'bankCsvGenerated']])));
+    const bankCsvStaleReason = childFirstNonBlankTextFromKeys(sources, ['bank_csv_stale_reason', 'bankCsvStaleReason']);
+    return {
+      routes,
+      route_capabilities: routes,
+      payment_route_capabilities: routes,
+      execute_any: executeAny,
+      any_execute: executeAny,
+      has_any_route_signal: hasAnyRouteSignal,
+      has_any_execute_route_signal: hasAnyExecuteRouteSignal,
+      bank_csv_current: bankCsvCurrent,
+      bankCsvCurrent,
+      bank_csv_generated: bankCsvGenerated,
+      bankCsvGenerated,
+      bank_csv_stale_reason: bankCsvStaleReason || '',
+      bankCsvStaleReason: bankCsvStaleReason || ''
+    };
+  };
+
+  const getCapabilityDisabledMessage = (capability, fallback = '') => {
+    const cap = (capability && typeof capability === 'object' && !Array.isArray(capability)) ? capability : {};
+    const code = String(cap.reason_code || cap.reasonCode || '').trim().toUpperCase();
+    const reason = String(cap.reason || cap.message || '').trim();
+    if (reason) return reason;
+    if (code === 'PAYE_NET_REQUIRED' || code === 'PAYE_NET_REQUIRED_FOR_EXECUTION' || code === 'PAYE_NET_REQUIRED_FOR_BANK_CSV') return 'Enter and save every required PAYE net amount before continuing.';
+    if (code === 'PAYMENT_PROJECTION_INVALID' || code === 'BANK_CSV_PROJECTION_INVALID' || code === 'PROJECTED_PAYMENT_INVALID') return 'The frozen payment projection contains an invalid payment row. Resolve the payment issue before continuing.';
+    if (code === 'BANK_CSV_STALE') return 'The Bank CSV is no longer current. Regenerate it before manual settlement.';
+    if (code === 'BANK_CSV_STATE_CHANGED' || code === 'BANK_CSV_REGENERATION_CONFLICT' || code === 'BANK_CSV_REGENERATION_REQUIRED' || code === 'BANK_CSV_PROOF_CHANGED' || code === 'PAYMENT_PROJECTION_CHANGED' || code === 'BATCH_STALE') return 'Payment details changed while preparing this action. Refresh the batch and regenerate the Bank CSV if required.';
+    if (code === 'BANK_CSV_NOT_GENERATED' || code === 'BANK_CSV_REQUIRED') return 'Generate the current Bank CSV before using manual CSV settlement.';
+    if (code === 'BATCH_TERMINAL_OR_STATUS_BLOCKED' || code === 'BATCH_TERMINAL' || code === 'TERMINAL_BATCH_STATUS') return 'Payment actions are not available for this batch state.';
+    return String(fallback || 'This action is not currently available. Refresh the batch and review Current Payment Status before trying again.').trim();
+  };
+
+  const backendProofHasExplicitZeroScope = (data) => {
+    const { sources } = getChildDataAndBatchObjects(data);
+    const zeroCount = childFirstNonNegativeIntegerFromKeys(sources, ['scoped_explicit_zero_count', 'scopedExplicitZeroCount', 'global_explicit_zero_count', 'globalExplicitZeroCount', 'explicit_zero_count', 'explicitZeroCount']);
+    const missingCount = childFirstNonNegativeIntegerFromKeys(sources, ['scoped_missing_explicit_paye_input_count', 'scopedMissingExplicitPayeInputCount', 'global_missing_explicit_paye_input_count', 'globalMissingExplicitPayeInputCount', 'missing_explicit_paye_input_count', 'missingExplicitPayeInputCount']);
+    const invalidCount = childFirstNonNegativeIntegerFromKeys(sources, ['scoped_invalid_payment_row_count', 'scopedInvalidPaymentRowCount', 'global_invalid_payment_row_count', 'globalInvalidPaymentRowCount', 'invalid_payment_row_count', 'invalidPaymentRowCount']);
+    return zeroCount !== null && zeroCount > 0 && (missingCount === null || missingCount === 0) && (invalidCount === null || invalidCount === 0);
   };
 
   const countCandidateLineEntriesForBatch = (data) => {
@@ -60599,9 +61043,12 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
   const isExecuteAllowedByStatus = (data) => {
     try {
+      const capability = getAnyExecuteRouteCapability(data);
+      if (capability.state !== null) return capability.state === true;
       const b = deriveBatchObj(data) || {};
-      const stx = String(b.status || '').trim().toUpperCase();
-      const commitState = String(b.execution_commit_state || '').trim().toUpperCase();
+      const d = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+      const stx = String(b.status || d.status || '').trim().toUpperCase();
+      const commitState = String(b.execution_commit_state || d.execution_commit_state || '').trim().toUpperCase();
       if (commitState === 'COMMITTED' || commitState === 'SETTLED' || commitState === 'CANCELLED') return false;
       if (commitState === 'SUBMITTED_NOT_COMMITTED') return false;
       if (stx === 'COMMITTED' || stx === 'CANCELLED' || stx === 'SETTLED' || stx === 'SUBMITTED_NOT_COMMITTED') return false;
@@ -60634,18 +61081,14 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   };
 
   const isCsvExportAllowedByStatus = (data) => {
+    const capability = getBackendRouteCapability(data, 'bank_csv');
+    if (capability.state !== null) return capability.state === true;
     if (!hasActivePaymentsForBatch(data)) return false;
     try {
       if (typeof bankingPayIsCsvExportAllowedByStatus === 'function' && bankingPayIsCsvExportAllowedByStatus(data) === true) return true;
     } catch {}
     const d = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
     const b = deriveBatchObj(d) || {};
-    const explicitBankCsvAllowed =
-      childBatchStatusReadBool(d.can_create_bank_csv_file) ||
-      childBatchStatusReadBool(d.canCreateBankCsvFile) ||
-      childBatchStatusReadBool(b.can_create_bank_csv_file) ||
-      childBatchStatusReadBool(b.canCreateBankCsvFile);
-    if (explicitBankCsvAllowed) return true;
     const stx = String(b.status || d.status || '').trim().toUpperCase();
     const commitState = String(b.execution_commit_state || d.execution_commit_state || 'NOT_SUBMITTED').trim().toUpperCase() || 'NOT_SUBMITTED';
     if (commitState !== 'NOT_SUBMITTED') return false;
@@ -60657,28 +61100,33 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const isPayeNetCompleteForBatch = (data) => {
     const info = deriveBatchKindInfo(data);
     if (!info.isPayeish || info.isLoans) return true;
-
-    const candidates = deriveCandidates(data);
-    const payeCands = candidates.filter(c => {
-      const ps = (c && typeof c === 'object') ? c.paye_state : null;
-      return ps != null && String(ps).trim() !== '';
-    });
-
-    if (!payeCands.length) return false;
-
-    for (const c of payeCands) {
-      const stx = String(c?.paye_state || '').trim().toUpperCase();
-      if (stx !== 'READY') return false;
-
-      const v = c?.paye_net_amount;
-      if (v === null || v === undefined || String(v).trim() === '') return false;
-
-      const n = Number(v);
-      if (!Number.isFinite(n)) return false;
-      if (n < 0) return false;
+    const { sources } = getChildDataAndBatchObjects(data);
+    for (const source of sources) {
+      const obj = childPlainObject(source);
+      for (const key of ['paye_net_complete', 'payeNetComplete']) {
+        if (!childObjectHasKey(obj, key)) continue;
+        const parsed = childReadTriStateBool(obj[key]);
+        if (parsed !== null) return parsed;
+      }
     }
-
-    return true;
+    const missingCount = childFirstNonNegativeIntegerFromKeys(sources, [
+      'global_missing_explicit_paye_input_count',
+      'globalMissingExplicitPayeInputCount',
+      'missing_explicit_paye_input_count',
+      'missingExplicitPayeInputCount'
+    ]);
+    if (missingCount !== null) return missingCount === 0;
+    const invalidCount = childFirstNonNegativeIntegerFromKeys(sources, [
+      'global_invalid_payment_row_count',
+      'globalInvalidPaymentRowCount',
+      'invalid_payment_row_count',
+      'invalidPaymentRowCount'
+    ]);
+    if (invalidCount !== null && invalidCount > 0) return false;
+    const routeContract = getAuthoritativePaymentCapabilityContract(data);
+    if (routeContract.execute_any.state === true || routeContract.routes.bank_csv.state === true) return true;
+    if (routeContract.execute_any.state === false || routeContract.routes.bank_csv.state === false) return false;
+    return false;
   };
 
   const toast = (msg) => {
@@ -65016,13 +65464,24 @@ const executePaymentPipeline = async () => {
   if (child.actionsBusy.executing) return;
   if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
 
-  if (!hasActivePaymentsForBatch(child.data)) {
+  const routeContract = getAuthoritativePaymentCapabilityContract(child.data);
+  const executeCapability = routeContract.execute_any;
+
+  if (executeCapability.state === false) {
+    const message = getCapabilityDisabledMessage(executeCapability, 'This payment cannot be executed in its current state. Refresh the batch and review Current Payment Status before trying again.');
+    child.error = message;
+    try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
+    await rerenderChild();
+    return;
+  }
+
+  if (executeCapability.state !== true && !hasActivePaymentsForBatch(child.data)) {
     await blockNoActivePaymentsAction();
     return;
   }
 
-  if (!isExecuteAllowedByStatus(child.data)) {
-    const message = 'This payment cannot be executed in its current state. Refresh the batch and review Current Payment Status before trying again.';
+  if (executeCapability.state !== true && !isExecuteAllowedByStatus(child.data)) {
+    const message = getCapabilityDisabledMessage(executeCapability, 'This payment cannot be executed in its current state. Refresh the batch and review Current Payment Status before trying again.');
     child.error = message;
     try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
     await rerenderChild();
@@ -65030,7 +65489,8 @@ const executePaymentPipeline = async () => {
   }
 
   if (!isPayeNetCompleteForBatch(child.data)) {
-    try { if (typeof window.__toast === 'function') window.__toast('PAYE net payments are incomplete. Click “Enter PAYE payments”, save, then execute.'); } catch {}
+    const message = getCapabilityDisabledMessage(executeCapability, 'PAYE net payments are incomplete. Click “Enter PAYE payments”, save, then execute.');
+    try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
     return;
   }
 
@@ -65068,7 +65528,24 @@ const executePaymentPipeline = async () => {
     let execCfg = null;
     try {
       if (typeof openBankingPayExecuteConfirmModal === 'function') {
-        const payload = { pay_batch_id: id, batch: deep(child.data), scope };
+        const currentRouteContract = getAuthoritativePaymentCapabilityContract(child.data);
+        const payload = {
+          pay_batch_id: id,
+          batch: deep(child.data),
+          scope,
+          payment_route_capabilities: currentRouteContract.payment_route_capabilities,
+          paymentRouteCapabilities: currentRouteContract.payment_route_capabilities,
+          route_capabilities: currentRouteContract.route_capabilities,
+          routeCapabilities: currentRouteContract.route_capabilities,
+          execute_capability: currentRouteContract.execute_any,
+          executeCapability: currentRouteContract.execute_any,
+          bank_csv_current: currentRouteContract.bank_csv_current,
+          bankCsvCurrent: currentRouteContract.bankCsvCurrent,
+          bank_csv_stale_reason: currentRouteContract.bank_csv_stale_reason,
+          bankCsvStaleReason: currentRouteContract.bankCsvStaleReason,
+          server_owned_capabilities: true,
+          serverOwnedCapabilities: true
+        };
         if (typeof hasGoldenKey === 'boolean') payload.has_golden_key = hasGoldenKey;
         execCfg = await openBankingPayExecuteConfirmModal(payload);
       } else {
@@ -65879,14 +66356,27 @@ const retryUnsentPaymentsPipeline = async () => {
     if (child.actionsBusy.exportingCsv) return;
     if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
 
-    if (!hasActivePaymentsForBatch(child.data)) {
+    const csvCapability = getBackendRouteCapability(child.data, 'bank_csv');
+    if (csvCapability.state === false) {
+      const message = getCapabilityDisabledMessage(csvCapability, 'Bank CSV generation is not currently available for this batch.');
+      child.error = message;
+      try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
+      await rerenderChild();
+      return;
+    }
+
+    if (csvCapability.state !== true && !hasActivePaymentsForBatch(child.data)) {
       await blockNoActivePaymentsAction();
       return;
     }
 
-    if (!isCsvExportAllowedByStatus(child.data)) {
+    if (csvCapability.state !== true && !isCsvExportAllowedByStatus(child.data)) {
       const stx = getBatchStatusUpper(child.data) || '—';
-      throw new Error(`CSV export is not allowed in status: ${stx}`);
+      const message = getCapabilityDisabledMessage(csvCapability, `CSV export is not allowed in status: ${stx}`);
+      child.error = message;
+      try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
+      await rerenderChild();
+      return;
     }
 
     child.actionsBusy.exportingCsv = true;
@@ -65995,32 +66485,10 @@ const retryUnsentPaymentsPipeline = async () => {
     try {
       const data = (child.data && typeof child.data === 'object' && !Array.isArray(child.data)) ? child.data : {};
       const batch = deriveBatchObj(data) || {};
-      const explicitCanStartStandardExecution = readProviderSubmitBool(data.can_start_standard_execution)
-        || readProviderSubmitBool(data.canStartStandardExecution)
-        || readProviderSubmitBool(batch.can_start_standard_execution)
-        || readProviderSubmitBool(batch.canStartStandardExecution);
-      const explicitCanExecute = readProviderSubmitBool(data.can_execute)
-        || readProviderSubmitBool(data.canExecute)
-        || readProviderSubmitBool(data.execute_allowed)
-        || readProviderSubmitBool(data.executeAllowed)
-        || readProviderSubmitBool(batch.can_execute)
-        || readProviderSubmitBool(batch.canExecute)
-        || readProviderSubmitBool(batch.execute_allowed)
-        || readProviderSubmitBool(batch.executeAllowed);
-      const explicitlyDisabled = readProviderSubmitBool(data.standard_execution_disabled)
-        || readProviderSubmitBool(data.standardExecutionDisabled)
-        || readProviderSubmitBool(data.standard_bank_execution_disabled)
-        || readProviderSubmitBool(data.standardBankExecutionDisabled)
-        || readProviderSubmitBool(data.execute_disabled)
-        || readProviderSubmitBool(data.executeDisabled)
-        || readProviderSubmitBool(batch.standard_execution_disabled)
-        || readProviderSubmitBool(batch.standardExecutionDisabled)
-        || readProviderSubmitBool(batch.standard_bank_execution_disabled)
-        || readProviderSubmitBool(batch.standardBankExecutionDisabled)
-        || readProviderSubmitBool(batch.execute_disabled)
-        || readProviderSubmitBool(batch.executeDisabled);
-
-      if (explicitlyDisabled) return false;
+      const routeContract = getAuthoritativePaymentCapabilityContract(data);
+      if (routeContract.execute_any.state === false) return false;
+      if (routeContract.execute_any.state === true) return true;
+      if (routeContract.has_any_execute_route_signal === true) return false;
       if (!hasActivePaymentsForBatch(data)) return false;
       if (!isExecuteAllowedByStatus(data)) return false;
       if (providerSubmitReviewIssuePresent(data, batch) === true) return false;
@@ -66045,7 +66513,7 @@ const retryUnsentPaymentsPipeline = async () => {
       const executionCommitState = String(batch.execution_commit_state || data.execution_commit_state || 'NOT_SUBMITTED').trim().toUpperCase() || 'NOT_SUBMITTED';
       const cleanDraftExecutable = ['DRAFT', 'DRAFT_CREATED', 'READY'].includes(batchStatus) && executionCommitState === 'NOT_SUBMITTED';
 
-      return !!(explicitCanStartStandardExecution || explicitCanExecute || cleanDraftExecutable);
+      return cleanDraftExecutable;
     } catch {
       return false;
     }
@@ -67808,16 +68276,6 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
         }
 
         if (act === 'banking:pay:child:generateCsv') {
-          if (!hasActivePaymentsForBatch(child.data)) {
-            await blockNoActivePaymentsAction();
-            return;
-          }
-
-          if (!isCsvExportAllowedByStatus(child.data)) {
-            const stx = getBatchStatusUpper(child.data) || '—';
-            try { if (typeof window.__toast === 'function') window.__toast(`CSV export is not allowed in status: ${stx}`); } catch {}
-            return;
-          }
           await generateCsv();
           return;
         }
@@ -68323,6 +68781,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
   await rerenderChild();
   scheduleWire();
 }
+
 
 
 
