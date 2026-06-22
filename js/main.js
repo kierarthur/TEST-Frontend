@@ -58455,8 +58455,6 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
 
 
 
-
-
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -60470,6 +60468,24 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     if (info.isPaye && !info.isMixed) return 'PAYE';
     if (info.isUmbrella && !info.isMixed) return 'UMBRELLA';
     return 'ALL';
+  };
+
+  const normalizeBankingPayExecutionScope = (value, fallback = '') => {
+    const raw = String(value == null ? '' : value).trim().toUpperCase();
+    if (raw === 'PAYE' || raw === 'UMBRELLA' || raw === 'ALL') return raw;
+    const fallbackRaw = String(fallback == null ? '' : fallback).trim().toUpperCase();
+    if (fallbackRaw === 'PAYE' || fallbackRaw === 'UMBRELLA' || fallbackRaw === 'ALL') return fallbackRaw;
+    return '';
+  };
+
+  const getStoredBankCsvScopeForSettlement = (data) => {
+    const { d, b, summary, csv } = getChildDataAndBatchObjects(data);
+    const childCsv = childPlainObject(child.csv);
+    const childCsvEvidence = childPlainObject(child.csv?.evidence_summary || child.csv?.evidenceSummary);
+    return normalizeBankingPayExecutionScope(childFirstNonBlankTextFromKeys(
+      [childCsv, childCsvEvidence, csv, d, b, summary],
+      ['scope', 'pay_channel_scope', 'payChannelScope', 'requested_scope', 'requestedScope', 'csv_scope', 'csvScope', 'bank_csv_scope', 'bankCsvScope']
+    ), '');
   };
 
   const getCurrentWorkbenchSessionId = () => String(
@@ -65464,6 +65480,8 @@ const executePaymentPipeline = async () => {
   if (child.actionsBusy.executing) return;
   if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
 
+  let lastExecutionScopeForError = deriveScopeForBatch(child.data);
+
   const routeContract = getAuthoritativePaymentCapabilityContract(child.data);
   const executeCapability = routeContract.execute_any;
 
@@ -65499,7 +65517,9 @@ const executePaymentPipeline = async () => {
   await rerenderChild();
 
   try {
-    const scope = deriveScopeForBatch(child.data);
+    const defaultScope = deriveScopeForBatch(child.data);
+    let scope = defaultScope;
+    lastExecutionScopeForError = scope;
 
     let hasGoldenKey = null;
     try {
@@ -65529,10 +65549,17 @@ const executePaymentPipeline = async () => {
     try {
       if (typeof openBankingPayExecuteConfirmModal === 'function') {
         const currentRouteContract = getAuthoritativePaymentCapabilityContract(child.data);
+        const csvScopeForConfirm = getStoredBankCsvScopeForSettlement(child.data) || null;
         const payload = {
           pay_batch_id: id,
           batch: deep(child.data),
           scope,
+          default_scope: defaultScope,
+          defaultScope,
+          csv_scope: csvScopeForConfirm,
+          csvScope: csvScopeForConfirm,
+          bank_csv_scope: csvScopeForConfirm,
+          bankCsvScope: csvScopeForConfirm,
           payment_route_capabilities: currentRouteContract.payment_route_capabilities,
           paymentRouteCapabilities: currentRouteContract.payment_route_capabilities,
           route_capabilities: currentRouteContract.route_capabilities,
@@ -65574,6 +65601,22 @@ const executePaymentPipeline = async () => {
       executionModeRaw === 'EXTERNAL_SETTLEMENT' ||
       executionModeRaw === 'STANDARD_BANK'
     ) ? executionModeRaw : 'STANDARD_BANK';
+
+    if (execution_mode === 'CSV_SETTLEMENT') {
+      const csvSettlementScope = getStoredBankCsvScopeForSettlement(child.data);
+      if (!csvSettlementScope) {
+        const message = 'Generate the current Bank CSV before using manual CSV settlement.';
+        child.error = message;
+        try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
+        child.actionsBusy.executing = false;
+        await rerenderChild();
+        return;
+      }
+      scope = csvSettlementScope;
+    } else {
+      scope = defaultScope;
+    }
+    lastExecutionScopeForError = scope;
 
     const scheduleKindRaw0 = String(execCfg?.schedule_kind || execCfg?.scheduleKind || execCfg?.kind || 'IMMEDIATE').trim().toUpperCase();
     const scheduleKindRaw = (scheduleKindRaw0 === 'AT_TIME') ? 'SCHEDULED' : scheduleKindRaw0;
@@ -66151,7 +66194,7 @@ const executePaymentPipeline = async () => {
             action: 'EXECUTE_PAYMENT',
             userInitiated: true,
             silent: false,
-            scope: deriveScopeForBatch(child.data),
+            scope: lastExecutionScopeForError || deriveScopeForBatch(child.data),
             fallbackCode: friendlyCode || 'PAYMENT_EXECUTE_OPERATION_START_FAILED',
             operation_created: false,
             execute_payment_operation_started: false,
@@ -66194,7 +66237,7 @@ const executePaymentPipeline = async () => {
       action: 'EXECUTE_PAYMENT',
       userInitiated: true,
       silent: false,
-      scope: deriveScopeForBatch(child.data)
+      scope: lastExecutionScopeForError || deriveScopeForBatch(child.data)
     });
 
     try {
@@ -68781,6 +68824,8 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
   await rerenderChild();
   scheduleWire();
 }
+
+
 
 
 
