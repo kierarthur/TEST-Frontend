@@ -27216,8 +27216,6 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
   return { filename, rowCount: exportRows.length };
 }
 
-
-
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -28678,6 +28676,254 @@ async function bankingPayPreview(pay_date) {
     );
   };
 
+  const hasOwnProgressField = (source, key) => isPlainObject(source) && Object.prototype.hasOwnProperty.call(source, key);
+  const normaliseWorkbenchSessionVersion = (value) => {
+    const raw = trimStr(value);
+    if (!/^\d+$/.test(raw)) return '';
+    return raw.replace(/^0+(?=\d)/, '') || '0';
+  };
+  const hasValidNonNegativeProgressField = (source, key) => {
+    if (!isPlainObject(source) || !hasOwnProgressField(source, key)) return false;
+    const rawValue = source[key];
+    const numericValue = Number(rawValue);
+    return rawValue !== null && rawValue !== undefined && rawValue !== '' && Number.isFinite(numericValue) && numericValue >= 0;
+  };
+  const hasFullAuthoritativeProgressContract = (progressLike) => {
+    const progress = isPlainObject(progressLike) ? progressLike : {};
+    const candidateCounts = isPlainObject(progress.candidate_counts) ? progress.candidate_counts : {};
+    const lineCounts = isPlainObject(progress.line_counts) ? progress.line_counts : {};
+    const jobCounts = isPlainObject(progress.job_counts) ? progress.job_counts : {};
+    const aggregateContractPresent = [
+      ...['pending', 'processing', 'materialisation_pending', 'dirty', 'failed', 'unknown', 'unseeded'].map((key) => hasValidNonNegativeProgressField(candidateCounts, key)),
+      ...['pending', 'ready_not_materialised', 'failed', 'unknown'].map((key) => hasValidNonNegativeProgressField(lineCounts, key)),
+      ...['queued', 'running', 'unresolved_failed', 'unresolved_dead'].map((key) => hasValidNonNegativeProgressField(jobCounts, key)),
+      hasValidNonNegativeProgressField(progress, 'selected_eligible_ready_row_count')
+    ].every(Boolean);
+    return !!(
+      hasOwnProgressField(progress, 'session_ready') &&
+      hasOwnProgressField(progress, 'ready_for_draft') &&
+      hasOwnProgressField(progress, 'scope_seed_complete') &&
+      hasOwnProgressField(progress, 'scope_cursor_remaining') &&
+      hasOwnProgressField(progress, 'session_obsolete') &&
+      hasOwnProgressField(progress, 'replacement_required') &&
+      hasOwnProgressField(progress, 'replacement_session_id') &&
+      hasOwnProgressField(progress, 'stored_ready_mismatch') &&
+      hasOwnProgressField(progress, 'selected_eligible_ready_row_count') &&
+      (hasOwnProgressField(progress, 'session_status') || hasOwnProgressField(progress, 'status')) &&
+      Array.isArray(progress.session_blocker_codes) &&
+      Array.isArray(progress.draft_blocker_codes) &&
+      isPlainObject(progress.candidate_counts) &&
+      isPlainObject(progress.line_counts) &&
+      isPlainObject(progress.job_counts) &&
+      aggregateContractPresent &&
+      !!trimStr(progress.session_status || progress.status || '') &&
+      !!trimStr(progress.session_id || '') &&
+      !!normaliseWorkbenchSessionVersion(progress.session_version ?? progress.version)
+    );
+  };
+  const getAuthoritativeProgressContract = (payload = null) => {
+    const source = isPlainObject(payload) ? payload : {};
+    const currentSessionId = trimStr(getCurrentWorkbenchSessionId() || '');
+    const currentSessionVersion = normaliseWorkbenchSessionVersion(
+      wiz.workbench?.session_version ??
+      wiz.decisions?.session_version ??
+      wiz.preview?.data?.session_version ??
+      wiz.preview?.data?.session?.session_version ??
+      null
+    );
+    const freshnessRequiredSessionId = trimStr(wiz.workbench?.__authoritative_progress_refresh_required_session_id || '');
+    const sourceReadFailed = source.__cloudtms_authoritative_progress_read_failed === true;
+    const sourceCandidates = sourceReadFailed
+      ? []
+      : [source.progress, source.authoritative_progress, source.authoritativeProgress, source];
+    const storedCandidates = freshnessRequiredSessionId && freshnessRequiredSessionId === currentSessionId
+      ? []
+      : [
+          wiz.workbench?.progress,
+          wiz.preview?.data?.progress,
+          wiz.preview?.data?.preview?.progress,
+          wiz.decisions?.progress
+        ];
+    const contracts = [...sourceCandidates, ...storedCandidates]
+      .filter((candidate) => hasFullAuthoritativeProgressContract(candidate));
+    if (contracts.length === 0) return null;
+    return contracts.find((candidate) => (
+      currentSessionId &&
+      currentSessionVersion &&
+      trimStr(candidate.session_id || '') === currentSessionId &&
+      normaliseWorkbenchSessionVersion(candidate.session_version ?? candidate.version) === currentSessionVersion
+    )) || contracts[0];
+  };
+  const getAuthoritativeWorkbenchProgressState = (payload = null) => {
+    const progress = getAuthoritativeProgressContract(payload);
+    const contractPresent = !!progress;
+    const currentSessionId = trimStr(getCurrentWorkbenchSessionId() || '');
+    const currentSessionVersion = normaliseWorkbenchSessionVersion(
+      wiz.workbench?.session_version ??
+      wiz.decisions?.session_version ??
+      wiz.preview?.data?.session_version ??
+      wiz.preview?.data?.session?.session_version ??
+      null
+    );
+    const progressSessionId = trimStr(progress?.session_id || '');
+    const progressSessionVersion = normaliseWorkbenchSessionVersion(progress?.session_version ?? progress?.version);
+    const sessionMatchesCurrent = !!(
+      contractPresent &&
+      currentSessionId &&
+      currentSessionVersion &&
+      progressSessionId &&
+      progressSessionVersion &&
+      currentSessionId === progressSessionId &&
+      currentSessionVersion === progressSessionVersion
+    );
+    const count = (source, ...keys) => {
+      const node = isPlainObject(source) ? source : {};
+      for (const key of keys) {
+        const n = Number(node[key]);
+        if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
+      }
+      return 0;
+    };
+    const cursorHasValue = (value) => {
+      if (isPlainObject(value)) return Object.keys(value).length > 0;
+      if (Array.isArray(value)) return value.length > 0;
+      const raw = trimStr(value);
+      return !!raw && raw !== '{}' && raw.toLowerCase() !== 'null';
+    };
+    const blockerCodes = (value) => Array.isArray(value)
+      ? Array.from(new Set(value.map((code) => trimStr(code).toUpperCase()).filter(Boolean)))
+      : [];
+    const candidateCounts = isPlainObject(progress?.candidate_counts) ? progress.candidate_counts : {};
+    const lineCounts = isPlainObject(progress?.line_counts) ? progress.line_counts : {};
+    const jobCounts = isPlainObject(progress?.job_counts) ? progress.job_counts : {};
+    const sectionCounts = isPlainObject(progress?.section_counts) ? progress.section_counts : {};
+    const sessionBlockerCodes = blockerCodes(progress?.session_blocker_codes);
+    const draftBlockerCodes = blockerCodes(progress?.draft_blocker_codes);
+    const sessionStatus = trimStr(progress?.session_status || progress?.status || '').toUpperCase();
+    const replacementSessionIdText = trimStr(progress?.replacement_session_id || '');
+    const obsolete = !!(
+      progress?.session_obsolete === true ||
+      progress?.obsolete === true ||
+      progress?.active_session_obsolete === true ||
+      (sessionStatus && sessionStatus !== 'OPEN')
+    );
+    const replacementRequired = !!(
+      progress?.replacement_required === true ||
+      progress?.requires_new_session === true ||
+      progress?.rebase_required === true ||
+      replacementSessionIdText
+    );
+    const scopeSeedComplete = progress?.scope_seed_complete === true;
+    const scopeCursorRemaining = !!(
+      progress?.scope_cursor_remaining === true ||
+      cursorHasValue(progress?.scope_next_cursor_json) ||
+      cursorHasValue(progress?.scope_next_cursor)
+    );
+    const outstandingWork = !!(
+      !scopeSeedComplete ||
+      scopeCursorRemaining ||
+      count(candidateCounts, 'unseeded') > 0 ||
+      count(candidateCounts, 'pending') > 0 ||
+      count(candidateCounts, 'processing') > 0 ||
+      count(candidateCounts, 'materialisation_pending') > 0 ||
+      count(candidateCounts, 'dirty') > 0 ||
+      count(lineCounts, 'pending') > 0 ||
+      count(lineCounts, 'ready_not_materialised') > 0 ||
+      count(jobCounts, 'queued') > 0 ||
+      count(jobCounts, 'running') > 0
+    );
+    const blockerIndicatesFailure = sessionBlockerCodes.some((code) => /(?:FAILED|ERROR|DEAD|UNKNOWN)/.test(code));
+    const failure = !!(
+      count(candidateCounts, 'failed') > 0 ||
+      count(candidateCounts, 'unknown') > 0 ||
+      count(lineCounts, 'failed') > 0 ||
+      count(lineCounts, 'unknown') > 0 ||
+      count(jobCounts, 'unresolved_failed') > 0 ||
+      count(jobCounts, 'unresolved_dead') > 0 ||
+      blockerIndicatesFailure ||
+      ['FAILED', 'ERROR'].includes(trimStr(progress?.phase || progress?.progress_state || '').toUpperCase())
+    );
+    const sessionReadyReported = progress?.session_ready === true;
+    const readyForDraft = progress?.ready_for_draft === true;
+    const storedReadyMismatch = progress?.stored_ready_mismatch === true;
+    const ready = !!(
+      contractPresent &&
+      sessionMatchesCurrent &&
+      sessionReadyReported &&
+      scopeSeedComplete &&
+      !scopeCursorRemaining &&
+      !outstandingWork &&
+      !failure &&
+      !obsolete &&
+      !replacementRequired &&
+      !storedReadyMismatch &&
+      sessionBlockerCodes.length === 0
+    );
+    const readyEmpty = !!(ready && progress?.ready_empty === true);
+    const rowsAvailable = !!(
+      progress?.rows_available === true ||
+      progress?.has_materialised_preview_rows === true ||
+      count(progress, 'preview_row_count') > 0 ||
+      Object.values(sectionCounts).some((value) => Number.isFinite(Number(value)) && Number(value) > 0)
+    );
+    const shouldPoll = !!(
+      currentSessionId &&
+      !ready &&
+      !obsolete &&
+      !replacementRequired &&
+      !failure &&
+      (
+        !contractPresent ||
+        !sessionMatchesCurrent ||
+        outstandingWork ||
+        !sessionReadyReported ||
+        storedReadyMismatch ||
+        sessionBlockerCodes.length > 0
+      )
+    );
+    const backendStatusText = trimStr(progress?.status_text || progress?.message || '');
+    const backendPhase = trimStr(progress?.phase || progress?.progress_state || '').toUpperCase();
+    const backendClaimsReady = backendPhase === 'READY' || backendPhase === 'READY_EMPTY';
+    const statusText = replacementRequired
+      ? 'Payment preview session was replaced. CloudTMS is refreshing the current session.'
+      : (obsolete
+          ? 'Payment preview is obsolete.'
+          : (failure
+              ? 'Payment preview could not be prepared for every candidate.'
+              : (ready
+                  ? (readyEmpty ? 'No payable rows found.' : 'Payment preview is ready.')
+                  : ((sessionReadyReported || storedReadyMismatch || backendClaimsReady)
+                      ? 'Preparing payment preview candidates.'
+                      : (backendStatusText || 'Preparing payment preview candidates.')))));
+    return {
+      progress,
+      contractPresent,
+      sessionMatchesCurrent,
+      currentSessionId,
+      currentSessionVersion,
+      progressSessionId,
+      progressSessionVersion,
+      sessionStatus,
+      sessionReadyReported,
+      readyForDraft,
+      storedReadyMismatch,
+      sessionBlockerCodes,
+      draftBlockerCodes,
+      obsolete,
+      replacementRequired,
+      replacementSessionId: replacementSessionIdText || null,
+      scopeSeedComplete,
+      scopeCursorRemaining,
+      outstandingWork,
+      failure,
+      ready,
+      readyEmpty,
+      rowsAvailable,
+      shouldPoll,
+      statusText
+    };
+  };
+
   const candidateStatusRowsFromProgressLike = (progressLike) => {
     const progressObj = isPlainObject(progressLike) ? progressLike : {};
     const progressSource = isPlainObject(progressObj.progress) ? progressObj.progress : progressObj;
@@ -28739,6 +28985,42 @@ async function bankingPayPreview(pay_date) {
   const syncProgressIntoState = (progress) => {
     const progressObj = isPlainObject(progress) ? progress : null;
     if (!progressObj) return;
+    const fullProgressContract = deep(progressObj) || progressObj;
+    const authoritativeSessionId = trimStr(progressObj.session_id || '');
+    const authoritativeSessionVersion = normaliseWorkbenchSessionVersion(progressObj.session_version ?? progressObj.version);
+    const currentSessionId = getCurrentWorkbenchSessionId();
+    const currentSessionVersion = normaliseWorkbenchSessionVersion(wiz.workbench?.session_version ?? null);
+    if (authoritativeSessionId && (!currentSessionId || currentSessionId === authoritativeSessionId)) {
+      if (currentSessionId === authoritativeSessionId && currentSessionVersion && authoritativeSessionVersion && currentSessionVersion !== authoritativeSessionVersion) {
+        wiz.preview.first_page_applied = false;
+        wiz.preview.__canonical_first_page_session_id = '';
+        wiz.preview.__canonical_first_page_session_version = '';
+      }
+      wiz.workbench.session_id = authoritativeSessionId;
+      if (progressObj.session_version !== null && progressObj.session_version !== undefined) wiz.workbench.session_version = progressObj.session_version;
+      if (trimStr(progressObj.session_signature || '')) wiz.workbench.session_signature = trimStr(progressObj.session_signature);
+      if (trimStr(progressObj.pay_date || '')) wiz.workbench.pay_date = trimStr(progressObj.pay_date);
+      const progressCutoff = normalizeCutoffDate(progressObj.week_ending_cutoff_date || progressObj.week_ending_cutoff || '');
+      if (progressCutoff) {
+        wiz.workbench.week_ending_cutoff_date = progressCutoff;
+        wiz.workbench.week_ending_cutoff = progressCutoff;
+      }
+    }
+    wiz.workbench.progress = fullProgressContract;
+    wiz.workbench.progress_counter_version = progressObj.progress_counter_version ?? progressObj.progressCounterVersion ?? null;
+    wiz.workbench.progress_state = trimStr(progressObj.progress_state || progressObj.phase || progressObj.status || '');
+    const syncedSessionId = trimStr(wiz.workbench.session_id || '');
+    const syncedSessionVersion = normaliseWorkbenchSessionVersion(wiz.workbench.session_version ?? null);
+    if (
+      hasFullAuthoritativeProgressContract(progressObj) &&
+      authoritativeSessionId &&
+      authoritativeSessionVersion &&
+      authoritativeSessionId === syncedSessionId &&
+      authoritativeSessionVersion === syncedSessionVersion
+    ) {
+      wiz.workbench.__authoritative_progress_refresh_required_session_id = '';
+      wiz.workbench.__authoritative_progress_last_read_error = '';
+    }
     const progressCandidateStatusRows = candidateStatusRowsFromProgressLike(progressObj);
     const sampleLimit = 25;
     const countValue = (...keys) => {
@@ -28770,14 +29052,10 @@ async function bankingPayPreview(pay_date) {
       if (!candidateRowsById.has(candidateIdText)) candidateRowsById.set(candidateIdText, []);
       candidateRowsById.get(candidateIdText).push(row);
     }
-    const progressReady = workbenchProgressLooksReady(progressObj);
+    const authoritativeProgressState = getAuthoritativeWorkbenchProgressState({ progress: progressObj });
+    const progressReady = authoritativeProgressState.ready;
     const progressPhaseText = trimStr(progressObj.phase || progressObj.current_phase || progressObj.status || progressObj.state || '');
-    const progressPhaseUpper = progressPhaseText.toUpperCase();
-    const progressReadyEmpty = !!(
-      progressObj.ready_empty === true ||
-      progressObj.readyEmpty === true ||
-      progressPhaseUpper === 'READY_EMPTY'
-    );
+    const progressReadyEmpty = authoritativeProgressState.readyEmpty;
     const progressStatusText = trimStr(
       progressObj.status_text ||
       progressObj.statusText ||
@@ -28853,7 +29131,22 @@ async function bankingPayPreview(pay_date) {
       rows_available: progressObj.rows_available === true || progressObj.has_materialised_preview_rows === true || countValue('preview_row_count', 'preview_rows_count', 'row_count') > 0,
       has_materialised_preview_rows: progressObj.has_materialised_preview_rows === true || countValue('preview_row_count', 'preview_rows_count', 'row_count') > 0,
       selected_rows_available: progressObj.selected_rows_available === true || countValue('selected_row_count', 'selected_rows_count') > 0,
-      section_counts: isPlainObject(progressObj.section_counts) ? (deep(progressObj.section_counts) || {}) : {}
+      section_counts: isPlainObject(progressObj.section_counts) ? (deep(progressObj.section_counts) || {}) : {},
+      candidate_counts: isPlainObject(progressObj.candidate_counts) ? (deep(progressObj.candidate_counts) || {}) : {},
+      line_counts: isPlainObject(progressObj.line_counts) ? (deep(progressObj.line_counts) || {}) : {},
+      job_counts: isPlainObject(progressObj.job_counts) ? (deep(progressObj.job_counts) || {}) : {},
+      session_blocker_codes: Array.isArray(progressObj.session_blocker_codes) ? (deep(progressObj.session_blocker_codes) || []) : [],
+      draft_blocker_codes: Array.isArray(progressObj.draft_blocker_codes) ? (deep(progressObj.draft_blocker_codes) || []) : [],
+      progress_counter_version: progressObj.progress_counter_version ?? progressObj.progressCounterVersion ?? null,
+      session_ready: progressObj.session_ready === true,
+      ready_for_draft: progressObj.ready_for_draft === true,
+      scope_seed_complete: progressObj.scope_seed_complete === true,
+      scope_cursor_remaining: progressObj.scope_cursor_remaining === true,
+      scope_next_cursor_json: isPlainObject(progressObj.scope_next_cursor_json) ? (deep(progressObj.scope_next_cursor_json) || {}) : (progressObj.scope_next_cursor_json ?? null),
+      session_obsolete: progressObj.session_obsolete === true,
+      replacement_required: progressObj.replacement_required === true,
+      replacement_session_id: trimStr(progressObj.replacement_session_id || '') || null,
+      stored_ready_mismatch: progressObj.stored_ready_mismatch === true
     };
     wiz.workbench.last_progress_at = new Date().toISOString();
 
@@ -28879,11 +29172,15 @@ async function bankingPayPreview(pay_date) {
       wiz.decisions.failed_candidate_ids = [...failedCandidateIds];
       wiz.decisions.pending_candidate_rows = deep(pendingRows) || [];
       wiz.decisions.failed_candidate_rows = deep(failedRows) || [];
+      wiz.decisions.progress = deep(fullProgressContract) || fullProgressContract;
       wiz.decisions.progress_counts = deep(wiz.workbench.progress_counts) || {};
+      wiz.decisions.progress_counter_version = wiz.workbench.progress_counter_version;
       wiz.decisions.last_progress_at = wiz.workbench.last_progress_at;
     }
 
     if (wiz.preview && isPlainObject(wiz.preview.data)) {
+      wiz.preview.data.progress = deep(fullProgressContract) || fullProgressContract;
+      wiz.preview.data.progress_counter_version = wiz.workbench.progress_counter_version;
       wiz.preview.data.pending_candidate_ids = [...pendingCandidateIds];
       wiz.preview.data.failed_candidate_ids = [...failedCandidateIds];
       wiz.preview.data.pending_candidate_rows = deep(pendingRows) || [];
@@ -28893,6 +29190,8 @@ async function bankingPayPreview(pay_date) {
       wiz.preview.data.progress_counts = deep(wiz.workbench.progress_counts) || {};
       wiz.preview.data.last_progress_at = wiz.workbench.last_progress_at;
       if (isPlainObject(wiz.preview.data.session)) {
+        wiz.preview.data.session.progress = deep(fullProgressContract) || fullProgressContract;
+        wiz.preview.data.session.progress_counter_version = wiz.workbench.progress_counter_version;
         wiz.preview.data.session.pending_candidate_ids = [...pendingCandidateIds];
         wiz.preview.data.session.failed_candidate_ids = [...failedCandidateIds];
         wiz.preview.data.session.pending_candidate_rows = deep(pendingRows) || [];
@@ -28903,6 +29202,8 @@ async function bankingPayPreview(pay_date) {
         wiz.preview.data.session.last_progress_at = wiz.workbench.last_progress_at;
       }
       if (isPlainObject(wiz.preview.data.preview)) {
+        wiz.preview.data.preview.progress = deep(fullProgressContract) || fullProgressContract;
+        wiz.preview.data.preview.progress_counter_version = wiz.workbench.progress_counter_version;
         wiz.preview.data.preview.pending_candidate_ids = [...pendingCandidateIds];
         wiz.preview.data.preview.failed_candidate_ids = [...failedCandidateIds];
         wiz.preview.data.preview.pending_candidate_rows = deep(pendingRows) || [];
@@ -29852,55 +30153,101 @@ async function bankingPayPreview(pay_date) {
     return syntheticPayload;
   };
 
-  const finalisePreviewVisualStateAfterRowsApplied = (pagePayload = null, sourcePayload = null) => {
-    const page = isPlainObject(pagePayload) ? pagePayload : {};
-    const pageRows = Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
-    const hasRows = pageRows.length > 0 || payloadHasFullPreviewData(sourcePayload) || payloadHasFullPreviewData(wiz.preview?.data);
-    if (!hasRows) return;
+  const applyAuthoritativePreviewVisualState = (sourcePayload = null) => {
+    const state = getAuthoritativeWorkbenchProgressState(sourcePayload);
+    const firstPageSessionId = trimStr(wiz.preview.__canonical_first_page_session_id || '');
+    const firstPageSessionVersion = normaliseWorkbenchSessionVersion(wiz.preview.__canonical_first_page_session_version || '');
+    const firstPageApplied = !!(
+      state.readyEmpty ||
+      (
+        wiz.preview.first_page_applied === true &&
+        state.progressSessionId &&
+        state.progressSessionVersion &&
+        firstPageSessionId === state.progressSessionId &&
+        firstPageSessionVersion === state.progressSessionVersion
+      )
+    );
+    const readyVisual = !!(state.ready && firstPageApplied);
+    const terminalWithoutReady = !!(state.obsolete || state.replacementRequired || state.failure);
+    const visualStatusText = readyVisual
+      ? state.statusText
+      : (state.ready && !firstPageApplied ? 'Loading preview rows…' : state.statusText);
 
-    const source = isPlainObject(sourcePayload) ? sourcePayload : {};
-    const progress = isPlainObject(source.progress) ? source.progress : source;
-    const activePending = payloadHasActivePendingWorkbenchWork(source) || hasActiveWorkbenchPendingWork();
-    const readyNow = workbenchProgressLooksReady(source) || workbenchProgressLooksReady(progress) || !activePending;
+    wiz.preview.preview_ready_visual = readyVisual;
+    wiz.preview.ready_empty = state.readyEmpty;
+    wiz.preview.status_text = visualStatusText;
+    wiz.preview.progress_only = !readyVisual;
+    wiz.preview.bootstrap_only = false;
+    wiz.preview.loading = readyVisual ? false : !terminalWithoutReady;
 
-    wiz.preview.first_page_applied = true;
-    wiz.preview.ready_empty = false;
-    wiz.preview.preview_ready_visual = !!(readyNow && !activePending);
-    wiz.preview.error = '';
-    wiz.preview.failure = null;
+    const applyFlags = (target) => {
+      if (!isPlainObject(target)) return;
+      target.ready = state.ready;
+      target.ready_flag = state.ready;
+      target.ready_empty = state.readyEmpty;
+      target.progress_only = !readyVisual;
+      target.bootstrap_only = false;
+      target.preview_ready_visual = readyVisual;
+      target.first_page_applied = firstPageApplied;
+      target.status_text = visualStatusText;
+      if (state.progress) target.progress = deep(state.progress) || state.progress;
+    };
+    applyFlags(wiz.preview.data);
+    applyFlags(wiz.preview.data?.preview);
 
-    if (readyNow && !activePending) {
-      wiz.preview.loading = false;
-      wiz.preview.status_text = 'Payment preview is ready.';
-      wiz.preview.progress_only = false;
-      wiz.preview.bootstrap_only = false;
-      if (isPlainObject(wiz.preview.data)) {
-        wiz.preview.data.ready = true;
-        wiz.preview.data.ready_flag = true;
-        wiz.preview.data.ready_empty = false;
-        wiz.preview.data.progress_only = false;
-        wiz.preview.data.bootstrap_only = false;
-        wiz.preview.data.preview_ready_visual = true;
-        wiz.preview.data.first_page_applied = true;
-        if (isPlainObject(wiz.preview.data.preview)) {
-          wiz.preview.data.preview.ready = true;
-          wiz.preview.data.preview.ready_flag = true;
-          wiz.preview.data.preview.ready_empty = false;
-          wiz.preview.data.preview.progress_only = false;
-          wiz.preview.data.preview.bootstrap_only = false;
-          wiz.preview.data.preview.preview_ready_visual = true;
-          wiz.preview.data.preview.first_page_applied = true;
-        }
-      }
+    if (readyVisual) {
+      wiz.preview.error = '';
+      wiz.preview.failure = null;
       wiz.workbench.create_draft_refresh_pending = false;
       wiz.workbench.preview_reopen_required = false;
       if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = false;
-    } else {
-      wiz.preview.loading = true;
-      wiz.preview.status_text = trimStr(wiz.preview.status_text || progress.status_text || source.status_text || 'Loading preview rows…');
-      wiz.preview.progress_only = true;
-      wiz.preview.bootstrap_only = false;
     }
+    return { ...state, firstPageApplied, readyVisual, statusText: visualStatusText };
+  };
+
+  const finalisePreviewVisualStateAfterRowsApplied = (pagePayload = null, sourcePayload = null) => {
+    const page = isPlainObject(pagePayload) ? pagePayload : {};
+    const currentSessionId = getCurrentWorkbenchSessionId();
+    const currentSessionVersion = normaliseWorkbenchSessionVersion(wiz.workbench?.session_version ?? null);
+    const pageSessionId = trimStr(page.session_id || currentSessionId || '');
+    const pageSessionVersion = normaliseWorkbenchSessionVersion(page.session_version ?? page.sessionVersion ?? currentSessionVersion);
+    const loadedSections = Array.isArray(page.loaded_sections)
+      ? page.loaded_sections.map((section) => normalisePreviewPageSectionName(section))
+      : [];
+    const explicitPageSection = trimStr(
+      page.resolved_section ||
+      page.resolvedSection ||
+      page.section ||
+      page.requested_section ||
+      page.requestedSection ||
+      ''
+    );
+    const canonicalPage = isPlainObject(page.section_pages?.canonical_preview_lines)
+      ? page.section_pages.canonical_preview_lines
+      : (explicitPageSection && normalisePreviewPageSectionName(explicitPageSection) === 'canonical_preview_lines' ? page : null);
+    const canonicalPageSessionId = trimStr(canonicalPage?.session_id || pageSessionId || '');
+    const canonicalPageVersion = normaliseWorkbenchSessionVersion(canonicalPage?.session_version ?? canonicalPage?.sessionVersion ?? pageSessionVersion);
+    const canonicalPageLoaded = loadedSections.includes('canonical_preview_lines') || !!canonicalPage;
+    const canonicalPageCurrent = !!(
+      canonicalPageLoaded &&
+      currentSessionId &&
+      currentSessionVersion &&
+      canonicalPageSessionId === currentSessionId &&
+      canonicalPageVersion === currentSessionVersion
+    );
+
+    if (canonicalPageCurrent) {
+      wiz.preview.first_page_applied = true;
+      wiz.preview.__canonical_first_page_session_id = currentSessionId;
+      wiz.preview.__canonical_first_page_session_version = currentSessionVersion;
+    } else if (currentSessionId && currentSessionVersion) {
+      wiz.preview.first_page_applied = false;
+      wiz.preview.__canonical_first_page_session_id = '';
+      wiz.preview.__canonical_first_page_session_version = '';
+    }
+    wiz.preview.error = '';
+    wiz.preview.failure = null;
+    return applyAuthoritativePreviewVisualState(sourcePayload);
   };
 
   const loadRequiredPreviewSectionsForReadyWorkbench = async (sessionId, loadOptions = {}) => {
@@ -29945,15 +30292,9 @@ async function bankingPayPreview(pay_date) {
       wiz.workbench.session_version ??
       null
     );
-    const readyForFreshPages = !!(
-      workbenchProgressLooksReady(sourcePayload) ||
-      workbenchProgressLooksReady(progressObj) ||
-      workbenchProgressLooksReady(sourcePayload?.progress) ||
-      sourcePayload?.ready === true ||
-      sourcePayload?.ready_flag === true ||
-      progressObj.ready === true ||
-      progressObj.ready_flag === true
-    );
+    const authoritativePageProgressState = getAuthoritativeWorkbenchProgressState(sourcePayload || progressObj);
+    const readyForFreshPages = authoritativePageProgressState.ready;
+    const currentSessionVersionText = normaliseWorkbenchSessionVersion(currentSessionVersion);
     const parseCountMap = (value) => {
       if (isPlainObject(value)) return value;
       if (typeof value !== 'string' || !trimStr(value)) return null;
@@ -30041,12 +30382,7 @@ async function bankingPayPreview(pay_date) {
       }
       return null;
     })();
-    const activePendingForPageRefresh = !!(
-      payloadHasActivePendingWorkbenchWork(sourcePayload) ||
-      payloadHasActivePendingWorkbenchWork(progressObj) ||
-      hasActiveWorkbenchPendingWork()
-    );
-    const settledForFreshPages = readyForFreshPages && !activePendingForPageRefresh;
+    const settledForFreshPages = readyForFreshPages;
     const getExpectedSectionRowCount = (sectionName) => {
       const section = normalisePreviewPageSectionName(sectionName);
       const aliasesBySection = {
@@ -30076,7 +30412,10 @@ async function bankingPayPreview(pay_date) {
       let page = null;
       const cachedPage = existingPageMap[section] || null;
       const cachedRows = getPreviewPageRows(cachedPage);
+      const cachedSessionId = trimStr(cachedPage?.session_id || cachedPage?.sessionId || '');
       const cachedVersion = cachedPage?.session_version ?? cachedPage?.sessionVersion ?? null;
+      const cachedVersionText = normaliseWorkbenchSessionVersion(cachedVersion);
+      const cachedSessionMatches = !!(cachedSessionId && cachedSessionId === sessionIdText);
       const expectedSectionRowCount = getExpectedSectionRowCount(section);
       const sectionFreshnessSignature = buildSectionFreshnessSignature(section, expectedSectionRowCount);
       const cachedFreshnessSignature = trimStr(cachedPage?.__cloudtms_row_backed_freshness_signature || '');
@@ -30088,11 +30427,9 @@ async function bankingPayPreview(pay_date) {
       let refreshAttemptsForSignal = cachedRefreshAttemptsForSignal;
       const cachedHasRowsArray = !!(cachedPage && (Array.isArray(cachedPage.rows) || Array.isArray(cachedPage.items)));
       const cachedVersionMatches = !!(
-        cachedVersion === null ||
-        cachedVersion === undefined ||
-        currentSessionVersion === null ||
-        currentSessionVersion === undefined ||
-        String(cachedVersion) === String(currentSessionVersion)
+        currentSessionVersionText &&
+        cachedVersionText &&
+        cachedVersionText === currentSessionVersionText
       );
       const cachedLimitRaw = Number(cachedPage?.limit ?? limit);
       const cachedLimit = Number.isFinite(cachedLimitRaw) ? Math.max(1, Math.min(100, Math.trunc(cachedLimitRaw))) : limit;
@@ -30114,21 +30451,22 @@ async function bankingPayPreview(pay_date) {
         settledForFreshPages
       );
       const cachedFreshnessMatches = !freshnessMustMatch || cachedSignalMatches;
+      const hardSessionContextMismatch = !cachedSessionMatches || !cachedVersionMatches;
       const cacheDataMismatch = !!(
-        !cachedVersionMatches ||
         cachedCountDiffersFromExpected ||
         cachedBelowSelectedLowerBound ||
         cachedReturnedCountMismatch ||
         cachedKnownCountMismatch
       );
-      const mismatchRefreshRequired = cacheDataMismatch && (
+      const mismatchRefreshRequired = hardSessionContextMismatch || (cacheDataMismatch && (
         !cachedSignalMatches ||
         cachedRefreshAttemptsForSignal < maxRefreshAttemptsPerSignal
-      );
+      ));
       const freshnessRefreshRequired = freshnessMustMatch && !cachedFreshnessMatches;
       const staleReasons = [];
       if (!cachedPage) staleReasons.push('CACHE_MISSING');
       if (cachedPage && !cachedHasRowsArray) staleReasons.push('ROWS_ARRAY_MISSING');
+      if (cachedPage && !cachedSessionMatches) staleReasons.push('SESSION_CHANGED');
       if (cachedPage && !cachedVersionMatches) staleReasons.push('SESSION_VERSION_CHANGED');
       if (cachedPage && cachedCountDiffersFromExpected) staleReasons.push('EXPECTED_SECTION_COUNT_CHANGED');
       if (cachedPage && cachedBelowSelectedLowerBound) staleReasons.push('SELECTED_ROW_COUNT_EXCEEDS_CACHE');
@@ -30139,6 +30477,8 @@ async function bankingPayPreview(pay_date) {
       const cachedUsable = !!(
         cachedPage &&
         cachedHasRowsArray &&
+        cachedSessionMatches &&
+        cachedVersionMatches &&
         !mismatchRefreshRequired &&
         !freshnessRefreshRequired &&
         !forcePreviewPageRefetch
@@ -30163,8 +30503,22 @@ async function bankingPayPreview(pay_date) {
         }
       }
       if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) break;
+      const returnedPageSessionId = trimStr(page?.session_id || page?.sessionId || '');
+      const returnedPageSessionVersion = normaliseWorkbenchSessionVersion(page?.session_version ?? page?.sessionVersion ?? null);
+      if (
+        !returnedPageSessionId ||
+        returnedPageSessionId !== sessionIdText ||
+        !currentSessionVersionText ||
+        !returnedPageSessionVersion ||
+        returnedPageSessionVersion !== currentSessionVersionText
+      ) {
+        errors.push({ section, message: 'Preview page did not match the current workbench session and version.' });
+        invalidatedSections[section] = Array.from(new Set([...(invalidatedSections[section] || []), 'PAGE_SESSION_CONTEXT_MISMATCH']));
+        continue;
+      }
       const normalisedPage = normalisePreviewPagePayloadForState(page, section);
       normalisedPage.session_id = sessionIdText;
+      normalisedPage.session_version = currentSessionVersion;
       normalisedPage.__cloudtms_row_backed_freshness_signature = sectionFreshnessSignature;
       normalisedPage.__cloudtms_row_backed_expected_count = settledForFreshPages && expectedSectionRowCount.known ? expectedSectionRowCount.count : null;
       normalisedPage.__cloudtms_row_backed_ready = settledForFreshPages;
@@ -30196,6 +30550,7 @@ async function bankingPayPreview(pay_date) {
       pages_by_section: sectionPages,
       errors,
       session_id: sessionIdText,
+      session_version: currentSessionVersion,
       rows: combinedRows,
       items: combinedRows,
       returned_count: combinedRows.length,
@@ -30210,7 +30565,8 @@ async function bankingPayPreview(pay_date) {
 
   const maybeLoadFirstPreviewPageForPayload = async (payload) => {
     if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return null;
-    const shouldAttemptPage = loadFirstPage || workbenchProgressHasRowsAvailable(payload) || workbenchProgressLooksReady(payload) || workbenchProgressLooksReady(payload?.progress);
+    const authoritativePageState = getAuthoritativeWorkbenchProgressState(payload);
+    const shouldAttemptPage = loadFirstPage || workbenchProgressHasRowsAvailable(payload) || authoritativePageState.ready;
     if (!shouldAttemptPage) return null;
     const stored = storeWorkbenchBootstrapContextFromPayload(payload, 'LOAD_FIRST_PAGE');
     const sessionIdText = trimStr(stored?.session_id || getCurrentWorkbenchSessionId() || '');
@@ -30227,9 +30583,7 @@ async function bankingPayPreview(pay_date) {
     });
 
     if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) return pageLoadSummary;
-    const anySectionRows = Array.isArray(pageLoadSummary?.rows) && pageLoadSummary.rows.length > 0;
-    const anySectionLoaded = Array.isArray(pageLoadSummary?.loaded_sections) && pageLoadSummary.loaded_sections.length > 0;
-    if (anySectionRows || anySectionLoaded) {
+    if (isPlainObject(pageLoadSummary)) {
       finalisePreviewVisualStateAfterRowsApplied(pageLoadSummary, payload);
     }
     return pageLoadSummary;
@@ -31085,7 +31439,6 @@ async function bankingPayPreview(pay_date) {
       isObsoleteSessionId(sessionIdText)
     );
     let lastFingerprint = '';
-    let pageLoaded = false;
 
     const runPollAttempt = async (attemptIndex = 0) => {
       if (shouldAbortPoll()) {
@@ -31095,7 +31448,14 @@ async function bankingPayPreview(pay_date) {
       wiz.workbench.__session_progress_poll_attempt = attemptIndex + 1;
       try {
         let progressPayload = null;
-        if (attemptIndex === 0 && isPlainObject(seedPayload?.progress)) progressPayload = seedPayload.progress;
+        const seedProgress = isPlainObject(seedPayload?.progress) ? seedPayload.progress : null;
+        const seedIsFreshAuthoritativeProgress = !!(
+          attemptIndex === 0 &&
+          seedPayload?.__cloudtms_authoritative_progress_read === true &&
+          seedPayload?.__cloudtms_authoritative_progress_read_failed !== true &&
+          hasFullAuthoritativeProgressContract(seedProgress)
+        );
+        if (seedIsFreshAuthoritativeProgress) progressPayload = seedProgress;
         if (!progressPayload) {
           progressPayload = await bankingPayWorkbenchSessionGetProgress(
             sessionIdText,
@@ -31111,6 +31471,8 @@ async function bankingPayPreview(pay_date) {
         const progressCode = trimStr(progressObj?.code || progressObj?.error_code || progressPayload?.code || progressPayload?.error_code || '').toUpperCase();
         if (progressCode === 'OBSOLETE_SESSION' || progressCode === 'STALE_SESSION' || progressCode === 'REBASE_REQUIRED') {
           clearPollToken();
+          applyAuthoritativePreviewVisualState({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj });
+          await rerenderQuietly();
           return;
         }
         const fingerprint = JSON.stringify({
@@ -31125,11 +31487,10 @@ async function bankingPayPreview(pay_date) {
           running: Number(progressObj?.running_jobs || 0)
         });
         const rowsAvailable = workbenchProgressHasRowsAvailable(progressObj) || workbenchProgressHasRowsAvailable(progressPayload);
-        const readyNow = workbenchProgressLooksReady(progressObj) || workbenchProgressLooksReady(progressPayload);
+        const authoritativePollState = getAuthoritativeWorkbenchProgressState({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj });
+        const readyNow = authoritativePollState.ready;
         if (rowsAvailable || readyNow) {
           const page = await maybeLoadFirstPreviewPageForPayload({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj, session_id: sessionIdText });
-          const pageRows = Array.isArray(page?.rows) ? page.rows : (Array.isArray(page?.items) ? page.items : []);
-          pageLoaded = pageLoaded || pageRows.length > 0;
           if (page && wiz.workbench.__candidate_refresh_page_reread_pending === true) {
             wiz.workbench.__candidate_refresh_page_reread_pending = false;
           }
@@ -31138,21 +31499,21 @@ async function bankingPayPreview(pay_date) {
           lastFingerprint = fingerprint;
           await rerenderQuietly();
         }
-        const stillPending = payloadHasActivePendingWorkbenchWork(progressObj) || hasActiveWorkbenchPendingWork();
-        if ((readyNow && (pageLoaded || !rowsAvailable)) || (!stillPending && readyNow)) {
+        const pollVisualState = applyAuthoritativePreviewVisualState({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj });
+        if (readyNow && pollVisualState.readyVisual) {
           clearPollToken();
-          wiz.preview.loading = false;
-          wiz.preview.error = '';
-          wiz.preview.failure = null;
-          wiz.workbench.create_draft_refresh_pending = false;
-          wiz.workbench.preview_reopen_required = false;
-          if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = false;
+          await rerenderQuietly();
+          return;
+        }
+        if (authoritativePollState.obsolete || authoritativePollState.replacementRequired || authoritativePollState.failure) {
+          clearPollToken();
+          applyAuthoritativePreviewVisualState({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj });
           await rerenderQuietly();
           return;
         }
         if (attemptIndex >= maxAttempts - 1) {
           clearPollToken();
-          wiz.preview.loading = stillPending;
+          applyAuthoritativePreviewVisualState({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj });
           await rerenderQuietly();
           return;
         }
@@ -31161,7 +31522,7 @@ async function bankingPayPreview(pay_date) {
       } catch (pollError) {
         if (attemptIndex >= maxAttempts - 1) {
           clearPollToken();
-          wiz.preview.loading = hasActiveWorkbenchPendingWork();
+          applyAuthoritativePreviewVisualState();
           await rerenderQuietly();
           return;
         }
@@ -31171,6 +31532,91 @@ async function bankingPayPreview(pay_date) {
 
     window.setTimeout(() => { runPollAttempt(0); }, 0);
     return true;
+  };
+
+  const refreshAuthoritativeProgressAfterSessionAcquisition = async (payload, reason = 'SESSION_ACQUIRED') => {
+    let mergedPayload = isPlainObject(payload) ? (deep(payload) || payload) : {};
+    const reasonText = trimStr(reason) || 'SESSION_ACQUIRED';
+    const storedInitial = storeWorkbenchBootstrapContextFromPayload(mergedPayload, `${reasonText}_CONTEXT`);
+    let sessionIdText = trimStr(storedInitial?.session_id || extractWorkbenchContextFromPayload(mergedPayload).session_id || getCurrentWorkbenchSessionId() || '');
+    if (sessionIdText) wiz.workbench.__authoritative_progress_refresh_required_session_id = sessionIdText;
+    if (!sessionIdText || typeof bankingPayWorkbenchSessionGetProgress !== 'function') {
+      mergedPayload.__cloudtms_authoritative_progress_read_failed = true;
+      mergedPayload.__cloudtms_authoritative_progress_read_error = 'Authoritative progress endpoint is unavailable.';
+      wiz.workbench.__authoritative_progress_last_read_error = mergedPayload.__cloudtms_authoritative_progress_read_error;
+      return mergedPayload;
+    }
+
+    const visitedSessionIds = new Set();
+    for (let readIndex = 0; readIndex < 3; readIndex += 1) {
+      if (!sessionIdText || visitedSessionIds.has(sessionIdText) || !isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) break;
+      visitedSessionIds.add(sessionIdText);
+      wiz.workbench.__authoritative_progress_refresh_required_session_id = sessionIdText;
+      let progressPayload = null;
+      try {
+        progressPayload = await bankingPayWorkbenchSessionGetProgress(
+          sessionIdText,
+          makeLightProgressReadOptions(sessionIdText, `bankingPayPreview.${reasonText}.immediateProgress`)
+        );
+      } catch (progressReadError) {
+        mergedPayload.__cloudtms_authoritative_progress_read_failed = true;
+        mergedPayload.__cloudtms_authoritative_progress_read_error = trimStr(progressReadError?.message || progressReadError || '') || 'Authoritative progress could not be read.';
+        wiz.workbench.__authoritative_progress_last_read_error = mergedPayload.__cloudtms_authoritative_progress_read_error;
+        break;
+      }
+      if (!isLatestRequest()) return mergedPayload;
+
+      const progressObj = isPlainObject(progressPayload?.progress)
+        ? progressPayload.progress
+        : (isPlainObject(progressPayload) ? progressPayload : {});
+      const progressSessionId = trimStr(progressObj.session_id || progressPayload?.session_id || '');
+      const targetSessionId = progressSessionId || sessionIdText;
+      const targetSessionVersion = normaliseWorkbenchSessionVersion(
+        progressObj.session_version ?? progressPayload?.session_version ?? null
+      );
+      const priorContext = extractWorkbenchContextFromPayload(mergedPayload);
+      const priorSessionVersion = normaliseWorkbenchSessionVersion(priorContext.session_version);
+      const preserveSessionBoundPreviewPayloads = !!(
+        targetSessionId &&
+        targetSessionVersion &&
+        trimStr(priorContext.session_id || '') === targetSessionId &&
+        priorSessionVersion === targetSessionVersion
+      );
+      const priorPayloadForMerge = { ...mergedPayload };
+      if (!preserveSessionBoundPreviewPayloads) {
+        delete priorPayloadForMerge.preview;
+        delete priorPayloadForMerge.initial_page;
+        delete priorPayloadForMerge.preview_page;
+      }
+      const preservedPreview = preserveSessionBoundPreviewPayloads && isPlainObject(mergedPayload.preview) ? mergedPayload.preview : null;
+      const preservedInitialPage = preserveSessionBoundPreviewPayloads && isPlainObject(mergedPayload.initial_page) ? mergedPayload.initial_page : null;
+      const preservedPreviewPage = preserveSessionBoundPreviewPayloads && isPlainObject(mergedPayload.preview_page) ? mergedPayload.preview_page : null;
+      mergedPayload = {
+        ...priorPayloadForMerge,
+        ...(isPlainObject(progressPayload) ? progressPayload : {}),
+        ...(preservedPreview ? { preview: preservedPreview } : {}),
+        ...(preservedInitialPage ? { initial_page: preservedInitialPage } : {}),
+        ...(preservedPreviewPage ? { preview_page: preservedPreviewPage } : {}),
+        progress: deep(progressObj) || progressObj,
+        session_id: targetSessionId,
+        session_version: progressObj.session_version ?? progressPayload?.session_version ?? mergedPayload.session_version ?? null,
+        session_signature: trimStr(progressObj.session_signature || progressPayload?.session_signature || mergedPayload.session_signature || '') || null,
+        pay_date: trimStr(progressObj.pay_date || progressPayload?.pay_date || mergedPayload.pay_date || effectivePayDate),
+        week_ending_cutoff_date: normalizeCutoffDate(progressObj.week_ending_cutoff_date || progressObj.week_ending_cutoff || progressPayload?.week_ending_cutoff_date || progressPayload?.week_ending_cutoff || mergedPayload.week_ending_cutoff_date || mergedPayload.week_ending_cutoff || weekEndingCutoffDate),
+        __cloudtms_authoritative_progress_read: true,
+        __cloudtms_authoritative_progress_read_failed: false,
+        __cloudtms_authoritative_progress_read_error: ''
+      };
+
+      const storedProgress = storeWorkbenchBootstrapContextFromPayload(mergedPayload, `${reasonText}_AUTHORITATIVE_PROGRESS`);
+      syncProgressIntoState(progressObj);
+      const effectiveSessionId = trimStr(storedProgress?.session_id || progressSessionId || getCurrentWorkbenchSessionId() || '');
+      if (!effectiveSessionId || effectiveSessionId === sessionIdText) break;
+      sessionIdText = effectiveSessionId;
+      wiz.workbench.__authoritative_progress_refresh_required_session_id = sessionIdText;
+    }
+
+    return mergedPayload;
   };
 
   const maybeAutoSettlePendingCandidates = async () => {
@@ -31202,6 +31648,8 @@ async function bankingPayPreview(pay_date) {
         }
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
+      responsePayload = await refreshAuthoritativeProgressAfterSessionAcquisition(responsePayload, 'replacementBootstrap');
+      if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
       const applyResult = applyFullWorkbenchPreviewPayload(responsePayload);
       didFullPreviewLoad = previewApplyLoaded(applyResult);
@@ -31218,6 +31666,8 @@ async function bankingPayPreview(pay_date) {
           throwPreviewFailureEnvelope(openedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
         }
       }
+      if (!isLatestRequest()) return deep(wiz.preview.data);
+      responsePayload = await refreshAuthoritativeProgressAfterSessionAcquisition(responsePayload, 'sharedAttach');
       if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
       const applyResult = applyFullWorkbenchPreviewPayload(responsePayload);
@@ -31241,6 +31691,8 @@ async function bankingPayPreview(pay_date) {
         }
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
+      responsePayload = await refreshAuthoritativeProgressAfterSessionAcquisition(responsePayload, 'currentSessionRead');
+      if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
       const applyResult = applyFullWorkbenchPreviewPayload(responsePayload);
       didFullPreviewLoad = previewApplyLoaded(applyResult);
@@ -31255,6 +31707,8 @@ async function bankingPayPreview(pay_date) {
           throwPreviewFailureEnvelope(fallbackOpenedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
         }
       }
+      if (!isLatestRequest()) return deep(wiz.preview.data);
+      responsePayload = await refreshAuthoritativeProgressAfterSessionAcquisition(responsePayload, 'fallbackSharedAttach');
       if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
       const applyResult = applyFullWorkbenchPreviewPayload(responsePayload);
@@ -31273,7 +31727,8 @@ async function bankingPayPreview(pay_date) {
         const immediateRows = Array.isArray(immediatePostMutationPage.rows)
           ? immediatePostMutationPage.rows
           : (Array.isArray(immediatePostMutationPage.items) ? immediatePostMutationPage.items : []);
-        if (immediateRows.length > 0 || workbenchProgressLooksReady(responsePayload) || workbenchProgressLooksReady(responsePayload?.progress)) {
+        const immediatePostMutationState = getAuthoritativeWorkbenchProgressState(responsePayload);
+        if (immediateRows.length > 0 || immediatePostMutationState.ready) {
           didFullPreviewLoad = immediateRows.length > 0 || didFullPreviewLoad;
           if (wiz.workbench.__candidate_refresh_page_reread_pending === true) wiz.workbench.__candidate_refresh_page_reread_pending = false;
         }
@@ -31298,11 +31753,17 @@ async function bankingPayPreview(pay_date) {
     } catch {}
 
     const sessionForPoll = getCurrentWorkbenchSessionId();
-    if (sessionForPoll && (payloadHasActivePendingWorkbenchWork(responsePayload) || hasActiveWorkbenchPendingWork() || (!didFullPreviewLoad && !workbenchProgressLooksReady(responsePayload)))) {
-      startOrResumeWorkbenchSessionPoll(sessionForPoll, 'INITIAL_PREVIEW_RESPONSE_PENDING', responsePayload);
+    const immediateAuthoritativeState = getAuthoritativeWorkbenchProgressState(responsePayload);
+    const immediateVisualState = applyAuthoritativePreviewVisualState(responsePayload);
+    const initialPollRequired = !!(
+      immediateAuthoritativeState.shouldPoll ||
+      (immediateAuthoritativeState.ready && !immediateVisualState.readyVisual)
+    );
+    if (sessionForPoll && initialPollRequired) {
+      startOrResumeWorkbenchSessionPoll(sessionForPoll, 'INITIAL_AUTHORITATIVE_PROGRESS_OR_PAGE_NOT_READY', responsePayload);
     }
 
-    const activePendingWorkbenchWork = hasActiveWorkbenchPendingWork();
+    const activePendingWorkbenchWork = immediateAuthoritativeState.shouldPoll;
     const replacementPendingWork = !!(useReplacementSessionBootstrap && activePendingWorkbenchWork);
 
     if (replacementPendingWork || activePendingWorkbenchWork) {
@@ -31320,8 +31781,7 @@ async function bankingPayPreview(pay_date) {
 
       if (!isLatestRequest()) return deep(wiz.preview.data);
 
-      const stillPendingAfterSettleAttempt = hasActiveWorkbenchPendingWork();
-      wiz.preview.loading = stillPendingAfterSettleAttempt;
+      applyAuthoritativePreviewVisualState(responsePayload);
       wiz.preview.error = '';
       wiz.preview.failure = null;
 
@@ -31333,27 +31793,14 @@ async function bankingPayPreview(pay_date) {
       isPostMutationRefresh &&
       (wiz.workbench.preview_reopen_required === true || wiz.workbench.create_draft_refresh_pending === true)
     );
-    wiz.preview.loading = hasActiveWorkbenchPendingWork() || postMutationRebaseStillRequired;
+    const finalAuthoritativeState = applyAuthoritativePreviewVisualState(responsePayload);
+    if (postMutationRebaseStillRequired && !finalAuthoritativeState.ready) wiz.preview.loading = true;
     wiz.preview.error = '';
     wiz.preview.failure = null;
-    if (!wiz.preview.loading && (payloadHasFullPreviewData(wiz.preview.data) || wiz.preview.first_page_applied === true || wiz.preview.ready_empty === true)) {
-      const previewDataForStatus = isPlainObject(wiz.preview.data) ? wiz.preview.data : {};
-      const progressCountsForStatus = isPlainObject(wiz.workbench?.progress_counts) ? wiz.workbench.progress_counts : {};
-      const isReadyEmptyForStatus = !!(
-        wiz.preview.ready_empty === true ||
-        previewDataForStatus.ready_empty === true ||
-        previewDataForStatus.preview?.ready_empty === true ||
-        progressCountsForStatus.ready_empty === true
-      );
-      wiz.preview.status_text = isReadyEmptyForStatus ? 'No payable rows found.' : 'Payment preview is ready.';
-      wiz.preview.progress_only = false;
-      wiz.preview.bootstrap_only = false;
-      wiz.preview.preview_ready_visual = true;
-    }
 
     await rerenderQuietly();
 
-    if (didFullPreviewLoad || hasActiveWorkbenchPendingWork()) {
+    if (didFullPreviewLoad || finalAuthoritativeState.shouldPoll) {
       Promise.resolve().then(async () => {
         if (!isLatestRequest()) return;
         try {
@@ -31402,20 +31849,9 @@ async function bankingPayPreview(pay_date) {
         isPostMutationRefresh &&
         (wiz.workbench.preview_reopen_required === true || wiz.workbench.create_draft_refresh_pending === true)
       );
-      wiz.preview.loading = hasActiveWorkbenchPendingWork() || postMutationRebaseStillRequired;
-      if (!wiz.preview.loading && (payloadHasFullPreviewData(wiz.preview.data) || wiz.preview.first_page_applied === true || wiz.preview.ready_empty === true)) {
-        const previewDataForStatus = isPlainObject(wiz.preview.data) ? wiz.preview.data : {};
-        const progressCountsForStatus = isPlainObject(wiz.workbench?.progress_counts) ? wiz.workbench.progress_counts : {};
-        const isReadyEmptyForStatus = !!(
-          wiz.preview.ready_empty === true ||
-          previewDataForStatus.ready_empty === true ||
-          previewDataForStatus.preview?.ready_empty === true ||
-          progressCountsForStatus.ready_empty === true
-        );
-        wiz.preview.status_text = isReadyEmptyForStatus ? 'No payable rows found.' : 'Payment preview is ready.';
-        wiz.preview.progress_only = false;
-        wiz.preview.bootstrap_only = false;
-        wiz.preview.preview_ready_visual = true;
+      if (!wiz.preview.error && !wiz.preview.failure?.preview_unavailable) {
+        const finalState = applyAuthoritativePreviewVisualState();
+        if (postMutationRebaseStillRequired && !finalState.ready) wiz.preview.loading = true;
       }
     }
     if (trimStr(wiz?.workbench?.__preview_refresh_request_token || '') === requestToken) {
@@ -31423,7 +31859,6 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
-
 
 
 
@@ -58091,7 +58526,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
       label: 'Standard bank execution',
       desc: pureAllZero
         ? 'Authorise and settle this batch without creating or sending a bank/provider transfer because every required PAYE net is explicitly £0.00.'
-        : 'Use the configured banking rail to execute/send the payment through the bank adaptor.',
+        : 'Payment will be made directly and automatically through your configured bank.',
       enabled: canStartStandardExecution === true && standardExecutionExplicitlyDisabled !== true && payeInputBlocked !== true,
       disabledReason: payeInputBlocked
         ? 'Every required PAYE net amount must be explicitly entered or imported before payment execution can start.'
@@ -58101,7 +58536,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
       label: 'CSV settlement',
       desc: pureAllZero
         ? 'Review the current zero-row CloudTMS Bank CSV, confirm that no bank payment is required, then authorise and settle the batch in CloudTMS.'
-        : 'Use a current CloudTMS-generated CSV banking file, upload/process it manually with the bank, then settle the batch in CloudTMS after confirmation.',
+        : 'Use the generated Bank CSV to manually pay candidates outside of this system. Choosing this option confirms you have completed this and will mark everything as paid.',
       enabled: routeCapability('csv_settlement', ['can_start_csv_settlement', 'canStartCsvSettlement']) && payeInputBlocked !== true,
       disabledReason: routeReason('csv_settlement', ['csv_settlement_disabled_reason', 'csvSettlementDisabledReason'], 'CSV settlement is unavailable for this batch.')
     },
@@ -58109,7 +58544,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
       label: 'Settle Batch Externally',
       desc: pureAllZero
         ? 'Authorise and settle the explicit-zero batch without recording an external bank payment, where this route is authorised by the backend.'
-        : 'Mark the authorised batch as settled in CloudTMS because payment was handled outside the bank adaptor and outside the CloudTMS CSV banking-file route.',
+        : 'Choose this option to mark everything as settled in CloudTMS. Only use this option if you are not transferring any funds and not uploading any CSV to the bank manually.',
       enabled: routeCapability('external_settlement', ['can_start_external_settlement', 'canStartExternalSettlement']) && payeInputBlocked !== true,
       disabledReason: routeReason('external_settlement', ['external_settlement_disabled_reason', 'externalSettlementDisabledReason'], 'External settlement is unavailable for this batch.')
     }
