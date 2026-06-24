@@ -96925,8 +96925,6 @@ function summaryInsertRowIfMissing(section, patchedRow) {
     return false;
   }
 }
-
-
 function summaryUpdateRowDom(section, id, patchedRow) {
   section = String(section || '').trim();
   id = String(id || '').trim();
@@ -96982,6 +96980,7 @@ function summaryUpdateRowDom(section, id, patchedRow) {
         const isPaidToCandidate =
           payStatus === 'PAID' ||
           payStatus === 'PARTIALLY_PAID' ||
+          payStatus === 'OVERPAID' ||
           !!row?.pay_paid_at_utc ||
           !!row?.paid_at_utc;
         const isInvoiceIssued      = (invIssueStage === 'INVOICED_ISSUED');
@@ -97044,7 +97043,7 @@ function summaryUpdateRowDom(section, id, patchedRow) {
       badge.style.color = '#ffffff';
       badge.title = 'Partly paid';
     } else if (iconCode === 'RED_COIN') {
-      const delta = Number(rowObj?.net_delta_ex_vat || 0);
+      const delta = Math.abs(Number(rowObj?.net_delta_ex_vat || 0));
       badge.textContent = '£';
       badge.style.background = 'radial-gradient(circle at 30% 30%, #fecaca 0%, #f87171 35%, #dc2626 60%, #7f1d1d 100%)';
       badge.style.color = '#ffffff';
@@ -97062,9 +97061,14 @@ function summaryUpdateRowDom(section, id, patchedRow) {
 
     const raw = Array.isArray(codes) ? codes.filter(Boolean) : [];
     const arr0 = raw.map(x => String(x || '').trim()).filter(Boolean);
+    const PAYMENT_BADGE_CODES = new Set([
+      '__PAY_BADGE_ADV__',
+      '__PAY_BADGE_OVERPAID__',
+      '__PAY_BADGE_PROCESSING__'
+    ]);
+    const paymentBadges = new Set(arr0.filter((code) => PAYMENT_BADGE_CODES.has(code)));
+    const businessCodes = arr0.filter(x => !PAYMENT_BADGE_CODES.has(x));
 
-    // ✅ Reference blocker pills (Option A: DB emits exact strings into issue_codes)
-    // Ensure we never display more than one, even if legacy data ever contains multiples.
     const REF_ALL = new Set([
       'Refs (Invoicing Blocked)',
       'Refs (Issue Invoice Blocked)',
@@ -97078,25 +97082,80 @@ function summaryUpdateRowDom(section, id, patchedRow) {
 
     let refChosen = '';
     for (const k of REF_PRECEDENCE) {
-      if (arr0.includes(k)) { refChosen = k; break; }
+      if (businessCodes.includes(k)) {
+        refChosen = k;
+        break;
+      }
     }
 
-    const rest = arr0.filter(x => !REF_ALL.has(x));
+    const rest = businessCodes.filter(x => !REF_ALL.has(x));
     const arr = refChosen ? [refChosen, ...rest] : rest;
+
+    const appendPaymentPill = (label, title) => {
+      const pill = document.createElement('span');
+      pill.className = 'pill pill-bad';
+      pill.textContent = label;
+      if (title) pill.title = title;
+      wrap.appendChild(pill);
+    };
+
+    if (paymentBadges.has('__PAY_BADGE_ADV__')) {
+      appendPaymentPill('ADV', 'Advance Pay override active');
+    }
 
     const payIcon = (section === 'timesheets' && rowObj)
       ? buildTimesheetPayIcon(rowObj)
       : null;
 
+    const primaryPayIconCode = (() => {
+      if (!(section === 'timesheets' && rowObj)) return 'NONE';
+      const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
+      let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
+
+      if (!iconCode || iconCode === 'NONE') {
+        if (payStatus === 'PAID') iconCode = 'COIN';
+        else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
+        else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
+        else iconCode = 'NONE';
+      }
+
+      return iconCode || 'NONE';
+    })();
+
     if (payIcon) {
+      payIcon.classList.add('issue-pay-badge');
+      payIcon.style.marginLeft = '0';
+      payIcon.style.flex = '0 0 auto';
+      payIcon.style.alignSelf = 'center';
       wrap.appendChild(payIcon);
     }
 
+    if (paymentBadges.has('__PAY_BADGE_OVERPAID__')) {
+      appendPaymentPill(
+        'Overpaid',
+        `Overpaid by ${fmtSummaryMoney(Math.abs(Number(rowObj?.net_delta_ex_vat || 0)))}`
+      );
+    }
+
+    if (paymentBadges.has('__PAY_BADGE_PROCESSING__') && primaryPayIconCode !== 'CLOCK') {
+      const clock = document.createElement('span');
+      clock.className = 'coin-badge issue-pay-badge';
+      clock.setAttribute('aria-hidden', 'true');
+      clock.style.marginLeft = '0';
+      clock.style.flex = '0 0 auto';
+      clock.style.alignSelf = 'center';
+      clock.textContent = '◷';
+      clock.title = 'Payment in progress';
+      wrap.appendChild(clock);
+    }
+
     if (!arr.length) {
-      const ok = document.createElement('span');
-      ok.className = 'pill pill-ok';
-      ok.textContent = 'OK';
-      wrap.appendChild(ok);
+      if (!payIcon && paymentBadges.size === 0) {
+        const ok = document.createElement('span');
+        ok.className = 'pill pill-ok';
+        ok.textContent = 'OK';
+        wrap.appendChild(ok);
+      }
       return wrap;
     }
 
@@ -97106,7 +97165,11 @@ function summaryUpdateRowDom(section, id, patchedRow) {
 
       let cls = 'pill pill-bad';
       const up = label.toUpperCase();
-      if (up === 'ON HOLD' || up === 'VALIDATION' || up === 'AUTHORISATION') {
+      if (
+        up === 'ON HOLD' ||
+        up === 'VALIDATION' ||
+        up === 'AUTHORISATION'
+      ) {
         cls = 'pill pill-warn';
       }
 
@@ -97623,7 +97686,7 @@ function summaryInsertRowDom(section, patchedRow) {
       badge.style.color = '#ffffff';
       badge.title = 'Partly paid';
     } else if (iconCode === 'RED_COIN') {
-      const delta = Number(rowObj?.net_delta_ex_vat || 0);
+      const delta = Math.abs(Number(rowObj?.net_delta_ex_vat || 0));
       badge.textContent = '£';
       badge.style.background = 'radial-gradient(circle at 30% 30%, #fecaca 0%, #f87171 35%, #dc2626 60%, #7f1d1d 100%)';
       badge.style.color = '#ffffff';
@@ -97641,6 +97704,13 @@ function summaryInsertRowDom(section, patchedRow) {
 
     const raw = Array.isArray(codes) ? codes.filter(Boolean) : [];
     const arr0 = raw.map((x) => String(x || '').trim()).filter(Boolean);
+    const PAYMENT_BADGE_CODES = new Set([
+      '__PAY_BADGE_ADV__',
+      '__PAY_BADGE_OVERPAID__',
+      '__PAY_BADGE_PROCESSING__'
+    ]);
+    const paymentBadges = new Set(arr0.filter((code) => PAYMENT_BADGE_CODES.has(code)));
+    const businessCodes = arr0.filter((x) => !PAYMENT_BADGE_CODES.has(x));
 
     const REF_ALL = new Set([
       'Refs (Invoicing Blocked)',
@@ -97655,28 +97725,80 @@ function summaryInsertRowDom(section, patchedRow) {
 
     let refChosen = '';
     for (const k of REF_PRECEDENCE) {
-      if (arr0.includes(k)) {
+      if (businessCodes.includes(k)) {
         refChosen = k;
         break;
       }
     }
 
-    const rest = arr0.filter((x) => !REF_ALL.has(x));
+    const rest = businessCodes.filter((x) => !REF_ALL.has(x));
     const arr = refChosen ? [refChosen, ...rest] : rest;
+
+    const appendPaymentPill = (label, title) => {
+      const pill = document.createElement('span');
+      pill.className = 'pill pill-bad';
+      pill.textContent = label;
+      if (title) pill.title = title;
+      wrap.appendChild(pill);
+    };
+
+    if (paymentBadges.has('__PAY_BADGE_ADV__')) {
+      appendPaymentPill('ADV', 'Advance Pay override active');
+    }
 
     const payIcon = (section === 'timesheets' && rowObj)
       ? buildTimesheetPayIcon(rowObj)
       : null;
 
+    const primaryPayIconCode = (() => {
+      if (!(section === 'timesheets' && rowObj)) return 'NONE';
+      const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
+      let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
+
+      if (!iconCode || iconCode === 'NONE') {
+        if (payStatus === 'PAID') iconCode = 'COIN';
+        else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
+        else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
+        else iconCode = 'NONE';
+      }
+
+      return iconCode || 'NONE';
+    })();
+
     if (payIcon) {
+      payIcon.classList.add('issue-pay-badge');
+      payIcon.style.marginLeft = '0';
+      payIcon.style.flex = '0 0 auto';
+      payIcon.style.alignSelf = 'center';
       wrap.appendChild(payIcon);
     }
 
+    if (paymentBadges.has('__PAY_BADGE_OVERPAID__')) {
+      appendPaymentPill(
+        'Overpaid',
+        `Overpaid by ${fmtSummaryMoney(Math.abs(Number(rowObj?.net_delta_ex_vat || 0)))}`
+      );
+    }
+
+    if (paymentBadges.has('__PAY_BADGE_PROCESSING__') && primaryPayIconCode !== 'CLOCK') {
+      const clock = document.createElement('span');
+      clock.className = 'coin-badge issue-pay-badge';
+      clock.setAttribute('aria-hidden', 'true');
+      clock.style.marginLeft = '0';
+      clock.style.flex = '0 0 auto';
+      clock.style.alignSelf = 'center';
+      clock.textContent = '◷';
+      clock.title = 'Payment in progress';
+      wrap.appendChild(clock);
+    }
+
     if (!arr.length) {
-      const ok = document.createElement('span');
-      ok.className = 'pill pill-ok';
-      ok.textContent = 'OK';
-      wrap.appendChild(ok);
+      if (!payIcon && paymentBadges.size === 0) {
+        const ok = document.createElement('span');
+        ok.className = 'pill pill-ok';
+        ok.textContent = 'OK';
+        wrap.appendChild(ok);
+      }
       return wrap;
     }
 
@@ -97686,7 +97808,11 @@ function summaryInsertRowDom(section, patchedRow) {
 
       let cls = 'pill pill-bad';
       const up = label.toUpperCase();
-      if (up === 'ON HOLD' || up === 'VALIDATION' || up === 'AUTHORISATION') {
+      if (
+        up === 'ON HOLD' ||
+        up === 'VALIDATION' ||
+        up === 'AUTHORISATION'
+      ) {
         cls = 'pill pill-warn';
       }
 
@@ -97810,6 +97936,7 @@ function summaryInsertRowDom(section, patchedRow) {
         const isPaidToCandidate =
           payStatus === 'PAID' ||
           payStatus === 'PARTIALLY_PAID' ||
+          payStatus === 'OVERPAID' ||
           !!row?.pay_paid_at_utc ||
           !!row?.paid_at_utc;
         const isInvoiceIssued = (invIssueStage === 'INVOICED_ISSUED');
@@ -97937,7 +98064,6 @@ function summaryInsertRowDom(section, patchedRow) {
 
   return true;
 }
-
 
 
 function summaryMaybeResortDom(section) {
@@ -278770,6 +278896,7 @@ function renderOutboxTable(content, rows) {
 }
 
 
+
 function renderSummary(rows){
   currentRows = rows;
   currentSelection = null;
@@ -278879,77 +279006,131 @@ function renderSummary(rows){
 
    // Small helper: render red issue badges or green OK for the Issues column
  const renderIssueBadges = (codes, rowObj = null) => {
-  const wrap = document.createElement('div');
-  wrap.className = 'issue-badges';
+   const wrap = document.createElement('div');
+   wrap.className = 'issue-badges';
 
-  const raw = Array.isArray(codes) ? codes.filter(Boolean) : [];
-  const arr0 = raw.map(x => String(x || '').trim()).filter(Boolean);
+   const raw = Array.isArray(codes) ? codes.filter(Boolean) : [];
+   const arr0 = raw.map(x => String(x || '').trim()).filter(Boolean);
+   const PAYMENT_BADGE_CODES = new Set([
+     '__PAY_BADGE_ADV__',
+     '__PAY_BADGE_OVERPAID__',
+     '__PAY_BADGE_PROCESSING__'
+   ]);
+   const paymentBadges = new Set(arr0.filter((code) => PAYMENT_BADGE_CODES.has(code)));
+   const businessCodes = arr0.filter(x => !PAYMENT_BADGE_CODES.has(x));
 
-  // ✅ Reference blocker pills (Option A: DB emits exact strings into issue_codes)
-  // Ensure we never display more than one, even if legacy data ever contains multiples.
-  const REF_ALL = new Set([
-    'Refs (Invoicing Blocked)',
-    'Refs (Issue Invoice Blocked)',
-    'Refs (Invoice and Issue Blocked)'
-  ]);
-  const REF_PRECEDENCE = [
-    'Refs (Invoice and Issue Blocked)',
-    'Refs (Invoicing Blocked)',
-    'Refs (Issue Invoice Blocked)'
-  ];
+   const REF_ALL = new Set([
+     'Refs (Invoicing Blocked)',
+     'Refs (Issue Invoice Blocked)',
+     'Refs (Invoice and Issue Blocked)'
+   ]);
+   const REF_PRECEDENCE = [
+     'Refs (Invoice and Issue Blocked)',
+     'Refs (Invoicing Blocked)',
+     'Refs (Issue Invoice Blocked)'
+   ];
 
-  let refChosen = '';
-  for (const k of REF_PRECEDENCE) {
-    if (arr0.includes(k)) { refChosen = k; break; }
-  }
+   let refChosen = '';
+   for (const k of REF_PRECEDENCE) {
+     if (businessCodes.includes(k)) {
+       refChosen = k;
+       break;
+     }
+   }
 
-  const rest = arr0.filter(x => !REF_ALL.has(x));
-  const arr = refChosen ? [refChosen, ...rest] : rest;
+   const rest = businessCodes.filter(x => !REF_ALL.has(x));
+   const arr = refChosen ? [refChosen, ...rest] : rest;
 
-  const payIcon = (currentSection === 'timesheets' && rowObj)
-    ? buildTimesheetPayIcon(rowObj)
-    : null;
+   const appendPaymentPill = (label, title) => {
+     const pill = document.createElement('span');
+     pill.className = 'pill pill-bad';
+     pill.textContent = label;
+     if (title) pill.title = title;
+     wrap.appendChild(pill);
+   };
 
-  if (payIcon) {
-    payIcon.classList.add('issue-pay-badge');
-    payIcon.style.marginLeft = '0';
-    payIcon.style.flex = '0 0 auto';
-    payIcon.style.alignSelf = 'center';
-    wrap.appendChild(payIcon);
-  }
+   if (paymentBadges.has('__PAY_BADGE_ADV__')) {
+     appendPaymentPill('ADV', 'Advance Pay override active');
+   }
 
-  if (!arr.length) {
-    const ok = document.createElement('span');
-    ok.className = 'pill pill-ok';
-    ok.textContent = 'OK';
-    wrap.appendChild(ok);
-    return wrap;
-  }
+   const payIcon = (currentSection === 'timesheets' && rowObj)
+     ? buildTimesheetPayIcon(rowObj)
+     : null;
 
-  arr.forEach(code => {
-    const span = document.createElement('span');
-    const label = String(code || '').trim() || 'Issue';
+   const primaryPayIconCode = (() => {
+     if (!(currentSection === 'timesheets' && rowObj)) return 'NONE';
+     const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
+     let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
 
-    let cls = 'pill pill-bad';
-    const up = label.toUpperCase();
+     if (!iconCode || iconCode === 'NONE') {
+       if (payStatus === 'PAID') iconCode = 'COIN';
+       else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
+       else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
+       else iconCode = 'NONE';
+     }
 
-    // ✅ WARN (amber) pills
-    if (
-      up === 'ON HOLD' ||
-      up === 'VALIDATION' ||
-      up === 'AUTHORISATION' ||
-      up === 'AWAITING SIGNED QR TIMESHEET'
-    ) {
-      cls = 'pill pill-warn';
-    }
+     return iconCode || 'NONE';
+   })();
 
-    span.className = cls;
-    span.textContent = label;
-    wrap.appendChild(span);
-  });
+   if (payIcon) {
+     payIcon.classList.add('issue-pay-badge');
+     payIcon.style.marginLeft = '0';
+     payIcon.style.flex = '0 0 auto';
+     payIcon.style.alignSelf = 'center';
+     wrap.appendChild(payIcon);
+   }
 
-  return wrap;
-};
+   if (paymentBadges.has('__PAY_BADGE_OVERPAID__')) {
+     appendPaymentPill(
+       'Overpaid',
+       `Overpaid by ${fmtSummaryMoney(Math.abs(Number(rowObj?.net_delta_ex_vat || 0)))}`
+     );
+   }
+
+   if (paymentBadges.has('__PAY_BADGE_PROCESSING__') && primaryPayIconCode !== 'CLOCK') {
+     const clock = document.createElement('span');
+     clock.className = 'coin-badge issue-pay-badge';
+     clock.setAttribute('aria-hidden', 'true');
+     clock.style.marginLeft = '0';
+     clock.style.flex = '0 0 auto';
+     clock.style.alignSelf = 'center';
+     clock.textContent = '◷';
+     clock.title = 'Payment in progress';
+     wrap.appendChild(clock);
+   }
+
+   if (!arr.length) {
+     if (!payIcon && paymentBadges.size === 0) {
+       const ok = document.createElement('span');
+       ok.className = 'pill pill-ok';
+       ok.textContent = 'OK';
+       wrap.appendChild(ok);
+     }
+     return wrap;
+   }
+
+   arr.forEach(code => {
+     const span = document.createElement('span');
+     const label = String(code || '').trim() || 'Issue';
+
+     let cls = 'pill pill-bad';
+     const up = label.toUpperCase();
+     if (
+       up === 'ON HOLD' ||
+       up === 'VALIDATION' ||
+       up === 'AUTHORISATION' ||
+        up === 'AWAITING SIGNED QR TIMESHEET'
+     ) {
+       cls = 'pill pill-warn';
+     }
+
+     span.className = cls;
+     span.textContent = label;
+     wrap.appendChild(span);
+   });
+
+   return wrap;
+ };
 
   const fmtSummaryMoney = (n) => {
     const v = Number(n || 0);
@@ -279004,7 +279185,7 @@ function renderSummary(rows){
       badge.style.color = '#ffffff';
       badge.title = 'Partly paid';
     } else if (iconCode === 'RED_COIN') {
-      const delta = Number(rowObj?.net_delta_ex_vat || 0);
+      const delta = Math.abs(Number(rowObj?.net_delta_ex_vat || 0));
       badge.textContent = '£';
       badge.style.background = 'radial-gradient(circle at 30% 30%, #fecaca 0%, #f87171 35%, #dc2626 60%, #7f1d1d 100%)';
       badge.style.color = '#ffffff';
@@ -281720,6 +281901,7 @@ const getSelectionUiState = () => {
         const isPaidToCandidate    =
           payStatus === 'PAID' ||
           payStatus === 'PARTIALLY_PAID' ||
+          payStatus === 'OVERPAID' ||
           !!r?.pay_paid_at_utc;
         const isInvoiceIssued      = (invIssueStage === 'INVOICED_ISSUED');
         const isInvoiceNotIssued   = (invIssueStage === 'INVOICED_NOT_ISSUED');
@@ -282497,8 +282679,6 @@ const getSelectionUiState = () => {
     })
     .catch(() => { /* non-blocking */ }); 
 }
-
-
 
 
 
