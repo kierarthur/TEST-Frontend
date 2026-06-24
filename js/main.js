@@ -284980,6 +284980,7 @@ async function apiListOutbox(opts = {}) {
 // ─────────────────────────────────────────────────────────────────────────────
 // UPDATED: showModal (adds contract-modal class toggling for Contracts dialogs)
 // ─────────────────────────────────────────────────────────────────────────────
+
 function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
 
   const LOG = (typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : true;
@@ -291660,24 +291661,24 @@ top._updateButtons = ()=> {
     const isWeekly   = (sheetScope === 'WEEKLY');
     const isDaily    = (sheetScope === 'DAILY');
 
-    const locked =
-      !!meta.isPaid ||
+    const editLocked =
       !!meta.isInvoiced ||
       !!tsfin.locked_by_invoice_id ||
-      !!tsfin.paid_at_utc;
+      !!data.locked_by_invoice_id ||
+      !!det.locked_by_invoice_id;
 
    if (top.entity === 'timesheets') {
   const hasTsMeta  = !!meta.hasTs;
   const isPlanned  = !!meta.isPlannedWeek;
 
   const isWeeklyManualTs =
-    hasTsMeta && isWeekly && subMode === 'MANUAL' && !locked;
+    hasTsMeta && isWeekly && subMode === 'MANUAL' && !editLocked;
 
   const isPlannedManualWeek =
-    !hasTsMeta && isPlanned && isWeekly && !!weekId && !locked && (cwMode === 'MANUAL');
+    !hasTsMeta && isPlanned && isWeekly && !!weekId && !editLocked && (cwMode === 'MANUAL');
 
   const isDailyManualTs =
-    hasTsMeta && isDaily && subMode === 'MANUAL' && !locked;
+    hasTsMeta && isDaily && subMode === 'MANUAL' && !editLocked;
   const boolish = (v) => {
     if (v === true) return true;
     if (v === false) return false;
@@ -291921,7 +291922,7 @@ top._updateButtons = ()=> {
 
   // ✅ Allow Edit for import-authoritative *real timesheets* (for deferrals)
   const isImportAuthEditable =
-    hasTsMeta && !locked && importAuthoritative;
+    hasTsMeta && !editLocked && importAuthoritative;
 
   // ✅ Planned import-authoritative stub → cannot Edit
   const isImportAuthPlannedStub =
@@ -291930,7 +291931,7 @@ top._updateButtons = ()=> {
   canEdit =
     (top.mode === 'view') &&
     !isImportAuthPlannedStub &&
-    !locked &&
+    !editLocked &&
     (
       hasEditableTimesheetDomain ||
       isWeeklyManualTs ||
@@ -294894,7 +294895,6 @@ bindSave(btnSave, top);
 
   renderTop();
 }
-
 
 
 
