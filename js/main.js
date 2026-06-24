@@ -88138,9 +88138,6 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 // Full replacement for attachBankingModalDelegatedHandlers from FRONTEND 10052026.js
 
 
-
-
-
 async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -88202,6 +88199,14 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     return null;
   };
 
+  const pickNum6 = (...vals) => {
+    for (const v of vals) {
+      const n = toNum(v);
+      if (n !== null) return round6(n);
+    }
+    return null;
+  };
+
   const fmtMoney = (v) => {
     const n = toNum(v);
     if (n === null) return '—';
@@ -88243,9 +88248,12 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   };
 
   const normalizeSourceBasisJson = (value) => isPlainObject(value) ? deep(value) : {};
-  const getSourceBasisFingerprint = (value) => {
-    const normalized = normalizeSourceBasisJson(value);
-    return Object.keys(normalized).length ? stableStringify(normalized) : '';
+  const getProvidedSourceBasisFingerprint = (...values) => {
+    for (const value of values) {
+      const text = trimStr(value);
+      if (text && text !== '[object Object]') return text;
+    }
+    return '';
   };
 
   const getBucketCode = (rowLike, rawSourceBasis) => {
@@ -88258,14 +88266,25 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     return code || '';
   };
 
-  const getComponentSemantics = (componentKeyType, classification, sourceUnits, sourceRate, sourceChargeRate) => {
+  const getComponentSemantics = (componentKeyType, classification, sourceUnits, sourceRate, sourceChargeRate, explicitRateBearingEvidence = false) => {
     const keyType = upperTrim(componentKeyType || '');
+    const hasNonZeroUnits = sourceUnits !== null && Math.abs(Number(sourceUnits)) > 0.000000001;
+    const supportedRateBearingKeyType = [
+      'TS_DAY',
+      'TS_TOTAL',
+      'ADDITIONAL_CODE',
+      'EXPENSE_CODE',
+      'PAY_CODE',
+      'ADDITIONAL_PAY_CODE',
+      'ADDITIONAL_UNIT',
+      'ADDITIONAL_UNITS'
+    ].includes(keyType);
     const isRateBearing = (
       upperTrim(classification || '') === 'TAXABLE_CHANNEL_SENSITIVE' &&
-      ['TS_DAY', 'TS_TOTAL', 'ADDITIONAL_CODE'].includes(keyType) &&
       keyType !== 'ADJUSTMENT_CODE' &&
-      sourceUnits !== null &&
-      sourceUnits > 0 &&
+      keyType !== 'MANUAL_CARRY_FORWARD' &&
+      (supportedRateBearingKeyType || explicitRateBearingEvidence === true) &&
+      hasNonZeroUnits &&
       sourceRate !== null &&
       sourceChargeRate !== null
     );
@@ -88273,6 +88292,294 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       is_rate_bearing: isRateBearing,
       is_amount_led: !isRateBearing,
       component_semantics: isRateBearing ? 'RATE_BEARING' : 'AMOUNT_LED'
+    };
+  };
+
+
+  const normalizeIsoDateCandidate = (value) => {
+    const raw = trimStr(value);
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/);
+    if (!match) return '';
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (
+      !Number.isFinite(date.getTime()) ||
+      date.getUTCFullYear() !== year ||
+      date.getUTCMonth() !== month - 1 ||
+      date.getUTCDate() !== day
+    ) return '';
+    return `${match[1]}-${match[2]}-${match[3]}`;
+  };
+
+  const formatIsoDateUk = (iso) => {
+    const normalized = normalizeIsoDateCandidate(iso);
+    if (!normalized) return '—';
+    const [year, month, day] = normalized.split('-');
+    return `${day}/${month}/${year}`;
+  };
+
+  const getSuggestedRateComponentDate = (component) => {
+    const raw = isPlainObject(component?.raw) ? component.raw : {};
+    const sourceBasis = isPlainObject(component?.source_basis_json)
+      ? component.source_basis_json
+      : (isPlainObject(raw.source_basis_json) ? raw.source_basis_json : {});
+    const suggestedPayload = isPlainObject(component?.suggested_resolution_payload_json)
+      ? component.suggested_resolution_payload_json
+      : (isPlainObject(raw.suggested_resolution_payload_json) ? raw.suggested_resolution_payload_json : {});
+    const suggestedResult = isPlainObject(component?.suggested_resolution_result_json)
+      ? component.suggested_resolution_result_json
+      : (isPlainObject(raw.suggested_resolution_result_json) ? raw.suggested_resolution_result_json : {});
+    const componentKeyType = upperTrim(component?.component_key_type || raw.component_key_type || '');
+    const frozenComponentKeyType = upperTrim(component?.frozen_component_key_type || raw.frozen_component_key_type || '');
+
+    const candidates = [
+      component?.work_date,
+      component?.date,
+      component?.shift_date,
+      component?.service_date,
+      raw.work_date,
+      raw.date,
+      raw.shift_date,
+      raw.service_date,
+      sourceBasis.work_date,
+      sourceBasis.date,
+      sourceBasis.shift_date,
+      sourceBasis.service_date,
+      suggestedPayload.work_date,
+      suggestedPayload.date,
+      suggestedPayload.shift_date,
+      suggestedPayload.service_date,
+      suggestedResult.work_date,
+      suggestedResult.date,
+      suggestedResult.shift_date,
+      suggestedResult.service_date,
+      componentKeyType === 'TS_DAY' ? component?.component_key_value : '',
+      componentKeyType === 'TS_DAY' ? raw.component_key_value : '',
+      frozenComponentKeyType === 'TS_DAY' ? component?.frozen_component_key_value : '',
+      frozenComponentKeyType === 'TS_DAY' ? raw.frozen_component_key_value : ''
+    ];
+
+    for (const candidate of candidates) {
+      const iso = normalizeIsoDateCandidate(candidate);
+      if (!iso) continue;
+      return {
+        iso,
+        display: formatIsoDateUk(iso),
+        sortKey: `0|${iso}`,
+        hasDate: true
+      };
+    }
+
+    return {
+      iso: '',
+      display: '—',
+      sortKey: '1|9999-12-31',
+      hasDate: false
+    };
+  };
+
+  const getObjectText = (objects, keys) => {
+    for (const objectValue of objects) {
+      if (!isPlainObject(objectValue)) continue;
+      for (const key of keys) {
+        const value = trimStr(objectValue[key]);
+        if (value) return value;
+      }
+    }
+    return '';
+  };
+
+  const cleanCategoryIdentity = (value) => trimStr(value)
+    .replace(/^(additional\s+units?|additional\s+code|pay\s+code|expense|adjustment)\s*[-:–—]\s*/i, '')
+    .trim();
+
+  const buildNamedCategoryLabel = (prefix, name, description, code) => {
+    const cleanName = cleanCategoryIdentity(name);
+    const cleanDescription = cleanCategoryIdentity(description);
+    const cleanCode = cleanCategoryIdentity(code);
+    const primary = cleanName || cleanDescription || cleanCode;
+    if (!primary) return '';
+    const codeSuffix = cleanCode && upperTrim(cleanCode) !== upperTrim(primary)
+      ? ` (${cleanCode})`
+      : '';
+    return `${prefix} - ${primary}${codeSuffix}`;
+  };
+
+  const getSuggestedRateComponentCategory = (component) => {
+    const raw = isPlainObject(component?.raw) ? component.raw : {};
+    const sourceBasis = isPlainObject(component?.source_basis_json)
+      ? component.source_basis_json
+      : (isPlainObject(raw.source_basis_json) ? raw.source_basis_json : {});
+    const suggestedPayload = isPlainObject(component?.suggested_resolution_payload_json)
+      ? component.suggested_resolution_payload_json
+      : (isPlainObject(raw.suggested_resolution_payload_json) ? raw.suggested_resolution_payload_json : {});
+    const suggestedResult = isPlainObject(component?.suggested_resolution_result_json)
+      ? component.suggested_resolution_result_json
+      : (isPlainObject(raw.suggested_resolution_result_json) ? raw.suggested_resolution_result_json : {});
+    const objects = [component, raw, sourceBasis, suggestedPayload, suggestedResult];
+    const keyType = upperTrim(component?.component_key_type || raw.component_key_type || '');
+    const keyValue = trimStr(component?.component_key_value || raw.component_key_value || '');
+    const currentLabel = pickText(component?.label, raw.label, raw.component_label, raw.display_label, raw.display_name);
+
+    if (['TS_DAY', 'TS_TOTAL'].includes(keyType)) {
+      const bucketLabel = getObjectText(objects, [
+        'bucket_label', 'bucket_name', 'bucket_description', 'bucket',
+        'rate_type_label', 'rate_type_name', 'rate_name', 'rate_label'
+      ]);
+      const bucketCode = upperTrim(getObjectText(objects, [
+        'bucket_code', 'rate_type_code', 'rate_code'
+      ]) || component?.bucket_code || '');
+      const safeCurrentLabel = normalizeIsoDateCandidate(currentLabel) ? '' : currentLabel;
+      const label = pickText(bucketLabel, bucketCode, safeCurrentLabel, keyType === 'TS_TOTAL' ? 'TOTAL' : 'TS DAY');
+      const code = upperTrim(bucketCode || label);
+      const identityLabel = bucketLabel || (!bucketCode ? safeCurrentLabel : '');
+      return {
+        label,
+        code,
+        kind: 'WORKED_TIME_BUCKET',
+        sortLabel: upperTrim(label),
+        identityKey: stableStringify({
+          kind: 'WORKED_TIME_BUCKET',
+          key_type: keyType,
+          bucket_code: bucketCode || null,
+          bucket_label: upperTrim(identityLabel || '') || null
+        })
+      };
+    }
+
+    const explicitLabel = pickText(
+      raw.category_label,
+      raw.component_category_label,
+      raw.display_category,
+      currentLabel
+    );
+    if (/^additional\s+units?\s*[-:–—]/i.test(explicitLabel)) {
+      const identity = cleanCategoryIdentity(explicitLabel);
+      return {
+        label: explicitLabel,
+        code: upperTrim(getObjectText(objects, ['additional_unit_code', 'additional_code', 'code']) || keyValue || identity),
+        kind: 'ADDITIONAL_UNIT',
+        sortLabel: upperTrim(explicitLabel),
+        identityKey: stableStringify({ kind: 'ADDITIONAL_UNIT', label: upperTrim(explicitLabel), key_value: keyValue || null })
+      };
+    }
+    if (/^(additional\s+code|pay\s+code)\s*[-:–—]/i.test(explicitLabel)) {
+      return {
+        label: explicitLabel,
+        code: upperTrim(getObjectText(objects, ['additional_code', 'pay_code', 'code']) || keyValue || explicitLabel),
+        kind: 'ADDITIONAL_CODE',
+        sortLabel: upperTrim(explicitLabel),
+        identityKey: stableStringify({ kind: 'ADDITIONAL_CODE', label: upperTrim(explicitLabel), key_value: keyValue || null })
+      };
+    }
+
+    const additionalUnitLikeKeyType = ['ADDITIONAL_UNIT', 'ADDITIONAL_UNITS', 'UNIT_CODE', 'ADDITIONAL_UNIT_CODE'].includes(keyType);
+    const additionalUnitName = getObjectText(objects, [
+      'additional_unit_name', 'additional_units_name', 'additional_unit_label',
+      'additional_units_label', 'additional_unit_type_name', 'unit_type_name',
+      'unit_name', 'unit_label', 'additional_name', 'additional_label'
+    ]) || (additionalUnitLikeKeyType ? getObjectText(objects, [
+      'component_name', 'component_label', 'name', 'display_name', 'display_label'
+    ]) : '');
+    const additionalUnitDescription = getObjectText(objects, [
+      'additional_unit_description', 'additional_units_description',
+      'additional_unit_type_description', 'unit_type_description',
+      'unit_description', 'additional_description'
+    ]) || (additionalUnitLikeKeyType ? getObjectText(objects, [
+      'description', 'component_description', 'display_description'
+    ]) : '');
+    const additionalUnitCode = getObjectText(objects, [
+      'additional_unit_code', 'additional_units_code', 'additional_unit_type_code',
+      'unit_code', 'additional_unit_key', 'additional_units_key'
+    ]);
+    if (additionalUnitName || additionalUnitDescription || additionalUnitCode) {
+      const label = buildNamedCategoryLabel(
+        'Additional units',
+        additionalUnitName,
+        additionalUnitDescription,
+        (additionalUnitName || additionalUnitDescription) ? '' : (additionalUnitCode || keyValue)
+      );
+      return {
+        label,
+        code: upperTrim(additionalUnitCode || keyValue || additionalUnitName || additionalUnitDescription),
+        kind: 'ADDITIONAL_UNIT',
+        sortLabel: upperTrim(label),
+        identityKey: stableStringify({
+          kind: 'ADDITIONAL_UNIT',
+          key_type: keyType,
+          key_value: keyValue || null,
+          name: upperTrim(additionalUnitName) || null,
+          description: upperTrim(additionalUnitDescription) || null,
+          code: upperTrim(additionalUnitCode) || null
+        })
+      };
+    }
+
+    const additionalCodeLikeKeyType = ['ADDITIONAL_CODE', 'PAY_CODE', 'ADDITIONAL_PAY_CODE'].includes(keyType);
+    const additionalCodeName = getObjectText(objects, [
+      'additional_code_name', 'additional_code_label', 'pay_code_name',
+      'pay_code_label', 'code_name'
+    ]) || (additionalCodeLikeKeyType ? getObjectText(objects, [
+      'component_name', 'component_label', 'rate_name', 'rate_label', 'name', 'display_name', 'display_label'
+    ]) : '');
+    const additionalCodeDescription = getObjectText(objects, [
+      'additional_code_description', 'pay_code_description', 'code_description'
+    ]) || (additionalCodeLikeKeyType ? getObjectText(objects, [
+      'description', 'component_description', 'display_description'
+    ]) : '');
+    const additionalCode = getObjectText(objects, [
+      'additional_code', 'additional_code_value', 'pay_code', 'pay_code_value',
+      'code', 'component_code', 'rate_code'
+    ]);
+    if (keyType === 'ADDITIONAL_CODE' || keyType === 'PAY_CODE' || keyType === 'ADDITIONAL_PAY_CODE' || additionalCodeName || additionalCodeDescription || additionalCode) {
+      const label = buildNamedCategoryLabel(
+        keyType === 'PAY_CODE' || keyType === 'ADDITIONAL_PAY_CODE' ? 'Additional code' : 'Additional code',
+        additionalCodeName || (explicitLabel && upperTrim(explicitLabel) !== upperTrim(keyValue) ? explicitLabel : ''),
+        additionalCodeDescription,
+        additionalCode || keyValue || explicitLabel
+      ) || `${keyType || 'ADDITIONAL_CODE'} - ${keyValue || explicitLabel || 'UNLABELLED'}`;
+      return {
+        label,
+        code: upperTrim(additionalCode || keyValue || additionalCodeName || explicitLabel),
+        kind: 'ADDITIONAL_CODE',
+        sortLabel: upperTrim(label),
+        identityKey: stableStringify({
+          kind: 'ADDITIONAL_CODE',
+          key_type: keyType,
+          key_value: keyValue || null,
+          name: upperTrim(additionalCodeName) || null,
+          description: upperTrim(additionalCodeDescription) || null,
+          code: upperTrim(additionalCode) || null
+        })
+      };
+    }
+
+    const genericName = getObjectText(objects, [
+      'component_name', 'component_label', 'rate_name', 'rate_label',
+      'description', 'component_description', 'name'
+    ]) || explicitLabel;
+    const genericCode = getObjectText(objects, [
+      'expense_code', 'adjustment_code', 'component_code', 'code'
+    ]) || keyValue;
+    const genericPrefix = keyType === 'EXPENSE_CODE'
+      ? 'Expense'
+      : (keyType === 'ADJUSTMENT_CODE' ? 'Adjustment' : (keyType ? keyType.replace(/_/g, ' ') : 'Component'));
+    const genericLabel = buildNamedCategoryLabel(genericPrefix, genericName, '', genericCode)
+      || `${keyType || 'COMPONENT'} - ${keyValue || 'UNLABELLED'}`;
+    return {
+      label: genericLabel,
+      code: upperTrim(genericCode || genericName || keyType),
+      kind: keyType || 'COMPONENT',
+      sortLabel: upperTrim(genericLabel),
+      identityKey: stableStringify({
+        kind: keyType || 'COMPONENT',
+        key_type: keyType || null,
+        key_value: keyValue || null,
+        name: upperTrim(genericName) || null,
+        code: upperTrim(genericCode) || null
+      })
     };
   };
 
@@ -88493,11 +88800,11 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
 
     const components = rawComponents.map((row, idx) => {
       const rawComponent = isPlainObject(row.raw) ? row.raw : row;
-      const sourceUnits = pickNum(row.source_units, rawComponent.source_units, rawComponent.units, rawComponent.hours, rawComponent.source_basis_json?.source_units, rawComponent.source_basis_json?.units, rawComponent.source_basis_json?.hours);
-      const sourceRate = pickNum(row.source_rate, rawComponent.source_rate, rawComponent.rate, rawComponent.source_basis_json?.source_rate, rawComponent.source_basis_json?.rate);
-      const sourceChargeRate = pickNum(row.source_charge_rate, rawComponent.source_charge_rate, rawComponent.charge_rate, rawComponent.source_basis_json?.source_charge_rate, rawComponent.source_basis_json?.charge_rate);
+      const sourceUnits = pickNum6(row.source_units, rawComponent.source_units, rawComponent.units, rawComponent.hours, rawComponent.source_basis_json?.source_units, rawComponent.source_basis_json?.units, rawComponent.source_basis_json?.hours);
+      const sourceRate = pickNum6(row.source_rate, rawComponent.source_rate, rawComponent.rate, rawComponent.source_basis_json?.source_rate, rawComponent.source_basis_json?.rate);
+      const sourceChargeRate = pickNum6(row.source_charge_rate, rawComponent.source_charge_rate, rawComponent.charge_rate, rawComponent.source_basis_json?.source_charge_rate, rawComponent.source_basis_json?.charge_rate);
       const rawSourceBasisJson = normalizeSourceBasisJson(row.source_basis_json || rawComponent.source_basis_json);
-      const sourceBasisFingerprint = trimStr(row.source_basis_fingerprint || rawComponent.source_basis_fingerprint || getSourceBasisFingerprint(rawSourceBasisJson));
+      const sourceBasisFingerprint = getProvidedSourceBasisFingerprint(row.source_basis_fingerprint, rawComponent.source_basis_fingerprint);
       const bucketCode = getBucketCode(row, rawSourceBasisJson);
       const sourcePay = pickNum(row.source_pay_ex_vat, rawComponent.source_pay_ex_vat, rawComponent.component_amount_ex_vat, rawComponent.amount_ex_vat, rawComponent.amount_ex, rawComponent.amount, rawComponent.source_basis_json?.source_pay_ex_vat, rawComponent.source_basis_json?.amount_ex_vat, rawComponent.source_basis_json?.amount_ex, rawComponent.source_basis_json?.amount);
       const sourceCharge = pickNum(row.source_charge_ex_vat, rawComponent.source_charge_ex_vat, rawComponent.charge_amount_ex_vat, rawComponent.charge_amount, rawComponent.charge_ex_vat, rawComponent.source_basis_json?.source_charge_ex_vat, rawComponent.source_basis_json?.charge_amount_ex_vat, rawComponent.source_basis_json?.charge_amount, rawComponent.source_basis_json?.charge_ex_vat);
@@ -88507,8 +88814,15 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       const suggestedCharge = pickNum(row.suggested_target_charge_ex_vat, rawComponent.target_charge_ex_vat, rawComponent.suggested_resolution_result_json?.target_charge_ex_vat, sourceCharge);
       const suggestedMargin = pickNum(row.suggested_target_margin_ex_vat, rawComponent.target_margin_ex_vat, rawComponent.suggested_resolution_result_json?.target_margin_ex_vat, (suggestedCharge !== null && suggestedPay !== null) ? (suggestedCharge - suggestedPay) : null);
       const classification = upperTrim(row.classification || rawComponent.classification || '');
-      const componentSemantics = getComponentSemantics(row.component_key_type || rawComponent.component_key_type, classification, sourceUnits, sourceRate, sourceChargeRate);
-      const needsAction = row.needs_action === true || rawComponent.needs_action === true || rawComponent.requires_resolution === true || upperTrim(row.resolution_state || rawComponent.resolution_state || '') === 'REQUIRED';
+      const componentSemantics = getComponentSemantics(
+        row.component_key_type || rawComponent.component_key_type,
+        classification,
+        sourceUnits,
+        sourceRate,
+        sourceChargeRate,
+        row.is_rate_bearing === true || rawComponent.is_rate_bearing === true
+      );
+      const needsAction = row.needs_action === true || rawComponent.needs_action === true || rawComponent.requires_resolution === true || row.is_actionable_resolution_row === true || rawComponent.is_actionable_resolution_row === true || upperTrim(row.resolution_state || rawComponent.resolution_state || '') === 'REQUIRED';
       const fixedNoAction = row.fixed_no_action === true || rawComponent.is_fixed_reimbursement === true || rawComponent.is_fixed_no_action_taxable_row === true || upperTrim(row.resolution_state || rawComponent.resolution_state || '') === 'FIXED' || upperTrim(row.resolution_state || rawComponent.resolution_state || '') === 'NOT_REQUIRED';
 
       return {
@@ -88520,13 +88834,17 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         source_family_key: trimStr(row.source_family_key || rawComponent.source_family_key || '') || (trimStr(rawCase?.timesheet_id || rawCase?.linked_timesheet_id || '') ? `timesheet:${trimStr(rawCase?.timesheet_id || rawCase?.linked_timesheet_id || '')}` : ''),
         component_key_type: trimStr(row.component_key_type || rawComponent.component_key_type || ''),
         component_key_value: trimStr(row.component_key_value || rawComponent.component_key_value || ''),
+        frozen_component_key_type: trimStr(row.frozen_component_key_type || rawComponent.frozen_component_key_type || ''),
+        frozen_component_key_value: trimStr(row.frozen_component_key_value || rawComponent.frozen_component_key_value || ''),
         classification,
-        source_pay_method: upperTrim(row.source_pay_method || rawComponent.source_pay_method || ''),
-        target_pay_method: upperTrim(row.target_pay_method || rawComponent.current_target_pay_method || rawComponent.saved_target_pay_method || ''),
+        source_pay_method: upperTrim(row.source_pay_method || rawComponent.source_pay_method || rawSourceBasisJson.source_pay_method || ''),
+        target_pay_method: upperTrim(row.target_pay_method || rawComponent.current_target_pay_method || rawComponent.target_pay_method || rawComponent.saved_target_pay_method || ''),
         source_basis_json: rawSourceBasisJson,
         source_basis_fingerprint: sourceBasisFingerprint,
+        component_fingerprint: trimStr(row.component_fingerprint || rawComponent.component_fingerprint || ''),
         bucket_code: bucketCode || null,
         source_units: sourceUnits,
+        target_units: pickNum6(row.target_units, rawComponent.target_units, rawComponent.suggested_resolution_result_json?.target_units, rawComponent.suggested_resolution_payload_json?.target_units, sourceUnits),
         source_rate: sourceRate,
         source_charge_rate: sourceChargeRate,
         source_pay_ex_vat: sourcePay,
@@ -88536,13 +88854,27 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         suggested_target_pay_ex_vat: suggestedPay,
         suggested_target_charge_ex_vat: suggestedCharge,
         suggested_target_margin_ex_vat: suggestedMargin,
+        saved_resolution_mode: upperTrim(row.saved_resolution_mode || rawComponent.saved_resolution_mode || rawComponent.matched_saved_resolution_mode || ''),
+        saved_resolution_payload_json: isPlainObject(row.saved_resolution_payload_json)
+          ? deep(row.saved_resolution_payload_json)
+          : (isPlainObject(rawComponent.saved_resolution_payload_json) ? deep(rawComponent.saved_resolution_payload_json) : null),
+        saved_resolution_result_json: isPlainObject(row.saved_resolution_result_json)
+          ? deep(row.saved_resolution_result_json)
+          : (isPlainObject(rawComponent.saved_resolution_result_json) ? deep(rawComponent.saved_resolution_result_json) : null),
+        suggested_resolution_payload_json: isPlainObject(row.suggested_resolution_payload_json)
+          ? deep(row.suggested_resolution_payload_json)
+          : (isPlainObject(rawComponent.suggested_resolution_payload_json) ? deep(rawComponent.suggested_resolution_payload_json) : null),
+        suggested_resolution_result_json: isPlainObject(row.suggested_resolution_result_json)
+          ? deep(row.suggested_resolution_result_json)
+          : (isPlainObject(rawComponent.suggested_resolution_result_json) ? deep(rawComponent.suggested_resolution_result_json) : null),
         suggestion_explanation_text: pickText(row.suggestion_explanation_text, rawComponent.suggestion_explanation_text),
         resolution_state: upperTrim(row.resolution_state || rawComponent.resolution_state || '') || (needsAction ? 'REQUIRED' : (fixedNoAction ? 'FIXED' : 'NOT_REQUIRED')),
         actionable: needsAction,
         fixed_no_action: fixedNoAction,
         is_rate_bearing: componentSemantics.is_rate_bearing,
         is_amount_led: componentSemantics.is_amount_led,
-        component_semantics: componentSemantics.component_semantics
+        component_semantics: componentSemantics.component_semantics,
+        _uiComponentIndex: idx
       };
     }).filter((row) => row.is_rate_bearing === true);
 
@@ -88650,12 +88982,349 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   })();
   const caseIsLinkable = (linkedTimesheetCount > 1 || linkedTimesheetIds.length > 1 || linkedScope.resolve_all_linked_timesheets_default === true);
 
+  const existingBucketResolutions = (() => {
+    const candidates = [
+      existingCaseResolution?.bucket_resolutions,
+      existingCaseResolution?.resolution_payload_json?.bucket_resolutions,
+      existingCaseResolution?.payload?.bucket_resolutions
+    ];
+    for (const value of candidates) {
+      if (Array.isArray(value)) return value.filter((row) => isPlainObject(row));
+    }
+    return [];
+  })();
+
+  const getExistingBucketResolutionForComponent = (component) => {
+    const componentFingerprint = trimStr(component?.source_basis_fingerprint || '');
+    if (componentFingerprint) {
+      const byFingerprint = existingBucketResolutions.find((bucket) => (
+        trimStr(bucket?.source_basis_fingerprint || '') &&
+        trimStr(bucket.source_basis_fingerprint) === componentFingerprint
+      ));
+      if (byFingerprint) return byFingerprint;
+    }
+
+    const financeComponentId = trimStr(component?.finance_component_id || '');
+    if (financeComponentId) {
+      const byFinanceComponentId = existingBucketResolutions.find((bucket) => (
+        trimStr(bucket?.finance_component_id || '') &&
+        trimStr(bucket.finance_component_id) === financeComponentId
+      ));
+      if (byFinanceComponentId) return byFinanceComponentId;
+    }
+
+    const sourceFamilyKey = trimStr(component?.source_family_key || '');
+    const componentKeyType = upperTrim(component?.component_key_type || '');
+    const componentKeyValue = trimStr(component?.component_key_value || '');
+    const bucketCode = upperTrim(component?.bucket_code || component?.source_basis_json?.bucket_code || '');
+    return existingBucketResolutions.find((bucket) => {
+      const bucketSourceFamilyKey = trimStr(bucket?.source_family_key || '');
+      const bucketKeyType = upperTrim(bucket?.component_key_type || '');
+      const bucketKeyValue = trimStr(bucket?.component_key_value || '');
+      const existingBucketCode = upperTrim(bucket?.bucket_code || bucket?.source_basis_json?.bucket_code || '');
+      return !!(
+        sourceFamilyKey && bucketSourceFamilyKey && sourceFamilyKey === bucketSourceFamilyKey &&
+        componentKeyType && bucketKeyType && componentKeyType === bucketKeyType &&
+        componentKeyValue && bucketKeyValue && componentKeyValue === bucketKeyValue &&
+        (!bucketCode || !existingBucketCode || bucketCode === existingBucketCode)
+      );
+    }) || null;
+  };
+
+  const getSuggestedChargeRate = (component) => {
+    const raw = isPlainObject(component?.raw) ? component.raw : {};
+    const payload = isPlainObject(component?.suggested_resolution_payload_json) ? component.suggested_resolution_payload_json : {};
+    const result = isPlainObject(component?.suggested_resolution_result_json) ? component.suggested_resolution_result_json : {};
+    const explicitTargetChargeRate = pickNum6(
+      component?.suggested_target_charge_rate,
+      raw.suggested_target_charge_rate,
+      raw.target_charge_rate,
+      payload.suggested_target_charge_rate,
+      payload.target_charge_rate,
+      result.suggested_target_charge_rate,
+      result.target_charge_rate
+    );
+    if (explicitTargetChargeRate !== null) return explicitTargetChargeRate;
+
+    const sourceChargeRate = pickNum6(
+      component?.source_charge_rate,
+      raw.source_charge_rate,
+      raw.charge_rate,
+      component?.source_basis_json?.source_charge_rate,
+      component?.source_basis_json?.charge_rate,
+      raw.source_basis_json?.source_charge_rate,
+      raw.source_basis_json?.charge_rate
+    );
+    const targetChargeAmount = pickNum(
+      component?.suggested_target_charge_ex_vat,
+      raw.suggested_target_charge_ex_vat,
+      raw.target_charge_ex_vat,
+      payload.target_charge_ex_vat,
+      result.target_charge_ex_vat
+    );
+    const targetUnits = pickNum6(
+      component?.target_units,
+      raw.target_units,
+      payload.target_units,
+      result.target_units,
+      component?.source_units
+    );
+
+    if (
+      sourceChargeRate !== null &&
+      targetChargeAmount !== null &&
+      targetUnits !== null &&
+      Math.abs(Number(targetUnits)) > 0.000000001 &&
+      Math.abs(round2(Number(sourceChargeRate) * Number(targetUnits)) - Number(targetChargeAmount)) < 0.000001
+    ) {
+      return sourceChargeRate;
+    }
+
+    const derivedTargetChargeRate = (
+      targetChargeAmount !== null &&
+      targetUnits !== null &&
+      Math.abs(Number(targetUnits)) > 0.000000001
+    ) ? Number(targetChargeAmount) / Number(targetUnits) : null;
+
+    return pickNum6(derivedTargetChargeRate, sourceChargeRate);
+  };
+
+  const getSuggestedRateResolutionSignature = (component) => {
+    const payload = isPlainObject(component?.suggested_resolution_payload_json) ? component.suggested_resolution_payload_json : {};
+    const result = isPlainObject(component?.suggested_resolution_result_json) ? component.suggested_resolution_result_json : {};
+    return {
+      resolution_mode: upperTrim(payload.resolution_mode || result.resolution_mode || component?.saved_resolution_mode || ''),
+      reuse_mode: upperTrim(payload.reuse_mode || result.reuse_mode || ''),
+      target_pay_method: upperTrim(payload.target_pay_method || result.target_pay_method || component?.target_pay_method || ''),
+      relevant_erni_pct: toNum(payload.relevant_erni_pct ?? result.relevant_erni_pct),
+      vat_rate_pct: toNum(payload.vat_rate_pct ?? result.vat_rate_pct),
+      umbrella_vat_chargeable: payload.umbrella_vat_chargeable === true || result.umbrella_vat_chargeable === true,
+      target_charge_basis: upperTrim(payload.target_charge_basis || result.target_charge_basis || payload.charge_basis || result.charge_basis || '')
+    };
+  };
+
+  const groupNumberKey = (value, places = 6) => {
+    const numeric = toNum(value);
+    if (numeric === null) return null;
+    const factor = Math.pow(10, places);
+    return Math.round(numeric * factor) / factor;
+  };
+
+  const buildSuggestedRateGroupKey = (component, category, initialFinalRate, existingBucketResolution) => {
+    const keyType = upperTrim(component?.component_key_type || '');
+    const resolutionSignature = getSuggestedRateResolutionSignature(component);
+    return stableStringify({
+      resolution_family: upperTrim(ctx.resolution_family || 'BUCKETED'),
+      classification: upperTrim(component?.classification || ''),
+      component_semantics: upperTrim(component?.component_semantics || ''),
+      category_kind: category.kind,
+      category_identity: category.identityKey,
+      source_family_key: trimStr(component?.source_family_key || ''),
+      component_key_type: keyType,
+      component_key_value: keyType === 'TS_DAY' ? null : trimStr(component?.component_key_value || ''),
+      bucket_code: upperTrim(component?.bucket_code || component?.source_basis_json?.bucket_code || category.code || ''),
+      source_pay_method: upperTrim(component?.source_pay_method || ''),
+      target_pay_method: upperTrim(component?.target_pay_method || resolutionSignature.target_pay_method || ''),
+      current_pay_rate: groupNumberKey(component?.source_rate),
+      current_charge_rate: groupNumberKey(component?.source_charge_rate),
+      suggested_target_rate: groupNumberKey(component?.suggested_target_rate),
+      suggested_charge_rate: groupNumberKey(getSuggestedChargeRate(component)),
+      initial_final_target_rate: groupNumberKey(initialFinalRate),
+      existing_resolution_mode: upperTrim(existingBucketResolution?.resolution_mode || ''),
+      resolution_signature: resolutionSignature,
+      actionable: component?.actionable === true,
+      fixed_no_action: component?.fixed_no_action === true,
+      resolution_state: upperTrim(component?.resolution_state || '')
+    });
+  };
+
+  const getGroupSortRank = (category) => {
+    const code = upperTrim(category?.code || category?.label || '');
+    const workedTimeOrder = {
+      DAY: 10,
+      NIGHT: 20,
+      SAT: 30,
+      SATURDAY: 30,
+      SUN: 40,
+      SUNDAY: 40,
+      BH: 50,
+      BANK_HOLIDAY: 50,
+      'BANK HOLIDAY': 50
+    };
+    if (Object.prototype.hasOwnProperty.call(workedTimeOrder, code)) return workedTimeOrder[code];
+    if (category?.kind === 'WORKED_TIME_BUCKET') return 60;
+    if (category?.kind === 'ADDITIONAL_UNIT') return 100;
+    if (category?.kind === 'ADDITIONAL_CODE') return 110;
+    if (category?.kind === 'EXPENSE_CODE') return 120;
+    if (category?.kind === 'ADJUSTMENT_CODE') return 130;
+    return 200;
+  };
+
+  const buildSuggestedRateGroups = (components) => {
+    const groupsByKey = new Map();
+
+    (Array.isArray(components) ? components : []).forEach((component, index) => {
+      const dateInfo = getSuggestedRateComponentDate(component);
+      const category = getSuggestedRateComponentCategory(component);
+      const existingBucketResolution = getExistingBucketResolutionForComponent(component);
+      const initialFinalRate = pickNum(existingBucketResolution?.target_rate, component?.suggested_target_rate);
+      const suggestedChargeRate = getSuggestedChargeRate(component);
+      const groupKey = buildSuggestedRateGroupKey(component, category, initialFinalRate, existingBucketResolution);
+      const typeLabel = classificationLabel(component?.classification);
+      const componentIndex = Number.isInteger(component?._uiComponentIndex) ? component._uiComponentIndex : index;
+      const detailIdentity = [
+        trimStr(component?.source_family_key || ''),
+        upperTrim(component?.component_key_type || ''),
+        trimStr(component?.component_key_value || ''),
+        upperTrim(component?.bucket_code || ''),
+        trimStr(component?.source_basis_fingerprint || ''),
+        String(componentIndex).padStart(8, '0')
+      ].join('|');
+
+      const uiComponent = {
+        ...component,
+        _uiComponentIndex: componentIndex,
+        _uiWorkDateIso: dateInfo.iso,
+        _uiWorkDateDisplay: dateInfo.display,
+        _uiGroupKey: groupKey,
+        _uiGroupLabel: category.label,
+        _uiGroupTypeLabel: typeLabel,
+        _uiDetailSortKey: `${dateInfo.sortKey}|${detailIdentity}`,
+        _uiCurrentPayRate: component?.source_rate,
+        _uiSuggestedRate: component?.suggested_target_rate,
+        _uiCurrentChargeRate: component?.source_charge_rate,
+        _uiSuggestedChargeRate: suggestedChargeRate,
+        _uiUnits: component?.source_units,
+        _uiInitialFinalTargetRate: initialFinalRate,
+        _uiExistingResolutionMode: upperTrim(existingBucketResolution?.resolution_mode || '')
+      };
+
+      let group = groupsByKey.get(groupKey);
+      if (!group) {
+        group = {
+          groupKey,
+          category,
+          baseLabel: category.label,
+          label: category.label,
+          typeLabel,
+          detailRows: [],
+          currentPayRate: component?.source_rate,
+          currentChargeRate: component?.source_charge_rate,
+          suggestedRate: component?.suggested_target_rate,
+          suggestedChargeRate,
+          finalTargetRateInitialValue: initialFinalRate,
+          sourcePayMethod: upperTrim(component?.source_pay_method || ''),
+          targetPayMethod: upperTrim(component?.target_pay_method || ''),
+          resolutionSignature: getSuggestedRateResolutionSignature(component),
+          componentCount: 0,
+          actionableCount: 0,
+          totalUnits: 0,
+          hasNumericUnits: false,
+          needsAction: false,
+          fixedNoAction: true,
+          sortRank: getGroupSortRank(category),
+          decisionQualifier: '',
+          errorLabel: category.label
+        };
+        groupsByKey.set(groupKey, group);
+      }
+
+      group.detailRows.push(uiComponent);
+      group.componentCount += 1;
+      if (uiComponent.actionable === true) group.actionableCount += 1;
+      group.needsAction = group.needsAction || uiComponent.actionable === true;
+      group.fixedNoAction = group.fixedNoAction && uiComponent.fixed_no_action === true;
+      const units = toNum(uiComponent.source_units);
+      if (units !== null) {
+        group.totalUnits += units;
+        group.hasNumericUnits = true;
+      }
+    });
+
+    const groups = Array.from(groupsByKey.values());
+    groups.forEach((group) => {
+      group.totalUnits = group.hasNumericUnits ? round6(group.totalUnits) : null;
+      group.detailRows.sort((a, b) => String(a._uiDetailSortKey).localeCompare(String(b._uiDetailSortKey)));
+    });
+
+    groups.sort((a, b) => (
+      a.sortRank - b.sortRank ||
+      String(a.category?.sortLabel || a.baseLabel || '').localeCompare(String(b.category?.sortLabel || b.baseLabel || '')) ||
+      (toNum(a.currentPayRate) ?? Number.POSITIVE_INFINITY) - (toNum(b.currentPayRate) ?? Number.POSITIVE_INFINITY) ||
+      (toNum(a.suggestedRate) ?? Number.POSITIVE_INFINITY) - (toNum(b.suggestedRate) ?? Number.POSITIVE_INFINITY) ||
+      String(a.groupKey).localeCompare(String(b.groupKey))
+    ));
+
+    const duplicateLabelCounts = new Map();
+    groups.forEach((group) => {
+      const duplicateKey = `${upperTrim(group.baseLabel)}|${upperTrim(group.typeLabel)}`;
+      duplicateLabelCounts.set(duplicateKey, (duplicateLabelCounts.get(duplicateKey) || 0) + 1);
+    });
+
+    groups.forEach((group, groupIndex) => {
+      group.groupIndex = groupIndex;
+      group.detailRows = group.detailRows.map((row) => ({ ...row, _uiGroupIndex: groupIndex }));
+      const duplicateKey = `${upperTrim(group.baseLabel)}|${upperTrim(group.typeLabel)}`;
+      if ((duplicateLabelCounts.get(duplicateKey) || 0) > 1) {
+        const qualifierParts = [
+          `Current ${fmtMoney(group.currentPayRate)}`,
+          `Suggested ${fmtMoney(group.suggestedRate)}`,
+          `Charge ${fmtMoney(group.currentChargeRate)} → ${fmtMoney(group.suggestedChargeRate)}`
+        ];
+        if (
+          ['ADDITIONAL_UNIT', 'ADDITIONAL_CODE'].includes(group.category?.kind) &&
+          trimStr(group.category?.code) &&
+          !upperTrim(group.baseLabel).includes(upperTrim(group.category.code))
+        ) {
+          qualifierParts.push(`Code ${trimStr(group.category.code)}`);
+        }
+        if (group.sourcePayMethod || group.targetPayMethod) {
+          qualifierParts.push(`${group.sourcePayMethod || '—'} → ${group.targetPayMethod || '—'}`);
+        }
+        const signature = isPlainObject(group.resolutionSignature) ? group.resolutionSignature : {};
+        if (trimStr(signature.resolution_mode)) {
+          qualifierParts.push(`Mode ${trimStr(signature.resolution_mode).replace(/_/g, ' ')}`);
+        }
+        if (trimStr(signature.target_charge_basis)) {
+          qualifierParts.push(`Charge basis ${trimStr(signature.target_charge_basis).replace(/_/g, ' ')}`);
+        }
+        if (toNum(signature.relevant_erni_pct) !== null) {
+          qualifierParts.push(`ERNI ${fmtUnits(signature.relevant_erni_pct)}%`);
+        }
+        if (toNum(signature.vat_rate_pct) !== null) {
+          qualifierParts.push(`VAT ${fmtUnits(signature.vat_rate_pct)}%`);
+        }
+        if (signature.umbrella_vat_chargeable === true) {
+          qualifierParts.push('Umbrella VAT chargeable');
+        }
+        if (
+          group.finalTargetRateInitialValue !== null &&
+          group.suggestedRate !== null &&
+          Math.abs(Number(group.finalTargetRateInitialValue) - Number(group.suggestedRate)) > 0.000001
+        ) {
+          qualifierParts.push(`Existing final ${fmtMoney(group.finalTargetRateInitialValue)}`);
+        }
+        group.decisionQualifier = qualifierParts.join(' • ');
+        group.errorLabel = `${group.baseLabel} (${qualifierParts.join(', ')})`;
+      }
+    });
+
+    return groups;
+  };
+
+  const suggestedRateGroups = buildSuggestedRateGroups(ctx.components);
+
   const state = {
     accepted: false,
     busy: false,
     error: '',
     friendlyError: null,
-    resolveAllLinked: existingCaseResolution?.resolve_all_linked_timesheets === true ? true : !!caseIsLinkable
+    resolveAllLinked: existingCaseResolution?.resolve_all_linked_timesheets === true ? true : !!caseIsLinkable,
+    expandedSuggestedRateGroupKeys: new Set(),
+    finalRateByGroupKey: Object.fromEntries(suggestedRateGroups.map((group) => [
+      group.groupKey,
+      group.finalTargetRateInitialValue == null ? '' : Number(group.finalTargetRateInitialValue).toFixed(2)
+    ]))
   };
 
   const rerenderChild = async () => {
@@ -88668,6 +89337,137 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       try { fr._suppressDirty = false; } catch {}
       try { fr._updateButtons && fr._updateButtons(); } catch {}
     } catch {}
+  };
+
+  const getGroupRateRawValue = (group) => {
+    if (Object.prototype.hasOwnProperty.call(state.finalRateByGroupKey, group.groupKey)) {
+      return trimStr(state.finalRateByGroupKey[group.groupKey]);
+    }
+    return group.finalTargetRateInitialValue == null ? '' : Number(group.finalTargetRateInitialValue).toFixed(2);
+  };
+
+  const formatGroupRateDisplay = (group) => {
+    const rawValue = getGroupRateRawValue(group);
+    if (!rawValue) return '—';
+    const numeric = Number(rawValue);
+    return Number.isFinite(numeric) ? fmtMoney(numeric) : rawValue;
+  };
+
+  const renderSuggestedRateGroupDetailRows = (group, groupIndex) => {
+    const finalRateDisplay = formatGroupRateDisplay(group);
+    return `
+      <tr id="bankingPaySuggestedGroupDetails_${groupIndex}">
+        <td colspan="9" style="padding:0;background:rgba(148,163,184,.06);">
+          <div style="padding:10px;overflow:auto;">
+            <div class="mini" style="opacity:.8;margin-bottom:8px;">
+              Component-level evidence for ${enc(group.baseLabel)}. Rows are ordered by work date; undated rows appear last.
+            </div>
+            <table class="grid" style="min-width:1880px;table-layout:auto;background:var(--panel,#fff);">
+              <thead>
+                <tr>
+                  <th style="width:110px;">Date</th>
+                  <th>Bucket / category</th>
+                  <th style="width:130px;">Type</th>
+                  <th style="width:100px;text-align:right;">Units</th>
+                  <th style="width:130px;text-align:right;">Current pay rate</th>
+                  <th style="width:140px;text-align:right;">Current charge rate</th>
+                  <th style="width:130px;text-align:right;">Current pay</th>
+                  <th style="width:140px;text-align:right;">Current charge</th>
+                  <th style="width:130px;text-align:right;">Current margin</th>
+                  <th style="width:130px;text-align:right;">Suggested rate</th>
+                  <th style="width:130px;text-align:right;">Suggested pay</th>
+                  <th style="width:140px;text-align:right;">Suggested charge</th>
+                  <th style="width:140px;text-align:right;">Suggested margin</th>
+                  <th style="width:140px;text-align:right;">Final target rate</th>
+                  <th style="width:140px;">Needs action</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${group.detailRows.map((row) => {
+                  const editable = row.actionable === true;
+                  const helperText = !editable ? (row.fixed_no_action ? 'Fixed / no action' : 'No action') : '';
+                  return `
+                    <tr style="opacity:${editable ? '1' : '0.7'};">
+                      <td class="mono" style="white-space:nowrap;">${enc(row._uiWorkDateDisplay || '—')}</td>
+                      <td>${enc(row._uiGroupLabel || row.label || 'Bucket')}</td>
+                      <td>${enc(row._uiGroupTypeLabel || classificationLabel(row.classification))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtUnits(row.source_units))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">${enc(row.source_rate === null ? '—' : fmtMoney(row.source_rate))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">${enc(row.source_charge_rate === null ? '—' : fmtMoney(row.source_charge_rate))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtMoney(row.source_pay_ex_vat))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtMoney(row.source_charge_ex_vat))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtMoney(row.source_margin_ex_vat))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">${enc(row.suggested_target_rate === null ? '—' : fmtMoney(row.suggested_target_rate))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtMoney(row.suggested_target_pay_ex_vat))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtMoney(row.suggested_target_charge_ex_vat))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtMoney(row.suggested_target_margin_ex_vat))}</td>
+                      <td class="mono" style="text-align:right;white-space:nowrap;">
+                        <span data-suggested-rate-mirror-group-index="${groupIndex}">${enc(finalRateDisplay)}</span>
+                      </td>
+                      <td>${editable ? '<span class="pill pill-bad">Needs action</span>' : `<span class="pill">${enc(helperText || 'No action')}</span>`}</td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </td>
+      </tr>
+    `;
+  };
+
+  const renderSuggestedRateGroupSummaryRow = (group, groupIndex) => {
+    const editable = group.actionableCount > 0;
+    const expanded = state.expandedSuggestedRateGroupKeys.has(group.groupKey);
+    const rawRateValue = getGroupRateRawValue(group);
+    const helperText = !editable ? (group.fixedNoAction ? 'Fixed / no action' : 'No action') : '';
+    return `
+      <tr id="bankingPaySuggestedGroupRow_${groupIndex}" style="opacity:${editable ? '1' : '0.7'};">
+        <td style="text-align:center;">
+          <button
+            type="button"
+            class="btn btn-xs btn-outline"
+            id="bankingPaySuggestedGroupToggle_${groupIndex}"
+            data-suggested-rate-group-toggle="true"
+            data-group-index="${groupIndex}"
+            aria-expanded="${expanded ? 'true' : 'false'}"
+            aria-controls="bankingPaySuggestedGroupDetails_${groupIndex}"
+            title="${enc(expanded ? `Collapse ${group.baseLabel}` : `Expand ${group.baseLabel}`)}"
+            ${state.busy ? 'disabled' : ''}
+            style="min-width:32px;"
+          >${expanded ? '−' : '+'}</button>
+        </td>
+        <td>
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <strong>${enc(group.baseLabel)}</strong>
+            ${group.decisionQualifier ? `<div class="mini" style="opacity:.78;">${enc(group.decisionQualifier)}</div>` : ''}
+          </div>
+        </td>
+        <td>${enc(group.typeLabel)}</td>
+        <td class="mono" style="text-align:right;white-space:nowrap;">${enc(String(group.componentCount))}</td>
+        <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtUnits(group.totalUnits))}</td>
+        <td class="mono" style="text-align:right;white-space:nowrap;">${enc(group.currentPayRate === null ? '—' : fmtMoney(group.currentPayRate))}</td>
+        <td class="mono" style="text-align:right;white-space:nowrap;">${enc(group.suggestedRate === null ? '—' : fmtMoney(group.suggestedRate))}</td>
+        <td>
+          ${editable ? `
+            <input
+              id="bankingPaySuggestedRateInput_${groupIndex}"
+              data-suggested-rate-group-input="true"
+              data-group-index="${groupIndex}"
+              type="number"
+              step="0.01"
+              min="0"
+              class="input"
+              value="${enc(rawRateValue)}"
+              style="width:120px;"
+              ${state.busy ? 'disabled' : ''}
+            />
+          ` : `<div class="mini" style="opacity:.8;">${enc(helperText || '—')}</div>`}
+        </td>
+        <td>${group.needsAction ? '<span class="pill pill-bad">Needs action</span>' : `<span class="pill">${enc(helperText || 'No action')}</span>`}</td>
+      </tr>
+      ${expanded ? renderSuggestedRateGroupDetailRows(group, groupIndex) : ''}
+    `;
   };
 
   const renderMain = () => `
@@ -88694,87 +89494,48 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         </div>
       </div>
 
-      <div style="margin-top:8px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
-        <table class="grid" style="min-width:1320px; table-layout:auto;">
+      <div class="mini" style="opacity:.82;margin:8px 2px;">
+        This table shows grouped rate decisions for the current anchor timesheet. Expand a row to review the dated component-level evidence.
+      </div>
+
+      <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
+        <table class="grid" style="min-width:1180px;table-layout:auto;">
           <thead>
             <tr>
-              <th>Bucket</th>
-              <th style="width:120px; text-align:right;">Units</th>
-              <th style="width:120px; text-align:right;">Current pay rate</th>
-              <th style="width:120px; text-align:right;">Current charge rate</th>
-              <th style="width:140px; text-align:right;">Current pay</th>
-              <th style="width:140px; text-align:right;">Current charge</th>
-              <th style="width:140px; text-align:right;">Current margin</th>
-              <th style="width:140px; text-align:right;">Suggested rate</th>
-              <th style="width:140px; text-align:right;">Suggested pay</th>
-              <th style="width:140px; text-align:right;">Suggested charge</th>
-              <th style="width:140px; text-align:right;">Suggested margin</th>
+              <th style="width:56px;text-align:center;">Expand</th>
+              <th>Bucket / category</th>
+              <th style="width:140px;">Type</th>
+              <th style="width:125px;text-align:right;">Component count</th>
+              <th style="width:115px;text-align:right;">Total units</th>
+              <th style="width:140px;text-align:right;">Current pay rate</th>
+              <th style="width:140px;text-align:right;">Suggested rate</th>
               <th style="width:160px;">Final target rate</th>
-              <th style="width:160px;">Needs action</th>
+              <th style="width:150px;">Needs action</th>
             </tr>
           </thead>
           <tbody>
-            ${ctx.components.map((row, idx) => {
-              const editable = row.actionable === true;
-              const helperText = !editable ? (row.fixed_no_action ? 'Fixed / no action' : 'No action') : '';
-              const initialRate = pickNum(
-                existingCaseResolution?.bucket_resolutions?.find((bucket) => trimStr(bucket?.finance_component_id || '') === trimStr(row.finance_component_id || '') || trimStr(bucket?.source_basis_fingerprint || '') === trimStr(row.source_basis_fingerprint || ''))?.target_rate,
-                row.suggested_target_rate
-              );
-              return `
-                <tr style="opacity:${editable ? '1' : '0.7'};">
-                  <td>
-                    <div style="display:flex;flex-direction:column;gap:4px;">
-                      <div>${enc(trimStr(row.label || 'Bucket'))}</div>
-                      <div class="mini" style="opacity:.8;">${enc(classificationLabel(row.classification))}</div>
-                    </div>
-                  </td>
-                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtUnits(row.source_units))}</td>
-                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(row.source_rate === null ? '—' : fmtMoney(row.source_rate))}</td>
-                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(row.source_charge_rate === null ? '—' : fmtMoney(row.source_charge_rate))}</td>
-                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(row.source_pay_ex_vat))}</td>
-                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(row.source_charge_ex_vat))}</td>
-                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(row.source_margin_ex_vat))}</td>
-                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(row.suggested_target_rate === null ? '—' : fmtMoney(row.suggested_target_rate))}</td>
-                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(row.suggested_target_pay_ex_vat))}</td>
-                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(row.suggested_target_charge_ex_vat))}</td>
-                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(row.suggested_target_margin_ex_vat))}</td>
-                  <td>
-                    ${editable ? `
-                      <input
-                        id="bankingPaySuggestedRateInput_${idx}"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        class="input"
-                        value="${enc(initialRate == null ? '' : String(Number(initialRate).toFixed(2)))}"
-                        style="width:120px;"
-                      />
-                    ` : `<div class="mini" style="opacity:.8;">${enc(helperText || '—')}</div>`}
-                  </td>
-                  <td>${editable ? `<span class="pill pill-bad">Needs action</span>` : `<span class="pill">${enc(helperText || 'No action')}</span>`}</td>
-                </tr>
-              `;
-            }).join('')}
+            ${suggestedRateGroups.length
+              ? suggestedRateGroups.map((group, groupIndex) => renderSuggestedRateGroupSummaryRow(group, groupIndex)).join('')
+              : '<tr><td colspan="9"><div class="mini" style="opacity:.8;">No rate-bearing components are available for this case.</div></td></tr>'}
           </tbody>
         </table>
       </div>
 
       ${caseIsLinkable ? `
-        <div class="card" style="padding:10px; margin-top:10px;">
-          <label style="display:flex; align-items:flex-start; gap:8px;">
-            <input type="checkbox" id="bankingPaySuggestedResolveAllLinked" ${state.resolveAllLinked ? 'checked' : ''} />
+        <div class="card" style="padding:10px;margin-top:10px;">
+          <label style="display:flex;align-items:flex-start;gap:8px;">
+            <input type="checkbox" id="bankingPaySuggestedResolveAllLinked" ${state.resolveAllLinked ? 'checked' : ''} ${state.busy ? 'disabled' : ''} />
             <span>
-              <strong>Apply to matching timesheets</strong>
-              <div class="mini" style="opacity:.8; margin-top:4px;">
-                ${enc(trimStr(linkedScope.confirmation_text || `This will apply to ${linkedTimesheetCount} matching timesheets for this candidate. Are you sure you wish to continue?`))}
+              <strong>Apply these rate decisions to matching linked timesheets</strong>
+              <div class="mini" style="opacity:.8;margin-top:4px;">
+                ${enc(`This modal shows the current anchor timesheet. If selected, CloudTMS will also apply the same grouped rate decisions to matching unresolved components across ${linkedTimesheetCount} linked timesheet${linkedTimesheetCount === 1 ? '' : 's'} for this candidate.`)}
               </div>
             </span>
           </label>
         </div>
       ` : ''}
 
-      <div class="card" style="padding:10px; margin-top:10px;">
+      <div class="card" style="padding:10px;margin-top:10px;">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <button type="button" class="btn btn-primary" id="bankingPaySuggestedRatesApplyBtn" ${state.busy ? 'disabled' : ''}>${enc(state.busy ? 'Applying…' : 'Apply')}</button>
           ${existingCaseResolution ? `<button type="button" class="btn btn-outline" id="bankingPaySuggestedRatesClearBtn" ${state.busy ? 'disabled' : ''}>Clear resolution</button>` : ''}
@@ -88784,7 +89545,32 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     </div>
   `;
 
-  const buildBucketResolutions = (rowsWithRates) => {
+  const captureSuggestedRateGroupInputValues = () => {
+    suggestedRateGroups.forEach((group, groupIndex) => {
+      if (group.actionableCount <= 0) return;
+      const input = document.getElementById(`bankingPaySuggestedRateInput_${groupIndex}`);
+      if (!input) return;
+      state.finalRateByGroupKey[group.groupKey] = trimStr(input.value);
+    });
+  };
+
+  const buildBucketResolutions = (groupDecisions) => {
+    const rowsWithRates = [];
+    (Array.isArray(groupDecisions) ? groupDecisions : []).forEach((decision) => {
+      const group = decision?.group;
+      const finalTargetRate = decision?.final_target_rate;
+      if (!group || !Array.isArray(group.detailRows)) return;
+      group.detailRows.forEach((row) => {
+        if (row.actionable !== true) return;
+        rowsWithRates.push({
+          ...row,
+          final_target_rate: finalTargetRate
+        });
+      });
+    });
+
+    rowsWithRates.sort((a, b) => Number(a._uiComponentIndex ?? 0) - Number(b._uiComponentIndex ?? 0));
+
     return rowsWithRates.map((row) => {
       const suggested = row.suggested_target_rate;
       const finalRate = row.final_target_rate;
@@ -88806,7 +89592,14 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         source_basis_json: isPlainObject(row.source_basis_json) ? deep(row.source_basis_json) : {},
         source_basis_fingerprint: trimStr(row.source_basis_fingerprint || ''),
         bucket_code: trimStr(row.bucket_code || '') || null,
+        classification: trimStr(row.classification || '') || null,
+        source_pay_method: trimStr(row.source_pay_method || '') || null,
+        target_pay_method: trimStr(row.target_pay_method || '') || null,
+        frozen_component_key_type: trimStr(row.frozen_component_key_type || '') || null,
+        frozen_component_key_value: trimStr(row.frozen_component_key_value || '') || null,
+        component_fingerprint: trimStr(row.component_fingerprint || '') || null,
         source_units: sourceUnits,
+        target_units: round6(row.target_units ?? row.source_units),
         source_rate: round6(row.source_rate),
         source_charge_rate: round6(row.source_charge_rate),
         source_amount_ex_vat: sourceAmount,
@@ -88818,30 +89611,34 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         target_charge_ex_vat: round2(row.suggested_target_charge_ex_vat),
         target_margin_ex_vat: targetMargin,
         margin_delta_ex_vat: (targetMargin !== null && sourceMargin !== null) ? round2(targetMargin - sourceMargin) : null,
+        suggested_resolution_payload_json: isPlainObject(row.suggested_resolution_payload_json) ? deep(row.suggested_resolution_payload_json) : null,
+        suggested_resolution_result_json: isPlainObject(row.suggested_resolution_result_json) ? deep(row.suggested_resolution_result_json) : null,
+        saved_resolution_mode: trimStr(row.saved_resolution_mode || '') || null,
+        saved_resolution_payload_json: isPlainObject(row.saved_resolution_payload_json) ? deep(row.saved_resolution_payload_json) : null,
+        saved_resolution_result_json: isPlainObject(row.saved_resolution_result_json) ? deep(row.saved_resolution_result_json) : null,
         resolution_mode: useSuggested ? 'SUGGESTED_EQUIVALENT_BASIS' : 'MANUAL_REPLACEMENT_RATE'
       };
     });
   };
 
   const readFinalRateInputs = () => {
+    captureSuggestedRateGroupInputValues();
     const out = [];
-    for (let i = 0; i < ctx.components.length; i += 1) {
-      const row = ctx.components[i];
-      if (!row.actionable) continue;
-      const el = document.getElementById(`bankingPaySuggestedRateInput_${i}`);
-      const rawValue = trimStr(el ? el.value : row.suggested_target_rate);
+    for (const group of suggestedRateGroups) {
+      if (group.actionableCount <= 0) continue;
+      const rawValue = getGroupRateRawValue(group);
       if (!rawValue) {
-        return { error: `Final target rate is required for ${row.label}.` };
+        return { error: `Final target rate is required for ${group.errorLabel || group.baseLabel}.` };
       }
       const parsed = Number(rawValue);
       if (!Number.isFinite(parsed) || parsed < 0) {
-        return { error: `Final target rate for ${row.label} must be a non-negative number.` };
+        return { error: `Final target rate for ${group.errorLabel || group.baseLabel} must be a non-negative number.` };
       }
       if (Math.abs((parsed * 100) - Math.round(parsed * 100)) > 1e-9) {
-        return { error: `Final target rate for ${row.label} must have at most 2 decimal places.` };
+        return { error: `Final target rate for ${group.errorLabel || group.baseLabel} must have at most 2 decimal places.` };
       }
       out.push({
-        ...row,
+        group,
         final_target_rate: round2(parsed)
       });
     }
@@ -88942,6 +89739,41 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
 
     const onReturn = () => {
       try {
+        document.querySelectorAll('[data-suggested-rate-group-input="true"]').forEach((input) => {
+          if (input.__wired) return;
+          input.__wired = true;
+          input.addEventListener('input', () => {
+            const groupIndex = Number(input.dataset.groupIndex);
+            const group = suggestedRateGroups[groupIndex];
+            if (!group) return;
+            const rawValue = trimStr(input.value);
+            state.finalRateByGroupKey[group.groupKey] = rawValue;
+            const numeric = Number(rawValue);
+            const displayValue = rawValue && Number.isFinite(numeric) ? fmtMoney(numeric) : (rawValue || '—');
+            document.querySelectorAll(`[data-suggested-rate-mirror-group-index="${groupIndex}"]`).forEach((mirror) => {
+              mirror.textContent = displayValue;
+            });
+          });
+        });
+
+        document.querySelectorAll('[data-suggested-rate-group-toggle="true"]').forEach((button) => {
+          if (button.__wired) return;
+          button.__wired = true;
+          button.addEventListener('click', async () => {
+            if (state.busy) return;
+            captureSuggestedRateGroupInputValues();
+            const groupIndex = Number(button.dataset.groupIndex);
+            const group = suggestedRateGroups[groupIndex];
+            if (!group) return;
+            if (state.expandedSuggestedRateGroupKeys.has(group.groupKey)) {
+              state.expandedSuggestedRateGroupKeys.delete(group.groupKey);
+            } else {
+              state.expandedSuggestedRateGroupKeys.add(group.groupKey);
+            }
+            await rerenderChild();
+          });
+        });
+
         const linkedCheckbox = document.getElementById('bankingPaySuggestedResolveAllLinked');
         if (linkedCheckbox && !linkedCheckbox.__wired) {
           linkedCheckbox.__wired = true;
@@ -89055,6 +89887,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     );
   });
 }
+
 
 
 function closeCurrentModalFrameSafely(options = {}) {
