@@ -47684,8 +47684,6 @@ function deriveBankingAttentionStateFromBatchList(input) {
   };
 }
 
-
-
 function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   const argumentCount = arguments.length;
   const isPlainObject = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -48010,6 +48008,14 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'STANDARD_BANK_NOT_AVAILABLE_FOR_CSV_PROVIDER',
     'EXTERNAL_SUBMISSION_ALREADY_RECORDED',
     'CSV_SETTLEMENT_SCOPE_MUST_BE_ALL',
+    'BANK_CSV_STALE',
+    'CSV_REGENERATION_REQUIRED',
+    'BANK_CSV_REGENERATION_REQUIRED',
+    'CSV_SETTLEMENT_PROOF_INVALID',
+    'BANK_CSV_REQUIRED',
+    'BANK_CSV_NOT_CURRENT',
+    'PAYE_NET_STATE_CHANGED',
+    'BANK_PAYMENT_PROJECTION_CHANGED',
     'CSV_EXPORT_EVIDENCE_REQUIRED',
     'CSV_UPLOADED_CONFIRMATION_REQUIRED',
     'CSV_BANK_CONFIRM_REF_REQUIRED',
@@ -48096,6 +48102,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     if (code === 'PAYMENT_RETRY_BLOCKED_FUNDS_CLEANUP_NOT_SAFE') return 'PAYMENT_RETRY_BLOCKED_FUNDS_CLEANUP_NOT_SAFE';
     if (code === 'PAY_EXECUTE_BANK_FAILED') return 'BANKING_EXECUTE_PAYMENT_FAILED';
     if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (['CSV_REGENERATION_REQUIRED', 'BANK_CSV_REGENERATION_REQUIRED', 'CSV_SETTLEMENT_PROOF_INVALID', 'BANK_CSV_REQUIRED', 'BANK_CSV_NOT_CURRENT', 'PAYE_NET_STATE_CHANGED', 'BANK_PAYMENT_PROJECTION_CHANGED'].includes(code)) return 'BANK_CSV_STALE';
     if (code === 'CSV_UPLOADED_CONFIRMED_MUST_BE_TRUE' || code === 'CSV_UPLOADED_CONFIRMATION_MISSING') return 'CSV_UPLOADED_CONFIRMATION_REQUIRED';
     if (code === 'CSV_BANK_CONFIRM_REF_IS_REQUIRED' || code === 'CSV_BANK_CONFIRMATION_REFERENCE_REQUIRED') return 'CSV_BANK_CONFIRM_REF_REQUIRED';
     if (code === 'EXTERNAL_SETTLEMENT_COMMENT_IS_REQUIRED') return 'EXTERNAL_SETTLEMENT_COMMENT_REQUIRED';
@@ -48161,6 +48168,14 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     if (rawUpper.includes('STANDARD_BANK_NOT_AVAILABLE_FOR_CSV_PROVIDER') || rawUpper.includes('STANDARD BANK EXECUTION IS NOT AVAILABLE FOR CSV')) return 'STANDARD_BANK_NOT_AVAILABLE_FOR_CSV_PROVIDER';
     if (rawUpper.includes('EXTERNAL_SUBMISSION_ALREADY_RECORDED')) return 'EXTERNAL_SUBMISSION_ALREADY_RECORDED';
     if (rawUpper.includes('CSV_SETTLEMENT_SCOPE_MUST_BE_ALL')) return 'CSV_SETTLEMENT_SCOPE_MUST_BE_ALL';
+    if (rawUpper.includes('BANK_CSV_STALE')
+      || rawUpper.includes('CSV_REGENERATION_REQUIRED')
+      || rawUpper.includes('BANK_CSV_REGENERATION_REQUIRED')
+      || rawUpper.includes('CSV_SETTLEMENT_PROOF_INVALID')
+      || rawUpper.includes('BANK_CSV_NOT_CURRENT')
+      || rawUpper.includes('PAYE_NET_STATE_CHANGED')
+      || rawUpper.includes('BANK_PAYMENT_PROJECTION_CHANGED')
+      || (rawUpper.includes('BANK CSV') && (rawUpper.includes('NO LONGER CURRENT') || rawUpper.includes('OUT OF DATE') || rawUpper.includes('REGENERAT')))) return 'BANK_CSV_STALE';
     if (rawUpper.includes('CSV_EXPORT_EVIDENCE_REQUIRED')) return 'CSV_EXPORT_EVIDENCE_REQUIRED';
     if (rawUpper.includes('CSV_UPLOADED_CONFIRMED MUST BE TRUE') || rawUpper.includes('CSV_UPLOADED_CONFIRMATION_REQUIRED')) return 'CSV_UPLOADED_CONFIRMATION_REQUIRED';
     if (rawUpper.includes('CSV_BANK_CONFIRM_REF IS REQUIRED') || rawUpper.includes('CSV_BANK_CONFIRM_REF_REQUIRED')) return 'CSV_BANK_CONFIRM_REF_REQUIRED';
@@ -48248,6 +48263,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   });
 
   const priorityBusinessCodes = [
+    'BANK_CSV_STALE',
     'EXECUTE_PAYMENT_INVALID_REQUEST',
     'EXECUTE_PAYMENT_INVALID_MODE',
     'EXECUTE_PAYMENT_INVALID_PAYMENT_DATE',
@@ -48772,6 +48788,33 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       user_action: 'REFRESH_BATCH',
       confirm_label: 'OK',
       show_modal: true
+    },
+    BANK_CSV_STALE: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Bank CSV file no longer current',
+      message: 'The Bank CSV file is no longer current because PAYE/payment values have changed. No payment has been submitted. Please download the latest Bank CSV file and run CSV settlement again.',
+      user_action: 'DOWNLOAD_LATEST_BANK_CSV',
+      next_required_action: 'DOWNLOAD_LATEST_BANK_CSV',
+      confirm_label: 'OK',
+      show_modal: true,
+      user_correctable: true,
+      retryable: true,
+      stale_bank_csv: true,
+      bank_csv_stale: true,
+      csv_regeneration_required: true,
+      safe_to_retry: true,
+      operation_reset_for_retry: false,
+      operation_created: false,
+      execute_payment_operation_started: false,
+      execute_payment_operation_available: false,
+      provider_submission_required: false,
+      provider_submission_attempted: false,
+      submitted_to_bank: false,
+      local_settlement_evidence_created: false,
+      backend_execution_continues: false,
+      review_required: false
     },
     CSV_SETTLEMENT_SCOPE_MUST_BE_ALL: {
       ok: false,
@@ -49507,6 +49550,17 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'execute_payment_operation_started',
     'submitted_to_bank',
     'provider_submission_attempted',
+    'provider_submission_required',
+    'local_settlement_evidence_created',
+    'execute_payment_operation_available',
+    'user_correctable',
+    'retryable',
+    'stale_bank_csv',
+    'bank_csv_stale',
+    'csv_regeneration_required',
+    'safe_to_retry',
+    'operation_reset_for_retry',
+    'backend_execution_continues',
     'safe_retry_available',
     'retry_blocked',
     'review_required',
@@ -49518,6 +49572,31 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       if (isPlainObject(payload) && Object.prototype.hasOwnProperty.call(payload, safeFlagKey) && typeof payload[safeFlagKey] === 'boolean') result[safeFlagKey] = payload[safeFlagKey];
     }
   }
+
+  const safeNextRequiredAction = (() => {
+    const candidates = [template.next_required_action, template.nextRequiredAction, contextInput.next_required_action, contextInput.nextRequiredAction];
+    for (const payload of payloads) {
+      if (isPlainObject(payload)) candidates.push(payload.next_required_action, payload.nextRequiredAction);
+    }
+    for (const value of candidates) {
+      const text = safeTrim(value).toUpperCase();
+      if (text && text.length <= 100 && /^[A-Z0-9_:-]+$/.test(text)) return text;
+    }
+    return '';
+  })();
+  if (safeNextRequiredAction) {
+    result.next_required_action = safeNextRequiredAction;
+    result.nextRequiredAction = safeNextRequiredAction;
+  }
+  if (typeof result.user_correctable === 'boolean') result.userCorrectable = result.user_correctable;
+  if (typeof result.csv_regeneration_required === 'boolean') result.csvRegenerationRequired = result.csv_regeneration_required;
+  if (typeof result.bank_csv_stale === 'boolean') result.bankCsvStale = result.bank_csv_stale;
+  if (typeof result.safe_to_retry === 'boolean') result.safeToRetry = result.safe_to_retry;
+  if (typeof result.operation_reset_for_retry === 'boolean') result.operationResetForRetry = result.operation_reset_for_retry;
+  if (typeof result.provider_submission_required === 'boolean') result.providerSubmissionRequired = result.provider_submission_required;
+  if (typeof result.provider_submission_attempted === 'boolean') result.providerSubmissionAttempted = result.provider_submission_attempted;
+  if (typeof result.submitted_to_bank === 'boolean') result.submittedToBank = result.submitted_to_bank;
+  if (typeof result.backend_execution_continues === 'boolean') result.backendExecutionContinues = result.backend_execution_continues;
 
   const diagnosticStage = (() => {
     const candidates = [contextInput.diagnostic_stage, contextInput.diagnosticStage, contextInput.stage];
@@ -49569,7 +49648,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     }
   };
 
-  if (result.provider_submission_attempted === false && !/no\s+bank\s+submission\s+was\s+attempted/i.test(result.message || '')) {
+  if (errorCode !== 'BANK_CSV_STALE' && result.provider_submission_attempted === false && !/no\s+bank\s+submission\s+was\s+attempted/i.test(result.message || '')) {
     const noAttemptMessage = `${safeTrim(result.message)} No bank submission was attempted.`.trim();
     updateResultMessage(noAttemptMessage);
   }
@@ -49597,6 +49676,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 
   return result;
 }
+
 
 
 function updateBankingNavAttentionState(attentionState) {
@@ -58393,6 +58473,8 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     ? 'BANK_CSV_SCOPE_MISMATCH'
     : (strField('bank_csv_stale_reason', 'bankCsvStaleReason') || String(bankCsvEvidence.bank_csv_stale_reason || '').trim());
   const csvGeneratedAtUtc = String(bankCsvEvidence.generated_at_utc || strField('csv_file_generated_at_utc', 'csvFileGeneratedAtUtc') || '').trim();
+  const staleBankCsvMessage = 'The Bank CSV file is no longer current because PAYE/payment values have changed. Please download the latest Bank CSV file and then run CSV settlement again.';
+  const bankCsvCurrentnessLabel = bankCsvGenerated ? (bankCsvCurrent ? 'Current' : 'No longer current') : 'Missing';
   const accountingPaymentDate = String(
     fieldValue('authoritative_payment_date', 'authoritativePaymentDate', 'payment_date', 'paymentDate', 'pay_date', 'payDate') || ''
   ).trim();
@@ -58825,12 +58907,10 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
   } else {
     if (!csvGenerated) {
       modeInfo.CSV_SETTLEMENT.enabled = false;
-      modeInfo.CSV_SETTLEMENT.disabledReason = 'Generate the Bank CSV before using manual CSV settlement.';
+      modeInfo.CSV_SETTLEMENT.disabledReason = staleBankCsvMessage;
     } else if (!csvMatches) {
       modeInfo.CSV_SETTLEMENT.enabled = false;
-      modeInfo.CSV_SETTLEMENT.disabledReason = bankCsvStaleReason
-        ? 'The Bank CSV is no longer current. Regenerate it before manual CSV settlement.'
-        : 'The Bank CSV is no longer current. Regenerate it before manual CSV settlement.';
+      modeInfo.CSV_SETTLEMENT.disabledReason = staleBankCsvMessage;
     } else if (!modeInfo.CSV_SETTLEMENT.enabled && !modeInfo.CSV_SETTLEMENT.disabledReason) {
       modeInfo.CSV_SETTLEMENT.disabledReason = 'CSV settlement is unavailable for this batch.';
     }
@@ -58986,7 +59066,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
                         <div style="font-weight:700;">${enc(mi.label)}</div>
                         <div style="opacity:.85;">${enc(mi.desc)}</div>
                         ${(!mi.enabled && mi.disabledReason) ? `<div class="mini" style="color:#b26b00;margin-top:4px;">${enc(mi.disabledReason)}</div>` : ''}
-                        ${(k === 'CSV_SETTLEMENT' && csvGeneratedAtUtc) ? `<div class="mini" style="opacity:.75;margin-top:4px;">CSV generated: ${enc(csvGeneratedAtUtc)}</div>` : ''}
+                        ${k === 'CSV_SETTLEMENT' ? `<div class="mini" style="opacity:.8;margin-top:4px;">Bank CSV status: <strong>${enc(bankCsvCurrentnessLabel)}</strong>${csvGeneratedAtUtc ? ` • generated ${enc(csvGeneratedAtUtc)}` : ''}</div>` : ''}
                       </span>
                     </label>`;
                   }).join('')}
@@ -59285,6 +59365,11 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
           if (id !== 'payExecConfirmBtn') return;
 
           const mode = String(state.execution_mode || '').trim().toUpperCase();
+          if (mode === 'CSV_SETTLEMENT' && (!csvGenerated || !csvMatches)) {
+            state.err = staleBankCsvMessage;
+            rerender();
+            return;
+          }
           if (!modeInfo[mode] || !modeInfo[mode].enabled) {
             state.err = (modeInfo[mode] && modeInfo[mode].disabledReason) ? modeInfo[mode].disabledReason : 'Selected mode is unavailable.';
             rerender();
@@ -59349,6 +59434,11 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
           }
 
           if (mode === 'CSV_SETTLEMENT') {
+            if (!csvGenerated || !csvMatches) {
+              state.err = staleBankCsvMessage;
+              rerender();
+              return;
+            }
             if (!state.csv_uploaded_confirmed) {
               state.err = pureAllZero
                 ? 'Confirm that you reviewed the current zero-row CloudTMS Bank CSV and that no bank payment was required.'
@@ -59410,9 +59500,6 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
 
 
 
-
-
-
 async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
   const id = String(payBatchId || '').trim();
   if (!id) throw new Error('bankingPayBatchExecutePayment: payBatchId is required');
@@ -59458,6 +59545,32 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
     const obj = isPlainObject(value) ? value : {};
     return normaliseBusinessCode(obj.error_code || obj.errorCode || obj.code || '');
   };
+  const staleBankCsvBusinessCodes = new Set([
+    'BANK_CSV_STALE',
+    'CSV_REGENERATION_REQUIRED',
+    'BANK_CSV_REGENERATION_REQUIRED',
+    'CSV_SETTLEMENT_PROOF_INVALID',
+    'BANK_CSV_REQUIRED',
+    'BANK_CSV_NOT_CURRENT',
+    'PAYE_NET_STATE_CHANGED',
+    'BANK_PAYMENT_PROJECTION_CHANGED'
+  ]);
+  const staleBankCsvMessage = 'The Bank CSV file is no longer current because PAYE/payment values have changed. No payment has been submitted. Please download the latest Bank CSV file, then run CSV settlement again.';
+  const isStaleBankCsvCode = (value) => staleBankCsvBusinessCodes.has(normaliseBusinessCode(value));
+  const refreshBatchAfterStaleBankCsv = async () => {
+    try {
+      if (typeof forceRefreshBankingPayBatchChildModalAfterOperation === 'function') {
+        await forceRefreshBankingPayBatchChildModalAfterOperation(id, '', 'bank-csv-stale-pre-operation', {
+          source: 'bankingPayBatchExecutePayment',
+          force: true,
+          refreshOverview: true,
+          refreshPaymentStatus: true,
+          refreshAlerts: true
+        });
+      }
+    } catch {}
+  };
+
   const preOperationBusinessCodes = new Set([
     'EXECUTE_PAYMENT_INVALID_REQUEST',
     'EXECUTE_PAYMENT_INVALID_MODE',
@@ -59489,6 +59602,12 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
     'PAYMENT_PROJECTION_CHANGED_DURING_PREFLIGHT',
     'BANK_CSV_REQUIRED',
     'BANK_CSV_STALE',
+    'CSV_REGENERATION_REQUIRED',
+    'BANK_CSV_REGENERATION_REQUIRED',
+    'CSV_SETTLEMENT_PROOF_INVALID',
+    'BANK_CSV_NOT_CURRENT',
+    'PAYE_NET_STATE_CHANGED',
+    'BANK_PAYMENT_PROJECTION_CHANGED',
     'CSV_UPLOAD_CONFIRMATION_REQUIRED',
     'ZERO_ROW_CSV_REVIEW_CONFIRMATION_REQUIRED',
     'CSV_BANK_CONFIRM_REF_REQUIRED',
@@ -59516,6 +59635,16 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
       'execute_payment_operation_available',
       'submitted_to_bank',
       'provider_submission_attempted',
+      'provider_submission_required',
+      'local_settlement_evidence_created',
+      'user_correctable',
+      'retryable',
+      'csv_regeneration_required',
+      'bank_csv_stale',
+      'operation_reset_for_retry',
+      'safe_to_retry',
+      'backend_execution_continues',
+      'next_required_action',
       'diagnostic_stage',
       'pay_batch_id',
       'review_required',
@@ -59536,6 +59665,15 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
       executePaymentOperationAvailable: 'execute_payment_operation_available',
       submittedToBank: 'submitted_to_bank',
       providerSubmissionAttempted: 'provider_submission_attempted',
+      providerSubmissionRequired: 'provider_submission_required',
+      localSettlementEvidenceCreated: 'local_settlement_evidence_created',
+      userCorrectable: 'user_correctable',
+      csvRegenerationRequired: 'csv_regeneration_required',
+      bankCsvStale: 'bank_csv_stale',
+      operationResetForRetry: 'operation_reset_for_retry',
+      safeToRetry: 'safe_to_retry',
+      backendExecutionContinues: 'backend_execution_continues',
+      nextRequiredAction: 'next_required_action',
       diagnosticStage: 'diagnostic_stage',
       payBatchId: 'pay_batch_id',
       reviewRequired: 'review_required',
@@ -59818,6 +59956,50 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
     if (authFailure) {
       try { friendlyError.is_auth_failure = true; } catch {}
     }
+    const staleCode = readBusinessCode(parsed) || readBusinessCode(friendlyError) || normaliseBusinessCode(friendlyError?.error_code || friendlyError?.code);
+    if (isStaleBankCsvCode(staleCode)) {
+      try {
+        friendlyError.message = staleBankCsvMessage;
+        friendlyError.error_code = staleCode === 'CSV_REGENERATION_REQUIRED' || staleCode === 'BANK_CSV_REGENERATION_REQUIRED' ? 'BANK_CSV_STALE' : staleCode;
+        friendlyError.code = friendlyError.error_code;
+        friendlyError.user_correctable = true;
+        friendlyError.retryable = true;
+        friendlyError.csv_regeneration_required = true;
+        friendlyError.bank_csv_stale = true;
+        friendlyError.safe_to_retry = true;
+        friendlyError.operation_created = false;
+        friendlyError.execute_payment_operation_started = false;
+        friendlyError.execute_payment_operation_available = false;
+        friendlyError.provider_submission_required = false;
+        friendlyError.provider_submission_attempted = false;
+        friendlyError.submitted_to_bank = false;
+        friendlyError.local_settlement_evidence_created = false;
+        friendlyError.backend_execution_continues = false;
+        friendlyError.next_required_action = 'DOWNLOAD_LATEST_BANK_CSV';
+        if (isPlainObject(friendlyError.json)) {
+          Object.assign(friendlyError.json, {
+            message: staleBankCsvMessage,
+            error: staleBankCsvMessage,
+            user_message: staleBankCsvMessage,
+            user_correctable: true,
+            retryable: true,
+            csv_regeneration_required: true,
+            bank_csv_stale: true,
+            safe_to_retry: true,
+            operation_created: false,
+            execute_payment_operation_started: false,
+            execute_payment_operation_available: false,
+            provider_submission_required: false,
+            provider_submission_attempted: false,
+            submitted_to_bank: false,
+            local_settlement_evidence_created: false,
+            backend_execution_continues: false,
+            next_required_action: 'DOWNLOAD_LATEST_BANK_CSV'
+          });
+        }
+      } catch {}
+      await refreshBatchAfterStaleBankCsv();
+    }
     throw friendlyError;
   }
 
@@ -59857,7 +60039,28 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
     const fallbackCode = preOperationBusinessCodes.has(operationPayloadCode)
       ? operationPayloadCode
       : 'PAYMENT_EXECUTE_OPERATION_START_FAILED';
-    throw makeFriendlyError(operationPayload, operationPayload, { fallbackCode });
+    const friendlyError = makeFriendlyError(operationPayload, operationPayload, { fallbackCode });
+    if (isStaleBankCsvCode(operationPayloadCode || fallbackCode)) {
+      try {
+        friendlyError.message = staleBankCsvMessage;
+        friendlyError.user_correctable = true;
+        friendlyError.retryable = true;
+        friendlyError.csv_regeneration_required = true;
+        friendlyError.bank_csv_stale = true;
+        friendlyError.safe_to_retry = true;
+        friendlyError.operation_created = false;
+        friendlyError.execute_payment_operation_started = false;
+        friendlyError.execute_payment_operation_available = false;
+        friendlyError.provider_submission_required = false;
+        friendlyError.provider_submission_attempted = false;
+        friendlyError.submitted_to_bank = false;
+        friendlyError.local_settlement_evidence_created = false;
+        friendlyError.backend_execution_continues = false;
+        friendlyError.next_required_action = 'DOWNLOAD_LATEST_BANK_CSV';
+      } catch {}
+      await refreshBatchAfterStaleBankCsv();
+    }
+    throw friendlyError;
   }
 
   let progress = operationPayload;
@@ -59903,6 +60106,9 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
     status: progress?.status || operationPayload?.status || null
   };
 }
+
+
+
 
 
 
@@ -159712,6 +159918,9 @@ function bulkAuthoriseHasProcessedExpensesValue(ctxInput) {
 }
 
 
+
+
+
 function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOptions = {}) {
   const inputIsOptions = operationOrOptions && typeof operationOrOptions === 'object' && !Array.isArray(operationOrOptions) && (
     Object.prototype.hasOwnProperty.call(operationOrOptions, 'operation') ||
@@ -159780,6 +159989,28 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   };
   const operationErrorCode = (operationState) => firstText(operationState?.error_code, operationState?.errorCode, operationState?.code, operationState?.error?.code, operationState?.small_error_summary?.code);
   const operationErrorMessage = (operationState) => firstText(operationState?.error_message, operationState?.errorMessage, operationState?.message, operationState?.error?.message, operationState?.small_error_summary?.message);
+  const bankCsvStaleTitle = 'Bank CSV file no longer current';
+  const bankCsvStaleMessage = 'The Bank CSV file is no longer current because PAYE/payment values changed while payment execution was being prepared. Nothing was submitted to the bank. Download the latest Bank CSV file and run CSV settlement again.';
+  const isStaleBankCsvRetryState = (operationState) => {
+    const op = operationState && typeof operationState === 'object' ? operationState : {};
+    const operationType = upperTrim(op.operation_type || op.operationType || op.type || '');
+    const action = upperTrim(op.next_required_action || op.nextRequiredAction || op.recommended_action || op.recommendedAction || '');
+    const outcome = upperTrim(op.execution_outcome || op.executionOutcome || '');
+    const boundaryCount = Number(op.provider_boundary_evidence_count ?? op.providerBoundaryEvidenceCount ?? 0);
+    return operationType === 'PAYMENT_EXECUTE'
+      && (readBool(op.bank_csv_stale) || readBool(op.bankCsvStale) || outcome === 'BANK_CSV_STALE')
+      && (readBool(op.csv_regeneration_required) || readBool(op.csvRegenerationRequired) || action === 'DOWNLOAD_LATEST_BANK_CSV')
+      && readBool(op.user_correctable || op.userCorrectable)
+      && readBool(op.retryable)
+      && readBool(op.operation_reset_for_retry || op.operationResetForRetry)
+      && readBool(op.safe_to_retry || op.safeToRetry || op.safe_retry_available || op.safeRetryAvailable)
+      && action === 'DOWNLOAD_LATEST_BANK_CSV'
+      && !readBool(op.submitted_to_bank || op.submittedToBank)
+      && !readBool(op.provider_submission_attempted || op.providerSubmissionAttempted)
+      && !readBool(op.provider_submission_required || op.providerSubmissionRequired)
+      && !readBool(op.provider_ambiguity || op.providerAmbiguity)
+      && (!Number.isFinite(boundaryCount) || boundaryCount <= 0);
+  };
 
   let state = normalise(suppliedOperation || {});
   if (!state.operation_id && opts.operation_id) state.operation_id = trimStr(opts.operation_id);
@@ -159792,8 +160023,9 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   const executionOutcomeStatusText = (operationState) => trimStr(operationState?.execution_outcome_status_text || operationState?.payment_execution_outcome_status_text || '');
   const executionOutcomeCountText = (operationState) => trimStr(operationState?.execution_outcome_count_text || operationState?.payment_execution_outcome_count_text || '');
   const hasExecutionOutcome = (operationState) => !!trimStr(operationState?.execution_outcome || operationState?.executionOutcome || '') || !!executionOutcomeTitle(operationState) || !!executionOutcomeStatusText(operationState);
-  const displayTitleForOperation = (operationState) => executionOutcomeTitle(operationState) || operationState?.title || 'Payment execution status';
+  const displayTitleForOperation = (operationState) => isStaleBankCsvRetryState(operationState) ? bankCsvStaleTitle : (executionOutcomeTitle(operationState) || operationState?.title || 'Payment execution status');
   const displayStatusForOperation = (operationState) => {
+    if (isStaleBankCsvRetryState(operationState)) return bankCsvStaleMessage;
     if (hasExecutionOutcome(operationState)) return executionOutcomeStatusText(operationState) || operationState?.status_text || '';
     const backendDraft = isBackendOwnedDraftCreateOperation(operationState);
     const failedDraft = backendDraft && (operationState?.failed === true || ['FAILED', 'ERROR'].includes(operationStatus(operationState)));
@@ -159815,6 +160047,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     return `${operationState?.phase_label || 'Processing'}${operationState?.status_text ? ` — ${operationState.status_text}` : ''}`;
   };
   const displayFinalTextForOperation = (operationState) => {
+    if (isStaleBankCsvRetryState(operationState)) return bankCsvStaleMessage;
     if (hasExecutionOutcome(operationState)) {
       const main = executionOutcomeStatusText(operationState) || operationState?.status_text || '';
       const counts = executionOutcomeCountText(operationState);
@@ -159847,7 +160080,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   const isBackendOwnedDraftCreateOperation = (operationState) => isBackendOwnedBankingPayOperation(operationState) && operationTypeOf(operationState) === 'DRAFT_CREATE';
   const isTerminal = (operationState) => operationState?.terminal === true || ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED'].includes(operationStatus(operationState));
   const isWaitingAuthorisation = (operationState) => operationState?.waiting_for_authorisation === true || operationState?.waitingForAuthorisation === true || ['WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'AUTHORISATION_REQUIRED', 'AUTHORIZATION_REQUIRED'].includes(operationStatus(operationState));
-  const isReviewRequired = (operationState) => operationState?.review_required === true || operationState?.reviewRequired === true || ['REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW'].includes(operationStatus(operationState));
+  const isReviewRequired = (operationState) => isStaleBankCsvRetryState(operationState) ? false : (operationState?.review_required === true || operationState?.reviewRequired === true || ['REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW'].includes(operationStatus(operationState)));
   const operationPayBatchId = (operationState) => firstText(operationState?.pay_batch_id, operationState?.payBatchId, operationState?.primary_pay_batch_id, operationState?.primaryPayBatchId, operationState?.input_json?.pay_batch_id, operationState?.inputJson?.payBatchId, opts.payBatchId, opts.pay_batch_id);
   const operationIdForRefresh = (operationState) => firstText(operationState?.operation_id, operationState?.operationId, operationState?.id, opts.operationId, opts.operation_id);
   const isPaymentExecuteOperation = (operationState) => operationTypeOf(operationState || {}) === 'PAYMENT_EXECUTE' || upperTrim(opts.operationType || opts.operation_type) === 'PAYMENT_EXECUTE';
@@ -159918,6 +160151,14 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   const buildDraftCreateProgressModalActions = (operationState) => {
     const backendDraft = isBackendOwnedDraftCreateOperation(operationState);
     const backendBankingPay = isBackendOwnedBankingPayOperation(operationState);
+    if (isStaleBankCsvRetryState(operationState)) {
+      return {
+        show_nudge: false,
+        show_refresh: true,
+        close_label: 'Close',
+        safe_close_text: 'No backend payment work is continuing. Close this window, download the latest Bank CSV file, and run CSV settlement again.'
+      };
+    }
     return {
       show_nudge: backendBankingPay ? false : operationCanSafelyNudge(operationState),
       show_refresh: true,
@@ -160044,6 +160285,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     return d.toLocaleString('en-GB', { hour12: false });
   };
   const summariseReview = (operationState) => {
+    if (isStaleBankCsvRetryState(operationState)) return '';
     const parts = [];
     if (operationState?.review_reason_code) parts.push(`Reason: ${operationState.review_reason_code}`);
     if (operationState?.recommended_action) parts.push(`Recommended action: ${operationState.recommended_action}`);
@@ -160634,10 +160876,6 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   schedulePoll();
   return controller;
 }
-
-
-
-
 
 
 
@@ -193727,7 +193965,6 @@ const getAttachedEvidenceId = (item) => {
   });
 }
 
-
 function normaliseBankingPayOperationProgress(operationPayload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const upperTrim = (value) => trimStr(value).toUpperCase();
@@ -194660,6 +194897,92 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     || providerErrorEvidence === true
     || providerOutcomeCountEvidence === true;
 
+  const anyExecutionBoolTrue = (...keys) => paymentExecutionEvidenceSources.some((source) => {
+    if (!isPlainObject(source)) return false;
+    return keys.some((key) => boolFromProviderDiagnostic(source[key]) === true);
+  });
+  const maxExecutionNumber = (...keys) => paymentExecutionEvidenceSources.reduce((maxValue, source) => {
+    if (!isPlainObject(source)) return maxValue;
+    let nextMax = maxValue;
+    for (const key of keys) {
+      const value = Number(source[key]);
+      if (Number.isFinite(value)) nextMax = Math.max(nextMax, value);
+    }
+    return nextMax;
+  }, 0);
+  const allExecutionTexts = (...keys) => paymentExecutionEvidenceSources.flatMap((source) => {
+    if (!isPlainObject(source)) return [];
+    return keys.map((key) => trimStr(source[key])).filter(Boolean);
+  });
+  const bankCsvStaleCodes = new Set([
+    'BANK_CSV_STALE',
+    'BANK_CSV_NOT_CURRENT',
+    'CSV_REGENERATION_REQUIRED',
+    'BANK_CSV_REGENERATION_REQUIRED',
+    'PAYE_NET_STATE_CHANGED',
+    'BANK_PAYMENT_PROJECTION_CHANGED',
+    'BANK_CSV_SCOPE_MISMATCH',
+    'BANK_CSV_ROW_COUNT_CHANGED',
+    'BANK_CSV_TOTAL_CHANGED'
+  ]);
+  const executionModes = allExecutionTexts('execution_mode', 'executionMode').map(upperTrim);
+  const executionCodes = allExecutionTexts(
+    'code',
+    'error_code',
+    'errorCode',
+    'business_code',
+    'businessCode',
+    'review_reason_code',
+    'reviewReasonCode'
+  ).map(upperTrim);
+  const nextRequiredActions = allExecutionTexts('next_required_action', 'nextRequiredAction', 'recommended_action', 'recommendedAction').map(upperTrim);
+  const csvSettlementModeConfirmed = executionModes.includes('CSV_SETTLEMENT');
+  const explicitBankCsvStaleSignal = executionCodes.some((code) => bankCsvStaleCodes.has(code))
+    || anyExecutionBoolTrue('bank_csv_stale', 'bankCsvStale', 'csv_regeneration_required', 'csvRegenerationRequired')
+    || nextRequiredActions.includes('DOWNLOAD_LATEST_BANK_CSV');
+  const staleCsvOperationReset = anyExecutionBoolTrue('operation_reset_for_retry', 'operationResetForRetry');
+  const staleCsvSafeToRetry = anyExecutionBoolTrue('safe_to_retry', 'safeToRetry', 'safe_retry_available', 'safeRetryAvailable');
+  const staleCsvUserCorrectable = anyExecutionBoolTrue('user_correctable', 'userCorrectable');
+  const staleCsvRetryable = anyExecutionBoolTrue('retryable');
+  const staleCsvProviderSubmissionRequired = anyExecutionBoolTrue('provider_submission_required', 'providerSubmissionRequired');
+  const staleCsvProviderSubmissionAttempted = providerSubmissionAttemptedEvidence === true
+    || anyExecutionBoolTrue('provider_submission_attempted', 'providerSubmissionAttempted', 'provider_called', 'providerCalled');
+  const staleCsvSubmittedToBank = providerRequestSentEvidence === true
+    || providerResponsePresentEvidence === true
+    || anyExecutionBoolTrue('submitted_to_bank', 'submittedToBank');
+  const staleCsvProviderBoundaryEvidenceCount = maxExecutionNumber(
+    'provider_boundary_evidence_count',
+    'providerBoundaryEvidenceCount',
+    'provider_scope_evidence_count',
+    'providerScopeEvidenceCount',
+    'provider_attempt_row_count',
+    'providerAttemptRowCount',
+    'provider_event_count',
+    'providerEventCount'
+  );
+  const staleCsvProviderAmbiguity = anyExecutionBoolTrue(
+    'provider_ambiguity',
+    'providerAmbiguity',
+    'provider_submission_unknown',
+    'providerSubmissionUnknown',
+    'manual_resolution_required',
+    'manualResolutionRequired'
+  );
+  const staleBankCsvRetryState = operationType === 'PAYMENT_EXECUTE'
+    && csvSettlementModeConfirmed
+    && explicitBankCsvStaleSignal
+    && staleCsvOperationReset
+    && staleCsvSafeToRetry
+    && staleCsvUserCorrectable
+    && staleCsvRetryable
+    && staleCsvProviderSubmissionRequired !== true
+    && staleCsvProviderSubmissionAttempted !== true
+    && staleCsvSubmittedToBank !== true
+    && staleCsvProviderBoundaryEvidenceCount <= 0
+    && staleCsvProviderAmbiguity !== true
+    && hasProviderSubmitEvidence !== true;
+  const staleBankCsvRetryMessage = 'The Bank CSV file is no longer current because PAYE/payment values changed while payment execution was being prepared. Nothing was submitted to the bank. Download the latest Bank CSV file and run CSV settlement again.';
+
   const sourceHasRawBlockedFundsEvidence = (source) => {
     if (!isPlainObject(source)) return false;
     if (source.blocked_funds === true || source.blockedFunds === true) return true;
@@ -194721,7 +195044,34 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     || providerRequestSentCount > 0
     || providerResponsePresentCount > 0
     || hasProviderSubmitEvidence === true
-    || blockedFundsOutcome === true;
+    || blockedFundsOutcome === true
+    || staleBankCsvRetryState === true;
+
+  const effectiveReviewRequired = staleBankCsvRetryState ? false : reviewRequiredFinal;
+  const effectiveRequiresUserAction = staleBankCsvRetryState ? false : requiresUserAction;
+  const effectiveCanAdvance = staleBankCsvRetryState ? false : canAdvance;
+  const effectiveCanCancel = staleBankCsvRetryState ? false : canCancel;
+  const effectiveWaitingForProvider = staleBankCsvRetryState ? false : waitingForProvider;
+  const effectiveWaitingForAuthorisation = staleBankCsvRetryState ? false : waitingForAuthorisation;
+  const effectiveBackendExecutionContinues = staleBankCsvRetryState
+    ? false
+    : (!terminal && (serverRunning || leaseActive || runnerState === 'RUNNING' || runnerState === 'RUNNABLE' || waitingForProvider || runAfterInFuture));
+  const effectiveStillRunning = staleBankCsvRetryState ? false : (!terminal && !reviewRequiredFinal && !waitingForAuthorisation);
+  const staleBankCsvError = staleBankCsvRetryState ? {
+    code: 'BANK_CSV_STALE',
+    error_code: 'BANK_CSV_STALE',
+    message: staleBankCsvRetryMessage,
+    user_correctable: true,
+    retryable: true,
+    bank_csv_stale: true,
+    csv_regeneration_required: true,
+    next_required_action: 'DOWNLOAD_LATEST_BANK_CSV',
+    submitted_to_bank: false,
+    provider_submission_attempted: false,
+    provider_submission_required: false,
+    operation_reset_for_retry: true,
+    safe_to_retry: true
+  } : null;
 
   let executionOutcome = '';
   let executionOutcomeTitle = '';
@@ -194729,7 +195079,11 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
   let executionOutcomeCountText = '';
 
   if (terminal && hasPaymentExecutionOutcomeEvidence && !isRetryUnsentOperation) {
-    if (blockedFundsOutcome === true) {
+    if (staleBankCsvRetryState === true) {
+      executionOutcome = 'BANK_CSV_STALE';
+      executionOutcomeTitle = 'Bank CSV file no longer current';
+      executionOutcomeStatusText = staleBankCsvRetryMessage;
+    } else if (blockedFundsOutcome === true) {
       executionOutcome = 'BLOCKED_FUNDS';
       executionOutcomeTitle = 'Payment blocked — insufficient funds';
       executionOutcomeStatusText = 'No bank submission was attempted because the selected funding account did not have enough available balance.';
@@ -194832,9 +195186,15 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     provider_request_sent_count: providerRequestSentCount,
     provider_response_present_count: providerResponsePresentCount,
     blocked_funds_count: blockedFundsCount,
-    blocked_funds: blockedFundsOutcome === true,
-    submitted_to_bank: providerRequestSentEvidence === true || providerResponsePresentEvidence === true,
-    provider_submission_attempted: providerSubmissionAttemptedEvidence === true,
+    blocked_funds: staleBankCsvRetryState ? false : blockedFundsOutcome === true,
+    submitted_to_bank: staleBankCsvRetryState ? false : (providerRequestSentEvidence === true || providerResponsePresentEvidence === true),
+    submittedToBank: staleBankCsvRetryState ? false : (providerRequestSentEvidence === true || providerResponsePresentEvidence === true),
+    provider_submission_attempted: staleBankCsvRetryState ? false : providerSubmissionAttemptedEvidence === true,
+    providerSubmissionAttempted: staleBankCsvRetryState ? false : providerSubmissionAttemptedEvidence === true,
+    provider_submission_required: staleBankCsvRetryState ? false : anyExecutionBoolTrue('provider_submission_required', 'providerSubmissionRequired'),
+    providerSubmissionRequired: staleBankCsvRetryState ? false : anyExecutionBoolTrue('provider_submission_required', 'providerSubmissionRequired'),
+    provider_boundary_evidence_count: staleBankCsvRetryState ? 0 : staleCsvProviderBoundaryEvidenceCount,
+    providerBoundaryEvidenceCount: staleBankCsvRetryState ? 0 : staleCsvProviderBoundaryEvidenceCount,
     total_units: totalUnits,
     completed_units: completedUnits,
     failed_units: failedUnits,
@@ -194865,22 +195225,22 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     displayCounters,
     progress_counters: displayCounters,
     progressCounters: displayCounters,
-    can_advance: canAdvance,
-    canAdvance,
-    can_nudge: backendOwnedDraftCreate ? false : canAdvance,
-    canNudge: backendOwnedDraftCreate ? false : canAdvance,
-    can_resume: backendOwnedDraftCreate ? false : canAdvance,
-    canResume: backendOwnedDraftCreate ? false : canAdvance,
-    can_cancel: canCancel,
+    can_advance: effectiveCanAdvance,
+    canAdvance: effectiveCanAdvance,
+    can_nudge: backendOwnedDraftCreate ? false : effectiveCanAdvance,
+    canNudge: backendOwnedDraftCreate ? false : effectiveCanAdvance,
+    can_resume: backendOwnedDraftCreate ? false : effectiveCanAdvance,
+    canResume: backendOwnedDraftCreate ? false : effectiveCanAdvance,
+    can_cancel: effectiveCanCancel,
     terminal,
     complete,
     failed,
     cancelled,
-    review_required: reviewRequiredFinal,
-    reviewRequired: reviewRequiredFinal,
-    requires_user_action: requiresUserAction,
-    requiresUserAction,
-    waiting: waiting || waitingForProvider || waitingForAuthorisation || runAfterInFuture,
+    review_required: effectiveReviewRequired,
+    reviewRequired: effectiveReviewRequired,
+    requires_user_action: effectiveRequiresUserAction,
+    requiresUserAction: effectiveRequiresUserAction,
+    waiting: staleBankCsvRetryState ? false : (waiting || waitingForProvider || waitingForAuthorisation || runAfterInFuture),
     runner_state: runnerState || null,
     runnerState: runnerState || null,
     server_running: serverRunning,
@@ -194916,15 +195276,15 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     retryAfterMs,
     locked_by: leaseOwner || src.locked_by || progress.locked_by || null,
     lock_expires_at_utc: leaseExpiresAtUtc || src.lock_expires_at_utc || progress.lock_expires_at_utc || null,
-    waiting_for_authorisation: waitingForAuthorisation,
-    waitingForAuthorisation,
-    waiting_for_provider: waitingForProvider,
-    waitingForProvider,
-    waiting_for_preview: waiting && phase === 'WAIT_FOR_PREVIEW_READY',
-    backend_execution_continues: !terminal && (serverRunning || leaseActive || runnerState === 'RUNNING' || runnerState === 'RUNNABLE' || waitingForProvider || runAfterInFuture),
-    backendExecutionContinues: !terminal && (serverRunning || leaseActive || runnerState === 'RUNNING' || runnerState === 'RUNNABLE' || waitingForProvider || runAfterInFuture),
-    still_running: !terminal && !reviewRequiredFinal && !waitingForAuthorisation,
-    stillRunning: !terminal && !reviewRequiredFinal && !waitingForAuthorisation,
+    waiting_for_authorisation: effectiveWaitingForAuthorisation,
+    waitingForAuthorisation: effectiveWaitingForAuthorisation,
+    waiting_for_provider: effectiveWaitingForProvider,
+    waitingForProvider: effectiveWaitingForProvider,
+    waiting_for_preview: staleBankCsvRetryState ? false : (waiting && phase === 'WAIT_FOR_PREVIEW_READY'),
+    backend_execution_continues: effectiveBackendExecutionContinues,
+    backendExecutionContinues: effectiveBackendExecutionContinues,
+    still_running: effectiveStillRunning,
+    stillRunning: effectiveStillRunning,
     provider_submission_started: providerSubmissionStarted,
     pay_batch_id: primaryPayBatchId,
     pay_batch_ids: batchIdUniverse,
@@ -194933,13 +195293,14 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     umbrella_pay_batch_id: umbrellaPayBatchId,
     created_batches: createdBatches,
     result: finalResult,
-    error: finalError,
+    error: staleBankCsvError || finalError,
     provider_submit_diagnostic: providerSubmitDiagnosticEvidencePresent ? providerSubmitDiagnostic : null,
     provider_submission_status: providerSubmissionStatus || null,
     review_reason_code: providerSubmitReviewReasonCode || null,
-    manual_resolution_required: providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.manual_resolution_required === true,
-    safe_retry_available: providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.safe_retry_available === true,
-    recommended_action: providerSubmitDiagnosticEvidencePresent ? (trimStr(providerSubmitDiagnostic.recommended_action) || null) : null,
+    manual_resolution_required: staleBankCsvRetryState ? false : (providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.manual_resolution_required === true),
+    safe_retry_available: staleBankCsvRetryState ? true : (providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.safe_retry_available === true),
+    safeRetryAvailable: staleBankCsvRetryState ? true : (providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.safe_retry_available === true),
+    recommended_action: staleBankCsvRetryState ? 'DOWNLOAD_LATEST_BANK_CSV' : (providerSubmitDiagnosticEvidencePresent ? (trimStr(providerSubmitDiagnostic.recommended_action) || null) : null),
     provider_called: providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.provider_called === true,
     provider_request_sent: providerRequestSentEvidence === true,
     provider_request_sent_confirmed: providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.provider_request_sent_confirmed === true,
@@ -194947,11 +195308,25 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     provider_response_present: providerResponsePresentEvidence === true,
     provider_response_received: (providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.provider_response_received === true) || providerResponsePresentEvidence === true,
     provider_external_evidence_present: providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.provider_external_evidence_present === true,
-    provider_acceptance_evidence_present: providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.provider_acceptance_evidence_present === true,
+    provider_acceptance_evidence_present: staleBankCsvRetryState ? false : (providerSubmitDiagnosticEvidencePresent && providerSubmitDiagnostic.provider_acceptance_evidence_present === true),
+    user_correctable: staleBankCsvRetryState === true,
+    userCorrectable: staleBankCsvRetryState === true,
+    retryable: staleBankCsvRetryState === true,
+    csv_regeneration_required: staleBankCsvRetryState === true,
+    csvRegenerationRequired: staleBankCsvRetryState === true,
+    bank_csv_stale: staleBankCsvRetryState === true,
+    bankCsvStale: staleBankCsvRetryState === true,
+    operation_reset_for_retry: staleBankCsvRetryState === true,
+    operationResetForRetry: staleBankCsvRetryState === true,
+    safe_to_retry: staleBankCsvRetryState === true,
+    safeToRetry: staleBankCsvRetryState === true,
+    next_required_action: staleBankCsvRetryState ? 'DOWNLOAD_LATEST_BANK_CSV' : (nextRequiredActions[0] || null),
+    nextRequiredAction: staleBankCsvRetryState ? 'DOWNLOAD_LATEST_BANK_CSV' : (nextRequiredActions[0] || null),
+    provider_ambiguity: staleBankCsvRetryState ? false : staleCsvProviderAmbiguity,
+    providerAmbiguity: staleBankCsvRetryState ? false : staleCsvProviderAmbiguity,
     raw_payload: src
   };
 }
-
 
 
 
