@@ -23041,7 +23041,14 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
     const payBatchCandidateIds = uniq([row.pay_batch_candidate_ids, row.payBatchCandidateIds, row.pay_batch_candidate_id, row.payBatchCandidateId, fullScope.pay_batch_candidate_ids]);
     const providerName = text(row.rail_provider || row.railProvider || row.provider_key || row.providerKey || row.provider || row.payment_provider || row.paymentProvider);
     const providerEnv = text(row.rail_env || row.railEnv || row.provider_env || row.providerEnv || row.env || row.environment);
-    const providerRailLabel = [providerName, providerEnv].filter(Boolean).join(' · ');
+    const routeDisplay = typeof resolveBankingPaymentRouteDisplay === 'function'
+      ? resolveBankingPaymentRouteDisplay(row, { fallbackProvider: providerName, fallbackEnvironment: providerEnv })
+      : {
+          label: [providerName, providerEnv].filter(Boolean).join(' · '),
+          routeKind: providerName || providerEnv ? 'PROVIDER' : 'UNKNOWN',
+          completedMessage: 'Payment completed successfully.'
+        };
+    const providerRailLabel = text(routeDisplay.label) || [providerName, providerEnv].filter(Boolean).join(' · ');
     const supportDetails = obj(row.details || row.supportDetails || row.support_details);
     const hasScope = Object.keys(fullScope).length > 0 || transferIds.length > 0 || itemIds.length > 0 || candidateIds.length > 0 || payBatchCandidateIds.length > 0;
     const hasSignature = !!text(row.status_update_signature || row.live_status_signature || row.statusUpdateSignature || row.liveStatusSignature || row.scope_signature || row.scopeSignature);
@@ -23053,6 +23060,11 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       && hasSignature;
     const selectionDisabledReason = selectionDisabledReasonFor(row, status, rowSelectable, fullScope, transferIds, itemIds, candidateIds, payBatchCandidateIds);
     const actionLabel = actionLabelFor(status.action, upper(row.payment_lifecycle_state || row.lifecycle), status.state === 'rewinding');
+    const existingWhatHappened = text(row.what_happened_label || row.whatHappenedLabel || status.what);
+    const routeAwareWhatHappened = status.state === 'paid'
+      && ['CSV_SETTLEMENT', 'EXTERNAL_SETTLEMENT', 'NO_BANK_PAYMENT'].includes(upper(routeDisplay.routeKind || routeDisplay.route_kind))
+      ? text(routeDisplay.completedMessage || routeDisplay.completed_message || status.what)
+      : existingWhatHappened;
 
     return {
       ...row,
@@ -23075,10 +23087,14 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       providerRailLabel,
       provider_rail_label: providerRailLabel,
       provider_display_label: providerRailLabel,
+      paymentRouteDisplayLabel: providerRailLabel,
+      payment_route_display_label: providerRailLabel,
+      paymentRouteKind: text(routeDisplay.routeKind || routeDisplay.route_kind) || null,
+      payment_route_kind: text(routeDisplay.routeKind || routeDisplay.route_kind) || null,
       paymentAmount: num(row.payment_amount ?? row.paymentAmount ?? row.amount ?? row.amount_affected),
       payment_amount: num(row.payment_amount ?? row.paymentAmount ?? row.amount ?? row.amount_affected),
-      whatHappenedLabel: text(row.what_happened_label || row.whatHappenedLabel || status.what),
-      what_happened_label: text(row.what_happened_label || row.whatHappenedLabel || status.what),
+      whatHappenedLabel: routeAwareWhatHappened,
+      what_happened_label: routeAwareWhatHappened,
       manualAdjustmentsLabel: manualAdjustmentItems.length ? 'Manual adjustments will be carried forward' : 'None',
       manual_adjustments: manualAdjustmentItems,
       actionType: status.action,
@@ -23117,7 +23133,7 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
         status: status.label,
         candidate_payee: [candidateName, payeeName].filter(Boolean).join(' / '),
         amount: num(row.payment_amount ?? row.paymentAmount ?? row.amount ?? row.amount_affected),
-        what_happened: text(row.what_happened_label || row.whatHappenedLabel || status.what),
+        what_happened: routeAwareWhatHappened,
         manual_adjustments: manualAdjustmentItems,
         action: status.action,
         details: {
@@ -23130,8 +23146,6 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
 
   return rows;
 }
-
-
 
 
 
@@ -23153,6 +23167,20 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
   const rowKeyOf = (row) => text(row?.rowKey || row?.row_key || row?.scope_key || row?.scopeKey || row?.payBankTransferId || row?.pay_bank_transfer_id || row?.payBatchItemId || row?.pay_batch_item_id || row?.payBatchCandidateId || row?.pay_batch_candidate_id || row?.candidateId || row?.candidate_id);
   const actionOf = (row) => upper(row?.recommended_action || row?.actionType || row?.action_type || row?.action);
   const providerRailLabelFor = (row) => {
+    const resolvedLabel = text(
+      row?.paymentRouteDisplayLabel
+      || row?.payment_route_display_label
+      || row?.routeDisplayLabel
+      || row?.route_display_label
+    );
+    if (resolvedLabel) return resolvedLabel;
+
+    if (typeof resolveBankingPaymentRouteDisplay === 'function') {
+      const resolved = resolveBankingPaymentRouteDisplay(row);
+      const helperLabel = text(resolved && resolved.label);
+      if (helperLabel) return helperLabel;
+    }
+
     const provider = text(row?.providerRailLabel || row?.provider_rail_label || row?.provider_display_label || row?.providerDisplayLabel || row?.rail_provider || row?.railProvider || row?.provider_key || row?.providerKey || row?.provider || row?.payment_provider || row?.paymentProvider);
     const env = text(row?.rail_env || row?.railEnv || row?.provider_env || row?.providerEnv || row?.env || row?.environment);
     if (provider && env && !provider.toUpperCase().includes(env.toUpperCase())) return `${provider} · ${env}`;
@@ -23416,8 +23444,6 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     </section>
   `;
 }
-
-
 
 
 
@@ -294896,6 +294922,236 @@ bindSave(btnSave, top);
   renderTop();
 }
 
+function resolveBankingPaymentRouteDisplay(source, options = {}) {
+  const root = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
+  const opts = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
+  const text = (value) => String(value == null ? '' : value).trim();
+  const normalise = (value) => text(value)
+    .toUpperCase()
+    .replace(/[·/\\|.\-\s]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  const bool = (value) => value === true || ['TRUE', 'T', '1', 'YES', 'Y', 'ON'].includes(normalise(value));
+  const numberOrNull = (value) => {
+    if (value == null || text(value) === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const objectOrEmpty = (value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value !== 'string') return {};
+    const raw = value.trim();
+    if (!raw || raw[0] !== '{') return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const sources = [];
+  const seen = new Set();
+  const nestedKeys = [
+    'rail_meta_json', 'railMetaJson',
+    'settlement_confirmation_json', 'settlementConfirmationJson',
+    'execution_intent_json', 'executionIntentJson',
+    'raw_payload', 'rawPayload',
+    'payment_route_json', 'paymentRouteJson',
+    'route_json', 'routeJson',
+    'metadata', 'meta', 'details',
+    'settlement', 'confirmation', 'execution', 'route', 'payment',
+    'provider_event', 'providerEvent', 'latest_event', 'latestEvent'
+  ];
+  const addSource = (value, depth = 0) => {
+    const objectValue = objectOrEmpty(value);
+    if (!Object.keys(objectValue).length || seen.has(objectValue) || sources.length >= 80) return;
+    seen.add(objectValue);
+    sources.push(objectValue);
+    if (depth >= 3) return;
+    nestedKeys.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(objectValue, key)) addSource(objectValue[key], depth + 1);
+    });
+  };
+  addSource(root);
+  addSource(opts.context);
+
+  const values = (keys) => {
+    const output = [];
+    sources.forEach((item) => {
+      keys.forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(item, key)) output.push(item[key]);
+      });
+    });
+    return output;
+  };
+  const firstText = (keys) => {
+    for (const value of values(keys)) {
+      const candidate = text(value);
+      if (candidate) return candidate;
+    }
+    return '';
+  };
+  const anyTrue = (keys) => values(keys).some(bool);
+  const tokens = (keys) => values(keys).map(normalise).filter(Boolean);
+
+  const routeLabelTokens = tokens([
+    'payment_route_display_label', 'paymentRouteDisplayLabel',
+    'payment_route_label', 'paymentRouteLabel',
+    'route_display_label', 'routeDisplayLabel',
+    'providerRailLabel', 'provider_rail_label',
+    'provider_display_label', 'providerDisplayLabel'
+  ]);
+  const modeTokens = tokens([
+    'execution_mode', 'executionMode',
+    'settlement_mode', 'settlementMode',
+    'confirmation_mode', 'confirmationMode',
+    'manual_confirmation_mode', 'manualConfirmationMode',
+    'payment_route_kind', 'paymentRouteKind',
+    'route_kind', 'routeKind',
+    'scope_kind', 'scopeKind',
+    'rail_state', 'railState',
+    'provider_state', 'providerState',
+    'latest_event_provider_state', 'latestEventProviderState',
+    'banking_system', 'bankingSystem',
+    'banking_system_snapshot', 'bankingSystemSnapshot'
+  ]);
+  const providerTokens = tokens([
+    'rail_provider', 'railProvider',
+    'provider', 'provider_key', 'providerKey',
+    'payment_provider', 'paymentProvider'
+  ]);
+  const allRouteTokens = routeLabelTokens.concat(modeTokens);
+
+  const csvTokens = new Set([
+    'BANK_CSV_UPLOAD',
+    'CSV',
+    'CSV_SETTLEMENT',
+    'CSV_MANUAL_CONFIRM',
+    'CSV_MANUAL_SETTLEMENT',
+    'BANK_UPLOAD_CONFIRMED',
+    'CSV_BANK_UPLOAD'
+  ]);
+  const externalTokens = new Set([
+    'EXTERNAL_SETTLEMENT',
+    'EXTERNAL_SETTLEMENT_CONFIRM',
+    'EXTERNAL_SETTLEMENT_CONFIRMED',
+    'EXTERNAL_MANUAL_CONFIRM',
+    'MANUAL_SETTLEMENT',
+    'MANUAL_EXTERNAL_SETTLEMENT'
+  ]);
+  const noBankTokens = new Set([
+    'NO_BANK_PAYMENT_REQUIRED',
+    'NO_BANK_PAYMENT',
+    'NO_BANK_PAYMENT_EXECUTION',
+    'NO_BANK_PAYMENT_REVIEW',
+    'NO_BANK_PAYMENT_EXTERNAL_CONFIRMATION',
+    'NO_BANK_TRANSFER',
+    'ZERO_BANK',
+    'ZERO_BANK_PAYMENT',
+    'NO_MONEY'
+  ]);
+  const hasToken = (set, candidates) => candidates.some((candidate) => set.has(candidate));
+
+  const positiveTransferCount = [
+    ...values(['positive_transfer_count', 'positiveTransferCount']),
+    ...values(['transfer_count', 'transferCount'])
+  ].map(numberOrNull).find((value) => value !== null);
+  const amount = [
+    ...values(['total_bank_out', 'totalBankOut']),
+    ...values(['payment_amount', 'paymentAmount']),
+    ...values(['amount'])
+  ].map(numberOrNull).find((value) => value !== null);
+  const hasPositiveMoneyEvidence = (positiveTransferCount !== undefined && positiveTransferCount > 0)
+    || (amount !== undefined && amount > 0);
+
+  const explicitNoBankExecution = anyTrue([
+    'no_bank_payment_execution', 'noBankPaymentExecution',
+    'is_no_bank_payment', 'isNoBankPayment',
+    'no_bank_payment_required', 'noBankPaymentRequired',
+    'zero_bank_proof', 'zeroBankProof'
+  ]) || hasToken(noBankTokens, allRouteTokens);
+  const explicitBankPaymentDidNotOccur = values(['bank_payment_occurred', 'bankPaymentOccurred']).some((value) => value === false || normalise(value) === 'FALSE');
+  const noBankReferencePresent = !!firstText([
+    'no_bank_scope_reference', 'noBankScopeReference',
+    'no_bank_payment_note', 'noBankPaymentNote',
+    'local_no_bank_commit_ref', 'localNoBankCommitRef'
+  ]);
+  const pureNoBankExecution = explicitNoBankExecution
+    || (explicitBankPaymentDidNotOccur && noBankReferencePresent && !hasPositiveMoneyEvidence);
+
+  const csvEvidence = hasToken(csvTokens, allRouteTokens)
+    || providerTokens.some((token) => token === 'CSV' || token === 'BANK_CSV')
+    || anyTrue(['csv_uploaded_confirmed', 'csvUploadedConfirmed', 'bank_upload_confirmed', 'bankUploadConfirmed']);
+  const externalEvidence = hasToken(externalTokens, allRouteTokens)
+    || anyTrue(['external_settlement_confirmed', 'externalSettlementConfirmed']);
+
+  const localSettlementEvidenceOnly = anyTrue(['local_settlement_evidence_only', 'localSettlementEvidenceOnly']);
+  const submittedToBankFalse = values(['submitted_to_bank', 'submittedToBank']).some((value) => value === false || normalise(value) === 'FALSE');
+  const providerSubmissionRequiredFalse = values(['provider_submission_required', 'providerSubmissionRequired']).some((value) => value === false || normalise(value) === 'FALSE');
+  const providerSubmissionAttemptedFalse = values(['provider_submission_attempted', 'providerSubmissionAttempted']).some((value) => value === false || normalise(value) === 'FALSE');
+  const strongLocalProof = localSettlementEvidenceOnly
+    && submittedToBankFalse
+    && providerSubmissionRequiredFalse
+    && providerSubmissionAttemptedFalse;
+
+  const output = (label, routeKind, isLocalSettlement, isNoBankPayment, completedMessage) => ({
+    label,
+    routeKind,
+    route_kind: routeKind,
+    isLocalSettlement,
+    is_local_settlement: isLocalSettlement,
+    isNoBankPayment,
+    is_no_bank_payment: isNoBankPayment,
+    completedMessage,
+    completed_message: completedMessage
+  });
+
+  // A whole-route no-bank execution is stronger than a CSV/external mode carried on
+  // the authorised intent. Mixed positive + zero batches do not set this flag and
+  // therefore continue to display their actual positive-payment route.
+  if (pureNoBankExecution) {
+    return output('No bank payment required', 'NO_BANK_PAYMENT', true, true, 'Payment completed — no bank payment was required.');
+  }
+  if (csvEvidence || (strongLocalProof && allRouteTokens.some((token) => token.includes('CSV')))) {
+    return output('Bank CSV upload', 'CSV_SETTLEMENT', true, false, 'Payment completed by Bank CSV upload.');
+  }
+  if (externalEvidence || (strongLocalProof && allRouteTokens.some((token) => token.includes('EXTERNAL')))) {
+    return output('External settlement', 'EXTERNAL_SETTLEMENT', true, false, 'Payment completed by External settlement.');
+  }
+
+  const provider = text(
+    opts.fallbackProvider
+    || opts.fallback_provider
+    || root.providerRailLabel
+    || root.provider_rail_label
+    || root.provider_display_label
+    || root.providerDisplayLabel
+    || root.rail_provider
+    || root.railProvider
+    || root.provider_key
+    || root.providerKey
+    || root.provider
+    || root.payment_provider
+    || root.paymentProvider
+  );
+  const environment = text(
+    opts.fallbackEnvironment
+    || opts.fallback_environment
+    || opts.fallbackEnv
+    || opts.fallback_env
+    || root.rail_env
+    || root.railEnv
+    || root.provider_env
+    || root.providerEnv
+    || root.env
+    || root.environment
+  );
+  const label = provider && environment && !normalise(provider).includes(normalise(environment))
+    ? `${provider} · ${environment}`
+    : (provider || environment || text(opts.fallbackLabel || opts.fallback_label));
+  return output(label, label ? 'PROVIDER' : 'UNKNOWN', false, false, 'Payment completed successfully.');
+}
 
 
 function ensureTsRefreshAndRepaintOverview() {
