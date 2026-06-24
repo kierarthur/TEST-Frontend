@@ -110623,6 +110623,9 @@ function operationCanAdvance(operationState) {
 }
 
 
+
+
+
 function classifyTimesheetEditDomains(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const toUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -111107,7 +111110,6 @@ function classifyTimesheetEditDomains(ctxInput) {
   const hasContractWeekExpenseDraftTarget = !!(
     isWeeklyPlannedContext &&
     !isAuthorised &&
-    !isPaid &&
     !isInvoiceLocked &&
     !isSegmentInvoiceLocked &&
     !isCancelled &&
@@ -111119,7 +111121,6 @@ function classifyTimesheetEditDomains(ctxInput) {
     hasRealTimesheet &&
     hasFinancialSnapshot &&
     !isAuthorised &&
-    !isPaid &&
     !isInvoiceLocked &&
     !isSegmentInvoiceLocked &&
     !isCancelled &&
@@ -111141,8 +111142,6 @@ function classifyTimesheetEditDomains(ctxInput) {
     expensesDisabledReason = 'This timesheet is authorised. Unauthorise it before changing expenses.';
   } else if (isInvoiceLocked || isSegmentInvoiceLocked) {
     expensesDisabledReason = 'This timesheet is invoiced, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.';
-  } else if (isPaid) {
-    expensesDisabledReason = 'This timesheet is paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.';
   } else if (isCancelled) {
     expensesDisabledReason = 'Expenses cannot be edited directly for this row.';
   } else if (isReviewOnly) {
@@ -111174,7 +111173,7 @@ function classifyTimesheetEditDomains(ctxInput) {
   if (expensesTabDisabled) reasonCodes.push('EXPENSES_IMPORT_PROTECTED_TAB_DISABLED');
 
   const backendAddAdditional = firstBoolIfPresent('can_add_additional_manual', 'canAddAdditionalManual', 'allow_additional_manual', 'can_create_additional_manual');
-  const requiresAdditionalManualForExpenses = !!(expensesDisabledReason && (isSegmentOnlyContext || isInvoiceLocked || isSegmentInvoiceLocked || isPaid || protectedOriginal));
+  const requiresAdditionalManualForExpenses = !!(expensesDisabledReason && (isSegmentOnlyContext || isInvoiceLocked || isSegmentInvoiceLocked || protectedOriginal));
   const hasAdditionalManualAnchor = !!(
     hasRealTimesheet ||
     anyValue('contract_week_id', 'active_contract_week_id', 'planned_contract_week_id') ||
@@ -111193,8 +111192,7 @@ function classifyTimesheetEditDomains(ctxInput) {
       isOriginalImportAuthoritative ||
       isNoTimesheetRequiredOriginal ||
       isInvoiceLocked ||
-      isSegmentInvoiceLocked ||
-      isPaid
+      isSegmentInvoiceLocked
     )
   );
   const canAddAdditionalManual = backendAddAdditional !== null
@@ -111268,8 +111266,6 @@ function classifyTimesheetEditDomains(ctxInput) {
     reasonCodes
   };
 }
-
-
 
 
 
@@ -122561,9 +122557,9 @@ const deriveExpensesTabUiState = (policy) => {
   const isDraftTarget = storageTarget === 'CONTRACT_WEEK_DRAFT';
   const isTsfinTarget = storageTarget === 'TSFIN';
   const storageEnabled = !!(isTsfinTarget || isDraftTarget);
-  const tabDisabled = !!(p && (p.expensesTabDisabled === true || p.expensesActionDisabled === true));
+  const tabDisabled = !!(p && p.expensesTabDisabled === true);
   const disabledReason = String(
-    (p && (p.expensesTabDisabledReason || p.expensesActionDisabledReason || p.expensesDisabledReason)) ||
+    (p && (p.expensesTabDisabledReason || p.expensesDisabledReason || p.expensesActionDisabledReason)) ||
     ''
   ).trim();
   const fallbackReason = p?.requiresAdditionalManualForExpenses
@@ -122571,7 +122567,7 @@ const deriveExpensesTabUiState = (policy) => {
     : (isDraftTarget
         ? 'Expenses will be saved as a draft until this week is processed.'
         : 'Expenses cannot be edited directly for this row.');
-  const enabled = !!(p && storageEnabled && !tabDisabled && p.canOpenExpenses === true);
+  const enabled = !!(p && p.canOpenExpenses === true && !tabDisabled);
   const reason = enabled
     ? ''
     : (disabledReason || fallbackReason);
@@ -124278,7 +124274,7 @@ try {
   // ✅ Always open in VIEW; Edit gating (including planned weeks) is handled by showModal/_updateButtons.
   mode: 'view',
 
-  // ✅ NEW: expenses tab state (always visible, disabled unless eligible)
+  // ✅ Expenses tab state keeps navigation separate from edit/save eligibility
    expenses_tab_enabled: !!expensesTabEnabled,
   expenses_tab_disabled: !!expensesTabDisabled,
   expenses_tab_reason: String(expensesTabReason || ''),
@@ -124372,7 +124368,7 @@ const tabDefs = [
   { key: 'overview', title: 'Overview' },
   { key: 'lines',    title: 'Lines' },
 
-  // ✅ NEW: always visible; disabled unless eligible (non-clickable via render bounce)
+  // ✅ Always present; disabled only when the policy says the surface cannot be opened
   { key: 'expenses', title: 'Expenses', disabled: !expensesTabEnabled, disabled_reason: expensesTabReason },
 
   { key: 'evidence', title: 'Evidence' },
@@ -124842,14 +124838,22 @@ const onSaveTimesheet = async () => {
     hasSegmentInvoiceLockForSave ||
     (policy && (policy.isInvoiceLocked === true || policy.isSegmentInvoiceLocked === true))
   );
-  const paidNow = !!(
-    tsfinLocal.paid_at_utc ||
-    (policy && policy.isPaid === true)
-  );
   const lockedNow = invoiceLockedNow;
 
   const canEditHoursForSave = !!(policy && policy.canEditHoursSchedule === true);
   const expenseStorageTargetForSave = String(policy?.expenseStorageTarget || mc.expenseStorageTarget || mc.expense_storage_target || '').trim().toUpperCase();
+  const hasSupportedExpenseStorageTargetForSave = !!(
+    expenseStorageTargetForSave === 'TSFIN' ||
+    expenseStorageTargetForSave === 'CONTRACT_WEEK_DRAFT'
+  );
+  const canEditExpensesForSave = policy
+    ? !!(
+        policy.canEditExpenses === true &&
+        policy.expensesReadOnly !== true &&
+        policy.expensesActionDisabled !== true &&
+        hasSupportedExpenseStorageTargetForSave
+      )
+    : !!(hasSupportedExpenseStorageTargetForSave && !isAuthorisedNow && !invoiceLockedNow);
   const canManageExpenseEvidenceForSave = !!(policy && policy.canManageExpenseEvidence === true);
   const hoursScheduleDisabledReasonForSave = String(
     (policy && policy.hoursScheduleDisabledReason) ||
@@ -125392,12 +125396,6 @@ const onSaveTimesheet = async () => {
     segmentControlsDirty ||
     refChanged;
 
-  if (paidNow && expensesChanged) {
-    alert((policy && policy.expensesDisabledReason) || 'This timesheet is paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.');
-    GE();
-    return { ok: false };
-  }
-
   if (lockedNow && isContentChangeAttempt) {
     const lockedAttemptIsExpensesOnly = !!(
       expensesChanged &&
@@ -125412,6 +125410,19 @@ const onSaveTimesheet = async () => {
       alert('This timesheet is invoice locked. You cannot change schedule, references, segments, or expenses.');
     }
 
+    GE();
+    return { ok: false };
+  }
+
+  if (expensesChanged && !canEditExpensesForSave) {
+    const blockedExpenseSaveReason = String(
+      policy?.expensesDisabledReason ||
+      policy?.expensesActionDisabledReason ||
+      (!hasSupportedExpenseStorageTargetForSave
+        ? 'Expenses cannot be saved because this row does not have a supported expenses storage target.'
+        : 'Expenses cannot be edited directly for this row.')
+    ).trim();
+    alert(blockedExpenseSaveReason || 'Expenses cannot be edited directly for this row.');
     GE();
     return { ok: false };
   }
@@ -127372,15 +127383,16 @@ async function loadTimesheetRelatedAfterDetails(openToken, opts = {}) {
   }
 }
 
+
 function deriveTimesheetExpensesUiStateForHydration(policy) {
   const p = (policy && typeof policy === 'object') ? policy : null;
   const storageTarget = String(p?.expenseStorageTarget || '').trim().toUpperCase();
   const isDraftTarget = storageTarget === 'CONTRACT_WEEK_DRAFT';
   const isTsfinTarget = storageTarget === 'TSFIN';
   const storageEnabled = !!(isTsfinTarget || isDraftTarget);
-  const tabDisabled = !!(p && (p.expensesTabDisabled === true || p.expensesActionDisabled === true));
+  const tabDisabled = !!(p && p.expensesTabDisabled === true);
   const disabledReason = String(
-    (p && (p.expensesTabDisabledReason || p.expensesActionDisabledReason || p.expensesDisabledReason)) ||
+    (p && (p.expensesTabDisabledReason || p.expensesDisabledReason || p.expensesActionDisabledReason)) ||
     ''
   ).trim();
   const fallbackReason = p?.requiresAdditionalManualForExpenses
@@ -127388,7 +127400,7 @@ function deriveTimesheetExpensesUiStateForHydration(policy) {
     : (isDraftTarget
         ? 'Expenses will be saved as a draft until this week is processed.'
         : 'Expenses cannot be edited directly for this row.');
-  const enabled = !!(p && storageEnabled && !tabDisabled && p.canOpenExpenses === true);
+  const enabled = !!(p && p.canOpenExpenses === true && !tabDisabled);
   const reason = enabled
     ? ''
     : (disabledReason || fallbackReason);
@@ -149080,11 +149092,6 @@ async function fetchBulkProcessDataset(filters, options = {}) {
 }
 
 
-
-
-
-
-
 function renderTimesheetExpensesTab(ctx) {
   const c = normaliseTimesheetCtx(ctx);
   const row     = c.row || {};
@@ -149371,11 +149378,8 @@ function renderTimesheetExpensesTab(ctx) {
   const isBulkProcessModal = String(window?.modalCtx?.entity || '').trim().toLowerCase() === 'bulk-process';
   const lockedByFinanceExpense = !!(
     tf?.locked_by_invoice_id ||
-    tf?.paid_at_utc ||
     row.locked_by_invoice_id ||
-    row.paid_at_utc ||
-    details.locked_by_invoice_id ||
-    details.paid_at_utc
+    details.locked_by_invoice_id
   );
   const authorisedExpense = !!(
     ts?.authorised_at_server ||
@@ -149399,7 +149403,7 @@ function renderTimesheetExpensesTab(ctx) {
   );
   const policyCanOpenExpenses = !!(
     editPolicy &&
-    (editPolicy.canOpenExpenses === true || policyCanEditExpenses) &&
+    editPolicy.canOpenExpenses === true &&
     editPolicy.expensesTabDisabled !== true
   );
   const hardLockedExpense = policyCanEditExpenses
@@ -149425,21 +149429,19 @@ function renderTimesheetExpensesTab(ctx) {
     : (!expenseStorageTarget
         ? 'Expenses cannot be saved because this row does not yet have a supported expenses draft target.'
         : (hardLockedExpense
-            ? 'Expenses cannot be edited because this row is locked, authorised, paid, or invoiced.'
+            ? 'Expenses cannot be edited because this row is locked, authorised, or invoiced.'
             : 'Expenses cannot be edited directly for this row.'));
   let expensesTabDisabled = editPolicy
-    ? !!(editPolicy.expensesTabDisabled === true || (!policyCanEditExpenses && editPolicy.expensesActionDisabled === true) || !expenseStorageTarget)
+    ? editPolicy.expensesTabDisabled === true
     : !hasSupportedExpenseTarget;
-  if (policyCanEditExpenses && hasSupportedExpenseTarget) expensesTabDisabled = false;
   if (additionalManualExpenseSupported) expensesTabDisabled = false;
-  if (!hasSupportedExpenseTarget) expensesTabDisabled = true;
   if (trueSourceImportExpense) expensesTabDisabled = true;
   const expensesTabDisabledReason = String(
-    (editPolicy && !policyCanEditExpenses && !additionalManualExpenseSupported && (editPolicy.expensesTabDisabledReason || editPolicy.expensesActionDisabledReason || editPolicy.expensesDisabledReason)) ||
+    (editPolicy && !additionalManualExpenseSupported && (editPolicy.expensesTabDisabledReason || editPolicy.expensesDisabledReason)) ||
     defaultBlockedReason
   );
   const enabled = editPolicy
-    ? (hasSupportedExpenseTarget && (policyCanOpenExpenses || policyCanEditExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
+    ? ((policyCanOpenExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
     : hasSupportedExpenseTarget;
   const canEditExpenseControls = editPolicy
     ? (hasSupportedExpenseTarget && !hardLockedExpense && (policyCanEditExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
@@ -149600,6 +149602,9 @@ function renderTimesheetExpensesTab(ctx) {
     </div>
   `;
 }
+
+
+
 
 
 function resolveTimesheetExpensesModalCtx(ctxArg = null) {
@@ -289427,8 +289432,7 @@ if (this.entity === 'timesheets' && k === 'expenses') {
       return (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : mc;
     };
 
-     // ✅ If the tab is disabled, do not wire anything (keeps it inert even if called programmatically)
-    const enabled = !!mc.expenses_tab_enabled;
+     // ✅ Keep tab navigation separate from edit-control wiring.
     const detailsForExpensesPolicy = mc.timesheetDetails || {};
     const policy = mc.timesheetEditDomains || (typeof classifyTimesheetEditDomains === 'function'
       ? classifyTimesheetEditDomains({
@@ -289463,49 +289467,37 @@ if (this.entity === 'timesheets' && k === 'expenses') {
     );
     const policyCanOpenExpenses = !!(
       policy &&
-      (policy.canOpenExpenses === true || policyCanEditExpenses) &&
+      policy.canOpenExpenses === true &&
       policy.expensesTabDisabled !== true
     );
-    const disabledByPolicy = !!(
-      policy &&
-      !policyCanEditExpenses &&
-      (policy.expensesTabDisabled === true || policy.expensesActionDisabled === true)
-    );
-    const disabledByCtx = !!(!policyCanEditExpenses && mc.expenses_tab_disabled === true);
-    const expensesTabDisabled = !!(
-      !hasExpenseStorageTarget ||
-      disabledByPolicy ||
-      disabledByCtx
-    );
+    const expensesTabCanOpen = policy
+      ? policyCanOpenExpenses
+      : !!(mc.expenses_tab_enabled === true && mc.expenses_tab_disabled !== true);
     const canEditExpenses = !!(
-      policy
-        ? (policyCanEditExpenses && !expensesTabDisabled)
-        : (hasExpenseStorageTarget && !expensesTabDisabled)
-    );
-    const expensesTabCanOpen = !!(
+      expensesTabCanOpen &&
       hasExpenseStorageTarget &&
-      (
-        policy
-          ? ((policyCanOpenExpenses || policyCanEditExpenses) && !expensesTabDisabled)
-          : !expensesTabDisabled
-      )
+      (policy ? policyCanEditExpenses : mc.expenses_read_only !== true)
     );
-    if (!expensesTabCanOpen || !canEditExpenses) {
-      if (LOGM) LT('expenses tab disabled; skip wiring', {
+    if (!expensesTabCanOpen) {
+      if (LOGM) LT('expenses tab unavailable; skip wiring', {
         reason:
           mc.expenses_tab_reason ||
           policy?.expensesTabDisabledReason ||
-          policy?.expensesActionDisabledReason ||
           policy?.expensesDisabledReason ||
+          policy?.expensesActionDisabledReason ||
           (
             policy?.requiresAdditionalManualForExpenses === true
               ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
-              : (
-                  expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
-                    ? 'Expenses will be saved as a draft until this week is processed.'
-                    : 'Expenses cannot be edited directly for this row.'
-                )
+              : 'Expenses cannot be opened for this row.'
           )
+      });
+    } else if (!canEditExpenses) {
+      if (LOGM) LT('expenses tab read-only; skip edit wiring', {
+        reason:
+          policy?.expensesActionDisabledReason ||
+          policy?.expensesDisabledReason ||
+          mc.expenses_action_disabled_reason ||
+          'Expenses are read-only for this row.'
       });
     } else if (root) {
       mc.timesheetState = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
@@ -290888,76 +290880,47 @@ const resolveTabDisabledState = (tabLike) => {
                 })
               : null);
 
-         const hasCtxDisabled = Object.prototype.hasOwnProperty.call(mc, 'expenses_tab_disabled');
+      const hasCtxDisabled = Object.prototype.hasOwnProperty.call(mc, 'expenses_tab_disabled');
       const hasCtxEnabled = Object.prototype.hasOwnProperty.call(mc, 'expenses_tab_enabled');
-      const policyTabDisabledKnown = !!(
-        policy &&
-        (
-          Object.prototype.hasOwnProperty.call(policy, 'expensesTabDisabled') ||
-          Object.prototype.hasOwnProperty.call(policy, 'expensesActionDisabled')
-        )
-      );
-
-      const expenseStorageTarget = String(
-        policy?.expenseStorageTarget ||
-        policy?.expense_storage_target ||
-        mc.expenseStorageTarget ||
-        mc.expense_storage_target ||
-        mc.data?.expenseStorageTarget ||
-        mc.data?.expense_storage_target ||
-        det.expenseStorageTarget ||
-        det.expense_storage_target ||
-        ''
-      ).trim().toUpperCase();
-      const hasExpenseStorageTarget = (expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT');
-      const policyCanEditExpenses = !!(
-        policy &&
-        policy.canEditExpenses === true &&
-        policy.expensesReadOnly !== true &&
-        policy.expensesActionDisabled !== true
-      );
       const policyCanOpenExpenses = !!(
         policy &&
-        (policy.canOpenExpenses === true || policyCanEditExpenses) &&
+        policy.canOpenExpenses === true &&
         policy.expensesTabDisabled !== true
       );
-      const disabledByPolicy = !!(
-        policy &&
-        !policyCanEditExpenses &&
-        (policy.expensesTabDisabled === true || policy.expensesActionDisabled === true)
+      const ctxExplicitlyUnavailable = !!(
+        !policy &&
+        (
+          (hasCtxDisabled && mc.expenses_tab_disabled === true) ||
+          (hasCtxEnabled && mc.expenses_tab_enabled !== true)
+        )
       );
-      const disabledByCtx = !!(!policyCanEditExpenses && hasCtxDisabled && mc.expenses_tab_disabled === true);
-      const explicitlyEnabledByPolicy = !!(policy && hasExpenseStorageTarget && (policyCanOpenExpenses || policyCanEditExpenses) && !disabledByPolicy);
-      const explicitlyEnabledByCtx = !!(hasExpenseStorageTarget && hasCtxEnabled && mc.expenses_tab_enabled === true && !disabledByCtx);
-      const explicitlyUnavailableByCtx = !!(!policyCanEditExpenses && hasCtxEnabled && mc.expenses_tab_enabled !== true);
+      const ctxExplicitlyEnabled = !!(
+        !policy &&
+        hasCtxEnabled &&
+        mc.expenses_tab_enabled === true &&
+        !(hasCtxDisabled && mc.expenses_tab_disabled === true)
+      );
       const preciseExpenseReason = String(
         mc.expenses_tab_reason ||
         policy?.expensesTabDisabledReason ||
-        policy?.expensesActionDisabledReason ||
         policy?.expensesDisabledReason ||
+        policy?.expensesActionDisabledReason ||
         (
           policy?.requiresAdditionalManualForExpenses === true
             ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
-            : (
-                expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
-                  ? 'Expenses will be saved as a draft until this week is processed.'
-                  : 'Expenses cannot be edited directly for this row.'
-              )
+            : 'Expenses cannot be opened for this row.'
         )
       ).trim();
 
-      if (disabledByPolicy || disabledByCtx) {
+      if (policy) {
+        disabled = !policyCanOpenExpenses;
+        reason = disabled ? (preciseExpenseReason || 'This tab is currently unavailable.') : '';
+      } else if (ctxExplicitlyUnavailable) {
         disabled = true;
         reason = preciseExpenseReason || 'This tab is currently unavailable.';
-      } else if (policyCanEditExpenses && hasExpenseStorageTarget) {
+      } else if (ctxExplicitlyEnabled) {
         disabled = false;
         reason = '';
-      } else if (explicitlyEnabledByCtx || explicitlyEnabledByPolicy) {
-        disabled = false;
-        reason = '';
-      } else if (!hasExpenseStorageTarget || hasCtxDisabled || policyTabDisabledKnown || explicitlyUnavailableByCtx) {
-        disabled = true;
-        reason = preciseExpenseReason || 'Expenses cannot be edited directly for this row.';
       }
     }
   } catch {}
@@ -294931,6 +294894,9 @@ bindSave(btnSave, top);
 
   renderTop();
 }
+
+
+
 
 function ensureTsRefreshAndRepaintOverview() {
   if (typeof window.__tsRefreshAndRepaintOverview === 'function') {
