@@ -31897,7 +31897,6 @@ async function bankingPayPreview(pay_date) {
 }
 
 
-
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -32597,8 +32596,13 @@ async function bankingPayCreateDraft(input = {}) {
     if (scopedCurrentSelectedIds.length <= 0) {
       return {
         ok: false,
-        error_code: 'BANKING_PAY_CREATE_DRAFT_NO_CURRENT_SELECTED_ROWS',
-        message: `No current selected Ready to Pay rows are available for ${requestedScope === 'PAYE' ? 'PAYE' : (requestedScope === 'UMBRELLA' ? 'Umbrella' : 'the selected draft scope')}.`,
+        error_code: 'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE',
+        code: 'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE',
+        message: requestedScope === 'PAYE'
+          ? 'No PAYE rows are available for Create Draft. Choose Umbrella only or select PAYE-ready rows.'
+          : (requestedScope === 'UMBRELLA'
+              ? 'No Umbrella rows are available for Create Draft. Choose PAYE only or select Umbrella-ready rows.'
+              : 'No current selected Ready to Pay rows are available for the selected draft scope.'),
         previous_selected_preview_row_ids: previousIds,
         session_id: id,
         session_version: normalisedPage.session_version ?? normalisedPage.sessionVersion ?? null,
@@ -33701,7 +33705,11 @@ async function bankingPayCreateDraft(input = {}) {
     'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
     'PAYMENT_AUTHORISER_REQUIRED',
     'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_ACTION_FAILED',
     'BANKING_PAY_CREATE_DRAFT_FAILED',
+    'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE',
+    'BANKING_PAY_CREATE_DRAFT_INVALID_SCOPE',
+    'BANKING_PAY_CREATE_DRAFT_SCOPE_CONFLICT',
     'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED',
     'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED',
     'BANKING_PAY_WORKBENCH_NOT_READY_FOR_DRAFT',
@@ -34557,36 +34565,197 @@ async function bankingPayCreateDraft(input = {}) {
     });
   }
 
-  const normaliseDraftScopeForCreate = (value, fallback = 'ALL') => {
-    if (typeof normaliseBankingPayDraftScope === 'function') {
-      return normaliseBankingPayDraftScope(value, fallback);
+  const normaliseDraftScopeForCreate = (value) => {
+    const raw = upperTrim(value).replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!raw) return '';
+    if (['ALL', 'BOTH', 'BOTH_PAYE_UMBRELLA', 'BOTH_PAYE_AND_UMBRELLA', 'PAYE_UMBRELLA', 'PAYE_AND_UMBRELLA', 'ALL_CHANNELS', 'ALL_PAY_CHANNELS', 'BOTH_CHANNELS', 'BOTH_PAY_CHANNELS'].includes(raw)) return 'ALL';
+    if (['PAYE', 'PAYE_ONLY', 'PAYE_CHANNEL', 'PAYE_ONLY_CHANNEL'].includes(raw)) return 'PAYE';
+    if (['UMBRELLA', 'UMBRELLA_ONLY', 'UMBRELLA_CHANNEL', 'UMBRELLA_ONLY_CHANNEL', 'NON_PAYE', 'NONPAYE', 'NON_PAYE_ONLY', 'NONPAYE_ONLY'].includes(raw)) return 'UMBRELLA';
+    return '';
+  };
+  const addDraftScopeEntryForCreate = (entries, source, owner, key) => {
+    if (!isPlainObject(owner) || !hasOwnValue(owner, key)) return;
+    const raw = trimStr(owner[key]);
+    if (!raw) return;
+    const normalised = normaliseDraftScopeForCreate(raw);
+    entries.push({ source: `${source}.${key}`, raw, value: normalised || null, invalid: !normalised });
+  };
+  const resolveDraftScopeForCreate = () => {
+    const entries = [];
+    addDraftScopeEntryForCreate(entries, 'input', inputOptions, 'pay_channel_scope');
+    addDraftScopeEntryForCreate(entries, 'input', inputOptions, 'payChannelScope');
+    addDraftScopeEntryForCreate(entries, 'input', inputOptions, 'draft_scope');
+    addDraftScopeEntryForCreate(entries, 'input', inputOptions, 'draftScope');
+    addDraftScopeEntryForCreate(entries, 'preview_decisions_json', preview_decisions_json, 'pay_channel_scope');
+    addDraftScopeEntryForCreate(entries, 'preview_decisions_json', preview_decisions_json, 'payChannelScope');
+    addDraftScopeEntryForCreate(entries, 'preview_decisions_json', preview_decisions_json, 'draft_scope');
+    addDraftScopeEntryForCreate(entries, 'preview_decisions_json', preview_decisions_json, 'draftScope');
+    addDraftScopeEntryForCreate(entries, 'preview_decisions_json', preview_decisions_json, 'scope');
+    addDraftScopeEntryForCreate(entries, 'draftWizard', wiz, 'draft_scope');
+    addDraftScopeEntryForCreate(entries, 'draftWizard', wiz, 'draftScope');
+    addDraftScopeEntryForCreate(entries, 'draftWizard', wiz, 'pay_channel_scope');
+    addDraftScopeEntryForCreate(entries, 'draftWizard', wiz, 'payChannelScope');
+    addDraftScopeEntryForCreate(entries, 'draftWizard.decisions', wiz.decisions, 'draft_scope');
+    addDraftScopeEntryForCreate(entries, 'draftWizard.decisions', wiz.decisions, 'draftScope');
+    addDraftScopeEntryForCreate(entries, 'draftWizard.decisions', wiz.decisions, 'pay_channel_scope');
+    addDraftScopeEntryForCreate(entries, 'draftWizard.decisions', wiz.decisions, 'payChannelScope');
+
+    const invalidEntries = entries.filter((entry) => entry.invalid);
+    if (invalidEntries.length > 0) {
+      return {
+        ok: false,
+        error_code: 'BANKING_PAY_CREATE_DRAFT_INVALID_SCOPE',
+        message: 'Create Draft scope is not valid. Choose Both PAYE + Umbrella, PAYE only, or Umbrella only.',
+        invalid_entries: invalidEntries,
+        entries
+      };
     }
-    const raw = upperTrim(value || fallback || 'ALL').replace(/[\s-]+/g, '_');
-    if (['PAYE', 'PAYE_ONLY'].includes(raw)) return 'PAYE';
-    if (['UMBRELLA', 'UMBRELLA_ONLY', 'NON_PAYE', 'NONPAYE'].includes(raw)) return 'UMBRELLA';
-    return 'ALL';
+
+    const distinctValues = Array.from(new Set(entries.map((entry) => entry.value).filter(Boolean)));
+    if (distinctValues.length > 1) {
+      return {
+        ok: false,
+        error_code: 'BANKING_PAY_CREATE_DRAFT_SCOPE_CONFLICT',
+        message: 'Create Draft scope is inconsistent. Reopen Pay Filters, choose one draft scope, then try again.',
+        scope_values: distinctValues,
+        entries
+      };
+    }
+
+    return {
+      ok: true,
+      scope: distinctValues[0] || 'ALL',
+      entries
+    };
+  };
+  const syncDraftScopeStateForCreate = (scopeValue) => {
+    const canonical = normaliseDraftScopeForCreate(scopeValue) || 'ALL';
+    try {
+      wiz.draft_scope = canonical;
+      wiz.draftScope = canonical;
+      wiz.pay_channel_scope = canonical;
+      wiz.payChannelScope = canonical;
+      wiz.decisions = isPlainObject(wiz.decisions) ? wiz.decisions : {};
+      wiz.decisions.draft_scope = canonical;
+      wiz.decisions.draftScope = canonical;
+      wiz.decisions.pay_channel_scope = canonical;
+      wiz.decisions.payChannelScope = canonical;
+      wiz.workbench = isPlainObject(wiz.workbench) ? wiz.workbench : {};
+      wiz.workbench.draft_scope = canonical;
+      wiz.workbench.draftScope = canonical;
+      wiz.workbench.pay_channel_scope = canonical;
+      wiz.workbench.payChannelScope = canonical;
+    } catch {}
+    return canonical;
   };
 
-  const requestedDraftScopeRaw =
-    inputOptions.pay_channel_scope ||
-    inputOptions.payChannelScope ||
-    inputOptions.draft_scope ||
-    inputOptions.draftScope ||
-    (isPlainObject(preview_decisions_json) ? (
-      preview_decisions_json.pay_channel_scope ||
-      preview_decisions_json.payChannelScope ||
-      preview_decisions_json.draft_scope ||
-      preview_decisions_json.draftScope ||
-      preview_decisions_json.scope
-    ) : '') ||
-    wiz.draft_scope ||
-    'ALL';
-  let payChannelScope = normaliseDraftScopeForCreate(requestedDraftScopeRaw, 'ALL');
-  wiz.draft_scope = payChannelScope;
+  const draftScopeResolution = resolveDraftScopeForCreate();
+  if (!draftScopeResolution || draftScopeResolution.ok !== true) {
+    return await failCreateDraftContext(draftScopeResolution?.message || 'Create Draft scope is not valid. Choose Both PAYE + Umbrella, PAYE only, or Umbrella only.', {
+      code: draftScopeResolution?.error_code || 'BANKING_PAY_CREATE_DRAFT_INVALID_SCOPE',
+      error_code: draftScopeResolution?.error_code || 'BANKING_PAY_CREATE_DRAFT_INVALID_SCOPE',
+      reason: draftScopeResolution?.error_code || 'BANKING_PAY_CREATE_DRAFT_INVALID_SCOPE',
+      allowed_values: ['ALL', 'PAYE', 'UMBRELLA'],
+      scope_entries: draftScopeResolution?.entries || [],
+      invalid_entries: draftScopeResolution?.invalid_entries || [],
+      scope_values: draftScopeResolution?.scope_values || []
+    });
+  }
+  let payChannelScope = syncDraftScopeStateForCreate(draftScopeResolution.scope || 'ALL');
 
   let overrideReason = null;
   let overrideContinue = false;
   let reauthToken = '';
+
+  const makeCreateDraftCancelledResult = (code = 'BANKING_PAY_CREATE_DRAFT_CANCELLED', extra = {}) => ({
+    ok: false,
+    cancelled: true,
+    code,
+    error_code: code,
+    operation_started: false,
+    no_operation_started: true,
+    no_batch_created: true,
+    ...(isPlainObject(extra) ? extra : {})
+  });
+  const classifySelectedRowsForDraftScope = (selectedRowIds, scopeValue) => {
+    const selectedSet = new Set(uniqTrimmed(selectedRowIds));
+    const scope = normaliseDraftScopeForCreate(scopeValue) || 'ALL';
+    const rowsBySection = collectLoadedPreviewRowsBySectionForCreateDraft();
+    const eligibleSelectedRows = asArray(rowsBySection.canonical_preview_lines)
+      .filter((row) => isDraftCreateEligiblePreviewRow(row))
+      .filter((row) => {
+        const rowId = getPreviewRowId(row);
+        return rowId && selectedSet.has(rowId);
+      });
+    const payeRows = [];
+    const umbrellaRows = [];
+    const otherRows = [];
+    for (const row of eligibleSelectedRows) {
+      const channel = getPreviewRowPayChannelForCreateDraft(row);
+      if (channel === 'PAYE') payeRows.push(row);
+      else if (channel === 'UMBRELLA') umbrellaRows.push(row);
+      else otherRows.push(row);
+    }
+    const scopedRows = scope === 'PAYE' ? payeRows : (scope === 'UMBRELLA' ? umbrellaRows : eligibleSelectedRows);
+    return {
+      scope,
+      selected_eligible_rows: eligibleSelectedRows,
+      selected_eligible_row_ids: uniqTrimmed(eligibleSelectedRows.map((row) => getPreviewRowId(row))),
+      scoped_rows: scopedRows,
+      scoped_row_ids: uniqTrimmed(scopedRows.map((row) => getPreviewRowId(row))),
+      counts: {
+        selected_ready_total: eligibleSelectedRows.length,
+        selected_ready_paye: payeRows.length,
+        selected_ready_umbrella: umbrellaRows.length,
+        selected_ready_other: otherRows.length,
+        selected_ready_for_scope: scopedRows.length
+      },
+      samples: {
+        selected_ready_paye_preview_row_ids: uniqTrimmed(payeRows.map((row) => getPreviewRowId(row))).slice(0, 10),
+        selected_ready_umbrella_preview_row_ids: uniqTrimmed(umbrellaRows.map((row) => getPreviewRowId(row))).slice(0, 10),
+        selected_ready_for_scope_preview_row_ids: uniqTrimmed(scopedRows.map((row) => getPreviewRowId(row))).slice(0, 10)
+      }
+    };
+  };
+  const returnCreateDraftNoRowsForScope = async (scopeValue, selectionSummary) => {
+    const scope = normaliseDraftScopeForCreate(scopeValue) || 'ALL';
+    const counts = isPlainObject(selectionSummary?.counts) ? selectionSummary.counts : {};
+    const title = scope === 'PAYE'
+      ? 'No PAYE rows available'
+      : (scope === 'UMBRELLA' ? 'No Umbrella rows available' : 'No selected rows available');
+    const message = scope === 'PAYE'
+      ? 'No PAYE rows are available for Create Draft. Choose Umbrella only or select PAYE-ready rows.'
+      : (scope === 'UMBRELLA'
+          ? 'No Umbrella rows are available for Create Draft. Choose PAYE only or select Umbrella-ready rows.'
+          : 'No selected Ready to Pay rows are available for Create Draft.');
+    const result = makeCreateDraftCancelledResult('BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE', {
+      scope,
+      pay_channel_scope: scope,
+      title,
+      message,
+      scope_counts: counts,
+      selected_preview_row_ids_count: selectedPreviewRowIdsForServer.length,
+      selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode
+    });
+    logTroubleshoot('warn', 'NO_ROWS_FOR_SELECTED_DRAFT_SCOPE', {
+      scope,
+      counts,
+      selected_preview_row_ids_count: selectedPreviewRowIdsForServer.length,
+      selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode
+    });
+    try {
+      wiz.createDraftError = message;
+      wiz.createDraftFriendlyError = { title, message, code: result.code, error_code: result.error_code };
+      wiz.lastCreateDraftResult = deep(result);
+    } catch {}
+    await presentCreateDraftFriendlyError({ title, message, code: result.code, error_code: result.error_code, confirm_label: 'OK' }, title, message);
+    return deep(result);
+  };
+
+  const preSyncScopeSelection = classifySelectedRowsForDraftScope(selectedPreviewRowIdsForServer, payChannelScope || 'ALL');
+  if ((payChannelScope === 'PAYE' || payChannelScope === 'UMBRELLA') && preSyncScopeSelection.scoped_row_ids.length <= 0) {
+    return await returnCreateDraftNoRowsForScope(payChannelScope, preSyncScopeSelection);
+  }
 
   const requestSummary = {
     pay_date: pd,
@@ -34598,6 +34767,12 @@ async function bankingPayCreateDraft(input = {}) {
     selected_preview_row_ids_count: selectedPreviewRowIdsForServer.length,
     selected_preview_row_ids_sample: selectedPreviewRowIdsForServer.slice(0, 10),
     pay_channel_scope: payChannelScope || 'ALL',
+    selected_ready_total: preSyncScopeSelection.counts.selected_ready_total,
+    selected_ready_paye: preSyncScopeSelection.counts.selected_ready_paye,
+    selected_ready_umbrella: preSyncScopeSelection.counts.selected_ready_umbrella,
+    selected_ready_for_scope: preSyncScopeSelection.counts.selected_ready_for_scope,
+    selected_preview_row_ids_for_scope_count: preSyncScopeSelection.scoped_row_ids.length,
+    selected_preview_row_ids_for_scope_sample: preSyncScopeSelection.scoped_row_ids.slice(0, 10),
     same_week_paye_override_reason_present: !!overrideReason,
     same_week_paye_override_continue: overrideContinue === true,
     same_week_paye_reauth_token_present: !!reauthToken
@@ -34685,10 +34860,26 @@ async function bankingPayCreateDraft(input = {}) {
     const draftSelectedEconomicKeys = asArray(currentSelectionBeforeSubmit.selected_economic_keys || currentSelectionBeforeSubmit.draft_selected_economic_keys)
       .filter((contract) => isPlainObject(contract))
       .map((contract) => deep(contract) || contract);
+    const scopedSelectedPreviewRowContracts = asArray(currentSelectionBeforeSubmit.scoped_selected_preview_row_contracts)
+      .filter((contract) => isPlainObject(contract))
+      .map((contract) => deep(contract) || contract);
+    const scopedSelectedEconomicKeys = asArray(currentSelectionBeforeSubmit.scoped_selected_economic_keys)
+      .filter((contract) => isPlainObject(contract))
+      .map((contract) => deep(contract) || contract);
     createDraftPreviewDecisions.draft_selected_preview_row_contracts = deep(draftSelectedPreviewRowContracts) || [];
     createDraftPreviewDecisions.selected_preview_row_contracts = deep(draftSelectedPreviewRowContracts) || [];
     createDraftPreviewDecisions.draft_selected_economic_keys = deep(draftSelectedEconomicKeys) || [];
     createDraftPreviewDecisions.selected_economic_keys = deep(draftSelectedEconomicKeys) || [];
+    createDraftPreviewDecisions.scoped_selected_preview_row_ids = uniqTrimmed(currentSelectionBeforeSubmit.scoped_selected_preview_row_ids);
+    createDraftPreviewDecisions.scoped_selected_preview_row_contracts = deep(scopedSelectedPreviewRowContracts) || [];
+    createDraftPreviewDecisions.scoped_selected_economic_keys = deep(scopedSelectedEconomicKeys) || [];
+    createDraftPreviewDecisions.scope_counts = {
+      selected_ready_total: Number(currentSelectionBeforeSubmit.selected_eligible_ready_row_count_all_channels || 0) || 0,
+      selected_ready_for_scope: Number(currentSelectionBeforeSubmit.selected_eligible_ready_row_count_for_scope || 0) || 0,
+      selected_preview_row_ids_total: syncedSelectedRows.length,
+      scoped_selected_preview_row_ids_total: uniqTrimmed(currentSelectionBeforeSubmit.scoped_selected_preview_row_ids).length,
+      pay_channel_scope: payChannelScope || 'ALL'
+    };
 
     const reqBody = {
       pay_date: pd,
@@ -34787,6 +34978,8 @@ async function bankingPayCreateDraft(input = {}) {
     if (isPlainObject(preflightBody.preview_decisions_json)) {
       preflightBody.preview_decisions_json.pay_channel_scope = payChannelScope;
       preflightBody.preview_decisions_json.draft_scope = payChannelScope;
+      preflightBody.preview_decisions_json.payChannelScope = payChannelScope;
+      preflightBody.preview_decisions_json.draftScope = payChannelScope;
     }
     delete preflightBody.same_week_paye_override_reason;
     delete preflightBody.same_week_paye_override_continue;
@@ -34959,57 +35152,15 @@ async function bankingPayCreateDraft(input = {}) {
       return null;
     };
 
-    let preflightPayload = null;
-    try {
-      preflightPayload = await apiPostJson('/api/banking/pay/batch/create-draft', preflightBody, {
-        action: 'CREATE_DRAFT',
-        userInitiated: createDraftUserInitiated,
-        silent: true,
-        background: true,
-        showModal: false,
-        fallbackCode: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_FAILED',
-        fallbackTitle: 'Payment draft could not be checked',
-        fallbackMessage: 'CloudTMS could not check the selected draft scope. Refresh Banking and try again.'
-      });
-    } catch (preflightError) {
-      const actionPayload = extractCreateDraftPreflightActionPayload(preflightError);
-      if (!actionPayload) throw preflightError;
-      preflightPayload = actionPayload;
-      logTroubleshoot('info', 'CREATE_DRAFT_PREFLIGHT_ACTION_REQUIRED_FROM_ERROR', {
-        code: trimStr(actionPayload.code || actionPayload.error_code || '') || null,
-        status: Number(preflightError?.status || preflightError?.status_code || preflightError?.http_status || 0) || null
-      });
-    }
-
-    if (!isPlainObject(preflightPayload)) {
-      throwCreateDraftFailureEnvelope({
-        ok: false,
-        error_code: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID',
-        code: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID',
-        message: 'CloudTMS could not confirm whether this draft can start. Refresh Banking and try again.',
-        payload: preflightPayload
-      }, 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID');
-    }
-
-    const preflightActionRequired = payloadRequiresPayeDraftAction(preflightPayload);
-    if (!preflightActionRequired && preflightPayload.preflight !== true) {
-      throwCreateDraftFailureEnvelope({
-        ok: false,
-        error_code: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID',
-        code: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID',
-        message: 'CloudTMS could not confirm whether this draft can start. Refresh Banking and try again.',
-        payload: preflightPayload
-      }, 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID');
-    }
-
-    if (preflightActionRequired) {
-      const ui = isPlainObject(preflightPayload.ui) ? preflightPayload.ui : {};
+    const applyCreateDraftActionRequiredDecision = async (actionPayloadLike, sourceLabel = 'CREATE_DRAFT_ACTION_REQUIRED') => {
+      const actionPayload = isPlainObject(actionPayloadLike) ? actionPayloadLike : {};
+      const ui = isPlainObject(actionPayload.ui) ? actionPayload.ui : {};
       const actionCode = upperTrim(
-        preflightPayload.code ||
-        preflightPayload.error_code ||
-        preflightPayload.errorCode ||
-        preflightPayload.action_code ||
-        preflightPayload.actionCode ||
+        actionPayload.code ||
+        actionPayload.error_code ||
+        actionPayload.errorCode ||
+        actionPayload.action_code ||
+        actionPayload.actionCode ||
         ui.code ||
         ui.error_code ||
         ui.errorCode ||
@@ -35017,20 +35168,23 @@ async function bankingPayCreateDraft(input = {}) {
         ui.actionCode ||
         'PAYE_SAME_WEEK_OVERRIDE_REQUIRED'
       ) || 'PAYE_SAME_WEEK_OVERRIDE_REQUIRED';
-      const actionChoices = firstActionArray(preflightPayload.choices, ui.choices, preflightPayload.actions, ui.actions, preflightPayload.options, ui.options);
-      const actionTitle = trimStr(ui.title || preflightPayload.title) || 'PAYE draft needs your decision';
-      const actionMessage = trimStr(ui.message || preflightPayload.message || preflightPayload.user_message)
+      const actionChoices = firstActionArray(actionPayload.choices, ui.choices, actionPayload.actions, ui.actions, actionPayload.options, ui.options);
+      const actionTitle = trimStr(ui.title || actionPayload.title) || 'PAYE draft needs your decision';
+      const actionMessage = trimStr(ui.message || actionPayload.message || actionPayload.user_message)
         || 'A PAYE batch already exists for this payroll week.';
-      const actionDetail = trimStr(ui.detail || ui.secondary_message || ui.secondaryMessage || preflightPayload.detail || preflightPayload.description || '');
+      const actionDetail = trimStr(ui.detail || ui.secondary_message || ui.secondaryMessage || actionPayload.detail || actionPayload.description || '');
 
       if (!createDraftUserInitiated || createDraftSilent || createDraftBackground) {
         throwCreateDraftFailureEnvelope({
-          ...preflightPayload,
+          ...actionPayload,
           ok: false,
           error_code: actionCode,
           code: actionCode,
           message: actionMessage,
-          action_required: true
+          action_required: true,
+          operation_started: false,
+          no_operation_started: true,
+          no_batch_created: true
         }, actionCode);
       }
 
@@ -35050,29 +35204,34 @@ async function bankingPayCreateDraft(input = {}) {
         detail: actionDetail,
         choices: actionChoices,
         ui,
-        counts: preflightPayload.scope_counts || preflightPayload.counts || ui.counts || {},
+        counts: actionPayload.scope_counts || actionPayload.counts || ui.counts || {},
         pay_channel_scope: payChannelScope,
         paye_row_count:
-          preflightPayload.scope_counts?.paye_rows ??
-          preflightPayload.scope_counts?.paye_row_count ??
-          preflightPayload.counts?.paye_rows ??
-          preflightPayload.counts?.paye_row_count ??
-          preflightPayload.paye_row_count,
+          actionPayload.scope_counts?.paye_rows ??
+          actionPayload.scope_counts?.paye_row_count ??
+          actionPayload.scope_counts?.selected_ready_paye ??
+          actionPayload.counts?.paye_rows ??
+          actionPayload.counts?.paye_row_count ??
+          actionPayload.counts?.selected_ready_paye ??
+          actionPayload.paye_row_count,
         umbrella_row_count:
-          preflightPayload.scope_counts?.umbrella_rows ??
-          preflightPayload.scope_counts?.umbrella_row_count ??
-          preflightPayload.counts?.umbrella_rows ??
-          preflightPayload.counts?.umbrella_row_count ??
-          preflightPayload.umbrella_row_count
+          actionPayload.scope_counts?.umbrella_rows ??
+          actionPayload.scope_counts?.umbrella_row_count ??
+          actionPayload.scope_counts?.selected_ready_umbrella ??
+          actionPayload.counts?.umbrella_rows ??
+          actionPayload.counts?.umbrella_row_count ??
+          actionPayload.counts?.selected_ready_umbrella ??
+          actionPayload.umbrella_row_count
       });
 
       if (choice === 'CREATE_UMBRELLA_ONLY') {
-        payChannelScope = 'UMBRELLA';
-        wiz.draft_scope = 'UMBRELLA';
+        payChannelScope = syncDraftScopeStateForCreate('UMBRELLA');
         reqBody.pay_channel_scope = 'UMBRELLA';
         if (isPlainObject(reqBody.preview_decisions_json)) {
           reqBody.preview_decisions_json.pay_channel_scope = 'UMBRELLA';
           reqBody.preview_decisions_json.draft_scope = 'UMBRELLA';
+          reqBody.preview_decisions_json.draftScope = 'UMBRELLA';
+          reqBody.preview_decisions_json.payChannelScope = 'UMBRELLA';
         }
         overrideReason = null;
         overrideContinue = false;
@@ -35084,11 +35243,15 @@ async function bankingPayCreateDraft(input = {}) {
         requestSummary.same_week_paye_override_reason_present = false;
         requestSummary.same_week_paye_override_continue = false;
         requestSummary.same_week_paye_reauth_token_present = false;
-        logTroubleshoot('info', 'CREATE_DRAFT_PREFLIGHT_UMBRELLA_ONLY_SELECTED', {
+        logTroubleshoot('info', `${sourceLabel}_UMBRELLA_ONLY_SELECTED`, {
           action_code: actionCode,
-          selected_preview_row_ids_count: syncedSelectedRows.length
+          selected_preview_row_ids_count: syncedSelectedRows.length,
+          operation_started: false
         });
-      } else if (choice === 'VERIFY_AND_CREATE_BOTH' || choice === 'VERIFY_AND_CREATE_PAYE') {
+        return { ok: true, decision: 'CREATE_UMBRELLA_ONLY' };
+      }
+
+      if (choice === 'VERIFY_AND_CREATE_BOTH' || choice === 'VERIFY_AND_CREATE_PAYE') {
         if (typeof collectSameWeekPayeOverrideProof !== 'function') {
           throwCreateDraftFailureEnvelope({
             ok: false,
@@ -35101,23 +35264,28 @@ async function bankingPayCreateDraft(input = {}) {
         const proof = await collectSameWeekPayeOverrideProof({
           pay_channel_scope: choice === 'VERIFY_AND_CREATE_BOTH' ? 'ALL' : 'PAYE',
           guardrail_code: actionCode,
-          preflight: preflightPayload
+          preflight: actionPayload
         });
         if (!proof || proof.ok !== true) {
+          const result = makeCreateDraftCancelledResult(proof?.code || 'PAYE_SAME_WEEK_OVERRIDE_CANCELLED', {
+            reason: 'PAYE_SAME_WEEK_OVERRIDE_NOT_COMPLETED',
+            message: trimStr(proof?.message || 'Same-week PAYE override was cancelled. No draft was created.'),
+            pay_channel_scope: payChannelScope
+          });
           try {
-            wiz.createDraftError = trimStr(proof?.message || 'Same-week PAYE override was cancelled. No draft was created.');
-            wiz.lastCreateDraftResult = deep({
-              ok: false,
-              cancelled: proof?.cancelled === true,
-              code: proof?.code || 'PAYE_SAME_WEEK_OVERRIDE_CANCELLED',
-              reason: 'PAYE_SAME_WEEK_OVERRIDE_NOT_COMPLETED'
-            });
+            wiz.createDraftError = result.message;
+            wiz.lastCreateDraftResult = deep(result);
           } catch {}
-          return null;
+          logTroubleshoot('info', `${sourceLabel}_OVERRIDE_NOT_COMPLETED`, {
+            action_code: actionCode,
+            choice,
+            cancelled: proof?.cancelled === true,
+            operation_started: false
+          });
+          return { ok: false, cancelled: true, result };
         }
 
-        payChannelScope = choice === 'VERIFY_AND_CREATE_BOTH' ? 'ALL' : 'PAYE';
-        wiz.draft_scope = payChannelScope;
+        payChannelScope = syncDraftScopeStateForCreate(choice === 'VERIFY_AND_CREATE_BOTH' ? 'ALL' : 'PAYE');
         overrideReason = trimStr(proof.reason) || null;
         overrideContinue = proof.continue === true;
         reauthToken = trimStr(proof.reauth_token || proof.reauthToken || '');
@@ -35137,56 +35305,183 @@ async function bankingPayCreateDraft(input = {}) {
         if (isPlainObject(reqBody.preview_decisions_json)) {
           reqBody.preview_decisions_json.pay_channel_scope = payChannelScope;
           reqBody.preview_decisions_json.draft_scope = payChannelScope;
+          reqBody.preview_decisions_json.draftScope = payChannelScope;
+          reqBody.preview_decisions_json.payChannelScope = payChannelScope;
         }
         requestSummary.pay_channel_scope = payChannelScope;
         requestSummary.same_week_paye_override_reason_present = true;
         requestSummary.same_week_paye_override_continue = true;
         requestSummary.same_week_paye_reauth_token_present = true;
-        logTroubleshoot('info', 'CREATE_DRAFT_PREFLIGHT_OVERRIDE_PROOF_COLLECTED', {
+        logTroubleshoot('info', `${sourceLabel}_OVERRIDE_PROOF_COLLECTED`, {
           action_code: actionCode,
           pay_channel_scope: payChannelScope,
           same_week_paye_override_reason_present: true,
-          same_week_paye_reauth_token_present: true
+          same_week_paye_reauth_token_present: true,
+          operation_started: false
+        });
+        return { ok: true, decision: choice };
+      }
+
+      const result = makeCreateDraftCancelledResult(actionCode, {
+        reason: 'CREATE_DRAFT_CANCELLED_AT_PAYE_GUARDRAIL',
+        message: 'Draft creation was cancelled. No draft was created.',
+        pay_channel_scope: payChannelScope
+      });
+      try {
+        wiz.createDraftError = result.message;
+        wiz.lastCreateDraftResult = deep(result);
+      } catch {}
+      logTroubleshoot('info', `${sourceLabel}_CANCELLED`, {
+        action_code: actionCode,
+        choice: choice || 'CANCEL',
+        operation_started: false
+      });
+      return { ok: false, cancelled: true, result };
+    };
+
+    let preflightPayload = null;
+    try {
+      preflightPayload = await apiPostJson('/api/banking/pay/batch/create-draft', preflightBody, {
+        action: 'CREATE_DRAFT',
+        userInitiated: createDraftUserInitiated,
+        silent: true,
+        background: true,
+        showModal: false,
+        fallbackCode: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_FAILED',
+        fallbackTitle: 'Payment draft could not be checked',
+        fallbackMessage: 'CloudTMS could not check the selected draft scope. Refresh Banking and try again.'
+      });
+    } catch (preflightError) {
+      const actionPayload = extractCreateDraftPreflightActionPayload(preflightError);
+      if (actionPayload) {
+        preflightPayload = actionPayload;
+        logTroubleshoot('info', 'CREATE_DRAFT_PREFLIGHT_ACTION_REQUIRED_FROM_ERROR', {
+          code: trimStr(actionPayload.code || actionPayload.error_code || '') || null,
+          status: Number(preflightError?.status || preflightError?.status_code || preflightError?.http_status || 0) || null
         });
       } else {
-        try {
-          wiz.createDraftError = 'Draft creation was cancelled. No draft was created.';
-          wiz.lastCreateDraftResult = deep({
-            ok: false,
-            cancelled: true,
-            code: actionCode,
-            reason: 'CREATE_DRAFT_CANCELLED_AT_PAYE_GUARDRAIL'
-          });
-        } catch {}
-        return null;
+        const failurePayload = detectCreateDraftFailureEnvelope(preflightError);
+        if (failurePayload) {
+          throwCreateDraftFailureEnvelope(failurePayload, failurePayload.error_code || failurePayload.code || 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_FAILED');
+        }
+        throw preflightError;
       }
-    } else if (preflightPayload.can_start !== true) {
+    }
+
+    if (!isPlainObject(preflightPayload)) {
       throwCreateDraftFailureEnvelope({
         ok: false,
-        error_code: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_BLOCKED',
-        code: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_BLOCKED',
-        message: trimStr(preflightPayload.message) || 'CloudTMS could not confirm that draft creation may start. Refresh Banking and try again.',
+        error_code: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID',
+        code: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID',
+        message: 'CloudTMS could not confirm whether this draft can start. Refresh Banking and try again.',
         payload: preflightPayload
-      }, 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_BLOCKED');
+      }, 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID');
     }
+
+    const preflightActionRequired = payloadRequiresPayeDraftAction(preflightPayload);
+    if (!preflightActionRequired && preflightPayload.preflight !== true) {
+      const preflightFailure = detectCreateDraftFailureEnvelope(preflightPayload);
+      if (preflightFailure) {
+        throwCreateDraftFailureEnvelope(preflightFailure, preflightFailure.error_code || preflightFailure.code || 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_FAILED');
+      }
+      throwCreateDraftFailureEnvelope({
+        ok: false,
+        error_code: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID',
+        code: 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID',
+        message: 'CloudTMS could not confirm whether this draft can start. Refresh Banking and try again.',
+        payload: preflightPayload
+      }, 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_RESPONSE_INVALID');
+    }
+
+    if (preflightActionRequired) {
+      const actionDecision = await applyCreateDraftActionRequiredDecision(preflightPayload, 'CREATE_DRAFT_PREFLIGHT');
+      if (actionDecision?.cancelled) return deep(actionDecision.result || makeCreateDraftCancelledResult('BANKING_PAY_CREATE_DRAFT_CANCELLED'));
+    } else if (preflightPayload.can_start !== true) {
+      const payloadCode = trimStr(preflightPayload.error_code || preflightPayload.code || 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_BLOCKED') || 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_BLOCKED';
+      throwCreateDraftFailureEnvelope({
+        ...preflightPayload,
+        ok: false,
+        error_code: payloadCode,
+        code: payloadCode,
+        message: trimStr(preflightPayload.message || preflightPayload.user_message) || 'CloudTMS could not confirm that draft creation may start. Refresh Banking and try again.',
+        payload: preflightPayload,
+        operation_started: false,
+        no_operation_started: true,
+        no_batch_created: true
+      }, payloadCode);
+    }
+
 
     reqBody.pay_channel_scope = payChannelScope;
     if (isPlainObject(reqBody.preview_decisions_json)) {
       reqBody.preview_decisions_json.pay_channel_scope = payChannelScope;
       reqBody.preview_decisions_json.draft_scope = payChannelScope;
+      reqBody.preview_decisions_json.payChannelScope = payChannelScope;
+      reqBody.preview_decisions_json.draftScope = payChannelScope;
     }
 
 
-    const operationPayload = await apiPostJson('/api/banking/pay/batch/create-draft', reqBody, {
-      action: 'CREATE_DRAFT',
-      userInitiated: createDraftUserInitiated,
-      silent: createDraftSilent,
-      background: createDraftBackground,
-      showModal: createDraftUserInitiated && !createDraftSilent && !createDraftBackground,
-      fallbackCode: 'BANKING_PAY_CREATE_DRAFT_FAILED',
-      fallbackTitle: 'Payment batch could not be created',
-      fallbackMessage: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.'
-    });
+    let operationPayload = null;
+    let finalSubmissionCancelledResult = null;
+    for (let finalSubmitAttempt = 0; finalSubmitAttempt < 3; finalSubmitAttempt += 1) {
+      try {
+        operationPayload = await apiPostJson('/api/banking/pay/batch/create-draft', reqBody, {
+          action: 'CREATE_DRAFT',
+          userInitiated: createDraftUserInitiated,
+          silent: createDraftSilent,
+          background: createDraftBackground,
+          showModal: createDraftUserInitiated && !createDraftSilent && !createDraftBackground,
+          fallbackCode: 'BANKING_PAY_CREATE_DRAFT_FAILED',
+          fallbackTitle: 'Payment batch could not be created',
+          fallbackMessage: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.'
+        });
+      } catch (finalSubmitError) {
+        const finalActionPayload = extractCreateDraftPreflightActionPayload(finalSubmitError);
+        if (!finalActionPayload) throw finalSubmitError;
+        logTroubleshoot('info', 'CREATE_DRAFT_FINAL_ACTION_REQUIRED_FROM_ERROR', {
+          code: trimStr(finalActionPayload.code || finalActionPayload.error_code || '') || null,
+          status: Number(finalSubmitError?.status || finalSubmitError?.status_code || finalSubmitError?.http_status || 0) || null,
+          final_submit_attempt: finalSubmitAttempt + 1
+        });
+        const finalDecision = await applyCreateDraftActionRequiredDecision(finalActionPayload, 'CREATE_DRAFT_FINAL_SUBMISSION');
+        if (finalDecision?.cancelled) {
+          finalSubmissionCancelledResult = finalDecision.result || makeCreateDraftCancelledResult('BANKING_PAY_CREATE_DRAFT_CANCELLED');
+          break;
+        }
+        operationPayload = null;
+        continue;
+      }
+
+      const finalActionPayload = extractCreateDraftPreflightActionPayload(operationPayload);
+      if (!finalActionPayload) break;
+      logTroubleshoot('info', 'CREATE_DRAFT_FINAL_ACTION_REQUIRED_FROM_PAYLOAD', {
+        code: trimStr(finalActionPayload.code || finalActionPayload.error_code || '') || null,
+        final_submit_attempt: finalSubmitAttempt + 1
+      });
+      const finalDecision = await applyCreateDraftActionRequiredDecision(finalActionPayload, 'CREATE_DRAFT_FINAL_SUBMISSION');
+      if (finalDecision?.cancelled) {
+        finalSubmissionCancelledResult = finalDecision.result || makeCreateDraftCancelledResult('BANKING_PAY_CREATE_DRAFT_CANCELLED');
+        operationPayload = null;
+        break;
+      }
+      operationPayload = null;
+    }
+
+    if (finalSubmissionCancelledResult) {
+      return deep(finalSubmissionCancelledResult);
+    }
+
+    if (!operationPayload) {
+      throwCreateDraftFailureEnvelope({
+        ok: false,
+        error_code: 'BANKING_PAY_CREATE_DRAFT_ACTION_RETRY_LIMIT',
+        code: 'BANKING_PAY_CREATE_DRAFT_ACTION_RETRY_LIMIT',
+        message: 'CloudTMS could not complete the Create Draft decision safely. No draft has been created. Refresh Banking and try again.',
+        operation_started: false,
+        no_operation_started: true,
+        no_batch_created: true
+      }, 'BANKING_PAY_CREATE_DRAFT_ACTION_RETRY_LIMIT');
+    }
 
     const createDraftFailure = detectCreateDraftFailureEnvelope(operationPayload);
     if (createDraftFailure) {
@@ -35561,6 +35856,8 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
+
 
 async function openPayeSameWeekOverrideDecisionModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -42286,6 +42583,8 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 
 // Full replacement for renderPayNewBatchWizard from FRONTEND 10052026.js
 
+
+
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -42388,7 +42687,31 @@ function renderPayNewBatchWizard() {
 
   const stickyPreviewHeaderCellStyle = 'position:sticky;top:0;z-index:2;background:var(--panel,#fff);box-shadow:inset 0 -1px 0 var(--line);';
   const sectionScrollHostStyle = 'margin-top:10px;max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;scrollbar-gutter:stable;overscroll-behavior:contain;background:var(--panel,#fff);';
+  const expandedSectionScrollHostStyle = 'margin-top:10px;max-height:calc(100vh - 250px);min-height:min(620px, calc(100vh - 250px));overflow:auto;border:1px solid var(--line);border-radius:10px;scrollbar-gutter:stable;overscroll-behavior:contain;background:var(--panel,#fff);';
   const caseCardStackStyle = 'padding:10px;display:flex;flex-direction:column;gap:12px;';
+  wiz.ui_state = (wiz.ui_state && typeof wiz.ui_state === 'object' && !Array.isArray(wiz.ui_state)) ? wiz.ui_state : {};
+  const validWorkbenchSectionKeys = new Set(['READY_TO_PAY', 'CASES_RESOLUTIONS', 'BLOCKED_FOR_PAY']);
+  const expandedWorkbenchSection = validWorkbenchSectionKeys.has(upperTrim(wiz.ui_state.expanded_workbench_section))
+    ? upperTrim(wiz.ui_state.expanded_workbench_section)
+    : '';
+  const openReadyTimesheetBreakdownKeys = new Set(uniqTrimmed(wiz.ui_state.ready_timesheet_breakdown_open_keys));
+  const isWorkbenchSectionBodyVisible = (sectionKey) => !expandedWorkbenchSection || expandedWorkbenchSection === upperTrim(sectionKey);
+  const getWorkbenchSectionScrollHostStyle = (sectionKey) => expandedWorkbenchSection === upperTrim(sectionKey)
+    ? expandedSectionScrollHostStyle
+    : sectionScrollHostStyle;
+  const renderWorkbenchSectionExpandControl = (sectionKey) => {
+    const key = upperTrim(sectionKey);
+    const isExpanded = expandedWorkbenchSection === key;
+    return `
+      <button
+        type="button"
+        class="btn btn-xs btn-outline"
+        data-action="banking:pay:toggleWorkbenchSection"
+        data-section-key="${enc(key)}"
+        aria-expanded="${isExpanded ? 'true' : 'false'}"
+      >${enc(isExpanded ? 'Collapse section' : 'Expand section')}</button>
+    `;
+  };
   const previewTableStyle = 'min-width:1260px;table-layout:auto;border-collapse:separate;border-spacing:0;';
   const makeScrollAnchor = (prefix, raw) => {
     const value = trimStr(raw);
@@ -44888,7 +45211,7 @@ function renderPayNewBatchWizard() {
     const summaryText = section === 'BLOCKED_FOR_PAY'
       ? `Show blocked segments (${segmentRows.length})`
       : section === 'READY_TO_PAY'
-        ? `Show ready segments (${segmentRows.length})`
+        ? `Show timesheet breakdown (${segmentRows.length})`
         : `Show segments (${segmentRows.length})`;
 
     return `
@@ -45313,6 +45636,292 @@ function renderPayNewBatchWizard() {
         </div>
       </details>
     `;
+  };
+
+  const getReadyTimesheetGroupKey = (line) => {
+    const candidateId = getLineCandidateId(line);
+    const timesheetId = getLineTimesheetId(line);
+    if (!candidateId || !timesheetId) return '';
+    return `READY_TO_PAY|${candidateId}|${timesheetId}`;
+  };
+
+  const buildReadyTimesheetBreakdownEntries = (groupLines) => {
+    const entries = [];
+    for (const line of asArray(groupLines)) {
+      const segmentRows = getLineSectionSegmentRows(line);
+      const operationalRows = segmentRows.length ? segmentRows : [line];
+      const previewRowId = getPreviewRowId(line);
+      operationalRows.forEach((segment, index) => {
+        entries.push({
+          line,
+          segment,
+          preview_row_id: previewRowId,
+          preview_row_span: operationalRows.length,
+          show_preview_checkbox: index === 0
+        });
+      });
+    }
+    return entries;
+  };
+
+  const renderReadyTimesheetBreakdown = (groupKey, groupLines, candidateId, timesheetId) => {
+    const entries = buildReadyTimesheetBreakdownEntries(groupLines);
+    if (!entries.length) return '';
+
+    return `
+      <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
+        <table class="grid" style="min-width:1180px;table-layout:auto;">
+          <thead>
+            <tr>
+              <th style="white-space:nowrap;">Tick</th>
+              <th style="white-space:nowrap;">Date</th>
+              <th>Client</th>
+              <th>Role</th>
+              <th>Band</th>
+              <th style="white-space:nowrap;">Start</th>
+              <th style="white-space:nowrap;">Finish</th>
+              <th style="white-space:nowrap;">Break</th>
+              <th style="text-align:right;white-space:nowrap;">Amount</th>
+              <th style="white-space:nowrap;">Snooze state</th>
+              <th style="white-space:nowrap;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${entries.map((entry) => {
+              const line = entry.line;
+              const segment = entry.segment;
+              const nestedSegment = getNestedLinePayload(segment);
+              const previewRowId = trimStr(entry.preview_row_id);
+              const selected = previewRowId ? selectedPreviewRowSet.has(previewRowId) : false;
+              const segmentDate = trimStr(segment?.date || segment?.work_date || segment?.linked_shift_date || nestedSegment?.date || nestedSegment?.work_date || line?.linked_shift_date || line?.week_ending_date || '');
+              const clientName = trimStr(segment?.client_name || segment?.trust_name || nestedSegment?.client_name || line?.client_name || line?.trust_name || '') || '—';
+              const role = trimStr(segment?.role || segment?.job_title || nestedSegment?.role || nestedSegment?.job_title || line?.role || line?.job_title || '') || '—';
+              const band = trimStr(segment?.band || segment?.band_name || nestedSegment?.band || line?.band || '') || '—';
+              const startVal = trimStr(segment?.start || segment?.start_time || nestedSegment?.start || nestedSegment?.start_time || '') || '—';
+              const finishVal = trimStr(segment?.finish || segment?.finish_time || nestedSegment?.finish || nestedSegment?.finish_time || '') || '—';
+              const amount = segment?.pay_amount_ex_vat ?? segment?.amount_ex_vat ?? segment?.pay_amount ?? nestedSegment?.pay_amount_ex_vat ?? nestedSegment?.amount_ex_vat ?? getLineSectionAmount(line);
+              const snoozeInfo = getSnoozeInfo(segment);
+              const breakStart = trimStr(segment?.break_start || nestedSegment?.break_start || '');
+              const breakEnd = trimStr(segment?.break_end || nestedSegment?.break_end || '');
+              const breakMinsNum = Number(segment?.break_mins ?? segment?.break_minutes ?? nestedSegment?.break_mins ?? nestedSegment?.break_minutes);
+              const breakWindows = Array.isArray(segment?.breaks)
+                ? segment.breaks.filter((br) => br && typeof br === 'object')
+                : [];
+              const breakLabel = (breakStart || breakEnd)
+                ? `${breakStart || '—'} - ${breakEnd || '—'}`
+                : (Number.isFinite(breakMinsNum) && breakMinsNum > 0
+                    ? `${String(Math.round(breakMinsNum))} mins`
+                    : (breakWindows.length
+                        ? breakWindows.map((br) => {
+                            const brStart = trimStr(br?.start || br?.break_start || '');
+                            const brEnd = trimStr(br?.end || br?.break_end || '');
+                            const brMins = Number(br?.break_mins ?? br?.break_minutes ?? br?.minutes ?? br?.duration_minutes ?? br?.duration_mins ?? br?.mins);
+                            if (brStart || brEnd) return `${brStart || '—'} - ${brEnd || '—'}`;
+                            if (Number.isFinite(brMins) && brMins > 0) return `${String(Math.round(brMins))} mins`;
+                            return '';
+                          }).filter(Boolean).join('; ') || '—'
+                        : '—'));
+              const snoozeState = snoozeInfo.isDated
+                ? `Snoozed until ${ymdToUk(snoozeInfo.snoozeUntil) || snoozeInfo.snoozeUntil}`
+                : (snoozeInfo.isIndefinite ? 'Indefinitely snoozed' : 'Not snoozed');
+              const actionHtml = snoozeInfo.isIndefinite ? '' : `
+                <button
+                  type="button"
+                  class="btn btn-xs btn-outline"
+                  data-action="banking:pay:openSnooze"
+                  ${buildSnoozeDataAttrs({
+                    obj: segment,
+                    parentObj: line,
+                    candidateId,
+                    snoozeKind: 'DO_NOT_PAY',
+                    lineLabel: ['Segment', trimStr(line?.display_name), segmentDate ? (ymdToUk(segmentDate) || segmentDate) : '', (startVal || finishVal) ? `${startVal || '—'}-${finishVal || '—'}` : ''].filter(Boolean).join(' — '),
+                    sourceRefOverride: '',
+                    timesheetIdOverride: getIdentityValue(segment, 'timesheet_id') || timesheetId,
+                    segmentIdOverride: getIdentityValue(segment, 'segment_id')
+                  })}
+                  ${getCandidateActionDisabledAttrs(candidateId, snoozeInfo.isDated ? 'Manage snooze' : 'Snooze this segment')}
+                >${enc(snoozeInfo.isDated ? 'Manage snooze' : 'Snooze segment')}</button>`;
+
+              return `
+                <tr${previewRowId ? ` data-preview-row-id="${enc(previewRowId)}"` : ''} data-timesheet-group-key="${enc(groupKey)}">
+                  ${entry.show_preview_checkbox ? `
+                    <td rowspan="${enc(String(entry.preview_row_span))}" style="white-space:nowrap;vertical-align:top;">
+                      ${previewRowId ? `
+                        <input
+                          type="checkbox"
+                          data-action="banking:pay:togglePreviewRow"
+                          data-preview-row-id="${enc(previewRowId)}"
+                          data-selection-scope="TIMESHEET_BREAKDOWN_CHILD"
+                          data-timesheet-id="${enc(timesheetId)}"
+                          data-candidate-id="${enc(candidateId)}"
+                          data-line-type="TIMESHEET_PAYMENT"
+                          data-presentation-section="READY_TO_PAY"
+                          ${selected ? 'checked' : ''}
+                          ${getCandidateActionDisabledAttrs(candidateId, selected ? 'Untick this preview row' : 'Tick this preview row')}
+                        />
+                      ` : `<span class="mini" style="opacity:.7;">—</span>`}
+                    </td>
+                  ` : ''}
+                  <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(segmentDate) || segmentDate || '—')}</td>
+                  <td class="mini">${enc(clientName)}</td>
+                  <td class="mini">${enc(role)}</td>
+                  <td class="mini">${enc(band)}</td>
+                  <td class="mini" style="white-space:nowrap;">${enc(startVal)}</td>
+                  <td class="mini" style="white-space:nowrap;">${enc(finishVal)}</td>
+                  <td class="mini" style="white-space:nowrap;">${enc(breakLabel)}</td>
+                  <td class="mono" style="text-align:right;white-space:nowrap;">£${enc(fmtMoney(amount))}</td>
+                  <td class="mini" style="white-space:nowrap;">${enc(snoozeState)}</td>
+                  <td style="white-space:nowrap;">${actionHtml || `<span class="mini" style="opacity:.7;">—</span>`}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  };
+
+  const renderReadyTimesheetGroupedRows = (lines) => {
+    const orderedItems = [];
+    const groupByKey = new Map();
+
+    for (const line of asArray(lines).filter((item) => isPlainObject(item))) {
+      const groupKey = getReadyTimesheetGroupKey(line);
+      if (!groupKey) {
+        orderedItems.push({ kind: 'line', line });
+        continue;
+      }
+      if (!groupByKey.has(groupKey)) {
+        const group = { kind: 'group', key: groupKey, lines: [] };
+        groupByKey.set(groupKey, group);
+        orderedItems.push(group);
+      }
+      groupByKey.get(groupKey).lines.push(line);
+    }
+
+    return orderedItems.map((item) => {
+      if (item.kind === 'line') {
+        return renderTimesheetParentRows([item.line], 'READY_TO_PAY');
+      }
+
+      const groupLines = item.lines;
+      const representative = groupLines.find((line) => !!resolvedRateCancelActionHtml(line, 'READY_TO_PAY')) || groupLines[0];
+      const candidateId = getLineCandidateId(representative);
+      const timesheetId = getLineTimesheetId(representative);
+      const previewRowIds = uniqTrimmed(groupLines.map((line) => getPreviewRowId(line)));
+      const selectedPreviewRowIds = previewRowIds.filter((rowId) => selectedPreviewRowSet.has(rowId));
+      const selectionState = previewRowIds.length <= 0
+        ? 'NONE'
+        : (selectedPreviewRowIds.length === previewRowIds.length
+            ? 'ALL'
+            : (selectedPreviewRowIds.length === 0 ? 'NONE' : 'PARTIAL'));
+      const fullAmount = Math.round(groupLines.reduce((sum, line) => sum + toNum(getLineSectionAmount(line), 0), 0) * 100) / 100;
+      const selectedAmount = Math.round(groupLines.reduce((sum, line) => {
+        const rowId = getPreviewRowId(line);
+        return sum + (rowId && selectedPreviewRowSet.has(rowId) ? toNum(getLineSectionAmount(line), 0) : 0);
+      }, 0) * 100) / 100;
+      const breakdownEntries = buildReadyTimesheetBreakdownEntries(groupLines);
+      const breakdownCount = breakdownEntries.length;
+      const isBreakdownOpen = openReadyTimesheetBreakdownKeys.has(item.key);
+      const nested = getNestedLinePayload(representative);
+      const displayName = trimStr(representative?.display_name || nested?.display_name || representative?.candidate_name || nested?.candidate_name || '') || '—';
+      const tmsRef = trimStr(representative?.tms_ref || nested?.tms_ref || '');
+      const client = trimStr(representative?.client_name || nested?.client_name || representative?.trust_name || nested?.trust_name || '') || '—';
+      const weekOrDate = ymdToUk(trimStr(representative?.week_ending_date || nested?.week_ending_date || '')) || ymdToUk(trimStr(representative?.linked_shift_date || nested?.linked_shift_date || '')) || '—';
+      const payChannels = uniqTrimmed(groupLines.map((line) => upperTrim(line?.pay_channel || getNestedLinePayload(line)?.pay_channel || '')));
+      const payeTreatments = uniqTrimmed(groupLines.map((line) => upperTrim(line?.paye_treatment || getNestedLinePayload(line)?.paye_treatment || '')));
+      const payChannel = payChannels.length > 1 ? 'MIXED' : (payChannels[0] || '—');
+      const payeTreatment = payeTreatments.length > 1 ? 'MIXED' : (payeTreatments[0] || '');
+      const cancelResolvedRateHtml = resolvedRateCancelActionHtml(representative, 'READY_TO_PAY');
+      const wholeActionHtml = (() => {
+        const info = getSnoozeInfo(representative);
+        const lineLabel = `TIMESHEET PAYMENT — ${displayName}`;
+        if (info.hasActive && info.snoozeId) {
+          return `
+            <button
+              type="button"
+              class="btn btn-xs btn-outline"
+              data-action="banking:finance:clearTimesheetSnooze"
+              data-snooze-id="${enc(info.snoozeId)}"
+              data-timesheet-id="${enc(timesheetId)}"
+              ${getCandidateActionDisabledAttrs(candidateId, 'Unsnooze this whole timesheet')}
+            >Unsnooze whole timesheet</button>
+          `;
+        }
+        return `
+          <button
+            type="button"
+            class="btn btn-xs btn-outline"
+            data-action="banking:pay:openSnooze"
+            ${buildSnoozeDataAttrs({ obj: representative, candidateId, snoozeKind: trimStr(representative?.snooze_kind || 'TIMESHEET_PAYMENT'), lineLabel, timesheetIdOverride: timesheetId })}
+            ${getCandidateActionDisabledAttrs(candidateId, 'Snooze this whole timesheet')}
+          >Snooze whole timesheet</button>
+        `;
+      })();
+      const groupAnchor = makeScrollAnchor('ready-timesheet', `${candidateId}:${timesheetId}`);
+      const amountHtml = `
+        <div>£${enc(fmtMoney(fullAmount))}</div>
+        ${selectionState === 'PARTIAL' ? `<div class="mini" style="color:#c62828;font-weight:700;margin-top:2px;">£${enc(fmtMoney(selectedAmount))} selected</div>` : ''}
+      `;
+
+      return `
+        <tr${groupAnchor ? ` data-banking-scroll-anchor="${enc(groupAnchor)}"` : ''} data-timesheet-group-key="${enc(item.key)}" data-candidate-id="${enc(candidateId)}" data-timesheet-id="${enc(timesheetId)}">
+          <td style="white-space:nowrap;vertical-align:top;">
+            ${previewRowIds.length ? `
+              <input
+                type="checkbox"
+                data-action="banking:pay:toggleTimesheetPreviewGroup"
+                data-preview-row-ids="${enc(JSON.stringify(previewRowIds))}"
+                data-group-selection-state="${enc(selectionState)}"
+                data-timesheet-group-key="${enc(item.key)}"
+                data-timesheet-id="${enc(timesheetId)}"
+                data-candidate-id="${enc(candidateId)}"
+                aria-checked="${selectionState === 'PARTIAL' ? 'mixed' : (selectionState === 'ALL' ? 'true' : 'false')}"
+                ${selectionState === 'ALL' ? 'checked' : ''}
+                ${getCandidateActionDisabledAttrs(candidateId, selectionState === 'ALL' ? 'Untick all rows in this timesheet' : 'Tick all rows in this timesheet')}
+              />
+            ` : `<span class="mini" style="opacity:.7;">—</span>`}
+          </td>
+          <td class="mini">TIMESHEET PAYMENT</td>
+          <td>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span class="mono">${enc(tmsRef)}</span>
+              <span>${enc(displayName)}</span>
+              ${renderCandidateWorkbenchIndicators(candidateId)}
+              <span class="mini" style="opacity:.75;">${enc(String(breakdownCount))} breakdown row(s)</span>
+            </div>
+            <button
+              type="button"
+              class="btn btn-xs btn-outline"
+              style="margin-top:6px;"
+              data-action="banking:pay:toggleTimesheetBreakdown"
+              data-timesheet-group-key="${enc(item.key)}"
+              aria-expanded="${isBreakdownOpen ? 'true' : 'false'}"
+            >${enc(`${isBreakdownOpen ? 'Hide' : 'Show'} timesheet breakdown (${breakdownCount})`)}</button>
+          </td>
+          <td class="mini">${enc(client)}</td>
+          <td class="mini" style="white-space:nowrap;">${enc(weekOrDate)}</td>
+          <td class="mono" style="text-align:right;white-space:nowrap;">${amountHtml}</td>
+          <td>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <span class="pill pill-ok">Ready to pay</span>
+              <div class="mini" style="opacity:.85;">${enc(payChannel)}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}</div>
+            </div>
+          </td>
+          <td style="white-space:nowrap;">
+            <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;">
+              ${cancelResolvedRateHtml || ''}
+              ${wholeActionHtml || ''}
+            </div>
+          </td>
+        </tr>
+        ${isBreakdownOpen ? `
+          <tr data-timesheet-group-key="${enc(item.key)}">
+            <td colspan="8" style="padding-top:0;">${renderReadyTimesheetBreakdown(item.key, groupLines, candidateId, timesheetId)}</td>
+          </tr>
+        ` : ''}
+      `;
+    }).join('');
   };
 
   const renderTimesheetParentRows = (lines, renderContextSection = '') => {
@@ -47730,13 +48339,16 @@ function renderPayNewBatchWizard() {
             <span class="pill">Amount ${enc(fmtMoney(totalCaseAmount))}</span>
           </div>
         </div>
+        ${renderWorkbenchSectionExpandControl('CASES_RESOLUTIONS')}
       </div>
-      <div id="bankingPayCasesScrollHost" data-banking-scroll-host="cases" style="${sectionScrollHostStyle}">
-        <table class="grid" style="${previewTableStyle}">
-          ${previewTableHeaderHtml}
-          <tbody>${previewRowsHtml}</tbody>
-        </table>
-      </div>
+      ${isWorkbenchSectionBodyVisible('CASES_RESOLUTIONS') ? `
+        <div id="bankingPayCasesScrollHost" data-banking-scroll-host="cases" style="${getWorkbenchSectionScrollHostStyle('CASES_RESOLUTIONS')}">
+          <table class="grid" style="${previewTableStyle}">
+            ${previewTableHeaderHtml}
+            <tbody>${previewRowsHtml}</tbody>
+          </table>
+        </div>
+      ` : ''}
     </div>
   `;
 };
@@ -47774,23 +48386,26 @@ function renderPayNewBatchWizard() {
               ${totalCases > 0 ? `<span class="pill">Case amount ${enc(fmtMoney(totalCaseAmount))}</span>` : ''}
             </div>
           </div>
+          ${renderWorkbenchSectionExpandControl('BLOCKED_FOR_PAY')}
         </div>
-        <div id="bankingPayBlockedScrollHost" data-banking-scroll-host="blocked" style="${sectionScrollHostStyle}">
-          <table class="grid" style="${previewTableStyle}">
-            ${previewTableHeaderHtml}
-            <tbody>${previewRowsHtml}</tbody>
-          </table>
-          ${displayGroups.length ? `
-            <div style="border-top:1px solid var(--line); ${caseCardStackStyle}">
-              ${displayGroups.map((group) => `
-                <div class="card" style="margin:0;">
-                  ${renderCandidateHeader(group.candidate, group.entries.length)}
-                  ${group.entries.map((entry) => renderCaseCard(entry)).join('')}
-                </div>
-              `).join('')}
-            </div>
-          ` : ''}
-        </div>
+        ${isWorkbenchSectionBodyVisible('BLOCKED_FOR_PAY') ? `
+          <div id="bankingPayBlockedScrollHost" data-banking-scroll-host="blocked" style="${getWorkbenchSectionScrollHostStyle('BLOCKED_FOR_PAY')}">
+            <table class="grid" style="${previewTableStyle}">
+              ${previewTableHeaderHtml}
+              <tbody>${previewRowsHtml}</tbody>
+            </table>
+            ${displayGroups.length ? `
+              <div style="border-top:1px solid var(--line); ${caseCardStackStyle}">
+                ${displayGroups.map((group) => `
+                  <div class="card" style="margin:0;">
+                    ${renderCandidateHeader(group.candidate, group.entries.length)}
+                    ${group.entries.map((entry) => renderCaseCard(entry)).join('')}
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
+        ` : ''}
       </div>
     `;
   };
@@ -47812,7 +48427,7 @@ function renderPayNewBatchWizard() {
   };
 
   const readyCanonicalRowsHtml = [
-    renderTimesheetParentRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT'), 'READY_TO_PAY'),
+    renderReadyTimesheetGroupedRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
     renderSimplePreviewRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'), null, 'READY_TO_PAY')
   ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(readyEmptyMessage())}</td></tr>`;
 
@@ -47862,13 +48477,16 @@ function renderPayNewBatchWizard() {
                   <span class="pill">Amount ${enc(fmtMoney(readyLineAmountTotal))}</span>
                 </div>
               </div>
+              ${renderWorkbenchSectionExpandControl('READY_TO_PAY')}
             </div>
-            <div id="bankingPayReadyScrollHost" data-banking-scroll-host="ready" style="${sectionScrollHostStyle}">
-              <table class="grid" style="${previewTableStyle}">
-                ${previewTableHeaderHtml}
-                <tbody>${readyCanonicalRowsHtml}</tbody>
-              </table>
-            </div>
+            ${isWorkbenchSectionBodyVisible('READY_TO_PAY') ? `
+              <div id="bankingPayReadyScrollHost" data-banking-scroll-host="ready" style="${getWorkbenchSectionScrollHostStyle('READY_TO_PAY')}">
+                <table class="grid" style="${previewTableStyle}">
+                  ${previewTableHeaderHtml}
+                  <tbody>${readyCanonicalRowsHtml}</tbody>
+                </table>
+              </div>
+            ` : ''}
           </div>
 
           ${renderCasesSection(casePreviewLinesEnriched, caseGroups)}
@@ -47879,7 +48497,6 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
-
 
 
 
@@ -79888,6 +80505,7 @@ function renderBankingAlertPreferencesPanel() {
   `;
 }
 
+
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -79962,9 +80580,29 @@ function attachBankingModalDelegatedHandlers() {
   const targetEl = document.getElementById('modalBody');
   if (!targetEl) return { ok: false, error: 'modalBody not found' };
 
+  const syncTimesheetGroupCheckboxes = (root = targetEl) => {
+    try {
+      if (!root || typeof root.querySelectorAll !== 'function') return;
+      const checkboxes = root.querySelectorAll('[data-action="banking:pay:toggleTimesheetPreviewGroup"]');
+      for (const checkbox of checkboxes) {
+        const state = String(checkbox.getAttribute('data-group-selection-state') || '').trim().toUpperCase();
+        const isAll = state === 'ALL';
+        const isPartial = state === 'PARTIAL';
+        checkbox.checked = isAll;
+        checkbox.indeterminate = isPartial;
+        checkbox.setAttribute('aria-checked', isPartial ? 'mixed' : (isAll ? 'true' : 'false'));
+      }
+    } catch {}
+  };
+
   try {
     const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
     if (mc && mc.__bankingDelegated && mc.__bankingDelegated.targetEl === targetEl) {
+      try {
+        const sync = mc.__bankingDelegated.syncTimesheetGroupCheckboxes;
+        if (typeof sync === 'function') sync(targetEl);
+        else syncTimesheetGroupCheckboxes(targetEl);
+      } catch {}
       return { ok: true, already: true };
     }
   } catch {}
@@ -83113,10 +83751,17 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           for (const node of nodes) {
             pushId(node.getAttribute('data-preview-row-id'));
           }
+          const groupNodes = root.querySelectorAll('[data-action="banking:pay:toggleTimesheetPreviewGroup"][data-preview-row-ids]');
+          for (const node of groupNodes) {
+            const raw = String(node.getAttribute('data-preview-row-ids') || '').trim();
+            if (!raw) continue;
+            try {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) parsed.forEach(pushId);
+            } catch {}
+          }
         }
       } catch {}
-
-      if (out.length > 0) return out;
 
       for (const rowId of getPayWizardSelectablePreviewRowIdsFromState()) {
         pushId(rowId);
@@ -83261,6 +83906,59 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           : (workingSet.size >= allPreviewRowIds.length ? 'IMPLICIT_ALL' : 'EXPLICIT_SUBSET'),
         selectedIds: Array.from(workingSet)
       });
+    };
+
+    const setPreviewRowsSelection = (previewRowIds, checked) => {
+      const requestedIds = normalizePreviewRowIdArray(previewRowIds);
+      const allPreviewRowIds = getRenderedPreviewRowIds();
+      const validPreviewRowIdSet = new Set(allPreviewRowIds);
+      const targetIds = requestedIds.filter((rowId) => validPreviewRowIdSet.has(rowId));
+      const decisions = ensurePayWizardDecisionState();
+      if (!targetIds.length || !allPreviewRowIds.length) return decisions;
+
+      const currentMode = normalizeSelectedPreviewRowMode(
+        st.pay?.draftWizard?.selected_preview_row_mode,
+        allPreviewRowIds,
+        decisions.selected_preview_row_ids
+      );
+      const workingSet = new Set(
+        currentMode === 'IMPLICIT_ALL'
+          ? allPreviewRowIds
+          : normalizePreviewRowIdArray(decisions.selected_preview_row_ids).filter((rowId) => validPreviewRowIdSet.has(rowId))
+      );
+
+      for (const rowId of targetIds) {
+        if (checked) workingSet.add(rowId);
+        else workingSet.delete(rowId);
+      }
+
+      return setPreviewRowSelectionState({
+        mode: workingSet.size <= 0
+          ? 'EXPLICIT_NONE'
+          : (workingSet.size >= allPreviewRowIds.length ? 'IMPLICIT_ALL' : 'EXPLICIT_SUBSET'),
+        selectedIds: Array.from(workingSet)
+      });
+    };
+
+    const ensurePayWorkbenchUiState = () => {
+      st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+      st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+      st.pay.draftWizard.ui_state = (st.pay.draftWizard.ui_state && typeof st.pay.draftWizard.ui_state === 'object' && !Array.isArray(st.pay.draftWizard.ui_state))
+        ? st.pay.draftWizard.ui_state
+        : {};
+      return st.pay.draftWizard.ui_state;
+    };
+
+    const parsePreviewRowIdsAttribute = (raw) => {
+      const text = String(raw || '').trim();
+      if (!text) return [];
+      try {
+        const parsed = JSON.parse(text);
+        if (!Array.isArray(parsed) || parsed.length > 10000) return [];
+        return normalizePreviewRowIdArray(parsed);
+      } catch {
+        return [];
+      }
     };
 
     const updateCandidateIncludeSet = (candidateId, includeChecked) => {
@@ -84835,6 +85533,41 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       return;
     }
 
+    if (a === 'banking:pay:toggleTimesheetPreviewGroup') {
+      if (kind !== 'change') return;
+      const previewRowIds = parsePreviewRowIdsAttribute(ds('previewRowIds') || dget('data-preview-row-ids'));
+      if (!previewRowIds.length) return;
+      const currentState = String(ds('groupSelectionState') || dget('data-group-selection-state') || '').trim().toUpperCase();
+      const selectAllChildren = currentState !== 'ALL';
+      setPreviewRowsSelection(previewRowIds, selectAllChildren);
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:pay:toggleTimesheetBreakdown') {
+      if (kind !== 'click') return;
+      const groupKey = String(ds('timesheetGroupKey') || dget('data-timesheet-group-key') || '').trim();
+      if (!groupKey) return;
+      const uiState = ensurePayWorkbenchUiState();
+      const openKeys = new Set(normalizePreviewRowIdArray(uiState.ready_timesheet_breakdown_open_keys));
+      if (openKeys.has(groupKey)) openKeys.delete(groupKey);
+      else openKeys.add(groupKey);
+      uiState.ready_timesheet_breakdown_open_keys = Array.from(openKeys);
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:pay:toggleWorkbenchSection') {
+      if (kind !== 'click') return;
+      const sectionKey = String(ds('sectionKey') || dget('data-section-key') || '').trim().toUpperCase();
+      if (!['READY_TO_PAY', 'CASES_RESOLUTIONS', 'BLOCKED_FOR_PAY'].includes(sectionKey)) return;
+      const uiState = ensurePayWorkbenchUiState();
+      const current = String(uiState.expanded_workbench_section || '').trim().toUpperCase();
+      uiState.expanded_workbench_section = current === sectionKey ? '' : sectionKey;
+      await safeRerender(null);
+      return;
+    }
+
     if (a === 'banking:pay:togglePreviewRow') {
       if (kind !== 'change') return;
       const previewRowId = String(ds('previewRowId') || dget('data-preview-row-id') || '').trim();
@@ -85013,11 +85746,70 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       });
       return;
     }
-    if (a === 'banking:pay:clearCaseResolution' || a === 'banking:pay:componentClearResolution') {
+    if (a === 'banking:pay:clearCaseResolution') {
+      const candidateId = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+      const caseKey = String(ds('caseKey') || dget('data-case-key') || '').trim();
+      const linkedTimesheetId = String(ds('linkedTimesheetId') || dget('data-linked-timesheet-id') || ds('timesheetId') || dget('data-timesheet-id') || '').trim();
+      const resolutionFamily = String(ds('resolutionFamily') || dget('data-resolution-family') || 'BUCKETED').trim().toUpperCase();
+      const workbenchSessionId = getCurrentWorkbenchSessionId();
+      const workbenchSessionVersion = getCurrentWorkbenchSessionVersion();
+
+      if (!candidateId) {
+        toast('Candidate id is required.');
+        return;
+      }
+      if (!linkedTimesheetId) {
+        toast('Timesheet id is required.');
+        return;
+      }
+      if (!workbenchSessionId) {
+        toast('No workbench session is available. Refresh Banking Pay and try again.');
+        return;
+      }
+      if (resolutionFamily !== 'BUCKETED') {
+        toast('Only whole-timesheet resolved rates can be cancelled here.');
+        return;
+      }
+      if (typeof openBankingPayCancelResolvedRatesModal !== 'function') {
+        toast('The Cancel Resolved Rate modal is not available. Refresh Banking Pay and try again.');
+        return;
+      }
+
+      try {
+        await openBankingPayCancelResolvedRatesModal({
+          workbench_session_id: workbenchSessionId,
+          session_version: workbenchSessionVersion,
+          candidate_id: candidateId,
+          clicked_timesheet_id: linkedTimesheetId,
+          clicked_case_key: caseKey || `timesheet:${linkedTimesheetId}`,
+          onConfirm: async ({ selected_timesheet_ids: selectedTimesheetIds, expected_session_version: expectedSessionVersion }) => {
+            if (getCurrentWorkbenchSessionId() !== workbenchSessionId) {
+              throw new Error('The Banking Pay workbench session changed. Close this modal, refresh Banking Pay, and try again.');
+            }
+            return runWorkbenchCandidateMutation({
+              candidateId,
+              mutate: (sessionId) => bankingPayWorkbenchSessionClearCaseResolution(sessionId, {
+                operation: 'CLEAR',
+                candidate_id: candidateId,
+                resolution_family: 'BUCKETED',
+                selected_timesheet_ids: selectedTimesheetIds,
+                expected_session_version: expectedSessionVersion
+              })
+            });
+          }
+        });
+      } catch (e) {
+        toast(String(e?.message || e || 'Unable to open Cancel Resolved Rate.'));
+      }
+      return;
+    }
+
+    if (a === 'banking:pay:componentClearResolution') {
       const candidateId = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
       const caseKey = String(ds('caseKey') || dget('data-case-key') || '').trim();
       const linkedTimesheetId = String(ds('linkedTimesheetId') || dget('data-linked-timesheet-id') || ds('timesheetId') || dget('data-timesheet-id') || '').trim();
+      const resolutionFamily = String(ds('resolutionFamily') || dget('data-resolution-family') || '').trim().toUpperCase();
 
       if (!candidateId) {
         toast('Candidate id is required.');
@@ -85044,10 +85836,13 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         await runWorkbenchCandidateMutation({
           candidateId,
           mutate: (sessionId) => bankingPayWorkbenchSessionClearCaseResolution(sessionId, {
+            operation: 'CLEAR',
             candidate_id: candidateId,
             case_key: caseKey,
             ...(financeCaseId ? { finance_case_id: financeCaseId } : {}),
-            ...(linkedTimesheetId ? { linked_timesheet_id: linkedTimesheetId, timesheet_id: linkedTimesheetId } : {})
+            ...(linkedTimesheetId ? { linked_timesheet_id: linkedTimesheetId, timesheet_id: linkedTimesheetId } : {}),
+            ...(resolutionFamily ? { resolution_family: resolutionFamily } : {}),
+            ...(getCurrentWorkbenchSessionVersion() != null ? { expected_session_version: getCurrentWorkbenchSessionVersion() } : {})
           })
         });
       } catch (e) {
@@ -88978,6 +89773,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         onInput,
         onKeyDown,
         onDblClick,
+        syncTimesheetGroupCheckboxes,
         detach: () => {
           try { targetEl.removeEventListener('click', onClick, true); } catch {}
           try { targetEl.removeEventListener('change', onChange, true); } catch {}
@@ -88989,10 +89785,504 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     }
   } catch {}
 
+  try { setTimeout(() => syncTimesheetGroupCheckboxes(targetEl), 0); } catch {}
+
   return { ok: true };
 }
 
+async function openBankingPayCancelResolvedRatesModal(seed = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const upperTrim = (value) => trimStr(value).toUpperCase();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[char]));
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const readUuid = (value) => {
+    const text = trimStr(value);
+    return uuidRe.test(text) ? text : '';
+  };
+  const readPositiveInteger = (value) => {
+    const text = trimStr(value);
+    if (!/^[0-9]{1,18}$/.test(text)) return null;
+    const parsed = Number(text);
+    return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : null;
+  };
+  const toNumber = (value) => {
+    if (value == null || trimStr(value) === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const formatMoney = (value) => {
+    const parsed = toNumber(value);
+    if (parsed === null) return '—';
+    return `£${(Math.round(parsed * 100) / 100).toFixed(2)}`;
+  };
+  const formatQuantity = (value) => {
+    const parsed = toNumber(value);
+    if (parsed === null) return trimStr(value) || '—';
+    return String(Math.round(parsed * 10000) / 10000);
+  };
+  const formatIsoDateUk = (value) => {
+    const text = trimStr(value);
+    const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : (text || '—');
+  };
+  const normalisePayMethod = (value) => {
+    const method = upperTrim(value);
+    if (!method) return '';
+    if (method === 'PAYE') return 'PAYE';
+    if (method === 'UMBRELLA') return 'Umbrella';
+    if (method === 'MIXED') return 'Mixed';
+    return method.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+  };
+  const formatMovement = (value, sourcePayMethod = '', targetPayMethod = '') => {
+    const explicit = trimStr(value);
+    if (upperTrim(explicit) === 'MIXED') return 'Mixed';
+    const source = normalisePayMethod(sourcePayMethod);
+    const target = normalisePayMethod(targetPayMethod);
+    if (source || target) return `${source || '—'} -> ${target || '—'}`;
+    if (!explicit) return '—';
+    const parts = explicit.split(/\s*(?:->|→)\s*/);
+    if (parts.length === 2) return `${normalisePayMethod(parts[0]) || '—'} -> ${normalisePayMethod(parts[1]) || '—'}`;
+    return explicit;
+  };
+  const pickText = (...values) => {
+    for (const value of values) {
+      const text = trimStr(value);
+      if (text) return text;
+    }
+    return '';
+  };
+  const toast = (message) => {
+    try {
+      if (typeof window !== 'undefined' && typeof window.__toast === 'function') {
+        window.__toast(trimStr(message));
+      }
+    } catch {}
+  };
 
+  const input = isPlainObject(seed) ? seed : {};
+  const sessionId = readUuid(input.workbench_session_id ?? input.workbenchSessionId ?? input.session_id ?? input.sessionId);
+  const candidateId = readUuid(input.candidate_id ?? input.candidateId);
+  const clickedTimesheetId = readUuid(input.clicked_timesheet_id ?? input.clickedTimesheetId ?? input.timesheet_id ?? input.timesheetId);
+  const suppliedSessionVersion = readPositiveInteger(input.session_version ?? input.sessionVersion ?? input.expected_session_version ?? input.expectedSessionVersion);
+  const onConfirm = typeof input.onConfirm === 'function' ? input.onConfirm : null;
+
+  if (!sessionId) throw new Error('A current Banking Pay workbench session is required.');
+  if (suppliedSessionVersion == null) throw new Error('A current Banking Pay workbench session version is required.');
+  if (!candidateId) throw new Error('Candidate id is required.');
+  if (!clickedTimesheetId) throw new Error('Timesheet id is required.');
+  if (!onConfirm) throw new Error('The Cancel Resolved Rate action is not available.');
+  if (typeof bankingPayWorkbenchSessionClearCaseResolution !== 'function') {
+    throw new Error('The Banking Pay resolved-rate service is not available.');
+  }
+
+  const listResult = await bankingPayWorkbenchSessionClearCaseResolution(sessionId, {
+    operation: 'LIST_CLEARABLE',
+    candidate_id: candidateId,
+    resolution_family: 'BUCKETED',
+    ...(suppliedSessionVersion != null ? { expected_session_version: suppliedSessionVersion } : {})
+  });
+
+  const listedSessionId = readUuid(listResult?.session_id ?? listResult?.workbench_session_id ?? sessionId);
+  const listedCandidateId = readUuid(listResult?.candidate_id ?? candidateId);
+  const listedSessionVersion = readPositiveInteger(listResult?.session_version);
+  if (listedSessionId !== sessionId || listedCandidateId !== candidateId || listedSessionVersion == null || listedSessionVersion !== suppliedSessionVersion) {
+    throw new Error('The Banking Pay workbench changed while resolved rates were loading. Refresh and try again.');
+  }
+
+  const normaliseEvidenceRow = (raw, fallbackIndex = 0) => {
+    const row = isPlainObject(raw) ? raw : {};
+    const sourceBasis = isPlainObject(row.source_basis_json) ? row.source_basis_json : {};
+    const suggestedResult = isPlainObject(row.suggested_resolution_result_json) ? row.suggested_resolution_result_json : {};
+    const resolvedResult = isPlainObject(row.resolution_result_json) ? row.resolution_result_json : {};
+    const sourcePayMethod = pickText(row.source_pay_method, row.previous_pay_method, row.pay_method_from, sourceBasis.source_pay_method);
+    const targetPayMethod = pickText(
+      row.target_pay_method,
+      row.current_pay_method,
+      row.resolved_pay_method,
+      row.pay_method_to,
+      suggestedResult.target_pay_method,
+      resolvedResult.target_pay_method
+    );
+    return {
+      key: [
+        pickText(row.component_key_type, row.key_type),
+        pickText(row.component_key_value, row.key_value),
+        pickText(row.bucket_code, row.unit_name, row.label),
+        pickText(row.work_date, sourceBasis.work_date),
+        String(fallbackIndex)
+      ].join('|'),
+      unit_name: pickText(row.unit_name, row.label, row.bucket_label, row.bucket_code, row.component_label, row.component_key_value) || 'Rate unit',
+      quantity: row.quantity ?? row.target_units ?? row.source_units ?? row.units ?? row.hours ?? row.count ?? null,
+      source_pay_method: sourcePayMethod,
+      target_pay_method: targetPayMethod,
+      movement: formatMovement(row.movement, sourcePayMethod, targetPayMethod),
+      previous_rate: row.previous_rate ?? row.source_rate ?? row.old_rate ?? null,
+      current_resolved_rate: row.current_resolved_rate ?? row.target_rate ?? row.resolved_rate ?? row.new_rate ?? row.suggested_target_rate ?? suggestedResult.replacement_rate ?? suggestedResult.target_rate ?? resolvedResult.replacement_rate ?? resolvedResult.target_rate ?? null,
+      old_margin: row.old_margin ?? row.source_margin_ex_vat ?? row.previous_margin_ex_vat ?? null,
+      new_margin: row.new_margin ?? row.target_margin_ex_vat ?? row.current_margin_ex_vat ?? row.suggested_target_margin_ex_vat ?? suggestedResult.target_margin_ex_vat ?? resolvedResult.target_margin_ex_vat ?? null,
+      work_date: pickText(row.work_date, sourceBasis.work_date),
+      bucket_code: pickText(row.bucket_code),
+      component_key_type: pickText(row.component_key_type, row.key_type),
+      component_key_value: pickText(row.component_key_value, row.key_value)
+    };
+  };
+
+  const rows = [];
+  const seenTimesheets = new Set();
+  for (const raw of Array.isArray(listResult?.clearable_timesheets) ? listResult.clearable_timesheets : []) {
+    if (!isPlainObject(raw)) continue;
+    const timesheetId = readUuid(raw.timesheet_id ?? raw.linked_timesheet_id);
+    const rowCandidateId = readUuid(raw.candidate_id ?? candidateId);
+    if (!timesheetId || rowCandidateId !== candidateId || seenTimesheets.has(timesheetId)) continue;
+    if (upperTrim(raw.resolution_family || 'BUCKETED') !== 'BUCKETED') continue;
+    seenTimesheets.add(timesheetId);
+
+    const evidenceSources = [
+      ...(Array.isArray(raw.evidence) ? raw.evidence : []),
+      ...(Array.isArray(raw.case_components) ? raw.case_components : [])
+    ];
+    const evidence = [];
+    const seenEvidence = new Set();
+    evidenceSources.forEach((item, index) => {
+      const normalised = normaliseEvidenceRow(item, index);
+      const hasMeaningfulEvidence = !!(
+        normalised.unit_name !== 'Rate unit' ||
+        normalised.quantity != null ||
+        normalised.previous_rate != null ||
+        normalised.current_resolved_rate != null ||
+        normalised.old_margin != null ||
+        normalised.new_margin != null ||
+        normalised.source_pay_method ||
+        normalised.target_pay_method ||
+        normalised.work_date ||
+        normalised.bucket_code ||
+        normalised.component_key_type ||
+        normalised.component_key_value
+      );
+      if (!hasMeaningfulEvidence) return;
+      const dedupeKey = [
+        normalised.unit_name,
+        trimStr(normalised.quantity),
+        normalised.source_pay_method,
+        normalised.target_pay_method,
+        trimStr(normalised.previous_rate),
+        trimStr(normalised.current_resolved_rate),
+        trimStr(normalised.old_margin),
+        trimStr(normalised.new_margin),
+        normalised.work_date,
+        normalised.bucket_code,
+        normalised.component_key_type,
+        normalised.component_key_value
+      ].join('|');
+      if (seenEvidence.has(dedupeKey)) return;
+      seenEvidence.add(dedupeKey);
+      evidence.push(normalised);
+    });
+    const uniqueMovements = Array.from(new Set(evidence.map((item) => item.movement).filter((item) => item && item !== '—')));
+    const movement = pickText(
+      raw.pay_method_movement,
+      uniqueMovements.length === 1 ? uniqueMovements[0] : (uniqueMovements.length > 1 ? 'Mixed' : '')
+    );
+
+    rows.push({
+      timesheet_id: timesheetId,
+      candidate_id: candidateId,
+      case_key: pickText(raw.case_key) || `timesheet:${timesheetId}`,
+      week_ending_date: pickText(raw.week_ending_date),
+      client_name: pickText(raw.client_name, raw.trust_name) || '—',
+      candidate_name: pickText(raw.candidate_name),
+      tms_ref: pickText(raw.tms_ref),
+      pay_method_movement: formatMovement(movement),
+      evidence
+    });
+  }
+
+  rows.sort((left, right) => {
+    const leftWeek = left.week_ending_date || '9999-12-31';
+    const rightWeek = right.week_ending_date || '9999-12-31';
+    const weekCompare = leftWeek.localeCompare(rightWeek);
+    if (weekCompare !== 0) return weekCompare;
+    const clientCompare = left.client_name.localeCompare(right.client_name, 'en-GB', { sensitivity: 'base' });
+    if (clientCompare !== 0) return clientCompare;
+    return left.timesheet_id.localeCompare(right.timesheet_id);
+  });
+
+  if (!rows.some((row) => row.timesheet_id === clickedTimesheetId)) {
+    throw new Error('This timesheet is no longer a current clearable resolved-rate timesheet. Refresh Banking Pay and try again.');
+  }
+
+  const candidateName = pickText(rows.find((row) => row.timesheet_id === clickedTimesheetId)?.candidate_name, rows[0]?.candidate_name);
+  const tmsRef = pickText(rows.find((row) => row.timesheet_id === clickedTimesheetId)?.tms_ref, rows[0]?.tms_ref);
+  const state = {
+    busy: false,
+    accepted: false,
+    error: '',
+    selectedTimesheetIds: new Set([clickedTimesheetId]),
+    expandedTimesheetIds: new Set()
+  };
+
+  const renderEvidenceTable = (row) => {
+    if (!row.evidence.length) {
+      return `<div class="mini" style="opacity:.8;padding:10px;">No component-level rate evidence is available for this resolved timesheet.</div>`;
+    }
+    return `
+      <div style="padding:10px;overflow:auto;background:rgba(148,163,184,.06);">
+        <table class="grid" style="min-width:1050px;table-layout:auto;background:var(--panel,#fff);">
+          <thead>
+            <tr>
+              <th>Unit name</th>
+              <th style="text-align:right;white-space:nowrap;">Quantity</th>
+              <th style="white-space:nowrap;">Movement</th>
+              <th style="text-align:right;white-space:nowrap;">Previous Rate</th>
+              <th style="text-align:right;white-space:nowrap;">Current Resolved Rate</th>
+              <th style="text-align:right;white-space:nowrap;">Old Margin</th>
+              <th style="text-align:right;white-space:nowrap;">New Margin</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${row.evidence.map((item) => `
+              <tr>
+                <td>
+                  <div>${enc(item.unit_name)}</div>
+                  ${item.work_date ? `<div class="mini" style="opacity:.75;">${enc(formatIsoDateUk(item.work_date))}</div>` : ''}
+                </td>
+                <td class="mono" style="text-align:right;white-space:nowrap;">${enc(formatQuantity(item.quantity))}</td>
+                <td class="mini" style="white-space:nowrap;">${enc(item.movement || '—')}</td>
+                <td class="mono" style="text-align:right;white-space:nowrap;">${enc(formatMoney(item.previous_rate))}</td>
+                <td class="mono" style="text-align:right;white-space:nowrap;">${enc(formatMoney(item.current_resolved_rate))}</td>
+                <td class="mono" style="text-align:right;white-space:nowrap;">${enc(formatMoney(item.old_margin))}</td>
+                <td class="mono" style="text-align:right;white-space:nowrap;">${enc(formatMoney(item.new_margin))}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  };
+
+  const renderMain = () => {
+    const selectedCount = state.selectedTimesheetIds.size;
+    return `
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="card">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <strong>${enc('Cancel Resolved Rate')}</strong>
+            ${tmsRef ? `<span class="mono">${enc(tmsRef)}</span>` : ''}
+            ${candidateName ? `<span>${enc(candidateName)}</span>` : ''}
+            <span class="pill">${enc(String(rows.length))} eligible timesheet(s)</span>
+            <span class="pill">${enc(String(selectedCount))} selected</span>
+          </div>
+          <div class="mini" style="opacity:.85;margin-top:6px;">
+            The clicked timesheet is selected. Tick any other current resolved timesheets for this candidate that should be cancelled in the same atomic operation.
+          </div>
+        </div>
+
+        ${state.error ? `<div class="error" style="white-space:pre-wrap;">${enc(state.error)}</div>` : ''}
+
+        <div style="max-height:calc(100vh - 310px);overflow:auto;border:1px solid var(--line);border-radius:10px;scrollbar-gutter:stable;">
+          <table class="grid" style="min-width:820px;table-layout:auto;">
+            <thead>
+              <tr>
+                <th style="width:70px;">Tick</th>
+                <th style="width:150px;">Week ending</th>
+                <th>Client</th>
+                <th style="width:190px;">Movement</th>
+                <th style="width:190px;">Rate evidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row) => {
+                const selected = state.selectedTimesheetIds.has(row.timesheet_id);
+                const expanded = state.expandedTimesheetIds.has(row.timesheet_id);
+                return `
+                  <tr>
+                    <td style="text-align:center;">
+                      <input
+                        type="checkbox"
+                        data-cancel-resolved-rate-select="true"
+                        data-timesheet-id="${enc(row.timesheet_id)}"
+                        ${selected ? 'checked' : ''}
+                        ${state.busy ? 'disabled' : ''}
+                        aria-label="${enc(`Select resolved timesheet ending ${formatIsoDateUk(row.week_ending_date)}`)}"
+                      />
+                    </td>
+                    <td class="mini" style="white-space:nowrap;">${enc(formatIsoDateUk(row.week_ending_date))}</td>
+                    <td>${enc(row.client_name)}</td>
+                    <td class="mini" style="white-space:nowrap;">${enc(row.pay_method_movement || '—')}</td>
+                    <td>
+                      <button
+                        type="button"
+                        class="btn btn-xs btn-outline"
+                        data-cancel-resolved-rate-expand="true"
+                        data-timesheet-id="${enc(row.timesheet_id)}"
+                        aria-expanded="${expanded ? 'true' : 'false'}"
+                        ${state.busy ? 'disabled' : ''}
+                      >${enc(`${expanded ? 'Hide' : 'Show'} rate evidence (${row.evidence.length})`)}</button>
+                    </td>
+                  </tr>
+                  ${expanded ? `<tr><td colspan="5" style="padding:0;">${renderEvidenceTable(row)}</td></tr>` : ''}
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
+          <button type="button" class="btn btn-outline" id="bankingPayCancelResolvedRatesCloseBtn" ${state.busy ? 'disabled' : ''}>Keep resolved rates</button>
+          <button type="button" class="btn btn-primary" id="bankingPayCancelResolvedRatesConfirmBtn" ${state.busy || selectedCount <= 0 ? 'disabled' : ''}>
+            ${enc(state.busy ? 'Cancelling…' : `Cancel Resolved Rate (${selectedCount})`)}
+          </button>
+        </div>
+      </div>
+    `;
+  };
+
+  const rerenderChild = async () => {
+    try {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (!frame || String(frame.kind || '') !== 'banking-pay-cancel-resolved-rates') return;
+      const tabKey = String(frame.currentTabKey || 'main').trim() || 'main';
+      try { frame._suppressDirty = true; } catch {}
+      await frame.setTab(tabKey);
+      try { frame._suppressDirty = false; } catch {}
+      try { frame._updateButtons && frame._updateButtons(); } catch {}
+    } catch {}
+  };
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const closeChild = () => {
+      try {
+        if (typeof closeCurrentModalFrameSafely === 'function') {
+          closeCurrentModalFrameSafely({ expectedKind: 'banking-pay-cancel-resolved-rates' });
+          return;
+        }
+      } catch {}
+      try {
+        const closeButton = document.getElementById('btnCloseModal');
+        if (closeButton) closeButton.click();
+      } catch {}
+    };
+
+    const onReturn = () => {
+      try {
+        document.querySelectorAll('[data-cancel-resolved-rate-select="true"]').forEach((checkbox) => {
+          if (checkbox.__wired) return;
+          checkbox.__wired = true;
+          checkbox.addEventListener('change', async () => {
+            if (state.busy) return;
+            const timesheetId = readUuid(checkbox.getAttribute('data-timesheet-id'));
+            if (!timesheetId) return;
+            if (checkbox.checked) state.selectedTimesheetIds.add(timesheetId);
+            else state.selectedTimesheetIds.delete(timesheetId);
+            state.error = '';
+            await rerenderChild();
+          });
+        });
+
+        document.querySelectorAll('[data-cancel-resolved-rate-expand="true"]').forEach((button) => {
+          if (button.__wired) return;
+          button.__wired = true;
+          button.addEventListener('click', async () => {
+            if (state.busy) return;
+            const timesheetId = readUuid(button.getAttribute('data-timesheet-id'));
+            if (!timesheetId) return;
+            if (state.expandedTimesheetIds.has(timesheetId)) state.expandedTimesheetIds.delete(timesheetId);
+            else state.expandedTimesheetIds.add(timesheetId);
+            await rerenderChild();
+          });
+        });
+
+        const closeButton = document.getElementById('bankingPayCancelResolvedRatesCloseBtn');
+        if (closeButton && !closeButton.__wired) {
+          closeButton.__wired = true;
+          closeButton.addEventListener('click', () => {
+            if (state.busy) return;
+            finish({ ok: true, accepted: false, declined: true });
+            closeChild();
+          });
+        }
+
+        const confirmButton = document.getElementById('bankingPayCancelResolvedRatesConfirmBtn');
+        if (confirmButton && !confirmButton.__wired) {
+          confirmButton.__wired = true;
+          confirmButton.addEventListener('click', async () => {
+            if (state.busy) return;
+            const selectedTimesheetIds = rows
+              .map((row) => row.timesheet_id)
+              .filter((timesheetId) => state.selectedTimesheetIds.has(timesheetId));
+            if (!selectedTimesheetIds.length) {
+              state.error = 'Select at least one resolved timesheet.';
+              await rerenderChild();
+              return;
+            }
+
+            state.busy = true;
+            state.error = '';
+            await rerenderChild();
+            try {
+              const result = await onConfirm({
+                workbench_session_id: sessionId,
+                candidate_id: candidateId,
+                selected_timesheet_ids: selectedTimesheetIds,
+                expected_session_version: listedSessionVersion
+              });
+              state.accepted = true;
+              finish({
+                ok: true,
+                accepted: true,
+                candidate_id: candidateId,
+                selected_timesheet_ids: selectedTimesheetIds,
+                result
+              });
+              closeChild();
+            } catch (error) {
+              state.busy = false;
+              state.error = trimStr(error?.user_message || error?.message || error || 'The resolved rate could not be cancelled. Refresh Banking Pay and try again.');
+              await rerenderChild();
+            }
+          });
+        }
+      } catch (error) {
+        toast(error?.message || error || 'Cancel Resolved Rate controls could not be prepared.');
+      }
+    };
+
+    showModal(
+      'Cancel Resolved Rate',
+      [{ key: 'main', label: 'Resolved Timesheets' }],
+      () => renderMain(),
+      null,
+      false,
+      onReturn,
+      {
+        kind: 'banking-pay-cancel-resolved-rates',
+        noParentGate: true,
+        forceEdit: true,
+        runOnRender: true,
+        showSave: false,
+        showApply: false,
+        onDismiss: () => {
+          finish({ ok: true, accepted: false, declined: !state.accepted });
+        }
+      }
+    );
+  });
+}
 
 
 
@@ -115615,9 +116905,6 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
   }
 }
 
-
-
-
 async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -115627,6 +116914,54 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
     } catch {
       return null;
     }
+  };
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const readUuid = (value) => {
+    const text = trimStr(value);
+    return uuidRe.test(text) ? text : '';
+  };
+  const readPositiveInteger = (value) => {
+    const text = trimStr(value);
+    if (!/^[0-9]{1,18}$/.test(text)) return null;
+    const number = Number(text);
+    return Number.isSafeInteger(number) && number >= 1 ? number : null;
+  };
+  const normaliseUuidArray = (value, maxItems = 500) => {
+    if (!Array.isArray(value)) return null;
+    if (value.length > maxItems) return null;
+    const out = [];
+    const seen = new Set();
+    for (const item of value) {
+      const uuid = readUuid(item);
+      if (!uuid) return null;
+      if (seen.has(uuid)) continue;
+      seen.add(uuid);
+      out.push(uuid);
+    }
+    return out;
+  };
+  const resolveJobId = (payloadObj) => {
+    const candidates = [
+      payloadObj?.job_id,
+      payloadObj?.jobId,
+      payloadObj?.pending_job_id,
+      payloadObj?.pendingJobId,
+      payloadObj?.enqueue_result?.job_id,
+      payloadObj?.enqueue_result?.jobId,
+      payloadObj?.enqueue_result?.job_ids?.[0],
+      payloadObj?.enqueue_result?.jobIds?.[0],
+      payloadObj?.enqueue_result?.session_recompute_job_ids?.[0],
+      payloadObj?.enqueue_result?.sessionRecomputeJobIds?.[0],
+      payloadObj?.job_ids?.[0],
+      payloadObj?.jobIds?.[0],
+      payloadObj?.session_recompute_job_ids?.[0],
+      payloadObj?.sessionRecomputeJobIds?.[0]
+    ];
+    for (const value of candidates) {
+      const uuid = readUuid(value);
+      if (uuid) return uuid;
+    }
+    return '';
   };
   const parseJsonResponse = async (res) => {
     const text = await res.text().catch(() => '');
@@ -115898,11 +117233,87 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
   };
 
   try {
-    const sessionIdText = trimStr(sessionId);
+    const sessionIdText = readUuid(sessionId);
+    if (!sessionIdText) {
+      throw makeApiPayloadError({ code: 'WORKBENCH_SESSION_INVALID' }, 400, 'The Banking Pay workbench session is invalid.');
+    }
+
+    const inputPayload = isPlainObject(payload) ? payload : {};
+    const operationRaw = trimStr(inputPayload.operation ?? inputPayload.action ?? inputPayload.mode).toUpperCase();
+    const operation = ['LIST', 'LIST_CLEARABLE', 'LIST_CLEARABLE_RESOLVED_RATES', 'LIST_RESOLVED_TIMESHEETS'].includes(operationRaw)
+      ? 'LIST_CLEARABLE'
+      : 'CLEAR';
+    if (operationRaw && ![
+      'LIST', 'LIST_CLEARABLE', 'LIST_CLEARABLE_RESOLVED_RATES', 'LIST_RESOLVED_TIMESHEETS',
+      'CLEAR', 'CLEAR_RESOLUTION', 'CLEAR_RESOLVED_RATE', 'BULK_CLEAR'
+    ].includes(operationRaw)) {
+      throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_CASE_RESOLUTION' }, 400, 'The requested resolved-rate action is invalid.');
+    }
+
+    const candidateRaw = inputPayload.candidate_id ?? inputPayload.candidateId;
+    const candidateId = candidateRaw == null || trimStr(candidateRaw) === '' ? '' : readUuid(candidateRaw);
+    if (candidateRaw != null && trimStr(candidateRaw) !== '' && !candidateId) {
+      throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_CANDIDATE' }, 400, 'Candidate id is invalid.');
+    }
+
+    const financeCaseRaw = inputPayload.finance_case_id ?? inputPayload.financeCaseId;
+    const financeCaseId = financeCaseRaw == null || trimStr(financeCaseRaw) === '' ? '' : readUuid(financeCaseRaw);
+    if (financeCaseRaw != null && trimStr(financeCaseRaw) !== '' && !financeCaseId) {
+      throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_FINANCE_CASE' }, 400, 'Finance case id is invalid.');
+    }
+
+    const linkedTimesheetRaw = inputPayload.linked_timesheet_id ?? inputPayload.linkedTimesheetId ?? inputPayload.timesheet_id ?? inputPayload.timesheetId;
+    const linkedTimesheetId = linkedTimesheetRaw == null || trimStr(linkedTimesheetRaw) === '' ? '' : readUuid(linkedTimesheetRaw);
+    if (linkedTimesheetRaw != null && trimStr(linkedTimesheetRaw) !== '' && !linkedTimesheetId) {
+      throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_TIMESHEET' }, 400, 'Timesheet id is invalid.');
+    }
+
+    const selectedTimesheetInput = inputPayload.selected_timesheet_ids ?? inputPayload.selectedTimesheetIds ?? inputPayload.timesheet_ids ?? inputPayload.timesheetIds;
+    const selectedTimesheetIds = selectedTimesheetInput == null
+      ? []
+      : normaliseUuidArray(selectedTimesheetInput);
+    if (selectedTimesheetInput != null && !selectedTimesheetIds) {
+      throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_SELECTED_ROWS' }, 400, 'Selected timesheet ids must be a bounded array of UUIDs.');
+    }
+
+    const expectedVersionRaw = inputPayload.expected_session_version ?? inputPayload.expectedSessionVersion ?? inputPayload.session_version ?? inputPayload.sessionVersion;
+    const expectedSessionVersion = expectedVersionRaw == null || trimStr(expectedVersionRaw) === ''
+      ? null
+      : readPositiveInteger(expectedVersionRaw);
+    if (expectedVersionRaw != null && trimStr(expectedVersionRaw) !== '' && expectedSessionVersion == null) {
+      throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_SESSION_VERSION' }, 400, 'The expected workbench session version is invalid.');
+    }
+
+    const caseKey = trimStr(inputPayload.case_key ?? inputPayload.caseKey);
+    const resolutionFamily = trimStr(inputPayload.resolution_family ?? inputPayload.resolutionFamily).toUpperCase();
+    if (operation === 'LIST_CLEARABLE' && !candidateId) {
+      throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_CANDIDATE' }, 400, 'Candidate id is required.');
+    }
+    if (operation === 'CLEAR' && !caseKey && selectedTimesheetIds.length === 0) {
+      throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_CASE_KEY' }, 400, 'Select at least one resolved-rate timesheet.');
+    }
+
+    const requestPayload = {
+      operation,
+      ...(candidateId ? { candidate_id: candidateId } : {}),
+      ...(caseKey ? { case_key: caseKey } : {}),
+      ...(financeCaseId ? { finance_case_id: financeCaseId } : {}),
+      ...(linkedTimesheetId ? { linked_timesheet_id: linkedTimesheetId, timesheet_id: linkedTimesheetId } : {}),
+      ...(resolutionFamily ? { resolution_family: resolutionFamily } : {}),
+      ...(expectedSessionVersion != null ? { expected_session_version: expectedSessionVersion } : {}),
+      ...(selectedTimesheetIds.length ? { selected_timesheet_ids: selectedTimesheetIds } : {}),
+      ...(Array.isArray(inputPayload.selected_case_keys ?? inputPayload.selectedCaseKeys)
+        ? { selected_case_keys: cloneJson(inputPayload.selected_case_keys ?? inputPayload.selectedCaseKeys) }
+        : {}),
+      ...(Array.isArray(inputPayload.selected_case_identities ?? inputPayload.selectedCaseIdentities)
+        ? { selected_case_identities: cloneJson(inputPayload.selected_case_identities ?? inputPayload.selectedCaseIdentities) }
+        : {})
+    };
+
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution/clear`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(isPlainObject(payload) ? payload : {})
+      body: JSON.stringify(requestPayload)
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
@@ -115915,19 +117326,21 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
       throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-    const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
+    const jobId = resolveJobId(payloadObj);
     return {
       ok: true,
       ...(cloneJson(payloadObj) || {}),
+      operation: trimStr(payloadObj.operation || operation),
       session_id: trimStr(payloadObj.session_id || sessionIdText),
-      candidate_id: trimStr(payloadObj.candidate_id || payload.candidate_id || ''),
+      candidate_id: trimStr(payloadObj.candidate_id || candidateId || ''),
       session_version: payloadObj.session_version ?? null,
       job_id: jobId || null,
       queued_job_metadata: {
         job_id: jobId || null,
-        status: trimStr(payloadObj.job_status || payloadObj.status || 'QUEUED') || 'QUEUED'
+        status: trimStr(payloadObj.job_status || payloadObj.status || (jobId ? 'QUEUED' : '')) || null
       }
     };
+
   } catch (error) {
     const friendly = (typeof bankingNormalizeApiError === 'function')
       ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'WORKBENCH_MODAL_ACTION', fallbackCode: 'BANKING_ACTION_FAILED', userInitiated: true })
@@ -115935,6 +117348,7 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
 
 async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
