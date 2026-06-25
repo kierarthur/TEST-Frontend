@@ -129596,6 +129596,294 @@ const onSaveTimesheet = async () => {
     return result || { ok: true, week_id: weekIdSave };
   };
 
+  const showSimpleTimesheetLifecycleRefreshWarning = (message) => {
+    const msg = String(
+      message ||
+      'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Authorise is blocked. Close and reopen the timesheet before authorising.'
+    ).trim();
+
+    try {
+      if (typeof window.__toast === 'function') {
+        window.__toast(msg);
+        return;
+      }
+      if (typeof window.toast === 'function') {
+        window.toast(msg, { kind: 'warn' });
+        return;
+      }
+      if (typeof window.showToast === 'function') {
+        window.showToast(msg, 'warn');
+        return;
+      }
+    } catch {}
+
+    try { window.alert(msg); } catch {}
+  };
+
+  const markSimpleTimesheetLifecycleRefreshRequired = (timesheetId, message) => {
+    const id = String(timesheetId || '').trim();
+    const msg = String(
+      message ||
+      'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Authorise is blocked. Close and reopen the timesheet before authorising.'
+    ).trim();
+
+    window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+    const liveCtx = window.modalCtx;
+
+    liveCtx.__simpleTimesheetLifecycleRefreshRequired = true;
+    liveCtx.__simpleTimesheetLifecycleRefreshTimesheetId = id || null;
+    liveCtx.__simpleTimesheetLifecycleRefreshMessage = msg;
+    liveCtx.lifecycle_refresh_failed = true;
+    liveCtx.lifecycle_refresh_error = msg;
+    liveCtx.refresh_required = true;
+
+    liveCtx.data = {
+      ...(liveCtx.data || rowNow || {}),
+      row_stale: true,
+      refresh_required: true,
+      lifecycle_refresh_failed: true,
+      lifecycle_refresh_error: msg
+    };
+
+    liveCtx.timesheetDetails = (liveCtx.timesheetDetails && typeof liveCtx.timesheetDetails === 'object')
+      ? liveCtx.timesheetDetails
+      : {};
+    liveCtx.timesheetDetails.row = {
+      ...(liveCtx.timesheetDetails.row || {}),
+      row_stale: true,
+      refresh_required: true,
+      lifecycle_refresh_failed: true,
+      lifecycle_refresh_error: msg
+    };
+  };
+
+  const refreshAndAdoptSimpleTimesheetLifecycleRowAfterSave = async (args = {}) => {
+    const id = String(args.timesheetId || '').trim();
+    const contractWeekId = String(args.contractWeekId || '').trim();
+    const bookingId = String(args.bookingId || '').trim();
+    const defaultMessage = 'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Authorise is blocked. Close and reopen the timesheet before authorising.';
+
+    const fail = (errorCode, errorMessage, refreshResult = null) => {
+      const message = String(errorMessage || defaultMessage).trim();
+      markSimpleTimesheetLifecycleRefreshRequired(id, message);
+      return {
+        ok: false,
+        error_code: String(errorCode || 'LIFECYCLE_REFRESH_REQUIRED'),
+        error: message,
+        refresh_required: true,
+        safe_for_lifecycle: false,
+        refresh_result: refreshResult
+      };
+    };
+
+    if (!id) {
+      return fail('MISSING_TIMESHEET_ID', defaultMessage);
+    }
+    if (typeof refreshTimesheetLifecycleAffectedRows !== 'function') {
+      return fail('LIFECYCLE_REFRESH_UNAVAILABLE', defaultMessage);
+    }
+
+    let refreshResult = null;
+    try {
+      refreshResult = await refreshTimesheetLifecycleAffectedRows({
+        row_key: `timesheet:${id}`,
+        timesheet_id: id,
+        current_timesheet_id: id,
+        expected_timesheet_id: id,
+        contract_week_id: contractWeekId || null,
+        booking_id: bookingId || null,
+        context: 'timesheet_modal'
+      }, {
+        context: 'timesheet_modal',
+        action: 'save-expenses',
+        mutation: 'save-expenses',
+        state: window.modalCtx || null,
+        apply: false,
+        max_items: 4
+      });
+    } catch (err) {
+      L('post-expense-save lifecycle refresh threw', {
+        timesheet_id: id,
+        error: String(err?.message || err || '')
+      });
+      if (!isActiveTimesheetModalToken(openToken)) {
+        return {
+          ok: false,
+          stale: true,
+          error_code: 'STALE_MODAL',
+          refresh_required: true,
+          safe_for_lifecycle: false,
+          refresh_result: null
+        };
+      }
+      return fail('LIFECYCLE_REFRESH_FAILED', defaultMessage);
+    }
+
+    if (!isActiveTimesheetModalToken(openToken)) {
+      return {
+        ok: false,
+        stale: true,
+        error_code: 'STALE_MODAL',
+        refresh_required: true,
+        safe_for_lifecycle: false,
+        refresh_result: refreshResult
+      };
+    }
+
+    if (!refreshResult || refreshResult.ok === false || refreshResult.refresh_failed === true) {
+      L('post-expense-save lifecycle refresh failed', {
+        timesheet_id: id,
+        error_code: refreshResult?.error_code || null,
+        error: refreshResult?.error || null
+      });
+      return fail(
+        refreshResult?.error_code || 'LIFECYCLE_REFRESH_FAILED',
+        defaultMessage,
+        refreshResult
+      );
+    }
+
+    const rows = Array.isArray(refreshResult.flattened_rows) ? refreshResult.flattened_rows : [];
+    const freshRow = rows.find((candidate) => {
+      const candidateId = String(candidate?.current_timesheet_id || candidate?.timesheet_id || '').trim();
+      const candidateKey = String(candidate?.row_key || '').trim();
+      return candidateId === id || candidateKey === `timesheet:${id}`;
+    }) || null;
+
+    if (!freshRow) {
+      L('post-expense-save lifecycle refresh returned no matching row', {
+        timesheet_id: id,
+        returned_count: rows.length,
+        missing: refreshResult.missing || []
+      });
+      return fail('LIFECYCLE_ROW_NOT_RETURNED', defaultMessage, refreshResult);
+    }
+
+    const freshId = String(freshRow.current_timesheet_id || freshRow.timesheet_id || '').trim();
+    if (!freshId || freshId !== id) {
+      L('post-expense-save lifecycle refresh identity mismatch', {
+        expected_timesheet_id: id,
+        returned_timesheet_id: freshId || null
+      });
+      return fail('TIMESHEET_IDENTITY_CHANGED_AFTER_SAVE', defaultMessage, refreshResult);
+    }
+
+    const freshContractWeekId = String(freshRow.contract_week_id || '').trim();
+    if (contractWeekId && freshContractWeekId && freshContractWeekId !== contractWeekId) {
+      L('post-expense-save lifecycle refresh contract-week mismatch', {
+        timesheet_id: id,
+        expected_contract_week_id: contractWeekId,
+        returned_contract_week_id: freshContractWeekId
+      });
+      return fail('CONTRACT_WEEK_IDENTITY_CHANGED_AFTER_SAVE', defaultMessage, refreshResult);
+    }
+
+    const signature = String(
+      freshRow.backend_row_signature ||
+      freshRow.mutation_row_signature ||
+      freshRow.row_signature ||
+      ''
+    ).trim();
+
+    if (!signature) {
+      L('post-expense-save lifecycle refresh returned no signature', {
+        timesheet_id: id
+      });
+      return fail('LIFECYCLE_SIGNATURE_NOT_RETURNED', defaultMessage, refreshResult);
+    }
+
+    const liveCtx = window.modalCtx || {};
+    const liveModalId = String(
+      liveCtx.data?.current_timesheet_id ||
+      liveCtx.data?.timesheet_id ||
+      liveCtx.timesheetDetails?.current_timesheet_id ||
+      liveCtx.timesheetDetails?.timesheet?.current_timesheet_id ||
+      liveCtx.timesheetDetails?.timesheet?.timesheet_id ||
+      ''
+    ).trim();
+
+    if (liveModalId && liveModalId !== id) {
+      L('post-expense-save lifecycle adoption blocked by modal identity change', {
+        expected_timesheet_id: id,
+        modal_timesheet_id: liveModalId
+      });
+      return fail('MODAL_IDENTITY_CHANGED_AFTER_SAVE', defaultMessage, refreshResult);
+    }
+
+    const signaturePatch = {
+      backend_row_signature: signature,
+      mutation_row_signature: signature,
+      row_signature: signature,
+      expected_row_signature: signature
+    };
+    const authoritativeRowPatch = {
+      ...(freshRow || {}),
+      id,
+      timesheet_id: id,
+      current_timesheet_id: id,
+      expected_timesheet_id: id,
+      ...signaturePatch,
+      row_stale: false,
+      refresh_required: false,
+      lifecycle_refresh_failed: false,
+      lifecycle_refresh_error: ''
+    };
+
+    liveCtx.data = {
+      ...(liveCtx.data || rowNow || {}),
+      ...authoritativeRowPatch
+    };
+
+    const detailsNow = (liveCtx.timesheetDetails && typeof liveCtx.timesheetDetails === 'object')
+      ? liveCtx.timesheetDetails
+      : {};
+    liveCtx.timesheetDetails = {
+      ...detailsNow,
+      current_timesheet_id: id,
+      timesheet_id: id,
+      ...signaturePatch,
+      row_stale: false,
+      refresh_required: false,
+      lifecycle_refresh_failed: false,
+      lifecycle_refresh_error: '',
+      row: {
+        ...(detailsNow.row || {}),
+        ...authoritativeRowPatch
+      },
+      timesheet: {
+        ...(detailsNow.timesheet || {}),
+        timesheet_id: id,
+        current_timesheet_id: id,
+        ...signaturePatch
+      }
+    };
+
+    liveCtx.timesheetMeta = {
+      ...(liveCtx.timesheetMeta || {}),
+      expected_timesheet_id: id,
+      hasTs: true,
+      isPlannedWeek: false
+    };
+
+    liveCtx.lifecycle_refresh_failed = false;
+    liveCtx.lifecycle_refresh_error = '';
+    liveCtx.refresh_required = false;
+    delete liveCtx.__simpleTimesheetLifecycleRefreshRequired;
+    delete liveCtx.__simpleTimesheetLifecycleRefreshTimesheetId;
+    delete liveCtx.__simpleTimesheetLifecycleRefreshMessage;
+
+    window.modalCtx = liveCtx;
+
+    return {
+      ok: true,
+      row: authoritativeRowPatch,
+      signature,
+      refresh_required: false,
+      safe_for_lifecycle: true,
+      refresh_result: refreshResult
+    };
+  };
+
   const onlyExpensesDirty = !!(expensesChanged && !hoursScheduleDirty && !refChanged && !segmentControlsDirty && !shouldChangeHold);
 
   if (onlyExpensesDirty && expenseStorageTargetForSave === 'CONTRACT_WEEK_DRAFT') {
@@ -129662,6 +129950,7 @@ const onSaveTimesheet = async () => {
       GE();
       return { ok: false };
     }
+
     const saveExpOnly = await commitTimesheetExpensesMileageDraft({
       timesheetId: tsIdSave,
       expectedTimesheetId: window.modalCtx?.timesheetMeta?.expected_timesheet_id || tsIdSave,
@@ -129673,6 +129962,7 @@ const onSaveTimesheet = async () => {
       source: 'simple',
       onAdoptMovedTimesheetId: (typeof tsModalAdoptTimesheetId === 'function') ? adoptMovedTimesheetIdDuringSave : undefined
     });
+
     if (!isActiveTimesheetModalToken(openToken)) {
       GE();
       return { ok: false, stale: true };
@@ -129685,7 +129975,8 @@ const onSaveTimesheet = async () => {
       GE();
       return { ok: false };
     }
-     try {
+
+    try {
       st.expensesDraft = JSON.parse(JSON.stringify(saveExpOnly.committedDraft || stagedExpenses));
       st.expensesBaseline = JSON.parse(JSON.stringify(saveExpOnly.committedDraft || stagedExpenses));
       st.expensesDirty = false;
@@ -129697,9 +129988,9 @@ const onSaveTimesheet = async () => {
       st.expenseDirtyMarker = false;
     } catch {}
 
-    try {
-      const committedTsfin = saveExpOnly.updatedTsfin || null;
+    const committedTsfin = saveExpOnly.updatedTsfin || null;
 
+    try {
       if (committedTsfin && window.modalCtx?.timesheetDetails) {
         window.modalCtx.timesheetDetails.tsfin = {
           ...(window.modalCtx.timesheetDetails.tsfin || {}),
@@ -129720,19 +130011,63 @@ const onSaveTimesheet = async () => {
           current_timesheet_id: tsIdSave || window.modalCtx.data.current_timesheet_id || window.modalCtx.data.timesheet_id
         };
       }
+    } catch (err) {
+      L('post-expense-save local TSFIN merge failed (non-fatal)', {
+        timesheet_id: tsIdSave,
+        error: String(err?.message || err || '')
+      });
+    }
 
+    try {
       if (tsIdSave && typeof refreshTimesheetsSummaryAfterRotation === 'function') {
         await refreshTimesheetsSummaryAfterRotation(tsIdSave, {
           allowRenderAll: false,
           skipTabRefresh: true
         });
       }
+    } catch (err) {
+      L('post-expense-save summary refresh failed (non-fatal)', {
+        timesheet_id: tsIdSave,
+        error: String(err?.message || err || '')
+      });
+    }
 
-      if (!isActiveTimesheetModalToken(openToken)) {
-        GE();
-        return { ok: false, stale: true };
-      }
+    if (!isActiveTimesheetModalToken(openToken)) {
+      GE();
+      return { ok: false, stale: true };
+    }
 
+    const lifecycleRefresh = await refreshAndAdoptSimpleTimesheetLifecycleRowAfterSave({
+      timesheetId: tsIdSave,
+      contractWeekId: weekIdSave || window.modalCtx?.data?.contract_week_id || window.modalCtx?.timesheetDetails?.contract_week_id || null,
+      bookingId: window.modalCtx?.data?.booking_id || window.modalCtx?.timesheetDetails?.booking_id || window.modalCtx?.timesheetDetails?.contract_week?.booking_id || null
+    });
+
+    if (!isActiveTimesheetModalToken(openToken)) {
+      GE();
+      return { ok: false, stale: true };
+    }
+
+    if (!lifecycleRefresh || lifecycleRefresh.ok !== true) {
+      const warningMessage = String(
+        lifecycleRefresh?.error ||
+        window.modalCtx?.__simpleTimesheetLifecycleRefreshMessage ||
+        'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Authorise is blocked. Close and reopen the timesheet before authorising.'
+      ).trim();
+      showSimpleTimesheetLifecycleRefreshWarning(warningMessage);
+      GE();
+      return {
+        ok: false,
+        saved: window.modalCtx?.data || rowNow,
+        saved_persisted: true,
+        saved_but_stale: true,
+        refresh_required: true,
+        safe_for_lifecycle: false,
+        error_code: lifecycleRefresh?.error_code || 'LIFECYCLE_REFRESH_REQUIRED'
+      };
+    }
+
+    try {
       if (typeof classifyTimesheetEditDomains === 'function' && window.modalCtx) {
         const refreshedPolicy = classifyTimesheetEditDomains({
           row: window.modalCtx.data || rowNow,
@@ -129745,21 +130080,36 @@ const onSaveTimesheet = async () => {
           action_flags: window.modalCtx.timesheetDetails?.action_flags || null,
           state: st
         });
-         applyTimesheetEditDomainPolicyToModalCtx(window.modalCtx, refreshedPolicy);
+        applyTimesheetEditDomainPolicyToModalCtx(window.modalCtx, refreshedPolicy);
       }
+    } catch (err) {
+      L('post-expense-save policy reclassification failed (non-fatal)', {
+        timesheet_id: tsIdSave,
+        error: String(err?.message || err || '')
+      });
+    }
 
-      try {
-        if (isActiveTimesheetModalToken(openToken)) {
-          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-          if (fr && fr.entity === 'timesheets') {
-            await safeRerenderTimesheetModal(openToken, fr.currentTabKey || 'expenses');
-          }
+    try {
+      if (isActiveTimesheetModalToken(openToken)) {
+        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        if (fr && fr.entity === 'timesheets') {
+          await safeRerenderTimesheetModal(openToken, fr.currentTabKey || 'expenses');
         }
-      } catch {}
-    } catch {}
+      }
+    } catch (err) {
+      L('post-expense-save modal rerender failed (non-fatal)', {
+        timesheet_id: tsIdSave,
+        error: String(err?.message || err || '')
+      });
+    }
 
     GE();
-    return { ok: true, saved: window.modalCtx?.data || rowNow };
+    return {
+      ok: true,
+      saved: window.modalCtx?.data || rowNow,
+      safe_for_lifecycle: true,
+      lifecycle_refresh: lifecycleRefresh.refresh_result || null
+    };
   }
 
       // ✅ WEEKLY MANUAL: schedule-driven ONLY (planned: draft endpoint; processed: manualUpsertContractWeek)
@@ -279845,13 +280195,13 @@ function renderTimesheetLinesTab(ctx) {
   `;
 }
 
-
 async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUTH]');
   GC('authoriseTimesheet');
 
   const toastWarn = (msg) => {
-    if (typeof window.toast === 'function') window.toast(msg, { kind: 'warn' });
+    if (typeof window.__toast === 'function') window.__toast(msg);
+    else if (typeof window.toast === 'function') window.toast(msg, { kind: 'warn' });
     else if (typeof window.showToast === 'function') window.showToast(msg, 'warn');
     else window.alert(msg);
   };
@@ -279913,6 +280263,24 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     toastWarn('A real timesheet has not been created for this week yet. Save/process the timesheet first.');
     GE();
     return { ok: false, blocked: true, reason: 'NO_REAL_TIMESHEET' };
+  }
+
+  const liveCtxForSafety = window.modalCtx || mc || {};
+  const refreshBlockedId = trimStr(liveCtxForSafety.__simpleTimesheetLifecycleRefreshTimesheetId);
+  const lifecycleRefreshRequired = liveCtxForSafety.__simpleTimesheetLifecycleRefreshRequired === true;
+  if (lifecycleRefreshRequired && (!refreshBlockedId || refreshBlockedId === trimStr(tsId))) {
+    toastWarn(
+      trimStr(liveCtxForSafety.__simpleTimesheetLifecycleRefreshMessage) ||
+      'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Close and reopen the timesheet before authorising.'
+    );
+    GE();
+    return {
+      ok: false,
+      blocked: true,
+      reason: 'LIFECYCLE_REFRESH_REQUIRED',
+      refresh_required: true,
+      current_timesheet_id: String(tsId)
+    };
   }
 
   const expected = trimStr(expectedTimesheetId) || trimStr(window.modalCtx?.timesheetMeta?.expected_timesheet_id) || String(tsId);
