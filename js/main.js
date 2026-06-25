@@ -41793,8 +41793,6 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 
 // Full replacement for renderPayNewBatchWizard from FRONTEND 10052026.js
 
-
-
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -44226,6 +44224,80 @@ function renderPayNewBatchWizard() {
     ].join(' ');
   };
 
+  const resolvedRateCancelActionHtml = (line, renderContextSection = '') => {
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const renderSection = upperTrim(renderContextSection);
+    const section = renderSection || getLinePresentationSection(line);
+    if (section !== 'READY_TO_PAY') return '';
+
+    const hasResolvedRate = asBool(
+      line?.has_resolved_rate ??
+      nested?.has_resolved_rate ??
+      summary?.has_resolved_rate
+    );
+    const resolutionFamily = upperTrim(
+      line?.resolved_rate_family ||
+      nested?.resolved_rate_family ||
+      summary?.resolved_rate_family ||
+      ''
+    );
+    if (!hasResolvedRate || resolutionFamily !== 'BUCKETED') return '';
+
+    const candidateId = trimStr(
+      line?.resolved_rate_candidate_id ||
+      nested?.resolved_rate_candidate_id ||
+      summary?.resolved_rate_candidate_id ||
+      line?.candidate_id ||
+      nested?.candidate_id ||
+      ''
+    );
+    const timesheetId = trimStr(
+      line?.resolved_rate_timesheet_id ||
+      nested?.resolved_rate_timesheet_id ||
+      summary?.resolved_rate_timesheet_id ||
+      line?.timesheet_id ||
+      nested?.timesheet_id ||
+      ''
+    );
+    const caseKey = trimStr(
+      line?.resolved_rate_case_key ||
+      nested?.resolved_rate_case_key ||
+      summary?.resolved_rate_case_key ||
+      (timesheetId ? `timesheet:${timesheetId}` : '')
+    );
+    if (!candidateId || !timesheetId || !caseKey) return '';
+
+    const immutableState = upperTrim(
+      line?.batch_status ||
+      line?.payment_status ||
+      line?.settlement_status ||
+      nested?.batch_status ||
+      nested?.payment_status ||
+      nested?.settlement_status ||
+      ''
+    );
+    if (['DRAFT', 'AUTHORISED', 'AUTHORIZED', 'PROCESSING', 'PAID', 'SETTLED', 'COMPLETED'].includes(immutableState)) return '';
+
+    const confirmationText = 'Cancel resolved rate for this timesheet?\n\nThis removes the resolved rate for this timesheet only and refreshes the candidate. If a rate decision is still required, the timesheet will return to Cases / Resolutions. Other linked timesheets will not be cancelled.';
+    return `
+      <button
+        type="button"
+        class="btn btn-xs btn-outline"
+        data-action="banking:pay:clearCaseResolution"
+        data-candidate-id="${enc(candidateId)}"
+        data-case-key="${enc(caseKey)}"
+        data-timesheet-id="${enc(timesheetId)}"
+        data-linked-timesheet-id="${enc(timesheetId)}"
+        data-resolution-family="BUCKETED"
+        data-confirm-message="${enc(confirmationText)}"
+        ${getCandidateActionDisabledAttrs(candidateId, 'Cancel the resolved rate for this timesheet')}
+      >Cancel Resolved Rate</button>
+    `;
+  };
+
   const previewActionHtml = (line) => {
     const info = getSnoozeInfo(line);
     if (info.isIndefinite) return '';
@@ -44750,7 +44822,7 @@ function renderPayNewBatchWizard() {
     `;
   };
 
-  const renderTimesheetParentRows = (lines) => {
+  const renderTimesheetParentRows = (lines, renderContextSection = '') => {
     return lines.map((line) => {
       const amount = getLineSectionAmount(line);
       const client = trimStr(line?.client_name) || '—';
@@ -44791,7 +44863,8 @@ function renderPayNewBatchWizard() {
       const caseActionHtml = (section === 'CASES_RESOLUTIONS' && isPlainObject(line?.__case_entry))
         ? renderCaseActionButtons(line.__case_entry)
         : '';
-      const combinedActionHtml = [caseActionHtml, blockedUi.extraActionHtml, wholeActionHtml].filter(Boolean).join(' ');
+      const cancelResolvedRateHtml = resolvedRateCancelActionHtml(line, renderContextSection);
+      const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, wholeActionHtml].filter(Boolean).join(' ');
       const expenseComponentLabel = getExpenseComponentFriendlyLabel(line);
       const detailRowHtml = [
         blockedUi.showSegmentDetail ? renderTimesheetSegmentRows(line) : '',
@@ -44863,7 +44936,7 @@ function renderPayNewBatchWizard() {
     }).join('');
   };
 
-  const renderSimplePreviewRows = (lines, stateLabelOverride = null) => {
+  const renderSimplePreviewRows = (lines, stateLabelOverride = null, renderContextSection = '') => {
     return lines.map((line) => {
       const amount = getLineSectionAmount(line);
       const client = trimStr(line?.client_name) || '—';
@@ -44877,7 +44950,8 @@ function renderPayNewBatchWizard() {
       const caseActionHtml = (section === 'CASES_RESOLUTIONS' && isPlainObject(line?.__case_entry))
         ? renderCaseActionButtons(line.__case_entry)
         : '';
-      const combinedActionHtml = [caseActionHtml, blockedUi.extraActionHtml, actionHtml].filter(Boolean).join(' ');
+      const cancelResolvedRateHtml = resolvedRateCancelActionHtml(line, renderContextSection);
+      const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, actionHtml].filter(Boolean).join(' ');
       const expenseComponentLabel = getExpenseComponentFriendlyLabel(line);
       const detailRowHtml = renderExpenseComponentBreakdown(line);
       const info = getSnoozeInfo(line);
@@ -47147,8 +47221,8 @@ function renderPayNewBatchWizard() {
     if (candidateId) candidateIds.add(candidateId);
   }
   const previewRowsHtml = [
-    renderTimesheetParentRows(displayLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
-    renderSimplePreviewRows(displayLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'), 'Resolution required')
+    renderTimesheetParentRows(displayLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT'), 'CASES_RESOLUTIONS'),
+    renderSimplePreviewRows(displayLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'), 'Resolution required', 'CASES_RESOLUTIONS')
   ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(casesEmptyMessage())}</td></tr>`;
 
   return `
@@ -47190,8 +47264,8 @@ function renderPayNewBatchWizard() {
       if (candidateId) candidateIds.add(candidateId);
     }
     const previewRowsHtml = [
-      renderTimesheetParentRows(displayLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
-      renderSimplePreviewRows(displayLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'), 'Blocked for pay')
+      renderTimesheetParentRows(displayLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT'), 'BLOCKED_FOR_PAY'),
+      renderSimplePreviewRows(displayLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'), 'Blocked for pay', 'BLOCKED_FOR_PAY')
     ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(blockedEmptyMessage())}</td></tr>`;
 
     return `
@@ -47245,8 +47319,8 @@ function renderPayNewBatchWizard() {
   };
 
   const readyCanonicalRowsHtml = [
-    renderTimesheetParentRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
-    renderSimplePreviewRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'))
+    renderTimesheetParentRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT'), 'READY_TO_PAY'),
+    renderSimplePreviewRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'), null, 'READY_TO_PAY')
   ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(readyEmptyMessage())}</td></tr>`;
 
   return `
@@ -47312,6 +47386,7 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
+
 
 
 
@@ -79062,7 +79137,6 @@ function renderBankingAlertPreferencesPanel() {
   `;
 }
 
-
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -79185,17 +79259,20 @@ function attachBankingModalDelegatedHandlers() {
       return { entity_kind, entity_id, bank_details_hash, provider, env0, candidate_id, preview_row_id };
     };
 
+    const getBankingUiConfirmModal = () => (
+      (typeof openUiConfirmModal === 'function')
+        ? openUiConfirmModal
+        : ((typeof window !== 'undefined' && typeof window.openUiConfirmModal === 'function')
+            ? window.openUiConfirmModal.bind(window)
+            : null)
+    );
+
     const showBankingPayNoticeModal = async ({
       title = 'Banking Pay updated',
       message = 'Banking Pay will refresh now.',
       kind = 'import-summary-ui-confirm-banking-pay-notice'
     } = {}) => {
-      const confirmFn =
-        (typeof openUiConfirmModal === 'function')
-          ? openUiConfirmModal
-          : ((typeof window !== 'undefined' && typeof window.openUiConfirmModal === 'function')
-              ? window.openUiConfirmModal.bind(window)
-              : null);
+      const confirmFn = getBankingUiConfirmModal();
 
       if (!confirmFn) {
         toast(String(message || title || 'Banking Pay will refresh now.'));
@@ -79209,6 +79286,32 @@ function attachBankingModalDelegatedHandlers() {
         hide_cancel: true,
         kind
       });
+    };
+
+    const confirmBankingPayAction = async ({
+      title = 'Confirm Banking Pay action',
+      message = '',
+      confirmLabel = 'Confirm',
+      cancelLabel = 'Cancel',
+      kind = 'banking-pay-action-confirm'
+    } = {}) => {
+      const confirmFn = getBankingUiConfirmModal();
+      if (!confirmFn) {
+        toast('Confirmation is required, but the confirmation modal is not available. Refresh Banking Pay and try again.');
+        return false;
+      }
+      try {
+        const result = await confirmFn({
+          title: String(title || 'Confirm Banking Pay action'),
+          message: String(message || title || 'Confirm this Banking Pay action.'),
+          confirm_label: String(confirmLabel || 'Confirm'),
+          cancel_label: String(cancelLabel || 'Cancel'),
+          kind
+        });
+        return !!(result && result.confirmed === true);
+      } catch {
+        return false;
+      }
     };
        const refreshPayWorkbench = async ({ reason = 'PAY_AFFECTING_ACTION', mode = 'SOFT' } = {}) => {
       const requestedMode = String(mode || 'SOFT').trim().toUpperCase();
@@ -83295,13 +83398,11 @@ const openTaxableFinanceCaseRestructureFlow = async (seed = {}) => {
   });
 
   if (!ctx || !trimStr(ctx.finance_case_id)) {
-    if (typeof toast === 'function') toast('Taxable finance restructure context not found.');
-    else alert('Taxable finance restructure context not found.');
+    toast('Taxable finance restructure context not found.');
     return { ok: false, error: 'TAXABLE_FINANCE_RESTRUCTURE_CONTEXT_NOT_FOUND' };
   }
   if (typeof openBankingFinanceCaseRestructureModal !== 'function') {
-    if (typeof toast === 'function') toast('Finance Restructure modal is not available.');
-    else alert('Finance Restructure modal is not available.');
+    toast('Finance Restructure modal is not available.');
     return { ok: false, error: 'FINANCE_RESTRUCTURE_MODAL_UNAVAILABLE' };
   }
 
@@ -84054,18 +84155,13 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
       let confirmed = false;
       try {
-        if (confirmFn) {
-          const confirmResult = await confirmFn({
-            title: 'Clear all Decisions',
-            message: 'This will clear saved decisions, exclusions and selected rows, then reload the latest live Banking view.',
-            confirm_label: 'Clear all Decisions',
-            cancel_label: 'Cancel',
-            kind: 'banking-pay-clear-all-decisions'
-          });
-          confirmed = !!(confirmResult && confirmResult.confirmed === true);
-        } else {
-          confirmed = window.confirm('Clear all Decisions and reload the latest live Banking view?');
-        }
+        confirmed = await confirmBankingPayAction({
+          title: 'Clear all Decisions',
+          message: 'This will clear saved decisions, exclusions and selected rows, then reload the latest live Banking view.',
+          confirmLabel: 'Clear all Decisions',
+          cancelLabel: 'Cancel',
+          kind: 'banking-pay-clear-all-decisions'
+        });
       } catch {
         confirmed = false;
       }
@@ -84179,6 +84275,18 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (!caseKey) {
         toast('Case key is required.');
         return;
+      }
+
+      const confirmationMessage = String(ds('confirmMessage') || dget('data-confirm-message') || '').trim();
+      if (confirmationMessage) {
+        const confirmed = await confirmBankingPayAction({
+          title: 'Cancel resolved rate?',
+          message: confirmationMessage,
+          confirmLabel: 'Cancel Resolved Rate',
+          cancelLabel: 'Keep resolved rate',
+          kind: 'banking-pay-clear-case-resolution-confirm'
+        });
+        if (!confirmed) return;
       }
 
       try {
@@ -88135,8 +88243,9 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
 
 
-// Full replacement  for attachBankingModalDelegatedHandlers from FRONTEND 10052026.js
 
+
+// Full replacement  for attachBankingModalDelegatedHandlers from FRONTEND 10052026.js
 
 async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -88149,16 +88258,96 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         "'": '&#39;'
       }[c]));
 
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  const asBool = (v) => {
+    if (v === true || v === 1) return true;
+    if (v === false || v === 0 || v == null) return false;
+    const s = trimStr(v).toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  };
+  const showSuggestedRatesNotice = async ({
+    title = 'Suggested rates review',
+    message = '',
+    kind = 'banking-pay-suggested-rates-notice'
+  } = {}) => {
+    const titleText = trimStr(title) || 'Suggested rates review';
+    const messageText = trimStr(message) || titleText;
+    const confirmFn =
+      (typeof openUiConfirmModal === 'function')
+        ? openUiConfirmModal
+        : ((typeof window !== 'undefined' && typeof window.openUiConfirmModal === 'function')
+            ? window.openUiConfirmModal.bind(window)
+            : null);
+    if (confirmFn) {
+      try {
+        await confirmFn({
+          title: titleText,
+          message: messageText,
+          confirm_label: 'OK',
+          hide_cancel: true,
+          kind
+        });
+        return;
+      } catch {}
+    }
+    try {
+      if (typeof window !== 'undefined' && typeof window.__toast === 'function') {
+        window.__toast(messageText);
+        return;
+      }
+    } catch {}
+    try { if (typeof console !== 'undefined' && console && typeof console.warn === 'function') console.warn(messageText); } catch {}
+  };
+  const confirmSuggestedRatesAction = async ({
+    title = 'Confirm suggested rate change',
+    message = '',
+    confirmLabel = 'Apply',
+    cancelLabel = 'Cancel',
+    kind = 'banking-pay-suggested-rates-confirm'
+  } = {}) => {
+    const titleText = trimStr(title) || 'Confirm suggested rate change';
+    const messageText = trimStr(message) || titleText;
+    const confirmFn =
+      (typeof openUiConfirmModal === 'function')
+        ? openUiConfirmModal
+        : ((typeof window !== 'undefined' && typeof window.openUiConfirmModal === 'function')
+            ? window.openUiConfirmModal.bind(window)
+            : null);
+    if (!confirmFn) {
+      try {
+        if (typeof window !== 'undefined' && typeof window.__toast === 'function') {
+          window.__toast('Confirmation is required, but the confirmation modal is not available. Refresh Banking Pay and try again.');
+        }
+      } catch {}
+      return false;
+    }
+    try {
+      const result = await confirmFn({
+        title: titleText,
+        message: messageText,
+        confirm_label: trimStr(confirmLabel) || 'Apply',
+        cancel_label: trimStr(cancelLabel) || 'Cancel',
+        kind
+      });
+      return !!(result && result.confirmed === true);
+    } catch {
+      return false;
+    }
+  };
+
   const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
   if (!st) {
-    alert('Banking state is not available.');
+    await showSuggestedRatesNotice({
+      title: 'Banking state unavailable',
+      message: 'Banking state is not available.',
+      kind: 'banking-pay-suggested-rates-state-unavailable'
+    });
     return { ok: false, accepted: false, error: 'BANKING_STATE_UNAVAILABLE' };
   }
 
   const src = (seed && typeof seed === 'object' && !Array.isArray(seed)) ? seed : {};
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
-  const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
-  const trimStr = (v) => String(v == null ? '' : v).trim();
   const upperTrim = (v) => trimStr(v).toUpperCase();
 
   const requestedCaseKey = trimStr(src.case_key || src.caseKey || '');
@@ -88635,20 +88824,32 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
 
   const currentPayDate = trimStr(st?.pay?.draftWizard?.pay_date || st?.pay?.pay_date || st?.pay?.selectedPayDate || '');
   if (!currentPayDate) {
-    alert('Pay date is required before reviewing suggested rates.');
+    await showSuggestedRatesNotice({
+      title: 'Pay date required',
+      message: 'Pay date is required before reviewing suggested rates.',
+      kind: 'banking-pay-suggested-rates-pay-date-required'
+    });
     return { ok: false, accepted: false, error: 'PAY_DATE_REQUIRED' };
   }
 
   const sessionId = trimStr(wiz.workbench.session_id || wiz.decisions?.session_id || '');
   if (!sessionId) {
-    alert('No workbench session is available. Refresh the Banking Pay workbench and try again.');
+    await showSuggestedRatesNotice({
+      title: 'Workbench session unavailable',
+      message: 'No workbench session is available. Refresh the Banking Pay workbench and try again.',
+      kind: 'banking-pay-suggested-rates-session-required'
+    });
     return { ok: false, accepted: false, error: 'SESSION_ID_REQUIRED' };
   }
 
   const decisions = (typeof ensurePayWizardDecisionState === 'function') ? ensurePayWizardDecisionState() : null;
   const requestedLocatorPresent = !!(requestedCaseKey || requestedFinanceCaseId || requestedLinkedTimesheetId);
   if (!requestedLocatorPresent && !isPlainObject(src.context)) {
-    alert('Case context is required.');
+    await showSuggestedRatesNotice({
+      title: 'Case context required',
+      message: 'Case context is required.',
+      kind: 'banking-pay-suggested-rates-case-context-required'
+    });
     return { ok: false, accepted: false, error: 'CASE_CONTEXT_REQUIRED' };
   }
 
@@ -88809,10 +89010,32 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       const sourcePay = pickNum(row.source_pay_ex_vat, rawComponent.source_pay_ex_vat, rawComponent.component_amount_ex_vat, rawComponent.amount_ex_vat, rawComponent.amount_ex, rawComponent.amount, rawComponent.source_basis_json?.source_pay_ex_vat, rawComponent.source_basis_json?.amount_ex_vat, rawComponent.source_basis_json?.amount_ex, rawComponent.source_basis_json?.amount);
       const sourceCharge = pickNum(row.source_charge_ex_vat, rawComponent.source_charge_ex_vat, rawComponent.charge_amount_ex_vat, rawComponent.charge_amount, rawComponent.charge_ex_vat, rawComponent.source_basis_json?.source_charge_ex_vat, rawComponent.source_basis_json?.charge_amount_ex_vat, rawComponent.source_basis_json?.charge_amount, rawComponent.source_basis_json?.charge_ex_vat);
       const sourceMargin = pickNum(row.source_margin_ex_vat, rawComponent.source_margin_ex_vat, (sourceCharge !== null && sourcePay !== null) ? (sourceCharge - sourcePay) : null);
-      const suggestedTargetRate = pickNum(row.suggested_target_rate, rawComponent.target_rate, rawComponent.suggested_resolution_result_json?.replacement_rate, rawComponent.suggested_resolution_payload_json?.suggested_target_rate);
-      const suggestedPay = pickNum(row.suggested_target_pay_ex_vat, rawComponent.target_pay_ex_vat, rawComponent.preview_component_amount_ex_vat, rawComponent.suggested_resolution_result_json?.target_amount_ex_vat);
-      const suggestedCharge = pickNum(row.suggested_target_charge_ex_vat, rawComponent.target_charge_ex_vat, rawComponent.suggested_resolution_result_json?.target_charge_ex_vat, sourceCharge);
-      const suggestedMargin = pickNum(row.suggested_target_margin_ex_vat, rawComponent.target_margin_ex_vat, rawComponent.suggested_resolution_result_json?.target_margin_ex_vat, (suggestedCharge !== null && suggestedPay !== null) ? (suggestedCharge - suggestedPay) : null);
+      const suggestedTargetRate = pickNum(
+        row.suggested_target_rate,
+        rawComponent.suggested_resolution_payload_json?.suggested_target_rate,
+        rawComponent.suggested_resolution_result_json?.replacement_rate,
+        rawComponent.suggested_target_rate,
+        rawComponent.target_rate
+      );
+      const suggestedPay = pickNum(
+        row.suggested_target_pay_ex_vat,
+        rawComponent.suggested_resolution_result_json?.target_pay_ex_vat,
+        rawComponent.suggested_resolution_result_json?.target_amount_ex_vat,
+        rawComponent.target_pay_ex_vat,
+        rawComponent.preview_component_amount_ex_vat
+      );
+      const suggestedCharge = pickNum(
+        row.suggested_target_charge_ex_vat,
+        rawComponent.suggested_resolution_result_json?.target_charge_ex_vat,
+        rawComponent.target_charge_ex_vat,
+        sourceCharge
+      );
+      const suggestedMargin = pickNum(
+        row.suggested_target_margin_ex_vat,
+        rawComponent.suggested_resolution_result_json?.target_margin_ex_vat,
+        rawComponent.target_margin_ex_vat,
+        (suggestedCharge !== null && suggestedPay !== null) ? (suggestedCharge - suggestedPay) : null
+      );
       const classification = upperTrim(row.classification || rawComponent.classification || '');
       const componentSemantics = getComponentSemantics(
         row.component_key_type || rawComponent.component_key_type,
@@ -88830,6 +89053,12 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         row_id: trimStr(row.row_id || `bucket_${idx}`),
         label: pickText(row.label, rawComponent.label, rawComponent.component_label, rawComponent.display_label, rawComponent.display_name, rawComponent.description, rawComponent.name) || 'Bucket',
         candidate_id: candidateIdText,
+        timesheet_id: trimStr(
+          row.timesheet_id ||
+          rawComponent.timesheet_id ||
+          rawSourceBasisJson.timesheet_id ||
+          linkedTimesheetIdText
+        ) || null,
         finance_component_id: trimStr(row.finance_component_id || rawComponent.finance_component_id || '') || null,
         source_family_key: trimStr(row.source_family_key || rawComponent.source_family_key || '') || (trimStr(rawCase?.timesheet_id || rawCase?.linked_timesheet_id || '') ? `timesheet:${trimStr(rawCase?.timesheet_id || rawCase?.linked_timesheet_id || '')}` : ''),
         component_key_type: trimStr(row.component_key_type || rawComponent.component_key_type || ''),
@@ -88959,12 +89188,20 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
 
   const ctx = resolveContext();
   if (!ctx) {
-    alert('Suggested rates case context is not available.');
+    await showSuggestedRatesNotice({
+      title: 'Suggested rates unavailable',
+      message: 'Suggested rates case context is not available.',
+      kind: 'banking-pay-suggested-rates-context-unavailable'
+    });
     return { ok: false, accepted: false, error: 'SUGGESTED_CASE_CONTEXT_UNAVAILABLE' };
   }
 
   if (upperTrim(ctx.resolution_family || '') === 'TAXABLE_CHANNEL_RESTRUCTURE') {
-    alert('Taxable finance channel restructure must be handled by the Finance Restructure modal, not Suggested Rates Review.');
+    await showSuggestedRatesNotice({
+      title: 'Use Finance Restructure',
+      message: 'Taxable finance channel restructure must be handled by the Finance Restructure modal, not Suggested Rates Review.',
+      kind: 'banking-pay-suggested-rates-wrong-resolution-modal'
+    });
     return { ok: false, accepted: false, error: 'WRONG_RESOLUTION_MODAL' };
   }
 
@@ -89098,7 +89335,9 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       target_pay_method: upperTrim(payload.target_pay_method || result.target_pay_method || component?.target_pay_method || ''),
       relevant_erni_pct: toNum(payload.relevant_erni_pct ?? result.relevant_erni_pct),
       vat_rate_pct: toNum(payload.vat_rate_pct ?? result.vat_rate_pct),
-      umbrella_vat_chargeable: payload.umbrella_vat_chargeable === true || result.umbrella_vat_chargeable === true,
+      umbrella_vat_chargeable: Object.prototype.hasOwnProperty.call(payload, 'umbrella_vat_chargeable')
+        ? asBool(payload.umbrella_vat_chargeable)
+        : (Object.prototype.hasOwnProperty.call(result, 'umbrella_vat_chargeable') ? asBool(result.umbrella_vat_chargeable) : null),
       target_charge_basis: upperTrim(payload.target_charge_basis || result.target_charge_basis || payload.charge_basis || result.charge_basis || '')
     };
   };
@@ -89110,7 +89349,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     return Math.round(numeric * factor) / factor;
   };
 
-  const buildSuggestedRateGroupKey = (component, category, initialFinalRate, existingBucketResolution) => {
+  const buildSuggestedRateGroupKey = (component, category) => {
     const keyType = upperTrim(component?.component_key_type || '');
     const resolutionSignature = getSuggestedRateResolutionSignature(component);
     return stableStringify({
@@ -89119,7 +89358,6 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       component_semantics: upperTrim(component?.component_semantics || ''),
       category_kind: category.kind,
       category_identity: category.identityKey,
-      source_family_key: trimStr(component?.source_family_key || ''),
       component_key_type: keyType,
       component_key_value: keyType === 'TS_DAY' ? null : trimStr(component?.component_key_value || ''),
       bucket_code: upperTrim(component?.bucket_code || component?.source_basis_json?.bucket_code || category.code || ''),
@@ -89129,12 +89367,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       current_charge_rate: groupNumberKey(component?.source_charge_rate),
       suggested_target_rate: groupNumberKey(component?.suggested_target_rate),
       suggested_charge_rate: groupNumberKey(getSuggestedChargeRate(component)),
-      initial_final_target_rate: groupNumberKey(initialFinalRate),
-      existing_resolution_mode: upperTrim(existingBucketResolution?.resolution_mode || ''),
-      resolution_signature: resolutionSignature,
-      actionable: component?.actionable === true,
-      fixed_no_action: component?.fixed_no_action === true,
-      resolution_state: upperTrim(component?.resolution_state || '')
+      resolution_signature: resolutionSignature
     });
   };
 
@@ -89169,7 +89402,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       const existingBucketResolution = getExistingBucketResolutionForComponent(component);
       const initialFinalRate = pickNum(existingBucketResolution?.target_rate, component?.suggested_target_rate);
       const suggestedChargeRate = getSuggestedChargeRate(component);
-      const groupKey = buildSuggestedRateGroupKey(component, category, initialFinalRate, existingBucketResolution);
+      const groupKey = buildSuggestedRateGroupKey(component, category);
       const typeLabel = classificationLabel(component?.classification);
       const componentIndex = Number.isInteger(component?._uiComponentIndex) ? component._uiComponentIndex : index;
       const detailIdentity = [
@@ -89357,7 +89590,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     const finalRateDisplay = formatGroupRateDisplay(group);
     return `
       <tr id="bankingPaySuggestedGroupDetails_${groupIndex}">
-        <td colspan="9" style="padding:0;background:rgba(148,163,184,.06);">
+        <td colspan="10" style="padding:0;background:rgba(148,163,184,.06);">
           <div style="padding:10px;overflow:auto;">
             <div class="mini" style="opacity:.8;margin-bottom:8px;">
               Component-level evidence for ${enc(group.baseLabel)}. Rows are ordered by work date; undated rows appear last.
@@ -89447,6 +89680,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         <td class="mono" style="text-align:right;white-space:nowrap;">${enc(String(group.componentCount))}</td>
         <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtUnits(group.totalUnits))}</td>
         <td class="mono" style="text-align:right;white-space:nowrap;">${enc(group.currentPayRate === null ? '—' : fmtMoney(group.currentPayRate))}</td>
+        <td class="mono" style="text-align:right;white-space:nowrap;">${enc(group.currentChargeRate === null ? '—' : fmtMoney(group.currentChargeRate))}</td>
         <td class="mono" style="text-align:right;white-space:nowrap;">${enc(group.suggestedRate === null ? '—' : fmtMoney(group.suggestedRate))}</td>
         <td>
           ${editable ? `
@@ -89508,6 +89742,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
               <th style="width:125px;text-align:right;">Component count</th>
               <th style="width:115px;text-align:right;">Total units</th>
               <th style="width:140px;text-align:right;">Current pay rate</th>
+              <th style="width:150px;text-align:right;">Current charge rate</th>
               <th style="width:140px;text-align:right;">Suggested rate</th>
               <th style="width:160px;">Final target rate</th>
               <th style="width:150px;">Needs action</th>
@@ -89516,7 +89751,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
           <tbody>
             ${suggestedRateGroups.length
               ? suggestedRateGroups.map((group, groupIndex) => renderSuggestedRateGroupSummaryRow(group, groupIndex)).join('')
-              : '<tr><td colspan="9"><div class="mini" style="opacity:.8;">No rate-bearing components are available for this case.</div></td></tr>'}
+              : '<tr><td colspan="10"><div class="mini" style="opacity:.8;">No rate-bearing components are available for this case.</div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -89580,11 +89815,16 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       const targetAmount = (sourceUnits !== null && targetRate !== null)
         ? round2(Number(sourceUnits) * Number(targetRate))
         : round2(row.suggested_target_pay_ex_vat);
+      const sourceCharge = round2(row.source_charge_ex_vat);
+      const targetCharge = round2(row.suggested_target_charge_ex_vat ?? row.source_charge_ex_vat);
       const sourceMargin = round2(row.source_margin_ex_vat);
-      const targetMargin = round2(row.suggested_target_margin_ex_vat);
+      const targetMargin = (targetCharge !== null && targetAmount !== null)
+        ? round2(Number(targetCharge) - Number(targetAmount))
+        : null;
       const useSuggested = suggested !== null && Math.abs(Number(finalRate) - Number(suggested)) < 0.000001;
       return {
         finance_case_id: ctx.finance_case_id || null,
+        timesheet_id: row.timesheet_id || ctx.linked_timesheet_id || null,
         finance_component_id: row.finance_component_id || null,
         source_family_key: row.source_family_key || null,
         component_key_type: row.component_key_type || null,
@@ -89599,16 +89839,16 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         frozen_component_key_value: trimStr(row.frozen_component_key_value || '') || null,
         component_fingerprint: trimStr(row.component_fingerprint || '') || null,
         source_units: sourceUnits,
-        target_units: round6(row.target_units ?? row.source_units),
+        target_units: sourceUnits,
         source_rate: round6(row.source_rate),
         source_charge_rate: round6(row.source_charge_rate),
         source_amount_ex_vat: sourceAmount,
         source_pay_ex_vat: sourceAmount,
-        source_charge_ex_vat: round2(row.source_charge_ex_vat),
+        source_charge_ex_vat: sourceCharge,
         target_rate: targetRate,
         target_amount_ex_vat: targetAmount,
         target_pay_ex_vat: targetAmount,
-        target_charge_ex_vat: round2(row.suggested_target_charge_ex_vat),
+        target_charge_ex_vat: targetCharge,
         target_margin_ex_vat: targetMargin,
         margin_delta_ex_vat: (targetMargin !== null && sourceMargin !== null) ? round2(targetMargin - sourceMargin) : null,
         suggested_resolution_payload_json: isPlainObject(row.suggested_resolution_payload_json) ? deep(row.suggested_resolution_payload_json) : null,
@@ -89811,7 +90051,13 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
               (caseIsLinkable ? `This will apply to ${linkedTimesheetCount} matching timesheets for this candidate. Are you sure you wish to continue?` : '')
             );
             if (state.resolveAllLinked && caseIsLinkable && confirmationText) {
-              const confirmed = window.confirm(confirmationText);
+              const confirmed = await confirmSuggestedRatesAction({
+                title: 'Apply to matching timesheets?',
+                message: confirmationText,
+                confirmLabel: 'Apply',
+                cancelLabel: 'Cancel',
+                kind: 'banking-pay-suggested-rates-apply-linked-confirm'
+              });
               if (!confirmed) return;
             }
 
@@ -89832,6 +90078,14 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
           clearBtn.__wired = true;
           clearBtn.addEventListener('click', async () => {
             if (state.busy) return;
+            const confirmed = await confirmSuggestedRatesAction({
+              title: 'Clear resolved rate?',
+              message: 'Clear the saved resolved rate for this case and refresh the candidate?',
+              confirmLabel: 'Clear resolution',
+              cancelLabel: 'Cancel',
+              kind: 'banking-pay-suggested-rates-clear-confirm'
+            });
+            if (!confirmed) return;
             await applyMutationAndRefresh(() => bankingPayWorkbenchSessionClearCaseResolution(sessionId, {
               candidate_id: ctx.candidate_id,
               case_key: ctx.case_key,
@@ -89887,6 +90141,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     );
   });
 }
+
 
 
 
@@ -96925,6 +97180,9 @@ function summaryInsertRowIfMissing(section, patchedRow) {
     return false;
   }
 }
+
+
+
 function summaryUpdateRowDom(section, id, patchedRow) {
   section = String(section || '').trim();
   id = String(id || '').trim();
@@ -97012,28 +97270,74 @@ function summaryUpdateRowDom(section, id, patchedRow) {
     return `£${Math.abs(safe).toFixed(2)}`;
   };
 
+  const PAYMENT_BADGE_TOKENS = new Set([
+    '__PAY_BADGE_ADV__',
+    '__PAY_BADGE_OVERPAID__',
+    '__PAY_BADGE_PROCESSING__'
+  ]);
+
+  const readTimesheetPaymentBadges = (codes, rowObj = null) => {
+    const rawCodes = (Array.isArray(codes) ? codes : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+
+    const paymentTokens = new Set(
+      rawCodes.filter((code) => PAYMENT_BADGE_TOKENS.has(code))
+    );
+    const businessIssueCodes = rawCodes.filter(
+      (code) => !PAYMENT_BADGE_TOKENS.has(code)
+    );
+
+    const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
+    const iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
+
+    return {
+      businessIssueCodes,
+      showAdvance:
+        paymentTokens.has('__PAY_BADGE_ADV__') ||
+        payStatus === 'ADVANCED',
+      showOverpaid:
+        paymentTokens.has('__PAY_BADGE_OVERPAID__') ||
+        payStatus === 'OVERPAID' ||
+        iconCode === 'RED_COIN',
+      showProcessingOverlay:
+        paymentTokens.has('__PAY_BADGE_PROCESSING__')
+    };
+  };
+
+  const decoratePaymentIcon = (badge) => {
+    badge.classList.add('issue-pay-badge');
+    badge.style.marginLeft = '0';
+    badge.style.flex = '0 0 auto';
+    badge.style.alignSelf = 'center';
+    return badge;
+  };
+
   const buildTimesheetPayIcon = (rowObj) => {
     const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
     let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
 
+    // OVERPAID is rendered as a labelled pill, never as the legacy red coin.
+    if (payStatus === 'OVERPAID' || iconCode === 'RED_COIN') return null;
+
     if (!iconCode || iconCode === 'NONE') {
       if (payStatus === 'PAID') iconCode = 'COIN';
       else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
-      else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
+      else if (payStatus === 'PROCESSING') iconCode = 'CLOCK';
     }
 
+    // ADVANCED is an ADV lifecycle badge. A clock is shown only when the
+    // cached state says payment processing is active.
+    if (payStatus === 'ADVANCED' && iconCode === 'CLOCK') return null;
     if (!iconCode || iconCode === 'NONE') return null;
 
-    const badge = document.createElement('span');
-    badge.className = 'coin-badge issue-pay-badge';
+    const badge = decoratePaymentIcon(document.createElement('span'));
+    badge.classList.add('coin-badge');
     badge.setAttribute('aria-hidden', 'true');
-    badge.style.marginLeft = '0';
-    badge.style.flex = '0 0 auto';
-    badge.style.alignSelf = 'center';
 
     if (iconCode === 'CLOCK') {
       badge.textContent = '◷';
-      badge.title = (payStatus === 'ADVANCED') ? 'Marked for Advance Pay' : 'Payment in progress';
+      badge.title = 'Payment in progress';
     } else if (iconCode === 'COIN') {
       badge.textContent = '£';
       badge.title = 'Paid';
@@ -97042,12 +97346,6 @@ function summaryUpdateRowDom(section, id, patchedRow) {
       badge.style.background = 'linear-gradient(90deg, #d4af37 0%, #d4af37 50%, #334155 50%, #334155 100%)';
       badge.style.color = '#ffffff';
       badge.title = 'Partly paid';
-    } else if (iconCode === 'RED_COIN') {
-      const delta = Math.abs(Number(rowObj?.net_delta_ex_vat || 0));
-      badge.textContent = '£';
-      badge.style.background = 'radial-gradient(circle at 30% 30%, #fecaca 0%, #f87171 35%, #dc2626 60%, #7f1d1d 100%)';
-      badge.style.color = '#ffffff';
-      badge.title = `Overpaid by ${fmtSummaryMoney(delta)} (adjusted)`;
     } else {
       return null;
     }
@@ -97055,20 +97353,40 @@ function summaryUpdateRowDom(section, id, patchedRow) {
     return badge;
   };
 
+  const buildAdvanceBadge = () => {
+    const badge = document.createElement('span');
+    badge.className = 'pill pill-bad issue-pay-badge';
+    badge.textContent = 'ADV';
+    badge.title = 'Advance Pay override';
+    return badge;
+  };
+
+  const buildOverpaidBadge = (rowObj) => {
+    const badge = document.createElement('span');
+    badge.className = 'pill pill-bad issue-pay-badge';
+    badge.textContent = 'Overpaid';
+    badge.title = `Overpaid by ${fmtSummaryMoney(rowObj?.net_delta_ex_vat)} (adjusted)`;
+    return badge;
+  };
+
+  const buildProcessingOverlay = () => {
+    const badge = decoratePaymentIcon(document.createElement('span'));
+    badge.classList.add('coin-badge');
+    badge.setAttribute('aria-hidden', 'true');
+    badge.textContent = '◷';
+    badge.title = 'Payment in progress';
+    return badge;
+  };
+
   const renderIssueBadges = (codes, rowObj = null) => {
     const wrap = document.createElement('div');
     wrap.className = 'issue-badges';
 
-    const raw = Array.isArray(codes) ? codes.filter(Boolean) : [];
-    const arr0 = raw.map(x => String(x || '').trim()).filter(Boolean);
-    const PAYMENT_BADGE_CODES = new Set([
-      '__PAY_BADGE_ADV__',
-      '__PAY_BADGE_OVERPAID__',
-      '__PAY_BADGE_PROCESSING__'
-    ]);
-    const paymentBadges = new Set(arr0.filter((code) => PAYMENT_BADGE_CODES.has(code)));
-    const businessCodes = arr0.filter(x => !PAYMENT_BADGE_CODES.has(x));
+    const paymentState = readTimesheetPaymentBadges(codes, rowObj);
+    const arr0 = paymentState.businessIssueCodes;
 
+    // Reference blocker pills retain their existing precedence and remain
+    // business issues; payment tokens are deliberately excluded above.
     const REF_ALL = new Set([
       'Refs (Invoicing Blocked)',
       'Refs (Issue Invoice Blocked)',
@@ -97081,85 +97399,52 @@ function summaryUpdateRowDom(section, id, patchedRow) {
     ];
 
     let refChosen = '';
-    for (const k of REF_PRECEDENCE) {
-      if (businessCodes.includes(k)) {
-        refChosen = k;
+    for (const key of REF_PRECEDENCE) {
+      if (arr0.includes(key)) {
+        refChosen = key;
         break;
       }
     }
 
-    const rest = businessCodes.filter(x => !REF_ALL.has(x));
-    const arr = refChosen ? [refChosen, ...rest] : rest;
+    const rest = arr0.filter((code) => !REF_ALL.has(code));
+    const businessIssues = refChosen ? [refChosen, ...rest] : rest;
 
-    const appendPaymentPill = (label, title) => {
-      const pill = document.createElement('span');
-      pill.className = 'pill pill-bad';
-      pill.textContent = label;
-      if (title) pill.title = title;
-      wrap.appendChild(pill);
-    };
-
-    if (paymentBadges.has('__PAY_BADGE_ADV__')) {
-      appendPaymentPill('ADV', 'Advance Pay override active');
-    }
-
-    const payIcon = (section === 'timesheets' && rowObj)
+    const isTimesheetPaymentRow = section === 'timesheets' && !!rowObj;
+    const payIcon = isTimesheetPaymentRow
       ? buildTimesheetPayIcon(rowObj)
       : null;
 
-    const primaryPayIconCode = (() => {
-      if (!(section === 'timesheets' && rowObj)) return 'NONE';
-      const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
-      let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
-
-      if (!iconCode || iconCode === 'NONE') {
-        if (payStatus === 'PAID') iconCode = 'COIN';
-        else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
-        else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
-        else iconCode = 'NONE';
-      }
-
-      return iconCode || 'NONE';
-    })();
-
+    if (isTimesheetPaymentRow && paymentState.showAdvance) {
+      wrap.appendChild(buildAdvanceBadge());
+    }
     if (payIcon) {
-      payIcon.classList.add('issue-pay-badge');
-      payIcon.style.marginLeft = '0';
-      payIcon.style.flex = '0 0 auto';
-      payIcon.style.alignSelf = 'center';
       wrap.appendChild(payIcon);
     }
-
-    if (paymentBadges.has('__PAY_BADGE_OVERPAID__')) {
-      appendPaymentPill(
-        'Overpaid',
-        `Overpaid by ${fmtSummaryMoney(Math.abs(Number(rowObj?.net_delta_ex_vat || 0)))}`
-      );
+    if (isTimesheetPaymentRow && paymentState.showOverpaid) {
+      wrap.appendChild(buildOverpaidBadge(rowObj));
+    }
+    if (isTimesheetPaymentRow && paymentState.showProcessingOverlay) {
+      wrap.appendChild(buildProcessingOverlay());
     }
 
-    if (paymentBadges.has('__PAY_BADGE_PROCESSING__') && primaryPayIconCode !== 'CLOCK') {
-      const clock = document.createElement('span');
-      clock.className = 'coin-badge issue-pay-badge';
-      clock.setAttribute('aria-hidden', 'true');
-      clock.style.marginLeft = '0';
-      clock.style.flex = '0 0 auto';
-      clock.style.alignSelf = 'center';
-      clock.textContent = '◷';
-      clock.title = 'Payment in progress';
-      wrap.appendChild(clock);
-    }
+    const hasPaymentDisplay = !!(
+      isTimesheetPaymentRow && (
+        paymentState.showAdvance ||
+        payIcon ||
+        paymentState.showOverpaid ||
+        paymentState.showProcessingOverlay
+      )
+    );
 
-    if (!arr.length) {
-      if (!payIcon && paymentBadges.size === 0) {
-        const ok = document.createElement('span');
-        ok.className = 'pill pill-ok';
-        ok.textContent = 'OK';
-        wrap.appendChild(ok);
-      }
+    if (!businessIssues.length && !hasPaymentDisplay) {
+      const ok = document.createElement('span');
+      ok.className = 'pill pill-ok';
+      ok.textContent = 'OK';
+      wrap.appendChild(ok);
       return wrap;
     }
 
-    arr.forEach(code => {
+    businessIssues.forEach((code) => {
       const span = document.createElement('span');
       const label = String(code || '').trim() || 'Issue';
 
@@ -97168,7 +97453,8 @@ function summaryUpdateRowDom(section, id, patchedRow) {
       if (
         up === 'ON HOLD' ||
         up === 'VALIDATION' ||
-        up === 'AUTHORISATION'
+        up === 'AUTHORISATION' ||
+        up === 'AWAITING SIGNED QR TIMESHEET'
       ) {
         cls = 'pill pill-warn';
       }
@@ -97655,28 +97941,74 @@ function summaryInsertRowDom(section, patchedRow) {
     return `£${Math.abs(safe).toFixed(2)}`;
   };
 
+  const PAYMENT_BADGE_TOKENS = new Set([
+    '__PAY_BADGE_ADV__',
+    '__PAY_BADGE_OVERPAID__',
+    '__PAY_BADGE_PROCESSING__'
+  ]);
+
+  const readTimesheetPaymentBadges = (codes, rowObj = null) => {
+    const rawCodes = (Array.isArray(codes) ? codes : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+
+    const paymentTokens = new Set(
+      rawCodes.filter((code) => PAYMENT_BADGE_TOKENS.has(code))
+    );
+    const businessIssueCodes = rawCodes.filter(
+      (code) => !PAYMENT_BADGE_TOKENS.has(code)
+    );
+
+    const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
+    const iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
+
+    return {
+      businessIssueCodes,
+      showAdvance:
+        paymentTokens.has('__PAY_BADGE_ADV__') ||
+        payStatus === 'ADVANCED',
+      showOverpaid:
+        paymentTokens.has('__PAY_BADGE_OVERPAID__') ||
+        payStatus === 'OVERPAID' ||
+        iconCode === 'RED_COIN',
+      showProcessingOverlay:
+        paymentTokens.has('__PAY_BADGE_PROCESSING__')
+    };
+  };
+
+  const decoratePaymentIcon = (badge) => {
+    badge.classList.add('issue-pay-badge');
+    badge.style.marginLeft = '0';
+    badge.style.flex = '0 0 auto';
+    badge.style.alignSelf = 'center';
+    return badge;
+  };
+
   const buildTimesheetPayIcon = (rowObj) => {
     const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
     let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
 
+    // OVERPAID is rendered as a labelled pill, never as the legacy red coin.
+    if (payStatus === 'OVERPAID' || iconCode === 'RED_COIN') return null;
+
     if (!iconCode || iconCode === 'NONE') {
       if (payStatus === 'PAID') iconCode = 'COIN';
       else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
-      else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
+      else if (payStatus === 'PROCESSING') iconCode = 'CLOCK';
     }
 
+    // ADVANCED is an ADV lifecycle badge. A clock is shown only when the
+    // cached state says payment processing is active.
+    if (payStatus === 'ADVANCED' && iconCode === 'CLOCK') return null;
     if (!iconCode || iconCode === 'NONE') return null;
 
-    const badge = document.createElement('span');
-    badge.className = 'coin-badge issue-pay-badge';
+    const badge = decoratePaymentIcon(document.createElement('span'));
+    badge.classList.add('coin-badge');
     badge.setAttribute('aria-hidden', 'true');
-    badge.style.marginLeft = '0';
-    badge.style.flex = '0 0 auto';
-    badge.style.alignSelf = 'center';
 
     if (iconCode === 'CLOCK') {
       badge.textContent = '◷';
-      badge.title = (payStatus === 'ADVANCED') ? 'Marked for Advance Pay' : 'Payment in progress';
+      badge.title = 'Payment in progress';
     } else if (iconCode === 'COIN') {
       badge.textContent = '£';
       badge.title = 'Paid';
@@ -97685,12 +98017,6 @@ function summaryInsertRowDom(section, patchedRow) {
       badge.style.background = 'linear-gradient(90deg, #d4af37 0%, #d4af37 50%, #334155 50%, #334155 100%)';
       badge.style.color = '#ffffff';
       badge.title = 'Partly paid';
-    } else if (iconCode === 'RED_COIN') {
-      const delta = Math.abs(Number(rowObj?.net_delta_ex_vat || 0));
-      badge.textContent = '£';
-      badge.style.background = 'radial-gradient(circle at 30% 30%, #fecaca 0%, #f87171 35%, #dc2626 60%, #7f1d1d 100%)';
-      badge.style.color = '#ffffff';
-      badge.title = `Overpaid by ${fmtSummaryMoney(delta)} (adjusted)`;
     } else {
       return null;
     }
@@ -97698,20 +98024,40 @@ function summaryInsertRowDom(section, patchedRow) {
     return badge;
   };
 
+  const buildAdvanceBadge = () => {
+    const badge = document.createElement('span');
+    badge.className = 'pill pill-bad issue-pay-badge';
+    badge.textContent = 'ADV';
+    badge.title = 'Advance Pay override';
+    return badge;
+  };
+
+  const buildOverpaidBadge = (rowObj) => {
+    const badge = document.createElement('span');
+    badge.className = 'pill pill-bad issue-pay-badge';
+    badge.textContent = 'Overpaid';
+    badge.title = `Overpaid by ${fmtSummaryMoney(rowObj?.net_delta_ex_vat)} (adjusted)`;
+    return badge;
+  };
+
+  const buildProcessingOverlay = () => {
+    const badge = decoratePaymentIcon(document.createElement('span'));
+    badge.classList.add('coin-badge');
+    badge.setAttribute('aria-hidden', 'true');
+    badge.textContent = '◷';
+    badge.title = 'Payment in progress';
+    return badge;
+  };
+
   const renderIssueBadges = (codes, rowObj = null) => {
     const wrap = document.createElement('div');
     wrap.className = 'issue-badges';
 
-    const raw = Array.isArray(codes) ? codes.filter(Boolean) : [];
-    const arr0 = raw.map((x) => String(x || '').trim()).filter(Boolean);
-    const PAYMENT_BADGE_CODES = new Set([
-      '__PAY_BADGE_ADV__',
-      '__PAY_BADGE_OVERPAID__',
-      '__PAY_BADGE_PROCESSING__'
-    ]);
-    const paymentBadges = new Set(arr0.filter((code) => PAYMENT_BADGE_CODES.has(code)));
-    const businessCodes = arr0.filter((x) => !PAYMENT_BADGE_CODES.has(x));
+    const paymentState = readTimesheetPaymentBadges(codes, rowObj);
+    const arr0 = paymentState.businessIssueCodes;
 
+    // Reference blocker pills retain their existing precedence and remain
+    // business issues; payment tokens are deliberately excluded above.
     const REF_ALL = new Set([
       'Refs (Invoicing Blocked)',
       'Refs (Issue Invoice Blocked)',
@@ -97724,85 +98070,52 @@ function summaryInsertRowDom(section, patchedRow) {
     ];
 
     let refChosen = '';
-    for (const k of REF_PRECEDENCE) {
-      if (businessCodes.includes(k)) {
-        refChosen = k;
+    for (const key of REF_PRECEDENCE) {
+      if (arr0.includes(key)) {
+        refChosen = key;
         break;
       }
     }
 
-    const rest = businessCodes.filter((x) => !REF_ALL.has(x));
-    const arr = refChosen ? [refChosen, ...rest] : rest;
+    const rest = arr0.filter((code) => !REF_ALL.has(code));
+    const businessIssues = refChosen ? [refChosen, ...rest] : rest;
 
-    const appendPaymentPill = (label, title) => {
-      const pill = document.createElement('span');
-      pill.className = 'pill pill-bad';
-      pill.textContent = label;
-      if (title) pill.title = title;
-      wrap.appendChild(pill);
-    };
-
-    if (paymentBadges.has('__PAY_BADGE_ADV__')) {
-      appendPaymentPill('ADV', 'Advance Pay override active');
-    }
-
-    const payIcon = (section === 'timesheets' && rowObj)
+    const isTimesheetPaymentRow = section === 'timesheets' && !!rowObj;
+    const payIcon = isTimesheetPaymentRow
       ? buildTimesheetPayIcon(rowObj)
       : null;
 
-    const primaryPayIconCode = (() => {
-      if (!(section === 'timesheets' && rowObj)) return 'NONE';
-      const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
-      let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
-
-      if (!iconCode || iconCode === 'NONE') {
-        if (payStatus === 'PAID') iconCode = 'COIN';
-        else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
-        else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
-        else iconCode = 'NONE';
-      }
-
-      return iconCode || 'NONE';
-    })();
-
+    if (isTimesheetPaymentRow && paymentState.showAdvance) {
+      wrap.appendChild(buildAdvanceBadge());
+    }
     if (payIcon) {
-      payIcon.classList.add('issue-pay-badge');
-      payIcon.style.marginLeft = '0';
-      payIcon.style.flex = '0 0 auto';
-      payIcon.style.alignSelf = 'center';
       wrap.appendChild(payIcon);
     }
-
-    if (paymentBadges.has('__PAY_BADGE_OVERPAID__')) {
-      appendPaymentPill(
-        'Overpaid',
-        `Overpaid by ${fmtSummaryMoney(Math.abs(Number(rowObj?.net_delta_ex_vat || 0)))}`
-      );
+    if (isTimesheetPaymentRow && paymentState.showOverpaid) {
+      wrap.appendChild(buildOverpaidBadge(rowObj));
+    }
+    if (isTimesheetPaymentRow && paymentState.showProcessingOverlay) {
+      wrap.appendChild(buildProcessingOverlay());
     }
 
-    if (paymentBadges.has('__PAY_BADGE_PROCESSING__') && primaryPayIconCode !== 'CLOCK') {
-      const clock = document.createElement('span');
-      clock.className = 'coin-badge issue-pay-badge';
-      clock.setAttribute('aria-hidden', 'true');
-      clock.style.marginLeft = '0';
-      clock.style.flex = '0 0 auto';
-      clock.style.alignSelf = 'center';
-      clock.textContent = '◷';
-      clock.title = 'Payment in progress';
-      wrap.appendChild(clock);
-    }
+    const hasPaymentDisplay = !!(
+      isTimesheetPaymentRow && (
+        paymentState.showAdvance ||
+        payIcon ||
+        paymentState.showOverpaid ||
+        paymentState.showProcessingOverlay
+      )
+    );
 
-    if (!arr.length) {
-      if (!payIcon && paymentBadges.size === 0) {
-        const ok = document.createElement('span');
-        ok.className = 'pill pill-ok';
-        ok.textContent = 'OK';
-        wrap.appendChild(ok);
-      }
+    if (!businessIssues.length && !hasPaymentDisplay) {
+      const ok = document.createElement('span');
+      ok.className = 'pill pill-ok';
+      ok.textContent = 'OK';
+      wrap.appendChild(ok);
       return wrap;
     }
 
-    arr.forEach((code) => {
+    businessIssues.forEach((code) => {
       const span = document.createElement('span');
       const label = String(code || '').trim() || 'Issue';
 
@@ -97811,7 +98124,8 @@ function summaryInsertRowDom(section, patchedRow) {
       if (
         up === 'ON HOLD' ||
         up === 'VALIDATION' ||
-        up === 'AUTHORISATION'
+        up === 'AUTHORISATION' ||
+        up === 'AWAITING SIGNED QR TIMESHEET'
       ) {
         cls = 'pill pill-warn';
       }
@@ -278896,7 +279210,6 @@ function renderOutboxTable(content, rows) {
 }
 
 
-
 function renderSummary(rows){
   currentRows = rows;
   currentSelection = null;
@@ -279004,178 +279317,80 @@ function renderSummary(rows){
   const getActiveSelection = () => ensureSelection(currentSection);
   let sel = getActiveSelection();
 
-   // Small helper: render red issue badges or green OK for the Issues column
- const renderIssueBadges = (codes, rowObj = null) => {
-   const wrap = document.createElement('div');
-   wrap.className = 'issue-badges';
-
-   const raw = Array.isArray(codes) ? codes.filter(Boolean) : [];
-   const arr0 = raw.map(x => String(x || '').trim()).filter(Boolean);
-   const PAYMENT_BADGE_CODES = new Set([
-     '__PAY_BADGE_ADV__',
-     '__PAY_BADGE_OVERPAID__',
-     '__PAY_BADGE_PROCESSING__'
-   ]);
-   const paymentBadges = new Set(arr0.filter((code) => PAYMENT_BADGE_CODES.has(code)));
-   const businessCodes = arr0.filter(x => !PAYMENT_BADGE_CODES.has(x));
-
-   const REF_ALL = new Set([
-     'Refs (Invoicing Blocked)',
-     'Refs (Issue Invoice Blocked)',
-     'Refs (Invoice and Issue Blocked)'
-   ]);
-   const REF_PRECEDENCE = [
-     'Refs (Invoice and Issue Blocked)',
-     'Refs (Invoicing Blocked)',
-     'Refs (Issue Invoice Blocked)'
-   ];
-
-   let refChosen = '';
-   for (const k of REF_PRECEDENCE) {
-     if (businessCodes.includes(k)) {
-       refChosen = k;
-       break;
-     }
-   }
-
-   const rest = businessCodes.filter(x => !REF_ALL.has(x));
-   const arr = refChosen ? [refChosen, ...rest] : rest;
-
-   const appendPaymentPill = (label, title) => {
-     const pill = document.createElement('span');
-     pill.className = 'pill pill-bad';
-     pill.textContent = label;
-     if (title) pill.title = title;
-     wrap.appendChild(pill);
-   };
-
-   if (paymentBadges.has('__PAY_BADGE_ADV__')) {
-     appendPaymentPill('ADV', 'Advance Pay override active');
-   }
-
-   const payIcon = (currentSection === 'timesheets' && rowObj)
-     ? buildTimesheetPayIcon(rowObj)
-     : null;
-
-   const primaryPayIconCode = (() => {
-     if (!(currentSection === 'timesheets' && rowObj)) return 'NONE';
-     const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
-     let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
-
-     if (!iconCode || iconCode === 'NONE') {
-       if (payStatus === 'PAID') iconCode = 'COIN';
-       else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
-       else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
-       else iconCode = 'NONE';
-     }
-
-     return iconCode || 'NONE';
-   })();
-
-   if (payIcon) {
-     payIcon.classList.add('issue-pay-badge');
-     payIcon.style.marginLeft = '0';
-     payIcon.style.flex = '0 0 auto';
-     payIcon.style.alignSelf = 'center';
-     wrap.appendChild(payIcon);
-   }
-
-   if (paymentBadges.has('__PAY_BADGE_OVERPAID__')) {
-     appendPaymentPill(
-       'Overpaid',
-       `Overpaid by ${fmtSummaryMoney(Math.abs(Number(rowObj?.net_delta_ex_vat || 0)))}`
-     );
-   }
-
-   if (paymentBadges.has('__PAY_BADGE_PROCESSING__') && primaryPayIconCode !== 'CLOCK') {
-     const clock = document.createElement('span');
-     clock.className = 'coin-badge issue-pay-badge';
-     clock.setAttribute('aria-hidden', 'true');
-     clock.style.marginLeft = '0';
-     clock.style.flex = '0 0 auto';
-     clock.style.alignSelf = 'center';
-     clock.textContent = '◷';
-     clock.title = 'Payment in progress';
-     wrap.appendChild(clock);
-   }
-
-   if (!arr.length) {
-     if (!payIcon && paymentBadges.size === 0) {
-       const ok = document.createElement('span');
-       ok.className = 'pill pill-ok';
-       ok.textContent = 'OK';
-       wrap.appendChild(ok);
-     }
-     return wrap;
-   }
-
-   arr.forEach(code => {
-     const span = document.createElement('span');
-     const label = String(code || '').trim() || 'Issue';
-
-     let cls = 'pill pill-bad';
-     const up = label.toUpperCase();
-     if (
-       up === 'ON HOLD' ||
-       up === 'VALIDATION' ||
-       up === 'AUTHORISATION' ||
-        up === 'AWAITING SIGNED QR TIMESHEET'
-     ) {
-       cls = 'pill pill-warn';
-     }
-
-     span.className = cls;
-     span.textContent = label;
-     wrap.appendChild(span);
-   });
-
-   return wrap;
- };
-
   const fmtSummaryMoney = (n) => {
     const v = Number(n || 0);
     const safe = Number.isFinite(v) ? v : 0;
     return `£${Math.abs(safe).toFixed(2)}`;
   };
 
-  const formatUkPayTimestamp = (rawUtc) => {
-    if (!rawUtc) return '';
-    try {
-      const d = new Date(rawUtc);
-      if (!Number.isFinite(d.getTime())) return String(rawUtc || '');
-      return new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Europe/London',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
-      }).format(d).replace(',', '');
-    } catch {
-      return String(rawUtc || '');
-    }
+  const PAYMENT_BADGE_TOKENS = new Set([
+    '__PAY_BADGE_ADV__',
+    '__PAY_BADGE_OVERPAID__',
+    '__PAY_BADGE_PROCESSING__'
+  ]);
+
+  const readTimesheetPaymentBadges = (codes, rowObj = null) => {
+    const rawCodes = (Array.isArray(codes) ? codes : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+
+    const paymentTokens = new Set(
+      rawCodes.filter((code) => PAYMENT_BADGE_TOKENS.has(code))
+    );
+    const businessIssueCodes = rawCodes.filter(
+      (code) => !PAYMENT_BADGE_TOKENS.has(code)
+    );
+
+    const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
+    const iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
+
+    return {
+      businessIssueCodes,
+      showAdvance:
+        paymentTokens.has('__PAY_BADGE_ADV__') ||
+        payStatus === 'ADVANCED',
+      showOverpaid:
+        paymentTokens.has('__PAY_BADGE_OVERPAID__') ||
+        payStatus === 'OVERPAID' ||
+        iconCode === 'RED_COIN',
+      showProcessingOverlay:
+        paymentTokens.has('__PAY_BADGE_PROCESSING__')
+    };
+  };
+
+  const decoratePaymentIcon = (badge) => {
+    badge.classList.add('issue-pay-badge');
+    badge.style.marginLeft = '0';
+    badge.style.flex = '0 0 auto';
+    badge.style.alignSelf = 'center';
+    return badge;
   };
 
   const buildTimesheetPayIcon = (rowObj) => {
     const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
     let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
 
+    // OVERPAID is rendered as a labelled pill, never as the legacy red coin.
+    if (payStatus === 'OVERPAID' || iconCode === 'RED_COIN') return null;
+
     if (!iconCode || iconCode === 'NONE') {
       if (payStatus === 'PAID') iconCode = 'COIN';
       else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
-      else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
+      else if (payStatus === 'PROCESSING') iconCode = 'CLOCK';
     }
 
+    // ADVANCED is an ADV lifecycle badge. A clock is shown only when the
+    // cached state says payment processing is active.
+    if (payStatus === 'ADVANCED' && iconCode === 'CLOCK') return null;
     if (!iconCode || iconCode === 'NONE') return null;
 
-    const badge = document.createElement('span');
-    badge.className = 'coin-badge';
+    const badge = decoratePaymentIcon(document.createElement('span'));
+    badge.classList.add('coin-badge');
     badge.setAttribute('aria-hidden', 'true');
 
     if (iconCode === 'CLOCK') {
       badge.textContent = '◷';
-      badge.title = (payStatus === 'ADVANCED') ? 'Marked for Advance Pay' : 'Payment in progress';
+      badge.title = 'Payment in progress';
     } else if (iconCode === 'COIN') {
       badge.textContent = '£';
       badge.title = 'Paid';
@@ -279184,18 +279399,127 @@ function renderSummary(rows){
       badge.style.background = 'linear-gradient(90deg, #d4af37 0%, #d4af37 50%, #334155 50%, #334155 100%)';
       badge.style.color = '#ffffff';
       badge.title = 'Partly paid';
-    } else if (iconCode === 'RED_COIN') {
-      const delta = Math.abs(Number(rowObj?.net_delta_ex_vat || 0));
-      badge.textContent = '£';
-      badge.style.background = 'radial-gradient(circle at 30% 30%, #fecaca 0%, #f87171 35%, #dc2626 60%, #7f1d1d 100%)';
-      badge.style.color = '#ffffff';
-      badge.title = `Overpaid by ${fmtSummaryMoney(delta)} (adjusted)`;
     } else {
       return null;
     }
 
     return badge;
   };
+
+  const buildAdvanceBadge = () => {
+    const badge = document.createElement('span');
+    badge.className = 'pill pill-bad issue-pay-badge';
+    badge.textContent = 'ADV';
+    badge.title = 'Advance Pay override';
+    return badge;
+  };
+
+  const buildOverpaidBadge = (rowObj) => {
+    const badge = document.createElement('span');
+    badge.className = 'pill pill-bad issue-pay-badge';
+    badge.textContent = 'Overpaid';
+    badge.title = `Overpaid by ${fmtSummaryMoney(rowObj?.net_delta_ex_vat)} (adjusted)`;
+    return badge;
+  };
+
+  const buildProcessingOverlay = () => {
+    const badge = decoratePaymentIcon(document.createElement('span'));
+    badge.classList.add('coin-badge');
+    badge.setAttribute('aria-hidden', 'true');
+    badge.textContent = '◷';
+    badge.title = 'Payment in progress';
+    return badge;
+  };
+
+  const renderIssueBadges = (codes, rowObj = null) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'issue-badges';
+
+    const paymentState = readTimesheetPaymentBadges(codes, rowObj);
+    const arr0 = paymentState.businessIssueCodes;
+
+    // Reference blocker pills retain their existing precedence and remain
+    // business issues; payment tokens are deliberately excluded above.
+    const REF_ALL = new Set([
+      'Refs (Invoicing Blocked)',
+      'Refs (Issue Invoice Blocked)',
+      'Refs (Invoice and Issue Blocked)'
+    ]);
+    const REF_PRECEDENCE = [
+      'Refs (Invoice and Issue Blocked)',
+      'Refs (Invoicing Blocked)',
+      'Refs (Issue Invoice Blocked)'
+    ];
+
+    let refChosen = '';
+    for (const key of REF_PRECEDENCE) {
+      if (arr0.includes(key)) {
+        refChosen = key;
+        break;
+      }
+    }
+
+    const rest = arr0.filter((code) => !REF_ALL.has(code));
+    const businessIssues = refChosen ? [refChosen, ...rest] : rest;
+
+    const isTimesheetPaymentRow = currentSection === 'timesheets' && !!rowObj;
+    const payIcon = isTimesheetPaymentRow
+      ? buildTimesheetPayIcon(rowObj)
+      : null;
+
+    if (isTimesheetPaymentRow && paymentState.showAdvance) {
+      wrap.appendChild(buildAdvanceBadge());
+    }
+    if (payIcon) {
+      wrap.appendChild(payIcon);
+    }
+    if (isTimesheetPaymentRow && paymentState.showOverpaid) {
+      wrap.appendChild(buildOverpaidBadge(rowObj));
+    }
+    if (isTimesheetPaymentRow && paymentState.showProcessingOverlay) {
+      wrap.appendChild(buildProcessingOverlay());
+    }
+
+    const hasPaymentDisplay = !!(
+      isTimesheetPaymentRow && (
+        paymentState.showAdvance ||
+        payIcon ||
+        paymentState.showOverpaid ||
+        paymentState.showProcessingOverlay
+      )
+    );
+
+    if (!businessIssues.length && !hasPaymentDisplay) {
+      const ok = document.createElement('span');
+      ok.className = 'pill pill-ok';
+      ok.textContent = 'OK';
+      wrap.appendChild(ok);
+      return wrap;
+    }
+
+    businessIssues.forEach((code) => {
+      const span = document.createElement('span');
+      const label = String(code || '').trim() || 'Issue';
+
+      let cls = 'pill pill-bad';
+      const up = label.toUpperCase();
+      if (
+        up === 'ON HOLD' ||
+        up === 'VALIDATION' ||
+        up === 'AUTHORISATION' ||
+        up === 'AWAITING SIGNED QR TIMESHEET'
+      ) {
+        cls = 'pill pill-warn';
+      }
+
+      span.className = cls;
+      span.textContent = label;
+      wrap.appendChild(span);
+    });
+
+    return wrap;
+  };
+
    // Tie selection to dataset via canonical dataset key (filters + section, excluding sort/page/pageSize)
   const priorSnapshot = (typeof getSelectionSnapshot === 'function')
     ? getSelectionSnapshot(currentSection)
