@@ -20903,7 +20903,7 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
   mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
   mc.banking.pay.list = (mc.banking.pay.list && typeof mc.banking.pay.list === 'object') ? mc.banking.pay.list : {
     items: [],
-    limit: 50,
+    limit: 5,
     offset: 0,
     statusFilter: '',
     loading: false,
@@ -20941,7 +20941,7 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
     return x;
   };
 
-  const lim = clampInt(limit, clampInt(pay.list.limit, 50, 1, 50), 1, 50);
+  const lim = clampInt(limit, clampInt(pay.list.limit, 5, 1, 200), 1, 200);
   const off = clampInt(offset, clampInt(pay.list.offset, 0, 0, 1_000_000), 0, 1_000_000);
 
   const stRaw =
@@ -21187,6 +21187,8 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
     try { pay.list.loading = false; } catch {}
   }
 }
+
+
 
 
 
@@ -32286,7 +32288,9 @@ async function bankingPayCreateDraft(input = {}) {
     const source = isPlainObject(baseDecisionSource) ? (deep(baseDecisionSource) || {}) : {};
     const rowsBySection = collectLoadedPreviewRowsBySectionForCreateDraft();
     const selectedSet = new Set(uniqTrimmed(selectedRowsForServer));
-    const selectedDraftableRows = asArray(rowsBySection.canonical_preview_lines)
+    const filteredReadyRows = asArray(rowsBySection.canonical_preview_lines)
+      .filter((row) => createDraftNodeMatchesActiveFilters(row));
+    const selectedDraftableRows = filteredReadyRows
       .filter((row) => isDraftCreateEligiblePreviewRow(row))
       .filter((row) => selectedSet.size <= 0 || selectedSet.has(getPreviewRowId(row)));
     const blockedRows = deep(rowsBySection.blocked_for_pay) || [];
@@ -32298,9 +32302,9 @@ async function bankingPayCreateDraft(input = {}) {
       selected_preview_row_mode: selectedMode,
       pay_channel_scope: channelScope || 'ALL',
       draftable_now: deep(selectedDraftableRows) || [],
-      ready_to_pay_now: deep(rowsBySection.canonical_preview_lines) || [],
-      ready_preview_lines: deep(rowsBySection.canonical_preview_lines) || [],
-      canonical_preview_lines: deep(rowsBySection.canonical_preview_lines) || [],
+      ready_to_pay_now: deep(filteredReadyRows) || [],
+      ready_preview_lines: deep(filteredReadyRows) || [],
+      canonical_preview_lines: deep(filteredReadyRows) || [],
       blocked_for_pay: blockedRows,
       blocked_for_pay_now: blockedRows,
       blocked_now: blockedRows,
@@ -32397,6 +32401,7 @@ async function bankingPayCreateDraft(input = {}) {
     const lineId = trimStr(row.line_id || row.lineId || rowJson.line_id || rowJson.lineId || '');
     const section = normalisePreviewPageSectionName(row.section || rowJson.section || 'canonical_preview_lines');
     const candidateId = trimStr(row.candidate_id || row.candidateId || rowJson.candidate_id || rowJson.candidateId || '');
+    const clientId = trimStr(row.client_id || row.clientId || rowJson.client_id || rowJson.clientId || '');
     const timesheetId = trimStr(row.timesheet_id || row.timesheetId || economicKey.timesheet_id || economicKey.timesheetId || rowJson.timesheet_id || rowJson.timesheetId || '');
     const keyType = upperTrim(row.key_type || row.keyType || economicKey.key_type || economicKey.keyType || row.component_key_type || row.componentKeyType || rowJson.key_type || rowJson.keyType || rowJson.component_key_type || rowJson.componentKeyType || '');
     const keyValue = trimStr(row.key_value || row.keyValue || economicKey.key_value || economicKey.keyValue || row.component_key_value || row.componentKeyValue || rowJson.key_value || rowJson.keyValue || rowJson.component_key_value || rowJson.componentKeyValue || '');
@@ -32416,6 +32421,7 @@ async function bankingPayCreateDraft(input = {}) {
       row_key: rowKey || null,
       section: section || 'canonical_preview_lines',
       candidate_id: candidateId || null,
+      client_id: clientId || null,
       timesheet_id: timesheetId || null,
       key_type: keyType || null,
       key_value: keyValue || null,
@@ -32441,6 +32447,7 @@ async function bankingPayCreateDraft(input = {}) {
     const contract = isPlainObject(contractLike) ? contractLike : {};
     return {
       candidate_id: trimStr(contract.candidate_id || '') || null,
+      client_id: trimStr(contract.client_id || '') || null,
       timesheet_id: trimStr(contract.timesheet_id || contract.economic_key?.timesheet_id || '') || null,
       key_type: upperTrim(contract.key_type || contract.economic_key?.key_type || '') || null,
       key_value: trimStr(contract.key_value || contract.economic_key?.key_value || '') || null,
@@ -32564,6 +32571,7 @@ async function bankingPayCreateDraft(input = {}) {
     }
 
     const rowIsWithinRequestedScope = (row) => {
+      if (!createDraftNodeMatchesActiveFilters(row)) return false;
       if (requestedScope !== 'PAYE' && requestedScope !== 'UMBRELLA') return true;
       const rowChannel = getPreviewRowPayChannelForCreateDraft(row);
       return !rowChannel || rowChannel === requestedScope;
@@ -32599,10 +32607,17 @@ async function bankingPayCreateDraft(input = {}) {
         error_code: 'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE',
         code: 'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE',
         message: requestedScope === 'PAYE'
-          ? 'No PAYE rows are available for Create Draft. Choose Umbrella only or select PAYE-ready rows.'
+          ? 'No PAYE rows are available for the current Banking Pay filters. Choose Umbrella only, Both PAYE + Umbrella, or change the candidate/client filters.'
           : (requestedScope === 'UMBRELLA'
-              ? 'No Umbrella rows are available for Create Draft. Choose PAYE only or select Umbrella-ready rows.'
-              : 'No current selected Ready to Pay rows are available for the selected draft scope.'),
+              ? 'No Umbrella rows are available for the current Banking Pay filters. Choose PAYE only, Both PAYE + Umbrella, or change the candidate/client filters.'
+              : 'No Ready to Pay rows match the current Banking Pay filters. Change the filters or refresh Banking Pay.'),
+        scope_counts: {
+          selected_ready_total: allEligibleSelectedRows.length,
+          selected_ready_paye: allEligibleSelectedRows.filter((row) => getPreviewRowPayChannelForCreateDraft(row) === 'PAYE').length,
+          selected_ready_umbrella: allEligibleSelectedRows.filter((row) => getPreviewRowPayChannelForCreateDraft(row) === 'UMBRELLA').length,
+          selected_ready_for_scope: 0,
+          pay_channel_scope: requestedScope
+        },
         previous_selected_preview_row_ids: previousIds,
         session_id: id,
         session_version: normalisedPage.session_version ?? normalisedPage.sessionVersion ?? null,
@@ -33708,6 +33723,12 @@ async function bankingPayCreateDraft(input = {}) {
     'BANKING_ACTION_FAILED',
     'BANKING_PAY_CREATE_DRAFT_FAILED',
     'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE',
+    'BANKING_PAY_CREATE_DRAFT_FILTER_CONTEXT_INVALID',
+    'BANKING_PAY_CREATE_DRAFT_FILTER_CONTEXT_MISMATCH',
+    'BANKING_PAY_CREATE_DRAFT_ROWS_OUTSIDE_FILTER',
+    'BANKING_PAY_CREATE_DRAFT_ROW_CONTRACT_MISMATCH',
+    'BANKING_PAY_CREATE_DRAFT_ECONOMIC_KEY_CONTRACT_MISMATCH',
+    'BANKING_PAY_CREATE_DRAFT_DRAFT_ROWS_TOO_MANY_FOR_REQUEST',
     'BANKING_PAY_CREATE_DRAFT_INVALID_SCOPE',
     'BANKING_PAY_CREATE_DRAFT_SCOPE_CONFLICT',
     'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED',
@@ -33750,7 +33771,150 @@ async function bankingPayCreateDraft(input = {}) {
     }
     return null;
   };
+  const createDraftFilteredScopeFailureCodes = new Set([
+    'BANKING_PAY_CREATE_DRAFT_FILTER_CONTEXT_INVALID',
+    'BANKING_PAY_CREATE_DRAFT_FILTER_CONTEXT_MISMATCH',
+    'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE',
+    'BANKING_PAY_CREATE_DRAFT_ROWS_OUTSIDE_FILTER',
+    'BANKING_PAY_CREATE_DRAFT_ROW_CONTRACT_MISMATCH',
+    'BANKING_PAY_CREATE_DRAFT_ECONOMIC_KEY_CONTRACT_MISMATCH',
+    'BANKING_PAY_CREATE_DRAFT_DRAFT_ROWS_TOO_MANY_FOR_REQUEST'
+  ]);
+  const extractCreateDraftFilteredScopeFailure = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const candidates = [];
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+    const fallbackMessageForCode = (code, node = {}) => {
+      if (code === 'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE') {
+        const scope = normaliseDraftScopeForCreate(node.pay_channel_scope || node.scope || node.details?.pay_channel_scope || node.details?.scope || payChannelScope || 'ALL') || 'ALL';
+        if (scope === 'PAYE') return 'No PAYE rows are available for the current Banking Pay filters. Choose Umbrella only, Both PAYE + Umbrella, or change the candidate/client filters.';
+        if (scope === 'UMBRELLA') return 'No Umbrella rows are available for the current Banking Pay filters. Choose PAYE only, Both PAYE + Umbrella, or change the candidate/client filters.';
+        return 'No Ready to Pay rows match the current Banking Pay filters. Change the filters or refresh Banking Pay.';
+      }
+      if (code === 'BANKING_PAY_CREATE_DRAFT_FILTER_CONTEXT_INVALID') return 'The Banking Pay candidate or client filter is not valid. Reopen Banking Pay filters and try again.';
+      if (code === 'BANKING_PAY_CREATE_DRAFT_FILTER_CONTEXT_MISMATCH') return 'Banking Pay filters changed before Create Draft could start. Refresh Banking Pay and try again.';
+      if (code === 'BANKING_PAY_CREATE_DRAFT_ROWS_OUTSIDE_FILTER') return 'One or more submitted payment rows are outside the current Banking Pay filters. Refresh Banking Pay and try again.';
+      if (code === 'BANKING_PAY_CREATE_DRAFT_ROW_CONTRACT_MISMATCH') return 'The submitted payment-row contract no longer matches the current Banking Pay preview. Refresh Banking Pay and try again.';
+      if (code === 'BANKING_PAY_CREATE_DRAFT_ECONOMIC_KEY_CONTRACT_MISMATCH') return 'The submitted payment economic keys no longer match the current Banking Pay preview. Refresh Banking Pay and try again.';
+      if (code === 'BANKING_PAY_CREATE_DRAFT_DRAFT_ROWS_TOO_MANY_FOR_REQUEST') return 'Too many filtered draft rows were sent with the create request. Reduce the filtered selection and try again.';
+      return 'Payment batch could not be created. Refresh Banking Pay and try again.';
+    };
+    const isGenericCreateDraftMessage = (message) => {
+      const text = trimStr(message).toLowerCase();
+      return !text
+        || text.includes('some payment details need attention')
+        || text === 'payment batch could not be created'
+        || text.includes('could not create this payment batch because some payment details need attention');
+    };
+
+    enqueue(value);
+    while (queue.length) {
+      const node = queue.shift();
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          errorCode: node.errorCode,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+      if (typeof node === 'string') {
+        const parsed = parseCreateDraftEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        continue;
+      }
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeCreateDraftFailureCode(node.error_code || node.errorCode || node.code || node.friendly_error?.error_code || node.friendlyError?.errorCode || '');
+      if (createDraftFilteredScopeFailureCodes.has(code)) {
+        const title = trimStr(node.title || node.friendly_error?.title || node.friendlyError?.title || '') || 'Payment batch could not be created';
+        const messageCandidates = [
+          node.user_message,
+          node.userMessage,
+          node.message,
+          node.friendly_error?.message,
+          node.friendlyError?.message,
+          node.details?.message,
+          node.detail?.message,
+          node.error
+        ].map((entry) => trimStr(entry)).filter(Boolean);
+        const specificMessage = messageCandidates.find((entry) => !isGenericCreateDraftMessage(entry));
+        const message = specificMessage || fallbackMessageForCode(code, node) || messageCandidates[0];
+        candidates.push({
+          score: specificMessage ? 100 : (messageCandidates.length ? 10 : 1),
+          payload: {
+            ...node,
+            ok: false,
+            error_code: code,
+            code,
+            title,
+            message,
+            error: message,
+            user_message: message,
+            operation_started: false,
+            no_operation_started: true,
+            no_batch_created: true,
+            friendly_error: {
+              ...(isPlainObject(node.friendly_error) ? node.friendly_error : (isPlainObject(node.friendlyError) ? node.friendlyError : {})),
+              title,
+              message,
+              error_code: code,
+              code
+            }
+          }
+        });
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseCreateDraftEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates.length ? candidates[0].payload : null;
+  };
+
   const detectCreateDraftFailureEnvelope = (value) => {
+    const filteredScopeFailure = extractCreateDraftFilteredScopeFailure(value);
+    if (filteredScopeFailure) return filteredScopeFailure;
     const queue = [];
     const seenObjects = new Set();
     const seenStrings = new Set();
@@ -33858,11 +34022,14 @@ async function bankingPayCreateDraft(input = {}) {
     return null;
   };
   const throwCreateDraftFailureEnvelope = (failurePayload, fallbackCode = 'BANKING_PAY_CREATE_DRAFT_FAILED') => {
-    const sourcePayload = isPlainObject(failurePayload)
+    const filteredScopeFailure = extractCreateDraftFilteredScopeFailure(failurePayload);
+    const sourcePayload = filteredScopeFailure || (isPlainObject(failurePayload)
       ? failurePayload
-      : { ok: false, error_code: fallbackCode, code: fallbackCode, message: trimStr(failurePayload) || fallbackCode };
-    const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(sourcePayload, sourcePayload, {
+      : { ok: false, error_code: fallbackCode, code: fallbackCode, message: trimStr(failurePayload) || fallbackCode });
+    const friendly = filteredScopeFailure
+      ? filteredScopeFailure
+      : ((typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(sourcePayload, sourcePayload, {
           action: 'CREATE_DRAFT',
           fallbackCode: sourcePayload.error_code || sourcePayload.code || fallbackCode,
           userInitiated: createDraftUserInitiated,
@@ -33872,7 +34039,7 @@ async function bankingPayCreateDraft(input = {}) {
           payload: sourcePayload,
           backendPayload: sourcePayload
         })
-      : null;
+        : null);
     const message = trimStr(
       friendly?.user_message ||
       friendly?.message ||
@@ -34471,6 +34638,47 @@ async function bankingPayCreateDraft(input = {}) {
   const hasExplicitSelectionMode = (mode) => (mode === 'EXPLICIT_SUBSET' || mode === 'EXPLICIT_NONE');
 
   const callerDecisionSource = isPlainObject(preview_decisions_json) ? deep(preview_decisions_json) : null;
+  const activeCandidateFilterIdForCreate = trimStr(
+    wiz.candidate_filter_id ||
+    wiz.candidateFilterId ||
+    wiz.decisions?.candidate_filter_id ||
+    wiz.decisions?.candidateFilterId ||
+    wiz.workbench?.candidate_filter_id ||
+    wiz.workbench?.candidateFilterId ||
+    inputOptions.candidate_filter_id ||
+    inputOptions.candidateFilterId ||
+    callerDecisionSource?.candidate_filter_id ||
+    callerDecisionSource?.candidateFilterId ||
+    ''
+  );
+  const activeClientFilterIdForCreate = trimStr(
+    wiz.client_filter_id ||
+    wiz.clientFilterId ||
+    wiz.decisions?.client_filter_id ||
+    wiz.decisions?.clientFilterId ||
+    wiz.workbench?.client_filter_id ||
+    wiz.workbench?.clientFilterId ||
+    inputOptions.client_filter_id ||
+    inputOptions.clientFilterId ||
+    callerDecisionSource?.client_filter_id ||
+    callerDecisionSource?.clientFilterId ||
+    ''
+  );
+  const createDraftNodeCandidateId = (nodeLike) => {
+    const node = isPlainObject(nodeLike) ? nodeLike : {};
+    const rowJson = isPlainObject(node.row_json) ? node.row_json : (isPlainObject(node.rowJson) ? node.rowJson : {});
+    return trimStr(node.candidate_id || node.candidateId || rowJson.candidate_id || rowJson.candidateId || '');
+  };
+  const createDraftNodeClientId = (nodeLike) => {
+    const node = isPlainObject(nodeLike) ? nodeLike : {};
+    const rowJson = isPlainObject(node.row_json) ? node.row_json : (isPlainObject(node.rowJson) ? node.rowJson : {});
+    return trimStr(node.client_id || node.clientId || rowJson.client_id || rowJson.clientId || '');
+  };
+  const createDraftNodeMatchesActiveFilters = (nodeLike) => {
+    if (activeCandidateFilterIdForCreate && createDraftNodeCandidateId(nodeLike) !== activeCandidateFilterIdForCreate) return false;
+    if (activeClientFilterIdForCreate && createDraftNodeClientId(nodeLike) !== activeClientFilterIdForCreate) return false;
+    return true;
+  };
   const callerSelectedPreviewRowIds = uniqTrimmed(callerDecisionSource?.selected_preview_row_ids);
   const callerHasSelectedPreviewRowIds = !!(
     callerDecisionSource &&
@@ -34682,6 +34890,7 @@ async function bankingPayCreateDraft(input = {}) {
     const scope = normaliseDraftScopeForCreate(scopeValue) || 'ALL';
     const rowsBySection = collectLoadedPreviewRowsBySectionForCreateDraft();
     const eligibleSelectedRows = asArray(rowsBySection.canonical_preview_lines)
+      .filter((row) => createDraftNodeMatchesActiveFilters(row))
       .filter((row) => isDraftCreateEligiblePreviewRow(row))
       .filter((row) => {
         const rowId = getPreviewRowId(row);
@@ -34724,10 +34933,10 @@ async function bankingPayCreateDraft(input = {}) {
       ? 'No PAYE rows available'
       : (scope === 'UMBRELLA' ? 'No Umbrella rows available' : 'No selected rows available');
     const message = scope === 'PAYE'
-      ? 'No PAYE rows are available for Create Draft. Choose Umbrella only or select PAYE-ready rows.'
+      ? 'No PAYE rows are available for the current Banking Pay filters. Choose Umbrella only, Both PAYE + Umbrella, or change the candidate/client filters.'
       : (scope === 'UMBRELLA'
-          ? 'No Umbrella rows are available for Create Draft. Choose PAYE only or select Umbrella-ready rows.'
-          : 'No selected Ready to Pay rows are available for Create Draft.');
+          ? 'No Umbrella rows are available for the current Banking Pay filters. Choose PAYE only, Both PAYE + Umbrella, or change the candidate/client filters.'
+          : 'No Ready to Pay rows match the current Banking Pay filters. Change the filters or refresh Banking Pay.');
     const result = makeCreateDraftCancelledResult('BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE', {
       scope,
       pay_channel_scope: scope,
@@ -34821,6 +35030,9 @@ async function bankingPayCreateDraft(input = {}) {
       expectedSessionVersion
     );
 
+    if (currentSelectionBeforeSubmit?.error_code === 'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE') {
+      return await returnCreateDraftNoRowsForScope(payChannelScope, currentSelectionBeforeSubmit);
+    }
     if (!currentSelectionBeforeSubmit || currentSelectionBeforeSubmit.ok !== true) {
       throwCreateDraftFailureEnvelope({
         ok: false,
@@ -34854,32 +35066,14 @@ async function bankingPayCreateDraft(input = {}) {
       payChannelScope || 'ALL'
     );
 
-    const draftSelectedPreviewRowContracts = asArray(currentSelectionBeforeSubmit.selected_preview_row_contracts || currentSelectionBeforeSubmit.draft_selected_preview_row_contracts)
+    const allSelectedPreviewRowContracts = asArray(currentSelectionBeforeSubmit.selected_preview_row_contracts || currentSelectionBeforeSubmit.draft_selected_preview_row_contracts)
       .filter((contract) => isPlainObject(contract))
       .map((contract) => deep(contract) || contract);
-    const draftSelectedEconomicKeys = asArray(currentSelectionBeforeSubmit.selected_economic_keys || currentSelectionBeforeSubmit.draft_selected_economic_keys)
+    const allSelectedEconomicKeys = asArray(currentSelectionBeforeSubmit.selected_economic_keys || currentSelectionBeforeSubmit.draft_selected_economic_keys)
       .filter((contract) => isPlainObject(contract))
       .map((contract) => deep(contract) || contract);
-    const scopedSelectedPreviewRowContracts = asArray(currentSelectionBeforeSubmit.scoped_selected_preview_row_contracts)
-      .filter((contract) => isPlainObject(contract))
-      .map((contract) => deep(contract) || contract);
-    const scopedSelectedEconomicKeys = asArray(currentSelectionBeforeSubmit.scoped_selected_economic_keys)
-      .filter((contract) => isPlainObject(contract))
-      .map((contract) => deep(contract) || contract);
-    createDraftPreviewDecisions.draft_selected_preview_row_contracts = deep(draftSelectedPreviewRowContracts) || [];
-    createDraftPreviewDecisions.selected_preview_row_contracts = deep(draftSelectedPreviewRowContracts) || [];
-    createDraftPreviewDecisions.draft_selected_economic_keys = deep(draftSelectedEconomicKeys) || [];
-    createDraftPreviewDecisions.selected_economic_keys = deep(draftSelectedEconomicKeys) || [];
-    createDraftPreviewDecisions.scoped_selected_preview_row_ids = uniqTrimmed(currentSelectionBeforeSubmit.scoped_selected_preview_row_ids);
-    createDraftPreviewDecisions.scoped_selected_preview_row_contracts = deep(scopedSelectedPreviewRowContracts) || [];
-    createDraftPreviewDecisions.scoped_selected_economic_keys = deep(scopedSelectedEconomicKeys) || [];
-    createDraftPreviewDecisions.scope_counts = {
-      selected_ready_total: Number(currentSelectionBeforeSubmit.selected_eligible_ready_row_count_all_channels || 0) || 0,
-      selected_ready_for_scope: Number(currentSelectionBeforeSubmit.selected_eligible_ready_row_count_for_scope || 0) || 0,
-      selected_preview_row_ids_total: syncedSelectedRows.length,
-      scoped_selected_preview_row_ids_total: uniqTrimmed(currentSelectionBeforeSubmit.scoped_selected_preview_row_ids).length,
-      pay_channel_scope: payChannelScope || 'ALL'
-    };
+    const activeCandidateFilterId = activeCandidateFilterIdForCreate;
+    const activeClientFilterId = activeClientFilterIdForCreate;
 
     const reqBody = {
       pay_date: pd,
@@ -34887,12 +35081,65 @@ async function bankingPayCreateDraft(input = {}) {
       session_id: sessionId,
       selected_preview_row_ids: [...syncedSelectedRows],
       selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
-      draft_selected_preview_row_contracts: deep(draftSelectedPreviewRowContracts) || [],
-      selected_preview_row_contracts: deep(draftSelectedPreviewRowContracts) || [],
-      draft_selected_economic_keys: deep(draftSelectedEconomicKeys) || [],
-      selected_economic_keys: deep(draftSelectedEconomicKeys) || [],
       preview_decisions_json: createDraftPreviewDecisions
     };
+    if (activeCandidateFilterId) reqBody.candidate_filter_id = activeCandidateFilterId;
+    if (activeClientFilterId) reqBody.client_filter_id = activeClientFilterId;
+
+    const applyDraftSubsetForScope = (scopeValue) => {
+      const scope = normaliseDraftScopeForCreate(scopeValue) || 'ALL';
+      const contractIndexes = [];
+      const contracts = [];
+      allSelectedPreviewRowContracts.forEach((contract, index) => {
+        const channel = upperTrim(contract?.pay_channel || '');
+        if ((scope === 'ALL' || channel === scope) && createDraftNodeMatchesActiveFilters(contract)) {
+          contractIndexes.push(index);
+          contracts.push(contract);
+        }
+      });
+      const contractIds = uniqTrimmed(contracts.map((contract) => contract?.preview_row_id || contract?.materialised_preview_row_id || contract?.row_id));
+      const economicKeys = contractIndexes
+        .map((index) => allSelectedEconomicKeys[index])
+        .filter((key) => isPlainObject(key));
+      if (contractIds.length <= 0) return false;
+
+      reqBody.pay_channel_scope = scope;
+      reqBody.draft_selected_preview_row_ids = [...contractIds];
+      reqBody.draft_selected_preview_row_contracts = deep(contracts) || [];
+      reqBody.selected_preview_row_contracts = deep(contracts) || [];
+      reqBody.draft_selected_economic_keys = deep(economicKeys) || [];
+      reqBody.selected_economic_keys = deep(economicKeys) || [];
+
+      createDraftPreviewDecisions.pay_channel_scope = scope;
+      createDraftPreviewDecisions.draft_scope = scope;
+      createDraftPreviewDecisions.payChannelScope = scope;
+      createDraftPreviewDecisions.draftScope = scope;
+      createDraftPreviewDecisions.candidate_filter_id = activeCandidateFilterId || null;
+      createDraftPreviewDecisions.client_filter_id = activeClientFilterId || null;
+      createDraftPreviewDecisions.draft_selected_preview_row_ids = [...contractIds];
+      createDraftPreviewDecisions.scoped_selected_preview_row_ids = [...contractIds];
+      createDraftPreviewDecisions.draft_selected_preview_row_contracts = deep(contracts) || [];
+      createDraftPreviewDecisions.selected_preview_row_contracts = deep(contracts) || [];
+      createDraftPreviewDecisions.scoped_selected_preview_row_contracts = deep(contracts) || [];
+      createDraftPreviewDecisions.draft_selected_economic_keys = deep(economicKeys) || [];
+      createDraftPreviewDecisions.selected_economic_keys = deep(economicKeys) || [];
+      createDraftPreviewDecisions.scoped_selected_economic_keys = deep(economicKeys) || [];
+      createDraftPreviewDecisions.scope_counts = {
+        selected_ready_total: allSelectedPreviewRowContracts.length,
+        selected_ready_for_scope: contracts.length,
+        selected_preview_row_ids_total: syncedSelectedRows.length,
+        scoped_selected_preview_row_ids_total: contractIds.length,
+        pay_channel_scope: scope
+      };
+      return true;
+    };
+
+    if (!applyDraftSubsetForScope(payChannelScope || 'ALL')) {
+      return await returnCreateDraftNoRowsForScope(payChannelScope, currentSelectionBeforeSubmit);
+    }
+
+    const draftSelectedPreviewRowContracts = reqBody.draft_selected_preview_row_contracts;
+    const draftSelectedEconomicKeys = reqBody.draft_selected_economic_keys;
 
     const currentSessionSignatureForSubmit = trimStr(
       currentSelectionBeforeSubmit.session_signature ||
@@ -34917,8 +35164,12 @@ async function bankingPayCreateDraft(input = {}) {
       selection_remapped_to_current_session: currentSelectionBeforeSubmit.selection_remapped_to_current_session === true,
       current_session_version: currentSelectionBeforeSubmit.session_version ?? null,
       current_selected_preview_row_ids_sample: syncedSelectedRows.slice(0, 10),
+      draft_selected_preview_row_ids_count: reqBody.draft_selected_preview_row_ids.length,
+      draft_selected_preview_row_ids_sample: reqBody.draft_selected_preview_row_ids.slice(0, 10),
       draft_selected_preview_row_contract_count: draftSelectedPreviewRowContracts.length,
-      draft_selected_economic_key_count: draftSelectedEconomicKeys.length
+      draft_selected_economic_key_count: draftSelectedEconomicKeys.length,
+      candidate_filter_id: activeCandidateFilterId || null,
+      client_filter_id: activeClientFilterId || null
     });
 
     if (typeof runBankingPayOperationWithProgress !== 'function') {
@@ -35226,6 +35477,9 @@ async function bankingPayCreateDraft(input = {}) {
 
       if (choice === 'CREATE_UMBRELLA_ONLY') {
         payChannelScope = syncDraftScopeStateForCreate('UMBRELLA');
+        if (!applyDraftSubsetForScope('UMBRELLA')) {
+          return { ok: false, cancelled: true, result: await returnCreateDraftNoRowsForScope('UMBRELLA', currentSelectionBeforeSubmit) };
+        }
         reqBody.pay_channel_scope = 'UMBRELLA';
         if (isPlainObject(reqBody.preview_decisions_json)) {
           reqBody.preview_decisions_json.pay_channel_scope = 'UMBRELLA';
@@ -35298,6 +35552,9 @@ async function bankingPayCreateDraft(input = {}) {
           }, 'PAYE_SAME_WEEK_OVERRIDE_PROOF_INCOMPLETE');
         }
 
+        if (!applyDraftSubsetForScope(payChannelScope)) {
+          return { ok: false, cancelled: true, result: await returnCreateDraftNoRowsForScope(payChannelScope, currentSelectionBeforeSubmit) };
+        }
         reqBody.pay_channel_scope = payChannelScope;
         reqBody.same_week_paye_override_reason = overrideReason;
         reqBody.same_week_paye_override_continue = true;
@@ -35412,6 +35669,9 @@ async function bankingPayCreateDraft(input = {}) {
     }
 
 
+    if (!applyDraftSubsetForScope(payChannelScope)) {
+      return await returnCreateDraftNoRowsForScope(payChannelScope, currentSelectionBeforeSubmit);
+    }
     reqBody.pay_channel_scope = payChannelScope;
     if (isPlainObject(reqBody.preview_decisions_json)) {
       reqBody.preview_decisions_json.pay_channel_scope = payChannelScope;
@@ -35798,8 +36058,11 @@ async function bankingPayCreateDraft(input = {}) {
 
     return deep(finalResult);
   } catch (e) {
-    const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(e, e?.payload || e?.json || null, {
+    const filteredScopeFailure = extractCreateDraftFilteredScopeFailure(e);
+    const friendly = filteredScopeFailure
+      ? filteredScopeFailure
+      : ((typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(e, e?.payload || e?.json || null, {
           action: 'CREATE_DRAFT',
           fallbackCode: 'BANKING_PAY_CREATE_DRAFT_FAILED',
           userInitiated: createDraftUserInitiated,
@@ -35807,7 +36070,7 @@ async function bankingPayCreateDraft(input = {}) {
           background: createDraftBackground,
           showModal: createDraftUserInitiated && !createDraftSilent && !createDraftBackground
         })
-      : null;
+        : null);
     const rawErrMessage = trimStr(
       friendly?.user_message ||
       friendly?.message ||
@@ -35856,6 +36119,7 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
 
 
 
@@ -42585,6 +42849,10 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 
 
 
+
+
+
+
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -42988,15 +43256,26 @@ function renderPayNewBatchWizard() {
   const clientFilterLabel = trimStr(wiz.client_filter_label);
   const candDisplay = candFilterId ? (candFilterLabel || candFilterId) : 'ALL candidates';
   const clientDisplay = clientFilterId ? (clientFilterLabel || clientFilterId) : 'ALL clients';
+  const draftScope = (typeof normaliseBankingPayDraftScope === 'function')
+    ? normaliseBankingPayDraftScope(
+        wiz.draft_scope || wiz.draftScope || wiz.pay_channel_scope || wiz.payChannelScope || wiz.decisions?.draft_scope || wiz.decisions?.pay_channel_scope || 'ALL',
+        'ALL'
+      )
+    : (() => {
+        const raw = upperTrim(wiz.draft_scope || wiz.draftScope || wiz.pay_channel_scope || wiz.payChannelScope || wiz.decisions?.draft_scope || wiz.decisions?.pay_channel_scope || 'ALL');
+        return raw === 'PAYE' ? 'PAYE' : (raw === 'UMBRELLA' ? 'UMBRELLA' : 'ALL');
+      })();
+  const draftScopeLabel = (typeof getBankingPayDraftScopeLabel === 'function')
+    ? getBankingPayDraftScopeLabel(draftScope)
+    : (draftScope === 'PAYE' ? 'PAYE only' : (draftScope === 'UMBRELLA' ? 'Umbrella only' : 'Both PAYE and Umbrella'));
   const hasCandidateFilter = !!candFilterId;
   const hasClientFilter = !!clientFilterId;
-  const hasActivePayFilters = hasCandidateFilter || hasClientFilter;
+  const hasRouteFilter = draftScope !== 'ALL';
+  const hasActivePayFilters = hasCandidateFilter || hasClientFilter || hasRouteFilter;
   const clearFiltersTitle = hasActivePayFilters
-    ? 'Clear candidate and client filters'
-    : 'No candidate or client filters are currently applied';
-  const filterSummary = (!hasCandidateFilter && !hasClientFilter)
-    ? 'No candidate or client filters applied'
-    : `Candidate ${hasCandidateFilter ? candDisplay : 'ALL candidates'}, Client ${hasClientFilter ? clientDisplay : 'ALL clients'}`;
+    ? 'Clear payment route, candidate and client filters'
+    : 'No Banking Pay filters are currently applied';
+  const filterSummary = `Payment route ${draftScopeLabel}, Candidate ${hasCandidateFilter ? candDisplay : 'ALL candidates'}, Client ${hasClientFilter ? clientDisplay : 'ALL clients'}`;
   const previewEnvelope = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : {};
   const pv = (previewEnvelope.preview && typeof previewEnvelope.preview === 'object' && !Array.isArray(previewEnvelope.preview)) ? previewEnvelope.preview : previewEnvelope;
   const readiness = (previewEnvelope.readiness && typeof previewEnvelope.readiness === 'object' && !Array.isArray(previewEnvelope.readiness))
@@ -43916,7 +44195,7 @@ function renderPayNewBatchWizard() {
     if (typeof bankingPayBatchesList === 'function') {
       refreshTasks.push(Promise.resolve().then(() => bankingPayBatchesList({
         status: st.pay?.list?.statusFilter,
-        limit: st.pay?.list?.limit || 50,
+        limit: st.pay?.list?.limit || 5,
         offset: 0,
         display_mode: 'LIGHT',
         displayMode: 'LIGHT',
@@ -47127,13 +47406,144 @@ function renderPayNewBatchWizard() {
     };
   };
 
+
+  const normaliseWorkbenchPayRoute = (value) => {
+    const raw = upperTrim(value).replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (['PAYE', 'PAYE_ONLY', 'PAYE_CHANNEL'].includes(raw)) return 'PAYE';
+    if (['UMBRELLA', 'UMBRELLA_ONLY', 'UMBRELLA_CHANNEL', 'NON_PAYE', 'NONPAYE'].includes(raw)) return 'UMBRELLA';
+    return '';
+  };
+  const activeSessionFiltersForWorkbench = (() => {
+    const candidates = [
+      previewEnvelope?.session?.filters_json,
+      previewEnvelope?.session?.filtersJson,
+      previewEnvelope?.filters_json,
+      previewEnvelope?.filtersJson,
+      pv?.filters_json,
+      pv?.filtersJson,
+      wiz.workbench?.filters_json,
+      wiz.workbench?.filtersJson,
+      wiz.decisions?.filters_json,
+      wiz.decisions?.filtersJson
+    ];
+    return candidates.find((value) => isPlainObject(value)) || {};
+  })();
+  const sessionCandidateFilterId = trimStr(activeSessionFiltersForWorkbench.candidate_id || activeSessionFiltersForWorkbench.candidateId || '');
+  const sessionClientFilterId = trimStr(activeSessionFiltersForWorkbench.client_id || activeSessionFiltersForWorkbench.clientId || '');
+  const collectWorkbenchFilterIds = (rowLike, keyNames) => {
+    const out = new Set();
+    const keys = new Set(keyNames);
+    const visit = (value, depth = 0) => {
+      if (depth > 6 || value == null) return;
+      if (Array.isArray(value)) {
+        for (const item of value) visit(item, depth + 1);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      for (const [key, child] of Object.entries(value)) {
+        if (keys.has(key)) {
+          const id = trimStr(child);
+          if (id) out.add(id);
+        }
+        if (Array.isArray(child) || isPlainObject(child)) visit(child, depth + 1);
+      }
+    };
+    visit(rowLike);
+    return out;
+  };
+  const workbenchResolutionTargetRouteKeys = new Set([
+    'current_target_pay_method', 'currentTargetPayMethod', 'target_pay_method', 'targetPayMethod',
+    'saved_target_pay_method', 'savedTargetPayMethod', 'resolved_target_pay_method', 'resolvedTargetPayMethod',
+    'proposed_target_pay_method', 'proposedTargetPayMethod', 'to_pay_method', 'toPayMethod',
+    'resolution_target_pay_method', 'resolutionTargetPayMethod', 'frozen_target_pay_method', 'frozenTargetPayMethod',
+    'target_pay_channel', 'targetPayChannel', 'resolved_pay_method', 'resolvedPayMethod',
+    'proposed_pay_method', 'proposedPayMethod'
+  ]);
+  const workbenchEffectiveRouteKeys = new Set([
+    'pay_channel', 'payChannel', 'candidate_pay_method', 'candidatePayMethod',
+    'current_pay_method', 'currentPayMethod', 'pay_method', 'payMethod'
+  ]);
+  const workbenchSourceRouteKeys = new Set([
+    'source_pay_method', 'sourcePayMethod', 'from_pay_method', 'fromPayMethod', 'previous_pay_method', 'previousPayMethod',
+    'timesheet_pay_method', 'timesheetPayMethod', 'ts_pay_method', 'tsPayMethod', 'frozen_source_pay_method', 'frozenSourcePayMethod',
+    'source_pay_channel', 'sourcePayChannel'
+  ]);
+  const collectWorkbenchRouteSignals = (rowLike) => {
+    const resolutionTarget = new Set();
+    const effective = new Set();
+    const source = new Set();
+    const visit = (value, depth = 0) => {
+      if (depth > 7 || value == null) return;
+      if (Array.isArray(value)) {
+        for (const item of value) visit(item, depth + 1);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      for (const [key, child] of Object.entries(value)) {
+        if (workbenchResolutionTargetRouteKeys.has(key)) {
+          const route = normaliseWorkbenchPayRoute(child);
+          if (route) resolutionTarget.add(route);
+        }
+        if (workbenchEffectiveRouteKeys.has(key)) {
+          const route = normaliseWorkbenchPayRoute(child);
+          if (route) effective.add(route);
+        }
+        if (workbenchSourceRouteKeys.has(key)) {
+          const route = normaliseWorkbenchPayRoute(child);
+          if (route) source.add(route);
+        }
+        if (Array.isArray(child) || isPlainObject(child)) visit(child, depth + 1);
+      }
+    };
+    visit(rowLike);
+    return { resolutionTarget, effective, source };
+  };
+  const rowMatchesCandidateClientFilters = (rowLike) => {
+    const candidateIds = collectWorkbenchFilterIds(rowLike, ['candidate_id', 'candidateId']);
+    const clientIds = collectWorkbenchFilterIds(rowLike, ['client_id', 'clientId']);
+    if (candFilterId) {
+      if (candidateIds.size > 0 && !candidateIds.has(candFilterId)) return false;
+      if (candidateIds.size <= 0 && sessionCandidateFilterId !== candFilterId) return false;
+    }
+    if (clientFilterId) {
+      if (clientIds.size > 0 && !clientIds.has(clientFilterId)) return false;
+      if (clientIds.size <= 0 && sessionClientFilterId !== clientFilterId) return false;
+    }
+    return true;
+  };
+  const rowMatchesPayRouteFilter = (rowLike, sectionKind = '') => {
+    if (draftScope === 'ALL') return true;
+    const signals = collectWorkbenchRouteSignals(rowLike);
+    const isCaseResolution = upperTrim(sectionKind) === 'CASES_RESOLUTIONS';
+    if (isCaseResolution) {
+      // A route-changing case is relevant to its proposed/resolved target.
+      // Generic current/visible route metadata is considered only when no
+      // explicit target is present; source/from route is the final fallback.
+      // This keeps Umbrella -> PAYE visible for PAYE and PAYE -> Umbrella
+      // visible for Umbrella even when a top-level pay_channel is the source.
+      if (signals.resolutionTarget.size > 0) return signals.resolutionTarget.has(draftScope);
+      if (signals.effective.size > 0) return signals.effective.has(draftScope);
+      return signals.source.has(draftScope);
+    }
+    if (signals.effective.size > 0) return signals.effective.has(draftScope);
+    if (signals.resolutionTarget.size > 0) return signals.resolutionTarget.has(draftScope);
+    return signals.source.has(draftScope);
+  };
+  const rowMatchesActivePayFilters = (rowLike, sectionKind = '') => (
+    rowMatchesCandidateClientFilters(rowLike) && rowMatchesPayRouteFilter(rowLike, sectionKind)
+  );
+
   const buildPayPreviewRowsViewModel = () => {
-    const canonicalRows = resolveAllCanonicalPreviewRows();
-    const readyRows = resolveReadyPreviewRows();
-    const caseRows = resolveCasePreviewRows();
-    const blockedRows = resolveBlockedPreviewRows();
-    const hiddenRows = resolveHiddenPreviewRows();
-    const allSelectableRowIds = resolveAllSelectablePreviewRowIds();
+    const canonicalRows = resolveAllCanonicalPreviewRows().filter((line) => rowMatchesActivePayFilters(line, upperTrim(line?.presentation_section || line?.section || '')));
+    const readyRows = resolveReadyPreviewRows().filter((line) => rowMatchesActivePayFilters(line, 'READY_TO_PAY'));
+    const caseRows = resolveCasePreviewRows().filter((line) => rowMatchesActivePayFilters(line, 'CASES_RESOLUTIONS'));
+    const blockedRows = resolveBlockedPreviewRows().filter((line) => rowMatchesActivePayFilters(line, 'BLOCKED_FOR_PAY'));
+    const hiddenRows = resolveHiddenPreviewRows().filter((line) => rowMatchesActivePayFilters(line, 'HIDDEN'));
+    const allSelectableRowIds = uniqTrimmed([
+      ...readyRows,
+      ...caseRows,
+      ...blockedRows
+    ].map((line) => getPreviewRowId(line)).filter(Boolean));
     const readyRowIds = uniqTrimmed(readyRows.map((line) => getPreviewRowId(line)).filter(Boolean));
     const reconciledSelectionForRows = reconcileSelectedPreviewSelection(
       selectedPreviewRowIds,
@@ -47371,6 +47781,7 @@ function renderPayNewBatchWizard() {
         candidate_id: candidateId,
         display_name: trimStr(payee?.display_name || payee?.candidate_name || payee?.payee_name || fallbackMeta?.display_name || ''),
         tms_ref: trimStr(payee?.tms_ref || fallbackMeta?.tms_ref || ''),
+        client_id: trimStr(payee?.client_id || payee?.clientId || ''),
         client_name: trimStr(payee?.client_name || ''),
         pay_channel: upperTrim(payee?.pay_channel || payee?.current_pay_method || fallbackMeta?.current_pay_method || (entityKind === 'UMBRELLA' ? 'UMBRELLA' : '')),
         current_pay_method: upperTrim(payee?.current_pay_method || payee?.pay_channel || fallbackMeta?.current_pay_method || (entityKind === 'UMBRELLA' ? 'UMBRELLA' : '')),
@@ -47403,7 +47814,10 @@ function renderPayNewBatchWizard() {
     return out;
   };
   const payeeReadinessBlockedLines = collectPayeeReadinessBlockedLines();
-  const blockedLinesForDisplay = [...blockedPreviewLines, ...payeeReadinessBlockedLines];
+  const blockedLinesForDisplay = [
+    ...blockedPreviewLines,
+    ...payeeReadinessBlockedLines.filter((line) => rowMatchesActivePayFilters(line, 'BLOCKED_FOR_PAY'))
+  ];
 
   const groupEntriesByCandidate = (arr) => {
     const map = new Map();
@@ -48412,18 +48826,19 @@ function renderPayNewBatchWizard() {
 
   const readyEmptyMessage = () => {
     if (previewRowsVm.loadState.loadingWithoutRows) return 'Loading payment preview rows…';
-    if (previewRowsVm.loadState.isReadyEmpty) return 'No payable rows found.';
+    if (previewRowsVm.loadState.isReadyEmpty && !hasActivePayFilters) return 'No payable rows found.';
+    if (hasActivePayFilters) return 'No Ready to Pay rows match the current Banking Pay filters.';
     return 'No line-level items are currently ready to pay.';
   };
 
   const casesEmptyMessage = () => {
     if (previewRowsVm.loadState.loadingWithoutRows) return 'Loading case-resolution state…';
-    return 'No cases need resolution.';
+    return hasActivePayFilters ? 'No Case Resolutions match the current Banking Pay filters.' : 'No cases need resolution.';
   };
 
   const blockedEmptyMessage = () => {
     if (previewRowsVm.loadState.loadingWithoutRows) return 'Loading blocked-row state…';
-    return 'No rows are blocked for pay.';
+    return hasActivePayFilters ? 'No Blocked for Pay rows match the current Banking Pay filters.' : 'No rows are blocked for pay.';
   };
 
   const readyCanonicalRowsHtml = [
@@ -48497,6 +48912,7 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
+
 
 
 
@@ -51701,6 +52117,7 @@ function refreshBankingNavAttentionFromCachedRows() {
   } catch {}
 }
 
+
 function renderPayBatchListPanel() {
   try { installBankingPayBatchTimesheetSummaryShortcut(); } catch {}
   const enc = (typeof escapeHtml === 'function')
@@ -51760,7 +52177,7 @@ function renderPayBatchListPanel() {
   }
 
   st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
-  st.pay.list = (st.pay.list && typeof st.pay.list === 'object') ? st.pay.list : { items: [], limit: 50, offset: 0, statusFilter: '', loading: false, error: '' };
+  st.pay.list = (st.pay.list && typeof st.pay.list === 'object') ? st.pay.list : { items: [], limit: 5, offset: 0, statusFilter: '', loading: false, error: '' };
   st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
   st.pay.draftWizard.workbench = (st.pay.draftWizard.workbench && typeof st.pay.draftWizard.workbench === 'object') ? st.pay.draftWizard.workbench : {};
   st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
@@ -52590,7 +53007,7 @@ function renderPayBatchListPanel() {
     if (typeof bankingPayBatchesList === 'function') {
       refreshTasks.push(Promise.resolve().then(() => bankingPayBatchesList({
         status: st.pay?.list?.statusFilter,
-        limit: st.pay?.list?.limit || 50,
+        limit: st.pay?.list?.limit || 5,
         offset: 0,
         display_mode: 'LIGHT',
         displayMode: 'LIGHT',
@@ -53135,7 +53552,7 @@ function renderPayBatchListPanel() {
 
   const selectedId = String(st.pay.selectedBatchId || '').trim();
   const statusNow = String(st.pay.list.statusFilter || '').trim().toUpperCase();
-  const limitNow = Number.isFinite(Number(st.pay.list.limit)) ? Math.trunc(Number(st.pay.list.limit)) : 50;
+  const limitNow = Number.isFinite(Number(st.pay.list.limit)) ? Math.max(1, Math.min(200, Math.trunc(Number(st.pay.list.limit)))) : 5;
   const offsetNow = Number.isFinite(Number(st.pay.list.offset)) ? Math.max(0, Math.trunc(Number(st.pay.list.offset))) : 0;
   const totalCount = Number.isFinite(Number(st.pay.list.total_count))
     ? Math.max(0, Math.trunc(Number(st.pay.list.total_count)))
@@ -53422,7 +53839,7 @@ function renderPayBatchListPanel() {
     { v: 'SETTLED', label: 'Paid' }
   ];
 
-  const limitOptions = [25, 50, 100, 200];
+  const limitOptions = [5, 10, 25, 50, 100, 200];
 
   const deriveBankingPayBatchPaymentOutcomeDisplay = (row) => {
     const source = (row && typeof row === 'object' && !Array.isArray(row)) ? row : {};
@@ -54024,6 +54441,7 @@ function renderPayBatchListPanel() {
     </div>
   `;
 }
+
 
 
 function deriveTimesheetModalInvoicingState(ctx) {
@@ -59087,8 +59505,6 @@ function renderBankingRemittancesStatusTab() {
     </div>
   `;
 }
-
-
 function renderBankingPayFiltersModal(state = {}, helpers = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -59126,7 +59542,7 @@ function renderBankingPayFiltersModal(state = {}, helpers = {}) {
 
       <div class="card" style="padding:10px;display:flex;flex-direction:column;gap:12px;">
         <div class="mini" style="opacity:.9;">
-          Choose which candidates or clients appear in the Banking Pay workbench and which payment channels Create Draft will include.
+          Choose which payment routes, candidates and clients appear in Banking Pay. Create Draft uses the same filtered workbench rows.
         </div>
 
         <div class="row">
@@ -59137,26 +59553,26 @@ function renderBankingPayFiltersModal(state = {}, helpers = {}) {
                 <input type="radio" name="bankingPayDraftScope" value="ALL" ${checked('ALL')} style="margin-top:3px;" />
                 <span>
                   <span style="display:block;font-weight:700;">Both PAYE and Umbrella</span>
-                  <span class="mini" style="opacity:.8;">Create both eligible draft types, subject to PAYE guardrails.</span>
+                  <span class="mini" style="opacity:.8;">Show PAYE- and Umbrella-relevant rows and create the applicable filtered draft(s), subject to PAYE guardrails.</span>
                 </span>
               </label>
               <label class="card" style="padding:10px;display:flex;gap:10px;align-items:flex-start;cursor:pointer;background:rgba(255,255,255,.02);">
                 <input type="radio" name="bankingPayDraftScope" value="PAYE" ${checked('PAYE')} style="margin-top:3px;" />
                 <span>
                   <span style="display:block;font-weight:700;">PAYE only</span>
-                  <span class="mini" style="opacity:.8;">Create only eligible PAYE rows.</span>
+                  <span class="mini" style="opacity:.8;">Show only PAYE-relevant workbench rows and include only those filtered Ready to Pay rows in Create Draft.</span>
                 </span>
               </label>
               <label class="card" style="padding:10px;display:flex;gap:10px;align-items:flex-start;cursor:pointer;background:rgba(255,255,255,.02);">
                 <input type="radio" name="bankingPayDraftScope" value="UMBRELLA" ${checked('UMBRELLA')} style="margin-top:3px;" />
                 <span>
                   <span style="display:block;font-weight:700;">Umbrella only</span>
-                  <span class="mini" style="opacity:.8;">Create only eligible Umbrella rows. PAYE rows remain selected in the workbench.</span>
+                  <span class="mini" style="opacity:.8;">Show only Umbrella-relevant workbench rows and include only those filtered Ready to Pay rows in Create Draft.</span>
                 </span>
               </label>
             </div>
             <div class="mini" style="opacity:.8;margin-top:6px;">
-              Draft scope filters Create Draft only. It does not globally deselect rows.
+              Payment route, candidate and client filters intersect across Ready to Pay, Blocked for Pay and Case Resolutions. Hidden selections are preserved, but hidden rows are never drafted.
             </div>
           </div>
         </div>
@@ -59231,6 +59647,7 @@ function renderBankingPayFiltersModal(state = {}, helpers = {}) {
     </div>
   `;
 }
+
 
 
 async function openBankingPayFiltersModal(seed = {}) {
@@ -80505,7 +80922,6 @@ function renderBankingAlertPreferencesPanel() {
   `;
 }
 
-
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -80754,8 +81170,8 @@ function attachBankingModalDelegatedHandlers() {
 
       const refreshBankingPayAll = async ({ reason = 'PAY_AFFECTING_ACTION', mode = 'SOFT' } = {}) => {
       const listState = (st.pay && st.pay.list && typeof st.pay.list === 'object') ? st.pay.list : {};
-      const requestedLimit = Number(listState.limit || 50);
-      const safeLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(50, Math.trunc(requestedLimit))) : 50;
+      const requestedLimit = Number(listState.limit || 5);
+      const safeLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(200, Math.trunc(requestedLimit))) : 5;
       const requestedOffset = Number(listState.offset || 0);
       const safeOffset = Number.isFinite(requestedOffset) ? Math.max(0, Math.trunc(requestedOffset)) : 0;
 
@@ -83770,6 +84186,41 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       return out;
     };
 
+    const getVisibleRenderedPreviewRowIds = () => {
+      const out = [];
+      const seen = new Set();
+      let renderedRootPresent = false;
+      const pushId = (raw) => {
+        const s = String(raw || '').trim();
+        if (!s || seen.has(s)) return;
+        seen.add(s);
+        out.push(s);
+      };
+
+      try {
+        const root = document.getElementById('modalBody');
+        renderedRootPresent = !!root;
+        if (root && typeof root.querySelectorAll === 'function') {
+          const nodes = root.querySelectorAll('[data-action="banking:pay:togglePreviewRow"][data-preview-row-id]');
+          for (const node of nodes) pushId(node.getAttribute('data-preview-row-id'));
+          const groupNodes = root.querySelectorAll('[data-action="banking:pay:toggleTimesheetPreviewGroup"][data-preview-row-ids]');
+          for (const node of groupNodes) {
+            const raw = String(node.getAttribute('data-preview-row-ids') || '').trim();
+            if (!raw) continue;
+            try {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) parsed.forEach(pushId);
+            } catch {}
+          }
+        }
+      } catch {}
+
+      // An existing modal body with zero matching rows means the active
+      // filters have no visible selectable rows. Only fall back to state when
+      // the render root itself is temporarily unavailable.
+      return renderedRootPresent ? out : getPayWizardSelectablePreviewRowIdsFromState();
+    };
+
     const normalizeSelectedPreviewRowMode = (raw, validPreviewRowIds = [], selectedPreviewRowIds = []) => {
       const s = String(raw == null ? '' : raw).trim().toUpperCase();
       if (s === 'IMPLICIT_ALL' || s === 'EXPLICIT_SUBSET' || s === 'EXPLICIT_NONE') return s;
@@ -85579,14 +86030,14 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     if (a === 'banking:pay:selectAllPreviewRows') {
       if (kind !== 'click') return;
-      setPreviewRowSelectionState({ mode: 'IMPLICIT_ALL' });
+      setPreviewRowsSelection(getVisibleRenderedPreviewRowIds(), true);
       await safeRerender(null);
       return;
     }
 
     if (a === 'banking:pay:clearAllPreviewRows') {
       if (kind !== 'click') return;
-      setPreviewRowSelectionState({ mode: 'EXPLICIT_NONE', selectedIds: [] });
+      setPreviewRowsSelection(getVisibleRenderedPreviewRowIds(), false);
       await safeRerender(null);
       return;
     }
@@ -85669,6 +86120,15 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       st.pay.draftWizard.candidate_filter_label = '';
       st.pay.draftWizard.client_filter_id = '';
       st.pay.draftWizard.client_filter_label = '';
+      st.pay.draftWizard.draft_scope = 'ALL';
+      st.pay.draftWizard.draftScope = 'ALL';
+      st.pay.draftWizard.pay_channel_scope = 'ALL';
+      st.pay.draftWizard.payChannelScope = 'ALL';
+      st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
+      st.pay.draftWizard.decisions.draft_scope = 'ALL';
+      st.pay.draftWizard.decisions.draftScope = 'ALL';
+      st.pay.draftWizard.decisions.pay_channel_scope = 'ALL';
+      st.pay.draftWizard.decisions.payChannelScope = 'ALL';
       resetPayPreviewAndDecisions();
 
       const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
@@ -86841,7 +87301,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (typeof bankingPayBatchesList === 'function') {
         await bankingPayBatchesList({
           status: st.pay.list.statusFilter,
-          limit: Math.max(1, Math.min(50, Math.trunc(Number(st.pay?.list?.limit || 50)) || 50)),
+          limit: Math.max(1, Math.min(200, Math.trunc(Number(st.pay?.list?.limit || 5)) || 5)),
           offset: 0,
           display_mode: 'LIGHT',
           displayMode: 'LIGHT',
@@ -86861,8 +87321,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     if (a === 'banking:pay:setPageSize') {
       const v = (el && el.value != null) ? String(el.value) : '';
       const n = Number(v);
-      const existingLimit = Number(st.pay?.list?.limit || 50);
-      const lim = Number.isFinite(n) ? Math.max(1, Math.min(50, Math.trunc(n))) : (Number.isFinite(existingLimit) ? Math.max(1, Math.min(50, Math.trunc(existingLimit))) : 50);
+      const existingLimit = Number(st.pay?.list?.limit || 5);
+      const lim = Number.isFinite(n) ? Math.max(1, Math.min(200, Math.trunc(n))) : (Number.isFinite(existingLimit) ? Math.max(1, Math.min(200, Math.trunc(existingLimit))) : 5);
       try { st.pay.list.limit = lim; st.pay.list.offset = 0; } catch {}
       if (typeof bankingPayBatchesList === 'function') {
         await bankingPayBatchesList({
@@ -86885,8 +87345,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     }
 
     if (a === 'banking:pay:listRefresh' || a === 'banking:pay:listPrev' || a === 'banking:pay:listNext' || a === 'banking:pay:listPage') {
-      const limRaw = Number(ds('limit') || st.pay?.list?.limit || 50);
-      const lim2 = Number.isFinite(limRaw) ? Math.max(1, Math.min(50, Math.trunc(limRaw))) : 50;
+      const limRaw = Number(ds('limit') || st.pay?.list?.limit || 5);
+      const lim2 = Number.isFinite(limRaw) ? Math.max(1, Math.min(200, Math.trunc(limRaw))) : 5;
 
       let off2 = 0;
       if (a === 'banking:pay:listPage') {
@@ -87052,10 +87512,19 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
             try {
               if (typeof bankingPayBatchesList === 'function') {
+                const cancelListState = (st.pay && st.pay.list && typeof st.pay.list === 'object') ? st.pay.list : null;
+                const cancelListLimitRaw = Number(cancelListState?.limit || 5);
+                const cancelListLimit = Number.isFinite(cancelListLimitRaw) ? Math.max(1, Math.min(200, Math.trunc(cancelListLimitRaw))) : 5;
+                const cancelListOffsetRaw = Number(cancelListState?.offset || 0);
+                const cancelListOffset = Number.isFinite(cancelListOffsetRaw) ? Math.max(0, Math.trunc(cancelListOffsetRaw)) : 0;
+                if (cancelListState) {
+                  cancelListState.limit = cancelListLimit;
+                  cancelListState.offset = cancelListOffset;
+                }
                 await bankingPayBatchesList({
-                  status: st.pay.list ? st.pay.list.statusFilter : null,
-                  limit: st.pay.list ? st.pay.list.limit : null,
-                  offset: st.pay.list ? st.pay.list.offset : null
+                  status: cancelListState ? cancelListState.statusFilter : null,
+                  limit: cancelListLimit,
+                  offset: cancelListOffset
                 });
               }
             } catch {}
@@ -89789,6 +90258,9 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
   return { ok: true };
 }
+
+
+
 
 async function openBankingPayCancelResolvedRatesModal(seed = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -120654,9 +121126,6 @@ async function openUiConfirmModal(opts = {}) {
 }
 
 
-
-
-
 async function openBanking() {
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
   const trimStr = (v) => String(v == null ? '' : v).trim();
@@ -120691,7 +121160,7 @@ async function openBanking() {
       scopePreset: 'ALL',
       list: {
         items: [],
-        limit: 50,
+        limit: 5,
         offset: 0,
         statusFilter: '',
         loading: false,
@@ -121215,7 +121684,7 @@ const maybeAutoloadPayWorkbench = async () => {
     const listPromise = Promise.resolve().then(async () => {
       if (!autoloadStillCurrent() || typeof bankingPayBatchesList !== 'function') return null;
       const limitRaw = Number(bankingState.pay?.list?.limit);
-      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50, Math.trunc(limitRaw))) : 50;
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.trunc(limitRaw))) : 5;
       const offset = Number.isFinite(Number(bankingState.pay?.list?.offset)) ? Math.max(0, Math.trunc(Number(bankingState.pay.list.offset))) : 0;
       const status = trimStr(bankingState.pay?.list?.statusFilter || '');
       return bankingPayBatchesList({
@@ -121545,6 +122014,8 @@ function buildTimesheetSummaryFilterSpec(input = {}) {
     })();
   }, 0);
 }
+
+
 
 
 async function openOutboxDetailModal(outboxOrIdentity = {}) {
