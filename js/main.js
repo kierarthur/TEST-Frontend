@@ -42852,7 +42852,6 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 
 
 
-
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -44841,6 +44840,65 @@ function renderPayNewBatchWizard() {
     return trimStr(line.preview_row_id || line.previewRowId || line.row_id || line.rowId || line.line_id || line.lineId || line.id);
   };
 
+  const isPreviewRowSelectionAllowed = (line) => {
+    if (!isPlainObject(line)) return false;
+    const rowJson = isPlainObject(line.row_json)
+      ? line.row_json
+      : (isPlainObject(line.rowJson) ? line.rowJson : {});
+    const previewContract = isPlainObject(line.preview_contract)
+      ? line.preview_contract
+      : (isPlainObject(rowJson.preview_contract) ? rowJson.preview_contract : {});
+    const firstDefined = (...values) => {
+      for (const value of values) {
+        if (value !== undefined && value !== null && !(typeof value === 'string' && trimStr(value) === '')) return value;
+      }
+      return undefined;
+    };
+    const section = upperTrim(firstDefined(
+      line.presentation_section,
+      rowJson.presentation_section,
+      line.section,
+      rowJson.section
+    ));
+    const selectionState = upperTrim(firstDefined(
+      line.selection_state,
+      line.selectionState,
+      rowJson.selection_state,
+      rowJson.selectionState
+    ));
+    const status = upperTrim(firstDefined(line.status, rowJson.status));
+
+    if (selectionState === 'NOT_SELECTABLE' || selectionState === 'SUPERSEDED') return false;
+    if (status === 'SUPERSEDED') return false;
+    if (section === 'CASES_RESOLUTIONS' || section === 'BLOCKED_FOR_PAY' || section === 'INTERNAL_ONLY') return false;
+
+    const explicitSelectionAllowed = firstDefined(
+      line.selection_allowed,
+      line.selectionAllowed,
+      rowJson.selection_allowed,
+      rowJson.selectionAllowed,
+      previewContract.selection_allowed,
+      previewContract.selectionAllowed
+    );
+    if (explicitSelectionAllowed !== undefined && !asBool(explicitSelectionAllowed)) return false;
+
+    const explicitReadyForDraft = firstDefined(
+      line.is_ready_for_draft,
+      line.isReadyForDraft,
+      rowJson.is_ready_for_draft,
+      rowJson.isReadyForDraft
+    );
+    if (explicitReadyForDraft !== undefined && !asBool(explicitReadyForDraft)) return false;
+
+    const explicitDraftable = firstDefined(
+      line.draftable,
+      rowJson.draftable
+    );
+    if (explicitDraftable !== undefined && !asBool(explicitDraftable)) return false;
+
+    return !!getPreviewRowId(line);
+  };
+
   const allPreviewRowIds = uniqTrimmed(collectPreviewRowIds(pv));
   const allPreviewRowIdSet = new Set(allPreviewRowIds);
 
@@ -44866,7 +44924,7 @@ function renderPayNewBatchWizard() {
 
   const isPreviewRowSelected = (line) => {
     const rowId = getPreviewRowId(line);
-    if (!rowId) return false;
+    if (!rowId || !isPreviewRowSelectionAllowed(line)) return false;
     return selectedPreviewRowSet.has(rowId);
   };
 
@@ -46260,7 +46318,8 @@ function renderPayNewBatchWizard() {
         ? 'Blocked for pay'
         : (section === 'CASES_RESOLUTIONS' ? 'Resolution required' : 'Ready to pay');
       const previewRowId = getPreviewRowId(line);
-      const selected = isPreviewRowSelected(line);
+      const selectionAllowed = isPreviewRowSelectionAllowed(line);
+      const selected = selectionAllowed && isPreviewRowSelected(line);
       const timesheetId = trimStr(line?.timesheet_id || line?.linked_timesheet_id || '');
       const candidateId = trimStr(line?.candidate_id || '');
       const lineType = upperTrim(line?.line_type || '');
@@ -46270,7 +46329,7 @@ function renderPayNewBatchWizard() {
       return `
         <tr${rowAnchor ? ` data-banking-scroll-anchor="${enc(rowAnchor)}"` : ''}${previewRowId ? ` data-preview-row-id="${enc(previewRowId)}"` : ''}>
           <td style="white-space:nowrap;">
-            ${previewRowId ? `
+            ${previewRowId && selectionAllowed ? `
               <input
                 type="checkbox"
                 data-action="banking:pay:togglePreviewRow"
@@ -46350,7 +46409,8 @@ function renderPayNewBatchWizard() {
         : (section === 'CASES_RESOLUTIONS' ? 'pill-warn' : ((info.isDated || upperTrim(line?.line_type || '') === 'BLOCKED_TIMESHEET' || upperTrim(line?.line_type || '') === 'DO_NOT_PAY' || asBool(line?.is_excluded_from_allocation) || (line?.is_ready_for_draft === false) || asBool(line?.case_is_blocked)) ? 'pill-bad' : 'pill-ok'));
       const isBlockedLike = section === 'BLOCKED_FOR_PAY' || section === 'CASES_RESOLUTIONS' || info.isDated || upperTrim(line?.line_type || '') === 'BLOCKED_TIMESHEET' || upperTrim(line?.line_type || '') === 'DO_NOT_PAY' || asBool(line?.is_excluded_from_allocation) || (line?.is_ready_for_draft === false) || asBool(line?.case_is_blocked);
       const previewRowId = getPreviewRowId(line);
-      const selected = isPreviewRowSelected(line);
+      const selectionAllowed = isPreviewRowSelectionAllowed(line);
+      const selected = selectionAllowed && isPreviewRowSelected(line);
       const timesheetId = trimStr(line?.timesheet_id || line?.linked_timesheet_id || '');
       const candidateId = trimStr(line?.candidate_id || '');
       const lineType = upperTrim(line?.line_type || '');
@@ -46360,7 +46420,7 @@ function renderPayNewBatchWizard() {
       return `
         <tr${rowAnchor ? ` data-banking-scroll-anchor="${enc(rowAnchor)}"` : ''}${previewRowId ? ` data-preview-row-id="${enc(previewRowId)}"` : ''}>
           <td style="white-space:nowrap;">
-            ${previewRowId ? `
+            ${previewRowId && selectionAllowed ? `
               <input
                 type="checkbox"
                 data-action="banking:pay:togglePreviewRow"
@@ -47543,8 +47603,11 @@ function renderPayNewBatchWizard() {
       ...readyRows,
       ...caseRows,
       ...blockedRows
-    ].map((line) => getPreviewRowId(line)).filter(Boolean));
-    const readyRowIds = uniqTrimmed(readyRows.map((line) => getPreviewRowId(line)).filter(Boolean));
+    ].filter((line) => isPreviewRowSelectionAllowed(line)).map((line) => getPreviewRowId(line)).filter(Boolean));
+    const readyRowIds = uniqTrimmed(readyRows
+      .filter((line) => isPreviewRowSelectionAllowed(line))
+      .map((line) => getPreviewRowId(line))
+      .filter(Boolean));
     const reconciledSelectionForRows = reconcileSelectedPreviewSelection(
       selectedPreviewRowIds,
       allSelectableRowIds,
@@ -47877,6 +47940,41 @@ function renderPayNewBatchWizard() {
       }
       return [];
     };
+    const hasActionableSuggestedResolution = (components) => asArray(components).some((component) => {
+      if (!isPlainObject(component)) return false;
+      const requiresResolution = asBool(firstDefinedValue(
+        component.requires_resolution,
+        component.needs_resolution,
+        component.resolution_required
+      ));
+      if (!requiresResolution) return false;
+
+      const explicitActionable = firstDefinedValue(
+        component.is_actionable_resolution_row,
+        component.actionable_resolution_row,
+        component.is_actionable
+      );
+      if (explicitActionable !== undefined && !asBool(explicitActionable)) return false;
+
+      const suggestedPayload = firstPlainObject(
+        component.suggested_resolution_payload_json,
+        component.suggested_resolution_payload,
+        component.suggested_payload_json
+      );
+      const suggestedResult = firstPlainObject(
+        component.suggested_resolution_result_json,
+        component.suggested_resolution_result,
+        component.suggested_result_json
+      );
+      const hasSuggestedFlag = asBool(firstDefinedValue(
+        component.has_suggested_resolution,
+        component.is_fresh_suggested_resolution,
+        component.suggested_resolution_available
+      ));
+
+      return (hasSuggestedFlag || !!suggestedPayload || !!suggestedResult)
+        && (!!suggestedPayload || !!suggestedResult);
+    });
     const makeScopedKey = (prefix, candidateId, value) => {
       const candidateIdText = trimStr(candidateId);
       const valueText = trimStr(value);
@@ -47910,6 +48008,24 @@ function renderPayNewBatchWizard() {
     const buildOverlayedDisplayEntry = (entry, line) => {
       const displayEntry = deep(entry);
       const previewLine = isPlainObject(line) ? line : {};
+      const lineResolutionSummary = firstPlainObject(
+        previewLine.case_resolution_summary,
+        previewLine.caseResolutionSummary,
+        previewLine.row_json?.case_resolution_summary,
+        previewLine.row_json?.caseResolutionSummary,
+        previewLine.rowJson?.case_resolution_summary,
+        previewLine.rowJson?.caseResolutionSummary
+      );
+      const lineComponentSources = [
+        previewLine.case_components,
+        previewLine.caseComponents,
+        previewLine.row_json?.case_components,
+        previewLine.row_json?.caseComponents,
+        previewLine.rowJson?.case_components,
+        previewLine.rowJson?.caseComponents
+      ];
+      const lineComponentsProvided = lineComponentSources.some((value) => Array.isArray(value));
+      const lineComponents = firstArrayOfObjects(...lineComponentSources);
       const lineAmount = getLineSectionAmount(previewLine);
       const candidateDisplayName = trimStr(firstNonBlankString(previewLine.display_name, displayEntry.candidate_display_name));
       const candidateTmsRef = trimStr(firstNonBlankString(previewLine.tms_ref, displayEntry.candidate_tms_ref));
@@ -47917,6 +48033,22 @@ function renderPayNewBatchWizard() {
       displayEntry.line_id = trimStr(firstNonBlankString(previewLine.line_id, previewLine.preview_row_id, previewLine.row_id, previewLine.id, displayEntry.line_id));
       displayEntry.presentation_section = upperTrim(firstNonBlankString(previewLine.presentation_section, displayEntry.presentation_section));
       displayEntry.presentation_reason = trimStr(firstNonBlankString(previewLine.presentation_reason, displayEntry.presentation_reason));
+      if (lineResolutionSummary) {
+        displayEntry.case_resolution_summary = deep(lineResolutionSummary);
+        displayEntry.case_type = upperTrim(firstNonBlankString(previewLine.case_type, lineResolutionSummary.case_type, displayEntry.case_type));
+        displayEntry.resolution_family = upperTrim(firstNonBlankString(previewLine.resolution_family, lineResolutionSummary.resolution_family, displayEntry.resolution_family));
+        displayEntry.resolution_action_label = trimStr(firstNonBlankString(previewLine.resolution_action_label, lineResolutionSummary.resolution_action_label, displayEntry.resolution_action_label));
+        displayEntry.case_needs_resolution = asBool(firstDefinedValue(previewLine.case_needs_resolution, lineResolutionSummary.case_needs_resolution, displayEntry.case_needs_resolution));
+        displayEntry.case_resolution_satisfied_now = asBool(firstDefinedValue(previewLine.case_resolution_satisfied_now, lineResolutionSummary.case_resolution_satisfied_now, displayEntry.case_resolution_satisfied_now));
+        displayEntry.unresolved_taxable_count = Math.trunc(toNum(firstDefinedValue(previewLine.unresolved_taxable_count, lineResolutionSummary.unresolved_taxable_count, displayEntry.unresolved_taxable_count), 0));
+        displayEntry.stale_count = Math.trunc(toNum(firstDefinedValue(previewLine.stale_count, lineResolutionSummary.stale_count, displayEntry.stale_count), 0));
+        displayEntry.is_mixed_case = asBool(firstDefinedValue(previewLine.is_mixed_case, lineResolutionSummary.is_mixed_case, displayEntry.is_mixed_case));
+        displayEntry.linked_resolution_scope_json = firstDefinedValue(previewLine.linked_resolution_scope_json, lineResolutionSummary.linked_resolution_scope_json, displayEntry.linked_resolution_scope_json);
+      }
+      if (lineComponentsProvided) displayEntry.components = lineComponents;
+      displayEntry.has_actionable_suggested_resolution = hasActionableSuggestedResolution(displayEntry.components);
+      displayEntry.resolution_action_requires_actionable_components = !!lineResolutionSummary
+        && upperTrim(displayEntry.resolution_family) === 'BUCKETED';
       if (lineAmount !== undefined) {
         displayEntry.case_amount = toNum(lineAmount, displayEntry.case_amount || 0);
         displayEntry.amount_ex_vat = lineAmount;
@@ -47951,24 +48083,55 @@ function renderPayNewBatchWizard() {
       const nestedCase = firstPlainObject(entry.case, entry.case_state, entry.state);
       const rawCaseEnvelope = firstPlainObject(entry.raw_case, nestedCase?.raw_case);
       const rawCase = unwrapRawCase(rawCaseEnvelope);
+      const resolutionSummary = firstPlainObject(
+        entry.case_resolution_summary,
+        entry.caseResolutionSummary,
+        nestedCase?.case_resolution_summary,
+        nestedCase?.caseResolutionSummary,
+        rawCase?.case_resolution_summary,
+        rawCase?.caseResolutionSummary
+      );
+      const components = firstArrayOfObjects(
+        entry.components,
+        entry.case_components,
+        entry.caseComponents,
+        entry.component_states,
+        entry.component_resolution_states,
+        entry.preview_components,
+        nestedCase?.components,
+        nestedCase?.case_components,
+        nestedCase?.caseComponents,
+        nestedCase?.component_states,
+        nestedCase?.component_resolution_states,
+        nestedCase?.preview_components,
+        rawCase?.components,
+        rawCase?.case_components,
+        rawCase?.caseComponents,
+        rawCase?.component_states,
+        rawCase?.component_resolution_states,
+        rawCase?.preview_components
+      );
       const candidateId = trimStr(firstNonBlankString(
         entry.candidate_id,
         nestedCase?.candidate_id,
         rawCase?.candidate_id,
+        resolutionSummary?.candidate_id,
         sourceCandidate?.candidate_id
       ));
       if (!candidateId) return null;
 
       const candidateMeta = candidateMetaById.get(candidateId) || null;
-      const caseKey = trimStr(firstNonBlankString(entry.case_key, nestedCase?.case_key, rawCase?.case_key));
-      const financeCaseId = trimStr(firstNonBlankString(entry.finance_case_id, nestedCase?.finance_case_id, rawCase?.finance_case_id));
+      const caseKey = trimStr(firstNonBlankString(entry.case_key, nestedCase?.case_key, rawCase?.case_key, resolutionSummary?.case_key));
+      const financeCaseId = trimStr(firstNonBlankString(entry.finance_case_id, nestedCase?.finance_case_id, rawCase?.finance_case_id, resolutionSummary?.finance_case_id));
       const linkedTimesheetId = trimStr(firstNonBlankString(
         entry.linked_timesheet_id,
         entry.timesheet_id,
         nestedCase?.linked_timesheet_id,
         nestedCase?.timesheet_id,
         rawCase?.linked_timesheet_id,
-        rawCase?.timesheet_id
+        rawCase?.timesheet_id,
+        resolutionSummary?.linked_timesheet_id,
+        resolutionSummary?.timesheet_id
       ));
       if (!caseKey && !financeCaseId && !linkedTimesheetId) return null;
 
@@ -48006,39 +48169,27 @@ function renderPayNewBatchWizard() {
         )),
         finance_case_id: financeCaseId,
         case_key: caseKey,
-        case_type: upperTrim(firstNonBlankString(entry.case_type, nestedCase?.case_type, rawCase?.case_type)),
-        resolution_family: upperTrim(firstNonBlankString(entry.resolution_family, nestedCase?.resolution_family, rawCase?.resolution_family)),
-        resolution_action_label: trimStr(firstNonBlankString(entry.resolution_action_label, nestedCase?.resolution_action_label, rawCase?.resolution_action_label)),
-        case_needs_resolution: asBool(firstDefinedValue(entry.case_needs_resolution, nestedCase?.case_needs_resolution, rawCase?.case_needs_resolution, entry.needs_resolution, nestedCase?.needs_resolution, rawCase?.needs_resolution)),
-        case_resolution_satisfied_now: asBool(firstDefinedValue(entry.case_resolution_satisfied_now, nestedCase?.case_resolution_satisfied_now, rawCase?.case_resolution_satisfied_now)),
+        case_type: upperTrim(firstNonBlankString(entry.case_type, nestedCase?.case_type, rawCase?.case_type, resolutionSummary?.case_type)),
+        resolution_family: upperTrim(firstNonBlankString(entry.resolution_family, nestedCase?.resolution_family, rawCase?.resolution_family, resolutionSummary?.resolution_family)),
+        resolution_action_label: trimStr(firstNonBlankString(entry.resolution_action_label, nestedCase?.resolution_action_label, rawCase?.resolution_action_label, resolutionSummary?.resolution_action_label)),
+        case_needs_resolution: asBool(firstDefinedValue(entry.case_needs_resolution, nestedCase?.case_needs_resolution, rawCase?.case_needs_resolution, resolutionSummary?.case_needs_resolution, entry.needs_resolution, nestedCase?.needs_resolution, rawCase?.needs_resolution, resolutionSummary?.needs_resolution)),
+        case_resolution_satisfied_now: asBool(firstDefinedValue(entry.case_resolution_satisfied_now, nestedCase?.case_resolution_satisfied_now, rawCase?.case_resolution_satisfied_now, resolutionSummary?.case_resolution_satisfied_now)),
         linked_timesheet_id: linkedTimesheetId,
         week_ending_date: trimStr(firstNonBlankString(entry.week_ending_date, nestedCase?.week_ending_date, rawCase?.week_ending_date)),
         linked_shift_date: trimStr(firstNonBlankString(entry.linked_shift_date, nestedCase?.linked_shift_date, rawCase?.linked_shift_date)),
         blocked_reason: trimStr(firstNonBlankString(entry.blocked_reason, entry.reason_text, nestedCase?.blocked_reason, nestedCase?.reason_text, rawCase?.blocked_reason, rawCase?.reason_text)),
         case_amount: toNum(firstDefinedValue(entry.case_amount, entry.amount_ex_vat, nestedCase?.case_amount, nestedCase?.amount_ex_vat, rawCase?.case_amount, rawCase?.amount_ex_vat), 0),
-        unresolved_taxable_count: Math.trunc(toNum(firstDefinedValue(entry.unresolved_taxable_count, nestedCase?.unresolved_taxable_count, rawCase?.unresolved_taxable_count), 0)),
-        stale_count: Math.trunc(toNum(firstDefinedValue(entry.stale_count, nestedCase?.stale_count, rawCase?.stale_count), 0)),
-        is_mixed_case: asBool(firstDefinedValue(entry.is_mixed_case, nestedCase?.is_mixed_case, rawCase?.is_mixed_case)),
-        excluded_from_run: asBool(firstDefinedValue(entry.excluded_from_run, entry.exclude_from_run, nestedCase?.excluded_from_run, nestedCase?.exclude_from_run, rawCase?.excluded_from_run, rawCase?.exclude_from_run)),
-        linked_resolution_scope_json: firstDefinedValue(entry.linked_resolution_scope_json, nestedCase?.linked_resolution_scope_json, rawCase?.linked_resolution_scope_json),
+        unresolved_taxable_count: Math.trunc(toNum(firstDefinedValue(entry.unresolved_taxable_count, nestedCase?.unresolved_taxable_count, rawCase?.unresolved_taxable_count, resolutionSummary?.unresolved_taxable_count), 0)),
+        stale_count: Math.trunc(toNum(firstDefinedValue(entry.stale_count, nestedCase?.stale_count, rawCase?.stale_count, resolutionSummary?.stale_count), 0)),
+        is_mixed_case: asBool(firstDefinedValue(entry.is_mixed_case, nestedCase?.is_mixed_case, rawCase?.is_mixed_case, resolutionSummary?.is_mixed_case)),
+        excluded_from_run: asBool(firstDefinedValue(entry.excluded_from_run, entry.exclude_from_run, nestedCase?.excluded_from_run, nestedCase?.exclude_from_run, rawCase?.excluded_from_run, rawCase?.exclude_from_run, resolutionSummary?.excluded_from_run)),
+        linked_resolution_scope_json: firstDefinedValue(entry.linked_resolution_scope_json, nestedCase?.linked_resolution_scope_json, rawCase?.linked_resolution_scope_json, resolutionSummary?.linked_resolution_scope_json),
         taxable_manual_debt_resolution: firstDefinedValue(entry.taxable_manual_debt_resolution, nestedCase?.taxable_manual_debt_resolution, rawCase?.taxable_manual_debt_resolution),
-        components: firstArrayOfObjects(
-          entry.components,
-          entry.case_components,
-          entry.component_states,
-          entry.component_resolution_states,
-          entry.preview_components,
-          nestedCase?.components,
-          nestedCase?.case_components,
-          nestedCase?.component_states,
-          nestedCase?.component_resolution_states,
-          nestedCase?.preview_components,
-          rawCase?.components,
-          rawCase?.case_components,
-          rawCase?.component_states,
-          rawCase?.component_resolution_states,
-          rawCase?.preview_components
-        ),
+        components,
+        case_resolution_summary: isPlainObject(resolutionSummary) ? deep(resolutionSummary) : null,
+        has_actionable_suggested_resolution: hasActionableSuggestedResolution(components),
+        resolution_action_requires_actionable_components: !!resolutionSummary
+          && upperTrim(firstNonBlankString(entry.resolution_family, nestedCase?.resolution_family, rawCase?.resolution_family, resolutionSummary?.resolution_family)) === 'BUCKETED',
         presentation_section: upperTrim(firstNonBlankString(entry.presentation_section, nestedCase?.presentation_section, rawCase?.presentation_section)),
         readiness_state: upperTrim(firstNonBlankString(entry.readiness_state, nestedCase?.readiness_state, rawCase?.readiness_state)),
         raw_case: isPlainObject(rawCase) ? deep(rawCase) : (isPlainObject(nestedCase) ? deep(nestedCase) : deep(entry)),
@@ -48121,18 +48272,34 @@ function renderPayNewBatchWizard() {
       addNormalizedEntry(normalizeCaseEntry(rawEntry, null));
     }
 
+    // Current preview-page case rows are authoritative and can carry the
+    // resolution summary/components directly without a decorated case-state entry.
+    for (const rawEntry of casePreviewRows.filter((entry) => isPlainObject(entry))) {
+      addNormalizedEntry(normalizeCaseEntry(rawEntry, null));
+    }
+
     const findEntryForLine = (line) => {
       const previewLine = isPlainObject(line) ? line : {};
       const lineRawCaseEnvelope = firstPlainObject(previewLine.raw_case, previewLine.case);
       const lineRawCase = unwrapRawCase(lineRawCaseEnvelope);
-      const candidateId = trimStr(firstNonBlankString(previewLine.candidate_id, lineRawCase?.candidate_id));
-      const caseKey = trimStr(firstNonBlankString(previewLine.case_key, lineRawCase?.case_key));
-      const financeCaseId = trimStr(firstNonBlankString(previewLine.finance_case_id, lineRawCase?.finance_case_id));
+      const lineResolutionSummary = firstPlainObject(
+        previewLine.case_resolution_summary,
+        previewLine.caseResolutionSummary,
+        previewLine.row_json?.case_resolution_summary,
+        previewLine.row_json?.caseResolutionSummary,
+        previewLine.rowJson?.case_resolution_summary,
+        previewLine.rowJson?.caseResolutionSummary
+      );
+      const candidateId = trimStr(firstNonBlankString(previewLine.candidate_id, lineRawCase?.candidate_id, lineResolutionSummary?.candidate_id));
+      const caseKey = trimStr(firstNonBlankString(previewLine.case_key, lineRawCase?.case_key, lineResolutionSummary?.case_key));
+      const financeCaseId = trimStr(firstNonBlankString(previewLine.finance_case_id, lineRawCase?.finance_case_id, lineResolutionSummary?.finance_case_id));
       const linkedTimesheetId = trimStr(firstNonBlankString(
         previewLine.linked_timesheet_id,
         previewLine.timesheet_id,
         lineRawCase?.linked_timesheet_id,
-        lineRawCase?.timesheet_id
+        lineRawCase?.timesheet_id,
+        lineResolutionSummary?.linked_timesheet_id,
+        lineResolutionSummary?.timesheet_id
       ));
 
       if (candidateId && caseKey) {
@@ -48538,7 +48705,13 @@ function renderPayNewBatchWizard() {
 
   const renderCaseActionButtons = (entry) => {
     const buttons = [];
-    if (entry.case_needs_resolution && !entry.case_resolution_satisfied_now) {
+    const actionableSuggestedResolutionAvailable = entry?.has_actionable_suggested_resolution === true;
+    const actionableSuggestedResolutionRequired = entry?.resolution_action_requires_actionable_components === true;
+    if (
+      entry.case_needs_resolution
+      && !entry.case_resolution_satisfied_now
+      && (!actionableSuggestedResolutionRequired || actionableSuggestedResolutionAvailable)
+    ) {
       const resolutionFamily = upperTrim(entry.resolution_family);
       if (resolutionFamily === 'TAXABLE_CHANNEL_RESTRUCTURE') {
         buttons.push(`
@@ -48912,6 +49085,10 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
+
+
+
+
 
 
 
@@ -80922,6 +81099,7 @@ function renderBankingAlertPreferencesPanel() {
   `;
 }
 
+
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -83976,10 +84154,75 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       ''
     ).trim();
 
-    const pushPreviewRowIdsFromRows = (rows, pushId) => {
+    const previewRowSectionHintForKey = (rowKey) => {
+      const key = String(rowKey || '').trim().toLowerCase();
+      if (key.includes('blocked')) return 'BLOCKED_FOR_PAY';
+      if (key.includes('case') || key.includes('resolution')) return 'CASES_RESOLUTIONS';
+      if (key.includes('ready') || key.includes('draftable') || key.includes('canonical')) return 'READY_TO_PAY';
+      return '';
+    };
+
+    const isPreviewRowSelectableFromState = (rowLike, sectionHint = '') => {
+      if (!rowLike || typeof rowLike !== 'object' || Array.isArray(rowLike)) return false;
+      const rowJson = (rowLike.row_json && typeof rowLike.row_json === 'object' && !Array.isArray(rowLike.row_json))
+        ? rowLike.row_json
+        : ((rowLike.rowJson && typeof rowLike.rowJson === 'object' && !Array.isArray(rowLike.rowJson)) ? rowLike.rowJson : {});
+      const previewContract = (rowLike.preview_contract && typeof rowLike.preview_contract === 'object' && !Array.isArray(rowLike.preview_contract))
+        ? rowLike.preview_contract
+        : ((rowJson.preview_contract && typeof rowJson.preview_contract === 'object' && !Array.isArray(rowJson.preview_contract)) ? rowJson.preview_contract : {});
+      const firstDefined = (...values) => {
+        for (const value of values) {
+          if (value !== undefined && value !== null && !(typeof value === 'string' && String(value).trim() === '')) return value;
+        }
+        return undefined;
+      };
+      const section = String(firstDefined(
+        rowLike.presentation_section,
+        rowJson.presentation_section,
+        rowLike.section,
+        rowJson.section,
+        sectionHint
+      ) || '').trim().toUpperCase();
+      const selectionState = String(firstDefined(
+        rowLike.selection_state,
+        rowLike.selectionState,
+        rowJson.selection_state,
+        rowJson.selectionState
+      ) || '').trim().toUpperCase();
+      const status = String(firstDefined(rowLike.status, rowJson.status) || '').trim().toUpperCase();
+
+      if (selectionState === 'NOT_SELECTABLE' || selectionState === 'SUPERSEDED') return false;
+      if (status === 'SUPERSEDED') return false;
+      if (section === 'CASES_RESOLUTIONS' || section === 'BLOCKED_FOR_PAY' || section === 'INTERNAL_ONLY') return false;
+
+      const selectionAllowed = firstDefined(
+        rowLike.selection_allowed,
+        rowLike.selectionAllowed,
+        rowJson.selection_allowed,
+        rowJson.selectionAllowed,
+        previewContract.selection_allowed,
+        previewContract.selectionAllowed
+      );
+      if (selectionAllowed !== undefined && !parseDataBool(selectionAllowed)) return false;
+
+      const readyForDraft = firstDefined(
+        rowLike.is_ready_for_draft,
+        rowLike.isReadyForDraft,
+        rowJson.is_ready_for_draft,
+        rowJson.isReadyForDraft
+      );
+      if (readyForDraft !== undefined && !parseDataBool(readyForDraft)) return false;
+
+      const draftable = firstDefined(rowLike.draftable, rowJson.draftable);
+      if (draftable !== undefined && !parseDataBool(draftable)) return false;
+
+      return !!getPreviewRowIdFromRow(rowLike);
+    };
+
+    const pushPreviewRowIdsFromRows = (rows, pushId, sectionHint = '') => {
       if (!Array.isArray(rows)) return;
       for (const row of rows) {
-        if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+        if (!isPreviewRowSelectableFromState(row, sectionHint)) continue;
         pushId(getPreviewRowIdFromRow(row));
       }
     };
@@ -84009,7 +84252,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         'blocked_now',
         'blockedNow'
       ]) {
-        pushPreviewRowIdsFromRows(pageLike[rowKey], pushId);
+        pushPreviewRowIdsFromRows(pageLike[rowKey], pushId, previewRowSectionHintForKey(rowKey));
       }
     };
 
@@ -84059,7 +84302,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         'previewLines',
         'lines'
       ]) {
-        pushPreviewRowIdsFromRows(nodeLike[rowKey], pushId);
+        pushPreviewRowIdsFromRows(nodeLike[rowKey], pushId, previewRowSectionHintForKey(rowKey));
       }
 
       const componentStateCache = (nodeLike.componentStateCache && typeof nodeLike.componentStateCache === 'object' && !Array.isArray(nodeLike.componentStateCache))
@@ -84082,7 +84325,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           'hidden_preview_lines',
           'hiddenPreviewLines'
         ]) {
-          pushPreviewRowIdsFromRows(componentStateCache[rowKey], pushId);
+          pushPreviewRowIdsFromRows(componentStateCache[rowKey], pushId, previewRowSectionHintForKey(rowKey));
         }
       }
 
@@ -84097,7 +84340,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         const bucket = Array.isArray(nodeLike[bucketKey]) ? nodeLike[bucketKey] : [];
         for (const candidateLike of bucket) {
           if (!candidateLike || typeof candidateLike !== 'object' || Array.isArray(candidateLike)) continue;
-          pushId(getPreviewRowIdFromRow(candidateLike));
+          if (isPreviewRowSelectableFromState(candidateLike)) pushId(getPreviewRowIdFromRow(candidateLike));
           for (const rowKey of [
             'itemisation',
             'canonical_preview_lines',
@@ -84113,7 +84356,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
             'rows',
             'lines'
           ]) {
-            pushPreviewRowIdsFromRows(candidateLike[rowKey], pushId);
+            pushPreviewRowIdsFromRows(candidateLike[rowKey], pushId, previewRowSectionHintForKey(rowKey));
           }
         }
       }
@@ -86235,8 +86478,9 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         return;
       }
 
+      let clearAccepted = false;
       try {
-        await openBankingPayCancelResolvedRatesModal({
+        const modalResult = await openBankingPayCancelResolvedRatesModal({
           workbench_session_id: workbenchSessionId,
           session_version: workbenchSessionVersion,
           candidate_id: candidateId,
@@ -86246,20 +86490,77 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
             if (getCurrentWorkbenchSessionId() !== workbenchSessionId) {
               throw new Error('The Banking Pay workbench session changed. Close this modal, refresh Banking Pay, and try again.');
             }
-            return runWorkbenchCandidateMutation({
-              candidateId,
-              mutate: (sessionId) => bankingPayWorkbenchSessionClearCaseResolution(sessionId, {
-                operation: 'CLEAR',
-                candidate_id: candidateId,
-                resolution_family: 'BUCKETED',
-                selected_timesheet_ids: selectedTimesheetIds,
-                expected_session_version: expectedSessionVersion
-              })
+            return bankingPayWorkbenchSessionClearCaseResolution(workbenchSessionId, {
+              operation: 'CLEAR',
+              candidate_id: candidateId,
+              resolution_family: 'BUCKETED',
+              selected_timesheet_ids: selectedTimesheetIds,
+              expected_session_version: expectedSessionVersion
             });
           }
         });
+
+        if (!modalResult?.accepted) return;
+        clearAccepted = true;
+
+        if (getCurrentWorkbenchSessionId() !== workbenchSessionId) {
+          throw new Error('The Banking Pay workbench session changed after the resolved rate was cancelled. Refresh Banking Pay to read the current session.');
+        }
+        if (typeof pollPayWorkbenchCandidateUntilSettled !== 'function') {
+          throw new Error('Banking Pay refresh polling is not available. Refresh Banking Pay to read the updated session.');
+        }
+
+        const queueResult = (modalResult?.result && typeof modalResult.result === 'object' && !Array.isArray(modalResult.result))
+          ? modalResult.result
+          : {};
+        markCandidatePendingLocal(candidateId, queueResult);
+        await safeRerender(null);
+
+        const returnedSessionVersionRaw = String(
+          queueResult.session_version ??
+          queueResult.sessionVersion ??
+          queueResult.version ??
+          ''
+        ).trim();
+        const returnedSessionVersion = /^[0-9]{1,18}$/.test(returnedSessionVersionRaw)
+          ? Number(returnedSessionVersionRaw)
+          : null;
+        const minimumSessionVersion = Number.isSafeInteger(returnedSessionVersion) && returnedSessionVersion >= 1
+          ? returnedSessionVersion
+          : null;
+        if (minimumSessionVersion == null) {
+          throw new Error('The resolved rate was cancelled, but the updated Banking Pay session version was not returned. Refresh Banking Pay to read the latest state.');
+        }
+
+        const sessionSettledResult = await pollPayWorkbenchCandidateUntilSettled(workbenchSessionId, '', {
+          updateState: true,
+          expectedSessionId: workbenchSessionId,
+          minimumSessionVersion,
+          requirePreviewSectionsAfterReady: true,
+          source: 'attachBankingModalDelegatedHandlers.clearCaseResolution.sessionAdoption'
+        });
+        if (sessionSettledResult?.aborted === true || sessionSettledResult?.stale === true) {
+          throw new Error('The Banking Pay workbench session changed while the updated preview was being adopted. Refresh Banking Pay to read the current session.');
+        }
+        if (sessionSettledResult?.failed === true) {
+          throw new Error('The resolved rate was cancelled, but the updated Banking Pay preview could not be adopted. Refresh Banking Pay and review the workbench error.');
+        }
+        if (
+          sessionSettledResult?.timed_out === true ||
+          sessionSettledResult?.settled !== true ||
+          sessionSettledResult?.ready !== true ||
+          sessionSettledResult?.required_preview_sections_loaded !== true
+        ) {
+          throw new Error('The resolved rate was cancelled, but the current preview pages are still refreshing. Refresh Banking Pay to read the latest state.');
+        }
+
+        await safeRerender(null);
+        toast('Resolved rate cancelled. Banking Pay has been refreshed.');
       } catch (e) {
-        toast(String(e?.message || e || 'Unable to open Cancel Resolved Rate.'));
+        const message = String(e?.message || e || '').trim();
+        toast(message || (clearAccepted
+          ? 'The resolved rate was cancelled, but Banking Pay could not finish refreshing. Refresh Banking Pay to read the latest state.'
+          : 'Unable to open Cancel Resolved Rate.'));
       }
       return;
     }
@@ -90258,7 +90559,6 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
   return { ok: true };
 }
-
 
 
 
@@ -112902,7 +113202,6 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   return nextEnvelope;
 }
 
-
 async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -112915,6 +113214,29 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     }
   };
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const readPositiveInteger = (value) => {
+    const text = trimStr(value);
+    if (!/^[0-9]{1,18}$/.test(text)) return null;
+    const number = Number(text);
+    return Number.isSafeInteger(number) && number >= 1 ? number : null;
+  };
+  const readSessionVersion = (value) => {
+    const obj = isPlainObject(value) ? value : {};
+    const progressObj = isPlainObject(obj.progress) ? obj.progress : {};
+    const candidates = [
+      obj.session_version,
+      obj.sessionVersion,
+      obj.version,
+      progressObj.session_version,
+      progressObj.sessionVersion,
+      progressObj.version
+    ];
+    for (const candidate of candidates) {
+      const parsed = readPositiveInteger(candidate);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  };
   const getWorkbenchState = () => {
     try {
       if (typeof bankingGetState === 'function') {
@@ -113040,6 +113362,18 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     options.force_full_session_refresh === true ||
     options.fullSessionRefreshAfterSettled === true ||
     options.full_session_refresh_after_settled === true
+  );
+  const minimumSessionVersion = readPositiveInteger(
+    options.minimumSessionVersion ??
+    options.minimum_session_version ??
+    options.expectedMinimumSessionVersion ??
+    options.expected_minimum_session_version
+  );
+  const requirePreviewSectionsAfterReady = !!(
+    options.requirePreviewSectionsAfterReady === true ||
+    options.require_preview_sections_after_ready === true ||
+    options.forcePreviewSectionsAfterReady === true ||
+    options.force_preview_sections_after_ready === true
   );
 
   const buildAbortResult = (abortMeta = {}, extra = {}) => {
@@ -113192,6 +113526,8 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
   };
   const fetchFirstSessionPageIfAvailable = async (progressLike) => {
     if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return null;
+    const progressSessionVersion = readSessionVersion(progressLike);
+    if (minimumSessionVersion != null && (progressSessionVersion == null || progressSessionVersion < minimumSessionVersion)) return null;
     if (!progressHasRowsAvailable(progressLike) && !progressLooksReady(progressLike)) return null;
     const progressObj = isPlainObject(progressLike?.progress) ? progressLike.progress : (isPlainObject(progressLike) ? progressLike : {});
     const normalisePreviewPageSectionName = (section) => {
@@ -113406,6 +113742,15 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       const afterSectionFetchGuard = evaluateStalenessGuard('after_session_preview_section_fetch', { section, page: cloneJson(page) });
       if (afterSectionFetchGuard.aborted) return buildAbortResult(afterSectionFetchGuard);
       const normalisedPage = normalisePage(page, section);
+      const pageSessionVersion = readSessionVersion(normalisedPage);
+      if (minimumSessionVersion != null && (pageSessionVersion == null || pageSessionVersion < minimumSessionVersion)) {
+        errors.push({
+          section,
+          code: 'STALE_PREVIEW_PAGE_VERSION',
+          message: `Preview section ${section} is for session version ${pageSessionVersion}; version ${minimumSessionVersion} or later is required.`
+        });
+        continue;
+      }
       const resolvedSection = normalisePreviewPageSectionName(normalisedPage.resolved_section || normalisedPage.section || section);
       const rows = pageRows(normalisedPage);
       sectionPages[resolvedSection] = normalisedPage;
@@ -113434,7 +113779,10 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       returned_count: combinedRows.length,
       session_id: sessionIdText,
       session_version: progressLike?.session_version ?? progressLike?.progress?.session_version ?? null,
-      section_row_counts: Object.fromEntries(requiredSections.map((section) => [section, pageRows(sectionPages[section]).length]))
+      section_row_counts: Object.fromEntries(requiredSections.map((section) => [section, pageRows(sectionPages[section]).length])),
+      all_required_sections_loaded: errors.length === 0 && requiredSections.every((section) => loadedSections[section] === true),
+      minimum_session_version: minimumSessionVersion,
+      progress_session_version: progressSessionVersion
     };
 
     if (updateState && (Object.keys(loadedSections).length > 0 || combinedRows.length > 0)) {
@@ -113446,6 +113794,71 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       } catch {}
     }
     return summary;
+  };
+
+  const adoptSettledSessionProgressIntoState = (progressLike) => {
+    if (!updateState) return;
+    try {
+      const st = getWorkbenchState();
+      if (!st || typeof st !== 'object') return;
+      if (sessionIsObsolete(sessionIdText) || sessionIsObsolete(expectedSessionIdText)) return;
+      const currentSessionId = resolveCurrentActiveSessionId({ phase: 'adopt_settled_session_progress' });
+      if (uuidRe.test(currentSessionId) && currentSessionId !== expectedSessionIdText) return;
+
+      const root = isPlainObject(progressLike) ? progressLike : {};
+      const progressObj = isPlainObject(root.progress) ? root.progress : {};
+      const readArray = (...keys) => {
+        for (const source of [root, progressObj]) {
+          for (const key of keys) {
+            if (Array.isArray(source?.[key])) return source[key];
+          }
+        }
+        return [];
+      };
+      const normalizeIds = (values) => Array.from(new Set(
+        (Array.isArray(values) ? values : []).map((value) => trimStr(value)).filter(Boolean)
+      ));
+      const failedCandidateIds = normalizeIds(readArray('failed_candidate_ids', 'failedCandidateIds'));
+      const candidateStatusRows = readArray('candidate_status_rows', 'candidate_statuses', 'candidateStatusRows')
+        .filter((row) => isPlainObject(row));
+      const failedCandidateRows = candidateStatusRows.filter((row) => failedCandidateIds.includes(trimStr(row?.candidate_id || row?.candidateId || '')));
+      const dirtyCandidateIds = [...failedCandidateIds];
+      const sessionVersion = readSessionVersion(progressLike);
+      const nowIso = new Date().toISOString();
+
+      st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+      st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+      const wiz = st.pay.draftWizard;
+      wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
+      wiz.decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {};
+      wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
+
+      const writeTerminalState = (target) => {
+        if (!target || typeof target !== 'object' || Array.isArray(target)) return;
+        target.pending_candidate_ids = [];
+        target.failed_candidate_ids = [...failedCandidateIds];
+        target.pending_candidate_rows = [];
+        target.failed_candidate_rows = cloneJson(failedCandidateRows) || [];
+        target.pending_candidate_jobs = [];
+        target.dirty_candidate_ids = [...dirtyCandidateIds];
+        target.create_draft_refresh_pending = false;
+        target.pay_context_dirty = failedCandidateIds.length > 0;
+        target.last_progress_at = nowIso;
+        if (sessionVersion != null) target.session_version = sessionVersion;
+      };
+
+      writeTerminalState(wiz.workbench);
+      writeTerminalState(wiz.decisions);
+      wiz.create_draft_refresh_pending = false;
+      wiz.preview.loading = false;
+      wiz.preview.progress_only = false;
+
+      if (isPlainObject(wiz.preview.data)) {
+        writeTerminalState(wiz.preview.data);
+        if (isPlainObject(wiz.preview.data.session)) writeTerminalState(wiz.preview.data.session);
+        if (isPlainObject(wiz.preview.data.preview)) writeTerminalState(wiz.preview.data.preview);
+      }
+    } catch {}
   };
 
   if (!candidateScopedPoll) {
@@ -113480,15 +113893,42 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       if (updateState) {
         try { if (typeof options.onProgress === 'function') await options.onProgress(progress); } catch {}
       }
-      if (progressHasRowsAvailable(progress) || progressLooksReady(progress)) {
+      const progressSessionVersion = readSessionVersion(progress);
+      const minimumVersionReached = minimumSessionVersion == null || (
+        progressSessionVersion != null && progressSessionVersion >= minimumSessionVersion
+      );
+      const shouldLoadSessionPreview = requirePreviewSectionsAfterReady
+        ? progressLooksReady(progress)
+        : (progressHasRowsAvailable(progress) || progressLooksReady(progress));
+      if (minimumVersionReached && shouldLoadSessionPreview) {
         lastSessionPage = await fetchFirstSessionPageIfAvailable(progress).catch(() => null);
       }
+      if (lastSessionPage?.aborted === true) return lastSessionPage;
       const pageRows = Array.isArray(lastSessionPage?.rows) ? lastSessionPage.rows : (Array.isArray(lastSessionPage?.items) ? lastSessionPage.items : []);
-      const readyNow = progressLooksReady(progress);
+      const readyNow = progressLooksReady(progress) && minimumVersionReached;
       const rowsAvailable = progressHasRowsAvailable(progress);
-      if (readyNow && (!rowsAvailable || pageRows.length > 0)) {
+      const requiredSectionsLoaded = lastSessionPage?.all_required_sections_loaded === true;
+      const previewAdopted = requirePreviewSectionsAfterReady
+        ? requiredSectionsLoaded
+        : (!rowsAvailable || pageRows.length > 0);
+      if (readyNow && previewAdopted) {
+        adoptSettledSessionProgressIntoState(progress);
         markProgressPollStopped();
-        return { ok: true, settled: true, ready: true, failed: false, stale: false, rows_available: rowsAvailable, page_loaded: pageRows.length > 0, progress: cloneJson(progress), page: cloneJson(lastSessionPage), session_id: sessionIdText, session_version: progress?.session_version ?? progress?.progress?.session_version ?? null };
+        return {
+          ok: true,
+          settled: true,
+          ready: true,
+          failed: false,
+          stale: false,
+          rows_available: rowsAvailable,
+          page_loaded: pageRows.length > 0,
+          required_preview_sections_loaded: requiredSectionsLoaded,
+          progress: cloneJson(progress),
+          page: cloneJson(lastSessionPage),
+          session_id: sessionIdText,
+          session_version: progressSessionVersion,
+          minimum_session_version: minimumSessionVersion
+        };
       }
       const sessionSleepMs = attempt < 10 ? sessionPollMs : Math.min(5000, sessionPollMs * 2);
       const sessionSleepEndAt = Date.now() + sessionSleepMs;
@@ -113499,7 +113939,25 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       }
     }
     markProgressPollStopped();
-    return { ok: true, settled: false, ready: false, failed: false, stale: false, rows_available: progressHasRowsAvailable(lastProgress), page_loaded: false, progress: cloneJson(lastProgress), page: cloneJson(lastSessionPage), session_id: sessionIdText, session_version: lastProgress?.session_version ?? lastProgress?.progress?.session_version ?? null, timed_out: true, still_refreshing: true, backend_work_continues: true, non_terminal: true };
+    return {
+      ok: true,
+      settled: false,
+      ready: false,
+      failed: false,
+      stale: false,
+      rows_available: progressHasRowsAvailable(lastProgress),
+      page_loaded: false,
+      progress: cloneJson(lastProgress),
+      page: cloneJson(lastSessionPage),
+      session_id: sessionIdText,
+      session_version: readSessionVersion(lastProgress),
+      minimum_session_version: minimumSessionVersion,
+      required_preview_sections_loaded: lastSessionPage?.all_required_sections_loaded === true,
+      timed_out: true,
+      still_refreshing: true,
+      backend_work_continues: true,
+      non_terminal: true
+    };
   }
 
   const normalizeProgress = (progress) => {
@@ -114013,6 +114471,8 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     message: 'Candidate refresh is still running in the background.'
   };
 }
+
+
 
 
 async function bankingPayWorkbenchSessionOpen(payload = {}) {
