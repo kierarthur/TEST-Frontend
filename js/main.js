@@ -115835,6 +115835,7 @@ function formatTsfinEvidenceRequiredMessage(errorPayload) {
   return `${list} are required before these expenses can be saved. Please upload the required evidence, then try again.`;
 }
 
+
 async function commitTimesheetExpensesMileageDraft(args = {}) {
   const pick = (...values) => {
     for (const value of values) {
@@ -116107,6 +116108,44 @@ async function commitTimesheetExpensesMileageDraft(args = {}) {
     }
   };
 
+  const extractLifecycleSignaturePatch = (payload) => {
+    const response = (payload && typeof payload === 'object') ? payload : {};
+    const lifecycle = (response.lifecycle_signature && typeof response.lifecycle_signature === 'object')
+      ? response.lifecycle_signature
+      : {};
+    const data = (response.data && typeof response.data === 'object') ? response.data : {};
+    const tsfin = (response.tsfin && typeof response.tsfin === 'object') ? response.tsfin : {};
+    const signature = pick(
+      response.backend_row_signature,
+      response.mutation_row_signature,
+      response.row_signature,
+      response.expected_row_signature,
+      response.signature,
+      lifecycle.backend_row_signature,
+      lifecycle.mutation_row_signature,
+      lifecycle.row_signature,
+      lifecycle.expected_row_signature,
+      lifecycle.signature,
+      data.backend_row_signature,
+      data.mutation_row_signature,
+      data.row_signature,
+      data.expected_row_signature,
+      tsfin.backend_row_signature,
+      tsfin.mutation_row_signature,
+      tsfin.row_signature,
+      tsfin.expected_row_signature
+    );
+    const signatureText = String(signature || '').trim();
+    if (!signatureText) return {};
+    return {
+      backend_row_signature: signatureText,
+      mutation_row_signature: signatureText,
+      row_signature: signatureText,
+      expected_row_signature: signatureText,
+      lifecycle_signature: Object.keys(lifecycle).length ? lifecycle : null
+    };
+  };
+
   try {
     let last = null;
     if (dirtyResult.expensesDirty) {
@@ -116144,7 +116183,8 @@ async function commitTimesheetExpensesMileageDraft(args = {}) {
     }
     const movedId = last?.current_timesheet_id || last?.timesheet_id;
     if (movedId && typeof args.onAdoptMovedTimesheetId === 'function' && String(movedId) !== String(timesheetId)) args.onAdoptMovedTimesheetId(movedId, last);
-    return { ok: true, noChanges: false, evidenceRequired: false, message: '', error: null, missing: [], committedDraft: draft, updatedTsfin: last?.tsfin || last?.data || null, response: last, dirtyResult };
+    const lifecycleSignaturePatch = extractLifecycleSignaturePatch(last);
+    return { ok: true, noChanges: false, evidenceRequired: false, message: '', error: null, missing: [], committedDraft: draft, updatedTsfin: last?.tsfin || last?.data || null, response: last, dirtyResult, ...lifecycleSignaturePatch };
   } catch (e) {
     const err = e || {};
     const movedId = err?.current_timesheet_id || err?.timesheet_id;
@@ -116155,8 +116195,6 @@ async function commitTimesheetExpensesMileageDraft(args = {}) {
     return { ok: false, noChanges: false, evidenceRequired, message: evidenceRequired ? formatTsfinEvidenceRequiredMessage(err) : String(err.message || edit.expensesDisabledReason || 'Unable to save expenses.'), error: code || 'SAVE_FAILED', missing, committedDraft: null, updatedTsfin: null, response: err, dirtyResult };
   }
 }
-
-
 
 
 function bankingBuildEnrichedFriendlyError(originalError, friendly, fallbackMessage = 'Banking action failed') {
@@ -130516,6 +130554,202 @@ const onSaveTimesheet = async () => {
     };
   };
 
+
+  const adoptSimpleTimesheetLifecycleSignatureFromSaveResponse = (saveResult, args = {}) => {
+    const id = String(args.timesheetId || '').trim();
+    const expectedContractWeekId = String(args.contractWeekId || '').trim();
+
+    if (!id) {
+      return {
+        ok: false,
+        error_code: 'MISSING_TIMESHEET_ID',
+        refresh_required: true,
+        safe_for_lifecycle: false
+      };
+    }
+
+    const response = (saveResult?.response && typeof saveResult.response === 'object') ? saveResult.response : {};
+    const lifecycle = (saveResult?.lifecycle_signature && typeof saveResult.lifecycle_signature === 'object')
+      ? saveResult.lifecycle_signature
+      : ((response.lifecycle_signature && typeof response.lifecycle_signature === 'object') ? response.lifecycle_signature : {});
+    const responseData = (response.data && typeof response.data === 'object') ? response.data : {};
+    const responseTsfin = (response.tsfin && typeof response.tsfin === 'object') ? response.tsfin : {};
+    const resultTsfin = (saveResult?.updatedTsfin && typeof saveResult.updatedTsfin === 'object') ? saveResult.updatedTsfin : {};
+
+    const signature = String(
+      saveResult?.backend_row_signature ||
+      saveResult?.mutation_row_signature ||
+      saveResult?.row_signature ||
+      saveResult?.expected_row_signature ||
+      response.backend_row_signature ||
+      response.mutation_row_signature ||
+      response.row_signature ||
+      response.expected_row_signature ||
+      response.signature ||
+      lifecycle.backend_row_signature ||
+      lifecycle.mutation_row_signature ||
+      lifecycle.row_signature ||
+      lifecycle.expected_row_signature ||
+      lifecycle.signature ||
+      responseData.backend_row_signature ||
+      responseData.mutation_row_signature ||
+      responseData.row_signature ||
+      responseData.expected_row_signature ||
+      responseTsfin.backend_row_signature ||
+      responseTsfin.mutation_row_signature ||
+      responseTsfin.row_signature ||
+      responseTsfin.expected_row_signature ||
+      resultTsfin.backend_row_signature ||
+      resultTsfin.mutation_row_signature ||
+      resultTsfin.row_signature ||
+      resultTsfin.expected_row_signature ||
+      ''
+    ).trim();
+
+    if (!signature) {
+      return {
+        ok: false,
+        error_code: 'LIFECYCLE_SIGNATURE_NOT_RETURNED',
+        refresh_required: true,
+        safe_for_lifecycle: false
+      };
+    }
+
+    const returnedId = String(
+      response.current_timesheet_id ||
+      response.timesheet_id ||
+      saveResult?.current_timesheet_id ||
+      saveResult?.timesheet_id ||
+      lifecycle.current_timesheet_id ||
+      lifecycle.timesheet_id ||
+      ''
+    ).trim();
+
+    if (returnedId && returnedId !== id) {
+      return {
+        ok: false,
+        error_code: 'TIMESHEET_IDENTITY_CHANGED_AFTER_SAVE',
+        returned_timesheet_id: returnedId,
+        refresh_required: true,
+        safe_for_lifecycle: false
+      };
+    }
+
+    const returnedContractWeekId = String(
+      response.contract_week_id ||
+      lifecycle.contract_week_id ||
+      responseData.contract_week_id ||
+      ''
+    ).trim();
+
+    if (expectedContractWeekId && returnedContractWeekId && returnedContractWeekId !== expectedContractWeekId) {
+      return {
+        ok: false,
+        error_code: 'CONTRACT_WEEK_IDENTITY_CHANGED_AFTER_SAVE',
+        returned_contract_week_id: returnedContractWeekId,
+        refresh_required: true,
+        safe_for_lifecycle: false
+      };
+    }
+
+    window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+    const liveCtx = window.modalCtx;
+    const liveModalId = String(
+      liveCtx.data?.current_timesheet_id ||
+      liveCtx.data?.timesheet_id ||
+      liveCtx.timesheetDetails?.current_timesheet_id ||
+      liveCtx.timesheetDetails?.timesheet?.current_timesheet_id ||
+      liveCtx.timesheetDetails?.timesheet?.timesheet_id ||
+      ''
+    ).trim();
+
+    if (liveModalId && liveModalId !== id) {
+      return {
+        ok: false,
+        error_code: 'MODAL_IDENTITY_CHANGED_AFTER_SAVE',
+        modal_timesheet_id: liveModalId,
+        refresh_required: true,
+        safe_for_lifecycle: false
+      };
+    }
+
+    const signaturePatch = {
+      backend_row_signature: signature,
+      mutation_row_signature: signature,
+      row_signature: signature,
+      expected_row_signature: signature
+    };
+
+    liveCtx.data = {
+      ...(liveCtx.data || rowNow || {}),
+      id,
+      timesheet_id: id,
+      current_timesheet_id: id,
+      expected_timesheet_id: id,
+      ...signaturePatch,
+      row_stale: false,
+      refresh_required: false,
+      lifecycle_refresh_failed: false,
+      lifecycle_refresh_error: ''
+    };
+
+    const detailsNow = (liveCtx.timesheetDetails && typeof liveCtx.timesheetDetails === 'object')
+      ? liveCtx.timesheetDetails
+      : {};
+    liveCtx.timesheetDetails = {
+      ...detailsNow,
+      current_timesheet_id: id,
+      timesheet_id: id,
+      ...signaturePatch,
+      row_stale: false,
+      refresh_required: false,
+      lifecycle_refresh_failed: false,
+      lifecycle_refresh_error: '',
+      row: {
+        ...(detailsNow.row || {}),
+        id,
+        timesheet_id: id,
+        current_timesheet_id: id,
+        expected_timesheet_id: id,
+        ...signaturePatch,
+        row_stale: false,
+        refresh_required: false,
+        lifecycle_refresh_failed: false,
+        lifecycle_refresh_error: ''
+      },
+      timesheet: {
+        ...(detailsNow.timesheet || {}),
+        timesheet_id: id,
+        current_timesheet_id: id,
+        ...signaturePatch
+      }
+    };
+
+    liveCtx.timesheetMeta = {
+      ...(liveCtx.timesheetMeta || {}),
+      expected_timesheet_id: id,
+      hasTs: true,
+      isPlannedWeek: false
+    };
+
+    liveCtx.lifecycle_refresh_failed = false;
+    liveCtx.lifecycle_refresh_error = '';
+    liveCtx.refresh_required = false;
+    delete liveCtx.__simpleTimesheetLifecycleRefreshRequired;
+    delete liveCtx.__simpleTimesheetLifecycleRefreshTimesheetId;
+    delete liveCtx.__simpleTimesheetLifecycleRefreshMessage;
+
+    window.modalCtx = liveCtx;
+
+    return {
+      ok: true,
+      signature,
+      refresh_required: false,
+      safe_for_lifecycle: true,
+      source: 'tsfin_patch_response'
+    };
+  };
+
   const onlyExpensesDirty = !!(expensesChanged && !hoursScheduleDirty && !refChanged && !segmentControlsDirty && !shouldChangeHold);
 
   if (onlyExpensesDirty && expenseStorageTargetForSave === 'CONTRACT_WEEK_DRAFT') {
@@ -130650,53 +130884,53 @@ const onSaveTimesheet = async () => {
       });
     }
 
-    try {
-      if (tsIdSave && typeof refreshTimesheetsSummaryAfterRotation === 'function') {
-        await refreshTimesheetsSummaryAfterRotation(tsIdSave, {
-          allowRenderAll: false,
-          skipTabRefresh: true
-        });
-      }
-    } catch (err) {
-      L('post-expense-save summary refresh failed (non-fatal)', {
-        timesheet_id: tsIdSave,
-        error: String(err?.message || err || '')
-      });
-    }
-
-    if (!isActiveTimesheetModalToken(openToken)) {
-      GE();
-      return { ok: false, stale: true };
-    }
-
-    const lifecycleRefresh = await refreshAndAdoptSimpleTimesheetLifecycleRowAfterSave({
+    const lifecycleIdentityForSave = {
       timesheetId: tsIdSave,
       contractWeekId: weekIdSave || window.modalCtx?.data?.contract_week_id || window.modalCtx?.timesheetDetails?.contract_week_id || null,
       bookingId: window.modalCtx?.data?.booking_id || window.modalCtx?.timesheetDetails?.booking_id || window.modalCtx?.timesheetDetails?.contract_week?.booking_id || null
-    });
+    };
+
+    let lifecycleRefresh = null;
+    let lifecycleSignatureAdoption = adoptSimpleTimesheetLifecycleSignatureFromSaveResponse(saveExpOnly, lifecycleIdentityForSave);
+
+    if (!lifecycleSignatureAdoption || lifecycleSignatureAdoption.ok !== true) {
+      L('post-expense-save direct signature adoption unavailable; running bounded fallback refresh', {
+        timesheet_id: tsIdSave,
+        error_code: lifecycleSignatureAdoption?.error_code || null
+      });
+
+      lifecycleRefresh = await refreshAndAdoptSimpleTimesheetLifecycleRowAfterSave(lifecycleIdentityForSave);
+
+      if (!isActiveTimesheetModalToken(openToken)) {
+        GE();
+        return { ok: false, stale: true };
+      }
+
+      if (!lifecycleRefresh || lifecycleRefresh.ok !== true) {
+        const warningMessage = String(
+          lifecycleRefresh?.error ||
+          window.modalCtx?.__simpleTimesheetLifecycleRefreshMessage ||
+          'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Authorise is blocked. Close and reopen the timesheet before authorising.'
+        ).trim();
+        showSimpleTimesheetLifecycleRefreshWarning(warningMessage);
+        GE();
+        return {
+          ok: false,
+          saved: window.modalCtx?.data || rowNow,
+          saved_persisted: true,
+          saved_but_stale: true,
+          refresh_required: true,
+          safe_for_lifecycle: false,
+          error_code: lifecycleRefresh?.error_code || lifecycleSignatureAdoption?.error_code || 'LIFECYCLE_REFRESH_REQUIRED'
+        };
+      }
+
+      lifecycleSignatureAdoption = lifecycleRefresh;
+    }
 
     if (!isActiveTimesheetModalToken(openToken)) {
       GE();
       return { ok: false, stale: true };
-    }
-
-    if (!lifecycleRefresh || lifecycleRefresh.ok !== true) {
-      const warningMessage = String(
-        lifecycleRefresh?.error ||
-        window.modalCtx?.__simpleTimesheetLifecycleRefreshMessage ||
-        'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Authorise is blocked. Close and reopen the timesheet before authorising.'
-      ).trim();
-      showSimpleTimesheetLifecycleRefreshWarning(warningMessage);
-      GE();
-      return {
-        ok: false,
-        saved: window.modalCtx?.data || rowNow,
-        saved_persisted: true,
-        saved_but_stale: true,
-        refresh_required: true,
-        safe_for_lifecycle: false,
-        error_code: lifecycleRefresh?.error_code || 'LIFECYCLE_REFRESH_REQUIRED'
-      };
     }
 
     try {
@@ -130740,7 +130974,8 @@ const onSaveTimesheet = async () => {
       ok: true,
       saved: window.modalCtx?.data || rowNow,
       safe_for_lifecycle: true,
-      lifecycle_refresh: lifecycleRefresh.refresh_result || null
+      lifecycle_signature_source: lifecycleSignatureAdoption?.source || (lifecycleRefresh ? 'affected_rows_fallback' : 'tsfin_patch_response'),
+      lifecycle_refresh: lifecycleRefresh?.refresh_result || null
     };
   }
 
