@@ -32284,37 +32284,111 @@ async function bankingPayCreateDraft(input = {}) {
     }
     return { ok: failed.length === 0, loaded_sections: loaded, missing_sections: failed.map((row) => row.section), errors: failed };
   };
-  const buildCreateDraftPreviewDecisionsFromLoadedSections = (baseDecisionSource, selectedRowsForServer, selectedMode, channelScope) => {
-    const source = isPlainObject(baseDecisionSource) ? (deep(baseDecisionSource) || {}) : {};
-    const rowsBySection = collectLoadedPreviewRowsBySectionForCreateDraft();
-    const selectedSet = new Set(uniqTrimmed(selectedRowsForServer));
-    const filteredReadyRows = asArray(rowsBySection.canonical_preview_lines)
-      .filter((row) => createDraftNodeMatchesActiveFilters(row));
-    const selectedDraftableRows = filteredReadyRows
-      .filter((row) => isDraftCreateEligiblePreviewRow(row))
-      .filter((row) => selectedSet.size <= 0 || selectedSet.has(getPreviewRowId(row)));
-    const blockedRows = deep(rowsBySection.blocked_for_pay) || [];
-    const caseRows = deep(rowsBySection.cases_resolutions) || [];
+  const createDraftDecisionMutationKeys = [
+    'case_resolutions', 'caseResolutions',
+    'component_resolutions', 'componentResolutions'
+  ];
+  const createDraftDecisionDisplayCaseKeys = [
+    'case_resolution_states', 'caseResolutionStates',
+    'cases_resolutions', 'casesResolutions',
+    'blocked_case_states', 'blockedCaseStates',
+    'safe_case_states', 'safeCaseStates',
+    'ready_to_pay_now', 'readyToPayNow',
+    'draftable_now', 'draftableNow',
+    'ready_preview_lines', 'readyPreviewLines',
+    'canonical_preview_lines', 'canonicalPreviewLines',
+    'blocked_for_pay', 'blockedForPay',
+    'blocked_for_pay_now', 'blockedForPayNow',
+    'blocked_now', 'blockedNow',
+    'blocked_preview_lines', 'blockedPreviewLines'
+  ];
+  const createDraftDecisionAllowedKeys = new Set([
+    'selected_preview_row_ids', 'selectedPreviewRowIds',
+    '__selected_preview_row_mode', 'selected_preview_row_mode', 'selectedPreviewRowMode',
+    'pay_channel_scope', 'payChannelScope', 'draft_scope', 'draftScope', 'scope',
+    'session_id', 'sessionId', 'workbench_session_id', 'workbenchSessionId',
+    'session_version', 'sessionVersion',
+    'snapshot_run_id', 'snapshotRunId', 'source_snapshot_run_id', 'sourceSnapshotRunId',
+    'session_signature', 'sessionSignature',
+    'candidate_filter_id', 'candidateFilterId', 'client_filter_id', 'clientFilterId',
+    'draft_selected_preview_row_ids', 'draftSelectedPreviewRowIds',
+    'scoped_selected_preview_row_ids', 'scopedSelectedPreviewRowIds',
+    'draft_selected_preview_row_contracts', 'draftSelectedPreviewRowContracts',
+    'selected_preview_row_contracts', 'selectedPreviewRowContracts',
+    'scoped_selected_preview_row_contracts', 'scopedSelectedPreviewRowContracts',
+    'draft_selected_economic_keys', 'draftSelectedEconomicKeys',
+    'selected_economic_keys', 'selectedEconomicKeys',
+    'scoped_selected_economic_keys', 'scopedSelectedEconomicKeys',
+    'scope_counts', 'scopeCounts'
+  ]);
+  const arrayCountForCreateDraftDecisionKey = (value) => Array.isArray(value) ? value.length : null;
+  const objectKeyCountForCreateDraftDecisionKey = (value) => (isPlainObject(value) ? Object.keys(value).length : null);
+  const summariseCreateDraftPreviewDecisionCaseKeys = (decisions) => {
+    const source = isPlainObject(decisions) ? decisions : {};
+    const hasOwn = (key) => Object.prototype.hasOwnProperty.call(source, key);
+    const caseResolutionSource = hasOwn('case_resolutions') ? source.case_resolutions : (hasOwn('caseResolutions') ? source.caseResolutions : undefined);
+    const componentResolutionSource = hasOwn('component_resolutions') ? source.component_resolutions : (hasOwn('componentResolutions') ? source.componentResolutions : undefined);
     return {
+      has_case_resolutions_key: hasOwn('case_resolutions') || hasOwn('caseResolutions'),
+      case_resolutions_key_count: objectKeyCountForCreateDraftDecisionKey(caseResolutionSource),
+      has_component_resolutions_key: hasOwn('component_resolutions') || hasOwn('componentResolutions'),
+      component_resolutions_key_count: objectKeyCountForCreateDraftDecisionKey(componentResolutionSource),
+      case_state_array_counts: {
+        case_resolution_states: arrayCountForCreateDraftDecisionKey(source.case_resolution_states),
+        caseResolutionStates: arrayCountForCreateDraftDecisionKey(source.caseResolutionStates),
+        cases_resolutions: arrayCountForCreateDraftDecisionKey(source.cases_resolutions),
+        casesResolutions: arrayCountForCreateDraftDecisionKey(source.casesResolutions),
+        blocked_case_states: arrayCountForCreateDraftDecisionKey(source.blocked_case_states),
+        safe_case_states: arrayCountForCreateDraftDecisionKey(source.safe_case_states)
+      }
+    };
+  };
+  const sanitizePreviewDecisionsForCreateDraft = (decisions) => {
+    const source = isPlainObject(decisions) ? decisions : {};
+    const out = {};
+    for (const [key, value] of Object.entries(source)) {
+      if (!createDraftDecisionAllowedKeys.has(key)) continue;
+      if (Array.isArray(value)) {
+        out[key] = deep(value) || [];
+      } else if (isPlainObject(value)) {
+        out[key] = deep(value) || {};
+      } else if (value !== undefined) {
+        out[key] = value;
+      }
+    }
+    for (const key of createDraftDecisionMutationKeys) delete out[key];
+    for (const key of createDraftDecisionDisplayCaseKeys) delete out[key];
+    return out;
+  };
+  const logCreateDraftPreviewDecisionPayload = (label, decisions, reqLike = null) => {
+    try {
+      const source = isPlainObject(decisions) ? decisions : {};
+      const req = isPlainObject(reqLike) ? reqLike : {};
+      const selectedIds = uniqTrimmed(source.selected_preview_row_ids || source.selectedPreviewRowIds || req.selected_preview_row_ids || []);
+      logTroubleshoot('info', label, {
+        selected_preview_row_ids_count: selectedIds.length,
+        ...summariseCreateDraftPreviewDecisionCaseKeys(source),
+        session_id: trimStr(req.session_id || source.session_id || source.sessionId || source.workbench_session_id || source.workbenchSessionId || ''),
+        session_version: req.session_version ?? source.session_version ?? source.sessionVersion ?? null,
+        pay_channel_scope: trimStr(req.pay_channel_scope || source.pay_channel_scope || source.payChannelScope || source.draft_scope || source.draftScope || '') || null
+      });
+    } catch {}
+  };
+  const refreshCreateDraftPreviewDecisionsOnBody = (bodyLike, label = '') => {
+    if (!isPlainObject(bodyLike)) return {};
+    bodyLike.preview_decisions_json = sanitizePreviewDecisionsForCreateDraft(bodyLike.preview_decisions_json);
+    if (label) logCreateDraftPreviewDecisionPayload(label, bodyLike.preview_decisions_json, bodyLike);
+    return bodyLike.preview_decisions_json;
+  };
+  const buildCreateDraftPreviewDecisionsFromLoadedSections = (baseDecisionSource, selectedRowsForServer, selectedMode, channelScope) => {
+    const source = sanitizePreviewDecisionsForCreateDraft(baseDecisionSource);
+    return sanitizePreviewDecisionsForCreateDraft({
       ...source,
       selected_preview_row_ids: uniqTrimmed(selectedRowsForServer),
       __selected_preview_row_mode: selectedMode,
       selected_preview_row_mode: selectedMode,
-      pay_channel_scope: channelScope || 'ALL',
-      draftable_now: deep(selectedDraftableRows) || [],
-      ready_to_pay_now: deep(filteredReadyRows) || [],
-      ready_preview_lines: deep(filteredReadyRows) || [],
-      canonical_preview_lines: deep(filteredReadyRows) || [],
-      blocked_for_pay: blockedRows,
-      blocked_for_pay_now: blockedRows,
-      blocked_now: blockedRows,
-      blocked_preview_lines: blockedRows,
-      blockedForPayNow: blockedRows,
-      blockedPreviewLines: blockedRows,
-      case_resolution_states: caseRows,
-      cases_resolutions: caseRows,
-      caseResolutionStates: caseRows
-    };
+      pay_channel_scope: channelScope || 'ALL'
+    });
   };
   const collectDraftablePreviewRowIdsFromWizardState = (wizLike, previewLike) => {
     const out = [];
@@ -35059,7 +35133,7 @@ async function bankingPayCreateDraft(input = {}) {
     previewEnvelope = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : previewEnvelope;
     previewObj = (previewEnvelope.preview && typeof previewEnvelope.preview === 'object' && !Array.isArray(previewEnvelope.preview)) ? previewEnvelope.preview : previewEnvelope;
 
-    const createDraftPreviewDecisions = buildCreateDraftPreviewDecisionsFromLoadedSections(
+    let createDraftPreviewDecisions = buildCreateDraftPreviewDecisionsFromLoadedSections(
       callerDecisionSource,
       syncedSelectedRows,
       selectedPreviewSelection.selected_preview_row_mode,
@@ -35131,6 +35205,8 @@ async function bankingPayCreateDraft(input = {}) {
         scoped_selected_preview_row_ids_total: contractIds.length,
         pay_channel_scope: scope
       };
+      createDraftPreviewDecisions = sanitizePreviewDecisionsForCreateDraft(createDraftPreviewDecisions);
+      reqBody.preview_decisions_json = createDraftPreviewDecisions;
       return true;
     };
 
@@ -35155,6 +35231,7 @@ async function bankingPayCreateDraft(input = {}) {
     if (overrideReason) reqBody.same_week_paye_override_reason = overrideReason;
     if (overrideContinue === true) reqBody.same_week_paye_override_continue = true;
     if (reauthToken) reqBody.same_week_paye_reauth_token = reauthToken;
+    refreshCreateDraftPreviewDecisionsOnBody(reqBody, 'CREATE_DRAFT_DECISIONS_SANITISED_FOR_SUBMIT');
 
     logTroubleshoot('info', 'API_POST_CREATE_DRAFT_SESSION', {
       ...requestSummary,
@@ -35223,6 +35300,7 @@ async function bankingPayCreateDraft(input = {}) {
     authoritativeReadinessSnapshot = finalAuthoritativeReadiness;
     reqBody.session_version = finalAuthoritativeReadiness.session_version;
 
+    refreshCreateDraftPreviewDecisionsOnBody(reqBody, 'CREATE_DRAFT_DECISIONS_SANITISED_BEFORE_PREFLIGHT');
     const preflightBody = deep(reqBody) || { ...reqBody };
     preflightBody.preflight_only = true;
     preflightBody.pay_channel_scope = payChannelScope;
@@ -35232,6 +35310,7 @@ async function bankingPayCreateDraft(input = {}) {
       preflightBody.preview_decisions_json.payChannelScope = payChannelScope;
       preflightBody.preview_decisions_json.draftScope = payChannelScope;
     }
+    refreshCreateDraftPreviewDecisionsOnBody(preflightBody, 'CREATE_DRAFT_PREFLIGHT_DECISIONS_SANITISED');
     delete preflightBody.same_week_paye_override_reason;
     delete preflightBody.same_week_paye_override_continue;
     delete preflightBody.same_week_paye_reauth_token;
@@ -35487,6 +35566,7 @@ async function bankingPayCreateDraft(input = {}) {
           reqBody.preview_decisions_json.draftScope = 'UMBRELLA';
           reqBody.preview_decisions_json.payChannelScope = 'UMBRELLA';
         }
+        refreshCreateDraftPreviewDecisionsOnBody(reqBody, 'CREATE_DRAFT_DECISIONS_SANITISED_AFTER_UMBRELLA_ONLY_SCOPE');
         overrideReason = null;
         overrideContinue = false;
         reauthToken = '';
@@ -35565,6 +35645,7 @@ async function bankingPayCreateDraft(input = {}) {
           reqBody.preview_decisions_json.draftScope = payChannelScope;
           reqBody.preview_decisions_json.payChannelScope = payChannelScope;
         }
+        refreshCreateDraftPreviewDecisionsOnBody(reqBody, 'CREATE_DRAFT_DECISIONS_SANITISED_AFTER_OVERRIDE_SCOPE');
         requestSummary.pay_channel_scope = payChannelScope;
         requestSummary.same_week_paye_override_reason_present = true;
         requestSummary.same_week_paye_override_continue = true;
@@ -35679,6 +35760,7 @@ async function bankingPayCreateDraft(input = {}) {
       reqBody.preview_decisions_json.payChannelScope = payChannelScope;
       reqBody.preview_decisions_json.draftScope = payChannelScope;
     }
+    refreshCreateDraftPreviewDecisionsOnBody(reqBody, 'CREATE_DRAFT_FINAL_DECISIONS_SANITISED');
 
 
     let operationPayload = null;
@@ -36119,8 +36201,6 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
-
-
 
 
 async function openPayeSameWeekOverrideDecisionModal(opts = {}) {
@@ -91059,7 +91139,6 @@ async function openBankingPayCancelResolvedRatesModal(seed = {}) {
 
 
 // Full replacement  for attachBankingModalDelegatedHandlers from FRONTEND 10052026.js
-
 async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -92365,6 +92444,9 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     busy: false,
     error: '',
     friendlyError: null,
+    mutationInFlight: false,
+    applyIntentInFlight: false,
+    clearIntentInFlight: false,
     resolveAllLinked: existingCaseResolution?.resolve_all_linked_timesheets === true ? true : !!caseIsLinkable,
     expandedSuggestedRateGroupKeys: new Set(),
     finalRateByGroupKey: Object.fromEntries(suggestedRateGroups.map((group) => [
@@ -92707,7 +92789,47 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       resolve(result);
     };
 
-    const closeChild = () => {
+    const getSuggestedRatesReviewFrame = () => {
+      try {
+        const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+        for (let i = stack.length - 1; i >= 0; i -= 1) {
+          const fr = stack[i];
+          if (fr && String(fr.kind || '') === 'banking-pay-suggested-rates-review') return fr;
+        }
+        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        return fr && String(fr.kind || '') === 'banking-pay-suggested-rates-review' ? fr : null;
+      } catch {
+        return null;
+      }
+    };
+    const markSuggestedRatesReviewAppliedClean = () => {
+      try {
+        const fr = getSuggestedRatesReviewFrame();
+        if (!fr) return;
+        fr.isDirty = false;
+        fr._confirmingDiscard = false;
+        fr._suppressDirty = true;
+        fr.__bankingPaySuggestedRatesApplied = true;
+        if (typeof fr._detachDirty === 'function') {
+          try { fr._detachDirty(); } catch {}
+          fr._detachDirty = null;
+        }
+        try { fr._updateButtons && fr._updateButtons(); } catch {}
+      } catch {}
+    };
+    const notifySuggestedRatesAppliedButRefreshing = (message) => {
+      const text = trimStr(message) || 'The suggested rate was applied. Banking Pay is still refreshing the latest preview.';
+      try {
+        if (typeof window !== 'undefined' && typeof window.__toast === 'function') {
+          window.__toast(text);
+          return;
+        }
+      } catch {}
+      try { if (typeof console !== 'undefined' && console && typeof console.warn === 'function') console.warn(text); } catch {}
+    };
+    const closeChild = (closeOptions = {}) => {
+      const opts = isPlainObject(closeOptions) ? closeOptions : {};
+      if (opts.applied === true || opts.clean === true) markSuggestedRatesReviewAppliedClean();
       try {
         if (typeof closeCurrentModalFrameSafely === 'function') {
           closeCurrentModalFrameSafely({ expectedKind: 'banking-pay-suggested-rates-review' });
@@ -92720,23 +92842,82 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       } catch {}
     };
 
+    const finishSuggestedRatesApplySuccess = ({ queued, settledResult, affectedCandidateIds, adoptionError = null } = {}) => {
+      state.accepted = true;
+      state.busy = false;
+      state.mutationInFlight = false;
+      state.applyIntentInFlight = false;
+      state.clearIntentInFlight = false;
+      state.error = '';
+      markSuggestedRatesReviewAppliedClean();
+      finish({
+        ok: true,
+        accepted: true,
+        action: trimStr(queued?.action || queued?.code || '') || 'SESSION_CASE_RESOLUTION_APPLIED',
+        state_changed: queued?.state_changed === true,
+        session_id: trimStr(queued?.session_id || queued?.workbench_session_id || sessionId || '') || sessionId,
+        session_version: queued?.session_version ?? queued?.version ?? settledResult?.session_version ?? null,
+        case_resolution_ids: Array.isArray(queued?.case_resolution_ids) ? deep(queued.case_resolution_ids) : [],
+        case_key: ctx.case_key,
+        candidate_id: ctx.candidate_id,
+        affected_candidate_ids: affectedCandidateIds,
+        finance_case_id: ctx.finance_case_id || null,
+        queued_result: deep(queued),
+        settled: deep(settledResult),
+        preview_refresh_pending: !!adoptionError,
+        adoption_error: adoptionError ? { message: trimStr(adoptionError.message || adoptionError) || 'Preview adoption is still refreshing.' } : null
+      });
+      closeChild({ applied: true, clean: true });
+    };
+
     const applyMutationAndRefresh = async (runner, mutationMeta = {}) => {
+      if (state.mutationInFlight) return;
+      state.mutationInFlight = true;
       state.busy = true;
       state.error = '';
       await rerenderChild();
+      let queued = null;
       try {
-        const queued = await runner();
-        const affectedCandidateIds = collectCandidateIdsFromPayload(queued, [ctx.candidate_id]);
-        const jobMeta = {
-          job_id: queued?.job_id || queued?.refresh_job_id || queued?.recompute_job_id || queued?.queued_job_metadata?.job_id || '',
-          status: queued?.queued_job_metadata?.status || queued?.status || 'QUEUED',
-          latest_job_type: 'SESSION_CANDIDATE_RECOMPUTE'
-        };
-        markCandidatesPendingLocal(affectedCandidateIds, jobMeta);
+        queued = await runner();
+      } catch (e) {
+        state.busy = false;
+        state.mutationInFlight = false;
+        state.applyIntentInFlight = false;
+        state.clearIntentInFlight = false;
+        const friendly = (typeof bankingNormalizeApiError === 'function')
+          ? bankingNormalizeApiError(e, e?.payload || e?.json || null, {
+            action: 'WORKBENCH_MODAL_ACTION',
+            userInitiated: true,
+            silent: false,
+            fallbackCode: 'BANKING_ACTION_FAILED',
+            fallbackTitle: 'Payment preview could not be updated',
+            fallbackMessage: 'CloudTMS could not save this payment decision. Refresh the preview and try again.'
+          })
+          : null;
+        state.friendlyError = friendly && typeof friendly === 'object' ? friendly : null;
+        state.error = trimStr(friendly?.user_message || friendly?.message || 'CloudTMS could not save this payment decision. Refresh the preview and try again.');
+        await rerenderChild();
+        return;
+      }
 
-        const forceFullSessionRefresh = shouldForceFullSessionRefreshAfterMutation(queued, mutationMeta.resolveAllLinked === true);
-        const settledResult = await pollPayWorkbenchCandidateUntilSettled(sessionId, ctx.candidate_id, {
+      const affectedCandidateIds = collectCandidateIdsFromPayload(queued, [ctx.candidate_id]);
+      const jobMeta = {
+        job_id: queued?.job_id || queued?.refresh_job_id || queued?.recompute_job_id || queued?.queued_job_metadata?.job_id || '',
+        status: queued?.queued_job_metadata?.status || queued?.status || 'QUEUED',
+        latest_job_type: 'SESSION_CANDIDATE_RECOMPUTE'
+      };
+      markCandidatesPendingLocal(affectedCandidateIds, jobMeta);
+
+      const forceFullSessionRefresh = shouldForceFullSessionRefreshAfterMutation(queued, mutationMeta.resolveAllLinked === true);
+      let settledResult = null;
+      let adoptionError = null;
+      try {
+        settledResult = await pollPayWorkbenchCandidateUntilSettled(sessionId, ctx.candidate_id, {
           updateState: true,
+          expectedSessionId: sessionId,
+          minimumSessionVersion: queued?.session_version ?? queued?.version ?? null,
+          requirePreviewSectionsAfterReady: true,
+          source: 'openBankingPaySuggestedRatesReviewModal.applySuccess',
           forceFullSessionRefresh,
           fullSessionRefreshAfterSettled: forceFullSessionRefresh,
           affectedCandidateIds,
@@ -92751,7 +92932,9 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
             const latestSession = await bankingPayWorkbenchSessionGet(sessionId);
             applyPayWorkbenchPreviewToState(latestSession, st);
           }
-        } catch {}
+        } catch (refreshError) {
+          adoptionError = refreshError;
+        }
         try {
           if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth();
         } catch {}
@@ -92760,34 +92943,12 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
             await bankingRerender(null);
           }
         } catch {}
-        state.accepted = true;
-        finish({
-          ok: true,
-          accepted: true,
-          case_key: ctx.case_key,
-          candidate_id: ctx.candidate_id,
-          affected_candidate_ids: affectedCandidateIds,
-          finance_case_id: ctx.finance_case_id || null,
-          queued_result: deep(queued),
-          settled: deep(settledResult)
-        });
-        closeChild();
-      } catch (e) {
-        state.busy = false;
-        const friendly = (typeof bankingNormalizeApiError === 'function')
-          ? bankingNormalizeApiError(e, e?.payload || e?.json || null, {
-            action: 'WORKBENCH_MODAL_ACTION',
-            userInitiated: true,
-            silent: false,
-            fallbackCode: 'BANKING_ACTION_FAILED',
-            fallbackTitle: 'Payment preview could not be updated',
-            fallbackMessage: 'CloudTMS could not save this payment decision. Refresh the preview and try again.'
-          })
-          : null;
-        state.friendlyError = friendly && typeof friendly === 'object' ? friendly : null;
-        state.error = trimStr(friendly?.user_message || friendly?.message || 'CloudTMS could not save this payment decision. Refresh the preview and try again.');
-        await rerenderChild();
+      } catch (pollError) {
+        adoptionError = pollError;
+        notifySuggestedRatesAppliedButRefreshing('The suggested rate was applied. Banking Pay is still refreshing the latest preview.');
       }
+
+      finishSuggestedRatesApplySuccess({ queued, settledResult, affectedCandidateIds, adoptionError });
     };
 
     const onReturn = () => {
@@ -92839,22 +93000,26 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         if (applyBtn && !applyBtn.__wired) {
           applyBtn.__wired = true;
           applyBtn.addEventListener('click', async () => {
-            if (state.busy) return;
+            if (state.busy || state.applyIntentInFlight || state.mutationInFlight) return;
+            state.applyIntentInFlight = true;
             const readResult = readFinalRateInputs();
             if (readResult.error) {
               state.error = readResult.error;
+              state.applyIntentInFlight = false;
               await rerenderChild();
               return;
             }
             const rowsWithRates = readResult.value || [];
             if (!rowsWithRates.length) {
               state.error = 'No actionable buckets are available to resolve for this case.';
+              state.applyIntentInFlight = false;
               await rerenderChild();
               return;
             }
             const bucketResolutions = buildBucketResolutions(rowsWithRates);
             if (!bucketResolutions.length) {
               state.error = 'No actionable buckets are available to resolve for this case.';
+              state.applyIntentInFlight = false;
               await rerenderChild();
               return;
             }
@@ -92871,7 +93036,10 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
                 cancelLabel: 'Cancel',
                 kind: 'banking-pay-suggested-rates-apply-linked-confirm'
               });
-              if (!confirmed) return;
+              if (!confirmed) {
+                state.applyIntentInFlight = false;
+                return;
+              }
             }
 
             await applyMutationAndRefresh(() => bankingPayWorkbenchSessionApplyCaseResolution(sessionId, {
@@ -92890,7 +93058,8 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         if (clearBtn && !clearBtn.__wired) {
           clearBtn.__wired = true;
           clearBtn.addEventListener('click', async () => {
-            if (state.busy) return;
+            if (state.busy || state.clearIntentInFlight || state.mutationInFlight) return;
+            state.clearIntentInFlight = true;
             const confirmed = await confirmSuggestedRatesAction({
               title: 'Clear resolved rate?',
               message: 'Clear the saved resolved rate for this case and refresh the candidate?',
@@ -92898,7 +93067,10 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
               cancelLabel: 'Cancel',
               kind: 'banking-pay-suggested-rates-clear-confirm'
             });
-            if (!confirmed) return;
+            if (!confirmed) {
+              state.clearIntentInFlight = false;
+              return;
+            }
             await applyMutationAndRefresh(() => bankingPayWorkbenchSessionClearCaseResolution(sessionId, {
               candidate_id: ctx.candidate_id,
               case_key: ctx.case_key,
