@@ -31899,6 +31899,8 @@ async function bankingPayPreview(pay_date) {
 }
 
 
+
+
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -32028,6 +32030,7 @@ async function bankingPayCreateDraft(input = {}) {
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
     if (!rowId) return false;
+    if (isSyntheticResolvedTimesheetResidualPreviewRow(row)) return false;
     if (rowKey.toLowerCase().startsWith('timesheet_snapshot:')) return false;
     if (sourceKind === 'TIMESHEET_SNAPSHOT' || sourceKind === 'TIMESHEET_SNAPSHOT_EVIDENCE' || sourceKind === 'RAW_TIMESHEET_SNAPSHOT' || sourceKind === 'INTERNAL_ONLY') return false;
     if (presentationRole === 'HIDDEN') return false;
@@ -32059,6 +32062,224 @@ async function bankingPayCreateDraft(input = {}) {
     rowLike?.id ||
     ''
   );
+  const getCreateDraftRowJson = (rowLike) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    return isPlainObject(row.row_json) ? row.row_json : (isPlainObject(row.rowJson) ? row.rowJson : {});
+  };
+  const getCreateDraftEconomicKey = (rowLike) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    const rowJson = getCreateDraftRowJson(row);
+    return isPlainObject(row.economic_key)
+      ? row.economic_key
+      : (isPlainObject(row.economicKey)
+          ? row.economicKey
+          : (isPlainObject(rowJson.economic_key) ? rowJson.economic_key : (isPlainObject(rowJson.economicKey) ? rowJson.economicKey : {})));
+  };
+  const getCreateDraftSourceBasis = (rowLike) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    const rowJson = getCreateDraftRowJson(row);
+    return isPlainObject(row.source_basis_json)
+      ? row.source_basis_json
+      : (isPlainObject(row.sourceBasisJson)
+          ? row.sourceBasisJson
+          : (isPlainObject(row.source_basis)
+              ? row.source_basis
+              : (isPlainObject(row.sourceBasis)
+                  ? row.sourceBasis
+                  : (isPlainObject(rowJson.source_basis_json)
+                      ? rowJson.source_basis_json
+                      : (isPlainObject(rowJson.sourceBasisJson)
+                          ? rowJson.sourceBasisJson
+                          : (isPlainObject(rowJson.source_basis) ? rowJson.source_basis : (isPlainObject(rowJson.sourceBasis) ? rowJson.sourceBasis : {})))))));
+  };
+  const getCreateDraftTimesheetId = (rowLike) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    const rowJson = getCreateDraftRowJson(row);
+    const economicKey = getCreateDraftEconomicKey(row);
+    const sourceBasis = getCreateDraftSourceBasis(row);
+    return trimStr(
+      row.timesheet_id || row.timesheetId ||
+      economicKey.timesheet_id || economicKey.timesheetId ||
+      rowJson.timesheet_id || rowJson.timesheetId ||
+      sourceBasis.timesheet_id || sourceBasis.timesheetId || ''
+    );
+  };
+  const getCreateDraftKeyType = (rowLike) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    const rowJson = getCreateDraftRowJson(row);
+    const economicKey = getCreateDraftEconomicKey(row);
+    const sourceBasis = getCreateDraftSourceBasis(row);
+    return upperTrim(
+      row.key_type || row.keyType ||
+      economicKey.key_type || economicKey.keyType ||
+      rowJson.key_type || rowJson.keyType ||
+      rowJson.component_key_type || rowJson.componentKeyType ||
+      sourceBasis.component_key_type || sourceBasis.componentKeyType ||
+      sourceBasis.key_type || sourceBasis.keyType || ''
+    );
+  };
+  const getCreateDraftKeyValue = (rowLike) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    const rowJson = getCreateDraftRowJson(row);
+    const economicKey = getCreateDraftEconomicKey(row);
+    const sourceBasis = getCreateDraftSourceBasis(row);
+    return trimStr(
+      row.key_value || row.keyValue ||
+      economicKey.key_value || economicKey.keyValue ||
+      rowJson.key_value || rowJson.keyValue ||
+      rowJson.component_key_value || rowJson.componentKeyValue ||
+      sourceBasis.component_key_value || sourceBasis.componentKeyValue ||
+      sourceBasis.key_value || sourceBasis.keyValue || ''
+    );
+  };
+  const getCreateDraftSourceBasisKeyType = (rowLike) => {
+    const sourceBasis = getCreateDraftSourceBasis(rowLike);
+    return upperTrim(sourceBasis.component_key_type || sourceBasis.componentKeyType || sourceBasis.key_type || sourceBasis.keyType || '');
+  };
+  const getCreateDraftSourceBasisKeyValue = (rowLike) => {
+    const sourceBasis = getCreateDraftSourceBasis(rowLike);
+    return upperTrim(sourceBasis.component_key_value || sourceBasis.componentKeyValue || sourceBasis.key_value || sourceBasis.keyValue || '');
+  };
+  const createDraftRowIdentityText = (rowLike) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    const rowJson = getCreateDraftRowJson(row);
+    const economicKey = getCreateDraftEconomicKey(row);
+    const sourceBasis = getCreateDraftSourceBasis(row);
+    const values = [
+      getPreviewRowId(row),
+      row.id,
+      row.preview_row_id,
+      row.previewRowId,
+      row.row_id,
+      row.rowId,
+      row.row_key,
+      row.rowKey,
+      row.line_key,
+      row.lineKey,
+      row.source_ref,
+      row.sourceRef,
+      row.source_row_key,
+      row.sourceRowKey,
+      rowJson.preview_row_id,
+      rowJson.previewRowId,
+      rowJson.row_id,
+      rowJson.rowId,
+      rowJson.row_key,
+      rowJson.rowKey,
+      rowJson.line_key,
+      rowJson.lineKey,
+      rowJson.source_ref,
+      rowJson.sourceRef,
+      rowJson.source_row_key,
+      rowJson.sourceRowKey,
+      economicKey.row_key,
+      economicKey.rowKey,
+      economicKey.source_ref,
+      economicKey.sourceRef,
+      sourceBasis.row_key,
+      sourceBasis.rowKey,
+      sourceBasis.line_key,
+      sourceBasis.lineKey,
+      sourceBasis.source_ref,
+      sourceBasis.sourceRef,
+      sourceBasis.source_row_key,
+      sourceBasis.sourceRowKey
+    ];
+    return values.map((value) => trimStr(value).toLowerCase()).filter(Boolean).join('|');
+  };
+  const createDraftHasRealWorkDate = (rowLike) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    const rowJson = getCreateDraftRowJson(row);
+    const sourceBasis = getCreateDraftSourceBasis(row);
+    const candidates = [
+      row.work_date,
+      row.workDate,
+      row.shift_date,
+      row.shiftDate,
+      row.date,
+      rowJson.work_date,
+      rowJson.workDate,
+      rowJson.shift_date,
+      rowJson.shiftDate,
+      rowJson.date,
+      sourceBasis.work_date,
+      sourceBasis.workDate,
+      sourceBasis.shift_date,
+      sourceBasis.shiftDate,
+      sourceBasis.date
+    ];
+    return candidates.some((value) => /^\d{4}-\d{2}-\d{2}$/.test(trimStr(value)));
+  };
+  const createDraftSegmentRows = (rowLike) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    const rowJson = getCreateDraftRowJson(row);
+    const sourceBasis = getCreateDraftSourceBasis(row);
+    for (const value of [
+      row.segment_rows,
+      row.segmentRows,
+      row.segments,
+      row.resolved_segment_rows,
+      row.resolvedSegmentRows,
+      rowJson.segment_rows,
+      rowJson.segmentRows,
+      rowJson.segments,
+      rowJson.resolved_segment_rows,
+      rowJson.resolvedSegmentRows,
+      sourceBasis.segment_rows,
+      sourceBasis.segmentRows,
+      sourceBasis.segments,
+      sourceBasis.resolved_segment_rows,
+      sourceBasis.resolvedSegmentRows
+    ]) {
+      if (Array.isArray(value) && value.length > 0) return value;
+    }
+    return [];
+  };
+  const createDraftRowSelectedOrReady = (rowLike) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    const rowJson = getCreateDraftRowJson(row);
+    const selected = row.selected === true || booleanFlag(rowJson.selected);
+    const selectionState = upperTrim(row.selection_state || row.selectionState || rowJson.selection_state || rowJson.selectionState || '');
+    const status = upperTrim(row.status || rowJson.status || '');
+    return selected || selectionState === 'SELECTED' || status === 'READY';
+  };
+  const isSyntheticResolvedTimesheetResidualPreviewRow = (rowLike, siblingRows = []) => {
+    const row = isPlainObject(rowLike) ? rowLike : null;
+    if (!row) return false;
+    const rowJson = getCreateDraftRowJson(row);
+    const sourceBasis = getCreateDraftSourceBasis(row);
+    const keyType = getCreateDraftKeyType(row);
+    const keyValue = upperTrim(getCreateDraftKeyValue(row));
+    const sourceKeyType = getCreateDraftSourceBasisKeyType(row);
+    const sourceKeyValue = getCreateDraftSourceBasisKeyValue(row);
+    const isTimesheetTotal = (keyType === 'TS_TOTAL' && keyValue === 'TOTAL') || (sourceKeyType === 'TS_TOTAL' && sourceKeyValue === 'TOTAL');
+    if (!isTimesheetTotal) return false;
+
+    const identityText = createDraftRowIdentityText(row);
+    if (!identityText.includes(':non_segment:total')) return false;
+
+    const explicitResolvedReplacementMarker = booleanFlag(
+      row.resolved_segment_rows_replace_source_total ??
+      row.resolvedSegmentRowsReplaceSourceTotal ??
+      rowJson.resolved_segment_rows_replace_source_total ??
+      rowJson.resolvedSegmentRowsReplaceSourceTotal ??
+      sourceBasis.resolved_segment_rows_replace_source_total ??
+      sourceBasis.resolvedSegmentRowsReplaceSourceTotal
+    );
+    if (explicitResolvedReplacementMarker) return true;
+
+    const timesheetId = getCreateDraftTimesheetId(row);
+    const siblingHasRealTsDayRow = asArray(siblingRows).some((candidate) => {
+      if (!isPlainObject(candidate) || candidate === row) return false;
+      if (getCreateDraftKeyType(candidate) !== 'TS_DAY') return false;
+      const candidateTimesheetId = getCreateDraftTimesheetId(candidate);
+      if (timesheetId && candidateTimesheetId && candidateTimesheetId !== timesheetId) return false;
+      return createDraftRowSelectedOrReady(candidate);
+    });
+    if (siblingHasRealTsDayRow) return true;
+
+    return !createDraftHasRealWorkDate(row) && createDraftSegmentRows(row).length <= 0;
+  };
   const collectPageRowsFromNode = (nodeLike) => {
     const node = isPlainObject(nodeLike) ? nodeLike : {};
     const out = [];
@@ -32655,6 +32876,22 @@ async function bankingPayCreateDraft(input = {}) {
       const selectionState = upperTrim(row.selection_state || row.selectionState || row.row_json?.selection_state || row.rowJson?.selection_state || '');
       return selected && selectionState === 'SELECTED' && rowIsWithinRequestedScope(row);
     });
+    const selectedSyntheticResidualRows = selectedRowsInRequestedScope.filter((row) => isSyntheticResolvedTimesheetResidualPreviewRow(row, rows));
+    if (selectedSyntheticResidualRows.length > 0) {
+      return {
+        ok: false,
+        error_code: 'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE',
+        code: 'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE',
+        title: 'Payment batch could not be created',
+        message: 'A selected resolved timesheet total row is stale and cannot be drafted. Refresh Banking Pay and try Create Draft again.',
+        session_id: id,
+        session_version: normalisedPage.session_version ?? normalisedPage.sessionVersion ?? null,
+        invalid_preview_row_ids: uniqTrimmed(selectedSyntheticResidualRows.map((row) => getPreviewRowId(row))).slice(0, 25),
+        invalid_row_count: selectedSyntheticResidualRows.length,
+        pay_channel_scope: requestedScope
+      };
+    }
+
     const invalidSelectedRows = selectedRowsInRequestedScope.filter((row) => !isDraftCreateEligiblePreviewRow(row));
     if (invalidSelectedRows.length > 0) {
       return {
@@ -32753,9 +32990,9 @@ async function bankingPayCreateDraft(input = {}) {
       current_selected_preview_row_ids: allCurrentSelectedIds,
       current_scoped_selected_preview_row_ids: scopedCurrentSelectedIds,
       selected_preview_row_contracts: selectedPreviewRowContracts,
-      draft_selected_preview_row_contracts: selectedPreviewRowContracts,
+      draft_selected_preview_row_contracts: scopedSelectedPreviewRowContracts,
       selected_economic_keys: selectedEconomicKeys,
-      draft_selected_economic_keys: selectedEconomicKeys,
+      draft_selected_economic_keys: scopedSelectedEconomicKeys,
       scoped_selected_preview_row_contracts: scopedSelectedPreviewRowContracts,
       scoped_selected_economic_keys: scopedSelectedEconomicKeys
     };
@@ -35107,6 +35344,18 @@ async function bankingPayCreateDraft(input = {}) {
     if (currentSelectionBeforeSubmit?.error_code === 'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE') {
       return await returnCreateDraftNoRowsForScope(payChannelScope, currentSelectionBeforeSubmit);
     }
+    if (['RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE', 'RESOLVED_SYNTHETIC_TOTAL_ROW_ALLOCATION_BLOCKED', 'RESOLVED_SYNTHETIC_TOTAL_ROW_ITEM_BLOCKED'].includes(upperTrim(currentSelectionBeforeSubmit?.error_code || currentSelectionBeforeSubmit?.code || ''))) {
+      throwCreateDraftFailureEnvelope({
+        ...(isPlainObject(currentSelectionBeforeSubmit) ? currentSelectionBeforeSubmit : {}),
+        ok: false,
+        error_code: upperTrim(currentSelectionBeforeSubmit?.error_code || currentSelectionBeforeSubmit?.code || 'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE') || 'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE',
+        code: upperTrim(currentSelectionBeforeSubmit?.error_code || currentSelectionBeforeSubmit?.code || 'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE') || 'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE',
+        message: trimStr(currentSelectionBeforeSubmit?.message || '') || 'A selected resolved timesheet row is stale and cannot be drafted. Refresh Banking Pay and try Create Draft again.',
+        operation_started: false,
+        no_operation_started: true,
+        no_batch_created: true
+      }, upperTrim(currentSelectionBeforeSubmit?.error_code || currentSelectionBeforeSubmit?.code || 'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE') || 'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE');
+    }
     if (!currentSelectionBeforeSubmit || currentSelectionBeforeSubmit.ok !== true) {
       throwCreateDraftFailureEnvelope({
         ok: false,
@@ -35165,7 +35414,9 @@ async function bankingPayCreateDraft(input = {}) {
       const contractIndexes = [];
       const contracts = [];
       allSelectedPreviewRowContracts.forEach((contract, index) => {
-        const channel = upperTrim(contract?.pay_channel || '');
+        if (!isPlainObject(contract)) return;
+        if (isSyntheticResolvedTimesheetResidualPreviewRow(contract, allSelectedPreviewRowContracts)) return;
+        const channel = upperTrim(contract?.pay_channel || contract?.payChannel || contract?.economic_key?.pay_channel || '');
         if ((scope === 'ALL' || channel === scope) && createDraftNodeMatchesActiveFilters(contract)) {
           contractIndexes.push(index);
           contracts.push(contract);
@@ -35177,12 +35428,33 @@ async function bankingPayCreateDraft(input = {}) {
         .filter((key) => isPlainObject(key));
       if (contractIds.length <= 0) return false;
 
+      const allNonSyntheticContracts = allSelectedPreviewRowContracts.filter((contract) => isPlainObject(contract) && !isSyntheticResolvedTimesheetResidualPreviewRow(contract, allSelectedPreviewRowContracts));
+      const allPayeReady = allNonSyntheticContracts.filter((contract) => upperTrim(contract?.pay_channel || contract?.payChannel || contract?.economic_key?.pay_channel || '') === 'PAYE' && createDraftNodeMatchesActiveFilters(contract)).length;
+      const allUmbrellaReady = allNonSyntheticContracts.filter((contract) => upperTrim(contract?.pay_channel || contract?.payChannel || contract?.economic_key?.pay_channel || '') === 'UMBRELLA' && createDraftNodeMatchesActiveFilters(contract)).length;
+
+      syncedSelectedRows = [...contractIds];
+      selectedPreviewRowIdsForServer = [...contractIds];
+      selectedPreviewSelection.selected_preview_row_ids = [...contractIds];
+      selectedPreviewSelection.selected_preview_row_mode = contractIds.length > 0 ? (selectedPreviewSelection.selected_preview_row_mode || 'IMPLICIT_ALL') : 'EXPLICIT_NONE';
+      try {
+        wiz.decisions.selected_preview_row_ids = [...contractIds];
+        wiz.decisions.server_selected_preview_row_ids = [...contractIds];
+        wiz.workbench.server_selected_preview_row_ids = [...contractIds];
+        wiz.workbench.server_selected_preview_row_ids_provided = true;
+        wiz.decisions.server_selected_preview_row_ids_provided = true;
+      } catch {}
+
       reqBody.pay_channel_scope = scope;
+      reqBody.selected_preview_row_ids = [...contractIds];
+      reqBody.selected_preview_row_mode = selectedPreviewSelection.selected_preview_row_mode;
       reqBody.draft_selected_preview_row_ids = [...contractIds];
+      reqBody.scoped_selected_preview_row_ids = [...contractIds];
       reqBody.draft_selected_preview_row_contracts = deep(contracts) || [];
       reqBody.selected_preview_row_contracts = deep(contracts) || [];
+      reqBody.scoped_selected_preview_row_contracts = deep(contracts) || [];
       reqBody.draft_selected_economic_keys = deep(economicKeys) || [];
       reqBody.selected_economic_keys = deep(economicKeys) || [];
+      reqBody.scoped_selected_economic_keys = deep(economicKeys) || [];
 
       createDraftPreviewDecisions.pay_channel_scope = scope;
       createDraftPreviewDecisions.draft_scope = scope;
@@ -35190,6 +35462,10 @@ async function bankingPayCreateDraft(input = {}) {
       createDraftPreviewDecisions.draftScope = scope;
       createDraftPreviewDecisions.candidate_filter_id = activeCandidateFilterId || null;
       createDraftPreviewDecisions.client_filter_id = activeClientFilterId || null;
+      createDraftPreviewDecisions.selected_preview_row_ids = [...contractIds];
+      createDraftPreviewDecisions.selectedPreviewRowIds = [...contractIds];
+      createDraftPreviewDecisions.selected_preview_row_mode = selectedPreviewSelection.selected_preview_row_mode;
+      createDraftPreviewDecisions.selectedPreviewRowMode = selectedPreviewSelection.selected_preview_row_mode;
       createDraftPreviewDecisions.draft_selected_preview_row_ids = [...contractIds];
       createDraftPreviewDecisions.scoped_selected_preview_row_ids = [...contractIds];
       createDraftPreviewDecisions.draft_selected_preview_row_contracts = deep(contracts) || [];
@@ -35199,12 +35475,26 @@ async function bankingPayCreateDraft(input = {}) {
       createDraftPreviewDecisions.selected_economic_keys = deep(economicKeys) || [];
       createDraftPreviewDecisions.scoped_selected_economic_keys = deep(economicKeys) || [];
       createDraftPreviewDecisions.scope_counts = {
-        selected_ready_total: allSelectedPreviewRowContracts.length,
+        selected_ready_total: allNonSyntheticContracts.length,
+        selected_ready_paye: allPayeReady,
+        selected_ready_umbrella: allUmbrellaReady,
         selected_ready_for_scope: contracts.length,
-        selected_preview_row_ids_total: syncedSelectedRows.length,
+        selected_preview_row_ids_total: contractIds.length,
+        selected_preview_row_ids_for_scope_count: contractIds.length,
         scoped_selected_preview_row_ids_total: contractIds.length,
         pay_channel_scope: scope
       };
+      try {
+        requestSummary.pay_channel_scope = scope;
+        requestSummary.selected_preview_row_ids_count = contractIds.length;
+        requestSummary.selected_preview_row_ids_sample = contractIds.slice(0, 10);
+        requestSummary.selected_ready_total = allNonSyntheticContracts.length;
+        requestSummary.selected_ready_paye = allPayeReady;
+        requestSummary.selected_ready_umbrella = allUmbrellaReady;
+        requestSummary.selected_ready_for_scope = contracts.length;
+        requestSummary.selected_preview_row_ids_for_scope_count = contractIds.length;
+        requestSummary.selected_preview_row_ids_for_scope_sample = contractIds.slice(0, 10);
+      } catch {}
       createDraftPreviewDecisions = sanitizePreviewDecisionsForCreateDraft(createDraftPreviewDecisions);
       reqBody.preview_decisions_json = createDraftPreviewDecisions;
       return true;
@@ -36201,7 +36491,6 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
-
 
 async function openPayeSameWeekOverrideDecisionModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -49991,6 +50280,10 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'BANKING_CREATE_DRAFT_INVALID_INPUT',
     'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED',
     'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED',
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE',
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_ALLOCATION_BLOCKED',
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_ITEM_BLOCKED',
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_SUPPRESSED',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
     'STALE_SESSION',
     'OBSOLETE_SESSION',
@@ -50195,6 +50488,10 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   });
 
   const priorityBusinessCodes = [
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE',
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_ALLOCATION_BLOCKED',
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_ITEM_BLOCKED',
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_SUPPRESSED',
     'BANK_CSV_STALE',
     'EXECUTE_PAYMENT_INVALID_REQUEST',
     'EXECUTE_PAYMENT_INVALID_MODE',
@@ -50257,6 +50554,46 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   });
 
   let errorCode = priorityBusinessCode || specificStructuredCode || detectedSpecificCode || safeNonTransportCode || wrapperStructuredCode || detectedWrapperCode || genericStructuredCode || detectedCode || 'BANKING_ACTION_FAILED';
+
+  const syntheticDraftSelectionCodes = [
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE',
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_ALLOCATION_BLOCKED',
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_ITEM_BLOCKED',
+    'RESOLVED_SYNTHETIC_TOTAL_ROW_SUPPRESSED'
+  ];
+  const syntheticDraftSelectionCode = syntheticDraftSelectionCodes.find((code) =>
+    canonicalStructuredCodes.includes(code) ||
+    detectedSpecificCode === code ||
+    containsCodeToken(rawUpper, code)
+  ) || '';
+  const draftCreateOperationContext = (() => {
+    if (normaliseCode(contextInput.action || contextInput.context_action || contextInput.mutation_context || contextInput.mutationContext || '') === 'CREATE_DRAFT') return true;
+    for (const payload of payloads) {
+      if (!isPlainObject(payload)) continue;
+      const operationCandidates = [
+        payload.operation_type,
+        payload.operationType,
+        payload.operation?.operation_type,
+        payload.operation?.operationType,
+        payload.operation?.type,
+        payload.raw_operation?.operation_type,
+        payload.rawOperation?.operationType,
+        payload.progress_json?.operation_type,
+        payload.progressJson?.operationType,
+        payload.result_json?.operation_type,
+        payload.resultJson?.operationType
+      ];
+      if (operationCandidates.some((value) => normaliseCode(value) === 'DRAFT_CREATE')) return true;
+    }
+    return rawUpper.includes('DRAFT_CREATE') && (rawUpper.includes('OPERATION_TYPE') || rawUpper.includes('DRAFT CREATION') || rawUpper.includes('CREATE_DRAFT'));
+  })();
+  if (draftCreateOperationContext) {
+    if (syntheticDraftSelectionCode) {
+      errorCode = syntheticDraftSelectionCode;
+    } else if (errorCode === 'BANK_CSV_STALE') {
+      errorCode = 'BANKING_PAY_CREATE_DRAFT_FAILED';
+    }
+  }
 
   const blockedFundsFailureContext = rawUpper.includes('MARK_BLOCKED_FUNDS_FAILED')
     || rawUpper.includes('BLOCKED_FUNDS_RETRY_FAILED')
@@ -50720,6 +51057,58 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       user_action: 'REFRESH_BATCH',
       confirm_label: 'OK',
       show_modal: true
+    },
+    RESOLVED_SYNTHETIC_TOTAL_ROW_NOT_DRAFTABLE: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment batch could not be created',
+      message: 'A selected resolved timesheet row is stale and cannot be drafted. Refresh Banking Pay and try Create Draft again.',
+      user_action: 'REFRESH_PREVIEW',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      provider_submission_attempted: false,
+      submitted_to_bank: false
+    },
+    RESOLVED_SYNTHETIC_TOTAL_ROW_ALLOCATION_BLOCKED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment batch could not be created',
+      message: 'A stale resolved timesheet row reached draft allocation. Refresh Banking Pay and try Create Draft again.',
+      user_action: 'REFRESH_PREVIEW',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      provider_submission_attempted: false,
+      submitted_to_bank: false
+    },
+    RESOLVED_SYNTHETIC_TOTAL_ROW_ITEM_BLOCKED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment batch could not be created',
+      message: 'A stale resolved timesheet row reached draft item creation. Refresh Banking Pay and try Create Draft again.',
+      user_action: 'REFRESH_PREVIEW',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      provider_submission_attempted: false,
+      submitted_to_bank: false
+    },
+    RESOLVED_SYNTHETIC_TOTAL_ROW_SUPPRESSED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment batch could not be created',
+      message: 'A stale resolved timesheet row is still present in the draft selection. Refresh Banking Pay and try Create Draft again.',
+      user_action: 'REFRESH_PREVIEW',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      provider_submission_attempted: false,
+      submitted_to_bank: false
     },
     BANK_CSV_STALE: {
       ok: false,
@@ -51608,6 +51997,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 
   return result;
 }
+
 
 
 
