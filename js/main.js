@@ -129587,7 +129587,6 @@ const adoptMovedTimesheetIdDuringSave = async (movedId, adoptOpts = {}) => {
   return result;
 };
 
-
 const onSaveTimesheet = async () => {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][SAVE]');
   GC('onSaveTimesheet');
@@ -129601,6 +129600,7 @@ const onSaveTimesheet = async () => {
   const rowNow = mc.data || {};
   const det    = mc.timesheetDetails || {};
   const st     = mc.timesheetState || {};
+  const related = (mc.timesheetRelated && typeof mc.timesheetRelated === 'object') ? mc.timesheetRelated : {};
 
   const staleScheduleErrorAtSaveStart = !!(st && st.scheduleHasErrors);
 
@@ -130779,6 +130779,38 @@ const onSaveTimesheet = async () => {
     };
   };
 
+
+  const markTimesheetAuthorisePreflightRefreshRequired = (timesheetId, meta = {}) => {
+    const id = String(timesheetId || '').trim();
+    if (!id) return;
+
+    window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+    const liveCtx = window.modalCtx;
+
+    liveCtx.__timesheetAuthorisePreflightRefreshRequired = true;
+    liveCtx.__timesheetAuthorisePreflightRefreshTimesheetId = id;
+    liveCtx.__timesheetAuthorisePreflightRefreshContractWeekId = String(meta.contractWeekId || meta.contract_week_id || '').trim() || null;
+    liveCtx.__timesheetAuthorisePreflightRefreshBookingId = String(meta.bookingId || meta.booking_id || '').trim() || null;
+    liveCtx.__timesheetAuthorisePreflightRefreshReason = String(meta.reason || 'POST_TSFIN_SAVE').trim() || 'POST_TSFIN_SAVE';
+    liveCtx.__timesheetAuthorisePreflightRefreshMarkedAt = Date.now();
+  };
+
+  const clearTimesheetAuthorisePreflightRefreshRequired = (timesheetId) => {
+    const id = String(timesheetId || '').trim();
+    const liveCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    if (!liveCtx) return;
+
+    const markedId = String(liveCtx.__timesheetAuthorisePreflightRefreshTimesheetId || '').trim();
+    if (id && markedId && markedId !== id) return;
+
+    delete liveCtx.__timesheetAuthorisePreflightRefreshRequired;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshTimesheetId;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshContractWeekId;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshBookingId;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshReason;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshMarkedAt;
+  };
+
   const refreshAndAdoptSimpleTimesheetLifecycleRowAfterSave = async (args = {}) => {
     const id = String(args.timesheetId || '').trim();
     const contractWeekId = String(args.contractWeekId || '').trim();
@@ -130990,6 +131022,7 @@ const onSaveTimesheet = async () => {
     liveCtx.lifecycle_refresh_failed = false;
     liveCtx.lifecycle_refresh_error = '';
     liveCtx.refresh_required = false;
+    clearTimesheetAuthorisePreflightRefreshRequired(id);
     delete liveCtx.__simpleTimesheetLifecycleRefreshRequired;
     delete liveCtx.__simpleTimesheetLifecycleRefreshTimesheetId;
     delete liveCtx.__simpleTimesheetLifecycleRefreshMessage;
@@ -131187,6 +131220,7 @@ const onSaveTimesheet = async () => {
     liveCtx.lifecycle_refresh_failed = false;
     liveCtx.lifecycle_refresh_error = '';
     liveCtx.refresh_required = false;
+    clearTimesheetAuthorisePreflightRefreshRequired(id);
     delete liveCtx.__simpleTimesheetLifecycleRefreshRequired;
     delete liveCtx.__simpleTimesheetLifecycleRefreshTimesheetId;
     delete liveCtx.__simpleTimesheetLifecycleRefreshMessage;
@@ -131293,6 +131327,12 @@ const onSaveTimesheet = async () => {
       GE();
       return { ok: false };
     }
+
+    markTimesheetAuthorisePreflightRefreshRequired(tsIdSave, {
+      contractWeekId: weekIdSave || window.modalCtx?.data?.contract_week_id || window.modalCtx?.timesheetDetails?.contract_week_id || null,
+      bookingId: window.modalCtx?.data?.booking_id || window.modalCtx?.timesheetDetails?.booking_id || window.modalCtx?.timesheetDetails?.contract_week?.booking_id || null,
+      reason: 'TSFIN_EXPENSES_SAVE'
+    });
 
     try {
       st.expensesDraft = JSON.parse(JSON.stringify(saveExpOnly.committedDraft || stagedExpenses));
@@ -131893,6 +131933,24 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
       }
       try { window.modalCtx.timesheetState.expensesBaseline = JSON.parse(JSON.stringify(result?.committedDraft || stagedExpenses)); } catch {}
 
+      const lifecycleIdentityForSave = {
+        timesheetId: tsIdSave,
+        contractWeekId: weekIdSave || window.modalCtx?.data?.contract_week_id || window.modalCtx?.timesheetDetails?.contract_week_id || null,
+        bookingId: window.modalCtx?.data?.booking_id || window.modalCtx?.timesheetDetails?.booking_id || window.modalCtx?.timesheetDetails?.contract_week?.booking_id || null
+      };
+      markTimesheetAuthorisePreflightRefreshRequired(tsIdSave, {
+        ...lifecycleIdentityForSave,
+        reason: 'TSFIN_EXPENSES_SAVE_COMBINED'
+      });
+
+      const lifecycleSignatureAdoption = adoptSimpleTimesheetLifecycleSignatureFromSaveResponse(result, lifecycleIdentityForSave);
+      if (!lifecycleSignatureAdoption || lifecycleSignatureAdoption.ok !== true) {
+        L('post-expense-save combined path direct signature adoption unavailable; authorise preflight refresh remains required', {
+          timesheet_id: tsIdSave,
+          error_code: lifecycleSignatureAdoption?.error_code || null
+        });
+      }
+
       try {
         if (result.updatedTsfin && window.modalCtx?.timesheetDetails) {
           window.modalCtx.timesheetDetails.tsfin = {
@@ -132250,6 +132308,11 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
   GE();
   return { ok: true, saved: updatedRow };
 }
+
+
+  
+    
+
 
 
   
@@ -281514,6 +281577,9 @@ function renderTimesheetLinesTab(ctx) {
   `;
 }
 
+
+
+
 async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUTH]');
   GC('authoriseTimesheet');
@@ -281548,7 +281614,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     } catch {}
   };
 
-  const mc = window.modalCtx || {};
+  let mc = window.modalCtx || {};
   let row = (mc.data && mc.data.timesheet_id) ? mc.data : (ctxOrId && ctxOrId.row ? ctxOrId.row : {});
   let tsId = (typeof ctxOrId === 'string')
     ? String(ctxOrId)
@@ -281601,6 +281667,278 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       current_timesheet_id: String(tsId)
     };
   }
+
+  const mergeAuthorisePreflightLifecycleRow = (freshRow, targetTimesheetId) => {
+    const id = trimStr(targetTimesheetId);
+    const fresh = (freshRow && typeof freshRow === 'object') ? freshRow : {};
+    if (!id) return '';
+
+    const signature = pickSignature(
+      fresh.backend_row_signature,
+      fresh.mutation_row_signature,
+      fresh.row_signature,
+      fresh.expected_row_signature
+    );
+    if (!signature) return '';
+
+    window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+    const liveCtx = window.modalCtx;
+    const signaturePatch = {
+      backend_row_signature: signature,
+      mutation_row_signature: signature,
+      row_signature: signature,
+      expected_row_signature: signature
+    };
+    const authoritativeRowPatch = {
+      ...fresh,
+      id,
+      timesheet_id: id,
+      current_timesheet_id: id,
+      expected_timesheet_id: id,
+      ...signaturePatch,
+      row_stale: false,
+      refresh_required: false,
+      lifecycle_refresh_failed: false,
+      lifecycle_refresh_error: ''
+    };
+
+    liveCtx.data = {
+      ...(liveCtx.data || row || {}),
+      ...authoritativeRowPatch
+    };
+
+    const detailsNow = (liveCtx.timesheetDetails && typeof liveCtx.timesheetDetails === 'object')
+      ? liveCtx.timesheetDetails
+      : {};
+    liveCtx.timesheetDetails = {
+      ...detailsNow,
+      current_timesheet_id: id,
+      timesheet_id: id,
+      ...signaturePatch,
+      row_stale: false,
+      refresh_required: false,
+      lifecycle_refresh_failed: false,
+      lifecycle_refresh_error: '',
+      row: {
+        ...(detailsNow.row || {}),
+        ...authoritativeRowPatch
+      },
+      timesheet: {
+        ...(detailsNow.timesheet || {}),
+        timesheet_id: id,
+        current_timesheet_id: id,
+        ...signaturePatch
+      }
+    };
+
+    liveCtx.timesheetMeta = {
+      ...(liveCtx.timesheetMeta || {}),
+      expected_timesheet_id: id,
+      hasTs: true,
+      isPlannedWeek: false
+    };
+
+    liveCtx.lifecycle_refresh_failed = false;
+    liveCtx.lifecycle_refresh_error = '';
+    liveCtx.refresh_required = false;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshRequired;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshTimesheetId;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshContractWeekId;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshBookingId;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshReason;
+    delete liveCtx.__timesheetAuthorisePreflightRefreshMarkedAt;
+
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
+    } catch {}
+
+    return signature;
+  };
+
+  const refreshAuthoriseGuardsBeforeMutation = async () => {
+    const liveCtx = window.modalCtx || mc || {};
+    const id = trimStr(
+      tsId ||
+      liveCtx.data?.current_timesheet_id ||
+      liveCtx.data?.timesheet_id ||
+      liveCtx.timesheetDetails?.current_timesheet_id ||
+      liveCtx.timesheetDetails?.timesheet?.current_timesheet_id ||
+      liveCtx.timesheetDetails?.timesheet?.timesheet_id ||
+      liveCtx.timesheetDetails?.row?.current_timesheet_id ||
+      liveCtx.timesheetDetails?.row?.timesheet_id ||
+      ''
+    );
+    if (!id) return { ok: true, skipped: true };
+
+    const markerRequired = liveCtx.__timesheetAuthorisePreflightRefreshRequired === true;
+    const markerId = trimStr(liveCtx.__timesheetAuthorisePreflightRefreshTimesheetId);
+    const sameMarkedTimesheet = markerRequired && (!markerId || markerId === id);
+    const refreshRequired = liveCtx.refresh_required === true
+      || liveCtx.data?.refresh_required === true
+      || liveCtx.timesheetDetails?.refresh_required === true
+      || liveCtx.timesheetDetails?.row?.refresh_required === true;
+
+    if (!sameMarkedTimesheet && !refreshRequired) {
+      return { ok: true, skipped: true };
+    }
+
+    if (typeof refreshTimesheetLifecycleAffectedRows !== 'function') {
+      if (sameMarkedTimesheet || refreshRequired) {
+        const message = 'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Close and reopen the timesheet before authorising.';
+        toastWarn(message);
+        return {
+          ok: false,
+          blocked: true,
+          result: {
+            ok: false,
+            blocked: true,
+            reason: 'AUTHORISE_PREFLIGHT_REFRESH_UNAVAILABLE',
+            refresh_required: true,
+            current_timesheet_id: id
+          }
+        };
+      }
+      return { ok: true, skipped: true };
+    }
+
+    const contractWeekId = trimStr(
+      liveCtx.__timesheetAuthorisePreflightRefreshContractWeekId ||
+      liveCtx.data?.contract_week_id ||
+      liveCtx.timesheetDetails?.contract_week_id ||
+      liveCtx.timesheetDetails?.row?.contract_week_id ||
+      ''
+    );
+    const bookingId = trimStr(
+      liveCtx.__timesheetAuthorisePreflightRefreshBookingId ||
+      liveCtx.data?.booking_id ||
+      liveCtx.timesheetDetails?.booking_id ||
+      liveCtx.timesheetDetails?.contract_week?.booking_id ||
+      liveCtx.timesheetDetails?.row?.booking_id ||
+      ''
+    );
+
+    let refreshResult = null;
+    try {
+      refreshResult = await refreshTimesheetLifecycleAffectedRows({
+        row_key: `timesheet:${id}`,
+        timesheet_id: id,
+        current_timesheet_id: id,
+        expected_timesheet_id: id,
+        contract_week_id: contractWeekId || null,
+        booking_id: bookingId || null,
+        context: 'timesheet_modal'
+      }, {
+        context: 'timesheet_modal',
+        action: 'authorise-preflight',
+        mutation: 'authorise-preflight',
+        state: window.modalCtx || null,
+        apply: false,
+        max_items: 4
+      });
+    } catch (err) {
+      L('authorise preflight lifecycle refresh threw', {
+        timesheet_id: id,
+        error: String(err?.message || err || '')
+      });
+      refreshResult = null;
+    }
+
+    const rows = Array.isArray(refreshResult?.flattened_rows) ? refreshResult.flattened_rows : [];
+    const freshRow = rows.find((candidate) => {
+      const candidateId = trimStr(candidate?.current_timesheet_id || candidate?.timesheet_id || candidate?.id || '');
+      const candidateKey = trimStr(candidate?.row_key || '');
+      return candidateId === id || candidateKey === `timesheet:${id}`;
+    }) || null;
+
+    const freshId = trimStr(freshRow?.current_timesheet_id || freshRow?.timesheet_id || freshRow?.id || '');
+    if (freshRow && freshId && freshId !== id) {
+      toastWarn('This timesheet changed while you were editing; review and try again.');
+      return {
+        ok: false,
+        blocked: true,
+        result: {
+          ok: false,
+          stale: true,
+          blocked: true,
+          reason: 'AUTHORISE_PREFLIGHT_IDENTITY_CHANGED',
+          expected_timesheet_id: id,
+          current_timesheet_id: freshId
+        }
+      };
+    }
+
+    const freshSignature = freshRow ? mergeAuthorisePreflightLifecycleRow(freshRow, id) : '';
+    if (freshSignature) {
+      L('authorise preflight lifecycle refresh adopted canonical guard', {
+        timesheet_id: id,
+        signature_present: true,
+        reason: trimStr(liveCtx.__timesheetAuthorisePreflightRefreshReason) || null
+      });
+      return { ok: true, refreshed: true, signature: freshSignature };
+    }
+
+    if (typeof refreshTimesheetsSummaryAfterRotation === 'function') {
+      try {
+        await refreshTimesheetsSummaryAfterRotation(id, {
+          allowRenderAll: false,
+          skipTabRefresh: true,
+          forceFresh: true,
+          bypassCache: true,
+          reason: 'authorise-preflight'
+        });
+        const fallbackCtx = window.modalCtx || {};
+        const fallbackSignature = pickSignature(
+          fallbackCtx.data?.backend_row_signature,
+          fallbackCtx.data?.mutation_row_signature,
+          fallbackCtx.data?.row_signature,
+          fallbackCtx.timesheetDetails?.backend_row_signature,
+          fallbackCtx.timesheetDetails?.row_signature,
+          fallbackCtx.timesheetDetails?.row?.backend_row_signature,
+          fallbackCtx.timesheetDetails?.row?.row_signature
+        );
+        if (fallbackSignature) {
+          delete fallbackCtx.__timesheetAuthorisePreflightRefreshRequired;
+          delete fallbackCtx.__timesheetAuthorisePreflightRefreshTimesheetId;
+          delete fallbackCtx.__timesheetAuthorisePreflightRefreshContractWeekId;
+          delete fallbackCtx.__timesheetAuthorisePreflightRefreshBookingId;
+          delete fallbackCtx.__timesheetAuthorisePreflightRefreshReason;
+          delete fallbackCtx.__timesheetAuthorisePreflightRefreshMarkedAt;
+          fallbackCtx.refresh_required = false;
+          return { ok: true, refreshed: true, signature: fallbackSignature, source: 'summary_rotation' };
+        }
+      } catch (err) {
+        L('authorise preflight summary fallback threw', {
+          timesheet_id: id,
+          error: String(err?.message || err || '')
+        });
+      }
+    }
+
+    toastWarn('Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Close and reopen the timesheet before authorising.');
+    return {
+      ok: false,
+      blocked: true,
+      result: {
+        ok: false,
+        blocked: true,
+        reason: 'AUTHORISE_PREFLIGHT_REFRESH_FAILED',
+        refresh_required: true,
+        current_timesheet_id: id,
+        refresh_result: refreshResult || null
+      }
+    };
+  };
+
+  const preflightRefresh = await refreshAuthoriseGuardsBeforeMutation();
+  if (preflightRefresh && preflightRefresh.blocked) {
+    GE();
+    return preflightRefresh.result || { ok: false, blocked: true, reason: 'AUTHORISE_PREFLIGHT_REFRESH_FAILED' };
+  }
+
+  mc = window.modalCtx || mc || {};
+  row = (mc.data && (mc.data.timesheet_id || mc.data.current_timesheet_id || mc.data.id)) ? mc.data : row;
+  tsId = trimStr(row.timesheet_id || row.current_timesheet_id || row.id || tsId);
 
   const expected = trimStr(expectedTimesheetId) || trimStr(window.modalCtx?.timesheetMeta?.expected_timesheet_id) || String(tsId);
   const expectedRowSignature = pickSignature(
@@ -281753,6 +282091,8 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     markButtonsBusy(false);
   }
 }
+
+
 
 
 async function contractWeekAuthorise(week_id, expectedTimesheetId /* optional */) {
