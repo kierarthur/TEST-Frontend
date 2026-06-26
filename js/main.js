@@ -31901,6 +31901,7 @@ async function bankingPayPreview(pay_date) {
 
 
 
+
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -32001,7 +32002,7 @@ async function bankingPayCreateDraft(input = {}) {
     if (!/^-?[0-9]+(\.[0-9]+)?$/.test(raw)) return null;
     return round2(raw);
   };
-  const isDraftCreateEligiblePreviewRow = (rowLike) => {
+  const isDraftCreateEligiblePreviewRow = (rowLike, siblingRows = []) => {
     const row = isPlainObject(rowLike) ? rowLike : null;
     if (!row) return false;
 
@@ -32030,7 +32031,7 @@ async function bankingPayCreateDraft(input = {}) {
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
     if (!rowId) return false;
-    if (isSyntheticResolvedTimesheetResidualPreviewRow(row)) return false;
+    if (isSyntheticResolvedTimesheetResidualPreviewRow(row, siblingRows)) return false;
     if (rowKey.toLowerCase().startsWith('timesheet_snapshot:')) return false;
     if (sourceKind === 'TIMESHEET_SNAPSHOT' || sourceKind === 'TIMESHEET_SNAPSHOT_EVIDENCE' || sourceKind === 'RAW_TIMESHEET_SNAPSHOT' || sourceKind === 'INTERNAL_ONLY') return false;
     if (presentationRole === 'HIDDEN') return false;
@@ -32611,21 +32612,27 @@ async function bankingPayCreateDraft(input = {}) {
       pay_channel_scope: channelScope || 'ALL'
     });
   };
-  const collectDraftablePreviewRowIdsFromWizardState = (wizLike, previewLike) => {
+  const collectDraftablePreviewRowIdsFromWizardState = (wizLike, previewLike, siblingRowsLike = []) => {
     const out = [];
     const seen = new Set();
+    const fallbackSiblingRows = asArray(siblingRowsLike).filter((row) => isPlainObject(row));
     const pushId = (raw) => {
       const s = trimStr(raw);
       if (!s || seen.has(s)) return;
       seen.add(s);
       out.push(s);
     };
-    const pushEligibleRow = (rowLike) => {
-      if (!isDraftCreateEligiblePreviewRow(rowLike)) return;
+    const pushEligibleRow = (rowLike, siblingRowsForEligibility = fallbackSiblingRows) => {
+      const siblingRows = asArray(siblingRowsForEligibility).filter((row) => isPlainObject(row));
+      if (!isDraftCreateEligiblePreviewRow(rowLike, siblingRows.length > 0 ? siblingRows : fallbackSiblingRows)) return;
       pushId(getPreviewRowId(rowLike));
     };
-    const pushEligibleRows = (rows) => {
-      for (const row of asArray(rows)) pushEligibleRow(row);
+    const pushEligibleRows = (rows, siblingRowsForEligibility = null) => {
+      const rowList = asArray(rows).filter((row) => isPlainObject(row));
+      const siblingRows = Array.isArray(siblingRowsForEligibility)
+        ? siblingRowsForEligibility.filter((row) => isPlainObject(row))
+        : (fallbackSiblingRows.length > 0 ? fallbackSiblingRows : rowList);
+      for (const row of rowList) pushEligibleRow(row, siblingRows);
     };
     const pushComponentCacheRows = (cacheLike) => {
       const cache = isPlainObject(cacheLike) ? cacheLike : null;
@@ -32642,7 +32649,7 @@ async function bankingPayCreateDraft(input = {}) {
       for (const bucketKey of ['paye_candidates', 'payeCandidates', 'non_paye_payees', 'nonPayePayees', 'payees', 'candidates']) {
         for (const candidate of asArray(node[bucketKey])) {
           if (!isPlainObject(candidate)) continue;
-          pushEligibleRow(candidate);
+          pushEligibleRow(candidate, fallbackSiblingRows);
           for (const rowKey of ['itemisation', 'canonical_preview_lines', 'canonicalPreviewLines', 'preview_lines', 'previewLines', 'preview_rows', 'previewRows', 'ready_preview_lines', 'readyPreviewLines', 'rows', 'lines']) {
             pushEligibleRows(candidate[rowKey]);
           }
@@ -32671,7 +32678,7 @@ async function bankingPayCreateDraft(input = {}) {
     pushNodeRows(wizard.workbench);
     return out;
   };
-  const collectPreviewRowIds = (previewLike) => collectDraftablePreviewRowIdsFromWizardState(wiz, previewLike);
+  const collectPreviewRowIds = (previewLike, siblingRows = []) => collectDraftablePreviewRowIdsFromWizardState(wiz, previewLike, siblingRows);
   const getPreviewRowPayChannelForCreateDraft = (rowLike) => upperTrim(
     rowLike?.pay_channel ||
     rowLike?.payChannel ||
@@ -32892,7 +32899,7 @@ async function bankingPayCreateDraft(input = {}) {
       };
     }
 
-    const invalidSelectedRows = selectedRowsInRequestedScope.filter((row) => !isDraftCreateEligiblePreviewRow(row));
+    const invalidSelectedRows = selectedRowsInRequestedScope.filter((row) => !isDraftCreateEligiblePreviewRow(row, rows));
     if (invalidSelectedRows.length > 0) {
       return {
         ok: false,
@@ -32905,7 +32912,7 @@ async function bankingPayCreateDraft(input = {}) {
       };
     }
 
-    const allEligibleSelectedRows = rows.filter((row) => isDraftCreateEligiblePreviewRow(row));
+    const allEligibleSelectedRows = rows.filter((row) => isDraftCreateEligiblePreviewRow(row, rows));
     const currentEligibleSelectedRows = allEligibleSelectedRows.filter((row) => rowIsWithinRequestedScope(row));
     const allCurrentSelectedIds = uniqTrimmed(allEligibleSelectedRows.map((row) => getPreviewRowId(row)));
     const scopedCurrentSelectedIds = uniqTrimmed(currentEligibleSelectedRows.map((row) => getPreviewRowId(row)));
@@ -33012,8 +33019,8 @@ async function bankingPayCreateDraft(input = {}) {
       const candidate = isPlainObject(candidateLike) ? candidateLike : null;
       if (!candidate) return [];
 
-      const rows = [];
-      if (isDraftCreateEligiblePreviewRow(candidate)) rows.push(candidate);
+        const rows = [];
+      if (isPlainObject(candidate)) rows.push(candidate);
 
       for (const sourceRows of [
         candidate.itemisation,
@@ -33038,8 +33045,9 @@ async function bankingPayCreateDraft(input = {}) {
       if (seen.has(candId)) continue;
       if (includeSet && !includeSet.has(candId)) continue;
 
-      const hasSelectedReadyLine = candidateRows(c).some((row) => {
-        if (!isDraftCreateEligiblePreviewRow(row)) return false;
+      const candidateRowList = candidateRows(c);
+      const hasSelectedReadyLine = candidateRowList.some((row) => {
+        if (!isDraftCreateEligiblePreviewRow(row, candidateRowList)) return false;
         const rowId = rowIdOf(row);
         if (!rowId) return false;
         return selectedRowIdSet.size <= 0 || selectedRowIdSet.has(rowId);
@@ -34906,7 +34914,9 @@ async function bankingPayCreateDraft(input = {}) {
     });
   }
   const currentCanonicalPageAppliedInitially = isCurrentCanonicalPageAppliedForCreateDraft(sessionId, expectedSessionVersion);
-  const localEligibleSelectedPreviewRowIdsInitially = collectDraftablePreviewRowIdsFromWizardState(wiz, previewObj);
+  const initialLoadedRowsForCreateDraft = collectLoadedPreviewRowsBySectionForCreateDraft();
+  const initialCanonicalRowsForCreateDraft = asArray(initialLoadedRowsForCreateDraft.canonical_preview_lines).filter((row) => isPlainObject(row));
+  const localEligibleSelectedPreviewRowIdsInitially = collectDraftablePreviewRowIdsFromWizardState(wiz, previewObj, initialCanonicalRowsForCreateDraft);
   if (!currentCanonicalPageAppliedInitially || localEligibleSelectedPreviewRowIdsInitially.length <= 0) {
     return await rejectAuthoritativeCreateDraftReadiness('INITIAL_LOCAL_READY_SELECTION_GATE', {
       ...authoritativeReadinessSnapshot,
@@ -34936,7 +34946,9 @@ async function bankingPayCreateDraft(input = {}) {
   previewEnvelope = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : previewEnvelope;
   previewObj = (previewEnvelope.preview && typeof previewEnvelope.preview === 'object' && !Array.isArray(previewEnvelope.preview)) ? previewEnvelope.preview : previewEnvelope;
 
-  const previewRowUniverse = collectPreviewRowIds(previewObj);
+  const loadedRowsForCreateDraftSelection = collectLoadedPreviewRowsBySectionForCreateDraft();
+  const canonicalRowsForCreateDraftSelection = asArray(loadedRowsForCreateDraftSelection.canonical_preview_lines).filter((row) => isPlainObject(row));
+  const previewRowUniverse = collectPreviewRowIds(previewObj, canonicalRowsForCreateDraftSelection);
 
   const normalizeSelectedPreviewRowIdsProvided = (value) => {
     if (value === true) return true;
@@ -35200,9 +35212,10 @@ async function bankingPayCreateDraft(input = {}) {
     const selectedSet = new Set(uniqTrimmed(selectedRowIds));
     const scope = normaliseDraftScopeForCreate(scopeValue) || 'ALL';
     const rowsBySection = collectLoadedPreviewRowsBySectionForCreateDraft();
-    const eligibleSelectedRows = asArray(rowsBySection.canonical_preview_lines)
+    const canonicalRows = asArray(rowsBySection.canonical_preview_lines).filter((row) => isPlainObject(row));
+    const eligibleSelectedRows = canonicalRows
       .filter((row) => createDraftNodeMatchesActiveFilters(row))
-      .filter((row) => isDraftCreateEligiblePreviewRow(row))
+      .filter((row) => isDraftCreateEligiblePreviewRow(row, canonicalRows))
       .filter((row) => {
         const rowId = getPreviewRowId(row);
         return rowId && selectedSet.has(rowId);
@@ -36491,6 +36504,7 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
 
 async function openPayeSameWeekOverrideDecisionModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
