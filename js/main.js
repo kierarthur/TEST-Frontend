@@ -45782,7 +45782,6 @@ function renderPayNewBatchWizard() {
       ''
     );
   };
-
   const getLineKeyValue = (obj) => {
     const nested = getNestedLinePayload(obj);
     const economicKey = isPlainObject(obj?.economic_key) ? obj.economic_key : (isPlainObject(obj?.economicKey) ? obj.economicKey : {});
@@ -45794,6 +45793,43 @@ function renderPayNewBatchWizard() {
       nested?.key_value ||
       nested?.keyValue ||
       ''
+    );
+  };
+
+  const isSyntheticTimesheetResidualLine = (obj) => {
+    if (!isPlainObject(obj)) return false;
+    const nested = getNestedLinePayload(obj);
+    const sourceBasis = getLineSourceBasisJson(obj);
+    const keyType = getLineKeyType(obj);
+    const keyValue = upperTrim(getLineKeyValue(obj));
+    const identityText = [
+      obj?.row_key,
+      obj?.rowKey,
+      obj?.line_key,
+      obj?.lineKey,
+      obj?.source_ref,
+      obj?.sourceRef,
+      obj?.preview_row_id,
+      obj?.previewRowId,
+      nested?.row_key,
+      nested?.rowKey,
+      nested?.line_key,
+      nested?.lineKey,
+      nested?.source_ref,
+      nested?.sourceRef
+    ].map((value) => trimStr(value).toLowerCase()).filter(Boolean).join('|');
+    const sourceKeyType = upperTrim(sourceBasis?.component_key_type || sourceBasis?.componentKeyType || '');
+    const sourceKeyValue = upperTrim(sourceBasis?.component_key_value || sourceBasis?.componentKeyValue || '');
+    const hasRealWorkDate = !!trimStr(obj?.work_date || obj?.workDate || obj?.date || nested?.work_date || nested?.workDate || nested?.date || '');
+    const hasSegmentRows = getLineSectionSegmentRows(obj).length > 0;
+    return !!(
+      !hasRealWorkDate &&
+      !hasSegmentRows &&
+      identityText.includes(':non_segment:total') &&
+      (
+        (keyType === 'TS_TOTAL' && keyValue === 'TOTAL') ||
+        (sourceKeyType === 'TS_TOTAL' && sourceKeyValue === 'TOTAL')
+      )
     );
   };
 
@@ -46062,11 +46098,21 @@ function renderPayNewBatchWizard() {
     return `READY_TO_PAY|${candidateId}|${timesheetId}`;
   };
 
-  const buildReadyTimesheetBreakdownEntries = (groupLines) => {
+   const buildReadyTimesheetBreakdownEntries = (groupLines) => {
     const entries = [];
     for (const line of asArray(groupLines)) {
-      const segmentRows = getLineSectionSegmentRows(line);
-      const operationalRows = segmentRows.length ? segmentRows : [line];
+      if (!isPlainObject(line) || isSyntheticTimesheetResidualLine(line)) continue;
+      const segmentRows = getLineSectionSegmentRows(line).filter((segment) => {
+        if (!isPlainObject(segment)) return false;
+        const nestedSegment = getNestedLinePayload(segment);
+        return !!trimStr(segment?.date || segment?.work_date || segment?.linked_shift_date || nestedSegment?.date || nestedSegment?.work_date || '');
+      });
+      const lineHasActualWorkDate = !!trimStr(line?.date || line?.work_date || line?.linked_shift_date || getNestedLinePayload(line)?.date || getNestedLinePayload(line)?.work_date || '');
+      const lineIsDateBucket = getLineKeyType(line) === 'TS_DAY';
+      const operationalRows = segmentRows.length
+        ? segmentRows
+        : (lineHasActualWorkDate || lineIsDateBucket ? [line] : []);
+      if (!operationalRows.length) continue;
       const previewRowId = getPreviewRowId(line);
       operationalRows.forEach((segment, index) => {
         entries.push({
@@ -46110,7 +46156,7 @@ function renderPayNewBatchWizard() {
               const nestedSegment = getNestedLinePayload(segment);
               const previewRowId = trimStr(entry.preview_row_id);
               const selected = previewRowId ? selectedPreviewRowSet.has(previewRowId) : false;
-              const segmentDate = trimStr(segment?.date || segment?.work_date || segment?.linked_shift_date || nestedSegment?.date || nestedSegment?.work_date || line?.linked_shift_date || line?.week_ending_date || '');
+              const segmentDate = trimStr(segment?.date || segment?.work_date || segment?.linked_shift_date || nestedSegment?.date || nestedSegment?.work_date || '');
               const clientName = trimStr(segment?.client_name || segment?.trust_name || nestedSegment?.client_name || line?.client_name || line?.trust_name || '') || '—';
               const role = trimStr(segment?.role || segment?.job_title || nestedSegment?.role || nestedSegment?.job_title || line?.role || line?.job_title || '') || '—';
               const band = trimStr(segment?.band || segment?.band_name || nestedSegment?.band || line?.band || '') || '—';
@@ -46205,7 +46251,7 @@ function renderPayNewBatchWizard() {
     for (const line of asArray(lines).filter((item) => isPlainObject(item))) {
       const groupKey = getReadyTimesheetGroupKey(line);
       if (!groupKey) {
-        orderedItems.push({ kind: 'line', line });
+        if (!isSyntheticTimesheetResidualLine(line)) orderedItems.push({ kind: 'line', line });
         continue;
       }
       if (!groupByKey.has(groupKey)) {
@@ -46222,22 +46268,24 @@ function renderPayNewBatchWizard() {
       }
 
       const groupLines = item.lines;
-      const representative = groupLines.find((line) => !!resolvedRateCancelActionHtml(line, 'READY_TO_PAY')) || groupLines[0];
+      const payableGroupLines = groupLines.filter((line) => !isSyntheticTimesheetResidualLine(line));
+      if (!payableGroupLines.length) return '';
+      const representative = payableGroupLines.find((line) => !!resolvedRateCancelActionHtml(line, 'READY_TO_PAY')) || payableGroupLines[0];
       const candidateId = getLineCandidateId(representative);
       const timesheetId = getLineTimesheetId(representative);
-      const previewRowIds = uniqTrimmed(groupLines.map((line) => getPreviewRowId(line)));
+      const previewRowIds = uniqTrimmed(payableGroupLines.map((line) => getPreviewRowId(line)));
       const selectedPreviewRowIds = previewRowIds.filter((rowId) => selectedPreviewRowSet.has(rowId));
       const selectionState = previewRowIds.length <= 0
         ? 'NONE'
         : (selectedPreviewRowIds.length === previewRowIds.length
             ? 'ALL'
             : (selectedPreviewRowIds.length === 0 ? 'NONE' : 'PARTIAL'));
-      const fullAmount = Math.round(groupLines.reduce((sum, line) => sum + toNum(getLineSectionAmount(line), 0), 0) * 100) / 100;
-      const selectedAmount = Math.round(groupLines.reduce((sum, line) => {
+      const fullAmount = Math.round(payableGroupLines.reduce((sum, line) => sum + toNum(getLineSectionAmount(line), 0), 0) * 100) / 100;
+      const selectedAmount = Math.round(payableGroupLines.reduce((sum, line) => {
         const rowId = getPreviewRowId(line);
         return sum + (rowId && selectedPreviewRowSet.has(rowId) ? toNum(getLineSectionAmount(line), 0) : 0);
       }, 0) * 100) / 100;
-      const breakdownEntries = buildReadyTimesheetBreakdownEntries(groupLines);
+      const breakdownEntries = buildReadyTimesheetBreakdownEntries(payableGroupLines);
       const breakdownCount = breakdownEntries.length;
       const isBreakdownOpen = openReadyTimesheetBreakdownKeys.has(item.key);
       const nested = getNestedLinePayload(representative);
@@ -46245,8 +46293,8 @@ function renderPayNewBatchWizard() {
       const tmsRef = trimStr(representative?.tms_ref || nested?.tms_ref || '');
       const client = trimStr(representative?.client_name || nested?.client_name || representative?.trust_name || nested?.trust_name || '') || '—';
       const weekOrDate = ymdToUk(trimStr(representative?.week_ending_date || nested?.week_ending_date || '')) || ymdToUk(trimStr(representative?.linked_shift_date || nested?.linked_shift_date || '')) || '—';
-      const payChannels = uniqTrimmed(groupLines.map((line) => upperTrim(line?.pay_channel || getNestedLinePayload(line)?.pay_channel || '')));
-      const payeTreatments = uniqTrimmed(groupLines.map((line) => upperTrim(line?.paye_treatment || getNestedLinePayload(line)?.paye_treatment || '')));
+      const payChannels = uniqTrimmed(payableGroupLines.map((line) => upperTrim(line?.pay_channel || getNestedLinePayload(line)?.pay_channel || '')));
+      const payeTreatments = uniqTrimmed(payableGroupLines.map((line) => upperTrim(line?.paye_treatment || getNestedLinePayload(line)?.paye_treatment || '')));
       const payChannel = payChannels.length > 1 ? 'MIXED' : (payChannels[0] || '—');
       const payeTreatment = payeTreatments.length > 1 ? 'MIXED' : (payeTreatments[0] || '');
       const cancelResolvedRateHtml = resolvedRateCancelActionHtml(representative, 'READY_TO_PAY');
@@ -46334,7 +46382,7 @@ function renderPayNewBatchWizard() {
         </tr>
         ${isBreakdownOpen ? `
           <tr data-timesheet-group-key="${enc(item.key)}">
-            <td colspan="8" style="padding-top:0;">${renderReadyTimesheetBreakdown(item.key, groupLines, candidateId, timesheetId)}</td>
+            <td colspan="8" style="padding-top:0;">${renderReadyTimesheetBreakdown(item.key, payableGroupLines, candidateId, timesheetId)}</td>
           </tr>
         ` : ''}
       `;
