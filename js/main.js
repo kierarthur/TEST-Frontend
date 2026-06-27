@@ -104727,6 +104727,7 @@ function getSummaryFingerprint(section){
 */
 // ─────────────────────────────────────────────────────────────────────────────
 
+
 async function primeSummaryMembership(section, fingerprint, options = {}) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
 
@@ -105034,6 +105035,35 @@ async function primeSummaryMembership(section, fingerprint, options = {}) {
   if (!cacheKey) return;
 
   const opts = (options && typeof options === 'object') ? options : {};
+  const background = !!(opts.background === true || opts.lazy === true);
+  const afterLifecycleMutation = !!(opts.afterLifecycleMutation === true || opts.after_lifecycle_mutation === true);
+  const lifecycleSequence = Number(opts.lifecycleSequence ?? opts.lifecycle_sequence ?? opts.mutationSequence ?? opts.mutation_sequence ?? 0) || 0;
+  const isStaleMembershipResult = () => {
+    try {
+      if (secKey !== 'timesheets' || !afterLifecycleMutation || lifecycleSequence <= 0) return false;
+      const mc = window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : null;
+      const liveSeq = (typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(mc || {}) : Number(mc?.__timesheetLifecycleMutationSeq || mc?.__timesheetLatestLifecycleMutationSeq || 0) || 0;
+      return liveSeq > lifecycleSequence;
+    } catch { return false; }
+  };
+  if (background && opts.__background_worker !== true) {
+    window.__summaryMembershipBackgroundQueue = window.__summaryMembershipBackgroundQueue || {};
+    const bgKey = `${secKey}:${cacheKey}`;
+    const existingBg = window.__summaryMembershipBackgroundQueue[bgKey];
+    if (existingBg && existingBg.timer) { try { clearTimeout(existingBg.timer); } catch {} }
+    window.__summaryMembershipBackgroundQueue[bgKey] = {
+      section: secKey,
+      dataset_key: cacheKey,
+      mutation_sequence: lifecycleSequence || null,
+      scheduled_at: Date.now(),
+      timer: setTimeout(() => {
+        Promise.resolve(primeSummaryMembership(section, fingerprint, { ...opts, background: false, lazy: false, __background_worker: true })).finally(() => {
+          try { delete window.__summaryMembershipBackgroundQueue[bgKey]; } catch {}
+        });
+      }, Math.max(0, Math.min(Number(opts.debounce_ms ?? opts.debounceMs ?? 75) || 75, 500)))
+    };
+    return;
+  }
   const explicitFullMembership = !!(
     isTruthy(opts.explicitFullMembership) ||
     isTruthy(opts.explicit_full_membership) ||
@@ -105091,11 +105121,11 @@ async function primeSummaryMembership(section, fingerprint, options = {}) {
 
   const existingState = inspectCacheEntry(existing, cacheKey, hbRevNow, nowTs);
   if (existingState.hasUsableData && !existingState.stale) {
-    syncActiveSelectionFromCacheState(existingState, cacheKey);
+    if (!isStaleMembershipResult()) syncActiveSelectionFromCacheState(existingState, cacheKey);
     return;
   }
 
-  syncActiveSelectionFromCacheState(existingState, cacheKey);
+  if (!isStaleMembershipResult()) syncActiveSelectionFromCacheState(existingState, cacheKey);
 
   const previous = (existing && typeof existing === 'object') ? existing : null;
   const previousState = inspectCacheEntry(previous, cacheKey, hbRevNow, nowTs);
@@ -105187,7 +105217,7 @@ async function primeSummaryMembership(section, fingerprint, options = {}) {
         deferred_total_count: deferredTotal
       };
 
-      markActiveSelectionMembershipDeferred(cacheKey, deferredTotal);
+      if (!isStaleMembershipResult()) markActiveSelectionMembershipDeferred(cacheKey, deferredTotal);
       try {
         window.__summaryLoadState = window.__summaryLoadState || {};
         if (window.__summaryLoadState[secKey]) {
@@ -105241,7 +105271,7 @@ async function primeSummaryMembership(section, fingerprint, options = {}) {
       failedAt: null
     };
 
-    syncActiveSelectionFromCacheState(storedState, cacheKey);
+    if (!isStaleMembershipResult()) syncActiveSelectionFromCacheState(storedState, cacheKey);
 
     if (LOGC) {
       console.log('[SUMMARY][primeMembership]', {
@@ -105282,7 +105312,7 @@ async function primeSummaryMembership(section, fingerprint, options = {}) {
       };
     }
 
-    syncActiveSelectionFromCacheState(inspectCacheEntry(cache[cacheKey], cacheKey, hbRevNow, Date.now()), cacheKey);
+    if (!isStaleMembershipResult()) syncActiveSelectionFromCacheState(inspectCacheEntry(cache[cacheKey], cacheKey, hbRevNow, Date.now()), cacheKey);
 
     if (LOGC) console.warn('[SUMMARY][primeMembership] failed', e);
   } finally {
@@ -106095,9 +106125,7 @@ async function fetchContractWeekManualDraftDetails(weekId) {
 }
 
 
-
-
-async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
+async function fetchTimesheetWorkbenchDetails(ctxOrRow, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][WORKBENCH-DETAILS]');
 
   const src = (ctxOrRow && typeof ctxOrRow === 'object') ? ctxOrRow : {};
@@ -106105,6 +106133,43 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     (src.row && typeof src.row === 'object') ? src.row :
     (src.data && typeof src.data === 'object') ? src.data :
     src;
+
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const purposeRaw = String(
+    opts.purpose ||
+    opts.fetchPurpose ||
+    src.purpose ||
+    src.__timesheetWorkbenchFetchPurpose ||
+    row.__timesheetWorkbenchFetchPurpose ||
+    ''
+  ).trim();
+  const purpose = ['initial_open', 'tab_load', 'lifecycle_fallback', 'background_refresh'].includes(purposeRaw)
+    ? purposeRaw
+    : ((typeof window !== 'undefined' && window.modalCtx && window.modalCtx.entity === 'timesheets' && window.modalCtx.__timesheetLifecycleMutationInFlight === true) ? 'lifecycle_fallback' : 'initial_open');
+  const lifecycleSequenceAtRequest = Number(opts.lifecycleSequence ?? opts.mutationSequence ?? opts.lifecycle_sequence ?? opts.mutation_sequence ?? (typeof readTimesheetLifecycleMutationSequence === 'function' ? readTimesheetLifecycleMutationSequence(window.modalCtx || {}) : 0)) || 0;
+  const requestStartedAt = Date.now();
+  const shouldDiscardForStaleLifecycle = () => {
+    try {
+      if (purpose === 'initial_open' || purpose === 'tab_load') return false;
+      const mc = window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : null;
+      if (!mc || mc.entity !== 'timesheets') return false;
+      const liveSeq = (typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(mc) : Number(mc.__timesheetLifecycleMutationSeq || mc.__timesheetLatestLifecycleMutationSeq || 0) || 0;
+      if (lifecycleSequenceAtRequest > 0 && liveSeq > lifecycleSequenceAtRequest) return true;
+      const livePatchAt = Number(mc.__timesheetLatestLifecyclePatchAt || 0) || 0;
+      return !!(livePatchAt && livePatchAt > requestStartedAt && purpose !== 'background_refresh');
+    } catch { return false; }
+  };
+  const existingLifecycleSafeDetails = (reason) => {
+    const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+    const existing = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
+    return {
+      ...existing,
+      __workbench_fetch_purpose: purpose,
+      __skipped_full_details: true,
+      __stale_details_discarded: reason === 'stale-lifecycle-response',
+      __details_skip_reason: reason || 'lifecycle-state-already-known'
+    };
+  };
 
   const realTimesheetId =
     row.timesheet_id ||
@@ -106135,9 +106200,32 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     throw new Error('fetchTimesheetWorkbenchDetails: timesheet_id or contract_week_id is required');
   }
 
+  if (purpose === 'lifecycle_fallback' && opts.force !== true && opts.forceFullDetails !== true) {
+    try {
+      const mc = window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : null;
+      const trusted = mc && typeof hasTrustedTimesheetLifecycleSignature === 'function'
+        ? hasTrustedTimesheetLifecycleSignature(mc, { timesheet_id: realTimesheetId || row.current_timesheet_id || row.timesheet_id || row.id || null })
+        : false;
+      if (trusted) {
+        L('SKIP_FULL_DETAILS_FOR_TRUSTED_LIFECYCLE_FALLBACK', {
+          purpose,
+          realTimesheetId: realTimesheetId || null,
+          lifecycleSequenceAtRequest
+        });
+        GE();
+        return existingLifecycleSafeDetails('trusted-lifecycle-state');
+      }
+    } catch {}
+  }
+
   if (hasRealTimesheet) {
     try {
       const detailRaw = await fetchTimesheetDetails(realTimesheetId);
+      if (shouldDiscardForStaleLifecycle()) {
+        L('DISCARD_REAL_TIMESHEET_RESULT_FOR_STALE_LIFECYCLE', { purpose, realTimesheetId, lifecycleSequenceAtRequest });
+        GE();
+        return existingLifecycleSafeDetails('stale-lifecycle-response');
+      }
       const detail = (detailRaw && typeof detailRaw === 'object') ? { ...detailRaw } : {};
       const detailTimesheet = (detail.timesheet && typeof detail.timesheet === 'object') ? detail.timesheet : {};
       const detailContractWeek = (detail.contract_week && typeof detail.contract_week === 'object') ? detail.contract_week : {};
@@ -106341,6 +106429,9 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
         is_import_authoritative: mergedDetail?.is_import_authoritative === true,
         manual_additional: manualAdditional
       });
+      mergedDetail.__workbench_fetch_purpose = purpose;
+      mergedDetail.__workbench_request_started_at = requestStartedAt;
+      mergedDetail.__workbench_lifecycle_sequence = lifecycleSequenceAtRequest || null;
       GE();
       return mergedDetail;
     } catch (err) {
@@ -106470,6 +106561,11 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     });
 
     const plannedDetailRaw = await fetchContractWeekManualDraftDetails(contractWeekId);
+    if (shouldDiscardForStaleLifecycle()) {
+      L('DISCARD_PLANNED_WEEK_RESULT_FOR_STALE_LIFECYCLE', { purpose, contractWeekId, lifecycleSequenceAtRequest });
+      GE();
+      return existingLifecycleSafeDetails('stale-lifecycle-response');
+    }
 
     const plannedDetail =
       (plannedDetailRaw && typeof plannedDetailRaw === 'object')
@@ -106977,6 +107073,9 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
       sheet_scope: detail.sheet_scope || null,
       summary_stage: detail.summary_stage || null
     });
+    detail.__workbench_fetch_purpose = purpose;
+    detail.__workbench_request_started_at = requestStartedAt;
+    detail.__workbench_lifecycle_sequence = lifecycleSequenceAtRequest || null;
     GE();
     return detail;
   } catch (err) {
@@ -106985,6 +107084,7 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     throw err;
   }
 }
+
 
 
 
@@ -131146,206 +131246,143 @@ const onSaveTimesheet = async () => {
       safe_for_lifecycle: true,
       refresh_result: refreshResult
     };
-  };
+   };
 
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+
+  const pickSignature = (...values) => {
+    for (const value of values) {
+      const clean = trimStr(value);
+      if (clean) return clean;
+    }
+    return '';
+  };
 
   const adoptSimpleTimesheetLifecycleSignatureFromSaveResponse = (saveResult, args = {}) => {
-    const id = String(args.timesheetId || '').trim();
-    const expectedContractWeekId = String(args.contractWeekId || '').trim();
+  const ctx = window.modalCtx || null;
+  if (!ctx) {
+    return { ok: false, reason: 'NO_MODAL_CONTEXT' };
+  }
 
-    if (!id) {
-      return {
-        ok: false,
-        error_code: 'MISSING_TIMESHEET_ID',
-        refresh_required: true,
-        safe_for_lifecycle: false
-      };
-    }
+  const identity = (args && typeof args === 'object') ? args : {};
+  const rowNow = ctx.data || {};
+  const detailsNow = ctx.timesheetDetails || {};
+  const tsfinNow = detailsNow.tsfin || {};
+  const tsNow = detailsNow.timesheet || {};
+  const response = (saveResult && typeof saveResult === 'object') ? saveResult : {};
+  const responseData = (response.data && typeof response.data === 'object') ? response.data : {};
+  const responseTsfin = (response.tsfin && typeof response.tsfin === 'object') ? response.tsfin : {};
+  const responseLifecycle = (response.lifecycle_patch && typeof response.lifecycle_patch === 'object')
+    ? response.lifecycle_patch
+    : ((response.lifecyclePatch && typeof response.lifecyclePatch === 'object') ? response.lifecyclePatch : {});
 
-    const response = (saveResult?.response && typeof saveResult.response === 'object') ? saveResult.response : {};
-    const lifecycle = (saveResult?.lifecycle_signature && typeof saveResult.lifecycle_signature === 'object')
-      ? saveResult.lifecycle_signature
-      : ((response.lifecycle_signature && typeof response.lifecycle_signature === 'object') ? response.lifecycle_signature : {});
-    const responseData = (response.data && typeof response.data === 'object') ? response.data : {};
-    const responseTsfin = (response.tsfin && typeof response.tsfin === 'object') ? response.tsfin : {};
-    const resultTsfin = (saveResult?.updatedTsfin && typeof saveResult.updatedTsfin === 'object') ? saveResult.updatedTsfin : {};
+  const id = trimStr(
+    identity.timesheet_id || identity.current_timesheet_id ||
+    response.current_timesheet_id || response.timesheet_id || responseData.current_timesheet_id || responseData.timesheet_id ||
+    responseTsfin.timesheet_id || rowNow.current_timesheet_id || rowNow.timesheet_id || detailsNow.current_timesheet_id || tsNow.timesheet_id || ''
+  );
+  if (!id) {
+    return { ok: false, reason: 'MISSING_TIMESHEET_ID' };
+  }
 
-    const signature = String(
-      saveResult?.backend_row_signature ||
-      saveResult?.mutation_row_signature ||
-      saveResult?.row_signature ||
-      saveResult?.expected_row_signature ||
-      response.backend_row_signature ||
-      response.mutation_row_signature ||
-      response.row_signature ||
-      response.expected_row_signature ||
-      response.signature ||
-      lifecycle.backend_row_signature ||
-      lifecycle.mutation_row_signature ||
-      lifecycle.row_signature ||
-      lifecycle.expected_row_signature ||
-      lifecycle.signature ||
-      responseData.backend_row_signature ||
-      responseData.mutation_row_signature ||
-      responseData.row_signature ||
-      responseData.expected_row_signature ||
-      responseTsfin.backend_row_signature ||
-      responseTsfin.mutation_row_signature ||
-      responseTsfin.row_signature ||
-      responseTsfin.expected_row_signature ||
-      resultTsfin.backend_row_signature ||
-      resultTsfin.mutation_row_signature ||
-      resultTsfin.row_signature ||
-      resultTsfin.expected_row_signature ||
-      ''
-    ).trim();
+  const signature = pickSignature(
+    response.backend_row_signature,
+    response.mutation_row_signature,
+    response.row_signature,
+    response.expected_row_signature,
+    responseData.backend_row_signature,
+    responseData.mutation_row_signature,
+    responseData.row_signature,
+    responseData.expected_row_signature,
+    responseTsfin.backend_row_signature,
+    responseTsfin.mutation_row_signature,
+    responseTsfin.row_signature,
+    responseTsfin.expected_row_signature,
+    responseLifecycle.backend_row_signature,
+    responseLifecycle.mutation_row_signature,
+    responseLifecycle.row_signature,
+    responseLifecycle.expected_row_signature
+  );
 
-    if (!signature) {
-      return {
-        ok: false,
-        error_code: 'LIFECYCLE_SIGNATURE_NOT_RETURNED',
-        refresh_required: true,
-        safe_for_lifecycle: false
-      };
-    }
+  if (!signature) {
+    try {
+      ctx.__simpleTimesheetLifecycleRefreshRequired = true;
+      ctx.__simpleTimesheetLifecycleRefreshTimesheetId = String(id);
+      ctx.__simpleTimesheetLifecycleRefreshMessage = 'Saved, but the refreshed timesheet signature was not returned. Refresh before authorising.';
+      ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+      ctx.__timesheetLifecycleCriticalStateReason = 'SAVE_RESPONSE_MISSING_SIGNATURE';
+      ctx.__timesheetLifecyclePermissionStateComplete = false;
+      ctx.__timesheetLifecyclePriorityBadgesComplete = false;
+    } catch {}
+    return { ok: false, reason: 'MISSING_ROW_SIGNATURE', timesheet_id: id };
+  }
 
-    const returnedId = String(
-      response.current_timesheet_id ||
-      response.timesheet_id ||
-      saveResult?.current_timesheet_id ||
-      saveResult?.timesheet_id ||
-      lifecycle.current_timesheet_id ||
-      lifecycle.timesheet_id ||
-      ''
-    ).trim();
-
-    if (returnedId && returnedId !== id) {
-      return {
-        ok: false,
-        error_code: 'TIMESHEET_IDENTITY_CHANGED_AFTER_SAVE',
-        returned_timesheet_id: returnedId,
-        refresh_required: true,
-        safe_for_lifecycle: false
-      };
-    }
-
-    const returnedContractWeekId = String(
-      response.contract_week_id ||
-      lifecycle.contract_week_id ||
-      responseData.contract_week_id ||
-      ''
-    ).trim();
-
-    if (expectedContractWeekId && returnedContractWeekId && returnedContractWeekId !== expectedContractWeekId) {
-      return {
-        ok: false,
-        error_code: 'CONTRACT_WEEK_IDENTITY_CHANGED_AFTER_SAVE',
-        returned_contract_week_id: returnedContractWeekId,
-        refresh_required: true,
-        safe_for_lifecycle: false
-      };
-    }
-
-    window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
-    const liveCtx = window.modalCtx;
-    const liveModalId = String(
-      liveCtx.data?.current_timesheet_id ||
-      liveCtx.data?.timesheet_id ||
-      liveCtx.timesheetDetails?.current_timesheet_id ||
-      liveCtx.timesheetDetails?.timesheet?.current_timesheet_id ||
-      liveCtx.timesheetDetails?.timesheet?.timesheet_id ||
-      ''
-    ).trim();
-
-    if (liveModalId && liveModalId !== id) {
-      return {
-        ok: false,
-        error_code: 'MODAL_IDENTITY_CHANGED_AFTER_SAVE',
-        modal_timesheet_id: liveModalId,
-        refresh_required: true,
-        safe_for_lifecycle: false
-      };
-    }
-
-    const signaturePatch = {
-      backend_row_signature: signature,
-      mutation_row_signature: signature,
-      row_signature: signature,
-      expected_row_signature: signature
-    };
-
-    liveCtx.data = {
-      ...(liveCtx.data || rowNow || {}),
-      id,
-      timesheet_id: id,
-      current_timesheet_id: id,
-      expected_timesheet_id: id,
-      ...signaturePatch,
-      row_stale: false,
-      refresh_required: false,
-      lifecycle_refresh_failed: false,
-      lifecycle_refresh_error: ''
-    };
-
-    const detailsNow = (liveCtx.timesheetDetails && typeof liveCtx.timesheetDetails === 'object')
-      ? liveCtx.timesheetDetails
-      : {};
-    liveCtx.timesheetDetails = {
-      ...detailsNow,
-      current_timesheet_id: id,
-      timesheet_id: id,
-      ...signaturePatch,
-      row_stale: false,
-      refresh_required: false,
-      lifecycle_refresh_failed: false,
-      lifecycle_refresh_error: '',
-      row: {
-        ...(detailsNow.row || {}),
-        id,
-        timesheet_id: id,
-        current_timesheet_id: id,
-        expected_timesheet_id: id,
-        ...signaturePatch,
-        row_stale: false,
-        refresh_required: false,
-        lifecycle_refresh_failed: false,
-        lifecycle_refresh_error: ''
-      },
-      timesheet: {
-        ...(detailsNow.timesheet || {}),
-        timesheet_id: id,
-        current_timesheet_id: id,
-        ...signaturePatch
-      }
-    };
-
-    liveCtx.timesheetMeta = {
-      ...(liveCtx.timesheetMeta || {}),
-      expected_timesheet_id: id,
-      hasTs: true,
-      isPlannedWeek: false
-    };
-
-    liveCtx.lifecycle_refresh_failed = false;
-    liveCtx.lifecycle_refresh_error = '';
-    liveCtx.refresh_required = false;
-    delete liveCtx.__simpleTimesheetLifecycleRefreshRequired;
-    delete liveCtx.__simpleTimesheetLifecycleRefreshTimesheetId;
-    delete liveCtx.__simpleTimesheetLifecycleRefreshMessage;
-
-    window.modalCtx = liveCtx;
-
-    return {
-      ok: true,
-      signature,
-      refresh_required: false,
-      safe_for_lifecycle: true,
-      source: 'tsfin_patch_response'
-    };
+  const lifecyclePatch = {
+    ...responseLifecycle,
+    ...responseData,
+    ...response,
+    // TSFIN is deliberately nested and only lifecycle/signature fields are used by applyTimesheetLifecyclePatchToModal.
+    tsfin: responseTsfin,
+    id,
+    timesheet_id: id,
+    current_timesheet_id: id,
+    expected_timesheet_id: id,
+    contract_week_id: identity.contract_week_id || response.contract_week_id || responseData.contract_week_id || rowNow.contract_week_id || detailsNow.contract_week_id || null,
+    booking_id: identity.booking_id || response.booking_id || responseData.booking_id || rowNow.booking_id || detailsNow.booking_id || null,
+    backend_row_signature: signature,
+    mutation_row_signature: signature,
+    row_signature: signature,
+    expected_row_signature: signature,
+    refresh_required: false,
+    row_stale: false,
+    lifecycle_refresh_failed: false
   };
 
-  const onlyExpensesDirty = !!(expensesChanged && !hoursScheduleDirty && !refChanged && !segmentControlsDirty && !shouldChangeHold);
+  let patchResult = null;
+  if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
+    patchResult = applyTimesheetLifecyclePatchToModal(ctx, lifecyclePatch, {
+      action: 'save',
+      source: 'tsfin_patch_response',
+      requireSignature: true,
+      allowFallback: true,
+      timesheet_id: id,
+      contract_week_id: lifecyclePatch.contract_week_id || undefined,
+      mutationStartedAt: Date.now()
+    });
+  }
 
+  if (patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete) {
+    ctx.__timesheetLatestSuccessfulSaveAt = Date.now();
+    ctx.__timesheetLifecycleSignatureTrustedAfterSave = true;
+    delete ctx.__timesheetAuthorisePreflightRefreshRequired;
+    delete ctx.__timesheetAuthorisePreflightRefreshTimesheetId;
+    delete ctx.__timesheetAuthorisePreflightRefreshContractWeekId;
+    delete ctx.__timesheetAuthorisePreflightRefreshBookingId;
+    delete ctx.__timesheetAuthorisePreflightRefreshReason;
+    delete ctx.__timesheetAuthorisePreflightRefreshMarkedAt;
+    delete ctx.__simpleTimesheetLifecycleRefreshRequired;
+    ctx.__timesheetLifecycleCriticalStateIncomplete = false;
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
+    } catch {}
+    return { ok: true, signature, timesheet_id: id, patchResult };
+  }
+
+  ctx.__simpleTimesheetLifecycleRefreshRequired = true;
+  ctx.__simpleTimesheetLifecycleRefreshTimesheetId = String(id);
+  ctx.__simpleTimesheetLifecycleRefreshMessage = 'Saved, but permission-critical lifecycle state is incomplete. Refresh before authorising.';
+  ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+  ctx.__timesheetLifecycleCriticalStateReason = patchResult?.reason || 'SAVE_RESPONSE_LIFECYCLE_PATCH_INCOMPLETE';
+  ctx.__timesheetLifecyclePermissionStateComplete = false;
+  ctx.__timesheetLifecyclePriorityBadgesComplete = false;
+  try {
+    const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+    if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
+  } catch {}
+  return { ok: false, reason: patchResult?.reason || 'PATCH_INCOMPLETE', timesheet_id: id, signature };
+};
+  const onlyExpensesDirty = !!(expensesChanged && !hoursScheduleDirty && !refChanged && !segmentControlsDirty && !shouldChangeHold);
   if (onlyExpensesDirty && expenseStorageTargetForSave === 'CONTRACT_WEEK_DRAFT') {
     if (isAuthorisedNow) {
       alert('This timesheet is authorised. Unauthorise it before changing expenses.');
@@ -132297,11 +132334,50 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
       return { ok: false };
     }
   }
-  // Post-save row update (same as before)
-  const finalRefresh =
-    (typeof window.modalCtx?.refreshTimesheetAfterFinanceChange === 'function')
-      ? await window.modalCtx.refreshTimesheetAfterFinanceChange({ silent: true })
+   // Post-save row update: adopt trusted lifecycle/signature state first, then keep non-critical refreshes lazy.
+  const canTrustLifecycleAfterSave = (typeof hasTrustedTimesheetLifecycleSignature === 'function')
+    ? hasTrustedTimesheetLifecycleSignature(window.modalCtx || {}, { timesheet_id: tsIdSave })
+    : false;
+
+  const finalRefreshNeededForNonLifecycle = !!(
+    scheduleChangedWeekly || scheduleChangedDaily || extrasChangedWeekly ||
+    blockedScheduleChangedWeekly || blockedScheduleChangedDaily || blockedExtrasChangedWeekly ||
+    refChanged || shouldChangeHold || wantsMarkPaid || segmentControlsDirty ||
+    qrActionBackend || qrSendNewNow
+  );
+
+  let finalRefresh = null;
+  if (!canTrustLifecycleAfterSave || finalRefreshNeededForNonLifecycle) {
+    finalRefresh = (typeof window.modalCtx?.refreshTimesheetAfterFinanceChange === 'function')
+      ? await window.modalCtx.refreshTimesheetAfterFinanceChange({
+          silent: true,
+          purpose: canTrustLifecycleAfterSave ? 'background_refresh' : 'lifecycle_fallback',
+          lifecycleSequence: (typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(window.modalCtx || {}) : Number(window.modalCtx?.__timesheetLifecycleMutationSeq || 0) || null
+        })
       : null;
+  }
+
+  try {
+    if (canTrustLifecycleAfterSave && typeof noteTimesheetLifecycleMutationSequence === 'function') {
+      noteTimesheetLifecycleMutationSequence(window.modalCtx || {}, Number(window.modalCtx?.__timesheetLifecycleMutationSeq || 0) || null);
+    }
+    if (canTrustLifecycleAfterSave && typeof scheduleTimesheetPostMutationLazyRefresh === 'function') {
+      const saveLazyId = String(
+        window.modalCtx?.data?.current_timesheet_id ||
+        window.modalCtx?.data?.timesheet_id ||
+        tsIdSave ||
+        ''
+      ).trim();
+      scheduleTimesheetPostMutationLazyRefresh({
+        timesheet_id: saveLazyId || tsIdSave,
+        current_timesheet_id: saveLazyId || tsIdSave,
+        action: 'save',
+        active_tab: (typeof window.__getModalFrame === 'function' ? window.__getModalFrame()?.currentTabKey : null) || 'overview',
+        refresh_domains: ['related', 'summary', 'membership', 'badges'],
+        current_mutation_sequence: (typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(window.modalCtx || {}) : Number(window.modalCtx?.__timesheetLifecycleMutationSeq || 0) || null
+      });
+    }
+  } catch {}
 
   if (!isActiveTimesheetModalToken(openToken)) {
     GE();
@@ -132336,6 +132412,27 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
     ? String(finalRefresh.payStateError || '')
     : String(window.modalCtx.timesheetPayStateError || '');
 
+  try {
+    const savePatch = {
+      ...(window.modalCtx.data || {}),
+      ...(window.modalCtx.timesheetDetails?.row || {}),
+      ...(window.modalCtx.timesheetDetails?.timesheet || {}),
+      ...(window.modalCtx.timesheetDetails?.tsfin || {}),
+      id: finalTsId,
+      timesheet_id: finalTsId,
+      current_timesheet_id: finalTsId
+    };
+    if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
+      applyTimesheetLifecyclePatchToModal(window.modalCtx, savePatch, {
+        action: 'save',
+        source: finalRefresh ? 'save-final-refresh' : 'save-existing-details',
+        requireSignature: false,
+        allowFallback: true,
+        timesheet_id: finalTsId
+      });
+    }
+  } catch {}
+
   if (window.modalCtx.timesheetState) {
     window.modalCtx.timesheetState.segmentOverrides      = {};
     window.modalCtx.timesheetState.segmentInvoiceTargets = {};
@@ -132367,9 +132464,15 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
   }
 
   try {
-    const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-    if (fr && fr.entity === 'timesheets' && typeof fr.setTab === 'function') {
-      await safeRerenderTimesheetModal(openToken, fr.currentTabKey || 'overview');
+    const shouldRerenderForNonLifecycleData = !!finalRefresh || finalRefreshNeededForNonLifecycle;
+    if (shouldRerenderForNonLifecycleData) {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (fr && fr.entity === 'timesheets' && typeof fr.setTab === 'function') {
+        await safeRerenderTimesheetModal(openToken, fr.currentTabKey || 'overview');
+      }
+    } else {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (fr && fr.entity === 'timesheets' && typeof fr._updateButtons === 'function') fr._updateButtons();
     }
   } catch {}
 
@@ -247204,7 +247307,7 @@ async function withExistingModalLoadingSpinner(state, reason, runAsync) {
 
 
 async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
-  const { LOGM, L, GC, GE } = getTsLoggers('[TS][UNAUTH]');
+  const { L, GC, GE } = getTsLoggers('[TS][UNAUTH]');
   GC('unauthoriseTimesheet');
 
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -247215,155 +247318,38 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
     }
     return '';
   };
-  const markButtonsBusy = (busy) => {
+  const markCriticalIncomplete = (ctx, reason) => {
     try {
-      const buttons = document.querySelectorAll('[data-action="unauthorise"], .js-timesheet-unauthorise, #timesheetUnauthoriseBtn, #unauthoriseTimesheetBtn');
-      buttons.forEach((btn) => {
-        btn.disabled = !!busy;
-        if (busy) {
-          btn.setAttribute('aria-busy', 'true');
-          btn.setAttribute('data-lifecycle-busy', 'unauthorise');
-        } else if (btn.getAttribute('data-lifecycle-busy') === 'unauthorise') {
-          btn.removeAttribute('aria-busy');
-          btn.removeAttribute('data-lifecycle-busy');
-        }
-      });
+      if (!ctx) return;
+      ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+      ctx.__timesheetLifecycleCriticalStateReason = reason || 'UNAUTHORISE_PATCH_INCOMPLETE';
+      ctx.__timesheetLifecyclePermissionStateComplete = false;
+      ctx.__timesheetLifecyclePriorityBadgesComplete = false;
     } catch {}
   };
-
-
-  const applyUnauthorisedLifecycleStateToModalCtx = (modalCtx, lifecycleRow, sourceLabel = 'unauthorise') => {
-    const ctx = (modalCtx && typeof modalCtx === 'object') ? modalCtx : null;
-    const patch = (lifecycleRow && typeof lifecycleRow === 'object') ? lifecycleRow : {};
-    if (!ctx) return false;
-
-    const resolvedTimesheetId = trimStr(
-      patch.current_timesheet_id ||
-      patch.timesheet_id ||
-      patch.expected_timesheet_id ||
-      ctx.data?.current_timesheet_id ||
-      ctx.data?.timesheet_id ||
-      ''
-    );
-    const resolvedContractWeekId = trimStr(patch.contract_week_id || ctx.data?.contract_week_id || ctx.timesheetDetails?.contract_week_id || '');
-    const processingStatus = trimStr(patch.processing_status || patch.new_processing_status || ctx.data?.processing_status || 'PENDING_AUTH') || 'PENDING_AUTH';
-    const summaryStage = trimStr(patch.summary_stage || patch.tools_stage || processingStatus || ctx.data?.summary_stage || '') || processingStatus;
-    const signature = pickSignature(
-      patch.backend_row_signature,
-      patch.mutation_row_signature,
-      patch.row_signature,
-      patch.expected_row_signature,
-      ctx.data?.backend_row_signature,
-      ctx.data?.mutation_row_signature,
-      ctx.data?.row_signature
-    );
-
-    const writeLifecycle = (surface, options = {}) => {
-      if (!surface || typeof surface !== 'object') return false;
-      if (resolvedTimesheetId) {
-        surface.timesheet_id = resolvedTimesheetId;
-        surface.current_timesheet_id = resolvedTimesheetId;
-        if (options.setId !== false) surface.id = resolvedTimesheetId;
-      }
-      if (resolvedContractWeekId) surface.contract_week_id = resolvedContractWeekId;
-      surface.authorised_at_server = null;
-      surface.authorised_at_utc = null;
-      surface.is_authorised = false;
-      surface.authorised = false;
-      if (processingStatus) surface.processing_status = processingStatus;
-      if (summaryStage) {
-        surface.summary_stage = summaryStage;
-        surface.tools_stage = summaryStage;
-      }
-      if (signature) {
-        surface.backend_row_signature = signature;
-        surface.mutation_row_signature = signature;
-        surface.row_signature = signature;
-        surface.expected_row_signature = signature;
-      }
-      if (Object.prototype.hasOwnProperty.call(surface, 'review_only')) surface.review_only = false;
-      return true;
-    };
-
-    ctx.data = (ctx.data && typeof ctx.data === 'object') ? ctx.data : {};
-    writeLifecycle(ctx.data, { setId: true });
-
-    ctx.timesheetDetails = (ctx.timesheetDetails && typeof ctx.timesheetDetails === 'object') ? ctx.timesheetDetails : {};
-    writeLifecycle(ctx.timesheetDetails, { setId: false });
-
-    ctx.timesheetDetails.row = (ctx.timesheetDetails.row && typeof ctx.timesheetDetails.row === 'object') ? ctx.timesheetDetails.row : {};
-    writeLifecycle(ctx.timesheetDetails.row, { setId: true });
-
-    ctx.timesheetDetails.timesheet = (ctx.timesheetDetails.timesheet && typeof ctx.timesheetDetails.timesheet === 'object') ? ctx.timesheetDetails.timesheet : {};
-    writeLifecycle(ctx.timesheetDetails.timesheet, { setId: false });
-
-    if (ctx.timesheetDetails.tsfin && typeof ctx.timesheetDetails.tsfin === 'object') {
-      ctx.timesheetDetails.tsfin.authorised_at_utc = null;
-      ctx.timesheetDetails.tsfin.is_authorised = false;
-      ctx.timesheetDetails.tsfin.authorised = false;
-      if (resolvedTimesheetId) ctx.timesheetDetails.tsfin.timesheet_id = resolvedTimesheetId;
-      if (processingStatus) ctx.timesheetDetails.tsfin.processing_status = processingStatus;
-      if (signature) {
-        ctx.timesheetDetails.tsfin.backend_row_signature = signature;
-        ctx.timesheetDetails.tsfin.mutation_row_signature = signature;
-        ctx.timesheetDetails.tsfin.row_signature = signature;
-        ctx.timesheetDetails.tsfin.expected_row_signature = signature;
-      }
-    }
-
-    ctx.timesheetMeta = (ctx.timesheetMeta && typeof ctx.timesheetMeta === 'object') ? ctx.timesheetMeta : {};
-    if (resolvedTimesheetId) {
-      ctx.timesheetMeta.expected_timesheet_id = resolvedTimesheetId;
-      ctx.timesheetMeta.hasTs = true;
-      ctx.timesheetMeta.isPlannedWeek = false;
-    }
-    if (resolvedContractWeekId) ctx.timesheetMeta.contract_week_id = resolvedContractWeekId;
-    ctx.timesheetMeta.isAuthorised = false;
-    ctx.timesheetMeta.is_authorised = false;
-    ctx.timesheetMeta.authorised_at_server = null;
-    ctx.timesheetMeta.authorised_at_utc = null;
-
-    ctx.__timesheetLifecycleJustUnauthorised = {
-      timesheet_id: resolvedTimesheetId || null,
-      contract_week_id: resolvedContractWeekId || null,
-      source: sourceLabel,
-      at: Date.now()
-    };
-
+  const clearCriticalIncomplete = (ctx) => {
     try {
-      if (typeof classifyTimesheetEditDomains === 'function') {
-        const refreshedPolicy = classifyTimesheetEditDomains({
-          row: ctx.data || {},
-          details: ctx.timesheetDetails || {},
-          timesheet: ctx.timesheetDetails?.timesheet || null,
-          tsfin: ctx.timesheetDetails?.tsfin || null,
-          financial_snapshot: ctx.timesheetDetails?.financial_snapshot || null,
-          contract_week: ctx.timesheetDetails?.contract_week || null,
-          related: ctx.timesheetRelated || {},
-          action_flags: ctx.timesheetDetails?.action_flags || null,
-          state: ctx.timesheetState || {}
-        });
-        if (typeof applyTimesheetEditDomainPolicyToModalCtx === 'function') {
-          applyTimesheetEditDomainPolicyToModalCtx(ctx, refreshedPolicy);
-        } else {
-          ctx.timesheetEditDomains = refreshedPolicy;
-        }
-      } else {
-        delete ctx.timesheetEditDomains;
-      }
-    } catch (err) {
-      L('post-unauthorise edit-domain refresh failed', { error: String(err?.message || err || '') });
-      delete ctx.timesheetEditDomains;
+      if (!ctx) return;
+      ctx.__timesheetLifecycleCriticalStateIncomplete = false;
+      delete ctx.__timesheetLifecycleCriticalStateReason;
+    } catch {}
+  };
+  const firstAffectedRow = (value) => {
+    if (!value || typeof value !== 'object') return null;
+    const candidates = [value.flattened_rows, value.flattenedRows, value.affected_rows, value.affectedRows, value.rows];
+    for (const arr of candidates) {
+      if (Array.isArray(arr) && arr[0] && typeof arr[0] === 'object') return arr[0];
     }
-
-    return true;
+    return null;
   };
 
   const mc = window.modalCtx || {};
-  const row = (mc.data && mc.data.timesheet_id) ? mc.data : (ctxOrId && ctxOrId.row ? ctxOrId.row : {});
+  const row = (mc.data && (mc.data.timesheet_id || mc.data.current_timesheet_id || mc.data.id))
+    ? mc.data
+    : ((ctxOrId && ctxOrId.row) ? ctxOrId.row : {});
   const tsId = (typeof ctxOrId === 'string')
-    ? ctxOrId
-    : (row.timesheet_id || row.current_timesheet_id || row.id || mc.data?.id || null);
+    ? trimStr(ctxOrId)
+    : trimStr(row.timesheet_id || row.current_timesheet_id || row.id || mc.data?.id || mc.data?.timesheet_id || '');
 
   if (!tsId) {
     L('ERROR: missing timesheetId');
@@ -247376,22 +247362,30 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
     row.backend_row_signature,
     row.mutation_row_signature,
     row.row_signature,
+    row.expected_row_signature,
     mc.data?.backend_row_signature,
     mc.data?.mutation_row_signature,
     mc.data?.row_signature,
     mc.timesheetDetails?.backend_row_signature,
     mc.timesheetDetails?.row_signature,
     mc.timesheetDetails?.row?.backend_row_signature,
-    mc.timesheetDetails?.row?.row_signature
+    mc.timesheetDetails?.row?.row_signature,
+    mc.timesheetDetails?.timesheet?.backend_row_signature,
+    mc.timesheetDetails?.timesheet?.row_signature
   );
+
   const mutationKey = `unauthorise:${tsId}:${expected}`;
   if (!(window.__timesheetLifecycleMutationInFlight instanceof Set)) window.__timesheetLifecycleMutationInFlight = new Set();
-  if (window.__timesheetLifecycleMutationInFlight.has(mutationKey)) {
+  if (window.__timesheetLifecycleMutationInFlight.has(mutationKey) || (window.modalCtx && window.modalCtx.__timesheetLifecycleMutationInFlight === true)) {
     GE();
     return { ok: false, busy: true, reason: 'MUTATION_IN_FLIGHT' };
   }
+
   window.__timesheetLifecycleMutationInFlight.add(mutationKey);
-  markButtonsBusy(true);
+  const mutationStartedAt = Date.now();
+  if (typeof setTimesheetLifecycleBusy === 'function') {
+    setTimesheetLifecycleBusy(true, { action: 'unauthorise', timesheet_id: tsId, reason: 'Unauthorising timesheet', started_at: mutationStartedAt });
+  }
 
   try {
     const encId = encodeURIComponent(tsId);
@@ -247410,62 +247404,104 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
     const json = await apiPostJson(urlPath, payload);
     L('unauthorise result', json);
 
-    let affectedRefresh = null;
-    if (typeof refreshTimesheetLifecycleAffectedRows === 'function') {
-      affectedRefresh = await refreshTimesheetLifecycleAffectedRows(json, {
-        context: 'timesheet_modal',
+    let patchResult = { applied: false, permissionStateComplete: false, priorityBadgesComplete: false, reason: 'PATCH_HELPER_UNAVAILABLE' };
+    if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
+      patchResult = applyTimesheetLifecyclePatchToModal(window.modalCtx || mc, json, {
         action: 'unauthorise',
-        state: window.modalCtx || null,
-        apply: true
+        source: 'unauthorise-post',
+        requireSignature: true,
+        allowFallback: true,
+        timesheet_id: tsId,
+        current_timesheet_id: tsId,
+        mutationStartedAt
       });
     }
-    const affectedRow = affectedRefresh?.flattened_rows?.[0] || null;
-    const resolvedId = trimStr(json?.current_timesheet_id || json?.new_timesheet_id || json?.timesheet_id || affectedRow?.current_timesheet_id || tsId) || String(tsId);
-    const updatedRow = {
-      ...(mc.data || row),
-      ...(affectedRow || {}),
-      timesheet_id: resolvedId,
-      id: resolvedId,
-      current_timesheet_id: resolvedId,
-      authorised_at_server: null,
-      authorised_at_utc: null,
-      is_authorised: false,
-      authorised: false,
-      review_only: false,
-      processing_status: affectedRow?.processing_status || json?.processing_status || json?.new_processing_status || 'PENDING_AUTH',
-      summary_stage: affectedRow?.summary_stage || json?.summary_stage || mc.data?.summary_stage || row.summary_stage || 'PENDING_AUTH',
-      tools_stage: affectedRow?.tools_stage || json?.tools_stage || affectedRow?.summary_stage || json?.summary_stage || 'PENDING_AUTH',
-      backend_row_signature: affectedRow?.backend_row_signature || json?.backend_row_signature || json?.row_signature || null,
-      mutation_row_signature: affectedRow?.backend_row_signature || json?.backend_row_signature || json?.row_signature || null,
-      row_signature: affectedRow?.backend_row_signature || json?.backend_row_signature || json?.row_signature || null,
-      expected_row_signature: affectedRow?.backend_row_signature || json?.backend_row_signature || json?.row_signature || null
-    };
 
-    window.modalCtx = window.modalCtx || {};
-    window.modalCtx.data = updatedRow;
-    window.modalCtx.timesheetMeta = window.modalCtx.timesheetMeta || {};
-    window.modalCtx.timesheetMeta.expected_timesheet_id = resolvedId;
-    window.modalCtx.timesheetMeta.hasTs = true;
-    window.modalCtx.timesheetMeta.isPlannedWeek = false;
-    window.modalCtx.timesheetMeta.isAuthorised = false;
-    window.modalCtx.timesheetMeta.is_authorised = false;
-    window.modalCtx.timesheetMeta.authorised_at_server = null;
-    window.modalCtx.timesheetMeta.authorised_at_utc = null;
-    applyUnauthorisedLifecycleStateToModalCtx(window.modalCtx, updatedRow, 'unauthorise-success');
+    let affectedRefresh = null;
+    let affectedRow = firstAffectedRow(json);
+    if (!(patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete)) {
+      markCriticalIncomplete(window.modalCtx || mc, patchResult?.reason || 'UNAUTHORISE_PATCH_INCOMPLETE');
+      if (typeof refreshTimesheetLifecycleAffectedRows === 'function') {
+        affectedRefresh = await refreshTimesheetLifecycleAffectedRows(json, {
+          context: 'timesheet_modal',
+          action: 'unauthorise',
+          state: window.modalCtx || null,
+          apply: false,
+          network: 'auto',
+          require_signature: true,
+          require_permission_state: true,
+          max_items: 4
+        });
+        affectedRow = firstAffectedRow(affectedRefresh) || affectedRow;
+      }
+      if (affectedRow && typeof applyTimesheetLifecyclePatchToModal === 'function') {
+        patchResult = applyTimesheetLifecyclePatchToModal(window.modalCtx || mc, affectedRow, {
+          action: 'unauthorise',
+          source: 'unauthorise-affected-rows',
+          requireSignature: true,
+          allowFallback: true,
+          timesheet_id: tsId,
+          current_timesheet_id: tsId,
+          mutationStartedAt
+        });
+      }
+    }
 
-    try {
-      window.__pendingFocus = { section: 'timesheets', ids: [String(resolvedId)], primaryIds: [String(resolvedId)] };
-    } catch {}
+    const patchComplete = !!(patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete);
+    if (patchComplete) {
+      clearCriticalIncomplete(window.modalCtx || mc);
+      try {
+        const resolvedId = trimStr(patchResult.current_timesheet_id || window.modalCtx?.data?.current_timesheet_id || window.modalCtx?.data?.timesheet_id || tsId) || String(tsId);
+        window.__pendingFocus = { section: 'timesheets', ids: [String(resolvedId)], primaryIds: [String(resolvedId)] };
+      } catch {}
+      try {
+        if (typeof noteTimesheetLifecycleMutationSequence === 'function') {
+          noteTimesheetLifecycleMutationSequence(window.modalCtx || mc, Number(window.modalCtx?.__timesheetLifecycleMutationSeq || 0) || null);
+        }
+        if (typeof scheduleTimesheetPostMutationLazyRefresh === 'function') {
+          const resolvedLazyId = trimStr(patchResult.current_timesheet_id || window.modalCtx?.data?.current_timesheet_id || window.modalCtx?.data?.timesheet_id || tsId) || String(tsId);
+          scheduleTimesheetPostMutationLazyRefresh({
+            timesheet_id: resolvedLazyId,
+            current_timesheet_id: resolvedLazyId,
+            action: 'unauthorise',
+            active_tab: (typeof window.__getModalFrame === 'function' ? window.__getModalFrame()?.currentTabKey : null) || 'overview',
+            refresh_domains: ['related', 'summary', 'membership', 'badges'],
+            current_mutation_sequence: (typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(window.modalCtx || mc) : Number(window.modalCtx?.__timesheetLifecycleMutationSeq || 0) || null
+          });
+        }
+      } catch {}
+      try {
+        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
+      } catch {}
+      L('UPDATED ROW (patched)', { id: window.modalCtx?.data?.id || tsId, patchComplete: true });
+    } else {
+      markCriticalIncomplete(window.modalCtx || mc, patchResult?.reason || 'UNAUTHORISE_CRITICAL_PATCH_INCOMPLETE');
+      try {
+        const ctx = window.modalCtx || mc;
+        ctx.__simpleTimesheetLifecycleRefreshRequired = true;
+        ctx.__simpleTimesheetLifecycleRefreshTimesheetId = String(tsId);
+        ctx.__simpleTimesheetLifecycleRefreshMessage = 'Timesheet unauthorised, but the latest permission-critical state is still refreshing. Close and reopen if controls do not settle.';
+      } catch {}
+      L('unauthorise patch incomplete; unsafe actions remain disabled', patchResult);
+    }
 
-    L('UPDATED ROW', updatedRow);
     GE();
-    return { ok: true, updatedRow, affected_refresh: affectedRefresh, json };
+    return {
+      ok: true,
+      updatedRow: window.modalCtx?.data || null,
+      patch_applied: !!patchResult?.applied,
+      critical_patch_complete: patchComplete,
+      affected_refresh: affectedRefresh,
+      json
+    };
   } finally {
-    window.__timesheetLifecycleMutationInFlight.delete(mutationKey);
-    markButtonsBusy(false);
+    try { window.__timesheetLifecycleMutationInFlight.delete(mutationKey); } catch {}
+    if (typeof setTimesheetLifecycleBusy === 'function') {
+      setTimesheetLifecycleBusy(false, { action: 'unauthorise', timesheet_id: tsId, reason: 'Unauthorise settled' });
+    }
   }
 }
-
 
 
 
@@ -281809,7 +281845,6 @@ function renderTimesheetLinesTab(ctx) {
 
 
 
-
 async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUTH]');
   GC('authoriseTimesheet');
@@ -281828,30 +281863,41 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     }
     return '';
   };
-  const markButtonsBusy = (busy) => {
+  const firstAffectedRow = (value) => {
+    if (!value || typeof value !== 'object') return null;
+    const candidates = [value.flattened_rows, value.flattenedRows, value.affected_rows, value.affectedRows, value.rows];
+    for (const arr of candidates) {
+      if (Array.isArray(arr) && arr[0] && typeof arr[0] === 'object') return arr[0];
+    }
+    return null;
+  };
+  const markCriticalIncomplete = (ctx, reason) => {
     try {
-      const buttons = document.querySelectorAll('[data-action="authorise"], .js-timesheet-authorise, #timesheetAuthoriseBtn, #authoriseTimesheetBtn');
-      buttons.forEach((btn) => {
-        btn.disabled = !!busy;
-        if (busy) {
-          btn.setAttribute('aria-busy', 'true');
-          btn.setAttribute('data-lifecycle-busy', 'authorise');
-        } else if (btn.getAttribute('data-lifecycle-busy') === 'authorise') {
-          btn.removeAttribute('aria-busy');
-          btn.removeAttribute('data-lifecycle-busy');
-        }
-      });
+      if (!ctx) return;
+      ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+      ctx.__timesheetLifecycleCriticalStateReason = reason || 'AUTHORISE_PATCH_INCOMPLETE';
+      ctx.__timesheetLifecyclePermissionStateComplete = false;
+      ctx.__timesheetLifecyclePriorityBadgesComplete = false;
+    } catch {}
+  };
+  const clearCriticalIncomplete = (ctx) => {
+    try {
+      if (!ctx) return;
+      ctx.__timesheetLifecycleCriticalStateIncomplete = false;
+      delete ctx.__timesheetLifecycleCriticalStateReason;
     } catch {}
   };
 
   let mc = window.modalCtx || {};
-  let row = (mc.data && mc.data.timesheet_id) ? mc.data : (ctxOrId && ctxOrId.row ? ctxOrId.row : {});
+  let row = (mc.data && (mc.data.timesheet_id || mc.data.current_timesheet_id || mc.data.id))
+    ? mc.data
+    : ((ctxOrId && ctxOrId.row) ? ctxOrId.row : {});
   let tsId = (typeof ctxOrId === 'string')
-    ? String(ctxOrId)
-    : (row.timesheet_id || row.current_timesheet_id || row.id || mc.data?.timesheet_id || null);
+    ? trimStr(ctxOrId)
+    : trimStr(row.timesheet_id || row.current_timesheet_id || row.id || mc.data?.timesheet_id || '');
 
   if (!tsId) {
-    const detailCurrentId = mc.timesheetDetails?.current_timesheet_id || mc.timesheetDetails?.timesheet?.timesheet_id || null;
+    const detailCurrentId = trimStr(mc.timesheetDetails?.current_timesheet_id || mc.timesheetDetails?.timesheet?.current_timesheet_id || mc.timesheetDetails?.timesheet?.timesheet_id || '');
     if (detailCurrentId) {
       try {
         if (typeof tsModalAdoptTimesheetId === 'function') {
@@ -281860,6 +281906,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
           window.modalCtx = window.modalCtx || {};
           window.modalCtx.data = window.modalCtx.data || {};
           window.modalCtx.data.timesheet_id = String(detailCurrentId);
+          window.modalCtx.data.current_timesheet_id = String(detailCurrentId);
           window.modalCtx.data.id = String(detailCurrentId);
           window.modalCtx.timesheetMeta = window.modalCtx.timesheetMeta || {};
           window.modalCtx.timesheetMeta.expected_timesheet_id = String(detailCurrentId);
@@ -281869,8 +281916,9 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       } catch (e) {
         L('canonical identity adoption before authorise failed (non-fatal)', e);
       }
-      row = (window.modalCtx && window.modalCtx.data && window.modalCtx.data.timesheet_id) ? window.modalCtx.data : row;
-      tsId = String(detailCurrentId);
+      mc = window.modalCtx || mc || {};
+      row = (mc.data && (mc.data.timesheet_id || mc.data.current_timesheet_id || mc.data.id)) ? mc.data : row;
+      tsId = detailCurrentId;
     }
   }
 
@@ -281880,181 +281928,61 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     return { ok: false, blocked: true, reason: 'NO_REAL_TIMESHEET' };
   }
 
-  const liveCtxForSafety = window.modalCtx || mc || {};
-  const refreshBlockedId = trimStr(liveCtxForSafety.__simpleTimesheetLifecycleRefreshTimesheetId);
-  const lifecycleRefreshRequired = liveCtxForSafety.__simpleTimesheetLifecycleRefreshRequired === true;
-  if (lifecycleRefreshRequired && (!refreshBlockedId || refreshBlockedId === trimStr(tsId))) {
-    toastWarn(
-      trimStr(liveCtxForSafety.__simpleTimesheetLifecycleRefreshMessage) ||
-      'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Close and reopen the timesheet before authorising.'
-    );
+  const expected = trimStr(expectedTimesheetId) || trimStr(window.modalCtx?.timesheetMeta?.expected_timesheet_id) || String(tsId);
+  const mutationKey = `authorise:${tsId}:${expected}`;
+  if (!(window.__timesheetLifecycleMutationInFlight instanceof Set)) window.__timesheetLifecycleMutationInFlight = new Set();
+  if (window.__timesheetLifecycleMutationInFlight.has(mutationKey) || (window.modalCtx && window.modalCtx.__timesheetLifecycleMutationInFlight === true)) {
     GE();
-    return {
-      ok: false,
-      blocked: true,
-      reason: 'LIFECYCLE_REFRESH_REQUIRED',
-      refresh_required: true,
-      current_timesheet_id: String(tsId)
-    };
+    return { ok: false, busy: true, reason: 'MUTATION_IN_FLIGHT' };
   }
 
-  const mergeAuthorisePreflightLifecycleRow = (freshRow, targetTimesheetId) => {
-    const id = trimStr(targetTimesheetId);
-    const fresh = (freshRow && typeof freshRow === 'object') ? freshRow : {};
-    if (!id) return '';
+  window.__timesheetLifecycleMutationInFlight.add(mutationKey);
+  const mutationStartedAt = Date.now();
+  if (typeof setTimesheetLifecycleBusy === 'function') {
+    setTimesheetLifecycleBusy(true, { action: 'authorise', timesheet_id: tsId, reason: 'Authorising timesheet', started_at: mutationStartedAt });
+  }
 
-    const signature = pickSignature(
-      fresh.backend_row_signature,
-      fresh.mutation_row_signature,
-      fresh.row_signature,
-      fresh.expected_row_signature
-    );
-    if (!signature) return '';
-
-    window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
-    const liveCtx = window.modalCtx;
-    const signaturePatch = {
-      backend_row_signature: signature,
-      mutation_row_signature: signature,
-      row_signature: signature,
-      expected_row_signature: signature
-    };
-    const authoritativeRowPatch = {
-      ...fresh,
-      id,
-      timesheet_id: id,
-      current_timesheet_id: id,
-      expected_timesheet_id: id,
-      ...signaturePatch,
-      row_stale: false,
-      refresh_required: false,
-      lifecycle_refresh_failed: false,
-      lifecycle_refresh_error: ''
-    };
-
-    liveCtx.data = {
-      ...(liveCtx.data || row || {}),
-      ...authoritativeRowPatch
-    };
-
-    const detailsNow = (liveCtx.timesheetDetails && typeof liveCtx.timesheetDetails === 'object')
-      ? liveCtx.timesheetDetails
-      : {};
-    liveCtx.timesheetDetails = {
-      ...detailsNow,
-      current_timesheet_id: id,
-      timesheet_id: id,
-      ...signaturePatch,
-      row_stale: false,
-      refresh_required: false,
-      lifecycle_refresh_failed: false,
-      lifecycle_refresh_error: '',
-      row: {
-        ...(detailsNow.row || {}),
-        ...authoritativeRowPatch
-      },
-      timesheet: {
-        ...(detailsNow.timesheet || {}),
-        timesheet_id: id,
-        current_timesheet_id: id,
-        ...signaturePatch
-      }
-    };
-
-    liveCtx.timesheetMeta = {
-      ...(liveCtx.timesheetMeta || {}),
-      expected_timesheet_id: id,
-      hasTs: true,
-      isPlannedWeek: false
-    };
-
-    liveCtx.lifecycle_refresh_failed = false;
-    liveCtx.lifecycle_refresh_error = '';
-    liveCtx.refresh_required = false;
-    delete liveCtx.__timesheetAuthorisePreflightRefreshRequired;
-    delete liveCtx.__timesheetAuthorisePreflightRefreshTimesheetId;
-    delete liveCtx.__timesheetAuthorisePreflightRefreshContractWeekId;
-    delete liveCtx.__timesheetAuthorisePreflightRefreshBookingId;
-    delete liveCtx.__timesheetAuthorisePreflightRefreshReason;
-    delete liveCtx.__timesheetAuthorisePreflightRefreshMarkedAt;
-
-    try {
-      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
-    } catch {}
-
-    return signature;
-  };
-
-  const refreshAuthoriseGuardsBeforeMutation = async () => {
-    const liveCtx = window.modalCtx || mc || {};
-    const id = trimStr(
-      tsId ||
-      liveCtx.data?.current_timesheet_id ||
-      liveCtx.data?.timesheet_id ||
-      liveCtx.timesheetDetails?.current_timesheet_id ||
-      liveCtx.timesheetDetails?.timesheet?.current_timesheet_id ||
-      liveCtx.timesheetDetails?.timesheet?.timesheet_id ||
-      liveCtx.timesheetDetails?.row?.current_timesheet_id ||
-      liveCtx.timesheetDetails?.row?.timesheet_id ||
-      ''
-    );
-    if (!id) return { ok: true, skipped: true };
-
-    const markerRequired = liveCtx.__timesheetAuthorisePreflightRefreshRequired === true;
-    const markerId = trimStr(liveCtx.__timesheetAuthorisePreflightRefreshTimesheetId);
-    const sameMarkedTimesheet = markerRequired && (!markerId || markerId === id);
-    const refreshRequired = liveCtx.refresh_required === true
-      || liveCtx.data?.refresh_required === true
-      || liveCtx.timesheetDetails?.refresh_required === true
-      || liveCtx.timesheetDetails?.row?.refresh_required === true;
-
-    if (!sameMarkedTimesheet && !refreshRequired) {
-      return { ok: true, skipped: true };
+  const runTrustedSignaturePreflight = async () => {
+    if (typeof hasTrustedTimesheetLifecycleSignature === 'function' && hasTrustedTimesheetLifecycleSignature(window.modalCtx || mc, { timesheet_id: tsId })) {
+      return { ok: true, skipped: true, trusted: true };
     }
 
     if (typeof refreshTimesheetLifecycleAffectedRows !== 'function') {
-      if (sameMarkedTimesheet || refreshRequired) {
-        const message = 'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Close and reopen the timesheet before authorising.';
-        toastWarn(message);
-        return {
+      return {
+        ok: false,
+        blocked: true,
+        result: {
           ok: false,
           blocked: true,
-          result: {
-            ok: false,
-            blocked: true,
-            reason: 'AUTHORISE_PREFLIGHT_REFRESH_UNAVAILABLE',
-            refresh_required: true,
-            current_timesheet_id: id
-          }
-        };
-      }
-      return { ok: true, skipped: true };
+          reason: 'AUTHORISE_TRUSTED_SIGNATURE_UNAVAILABLE',
+          refresh_required: true,
+          current_timesheet_id: tsId
+        }
+      };
     }
 
+    const liveCtx = window.modalCtx || mc || {};
     const contractWeekId = trimStr(
       liveCtx.__timesheetAuthorisePreflightRefreshContractWeekId ||
       liveCtx.data?.contract_week_id ||
       liveCtx.timesheetDetails?.contract_week_id ||
-      liveCtx.timesheetDetails?.row?.contract_week_id ||
-      ''
+      liveCtx.timesheetDetails?.row?.contract_week_id || ''
     );
     const bookingId = trimStr(
       liveCtx.__timesheetAuthorisePreflightRefreshBookingId ||
       liveCtx.data?.booking_id ||
       liveCtx.timesheetDetails?.booking_id ||
       liveCtx.timesheetDetails?.contract_week?.booking_id ||
-      liveCtx.timesheetDetails?.row?.booking_id ||
-      ''
+      liveCtx.timesheetDetails?.row?.booking_id || ''
     );
 
     let refreshResult = null;
     try {
       refreshResult = await refreshTimesheetLifecycleAffectedRows({
-        row_key: `timesheet:${id}`,
-        timesheet_id: id,
-        current_timesheet_id: id,
-        expected_timesheet_id: id,
+        row_key: `timesheet:${tsId}`,
+        timesheet_id: tsId,
+        current_timesheet_id: tsId,
+        expected_timesheet_id: tsId,
         contract_week_id: contractWeekId || null,
         booking_id: bookingId || null,
         context: 'timesheet_modal'
@@ -282064,135 +281992,83 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
         mutation: 'authorise-preflight',
         state: window.modalCtx || null,
         apply: false,
+        network: 'auto',
         max_items: 4
       });
     } catch (err) {
-      L('authorise preflight lifecycle refresh threw', {
-        timesheet_id: id,
-        error: String(err?.message || err || '')
-      });
+      L('authorise preflight lifecycle refresh threw', { timesheet_id: tsId, error: String(err?.message || err || '') });
       refreshResult = null;
     }
 
-    const rows = Array.isArray(refreshResult?.flattened_rows) ? refreshResult.flattened_rows : [];
-    const freshRow = rows.find((candidate) => {
-      const candidateId = trimStr(candidate?.current_timesheet_id || candidate?.timesheet_id || candidate?.id || '');
-      const candidateKey = trimStr(candidate?.row_key || '');
-      return candidateId === id || candidateKey === `timesheet:${id}`;
-    }) || null;
-
+    const freshRow = firstAffectedRow(refreshResult);
     const freshId = trimStr(freshRow?.current_timesheet_id || freshRow?.timesheet_id || freshRow?.id || '');
-    if (freshRow && freshId && freshId !== id) {
+    if (freshRow && freshId && freshId !== tsId) {
       toastWarn('This timesheet changed while you were editing; review and try again.');
       return {
         ok: false,
         blocked: true,
-        result: {
-          ok: false,
-          stale: true,
-          blocked: true,
-          reason: 'AUTHORISE_PREFLIGHT_IDENTITY_CHANGED',
-          expected_timesheet_id: id,
-          current_timesheet_id: freshId
-        }
+        result: { ok: false, stale: true, blocked: true, reason: 'AUTHORISE_PREFLIGHT_IDENTITY_CHANGED', expected_timesheet_id: tsId, current_timesheet_id: freshId }
       };
     }
 
-    const freshSignature = freshRow ? mergeAuthorisePreflightLifecycleRow(freshRow, id) : '';
-    if (freshSignature) {
-      L('authorise preflight lifecycle refresh adopted canonical guard', {
-        timesheet_id: id,
-        signature_present: true,
-        reason: trimStr(liveCtx.__timesheetAuthorisePreflightRefreshReason) || null
+    let patchResult = null;
+    if (freshRow && typeof applyTimesheetLifecyclePatchToModal === 'function') {
+      patchResult = applyTimesheetLifecyclePatchToModal(window.modalCtx || mc, freshRow, {
+        action: 'authorise',
+        source: 'authorise-preflight',
+        requireSignature: true,
+        allowFallback: false,
+        timesheet_id: tsId,
+        mutationStartedAt
       });
-      return { ok: true, refreshed: true, signature: freshSignature };
     }
 
-    if (typeof refreshTimesheetsSummaryAfterRotation === 'function') {
-      try {
-        await refreshTimesheetsSummaryAfterRotation(id, {
-          allowRenderAll: false,
-          skipTabRefresh: true,
-          forceFresh: true,
-          bypassCache: true,
-          reason: 'authorise-preflight'
-        });
-        const fallbackCtx = window.modalCtx || {};
-        const fallbackSignature = pickSignature(
-          fallbackCtx.data?.backend_row_signature,
-          fallbackCtx.data?.mutation_row_signature,
-          fallbackCtx.data?.row_signature,
-          fallbackCtx.timesheetDetails?.backend_row_signature,
-          fallbackCtx.timesheetDetails?.row_signature,
-          fallbackCtx.timesheetDetails?.row?.backend_row_signature,
-          fallbackCtx.timesheetDetails?.row?.row_signature
-        );
-        if (fallbackSignature) {
-          delete fallbackCtx.__timesheetAuthorisePreflightRefreshRequired;
-          delete fallbackCtx.__timesheetAuthorisePreflightRefreshTimesheetId;
-          delete fallbackCtx.__timesheetAuthorisePreflightRefreshContractWeekId;
-          delete fallbackCtx.__timesheetAuthorisePreflightRefreshBookingId;
-          delete fallbackCtx.__timesheetAuthorisePreflightRefreshReason;
-          delete fallbackCtx.__timesheetAuthorisePreflightRefreshMarkedAt;
-          fallbackCtx.refresh_required = false;
-          return { ok: true, refreshed: true, signature: fallbackSignature, source: 'summary_rotation' };
-        }
-      } catch (err) {
-        L('authorise preflight summary fallback threw', {
-          timesheet_id: id,
-          error: String(err?.message || err || '')
-        });
-      }
+    if (patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete) {
+      return { ok: true, refreshed: true, signature: patchResult.signature };
     }
 
-    toastWarn('Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Close and reopen the timesheet before authorising.');
+    toastWarn('The latest saved row signature or permission state is not trusted yet. Save or refresh the timesheet before authorising.');
     return {
       ok: false,
       blocked: true,
-      result: {
-        ok: false,
-        blocked: true,
-        reason: 'AUTHORISE_PREFLIGHT_REFRESH_FAILED',
-        refresh_required: true,
-        current_timesheet_id: id,
-        refresh_result: refreshResult || null
-      }
+      result: { ok: false, blocked: true, reason: patchResult?.reason || 'AUTHORISE_PREFLIGHT_REFRESH_FAILED', refresh_required: true, current_timesheet_id: tsId }
     };
   };
 
-  const preflightRefresh = await refreshAuthoriseGuardsBeforeMutation();
-  if (preflightRefresh && preflightRefresh.blocked) {
-    GE();
-    return preflightRefresh.result || { ok: false, blocked: true, reason: 'AUTHORISE_PREFLIGHT_REFRESH_FAILED' };
-  }
-
-  mc = window.modalCtx || mc || {};
-  row = (mc.data && (mc.data.timesheet_id || mc.data.current_timesheet_id || mc.data.id)) ? mc.data : row;
-  tsId = trimStr(row.timesheet_id || row.current_timesheet_id || row.id || tsId);
-
-  const expected = trimStr(expectedTimesheetId) || trimStr(window.modalCtx?.timesheetMeta?.expected_timesheet_id) || String(tsId);
-  const expectedRowSignature = pickSignature(
-    row.backend_row_signature,
-    row.mutation_row_signature,
-    row.row_signature,
-    window.modalCtx?.data?.backend_row_signature,
-    window.modalCtx?.data?.mutation_row_signature,
-    window.modalCtx?.data?.row_signature,
-    window.modalCtx?.timesheetDetails?.backend_row_signature,
-    window.modalCtx?.timesheetDetails?.row_signature,
-    window.modalCtx?.timesheetDetails?.row?.backend_row_signature,
-    window.modalCtx?.timesheetDetails?.row?.row_signature
-  );
-  const mutationKey = `authorise:${tsId}:${expected}`;
-  if (!(window.__timesheetLifecycleMutationInFlight instanceof Set)) window.__timesheetLifecycleMutationInFlight = new Set();
-  if (window.__timesheetLifecycleMutationInFlight.has(mutationKey)) {
-    GE();
-    return { ok: false, busy: true, reason: 'MUTATION_IN_FLIGHT' };
-  }
-  window.__timesheetLifecycleMutationInFlight.add(mutationKey);
-  markButtonsBusy(true);
-
   try {
+    const preflight = await runTrustedSignaturePreflight();
+    if (preflight && preflight.blocked) {
+      markCriticalIncomplete(window.modalCtx || mc, preflight.result?.reason || 'AUTHORISE_PREFLIGHT_BLOCKED');
+      GE();
+      return preflight.result || { ok: false, blocked: true, reason: 'AUTHORISE_PREFLIGHT_REFRESH_FAILED' };
+    }
+
+    mc = window.modalCtx || mc || {};
+    row = (mc.data && (mc.data.timesheet_id || mc.data.current_timesheet_id || mc.data.id)) ? mc.data : row;
+    tsId = trimStr(row.timesheet_id || row.current_timesheet_id || row.id || tsId);
+
+    const expectedRowSignature = pickSignature(
+      row.backend_row_signature,
+      row.mutation_row_signature,
+      row.row_signature,
+      row.expected_row_signature,
+      window.modalCtx?.data?.backend_row_signature,
+      window.modalCtx?.data?.mutation_row_signature,
+      window.modalCtx?.data?.row_signature,
+      window.modalCtx?.timesheetDetails?.backend_row_signature,
+      window.modalCtx?.timesheetDetails?.row_signature,
+      window.modalCtx?.timesheetDetails?.row?.backend_row_signature,
+      window.modalCtx?.timesheetDetails?.row?.row_signature,
+      window.modalCtx?.timesheetDetails?.timesheet?.backend_row_signature,
+      window.modalCtx?.timesheetDetails?.timesheet?.row_signature
+    );
+    if (!expectedRowSignature) {
+      markCriticalIncomplete(window.modalCtx || mc, 'AUTHORISE_MISSING_TRUSTED_SIGNATURE');
+      toastWarn('Cannot authorise until the saved row signature has been refreshed.');
+      GE();
+      return { ok: false, blocked: true, reason: 'AUTHORISE_MISSING_TRUSTED_SIGNATURE', refresh_required: true };
+    }
+
     const normCodes = (arr) => (Array.isArray(arr) ? arr.map(x => String(x || '').trim()).filter(Boolean) : []);
     const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
     try {
@@ -282280,46 +282156,384 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       }
     } catch {}
 
-    let affectedRefresh = null;
-    if (typeof refreshTimesheetLifecycleAffectedRows === 'function') {
-      affectedRefresh = await refreshTimesheetLifecycleAffectedRows(json, {
-        context: 'timesheet_modal',
+    let patchResult = { applied: false, permissionStateComplete: false, priorityBadgesComplete: false, reason: 'PATCH_HELPER_UNAVAILABLE' };
+    if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
+      patchResult = applyTimesheetLifecyclePatchToModal(window.modalCtx || mc, json, {
         action: 'authorise',
-        state: window.modalCtx || null,
-        apply: true
+        source: 'authorise-post',
+        requireSignature: true,
+        allowFallback: true,
+        timesheet_id: tsId,
+        current_timesheet_id: tsId,
+        mutationStartedAt
       });
     }
-    const affectedRow = affectedRefresh?.flattened_rows?.[0] || null;
-    const resolvedId = trimStr(json?.current_timesheet_id || json?.new_timesheet_id || json?.timesheet_id || affectedRow?.current_timesheet_id || tsId) || String(tsId);
-    const updatedRow = {
-      ...(window.modalCtx?.data || mc.data || row),
-      ...(affectedRow || {}),
-      timesheet_id: resolvedId,
-      id: resolvedId,
-      current_timesheet_id: resolvedId,
-      authorised_at_server: (affectedRow?.is_authorised === true || json?.authorised === true) ? (json?.authorised_at_server || new Date().toISOString()) : (affectedRow?.authorised_at_server ?? window.modalCtx?.data?.authorised_at_server ?? null),
-      processing_status: affectedRow?.processing_status || json?.processing_status || json?.new_processing_status || window.modalCtx?.data?.processing_status || row.processing_status || null,
-      backend_row_signature: affectedRow?.backend_row_signature || json?.backend_row_signature || json?.row_signature || null,
-      row_signature: affectedRow?.backend_row_signature || json?.backend_row_signature || json?.row_signature || null
+
+    let affectedRefresh = null;
+    let affectedRow = firstAffectedRow(json);
+    if (!(patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete)) {
+      markCriticalIncomplete(window.modalCtx || mc, patchResult?.reason || 'AUTHORISE_PATCH_INCOMPLETE');
+      if (typeof refreshTimesheetLifecycleAffectedRows === 'function') {
+        affectedRefresh = await refreshTimesheetLifecycleAffectedRows(json, {
+          context: 'timesheet_modal',
+          action: 'authorise',
+          state: window.modalCtx || null,
+          apply: false,
+          network: 'auto',
+          require_signature: true,
+          require_permission_state: true,
+          max_items: 4
+        });
+        affectedRow = firstAffectedRow(affectedRefresh) || affectedRow;
+      }
+      if (affectedRow && typeof applyTimesheetLifecyclePatchToModal === 'function') {
+        patchResult = applyTimesheetLifecyclePatchToModal(window.modalCtx || mc, affectedRow, {
+          action: 'authorise',
+          source: 'authorise-affected-rows',
+          requireSignature: true,
+          allowFallback: true,
+          timesheet_id: tsId,
+          current_timesheet_id: tsId,
+          mutationStartedAt
+        });
+      }
+    }
+
+    const patchComplete = !!(patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete);
+    if (patchComplete) {
+      clearCriticalIncomplete(window.modalCtx || mc);
+      try {
+        const modalBody = document.getElementById('modalBody') || document.querySelector('#modal .modal-body') || document.querySelector('#modalBodyWrap');
+        if (modalBody && typeof setFormReadOnly === 'function') setFormReadOnly(modalBody, true);
+      } catch {}
+      try {
+        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
+      } catch {}
+      try {
+        const resolvedId = trimStr(patchResult.current_timesheet_id || window.modalCtx?.data?.current_timesheet_id || window.modalCtx?.data?.timesheet_id || tsId) || String(tsId);
+        window.__pendingFocus = { section: 'timesheets', ids: [String(resolvedId)], primaryIds: [String(resolvedId)] };
+      } catch {}
+      try {
+        if (typeof noteTimesheetLifecycleMutationSequence === 'function') {
+          noteTimesheetLifecycleMutationSequence(window.modalCtx || mc, Number(window.modalCtx?.__timesheetLifecycleMutationSeq || 0) || null);
+        }
+        if (typeof scheduleTimesheetPostMutationLazyRefresh === 'function') {
+          const resolvedLazyId = trimStr(patchResult.current_timesheet_id || window.modalCtx?.data?.current_timesheet_id || window.modalCtx?.data?.timesheet_id || tsId) || String(tsId);
+          scheduleTimesheetPostMutationLazyRefresh({
+            timesheet_id: resolvedLazyId,
+            current_timesheet_id: resolvedLazyId,
+            action: 'authorise',
+            active_tab: (typeof window.__getModalFrame === 'function' ? window.__getModalFrame()?.currentTabKey : null) || 'overview',
+            refresh_domains: ['related', 'summary', 'membership', 'badges'],
+            current_mutation_sequence: (typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(window.modalCtx || mc) : Number(window.modalCtx?.__timesheetLifecycleMutationSeq || 0) || null
+          });
+        }
+      } catch {}
+    } else {
+      markCriticalIncomplete(window.modalCtx || mc, patchResult?.reason || 'AUTHORISE_CRITICAL_PATCH_INCOMPLETE');
+      try {
+        const ctx = window.modalCtx || mc;
+        ctx.__simpleTimesheetLifecycleRefreshRequired = true;
+        ctx.__simpleTimesheetLifecycleRefreshTimesheetId = String(tsId);
+        ctx.__simpleTimesheetLifecycleRefreshMessage = 'Timesheet authorised, but the latest permission-critical state is still refreshing. Close and reopen if controls do not settle.';
+      } catch {}
+      try {
+        const modalBody = document.getElementById('modalBody') || document.querySelector('#modal .modal-body') || document.querySelector('#modalBodyWrap');
+        if (modalBody && typeof setFormReadOnly === 'function') setFormReadOnly(modalBody, true);
+      } catch {}
+      L('authorise patch incomplete; unsafe actions remain disabled', patchResult);
+    }
+
+    GE();
+    return {
+      ok: true,
+      updatedRow: window.modalCtx?.data || null,
+      patch_applied: !!patchResult?.applied,
+      critical_patch_complete: patchComplete,
+      affected_refresh: affectedRefresh,
+      json
     };
-    window.modalCtx = window.modalCtx || {};
-    window.modalCtx.data = updatedRow;
-    window.modalCtx.timesheetMeta = window.modalCtx.timesheetMeta || {};
-    window.modalCtx.timesheetMeta.expected_timesheet_id = resolvedId;
-    window.modalCtx.timesheetMeta.hasTs = true;
-    window.modalCtx.timesheetMeta.isPlannedWeek = false;
+  } finally {
+    try { window.__timesheetLifecycleMutationInFlight.delete(mutationKey); } catch {}
+    if (typeof setTimesheetLifecycleBusy === 'function') {
+      setTimesheetLifecycleBusy(false, { action: 'authorise', timesheet_id: tsId, reason: 'Authorise settled' });
+    }
+  }
+}
+
+function readTimesheetLifecycleMutationSequence(ctxInput) {
+  const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : ((typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {});
+  const values = [
+    ctx.__timesheetLifecycleMutationSeq,
+    ctx.__timesheetLatestLifecycleMutationSeq,
+    ctx.__timesheetLifecycleRefreshSeq,
+    ctx.__timesheetLazyRefreshSeq,
+    ctx.__timesheetLatestLifecyclePatchAt
+  ];
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+function noteTimesheetLifecycleMutationSequence(ctxInput, seqInput) {
+  const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : ((typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null);
+  if (!ctx) return 0;
+  const current = readTimesheetLifecycleMutationSequence(ctx);
+  const supplied = Number(seqInput);
+  const next = Number.isFinite(supplied) && supplied > 0 ? Math.max(current, supplied) : (current + 1);
+  ctx.__timesheetLifecycleMutationSeq = next;
+  ctx.__timesheetLatestLifecycleMutationSeq = next;
+  ctx.__timesheetLatestLifecyclePatchAt = Date.now();
+  return next;
+}
+
+function isStaleTimesheetPostMutationRefresh(options = {}) {
+  const opts = (options && typeof options === 'object') ? options : {};
+  const ctx = (opts.ctx && typeof opts.ctx === 'object') ? opts.ctx : ((typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null);
+  if (!ctx) return true;
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const expectedId = trimStr(opts.currentTimesheetId || opts.current_timesheet_id || opts.timesheetId || opts.timesheet_id || '');
+  const liveId = trimStr(
+    ctx.data?.current_timesheet_id ||
+    ctx.data?.timesheet_id ||
+    ctx.data?.id ||
+    ctx.timesheetDetails?.current_timesheet_id ||
+    ctx.timesheetDetails?.timesheet?.current_timesheet_id ||
+    ctx.timesheetDetails?.timesheet?.timesheet_id ||
+    ''
+  );
+  if (expectedId && liveId && expectedId !== liveId) return true;
+  const sequence = Number(opts.mutationSequence ?? opts.mutation_sequence ?? opts.sequence ?? 0) || 0;
+  if (sequence > 0 && readTimesheetLifecycleMutationSequence(ctx) > sequence) return true;
+  return false;
+}
+
+function markTimesheetLazyRefreshBadge(ctxInput, domain, state = {}) {
+  const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : ((typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null);
+  if (!ctx) return;
+  const key = String(domain || '').trim() || 'general';
+  ctx.__timesheetLazyTabBadges = (ctx.__timesheetLazyTabBadges && typeof ctx.__timesheetLazyTabBadges === 'object') ? ctx.__timesheetLazyTabBadges : {};
+  const prev = (ctx.__timesheetLazyTabBadges[key] && typeof ctx.__timesheetLazyTabBadges[key] === 'object') ? ctx.__timesheetLazyTabBadges[key] : {};
+  ctx.__timesheetLazyTabBadges[key] = {
+    ...prev,
+    stale: state.stale !== false,
+    refreshing: state.refreshing !== false,
+    background: state.background !== false,
+    action: String(state.action || prev.action || '').trim() || null,
+    mutation_sequence: Number(state.mutationSequence ?? state.mutation_sequence ?? prev.mutation_sequence ?? 0) || null,
+    marked_at: Date.now()
+  };
+}
+
+function scheduleTimesheetPostMutationLazyRefresh(args = {}) {
+  const opts = (args && typeof args === 'object') ? args : {};
+  const ctx = (opts.ctx && typeof opts.ctx === 'object') ? opts.ctx : ((typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null);
+  if (!ctx || ctx.entity !== 'timesheets') {
+    return { ok: false, scheduled: false, reason: 'NO_ACTIVE_TIMESHEET_MODAL' };
+  }
+
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const timesheetId = trimStr(opts.timesheet_id || opts.timesheetId || opts.id || ctx.data?.timesheet_id || ctx.data?.current_timesheet_id || ctx.data?.id || '');
+  const currentTimesheetId = trimStr(opts.current_timesheet_id || opts.currentTimesheetId || timesheetId || ctx.data?.current_timesheet_id || ctx.timesheetDetails?.current_timesheet_id || '');
+  if (!timesheetId && !currentTimesheetId) {
+    return { ok: false, scheduled: false, reason: 'NO_TIMESHEET_ID' };
+  }
+
+  const action = trimStr(opts.action || opts.mutation || 'lifecycle');
+  const activeTab = trimStr(opts.active_tab || opts.activeTab || (() => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      return fr && fr.entity === 'timesheets' ? fr.currentTabKey : '';
+    } catch { return ''; }
+  })() || 'overview');
+  const rawDomains = Array.isArray(opts.refresh_domains) ? opts.refresh_domains : (Array.isArray(opts.domains) ? opts.domains : null);
+  const domains = Array.from(new Set((rawDomains && rawDomains.length ? rawDomains : [activeTab, 'related', 'summary', 'membership', 'badges'])
+    .map((value) => trimStr(value).toLowerCase())
+    .filter(Boolean)));
+
+  const requestedSequence = Number(opts.current_mutation_sequence ?? opts.currentMutationSequence ?? opts.mutationSequence ?? opts.mutation_sequence ?? readTimesheetLifecycleMutationSequence(ctx)) || readTimesheetLifecycleMutationSequence(ctx);
+  const queueId = currentTimesheetId || timesheetId;
+  const queueKey = `${queueId}:post-mutation-lazy-refresh`;
+
+  if (typeof window !== 'undefined') {
+    window.__timesheetPostMutationLazyRefreshQueue = window.__timesheetPostMutationLazyRefreshQueue || {};
+  }
+  const queue = window.__timesheetPostMutationLazyRefreshQueue;
+  const existing = queue[queueKey] || {};
+  if (existing.timer) {
+    try { clearTimeout(existing.timer); } catch {}
+  }
+  const sequence = Math.max(requestedSequence || 0, Number(existing.mutation_sequence || 0) || 0);
+  const coalescedDomains = Array.from(new Set([
+    ...(Array.isArray(existing.domains) ? existing.domains : []),
+    ...domains
+  ].map((value) => trimStr(value).toLowerCase()).filter(Boolean)));
+  domains.splice(0, domains.length, ...coalescedDomains);
+
+  ctx.__timesheetLazyRefreshSeq = Math.max(Number(ctx.__timesheetLazyRefreshSeq || 0) || 0, sequence || 0);
+  ctx.__timesheetLazyRefresh = {
+    scheduled: true,
+    refreshing: true,
+    background: true,
+    action,
+    active_tab: activeTab,
+    domains,
+    timesheet_id: timesheetId || currentTimesheetId,
+    current_timesheet_id: currentTimesheetId || timesheetId,
+    mutation_sequence: sequence || null,
+    scheduled_at: Date.now()
+  };
+
+  for (const domain of domains) {
+    if (domain !== activeTab) markTimesheetLazyRefreshBadge(ctx, domain, { action, mutationSequence: sequence, stale: true, refreshing: true, background: true });
+  }
+  if (activeTab && activeTab !== 'overview') markTimesheetLazyRefreshBadge(ctx, activeTab, { action, mutationSequence: sequence, stale: true, refreshing: true, background: true });
+
+  const queueToken = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
+  const worker = async () => {
+    const liveCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : ctx;
+    const staleBase = () => isStaleTimesheetPostMutationRefresh({ ctx: liveCtx, currentTimesheetId: currentTimesheetId || timesheetId, mutationSequence: sequence });
+    if (staleBase()) return { ok: false, stale: true, reason: 'STALE_BEFORE_REFRESH' };
+
+    const settled = [];
+    const errors = [];
+    const runRelated = async () => {
+      if (typeof fetchTimesheetRelated !== 'function') return;
+      try {
+        const related = await fetchTimesheetRelated(currentTimesheetId || timesheetId, {
+          background: false,
+          lazy: false,
+          __background_worker: true,
+          action,
+          expected_timesheet_id: currentTimesheetId || timesheetId,
+          mutationSequence: sequence
+        });
+        if (!staleBase() && related && typeof related === 'object' && related.stale_discarded !== true) {
+          liveCtx.timesheetRelated = related;
+          liveCtx.timesheetRelatedStale = false;
+          liveCtx.timesheetRelatedRefreshing = false;
+          settled.push('related');
+        }
+      } catch (err) {
+        errors.push({ domain: 'related', error: String(err?.message || err || '') });
+      }
+    };
+
+    const runSummary = async () => {
+      if (typeof refreshTimesheetsSummaryAfterRotation !== 'function') return;
+      try {
+        await refreshTimesheetsSummaryAfterRotation(currentTimesheetId || timesheetId, {
+          blocking: false,
+          afterLifecycleMutation: true,
+          background: false,
+          lazy: false,
+          __background_worker: true,
+          lifecycleSequence: sequence,
+          mutationSequence: sequence,
+          skipTabRefresh: true,
+          allowRenderAll: false,
+          source: `post-${action || 'lifecycle'}-lazy-refresh`
+        });
+        if (!staleBase()) settled.push('summary');
+      } catch (err) {
+        errors.push({ domain: 'summary', error: String(err?.message || err || '') });
+      }
+    };
+
+    const runMembership = async () => {
+      if (typeof primeSummaryMembership !== 'function') return;
+      try {
+        let fp = '';
+        try { if (typeof getSummaryFingerprint === 'function') fp = String(getSummaryFingerprint('timesheets') || '').trim(); } catch {}
+        if (fp) {
+          await primeSummaryMembership('timesheets', fp, {
+            background: false,
+            lazy: false,
+            __background_worker: true,
+            afterLifecycleMutation: true,
+            lifecycleSequence: sequence,
+            mutationSequence: sequence,
+            source: `post-${action || 'lifecycle'}-lazy-refresh`
+          });
+          if (!staleBase()) settled.push('membership');
+        }
+      } catch (err) {
+        errors.push({ domain: 'membership', error: String(err?.message || err || '') });
+      }
+    };
 
     try {
-      window.__pendingFocus = { section: 'timesheets', ids: [String(resolvedId)], primaryIds: [String(resolvedId)] };
-    } catch {}
+      if (activeTab === 'related' || domains.includes('related')) await runRelated();
+      if (staleBase()) return { ok: false, stale: true, settled, errors };
+      if (domains.includes('summary') || domains.includes('badges')) await runSummary();
+      if (staleBase()) return { ok: false, stale: true, settled, errors };
+      if (domains.includes('membership')) await runMembership();
+    } finally {
+      if (!staleBase()) {
+        liveCtx.__timesheetLazyRefresh = {
+          ...(liveCtx.__timesheetLazyRefresh || {}),
+          scheduled: false,
+          refreshing: false,
+          settled_at: Date.now(),
+          settled,
+          errors
+        };
+        if (liveCtx.__timesheetLazyTabBadges && typeof liveCtx.__timesheetLazyTabBadges === 'object') {
+          for (const domain of domains) {
+            const badge = liveCtx.__timesheetLazyTabBadges[domain];
+            if (badge && typeof badge === 'object' && Number(badge.mutation_sequence || 0) <= sequence) {
+              badge.refreshing = false;
+              badge.stale = errors.some((item) => item.domain === domain);
+              badge.settled_at = Date.now();
+            }
+          }
+        }
+        try {
+          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (fr && fr.entity === 'timesheets' && typeof fr._updateButtons === 'function') fr._updateButtons();
+        } catch {}
+      }
+      try {
+        if (queue[queueKey] && queue[queueKey].token === queueToken) delete queue[queueKey];
+      } catch {}
+    }
+    return { ok: errors.length === 0, stale: false, settled, errors };
+  };
 
-    L('UPDATED ROW', updatedRow);
-    GE();
-    return { ok: true, updatedRow, affected_refresh: affectedRefresh, json };
-  } finally {
-    window.__timesheetLifecycleMutationInFlight.delete(mutationKey);
-    markButtonsBusy(false);
-  }
+  const delay = Math.max(0, Math.min(Number(opts.debounce_ms ?? opts.debounceMs ?? 75) || 75, 500));
+  queue[queueKey] = {
+    key: queueKey,
+    token: queueToken,
+    action,
+    domains,
+    timesheet_id: timesheetId || currentTimesheetId,
+    current_timesheet_id: currentTimesheetId || timesheetId,
+    mutation_sequence: sequence || null,
+    scheduled_at: Date.now(),
+    timer: setTimeout(() => {
+      Promise.resolve(worker()).catch((err) => {
+        try { console.warn('[TS][LAZY-REFRESH] post-mutation lazy refresh failed', err); } catch {}
+      });
+    }, delay)
+  };
+
+  return {
+    ok: true,
+    scheduled: true,
+    background: true,
+    coalesced: !!existing.timer,
+    key: queueKey,
+    action,
+    active_tab: activeTab,
+    domains,
+    timesheet_id: timesheetId || currentTimesheetId,
+    current_timesheet_id: currentTimesheetId || timesheetId,
+    mutation_sequence: sequence || null
+  };
 }
 
 
@@ -291237,6 +291451,300 @@ async function apiListOutbox(opts = {}) {
 // UPDATED: showModal (adds contract-modal class toggling for Contracts dialogs)
 // ─────────────────────────────────────────────────────────────────────────────
 
+function setTimesheetLifecycleBusy(busyOrOptions, options) {
+  const rawOptions = (busyOrOptions && typeof busyOrOptions === 'object')
+    ? busyOrOptions
+    : { ...(options || {}), busy: !!busyOrOptions };
+
+  const busy = !!rawOptions.busy;
+  const action = String(rawOptions.action || '').trim().toLowerCase();
+  const actionSafe = (action === 'authorise' || action === 'unauthorise') ? action : 'lifecycle';
+  const reason = String(rawOptions.reason || '').trim();
+  const now = Date.now();
+
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const currentCtx = (rawOptions.modalCtx && typeof rawOptions.modalCtx === 'object')
+    ? rawOptions.modalCtx
+    : ((window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null);
+  const frame = rawOptions.frame || (() => {
+    try { return (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null; } catch { return null; }
+  })();
+
+  const timesheetId = trimStr(
+    rawOptions.timesheet_id ||
+    rawOptions.current_timesheet_id ||
+    currentCtx?.data?.current_timesheet_id ||
+    currentCtx?.data?.timesheet_id ||
+    currentCtx?.data?.id ||
+    currentCtx?.timesheetDetails?.current_timesheet_id ||
+    currentCtx?.timesheetDetails?.row?.current_timesheet_id ||
+    currentCtx?.timesheetDetails?.row?.timesheet_id ||
+    currentCtx?.timesheetDetails?.timesheet?.current_timesheet_id ||
+    currentCtx?.timesheetDetails?.timesheet?.timesheet_id ||
+    ''
+  );
+
+  const marker = {
+    busy,
+    action: actionSafe,
+    reason: reason || (busy ? 'timesheet lifecycle mutation in flight' : 'timesheet lifecycle mutation settled'),
+    timesheet_id: timesheetId || null,
+    started_at: busy ? (rawOptions.started_at || now) : null,
+    updated_at: now
+  };
+
+  try {
+    if (currentCtx) {
+      if (busy) {
+        currentCtx.__timesheetLifecycleBusy = marker;
+        currentCtx.timesheetLifecycleBusy = marker;
+        currentCtx.__timesheetLifecycleMutationInFlight = true;
+        currentCtx.__timesheetLifecycleBusyAction = actionSafe;
+        currentCtx.__timesheetLifecycleBusyTimesheetId = timesheetId || null;
+        currentCtx.__timesheetLifecycleBusyStartedAt = marker.started_at;
+        currentCtx.__timesheetLatestLifecycleMutationStartedAt = marker.started_at;
+        currentCtx.__timesheetLifecycleBusyReason = marker.reason;
+      } else {
+        delete currentCtx.__timesheetLifecycleBusy;
+        delete currentCtx.timesheetLifecycleBusy;
+        delete currentCtx.__timesheetLifecycleBusyAction;
+        delete currentCtx.__timesheetLifecycleBusyTimesheetId;
+        delete currentCtx.__timesheetLifecycleBusyStartedAt;
+        delete currentCtx.__timesheetLifecycleBusyReason;
+        currentCtx.__timesheetLifecycleMutationInFlight = false;
+      }
+    }
+  } catch {}
+
+  try {
+    if (busy) {
+      window.__timesheetLifecycleBusy = marker;
+      window.__timesheetLifecycleBusyAction = actionSafe;
+      window.__timesheetLifecycleBusyTimesheetId = timesheetId || null;
+    } else {
+      delete window.__timesheetLifecycleBusy;
+      delete window.__timesheetLifecycleBusyAction;
+      delete window.__timesheetLifecycleBusyTimesheetId;
+    }
+  } catch {}
+
+  try {
+    if (frame && typeof frame === 'object') {
+      if (busy) {
+        frame.__timesheetLifecycleBusy = marker;
+        frame._timesheetLifecycleBusy = marker;
+      } else {
+        delete frame.__timesheetLifecycleBusy;
+        delete frame._timesheetLifecycleBusy;
+      }
+    }
+  } catch {}
+
+  const buttonSelectors = [
+    '#btnSave',
+    'button[data-action="save"]',
+    '#btnTsAuthorise',
+    '[data-action="authorise"]',
+    '.js-timesheet-authorise',
+    '#timesheetAuthoriseBtn',
+    '#authoriseTimesheetBtn',
+    '#btnTsUnauthorise',
+    '[data-action="unauthorise"]',
+    '.js-timesheet-unauthorise',
+    '#timesheetUnauthoriseBtn',
+    '#unauthoriseTimesheetBtn'
+  ];
+
+  const setButtonBusy = (btn) => {
+    if (!btn) return;
+    try {
+      if (busy) {
+        if (!btn.hasAttribute('data-lifecycle-prev-title')) {
+          btn.setAttribute('data-lifecycle-prev-title', btn.getAttribute('title') || '');
+        }
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        btn.setAttribute('aria-disabled', 'true');
+        btn.setAttribute('data-disabled', '1');
+        btn.setAttribute('data-lifecycle-busy', actionSafe);
+        btn.classList && btn.classList.add('disabled');
+        btn.style.opacity = '0.45';
+        btn.style.filter = 'grayscale(55%)';
+        btn.style.pointerEvents = 'auto';
+        btn.setAttribute('title', marker.reason || 'Timesheet lifecycle update in progress');
+      } else if (btn.getAttribute('data-lifecycle-busy')) {
+        btn.removeAttribute('aria-busy');
+        btn.removeAttribute('aria-disabled');
+        btn.removeAttribute('data-disabled');
+        btn.removeAttribute('data-lifecycle-busy');
+        btn.classList && btn.classList.remove('disabled');
+        btn.style.opacity = '';
+        btn.style.filter = '';
+        btn.style.pointerEvents = '';
+        const previousTitle = btn.getAttribute('data-lifecycle-prev-title');
+        btn.removeAttribute('data-lifecycle-prev-title');
+        if (previousTitle) btn.setAttribute('title', previousTitle);
+        else btn.removeAttribute('title');
+        // Do not force-enable here. _updateButtons below recomputes permission-correct state.
+      }
+    } catch {}
+  };
+
+  try {
+    const seen = new Set();
+    buttonSelectors.forEach((selector) => {
+      try {
+        document.querySelectorAll(selector).forEach((btn) => {
+          if (!btn || seen.has(btn)) return;
+          seen.add(btn);
+          setButtonBusy(btn);
+        });
+      } catch {}
+    });
+  } catch {}
+
+  try {
+    const modalBody = document.getElementById('modalBody') || document.querySelector('#modal .modal-body') || document.querySelector('#modalBodyWrap');
+    if (modalBody && typeof setFormReadOnly === 'function') {
+      if (busy) {
+        setFormReadOnly(modalBody, true);
+      } else {
+        const frameNow = frame || (() => {
+          try { return (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null; } catch { return null; }
+        })();
+        const frameMode = String(frameNow?.mode || '').trim().toLowerCase();
+        if (frameMode) {
+          setFormReadOnly(modalBody, !(frameMode === 'edit' || frameMode === 'create'));
+        }
+      }
+    }
+  } catch {}
+
+  try {
+    if (frame && typeof frame._updateButtons === 'function' && !frame.__timesheetLifecycleBusyRepaint) {
+      frame.__timesheetLifecycleBusyRepaint = true;
+      try { frame._updateButtons(); }
+      finally { frame.__timesheetLifecycleBusyRepaint = false; }
+    }
+  } catch {}
+
+  // _updateButtons recomputes the footer after the marker is set. Re-apply the busy
+  // lock afterwards so later generic Save/Edit footer logic cannot accidentally
+  // re-enable Save while authorise/unauthorise is still in flight.
+  if (busy) {
+    try {
+      const seen = new Set();
+      buttonSelectors.forEach((selector) => {
+        try {
+          document.querySelectorAll(selector).forEach((btn) => {
+            if (!btn || seen.has(btn)) return;
+            seen.add(btn);
+            setButtonBusy(btn);
+          });
+        } catch {}
+      });
+    } catch {}
+  }
+
+  return marker;
+}
+
+
+function hasTrustedTimesheetLifecycleSignature(modalCtxInput, options) {
+  const opts = (options && typeof options === 'object') ? options : {};
+  const ctx = (modalCtxInput && typeof modalCtxInput === 'object')
+    ? modalCtxInput
+    : ((window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null);
+  if (!ctx) return false;
+
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const pickSignature = (...values) => {
+    for (const value of values) {
+      const s = trimStr(value);
+      if (s) return s;
+    }
+    return '';
+  };
+
+  const currentId = trimStr(
+    opts.timesheet_id || opts.current_timesheet_id ||
+    ctx.data?.current_timesheet_id || ctx.data?.timesheet_id || ctx.data?.id ||
+    ctx.timesheetDetails?.current_timesheet_id ||
+    ctx.timesheetDetails?.row?.current_timesheet_id || ctx.timesheetDetails?.row?.timesheet_id ||
+    ctx.timesheetDetails?.timesheet?.current_timesheet_id || ctx.timesheetDetails?.timesheet?.timesheet_id ||
+    ctx.timesheetMeta?.expected_timesheet_id || ''
+  );
+  if (!currentId) return false;
+
+  const signature = pickSignature(
+    ctx.data?.backend_row_signature,
+    ctx.data?.mutation_row_signature,
+    ctx.data?.row_signature,
+    ctx.data?.expected_row_signature,
+    ctx.timesheetDetails?.backend_row_signature,
+    ctx.timesheetDetails?.row_signature,
+    ctx.timesheetDetails?.row?.backend_row_signature,
+    ctx.timesheetDetails?.row?.mutation_row_signature,
+    ctx.timesheetDetails?.row?.row_signature,
+    ctx.timesheetDetails?.timesheet?.backend_row_signature,
+    ctx.timesheetDetails?.timesheet?.row_signature,
+    ctx.timesheetDetails?.tsfin?.backend_row_signature,
+    ctx.timesheetDetails?.tsfin?.row_signature
+  );
+  if (!signature) return false;
+
+  const trusted = (ctx.__timesheetLifecycleTrusted && typeof ctx.__timesheetLifecycleTrusted === 'object')
+    ? ctx.__timesheetLifecycleTrusted
+    : null;
+  if (!trusted) return false;
+
+  const trustedId = trimStr(trusted.timesheet_id || trusted.current_timesheet_id || '');
+  if (!trustedId || trustedId !== currentId) return false;
+  if (trimStr(trusted.signature) !== signature) return false;
+
+  const allowedSources = new Set([
+    'save', 'timesheet-save', 'tsfin_patch_response', 'save-response', 'save-lifecycle-patch',
+    'save-existing-details', 'save-final-refresh', 'save-existing-lifecycle', 'save-final-lifecycle',
+    'authorise', 'authorise-post', 'authorise-preflight',
+    'unauthorise', 'unauthorise-post', 'lifecycle', 'affected_rows_fallback',
+    'authorise-affected-rows', 'unauthorise-affected-rows'
+  ]);
+  const trustedSource = trimStr(trusted.source).toLowerCase();
+  const trustedAction = trimStr(trusted.action).toLowerCase();
+  if (!allowedSources.has(trustedSource) && !allowedSources.has(trustedAction)) return false;
+
+  const refreshRequired = !!(
+    ctx.__simpleTimesheetLifecycleRefreshRequired === true ||
+    ctx.__timesheetAuthorisePreflightRefreshRequired === true ||
+    ctx.__timesheetLifecycleCriticalStateIncomplete === true ||
+    ctx.refresh_required === true || ctx.lifecycle_refresh_failed === true ||
+    ctx.data?.refresh_required === true || ctx.data?.row_stale === true ||
+    ctx.timesheetDetails?.refresh_required === true || ctx.timesheetDetails?.row_stale === true ||
+    ctx.timesheetDetails?.row?.refresh_required === true || ctx.timesheetDetails?.row?.row_stale === true
+  );
+  if (refreshRequired) return false;
+
+  const expectedId = trimStr(ctx.timesheetMeta?.expected_timesheet_id || ctx.data?.expected_timesheet_id || currentId);
+  if (expectedId && expectedId !== currentId) return false;
+
+  if (ctx.__timesheetLifecyclePermissionStateComplete !== true && trusted.permissionStateComplete !== true) return false;
+  if (ctx.__timesheetLifecyclePriorityBadgesComplete !== true && trusted.priorityBadgesComplete !== true) return false;
+
+  const patchAt = Number(trusted.patched_at || ctx.__timesheetLatestLifecyclePatchAt || 0);
+  if (!Number.isFinite(patchAt) || patchAt <= 0) return false;
+  const latestEditAt = Math.max(
+    Number(ctx.__timesheetLatestEditAt || 0),
+    Number(ctx.__timesheetLatestDirtyEditAt || 0),
+    Number(ctx.__timesheetLatestSavedMutationStartedAt || 0),
+    Number(opts.minPatchedAt || 0)
+  );
+  if (Number.isFinite(latestEditAt) && latestEditAt > 0 && patchAt < latestEditAt) return false;
+
+  return true;
+}
+
+
+
 function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
 
   const LOG = (typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : true;
@@ -291959,6 +292467,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
 
 // ✅ Canonical timesheet refresh helper (must exist BEFORE any footer clicks)
 
+
 function setFormReadOnly(root, ro) {
   if (!root || !document.contains(root)) { L('setFormReadOnly(skip: invalid root)', { ro }); return; }
   const _allBefore = root.querySelectorAll('input, select, textarea, button');
@@ -291988,6 +292497,41 @@ function setFormReadOnly(root, ro) {
       return null;
     }
   })();
+
+  const timesheetLifecycleSafetyContext = (() => {
+    try {
+      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+      const isTimesheetFrame = !!(top && top.entity === 'timesheets');
+      if (!isTimesheetFrame) return null;
+      const mc = window.modalCtx || {};
+      const det = mc.timesheetDetails || {};
+      const row = mc.data || {};
+      const ts = det.timesheet || {};
+      const authorised = !!(
+        row.authorised_at_server || row.authorised_at_utc || row.is_authorised === true || row.authorised === true ||
+        det.authorised_at_server || det.authorised_at_utc || det.is_authorised === true || det.authorised === true ||
+        det.row?.authorised_at_server || det.row?.authorised_at_utc || det.row?.is_authorised === true || det.row?.authorised === true ||
+        ts.authorised_at_server || ts.authorised_at_utc || ts.is_authorised === true || ts.authorised === true ||
+        mc.timesheetMeta?.isAuthorised === true || mc.timesheetMeta?.is_authorised === true
+      );
+      const lifecycleBusy = !!(
+        mc.__timesheetLifecycleMutationInFlight === true ||
+        (mc.__timesheetLifecycleBusy && mc.__timesheetLifecycleBusy.busy !== false) ||
+        (window.__timesheetLifecycleBusy && window.__timesheetLifecycleBusy.busy !== false)
+      );
+      const permissionIncomplete = mc.__timesheetLifecycleCriticalStateIncomplete === true ||
+        mc.__timesheetLifecyclePermissionStateComplete === false;
+      return {
+        authorised,
+        lifecycleBusy,
+        permissionIncomplete,
+        lockAllEditable: authorised || lifecycleBusy || permissionIncomplete
+      };
+    } catch {
+      return null;
+    }
+  })();
+
   const isTimesheetHoursAction = (action) => {
     const a = String(action || '').trim().toLowerCase();
     return new Set([
@@ -292069,6 +292613,35 @@ function setFormReadOnly(root, ro) {
 // because create-mode should not allow manual editing; system generates on save.
 root.querySelectorAll('input, select, textarea, button').forEach((el) => {
   const isDisplayOnly = el.id === 'tms_ref_display' || el.id === 'cli_ref_display';
+
+
+  // Timesheet lifecycle safety override: during authorise/unauthorise, after authorise,
+  // or while permission-critical state is incomplete, existing editable controls are disabled immediately.
+  if (timesheetLifecycleSafetyContext && timesheetLifecycleSafetyContext.lockAllEditable) {
+    const actionName = String(
+      el.getAttribute('data-action') || el.getAttribute('data-ts-action') || el.getAttribute('data-hours-action') || el.getAttribute('data-evidence-action') || ''
+    ).trim().toLowerCase();
+    const lifecycleFooterAction = ['authorise', 'unauthorise', 'save'].includes(actionName) ||
+      el.id === 'btnTsAuthorise' || el.id === 'btnTsUnauthorise' || el.id === 'btnSave';
+    if (
+      lifecycleFooterAction ||
+      isTimesheetHoursControl(el) ||
+      isTimesheetExpenseControl(el) ||
+      isTimesheetEvidenceMutationControl(el)
+    ) {
+      try { el.disabled = true; } catch {}
+      try { el.setAttribute('disabled', 'true'); } catch {}
+      try { el.setAttribute('aria-disabled', 'true'); } catch {}
+      if (el.tagName !== 'BUTTON') {
+        try { el.setAttribute('readonly', 'true'); } catch {}
+      }
+      if (timesheetLifecycleSafetyContext.lifecycleBusy) {
+        try { el.setAttribute('aria-busy', 'true'); } catch {}
+        try { el.setAttribute('data-lifecycle-busy', '1'); } catch {}
+      }
+      return;
+    }
+  }
 
   // ✅ NEW: Candidate Display Name auto-lock (only when blank)
   const shouldAutoLockCandidateDisplayName = (() => {
@@ -292314,7 +292887,7 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
     el.removeAttribute('readonly');
   }
 });
-// Timesheet domain-level lock overrides (Handover 3)
+// Timesheet domain-level lock overrides (existing)
 try {
   const top = (typeof currentFrame === 'function') ? currentFrame() : null;
   const isTimesheet = !!(top && top.entity === 'timesheets');
@@ -292326,9 +292899,13 @@ try {
     const policy = mc.timesheetEditDomains || (typeof classifyTimesheetEditDomains === 'function'
       ? classifyTimesheetEditDomains({ row: mc.data || {}, details: det, timesheet: ts, tsfin: tf, state: mc.timesheetState || {} })
       : null);
-    const lockHours = !!(policy && policy.canEditHoursSchedule === false);
-    const lockExpenses = !!(policy && (policy.canEditExpenses === false || policy.expensesReadOnly === true));
-    const lockEvidence = !!(policy && policy.canManageExpenseEvidence === false);
+    const lifecycleAuthorised = !!(timesheetLifecycleSafetyContext && timesheetLifecycleSafetyContext.authorised);
+    const lifecycleBusy = !!(timesheetLifecycleSafetyContext && timesheetLifecycleSafetyContext.lifecycleBusy);
+    const lifecyclePermissionIncomplete = !!(timesheetLifecycleSafetyContext && timesheetLifecycleSafetyContext.permissionIncomplete);
+    const lifecycleLockEditable = lifecycleAuthorised || lifecycleBusy || lifecyclePermissionIncomplete;
+    const lockHours = lifecycleLockEditable || !!(policy && policy.canEditHoursSchedule === false);
+    const lockExpenses = lifecycleLockEditable || !!(policy && (policy.canEditExpenses === false || policy.expensesReadOnly === true));
+    const lockEvidence = lifecycleLockEditable || !!(policy && policy.canManageExpenseEvidence === false);
     if (lockHours) {
       root.querySelectorAll('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-segment-action],[data-segment-control],[data-ts-daily-field],[data-weekly-line-action],[data-hours-action],[data-extra-code],[data-extra-field],[data-additional-rate-code],[data-additional-units-field],[data-protected-hours-control],input[name^=\"extra_units_\"],input[name*=\"worked_start\"],input[name*=\"worked_end\"],input[name*=\"break_minutes\"],input[name*=\"break_mins\"],input[name*=\"break_start\"],input[name*=\"break_end\"],input[name*=\"hours_day\"],input[name*=\"hours_night\"],input[name*=\"hours_sat\"],input[name*=\"hours_sun\"],input[name*=\"hours_bh\"]').forEach((el) => {
         el.disabled = true;
@@ -292417,6 +292994,7 @@ try {
     });
   } catch {}
 }
+
 
 
 
@@ -293672,6 +294250,258 @@ async setTab(k) {
   this._suppressDirty = true;
   this.__bulkProcessSetTabRebaseTransition = false;
 
+
+  const timesheetTabLifecycleGuard = (() => {
+    if (this.entity !== 'timesheets') return null;
+    const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    if (!ctx) return null;
+    const trimStr = (value) => String(value == null ? '' : value).trim();
+    const boolish = (value) => {
+      if (value === true || value === 1) return true;
+      if (value === false || value === 0 || value == null || value === '') return false;
+      const raw = String(value).trim().toLowerCase();
+      return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
+    };
+    const sequence = (typeof readTimesheetLifecycleMutationSequence === 'function')
+      ? readTimesheetLifecycleMutationSequence(ctx)
+      : (Number(ctx.__timesheetLifecycleMutationSeq || ctx.__timesheetLatestLifecycleMutationSeq || 0) || 0);
+    const signature = trimStr(
+      ctx.data?.backend_row_signature ||
+      ctx.data?.mutation_row_signature ||
+      ctx.data?.row_signature ||
+      ctx.timesheetDetails?.backend_row_signature ||
+      ctx.timesheetDetails?.row_signature ||
+      ctx.timesheetDetails?.timesheet?.backend_row_signature ||
+      ctx.timesheetDetails?.timesheet?.row_signature ||
+      ''
+    );
+    const contractWeekIdFromCtx = (ctxLike) => trimStr(
+      ctxLike?.data?.contract_week_id ||
+      ctxLike?.timesheetDetails?.contract_week_id ||
+      ctxLike?.timesheetDetails?.contract_week?.id ||
+      ctxLike?.timesheetDetails?.contract_week?.contract_week_id ||
+      ''
+    );
+    const realTimesheetIdFromCtx = (ctxLike) => {
+      const data = (ctxLike?.data && typeof ctxLike.data === 'object') ? ctxLike.data : {};
+      const details = (ctxLike?.timesheetDetails && typeof ctxLike.timesheetDetails === 'object') ? ctxLike.timesheetDetails : {};
+      const ts = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : {};
+      const explicit = trimStr(
+        data.current_timesheet_id ||
+        data.timesheet_id ||
+        details.current_timesheet_id ||
+        details.timesheet_id ||
+        ts.current_timesheet_id ||
+        ts.timesheet_id ||
+        ''
+      );
+      if (explicit) return explicit;
+
+      const rowKey = trimStr(
+        data.row_key ||
+        data.new_row_key ||
+        details.row_key ||
+        details.row?.row_key ||
+        ''
+      );
+      const rowKeyMatch = rowKey.match(/^timesheet:(.+)$/i);
+      if (rowKeyMatch && trimStr(rowKeyMatch[1])) return trimStr(rowKeyMatch[1]);
+
+      const dataId = trimStr(data.id || '');
+      const contractWeekId = contractWeekIdFromCtx(ctxLike);
+      if (dataId && (!contractWeekId || dataId !== contractWeekId)) return dataId;
+      return '';
+    };
+    const currentTimesheetId = realTimesheetIdFromCtx(ctx);
+    const token = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    ctx.__timesheetTabRefreshTokens = (ctx.__timesheetTabRefreshTokens && typeof ctx.__timesheetTabRefreshTokens === 'object') ? ctx.__timesheetTabRefreshTokens : {};
+    ctx.__timesheetTabRefreshTokens[k] = {
+      token,
+      tab_key: k,
+      mutation_sequence: sequence || null,
+      row_signature: signature || null,
+      current_timesheet_id: currentTimesheetId || null,
+      created_at: Date.now()
+    };
+    ctx.__timesheetLatestTabRenderToken = token;
+    ctx.__timesheetLatestTabRenderKey = k;
+    const getLiveTimesheetCtx = () => {
+      const liveCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      return liveCtx && liveCtx.entity === 'timesheets' ? liveCtx : null;
+    };
+    const sequenceFromCtx = (ctxLike) => {
+      if (!ctxLike || typeof ctxLike !== 'object') return 0;
+      if (typeof readTimesheetLifecycleMutationSequence === 'function') {
+        return Number(readTimesheetLifecycleMutationSequence(ctxLike)) || 0;
+      }
+      return Number(ctxLike.__timesheetLifecycleMutationSeq || ctxLike.__timesheetLatestLifecycleMutationSeq || 0) || 0;
+    };
+    const signatureFromCtx = (ctxLike) => trimStr(
+      ctxLike?.data?.backend_row_signature ||
+      ctxLike?.data?.mutation_row_signature ||
+      ctxLike?.data?.row_signature ||
+      ctxLike?.timesheetDetails?.backend_row_signature ||
+      ctxLike?.timesheetDetails?.mutation_row_signature ||
+      ctxLike?.timesheetDetails?.row_signature ||
+      ctxLike?.timesheetDetails?.row?.backend_row_signature ||
+      ctxLike?.timesheetDetails?.row?.mutation_row_signature ||
+      ctxLike?.timesheetDetails?.row?.row_signature ||
+      ctxLike?.timesheetDetails?.timesheet?.backend_row_signature ||
+      ctxLike?.timesheetDetails?.timesheet?.mutation_row_signature ||
+      ctxLike?.timesheetDetails?.timesheet?.row_signature ||
+      ''
+    );
+    const timesheetIdFromCtx = (ctxLike) => realTimesheetIdFromCtx(ctxLike);
+    const tabTokenFromCtx = (ctxLike, tabKey = k) => trimStr(ctxLike?.__timesheetTabRefreshTokens?.[tabKey]?.token || '');
+    const isStillCurrent = (info = {}) => {
+      const liveCtx = getLiveTimesheetCtx();
+      if (!liveCtx) return false;
+
+      const tabKey = trimStr(info.tab_key || info.tabKey || k) || k;
+      const expectedToken = trimStr(info.token || token || '');
+      const liveToken = tabTokenFromCtx(liveCtx, tabKey);
+      if (expectedToken && liveToken && expectedToken !== liveToken) return false;
+      if (info.require_latest_tab !== false && info.requireLatestTab !== false) {
+        const latestToken = trimStr(liveCtx.__timesheetLatestTabRenderToken || '');
+        if (expectedToken && latestToken && latestToken !== expectedToken) return false;
+      }
+
+      const expectedId = trimStr(
+        info.current_timesheet_id ||
+        info.currentTimesheetId ||
+        info.timesheet_id ||
+        info.timesheetId ||
+        currentTimesheetId ||
+        ''
+      );
+      const liveId = timesheetIdFromCtx(liveCtx);
+      if (expectedId && liveId && expectedId !== liveId) return false;
+
+      const requestSeq = Number(info.mutation_sequence ?? info.mutationSequence ?? sequence ?? 0) || 0;
+      const liveSeq = sequenceFromCtx(liveCtx);
+      if (requestSeq > 0 && liveSeq > requestSeq) return false;
+
+      const requestSignature = trimStr(
+        info.row_signature ||
+        info.rowSignature ||
+        info.backend_row_signature ||
+        info.backendRowSignature ||
+        info.mutation_row_signature ||
+        info.mutationRowSignature ||
+        signature ||
+        ''
+      );
+      const liveSignature = signatureFromCtx(liveCtx);
+      if (requestSignature && liveSignature && requestSignature !== liveSignature) return false;
+
+      return true;
+    };
+    const makeAsyncGuard = (info = {}) => {
+      const guardInfo = {
+        token,
+        tab_key: k,
+        mutation_sequence: sequence || null,
+        row_signature: signature || null,
+        current_timesheet_id: currentTimesheetId || null,
+        ...(info && typeof info === 'object' ? info : {})
+      };
+      return {
+        isCurrent(extra = {}) {
+          return isStillCurrent({
+            ...guardInfo,
+            ...(extra && typeof extra === 'object' ? extra : {})
+          });
+        }
+      };
+    };
+    try {
+      window.__timesheetShouldApplyLazyTabResponse = function timesheetShouldApplyLazyTabResponse(info = {}) {
+        return isStillCurrent(info && typeof info === 'object' ? info : {});
+      };
+    } catch {}
+    const copyCriticalFields = (target) => {
+      if (!target || typeof target !== 'object') return;
+      const liveCtx = getLiveTimesheetCtx() || ctx;
+      const data = (liveCtx.data && typeof liveCtx.data === 'object') ? liveCtx.data : {};
+      const details = (liveCtx.timesheetDetails && typeof liveCtx.timesheetDetails === 'object') ? liveCtx.timesheetDetails : {};
+      const ts = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : {};
+      const actionFlags = (details.action_flags && typeof details.action_flags === 'object')
+        ? details.action_flags
+        : ((data.action_flags && typeof data.action_flags === 'object') ? data.action_flags : null);
+      const keys = [
+        'is_authorised', 'authorised', 'authorised_at_server', 'authorised_at_utc',
+        'is_locked', 'locked', 'is_invoice_locked', 'locked_by_invoice_id',
+        'is_paid', 'paid_at_utc', 'evidence_document_locked', 'evidence_lock_reason',
+        'can_authorise', 'can_unauthorise', 'can_bulk_authorise', 'can_bulk_unauthorise',
+        'can_edit_timesheet_data', 'can_manage_evidence', 'review_only',
+        'backend_row_signature', 'mutation_row_signature', 'row_signature', 'expected_row_signature'
+      ];
+      for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(data, key)) target[key] = data[key];
+        else if (Object.prototype.hasOwnProperty.call(details, key)) target[key] = details[key];
+        else if (Object.prototype.hasOwnProperty.call(ts, key)) target[key] = ts[key];
+      }
+      if (actionFlags) target.action_flags = { ...(target.action_flags || {}), ...actionFlags };
+      const liveTimesheetId = timesheetIdFromCtx(liveCtx) || currentTimesheetId;
+      const liveContractWeekId = contractWeekIdFromCtx(liveCtx);
+      if (liveTimesheetId) {
+        target.timesheet_id = liveTimesheetId;
+        target.current_timesheet_id = liveTimesheetId;
+        target.id = liveTimesheetId;
+        if (liveContractWeekId && !target.contract_week_id) target.contract_week_id = liveContractWeekId;
+      } else if (liveContractWeekId) {
+        target.contract_week_id = liveContractWeekId;
+        if (!target.id) target.id = liveContractWeekId;
+      }
+    };
+    const computeReadOnly = () => {
+      const liveCtx = getLiveTimesheetCtx() || ctx;
+      const data = (liveCtx.data && typeof liveCtx.data === 'object') ? liveCtx.data : {};
+      const details = (liveCtx.timesheetDetails && typeof liveCtx.timesheetDetails === 'object') ? liveCtx.timesheetDetails : {};
+      const ts = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : {};
+      const actionFlags = (details.action_flags && typeof details.action_flags === 'object')
+        ? details.action_flags
+        : ((data.action_flags && typeof data.action_flags === 'object') ? data.action_flags : {});
+      if (liveCtx.__timesheetLifecycleCriticalStateIncomplete === true || liveCtx.__timesheetLifecycleMutationInFlight === true) return true;
+      if (boolish(data.is_authorised) || boolish(data.authorised) || boolish(details.is_authorised) || boolish(details.authorised) || boolish(ts.is_authorised) || boolish(ts.authorised)) return true;
+      if (boolish(data.is_locked) || boolish(data.locked) || boolish(details.is_locked) || boolish(details.locked)) return true;
+      if (boolish(data.is_invoice_locked) || boolish(details.is_invoice_locked) || trimStr(data.locked_by_invoice_id || details.locked_by_invoice_id || '')) return true;
+      if (boolish(data.is_paid) || boolish(details.is_paid) || trimStr(data.paid_at_utc || details.paid_at_utc || '')) return true;
+      if (actionFlags.review_only === true || actionFlags.can_edit_timesheet_data === false || (actionFlags.can_manage_evidence === false && k === 'evidence')) return true;
+      return false;
+    };
+    const enforceCurrentPermissionState = () => {
+      try {
+        const body = byId('modalBody');
+        if (body && typeof setFormReadOnly === 'function' && computeReadOnly()) setFormReadOnly(body, true);
+      } catch {}
+    };
+    try {
+      const badge = ctx.__timesheetLazyTabBadges && ctx.__timesheetLazyTabBadges[k];
+      if (badge && badge.stale) {
+        badge.refreshing = true;
+        badge.last_tab_open_at = Date.now();
+      }
+    } catch {}
+    return {
+      token,
+      mutation_sequence: sequence || null,
+      row_signature: signature || null,
+      current_timesheet_id: currentTimesheetId || null,
+      isStillCurrent,
+      isLatestTabRequest() {
+        const liveCtx = getLiveTimesheetCtx();
+        if (!liveCtx) return false;
+        const latestToken = trimStr(liveCtx.__timesheetLatestTabRenderToken || '');
+        return !(latestToken && latestToken !== token);
+      },
+      makeAsyncGuard,
+      beforeRender(mergedRow) { copyCriticalFields(mergedRow); },
+      afterRender() { enforceCurrentPermissionState(); },
+      enforceCurrentPermissionState
+    };
+  })();
+
   if (this.entity === 'bulk-process' || this.entity === 'bulk-authorise') {
     const trimStr = (value) => String(value == null ? '' : value).trim();
     const identityFromResolvedFallback = (resolvedLike) => {
@@ -293781,7 +294611,20 @@ async setTab(k) {
     }
   }
 
+  if (
+    timesheetTabLifecycleGuard &&
+    typeof timesheetTabLifecycleGuard.isLatestTabRequest === 'function' &&
+    !timesheetTabLifecycleGuard.isLatestTabRequest()
+  ) {
+    this._suppressDirty = false;
+    this.isDirty = prevDirty;
+    GE();
+    return;
+  }
+
+  if (timesheetTabLifecycleGuard && typeof timesheetTabLifecycleGuard.beforeRender === 'function') timesheetTabLifecycleGuard.beforeRender(merged);
   byId('modalBody').innerHTML = this.renderTab(k, merged) || '';
+  if (timesheetTabLifecycleGuard && typeof timesheetTabLifecycleGuard.afterRender === 'function') timesheetTabLifecycleGuard.afterRender();
 
   if (this._runOnRender && typeof this.onReturn === 'function') {
     try {
@@ -295960,14 +296803,41 @@ if (this.entity === 'timesheets' && k === 'evidence') {
 
       // 1) Refresh evidence on tab open (source of truth)
       //    Re-render the tab after refresh so the table reflects the latest state.
-      if (tsId && typeof refreshTimesheetEvidenceIntoModalState === 'function' && !this.__tsEvidenceRefreshInFlight) {
+      //    If a newer lifecycle mutation or tab render wins while this awaits, do not repaint stale evidence.
+      const evidenceRefreshGuard = (timesheetTabLifecycleGuard && typeof timesheetTabLifecycleGuard.makeAsyncGuard === 'function')
+        ? timesheetTabLifecycleGuard.makeAsyncGuard({
+            tab_key: 'evidence',
+            current_timesheet_id: tsId || null
+          })
+        : null;
+      if (
+        tsId &&
+        typeof refreshTimesheetEvidenceIntoModalState === 'function' &&
+        !this.__tsEvidenceRefreshInFlight &&
+        (!evidenceRefreshGuard || evidenceRefreshGuard.isCurrent())
+      ) {
         this.__tsEvidenceRefreshInFlight = true;
         try {
           await refreshTimesheetEvidenceIntoModalState(tsId);
 
-          // Re-render Evidence tab HTML with updated modalCtx.timesheetState.evidence
-          byId('modalBody').innerHTML = this.renderTab('evidence', this.mergedRowForTab('evidence')) || '';
-          root = byId('modalBody');
+          if (evidenceRefreshGuard && !evidenceRefreshGuard.isCurrent()) {
+            if (LOGM) console.warn('[TS][EVIDENCE] skip stale evidence repaint after lifecycle/tab change', {
+              tsId,
+              tab: k
+            });
+          } else {
+            // Re-render Evidence tab HTML with updated modalCtx.timesheetState.evidence
+            const evidenceMerged = this.mergedRowForTab('evidence');
+            if (timesheetTabLifecycleGuard && typeof timesheetTabLifecycleGuard.beforeRender === 'function') {
+              timesheetTabLifecycleGuard.beforeRender(evidenceMerged);
+            }
+            const evidenceBody = byId('modalBody');
+            if (evidenceBody) evidenceBody.innerHTML = this.renderTab('evidence', evidenceMerged) || '';
+            root = byId('modalBody');
+            if (timesheetTabLifecycleGuard && typeof timesheetTabLifecycleGuard.afterRender === 'function') {
+              timesheetTabLifecycleGuard.afterRender();
+            }
+          }
         } catch (e) {
           if (LOGM) console.warn('[TS][EVIDENCE] refresh failed (non-fatal)', e);
         } finally {
@@ -296361,6 +297231,17 @@ try {
 }
 
     // Finalise setTab
+  if (
+    timesheetTabLifecycleGuard &&
+    typeof timesheetTabLifecycleGuard.isLatestTabRequest === 'function' &&
+    !timesheetTabLifecycleGuard.isLatestTabRequest()
+  ) {
+    this._suppressDirty = false;
+    this.isDirty = prevDirty;
+    GE();
+    return;
+  }
+
   this.currentTabKey = k;
   this._attachDirtyTracker();
 
@@ -296389,6 +297270,7 @@ if (this.noParentGate) {
 } else {
   setFormReadOnly(byId('modalBody'), (this.mode === 'view' || this.mode === 'saving'));
 }
+if (timesheetTabLifecycleGuard && typeof timesheetTabLifecycleGuard.enforceCurrentPermissionState === 'function') timesheetTabLifecycleGuard.enforceCurrentPermissionState();
 
 // ✅ TIMESHEETS → LINES: import-authoritative + PROCESSED → allow deferrals, lock hours/schedule/extras
 if (this.entity === 'timesheets' && k === 'lines') {
@@ -296813,7 +297695,6 @@ if (typeof this._updateButtons === 'function') this._updateButtons();
 
 GE();
 }
-
 
 
 
@@ -298250,6 +299131,108 @@ if (!isChild && top.entity === 'timesheets') {
   const canDeleteNow = footerState.canDelete;
   const canUnprocessNow = footerState.canUnprocess;
 
+const lifecycleBusyState = mcNow.__timesheetLifecycleBusy || window.__timesheetLifecycleBusy || null;
+const lifecycleBusy = !!(lifecycleBusyState && lifecycleBusyState.busy !== false) || mcNow.__timesheetLifecycleMutationInFlight === true;
+const lifecycleCriticalBlocked = mcNow.__timesheetLifecycleCriticalStateIncomplete === true;
+const lifecycleBlocked = lifecycleBusy || lifecycleCriticalBlocked;
+const lifecycleBlockedReason = lifecycleBusy
+  ? (String(lifecycleBusyState?.reason || 'Timesheet lifecycle update in progress'))
+  : (String(mcNow.__timesheetLifecycleCriticalStateReason || 'Waiting for trusted lifecycle state'));
+
+const styleLifecycleButton = (btn, state) => {
+  if (!btn) return;
+  const mode = state || {};
+  const enabled = !!mode.enabled;
+  const visible = mode.visible !== false;
+  const redAuthorise = mode.redAuthorise === true;
+  const title = String(mode.title || '');
+  btn.style.display = visible ? '' : 'none';
+  try {
+    btn.classList.remove('btn-outline', 'btn-warn', 'disabled');
+    if (redAuthorise && enabled) btn.classList.add('btn-warn');
+    else btn.classList.add('btn-outline');
+  } catch {}
+  btn.disabled = !enabled;
+  if (!enabled) {
+    btn.style.opacity = '0.45';
+    btn.style.filter = 'grayscale(55%)';
+    btn.style.pointerEvents = 'auto';
+    btn.setAttribute('aria-disabled', 'true');
+    btn.setAttribute('data-disabled', '1');
+    btn.setAttribute('title', title || lifecycleBlockedReason || 'Unavailable');
+    try { btn.classList.add('disabled'); } catch {}
+  } else {
+    btn.style.opacity = '';
+    btn.style.filter = '';
+    btn.style.pointerEvents = '';
+    btn.removeAttribute('aria-disabled');
+    btn.removeAttribute('data-disabled');
+    if (title) btn.setAttribute('title', title);
+    else btn.removeAttribute('title');
+    try { btn.classList.remove('disabled'); } catch {}
+  }
+};
+
+const recomputeLifecycleSaveBlock = () => {
+  const latestCtx = window.modalCtx || {};
+  const latestBusyState = latestCtx.__timesheetLifecycleBusy || window.__timesheetLifecycleBusy || null;
+  const latestBusy = !!(latestBusyState && latestBusyState.busy !== false) || latestCtx.__timesheetLifecycleMutationInFlight === true;
+  const latestCritical = latestCtx.__timesheetLifecycleCriticalStateIncomplete === true;
+  const latestReason = latestBusy
+    ? String(latestBusyState?.reason || 'Timesheet lifecycle update in progress')
+    : String(latestCtx.__timesheetLifecycleCriticalStateReason || 'Waiting for trusted lifecycle state');
+  return { blocked: latestBusy || latestCritical, busy: latestBusy, reason: latestReason };
+};
+
+const applyLifecycleSaveButtonState = (state) => {
+  if (!btnSave) return;
+  const blockedState = state || {};
+  if (blockedState.blocked) {
+    if (!btnSave.hasAttribute('data-lifecycle-prev-title')) {
+      btnSave.setAttribute('data-lifecycle-prev-title', btnSave.getAttribute('title') || '');
+    }
+    btnSave.disabled = true;
+    btnSave.style.opacity = '0.45';
+    btnSave.style.filter = 'grayscale(55%)';
+    btnSave.setAttribute('aria-disabled', 'true');
+    btnSave.setAttribute('data-disabled', '1');
+    btnSave.setAttribute('data-lifecycle-blocked', '1');
+    if (blockedState.busy) btnSave.setAttribute('aria-busy', 'true');
+    else btnSave.removeAttribute('aria-busy');
+    btnSave.setAttribute('title', blockedState.reason || lifecycleBlockedReason || 'Timesheet lifecycle update in progress');
+    return;
+  }
+
+  if (btnSave.getAttribute('data-lifecycle-busy') || btnSave.getAttribute('data-lifecycle-blocked')) {
+    btnSave.style.opacity = '';
+    btnSave.style.filter = '';
+    btnSave.removeAttribute('aria-busy');
+    btnSave.removeAttribute('aria-disabled');
+    btnSave.removeAttribute('data-disabled');
+    btnSave.removeAttribute('data-lifecycle-busy');
+    btnSave.removeAttribute('data-lifecycle-blocked');
+    const previousTitle = btnSave.getAttribute('data-lifecycle-prev-title');
+    btnSave.removeAttribute('data-lifecycle-prev-title');
+    if (previousTitle) btnSave.setAttribute('title', previousTitle);
+    else btnSave.removeAttribute('title');
+  }
+};
+
+try {
+  applyLifecycleSaveButtonState({ blocked: lifecycleBlocked, busy: lifecycleBusy, reason: lifecycleBlockedReason });
+
+  // The generic Save/Edit footer logic runs later in _updateButtons and can recompute
+  // btnSave.disabled. Re-apply the lifecycle lock after the current synchronous
+  // repaint so Save cannot be accidentally re-enabled while busy or critical-blocked.
+  if (btnSave) {
+    const postFooterSaveLock = () => {
+      try { applyLifecycleSaveButtonState(recomputeLifecycleSaveBlock()); } catch {}
+    };
+    if (typeof queueMicrotask === 'function') queueMicrotask(postFooterSaveLock);
+    else setTimeout(postFooterSaveLock, 0);
+  }
+} catch {}
+
   const refreshFooter = async () => {
     const fn = ensureTsRefreshAndRepaintOverview();
     await fn();
@@ -298408,115 +299391,116 @@ if (!isChild && top.entity === 'timesheets') {
   }
 
 
-      // ── Authorise ──
-      if (btnTsAuthorise) {
-        const showBtn = (canAuthoriseNow || showAuthoriseDisabled);
-        btnTsAuthorise.style.display = showBtn ? '' : 'none';
+  // ── Authorise ──
+if (btnTsAuthorise) {
+  const showBtn = (canAuthoriseNow || showAuthoriseDisabled || lifecycleBlocked);
+  const blockedTitle = showAuthoriseDisabled
+    ? 'QR Timesheet has not been signed by manager yet'
+    : lifecycleBlockedReason;
+  const canClickAuthorise = !!(canAuthoriseNow && !showAuthoriseDisabled && !lifecycleBlocked && !top._saving);
 
-        // clear any previous disabled shading/hint
-        try {
-          btnTsAuthorise.style.opacity = '';
-          btnTsAuthorise.style.filter = '';
-          btnTsAuthorise.style.pointerEvents = '';
-          btnTsAuthorise.removeAttribute('aria-disabled');
-          btnTsAuthorise.removeAttribute('data-disabled');
-          btnTsAuthorise.removeAttribute('title');
-        } catch {}
+  styleLifecycleButton(btnTsAuthorise, {
+    visible: showBtn,
+    enabled: canClickAuthorise,
+    redAuthorise: true,
+    title: canClickAuthorise ? '' : blockedTitle
+  });
 
-        if (showAuthoriseDisabled) {
-          // ✅ Shade out (do NOT remove), keep hover title working (avoid native disabled)
-          btnTsAuthorise.disabled = false;
-          btnTsAuthorise.style.opacity = '0.45';
-          btnTsAuthorise.style.filter = 'grayscale(40%)';
-          btnTsAuthorise.style.pointerEvents = 'auto';
-          btnTsAuthorise.setAttribute('aria-disabled', 'true');
-          btnTsAuthorise.setAttribute('data-disabled', '1');
-          btnTsAuthorise.setAttribute('title', 'QR Timesheet has not been signed by manager yet');
+  btnTsAuthorise.dataset.ownerToken = top._token;
+  btnTsAuthorise.onclick = async (ev) => {
+    try { ev && ev.preventDefault && ev.preventDefault(); } catch {}
+    try { ev && ev.stopPropagation && ev.stopPropagation(); } catch {}
+    const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
+    if (!fr || btnTsAuthorise.dataset.ownerToken !== fr._token) return;
 
-          btnTsAuthorise.dataset.ownerToken = top._token;
-          btnTsAuthorise.onclick = async (ev) => {
-            try { ev && ev.preventDefault && ev.preventDefault(); } catch {}
-            try { ev && ev.stopPropagation && ev.stopPropagation(); } catch {}
-            const msg = 'QR Timesheet has not been signed by manager yet';
-            if (window.__toast) window.__toast(msg);
-            else alert(msg);
-            return;
-          };
-        } else if (canAuthoriseNow) {
-          btnTsAuthorise.disabled = !!top._saving;
+    if (!canClickAuthorise || btnTsAuthorise.disabled || (window.modalCtx && window.modalCtx.__timesheetLifecycleMutationInFlight === true)) {
+      const msg = blockedTitle || 'Authorise is not currently available.';
+      if (window.__toast) window.__toast(msg); else if (showAuthoriseDisabled) alert(msg);
+      return;
+    }
 
-          btnTsAuthorise.dataset.ownerToken = top._token;
-          btnTsAuthorise.onclick = async () => {
-            const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
-            if (!fr || btnTsAuthorise.dataset.ownerToken !== fr._token) return;
+    const id = (window.modalCtx?.data?.timesheet_id || window.modalCtx?.data?.current_timesheet_id || null);
+    if (!id) { alert('Timesheet id missing.'); return; }
 
-            const id = (window.modalCtx?.data?.timesheet_id || null);
-            if (!id) { alert('Timesheet id missing.'); return; }
-
-            try {
-              await authoriseTimesheet(id);
-              window.__toast && window.__toast('Timesheet authorised');
-              await refreshFooter();
-            } catch (e) {
-              try {
-                if (typeof tsHandleMoved409Modal === 'function') {
-                  const handled = await tsHandleMoved409Modal(e, {
-                    tabKey: 'overview',
-                    label: 'footer-authorise',
-                    toast: 'This timesheet changed while you were editing; review and try again.'
-                  });
-                  if (handled) return;
-                }
-              } catch {}
-              alert(e?.message || 'Failed to authorise timesheet.');
-            }
-          };
-        }
-      }
-
-      // ── Unauthorise ──
-      if (btnTsUnauthorise) {
-        btnTsUnauthorise.style.display = canUnauthoriseNow ? '' : 'none';
-        btnTsUnauthorise.disabled      = !!top._saving;
-
-        btnTsUnauthorise.dataset.ownerToken = top._token;
-        btnTsUnauthorise.onclick = async () => {
-          const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
-          if (!fr || btnTsUnauthorise.dataset.ownerToken !== fr._token) return;
-
-          const id = (window.modalCtx?.data?.timesheet_id || null);
-          if (!id) { alert('Timesheet id missing.'); return; }
-
-          const ok = await confirmTimesheetAction({
-            title: 'Unauthorise Timesheet?',
-            messageHtml: `
-              <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Unauthorise this timesheet?</div>
-              <div class="mini" style="white-space:pre-wrap;">It will return to a pending state and will need to be authorised again before it can proceed.</div>
-            `,
-            confirmLabel: 'Unauthorise',
-            confirmClass: 'btn btn-outline'
+    try {
+      const result = await authoriseTimesheet(id);
+      if (result && result.ok === false) return;
+      window.__toast && window.__toast('Timesheet authorised');
+      if (!(result && result.critical_patch_complete)) await refreshFooter();
+      else if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
+    } catch (e) {
+      try {
+        if (typeof tsHandleMoved409Modal === 'function') {
+          const handled = await tsHandleMoved409Modal(e, {
+            tabKey: 'overview',
+            label: 'footer-authorise',
+            toast: 'This timesheet changed while you were editing; review and try again.'
           });
-          if (!ok) return;
+          if (handled) return;
+        }
+      } catch {}
+      alert(e?.message || 'Failed to authorise timesheet.');
+    }
+  };
+}
 
-          try {
-            await unauthoriseTimesheet(id);
-            window.__toast && window.__toast('Timesheet unauthorised');
-            await refreshFooter();
-          } catch (e) {
-            try {
-              if (typeof tsHandleMoved409Modal === 'function') {
-                const handled = await tsHandleMoved409Modal(e, {
-                  tabKey: 'overview',
-                  label: 'footer-unauthorise',
-                  toast: 'This timesheet changed while you were editing; review and try again.'
-                });
-                if (handled) return;
-              }
-            } catch {}
-            alert(e?.message || 'Failed to unauthorise timesheet.');
-          }
-        };
-      }
+// ── Unauthorise ──
+if (btnTsUnauthorise) {
+  const canClickUnauthorise = !!(canUnauthoriseNow && !lifecycleBlocked && !top._saving);
+  styleLifecycleButton(btnTsUnauthorise, {
+    visible: canUnauthoriseNow || lifecycleBusy,
+    enabled: canClickUnauthorise,
+    redAuthorise: false,
+    title: canClickUnauthorise ? '' : lifecycleBlockedReason
+  });
+
+  btnTsUnauthorise.dataset.ownerToken = top._token;
+  btnTsUnauthorise.onclick = async (ev) => {
+    try { ev && ev.preventDefault && ev.preventDefault(); } catch {}
+    try { ev && ev.stopPropagation && ev.stopPropagation(); } catch {}
+    const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
+    if (!fr || btnTsUnauthorise.dataset.ownerToken !== fr._token) return;
+
+    if (!canClickUnauthorise || btnTsUnauthorise.disabled || (window.modalCtx && window.modalCtx.__timesheetLifecycleMutationInFlight === true)) {
+      if (window.__toast && lifecycleBlockedReason) window.__toast(lifecycleBlockedReason);
+      return;
+    }
+
+    const id = (window.modalCtx?.data?.timesheet_id || window.modalCtx?.data?.current_timesheet_id || null);
+    if (!id) { alert('Timesheet id missing.'); return; }
+
+    const ok = await confirmTimesheetAction({
+      title: 'Unauthorise Timesheet?',
+      messageHtml: `
+        <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Unauthorise this timesheet?</div>
+        <div class="mini" style="white-space:pre-wrap;">It will return to a pending state and will need to be authorised again before it can proceed.</div>
+      `,
+      confirmLabel: 'Unauthorise',
+      confirmClass: 'btn btn-outline'
+    });
+    if (!ok) return;
+
+    try {
+      const result = await unauthoriseTimesheet(id);
+      if (result && result.ok === false) return;
+      window.__toast && window.__toast('Timesheet unauthorised');
+      if (!(result && result.critical_patch_complete)) await refreshFooter();
+      else if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
+    } catch (e) {
+      try {
+        if (typeof tsHandleMoved409Modal === 'function') {
+          const handled = await tsHandleMoved409Modal(e, {
+            tabKey: 'overview',
+            label: 'footer-unauthorise',
+            toast: 'This timesheet changed while you were editing; review and try again.'
+          });
+          if (handled) return;
+        }
+      } catch {}
+      alert(e?.message || 'Failed to unauthorise timesheet.');
+    }
+  };
+}
 
 // ── Process Timesheet ──
 if (btnTsProcess) {
@@ -301151,6 +302135,539 @@ bindSave(btnSave, top);
 
   renderTop();
 }
+
+
+
+
+function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput, options) {
+  const opts = (options && typeof options === 'object') ? options : {};
+  const ctx = (modalCtxInput && typeof modalCtxInput === 'object')
+    ? modalCtxInput
+    : ((window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null);
+  const action = String(opts.action || '').trim().toLowerCase();
+  const source = String(opts.source || action || 'lifecycle_patch').trim();
+  const requireSignature = opts.requireSignature !== false;
+  const patchedAt = Date.now();
+
+  const result = {
+    applied: false,
+    reason: '',
+    permissionStateComplete: false,
+    priorityBadgesComplete: false,
+    requiresAffectedRowsRefresh: false,
+    requiresFullDetailsRefresh: false,
+    signature: '',
+    current_timesheet_id: null
+  };
+
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const hasOwn = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const isPlainObject = (value) => !!(value && typeof value === 'object' && !Array.isArray(value));
+  const hasKeys = (value) => isPlainObject(value) && Object.keys(value).length > 0;
+  const boolish = (value) => {
+    if (value === true || value === false) return value;
+    const s = trimStr(value).toLowerCase();
+    if (['true', 't', 'yes', 'y', '1', 'authorised', 'authorized'].includes(s)) return true;
+    if (['false', 'f', 'no', 'n', '0', 'pending', 'pending_auth', 'unauthorised', 'unauthorized'].includes(s)) return false;
+    return null;
+  };
+  const firstPresent = (...values) => {
+    for (const value of values) {
+      if (value !== undefined && value !== null && trimStr(value) !== '') return value;
+    }
+    return undefined;
+  };
+  const firstBool = (...values) => {
+    for (const value of values) {
+      if (value === undefined || value === null || trimStr(value) === '') continue;
+      const parsed = boolish(value);
+      if (parsed !== null) return parsed;
+    }
+    return null;
+  };
+  const anyBoolTrue = (...values) => {
+    for (const value of values) {
+      if (value === undefined || value === null || trimStr(value) === '') continue;
+      if (boolish(value) === true) return true;
+    }
+    return false;
+  };
+  const pickSignature = (...values) => {
+    for (const value of values) {
+      const s = trimStr(value);
+      if (s) return s;
+    }
+    return '';
+  };
+  const deepValue = (obj, path) => {
+    try {
+      return String(path).split('.').reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
+    } catch { return undefined; }
+  };
+  const copyKnown = (from, keys, to) => {
+    if (!isPlainObject(from)) return;
+    keys.forEach((key) => {
+      if (hasOwn(from, key)) to[key] = from[key];
+    });
+  };
+
+  if (!ctx) {
+    result.reason = 'NO_MODAL_CONTEXT';
+    result.requiresAffectedRowsRefresh = true;
+    return result;
+  }
+
+  const pushObject = (bucket, value) => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => pushObject(bucket, item));
+      return;
+    }
+    if (isPlainObject(value)) bucket.push(value);
+  };
+
+  const sources = [];
+  pushObject(sources, lifecyclePatchInput);
+  if (isPlainObject(lifecyclePatchInput)) {
+    [
+      'lifecycle_patch', 'lifecyclePatch', 'lifecycle', 'patch', 'row', 'timesheet_row', 'updatedRow',
+      'updated_row', 'affected_row', 'affectedRow', 'timesheet', 'data', 'result'
+    ].forEach((key) => pushObject(sources, lifecyclePatchInput[key]));
+    ['flattened_rows', 'flattenedRows', 'affected_rows', 'affectedRows', 'rows'].forEach((key) => {
+      const arr = lifecyclePatchInput[key];
+      if (Array.isArray(arr) && arr.length) pushObject(sources, arr[0]);
+    });
+  }
+
+  if (!sources.length) {
+    result.reason = 'EMPTY_PATCH';
+    result.requiresAffectedRowsRefresh = true;
+    return result;
+  }
+
+  const patch = {};
+  sources.forEach((src) => {
+    Object.keys(src || {}).forEach((key) => {
+      const value = src[key];
+      if (value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '')) {
+        patch[key] = value;
+      }
+    });
+  });
+
+  const currentId = trimStr(firstPresent(
+    opts.timesheet_id,
+    opts.current_timesheet_id,
+    ctx?.data?.current_timesheet_id,
+    ctx?.data?.timesheet_id,
+    ctx?.data?.id,
+    ctx?.timesheetDetails?.current_timesheet_id,
+    ctx?.timesheetDetails?.row?.current_timesheet_id,
+    ctx?.timesheetDetails?.row?.timesheet_id,
+    ctx?.timesheetDetails?.timesheet?.current_timesheet_id,
+    ctx?.timesheetDetails?.timesheet?.timesheet_id,
+    ctx?.timesheetMeta?.expected_timesheet_id
+  ));
+  const patchId = trimStr(firstPresent(
+    patch.current_timesheet_id,
+    patch.new_timesheet_id,
+    patch.timesheet_id,
+    patch.expected_timesheet_id,
+    patch.id,
+    deepValue(patch, 'identity.current_timesheet_id'),
+    deepValue(patch, 'identity.timesheet_id')
+  ));
+  const resolvedId = patchId || currentId;
+  result.current_timesheet_id = resolvedId || null;
+
+  if (currentId && patchId && patchId !== currentId) {
+    result.reason = 'TIMESHEET_IDENTITY_MISMATCH';
+    result.requiresAffectedRowsRefresh = true;
+    result.requiresFullDetailsRefresh = true;
+    try {
+      ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+      ctx.__timesheetLifecycleCriticalStateReason = result.reason;
+    } catch {}
+    return result;
+  }
+
+  const currentWeekId = trimStr(firstPresent(
+    opts.contract_week_id,
+    ctx?.data?.contract_week_id,
+    ctx?.timesheetDetails?.contract_week_id,
+    ctx?.timesheetDetails?.row?.contract_week_id,
+    ctx?.timesheetDetails?.contract_week?.id,
+    ctx?.timesheetMeta?.contract_week_id
+  ));
+  const patchWeekId = trimStr(firstPresent(patch.contract_week_id, deepValue(patch, 'identity.contract_week_id')));
+  if (currentWeekId && patchWeekId && patchWeekId !== currentWeekId) {
+    result.reason = 'CONTRACT_WEEK_IDENTITY_MISMATCH';
+    result.requiresAffectedRowsRefresh = true;
+    result.requiresFullDetailsRefresh = true;
+    try {
+      ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+      ctx.__timesheetLifecycleCriticalStateReason = result.reason;
+    } catch {}
+    return result;
+  }
+
+  const explicitFullDetailsRefreshRequired = anyBoolTrue(
+    patch.requiresFullDetailsRefresh,
+    patch.requires_full_details_refresh,
+    patch.full_details_refresh_required,
+    deepValue(patch, 'refresh_hints.requires_full_details_refresh')
+  );
+  const explicitRefreshRequired = !!(
+    opts.forceRefresh === true ||
+    anyBoolTrue(
+      patch.refresh_required,
+      patch.lifecycle_refresh_required,
+      patch.requires_refresh,
+      patch.requiresAffectedRowsRefresh,
+      patch.requiresFullDetailsRefresh,
+      patch.requires_affected_row_refresh,
+      patch.requires_full_details_refresh,
+      patch.full_details_refresh_required,
+      deepValue(patch, 'refresh_hints.refresh_required'),
+      deepValue(patch, 'refresh_hints.requires_affected_row_refresh'),
+      deepValue(patch, 'refresh_hints.requires_full_details_refresh'),
+      patch.row_stale,
+      patch.stale,
+      patch.moved,
+      deepValue(patch, 'stale_markers.timesheet_moved'),
+      deepValue(patch, 'stale_markers.stale_write_detected')
+    ) ||
+    patch.error === 'TIMESHEET_MOVED' ||
+    patch.error_code === 'TIMESHEET_MOVED'
+  );
+
+  if (explicitRefreshRequired) {
+    result.reason = 'BACKEND_REFRESH_REQUIRED';
+    result.requiresAffectedRowsRefresh = true;
+    result.requiresFullDetailsRefresh = explicitFullDetailsRefreshRequired;
+    try {
+      ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+      ctx.__timesheetLifecycleCriticalStateReason = result.reason;
+      ctx.__timesheetLifecyclePermissionStateComplete = false;
+      ctx.__timesheetLifecyclePriorityBadgesComplete = false;
+    } catch {}
+    return result;
+  }
+
+  const patchSignature = pickSignature(
+    patch.backend_row_signature,
+    patch.mutation_row_signature,
+    patch.row_signature,
+    patch.expected_row_signature,
+    patch.render_signature,
+    patch.signature,
+    patch.etag,
+    deepValue(patch, 'identity.backend_row_signature'),
+    deepValue(patch, 'identity.row_signature')
+  );
+  const existingSignature = pickSignature(
+    ctx?.data?.backend_row_signature,
+    ctx?.data?.mutation_row_signature,
+    ctx?.data?.row_signature,
+    ctx?.timesheetDetails?.backend_row_signature,
+    ctx?.timesheetDetails?.row_signature,
+    ctx?.timesheetDetails?.row?.backend_row_signature,
+    ctx?.timesheetDetails?.row?.row_signature,
+    ctx?.timesheetDetails?.timesheet?.backend_row_signature,
+    ctx?.timesheetDetails?.timesheet?.row_signature,
+    ctx?.timesheetDetails?.tsfin?.backend_row_signature,
+    ctx?.timesheetDetails?.tsfin?.row_signature
+  );
+  const allowExistingSignature = !!(
+    requireSignature === false &&
+    opts.allowExistingSignature !== false &&
+    ctx.__timesheetLifecycleCriticalStateIncomplete !== true
+  );
+  const signature = patchSignature || (allowExistingSignature ? existingSignature : '');
+  const signatureCameFromPatch = !!patchSignature;
+  result.signature = signature;
+
+  if (requireSignature && !patchSignature) {
+    result.reason = 'MISSING_ROW_SIGNATURE';
+    result.requiresAffectedRowsRefresh = true;
+    try {
+      ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+      ctx.__timesheetLifecycleCriticalStateReason = result.reason;
+      ctx.__timesheetLifecyclePermissionStateComplete = false;
+      ctx.__timesheetLifecyclePriorityBadgesComplete = false;
+    } catch {}
+    return result;
+  }
+
+  const nowIso = new Date().toISOString();
+  let authorisedValue = boolish(firstPresent(
+    patch.is_authorised,
+    patch.authorised,
+    patch.authorized,
+    patch.review_only
+  ));
+  if (authorisedValue === null && (patch.authorised_at_server || patch.authorised_at_utc || patch.authorized_at_utc)) authorisedValue = true;
+  if (authorisedValue === null && action === 'authorise') authorisedValue = true;
+  if (authorisedValue === null && action === 'unauthorise') authorisedValue = false;
+
+  const authorisedAt = authorisedValue === true
+    ? (firstPresent(patch.authorised_at_server, patch.authorised_at_utc, patch.authorized_at_utc, patch.authorised_at, nowIso) || nowIso)
+    : null;
+
+  const processingStatus = trimStr(firstPresent(
+    patch.processing_status,
+    patch.new_processing_status,
+    patch.summary_stage,
+    patch.tools_stage,
+    authorisedValue === false ? 'PENDING_AUTH' : undefined,
+    ctx?.data?.processing_status,
+    ctx?.timesheetDetails?.processing_status,
+    ctx?.timesheetDetails?.row?.processing_status
+  ));
+  const summaryStage = trimStr(firstPresent(
+    patch.summary_stage,
+    patch.tools_stage,
+    processingStatus,
+    ctx?.data?.summary_stage,
+    ctx?.timesheetDetails?.summary_stage
+  ));
+  const bookingId = trimStr(firstPresent(
+    patch.booking_id,
+    deepValue(patch, 'identity.booking_id'),
+    ctx?.data?.booking_id,
+    ctx?.timesheetDetails?.booking_id,
+    ctx?.timesheetDetails?.row?.booking_id,
+    ctx?.timesheetDetails?.contract_week?.booking_id
+  ));
+  const readyToPay = firstPresent(patch.ready_to_pay, patch.ready_to_pay_flag, patch.pay_ready, patch.ts_ready_to_pay);
+  const actionHints = isPlainObject(patch.actions) ? patch.actions : {};
+  const footerActionHints = isPlainObject(patch.footer_action_hints) ? patch.footer_action_hints : {};
+  const editPermissionHints = isPlainObject(patch.edit_permission_hints) ? patch.edit_permission_hints : {};
+  const priorityBadgeHints = isPlainObject(patch.priority_badge_hints) ? patch.priority_badge_hints : {};
+  const patchCompleteness = isPlainObject(patch.patch_completeness) ? patch.patch_completeness : {};
+  const explicitPermissionComplete = firstBool(
+    patch.permission_state_patch_complete,
+    patch.permissionStateComplete,
+    patchCompleteness.permission_state_patch_complete,
+    patchCompleteness.permissionStateComplete
+  );
+  const explicitPriorityComplete = firstBool(
+    patch.priority_badges_patch_complete,
+    patch.priorityBadgesComplete,
+    patchCompleteness.priority_badges_patch_complete,
+    patchCompleteness.priorityBadgesComplete
+  );
+
+  const safeKeys = [
+    'sheet_scope', 'submission_mode', 'route_type', 'route_family',
+    'can_authorise', 'can_unauthorise', 'can_process', 'can_unprocess', 'can_delete', 'can_save', 'can_edit', 'read_only',
+    'can_manage_evidence', 'can_edit_timesheet_data', 'can_edit_hours_schedule', 'can_edit_expenses',
+    'qr_status', 'qr_unsigned_blocked', 'evidence_document_locked', 'evidence_lock_reason',
+    'disabled_reasons', 'issue_codes', 'warnings', 'blockers', 'priority_badges', 'badge_state',
+    'evidence_count', 'has_timesheet_evidence', 'requires_evidence', 'evidence_required'
+  ];
+  const safePatch = {};
+  copyKnown(patch, safeKeys, safePatch);
+
+  const mergedActionFlags = {};
+  [patch.action_flags, actionHints, footerActionHints, editPermissionHints].forEach((src) => {
+    if (!isPlainObject(src)) return;
+    Object.keys(src).forEach((key) => { mergedActionFlags[key] = src[key]; });
+  });
+  if (Object.keys(mergedActionFlags).length) safePatch.action_flags = mergedActionFlags;
+  if (hasKeys(priorityBadgeHints)) safePatch.priority_badge_hints = priorityBadgeHints;
+  if (explicitPermissionComplete !== null) safePatch.permission_state_patch_complete = explicitPermissionComplete;
+  if (explicitPriorityComplete !== null) safePatch.priority_badges_patch_complete = explicitPriorityComplete;
+
+  if (resolvedId) {
+    safePatch.id = resolvedId;
+    safePatch.timesheet_id = resolvedId;
+    safePatch.current_timesheet_id = resolvedId;
+    safePatch.expected_timesheet_id = resolvedId;
+  }
+  if (patchWeekId || currentWeekId) safePatch.contract_week_id = patchWeekId || currentWeekId;
+  if (bookingId) safePatch.booking_id = bookingId;
+  if (processingStatus) safePatch.processing_status = processingStatus;
+  if (summaryStage) {
+    safePatch.summary_stage = summaryStage;
+    safePatch.tools_stage = summaryStage;
+  }
+  if (readyToPay !== undefined) safePatch.ready_to_pay = readyToPay;
+  if (authorisedValue === true) {
+    safePatch.authorised_at_server = authorisedAt;
+    safePatch.authorised_at_utc = authorisedAt;
+    safePatch.is_authorised = true;
+    safePatch.authorised = true;
+    safePatch.review_only = true;
+  } else if (authorisedValue === false) {
+    safePatch.authorised_at_server = null;
+    safePatch.authorised_at_utc = null;
+    safePatch.is_authorised = false;
+    safePatch.authorised = false;
+    safePatch.review_only = false;
+  }
+  if (signature) {
+    safePatch.backend_row_signature = signature;
+    safePatch.mutation_row_signature = signature;
+    safePatch.row_signature = signature;
+    safePatch.expected_row_signature = signature;
+  }
+
+  const writeLifecycle = (surface, opts2) => {
+    if (!surface || typeof surface !== 'object') return;
+    Object.keys(safePatch).forEach((key) => {
+      if (opts2 && opts2.noId && key === 'id') return;
+      surface[key] = safePatch[key];
+    });
+    surface.row_stale = false;
+    surface.refresh_required = false;
+    surface.lifecycle_refresh_failed = false;
+    surface.lifecycle_refresh_error = '';
+  };
+
+  ctx.data = (ctx.data && typeof ctx.data === 'object') ? ctx.data : {};
+  writeLifecycle(ctx.data, { noId: false });
+
+  ctx.timesheetDetails = (ctx.timesheetDetails && typeof ctx.timesheetDetails === 'object') ? ctx.timesheetDetails : {};
+  writeLifecycle(ctx.timesheetDetails, { noId: true });
+
+  ctx.timesheetDetails.row = (ctx.timesheetDetails.row && typeof ctx.timesheetDetails.row === 'object') ? ctx.timesheetDetails.row : {};
+  writeLifecycle(ctx.timesheetDetails.row, { noId: false });
+
+  ctx.timesheetDetails.timesheet = (ctx.timesheetDetails.timesheet && typeof ctx.timesheetDetails.timesheet === 'object') ? ctx.timesheetDetails.timesheet : {};
+  writeLifecycle(ctx.timesheetDetails.timesheet, { noId: true });
+
+  ctx.timesheetDetails.tsfin = (ctx.timesheetDetails.tsfin && typeof ctx.timesheetDetails.tsfin === 'object') ? ctx.timesheetDetails.tsfin : {};
+  if (ctx.timesheetDetails.tsfin && typeof ctx.timesheetDetails.tsfin === 'object') {
+    const tsfinLifecyclePatch = {};
+    [
+      'timesheet_id', 'current_timesheet_id', 'contract_week_id', 'processing_status',
+      'authorised_at_server', 'authorised_at_utc', 'is_authorised', 'authorised',
+      'backend_row_signature', 'mutation_row_signature', 'row_signature', 'expected_row_signature',
+      'ready_to_pay'
+    ].forEach((key) => { if (hasOwn(safePatch, key)) tsfinLifecyclePatch[key] = safePatch[key]; });
+    Object.assign(ctx.timesheetDetails.tsfin, tsfinLifecyclePatch);
+  }
+
+  if (isPlainObject(safePatch.action_flags)) {
+    ctx.timesheetDetails.action_flags = { ...(ctx.timesheetDetails.action_flags || {}), ...safePatch.action_flags };
+    ctx.data.action_flags = { ...(ctx.data.action_flags || {}), ...safePatch.action_flags };
+  }
+  if (hasKeys(priorityBadgeHints)) ctx.timesheetDetails.priority_badge_hints = priorityBadgeHints;
+  if (isPlainObject(patch.bulk_authorise)) ctx.timesheetDetails.bulk_authorise = patch.bulk_authorise;
+  if (isPlainObject(patch.artifact_hints)) ctx.timesheetDetails.artifact_hints = patch.artifact_hints;
+
+  ctx.timesheetMeta = (ctx.timesheetMeta && typeof ctx.timesheetMeta === 'object') ? ctx.timesheetMeta : {};
+  if (resolvedId) {
+    ctx.timesheetMeta.expected_timesheet_id = resolvedId;
+    ctx.timesheetMeta.hasTs = true;
+    ctx.timesheetMeta.isPlannedWeek = false;
+  }
+  if (patchWeekId || currentWeekId) ctx.timesheetMeta.contract_week_id = patchWeekId || currentWeekId;
+  if (authorisedValue === true || authorisedValue === false) {
+    ctx.timesheetMeta.isAuthorised = authorisedValue;
+    ctx.timesheetMeta.is_authorised = authorisedValue;
+    ctx.timesheetMeta.authorised_at_server = authorisedAt;
+    ctx.timesheetMeta.authorised_at_utc = authorisedAt;
+  }
+
+  ctx.refresh_required = false;
+  ctx.lifecycle_refresh_failed = false;
+  ctx.lifecycle_refresh_error = '';
+  delete ctx.__simpleTimesheetLifecycleRefreshRequired;
+  delete ctx.__simpleTimesheetLifecycleRefreshTimesheetId;
+  delete ctx.__simpleTimesheetLifecycleRefreshMessage;
+  delete ctx.__timesheetAuthorisePreflightRefreshRequired;
+  delete ctx.__timesheetAuthorisePreflightRefreshTimesheetId;
+  delete ctx.__timesheetAuthorisePreflightRefreshContractWeekId;
+  delete ctx.__timesheetAuthorisePreflightRefreshBookingId;
+  delete ctx.__timesheetAuthorisePreflightRefreshReason;
+  delete ctx.__timesheetAuthorisePreflightRefreshMarkedAt;
+
+  const hasPermissionSignals = !!(
+    explicitPermissionComplete === true ||
+    hasKeys(safePatch.action_flags) || hasKeys(actionHints) || hasKeys(footerActionHints) || hasKeys(editPermissionHints) ||
+    hasOwn(patch, 'can_authorise') || hasOwn(patch, 'can_unauthorise') ||
+    hasOwn(patch, 'can_process') || hasOwn(patch, 'can_unprocess') ||
+    hasOwn(patch, 'can_save') || hasOwn(patch, 'can_edit') ||
+    action === 'authorise' || action === 'unauthorise' || action === 'save'
+  );
+  const hasPriorityBadgeSignals = !!(
+    explicitPriorityComplete === true || hasKeys(priorityBadgeHints) ||
+    hasOwn(patch, 'issue_codes') || hasOwn(patch, 'disabled_reasons') || hasOwn(patch, 'qr_status') ||
+    hasOwn(patch, 'ready_to_pay') || hasOwn(patch, 'processing_status') || hasOwn(patch, 'summary_stage') ||
+    hasKeys(safePatch.action_flags) || action === 'authorise' || action === 'unauthorise' || action === 'save'
+  );
+
+  result.permissionStateComplete = !!(signatureCameFromPatch && !explicitRefreshRequired && (explicitPermissionComplete === true || (explicitPermissionComplete !== false && hasPermissionSignals)));
+  result.priorityBadgesComplete = !!(signatureCameFromPatch && !explicitRefreshRequired && (explicitPriorityComplete === true || (explicitPriorityComplete !== false && hasPriorityBadgeSignals)));
+  result.applied = true;
+  result.reason = 'APPLIED';
+
+  ctx.__timesheetLifecyclePermissionStateComplete = result.permissionStateComplete;
+  ctx.__timesheetLifecyclePriorityBadgesComplete = result.priorityBadgesComplete;
+  ctx.__timesheetLatestLifecyclePatchAt = patchedAt;
+  ctx.__timesheetLifecycleTrusted = {
+    timesheet_id: resolvedId || null,
+    contract_week_id: patchWeekId || currentWeekId || null,
+    signature: signature || '',
+    source,
+    action,
+    patched_at: patchedAt,
+    mutation_started_at: opts.mutationStartedAt || ctx.__timesheetLatestLifecycleMutationStartedAt || ctx.__timesheetLatestMutationStartedAt || patchedAt,
+    signature_source: signatureCameFromPatch ? 'patch' : (existingSignature ? 'existing_context_untrusted' : ''),
+    trusted: signatureCameFromPatch && result.permissionStateComplete && result.priorityBadgesComplete,
+    permissionStateComplete: result.permissionStateComplete,
+    priorityBadgesComplete: result.priorityBadgesComplete
+  };
+  if (action === 'save' || String(source || '').toLowerCase().includes('save')) ctx.__timesheetLatestSuccessfulSaveAt = patchedAt;
+
+  if (result.permissionStateComplete && result.priorityBadgesComplete) {
+    ctx.__timesheetLifecycleCriticalStateIncomplete = false;
+    delete ctx.__timesheetLifecycleCriticalStateReason;
+  } else {
+    ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+    ctx.__timesheetLifecycleCriticalStateReason = !result.permissionStateComplete ? 'PERMISSION_STATE_INCOMPLETE' : 'PRIORITY_BADGES_INCOMPLETE';
+    result.requiresAffectedRowsRefresh = true;
+  }
+
+  try {
+    if (typeof classifyTimesheetEditDomains === 'function') {
+      const refreshedPolicy = classifyTimesheetEditDomains({
+        row: ctx.data || {},
+        details: ctx.timesheetDetails || {},
+        timesheet: ctx.timesheetDetails?.timesheet || null,
+        tsfin: ctx.timesheetDetails?.tsfin || null,
+        financial_snapshot: ctx.timesheetDetails?.financial_snapshot || null,
+        contract_week: ctx.timesheetDetails?.contract_week || null,
+        related: ctx.timesheetRelated || {},
+        action_flags: ctx.timesheetDetails?.action_flags || null,
+        state: ctx.timesheetState || {}
+      });
+      if (typeof applyTimesheetEditDomainPolicyToModalCtx === 'function') {
+        applyTimesheetEditDomainPolicyToModalCtx(ctx, refreshedPolicy);
+      } else {
+        ctx.timesheetEditDomains = refreshedPolicy;
+      }
+    }
+  } catch {}
+
+  try {
+    const modalBody = document.getElementById('modalBody') || document.querySelector('#modal .modal-body') || document.querySelector('#modalBodyWrap');
+    const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+    const frameReadOnly = !!(frame && frame.mode && frame.mode !== 'edit' && frame.mode !== 'create');
+    const forceReadOnly = (authorisedValue === true) || ctx.__timesheetLifecycleCriticalStateIncomplete === true || ctx.__timesheetLifecycleMutationInFlight === true || frameReadOnly;
+    if (modalBody && typeof setFormReadOnly === 'function') setFormReadOnly(modalBody, !!forceReadOnly);
+  } catch {}
+
+  try {
+    const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+    if (frame && typeof frame._updateButtons === 'function') frame._updateButtons();
+  } catch {}
+
+  return result;
+}
+
+
 
 function resolveBankingPaymentRouteDisplay(source, options = {}) {
   const root = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
@@ -319360,27 +320877,133 @@ async function fetchTimesheetSourceRows(timesheetId, opts = {}) {
   return json;
 }
 
-async function fetchTimesheetRelated(timesheetId) {
+
+
+
+
+async function fetchTimesheetRelated(timesheetId, options = {}) {
   const LOGM = (typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : false;
   const L    = (...a) => { if (LOGM) console.log('[TS][RELATED]', ...a); };
   const GC   = (label) => { if (LOGM) console.groupCollapsed('[TS][RELATED]', label); };
   const GE   = () => { if (LOGM) console.groupEnd(); };
 
-  if (!timesheetId) {
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const tsId = String(timesheetId || '').trim();
+  if (!tsId) {
     throw new Error('fetchTimesheetRelated: timesheetId is required');
   }
 
+  const backgroundMode = opts.background === true || opts.lazy === true;
+  const mutationSequence = Number(opts.mutationSequence ?? opts.mutation_sequence ?? opts.lifecycleSequence ?? opts.lifecycle_sequence ?? 0) || 0;
+  const expectedTimesheetId = String(opts.expected_timesheet_id || opts.expectedTimesheetId || opts.current_timesheet_id || opts.currentTimesheetId || tsId || '').trim();
+
+  if (typeof window !== 'undefined') {
+    window.__timesheetRelatedRefreshQueue = window.__timesheetRelatedRefreshQueue || {};
+  }
+
+  const isStaleRelatedResult = () => {
+    try {
+      const mc = window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : null;
+      if (!mc || mc.entity !== 'timesheets') return false;
+      const liveId = String(mc.data?.current_timesheet_id || mc.data?.timesheet_id || mc.data?.id || '').trim();
+      if (expectedTimesheetId && liveId && expectedTimesheetId !== liveId) return true;
+      if (mutationSequence > 0) {
+        const liveSeq = (typeof readTimesheetLifecycleMutationSequence === 'function')
+          ? readTimesheetLifecycleMutationSequence(mc)
+          : (Number(mc.__timesheetLifecycleMutationSeq || mc.__timesheetLatestLifecycleMutationSeq || 0) || 0);
+        if (liveSeq > mutationSequence) return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  const emptyRelated = {
+    counts: {},
+    candidate: null,
+    client: null,
+    invoices: [],
+    invoice: null,
+    invoice_no_by_invoice_id: {},
+    umbrella: null,
+    contract: null,
+    series: []
+  };
+
+  const queueKey = tsId;
+  const existingQueued = window.__timesheetRelatedRefreshQueue && window.__timesheetRelatedRefreshQueue[queueKey];
+  if (existingQueued && existingQueued.promise && opts.__background_worker !== true) {
+    const existingMutationSequence = Number(existingQueued.mutation_sequence || 0) || 0;
+    const replaceOlderBackgroundRefresh = !!(backgroundMode && mutationSequence > existingMutationSequence);
+    if (backgroundMode && !replaceOlderBackgroundRefresh) return existingQueued.promise;
+    try {
+      if (existingQueued.timer) clearTimeout(existingQueued.timer);
+      delete window.__timesheetRelatedRefreshQueue[queueKey];
+    } catch {}
+  }
+
+  if (backgroundMode && opts.__background_worker !== true) {
+    try {
+      const mc = window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : null;
+      if (mc && mc.entity === 'timesheets') {
+        mc.timesheetRelatedStale = true;
+        mc.timesheetRelatedRefreshing = true;
+        if (typeof markTimesheetLazyRefreshBadge === 'function') {
+          markTimesheetLazyRefreshBadge(mc, 'related', {
+            stale: true,
+            refreshing: true,
+            background: true,
+            mutationSequence
+          });
+        }
+      }
+    } catch {}
+
+    const scheduledAt = Date.now();
+    const queueToken = `${scheduledAt}:${Math.random().toString(36).slice(2)}`;
+    let timer = null;
+    const promise = new Promise((resolve) => {
+      const delay = Math.max(0, Math.min(Number(opts.debounce_ms ?? opts.debounceMs ?? 75) || 75, 500));
+      timer = setTimeout(() => {
+        Promise.resolve(fetchTimesheetRelated(tsId, { ...opts, background: false, lazy: false, __background_worker: true }))
+          .then(resolve)
+          .catch((err) => resolve({ ...emptyRelated, ok: false, error: String(err?.message || err || ''), stale_discarded: isStaleRelatedResult() }))
+          .finally(() => {
+            try {
+              if (window.__timesheetRelatedRefreshQueue?.[queueKey]?.token === queueToken) {
+                delete window.__timesheetRelatedRefreshQueue[queueKey];
+              }
+            } catch {}
+          });
+      }, delay);
+    });
+    window.__timesheetRelatedRefreshQueue[queueKey] = {
+      promise,
+      timer,
+      token: queueToken,
+      started_at: scheduledAt,
+      mutation_sequence: mutationSequence || null
+    };
+    return promise;
+  }
+
   GC('fetchTimesheetRelated');
-  L('START', { timesheetId });
+  L('START', { timesheetId: tsId, background: backgroundMode, mutationSequence: mutationSequence || null });
 
   // 1) Get counts first so the public behaviour and count-driven eligibility stay unchanged.
   let counts = {};
   try {
-    counts = await fetchRelatedCounts('timesheet', timesheetId) || {};
+    counts = await fetchRelatedCounts('timesheet', tsId) || {};
     L('counts', counts);
   } catch (err) {
     L('fetchRelatedCounts failed, proceeding with empty counts', err);
     counts = {};
+  }
+
+  if (isStaleRelatedResult()) {
+    GE();
+    return { ...emptyRelated, ok: false, stale_discarded: true, timesheet_id: tsId, reason: 'STALE_AFTER_COUNTS' };
   }
 
   const toInt = (v) => {
@@ -319398,18 +321021,11 @@ async function fetchTimesheetRelated(timesheetId) {
 
   const out = {
     counts,
-
     candidate: null,
     client:    null,
-
-    // ✅ NEW: many-to-many invoices
     invoices: [],
-    // Back-compat single invoice (do not rely on this; kept for legacy readers)
     invoice: null,
-
-    // ✅ NEW: invoice id -> invoice no (used by Lines tab "Invoiced – INV...")
     invoice_no_by_invoice_id: {},
-
     umbrella:  null,
     contract:  null,
     series:    []
@@ -319419,12 +321035,12 @@ async function fetchTimesheetRelated(timesheetId) {
   // It must never throw: one failed related request must not block the rest.
   const safeFetch = async (typeKey, label) => {
     try {
-      const res = await fetchRelated('timesheet', timesheetId, typeKey);
-
+      if (isStaleRelatedResult()) return [];
+      const res = await fetchRelated('timesheet', tsId, typeKey);
+      if (isStaleRelatedResult()) return [];
       // tolerate both shapes: array OR {items,total}
       const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : []);
       L(`related[${label}]`, { count: items.length, sample: items[0] || null });
-
       return items;
     } catch (err) {
       L(`related[${label}] failed`, err);
@@ -319446,6 +321062,11 @@ async function fetchTimesheetRelated(timesheetId) {
     return { slot: job.slot, items: Array.isArray(items) ? items : [] };
   }));
 
+  if (isStaleRelatedResult()) {
+    GE();
+    return { ...emptyRelated, ok: false, stale_discarded: true, timesheet_id: tsId, reason: 'STALE_AFTER_RELATED_LISTS' };
+  }
+
   for (const result of results) {
     const slot = result.slot;
     const items = Array.isArray(result.items) ? result.items : [];
@@ -319463,24 +321084,12 @@ async function fetchTimesheetRelated(timesheetId) {
     if (slot === 'invoice') {
       out.invoices = items;
       out.invoice  = out.invoices[0] || null; // back-compat only
-
-      // Build invoice_no_by_invoice_id map for downstream use.
       const map = {};
       for (const it of out.invoices) {
         if (!it || typeof it !== 'object') continue;
-
-        // tolerate possible keys
-        const iid =
-          (it.invoice_id != null ? String(it.invoice_id) : '') ||
-          (it.id != null ? String(it.id) : '');
-
+        const iid = (it.invoice_id != null ? String(it.invoice_id) : '') || (it.id != null ? String(it.id) : '');
         if (!iid) continue;
-
-        const ino =
-          (it.invoice_no != null && String(it.invoice_no).trim())
-            ? String(it.invoice_no).trim()
-            : '';
-
+        const ino = (it.invoice_no != null && String(it.invoice_no).trim()) ? String(it.invoice_no).trim() : '';
         if (ino) map[iid] = ino;
       }
       out.invoice_no_by_invoice_id = map;
@@ -319503,6 +321112,19 @@ async function fetchTimesheetRelated(timesheetId) {
     }
   }
 
+  try {
+    const mc = window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : null;
+    if (mc && mc.entity === 'timesheets' && !isStaleRelatedResult()) {
+      mc.timesheetRelatedStale = false;
+      mc.timesheetRelatedRefreshing = false;
+      if (mc.__timesheetLazyTabBadges?.related) {
+        mc.__timesheetLazyTabBadges.related.refreshing = false;
+        mc.__timesheetLazyTabBadges.related.stale = false;
+        mc.__timesheetLazyTabBadges.related.settled_at = Date.now();
+      }
+    }
+  } catch {}
+
   L('RESULT', {
     hasCandidate: !!out.candidate,
     hasClient: !!out.client,
@@ -319515,9 +321137,6 @@ async function fetchTimesheetRelated(timesheetId) {
   GE();
   return out;
 }
-
-
-
 
 // NEW: Electronic signatures evidence viewer
 // Expects backend evidence item with preview_mode: 'SIGNATURES' and meta/meta_json containing booking_id,
@@ -326758,7 +328377,7 @@ async function openTimesheet(row) {
       return;
     }
 
-    const baseRow = { ...row };
+    const baseRow = { ...row, __timesheetWorkbenchFetchPurpose: 'initial_open' };
     const ids = timesheetFastOpenIdsFromRow(baseRow);
     const realTsId = ids.realTsId || null;
     const weekId = ids.weekId || null;
@@ -326777,6 +328396,12 @@ async function openTimesheet(row) {
 
     const openToken = `timesheet:${Date.now()}:${Math.random().toString(36).slice(2)}`;
     const initialCtx = makeInitialTimesheetModalCtx(baseRow, ids, openToken);
+  initialCtx.__timesheetLifecycleMutationSeq = Number(initialCtx.__timesheetLifecycleMutationSeq || 0) || 0;
+  initialCtx.__timesheetLatestLifecycleMutationSeq = Number(initialCtx.__timesheetLatestLifecycleMutationSeq || 0) || 0;
+  initialCtx.__timesheetLazyRefreshSeq = Number(initialCtx.__timesheetLazyRefreshSeq || 0) || 0;
+  initialCtx.__timesheetWorkbenchFetchPurpose = 'initial_open';
+  initialCtx.__timesheetTabRefreshTokens = initialCtx.__timesheetTabRefreshTokens || {};
+  initialCtx.__timesheetLazyTabBadges = initialCtx.__timesheetLazyTabBadges || {};
     window.modalCtx = initialCtx;
     try { if (typeof modalCtx !== 'undefined') modalCtx = window.modalCtx; } catch {}
 
@@ -326826,7 +328451,7 @@ async function openTimesheet(row) {
     );
 
     Promise.resolve()
-      .then(() => hydrateTimesheetModalAfterOpen(openToken, baseRow, ids))
+      .then(() => hydrateTimesheetModalAfterOpen(openToken, { ...baseRow, __timesheetWorkbenchFetchPurpose: 'initial_open' }, ids))
       .catch(async (err) => {
         if (((typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : false)) {
           console.error('[TS][OPEN][FAST_OPEN_BACKGROUND] EXCEPTION', err);
@@ -326846,6 +328471,8 @@ async function openTimesheet(row) {
     GE();
   }
 }
+
+
 
 function timesheetFastOpenIdsFromRow(baseRowArg) {
   const baseRow = (baseRowArg && typeof baseRowArg === 'object') ? baseRowArg : {};
@@ -331151,6 +332778,7 @@ function renderWeeklyManualScheduleEditor(opts) {
     `;
 }
 
+
 async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
   if (!isActiveTimesheetModalToken(openToken)) return false;
 
@@ -331221,9 +332849,33 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
     contract_week_id: startingContractWeekId || mc.data?.contract_week_id || null
   };
 
+  const lifecycleSequence = Number(opts.lifecycleSequence ?? opts.lifecycle_sequence ?? opts.mutationSequence ?? opts.mutation_sequence ?? (typeof readTimesheetLifecycleMutationSequence === 'function' ? readTimesheetLifecycleMutationSequence(mc) : Number(mc.__timesheetLifecycleMutationSeq || mc.__timesheetLatestLifecycleMutationSeq || 0) || 0)) || 0;
+  const isTrustedLocalLifecycle = (rowPatch = {}) => {
+    try {
+      if (opts.forceFullDetails === true || opts.lifecycle_fallback === true) return false;
+      if (typeof hasTrustedTimesheetLifecycleSignature !== 'function') return false;
+      const checkId = trim(rowPatch.current_timesheet_id || rowPatch.timesheet_id || startingTimesheetId || mc.data?.current_timesheet_id || mc.data?.timesheet_id || '');
+      return hasTrustedTimesheetLifecycleSignature(mc, { timesheet_id: checkId || null });
+    } catch { return false; }
+  };
+
   const fetchByWorkbench = async (rowPatch) => {
-    const rowForFetch = { ...baseFetchRow, ...(rowPatch || {}) };
-    return await fetchTimesheetWorkbenchDetails(rowForFetch);
+    const rowForFetch = { ...baseFetchRow, ...(rowPatch || {}), __timesheetWorkbenchFetchPurpose: 'lifecycle_fallback' };
+    if (isTrustedLocalLifecycle(rowPatch)) {
+      return {
+        ...(mc.timesheetDetails || {}),
+        __skipped_full_details: true,
+        __details_skip_reason: 'trusted-local-lifecycle-state',
+        __workbench_fetch_purpose: 'lifecycle_fallback',
+        current_timesheet_id: trim(rowPatch?.current_timesheet_id || rowPatch?.timesheet_id || mc.data?.current_timesheet_id || mc.data?.timesheet_id || '') || mc.timesheetDetails?.current_timesheet_id || null
+      };
+    }
+    return await fetchTimesheetWorkbenchDetails(rowForFetch, {
+      purpose: 'lifecycle_fallback',
+      lifecycleSequence,
+      mutationSequence: lifecycleSequence,
+      forceFullDetails: opts.forceFullDetails === true
+    });
   };
 
   try {
@@ -331700,6 +333352,34 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
     detailsError: ''
   });
 
+  const skippedFullDetails = !!(details && details.__skipped_full_details === true);
+  if (skippedFullDetails) {
+    try {
+      const fr = getFrame();
+      if (fr && fr.entity === 'timesheets' && typeof fr._updateButtons === 'function') fr._updateButtons();
+    } catch {}
+    try {
+      if (typeof scheduleTimesheetPostMutationLazyRefresh === 'function') {
+        scheduleTimesheetPostMutationLazyRefresh({
+          timesheet_id: resolvedTimesheetId || startingTimesheetId || null,
+          current_timesheet_id: resolvedTimesheetId || startingTimesheetId || null,
+          action: opts.action || 'lifecycle',
+          active_tab: tabKey,
+          refresh_domains: ['related', 'summary', 'membership', 'badges'],
+          current_mutation_sequence: lifecycleSequence || ((typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(mc) : Number(mc.__timesheetLifecycleMutationSeq || 0) || null)
+        });
+      }
+    } catch {}
+    return {
+      ok: true,
+      timesheet_id: resolvedTimesheetId || null,
+      contract_week_id: resolvedContractWeekId || null,
+      tabKey,
+      skipped_full_details: true,
+      lazy_refresh_scheduled: true
+    };
+  }
+
   try {
     if (typeof hydrateTimesheetEditStateFromDetails === 'function') {
       await hydrateTimesheetEditStateFromDetails(mc.timesheetDetails || {}, mc);
@@ -331722,7 +333402,16 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
     try {
       const summaryCtx = mc.__summaryCtx || null;
       if (resolvedTimesheetId && typeof refreshTimesheetsSummaryAfterRotation === 'function') {
-        const r = await refreshTimesheetsSummaryAfterRotation(resolvedTimesheetId, { allowRenderAll: false, skipTabRefresh: true });
+        const mustBlockSummary = !!(opts.blocking === true || opts.identity_moved === true || opts.patch_complete === false || details?.was_stale === true);
+        const r = await refreshTimesheetsSummaryAfterRotation(resolvedTimesheetId, {
+          allowRenderAll: false,
+          skipTabRefresh: true,
+          blocking: mustBlockSummary,
+          afterLifecycleMutation: true,
+          background: !mustBlockSummary,
+          lifecycleSequence,
+          mutationSequence: lifecycleSequence
+        });
         didSummaryPatch = !!(r && r.ok);
       } else if (resolvedContractWeekId && typeof refreshContractWeekSummaryAfterPlannedChange === 'function') {
         const r = await refreshContractWeekSummaryAfterPlannedChange(resolvedContractWeekId, summaryCtx);
@@ -331730,7 +333419,7 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
       }
     } catch {}
 
-    if (!didSummaryPatch) {
+    if (!didSummaryPatch && (opts.blocking === true || opts.identity_moved === true || opts.patch_complete === false)) {
       try { await renderAll(); } catch {}
     }
   }
@@ -331750,6 +333439,19 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
     if (fr2 && fr2.entity === 'timesheets') fr2._updateButtons && fr2._updateButtons();
   } catch {}
 
+  try {
+    if (typeof scheduleTimesheetPostMutationLazyRefresh === 'function') {
+      scheduleTimesheetPostMutationLazyRefresh({
+        timesheet_id: resolvedTimesheetId || startingTimesheetId || null,
+        current_timesheet_id: resolvedTimesheetId || startingTimesheetId || null,
+        action: opts.action || 'lifecycle',
+        active_tab: tabKey,
+        refresh_domains: ['related', 'summary', 'membership', 'badges'],
+        current_mutation_sequence: lifecycleSequence || ((typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(mc) : Number(mc.__timesheetLifecycleMutationSeq || 0) || null)
+      });
+    }
+  } catch {}
+
   return {
     ok: true,
     timesheet_id: resolvedTimesheetId || null,
@@ -331757,6 +333459,7 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
     tabKey
   };
 }
+
 
 
 function resolveContractWeekScheduleForModal(rowArg, detailsArg, contractArg, options = {}) {
@@ -333359,10 +335062,25 @@ function renderDailyManualScheduleEditor(opts) {
 }
 
 
+
+
+
 async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
   const targetId = String(newId || '').trim();
-  const allowRenderAll = !!(opts && opts.allowRenderAll === true);
-  const skipTabRefresh = !!(opts && opts.skipTabRefresh === true);
+  const blocking = !!(opts && opts.blocking === true);
+  const afterLifecycleMutation = !!(opts && (opts.afterLifecycleMutation === true || opts.after_lifecycle_mutation === true));
+  const background = !!(opts && (opts.background === true || opts.lazy === true || (afterLifecycleMutation && !blocking)));
+  const lifecycleSequence = Number(opts?.lifecycleSequence ?? opts?.lifecycle_sequence ?? opts?.mutationSequence ?? opts?.mutation_sequence ?? 0) || 0;
+  const sequenceAtEntry = (typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(window.modalCtx || {}) : Number(window.modalCtx?.__timesheetLifecycleMutationSeq || window.modalCtx?.__timesheetLatestLifecycleMutationSeq || 0) || 0;
+  const isStaleLifecycleSummaryResult = () => {
+    try {
+      if (!afterLifecycleMutation || lifecycleSequence <= 0) return false;
+      const live = (typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(window.modalCtx || {}) : Number(window.modalCtx?.__timesheetLifecycleMutationSeq || window.modalCtx?.__timesheetLatestLifecycleMutationSeq || 0) || 0;
+      return live > lifecycleSequence;
+    } catch { return false; }
+  };
+  const allowRenderAll = !!(opts && opts.allowRenderAll === true && !background);
+  const skipTabRefresh = !!(opts && (opts.skipTabRefresh === true || background));
   const patchOnly = !!(opts && (opts.patchOnly === true || opts.patch_only === true || opts.bulkPatchOnly === true || opts.bulk_patch_only === true || opts.rowPatch || opts.row_patch || opts.data_row || opts.row));
   const preserveModalIdentity = !!(opts && (opts.preserveModalIdentity === true || opts.preserve_modal_identity === true || patchOnly));
 
@@ -333373,6 +335091,33 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
     reason: String(reason || '').trim() || null,
     ...extra
   });
+
+
+
+  if (background && afterLifecycleMutation && !blocking && opts.__background_worker !== true) {
+    const scheduledOpts = {
+      ...opts,
+      background: false,
+      lazy: false,
+      __background_worker: true,
+      skipTabRefresh: true,
+      allowRenderAll: false,
+      blocking: false,
+      afterLifecycleMutation: true,
+      lifecycleSequence: lifecycleSequence || sequenceAtEntry || null
+    };
+    setTimeout(() => {
+      Promise.resolve(refreshTimesheetsSummaryAfterRotation(newId, scheduledOpts)).catch((err) => {
+        try { console.warn('[TS][TRACE][SUMMARY_ROTATION] background refresh failed', err); } catch {}
+      });
+    }, Math.max(0, Math.min(Number(opts.debounce_ms ?? opts.debounceMs ?? 75) || 75, 500)));
+    return buildOutcome(true, 'scheduled_background', 'after-lifecycle-background', {
+      target_id: targetId || null,
+      background: true,
+      after_lifecycle_mutation: true,
+      lifecycle_sequence: lifecycleSequence || sequenceAtEntry || null
+    });
+  }
 
   const normaliseApplyOutcome = (result, fallbackReason) => {
     if (result && typeof result === 'object') {
@@ -333543,6 +335288,16 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
     const patch = (rowPatch && typeof rowPatch === 'object') ? rowPatch : null;
     const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
     if (!patch || !mc || mc.entity !== 'timesheets') return false;
+    if (isStaleLifecycleSummaryResult()) {
+      try {
+        console.log('[TS][TRACE][SUMMARY_ROTATION] skip-stale-modal-lifecycle-merge', {
+          target_id: targetId,
+          lifecycle_sequence: lifecycleSequence,
+          live_sequence: (typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(mc) : Number(mc.__timesheetLifecycleMutationSeq || mc.__timesheetLatestLifecycleMutationSeq || 0) || 0
+        });
+      } catch {}
+      return false;
+    }
 
     const hasOwn = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
     const readFirst = (...values) => {
@@ -333815,7 +335570,11 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
       modal_for_id_before: String(window.modalCtx?.formState?.__forId || '').trim() || null,
       expected_before: String(window.modalCtx?.timesheetMeta?.expected_timesheet_id || '').trim() || null,
       allow_render_all: allowRenderAll,
-      skip_tab_refresh: skipTabRefresh
+      skip_tab_refresh: skipTabRefresh,
+      blocking,
+      background,
+      after_lifecycle_mutation: afterLifecycleMutation,
+      lifecycle_sequence: lifecycleSequence || null
     });
   } catch {}
 
@@ -333973,9 +335732,13 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
                 (!!canonicalIdentity.id && String(mc?.data?.id || '') === canonicalIdentity.id)
               )
             ) {
-              mc.data = { ...(mc.data || {}), ...(canonical || {}) };
-              didModalMerge = true;
-              if (patchModalLifecycleFromCanonicalRow(canonical, { source: 'summary-canonical' })) didModalMerge = true;
+              if (!isStaleLifecycleSummaryResult()) {
+                mc.data = { ...(mc.data || {}), ...(canonical || {}) };
+                didModalMerge = true;
+                if (patchModalLifecycleFromCanonicalRow(canonical, { source: 'summary-canonical' })) didModalMerge = true;
+              } else {
+                try { console.log('[TS][TRACE][SUMMARY_ROTATION] stale-summary-result-kept-out-of-modal', { target_id: targetId, lifecycle_sequence: lifecycleSequence }); } catch {}
+              }
 
               try {
                 console.log('[TS][TRACE][SUMMARY_ROTATION] merged-into-modal', {
@@ -334181,6 +335944,8 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
         ).trim();
 
       const shouldRefreshTab =
+        !background &&
+        !isStaleLifecycleSummaryResult() &&
         !skipTabRefresh &&
         !!modalTargetId &&
         (
@@ -334244,8 +336009,6 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
 
   return finalOutcome;
 }
-
-
 
 
 
@@ -339602,6 +341365,7 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
 }
 
 
+
 async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
   const { LOGM, L, GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][LIFECYCLE][AFFECTED-ROWS]')
@@ -339615,6 +341379,12 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
     try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
   };
   const maxItems = Math.max(1, Math.min(Number(opts.max_items ?? opts.maxItems ?? 100) || 100, 100));
+  const networkModeRaw = String(opts.network || opts.networkMode || opts.refresh_network || 'auto').trim().toLowerCase();
+  const networkMode = (networkModeRaw === 'always' || networkModeRaw === 'never') ? networkModeRaw : 'auto';
+  const applyLocal = opts.apply !== false;
+  const backgroundMode = opts.background === true || opts.lazy === true;
+  const requireSignature = opts.require_signature === true || opts.requireSignature === true;
+  const requirePermissionState = opts.require_permission_state === true || opts.requirePermissionState === true;
   const endpoint = trimStr(opts.endpoint || opts.url || '/api/timesheets/lifecycle-affected-rows') || '/api/timesheets/lifecycle-affected-rows';
   const uuidRe = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
 
@@ -339759,7 +341529,7 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
         value.identities.forEach(push);
         return;
       }
-      if (isPlainObject(value) && Array.isArray(value.rows) && value.ok !== true) {
+      if (isPlainObject(value) && Array.isArray(value.rows)) {
         value.rows.forEach(push);
         return;
       }
@@ -340096,8 +341866,109 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
     }
   };
 
+  const hasOwn = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const nestedFirst = (src, keys) => {
+    const obj = isPlainObject(src) ? src : {};
+    for (const key of keys) {
+      if (hasOwn(obj, key)) return obj[key];
+    }
+    return undefined;
+  };
+
+  const collectLocalAffectedRows = () => {
+    const rows = [];
+    const pushRow = (value) => {
+      if (value == null) return;
+      if (Array.isArray(value)) {
+        value.forEach(pushRow);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (Array.isArray(value.flattened_rows)) { value.flattened_rows.forEach(pushRow); return; }
+      if (Array.isArray(value.flattenedRows)) { value.flattenedRows.forEach(pushRow); return; }
+      if (Array.isArray(value.affected_rows)) { value.affected_rows.forEach(pushRow); return; }
+      if (Array.isArray(value.affectedRows)) { value.affectedRows.forEach(pushRow); return; }
+      if (Array.isArray(value.rows)) { value.rows.forEach(pushRow); return; }
+      if (isPlainObject(value.lifecycle_patch)) { pushRow(value.lifecycle_patch); return; }
+      if (isPlainObject(value.lifecyclePatch)) { pushRow(value.lifecyclePatch); return; }
+      if (isPlainObject(value.result) && (Array.isArray(value.result.rows) || Array.isArray(value.result.affected_rows) || Array.isArray(value.result.affectedRows))) { pushRow(value.result); return; }
+      rows.push(value);
+    };
+    pushRow(opts.rows);
+    pushRow(opts.flattened_rows);
+    pushRow(opts.flattenedRows);
+    pushRow(opts.affected_rows);
+    pushRow(opts.affectedRows);
+    pushRow(opts.lifecycle_patch);
+    pushRow(opts.lifecyclePatch);
+    pushRow(input);
+    const out = [];
+    const seen = new Set();
+    for (const row of rows) {
+      const flat = flattenAffectedRow(row);
+      if (!flat || !(flat.row_key || flat.timesheet_id || flat.contract_week_id)) continue;
+      const key = [flat.row_key || '', flat.timesheet_id || '', flat.contract_week_id || '', flat.backend_row_signature || flat.row_signature || ''].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ source: row, flat });
+    }
+    return out;
+  };
+
+  const localRowHasPermissionState = (source, flat) => {
+    if (!requirePermissionState) return true;
+    const src = isPlainObject(source) ? source : {};
+    const actions = isPlainObject(src.actions) ? src.actions : (isPlainObject(src.action_flags) ? src.action_flags : (isPlainObject(flat.action_flags) ? flat.action_flags : {}));
+    const explicitComplete = src.permission_state_complete === true || src.permissionStateComplete === true || src.permission_state_patch_complete === true || src.permissionStatePatchComplete === true;
+    if (explicitComplete) return true;
+    const permissionKeys = ['can_authorise', 'can_unauthorise', 'can_bulk_authorise', 'can_bulk_unauthorise', 'can_edit_timesheet_data', 'can_manage_evidence', 'review_only'];
+    return permissionKeys.some((key) => hasOwn(actions, key) || hasOwn(flat, key));
+  };
+
+  const localRowIsComplete = ({ source, flat }) => {
+    const src = isPlainObject(source) ? source : {};
+    const currentId = trimStr(readFirst(flat.current_timesheet_id, flat.timesheet_id, src.current_timesheet_id, src.timesheet_id, src.identity?.timesheet_id));
+    const hasProcessing = !!trimStr(readFirst(flat.processing_status, flat.bulk_process_bucket, flat.summary_stage, src.processing_status, src.status?.processing_status, src.status?.bucket, src.bulk_process_bucket));
+    const signature = trimStr(readFirst(flat.backend_row_signature, flat.row_signature, flat.mutation_row_signature, flat.render_signature, src.backend_row_signature, src.row_signature, src.mutation_row_signature, src.render_signature));
+    const staleMovedKnown = !!(
+      hasOwn(src, 'was_stale') || hasOwn(src, 'stale') || hasOwn(src, 'moved') || hasOwn(src, 'identity_moved') || hasOwn(src, 'row_moved') ||
+      hasOwn(src, 'current_timesheet_id') || hasOwn(src, 'currentTimesheetId') || hasOwn(src, 'row_key') || hasOwn(src, 'rowKey') ||
+      !!trimStr(flat.current_timesheet_id || flat.timesheet_id || flat.row_key || '') ||
+      hasOwn(input, 'was_stale') || hasOwn(input, 'stale') || hasOwn(input, 'moved') || hasOwn(input, 'identity_moved') || hasOwn(input, 'current_timesheet_id') || hasOwn(input, 'currentTimesheetId')
+    );
+    const versionKnown = !!trimStr(readFirst(src.current_version, src.version, flat.current_version, input.current_version, input.version)) || !hasOwn(src, 'current_version');
+    return !!(currentId && hasProcessing && (!requireSignature || signature) && staleMovedKnown && versionKnown && localRowHasPermissionState(src, flat));
+  };
+
+  const buildLocalAffectedRowsResult = (localPairs, reason) => {
+    const rows = localPairs.map((pair) => pair.source);
+    const flattened_rows = localPairs.map((pair) => pair.flat);
+    const payloadLike = isPlainObject(input) ? input : {};
+    const apply_result = applyLocal ? applyRowsToState(opts.state, rows, payloadLike) : { applied: false, skipped: true };
+    return {
+      ok: true,
+      refresh_failed: false,
+      local_fast_path: true,
+      network_skipped: true,
+      reason: reason || 'complete-local-affected-rows',
+      context: context || payloadLike.context || null,
+      requested_count: flattened_rows.length,
+      rows,
+      flattened_rows,
+      missing: Array.isArray(payloadLike.missing) ? payloadLike.missing : [],
+      removed: Array.isArray(payloadLike.removed) ? payloadLike.removed : [],
+      count_deltas: isPlainObject(payloadLike.count_deltas) ? payloadLike.count_deltas : {},
+      cache_invalidation_hints: isPlainObject(payloadLike.cache_invalidation_hints) ? payloadLike.cache_invalidation_hints : {},
+      apply_result
+    };
+  };
+
   const items = collectItems();
-  if (!items.length) {
+  const localPairs = collectLocalAffectedRows();
+  const completeLocalPairs = localPairs.filter(localRowIsComplete);
+  const hasCompleteLocalRows = completeLocalPairs.length > 0 && completeLocalPairs.length >= Math.min(items.length || 1, localPairs.length || 1);
+
+  if (!items.length && !(networkMode !== 'always' && hasCompleteLocalRows)) {
     const result = {
       ok: false,
       refresh_failed: true,
@@ -340115,24 +341986,82 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
     return result;
   }
 
-  if (items.length > maxItems) {
+  const requestedCountForLimit = items.length || localPairs.length || completeLocalPairs.length || 0;
+  if (requestedCountForLimit > maxItems) {
     const result = {
       ok: false,
       refresh_failed: true,
       error_code: 'TOO_MANY_ROWS',
-      error: `Too many affected rows requested (${items.length}).`,
+      error: `Too many affected rows requested (${requestedCountForLimit}).`,
       max_items: maxItems,
-      received_count: items.length,
+      received_count: requestedCountForLimit,
       rows: [],
       missing: [],
       removed: [],
       count_deltas: {},
       cache_invalidation_hints: {}
     };
-    markRefreshFailed(opts.state, result.error, items);
+    markRefreshFailed(opts.state, result.error, items.length ? items : localPairs.map((pair) => pair.source));
     GE();
     if (opts.throwOnError === true) throw Object.assign(new Error(result.error), { result });
     return result;
+  }
+
+  if (networkMode !== 'always' && hasCompleteLocalRows) {
+    const result = buildLocalAffectedRowsResult(completeLocalPairs, 'complete-local-lifecycle-data');
+    L('local-fast-path', {
+      count: result.flattened_rows.length,
+      apply: applyLocal,
+      require_signature: requireSignature,
+      require_permission_state: requirePermissionState
+    });
+    GE();
+    return result;
+  }
+
+  if (networkMode === 'never') {
+    const result = {
+      ok: false,
+      refresh_failed: true,
+      network_skipped: true,
+      error_code: 'LOCAL_LIFECYCLE_DATA_INCOMPLETE',
+      error: 'Lifecycle affected rows were incomplete and network fallback was disabled.',
+      rows: completeLocalPairs.map((pair) => pair.source),
+      flattened_rows: completeLocalPairs.map((pair) => pair.flat),
+      missing: [],
+      removed: [],
+      count_deltas: {},
+      cache_invalidation_hints: {}
+    };
+    if (applyLocal) markRefreshFailed(opts.state, result.error, items);
+    GE();
+    if (opts.throwOnError === true) throw Object.assign(new Error(result.error), { result });
+    return result;
+  }
+
+  if (backgroundMode && opts.__background_worker !== true) {
+    const shallowInput = deep(input);
+    const shallowOpts = { ...opts, background: false, __background_worker: true };
+    setTimeout(() => {
+      Promise.resolve(refreshTimesheetLifecycleAffectedRows(shallowInput, shallowOpts)).catch((err) => {
+        try { console.warn('[TS][LIFECYCLE][AFFECTED-ROWS] background refresh failed', err); } catch {}
+      });
+    }, Math.max(0, Math.min(Number(opts.debounce_ms ?? opts.debounceMs ?? 50) || 50, 500)));
+    GE();
+    return {
+      ok: true,
+      scheduled_background: true,
+      refresh_failed: false,
+      context: context || null,
+      requested_count: items.length,
+      rows: completeLocalPairs.map((pair) => pair.source),
+      flattened_rows: completeLocalPairs.map((pair) => pair.flat),
+      missing: [],
+      removed: [],
+      count_deltas: {},
+      cache_invalidation_hints: {},
+      apply_result: { applied: false, scheduled: true }
+    };
   }
 
   try {
@@ -340205,8 +342134,6 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
     return result;
   }
 }
-
-
 
 
 async function resendQrTimesheetEmail(timesheetId) {
