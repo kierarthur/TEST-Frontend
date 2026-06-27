@@ -341365,7 +341365,6 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
 }
 
 
-
 async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
   const { LOGM, L, GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][LIFECYCLE][AFFECTED-ROWS]')
@@ -341533,6 +341532,14 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
         value.rows.forEach(push);
         return;
       }
+      if (isPlainObject(value) && isPlainObject(value.lifecycle_patch)) {
+        push(value.lifecycle_patch);
+        return;
+      }
+      if (isPlainObject(value) && isPlainObject(value.lifecyclePatch)) {
+        push(value.lifecyclePatch);
+        return;
+      }
       if (isPlainObject(value) && isPlainObject(value.result)) {
         push(value.result);
         return;
@@ -341582,30 +341589,258 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
     const identity = isPlainObject(src.identity) ? src.identity : {};
     const status = isPlainObject(src.status) ? src.status : {};
     const actions = isPlainObject(src.actions) ? src.actions : {};
+    const actionFlags = isPlainObject(src.action_flags) ? src.action_flags : (isPlainObject(src.actionFlags) ? src.actionFlags : {});
+    const editHints = isPlainObject(src.edit_permission_hints) ? src.edit_permission_hints : (isPlainObject(src.editPermissionHints) ? src.editPermissionHints : {});
+    const footerHints = isPlainObject(src.footer_action_hints) ? src.footer_action_hints : (isPlainObject(src.footerActionHints) ? src.footerActionHints : {});
+    const priorityHints = isPlainObject(src.priority_badge_hints) ? src.priority_badge_hints : (isPlainObject(src.priorityBadgeHints) ? src.priorityBadgeHints : {});
     const display = isPlainObject(src.display) ? src.display : {};
     const evidence = isPlainObject(src.evidence_summary) ? src.evidence_summary : {};
     const staged = isPlainObject(src.staged_evidence_summary) ? src.staged_evidence_summary : {};
+
+    const toBooleanOrNull = (value) => {
+      if (value === true || value === false) return value;
+      if (typeof value === 'number') {
+        if (value === 1) return true;
+        if (value === 0) return false;
+      }
+      const raw = trimStr(value).toLowerCase();
+      if (!raw) return null;
+      if (['true', 't', 'yes', 'y', '1', 'authorised', 'authorized', 'locked', 'readonly', 'read_only', 'ready'].includes(raw)) return true;
+      if (['false', 'f', 'no', 'n', '0', 'unauthorised', 'unauthorized', 'pending_auth', 'pending-authorisation', 'pending_authorisation', 'unlocked'].includes(raw)) return false;
+      return null;
+    };
+
+    const firstBool = function firstBool() {
+      for (let index = 0; index < arguments.length; index += 1) {
+        const parsed = toBooleanOrNull(arguments[index]);
+        if (parsed !== null) return parsed;
+      }
+      return null;
+    };
+
+    const firstArray = function firstArray() {
+      for (let index = 0; index < arguments.length; index += 1) {
+        if (Array.isArray(arguments[index])) return arguments[index];
+      }
+      return [];
+    };
+
     const rowKey = trimStr(readFirst(identity.row_key, identity.rowKey, src.row_key, src.rowKey)) || canonicalRowKey(src);
     const previousRowKey = trimStr(readFirst(identity.previous_row_key, identity.previousRowKey, src.previous_row_key, src.previousRowKey));
-    const timesheetId = trimStr(readFirst(identity.timesheet_id, identity.timesheetId, identity.current_timesheet_id, identity.currentTimesheetId, src.timesheet_id, src.timesheetId));
+    const timesheetId = trimStr(readFirst(
+      identity.current_timesheet_id,
+      identity.currentTimesheetId,
+      identity.timesheet_id,
+      identity.timesheetId,
+      src.current_timesheet_id,
+      src.currentTimesheetId,
+      src.timesheet_id,
+      src.timesheetId,
+      src.requested_timesheet_id,
+      src.requestedTimesheetId
+    ));
+    const requestedTimesheetId = trimStr(readFirst(
+      src.requested_timesheet_id,
+      src.requestedTimesheetId,
+      identity.requested_timesheet_id,
+      identity.requestedTimesheetId,
+      timesheetId
+    ));
+    const expectedTimesheetId = trimStr(readFirst(
+      src.expected_timesheet_id,
+      src.expectedTimesheetId,
+      identity.expected_timesheet_id,
+      identity.expectedTimesheetId,
+      timesheetId
+    ));
     const contractWeekId = trimStr(readFirst(identity.contract_week_id, identity.contractWeekId, src.contract_week_id, src.contractWeekId));
     const bookingId = trimStr(readFirst(identity.booking_id, identity.bookingId, display.booking_id, display.bookingId, src.booking_id, src.bookingId));
-    const bucketRaw = trimStr(readFirst(status.bucket, src.bucket, src.bulk_process_bucket)).toUpperCase();
-    const processBucket = bucketRaw === 'UNPROCESSED' ? 'UNPROCESSED' : 'PROCESSED';
-    const backendSignature = trimStr(readFirst(src.backend_row_signature, src.backendRowSignature, src.row_signature, src.rowSignature, src.render_signature, src.renderSignature));
-    const disabledReasons = Array.isArray(actions.disabled_reasons) ? actions.disabled_reasons : [];
-    const canAuthorise = actions.can_authorise === true;
-    const canUnauthorise = actions.can_unauthorise === true;
-    const canProcess = actions.can_process === true;
-    const canUnprocess = actions.can_unprocess === true;
-    const isPaid = status.is_paid === true;
-    const isInvoiceLocked = status.is_invoice_locked === true;
-    const isLocked = status.is_locked === true;
-    const isAuthorised = status.is_authorised === true;
+    const candidateId = trimStr(readFirst(identity.candidate_id, identity.candidateId, display.candidate_id, display.candidateId, src.candidate_id, src.candidateId));
+    const currentVersion = trimStr(readFirst(src.current_version, src.currentVersion, src.version, identity.current_version, identity.currentVersion, identity.version));
+
+    const processingStatus = trimStr(readFirst(
+      src.processing_status,
+      src.processingStatus,
+      src.new_processing_status,
+      src.newProcessingStatus,
+      status.processing_status,
+      status.processingStatus,
+      priorityHints.processing_status,
+      priorityHints.processingStatus
+    ));
+    const stateAfter = trimStr(readFirst(src.state_after, src.stateAfter, status.state_after, status.stateAfter, priorityHints.state_after, priorityHints.stateAfter));
+    const summaryStage = trimStr(readFirst(src.summary_stage, src.summaryStage, src.tools_stage, src.toolsStage, status.summary_stage, status.summaryStage, display.summary_stage, display.summaryStage, priorityHints.summary_stage, priorityHints.summaryStage));
+    const bucketRaw = trimStr(readFirst(status.bucket, status.bulk_process_bucket, src.bucket, src.bulk_process_bucket, src.bulkProcessBucket, summaryStage)).toUpperCase();
+    const processBucket = bucketRaw ? (bucketRaw === 'UNPROCESSED' ? 'UNPROCESSED' : 'PROCESSED') : null;
+
+    const backendSignature = trimStr(readFirst(
+      src.backend_row_signature,
+      src.backendRowSignature,
+      src.expected_row_signature,
+      src.expectedRowSignature,
+      src.row_signature,
+      src.rowSignature,
+      src.mutation_row_signature,
+      src.mutationRowSignature,
+      src.render_signature,
+      src.renderSignature,
+      identity.backend_row_signature,
+      identity.backendRowSignature,
+      identity.row_signature,
+      identity.rowSignature
+    ));
+
+    let authorisedValue = firstBool(
+      status.is_authorised,
+      status.authorised,
+      src.is_authorised,
+      src.isAuthorised,
+      src.authorised,
+      src.authorized,
+      priorityHints.is_authorised,
+      priorityHints.isAuthorised,
+      priorityHints.authorised,
+      priorityHints.authorized,
+      actionFlags.is_authorised,
+      actionFlags.isAuthorised,
+      actionFlags.authorised,
+      footerHints.is_authorised,
+      footerHints.authorised
+    );
+    const actionUpper = trimStr(readFirst(src.action, src.lifecycle_action, src.lifecycleAction)).toUpperCase();
+    const stateUpper = stateAfter.toUpperCase();
+    const processingUpper = processingStatus.toUpperCase();
+    if (authorisedValue === null) {
+      if (stateUpper === 'AUTHORISED' || stateUpper === 'AUTHORIZED' || actionUpper === 'AUTHORISE' || actionUpper === 'AUTHORIZE') authorisedValue = true;
+      else if (stateUpper === 'UNAUTHORISED' || stateUpper === 'UNAUTHORIZED' || actionUpper === 'UNAUTHORISE' || actionUpper === 'UNAUTHORIZE' || processingUpper === 'PENDING_AUTH') authorisedValue = false;
+      else if (trimStr(readFirst(src.authorised_at_utc, src.authorisedAtUtc, src.authorised_at_server, src.authorisedAtServer, status.authorised_at_utc, status.authorisedAtUtc))) authorisedValue = true;
+    }
+    const authorisedKnown = authorisedValue === true || authorisedValue === false;
+    const isAuthorised = authorisedValue === true;
+
+    const readyToPayValue = firstBool(
+      src.ready_to_pay,
+      src.readyToPay,
+      status.ready_to_pay,
+      status.readyToPay,
+      display.ready_to_pay,
+      display.readyToPay,
+      priorityHints.ready_to_pay,
+      priorityHints.readyToPay
+    );
+    const isPaid = firstBool(status.is_paid, status.isPaid, src.is_paid, src.isPaid, priorityHints.is_paid, priorityHints.isPaid) === true;
+    const isInvoiceLocked = firstBool(status.is_invoice_locked, status.isInvoiceLocked, src.is_invoice_locked, src.isInvoiceLocked) === true;
+    const isLocked = firstBool(status.is_locked, status.isLocked, status.locked, src.is_locked, src.isLocked, src.locked) === true;
+    const qrUnsignedBlocked = firstBool(status.qr_unsigned_blocked, status.qrUnsignedBlocked, src.qr_unsigned_blocked, src.qrUnsignedBlocked, priorityHints.qr_unsigned_blocked, priorityHints.qrUnsignedBlocked) === true;
     const evidenceLocked = isLocked || isAuthorised || isInvoiceLocked || isPaid;
     const evidenceLockReason = isInvoiceLocked
       ? 'INVOICE_LOCKED'
       : (isPaid ? 'TIMESHEET_PAID' : (isAuthorised ? 'AUTHORISED' : (isLocked ? 'LOCKED' : null)));
+
+    const canProcess = firstBool(actions.can_process, actions.canProcess, actionFlags.can_process, actionFlags.canProcess, src.can_process, src.canProcess) === true;
+    const canUnprocess = firstBool(actions.can_unprocess, actions.canUnprocess, actionFlags.can_unprocess, actionFlags.canUnprocess, src.can_unprocess, src.canUnprocess) === true;
+    let canAuthoriseValue = firstBool(
+      actions.can_authorise,
+      actions.canAuthorise,
+      actions.can_authorize,
+      actionFlags.can_authorise,
+      actionFlags.canAuthorise,
+      actionFlags.can_authorize,
+      footerHints.can_authorise,
+      footerHints.canAuthorise,
+      footerHints.can_authorize,
+      priorityHints.can_authorise,
+      priorityHints.canAuthorise,
+      src.can_authorise,
+      src.canAuthorise,
+      src.can_authorize
+    );
+    let canUnauthoriseValue = firstBool(
+      actions.can_unauthorise,
+      actions.canUnauthorise,
+      actions.can_unauthorize,
+      actionFlags.can_unauthorise,
+      actionFlags.canUnauthorise,
+      actionFlags.can_unauthorize,
+      footerHints.can_unauthorise,
+      footerHints.canUnauthorise,
+      footerHints.can_unauthorize,
+      priorityHints.can_unauthorise,
+      priorityHints.canUnauthorise,
+      src.can_unauthorise,
+      src.canUnauthorise,
+      src.can_unauthorize
+    );
+    if (canAuthoriseValue === null && authorisedValue === false && processingUpper && !isLocked && !isInvoiceLocked && !isPaid && !qrUnsignedBlocked) {
+      canAuthoriseValue = ['PENDING_AUTH', 'READY_FOR_AUTHORISATION', 'READY_FOR_AUTHORIZATION', 'READY_FOR_HR', 'PENDING_AUTHORISATION', 'PENDING_AUTHORIZATION'].includes(processingUpper);
+    }
+    if (canUnauthoriseValue === null && authorisedValue === true && !isLocked && !isInvoiceLocked && !isPaid) {
+      canUnauthoriseValue = true;
+    }
+    const canAuthorise = canAuthoriseValue === true;
+    const canUnauthorise = canUnauthoriseValue === true;
+
+    let canSaveValue = firstBool(
+      editHints.can_save,
+      editHints.canSave,
+      editHints.can_edit,
+      editHints.canEdit,
+      actionFlags.can_save,
+      actionFlags.canSave,
+      actionFlags.can_edit_timesheet_data,
+      actionFlags.canEditTimesheetData,
+      src.can_save,
+      src.canSave,
+      src.can_edit_timesheet_data,
+      src.canEditTimesheetData,
+      src.can_edit,
+      src.canEdit
+    );
+    if (canSaveValue === null && authorisedValue === false && !evidenceLocked) canSaveValue = true;
+    const canEditValue = firstBool(
+      editHints.can_edit,
+      editHints.canEdit,
+      editHints.can_edit_timesheet_data,
+      editHints.canEditTimesheetData,
+      actionFlags.can_edit_timesheet_data,
+      actionFlags.canEditTimesheetData,
+      src.can_edit_timesheet_data,
+      src.canEditTimesheetData,
+      src.can_edit,
+      src.canEdit,
+      canSaveValue
+    );
+    const canManageEvidenceValue = firstBool(
+      actions.can_manage_evidence,
+      actions.canManageEvidence,
+      actionFlags.can_manage_evidence,
+      actionFlags.canManageEvidence,
+      editHints.can_manage_evidence,
+      editHints.canManageEvidence,
+      src.can_manage_evidence,
+      src.canManageEvidence
+    );
+    const reviewOnlyValue = firstBool(
+      editHints.read_only,
+      editHints.readOnly,
+      actionFlags.review_only,
+      actionFlags.reviewOnly,
+      src.review_only,
+      src.reviewOnly
+    );
+    const disabledReasons = [
+      ...firstArray(actions.disabled_reasons, actions.disabledReasons),
+      ...firstArray(actionFlags.disabled_reasons, actionFlags.disabledReasons),
+      ...firstArray(footerHints.disabled_reasons, footerHints.disabledReasons),
+      ...firstArray(priorityHints.disabled_reasons, priorityHints.disabledReasons),
+      ...firstArray(src.disabled_reasons, src.disabledReasons)
+    ].filter((value, index, arr) => trimStr(value) && arr.findIndex((v) => trimStr(v) === trimStr(value)) === index);
+    const reviewOnly = reviewOnlyValue !== null ? reviewOnlyValue : (isLocked || isAuthorised);
+    const canSave = canSaveValue === true;
+    const canEditTimesheetData = canEditValue === true;
+    const canManageEvidence = canManageEvidenceValue !== null ? canManageEvidenceValue === true : !evidenceLocked;
+    const authorisedAt = readFirst(src.authorised_at_utc, src.authorisedAtUtc, src.authorised_at_server, src.authorisedAtServer, status.authorised_at_utc, status.authorisedAtUtc, null);
+    const unauthorisedAt = readFirst(src.unauthorised_at_utc, src.unauthorisedAtUtc, src.unauthorised_at_server, src.unauthorisedAtServer, status.unauthorised_at_utc, status.unauthorisedAtUtc, null);
 
     return {
       id: timesheetId || contractWeekId || rowKey || null,
@@ -341615,26 +341850,36 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
       stable_row_id: timesheetId || contractWeekId || null,
       timesheet_id: timesheetId || null,
       current_timesheet_id: timesheetId || null,
-      requested_timesheet_id: timesheetId || null,
-      expected_timesheet_id: timesheetId || null,
+      requested_timesheet_id: requestedTimesheetId || timesheetId || null,
+      expected_timesheet_id: expectedTimesheetId || timesheetId || null,
       contract_week_id: contractWeekId || null,
       booking_id: bookingId || null,
+      candidate_id: candidateId || display.candidate_id || null,
+      current_version: currentVersion || null,
+      version: currentVersion || null,
       row_signature: backendSignature || null,
       backend_row_signature: backendSignature || null,
+      expected_row_signature: trimStr(readFirst(src.expected_row_signature, src.expectedRowSignature, backendSignature)) || null,
       mutation_row_signature: trimStr(readFirst(src.mutation_row_signature, src.mutationRowSignature, backendSignature)) || null,
       render_signature: trimStr(readFirst(src.render_signature, src.renderSignature, src.row_signature, backendSignature)) || null,
-      previous_bulk_process_bucket: trimStr(readFirst(status.previous_bucket, status.previousBucket)) || null,
+      previous_bulk_process_bucket: trimStr(readFirst(status.previous_bucket, status.previousBucket, src.previous_bucket, src.previousBucket)) || null,
       bulk_process_bucket: processBucket,
-      summary_stage: processBucket,
-      tools_stage: processBucket,
-      processing_status: trimStr(status.processing_status) || null,
-      contract_week_status: trimStr(status.contract_week_status) || null,
-      is_authorised: isAuthorised,
+      summary_stage: summaryStage || processBucket || null,
+      tools_stage: summaryStage || processBucket || null,
+      state_after: stateAfter || null,
+      processing_status: processingStatus || null,
+      contract_week_status: trimStr(readFirst(status.contract_week_status, status.contractWeekStatus, src.contract_week_status, src.contractWeekStatus)) || null,
+      is_authorised: authorisedKnown ? authorisedValue : null,
+      authorised: authorisedKnown ? authorisedValue : null,
+      authorised_at_utc: authorisedAt || null,
+      authorised_at_server: authorisedAt || null,
+      unauthorised_at_utc: unauthorisedAt || null,
+      ready_to_pay: readyToPayValue,
       is_paid: isPaid,
       locked: isLocked,
       is_locked: isLocked,
       is_invoice_locked: isInvoiceLocked,
-      qr_unsigned_blocked: status.qr_unsigned_blocked === true,
+      qr_unsigned_blocked: qrUnsignedBlocked,
       can_process: canProcess,
       can_unprocess: canUnprocess,
       can_bulk_authorise: canAuthorise,
@@ -341642,26 +341887,25 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
       can_authorise: canAuthorise,
       can_unauthorise: canUnauthorise,
       bulk_authorise_section: canAuthorise ? 'processed_eligible' : (canUnauthorise ? 'authorised_eligible' : null),
-      can_save: canProcess || canUnprocess,
-      can_edit_timesheet_data: canProcess || canUnprocess,
-      can_manage_evidence: !evidenceLocked,
+      can_save: canSave,
+      can_edit_timesheet_data: canEditTimesheetData,
+      can_manage_evidence: canManageEvidence,
       evidence_document_locked: evidenceLocked,
       evidence_lock_reason: evidenceLockReason,
-      review_only: isLocked || isAuthorised,
+      review_only: reviewOnly,
       disabled_reasons: disabledReasons,
-      week_ending_date: display.week_ending_date || null,
-      candidate_id: display.candidate_id || null,
-      candidate_name: display.candidate_display || null,
-      candidate_display_name: display.candidate_display || null,
-      client_id: display.client_id || null,
-      client_name: display.client_name || null,
-      client_display_name: display.client_name || null,
-      role: display.role || null,
-      band: display.band || null,
-      total_hours: display.total_hours ?? null,
-      total_pay_ex_vat: display.total_pay_ex_vat ?? null,
-      total_charge_ex_vat: display.total_charge_ex_vat ?? null,
-      margin_ex_vat: display.margin_ex_vat ?? null,
+      week_ending_date: display.week_ending_date || display.weekEndingDate || src.week_ending_date || null,
+      candidate_name: display.candidate_display || display.candidate_display_name || src.candidate_name || src.candidate_display_name || null,
+      candidate_display_name: display.candidate_display || display.candidate_display_name || src.candidate_display_name || null,
+      client_id: display.client_id || src.client_id || null,
+      client_name: display.client_name || src.client_name || null,
+      client_display_name: display.client_name || src.client_display_name || null,
+      role: display.role || src.role || null,
+      band: display.band || src.band || null,
+      total_hours: display.total_hours ?? src.total_hours ?? null,
+      total_pay_ex_vat: display.total_pay_ex_vat ?? src.total_pay_ex_vat ?? null,
+      total_charge_ex_vat: display.total_charge_ex_vat ?? src.total_charge_ex_vat ?? null,
+      margin_ex_vat: display.margin_ex_vat ?? src.margin_ex_vat ?? null,
       evidence_count: Number(evidence.count || 0) + Number(staged.staged_count || 0),
       attached_evidence_count: Number(evidence.count || 0),
       queue_staged_count: Number(staged.staged_count || 0),
@@ -341671,17 +341915,35 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
       has_any_evidence: Number(evidence.count || 0) > 0 || Number(staged.staged_count || 0) > 0 || !!trimStr(readFirst(evidence.manual_pdf_r2_key, evidence.primary_storage_key, staged.primary_staged_timesheet_storage_key)),
       evidence_summary: evidence,
       staged_evidence_summary: staged,
+      edit_permission_hints: editHints,
+      footer_action_hints: footerHints,
+      priority_badge_hints: priorityHints,
+      permission_state_patch_complete: src.permission_state_patch_complete === true || src.permissionStatePatchComplete === true || src.permission_state_complete === true || src.permissionStateComplete === true || null,
+      priority_badges_patch_complete: src.priority_badges_patch_complete === true || src.priorityBadgesPatchComplete === true || src.priority_badge_state_complete === true || null,
+      immediate_lifecycle_patch_available: src.immediate_lifecycle_patch_available === true || src.immediateLifecyclePatchAvailable === true || null,
+      requires_affected_row_refresh: src.requires_affected_row_refresh === true || src.requiresAffectedRowRefresh === true,
+      requires_full_details_refresh: src.requires_full_details_refresh === true || src.requiresFullDetailsRefresh === true,
+      refresh_required: src.refresh_required === true || src.refreshRequired === true,
+      was_stale: src.was_stale === true || src.wasStale === true || src.stale === true,
+      stale: src.stale === true,
+      moved: src.moved === true || src.identity_moved === true || src.row_moved === true,
+      identity_moved: src.identity_moved === true || src.identityMoved === true,
+      row_moved: src.row_moved === true || src.rowMoved === true,
+      refresh_hints: isPlainObject(src.refresh_hints) ? src.refresh_hints : (isPlainObject(src.refreshHints) ? src.refreshHints : {}),
       action_flags: {
+        ...actionFlags,
         can_process: canProcess,
         can_unprocess: canUnprocess,
         can_bulk_authorise: canAuthorise,
         can_bulk_unauthorise: canUnauthorise,
         can_authorise: canAuthorise,
         can_unauthorise: canUnauthorise,
-        can_manage_evidence: !evidenceLocked,
+        can_save: canSave,
+        can_edit_timesheet_data: canEditTimesheetData,
+        can_manage_evidence: canManageEvidence,
         evidence_document_locked: evidenceLocked,
         evidence_lock_reason: evidenceLockReason,
-        review_only: isLocked || isAuthorised,
+        review_only: reviewOnly,
         disabled_reasons: disabledReasons
       },
       cache_invalidation_hints: isPlainObject(src.cache_invalidation_hints) ? src.cache_invalidation_hints : {}
@@ -341918,26 +342180,149 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
   const localRowHasPermissionState = (source, flat) => {
     if (!requirePermissionState) return true;
     const src = isPlainObject(source) ? source : {};
-    const actions = isPlainObject(src.actions) ? src.actions : (isPlainObject(src.action_flags) ? src.action_flags : (isPlainObject(flat.action_flags) ? flat.action_flags : {}));
-    const explicitComplete = src.permission_state_complete === true || src.permissionStateComplete === true || src.permission_state_patch_complete === true || src.permissionStatePatchComplete === true;
+    const flatRow = isPlainObject(flat) ? flat : {};
+    const actions = isPlainObject(src.actions) ? src.actions : {};
+    const actionFlags = isPlainObject(src.action_flags) ? src.action_flags : (isPlainObject(src.actionFlags) ? src.actionFlags : {});
+    const footerHints = isPlainObject(src.footer_action_hints) ? src.footer_action_hints : (isPlainObject(src.footerActionHints) ? src.footerActionHints : {});
+    const editHints = isPlainObject(src.edit_permission_hints) ? src.edit_permission_hints : (isPlainObject(src.editPermissionHints) ? src.editPermissionHints : {});
+    const priorityHints = isPlainObject(src.priority_badge_hints) ? src.priority_badge_hints : (isPlainObject(src.priorityBadgeHints) ? src.priorityBadgeHints : {});
+    const status = isPlainObject(src.status) ? src.status : {};
+    const explicitComplete = src.permission_state_complete === true || src.permissionStateComplete === true || src.permission_state_patch_complete === true || src.permissionStatePatchComplete === true || flatRow.permission_state_patch_complete === true;
     if (explicitComplete) return true;
-    const permissionKeys = ['can_authorise', 'can_unauthorise', 'can_bulk_authorise', 'can_bulk_unauthorise', 'can_edit_timesheet_data', 'can_manage_evidence', 'review_only'];
-    return permissionKeys.some((key) => hasOwn(actions, key) || hasOwn(flat, key));
+    if (src.permission_state_complete === false || src.permissionStateComplete === false || src.permission_state_patch_complete === false || src.permissionStatePatchComplete === false || flatRow.permission_state_patch_complete === false) return false;
+
+    const boolishKnown = (value) => {
+      if (value === true || value === false) return true;
+      if (typeof value === 'number') return value === 1 || value === 0;
+      const raw = trimStr(value).toLowerCase();
+      return ['true', 'false', 't', 'f', 'yes', 'no', 'y', 'n', '1', '0', 'authorised', 'authorized', 'unauthorised', 'unauthorized'].includes(raw);
+    };
+    const hasAuthorisedState = [
+      status.is_authorised,
+      status.authorised,
+      src.is_authorised,
+      src.isAuthorised,
+      src.authorised,
+      src.authorized,
+      priorityHints.is_authorised,
+      priorityHints.authorised,
+      flatRow.is_authorised,
+      flatRow.authorised
+    ].some(boolishKnown);
+
+    const permissionKeys = [
+      'can_authorise', 'canAuthorise', 'can_authorize',
+      'can_unauthorise', 'canUnauthorise', 'can_unauthorize',
+      'can_bulk_authorise', 'canBulkAuthorise',
+      'can_bulk_unauthorise', 'canBulkUnauthorise',
+      'can_edit_timesheet_data', 'canEditTimesheetData',
+      'can_edit', 'canEdit',
+      'can_save', 'canSave',
+      'can_manage_evidence', 'canManageEvidence',
+      'review_only', 'reviewOnly',
+      'read_only', 'readOnly'
+    ];
+    const buckets = [actions, actionFlags, footerHints, editHints, priorityHints, flatRow.action_flags, flatRow.footer_action_hints, flatRow.edit_permission_hints, flatRow.priority_badge_hints, flatRow].filter(isPlainObject);
+    const hasPermissionKeys = buckets.some((bucket) => permissionKeys.some((key) => hasOwn(bucket, key)));
+    return !!(hasAuthorisedState && hasPermissionKeys);
   };
 
   const localRowIsComplete = ({ source, flat }) => {
     const src = isPlainObject(source) ? source : {};
-    const currentId = trimStr(readFirst(flat.current_timesheet_id, flat.timesheet_id, src.current_timesheet_id, src.timesheet_id, src.identity?.timesheet_id));
-    const hasProcessing = !!trimStr(readFirst(flat.processing_status, flat.bulk_process_bucket, flat.summary_stage, src.processing_status, src.status?.processing_status, src.status?.bucket, src.bulk_process_bucket));
-    const signature = trimStr(readFirst(flat.backend_row_signature, flat.row_signature, flat.mutation_row_signature, flat.render_signature, src.backend_row_signature, src.row_signature, src.mutation_row_signature, src.render_signature));
+    const flatRow = isPlainObject(flat) ? flat : {};
+    const status = isPlainObject(src.status) ? src.status : {};
+    const priorityHints = isPlainObject(src.priority_badge_hints) ? src.priority_badge_hints : (isPlainObject(src.priorityBadgeHints) ? src.priorityBadgeHints : {});
+    const currentId = trimStr(readFirst(
+      flatRow.current_timesheet_id,
+      flatRow.timesheet_id,
+      src.current_timesheet_id,
+      src.currentTimesheetId,
+      src.timesheet_id,
+      src.timesheetId,
+      src.identity?.current_timesheet_id,
+      src.identity?.timesheet_id
+    ));
+    const actualProcessing = trimStr(readFirst(
+      flatRow.processing_status,
+      src.processing_status,
+      src.processingStatus,
+      src.new_processing_status,
+      src.newProcessingStatus,
+      status.processing_status,
+      status.processingStatus,
+      priorityHints.processing_status,
+      priorityHints.processingStatus
+    ));
+    const stageOrBucket = trimStr(readFirst(flatRow.summary_stage, flatRow.bulk_process_bucket, src.summary_stage, src.summaryStage, src.state_after, src.stateAfter, status.bucket, src.bulk_process_bucket));
+    const hasProcessing = !!actualProcessing || (context !== 'timesheet_modal' && !!stageOrBucket);
+    const signature = trimStr(readFirst(flatRow.backend_row_signature, flatRow.row_signature, flatRow.mutation_row_signature, flatRow.render_signature, src.backend_row_signature, src.backendRowSignature, src.row_signature, src.rowSignature, src.mutation_row_signature, src.mutationRowSignature, src.render_signature, src.renderSignature));
+
+    const boolishKnown = (value) => {
+      if (value === true || value === false) return true;
+      if (typeof value === 'number') return value === 1 || value === 0;
+      const raw = trimStr(value).toLowerCase();
+      return ['true', 'false', 't', 'f', 'yes', 'no', 'y', 'n', '1', '0', 'authorised', 'authorized', 'unauthorised', 'unauthorized'].includes(raw);
+    };
+    const boolishTrue = (value) => value === true || String(value).trim().toLowerCase() === 'true' || String(value).trim() === '1';
+    const stateUpper = trimStr(readFirst(flatRow.state_after, src.state_after, src.stateAfter)).toUpperCase();
+    const processingUpper = actualProcessing.toUpperCase();
+    const hasAuthorisedState = [
+      flatRow.is_authorised,
+      flatRow.authorised,
+      src.is_authorised,
+      src.isAuthorised,
+      src.authorised,
+      src.authorized,
+      status.is_authorised,
+      status.authorised,
+      priorityHints.is_authorised,
+      priorityHints.authorised
+    ].some(boolishKnown) || ['AUTHORISED', 'AUTHORIZED', 'UNAUTHORISED', 'UNAUTHORIZED'].includes(stateUpper) || processingUpper === 'PENDING_AUTH';
+
     const staleMovedKnown = !!(
-      hasOwn(src, 'was_stale') || hasOwn(src, 'stale') || hasOwn(src, 'moved') || hasOwn(src, 'identity_moved') || hasOwn(src, 'row_moved') ||
+      hasOwn(src, 'was_stale') || hasOwn(src, 'wasStale') || hasOwn(src, 'stale') || hasOwn(src, 'moved') || hasOwn(src, 'identity_moved') || hasOwn(src, 'identityMoved') || hasOwn(src, 'row_moved') || hasOwn(src, 'rowMoved') ||
       hasOwn(src, 'current_timesheet_id') || hasOwn(src, 'currentTimesheetId') || hasOwn(src, 'row_key') || hasOwn(src, 'rowKey') ||
-      !!trimStr(flat.current_timesheet_id || flat.timesheet_id || flat.row_key || '') ||
+      !!trimStr(flatRow.current_timesheet_id || flatRow.timesheet_id || flatRow.row_key || '') ||
       hasOwn(input, 'was_stale') || hasOwn(input, 'stale') || hasOwn(input, 'moved') || hasOwn(input, 'identity_moved') || hasOwn(input, 'current_timesheet_id') || hasOwn(input, 'currentTimesheetId')
     );
-    const versionKnown = !!trimStr(readFirst(src.current_version, src.version, flat.current_version, input.current_version, input.version)) || !hasOwn(src, 'current_version');
-    return !!(currentId && hasProcessing && (!requireSignature || signature) && staleMovedKnown && versionKnown && localRowHasPermissionState(src, flat));
+    const staleOrMoved = [
+      src.was_stale,
+      src.wasStale,
+      src.stale,
+      src.moved,
+      src.identity_moved,
+      src.identityMoved,
+      src.row_moved,
+      src.rowMoved,
+      flatRow.was_stale,
+      flatRow.stale,
+      flatRow.moved,
+      flatRow.identity_moved,
+      flatRow.row_moved
+    ].some(boolishTrue);
+    const refreshRequired = [
+      src.refresh_required,
+      src.refreshRequired,
+      src.requires_affected_row_refresh,
+      src.requiresAffectedRowRefresh,
+      src.requires_full_details_refresh,
+      src.requiresFullDetailsRefresh,
+      flatRow.refresh_required,
+      flatRow.requires_affected_row_refresh,
+      flatRow.requires_full_details_refresh
+    ].some(boolishTrue);
+    const versionFields = [
+      ['current_version', src],
+      ['currentVersion', src],
+      ['version', src],
+      ['current_version', flatRow],
+      ['version', flatRow],
+      ['current_version', input],
+      ['version', input]
+    ];
+    const hasExplicitVersionField = versionFields.some(([key, obj]) => hasOwn(obj, key));
+    const versionKnown = !hasExplicitVersionField || !!trimStr(readFirst(src.current_version, src.currentVersion, src.version, flatRow.current_version, flatRow.version, input.current_version, input.version));
+    return !!(currentId && hasProcessing && hasAuthorisedState && (!requireSignature || signature) && staleMovedKnown && !staleOrMoved && !refreshRequired && versionKnown && localRowHasPermissionState(src, flatRow));
   };
 
   const buildLocalAffectedRowsResult = (localPairs, reason) => {
