@@ -168343,6 +168343,8 @@ async function forceRefreshBankingPayBatchChildModalAfterOperation(payBatchId, o
 }
 
 
+
+
 async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -169214,32 +169216,48 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
     }
     return true;
   };
+  const normaliseReplacementPreviewSectionName = (value) => {
+    const section = trimStr(value || 'canonical_preview_lines').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!section || ['preview_rows', 'ready_to_pay', 'ready_preview_lines'].includes(section)) return 'canonical_preview_lines';
+    if (['blocked_items', 'blocked_preview_lines', 'blocked_now', 'blocked_for_pay_now'].includes(section)) return 'blocked_for_pay';
+    if (['case_resolution_states', 'case_resolutions'].includes(section)) return 'cases_resolutions';
+    return section;
+  };
+  const replacementPreviewSectionsRequired = (_progressLike = null) => ['canonical_preview_lines', 'blocked_for_pay', 'cases_resolutions'];
+  const previewPageRows = (pageLike) => {
+    const page = isPlainObject(pageLike) ? pageLike : {};
+    return Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
+  };
   const applyReplacementPreviewPage = (pageLike, progressLike, guard) => {
     const current = guardIsCurrent(guard, replacementSessionId, replacementSessionVersion);
     if (!current || !isPlainObject(pageLike)) return false;
     const returnedSessionId = trimStr(pageLike.session_id || pageLike.sessionId || pageLike.session?.session_id || pageLike.session?.sessionId || '');
     const returnedSessionVersion = positiveVersionOrNull(pageLike.session_version ?? pageLike.sessionVersion ?? pageLike.session?.session_version ?? pageLike.session?.sessionVersion);
-    if (returnedSessionId !== replacementSessionId || returnedSessionVersion !== replacementSessionVersion) return false;
+    if (returnedSessionId !== replacementSessionId || (returnedSessionVersion !== null && returnedSessionVersion !== replacementSessionVersion)) return false;
+    current.wizard.preview = isPlainObject(current.wizard.preview) ? current.wizard.preview : {};
+    current.wizard.workbench = isPlainObject(current.wizard.workbench) ? current.wizard.workbench : {};
+    current.wizard.decisions = isPlainObject(current.wizard.decisions) ? current.wizard.decisions : {};
     const page = cloneJson(pageLike) || pageLike;
-    const rows = Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
+    const requestedSection = normaliseReplacementPreviewSectionName(page.requested_section || page.requestedSection || page.request_section || page.section || 'canonical_preview_lines');
+    const resolvedSection = normaliseReplacementPreviewSectionName(page.resolved_section || page.resolvedSection || page.section || requestedSection);
+    const rows = previewPageRows(page);
+    const rowClones = cloneJson(rows) || [];
     const normalisedPage = {
       ...page,
       session_id: replacementSessionId,
       session_version: replacementSessionVersion,
-      section: 'canonical_preview_lines',
-      requested_section: 'canonical_preview_lines',
-      resolved_section: 'canonical_preview_lines',
-      rows: cloneJson(rows) || [],
+      section: resolvedSection,
+      requested_section: requestedSection,
+      resolved_section: resolvedSection,
+      rows: rowClones,
       items: cloneJson(rows) || [],
-      preview_rows: cloneJson(rows) || [],
-      returned_count: Number.isFinite(Number(page.returned_count)) ? Math.max(0, Math.trunc(Number(page.returned_count))) : rows.length
+      returned_count: Number.isFinite(Number(page.returned_count ?? page.returnedCount)) ? Math.max(0, Math.trunc(Number(page.returned_count ?? page.returnedCount))) : rows.length
     };
-    const componentStateCache = {
-      draftable_now: cloneJson(rows) || [],
-      ready_to_pay_now: cloneJson(rows) || [],
-      ready_preview_lines: cloneJson(rows) || [],
-      canonical_preview_lines: cloneJson(rows) || []
+    const pageMap = {
+      [resolvedSection]: normalisedPage,
+      ...(requestedSection !== resolvedSection ? { [requestedSection]: normalisedPage } : {})
     };
+    const componentStateCache = {};
     const payload = {
       ok: true,
       session_id: replacementSessionId,
@@ -169250,31 +169268,72 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
       pay_date: replacementContract.pay_date || opts.pay_date || opts.payDate || result.pay_date || null,
       week_ending_cutoff: replacementContract.week_ending_cutoff || opts.week_ending_cutoff_date || opts.weekEndingCutoffDate || opts.week_ending_cutoff || opts.weekEndingCutoff || result.week_ending_cutoff || null,
       progress: cloneJson(progressLike) || progressLike || null,
-      preview_pages: { canonical_preview_lines: normalisedPage },
-      preview_page_cache: { canonical_preview_lines: normalisedPage },
-      canonical_preview_lines: cloneJson(rows) || [],
-      preview_rows: cloneJson(rows) || [],
-      ready_preview_lines: cloneJson(rows) || [],
-      rows: cloneJson(rows) || [],
+      preview_pages: pageMap,
+      preview_page_cache: pageMap,
+      page_cache: pageMap,
       preview: {
         ok: true,
-        canonical_preview_lines: cloneJson(rows) || [],
-        preview_rows: cloneJson(rows) || [],
-        ready_preview_lines: cloneJson(rows) || [],
-        rows: cloneJson(rows) || [],
+        preview_pages: pageMap,
+        preview_page_cache: pageMap,
+        page_cache: pageMap,
         componentStateCache
       }
     };
+    if (resolvedSection === 'canonical_preview_lines') {
+      payload.canonical_preview_lines = cloneJson(rows) || [];
+      payload.preview_rows = cloneJson(rows) || [];
+      payload.ready_preview_lines = cloneJson(rows) || [];
+      payload.rows = cloneJson(rows) || [];
+      payload.preview.canonical_preview_lines = cloneJson(rows) || [];
+      payload.preview.preview_rows = cloneJson(rows) || [];
+      payload.preview.ready_preview_lines = cloneJson(rows) || [];
+      payload.preview.rows = cloneJson(rows) || [];
+      componentStateCache.draftable_now = cloneJson(rows) || [];
+      componentStateCache.ready_to_pay_now = cloneJson(rows) || [];
+      componentStateCache.ready_preview_lines = cloneJson(rows) || [];
+      componentStateCache.canonical_preview_lines = cloneJson(rows) || [];
+    } else if (resolvedSection === 'blocked_for_pay') {
+      payload.blocked_for_pay = cloneJson(rows) || [];
+      payload.blocked_for_pay_now = cloneJson(rows) || [];
+      payload.blocked_now = cloneJson(rows) || [];
+      payload.blocked_preview_lines = cloneJson(rows) || [];
+      payload.preview.blocked_for_pay = cloneJson(rows) || [];
+      payload.preview.blocked_for_pay_now = cloneJson(rows) || [];
+      payload.preview.blocked_now = cloneJson(rows) || [];
+      payload.preview.blocked_preview_lines = cloneJson(rows) || [];
+      componentStateCache.blocked_for_pay = cloneJson(rows) || [];
+      componentStateCache.blocked_for_pay_now = cloneJson(rows) || [];
+      componentStateCache.blocked_now = cloneJson(rows) || [];
+      componentStateCache.blocked_preview_lines = cloneJson(rows) || [];
+    } else if (resolvedSection === 'cases_resolutions') {
+      payload.case_resolution_states = cloneJson(rows) || [];
+      payload.cases_resolutions = cloneJson(rows) || [];
+      payload.preview.case_resolution_states = cloneJson(rows) || [];
+      payload.preview.cases_resolutions = cloneJson(rows) || [];
+      componentStateCache.case_resolution_states = cloneJson(rows) || [];
+      componentStateCache.cases_resolutions = cloneJson(rows) || [];
+    }
     if (typeof applyPayWorkbenchPreviewToState === 'function') {
       applyPayWorkbenchPreviewToState(payload, current.banking);
     } else {
-      current.wizard.preview.data = payload;
+      current.wizard.preview.data = isPlainObject(current.wizard.preview.data) ? current.wizard.preview.data : {};
+      current.wizard.preview.data = { ...current.wizard.preview.data, ...payload };
+      current.wizard.preview.preview_pages = { ...(isPlainObject(current.wizard.preview.preview_pages) ? current.wizard.preview.preview_pages : {}), ...pageMap };
+      current.wizard.preview.preview_page_cache = { ...(isPlainObject(current.wizard.preview.preview_page_cache) ? current.wizard.preview.preview_page_cache : {}), ...pageMap };
+      current.wizard.workbench.preview_pages = { ...(isPlainObject(current.wizard.workbench.preview_pages) ? current.wizard.workbench.preview_pages : {}), ...pageMap };
+      current.wizard.workbench.preview_page_cache = { ...(isPlainObject(current.wizard.workbench.preview_page_cache) ? current.wizard.workbench.preview_page_cache : {}), ...pageMap };
     }
-    current.wizard.preview.first_page_applied = true;
-    current.wizard.preview.__canonical_first_page_session_id = replacementSessionId;
-    current.wizard.preview.__canonical_first_page_session_version = replacementSessionVersion;
-    current.wizard.preview.canonical_first_page_session_id = replacementSessionId;
-    current.wizard.preview.canonical_first_page_session_version = replacementSessionVersion;
+    current.wizard.workbench.required_preview_sections_loaded = isPlainObject(current.wizard.workbench.required_preview_sections_loaded) ? current.wizard.workbench.required_preview_sections_loaded : {};
+    current.wizard.workbench.required_preview_sections_loaded[resolvedSection] = true;
+    if (requestedSection !== resolvedSection) current.wizard.workbench.required_preview_sections_loaded[requestedSection] = true;
+    current.wizard.workbench.requiredPreviewSectionsLoaded = { ...current.wizard.workbench.required_preview_sections_loaded };
+    if (resolvedSection === 'canonical_preview_lines') {
+      current.wizard.preview.first_page_applied = true;
+      current.wizard.preview.__canonical_first_page_session_id = replacementSessionId;
+      current.wizard.preview.__canonical_first_page_session_version = replacementSessionVersion;
+      current.wizard.preview.canonical_first_page_session_id = replacementSessionId;
+      current.wizard.preview.canonical_first_page_session_version = replacementSessionVersion;
+    }
     const progressSource = isPlainObject(progressLike?.progress) ? progressLike.progress : (isPlainObject(progressLike) ? progressLike : {});
     const readyEmpty = progressLike?.ready_empty === true || progressSource.ready_empty === true;
     const ready = readyEmpty || progressLike?.ready === true || progressLike?.ready_flag === true || progressSource.ready === true || progressSource.ready_flag === true;
@@ -169290,7 +169349,45 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
     current.wizard.workbench.preview_reopen_required = false;
     current.wizard.decisions.create_draft_refresh_pending = !ready;
     current.wizard.decisions.preview_reopen_required = false;
-    return { applied: true, ready, ready_empty: readyEmpty, row_count: rows.length };
+    return { applied: true, ready, ready_empty: readyEmpty, row_count: rows.length, section: resolvedSection };
+  };
+  const refreshReplacementPreviewSections = async (progressLike, guard) => {
+    if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') {
+      return { ok: false, skipped: true, reason: 'PREVIEW_PAGE_HELPER_UNAVAILABLE', loaded_sections: [] };
+    }
+    const loadedSections = [];
+    const failedSections = [];
+    for (const section of replacementPreviewSectionsRequired(progressLike)) {
+      const currentBeforePage = guardIsCurrent(guard, replacementSessionId, replacementSessionVersion);
+      if (!currentBeforePage) return { ok: true, skipped: true, outcome: 'superseded', reason: 'MODAL_CLOSED_OR_CONTEXT_CHANGED', loaded_sections: loadedSections, failed_sections: failedSections };
+      try {
+        const page = await bankingPayWorkbenchSessionGetPreviewPage(replacementSessionId, section, {
+          limit: 100,
+          background: true,
+          silent: true,
+          userInitiated: false,
+          expected_session_id: replacementSessionId,
+          current_session_id: replacementSessionId,
+          enforce_active_session: true,
+          source_session_id: sourceSessionId,
+          source_session_version: sourceSessionVersion,
+          mutation_context: 'CREATE_DRAFT_SUCCESS',
+          source: `bankingPayApplyCreateDraftResult.refreshReplacementPreviewSections.${section}`
+        });
+        const currentAfterPage = guardIsCurrent(guard, replacementSessionId, replacementSessionVersion);
+        if (!currentAfterPage) return { ok: true, skipped: true, outcome: 'superseded', reason: 'MODAL_CLOSED_OR_CONTEXT_CHANGED', loaded_sections: loadedSections, failed_sections: failedSections };
+        const applied = page && page.ok !== false ? applyReplacementPreviewPage(page, progressLike, guard) : false;
+        if (applied) loadedSections.push(section);
+        else failedSections.push(section);
+      } catch (e) {
+        failedSections.push(section);
+      }
+    }
+    return { ok: failedSections.length <= 0, loaded_sections: loadedSections, failed_sections: failedSections };
+  };
+  const rerenderPostCreateReplacementProgress = async () => {
+    try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
   };
   const pollPostCreateReplacementPreview = async (explicitReplacementSessionId, explicitReplacementSessionVersion, guard) => {
     const pollSessionId = trimStr(explicitReplacementSessionId);
@@ -169301,10 +169398,10 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
     if (typeof bankingPayWorkbenchSessionGetProgress !== 'function') {
       return { ok: false, skipped: true, reason: 'PROGRESS_HELPER_UNAVAILABLE' };
     }
-    const maxAttemptsRaw = Number(opts.post_create_poll_attempts ?? opts.postCreatePollAttempts ?? 3);
-    const maxAttempts = Number.isFinite(maxAttemptsRaw) ? Math.max(1, Math.min(12, Math.trunc(maxAttemptsRaw))) : 3;
-    const delayRaw = Number(opts.post_create_poll_delay_ms ?? opts.postCreatePollDelayMs ?? 750);
-    const delayMs = Number.isFinite(delayRaw) ? Math.max(250, Math.min(3000, Math.trunc(delayRaw))) : 750;
+    const maxAttemptsRaw = Number(opts.post_create_poll_attempts ?? opts.postCreatePollAttempts ?? 120);
+    const maxAttempts = Number.isFinite(maxAttemptsRaw) ? Math.max(1, Math.min(240, Math.trunc(maxAttemptsRaw))) : 120;
+    const delayRaw = Number(opts.post_create_poll_delay_ms ?? opts.postCreatePollDelayMs ?? 1500);
+    const delayMs = Number.isFinite(delayRaw) ? Math.max(1000, Math.min(2000, Math.trunc(delayRaw))) : 1500;
     const initialCurrent = guardIsCurrent(guard, pollSessionId, pollSessionVersion);
     const existingPageLoaded = !!(initialCurrent && replacementPageAlreadyLoaded(initialCurrent.wizard, pollSessionId, pollSessionVersion));
     let pageLoaded = existingPageLoaded;
@@ -169424,6 +169521,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
       currentAfterRead.wizard.workbench.preview_reopen_required = false;
       currentAfterRead.wizard.decisions.create_draft_refresh_pending = refreshPending;
       currentAfterRead.wizard.decisions.preview_reopen_required = false;
+      await rerenderPostCreateReplacementProgress();
 
       if (readyEmpty) {
         currentAfterRead.wizard.preview.loading = false;
@@ -169463,15 +169561,21 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
         if (!currentAfterPreview) {
           return { ok: true, skipped: true, outcome: 'superseded', reason: 'MODAL_CLOSED_OR_CONTEXT_CHANGED', progress };
         }
-        pageLoaded = replacementPageAlreadyLoaded(currentAfterPreview.wizard, pollSessionId, pollSessionVersion, progress);
-        const stateReadyEmpty = currentAfterPreview.wizard.preview?.ready_empty === true ||
-          currentAfterPreview.wizard.preview?.data?.ready_empty === true ||
-          currentAfterPreview.wizard.preview?.data?.preview?.ready_empty === true;
+        await refreshReplacementPreviewSections(progress, guard);
+        const currentAfterSectionPages = guardIsCurrent(guard, pollSessionId, pollSessionVersion);
+        if (!currentAfterSectionPages) {
+          return { ok: true, skipped: true, outcome: 'superseded', reason: 'MODAL_CLOSED_OR_CONTEXT_CHANGED', progress };
+        }
+        await rerenderPostCreateReplacementProgress();
+        pageLoaded = replacementPageAlreadyLoaded(currentAfterSectionPages.wizard, pollSessionId, pollSessionVersion, progress);
+        const stateReadyEmpty = currentAfterSectionPages.wizard.preview?.ready_empty === true ||
+          currentAfterSectionPages.wizard.preview?.data?.ready_empty === true ||
+          currentAfterSectionPages.wizard.preview?.data?.preview?.ready_empty === true;
         if (stateReadyEmpty) {
-          currentAfterPreview.wizard.preview.loading = false;
-          currentAfterPreview.wizard.preview.__post_create_refresh_pending = false;
-          currentAfterPreview.wizard.workbench.create_draft_refresh_pending = false;
-          currentAfterPreview.wizard.decisions.create_draft_refresh_pending = false;
+          currentAfterSectionPages.wizard.preview.loading = false;
+          currentAfterSectionPages.wizard.preview.__post_create_refresh_pending = false;
+          currentAfterSectionPages.wizard.workbench.create_draft_refresh_pending = false;
+          currentAfterSectionPages.wizard.decisions.create_draft_refresh_pending = false;
           return { ok: true, outcome: 'ready_empty', progress, page_loaded: false };
         }
       }
@@ -169699,9 +169803,6 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
 
   return normalisedResult;
 }
-
-
-
 
 async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
