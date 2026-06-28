@@ -31899,9 +31899,6 @@ async function bankingPayPreview(pay_date) {
 }
 
 
-
-
-
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -33342,6 +33339,325 @@ async function bankingPayCreateDraft(input = {}) {
       valid: !!(selected && uuidRe.test(selected.session_id) && selected.session_version !== null),
       source_paths: selected?.source_paths || []
     };
+  };
+
+
+
+  const recoverPostCreateReplacementContract = async (context = {}) => {
+    const uuidReLocal = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const positiveVersionOrNull = (rawValue) => {
+      const text = trimStr(rawValue);
+      if (!/^[0-9]{1,18}$/.test(text)) return null;
+      const number = Number(text);
+      return Number.isFinite(number) && number >= 1 ? Math.trunc(number) : null;
+    };
+    const sourceSessionId = trimStr(context.source_session_id || context.sourceSessionId || '');
+    const operationId = trimStr(context.operation_id || context.operationId || '');
+    const payDate = trimStr(context.pay_date || context.payDate || '');
+    const weekEndingCutoff = trimStr(context.week_ending_cutoff || context.weekEndingCutoff || context.week_ending_cutoff_date || context.weekEndingCutoffDate || '9999-12-31') || '9999-12-31';
+    const sourceSessionSignature = trimStr(context.source_session_signature || context.sourceSessionSignature || context.session_signature || context.sessionSignature || '');
+    const seenRecoverySources = [];
+    const recoveryErrors = [];
+
+    const withRecoveryMetadata = (contractLike, sourceName) => {
+      const contract = isPlainObject(contractLike) ? contractLike : {};
+      const sourcePaths = Array.from(new Set([
+        ...(Array.isArray(contract.source_paths) ? contract.source_paths : []),
+        sourceName
+      ].map((value) => trimStr(value)).filter(Boolean)));
+      return {
+        ...contract,
+        source_paths: sourcePaths,
+        recovered: sourceName !== 'terminal_operation.initial_contract',
+        recovery_source: sourceName || null,
+        recovery_sources_attempted: [...seenRecoverySources],
+        recovery_errors: recoveryErrors.slice(0, 5)
+      };
+    };
+
+    const tryExtract = (payloadLike, sourceName) => {
+      if (!payloadLike) return null;
+      const extracted = extractPostCreateReplacementContract(payloadLike);
+      if (extracted.valid) return withRecoveryMetadata(extracted, sourceName);
+      return extracted && extracted.session_id ? withRecoveryMetadata(extracted, sourceName) : null;
+    };
+
+    const buildContractFromSessionPayload = (payloadLike, sourceName, hintedSessionId = '') => {
+      const payload = isPlainObject(payloadLike) ? payloadLike : {};
+      const progress = isPlainObject(payload.progress) ? payload.progress : {};
+      const session = isPlainObject(payload.session) ? payload.session : {};
+      const previewSummary = isPlainObject(payload.preview_summary) ? payload.preview_summary : {};
+      const candidates = [payload, session, progress, previewSummary];
+      const firstValue = (...values) => {
+        for (const value of values) {
+          const text = trimStr(value);
+          if (text) return text;
+        }
+        return '';
+      };
+      const sessionId = firstValue(
+        hintedSessionId,
+        payload.replacement_session_id,
+        payload.replacementSessionId,
+        progress.replacement_session_id,
+        progress.replacementSessionId,
+        payload.session_id,
+        payload.sessionId,
+        session.session_id,
+        session.sessionId,
+        progress.session_id,
+        progress.sessionId,
+        payload.current_workbench_session_id,
+        payload.currentWorkbenchSessionId
+      );
+      if (!uuidReLocal.test(sessionId)) return null;
+      if (sourceSessionId && sessionId === sourceSessionId) return null;
+
+      const sessionVersion = positiveVersionOrNull(
+        payload.replacement_session_version ??
+        payload.replacementSessionVersion ??
+        progress.replacement_session_version ??
+        progress.replacementSessionVersion ??
+        payload.session_version ??
+        payload.sessionVersion ??
+        payload.version ??
+        session.session_version ??
+        session.sessionVersion ??
+        session.version ??
+        progress.session_version ??
+        progress.sessionVersion ??
+        progress.version
+      );
+      if (sessionVersion === null) return null;
+
+      const adoptedReplacement = !!(
+        payload.adopted_replacement_session === true ||
+        payload.adoptedReplacementSession === true ||
+        progress.adopted_replacement_session === true ||
+        progress.adoptedReplacementSession === true ||
+        payload.replacement_available === true ||
+        payload.replacementAvailable === true ||
+        progress.replacement_available === true ||
+        progress.replacementAvailable === true ||
+        payload.source_session_obsolete === true ||
+        payload.sourceSessionObsolete === true ||
+        progress.source_session_obsolete === true ||
+        progress.sourceSessionObsolete === true ||
+        (sourceSessionId && sessionId !== sourceSessionId)
+      );
+      if (!adoptedReplacement) return null;
+
+      const snapshotRunId = firstValue(
+        payload.replacement_snapshot_run_id,
+        payload.replacementSnapshotRunId,
+        progress.replacement_snapshot_run_id,
+        progress.replacementSnapshotRunId,
+        payload.snapshot_run_id,
+        payload.snapshotRunId,
+        payload.source_snapshot_run_id,
+        payload.sourceSnapshotRunId,
+        session.snapshot_run_id,
+        session.snapshotRunId,
+        session.source_snapshot_run_id,
+        session.sourceSnapshotRunId,
+        progress.snapshot_run_id,
+        progress.snapshotRunId,
+        progress.source_snapshot_run_id,
+        progress.sourceSnapshotRunId
+      ) || null;
+      const sessionSignature = firstValue(
+        payload.replacement_session_signature,
+        payload.replacementSessionSignature,
+        progress.replacement_session_signature,
+        progress.replacementSessionSignature,
+        payload.session_signature,
+        payload.sessionSignature,
+        session.session_signature,
+        session.sessionSignature,
+        progress.session_signature,
+        progress.sessionSignature
+      ) || null;
+      const resolvedPayDate = firstValue(
+        payload.replacement_pay_date,
+        payload.replacementPayDate,
+        progress.replacement_pay_date,
+        progress.replacementPayDate,
+        payload.pay_date,
+        payload.payDate,
+        session.pay_date,
+        session.payDate,
+        progress.pay_date,
+        progress.payDate,
+        payDate
+      ) || null;
+      const resolvedWeekEndingCutoff = firstValue(
+        payload.replacement_week_ending_cutoff,
+        payload.replacementWeekEndingCutoff,
+        progress.replacement_week_ending_cutoff,
+        progress.replacementWeekEndingCutoff,
+        payload.week_ending_cutoff,
+        payload.weekEndingCutoff,
+        payload.week_ending_cutoff_date,
+        payload.weekEndingCutoffDate,
+        session.week_ending_cutoff,
+        session.weekEndingCutoff,
+        session.week_ending_cutoff_date,
+        session.weekEndingCutoffDate,
+        progress.week_ending_cutoff,
+        progress.weekEndingCutoff,
+        progress.week_ending_cutoff_date,
+        progress.weekEndingCutoffDate,
+        weekEndingCutoff
+      ) || null;
+
+      return withRecoveryMetadata({
+        session_id: sessionId,
+        session_version: sessionVersion,
+        snapshot_run_id: snapshotRunId,
+        session_signature: sessionSignature,
+        pay_date: resolvedPayDate,
+        week_ending_cutoff: resolvedWeekEndingCutoff,
+        valid: true,
+        source_paths: [sourceName]
+      }, sourceName);
+    };
+
+    const attempt = async (sourceName, runner) => {
+      seenRecoverySources.push(sourceName);
+      try {
+        const value = await runner();
+        const direct = tryExtract(value, sourceName);
+        if (direct?.valid) return direct;
+        const fromSessionPayload = buildContractFromSessionPayload(value, sourceName, direct?.session_id || '');
+        if (fromSessionPayload?.valid) return fromSessionPayload;
+        return direct || null;
+      } catch (error) {
+        recoveryErrors.push({
+          source: sourceName,
+          message: trimStr(error?.message || error?.user_message || error?.error || error) || 'Replacement recovery failed',
+          code: trimStr(error?.code || error?.error_code || error?.payload?.code || error?.payload?.error_code || '') || null
+        });
+        return null;
+      }
+    };
+
+    const initialContract = tryExtract(context.terminal_operation || context.terminalOperation || {}, 'terminal_operation.initial_contract');
+    if (initialContract?.valid) return initialContract;
+
+    let hintedReplacementId = trimStr(
+      initialContract?.session_id ||
+      context.replacement_session_id ||
+      context.replacementSessionId ||
+      context.terminal_operation?.replacement_session_id ||
+      context.terminal_operation?.replacementSessionId ||
+      context.terminalOperation?.replacement_session_id ||
+      context.terminalOperation?.replacementSessionId ||
+      ''
+    );
+
+    if (uuidReLocal.test(hintedReplacementId) && typeof bankingPayWorkbenchSessionGet === 'function') {
+      const recoveredByGet = await attempt('workbench_session_get.hinted_replacement_session', async () => bankingPayWorkbenchSessionGet(hintedReplacementId, {
+        userInitiated: false,
+        user_initiated: false,
+        silent: true,
+        background: true,
+        replacement_adoption: true,
+        staleSessionGuard: false,
+        expectedSessionId: hintedReplacementId,
+        source: 'bankingPayCreateDraft.recoverPostCreateReplacementContract'
+      }));
+      if (recoveredByGet?.valid) return recoveredByGet;
+    }
+
+    if (!uuidReLocal.test(hintedReplacementId) && uuidReLocal.test(sourceSessionId) && typeof bankingPayWorkbenchSessionGet === 'function') {
+      const recoveredBySourceSession = await attempt('workbench_session_get.source_session_replacement_pointer', async () => bankingPayWorkbenchSessionGet(sourceSessionId, {
+        userInitiated: false,
+        user_initiated: false,
+        silent: true,
+        background: true,
+        replacement_adoption: true,
+        staleSessionGuard: false,
+        expectedSessionId: sourceSessionId,
+        source: 'bankingPayCreateDraft.recoverPostCreateReplacementContract.sourceSessionPointer'
+      }));
+      if (recoveredBySourceSession?.valid) return recoveredBySourceSession;
+
+      const sourcePointerId = trimStr(recoveredBySourceSession?.session_id || '');
+      if (uuidReLocal.test(sourcePointerId) && sourcePointerId !== sourceSessionId) {
+        hintedReplacementId = sourcePointerId;
+        const recoveredBySourcePointerGet = await attempt('workbench_session_get.source_session_replacement_session', async () => bankingPayWorkbenchSessionGet(hintedReplacementId, {
+          userInitiated: false,
+          user_initiated: false,
+          silent: true,
+          background: true,
+          replacement_adoption: true,
+          staleSessionGuard: false,
+          expectedSessionId: hintedReplacementId,
+          source: 'bankingPayCreateDraft.recoverPostCreateReplacementContract.sourceSessionReplacement'
+        }));
+        if (recoveredBySourcePointerGet?.valid) return recoveredBySourcePointerGet;
+      }
+    }
+
+    if (uuidReLocal.test(sourceSessionId) && operationId && typeof authFetch === 'function' && typeof API === 'function') {
+      const recoveredByOperationLookup = await attempt('draft_create_operation_lookup.recent_terminal', async () => {
+        const url = API(`/api/banking/pay/workbench/session/${encodeURIComponent(sourceSessionId)}/draft-create-operation?include_recent_terminal=true&recent_terminal_minutes=60&silent=true&source=bankingPayCreateDraft.recoverPostCreateReplacementContract`);
+        const response = await authFetch(url, { method: 'GET' });
+        let json = null;
+        try { json = await response.json(); } catch { json = null; }
+        if (!response.ok) {
+          const error = new Error(trimStr(json?.message || json?.error || `Draft-create operation lookup failed (${response.status})`) || `Draft-create operation lookup failed (${response.status})`);
+          error.status = response.status;
+          error.payload = json;
+          throw error;
+        }
+        return json;
+      });
+      if (recoveredByOperationLookup?.valid) return recoveredByOperationLookup;
+    }
+
+    if (typeof bankingPayWorkbenchSessionOpen === 'function' && payDate && sourceSessionSignature) {
+      const recoveredByOpen = await attempt('workbench_session_open.current_shared_session', async () => bankingPayWorkbenchSessionOpen({
+        pay_date: payDate,
+        week_ending_cutoff: weekEndingCutoff,
+        session_signature: sourceSessionSignature,
+        request_token: `banking-pay-create-draft-recover:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
+        silent: true,
+        background: true,
+        userInitiated: false,
+        user_initiated: false,
+        source: 'bankingPayCreateDraft.recoverPostCreateReplacementContract'
+      }));
+      if (recoveredByOpen?.valid) return recoveredByOpen;
+    }
+
+    if (typeof bankingPayPreview === 'function' && payDate) {
+      const recoveredByPreview = await attempt('banking_pay_preview.attach_current_shared_session', async () => bankingPayPreview({
+        pay_date: payDate,
+        week_ending_cutoff: weekEndingCutoff,
+        week_ending_cutoff_date: weekEndingCutoff,
+        mode: 'ATTACH_CURRENT_SHARED_SESSION',
+        soft_refresh: true,
+        background: true,
+        silent: true,
+        userInitiated: false,
+        user_initiated: false,
+        load_first_page: false,
+        source_session_id: sourceSessionId || undefined,
+        source_session_signature: sourceSessionSignature || undefined,
+        mutation_context: 'CREATE_DRAFT_SUCCESS',
+        created_pay_batch_ids: Array.isArray(context.created_pay_batch_ids) ? context.created_pay_batch_ids : [],
+        source: 'bankingPayCreateDraft.recoverPostCreateReplacementContract'
+      }));
+      if (recoveredByPreview?.valid) return recoveredByPreview;
+    }
+
+    return withRecoveryMetadata({
+      ...(initialContract || {}),
+      valid: false,
+      recovery_sources_attempted: [...seenRecoverySources],
+      recovery_errors: recoveryErrors.slice(0, 5)
+    }, 'replacement_contract_recovery.unresolved');
   };
 
   const isTerminalDraftCreateOperation = (operationLike) => {
@@ -36284,7 +36600,23 @@ async function bankingPayCreateDraft(input = {}) {
       ''
     ) || null;
     const operationIdForPostCreate = trimStr(operationPayload.operation_id || operationPayload.id || terminalOperation?.operation_id || terminalOperation?.id || '');
-    const replacementContract = extractPostCreateReplacementContract(terminalOperation);
+    let replacementContract = extractPostCreateReplacementContract(terminalOperation);
+    let replacementRecovery = null;
+    if (!replacementContract.valid) {
+      replacementRecovery = await recoverPostCreateReplacementContract({
+        terminal_operation: terminalOperation,
+        operation_id: operationIdForPostCreate || null,
+        pay_date: pd,
+        week_ending_cutoff: cutoffIso,
+        source_session_id: sourceWorkbenchSessionId,
+        source_snapshot_run_id: sourceWorkbenchSnapshotRunId,
+        source_session_version: sourceWorkbenchSessionVersion,
+        source_session_signature: sourceWorkbenchSessionSignature,
+        created_pay_batch_ids: [...terminalCreatedPayBatchIds],
+        selected_preview_row_ids: [...selectedPreviewRowIdsForServer]
+      });
+      if (replacementRecovery?.valid) replacementContract = replacementRecovery;
+    }
     const replacementConsistencyError = replacementContract.valid
       ? null
       : {
@@ -36308,10 +36640,17 @@ async function bankingPayCreateDraft(input = {}) {
         replacement_session_version: replacementContract.session_version,
         created_pay_batch_ids: terminalCreatedPayBatchIds,
         selected_preview_row_ids_count: selectedPreviewRowIdsForServer.length,
-        replacement_contract_sources: replacementContract.source_paths
+        replacement_contract_sources: replacementContract.source_paths,
+        replacement_recovered: replacementContract.recovered === true,
+        replacement_recovery_source: replacementContract.recovery_source || null,
+        replacement_recovery_sources_attempted: replacementContract.recovery_sources_attempted || null
       });
     } else {
-      logTroubleshoot('warn', 'POST_CREATE_REPLACEMENT_CONTRACT_MISSING', replacementConsistencyError);
+      logTroubleshoot('warn', 'POST_CREATE_REPLACEMENT_CONTRACT_MISSING', {
+        ...replacementConsistencyError,
+        replacement_recovery_sources_attempted: replacementRecovery?.recovery_sources_attempted || null,
+        replacement_recovery_errors: replacementRecovery?.recovery_errors || null
+      });
     }
 
     let appliedResult = null;
@@ -36504,6 +36843,7 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
 
 
 async function openPayeSameWeekOverrideDecisionModal(opts = {}) {
