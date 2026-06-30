@@ -27743,6 +27743,14 @@ async function bankingPayPreview(pay_date) {
   wiz.preview.preview_epoch = requestEpoch;
   const requestToken = `banking-pay-preview:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 
+  const payDateCloneRebaseSourceSessionId = !!(
+    !useReplacementSessionBootstrap &&
+    payDateSessionMismatch &&
+    existingWorkbenchSessionId &&
+    existingWorkbenchPayDate &&
+    existingWorkbenchPayDate !== effectivePayDate &&
+    !obsoleteSessionIds.includes(existingWorkbenchSessionId)
+  ) ? existingWorkbenchSessionId : '';
   const openPayload = {
     pay_date: effectivePayDate,
     week_ending_cutoff: weekEndingCutoffDate,
@@ -27750,6 +27758,22 @@ async function bankingPayPreview(pay_date) {
     filters_json: openFiltersJson,
     request_token: requestToken
   };
+  if (payDateCloneRebaseSourceSessionId) {
+    const openOptions = isPlainObject(openFiltersJson.open_options)
+      ? { ...openFiltersJson.open_options }
+      : (isPlainObject(openFiltersJson.options) ? { ...openFiltersJson.options } : {});
+    openOptions.allow_session_rebase = true;
+    openOptions.clone_from_session_id = payDateCloneRebaseSourceSessionId;
+    openOptions.source_session_id = payDateCloneRebaseSourceSessionId;
+    openOptions.source_pay_date = existingWorkbenchPayDate;
+    openOptions.rebase_simple_rows_only = true;
+    openFiltersJson.open_options = openOptions;
+    openPayload.allow_session_rebase = true;
+    openPayload.clone_from_session_id = payDateCloneRebaseSourceSessionId;
+    openPayload.source_session_id = payDateCloneRebaseSourceSessionId;
+    openPayload.source_pay_date = existingWorkbenchPayDate;
+    openPayload.rebase_simple_rows_only = true;
+  }
   // Normal workbench opens are shared-session attaches only. Mutation/replacement context is handled by the dedicated backend replacement RPC.
 
   wiz.preview.__request_token = requestToken;
@@ -31897,6 +31921,7 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
+
 
 
 
@@ -42554,6 +42579,180 @@ function renderBankingPayTab(scopePreset) {
   `;
 }
 
+function buildBankingPayNoMoneyConfirmationJson(body, options = {}) {
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const trimText = (value) => String(value == null ? '' : value).trim();
+  const lowerText = (value) => trimText(value).toLowerCase();
+  const root = isPlainObject(body) ? body : {};
+  const nestedKeys = [
+    'confirmation_json',
+    'confirmationJson',
+    'confirmation',
+    'provider_confirmation',
+    'providerConfirmation',
+    'bank_confirmation',
+    'bankConfirmation'
+  ];
+  const nested = {};
+  for (const key of nestedKeys) {
+    const value = root[key];
+    if (isPlainObject(value)) Object.assign(nested, value);
+  }
+  const combined = { ...nested, ...root };
+  for (const key of nestedKeys) delete combined[key];
+
+  const hasOwn = (source, key) => Object.prototype.hasOwnProperty.call(source, key);
+  const firstValue = (...keys) => {
+    for (const key of keys) {
+      if (hasOwn(root, key)) return root[key];
+    }
+    for (const key of keys) {
+      if (hasOwn(nested, key)) return nested[key];
+    }
+    for (const key of keys) {
+      if (hasOwn(combined, key)) return combined[key];
+    }
+    return undefined;
+  };
+  const readBool = (...keys) => {
+    for (const key of keys) {
+      const value = firstValue(key);
+      if (value === undefined) continue;
+      if (value === true) return true;
+      if (value === false) return false;
+      const text = lowerText(value);
+      if (['1', 'true', 't', 'yes', 'y', 'on'].includes(text)) return true;
+      if (['0', 'false', 'f', 'no', 'n', 'off'].includes(text)) return false;
+    }
+    return false;
+  };
+  const readText = (...keys) => {
+    for (const key of keys) {
+      const value = firstValue(key);
+      const text = trimText(value);
+      if (text) return text;
+    }
+    return '';
+  };
+
+  const providerEvidenceScope = readText(
+    'provider_evidence_scope',
+    'providerEvidenceScope',
+    'provider_confirmation_scope',
+    'providerConfirmationScope',
+    'bank_check_scope',
+    'bankCheckScope'
+  ).toUpperCase();
+  const providerCheckedByScope = ['PROVIDER', 'BANK', 'BOTH', 'REVOLUT', 'RAIL', 'PAYMENT_PROVIDER'].includes(providerEvidenceScope);
+  const providerChecked = providerCheckedByScope || readBool(
+    'provider_checked',
+    'providerChecked',
+    'provider_bank_checked',
+    'providerBankChecked',
+    'bank_checked',
+    'bankChecked',
+    'checked_provider_or_bank',
+    'checkedProviderOrBank'
+  );
+  const noPaymentMade = readBool(
+    'no_payment_made',
+    'noPaymentMade',
+    'no_money_moved',
+    'noMoneyMoved',
+    'payment_not_made',
+    'paymentNotMade'
+  );
+  const terminalNoMoneyConfirmed = readBool(
+    'terminal_no_money_confirmed',
+    'terminalNoMoneyConfirmed',
+    'terminal_failure',
+    'terminalFailure',
+    'provider_failed',
+    'providerFailed',
+    'payment_cancelled',
+    'paymentCancelled',
+    'provider_cancelled',
+    'providerCancelled'
+  );
+  const willNotLaterBePaid = readBool(
+    'will_not_later_be_paid',
+    'willNotLaterBePaid',
+    'will_not_be_paid',
+    'willNotBePaid',
+    'will_not_retry',
+    'willNotRetry',
+    'provider_will_not_pay_later',
+    'providerWillNotPayLater'
+  );
+  const paymentCancelled = readBool(
+    'payment_cancelled',
+    'paymentCancelled',
+    'provider_cancelled',
+    'providerCancelled'
+  );
+
+  const providerReference = readText(
+    'provider_reference',
+    'providerReference',
+    'provider_ref',
+    'providerRef',
+    'provider_transaction_id',
+    'providerTransactionId',
+    'provider_request_id',
+    'providerRequestId',
+    'bank_reference',
+    'bankReference',
+    'bank_ref',
+    'bankRef',
+    'rail_tx_id',
+    'railTxId'
+  );
+  const auditNote = readText(
+    'audit_note',
+    'auditNote',
+    'manual_note',
+    'manualNote',
+    'explanatory_note',
+    'explanatoryNote',
+    'note',
+    'reason',
+    'correction_reason',
+    'correctionReason'
+  );
+
+  const out = {
+    ...combined,
+    provider_checked: providerChecked,
+    provider_bank_checked: providerChecked,
+    no_payment_made: noPaymentMade,
+    terminal_no_money_confirmed: terminalNoMoneyConfirmed,
+    terminal_failure: terminalNoMoneyConfirmed,
+    payment_cancelled: paymentCancelled || terminalNoMoneyConfirmed,
+    will_not_later_be_paid: willNotLaterBePaid,
+    will_not_be_paid: willNotLaterBePaid,
+    manual_confirmation: true,
+    source_handler: trimText(options.source_handler || options.sourceHandler || combined.source_handler || combined.sourceHandler || 'buildBankingPayNoMoneyConfirmationJson'),
+    confirmation_contract: 'PAYMENT_NO_MONEY_CANONICAL_V1'
+  };
+
+  if (providerReference) {
+    out.provider_reference = providerReference;
+  } else if (!out.provider_reference && !out.providerReference) {
+    out.provider_reference = null;
+  }
+  if (auditNote) {
+    out.audit_note = auditNote;
+    out.manual_note = auditNote;
+    out.explanatory_note = auditNote;
+  } else if (!out.audit_note && !out.manual_note && !out.note && !out.explanatory_note) {
+    out.audit_note = null;
+  }
+  out.manual_confirmation_reference_present = !!(
+    trimText(out.provider_reference || out.provider_ref || out.bank_reference || out.bank_ref || out.rail_tx_id || out.provider_transaction_id || '') ||
+    trimText(out.audit_note || out.manual_note || out.note || out.explanatory_note || '')
+  );
+  return out;
+}
 
 
 function getBankingPayDraftScopeLabel(value) {
@@ -116104,6 +116303,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
 
 
 
+
 async function bankingPayWorkbenchSessionOpen(payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -116364,12 +116564,41 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
   if (!payDate) throw new Error('bankingPayWorkbenchSessionOpen: pay_date is required');
   if (!sessionSignature) throw new Error('bankingPayWorkbenchSessionOpen: session_signature is required');
 
+  const sourceSessionId = trimStr(input.source_session_id || input.sourceSessionId || filtersJson.source_session_id || filtersJson.sourceSessionId || '');
+  const cloneFromSessionId = trimStr(input.clone_from_session_id || input.cloneFromSessionId || filtersJson.clone_from_session_id || filtersJson.cloneFromSessionId || '');
+  const sourcePayDate = trimStr(input.source_pay_date || input.sourcePayDate || filtersJson.source_pay_date || filtersJson.sourcePayDate || '');
+  const allowSessionRebaseSupplied = Object.prototype.hasOwnProperty.call(input, 'allow_session_rebase')
+    || Object.prototype.hasOwnProperty.call(input, 'allowSessionRebase')
+    || Object.prototype.hasOwnProperty.call(filtersJson, 'allow_session_rebase')
+    || Object.prototype.hasOwnProperty.call(filtersJson, 'allowSessionRebase');
+  const allowSessionRebase = boolish(input.allow_session_rebase ?? input.allowSessionRebase ?? filtersJson.allow_session_rebase ?? filtersJson.allowSessionRebase, false);
+  const rebaseSimpleRowsOnlySupplied = Object.prototype.hasOwnProperty.call(input, 'rebase_simple_rows_only')
+    || Object.prototype.hasOwnProperty.call(input, 'rebaseSimpleRowsOnly')
+    || Object.prototype.hasOwnProperty.call(filtersJson, 'rebase_simple_rows_only')
+    || Object.prototype.hasOwnProperty.call(filtersJson, 'rebaseSimpleRowsOnly');
+  const rebaseSimpleRowsOnly = boolish(input.rebase_simple_rows_only ?? input.rebaseSimpleRowsOnly ?? filtersJson.rebase_simple_rows_only ?? filtersJson.rebaseSimpleRowsOnly, true);
+  const requestFiltersJson = cloneJson(filtersJson) || {};
+  const openOptions = isPlainObject(requestFiltersJson.open_options)
+    ? { ...requestFiltersJson.open_options }
+    : (isPlainObject(requestFiltersJson.options) ? { ...requestFiltersJson.options } : {});
+  if (allowSessionRebaseSupplied) openOptions.allow_session_rebase = allowSessionRebase;
+  if (uuidRe.test(sourceSessionId)) openOptions.source_session_id = sourceSessionId;
+  if (uuidRe.test(cloneFromSessionId)) openOptions.clone_from_session_id = cloneFromSessionId;
+  if (sourcePayDate) openOptions.source_pay_date = sourcePayDate;
+  if (rebaseSimpleRowsOnlySupplied) openOptions.rebase_simple_rows_only = rebaseSimpleRowsOnly;
+  if (Object.keys(openOptions).length > 0) requestFiltersJson.open_options = openOptions;
+
   const requestPayload = {
     pay_date: payDate,
     week_ending_cutoff: weekEndingCutoff,
-    filters_json: filtersJson,
+    filters_json: requestFiltersJson,
     session_signature: sessionSignature
   };
+  if (allowSessionRebaseSupplied) requestPayload.allow_session_rebase = allowSessionRebase;
+  if (uuidRe.test(sourceSessionId)) requestPayload.source_session_id = sourceSessionId;
+  if (uuidRe.test(cloneFromSessionId)) requestPayload.clone_from_session_id = cloneFromSessionId;
+  if (sourcePayDate) requestPayload.source_pay_date = sourcePayDate;
+  if (rebaseSimpleRowsOnlySupplied) requestPayload.rebase_simple_rows_only = rebaseSimpleRowsOnly;
 
   try {
     if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
@@ -116535,8 +116764,6 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
     throw error;
   }
 }
-
-
 function operationCanAdvance(operationState) {
   const source = operationState && typeof operationState === 'object' && !Array.isArray(operationState) ? operationState : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
