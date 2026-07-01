@@ -119540,10 +119540,6 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, op
 
 
 
-
-
-
-
 async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -119685,18 +119681,58 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       ? src.section_counts
       : (isPlainObject(src.section_counts_json) ? src.section_counts_json : {});
     const sourceSectionCounts = cloneJson(sectionCountsSource) || {};
-    const sourceTotal = toCount(src.total_candidates ?? src.candidate_count ?? src.total_count ?? src.scope_total_count ?? src.scope_total ?? 0);
-    const sourceCompleted = toCount(src.completed_candidates ?? src.ready_candidates ?? src.completed_count ?? src.ready_count ?? src.scope_ready_count ?? src.scope_ready ?? 0);
-    const sourceFailed = toCount(src.failed_candidates ?? src.failed_count ?? src.scope_failed_count ?? src.scope_failed ?? 0);
-    const sourcePendingRaw = src.pending_candidates ?? src.pending_count ?? src.scope_pending_count ?? src.scope_pending;
+    const sourceCandidateCounts = isPlainObject(src.candidate_counts) ? src.candidate_counts : {};
+    const sourceLineCounts = isPlainObject(src.line_counts) ? src.line_counts : {};
+    const sourceJobCounts = isPlainObject(src.job_counts) ? src.job_counts : {};
+    const hasOwnValue = (objectLike, key) => isPlainObject(objectLike) && Object.prototype.hasOwnProperty.call(objectLike, key);
+    const countFirst = (...values) => {
+      for (const value of values) {
+        const n = Number(value);
+        if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
+      }
+      return 0;
+    };
+    const boolish = (value) => value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(trimStr(value).toLowerCase());
+    const cursorHasValue = (value) => {
+      if (!value) return false;
+      if (Array.isArray(value)) return value.length > 0;
+      if (isPlainObject(value)) return Object.keys(value).length > 0;
+      const text = trimStr(value);
+      return !!text && text !== '{}' && text.toLowerCase() !== 'null';
+    };
+    const sourceTotal = countFirst(src.total_candidates, src.candidate_count, src.total_count, sourceCandidateCounts.total, src.scope_total_count, src.scope_total);
+    const sourceCompletedRaw = countFirst(src.completed_candidates, src.ready_candidates, src.completed_count, src.ready_count, sourceCandidateCounts.ready, sourceCandidateCounts.terminal_materialised, src.scope_ready_count, src.scope_ready);
+    const sourceCompleted = sourceTotal > 0 ? Math.min(sourceCompletedRaw, sourceTotal) : sourceCompletedRaw;
+    const sourceFailed = countFirst(src.failed_candidates, src.failed_count, sourceCandidateCounts.failed, src.scope_failed_count, src.scope_failed);
+    const sourcePendingRaw = src.pending_candidates ?? src.pending_count ?? sourceCandidateCounts.pending ?? src.scope_pending_count ?? src.scope_pending;
     const sourcePending = Number.isFinite(Number(sourcePendingRaw)) ? toCount(sourcePendingRaw) : Math.max(0, sourceTotal - sourceCompleted - sourceFailed);
-    const sourcePreviewRowCount = toCount(src.preview_row_count ?? src.preview_rows_count ?? src.row_count ?? 0);
-    const sourceSelectedRowCount = toCount(src.selected_row_count ?? src.selected_rows_count ?? 0);
-    const sourceLineUnitsPending = toCount(src.line_units_pending ?? src.pending_line_units ?? 0);
-    const sourceLineUnitsReady = toCount(src.line_units_ready ?? src.ready_line_units ?? 0);
-    const sourceLineUnitsFailed = toCount(src.line_units_failed ?? src.line_units_error ?? src.error_line_units ?? 0);
-    const sourceQueuedJobs = toCount(src.queued_jobs ?? src.queued_job_count ?? 0);
-    const sourceRunningJobs = toCount(src.running_jobs ?? src.running_job_count ?? 0);
+    const sourceCandidateProcessing = countFirst(sourceCandidateCounts.processing);
+    const sourceCandidateMaterialisationPending = countFirst(sourceCandidateCounts.materialisation_pending);
+    const sourceCandidateDirty = countFirst(sourceCandidateCounts.dirty);
+    const sourceCandidateUnknown = countFirst(sourceCandidateCounts.unknown);
+    const sourceCandidateUnseeded = countFirst(sourceCandidateCounts.unseeded);
+    const sourcePreviewRowCount = Math.max(
+      countFirst(src.preview_row_count, src.preview_rows_count, src.row_count),
+      countFirst(sourceSectionCounts.canonical_preview_lines, sourceSectionCounts.ready_to_pay, sourceSectionCounts.ready_preview_lines, sourceSectionCounts.preview_rows)
+    );
+    const sourceSelectedRowCount = countFirst(src.selected_row_count, src.selected_rows_count);
+    const sourceSelectedEligibleReadyRowCount = countFirst(src.selected_eligible_ready_row_count, isPlainObject(src.blocker_counts) ? src.blocker_counts.selected_eligible_ready_rows : undefined, sourceSelectedRowCount);
+    const sourceLineUnitsTotal = Math.max(countFirst(src.line_units_total, sourceLineCounts.total), sourcePreviewRowCount);
+    const sourceLineUnitsComplete = Math.max(
+      countFirst(src.line_units_complete, sourceLineCounts.complete, sourceLineCounts.materialised_or_skipped),
+      Math.min(sourcePreviewRowCount, sourceLineUnitsTotal || sourcePreviewRowCount)
+    );
+    const sourceLineUnitsPending = countFirst(src.line_units_pending, src.pending_line_units, sourceLineCounts.pending);
+    const sourceLineUnitsReady = countFirst(src.line_units_ready, src.ready_line_units);
+    const sourceLineUnitsFailed = countFirst(src.line_units_failed, src.line_units_error, src.error_line_units, sourceLineCounts.failed);
+    const readyNotMaterialisedExplicit = hasOwnValue(sourceLineCounts, 'ready_not_materialised') || hasOwnValue(sourceLineCounts, 'readyNotMaterialised') || hasOwnValue(src, 'line_units_ready_not_materialised');
+    let sourceLineUnitsReadyNotMaterialised = readyNotMaterialisedExplicit
+      ? countFirst(sourceLineCounts.ready_not_materialised, sourceLineCounts.readyNotMaterialised, src.line_units_ready_not_materialised)
+      : Math.max(0, sourceLineUnitsReady - sourceLineUnitsComplete);
+    const sourceQueuedJobs = countFirst(sourceJobCounts.queued, sourceJobCounts.queued_count, src.queued_jobs, src.queued_job_count);
+    const sourceRunningJobs = countFirst(sourceJobCounts.running, sourceJobCounts.running_count, src.running_jobs, src.running_job_count);
+    const sourceUnresolvedFailedJobs = countFirst(sourceJobCounts.unresolved_failed, sourceJobCounts.unresolvedFailed, src.unresolved_failed_jobs, src.unresolved_failed_job_count);
+    const sourceUnresolvedDeadJobs = countFirst(sourceJobCounts.unresolved_dead, sourceJobCounts.unresolvedDead, src.unresolved_dead_jobs, src.unresolved_dead_job_count);
     const sourcePhase = phaseFromProgressState(
       src.phase || src.current_phase || src.progress_state || payloadObj.phase || payloadObj.status || '',
       sourcePreviewRowCount > 0 ? 'PARTIAL_READY' : 'REFRESHING_CANDIDATES'
@@ -119710,17 +119746,50 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       toCount(sourceSectionCounts.ready_to_pay) > 0 ||
       toCount(sourceSectionCounts.preview_rows) > 0
     );
+    const sourceScopeSeedComplete = boolish(src.scope_seed_complete);
+    const sourceScopeCursorRemaining = boolish(src.scope_cursor_remaining) || cursorHasValue(src.scope_next_cursor_json) || cursorHasValue(src.scope_next_cursor);
     const sourceBackendReady = !sourceSessionObsolete && (
       src.ready === true ||
       src.ready_flag === true ||
+      src.session_ready === true ||
       src.ready_empty === true ||
       payloadObj.ready === true ||
       payloadObj.ready_flag === true ||
       sourcePhaseUpper === 'READY' ||
       sourcePhaseUpper === 'READY_EMPTY'
     );
-    const sourceHasActiveWork = sourceLineUnitsPending > 0 || sourceQueuedJobs > 0 || sourceRunningJobs > 0 || sourcePending > 0 || src.scope_seed_complete === false;
-    const sourceReady = sourceBackendReady && !sourceHasActiveWork && sourceFailed <= 0 && sourceLineUnitsFailed <= 0;
+    const sourceHasFailure = sourceFailed > 0 || sourceCandidateUnknown > 0 || sourceLineUnitsFailed > 0 || sourceUnresolvedFailedJobs > 0 || sourceUnresolvedDeadJobs > 0;
+    const sourceNoCurrentWork = sourceScopeSeedComplete
+      && !sourceScopeCursorRemaining
+      && sourcePending <= 0
+      && sourceCandidateProcessing <= 0
+      && sourceCandidateMaterialisationPending <= 0
+      && sourceCandidateDirty <= 0
+      && sourceCandidateUnseeded <= 0
+      && sourceLineUnitsPending <= 0
+      && sourceQueuedJobs <= 0
+      && sourceRunningJobs <= 0
+      && !sourceHasFailure;
+    if (sourceBackendReady && sourceNoCurrentWork && (sourceRowsAvailable || sourceSelectedRowCount > 0 || src.ready_empty === true || payloadObj.ready_empty === true)) {
+      sourceLineUnitsReadyNotMaterialised = 0;
+    }
+    const sourceHasActiveWork = !sourceNoCurrentWork && (
+      sourceLineUnitsPending > 0 ||
+      sourceLineUnitsReadyNotMaterialised > 0 ||
+      sourceQueuedJobs > 0 ||
+      sourceRunningJobs > 0 ||
+      sourcePending > 0 ||
+      sourceCandidateProcessing > 0 ||
+      sourceCandidateMaterialisationPending > 0 ||
+      sourceCandidateDirty > 0 ||
+      sourceCandidateUnseeded > 0 ||
+      sourceScopeSeedComplete === false ||
+      sourceScopeCursorRemaining
+    );
+    const sourceReady = sourceBackendReady && !sourceHasActiveWork && sourceNoCurrentWork;
+    const sourceLineUnitsCompleteForDisplay = sourceReady && sourceLineUnitsTotal > 0
+      ? sourceLineUnitsTotal
+      : sourceLineUnitsComplete;
     const sourceReadyEmpty = !sourceSessionObsolete && (
       src.ready_empty === true ||
       payloadObj.ready_empty === true ||
@@ -119770,16 +119839,48 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     const selectedRowCount = useReplacement ? 0 : sourceSelectedRowCount;
     const lineUnitsPending = useReplacement ? 0 : sourceLineUnitsPending;
     const lineUnitsReady = useReplacement ? 0 : sourceLineUnitsReady;
+    const lineUnitsReadyNotMaterialised = useReplacement ? 0 : sourceLineUnitsReadyNotMaterialised;
+    const lineUnitsComplete = useReplacement ? 0 : sourceLineUnitsCompleteForDisplay;
+    const lineUnitsTotal = useReplacement ? 0 : sourceLineUnitsTotal;
     const lineUnitsFailed = useReplacement ? 0 : sourceLineUnitsFailed;
     const queuedJobs = useReplacement ? 0 : sourceQueuedJobs;
     const runningJobs = useReplacement ? 0 : sourceRunningJobs;
+    const unresolvedFailedJobs = useReplacement ? 0 : sourceUnresolvedFailedJobs;
+    const unresolvedDeadJobs = useReplacement ? 0 : sourceUnresolvedDeadJobs;
     const sectionCounts = useReplacement ? {} : sourceSectionCounts;
     const rowsAvailable = useReplacement ? false : sourceRowsAvailable;
     const ready = useReplacement ? replacementReady : sourceReady;
     const readyEmpty = useReplacement ? replacementReadyEmpty : sourceReadyEmpty;
+    const readyForDraft = ready && (useReplacement ? false : sourceSelectedEligibleReadyRowCount > 0);
     const stillRunning = useReplacement ? replacementStillRunning : (!sourceSessionObsolete && !sourceReady && (sourceHasActiveWork || !sourceBackendReady));
     const activeSessionObsolete = sourceSessionObsolete && (!replacementAvailable || !replacementIsActive);
     const candidateSampleRows = normaliseCandidateSampleRows(payloadObj, src, useReplacement);
+    const clearableReadyBlockers = new Set([
+      'SCOPE_SEED_INCOMPLETE',
+      'SCOPE_CURSOR_REMAINING',
+      'CANDIDATES_UNSEEDED',
+      'CANDIDATES_PENDING',
+      'CANDIDATES_PROCESSING',
+      'CANDIDATES_MATERIALISATION_PENDING',
+      'CANDIDATES_DIRTY',
+      'LINE_WORK_PENDING',
+      'LINE_WORK_READY_NOT_MATERIALISED',
+      'WORKBENCH_JOBS_ACTIVE',
+      'WORKBENCH_REFRESH_PENDING',
+      'SESSION_NOT_READY',
+      'SESSION_NOT_READY_FOR_DRAFT'
+    ]);
+    const codeArray = (value) => {
+      if (Array.isArray(value)) return value.map((item) => trimStr(item).toUpperCase()).filter(Boolean);
+      if (typeof value === 'string') return value.split(/[\s,|]+/).map((item) => trimStr(item).toUpperCase()).filter(Boolean);
+      return [];
+    };
+    const normaliseBlockers = (...values) => {
+      const codes = Array.from(new Set(values.flatMap((value) => codeArray(value))));
+      return ready ? codes.filter((code) => !clearableReadyBlockers.has(code)) : codes;
+    };
+    const sessionBlockerCodes = useReplacement ? [] : normaliseBlockers(src.session_blocker_codes, src.sessionBlockerCodes);
+    const draftBlockerCodes = useReplacement ? [] : normaliseBlockers(src.draft_blocker_codes, src.draftBlockerCodes, src.blocker_codes, src.blockerCodes);
     const statusText = useReplacement
       ? (replacementReady
           ? (replacementReadyEmpty ? 'No payable rows found.' : 'Payment preview is ready.')
@@ -119788,10 +119889,12 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
                   ? 'Payment preview replacement is no longer active.'
                   : 'Payment preview replacement could not be prepared.')
               : 'Payment preview replacement is preparing in the background.'))
-      : trimStr(src.status_text || payloadObj.status_text || src.message || payloadObj.message || (sourceFailed ? 'Payment preview could not be prepared for every candidate.' : (sourceReady ? 'Payment preview is ready.' : 'Payment preview is preparing in the background.')));
+      : (sourceReady
+          ? (sourceReadyEmpty ? 'No payable rows found.' : 'Payment preview is ready.')
+          : trimStr(src.status_text || payloadObj.status_text || src.message || payloadObj.message || (sourceFailed ? 'Payment preview could not be prepared for every candidate.' : 'Payment preview is preparing in the background.')));
     const nextRecommendedAction = useReplacement
       ? (replacementReady ? 'READ_PREVIEW_PAGE' : (replacementFailed ? 'REVIEW_ERRORS' : 'WAIT_FOR_WORKER'))
-      : trimStr(src.next_recommended_action || payloadObj.next_recommended_action || (sourceFailed ? 'REVIEW_ERRORS' : (sourceReady ? 'READ_PREVIEW_PAGE' : 'WAIT_FOR_WORKER')));
+      : (sourceReady ? 'READ_PREVIEW_PAGE' : trimStr(src.next_recommended_action || payloadObj.next_recommended_action || (sourceFailed ? 'REVIEW_ERRORS' : 'WAIT_FOR_WORKER')));
 
     const activeProgress = stripHeavyArrays({
       ...(useReplacement ? {} : src),
@@ -119820,12 +119923,48 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       pending_count: pending,
       failed_candidates: failed,
       failed_count: failed,
+      candidate_counts: useReplacement ? {} : {
+        ...(isPlainObject(src.candidate_counts) ? src.candidate_counts : {}),
+        total,
+        ready: completed,
+        terminal_materialised: completed,
+        pending,
+        processing: sourceCandidateProcessing,
+        materialisation_pending: sourceCandidateMaterialisationPending,
+        dirty: sourceCandidateDirty,
+        failed,
+        unknown: sourceCandidateUnknown,
+        unseeded: sourceCandidateUnseeded
+      },
+      line_units_total: lineUnitsTotal,
+      line_units_complete: lineUnitsComplete,
       line_units_pending: lineUnitsPending,
       line_units_ready: lineUnitsReady,
+      line_units_ready_not_materialised: lineUnitsReadyNotMaterialised,
       line_units_failed: lineUnitsFailed,
       line_units_error: lineUnitsFailed,
+      line_counts: useReplacement ? {} : {
+        ...(isPlainObject(src.line_counts) ? src.line_counts : {}),
+        total: lineUnitsTotal,
+        complete: lineUnitsComplete,
+        materialised_or_skipped: lineUnitsComplete,
+        pending: lineUnitsPending,
+        ready_not_materialised: lineUnitsReadyNotMaterialised,
+        failed: lineUnitsFailed,
+        unknown: countFirst(sourceLineCounts.unknown)
+      },
       queued_jobs: queuedJobs,
       running_jobs: runningJobs,
+      unresolved_failed_jobs: unresolvedFailedJobs,
+      unresolved_dead_jobs: unresolvedDeadJobs,
+      job_counts: useReplacement ? { queued: 0, running: 0, unresolved_failed: 0, unresolved_dead: 0 } : {
+        ...(isPlainObject(src.job_counts) ? src.job_counts : {}),
+        queued: queuedJobs,
+        running: runningJobs,
+        unresolved_failed: unresolvedFailedJobs,
+        unresolved_dead: unresolvedDeadJobs
+      },
+      active_jobs: (!useReplacement && (queuedJobs > 0 || runningJobs > 0) && Array.isArray(src.active_jobs)) ? src.active_jobs.slice(0, 25) : [],
       preview_row_count: previewRowCount,
       selected_row_count: selectedRowCount,
       section_counts: sectionCounts,
@@ -119837,18 +119976,30 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       rows_available: rowsAvailable,
       has_materialised_preview_rows: rowsAvailable,
       selected_rows_available: !activeSessionObsolete && (useReplacement ? false : (src.selected_rows_available === true || selectedRowCount > 0)),
+      selected_eligible_ready_row_count: useReplacement ? 0 : sourceSelectedEligibleReadyRowCount,
       ready,
       ready_flag: ready,
+      session_ready: ready,
+      ready_for_draft: readyForDraft,
+      can_create_draft: readyForDraft,
       ready_empty: readyEmpty,
       still_running: stillRunning,
+      work_queued: stillRunning,
       pending_refresh: stillRunning,
       refresh_pending: stillRunning,
       preview_refresh_pending: stillRunning,
+      scope_seed_complete: useReplacement ? false : sourceScopeSeedComplete,
+      scope_cursor_remaining: useReplacement ? false : sourceScopeCursorRemaining,
+      session_blocker_codes: sessionBlockerCodes,
+      draft_blocker_codes: draftBlockerCodes,
+      blocker_codes: draftBlockerCodes,
       requires_paging: true,
       session_obsolete: sourceSessionObsolete,
       source_session_obsolete: sourceSessionObsolete,
       active_session_obsolete: activeSessionObsolete,
       obsolete: sourceSessionObsolete,
+      replacement_required: activeSessionObsolete || (replacementAvailable && !replacementIsActive),
+      stored_ready_mismatch: false,
       replacement_available: replacementAvailable && replacementIsActive,
       replacement_session_id: replacementAvailable ? replacementSessionId : null,
       replacement_session_version: payloadObj.replacement_session_version ?? src.replacement_session_version ?? null,
@@ -120023,20 +120174,133 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       wiz.workbench.progress_state = trimStr(src.progress_state || src.phase || '');
       wiz.workbench.progress_counter_version = src.progress_counter_version ?? null;
       wiz.workbench.candidate_sample_rows = cloneJson(src.candidate_sample_rows || src.candidate_status_rows || []) || [];
+
+      const adoptedCandidateCounts = isPlainObject(src.candidate_counts) ? src.candidate_counts : {};
+      const adoptedLineCounts = isPlainObject(src.line_counts) ? src.line_counts : {};
+      const adoptedJobCounts = isPlainObject(src.job_counts) ? src.job_counts : {};
+      const adoptedTotalCandidates = toCount(src.total_candidates ?? src.total_count ?? src.candidate_count ?? adoptedCandidateCounts.total);
+      const adoptedReadyCandidatesRaw = toCount(src.ready_candidates ?? src.completed_candidates ?? src.completed_count ?? adoptedCandidateCounts.ready ?? adoptedCandidateCounts.terminal_materialised);
+      const adoptedReadyCandidates = adoptedTotalCandidates > 0 ? Math.min(adoptedReadyCandidatesRaw, adoptedTotalCandidates) : adoptedReadyCandidatesRaw;
+      const adoptedPendingCandidates = toCount(src.pending_candidates ?? src.pending_count ?? adoptedCandidateCounts.pending);
+      const adoptedFailedCandidates = toCount(src.failed_candidates ?? src.failed_count ?? adoptedCandidateCounts.failed);
+      const adoptedPreviewRowCount = toCount(src.preview_row_count);
+      const adoptedLineTotal = Math.max(toCount(src.line_units_total ?? adoptedLineCounts.total), adoptedPreviewRowCount);
+      const adoptedLineComplete = Math.max(
+        toCount(src.line_units_complete ?? adoptedLineCounts.complete ?? adoptedLineCounts.materialised_or_skipped),
+        Math.min(adoptedPreviewRowCount, adoptedLineTotal || adoptedPreviewRowCount)
+      );
+      const adoptedLinePending = toCount(src.line_units_pending ?? adoptedLineCounts.pending);
+      const adoptedLineReady = toCount(src.line_units_ready ?? src.ready_line_units ?? adoptedLineCounts.ready);
+      const adoptedLineReadyNotMaterialised = toCount(src.line_units_ready_not_materialised ?? adoptedLineCounts.ready_not_materialised ?? adoptedLineCounts.readyNotMaterialised);
+      const adoptedLineFailed = toCount(src.line_units_failed ?? src.line_units_error ?? adoptedLineCounts.failed);
+      const adoptedQueuedJobs = toCount(src.queued_jobs ?? src.queued_job_count ?? adoptedJobCounts.queued ?? adoptedJobCounts.queued_count);
+      const adoptedRunningJobs = toCount(src.running_jobs ?? src.running_job_count ?? adoptedJobCounts.running ?? adoptedJobCounts.running_count);
+      const adoptedUnresolvedFailedJobs = toCount(src.unresolved_failed_jobs ?? adoptedJobCounts.unresolved_failed ?? adoptedJobCounts.unresolvedFailed);
+      const adoptedUnresolvedDeadJobs = toCount(src.unresolved_dead_jobs ?? adoptedJobCounts.unresolved_dead ?? adoptedJobCounts.unresolvedDead);
+      const adoptedReady = src.ready === true || src.ready_flag === true || src.session_ready === true;
+      const adoptedReadyForDraft = src.ready_for_draft === true || src.can_create_draft === true;
+      const adoptedRowsAvailable = src.rows_available === true || src.has_materialised_preview_rows === true || src.selected_rows_available === true || toCount(src.preview_row_count) > 0 || toCount(src.selected_row_count) > 0;
+      const adoptedNoCurrentWork = adoptedReady
+        && adoptedQueuedJobs <= 0
+        && adoptedRunningJobs <= 0
+        && adoptedUnresolvedFailedJobs <= 0
+        && adoptedUnresolvedDeadJobs <= 0
+        && adoptedPendingCandidates <= 0
+        && adoptedLinePending <= 0
+        && adoptedLineReadyNotMaterialised <= 0;
+      const adoptedLineCompleteForDisplay = adoptedNoCurrentWork && adoptedLineTotal > 0
+        ? adoptedLineTotal
+        : adoptedLineComplete;
+      const localCurrentPreviewHasRows = (() => {
+        const roots = [wiz.preview, wiz.preview?.data, wiz.preview?.data?.preview, wiz.workbench, wiz.decisions];
+        const rowKeys = [
+          'rows',
+          'items',
+          'preview_rows',
+          'previewRows',
+          'canonical_preview_lines',
+          'canonicalPreviewLines',
+          'ready_preview_lines',
+          'readyPreviewLines',
+          'ready_to_pay_now',
+          'readyToPayNow',
+          'draftable_now',
+          'draftableNow',
+          'blocked_preview_lines',
+          'blockedPreviewLines',
+          'blocked_for_pay_now',
+          'blockedForPayNow',
+          'case_resolution_states',
+          'caseResolutionStates',
+          'cases_resolutions',
+          'casesResolutions'
+        ];
+        const pageCacheKeys = ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages'];
+        const pageHasRows = (pageLike) => isPlainObject(pageLike) && (Array.isArray(pageLike.rows) && pageLike.rows.length > 0 || Array.isArray(pageLike.items) && pageLike.items.length > 0);
+        for (const root of roots) {
+          if (!isPlainObject(root)) continue;
+          for (const key of rowKeys) {
+            if (Array.isArray(root[key]) && root[key].length > 0) return true;
+          }
+          for (const key of pageCacheKeys) {
+            const cache = root[key];
+            if (Array.isArray(cache) && cache.some(pageHasRows)) return true;
+            if (isPlainObject(cache) && Object.values(cache).some(pageHasRows)) return true;
+          }
+        }
+        return false;
+      })();
       wiz.workbench.progress_counts = {
-        total_candidates: toCount(src.total_candidates ?? src.total_count),
-        ready_candidates: toCount(src.ready_candidates ?? src.completed_candidates ?? src.completed_count),
-        pending_candidates: toCount(src.pending_candidates ?? src.pending_count),
-        failed_candidates: toCount(src.failed_candidates ?? src.failed_count),
-        line_units_pending: toCount(src.line_units_pending),
-        line_units_ready: toCount(src.line_units_ready),
-        line_units_failed: toCount(src.line_units_failed ?? src.line_units_error),
-        preview_row_count: toCount(src.preview_row_count),
+        total_candidates: adoptedTotalCandidates,
+        ready_candidates: adoptedReadyCandidates,
+        completed_candidates: adoptedReadyCandidates,
+        completed_count: adoptedReadyCandidates,
+        pending_candidates: adoptedPendingCandidates,
+        failed_candidates: adoptedFailedCandidates,
+        line_units_total: adoptedLineTotal,
+        line_units_complete: adoptedLineCompleteForDisplay,
+        line_units_pending: adoptedLinePending,
+        line_units_ready: adoptedLineReady,
+        line_units_ready_not_materialised: adoptedLineReadyNotMaterialised,
+        line_units_failed: adoptedLineFailed,
+        line_units_error: adoptedLineFailed,
+        queued_jobs: adoptedQueuedJobs,
+        running_jobs: adoptedRunningJobs,
+        unresolved_failed_jobs: adoptedUnresolvedFailedJobs,
+        unresolved_dead_jobs: adoptedUnresolvedDeadJobs,
+        preview_row_count: adoptedPreviewRowCount,
         selected_row_count: toCount(src.selected_row_count),
-        ready: src.ready === true,
-        ready_flag: src.ready_flag === true,
+        selected_eligible_ready_row_count: toCount(src.selected_eligible_ready_row_count),
+        candidate_counts: cloneJson(src.candidate_counts) || {
+          total: adoptedTotalCandidates,
+          ready: adoptedReadyCandidates,
+          terminal_materialised: adoptedReadyCandidates,
+          pending: adoptedPendingCandidates,
+          failed: adoptedFailedCandidates
+        },
+        line_counts: cloneJson(src.line_counts) || {
+          total: adoptedLineTotal,
+          complete: adoptedLineCompleteForDisplay,
+          materialised_or_skipped: adoptedLineCompleteForDisplay,
+          pending: adoptedLinePending,
+          ready_not_materialised: adoptedLineReadyNotMaterialised,
+          failed: adoptedLineFailed
+        },
+        job_counts: cloneJson(src.job_counts) || {
+          queued: adoptedQueuedJobs,
+          running: adoptedRunningJobs,
+          unresolved_failed: adoptedUnresolvedFailedJobs,
+          unresolved_dead: adoptedUnresolvedDeadJobs
+        },
+        ready: adoptedReady,
+        ready_flag: adoptedReady,
+        session_ready: adoptedReady,
+        ready_for_draft: adoptedReadyForDraft,
+        can_create_draft: adoptedReadyForDraft,
         ready_empty: src.ready_empty === true,
-        rows_available: src.rows_available === true,
+        rows_available: adoptedRowsAvailable,
+        work_queued: adoptedNoCurrentWork ? false : src.work_queued === true,
+        still_running: adoptedNoCurrentWork ? false : src.still_running === true,
         phase: trimStr(src.phase || src.progress_state || ''),
         status_text: trimStr(src.status_text || '')
       };
@@ -120058,6 +120322,39 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
           wiz.preview.data.session_version = wiz.workbench.session_version;
           wiz.preview.data.session_signature = wiz.workbench.session_signature;
           wiz.preview.data.progress = cloneJson(src.progress || src) || src.progress || src;
+          wiz.preview.data.progress_counts = cloneJson(wiz.workbench.progress_counts) || {};
+          if (isPlainObject(wiz.preview.data.session)) {
+            wiz.preview.data.session.progress = cloneJson(src.progress || src) || src.progress || src;
+            wiz.preview.data.session.progress_counts = cloneJson(wiz.workbench.progress_counts) || {};
+          }
+          if (isPlainObject(wiz.preview.data.preview)) {
+            wiz.preview.data.preview.progress = cloneJson(src.progress || src) || src.progress || src;
+            wiz.preview.data.preview.progress_counts = cloneJson(wiz.workbench.progress_counts) || {};
+          }
+        }
+      }
+      if (adoptedNoCurrentWork && (adoptedRowsAvailable || src.ready_empty === true)) {
+        wiz.preview.loading = false;
+        wiz.preview.busy = false;
+        wiz.preview.error = '';
+        wiz.preview.friendlyError = null;
+        wiz.preview.failure = null;
+        wiz.preview.status_text = trimStr(src.status_text || '') || (src.ready_empty === true ? 'No payable rows found.' : 'Payment preview is ready.');
+        wiz.workbench.refresh_pending = false;
+        wiz.workbench.pending_refresh = false;
+        wiz.workbench.preview_refresh_pending = false;
+        wiz.workbench.work_queued = false;
+        if (localCurrentPreviewHasRows || src.ready_empty === true) {
+          wiz.preview.first_page_applied = true;
+          wiz.preview.firstPageApplied = true;
+          if (isPlainObject(wiz.preview.data)) {
+            wiz.preview.data.first_page_applied = true;
+            wiz.preview.data.firstPageApplied = true;
+            if (isPlainObject(wiz.preview.data.preview)) {
+              wiz.preview.data.preview.first_page_applied = true;
+              wiz.preview.data.preview.firstPageApplied = true;
+            }
+          }
         }
       }
       return true;
