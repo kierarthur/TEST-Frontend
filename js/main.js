@@ -250443,11 +250443,16 @@ async function withExistingModalLoadingSpinner(state, reason, runAsync) {
   }
 }
 
-
 async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
   const { L, GC, GE } = getTsLoggers('[TS][UNAUTH]');
   GC('unauthoriseTimesheet');
 
+  const toastWarn = (msg) => {
+    if (typeof window.__toast === 'function') window.__toast(msg);
+    else if (typeof window.toast === 'function') window.toast(msg, { kind: 'warn' });
+    else if (typeof window.showToast === 'function') window.showToast(msg, 'warn');
+    else window.alert(msg);
+  };
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const pickSignature = (...values) => {
     for (const value of values) {
@@ -250686,6 +250691,39 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
       });
       const freshRow = firstAffectedRow(refreshResult);
       const freshId = trimStr(freshRow?.current_timesheet_id || freshRow?.timesheet_id || freshRow?.id || '');
+      if (freshRow && freshId && freshId !== tsId) {
+        let handled = null;
+        try {
+          if (typeof tsHandleLifecycleReconcileModal === 'function') {
+            handled = await tsHandleLifecycleReconcileModal({
+              ok: false,
+              success: false,
+              error: 'STALE_LIFECYCLE_STATE',
+              error_code: 'STALE_LIFECYCLE_STATE',
+              stale_lifecycle_state: true,
+              refresh_required: true,
+              expected_timesheet_id: tsId,
+              current_timesheet_id: freshId,
+              timesheet_id: freshId,
+              affected_rows: [freshRow]
+            }, {
+              action: 'unauthorise',
+              timesheet_id: tsId,
+              current_timesheet_id: freshId,
+              tabKey: 'overview',
+              showMessage: true
+            });
+          }
+        } catch {}
+        if (handled && handled.handled) {
+          GE();
+          return handled;
+        }
+        markCriticalIncomplete(window.modalCtx || mc, 'UNAUTHORISE_PREFLIGHT_IDENTITY_CHANGED');
+        toastWarn('This timesheet changed while the update was being processed. The latest timesheet details are now shown.');
+        GE();
+        return { ok: false, stale: true, blocked: true, reason: 'UNAUTHORISE_PREFLIGHT_IDENTITY_CHANGED', expected_timesheet_id: tsId, current_timesheet_id: freshId, refresh_required: true, affected_rows: [freshRow] };
+      }
       if (freshRow && (!freshId || freshId === tsId) && typeof applyTimesheetLifecyclePatchToModal === 'function') {
         applyTimesheetLifecyclePatchToModal(window.modalCtx || mc, freshRow, {
           action: 'unauthorise',
@@ -250721,6 +250759,13 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
     }
   }
 
+  if (!expectedRowSignature) {
+    markCriticalIncomplete(window.modalCtx || mc, 'UNAUTHORISE_MISSING_TRUSTED_SIGNATURE');
+    toastWarn('Cannot unauthorise until the latest timesheet details have been refreshed.');
+    GE();
+    return { ok: false, blocked: true, reason: 'UNAUTHORISE_MISSING_TRUSTED_SIGNATURE', refresh_required: true };
+  }
+
   const mutationKey = `unauthorise:${tsId}:${expected}`;
   if (!(window.__timesheetLifecycleMutationInFlight instanceof Set)) window.__timesheetLifecycleMutationInFlight = new Set();
   if (window.__timesheetLifecycleMutationInFlight.has(mutationKey) || (window.modalCtx && window.modalCtx.__timesheetLifecycleMutationInFlight === true)) {
@@ -250748,8 +250793,60 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
     };
 
     L('REQUEST', { url: API(urlPath), tsId, expected_timesheet_id: expected, expected_row_signature_present: !!expectedRowSignature });
-    const json = await apiPostJson(urlPath, payload);
+    let json;
+    try {
+      json = await apiPostJson(urlPath, payload);
+    } catch (err) {
+      try {
+        if (typeof tsHandleLifecycleReconcileModal === 'function') {
+          const reconciled = await tsHandleLifecycleReconcileModal(err, {
+            action: 'unauthorise',
+            timesheet_id: tsId,
+            current_timesheet_id: tsId,
+            tabKey: 'overview',
+            mutationStartedAt,
+            showMessage: true
+          });
+          if (reconciled && reconciled.handled) {
+            GE();
+            return reconciled;
+          }
+        }
+      } catch {}
+      try {
+        if (typeof tsHandleMoved409Modal === 'function') {
+          const handled = await tsHandleMoved409Modal(err, {
+            tabKey: 'overview',
+            label: 'unauthorise-timesheet',
+            toast: 'This timesheet changed while you were editing; review and try again.'
+          });
+          if (handled) {
+            GE();
+            return { ok: false, stale: true, moved: true, current_timesheet_id: window.modalCtx?.data?.timesheet_id || null };
+          }
+        }
+      } catch {}
+      GE();
+      throw err;
+    }
     L('unauthorise result', json);
+
+    try {
+      if (typeof tsHandleLifecycleReconcileModal === 'function' && json && (json.ok === false || json.success === false || json.refresh_required === true || json.stale_lifecycle_state === true || json.unknown_lifecycle_outcome === true)) {
+        const reconciled = await tsHandleLifecycleReconcileModal(json, {
+          action: 'unauthorise',
+          timesheet_id: tsId,
+          current_timesheet_id: tsId,
+          tabKey: 'overview',
+          mutationStartedAt,
+          showMessage: true
+        });
+        if (reconciled && reconciled.handled) {
+          GE();
+          return reconciled;
+        }
+      }
+    } catch {}
 
     const fallbackPatch = {
       timesheet_id: tsId,
@@ -250846,7 +250943,7 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
         const ctx = window.modalCtx || mc;
         ctx.__simpleTimesheetLifecycleRefreshRequired = true;
         ctx.__simpleTimesheetLifecycleRefreshTimesheetId = String(tsId);
-        ctx.__simpleTimesheetLifecycleRefreshMessage = 'Timesheet unauthorised, but the latest permission-critical state is still refreshing. Close and reopen if controls do not settle.';
+        ctx.__simpleTimesheetLifecycleRefreshMessage = 'Timesheet unauthorised, but the latest timesheet details are still refreshing. Close and reopen the timesheet if the buttons do not update.';
       } catch {}
       L('unauthorise patch incomplete; unsafe actions remain disabled', patchResult);
     }
@@ -250873,6 +250970,226 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
   }
 }
 
+async function tsHandleLifecycleReconcileModal(errOrPayload, opts = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const firstString = function firstString() {
+    for (let index = 0; index < arguments.length; index += 1) {
+      const text = trimStr(arguments[index]);
+      if (text) return text;
+    }
+    return '';
+  };
+  const isPlainObject = (value) => !!(value && typeof value === 'object' && !Array.isArray(value));
+  const normaliseCode = (value) => trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  const parseMaybeJson = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      return isPlainObject(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const rawPayload = isPlainObject(errOrPayload?.json) ? errOrPayload.json
+    : (isPlainObject(errOrPayload?.backendPayload) ? errOrPayload.backendPayload
+      : (isPlainObject(errOrPayload?.payload) ? errOrPayload.payload
+        : (isPlainObject(errOrPayload) ? errOrPayload : parseMaybeJson(errOrPayload?.message || errOrPayload?.body))));
+  const detailPayload = parseMaybeJson(rawPayload?.details || rawPayload?.detail || errOrPayload?.details || errOrPayload?.detail);
+  const payload = detailPayload ? { ...(rawPayload || {}), ...detailPayload } : rawPayload;
+  const textBlob = [
+    errOrPayload?.message,
+    errOrPayload?.body,
+    errOrPayload?.name,
+    errOrPayload?.code,
+    errOrPayload?.error_code,
+    errOrPayload?.details,
+    errOrPayload?.detail,
+    payload?.message,
+    payload?.user_message,
+    payload?.error,
+    payload?.error_code,
+    payload?.code,
+    payload?.reason,
+    payload?.details,
+    payload?.detail
+  ].map((value) => String(value == null ? '' : value)).join(' ');
+  const status = Number(errOrPayload?.status || payload?.status || payload?.status_code || 0) || 0;
+  const code = normaliseCode(firstString(payload?.error_code, payload?.code, payload?.error, payload?.reason, errOrPayload?.error_code, errOrPayload?.code));
+  const controlledCodes = new Set([
+    'STALE_LIFECYCLE_STATE',
+    'UNKNOWN_LIFECYCLE_OUTCOME',
+    'LIFECYCLE_TIMEOUT_RETRY_EXHAUSTED',
+    'TRANSIENT_LIFECYCLE_CONFLICT',
+    'ROW_SIGNATURE_MISMATCH',
+    'TIMESHEET_MOVED'
+  ]);
+  const looksUnknownTimeout = [408, 504, 524].includes(status) || /timeout after|rpc .* failed 408|rpc .* timed out|fetch timeout|network timeout|gateway timeout|worker timeout|aborterror|aborted|request timed out|request timeout/i.test(textBlob);
+  const looksStaleLifecycle = /\bROW_SIGNATURE_MISMATCH\b|signature mismatch|\bEXPECTED_TIMESHEET_MISMATCH\b|\bTIMESHEET_MOVED\b|\bSTALE_LIFECYCLE_STATE\b/i.test(textBlob);
+  const shouldHandle = controlledCodes.has(code) || looksUnknownTimeout || looksStaleLifecycle || payload?.refresh_required === true || payload?.stale_lifecycle_state === true || payload?.unknown_lifecycle_outcome === true;
+  if (!shouldHandle) return { handled: false };
+
+  const o = isPlainObject(opts) ? opts : {};
+  const action = trimStr(o.action).toLowerCase().includes('unauthorise') ? 'unauthorise' : 'authorise';
+  const friendlyMessage = (() => {
+    const effectiveCode = (code === 'ROW_SIGNATURE_MISMATCH' || looksStaleLifecycle) ? 'STALE_LIFECYCLE_STATE' : code;
+    if (effectiveCode === 'STALE_LIFECYCLE_STATE' || effectiveCode === 'TIMESHEET_MOVED' || payload?.stale_lifecycle_state === true) {
+      return 'This timesheet changed while the update was being processed.\n\nThe latest timesheet details are now shown.';
+    }
+    if (effectiveCode === 'UNKNOWN_LIFECYCLE_OUTCOME' || payload?.unknown_lifecycle_outcome === true) {
+      return 'We could not confirm whether this timesheet update completed.\n\nPlease close this message and try again once the timesheet details have refreshed.';
+    }
+    if (action === 'unauthorise') {
+      return 'This timesheet could not be unauthorised.\n\nThe latest timesheet details are now shown. Please use the Unauthorise button again if the action is still needed.';
+    }
+    return 'This timesheet could not be authorised.\n\nThe latest timesheet details are now shown. Please use the Authorise button again if the action is still needed.';
+  })();
+  const firstAffectedRow = (value) => {
+    if (!isPlainObject(value)) return null;
+    const arrays = [value.flattened_rows, value.flattenedRows, value.affected_rows, value.affectedRows, value.rows];
+    for (const arr of arrays) {
+      if (Array.isArray(arr) && isPlainObject(arr[0])) return arr[0];
+    }
+    return null;
+  };
+  const markIncomplete = (ctx, reason) => {
+    try {
+      if (!ctx) return;
+      ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+      ctx.__timesheetLifecycleCriticalStateReason = reason || 'LIFECYCLE_RECONCILE_REFRESH_REQUIRED';
+      ctx.__timesheetLifecyclePermissionStateComplete = false;
+      ctx.__timesheetLifecyclePriorityBadgesComplete = false;
+      ctx.__simpleTimesheetLifecycleRefreshRequired = true;
+    } catch {}
+  };
+  const clearIncomplete = (ctx) => {
+    try {
+      if (!ctx) return;
+      ctx.__timesheetLifecycleCriticalStateIncomplete = false;
+      delete ctx.__timesheetLifecycleCriticalStateReason;
+      ctx.__simpleTimesheetLifecycleRefreshRequired = false;
+    } catch {}
+  };
+  let ctx = window.modalCtx || null;
+  const targetTimesheetId = firstString(
+    payload?.current_timesheet_id,
+    payload?.timesheet_id,
+    firstAffectedRow(payload)?.current_timesheet_id,
+    firstAffectedRow(payload)?.timesheet_id,
+    o.current_timesheet_id,
+    o.timesheet_id,
+    ctx?.data?.current_timesheet_id,
+    ctx?.data?.timesheet_id,
+    ctx?.data?.id
+  );
+
+  if (typeof setTimesheetLifecycleBusy === 'function') {
+    try { setTimesheetLifecycleBusy(true, { action, timesheet_id: targetTimesheetId || null, reason: 'Refreshing latest timesheet details' }); } catch {}
+  }
+
+  let patchResult = null;
+  let refreshResult = null;
+  let adopted = false;
+  try {
+    markIncomplete(ctx, code || 'LIFECYCLE_RECONCILE_REFRESH_REQUIRED');
+    if (payload && typeof applyTimesheetLifecyclePatchToModal === 'function') {
+      patchResult = applyTimesheetLifecyclePatchToModal(ctx || window.modalCtx || {}, payload, {
+        action,
+        source: 'lifecycle-controlled-response',
+        requireSignature: true,
+        allowFallback: true,
+        timesheet_id: targetTimesheetId || o.timesheet_id || null,
+        current_timesheet_id: targetTimesheetId || o.current_timesheet_id || null,
+        mutationStartedAt: o.mutationStartedAt || null
+      });
+    }
+
+    if (!(patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete) && typeof refreshTimesheetLifecycleAffectedRows === 'function') {
+      const refreshIdentity = payload || {
+        timesheet_id: targetTimesheetId || null,
+        current_timesheet_id: targetTimesheetId || null,
+        contract_week_id: firstString(o.contract_week_id, ctx?.data?.contract_week_id, ctx?.timesheetDetails?.contract_week_id) || null,
+        booking_id: firstString(o.booking_id, ctx?.data?.booking_id, ctx?.timesheetDetails?.booking_id) || null,
+        context: 'timesheet_modal'
+      };
+      refreshResult = await Promise.race([
+        refreshTimesheetLifecycleAffectedRows(refreshIdentity, {
+          context: 'timesheet_modal',
+          action: `${action}-controlled-refresh`,
+          state: window.modalCtx || ctx || null,
+          apply: false,
+          network: 'always',
+          require_signature: true,
+          require_permission_state: true,
+          max_items: 4
+        }),
+        new Promise((resolve) => setTimeout(() => resolve({ ok: false, timed_out: true, reason: 'LIFECYCLE_RECONCILE_REFRESH_TIMEOUT' }), 4500))
+      ]);
+      const affectedRow = firstAffectedRow(refreshResult);
+      if (affectedRow && typeof applyTimesheetLifecyclePatchToModal === 'function') {
+        patchResult = applyTimesheetLifecyclePatchToModal(window.modalCtx || ctx || {}, affectedRow, {
+          action,
+          source: 'lifecycle-controlled-refresh',
+          requireSignature: true,
+          allowFallback: true,
+          timesheet_id: targetTimesheetId || affectedRow.timesheet_id || null,
+          current_timesheet_id: targetTimesheetId || affectedRow.current_timesheet_id || affectedRow.timesheet_id || null,
+          mutationStartedAt: o.mutationStartedAt || null
+        });
+      }
+    }
+
+    const resolvedId = firstString(
+      patchResult?.current_timesheet_id,
+      window.modalCtx?.data?.current_timesheet_id,
+      window.modalCtx?.data?.timesheet_id,
+      targetTimesheetId
+    );
+    if (!(patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete) && resolvedId && typeof tsModalAdoptTimesheetId === 'function') {
+      try {
+        await tsModalAdoptTimesheetId(resolvedId, {
+          tabKey: o.tabKey || 'overview',
+          refreshDetails: true,
+          row_patch: isPlainObject(payload?.lifecycle_patch) ? payload.lifecycle_patch : null
+        });
+        adopted = true;
+      } catch {}
+    }
+
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
+    } catch {}
+
+    const patchComplete = !!(patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete);
+    if (patchComplete || adopted) clearIncomplete(window.modalCtx || ctx);
+    else markIncomplete(window.modalCtx || ctx, code || 'LIFECYCLE_RECONCILE_REFRESH_REQUIRED');
+
+    if (o.showMessage !== false) {
+      try {
+        if (typeof window.alert === 'function') window.alert(friendlyMessage);
+      } catch {}
+    }
+
+    return {
+      handled: true,
+      ok: false,
+      stale: looksStaleLifecycle || code === 'ROW_SIGNATURE_MISMATCH' || code === 'STALE_LIFECYCLE_STATE' || payload?.stale_lifecycle_state === true,
+      unknown: looksUnknownTimeout || code === 'UNKNOWN_LIFECYCLE_OUTCOME' || code === 'LIFECYCLE_TIMEOUT_RETRY_EXHAUSTED' || payload?.unknown_lifecycle_outcome === true,
+      code: code || (looksUnknownTimeout ? 'UNKNOWN_LIFECYCLE_OUTCOME' : (looksStaleLifecycle ? 'STALE_LIFECYCLE_STATE' : 'STALE_LIFECYCLE_STATE')),
+      current_timesheet_id: resolvedId || targetTimesheetId || null,
+      patch_applied: !!patchResult?.applied,
+      critical_patch_complete: patchComplete,
+      affected_refresh: refreshResult,
+      adopted
+    };
+  } finally {
+    if (typeof setTimesheetLifecycleBusy === 'function') {
+      try { setTimesheetLifecycleBusy(false, { action, timesheet_id: targetTimesheetId || null, reason: 'Latest timesheet details refreshed' }); } catch {}
+    }
+  }
+}
 
 
 
@@ -285213,8 +285530,6 @@ function renderTimesheetLinesTab(ctx) {
   `;
 }
 
-
-
 async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUTH]');
   GC('authoriseTimesheet');
@@ -285373,11 +285688,38 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     const freshRow = firstAffectedRow(refreshResult);
     const freshId = trimStr(freshRow?.current_timesheet_id || freshRow?.timesheet_id || freshRow?.id || '');
     if (freshRow && freshId && freshId !== tsId) {
-      toastWarn('This timesheet changed while you were editing; review and try again.');
+      let handled = null;
+      try {
+        if (typeof tsHandleLifecycleReconcileModal === 'function') {
+          handled = await tsHandleLifecycleReconcileModal({
+            ok: false,
+            success: false,
+            error: 'STALE_LIFECYCLE_STATE',
+            error_code: 'STALE_LIFECYCLE_STATE',
+            stale_lifecycle_state: true,
+            refresh_required: true,
+            expected_timesheet_id: tsId,
+            current_timesheet_id: freshId,
+            timesheet_id: freshId,
+            affected_rows: [freshRow]
+          }, {
+            action: 'authorise',
+            timesheet_id: tsId,
+            current_timesheet_id: freshId,
+            tabKey: 'overview',
+            mutationStartedAt,
+            showMessage: true
+          });
+        }
+      } catch {}
+      if (handled && handled.handled) {
+        return { ok: false, blocked: true, alreadyHandled: true, result: handled };
+      }
+      toastWarn('This timesheet changed while the update was being processed. The latest timesheet details are now shown.');
       return {
         ok: false,
         blocked: true,
-        result: { ok: false, stale: true, blocked: true, reason: 'AUTHORISE_PREFLIGHT_IDENTITY_CHANGED', expected_timesheet_id: tsId, current_timesheet_id: freshId }
+        result: { ok: false, stale: true, blocked: true, reason: 'AUTHORISE_PREFLIGHT_IDENTITY_CHANGED', expected_timesheet_id: tsId, current_timesheet_id: freshId, refresh_required: true, affected_rows: [freshRow] }
       };
     }
 
@@ -285397,7 +285739,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       return { ok: true, refreshed: true, signature: patchResult.signature };
     }
 
-    toastWarn('The latest saved row signature or permission state is not trusted yet. Save or refresh the timesheet before authorising.');
+    toastWarn('The latest timesheet details are not ready yet. Save or refresh the timesheet before authorising.');
     return {
       ok: false,
       blocked: true,
@@ -285408,7 +285750,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
   try {
     const preflight = await runTrustedSignaturePreflight();
     if (preflight && preflight.blocked) {
-      markCriticalIncomplete(window.modalCtx || mc, preflight.result?.reason || 'AUTHORISE_PREFLIGHT_BLOCKED');
+      if (!preflight.alreadyHandled) markCriticalIncomplete(window.modalCtx || mc, preflight.result?.reason || 'AUTHORISE_PREFLIGHT_BLOCKED');
       GE();
       return preflight.result || { ok: false, blocked: true, reason: 'AUTHORISE_PREFLIGHT_REFRESH_FAILED' };
     }
@@ -285434,7 +285776,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     );
     if (!expectedRowSignature) {
       markCriticalIncomplete(window.modalCtx || mc, 'AUTHORISE_MISSING_TRUSTED_SIGNATURE');
-      toastWarn('Cannot authorise until the saved row signature has been refreshed.');
+      toastWarn('Cannot authorise until the latest timesheet details have been refreshed.');
       GE();
       return { ok: false, blocked: true, reason: 'AUTHORISE_MISSING_TRUSTED_SIGNATURE', refresh_required: true };
     }
@@ -285503,6 +285845,22 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       json = await apiPostJson(urlPath, payload);
     } catch (err) {
       try {
+        if (typeof tsHandleLifecycleReconcileModal === 'function') {
+          const reconciled = await tsHandleLifecycleReconcileModal(err, {
+            action: 'authorise',
+            timesheet_id: tsId,
+            current_timesheet_id: tsId,
+            tabKey: 'overview',
+            mutationStartedAt,
+            showMessage: true
+          });
+          if (reconciled && reconciled.handled) {
+            GE();
+            return reconciled;
+          }
+        }
+      } catch {}
+      try {
         if (typeof tsHandleMoved409Modal === 'function') {
           const handled = await tsHandleMoved409Modal(err, {
             tabKey: 'overview',
@@ -285518,6 +285876,23 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       GE();
       throw err;
     }
+
+    try {
+      if (typeof tsHandleLifecycleReconcileModal === 'function' && json && (json.ok === false || json.success === false || json.refresh_required === true || json.stale_lifecycle_state === true || json.unknown_lifecycle_outcome === true)) {
+        const reconciled = await tsHandleLifecycleReconcileModal(json, {
+          action: 'authorise',
+          timesheet_id: tsId,
+          current_timesheet_id: tsId,
+          tabKey: 'overview',
+          mutationStartedAt,
+          showMessage: true
+        });
+        if (reconciled && reconciled.handled) {
+          GE();
+          return reconciled;
+        }
+      }
+    } catch {}
 
     try {
       const warnings = Array.isArray(json?.warnings) ? json.warnings.map(x => String(x || '').trim()).filter(Boolean) : [];
@@ -285606,7 +285981,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
         const ctx = window.modalCtx || mc;
         ctx.__simpleTimesheetLifecycleRefreshRequired = true;
         ctx.__simpleTimesheetLifecycleRefreshTimesheetId = String(tsId);
-        ctx.__simpleTimesheetLifecycleRefreshMessage = 'Timesheet authorised, but the latest permission-critical state is still refreshing. Close and reopen if controls do not settle.';
+        ctx.__simpleTimesheetLifecycleRefreshMessage = 'Timesheet authorised, but the latest timesheet details are still refreshing. Close and reopen the timesheet if the buttons do not update.';
       } catch {}
       try {
         const modalBody = document.getElementById('modalBody') || document.querySelector('#modal .modal-body') || document.querySelector('#modalBodyWrap');
@@ -285631,6 +286006,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     }
   }
 }
+
 
 function readTimesheetLifecycleMutationSequence(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : ((typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {});
