@@ -328236,6 +328236,7 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
 
 
 
+
 function renderTimesheetOverviewTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OVERVIEW]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -328815,6 +328816,51 @@ function renderTimesheetOverviewTab(ctx) {
   const isEffectivelyPartPaid = effectivePaidStatus === 'PARTIALLY_PAID';
   const isEffectivelyProcessing = effectivePaidStatus === 'PROCESSING' || payStateProcessingAny;
 
+  const lifecycleAuthorisedAtServer = (
+    details.authorised_at_server ||
+    details.authorisedAtServer ||
+    ts.authorised_at_server ||
+    ts.authorisedAtServer ||
+    baseSummary.authorised_at_server ||
+    row.authorised_at_server ||
+    null
+  );
+  const lifecycleAuthorisedAtUtc = (
+    tsfin.authorised_at_utc ||
+    tsfin.authorisedAtUtc ||
+    details.authorised_at_utc ||
+    details.authorisedAtUtc ||
+    baseSummary.authorised_at_utc ||
+    row.authorised_at_utc ||
+    null
+  );
+  const lifecycleRevokedAt = (
+    details.revoked_at ||
+    details.revokedAt ||
+    ts.revoked_at ||
+    ts.revokedAt ||
+    baseSummary.revoked_at ||
+    row.revoked_at ||
+    null
+  );
+  const lifecycleProcessingStatus = String(stageRaw || '').trim().toUpperCase();
+  const lifecycleIsPaymentAuthorised = !!(
+    hasTsfin &&
+    !lifecycleRevokedAt &&
+    lifecycleProcessingStatus !== 'PENDING_AUTH' &&
+    (
+      lifecycleProcessingStatus === 'READY_FOR_INVOICE' ||
+      lifecycleProcessingStatus === 'READY_FOR_PAYMENT' ||
+      lifecycleProcessingStatus === 'AUTHORISED_FOR_PAYMENT' ||
+      lifecycleProcessingStatus === 'AUTHORISED'
+    ) &&
+    (lifecycleAuthorisedAtServer || lifecycleAuthorisedAtUtc || authInfo.authorised === true)
+  );
+  const showAuthorisedForPaymentStageBadge = !!(
+    lifecycleIsPaymentAuthorised &&
+    !isEffectivelyPaid
+  );
+
   const showAdvancePaymentAction =
     !!tsId &&
     hasTsfin &&
@@ -328927,18 +328973,35 @@ function renderTimesheetOverviewTab(ctx) {
   const stageBadges = [];
   const seenStage   = new Set();
 
+  const makeStageBadgeHtml = (label, cls, title) => {
+    const key = String(label || '').trim();
+    if (!key) return '';
+    return `<span class="pill ${cls || 'pill-info'}" style="font-weight:600;"${title ? ` title="${enc(title)}"` : ''}>${enc(key)}</span>`;
+  };
+
   const addStage = (label, cls, title) => {
     const key = String(label || '').trim();
     if (!key) return;
     if (seenStage.has(key)) return;
     seenStage.add(key);
-
-    stageBadges.push(
-      `<span class="pill ${cls || 'pill-info'}" ` +
-      `style="font-weight:600;${title ? `" title="${enc(title)}"` : '"'}>` +
-      `${enc(key)}</span>`
-    );
+    stageBadges.push(makeStageBadgeHtml(key, cls, title));
   };
+
+  const prependStage = (label, cls, title) => {
+    const key = String(label || '').trim();
+    if (!key) return;
+    if (seenStage.has(key)) return;
+    seenStage.add(key);
+    stageBadges.unshift(makeStageBadgeHtml(key, cls, title));
+  };
+
+  if (showAuthorisedForPaymentStageBadge) {
+    prependStage(
+      'Authorised for Payment',
+      'pill-ok',
+      'This timesheet is authorised for payment and is not fully paid.'
+    );
+  }
 
   // Authoritative pay-state badges. Payment money is driven from pay_state paid_totals/adjusted,
   // not component-count diagnostics, and all payment badges stay in the Stage row.
@@ -329136,9 +329199,8 @@ function renderTimesheetOverviewTab(ctx) {
     }
   }
 
-  if (hasTsfin && stageRaw === 'READY_FOR_INVOICE' && !invoicePaid && !isInvoiced) {
-    addStage('Ready for Invoicing', 'pill-ok', 'This timesheet is authorised and ready to be added to an invoice.');
-  }
+  // READY_FOR_INVOICE is the internal lifecycle state for payment authorisation.
+  // The user-facing Overview/Stage badge is rendered first as “Authorised for Payment” above.
   if (hasTsfin && stageRaw === 'READY_FOR_HR') {
     addStage('Ready for HR', 'pill-info', 'This timesheet is authorised and requires HealthRoster validation before it can be invoiced.');
   }
@@ -329815,8 +329877,6 @@ function renderTimesheetOverviewTab(ctx) {
     </div>
   `;
 }
-
-
 
 
 
