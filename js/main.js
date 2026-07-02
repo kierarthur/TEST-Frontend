@@ -133238,7 +133238,7 @@ const onSaveTimesheet = async () => {
   const showSimpleTimesheetLifecycleRefreshWarning = (message) => {
     const msg = String(
       message ||
-      'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Authorise is blocked. Close and reopen the timesheet before authorising.'
+      'Your changes were saved, but the latest timesheet details could not be refreshed safely. Authorise is blocked until the latest details are refreshed.'
     ).trim();
 
     try {
@@ -133263,7 +133263,7 @@ const onSaveTimesheet = async () => {
     const id = String(timesheetId || '').trim();
     const msg = String(
       message ||
-      'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Authorise is blocked. Close and reopen the timesheet before authorising.'
+      'Your changes were saved, but the latest timesheet details could not be refreshed safely. Authorise is blocked until the latest details are refreshed.'
     ).trim();
 
     window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
@@ -133275,6 +133275,22 @@ const onSaveTimesheet = async () => {
     liveCtx.lifecycle_refresh_failed = true;
     liveCtx.lifecycle_refresh_error = msg;
     liveCtx.refresh_required = true;
+    liveCtx.__timesheetLifecycleSaveInFlight = false;
+    liveCtx.__timesheetSaveLifecyclePatchPending = true;
+    liveCtx.__timesheetLifecycleSignatureTrustedAfterSave = false;
+    liveCtx.__timesheetLifecycleCriticalStateIncomplete = true;
+    liveCtx.__timesheetLifecycleCriticalStateReason = 'LATEST_TIMESHEET_DETAILS_REFRESH_REQUIRED';
+    liveCtx.__timesheetLifecyclePermissionStateComplete = false;
+    liveCtx.__timesheetLifecyclePriorityBadgesComplete = false;
+    if (liveCtx.__timesheetLifecycleTrusted && typeof liveCtx.__timesheetLifecycleTrusted === 'object') {
+      liveCtx.__timesheetLifecycleTrusted = {
+        ...liveCtx.__timesheetLifecycleTrusted,
+        trusted: false,
+        invalidated_at: Date.now(),
+        invalidated_by: 'LATEST_TIMESHEET_DETAILS_REFRESH_REQUIRED',
+        invalidated_timesheet_id: id || null
+      };
+    }
 
     liveCtx.data = {
       ...(liveCtx.data || rowNow || {}),
@@ -133300,7 +133316,9 @@ const onSaveTimesheet = async () => {
     const id = String(args.timesheetId || '').trim();
     const contractWeekId = String(args.contractWeekId || '').trim();
     const bookingId = String(args.bookingId || '').trim();
-    const defaultMessage = 'Your expense changes were saved, but the latest timesheet row could not be refreshed safely. Authorise is blocked. Close and reopen the timesheet before authorising.';
+    const defaultMessage = 'Your changes were saved, but the latest timesheet details could not be refreshed safely. Authorise is blocked until the latest details are refreshed.';
+    const refreshAction = String(args.action || 'save-lifecycle-refresh').trim() || 'save-lifecycle-refresh';
+    const refreshSource = String(args.source || 'save-affected-rows-refresh').trim() || 'save-affected-rows-refresh';
 
     const fail = (errorCode, errorMessage, refreshResult = null) => {
       const message = String(errorMessage || defaultMessage).trim();
@@ -133335,10 +133353,13 @@ const onSaveTimesheet = async () => {
         context: 'timesheet_modal'
       }, {
         context: 'timesheet_modal',
-        action: 'save-expenses',
-        mutation: 'save-expenses',
+        action: refreshAction,
+        mutation: refreshAction,
         state: window.modalCtx || null,
         apply: false,
+        network: 'always',
+        require_signature: true,
+        require_permission_state: true,
         max_items: 4
       });
     } catch (err) {
@@ -133433,6 +133454,19 @@ const onSaveTimesheet = async () => {
     }
 
     const liveCtx = window.modalCtx || {};
+    const effectiveRefreshMutationStartedAt = resolveEffectiveSaveLifecycleMutationStartedAt(
+      liveCtx,
+      args.mutationStartedAt || null
+    );
+    rememberPostSaveLifecycleSignature(liveCtx, signature, {
+      source: refreshSource,
+      timesheet_id: id,
+      contract_week_id: contractWeekId || null,
+      booking_id: bookingId || null,
+      mutationStartedAt: effectiveRefreshMutationStartedAt
+    });
+    liveCtx.__timesheetLatestLifecycleAffectedRowSignature = signature;
+    liveCtx.__timesheetLatestLifecycleAffectedRowSignatureAt = Date.now();
     const liveModalId = String(
       liveCtx.data?.current_timesheet_id ||
       liveCtx.data?.timesheet_id ||
@@ -133507,12 +133541,12 @@ const onSaveTimesheet = async () => {
     if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
       const patchResult = applyTimesheetLifecyclePatchToModal(liveCtx, authoritativeRowPatch, {
         action: 'lifecycle',
-        source: args.source || 'save-affected-rows-refresh',
+        source: refreshSource,
         requireSignature: true,
         allowFallback: false,
         timesheet_id: id,
         contract_week_id: contractWeekId || undefined,
-        mutationStartedAt: Number(args.mutationStartedAt || liveCtx.__timesheetLatestSavedMutationStartedAt || 0) || Date.now()
+        mutationStartedAt: effectiveRefreshMutationStartedAt || Date.now()
       });
       if (!(patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete)) {
         clearTimesheetLifecycleSavePending(liveCtx, false);
@@ -133557,6 +133591,39 @@ const onSaveTimesheet = async () => {
     return '';
   };
 
+  const resolveEffectiveSaveLifecycleMutationStartedAt = (ctxInput, explicitValue = null) => {
+    const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : (window.modalCtx || null);
+    const candidates = [
+      explicitValue,
+      ctx?.__timesheetLatestSavedMutationStartedAt,
+      ctx?.__timesheetLatestSaveResponseSignatureMutationStartedAt,
+      ctx?.__timesheetLifecycleTrustInvalidatedAt,
+      ctx?.__timesheetSaveLifecycleTrustInvalidatedAt
+    ]
+      .map((value) => Number(value || 0))
+      .filter((value) => Number.isFinite(value) && value > 0);
+
+    return candidates.length ? Math.max(...candidates) : null;
+  };
+
+  const rememberPostSaveLifecycleSignature = (ctxInput, signatureInput, meta = {}) => {
+    const signature = pickSignature(signatureInput);
+    const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : (window.modalCtx || null);
+    if (!ctx || !signature) return '';
+    const now = Date.now();
+    ctx.__timesheetPostSaveRequiredSignature = signature;
+    ctx.__timesheetFreshestKnownLifecycleSignatureAfterSave = signature;
+    ctx.__timesheetLatestSaveResponseSignature = signature;
+    ctx.__timesheetLatestSaveResponseSignatureAt = now;
+    ctx.__timesheetLatestSaveResponseSignatureSource = String(meta.source || 'save-response');
+    ctx.__timesheetLatestSaveResponseSignatureTimesheetId = trimStr(meta.timesheet_id || meta.timesheetId || ctx.data?.current_timesheet_id || ctx.data?.timesheet_id || '') || null;
+    ctx.__timesheetLatestSaveResponseSignatureMutationStartedAt = resolveEffectiveSaveLifecycleMutationStartedAt(
+      ctx,
+      meta.mutationStartedAt || meta.mutation_started_at || null
+    );
+    return signature;
+  };
+
   const invalidateTimesheetLifecycleTrustForSave = (source, timesheetId) => {
     const ctx = window.modalCtx || null;
     if (!ctx || typeof ctx !== 'object') return null;
@@ -133571,7 +133638,32 @@ const onSaveTimesheet = async () => {
       ''
     );
 
+    const preSaveSignature = pickSignature(
+      ctx.__timesheetLifecycleTrusted?.signature,
+      ctx.__timesheetLifecycleTrusted?.backend_row_signature,
+      ctx.__timesheetLifecycleTrusted?.mutation_row_signature,
+      ctx.__timesheetLifecycleTrusted?.row_signature,
+      ctx.data?.backend_row_signature,
+      ctx.data?.mutation_row_signature,
+      ctx.data?.row_signature,
+      ctx.data?.expected_row_signature,
+      ctx.timesheetDetails?.row?.backend_row_signature,
+      ctx.timesheetDetails?.row?.mutation_row_signature,
+      ctx.timesheetDetails?.row?.row_signature,
+      ctx.timesheetDetails?.timesheet?.backend_row_signature,
+      ctx.timesheetDetails?.timesheet?.row_signature,
+      ctx.timesheetDetails?.tsfin?.backend_row_signature,
+      ctx.timesheetDetails?.tsfin?.row_signature
+    );
+
     ctx.__timesheetLatestSavedMutationStartedAt = Math.max(Number(ctx.__timesheetLatestSavedMutationStartedAt || 0) || 0, now);
+    ctx.__timesheetLifecyclePreSaveSignature = preSaveSignature || null;
+    ctx.__timesheetLifecyclePreSaveSignatureAt = now;
+    ctx.__timesheetPostSaveRequiredSignature = '';
+    ctx.__timesheetFreshestKnownLifecycleSignatureAfterSave = '';
+    ctx.__timesheetLatestSaveResponseSignature = '';
+    ctx.__timesheetLatestSaveResponseSignatureAt = null;
+    ctx.__timesheetLatestSaveResponseSignatureSource = '';
     ctx.__timesheetLifecycleTrustInvalidatedAt = now;
     ctx.__timesheetSaveLifecycleTrustInvalidatedAt = now;
     ctx.__timesheetLifecycleTrustInvalidatedBy = String(source || 'timesheet-save');
@@ -133730,6 +133822,14 @@ const onSaveTimesheet = async () => {
       response.booking_id || responseData.booking_id || responseLifecycle.booking_id || responseAffectedRow.booking_id ||
       rowNow.booking_id || detailsNow.booking_id || detailsNow.contract_week?.booking_id || ''
     ) || null;
+
+    rememberPostSaveLifecycleSignature(ctx, signature, {
+      source,
+      timesheet_id: id,
+      contract_week_id: contractWeekId,
+      booking_id: bookingId,
+      mutationStartedAt: Number(identity.mutationStartedAt || identity.mutation_started_at || ctx.__timesheetLatestSavedMutationStartedAt || 0) || null
+    });
 
     const truthyFlag = (...values) => values.some((value) => {
       if (value === true || value === 1) return true;
@@ -134866,7 +134966,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
     }
   }
    // Post-save row update: adopt trusted lifecycle/signature state first, then keep non-critical refreshes lazy.
-  const canTrustLifecycleAfterSave = (typeof hasTrustedTimesheetLifecycleSignature === 'function')
+  let canTrustLifecycleAfterSave = (typeof hasTrustedTimesheetLifecycleSignature === 'function')
     ? hasTrustedTimesheetLifecycleSignature(window.modalCtx || {}, { timesheet_id: tsIdSave })
     : false;
 
@@ -134877,12 +134977,55 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
     qrActionBackend || qrSendNewNow
   );
 
+  let lifecycleFallbackRefreshAfterSave = null;
+  if (!canTrustLifecycleAfterSave) {
+    const fallbackTimesheetId = trimStr(
+      window.modalCtx?.data?.current_timesheet_id ||
+      window.modalCtx?.data?.timesheet_id ||
+      tsIdSave ||
+      rowNow.current_timesheet_id ||
+      rowNow.timesheet_id ||
+      ''
+    );
+    if (fallbackTimesheetId) {
+      lifecycleFallbackRefreshAfterSave = await refreshAndAdoptSimpleTimesheetLifecycleRowAfterSave({
+        timesheetId: fallbackTimesheetId,
+        contractWeekId: weekIdSave || window.modalCtx?.data?.contract_week_id || window.modalCtx?.timesheetDetails?.contract_week_id || '',
+        bookingId: window.modalCtx?.data?.booking_id || window.modalCtx?.timesheetDetails?.booking_id || window.modalCtx?.timesheetDetails?.contract_week?.booking_id || '',
+        source: 'save-post-mutation-affected-rows-refresh',
+        action: 'save-post-mutation-affected-rows-refresh',
+        mutationStartedAt: resolveEffectiveSaveLifecycleMutationStartedAt(window.modalCtx || null, saveLifecycleMutationStartedAt) || saveLifecycleMutationStartedAt
+      });
+      if (!isActiveTimesheetModalToken(openToken)) {
+        GE();
+        return { ok: false, stale: true };
+      }
+      canTrustLifecycleAfterSave = (typeof hasTrustedTimesheetLifecycleSignature === 'function')
+        ? hasTrustedTimesheetLifecycleSignature(window.modalCtx || {}, { timesheet_id: fallbackTimesheetId })
+        : false;
+    }
+    if (!canTrustLifecycleAfterSave) {
+      const warningMessage = lifecycleFallbackRefreshAfterSave?.error || 'Your changes were saved, but the latest timesheet details are still refreshing. Please wait a moment and try again before authorising.';
+      markSimpleTimesheetLifecycleRefreshRequired(fallbackTimesheetId || tsIdSave, warningMessage);
+      showSimpleTimesheetLifecycleRefreshWarning(warningMessage);
+      GE();
+      return {
+        ok: false,
+        saved_persisted: true,
+        saved_but_stale: true,
+        refresh_required: true,
+        safe_for_lifecycle: false,
+        error_code: lifecycleFallbackRefreshAfterSave?.error_code || 'POST_SAVE_LIFECYCLE_REFRESH_REQUIRED'
+      };
+    }
+  }
+
   let finalRefresh = null;
-  if (!canTrustLifecycleAfterSave || finalRefreshNeededForNonLifecycle) {
+  if (finalRefreshNeededForNonLifecycle) {
     finalRefresh = (typeof window.modalCtx?.refreshTimesheetAfterFinanceChange === 'function')
       ? await window.modalCtx.refreshTimesheetAfterFinanceChange({
           silent: true,
-          purpose: canTrustLifecycleAfterSave ? 'background_refresh' : 'lifecycle_fallback',
+          purpose: 'background_refresh',
           lifecycleSequence: (typeof readTimesheetLifecycleMutationSequence === 'function') ? readTimesheetLifecycleMutationSequence(window.modalCtx || {}) : Number(window.modalCtx?.__timesheetLifecycleMutationSeq || 0) || null
         })
       : null;
@@ -134958,73 +135101,96 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
       trustedAfterSave.expected_row_signature
     ) : '';
     const finalRefreshSignature = finalRefresh ? pickSignature(
-      window.modalCtx?.data?.backend_row_signature,
-      window.modalCtx?.data?.mutation_row_signature,
-      window.modalCtx?.data?.row_signature,
-      window.modalCtx?.data?.expected_row_signature,
-      window.modalCtx?.timesheetDetails?.row?.backend_row_signature,
-      window.modalCtx?.timesheetDetails?.row?.mutation_row_signature,
-      window.modalCtx?.timesheetDetails?.row?.row_signature,
-      window.modalCtx?.timesheetDetails?.row?.expected_row_signature,
-      window.modalCtx?.timesheetDetails?.timesheet?.backend_row_signature,
-      window.modalCtx?.timesheetDetails?.timesheet?.mutation_row_signature,
-      window.modalCtx?.timesheetDetails?.timesheet?.row_signature,
-      window.modalCtx?.timesheetDetails?.timesheet?.expected_row_signature,
-      window.modalCtx?.timesheetDetails?.tsfin?.backend_row_signature,
-      window.modalCtx?.timesheetDetails?.tsfin?.mutation_row_signature,
-      window.modalCtx?.timesheetDetails?.tsfin?.row_signature,
-      window.modalCtx?.timesheetDetails?.tsfin?.expected_row_signature
+      finalRefresh.backend_row_signature,
+      finalRefresh.mutation_row_signature,
+      finalRefresh.row_signature,
+      finalRefresh.expected_row_signature,
+      finalRefresh.row?.backend_row_signature,
+      finalRefresh.row?.mutation_row_signature,
+      finalRefresh.row?.row_signature,
+      finalRefresh.row?.expected_row_signature,
+      finalRefresh.data?.backend_row_signature,
+      finalRefresh.data?.mutation_row_signature,
+      finalRefresh.data?.row_signature,
+      finalRefresh.data?.expected_row_signature,
+      finalRefresh.details?.backend_row_signature,
+      finalRefresh.details?.mutation_row_signature,
+      finalRefresh.details?.row_signature,
+      finalRefresh.details?.expected_row_signature,
+      finalRefresh.details?.row?.backend_row_signature,
+      finalRefresh.details?.row?.mutation_row_signature,
+      finalRefresh.details?.row?.row_signature,
+      finalRefresh.details?.row?.expected_row_signature,
+      finalRefresh.details?.timesheet?.backend_row_signature,
+      finalRefresh.details?.timesheet?.mutation_row_signature,
+      finalRefresh.details?.timesheet?.row_signature,
+      finalRefresh.details?.timesheet?.expected_row_signature,
+      finalRefresh.details?.tsfin?.backend_row_signature,
+      finalRefresh.details?.tsfin?.mutation_row_signature,
+      finalRefresh.details?.tsfin?.row_signature,
+      finalRefresh.details?.tsfin?.expected_row_signature
     ) : '';
-    const finalLifecycleSignature = pickSignature(trustedAfterSaveSignature, finalRefreshSignature);
-    const finalDetailsForPatch = (window.modalCtx.timesheetDetails && typeof window.modalCtx.timesheetDetails === 'object')
-      ? window.modalCtx.timesheetDetails
-      : {};
-    const savePatch = {
-      ...(window.modalCtx.data || {}),
-      ...(finalDetailsForPatch.row || {}),
-      ...(finalDetailsForPatch.timesheet || {}),
-      ...(finalDetailsForPatch.tsfin || {}),
-      action_flags: finalDetailsForPatch.action_flags || window.modalCtx.data?.action_flags || undefined,
-      footer_action_hints: finalDetailsForPatch.footer_action_hints || undefined,
-      edit_permission_hints: finalDetailsForPatch.edit_permission_hints || undefined,
-      priority_badge_hints: finalDetailsForPatch.priority_badge_hints || undefined,
-      patch_completeness: finalDetailsForPatch.patch_completeness || undefined,
-      permission_state_patch_complete: finalDetailsForPatch.permission_state_patch_complete === true ? true : undefined,
-      priority_badges_patch_complete: finalDetailsForPatch.priority_badges_patch_complete === true ? true : undefined,
-      immediate_lifecycle_patch_available: finalDetailsForPatch.immediate_lifecycle_patch_available === true ? true : undefined,
-      id: finalTsId,
-      timesheet_id: finalTsId,
-      current_timesheet_id: finalTsId
-    };
-    ['backend_row_signature', 'mutation_row_signature', 'row_signature', 'expected_row_signature', 'row_backend_signature', 'signature'].forEach((key) => {
-      try { delete savePatch[key]; } catch {}
-    });
-    if (finalLifecycleSignature) {
-      savePatch.backend_row_signature = finalLifecycleSignature;
-      savePatch.mutation_row_signature = finalLifecycleSignature;
-      savePatch.row_signature = finalLifecycleSignature;
-      savePatch.expected_row_signature = finalLifecycleSignature;
-    }
-    if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
-      const finalPatchResult = applyTimesheetLifecyclePatchToModal(window.modalCtx, savePatch, {
-        action: 'lifecycle',
-        source: trustedAfterSaveSignature ? 'save-existing-details' : (finalRefresh ? 'save-final-refresh' : 'save-untrusted-details'),
-        requireSignature: true,
-        allowFallback: false,
+    const requiredPostSaveSignature = pickSignature(
+      window.modalCtx?.__timesheetPostSaveRequiredSignature,
+      window.modalCtx?.__timesheetFreshestKnownLifecycleSignatureAfterSave,
+      window.modalCtx?.__timesheetLatestSaveResponseSignature,
+      window.modalCtx?.__timesheetLatestLifecycleAffectedRowSignature
+    );
+    const finalLifecycleSignature = pickSignature(finalRefreshSignature, trustedAfterSaveSignature);
+    if (requiredPostSaveSignature && finalLifecycleSignature && finalLifecycleSignature !== requiredPostSaveSignature) {
+      markSimpleTimesheetLifecycleRefreshRequired(finalTsId, 'The latest timesheet details are still refreshing. Please wait a moment and try again before authorising.');
+      clearTimesheetLifecycleSavePending(window.modalCtx, false);
+    } else {
+      const finalDetailsForPatch = (window.modalCtx.timesheetDetails && typeof window.modalCtx.timesheetDetails === 'object')
+        ? window.modalCtx.timesheetDetails
+        : {};
+      const savePatch = {
+        ...(window.modalCtx.data || {}),
+        ...(finalDetailsForPatch.row || {}),
+        ...(finalDetailsForPatch.timesheet || {}),
+        ...(finalDetailsForPatch.tsfin || {}),
+        action_flags: finalDetailsForPatch.action_flags || window.modalCtx.data?.action_flags || undefined,
+        footer_action_hints: finalDetailsForPatch.footer_action_hints || undefined,
+        edit_permission_hints: finalDetailsForPatch.edit_permission_hints || undefined,
+        priority_badge_hints: finalDetailsForPatch.priority_badge_hints || undefined,
+        patch_completeness: finalDetailsForPatch.patch_completeness || undefined,
+        permission_state_patch_complete: finalDetailsForPatch.permission_state_patch_complete === true ? true : undefined,
+        priority_badges_patch_complete: finalDetailsForPatch.priority_badges_patch_complete === true ? true : undefined,
+        immediate_lifecycle_patch_available: finalDetailsForPatch.immediate_lifecycle_patch_available === true ? true : undefined,
+        id: finalTsId,
         timesheet_id: finalTsId,
-        mutationStartedAt: Number(window.modalCtx?.__timesheetLatestSavedMutationStartedAt || 0) || Date.now()
+        current_timesheet_id: finalTsId
+      };
+      ['backend_row_signature', 'mutation_row_signature', 'row_signature', 'expected_row_signature', 'row_backend_signature', 'signature'].forEach((key) => {
+        try { delete savePatch[key]; } catch {}
       });
-      if (finalPatchResult && finalPatchResult.applied && finalPatchResult.permissionStateComplete && finalPatchResult.priorityBadgesComplete) {
-        clearTimesheetLifecycleSavePending(window.modalCtx, true);
-      } else {
-        window.modalCtx.__simpleTimesheetLifecycleRefreshRequired = true;
-        window.modalCtx.__simpleTimesheetLifecycleRefreshTimesheetId = String(finalTsId || '');
-        window.modalCtx.__simpleTimesheetLifecycleRefreshMessage = 'Saved, but the latest timesheet lifecycle state is not trusted yet. Refresh before authorising.';
-        window.modalCtx.__timesheetLifecycleCriticalStateIncomplete = true;
-        window.modalCtx.__timesheetLifecycleCriticalStateReason = finalPatchResult?.reason || 'SAVE_FINAL_LIFECYCLE_PATCH_INCOMPLETE';
-        window.modalCtx.__timesheetLifecyclePermissionStateComplete = false;
-        window.modalCtx.__timesheetLifecyclePriorityBadgesComplete = false;
-        clearTimesheetLifecycleSavePending(window.modalCtx, false);
+      if (finalLifecycleSignature) {
+        savePatch.backend_row_signature = finalLifecycleSignature;
+        savePatch.mutation_row_signature = finalLifecycleSignature;
+        savePatch.row_signature = finalLifecycleSignature;
+        savePatch.expected_row_signature = finalLifecycleSignature;
+      }
+      if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
+        const finalPatchResult = applyTimesheetLifecyclePatchToModal(window.modalCtx, savePatch, {
+          action: 'lifecycle',
+          source: finalRefreshSignature ? 'save-final-refresh' : (trustedAfterSaveSignature ? 'save-existing-details' : 'save-untrusted-details'),
+          requireSignature: true,
+          allowFallback: false,
+          timesheet_id: finalTsId,
+          mutationStartedAt: Number(window.modalCtx?.__timesheetLatestSavedMutationStartedAt || saveLifecycleMutationStartedAt || 0) || Date.now()
+        });
+        if (finalPatchResult && finalPatchResult.applied && finalPatchResult.permissionStateComplete && finalPatchResult.priorityBadgesComplete) {
+          clearTimesheetLifecycleSavePending(window.modalCtx, true);
+        } else {
+          window.modalCtx.__simpleTimesheetLifecycleRefreshRequired = true;
+          window.modalCtx.__simpleTimesheetLifecycleRefreshTimesheetId = String(finalTsId || '');
+          window.modalCtx.__simpleTimesheetLifecycleRefreshMessage = 'Saved, but the latest timesheet details are not trusted yet. Refresh before authorising.';
+          window.modalCtx.__timesheetLifecycleCriticalStateIncomplete = true;
+          window.modalCtx.__timesheetLifecycleCriticalStateReason = finalPatchResult?.reason || 'SAVE_FINAL_LIFECYCLE_PATCH_INCOMPLETE';
+          window.modalCtx.__timesheetLifecyclePermissionStateComplete = false;
+          window.modalCtx.__timesheetLifecyclePriorityBadgesComplete = false;
+          clearTimesheetLifecycleSavePending(window.modalCtx, false);
+        }
       }
     }
   } catch {}
@@ -135091,6 +135257,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
   GE();
   return { ok: true, saved: updatedRow };
 }
+
 
 
   
@@ -286027,7 +286194,6 @@ function renderTimesheetLinesTab(ctx) {
   `;
 }
 
-
 async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUTH]');
   GC('authoriseTimesheet');
@@ -286197,7 +286363,9 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
         mutation: 'authorise-preflight',
         state: window.modalCtx || null,
         apply: false,
-        network: 'auto',
+        network: 'always',
+        require_signature: true,
+        require_permission_state: true,
         max_items: 4
       });
     } catch (err) {
@@ -286293,41 +286461,39 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       trustedForPayload.expected_row_signature
     ) : '';
     const preflightSignatureForPayload = pickSignature(preflight?.signature);
+    const postSaveRequiredSignature = pickSignature(
+      window.modalCtx?.__timesheetPostSaveRequiredSignature,
+      window.modalCtx?.__timesheetFreshestKnownLifecycleSignatureAfterSave,
+      window.modalCtx?.__timesheetLatestSaveResponseSignature,
+      window.modalCtx?.__timesheetLatestLifecycleAffectedRowSignature
+    );
     const expectedRowSignature = pickSignature(
       trustedSignatureForPayload,
-      preflightSignatureForPayload,
-      row.backend_row_signature,
-      row.mutation_row_signature,
-      row.row_signature,
-      row.expected_row_signature,
-      window.modalCtx?.data?.backend_row_signature,
-      window.modalCtx?.data?.mutation_row_signature,
-      window.modalCtx?.data?.row_signature,
-      window.modalCtx?.data?.expected_row_signature,
-      window.modalCtx?.timesheetDetails?.backend_row_signature,
-      window.modalCtx?.timesheetDetails?.mutation_row_signature,
-      window.modalCtx?.timesheetDetails?.row_signature,
-      window.modalCtx?.timesheetDetails?.expected_row_signature,
-      window.modalCtx?.timesheetDetails?.row?.backend_row_signature,
-      window.modalCtx?.timesheetDetails?.row?.mutation_row_signature,
-      window.modalCtx?.timesheetDetails?.row?.row_signature,
-      window.modalCtx?.timesheetDetails?.row?.expected_row_signature,
-      window.modalCtx?.timesheetDetails?.timesheet?.backend_row_signature,
-      window.modalCtx?.timesheetDetails?.timesheet?.mutation_row_signature,
-      window.modalCtx?.timesheetDetails?.timesheet?.row_signature,
-      window.modalCtx?.timesheetDetails?.timesheet?.expected_row_signature,
-      window.modalCtx?.timesheetDetails?.tsfin?.backend_row_signature,
-      window.modalCtx?.timesheetDetails?.tsfin?.mutation_row_signature,
-      window.modalCtx?.timesheetDetails?.tsfin?.row_signature,
-      window.modalCtx?.timesheetDetails?.tsfin?.expected_row_signature
+      preflightSignatureForPayload
     );
-    const expectedRowSignatureSource = trustedSignatureForPayload ? 'trusted' : (preflightSignatureForPayload ? 'authorise-preflight' : (
-      pickSignature(row.backend_row_signature, row.mutation_row_signature, row.row_signature, row.expected_row_signature) ? 'modal_data' :
-      pickSignature(window.modalCtx?.timesheetDetails?.row?.backend_row_signature, window.modalCtx?.timesheetDetails?.row?.mutation_row_signature, window.modalCtx?.timesheetDetails?.row?.row_signature, window.modalCtx?.timesheetDetails?.row?.expected_row_signature) ? 'timesheetDetails.row' :
-      pickSignature(window.modalCtx?.timesheetDetails?.timesheet?.backend_row_signature, window.modalCtx?.timesheetDetails?.timesheet?.mutation_row_signature, window.modalCtx?.timesheetDetails?.timesheet?.row_signature, window.modalCtx?.timesheetDetails?.timesheet?.expected_row_signature) ? 'timesheetDetails.timesheet' :
-      pickSignature(window.modalCtx?.timesheetDetails?.tsfin?.backend_row_signature, window.modalCtx?.timesheetDetails?.tsfin?.mutation_row_signature, window.modalCtx?.timesheetDetails?.tsfin?.row_signature, window.modalCtx?.timesheetDetails?.tsfin?.expected_row_signature) ? 'timesheetDetails.tsfin' :
-      'none'
-    ));
+    const expectedRowSignatureSource = trustedSignatureForPayload ? 'trusted' : (preflightSignatureForPayload ? 'authorise-preflight' : 'none');
+    if (postSaveRequiredSignature && expectedRowSignature && expectedRowSignature !== postSaveRequiredSignature) {
+      markCriticalIncomplete(window.modalCtx || mc, 'AUTHORISE_STALE_POST_SAVE_SIGNATURE');
+      if (window.modalCtx && typeof window.modalCtx === 'object') {
+        window.modalCtx.__simpleTimesheetLifecycleRefreshRequired = true;
+        window.modalCtx.__simpleTimesheetLifecycleRefreshTimesheetId = String(tsId || '');
+        window.modalCtx.__simpleTimesheetLifecycleRefreshMessage = 'The latest timesheet details are still refreshing. Please wait a moment and try again.';
+        if (window.modalCtx.__timesheetLifecycleTrusted && typeof window.modalCtx.__timesheetLifecycleTrusted === 'object') {
+          window.modalCtx.__timesheetLifecycleTrusted = {
+            ...window.modalCtx.__timesheetLifecycleTrusted,
+            trusted: false,
+            invalidated_at: Date.now(),
+            invalidated_by: 'AUTHORISE_STALE_POST_SAVE_SIGNATURE',
+            invalidated_timesheet_id: tsId || null,
+            rejected_signature: expectedRowSignature,
+            required_signature: postSaveRequiredSignature
+          };
+        }
+      }
+      toastWarn('The latest timesheet details are still refreshing. Please wait a moment and try again.');
+      GE();
+      return { ok: false, blocked: true, reason: 'AUTHORISE_STALE_POST_SAVE_SIGNATURE', refresh_required: true };
+    }
     if (!expectedRowSignature) {
       markCriticalIncomplete(window.modalCtx || mc, 'AUTHORISE_MISSING_TRUSTED_SIGNATURE');
       toastWarn('Cannot authorise until the latest timesheet details have been refreshed.');
@@ -286583,6 +286749,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     }
   }
 }
+
 
 function readTimesheetLifecycleMutationSequence(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : ((typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {});
@@ -288637,6 +288804,7 @@ function renderOutboxTable(content, rows) {
 
   updateSelectionUi();
 }
+
 
 
 function renderSummary(rows){
@@ -291968,8 +292136,66 @@ const getSelectionUiState = () => {
     });
   }
 
+  const isSummaryRowOpenInteractiveTarget = (target) => {
+    try {
+      if (!target || typeof target.closest !== 'function') return false;
+      return !!target.closest([
+        'button',
+        'a[href]',
+        'input',
+        'textarea',
+        'select',
+        'option',
+        'label',
+        '[role="button"]',
+        '[role="link"]',
+        '[data-no-row-open]',
+        '[data-stop-row-open]',
+        '[data-action]',
+        '.action',
+        '.actions',
+        '.row-actions',
+        '.icon-action',
+        '.btn',
+        '.pager-btn',
+        '.ctx-item',
+        '.row-select'
+      ].join(','));
+    } catch { return false; }
+  };
+
+  const resolveSummaryRowFromEvent = (ev) => {
+    const target = ev && ev.target;
+    let tr = (target && typeof target.closest === 'function') ? target.closest('tr[data-id]') : null;
+    if (tr && tb.contains(tr)) return tr;
+
+    const x = Number(ev?.clientX);
+    const y = Number(ev?.clientY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+    let tableRect = null;
+    let bodyRect = null;
+    try {
+      tableRect = tbl.getBoundingClientRect();
+      bodyRect = bodyWrap.getBoundingClientRect();
+    } catch { return null; }
+    if (!tableRect || !bodyRect) return null;
+    if (y < tableRect.top || y > tableRect.bottom) return null;
+
+    const leftBound = Math.min(tableRect.left, bodyRect.left);
+    const rightBound = Math.max(tableRect.right, bodyRect.right);
+    if (x < leftBound || x > rightBound) return null;
+
+    const rowsForHitTest = Array.from(tb.querySelectorAll('tr[data-id]'));
+    for (const rowEl of rowsForHitTest) {
+      const rect = rowEl.getBoundingClientRect();
+      if (y >= rect.top && y <= rect.bottom && x >= leftBound && x <= rightBound) return rowEl;
+    }
+    return null;
+  };
+
   tb.addEventListener('click', (ev) => {
-    const tr = ev.target && ev.target.closest('tr'); if (!tr) return;
+    const tr = resolveSummaryRowFromEvent(ev); if (!tr) return;
     if (ev.target && ev.target.classList && ev.target.classList.contains('row-select')) return;
     const id = tr.dataset.id;
     setSummaryActiveRow(id, { focusGrid: true });
@@ -291981,9 +292207,9 @@ const getSelectionUiState = () => {
     });
   });
 
-  tb.addEventListener('dblclick', (ev) => {
-    const tr = ev.target && ev.target.closest('tr'); if (!tr) return;
-    if (ev.target && ev.target.closest && ev.target.closest('input.row-select')) return;
+  bodyWrap.addEventListener('dblclick', (ev) => {
+    if (isSummaryRowOpenInteractiveTarget(ev.target)) return;
+    const tr = resolveSummaryRowFromEvent(ev); if (!tr) return;
     if (!confirmDiscardChangesIfDirty()) return;
     const id = tr.dataset.id;
     setSummaryActiveRow(id, { focusGrid: true });
@@ -292432,8 +292658,6 @@ const getSelectionUiState = () => {
     })
     .catch(() => { /* non-blocking */ }); 
 }
-
-
 
 
 
@@ -295987,6 +296211,14 @@ function hasTrustedTimesheetLifecycleSignature(modalCtxInput, options) {
     }
     return '';
   };
+  const uniqueSignatures = (...values) => {
+    const out = [];
+    values.forEach((value) => {
+      const s = trimStr(value);
+      if (s && !out.includes(s)) out.push(s);
+    });
+    return out;
+  };
 
   const currentId = trimStr(
     opts.timesheet_id || opts.current_timesheet_id ||
@@ -295998,23 +296230,6 @@ function hasTrustedTimesheetLifecycleSignature(modalCtxInput, options) {
   );
   if (!currentId) return false;
 
-  const signature = pickSignature(
-    ctx.data?.backend_row_signature,
-    ctx.data?.mutation_row_signature,
-    ctx.data?.row_signature,
-    ctx.data?.expected_row_signature,
-    ctx.timesheetDetails?.backend_row_signature,
-    ctx.timesheetDetails?.row_signature,
-    ctx.timesheetDetails?.row?.backend_row_signature,
-    ctx.timesheetDetails?.row?.mutation_row_signature,
-    ctx.timesheetDetails?.row?.row_signature,
-    ctx.timesheetDetails?.timesheet?.backend_row_signature,
-    ctx.timesheetDetails?.timesheet?.row_signature,
-    ctx.timesheetDetails?.tsfin?.backend_row_signature,
-    ctx.timesheetDetails?.tsfin?.row_signature
-  );
-  if (!signature) return false;
-
   const trusted = (ctx.__timesheetLifecycleTrusted && typeof ctx.__timesheetLifecycleTrusted === 'object')
     ? ctx.__timesheetLifecycleTrusted
     : null;
@@ -296022,16 +296237,68 @@ function hasTrustedTimesheetLifecycleSignature(modalCtxInput, options) {
   if (trusted.trusted !== true) return false;
   if (ctx.__timesheetLifecycleSaveInFlight === true || ctx.__timesheetSaveLifecyclePatchPending === true) return false;
 
+  const trustedSignature = pickSignature(
+    trusted.signature,
+    trusted.backend_row_signature,
+    trusted.mutation_row_signature,
+    trusted.row_signature,
+    trusted.expected_row_signature
+  );
+  if (!trustedSignature) return false;
+
   const trustedId = trimStr(trusted.timesheet_id || trusted.current_timesheet_id || '');
   if (!trustedId || trustedId !== currentId) return false;
-  if (trimStr(trusted.signature) !== signature) return false;
+
+  const currentSurfaceSignatures = uniqueSignatures(
+    ctx.data?.backend_row_signature,
+    ctx.data?.mutation_row_signature,
+    ctx.data?.row_signature,
+    ctx.data?.expected_row_signature,
+    ctx.timesheetDetails?.backend_row_signature,
+    ctx.timesheetDetails?.mutation_row_signature,
+    ctx.timesheetDetails?.row_signature,
+    ctx.timesheetDetails?.expected_row_signature,
+    ctx.timesheetDetails?.row?.backend_row_signature,
+    ctx.timesheetDetails?.row?.mutation_row_signature,
+    ctx.timesheetDetails?.row?.row_signature,
+    ctx.timesheetDetails?.row?.expected_row_signature,
+    ctx.timesheetDetails?.timesheet?.backend_row_signature,
+    ctx.timesheetDetails?.timesheet?.mutation_row_signature,
+    ctx.timesheetDetails?.timesheet?.row_signature,
+    ctx.timesheetDetails?.timesheet?.expected_row_signature,
+    ctx.timesheetDetails?.tsfin?.backend_row_signature,
+    ctx.timesheetDetails?.tsfin?.mutation_row_signature,
+    ctx.timesheetDetails?.tsfin?.row_signature,
+    ctx.timesheetDetails?.tsfin?.expected_row_signature
+  );
+  if (!currentSurfaceSignatures.length) return false;
+  if (!currentSurfaceSignatures.includes(trustedSignature)) return false;
+  if (currentSurfaceSignatures.some((signature) => signature !== trustedSignature)) return false;
+
+  const freshestPostSaveSignatures = uniqueSignatures(
+    ctx.__timesheetPostSaveRequiredSignature,
+    ctx.__timesheetFreshestKnownLifecycleSignatureAfterSave,
+    ctx.__timesheetLatestSaveResponseSignature,
+    ctx.__timesheetLatestLifecycleAffectedRowSignature
+  );
+  if (freshestPostSaveSignatures.some((signature) => signature !== trustedSignature)) return false;
+
+  const preSaveSignature = pickSignature(ctx.__timesheetLifecyclePreSaveSignature);
+  if (
+    preSaveSignature &&
+    trustedSignature === preSaveSignature &&
+    ctx.__timesheetLifecycleSignatureTrustedAfterSave !== true &&
+    Number(ctx.__timesheetLatestSavedMutationStartedAt || 0) > 0
+  ) {
+    return false;
+  }
 
   const allowedSources = new Set([
     'save', 'timesheet-save', 'tsfin_patch_response', 'manual_upsert_response', 'daily_manual_upsert_response',
-    'save-response', 'save-lifecycle-patch', 'save-affected-rows-refresh',
+    'save-response', 'save-lifecycle-patch', 'save-affected-rows-refresh', 'save-post-mutation-affected-rows-refresh',
     'save-existing-details', 'save-final-refresh', 'save-existing-lifecycle', 'save-final-lifecycle',
     'authorise', 'authorise-post', 'authorise-preflight',
-    'unauthorise', 'unauthorise-post', 'lifecycle', 'affected_rows_fallback',
+    'unauthorise', 'unauthorise-post', 'unauthorise-preflight', 'lifecycle', 'affected_rows_fallback',
     'authorise-affected-rows', 'unauthorise-affected-rows'
   ]);
   const trustedSource = trimStr(trusted.source).toLowerCase();
@@ -296063,17 +296330,25 @@ function hasTrustedTimesheetLifecycleSignature(modalCtxInput, options) {
     Number(trusted.invalidated_at || 0)
   );
   if (Number.isFinite(lifecycleTrustInvalidatedAt) && lifecycleTrustInvalidatedAt > 0 && patchAt < lifecycleTrustInvalidatedAt) return false;
+  const latestSaveMutationStartedAt = Number(ctx.__timesheetLatestSavedMutationStartedAt || 0) || 0;
+  const trustedSaveMutationStartedAt = Number(
+    trusted.save_mutation_started_at ||
+    trusted.mutation_started_at ||
+    trusted.mutationStartedAt ||
+    0
+  ) || 0;
+  if (latestSaveMutationStartedAt > 0 && trustedSaveMutationStartedAt > 0 && trustedSaveMutationStartedAt < latestSaveMutationStartedAt) return false;
+
   const latestEditAt = Math.max(
     Number(ctx.__timesheetLatestEditAt || 0),
     Number(ctx.__timesheetLatestDirtyEditAt || 0),
-    Number(ctx.__timesheetLatestSavedMutationStartedAt || 0),
+    latestSaveMutationStartedAt,
     Number(opts.minPatchedAt || 0)
   );
   if (Number.isFinite(latestEditAt) && latestEditAt > 0 && patchAt < latestEditAt) return false;
 
   return true;
 }
-
 
 
 function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
@@ -306479,8 +306754,6 @@ bindSave(btnSave, top);
 }
 
 
-
-
 function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput, options) {
   const opts = (options && typeof options === 'object') ? options : {};
   const ctx = (modalCtxInput && typeof modalCtxInput === 'object')
@@ -306736,6 +307009,59 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
       ctx.__timesheetLifecycleCriticalStateReason = result.reason;
       ctx.__timesheetLifecyclePermissionStateComplete = false;
       ctx.__timesheetLifecyclePriorityBadgesComplete = false;
+      if (ctx.__timesheetLifecycleTrusted && typeof ctx.__timesheetLifecycleTrusted === 'object') {
+        ctx.__timesheetLifecycleTrusted = {
+          ...ctx.__timesheetLifecycleTrusted,
+          trusted: false,
+          invalidated_at: patchedAt,
+          invalidated_by: result.reason,
+          invalidated_timesheet_id: resolvedId || currentId || null
+        };
+      }
+    } catch {}
+    return result;
+  }
+
+  const sourceLower = String(source || '').trim().toLowerCase();
+  const actionLower = String(action || '').trim().toLowerCase();
+  const postSaveRequiredSignature = pickSignature(
+    ctx.__timesheetPostSaveRequiredSignature,
+    ctx.__timesheetFreshestKnownLifecycleSignatureAfterSave,
+    ctx.__timesheetLatestSaveResponseSignature,
+    ctx.__timesheetLatestLifecycleAffectedRowSignature
+  );
+  const mustMatchPostSaveSignature = !!(
+    postSaveRequiredSignature &&
+    (
+      sourceLower.includes('save') ||
+      actionLower === 'save' ||
+      sourceLower === 'authorise-preflight' ||
+      sourceLower === 'unauthorise-preflight'
+    )
+  );
+  if (mustMatchPostSaveSignature && signature && signature !== postSaveRequiredSignature) {
+    result.reason = 'STALE_POST_SAVE_SIGNATURE';
+    result.requiresAffectedRowsRefresh = true;
+    result.requiresFullDetailsRefresh = true;
+    try {
+      ctx.__simpleTimesheetLifecycleRefreshRequired = true;
+      ctx.__simpleTimesheetLifecycleRefreshTimesheetId = String(resolvedId || currentId || '');
+      ctx.__simpleTimesheetLifecycleRefreshMessage = 'The latest timesheet details are still refreshing. Please wait a moment and try again.';
+      ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+      ctx.__timesheetLifecycleCriticalStateReason = result.reason;
+      ctx.__timesheetLifecyclePermissionStateComplete = false;
+      ctx.__timesheetLifecyclePriorityBadgesComplete = false;
+      if (ctx.__timesheetLifecycleTrusted && typeof ctx.__timesheetLifecycleTrusted === 'object') {
+        ctx.__timesheetLifecycleTrusted = {
+          ...ctx.__timesheetLifecycleTrusted,
+          trusted: false,
+          invalidated_at: patchedAt,
+          invalidated_by: result.reason,
+          invalidated_timesheet_id: resolvedId || currentId || null,
+          rejected_signature: signature || '',
+          required_signature: postSaveRequiredSignature
+        };
+      }
     } catch {}
     return result;
   }
@@ -306948,20 +307274,46 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
   ctx.__timesheetLifecyclePermissionStateComplete = result.permissionStateComplete;
   ctx.__timesheetLifecyclePriorityBadgesComplete = result.priorityBadgesComplete;
   ctx.__timesheetLatestLifecyclePatchAt = patchedAt;
+  const mutationStartedAtForTrust = opts.mutationStartedAt || ctx.__timesheetLatestLifecycleMutationStartedAt || ctx.__timesheetLatestMutationStartedAt || patchedAt;
   ctx.__timesheetLifecycleTrusted = {
     timesheet_id: resolvedId || null,
     contract_week_id: patchWeekId || currentWeekId || null,
     signature: signature || '',
+    backend_row_signature: signature || '',
+    mutation_row_signature: signature || '',
+    row_signature: signature || '',
+    expected_row_signature: signature || '',
     source,
     action,
     patched_at: patchedAt,
-    mutation_started_at: opts.mutationStartedAt || ctx.__timesheetLatestLifecycleMutationStartedAt || ctx.__timesheetLatestMutationStartedAt || patchedAt,
+    mutation_started_at: mutationStartedAtForTrust,
+    save_mutation_started_at: (sourceLower.includes('save') || actionLower === 'save')
+      ? (opts.mutationStartedAt || ctx.__timesheetLatestSavedMutationStartedAt || mutationStartedAtForTrust)
+      : (ctx.__timesheetLatestSavedMutationStartedAt || null),
+    freshest_known_signature_after_save: postSaveRequiredSignature || '',
     signature_source: signatureCameFromPatch ? 'patch' : (existingSignature ? 'existing_context_untrusted' : ''),
     trusted: signatureCameFromPatch && result.permissionStateComplete && result.priorityBadgesComplete,
     permissionStateComplete: result.permissionStateComplete,
     priorityBadgesComplete: result.priorityBadgesComplete
   };
-  if (action === 'save' || String(source || '').toLowerCase().includes('save')) ctx.__timesheetLatestSuccessfulSaveAt = patchedAt;
+  if (sourceLower.includes('save') || actionLower === 'save') {
+    ctx.__timesheetLatestSuccessfulSaveAt = patchedAt;
+    if (signature) {
+      ctx.__timesheetPostSaveRequiredSignature = signature;
+      ctx.__timesheetFreshestKnownLifecycleSignatureAfterSave = signature;
+      ctx.__timesheetLatestLifecycleAffectedRowSignature = signature;
+      ctx.__timesheetLatestLifecycleAffectedRowSignatureAt = patchedAt;
+    }
+  } else if (
+    signature &&
+    !sourceLower.includes('preflight') &&
+    (actionLower === 'authorise' || actionLower === 'unauthorise' || sourceLower.includes('authorise') || sourceLower.includes('unauthorise'))
+  ) {
+    ctx.__timesheetPostSaveRequiredSignature = '';
+    ctx.__timesheetFreshestKnownLifecycleSignatureAfterSave = '';
+    ctx.__timesheetLatestSaveResponseSignature = '';
+    ctx.__timesheetLatestLifecycleAffectedRowSignature = '';
+  }
 
   if (result.permissionStateComplete && result.priorityBadgesComplete) {
     ctx.__timesheetLifecycleCriticalStateIncomplete = false;
@@ -307008,6 +307360,7 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
 
   return result;
 }
+
 
 
 
