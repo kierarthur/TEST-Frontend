@@ -28986,28 +28986,102 @@ async function bankingPayPreview(pay_date) {
     };
   };
 
-  const candidateStatusRowsFromProgressLike = (progressLike) => {
+ const candidateStatusRowsFromProgressLike = (progressLike) => {
     const progressObj = isPlainObject(progressLike) ? progressLike : {};
     const progressSource = isPlainObject(progressObj.progress) ? progressObj.progress : progressObj;
     const sampleLimitRaw = Number(progressSource.sample_limit || progressObj.sample_limit || 25);
     const sampleLimit = Number.isFinite(sampleLimitRaw) ? Math.max(1, Math.min(25, Math.trunc(sampleLimitRaw))) : 25;
-    const explicitRows = [
-      progressSource.candidate_status_rows,
-      progressSource.candidate_statuses,
-      progressSource.candidate_sample_rows,
-      progressSource.candidate_sample_rows_json,
-      progressObj.candidate_sample_rows,
-      progressObj.candidate_sample_rows_json,
-      progressSource.sample_candidate_rows,
-      progressSource.sample_rows,
-      progressSource.pending_candidate_jobs,
-      progressSource.pendingCandidateJobs
-    ].find((value) => Array.isArray(value)) || [];
-    const rows = explicitRows.filter((row) => isPlainObject(row)).slice(0, sampleLimit);
-    if (rows.length > 0) return rows;
+    const rows = [];
+    const pushRows = (value) => {
+      if (!Array.isArray(value)) return;
+      for (const row of value) {
+        if (isPlainObject(row)) rows.push(row);
+      }
+    };
+    const sourceObjects = [
+      progressSource,
+      progressObj,
+      isPlainObject(progressSource.progress) ? progressSource.progress : null,
+      isPlainObject(progressObj.progress) ? progressObj.progress : null,
+      isPlainObject(progressSource.preview) ? progressSource.preview : null,
+      isPlainObject(progressObj.preview) ? progressObj.preview : null,
+      isPlainObject(progressSource.session) ? progressSource.session : null,
+      isPlainObject(progressObj.session) ? progressObj.session : null
+    ].filter((value, index, arr) => isPlainObject(value) && arr.indexOf(value) === index);
+    for (const source of sourceObjects) {
+      pushRows(source.active_jobs);
+      pushRows(source.activeJobs);
+      pushRows(source.pending_candidate_jobs);
+      pushRows(source.pendingCandidateJobs);
+      pushRows(source.candidate_status_rows);
+      pushRows(source.candidate_statuses);
+      pushRows(source.candidate_sample_rows);
+      pushRows(source.candidate_sample_rows_json);
+      pushRows(source.sample_candidate_rows);
+      pushRows(source.sample_rows);
+    }
 
-    const countValue = (...keys) => {
-      for (const key of keys) {
+    const deltaJobTypes = new Set([
+      'WORKBENCH_CANDIDATE_DELTA_REFRESH',
+      'CANDIDATE_DELTA_REFRESH',
+      'BANKING_PAY_CANDIDATE_DELTA_REFRESH',
+      'PAY_WORKBENCH_CANDIDATE_DELTA_REFRESH'
+    ]);
+    const terminalStatuses = new Set(['READY', 'READY_EMPTY', 'MATERIALISED', 'MATERIALIZED', 'COMPLETE', 'COMPLETED', 'DONE', 'SUCCESS', 'SUCCEEDED', 'FAILED', 'ERROR', 'DEAD', 'CANCELLED', 'CANCELED', 'SKIPPED']);
+    const normaliseRow = (row) => {
+      const cloned = Object.assign({}, row);
+      const candidateId = trimStr(cloned.candidate_id || cloned.candidateId || cloned.candidate_uuid || cloned.candidateUuid || '');
+      const jobTypeRaw = trimStr(cloned.latest_job_type || cloned.latestJobType || cloned.job_type || cloned.jobType || cloned.canonical_job_type || cloned.canonicalJobType || cloned.resolved_job_type || cloned.resolvedJobType || cloned.type || '').toUpperCase();
+      const statusRaw = trimStr(cloned.latest_job_status || cloned.latestJobStatus || cloned.job_status || cloned.jobStatus || cloned.latest_status || cloned.latestStatus || cloned.status || cloned.new_status || cloned.newStatus || cloned.candidate_status || cloned.phase || cloned.state || '').toUpperCase();
+      const looksLikeDeltaJob = candidateId && deltaJobTypes.has(jobTypeRaw);
+      if (looksLikeDeltaJob && !terminalStatuses.has(statusRaw)) {
+        const jobId = trimStr(cloned.pending_job_id || cloned.pendingJobId || cloned.latest_job_id || cloned.latestJobId || cloned.job_id || cloned.jobId || cloned.id || '');
+        cloned.candidate_id = candidateId;
+        cloned.candidateId = candidateId;
+        cloned.pending_job_id = jobId || `delta-refresh:${candidateId}`;
+        cloned.latest_job_id = jobId || cloned.pending_job_id;
+        cloned.job_type = 'WORKBENCH_CANDIDATE_DELTA_REFRESH';
+        cloned.latest_job_type = 'WORKBENCH_CANDIDATE_DELTA_REFRESH';
+        cloned.job_status = statusRaw || 'RUNNING';
+        cloned.latest_job_status = statusRaw || 'RUNNING';
+        cloned.status = statusRaw || 'RUNNING';
+        cloned.candidate_status = statusRaw || 'RUNNING';
+        cloned.status_text = trimStr(cloned.status_text || cloned.statusText || cloned.message || '') || 'Updating latest payment details…';
+        cloned.display_status_text = trimStr(cloned.display_status_text || cloned.displayStatusText || cloned.status_text || '') || 'Updating latest payment details…';
+        cloned.active_delta_refresh = true;
+      }
+      return cloned;
+    };
+    const rowPriorityKey = (row) => {
+      const candidateId = trimStr(row && (row.candidate_id || row.candidateId || row.candidate_uuid || row.candidateUuid || ''));
+      const jobId = trimStr(row && (row.pending_job_id || row.pendingJobId || row.latest_job_id || row.latestJobId || row.job_id || row.jobId || row.id || ''));
+      const jobType = trimStr(row && (row.latest_job_type || row.latestJobType || row.job_type || row.jobType || row.canonical_job_type || row.canonicalJobType || row.resolved_job_type || row.resolvedJobType || ''));
+      const status = trimStr(row && (row.latest_job_status || row.latestJobStatus || row.job_status || row.jobStatus || row.status || row.candidate_status || row.state || ''));
+      if (candidateId || jobId || jobType || status) return [candidateId, jobId, jobType, status].join('|');
+      try { return JSON.stringify(row); } catch { return String(row || ''); }
+    };
+    const normalisedUnboundedRows = rows.map(normaliseRow).filter((row) => isPlainObject(row));
+    const prioritisedRows = [];
+    const seenNormalisedRows = new Set();
+    const appendPrioritisedRow = (row) => {
+      if (!isPlainObject(row)) return;
+      const key = rowPriorityKey(row);
+      if (key && seenNormalisedRows.has(key)) return;
+      if (key) seenNormalisedRows.add(key);
+      prioritisedRows.push(row);
+    };
+    for (const row of normalisedUnboundedRows) {
+      if (row.active_delta_refresh === true) appendPrioritisedRow(row);
+    }
+    for (const row of normalisedUnboundedRows) {
+      if (row.active_delta_refresh !== true) appendPrioritisedRow(row);
+    }
+
+    const normalisedRows = prioritisedRows.slice(0, sampleLimit);
+    if (normalisedRows.length > 0) return normalisedRows;
+
+    const countValue = function() {
+      for (const key of Array.from(arguments)) {
         const n = Number(progressSource[key] ?? progressObj[key]);
         if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
       }
@@ -29031,6 +29105,7 @@ async function bankingPayPreview(pay_date) {
     }
     return [];
   };
+
 
   const pendingJobIdFromRow = (row) => trimStr(row?.pending_job_id || row?.pendingJobId || row?.latest_job_id || row?.latestJobId || row?.job_id || row?.jobId || row?.id || '');
   const jobStatusFromRow = (row) => trimStr(row?.latest_job_status || row?.latestJobStatus || row?.job_status || row?.jobStatus || row?.status || row?.new_status || row?.candidate_status || row?.phase || row?.state || '');
@@ -46191,38 +46266,71 @@ const collectPreviewRowIds = (previewLike) => {
     pendingCandidateJobById.set(candidateId, deep(row));
   }
 
-  const getCandidateWorkbenchStatus = (candidateId) => {
+const getCandidateWorkbenchStatus = (candidateId) => {
     const candidateIdText = trimStr(candidateId);
+    const staleCandidateIds = (() => {
+      const sources = [];
+      try { if (typeof wiz !== 'undefined') sources.push(wiz?.workbench?.__candidate_refresh_stale_ids); } catch {}
+      try { if (typeof previewEnvelope !== 'undefined') sources.push(previewEnvelope?.__candidate_refresh_stale_ids); } catch {}
+      try { if (typeof pv !== 'undefined') sources.push(pv?.__candidate_refresh_stale_ids); } catch {}
+      return Array.from(new Set(sources.flatMap((value) => Array.isArray(value) ? value : [])
+        .map((value) => trimStr(value))
+        .filter(Boolean)));
+    })();
     const isPending = !!candidateIdText && pendingCandidateIds.includes(candidateIdText);
     const isFailed = !!candidateIdText && failedCandidateIds.includes(candidateIdText);
+    const isStale = !!candidateIdText && !isPending && !isFailed && staleCandidateIds.includes(candidateIdText);
     const pendingRow = candidateIdText ? (pendingCandidateRowById.get(candidateIdText) || pendingCandidateJobById.get(candidateIdText) || null) : null;
     const failedRow = candidateIdText ? (failedCandidateRowById.get(candidateIdText) || null) : null;
     const latestErrorJson = (failedRow && isPlainObject(failedRow.latest_error_json)) ? failedRow.latest_error_json : null;
-    const failedMessage = trimStr(latestErrorJson?.message || latestErrorJson?.error || failedRow?.status || 'Candidate refresh failed.');
-    const pendingMessage = trimStr(pendingRow?.latest_job_type || pendingRow?.status || 'Refreshing candidate…');
-    const disabledReason = isFailed ? failedMessage : (isPending ? pendingMessage : '');
+    const failedMessage = trimStr(latestErrorJson?.message || latestErrorJson?.error || failedRow?.status_text || failedRow?.message || failedRow?.status || 'Candidate refresh failed.');
+    const pendingJobType = trimStr(pendingRow?.latest_job_type || pendingRow?.latestJobType || pendingRow?.job_type || pendingRow?.jobType || '').toUpperCase();
+    const pendingMessage = trimStr(
+      pendingRow?.display_status_text ||
+      pendingRow?.displayStatusText ||
+      pendingRow?.status_text ||
+      pendingRow?.statusText ||
+      pendingRow?.message ||
+      pendingRow?.user_message ||
+      (pendingJobType === 'WORKBENCH_CANDIDATE_DELTA_REFRESH' ? 'Updating latest payment details…' : '') ||
+      pendingRow?.status ||
+      'Updating latest payment details…'
+    );
+    const pendingDisabledReason = pendingJobType === 'WORKBENCH_CANDIDATE_DELTA_REFRESH'
+      ? 'This candidate is refreshing. Please wait before creating a draft for this candidate.'
+      : pendingMessage;
+    const staleMessage = 'Latest payment details could not be confirmed. Refresh Banking Pay before creating a draft for this candidate.';
+    const disabledReason = isFailed ? failedMessage : (isPending ? pendingDisabledReason : (isStale ? staleMessage : ''));
     return {
       candidate_id: candidateIdText,
       is_pending: isPending,
       is_failed: isFailed,
+      is_stale: isStale,
       pending_row: pendingRow,
       failed_row: failedRow,
-      disabled: isPending || isFailed,
-      disabled_reason: disabledReason
+      disabled: isPending || isFailed || isStale,
+      disabled_reason: disabledReason,
+      pending_message: pendingMessage,
+      stale_message: staleMessage
     };
   };
 
-  const renderCandidateWorkbenchIndicators = (candidateId) => {
+
+const renderCandidateWorkbenchIndicators = (candidateId) => {
     const status = getCandidateWorkbenchStatus(candidateId);
     const pills = [];
     if (status.is_pending) {
-      pills.push(`<span class="pill pill-warn" title="${enc(status.disabled_reason || 'Refreshing candidate…')}">${enc('Refreshing…')}</span>`);
+      pills.push(`<span class="pill pill-warn" title="${enc(status.disabled_reason || status.pending_message || 'Updating latest payment details…')}">${enc('Refreshing')}</span>`);
     }
     if (status.is_failed) {
       pills.push(`<span class="pill pill-bad" title="${enc(status.disabled_reason || 'Candidate refresh failed.')}">${enc('Refresh failed')}</span>`);
     }
+    if (status.is_stale) {
+      pills.push(`<span class="pill pill-warn" title="${enc(status.disabled_reason || status.stale_message || 'Refresh Banking Pay before creating a draft for this candidate.')}">${enc('Refresh needed')}</span>`);
+    }
     return pills.join('');
   };
+
 
   const getCandidateActionDisabledAttrs = (candidateId, activeTitle) => {
     const status = getCandidateWorkbenchStatus(candidateId);
@@ -114938,6 +115046,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
 
 
 
+
 function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -114952,8 +115061,8 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   const normalizeStringArray = (arr) => Array.isArray(arr)
     ? Array.from(new Set(arr.map((x) => trimStr(x)).filter(Boolean)))
     : [];
-  const capRows = (rows, limit = 100) => Array.isArray(rows)
-    ? (cloneJson(rows.slice(0, Math.max(0, Math.min(100, Math.trunc(Number(limit) || 100))))) || [])
+  const capRows = (rows, limit = 10000) => Array.isArray(rows)
+    ? (cloneJson(rows.slice(0, Math.max(0, Math.min(10000, Math.trunc(Number(limit) || 10000))))) || [])
     : [];
   const boolish = (value) => value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(trimStr(value).toLowerCase());
   const firstArrayValue = (...values) => {
@@ -115738,7 +115847,6 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
 
   return nextEnvelope;
 }
-
 
 
 
@@ -349343,31 +349451,57 @@ async function bootstrapApp(){
       hb._lastWorkbenchPageRefreshToken = String(hb._lastWorkbenchPageRefreshToken || '').trim();
       hb._lastWorkbenchMaterialisationRevision = String(hb._lastWorkbenchMaterialisationRevision || '').trim();
 
-      const stop = () => {
-        try { if (hb._timer) clearInterval(hb._timer); } catch {}
-        hb._timer = null;
-        hb._started = false;
-        hb._pingInFlight = false;
-        hb._pendingPingReason = '';
-        hb._bankingAlertSummaryDetailInFlight = false;
-        hb.workbenchSessionSeqs = {};
-        hb._activeWorkbenchWatchedKey = '';
-        hb._workbenchProgressReadInFlight = null;
-        hb._workbenchProgressReadSessionId = '';
-        hb._workbenchPageReadInFlight = null;
-        hb._workbenchPageReadKey = '';
-        hb._lastWorkbenchPageRefreshToken = '';
-        hb._lastWorkbenchMaterialisationRevision = '';
-        try {
-          for (const mapName of ['lastSeenSeqs', 'seqs']) {
-            const map = hb[mapName];
-            if (!map || typeof map !== 'object' || Array.isArray(map)) continue;
-            for (const key of Object.keys(map)) {
-              if (String(key || '').startsWith('banking_pay_workbench_session:')) delete map[key];
+const clearWorkbenchCandidateSettlePoll = (reason = '') => {
+          try { if (hb._workbenchCandidateSettlePollTimer) clearTimeout(hb._workbenchCandidateSettlePollTimer); } catch {}
+          hb._workbenchCandidateSettlePollTimer = null;
+          hb._workbenchCandidateSettlePollToken = '';
+          hb._workbenchCandidateSettlePollSessionId = '';
+          hb._workbenchCandidateSettlePollStartedAtMs = 0;
+          hb._workbenchCandidateSettlePollTrackedIds = [];
+          hb._workbenchCandidateSettlePollReason = String(reason || '').trim();
+        };
+
+  const stop = () => {
+          try {
+            if (typeof clearWorkbenchCandidateSettlePoll === 'function') {
+              clearWorkbenchCandidateSettlePoll('stop');
+            } else {
+              if (hb._workbenchCandidateSettlePollTimer) clearTimeout(hb._workbenchCandidateSettlePollTimer);
+              hb._workbenchCandidateSettlePollTimer = null;
+              hb._workbenchCandidateSettlePollToken = '';
+              hb._workbenchCandidateSettlePollSessionId = '';
+              hb._workbenchCandidateSettlePollStartedAtMs = 0;
+              hb._workbenchCandidateSettlePollTrackedIds = [];
             }
+          } catch {
+            try { if (hb._workbenchCandidateSettlePollTimer) clearTimeout(hb._workbenchCandidateSettlePollTimer); } catch {}
+            hb._workbenchCandidateSettlePollTimer = null;
+            hb._workbenchCandidateSettlePollToken = '';
+            hb._workbenchCandidateSettlePollSessionId = '';
+            hb._workbenchCandidateSettlePollStartedAtMs = 0;
+            hb._workbenchCandidateSettlePollTrackedIds = [];
           }
-        } catch {}
-      };
+          if (hb.timer) {
+            clearInterval(hb.timer);
+            hb.timer = null;
+          }
+          hb.inFlight = null;
+          hb.lastSeq = 0;
+          hb.lastSeqKey = '';
+          hb.suppressUntil = 0;
+          hb.suppressFocusUntil = 0;
+          hb.suppressNextFocus = false;
+          hb.lastStartedAt = 0;
+          hb.workbenchSessionId = '';
+          hb._lastWorkbenchMaterialisationRevision = '';
+          hb._lastWorkbenchPageRefreshToken = '';
+          hb._workbenchProgressReadInFlight = null;
+          hb._workbenchProgressReadSessionId = '';
+          hb._workbenchPageReadInFlight = null;
+          hb._workbenchPageReadKey = '';
+          hb.started = false;
+        };
+
       hb.stop = stop;
 
       // Only start when authenticated
@@ -349789,6 +349923,108 @@ async function bootstrapApp(){
           if (section === 'case_resolution_states' || section === 'case_resolutions' || section === 'cases_resolutions') return 'cases_resolutions';
           return 'canonical_preview_lines';
         };
+        const getActiveWorkbenchDeltaRefreshJobs = (progressResult, trackedCandidateIds = []) => {
+          const trackedIds = new Set((Array.isArray(trackedCandidateIds) ? trackedCandidateIds : [])
+            .map((value) => String(value || '').trim())
+            .filter((value) => bankingPayHeartbeatUuidRe.test(value)));
+          const deltaJobTypes = new Set([
+            'WORKBENCH_CANDIDATE_DELTA_REFRESH',
+            'CANDIDATE_DELTA_REFRESH',
+            'BANKING_PAY_CANDIDATE_DELTA_REFRESH',
+            'PAY_WORKBENCH_CANDIDATE_DELTA_REFRESH'
+          ]);
+          const terminalStatuses = new Set(['READY', 'COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'ABORTED', 'SKIPPED', 'DEAD']);
+          const activeStatuses = new Set(['PENDING', 'DIRTY', 'REFRESHING', 'QUEUED', 'RUNNING', 'PROCESSING', 'STARTED', 'CLAIMED', 'SEEDING', 'WAITING', 'MATERIALISING', 'MATERIALIZING', 'IN_PROGRESS']);
+          const containers = [
+            progressResult?.active_jobs,
+            progressResult?.progress?.active_jobs,
+            progressResult?.pending_candidate_jobs,
+            progressResult?.progress?.pending_candidate_jobs,
+            progressResult?.candidate_jobs,
+            progressResult?.progress?.candidate_jobs,
+            progressResult?.candidate_sample_rows,
+            progressResult?.candidate_sample_rows_json,
+            progressResult?.candidate_status_rows,
+            progressResult?.candidate_statuses,
+            progressResult?.progress?.candidate_sample_rows,
+            progressResult?.progress?.candidate_sample_rows_json,
+            progressResult?.progress?.candidate_status_rows,
+            progressResult?.progress?.candidate_statuses
+          ];
+          const activeRows = [];
+          const seenRows = new Set();
+          const maybeAddRow = (row) => {
+            if (!isHeartbeatPlainObject(row)) return;
+            const candidateId = String(row.candidate_id || row.candidateId || row.provider_candidate_id || row.providerCandidateId || '').trim();
+            if (!bankingPayHeartbeatUuidRe.test(candidateId)) return;
+            const rawJobType = String(row.job_type || row.jobType || row.latest_job_type || row.latestJobType || row.type || row.kind || '').trim().toUpperCase();
+            const rawStatus = String(row.status || row.job_status || row.jobStatus || row.latest_job_status || row.latestJobStatus || row.candidate_status || row.state || '').trim().toUpperCase();
+            const hasDeltaJobType = deltaJobTypes.has(rawJobType);
+            const hasDeltaFlag = row.active_delta_refresh === true
+              || row.delta_refresh === true
+              || row.refresh_pending === true
+              || row.pending_refresh === true
+              || String(row.refresh_scope || row.scope || '').trim().toUpperCase().includes('DELTA');
+            const trackedCandidateFallback = trackedIds.has(candidateId) && (hasDeltaFlag || !rawJobType || rawJobType.includes('DELTA'));
+            if (!hasDeltaJobType && !trackedCandidateFallback) return;
+            if (rawStatus && terminalStatuses.has(rawStatus)) return;
+            if (rawStatus && !activeStatuses.has(rawStatus) && !hasDeltaFlag && !hasDeltaJobType) return;
+            const jobId = String(row.pending_job_id || row.pendingJobId || row.job_id || row.jobId || row.latest_job_id || row.latestJobId || row.id || '').trim();
+            const rowKey = [candidateId, jobId, rawJobType, rawStatus || 'ACTIVE'].join('|');
+            if (seenRows.has(rowKey)) return;
+            seenRows.add(rowKey);
+            activeRows.push({
+              ...(heartbeatCloneJson(row) || row),
+              candidate_id: candidateId,
+              latest_job_type: rawJobType || 'WORKBENCH_CANDIDATE_DELTA_REFRESH',
+              job_type: rawJobType || 'WORKBENCH_CANDIDATE_DELTA_REFRESH',
+              status: rawStatus || 'RUNNING',
+              active_delta_refresh: true,
+              display_status_text: 'Updating latest payment details…'
+            });
+          };
+          for (const container of containers) {
+            if (!Array.isArray(container)) continue;
+            for (const row of container) maybeAddRow(row);
+          }
+          return activeRows;
+        };
+
+
+const isWorkbenchProgressReadyForCandidateSettle = (progressLike, trackedCandidateIds = []) => {
+          const root = isHeartbeatPlainObject(progressLike) ? progressLike : {};
+          const progress = isHeartbeatPlainObject(root.progress) ? root.progress : root;
+          const tracked = Array.from(new Set((Array.isArray(trackedCandidateIds) ? trackedCandidateIds : [])
+            .map((value) => String(value || '').trim())
+            .filter((value) => bankingPayHeartbeatUuidRe.test(value))));
+          const activeJobs = getActiveWorkbenchDeltaRefreshJobs(root, tracked);
+          const activeForTracked = tracked.length > 0
+            ? activeJobs.some((row) => tracked.includes(String(row.candidate_id || '').trim()))
+            : activeJobs.length > 0;
+          if (activeForTracked) return false;
+          const jobCounts = isHeartbeatPlainObject(progress.job_counts) ? progress.job_counts : (isHeartbeatPlainObject(root.job_counts) ? root.job_counts : {});
+          const queued = toNonNegativeCount(jobCounts.queued ?? progress.queued_jobs ?? root.queued_jobs, 0);
+          const running = toNonNegativeCount(jobCounts.running ?? progress.running_jobs ?? root.running_jobs, 0);
+          if (queued > 0 || running > 0) return false;
+          const phase = String(progress.phase || progress.progress_state || progress.state || root.phase || root.progress_state || root.state || '').trim().toUpperCase();
+          const readyPhase = phase === 'READY' || phase === 'READY_EMPTY';
+          if (phase && !readyPhase) return false;
+          const explicitlyNotReady = root.ready === false
+            || root.ready_flag === false
+            || root.session_ready === false
+            || progress.ready === false
+            || progress.ready_flag === false
+            || progress.session_ready === false;
+          if (explicitlyNotReady) return false;
+          const ready = root.ready === true
+            || root.ready_flag === true
+            || root.session_ready === true
+            || progress.ready === true
+            || progress.ready_flag === true
+            || progress.session_ready === true
+            || readyPhase;
+          return ready === true;
+        };
         const stripWorkbenchKeysFromGenericHeartbeatMaps = () => {
           for (const mapName of ['lastSeenSeqs', 'seqs']) {
             const map = hb[mapName];
@@ -349999,46 +350235,180 @@ async function bootstrapApp(){
           };
         };
         const applyWorkbenchCandidateRefreshingState = (watchContext, progressResult) => {
-          const current = sameBankingPayWorkbenchWatchContext(watchContext, String(progressResult?.session_id || '').trim());
+          const effectiveSessionId = String(progressResult?.session_id || progressResult?.progress?.session_id || '').trim();
+          const current = sameBankingPayWorkbenchWatchContext(watchContext, effectiveSessionId);
           if (!current) return false;
           const wizard = current.wizard;
           if (!wizard) return false;
           wizard.workbench = isHeartbeatPlainObject(wizard.workbench) ? wizard.workbench : {};
           wizard.decisions = isHeartbeatPlainObject(wizard.decisions) ? wizard.decisions : {};
           wizard.preview = isHeartbeatPlainObject(wizard.preview) ? wizard.preview : {};
-          const sampleRows = [
-            progressResult?.candidate_sample_rows,
-            progressResult?.candidate_sample_rows_json,
-            progressResult?.candidate_status_rows,
-            progressResult?.candidate_statuses,
-            progressResult?.progress?.candidate_sample_rows,
-            progressResult?.progress?.candidate_sample_rows_json,
-            progressResult?.progress?.candidate_status_rows,
-            progressResult?.progress?.candidate_statuses
-          ].find((value) => Array.isArray(value)) || [];
-          const normalisedRows = sampleRows.filter((row) => isHeartbeatPlainObject(row)).slice(0, 25).map((row) => heartbeatCloneJson(row) || row);
-          if (normalisedRows.length <= 0) return false;
-          const activeStatuses = new Set(['PENDING', 'DIRTY', 'REFRESHING', 'QUEUED', 'RUNNING', 'PROCESSING', 'SEEDING', 'WAITING', 'MATERIALISING', 'MATERIALIZING']);
+          const existingHeartbeatIds = new Set((Array.isArray(wizard.workbench.__heartbeat_refreshing_candidate_ids) ? wizard.workbench.__heartbeat_refreshing_candidate_ids : [])
+            .map((value) => String(value || '').trim())
+            .filter((value) => bankingPayHeartbeatUuidRe.test(value)));
+          if (hb._workbenchCandidateSettlePollSessionId === current.sessionId && Array.isArray(hb._workbenchCandidateSettlePollTrackedIds)) {
+            for (const candidateId of hb._workbenchCandidateSettlePollTrackedIds) {
+              const candidateIdText = String(candidateId || '').trim();
+              if (bankingPayHeartbeatUuidRe.test(candidateIdText)) existingHeartbeatIds.add(candidateIdText);
+            }
+          }
+          const collectStateCandidateIds = (...values) => Array.from(new Set(values.flatMap((value) => Array.isArray(value) ? value : [])
+            .map((value) => String(value || '').trim())
+            .filter((value) => bankingPayHeartbeatUuidRe.test(value))));
+          const collectStateRefreshRowCandidateIds = (...values) => {
+            const deltaJobTypes = new Set([
+              'WORKBENCH_CANDIDATE_DELTA_REFRESH',
+              'CANDIDATE_DELTA_REFRESH',
+              'BANKING_PAY_CANDIDATE_DELTA_REFRESH',
+              'PAY_WORKBENCH_CANDIDATE_DELTA_REFRESH'
+            ]);
+            const collected = [];
+            for (const value of values) {
+              if (!Array.isArray(value)) continue;
+              for (const row of value) {
+                if (!isHeartbeatPlainObject(row)) continue;
+                const candidateId = String(row.candidate_id || row.candidateId || '').trim();
+                if (!bankingPayHeartbeatUuidRe.test(candidateId)) continue;
+                const jobType = String(row.latest_job_type || row.latestJobType || row.job_type || row.jobType || row.type || '').trim().toUpperCase();
+                if (row.refresh_timeout === true || row.active_delta_refresh === true || row.delta_refresh === true || deltaJobTypes.has(jobType)) {
+                  collected.push(candidateId);
+                }
+              }
+            }
+            return Array.from(new Set(collected));
+          };
+          const stateTrackedCandidateIds = Array.from(new Set(collectStateCandidateIds(
+            wizard.workbench.pending_candidate_ids,
+            wizard.decisions.pending_candidate_ids,
+            wizard.preview.data?.pending_candidate_ids,
+            wizard.preview.data?.session?.pending_candidate_ids,
+            wizard.preview.data?.preview?.pending_candidate_ids
+          ).concat(collectStateRefreshRowCandidateIds(
+            wizard.workbench.pending_candidate_rows,
+            wizard.workbench.pending_candidate_jobs,
+            wizard.workbench.failed_candidate_rows,
+            wizard.workbench.candidate_sample_rows,
+            wizard.workbench.candidate_status_rows,
+            wizard.decisions.pending_candidate_rows,
+            wizard.decisions.pending_candidate_jobs,
+            wizard.decisions.failed_candidate_rows,
+            wizard.decisions.candidate_sample_rows,
+            wizard.decisions.candidate_status_rows,
+            wizard.preview.data?.pending_candidate_rows,
+            wizard.preview.data?.pending_candidate_jobs,
+            wizard.preview.data?.failed_candidate_rows,
+            wizard.preview.data?.candidate_sample_rows,
+            wizard.preview.data?.candidate_status_rows,
+            wizard.preview.data?.session?.pending_candidate_rows,
+            wizard.preview.data?.session?.pending_candidate_jobs,
+            wizard.preview.data?.session?.failed_candidate_rows,
+            wizard.preview.data?.session?.candidate_sample_rows,
+            wizard.preview.data?.session?.candidate_status_rows,
+            wizard.preview.data?.preview?.pending_candidate_rows,
+            wizard.preview.data?.preview?.pending_candidate_jobs,
+            wizard.preview.data?.preview?.failed_candidate_rows,
+            wizard.preview.data?.preview?.candidate_sample_rows,
+            wizard.preview.data?.preview?.candidate_status_rows
+          ))));
+          const sampleRows = [];
+          const pushRows = (value) => {
+            if (!Array.isArray(value)) return;
+            for (const row of value) {
+              if (isHeartbeatPlainObject(row)) sampleRows.push(row);
+            }
+          };
+          pushRows(progressResult?.candidate_sample_rows);
+          pushRows(progressResult?.candidate_sample_rows_json);
+          pushRows(progressResult?.candidate_status_rows);
+          pushRows(progressResult?.candidate_statuses);
+          pushRows(progressResult?.progress?.candidate_sample_rows);
+          pushRows(progressResult?.progress?.candidate_sample_rows_json);
+          pushRows(progressResult?.progress?.candidate_status_rows);
+          pushRows(progressResult?.progress?.candidate_statuses);
+          const activeDeltaRows = getActiveWorkbenchDeltaRefreshJobs(progressResult, Array.from(existingHeartbeatIds));
+          const rowPriorityKey = (row) => {
+            const candidateId = String(row?.candidate_id || row?.candidateId || '').trim();
+            const jobId = String(row?.pending_job_id || row?.pendingJobId || row?.latest_job_id || row?.latestJobId || row?.job_id || row?.jobId || row?.id || '').trim();
+            const jobType = String(row?.latest_job_type || row?.latestJobType || row?.job_type || row?.jobType || '').trim();
+            const status = String(row?.latest_job_status || row?.latestJobStatus || row?.job_status || row?.jobStatus || row?.status || row?.candidate_status || row?.state || '').trim();
+            if (candidateId || jobId || jobType || status) return [candidateId, jobId, jobType, status].join('|');
+            try { return JSON.stringify(row); } catch { return String(row || ''); }
+          };
+          const normalisedRowsRaw = [];
+          const seenNormalisedRows = new Set();
+          const appendNormalisedRow = (row) => {
+            if (!isHeartbeatPlainObject(row)) return;
+            const key = rowPriorityKey(row);
+            if (key && seenNormalisedRows.has(key)) return;
+            if (key) seenNormalisedRows.add(key);
+            normalisedRowsRaw.push(heartbeatCloneJson(row) || row);
+          };
+          for (const row of activeDeltaRows) appendNormalisedRow(row);
+          for (const row of sampleRows) appendNormalisedRow(row);
+          const normalisedRows = normalisedRowsRaw.slice(0, 25);
+          const progressIsReady = isWorkbenchProgressReadyForCandidateSettle(progressResult, Array.from(existingHeartbeatIds));
+          if (progressIsReady && activeDeltaRows.length <= 0) {
+            for (const candidateId of stateTrackedCandidateIds) existingHeartbeatIds.add(candidateId);
+          }
+          if (normalisedRows.length <= 0 && existingHeartbeatIds.size <= 0) return false;
+          const activeStatuses = new Set(['PENDING', 'DIRTY', 'REFRESHING', 'QUEUED', 'RUNNING', 'PROCESSING', 'STARTED', 'CLAIMED', 'SEEDING', 'WAITING', 'MATERIALISING', 'MATERIALIZING', 'IN_PROGRESS']);
           const failedStatuses = new Set(['FAILED', 'ERROR', 'DEAD']);
-          const touchedIds = new Set();
+          const touchedIds = new Set(existingHeartbeatIds);
           const pendingIds = new Set();
           const failedIds = new Set();
+          const pendingJobRows = [];
+          const failedJobRows = [];
           for (const row of normalisedRows) {
             const candidateId = String(row.candidate_id || row.candidateId || '').trim();
             if (!bankingPayHeartbeatUuidRe.test(candidateId)) continue;
             touchedIds.add(candidateId);
-            const status = String(row.status || row.new_status || row.newStatus || row.candidate_status || row.state || '').trim().toUpperCase();
-            if (activeStatuses.has(status)) pendingIds.add(candidateId);
-            if (failedStatuses.has(status)) failedIds.add(candidateId);
+            const status = String(row.status || row.new_status || row.newStatus || row.candidate_status || row.latest_job_status || row.job_status || row.state || '').trim().toUpperCase();
+            if (activeStatuses.has(status) || row.active_delta_refresh === true) {
+              pendingIds.add(candidateId);
+              pendingJobRows.push(row);
+            }
+            if (failedStatuses.has(status)) {
+              failedIds.add(candidateId);
+              failedJobRows.push(row);
+            }
+          }
+          if (progressIsReady && activeDeltaRows.length <= 0) {
+            for (const candidateId of existingHeartbeatIds) pendingIds.delete(candidateId);
           }
           const updateCandidateArrays = (target) => {
             if (!target || typeof target !== 'object') return;
-            const retainUntouched = (values) => Array.from(new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter((value) => bankingPayHeartbeatUuidRe.test(value) && !touchedIds.has(value))));
-            target.pending_candidate_ids = Array.from(new Set([...retainUntouched(target.pending_candidate_ids), ...pendingIds]));
-            target.failed_candidate_ids = Array.from(new Set([...retainUntouched(target.failed_candidate_ids), ...failedIds]));
-            target.dirty_candidate_ids = Array.from(new Set([...target.pending_candidate_ids, ...target.failed_candidate_ids]));
-            target.candidate_sample_rows = heartbeatCloneJson(normalisedRows) || [];
-            target.candidate_status_rows = heartbeatCloneJson(normalisedRows) || [];
+            const retainUntouched = (values) => Array.from(new Set((Array.isArray(values) ? values : [])
+              .map((value) => String(value || '').trim())
+              .filter((value) => bankingPayHeartbeatUuidRe.test(value) && !touchedIds.has(value))));
+            const retainUntouchedRows = (values) => {
+              const retained = [];
+              if (!Array.isArray(values)) return retained;
+              for (const row of values) {
+                if (!isHeartbeatPlainObject(row)) continue;
+                const candidateId = String(row.candidate_id || row.candidateId || '').trim();
+                if (!bankingPayHeartbeatUuidRe.test(candidateId) || touchedIds.has(candidateId)) continue;
+                retained.push(row);
+              }
+              return retained;
+            };
+            const retainedPending = retainUntouched(target.pending_candidate_ids);
+            const retainedFailed = retainUntouched(target.failed_candidate_ids);
+            const nextPendingIds = Array.from(new Set(retainedPending.concat(Array.from(pendingIds))));
+            const nextFailedIds = Array.from(new Set(retainedFailed.concat(Array.from(failedIds))));
+            const nextDirtyIds = Array.from(new Set(nextPendingIds.concat(nextFailedIds)));
+            const retainedPendingRows = retainUntouchedRows(target.pending_candidate_rows);
+            const retainedPendingJobs = retainUntouchedRows(target.pending_candidate_jobs);
+            const retainedFailedRows = retainUntouchedRows(target.failed_candidate_rows);
+            const retainedSampleRows = retainUntouchedRows(target.candidate_sample_rows);
+            const retainedStatusRows = retainUntouchedRows(target.candidate_status_rows);
+            target.pending_candidate_ids = nextPendingIds;
+            target.failed_candidate_ids = nextFailedIds;
+            target.dirty_candidate_ids = nextDirtyIds;
+            target.candidate_sample_rows = heartbeatCloneJson(retainedSampleRows.concat(normalisedRows)) || [];
+            target.candidate_status_rows = heartbeatCloneJson(retainedStatusRows.concat(normalisedRows)) || [];
+            target.pending_candidate_rows = heartbeatCloneJson(retainedPendingRows.concat(pendingJobRows)) || [];
+            target.pending_candidate_jobs = heartbeatCloneJson(retainedPendingJobs.concat(pendingJobRows)) || [];
+            target.failed_candidate_rows = heartbeatCloneJson(retainedFailedRows.concat(failedJobRows)) || [];
           };
           updateCandidateArrays(wizard.workbench);
           updateCandidateArrays(wizard.decisions);
@@ -350047,13 +350417,37 @@ async function bootstrapApp(){
             if (isHeartbeatPlainObject(wizard.preview.data.session)) updateCandidateArrays(wizard.preview.data.session);
             if (isHeartbeatPlainObject(wizard.preview.data.preview)) updateCandidateArrays(wizard.preview.data.preview);
           }
-          const refreshPending = progressResult?.still_running === true || progressResult?.pending_refresh === true || progressResult?.refresh_pending === true || wizard.workbench.pending_candidate_ids.length > 0;
-          wizard.preview.loading = refreshPending;
+          wizard.workbench.__heartbeat_refreshing_candidate_ids = Array.from(pendingIds);
+          const refreshPending = progressResult?.still_running === true
+            || progressResult?.pending_refresh === true
+            || progressResult?.refresh_pending === true
+            || activeDeltaRows.length > 0
+            || wizard.workbench.pending_candidate_ids.length > 0;
+          const candidateScopedRefresh = touchedIds.size > 0 || existingHeartbeatIds.size > 0 || activeDeltaRows.length > 0;
+          const hasExistingVisibleRows = [
+            wizard.workbench.canonical_preview_lines,
+            wizard.workbench.ready_preview_lines,
+            wizard.workbench.case_resolution_states,
+            wizard.workbench.blocked_for_pay,
+            wizard.workbench.blocked_preview_lines,
+            wizard.preview.data?.canonical_preview_lines,
+            wizard.preview.data?.preview_rows
+          ].some((value) => Array.isArray(value) && value.length > 0);
           if (refreshPending) {
             wizard.preview.error = '';
             wizard.preview.failure = null;
-            wizard.preview.status_text = String(progressResult?.status_text || progressResult?.progress?.status_text || 'Refreshing changed payment details in the background.').trim();
-            wizard.preview.progress_only = true;
+            wizard.preview.status_text = String(progressResult?.status_text || progressResult?.progress?.status_text || 'Updating latest payment details…').trim();
+            if (!candidateScopedRefresh || !hasExistingVisibleRows) {
+              wizard.preview.loading = true;
+              wizard.preview.progress_only = true;
+            } else {
+              wizard.preview.loading = false;
+              wizard.preview.progress_only = false;
+            }
+          } else if (progressIsReady) {
+            wizard.preview.loading = false;
+            wizard.preview.progress_only = false;
+            if (String(wizard.preview.status_text || '').trim() === 'Updating latest payment details…') wizard.preview.status_text = '';
           }
           return true;
         };
@@ -350074,24 +350468,12 @@ async function bootstrapApp(){
           }
           return explicitSection || 'canonical_preview_lines';
         };
-        const buildWorkbenchPageStatePayload = (page, progressResult, sessionId, section) => {
-          const pageObject = isHeartbeatPlainObject(page) ? page : {};
-          const resolvedSection = normalizeWorkbenchPreviewSection(pageObject.resolved_section || pageObject.section || pageObject.requested_section || section);
-          const rows = Array.isArray(pageObject.rows)
-            ? pageObject.rows
-            : (Array.isArray(pageObject.items) ? pageObject.items : (Array.isArray(pageObject.preview_rows) ? pageObject.preview_rows : []));
-          const clonedRows = heartbeatCloneJson(rows) || [];
-          const normalisedPage = {
-            ...(heartbeatCloneJson(pageObject) || pageObject),
-            session_id: sessionId,
-            section: resolvedSection,
-            requested_section: normalizeWorkbenchPreviewSection(pageObject.requested_section || section),
-            resolved_section: resolvedSection,
-            rows: clonedRows,
-            items: clonedRows,
-            preview_rows: clonedRows,
-            returned_count: toNonNegativeCount(pageObject.returned_count ?? pageObject.rows_count ?? clonedRows.length, clonedRows.length)
-          };
+        const buildWorkbenchPagesStatePayload = (pagesBySection, progressResult, sessionId, sections) => {
+          const sourcePages = isHeartbeatPlainObject(pagesBySection) ? pagesBySection : {};
+          const requestedSections = Array.isArray(sections) && sections.length > 0
+            ? sections.map(normalizeWorkbenchPreviewSection)
+            : Object.keys(sourcePages).map(normalizeWorkbenchPreviewSection);
+          const sectionList = Array.from(new Set(requestedSections.length > 0 ? requestedSections : ['canonical_preview_lines']));
           const componentStateCache = {};
           const preview = { ok: true, componentStateCache };
           const payload = {
@@ -350099,54 +350481,92 @@ async function bootstrapApp(){
             session_id: sessionId,
             snapshot_run_id: progressResult?.snapshot_run_id || progressResult?.source_snapshot_run_id || null,
             source_snapshot_run_id: progressResult?.source_snapshot_run_id || progressResult?.snapshot_run_id || null,
-            session_version: progressResult?.session_version ?? null,
-            session_signature: progressResult?.session_signature || null,
-            pay_date: progressResult?.pay_date || null,
-            week_ending_cutoff: progressResult?.week_ending_cutoff || progressResult?.week_ending_cutoff_date || null,
-            progress: heartbeatCloneJson(progressResult?.progress || progressResult) || progressResult?.progress || progressResult,
+            source_scope_signature: progressResult?.source_scope_signature || progressResult?.scope_signature || null,
+            contract_id: progressResult?.contract_id || progressResult?.source_contract_id || null,
+            progress: progressResult,
             preview,
-            preview_pages: { [resolvedSection]: normalisedPage },
-            preview_page_cache: { [resolvedSection]: normalisedPage },
-            section: resolvedSection,
-            requested_section: normalisedPage.requested_section,
-            resolved_section: resolvedSection
+            preview_pages: {},
+            preview_page_cache: {},
+            fetched_sections: []
           };
-          if (resolvedSection === 'blocked_for_pay') {
-            payload.blocked_for_pay_now = clonedRows;
-            payload.blocked_now = clonedRows;
-            payload.blocked_preview_lines = clonedRows;
-            preview.blocked_for_pay_now = clonedRows;
-            preview.blocked_now = clonedRows;
-            preview.blocked_preview_lines = clonedRows;
-            componentStateCache.blocked_for_pay_now = clonedRows;
-            componentStateCache.blocked_now = clonedRows;
-            componentStateCache.blocked_preview_lines = clonedRows;
-          } else if (resolvedSection === 'cases_resolutions') {
-            payload.case_resolution_states = clonedRows;
-            payload.cases_resolutions = clonedRows;
-            preview.case_resolution_states = clonedRows;
-            preview.cases_resolutions = clonedRows;
-            componentStateCache.case_resolution_states = clonedRows;
-            componentStateCache.cases_resolutions = clonedRows;
-          } else {
-            payload.canonical_preview_lines = clonedRows;
-            payload.preview_rows = clonedRows;
-            payload.ready_preview_lines = clonedRows;
-            payload.rows = clonedRows;
-            preview.canonical_preview_lines = clonedRows;
-            preview.preview_rows = clonedRows;
-            preview.ready_preview_lines = clonedRows;
-            preview.rows = clonedRows;
-            componentStateCache.draftable_now = clonedRows;
-            componentStateCache.ready_to_pay_now = clonedRows;
-            componentStateCache.ready_preview_lines = clonedRows;
-            componentStateCache.canonical_preview_lines = clonedRows;
+          const findPageForSection = (requestedSection) => {
+            if (Object.prototype.hasOwnProperty.call(sourcePages, requestedSection)) {
+              return { found: true, page: sourcePages[requestedSection] };
+            }
+            for (const key of Object.keys(sourcePages)) {
+              const candidatePage = sourcePages[key];
+              const candidateSection = normalizeWorkbenchPreviewSection(isHeartbeatPlainObject(candidatePage) ? (candidatePage.resolved_section || candidatePage.section || candidatePage.requested_section || key) : key);
+              if (candidateSection === requestedSection) return { found: true, page: candidatePage };
+            }
+            return { found: false, page: null };
+          };
+          for (const requestedSection of sectionList) {
+            const pageLookup = findPageForSection(requestedSection);
+            if (!pageLookup.found) continue;
+            const pageObject = isHeartbeatPlainObject(pageLookup.page) ? pageLookup.page : {};
+            const resolvedSection = normalizeWorkbenchPreviewSection(pageObject.resolved_section || pageObject.section || pageObject.requested_section || requestedSection);
+            const rows = Array.isArray(pageObject.rows)
+              ? pageObject.rows
+              : (Array.isArray(pageObject.items) ? pageObject.items : (Array.isArray(pageObject.preview_rows) ? pageObject.preview_rows : []));
+            const clonedRows = heartbeatCloneJson(rows) || [];
+            const clonedPageObject = heartbeatCloneJson(pageObject) || pageObject;
+            const normalisedPage = Object.assign({}, clonedPageObject, {
+              session_id: sessionId,
+              section: resolvedSection,
+              requested_section: normalizeWorkbenchPreviewSection(pageObject.requested_section || requestedSection),
+              resolved_section: resolvedSection,
+              rows: clonedRows,
+              items: clonedRows,
+              preview_rows: clonedRows,
+              returned_count: toNonNegativeCount(pageObject.returned_count ?? pageObject.rows_count ?? clonedRows.length, clonedRows.length)
+            });
+            payload.preview_pages[resolvedSection] = normalisedPage;
+            payload.preview_page_cache[resolvedSection] = normalisedPage;
+            if (!payload.fetched_sections.includes(resolvedSection)) payload.fetched_sections.push(resolvedSection);
+            if (resolvedSection === 'blocked_for_pay') {
+              payload.blocked_for_pay = clonedRows;
+              payload.blocked_for_pay_now = clonedRows;
+              payload.blocked_now = clonedRows;
+              payload.blocked_preview_lines = clonedRows;
+              preview.blocked_for_pay = clonedRows;
+              preview.blocked_for_pay_now = clonedRows;
+              preview.blocked_now = clonedRows;
+              preview.blocked_preview_lines = clonedRows;
+              componentStateCache.blocked_for_pay = clonedRows;
+              componentStateCache.blocked_for_pay_now = clonedRows;
+              componentStateCache.blocked_now = clonedRows;
+              componentStateCache.blocked_preview_lines = clonedRows;
+            } else if (resolvedSection === 'cases_resolutions') {
+              payload.case_resolution_states = clonedRows;
+              payload.cases_resolutions = clonedRows;
+              preview.case_resolution_states = clonedRows;
+              preview.cases_resolutions = clonedRows;
+              componentStateCache.case_resolution_states = clonedRows;
+              componentStateCache.cases_resolutions = clonedRows;
+            } else {
+              payload.canonical_preview_lines = clonedRows;
+              payload.preview_rows = clonedRows;
+              payload.ready_preview_lines = clonedRows;
+              preview.canonical_preview_lines = clonedRows;
+              preview.preview_rows = clonedRows;
+              preview.ready_preview_lines = clonedRows;
+              preview.rows = clonedRows;
+              componentStateCache.draftable_now = clonedRows;
+              componentStateCache.ready_to_pay_now = clonedRows;
+              componentStateCache.ready_preview_lines = clonedRows;
+              componentStateCache.canonical_preview_lines = clonedRows;
+            }
           }
           return payload;
         };
-        const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressResult, previousSnapshot) => {
+const buildWorkbenchPageStatePayload = (page, progressResult, sessionId, section) => {
+          const resolvedSection = normalizeWorkbenchPreviewSection(isHeartbeatPlainObject(page) ? (page.resolved_section || page.section || page.requested_section || section) : section);
+          return buildWorkbenchPagesStatePayload({ [resolvedSection]: page }, progressResult, sessionId, [resolvedSection]);
+        };
+       const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressResult, previousSnapshot, options = {}) => {
           const current = sameBankingPayWorkbenchWatchContext(watchContext);
           if (!current || current.sessionId !== watchContext.sessionId) return false;
+          const refreshOptions = isHeartbeatPlainObject(options) ? options : {};
           const nextSectionCounts = getWorkbenchSectionCounts(progressResult?.section_counts || progressResult?.section_counts_json || progressResult?.progress?.section_counts || progressResult?.progress?.section_counts_json || {});
           const previousSectionCounts = getWorkbenchSectionCounts(previousSnapshot?.sectionCounts || {});
           const nextPreviewRowCount = toNonNegativeCount(progressResult?.preview_row_count ?? progressResult?.progress?.preview_row_count, 0);
@@ -350164,7 +350584,16 @@ async function bootstrapApp(){
           });
           const previousMaterialisationRevision = String(previousSnapshot?.materialisationRevision || '').trim();
           const materialisationRevisionAdvanced = hasWorkbenchMaterialisationRevisionAdvanced(previousMaterialisationRevision, nextMaterialisationRevision);
-          const previousPendingCandidateIds = new Set((Array.isArray(previousSnapshot?.pendingCandidateIds) ? previousSnapshot.pendingCandidateIds : []).map((value) => String(value || '').trim()).filter((value) => bankingPayHeartbeatUuidRe.test(value)));
+          const collectCandidateIds = (value) => Array.from(new Set((Array.isArray(value) ? value : [])
+            .map((candidateId) => String(candidateId || '').trim())
+            .filter((candidateId) => bankingPayHeartbeatUuidRe.test(candidateId))));
+          const previousPendingCandidateIds = collectCandidateIds(previousSnapshot?.pendingCandidateIds);
+          const heartbeatTrackedIds = collectCandidateIds(current.wizard?.workbench?.__heartbeat_refreshing_candidate_ids);
+          const optionTrackedIds = collectCandidateIds(refreshOptions.trackedCandidateIds);
+          const trackedCandidateIdSeed = Array.from(new Set(previousPendingCandidateIds.concat(heartbeatTrackedIds, optionTrackedIds)));
+          const activeDeltaJobs = getActiveWorkbenchDeltaRefreshJobs(progressResult, trackedCandidateIdSeed);
+          const activeDeltaCandidateIds = activeDeltaJobs.map((row) => String(row?.candidate_id || '').trim()).filter((value) => bankingPayHeartbeatUuidRe.test(value));
+          const trackedCandidateIds = Array.from(new Set(trackedCandidateIdSeed.concat(activeDeltaCandidateIds)));
           const sampleRows = [
             progressResult?.candidate_sample_rows,
             progressResult?.candidate_sample_rows_json,
@@ -350182,54 +350611,375 @@ async function bootstrapApp(){
             return bankingPayHeartbeatUuidRe.test(candidateId) && terminalMaterialisationStatuses.has(status) ? candidateId : '';
           }).filter(Boolean)));
           const candidateRefreshCompleted = nextProgressCounterVersion > previousProgressCounterVersion
-            && completedCandidateIds.some((candidateId) => previousPendingCandidateIds.has(candidateId));
-          const materialisedAdvanced = nextPreviewRowCount > previousPreviewRowCount || advancedSections.length > 0 || candidateRefreshCompleted || materialisationRevisionAdvanced;
+            && completedCandidateIds.some((candidateId) => previousPendingCandidateIds.includes(candidateId));
+          const candidateRefreshSettled = trackedCandidateIds.length > 0
+            && activeDeltaJobs.length <= 0
+            && isWorkbenchProgressReadyForCandidateSettle(progressResult, trackedCandidateIds);
+          const applyProgressMetadataToState = (liveContext) => {
+            if (!liveContext?.wizard) return;
+            const wizard = liveContext.wizard;
+            wizard.workbench = isHeartbeatPlainObject(wizard.workbench) ? wizard.workbench : {};
+            wizard.preview = isHeartbeatPlainObject(wizard.preview) ? wizard.preview : {};
+            const clonedProgress = heartbeatCloneJson(progressResult) || progressResult || {};
+            wizard.workbench.progress = clonedProgress;
+            wizard.workbench.progress_counter_version = nextProgressCounterVersion;
+            if (nextMaterialisationRevision) wizard.workbench.materialisation_revision = nextMaterialisationRevision;
+            if (Object.keys(nextSectionCounts).length > 0) {
+              wizard.workbench.section_counts = heartbeatCloneJson(nextSectionCounts) || nextSectionCounts;
+              if (isHeartbeatPlainObject(wizard.preview.data)) wizard.preview.data.section_counts = heartbeatCloneJson(nextSectionCounts) || nextSectionCounts;
+            }
+            if (isHeartbeatPlainObject(wizard.preview.data)) wizard.preview.data.progress = heartbeatCloneJson(progressResult) || progressResult;
+          };
+          if (candidateRefreshSettled) {
+            const refreshToken = [
+              current.sessionId,
+              'candidate-targeted',
+              nextProgressCounterVersion,
+              nextPreviewRowCount,
+              JSON.stringify(nextSectionCounts),
+              completedCandidateIds.join(','),
+              trackedCandidateIds.join(','),
+              nextMaterialisationRevision,
+              refreshOptions.settleRefresh === true ? 'settle' : ''
+            ].join('|');
+            if (hb._lastWorkbenchPageRefreshToken === refreshToken) return true;
+            if (hb._workbenchPageReadInFlight && typeof hb._workbenchPageReadInFlight.then === 'function') return false;
+            if (typeof bankingPayWorkbenchSessionGetCandidate !== 'function' || typeof mergePayWorkbenchCandidatePreviewIntoState !== 'function') return false;
+            const stableRowKey = (row, fallback = '') => {
+              if (!isHeartbeatPlainObject(row)) return String(fallback || '');
+              const parts = [
+                row.preview_row_id, row.previewRowId, row.row_id, row.rowId, row.line_id, row.lineId,
+                row.timesheet_id, row.timesheetId, row.case_key, row.caseKey, row.case_id, row.caseId, row.id,
+                row.candidate_id, row.candidateId
+              ].map((value) => String(value || '').trim()).filter(Boolean);
+              if (parts.length > 0) return parts.join('|');
+              try { return JSON.stringify(row); } catch { return String(fallback || ''); }
+            };
+            const nextCursorText = (payload) => {
+              const cursor = payload?.next_cursor ?? payload?.nextCursor ?? null;
+              if (cursor == null || cursor === false) return '';
+              if (typeof cursor === 'string') return cursor.trim();
+              try { return JSON.stringify(cursor); } catch { return ''; }
+            };
+            const mergeCandidatePagePayloads = (pages, candidateId) => {
+              const sourcePages = Array.isArray(pages) ? pages.filter((page) => isHeartbeatPlainObject(page)) : [];
+              if (sourcePages.length <= 0) return null;
+              const merged = heartbeatCloneJson(sourcePages[0]) || { ...sourcePages[0] };
+              const arrayKeys = [
+                'rows',
+                'preview_rows',
+                'canonical_preview_lines',
+                'ready_preview_lines',
+                'case_resolution_states',
+                'cases_resolutions',
+                'blocked_for_pay',
+                'blocked_for_pay_now',
+                'blocked_now',
+                'blocked_preview_lines',
+                'paye_candidates',
+                'non_paye_payees'
+              ];
+              for (const key of arrayKeys) {
+                const rows = [];
+                const seen = new Set();
+                for (const page of sourcePages) {
+                  const pageRows = Array.isArray(page?.[key]) ? page[key] : [];
+                  for (const row of pageRows) {
+                    const rowKey = stableRowKey(row, `${key}:${rows.length}`);
+                    if (rowKey && seen.has(rowKey)) continue;
+                    if (rowKey) seen.add(rowKey);
+                    rows.push(row);
+                  }
+                }
+                if (rows.length > 0 || Array.isArray(merged[key])) merged[key] = heartbeatCloneJson(rows) || rows;
+              }
+              const mergeItemisation = (objectKey) => {
+                const baseObj = isHeartbeatPlainObject(merged[objectKey]) ? (heartbeatCloneJson(merged[objectKey]) || merged[objectKey]) : null;
+                if (!baseObj) return;
+                const rows = [];
+                const seen = new Set();
+                for (const page of sourcePages) {
+                  const pageRows = Array.isArray(page?.[objectKey]?.itemisation) ? page[objectKey].itemisation : [];
+                  for (const row of pageRows) {
+                    const rowKey = stableRowKey(row, `${objectKey}:${rows.length}`);
+                    if (rowKey && seen.has(rowKey)) continue;
+                    if (rowKey) seen.add(rowKey);
+                    rows.push(row);
+                  }
+                }
+                if (rows.length > 0) baseObj.itemisation = heartbeatCloneJson(rows) || rows;
+                merged[objectKey] = baseObj;
+              };
+              mergeItemisation('paye_candidate');
+              mergeItemisation('non_paye_payee');
+              merged.candidate_id = String(merged.candidate_id || merged.candidateId || candidateId || '').trim();
+              merged.next_cursor = null;
+              merged.nextCursor = null;
+              merged.has_more = false;
+              merged.hasMore = false;
+              merged.returned_count = Array.isArray(merged.rows) ? merged.rows.length : toNonNegativeCount(merged.returned_count, 0);
+              return merged;
+            };
+            hb._workbenchPageReadKey = `${current.sessionId}:candidate:${trackedCandidateIds.join(',')}`;
+            const pagePromise = Promise.resolve().then(async () => {
+              const candidatePayloads = [];
+              for (const candidateId of trackedCandidateIds) {
+                const candidatePages = [];
+                let cursor = '';
+                for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+                  const liveBeforeFetch = sameBankingPayWorkbenchWatchContext(watchContext);
+                  if (!liveBeforeFetch || liveBeforeFetch.sessionId !== current.sessionId) return false;
+                  let candidatePreview = null;
+                  try {
+                    candidatePreview = await bankingPayWorkbenchSessionGetCandidate(current.sessionId, candidateId, {
+                      limit: 100,
+                      cursor,
+                      background: true,
+                      silent: true,
+                      source: 'bootstrapApp.changesPing.workbench.candidate-settle'
+                    });
+                  } catch {
+                    candidatePreview = null;
+                  }
+                  if (!candidatePreview || candidatePreview.ok === false) return false;
+                  const returnedSessionId = String(candidatePreview.session_id || candidatePreview.sessionId || candidatePreview.preview?.session_id || candidatePreview.session?.session_id || '').trim();
+                  if (returnedSessionId && returnedSessionId !== current.sessionId) return false;
+                  const returnedCandidateId = String(candidatePreview.candidate_id || candidatePreview.candidateId || candidatePreview.preview?.candidate_id || candidatePreview.summary?.candidate_id || candidateId || '').trim();
+                  if (returnedCandidateId && returnedCandidateId !== candidateId) return false;
+                  if (candidatePreview.pending_refresh === true || candidatePreview.refresh_pending === true || candidatePreview.still_running === true) return false;
+                  candidatePages.push(candidatePreview);
+                  cursor = nextCursorText(candidatePreview);
+                  if (!cursor) {
+                    if (candidatePreview.has_more === true || candidatePreview.hasMore === true) return false;
+                    break;
+                  }
+                  if (pageIndex === 19) return false;
+                }
+                const mergedCandidatePreview = mergeCandidatePagePayloads(candidatePages, candidateId);
+                if (!mergedCandidatePreview) return false;
+                candidatePayloads.push(mergedCandidatePreview);
+              }
+              const liveBeforeMerge = sameBankingPayWorkbenchWatchContext(watchContext);
+              if (!liveBeforeMerge || liveBeforeMerge.sessionId !== current.sessionId) return false;
+              for (const candidatePreview of candidatePayloads) {
+                const liveForMerge = sameBankingPayWorkbenchWatchContext(watchContext);
+                if (!liveForMerge || liveForMerge.sessionId !== current.sessionId) return false;
+                mergePayWorkbenchCandidatePreviewIntoState(candidatePreview, liveForMerge.bankingState);
+              }
+              const liveAfterMerge = sameBankingPayWorkbenchWatchContext(watchContext);
+              if (!liveAfterMerge || liveAfterMerge.sessionId !== current.sessionId) return false;
+              applyProgressMetadataToState(liveAfterMerge);
+              try { if (typeof applyWorkbenchCandidateRefreshingState === 'function') applyWorkbenchCandidateRefreshingState(watchContext, progressResult); } catch {}
+              const liveAfterStatus = sameBankingPayWorkbenchWatchContext(watchContext);
+              if (!liveAfterStatus || liveAfterStatus.sessionId !== current.sessionId) return false;
+              const trackedSet = new Set(trackedCandidateIds);
+              const removeTracked = (values) => Array.from(new Set((Array.isArray(values) ? values : [])
+                .map((value) => String(value || '').trim())
+                .filter((value) => bankingPayHeartbeatUuidRe.test(value) && !trackedSet.has(value))));
+              if (liveAfterStatus.wizard?.workbench) {
+                liveAfterStatus.wizard.workbench.__heartbeat_refreshing_candidate_ids = removeTracked(liveAfterStatus.wizard.workbench.__heartbeat_refreshing_candidate_ids);
+                liveAfterStatus.wizard.workbench.__candidate_refresh_stale_ids = removeTracked(liveAfterStatus.wizard.workbench.__candidate_refresh_stale_ids);
+              }
+              hb._lastWorkbenchPageRefreshToken = refreshToken;
+              if (nextMaterialisationRevision) hb._lastWorkbenchMaterialisationRevision = nextMaterialisationRevision;
+              try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
+              return true;
+            }).catch(() => false).finally(() => {
+              if (hb._workbenchPageReadInFlight === pagePromise) {
+                hb._workbenchPageReadInFlight = null;
+                hb._workbenchPageReadKey = '';
+              }
+            });
+            hb._workbenchPageReadInFlight = pagePromise;
+            return pagePromise;
+          }
+          const materialisedAdvanced = refreshOptions.forceRefresh === true
+            || (!refreshOptions.settleRefresh && (
+              nextPreviewRowCount > previousPreviewRowCount
+              || advancedSections.length > 0
+              || candidateRefreshCompleted
+              || materialisationRevisionAdvanced
+            ));
           if (!materialisedAdvanced) return false;
-          const section = resolveWorkbenchPageSection(current, advancedSections);
-          const refreshToken = [
+
+          // Safety: a session-level heartbeat does not identify which visible page/window
+          // changed. Fetching section page 1 here can silently replace the user's current
+          // page (for example page 3) and can disturb independent section scroll/selection.
+          // Keep the update metadata-only unless the candidate-settle branch above can
+          // fetch and merge the exact tracked candidate payload.
+          const metadataRefreshToken = [
             current.sessionId,
-            section,
+            'metadata-only',
             nextProgressCounterVersion,
             nextPreviewRowCount,
             JSON.stringify(nextSectionCounts),
             completedCandidateIds.join(','),
             nextMaterialisationRevision
           ].join('|');
-          if (hb._lastWorkbenchPageRefreshToken === refreshToken) return false;
-          if (hb._workbenchPageReadInFlight && typeof hb._workbenchPageReadInFlight.then === 'function') return false;
-          if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return false;
-          hb._workbenchPageReadKey = `${current.sessionId}:${section}`;
-          const pagePromise = Promise.resolve().then(async () => {
-            const page = await bankingPayWorkbenchSessionGetPreviewPage(current.sessionId, section, {
-              limit: 100,
-              expected_session_id: current.sessionId,
-              current_session_id: current.sessionId,
-              enforce_active_session: true,
-              source: 'bootstrapApp.changesPing.workbench'
-            });
-            const currentAfterPage = sameBankingPayWorkbenchWatchContext(watchContext);
-            if (!currentAfterPage || currentAfterPage.sessionId !== current.sessionId) return false;
-            if (page && page.ok !== false && typeof applyPayWorkbenchPreviewToState === 'function') {
-              applyPayWorkbenchPreviewToState(
-                buildWorkbenchPageStatePayload(page, progressResult, current.sessionId, section),
-                currentAfterPage.bankingState
-              );
-              hb._lastWorkbenchPageRefreshToken = refreshToken;
-              if (nextMaterialisationRevision) hb._lastWorkbenchMaterialisationRevision = nextMaterialisationRevision;
-              try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
-              return true;
-            }
-            return false;
-          }).catch(() => false).finally(() => {
-            if (hb._workbenchPageReadInFlight === pagePromise) {
-              hb._workbenchPageReadInFlight = null;
-              hb._workbenchPageReadKey = '';
-            }
-          });
-          hb._workbenchPageReadInFlight = pagePromise;
-          return pagePromise;
+          if (hb._lastWorkbenchPageRefreshToken === metadataRefreshToken) return false;
+          const liveMetadataContext = sameBankingPayWorkbenchWatchContext(watchContext);
+          if (!liveMetadataContext || liveMetadataContext.sessionId !== current.sessionId) return false;
+          applyProgressMetadataToState(liveMetadataContext);
+          try { if (typeof applyWorkbenchCandidateRefreshingState === 'function') applyWorkbenchCandidateRefreshingState(watchContext, progressResult); } catch {}
+          hb._lastWorkbenchPageRefreshToken = metadataRefreshToken;
+          if (nextMaterialisationRevision) hb._lastWorkbenchMaterialisationRevision = nextMaterialisationRevision;
+          try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
+          return true;
         };
-        const refreshWorkbenchAfterHeartbeatSignal = async (watchContext) => {
+
+        const scheduleWorkbenchCandidateSettlePoll = (watchContext, progressResult, previousSnapshot) => {
+          const current = sameBankingPayWorkbenchWatchContext(watchContext);
+          if (!current || current.sessionId !== watchContext.sessionId) return false;
+          if (typeof bankingPayWorkbenchSessionGetProgress !== 'function' || typeof refreshWorkbenchVisiblePageAfterProgress !== 'function') return false;
+          const activeDeltaJobs = getActiveWorkbenchDeltaRefreshJobs(progressResult);
+          const existingTrackedIds = Array.from(new Set((Array.isArray(current.wizard?.workbench?.__heartbeat_refreshing_candidate_ids) ? current.wizard.workbench.__heartbeat_refreshing_candidate_ids : [])
+            .map((value) => String(value || '').trim())
+            .filter((value) => bankingPayHeartbeatUuidRe.test(value))));
+          const activeDeltaCandidateIds = activeDeltaJobs.map((row) => String(row.candidate_id || '').trim()).filter((value) => bankingPayHeartbeatUuidRe.test(value));
+          const trackedCandidateIds = Array.from(new Set(existingTrackedIds.concat(activeDeltaCandidateIds)));
+          const progressPhase = String(progressResult?.phase || progressResult?.progress?.phase || progressResult?.progress_state || progressResult?.progress?.progress_state || '').trim().toUpperCase();
+          if (trackedCandidateIds.length <= 0) return false;
+          if (hb._workbenchCandidateSettlePollTimer && hb._workbenchCandidateSettlePollSessionId === current.sessionId) {
+            hb._workbenchCandidateSettlePollTrackedIds = Array.from(new Set((Array.isArray(hb._workbenchCandidateSettlePollTrackedIds) ? hb._workbenchCandidateSettlePollTrackedIds : [])
+              .concat(trackedCandidateIds)
+              .map((value) => String(value || '').trim())
+              .filter((value) => bankingPayHeartbeatUuidRe.test(value))));
+            return true;
+          }
+          clearWorkbenchCandidateSettlePoll('reschedule');
+          const sessionId = current.sessionId;
+          const token = `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+          const pollDelayMs = 1800;
+          const maxDurationMs = 90000;
+          hb._workbenchCandidateSettlePollToken = token;
+          hb._workbenchCandidateSettlePollSessionId = sessionId;
+          hb._workbenchCandidateSettlePollStartedAtMs = Date.now();
+          hb._workbenchCandidateSettlePollTrackedIds = trackedCandidateIds;
+          if (current.wizard?.workbench) {
+            current.wizard.workbench.__heartbeat_refreshing_candidate_ids = trackedCandidateIds;
+            current.wizard.workbench.__candidate_refresh_stale_ids = Array.from(new Set((Array.isArray(current.wizard.workbench.__candidate_refresh_stale_ids) ? current.wizard.workbench.__candidate_refresh_stale_ids : [])
+              .map((value) => String(value || '').trim())
+              .filter((value) => bankingPayHeartbeatUuidRe.test(value) && !trackedCandidateIds.includes(value))));
+          }
+          const applyTimeoutStaleState = async (reason = 'timeout') => {
+            if (hb._workbenchCandidateSettlePollToken !== token) return false;
+            const liveContext = sameBankingPayWorkbenchWatchContext(watchContext);
+            if (!liveContext || liveContext.sessionId !== sessionId) {
+              clearWorkbenchCandidateSettlePoll('context-changed-timeout');
+              return false;
+            }
+            const trackedNow = Array.from(new Set((Array.isArray(hb._workbenchCandidateSettlePollTrackedIds) ? hb._workbenchCandidateSettlePollTrackedIds : trackedCandidateIds)
+              .map((value) => String(value || '').trim())
+              .filter((value) => bankingPayHeartbeatUuidRe.test(value))));
+            const trackedSet = new Set(trackedNow);
+            const removeTracked = (values) => Array.from(new Set((Array.isArray(values) ? values : [])
+              .map((value) => String(value || '').trim())
+              .filter((value) => bankingPayHeartbeatUuidRe.test(value) && !trackedSet.has(value))));
+            const addTracked = (values) => Array.from(new Set(removeTracked(values).concat(trackedNow)));
+            const markTarget = (target) => {
+              if (!target || typeof target !== 'object') return;
+              target.pending_candidate_ids = removeTracked(target.pending_candidate_ids);
+              target.dirty_candidate_ids = Array.from(new Set((Array.isArray(target.dirty_candidate_ids) ? target.dirty_candidate_ids : [])
+                .map((value) => String(value || '').trim())
+                .filter((value) => bankingPayHeartbeatUuidRe.test(value) && !trackedSet.has(value))));
+              target.pending_candidate_rows = Array.isArray(target.pending_candidate_rows)
+                ? target.pending_candidate_rows.filter((row) => !trackedSet.has(String(row?.candidate_id || row?.candidateId || '').trim()))
+                : [];
+              target.pending_candidate_jobs = Array.isArray(target.pending_candidate_jobs)
+                ? target.pending_candidate_jobs.filter((row) => !trackedSet.has(String(row?.candidate_id || row?.candidateId || '').trim()))
+                : [];
+              target.__candidate_refresh_stale_ids = addTracked(target.__candidate_refresh_stale_ids);
+            };
+            markTarget(liveContext.wizard?.workbench);
+            markTarget(liveContext.wizard?.decisions);
+            if (isHeartbeatPlainObject(liveContext.wizard?.preview?.data)) {
+              markTarget(liveContext.wizard.preview.data);
+              if (isHeartbeatPlainObject(liveContext.wizard.preview.data.session)) markTarget(liveContext.wizard.preview.data.session);
+              if (isHeartbeatPlainObject(liveContext.wizard.preview.data.preview)) markTarget(liveContext.wizard.preview.data.preview);
+            }
+            if (liveContext.wizard?.workbench) {
+              liveContext.wizard.workbench.__heartbeat_refreshing_candidate_ids = [];
+              liveContext.wizard.workbench.__candidate_refresh_stale_ids = addTracked(liveContext.wizard.workbench.__candidate_refresh_stale_ids);
+            }
+            if (liveContext.wizard?.preview) {
+              liveContext.wizard.preview.loading = false;
+              liveContext.wizard.preview.progress_only = false;
+              liveContext.wizard.preview.status_text = 'Latest Banking Pay details could not be confirmed automatically. Refresh Banking Pay before creating drafts for the affected candidate.';
+            }
+            clearWorkbenchCandidateSettlePoll(reason);
+            try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
+            try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+            return true;
+          };
+          const pollOnce = async () => {
+            if (hb._workbenchCandidateSettlePollToken !== token) return false;
+            const liveContext = sameBankingPayWorkbenchWatchContext(watchContext);
+            if (!liveContext || liveContext.sessionId !== sessionId) {
+              clearWorkbenchCandidateSettlePoll('context-changed');
+              return false;
+            }
+            const elapsedMs = Date.now() - toNonNegativeCount(hb._workbenchCandidateSettlePollStartedAtMs, Date.now());
+            if (elapsedMs > maxDurationMs) return applyTimeoutStaleState('timeout');
+            const trackedNow = Array.from(new Set((Array.isArray(hb._workbenchCandidateSettlePollTrackedIds) ? hb._workbenchCandidateSettlePollTrackedIds : [])
+              .map((value) => String(value || '').trim())
+              .filter((value) => bankingPayHeartbeatUuidRe.test(value))));
+            let latestProgress = null;
+            try {
+              latestProgress = await bankingPayWorkbenchSessionGetProgress(sessionId, {
+                background: true,
+                silent: true,
+                source: 'bootstrapApp.changesPing.workbench.settle',
+                staleSessionGuard: true,
+                expectedSessionId: sessionId,
+                getCurrentSessionId: () => {
+                  const currentWatch = getActiveBankingPayWorkbenchWatchContext();
+                  return currentWatch ? currentWatch.sessionId : '';
+                }
+              });
+            } catch {
+              latestProgress = null;
+            }
+            const effectiveSessionId = String(latestProgress?.session_id || latestProgress?.progress?.session_id || '').trim();
+            if (!latestProgress || (effectiveSessionId && effectiveSessionId !== sessionId && latestProgress?.adopted_replacement_session !== true)) {
+              hb._workbenchCandidateSettlePollTimer = setTimeout(pollOnce, pollDelayMs);
+              return false;
+            }
+            const latestJobs = getActiveWorkbenchDeltaRefreshJobs(latestProgress, trackedNow);
+            const latestTracked = Array.from(new Set(trackedNow.concat(latestJobs.map((row) => String(row.candidate_id || '').trim()))
+              .filter((value) => bankingPayHeartbeatUuidRe.test(value))));
+            hb._workbenchCandidateSettlePollTrackedIds = latestTracked;
+            const settled = latestTracked.length > 0 && isWorkbenchProgressReadyForCandidateSettle(latestProgress, latestTracked);
+            let candidateStateUpdated = false;
+            let pageUpdated = false;
+            let settledAfterPageAttempt = false;
+            if (settled) {
+              pageUpdated = await refreshWorkbenchVisiblePageAfterProgress(watchContext, latestProgress, previousSnapshot || getWorkbenchProgressSnapshot(watchContext), {
+                settleRefresh: true,
+                trackedCandidateIds: latestTracked
+              });
+              if (pageUpdated) {
+                candidateStateUpdated = applyWorkbenchCandidateRefreshingState(watchContext, latestProgress);
+                clearWorkbenchCandidateSettlePoll('settled');
+                settledAfterPageAttempt = true;
+              } else {
+                const elapsedAfterPageMs = Date.now() - toNonNegativeCount(hb._workbenchCandidateSettlePollStartedAtMs, Date.now());
+                if (elapsedAfterPageMs > maxDurationMs) return applyTimeoutStaleState('timeout-after-settle-refresh');
+                hb._workbenchCandidateSettlePollTimer = setTimeout(pollOnce, pollDelayMs);
+              }
+            } else {
+              candidateStateUpdated = applyWorkbenchCandidateRefreshingState(watchContext, latestProgress);
+              hb._workbenchCandidateSettlePollTimer = setTimeout(pollOnce, pollDelayMs);
+            }
+            if (candidateStateUpdated || pageUpdated) {
+              try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
+              try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+            }
+            return settledAfterPageAttempt;
+          };
+          hb._workbenchCandidateSettlePollTimer = setTimeout(pollOnce, pollDelayMs);
+          return progressPhase === 'DELTA_REFRESHING' || trackedCandidateIds.length > 0;
+        };
+const refreshWorkbenchAfterHeartbeatSignal = async (watchContext) => {
           if (!watchContext || typeof bankingPayWorkbenchSessionGetProgress !== 'function') return false;
           const existingPromise = hb._workbenchProgressReadInFlight;
           if (existingPromise && typeof existingPromise.then === 'function') {
@@ -350258,16 +351008,45 @@ async function bootstrapApp(){
             if (adoptedReplacement) {
               try { currentAfterRead.ctx.bankingPayWorkbenchSessionId = effectiveSessionId; } catch {}
               hb._lastWorkbenchMaterialisationRevision = '';
+              clearWorkbenchCandidateSettlePoll('adopted-replacement');
               pruneWorkbenchSessionSeqs(`${bankingPayWorkbenchSessionKeyPrefix}${effectiveSessionId}`);
             } else if (currentAfterRead.sessionId !== watchContext.sessionId) {
               return false;
             }
-            const candidateStateUpdated = applyWorkbenchCandidateRefreshingState(watchContext, progressResult);
+            const activeDeltaJobs = getActiveWorkbenchDeltaRefreshJobs(progressResult);
+            const progressPhase = String(progressResult?.phase || progressResult?.progress?.phase || progressResult?.progress_state || progressResult?.progress?.progress_state || '').trim().toUpperCase();
+            const existingTrackedIds = (Array.isArray(currentAfterRead.wizard?.workbench?.__heartbeat_refreshing_candidate_ids) ? currentAfterRead.wizard.workbench.__heartbeat_refreshing_candidate_ids : [])
+              .map((value) => String(value || '').trim())
+              .filter((value) => bankingPayHeartbeatUuidRe.test(value));
+            const activeDeltaCandidateIds = activeDeltaJobs.map((row) => String(row.candidate_id || '').trim()).filter((value) => bankingPayHeartbeatUuidRe.test(value));
+            const trackedCandidateIds = Array.from(new Set(existingTrackedIds.concat(activeDeltaCandidateIds)));
+            const trackedRefreshSettled = trackedCandidateIds.length > 0
+              && activeDeltaJobs.length <= 0
+              && isWorkbenchProgressReadyForCandidateSettle(progressResult, trackedCandidateIds);
+            let candidateStateUpdated = false;
+            let settlePollScheduled = false;
             let pageUpdated = false;
             if (!adoptedReplacement) {
-              pageUpdated = await refreshWorkbenchVisiblePageAfterProgress(watchContext, progressResult, previousSnapshot);
+              if (activeDeltaJobs.length > 0 || progressPhase === 'DELTA_REFRESHING') {
+                candidateStateUpdated = applyWorkbenchCandidateRefreshingState(watchContext, progressResult);
+                settlePollScheduled = scheduleWorkbenchCandidateSettlePoll(watchContext, progressResult, previousSnapshot);
+              } else if (trackedRefreshSettled) {
+                pageUpdated = await refreshWorkbenchVisiblePageAfterProgress(watchContext, progressResult, previousSnapshot, {
+                  settleRefresh: true,
+                  trackedCandidateIds
+                });
+                if (pageUpdated) {
+                  candidateStateUpdated = applyWorkbenchCandidateRefreshingState(watchContext, progressResult);
+                  clearWorkbenchCandidateSettlePoll('settled-by-heartbeat');
+                } else {
+                  settlePollScheduled = scheduleWorkbenchCandidateSettlePoll(watchContext, progressResult, previousSnapshot);
+                }
+              } else {
+                candidateStateUpdated = applyWorkbenchCandidateRefreshingState(watchContext, progressResult);
+                pageUpdated = await refreshWorkbenchVisiblePageAfterProgress(watchContext, progressResult, previousSnapshot);
+              }
             }
-            if (adoptedReplacement || candidateStateUpdated || pageUpdated) {
+            if (adoptedReplacement || candidateStateUpdated || pageUpdated || settlePollScheduled) {
               try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
               try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
             }
@@ -350282,7 +351061,6 @@ async function bootstrapApp(){
           hb._workbenchProgressReadSessionId = watchContext.sessionId;
           return progressPromise;
         };
-
 
         const pingOnce = async (reason = '') => {
           if (hb._disabled) return;
@@ -350732,6 +351510,7 @@ async function bootstrapApp(){
     console.warn('[E2E][modal-opener] failed', err);
   }
 }
+
 
 
 
