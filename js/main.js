@@ -135476,7 +135476,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
     window.modalCtx?.data?.backend_row_signature,
     window.modalCtx?.data?.row_signature
   );
-  const canDeferLifecycleAuthorityRefreshAfterSave = !!(
+  const postSaveLifecycleAuthorityRequiresNetwork = !!(
     postSaveDisplaySignature &&
     (
       window.modalCtx?.__timesheetLifecycleTrustRequiresNetworkBeforeAuthorise === true ||
@@ -135486,6 +135486,12 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
       window.modalCtx?.__timesheetAuthorisePreflightRefreshRequired === true
     )
   );
+
+  // A save-response signature is useful for display, but it is not enough to release
+  // the Authorise safety gate when the backend explicitly requested an affected-row
+  // refresh. In that case Save may wait for the lightweight lifecycle authority
+  // endpoint, while heavier details/summary/finance refreshes remain lazy.
+  const canDeferLifecycleAuthorityRefreshAfterSave = false;
 
   let lifecycleFallbackRefreshAfterSave = null;
   if (!canTrustLifecycleAfterSave && !canDeferLifecycleAuthorityRefreshAfterSave) {
