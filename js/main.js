@@ -31998,10 +31998,6 @@ async function bankingPayPreview(pay_date) {
 }
 
 
-
-
-
-
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -32062,7 +32058,7 @@ async function bankingPayCreateDraft(input = {}) {
     }
 
     return {
-      selected_preview_row_ids: [...validPreviewRowIds],
+      selected_preview_row_ids: [],
       selected_preview_row_mode: 'IMPLICIT_ALL'
     };
   };
@@ -32886,91 +32882,155 @@ async function bankingPayCreateDraft(input = {}) {
       };
     }
 
-    let page = null;
-    try {
-      page = await bankingPayWorkbenchSessionGetPreviewPage(id, 'canonical_preview_lines', {
-        limit: 100,
-        mode: 'PAGE',
-        expected_session_id: id,
-        current_session_id: id,
-        force_current: true,
-        forceCurrent: true,
-        bypass_cache: true,
-        bypassCache: true,
-        source: 'bankingPayCreateDraft.refreshCurrentSelectedPreviewRowsForCreateDraft'
-      });
-    } catch (error) {
-      return {
-        ok: false,
-        error_code: 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
-        message: 'The current selected payment rows could not be re-read before draft creation.',
-        error: trimStr(error?.message || error || '') || null
-      };
+    const pageLimit = 100;
+    const maxPreviewPagesForDraftSelection = 1000;
+    const maxPreviewRowsForDraftSelection = 50000;
+    const collectedRows = [];
+    let normalisedPage = null;
+    let displayNormalisedPage = null;
+    let pageCursor = null;
+    let knownCount = 0;
+    let returnedCount = 0;
+    let pageHasMore = false;
+    let lastNextCursor = null;
+
+    for (let pageIndex = 0; pageIndex < maxPreviewPagesForDraftSelection; pageIndex += 1) {
+      let page = null;
+      try {
+        page = await bankingPayWorkbenchSessionGetPreviewPage(id, 'canonical_preview_lines', {
+          limit: pageLimit,
+          cursor: pageCursor,
+          cursor_json: pageCursor,
+          mode: 'PAGE',
+          expected_session_id: id,
+          current_session_id: id,
+          force_current: true,
+          forceCurrent: true,
+          bypass_cache: true,
+          bypassCache: true,
+          source: 'bankingPayCreateDraft.refreshCurrentSelectedPreviewRowsForCreateDraft'
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          error_code: 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
+          message: 'The current selected payment rows could not be re-read before draft creation.',
+          error: trimStr(error?.message || error || '') || null
+        };
+      }
+
+      const pagePayload = normaliseCreateDraftPreviewPage(page, 'canonical_preview_lines');
+      const resolvedSection = normalisePreviewPageSectionName(pagePayload.resolved_section || pagePayload.section || pagePayload.requested_section || 'canonical_preview_lines');
+      const returnedSessionId = trimStr(pagePayload.session_id || pagePayload.sessionId || '');
+      const returnedSessionVersionNormalized = normalizeSessionVersionForCreateDraft(pagePayload.session_version ?? pagePayload.sessionVersion);
+      if (pagePayload.ok === false) {
+        return {
+          ok: false,
+          error_code: trimStr(pagePayload.error_code || pagePayload.code || 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED') || 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
+          message: trimStr(pagePayload.message || pagePayload.error || 'The current Banking Pay preview rows could not be re-read before draft creation.'),
+          session_id: returnedSessionId || id,
+          session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null
+        };
+      }
+      if (resolvedSection !== 'canonical_preview_lines') {
+        return {
+          ok: false,
+          error_code: 'BANKING_PAY_CURRENT_SELECTION_SECTION_MISMATCH',
+          message: 'The current Banking Pay canonical preview page could not be verified.',
+          expected_section: 'canonical_preview_lines',
+          returned_section: resolvedSection
+        };
+      }
+      if (!returnedSessionId || returnedSessionId !== id) {
+        return {
+          ok: false,
+          error_code: 'BANKING_PAY_CURRENT_SELECTION_SESSION_MISMATCH',
+          message: 'The Banking Pay preview page belongs to a different workbench session.',
+          expected_session_id: id,
+          returned_session_id: returnedSessionId || null
+        };
+      }
+      if (!returnedSessionVersionNormalized || returnedSessionVersionNormalized !== expectedSessionVersionNormalized) {
+        return {
+          ok: false,
+          error_code: 'BANKING_PAY_CURRENT_SELECTION_SESSION_VERSION_CHANGED',
+          message: 'The Banking Pay preview session changed while preparing draft creation.',
+          expected_session_version: expectedSessionVersionNormalized,
+          returned_session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
+          returned_session_version_normalized: returnedSessionVersionNormalized
+        };
+      }
+
+      const pageRows = previewPageRows(pagePayload).filter((row) => isPlainObject(row));
+      if (!displayNormalisedPage) displayNormalisedPage = pagePayload;
+      collectedRows.push(...pageRows);
+
+      const knownCountRaw = Number(pagePayload.known_count ?? pagePayload.knownCount ?? pagePayload.total_count ?? pagePayload.totalCount ?? collectedRows.length);
+      const returnedCountRaw = Number(pagePayload.returned_count ?? pagePayload.returnedCount ?? pageRows.length);
+      if (Number.isFinite(knownCountRaw)) knownCount = Math.max(knownCount, Math.max(0, Math.trunc(knownCountRaw)));
+      returnedCount += Number.isFinite(returnedCountRaw) ? Math.max(0, Math.trunc(returnedCountRaw)) : pageRows.length;
+      lastNextCursor = pagePayload.next_cursor ?? pagePayload.nextCursor ?? null;
+      pageHasMore = booleanFlag(pagePayload.has_more ?? pagePayload.hasMore) || cursorHasValueForCreateDraft(lastNextCursor);
+
+      if (collectedRows.length > maxPreviewRowsForDraftSelection) {
+        return {
+          ok: false,
+          error_code: 'BANKING_PAY_CURRENT_SELECTION_TOO_LARGE_TO_VERIFY_CLIENT_SIDE',
+          message: 'The current selected payment rows exceed the client-side verification limit. Refresh Banking Pay and try again, or narrow the filters.',
+          session_id: id,
+          session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
+          row_count: collectedRows.length,
+          max_row_count: maxPreviewRowsForDraftSelection
+        };
+      }
+
+      if (!pageHasMore) break;
+      if (!cursorHasValueForCreateDraft(lastNextCursor)) {
+        return {
+          ok: false,
+          error_code: 'BANKING_PAY_CURRENT_SELECTION_NEXT_CURSOR_MISSING',
+          message: 'The current Banking Pay preview page did not return a cursor for the next selected-row verification page.',
+          session_id: id,
+          session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
+          row_count: collectedRows.length
+        };
+      }
+      pageCursor = lastNextCursor;
+
+      if (pageIndex === maxPreviewPagesForDraftSelection - 1) {
+        return {
+          ok: false,
+          error_code: 'BANKING_PAY_CURRENT_SELECTION_TOO_MANY_PAGES_TO_VERIFY_CLIENT_SIDE',
+          message: 'The current selected payment rows span too many preview pages to verify safely before draft creation.',
+          session_id: id,
+          session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
+          page_count: maxPreviewPagesForDraftSelection,
+          row_count: collectedRows.length
+        };
+      }
     }
 
-    const normalisedPage = normaliseCreateDraftPreviewPage(page, 'canonical_preview_lines');
-    const resolvedSection = normalisePreviewPageSectionName(normalisedPage.resolved_section || normalisedPage.section || normalisedPage.requested_section || 'canonical_preview_lines');
-    const returnedSessionId = trimStr(normalisedPage.session_id || normalisedPage.sessionId || '');
-    const returnedSessionVersionNormalized = normalizeSessionVersionForCreateDraft(normalisedPage.session_version ?? normalisedPage.sessionVersion);
-    if (normalisedPage.ok === false) {
-      return {
-        ok: false,
-        error_code: trimStr(normalisedPage.error_code || normalisedPage.code || 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED') || 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
-        message: trimStr(normalisedPage.message || normalisedPage.error || 'The current Banking Pay preview rows could not be re-read before draft creation.'),
-        session_id: returnedSessionId || id,
-        session_version: normalisedPage.session_version ?? normalisedPage.sessionVersion ?? null
-      };
-    }
-    if (resolvedSection !== 'canonical_preview_lines') {
-      return {
-        ok: false,
-        error_code: 'BANKING_PAY_CURRENT_SELECTION_SECTION_MISMATCH',
-        message: 'The current Banking Pay canonical preview page could not be verified.',
-        expected_section: 'canonical_preview_lines',
-        returned_section: resolvedSection
-      };
-    }
-    if (!returnedSessionId || returnedSessionId !== id) {
-      return {
-        ok: false,
-        error_code: 'BANKING_PAY_CURRENT_SELECTION_SESSION_MISMATCH',
-        message: 'The Banking Pay preview page belongs to a different workbench session.',
-        expected_session_id: id,
-        returned_session_id: returnedSessionId || null
-      };
-    }
-    if (!returnedSessionVersionNormalized || returnedSessionVersionNormalized !== expectedSessionVersionNormalized) {
-      return {
-        ok: false,
-        error_code: 'BANKING_PAY_CURRENT_SELECTION_SESSION_VERSION_CHANGED',
-        message: 'The Banking Pay preview session changed while preparing draft creation.',
-        expected_session_version: expectedSessionVersionNormalized,
-        returned_session_version: normalisedPage.session_version ?? normalisedPage.sessionVersion ?? null,
-        returned_session_version_normalized: returnedSessionVersionNormalized
-      };
-    }
-
-    const rows = previewPageRows(normalisedPage).filter((row) => isPlainObject(row));
-    const knownCountRaw = Number(normalisedPage.known_count ?? normalisedPage.knownCount ?? normalisedPage.total_count ?? normalisedPage.totalCount ?? rows.length);
-    const returnedCountRaw = Number(normalisedPage.returned_count ?? normalisedPage.returnedCount ?? rows.length);
-    const knownCount = Number.isFinite(knownCountRaw) ? Math.max(0, Math.trunc(knownCountRaw)) : rows.length;
-    const returnedCount = Number.isFinite(returnedCountRaw) ? Math.max(0, Math.trunc(returnedCountRaw)) : rows.length;
-    const pageHasMore = booleanFlag(normalisedPage.has_more ?? normalisedPage.hasMore)
-      || cursorHasValueForCreateDraft(normalisedPage.next_cursor ?? normalisedPage.nextCursor);
-    if (pageHasMore || knownCount > rows.length || returnedCount > rows.length || knownCount > 100) {
-      return {
-        ok: false,
-        error_code: 'BANKING_PAY_CURRENT_SELECTION_PAGE_PARTIAL',
-        message: 'The current selected payment rows span more than one canonical preview page and cannot be safely submitted as one draft operation.',
-        session_id: id,
-        session_version: normalisedPage.session_version ?? normalisedPage.sessionVersion ?? null,
-        known_count: knownCount,
-        returned_count: returnedCount,
-        row_count: rows.length,
-        has_more: pageHasMore,
-        limit: 100
-      };
-    }
+    const rows = collectedRows;
+    const authoritativeKnownCount = Math.max(knownCount || 0, rows.length);
+    normalisedPage = {
+      ...(displayNormalisedPage || {}),
+      rows,
+      items: rows,
+      preview_rows: rows,
+      returned_count: returnedCount || rows.length,
+      returnedCount: returnedCount || rows.length,
+      known_count: authoritativeKnownCount,
+      knownCount: authoritativeKnownCount,
+      total_count: authoritativeKnownCount,
+      totalCount: authoritativeKnownCount,
+      has_more: false,
+      hasMore: false,
+      next_cursor: null,
+      nextCursor: null
+    };
+    pageHasMore = false;
+    returnedCount = returnedCount || rows.length;
+    knownCount = authoritativeKnownCount;
 
     const rowIsWithinRequestedScope = (row) => {
       if (!createDraftNodeMatchesActiveFilters(row)) return false;
@@ -33017,7 +33077,7 @@ async function bankingPayCreateDraft(input = {}) {
     const allCurrentSelectedIds = uniqTrimmed(allEligibleSelectedRows.map((row) => getPreviewRowId(row)));
     const scopedCurrentSelectedIds = uniqTrimmed(currentEligibleSelectedRows.map((row) => getPreviewRowId(row)));
     const allCurrentUniverseIds = uniqTrimmed(allEligibleSelectedRows.map((row) => getPreviewRowId(row)));
-    applyCreateDraftPreviewSectionPageToState(normalisedPage);
+    applyCreateDraftPreviewSectionPageToState(displayNormalisedPage || normalisedPage);
 
     if (scopedCurrentSelectedIds.length <= 0) {
       return {
@@ -35705,9 +35765,6 @@ async function bankingPayCreateDraft(input = {}) {
   };
 
   const preSyncScopeSelection = classifySelectedRowsForDraftScope(selectedPreviewRowIdsForServer, payChannelScope || 'ALL');
-  if ((payChannelScope === 'PAYE' || payChannelScope === 'UMBRELLA') && preSyncScopeSelection.scoped_row_ids.length <= 0) {
-    return await returnCreateDraftNoRowsForScope(payChannelScope, preSyncScopeSelection);
-  }
 
   const requestSummary = {
     pay_date: pd,
@@ -35738,30 +35795,9 @@ async function bankingPayCreateDraft(input = {}) {
   try { wiz.lastCreateDraftResult = null; } catch {}
 
   try {
-    logTroubleshoot('info', 'SYNC_SELECTED_ROWS_TO_SESSION_START', requestSummary);
+    logTroubleshoot('info', 'AUTHORITATIVE_SESSION_SELECTION_RECHECK_START', requestSummary);
 
-    const selectionSyncResult = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, {
-      selected_preview_row_ids: selectedPreviewRowIdsForServer
-    });
-    const selectionSyncFailure = detectCreateDraftFailureEnvelope(selectionSyncResult);
-    if (selectionSyncFailure) {
-      throwCreateDraftFailureEnvelope(selectionSyncFailure, 'BANKING_PAY_CREATE_DRAFT_FAILED');
-    }
-
-    let syncedSelectedRows = uniqTrimmed(
-      Array.isArray(selectionSyncResult?.selected_preview_row_ids)
-        ? selectionSyncResult.selected_preview_row_ids
-        : selectedPreviewRowIdsForServer
-    );
-    const syncedSelectedRowsProvided = normalizeSelectedPreviewRowIdsProvided(
-      selectionSyncResult?.server_selected_preview_row_ids_provided ??
-      selectionSyncResult?.selected_preview_row_ids_provided
-    );
-
-    wiz.workbench.server_selected_preview_row_ids = [...syncedSelectedRows];
-    wiz.decisions.server_selected_preview_row_ids = [...syncedSelectedRows];
-    wiz.workbench.server_selected_preview_row_ids_provided = (syncedSelectedRowsProvided === null) ? true : syncedSelectedRowsProvided;
-    wiz.decisions.server_selected_preview_row_ids_provided = (syncedSelectedRowsProvided === null) ? true : syncedSelectedRowsProvided;
+    let syncedSelectedRows = uniqTrimmed(selectedPreviewRowIdsForServer);
     wiz.selected_preview_row_mode = selectedPreviewSelection.selected_preview_row_mode;
     wiz.decisions.selected_preview_row_ids = [...selectedPreviewSelection.selected_preview_row_ids];
 
@@ -37012,6 +37048,9 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
+
+
 
 async function openPayeSameWeekOverrideDecisionModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -44280,6 +44319,7 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 
 
 
+
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -44407,6 +44447,86 @@ function renderPayNewBatchWizard() {
       >${enc(isExpanded ? 'Collapse section' : 'Expand section')}</button>
     `;
   };
+
+  const normaliseWorkbenchPreviewPageSectionKey = (sectionKey) => {
+    const raw = upperTrim(sectionKey).replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!raw || raw === 'READY' || raw === 'READY_TO_PAY' || raw === 'READY_PREVIEW_LINES' || raw === 'CANONICAL_PREVIEW_LINES') return 'canonical_preview_lines';
+    if (raw === 'CASES' || raw === 'CASE_RESOLUTIONS' || raw === 'CASES_RESOLUTIONS' || raw === 'CASE_RESOLUTION_STATES') return 'cases_resolutions';
+    if (raw === 'BLOCKED' || raw === 'BLOCKED_NOW' || raw === 'BLOCKED_PREVIEW_LINES' || raw === 'BLOCKED_FOR_PAY') return 'blocked_for_pay';
+    return raw.toLowerCase();
+  };
+  const workbenchUiPageState = (() => {
+    const state = isPlainObject(wiz.ui_state.preview_page_state) ? wiz.ui_state.preview_page_state : (isPlainObject(wiz.ui_state.previewPageState) ? wiz.ui_state.previewPageState : {});
+    wiz.ui_state.preview_page_state = state;
+    wiz.ui_state.previewPageState = state;
+    return state;
+  })();
+  const getWorkbenchPreviewPageCache = () => {
+    const sources = [
+      wiz.workbench,
+      wiz.preview,
+      wiz.preview?.data,
+      wiz.preview?.data?.preview
+    ];
+    try { sources.push(previewEnvelope); } catch {}
+    try { sources.push(pv); } catch {}
+    try { sources.push(previewDataRoot); } catch {}
+    try { sources.push(previewDataPreview); } catch {}
+    for (const source of sources) {
+      if (!isPlainObject(source)) continue;
+      for (const key of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
+        if (isPlainObject(source[key])) return source[key];
+      }
+    }
+    return {};
+  };
+  const getWorkbenchSectionPageMeta = (sectionKey) => {
+    const section = normaliseWorkbenchPreviewPageSectionKey(sectionKey);
+    const cache = getWorkbenchPreviewPageCache();
+    const page = isPlainObject(cache[section]) ? cache[section] : {};
+    const uiPage = isPlainObject(workbenchUiPageState[section]) ? workbenchUiPageState[section] : {};
+    const rows = asArray(page.rows).length ? asArray(page.rows) : asArray(page.items);
+    const limitRaw = Number(uiPage.limit ?? page.limit ?? page.page_size ?? page.pageSize ?? rows.length ?? 100);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.max(1, Math.trunc(limitRaw)) : 100;
+    const totalRaw = Number(
+      page.known_count ?? page.knownCount ?? page.total_count ?? page.totalCount ?? page.total_count_estimate ?? page.totalCountEstimate ??
+      wiz.workbench?.section_counts_json?.[section] ?? wiz.workbench?.sectionCountsJson?.[section] ?? wiz.workbench?.section_counts?.[section] ?? wiz.workbench?.sectionCounts?.[section] ??
+      (() => { try { return pv?.section_counts_json?.[section] ?? pv?.sectionCountsJson?.[section] ?? pv?.section_counts?.[section] ?? pv?.sectionCounts?.[section]; } catch { return undefined; } })() ??
+      (() => { try { return previewEnvelope?.section_counts_json?.[section] ?? previewEnvelope?.sectionCountsJson?.[section] ?? previewEnvelope?.section_counts?.[section] ?? previewEnvelope?.sectionCounts?.[section]; } catch { return undefined; } })() ??
+      rows.length
+    );
+    const totalCount = Number.isFinite(totalRaw) ? Math.max(0, Math.trunc(totalRaw)) : rows.length;
+    const currentRaw = Number(uiPage.current_page ?? uiPage.currentPage ?? page.current_page ?? page.currentPage ?? 1);
+    const currentPage = Math.max(1, Number.isFinite(currentRaw) ? Math.trunc(currentRaw) : 1);
+    const hasMore = asBool(page.has_more ?? page.hasMore) || !!(page.next_cursor ?? page.nextCursor);
+    const totalPages = Math.max(1, Math.ceil(Math.max(totalCount, currentPage * limit + (hasMore ? 1 : 0)) / limit));
+    return {
+      section,
+      currentPage: Math.min(currentPage, totalPages),
+      totalPages,
+      totalCount,
+      limit,
+      returnedCount: Math.max(0, Math.trunc(Number(page.returned_count ?? page.returnedCount ?? rows.length) || rows.length)),
+      hasMore,
+      loading: asBool(uiPage.loading),
+      error: trimStr(uiPage.error || '')
+    };
+  };
+  const renderWorkbenchSectionPaginationControls = (sectionKey) => {
+    const meta = getWorkbenchSectionPageMeta(sectionKey);
+    if (meta.totalPages <= 1 && !meta.hasMore) return '';
+    const prevDisabled = meta.loading || meta.currentPage <= 1;
+    const nextDisabled = meta.loading || meta.currentPage >= meta.totalPages;
+    const label = meta.loading ? 'Loading…' : `Page ${meta.currentPage} of ${meta.totalPages}`;
+    return `
+      <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+        <button type="button" class="btn btn-xs btn-outline" data-action="banking:pay:previewPage" data-section-key="${enc(sectionKey)}" data-page-direction="prev" ${prevDisabled ? 'disabled aria-disabled="true"' : ''}>Previous</button>
+        <span class="mini" data-banking-pay-page-label="${enc(meta.section)}" title="${enc(String(meta.totalCount))} row-backed item(s), ${enc(String(meta.returnedCount))} shown on this page">${enc(label)}</span>
+        <button type="button" class="btn btn-xs btn-outline" data-action="banking:pay:previewPage" data-section-key="${enc(sectionKey)}" data-page-direction="next" ${nextDisabled ? 'disabled aria-disabled="true"' : ''}>Next</button>
+        ${meta.error ? `<span class="mini" style="color:#b00020;">${enc(meta.error)}</span>` : ''}
+      </div>
+    `;
+  };
   const previewTableStyle = 'min-width:1260px;table-layout:auto;border-collapse:separate;border-spacing:0;';
   const makeScrollAnchor = (prefix, raw) => {
     const value = trimStr(raw);
@@ -44473,7 +44593,7 @@ function renderPayNewBatchWizard() {
     }
 
     return {
-      selected_preview_row_ids: [...validPreviewRowIds],
+      selected_preview_row_ids: [],
       selected_preview_row_mode: 'IMPLICIT_ALL'
     };
   };
@@ -46266,71 +46386,38 @@ const collectPreviewRowIds = (previewLike) => {
     pendingCandidateJobById.set(candidateId, deep(row));
   }
 
-const getCandidateWorkbenchStatus = (candidateId) => {
+  const getCandidateWorkbenchStatus = (candidateId) => {
     const candidateIdText = trimStr(candidateId);
-    const staleCandidateIds = (() => {
-      const sources = [];
-      try { if (typeof wiz !== 'undefined') sources.push(wiz?.workbench?.__candidate_refresh_stale_ids); } catch {}
-      try { if (typeof previewEnvelope !== 'undefined') sources.push(previewEnvelope?.__candidate_refresh_stale_ids); } catch {}
-      try { if (typeof pv !== 'undefined') sources.push(pv?.__candidate_refresh_stale_ids); } catch {}
-      return Array.from(new Set(sources.flatMap((value) => Array.isArray(value) ? value : [])
-        .map((value) => trimStr(value))
-        .filter(Boolean)));
-    })();
     const isPending = !!candidateIdText && pendingCandidateIds.includes(candidateIdText);
     const isFailed = !!candidateIdText && failedCandidateIds.includes(candidateIdText);
-    const isStale = !!candidateIdText && !isPending && !isFailed && staleCandidateIds.includes(candidateIdText);
     const pendingRow = candidateIdText ? (pendingCandidateRowById.get(candidateIdText) || pendingCandidateJobById.get(candidateIdText) || null) : null;
     const failedRow = candidateIdText ? (failedCandidateRowById.get(candidateIdText) || null) : null;
     const latestErrorJson = (failedRow && isPlainObject(failedRow.latest_error_json)) ? failedRow.latest_error_json : null;
-    const failedMessage = trimStr(latestErrorJson?.message || latestErrorJson?.error || failedRow?.status_text || failedRow?.message || failedRow?.status || 'Candidate refresh failed.');
-    const pendingJobType = trimStr(pendingRow?.latest_job_type || pendingRow?.latestJobType || pendingRow?.job_type || pendingRow?.jobType || '').toUpperCase();
-    const pendingMessage = trimStr(
-      pendingRow?.display_status_text ||
-      pendingRow?.displayStatusText ||
-      pendingRow?.status_text ||
-      pendingRow?.statusText ||
-      pendingRow?.message ||
-      pendingRow?.user_message ||
-      (pendingJobType === 'WORKBENCH_CANDIDATE_DELTA_REFRESH' ? 'Updating latest payment details…' : '') ||
-      pendingRow?.status ||
-      'Updating latest payment details…'
-    );
-    const pendingDisabledReason = pendingJobType === 'WORKBENCH_CANDIDATE_DELTA_REFRESH'
-      ? 'This candidate is refreshing. Please wait before creating a draft for this candidate.'
-      : pendingMessage;
-    const staleMessage = 'Latest payment details could not be confirmed. Refresh Banking Pay before creating a draft for this candidate.';
-    const disabledReason = isFailed ? failedMessage : (isPending ? pendingDisabledReason : (isStale ? staleMessage : ''));
+    const failedMessage = trimStr(latestErrorJson?.message || latestErrorJson?.error || failedRow?.status || 'Candidate refresh failed.');
+    const pendingMessage = trimStr(pendingRow?.latest_job_type || pendingRow?.status || 'Refreshing candidate…');
+    const disabledReason = isFailed ? failedMessage : (isPending ? pendingMessage : '');
     return {
       candidate_id: candidateIdText,
       is_pending: isPending,
       is_failed: isFailed,
-      is_stale: isStale,
       pending_row: pendingRow,
       failed_row: failedRow,
-      disabled: isPending || isFailed || isStale,
-      disabled_reason: disabledReason,
-      pending_message: pendingMessage,
-      stale_message: staleMessage
+      disabled: isPending || isFailed,
+      disabled_reason: disabledReason
     };
   };
 
-
-const renderCandidateWorkbenchIndicators = (candidateId) => {
+  const renderCandidateWorkbenchIndicators = (candidateId) => {
     const status = getCandidateWorkbenchStatus(candidateId);
     const pills = [];
     if (status.is_pending) {
-      pills.push(`<span class="pill pill-warn" title="${enc(status.disabled_reason || status.pending_message || 'Updating latest payment details…')}">${enc('Refreshing')}</span>`);
+      pills.push(`<span class="pill pill-warn" title="${enc(status.disabled_reason || 'Refreshing candidate…')}">${enc('Refreshing…')}</span>`);
     }
     if (status.is_failed) {
       pills.push(`<span class="pill pill-bad" title="${enc(status.disabled_reason || 'Candidate refresh failed.')}">${enc('Refresh failed')}</span>`);
     }
-    if (status.is_stale) {
-      pills.push(`<span class="pill pill-warn" title="${enc(status.disabled_reason || status.stale_message || 'Refresh Banking Pay before creating a draft for this candidate.')}">${enc('Refresh needed')}</span>`);
-    }
     return pills.join('');
   };
-
 
   const getCandidateActionDisabledAttrs = (candidateId, activeTitle) => {
     const status = getCandidateWorkbenchStatus(candidateId);
@@ -49383,12 +49470,20 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     const rowIdSet = new Set(allSelectableRowIds);
     const selectedSetForRows = (() => {
       if (reconciledSelectionForRows.selected_preview_row_mode === 'EXPLICIT_NONE') return new Set();
-      if (reconciledSelectionForRows.selected_preview_row_mode === 'IMPLICIT_ALL') return new Set(allSelectableRowIds);
+      if (reconciledSelectionForRows.selected_preview_row_mode === 'IMPLICIT_ALL') {
+        return new Set(readyRows
+          .filter((line) => isPreviewRowSelectionAllowed(line))
+          .filter((line) => line.selected !== false && upperTrim(line.selection_state || line.selectionState || getNestedLinePayload(line)?.selection_state || getNestedLinePayload(line)?.selectionState || 'SELECTED') !== 'UNSELECTED')
+          .map((line) => getPreviewRowId(line))
+          .filter((rowId) => rowIdSet.has(rowId)));
+      }
       return new Set(reconciledSelectionForRows.selected_preview_row_ids.filter((rowId) => rowIdSet.has(rowId)));
     })();
 
     try {
-      const safeSelectedIds = uniqTrimmed(reconciledSelectionForRows.selected_preview_row_ids);
+      const safeSelectedIds = reconciledSelectionForRows.selected_preview_row_mode === 'IMPLICIT_ALL'
+        ? []
+        : uniqTrimmed(reconciledSelectionForRows.selected_preview_row_ids);
       const safeMode = reconciledSelectionForRows.selected_preview_row_mode;
       wiz.decisions.selected_preview_row_ids = [...safeSelectedIds];
       wiz.decisions.selectedPreviewRowIds = [...safeSelectedIds];
@@ -50254,6 +50349,37 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   };
   const localSelectedCurrentEligibleReadyRows = readyPreviewLines.filter((line) => isLocalCurrentEligibleReadyRow(line));
   const localSelectedCurrentEligibleReadyRowCount = localSelectedCurrentEligibleReadyRows.length;
+  const authoritativeSelectedCurrentEligibleReadyRowCount = (() => {
+    const readyMeta = getWorkbenchSectionPageMeta('READY_TO_PAY');
+    const workbenchSource = isPlainObject(wiz.workbench) ? wiz.workbench : {};
+    const progressSource = isPlainObject(authoritativeProgress) ? authoritativeProgress : {};
+    const previewPayloadSource = isPlainObject(pv) ? pv : {};
+    const previewDataSource = isPlainObject(previewEnvelope) ? previewEnvelope : {};
+    const candidates = [
+      workbenchSource.selected_row_count,
+      workbenchSource.selectedRowCount,
+      workbenchSource.server_selected_row_count,
+      workbenchSource.serverSelectedRowCount,
+      workbenchSource.selected_eligible_ready_row_count,
+      workbenchSource.selectedEligibleReadyRowCount,
+      progressSource.selected_row_count,
+      progressSource.selectedRowCount,
+      progressSource.selected_eligible_ready_row_count,
+      progressSource.selectedEligibleReadyRowCount,
+      previewPayloadSource.selected_row_count,
+      previewPayloadSource.selectedRowCount,
+      previewPayloadSource.server_selected_row_count,
+      previewPayloadSource.serverSelectedRowCount,
+      previewDataSource.selected_row_count,
+      previewDataSource.selectedRowCount
+    ];
+    for (const value of candidates) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n >= 0) return Math.trunc(n);
+    }
+    if (selectedPreviewSelection.selected_preview_row_mode === 'IMPLICIT_ALL' && readyMeta.totalCount > 0) return readyMeta.totalCount;
+    return localSelectedCurrentEligibleReadyRowCount;
+  })();
 
   const payeCreateBlocked = !!(payeGuardrails && payeGuardrails.create_paye_blocked === true);
   const payeOverrideRequired = !!(payeGuardrails && payeGuardrails.override_required === true);
@@ -50277,7 +50403,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const createBtnDisabled = !(
     authoritativeGateAllowsCreate &&
     currentFirstCanonicalPageApplied &&
-    localSelectedCurrentEligibleReadyRowCount > 0 &&
+    authoritativeSelectedCurrentEligibleReadyRowCount > 0 &&
     !createDraftBusyState &&
     payeGuardAllowsCreate
   );
@@ -50291,7 +50417,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     if (!authoritativeRenderState.scopeSeedComplete || authoritativeRenderState.scopeCursorRemaining) return 'Candidate scope is still being prepared. Draft creation re-enables when scope discovery is complete.';
     if (authoritativeRenderState.hasOutstandingWork || !authoritativeRenderState.sessionReady) return 'Preparing / candidates refreshing. Draft creation re-enables when all candidate, line, and job work is complete.';
     if (!currentFirstCanonicalPageApplied) return 'The current canonical preview page is still loading for this session/version.';
-    if (!authoritativeRenderState.readyForDraft || localSelectedCurrentEligibleReadyRowCount <= 0) return 'Select at least one current eligible Ready to Pay row.';
+    if (!authoritativeRenderState.readyForDraft || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) return 'Select at least one current eligible Ready to Pay row.';
     if (payeCreateBlocked && hasReadyUmbrella) return 'PAYE draft creation is blocked, but umbrella-ready items can still continue.';
     if (payeCreateBlocked && !hasReadyUmbrella) return 'A PAYE draft already exists. Cancel or delete it first.';
     if (payeOverrideRequired && hasReadyPaye) return 'Same-week PAYE override will require password, 2FA, and explicit continue confirmation.';
@@ -50300,7 +50426,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const createDraftLabel = (() => {
     if (cdBusy) return 'Creating…';
     if (authoritativeRenderState.sessionReady !== true) return 'Preparing…';
-    if (authoritativeRenderState.readyForDraft !== true || localSelectedCurrentEligibleReadyRowCount <= 0) return 'Select rows';
+    if (authoritativeRenderState.readyForDraft !== true || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) return 'Select rows';
     if (payeCreateBlocked && hasReadyUmbrella && !hasReadyPaye) return 'Create umbrella draft';
     if (payeCreateBlocked && hasReadyUmbrella && hasReadyPaye) return 'Create available drafts';
     if (payeOverrideRequired && hasReadyPaye) return 'Create drafts (override required)';
@@ -50335,7 +50461,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     if (!currentFirstCanonicalPageApplied) {
       return `<div class="warn" style="white-space:pre-wrap;">${enc('The current canonical preview page is still loading for this workbench session/version.')}</div>`;
     }
-    if (!authoritativeRenderState.readyForDraft || localSelectedCurrentEligibleReadyRowCount <= 0) {
+    if (!authoritativeRenderState.readyForDraft || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) {
       return `<div class="warn" style="white-space:pre-wrap;">${enc('Select at least one current eligible Ready to Pay row before creating a draft.')}</div>`;
     }
     return '';
@@ -50721,6 +50847,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
           </div>
         </div>
         ${renderWorkbenchSectionExpandControl('CASES_RESOLUTIONS')}
+        ${renderWorkbenchSectionPaginationControls('CASES_RESOLUTIONS')}
       </div>
       ${isWorkbenchSectionBodyVisible('CASES_RESOLUTIONS') ? `
         <div id="bankingPayCasesScrollHost" data-banking-scroll-host="cases" style="${getWorkbenchSectionScrollHostStyle('CASES_RESOLUTIONS')}">
@@ -50768,6 +50895,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             </div>
           </div>
           ${renderWorkbenchSectionExpandControl('BLOCKED_FOR_PAY')}
+          ${renderWorkbenchSectionPaginationControls('BLOCKED_FOR_PAY')}
         </div>
         ${isWorkbenchSectionBodyVisible('BLOCKED_FOR_PAY') ? `
           <div id="bankingPayBlockedScrollHost" data-banking-scroll-host="blocked" style="${getWorkbenchSectionScrollHostStyle('BLOCKED_FOR_PAY')}">
@@ -50840,13 +50968,13 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             <div class="actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto;">
               <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:openFiltersModal" title="Open Banking Pay filters">Filters</button>
               <button type="button" class="btn btn-sm btn-primary ${createBtnDisabled ? 'disabled' : ''}" ${createBtnDisabled ? 'disabled data-disabled="1" aria-disabled="true"' : 'data-disabled="0" aria-disabled="false"'} data-action="banking:pay:createDraft" title="${enc(createDraftTitle)}" style="font-weight:700;background:#198754;border-color:#198754;color:#fff;">${enc(createDraftLabel)}</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:selectAllPreviewRows" title="Select all preview rows" ${effectiveAllPreviewRowIds.length ? '' : 'disabled'}>Select all</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearAllPreviewRows" title="Unselect all preview rows" ${effectiveAllPreviewRowIds.length ? '' : 'disabled'}>Unselect all</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:selectAllPreviewRows" title="Select all eligible Ready to Pay rows across every page" ${getWorkbenchSectionPageMeta('READY_TO_PAY').totalCount ? '' : 'disabled'}>Select all</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearAllPreviewRows" title="Clear all eligible Ready to Pay rows across every page" ${getWorkbenchSectionPageMeta('READY_TO_PAY').totalCount ? '' : 'disabled'}>Clear selection</button>
               <button type="button" class="btn btn-sm btn-outline ${hasActivePayFilters ? '' : 'disabled'}" ${hasActivePayFilters ? '' : 'aria-disabled="true"'} data-action="banking:pay:clearFilters" title="${enc(clearFiltersTitle)}">Clear filters</button>
             </div>
           </div>
 
-          <div class="mini" style="opacity:.85;">${enc(`Selected preview rows: ${selectedPreviewRowSet.size}/${effectiveAllPreviewRowIds.length || 0}${selectedPreviewRowSet.size === effectiveAllPreviewRowIds.length && effectiveAllPreviewRowIds.length ? ' (all selected)' : ''} • Selected current eligible Ready to Pay rows: ${localSelectedCurrentEligibleReadyRowCount}`)}</div>
+          <div class="mini" style="opacity:.85;">${enc(`Selected current eligible Ready to Pay rows: ${authoritativeSelectedCurrentEligibleReadyRowCount} • Visible selected on this page: ${selectedPreviewRowSet.size}/${effectiveAllPreviewRowIds.length || 0}`)}</div>
           ${previewProgressHtml}
 
           <div class="card" style="margin-top:10px;">
@@ -50860,6 +50988,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
                 </div>
               </div>
               ${renderWorkbenchSectionExpandControl('READY_TO_PAY')}
+              ${renderWorkbenchSectionPaginationControls('READY_TO_PAY')}
             </div>
             ${isWorkbenchSectionBodyVisible('READY_TO_PAY') ? `
               <div id="bankingPayReadyScrollHost" data-banking-scroll-host="ready" style="${getWorkbenchSectionScrollHostStyle('READY_TO_PAY')}">
@@ -50879,6 +51008,12 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     </div>
   `;
 }
+
+
+
+
+
+
 
 
 
@@ -86604,70 +86739,242 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       return writePreviewSelectionState(decisions, allPreviewRowIds, 'IMPLICIT_ALL');
     };
 
-    const togglePreviewRowSelection = (previewRowId, checked) => {
+    const getActivePayWorkbenchSessionIdForSelection = () => String(
+      st.pay?.draftWizard?.workbench?.session_id ||
+      st.pay?.draftWizard?.decisions?.session_id ||
+      st.pay?.draftWizard?.preview?.data?.session_id ||
+      st.pay?.draftWizard?.preview?.data?.preview?.session_id ||
+      ''
+    ).trim();
+
+    const updatePreviewRowSelectionInLoadedState = (previewRowIds, selected) => {
+      const ids = new Set(normalizePreviewRowIdArray(previewRowIds));
+      if (!ids.size) return;
+      const visit = (node) => {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node)) {
+          for (const item of node) visit(item);
+          return;
+        }
+        const rowId = getPreviewRowIdFromRow(node);
+        if (rowId && ids.has(rowId)) {
+          node.selected = selected === true;
+          node.selection_state = selected === true ? 'SELECTED' : 'UNSELECTED';
+          node.selectionState = node.selection_state;
+          if (node.row_json && typeof node.row_json === 'object' && !Array.isArray(node.row_json)) {
+            node.row_json.selected = selected === true;
+            node.row_json.selection_state = node.selection_state;
+          }
+          if (node.rowJson && typeof node.rowJson === 'object' && !Array.isArray(node.rowJson)) {
+            node.rowJson.selected = selected === true;
+            node.rowJson.selection_state = node.selection_state;
+          }
+        }
+        for (const key of ['rows', 'items', 'data', 'canonical_preview_lines', 'canonicalPreviewLines', 'ready_preview_lines', 'readyPreviewLines', 'preview_rows', 'previewRows', 'blocked_for_pay', 'blockedForPay', 'blocked_preview_lines', 'blockedPreviewLines', 'cases_resolutions', 'casesResolutions', 'case_resolution_states', 'caseResolutionStates']) {
+          if (node[key]) visit(node[key]);
+        }
+        for (const key of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages', 'componentStateCache', 'component_state_cache', 'preview', 'workbench']) {
+          if (node[key] && typeof node[key] === 'object') visit(node[key]);
+        }
+      };
+      try { visit(st.pay?.draftWizard || {}); } catch {}
+    };
+
+    const applySelectionPayloadSummaryToWizard = (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      const selectedIds = normalizePreviewRowIdArray(payload.selected_preview_row_ids || payload.server_selected_preview_row_ids);
+      const selectedCount = Number(payload.selected_row_count ?? selectedIds.length);
+      const decisions = ensurePayWizardDecisionState();
+      try {
+        st.pay.draftWizard.workbench = (st.pay.draftWizard.workbench && typeof st.pay.draftWizard.workbench === 'object') ? st.pay.draftWizard.workbench : {};
+        if (Number.isFinite(selectedCount)) {
+          st.pay.draftWizard.workbench.selected_row_count = Math.max(0, Math.trunc(selectedCount));
+          st.pay.draftWizard.workbench.selected_eligible_ready_row_count = Math.max(0, Math.trunc(selectedCount));
+        }
+        st.pay.draftWizard.workbench.server_selected_preview_row_ids = selectedIds;
+        st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided = payload.server_selected_preview_row_ids_provided === true || payload.selected_preview_row_ids_provided === true;
+        decisions.server_selected_preview_row_ids = selectedIds;
+        decisions.server_selected_preview_row_ids_provided = st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided;
+      } catch {}
+    };
+
+    const togglePreviewRowSelection = async (previewRowId, checked) => {
       const rowId = String(previewRowId || '').trim();
       if (!rowId) return ensurePayWizardDecisionState();
       const allPreviewRowIds = getRenderedPreviewRowIds();
       const validPreviewRowIdSet = new Set(allPreviewRowIds);
       const decisions = ensurePayWizardDecisionState();
-      if (allPreviewRowIds.length <= 0 || !validPreviewRowIdSet.has(rowId)) {
-        return decisions;
+      if (allPreviewRowIds.length <= 0 || !validPreviewRowIdSet.has(rowId)) return decisions;
+      const wantChecked = (typeof checked === 'boolean') ? checked : true;
+      updatePreviewRowSelectionInLoadedState([rowId], wantChecked);
+      try {
+        const sessionId = getActivePayWorkbenchSessionIdForSelection();
+        if (sessionId && typeof bankingPayWorkbenchSessionSetSelectedRows === 'function') {
+          const result = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, wantChecked
+            ? { section: 'canonical_preview_lines', select_preview_row_ids: [rowId] }
+            : { section: 'canonical_preview_lines', deselect_preview_row_ids: [rowId] });
+          applySelectionPayloadSummaryToWizard(result);
+        }
+      } catch (error) {
+        updatePreviewRowSelectionInLoadedState([rowId], !wantChecked);
+        throw error;
       }
-      const currentMode = normalizeSelectedPreviewRowMode(
-        st.pay?.draftWizard?.selected_preview_row_mode,
-        allPreviewRowIds,
-        decisions.selected_preview_row_ids
-      );
-
-      const workingSet = new Set(
-        currentMode === 'IMPLICIT_ALL'
-          ? allPreviewRowIds
-          : normalizePreviewRowIdArray(decisions.selected_preview_row_ids).filter((id) => validPreviewRowIdSet.has(id))
-      );
-
-      const wantChecked = (typeof checked === 'boolean') ? checked : !workingSet.has(rowId);
-
-      if (wantChecked) workingSet.add(rowId);
-      else workingSet.delete(rowId);
-
-      return setPreviewRowSelectionState({
-        mode: workingSet.size <= 0
-          ? 'EXPLICIT_NONE'
-          : (workingSet.size >= allPreviewRowIds.length ? 'IMPLICIT_ALL' : 'EXPLICIT_SUBSET'),
-        selectedIds: Array.from(workingSet)
-      });
+      return decisions;
     };
 
-    const setPreviewRowsSelection = (previewRowIds, checked) => {
+    const setPreviewRowsSelection = async (previewRowIds, checked) => {
       const requestedIds = normalizePreviewRowIdArray(previewRowIds);
       const allPreviewRowIds = getRenderedPreviewRowIds();
       const validPreviewRowIdSet = new Set(allPreviewRowIds);
       const targetIds = requestedIds.filter((rowId) => validPreviewRowIdSet.has(rowId));
       const decisions = ensurePayWizardDecisionState();
       if (!targetIds.length || !allPreviewRowIds.length) return decisions;
-
-      const currentMode = normalizeSelectedPreviewRowMode(
-        st.pay?.draftWizard?.selected_preview_row_mode,
-        allPreviewRowIds,
-        decisions.selected_preview_row_ids
-      );
-      const workingSet = new Set(
-        currentMode === 'IMPLICIT_ALL'
-          ? allPreviewRowIds
-          : normalizePreviewRowIdArray(decisions.selected_preview_row_ids).filter((rowId) => validPreviewRowIdSet.has(rowId))
-      );
-
-      for (const rowId of targetIds) {
-        if (checked) workingSet.add(rowId);
-        else workingSet.delete(rowId);
+      const wantChecked = checked === true;
+      updatePreviewRowSelectionInLoadedState(targetIds, wantChecked);
+      try {
+        const sessionId = getActivePayWorkbenchSessionIdForSelection();
+        if (sessionId && typeof bankingPayWorkbenchSessionSetSelectedRows === 'function') {
+          for (let offset = 0; offset < targetIds.length; offset += 100) {
+            const chunkIds = targetIds.slice(offset, offset + 100);
+            if (!chunkIds.length) continue;
+            const result = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, wantChecked
+              ? { section: 'canonical_preview_lines', select_preview_row_ids: chunkIds }
+              : { section: 'canonical_preview_lines', deselect_preview_row_ids: chunkIds });
+            applySelectionPayloadSummaryToWizard(result);
+          }
+        }
+      } catch (error) {
+        updatePreviewRowSelectionInLoadedState(targetIds, !wantChecked);
+        throw error;
       }
+      return decisions;
+    };
 
-      return setPreviewRowSelectionState({
-        mode: workingSet.size <= 0
-          ? 'EXPLICIT_NONE'
-          : (workingSet.size >= allPreviewRowIds.length ? 'IMPLICIT_ALL' : 'EXPLICIT_SUBSET'),
-        selectedIds: Array.from(workingSet)
-      });
+    const setPreviewRowsGlobalSelection = async (checked) => {
+      const wantChecked = checked === true;
+      const decisions = ensurePayWizardDecisionState();
+      const visibleIds = getVisibleRenderedPreviewRowIds();
+      updatePreviewRowSelectionInLoadedState(visibleIds, wantChecked);
+      const sessionId = getActivePayWorkbenchSessionIdForSelection();
+      if (sessionId && typeof bankingPayWorkbenchSessionSetSelectedRows === 'function') {
+        const result = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, {
+          section: 'canonical_preview_lines',
+          selection_action: wantChecked ? 'SELECT_ALL_SECTION' : 'CLEAR_SECTION'
+        });
+        applySelectionPayloadSummaryToWizard(result);
+      }
+      return decisions;
+    };
+
+    const normalisePayPreviewPageUiSection = (sectionKey) => {
+      const raw = String(sectionKey || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      if (!raw || raw === 'READY' || raw === 'READY_TO_PAY' || raw === 'READY_PREVIEW_LINES' || raw === 'CANONICAL_PREVIEW_LINES') return 'canonical_preview_lines';
+      if (raw === 'CASES' || raw === 'CASE_RESOLUTIONS' || raw === 'CASES_RESOLUTIONS' || raw === 'CASE_RESOLUTION_STATES') return 'cases_resolutions';
+      if (raw === 'BLOCKED' || raw === 'BLOCKED_NOW' || raw === 'BLOCKED_PREVIEW_LINES' || raw === 'BLOCKED_FOR_PAY') return 'blocked_for_pay';
+      return raw.toLowerCase();
+    };
+
+    const getPreviewPageRowsFromPayload = (pageLike) => {
+      const page = (pageLike && typeof pageLike === 'object' && !Array.isArray(pageLike)) ? pageLike : {};
+      return Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : (Array.isArray(page.data) ? page.data : []));
+    };
+
+    const getPreviewPageCacheForUi = () => {
+      const wiz = st.pay?.draftWizard || {};
+      for (const source of [wiz.workbench, wiz.preview, wiz.preview?.data, wiz.preview?.data?.preview]) {
+        if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+        for (const key of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
+          if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) return source[key];
+        }
+      }
+      return {};
+    };
+
+    const loadPayWorkbenchPreviewPageForSection = async (sectionKey, direction) => {
+      const section = normalisePayPreviewPageUiSection(sectionKey);
+      if (!['canonical_preview_lines', 'cases_resolutions', 'blocked_for_pay'].includes(section)) return;
+      const sessionId = getActivePayWorkbenchSessionIdForSelection();
+      if (!sessionId || typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return;
+      const uiState = ensurePayWorkbenchUiState();
+      uiState.preview_page_state = (uiState.preview_page_state && typeof uiState.preview_page_state === 'object' && !Array.isArray(uiState.preview_page_state)) ? uiState.preview_page_state : {};
+      uiState.previewPageState = uiState.preview_page_state;
+      const pageState = (uiState.preview_page_state[section] && typeof uiState.preview_page_state[section] === 'object' && !Array.isArray(uiState.preview_page_state[section])) ? uiState.preview_page_state[section] : {};
+      uiState.preview_page_state[section] = pageState;
+      const cache = getPreviewPageCacheForUi();
+      const currentPage = Math.max(1, Number(pageState.current_page || pageState.currentPage || 1) || 1);
+      const currentCachedPage = (cache[section] && typeof cache[section] === 'object' && !Array.isArray(cache[section])) ? cache[section] : {};
+      const limit = Math.max(1, Math.min(100, Number(pageState.limit || currentCachedPage.limit || 100) || 100));
+      const totalRaw = Number(currentCachedPage.known_count ?? currentCachedPage.knownCount ?? currentCachedPage.total_count ?? currentCachedPage.totalCount ?? currentCachedPage.total_count_estimate ?? currentCachedPage.totalCountEstimate ?? 0);
+      const totalPages = Math.max(1, Math.ceil(Math.max(0, Number.isFinite(totalRaw) ? Math.trunc(totalRaw) : 0) / limit) || (currentCachedPage.has_more || currentCachedPage.hasMore ? currentPage + 1 : currentPage));
+      const dir = String(direction || '').trim().toLowerCase();
+      const targetPage = dir === 'prev' ? currentPage - 1 : currentPage + 1;
+      if (targetPage < 1 || targetPage > totalPages) return;
+      const cursorStack = Array.isArray(pageState.cursor_stack) ? pageState.cursor_stack : (Array.isArray(pageState.cursorStack) ? pageState.cursorStack : []);
+      let targetCursor = null;
+      if (targetPage > currentPage) {
+        targetCursor = currentCachedPage.next_cursor ?? currentCachedPage.nextCursor ?? null;
+        if (!targetCursor) return;
+        cursorStack[targetPage - 1] = targetCursor;
+      } else if (targetPage > 1) {
+        targetCursor = cursorStack[targetPage - 1] || null;
+      }
+      const scrollHostId = section === 'canonical_preview_lines' ? 'bankingPayReadyScrollHost' : (section === 'cases_resolutions' ? 'bankingPayCasesScrollHost' : 'bankingPayBlockedScrollHost');
+      let scrollTop = 0;
+      try { scrollTop = document.getElementById(scrollHostId)?.scrollTop || 0; } catch {}
+      pageState.loading = true;
+      pageState.error = '';
+      await safeRerender(null);
+      try {
+        const page = await bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, {
+          limit,
+          cursor_json: targetCursor || null,
+          cursor: targetCursor || null,
+          expected_session_id: sessionId,
+          current_session_id: sessionId,
+          force_current: true,
+          forceCurrent: true,
+          bypass_cache: true,
+          bypassCache: true,
+          source: 'banking:pay:previewPage'
+        });
+        const rows = getPreviewPageRowsFromPayload(page);
+        const appliedPage = {
+          ...(page && typeof page === 'object' ? page : {}),
+          section,
+          requested_section: section,
+          resolved_section: section,
+          rows,
+          items: rows,
+          current_page: targetPage,
+          page_number: targetPage,
+          limit
+        };
+        if (typeof applyPayWorkbenchPreviewToState === 'function') {
+          applyPayWorkbenchPreviewToState({
+            ok: true,
+            session_id: sessionId,
+            preview_pages: { [section]: appliedPage },
+            previewPageCache: { [section]: appliedPage },
+            preview: { preview_pages: { [section]: appliedPage }, previewPageCache: { [section]: appliedPage } }
+          });
+        }
+        pageState.current_page = targetPage;
+        pageState.currentPage = targetPage;
+        pageState.limit = limit;
+        pageState.cursor_stack = cursorStack;
+        pageState.cursorStack = cursorStack;
+        pageState.next_cursor = appliedPage.next_cursor ?? appliedPage.nextCursor ?? null;
+        pageState.nextCursor = pageState.next_cursor;
+        pageState.has_more = appliedPage.has_more === true || appliedPage.hasMore === true;
+        pageState.loading = false;
+        pageState.error = '';
+      } catch (error) {
+        pageState.loading = false;
+        pageState.error = String(error?.message || error || 'Page could not be loaded.');
+        throw error;
+      } finally {
+        try { setTimeout(() => { const host = document.getElementById(scrollHostId); if (host) host.scrollTop = scrollTop; }, 0); } catch {}
+      }
     };
 
     const ensurePayWorkbenchUiState = () => {
@@ -86802,7 +87109,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       }
       return { selected_preview_row_ids: [...existingSelected], selected_preview_row_mode: 'EXPLICIT_SUBSET' };
     }
-    return { selected_preview_row_ids: [...validPreviewRowIds], selected_preview_row_mode: 'IMPLICIT_ALL' };
+    return { selected_preview_row_ids: [], selected_preview_row_mode: 'IMPLICIT_ALL' };
   };
 
   const decisions = (typeof ensurePayWizardDecisionState === 'function')
@@ -88269,7 +88576,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (!previewRowIds.length) return;
       const currentState = String(ds('groupSelectionState') || dget('data-group-selection-state') || '').trim().toUpperCase();
       const selectAllChildren = currentState !== 'ALL';
-      setPreviewRowsSelection(previewRowIds, selectAllChildren);
+      await setPreviewRowsSelection(previewRowIds, selectAllChildren);
       await safeRerender(null);
       return;
     }
@@ -88298,25 +88605,39 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       return;
     }
 
+    if (a === 'banking:pay:previewPage') {
+      if (kind !== 'click') return;
+      const sectionKey = String(ds('sectionKey') || dget('data-section-key') || '').trim();
+      const direction = String(ds('pageDirection') || dget('data-page-direction') || '').trim().toLowerCase();
+      if (!sectionKey || !['prev', 'previous', 'next'].includes(direction)) return;
+      try {
+        await loadPayWorkbenchPreviewPageForSection(sectionKey, direction === 'previous' ? 'prev' : direction);
+      } catch (error) {
+        toast(error?.message || error || 'Preview page could not be loaded.');
+      }
+      await safeRerender(null);
+      return;
+    }
+
     if (a === 'banking:pay:togglePreviewRow') {
       if (kind !== 'change') return;
       const previewRowId = String(ds('previewRowId') || dget('data-preview-row-id') || '').trim();
       const checked = !!(el && el.checked === true);
-      togglePreviewRowSelection(previewRowId, checked);
+      await togglePreviewRowSelection(previewRowId, checked);
       await safeRerender(null);
       return;
     }
 
     if (a === 'banking:pay:selectAllPreviewRows') {
       if (kind !== 'click') return;
-      setPreviewRowsSelection(getVisibleRenderedPreviewRowIds(), true);
+      await setPreviewRowsGlobalSelection(true);
       await safeRerender(null);
       return;
     }
 
     if (a === 'banking:pay:clearAllPreviewRows') {
       if (kind !== 'click') return;
-      setPreviewRowsSelection(getVisibleRenderedPreviewRowIds(), false);
+      await setPreviewRowsGlobalSelection(false);
       await safeRerender(null);
       return;
     }
@@ -92595,8 +92916,6 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
   return { ok: true };
 }
-
-
 
 async function openBankingPayCancelResolvedRatesModal(seed = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -113187,6 +113506,7 @@ function computePayWorkbenchSessionSignature(input = null) {
   return stableStringify(signaturePayload);
 }
 
+
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -113834,7 +114154,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       }
       return { selected_preview_row_ids: [...existingSelected], selected_preview_row_mode: 'EXPLICIT_SUBSET' };
     }
-    return { selected_preview_row_ids: [...validPreviewRowIds], selected_preview_row_mode: 'IMPLICIT_ALL' };
+    return { selected_preview_row_ids: [], selected_preview_row_mode: 'IMPLICIT_ALL' };
   };
 
 
@@ -115042,6 +115362,9 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
 
   return normalizedEnvelope;
 }
+
+
+
 
 
 
