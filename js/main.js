@@ -134456,6 +134456,12 @@ const onSaveTimesheet = async () => {
   // ─────────────────────────────────────────────────────────────
 
     const qrStatusRaw = String(det?.qr_status || tsLocal?.qr_status || '').toUpperCase();
+  const qrStatusRequiresAfterSaveDecision = (() => {
+    const status = String(qrStatusRaw || '').trim().toUpperCase();
+    if (!status) return false;
+    if (['MANUAL', 'NONE', 'NULL', 'DISABLED', 'REVOKED', 'REVOKED_TO_MANUAL', 'NOT_REQUIRED', 'NO_QR'].includes(status)) return false;
+    return true;
+  })();
 
   const preQrCurrentOnHold    = !!tsfinLocal.pay_on_hold;
   const preQrPayHoldDesired   = (st.payHoldDesired === true || st.payHoldDesired === false) ? st.payHoldDesired : null;
@@ -134477,10 +134483,10 @@ const onSaveTimesheet = async () => {
 
   // Only prompt when:
   // - we have a real timesheet id (not planned week),
-  // - QR is active/known on this timesheet,
+  // - QR is active/known on this timesheet and is not already manual/non-QR,
   // - not locked,
   // - and QR-sensitive content actually changed.
-  if (!!tsIdSave && qrStatusRaw && !lockedNow && qrSensitiveChange && !preQrOnlyExpensesDirty) {
+  if (!!tsIdSave && qrStatusRequiresAfterSaveDecision && !lockedNow && qrSensitiveChange && !preQrOnlyExpensesDirty) {
     const decision = await openQrAfterSaveModal({
       context: {
         timesheet_id: tsIdSave || null,
@@ -134558,6 +134564,7 @@ const onSaveTimesheet = async () => {
     scheduleChangedDaily,
     qrSensitiveChange,
     qrStatusRaw,
+    qrStatusRequiresAfterSaveDecision,
 
     // ✅ NEW: expenses change detection
     expensesChanged,
