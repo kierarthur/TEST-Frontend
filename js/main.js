@@ -135201,255 +135201,340 @@ const onSaveTimesheet = async () => {
   };
 
   const adoptSimpleTimesheetLifecycleSignatureFromSaveResponse = (saveResult, args = {}) => {
-    const ctx = window.modalCtx || null;
-    if (!ctx) {
-      return { ok: false, reason: 'NO_MODAL_CONTEXT' };
-    }
+  const ctx = window.modalCtx || null;
+  if (!ctx) return { ok: false, reason: 'NO_MODAL_CONTEXT' };
 
-    const identity = (args && typeof args === 'object') ? args : {};
-    const rowNow = ctx.data || {};
-    const detailsNow = ctx.timesheetDetails || {};
-    const tsfinNow = detailsNow.tsfin || {};
-    const tsNow = detailsNow.timesheet || {};
-    const response = (saveResult && typeof saveResult === 'object') ? saveResult : {};
-    const responseData = (response.data && typeof response.data === 'object') ? response.data : {};
-    const responseTsfin = (response.tsfin && typeof response.tsfin === 'object') ? response.tsfin : {};
-    const responseLifecycle =
-      (response.lifecycle_patch && typeof response.lifecycle_patch === 'object') ? response.lifecycle_patch :
-      ((response.lifecyclePatch && typeof response.lifecyclePatch === 'object') ? response.lifecyclePatch :
-      ((response.lifecycle_signature && typeof response.lifecycle_signature === 'object') ? response.lifecycle_signature :
-      ((response.lifecycle && typeof response.lifecycle === 'object') ? response.lifecycle : {})));
-    const firstRowObject = (...values) => {
-      for (const value of values) {
-        if (Array.isArray(value)) {
-          const row = value.find((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
-          if (row) return row;
-        } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-          return value;
-        }
+  const identity = (args && typeof args === 'object') ? args : {};
+  const rowNow = ctx.data || {};
+  const detailsNow = ctx.timesheetDetails || {};
+  const tsNow = detailsNow.timesheet || {};
+  const response = (saveResult && typeof saveResult === 'object') ? saveResult : {};
+  const responseData = (response.data && typeof response.data === 'object') ? response.data : {};
+  const responseLifecycle =
+    (response.lifecycle_patch && typeof response.lifecycle_patch === 'object') ? response.lifecycle_patch :
+    ((response.lifecyclePatch && typeof response.lifecyclePatch === 'object') ? response.lifecyclePatch :
+    ((response.lifecycle_signature && typeof response.lifecycle_signature === 'object') ? response.lifecycle_signature :
+    ((response.lifecycle && typeof response.lifecycle === 'object') ? response.lifecycle : {})));
+  const responseTsfin =
+    (response.tsfin && typeof response.tsfin === 'object') ? response.tsfin :
+    ((responseData.tsfin && typeof responseData.tsfin === 'object') ? responseData.tsfin :
+    ((responseLifecycle.tsfin && typeof responseLifecycle.tsfin === 'object') ? responseLifecycle.tsfin : {}));
+
+  const firstRowObject = function firstRowObject() {
+    for (let index = 0; index < arguments.length; index += 1) {
+      const value = arguments[index];
+      if (Array.isArray(value)) {
+        const row = value.find((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
+        if (row) return row;
+      } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return value;
       }
-      return {};
-    };
-    const responseAffectedRow = firstRowObject(
-      response.flattened_rows,
-      response.flattenedRows,
-      response.affected_rows,
-      response.affectedRows,
-      response.rows,
-      response.row,
-      response.data_row,
-      response.dataRow,
-      response.row_patch,
-      response.rowPatch
-    );
-
-    const id = trimStr(
-      identity.timesheet_id || identity.timesheetId || identity.current_timesheet_id || identity.currentTimesheetId ||
-      response.current_timesheet_id || response.timesheet_id || responseData.current_timesheet_id || responseData.timesheet_id ||
-      responseLifecycle.current_timesheet_id || responseLifecycle.timesheet_id ||
-      responseAffectedRow.current_timesheet_id || responseAffectedRow.timesheet_id ||
-      responseTsfin.timesheet_id || rowNow.current_timesheet_id || rowNow.timesheet_id || detailsNow.current_timesheet_id || tsNow.timesheet_id || ''
-    );
-    if (!id) {
-      clearTimesheetLifecycleSavePending(ctx, false);
-      return { ok: false, reason: 'MISSING_TIMESHEET_ID' };
     }
-
-    const signature = pickSignature(
-      response.backend_row_signature,
-      response.mutation_row_signature,
-      response.row_signature,
-      response.expected_row_signature,
-      response.row_backend_signature,
-      responseData.backend_row_signature,
-      responseData.mutation_row_signature,
-      responseData.row_signature,
-      responseData.expected_row_signature,
-      responseTsfin.backend_row_signature,
-      responseTsfin.mutation_row_signature,
-      responseTsfin.row_signature,
-      responseTsfin.expected_row_signature,
-      responseLifecycle.backend_row_signature,
-      responseLifecycle.mutation_row_signature,
-      responseLifecycle.row_signature,
-      responseLifecycle.expected_row_signature,
-      responseLifecycle.signature,
-      responseAffectedRow.backend_row_signature,
-      responseAffectedRow.mutation_row_signature,
-      responseAffectedRow.row_signature,
-      responseAffectedRow.expected_row_signature,
-      responseAffectedRow.row_backend_signature,
-      responseAffectedRow.signature
-    );
-
-    if (!signature) {
-      try {
-        ctx.__simpleTimesheetLifecycleRefreshRequired = true;
-        ctx.__simpleTimesheetLifecycleRefreshTimesheetId = String(id);
-        ctx.__simpleTimesheetLifecycleRefreshMessage = 'Saved, but the refreshed timesheet signature was not returned. Refresh before authorising.';
-        ctx.__timesheetLifecycleCriticalStateIncomplete = true;
-        ctx.__timesheetLifecycleCriticalStateReason = 'SAVE_RESPONSE_MISSING_SIGNATURE';
-        ctx.__timesheetLifecyclePermissionStateComplete = false;
-        ctx.__timesheetLifecyclePriorityBadgesComplete = false;
-        clearTimesheetLifecycleSavePending(ctx, false);
-      } catch {}
-      return { ok: false, reason: 'MISSING_ROW_SIGNATURE', timesheet_id: id };
+    return {};
+  };
+  const responseAffectedRow = firstRowObject(
+    response.flattened_rows,
+    response.flattenedRows,
+    response.affected_rows,
+    response.affectedRows,
+    response.rows,
+    response.row,
+    response.data_row,
+    response.dataRow,
+    response.row_patch,
+    response.rowPatch,
+    responseData.row,
+    responseData.row_patch,
+    responseData.affected_row,
+    responseData.affectedRow
+  );
+  const read = function read() {
+    for (let index = 0; index < arguments.length; index += 1) {
+      const value = arguments[index];
+      if (trimStr(value)) return value;
     }
-
-    const source = trimStr(identity.source || identity.lifecycleSource || response.lifecycle_source || response.source || 'timesheet-save') || 'timesheet-save';
-    const contractWeekId = trimStr(
-      identity.contract_week_id || identity.contractWeekId ||
-      response.contract_week_id || responseData.contract_week_id || responseLifecycle.contract_week_id || responseAffectedRow.contract_week_id ||
-      rowNow.contract_week_id || detailsNow.contract_week_id || ''
-    ) || null;
-    const bookingId = trimStr(
-      identity.booking_id || identity.bookingId ||
-      response.booking_id || responseData.booking_id || responseLifecycle.booking_id || responseAffectedRow.booking_id ||
-      rowNow.booking_id || detailsNow.booking_id || detailsNow.contract_week?.booking_id || ''
-    ) || null;
-
-    rememberPostSaveLifecycleSignature(ctx, signature, {
-      source,
-      timesheet_id: id,
-      contract_week_id: contractWeekId,
-      booking_id: bookingId,
-      mutationStartedAt: Number(identity.mutationStartedAt || identity.mutation_started_at || ctx.__timesheetLatestSavedMutationStartedAt || 0) || null
-    });
-
-    const truthyFlag = (...values) => values.some((value) => {
+    return undefined;
+  };
+  const boolTrue = function boolTrue() {
+    for (let index = 0; index < arguments.length; index += 1) {
+      const value = arguments[index];
       if (value === true || value === 1) return true;
-      const raw = String(value == null ? '' : value).trim().toLowerCase();
-      return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
-    });
-    const responseRefreshRequired = truthyFlag(
-      response.refresh_required,
-      response.requires_affected_row_refresh,
-      response.requires_full_details_refresh,
-      response.requiresAffectedRowsRefresh,
-      response.requiresFullDetailsRefresh,
-      response.lifecycle_refresh_required,
-      response.row_stale,
-      response.stale,
-      responseLifecycle.refresh_required,
-      responseLifecycle.requires_affected_row_refresh,
-      responseLifecycle.requires_full_details_refresh,
-      responseLifecycle.requiresAffectedRowsRefresh,
-      responseLifecycle.requiresFullDetailsRefresh,
-      responseLifecycle.lifecycle_refresh_required,
-      responseLifecycle.row_stale,
-      responseLifecycle.stale,
-      responseAffectedRow.refresh_required,
-      responseAffectedRow.requires_affected_row_refresh,
-      responseAffectedRow.requires_full_details_refresh,
-      responseAffectedRow.requiresAffectedRowsRefresh,
-      responseAffectedRow.requiresFullDetailsRefresh,
-      responseAffectedRow.lifecycle_refresh_required,
-      responseAffectedRow.row_stale,
-      responseAffectedRow.stale
-    );
-    const saveResponseRequiresNetworkBeforeAuthorise = !!responseRefreshRequired;
-    if (saveResponseRequiresNetworkBeforeAuthorise) {
-      try {
-        ctx.__timesheetLifecycleTrustRequiresNetworkBeforeAuthorise = true;
-        ctx.__simpleTimesheetPostSaveLifecyclePending = true;
-        ctx.__timesheetLifecycleSaveResponseRefreshRequired = truthyFlag(response.refresh_required, response.lifecycle_refresh_required, responseLifecycle.refresh_required, responseAffectedRow.refresh_required);
-        ctx.__timesheetLifecycleSaveResponseRequiresAffectedRowRefresh = truthyFlag(response.requires_affected_row_refresh, response.requiresAffectedRowsRefresh, responseLifecycle.requires_affected_row_refresh, responseAffectedRow.requires_affected_row_refresh);
-        ctx.__timesheetLifecycleSaveResponsePendingReason = ctx.__timesheetLifecycleSaveResponseRequiresAffectedRowRefresh
-          ? 'SAVE_RESPONSE_AFFECTED_ROWS_REFRESH_REQUIRED'
-          : 'SAVE_RESPONSE_REFRESH_REQUIRED';
-        ctx.__timesheetAuthorisePreflightRefreshRequired = true;
-        ctx.__simpleTimesheetLifecycleRefreshTimesheetId = String(id);
-        ctx.__simpleTimesheetLifecycleRefreshMessage = 'Saved. The latest lifecycle state will be checked before authorising.';
-      } catch {}
+      if (['true', 't', '1', 'yes', 'y', 'on'].includes(String(value == null ? '' : value).trim().toLowerCase())) return true;
     }
-
-    const lifecyclePatch = {
-      ...responseAffectedRow,
-      ...responseLifecycle,
-      ...responseData,
-      ...response,
-      // TSFIN is deliberately nested and only lifecycle/signature fields are used by applyTimesheetLifecyclePatchToModal.
-      tsfin: responseTsfin,
-      id,
-      timesheet_id: id,
-      current_timesheet_id: id,
-      expected_timesheet_id: id,
-      contract_week_id: contractWeekId,
-      booking_id: bookingId,
-      processing_status: response.processing_status || responseData.processing_status || responseTsfin.processing_status || responseLifecycle.processing_status || responseAffectedRow.processing_status || tsfinNow.processing_status || rowNow.processing_status || null,
-      backend_row_signature: signature,
-      mutation_row_signature: signature,
-      row_signature: signature,
-      expected_row_signature: signature,
-      permission_state_patch_complete: response.permission_state_patch_complete === true || responseLifecycle.permission_state_patch_complete === true || responseAffectedRow.permission_state_patch_complete === true,
-      priority_badges_patch_complete: response.priority_badges_patch_complete === true || responseLifecycle.priority_badges_patch_complete === true || responseAffectedRow.priority_badges_patch_complete === true,
-      immediate_lifecycle_patch_available: response.immediate_lifecycle_patch_available === true || responseLifecycle.immediate_lifecycle_patch_available === true || responseAffectedRow.immediate_lifecycle_patch_available === true,
-      refresh_required: false,
-      requires_affected_row_refresh: false,
-      requires_full_details_refresh: false,
-      requiresAffectedRowsRefresh: false,
-      requiresFullDetailsRefresh: false,
-      row_stale: false,
-      lifecycle_refresh_failed: false
-    };
-
-    if (lifecyclePatch.permission_state_patch_complete !== true) delete lifecyclePatch.permission_state_patch_complete;
-    if (lifecyclePatch.priority_badges_patch_complete !== true) delete lifecyclePatch.priority_badges_patch_complete;
-    if (lifecyclePatch.immediate_lifecycle_patch_available !== true) delete lifecyclePatch.immediate_lifecycle_patch_available;
-
-    let patchResult = null;
-    if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
-      patchResult = applyTimesheetLifecyclePatchToModal(ctx, lifecyclePatch, {
-        action: 'lifecycle',
-        source,
-        requireSignature: true,
-        allowFallback: false,
-        timesheet_id: id,
-        contract_week_id: lifecyclePatch.contract_week_id || undefined,
-        mutationStartedAt: Number(identity.mutationStartedAt || identity.mutation_started_at || ctx.__timesheetLatestSavedMutationStartedAt || 0) || Date.now()
-      });
-    }
-
-    if (patchResult && patchResult.applied && patchResult.permissionStateComplete && patchResult.priorityBadgesComplete) {
-      ctx.__timesheetLatestSuccessfulSaveAt = Date.now();
-      clearTimesheetLifecycleSavePending(ctx, true);
-      ctx.__timesheetLifecycleCriticalStateIncomplete = false;
-      if (saveResponseRequiresNetworkBeforeAuthorise) {
-        ctx.__timesheetLifecycleTrustRequiresNetworkBeforeAuthorise = true;
-        ctx.__simpleTimesheetPostSaveLifecyclePending = true;
-        ctx.__timesheetAuthorisePreflightRefreshRequired = true;
-        if (ctx.__timesheetLifecycleTrusted && typeof ctx.__timesheetLifecycleTrusted === 'object') {
-          ctx.__timesheetLifecycleTrusted = {
-            ...ctx.__timesheetLifecycleTrusted,
-            source,
-            trusted: true,
-            requires_network_before_authorise: true,
-            post_save_lifecycle_pending: true,
-            pending_reason: ctx.__timesheetLifecycleSaveResponsePendingReason || 'SAVE_RESPONSE_REFRESH_REQUIRED'
-          };
-        }
-      }
-      try {
-        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-        if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
-      } catch {}
-      return { ok: true, signature, timesheet_id: id, source, patchResult, requires_network_before_authorise: saveResponseRequiresNetworkBeforeAuthorise };
-    }
-
-    ctx.__simpleTimesheetLifecycleRefreshRequired = true;
-    ctx.__simpleTimesheetLifecycleRefreshTimesheetId = String(id);
-    ctx.__simpleTimesheetLifecycleRefreshMessage = 'Saved, but permission-critical lifecycle state is incomplete. Refresh before authorising.';
-    ctx.__timesheetLifecycleCriticalStateIncomplete = true;
-    ctx.__timesheetLifecycleCriticalStateReason = patchResult?.reason || 'SAVE_RESPONSE_LIFECYCLE_PATCH_INCOMPLETE';
-    ctx.__timesheetLifecyclePermissionStateComplete = false;
-    ctx.__timesheetLifecyclePriorityBadgesComplete = false;
-    clearTimesheetLifecycleSavePending(ctx, false);
+    return false;
+  };
+  const markBlocked = (reason, id) => {
     try {
+      ctx.__simpleTimesheetLifecycleRefreshRequired = true;
+      ctx.__simpleTimesheetLifecycleRefreshTimesheetId = id ? String(id) : '';
+      ctx.__simpleTimesheetLifecycleRefreshMessage = 'Your changes were saved, but the latest permission-critical timesheet state needs to be refreshed before authorising.';
+      ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+      ctx.__timesheetLifecycleCriticalStateReason = reason;
+      ctx.__timesheetLifecyclePermissionStateComplete = false;
+      ctx.__timesheetLifecyclePriorityBadgesComplete = false;
+      clearTimesheetLifecycleSavePending(ctx, false);
       const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
       if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
     } catch {}
-    return { ok: false, reason: patchResult?.reason || 'PATCH_INCOMPLETE', timesheet_id: id, signature, source };
+    return { ok: false, reason, timesheet_id: id || null, requires_refresh: true };
   };
+
+  const expectedTimesheetId = trimStr(identity.timesheet_id || identity.timesheetId || identity.current_timesheet_id || identity.currentTimesheetId || rowNow.current_timesheet_id || rowNow.timesheet_id || detailsNow.current_timesheet_id || tsNow.timesheet_id || '');
+  const id = trimStr(read(
+    response.current_timesheet_id,
+    response.timesheet_id,
+    responseData.current_timesheet_id,
+    responseData.timesheet_id,
+    responseLifecycle.current_timesheet_id,
+    responseLifecycle.timesheet_id,
+    responseAffectedRow.current_timesheet_id,
+    responseAffectedRow.timesheet_id,
+    responseTsfin.timesheet_id
+  ));
+  if (!id) return markBlocked('MISSING_TIMESHEET_ID', expectedTimesheetId || null);
+  if (expectedTimesheetId && id !== expectedTimesheetId) return markBlocked('SAVE_RESPONSE_TIMESHEET_ID_MISMATCH', id);
+
+  const expectedContractWeekId = trimStr(identity.contract_week_id || identity.contractWeekId || rowNow.contract_week_id || detailsNow.contract_week_id || '');
+  const contractWeekId = trimStr(read(
+    response.contract_week_id,
+    responseData.contract_week_id,
+    responseLifecycle.contract_week_id,
+    responseAffectedRow.contract_week_id
+  ));
+  if (expectedContractWeekId && !contractWeekId) return markBlocked('SAVE_RESPONSE_MISSING_CONTRACT_WEEK_ID', id);
+  if (expectedContractWeekId && contractWeekId !== expectedContractWeekId) return markBlocked('SAVE_RESPONSE_CONTRACT_WEEK_ID_MISMATCH', id);
+  const contractWeekStatus = trimStr(read(
+    response.contract_week_status,
+    responseData.contract_week_status,
+    responseLifecycle.contract_week_status,
+    responseAffectedRow.contract_week_status,
+    response.status?.contract_week_status,
+    responseData.status?.contract_week_status
+  ));
+  if ((expectedContractWeekId || contractWeekId) && !contractWeekStatus) return markBlocked('SAVE_RESPONSE_MISSING_CONTRACT_WEEK_STATUS', id);
+
+  const signature = pickSignature(
+    response.backend_row_signature,
+    response.mutation_row_signature,
+    response.row_signature,
+    response.expected_row_signature,
+    response.row_backend_signature,
+    responseData.backend_row_signature,
+    responseData.mutation_row_signature,
+    responseData.row_signature,
+    responseData.expected_row_signature,
+    responseTsfin.backend_row_signature,
+    responseTsfin.mutation_row_signature,
+    responseTsfin.row_signature,
+    responseTsfin.expected_row_signature,
+    responseLifecycle.backend_row_signature,
+    responseLifecycle.mutation_row_signature,
+    responseLifecycle.row_signature,
+    responseLifecycle.expected_row_signature,
+    responseLifecycle.signature,
+    responseAffectedRow.backend_row_signature,
+    responseAffectedRow.mutation_row_signature,
+    responseAffectedRow.row_signature,
+    responseAffectedRow.expected_row_signature,
+    responseAffectedRow.row_backend_signature,
+    responseAffectedRow.signature
+  );
+  if (!signature) return markBlocked('MISSING_ROW_SIGNATURE', id);
+
+  if (boolTrue(
+    response.refresh_required,
+    response.requires_affected_row_refresh,
+    response.requires_full_details_refresh,
+    response.requiresAffectedRowsRefresh,
+    response.requiresFullDetailsRefresh,
+    response.lifecycle_refresh_required,
+    response.row_stale,
+    response.stale,
+    response.unknown_outcome,
+    response.unknownOutcome,
+    response.outcome_unknown,
+    responseData.refresh_required,
+    responseData.requires_affected_row_refresh,
+    responseData.requires_full_details_refresh,
+    responseData.requiresAffectedRowsRefresh,
+    responseData.requiresFullDetailsRefresh,
+    responseData.lifecycle_refresh_required,
+    responseData.row_stale,
+    responseData.stale,
+    responseData.unknown_outcome,
+    responseData.unknownOutcome,
+    responseLifecycle.refresh_required,
+    responseLifecycle.requires_affected_row_refresh,
+    responseLifecycle.requires_full_details_refresh,
+    responseLifecycle.requiresAffectedRowsRefresh,
+    responseLifecycle.requiresFullDetailsRefresh,
+    responseLifecycle.lifecycle_refresh_required,
+    responseLifecycle.row_stale,
+    responseLifecycle.stale,
+    responseLifecycle.unknown_outcome,
+    responseLifecycle.unknownOutcome,
+    responseAffectedRow.refresh_required,
+    responseAffectedRow.requires_affected_row_refresh,
+    responseAffectedRow.requires_full_details_refresh,
+    responseAffectedRow.requiresAffectedRowsRefresh,
+    responseAffectedRow.requiresFullDetailsRefresh,
+    responseAffectedRow.lifecycle_refresh_required,
+    responseAffectedRow.row_stale,
+    responseAffectedRow.stale,
+    responseAffectedRow.unknown_outcome,
+    responseAffectedRow.unknownOutcome
+  )) {
+    return markBlocked('SAVE_RESPONSE_REFRESH_OR_STALE_FLAG', id);
+  }
+
+  const processingStatus = trimStr(read(
+    response.processing_status,
+    responseData.processing_status,
+    responseTsfin.processing_status,
+    responseLifecycle.processing_status,
+    responseAffectedRow.processing_status,
+    response.status?.processing_status,
+    responseData.status?.processing_status
+  ));
+  const paymentStatus = trimStr(read(
+    response.payment_status,
+    response.pay_status,
+    responseData.payment_status,
+    responseData.pay_status,
+    responseTsfin.payment_status,
+    responseTsfin.pay_status,
+    responseLifecycle.payment_status,
+    responseLifecycle.pay_status,
+    responseAffectedRow.payment_status,
+    responseAffectedRow.pay_status,
+    response.status?.payment_status,
+    responseData.status?.payment_status
+  ));
+  if (!processingStatus) return markBlocked('SAVE_RESPONSE_MISSING_PROCESSING_STATUS', id);
+  if (!paymentStatus) return markBlocked('SAVE_RESPONSE_MISSING_PAYMENT_STATUS', id);
+
+  const tsfinId = trimStr(read(
+    response.tsfin_id,
+    response.timesheet_financial_id,
+    responseData.tsfin_id,
+    responseData.timesheet_financial_id,
+    responseTsfin.id,
+    responseTsfin.tsfin_id,
+    responseTsfin.timesheet_financial_id,
+    responseLifecycle.tsfin_id,
+    responseLifecycle.timesheet_financial_id,
+    responseAffectedRow.tsfin_id,
+    responseAffectedRow.timesheet_financial_id
+  ));
+  const tsfinAbsent = boolTrue(
+    response.tsfin_absent,
+    response.no_tsfin_required,
+    response.authoritative_tsfin_absent,
+    responseData.tsfin_absent,
+    responseData.no_tsfin_required,
+    responseData.authoritative_tsfin_absent,
+    responseTsfin.tsfin_absent,
+    responseTsfin.no_tsfin_required,
+    responseTsfin.authoritative_tsfin_absent,
+    responseLifecycle.tsfin_absent,
+    responseLifecycle.no_tsfin_required,
+    responseLifecycle.authoritative_tsfin_absent,
+    responseAffectedRow.tsfin_absent,
+    responseAffectedRow.no_tsfin_required,
+    responseAffectedRow.authoritative_tsfin_absent
+  );
+  if (!tsfinId && !tsfinAbsent) return markBlocked('SAVE_RESPONSE_MISSING_TSFIN_AUTHORITY', id);
+
+  const permissionComplete = boolTrue(
+    response.permission_state_patch_complete,
+    response.permissionStateComplete,
+    responseData.permission_state_patch_complete,
+    responseData.permissionStateComplete,
+    responseLifecycle.permission_state_patch_complete,
+    responseLifecycle.permissionStateComplete,
+    responseAffectedRow.permission_state_patch_complete,
+    responseAffectedRow.permissionStateComplete
+  );
+  const badgesComplete = boolTrue(
+    response.priority_badges_patch_complete,
+    response.priorityBadgesComplete,
+    response.payment_status_badges_patch_complete,
+    response.paymentStatusBadgesComplete,
+    responseData.priority_badges_patch_complete,
+    responseData.priorityBadgesComplete,
+    responseData.payment_status_badges_patch_complete,
+    responseData.paymentStatusBadgesComplete,
+    responseLifecycle.priority_badges_patch_complete,
+    responseLifecycle.priorityBadgesComplete,
+    responseAffectedRow.priority_badges_patch_complete,
+    responseAffectedRow.priorityBadgesComplete
+  );
+  if (!permissionComplete) return markBlocked('SAVE_RESPONSE_PERMISSION_PATCH_INCOMPLETE', id);
+  if (!badgesComplete) return markBlocked('SAVE_RESPONSE_PRIORITY_BADGES_INCOMPLETE', id);
+
+  const source = trimStr(identity.source || identity.lifecycleSource || response.lifecycle_source || response.source || 'timesheet-save') || 'timesheet-save';
+  const lifecyclePatch = Object.assign({}, responseAffectedRow, responseLifecycle, responseData, response, {
+    tsfin: responseTsfin,
+    id,
+    timesheet_id: id,
+    current_timesheet_id: id,
+    expected_timesheet_id: id,
+    contract_week_id: contractWeekId || null,
+    contract_week_status: contractWeekStatus,
+    processing_status: processingStatus,
+    payment_status: paymentStatus,
+    pay_status: paymentStatus,
+    backend_row_signature: signature,
+    mutation_row_signature: signature,
+    row_signature: signature,
+    expected_row_signature: signature,
+    permission_state_patch_complete: true,
+    priority_badges_patch_complete: true,
+    immediate_lifecycle_patch_available: true,
+    refresh_required: false,
+    requires_affected_row_refresh: false,
+    requires_full_details_refresh: false,
+    requiresAffectedRowsRefresh: false,
+    requiresFullDetailsRefresh: false,
+    row_stale: false,
+    stale: false,
+    lifecycle_refresh_failed: false
+  });
+  let patchResult = null;
+  if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
+    patchResult = applyTimesheetLifecyclePatchToModal(ctx, lifecyclePatch, {
+      action: 'lifecycle',
+      source,
+      requireSignature: true,
+      allowFallback: false,
+      timesheet_id: id,
+      contract_week_id: lifecyclePatch.contract_week_id || undefined,
+      mutationStartedAt: Number(identity.mutationStartedAt || identity.mutation_started_at || ctx.__timesheetLatestSavedMutationStartedAt || 0) || Date.now()
+    });
+  }
+  if (!(patchResult && patchResult.applied && patchResult.permissionStateComplete === true && patchResult.priorityBadgesComplete === true)) {
+    return markBlocked(patchResult?.reason || 'SAVE_RESPONSE_LIFECYCLE_PATCH_INCOMPLETE', id);
+  }
+
+  rememberPostSaveLifecycleSignature(ctx, signature, {
+    source,
+    timesheet_id: id,
+    contract_week_id: contractWeekId || null,
+    booking_id: trimStr(identity.booking_id || identity.bookingId || response.booking_id || responseData.booking_id || responseLifecycle.booking_id || responseAffectedRow.booking_id || rowNow.booking_id || detailsNow.booking_id || detailsNow.contract_week?.booking_id || '') || null,
+    mutationStartedAt: Number(identity.mutationStartedAt || identity.mutation_started_at || ctx.__timesheetLatestSavedMutationStartedAt || 0) || null
+  });
+  ctx.__timesheetLatestSuccessfulSaveAt = Date.now();
+  clearTimesheetLifecycleSavePending(ctx, true);
+  ctx.__timesheetLifecycleCriticalStateIncomplete = false;
+  ctx.__timesheetLifecyclePermissionStateComplete = true;
+  ctx.__timesheetLifecyclePriorityBadgesComplete = true;
+  try {
+    const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+    if (fr && typeof fr._updateButtons === 'function') fr._updateButtons();
+  } catch {}
+  return { ok: true, signature, timesheet_id: id, source, patchResult, requires_network_before_authorise: false };
+};
+
 
   const onlyExpensesDirty = !!(expensesChanged && !hoursScheduleDirty && !refChanged && !segmentControlsDirty && !shouldChangeHold);
   if (onlyExpensesDirty && expenseStorageTargetForSave === 'CONTRACT_WEEK_DRAFT') {
