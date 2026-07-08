@@ -27255,8 +27255,6 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
 }
 
 
-
-
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -27593,8 +27591,14 @@ async function bankingPayPreview(pay_date) {
     const filtersJson = (isPlainObject(wiz.filters_json) ? deep(wiz.filters_json) : (isPlainObject(wiz.filters) ? deep(wiz.filters) : {})) || {};
     const candidateFilterId = trimStr(wiz.candidate_filter_id || '');
     const clientFilterId = trimStr(wiz.client_filter_id || '');
-    if (candidateFilterId) filtersJson.candidate_id = candidateFilterId;
-    if (clientFilterId) filtersJson.client_id = clientFilterId;
+    if (candidateFilterId) {
+      filtersJson.candidate_filter_id = candidateFilterId;
+      filtersJson.candidate_id = candidateFilterId;
+    }
+    if (clientFilterId) {
+      filtersJson.client_filter_id = clientFilterId;
+      filtersJson.client_id = clientFilterId;
+    }
     if (wiz.decisions && Array.isArray(wiz.decisions.candidate_ids) && wiz.decisions.candidate_ids.length > 0) {
       filtersJson.candidate_ids = deep(wiz.decisions.candidate_ids);
     }
@@ -27609,192 +27613,59 @@ async function bankingPayPreview(pay_date) {
     }
     return JSON.stringify(value);
   };
-  const normalizeSessionSignatureForCompare = (value) => {
-    const text = trimStr(value);
-    if (!text) return '';
-    try {
-      return stableStringifyForSignature(JSON.parse(text));
-    } catch {
-      return text;
-    }
-  };
-  const parseSessionSignatureObject = (value) => {
-    if (isPlainObject(value)) {
-      try {
-        return deep(value) || value;
-      } catch {
-        return value;
-      }
-    }
+  const parseSessionSignatureForCompare = (value) => {
     const text = trimStr(value);
     if (!text) return null;
     try {
       const parsed = JSON.parse(text);
-      return isPlainObject(parsed) ? parsed : null;
+      return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
     } catch {
       return null;
     }
   };
-  const signatureUuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const signatureNestedObjects = (...objects) => {
-    const out = [];
-    const push = (obj) => {
-      if (!isPlainObject(obj)) return;
-      out.push(obj);
-      if (isPlainObject(obj.filters_json)) out.push(obj.filters_json);
-      if (isPlainObject(obj.filtersJson)) out.push(obj.filtersJson);
-      if (isPlainObject(obj.filters)) out.push(obj.filters);
-      if (isPlainObject(obj.filter)) out.push(obj.filter);
-    };
-    for (const obj of objects) push(obj);
-    return out;
+  const normalizeSignatureIdArrayForCompare = (value) => {
+    if (!Array.isArray(value)) return [];
+    return Array.from(new Set(value.map((item) => trimStr(item).toLowerCase()).filter(Boolean))).sort();
   };
-  const firstSignatureText = (objects, keys) => {
-    for (const obj of objects) {
-      if (!isPlainObject(obj)) continue;
-      for (const key of keys) {
-        const text = trimStr(obj[key]);
-        if (text) return text;
-      }
+  const readSignatureFieldForCompare = (obj, keys, fallback = '') => {
+    if (!isPlainObject(obj)) return fallback;
+    for (const key of keys) {
+      const value = trimStr(obj[key]);
+      if (value) return value;
     }
-    return '';
+    return fallback;
   };
-  const normaliseSignatureCandidateIdArray = (value) => {
-    const out = [];
-    const push = (item) => {
-      if (Array.isArray(item)) {
-        for (const nested of item) push(nested);
-        return;
-      }
-      const text = trimStr(item).toLowerCase();
-      if (text && signatureUuidRe.test(text)) out.push(text);
-    };
-    push(value);
-    return Array.from(new Set(out)).sort();
-  };
-  const collectSignatureCandidateIds = (...objects) => {
-    const out = [];
-    const push = (value) => {
-      for (const candidateId of normaliseSignatureCandidateIdArray(value)) out.push(candidateId);
-    };
-    for (const obj of signatureNestedObjects(...objects)) {
-      push(obj.candidate_id);
-      push(obj.candidateId);
-      push(obj.candidate_ids);
-      push(obj.candidateIds);
-    }
-    return Array.from(new Set(out)).sort();
-  };
-  const getSignatureSemanticContext = (signatureValue, fallback = {}) => {
-    const signatureObj = parseSessionSignatureObject(signatureValue) || {};
-    const fallbackObj = isPlainObject(fallback) ? fallback : {};
-    const objects = signatureNestedObjects(signatureObj, fallbackObj);
-    const kind = firstSignatureText(objects, ['kind']) || 'BANKING_PAY_WORKBENCH';
-    const payDateText = firstSignatureText(objects, ['pay_date', 'payDate', 'payment_date', 'paymentDate']) || effectivePayDate;
-    const cutoffText = normalizeCutoffDate(firstSignatureText(objects, [
-      'week_ending_cutoff',
-      'weekEndingCutoff',
-      'week_ending_cutoff_date',
-      'weekEndingCutoffDate'
-    ]) || weekEndingCutoffDate);
-    const candidateFilterId = firstSignatureText(objects, [
-      'candidate_filter_id',
-      'candidateFilterId',
-      'filter_candidate_id'
-    ]);
-    const clientFilterId = firstSignatureText(objects, [
-      'client_filter_id',
-      'clientFilterId',
-      'filter_client_id',
-      'client_id',
-      'clientId'
-    ]);
+  const normalizeSessionSignatureObjectForCompare = (obj) => {
+    const source = isPlainObject(obj) ? obj : {};
     return {
-      kind,
-      pay_date: payDateText,
-      week_ending_cutoff: cutoffText,
-      candidate_filter_id: candidateFilterId,
-      client_filter_id: clientFilterId,
-      candidate_ids: collectSignatureCandidateIds(signatureObj, fallbackObj),
-      signature_version: signatureObj.signature_version ?? signatureObj.signatureVersion ?? null,
-      actor_user_id_present: !!trimStr(signatureObj.actor_user_id || signatureObj.actorUserId || '')
+      candidate_filter_id: readSignatureFieldForCompare(source, ['candidate_filter_id', 'candidateFilterId', 'filter_candidate_id']),
+      candidate_ids: normalizeSignatureIdArrayForCompare(source.candidate_ids || source.candidateIds || []),
+      client_filter_id: readSignatureFieldForCompare(source, ['client_filter_id', 'clientFilterId', 'filter_client_id', 'client_id', 'clientId']),
+      kind: readSignatureFieldForCompare(source, ['kind'], 'BANKING_PAY_WORKBENCH') || 'BANKING_PAY_WORKBENCH',
+      pay_date: readSignatureFieldForCompare(source, ['pay_date', 'payDate']),
+      week_ending_cutoff: normalizeCutoffDate(readSignatureFieldForCompare(source, ['week_ending_cutoff', 'weekEndingCutoff', 'week_ending_cutoff_date', 'weekEndingCutoffDate'], ORDINARY_BANKING_CUTOFF_SENTINEL))
     };
   };
-  const signatureArraysEqual = (left, right) => {
-    const a = normaliseSignatureCandidateIdArray(left);
-    const b = normaliseSignatureCandidateIdArray(right);
-    if (a.length !== b.length) return false;
-    return a.every((value, index) => value === b[index]);
+  const normalizeSessionSignatureForCompare = (value) => {
+    const text = trimStr(value);
+    if (!text) return '';
+    const parsed = parseSessionSignatureForCompare(text);
+    if (parsed) return stableStringifyForSignature(normalizeSessionSignatureObjectForCompare(parsed));
+    return text;
   };
-  const currentSignatureSemanticFallback = () => ({
-    kind: 'BANKING_PAY_WORKBENCH',
-    pay_date: effectivePayDate,
-    payDate: effectivePayDate,
-    week_ending_cutoff: weekEndingCutoffDate,
-    week_ending_cutoff_date: weekEndingCutoffDate,
-    candidate_filter_id: trimStr(wiz.candidate_filter_id || ''),
-    client_filter_id: trimStr(wiz.client_filter_id || ''),
-    filters_json: (() => {
-      try {
-        return deep(openFiltersJson) || {};
-      } catch {
-        return {};
-      }
-    })(),
-    candidate_ids: collectSignatureCandidateIds(openFiltersJson, wiz.decisions || {})
-  });
-  const redactSignatureSemanticForError = (ctx) => ({
-    kind: trimStr(ctx?.kind || ''),
-    pay_date: trimStr(ctx?.pay_date || ''),
-    week_ending_cutoff: normalizeCutoffDate(ctx?.week_ending_cutoff || ''),
-    candidate_filter_id: trimStr(ctx?.candidate_filter_id || ''),
-    client_filter_id: trimStr(ctx?.client_filter_id || ''),
-    candidate_ids: normaliseSignatureCandidateIdArray(ctx?.candidate_ids),
-    signature_version: ctx?.signature_version ?? null,
-    actor_user_id_present: !!ctx?.actor_user_id_present
-  });
-  const signaturesAreSemanticallyCompatible = (expected, returned, fallback = {}) => {
-    const expectedText = normalizeSessionSignatureForCompare(expected);
-    const returnedText = normalizeSessionSignatureForCompare(returned);
-    if (!expectedText || !returnedText) {
-      return { compatible: false, reasons: ['MISSING_SESSION_SIGNATURE'] };
+  const sessionSignaturesSemanticallyCompatible = (expected, returned) => {
+    const expectedText = trimStr(expected);
+    const returnedText = trimStr(returned);
+    if (!expectedText || !returnedText) return true;
+    const expectedParsed = parseSessionSignatureForCompare(expectedText);
+    const returnedParsed = parseSessionSignatureForCompare(returnedText);
+    if (expectedParsed && returnedParsed) {
+      const expectedNormalised = normalizeSessionSignatureObjectForCompare(expectedParsed);
+      const returnedNormalised = normalizeSessionSignatureObjectForCompare(returnedParsed);
+      return stableStringifyForSignature(expectedNormalised) === stableStringifyForSignature(returnedNormalised);
     }
-    if (expectedText === returnedText) {
-      const semantic = getSignatureSemanticContext(returned, fallback);
-      return { compatible: true, reasons: [], expected: semantic, returned: semantic };
-    }
-    const expectedObj = parseSessionSignatureObject(expected);
-    const returnedObj = parseSessionSignatureObject(returned);
-    if (!expectedObj || !returnedObj) {
-      return { compatible: false, reasons: ['UNPARSABLE_SESSION_SIGNATURE'] };
-    }
-    const expectedCtx = getSignatureSemanticContext(expectedObj, fallback);
-    const returnedCtx = getSignatureSemanticContext(returnedObj, {
-      kind: fallback?.kind || 'BANKING_PAY_WORKBENCH',
-      pay_date: fallback?.pay_date || fallback?.payDate || effectivePayDate,
-      payDate: fallback?.payDate || fallback?.pay_date || effectivePayDate,
-      week_ending_cutoff: fallback?.week_ending_cutoff || fallback?.weekEndingCutoff || fallback?.week_ending_cutoff_date || fallback?.weekEndingCutoffDate || weekEndingCutoffDate,
-      week_ending_cutoff_date: fallback?.week_ending_cutoff_date || fallback?.weekEndingCutoffDate || fallback?.week_ending_cutoff || fallback?.weekEndingCutoff || weekEndingCutoffDate
-    });
-    const reasons = [];
-    if (expectedCtx.kind !== returnedCtx.kind) reasons.push('KIND_MISMATCH');
-    if (expectedCtx.pay_date !== returnedCtx.pay_date) reasons.push('PAY_DATE_MISMATCH');
-    if (expectedCtx.week_ending_cutoff !== returnedCtx.week_ending_cutoff) reasons.push('WEEK_ENDING_CUTOFF_MISMATCH');
-    if (expectedCtx.candidate_filter_id !== returnedCtx.candidate_filter_id) reasons.push('CANDIDATE_FILTER_MISMATCH');
-    if (expectedCtx.client_filter_id !== returnedCtx.client_filter_id) reasons.push('CLIENT_FILTER_MISMATCH');
-    if (!signatureArraysEqual(expectedCtx.candidate_ids, returnedCtx.candidate_ids)) reasons.push('CANDIDATE_IDS_MISMATCH');
-    return {
-      compatible: reasons.length === 0,
-      reasons,
-      expected: expectedCtx,
-      returned: returnedCtx
-    };
+    return normalizeSessionSignatureForCompare(expectedText) === normalizeSessionSignatureForCompare(returnedText);
   };
-  const compareWorkbenchSessionSignaturesForContext = (expected, returned) => signaturesAreSemanticallyCompatible(
-    expected,
-    returned,
-    currentSignatureSemanticFallback()
-  );
   const existingPreviewEnvelopeForSession = isPlainObject(wiz.preview.data) ? wiz.preview.data : {};
   const existingPreviewSessionForSession = isPlainObject(existingPreviewEnvelopeForSession.session) ? existingPreviewEnvelopeForSession.session : {};
   const computeCurrentSessionSignature = () => {
@@ -27802,7 +27673,8 @@ async function bankingPayPreview(pay_date) {
       if (typeof computePayWorkbenchSessionSignature === 'function') {
         return String(computePayWorkbenchSessionSignature({
           pay_date: effectivePayDate,
-          week_ending_cutoff: weekEndingCutoffDate,
+          candidate_filter_id: trimStr(wiz.candidate_filter_id || ''),
+          client_filter_id: trimStr(wiz.client_filter_id || ''),
           filters_json: deep(openFiltersJson) || {}
         })).trim();
       }
@@ -27868,23 +27740,17 @@ async function bankingPayPreview(pay_date) {
     existingPreviewEnvelopeForSession.week_ending_cutoff ||
     ''
   );
-  const requestedSessionSignatureCompatibility = (suppliedSessionSignature && existingWorkbenchSessionSignature)
-    ? compareWorkbenchSessionSignaturesForContext(suppliedSessionSignature, existingWorkbenchSessionSignature)
-    : null;
-  const computedSessionSignatureCompatibility = (computedSessionSignature && existingWorkbenchSessionSignature)
-    ? compareWorkbenchSessionSignaturesForContext(computedSessionSignature, existingWorkbenchSessionSignature)
-    : null;
   const requestedSessionSignatureMismatch = !!(
     !useReplacementSessionBootstrap &&
     suppliedSessionSignature &&
     existingWorkbenchSessionId &&
-    (!existingWorkbenchSessionSignature || requestedSessionSignatureCompatibility?.compatible !== true)
+    (!existingWorkbenchSessionSignature || suppliedSessionSignature !== existingWorkbenchSessionSignature)
   );
   const computedSessionSignatureMismatch = !!(
     !useReplacementSessionBootstrap &&
     computedSessionSignature &&
     existingWorkbenchSessionId &&
-    (!existingWorkbenchSessionSignature || computedSessionSignatureCompatibility?.compatible !== true)
+    (!existingWorkbenchSessionSignature || computedSessionSignature !== existingWorkbenchSessionSignature)
   );
   const payDateSessionMismatch = !!(
     !useReplacementSessionBootstrap &&
@@ -31140,40 +31006,6 @@ async function bankingPayPreview(pay_date) {
     if (isPlainObject(pageLoadSummary)) {
       finalisePreviewVisualStateAfterRowsApplied(pageLoadSummary, payload);
     }
-    if (mustReadPreviewPage) {
-      const summaryErrors = Array.isArray(pageLoadSummary?.errors)
-        ? pageLoadSummary.errors.filter((entry) => entry)
-        : [];
-      const summaryRows = Array.isArray(pageLoadSummary?.rows)
-        ? pageLoadSummary.rows
-        : (Array.isArray(pageLoadSummary?.items) ? pageLoadSummary.items : []);
-      const rowsWerePromised = workbenchProgressHasRowsAvailable(payload);
-      if (!isPlainObject(pageLoadSummary) || pageLoadSummary.ok === false || summaryErrors.length > 0 || (rowsWerePromised && summaryRows.length <= 0)) {
-        const firstSummaryError = summaryErrors.find((entry) => entry && trimStr(entry.message || entry.error || entry.reason || entry.code || entry));
-        const err = new Error(
-          trimStr(firstSummaryError?.message || firstSummaryError?.error || firstSummaryError?.reason || '') ||
-          'Payment preview first page could not be loaded.'
-        );
-        err.payload = {
-          code: 'BANKING_PREVIEW_FIRST_PAGE_LOAD_FAILED',
-          session_id: sessionIdText,
-          session_version: progressSessionVersion ?? null,
-          progress_next_action: trimStr(progressObj.next_recommended_action || progressObj.nextRecommendedAction || payload?.next_recommended_action || payload?.nextRecommendedAction || '') || null,
-          rows_were_promised: rowsWerePromised,
-          returned_count: summaryRows.length,
-          error_count: summaryErrors.length,
-          errors: summaryErrors.slice(0, 3).map((entry) => {
-            if (!entry || typeof entry !== 'object') return { message: trimStr(entry) };
-            return {
-              code: trimStr(entry.code || ''),
-              section: trimStr(entry.section || entry.requested_section || entry.resolved_section || ''),
-              message: trimStr(entry.message || entry.error || entry.reason || '')
-            };
-          })
-        };
-        throw err;
-      }
-    }
     return pageLoadSummary;
   };
 
@@ -31255,21 +31087,18 @@ async function bankingPayPreview(pay_date) {
       expectedSessionSignature &&
       expectedSessionSignatureForCompare &&
       returnedSessionSignatureForCompare &&
-      returnedSessionSignatureForCompare !== expectedSessionSignatureForCompare
+      !sessionSignaturesSemanticallyCompatible(expectedSessionSignature, returnedSessionSignature)
     ) {
-      const semanticComparison = compareWorkbenchSessionSignaturesForContext(expectedSessionSignature, returnedSessionSignature);
-      if (semanticComparison.compatible !== true) {
-        const err = new Error('Banking preview returned a different session signature from the requested workbench session.');
-        err.payload = {
-          code: 'BANKING_PREVIEW_SESSION_CONTEXT_MISMATCH',
-          mismatch_reasons: Array.isArray(semanticComparison.reasons) ? semanticComparison.reasons : ['SESSION_SIGNATURE_MISMATCH'],
-          expected_signature_semantic: redactSignatureSemanticForError(semanticComparison.expected),
-          returned_signature_semantic: redactSignatureSemanticForError(semanticComparison.returned),
-          expected_session_signature_normalized: expectedSessionSignatureForCompare,
-          returned_session_signature_normalized: returnedSessionSignatureForCompare
-        };
-        throw err;
-      }
+      const err = new Error('Banking preview returned a different session signature from the requested workbench session.');
+      err.payload = {
+        code: 'BANKING_PREVIEW_SESSION_CONTEXT_MISMATCH',
+        expected_session_signature: expectedSessionSignature,
+        returned_session_signature: returnedSessionSignature,
+        expected_session_signature_normalized: expectedSessionSignatureForCompare,
+        returned_session_signature_normalized: returnedSessionSignatureForCompare,
+        semantic_signature_compare: 'actorless_business_scope_v1'
+      };
+      throw err;
     }
     return ctx;
   };
@@ -32342,9 +32171,7 @@ async function bankingPayPreview(pay_date) {
       if (pageLoadForFinalPayload && wiz.workbench.__candidate_refresh_page_reread_pending === true) {
         wiz.workbench.__candidate_refresh_page_reread_pending = false;
       }
-    } catch (pageLoadError) {
-      if (progressPayloadRequiresFirstPreviewPageRead(responsePayload)) throw pageLoadError;
-    }
+    } catch {}
 
     const sessionForPoll = getCurrentWorkbenchSessionId();
     const immediateAuthoritativeState = getAuthoritativeWorkbenchProgressState(responsePayload);
@@ -32453,6 +32280,7 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
+
 
 
 
@@ -114522,257 +114350,128 @@ function computePayWorkbenchSessionSignature(input = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const cloneJson = (value) => {
-    try {
-      return JSON.parse(JSON.stringify(value));
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(JSON.stringify(value == null ? null : value)); } catch { return null; }
   };
   const stableStringify = (value) => {
-    if (Array.isArray(value)) {
-      return `[${value.map((item) => stableStringify(item)).join(',')}]`;
-    }
+    if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
     if (value && typeof value === 'object') {
       return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
     }
-    return JSON.stringify(value == null ? null : value);
-  };
-  const parseObject = (value) => {
-    if (isPlainObject(value)) return cloneJson(value) || value;
-    const text = trimStr(value);
-    if (!text) return {};
-    try {
-      const parsed = JSON.parse(text);
-      return isPlainObject(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
+    return JSON.stringify(value);
   };
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const ORDINARY_BANKING_CUTOFF_SENTINEL = '9999-12-31';
-
-  const source = (() => {
-    if (isPlainObject(input)) return input;
-    try {
-      if (typeof bankingGetState === 'function') {
-        const st = bankingGetState();
-        if (st && typeof st === 'object') return st;
-      }
-    } catch {}
-    try {
-      const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-      if (mc && mc.banking && typeof mc.banking === 'object') return mc.banking;
-    } catch {}
-    return {};
-  })();
-
-  const wiz = isPlainObject(source?.pay?.draftWizard)
-    ? source.pay.draftWizard
-    : (isPlainObject(source?.draftWizard) ? source.draftWizard : {});
-
-  const filtersSource = parseObject(
-    (isPlainObject(input?.filters_json) ? input.filters_json : null) ||
-    (isPlainObject(input?.filters) ? input.filters : null) ||
-    (isPlainObject(wiz.filters_json) ? wiz.filters_json : null) ||
-    (isPlainObject(wiz.filters) ? wiz.filters : null) ||
-    {}
-  );
-
-  const scopeFilterBlacklist = new Set([
-    'preview_context_summary',
-    'paye_guardrails',
-    'preview_decisions_json',
-    'preview_decisions',
-    'open_options',
-    'options',
-    'progress_json',
-    'candidate_sample_rows_json',
-    'scope_next_cursor_json',
-    'pay_date',
-    'payDate',
-    'selectedPayDate',
-    'pay_date_text',
-    'payDateText',
-    'source_pay_date',
-    'sourcePayDate',
-    'target_pay_date',
-    'targetPayDate',
-    'pay_week',
-    'payWeek',
-    'pay_week_label',
-    'payWeekLabel',
-    'pay_week_start',
-    'payWeekStart',
-    'pay_week_end',
-    'payWeekEnd',
-    'pay_period_start',
-    'payPeriodStart',
-    'pay_period_end',
-    'payPeriodEnd',
-    'week_start',
-    'weekStart',
-    'week_end',
-    'weekEnd',
-    'week_ending_cutoff_date',
-    'weekEndingCutoffDate',
-    'week_ending_cutoff',
-    'weekEndingCutoff',
-    'week_ending_cutoff_raw',
-    'weekEndingCutoffRaw',
-    'selected_preview_row_ids',
-    'selectedPreviewRowIds',
-    'case_resolutions',
-    'caseResolutions',
-    'component_resolutions',
-    'componentResolutions',
-    'exclude_timesheet_ids',
-    'excludeTimesheetIds',
-    'case_resolution_states',
-    'blocked_case_states',
-    'safe_case_states',
-    'reusable_component_resolutions',
-    'stale_component_resolutions',
-    'draftable_now',
-    'blocked_now',
-    'ready_to_pay_now',
-    'blocked_for_pay_now',
-    'hidden_indefinite_snoozes',
-    'preview_request_seq',
-    'preview_epoch',
-    'tab_epoch',
-    'modal_epoch',
-    'dirty_reason',
-    'pay_context_dirty',
-    'modal_valid',
-    'active_modal_epoch',
-    'same_week_paye_override_reason',
-    'sameWeekPayeOverrideReason',
-    'same_week_paye_override_continue',
-    'sameWeekPayeOverrideContinue',
-    'same_week_paye_override_verified',
-    'sameWeekPayeOverrideVerified',
-    'same_week_paye_override_verified_by_user_id',
-    'sameWeekPayeOverrideVerifiedByUserId',
-    'same_week_paye_override_verified_at_utc',
-    'sameWeekPayeOverrideVerifiedAtUtc',
-    'session_signature',
-    'sessionSignature',
-    'session_id',
-    'sessionId',
-    'source_session_id',
-    'sourceSessionId',
-    'workbench_session_id',
-    'workbenchSessionId',
-    'scope_is_row_backed',
-    'scope_seed_source',
-    'scope_count_unknown',
-    'scopeSeedSource',
-    'scopeCountUnknown',
-    'row_backed_scope',
-    'rowBackedScope',
-    'asynchronous',
-    'root_scope_job_id',
-    'root_job_id',
-    'work_queued',
-    'progress_state',
-    'progress_json',
-    'progress_counter_version',
-    'replacement_session_id',
-    'replacement_idempotency_key'
-  ]);
-
-  const sanitizedFilters = {};
-  for (const [rawKey, rawValue] of Object.entries(filtersSource)) {
-    const key = trimStr(rawKey);
-    if (!key || scopeFilterBlacklist.has(key)) continue;
-    if (rawValue === undefined) continue;
-    const cloned = cloneJson(rawValue);
-    if (cloned === null && rawValue !== null) continue;
-    sanitizedFilters[key] = cloned;
-  }
-
-  const nestedObjects = (...objects) => {
-    const out = [];
-    for (const obj of objects) {
-      if (!isPlainObject(obj)) continue;
-      out.push(obj);
-      if (isPlainObject(obj.filters)) out.push(obj.filters);
-      if (isPlainObject(obj.filter)) out.push(obj.filter);
-    }
-    return out;
-  };
-  const firstText = (objects, keys) => {
-    for (const obj of objects) {
-      if (!isPlainObject(obj)) continue;
-      for (const key of keys) {
-        const text = trimStr(obj[key]);
-        if (text) return text;
-      }
+  const ordinaryCutoffSentinel = '9999-12-31';
+  const source = isPlainObject(input) ? input : {};
+  const wizard = (typeof st !== 'undefined' && st && st.pay && isPlainObject(st.pay.draftWizard)) ? st.pay.draftWizard : {};
+  const filtersJson = isPlainObject(source.filters_json)
+    ? (cloneJson(source.filters_json) || {})
+    : (isPlainObject(source.filtersJson)
+      ? (cloneJson(source.filtersJson) || {})
+      : (isPlainObject(source.filters)
+        ? (cloneJson(source.filters) || {})
+        : (isPlainObject(wizard.filters_json)
+          ? (cloneJson(wizard.filters_json) || {})
+          : (isPlainObject(wizard.filters) ? (cloneJson(wizard.filters) || {}) : {}))));
+  const nestedFilters = isPlainObject(filtersJson.filters) ? filtersJson.filters : {};
+  const nestedFilter = isPlainObject(filtersJson.filter) ? filtersJson.filter : {};
+  const normaliseIdText = (value) => trimStr(value);
+  const firstText = (...values) => {
+    for (const value of values) {
+      const text = normaliseIdText(value);
+      if (text) return text;
     }
     return '';
   };
-  const collectCandidateIds = (...objects) => {
-    const out = [];
-    const push = (value) => {
-      if (Array.isArray(value)) {
-        for (const item of value) push(item);
-        return;
-      }
-      const text = trimStr(value).toLowerCase();
-      if (text && uuidRe.test(text)) out.push(text);
-    };
-    for (const obj of nestedObjects(...objects)) {
-      push(obj.candidate_id);
-      push(obj.candidateId);
-      push(obj.candidate_ids);
-      push(obj.candidateIds);
-    }
-    try {
-      push(wiz?.decisions?.candidate_ids);
-      push(wiz?.decisions?.candidateIds);
-    } catch {}
-    return Array.from(new Set(out)).sort();
-  };
-
-  const semanticSources = nestedObjects(input || {}, source || {}, wiz || {}, filtersSource, sanitizedFilters);
-  const payDate = trimStr(
-    input?.pay_date ||
-    input?.payDate ||
-    input?.payment_date ||
-    input?.paymentDate ||
-    wiz.pay_date ||
-    source?.pay?.pay_date ||
-    source?.pay?.selectedPayDate ||
-    ''
+  const payDate = firstText(source.pay_date, source.payDate, wizard.pay_date, wizard.payDate);
+  const weekEndingCutoff = firstText(
+    source.week_ending_cutoff,
+    source.weekEndingCutoff,
+    source.week_ending_cutoff_date,
+    source.weekEndingCutoffDate,
+    wizard.week_ending_cutoff,
+    wizard.weekEndingCutoff,
+    wizard.week_ending_cutoff_date,
+    wizard.weekEndingCutoffDate,
+    ordinaryCutoffSentinel
+  ) || ordinaryCutoffSentinel;
+  const candidateFilterId = firstText(
+    source.candidate_filter_id,
+    source.candidateFilterId,
+    source.filter_candidate_id,
+    filtersJson.candidate_filter_id,
+    filtersJson.candidateFilterId,
+    filtersJson.filter_candidate_id,
+    nestedFilters.candidate_filter_id,
+    nestedFilters.candidateFilterId,
+    nestedFilters.filter_candidate_id,
+    nestedFilter.candidate_filter_id,
+    nestedFilter.candidateFilterId,
+    nestedFilter.filter_candidate_id,
+    wizard.candidate_filter_id,
+    wizard.candidateFilterId
   );
-  const weekEndingCutoff = trimStr(
-    input?.week_ending_cutoff ||
-    input?.weekEndingCutoff ||
-    input?.week_ending_cutoff_date ||
-    input?.weekEndingCutoffDate ||
-    wiz.week_ending_cutoff_date ||
-    wiz.week_ending_cutoff ||
-    source?.pay?.week_ending_cutoff_date ||
-    source?.pay?.week_ending_cutoff ||
-    ''
-  ) || ORDINARY_BANKING_CUTOFF_SENTINEL;
-  const candidateFilterId = firstText(semanticSources, ['candidate_filter_id', 'candidateFilterId', 'filter_candidate_id']);
-  const clientFilterId = firstText(semanticSources, ['client_filter_id', 'clientFilterId', 'filter_client_id', 'client_id', 'clientId']);
-  const candidateIds = collectCandidateIds(input || {}, filtersSource, sanitizedFilters);
-
-  const signaturePayload = {
-    kind: 'BANKING_PAY_WORKBENCH',
-    signature_version: 4,
-    pay_date: payDate,
-    week_ending_cutoff: weekEndingCutoff,
-    candidate_ids: candidateIds,
-    candidate_filter_id: candidateFilterId,
-    client_filter_id: clientFilterId
+  const clientFilterId = firstText(
+    source.client_filter_id,
+    source.clientFilterId,
+    source.filter_client_id,
+    source.client_id,
+    source.clientId,
+    filtersJson.client_filter_id,
+    filtersJson.clientFilterId,
+    filtersJson.filter_client_id,
+    filtersJson.client_id,
+    filtersJson.clientId,
+    nestedFilters.client_filter_id,
+    nestedFilters.clientFilterId,
+    nestedFilters.filter_client_id,
+    nestedFilters.client_id,
+    nestedFilters.clientId,
+    nestedFilter.client_filter_id,
+    nestedFilter.clientFilterId,
+    nestedFilter.filter_client_id,
+    nestedFilter.client_id,
+    nestedFilter.clientId,
+    wizard.client_filter_id,
+    wizard.clientFilterId
+  );
+  const candidateIds = [];
+  const addCandidateId = (value) => {
+    const text = trimStr(value).toLowerCase();
+    if (text && uuidRe.test(text) && !candidateIds.includes(text)) candidateIds.push(text);
   };
+  const addCandidateIds = (value) => {
+    if (Array.isArray(value)) value.forEach(addCandidateId);
+    else addCandidateId(value);
+  };
+  addCandidateIds(source.candidate_ids);
+  addCandidateIds(source.candidateIds);
+  addCandidateIds(source.candidate_id);
+  addCandidateIds(source.candidateId);
+  addCandidateIds(filtersJson.candidate_ids);
+  addCandidateIds(filtersJson.candidateIds);
+  addCandidateIds(filtersJson.candidate_id);
+  addCandidateIds(filtersJson.candidateId);
+  addCandidateIds(nestedFilters.candidate_ids);
+  addCandidateIds(nestedFilters.candidateIds);
+  addCandidateIds(nestedFilters.candidate_id);
+  addCandidateIds(nestedFilters.candidateId);
+  addCandidateIds(nestedFilter.candidate_ids);
+  addCandidateIds(nestedFilter.candidateIds);
+  addCandidateIds(nestedFilter.candidate_id);
+  addCandidateIds(nestedFilter.candidateId);
+  addCandidateIds(wizard.decisions && wizard.decisions.candidate_ids);
+  candidateIds.sort();
 
-  return stableStringify(signaturePayload);
+  return stableStringify({
+    candidate_filter_id: candidateFilterId || '',
+    candidate_ids: candidateIds,
+    client_filter_id: clientFilterId || '',
+    kind: 'BANKING_PAY_WORKBENCH',
+    pay_date: payDate,
+    signature_version: 4,
+    week_ending_cutoff: weekEndingCutoff
+  });
 }
-
 
 
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
@@ -123635,7 +123334,6 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
   }
 }
 
-
 async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -123755,6 +123453,10 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     'WORKBENCH_SESSION_NOT_FOUND',
     'STALE_SESSION',
     'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_PROGRESS_CHANGED',
+    'WORKBENCH_SESSION_PROGRESS_CONTEXT_REQUIRED',
+    'WORKBENCH_SESSION_PROGRESS_CONTEXT_INVALID',
+    'WORKBENCH_SESSION_VERSION_CONTEXT_INVALID',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
     'PAYE_NOT_READY',
@@ -123915,12 +123617,38 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     return null;
   };
 
+  const readExpectedWorkbenchContext = () => {
+    const wizard = (typeof st !== 'undefined' && st && st.pay && isPlainObject(st.pay.draftWizard)) ? st.pay.draftWizard : {};
+    const workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
+    const progress = isPlainObject(workbench.progress) ? workbench.progress : {};
+    const preview = isPlainObject(wizard.preview) ? wizard.preview : {};
+    const previewData = isPlainObject(preview.data) ? preview.data : {};
+    const normaliseInteger = (value) => {
+      const text = trimStr(value);
+      if (!/^[0-9]{1,18}$/.test(text)) return null;
+      const number = Number(text);
+      return Number.isSafeInteger(number) && number >= 0 ? number : null;
+    };
+    return {
+      session_version: normaliseInteger(workbench.session_version ?? progress.session_version ?? previewData.session_version ?? previewData.session?.session_version),
+      progress_counter_version: normaliseInteger(workbench.progress_counter_version ?? progress.progress_counter_version ?? previewData.progress_counter_version ?? previewData.session?.progress_counter_version ?? previewData.preview?.progress_counter_version)
+    };
+  };
+
   try {
     const sessionIdText = trimStr(sessionId);
+    const expectedContext = readExpectedWorkbenchContext();
+    const requestPayload = isPlainObject(payload) ? (cloneJson(payload) || {}) : {};
+    if (requestPayload.expected_progress_counter_version == null && requestPayload.expectedProgressCounterVersion == null && requestPayload.progress_counter_version == null && requestPayload.progressCounterVersion == null && expectedContext.progress_counter_version != null) {
+      requestPayload.expected_progress_counter_version = expectedContext.progress_counter_version;
+    }
+    if (requestPayload.expected_session_version == null && requestPayload.expectedSessionVersion == null && requestPayload.session_version == null && requestPayload.sessionVersion == null && expectedContext.session_version != null) {
+      requestPayload.expected_session_version = expectedContext.session_version;
+    }
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/selected-rows`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(isPlainObject(payload) ? payload : {})
+      body: JSON.stringify(requestPayload)
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
@@ -123935,12 +123663,25 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const selectedRows = Array.isArray(payloadObj.selected_preview_row_ids)
       ? payloadObj.selected_preview_row_ids
-      : (Array.isArray(payloadObj.server_selected_preview_row_ids) ? payloadObj.server_selected_preview_row_ids : (Array.isArray(payload.selected_preview_row_ids) ? payload.selected_preview_row_ids : []));
+      : (Array.isArray(payloadObj.server_selected_preview_row_ids) ? payloadObj.server_selected_preview_row_ids : (Array.isArray(requestPayload.selected_preview_row_ids) ? requestPayload.selected_preview_row_ids : []));
+    try {
+      const wizard = (typeof st !== 'undefined' && st && st.pay && isPlainObject(st.pay.draftWizard)) ? st.pay.draftWizard : null;
+      if (wizard) {
+        wizard.workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
+        if (payloadObj.session_version !== null && payloadObj.session_version !== undefined) wizard.workbench.session_version = payloadObj.session_version;
+        if (payloadObj.progress_counter_version !== null && payloadObj.progress_counter_version !== undefined) wizard.workbench.progress_counter_version = payloadObj.progress_counter_version;
+        if (isPlainObject(wizard.preview) && isPlainObject(wizard.preview.data)) {
+          if (payloadObj.session_version !== null && payloadObj.session_version !== undefined) wizard.preview.data.session_version = payloadObj.session_version;
+          if (payloadObj.progress_counter_version !== null && payloadObj.progress_counter_version !== undefined) wizard.preview.data.progress_counter_version = payloadObj.progress_counter_version;
+        }
+      }
+    } catch {}
     return {
       ok: true,
       ...(cloneJson(payloadObj) || {}),
       session_id: trimStr(payloadObj.session_id || sessionIdText),
       session_version: payloadObj.session_version ?? null,
+      progress_counter_version: payloadObj.progress_counter_version ?? null,
       selected_preview_row_ids: cloneJson(selectedRows) || []
     };
   } catch (error) {
