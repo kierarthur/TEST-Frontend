@@ -27254,6 +27254,9 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
   return { filename, rowCount: exportRows.length };
 }
 
+
+
+
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -27615,6 +27618,183 @@ async function bankingPayPreview(pay_date) {
       return text;
     }
   };
+  const parseSessionSignatureObject = (value) => {
+    if (isPlainObject(value)) {
+      try {
+        return deep(value) || value;
+      } catch {
+        return value;
+      }
+    }
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      return isPlainObject(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const signatureUuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const signatureNestedObjects = (...objects) => {
+    const out = [];
+    const push = (obj) => {
+      if (!isPlainObject(obj)) return;
+      out.push(obj);
+      if (isPlainObject(obj.filters_json)) out.push(obj.filters_json);
+      if (isPlainObject(obj.filtersJson)) out.push(obj.filtersJson);
+      if (isPlainObject(obj.filters)) out.push(obj.filters);
+      if (isPlainObject(obj.filter)) out.push(obj.filter);
+    };
+    for (const obj of objects) push(obj);
+    return out;
+  };
+  const firstSignatureText = (objects, keys) => {
+    for (const obj of objects) {
+      if (!isPlainObject(obj)) continue;
+      for (const key of keys) {
+        const text = trimStr(obj[key]);
+        if (text) return text;
+      }
+    }
+    return '';
+  };
+  const normaliseSignatureCandidateIdArray = (value) => {
+    const out = [];
+    const push = (item) => {
+      if (Array.isArray(item)) {
+        for (const nested of item) push(nested);
+        return;
+      }
+      const text = trimStr(item).toLowerCase();
+      if (text && signatureUuidRe.test(text)) out.push(text);
+    };
+    push(value);
+    return Array.from(new Set(out)).sort();
+  };
+  const collectSignatureCandidateIds = (...objects) => {
+    const out = [];
+    const push = (value) => {
+      for (const candidateId of normaliseSignatureCandidateIdArray(value)) out.push(candidateId);
+    };
+    for (const obj of signatureNestedObjects(...objects)) {
+      push(obj.candidate_id);
+      push(obj.candidateId);
+      push(obj.candidate_ids);
+      push(obj.candidateIds);
+    }
+    return Array.from(new Set(out)).sort();
+  };
+  const getSignatureSemanticContext = (signatureValue, fallback = {}) => {
+    const signatureObj = parseSessionSignatureObject(signatureValue) || {};
+    const fallbackObj = isPlainObject(fallback) ? fallback : {};
+    const objects = signatureNestedObjects(signatureObj, fallbackObj);
+    const kind = firstSignatureText(objects, ['kind']) || 'BANKING_PAY_WORKBENCH';
+    const payDateText = firstSignatureText(objects, ['pay_date', 'payDate', 'payment_date', 'paymentDate']) || effectivePayDate;
+    const cutoffText = normalizeCutoffDate(firstSignatureText(objects, [
+      'week_ending_cutoff',
+      'weekEndingCutoff',
+      'week_ending_cutoff_date',
+      'weekEndingCutoffDate'
+    ]) || weekEndingCutoffDate);
+    const candidateFilterId = firstSignatureText(objects, [
+      'candidate_filter_id',
+      'candidateFilterId',
+      'filter_candidate_id'
+    ]);
+    const clientFilterId = firstSignatureText(objects, [
+      'client_filter_id',
+      'clientFilterId',
+      'filter_client_id',
+      'client_id',
+      'clientId'
+    ]);
+    return {
+      kind,
+      pay_date: payDateText,
+      week_ending_cutoff: cutoffText,
+      candidate_filter_id: candidateFilterId,
+      client_filter_id: clientFilterId,
+      candidate_ids: collectSignatureCandidateIds(signatureObj, fallbackObj),
+      signature_version: signatureObj.signature_version ?? signatureObj.signatureVersion ?? null,
+      actor_user_id_present: !!trimStr(signatureObj.actor_user_id || signatureObj.actorUserId || '')
+    };
+  };
+  const signatureArraysEqual = (left, right) => {
+    const a = normaliseSignatureCandidateIdArray(left);
+    const b = normaliseSignatureCandidateIdArray(right);
+    if (a.length !== b.length) return false;
+    return a.every((value, index) => value === b[index]);
+  };
+  const currentSignatureSemanticFallback = () => ({
+    kind: 'BANKING_PAY_WORKBENCH',
+    pay_date: effectivePayDate,
+    payDate: effectivePayDate,
+    week_ending_cutoff: weekEndingCutoffDate,
+    week_ending_cutoff_date: weekEndingCutoffDate,
+    candidate_filter_id: trimStr(wiz.candidate_filter_id || ''),
+    client_filter_id: trimStr(wiz.client_filter_id || ''),
+    filters_json: (() => {
+      try {
+        return deep(openFiltersJson) || {};
+      } catch {
+        return {};
+      }
+    })(),
+    candidate_ids: collectSignatureCandidateIds(openFiltersJson, wiz.decisions || {})
+  });
+  const redactSignatureSemanticForError = (ctx) => ({
+    kind: trimStr(ctx?.kind || ''),
+    pay_date: trimStr(ctx?.pay_date || ''),
+    week_ending_cutoff: normalizeCutoffDate(ctx?.week_ending_cutoff || ''),
+    candidate_filter_id: trimStr(ctx?.candidate_filter_id || ''),
+    client_filter_id: trimStr(ctx?.client_filter_id || ''),
+    candidate_ids: normaliseSignatureCandidateIdArray(ctx?.candidate_ids),
+    signature_version: ctx?.signature_version ?? null,
+    actor_user_id_present: !!ctx?.actor_user_id_present
+  });
+  const signaturesAreSemanticallyCompatible = (expected, returned, fallback = {}) => {
+    const expectedText = normalizeSessionSignatureForCompare(expected);
+    const returnedText = normalizeSessionSignatureForCompare(returned);
+    if (!expectedText || !returnedText) {
+      return { compatible: false, reasons: ['MISSING_SESSION_SIGNATURE'] };
+    }
+    if (expectedText === returnedText) {
+      const semantic = getSignatureSemanticContext(returned, fallback);
+      return { compatible: true, reasons: [], expected: semantic, returned: semantic };
+    }
+    const expectedObj = parseSessionSignatureObject(expected);
+    const returnedObj = parseSessionSignatureObject(returned);
+    if (!expectedObj || !returnedObj) {
+      return { compatible: false, reasons: ['UNPARSABLE_SESSION_SIGNATURE'] };
+    }
+    const expectedCtx = getSignatureSemanticContext(expectedObj, fallback);
+    const returnedCtx = getSignatureSemanticContext(returnedObj, {
+      kind: fallback?.kind || 'BANKING_PAY_WORKBENCH',
+      pay_date: fallback?.pay_date || fallback?.payDate || effectivePayDate,
+      payDate: fallback?.payDate || fallback?.pay_date || effectivePayDate,
+      week_ending_cutoff: fallback?.week_ending_cutoff || fallback?.weekEndingCutoff || fallback?.week_ending_cutoff_date || fallback?.weekEndingCutoffDate || weekEndingCutoffDate,
+      week_ending_cutoff_date: fallback?.week_ending_cutoff_date || fallback?.weekEndingCutoffDate || fallback?.week_ending_cutoff || fallback?.weekEndingCutoff || weekEndingCutoffDate
+    });
+    const reasons = [];
+    if (expectedCtx.kind !== returnedCtx.kind) reasons.push('KIND_MISMATCH');
+    if (expectedCtx.pay_date !== returnedCtx.pay_date) reasons.push('PAY_DATE_MISMATCH');
+    if (expectedCtx.week_ending_cutoff !== returnedCtx.week_ending_cutoff) reasons.push('WEEK_ENDING_CUTOFF_MISMATCH');
+    if (expectedCtx.candidate_filter_id !== returnedCtx.candidate_filter_id) reasons.push('CANDIDATE_FILTER_MISMATCH');
+    if (expectedCtx.client_filter_id !== returnedCtx.client_filter_id) reasons.push('CLIENT_FILTER_MISMATCH');
+    if (!signatureArraysEqual(expectedCtx.candidate_ids, returnedCtx.candidate_ids)) reasons.push('CANDIDATE_IDS_MISMATCH');
+    return {
+      compatible: reasons.length === 0,
+      reasons,
+      expected: expectedCtx,
+      returned: returnedCtx
+    };
+  };
+  const compareWorkbenchSessionSignaturesForContext = (expected, returned) => signaturesAreSemanticallyCompatible(
+    expected,
+    returned,
+    currentSignatureSemanticFallback()
+  );
   const existingPreviewEnvelopeForSession = isPlainObject(wiz.preview.data) ? wiz.preview.data : {};
   const existingPreviewSessionForSession = isPlainObject(existingPreviewEnvelopeForSession.session) ? existingPreviewEnvelopeForSession.session : {};
   const computeCurrentSessionSignature = () => {
@@ -27622,8 +27802,7 @@ async function bankingPayPreview(pay_date) {
       if (typeof computePayWorkbenchSessionSignature === 'function') {
         return String(computePayWorkbenchSessionSignature({
           pay_date: effectivePayDate,
-          candidate_filter_id: trimStr(wiz.candidate_filter_id || ''),
-          client_filter_id: trimStr(wiz.client_filter_id || ''),
+          week_ending_cutoff: weekEndingCutoffDate,
           filters_json: deep(openFiltersJson) || {}
         })).trim();
       }
@@ -27689,17 +27868,23 @@ async function bankingPayPreview(pay_date) {
     existingPreviewEnvelopeForSession.week_ending_cutoff ||
     ''
   );
+  const requestedSessionSignatureCompatibility = (suppliedSessionSignature && existingWorkbenchSessionSignature)
+    ? compareWorkbenchSessionSignaturesForContext(suppliedSessionSignature, existingWorkbenchSessionSignature)
+    : null;
+  const computedSessionSignatureCompatibility = (computedSessionSignature && existingWorkbenchSessionSignature)
+    ? compareWorkbenchSessionSignaturesForContext(computedSessionSignature, existingWorkbenchSessionSignature)
+    : null;
   const requestedSessionSignatureMismatch = !!(
     !useReplacementSessionBootstrap &&
     suppliedSessionSignature &&
     existingWorkbenchSessionId &&
-    (!existingWorkbenchSessionSignature || suppliedSessionSignature !== existingWorkbenchSessionSignature)
+    (!existingWorkbenchSessionSignature || requestedSessionSignatureCompatibility?.compatible !== true)
   );
   const computedSessionSignatureMismatch = !!(
     !useReplacementSessionBootstrap &&
     computedSessionSignature &&
     existingWorkbenchSessionId &&
-    (!existingWorkbenchSessionSignature || computedSessionSignature !== existingWorkbenchSessionSignature)
+    (!existingWorkbenchSessionSignature || computedSessionSignatureCompatibility?.compatible !== true)
   );
   const payDateSessionMismatch = !!(
     !useReplacementSessionBootstrap &&
@@ -30955,6 +31140,40 @@ async function bankingPayPreview(pay_date) {
     if (isPlainObject(pageLoadSummary)) {
       finalisePreviewVisualStateAfterRowsApplied(pageLoadSummary, payload);
     }
+    if (mustReadPreviewPage) {
+      const summaryErrors = Array.isArray(pageLoadSummary?.errors)
+        ? pageLoadSummary.errors.filter((entry) => entry)
+        : [];
+      const summaryRows = Array.isArray(pageLoadSummary?.rows)
+        ? pageLoadSummary.rows
+        : (Array.isArray(pageLoadSummary?.items) ? pageLoadSummary.items : []);
+      const rowsWerePromised = workbenchProgressHasRowsAvailable(payload);
+      if (!isPlainObject(pageLoadSummary) || pageLoadSummary.ok === false || summaryErrors.length > 0 || (rowsWerePromised && summaryRows.length <= 0)) {
+        const firstSummaryError = summaryErrors.find((entry) => entry && trimStr(entry.message || entry.error || entry.reason || entry.code || entry));
+        const err = new Error(
+          trimStr(firstSummaryError?.message || firstSummaryError?.error || firstSummaryError?.reason || '') ||
+          'Payment preview first page could not be loaded.'
+        );
+        err.payload = {
+          code: 'BANKING_PREVIEW_FIRST_PAGE_LOAD_FAILED',
+          session_id: sessionIdText,
+          session_version: progressSessionVersion ?? null,
+          progress_next_action: trimStr(progressObj.next_recommended_action || progressObj.nextRecommendedAction || payload?.next_recommended_action || payload?.nextRecommendedAction || '') || null,
+          rows_were_promised: rowsWerePromised,
+          returned_count: summaryRows.length,
+          error_count: summaryErrors.length,
+          errors: summaryErrors.slice(0, 3).map((entry) => {
+            if (!entry || typeof entry !== 'object') return { message: trimStr(entry) };
+            return {
+              code: trimStr(entry.code || ''),
+              section: trimStr(entry.section || entry.requested_section || entry.resolved_section || ''),
+              message: trimStr(entry.message || entry.error || entry.reason || '')
+            };
+          })
+        };
+        throw err;
+      }
+    }
     return pageLoadSummary;
   };
 
@@ -31038,15 +31257,19 @@ async function bankingPayPreview(pay_date) {
       returnedSessionSignatureForCompare &&
       returnedSessionSignatureForCompare !== expectedSessionSignatureForCompare
     ) {
-      const err = new Error('Banking preview returned a different session signature from the requested workbench session.');
-      err.payload = {
-        code: 'BANKING_PREVIEW_SESSION_CONTEXT_MISMATCH',
-        expected_session_signature: expectedSessionSignature,
-        returned_session_signature: returnedSessionSignature,
-        expected_session_signature_normalized: expectedSessionSignatureForCompare,
-        returned_session_signature_normalized: returnedSessionSignatureForCompare
-      };
-      throw err;
+      const semanticComparison = compareWorkbenchSessionSignaturesForContext(expectedSessionSignature, returnedSessionSignature);
+      if (semanticComparison.compatible !== true) {
+        const err = new Error('Banking preview returned a different session signature from the requested workbench session.');
+        err.payload = {
+          code: 'BANKING_PREVIEW_SESSION_CONTEXT_MISMATCH',
+          mismatch_reasons: Array.isArray(semanticComparison.reasons) ? semanticComparison.reasons : ['SESSION_SIGNATURE_MISMATCH'],
+          expected_signature_semantic: redactSignatureSemanticForError(semanticComparison.expected),
+          returned_signature_semantic: redactSignatureSemanticForError(semanticComparison.returned),
+          expected_session_signature_normalized: expectedSessionSignatureForCompare,
+          returned_session_signature_normalized: returnedSessionSignatureForCompare
+        };
+        throw err;
+      }
     }
     return ctx;
   };
@@ -32119,7 +32342,9 @@ async function bankingPayPreview(pay_date) {
       if (pageLoadForFinalPayload && wiz.workbench.__candidate_refresh_page_reread_pending === true) {
         wiz.workbench.__candidate_refresh_page_reread_pending = false;
       }
-    } catch {}
+    } catch (pageLoadError) {
+      if (progressPayloadRequiresFirstPreviewPageRead(responsePayload)) throw pageLoadError;
+    }
 
     const sessionForPoll = getCurrentWorkbenchSessionId();
     const immediateAuthoritativeState = getAuthoritativeWorkbenchProgressState(responsePayload);
@@ -114312,6 +114537,19 @@ function computePayWorkbenchSessionSignature(input = null) {
     }
     return JSON.stringify(value == null ? null : value);
   };
+  const parseObject = (value) => {
+    if (isPlainObject(value)) return cloneJson(value) || value;
+    const text = trimStr(value);
+    if (!text) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return isPlainObject(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const ORDINARY_BANKING_CUTOFF_SENTINEL = '9999-12-31';
 
   const source = (() => {
     if (isPlainObject(input)) return input;
@@ -114332,31 +114570,55 @@ function computePayWorkbenchSessionSignature(input = null) {
     ? source.pay.draftWizard
     : (isPlainObject(source?.draftWizard) ? source.draftWizard : {});
 
-  const filtersSource =
+  const filtersSource = parseObject(
     (isPlainObject(input?.filters_json) ? input.filters_json : null) ||
     (isPlainObject(input?.filters) ? input.filters : null) ||
     (isPlainObject(wiz.filters_json) ? wiz.filters_json : null) ||
     (isPlainObject(wiz.filters) ? wiz.filters : null) ||
-    {};
+    {}
+  );
 
   const scopeFilterBlacklist = new Set([
+    'preview_context_summary',
+    'paye_guardrails',
+    'preview_decisions_json',
+    'preview_decisions',
+    'open_options',
+    'options',
+    'progress_json',
+    'candidate_sample_rows_json',
+    'scope_next_cursor_json',
     'pay_date',
     'payDate',
     'selectedPayDate',
+    'pay_date_text',
+    'payDateText',
+    'source_pay_date',
+    'sourcePayDate',
+    'target_pay_date',
+    'targetPayDate',
+    'pay_week',
+    'payWeek',
+    'pay_week_label',
+    'payWeekLabel',
+    'pay_week_start',
+    'payWeekStart',
+    'pay_week_end',
+    'payWeekEnd',
+    'pay_period_start',
+    'payPeriodStart',
+    'pay_period_end',
+    'payPeriodEnd',
+    'week_start',
+    'weekStart',
+    'week_end',
+    'weekEnd',
     'week_ending_cutoff_date',
     'weekEndingCutoffDate',
     'week_ending_cutoff',
     'weekEndingCutoff',
     'week_ending_cutoff_raw',
     'weekEndingCutoffRaw',
-    'candidate_filter_id',
-    'candidateFilterId',
-    'candidate_id',
-    'candidateId',
-    'client_filter_id',
-    'clientFilterId',
-    'client_id',
-    'clientId',
     'selected_preview_row_ids',
     'selectedPreviewRowIds',
     'case_resolutions',
@@ -114396,34 +114658,121 @@ function computePayWorkbenchSessionSignature(input = null) {
     'session_signature',
     'sessionSignature',
     'session_id',
-    'sessionId'
+    'sessionId',
+    'source_session_id',
+    'sourceSessionId',
+    'workbench_session_id',
+    'workbenchSessionId',
+    'scope_is_row_backed',
+    'scope_seed_source',
+    'scope_count_unknown',
+    'scopeSeedSource',
+    'scopeCountUnknown',
+    'row_backed_scope',
+    'rowBackedScope',
+    'asynchronous',
+    'root_scope_job_id',
+    'root_job_id',
+    'work_queued',
+    'progress_state',
+    'progress_json',
+    'progress_counter_version',
+    'replacement_session_id',
+    'replacement_idempotency_key'
   ]);
 
-  const normalizedFilters = {};
+  const sanitizedFilters = {};
   for (const [rawKey, rawValue] of Object.entries(filtersSource)) {
     const key = trimStr(rawKey);
     if (!key || scopeFilterBlacklist.has(key)) continue;
     if (rawValue === undefined) continue;
     const cloned = cloneJson(rawValue);
     if (cloned === null && rawValue !== null) continue;
-    normalizedFilters[key] = cloned;
+    sanitizedFilters[key] = cloned;
   }
+
+  const nestedObjects = (...objects) => {
+    const out = [];
+    for (const obj of objects) {
+      if (!isPlainObject(obj)) continue;
+      out.push(obj);
+      if (isPlainObject(obj.filters)) out.push(obj.filters);
+      if (isPlainObject(obj.filter)) out.push(obj.filter);
+    }
+    return out;
+  };
+  const firstText = (objects, keys) => {
+    for (const obj of objects) {
+      if (!isPlainObject(obj)) continue;
+      for (const key of keys) {
+        const text = trimStr(obj[key]);
+        if (text) return text;
+      }
+    }
+    return '';
+  };
+  const collectCandidateIds = (...objects) => {
+    const out = [];
+    const push = (value) => {
+      if (Array.isArray(value)) {
+        for (const item of value) push(item);
+        return;
+      }
+      const text = trimStr(value).toLowerCase();
+      if (text && uuidRe.test(text)) out.push(text);
+    };
+    for (const obj of nestedObjects(...objects)) {
+      push(obj.candidate_id);
+      push(obj.candidateId);
+      push(obj.candidate_ids);
+      push(obj.candidateIds);
+    }
+    try {
+      push(wiz?.decisions?.candidate_ids);
+      push(wiz?.decisions?.candidateIds);
+    } catch {}
+    return Array.from(new Set(out)).sort();
+  };
+
+  const semanticSources = nestedObjects(input || {}, source || {}, wiz || {}, filtersSource, sanitizedFilters);
+  const payDate = trimStr(
+    input?.pay_date ||
+    input?.payDate ||
+    input?.payment_date ||
+    input?.paymentDate ||
+    wiz.pay_date ||
+    source?.pay?.pay_date ||
+    source?.pay?.selectedPayDate ||
+    ''
+  );
+  const weekEndingCutoff = trimStr(
+    input?.week_ending_cutoff ||
+    input?.weekEndingCutoff ||
+    input?.week_ending_cutoff_date ||
+    input?.weekEndingCutoffDate ||
+    wiz.week_ending_cutoff_date ||
+    wiz.week_ending_cutoff ||
+    source?.pay?.week_ending_cutoff_date ||
+    source?.pay?.week_ending_cutoff ||
+    ''
+  ) || ORDINARY_BANKING_CUTOFF_SENTINEL;
+  const candidateFilterId = firstText(semanticSources, ['candidate_filter_id', 'candidateFilterId', 'filter_candidate_id']);
+  const clientFilterId = firstText(semanticSources, ['client_filter_id', 'clientFilterId', 'filter_client_id', 'client_id', 'clientId']);
+  const candidateIds = collectCandidateIds(input || {}, filtersSource, sanitizedFilters);
 
   const signaturePayload = {
     kind: 'BANKING_PAY_WORKBENCH',
-    signature_version: 3,
-    pay_date: trimStr(input?.pay_date || input?.payDate || wiz.pay_date || source?.pay?.pay_date || source?.pay?.selectedPayDate || ''),
-    candidate_filter_id: trimStr(input?.candidate_filter_id || input?.candidateFilterId || input?.candidate_id || input?.candidateId || wiz.candidate_filter_id || ''),
-    client_filter_id: trimStr(input?.client_filter_id || input?.clientFilterId || input?.client_id || input?.clientId || wiz.client_filter_id || ''),
-    candidate_ids: []
+    signature_version: 4,
+    pay_date: payDate,
+    week_ending_cutoff: weekEndingCutoff,
+    candidate_ids: candidateIds,
+    candidate_filter_id: candidateFilterId,
+    client_filter_id: clientFilterId
   };
-
-  if (Object.keys(normalizedFilters).length > 0) {
-    signaturePayload.filters_json = normalizedFilters;
-  }
 
   return stableStringify(signaturePayload);
 }
+
 
 
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
