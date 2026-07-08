@@ -29171,24 +29171,6 @@ async function bankingPayPreview(pay_date) {
       ? Array.from(new Set(progressObj.pending_candidate_ids.map((x) => trimStr(x)).filter(Boolean))).slice(0, sampleLimit)
       : [];
     const candidateStatusRows = progressCandidateStatusRows.filter((row) => isPlainObject(row)).slice(0, sampleLimit);
-    const failedCandidateIds = Array.from(new Set([
-      ...(Array.isArray(progressObj.failed_candidate_ids)
-        ? progressObj.failed_candidate_ids.map((x) => trimStr(x)).filter(Boolean)
-        : []),
-      ...candidateStatusRows
-        .filter((row) => ['FAILED', 'ERROR'].includes(jobStatusFromRow(row).toUpperCase()))
-        .map((row) => candidateIdFromPendingRow(row))
-        .filter(Boolean)
-    ])).slice(0, sampleLimit);
-    const activeRows = candidateStatusRows.filter((row) => isActiveWorkbenchPendingJobRow(row));
-    const activeCandidateIds = Array.from(new Set(activeRows.map((row) => candidateIdFromPendingRow(row)).filter(Boolean)));
-    const candidateRowsById = new Map();
-    for (const row of candidateStatusRows) {
-      const candidateIdText = candidateIdFromPendingRow(row);
-      if (!candidateIdText) continue;
-      if (!candidateRowsById.has(candidateIdText)) candidateRowsById.set(candidateIdText, []);
-      candidateRowsById.get(candidateIdText).push(row);
-    }
     const authoritativeProgressState = getAuthoritativeWorkbenchProgressState({ progress: progressObj });
     const progressReady = authoritativeProgressState.ready;
     const progressPhaseText = trimStr(progressObj.phase || progressObj.current_phase || progressObj.status || progressObj.state || '');
@@ -29201,22 +29183,45 @@ async function bankingPayPreview(pay_date) {
       progressObj.statusMessage ||
       ''
     );
-    const pendingCandidateIds = progressReady && activeCandidateIds.length === 0
+
+    // Authoritative aggregate READY is the source of truth. Candidate sample rows
+    // are display hints only, and older samples can remain labelled RUNNING after
+    // the aggregate job/line/candidate counters are already terminal.
+    const displayCandidateStatusRows = progressReady ? [] : candidateStatusRows;
+    const failedCandidateIds = progressReady ? [] : Array.from(new Set([
+      ...(Array.isArray(progressObj.failed_candidate_ids)
+        ? progressObj.failed_candidate_ids.map((x) => trimStr(x)).filter(Boolean)
+        : []),
+      ...displayCandidateStatusRows
+        .filter((row) => ['FAILED', 'ERROR'].includes(jobStatusFromRow(row).toUpperCase()))
+        .map((row) => candidateIdFromPendingRow(row))
+        .filter(Boolean)
+    ])).slice(0, sampleLimit);
+    const activeRows = displayCandidateStatusRows.filter((row) => isActiveWorkbenchPendingJobRow(row));
+    const activeCandidateIds = Array.from(new Set(activeRows.map((row) => candidateIdFromPendingRow(row)).filter(Boolean)));
+    const candidateRowsById = new Map();
+    for (const row of displayCandidateStatusRows) {
+      const candidateIdText = candidateIdFromPendingRow(row);
+      if (!candidateIdText) continue;
+      if (!candidateRowsById.has(candidateIdText)) candidateRowsById.set(candidateIdText, []);
+      candidateRowsById.get(candidateIdText).push(row);
+    }
+    const pendingCandidateIds = progressReady
       ? []
       : Array.from(new Set([
           ...rawPendingCandidateIds.filter((candidateIdText) => {
             const rowsForCandidate = candidateRowsById.get(candidateIdText) || [];
-            if (rowsForCandidate.length === 0) return !progressReady;
+            if (rowsForCandidate.length === 0) return true;
             return rowsForCandidate.some((row) => isActiveWorkbenchPendingJobRow(row));
           }),
           ...activeCandidateIds
         ].map((value) => trimStr(value)).filter(Boolean))).slice(0, sampleLimit);
     const pendingCandidateSet = new Set(pendingCandidateIds);
-    const pendingRows = candidateStatusRows.filter((row) => {
+    const pendingRows = displayCandidateStatusRows.filter((row) => {
       const candidateIdText = candidateIdFromPendingRow(row);
       return !!candidateIdText && pendingCandidateSet.has(candidateIdText) && isActiveWorkbenchPendingJobRow(row);
     });
-    const failedRows = candidateStatusRows.filter((row) => failedCandidateIds.includes(candidateIdFromPendingRow(row)));
+    const failedRows = displayCandidateStatusRows.filter((row) => failedCandidateIds.includes(candidateIdFromPendingRow(row)));
     const pendingCandidateJobs = activeRows.map((row) => {
       const latestJobStatus = jobStatusFromRow(row);
       const pendingJobId = pendingJobIdFromRow(row);
@@ -29454,10 +29459,42 @@ async function bankingPayPreview(pay_date) {
     return pendingCandidateIds.length > 0 || pendingJobIds.length > 0 || scopePending > 0;
   };
 
+  const parseProgressSectionCountMap = (value) => {
+    if (isPlainObject(value)) return value;
+    if (typeof value !== 'string' || !trimStr(value)) return {};
+    try {
+      const parsed = JSON.parse(value);
+      return isPlainObject(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const mergeProgressSectionCountMaps = (...values) => {
+    const merged = {};
+    for (const value of values) {
+      const map = parseProgressSectionCountMap(value);
+      for (const [key, count] of Object.entries(map)) {
+        if (count === undefined || count === null || count === '') continue;
+        merged[key] = count;
+      }
+    }
+    return merged;
+  };
+
   const workbenchProgressHasRowsAvailable = (progressLike) => {
     const obj = isPlainObject(progressLike) ? progressLike : {};
     const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
-    const sectionCounts = isPlainObject(progressObj.section_counts) ? progressObj.section_counts : (isPlainObject(obj.section_counts) ? obj.section_counts : {});
+    const sectionCounts = mergeProgressSectionCountMaps(
+      obj.section_counts,
+      obj.sectionCounts,
+      obj.section_counts_json,
+      obj.sectionCountsJson,
+      progressObj.section_counts,
+      progressObj.sectionCounts,
+      progressObj.section_counts_json,
+      progressObj.sectionCountsJson
+    );
     const countValue = (...values) => {
       let best = 0;
       for (const value of values) {
@@ -29470,6 +29507,8 @@ async function bankingPayPreview(pay_date) {
       progressObj.rows_available === true ||
       obj.has_materialised_preview_rows === true ||
       progressObj.has_materialised_preview_rows === true ||
+      obj.selected_rows_available === true ||
+      progressObj.selected_rows_available === true ||
       countValue(obj.preview_row_count, progressObj.preview_row_count) > 0 ||
       countValue(obj.selected_row_count, progressObj.selected_row_count) > 0 ||
       countValue(sectionCounts.canonical_preview_lines) > 0 ||
@@ -29483,6 +29522,86 @@ async function bankingPayPreview(pay_date) {
       countValue(sectionCounts.case_resolution_states) > 0 ||
       countValue(sectionCounts.case_resolutions) > 0
     );
+  };
+
+  const progressPayloadRequiresFirstPreviewPageRead = (payload = null) => {
+    const obj = isPlainObject(payload) ? payload : {};
+    const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
+    const state = getAuthoritativeWorkbenchProgressState(payload);
+    const nextAction = trimStr(
+      progressObj.next_recommended_action ||
+      progressObj.nextRecommendedAction ||
+      progressObj.next_action ||
+      progressObj.nextAction ||
+      obj.next_recommended_action ||
+      obj.nextRecommendedAction ||
+      obj.next_action ||
+      obj.nextAction ||
+      ''
+    ).toUpperCase();
+    const requiresPaging = !!(
+      obj.requires_paging === true ||
+      obj.requiresPaging === true ||
+      progressObj.requires_paging === true ||
+      progressObj.requiresPaging === true ||
+      obj.large_preview === true ||
+      obj.largePreview === true ||
+      progressObj.large_preview === true ||
+      progressObj.largePreview === true ||
+      nextAction === 'READ_PREVIEW_PAGE'
+    );
+    const readySignal = !!(
+      state.ready ||
+      obj.ready === true ||
+      obj.ready_flag === true ||
+      obj.session_ready === true ||
+      obj.ready_for_draft === true ||
+      progressObj.ready === true ||
+      progressObj.ready_flag === true ||
+      progressObj.session_ready === true ||
+      progressObj.ready_for_draft === true ||
+      nextAction === 'READ_PREVIEW_PAGE'
+    );
+    const rowsSignal = workbenchProgressHasRowsAvailable(payload);
+    return !!(readySignal && (requiresPaging || rowsSignal));
+  };
+
+  const currentCanonicalFirstPageIsAppliedForSession = (sessionIdLike = '', sessionVersionLike = null) => {
+    const sessionIdText = trimStr(sessionIdLike || getCurrentWorkbenchSessionId() || '');
+    const sessionVersionText = normaliseWorkbenchSessionVersion(sessionVersionLike ?? wiz.workbench?.session_version ?? null);
+    if (!sessionIdText || !sessionVersionText) return false;
+    return !!(
+      wiz.preview?.first_page_applied === true &&
+      trimStr(wiz.preview.__canonical_first_page_session_id || '') === sessionIdText &&
+      normaliseWorkbenchSessionVersion(wiz.preview.__canonical_first_page_session_version || '') === sessionVersionText
+    );
+  };
+
+  const markCanonicalFirstPageRequestState = (sessionIdLike = '', sessionVersionLike = null, inFlight = false, reason = '') => {
+    const sessionIdText = trimStr(sessionIdLike || getCurrentWorkbenchSessionId() || '');
+    const sessionVersionText = normaliseWorkbenchSessionVersion(sessionVersionLike ?? wiz.workbench?.session_version ?? null);
+    const flag = inFlight === true;
+    const stamp = new Date().toISOString();
+    const targetObjects = [wiz.workbench, wiz.preview];
+    for (const target of targetObjects) {
+      if (!isPlainObject(target)) continue;
+      target.__canonical_first_page_request_in_flight = flag;
+      target.__canonical_first_page_request_session_id = sessionIdText;
+      target.__canonical_first_page_request_session_version = sessionVersionText;
+      target.__canonical_first_page_request_reason = trimStr(reason) || '';
+      if (flag) {
+        target.__canonical_first_page_request_started_at = stamp;
+        target.__canonical_first_page_request_completed_at = '';
+      } else {
+        target.__canonical_first_page_request_completed_at = stamp;
+      }
+    }
+    if (isPlainObject(wiz.preview?.data)) {
+      wiz.preview.data.__canonical_first_page_request_in_flight = flag;
+      wiz.preview.data.__canonical_first_page_request_session_id = sessionIdText;
+      wiz.preview.data.__canonical_first_page_request_session_version = sessionVersionText;
+    }
+    return flag;
   };
 
   const clearPreviewRowsForDeferredPostMutation = (statusText = '', payloadLike = null) => {
@@ -30542,8 +30661,16 @@ async function bankingPayPreview(pay_date) {
         : null,
       refresh_request: requestFreshnessRequired ? requestToken : null
     });
+    const requiredSectionsForThisPayload = (() => {
+      const sections = ['canonical_preview_lines'];
+      const caseCount = getExpectedSectionRowCount('cases_resolutions');
+      const blockedCount = getExpectedSectionRowCount('blocked_for_pay');
+      if (caseCount.known && caseCount.count > 0) sections.push('cases_resolutions');
+      if (blockedCount.known && blockedCount.count > 0) sections.push('blocked_for_pay');
+      return sections;
+    })();
 
-    for (const requiredSection of requiredRowBackedPreviewSections) {
+    for (const requiredSection of requiredSectionsForThisPayload) {
       if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) break;
       const section = normalisePreviewPageSectionName(requiredSection);
       let page = null;
@@ -30677,7 +30804,7 @@ async function bankingPayPreview(pay_date) {
     const summary = {
       ok: errors.length === 0,
       multi_section_preview_loaded: true,
-      requested_sections: requiredRowBackedPreviewSections.slice(),
+      requested_sections: requiredSectionsForThisPayload.slice(),
       loaded_sections: Object.keys(loadedSections),
       refetched_sections: refetchedSections,
       reused_sections: reusedSections,
@@ -30691,7 +30818,7 @@ async function bankingPayPreview(pay_date) {
       rows: combinedRows,
       items: combinedRows,
       returned_count: combinedRows.length,
-      section_row_counts: Object.fromEntries(requiredRowBackedPreviewSections.map((section) => {
+      section_row_counts: Object.fromEntries(requiredSectionsForThisPayload.map((section) => {
         const page = sectionPages[section] || {};
         return [section, getPreviewPageRows(page).length];
       }))
@@ -30703,7 +30830,8 @@ async function bankingPayPreview(pay_date) {
   const maybeLoadFirstPreviewPageForPayload = async (payload) => {
     if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return null;
     const authoritativePageState = getAuthoritativeWorkbenchProgressState(payload);
-    const shouldAttemptPage = loadFirstPage || workbenchProgressHasRowsAvailable(payload) || authoritativePageState.ready;
+    const mustReadPreviewPage = progressPayloadRequiresFirstPreviewPageRead(payload);
+    const shouldAttemptPage = loadFirstPage || workbenchProgressHasRowsAvailable(payload) || authoritativePageState.ready || mustReadPreviewPage;
     if (!shouldAttemptPage) return null;
     const stored = storeWorkbenchBootstrapContextFromPayload(payload, 'LOAD_FIRST_PAGE');
     const sessionIdText = trimStr(stored?.session_id || getCurrentWorkbenchSessionId() || '');
@@ -30711,13 +30839,25 @@ async function bankingPayPreview(pay_date) {
     if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) return null;
 
     const progressObj = isPlainObject(payload?.progress) ? payload.progress : (isPlainObject(payload) ? payload : {});
-    const pageLoadSummary = await loadRequiredPreviewSectionsForReadyWorkbench(sessionIdText, {
-      stored,
-      progressObj,
-      sourcePayload: payload,
-      limit: stored?.recommended_page_size || progressObj.recommended_page_size || 100,
-      source: 'bankingPayPreview.firstPage.requiredSections'
-    });
+    const progressSessionVersion = progressObj.session_version ?? progressObj.sessionVersion ?? stored?.session_version ?? stored?.sessionVersion ?? wiz.workbench?.session_version ?? null;
+    const forcePreviewPageRefetch = !!(
+      mustReadPreviewPage &&
+      !currentCanonicalFirstPageIsAppliedForSession(sessionIdText, progressSessionVersion)
+    );
+    markCanonicalFirstPageRequestState(sessionIdText, progressSessionVersion, true, 'LOAD_FIRST_PAGE');
+    let pageLoadSummary = null;
+    try {
+      pageLoadSummary = await loadRequiredPreviewSectionsForReadyWorkbench(sessionIdText, {
+        stored,
+        progressObj,
+        sourcePayload: payload,
+        limit: stored?.recommended_page_size || progressObj.recommended_page_size || 100,
+        force_preview_page_refetch: forcePreviewPageRefetch,
+        source: 'bankingPayPreview.firstPage.requiredSections'
+      });
+    } finally {
+      markCanonicalFirstPageRequestState(sessionIdText, progressSessionVersion, false, 'LOAD_FIRST_PAGE');
+    }
 
     if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) return pageLoadSummary;
     if (isPlainObject(pageLoadSummary)) {
@@ -44320,6 +44460,7 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 
 
 
+
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -50275,6 +50416,32 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const firstCanonicalPageState = isPlainObject(previewRowsVm.loadState.firstPageState)
     ? previewRowsVm.loadState.firstPageState
     : getCanonicalFirstPageStateForRender(authoritativeRenderState);
+  const canonicalFirstPageRequestState = (() => {
+    const sessionId = authoritativeRenderState.progressSessionId || authoritativeRenderState.localSessionId || '';
+    const sessionVersion = normalizeSessionVersionForRender(authoritativeRenderState.progressSessionVersion || authoritativeRenderState.localSessionVersion);
+    const requestSessionId = trimStr(
+      wiz.workbench?.__canonical_first_page_request_session_id ||
+      wiz.preview?.__canonical_first_page_request_session_id ||
+      previewEnvelope?.__canonical_first_page_request_session_id ||
+      ''
+    );
+    const requestSessionVersion = normalizeSessionVersionForRender(
+      wiz.workbench?.__canonical_first_page_request_session_version ||
+      wiz.preview?.__canonical_first_page_request_session_version ||
+      previewEnvelope?.__canonical_first_page_request_session_version ||
+      null
+    );
+    const inFlight = !!(
+      (wiz.workbench?.__canonical_first_page_request_in_flight === true ||
+       wiz.preview?.__canonical_first_page_request_in_flight === true ||
+       previewEnvelope?.__canonical_first_page_request_in_flight === true) &&
+      sessionId &&
+      sessionVersion &&
+      requestSessionId === sessionId &&
+      requestSessionVersion === sessionVersion
+    );
+    return { inFlight, requestSessionId, requestSessionVersion };
+  })();
   const optionalBoolean = (...values) => {
     for (const value of values) {
       if (value === undefined || value === null || value === '') continue;
@@ -50400,6 +50567,11 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     !authoritativeRenderState.rowsAvailable ||
     firstCanonicalPageState.appliedForCurrentSessionVersion
   );
+  const currentFirstCanonicalPageLoading = !!(
+    authoritativeRenderState.rowsAvailable &&
+    !currentFirstCanonicalPageApplied &&
+    canonicalFirstPageRequestState.inFlight
+  );
   const createBtnDisabled = !(
     authoritativeGateAllowsCreate &&
     currentFirstCanonicalPageApplied &&
@@ -50416,7 +50588,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     if (authoritativeRenderState.hasFailure) return 'Payment preview preparation failed for one or more candidates, lines, or jobs. Resolve or retry those failures before creating a draft.';
     if (!authoritativeRenderState.scopeSeedComplete || authoritativeRenderState.scopeCursorRemaining) return 'Candidate scope is still being prepared. Draft creation re-enables when scope discovery is complete.';
     if (authoritativeRenderState.hasOutstandingWork || !authoritativeRenderState.sessionReady) return 'Preparing / candidates refreshing. Draft creation re-enables when all candidate, line, and job work is complete.';
-    if (!currentFirstCanonicalPageApplied) return 'The current canonical preview page is still loading for this session/version.';
+    if (!currentFirstCanonicalPageApplied) return currentFirstCanonicalPageLoading ? 'The current canonical preview page is still loading for this session/version.' : 'Loading the first Ready to Pay preview page.';
     if (!authoritativeRenderState.readyForDraft || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) return 'Select at least one current eligible Ready to Pay row.';
     if (payeCreateBlocked && hasReadyUmbrella) return 'PAYE draft creation is blocked, but umbrella-ready items can still continue.';
     if (payeCreateBlocked && !hasReadyUmbrella) return 'A PAYE draft already exists. Cancel or delete it first.';
@@ -50458,15 +50630,17 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         </div>
       `;
     }
-    if (!currentFirstCanonicalPageApplied) {
+    if (currentFirstCanonicalPageLoading) {
       return `<div class="warn" style="white-space:pre-wrap;">${enc('The current canonical preview page is still loading for this workbench session/version.')}</div>`;
+    }
+    if (!currentFirstCanonicalPageApplied) {
+      return `<div class="mini" style="opacity:.9;white-space:pre-wrap;">${enc('Loading the first Ready to Pay preview page.')}</div>`;
     }
     if (!authoritativeRenderState.readyForDraft || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) {
       return `<div class="warn" style="white-space:pre-wrap;">${enc('Select at least one current eligible Ready to Pay row before creating a draft.')}</div>`;
     }
     return '';
   })();
-
   const readinessBannerHtml = (() => {
     if (!readiness || typeof readiness !== 'object') return '';
     const performed = (readiness.performed === true);
@@ -51008,7 +51182,6 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     </div>
   `;
 }
-
 
 
 
