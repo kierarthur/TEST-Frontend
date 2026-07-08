@@ -122298,6 +122298,8 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
 }
 
 
+
+
 async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -122416,12 +122418,6 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     'WORKBENCH_SESSION_INVALID',
     'WORKBENCH_SESSION_NOT_FOUND',
     'STALE_SESSION',
-    'WORKBENCH_SESSION_CONTEXT_REQUIRED',
-    'WORKBENCH_SESSION_VERSION_CONTEXT_REQUIRED',
-    'WORKBENCH_SESSION_PROGRESS_CONTEXT_REQUIRED',
-    'WORKBENCH_SESSION_VERSION_CONTEXT_INVALID',
-    'WORKBENCH_SESSION_PROGRESS_CONTEXT_INVALID',
-    'WORKBENCH_SESSION_PROGRESS_CHANGED',
     'OBSOLETE_SESSION',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
@@ -122583,89 +122579,11 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     return null;
   };
 
-
-  const readInteger = (value) => {
-    if (value === undefined || value === null || String(value).trim() === '') return null;
-    const n = Number(value);
-    if (!Number.isFinite(n) || Math.trunc(n) !== n) return null;
-    return n;
-  };
-  const readPositiveInteger = (value) => {
-    const n = readInteger(value);
-    return n !== null && n > 0 ? n : null;
-  };
-  const readNonNegativeInteger = (value) => {
-    const n = readInteger(value);
-    return n !== null && n >= 0 ? n : null;
-  };
-  const resolveWorkbenchObject = () => {
-    try {
-      const wizard = (typeof st !== 'undefined' && st && st.pay && st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
-      return {
-        wizard,
-        workbench: isPlainObject(wizard.workbench) ? wizard.workbench : {},
-        decisions: isPlainObject(wizard.decisions) ? wizard.decisions : {},
-        previewData: isPlainObject(wizard.preview?.data) ? wizard.preview.data : {},
-        previewSession: isPlainObject(wizard.preview?.data?.session) ? wizard.preview.data.session : {},
-        previewProgress: isPlainObject(wizard.preview?.data?.progress) ? wizard.preview.data.progress : {},
-        previewPayload: isPlainObject(wizard.preview?.data?.preview) ? wizard.preview.data.preview : {}
-      };
-    } catch {
-      return { wizard: {}, workbench: {}, decisions: {}, previewData: {}, previewSession: {}, previewProgress: {}, previewPayload: {} };
-    }
-  };
-  const currentWorkbenchSessionVersion = () => {
-    const ctx = resolveWorkbenchObject();
-    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
-      const value = readPositiveInteger(source.session_version ?? source.sessionVersion ?? source.version);
-      if (value !== null) return value;
-    }
-    return null;
-  };
-  const currentWorkbenchProgressCounterVersion = () => {
-    const ctx = resolveWorkbenchObject();
-    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
-      const value = readNonNegativeInteger(source.progress_counter_version ?? source.progressCounterVersion);
-      if (value !== null) return value;
-    }
-    return null;
-  };
-  const withWorkbenchFreshnessContext = (payloadLike) => {
-    const next = cloneJson(isPlainObject(payloadLike) ? payloadLike : {}) || {};
-    if (!Object.prototype.hasOwnProperty.call(next, 'expected_session_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedSessionVersion')) {
-      const sessionVersion = currentWorkbenchSessionVersion();
-      if (sessionVersion !== null) next.expected_session_version = sessionVersion;
-    }
-    if (!Object.prototype.hasOwnProperty.call(next, 'expected_progress_counter_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedProgressCounterVersion')) {
-      const progressCounterVersion = currentWorkbenchProgressCounterVersion();
-      if (progressCounterVersion !== null) next.expected_progress_counter_version = progressCounterVersion;
-    }
-    return next;
-  };
-  const adoptWorkbenchFreshnessMetadata = (payloadObj) => {
-    if (!isPlainObject(payloadObj)) return;
-    const sessionVersion = readPositiveInteger(payloadObj.session_version ?? payloadObj.sessionVersion ?? payloadObj.version ?? payloadObj.progress?.session_version ?? payloadObj.progress?.sessionVersion);
-    const progressCounterVersion = readNonNegativeInteger(payloadObj.progress_counter_version ?? payloadObj.progressCounterVersion ?? payloadObj.progress?.progress_counter_version ?? payloadObj.progress?.progressCounterVersion);
-    if (sessionVersion === null && progressCounterVersion === null) return;
-    try {
-      const ctx = resolveWorkbenchObject();
-      const targets = [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload].filter(isPlainObject);
-      for (const target of targets) {
-        if (sessionVersion !== null) {
-          target.session_version = sessionVersion;
-          target.sessionVersion = sessionVersion;
-        }
-        if (progressCounterVersion !== null) {
-          target.progress_counter_version = progressCounterVersion;
-          target.progressCounterVersion = progressCounterVersion;
-        }
-      }
-    } catch {}
-  };
-
   try {
     const sessionIdText = trimStr(sessionId);
-    const requestPayload = withWorkbenchFreshnessContext(payload);
+    const requestPayload = (typeof bankingPayAugmentWorkbenchFreshnessPayload === 'function')
+      ? bankingPayAugmentWorkbenchFreshnessPayload(sessionIdText, payload)
+      : (isPlainObject(payload) ? payload : {});
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -122682,7 +122600,6 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
       throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-    adoptWorkbenchFreshnessMetadata(payloadObj);
     const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
     return {
       ok: true,
@@ -122703,6 +122620,122 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
+// SHA-256 suffix: c4f394056cc0
+function bankingPayAugmentWorkbenchFreshnessPayload(sessionId, payload = {}, options = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const cloneJson = (value) => {
+    try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
+  };
+  const readPositiveInteger = (...values) => {
+    for (const value of values) {
+      const raw = trimStr(value);
+      if (!/^[0-9]{1,18}$/.test(raw)) continue;
+      const parsed = Number(raw);
+      if (Number.isSafeInteger(parsed) && parsed >= 1) return parsed;
+    }
+    return null;
+  };
+  const readNonNegativeInteger = (...values) => {
+    for (const value of values) {
+      const raw = trimStr(value);
+      if (!/^[0-9]{1,18}$/.test(raw)) continue;
+      const parsed = Number(raw);
+      if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
+    }
+    return null;
+  };
+  const hasAny = (source, keys) => keys.some((key) => Object.prototype.hasOwnProperty.call(source, key) && trimStr(source[key]) !== '');
+
+  const source = isPlainObject(payload) ? (cloneJson(payload) || {}) : {};
+  const sessionIdText = trimStr(sessionId);
+
+  if (hasAny(source, ['expected_session_version', 'expectedSessionVersion', 'session_version', 'sessionVersion']) &&
+      hasAny(source, ['expected_progress_counter_version', 'expectedProgressCounterVersion', 'progress_counter_version', 'progressCounterVersion'])) {
+    return source;
+  }
+
+  let bankingState = null;
+  try {
+    if (typeof bankingGetState === 'function') {
+      const state = bankingGetState();
+      if (isPlainObject(state)) bankingState = state;
+    }
+  } catch { bankingState = null; }
+  if (!bankingState) {
+    try {
+      const fallbackState = (typeof window !== 'undefined' && window.modalCtx && isPlainObject(window.modalCtx.banking)) ? window.modalCtx.banking : null;
+      if (isPlainObject(fallbackState)) bankingState = fallbackState;
+    } catch {}
+  }
+  if (!bankingState) {
+    try {
+      const legacyState = (typeof modalCtx !== 'undefined' && modalCtx && isPlainObject(modalCtx.banking)) ? modalCtx.banking : null;
+      if (isPlainObject(legacyState)) bankingState = legacyState;
+    } catch {}
+  }
+
+  const wizard = isPlainObject(bankingState?.pay?.draftWizard) ? bankingState.pay.draftWizard : null;
+  if (!wizard) return source;
+
+  const activeSessionId = trimStr(
+    wizard.workbench?.session_id ||
+    wizard.workbench?.sessionId ||
+    wizard.decisions?.session_id ||
+    wizard.decisions?.sessionId ||
+    wizard.preview?.data?.session_id ||
+    wizard.preview?.data?.sessionId ||
+    wizard.preview?.data?.session?.session_id ||
+    wizard.preview?.data?.session?.sessionId ||
+    ''
+  );
+  if (sessionIdText && activeSessionId && activeSessionId !== sessionIdText) return source;
+
+  const expectedSessionVersion = readPositiveInteger(
+    source.expected_session_version,
+    source.expectedSessionVersion,
+    source.session_version,
+    source.sessionVersion,
+    wizard.workbench?.session_version,
+    wizard.workbench?.sessionVersion,
+    wizard.decisions?.session_version,
+    wizard.decisions?.sessionVersion,
+    wizard.preview?.data?.session_version,
+    wizard.preview?.data?.sessionVersion,
+    wizard.preview?.data?.session?.session_version,
+    wizard.preview?.data?.session?.sessionVersion,
+    wizard.preview?.data?.session?.version
+  );
+  const expectedProgressCounterVersion = readNonNegativeInteger(
+    source.expected_progress_counter_version,
+    source.expectedProgressCounterVersion,
+    source.progress_counter_version,
+    source.progressCounterVersion,
+    wizard.workbench?.progress_counter_version,
+    wizard.workbench?.progressCounterVersion,
+    wizard.decisions?.progress_counter_version,
+    wizard.decisions?.progressCounterVersion,
+    wizard.preview?.data?.progress_counter_version,
+    wizard.preview?.data?.progressCounterVersion,
+    wizard.preview?.data?.session?.progress_counter_version,
+    wizard.preview?.data?.session?.progressCounterVersion,
+    wizard.preview?.data?.preview?.progress_counter_version,
+    wizard.preview?.data?.preview?.progressCounterVersion
+  );
+
+  if (!hasAny(source, ['expected_session_version', 'expectedSessionVersion', 'session_version', 'sessionVersion']) && expectedSessionVersion != null) {
+    source.expected_session_version = expectedSessionVersion;
+  }
+  if (!hasAny(source, ['expected_progress_counter_version', 'expectedProgressCounterVersion', 'progress_counter_version', 'progressCounterVersion']) && expectedProgressCounterVersion != null) {
+    source.expected_progress_counter_version = expectedProgressCounterVersion;
+  }
+  if (options && options.includeSessionId === true && sessionIdText && !source.session_id && !source.sessionId) {
+    source.session_id = sessionIdText;
+  }
+  return source;
+}
+
 
 async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -123092,7 +123125,7 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
       throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_CASE_KEY' }, 400, 'Select at least one resolved-rate timesheet.');
     }
 
-    const requestPayload = {
+    const requestPayload = (typeof bankingPayAugmentWorkbenchFreshnessPayload === 'function' ? bankingPayAugmentWorkbenchFreshnessPayload(sessionIdText, {
       operation,
       ...(candidateId ? { candidate_id: candidateId } : {}),
       ...(caseKey ? { case_key: caseKey } : {}),
@@ -123107,7 +123140,22 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
       ...(Array.isArray(inputPayload.selected_case_identities ?? inputPayload.selectedCaseIdentities)
         ? { selected_case_identities: cloneJson(inputPayload.selected_case_identities ?? inputPayload.selectedCaseIdentities) }
         : {})
-    };
+    }, { includeSessionId: false }) : {
+      operation,
+      ...(candidateId ? { candidate_id: candidateId } : {}),
+      ...(caseKey ? { case_key: caseKey } : {}),
+      ...(financeCaseId ? { finance_case_id: financeCaseId } : {}),
+      ...(linkedTimesheetId ? { linked_timesheet_id: linkedTimesheetId, timesheet_id: linkedTimesheetId } : {}),
+      ...(resolutionFamily ? { resolution_family: resolutionFamily } : {}),
+      ...(expectedSessionVersion != null ? { expected_session_version: expectedSessionVersion } : {}),
+      ...(selectedTimesheetIds.length ? { selected_timesheet_ids: selectedTimesheetIds } : {}),
+      ...(Array.isArray(inputPayload.selected_case_keys ?? inputPayload.selectedCaseKeys)
+        ? { selected_case_keys: cloneJson(inputPayload.selected_case_keys ?? inputPayload.selectedCaseKeys) }
+        : {}),
+      ...(Array.isArray(inputPayload.selected_case_identities ?? inputPayload.selectedCaseIdentities)
+        ? { selected_case_identities: cloneJson(inputPayload.selected_case_identities ?? inputPayload.selectedCaseIdentities) }
+        : {})
+    });
 
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution/clear`), {
       method: 'POST',
@@ -123147,6 +123195,8 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
+// SHA-256 suffix: 3e3ce4290d6d
 
 
 async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payload = {}) {
@@ -123267,12 +123317,6 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
     'WORKBENCH_SESSION_INVALID',
     'WORKBENCH_SESSION_NOT_FOUND',
     'STALE_SESSION',
-    'WORKBENCH_SESSION_CONTEXT_REQUIRED',
-    'WORKBENCH_SESSION_VERSION_CONTEXT_REQUIRED',
-    'WORKBENCH_SESSION_PROGRESS_CONTEXT_REQUIRED',
-    'WORKBENCH_SESSION_VERSION_CONTEXT_INVALID',
-    'WORKBENCH_SESSION_PROGRESS_CONTEXT_INVALID',
-    'WORKBENCH_SESSION_PROGRESS_CHANGED',
     'OBSOLETE_SESSION',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
@@ -123434,89 +123478,11 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
     return null;
   };
 
-
-  const readInteger = (value) => {
-    if (value === undefined || value === null || String(value).trim() === '') return null;
-    const n = Number(value);
-    if (!Number.isFinite(n) || Math.trunc(n) !== n) return null;
-    return n;
-  };
-  const readPositiveInteger = (value) => {
-    const n = readInteger(value);
-    return n !== null && n > 0 ? n : null;
-  };
-  const readNonNegativeInteger = (value) => {
-    const n = readInteger(value);
-    return n !== null && n >= 0 ? n : null;
-  };
-  const resolveWorkbenchObject = () => {
-    try {
-      const wizard = (typeof st !== 'undefined' && st && st.pay && st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
-      return {
-        wizard,
-        workbench: isPlainObject(wizard.workbench) ? wizard.workbench : {},
-        decisions: isPlainObject(wizard.decisions) ? wizard.decisions : {},
-        previewData: isPlainObject(wizard.preview?.data) ? wizard.preview.data : {},
-        previewSession: isPlainObject(wizard.preview?.data?.session) ? wizard.preview.data.session : {},
-        previewProgress: isPlainObject(wizard.preview?.data?.progress) ? wizard.preview.data.progress : {},
-        previewPayload: isPlainObject(wizard.preview?.data?.preview) ? wizard.preview.data.preview : {}
-      };
-    } catch {
-      return { wizard: {}, workbench: {}, decisions: {}, previewData: {}, previewSession: {}, previewProgress: {}, previewPayload: {} };
-    }
-  };
-  const currentWorkbenchSessionVersion = () => {
-    const ctx = resolveWorkbenchObject();
-    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
-      const value = readPositiveInteger(source.session_version ?? source.sessionVersion ?? source.version);
-      if (value !== null) return value;
-    }
-    return null;
-  };
-  const currentWorkbenchProgressCounterVersion = () => {
-    const ctx = resolveWorkbenchObject();
-    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
-      const value = readNonNegativeInteger(source.progress_counter_version ?? source.progressCounterVersion);
-      if (value !== null) return value;
-    }
-    return null;
-  };
-  const withWorkbenchFreshnessContext = (payloadLike) => {
-    const next = cloneJson(isPlainObject(payloadLike) ? payloadLike : {}) || {};
-    if (!Object.prototype.hasOwnProperty.call(next, 'expected_session_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedSessionVersion')) {
-      const sessionVersion = currentWorkbenchSessionVersion();
-      if (sessionVersion !== null) next.expected_session_version = sessionVersion;
-    }
-    if (!Object.prototype.hasOwnProperty.call(next, 'expected_progress_counter_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedProgressCounterVersion')) {
-      const progressCounterVersion = currentWorkbenchProgressCounterVersion();
-      if (progressCounterVersion !== null) next.expected_progress_counter_version = progressCounterVersion;
-    }
-    return next;
-  };
-  const adoptWorkbenchFreshnessMetadata = (payloadObj) => {
-    if (!isPlainObject(payloadObj)) return;
-    const sessionVersion = readPositiveInteger(payloadObj.session_version ?? payloadObj.sessionVersion ?? payloadObj.version ?? payloadObj.progress?.session_version ?? payloadObj.progress?.sessionVersion);
-    const progressCounterVersion = readNonNegativeInteger(payloadObj.progress_counter_version ?? payloadObj.progressCounterVersion ?? payloadObj.progress?.progress_counter_version ?? payloadObj.progress?.progressCounterVersion);
-    if (sessionVersion === null && progressCounterVersion === null) return;
-    try {
-      const ctx = resolveWorkbenchObject();
-      const targets = [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload].filter(isPlainObject);
-      for (const target of targets) {
-        if (sessionVersion !== null) {
-          target.session_version = sessionVersion;
-          target.sessionVersion = sessionVersion;
-        }
-        if (progressCounterVersion !== null) {
-          target.progress_counter_version = progressCounterVersion;
-          target.progressCounterVersion = progressCounterVersion;
-        }
-      }
-    } catch {}
-  };
-
   try {
     const sessionIdText = trimStr(sessionId);
-    const requestPayload = withWorkbenchFreshnessContext(payload);
+    const requestPayload = (typeof bankingPayAugmentWorkbenchFreshnessPayload === 'function')
+      ? bankingPayAugmentWorkbenchFreshnessPayload(sessionIdText, payload)
+      : (isPlainObject(payload) ? payload : {});
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/timesheet-exclusion`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -123533,7 +123499,6 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
       throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-    adoptWorkbenchFreshnessMetadata(payloadObj);
     const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
     return {
       ok: true,
@@ -123554,6 +123519,10 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
+// SHA-256 suffix: 78922a28ea61
+
+
 
 async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -123673,12 +123642,6 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     'WORKBENCH_SESSION_INVALID',
     'WORKBENCH_SESSION_NOT_FOUND',
     'STALE_SESSION',
-    'WORKBENCH_SESSION_CONTEXT_REQUIRED',
-    'WORKBENCH_SESSION_VERSION_CONTEXT_REQUIRED',
-    'WORKBENCH_SESSION_PROGRESS_CONTEXT_REQUIRED',
-    'WORKBENCH_SESSION_VERSION_CONTEXT_INVALID',
-    'WORKBENCH_SESSION_PROGRESS_CONTEXT_INVALID',
-    'WORKBENCH_SESSION_PROGRESS_CHANGED',
     'OBSOLETE_SESSION',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
@@ -123840,89 +123803,11 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     return null;
   };
 
-
-  const readInteger = (value) => {
-    if (value === undefined || value === null || String(value).trim() === '') return null;
-    const n = Number(value);
-    if (!Number.isFinite(n) || Math.trunc(n) !== n) return null;
-    return n;
-  };
-  const readPositiveInteger = (value) => {
-    const n = readInteger(value);
-    return n !== null && n > 0 ? n : null;
-  };
-  const readNonNegativeInteger = (value) => {
-    const n = readInteger(value);
-    return n !== null && n >= 0 ? n : null;
-  };
-  const resolveWorkbenchObject = () => {
-    try {
-      const wizard = (typeof st !== 'undefined' && st && st.pay && st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
-      return {
-        wizard,
-        workbench: isPlainObject(wizard.workbench) ? wizard.workbench : {},
-        decisions: isPlainObject(wizard.decisions) ? wizard.decisions : {},
-        previewData: isPlainObject(wizard.preview?.data) ? wizard.preview.data : {},
-        previewSession: isPlainObject(wizard.preview?.data?.session) ? wizard.preview.data.session : {},
-        previewProgress: isPlainObject(wizard.preview?.data?.progress) ? wizard.preview.data.progress : {},
-        previewPayload: isPlainObject(wizard.preview?.data?.preview) ? wizard.preview.data.preview : {}
-      };
-    } catch {
-      return { wizard: {}, workbench: {}, decisions: {}, previewData: {}, previewSession: {}, previewProgress: {}, previewPayload: {} };
-    }
-  };
-  const currentWorkbenchSessionVersion = () => {
-    const ctx = resolveWorkbenchObject();
-    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
-      const value = readPositiveInteger(source.session_version ?? source.sessionVersion ?? source.version);
-      if (value !== null) return value;
-    }
-    return null;
-  };
-  const currentWorkbenchProgressCounterVersion = () => {
-    const ctx = resolveWorkbenchObject();
-    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
-      const value = readNonNegativeInteger(source.progress_counter_version ?? source.progressCounterVersion);
-      if (value !== null) return value;
-    }
-    return null;
-  };
-  const withWorkbenchFreshnessContext = (payloadLike) => {
-    const next = cloneJson(isPlainObject(payloadLike) ? payloadLike : {}) || {};
-    if (!Object.prototype.hasOwnProperty.call(next, 'expected_session_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedSessionVersion')) {
-      const sessionVersion = currentWorkbenchSessionVersion();
-      if (sessionVersion !== null) next.expected_session_version = sessionVersion;
-    }
-    if (!Object.prototype.hasOwnProperty.call(next, 'expected_progress_counter_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedProgressCounterVersion')) {
-      const progressCounterVersion = currentWorkbenchProgressCounterVersion();
-      if (progressCounterVersion !== null) next.expected_progress_counter_version = progressCounterVersion;
-    }
-    return next;
-  };
-  const adoptWorkbenchFreshnessMetadata = (payloadObj) => {
-    if (!isPlainObject(payloadObj)) return;
-    const sessionVersion = readPositiveInteger(payloadObj.session_version ?? payloadObj.sessionVersion ?? payloadObj.version ?? payloadObj.progress?.session_version ?? payloadObj.progress?.sessionVersion);
-    const progressCounterVersion = readNonNegativeInteger(payloadObj.progress_counter_version ?? payloadObj.progressCounterVersion ?? payloadObj.progress?.progress_counter_version ?? payloadObj.progress?.progressCounterVersion);
-    if (sessionVersion === null && progressCounterVersion === null) return;
-    try {
-      const ctx = resolveWorkbenchObject();
-      const targets = [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload].filter(isPlainObject);
-      for (const target of targets) {
-        if (sessionVersion !== null) {
-          target.session_version = sessionVersion;
-          target.sessionVersion = sessionVersion;
-        }
-        if (progressCounterVersion !== null) {
-          target.progress_counter_version = progressCounterVersion;
-          target.progressCounterVersion = progressCounterVersion;
-        }
-      }
-    } catch {}
-  };
-
   try {
     const sessionIdText = trimStr(sessionId);
-    const requestPayload = withWorkbenchFreshnessContext(payload);
+    const requestPayload = (typeof bankingPayAugmentWorkbenchFreshnessPayload === 'function')
+      ? bankingPayAugmentWorkbenchFreshnessPayload(sessionIdText, payload)
+      : (isPlainObject(payload) ? payload : {});
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/selected-rows`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -123941,7 +123826,7 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const selectedRows = Array.isArray(payloadObj.selected_preview_row_ids)
       ? payloadObj.selected_preview_row_ids
-      : (Array.isArray(payloadObj.server_selected_preview_row_ids) ? payloadObj.server_selected_preview_row_ids : (Array.isArray(payload.selected_preview_row_ids) ? payload.selected_preview_row_ids : []));
+      : (Array.isArray(payloadObj.server_selected_preview_row_ids) ? payloadObj.server_selected_preview_row_ids : (Array.isArray(requestPayload.selected_preview_row_ids) ? requestPayload.selected_preview_row_ids : []));
     return {
       ok: true,
       ...(cloneJson(payloadObj) || {}),
@@ -123957,6 +123842,7 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
   }
 }
 
+// SHA-256 suffix: dc64599e311d
 
 async function bankingPayWorkbenchSessionDiscard(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
