@@ -27254,7 +27254,6 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
   return { filename, rowCount: exportRows.length };
 }
 
-
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -30544,20 +30543,27 @@ async function bankingPayPreview(pay_date) {
     const requestUrl = apiFn(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/preview-page?${query.toString()}`);
     const response = await authFetchFn(requestUrl, { method: 'GET' });
 
-    if (response && typeof response === 'object' && typeof response.text !== 'function' && !Object.prototype.hasOwnProperty.call(response, 'ok')) {
-      return response;
-    }
-
     let responseText = '';
     let parsed = null;
-    try {
-      responseText = response && typeof response.text === 'function' ? await response.text() : '';
-      parsed = responseText ? JSON.parse(responseText) : null;
-    } catch {
-      parsed = null;
+    let responseOk = false;
+    let responseStatus = 0;
+
+    if (response && typeof response === 'object' && typeof response.text !== 'function') {
+      parsed = isPlainObject(response) ? response : null;
+      responseStatus = Number(response.status || response.status_code || response.http_status || 200) || 200;
+      responseOk = !!(parsed && parsed.ok !== false);
+    } else {
+      try {
+        responseText = response && typeof response.text === 'function' ? await response.text() : '';
+        parsed = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        parsed = null;
+      }
+      responseStatus = Number(response?.status || 0) || 0;
+      responseOk = !!(response && response.ok === true && (!isPlainObject(parsed) || parsed.ok !== false));
     }
 
-    if (!response || response.ok !== true) {
+    if (!response || responseOk !== true) {
       const payload = isPlainObject(parsed) ? parsed : {};
       const message = trimStr(
         payload.user_message ||
@@ -30567,7 +30573,7 @@ async function bankingPayPreview(pay_date) {
         `Payment preview ${sectionText} page could not be loaded.`
       ) || `Payment preview ${sectionText} page could not be loaded.`;
       const err = new Error(message);
-      err.status = Number(response?.status || payload.status || payload.status_code || payload.http_status || 400) || 400;
+      err.status = Number(responseStatus || payload.status || payload.status_code || payload.http_status || 400) || 400;
       err.payload = payload;
       err.json = payload;
       err.error_code = trimStr(payload.error_code || payload.code || 'BANKING_PAY_WORKBENCH_PREVIEW_PAGE_FAILED') || 'BANKING_PAY_WORKBENCH_PREVIEW_PAGE_FAILED';
@@ -32222,6 +32228,8 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
+
+
 
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
