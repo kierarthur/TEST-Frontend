@@ -27254,6 +27254,7 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
   return { filename, rowCount: exportRows.length };
 }
 
+
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -30506,8 +30507,93 @@ async function bankingPayPreview(pay_date) {
     return applyAuthoritativePreviewVisualState(sourcePayload);
   };
 
+  const fetchWorkbenchPreviewPageForSection = async (sessionId, section, options = {}) => {
+    const sessionIdText = trimStr(sessionId || getCurrentWorkbenchSessionId() || '');
+    const sectionText = normalisePreviewPageSectionName(section || options?.section || 'canonical_preview_lines');
+    const opts = isPlainObject(options) ? options : {};
+
+    if (typeof bankingPayWorkbenchSessionGetPreviewPage === 'function') {
+      return await bankingPayWorkbenchSessionGetPreviewPage(sessionIdText, sectionText, opts);
+    }
+
+    const authFetchFn = (typeof authFetch === 'function')
+      ? authFetch
+      : ((typeof window !== 'undefined' && window && typeof window.authFetch === 'function') ? window.authFetch : null);
+    const apiFn = (typeof API === 'function')
+      ? API
+      : ((typeof window !== 'undefined' && window && typeof window.API === 'function') ? window.API : null);
+
+    if (!sessionIdText) {
+      throw new Error('bankingPayPreview.previewPage: session id is required');
+    }
+    if (typeof authFetchFn !== 'function' || typeof apiFn !== 'function') {
+      throw new Error('bankingPayPreview.previewPage: preview-page fetch helpers are unavailable');
+    }
+
+    const limitRaw = Number(opts.limit || opts.pageSize || opts.page_size || 100);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.trunc(limitRaw))) : 100;
+    const cursorValue = opts.cursor ?? opts.cursor_json ?? opts.cursorJson ?? null;
+    const query = new URLSearchParams();
+    query.set('section', sectionText);
+    query.set('limit', String(limit));
+    query.set('mode', 'PAGE');
+    if (cursorValue !== null && cursorValue !== undefined && cursorValue !== '') {
+      query.set('cursor', typeof cursorValue === 'string' ? cursorValue : JSON.stringify(cursorValue));
+    }
+
+    const requestUrl = apiFn(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/preview-page?${query.toString()}`);
+    const response = await authFetchFn(requestUrl, { method: 'GET' });
+
+    if (response && typeof response === 'object' && typeof response.text !== 'function' && !Object.prototype.hasOwnProperty.call(response, 'ok')) {
+      return response;
+    }
+
+    let responseText = '';
+    let parsed = null;
+    try {
+      responseText = response && typeof response.text === 'function' ? await response.text() : '';
+      parsed = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      parsed = null;
+    }
+
+    if (!response || response.ok !== true) {
+      const payload = isPlainObject(parsed) ? parsed : {};
+      const message = trimStr(
+        payload.user_message ||
+        payload.message ||
+        payload.error ||
+        responseText ||
+        `Payment preview ${sectionText} page could not be loaded.`
+      ) || `Payment preview ${sectionText} page could not be loaded.`;
+      const err = new Error(message);
+      err.status = Number(response?.status || payload.status || payload.status_code || payload.http_status || 400) || 400;
+      err.payload = payload;
+      err.json = payload;
+      err.error_code = trimStr(payload.error_code || payload.code || 'BANKING_PAY_WORKBENCH_PREVIEW_PAGE_FAILED') || 'BANKING_PAY_WORKBENCH_PREVIEW_PAGE_FAILED';
+      err.code = err.error_code;
+      throw err;
+    }
+
+    const page = isPlainObject(parsed) ? parsed : {};
+    return {
+      ...page,
+      ok: page.ok !== false,
+      session_id: trimStr(page.session_id || page.sessionId || sessionIdText),
+      session_version: page.session_version ?? page.sessionVersion ?? opts.session_version ?? wiz.workbench?.session_version ?? null,
+      requested_section: normalisePreviewPageSectionName(page.requested_section || page.requestedSection || sectionText),
+      resolved_section: normalisePreviewPageSectionName(page.resolved_section || page.resolvedSection || page.section || sectionText),
+      section: normalisePreviewPageSectionName(page.section || page.resolved_section || page.resolvedSection || sectionText),
+      rows: Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []),
+      items: Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []),
+      returned_count: Number.isFinite(Number(page.returned_count ?? page.returnedCount))
+        ? Math.max(0, Math.trunc(Number(page.returned_count ?? page.returnedCount)))
+        : (Array.isArray(page.rows) ? page.rows.length : (Array.isArray(page.items) ? page.items.length : 0)),
+      limit
+    };
+  };
+
   const loadRequiredPreviewSectionsForReadyWorkbench = async (sessionId, loadOptions = {}) => {
-    if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return null;
     const sessionIdText = trimStr(sessionId || getCurrentWorkbenchSessionId() || '');
     if (!sessionIdText || !isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) return null;
 
@@ -30753,10 +30839,11 @@ async function bankingPayPreview(pay_date) {
       } else {
         invalidatedSections[section] = staleReasons;
         try {
-          page = await bankingPayWorkbenchSessionGetPreviewPage(sessionIdText, section, {
+          page = await fetchWorkbenchPreviewPageForSection(sessionIdText, section, {
             limit,
             expected_session_id: sessionIdText,
             current_session_id: sessionIdText,
+            session_version: currentSessionVersion,
             source: opts.source || 'bankingPayPreview.requiredPreviewSections'
           });
           refreshAttemptsForSignal = cachedSignalMatches ? cachedRefreshAttemptsForSignal + 1 : 1;
@@ -30828,7 +30915,6 @@ async function bankingPayPreview(pay_date) {
   };
 
   const maybeLoadFirstPreviewPageForPayload = async (payload) => {
-    if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return null;
     const authoritativePageState = getAuthoritativeWorkbenchProgressState(payload);
     const mustReadPreviewPage = progressPayloadRequiresFirstPreviewPageRead(payload);
     const shouldAttemptPage = loadFirstPage || workbenchProgressHasRowsAvailable(payload) || authoritativePageState.ready || mustReadPreviewPage;
@@ -32136,7 +32222,6 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
-
 
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
