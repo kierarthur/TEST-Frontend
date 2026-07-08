@@ -32284,6 +32284,7 @@ async function bankingPayPreview(pay_date) {
 
 
 
+
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -35652,6 +35653,29 @@ async function bankingPayCreateDraft(input = {}) {
     });
   }
 
+  const readLocalProgressCounterVersionForCreateDraft = () => {
+    const candidates = [
+      wiz?.workbench?.progress_counter_version,
+      wiz?.workbench?.progressCounterVersion,
+      wiz?.decisions?.progress_counter_version,
+      wiz?.decisions?.progressCounterVersion,
+      wiz?.preview?.data?.progress_counter_version,
+      wiz?.preview?.data?.progressCounterVersion,
+      wiz?.preview?.data?.session?.progress_counter_version,
+      wiz?.preview?.data?.session?.progressCounterVersion,
+      wiz?.preview?.data?.progress?.progress_counter_version,
+      wiz?.preview?.data?.progress?.progressCounterVersion,
+      wiz?.preview?.data?.preview?.progress_counter_version,
+      wiz?.preview?.data?.preview?.progressCounterVersion
+    ];
+    for (const candidate of candidates) {
+      const value = normalizeSessionVersionForCreateDraft(candidate);
+      if (value) return value;
+    }
+    return null;
+  };
+  const localExpectedProgressCounterVersion = readLocalProgressCounterVersionForCreateDraft();
+
   let authoritativeReadinessSnapshot = await readAuthoritativeCreateDraftReadiness(sessionId, expectedSessionVersion, 'INITIAL_READINESS');
   if (!authoritativeReadinessSnapshot || authoritativeReadinessSnapshot.ok !== true || authoritativeReadinessSnapshot.gate_ready !== true) {
     return await rejectAuthoritativeCreateDraftReadiness('INITIAL_READINESS', authoritativeReadinessSnapshot, {
@@ -35660,6 +35684,19 @@ async function bankingPayCreateDraft(input = {}) {
       local_refresh_diagnostics: localRefreshDiagnostics
     });
   }
+  const authoritativeProgressCounterVersion = normalizeSessionVersionForCreateDraft(authoritativeReadinessSnapshot.progress_counter_version);
+  if (localExpectedProgressCounterVersion && authoritativeProgressCounterVersion && localExpectedProgressCounterVersion !== authoritativeProgressCounterVersion) {
+    return await rejectAuthoritativeCreateDraftReadiness('INITIAL_PROGRESS_COUNTER_CHANGED', {
+      ...authoritativeReadinessSnapshot,
+      gate_ready: false,
+      blocker_codes: uniqTrimmed([...(authoritativeReadinessSnapshot.blocker_codes || []), 'SESSION_PROGRESS_CHANGED_BEFORE_CREATE_DRAFT'])
+    }, {
+      expected_progress_counter_version: localExpectedProgressCounterVersion,
+      current_progress_counter_version: authoritativeProgressCounterVersion,
+      local_refresh_diagnostics: localRefreshDiagnostics
+    });
+  }
+
   const authoritativePayDate = trimStr(authoritativeReadinessSnapshot.pay_date || '');
   const authoritativeCutoff = normalizeCutoffDate(authoritativeReadinessSnapshot.week_ending_cutoff || '');
   const authoritativeSessionSignature = trimStr(authoritativeReadinessSnapshot.session_signature || '');
@@ -36186,28 +36223,30 @@ async function bankingPayCreateDraft(input = {}) {
       const allPayeReady = allNonSyntheticContracts.filter((contract) => upperTrim(contract?.pay_channel || contract?.payChannel || contract?.economic_key?.pay_channel || '') === 'PAYE' && createDraftNodeMatchesActiveFilters(contract)).length;
       const allUmbrellaReady = allNonSyntheticContracts.filter((contract) => upperTrim(contract?.pay_channel || contract?.payChannel || contract?.economic_key?.pay_channel || '') === 'UMBRELLA' && createDraftNodeMatchesActiveFilters(contract)).length;
 
-      syncedSelectedRows = [...contractIds];
-      selectedPreviewRowIdsForServer = [...contractIds];
-      selectedPreviewSelection.selected_preview_row_ids = [...contractIds];
-      selectedPreviewSelection.selected_preview_row_mode = contractIds.length > 0 ? (selectedPreviewSelection.selected_preview_row_mode || 'IMPLICIT_ALL') : 'EXPLICIT_NONE';
+      const globalSelectedRowIds = uniqTrimmed(currentSelectionBeforeSubmit.selected_preview_row_ids || syncedSelectedRows);
+      const globalSelectedRowMode = selectedPreviewSelection.selected_preview_row_mode || currentSelectionBeforeSubmit.selected_preview_row_mode || 'IMPLICIT_ALL';
+      syncedSelectedRows = [...globalSelectedRowIds];
+      selectedPreviewRowIdsForServer = [...globalSelectedRowIds];
+      selectedPreviewSelection.selected_preview_row_ids = [...globalSelectedRowIds];
+      selectedPreviewSelection.selected_preview_row_mode = globalSelectedRowMode;
       try {
-        wiz.decisions.selected_preview_row_ids = [...contractIds];
-        wiz.decisions.server_selected_preview_row_ids = [...contractIds];
-        wiz.workbench.server_selected_preview_row_ids = [...contractIds];
+        wiz.decisions.selected_preview_row_ids = [...globalSelectedRowIds];
+        wiz.decisions.server_selected_preview_row_ids = [...globalSelectedRowIds];
+        wiz.workbench.server_selected_preview_row_ids = [...globalSelectedRowIds];
         wiz.workbench.server_selected_preview_row_ids_provided = true;
         wiz.decisions.server_selected_preview_row_ids_provided = true;
       } catch {}
 
       reqBody.pay_channel_scope = scope;
-      reqBody.selected_preview_row_ids = [...contractIds];
-      reqBody.selected_preview_row_mode = selectedPreviewSelection.selected_preview_row_mode;
+      reqBody.selected_preview_row_ids = [...globalSelectedRowIds];
+      reqBody.selected_preview_row_mode = globalSelectedRowMode;
       reqBody.draft_selected_preview_row_ids = [...contractIds];
       reqBody.scoped_selected_preview_row_ids = [...contractIds];
       reqBody.draft_selected_preview_row_contracts = deep(contracts) || [];
-      reqBody.selected_preview_row_contracts = deep(contracts) || [];
+      reqBody.selected_preview_row_contracts = deep(allSelectedPreviewRowContracts) || [];
       reqBody.scoped_selected_preview_row_contracts = deep(contracts) || [];
       reqBody.draft_selected_economic_keys = deep(economicKeys) || [];
-      reqBody.selected_economic_keys = deep(economicKeys) || [];
+      reqBody.selected_economic_keys = deep(allSelectedEconomicKeys) || [];
       reqBody.scoped_selected_economic_keys = deep(economicKeys) || [];
 
       createDraftPreviewDecisions.pay_channel_scope = scope;
@@ -36216,32 +36255,32 @@ async function bankingPayCreateDraft(input = {}) {
       createDraftPreviewDecisions.draftScope = scope;
       createDraftPreviewDecisions.candidate_filter_id = activeCandidateFilterId || null;
       createDraftPreviewDecisions.client_filter_id = activeClientFilterId || null;
-      createDraftPreviewDecisions.selected_preview_row_ids = [...contractIds];
-      createDraftPreviewDecisions.selectedPreviewRowIds = [...contractIds];
-      createDraftPreviewDecisions.selected_preview_row_mode = selectedPreviewSelection.selected_preview_row_mode;
-      createDraftPreviewDecisions.selectedPreviewRowMode = selectedPreviewSelection.selected_preview_row_mode;
+      createDraftPreviewDecisions.selected_preview_row_ids = [...globalSelectedRowIds];
+      createDraftPreviewDecisions.selectedPreviewRowIds = [...globalSelectedRowIds];
+      createDraftPreviewDecisions.selected_preview_row_mode = globalSelectedRowMode;
+      createDraftPreviewDecisions.selectedPreviewRowMode = globalSelectedRowMode;
       createDraftPreviewDecisions.draft_selected_preview_row_ids = [...contractIds];
       createDraftPreviewDecisions.scoped_selected_preview_row_ids = [...contractIds];
       createDraftPreviewDecisions.draft_selected_preview_row_contracts = deep(contracts) || [];
-      createDraftPreviewDecisions.selected_preview_row_contracts = deep(contracts) || [];
+      createDraftPreviewDecisions.selected_preview_row_contracts = deep(allSelectedPreviewRowContracts) || [];
       createDraftPreviewDecisions.scoped_selected_preview_row_contracts = deep(contracts) || [];
       createDraftPreviewDecisions.draft_selected_economic_keys = deep(economicKeys) || [];
-      createDraftPreviewDecisions.selected_economic_keys = deep(economicKeys) || [];
+      createDraftPreviewDecisions.selected_economic_keys = deep(allSelectedEconomicKeys) || [];
       createDraftPreviewDecisions.scoped_selected_economic_keys = deep(economicKeys) || [];
       createDraftPreviewDecisions.scope_counts = {
         selected_ready_total: allNonSyntheticContracts.length,
         selected_ready_paye: allPayeReady,
         selected_ready_umbrella: allUmbrellaReady,
         selected_ready_for_scope: contracts.length,
-        selected_preview_row_ids_total: contractIds.length,
+        selected_preview_row_ids_total: globalSelectedRowIds.length,
         selected_preview_row_ids_for_scope_count: contractIds.length,
         scoped_selected_preview_row_ids_total: contractIds.length,
         pay_channel_scope: scope
       };
       try {
         requestSummary.pay_channel_scope = scope;
-        requestSummary.selected_preview_row_ids_count = contractIds.length;
-        requestSummary.selected_preview_row_ids_sample = contractIds.slice(0, 10);
+        requestSummary.selected_preview_row_ids_count = globalSelectedRowIds.length;
+        requestSummary.selected_preview_row_ids_sample = globalSelectedRowIds.slice(0, 10);
         requestSummary.selected_ready_total = allNonSyntheticContracts.length;
         requestSummary.selected_ready_paye = allPayeReady;
         requestSummary.selected_ready_umbrella = allUmbrellaReady;
@@ -36318,24 +36357,31 @@ async function bankingPayCreateDraft(input = {}) {
       && Number.isFinite(currentSelectionAllChannelCount)
       && Math.max(0, Math.trunc(finalAuthoritativeSelectedCount)) === Math.max(0, Math.trunc(currentSelectionAllChannelCount));
     const finalCanonicalPageCurrent = isCurrentCanonicalPageAppliedForCreateDraft(sessionId, expectedSessionVersion);
+    const finalAuthoritativeProgressCounterVersion = normalizeSessionVersionForCreateDraft(finalAuthoritativeReadiness?.progress_counter_version);
+    const finalProgressCounterMatchesExpected = !localExpectedProgressCounterVersion
+      || !finalAuthoritativeProgressCounterVersion
+      || localExpectedProgressCounterVersion === finalAuthoritativeProgressCounterVersion;
     if (!finalAuthoritativeReadiness
         || finalAuthoritativeReadiness.ok !== true
         || finalAuthoritativeReadiness.gate_ready !== true
         || !finalSelectedCountMatchesPage
-        || !finalCanonicalPageCurrent) {
+        || !finalCanonicalPageCurrent
+        || !finalProgressCounterMatchesExpected) {
       return await rejectAuthoritativeCreateDraftReadiness('FINAL_PRE_BACKEND_POST_READINESS', {
         ...(isPlainObject(finalAuthoritativeReadiness) ? finalAuthoritativeReadiness : {}),
         gate_ready: false,
         blocker_codes: uniqTrimmed([
           ...((isPlainObject(finalAuthoritativeReadiness) && Array.isArray(finalAuthoritativeReadiness.blocker_codes)) ? finalAuthoritativeReadiness.blocker_codes : []),
           ...(!finalSelectedCountMatchesPage ? ['SELECTED_READY_ROW_COUNT_CHANGED'] : []),
-          ...(!finalCanonicalPageCurrent ? ['FIRST_CANONICAL_PAGE_NOT_CURRENT'] : [])
+          ...(!finalCanonicalPageCurrent ? ['FIRST_CANONICAL_PAGE_NOT_CURRENT'] : []),
+          ...(!finalProgressCounterMatchesExpected ? ['SESSION_PROGRESS_CHANGED_BEFORE_CREATE_DRAFT'] : [])
         ])
       }, {
-        selected_preview_row_count_for_scope: syncedSelectedRows.length,
+        selected_preview_row_count_for_scope: Array.isArray(reqBody.draft_selected_preview_row_ids) ? reqBody.draft_selected_preview_row_ids.length : syncedSelectedRows.length,
         selected_eligible_ready_row_count_all_channels_on_page: Number.isFinite(currentSelectionAllChannelCount) ? Math.max(0, Math.trunc(currentSelectionAllChannelCount)) : null,
         authoritative_selected_eligible_ready_row_count: Number.isFinite(finalAuthoritativeSelectedCount) ? Math.max(0, Math.trunc(finalAuthoritativeSelectedCount)) : null,
         first_canonical_page_applied_for_current_session_version: finalCanonicalPageCurrent,
+        expected_progress_counter_version: localExpectedProgressCounterVersion,
         initial_progress_counter_version: authoritativeReadinessSnapshot?.progress_counter_version ?? null,
         final_progress_counter_version: finalAuthoritativeReadiness?.progress_counter_version ?? null,
         local_refresh_diagnostics: localRefreshDiagnostics
@@ -36343,6 +36389,8 @@ async function bankingPayCreateDraft(input = {}) {
     }
     authoritativeReadinessSnapshot = finalAuthoritativeReadiness;
     reqBody.session_version = finalAuthoritativeReadiness.session_version;
+    reqBody.expected_progress_counter_version = localExpectedProgressCounterVersion;
+    reqBody.progress_counter_version = localExpectedProgressCounterVersion;
 
     refreshCreateDraftPreviewDecisionsOnBody(reqBody, 'CREATE_DRAFT_DECISIONS_SANITISED_BEFORE_PREFLIGHT');
     const preflightBody = deep(reqBody) || { ...reqBody };
@@ -36362,7 +36410,8 @@ async function bankingPayCreateDraft(input = {}) {
     logTroubleshoot('info', 'CREATE_DRAFT_PREFLIGHT_START', {
       ...requestSummary,
       pay_channel_scope: payChannelScope,
-      selected_preview_row_ids_count: syncedSelectedRows.length
+      selected_preview_row_ids_count: syncedSelectedRows.length,
+      draft_selected_preview_row_ids_count: Array.isArray(reqBody.draft_selected_preview_row_ids) ? reqBody.draft_selected_preview_row_ids.length : 0
     });
 
     const firstActionArray = function () {
@@ -37334,9 +37383,6 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
-
-
-
 
 async function openPayeSameWeekOverrideDecisionModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -122252,7 +122298,6 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
 }
 
 
-
 async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -122371,6 +122416,12 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     'WORKBENCH_SESSION_INVALID',
     'WORKBENCH_SESSION_NOT_FOUND',
     'STALE_SESSION',
+    'WORKBENCH_SESSION_CONTEXT_REQUIRED',
+    'WORKBENCH_SESSION_VERSION_CONTEXT_REQUIRED',
+    'WORKBENCH_SESSION_PROGRESS_CONTEXT_REQUIRED',
+    'WORKBENCH_SESSION_VERSION_CONTEXT_INVALID',
+    'WORKBENCH_SESSION_PROGRESS_CONTEXT_INVALID',
+    'WORKBENCH_SESSION_PROGRESS_CHANGED',
     'OBSOLETE_SESSION',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
@@ -122532,12 +122583,93 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     return null;
   };
 
+
+  const readInteger = (value) => {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    const n = Number(value);
+    if (!Number.isFinite(n) || Math.trunc(n) !== n) return null;
+    return n;
+  };
+  const readPositiveInteger = (value) => {
+    const n = readInteger(value);
+    return n !== null && n > 0 ? n : null;
+  };
+  const readNonNegativeInteger = (value) => {
+    const n = readInteger(value);
+    return n !== null && n >= 0 ? n : null;
+  };
+  const resolveWorkbenchObject = () => {
+    try {
+      const wizard = (typeof st !== 'undefined' && st && st.pay && st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+      return {
+        wizard,
+        workbench: isPlainObject(wizard.workbench) ? wizard.workbench : {},
+        decisions: isPlainObject(wizard.decisions) ? wizard.decisions : {},
+        previewData: isPlainObject(wizard.preview?.data) ? wizard.preview.data : {},
+        previewSession: isPlainObject(wizard.preview?.data?.session) ? wizard.preview.data.session : {},
+        previewProgress: isPlainObject(wizard.preview?.data?.progress) ? wizard.preview.data.progress : {},
+        previewPayload: isPlainObject(wizard.preview?.data?.preview) ? wizard.preview.data.preview : {}
+      };
+    } catch {
+      return { wizard: {}, workbench: {}, decisions: {}, previewData: {}, previewSession: {}, previewProgress: {}, previewPayload: {} };
+    }
+  };
+  const currentWorkbenchSessionVersion = () => {
+    const ctx = resolveWorkbenchObject();
+    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
+      const value = readPositiveInteger(source.session_version ?? source.sessionVersion ?? source.version);
+      if (value !== null) return value;
+    }
+    return null;
+  };
+  const currentWorkbenchProgressCounterVersion = () => {
+    const ctx = resolveWorkbenchObject();
+    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
+      const value = readNonNegativeInteger(source.progress_counter_version ?? source.progressCounterVersion);
+      if (value !== null) return value;
+    }
+    return null;
+  };
+  const withWorkbenchFreshnessContext = (payloadLike) => {
+    const next = cloneJson(isPlainObject(payloadLike) ? payloadLike : {}) || {};
+    if (!Object.prototype.hasOwnProperty.call(next, 'expected_session_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedSessionVersion')) {
+      const sessionVersion = currentWorkbenchSessionVersion();
+      if (sessionVersion !== null) next.expected_session_version = sessionVersion;
+    }
+    if (!Object.prototype.hasOwnProperty.call(next, 'expected_progress_counter_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedProgressCounterVersion')) {
+      const progressCounterVersion = currentWorkbenchProgressCounterVersion();
+      if (progressCounterVersion !== null) next.expected_progress_counter_version = progressCounterVersion;
+    }
+    return next;
+  };
+  const adoptWorkbenchFreshnessMetadata = (payloadObj) => {
+    if (!isPlainObject(payloadObj)) return;
+    const sessionVersion = readPositiveInteger(payloadObj.session_version ?? payloadObj.sessionVersion ?? payloadObj.version ?? payloadObj.progress?.session_version ?? payloadObj.progress?.sessionVersion);
+    const progressCounterVersion = readNonNegativeInteger(payloadObj.progress_counter_version ?? payloadObj.progressCounterVersion ?? payloadObj.progress?.progress_counter_version ?? payloadObj.progress?.progressCounterVersion);
+    if (sessionVersion === null && progressCounterVersion === null) return;
+    try {
+      const ctx = resolveWorkbenchObject();
+      const targets = [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload].filter(isPlainObject);
+      for (const target of targets) {
+        if (sessionVersion !== null) {
+          target.session_version = sessionVersion;
+          target.sessionVersion = sessionVersion;
+        }
+        if (progressCounterVersion !== null) {
+          target.progress_counter_version = progressCounterVersion;
+          target.progressCounterVersion = progressCounterVersion;
+        }
+      }
+    } catch {}
+  };
+
   try {
     const sessionIdText = trimStr(sessionId);
+    const requestPayload = withWorkbenchFreshnessContext(payload);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(isPlainObject(payload) ? payload : {})
+      body: JSON.stringify(requestPayload)
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
@@ -122550,6 +122682,7 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
       throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
+    adoptWorkbenchFreshnessMetadata(payloadObj);
     const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
     return {
       ok: true,
@@ -123134,6 +123267,12 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
     'WORKBENCH_SESSION_INVALID',
     'WORKBENCH_SESSION_NOT_FOUND',
     'STALE_SESSION',
+    'WORKBENCH_SESSION_CONTEXT_REQUIRED',
+    'WORKBENCH_SESSION_VERSION_CONTEXT_REQUIRED',
+    'WORKBENCH_SESSION_PROGRESS_CONTEXT_REQUIRED',
+    'WORKBENCH_SESSION_VERSION_CONTEXT_INVALID',
+    'WORKBENCH_SESSION_PROGRESS_CONTEXT_INVALID',
+    'WORKBENCH_SESSION_PROGRESS_CHANGED',
     'OBSOLETE_SESSION',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
@@ -123295,12 +123434,93 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
     return null;
   };
 
+
+  const readInteger = (value) => {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    const n = Number(value);
+    if (!Number.isFinite(n) || Math.trunc(n) !== n) return null;
+    return n;
+  };
+  const readPositiveInteger = (value) => {
+    const n = readInteger(value);
+    return n !== null && n > 0 ? n : null;
+  };
+  const readNonNegativeInteger = (value) => {
+    const n = readInteger(value);
+    return n !== null && n >= 0 ? n : null;
+  };
+  const resolveWorkbenchObject = () => {
+    try {
+      const wizard = (typeof st !== 'undefined' && st && st.pay && st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+      return {
+        wizard,
+        workbench: isPlainObject(wizard.workbench) ? wizard.workbench : {},
+        decisions: isPlainObject(wizard.decisions) ? wizard.decisions : {},
+        previewData: isPlainObject(wizard.preview?.data) ? wizard.preview.data : {},
+        previewSession: isPlainObject(wizard.preview?.data?.session) ? wizard.preview.data.session : {},
+        previewProgress: isPlainObject(wizard.preview?.data?.progress) ? wizard.preview.data.progress : {},
+        previewPayload: isPlainObject(wizard.preview?.data?.preview) ? wizard.preview.data.preview : {}
+      };
+    } catch {
+      return { wizard: {}, workbench: {}, decisions: {}, previewData: {}, previewSession: {}, previewProgress: {}, previewPayload: {} };
+    }
+  };
+  const currentWorkbenchSessionVersion = () => {
+    const ctx = resolveWorkbenchObject();
+    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
+      const value = readPositiveInteger(source.session_version ?? source.sessionVersion ?? source.version);
+      if (value !== null) return value;
+    }
+    return null;
+  };
+  const currentWorkbenchProgressCounterVersion = () => {
+    const ctx = resolveWorkbenchObject();
+    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
+      const value = readNonNegativeInteger(source.progress_counter_version ?? source.progressCounterVersion);
+      if (value !== null) return value;
+    }
+    return null;
+  };
+  const withWorkbenchFreshnessContext = (payloadLike) => {
+    const next = cloneJson(isPlainObject(payloadLike) ? payloadLike : {}) || {};
+    if (!Object.prototype.hasOwnProperty.call(next, 'expected_session_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedSessionVersion')) {
+      const sessionVersion = currentWorkbenchSessionVersion();
+      if (sessionVersion !== null) next.expected_session_version = sessionVersion;
+    }
+    if (!Object.prototype.hasOwnProperty.call(next, 'expected_progress_counter_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedProgressCounterVersion')) {
+      const progressCounterVersion = currentWorkbenchProgressCounterVersion();
+      if (progressCounterVersion !== null) next.expected_progress_counter_version = progressCounterVersion;
+    }
+    return next;
+  };
+  const adoptWorkbenchFreshnessMetadata = (payloadObj) => {
+    if (!isPlainObject(payloadObj)) return;
+    const sessionVersion = readPositiveInteger(payloadObj.session_version ?? payloadObj.sessionVersion ?? payloadObj.version ?? payloadObj.progress?.session_version ?? payloadObj.progress?.sessionVersion);
+    const progressCounterVersion = readNonNegativeInteger(payloadObj.progress_counter_version ?? payloadObj.progressCounterVersion ?? payloadObj.progress?.progress_counter_version ?? payloadObj.progress?.progressCounterVersion);
+    if (sessionVersion === null && progressCounterVersion === null) return;
+    try {
+      const ctx = resolveWorkbenchObject();
+      const targets = [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload].filter(isPlainObject);
+      for (const target of targets) {
+        if (sessionVersion !== null) {
+          target.session_version = sessionVersion;
+          target.sessionVersion = sessionVersion;
+        }
+        if (progressCounterVersion !== null) {
+          target.progress_counter_version = progressCounterVersion;
+          target.progressCounterVersion = progressCounterVersion;
+        }
+      }
+    } catch {}
+  };
+
   try {
     const sessionIdText = trimStr(sessionId);
+    const requestPayload = withWorkbenchFreshnessContext(payload);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/timesheet-exclusion`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(isPlainObject(payload) ? payload : {})
+      body: JSON.stringify(requestPayload)
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
@@ -123313,6 +123533,7 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
       throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
+    adoptWorkbenchFreshnessMetadata(payloadObj);
     const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
     return {
       ok: true,
@@ -123452,11 +123673,13 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     'WORKBENCH_SESSION_INVALID',
     'WORKBENCH_SESSION_NOT_FOUND',
     'STALE_SESSION',
-    'OBSOLETE_SESSION',
-    'WORKBENCH_SESSION_PROGRESS_CHANGED',
+    'WORKBENCH_SESSION_CONTEXT_REQUIRED',
+    'WORKBENCH_SESSION_VERSION_CONTEXT_REQUIRED',
     'WORKBENCH_SESSION_PROGRESS_CONTEXT_REQUIRED',
-    'WORKBENCH_SESSION_PROGRESS_CONTEXT_INVALID',
     'WORKBENCH_SESSION_VERSION_CONTEXT_INVALID',
+    'WORKBENCH_SESSION_PROGRESS_CONTEXT_INVALID',
+    'WORKBENCH_SESSION_PROGRESS_CHANGED',
+    'OBSOLETE_SESSION',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
     'PAYE_NOT_READY',
@@ -123617,34 +123840,89 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     return null;
   };
 
-  const readExpectedWorkbenchContext = () => {
-    const wizard = (typeof st !== 'undefined' && st && st.pay && isPlainObject(st.pay.draftWizard)) ? st.pay.draftWizard : {};
-    const workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
-    const progress = isPlainObject(workbench.progress) ? workbench.progress : {};
-    const preview = isPlainObject(wizard.preview) ? wizard.preview : {};
-    const previewData = isPlainObject(preview.data) ? preview.data : {};
-    const normaliseInteger = (value) => {
-      const text = trimStr(value);
-      if (!/^[0-9]{1,18}$/.test(text)) return null;
-      const number = Number(text);
-      return Number.isSafeInteger(number) && number >= 0 ? number : null;
-    };
-    return {
-      session_version: normaliseInteger(workbench.session_version ?? progress.session_version ?? previewData.session_version ?? previewData.session?.session_version),
-      progress_counter_version: normaliseInteger(workbench.progress_counter_version ?? progress.progress_counter_version ?? previewData.progress_counter_version ?? previewData.session?.progress_counter_version ?? previewData.preview?.progress_counter_version)
-    };
+
+  const readInteger = (value) => {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    const n = Number(value);
+    if (!Number.isFinite(n) || Math.trunc(n) !== n) return null;
+    return n;
+  };
+  const readPositiveInteger = (value) => {
+    const n = readInteger(value);
+    return n !== null && n > 0 ? n : null;
+  };
+  const readNonNegativeInteger = (value) => {
+    const n = readInteger(value);
+    return n !== null && n >= 0 ? n : null;
+  };
+  const resolveWorkbenchObject = () => {
+    try {
+      const wizard = (typeof st !== 'undefined' && st && st.pay && st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+      return {
+        wizard,
+        workbench: isPlainObject(wizard.workbench) ? wizard.workbench : {},
+        decisions: isPlainObject(wizard.decisions) ? wizard.decisions : {},
+        previewData: isPlainObject(wizard.preview?.data) ? wizard.preview.data : {},
+        previewSession: isPlainObject(wizard.preview?.data?.session) ? wizard.preview.data.session : {},
+        previewProgress: isPlainObject(wizard.preview?.data?.progress) ? wizard.preview.data.progress : {},
+        previewPayload: isPlainObject(wizard.preview?.data?.preview) ? wizard.preview.data.preview : {}
+      };
+    } catch {
+      return { wizard: {}, workbench: {}, decisions: {}, previewData: {}, previewSession: {}, previewProgress: {}, previewPayload: {} };
+    }
+  };
+  const currentWorkbenchSessionVersion = () => {
+    const ctx = resolveWorkbenchObject();
+    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
+      const value = readPositiveInteger(source.session_version ?? source.sessionVersion ?? source.version);
+      if (value !== null) return value;
+    }
+    return null;
+  };
+  const currentWorkbenchProgressCounterVersion = () => {
+    const ctx = resolveWorkbenchObject();
+    for (const source of [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload]) {
+      const value = readNonNegativeInteger(source.progress_counter_version ?? source.progressCounterVersion);
+      if (value !== null) return value;
+    }
+    return null;
+  };
+  const withWorkbenchFreshnessContext = (payloadLike) => {
+    const next = cloneJson(isPlainObject(payloadLike) ? payloadLike : {}) || {};
+    if (!Object.prototype.hasOwnProperty.call(next, 'expected_session_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedSessionVersion')) {
+      const sessionVersion = currentWorkbenchSessionVersion();
+      if (sessionVersion !== null) next.expected_session_version = sessionVersion;
+    }
+    if (!Object.prototype.hasOwnProperty.call(next, 'expected_progress_counter_version') && !Object.prototype.hasOwnProperty.call(next, 'expectedProgressCounterVersion')) {
+      const progressCounterVersion = currentWorkbenchProgressCounterVersion();
+      if (progressCounterVersion !== null) next.expected_progress_counter_version = progressCounterVersion;
+    }
+    return next;
+  };
+  const adoptWorkbenchFreshnessMetadata = (payloadObj) => {
+    if (!isPlainObject(payloadObj)) return;
+    const sessionVersion = readPositiveInteger(payloadObj.session_version ?? payloadObj.sessionVersion ?? payloadObj.version ?? payloadObj.progress?.session_version ?? payloadObj.progress?.sessionVersion);
+    const progressCounterVersion = readNonNegativeInteger(payloadObj.progress_counter_version ?? payloadObj.progressCounterVersion ?? payloadObj.progress?.progress_counter_version ?? payloadObj.progress?.progressCounterVersion);
+    if (sessionVersion === null && progressCounterVersion === null) return;
+    try {
+      const ctx = resolveWorkbenchObject();
+      const targets = [ctx.workbench, ctx.decisions, ctx.previewData, ctx.previewSession, ctx.previewProgress, ctx.previewPayload].filter(isPlainObject);
+      for (const target of targets) {
+        if (sessionVersion !== null) {
+          target.session_version = sessionVersion;
+          target.sessionVersion = sessionVersion;
+        }
+        if (progressCounterVersion !== null) {
+          target.progress_counter_version = progressCounterVersion;
+          target.progressCounterVersion = progressCounterVersion;
+        }
+      }
+    } catch {}
   };
 
   try {
     const sessionIdText = trimStr(sessionId);
-    const expectedContext = readExpectedWorkbenchContext();
-    const requestPayload = isPlainObject(payload) ? (cloneJson(payload) || {}) : {};
-    if (requestPayload.expected_progress_counter_version == null && requestPayload.expectedProgressCounterVersion == null && requestPayload.progress_counter_version == null && requestPayload.progressCounterVersion == null && expectedContext.progress_counter_version != null) {
-      requestPayload.expected_progress_counter_version = expectedContext.progress_counter_version;
-    }
-    if (requestPayload.expected_session_version == null && requestPayload.expectedSessionVersion == null && requestPayload.session_version == null && requestPayload.sessionVersion == null && expectedContext.session_version != null) {
-      requestPayload.expected_session_version = expectedContext.session_version;
-    }
+    const requestPayload = withWorkbenchFreshnessContext(payload);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/selected-rows`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -123663,25 +123941,12 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const selectedRows = Array.isArray(payloadObj.selected_preview_row_ids)
       ? payloadObj.selected_preview_row_ids
-      : (Array.isArray(payloadObj.server_selected_preview_row_ids) ? payloadObj.server_selected_preview_row_ids : (Array.isArray(requestPayload.selected_preview_row_ids) ? requestPayload.selected_preview_row_ids : []));
-    try {
-      const wizard = (typeof st !== 'undefined' && st && st.pay && isPlainObject(st.pay.draftWizard)) ? st.pay.draftWizard : null;
-      if (wizard) {
-        wizard.workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
-        if (payloadObj.session_version !== null && payloadObj.session_version !== undefined) wizard.workbench.session_version = payloadObj.session_version;
-        if (payloadObj.progress_counter_version !== null && payloadObj.progress_counter_version !== undefined) wizard.workbench.progress_counter_version = payloadObj.progress_counter_version;
-        if (isPlainObject(wizard.preview) && isPlainObject(wizard.preview.data)) {
-          if (payloadObj.session_version !== null && payloadObj.session_version !== undefined) wizard.preview.data.session_version = payloadObj.session_version;
-          if (payloadObj.progress_counter_version !== null && payloadObj.progress_counter_version !== undefined) wizard.preview.data.progress_counter_version = payloadObj.progress_counter_version;
-        }
-      }
-    } catch {}
+      : (Array.isArray(payloadObj.server_selected_preview_row_ids) ? payloadObj.server_selected_preview_row_ids : (Array.isArray(payload.selected_preview_row_ids) ? payload.selected_preview_row_ids : []));
     return {
       ok: true,
       ...(cloneJson(payloadObj) || {}),
       session_id: trimStr(payloadObj.session_id || sessionIdText),
       session_version: payloadObj.session_version ?? null,
-      progress_counter_version: payloadObj.progress_counter_version ?? null,
       selected_preview_row_ids: cloneJson(selectedRows) || []
     };
   } catch (error) {
@@ -123691,6 +123956,7 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
 
 async function bankingPayWorkbenchSessionDiscard(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
