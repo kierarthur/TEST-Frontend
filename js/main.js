@@ -177308,6 +177308,9 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
 }
 
 
+
+
+
 async function authoriseSelectedTimesheets(payload) {
   const { LOGM, L, GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][BULK-AUTH][AUTHORISE-WRAPPER]')
@@ -177458,6 +177461,15 @@ async function authoriseSelectedTimesheets(payload) {
   }
 
   if (!json || typeof json !== 'object') json = {};
+    if (json.operation_id && json.batch_completed !== true && typeof pollTimesheetLifecycleBulkOperation === 'function') {
+      json = await pollTimesheetLifecycleBulkOperation(json.operation_id, {
+        action: 'AUTHORISE',
+        initialResult: json,
+        maxItems: 5,
+        maxRuntimeMs: 7000,
+      });
+      if (!json || typeof json !== 'object') json = {};
+    }
   const results = Array.isArray(json.results) ? json.results.map(normalizeResult) : [];
   const failedItems = Array.isArray(json.failed_items) ? clonePayload(json.failed_items) : results.filter((item) => item && item.success !== true);
   const staleItems = Array.isArray(json.stale_items) ? clonePayload(json.stale_items) : failedItems.filter((item) => {
@@ -177498,6 +177510,48 @@ async function authoriseSelectedTimesheets(payload) {
 }
 
 
+async function pollTimesheetLifecycleBulkOperation(operationId, options = {}) {
+    const id = String(operationId || '').trim();
+    if (!id) return options.initialResult || { ok: false, error: 'BULK_LIFECYCLE_OPERATION_ID_REQUIRED' };
+    const maxPolls = Math.max(1, Math.min(Number(options.maxPolls || 120), 300));
+    const delayMs = Math.max(150, Math.min(Number(options.delayMs || 500), 2500));
+    const action = options.action || options.lifecycleAction || null;
+    let last = options.initialResult && typeof options.initialResult === 'object' ? options.initialResult : null;
+
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    for (let attempt = 0; attempt < maxPolls; attempt += 1) {
+      try {
+        const payload = {
+          action,
+          max_items: Math.max(1, Math.min(Number(options.maxItems || 5), 10)),
+          max_runtime_ms: Math.max(500, Math.min(Number(options.maxRuntimeMs || 7000), 10000)),
+          poll_attempt: attempt + 1,
+        };
+        last = await apiPostJson(`/api/timesheets/bulk-lifecycle-operations/${encodeURIComponent(id)}/drain`, payload);
+        if (last && (last.batch_completed === true || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(String(last.status || '').toUpperCase()))) {
+          return last;
+        }
+      } catch (err) {
+        last = {
+          ...(last || {}),
+          ok: false,
+          operation_id: id,
+          error: 'BULK_LIFECYCLE_OPERATION_POLL_FAILED',
+          message: err?.message || 'Bulk lifecycle operation poll failed.',
+        };
+        break;
+      }
+      await sleep(delayMs);
+    }
+    return {
+      ...(last || {}),
+      ok: last?.ok !== false,
+      operation_id: id,
+      batch_completed: last?.batch_completed === true,
+      more_due: last?.batch_completed !== true,
+      poll_exhausted: last?.batch_completed !== true,
+    };
+  }
 
 async function unauthoriseSelectedTimesheets(payload) {
   const { LOGM, L, GC, GE } = (typeof getTsLoggers === 'function')
@@ -177649,6 +177703,15 @@ async function unauthoriseSelectedTimesheets(payload) {
   }
 
   if (!json || typeof json !== 'object') json = {};
+    if (json.operation_id && json.batch_completed !== true && typeof pollTimesheetLifecycleBulkOperation === 'function') {
+      json = await pollTimesheetLifecycleBulkOperation(json.operation_id, {
+        action: 'UNAUTHORISE',
+        initialResult: json,
+        maxItems: 5,
+        maxRuntimeMs: 7000,
+      });
+      if (!json || typeof json !== 'object') json = {};
+    }
   const results = Array.isArray(json.results) ? json.results.map(normalizeResult) : [];
   const failedItems = Array.isArray(json.failed_items) ? clonePayload(json.failed_items) : results.filter((item) => item && item.success !== true);
   const staleItems = Array.isArray(json.stale_items) ? clonePayload(json.stale_items) : failedItems.filter((item) => {
@@ -177687,8 +177750,6 @@ async function unauthoriseSelectedTimesheets(payload) {
   GE();
   return out;
 }
-
-
 
 function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   const deep = (v) => {
@@ -239357,8 +239418,6 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     return { ok: false, error: st.error_text };
   }
 }
-
-
 async function handleBulkAuthoriseSelected(state, options = {}) {
   const { GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][BULK-AUTH][AUTHORISE-SELECTED]')
@@ -239581,9 +239640,11 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     st.error_text = '';
     if (typeof rerenderBulkAuthoriseWorkbench === 'function') await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][AUTHORISE-SELECTED][START]');
 
-    const result = isMultiRowAction
-      ? await runBulkTimesheetSelectionChunks('AUTHORISE', items, { chunkSize: 50, maxChunkSize: 100, title: 'Authorising timesheets', payload: { context: 'bulk_authorise' } })
-      : await authoriseSelectedTimesheets({ items, context: 'bulk_authorise' });
+    const result = await authoriseSelectedTimesheets({
+      items,
+      context: 'bulk_authorise',
+      response_context: isMultiRowAction ? 'bulk_lifecycle_operation' : 'single_row_gold_path'
+    });
 
     const results = Array.isArray(result?.results) ? result.results : [];
     const failedRows = Array.isArray(result?.failed_items) ? result.failed_items : results.filter((entry) => entry && entry.success !== true && entry.ok !== true);
@@ -239772,6 +239833,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
   }
 }
 
+
 async function handleBulkUnauthoriseSelected(state, options = {}) {
   const { GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][BULK-AUTH][UNAUTHORISE-SELECTED]')
@@ -239928,9 +239990,11 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     st.error_text = '';
     if (typeof rerenderBulkAuthoriseWorkbench === 'function') await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][UNAUTHORISE-SELECTED][START]');
 
-    const result = isMultiRowAction
-      ? await runBulkTimesheetSelectionChunks('UNAUTHORISE', items, { chunkSize: 50, maxChunkSize: 100, title: 'Unauthorising timesheets', payload: { context: 'bulk_authorise' } })
-      : await unauthoriseSelectedTimesheets({ items, context: 'bulk_authorise' });
+    const result = await unauthoriseSelectedTimesheets({
+      items,
+      context: 'bulk_authorise',
+      response_context: isMultiRowAction ? 'bulk_lifecycle_operation' : 'single_row_gold_path'
+    });
 
     const results = Array.isArray(result?.results) ? result.results : [];
     const failedRows = Array.isArray(result?.failed_items) ? result.failed_items : results.filter((entry) => entry && entry.success !== true && entry.ok !== true);
@@ -240118,8 +240182,6 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     }
   }
 }
-
-
 
 async function openBulkQrReissueDecisionModal(row = {}, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
