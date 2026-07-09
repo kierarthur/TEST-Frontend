@@ -344382,6 +344382,7 @@ function renderDailyManualScheduleEditor(opts) {
 
 
 
+
 async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
   const targetId = String(newId || '').trim();
   const blocking = !!(opts && opts.blocking === true);
@@ -344824,6 +344825,193 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
     return true;
   };
 
+  const patchOpenTimesheetOverviewLifecycleStageBadge = (options = {}) => {
+    try {
+      if (!afterLifecycleMutation || isStaleLifecycleSummaryResult()) return false;
+      const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      if (!mc || mc.entity !== 'timesheets') return false;
+
+      const fr = options && options.frame ? options.frame : ((typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null);
+      if (!fr || fr.entity !== 'timesheets') return false;
+      const currentTabKey = String(fr.currentTabKey || '').trim();
+      if (currentTabKey && currentTabKey !== 'overview') return false;
+
+      const modalTargetId = String(
+        options.modalTargetId ||
+        mc?.data?.timesheet_id ||
+        mc?.data?.current_timesheet_id ||
+        mc?.data?.contract_week_id ||
+        mc?.data?.id ||
+        ''
+      ).trim();
+      const identity = (options.canonicalIdentity && typeof options.canonicalIdentity === 'object') ? options.canonicalIdentity : {};
+      const targetMatches = !!(
+        modalTargetId &&
+        (
+          modalTargetId === targetId ||
+          (!!identity.id && modalTargetId === identity.id) ||
+          (!!identity.timesheet_id && modalTargetId === identity.timesheet_id) ||
+          (!!identity.contract_week_id && modalTargetId === identity.contract_week_id)
+        )
+      );
+      if (!targetMatches) return false;
+
+      const root = document.getElementById('modal');
+      if (!root || root.getAttribute('data-uicf-kind')) return false;
+      const tabs = root.querySelector('#modalTabs');
+      const overviewTab = tabs ? tabs.querySelector('[data-testid="timesheet-tab-overview"]') : null;
+      if (overviewTab && !overviewTab.classList.contains('active')) return false;
+      const body = root.querySelector('#modalBody');
+      if (!body) return false;
+
+      const normaliseText = (value) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+      const stageRow = Array.from(body.querySelectorAll('.row')).find((row) => {
+        const label = normaliseText(row.querySelector('label')?.textContent || '').toLowerCase();
+        return label === 'stage';
+      });
+      if (!stageRow) return false;
+      const controls = stageRow.querySelector('.controls');
+      if (!controls) return false;
+
+      const surfaces = [
+        mc.data,
+        mc.timesheetDetails,
+        mc.timesheetDetails?.row,
+        mc.timesheetDetails?.timesheet,
+        mc.timesheetDetails?.tsfin,
+        mc.timesheetMeta
+      ].filter((surface) => surface && typeof surface === 'object');
+
+      const firstText = (keys) => {
+        for (const surface of surfaces) {
+          for (const key of keys) {
+            if (Object.prototype.hasOwnProperty.call(surface, key)) {
+              const raw = surface[key];
+              if (raw !== undefined && raw !== null && String(raw).trim() !== '') return String(raw).trim();
+            }
+          }
+        }
+        return '';
+      };
+      const firstBool = (keys) => {
+        for (const surface of surfaces) {
+          for (const key of keys) {
+            if (!Object.prototype.hasOwnProperty.call(surface, key)) continue;
+            const value = surface[key];
+            if (value === true || value === 1) return true;
+            if (value === false || value === 0) return false;
+            if (value == null || value === '') continue;
+            const raw = String(value).trim().toLowerCase();
+            if (['true', '1', 'yes', 'y', 'on'].includes(raw)) return true;
+            if (['false', '0', 'no', 'n', 'off'].includes(raw)) return false;
+          }
+        }
+        return null;
+      };
+
+      const processingStatus = firstText(['processing_status', 'new_processing_status', 'status']).toUpperCase();
+      const authStamp = firstText(['authorised_at_server', 'authorised_at_utc', 'authorized_at_server', 'authorized_at_utc']);
+      const explicitAuthorised = firstBool(['is_authorised', 'isAuthorised', 'authorised', 'authorized']);
+      const unauthorised = !!(
+        explicitAuthorised === false ||
+        (!authStamp && ['PENDING_AUTH', 'PENDING', 'UNAUTHORISED', 'UNAUTHORIZED'].includes(processingStatus))
+      );
+      const authorised = !!(
+        explicitAuthorised === true ||
+        !!authStamp ||
+        ['READY_FOR_INVOICE', 'AUTHORISED', 'AUTHORIZED', 'AUTHORISED_FOR_PAYMENT', 'AUTHORIZED_FOR_PAYMENT'].includes(processingStatus)
+      );
+      if (!unauthorised && !authorised) return false;
+
+      const lifecycleTexts = new Set([
+        'authorised for payment',
+        'authorized for payment',
+        'authorised for invoicing',
+        'authorized for invoicing',
+        'awaiting authorisation',
+        'awaiting authorization'
+      ]);
+      const readyToPayTexts = new Set(['ready to pay']);
+      const pills = () => Array.from(controls.querySelectorAll('.pill'));
+      const findLifecyclePill = () => pills().find((pill) => lifecycleTexts.has(normaliseText(pill.textContent).toLowerCase())) || null;
+      const ensureLifecyclePill = () => {
+        const existing = findLifecyclePill();
+        if (existing) return existing;
+        const created = document.createElement('span');
+        created.className = 'pill';
+        created.style.fontWeight = '600';
+        controls.insertBefore(created, controls.firstChild || null);
+        return created;
+      };
+      const setPill = (pill, textValue, className, title) => {
+        if (!pill) return false;
+        let changed = false;
+        if (normaliseText(pill.textContent) !== textValue) {
+          pill.textContent = textValue;
+          changed = true;
+        }
+        if (String(pill.className || '') !== className) {
+          pill.className = className;
+          changed = true;
+        }
+        if (String(pill.getAttribute('title') || '') !== title) {
+          pill.setAttribute('title', title);
+          changed = true;
+        }
+        if (!pill.style.fontWeight) pill.style.fontWeight = '600';
+        return changed;
+      };
+
+      let changed = false;
+      const targetPill = ensureLifecyclePill();
+      if (unauthorised) {
+        changed = setPill(
+          targetPill,
+          'Awaiting Authorisation',
+          'pill pill-warn',
+          'This timesheet requires authorisation before it can proceed.'
+        ) || changed;
+        for (const pill of pills()) {
+          if (pill !== targetPill && readyToPayTexts.has(normaliseText(pill.textContent).toLowerCase())) {
+            pill.remove();
+            changed = true;
+          }
+        }
+      } else if (authorised) {
+        changed = setPill(
+          targetPill,
+          'Authorised for Payment',
+          'pill pill-ok',
+          'This timesheet is authorised for payment and is not fully paid.'
+        ) || changed;
+      }
+
+      for (const pill of pills()) {
+        if (pill !== targetPill && lifecycleTexts.has(normaliseText(pill.textContent).toLowerCase())) {
+          pill.remove();
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        try {
+          console.log('[TS][TRACE][SUMMARY_ROTATION] lifecycle-overview-stage-badge-patched', {
+            target_id: targetId,
+            modal_target_id: modalTargetId,
+            processing_status: processingStatus || null,
+            authorised: authorised && !unauthorised,
+            unauthorised
+          });
+        } catch {}
+      }
+      return changed;
+    } catch (err) {
+      try { console.warn('[TS][TRACE][SUMMARY_ROTATION] lifecycle overview badge patch failed', err); } catch {}
+      return false;
+    }
+  };
+
+
   if (!targetId) {
     return buildOutcome(false, null, 'no-target-id', {
       target_id: null
@@ -344837,6 +345025,7 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
     }
     const modalMerged = applyPatchToModalIdentity(patchRow);
     const modalLifecycleMerged = patchModalLifecycleFromCanonicalRow(patchRow, { source: 'patch-only' });
+    const lifecycleBadgePatched = patchOpenTimesheetOverviewLifecycleStageBadge({ source: 'patch-only' });
     const visiblePatch = applyPatchToVisibleRows(patchRow);
     try {
       window.__pendingFocus = {
@@ -344863,6 +345052,7 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
       did_render_all: false,
       did_modal_merge: !!(modalMerged || modalLifecycleMerged),
       did_tab_refresh: false,
+      did_lifecycle_overview_badge_patch: !!lifecycleBadgePatched,
       patch_only: true,
       preserve_modal_identity: preserveModalIdentity
     });
@@ -344908,6 +345098,7 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
   let didRenderAll = false;
   let didModalMerge = false;
   let didTabRefresh = false;
+  let didLifecycleOverviewBadgePatch = false;
   let skipTimesheetCanonicalisation = false;
   let summaryCtxUsed = null;
   let applyOutcome = buildOutcome(false, null, 'not-run');
@@ -345260,26 +345451,47 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
           ''
         ).trim();
 
+      const currentTabKey = String(fr.currentTabKey || '').trim();
+      const modalTargetMatchesCanonical = !!(
+        modalTargetId === targetId ||
+        (!!canonicalIdentity.id && modalTargetId === canonicalIdentity.id) ||
+        (!!canonicalIdentity.timesheet_id && modalTargetId === canonicalIdentity.timesheet_id) ||
+        (!!canonicalIdentity.contract_week_id && modalTargetId === canonicalIdentity.contract_week_id)
+      );
+      const lifecycleOverviewBadgePatchCandidate = !!(
+        afterLifecycleMutation &&
+        didModalMerge &&
+        currentTabKey === 'overview' &&
+        !isStaleLifecycleSummaryResult() &&
+        !!modalTargetId &&
+        modalTargetMatchesCanonical
+      );
+      if (lifecycleOverviewBadgePatchCandidate) {
+        didLifecycleOverviewBadgePatch = patchOpenTimesheetOverviewLifecycleStageBadge({
+          frame: fr,
+          modalTargetId,
+          canonicalIdentity,
+          source: 'summary-rotation-final'
+        });
+      }
+
       const shouldRefreshTab =
         !background &&
         !isStaleLifecycleSummaryResult() &&
         !skipTabRefresh &&
         !!modalTargetId &&
-        (
-          modalTargetId === targetId ||
-          (!!canonicalIdentity.id && modalTargetId === canonicalIdentity.id) ||
-          (!!canonicalIdentity.timesheet_id && modalTargetId === canonicalIdentity.timesheet_id) ||
-          (!!canonicalIdentity.contract_week_id && modalTargetId === canonicalIdentity.contract_week_id)
-        );
+        modalTargetMatchesCanonical &&
+        !didLifecycleOverviewBadgePatch;
 
       try {
         console.log('[TS][TRACE][SUMMARY_ROTATION] before-tab-refresh-check', {
           target_id: targetId,
           modal_target_id: modalTargetId,
-          current_tab_key: String(fr.currentTabKey || '').trim() || null,
+          current_tab_key: currentTabKey || null,
           did_summary_patch: didSummaryPatch,
           did_targeted_refresh: didTargetedRefresh,
           did_render_all: didRenderAll,
+          did_lifecycle_overview_badge_patch: didLifecycleOverviewBadgePatch,
           should_refresh_tab: shouldRefreshTab,
           skip_tab_refresh: skipTabRefresh
         });
@@ -345306,6 +345518,7 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
   if (finalOutcome && typeof finalOutcome === 'object') {
     finalOutcome.did_tab_refresh = !!didTabRefresh;
     finalOutcome.did_modal_merge = !!didModalMerge;
+    finalOutcome.did_lifecycle_overview_badge_patch = !!didLifecycleOverviewBadgePatch;
   }
 
   try {
@@ -345316,6 +345529,7 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
       did_render_all: didRenderAll,
       did_modal_merge: didModalMerge,
       did_tab_refresh: didTabRefresh,
+      did_lifecycle_overview_badge_patch: didLifecycleOverviewBadgePatch,
       outcome: finalOutcome,
       modal_id_after: String(window.modalCtx?.data?.id || '').trim() || null,
       modal_timesheet_id_after: String(window.modalCtx?.data?.timesheet_id || '').trim() || null,
@@ -345326,7 +345540,6 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
 
   return finalOutcome;
 }
-
 
 
 async function fetchTimesheetAudit(timesheetId) {
