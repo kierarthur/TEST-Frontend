@@ -352473,6 +352473,7 @@ async function maybeOpenTestmodeE2eModal() {
   return true;
 }
 
+
 async function bootstrapApp(){
   // Belt & braces: if loadSession() ran but globals are not mirrored, mirror now
   try {
@@ -353662,7 +353663,57 @@ async function bootstrapApp(){
             'CANDIDATE_DELTA_REFRESH',
             'BANKING_PAY_CANDIDATE_DELTA_REFRESH',
             'PAY_WORKBENCH_CANDIDATE_DELTA_REFRESH',
-            'DELTA_REFRESH'
+            'BANKING_PAY_WORKBENCH_CANDIDATE_DELTA_REFRESH',
+            'DELTA_REFRESH',
+            'WORKBENCH_CANDIDATE_DIRTY_APPLY',
+            'WORKBENCH_FINANCE_CASE_DIRTY_APPLY',
+            'WORKBENCH_CANDIDATE_SOURCE_BUILD',
+            'WORKBENCH_CANDIDATE_SOURCE_BUILD_CHUNK',
+            'WORKBENCH_CANDIDATE_SOURCE_BUILD_PAGE',
+            'PAY_WORKBENCH_CANDIDATE_SOURCE_BUILD',
+            'BANKING_PAY_CANDIDATE_SOURCE_BUILD',
+            'BANKING_PAY_WORKBENCH_CANDIDATE_SOURCE_BUILD',
+            'CANDIDATE_SOURCE_BUILD',
+            'CANDIDATE_SOURCE_BUILD_CHUNK',
+            'SOURCE_BUILD',
+            'SOURCE_BUILD_PAGE',
+            'WORKBENCH_CANDIDATE_LINE_WORK_SEED',
+            'WORKBENCH_CANDIDATE_LINE_WORK_SEED_PAGE',
+            'PAY_WORKBENCH_CANDIDATE_LINE_WORK_SEED',
+            'BANKING_PAY_CANDIDATE_LINE_WORK_SEED',
+            'BANKING_PAY_WORKBENCH_CANDIDATE_LINE_WORK_SEED',
+            'SNAPSHOT_CANDIDATE_REFRESH',
+            'CANDIDATE_REFRESH',
+            'CANDIDATE_LINE_WORK_SEED',
+            'CANDIDATE_LINE_WORK_SEED_PAGE',
+            'LINE_WORK_SEED',
+            'LINE_WORK_SEED_PAGE',
+            'WORKBENCH_CANDIDATE_LINE_WORK_PROCESS',
+            'WORKBENCH_CANDIDATE_LINE_WORK_PROCESS_CHUNK',
+            'PAY_WORKBENCH_CANDIDATE_LINE_WORK_PROCESS',
+            'BANKING_PAY_CANDIDATE_LINE_WORK_PROCESS',
+            'BANKING_PAY_WORKBENCH_CANDIDATE_LINE_WORK_PROCESS',
+            'CANDIDATE_LINE_WORK_PROCESS',
+            'CANDIDATE_LINE_WORK_PROCESS_CHUNK',
+            'LINE_WORK_PROCESS',
+            'LINE_WORK_PROCESS_CHUNK',
+            'WORKBENCH_PREVIEW_ROWS_MATERIALISE',
+            'WORKBENCH_PREVIEW_ROWS_MATERIALIZE',
+            'WORKBENCH_PREVIEW_ROWS_MATERIALISE_CHUNK',
+            'WORKBENCH_PREVIEW_ROWS_MATERIALIZE_CHUNK',
+            'PAY_WORKBENCH_PREVIEW_ROWS_MATERIALISE',
+            'PAY_WORKBENCH_PREVIEW_ROWS_MATERIALIZE',
+            'BANKING_PAY_PREVIEW_ROWS_MATERIALISE',
+            'BANKING_PAY_PREVIEW_ROWS_MATERIALIZE',
+            'BANKING_PAY_WORKBENCH_PREVIEW_ROWS_MATERIALISE',
+            'BANKING_PAY_WORKBENCH_PREVIEW_ROWS_MATERIALIZE',
+            'PREVIEW_ROWS_MATERIALISE',
+            'PREVIEW_ROWS_MATERIALIZE',
+            'PREVIEW_ROWS_MATERIALISE_CHUNK',
+            'PREVIEW_ROWS_MATERIALIZE_CHUNK',
+            'PREVIEW_ROW_MATERIALISE_CHUNK',
+            'PREVIEW_ROW_MATERIALIZE_CHUNK',
+            'CONTRACT_CLIENT_DIRTY_FANOUT'
           ]);
           const terminalStatuses = new Set(['READY', 'READY_EMPTY', 'COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'ABORTED', 'SKIPPED', 'DEAD', 'DONE']);
           const activeStatuses = new Set(['PENDING', 'DIRTY', 'REFRESHING', 'QUEUED', 'RUNNING', 'PROCESSING', 'STARTED', 'CLAIMED', 'SEEDING', 'WAITING', 'MATERIALISING', 'MATERIALIZING', 'IN_PROGRESS']);
@@ -353738,6 +353789,76 @@ async function bootstrapApp(){
           if (readyValues.some((value) => value === false)) return false;
           if (readyValues.some((value) => value === true)) return true;
           return phase === 'READY' || phase === 'READY_EMPTY';
+        };
+        const getWorkbenchLineCounts = (progressResult) => {
+          const obj = isHeartbeatPlainObject(progressResult) ? progressResult : {};
+          const progressObj = isHeartbeatPlainObject(obj.progress) ? obj.progress : {};
+          const lineCounts = isHeartbeatPlainObject(obj.line_counts) ? obj.line_counts : (isHeartbeatPlainObject(progressObj.line_counts) ? progressObj.line_counts : {});
+          const count = (...values) => {
+            for (const value of values) {
+              const n = Number(value);
+              if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
+            }
+            return 0;
+          };
+          return {
+            ready_not_materialised: count(
+              lineCounts.ready_not_materialised,
+              lineCounts.readyNotMaterialised,
+              lineCounts.ready_not_materialized,
+              lineCounts.readyNotMaterialized,
+              lineCounts.ready_not_materialised_count,
+              lineCounts.ready_not_materialized_count,
+              obj.line_units_ready_not_materialised,
+              obj.line_units_ready_not_materialized,
+              progressObj.line_units_ready_not_materialised,
+              progressObj.line_units_ready_not_materialized
+            ),
+            pending: count(lineCounts.pending, lineCounts.pending_count, obj.line_units_pending, progressObj.line_units_pending),
+            unknown: count(lineCounts.unknown, lineCounts.unknown_count, obj.line_units_unknown, progressObj.line_units_unknown)
+          };
+        };
+        const hasActiveWorkbenchJobRows = (progressResult) => {
+          const obj = isHeartbeatPlainObject(progressResult) ? progressResult : {};
+          const progressObj = isHeartbeatPlainObject(obj.progress) ? obj.progress : {};
+          const terminalStatuses = new Set(['READY', 'READY_EMPTY', 'COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'ABORTED', 'SKIPPED', 'DEAD', 'DONE']);
+          const rows = [];
+          const pushRows = (value) => {
+            for (const row of firstWorkbenchArray(value)) {
+              if (isHeartbeatPlainObject(row)) rows.push(row);
+            }
+          };
+          pushRows(obj.active_jobs);
+          pushRows(progressObj.active_jobs);
+          pushRows(obj.pending_candidate_jobs);
+          pushRows(progressObj.pending_candidate_jobs);
+          pushRows(obj.candidate_jobs);
+          pushRows(progressObj.candidate_jobs);
+          for (const row of rows) {
+            const status = String(row.status || row.job_status || row.jobStatus || row.latest_job_status || row.latestStatus || row.state || '').trim().toUpperCase();
+            if (!status || !terminalStatuses.has(status)) return true;
+          }
+          return false;
+        };
+        const isWorkbenchProgressReadyForPreviewFetch = (progressResult) => {
+          const obj = isHeartbeatPlainObject(progressResult) ? progressResult : {};
+          const progressObj = isHeartbeatPlainObject(obj.progress) ? obj.progress : {};
+          const phase = workbenchProgressPhase(progressResult);
+          const readyPhase = phase === 'READY' || phase === 'READY_EMPTY';
+          const blockingReadyValues = [obj.ready, obj.ready_flag, obj.session_ready, progressObj.ready, progressObj.ready_flag, progressObj.session_ready];
+          if (blockingReadyValues.some((value) => value === false)) return false;
+          if (obj.pending_refresh === true || obj.refresh_pending === true || obj.preview_refresh_pending === true || obj.candidate_refresh_pending === true || obj.refreshing === true) return false;
+          if (progressObj.pending_refresh === true || progressObj.refresh_pending === true || progressObj.preview_refresh_pending === true || progressObj.candidate_refresh_pending === true || progressObj.refreshing === true) return false;
+          const explicitReady = blockingReadyValues.some((value) => value === true) || obj.ready_empty === true || progressObj.ready_empty === true;
+          if (phase && !readyPhase) return false;
+          if (!readyPhase && !explicitReady) return false;
+          const counts = getWorkbenchJobCounts(progressResult);
+          if (counts.queued > 0 || counts.running > 0 || counts.active > 0) return false;
+          if (getActiveWorkbenchDeltaRefreshJobs(progressResult).length > 0) return false;
+          if (hasActiveWorkbenchJobRows(progressResult)) return false;
+          const lineCounts = getWorkbenchLineCounts(progressResult);
+          if (lineCounts.ready_not_materialised > 0 || lineCounts.pending > 0 || lineCounts.unknown > 0) return false;
+          return true;
         };
         const hasWorkbenchVisibleRows = (wizard) => {
           const arrays = [
@@ -353918,6 +354039,132 @@ async function bootstrapApp(){
           wizard.preview.data.preview = isHeartbeatPlainObject(wizard.preview.data.preview) ? wizard.preview.data.preview : {};
           applyTo(wizard.preview.data.session);
           applyTo(wizard.preview.data.preview);
+
+          const rowMarkerKeys = ['__heartbeat_refreshing', '__candidate_refreshing', 'candidate_refresh_pending', 'pending_refresh', 'refreshing'];
+          const rowArrayKeys = [
+            'canonical_preview_lines', 'canonicalPreviewLines',
+            'ready_preview_lines', 'readyPreviewLines',
+            'preview_rows', 'previewRows',
+            'rows', 'items', 'data', 'itemisation', 'itemization',
+            'draftable_now', 'draftableNow',
+            'ready_to_pay_now', 'readyToPayNow',
+            'case_resolution_states', 'caseResolutionStates',
+            'cases_resolutions', 'casesResolutions',
+            'blocked_for_pay_now', 'blockedForPayNow',
+            'blocked_preview_lines', 'blockedPreviewLines',
+            'blocked_now', 'blockedNow',
+            'blocked_for_pay', 'blockedForPay'
+          ];
+          const pageMapKeys = ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages'];
+          const nestedObjectKeys = ['candidate', 'payee', 'paye_candidate', 'non_paye_payee'];
+          const readRowCandidateId = (row) => {
+            if (!row || typeof row !== 'object' || Array.isArray(row)) return '';
+            const rowJson = isHeartbeatPlainObject(row.row_json) ? row.row_json : (isHeartbeatPlainObject(row.rowJson) ? row.rowJson : {});
+            return String(
+              row.candidate_id ||
+              row.candidateId ||
+              row.candidate?.candidate_id ||
+              row.candidate?.candidateId ||
+              row.payee?.candidate_id ||
+              row.payee?.candidateId ||
+              row.paye_candidate?.candidate_id ||
+              row.paye_candidate?.candidateId ||
+              row.non_paye_payee?.candidate_id ||
+              row.non_paye_payee?.candidateId ||
+              rowJson.candidate_id ||
+              rowJson.candidateId ||
+              rowJson.candidate?.candidate_id ||
+              rowJson.candidate?.candidateId ||
+              row.preview_contract?.candidate_id ||
+              row.previewContract?.candidate_id ||
+              row.preview_contract?.candidateId ||
+              ''
+            ).trim();
+          };
+          const rowHasRefreshingMarker = (row) => isHeartbeatPlainObject(row) && rowMarkerKeys.some((key) => row[key] === true);
+          const markWorkbenchRowRefreshing = (row, pending) => {
+            if (!isHeartbeatPlainObject(row)) return false;
+            let changed = false;
+            if (pending) {
+              for (const key of rowMarkerKeys) {
+                if (row[key] !== true) { row[key] = true; changed = true; }
+              }
+            } else {
+              for (const key of rowMarkerKeys) {
+                if (Object.prototype.hasOwnProperty.call(row, key)) {
+                  try { delete row[key]; } catch { row[key] = false; }
+                  changed = true;
+                }
+              }
+            }
+            return changed;
+          };
+          const effectivePendingIds = new Set(normaliseWorkbenchUuidArray(
+            wizard.workbench.__heartbeat_refreshing_candidate_ids,
+            wizard.workbench.pending_candidate_ids,
+            wizard.decisions.pending_candidate_ids,
+            wizard.preview.data.pending_candidate_ids,
+            wizard.preview.data.session?.pending_candidate_ids,
+            wizard.preview.data.preview?.pending_candidate_ids
+          ));
+          const effectiveTouchedIds = new Set(normaliseWorkbenchUuidArray(
+            Array.from(touchedIds),
+            Array.from(clearIds),
+            Array.from(staleIds),
+            Array.from(failedIds),
+            options.trackedCandidateIds
+          ));
+          const applyRowMarkersToArray = (rows, depth = 0) => {
+            if (!Array.isArray(rows)) return false;
+            let changed = false;
+            for (const row of rows) {
+              if (!isHeartbeatPlainObject(row)) continue;
+              const candidateId = readRowCandidateId(row);
+              if (bankingPayHeartbeatUuidRe.test(candidateId)) {
+                if (effectivePendingIds.has(candidateId)) {
+                  changed = markWorkbenchRowRefreshing(row, true) || changed;
+                } else if (effectiveTouchedIds.has(candidateId) || rowHasRefreshingMarker(row)) {
+                  changed = markWorkbenchRowRefreshing(row, false) || changed;
+                }
+              }
+              if (depth < 2) {
+                for (const key of rowArrayKeys) changed = applyRowMarkersToArray(row[key], depth + 1) || changed;
+                for (const key of nestedObjectKeys) {
+                  if (isHeartbeatPlainObject(row[key])) changed = applyRowMarkersToTarget(row[key], depth + 1) || changed;
+                }
+              }
+            }
+            return changed;
+          };
+          const applyRowMarkersToPageMap = (map, depth = 0) => {
+            if (!isHeartbeatPlainObject(map)) return false;
+            let changed = false;
+            for (const page of Object.values(map)) {
+              if (Array.isArray(page)) changed = applyRowMarkersToArray(page, depth + 1) || changed;
+              else if (isHeartbeatPlainObject(page)) changed = applyRowMarkersToTarget(page, depth + 1) || changed;
+            }
+            return changed;
+          };
+          function applyRowMarkersToTarget(target, depth = 0) {
+            if (!isHeartbeatPlainObject(target) || depth > 3) return false;
+            let changed = false;
+            for (const key of rowArrayKeys) changed = applyRowMarkersToArray(target[key], depth + 1) || changed;
+            for (const key of pageMapKeys) changed = applyRowMarkersToPageMap(target[key], depth + 1) || changed;
+            const componentCache = isHeartbeatPlainObject(target.componentStateCache) ? target.componentStateCache : (isHeartbeatPlainObject(target.component_state_cache) ? target.component_state_cache : null);
+            if (componentCache && componentCache !== target) changed = applyRowMarkersToTarget(componentCache, depth + 1) || changed;
+            const previewObj = isHeartbeatPlainObject(target.preview) ? target.preview : null;
+            if (previewObj && previewObj !== target) changed = applyRowMarkersToTarget(previewObj, depth + 1) || changed;
+            const sessionObj = isHeartbeatPlainObject(target.session) ? target.session : null;
+            if (sessionObj && sessionObj !== target) changed = applyRowMarkersToTarget(sessionObj, depth + 1) || changed;
+            return changed;
+          }
+          wizard.preview.componentStateCache = isHeartbeatPlainObject(wizard.preview.componentStateCache) ? wizard.preview.componentStateCache : {};
+          applyRowMarkersToTarget(wizard.workbench);
+          applyRowMarkersToTarget(wizard.decisions);
+          applyRowMarkersToTarget(wizard.preview.data);
+          applyRowMarkersToTarget(wizard.preview.data.session);
+          applyRowMarkersToTarget(wizard.preview.data.preview);
+          applyRowMarkersToTarget(wizard.preview.componentStateCache);
 
           const refreshPending = wizard.workbench.__heartbeat_refreshing_candidate_ids.length > 0 || wizard.workbench.pending_candidate_ids.length > 0;
           const stalePending = wizard.workbench.__candidate_refresh_stale_ids.length > 0;
@@ -354148,6 +354395,10 @@ async function bootstrapApp(){
 const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressResult, previousSnapshot, options = {}) => {
   const current = sameBankingPayWorkbenchWatchContext(watchContext);
   if (!current || current.sessionId !== watchContext.sessionId) return false;
+
+  if (!isWorkbenchProgressReadyForPreviewFetch(progressResult)) {
+    return applyProgressMetadataToState(watchContext, progressResult, { allowedSessionId: current.sessionId });
+  }
 
   const nextSectionCounts = getWorkbenchSectionCounts(progressResult?.section_counts || progressResult?.section_counts_json || progressResult?.progress?.section_counts || progressResult?.progress?.section_counts_json || {});
   const previousSectionCounts = getWorkbenchSectionCounts(previousSnapshot?.sectionCounts || {});
@@ -354513,15 +354764,20 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
             const activeDeltaJobs = getActiveWorkbenchDeltaRefreshJobs(progressResult);
             const activeCandidateIds = normaliseWorkbenchUuidArray(activeDeltaJobs.map((job) => job.candidate_id));
             const previousTracked = normaliseWorkbenchUuidArray(previousSnapshot.pendingCandidateIds || [], hb._workbenchCandidateSettlePollTrackedIds || []);
+            const trackedCandidateIds = normaliseWorkbenchUuidArray(activeCandidateIds, previousTracked);
             const candidateStateUpdated = applyWorkbenchCandidateRefreshingState(watchContext, progressResult, {
               allowedSessionId: adoptedReplacement ? effectiveSessionId : watchContext.sessionId,
               activeJobs: activeDeltaJobs,
-              trackedCandidateIds: normaliseWorkbenchUuidArray(activeCandidateIds, previousTracked)
+              trackedCandidateIds
             });
             let stateUpdated = candidateStateUpdated;
+            const previewFetchReady = isWorkbenchProgressReadyForPreviewFetch(progressResult);
             if (!adoptedReplacement) {
-              if (activeCandidateIds.length > 0 || workbenchProgressPhase(progressResult) === 'DELTA_REFRESHING') {
-                scheduleWorkbenchCandidateSettlePoll(watchContext, progressResult, normaliseWorkbenchUuidArray(activeCandidateIds, previousTracked), 'active-delta-refresh');
+              if (!previewFetchReady) {
+                if (trackedCandidateIds.length > 0) {
+                  scheduleWorkbenchCandidateSettlePoll(watchContext, progressResult, trackedCandidateIds, activeCandidateIds.length > 0 ? 'active-candidate-refresh' : 'workbench-not-ready');
+                }
+                stateUpdated = true;
               } else if (previousTracked.length > 0 && isWorkbenchProgressReadyForCandidateSettle(progressResult, previousTracked)) {
                 const settled = await refreshWorkbenchVisiblePageAfterProgress(watchContext, progressResult, previousSnapshot, {
                   settleRefresh: true,
