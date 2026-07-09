@@ -32281,10 +32281,6 @@ async function bankingPayPreview(pay_date) {
   }
 }
 
-
-
-
-
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -35536,14 +35532,64 @@ async function bankingPayCreateDraft(input = {}) {
   const activeSessionSignature = trimStr(wiz.workbench.session_signature || wiz.decisions.session_signature || '');
   const previewSessionSignature = trimStr(previewEnvelope.session_signature || previewEnvelope.session?.session_signature || previewObj.session_signature || '');
   const previewSessionId = trimStr(previewEnvelope.session_id || previewEnvelope.session?.session_id || previewObj.session_id || '');
-  const computedLiveSessionSignature = (() => {
+  const computeActiveCreateDraftSessionSignature = () => {
+    const filtersJson = isPlainObject(wiz.filters_json)
+      ? (deep(wiz.filters_json) || {})
+      : (isPlainObject(wiz.filters) ? (deep(wiz.filters) || {}) : {});
+    const candidateIds = uniqTrimmed(
+      Array.isArray(wiz.decisions?.candidate_ids)
+        ? wiz.decisions.candidate_ids
+        : (Array.isArray(callerRequestContext.candidate_ids)
+            ? callerRequestContext.candidate_ids
+            : (Array.isArray(inputOptions.candidate_ids)
+                ? inputOptions.candidate_ids
+                : (Array.isArray(inputOptions.candidateIds) ? inputOptions.candidateIds : [])))
+    ).sort();
+    const candidateFilterId = trimStr(
+      wiz.candidate_filter_id ||
+      wiz.candidateFilterId ||
+      wiz.workbench?.candidate_filter_id ||
+      wiz.workbench?.candidateFilterId ||
+      callerRequestContext.candidate_filter_id ||
+      callerRequestContext.candidateFilterId ||
+      inputOptions.candidate_filter_id ||
+      inputOptions.candidateFilterId ||
+      ''
+    );
+    const clientFilterId = trimStr(
+      wiz.client_filter_id ||
+      wiz.clientFilterId ||
+      wiz.workbench?.client_filter_id ||
+      wiz.workbench?.clientFilterId ||
+      callerRequestContext.client_filter_id ||
+      callerRequestContext.clientFilterId ||
+      inputOptions.client_filter_id ||
+      inputOptions.clientFilterId ||
+      ''
+    );
+
     try {
       if (typeof computePayWorkbenchSessionSignature === 'function') {
-        return trimStr(computePayWorkbenchSessionSignature());
+        return trimStr(computePayWorkbenchSessionSignature({
+          pay_date: pd,
+          payDate: pd,
+          week_ending_cutoff: cutoffIso,
+          weekEndingCutoff: cutoffIso,
+          week_ending_cutoff_date: cutoffIso,
+          weekEndingCutoffDate: cutoffIso,
+          candidate_filter_id: candidateFilterId,
+          candidateFilterId: candidateFilterId,
+          client_filter_id: clientFilterId,
+          clientFilterId: clientFilterId,
+          candidate_ids: candidateIds,
+          candidateIds,
+          filters_json: filtersJson
+        }));
       }
     } catch {}
     return '';
-  })();
+  };
+  const computedLiveSessionSignature = computeActiveCreateDraftSessionSignature();
   const computedLiveSessionSignatureObj = (() => {
     if (!computedLiveSessionSignature) return null;
     try {
@@ -35702,7 +35748,8 @@ async function bankingPayCreateDraft(input = {}) {
   const authoritativeSessionSignature = trimStr(authoritativeReadinessSnapshot.session_signature || '');
   if ((authoritativePayDate && authoritativePayDate !== pd)
       || (authoritativeReadinessSnapshot.week_ending_cutoff && authoritativeCutoff !== cutoffIso)
-      || (authoritativeSessionSignature && activeSessionSignature && !jsonSignatureTextsMatch(authoritativeSessionSignature, activeSessionSignature))) {
+      || (authoritativeSessionSignature && activeSessionSignature && !jsonSignatureTextsMatch(authoritativeSessionSignature, activeSessionSignature))
+      || (authoritativeSessionSignature && computedLiveSessionSignature && !jsonSignatureTextsMatch(authoritativeSessionSignature, computedLiveSessionSignature))) {
     return await rejectAuthoritativeCreateDraftReadiness('INITIAL_AUTHORITATIVE_CONTEXT_MISMATCH', {
       ...authoritativeReadinessSnapshot,
       gate_ready: false,
@@ -35715,6 +35762,30 @@ async function bankingPayCreateDraft(input = {}) {
       local_refresh_diagnostics: localRefreshDiagnostics
     });
   }
+
+  const synchronizedContextSignature = trimStr(computedLiveSessionSignature || '');
+  const synchronizedSessionSignature = trimStr(authoritativeSessionSignature || activeSessionSignature || '');
+  const synchronizedContextIsCompatible = !!(
+    synchronizedContextSignature &&
+    synchronizedSessionSignature &&
+    jsonSignatureTextsMatch(synchronizedContextSignature, synchronizedSessionSignature)
+  );
+  if (synchronizedContextIsCompatible) {
+    try { callerRequestContext.context_signature = synchronizedContextSignature; } catch {}
+    try { wiz.decisions.context_signature = synchronizedContextSignature; } catch {}
+    try { wiz.preview.context_signature = synchronizedContextSignature; } catch {}
+    if (synchronizedSessionSignature) {
+      try { wiz.decisions.session_signature = synchronizedSessionSignature; } catch {}
+      try { wiz.workbench.session_signature = synchronizedSessionSignature; } catch {}
+    }
+    if (localRefreshDiagnostics.hasPending !== true && upperTrim(wiz.decisions.dirty_reason) === 'CONTEXT_SIGNATURE_CHANGED') {
+      try { wiz.decisions.pay_context_dirty = false; } catch {}
+      try { wiz.decisions.dirty_reason = ''; } catch {}
+      try { callerRequestContext.pay_context_dirty = false; } catch {}
+      try { callerRequestContext.dirty_reason = ''; } catch {}
+    }
+  }
+
   const currentCanonicalPageAppliedInitially = isCurrentCanonicalPageAppliedForCreateDraft(sessionId, expectedSessionVersion);
   const initialLoadedRowsForCreateDraft = collectLoadedPreviewRowsBySectionForCreateDraft();
   const initialCanonicalRowsForCreateDraft = asArray(initialLoadedRowsForCreateDraft.canonical_preview_lines).filter((row) => isPlainObject(row));
@@ -37383,6 +37454,8 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
+
 
 async function openPayeSameWeekOverrideDecisionModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -86037,10 +86110,34 @@ const normalizePayWizardDecisionState = (input) => {
 
 const ensurePayWizardDecisionState = () => {
   const trimStr = (v) => String(v == null ? '' : v).trim();
+  const upperTrim = (v) => trimStr(v).toUpperCase();
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
   const uniqTrimmed = (arr) => Array.isArray(arr)
     ? Array.from(new Set(arr.map((x) => trimStr(x)).filter(Boolean)))
     : [];
+  const stableStringify = (value) => {
+    if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+    if (value && typeof value === 'object') {
+      return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+    }
+    return JSON.stringify(value);
+  };
+  const canonicalJsonComparisonText = (value) => {
+    const raw = trimStr(value);
+    if (!raw) return '';
+    try {
+      const parsed = JSON.parse(raw);
+      return isPlainObject(parsed) ? stableStringify(parsed) : raw;
+    } catch {
+      return raw;
+    }
+  };
+  const signatureTextsMatch = (leftValue, rightValue) => {
+    const leftRaw = trimStr(leftValue);
+    const rightRaw = trimStr(rightValue);
+    if (!leftRaw || !rightRaw) return leftRaw === rightRaw;
+    return canonicalJsonComparisonText(leftRaw) === canonicalJsonComparisonText(rightRaw);
+  };
   const blankComponentStateCache = () => ({
     case_resolution_states: [],
     blocked_case_states: [],
@@ -86056,45 +86153,95 @@ const ensurePayWizardDecisionState = () => {
     blocked_preview_lines: [],
     hidden_preview_lines: []
   });
-   const buildContextSignature = () => {
+  const buildContextSignature = () => {
+    const wizard = isPlainObject(st?.pay?.draftWizard) ? st.pay.draftWizard : {};
+    const workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
+    const decisions = isPlainObject(wizard.decisions) ? wizard.decisions : {};
+    const previewEnvelope = isPlainObject(wizard.preview?.data) ? wizard.preview.data : {};
+    const previewSession = isPlainObject(previewEnvelope.session) ? previewEnvelope.session : {};
+    const previewObj = isPlainObject(previewEnvelope.preview) ? previewEnvelope.preview : {};
+    const filtersJson = isPlainObject(wizard.filters_json)
+      ? wizard.filters_json
+      : (isPlainObject(wizard.filters) ? wizard.filters : {});
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const candidateIds = uniqTrimmed(decisions.candidate_ids)
+      .map((value) => value.toLowerCase())
+      .filter((value) => uuidRe.test(value))
+      .sort();
+    const payDate = trimStr(
+      wizard.pay_date ||
+      st?.pay?.pay_date ||
+      st?.pay?.selectedPayDate ||
+      workbench.pay_date ||
+      decisions.pay_date ||
+      previewEnvelope.pay_date ||
+      previewSession.pay_date ||
+      previewObj.pay_date ||
+      ''
+    );
+    const weekEndingCutoff = trimStr(
+      wizard.week_ending_cutoff ||
+      wizard.weekEndingCutoff ||
+      wizard.week_ending_cutoff_date ||
+      wizard.weekEndingCutoffDate ||
+      st?.pay?.week_ending_cutoff ||
+      st?.pay?.week_ending_cutoff_date ||
+      workbench.week_ending_cutoff ||
+      workbench.week_ending_cutoff_date ||
+      decisions.week_ending_cutoff ||
+      decisions.week_ending_cutoff_date ||
+      previewEnvelope.week_ending_cutoff ||
+      previewEnvelope.week_ending_cutoff_date ||
+      previewSession.week_ending_cutoff ||
+      previewSession.week_ending_cutoff_date ||
+      previewObj.week_ending_cutoff ||
+      previewObj.week_ending_cutoff_date ||
+      '9999-12-31'
+    ) || '9999-12-31';
+    const candidateFilterId = trimStr(
+      wizard.candidate_filter_id ||
+      wizard.candidateFilterId ||
+      workbench.candidate_filter_id ||
+      workbench.candidateFilterId ||
+      ''
+    );
+    const clientFilterId = trimStr(
+      wizard.client_filter_id ||
+      wizard.clientFilterId ||
+      workbench.client_filter_id ||
+      workbench.clientFilterId ||
+      ''
+    );
+
     try {
       if (typeof computePayWorkbenchSessionSignature === 'function') {
-        return String(computePayWorkbenchSessionSignature()).trim();
+        return trimStr(computePayWorkbenchSessionSignature({
+          pay_date: payDate,
+          payDate,
+          week_ending_cutoff: weekEndingCutoff,
+          weekEndingCutoff,
+          week_ending_cutoff_date: weekEndingCutoff,
+          weekEndingCutoffDate: weekEndingCutoff,
+          candidate_filter_id: candidateFilterId,
+          candidateFilterId,
+          client_filter_id: clientFilterId,
+          clientFilterId,
+          candidate_ids: candidateIds,
+          candidateIds,
+          filters_json: filtersJson
+        }));
       }
     } catch {}
 
-    const candidateIds = (() => {
-      try {
-        const srcIds = st?.pay?.draftWizard?.decisions?.candidate_ids;
-        return Array.isArray(srcIds)
-          ? Array.from(new Set(srcIds.map((x) => trimStr(x)).filter(Boolean))).sort()
-          : [];
-      } catch {
-        return [];
-      }
-    })();
-
-    const payload = {
-      signature_kind: 'BANKING_PAY_WORKBENCH',
-      signature_version: 2,
-      pay_date: trimStr(st?.pay?.draftWizard?.pay_date || st?.pay?.pay_date || st?.pay?.selectedPayDate || ''),
-      candidate_filter_id: trimStr(st?.pay?.draftWizard?.candidate_filter_id || ''),
-      client_filter_id: trimStr(st?.pay?.draftWizard?.client_filter_id || ''),
-      candidate_ids: candidateIds
-    };
-
-    try {
-      return JSON.stringify(payload);
-    } catch {
-      return [
-        payload.signature_kind,
-        String(payload.signature_version),
-        payload.pay_date,
-        payload.candidate_filter_id,
-        payload.client_filter_id,
-        candidateIds.join(',')
-      ].join('|');
-    }
+    return stableStringify({
+      candidate_filter_id: candidateFilterId,
+      candidate_ids: candidateIds,
+      client_filter_id: clientFilterId,
+      kind: 'BANKING_PAY_WORKBENCH',
+      pay_date: payDate,
+      signature_version: 4,
+      week_ending_cutoff: weekEndingCutoff
+    });
   };
 
   try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; } catch {}
@@ -86151,6 +86298,16 @@ const ensurePayWizardDecisionState = () => {
   const decisions = st.pay.draftWizard.decisions;
   const workbench = st.pay.draftWizard.workbench;
   const contextSignature = buildContextSignature();
+  const previewEnvelope = isPlainObject(st.pay.draftWizard.preview?.data) ? st.pay.draftWizard.preview.data : {};
+  const previewSession = isPlainObject(previewEnvelope.session) ? previewEnvelope.session : {};
+  const previewObj = isPlainObject(previewEnvelope.preview) ? previewEnvelope.preview : {};
+  const activeSessionSignature = trimStr(
+    workbench.session_signature ||
+    previewEnvelope.session_signature ||
+    previewSession.session_signature ||
+    previewObj.session_signature ||
+    ''
+  );
 
   if (!Array.isArray(decisions.candidate_ids)) decisions.candidate_ids = [];
   decisions.candidate_ids = uniqTrimmed(decisions.candidate_ids);
@@ -86182,7 +86339,7 @@ const ensurePayWizardDecisionState = () => {
   if (!('session_id' in decisions)) decisions.session_id = null;
   if (!('snapshot_run_id' in decisions)) decisions.snapshot_run_id = null;
   if (!('session_version' in decisions)) decisions.session_version = null;
-  if (!('session_signature' in decisions) || typeof decisions.session_signature !== 'string') decisions.session_signature = contextSignature;
+  if (!('session_signature' in decisions) || typeof decisions.session_signature !== 'string') decisions.session_signature = activeSessionSignature || contextSignature;
   if (!Array.isArray(decisions.dirty_candidate_ids)) decisions.dirty_candidate_ids = [];
   decisions.dirty_candidate_ids = uniqTrimmed(decisions.dirty_candidate_ids);
   if (!Array.isArray(decisions.pending_candidate_jobs)) decisions.pending_candidate_jobs = [];
@@ -86193,7 +86350,7 @@ const ensurePayWizardDecisionState = () => {
   if (!('session_id' in workbench)) workbench.session_id = null;
   if (!('snapshot_run_id' in workbench)) workbench.snapshot_run_id = null;
   if (!('session_version' in workbench)) workbench.session_version = null;
-  if (!('session_signature' in workbench) || typeof workbench.session_signature !== 'string') workbench.session_signature = contextSignature;
+  if (!('session_signature' in workbench) || typeof workbench.session_signature !== 'string') workbench.session_signature = activeSessionSignature || contextSignature;
   if (!Array.isArray(workbench.dirty_candidate_ids)) workbench.dirty_candidate_ids = [];
   workbench.dirty_candidate_ids = uniqTrimmed(workbench.dirty_candidate_ids);
   if (!Array.isArray(workbench.pending_candidate_jobs)) workbench.pending_candidate_jobs = [];
@@ -86212,12 +86369,70 @@ const ensurePayWizardDecisionState = () => {
   if (!isPlainObject(workbench.summary)) workbench.summary = {};
    if (!('last_preview_applied_at' in workbench)) workbench.last_preview_applied_at = null;
 
-  if (!decisions.context_signature) decisions.context_signature = contextSignature;
-  if (!st.pay.draftWizard.preview.context_signature) st.pay.draftWizard.preview.context_signature = contextSignature;
-  if (decisions.context_signature !== contextSignature) {
+  const isTerminalPendingJobStatus = (status) => [
+    'SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY',
+    'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'
+  ].includes(upperTrim(status));
+  const hasNonTerminalPendingJob = (jobs) => (Array.isArray(jobs) ? jobs : []).some((job) => {
+    if (!isPlainObject(job)) return false;
+    const pendingJobId = trimStr(job.pending_job_id || job.pendingJobId || '');
+    if (!pendingJobId) return false;
+    const jobStatus = upperTrim(
+      job.latest_job_status || job.latestJobStatus || job.job_status || job.jobStatus ||
+      job.latest_status || job.latestStatus || job.current_status || job.currentStatus ||
+      job.state || job.status || job.status_code || job.statusCode || ''
+    );
+    const candidateStatus = upperTrim(
+      job.candidate_status || job.candidateStatus || job.candidate_state || job.candidateState ||
+      job.ready_status || job.readyStatus || ''
+    );
+    return !isTerminalPendingJobStatus(jobStatus) && !isTerminalPendingJobStatus(candidateStatus);
+  });
+  const hasPendingContextWork = st.pay.draftWizard.preview.loading === true ||
+    workbench.create_draft_refresh_pending === true ||
+    workbench.preview_reopen_required === true ||
+    decisions.create_draft_refresh_pending === true ||
+    uniqTrimmed(workbench.pending_candidate_ids).length > 0 ||
+    uniqTrimmed(workbench.dirty_candidate_ids).length > 0 ||
+    uniqTrimmed(workbench.failed_candidate_ids).length > 0 ||
+    uniqTrimmed(decisions.dirty_candidate_ids).length > 0 ||
+    hasNonTerminalPendingJob(workbench.pending_candidate_jobs) ||
+    hasNonTerminalPendingJob(decisions.pending_candidate_jobs);
+  const decisionContextSignature = trimStr(decisions.context_signature);
+  const activeSessionMatchesCurrentContext = !!(
+    activeSessionSignature &&
+    contextSignature &&
+    signatureTextsMatch(activeSessionSignature, contextSignature)
+  );
+  const activeSessionConflictsWithCurrentContext = !!(
+    activeSessionSignature &&
+    contextSignature &&
+    !activeSessionMatchesCurrentContext
+  );
+  const decisionContextConflictsWithCurrentContext = !!(
+    decisionContextSignature &&
+    contextSignature &&
+    !signatureTextsMatch(decisionContextSignature, contextSignature)
+  );
+
+  if (activeSessionConflictsWithCurrentContext || (!activeSessionSignature && decisionContextConflictsWithCurrentContext)) {
     decisions.pay_context_dirty = true;
     decisions.dirty_reason = decisions.dirty_reason || 'CONTEXT_SIGNATURE_CHANGED';
-    decisions.context_signature = contextSignature;
+    decisions.context_signature = contextSignature || decisionContextSignature;
+    if (!st.pay.draftWizard.preview.context_signature) {
+      st.pay.draftWizard.preview.context_signature = activeSessionSignature || decisionContextSignature || contextSignature;
+    }
+  } else {
+    decisions.context_signature = contextSignature || decisionContextSignature || activeSessionSignature;
+    st.pay.draftWizard.preview.context_signature = contextSignature || st.pay.draftWizard.preview.context_signature || activeSessionSignature;
+    if (activeSessionSignature) {
+      decisions.session_signature = activeSessionSignature;
+      workbench.session_signature = activeSessionSignature;
+    }
+    if (activeSessionMatchesCurrentContext && !hasPendingContextWork && upperTrim(decisions.dirty_reason) === 'CONTEXT_SIGNATURE_CHANGED') {
+      decisions.pay_context_dirty = false;
+      decisions.dirty_reason = '';
+    }
   }
 
   if (workbench.server_selected_preview_row_ids_provided !== true) {
@@ -86230,7 +86445,7 @@ const ensurePayWizardDecisionState = () => {
   decisions.session_id = workbench.session_id || decisions.session_id || null;
   decisions.snapshot_run_id = workbench.snapshot_run_id || decisions.snapshot_run_id || null;
   decisions.session_version = workbench.session_version ?? decisions.session_version ?? null;
-  decisions.session_signature = workbench.session_signature || decisions.session_signature || contextSignature;
+  decisions.session_signature = activeSessionSignature || workbench.session_signature || decisions.session_signature || contextSignature;
   decisions.server_selected_preview_row_ids = uniqTrimmed(decisions.server_selected_preview_row_ids);
   decisions.server_selected_preview_row_ids_provided = (decisions.server_selected_preview_row_ids_provided === true);
   decisions.dirty_candidate_ids = uniqTrimmed(
@@ -86244,6 +86459,7 @@ const ensurePayWizardDecisionState = () => {
 
   return decisions;
 }
+
 const resetPayPreviewAndDecisions = async (options = {}) => {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
