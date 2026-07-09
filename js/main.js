@@ -44653,7 +44653,6 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 
 
 
-
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -45660,7 +45659,7 @@ const collectPreviewRowIds = (previewLike) => {
       ''
     );
     const terminalComplete = isActiveDraftCreateComplete(operationLike);
-    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     const positiveVersionOrNull = (value) => {
       const raw = trimStr(value);
       if (!/^[0-9]{1,18}$/.test(raw)) return null;
@@ -46691,68 +46690,409 @@ const collectPreviewRowIds = (previewLike) => {
     pending_candidate_jobs: Array.isArray(wiz.decisions.pending_candidate_jobs) ? deep(wiz.decisions.pending_candidate_jobs) : []
   };
 
-  const pendingCandidateIds = uniqTrimmed(
-    Array.isArray(wiz.workbench.pending_candidate_ids)
-      ? wiz.workbench.pending_candidate_ids
-      : (Array.isArray(previewEnvelope.pending_candidate_ids)
-          ? previewEnvelope.pending_candidate_ids
-          : (Array.isArray(pv?.pending_candidate_ids) ? pv.pending_candidate_ids : []))
-  );
-  const failedCandidateIds = uniqTrimmed(
-    Array.isArray(wiz.workbench.failed_candidate_ids)
-      ? wiz.workbench.failed_candidate_ids
-      : (Array.isArray(previewEnvelope.failed_candidate_ids)
-          ? previewEnvelope.failed_candidate_ids
-          : (Array.isArray(pv?.failed_candidate_ids) ? pv.failed_candidate_ids : []))
-  );
-  const pendingCandidateRows = asArray(
-    Array.isArray(wiz.workbench.pending_candidate_rows)
-      ? wiz.workbench.pending_candidate_rows
-      : (Array.isArray(previewEnvelope.pending_candidate_rows)
-          ? previewEnvelope.pending_candidate_rows
-          : (Array.isArray(pv?.pending_candidate_rows) ? pv.pending_candidate_rows : []))
-  ).filter((row) => isPlainObject(row));
-  const failedCandidateRows = asArray(
-    Array.isArray(wiz.workbench.failed_candidate_rows)
-      ? wiz.workbench.failed_candidate_rows
-      : (Array.isArray(previewEnvelope.failed_candidate_rows)
-          ? previewEnvelope.failed_candidate_rows
-          : (Array.isArray(pv?.failed_candidate_rows) ? pv.failed_candidate_rows : []))
-  ).filter((row) => isPlainObject(row));
-  const pendingCandidateJobs = asArray(
-    Array.isArray(wiz.workbench.pending_candidate_jobs)
-      ? wiz.workbench.pending_candidate_jobs
-      : (Array.isArray(decisions.pending_candidate_jobs) ? decisions.pending_candidate_jobs : [])
-  ).filter((row) => isPlainObject(row));
-
-  const pendingCandidateRowById = new Map();
-  for (const row of pendingCandidateRows) {
-    const candidateId = trimStr(row?.candidate_id);
-    if (!candidateId || pendingCandidateRowById.has(candidateId)) continue;
-    pendingCandidateRowById.set(candidateId, deep(row));
-  }
-  const failedCandidateRowById = new Map();
-  for (const row of failedCandidateRows) {
-    const candidateId = trimStr(row?.candidate_id);
-    if (!candidateId || failedCandidateRowById.has(candidateId)) continue;
-    failedCandidateRowById.set(candidateId, deep(row));
-  }
-  const pendingCandidateJobById = new Map();
-  for (const row of pendingCandidateJobs) {
-    const candidateId = trimStr(row?.candidate_id);
-    if (!candidateId || pendingCandidateJobById.has(candidateId)) continue;
-    pendingCandidateJobById.set(candidateId, deep(row));
-  }
+  const cloneWorkbenchStatusRow = (row) => {
+    if (!isPlainObject(row)) return {};
+    try { return deep(row); } catch {
+      try { return Object.assign({}, row); } catch { return {}; }
+    }
+  };
+  const workbenchCandidateIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const isWorkbenchCandidateId = (value) => workbenchCandidateIdPattern.test(trimStr(value));
+  const workbenchRefreshJobTypes = new Set([
+    'WORKBENCH_CANDIDATE_DELTA_REFRESH',
+    'WORKBENCH_CANDIDATE_REFRESH',
+    'WORKBENCH_CANDIDATE_SOURCE_BUILD',
+    'WORKBENCH_CANDIDATE_SOURCE_BUILD_CHUNK',
+    'WORKBENCH_CANDIDATE_LINE_WORK_SEED',
+    'WORKBENCH_CANDIDATE_LINE_WORK_PROCESS',
+    'WORKBENCH_CANDIDATE_PREVIEW_ROWS_MATERIALISE',
+    'WORKBENCH_CANDIDATE_PREVIEW_ROWS_MATERIALIZE',
+    'WORKBENCH_PREVIEW_ROWS_MATERIALISE',
+    'WORKBENCH_PREVIEW_ROWS_MATERIALIZE',
+    'WORKBENCH_PREVIEW_ROWS_MATERIALISE_CHUNK',
+    'WORKBENCH_PREVIEW_ROWS_MATERIALIZE_CHUNK',
+    'WORKBENCH_LINE_WORK_SEED',
+    'WORKBENCH_LINE_WORK_PROCESS',
+    'WORKBENCH_SOURCE_BUILD',
+    'CANDIDATE_DELTA_REFRESH',
+    'CANDIDATE_SOURCE_BUILD',
+    'CANDIDATE_SOURCE_BUILD_CHUNK',
+    'CANDIDATE_LINE_WORK_SEED',
+    'CANDIDATE_LINE_WORK_PROCESS'
+  ]);
+  const workbenchTerminalStatuses = new Set([
+    'READY', 'READY_EMPTY', 'COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED',
+    'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'ABORTED', 'SKIPPED', 'DEAD', 'DONE'
+  ]);
+  const workbenchFailedStatuses = new Set(['FAILED', 'ERROR', 'DEAD', 'ABORTED']);
+  const workbenchActiveStatuses = new Set([
+    'PENDING', 'DIRTY', 'REFRESHING', 'QUEUED', 'RUNNING', 'PROCESSING', 'STARTED',
+    'CLAIMED', 'SEEDING', 'WAITING', 'MATERIALISING', 'MATERIALIZING', 'IN_PROGRESS'
+  ]);
+  const candidateRefreshFlagKeys = [
+    'refreshing', 'pending_refresh', 'pendingRefresh', 'candidate_refresh_pending', 'candidateRefreshPending',
+    '__heartbeat_refreshing', '__heartbeatRefreshing', '__candidate_refreshing', '__candidateRefreshing'
+  ];
+  const getCandidateIdFromWorkbenchObject = (value) => {
+    if (!isPlainObject(value)) return '';
+    const candidates = [
+      value.candidate_id,
+      value.candidateId,
+      value.candidate_uuid,
+      value.candidateUuid,
+      value.workbench_candidate_id,
+      value.workbenchCandidateId,
+      value.subject_candidate_id,
+      value.subjectCandidateId,
+      value.refresh_candidate_id,
+      value.refreshCandidateId,
+      value.entity_candidate_id,
+      value.entityCandidateId,
+      value.candidate?.candidate_id,
+      value.candidate?.candidateId,
+      value.payee?.candidate_id,
+      value.payee?.candidateId,
+      value.paye_candidate?.candidate_id,
+      value.paye_candidate?.candidateId,
+      value.non_paye_payee?.candidate_id,
+      value.non_paye_payee?.candidateId,
+      value.preview_contract?.candidate_id,
+      value.preview_contract?.candidateId,
+      value.previewContract?.candidate_id,
+      value.previewContract?.candidateId,
+      value.row_json?.candidate_id,
+      value.row_json?.candidateId,
+      value.rowJson?.candidate_id,
+      value.rowJson?.candidateId,
+      value.row_json?.candidate?.candidate_id,
+      value.row_json?.candidate?.candidateId,
+      value.rowJson?.candidate?.candidate_id,
+      value.rowJson?.candidate?.candidateId,
+      value.payload?.candidate_id,
+      value.payload?.candidateId,
+      value.job_payload?.candidate_id,
+      value.job_payload?.candidateId,
+      value.jobPayload?.candidate_id,
+      value.jobPayload?.candidateId
+    ];
+    for (const candidate of candidates) {
+      const candidateId = trimStr(candidate);
+      if (isWorkbenchCandidateId(candidateId)) return candidateId;
+    }
+    return '';
+  };
+  const getCandidateRefreshLabelFromWorkbenchObject = (value, fallbackCandidateId = '') => {
+    if (!isPlainObject(value)) return trimStr(fallbackCandidateId);
+    const nested = isPlainObject(value.row_json) ? value.row_json : (isPlainObject(value.rowJson) ? value.rowJson : {});
+    const candidate = isPlainObject(value.candidate) ? value.candidate : (isPlainObject(nested.candidate) ? nested.candidate : {});
+    return trimStr(
+      value.candidate_name || value.candidateName || value.display_name || value.displayName || value.name ||
+      value.worker_name || value.workerName || value.payee_name || value.payeeName ||
+      candidate.display_name || candidate.displayName || candidate.name || candidate.full_name || candidate.fullName ||
+      nested.candidate_name || nested.candidateName || nested.display_name || nested.displayName ||
+      value.tms_ref || value.tmsRef || nested.tms_ref || nested.tmsRef || fallbackCandidateId
+    );
+  };
+  const getWorkbenchRowStatus = (row) => upperTrim(row?.status || row?.job_status || row?.jobStatus || row?.state || row?.job_state || row?.jobState || row?.refresh_status || row?.refreshStatus || '');
+  const getWorkbenchRowJobType = (row) => upperTrim(row?.job_type || row?.jobType || row?.type || row?.task_type || row?.taskType || row?.latest_job_type || row?.latestJobType || row?.work_type || row?.workType || '');
+  const hasCandidateRefreshFlag = (row) => {
+    if (!isPlainObject(row)) return false;
+    return candidateRefreshFlagKeys.some((key) => row[key] === true || row[key] === 'true' || row[key] === 1 || row[key] === '1');
+  };
+  const looksLikeWorkbenchRefreshJobType = (jobType) => {
+    const normalized = upperTrim(jobType);
+    if (!normalized) return false;
+    if (workbenchRefreshJobTypes.has(normalized)) return true;
+    return normalized.includes('WORKBENCH') && (
+      normalized.includes('CANDIDATE') ||
+      normalized.includes('SOURCE_BUILD') ||
+      normalized.includes('LINE_WORK') ||
+      normalized.includes('PREVIEW_ROWS_MATERIALIS') ||
+      normalized.includes('PREVIEW_ROWS_MATERIALIZ') ||
+      normalized.includes('DELTA_REFRESH')
+    );
+  };
+  const collectWorkbenchCandidateRefreshState = () => {
+    const candidateRefreshStateById = new Map();
+    const failedCandidateStateById = new Map();
+    const pendingCandidateRowsCollected = [];
+    const failedCandidateRowsCollected = [];
+    const pendingCandidateJobsCollected = [];
+    const seenPendingRows = new Set();
+    const seenPendingJobs = new Set();
+    const seenFailedRows = new Set();
+    const rowKeyFor = (sourcePath, candidateId, row) => {
+      if (!isPlainObject(row)) return `${sourcePath}:${candidateId}`;
+      return trimStr(row.job_id || row.jobId || row.id || row.preview_row_id || row.previewRowId || row.row_id || row.rowId || row.line_id || row.lineId || '') || `${sourcePath}:${candidateId}:${pendingCandidateRowsCollected.length + pendingCandidateJobsCollected.length + failedCandidateRowsCollected.length}`;
+    };
+    const ensurePendingCandidate = (candidateId, sourcePath, row = null, options = {}) => {
+      const id = trimStr(candidateId);
+      if (!isWorkbenchCandidateId(id)) return null;
+      const existing = candidateRefreshStateById.get(id) || {
+        candidate_id: id,
+        refreshing: true,
+        reasons: [],
+        job_types: [],
+        job_statuses: [],
+        source_paths: [],
+        label: '',
+        row: null,
+        job: null
+      };
+      const reason = trimStr(options.reason || 'pending');
+      const jobType = getWorkbenchRowJobType(row);
+      const status = getWorkbenchRowStatus(row);
+      const label = getCandidateRefreshLabelFromWorkbenchObject(row, id);
+      if (reason && !existing.reasons.includes(reason)) existing.reasons.push(reason);
+      if (sourcePath && !existing.source_paths.includes(sourcePath)) existing.source_paths.push(sourcePath);
+      if (jobType && !existing.job_types.includes(jobType)) existing.job_types.push(jobType);
+      if (status && !existing.job_statuses.includes(status)) existing.job_statuses.push(status);
+      if (!existing.label && label && label !== id) existing.label = label;
+      if (isPlainObject(row)) {
+        const cloned = cloneWorkbenchStatusRow(row);
+        if (options.isJob) existing.job = existing.job || cloned;
+        existing.row = existing.row || cloned;
+      }
+      candidateRefreshStateById.set(id, existing);
+      failedCandidateStateById.delete(id);
+      return existing;
+    };
+    const ensureFailedCandidate = (candidateId, sourcePath, row = null, options = {}) => {
+      const id = trimStr(candidateId);
+      if (!isWorkbenchCandidateId(id) || candidateRefreshStateById.has(id)) return null;
+      const existing = failedCandidateStateById.get(id) || {
+        candidate_id: id,
+        failed: true,
+        reasons: [],
+        job_types: [],
+        job_statuses: [],
+        source_paths: [],
+        label: '',
+        row: null
+      };
+      const reason = trimStr(options.reason || 'failed');
+      const jobType = getWorkbenchRowJobType(row);
+      const status = getWorkbenchRowStatus(row);
+      const label = getCandidateRefreshLabelFromWorkbenchObject(row, id);
+      if (reason && !existing.reasons.includes(reason)) existing.reasons.push(reason);
+      if (sourcePath && !existing.source_paths.includes(sourcePath)) existing.source_paths.push(sourcePath);
+      if (jobType && !existing.job_types.includes(jobType)) existing.job_types.push(jobType);
+      if (status && !existing.job_statuses.includes(status)) existing.job_statuses.push(status);
+      if (!existing.label && label && label !== id) existing.label = label;
+      if (isPlainObject(row)) existing.row = existing.row || cloneWorkbenchStatusRow(row);
+      failedCandidateStateById.set(id, existing);
+      return existing;
+    };
+    const collectIdsFrom = (sourcePath, values, options = {}) => {
+      for (const value of asArray(values)) {
+        const candidateId = isPlainObject(value) ? getCandidateIdFromWorkbenchObject(value) : trimStr(value);
+        if (!candidateId) continue;
+        if (options.failed) ensureFailedCandidate(candidateId, sourcePath, isPlainObject(value) ? value : null, { reason: options.reason || 'failed_candidate_ids' });
+        else ensurePendingCandidate(candidateId, sourcePath, isPlainObject(value) ? value : null, { reason: options.reason || 'pending_candidate_ids' });
+      }
+    };
+    const shouldTreatRowAsPending = (row, options = {}) => {
+      if (!isPlainObject(row)) return false;
+      if (options.forcePending) return true;
+      const status = getWorkbenchRowStatus(row);
+      const jobType = getWorkbenchRowJobType(row);
+      if (status && workbenchFailedStatuses.has(status)) return false;
+      if (hasCandidateRefreshFlag(row)) return true;
+      if (status && workbenchTerminalStatuses.has(status)) return false;
+      if (jobType && looksLikeWorkbenchRefreshJobType(jobType)) return true;
+      if (status && workbenchActiveStatuses.has(status)) return true;
+      return false;
+    };
+    const shouldTreatRowAsFailed = (row, options = {}) => {
+      if (!isPlainObject(row)) return false;
+      if (options.failed) return true;
+      const status = getWorkbenchRowStatus(row);
+      return !!status && workbenchFailedStatuses.has(status);
+    };
+    const collectRowsFrom = (sourcePath, rows, options = {}) => {
+      for (const row of asArray(rows)) {
+        if (!isPlainObject(row)) continue;
+        const candidateId = getCandidateIdFromWorkbenchObject(row);
+        if (!candidateId) continue;
+        if (shouldTreatRowAsFailed(row, options)) {
+          const state = ensureFailedCandidate(candidateId, sourcePath, row, { reason: options.reason || 'failed_row' });
+          const key = rowKeyFor(sourcePath, candidateId, row);
+          if (state && !seenFailedRows.has(key)) {
+            seenFailedRows.add(key);
+            failedCandidateRowsCollected.push(cloneWorkbenchStatusRow(row));
+          }
+          continue;
+        }
+        if (!shouldTreatRowAsPending(row, options)) continue;
+        const state = ensurePendingCandidate(candidateId, sourcePath, row, { reason: options.reason || (options.isJob ? 'pending_job' : 'pending_row'), isJob: options.isJob });
+        const key = rowKeyFor(sourcePath, candidateId, row);
+        if (state && options.isJob && !seenPendingJobs.has(key)) {
+          seenPendingJobs.add(key);
+          pendingCandidateJobsCollected.push(cloneWorkbenchStatusRow(row));
+        } else if (state && !options.isJob && !seenPendingRows.has(key)) {
+          seenPendingRows.add(key);
+          pendingCandidateRowsCollected.push(cloneWorkbenchStatusRow(row));
+        }
+      }
+    };
+    const refreshRoots = [
+      ['wiz.workbench', wiz.workbench],
+      ['wiz.workbench.progress', wiz.workbench?.progress],
+      ['wiz.workbench.progress_counts', wiz.workbench?.progress_counts],
+      ['wiz.decisions', decisions],
+      ['wiz.decisions.progress', decisions?.progress],
+      ['wiz.decisions.progress_counts', decisions?.progress_counts],
+      ['previewEnvelope', previewEnvelope],
+      ['previewEnvelope.session', previewEnvelope?.session],
+      ['previewEnvelope.preview', previewEnvelope?.preview],
+      ['previewEnvelope.progress', previewEnvelope?.progress],
+      ['pv', pv],
+      ['pv.session', pv?.session],
+      ['pv.preview', pv?.preview],
+      ['pv.progress', pv?.progress],
+      ['wiz.preview.data', wiz.preview?.data],
+      ['wiz.preview.data.session', wiz.preview?.data?.session],
+      ['wiz.preview.data.preview', wiz.preview?.data?.preview],
+      ['wiz.preview.data.progress', wiz.preview?.data?.progress]
+    ];
+    for (const [sourcePath, source] of refreshRoots) {
+      if (!isPlainObject(source)) continue;
+      collectIdsFrom(`${sourcePath}.pending_candidate_ids`, source.pending_candidate_ids, { reason: 'pending_candidate_ids' });
+      collectIdsFrom(`${sourcePath}.pendingCandidateIds`, source.pendingCandidateIds, { reason: 'pending_candidate_ids' });
+      collectIdsFrom(`${sourcePath}.__heartbeat_refreshing_candidate_ids`, source.__heartbeat_refreshing_candidate_ids, { reason: '__heartbeat_refreshing_candidate_ids' });
+      collectIdsFrom(`${sourcePath}.__heartbeatRefreshingCandidateIds`, source.__heartbeatRefreshingCandidateIds, { reason: '__heartbeat_refreshing_candidate_ids' });
+      collectIdsFrom(`${sourcePath}.refreshing_candidate_ids`, source.refreshing_candidate_ids, { reason: 'refreshing_candidate_ids' });
+      collectIdsFrom(`${sourcePath}.refreshingCandidateIds`, source.refreshingCandidateIds, { reason: 'refreshing_candidate_ids' });
+      collectIdsFrom(`${sourcePath}.failed_candidate_ids`, source.failed_candidate_ids, { failed: true, reason: 'failed_candidate_ids' });
+      collectIdsFrom(`${sourcePath}.failedCandidateIds`, source.failedCandidateIds, { failed: true, reason: 'failed_candidate_ids' });
+      collectRowsFrom(`${sourcePath}.pending_candidate_jobs`, source.pending_candidate_jobs, { forcePending: true, isJob: true, reason: 'pending_candidate_jobs' });
+      collectRowsFrom(`${sourcePath}.pendingCandidateJobs`, source.pendingCandidateJobs, { forcePending: true, isJob: true, reason: 'pending_candidate_jobs' });
+      collectRowsFrom(`${sourcePath}.active_jobs`, source.active_jobs, { isJob: true, reason: 'active_jobs' });
+      collectRowsFrom(`${sourcePath}.activeJobs`, source.activeJobs, { isJob: true, reason: 'active_jobs' });
+      collectRowsFrom(`${sourcePath}.candidate_jobs`, source.candidate_jobs, { isJob: true, reason: 'candidate_jobs' });
+      collectRowsFrom(`${sourcePath}.candidateJobs`, source.candidateJobs, { isJob: true, reason: 'candidate_jobs' });
+      collectRowsFrom(`${sourcePath}.pending_candidate_rows`, source.pending_candidate_rows, { forcePending: true, reason: 'pending_candidate_rows' });
+      collectRowsFrom(`${sourcePath}.pendingCandidateRows`, source.pendingCandidateRows, { forcePending: true, reason: 'pending_candidate_rows' });
+      collectRowsFrom(`${sourcePath}.candidate_sample_rows`, source.candidate_sample_rows, { reason: 'candidate_sample_rows' });
+      collectRowsFrom(`${sourcePath}.candidateSampleRows`, source.candidateSampleRows, { reason: 'candidate_sample_rows' });
+      collectRowsFrom(`${sourcePath}.candidate_status_rows`, source.candidate_status_rows, { reason: 'candidate_status_rows' });
+      collectRowsFrom(`${sourcePath}.candidateStatusRows`, source.candidateStatusRows, { reason: 'candidate_status_rows' });
+      collectRowsFrom(`${sourcePath}.failed_candidate_rows`, source.failed_candidate_rows, { failed: true, reason: 'failed_candidate_rows' });
+      collectRowsFrom(`${sourcePath}.failedCandidateRows`, source.failedCandidateRows, { failed: true, reason: 'failed_candidate_rows' });
+    }
+    const refreshFlagScanRoots = [
+      ['componentStateCache', componentStateCache],
+      ['wiz.preview.componentStateCache', wiz.preview?.componentStateCache],
+      ['previewEnvelope.ready_rows', previewEnvelope?.ready_rows],
+      ['previewEnvelope.readyRows', previewEnvelope?.readyRows],
+      ['previewEnvelope.case_rows', previewEnvelope?.case_rows],
+      ['previewEnvelope.caseRows', previewEnvelope?.caseRows],
+      ['previewEnvelope.blocked_rows', previewEnvelope?.blocked_rows],
+      ['previewEnvelope.blockedRows', previewEnvelope?.blockedRows],
+      ['pv.ready_rows', pv?.ready_rows],
+      ['pv.readyRows', pv?.readyRows],
+      ['pv.case_rows', pv?.case_rows],
+      ['pv.caseRows', pv?.caseRows],
+      ['pv.blocked_rows', pv?.blocked_rows],
+      ['pv.blockedRows', pv?.blockedRows]
+    ];
+    const scanSeen = new WeakSet();
+    const scanRefreshFlaggedRows = (value, sourcePath, depth = 0) => {
+      if (depth > 4 || value === null || value === undefined) return;
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => scanRefreshFlaggedRows(item, `${sourcePath}[${index}]`, depth + 1));
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (scanSeen.has(value)) return;
+      scanSeen.add(value);
+      const candidateId = getCandidateIdFromWorkbenchObject(value);
+      if (candidateId) {
+        if (shouldTreatRowAsFailed(value, {})) {
+          ensureFailedCandidate(candidateId, sourcePath, value, { reason: 'refresh_flag_scan_failed' });
+        } else if (hasCandidateRefreshFlag(value) || shouldTreatRowAsPending(value, {})) {
+          const state = ensurePendingCandidate(candidateId, sourcePath, value, { reason: hasCandidateRefreshFlag(value) ? 'row_refresh_flag' : 'row_pending_state' });
+          const key = rowKeyFor(sourcePath, candidateId, value);
+          if (state && !seenPendingRows.has(key)) {
+            seenPendingRows.add(key);
+            pendingCandidateRowsCollected.push(cloneWorkbenchStatusRow(value));
+          }
+        }
+      }
+      const scanKeys = [
+        'ready_rows', 'readyRows', 'rows', 'items', 'lines', 'preview_rows', 'previewRows',
+        'case_rows', 'caseRows', 'case_groups', 'caseGroups', 'blocked_rows', 'blockedRows',
+        'page_rows', 'pageRows', 'current_rows', 'currentRows', 'cached_rows', 'cachedRows',
+        'pages', 'page_cache', 'pageCache', 'section_page_cache', 'sectionPageCache',
+        'by_candidate', 'byCandidate', 'candidate_rows', 'candidateRows'
+      ];
+      for (const key of scanKeys) {
+        if (value[key] !== undefined) scanRefreshFlaggedRows(value[key], `${sourcePath}.${key}`, depth + 1);
+      }
+    };
+    for (const [sourcePath, source] of refreshFlagScanRoots) scanRefreshFlaggedRows(source, sourcePath, 0);
+    for (const candidateId of candidateRefreshStateById.keys()) failedCandidateStateById.delete(candidateId);
+    const pendingCandidateIds = Array.from(candidateRefreshStateById.keys());
+    const failedCandidateIds = Array.from(failedCandidateStateById.keys());
+    const pendingCandidateRowById = new Map();
+    for (const row of pendingCandidateRowsCollected) {
+      const candidateId = getCandidateIdFromWorkbenchObject(row);
+      if (candidateId && !pendingCandidateRowById.has(candidateId)) pendingCandidateRowById.set(candidateId, cloneWorkbenchStatusRow(row));
+    }
+    const pendingCandidateJobById = new Map();
+    for (const row of pendingCandidateJobsCollected) {
+      const candidateId = getCandidateIdFromWorkbenchObject(row);
+      if (candidateId && !pendingCandidateJobById.has(candidateId)) pendingCandidateJobById.set(candidateId, cloneWorkbenchStatusRow(row));
+    }
+    const failedCandidateRowById = new Map();
+    for (const row of failedCandidateRowsCollected) {
+      const candidateId = getCandidateIdFromWorkbenchObject(row);
+      if (candidateId && !failedCandidateRowById.has(candidateId)) failedCandidateRowById.set(candidateId, cloneWorkbenchStatusRow(row));
+    }
+    for (const [candidateId, state] of candidateRefreshStateById.entries()) {
+      if (!pendingCandidateRowById.has(candidateId) && state.row) pendingCandidateRowById.set(candidateId, cloneWorkbenchStatusRow(state.row));
+      if (!pendingCandidateJobById.has(candidateId) && state.job) pendingCandidateJobById.set(candidateId, cloneWorkbenchStatusRow(state.job));
+    }
+    for (const [candidateId, state] of failedCandidateStateById.entries()) {
+      if (!failedCandidateRowById.has(candidateId) && state.row) failedCandidateRowById.set(candidateId, cloneWorkbenchStatusRow(state.row));
+    }
+    return {
+      candidateRefreshStateById,
+      failedCandidateStateById,
+      pendingCandidateIds,
+      failedCandidateIds,
+      pendingCandidateRows: pendingCandidateRowsCollected,
+      failedCandidateRows: failedCandidateRowsCollected,
+      pendingCandidateJobs: pendingCandidateJobsCollected,
+      pendingCandidateRowById,
+      failedCandidateRowById,
+      pendingCandidateJobById
+    };
+  };
+  const workbenchCandidateRefreshState = collectWorkbenchCandidateRefreshState();
+  const candidateRefreshStateById = workbenchCandidateRefreshState.candidateRefreshStateById;
+  const failedCandidateStateById = workbenchCandidateRefreshState.failedCandidateStateById;
+  const pendingCandidateIds = workbenchCandidateRefreshState.pendingCandidateIds;
+  const failedCandidateIds = workbenchCandidateRefreshState.failedCandidateIds;
+  const pendingCandidateRows = workbenchCandidateRefreshState.pendingCandidateRows;
+  const failedCandidateRows = workbenchCandidateRefreshState.failedCandidateRows;
+  const pendingCandidateJobs = workbenchCandidateRefreshState.pendingCandidateJobs;
+  const pendingCandidateRowById = workbenchCandidateRefreshState.pendingCandidateRowById;
+  const failedCandidateRowById = workbenchCandidateRefreshState.failedCandidateRowById;
+  const pendingCandidateJobById = workbenchCandidateRefreshState.pendingCandidateJobById;
 
   const getCandidateWorkbenchStatus = (candidateId) => {
     const candidateIdText = trimStr(candidateId);
-    const isPending = !!candidateIdText && pendingCandidateIds.includes(candidateIdText);
-    const isFailed = !!candidateIdText && failedCandidateIds.includes(candidateIdText);
-    const pendingRow = candidateIdText ? (pendingCandidateRowById.get(candidateIdText) || pendingCandidateJobById.get(candidateIdText) || null) : null;
-    const failedRow = candidateIdText ? (failedCandidateRowById.get(candidateIdText) || null) : null;
+    const refreshState = candidateIdText ? (candidateRefreshStateById.get(candidateIdText) || null) : null;
+    const failureState = candidateIdText ? (failedCandidateStateById.get(candidateIdText) || null) : null;
+    const isPending = !!(candidateIdText && (refreshState || pendingCandidateRowById.has(candidateIdText) || pendingCandidateJobById.has(candidateIdText) || pendingCandidateIds.includes(candidateIdText)));
+    const isFailed = !!(candidateIdText && !isPending && (failureState || failedCandidateRowById.has(candidateIdText) || failedCandidateIds.includes(candidateIdText)));
+    const pendingRow = candidateIdText ? (pendingCandidateRowById.get(candidateIdText) || pendingCandidateJobById.get(candidateIdText) || refreshState?.row || refreshState?.job || null) : null;
+    const failedRow = candidateIdText ? (failedCandidateRowById.get(candidateIdText) || failureState?.row || null) : null;
     const latestErrorJson = (failedRow && isPlainObject(failedRow.latest_error_json)) ? failedRow.latest_error_json : null;
-    const failedMessage = trimStr(latestErrorJson?.message || latestErrorJson?.error || failedRow?.status || 'Candidate refresh failed.');
-    const pendingMessage = trimStr(pendingRow?.latest_job_type || pendingRow?.status || 'Refreshing candidate…');
+    const failedMessage = trimStr(latestErrorJson?.message || latestErrorJson?.error || failedRow?.status || failureState?.job_statuses?.[0] || 'Candidate refresh failed.');
+    const pendingStateText = trimStr(refreshState?.job_types?.[0] || refreshState?.job_statuses?.[0] || refreshState?.reasons?.[0] || '');
+    const pendingMessage = trimStr(pendingRow?.latest_job_type || pendingRow?.job_type || pendingRow?.status || pendingStateText || 'Refreshing candidate…');
     const disabledReason = isFailed ? failedMessage : (isPending ? pendingMessage : '');
     return {
       candidate_id: candidateIdText,
@@ -46760,6 +47100,8 @@ const collectPreviewRowIds = (previewLike) => {
       is_failed: isFailed,
       pending_row: pendingRow,
       failed_row: failedRow,
+      refresh_state: refreshState,
+      failure_state: failureState,
       disabled: isPending || isFailed,
       disabled_reason: disabledReason
     };
@@ -49153,6 +49495,8 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 
     assignIfMissing('queued_jobs', jobCounts.queued);
     assignIfMissing('running_jobs', jobCounts.running);
+    assignIfMissing('active_job_count', jobCounts.active);
+    assignIfMissing('active_jobs_count', jobCounts.active);
     assignIfMissing('unresolved_failed_jobs', jobCounts.unresolved_failed);
     assignIfMissing('unresolved_dead_jobs', jobCounts.unresolved_dead);
 
@@ -49270,6 +49614,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     const jobCounts = {
       queued: nonNegativeCount(jobCountsRaw, ['queued'], raw, ['queued_jobs', 'queued_job_count']),
       running: nonNegativeCount(jobCountsRaw, ['running'], raw, ['running_jobs', 'running_job_count']),
+      active: nonNegativeCount(jobCountsRaw, ['active'], raw, ['active_job_count', 'active_jobs_count']),
       unresolved_failed: nonNegativeCount(jobCountsRaw, ['unresolved_failed'], raw, ['unresolved_failed_jobs']),
       unresolved_dead: nonNegativeCount(jobCountsRaw, ['unresolved_dead'], raw, ['unresolved_dead_jobs'])
     };
@@ -49325,7 +49670,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     appendSessionBlocker('LINE_WORK_READY_NOT_MATERIALISED', lineCounts.ready_not_materialised > 0);
     appendSessionBlocker('LINE_WORK_FAILED', lineCounts.failed > 0);
     appendSessionBlocker('LINE_WORK_UNKNOWN_STATE', lineCounts.unknown > 0);
-    appendSessionBlocker('WORKBENCH_JOBS_ACTIVE', jobCounts.queued > 0 || jobCounts.running > 0);
+    appendSessionBlocker('WORKBENCH_JOBS_ACTIVE', jobCounts.queued > 0 || jobCounts.running > 0 || jobCounts.active > 0);
     appendSessionBlocker('WORKBENCH_JOBS_FAILED', jobCounts.unresolved_failed > 0 || jobCounts.unresolved_dead > 0);
     appendSessionBlocker('STORED_READY_MISMATCH', storedReadyMismatch);
     const allBlockerCodes = Array.from(new Set([...sessionBlockerCodes, ...draftBlockerCodes]));
@@ -49346,7 +49691,8 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       || lineCounts.pending > 0
       || lineCounts.ready_not_materialised > 0
       || jobCounts.queued > 0
-      || jobCounts.running > 0;
+      || jobCounts.running > 0
+      || jobCounts.active > 0;
     return {
       raw,
       contractPresent,
@@ -49494,6 +49840,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     const selectedRowCount = Math.max(countValue('selected_row_count', 'selected_rows_count'), selectedSetSize);
     const queuedJobs = countValue('queued_jobs', 'queued_job_count');
     const runningJobs = countValue('running_jobs', 'running_job_count');
+    const activeJobs = countValue('active_job_count', 'active_jobs_count');
     const phase = upperTrim(counts.phase || counts.current_phase || counts.status || counts.state || '');
     const nextAction = upperTrim(counts.next_recommended_action || counts.next_action || '');
     const rowsAvailable = !!(
@@ -49559,34 +49906,126 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       selectedRowCount,
       queuedJobs,
       runningJobs,
+      activeJobs,
       rowsAvailable
     };
   };
 
   const renderPayPreviewProgress = (progressVm) => {
-    if (!isPlainObject(progressVm) || !progressVm.show) return '';
+    const vm = isPlainObject(progressVm) ? progressVm : {};
+    const refreshingStates = Array.from(candidateRefreshStateById.values()).filter((state) => isPlainObject(state));
+    const refreshingCount = refreshingStates.length;
+    const progressActive = !!(vm.show || refreshingCount > 0);
+    const resolveRefreshingCandidateDisplayLabel = (stateLike) => {
+      const state = isPlainObject(stateLike) ? stateLike : {};
+      const candidateId = trimStr(state.candidate_id || state.candidateId || '');
+      const isTechnicalIdentifier = (value) => {
+        const text = trimStr(value);
+        return !text || isWorkbenchCandidateId(text);
+      };
+      const firstFriendlyLabel = (...values) => {
+        for (const value of values) {
+          const text = trimStr(value);
+          if (text && !isTechnicalIdentifier(text)) return text;
+        }
+        return '';
+      };
+      const meta = candidateId ? (candidateMetaById.get(candidateId) || {}) : {};
+      const rowLabel = firstFriendlyLabel(
+        getCandidateRefreshLabelFromWorkbenchObject(state.row, ''),
+        getCandidateRefreshLabelFromWorkbenchObject(state.job, ''),
+        getCandidateRefreshLabelFromWorkbenchObject(candidateId ? pendingCandidateRowById.get(candidateId) : null, ''),
+        getCandidateRefreshLabelFromWorkbenchObject(candidateId ? pendingCandidateJobById.get(candidateId) : null, '')
+      );
+      const previewRowLabel = (() => {
+        if (!candidateId) return '';
+        const rowSources = [
+          ...asArray(previewRowsVm?.readyRows),
+          ...asArray(previewRowsVm?.caseRows),
+          ...asArray(previewRowsVm?.blockedRows),
+          ...asArray(previewRowsVm?.canonicalRows),
+          ...asArray(wiz.workbench?.ready_preview_lines),
+          ...asArray(wiz.workbench?.canonical_preview_lines),
+          ...asArray(wiz.workbench?.blocked_preview_lines),
+          ...asArray(wiz.workbench?.case_resolution_states),
+          ...asArray(previewDataPreview?.ready_preview_lines),
+          ...asArray(previewDataPreview?.canonical_preview_lines),
+          ...asArray(previewDataPreview?.blocked_preview_lines),
+          ...asArray(previewDataPreview?.case_resolution_states),
+          ...asArray(pv?.ready_preview_lines),
+          ...asArray(pv?.canonical_preview_lines),
+          ...asArray(pv?.blocked_preview_lines),
+          ...asArray(pv?.case_resolution_states)
+        ];
+        for (const row of rowSources) {
+          if (!isPlainObject(row)) continue;
+          const rowCandidateId = getCandidateIdFromWorkbenchObject(row) || getLineCandidateId(row);
+          if (rowCandidateId !== candidateId) continue;
+          const label = firstFriendlyLabel(
+            row.display_name,
+            row.displayName,
+            row.candidate_name,
+            row.candidateName,
+            row.tms_ref,
+            row.tmsRef,
+            getCandidateRefreshLabelFromWorkbenchObject(row, '')
+          );
+          if (label) return label;
+        }
+        return '';
+      })();
+      return firstFriendlyLabel(
+        state.label,
+        state.candidate_name,
+        state.candidateName,
+        state.display_name,
+        state.displayName,
+        state.tms_ref,
+        state.tmsRef,
+        meta.display_name,
+        meta.displayName,
+        meta.candidate_name,
+        meta.candidateName,
+        meta.tms_ref,
+        meta.tmsRef,
+        rowLabel,
+        previewRowLabel
+      );
+    };
+    const compactCandidateLabel = (() => {
+      if (refreshingCount <= 0) return '';
+      if (refreshingCount > 1) return `Updating ${refreshingCount} candidates…`;
+      const label = resolveRefreshingCandidateDisplayLabel(refreshingStates[0]);
+      return label ? `Refreshing ${label}…` : 'Updating 1 candidate…';
+    })();
+    const compactText = trimStr(compactCandidateLabel || (progressActive ? (vm.phaseText || 'Updating Banking Pay…') : ''));
     const countBits = [];
-    if (progressVm.totalCandidates > 0) countBits.push(`Candidates: ${progressVm.readyCandidates}/${progressVm.totalCandidates}`);
-    if (progressVm.lineTotal > 0) countBits.push(`Pay lines: ${progressVm.lineComplete}/${progressVm.lineTotal}`);
-    if (progressVm.previewRowCount > 0) countBits.push(`Preview rows: ${progressVm.previewRowCount}`);
-    if (progressVm.selectedRowCount > 0) countBits.push(`Selected: ${progressVm.selectedRowCount}`);
-    if (progressVm.queuedJobs > 0 || progressVm.runningJobs > 0) countBits.push(`Jobs: ${progressVm.runningJobs} running / ${progressVm.queuedJobs} queued`);
-    if (progressVm.lineError > 0 || progressVm.failedCandidates > 0) countBits.push(`Issues: ${progressVm.lineError + progressVm.failedCandidates}`);
-    const width = progressVm.indeterminate ? 100 : progressVm.percent;
-    const barInnerStyle = progressVm.indeterminate
+    if (refreshingCount > 0) countBits.push(`${refreshingCount} candidate${refreshingCount === 1 ? '' : 's'}`);
+    if (vm.queuedJobs > 0 || vm.runningJobs > 0 || vm.activeJobs > 0) {
+      const activeTotal = Math.max(0, Number(vm.activeJobs || 0)) || (Math.max(0, Number(vm.queuedJobs || 0)) + Math.max(0, Number(vm.runningJobs || 0)));
+      countBits.push(`${activeTotal} active job${activeTotal === 1 ? '' : 's'}`);
+    }
+    if (vm.linePending > 0 || vm.lineReady > 0) countBits.push(`${Math.max(0, Number(vm.linePending || 0)) + Math.max(0, Number(vm.lineReady || 0))} pay line${(Math.max(0, Number(vm.linePending || 0)) + Math.max(0, Number(vm.lineReady || 0))) === 1 ? '' : 's'}`);
+    if (vm.lineError > 0 || vm.failedCandidates > 0) countBits.push(`${Math.max(0, Number(vm.lineError || 0)) + Math.max(0, Number(vm.failedCandidates || 0))} issue${(Math.max(0, Number(vm.lineError || 0)) + Math.max(0, Number(vm.failedCandidates || 0))) === 1 ? '' : 's'}`);
+    const width = vm.indeterminate ? 100 : Math.max(0, Math.min(100, Number(vm.percent || 0)));
+    const barInnerStyle = vm.indeterminate
       ? 'width:100%;height:100%;opacity:.35;background:var(--accent,#3b82f6);'
-      : `width:${Math.max(0, Math.min(100, width))}%;height:100%;background:var(--accent,#3b82f6);transition:width .25s ease;`;
+      : `width:${width}%;height:100%;background:var(--accent,#3b82f6);transition:width .25s ease;`;
+    const stripTitle = trimStr([
+      compactText,
+      countBits.join(' • '),
+      vm.phaseText && vm.phaseText !== compactText ? vm.phaseText : ''
+    ].filter(Boolean).join(' — '));
+    const wrapperStyle = 'margin-top:6px;min-height:26px;height:26px;display:flex;align-items:center;overflow:hidden;';
+    const innerStyle = `width:100%;height:22px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:2px 8px;border:1px solid ${progressActive ? 'rgba(148,163,184,.45)' : 'transparent'};border-radius:999px;background:${progressActive ? 'rgba(148,163,184,.10)' : 'transparent'};visibility:${progressActive ? 'visible' : 'hidden'};overflow:hidden;`;
     return `
-      <div class="card" id="bankingPayPreviewProgress" style="margin-top:10px;">
-        <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
-          <div style="display:flex;flex-direction:column;gap:4px;min-width:260px;flex:1;">
-            <strong>${enc(progressVm.phaseText || 'Preparing payment preview…')}</strong>
-            ${countBits.length ? `<div class="mini" style="opacity:.85;">${enc(countBits.join(' • '))}</div>` : ''}
+      <div id="bankingPayPreviewProgress" data-progress-active="${progressActive ? 'true' : 'false'}" aria-hidden="${progressActive ? 'false' : 'true'}" style="${wrapperStyle}">
+        <div title="${enc(stripTitle || 'Banking Pay status')}" style="${innerStyle}">
+          <span class="mini" style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1;">${enc(compactText || 'Banking Pay status')}</span>
+          ${countBits.length ? `<span class="mini" style="opacity:.78;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">${enc(countBits.join(' • '))}</span>` : ''}
+          <div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${enc(vm.indeterminate ? '' : String(width))}" style="width:58px;min-width:58px;height:4px;border-radius:999px;overflow:hidden;background:rgba(148,163,184,.28);">
+            <div style="${barInnerStyle}"></div>
           </div>
-          ${progressVm.indeterminate ? `<span class="pill pill-warn">${enc('Working')}</span>` : `<span class="pill">${enc(String(progressVm.percent))}%</span>`}
-        </div>
-        <div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${enc(progressVm.indeterminate ? '' : String(progressVm.percent))}" style="margin-top:8px;height:10px;border-radius:999px;overflow:hidden;background:rgba(148,163,184,.28);">
-          <div style="${barInnerStyle}"></div>
         </div>
       </div>
     `;
@@ -50800,12 +51239,16 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     authoritativeGateAllowsCreate &&
     currentFirstCanonicalPageApplied &&
     authoritativeSelectedCurrentEligibleReadyRowCount > 0 &&
+    !hasPendingCandidates &&
+    !hasFailedCandidates &&
     !createDraftBusyState &&
     payeGuardAllowsCreate
   );
   const createDraftTitle = (() => {
     if (cdBusy) return 'Draft creation is already starting.';
     if (activeDraftCreateOperationForRender) return 'A draft creation operation is already running.';
+    if (hasPendingCandidates) return 'Preparing / candidates refreshing. Draft creation re-enables when all candidate refresh work is complete.';
+    if (hasFailedCandidates) return 'One or more sampled candidate refreshes failed. Resolve or retry those candidates before creating a draft.';
     if (!authoritativeRenderState.contractPresent) return 'Authoritative payment preview readiness is unavailable. Refresh Banking Pay before creating a draft.';
     if (!authoritativeRenderState.sessionMatchesCurrent) return 'The displayed preview does not match the current workbench session/version. Refresh Banking Pay.';
     if (authoritativeRenderState.sessionObsolete || authoritativeRenderState.replacementRequired) return 'This payment preview is obsolete or has been replaced. Open the latest preview session.';
@@ -50821,6 +51264,8 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   })();
   const createDraftLabel = (() => {
     if (cdBusy) return 'Creating…';
+    if (hasPendingCandidates) return 'Preparing…';
+    if (hasFailedCandidates) return 'Refresh failed';
     if (authoritativeRenderState.sessionReady !== true) return 'Preparing…';
     if (authoritativeRenderState.readyForDraft !== true || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) return 'Select rows';
     if (payeCreateBlocked && hasReadyUmbrella && !hasReadyPaye) return 'Create umbrella draft';
@@ -51350,13 +51795,11 @@ const renderReadyTimesheetGroupedRows = (lines) => {
           ${guardrailsBannerHtml}
           ${readinessBannerHtml}
           ${authoritativeWorkbenchBannerHtml}
-          ${(hasPendingCandidates || hasFailedCandidates) ? `
+          ${hasFailedCandidates ? `
             <div class="card" style="margin-top:10px;">
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                ${hasPendingCandidates ? `<span class="pill pill-warn">${enc(String(pendingCandidateIds.length))} sampled candidate(s) refreshing</span>` : ''}
-                ${hasFailedCandidates ? `<span class="pill pill-bad">${enc(String(failedCandidateIds.length))} sampled candidate(s) failed</span>` : ''}
-                ${hasPendingCandidates ? `<span class="mini" style="opacity:.85;">${enc('Refreshing candidates update in place. Authoritative aggregate progress controls draft availability.')}</span>` : ''}
-                ${hasFailedCandidates ? `<span class="mini" style="opacity:.85;">${enc('Failed candidates block draft creation until they are successfully refreshed or resolved.')}</span>` : ''}
+                <span class="pill pill-bad">${enc(String(failedCandidateIds.length))} sampled candidate(s) failed</span>
+                <span class="mini" style="opacity:.85;">${enc('Failed candidates block draft creation until they are successfully refreshed or resolved.')}</span>
               </div>
             </div>
           ` : ''}
