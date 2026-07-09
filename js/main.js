@@ -353321,11 +353321,157 @@ async function bootstrapApp(){
 };
 
 
+        const getFailClosedBankingPayWorkbenchWatchContext = () => {
+          try {
+            const asPlainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : null;
+            const ctx = asPlainObject(window.modalCtx);
+
+            let frame = null;
+            try {
+              frame = typeof window.__getModalFrame === 'function' ? window.__getModalFrame() : null;
+            } catch {
+              frame = null;
+            }
+
+            let bankingGetterState = null;
+            try {
+              bankingGetterState = typeof window.bankingGetState === 'function' ? window.bankingGetState() : null;
+            } catch {
+              bankingGetterState = null;
+            }
+
+            const frameEntity = String(frame?.entity || '').trim().toLowerCase();
+            const frameKind = String(frame?.kind || '').trim().toLowerCase();
+            const frameTab = String(
+              frame?.currentTabKey ||
+              frame?.activeTabKey ||
+              frame?.current_tab_key ||
+              frame?.active_tab_key ||
+              frame?.currentTab ||
+              frame?.activeTab ||
+              ''
+            ).trim().toLowerCase();
+
+            const ctxEntity = String(ctx?.entity || '').trim().toLowerCase();
+            const ctxKind = String(ctx?.kind || '').trim().toLowerCase();
+            const ctxTab = String(
+              ctx?.currentTabKey ||
+              ctx?.activeTabKey ||
+              ctx?.current_tab_key ||
+              ctx?.active_tab_key ||
+              ''
+            ).trim().toLowerCase();
+
+            const payWorkbenchMounted = (() => {
+              try {
+                const root = document.getElementById('bankingPayNewBatchWizard')
+                  || document.querySelector('[data-banking-pay-workbench], [data-banking-pay-draft-wizard], [data-banking-section="pay"]');
+                if (!root) return false;
+                if (typeof root.closest === 'function' && root.closest('[hidden],[aria-hidden="true"]')) return false;
+                const rects = typeof root.getClientRects === 'function' ? root.getClientRects() : null;
+                return !rects || rects.length > 0;
+              } catch {
+                return false;
+              }
+            })();
+
+            const looksBanking = !!(
+              ctxEntity === 'banking'
+              || ctxKind === 'banking'
+              || frameEntity === 'banking'
+              || frameKind === 'banking'
+              || String(ctxEntity || '').includes('banking')
+              || String(ctxKind || '').includes('banking')
+              || String(frameEntity || '').includes('banking')
+              || String(frameKind || '').includes('banking')
+              || payWorkbenchMounted
+            );
+            if (!looksBanking) return null;
+
+            const bankingCandidates = [];
+            const seenCandidates = new Set();
+            const pushBankingCandidate = (value, source) => {
+              const obj = isHeartbeatPlainObject(value) ? value : asPlainObject(value);
+              if (!obj || seenCandidates.has(obj)) return;
+              seenCandidates.add(obj);
+              bankingCandidates.push({ bankingState: obj, source: String(source || '') });
+            };
+            pushBankingCandidate(ctx?.banking, 'modalCtx.banking.failClosed');
+            pushBankingCandidate(bankingGetterState, 'bankingGetState.failClosed');
+
+            const readSessionId = (bankingState, payState, wizard) => String(
+              wizard?.workbench?.session_id
+              || wizard?.workbench?.sessionId
+              || wizard?.workbench?.id
+              || wizard?.workbench?.__active_workbench_session_id
+              || wizard?.workbench?.__activeWorkbenchSessionId
+              || wizard?.workbench?.__active_progress_session_id
+              || wizard?.workbench?.__activeProgressSessionId
+              || wizard?.decisions?.session_id
+              || wizard?.decisions?.sessionId
+              || wizard?.preview?.data?.session_id
+              || wizard?.preview?.data?.sessionId
+              || wizard?.preview?.data?.session?.session_id
+              || wizard?.preview?.data?.session?.sessionId
+              || payState?.workbench_session_id
+              || payState?.workbenchSessionId
+              || bankingState?.workbench_session_id
+              || bankingState?.workbenchSessionId
+              || ctx?.bankingPayWorkbenchSessionId
+              || ctx?.workbench_session_id
+              || ''
+            ).trim();
+
+            const activeTabCandidatesFor = (bankingState, payState) => [
+              frameTab,
+              ctxTab,
+              bankingState?.ui?.activeTabKey,
+              bankingState?.ui?.active_tab_key,
+              bankingState?.ui?.activeTab,
+              bankingState?.ui?.active_tab,
+              payState?.activeTabKey,
+              payState?.active_tab_key
+            ].map((value) => String(value ?? '').trim().toLowerCase()).filter(Boolean);
+
+            for (const candidate of bankingCandidates) {
+              const bankingState = candidate.bankingState;
+              const payState = isHeartbeatPlainObject(bankingState?.pay) ? bankingState.pay : asPlainObject(bankingState?.pay);
+              const wizard = isHeartbeatPlainObject(payState?.draftWizard) ? payState.draftWizard : asPlainObject(payState?.draftWizard);
+              const sessionId = readSessionId(bankingState, payState, wizard || {});
+              if (!bankingPayHeartbeatUuidRe.test(sessionId)) continue;
+
+              const activeTabCandidates = activeTabCandidatesFor(bankingState, payState);
+              const explicitPayTab = activeTabCandidates.includes('pay');
+              const explicitNonPayTab = activeTabCandidates.length > 0 && !explicitPayTab;
+              if (!explicitPayTab && explicitNonPayTab && !payWorkbenchMounted) continue;
+              if (!explicitPayTab && !payWorkbenchMounted && !wizard && !payState) continue;
+
+              return {
+                ctx,
+                bankingState,
+                payState,
+                wizard: wizard || {},
+                sessionId,
+                entityKey: `${bankingPayWorkbenchSessionKeyPrefix}${sessionId}`,
+                modalEpoch: String(ctx?.openToken || bankingState?.openToken || '').trim(),
+                activeTabKey: explicitPayTab ? 'pay' : (activeTabCandidates[0] || 'pay'),
+                source: candidate.source || null,
+                failClosed: true
+              };
+            }
+
+            return null;
+          } catch {
+            return null;
+          }
+        };
+        const getCurrentBankingPayWorkbenchWatchContext = () => getActiveBankingPayWorkbenchWatchContext() || getFailClosedBankingPayWorkbenchWatchContext();
+
        const sameBankingPayWorkbenchWatchContext = (expected, allowedSessionId = '') => {
   const expectedId = String(expected?.sessionId || '').trim();
   if (!expected || !bankingPayHeartbeatUuidRe.test(expectedId)) return null;
 
-  const current = getActiveBankingPayWorkbenchWatchContext();
+  const current = getCurrentBankingPayWorkbenchWatchContext();
   if (!current) return null;
 
   const allowedId = String(allowedSessionId || '').trim();
@@ -354284,7 +354430,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
                 staleSessionGuard: true,
                 expectedSessionId: current.sessionId,
                 getCurrentSessionId: () => {
-                  const active = getActiveBankingPayWorkbenchWatchContext();
+                  const active = getCurrentBankingPayWorkbenchWatchContext();
                   return active ? active.sessionId : '';
                 }
               });
@@ -354347,7 +354493,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
               staleSessionGuard: true,
               expectedSessionId: watchContext.sessionId,
               getCurrentSessionId: () => {
-                const current = getActiveBankingPayWorkbenchWatchContext();
+                const current = getCurrentBankingPayWorkbenchWatchContext();
                 return current ? current.sessionId : '';
               }
             });
@@ -354463,13 +354609,26 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
 
           try {
             const payloadHash = syncBankingAlertDetailHashState(getCurrentBankingAlertHash());
-            requestedWorkbenchContext = getActiveBankingPayWorkbenchWatchContext();
+            requestedWorkbenchContext = getCurrentBankingPayWorkbenchWatchContext();
             requestedWorkbenchEntityKey = requestedWorkbenchContext ? requestedWorkbenchContext.entityKey : '';
             pruneWorkbenchSessionSeqs(requestedWorkbenchEntityKey);
             const payload = {
               last_seen: buildHeartbeatLastSeenForRequest(requestedWorkbenchContext),
               banking_alert_hash: payloadHash
             };
+            if (requestedWorkbenchContext && requestedWorkbenchEntityKey) {
+              const watchedKeys = Array.isArray(payload.last_seen?.__watched_entity_keys) ? payload.last_seen.__watched_entity_keys : [];
+              const hasRequestedWatchKey = watchedKeys.some((row) => String(row?.entity_key || '').trim() === requestedWorkbenchEntityKey);
+              if (!hasRequestedWatchKey) {
+                const knownSeq = toNonNegativeCount(hb.workbenchSessionSeqs?.[requestedWorkbenchEntityKey], 0);
+                payload.last_seen = isHeartbeatPlainObject(payload.last_seen) ? payload.last_seen : {};
+                payload.last_seen.__changes_ping_context = 'BANKING_PAY_MODAL';
+                payload.last_seen.__watched_entity_keys = [{
+                  entity_key: requestedWorkbenchEntityKey,
+                  known_seq: knownSeq
+                }];
+              }
+            }
             const forceDetailRefresh = isExplicitBankingAlertDetailRefreshReason(reason) || (payloadHash && bankingDetailHashField('_bankingAlertSummaryDetailForceRefreshHash') === payloadHash);
             const detailRefreshPending = !!payloadHash && (isBankingAlertDetailPendingForHash(payloadHash) || forceDetailRefresh === true);
             const lastDetailRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
@@ -354766,7 +354925,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
               if (requestedWorkbenchChanged) {
                 workbenchStateChanged = await refreshWorkbenchAfterHeartbeatSignal(requestedWorkbenchContext);
                 if (workbenchStateChanged) {
-                  const currentAfterWorkbenchRead = getActiveBankingPayWorkbenchWatchContext();
+                  const currentAfterWorkbenchRead = getCurrentBankingPayWorkbenchWatchContext();
                   if (currentAfterWorkbenchRead && currentAfterWorkbenchRead.entityKey === requestedWorkbenchEntityKey) {
                     hb.workbenchSessionSeqs[requestedWorkbenchEntityKey] = toNonNegativeCount(workbenchSeqUpdates[requestedWorkbenchEntityKey], 0);
                     pruneWorkbenchSessionSeqs(requestedWorkbenchEntityKey);
@@ -354781,7 +354940,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
                 pruneWorkbenchSessionSeqs(requestedWorkbenchEntityKey);
               }
             } else {
-              const currentWatchContext = getActiveBankingPayWorkbenchWatchContext();
+              const currentWatchContext = getCurrentBankingPayWorkbenchWatchContext();
               pruneWorkbenchSessionSeqs(currentWatchContext ? currentWatchContext.entityKey : '');
             }
           } else {
@@ -354869,6 +355028,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
     console.warn('[E2E][modal-opener] failed', err);
   }
 }
+
 
 
 // Initialize
