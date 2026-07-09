@@ -353773,7 +353773,6 @@ async function maybeOpenTestmodeE2eModal() {
 }
 
 
-
 async function bootstrapApp(){
   // Belt & braces: if loadSession() ran but globals are not mirrored, mirror now
   try {
@@ -356301,13 +356300,14 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
           let requestedBankingAlertDetailRefreshHash = '';
           let requestedWorkbenchContext = null;
           let requestedWorkbenchEntityKey = '';
+          let requestedWorkbenchKnownSeqBeforePing = 0;
 
           try {
             const payloadHash = syncBankingAlertDetailHashState(getCurrentBankingAlertHash());
             requestedWorkbenchContext = getCurrentBankingPayWorkbenchWatchContext();
             requestedWorkbenchEntityKey = requestedWorkbenchContext ? requestedWorkbenchContext.entityKey : '';
             pruneWorkbenchSessionSeqs(requestedWorkbenchEntityKey);
-            const requestedWorkbenchKnownSeqBeforePing = requestedWorkbenchEntityKey ? getWorkbenchKnownSeqForRequest(requestedWorkbenchContext) : 0;
+            requestedWorkbenchKnownSeqBeforePing = requestedWorkbenchEntityKey ? getWorkbenchKnownSeqForRequest(requestedWorkbenchContext) : 0;
             const payload = {
               last_seen: buildHeartbeatLastSeenForRequest(requestedWorkbenchContext),
               banking_alert_hash: payloadHash
