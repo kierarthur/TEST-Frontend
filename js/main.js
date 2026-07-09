@@ -352473,8 +352473,6 @@ async function maybeOpenTestmodeE2eModal() {
   return true;
 }
 
-
-
 async function bootstrapApp(){
   // Belt & braces: if loadSession() ran but globals are not mirrored, mirror now
   try {
@@ -353095,7 +353093,7 @@ async function bootstrapApp(){
         hb.requestBankingAlertSummaryDetailRefresh = queueBankingAlertSummaryDetailRefresh;
 
         const bankingPayWorkbenchSessionKeyPrefix = 'banking_pay_workbench_session:';
-        const bankingPayHeartbeatUuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+        const bankingPayHeartbeatUuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
         const heartbeatCloneJson = (value) => {
           try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
         };
@@ -355028,6 +355026,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
     console.warn('[E2E][modal-opener] failed', err);
   }
 }
+
 
 
 
