@@ -42830,8 +42830,6 @@ function renderBankingIdHistoryTab() {
     </div>
   `;
 }
-
-
 function renderBankingPayTab(scopePreset) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -43221,9 +43219,25 @@ function renderBankingPayTab(scopePreset) {
   }
   const explicitStatePills = [];
   const progressState = String(workbench.progress_state || progress.progress_state || progress.phase || '').trim().toUpperCase();
+  const authoritativePatchProgressState = String(progress.progress_state || progress.phase || workbench.progress_state || '').trim().toUpperCase();
+  const previewIsAuthoritativelyReady = authoritativePatchProgressState === 'READY' || authoritativePatchProgressState === 'READY_EMPTY';
+  const patchingPreviewActive = !previewIsAuthoritativelyReady && (
+    authoritativePatchProgressState === 'PATCHING_PREVIEW_ROWS' ||
+    authoritativePatchProgressState === 'PATCHING_PREVIEW' ||
+    boolish(
+      workbench.patching_preview_rows ||
+      workbench.patchingPreviewRows ||
+      workbench.patching_preview ||
+      workbench.patchingPreview ||
+      progress.patching_preview_rows ||
+      progress.patchingPreviewRows ||
+      progress.patching_preview ||
+      progress.patchingPreview
+    )
+  );
   if (progressState === 'CLONE_REBASING' || boolish(workbench.clone_rebase_pending || progress.clone_rebase_pending)) explicitStatePills.push(['clone rebasing', 'Eligible rows are being copied in the background.']);
   if (progressState.includes('DELTA') || boolish(workbench.delta_refresh_pending || progress.delta_refresh_pending)) explicitStatePills.push(['delta refreshing', 'Changed candidate rows are refreshing.']);
-  if (boolish(workbench.current_session_patch_applied || workbench.patching_preview || progress.patching_preview)) explicitStatePills.push(['patching preview', 'The current preview was patched after a Banking Pay action.']);
+  if (patchingPreviewActive) explicitStatePills.push(['patching preview', 'The current preview is being updated after a Banking Pay action.']);
   if (boolish(workbench.fallback_recalculation_pending || workbench.targeted_refresh_enqueued || progress.targeted_refresh_enqueued)) explicitStatePills.push(['falling back to full calculation', 'Affected candidates are recalculating through the legacy-safe path.']);
   if (boolish(workbench.shadow_compare_failed || progress.shadow_compare_failed)) explicitStatePills.push(['shadow compare failed', 'Delta output was rejected and targeted recalculation is running.']);
   if (boolish(workbench.projection_blocked || progress.projection_blocked)) explicitStatePills.push(['projection blocked', 'Delta projection was blocked for safety.']);
@@ -96045,6 +96059,7 @@ async function openBankingPayCancelResolvedRatesModal(seed = {}) {
 
 
 // Full replacement  for attachBankingModalDelegatedHandlers from FRONTEND 10052026.js
+
 async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -97006,16 +97021,33 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   const existingCaseResolution = isPlainObject(decisions?.case_resolutions?.[ctx.case_key]) ? decisions.case_resolutions[ctx.case_key] : null;
 
   const linkedScope = isPlainObject(ctx.linked_resolution_scope_json) ? ctx.linked_resolution_scope_json : {};
-  const linkedTimesheetIds = Array.isArray(linkedScope.linked_timesheet_ids)
-    ? linkedScope.linked_timesheet_ids.map((x) => trimStr(x)).filter(Boolean)
-    : [];
-  const linkedTimesheetCount = (() => {
-    const explicit = Number(linkedScope.linked_timesheet_count);
+  const anchorTimesheetId = trimStr(pickText(
+    linkedScope.seed_timesheet_id,
+    linkedScope.anchor_timesheet_id,
+    ctx.linked_timesheet_id,
+    requestedLinkedTimesheetId,
+    src.seed_timesheet_id,
+    src.anchor_timesheet_id,
+    src.linked_timesheet_id,
+    src.timesheet_id,
+    Array.isArray(ctx.components) ? ctx.components.find((row) => trimStr(row?.timesheet_id || ''))?.timesheet_id : ''
+  ));
+  const linkedIdArrays = [linkedScope.linked_timesheet_ids, linkedScope.linkedTimesheetIds].filter(Array.isArray);
+  const linkedTimesheetIdsProvided = linkedIdArrays.length > 0;
+  const additionalLinkedTimesheetIds = Array.from(new Set(
+    linkedIdArrays.flat().map((value) => trimStr(value)).filter(Boolean)
+  )).filter((timesheetId) => !anchorTimesheetId || timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase());
+  const additionalLinkedTimesheetCount = (() => {
+    if (linkedTimesheetIdsProvided) return additionalLinkedTimesheetIds.length;
+    const explicit = Number(linkedScope.linked_timesheet_count ?? linkedScope.additional_linked_timesheet_count);
     if (Number.isFinite(explicit) && explicit > 0) return Math.trunc(explicit);
-    if (linkedTimesheetIds.length > 0) return linkedTimesheetIds.length;
-    return 1;
+    return 0;
   })();
-  const caseIsLinkable = (linkedTimesheetCount > 1 || linkedTimesheetIds.length > 1 || linkedScope.resolve_all_linked_timesheets_default === true);
+  const caseIsLinkable = additionalLinkedTimesheetCount > 0;
+  const resolveAllLinkedDefault = caseIsLinkable && (
+    existingCaseResolution?.resolve_all_linked_timesheets === true ||
+    asBool(linkedScope.resolve_all_linked_timesheets_default)
+  );
 
   const existingBucketResolutions = (() => {
     const candidates = [
@@ -97353,7 +97385,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     mutationInFlight: false,
     applyIntentInFlight: false,
     clearIntentInFlight: false,
-    resolveAllLinked: existingCaseResolution?.resolve_all_linked_timesheets === true ? true : !!caseIsLinkable,
+    resolveAllLinked: resolveAllLinkedDefault,
     expandedSuggestedRateGroupKeys: new Set(),
     finalRateByGroupKey: Object.fromEntries(suggestedRateGroups.map((group) => [
       group.groupKey,
@@ -97564,7 +97596,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
             <span>
               <strong>Apply these rate decisions to matching linked timesheets</strong>
               <div class="mini" style="opacity:.8;margin-top:4px;">
-                ${enc(`This modal shows the current anchor timesheet. If selected, CloudTMS will also apply the same grouped rate decisions to matching unresolved components across ${linkedTimesheetCount} linked timesheet${linkedTimesheetCount === 1 ? '' : 's'} for this candidate.`)}
+                ${enc(`This modal shows the current anchor timesheet. If selected, CloudTMS will also apply the same grouped rate decisions to matching unresolved components across ${additionalLinkedTimesheetCount} additional eligible linked timesheet${additionalLinkedTimesheetCount === 1 ? '' : 's'} in this current Banking Pay session.`)}
               </div>
             </span>
           </label>
@@ -97898,7 +97930,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         if (linkedCheckbox && !linkedCheckbox.__wired) {
           linkedCheckbox.__wired = true;
           linkedCheckbox.addEventListener('change', () => {
-            state.resolveAllLinked = !!linkedCheckbox.checked;
+            state.resolveAllLinked = caseIsLinkable && !!linkedCheckbox.checked;
           });
         }
 
@@ -97930,10 +97962,9 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
               return;
             }
 
-            const confirmationText = trimStr(
-              linkedScope.confirmation_text ||
-              (caseIsLinkable ? `This will apply to ${linkedTimesheetCount} matching timesheets for this candidate. Are you sure you wish to continue?` : '')
-            );
+            const confirmationText = caseIsLinkable
+              ? `Apply these decisions to ${additionalLinkedTimesheetCount} additional eligible linked timesheet${additionalLinkedTimesheetCount === 1 ? '' : 's'} in this current Banking Pay session?`
+              : '';
             if (state.resolveAllLinked && caseIsLinkable && confirmationText) {
               const confirmed = await confirmSuggestedRatesAction({
                 title: 'Apply to matching timesheets?',
