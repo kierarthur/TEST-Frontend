@@ -95894,6 +95894,9 @@ async function openBankingPayCancelResolvedRatesModal(seed = {}) {
 
 // Full replacement  for attachBankingModalDelegatedHandlers from FRONTEND 10052026.js
 
+
+
+
 async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -97829,15 +97832,32 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       markCandidatesPendingLocal(affectedCandidateIds, jobMeta);
 
       const forceFullSessionRefresh = shouldForceFullSessionRefreshAfterMutation(queued, mutationMeta.resolveAllLinked === true);
+      const returnedSessionVersionRaw = trimStr(
+        queued?.session_version ??
+        queued?.sessionVersion ??
+        queued?.version ??
+        queued?.session?.session_version ??
+        queued?.session?.sessionVersion ??
+        queued?.preview?.session_version ??
+        queued?.preview?.sessionVersion ??
+        ''
+      );
+      const minimumSessionVersion = /^[0-9]{1,18}$/.test(returnedSessionVersionRaw)
+        ? Number(returnedSessionVersionRaw)
+        : null;
       let settledResult = null;
       let adoptionError = null;
       try {
-        settledResult = await pollPayWorkbenchCandidateUntilSettled(sessionId, ctx.candidate_id, {
+        if (!Number.isSafeInteger(minimumSessionVersion) || minimumSessionVersion < 1) {
+          throw new Error('The payment decision was saved, but the updated Banking Pay session version was not returned. Refresh Banking Pay to read the latest state.');
+        }
+
+        settledResult = await pollPayWorkbenchCandidateUntilSettled(sessionId, '', {
           updateState: true,
           expectedSessionId: sessionId,
-          minimumSessionVersion: queued?.session_version ?? queued?.version ?? null,
+          minimumSessionVersion,
           requirePreviewSectionsAfterReady: true,
-          source: 'openBankingPaySuggestedRatesReviewModal.applySuccess',
+          source: 'openBankingPaySuggestedRatesReviewModal.applySuccess.sessionAdoption',
           forceFullSessionRefresh,
           fullSessionRefreshAfterSettled: forceFullSessionRefresh,
           affectedCandidateIds,
@@ -97847,14 +97867,22 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
             if (pendingIds.length) markCandidatesPendingLocal(pendingIds, jobMeta);
           }
         });
-        try {
-          if (forceFullSessionRefresh && typeof bankingPayWorkbenchSessionGet === 'function' && typeof applyPayWorkbenchPreviewToState === 'function') {
-            const latestSession = await bankingPayWorkbenchSessionGet(sessionId);
-            applyPayWorkbenchPreviewToState(latestSession, st);
-          }
-        } catch (refreshError) {
-          adoptionError = refreshError;
+
+        if (settledResult?.aborted === true || settledResult?.stale === true) {
+          throw new Error('The Banking Pay workbench session changed while the updated preview was being adopted. Refresh Banking Pay to read the current session.');
         }
+        if (settledResult?.failed === true) {
+          throw new Error('The payment decision was saved, but the updated Banking Pay preview could not be adopted. Refresh Banking Pay and review the workbench error.');
+        }
+        if (
+          settledResult?.timed_out === true ||
+          settledResult?.settled !== true ||
+          settledResult?.ready !== true ||
+          settledResult?.required_preview_sections_loaded !== true
+        ) {
+          throw new Error('The payment decision was saved, but the current preview pages are still refreshing. Refresh Banking Pay to read the latest state.');
+        }
+
         try {
           if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth();
         } catch {}
@@ -97865,7 +97893,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         } catch {}
       } catch (pollError) {
         adoptionError = pollError;
-        notifySuggestedRatesAppliedButRefreshing('The suggested rate was applied. Banking Pay is still refreshing the latest preview.');
+        notifySuggestedRatesAppliedButRefreshing('The payment decision was saved. Banking Pay is still refreshing the latest preview.');
       }
 
       finishSuggestedRatesApplySuccess({ queued, settledResult, affectedCandidateIds, adoptionError });
@@ -98115,9 +98143,6 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     );
   });
 }
-
-
-
 
 
 
