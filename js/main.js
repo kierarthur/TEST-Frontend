@@ -58719,6 +58719,7 @@ function renderPayPreparePanel() {
   `;
 }
 
+
 async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
   const root = (typeof window !== 'undefined') ? window : globalThis;
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -58788,6 +58789,11 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
 
   if (payBatchCandidateId && !uuidRe.test(payBatchCandidateId)) {
     notify('Unable to show timesheets: invalid candidate selection.', 'error');
+    return false;
+  }
+
+  if (payBatchCandidateId && !candidateId) {
+    notify('Unable to show timesheets: candidate identity is required.', 'error');
     return false;
   }
 
@@ -58957,7 +58963,6 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
   }
   return true;
 }
-
 
 
 function installBankingPayBatchTimesheetSummaryShortcut() {
@@ -65298,6 +65303,7 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
 
 
 
+
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -65363,6 +65369,11 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const id = String(rawBatchId || '').trim();
   if (!id) {
     try { if (typeof window.__toast === 'function') window.__toast('pay_batch_id is required'); } catch {}
+    return;
+  }
+  const payBatchIdUuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!payBatchIdUuidRe.test(id)) {
+    try { if (typeof window.__toast === 'function') window.__toast('A valid pay batch is required.'); } catch {}
     return;
   }
 
@@ -67325,7 +67336,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     const payBatchCandidateId = String(identity?.payBatchCandidateId || '').trim();
     const candidateId = String(identity?.candidateId || '').trim();
 
-    if (!key || !candidateDetailUuidRe.test(payBatchCandidateId) || !candidateDetailUuidRe.test(candidateId)) {
+    if (!payBatchIdUuidRe.test(id) || !key || !candidateDetailUuidRe.test(payBatchCandidateId) || !candidateDetailUuidRe.test(candidateId)) {
       setCandidateDetailLocalError({ expansionKey: key, payBatchCandidateId, candidateId });
       return null;
     }
@@ -67336,7 +67347,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     };
 
     if (!force && candidateDetailCacheIsCurrent(key)) return ui.candidateDetailByKey[key];
-    if (!force && ui.candidateDetailPromiseByKey[key]) {
+    if (ui.candidateDetailPromiseByKey[key]) {
       try { return await ui.candidateDetailPromiseByKey[key]; } catch { return null; }
     }
 
@@ -67393,15 +67404,18 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
           if (stale) return null;
 
           const responseBatchId = String(page?.pay_batch_id || page?.payBatchId || '').trim();
+          const responseSection = String(page?.section || '').trim().toLowerCase();
           const responseScopeType = String(page?.scope_type || page?.scopeType || '').trim().toUpperCase();
           const responsePayBatchCandidateId = String(page?.pay_batch_candidate_id || page?.payBatchCandidateId || '').trim();
           const responseCandidateId = String(page?.candidate_id || page?.candidateId || '').trim();
           if (
             !responseBatchId ||
+            !responseSection ||
             !responseScopeType ||
             !responsePayBatchCandidateId ||
             !responseCandidateId ||
             responseBatchId !== id ||
+            responseSection !== 'items' ||
             responseScopeType !== 'PAY_BATCH_CANDIDATE' ||
             responsePayBatchCandidateId !== payBatchCandidateId ||
             responseCandidateId !== candidateId
@@ -67416,7 +67430,10 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
               throw new Error('CANDIDATE_DETAIL_ROW_SCOPE_MISMATCH');
             }
             const rowId = String(row.pay_batch_item_id || row.payBatchItemId || row.id || '').trim();
-            if (!rowId || seenItemIds.has(rowId)) continue;
+            if (!rowId || !candidateDetailUuidRe.test(rowId)) {
+              throw new Error('CANDIDATE_DETAIL_ITEM_ID_INVALID');
+            }
+            if (seenItemIds.has(rowId)) continue;
             seenItemIds.add(rowId);
             rows.push(deep(row));
           }
@@ -75998,7 +76015,6 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
 
 
 
-
 function openBulkTimesheetActionProgressModal(options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -79905,6 +79921,7 @@ function renderBankingPayBatchChildModalOverview() {
         <tbody>
           ${overviewCandidateSummaries.map((summary) => {
             const expandedCandidate = !!expanded[summary.key];
+            const candidateDetailState = detailStateForCandidate(summary);
             const uniqueTimesheetCount = summary.timesheetIds.size;
             const detailText = `${uniqueTimesheetCount} timesheet${uniqueTimesheetCount === 1 ? '' : 's'} · ${summary.rows.length} payment item${summary.rows.length === 1 ? '' : 's'}`;
             const contextText = summary.newestWeekEnding
@@ -79933,8 +79950,9 @@ function renderBankingPayBatchChildModalOverview() {
                 data-pay-batch-candidate-id="${enc(summary.payBatchCandidateId)}"
                 data-actual-candidate-id="${enc(summary.candidateId)}"
                 aria-expanded="${expandedCandidate ? 'true' : 'false'}"
+                aria-busy="${candidateDetailState.loading ? 'true' : 'false'}"
                 aria-label="${expandedCandidate ? 'Collapse' : 'Expand'} frozen payment details for ${enc(summary.candidateName)}"
-                title="${expandedCandidate ? 'Collapse' : 'Expand'} frozen payment details"
+                title="${expandedCandidate ? 'Collapse' : 'Expand'} frozen payment details${candidateDetailState.loading ? ' (loading)' : ''}"
                 style="min-width:28px;padding:0 7px;line-height:1.35;"
               >${expandedCandidate ? '−' : '+'}</button>
             ` : '';
@@ -80248,7 +80266,6 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
-
 
 
 function openBulkTimesheetActionProgressModal(options = {}) {
