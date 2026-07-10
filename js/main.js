@@ -47867,6 +47867,69 @@ const isPreviewRowSelectionAllowed = (line) => {
     ].join(' ');
   };
 
+ const resolvedRateBadgeHtml = (line, renderContextSection = '') => {
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const section = upperTrim(renderContextSection) || getLinePresentationSection(line);
+    if (section !== 'READY_TO_PAY') return '';
+
+    const hasResolvedRate = asBool(
+      line?.has_resolved_rate ??
+      nested?.has_resolved_rate ??
+      summary?.has_resolved_rate
+    );
+    const resolutionSatisfiedNow = asBool(
+      line?.case_resolution_satisfied_now ??
+      nested?.case_resolution_satisfied_now ??
+      summary?.case_resolution_satisfied_now
+    );
+    const resolutionFamily = upperTrim(
+      line?.resolved_rate_family ||
+      nested?.resolved_rate_family ||
+      summary?.resolved_rate_family ||
+      ''
+    );
+    if (!hasResolvedRate || !resolutionSatisfiedNow || resolutionFamily !== 'BUCKETED') return '';
+
+    const rowSessionId = trimStr(
+      line?.workbench_session_id ||
+      line?.session_id ||
+      nested?.workbench_session_id ||
+      nested?.session_id ||
+      summary?.workbench_session_id ||
+      summary?.session_id ||
+      ''
+    );
+    const currentSessionId = trimStr(
+      typeof getCurrentWorkbenchSessionId === 'function'
+        ? getCurrentWorkbenchSessionId()
+        : ''
+    );
+    if (rowSessionId && currentSessionId && rowSessionId.toLowerCase() !== currentSessionId.toLowerCase()) return '';
+
+    const rowSessionVersionRaw =
+      line?.workbench_session_version ??
+      line?.session_version ??
+      nested?.workbench_session_version ??
+      nested?.session_version ??
+      summary?.workbench_session_version ??
+      summary?.session_version;
+    const currentSessionVersionRaw = typeof getCurrentWorkbenchSessionVersion === 'function'
+      ? getCurrentWorkbenchSessionVersion()
+      : null;
+    const rowSessionVersion = Number(rowSessionVersionRaw);
+    const currentSessionVersion = Number(currentSessionVersionRaw);
+    if (
+      Number.isSafeInteger(rowSessionVersion) && rowSessionVersion >= 1 &&
+      Number.isSafeInteger(currentSessionVersion) && currentSessionVersion >= 1 &&
+      rowSessionVersion !== currentSessionVersion
+    ) return '';
+
+    return '<div><span class="pill" style="display:inline-block;background:#b91c1c;color:#fff;border-color:#991b1b;font-weight:800;margin-bottom:4px;">RESOLVED</span></div>';
+  };
+
   const resolvedRateCancelActionHtml = (line, renderContextSection = '') => {
     const nested = getNestedLinePayload(line);
     const summary = isPlainObject(line?.case_resolution_summary)
@@ -47881,13 +47944,18 @@ const isPreviewRowSelectionAllowed = (line) => {
       nested?.has_resolved_rate ??
       summary?.has_resolved_rate
     );
+    const resolutionSatisfiedNow = asBool(
+      line?.case_resolution_satisfied_now ??
+      nested?.case_resolution_satisfied_now ??
+      summary?.case_resolution_satisfied_now
+    );
     const resolutionFamily = upperTrim(
       line?.resolved_rate_family ||
       nested?.resolved_rate_family ||
       summary?.resolved_rate_family ||
       ''
     );
-    if (!hasResolvedRate || resolutionFamily !== 'BUCKETED') return '';
+    if (!hasResolvedRate || !resolutionSatisfiedNow || resolutionFamily !== 'BUCKETED') return '';
 
     const candidateId = trimStr(
       line?.resolved_rate_candidate_id ||
@@ -47924,7 +47992,7 @@ const isPreviewRowSelectionAllowed = (line) => {
     );
     if (['DRAFT', 'AUTHORISED', 'AUTHORIZED', 'PROCESSING', 'PAID', 'SETTLED', 'COMPLETED'].includes(immutableState)) return '';
 
-    const confirmationText = 'Cancel resolved rate for this timesheet?\n\nThis removes the resolved rate for this timesheet only and refreshes the candidate. If a rate decision is still required, the timesheet will return to Cases / Resolutions. Other linked timesheets will not be cancelled.';
+    const confirmationText = 'Cancel the resolved rate for this timesheet and any eligible linked timesheets? Linked timesheets already included in a payment batch will not be changed.';
     return `
       <button
         type="button"
@@ -48837,11 +48905,13 @@ const renderReadyTimesheetGroupedRows = (lines) => {
           >Snooze whole timesheet</button>
         `;
       })();
-      const groupAnchor = makeScrollAnchor('ready-timesheet', `${candidateId}:${timesheetId}`);
+    const groupAnchor = makeScrollAnchor('ready-timesheet', `${candidateId}:${timesheetId}`);
       const amountHtml = `
+        ${resolvedRateBadgeHtml(representative, 'READY_TO_PAY')}
         <div>£${enc(fmtMoney(fullAmount))}</div>
         ${selectionState === 'PARTIAL' ? `<div class="mini" style="color:#c62828;font-weight:700;margin-top:2px;">£${enc(fmtMoney(selectedAmount))} selected</div>` : ''}
       `;
+
 
       return `
         <tr${groupAnchor ? ` data-banking-scroll-anchor="${enc(groupAnchor)}"` : ''} data-timesheet-group-key="${enc(item.key)}" data-candidate-id="${enc(candidateId)}" data-timesheet-id="${enc(timesheetId)}">
@@ -48999,7 +49069,10 @@ const renderReadyTimesheetGroupedRows = (lines) => {
           </td>
           <td class="mini">${enc(client)}</td>
           <td class="mini" style="white-space:nowrap;">${enc(weekOrDate)}</td>
-          <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtMoney(amount))}</td>
+        <td class="mono" style="text-align:right;white-space:nowrap;">
+            ${resolvedRateBadgeHtml(line, renderContextSection)}
+            <div>${enc(fmtMoney(amount))}</div>
+          </td>
           <td>
             <div style="display:flex;flex-direction:column;gap:4px;">
               <span class="pill ${enc(statePillClass)}">${enc(stateLabel)}</span>
@@ -49089,7 +49162,10 @@ const renderReadyTimesheetGroupedRows = (lines) => {
           </td>
           <td class="mini">${enc(client)}</td>
           <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(trimStr(line?.week_ending_date)) || ymdToUk(trimStr(line?.linked_shift_date)) || '—')}</td>
-          <td class="mono" style="text-align:right;white-space:nowrap;">${enc(fmtMoney(amount))}</td>
+          <td class="mono" style="text-align:right;white-space:nowrap;">
+            ${resolvedRateBadgeHtml(line, renderContextSection)}
+            <div>${enc(fmtMoney(amount))}</div>
+          </td>
           <td>
             <div style="display:flex;flex-direction:column;gap:4px;">
               <span class="pill ${enc(statePillClass || (isBlockedLike ? 'pill-bad' : 'pill-ok'))}">${enc(stateLabel)}</span>
@@ -90836,22 +90912,32 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
       let clearAccepted = false;
       try {
-        const modalResult = await openBankingPayCancelResolvedRatesModal({
+           const modalResult = await openBankingPayCancelResolvedRatesModal({
           workbench_session_id: workbenchSessionId,
           session_version: workbenchSessionVersion,
           candidate_id: candidateId,
           clicked_timesheet_id: linkedTimesheetId,
           clicked_case_key: caseKey || `timesheet:${linkedTimesheetId}`,
-          onConfirm: async ({ selected_timesheet_ids: selectedTimesheetIds, expected_session_version: expectedSessionVersion }) => {
+          onConfirm: async ({
+            anchor_timesheet_id: anchorTimesheetId,
+            anchor_case_key: anchorCaseKey,
+            clearable_timesheet_ids: clearableTimesheetIds,
+            expected_session_version: expectedSessionVersion,
+            expected_progress_counter_version: expectedProgressCounterVersion
+          }) => {
             if (getCurrentWorkbenchSessionId() !== workbenchSessionId) {
               throw new Error('The Banking Pay workbench session changed. Close this modal, refresh Banking Pay, and try again.');
             }
             return bankingPayWorkbenchSessionClearCaseResolution(workbenchSessionId, {
               operation: 'CLEAR',
               candidate_id: candidateId,
+              case_key: anchorCaseKey,
+              linked_timesheet_id: anchorTimesheetId,
+              timesheet_id: anchorTimesheetId,
               resolution_family: 'BUCKETED',
-              selected_timesheet_ids: selectedTimesheetIds,
-              expected_session_version: expectedSessionVersion
+              selected_timesheet_ids: clearableTimesheetIds,
+              expected_session_version: expectedSessionVersion,
+              expected_progress_counter_version: expectedProgressCounterVersion
             });
           }
         });
@@ -95564,17 +95650,7 @@ function isTimesheetSaveSignatureDiagEnabled() {
 
 async function openBankingPayCancelResolvedRatesModal(seed = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
-  const upperTrim = (value) => trimStr(value).toUpperCase();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
-  const enc = (typeof escapeHtml === 'function')
-    ? escapeHtml
-    : (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-      }[char]));
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const readUuid = (value) => {
     const text = trimStr(value);
@@ -95583,477 +95659,235 @@ async function openBankingPayCancelResolvedRatesModal(seed = {}) {
   const readPositiveInteger = (value) => {
     const text = trimStr(value);
     if (!/^[0-9]{1,18}$/.test(text)) return null;
-    const parsed = Number(text);
-    return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : null;
+    const number = Number(text);
+    return Number.isSafeInteger(number) && number >= 1 ? number : null;
   };
-  const toNumber = (value) => {
-    if (value == null || trimStr(value) === '') return null;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  };
-  const formatMoney = (value) => {
-    const parsed = toNumber(value);
-    if (parsed === null) return '—';
-    return `£${(Math.round(parsed * 100) / 100).toFixed(2)}`;
-  };
-  const formatQuantity = (value) => {
-    const parsed = toNumber(value);
-    if (parsed === null) return trimStr(value) || '—';
-    return String(Math.round(parsed * 10000) / 10000);
-  };
-  const formatIsoDateUk = (value) => {
+  const readNonNegativeInteger = (value) => {
     const text = trimStr(value);
-    const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    return match ? `${match[3]}/${match[2]}/${match[1]}` : (text || '—');
+    if (!/^[0-9]{1,18}$/.test(text)) return null;
+    const number = Number(text);
+    return Number.isSafeInteger(number) && number >= 0 ? number : null;
   };
-  const normalisePayMethod = (value) => {
-    const method = upperTrim(value);
-    if (!method) return '';
-    if (method === 'PAYE') return 'PAYE';
-    if (method === 'UMBRELLA') return 'Umbrella';
-    if (method === 'MIXED') return 'Mixed';
-    return method.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+  const readUuidArray = (value) => {
+    if (!Array.isArray(value)) return [];
+    return Array.from(new Set(value.map(readUuid).filter(Boolean)));
   };
-  const formatMovement = (value, sourcePayMethod = '', targetPayMethod = '') => {
-    const explicit = trimStr(value);
-    if (upperTrim(explicit) === 'MIXED') return 'Mixed';
-    const source = normalisePayMethod(sourcePayMethod);
-    const target = normalisePayMethod(targetPayMethod);
-    if (source || target) return `${source || '—'} -> ${target || '—'}`;
-    if (!explicit) return '—';
-    const parts = explicit.split(/\s*(?:->|→)\s*/);
-    if (parts.length === 2) return `${normalisePayMethod(parts[0]) || '—'} -> ${normalisePayMethod(parts[1]) || '—'}`;
-    return explicit;
-  };
-  const pickText = (...values) => {
-    for (const value of values) {
-      const text = trimStr(value);
-      if (text) return text;
-    }
-    return '';
-  };
-  const toast = (message) => {
-    try {
-      if (typeof window !== 'undefined' && typeof window.__toast === 'function') {
-        window.__toast(trimStr(message));
-      }
-    } catch {}
-  };
+  const escapeText = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[character]));
 
   const input = isPlainObject(seed) ? seed : {};
-  const sessionId = readUuid(input.workbench_session_id ?? input.workbenchSessionId ?? input.session_id ?? input.sessionId);
+  const sessionId = readUuid(
+    input.workbench_session_id ?? input.workbenchSessionId ?? input.session_id ?? input.sessionId
+  );
   const candidateId = readUuid(input.candidate_id ?? input.candidateId);
-  const clickedTimesheetId = readUuid(input.clicked_timesheet_id ?? input.clickedTimesheetId ?? input.timesheet_id ?? input.timesheetId);
-  const suppliedSessionVersion = readPositiveInteger(input.session_version ?? input.sessionVersion ?? input.expected_session_version ?? input.expectedSessionVersion);
+  const anchorTimesheetId = readUuid(
+    input.clicked_timesheet_id ?? input.clickedTimesheetId ??
+    input.anchor_timesheet_id ?? input.anchorTimesheetId ??
+    input.linked_timesheet_id ?? input.linkedTimesheetId ??
+    input.timesheet_id ?? input.timesheetId
+  );
+  const anchorCaseKey = trimStr(
+    input.clicked_case_key ?? input.clickedCaseKey ??
+    input.anchor_case_key ?? input.anchorCaseKey ??
+    input.case_key ?? input.caseKey ??
+    (anchorTimesheetId ? `timesheet:${anchorTimesheetId}` : '')
+  );
+  const expectedSessionVersion = readPositiveInteger(
+    input.expected_session_version ?? input.expectedSessionVersion ??
+    input.session_version ?? input.sessionVersion
+  );
+  const suppliedProgressCounterVersion = readNonNegativeInteger(
+    input.expected_progress_counter_version ?? input.expectedProgressCounterVersion ??
+    input.progress_counter_version ?? input.progressCounterVersion
+  );
   const onConfirm = typeof input.onConfirm === 'function' ? input.onConfirm : null;
 
-  if (!sessionId) throw new Error('A current Banking Pay workbench session is required.');
-  if (suppliedSessionVersion == null) throw new Error('A current Banking Pay workbench session version is required.');
-  if (!candidateId) throw new Error('Candidate id is required.');
-  if (!clickedTimesheetId) throw new Error('Timesheet id is required.');
-  if (!onConfirm) throw new Error('The Cancel Resolved Rate action is not available.');
+  if (!sessionId) throw new Error('No Banking Pay workbench session is available. Refresh Banking Pay and try again.');
+  if (!candidateId) throw new Error('Candidate details are unavailable. Refresh Banking Pay and try again.');
+  if (!anchorTimesheetId) throw new Error('Timesheet details are unavailable. Refresh Banking Pay and try again.');
+  if (!anchorCaseKey || anchorCaseKey.toLowerCase() !== `timesheet:${anchorTimesheetId}`.toLowerCase()) {
+    throw new Error('The resolved-rate details are no longer current. Refresh Banking Pay and try again.');
+  }
+  if (expectedSessionVersion == null) {
+    throw new Error('The Banking Pay session version is unavailable. Refresh Banking Pay and try again.');
+  }
   if (typeof bankingPayWorkbenchSessionClearCaseResolution !== 'function') {
-    throw new Error('The Banking Pay resolved-rate service is not available.');
+    throw new Error('Cancel Resolved Rate is not available. Refresh Banking Pay and try again.');
+  }
+  if (typeof openUiConfirmModal !== 'function') {
+    throw new Error('The confirmation window is not available. Refresh Banking Pay and try again.');
+  }
+  if (!onConfirm) {
+    throw new Error('Cancel Resolved Rate could not be prepared. Refresh Banking Pay and try again.');
   }
 
-  const listResult = await bankingPayWorkbenchSessionClearCaseResolution(sessionId, {
+  const discovery = await bankingPayWorkbenchSessionClearCaseResolution(sessionId, {
     operation: 'LIST_CLEARABLE',
     candidate_id: candidateId,
+    case_key: anchorCaseKey,
+    linked_timesheet_id: anchorTimesheetId,
+    timesheet_id: anchorTimesheetId,
     resolution_family: 'BUCKETED',
-    ...(suppliedSessionVersion != null ? { expected_session_version: suppliedSessionVersion } : {})
+    expected_session_version: expectedSessionVersion,
+    ...(suppliedProgressCounterVersion != null
+      ? { expected_progress_counter_version: suppliedProgressCounterVersion }
+      : {})
   });
 
-  const listedSessionId = readUuid(listResult?.session_id ?? listResult?.workbench_session_id ?? sessionId);
-  const listedCandidateId = readUuid(listResult?.candidate_id ?? candidateId);
-  const listedSessionVersion = readPositiveInteger(listResult?.session_version);
-  if (listedSessionId !== sessionId || listedCandidateId !== candidateId || listedSessionVersion == null || listedSessionVersion !== suppliedSessionVersion) {
-    throw new Error('The Banking Pay workbench changed while resolved rates were loading. Refresh and try again.');
+  if (!isPlainObject(discovery) || discovery.ok !== true) {
+    throw new Error('The resolved-rate details could not be checked. Refresh Banking Pay and try again.');
   }
 
-  const normaliseEvidenceRow = (raw, fallbackIndex = 0) => {
-    const row = isPlainObject(raw) ? raw : {};
-    const sourceBasis = isPlainObject(row.source_basis_json) ? row.source_basis_json : {};
-    const suggestedResult = isPlainObject(row.suggested_resolution_result_json) ? row.suggested_resolution_result_json : {};
-    const resolvedResult = isPlainObject(row.resolution_result_json) ? row.resolution_result_json : {};
-    const sourcePayMethod = pickText(row.source_pay_method, row.previous_pay_method, row.pay_method_from, sourceBasis.source_pay_method);
-    const targetPayMethod = pickText(
-      row.target_pay_method,
-      row.current_pay_method,
-      row.resolved_pay_method,
-      row.pay_method_to,
-      suggestedResult.target_pay_method,
-      resolvedResult.target_pay_method
-    );
+  const discoveredAnchorId = readUuid(discovery.anchor_timesheet_id ?? discovery.anchorTimesheetId);
+  const discoveredCandidateId = readUuid(discovery.candidate_id ?? discovery.candidateId);
+  const discoveredCaseKey = trimStr(discovery.anchor_case_key ?? discovery.anchorCaseKey ?? discovery.case_key ?? discovery.caseKey);
+  const clearableIds = readUuidArray(
+    discovery.clearable_timesheet_ids ?? discovery.clearableTimesheetIds ?? discovery.targeted_timesheet_ids
+  );
+  const clearableLinkedIds = readUuidArray(
+    discovery.clearable_linked_timesheet_ids ?? discovery.clearableLinkedTimesheetIds ??
+    discovery.eligible_linked_timesheet_ids ?? discovery.eligibleLinkedTimesheetIds ??
+    discovery.linked_timesheet_ids
+  ).filter((timesheetId) => timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase());
+  const excludedLinkedTimesheets = Array.isArray(discovery.excluded_linked_timesheets)
+    ? discovery.excluded_linked_timesheets.filter(isPlainObject)
+    : [];
+  const eligibleLinkedCount = Number(
+    discovery.eligible_linked_timesheet_count ??
+    discovery.clearable_linked_timesheet_count ??
+    clearableLinkedIds.length
+  );
+  const totalAffectedCount = Number(
+    discovery.total_affected_timesheet_count ??
+    (1 + clearableLinkedIds.length)
+  );
+  const excludedLinkedCount = Number(
+    discovery.excluded_linked_timesheet_count ?? excludedLinkedTimesheets.length
+  );
+  const discoverySessionVersion = readPositiveInteger(discovery.session_version ?? expectedSessionVersion);
+  const discoveryProgressCounterVersion = readNonNegativeInteger(
+    discovery.progress_counter_version ?? discovery.progressCounterVersion ?? suppliedProgressCounterVersion
+  );
+
+  const sameAnchor = discoveredAnchorId && discoveredAnchorId.toLowerCase() === anchorTimesheetId.toLowerCase();
+  const sameCandidate = discoveredCandidateId && discoveredCandidateId.toLowerCase() === candidateId.toLowerCase();
+  const sameCase = discoveredCaseKey && discoveredCaseKey.toLowerCase() === anchorCaseKey.toLowerCase();
+  const anchorClearable = clearableIds.some((timesheetId) => timesheetId.toLowerCase() === anchorTimesheetId.toLowerCase());
+  const linkedSet = new Set(clearableLinkedIds.map((timesheetId) => timesheetId.toLowerCase()));
+  const clearableAdditionalIds = clearableIds.filter((timesheetId) => timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase());
+  const clearableScopeMatches = clearableAdditionalIds.length === clearableLinkedIds.length &&
+    clearableAdditionalIds.every((timesheetId) => linkedSet.has(timesheetId.toLowerCase()));
+  const countContractMatches = Number.isSafeInteger(eligibleLinkedCount) && eligibleLinkedCount >= 0 &&
+    eligibleLinkedCount === clearableLinkedIds.length &&
+    Number.isSafeInteger(totalAffectedCount) && totalAffectedCount === 1 + eligibleLinkedCount &&
+    Number.isSafeInteger(excludedLinkedCount) && excludedLinkedCount >= 0 &&
+    excludedLinkedCount === excludedLinkedTimesheets.length;
+
+  if (
+    !sameAnchor || !sameCandidate || !sameCase || !anchorClearable ||
+    !clearableScopeMatches || !countContractMatches ||
+    discoverySessionVersion == null || discoveryProgressCounterVersion == null
+  ) {
+    throw new Error('The resolved-rate scope changed while it was being checked. Refresh Banking Pay and try again.');
+  }
+
+  const linkedSentence = eligibleLinkedCount === 0
+    ? 'No additional linked timesheets can be changed.'
+    : `${eligibleLinkedCount} linked timesheet${eligibleLinkedCount === 1 ? '' : 's'} can also be updated.`;
+  const excludedSentence = excludedLinkedCount > 0
+    ? `${excludedLinkedCount} other linked timesheet${excludedLinkedCount === 1 ? ' is' : 's are'} already included in a payment batch and will not be changed.`
+    : '';
+
+  const confirmation = await openUiConfirmModal({
+    title: 'Cancel resolved rate?',
+    message: 'Are you sure you want to cancel the resolved rate for this and any linked timesheets?',
+    extra_html: `
+      <div class="card" style="padding:10px;margin-top:10px;">
+        <div class="mini">${escapeText(linkedSentence)}</div>
+        ${excludedSentence ? `<div class="mini" style="margin-top:6px;">${escapeText(excludedSentence)}</div>` : ''}
+        <div class="mini" style="margin-top:6px;opacity:.8;">${escapeText(`Total affected timesheets including this timesheet: ${totalAffectedCount}`)}</div>
+      </div>
+    `,
+    confirm_label: 'OK',
+    cancel_label: 'Cancel',
+    confirm_class: 'btn btn-warn',
+    cancel_class: 'btn btn-outline',
+    kind: 'banking-pay-cancel-resolved-rate-confirm'
+  });
+
+  if (!(confirmation && confirmation.confirmed === true)) {
     return {
-      key: [
-        pickText(row.component_key_type, row.key_type),
-        pickText(row.component_key_value, row.key_value),
-        pickText(row.bucket_code, row.unit_name, row.label),
-        pickText(row.work_date, sourceBasis.work_date),
-        String(fallbackIndex)
-      ].join('|'),
-      unit_name: pickText(row.unit_name, row.label, row.bucket_label, row.bucket_code, row.component_label, row.component_key_value) || 'Rate unit',
-      quantity: row.quantity ?? row.target_units ?? row.source_units ?? row.units ?? row.hours ?? row.count ?? null,
-      source_pay_method: sourcePayMethod,
-      target_pay_method: targetPayMethod,
-      movement: formatMovement(row.movement, sourcePayMethod, targetPayMethod),
-      previous_rate: row.previous_rate ?? row.source_rate ?? row.old_rate ?? null,
-      current_resolved_rate: row.current_resolved_rate ?? row.target_rate ?? row.resolved_rate ?? row.new_rate ?? row.suggested_target_rate ?? suggestedResult.replacement_rate ?? suggestedResult.target_rate ?? resolvedResult.replacement_rate ?? resolvedResult.target_rate ?? null,
-      old_margin: row.old_margin ?? row.source_margin_ex_vat ?? row.previous_margin_ex_vat ?? null,
-      new_margin: row.new_margin ?? row.target_margin_ex_vat ?? row.current_margin_ex_vat ?? row.suggested_target_margin_ex_vat ?? suggestedResult.target_margin_ex_vat ?? resolvedResult.target_margin_ex_vat ?? null,
-      work_date: pickText(row.work_date, sourceBasis.work_date),
-      bucket_code: pickText(row.bucket_code),
-      component_key_type: pickText(row.component_key_type, row.key_type),
-      component_key_value: pickText(row.component_key_value, row.key_value)
+      ok: true,
+      accepted: false,
+      declined: true,
+      discovery
     };
-  };
-
-  const rows = [];
-  const seenTimesheets = new Set();
-  for (const raw of Array.isArray(listResult?.clearable_timesheets) ? listResult.clearable_timesheets : []) {
-    if (!isPlainObject(raw)) continue;
-    const timesheetId = readUuid(raw.timesheet_id ?? raw.linked_timesheet_id);
-    const rowCandidateId = readUuid(raw.candidate_id ?? candidateId);
-    if (!timesheetId || rowCandidateId !== candidateId || seenTimesheets.has(timesheetId)) continue;
-    if (upperTrim(raw.resolution_family || 'BUCKETED') !== 'BUCKETED') continue;
-    seenTimesheets.add(timesheetId);
-
-    const evidenceSources = [
-      ...(Array.isArray(raw.evidence) ? raw.evidence : []),
-      ...(Array.isArray(raw.case_components) ? raw.case_components : [])
-    ];
-    const evidence = [];
-    const seenEvidence = new Set();
-    evidenceSources.forEach((item, index) => {
-      const normalised = normaliseEvidenceRow(item, index);
-      const hasMeaningfulEvidence = !!(
-        normalised.unit_name !== 'Rate unit' ||
-        normalised.quantity != null ||
-        normalised.previous_rate != null ||
-        normalised.current_resolved_rate != null ||
-        normalised.old_margin != null ||
-        normalised.new_margin != null ||
-        normalised.source_pay_method ||
-        normalised.target_pay_method ||
-        normalised.work_date ||
-        normalised.bucket_code ||
-        normalised.component_key_type ||
-        normalised.component_key_value
-      );
-      if (!hasMeaningfulEvidence) return;
-      const dedupeKey = [
-        normalised.unit_name,
-        trimStr(normalised.quantity),
-        normalised.source_pay_method,
-        normalised.target_pay_method,
-        trimStr(normalised.previous_rate),
-        trimStr(normalised.current_resolved_rate),
-        trimStr(normalised.old_margin),
-        trimStr(normalised.new_margin),
-        normalised.work_date,
-        normalised.bucket_code,
-        normalised.component_key_type,
-        normalised.component_key_value
-      ].join('|');
-      if (seenEvidence.has(dedupeKey)) return;
-      seenEvidence.add(dedupeKey);
-      evidence.push(normalised);
-    });
-    const uniqueMovements = Array.from(new Set(evidence.map((item) => item.movement).filter((item) => item && item !== '—')));
-    const movement = pickText(
-      raw.pay_method_movement,
-      uniqueMovements.length === 1 ? uniqueMovements[0] : (uniqueMovements.length > 1 ? 'Mixed' : '')
-    );
-
-    rows.push({
-      timesheet_id: timesheetId,
-      candidate_id: candidateId,
-      case_key: pickText(raw.case_key) || `timesheet:${timesheetId}`,
-      week_ending_date: pickText(raw.week_ending_date),
-      client_name: pickText(raw.client_name, raw.trust_name) || '—',
-      candidate_name: pickText(raw.candidate_name),
-      tms_ref: pickText(raw.tms_ref),
-      pay_method_movement: formatMovement(movement),
-      evidence
-    });
   }
 
-  rows.sort((left, right) => {
-    const leftWeek = left.week_ending_date || '9999-12-31';
-    const rightWeek = right.week_ending_date || '9999-12-31';
-    const weekCompare = leftWeek.localeCompare(rightWeek);
-    if (weekCompare !== 0) return weekCompare;
-    const clientCompare = left.client_name.localeCompare(right.client_name, 'en-GB', { sensitivity: 'base' });
-    if (clientCompare !== 0) return clientCompare;
-    return left.timesheet_id.localeCompare(right.timesheet_id);
+  const result = await onConfirm({
+    anchor_timesheet_id: anchorTimesheetId,
+    anchor_case_key: anchorCaseKey,
+    candidate_id: candidateId,
+    clearable_timesheet_ids: clearableIds,
+    clearable_linked_timesheet_ids: clearableLinkedIds,
+    eligible_linked_timesheet_ids: clearableLinkedIds,
+    eligible_linked_timesheet_count: eligibleLinkedCount,
+    total_affected_timesheet_count: totalAffectedCount,
+    excluded_linked_timesheets: excludedLinkedTimesheets,
+    excluded_linked_timesheet_count: excludedLinkedCount,
+    expected_session_version: discoverySessionVersion,
+    expected_progress_counter_version: discoveryProgressCounterVersion,
+    discovery
   });
 
-  if (!rows.some((row) => row.timesheet_id === clickedTimesheetId)) {
-    throw new Error('This timesheet is no longer a current clearable resolved-rate timesheet. Refresh Banking Pay and try again.');
+  if (!isPlainObject(result) || result.ok !== true) {
+    throw new Error('The resolved rate could not be cancelled. Refresh Banking Pay and try again.');
   }
 
-  const candidateName = pickText(rows.find((row) => row.timesheet_id === clickedTimesheetId)?.candidate_name, rows[0]?.candidate_name);
-  const tmsRef = pickText(rows.find((row) => row.timesheet_id === clickedTimesheetId)?.tms_ref, rows[0]?.tms_ref);
-  const state = {
-    busy: false,
-    accepted: false,
-    error: '',
-    selectedTimesheetIds: new Set([clickedTimesheetId]),
-    expandedTimesheetIds: new Set()
+  const actualAnchorId = readUuid(result.anchor_timesheet_id ?? result.anchorTimesheetId);
+  const actualLinkedIds = readUuidArray(
+    result.linked_timesheet_ids ?? result.clearable_linked_timesheet_ids ?? result.eligible_linked_timesheet_ids
+  ).filter((timesheetId) => timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase());
+  const actualTargetIds = readUuidArray(
+    result.targeted_timesheet_ids ?? result.clearable_timesheet_ids ?? result.affected_timesheet_ids
+  );
+  const actualEligibleLinkedCount = Number(
+    result.eligible_linked_timesheet_count ?? result.clearable_linked_timesheet_count ?? actualLinkedIds.length
+  );
+  const actualTotalAffectedCount = Number(
+    result.total_affected_timesheet_count ?? actualTargetIds.length
+  );
+  const actualLinkedSet = new Set(actualLinkedIds.map((timesheetId) => timesheetId.toLowerCase()));
+  const actualTargetsMatch = actualTargetIds.length === 1 + actualLinkedIds.length &&
+    actualTargetIds.some((timesheetId) => timesheetId.toLowerCase() === anchorTimesheetId.toLowerCase()) &&
+    actualTargetIds
+      .filter((timesheetId) => timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase())
+      .every((timesheetId) => actualLinkedSet.has(timesheetId.toLowerCase()));
+
+  if (
+    !actualAnchorId || actualAnchorId.toLowerCase() !== anchorTimesheetId.toLowerCase() ||
+    actualLinkedIds.some((timesheetId) => timesheetId.toLowerCase() === anchorTimesheetId.toLowerCase()) ||
+    !Number.isSafeInteger(actualEligibleLinkedCount) || actualEligibleLinkedCount !== actualLinkedIds.length ||
+    !Number.isSafeInteger(actualTotalAffectedCount) || actualTotalAffectedCount !== 1 + actualEligibleLinkedCount ||
+    !actualTargetsMatch
+  ) {
+    throw new Error('The resolved rate was cancelled, but the returned refresh scope did not reconcile. Refresh Banking Pay before continuing.');
+  }
+
+  return {
+    ok: true,
+    accepted: true,
+    declined: false,
+    discovery,
+    result
   };
-
-  const renderEvidenceTable = (row) => {
-    if (!row.evidence.length) {
-      return `<div class="mini" style="opacity:.8;padding:10px;">No component-level rate evidence is available for this resolved timesheet.</div>`;
-    }
-    return `
-      <div style="padding:10px;overflow:auto;background:rgba(148,163,184,.06);">
-        <table class="grid" style="min-width:1050px;table-layout:auto;background:var(--panel,#fff);">
-          <thead>
-            <tr>
-              <th>Unit name</th>
-              <th style="text-align:right;white-space:nowrap;">Quantity</th>
-              <th style="white-space:nowrap;">Movement</th>
-              <th style="text-align:right;white-space:nowrap;">Previous Rate</th>
-              <th style="text-align:right;white-space:nowrap;">Current Resolved Rate</th>
-              <th style="text-align:right;white-space:nowrap;">Old Margin</th>
-              <th style="text-align:right;white-space:nowrap;">New Margin</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${row.evidence.map((item) => `
-              <tr>
-                <td>
-                  <div>${enc(item.unit_name)}</div>
-                  ${item.work_date ? `<div class="mini" style="opacity:.75;">${enc(formatIsoDateUk(item.work_date))}</div>` : ''}
-                </td>
-                <td class="mono" style="text-align:right;white-space:nowrap;">${enc(formatQuantity(item.quantity))}</td>
-                <td class="mini" style="white-space:nowrap;">${enc(item.movement || '—')}</td>
-                <td class="mono" style="text-align:right;white-space:nowrap;">${enc(formatMoney(item.previous_rate))}</td>
-                <td class="mono" style="text-align:right;white-space:nowrap;">${enc(formatMoney(item.current_resolved_rate))}</td>
-                <td class="mono" style="text-align:right;white-space:nowrap;">${enc(formatMoney(item.old_margin))}</td>
-                <td class="mono" style="text-align:right;white-space:nowrap;">${enc(formatMoney(item.new_margin))}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
-  };
-
-  const renderMain = () => {
-    const selectedCount = state.selectedTimesheetIds.size;
-    return `
-      <div style="display:flex;flex-direction:column;gap:12px;">
-        <div class="card">
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <strong>${enc('Cancel Resolved Rate')}</strong>
-            ${tmsRef ? `<span class="mono">${enc(tmsRef)}</span>` : ''}
-            ${candidateName ? `<span>${enc(candidateName)}</span>` : ''}
-            <span class="pill">${enc(String(rows.length))} eligible timesheet(s)</span>
-            <span class="pill">${enc(String(selectedCount))} selected</span>
-          </div>
-          <div class="mini" style="opacity:.85;margin-top:6px;">
-            The clicked timesheet is selected. Tick any other current resolved timesheets for this candidate that should be cancelled in the same atomic operation.
-          </div>
-        </div>
-
-        ${state.error ? `<div class="error" style="white-space:pre-wrap;">${enc(state.error)}</div>` : ''}
-
-        <div style="max-height:calc(100vh - 310px);overflow:auto;border:1px solid var(--line);border-radius:10px;scrollbar-gutter:stable;">
-          <table class="grid" style="min-width:820px;table-layout:auto;">
-            <thead>
-              <tr>
-                <th style="width:70px;">Tick</th>
-                <th style="width:150px;">Week ending</th>
-                <th>Client</th>
-                <th style="width:190px;">Movement</th>
-                <th style="width:190px;">Rate evidence</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rows.map((row) => {
-                const selected = state.selectedTimesheetIds.has(row.timesheet_id);
-                const expanded = state.expandedTimesheetIds.has(row.timesheet_id);
-                return `
-                  <tr>
-                    <td style="text-align:center;">
-                      <input
-                        type="checkbox"
-                        data-cancel-resolved-rate-select="true"
-                        data-timesheet-id="${enc(row.timesheet_id)}"
-                        ${selected ? 'checked' : ''}
-                        ${state.busy ? 'disabled' : ''}
-                        aria-label="${enc(`Select resolved timesheet ending ${formatIsoDateUk(row.week_ending_date)}`)}"
-                      />
-                    </td>
-                    <td class="mini" style="white-space:nowrap;">${enc(formatIsoDateUk(row.week_ending_date))}</td>
-                    <td>${enc(row.client_name)}</td>
-                    <td class="mini" style="white-space:nowrap;">${enc(row.pay_method_movement || '—')}</td>
-                    <td>
-                      <button
-                        type="button"
-                        class="btn btn-xs btn-outline"
-                        data-cancel-resolved-rate-expand="true"
-                        data-timesheet-id="${enc(row.timesheet_id)}"
-                        aria-expanded="${expanded ? 'true' : 'false'}"
-                        ${state.busy ? 'disabled' : ''}
-                      >${enc(`${expanded ? 'Hide' : 'Show'} rate evidence (${row.evidence.length})`)}</button>
-                    </td>
-                  </tr>
-                  ${expanded ? `<tr><td colspan="5" style="padding:0;">${renderEvidenceTable(row)}</td></tr>` : ''}
-                `;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>
-
-        <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
-          <button type="button" class="btn btn-outline" id="bankingPayCancelResolvedRatesCloseBtn" ${state.busy ? 'disabled' : ''}>Keep resolved rates</button>
-          <button type="button" class="btn btn-primary" id="bankingPayCancelResolvedRatesConfirmBtn" ${state.busy || selectedCount <= 0 ? 'disabled' : ''}>
-            ${enc(state.busy ? 'Cancelling…' : `Cancel Resolved Rate (${selectedCount})`)}
-          </button>
-        </div>
-      </div>
-    `;
-  };
-
-  const rerenderChild = async () => {
-    try {
-      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      if (!frame || String(frame.kind || '') !== 'banking-pay-cancel-resolved-rates') return;
-      const tabKey = String(frame.currentTabKey || 'main').trim() || 'main';
-      try { frame._suppressDirty = true; } catch {}
-      await frame.setTab(tabKey);
-      try { frame._suppressDirty = false; } catch {}
-      try { frame._updateButtons && frame._updateButtons(); } catch {}
-    } catch {}
-  };
-
-  return await new Promise((resolve) => {
-    let settled = false;
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
-    const closeChild = () => {
-      try {
-        if (typeof closeCurrentModalFrameSafely === 'function') {
-          closeCurrentModalFrameSafely({ expectedKind: 'banking-pay-cancel-resolved-rates' });
-          return;
-        }
-      } catch {}
-      try {
-        const closeButton = document.getElementById('btnCloseModal');
-        if (closeButton) closeButton.click();
-      } catch {}
-    };
-
-    const onReturn = () => {
-      try {
-        document.querySelectorAll('[data-cancel-resolved-rate-select="true"]').forEach((checkbox) => {
-          if (checkbox.__wired) return;
-          checkbox.__wired = true;
-          checkbox.addEventListener('change', async () => {
-            if (state.busy) return;
-            const timesheetId = readUuid(checkbox.getAttribute('data-timesheet-id'));
-            if (!timesheetId) return;
-            if (checkbox.checked) state.selectedTimesheetIds.add(timesheetId);
-            else state.selectedTimesheetIds.delete(timesheetId);
-            state.error = '';
-            await rerenderChild();
-          });
-        });
-
-        document.querySelectorAll('[data-cancel-resolved-rate-expand="true"]').forEach((button) => {
-          if (button.__wired) return;
-          button.__wired = true;
-          button.addEventListener('click', async () => {
-            if (state.busy) return;
-            const timesheetId = readUuid(button.getAttribute('data-timesheet-id'));
-            if (!timesheetId) return;
-            if (state.expandedTimesheetIds.has(timesheetId)) state.expandedTimesheetIds.delete(timesheetId);
-            else state.expandedTimesheetIds.add(timesheetId);
-            await rerenderChild();
-          });
-        });
-
-        const closeButton = document.getElementById('bankingPayCancelResolvedRatesCloseBtn');
-        if (closeButton && !closeButton.__wired) {
-          closeButton.__wired = true;
-          closeButton.addEventListener('click', () => {
-            if (state.busy) return;
-            finish({ ok: true, accepted: false, declined: true });
-            closeChild();
-          });
-        }
-
-        const confirmButton = document.getElementById('bankingPayCancelResolvedRatesConfirmBtn');
-        if (confirmButton && !confirmButton.__wired) {
-          confirmButton.__wired = true;
-          confirmButton.addEventListener('click', async () => {
-            if (state.busy) return;
-            const selectedTimesheetIds = rows
-              .map((row) => row.timesheet_id)
-              .filter((timesheetId) => state.selectedTimesheetIds.has(timesheetId));
-            if (!selectedTimesheetIds.length) {
-              state.error = 'Select at least one resolved timesheet.';
-              await rerenderChild();
-              return;
-            }
-
-            state.busy = true;
-            state.error = '';
-            await rerenderChild();
-            try {
-              const result = await onConfirm({
-                workbench_session_id: sessionId,
-                candidate_id: candidateId,
-                selected_timesheet_ids: selectedTimesheetIds,
-                expected_session_version: listedSessionVersion
-              });
-              state.accepted = true;
-              finish({
-                ok: true,
-                accepted: true,
-                candidate_id: candidateId,
-                selected_timesheet_ids: selectedTimesheetIds,
-                result
-              });
-              closeChild();
-            } catch (error) {
-              state.busy = false;
-              state.error = trimStr(error?.user_message || error?.message || error || 'The resolved rate could not be cancelled. Refresh Banking Pay and try again.');
-              await rerenderChild();
-            }
-          });
-        }
-      } catch (error) {
-        toast(error?.message || error || 'Cancel Resolved Rate controls could not be prepared.');
-      }
-    };
-
-    showModal(
-      'Cancel Resolved Rate',
-      [{ key: 'main', label: 'Resolved Timesheets' }],
-      () => renderMain(),
-      null,
-      false,
-      onReturn,
-      {
-        kind: 'banking-pay-cancel-resolved-rates',
-        noParentGate: true,
-        forceEdit: true,
-        runOnRender: true,
-        showSave: false,
-        showApply: false,
-        onDismiss: () => {
-          finish({ ok: true, accepted: false, declined: !state.accepted });
-        }
-      }
-    );
-  });
 }
 
 
@@ -97032,19 +96866,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     src.timesheet_id,
     Array.isArray(ctx.components) ? ctx.components.find((row) => trimStr(row?.timesheet_id || ''))?.timesheet_id : ''
   ));
-  const linkedIdArrays = [linkedScope.linked_timesheet_ids, linkedScope.linkedTimesheetIds].filter(Array.isArray);
-  const linkedTimesheetIdsProvided = linkedIdArrays.length > 0;
-  const additionalLinkedTimesheetIds = Array.from(new Set(
-    linkedIdArrays.flat().map((value) => trimStr(value)).filter(Boolean)
-  )).filter((timesheetId) => !anchorTimesheetId || timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase());
-  const additionalLinkedTimesheetCount = (() => {
-    if (linkedTimesheetIdsProvided) return additionalLinkedTimesheetIds.length;
-    const explicit = Number(linkedScope.linked_timesheet_count ?? linkedScope.additional_linked_timesheet_count);
-    if (Number.isFinite(explicit) && explicit > 0) return Math.trunc(explicit);
-    return 0;
-  })();
-  const caseIsLinkable = additionalLinkedTimesheetCount > 0;
-  const resolveAllLinkedDefault = caseIsLinkable && (
+  const resolveAllLinkedRequestedDefault = (
     existingCaseResolution?.resolve_all_linked_timesheets === true ||
     asBool(linkedScope.resolve_all_linked_timesheets_default)
   );
@@ -97385,7 +97207,11 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     mutationInFlight: false,
     applyIntentInFlight: false,
     clearIntentInFlight: false,
-    resolveAllLinked: resolveAllLinkedDefault,
+    resolveAllLinked: false,
+    linkedDiscovery: null,
+    linkedDiscoveryLoading: true,
+    linkedDiscoveryAttempted: false,
+    linkedDiscoveryError: '',
     expandedSuggestedRateGroupKeys: new Set(),
     finalRateByGroupKey: Object.fromEntries(suggestedRateGroups.map((group) => [
       group.groupKey,
@@ -97403,6 +97229,112 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       try { fr._suppressDirty = false; } catch {}
       try { fr._updateButtons && fr._updateButtons(); } catch {}
     } catch {}
+  };
+
+  const normalizeUuidList = (value) => Array.from(new Set(
+    (Array.isArray(value) ? value : []).map((item) => trimStr(item)).filter(Boolean)
+  ));
+  const normalizeLinkedDiscovery = (payload) => {
+    if (!isPlainObject(payload) || payload.ok !== true) {
+      throw new Error('Linked timesheets could not be checked. Refresh Banking Pay and try again.');
+    }
+    const discoveredAnchorId = trimStr(payload.anchor_timesheet_id || payload.anchorTimesheetId || '');
+    const eligibleLinkedTimesheetIds = normalizeUuidList(
+      payload.eligible_linked_timesheet_ids || payload.eligibleLinkedTimesheetIds || payload.linked_timesheet_ids || []
+    ).filter((timesheetId) => !anchorTimesheetId || timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase());
+    const excludedLinkedTimesheets = Array.isArray(payload.excluded_linked_timesheets)
+      ? payload.excluded_linked_timesheets.filter(isPlainObject).map((row) => deep(row))
+      : [];
+    const eligibleLinkedTimesheetCount = Number(
+      payload.eligible_linked_timesheet_count ?? eligibleLinkedTimesheetIds.length
+    );
+    const totalAffectedTimesheetCount = Number(
+      payload.total_affected_timesheet_count ?? (1 + eligibleLinkedTimesheetIds.length)
+    );
+    const excludedLinkedTimesheetCount = Number(
+      payload.excluded_linked_timesheet_count ?? excludedLinkedTimesheets.length
+    );
+    const targetedTimesheetIds = normalizeUuidList(
+      payload.targeted_timesheet_ids || payload.affected_timesheet_ids || [anchorTimesheetId, ...eligibleLinkedTimesheetIds]
+    );
+    const additionalTargetIds = targetedTimesheetIds.filter(
+      (timesheetId) => !anchorTimesheetId || timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase()
+    );
+    const eligibleSet = new Set(eligibleLinkedTimesheetIds.map((timesheetId) => timesheetId.toLowerCase()));
+    const countsReconcile = Number.isSafeInteger(eligibleLinkedTimesheetCount) && eligibleLinkedTimesheetCount >= 0 &&
+      eligibleLinkedTimesheetCount === eligibleLinkedTimesheetIds.length &&
+      Number.isSafeInteger(totalAffectedTimesheetCount) && totalAffectedTimesheetCount === 1 + eligibleLinkedTimesheetCount &&
+      Number.isSafeInteger(excludedLinkedTimesheetCount) && excludedLinkedTimesheetCount >= 0 &&
+      excludedLinkedTimesheetCount === excludedLinkedTimesheets.length;
+    const targetsReconcile = targetedTimesheetIds.length === totalAffectedTimesheetCount &&
+      targetedTimesheetIds.some((timesheetId) => anchorTimesheetId && timesheetId.toLowerCase() === anchorTimesheetId.toLowerCase()) &&
+      additionalTargetIds.length === eligibleLinkedTimesheetIds.length &&
+      additionalTargetIds.every((timesheetId) => eligibleSet.has(timesheetId.toLowerCase()));
+    if (
+      !anchorTimesheetId || !discoveredAnchorId || discoveredAnchorId.toLowerCase() !== anchorTimesheetId.toLowerCase() ||
+      eligibleLinkedTimesheetIds.some((timesheetId) => timesheetId.toLowerCase() === anchorTimesheetId.toLowerCase()) ||
+      !countsReconcile || !targetsReconcile
+    ) {
+      throw new Error('The linked-timesheet scope did not reconcile. Refresh Banking Pay and try again.');
+    }
+    return {
+      raw: deep(payload),
+      anchor_timesheet_id: discoveredAnchorId,
+      eligible_linked_timesheet_ids: eligibleLinkedTimesheetIds,
+      eligible_linked_timesheet_count: eligibleLinkedTimesheetCount,
+      total_affected_timesheet_count: totalAffectedTimesheetCount,
+      excluded_linked_timesheets: excludedLinkedTimesheets,
+      excluded_linked_timesheet_count: excludedLinkedTimesheetCount,
+      targeted_timesheet_ids: targetedTimesheetIds,
+      session_version: payload.session_version ?? null,
+      progress_counter_version: payload.progress_counter_version ?? payload.progressCounterVersion ?? null
+    };
+  };
+  const getLinkedDiscovery = () => isPlainObject(state.linkedDiscovery) ? state.linkedDiscovery : null;
+  const getEligibleLinkedTimesheetCount = () => Number(getLinkedDiscovery()?.eligible_linked_timesheet_count || 0);
+  const getExcludedLinkedTimesheetCount = () => Number(getLinkedDiscovery()?.excluded_linked_timesheet_count || 0);
+  const caseIsLinkableNow = () => getEligibleLinkedTimesheetCount() > 0;
+  const renderLinkedScopeControl = () => {
+    if (state.linkedDiscoveryLoading) {
+      return `
+        <div class="card" style="padding:10px;margin-top:10px;">
+          <div class="mini">Checking linked timesheets…</div>
+        </div>
+      `;
+    }
+    if (state.linkedDiscoveryError) {
+      return `
+        <div class="card" style="padding:10px;margin-top:10px;border-color:rgba(239,68,68,.45);">
+          <div class="mini" style="color:#ef4444;">${enc(state.linkedDiscoveryError)}</div>
+        </div>
+      `;
+    }
+    const discovery = getLinkedDiscovery();
+    if (!discovery) return '';
+    const eligibleCount = getEligibleLinkedTimesheetCount();
+    const excludedCount = getExcludedLinkedTimesheetCount();
+    const totalAffected = Number(discovery.total_affected_timesheet_count || (1 + eligibleCount));
+    const eligibleCopy = eligibleCount === 0
+      ? 'No additional linked timesheets can currently be updated.'
+      : `${eligibleCount} linked timesheet${eligibleCount === 1 ? '' : 's'} can also be updated.`;
+    const excludedCopy = excludedCount > 0
+      ? `${excludedCount} other linked timesheet${excludedCount === 1 ? ' is' : 's are'} already included in a payment batch and will not be changed.`
+      : '';
+    return `
+      <div class="card" style="padding:10px;margin-top:10px;">
+        ${eligibleCount > 0 ? `
+          <label style="display:flex;align-items:flex-start;gap:8px;">
+            <input type="checkbox" id="bankingPaySuggestedResolveAllLinked" ${state.resolveAllLinked ? 'checked' : ''} ${state.busy ? 'disabled' : ''} />
+            <span>
+              <strong>Apply these rate decisions to matching linked timesheets</strong>
+              <div class="mini" style="opacity:.8;margin-top:4px;">${enc(eligibleCopy)}</div>
+            </span>
+          </label>
+        ` : `<div class="mini">${enc(eligibleCopy)}</div>`}
+        ${excludedCopy ? `<div class="mini" style="margin-top:6px;opacity:.8;">${enc(excludedCopy)}</div>` : ''}
+        <div class="mini" style="margin-top:6px;opacity:.8;">${enc(`Total affected timesheets including this timesheet: ${state.resolveAllLinked ? totalAffected : 1}`)}</div>
+      </div>
+    `;
   };
 
   const getGroupRateRawValue = (group) => {
@@ -97589,19 +97521,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         </table>
       </div>
 
-      ${caseIsLinkable ? `
-        <div class="card" style="padding:10px;margin-top:10px;">
-          <label style="display:flex;align-items:flex-start;gap:8px;">
-            <input type="checkbox" id="bankingPaySuggestedResolveAllLinked" ${state.resolveAllLinked ? 'checked' : ''} ${state.busy ? 'disabled' : ''} />
-            <span>
-              <strong>Apply these rate decisions to matching linked timesheets</strong>
-              <div class="mini" style="opacity:.8;margin-top:4px;">
-                ${enc(`This modal shows the current anchor timesheet. If selected, CloudTMS will also apply the same grouped rate decisions to matching unresolved components across ${additionalLinkedTimesheetCount} additional eligible linked timesheet${additionalLinkedTimesheetCount === 1 ? '' : 's'} in this current Banking Pay session.`)}
-              </div>
-            </span>
-          </label>
-        </div>
-      ` : ''}
+      ${renderLinkedScopeControl()}
 
       <div class="card" style="padding:10px;margin-top:10px;">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -97716,6 +97636,68 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       });
     }
     return { value: out };
+  };
+
+  const discoverLinkedResolutionScope = async (bucketResolutions, { rerender = true } = {}) => {
+    if (typeof bankingPayWorkbenchSessionApplyCaseResolution !== 'function') {
+      throw new Error('Linked-timesheet discovery is not available. Refresh Banking Pay and try again.');
+    }
+    if (!anchorTimesheetId) {
+      throw new Error('The anchor timesheet is unavailable. Refresh Banking Pay and try again.');
+    }
+    state.linkedDiscoveryLoading = true;
+    state.linkedDiscoveryError = '';
+    if (rerender) await rerenderChild();
+    try {
+      const payload = await bankingPayWorkbenchSessionApplyCaseResolution(sessionId, {
+        operation: 'DISCOVER',
+        candidate_id: ctx.candidate_id,
+        case_key: ctx.case_key,
+        finance_case_id: ctx.finance_case_id || null,
+        linked_timesheet_id: anchorTimesheetId,
+        timesheet_id: anchorTimesheetId,
+        resolution_family: 'BUCKETED',
+        resolve_all_linked_timesheets: true,
+        bucket_resolutions: deep(bucketResolutions)
+      });
+      const normalized = normalizeLinkedDiscovery(payload);
+      const hadDiscovery = !!getLinkedDiscovery();
+      const wasSelected = state.resolveAllLinked === true;
+      state.linkedDiscovery = normalized;
+      state.linkedDiscoveryLoading = false;
+      state.linkedDiscoveryError = '';
+      state.resolveAllLinked = normalized.eligible_linked_timesheet_count > 0 && (
+        wasSelected || (!hadDiscovery && resolveAllLinkedRequestedDefault)
+      );
+      if (rerender) await rerenderChild();
+      return normalized;
+    } catch (error) {
+      state.linkedDiscovery = null;
+      state.linkedDiscoveryLoading = false;
+      state.resolveAllLinked = false;
+      state.linkedDiscoveryError = trimStr(
+        error?.user_message || error?.message || 'Linked timesheets could not be checked. Refresh Banking Pay and try again.'
+      );
+      if (rerender) await rerenderChild();
+      throw error;
+    }
+  };
+  const validateAppliedScopeResult = (payload, requestedLinkedApply) => {
+    const normalized = normalizeLinkedDiscovery(payload);
+    const returnedLinkedIds = normalizeUuidList(
+      payload?.linked_timesheet_ids || payload?.eligible_linked_timesheet_ids || []
+    ).filter((timesheetId) => timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase());
+    const returnedSet = new Set(returnedLinkedIds.map((timesheetId) => timesheetId.toLowerCase()));
+    const normalizedSet = new Set(normalized.eligible_linked_timesheet_ids.map((timesheetId) => timesheetId.toLowerCase()));
+    if (
+      returnedLinkedIds.length !== normalized.eligible_linked_timesheet_count ||
+      returnedLinkedIds.some((timesheetId) => !normalizedSet.has(timesheetId.toLowerCase())) ||
+      normalized.eligible_linked_timesheet_ids.some((timesheetId) => !returnedSet.has(timesheetId.toLowerCase())) ||
+      (!requestedLinkedApply && returnedLinkedIds.length !== 0)
+    ) {
+      throw new Error('The applied linked-timesheet scope did not reconcile. Refresh Banking Pay before continuing.');
+    }
+    return payload;
   };
 
   return await new Promise((resolve) => {
@@ -97889,7 +97871,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       finishSuggestedRatesApplySuccess({ queued, settledResult, affectedCandidateIds, adoptionError });
     };
 
-    const onReturn = () => {
+    const onReturn = async () => {
       try {
         document.querySelectorAll('[data-suggested-rate-group-input="true"]').forEach((input) => {
           if (input.__wired) return;
@@ -97930,7 +97912,14 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         if (linkedCheckbox && !linkedCheckbox.__wired) {
           linkedCheckbox.__wired = true;
           linkedCheckbox.addEventListener('change', () => {
-            state.resolveAllLinked = caseIsLinkable && !!linkedCheckbox.checked;
+            state.resolveAllLinked = caseIsLinkableNow() && !!linkedCheckbox.checked;
+            try {
+              const discovery = getLinkedDiscovery();
+              const totalNode = linkedCheckbox.closest('.card')?.querySelector('.mini:last-child');
+              if (totalNode && discovery) {
+                totalNode.textContent = `Total affected timesheets including this timesheet: ${state.resolveAllLinked ? discovery.total_affected_timesheet_count : 1}`;
+              }
+            } catch {}
           });
         }
 
@@ -97962,13 +97951,24 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
               return;
             }
 
-            const confirmationText = caseIsLinkable
-              ? `Apply these decisions to ${additionalLinkedTimesheetCount} additional eligible linked timesheet${additionalLinkedTimesheetCount === 1 ? '' : 's'} in this current Banking Pay session?`
-              : '';
-            if (state.resolveAllLinked && caseIsLinkable && confirmationText) {
+            let authoritativeScope = null;
+            try {
+              authoritativeScope = await discoverLinkedResolutionScope(bucketResolutions, { rerender: true });
+            } catch {
+              state.applyIntentInFlight = false;
+              return;
+            }
+
+            const eligibleLinkedCount = authoritativeScope.eligible_linked_timesheet_count;
+            const excludedLinkedCount = authoritativeScope.excluded_linked_timesheet_count;
+            const applyLinked = state.resolveAllLinked === true && eligibleLinkedCount > 0;
+            if (applyLinked) {
+              const excludedCopy = excludedLinkedCount > 0
+                ? ` ${excludedLinkedCount} other linked timesheet${excludedLinkedCount === 1 ? ' is' : 's are'} already included in a payment batch and will not be changed.`
+                : '';
               const confirmed = await confirmSuggestedRatesAction({
                 title: 'Apply to matching timesheets?',
-                message: confirmationText,
+                message: `This will resolve ${eligibleLinkedCount} linked timesheet${eligibleLinkedCount === 1 ? '' : 's'}. Total affected timesheets including the anchor: ${authoritativeScope.total_affected_timesheet_count}.${excludedCopy}`,
                 confirmLabel: 'Apply',
                 cancelLabel: 'Cancel',
                 kind: 'banking-pay-suggested-rates-apply-linked-confirm'
@@ -97979,15 +97979,20 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
               }
             }
 
-            await applyMutationAndRefresh(() => bankingPayWorkbenchSessionApplyCaseResolution(sessionId, {
-              candidate_id: ctx.candidate_id,
-              case_key: ctx.case_key,
-              finance_case_id: ctx.finance_case_id || null,
-              linked_timesheet_id: ctx.linked_timesheet_id || null,
-              resolution_family: 'BUCKETED',
-              resolve_all_linked_timesheets: !!(caseIsLinkable && state.resolveAllLinked),
-              bucket_resolutions: deep(bucketResolutions)
-            }), { resolveAllLinked: !!(caseIsLinkable && state.resolveAllLinked) });
+            await applyMutationAndRefresh(async () => {
+              const result = await bankingPayWorkbenchSessionApplyCaseResolution(sessionId, {
+                operation: 'APPLY',
+                candidate_id: ctx.candidate_id,
+                case_key: ctx.case_key,
+                finance_case_id: ctx.finance_case_id || null,
+                linked_timesheet_id: anchorTimesheetId,
+                timesheet_id: anchorTimesheetId,
+                resolution_family: 'BUCKETED',
+                resolve_all_linked_timesheets: applyLinked,
+                bucket_resolutions: deep(bucketResolutions)
+              });
+              return validateAppliedScopeResult(result, applyLinked);
+            }, { resolveAllLinked: applyLinked });
           });
         }
 
@@ -97997,23 +98002,49 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
           clearBtn.addEventListener('click', async () => {
             if (state.busy || state.clearIntentInFlight || state.mutationInFlight) return;
             state.clearIntentInFlight = true;
-            const confirmed = await confirmSuggestedRatesAction({
-              title: 'Clear resolved rate?',
-              message: 'Clear the saved resolved rate for this case and refresh the candidate?',
-              confirmLabel: 'Clear resolution',
-              cancelLabel: 'Cancel',
-              kind: 'banking-pay-suggested-rates-clear-confirm'
-            });
-            if (!confirmed) {
+            if (typeof openBankingPayCancelResolvedRatesModal !== 'function') {
+              state.clearIntentInFlight = false;
+              state.error = 'Cancel Resolved Rate is not available. Refresh Banking Pay and try again.';
+              await rerenderChild();
+              return;
+            }
+            let cancelResult = null;
+            try {
+              cancelResult = await openBankingPayCancelResolvedRatesModal({
+                workbench_session_id: sessionId,
+                session_version: getCurrentWorkbenchSessionVersion(),
+                candidate_id: ctx.candidate_id,
+                clicked_timesheet_id: anchorTimesheetId,
+                clicked_case_key: ctx.case_key,
+                onConfirm: ({
+                  anchor_timesheet_id: confirmedAnchorTimesheetId,
+                  anchor_case_key: confirmedAnchorCaseKey,
+                  clearable_timesheet_ids: clearableTimesheetIds,
+                  expected_session_version: expectedSessionVersion,
+                  expected_progress_counter_version: expectedProgressCounterVersion
+                }) => bankingPayWorkbenchSessionClearCaseResolution(sessionId, {
+                  operation: 'CLEAR',
+                  candidate_id: ctx.candidate_id,
+                  case_key: confirmedAnchorCaseKey,
+                  linked_timesheet_id: confirmedAnchorTimesheetId,
+                  timesheet_id: confirmedAnchorTimesheetId,
+                  resolution_family: 'BUCKETED',
+                  selected_timesheet_ids: clearableTimesheetIds,
+                  expected_session_version: expectedSessionVersion,
+                  expected_progress_counter_version: expectedProgressCounterVersion
+                })
+              });
+            } catch (error) {
+              state.clearIntentInFlight = false;
+              state.error = trimStr(error?.user_message || error?.message || 'The resolved rate could not be cancelled. Refresh Banking Pay and try again.');
+              await rerenderChild();
+              return;
+            }
+            if (!cancelResult?.accepted) {
               state.clearIntentInFlight = false;
               return;
             }
-            await applyMutationAndRefresh(() => bankingPayWorkbenchSessionClearCaseResolution(sessionId, {
-              candidate_id: ctx.candidate_id,
-              case_key: ctx.case_key,
-              finance_case_id: ctx.finance_case_id || null,
-              linked_timesheet_id: ctx.linked_timesheet_id || null
-            }), { resolveAllLinked: true });
+            await applyMutationAndRefresh(() => Promise.resolve(cancelResult.result), { resolveAllLinked: true });
           });
         }
 
@@ -98031,6 +98062,27 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
             });
             closeChild();
           });
+        }
+
+        if (!state.linkedDiscoveryAttempted && !state.busy) {
+          state.linkedDiscoveryAttempted = true;
+          const initialRead = readFinalRateInputs();
+          if (initialRead.error) {
+            state.linkedDiscoveryLoading = false;
+            state.linkedDiscoveryError = initialRead.error;
+            await rerenderChild();
+          } else {
+            const initialBucketResolutions = buildBucketResolutions(initialRead.value || []);
+            if (!initialBucketResolutions.length) {
+              state.linkedDiscoveryLoading = false;
+              state.linkedDiscoveryError = 'No actionable buckets are available to check linked timesheets.';
+              await rerenderChild();
+            } else {
+              try {
+                await discoverLinkedResolutionScope(initialBucketResolutions, { rerender: true });
+              } catch {}
+            }
+          }
         }
       } catch {}
     };
@@ -98063,6 +98115,10 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     );
   });
 }
+
+
+
+
 
 
 
@@ -126477,7 +126533,6 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
 
 
 
-
 async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -126598,6 +126653,8 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     'STALE_SESSION',
     'OBSOLETE_SESSION',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'WORKBENCH_RESOLUTION_ANCHOR_FINANCIAL_BOUNDARY',
+    'WORKBENCH_RESOLUTION_OPERATION_INVALID',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
     'PAYE_NOT_READY',
     'PAYE_NET_MISSING',
@@ -126759,9 +126816,21 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
 
   try {
     const sessionIdText = trimStr(sessionId);
+    const inputPayload = isPlainObject(payload) ? payload : {};
+    const operationRaw = trimStr(inputPayload.operation ?? inputPayload.action ?? inputPayload.mode ?? 'APPLY').toUpperCase();
+    const operation = ['DISCOVER', 'DISCOVER_LINKED_SCOPE', 'PREVIEW_SCOPE', 'LIST_ELIGIBLE_LINKED'].includes(operationRaw)
+      ? 'DISCOVER'
+      : 'APPLY';
+    if (operationRaw && ![
+      'DISCOVER', 'DISCOVER_LINKED_SCOPE', 'PREVIEW_SCOPE', 'LIST_ELIGIBLE_LINKED',
+      'APPLY', 'SAVE', 'APPLY_RESOLUTION'
+    ].includes(operationRaw)) {
+      throw makeApiPayloadError({ code: 'WORKBENCH_RESOLUTION_OPERATION_INVALID' }, 400, 'The requested resolved-rate action is invalid.');
+    }
+    const payloadWithOperation = { ...inputPayload, operation };
     const requestPayload = (typeof bankingPayAugmentWorkbenchFreshnessPayload === 'function')
-      ? bankingPayAugmentWorkbenchFreshnessPayload(sessionIdText, payload)
-      : (isPlainObject(payload) ? payload : {});
+      ? bankingPayAugmentWorkbenchFreshnessPayload(sessionIdText, payloadWithOperation)
+      : payloadWithOperation;
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -126778,17 +126847,21 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
       throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-    const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
+    const responseOperation = trimStr(payloadObj.operation || operation).toUpperCase() || operation;
+    const isDiscovery = responseOperation === 'DISCOVER';
+    const jobId = isDiscovery ? '' : trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
     return {
       ok: true,
       ...(cloneJson(payloadObj) || {}),
+      operation: responseOperation,
       session_id: trimStr(payloadObj.session_id || sessionIdText),
-      candidate_id: trimStr(payloadObj.candidate_id || payload.candidate_id || ''),
+      candidate_id: trimStr(payloadObj.candidate_id || inputPayload.candidate_id || inputPayload.candidateId || ''),
       session_version: payloadObj.session_version ?? null,
+      state_changed: isDiscovery ? false : payloadObj.state_changed,
       job_id: jobId || null,
       queued_job_metadata: {
         job_id: jobId || null,
-        status: trimStr(payloadObj.job_status || payloadObj.status || 'QUEUED') || 'QUEUED'
+        status: isDiscovery ? null : (trimStr(payloadObj.job_status || payloadObj.status || (jobId ? 'QUEUED' : '')) || null)
       }
     };
   } catch (error) {
@@ -126798,6 +126871,8 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
+// SHA-256 suffix: c4f394056cc0
 
 // SHA-256 suffix: c4f394056cc0
 function bankingPayAugmentWorkbenchFreshnessPayload(sessionId, payload = {}, options = {}) {
@@ -126913,7 +126988,6 @@ function bankingPayAugmentWorkbenchFreshnessPayload(sessionId, payload = {}, opt
   }
   return source;
 }
-
 
 async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -127083,6 +127157,10 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
     'STALE_SESSION',
     'OBSOLETE_SESSION',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'WORKBENCH_RESOLUTION_ANCHOR_FINANCIAL_BOUNDARY',
+    'WORKBENCH_RESOLUTION_ANCHOR_NOT_CLEARABLE',
+    'WORKBENCH_RESOLUTION_NOT_CLEARABLE',
+    'WORKBENCH_RESOLUTION_SCOPE_CHANGED',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
     'PAYE_NOT_READY',
     'PAYE_NET_MISSING',
@@ -127299,7 +127377,18 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
     if (operation === 'LIST_CLEARABLE' && !candidateId) {
       throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_CANDIDATE' }, 400, 'Candidate id is required.');
     }
-    if (operation === 'CLEAR' && !caseKey && selectedTimesheetIds.length === 0) {
+    if (resolutionFamily === 'BUCKETED') {
+      if (!candidateId) {
+        throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_CANDIDATE' }, 400, 'Candidate id is required.');
+      }
+      if (!linkedTimesheetId) {
+        throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_TIMESHEET' }, 400, 'The anchor timesheet is required.');
+      }
+      const expectedAnchorCaseKey = `timesheet:${linkedTimesheetId}`;
+      if (!caseKey || caseKey.toLowerCase() !== expectedAnchorCaseKey.toLowerCase()) {
+        throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_CASE_KEY' }, 400, 'The anchor timesheet details are invalid.');
+      }
+    } else if (operation === 'CLEAR' && !caseKey && selectedTimesheetIds.length === 0) {
       throw makeApiPayloadError({ code: 'WORKBENCH_MODAL_ACTION_INVALID_CASE_KEY' }, 400, 'Select at least one resolved-rate timesheet.');
     }
 
@@ -127351,18 +127440,21 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
       throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-    const jobId = resolveJobId(payloadObj);
+    const responseOperation = trimStr(payloadObj.operation || operation).toUpperCase() || operation;
+    const isDiscovery = responseOperation === 'LIST_CLEARABLE';
+    const jobId = isDiscovery ? '' : resolveJobId(payloadObj);
     return {
       ok: true,
       ...(cloneJson(payloadObj) || {}),
-      operation: trimStr(payloadObj.operation || operation),
+      operation: responseOperation,
       session_id: trimStr(payloadObj.session_id || sessionIdText),
       candidate_id: trimStr(payloadObj.candidate_id || candidateId || ''),
       session_version: payloadObj.session_version ?? null,
+      state_changed: isDiscovery ? false : payloadObj.state_changed,
       job_id: jobId || null,
       queued_job_metadata: {
         job_id: jobId || null,
-        status: trimStr(payloadObj.job_status || payloadObj.status || (jobId ? 'QUEUED' : '')) || null
+        status: isDiscovery ? null : (trimStr(payloadObj.job_status || payloadObj.status || (jobId ? 'QUEUED' : '')) || null)
       }
     };
 
@@ -127373,6 +127465,10 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
+// SHA-256 suffix: 3e3ce4290d6d
+
+
 
 // SHA-256 suffix: 3e3ce4290d6d
 
