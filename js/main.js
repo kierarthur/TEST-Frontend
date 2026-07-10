@@ -58723,9 +58723,38 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
   const root = (typeof window !== 'undefined') ? window : globalThis;
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const id = trimStr(
     batchId ||
-    (options && (options.pay_batch_id || options.payBatchId || options.batch_id || options.batchId)) ||
+    opts.pay_batch_id ||
+    opts.payBatchId ||
+    opts.batch_id ||
+    opts.batchId ||
+    ''
+  );
+  const candidateId = trimStr(
+    opts.candidate_id ||
+    opts.candidateId ||
+    ''
+  );
+  const candidateName = trimStr(
+    opts.candidate_name ||
+    opts.candidateName ||
+    ''
+  );
+  const payBatchCandidateId = trimStr(
+    opts.pay_batch_candidate_id ||
+    opts.payBatchCandidateId ||
+    ''
+  );
+  const timesheetId = trimStr(
+    opts.timesheet_id ||
+    opts.timesheetId ||
+    ''
+  );
+  const timesheetLabel = trimStr(
+    opts.timesheet_label ||
+    opts.timesheetLabel ||
     ''
   );
 
@@ -58752,6 +58781,38 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
     return false;
   }
 
+  if (candidateId && !uuidRe.test(candidateId)) {
+    notify('Unable to show timesheets: invalid candidate selection.', 'error');
+    return false;
+  }
+
+  if (payBatchCandidateId && !uuidRe.test(payBatchCandidateId)) {
+    notify('Unable to show timesheets: invalid candidate selection.', 'error');
+    return false;
+  }
+
+  if (timesheetId && !uuidRe.test(timesheetId)) {
+    notify('Unable to show timesheets: invalid timesheet selection.', 'error');
+    return false;
+  }
+
+  if (timesheetId && !candidateId) {
+    notify('Unable to show this timesheet: candidate identity is required.', 'error');
+    return false;
+  }
+
+  const filters = { pay_batch_id: id };
+  if (candidateId) filters.candidate_id = candidateId;
+  if (timesheetId) filters.timesheet_id = timesheetId;
+
+  const scopeKind = timesheetId ? 'timesheet' : (candidateId ? 'candidate' : 'batch');
+  const selectionReason = scopeKind === 'timesheet'
+    ? 'banking-pay-batch-candidate-timesheet'
+    : (scopeKind === 'candidate' ? 'banking-pay-batch-candidate-timesheets' : 'banking-pay-batch-timesheets');
+  const membershipSource = scopeKind === 'timesheet'
+    ? 'banking_pay_batch_candidate_timesheet_shortcut'
+    : (scopeKind === 'candidate' ? 'banking_pay_batch_candidate_shortcut' : 'banking_pay_batch_shortcut');
+
   root.__listState = root.__listState || {};
   const existingState = (root.__listState.timesheets && typeof root.__listState.timesheets === 'object')
     ? root.__listState.timesheets
@@ -58769,7 +58830,7 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
 
   const datasetKey = JSON.stringify({
     section: 'timesheets',
-    filters: { pay_batch_id: id }
+    filters
   });
 
   root.__listState.timesheets = {
@@ -58779,14 +58840,20 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
     total: null,
     hasMore: false,
     totals: null,
-    filters: { pay_batch_id: id },
+    filters: { ...filters },
     sort,
     __allRowsCache: null,
     __lastSelectionDatasetKey: '',
     __lastSelectionViewKey: '',
     __openedFromBankingPayBatchShortcut: true,
     openedFromBankingPayBatchShortcut: true,
-    __bankingPayBatchTimesheetShortcutPayBatchId: id
+    __bankingPayBatchTimesheetShortcutScope: scopeKind,
+    __bankingPayBatchTimesheetShortcutPayBatchId: id,
+    __bankingPayBatchTimesheetShortcutCandidateId: candidateId || '',
+    __bankingPayBatchTimesheetShortcutPayBatchCandidateId: payBatchCandidateId || '',
+    __bankingPayBatchTimesheetShortcutCandidateName: candidateName || '',
+    __bankingPayBatchTimesheetShortcutTimesheetId: timesheetId || '',
+    __bankingPayBatchTimesheetShortcutTimesheetLabel: timesheetLabel || ''
   };
 
   try {
@@ -58825,7 +58892,7 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
 
   try {
     if (typeof resetSelectionForDataset === 'function') {
-      resetSelectionForDataset('timesheets', datasetKey, 'banking-pay-batch-timesheets');
+      resetSelectionForDataset('timesheets', datasetKey, selectionReason);
     } else if (root.__selection && root.__selection.timesheets) {
       const sel = root.__selection.timesheets;
       if (sel.ids && typeof sel.ids.clear === 'function') sel.ids.clear();
@@ -58836,7 +58903,7 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
       sel.fingerprint = datasetKey;
       sel.membership_total = null;
       sel.membership_status = 'deferred';
-      sel.membership_source = 'banking_pay_batch_shortcut';
+      sel.membership_source = membershipSource;
       sel.membership_authoritative = false;
       sel.membership_fallback_total = null;
     }
@@ -58854,7 +58921,7 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
         if (sel.excluded_ids && typeof sel.excluded_ids.clear === 'function') sel.excluded_ids.clear();
         sel.membership_total = null;
         sel.membership_status = 'deferred';
-        sel.membership_source = 'banking_pay_batch_shortcut';
+        sel.membership_source = membershipSource;
         sel.membership_authoritative = false;
         sel.membership_fallback_total = null;
       }
@@ -58863,16 +58930,35 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
 
   try { currentSection = 'timesheets'; } catch {}
   try { root.currentSection = 'timesheets'; } catch {}
+  try { currentRows = []; } catch {}
+  try { currentSelection = null; } catch {}
+  try { root.currentRows = []; } catch {}
+  try { root.currentSelection = null; } catch {}
 
   if (typeof renderAll === 'function') {
     await renderAll();
   } else if (typeof listTimesheetsSummary === 'function') {
-    root.currentRows = await listTimesheetsSummary({ pay_batch_id: id });
+    root.currentRows = await listTimesheetsSummary({ ...filters });
   }
 
-  notify('Showing timesheets linked to the selected pay batch.', 'info');
+  if (timesheetId) {
+    const safeTimesheetText = timesheetLabel || 'the selected timesheet';
+    const safeCandidateText = candidateName || 'the selected candidate';
+    notify(`Showing ${safeTimesheetText} for ${safeCandidateText} in the selected pay batch.`, 'info');
+  } else if (candidateId) {
+    notify(
+      candidateName
+        ? `Showing timesheets for ${candidateName} in the selected pay batch.`
+        : 'Showing timesheets for the selected candidate in the selected pay batch.',
+      'info'
+    );
+  } else {
+    notify('Showing timesheets linked to the selected pay batch.', 'info');
+  }
   return true;
 }
+
+
 
 function installBankingPayBatchTimesheetSummaryShortcut() {
   try {
@@ -65211,6 +65297,7 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
 
 
 
+
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -65434,6 +65521,13 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       } catch {}
 
       try {
+        prev.ui = (prev.ui && typeof prev.ui === 'object' && !Array.isArray(prev.ui)) ? prev.ui : {};
+        prev.ui.candidateDetailGeneration = Number(prev.ui.candidateDetailGeneration || 0) + 1;
+        prev.ui.candidateDetailPromiseByKey = {};
+        prev.ui.candidateDetailLoadingByKey = {};
+      } catch {}
+
+      try {
         prev.liveWatch = (prev.liveWatch && typeof prev.liveWatch === 'object' && !Array.isArray(prev.liveWatch)) ? prev.liveWatch : {};
         prev.liveWatch.running = false;
         prev.liveWatch.started = false;
@@ -65598,7 +65692,18 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       hasRequestedActiveTabKey,
       expanded: {},
       expandAllDefault: false,
-      last_poll_note: ''
+      last_poll_note: '',
+      candidateDetailByKey: {},
+      candidateDetailPromiseByKey: {},
+      candidateDetailLoadingByKey: {},
+      candidateDetailErrorByKey: {},
+      candidateDetailVersionByKey: {},
+      candidateDetailRequestSeqByKey: {},
+      candidateDetailIdentityByKey: {},
+      candidateDetailGeneration: 0,
+      candidateDetailKnownOverviewVersion: null,
+      candidateDetailKnownLiveSignalVersion: null,
+      candidateDetailInvalidatedAtUtc: null
     },
     csv: {
       generated_at_utc: null,
@@ -65810,9 +65915,42 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     };
   };
 
+  const invalidateCandidateDetailCacheForVersionChange = (versions) => {
+    try {
+      child.ui = (child.ui && typeof child.ui === 'object' && !Array.isArray(child.ui)) ? child.ui : {};
+      const ui = child.ui;
+      const nextOverviewVersion = versions?.overview_version ?? null;
+      const nextLiveSignalVersion = versions?.live_signal_version ?? null;
+      const previousOverviewVersion = ui.candidateDetailKnownOverviewVersion ?? null;
+      const previousLiveSignalVersion = ui.candidateDetailKnownLiveSignalVersion ?? null;
+      const overviewChanged = previousOverviewVersion !== null && nextOverviewVersion !== null
+        && String(previousOverviewVersion) !== String(nextOverviewVersion);
+      const liveSignalChanged = previousLiveSignalVersion !== null && nextLiveSignalVersion !== null
+        && String(previousLiveSignalVersion) !== String(nextLiveSignalVersion);
+
+      if (nextOverviewVersion !== null) ui.candidateDetailKnownOverviewVersion = nextOverviewVersion;
+      if (nextLiveSignalVersion !== null) ui.candidateDetailKnownLiveSignalVersion = nextLiveSignalVersion;
+
+      if (!overviewChanged && !liveSignalChanged) return false;
+
+      ui.candidateDetailGeneration = Number(ui.candidateDetailGeneration || 0) + 1;
+      ui.candidateDetailByKey = {};
+      ui.candidateDetailPromiseByKey = {};
+      ui.candidateDetailLoadingByKey = {};
+      ui.candidateDetailErrorByKey = {};
+      ui.candidateDetailVersionByKey = {};
+      ui.candidateDetailRequestSeqByKey = {};
+      ui.candidateDetailInvalidatedAtUtc = new Date().toISOString();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const syncChildKnownLiveVersions = (payload) => {
     try {
       const versions = extractLiveVersionsFromBatchPayload(payload);
+      invalidateCandidateDetailCacheForVersionChange(versions);
       child.liveWatch = (child.liveWatch && typeof child.liveWatch === 'object' && !Array.isArray(child.liveWatch)) ? child.liveWatch : {};
       child.liveWatch.knownVersions = {
         ...(child.liveWatch.knownVersions && typeof child.liveWatch.knownVersions === 'object' && !Array.isArray(child.liveWatch.knownVersions) ? child.liveWatch.knownVersions : {}),
@@ -67104,6 +67242,250 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       child.ui.expanded = next;
     } catch {}
   };
+  const candidateDetailUuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  const ensureCandidateDetailUiState = () => {
+    child.ui = (child.ui && typeof child.ui === 'object' && !Array.isArray(child.ui)) ? child.ui : {};
+    const ui = child.ui;
+    ui.candidateDetailByKey = (ui.candidateDetailByKey && typeof ui.candidateDetailByKey === 'object' && !Array.isArray(ui.candidateDetailByKey)) ? ui.candidateDetailByKey : {};
+    ui.candidateDetailPromiseByKey = (ui.candidateDetailPromiseByKey && typeof ui.candidateDetailPromiseByKey === 'object' && !Array.isArray(ui.candidateDetailPromiseByKey)) ? ui.candidateDetailPromiseByKey : {};
+    ui.candidateDetailLoadingByKey = (ui.candidateDetailLoadingByKey && typeof ui.candidateDetailLoadingByKey === 'object' && !Array.isArray(ui.candidateDetailLoadingByKey)) ? ui.candidateDetailLoadingByKey : {};
+    ui.candidateDetailErrorByKey = (ui.candidateDetailErrorByKey && typeof ui.candidateDetailErrorByKey === 'object' && !Array.isArray(ui.candidateDetailErrorByKey)) ? ui.candidateDetailErrorByKey : {};
+    ui.candidateDetailVersionByKey = (ui.candidateDetailVersionByKey && typeof ui.candidateDetailVersionByKey === 'object' && !Array.isArray(ui.candidateDetailVersionByKey)) ? ui.candidateDetailVersionByKey : {};
+    ui.candidateDetailRequestSeqByKey = (ui.candidateDetailRequestSeqByKey && typeof ui.candidateDetailRequestSeqByKey === 'object' && !Array.isArray(ui.candidateDetailRequestSeqByKey)) ? ui.candidateDetailRequestSeqByKey : {};
+    ui.candidateDetailIdentityByKey = (ui.candidateDetailIdentityByKey && typeof ui.candidateDetailIdentityByKey === 'object' && !Array.isArray(ui.candidateDetailIdentityByKey)) ? ui.candidateDetailIdentityByKey : {};
+    ui.candidateDetailGeneration = Number.isFinite(Number(ui.candidateDetailGeneration)) ? Math.max(0, Math.trunc(Number(ui.candidateDetailGeneration))) : 0;
+    return ui;
+  };
+
+  const getCandidateDetailAuthoritySignature = () => {
+    const ui = ensureCandidateDetailUiState();
+    const overviewVersion = child.overview_version ?? ui.candidateDetailKnownOverviewVersion ?? child.liveWatch?.knownVersions?.overview_version ?? child.data?.overview_version ?? null;
+    const liveSignalVersion = child.live_signal_version ?? ui.candidateDetailKnownLiveSignalVersion ?? child.liveWatch?.knownVersions?.live_signal_version ?? child.data?.live_signal_version ?? null;
+    return stableStringify({
+      pay_batch_id: id,
+      overview_version: overviewVersion === null || overviewVersion === undefined ? null : String(overviewVersion),
+      live_signal_version: liveSignalVersion === null || liveSignalVersion === undefined ? null : String(liveSignalVersion)
+    });
+  };
+
+  const candidateDetailCacheIsCurrent = (candidateKey) => {
+    const key = String(candidateKey || '').trim();
+    if (!key) return false;
+    const ui = ensureCandidateDetailUiState();
+    const cached = ui.candidateDetailByKey[key];
+    if (!cached || typeof cached !== 'object' || Array.isArray(cached) || cached.loaded !== true) return false;
+    return String(ui.candidateDetailVersionByKey[key] || cached.version_signature || '') === getCandidateDetailAuthoritySignature();
+  };
+
+  const candidateDetailRowsFromPage = (page) => {
+    if (!page || typeof page !== 'object') return [];
+    const rows = Array.isArray(page.items) ? page.items : (Array.isArray(page.rows) ? page.rows : []);
+    return rows.filter((row) => row && typeof row === 'object' && !Array.isArray(row));
+  };
+
+  const candidateDetailIdentityFromActionElement = (el) => {
+    const expansionKey = String(el?.getAttribute?.('data-candidate-id') || el?.dataset?.candidateId || '').trim();
+    const payBatchCandidateId = String(
+      el?.getAttribute?.('data-pay-batch-candidate-id') ||
+      el?.dataset?.payBatchCandidateId ||
+      expansionKey ||
+      ''
+    ).trim();
+    const candidateId = String(
+      el?.getAttribute?.('data-actual-candidate-id') ||
+      el?.getAttribute?.('data-candidate-uuid') ||
+      el?.dataset?.actualCandidateId ||
+      el?.dataset?.candidateUuid ||
+      ''
+    ).trim();
+    return {
+      expansionKey: expansionKey || payBatchCandidateId,
+      payBatchCandidateId,
+      candidateId
+    };
+  };
+
+  const setCandidateDetailLocalError = (identity, message = 'Payment details could not be loaded.') => {
+    const ui = ensureCandidateDetailUiState();
+    const key = String(identity?.expansionKey || identity?.payBatchCandidateId || '').trim();
+    if (!key) return;
+    ui.candidateDetailLoadingByKey[key] = false;
+    ui.candidateDetailErrorByKey[key] = String(message || 'Payment details could not be loaded.').trim() || 'Payment details could not be loaded.';
+    ui.candidateDetailIdentityByKey[key] = {
+      pay_batch_candidate_id: String(identity?.payBatchCandidateId || '').trim(),
+      candidate_id: String(identity?.candidateId || '').trim()
+    };
+  };
+
+  const loadCandidateDetailForIdentity = async (identity, options = {}) => {
+    const ui = ensureCandidateDetailUiState();
+    const force = options?.force === true;
+    const key = String(identity?.expansionKey || identity?.payBatchCandidateId || '').trim();
+    const payBatchCandidateId = String(identity?.payBatchCandidateId || '').trim();
+    const candidateId = String(identity?.candidateId || '').trim();
+
+    if (!key || !candidateDetailUuidRe.test(payBatchCandidateId) || !candidateDetailUuidRe.test(candidateId)) {
+      setCandidateDetailLocalError({ expansionKey: key, payBatchCandidateId, candidateId });
+      return null;
+    }
+
+    ui.candidateDetailIdentityByKey[key] = {
+      pay_batch_candidate_id: payBatchCandidateId,
+      candidate_id: candidateId
+    };
+
+    if (!force && candidateDetailCacheIsCurrent(key)) return ui.candidateDetailByKey[key];
+    if (!force && ui.candidateDetailPromiseByKey[key]) {
+      try { return await ui.candidateDetailPromiseByKey[key]; } catch { return null; }
+    }
+
+    const authoritySignature = getCandidateDetailAuthoritySignature();
+    const expectedOpenToken = String(child.openToken || '').trim();
+    const generation = Number(ui.candidateDetailGeneration || 0);
+    const requestSeq = Number(ui.candidateDetailRequestSeqByKey[key] || 0) + 1;
+    ui.candidateDetailRequestSeqByKey[key] = requestSeq;
+    ui.candidateDetailLoadingByKey[key] = true;
+    ui.candidateDetailErrorByKey[key] = '';
+    if (force) {
+      delete ui.candidateDetailByKey[key];
+      delete ui.candidateDetailVersionByKey[key];
+    }
+
+    let promise = null;
+    promise = (async () => {
+      try {
+        if (typeof bankingPayBatchGetSectionPage !== 'function') throw new Error('BANKING_PAY_BATCH_SECTION_HELPER_MISSING');
+        const limitRaw = Number(child.recommended_page_size || child.recommendedPageSize || 100);
+        const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(250, Math.trunc(limitRaw))) : 100;
+        const rows = [];
+        const seenItemIds = new Set();
+        const seenCursors = new Set();
+        let cursor = null;
+        let pageCount = 0;
+        let lastPageSignature = '';
+
+        while (true) {
+          pageCount += 1;
+          if (pageCount > 100) throw new Error('CANDIDATE_DETAIL_PAGE_LIMIT_EXCEEDED');
+
+          const page = await bankingPayBatchGetSectionPage(id, 'items', {
+            cursor,
+            limit,
+            purpose: 'detail',
+            action_context: 'candidate_expansion',
+            current_tab: 'overview',
+            filters: {
+              scope_type: 'PAY_BATCH_CANDIDATE',
+              pay_batch_candidate_id: payBatchCandidateId,
+              candidate_id: candidateId,
+              known_live_signal_version: child.live_signal_version ?? null
+            },
+            userInitiated: options?.userInitiated !== false,
+            silent: true
+          });
+
+          const currentUi = ensureCandidateDetailUiState();
+          const stale = !shouldApplyChildMutation(expectedOpenToken, null)
+            || Number(currentUi.candidateDetailGeneration || 0) !== generation
+            || Number(currentUi.candidateDetailRequestSeqByKey[key] || 0) !== requestSeq
+            || getCandidateDetailAuthoritySignature() !== authoritySignature;
+          if (stale) return null;
+
+          const responseBatchId = String(page?.pay_batch_id || page?.payBatchId || '').trim();
+          const responseScopeType = String(page?.scope_type || page?.scopeType || '').trim().toUpperCase();
+          const responsePayBatchCandidateId = String(page?.pay_batch_candidate_id || page?.payBatchCandidateId || '').trim();
+          const responseCandidateId = String(page?.candidate_id || page?.candidateId || '').trim();
+          if (
+            !responseBatchId ||
+            !responseScopeType ||
+            !responsePayBatchCandidateId ||
+            !responseCandidateId ||
+            responseBatchId !== id ||
+            responseScopeType !== 'PAY_BATCH_CANDIDATE' ||
+            responsePayBatchCandidateId !== payBatchCandidateId ||
+            responseCandidateId !== candidateId
+          ) {
+            throw new Error('CANDIDATE_DETAIL_SCOPE_MISMATCH');
+          }
+
+          for (const row of candidateDetailRowsFromPage(page)) {
+            const rowPayBatchCandidateId = String(row.pay_batch_candidate_id || row.payBatchCandidateId || '').trim();
+            const rowCandidateId = String(row.candidate_id || row.candidateId || '').trim();
+            if (rowPayBatchCandidateId !== payBatchCandidateId || rowCandidateId !== candidateId) {
+              throw new Error('CANDIDATE_DETAIL_ROW_SCOPE_MISMATCH');
+            }
+            const rowId = String(row.pay_batch_item_id || row.payBatchItemId || row.id || '').trim();
+            if (!rowId || seenItemIds.has(rowId)) continue;
+            seenItemIds.add(rowId);
+            rows.push(deep(row));
+          }
+
+          const nextCursor = page?.next_cursor ?? page?.nextCursor ?? null;
+          if (!nextCursor) break;
+          const cursorSignature = stableStringify(nextCursor);
+          if (!cursorSignature || seenCursors.has(cursorSignature) || cursorSignature === lastPageSignature) {
+            throw new Error('CANDIDATE_DETAIL_CURSOR_REPEATED');
+          }
+          seenCursors.add(cursorSignature);
+          lastPageSignature = cursorSignature;
+          cursor = deep(nextCursor);
+        }
+
+        const currentUi = ensureCandidateDetailUiState();
+        const stale = !shouldApplyChildMutation(expectedOpenToken, null)
+          || Number(currentUi.candidateDetailGeneration || 0) !== generation
+          || Number(currentUi.candidateDetailRequestSeqByKey[key] || 0) !== requestSeq
+          || getCandidateDetailAuthoritySignature() !== authoritySignature;
+        if (stale) return null;
+
+        const result = {
+          loaded: true,
+          loading: false,
+          error: '',
+          rows,
+          items: rows,
+          returned_count: rows.length,
+          page_count: pageCount,
+          next_cursor: null,
+          pay_batch_id: id,
+          pay_batch_candidate_id: payBatchCandidateId,
+          candidate_id: candidateId,
+          scope_type: 'PAY_BATCH_CANDIDATE',
+          version_signature: authoritySignature,
+          loaded_at_utc: new Date().toISOString()
+        };
+        currentUi.candidateDetailByKey[key] = result;
+        currentUi.candidateDetailVersionByKey[key] = authoritySignature;
+        currentUi.candidateDetailLoadingByKey[key] = false;
+        currentUi.candidateDetailErrorByKey[key] = '';
+        currentUi.candidateDetailInvalidatedAtUtc = null;
+        return result;
+      } catch (error) {
+        const currentUi = ensureCandidateDetailUiState();
+        const stale = !shouldApplyChildMutation(expectedOpenToken, null)
+          || Number(currentUi.candidateDetailGeneration || 0) !== generation
+          || Number(currentUi.candidateDetailRequestSeqByKey[key] || 0) !== requestSeq;
+        if (!stale) setCandidateDetailLocalError({ expansionKey: key, payBatchCandidateId, candidateId });
+        return null;
+      } finally {
+        const currentUi = ensureCandidateDetailUiState();
+        if (Number(currentUi.candidateDetailRequestSeqByKey[key] || 0) === requestSeq) {
+          currentUi.candidateDetailLoadingByKey[key] = false;
+        }
+        if (currentUi.candidateDetailPromiseByKey[key] === promise) {
+          delete currentUi.candidateDetailPromiseByKey[key];
+        }
+        if (shouldApplyChildMutation(expectedOpenToken, null)) {
+          try { await rerenderChild(); } catch {}
+        }
+      }
+    })();
+
+    ui.candidateDetailPromiseByKey[key] = promise;
+    return await promise;
+  };
+
   const deriveChildCommunicationsState = (data) => {
     const d = (data && typeof data === 'object') ? data : null;
     const b = (d && d.batch && typeof d.batch === 'object' && !Array.isArray(d.batch)) ? d.batch : null;
@@ -73491,6 +73873,12 @@ const retryUnsentPaymentsPipeline = async () => {
     } catch {}
     try { child.__sectionLoadPromises = {}; } catch {}
     try {
+      child.ui = (child.ui && typeof child.ui === 'object' && !Array.isArray(child.ui)) ? child.ui : {};
+      child.ui.candidateDetailGeneration = Number(child.ui.candidateDetailGeneration || 0) + 1;
+      child.ui.candidateDetailPromiseByKey = {};
+      child.ui.candidateDetailLoadingByKey = {};
+    } catch {}
+    try {
       const body = document.getElementById('modalBody');
       if (body && body.__bankingPayBatchChildHandler) {
         const h = body.__bankingPayBatchChildHandler;
@@ -75304,11 +75692,37 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
         }
 
         if (act === 'banking:pay:child:toggleExpandCandidate') {
-          const cid = String(el.getAttribute('data-candidate-id') || '').trim();
-          if (!cid) return;
-          const cur = !!child.ui.expanded[cid];
-          child.ui.expanded[cid] = !cur;
+          const identity = candidateDetailIdentityFromActionElement(el);
+          const key = String(identity.expansionKey || '').trim();
+          if (!key) return;
+          const ui = ensureCandidateDetailUiState();
+          ui.expanded = (ui.expanded && typeof ui.expanded === 'object' && !Array.isArray(ui.expanded)) ? ui.expanded : {};
+          const currentlyExpanded = ui.expanded[key] === true;
+          ui.expanded[key] = !currentlyExpanded;
+
+          if (currentlyExpanded) {
+            await rerenderChild();
+            return;
+          }
+
+          const loadPromise = candidateDetailCacheIsCurrent(key)
+            ? null
+            : loadCandidateDetailForIdentity(identity, { force: false, userInitiated: true });
           await rerenderChild();
+          if (loadPromise) await loadPromise;
+          return;
+        }
+
+        if (act === 'banking:pay:child:retryCandidateDetail') {
+          const identity = candidateDetailIdentityFromActionElement(el);
+          const key = String(identity.expansionKey || '').trim();
+          if (!key) return;
+          const ui = ensureCandidateDetailUiState();
+          ui.expanded = (ui.expanded && typeof ui.expanded === 'object' && !Array.isArray(ui.expanded)) ? ui.expanded : {};
+          ui.expanded[key] = true;
+          const loadPromise = loadCandidateDetailForIdentity(identity, { force: true, userInitiated: true });
+          await rerenderChild();
+          await loadPromise;
           return;
         }
 
@@ -75580,8 +75994,6 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
   await rerenderChild();
   scheduleWire();
 }
-
-
 
 
 
@@ -79020,38 +79432,468 @@ function renderBankingPayBatchChildModalOverview() {
     return bits.length ? `<span class="mini" style="opacity:.8;">${enc(bits.join(' '))}</span>` : '';
   })();
 
-  const overviewAmountForRow = (row) => firstFiniteNumber(
-    row.amount_inc_vat,
-    row.amountIncVat,
-    row.frozen_target_amount_inc_vat,
-    row.frozenTargetAmountIncVat,
-    row.amount_ex_vat,
-    row.amountExVat,
-    row.frozen_target_amount_ex_vat,
-    row.frozenTargetAmountExVat,
-    row.net_bank_amount,
-    row.netBankAmount,
-    row.payee_net_bank_amount,
-    row.payeeNetBankAmount,
-    row.candidate_net_bank_amount,
-    row.candidateNetBankAmount
-  );
+  const frozenAmountForBatchKind = (row) => {
+    const r = asObj(row) || {};
+    const ex = firstFiniteNumber(
+      r.frozen_target_amount_ex_vat,
+      r.frozenTargetAmountExVat,
+      r.amount_ex_vat,
+      r.amountExVat,
+      r.amount,
+      r.subtotal
+    );
+    const inc = firstFiniteNumber(
+      r.frozen_target_amount_inc_vat,
+      r.frozenTargetAmountIncVat,
+      r.amount_inc_vat,
+      r.amountIncVat,
+      r.payment_amount,
+      r.paymentAmount,
+      ex
+    );
+    if (batchKind === 'PAYE' || batchKind === 'LOANS') return ex ?? inc ?? 0;
+    if (batchKind === 'UMBRELLA') return inc ?? ex ?? 0;
+    return inc ?? ex ?? 0;
+  };
+
   const formatMaybeMoney = (value, loading = false) => {
     const n = Number(value);
     if (!Number.isFinite(n)) return loading ? 'Loading…' : '—';
     return `£${fmtMoney(n)}`;
   };
-  const cleanOverviewContextText = (value) => {
-    const raw = firstText(value);
-    const upper = upperTrim(raw);
-    if (!raw) return '';
-    if (['OVERVIEW', 'OVERVIEW_ITEMS', 'OVERVIEW_ITEM', 'ITEMS', 'PAY_BATCH_ITEMS'].includes(upper)) return '';
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) return '';
-    return raw;
+
+  const overviewCandidateKey = (row) => firstText(
+    row?.pay_batch_candidate_id,
+    row?.payBatchCandidateId,
+    row?.candidate_row_id,
+    row?.candidateRowId,
+    row?.candidate_id,
+    row?.candidateId
+  );
+
+  const overviewCandidateActualId = (row) => firstText(row?.candidate_id, row?.candidateId);
+  const overviewCandidateName = (row) => firstText(
+    row?.candidate_display_name,
+    row?.candidateDisplayName,
+    row?.candidate_name,
+    row?.candidateName,
+    row?.worker_name,
+    row?.workerName,
+    row?.display_name,
+    row?.name,
+    row?.payee_display_name,
+    row?.payeeDisplayName,
+    row?.payee_name,
+    row?.payeeName
+  ) || '—';
+
+  const overviewCandidateSummaries = (() => {
+    const ordered = [];
+    const byKey = new Map();
+    for (const rowValue of overviewRows) {
+      const row = asObj(rowValue) || {};
+      const payBatchCandidateId = firstText(row.pay_batch_candidate_id, row.payBatchCandidateId);
+      const candidateId = overviewCandidateActualId(row);
+      const key = payBatchCandidateId || candidateId;
+      if (!key) continue;
+      let summary = byKey.get(key);
+      if (!summary) {
+        summary = {
+          key,
+          payBatchCandidateId,
+          candidateId,
+          candidateName: overviewCandidateName(row),
+          candidateTmsRef: firstText(row.candidate_tms_ref, row.candidateTmsRef, row.tms_ref, row.tmsRef),
+          payeeName: firstText(row.payee_display_name, row.payeeDisplayName, row.payee_name, row.payeeName, row.umbrella_name, row.umbrellaName),
+          rows: [],
+          amount: 0,
+          newestWeekEnding: '',
+          timesheetIds: new Set()
+        };
+        byKey.set(key, summary);
+        ordered.push(summary);
+      }
+      summary.rows.push(row);
+      summary.amount += Number(frozenAmountForBatchKind(row)) || 0;
+      const timesheetId = firstText(row.timesheet_id, row.timesheetId);
+      if (timesheetId) summary.timesheetIds.add(timesheetId);
+      const weekEnding = firstText(row.week_ending_date, row.weekEndingDate, row.display_context_json?.week_ending_date, row.displayContextJson?.weekEndingDate);
+      if (weekEnding && (!summary.newestWeekEnding || weekEnding > summary.newestWeekEnding)) summary.newestWeekEnding = weekEnding;
+      if (!summary.payeeName) summary.payeeName = firstText(row.payee_display_name, row.payeeDisplayName, row.payee_name, row.payeeName, row.umbrella_name, row.umbrellaName);
+      if (!summary.candidateTmsRef) summary.candidateTmsRef = firstText(row.candidate_tms_ref, row.candidateTmsRef, row.tms_ref, row.tmsRef);
+    }
+    return ordered;
+  })();
+
+  const candidateDetailUi = asObj(child.ui) || {};
+  const candidateDetailByKey = asObj(candidateDetailUi.candidateDetailByKey) || {};
+  const candidateDetailLoadingByKey = asObj(candidateDetailUi.candidateDetailLoadingByKey) || {};
+  const candidateDetailErrorByKey = asObj(candidateDetailUi.candidateDetailErrorByKey) || {};
+  const candidateDetailVersionByKey = asObj(candidateDetailUi.candidateDetailVersionByKey) || {};
+  const candidateDetailAuthoritySignature = (() => {
+    const overviewVersion = child.overview_version ?? candidateDetailUi.candidateDetailKnownOverviewVersion ?? child.liveWatch?.knownVersions?.overview_version ?? data.overview_version ?? null;
+    const liveSignalVersion = child.live_signal_version ?? candidateDetailUi.candidateDetailKnownLiveSignalVersion ?? child.liveWatch?.knownVersions?.live_signal_version ?? data.live_signal_version ?? null;
+    try {
+      return JSON.stringify({
+        live_signal_version: liveSignalVersion === null || liveSignalVersion === undefined ? null : String(liveSignalVersion),
+        overview_version: overviewVersion === null || overviewVersion === undefined ? null : String(overviewVersion),
+        pay_batch_id: id
+      });
+    } catch {
+      return `${id}|${String(overviewVersion ?? '')}|${String(liveSignalVersion ?? '')}`;
+    }
+  })();
+
+  const detailStateForCandidate = (summary) => {
+    const key = trimStr(summary?.key);
+    const cached = asObj(candidateDetailByKey[key]);
+    const cachedVersion = firstText(candidateDetailVersionByKey[key], cached?.version_signature);
+    const current = !!(cached && cached.loaded === true && cachedVersion === candidateDetailAuthoritySignature);
+    return {
+      key,
+      cached: current ? cached : null,
+      loading: candidateDetailLoadingByKey[key] === true,
+      error: firstText(candidateDetailErrorByKey[key]),
+      stale: !!cached && !current
+    };
   };
-  const overviewRowsHtml = overviewRows.length ? `
-    <div style="overflow:auto; border:1px solid var(--line); border-radius:10px; max-height:min(60vh,720px);">
-      <table class="grid" style="min-width:760px; table-layout:auto; margin:0;">
+
+  const detailWeekEndingForItem = (item) => firstText(
+    item?.week_ending_date,
+    item?.weekEndingDate,
+    item?.display_context_json?.week_ending_date,
+    item?.displayContextJson?.weekEndingDate
+  );
+  const detailClientForItem = (item) => firstText(
+    item?.client_name,
+    item?.clientName,
+    item?.display_context_json?.client_name,
+    item?.displayContextJson?.clientName,
+    'Client not recorded'
+  );
+  const detailWorkedDateForItem = (item) => firstText(
+    item?.worked_date,
+    item?.workedDate,
+    item?.display_context_json?.worked_date,
+    item?.displayContextJson?.workedDate
+  );
+  const detailTimesheetIdForItem = (item) => firstText(item?.timesheet_id, item?.timesheetId);
+  const detailPayChannelForItem = (item) => upperTrim(firstText(item?.pay_channel, item?.payChannel));
+  const compactIdentity = (value) => {
+    const text = trimStr(value);
+    if (!text) return '';
+    return text.length > 12 ? `${text.slice(0, 8)}…` : text;
+  };
+  const frozenDetailTotal = (itemsValue) => asArr(itemsValue).reduce(
+    (sum, itemValue) => sum + (Number(frozenAmountForBatchKind(itemValue)) || 0),
+    0
+  );
+
+  const makeTimesheetLabel = (timesheetItems) => {
+    const rows = asArr(timesheetItems);
+    const timesheetId = rows.map(detailTimesheetIdForItem).find(Boolean) || '';
+    const workedDates = Array.from(new Set(rows.map(detailWorkedDateForItem).filter(Boolean))).sort();
+    let reference = '';
+    for (const row of rows) {
+      reference = firstText(row?.source_reference, row?.sourceRef, row?.source_ref);
+      if (reference) break;
+    }
+    const safeReference = reference && !/^[0-9a-f-]{36}(?::|$)/i.test(reference) ? reference : '';
+    const identityLabel = safeReference || compactIdentity(timesheetId);
+    const prefix = timesheetId ? `Timesheet${identityLabel ? ` ${identityLabel}` : ''}` : 'Payment item';
+    if (workedDates.length === 1) return `${prefix} · ${formatIsoToUkLocal(workedDates[0])}`;
+    if (workedDates.length > 1) return `${prefix} · ${workedDates.length} worked dates`;
+    return prefix;
+  };
+
+  const detailLineRowsForItem = (itemValue, itemIndex) => {
+    const item = asObj(itemValue) || {};
+    const breakdowns = asArr(item.breakdowns || item.item_breakdowns || item.itemBreakdowns).filter((entry) => asObj(entry));
+    if (breakdowns.length) {
+      return breakdowns.map((breakdownValue, breakdownIndex) => {
+        const breakdown = asObj(breakdownValue) || {};
+        return {
+          stableKey: firstText(breakdown.id, breakdown.breakdown_id, breakdown.operation_source_key, `${itemIndex}:${breakdownIndex}`),
+          label: firstText(
+            breakdown.unit_name,
+            breakdown.bucket_code ? bucketLabel(breakdown.bucket_code, breakdown.unit_name) : '',
+            item.unit_label,
+            item.unit_name,
+            item.description,
+            item.item_type,
+            'Payment line'
+          ),
+          kind: firstText(breakdown.line_kind, breakdown.bucket_code, item.item_type),
+          workedDate: detailWorkedDateForItem(item),
+          units: firstFiniteNumber(breakdown.units, item.units),
+          rate: firstFiniteNumber(breakdown.rate, item.rate, item.source_rate),
+          amountExVat: firstFiniteNumber(breakdown.amount_ex_vat, breakdown.amountExVat, item.frozen_target_amount_ex_vat, item.amount_ex_vat, 0) ?? 0,
+          amountVat: firstFiniteNumber(breakdown.amount_vat, breakdown.amountVat, item.frozen_target_amount_vat, item.amount_vat, 0) ?? 0,
+          amountIncVat: firstFiniteNumber(breakdown.amount_inc_vat, breakdown.amountIncVat, item.frozen_target_amount_inc_vat, item.amount_inc_vat, item.frozen_target_amount_ex_vat, item.amount_ex_vat, 0) ?? 0,
+          voided: readBool(item.is_voided || item.isVoided)
+        };
+      });
+    }
+    return [{
+      stableKey: firstText(item.pay_batch_item_id, item.payBatchItemId, item.id, String(itemIndex)),
+      label: firstText(item.unit_label, item.unit_name, item.description, item.additional_code, item.item_type, 'Payment line'),
+      kind: firstText(item.line_kind, item.bucket_code, item.item_type),
+      workedDate: detailWorkedDateForItem(item),
+      units: firstFiniteNumber(item.units),
+      rate: firstFiniteNumber(item.rate, item.source_rate),
+      amountExVat: firstFiniteNumber(item.frozen_target_amount_ex_vat, item.frozenTargetAmountExVat, item.amount_ex_vat, item.amountExVat, 0) ?? 0,
+      amountVat: firstFiniteNumber(item.frozen_target_amount_vat, item.frozenTargetAmountVat, item.amount_vat, item.amountVat, 0) ?? 0,
+      amountIncVat: firstFiniteNumber(item.frozen_target_amount_inc_vat, item.frozenTargetAmountIncVat, item.amount_inc_vat, item.amountIncVat, item.frozen_target_amount_ex_vat, item.amount_ex_vat, 0) ?? 0,
+      voided: readBool(item.is_voided || item.isVoided)
+    }];
+  };
+
+  const detailItemStableId = (entryValue) => {
+    const entry = asObj(entryValue) || {};
+    const item = asObj(entry.item) || {};
+    return firstText(
+      item.pay_batch_item_id,
+      item.payBatchItemId,
+      item.id,
+      Number.isFinite(Number(entry.itemIndex)) ? String(entry.itemIndex) : ''
+    );
+  };
+
+  const compareOptionalDetailDate = (leftValue, rightValue) => {
+    const left = trimStr(leftValue);
+    const right = trimStr(rightValue);
+    if (left && right && left !== right) return left.localeCompare(right);
+    if (left && !right) return -1;
+    if (!left && right) return 1;
+    return 0;
+  };
+
+  const groupCandidateDetailItems = (itemsValue) => {
+    const weeks = new Map();
+    asArr(itemsValue).forEach((itemValue, itemIndex) => {
+      const item = asObj(itemValue);
+      if (!item) return;
+      const weekEnding = detailWeekEndingForItem(item) || '';
+      const clientName = detailClientForItem(item);
+      const timesheetId = detailTimesheetIdForItem(item);
+      const timesheetKey = timesheetId || `no-timesheet:${firstText(item.pay_batch_item_id, item.id, itemIndex)}`;
+      if (!weeks.has(weekEnding)) weeks.set(weekEnding, new Map());
+      const clients = weeks.get(weekEnding);
+      if (!clients.has(clientName)) clients.set(clientName, new Map());
+      const timesheets = clients.get(clientName);
+      if (!timesheets.has(timesheetKey)) timesheets.set(timesheetKey, { timesheetId, items: [] });
+      timesheets.get(timesheetKey).items.push({ item, itemIndex });
+    });
+
+    return Array.from(weeks.entries())
+      .sort((a, b) => {
+        if (!a[0] && !b[0]) return 0;
+        if (!a[0]) return 1;
+        if (!b[0]) return -1;
+        return b[0].localeCompare(a[0]);
+      })
+      .map(([weekEnding, clients]) => {
+        const clientGroups = Array.from(clients.entries())
+          .sort((a, b) => a[0].localeCompare(b[0], 'en-GB', { sensitivity: 'base' }))
+          .map(([clientName, timesheets]) => {
+            const timesheetGroups = Array.from(timesheets.values())
+              .map((timesheetGroup) => {
+                const sortedEntries = asArr(timesheetGroup.items).slice().sort((a, b) => {
+                  const workedDateOrder = compareOptionalDetailDate(
+                    detailWorkedDateForItem(a?.item),
+                    detailWorkedDateForItem(b?.item)
+                  );
+                  if (workedDateOrder) return workedDateOrder;
+
+                  const timesheetOrder = String(detailTimesheetIdForItem(a?.item) || timesheetGroup.timesheetId || '')
+                    .localeCompare(String(detailTimesheetIdForItem(b?.item) || timesheetGroup.timesheetId || ''));
+                  if (timesheetOrder) return timesheetOrder;
+
+                  return detailItemStableId(a).localeCompare(detailItemStableId(b));
+                });
+                const items = sortedEntries.map((entry) => entry.item);
+                const payChannels = Array.from(new Set(items.map(detailPayChannelForItem).filter(Boolean))).sort();
+                return {
+                  ...timesheetGroup,
+                  items: sortedEntries,
+                  payChannels,
+                  sortWorkedDate: sortedEntries.map((entry) => detailWorkedDateForItem(entry.item)).find(Boolean) || '',
+                  sortStableId: detailItemStableId(sortedEntries[0]),
+                  subtotal: frozenDetailTotal(items)
+                };
+              })
+              .sort((a, b) => {
+                const workedDateOrder = compareOptionalDetailDate(a.sortWorkedDate, b.sortWorkedDate);
+                if (workedDateOrder) return workedDateOrder;
+
+                const timesheetOrder = String(a.timesheetId || '').localeCompare(String(b.timesheetId || ''));
+                if (timesheetOrder) return timesheetOrder;
+
+                return String(a.sortStableId || '').localeCompare(String(b.sortStableId || ''));
+              });
+            return {
+              clientName,
+              timesheets: timesheetGroups,
+              subtotal: timesheetGroups.reduce((sum, group) => sum + (Number(group.subtotal) || 0), 0)
+            };
+          });
+        return {
+          weekEnding,
+          clients: clientGroups,
+          subtotal: clientGroups.reduce((sum, group) => sum + (Number(group.subtotal) || 0), 0)
+        };
+      });
+  };
+
+  const renderCandidateDetail = (summary) => {
+    const state = detailStateForCandidate(summary);
+    const attrs = `data-candidate-id="${enc(summary.key)}" data-pay-batch-candidate-id="${enc(summary.payBatchCandidateId)}" data-actual-candidate-id="${enc(summary.candidateId)}"`;
+    if (state.loading) {
+      return `<div class="mini" style="padding:10px 12px;opacity:.85;">Loading frozen payment details…</div>`;
+    }
+    if (state.error) {
+      return `
+        <div style="padding:10px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="mini" style="font-weight:700;">Payment details could not be loaded.</span>
+          <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:retryCandidateDetail" ${attrs}>Retry</button>
+        </div>
+      `;
+    }
+    const detailItems = asArr(state.cached?.items || state.cached?.rows);
+    if (!state.cached) {
+      return `
+        <div style="padding:10px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="mini" style="opacity:.85;">Payment details are not loaded for the current batch version.</span>
+          <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:retryCandidateDetail" ${attrs}>Load</button>
+        </div>
+      `;
+    }
+    if (!detailItems.length) {
+      return `<div class="mini" style="padding:10px 12px;opacity:.85;">No frozen payment details were returned for this candidate.</div>`;
+    }
+
+    const groups = groupCandidateDetailItems(detailItems);
+    const displayedTotal = frozenDetailTotal(detailItems);
+    let candidateGrossPreview = null;
+    let candidateNetBankAmount = null;
+    let candidateAwaitingNetAmount = false;
+    let candidatePayeState = '';
+    let candidateSettlementStatus = '';
+    for (const item of detailItems) {
+      if (candidateGrossPreview === null) {
+        candidateGrossPreview = firstFiniteNumber(item?.candidate_gross_preview, item?.candidateGrossPreview, item?.gross_preview, item?.grossPreview);
+      }
+      if (candidateNetBankAmount === null) {
+        candidateNetBankAmount = firstFiniteNumber(item?.candidate_net_bank_amount, item?.candidateNetBankAmount, item?.net_bank_amount, item?.netBankAmount);
+      }
+      candidateAwaitingNetAmount = candidateAwaitingNetAmount || readBool(item?.candidate_awaiting_net_amount ?? item?.candidateAwaitingNetAmount ?? item?.awaiting_net_amount ?? item?.awaitingNetAmount);
+      if (!candidatePayeState) candidatePayeState = upperTrim(firstText(item?.candidate_paye_state, item?.candidatePayeState, item?.paye_state, item?.payeState));
+      if (!candidateSettlementStatus) candidateSettlementStatus = upperTrim(firstText(item?.candidate_settlement_status, item?.candidateSettlementStatus, item?.settlement_status, item?.settlementStatus));
+    }
+    const payeFooterHtml = batchKind === 'PAYE' ? `
+      ${candidateGrossPreview !== null ? `<span class="mini" style="font-weight:700;">Frozen gross <span class="mono">£${enc(fmtMoney(candidateGrossPreview))}</span></span>` : ''}
+      ${candidateAwaitingNetAmount ? '<span class="pill">Awaiting PAYE net amount</span>' : (candidateNetBankAmount !== null ? `<span class="mini" style="font-weight:700;">PAYE bank amount <span class="mono">£${enc(fmtMoney(candidateNetBankAmount))}</span></span>` : '')}
+      ${candidatePayeState ? `<span class="pill">${enc(candidatePayeState.replace(/_/g, ' '))}</span>` : ''}
+      ${candidateSettlementStatus ? `<span class="pill">${enc(candidateSettlementStatus.replace(/_/g, ' '))}</span>` : ''}
+    ` : '';
+    return `
+      <div style="padding:10px 12px;background:rgba(0,0,0,.02);border-top:1px solid var(--line);">
+        <div style="max-height:min(46vh,560px);overflow:auto;display:flex;flex-direction:column;gap:10px;">
+          ${groups.map((weekGroup) => `
+            <section style="border:1px solid var(--line);border-radius:9px;background:var(--panel,#fff);overflow:hidden;">
+              <div class="mini" style="padding:7px 9px;font-weight:800;background:rgba(0,0,0,.025);display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                <span>${enc(weekGroup.weekEnding ? `Week ending ${formatIsoToUkLocal(weekGroup.weekEnding)}` : 'Week ending not recorded')}</span>
+                <span class="mono" style="flex:0 0 auto;">£${enc(fmtMoney(weekGroup.subtotal))}</span>
+              </div>
+              ${weekGroup.clients.map((clientGroup) => `
+                <div style="padding:8px 9px;border-top:1px solid var(--line);">
+                  <div class="mini" style="font-weight:800;margin-bottom:7px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${enc(clientGroup.clientName)}</span>
+                    <span class="mono" style="flex:0 0 auto;">£${enc(fmtMoney(clientGroup.subtotal))}</span>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:8px;">
+                    ${clientGroup.timesheets.map((timesheetGroup) => {
+                      const itemEntries = timesheetGroup.items;
+                      const itemRows = itemEntries.flatMap((entry) => detailLineRowsForItem(entry.item, entry.itemIndex));
+                      const timesheetLabel = makeTimesheetLabel(itemEntries.map((entry) => entry.item));
+                      const timesheetButton = timesheetGroup.timesheetId ? `
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-outline"
+                          data-action="banking:pay:child:viewTimesheets"
+                          data-batch-id="${enc(id)}"
+                          data-pay-batch-candidate-id="${enc(summary.payBatchCandidateId)}"
+                          data-candidate-id="${enc(summary.candidateId)}"
+                          data-candidate-name="${enc(summary.candidateName)}"
+                          data-timesheet-id="${enc(timesheetGroup.timesheetId)}"
+                          data-timesheet-label="${enc(timesheetLabel)}"
+                          aria-label="Show this timesheet in the Timesheets summary"
+                          title="Show this timesheet in the Timesheets summary"
+                          style="min-width:28px;padding:0 6px;line-height:1.35;"
+                        >🗒️</button>
+                      ` : '';
+                      return `
+                        <div style="border:1px solid var(--line);border-radius:8px;overflow:hidden;">
+                          <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;white-space:nowrap;overflow:hidden;">
+                            ${timesheetButton}
+                            <span class="mini" style="font-weight:800;overflow:hidden;text-overflow:ellipsis;">${enc(timesheetLabel)}</span>
+                            ${timesheetGroup.payChannels.map((channel) => `<span class="pill" style="flex:0 0 auto;">${enc(channel)}</span>`).join('')}
+                            <span style="flex:1 1 auto;min-width:4px;"></span>
+                            <span class="mono mini" style="font-weight:800;flex:0 0 auto;">£${enc(fmtMoney(timesheetGroup.subtotal))}</span>
+                          </div>
+                          <div style="overflow:auto;border-top:1px solid var(--line);">
+                            <table class="grid" style="min-width:760px;table-layout:auto;margin:0;">
+                              <thead>
+                                <tr>
+                                  <th>Payment line</th>
+                                  <th style="width:95px;">Worked date</th>
+                                  <th style="width:70px;text-align:right;">Qty</th>
+                                  <th style="width:90px;text-align:right;">Rate</th>
+                                  <th style="width:105px;text-align:right;">Ex VAT</th>
+                                  <th style="width:90px;text-align:right;">VAT</th>
+                                  <th style="width:105px;text-align:right;">Total</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                ${itemRows.map((line) => `
+                                  <tr>
+                                    <td class="mini">
+                                      <span>${enc(line.label || 'Payment line')}</span>
+                                      ${line.kind ? `<span style="opacity:.65;"> · ${enc(line.kind)}</span>` : ''}
+                                      ${line.voided ? `<span class="pill" style="margin-left:6px;">Voided</span>` : ''}
+                                    </td>
+                                    <td class="mini" style="white-space:nowrap;">${enc(line.workedDate ? formatIsoToUkLocal(line.workedDate) : '—')}</td>
+                                    <td class="mono" style="text-align:right;">${enc(line.units === null ? '—' : fmtQty(line.units))}</td>
+                                    <td class="mono" style="text-align:right;">${enc(line.rate === null ? '—' : `£${fmtMoney(line.rate)}`)}</td>
+                                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountExVat))}</td>
+                                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountVat))}</td>
+                                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountIncVat))}</td>
+                                  </tr>
+                                `).join('')}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      `;
+                    }).join('')}
+                  </div>
+                </div>
+              `).join('')}
+            </section>
+          `).join('')}
+        </div>
+        <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap;">
+          ${payeFooterHtml}
+          <span class="mini" style="font-weight:800;">Displayed frozen total</span>
+          <span class="mono" style="font-weight:800;">£${enc(fmtMoney(displayedTotal))}</span>
+        </div>
+      </div>
+    `;
+  };
+
+  const overviewRowsHtml = overviewCandidateSummaries.length ? `
+    <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:min(60vh,720px);">
+      <table class="grid" style="min-width:760px;table-layout:auto;margin:0;">
         <thead>
           <tr>
             <th>Candidate / payee</th>
@@ -79061,28 +79903,57 @@ function renderBankingPayBatchChildModalOverview() {
           </tr>
         </thead>
         <tbody>
-          ${overviewRows.map((row) => {
-            const r = asObj(row) || {};
-            const candidateName = firstText(r.candidate_display_name, r.candidateDisplayName, r.candidate_name, r.candidateName, r.worker_name, r.workerName, r.display_name, r.name, r.payee_display_name, r.payeeDisplayName, r.payee_name, r.payeeName) || '—';
-            const payeeName = firstText(r.payee_display_name, r.payeeDisplayName, r.payee_name, r.payeeName, r.umbrella_name, r.umbrellaName);
-            const friendlyItemType = firstText(r.item_type_label, r.itemTypeLabel, r.detail_label, r.detailLabel);
-            const weekContext = r.week_ending_date ? `Week ending ${formatIsoToUkLocal(r.week_ending_date)}` : '';
-            const detailText = firstText(r.description, r.summary, friendlyItemType, r.client_name, r.clientName, weekContext);
-            const rawContext = firstText(r.payment_context_label, r.paymentContextLabel, r.status_label, r.statusLabel, r.payment_status_label, r.paymentStatusLabel, r.payment_status, r.paymentStatus, r.source_label, r.sourceLabel, weekContext);
-            const contextText = normalisePaymentStatusDisplayLabel(cleanOverviewContextText(rawContext)) || (overviewIsPreSubmissionDraft ? 'Draft — not sent' : '—');
-            const amount = overviewAmountForRow(r);
+          ${overviewCandidateSummaries.map((summary) => {
+            const expandedCandidate = !!expanded[summary.key];
+            const uniqueTimesheetCount = summary.timesheetIds.size;
+            const detailText = `${uniqueTimesheetCount} timesheet${uniqueTimesheetCount === 1 ? '' : 's'} · ${summary.rows.length} payment item${summary.rows.length === 1 ? '' : 's'}`;
+            const contextText = summary.newestWeekEnding
+              ? `Newest week ${formatIsoToUkLocal(summary.newestWeekEnding)}`
+              : (overviewIsPreSubmissionDraft ? 'Draft — not sent' : 'Frozen batch detail');
+            const candidateTimesheetButton = summary.candidateId ? `
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:child:viewTimesheets"
+                data-batch-id="${enc(id)}"
+                data-pay-batch-candidate-id="${enc(summary.payBatchCandidateId)}"
+                data-candidate-id="${enc(summary.candidateId)}"
+                data-candidate-name="${enc(summary.candidateName)}"
+                aria-label="Show timesheets for ${enc(summary.candidateName)} in this pay batch"
+                title="Show timesheets for ${enc(summary.candidateName)} in this pay batch"
+                style="min-width:28px;padding:0 6px;line-height:1.35;"
+              >🗒️</button>
+            ` : '';
+            const expansionButton = summary.payBatchCandidateId && summary.candidateId ? `
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:child:toggleExpandCandidate"
+                data-candidate-id="${enc(summary.key)}"
+                data-pay-batch-candidate-id="${enc(summary.payBatchCandidateId)}"
+                data-actual-candidate-id="${enc(summary.candidateId)}"
+                aria-expanded="${expandedCandidate ? 'true' : 'false'}"
+                aria-label="${expandedCandidate ? 'Collapse' : 'Expand'} frozen payment details for ${enc(summary.candidateName)}"
+                title="${expandedCandidate ? 'Collapse' : 'Expand'} frozen payment details"
+                style="min-width:28px;padding:0 7px;line-height:1.35;"
+              >${expandedCandidate ? '−' : '+'}</button>
+            ` : '';
             return `
               <tr>
-                <td>
-                  <div style="display:flex;flex-direction:column;gap:3px;">
-                    <span style="font-weight:700;">${enc(candidateName)}</span>
-                    ${payeeName && payeeName !== candidateName ? `<span class="mini" style="opacity:.85;">${enc(payeeName)}</span>` : ''}
+                <td style="max-width:390px;">
+                  <div style="display:flex;align-items:center;gap:5px;white-space:nowrap;min-width:0;overflow:hidden;">
+                    ${expansionButton}
+                    ${candidateTimesheetButton}
+                    <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;">${enc(summary.candidateName)}</span>
+                    ${summary.candidateTmsRef ? `<span class="mono mini" style="opacity:.78;flex:0 0 auto;">${enc(summary.candidateTmsRef)}</span>` : ''}
+                    ${summary.payeeName && summary.payeeName !== summary.candidateName ? `<span class="mini" style="opacity:.72;overflow:hidden;text-overflow:ellipsis;">· ${enc(summary.payeeName)}</span>` : ''}
                   </div>
                 </td>
-                <td class="mini">${enc(detailText || '—')}</td>
+                <td class="mini" style="white-space:nowrap;">${enc(detailText)}</td>
                 <td><span class="pill">${enc(contextText)}</span></td>
-                <td class="mono" style="text-align:right;">${enc(formatMaybeMoney(amount, overviewItemsLoading))}</td>
+                <td class="mono" style="text-align:right;">${enc(formatMaybeMoney(summary.amount, overviewItemsLoading))}</td>
               </tr>
+              ${expandedCandidate ? `<tr><td colspan="4" style="padding:0;">${renderCandidateDetail(summary)}</td></tr>` : ''}
             `;
           }).join('')}
         </tbody>
@@ -79091,7 +79962,7 @@ function renderBankingPayBatchChildModalOverview() {
   ` : '';
   const overviewRowsCardHtml = overviewRowsHtml ? `
     <div class="card" style="padding:10px;">
-      <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Overview items</div>
+      <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Beneficiaries</div>
       ${overviewRowsHtml}
     </div>
   ` : '';
@@ -79377,8 +80248,6 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
-
-
 
 
 
