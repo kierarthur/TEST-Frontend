@@ -115210,6 +115210,7 @@ function computePayWorkbenchSessionSignature(input = null) {
 }
 
 
+
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -115293,26 +115294,37 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   };
   const blankComponentStateCache = () => ({
     case_resolution_states: [],
+    caseResolutionStates: [],
     blocked_case_states: [],
+    blockedCaseStates: [],
     safe_case_states: [],
+    safeCaseStates: [],
     reusable_component_resolutions: {},
     stale_component_resolutions: {},
+    canonical_preview_lines: [],
+    canonicalPreviewLines: [],
+    preview_rows: [],
+    previewRows: [],
     draftable_now: [],
+    draftableNow: [],
     blocked_now: [],
+    blockedNow: [],
     ready_to_pay_now: [],
+    readyToPayNow: [],
     blocked_for_pay_now: [],
     hidden_indefinite_snoozes: [],
+    hiddenIndefiniteSnoozes: [],
     ready_preview_lines: [],
+    readyPreviewLines: [],
     blocked_preview_lines: [],
+    blockedPreviewLines: [],
     hidden_preview_lines: [],
+    hiddenPreviewLines: [],
     blocked_for_pay: [],
     blockedForPay: [],
     blockedForPayNow: [],
-    blockedNow: [],
-    blockedPreviewLines: [],
     cases_resolutions: [],
-    casesResolutions: [],
-    caseResolutionStates: []
+    casesResolutions: []
   });
   const getComponentStateCache = (payload) => {
     const obj = isPlainObject(payload) ? payload : {};
@@ -115354,7 +115366,14 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     'itemisation',
     'preview_rows',
     'previewRows',
+    'preview_lines',
+    'previewLines',
     'rows',
+    'items',
+    'draftable_now',
+    'draftableNow',
+    'ready_to_pay_now',
+    'readyToPayNow',
     'ready_preview_lines',
     'readyPreviewLines',
     'blocked_for_pay',
@@ -115369,8 +115388,14 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     'casesResolutions',
     'case_resolution_states',
     'caseResolutionStates',
+    'blocked_case_states',
+    'blockedCaseStates',
+    'safe_case_states',
+    'safeCaseStates',
     'hidden_preview_lines',
-    'hiddenPreviewLines'
+    'hiddenPreviewLines',
+    'hidden_indefinite_snoozes',
+    'hiddenIndefiniteSnoozes'
   ];
   const nestedPreviewRowArrayKeys = [
     'itemisation',
@@ -115379,6 +115404,11 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     'preview_lines',
     'previewLines',
     'rows',
+    'items',
+    'draftable_now',
+    'draftableNow',
+    'ready_to_pay_now',
+    'readyToPayNow',
     'ready_preview_lines',
     'readyPreviewLines',
     'blocked_for_pay',
@@ -115393,8 +115423,14 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     'casesResolutions',
     'case_resolution_states',
     'caseResolutionStates',
+    'blocked_case_states',
+    'blockedCaseStates',
+    'safe_case_states',
+    'safeCaseStates',
     'hidden_preview_lines',
-    'hiddenPreviewLines'
+    'hiddenPreviewLines',
+    'hidden_indefinite_snoozes',
+    'hiddenIndefiniteSnoozes'
   ];
   const previewPayeeCollectionKeys = ['paye_candidates', 'payeCandidates', 'non_paye_payees', 'nonPayePayees'];
   const addPreviewRowsFromPayload = (payload, out, seen) => {
@@ -115431,8 +115467,14 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
         'casesResolutions',
         'case_resolution_states',
         'caseResolutionStates',
+        'blocked_case_states',
+        'blockedCaseStates',
+        'safe_case_states',
+        'safeCaseStates',
         'hidden_preview_lines',
-        'hiddenPreviewLines'
+        'hiddenPreviewLines',
+        'hidden_indefinite_snoozes',
+        'hiddenIndefiniteSnoozes'
       ]) {
         for (const row of asArray(componentStateCache[key])) pushUniquePreviewRow(out, seen, row);
       }
@@ -115458,6 +115500,77 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     return raw;
   };
   const isTruthyFlag = (value) => value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(trimStr(value).toLowerCase());
+  const firstDefinedValue = (...values) => {
+    for (const value of values) {
+      if (value !== undefined && value !== null && !(typeof value === 'string' && trimStr(value) === '')) return value;
+    }
+    return undefined;
+  };
+  const postDraftUnavailableOperationTypes = new Set(['DRAFT_CREATE', 'PAYMENT_EXECUTE', 'PAYMENT_SETTLE']);
+  const postDraftRestoreOperationTypes = new Set(['DRAFT_CANCEL', 'DRAFT_DELETE']);
+  const isPostDraftUnavailablePreviewRow = (row) => {
+    if (!isPlainObject(row)) return false;
+    const rowJson = isPlainObject(row.row_json)
+      ? row.row_json
+      : (isPlainObject(row.rowJson) ? row.rowJson : {});
+    const explicitUnavailable = firstDefinedValue(
+      row.post_draft_unavailable,
+      row.postDraftUnavailable,
+      rowJson.post_draft_unavailable,
+      rowJson.postDraftUnavailable
+    );
+    if (explicitUnavailable !== undefined && isTruthyFlag(explicitUnavailable)) return true;
+    const overlayActive = firstDefinedValue(
+      row.post_draft_overlay_active,
+      row.postDraftOverlayActive,
+      rowJson.post_draft_overlay_active,
+      rowJson.postDraftOverlayActive
+    );
+    if (overlayActive !== undefined && !isTruthyFlag(overlayActive)) return false;
+    const overlayApplied = firstDefinedValue(
+      row.post_draft_overlay_applied,
+      row.postDraftOverlayApplied,
+      rowJson.post_draft_overlay_applied,
+      rowJson.postDraftOverlayApplied
+    );
+    if (!isTruthyFlag(overlayApplied)) return false;
+    const operationType = trimStr(firstDefinedValue(
+      row.post_draft_overlay_operation_type,
+      row.postDraftOverlayOperationType,
+      rowJson.post_draft_overlay_operation_type,
+      rowJson.postDraftOverlayOperationType
+    ) || '').toUpperCase();
+    return postDraftUnavailableOperationTypes.has(operationType);
+  };
+  const isExplicitlyRestoredPreviewRow = (row) => {
+    if (!isPlainObject(row)) return false;
+    const rowJson = isPlainObject(row.row_json)
+      ? row.row_json
+      : (isPlainObject(row.rowJson) ? row.rowJson : {});
+    const explicitUnavailable = firstDefinedValue(
+      row.post_draft_unavailable,
+      row.postDraftUnavailable,
+      rowJson.post_draft_unavailable,
+      rowJson.postDraftUnavailable
+    );
+    const overlayActive = firstDefinedValue(
+      row.post_draft_overlay_active,
+      row.postDraftOverlayActive,
+      rowJson.post_draft_overlay_active,
+      rowJson.postDraftOverlayActive
+    );
+    const operationType = trimStr(firstDefinedValue(
+      row.post_draft_overlay_operation_type,
+      row.postDraftOverlayOperationType,
+      rowJson.post_draft_overlay_operation_type,
+      rowJson.postDraftOverlayOperationType
+    ) || '').toUpperCase();
+    return explicitUnavailable !== undefined
+      && !isTruthyFlag(explicitUnavailable)
+      && overlayActive !== undefined
+      && !isTruthyFlag(overlayActive)
+      && postDraftRestoreOperationTypes.has(operationType);
+  };
   const firstArrayValue = (...values) => {
     for (const value of values) {
       if (Array.isArray(value)) return value;
@@ -115467,37 +115580,57 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const readPostActionRefreshPayload = (...sources) => {
     const visited = new WeakSet();
     const candidates = [];
-    const addCandidate = (value) => {
+    const addCandidate = (value, depth) => {
       if (!isPlainObject(value) || visited.has(value)) return;
       visited.add(value);
-      candidates.push(value);
+      candidates.push({ value, depth });
     };
     const walk = (value, depth = 0) => {
       if (!isPlainObject(value) || depth > 5) return;
-      addCandidate(value);
-      for (const key of ['post_action_refresh', 'postActionRefresh', 'workbench_refresh', 'workbenchRefresh', 'refresh', 'result', 'result_json', 'payload', 'progress']) {
+      addCandidate(value, depth);
+      for (const key of ['post_action_refresh', 'postActionRefresh', 'workbench_refresh', 'workbenchRefresh', 'refresh', 'result', 'result_json', 'resultJson', 'result_summary', 'resultSummary', 'payload', 'progress', 'progress_json', 'progressJson']) {
         if (Object.prototype.hasOwnProperty.call(value, key)) walk(value[key], depth + 1);
       }
     };
     for (const source of sources) walk(source, 0);
-    for (const candidate of candidates) {
-      const mode = trimStr(candidate.mode || candidate.refresh_mode || candidate.refreshMode || '').toUpperCase();
-      if (mode === 'PATCH_EXISTING_SESSION'
-          || candidate.patch_applied === true
-          || candidate.patchApplied === true
-          || candidate.targeted_refresh_enqueued === true
-          || candidate.targetedRefreshEnqueued === true
-          || candidate.shadow_compare_failed === true
-          || Array.isArray(candidate.patched_row_ids)
-          || Array.isArray(candidate.patchedRowIds)
-          || Array.isArray(candidate.affected_candidate_ids)
-          || Array.isArray(candidate.affectedCandidateIds)) {
-        return candidate;
-      }
-    }
-    return null;
+    const scoreCandidate = ({ value, depth }) => {
+      const mode = trimStr(value.mode || value.refresh_mode || value.refreshMode || '').toUpperCase();
+      let score = Math.max(0, depth);
+      if (mode === 'PATCH_EXISTING_SESSION') score += 100;
+      else if (mode) score += 20;
+      if (Array.isArray(value.patched_row_ids) || Array.isArray(value.patchedRowIds)) score += 60;
+      if (Array.isArray(value.affected_economic_keys) || Array.isArray(value.affectedEconomicKeys)) score += 50;
+      if (Array.isArray(value.affected_timesheet_ids) || Array.isArray(value.affectedTimesheetIds)) score += 40;
+      if (Array.isArray(value.affected_candidate_ids) || Array.isArray(value.affectedCandidateIds)) score += 30;
+      if (Array.isArray(value.targeted_refresh_candidate_ids) || Array.isArray(value.targetedRefreshCandidateIds)) score += 25;
+      if (value.patch_applied === true || value.patchApplied === true) score += 15;
+      if (value.targeted_refresh_enqueued === true || value.targetedRefreshEnqueued === true) score += 10;
+      if (value.shadow_compare_failed === true || value.shadowCompareFailed === true) score += 5;
+      return score;
+    };
+    const matches = candidates.filter(({ value }) => {
+      const mode = trimStr(value.mode || value.refresh_mode || value.refreshMode || '').toUpperCase();
+      return mode === 'PATCH_EXISTING_SESSION'
+        || value.patch_applied === true
+        || value.patchApplied === true
+        || value.targeted_refresh_enqueued === true
+        || value.targetedRefreshEnqueued === true
+        || value.shadow_compare_failed === true
+        || value.shadowCompareFailed === true
+        || Array.isArray(value.patched_row_ids)
+        || Array.isArray(value.patchedRowIds)
+        || Array.isArray(value.affected_candidate_ids)
+        || Array.isArray(value.affectedCandidateIds)
+        || Array.isArray(value.affected_timesheet_ids)
+        || Array.isArray(value.affectedTimesheetIds)
+        || Array.isArray(value.affected_economic_keys)
+        || Array.isArray(value.affectedEconomicKeys);
+    });
+    matches.sort((a, b) => scoreCandidate(b) - scoreCandidate(a));
+    return matches.length > 0 ? matches[0].value : null;
   };
   const rowExplicitlySelectedByBackend = (row) => isPlainObject(row)
+    && !isPostDraftUnavailablePreviewRow(row)
     && row.selected === true
     && trimStr(row.selection_state || row.selectionState || row.row_json?.selection_state || row.row_json?.selectionState || '').toUpperCase() === 'SELECTED';
   const numericAmountFromPreviewRow = (row) => {
@@ -115516,27 +115649,50 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   };
   const isReadyToPayPreviewRow = (row) => {
     if (!isPlainObject(row)) return false;
-    const presentationRole = trimStr(row.presentation_role || row.presentationRole || '').toUpperCase();
-    const presentationSection = previewRowPresentationSection(row);
-    const readinessState = trimStr(row.readiness_state || row.readinessState || '').toUpperCase();
-    const rowStatus = trimStr(row.status || row.row_status || row.rowStatus || '').toUpperCase();
-    const section = normalizePreviewPageSection(row.section || row.resolved_section || row.resolvedSection || '');
-    const rowKey = trimStr(row.row_key || row.rowKey || row.line_key || row.lineKey || row.key || '');
-    const sourceKind = trimStr(row.source_kind || row.sourceKind || row.source_type || row.sourceType || '').toUpperCase();
+    if (isPostDraftUnavailablePreviewRow(row)) return false;
+    const rowJson = isPlainObject(row.row_json)
+      ? row.row_json
+      : (isPlainObject(row.rowJson) ? row.rowJson : {});
+    const previewContract = isPlainObject(row.preview_contract)
+      ? row.preview_contract
+      : (isPlainObject(rowJson.preview_contract)
+          ? rowJson.preview_contract
+          : (isPlainObject(rowJson.previewContract) ? rowJson.previewContract : {}));
+    const presentationRole = trimStr(firstDefinedValue(row.presentation_role, row.presentationRole, rowJson.presentation_role, rowJson.presentationRole) || '').toUpperCase();
+    const presentationSection = trimStr(firstDefinedValue(row.presentation_section, row.presentationSection, rowJson.presentation_section, rowJson.presentationSection) || '').toUpperCase();
+    const readinessState = trimStr(firstDefinedValue(row.readiness_state, row.readinessState, rowJson.readiness_state, rowJson.readinessState) || '').toUpperCase();
+    const rowStatus = trimStr(firstDefinedValue(row.status, row.row_status, row.rowStatus, rowJson.status, rowJson.row_status, rowJson.rowStatus, previewContract.status) || '').toUpperCase();
+    const selectionState = trimStr(firstDefinedValue(row.selection_state, row.selectionState, rowJson.selection_state, rowJson.selectionState, previewContract.selection_state, previewContract.selectionState) || '').toUpperCase();
+    const selectionAllowed = firstDefinedValue(row.selection_allowed, row.selectionAllowed, rowJson.selection_allowed, rowJson.selectionAllowed, previewContract.selection_allowed, previewContract.selectionAllowed);
+    const draftableValue = firstDefinedValue(row.draftable, row.is_draftable, row.isDraftable, row.draftable_now, row.draftableNow, rowJson.draftable, rowJson.is_draftable, rowJson.isDraftable, previewContract.draftable);
+    const readyForDraftValue = firstDefinedValue(row.is_ready_for_draft, row.isReadyForDraft, row.ready_for_draft, row.readyForDraft, rowJson.is_ready_for_draft, rowJson.isReadyForDraft, rowJson.ready_for_draft, rowJson.readyForDraft, previewContract.is_ready_for_draft, previewContract.isReadyForDraft);
+    const previewOk = firstDefinedValue(previewContract.ok, previewContract.is_ok, previewContract.isOk);
+    const section = normalizePreviewPageSection(firstDefinedValue(row.section, row.resolved_section, row.resolvedSection, rowJson.section, rowJson.resolved_section, rowJson.resolvedSection) || '');
+    const rowKey = trimStr(firstDefinedValue(row.row_key, row.rowKey, row.line_key, row.lineKey, row.key, rowJson.row_key, rowJson.rowKey, rowJson.line_key, rowJson.lineKey) || '');
+    const sourceKind = trimStr(firstDefinedValue(row.source_kind, row.sourceKind, row.source_type, row.sourceType, rowJson.source_kind, rowJson.sourceKind, rowJson.source_type, rowJson.sourceType) || '').toUpperCase();
     const rowId = rowIdFromPreviewRow(row);
-    const draftableExplicitFalse = row.draftable === false || row.is_draftable === false || row.isDraftable === false || row.draftable_now === false || row.draftableNow === false;
+    const draftableExplicitFalse = draftableValue !== undefined && !isTruthyFlag(draftableValue);
+    const readyForDraftExplicitFalse = readyForDraftValue !== undefined && !isTruthyFlag(readyForDraftValue);
     if (presentationRole === 'HIDDEN') return false;
     if (sourceKind === 'TIMESHEET_SNAPSHOT' || sourceKind === 'TIMESHEET_SNAPSHOT_EVIDENCE' || sourceKind === 'RAW_TIMESHEET_SNAPSHOT' || sourceKind === 'INTERNAL_ONLY') return false;
     if (rowKey.toLowerCase().startsWith('timesheet_snapshot:')) return false;
-    if (readinessState === 'BLOCKED' || rowStatus === 'BLOCKED' || rowStatus === 'ERROR') return false;
-    if (row.blocked === true || row.do_not_pay === true || row.doNotPay === true || row.excluded === true) return false;
-    if (draftableExplicitFalse) return false;
+    if (rowStatus && rowStatus !== 'READY') return false;
+    if (readinessState === 'BLOCKED' || readinessState === 'NOT_SELECTABLE') return false;
+    if (['NOT_SELECTABLE', 'EXCLUDED', 'SUPERSEDED', 'DIRTY'].includes(selectionState)) return false;
+    if (selectionAllowed !== undefined && !isTruthyFlag(selectionAllowed)) return false;
+    if (previewOk !== undefined && !isTruthyFlag(previewOk)) return false;
+    if (isTruthyFlag(firstDefinedValue(row.blocked, rowJson.blocked))) return false;
+    if (isTruthyFlag(firstDefinedValue(row.do_not_pay, row.doNotPay, rowJson.do_not_pay, rowJson.doNotPay))) return false;
+    if (isTruthyFlag(firstDefinedValue(row.excluded, row.is_excluded_from_allocation, row.isExcludedFromAllocation, rowJson.excluded, rowJson.is_excluded_from_allocation, rowJson.isExcludedFromAllocation))) return false;
+    if (isTruthyFlag(firstDefinedValue(row.case_is_blocked, row.caseIsBlocked, rowJson.case_is_blocked, rowJson.caseIsBlocked))) return false;
+    if (draftableExplicitFalse || readyForDraftExplicitFalse) return false;
     if (!rowId && !rowKey) return false;
-    if (presentationSection === 'READY_TO_PAY') return true;
+    if (presentationSection) return presentationSection === 'READY_TO_PAY';
     return section === 'canonical_preview_lines' && readinessState === 'READY_TO_PAY';
   };
   const isDraftableWorkbenchReadyRow = (row) => {
     if (!isPlainObject(row)) return false;
+    if (isPostDraftUnavailablePreviewRow(row)) return false;
     const rowJson = isPlainObject(row.row_json)
       ? row.row_json
       : (isPlainObject(row.rowJson) ? row.rowJson : {});
@@ -115660,8 +115816,10 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       const componentStateCache = getComponentStateCache(payload);
       if (componentStateCache) explicitSources.push(componentStateCache.ready_preview_lines, componentStateCache.readyPreviewLines, componentStateCache.ready_to_pay_now, componentStateCache.readyToPayNow);
     }
-    const explicit = firstNonEmptyArray(...explicitSources);
-    if (explicit.length > 0) return explicit.filter((row) => isPlainObject(row) && trimStr(row.presentation_role || row.presentationRole || '').toUpperCase() !== 'HIDDEN');
+    for (const explicitSource of explicitSources) {
+      const filtered = asArray(explicitSource).filter(isReadyToPayPreviewRow);
+      if (filtered.length > 0) return filtered;
+    }
     return asArray(rowUniverse).filter(isReadyToPayPreviewRow);
   };
   const derivePayeesForWorkbench = (...previewPayloads) => {
@@ -115766,22 +115924,37 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       return Number.isFinite(n) && n > 0;
     });
   };
+  const readyPreviewCollectionKeys = new Set([
+    'canonical_preview_lines', 'canonicalPreviewLines',
+    'itemisation',
+    'preview_rows', 'previewRows',
+    'preview_lines', 'previewLines',
+    'draftable_now', 'draftableNow',
+    'ready_to_pay_now', 'readyToPayNow',
+    'ready_preview_lines', 'readyPreviewLines'
+  ]);
+  const rowCountsAsAvailablePreviewData = (row, collectionKey = '', fallbackSection = '') => {
+    if (!isPlainObject(row)) return false;
+    const resolvedSection = previewRowSectionFromRow(row, fallbackSection || collectionKey);
+    if (readyPreviewCollectionKeys.has(collectionKey) || resolvedSection === 'canonical_preview_lines') {
+      return isReadyToPayPreviewRow(row);
+    }
+    return !isPostDraftUnavailablePreviewRow(row);
+  };
   const payloadNodeHasPreviewRows = (payload) => {
     const obj = isPlainObject(payload) ? payload : {};
-    for (const key of [
-      ...previewRowArrayKeys,
-      'case_resolution_states',
-      'caseResolutionStates'
-    ]) {
-      if (Array.isArray(obj[key]) && obj[key].length > 0) return true;
+    const fallbackSection = normalizePreviewPageSection(
+      obj.resolved_section || obj.resolvedSection || obj.section || obj.requested_section || obj.requestedSection || 'canonical_preview_lines'
+    );
+    for (const key of previewRowArrayKeys) {
+      if (asArray(obj[key]).some((row) => rowCountsAsAvailablePreviewData(row, key, fallbackSection))) return true;
     }
     for (const key of previewPayeeCollectionKeys) {
       const collection = asArray(obj[key]);
-      if (collection.length > 0) return true;
       for (const entry of collection) {
         if (!isPlainObject(entry)) continue;
         for (const rowKey of nestedPreviewRowArrayKeys) {
-          if (Array.isArray(entry[rowKey]) && entry[rowKey].length > 0) return true;
+          if (asArray(entry[rowKey]).some((row) => rowCountsAsAvailablePreviewData(row, rowKey, fallbackSection))) return true;
         }
       }
     }
@@ -115806,10 +115979,16 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
         'casesResolutions',
         'case_resolution_states',
         'caseResolutionStates',
+        'blocked_case_states',
+        'blockedCaseStates',
+        'safe_case_states',
+        'safeCaseStates',
         'hidden_preview_lines',
-        'hiddenPreviewLines'
+        'hiddenPreviewLines',
+        'hidden_indefinite_snoozes',
+        'hiddenIndefiniteSnoozes'
       ]) {
-        if (Array.isArray(componentStateCache[key]) && componentStateCache[key].length > 0) return true;
+        if (asArray(componentStateCache[key]).some((row) => rowCountsAsAvailablePreviewData(row, key, fallbackSection))) return true;
       }
     }
     return false;
@@ -115824,7 +116003,9 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       seen.add(s);
       out.push(s);
     };
-    for (const row of collectPreviewRowObjects(...previewPayloads)) pushId(rowIdFromPreviewRow(row));
+    for (const row of collectPreviewRowObjects(...previewPayloads)) {
+      if (isDraftableWorkbenchReadyRow(row)) pushId(rowIdFromPreviewRow(row));
+    }
     return out;
   };
   const normalizeSelectedPreviewRowMode = (raw, validPreviewRowIds = [], selectedPreviewRowIds = []) => {
@@ -116152,16 +116333,267 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     shadow_compare_failed: postActionShadowCompareFailed,
     replacement_session_created: postActionReplacementSessionCreated
   } : null;
-  const previousPreviewPages = collectExistingPreviewPagesForWorkbench();
-  const incomingPreviewPages = collectIncomingPreviewPagesForPayload(responseObj, previewObj, progressObj);
-  const mergedPreviewPages = activeSessionChanged ? { ...incomingPreviewPages } : { ...previousPreviewPages, ...incomingPreviewPages };
+  const readNestedBatchMutationOperationType = (...sources) => {
+    const visited = new WeakSet();
+    const knownOperationTypes = new Set([
+      'DRAFT_CREATE',
+      'DRAFT_DELETE',
+      'DRAFT_CANCEL',
+      'PAYMENT_EXECUTE',
+      'PAYMENT_SETTLE'
+    ]);
+    const walk = (value, depth = 0) => {
+      if (!isPlainObject(value) || depth > 6 || visited.has(value)) return '';
+      visited.add(value);
+      const direct = trimStr(value.operation_type || value.operationType || '').toUpperCase();
+      if (knownOperationTypes.has(direct)) return direct;
+      for (const key of ['post_action_refresh', 'postActionRefresh', 'workbench_refresh', 'workbenchRefresh', 'refresh', 'result', 'result_json', 'resultJson', 'result_summary', 'resultSummary', 'payload', 'progress', 'progress_json', 'progressJson']) {
+        if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+        const nested = walk(value[key], depth + 1);
+        if (nested) return nested;
+      }
+      return '';
+    };
+    for (const source of sources) {
+      const resolved = walk(source, 0);
+      if (resolved) return resolved;
+    }
+    return '';
+  };
+  const postActionOperationType = trimStr(
+    postActionRefresh?.operation_type ||
+    postActionRefresh?.operationType ||
+    readNestedBatchMutationOperationType(responseObj, progressObj) ||
+    ''
+  ).toUpperCase();
+  const postActionConsumesPreviewRows = !!(
+    cloneOrPatchContext &&
+    postDraftUnavailableOperationTypes.has(postActionOperationType) &&
+    (postActionRefresh?.patch_applied === true || postActionRefresh?.patchApplied === true || responseObj.patch_applied === true || responseObj.patchApplied === true)
+  );
+  const postActionPatchedRowIdSet = new Set(postActionPatchedRowIds);
+  const completeEconomicIdentityKey = (candidateId, timesheetId, keyType, keyValue) => {
+    const parts = [
+      trimStr(candidateId || ''),
+      trimStr(timesheetId || ''),
+      trimStr(keyType || '').toUpperCase(),
+      trimStr(keyValue || '')
+    ];
+    return parts.every(Boolean) ? parts.join('|') : '';
+  };
+  const postActionAffectedEconomicKeySet = new Set(postActionAffectedEconomicKeys
+    .filter(isPlainObject)
+    .map((entry) => completeEconomicIdentityKey(
+      entry.candidate_id || entry.candidateId,
+      entry.timesheet_id || entry.timesheetId,
+      entry.key_type || entry.keyType,
+      entry.key_value || entry.keyValue
+    ))
+    .filter(Boolean));
+  const previewRowEconomicIdentityKey = (row) => {
+    if (!isPlainObject(row)) return '';
+    const rowJson = isPlainObject(row.row_json) ? row.row_json : (isPlainObject(row.rowJson) ? row.rowJson : {});
+    const economicKey = isPlainObject(row.economic_key)
+      ? row.economic_key
+      : (isPlainObject(rowJson.economic_key) ? rowJson.economic_key : {});
+    return completeEconomicIdentityKey(
+      row.candidate_id || row.candidateId || rowJson.candidate_id || rowJson.candidateId,
+      row.timesheet_id || row.timesheetId || rowJson.timesheet_id || rowJson.timesheetId || economicKey.timesheet_id || economicKey.timesheetId,
+      row.key_type || row.keyType || rowJson.key_type || rowJson.keyType || economicKey.key_type || economicKey.keyType,
+      row.key_value || row.keyValue || rowJson.key_value || rowJson.keyValue || economicKey.key_value || economicKey.keyValue
+    );
+  };
+  const isDirectlyUnavailableForCurrentPostAction = (row) => {
+    if (!isPlainObject(row)) return false;
+    if (isPostDraftUnavailablePreviewRow(row)) return true;
+    if (!postActionConsumesPreviewRows) return false;
+    const rowId = rowIdFromPreviewRow(row);
+    if (rowId && postActionPatchedRowIdSet.has(rowId)) return true;
+    const economicIdentityKey = previewRowEconomicIdentityKey(row);
+    return !!economicIdentityKey && postActionAffectedEconomicKeySet.has(economicIdentityKey);
+  };
+  const collectPreviewRowOccurrences = (...sources) => {
+    const out = [];
+    const visitedContainers = new WeakSet();
+    const pushRows = (rows) => {
+      for (const row of asArray(rows)) {
+        if (isPlainObject(row)) out.push(row);
+      }
+    };
+    const walk = (value, depth = 0) => {
+      if (!isPlainObject(value) || depth > 8 || visitedContainers.has(value)) return;
+      visitedContainers.add(value);
+      for (const key of previewRowArrayKeys) pushRows(value[key]);
+      for (const key of previewPayeeCollectionKeys) {
+        for (const entry of asArray(value[key])) {
+          if (!isPlainObject(entry)) continue;
+          for (const rowKey of nestedPreviewRowArrayKeys) pushRows(entry[rowKey]);
+        }
+      }
+      const componentStateCache = getComponentStateCache(value);
+      if (componentStateCache && componentStateCache !== value) walk(componentStateCache, depth + 1);
+      for (const key of ['preview', 'progress', 'data']) {
+        if (isPlainObject(value[key])) walk(value[key], depth + 1);
+      }
+      for (const key of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
+        const pageMap = value[key];
+        if (!isPlainObject(pageMap)) continue;
+        for (const page of Object.values(pageMap)) {
+          if (isPlainObject(page)) walk(page, depth + 1);
+        }
+      }
+    };
+    for (const source of sources) walk(source, 0);
+    return out;
+  };
+  const explicitlyRestoredPreviewRowIds = new Set();
+  for (const row of collectPreviewRowOccurrences(responseObj, previewObj, progressObj)) {
+    if (!isExplicitlyRestoredPreviewRow(row)) continue;
+    const rowId = rowIdFromPreviewRow(row);
+    if (rowId) explicitlyRestoredPreviewRowIds.add(rowId);
+  }
+  const unavailablePreviewRowIds = new Set(postActionConsumesPreviewRows ? postActionPatchedRowIds : []);
+  const unavailableEconomicIdentityKeys = new Set(postActionConsumesPreviewRows ? postActionAffectedEconomicKeySet : []);
+  const unavailableEvidenceSources = [
+    responseObj,
+    previewObj,
+    progressObj,
+    ...(!activeSessionChanged ? [
+      wiz.preview,
+      wiz.preview?.data,
+      wiz.preview?.componentStateCache,
+      wiz.decisions,
+      wiz.workbench
+    ] : [])
+  ];
+  for (const row of collectPreviewRowOccurrences(...unavailableEvidenceSources)) {
+    if (!isDirectlyUnavailableForCurrentPostAction(row)) continue;
+    const rowId = rowIdFromPreviewRow(row);
+    const economicIdentityKey = previewRowEconomicIdentityKey(row);
+    if (rowId) unavailablePreviewRowIds.add(rowId);
+    if (economicIdentityKey) unavailableEconomicIdentityKeys.add(economicIdentityKey);
+  }
+  const isUnavailableForCurrentPostAction = (row) => {
+    if (!isPlainObject(row)) return false;
+    if (isExplicitlyRestoredPreviewRow(row)) return false;
+    if (isDirectlyUnavailableForCurrentPostAction(row)) return true;
+    const rowId = rowIdFromPreviewRow(row);
+    if (rowId && unavailablePreviewRowIds.has(rowId)) return true;
+    const economicIdentityKey = previewRowEconomicIdentityKey(row);
+    return !!economicIdentityKey && unavailableEconomicIdentityKeys.has(economicIdentityKey);
+  };
+  const prunePreviewRowsForCurrentPostAction = (rows) => asArray(rows).filter((row) => isPlainObject(row) && !isUnavailableForCurrentPostAction(row));
+  const prunePreviewCollectionsInPlace = (target) => {
+    if (!isPlainObject(target)) return target;
+    for (const key of [
+      ...previewRowArrayKeys,
+      'draftable_now', 'draftableNow',
+      'ready_to_pay_now', 'readyToPayNow',
+      'blocked_for_pay_now', 'blockedForPayNow',
+      'blocked_now', 'blockedNow',
+      'hidden_indefinite_snoozes', 'hiddenIndefiniteSnoozes'
+    ]) {
+      if (Array.isArray(target[key])) target[key] = prunePreviewRowsForCurrentPostAction(target[key]);
+    }
+    for (const key of previewPayeeCollectionKeys) {
+      if (!Array.isArray(target[key])) continue;
+      target[key] = target[key].map((entry) => {
+        if (!isPlainObject(entry)) return entry;
+        const nextEntry = { ...entry };
+        for (const rowKey of nestedPreviewRowArrayKeys) {
+          if (Array.isArray(nextEntry[rowKey])) nextEntry[rowKey] = prunePreviewRowsForCurrentPostAction(nextEntry[rowKey]);
+        }
+        return nextEntry;
+      });
+    }
+    const componentStateCache = getComponentStateCache(target);
+    if (componentStateCache && componentStateCache !== target) prunePreviewCollectionsInPlace(componentStateCache);
+    for (const key of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
+      if (isPlainObject(target[key])) target[key] = prunePreviewPageMapForCurrentPostAction(target[key]);
+    }
+    if (isPlainObject(target.preview) && target.preview !== target) prunePreviewCollectionsInPlace(target.preview);
+    return target;
+  };
+  const pruneSelectionIdsInPlace = (target) => {
+    if (!isPlainObject(target)) return target;
+    const rowIdsToRemove = new Set([
+      ...Array.from(unavailablePreviewRowIds).filter((id) => !explicitlyRestoredPreviewRowIds.has(id)),
+      ...(postActionConsumesPreviewRows ? postActionPatchedRowIds : [])
+    ]);
+    for (const row of collectPreviewRowObjects(target)) {
+      if (!isUnavailableForCurrentPostAction(row)) continue;
+      const rowId = rowIdFromPreviewRow(row);
+      if (rowId) rowIdsToRemove.add(rowId);
+    }
+    if (rowIdsToRemove.size > 0) {
+      for (const key of [
+        'selected_preview_row_ids',
+        'selectedPreviewRowIds',
+        'server_selected_preview_row_ids',
+        'serverSelectedPreviewRowIds'
+      ]) {
+        if (Array.isArray(target[key])) {
+          target[key] = normalizeStringArray(target[key]).filter((id) => !rowIdsToRemove.has(id));
+        }
+      }
+    }
+    if (isPlainObject(target.session) && target.session !== target) pruneSelectionIdsInPlace(target.session);
+    return target;
+  };
+  const prunePreviewPageMapForCurrentPostAction = (pageMap) => {
+    const nextMap = isPlainObject(pageMap) ? (cloneJson(pageMap) || {}) : {};
+    for (const [pageKey, page] of Object.entries(nextMap)) {
+      if (!isPlainObject(page)) continue;
+      const pageSection = normalizePreviewPageSection(
+        page.resolved_section || page.resolvedSection || page.section || page.requested_section || page.requestedSection || pageKey || 'canonical_preview_lines'
+      );
+      const sourceRows = Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
+      const rows = sourceRows.filter((row) => {
+        if (!isPlainObject(row) || isUnavailableForCurrentPostAction(row)) return false;
+        return rowCountsAsAvailablePreviewData(row, 'rows', pageSection);
+      });
+      for (const key of previewRowArrayKeys) {
+        if (!Array.isArray(page[key])) continue;
+        page[key] = page[key].filter((row) => {
+          if (!isPlainObject(row) || isUnavailableForCurrentPostAction(row)) return false;
+          return rowCountsAsAvailablePreviewData(row, key, pageSection);
+        });
+      }
+      const retainedKeys = new Set(rows.map(previewRowDedupeKey).filter(Boolean));
+      const removedCount = new Set(
+        sourceRows
+          .filter((row) => isPlainObject(row) && !retainedKeys.has(previewRowDedupeKey(row)))
+          .map(previewRowDedupeKey)
+          .filter(Boolean)
+      ).size;
+      if (Array.isArray(page.rows)) page.rows = cloneJson(rows) || [];
+      if (Array.isArray(page.items)) page.items = cloneJson(rows) || [];
+      page.returned_count = rows.length;
+      page.returnedCount = rows.length;
+      for (const key of ['known_count', 'knownCount', 'total_count_estimate', 'totalCountEstimate']) {
+        const currentCount = Number(page[key]);
+        if (Number.isFinite(currentCount) && removedCount > 0) {
+          page[key] = Math.max(0, Math.trunc(currentCount) - removedCount);
+        }
+      }
+      pruneSelectionIdsInPlace(page);
+    }
+    return nextMap;
+  };
+  prunePreviewCollectionsInPlace(pruneSelectionIdsInPlace(responseObj));
+  if (progressObj !== responseObj) prunePreviewCollectionsInPlace(pruneSelectionIdsInPlace(progressObj));
+  const previousPreviewPages = prunePreviewPageMapForCurrentPostAction(collectExistingPreviewPagesForWorkbench());
+  const incomingPreviewPages = prunePreviewPageMapForCurrentPostAction(collectIncomingPreviewPagesForPayload(responseObj, previewObj, progressObj));
+  const mergedPreviewPages = prunePreviewPageMapForCurrentPostAction(activeSessionChanged ? { ...incomingPreviewPages } : { ...previousPreviewPages, ...incomingPreviewPages });
   const previousPreviewPageRowsBySection = collectPreviewRowsBySectionFromPageMap(previousPreviewPages);
   const previousStateRowsBySection = collectExistingPreviewRowsBySectionForWorkbench();
-  const previousRowsBySection = {
-    canonical_preview_lines: mergePreviewRowsUnique(previousPreviewPageRowsBySection.canonical_preview_lines, previousStateRowsBySection.canonical_preview_lines),
-    blocked_for_pay: mergePreviewRowsUnique(previousPreviewPageRowsBySection.blocked_for_pay, previousStateRowsBySection.blocked_for_pay),
-    cases_resolutions: mergePreviewRowsUnique(previousPreviewPageRowsBySection.cases_resolutions, previousStateRowsBySection.cases_resolutions)
-  };
+  const previousRowsBySection = activeSessionChanged
+    ? { canonical_preview_lines: [], blocked_for_pay: [], cases_resolutions: [] }
+    : {
+        canonical_preview_lines: prunePreviewRowsForCurrentPostAction(mergePreviewRowsUnique(previousPreviewPageRowsBySection.canonical_preview_lines, previousStateRowsBySection.canonical_preview_lines)),
+        blocked_for_pay: prunePreviewRowsForCurrentPostAction(mergePreviewRowsUnique(previousPreviewPageRowsBySection.blocked_for_pay, previousStateRowsBySection.blocked_for_pay)),
+        cases_resolutions: prunePreviewRowsForCurrentPostAction(mergePreviewRowsUnique(previousPreviewPageRowsBySection.cases_resolutions, previousStateRowsBySection.cases_resolutions))
+      };
   const incomingPreviewPageRowsBySection = collectPreviewRowsBySectionFromPageMap(incomingPreviewPages);
   const fetchedPreviewSections = new Set();
   for (const page of Object.values(isPlainObject(incomingPreviewPages) ? incomingPreviewPages : {})) {
@@ -116396,7 +116828,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       progress: cloneJson(progressObj) || progressObj
     };
 
-    const pendingPreviewEnvelope = (!shouldClearRowBackedStateForPending && isPlainObject(wiz.preview.data))
+    const pendingPreviewEnvelopeRaw = (!shouldClearRowBackedStateForPending && isPlainObject(wiz.preview.data))
       ? {
           ...(cloneJson(wiz.preview.data) || {}),
           ...pendingEnvelope,
@@ -116411,9 +116843,10 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
           page_cache: cloneJson(mergedPreviewPages) || {}
         }
       : pendingEnvelope;
+    const pendingPreviewEnvelope = prunePreviewCollectionsInPlace(pruneSelectionIdsInPlace(pendingPreviewEnvelopeRaw));
 
     const preservedPreviewForPending = !shouldClearRowBackedStateForPending
-      ? (isPlainObject(pendingPreviewEnvelope.preview) ? pendingPreviewEnvelope.preview : (isPlainObject(wiz.preview.data?.preview) ? wiz.preview.data.preview : {}))
+      ? (isPlainObject(pendingPreviewEnvelope.preview) ? pendingPreviewEnvelope.preview : (isPlainObject(wiz.preview.data?.preview) ? prunePreviewCollectionsInPlace(cloneJson(wiz.preview.data.preview) || {}) : {}))
       : {};
     wiz.preview.data = pendingPreviewEnvelope;
     wiz.preview.loading = !responseReadyEmpty;
@@ -116449,6 +116882,29 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     wiz.lastPreviewFailure = null;
 
     if (!shouldClearRowBackedStateForPending) {
+      prunePreviewCollectionsInPlace(pruneSelectionIdsInPlace(wiz.decisions));
+      prunePreviewCollectionsInPlace(pruneSelectionIdsInPlace(wiz.workbench));
+      pruneSelectionIdsInPlace(wiz);
+      prunePreviewCollectionsInPlace(wiz.preview.componentStateCache);
+      if (postActionConsumesPreviewRows && postActionPatchedRowIdSet.size > 0) {
+        const remainingSelectedIds = normalizeStringArray(wiz.decisions.selected_preview_row_ids);
+        if (remainingSelectedIds.length <= 0 && trimStr(wiz.decisions.selected_preview_row_mode || wiz.selected_preview_row_mode || '').toUpperCase() === 'EXPLICIT_SUBSET') {
+          wiz.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+          wiz.decisions.selectedPreviewRowMode = 'EXPLICIT_NONE';
+          wiz.selected_preview_row_ids = [];
+          wiz.selectedPreviewRowIds = [];
+          wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
+          wiz.selectedPreviewRowMode = 'EXPLICIT_NONE';
+          wiz.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+          wiz.workbench.selectedPreviewRowMode = 'EXPLICIT_NONE';
+        }
+      }
+      const pendingSelectedIds = normalizeStringArray(wiz.decisions.selected_preview_row_ids || wiz.decisions.selectedPreviewRowIds || []);
+      const pendingSelectedMode = trimStr(wiz.decisions.selected_preview_row_mode || wiz.decisions.selectedPreviewRowMode || wiz.selected_preview_row_mode || wiz.selectedPreviewRowMode || 'IMPLICIT_ALL').toUpperCase();
+      wiz.selected_preview_row_ids = [...pendingSelectedIds];
+      wiz.selectedPreviewRowIds = [...pendingSelectedIds];
+      wiz.selected_preview_row_mode = pendingSelectedMode;
+      wiz.selectedPreviewRowMode = pendingSelectedMode;
       wiz.decisions.pending_candidate_ids = pendingIds;
       wiz.decisions.dirty_candidate_ids = dirtyIds;
       wiz.decisions.create_draft_refresh_pending = !responseReadyEmpty;
@@ -116469,10 +116925,15 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     }
 
     wiz.decisions.selected_preview_row_ids = [];
+    wiz.decisions.selectedPreviewRowIds = [];
+    wiz.selected_preview_row_ids = [];
+    wiz.selectedPreviewRowIds = [];
     wiz.decisions.server_selected_preview_row_ids = [];
     wiz.decisions.server_selected_preview_row_ids_provided = true;
     wiz.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wiz.decisions.selectedPreviewRowMode = 'EXPLICIT_NONE';
     wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wiz.selectedPreviewRowMode = 'EXPLICIT_NONE';
     wiz.local_selected_preview_row_ids_dirty = false;
     wiz.decisions.pending_candidate_ids = pendingIds;
     wiz.decisions.dirty_candidate_ids = dirtyIds;
@@ -116494,6 +116955,11 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     wiz.decisions.case_resolution_states = [];
     wiz.decisions.caseResolutionStates = [];
     wiz.decisions.cases_resolutions = [];
+    wiz.decisions.casesResolutions = [];
+    wiz.decisions.blocked_case_states = [];
+    wiz.decisions.blockedCaseStates = [];
+    wiz.decisions.safe_case_states = [];
+    wiz.decisions.safeCaseStates = [];
 
     wiz.workbench.session_id = responseReadyEmpty ? (sessionId || null) : null;
     wiz.workbench.snapshot_run_id = responseReadyEmpty ? (snapshotRunId || null) : null;
@@ -116520,6 +116986,11 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     wiz.workbench.case_resolution_states = [];
     wiz.workbench.caseResolutionStates = [];
     wiz.workbench.cases_resolutions = [];
+    wiz.workbench.casesResolutions = [];
+    wiz.workbench.blocked_case_states = [];
+    wiz.workbench.blockedCaseStates = [];
+    wiz.workbench.safe_case_states = [];
+    wiz.workbench.safeCaseStates = [];
     wiz.workbench.payees = [];
     wiz.workbench.summary = {};
     wiz.workbench.create_draft_refresh_pending = !responseReadyEmpty;
@@ -116612,18 +117083,55 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const safeCaseStates = firstNonEmptyArray(previewObj.safe_case_states, responseObj.safe_case_states, previewComponentStateCache.safe_case_states, responseComponentStateCache.safe_case_states);
   const stablePreviewRows = collectPreviewRowObjects(previewObj, responseObj);
   const stableReadyPreviewRows = stablePreviewRows.filter(isReadyToPayPreviewRow);
+  const firstNonEmptyFilteredArray = (predicate, ...values) => {
+    for (const value of values) {
+      const filtered = asArray(value).filter(predicate);
+      if (filtered.length > 0) return filtered;
+    }
+    return [];
+  };
   const explicitlySelectedRowsFromPayload = stablePreviewRows.filter(rowExplicitlySelectedByBackend);
   const explicitlySelectedPreviewRowIdsFromRows = normalizeStringArray(explicitlySelectedRowsFromPayload.map(rowIdFromPreviewRow));
-  const explicitCanonicalPreviewLines = firstNonEmptyArray(previewObj.canonical_preview_lines, responseObj.canonical_preview_lines, previewObj.canonicalPreviewLines, responseObj.canonicalPreviewLines);
-  const canonicalPreviewLines = explicitCanonicalPreviewLines.length > 0 ? explicitCanonicalPreviewLines.filter(isReadyToPayPreviewRow) : firstNonEmptyArray(pageReadyRows, stableReadyPreviewRows);
-  const explicitPreviewRows = firstNonEmptyArray(previewObj.preview_rows, responseObj.preview_rows, previewObj.previewRows, responseObj.previewRows, previewObj.rows, responseObj.rows);
-  const previewRows = explicitPreviewRows.length > 0 ? explicitPreviewRows.filter(isReadyToPayPreviewRow) : firstNonEmptyArray(pageReadyRows, stableReadyPreviewRows);
+  const canonicalPreviewLines = firstNonEmptyFilteredArray(
+    isReadyToPayPreviewRow,
+    previewObj.canonical_preview_lines,
+    responseObj.canonical_preview_lines,
+    previewObj.canonicalPreviewLines,
+    responseObj.canonicalPreviewLines,
+    pageReadyRows,
+    stableReadyPreviewRows
+  );
+  const previewRows = firstNonEmptyFilteredArray(
+    isReadyToPayPreviewRow,
+    previewObj.preview_rows,
+    responseObj.preview_rows,
+    previewObj.previewRows,
+    responseObj.previewRows,
+    previewObj.rows,
+    responseObj.rows,
+    pageReadyRows,
+    stableReadyPreviewRows
+  );
   const readyPreviewLines = deriveReadyPreviewRows(firstNonEmptyArray(pageReadyRows, stableReadyPreviewRows), previewObj, responseObj);
   const blockedPreviewLines = firstNonEmptyArray(previewObj.blocked_preview_lines, responseObj.blocked_preview_lines, previewComponentStateCache.blocked_preview_lines, responseComponentStateCache.blocked_preview_lines, pageBlockedRows);
   const hiddenPreviewLines = firstNonEmptyArray(previewObj.hidden_preview_lines, responseObj.hidden_preview_lines, previewComponentStateCache.hidden_preview_lines, responseComponentStateCache.hidden_preview_lines);
-  const draftableNow = firstNonEmptyArray(previewObj.draftable_now, responseObj.draftable_now, previewComponentStateCache.draftable_now, responseComponentStateCache.draftable_now, readyPreviewLines.filter(isDraftableWorkbenchReadyRow));
+  const draftableNow = firstNonEmptyFilteredArray(
+    isDraftableWorkbenchReadyRow,
+    previewObj.draftable_now,
+    responseObj.draftable_now,
+    previewComponentStateCache.draftable_now,
+    responseComponentStateCache.draftable_now,
+    readyPreviewLines
+  );
   const blockedNow = firstNonEmptyArray(previewObj.blocked_now, responseObj.blocked_now, previewComponentStateCache.blocked_now, responseComponentStateCache.blocked_now, pageBlockedRows);
-  const readyToPayNow = firstNonEmptyArray(previewObj.ready_to_pay_now, responseObj.ready_to_pay_now, previewComponentStateCache.ready_to_pay_now, responseComponentStateCache.ready_to_pay_now, readyPreviewLines);
+  const readyToPayNow = firstNonEmptyFilteredArray(
+    isReadyToPayPreviewRow,
+    previewObj.ready_to_pay_now,
+    responseObj.ready_to_pay_now,
+    previewComponentStateCache.ready_to_pay_now,
+    responseComponentStateCache.ready_to_pay_now,
+    readyPreviewLines
+  );
   const blockedForPayNow = firstNonEmptyArray(previewObj.blocked_for_pay_now, responseObj.blocked_for_pay_now, previewComponentStateCache.blocked_for_pay_now, responseComponentStateCache.blocked_for_pay_now, pageBlockedRows);
   const blockedForPayRows = mergePreviewRowsUnique(blockedForPayNow, blockedNow, blockedPreviewLines, pageBlockedRows);
   const caseResolutionRows = mergePreviewRowsUnique(caseResolutionStates, pageCaseRows);
@@ -116817,12 +117325,33 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       localSelectionMode
     );
   }
+  const genericPayloadSection = normalizePreviewPageSection(
+    responseObj.resolved_section || responseObj.resolvedSection || responseObj.section || responseObj.requested_section || responseObj.requestedSection || previewObj.resolved_section || previewObj.resolvedSection || previewObj.section || 'canonical_preview_lines'
+  );
+  const filterGenericPreviewRows = (rows) => asArray(rows).filter((row) =>
+    rowCountsAsAvailablePreviewData(row, 'rows', genericPayloadSection)
+  );
+  const firstNonEmptyGenericPreviewRows = (...values) => {
+    for (const value of values) {
+      const filtered = filterGenericPreviewRows(value);
+      if (filtered.length > 0) return filtered;
+    }
+    return [];
+  };
   const normalizedPreviewPayload = {
     ...(isPlainObject(previewObj) ? previewObj : {}),
     canonical_preview_lines: cloneJson(canonicalPreviewLines) || [],
+    canonicalPreviewLines: cloneJson(canonicalPreviewLines) || [],
     preview_rows: cloneJson(previewRows) || [],
-    rows: cloneJson(firstNonEmptyArray(previewObj.rows, responseObj.rows, previewRows)) || [],
+    previewRows: cloneJson(previewRows) || [],
+    rows: cloneJson(firstNonEmptyGenericPreviewRows(previewObj.rows, responseObj.rows, previewRows)) || [],
+    items: cloneJson(firstNonEmptyGenericPreviewRows(previewObj.items, responseObj.items, previewObj.rows, responseObj.rows, previewRows)) || [],
     ready_preview_lines: cloneJson(readyPreviewLines) || [],
+    readyPreviewLines: cloneJson(readyPreviewLines) || [],
+    draftable_now: cloneJson(draftableNow) || [],
+    draftableNow: cloneJson(draftableNow) || [],
+    ready_to_pay_now: cloneJson(readyToPayNow) || [],
+    readyToPayNow: cloneJson(readyToPayNow) || [],
     blocked_preview_lines: cloneJson(blockedForPayRows) || [],
     blockedPreviewLines: cloneJson(blockedForPayRows) || [],
     blocked_for_pay: cloneJson(blockedForPayRows) || [],
@@ -116833,32 +117362,49 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     case_resolution_states: cloneJson(caseResolutionRows) || [],
     caseResolutionStates: cloneJson(caseResolutionRows) || [],
     cases_resolutions: cloneJson(caseResolutionRows) || [],
+    casesResolutions: cloneJson(caseResolutionRows) || [],
+    blocked_case_states: cloneJson(blockedCaseStates) || [],
+    blockedCaseStates: cloneJson(blockedCaseStates) || [],
+    safe_case_states: cloneJson(safeCaseStates) || [],
+    safeCaseStates: cloneJson(safeCaseStates) || [],
     hidden_preview_lines: cloneJson(hiddenPreviewLines) || [],
+    hiddenPreviewLines: cloneJson(hiddenPreviewLines) || [],
     payees: cloneJson(payees) || [],
     summary: cloneJson(previewSummary) || {},
     componentStateCache: {
       ...(isPlainObject(previewComponentStateCache) ? cloneJson(previewComponentStateCache) || {} : {}),
+      canonical_preview_lines: cloneJson(canonicalPreviewLines) || [],
+      canonicalPreviewLines: cloneJson(canonicalPreviewLines) || [],
+      preview_rows: cloneJson(previewRows) || [],
+      previewRows: cloneJson(previewRows) || [],
       case_resolution_states: cloneJson(caseResolutionRows) || [],
       caseResolutionStates: cloneJson(caseResolutionRows) || [],
       cases_resolutions: cloneJson(caseResolutionRows) || [],
       blocked_case_states: cloneJson(blockedCaseStates) || [],
+      blockedCaseStates: cloneJson(blockedCaseStates) || [],
       safe_case_states: cloneJson(safeCaseStates) || [],
+      safeCaseStates: cloneJson(safeCaseStates) || [],
       draftable_now: cloneJson(draftableNow) || [],
+      draftableNow: cloneJson(draftableNow) || [],
       blocked_now: cloneJson(blockedForPayRows) || [],
       blockedNow: cloneJson(blockedForPayRows) || [],
       ready_to_pay_now: cloneJson(readyToPayNow) || [],
+      readyToPayNow: cloneJson(readyToPayNow) || [],
       blocked_for_pay: cloneJson(blockedForPayRows) || [],
       blocked_for_pay_now: cloneJson(blockedForPayRows) || [],
       blockedForPayNow: cloneJson(blockedForPayRows) || [],
       hidden_indefinite_snoozes: cloneJson(hiddenIndefiniteSnoozes) || [],
       ready_preview_lines: cloneJson(readyPreviewLines) || [],
+      readyPreviewLines: cloneJson(readyPreviewLines) || [],
       blocked_preview_lines: cloneJson(blockedForPayRows) || [],
       blockedPreviewLines: cloneJson(blockedForPayRows) || [],
-      hidden_preview_lines: cloneJson(hiddenPreviewLines) || []
+      hidden_preview_lines: cloneJson(hiddenPreviewLines) || [],
+      hiddenPreviewLines: cloneJson(hiddenPreviewLines) || []
     }
   };
-  const itemisationRows = firstNonEmptyArray(previewObj.itemisation, responseObj.itemisation);
+  const itemisationRows = prunePreviewRowsForCurrentPostAction(firstNonEmptyArray(previewObj.itemisation, responseObj.itemisation));
   if (itemisationRows.length > 0) normalizedPreviewPayload.itemisation = cloneJson(itemisationRows) || [];
+  prunePreviewCollectionsInPlace(normalizedPreviewPayload);
 
   const normalizedEnvelope = {
     ...(responseObj && typeof responseObj === 'object' ? responseObj : {}),
@@ -116906,6 +117452,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   if (!effectiveServerSelectedPreviewRowIdsProvided) {
     try { delete normalizedEnvelope.session.server_selected_preview_row_ids; } catch {}
   }
+  prunePreviewCollectionsInPlace(pruneSelectionIdsInPlace(normalizedEnvelope));
 
   wiz.preview.data = normalizedEnvelope;
   wiz.preview.loading = hasPendingWorkbenchRefresh;
@@ -116927,47 +117474,67 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.preview.preview_epoch = Number.isFinite(Number(wiz.preview.preview_epoch)) ? (Number(wiz.preview.preview_epoch) + 1) : 1;
   wiz.preview.candidateDebtInfo = (isPlainObject(previewObj.candidateDebtInfo) ? cloneJson(previewObj.candidateDebtInfo) : (isPlainObject(previewObj.candidate_debt_info) ? cloneJson(previewObj.candidate_debt_info) : {})) || {};
   wiz.preview.componentStateCache = {
+    canonical_preview_lines: cloneJson(canonicalPreviewLines) || [],
+    canonicalPreviewLines: cloneJson(canonicalPreviewLines) || [],
+    preview_rows: cloneJson(previewRows) || [],
+    previewRows: cloneJson(previewRows) || [],
     case_resolution_states: cloneJson(caseResolutionRows) || [],
     caseResolutionStates: cloneJson(caseResolutionRows) || [],
     cases_resolutions: cloneJson(caseResolutionRows) || [],
     blocked_case_states: cloneJson(blockedCaseStates) || [],
+    blockedCaseStates: cloneJson(blockedCaseStates) || [],
     safe_case_states: cloneJson(safeCaseStates) || [],
+    safeCaseStates: cloneJson(safeCaseStates) || [],
     reusable_component_resolutions: (isPlainObject(previewObj.reusable_component_resolutions) ? cloneJson(previewObj.reusable_component_resolutions) : {}) || {},
     stale_component_resolutions: (isPlainObject(previewObj.stale_component_resolutions) ? cloneJson(previewObj.stale_component_resolutions) : {}) || {},
     draftable_now: cloneJson(draftableNow) || [],
+    draftableNow: cloneJson(draftableNow) || [],
     blocked_now: cloneJson(blockedForPayRows) || [],
     blockedNow: cloneJson(blockedForPayRows) || [],
     ready_to_pay_now: cloneJson(readyToPayNow) || [],
+    readyToPayNow: cloneJson(readyToPayNow) || [],
     blocked_for_pay: cloneJson(blockedForPayRows) || [],
     blocked_for_pay_now: cloneJson(blockedForPayRows) || [],
     blockedForPayNow: cloneJson(blockedForPayRows) || [],
     hidden_indefinite_snoozes: cloneJson(hiddenIndefiniteSnoozes) || [],
     ready_preview_lines: cloneJson(readyPreviewLines) || [],
+    readyPreviewLines: cloneJson(readyPreviewLines) || [],
     blocked_preview_lines: cloneJson(blockedForPayRows) || [],
     blockedPreviewLines: cloneJson(blockedForPayRows) || [],
-    hidden_preview_lines: cloneJson(hiddenPreviewLines) || []
+    hidden_preview_lines: cloneJson(hiddenPreviewLines) || [],
+    hiddenPreviewLines: cloneJson(hiddenPreviewLines) || []
   };
 
   wiz.decisions.case_resolution_states = cloneJson(caseResolutionRows) || [];
   wiz.decisions.caseResolutionStates = cloneJson(caseResolutionRows) || [];
   wiz.decisions.cases_resolutions = cloneJson(caseResolutionRows) || [];
   wiz.decisions.blocked_case_states = cloneJson(blockedCaseStates) || [];
+  wiz.decisions.blockedCaseStates = cloneJson(blockedCaseStates) || [];
   wiz.decisions.safe_case_states = cloneJson(safeCaseStates) || [];
+  wiz.decisions.safeCaseStates = cloneJson(safeCaseStates) || [];
   wiz.decisions.reusable_component_resolutions = (isPlainObject(previewObj.reusable_component_resolutions) ? cloneJson(previewObj.reusable_component_resolutions) : {}) || {};
   wiz.decisions.stale_component_resolutions = (isPlainObject(previewObj.stale_component_resolutions) ? cloneJson(previewObj.stale_component_resolutions) : {}) || {};
   wiz.decisions.canonical_preview_lines = cloneJson(canonicalPreviewLines) || [];
+  wiz.decisions.canonicalPreviewLines = cloneJson(canonicalPreviewLines) || [];
   wiz.decisions.preview_rows = cloneJson(previewRows) || [];
+  wiz.decisions.previewRows = cloneJson(previewRows) || [];
+  wiz.decisions.rows = cloneJson(previewRows) || [];
+  wiz.decisions.items = cloneJson(previewRows) || [];
   wiz.decisions.ready_preview_lines = cloneJson(readyPreviewLines) || [];
+  wiz.decisions.readyPreviewLines = cloneJson(readyPreviewLines) || [];
   wiz.decisions.draftable_now = cloneJson(draftableNow) || [];
+  wiz.decisions.draftableNow = cloneJson(draftableNow) || [];
   wiz.decisions.blocked_now = cloneJson(blockedForPayRows) || [];
   wiz.decisions.blockedNow = cloneJson(blockedForPayRows) || [];
   wiz.decisions.ready_to_pay_now = cloneJson(readyToPayNow) || [];
+  wiz.decisions.readyToPayNow = cloneJson(readyToPayNow) || [];
   wiz.decisions.blocked_for_pay = cloneJson(blockedForPayRows) || [];
   wiz.decisions.blocked_for_pay_now = cloneJson(blockedForPayRows) || [];
   wiz.decisions.blockedForPayNow = cloneJson(blockedForPayRows) || [];
   wiz.decisions.blocked_preview_lines = cloneJson(blockedForPayRows) || [];
   wiz.decisions.blockedPreviewLines = cloneJson(blockedForPayRows) || [];
   wiz.decisions.hidden_indefinite_snoozes = cloneJson(hiddenIndefiniteSnoozes) || [];
+  wiz.decisions.hiddenIndefiniteSnoozes = cloneJson(hiddenIndefiniteSnoozes) || [];
   wiz.decisions.context_signature = wiz.preview.context_signature;
   wiz.decisions.session_id = sessionId || null;
   wiz.decisions.snapshot_run_id = snapshotRunId || null;
@@ -116976,7 +117543,9 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.decisions.pay_date = canonicalPayDate || wiz.decisions.pay_date || null;
   wiz.decisions.week_ending_cutoff_date = canonicalWeekEndingCutoffDate || wiz.decisions.week_ending_cutoff_date || null;
   wiz.decisions.server_selected_preview_row_ids_provided = effectiveServerSelectedPreviewRowIdsProvided;
+  wiz.decisions.serverSelectedPreviewRowIdsProvided = effectiveServerSelectedPreviewRowIdsProvided;
   wiz.decisions.server_selected_preview_row_ids = effectiveServerSelectedPreviewRowIdsProvided ? (cloneJson(effectiveServerSelectedPreviewRowIds) || []) : [];
+  wiz.decisions.serverSelectedPreviewRowIds = effectiveServerSelectedPreviewRowIdsProvided ? (cloneJson(effectiveServerSelectedPreviewRowIds) || []) : [];
   wiz.decisions.pending_candidate_ids = pendingCandidateIds;
   wiz.decisions.failed_candidate_ids = failedCandidateIds;
   wiz.decisions.pending_candidate_rows = cloneJson(pendingCandidateRows) || [];
@@ -116998,8 +117567,13 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.decisions.shadow_compare_failed = postActionShadowCompareFailed;
   wiz.decisions.modal_valid = true;
   wiz.decisions.selected_preview_row_ids = cloneJson(selectionState.selected_preview_row_ids) || [];
+  wiz.decisions.selectedPreviewRowIds = cloneJson(selectionState.selected_preview_row_ids) || [];
   wiz.decisions.selected_preview_row_mode = selectionState.selected_preview_row_mode;
+  wiz.decisions.selectedPreviewRowMode = selectionState.selected_preview_row_mode;
+  wiz.selected_preview_row_ids = cloneJson(selectionState.selected_preview_row_ids) || [];
+  wiz.selectedPreviewRowIds = cloneJson(selectionState.selected_preview_row_ids) || [];
   wiz.selected_preview_row_mode = selectionState.selected_preview_row_mode;
+  wiz.selectedPreviewRowMode = selectionState.selected_preview_row_mode;
   wiz.local_selected_preview_row_ids_dirty = localSelectionDirty;
 
   if (canonicalPayDate) {
@@ -117033,9 +117607,13 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.targeted_refresh_enqueued = postActionTargetedRefreshEnqueued;
   wiz.workbench.shadow_compare_failed = postActionShadowCompareFailed;
   wiz.workbench.server_selected_preview_row_ids_provided = effectiveServerSelectedPreviewRowIdsProvided;
+  wiz.workbench.serverSelectedPreviewRowIdsProvided = effectiveServerSelectedPreviewRowIdsProvided;
   wiz.workbench.server_selected_preview_row_ids = effectiveServerSelectedPreviewRowIdsProvided ? (cloneJson(effectiveServerSelectedPreviewRowIds) || []) : [];
+  wiz.workbench.serverSelectedPreviewRowIds = effectiveServerSelectedPreviewRowIdsProvided ? (cloneJson(effectiveServerSelectedPreviewRowIds) || []) : [];
   wiz.workbench.selected_preview_row_ids = cloneJson(selectionState.selected_preview_row_ids) || [];
+  wiz.workbench.selectedPreviewRowIds = cloneJson(selectionState.selected_preview_row_ids) || [];
   wiz.workbench.selected_preview_row_mode = selectionState.selected_preview_row_mode;
+  wiz.workbench.selectedPreviewRowMode = selectionState.selected_preview_row_mode;
   wiz.workbench.create_draft_refresh_pending = hasPendingWorkbenchRefresh;
   wiz.workbench.preview_reopen_required = hasPendingWorkbenchRefresh;
   wiz.workbench.__post_mutation_preview_refresh_failed = false;
@@ -117047,9 +117625,21 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.caseResolutionStates = cloneJson(caseResolutionRows) || [];
   wiz.workbench.cases_resolutions = cloneJson(caseResolutionRows) || [];
   wiz.workbench.blocked_case_states = cloneJson(blockedCaseStates) || [];
+  wiz.workbench.blockedCaseStates = cloneJson(blockedCaseStates) || [];
+  wiz.workbench.safe_case_states = cloneJson(safeCaseStates) || [];
+  wiz.workbench.safeCaseStates = cloneJson(safeCaseStates) || [];
   wiz.workbench.canonical_preview_lines = cloneJson(canonicalPreviewLines) || [];
+  wiz.workbench.canonicalPreviewLines = cloneJson(canonicalPreviewLines) || [];
   wiz.workbench.preview_rows = cloneJson(previewRows) || [];
+  wiz.workbench.previewRows = cloneJson(previewRows) || [];
+  wiz.workbench.rows = cloneJson(previewRows) || [];
+  wiz.workbench.items = cloneJson(previewRows) || [];
   wiz.workbench.ready_preview_lines = cloneJson(readyPreviewLines) || [];
+  wiz.workbench.readyPreviewLines = cloneJson(readyPreviewLines) || [];
+  wiz.workbench.draftable_now = cloneJson(draftableNow) || [];
+  wiz.workbench.draftableNow = cloneJson(draftableNow) || [];
+  wiz.workbench.ready_to_pay_now = cloneJson(readyToPayNow) || [];
+  wiz.workbench.readyToPayNow = cloneJson(readyToPayNow) || [];
   wiz.workbench.blocked_preview_lines = cloneJson(blockedForPayRows) || [];
   wiz.workbench.blockedPreviewLines = cloneJson(blockedForPayRows) || [];
   wiz.workbench.blocked_for_pay = cloneJson(blockedForPayRows) || [];
@@ -117057,6 +117647,10 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.blockedForPayNow = cloneJson(blockedForPayRows) || [];
   wiz.workbench.blocked_now = cloneJson(blockedForPayRows) || [];
   wiz.workbench.blockedNow = cloneJson(blockedForPayRows) || [];
+  wiz.workbench.hidden_preview_lines = cloneJson(hiddenPreviewLines) || [];
+  wiz.workbench.hiddenPreviewLines = cloneJson(hiddenPreviewLines) || [];
+  wiz.workbench.hidden_indefinite_snoozes = cloneJson(hiddenIndefiniteSnoozes) || [];
+  wiz.workbench.hiddenIndefiniteSnoozes = cloneJson(hiddenIndefiniteSnoozes) || [];
   wiz.workbench.payees = cloneJson(payees) || [];
   wiz.workbench.summary = isPlainObject(previewSummary) ? (cloneJson(previewSummary) || {}) : {};
   wiz.workbench.last_preview_applied_at = new Date().toISOString();
@@ -117065,6 +117659,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
 
   return normalizedEnvelope;
 }
+
 
 
 function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = null) {
