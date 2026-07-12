@@ -43471,8 +43471,6 @@ function getBankingPayDraftScopeLabel(value) {
   if (scope === 'UMBRELLA') return 'Umbrella only';
   return 'Both PAYE + Umbrella';
 }
-
-
 async function openBankingFinanceSnoozeModal(seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -43669,6 +43667,20 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
   if (!snoozeKind) {
     alert('This item cannot be snoozed from this action.');
     return;
+  }
+
+  const hasResolvedRate = asBool(
+    src.has_resolved_rate
+    ?? src.hasResolvedRate
+    ?? src.case_resolution_summary?.has_resolved_rate
+  ) || Number(src.resolved_rate_component_count ?? src.resolvedRateComponentCount ?? 0) > 0;
+  if (hasResolvedRate) {
+    const rateWarning = targetType === 'TIMESHEET_SEGMENT'
+      ? 'This shift has a rate resolved to it. When you unsnooze it, you will need to resolve this rate again if it is unsnoozed in a different pay week to this one.'
+      : 'This timesheet has a rate resolved to it. When you unsnooze it, you will need to resolve this rate again if it is unsnoozed in a different pay week to this one.';
+    let continueToSnooze = true;
+    try { continueToSnooze = window.confirm(rateWarning); } catch {}
+    if (!continueToSnooze) return;
   }
 
   const existingSnoozeId =
@@ -44365,6 +44377,22 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
 
     state.saveBusy = true;
     try {
+      if (untilIso) {
+        const validation = await apiPostJson('/api/banking/pay/snooze/upsert', {
+          ...payload,
+          validate_only: true
+        });
+        if (validation?.warning_required === true && validation?.warning_message) {
+          let confirmed = true;
+          try { confirmed = window.confirm(String(validation.warning_message)); } catch {}
+          if (!confirmed) {
+            state.saveBusy = false;
+            return false;
+          }
+          payload.warning_ack_code = String(validation.warning_code || '').trim() || null;
+        }
+      }
+
       const result = await apiPostJson('/api/banking/pay/snooze/upsert', payload);
 
       applyResultState(result);
@@ -44412,6 +44440,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
     }
   );
 }
+
 
 async function openBankingFinanceCaseAuditModal(seed = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -47834,7 +47863,7 @@ const isPreviewRowSelectionAllowed = (line) => {
     return '';
   };
 
-  const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, lineLabel, sourceRefOverride = null, timesheetIdOverride = null, segmentIdOverride = null }) => {
+const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, lineLabel, sourceRefOverride = null, timesheetIdOverride = null, segmentIdOverride = null }) => {
     const info = getSnoozeInfo(obj);
     const sourceRef = sourceRefOverride == null ? getIdentityValue(obj, 'source_ref') : trimStr(sourceRefOverride);
     const timesheetId = timesheetIdOverride == null ? getIdentityValue(obj, 'timesheet_id') : trimStr(timesheetIdOverride);
@@ -47847,6 +47876,34 @@ const isPreviewRowSelectionAllowed = (line) => {
     const segmentBlockedReason = trimStr(obj?.segment_snooze_action_block_reason ?? parentObj?.segment_snooze_action_block_reason ?? '');
     const wholeBlocked = asBool(wholeBlockedRaw);
     const segmentBlocked = asBool(segmentBlockedRaw);
+    const hasResolvedRate = asBool(
+      obj?.has_resolved_rate
+      ?? obj?.hasResolvedRate
+      ?? parentObj?.has_resolved_rate
+      ?? parentObj?.hasResolvedRate
+    );
+    const resolvedRateComponentCount = Number(
+      obj?.resolved_rate_component_count
+      ?? obj?.resolvedRateComponentCount
+      ?? parentObj?.resolved_rate_component_count
+      ?? parentObj?.resolvedRateComponentCount
+      ?? 0
+    );
+    const resolvedRateCaseKey = trimStr(
+      obj?.resolved_rate_case_key
+      ?? obj?.resolvedRateCaseKey
+      ?? parentObj?.resolved_rate_case_key
+      ?? parentObj?.resolvedRateCaseKey
+      ?? ''
+    );
+    const resolvedRateTimesheetId = trimStr(
+      obj?.resolved_rate_timesheet_id
+      ?? obj?.resolvedRateTimesheetId
+      ?? parentObj?.resolved_rate_timesheet_id
+      ?? parentObj?.resolvedRateTimesheetId
+      ?? timesheetId
+      ?? ''
+    );
 
     return [
       `data-candidate-id="${enc(candidateId)}"`,
@@ -47863,9 +47920,14 @@ const isPreviewRowSelectionAllowed = (line) => {
       `data-whole-timesheet-snooze-action-blocked="${wholeBlocked ? 'true' : 'false'}"`,
       `data-whole-timesheet-snooze-action-block-reason="${enc(wholeBlockedReason)}"`,
       `data-segment-snooze-action-blocked="${segmentBlocked ? 'true' : 'false'}"`,
-      `data-segment-snooze-action-block-reason="${enc(segmentBlockedReason)}"`
+      `data-segment-snooze-action-block-reason="${enc(segmentBlockedReason)}"`,
+      `data-has-resolved-rate="${hasResolvedRate ? 'true' : 'false'}"`,
+      `data-resolved-rate-component-count="${Number.isFinite(resolvedRateComponentCount) ? Math.max(0, Math.trunc(resolvedRateComponentCount)) : 0}"`,
+      `data-resolved-rate-case-key="${enc(resolvedRateCaseKey)}"`,
+      `data-resolved-rate-timesheet-id="${enc(resolvedRateTimesheetId)}"`
     ].join(' ');
   };
+
 
  const resolvedRateBadgeHtml = (line, renderContextSection = '') => {
     const nested = getNestedLinePayload(line);
@@ -90261,7 +90323,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       });
     };
 
-    const mapPreviewLineToSnoozeSeed = () => {
+  const mapPreviewLineToSnoozeSeed = () => {
       const candidateId = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
       const snoozeKind = String(ds('snoozeKind') || dget('data-snooze-kind') || '').trim().toUpperCase();
       const sourceRef = String(ds('sourceRef') || dget('data-source-ref') || '').trim();
@@ -90284,6 +90346,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       const wholeTimesheetSnoozeActionBlockReason = String(ds('wholeTimesheetSnoozeActionBlockReason') || dget('data-whole-timesheet-snooze-action-block-reason') || '').trim();
       const segmentSnoozeActionBlocked = parseDataBool(ds('segmentSnoozeActionBlocked') || dget('data-segment-snooze-action-blocked'));
       const segmentSnoozeActionBlockReason = String(ds('segmentSnoozeActionBlockReason') || dget('data-segment-snooze-action-block-reason') || '').trim();
+      const hasResolvedRate = parseDataBool(ds('hasResolvedRate') || dget('data-has-resolved-rate'));
+      const resolvedRateComponentCount = Number(ds('resolvedRateComponentCount') || dget('data-resolved-rate-component-count') || 0);
+      const resolvedRateCaseKey = String(ds('resolvedRateCaseKey') || dget('data-resolved-rate-case-key') || '').trim();
+      const resolvedRateTimesheetId = String(ds('resolvedRateTimesheetId') || dget('data-resolved-rate-timesheet-id') || '').trim();
 
       const seed = {
         candidate_id: candidateId,
@@ -90296,7 +90362,11 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         whole_timesheet_snooze_action_blocked: wholeTimesheetSnoozeActionBlocked,
         whole_timesheet_snooze_action_block_reason: wholeTimesheetSnoozeActionBlockReason,
         segment_snooze_action_blocked: segmentSnoozeActionBlocked,
-        segment_snooze_action_block_reason: segmentSnoozeActionBlockReason
+        segment_snooze_action_block_reason: segmentSnoozeActionBlockReason,
+        has_resolved_rate: hasResolvedRate,
+        resolved_rate_component_count: Number.isFinite(resolvedRateComponentCount) ? Math.max(0, Math.trunc(resolvedRateComponentCount)) : 0,
+        resolved_rate_case_key: resolvedRateCaseKey || null,
+        resolved_rate_timesheet_id: resolvedRateTimesheetId || timesheetId || null
       };
 
       if (timesheetId) {
@@ -90319,6 +90389,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
       return seed;
     };
+
     const idGetFilters = () => {
       const f = (st.id && st.id.ledgerFilters && typeof st.id.ledgerFilters === 'object') ? st.id.ledgerFilters : {};
       const onlyReportable = !!f.only_reportable;
@@ -134133,6 +134204,10 @@ async function openSaveSearchModal(section, filters){
   }
 }
 
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend body was supplied.
+ * Complete final replacement extracted from and verified against the integrated final main.js.
+ */
 async function openSearchModal(opts = {}) {
   const INVOICE_STATUS = ['DRAFT','ISSUED','ON_HOLD','PAID'];
 
@@ -134276,6 +134351,7 @@ async function openSearchModal(opts = {}) {
           <option value="AWAITING_AUTHORISATION">Awaiting Authorisation</option>
           <option value="AUTHORISED_FOR_INVOICING">Authorised for Invoicing</option>
           <option value="INVOICED">Invoiced</option>
+          <option value="ARCHIVED">Archived</option>
         </select>`),
       row('Issues', `
         <select name="issues_filter">
@@ -134672,6 +134748,10 @@ async function openSearchModal(opts = {}) {
 
   setTimeout(wireAdvancedSearch, 0);
 }
+
+
+
+
 async function openSaveSelectionModal(section) {
   const sanitize = (typeof window !== 'undefined' && typeof window.sanitize === 'function')
     ? window.sanitize
@@ -153243,6 +153323,12 @@ async function openOutboxRunsModal() {
 
   mount();
 }
+
+
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend body was supplied.
+ * Complete final replacement extracted from and verified against the integrated final main.js.
+ */
 function renderTools(){
   const sectionKey = String(currentSection || '').trim().toLowerCase();
 
@@ -154855,7 +154941,8 @@ function renderTools(){
       ['PROCESSING_DELAYED',     'Processing Delayed'],
       ['AWAITING_AUTHORISATION', 'Awaiting Authorisation'],
       ['AUTHORISED_FOR_INVOICING','Authorised for Invoicing'],
-      ['INVOICED',               'Invoiced']
+      ['INVOICED',               'Invoiced'],
+      ['ARCHIVED',               'Archived']
     ];
 
     const allowedStages = new Set(stageOpts.map(x => x[0]));
@@ -154896,6 +154983,8 @@ function renderTools(){
     el.appendChild(box);
   }
 }
+
+
 
 
 async function fetchTimesheetManualDailyCreateOptions(criteria) {
@@ -159937,7 +160026,10 @@ function calcMargin(charge, pay, rate_type, erni_pct = 0) {
 
 
 
-
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend version was supplied.
+ * Complete replacement: preserve the supplied installed function and amend only the stated contract.
+ */
 async function fetchBulkAuthoriseDataset(filters, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-AUTH][DATASET]');
   GC('fetchBulkAuthoriseDataset');
@@ -160095,6 +160187,11 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
       'tools_stage',
       'processing_status',
       'processing_status_display',
+      'is_archived',
+      'archived_at_utc',
+      'archived_by_user_id',
+      'archived_by_display',
+      'archived_reason_code',
       'processed_at_utc',
       'processed_by_user_id',
       'processed_by_display',
@@ -160139,6 +160236,12 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
       'can_save',
       'can_process',
       'can_unprocess',
+      'has_retained_financial_history',
+      'unprocess_block_reason',
+      'unprocess_action_visible',
+      'unprocess_block_message',
+      'action_flags',
+      'row_patch',
       'can_edit_timesheet_data',
       'can_manage_evidence',
       'can_bulk_authorise',
@@ -160212,6 +160315,11 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     'tools_stage',
     'processing_status',
     'processing_status_display',
+    'is_archived',
+    'archived_at_utc',
+    'archived_by_user_id',
+    'archived_by_display',
+    'archived_reason_code',
     'route_type',
     'route_display',
     'submission_mode',
@@ -160227,6 +160335,10 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     'can_edit_timesheet_data',
     'can_manage_evidence',
     'can_unprocess',
+    'has_retained_financial_history',
+    'unprocess_block_reason',
+    'unprocess_action_visible',
+    'unprocess_block_message',
     'has_any_evidence',
     'evidence_badges',
     'issue_codes',
@@ -160246,6 +160358,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
 
   const defaultListRowValue = (field) => {
     if (field === 'issue_codes' || field === 'evidence_badges') return [];
+    if (field === 'action_flags' || field === 'row_patch') return {};
     if (
       field === 'total_hours' ||
       field === 'total_pay_ex_vat' ||
@@ -160390,6 +160503,60 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     }
     out.is_current = toBool(out.is_current);
     out.was_stale = toBool(out.was_stale);
+
+    const actionFlags = (out.action_flags && typeof out.action_flags === 'object' && !Array.isArray(out.action_flags)) ? { ...out.action_flags } : {};
+    const rowPatch = (out.row_patch && typeof out.row_patch === 'object' && !Array.isArray(out.row_patch)) ? { ...out.row_patch } : {};
+    const own = (obj, key) => (obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key)) ? obj[key] : undefined;
+    const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null);
+    const archivedAtUtc = firstDefined(own(out, 'archived_at_utc'), own(rowPatch, 'archived_at_utc')) || null;
+    const suppliedStage = String(out.tools_stage || out.summary_stage || '').trim().toUpperCase();
+    const isArchived = toBool(firstDefined(own(out, 'is_archived'), own(rowPatch, 'is_archived'))) || !!archivedAtUtc || suppliedStage === 'ARCHIVED';
+    const retained = toBool(firstDefined(own(out, 'has_retained_financial_history'), own(actionFlags, 'has_retained_financial_history'), own(rowPatch, 'has_retained_financial_history')));
+    const unprocessReason = String(firstDefined(own(out, 'unprocess_block_reason'), own(actionFlags, 'unprocess_block_reason'), own(rowPatch, 'unprocess_block_reason')) || '').trim().toUpperCase() || null;
+    const suppliedVisible = firstDefined(own(out, 'unprocess_action_visible'), own(actionFlags, 'unprocess_action_visible'), own(rowPatch, 'unprocess_action_visible'));
+    const unprocessVisible = !isArchived && (suppliedVisible !== undefined ? toBool(suppliedVisible) : (retained || out.can_unprocess === true));
+    const blockMessage = retained && unprocessReason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS'
+      ? 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.'
+      : (String(firstDefined(own(out, 'unprocess_block_message'), own(actionFlags, 'unprocess_block_message'), own(rowPatch, 'unprocess_block_message')) || '').trim() || null);
+
+    out.is_archived = isArchived;
+    out.archived_at_utc = archivedAtUtc;
+    out.archived_by_user_id = firstDefined(own(out, 'archived_by_user_id'), own(rowPatch, 'archived_by_user_id')) || null;
+    out.archived_by_display = firstDefined(own(out, 'archived_by_display'), own(rowPatch, 'archived_by_display')) || null;
+    out.archived_reason_code = firstDefined(own(out, 'archived_reason_code'), own(rowPatch, 'archived_reason_code')) || null;
+    out.has_retained_financial_history = retained;
+    out.unprocess_block_reason = retained ? (unprocessReason || 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS') : unprocessReason;
+    out.unprocess_action_visible = unprocessVisible;
+    out.unprocess_block_message = blockMessage;
+    if (isArchived) {
+      out.summary_stage = 'ARCHIVED';
+      out.tools_stage = 'ARCHIVED';
+      out.processing_status_display = 'Archived';
+      out.can_bulk_authorise = false;
+      out.can_bulk_unauthorise = false;
+      out.can_unprocess = false;
+      out.can_edit_timesheet_data = false;
+      out.can_manage_evidence = false;
+      out.review_only = true;
+    }
+    out.action_flags = { ...actionFlags,
+      is_archived: isArchived,
+      has_retained_financial_history: retained,
+      unprocess_block_reason: out.unprocess_block_reason,
+      unprocess_action_visible: unprocessVisible,
+      unprocess_block_message: blockMessage
+    };
+    out.row_patch = { ...rowPatch,
+      is_archived: isArchived,
+      archived_at_utc: archivedAtUtc,
+      archived_by_user_id: out.archived_by_user_id,
+      archived_reason_code: out.archived_reason_code,
+      has_retained_financial_history: retained,
+      can_unprocess: out.can_unprocess === true,
+      unprocess_block_reason: out.unprocess_block_reason,
+      unprocess_action_visible: unprocessVisible,
+      unprocess_block_message: blockMessage
+    };
 
     return out;
   };
@@ -160540,7 +160707,9 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     const rawRows = Array.isArray(json.rows) ? json.rows : [];
     const paddedRows = rawRows.map(padRendererRowDefaults);
     validateRequiredFields(paddedRows);
-    const rows = paddedRows.map(normalizeRow);
+    const normalizedRows = paddedRows.map(normalizeRow);
+    // Archived rows are never active Bulk Authorise candidates. They remain available through the Archived Stage summary.
+    const rows = normalizedRows.filter((row) => row.is_archived !== true);
 
     const out = {
       filters: (json.filters && typeof json.filters === 'object') ? {
@@ -160571,7 +160740,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
         validation_already: validationAlready !== false,
         validation_awaiting: validationAwaiting === true
       },
-      counts: (json.counts && typeof json.counts === 'object') ? json.counts : {
+      counts: {
         total: rows.length,
         processed_eligible: rows.filter((row) => row.bulk_authorise_section === 'processed_eligible').length,
         authorised_eligible: rows.filter((row) => row.bulk_authorise_section === 'authorised_eligible').length,
@@ -160588,7 +160757,8 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
         validation: {
           already_validated: rows.filter((row) => row.bulk_authorise_classification === 'TIMESHEETS' && row.hr_validation_awaiting !== true).length,
           awaiting_validation: rows.filter((row) => row.bulk_authorise_classification === 'TIMESHEETS' && row.hr_validation_awaiting === true).length
-        }
+        },
+        excluded_archived: normalizedRows.length - rows.length
       },
       rows,
       profile: (json.profile != null && String(json.profile).trim()) ? String(json.profile).trim() : profile,
@@ -163508,7 +163678,10 @@ async function wireTimesheetImportsQueueActions(state) {
   GE();
 }
 
-
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend version was supplied.
+ * Complete replacement: preserve the supplied installed function and amend only the stated contract.
+ */
 async function fetchBulkProcessDataset(filters, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][DATASET]');
   GC('fetchBulkProcessDataset');
@@ -163812,6 +163985,11 @@ async function fetchBulkProcessDataset(filters, options = {}) {
       'tools_stage',
       'processing_status',
       'processing_status_display',
+      'is_archived',
+      'archived_at_utc',
+      'archived_by_user_id',
+      'archived_by_display',
+      'archived_reason_code',
       'processed_at_utc',
       'processed_by_user_id',
       'processed_by_display',
@@ -163856,6 +164034,12 @@ async function fetchBulkProcessDataset(filters, options = {}) {
       'can_save',
       'can_process',
       'can_unprocess',
+      'has_retained_financial_history',
+      'unprocess_block_reason',
+      'unprocess_action_visible',
+      'unprocess_block_message',
+      'action_flags',
+      'row_patch',
       'can_edit_timesheet_data',
       'can_manage_evidence',
       'can_bulk_authorise',
@@ -163929,6 +164113,11 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     'tools_stage',
     'processing_status',
     'processing_status_display',
+    'is_archived',
+    'archived_at_utc',
+    'archived_by_user_id',
+    'archived_by_display',
+    'archived_reason_code',
     'route_type',
     'route_display',
     'submission_mode',
@@ -163941,6 +164130,10 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     'can_save',
     'can_process',
     'can_unprocess',
+    'has_retained_financial_history',
+    'unprocess_block_reason',
+    'unprocess_action_visible',
+    'unprocess_block_message',
     'can_edit_timesheet_data',
     'can_manage_evidence',
     'has_any_evidence',
@@ -163962,6 +164155,7 @@ async function fetchBulkProcessDataset(filters, options = {}) {
 
   const defaultListRowValue = (field) => {
     if (field === 'issue_codes' || field === 'evidence_badges') return [];
+    if (field === 'action_flags' || field === 'row_patch') return {};
     if (
       field === 'total_hours' ||
       field === 'total_pay_ex_vat' ||
@@ -164088,6 +164282,62 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     out.has_any_evidence = toBool(out.has_any_evidence);
     out.evidence_document_locked = toBool(out.evidence_document_locked);
 
+    const actionFlags = (out.action_flags && typeof out.action_flags === 'object' && !Array.isArray(out.action_flags)) ? { ...out.action_flags } : {};
+    const rowPatch = (out.row_patch && typeof out.row_patch === 'object' && !Array.isArray(out.row_patch)) ? { ...out.row_patch } : {};
+    const own = (obj, key) => (obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key)) ? obj[key] : undefined;
+    const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null);
+    const archivedAtUtc = firstDefined(own(out, 'archived_at_utc'), own(rowPatch, 'archived_at_utc')) || null;
+    const suppliedStage = String(out.tools_stage || out.summary_stage || '').trim().toUpperCase();
+    const isArchived = toBool(firstDefined(own(out, 'is_archived'), own(rowPatch, 'is_archived'))) || !!archivedAtUtc || suppliedStage === 'ARCHIVED';
+    const retained = toBool(firstDefined(own(out, 'has_retained_financial_history'), own(actionFlags, 'has_retained_financial_history'), own(rowPatch, 'has_retained_financial_history')));
+    const suppliedReason = String(firstDefined(own(out, 'unprocess_block_reason'), own(actionFlags, 'unprocess_block_reason'), own(rowPatch, 'unprocess_block_reason')) || '').trim().toUpperCase();
+    const unprocessReason = retained ? (suppliedReason || 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS') : (suppliedReason || null);
+    const suppliedVisible = firstDefined(own(out, 'unprocess_action_visible'), own(actionFlags, 'unprocess_action_visible'), own(rowPatch, 'unprocess_action_visible'));
+    const unprocessVisible = !isArchived && (suppliedVisible !== undefined ? toBool(suppliedVisible) : (retained || out.can_unprocess === true));
+    const blockMessage = retained && unprocessReason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS'
+      ? 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.'
+      : (String(firstDefined(own(out, 'unprocess_block_message'), own(actionFlags, 'unprocess_block_message'), own(rowPatch, 'unprocess_block_message')) || '').trim() || null);
+    out.is_archived = isArchived;
+    out.archived_at_utc = archivedAtUtc;
+    out.archived_by_user_id = firstDefined(own(out, 'archived_by_user_id'), own(rowPatch, 'archived_by_user_id')) || null;
+    out.archived_by_display = firstDefined(own(out, 'archived_by_display'), own(rowPatch, 'archived_by_display')) || null;
+    out.archived_reason_code = firstDefined(own(out, 'archived_reason_code'), own(rowPatch, 'archived_reason_code')) || null;
+    out.has_retained_financial_history = retained;
+    out.unprocess_block_reason = unprocessReason;
+    out.unprocess_action_visible = unprocessVisible;
+    out.unprocess_block_message = blockMessage;
+    if (retained) out.can_unprocess = false;
+    if (isArchived) {
+      out.summary_stage = 'ARCHIVED';
+      out.tools_stage = 'ARCHIVED';
+      out.processing_status_display = 'Archived';
+      out.can_save = false;
+      out.can_process = false;
+      out.can_unprocess = false;
+      out.can_edit_timesheet_data = false;
+      out.can_manage_evidence = false;
+      out.review_only = true;
+    }
+    out.action_flags = { ...actionFlags,
+      is_archived: isArchived,
+      has_retained_financial_history: retained,
+      can_unprocess: out.can_unprocess === true,
+      unprocess_block_reason: unprocessReason,
+      unprocess_action_visible: unprocessVisible,
+      unprocess_block_message: blockMessage
+    };
+    out.row_patch = { ...rowPatch,
+      is_archived: isArchived,
+      archived_at_utc: archivedAtUtc,
+      archived_by_user_id: out.archived_by_user_id,
+      archived_reason_code: out.archived_reason_code,
+      has_retained_financial_history: retained,
+      can_unprocess: out.can_unprocess === true,
+      unprocess_block_reason: unprocessReason,
+      unprocess_action_visible: unprocessVisible,
+      unprocess_block_message: blockMessage
+    };
+
     if (!Object.prototype.hasOwnProperty.call(out, 'bulk_process_bucket') || out.bulk_process_bucket == null) {
       out.bulk_process_bucket = String(bucketName || '').trim().toUpperCase() || null;
     }
@@ -164196,8 +164446,11 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     validateRequiredFields(paddedUnprocessed, 'unprocessed_rows');
     validateRequiredFields(paddedProcessed, 'processed_rows');
 
-    const baseUnprocessed = paddedUnprocessed.map((row) => normaliseRow(row, 'UNPROCESSED'));
-    const baseProcessed = paddedProcessed.map((row) => normaliseRow(row, 'PROCESSED'));
+    const normalizedUnprocessed = paddedUnprocessed.map((row) => normaliseRow(row, 'UNPROCESSED'));
+    const normalizedProcessed = paddedProcessed.map((row) => normaliseRow(row, 'PROCESSED'));
+    // Archived rows are excluded from active Bulk Process buckets.
+    const baseUnprocessed = normalizedUnprocessed.filter((row) => row.is_archived !== true);
+    const baseProcessed = normalizedProcessed.filter((row) => row.is_archived !== true);
 
     const out = {
       filters: (json.filters && typeof json.filters === 'object') ? json.filters : {
@@ -164222,10 +164475,11 @@ async function fetchBulkProcessDataset(filters, options = {}) {
         limit: limit == null ? null : limit,
         offset: offset == null ? 0 : offset
       },
-      counts: (json.counts && typeof json.counts === 'object') ? json.counts : {
+      counts: {
         unprocessed: baseUnprocessed.length,
         processed: baseProcessed.length,
-        total: baseUnprocessed.length + baseProcessed.length
+        total: baseUnprocessed.length + baseProcessed.length,
+        excluded_archived: (normalizedUnprocessed.length + normalizedProcessed.length) - (baseUnprocessed.length + baseProcessed.length)
       },
       unprocessed_rows: baseUnprocessed,
       processed_rows: baseProcessed,
@@ -164304,7 +164558,6 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     throw err;
   }
 }
-
 
 function renderTimesheetExpensesTab(ctx) {
   const c = normaliseTimesheetCtx(ctx);
@@ -179939,7 +180192,10 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
 
 
 
-
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend version was supplied.
+ * Complete replacement: preserve the supplied installed function and amend only the stated contract.
+ */
 function classifyBulkAuthoriseEditability(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const activeCtx = (ctx.active_ctx && typeof ctx.active_ctx === 'object') ? ctx.active_ctx : {};
@@ -180080,7 +180336,9 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     'route_family', 'route_subfamily', 'underlying_channel_family', 'is_authorised', 'locked',
     'is_import_authoritative', 'can_manage_evidence', 'can_edit_timesheet_data', 'can_unprocess',
     'can_add_additional_manual', 'can_bulk_authorise', 'can_bulk_unauthorise', 'review_only',
-    'segment_id', 'segment_stable_key', 'target_type', 'segment_only'
+    'segment_id', 'segment_stable_key', 'target_type', 'segment_only',
+    'is_archived', 'archived_at_utc', 'archived_by_user_id', 'archived_reason_code',
+    'has_retained_financial_history', 'unprocess_block_reason', 'unprocess_action_visible', 'unprocess_block_message'
   ].forEach((key) => {
     if (Object.prototype.hasOwnProperty.call(mergedRow, key) && mergedRow[key] !== undefined && mergedRow[key] !== null && trimStr(mergedRow[key]) !== '') return;
     const value = readFirst([ctx, key], [activeCtx, key], [activeContext, key]);
@@ -180131,6 +180389,8 @@ function classifyBulkAuthoriseEditability(ctxInput) {
   const rowLocked = readBool([ctx, 'locked'], [activeCtx, 'locked'], [mergedRow, 'locked']) === true;
   const isInvoiceDocumentLocked = domainPolicy ? !!domainPolicy.isInvoiceLocked : hasValue(readFirst([tsfin, 'locked_by_invoice_id'], [mergedRow, 'locked_by_invoice_id']));
   const isPaid = domainPolicy ? !!domainPolicy.isPaid : hasValue(readFirst([tsfin, 'paid_at_utc'], [mergedRow, 'paid_at_utc']));
+  const archivedAtUtc = trimStr(readFirst([mergedRow, 'archived_at_utc'], [details, 'archived_at_utc'], [ts, 'archived_at_utc']) || '');
+  const isArchived = !!(archivedAtUtc || readBool([mergedRow, 'is_archived'], [details, 'is_archived'], [ts, 'is_archived']) === true || upper(readFirst([mergedRow, 'tools_stage'], [mergedRow, 'summary_stage'], [details, 'tools_stage'], [details, 'summary_stage']) || '') === 'ARCHIVED');
   const hasSegmentInvoiceDocumentLock = domainPolicy ? !!domainPolicy.isSegmentInvoiceLocked : !!(hasSegmentInvoiceLock(readFirst([tsfin, 'invoice_breakdown_json'], [details, 'invoice_breakdown_json'], [details, 'invoiceBreakdown'], [mergedRow, 'invoice_breakdown_json'])) || Number(readFirst([mergedRow, 'invoice_segments_locked'], [details, 'invoice_segments_locked'], [ctx, 'invoice_segments_locked']) || 0) > 0);
   const isImportAuthoritative = domainPolicy ? !!domainPolicy.isOriginalImportAuthoritative : !!(readBool([ctx, 'is_import_authoritative'], [activeCtx, 'is_import_authoritative'], [mergedRow, 'is_import_authoritative']) === true || routeFamily === 'IMPORT_AUTHORITATIVE' || underlyingChannelFamily === 'IMPORT_AUTHORITATIVE');
   const isSegmentOnlyContext = domainPolicy ? !!domainPolicy.isSegmentOnlyContext : !!(readBool([ctx, 'segment_only'], [activeCtx, 'segment_only'], [mergedRow, 'segment_only'], [details, 'segment_only']) === true || upper(readFirst([ctx, 'target_type'], [activeCtx, 'target_type'], [mergedRow, 'target_type']) || '') === 'TIMESHEET_SEGMENT' || hasValue(readFirst([ctx, 'segment_id'], [activeCtx, 'segment_id'], [mergedRow, 'segment_id'], [details, 'segment_id'], [ctx, 'segment_stable_key'], [activeCtx, 'segment_stable_key'], [mergedRow, 'segment_stable_key'])));
@@ -180141,14 +180401,15 @@ function classifyBulkAuthoriseEditability(ctxInput) {
   const canAuthoriseFlag = readBool([ctx, 'can_bulk_authorise'], [activeCtx, 'can_bulk_authorise'], [mergedRow, 'can_bulk_authorise']) === true;
   const canUnauthoriseFlag = readBool([ctx, 'can_bulk_unauthorise'], [activeCtx, 'can_bulk_unauthorise'], [mergedRow, 'can_bulk_unauthorise']) === true;
 
-  const actionHardLocked = !!(rowLocked || isPaid || isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock);
-  const paymentScheduleLocked = !!(isAuthorised || actionHardLocked || isImportAuthoritative);
-  const paymentScheduleLockReason = isImportAuthoritative
-    ? 'import-authoritative'
-    : (isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock)
-      ? 'invoice/document-locked'
-      : isPaid
-        ? 'paid'
+  // Paid is informational; it is not an Authorise/Unauthorise hard lock.
+  const actionHardLocked = !!(isArchived || rowLocked || isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock);
+  const paymentScheduleLocked = !!(isArchived || isAuthorised || actionHardLocked || isImportAuthoritative);
+  const paymentScheduleLockReason = isArchived
+    ? 'archived'
+    : isImportAuthoritative
+      ? 'import-authoritative'
+      : (isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock)
+        ? 'invoice/document-locked'
         : rowLocked
           ? 'locked'
           : isAuthorised
@@ -180232,6 +180493,8 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     isImportAuthoritativeCurrent: isImportAuthoritative,
     isLockedByInvoice: !!isInvoiceDocumentLocked,
     isPaid: !!isPaid,
+    isArchived,
+    archivedAtUtc: archivedAtUtc || null,
     isAuthorisedBlocked: isAuthorised,
     hasAnyLockBlocker: paymentScheduleLocked,
     paymentScheduleLocked,
@@ -180257,8 +180520,8 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     canAllowQrAgain: !!(base.canAllowQrAgain && isQr),
     canAllowElectronicAgain: !!(base.canAllowElectronicAgain && isElectronic),
     canConvertQrToManualOnly: !!(base.canConvertQrToManualOnly && isQr && !isManual),
-    canAuthorise: !isAuthorised && !actionHardLocked && canAuthoriseFlag,
-    canUnauthorise: isAuthorised && !actionHardLocked && canUnauthoriseFlag,
+    canAuthorise: !isArchived && !isAuthorised && !actionHardLocked && canAuthoriseFlag,
+    canUnauthorise: !isArchived && isAuthorised && !actionHardLocked && canUnauthoriseFlag,
     canEditHoursSchedule,
     canEditTimesheetData: canEditHoursSchedule,
     canSave: !!(scheduleSaveAllowed || expensesSaveAllowed),
@@ -190302,8 +190565,10 @@ async function openBulkProcessWorkbench(seed = {}) {
 }
 
 
-
-
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend version was supplied.
+ * Complete replacement: preserve the supplied installed function and amend only the stated contract.
+ */
 function classifyBulkProcessEditability(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const row = (ctx.row && typeof ctx.row === 'object') ? ctx.row : {};
@@ -190416,7 +190681,7 @@ function classifyBulkProcessEditability(ctxInput) {
 
   const sheetScope = upper(details.sheet_scope || row.sheet_scope || ts.sheet_scope || datasetLifecycleRow?.sheet_scope || datasetLifecycleRow?.period_type || '');
   const rawSummaryStage = (() => {
-    const terminalStages = new Set(['UNPROCESSED', 'PROCESSED', 'AUTHORISED', 'AUTHORIZED', 'INVOICED', 'PAID', 'LOCKED']);
+    const terminalStages = new Set(['ARCHIVED', 'UNPROCESSED', 'PROCESSED', 'AUTHORISED', 'AUTHORIZED', 'INVOICED', 'PAID', 'LOCKED']);
     const statusToStage = new Map([
       ['RECEIVED', 'UNPROCESSED'],
       ['SUBMITTED', 'UNPROCESSED'],
@@ -190529,6 +190794,28 @@ function classifyBulkProcessEditability(ctxInput) {
   );
   const isLockedByInvoice = !!(tsfin.locked_by_invoice_id || row.locked_by_invoice_id || details.locked_by_invoice_id || isSegmentInvoiceLocked);
   const isPaid = !!(tsfin.paid_at_utc || row.paid_at_utc || details.paid_at_utc);
+  const archivedAtUtc = trimStr(readFirst([row, 'archived_at_utc'], [details, 'archived_at_utc'], [ts, 'archived_at_utc'], [datasetLifecycleRow, 'archived_at_utc']) || '');
+  const isArchived = !!(
+    archivedAtUtc ||
+    readBool([row, 'is_archived'], [details, 'is_archived'], [ts, 'is_archived'], [datasetLifecycleRow, 'is_archived']) === true ||
+    rawSummaryStage === 'ARCHIVED'
+  );
+  const hasRetainedFinancialHistory = readBool(
+    [row, 'has_retained_financial_history'], [details, 'has_retained_financial_history'], [actionFlags, 'has_retained_financial_history'], [datasetLifecycleRow, 'has_retained_financial_history']
+  ) === true;
+  const suppliedUnprocessBlockReason = upper(readFirst(
+    [row, 'unprocess_block_reason'], [details, 'unprocess_block_reason'], [actionFlags, 'unprocess_block_reason'], [datasetLifecycleRow, 'unprocess_block_reason']
+  ) || '');
+  const unprocessBlockReason = hasRetainedFinancialHistory
+    ? (suppliedUnprocessBlockReason || 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS')
+    : (suppliedUnprocessBlockReason || '');
+  const suppliedUnprocessVisible = readBool(
+    [row, 'unprocess_action_visible'], [details, 'unprocess_action_visible'], [actionFlags, 'unprocess_action_visible'], [datasetLifecycleRow, 'unprocess_action_visible']
+  );
+  const unprocessActionVisible = !isArchived && (suppliedUnprocessVisible === true || hasRetainedFinancialHistory);
+  const unprocessBlockMessage = hasRetainedFinancialHistory && unprocessBlockReason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS'
+    ? 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.'
+    : trimStr(readFirst([row, 'unprocess_block_message'], [details, 'unprocess_block_message'], [actionFlags, 'unprocess_block_message'], [datasetLifecycleRow, 'unprocess_block_message']) || '');
   const isRevoked = !!(hasValue(ts.revoked_at) || hasValue(row.revoked_at) || hasValue(details.revoked_at));
   const isAuthorisedBlocked = !!(
     !isRevoked &&
@@ -190540,7 +190827,8 @@ function classifyBulkProcessEditability(ctxInput) {
       hasValue(row.authorised_at_utc)
     )
   );
-  const hasAnyLockBlocker = isLockedByInvoice || isPaid;
+  // Payment is display state only; invoice and Archive remain authoritative lifecycle locks.
+  const hasAnyLockBlocker = isLockedByInvoice || isArchived;
   const baseAdditionalSeqForAdjustment = Number(
     readFirst(
       [cw, 'additional_seq'],
@@ -190585,7 +190873,7 @@ function classifyBulkProcessEditability(ctxInput) {
     !reviewOnlyEffective &&
     backendCanEditTimesheetData !== false;
 
-  let summaryStage = rawSummaryStage;
+  let summaryStage = isArchived ? 'ARCHIVED' : rawSummaryStage;
   if (!summaryStage) {
     const unprocessedLifecycleHints = !!(
       upper(ctx.bulk_process_bucket || row.bulk_process_bucket || details.bulk_process_bucket || '') === 'UNPROCESSED' ||
@@ -190727,8 +191015,9 @@ function classifyBulkProcessEditability(ctxInput) {
   const weeklyManualProcessTarget = !!(sheetScope === 'WEEKLY' && effectiveIsManual && (!!tsId || !!weekId));
   const domainCanProcess = (typeof domainPolicy.canProcess === 'boolean') ? domainPolicy.canProcess : null;
   const canProcess = !!(
+    !isArchived &&
     !isAuthorisedBlocked &&
-    !hasAnyLockBlocker &&
+    !isLockedByInvoice &&
     !reviewOnlyEffective &&
     backendCanProcess !== false &&
     unprocessedLike &&
@@ -190736,6 +191025,10 @@ function classifyBulkProcessEditability(ctxInput) {
     (domainCanProcess !== false)
   );
   const canUnprocess = !!(
+    !isArchived &&
+    !hasRetainedFinancialHistory &&
+    !isLockedByInvoice &&
+    !isAuthorisedBlocked &&
     !unprocessedLike &&
     (domainPolicy.canUnprocess === true || manualNonQrEditable) &&
     !!tsId &&
@@ -190827,6 +191120,13 @@ function classifyBulkProcessEditability(ctxInput) {
     isImportAuthoritativeCurrent,
     isLockedByInvoice,
     isPaid,
+    isArchived,
+    archivedAtUtc: archivedAtUtc || null,
+    hasRetainedFinancialHistory,
+    unprocessBlockReason: unprocessBlockReason || null,
+    unprocessActionVisible: unprocessActionVisible || canUnprocess,
+    showUnprocess: unprocessActionVisible || canUnprocess,
+    unprocessBlockMessage: unprocessBlockMessage || null,
     isSegmentInvoiceLocked,
     isAuthorisedBlocked,
     hasAnyLockBlocker,
@@ -190871,6 +191171,7 @@ function classifyBulkProcessEditability(ctxInput) {
     canAddAdditionalManual
   };
 }
+
 
 function bindBulkProcessManualEditor(state) {
   const st = (state && typeof state === 'object') ? state : null;
@@ -236344,6 +236645,11 @@ function renderBulkAuthorisePreviewPane(state) {
   `);
 }
 
+/* Installed original amended because no candidate frontend body was supplied.
+ * COMPLETE FINAL REPLACEMENT FUNCTION extracted from the integrated final main.js.
+ * Retention preflight and server-race blocks use the canonical informational contract.
+ */
+
 async function handleBulkProcessUnprocess(state) {
   const { LOGM, L, GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][BULK-PROCESS][UNPROCESS]')
@@ -236758,6 +237064,16 @@ async function handleBulkProcessUnprocess(state) {
   const isDailyManual = (periodType === 'DAILY' || sheetScope === 'DAILY') && submissionMode === 'MANUAL' && !!timesheetId;
   const isWeeklyManual = (periodType === 'WEEKLY' || sheetScope === 'WEEKLY' || !!contractWeekId) && submissionMode === 'MANUAL' && !!timesheetId && !!contractWeekId;
   let rowSignature = pickSignature(activeRow, activeCtx.row, activeCtx, activeDetails, timesheet, st.active_context, st.active_row);
+  const activeActionFlags = (activeDetails.action_flags && typeof activeDetails.action_flags === 'object') ? activeDetails.action_flags : {};
+  const retentionBlocked = boolish(activeRow.has_retained_financial_history ?? activeDetails.has_retained_financial_history ?? activeActionFlags.has_retained_financial_history) ||
+    upper(activeRow.unprocess_block_reason || activeDetails.unprocess_block_reason || activeActionFlags.unprocess_block_reason || '') === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS';
+  if (retentionBlocked) {
+    if (typeof showTimesheetRetentionUnprocessBlockedInfo === 'function') await showTimesheetRetentionUnprocessBlockedInfo({ source: 'bulk-process-preflight' });
+    else alert('This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.');
+    GE();
+    return { ok: false, blocked: true, error_code: 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS', message: 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.' };
+  }
+
   const lifecycleMutationIdentity = contractWeekId
     ? `contract_week:${contractWeekId}`
     : (timesheetId ? `timesheet:${timesheetId}` : (previousRowKey || 'active'));
@@ -237044,6 +237360,20 @@ async function handleBulkProcessUnprocess(state) {
     };
   } catch (err) {
     resetBusy('error');
+    const blockedBody = (err?.json && typeof err.json === 'object') ? err.json : {};
+    const blockedReason = upper(blockedBody.unprocess_block_reason || blockedBody.error_code || blockedBody.code || '');
+    if (blockedBody.has_retained_financial_history === true || blockedReason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS') {
+      try {
+        if (typeof applyBulkTimesheetRowPatches === 'function') applyBulkTimesheetRowPatches(st, [blockedBody.row_patch || blockedBody], { mode: 'bulk_process', action: 'unprocess-blocked' });
+        if (typeof refreshTimesheetLifecycleAffectedRows === 'function') await refreshTimesheetLifecycleAffectedRows(blockedBody, { context: 'bulk_process', action: 'unprocess-blocked', state: st, apply: true, throwOnError: false });
+      } catch {}
+      st.error_text = '';
+      if (typeof rerenderBulkProcessWorkbench === 'function') try { await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][UNPROCESS][RETENTION-BLOCKED]'); } catch {}
+      if (typeof showTimesheetRetentionUnprocessBlockedInfo === 'function') await showTimesheetRetentionUnprocessBlockedInfo({ source: 'bulk-process-server' });
+      else alert('This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.');
+      GE();
+      return { ok: false, blocked: true, error_code: 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS', message: 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.', json: blockedBody };
+    }
     const rawErrorText = String(err?.message || err || 'Failed to unprocess Bulk Process row.');
     st.error_text = isTransientLifecycleContention(err) || transientLifecycleContentionPattern.test(rawErrorText)
       ? BULK_PROCESS_SAFE_LIFECYCLE_CONTENTION_MESSAGE
@@ -237059,6 +237389,7 @@ async function handleBulkProcessUnprocess(state) {
     if (st.__bulk_process_unprocess_in_flight || st.unprocessing) resetBusy('finally');
   }
 }
+
 
 
 function applyBulkTimesheetRowPatches(state, patches, options = {}) {
@@ -242584,6 +242915,12 @@ async function refreshBulkAuthoriseSummaryRowAfterMutation(state, options = {}) 
 }
 
 
+/* Installed original amended because no candidate frontend body was supplied.
+ * COMPLETE FINAL REPLACEMENT FUNCTION extracted from the integrated final main.js.
+ * Retention preflight and server-race blocks use the canonical informational contract.
+ */
+
+
 async function handleBulkAuthoriseUnprocess(state, row) {
   const { GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][BULK-AUTH][UNPROCESS]')
@@ -242702,6 +243039,18 @@ async function handleBulkAuthoriseUnprocess(state, row) {
       ? classifyBulkAuthoriseEditability({ ...ctx, row: srcRow, details, state: activeCtx?.state, active_ctx: activeCtx })
       : { canUnprocess: readBool([ctx, 'can_unprocess'], [srcRow, 'can_unprocess']) === true };
     const backendCanUnprocess = readBool([ctx, 'can_unprocess'], [activeCtx || {}, 'can_unprocess'], [srcRow, 'can_unprocess']) === true;
+    const retainedHistory = editability.hasRetainedFinancialHistory === true || readBool(
+      [ctx, 'has_retained_financial_history'], [activeCtx || {}, 'has_retained_financial_history'], [srcRow, 'has_retained_financial_history'], [details, 'has_retained_financial_history'], [details?.action_flags || {}, 'has_retained_financial_history']
+    ) === true;
+    const retainedReason = upper(readFirst(
+      [ctx, 'unprocess_block_reason'], [activeCtx || {}, 'unprocess_block_reason'], [srcRow, 'unprocess_block_reason'], [details, 'unprocess_block_reason'], [details?.action_flags || {}, 'unprocess_block_reason']
+    ) || editability.unprocessBlockReason || '');
+    if (retainedHistory || retainedReason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS') {
+      if (typeof showTimesheetRetentionUnprocessBlockedInfo === 'function') await showTimesheetRetentionUnprocessBlockedInfo({ source: 'bulk-authorise-preflight' });
+      else alert('This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.');
+      GE();
+      return { ok: false, blocked: true, error_code: 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS', message: 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.' };
+    }
     const isAuthorised = !!(editability.isAuthorised || readBool([ctx, 'is_authorised'], [activeCtx || {}, 'is_authorised'], [srcRow, 'is_authorised']) === true);
     const isLocked = !!(editability.hasAnyLockBlocker || readBool([ctx, 'locked'], [activeCtx || {}, 'locked'], [srcRow, 'locked']) === true);
     const routeFamily = upper(readFirst([ctx, 'route_family'], [activeCtx || {}, 'route_family'], [srcRow, 'route_family']) || editability.routeFamily || '');
@@ -242918,6 +243267,21 @@ async function handleBulkAuthoriseUnprocess(state, row) {
     };
   } catch (err) {
     st.unprocessing = false;
+    const blockedBody = (err?.json && typeof err.json === 'object') ? err.json : {};
+    const blockedReason = upper(blockedBody.unprocess_block_reason || blockedBody.error_code || blockedBody.code || '');
+    if (blockedBody.has_retained_financial_history === true || blockedReason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS') {
+      st.error_text = '';
+      try {
+        if (typeof applyBulkTimesheetRowPatches === 'function') applyBulkTimesheetRowPatches(st, [blockedBody.row_patch || blockedBody], { mode: 'bulk_authorise', action: 'unprocess-blocked' });
+        if (typeof refreshTimesheetLifecycleAffectedRows === 'function') await refreshTimesheetLifecycleAffectedRows(blockedBody, { context: 'bulk_authorise', action: 'unprocess-blocked', state: st, apply: true, throwOnError: false });
+      } catch {}
+      markButtonsBusy(false);
+      if (typeof rerenderBulkAuthoriseWorkbench === 'function') try { await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][UNPROCESS][RETENTION-BLOCKED]'); } catch {}
+      if (typeof showTimesheetRetentionUnprocessBlockedInfo === 'function') await showTimesheetRetentionUnprocessBlockedInfo({ source: 'bulk-authorise-server' });
+      else alert('This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.');
+      GE();
+      return { ok: false, blocked: true, error_code: 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS', message: 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.', json: blockedBody };
+    }
     st.error_text = String(err?.message || err || 'Failed to unprocess Bulk Authorise row.');
     markButtonsBusy(false);
     if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
@@ -242931,7 +243295,6 @@ async function handleBulkAuthoriseUnprocess(state, row) {
     window.__timesheetLifecycleMutationInFlight.delete(mutationKey);
   }
 }
-
 
 
 
@@ -294371,7 +294734,10 @@ async function contractWeekAuthorise(week_id, expectedTimesheetId /* optional */
 
 
 
-
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend body was supplied.
+ * Complete final replacement extracted from and verified against the integrated final main.js.
+ */
 function renderTimesheetIssuesTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][ISSUES]');
   const { row, details } = normaliseTimesheetCtx(ctx);
@@ -294906,10 +295272,28 @@ function renderTimesheetIssuesTab(ctx) {
     ? `<ul class="mini">${issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>`
     : `<span class="mini">OK</span>`;
 
+  const archivedAtUtc = normStr(row?.archived_at_utc || details?.archived_at_utc || ts?.archived_at_utc || details?.action_flags?.archived_at_utc || '');
+  const archivedDisplay = normStr(row?.archived_by_display || details?.archived_by_display || details?.action_flags?.archived_by_display || '');
+  const isArchived = !!(archivedAtUtc || boolish(row?.is_archived) || boolish(details?.is_archived) || boolish(ts?.is_archived));
+  const formatArchiveCurrentStateTime = (iso) => {
+    try {
+      const d = new Date(String(iso || ''));
+      if (Number.isNaN(d.getTime())) return '';
+      const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(d);
+      const get = (type) => parts.find((part) => part.type === type)?.value || '';
+      return `${get('day')} ${get('month')} ${get('year')} at ${get('hour')}:${get('minute')} hrs`;
+    } catch { return ''; }
+  };
+  const archivedCurrentStateHtml = isArchived ? `
+    <div class="card" style="margin-bottom:10px;border-color:#b91c1c;">
+      <div class="row"><label>Archived</label><div class="controls"><span class="mini">This timesheet was archived by ${esc(archivedDisplay || 'a CloudTMS administrator')}${archivedAtUtc ? ` on ${esc(formatArchiveCurrentStateTime(archivedAtUtc))}` : ''}.</span></div></div>
+    </div>` : '';
+
   GE();
 
   return `
     <div class="tabc">
+      ${archivedCurrentStateHtml}
       <div class="card">
         <div class="row">
           <label>Processing State</label>
@@ -294932,6 +295316,7 @@ function renderTimesheetIssuesTab(ctx) {
     </div>
   `;
 }
+
 
 function buildOutboxFiltersFromUi() {
   const getVal = (id) => {
@@ -303906,6 +304291,10 @@ function adoptRealTimesheetState(mc, detail, opts = {}) {
     contract_week_id: weekId
   };
 }
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend version was supplied.
+ * Complete replacement: preserve the supplied installed function and amend only the stated contract.
+ */
 function getCanonicalTimesheetFooterState(mc, frameMode) {
   const det   = (mc && mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
   const ts    = (det.timesheet && typeof det.timesheet === 'object') ? det.timesheet : {};
@@ -304044,12 +304433,35 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const hasTs = !!timesheetId;
   const isPlannedWeek = !hasTs && !!contractWeekId;
 
-  const locked = !!(
-    meta.isPaid ||
-    meta.isInvoiced ||
-    tsfin.locked_by_invoice_id ||
-    tsfin.paid_at_utc
+  const archivedAtUtc = String(
+    data.archived_at_utc || det.archived_at_utc || ts.archived_at_utc || data.row_patch?.archived_at_utc || ''
+  ).trim() || null;
+  const isArchived = !!(
+    archivedAtUtc || boolish(data.is_archived) || boolish(det.is_archived) || boolish(ts.is_archived) || toolsStage === 'ARCHIVED' || summaryStage === 'ARCHIVED'
   );
+  const invoiceLocked = !!(
+    meta.isInvoiced || tsfin.locked_by_invoice_id || data.locked_by_invoice_id || Number(data.invoice_segments_locked || det.invoice_segments_locked || 0) > 0
+  );
+  const isPaid = !!(meta.isPaid || tsfin.paid_at_utc || data.paid_at_utc || data.pay_paid_at_utc);
+  const locked = invoiceLocked || isArchived;
+  const actionFlagsForRetention = isPlainObject(det.action_flags) ? det.action_flags : {};
+  const rowPatchForRetention = isPlainObject(data.row_patch) ? data.row_patch : {};
+  const hasRetainedFinancialHistory = boolish(
+    data.has_retained_financial_history ?? det.has_retained_financial_history ?? actionFlagsForRetention.has_retained_financial_history ?? rowPatchForRetention.has_retained_financial_history
+  );
+  const suppliedUnprocessReason = upper(
+    data.unprocess_block_reason || det.unprocess_block_reason || actionFlagsForRetention.unprocess_block_reason || rowPatchForRetention.unprocess_block_reason || ''
+  );
+  const unprocessBlockReason = hasRetainedFinancialHistory
+    ? (suppliedUnprocessReason || 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS')
+    : (suppliedUnprocessReason || null);
+  const unprocessActionVisible = !isArchived && (
+    boolish(data.unprocess_action_visible ?? det.unprocess_action_visible ?? actionFlagsForRetention.unprocess_action_visible ?? rowPatchForRetention.unprocess_action_visible) ||
+    hasRetainedFinancialHistory
+  );
+  const unprocessBlockMessage = hasRetainedFinancialHistory && unprocessBlockReason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS'
+    ? 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.'
+    : String(data.unprocess_block_message || det.unprocess_block_message || actionFlagsForRetention.unprocess_block_message || rowPatchForRetention.unprocess_block_message || '').trim() || null;
 
   const isAuthorised = !!(
     ts.authorised_at_server ||
@@ -304231,7 +304643,8 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const canAuthoriseBase =
     (frameMode === 'view') &&
     hasTs &&
-    !locked &&
+    !isArchived &&
+    !invoiceLocked &&
     requiresAuth &&
     !isAuthorised;
 
@@ -304241,12 +304654,14 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const canUnauthorise =
     (frameMode === 'view') &&
     hasTs &&
-    !locked &&
+    !isArchived &&
+    !invoiceLocked &&
     isAuthorised;
 
   const canProcess =
     (frameMode === 'view') &&
-    !locked &&
+    !isArchived &&
+    !invoiceLocked &&
     !importAuthoritative &&
     !isAuthorised &&
     (
@@ -304265,12 +304680,14 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
 
   const dpKind = upper((dp && dp.kind) ? dp.kind : '');
   const dpEligible = (dp && typeof dp.eligible === 'boolean') ? dp.eligible : false;
+  const dpDecision = upper((dp && (dp.decision || dp.delete_decision || dp.removal_decision)) || '');
+  const dpActionable = dpEligible === true || dpDecision === 'PERMANENT_DELETE' || dpDecision === 'ARCHIVE_REQUIRED';
 
   const canDeleteBase =
-    ((frameMode === 'edit' || frameMode === 'view') && !locked && (hasTs || isPlannedWeek));
+    ((frameMode === 'edit' || frameMode === 'view') && !isArchived && !invoiceLocked && (hasTs || isPlannedWeek));
 
   const safeRealTimesheetDeletePreview = !!(
-    dpEligible === true &&
+    dpActionable &&
     (
       manualAdditionalForFooter
         ? dpKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE'
@@ -304288,7 +304705,9 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const canUnprocess =
     (frameMode === 'view') &&
     hasTs &&
-    !locked &&
+    !isArchived &&
+    !invoiceLocked &&
+    !hasRetainedFinancialHistory &&
     !isAuthorised &&
     (
       (
@@ -304309,6 +304728,19 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     hasTs,
     isPlannedWeek,
     locked,
+    invoiceLocked,
+    isPaid,
+    isArchived,
+    archivedAtUtc,
+    archivedByUserId: data.archived_by_user_id || det.archived_by_user_id || ts.archived_by_user_id || null,
+    archivedByDisplay: data.archived_by_display || det.archived_by_display || null,
+    archivedReasonCode: data.archived_reason_code || det.archived_reason_code || ts.archived_reason_code || null,
+    hasRetainedFinancialHistory,
+    unprocessBlockReason,
+    unprocessActionVisible: unprocessActionVisible || canUnprocess,
+    showUnprocess: unprocessActionVisible || canUnprocess,
+    unprocessBlockMessage,
+    canUnarchive: frameMode === 'view' && hasTs && isArchived,
     isAuthorised,
     canAuthoriseBase,
     canAuthorise,
@@ -309771,6 +310203,10 @@ frame._parentModeOnOpen = parentOnOpen ? parentOnOpen.mode : null;
 stack().push(frame);
 byId('modalBack').style.display='flex';
 
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend body was supplied.
+ * Complete final replacement extracted from and verified against the integrated final main.js.
+ */
 function renderTop() {
   const LOG = (typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : true;
   const L  = (...a)=> { if (LOG) console.log('[MODAL]', ...a); };
@@ -310987,6 +311423,10 @@ if (!isChild && top.entity === 'timesheets') {
   const canProcessNow = footerState.canProcess;
   const canDeleteNow = footerState.canDelete;
   const canUnprocessNow = footerState.canUnprocess;
+  const showUnprocessNow = footerState.showUnprocess === true;
+  const unprocessBlockReasonNow = String(footerState.unprocessBlockReason || '').trim().toUpperCase();
+  const isArchivedNow = footerState.isArchived === true;
+  const canUnarchiveNow = footerState.canUnarchive === true;
 
 const lifecycleBusyState = mcNow.__timesheetLifecycleBusy || window.__timesheetLifecycleBusy || null;
 const lifecycleBusy = !!(lifecycleBusyState && lifecycleBusyState.busy !== false) || mcNow.__timesheetLifecycleMutationInFlight === true;
@@ -311164,93 +311604,90 @@ try {
   };
 
   if (btnTsUnprocess) {
-    btnTsUnprocess.style.display = canUnprocessNow ? '' : 'none';
-    btnTsUnprocess.disabled      = !!top._saving;
-
+    const retentionBlockedNow = unprocessBlockReasonNow === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS' || footerState.hasRetainedFinancialHistory === true;
+    const canOpenUnprocessAction = showUnprocessNow && !isArchivedNow && !lifecycleBlocked && !top._saving;
+    styleLifecycleButton(btnTsUnprocess, {
+      visible: showUnprocessNow && !isArchivedNow,
+      enabled: canOpenUnprocessAction,
+      title: retentionBlockedNow ? 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.' : (canOpenUnprocessAction ? '' : lifecycleBlockedReason)
+    });
+    btnTsUnprocess.textContent = 'Unprocess Timesheet';
     btnTsUnprocess.dataset.ownerToken = top._token;
-    btnTsUnprocess.onclick = async () => {
+    btnTsUnprocess.onclick = async (ev) => {
+      try { ev && ev.preventDefault && ev.preventDefault(); } catch {}
+      try { ev && ev.stopPropagation && ev.stopPropagation(); } catch {}
       const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
-      if (!fr || btnTsUnprocess.dataset.ownerToken !== fr._token) return;
+      if (!fr || btnTsUnprocess.dataset.ownerToken !== fr._token || btnTsUnprocess.disabled) return;
 
       const mc = window.modalCtx || {};
-      const det = mc.timesheetDetails || {};
-      const tsfin = det.tsfin || {};
-      const ts = det.timesheet || {};
-
-      const tsIdX = mc.data?.timesheet_id || null;
-      const cwIdX = det.contract_week_id || mc.data?.contract_week_id || null;
-
-      const lockedX = !!(tsfin.locked_by_invoice_id || tsfin.paid_at_utc);
-      if (lockedX) { alert('This timesheet is locked (paid or invoiced).'); return; }
-
-      const sheetScopeX = String(
-        mc?.timesheetMeta?.sheetScope ||
-        det?.sheet_scope ||
-        mc?.data?.sheet_scope ||
-        ts?.sheet_scope ||
-        ''
-      ).toUpperCase();
-
-      const subModeX = String(
-        mc?.timesheetMeta?.subMode ||
-        ts?.submission_mode ||
-        mc?.data?.submission_mode ||
-        ''
-      ).toUpperCase();
-
-      const isWeeklyManualX = (sheetScopeX === 'WEEKLY' && subModeX === 'MANUAL' && !!tsIdX && !!cwIdX);
-      const isDailyManualX = (sheetScopeX === 'DAILY' && subModeX === 'MANUAL' && !!tsIdX);
-
-      if (!isWeeklyManualX && !isDailyManualX) {
-        alert('This timesheet is not currently unprocessable.');
+      const freshFooter = (typeof getCanonicalTimesheetFooterState === 'function')
+        ? getCanonicalTimesheetFooterState(mc, fr.mode || top.mode)
+        : footerState;
+      const freshReason = String(freshFooter?.unprocessBlockReason || '').trim().toUpperCase();
+      if (freshFooter?.hasRetainedFinancialHistory === true || freshReason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS') {
+        if (typeof showTimesheetRetentionUnprocessBlockedInfo === 'function') await showTimesheetRetentionUnprocessBlockedInfo({ source: 'timesheet-footer' });
+        else alert('This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.');
         return;
       }
+      if (freshFooter?.isArchived === true) return;
+      if (freshFooter?.invoiceLocked === true) { alert('This timesheet is locked by an invoice.'); return; }
+      if (freshFooter?.canUnprocess !== true) { alert('This timesheet is not currently unprocessable.'); return; }
+
+      const det = mc.timesheetDetails || {};
+      const ts = det.timesheet || {};
+      const tsIdX = mc.data?.timesheet_id || det.current_timesheet_id || ts.timesheet_id || null;
+      const cwIdX = det.contract_week_id || det.contract_week?.id || mc.data?.contract_week_id || null;
+      const sheetScopeX = String(mc?.timesheetMeta?.sheetScope || det?.sheet_scope || mc?.data?.sheet_scope || ts?.sheet_scope || '').toUpperCase();
+      const subModeX = String(mc?.timesheetMeta?.subMode || ts?.submission_mode || mc?.data?.submission_mode || '').toUpperCase();
+      const isWeeklyManualX = (sheetScopeX === 'WEEKLY' && subModeX === 'MANUAL' && !!tsIdX && !!cwIdX);
+      const isDailyManualX = (sheetScopeX === 'DAILY' && subModeX === 'MANUAL' && !!tsIdX);
+      if (!isWeeklyManualX && !isDailyManualX) { alert('This timesheet is not currently unprocessable.'); return; }
 
       const ok = await confirmTimesheetAction({
         title: 'Unprocess Timesheet?',
         messageHtml: isWeeklyManualX
-          ? `
-            <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Unprocess this weekly manual timesheet?</div>
-            <div class="mini" style="white-space:pre-wrap;">This will delete the processed manual timesheet and revert back to the planned week. Attached evidence will stay with the workflow and will not be returned to Timesheet Imports.</div>
-          `
-          : `
-            <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Unprocess this daily manual timesheet?</div>
-            <div class="mini" style="white-space:pre-wrap;">This will return the daily manual timesheet to Unprocessed. The real timesheet row remains in place and attached evidence stays attached.</div>
-          `,
+          ? '<div style="font-size:14px;font-weight:700;margin-bottom:6px;">Unprocess this weekly manual timesheet?</div><div class="mini" style="white-space:pre-wrap;">This will delete the processed manual timesheet and revert back to the planned week. Attached evidence will stay with the workflow and will not be returned to Timesheet Imports.</div>'
+          : '<div style="font-size:14px;font-weight:700;margin-bottom:6px;">Unprocess this daily manual timesheet?</div><div class="mini" style="white-space:pre-wrap;">This will return the daily manual timesheet to Unprocessed. The real timesheet row remains in place and attached evidence stays attached.</div>',
         confirmLabel: 'Unprocess Timesheet',
         confirmClass: 'btn btn-outline'
       });
       if (!ok) return;
 
+      top._saving = true;
+      top._updateButtons && top._updateButtons();
       try {
-        if (isWeeklyManualX) {
-          await deleteManualTimesheetAndReopenWeek(String(tsIdX), String(cwIdX));
-
-          try {
-            mc.timesheetRelated = mc.timesheetRelated || {};
-            mc.timesheetRelated.invoice = null;
-          } catch {}
-        } else {
-          await unprocessDailyManualTimesheet(String(tsIdX), {
-            expected_timesheet_id:
-              (mc?.timesheetMeta?.expected_timesheet_id || det?.current_timesheet_id || ts?.timesheet_id || tsIdX)
-          });
+        const result = isWeeklyManualX
+          ? await deleteManualTimesheetAndReopenWeek(String(tsIdX), String(cwIdX), { expected_timesheet_id: String(tsIdX) })
+          : await unprocessDailyManualTimesheet(String(tsIdX), { expected_timesheet_id: mc?.timesheetMeta?.expected_timesheet_id || det?.current_timesheet_id || ts?.timesheet_id || tsIdX });
+        const root = (result && typeof result === 'object') ? result : {};
+        const reason = String(root.unprocess_block_reason || root.error_code || root.code || '').trim().toUpperCase();
+        if (root.has_retained_financial_history === true || reason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS') {
+          try { applyTimesheetLifecyclePatchToModal(mc, root, { action: 'unprocess', source: 'footer-unprocess-blocked', requireSignature: false, showBlockMessage: false }); } catch {}
+          if (typeof showTimesheetRetentionUnprocessBlockedInfo === 'function') await showTimesheetRetentionUnprocessBlockedInfo({ source: 'timesheet-footer-result' });
+          else alert('This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.');
+          return;
         }
-
         window.__toast && window.__toast('Timesheet unprocessed.');
         await refreshFooter();
       } catch (e) {
+        const body = (e?.json && typeof e.json === 'object') ? e.json : ((e?.body && typeof e.body === 'object') ? e.body : {});
+        const reason = String(body.unprocess_block_reason || body.error_code || body.code || '').trim().toUpperCase();
+        if (body.has_retained_financial_history === true || reason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS') {
+          try { applyTimesheetLifecyclePatchToModal(mc, body, { action: 'unprocess', source: 'footer-unprocess-error', requireSignature: false, showBlockMessage: false }); } catch {}
+          if (typeof showTimesheetRetentionUnprocessBlockedInfo === 'function') await showTimesheetRetentionUnprocessBlockedInfo({ source: 'timesheet-footer-error' });
+          else alert('This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.');
+          return;
+        }
         try {
           if (typeof tsHandleMoved409Modal === 'function') {
-            const handled = await tsHandleMoved409Modal(e, {
-              tabKey: 'overview',
-              label: 'footer-unprocess-timesheet',
-              toast: 'This timesheet changed while you were editing; review and try again.'
-            });
+            const handled = await tsHandleMoved409Modal(e, { tabKey: 'overview', label: 'footer-unprocess-timesheet', toast: 'This timesheet changed while you were editing; review and try again.' });
             if (handled) return;
           }
         } catch {}
         alert(e?.message || 'Failed to unprocess timesheet.');
+      } finally {
+        top._saving = false;
+        top._updateButtons && top._updateButtons();
       }
     };
   }
@@ -311842,485 +312279,94 @@ if (btnTsProcess) {
   };
 }
 
-      // ── Delete Timesheet ──
+      // ── Delete / Archive / Unarchive Timesheet ──
       if (btnTsDelete) {
-        btnTsDelete.style.display = canDeleteNow ? '' : 'none';
-        btnTsDelete.disabled      = !!top._saving;
-
+        const showRemovalAction = !!(canDeleteNow || canUnarchiveNow);
+        const removalEnabled = showRemovalAction && !lifecycleBlocked && !top._saving;
+        btnTsDelete.textContent = canUnarchiveNow ? 'Unarchive timesheet' : 'Delete timesheet';
+        styleLifecycleButton(btnTsDelete, {
+          visible: showRemovalAction,
+          enabled: removalEnabled,
+          title: removalEnabled ? '' : lifecycleBlockedReason
+        });
+        try {
+          btnTsDelete.classList.remove('btn-primary', 'btn-warn');
+          btnTsDelete.classList.add(canUnarchiveNow ? 'btn-outline' : 'btn-warn');
+        } catch {}
         btnTsDelete.dataset.ownerToken = top._token;
-        btnTsDelete.onclick = async () => {
+        btnTsDelete.onclick = async (ev) => {
+          try { ev && ev.preventDefault && ev.preventDefault(); } catch {}
+          try { ev && ev.stopPropagation && ev.stopPropagation(); } catch {}
           const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
-          if (!fr || btnTsDelete.dataset.ownerToken !== fr._token) return;
+          if (!fr || btnTsDelete.dataset.ownerToken !== fr._token || btnTsDelete.disabled) return;
 
           const mc = window.modalCtx || {};
           const det = mc.timesheetDetails || {};
-          const tsfin = det.tsfin || {};
-          const tsIdX = mc.data?.timesheet_id || null;
-          const weekIdX = mc.data?.contract_week_id || null;
+          const ts = det.timesheet || {};
+          const freshFooter = getCanonicalTimesheetFooterState(mc, fr.mode || top.mode);
+          const tsIdX = freshFooter.timesheetId || mc.data?.timesheet_id || det.current_timesheet_id || ts.timesheet_id || null;
+          const weekIdX = freshFooter.contractWeekId || det.contract_week_id || det.contract_week?.id || mc.data?.contract_week_id || null;
 
-          const lockedX = !!(tsfin.locked_by_invoice_id || tsfin.paid_at_utc);
-          if (lockedX) { alert('This timesheet is locked (paid or invoiced).'); return; }
-
-          const isPlannedOnly = (!tsIdX && !!weekIdX);
-
-              const boolishDelete = (v) => {
-            if (v === true) return true;
-            if (v === false) return false;
-            if (v == null) return false;
-            const s = String(v).trim().toLowerCase();
-            return (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on');
-          };
-
-          const upperDelete = (v) => String(v || '').trim().toUpperCase();
-
-          const numDelete = (v) => {
-            const n = Number(v);
-            return Number.isFinite(n) ? n : 0;
-          };
-
-          const routeTypeDelete = upperDelete(
-            det?.route_type ||
-            det?.effective?.route_type ||
-            det?.action_flags?.route_type ||
-            det?.contract_week?.route_type ||
-            mc?.data?.route_type ||
-            ''
-          );
-
-          const routeFamilyDelete = upperDelete(
-            det?.route_family ||
-            det?.effective?.route_family ||
-            det?.action_flags?.route_family ||
-            det?.contract_week?.route_family ||
-            mc?.data?.route_family ||
-            ''
-          );
-
-          const routeSubfamilyDelete = upperDelete(
-            det?.route_subfamily ||
-            det?.effective?.route_subfamily ||
-            det?.action_flags?.route_subfamily ||
-            det?.contract_week?.route_subfamily ||
-            mc?.data?.route_subfamily ||
-            ''
-          );
-
-          const underlyingFamilyDelete = upperDelete(
-            det?.underlying_channel_family ||
-            det?.effective?.underlying_channel_family ||
-            det?.action_flags?.underlying_channel_family ||
-            det?.contract_week?.underlying_channel_family ||
-            mc?.data?.underlying_channel_family ||
-            ''
-          );
-
-          const cwModeDelete = upperDelete(
-            det?.cw_submission_mode_snapshot ||
-            det?.contract_week?.submission_mode_snapshot ||
-            mc?.timesheetMeta?.cw_submission_mode_snapshot ||
-            mc?.data?.submission_mode_snapshot ||
-            ''
-          );
-
-          const additionalSeqDelete = numDelete(
-            det?.additional_seq ??
-            det?.contract_week_additional_seq ??
-            det?.effective?.additional_seq ??
-            det?.action_flags?.additional_seq ??
-            det?.contract_week?.additional_seq ??
-            mc?.data?.additional_seq ??
-            mc?.data?.contract_week_additional_seq ??
-            0
-          );
-
-          const deleteTargetLooksManualAdditional = !!(
-            additionalSeqDelete > 0 ||
-            routeTypeDelete === 'WEEKLY_NHSP_ADJUSTMENT' ||
-            routeTypeDelete === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
-            routeTypeDelete === 'WEEKLY_MANUAL_ADJUSTMENT' ||
-            routeTypeDelete.includes('_ADJUSTMENT') ||
-            boolishDelete(det?.is_adjustment) ||
-            boolishDelete(det?.effective?.is_adjustment) ||
-            boolishDelete(det?.action_flags?.is_adjustment) ||
-            boolishDelete(det?.contract_week?.is_adjustment) ||
-            boolishDelete(det?.timesheet?.is_adjustment) ||
-            boolishDelete(mc?.data?.is_adjustment)
-          );
-
-          const deleteTargetLooksManualRoute = !!(
-            routeFamilyDelete === 'MANUAL_NON_QR' ||
-            routeSubfamilyDelete === 'MANUAL_NON_QR' ||
-            underlyingFamilyDelete === 'MANUAL_NON_QR' ||
-            cwModeDelete === 'MANUAL' ||
-            additionalSeqDelete > 0
-          );
-
-          const isKnownManualAdditionalDeleteTarget = !!(
-            !isPlannedOnly &&
-            !!tsIdX &&
-            !!weekIdX &&
-            deleteTargetLooksManualAdditional &&
-            deleteTargetLooksManualRoute
-          );
-
-          const refreshDeletePreviewNow = async () => {
-            if (isPlannedOnly) return null;
-
-            if (!tsIdX) throw new Error('Timesheet id missing.');
-
-            if (typeof fetchTimesheetDeletePreview === 'function') {
-              const out = await fetchTimesheetDeletePreview(String(tsIdX));
-              if (out && typeof out === 'object') return out.preview || out.delete_preview || out;
-            }
-
-            if (typeof authFetch !== 'function' || typeof API !== 'function') {
-              throw new Error('Delete preview refresh is unavailable.');
-            }
-
-            const res = await authFetch(API(`/api/timesheets/${encodeURIComponent(String(tsIdX))}/delete-preview`), {
-              method: 'GET'
-            });
-
-            let body = null;
-            try { body = await res.json(); } catch { body = null; }
-
-            if (!res.ok || !body) {
-              throw new Error((body && (body.message || body.error)) || 'Delete preview could not be refreshed.');
-            }
-
-            if (body.ok === false) {
-              throw new Error(body.message || body.error || 'Delete preview could not be refreshed.');
-            }
-
-            return body.preview || body.delete_preview || body;
-          };
-
-          // ✅ Always refresh delete preview immediately before showing destructive confirmation.
-          // Never trust cached mc.timesheetDeletePreview for real timesheet deletes.
-          let freshDpX =
-            isPlannedOnly
-              ? null
-              : await refreshDeletePreviewNow();
-
-          if (freshDpX && typeof freshDpX === 'object') {
-            try { mc.timesheetDeletePreview = freshDpX; } catch {}
-          }
-
-          const dpKindX = String((freshDpX && freshDpX.kind) ? freshDpX.kind : '').toUpperCase();
-          const dpEligibleX = (freshDpX && typeof freshDpX.eligible === 'boolean') ? freshDpX.eligible : false;
-
-          if (!isPlannedOnly) {
-            if (dpKindX === 'IMPORT_CHILD_ADJUSTMENT') {
-              alert("This is an NHSP/HR child adjustment and can't be deleted directly. Delete must be performed via the parent timesheet (if eligible).");
-              return;
-            }
-
-            if (isKnownManualAdditionalDeleteTarget && dpKindX === 'WEEKLY_CHAIN_DELETE_PARENT') {
-              alert('Delete has been blocked for safety. This is an additional manual adjustment, but the refreshed preview is trying to delete a parent weekly chain.');
-              return;
-            }
-
-            if (isKnownManualAdditionalDeleteTarget && dpKindX !== 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') {
-              alert('Delete has been blocked for safety. This additional manual adjustment did not return an additional-only delete preview.');
-              return;
-            }
-
-            if (dpEligibleX !== true) {
-              alert('Delete is not available for this timesheet (it may be locked, invoiced/paid, or not eligible).');
-              return;
-            }
-            const previewContractWeekIds = Array.isArray(freshDpX?.contract_week_ids)
-              ? freshDpX.contract_week_ids.map((id) => String(id || '').trim()).filter(Boolean)
-              : [];
-
-            if (
-              (isKnownManualAdditionalDeleteTarget || dpKindX === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') &&
-              weekIdX &&
-              previewContractWeekIds.some((id) => String(id) !== String(weekIdX))
-            ) {
-              alert('Delete has been blocked for safety. The refreshed preview includes a source/base contract week as a destructive target.');
-              return;
-            }
-          }
-
-          // Friendly confirm modal (uses refreshed preview.delete_items for details)
-          const enc2 = escapeHtml;
-
-          const fmtGBP = (n) => {
-            const x = Number(n || 0);
-            const v = Number.isFinite(x) ? x : 0;
-            return `£${v.toFixed(2)}`;
-          };
-
-          const fmtHours = (n) => {
-            const x = Number(n || 0);
-            const v = Number.isFinite(x) ? x : 0;
-            return v.toFixed(2);
-          };
-           const roleLabel = (it) => {
-            const r = String(it?.display_role || '').toUpperCase();
-            if (dpKindX === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') return 'Manual Adjustment';
-            if (r === 'PARENT') return 'Parent';
-            if (r === 'MANUAL_ADJUSTMENT') return 'Manual Adjustment';
-            if (r === 'IMPORT_CHILD_ADJUSTMENT') return 'Import Adjustment';
-            if (r === 'ADJUSTMENT') return 'Adjustment';
-            return 'Timesheet';
-          };
-
-          const buildDeleteTableHtml = (items) => {
-            const list = Array.isArray(items) ? items : [];
-            if (!list.length) return '';
-
-            let sumH = 0, sumPay = 0, sumChg = 0;
-            const rows = list.map(it => {
-              const h = Number(it?.total_hours || 0) || 0;
-              const p = Number(it?.total_pay_ex_vat || 0) || 0;
-              const c = Number(it?.total_charge_ex_vat || 0) || 0;
-              sumH += h; sumPay += p; sumChg += c;
-
-              const id8 = String(it?.timesheet_id || '').slice(0, 8);
-              return `
-                <tr>
-                  <td style="padding:6px 8px;border-bottom:1px solid var(--line);">${enc2(roleLabel(it))}</td>
-                  <td style="padding:6px 8px;border-bottom:1px solid var(--line);font-family:monospace;">${enc2(id8 ? `${id8}…` : '')}</td>
-                  <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;">${enc2(fmtHours(h))}</td>
-                  <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;">${enc2(fmtGBP(p))}</td>
-                  <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;">${enc2(fmtGBP(c))}</td>
-                </tr>
-              `;
-            }).join('');
-
-            const totalRow = `
-              <tr>
-                <td style="padding:6px 8px;font-weight:700;">Total</td>
-                <td style="padding:6px 8px;"></td>
-                <td style="padding:6px 8px;text-align:right;font-weight:700;">${enc2(fmtHours(sumH))}</td>
-                <td style="padding:6px 8px;text-align:right;font-weight:700;">${enc2(fmtGBP(sumPay))}</td>
-                <td style="padding:6px 8px;text-align:right;font-weight:700;">${enc2(fmtGBP(sumChg))}</td>
-              </tr>
-            `;
-
-            return `
-              <div style="margin-top:10px;">
-                <div class="mini" style="margin-bottom:6px;opacity:.85;">
-                  The following timesheet(s) will be deleted:
-                </div>
-                <table style="width:100%;border-collapse:collapse;border:1px solid var(--line);border-radius:10px;overflow:hidden;">
-                  <thead>
-                    <tr>
-                      <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);">Type</th>
-                      <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);">ID</th>
-                      <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);">Hours</th>
-                      <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);">Net pay</th>
-                      <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);">Net charge</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${rows}
-                    ${totalRow}
-                  </tbody>
-                </table>
-              </div>
-            `;
-          };
-
-            const dpItems = (!isPlannedOnly && freshDpX && Array.isArray(freshDpX.delete_items)) ? freshDpX.delete_items : [];
-          const weYmdX =
-            (dpItems[0] && dpItems[0].week_ending_date) ? String(dpItems[0].week_ending_date) :
-            (det?.timesheet?.week_ending_date) ? String(det.timesheet.week_ending_date) :
-            (mc.data?.week_ending_date) ? String(mc.data.week_ending_date) :
-            '';
-
-          const isAdditionalOnlyDelete = !!(!isPlannedOnly && dpKindX === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE');
-
-          const title =
-            isPlannedOnly
-              ? 'Delete planned week?'
-              : (isAdditionalOnlyDelete ? 'Delete additional manual adjustment?' : 'Delete timesheet(s)?');
-
-          const messageHtml =
-            isPlannedOnly
-              ? `
-                <div style="font-size:14px;font-weight:700;margin-bottom:6px;">
-                  Delete this planned week?
-                </div>
-                <div class="mini" style="white-space:pre-wrap;">
-                  This is a planned week (no timesheet has been created yet).
-                  Deleting will remove the planned contract week. Any staged files associated with this planned row will also be permanently deleted and will not return to Timesheet Imports.
-                </div>
-                <div class="mini" style="margin-top:10px;opacity:.8;">
-                  This action cannot be undone.
-                </div>
-              `
-              : (isAdditionalOnlyDelete
-                ? `
-                  <div style="font-size:14px;font-weight:700;margin-bottom:6px;">
-                    Delete this additional manual adjustment?
-                  </div>
-                  <div class="mini" style="white-space:pre-wrap;">
-                    This will permanently delete only the additional manual adjustment listed below. The original/source timesheet and source contract week must not be deleted, detached, or changed.
-                  </div>
-                  <div class="mini" style="margin-top:10px;opacity:.8;">
-                    This action cannot be undone.
-                  </div>
-                `
-                : `
-                  <div style="font-size:14px;font-weight:700;margin-bottom:6px;">
-                    Delete timesheet(s) for week ending ${enc2(weYmdX || 'Unknown')}?
-                  </div>
-                  <div class="mini" style="white-space:pre-wrap;">
-                    This will permanently delete the timesheet(s) listed below. Associated evidence, images and files will also be permanently deleted and will not return to Timesheet Imports.
-                  </div>
-                  <div class="mini" style="margin-top:10px;opacity:.8;">
-                    This action cannot be undone.
-                  </div>
-                `);
-
-          const extraHtml =
-            isPlannedOnly ? '' : buildDeleteTableHtml(dpItems);
-
-          const confirmLabel =
-            isPlannedOnly
-              ? 'Delete planned week'
-              : (isAdditionalOnlyDelete ? 'Delete additional adjustment' : 'Delete timesheet(s)');
-
-          const confirmRes = await openUiConfirmModal({
-            title,
-            message_html: messageHtml,
-            extra_html: extraHtml,
-            confirm_label: confirmLabel,
-            cancel_label: 'Cancel',
-            confirm_class: 'btn btn-warn',
-            cancel_class: 'btn btn-outline'
-          });
-
-          if (!confirmRes || !confirmRes.confirmed) return;
-
-          // OK-only info modal (utility child)
-          const showOkInfoModal = async (infoTitle, infoHtml) => {
-            const modalKind = 'import-summary-ui-info';
-            const btnId = `btnUiInfoOk_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-
-            return await new Promise((resolve) => {
-              let done = false;
-              const finish = () => { if (done) return; done = true; resolve(true); };
-
-              showModal(
-                String(infoTitle || 'Done'),
-                [{ key: 'ok', label: 'OK' }],
-                () => `
-                  <div style="padding: 6px 2px;">
-                    ${String(infoHtml || '')}
-                    <div style="display:flex; gap:10px; margin-top:14px;">
-                      <button id="${enc2(btnId)}" type="button" class="btn btn-primary">OK</button>
-                    </div>
-                  </div>
-                `,
-                null,
-                true,
-                null,
-                {
-                  kind: modalKind,
-                  noParentGate: true,
-                  showSave: false,
-                  showApply: false,
-                  onDismiss: () => finish()
-                }
-              );
-
-              const wire = () => {
-                const okBtn = document.getElementById(btnId);
-                if (okBtn && !okBtn.__wired) {
-                  okBtn.__wired = true;
-                  okBtn.onclick = () => {
-                    finish();
-                    try { document.getElementById('btnCloseModal')?.click(); } catch {}
-                  };
-                }
-              };
-
-              try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
-            });
-          };
-
-          // Capture summary ctx (if available) BEFORE closing anything
-          let summaryCtx = null;
-          try { summaryCtx = fr._summaryCtx || top._summaryCtx || mc.__summaryCtx || null; } catch { summaryCtx = null; }
-          try { mc.__summaryCtx = summaryCtx || null; } catch {}
-
+          top._saving = true;
+          top._updateButtons && top._updateButtons();
           try {
-               if (isPlannedOnly) {
-              if (!weekIdX) throw new Error('Contract week id missing.');
-              await deletePlannedContractWeek(weekIdX);
-            } else {
-              if (!tsIdX) throw new Error('Timesheet id missing.');
-
-              const expectedDeleteContractWeekId =
-                isAdditionalOnlyDelete
-                  ? (weekIdX || freshDpX?.contract_week_id || null)
-                  : (weekIdX || freshDpX?.contract_week_id || null);
-
-              await deleteTimesheetPermanent(tsIdX, {
-                expected_timesheet_id: tsIdX,
-                expected_contract_week_id: expectedDeleteContractWeekId,
-                expected_delete_kind: dpKindX || null,
-                contractWeekId: expectedDeleteContractWeekId,
-                expectedContractWeekId: expectedDeleteContractWeekId,
-                expectedDeleteKind: dpKindX || null
+            if (freshFooter.isArchived === true) {
+              const answer = await openUiConfirmModal({
+                title: 'Unarchive timesheet?',
+                message: 'Make this timesheet active again?',
+                confirm_label: 'Unarchive',
+                cancel_label: 'Cancel',
+                confirm_class: 'btn btn-primary',
+                cancel_class: 'btn btn-outline',
+                kind: 'timesheet-unarchive-confirm',
+                noParentGate: true
               });
+              if (!answer || answer.confirmed !== true) return;
+              if (!tsIdX) throw new Error('Timesheet id is missing.');
+              await requestTimesheetArchiveAction(String(tsIdX), 'UNARCHIVE', {
+                expected_timesheet_id: String(tsIdX),
+                expected_row_signature: det?.row?.backend_row_signature || det?.backend_row_signature || mc?.data?.backend_row_signature || null,
+                summaryCtx: fr._summaryCtx || top._summaryCtx || mc.__summaryCtx || null
+              });
+              window.__toast && window.__toast('Timesheet unarchived.');
+              await refreshFooter();
+              return;
             }
 
-            await showOkInfoModal(
-              'Deleted',
-              `<div style="font-size:14px;font-weight:700;margin-bottom:6px;">Deleted successfully.</div>
-               <div class="mini">The selected timesheet(s) have been deleted.</div>`
-            );
-
-                  // Update summary behind (use helper; fallback to renderAll only if needed)
-            try {
-              if (typeof applyTimesheetDeleteImpactToSummary === 'function') {
-                await applyTimesheetDeleteImpactToSummary({
-                  entity: 'timesheets',
-                         preview: freshDpX || null,
-                  opened_timesheet_id: tsIdX || null,
-                  planned_contract_week_id: (isPlannedOnly ? (weekIdX || null) : null),
-                  summaryCtx: summaryCtx || null,
-                  fallbackFullRefresh: true
-                });
-              } else {
-                try { await renderAll(); } catch {}
-              }
-            } catch {
-              try { await renderAll(); } catch {}
+            const result = await deleteTimesheetPermanent(tsIdX ? String(tsIdX) : null, {
+              contractWeekId: weekIdX || null,
+              expected_timesheet_id: tsIdX || null,
+              expected_contract_week_id: weekIdX || null,
+              expected_delete_kind: mc.timesheetDeletePreview?.kind || null,
+              summaryCtx: fr._summaryCtx || top._summaryCtx || mc.__summaryCtx || null
+            });
+            if (!result || result.cancelled === true || result.ok === false) return;
+            const decision = String(result.decision || result.delete_decision || result.removal_decision || '').trim().toUpperCase();
+            const action = String(result.action || '').trim().toUpperCase();
+            if (decision === 'ARCHIVE_REQUIRED' || action === 'ARCHIVE' || result.archived === true) {
+              window.__toast && window.__toast('Timesheet archived.');
+              await refreshFooter();
+              return;
             }
-
-    // Close the timesheet modal after the user confirms OK
-// ✅ Do NOT rely on btnCloseModal.click() here (token-guarded, can no-op after utility child modals).
-// ✅ Hard-close the modal stack (timesheet no longer exists).
-try {
-  discardAllModalsAndState();
-} catch {
-  // fallback: attempt normal close
-  try { byId('btnCloseModal')?.click(); } catch {}
-}
-
-
-
+            if (decision === 'PERMANENT_DELETE' || result.deleted === true || (!tsIdX && weekIdX)) {
+              window.__toast && window.__toast(tsIdX ? 'Timesheet deleted.' : 'Planned week deleted.');
+              try { discardAllModalsAndState(); } catch { try { byId('btnCloseModal')?.click(); } catch {} }
+            }
           } catch (e) {
             try {
               if (typeof tsHandleMoved409Modal === 'function') {
-                const handled = await tsHandleMoved409Modal(e, {
-                  tabKey: (currentFrame?.() && currentFrame().currentTabKey) ? currentFrame().currentTabKey : 'overview',
-                  label: 'footer-delete-timesheet',
-                  toast: 'This timesheet changed while you were editing; review and try again.'
-                });
+                const handled = await tsHandleMoved409Modal(e, { tabKey: fr.currentTabKey || 'overview', label: 'footer-delete-archive-timesheet', toast: 'This timesheet changed while you were editing; review and try again.' });
                 if (handled) return;
               }
             } catch {}
-            alert(e?.message || 'Delete failed');
+            alert(e?.message || 'Timesheet action failed.');
+          } finally {
+            top._saving = false;
+            top._updateButtons && top._updateButtons();
           }
         };
       }
+
 
 
   } else {
@@ -313998,6 +314044,7 @@ bindSave(btnSave, top);
   };
 }
 
+
   byId('modalBack').style.display='flex';
   window.__getModalFrame = currentFrame;
 
@@ -314015,9 +314062,10 @@ bindSave(btnSave, top);
 }
 
 
-
-
-
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend version was supplied.
+ * Complete replacement preserving existing signature/stale-state safeguards.
+ */
 function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput, options) {
   const opts = (options && typeof options === 'object') ? options : {};
   const ctx = (modalCtxInput && typeof modalCtxInput === 'object')
@@ -314229,6 +314277,8 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
       }));
     }
     nestedSourceKeys.forEach((key) => pushObject(sources, lifecyclePatchInput[key]));
+    ['row_patch', 'rowPatch', 'action_flags', 'actionFlags', 'archive_state', 'archiveState', 'retention_state', 'retentionState']
+      .forEach((key) => pushObject(sources, lifecyclePatchInput[key]));
     ['flattened_rows', 'flattenedRows', 'affected_rows', 'affectedRows', 'rows'].forEach((key) => {
       const arr = lifecyclePatchInput[key];
       if (Array.isArray(arr) && arr.length) pushObject(sources, arr[0]);
@@ -314635,7 +314685,10 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
     'can_manage_evidence', 'can_edit_timesheet_data', 'can_edit_hours_schedule', 'can_edit_expenses',
     'qr_status', 'qr_unsigned_blocked', 'evidence_document_locked', 'evidence_lock_reason',
     'disabled_reasons', 'issue_codes', 'warnings', 'blockers', 'priority_badges', 'badge_state',
-    'evidence_count', 'has_timesheet_evidence', 'requires_evidence', 'evidence_required'
+    'evidence_count', 'has_timesheet_evidence', 'requires_evidence', 'evidence_required',
+    'is_archived', 'archived_at_utc', 'archived_by_user_id', 'archived_by_display', 'archived_reason_code',
+    'archive_active_advance_cleared', 'archive_consumed_advance_history_retained', 'can_unarchive',
+    'has_retained_financial_history', 'unprocess_block_reason', 'unprocess_action_visible', 'unprocess_block_message'
   ];
   const safePatch = {};
   copyKnown(patch, safeKeys, safePatch);
@@ -314646,6 +314699,58 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
     Object.keys(src).forEach((key) => { mergedActionFlags[key] = src[key]; });
   });
   if (Object.keys(mergedActionFlags).length) safePatch.action_flags = mergedActionFlags;
+
+  const canonicalArchivedAt = trimStr(firstPresent(patch.archived_at_utc, mergedActionFlags.archived_at_utc));
+  const canonicalArchived = firstBool(
+    patch.is_archived, patch.archived, mergedActionFlags.is_archived, mergedActionFlags.archived,
+    canonicalArchivedAt ? true : undefined,
+    trimStr(firstPresent(patch.summary_stage, patch.tools_stage)).toUpperCase() === 'ARCHIVED' ? true : undefined
+  ) === true;
+  const canonicalRetention = firstBool(
+    patch.has_retained_financial_history,
+    mergedActionFlags.has_retained_financial_history
+  ) === true;
+  const canonicalUnprocessReason = trimStr(firstPresent(
+    patch.unprocess_block_reason,
+    mergedActionFlags.unprocess_block_reason,
+    topLevelInput.unprocess_block_reason,
+    topLevelUnsafeCode === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS' ? topLevelUnsafeCode : undefined
+  )).toUpperCase();
+  const financialUnprocessBlocked = canonicalRetention || canonicalUnprocessReason === 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS';
+
+  if (canonicalArchived) {
+    safePatch.is_archived = true;
+    if (canonicalArchivedAt) safePatch.archived_at_utc = canonicalArchivedAt;
+    safePatch.summary_stage = 'ARCHIVED';
+    safePatch.tools_stage = 'ARCHIVED';
+    safePatch.can_authorise = false;
+    safePatch.can_unauthorise = false;
+    safePatch.can_process = false;
+    safePatch.can_unprocess = false;
+    safePatch.can_delete = false;
+    safePatch.can_save = false;
+    safePatch.can_edit = false;
+    safePatch.read_only = true;
+    safePatch.can_unarchive = true;
+  } else if (hasOwn(patch, 'is_archived') || hasOwn(patch, 'archived_at_utc') || hasOwn(mergedActionFlags, 'is_archived')) {
+    safePatch.is_archived = false;
+    safePatch.archived_at_utc = null;
+    safePatch.can_unarchive = false;
+  }
+
+  if (financialUnprocessBlocked && !canonicalArchived) {
+    safePatch.has_retained_financial_history = true;
+    safePatch.can_unprocess = false;
+    safePatch.unprocess_block_reason = 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS';
+    safePatch.unprocess_action_visible = true;
+    safePatch.unprocess_block_message = 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.';
+  }
+
+  safePatch.action_flags = {
+    ...(isPlainObject(safePatch.action_flags) ? safePatch.action_flags : {}),
+    ...(['is_archived','archived_at_utc','archived_by_user_id','archived_by_display','archived_reason_code','archive_active_advance_cleared','archive_consumed_advance_history_retained','can_unarchive','has_retained_financial_history','can_unprocess','unprocess_block_reason','unprocess_action_visible','unprocess_block_message','can_authorise','can_unauthorise','can_process','can_delete','can_save','can_edit','read_only','summary_stage','tools_stage']
+      .reduce((acc, key) => { if (hasOwn(safePatch, key)) acc[key] = safePatch[key]; return acc; }, {}))
+  };
   if (hasKeys(priorityBadgeHints)) safePatch.priority_badge_hints = priorityBadgeHints;
   if (explicitPermissionComplete !== null) safePatch.permission_state_patch_complete = explicitPermissionComplete;
   if (explicitPriorityComplete !== null) safePatch.priority_badges_patch_complete = explicitPriorityComplete;
@@ -314659,7 +314764,7 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
   if (patchWeekId || currentWeekId) safePatch.contract_week_id = patchWeekId || currentWeekId;
   if (bookingId) safePatch.booking_id = bookingId;
   if (processingStatus) safePatch.processing_status = processingStatus;
-  if (summaryStage) {
+  if (summaryStage && !canonicalArchived) {
     safePatch.summary_stage = summaryStage;
     safePatch.tools_stage = summaryStage;
   }
@@ -314715,7 +314820,10 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
       'timesheet_id', 'current_timesheet_id', 'contract_week_id', 'processing_status',
       'authorised_at_server', 'authorised_at_utc', 'is_authorised', 'authorised',
       'backend_row_signature', 'mutation_row_signature', 'row_signature', 'expected_row_signature',
-      'ready_to_pay'
+      'ready_to_pay',
+      'is_archived', 'archived_at_utc', 'archived_by_user_id', 'archived_by_display', 'archived_reason_code',
+      'archive_active_advance_cleared', 'archive_consumed_advance_history_retained', 'can_unarchive',
+      'has_retained_financial_history', 'can_unprocess', 'unprocess_block_reason', 'unprocess_action_visible', 'unprocess_block_message'
     ].forEach((key) => { if (hasOwn(safePatch, key)) tsfinLifecyclePatch[key] = safePatch[key]; });
     Object.assign(ctx.timesheetDetails.tsfin, tsfinLifecyclePatch);
   }
@@ -314888,7 +314996,70 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
     if (frame && typeof frame._updateButtons === 'function') frame._updateButtons();
   } catch {}
 
+  if (financialUnprocessBlocked && opts.showBlockMessage !== false && typeof showTimesheetRetentionUnprocessBlockedInfo === 'function') {
+    Promise.resolve().then(() => showTimesheetRetentionUnprocessBlockedInfo({ source })).catch(() => {});
+  }
+
   return finishTimesheetLifecyclePatchForDiag(result);
+}
+
+/* CloudTMS Retention Marker / Unprocess handover
+ * GENUINELY NEW IMPLEMENTATION UNIT.
+ * Server-refresh reconciliation after Archive/Unarchive; no arithmetic count guesses.
+ */
+async function reconcileTimesheetArchiveListMembership(input = {}) {
+  const opts = (input && typeof input === 'object') ? input : {};
+  const timesheetId = String(opts.timesheet_id || opts.current_timesheet_id || '').trim();
+  const action = String(opts.action || '').trim().toUpperCase();
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+
+  try {
+    if (mc) {
+      mc.__timesheetAuditCacheInvalidatedAt = Date.now();
+      delete mc.timesheetAudit;
+      delete mc.timesheetAuditRows;
+      delete mc.__timesheetAuditLoadedAt;
+    }
+  } catch {}
+
+  try {
+    if (window.__listState && window.__listState.timesheets) {
+      const state = window.__listState.timesheets;
+      state.total = null;
+      state.hasMore = false;
+      state.__membershipInvalidatedAt = Date.now();
+      state.__membershipInvalidatedTimesheetId = timesheetId || null;
+      state.__membershipInvalidatedAction = action || null;
+    }
+  } catch {}
+
+  // Invalidate both Bulk datasets because Archive is a hard exclusion from active buckets.
+  try {
+    if (window.modalCtx?.bulkProcessState) window.modalCtx.bulkProcessState.__dataset_invalidated_at = Date.now();
+    if (window.modalCtx?.bulkAuthoriseState) window.modalCtx.bulkAuthoriseState.__dataset_invalidated_at = Date.now();
+  } catch {}
+
+  if (typeof opts.refreshList === 'function') {
+    await opts.refreshList({ timesheet_id: timesheetId, action });
+  } else if (typeof renderAll === 'function') {
+    await renderAll();
+  } else if (typeof listTimesheetsSummary === 'function') {
+    const filters = (window.__listState?.timesheets?.filters && typeof window.__listState.timesheets.filters === 'object')
+      ? { ...window.__listState.timesheets.filters }
+      : {};
+    await listTimesheetsSummary(filters);
+  }
+
+  try {
+    if (typeof refreshSimpleTimesheetOverviewLifecycleBadgesIfVisible === 'function') {
+      refreshSimpleTimesheetOverviewLifecycleBadgesIfVisible({
+        timesheet_id: timesheetId,
+        action: action.toLowerCase()
+      });
+    }
+  } catch {}
+
+  return { ok: true, refreshed_from_server: true, timesheet_id: timesheetId || null, action: action || null };
 }
 
 
@@ -315124,6 +315295,10 @@ function resolveBankingPaymentRouteDisplay(source, options = {}) {
 }
 
 
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend version was supplied.
+ * Complete replacement: preserve the supplied installed function and amend only the stated contract.
+ */
 function refreshSimpleTimesheetOverviewLifecycleBadgesIfVisible(options = {}) {
   try {
     const opts = (options && typeof options === 'object') ? options : {};
@@ -315195,6 +315370,29 @@ function refreshSimpleTimesheetOverviewLifecycleBadgesIfVisible(options = {}) {
       }
       return null;
     };
+
+    const archivedAtUtc = firstText(['archived_at_utc']);
+    const isArchived = firstBool(['is_archived']) === true || !!archivedAtUtc || firstText(['tools_stage', 'summary_stage']).toUpperCase() === 'ARCHIVED';
+    if (isArchived) {
+      const currentPills = Array.from(controls.querySelectorAll('.pill'));
+      currentPills.forEach((pill) => {
+        const text = normaliseText(pill.textContent).toLowerCase();
+        if (['processed', 'unprocessed', 'authorised for payment', 'authorized for payment', 'authorised for invoicing', 'authorized for invoicing', 'awaiting authorisation', 'awaiting authorization'].includes(text)) {
+          pill.remove();
+        }
+      });
+      let archivedPill = Array.from(controls.querySelectorAll('.pill')).find((pill) => normaliseText(pill.textContent).toLowerCase() === 'archived');
+      if (!archivedPill) {
+        archivedPill = document.createElement('span');
+        archivedPill.className = 'pill pill-bad';
+        archivedPill.style.fontWeight = '700';
+        controls.insertBefore(archivedPill, controls.firstChild || null);
+      }
+      archivedPill.textContent = 'Archived';
+      archivedPill.className = 'pill pill-bad';
+      archivedPill.setAttribute('title', 'This timesheet is archived and must be unarchived before lifecycle actions are available.');
+      return true;
+    }
 
     const processingStatus = firstText(['processing_status', 'new_processing_status', 'status']).toUpperCase();
     const authStamp = firstText(['authorised_at_server', 'authorised_at_utc', 'authorized_at_server', 'authorized_at_utc']);
@@ -315275,6 +315473,8 @@ function refreshSimpleTimesheetOverviewLifecycleBadgesIfVisible(options = {}) {
     return false;
   }
 }
+
+
 try { window.__refreshSimpleTimesheetOverviewLifecycleBadgesIfVisible = refreshSimpleTimesheetOverviewLifecycleBadgesIfVisible; } catch {}
 
 
@@ -315315,6 +315515,161 @@ function ensureTsRefreshAndRepaintOverview() {
 }
 
 
+/* CloudTMS Retention Marker / Unprocess handover
+ * GENUINELY NEW IMPLEMENTATION UNIT.
+ * Central friendly informational boundary for FINANCIAL_HISTORY_PREVENTS_UNPROCESS.
+ */
+function showTimesheetRetentionUnprocessBlockedInfo(options = {}) {
+  const message = 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.';
+  const opts = (options && typeof options === 'object') ? options : {};
+
+  try {
+    if (window.__timesheetRetentionUnprocessInfoPromise) {
+      return window.__timesheetRetentionUnprocessInfoPromise;
+    }
+  } catch {}
+
+  const run = async () => {
+    if (typeof openUiConfirmModal === 'function') {
+      return await openUiConfirmModal({
+        title: 'Timesheet cannot be unprocessed',
+        message,
+        confirm_label: 'OK',
+        hide_cancel: true,
+        confirm_class: 'btn btn-primary',
+        kind: String(opts.kind || 'timesheet-retention-unprocess-info'),
+        noParentGate: true
+      });
+    }
+    if (typeof alert === 'function') alert(message);
+    return { confirmed: true, via: 'fallback-alert' };
+  };
+
+  const promise = Promise.resolve().then(run).finally(() => {
+    try {
+      if (window.__timesheetRetentionUnprocessInfoPromise === promise) {
+        delete window.__timesheetRetentionUnprocessInfoPromise;
+      }
+    } catch {}
+  });
+  try { window.__timesheetRetentionUnprocessInfoPromise = promise; } catch {}
+  return promise;
+}
+/* CloudTMS Retention Marker / Unprocess handover
+ * GENUINELY NEW IMPLEMENTATION UNIT.
+ * Explicit Archive/Unarchive transport and authoritative reconciliation boundary.
+ */
+async function requestTimesheetArchiveAction(timesheetId, actionInput, options = {}) {
+  const opts = (options && typeof options === 'object') ? options : {};
+  const trim = (value) => String(value == null ? '' : value).trim();
+  const upper = (value) => trim(value).toUpperCase();
+  const action = upper(actionInput || opts.action);
+  const id = trim(timesheetId || opts.timesheet_id || opts.current_timesheet_id);
+  if (!id) throw new Error('timesheet_id is required');
+  if (action !== 'ARCHIVE' && action !== 'UNARCHIVE') throw new Error('action must be ARCHIVE or UNARCHIVE');
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+  const det = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
+  const row = (det.row && typeof det.row === 'object') ? det.row : {};
+  const ts = (det.timesheet && typeof det.timesheet === 'object') ? det.timesheet : {};
+  const expectedTimesheetId = trim(
+    opts.expected_timesheet_id || opts.expectedTimesheetId ||
+    mc?.timesheetMeta?.expected_timesheet_id || det?.current_timesheet_id ||
+    row?.current_timesheet_id || row?.timesheet_id || ts?.timesheet_id ||
+    mc?.data?.current_timesheet_id || mc?.data?.timesheet_id || id
+  ) || id;
+  const expectedRowSignature = trim(
+    opts.expected_row_signature || opts.expectedRowSignature ||
+    row?.backend_row_signature || row?.row_signature ||
+    det?.backend_row_signature || det?.row_signature ||
+    mc?.data?.backend_row_signature || mc?.data?.row_signature ||
+    mc?.__timesheetLifecycleTrusted?.signature || ''
+  ) || null;
+  const removalKind = upper(
+    opts.removal_kind || opts.removalKind || opts.delete_kind || opts.deleteKind ||
+    mc?.timesheetDeletePreview?.delete_kind || mc?.timesheetDeletePreview?.kind || 'STANDARD_DELETE'
+  ) || 'STANDARD_DELETE';
+
+  if (action === 'UNARCHIVE' && opts.confirmed !== true) {
+    const answer = (typeof openUiConfirmModal === 'function')
+      ? await openUiConfirmModal({
+          title: 'Unarchive timesheet?',
+          message: 'Are you sure you want to unarchive this timesheet?',
+          confirm_label: 'OK',
+          cancel_label: 'Cancel',
+          confirm_class: 'btn btn-primary',
+          cancel_class: 'btn btn-outline',
+          kind: 'timesheet-unarchive-confirm',
+          noParentGate: true
+        })
+      : { confirmed: typeof confirm === 'function' ? confirm('Are you sure you want to unarchive this timesheet?') : false };
+    if (!answer || answer.confirmed !== true) return { ok: false, cancelled: true, action };
+  }
+
+  let response;
+  try {
+    response = await apiPostJson(`/api/timesheets/${encodeURIComponent(id)}/archive-transition`, {
+      action,
+      removal_kind: removalKind,
+      expected_timesheet_id: expectedTimesheetId,
+      expected_row_signature: expectedRowSignature
+    });
+  } catch (error) {
+    const body = (error && error.json && typeof error.json === 'object') ? error.json : null;
+    const outcomeUnknown = !!(body?.outcome_unknown || body?.error_code === 'ARCHIVE_TRANSITION_RECONCILIATION_REQUIRED');
+    if (outcomeUnknown && typeof opts.refreshAuthoritativeState === 'function') {
+      try { await opts.refreshAuthoritativeState({ timesheet_id: id, reason: body?.error_code || 'UNKNOWN_OUTCOME' }); } catch {}
+    }
+    if (body) {
+      error.archive_result = body;
+      error.error_code = body.error_code || body.code || null;
+      error.decision = body.decision || null;
+    }
+    throw error;
+  }
+
+  const result = (response && typeof response === 'object') ? response : {};
+  if (result.ok === false) {
+    const error = new Error(result.message || result.error || 'Archive transition was blocked.');
+    error.json = result;
+    error.error_code = result.error_code || null;
+    error.decision = result.decision || null;
+    throw error;
+  }
+
+  const patch = result.row_patch || result.lifecycle_patch || result.patch || result.row || result;
+  if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
+    try {
+      applyTimesheetLifecyclePatchToModal(mc, result, {
+        action: action.toLowerCase(),
+        source: 'timesheet_archive_transition',
+        requireSignature: false,
+        showBlockMessage: false,
+        timesheet_id: result.current_timesheet_id || expectedTimesheetId
+      });
+    } catch {}
+  }
+  try {
+    mc.__timesheetAuditCacheInvalidatedAt = Date.now();
+    delete mc.timesheetAudit;
+    delete mc.timesheetAuditRows;
+  } catch {}
+
+  if (typeof reconcileTimesheetArchiveListMembership === 'function') {
+    try {
+      await reconcileTimesheetArchiveListMembership({
+        timesheet_id: result.current_timesheet_id || expectedTimesheetId,
+        action,
+        is_archived: action === 'ARCHIVE',
+        patch,
+        result,
+        summaryCtx: opts.summaryCtx || opts.summary_ctx || null
+      });
+    } catch {}
+  }
+
+  return { ...result, ok: true, action, row_patch: patch };
+}
 
 
 async function applyTimesheetDeleteImpactToSummary(opts = {}) {
@@ -316966,6 +317321,12 @@ function openImportColumnAliasesModal(opts) {
   }, 0);
 }
 
+
+
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend body was supplied.
+ * Complete final replacement extracted from and verified against the integrated final main.js.
+ */
 function renderTimesheetAuditTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUDIT][TAB]');
   const { row, details } = normaliseTimesheetCtx(ctx);
@@ -317086,6 +317447,8 @@ function renderTimesheetAuditTab(ctx) {
     if (!a) return 'Event';
     if (a === 'TIMESHEET_CHANNEL_CHANGE_PORTION_SETTLED') return 'Changed-channel payment settled';
     if (a === 'TIMESHEET_CHANNEL_CHANGE_PORTION_UNWOUND') return 'Changed-channel payment unwound';
+    if (a === 'TIMESHEET_ARCHIVED') return 'Timesheet archived';
+    if (a === 'TIMESHEET_UNARCHIVED') return 'Timesheet unarchived';
     return enc(a.replace(/_/g, ' '));
   };
 
@@ -317349,6 +317712,34 @@ function renderTimesheetAuditTab(ctx) {
     `;
   };
 
+  const isArchiveAudit = (it) => {
+    const action = upperTrim(it?.action || '');
+    return action === 'TIMESHEET_ARCHIVED' || action === 'TIMESHEET_UNARCHIVED';
+  };
+
+  const renderArchiveCard = (it) => {
+    const action = upperTrim(it?.action || '');
+    const archived = action === 'TIMESHEET_ARCHIVED';
+    const after = parseJsonObject(it?.after_json) || {};
+    const before = parseJsonObject(it?.before_json) || {};
+    const payload = { ...before, ...after };
+    const actorDisplay = trimStr(it?.actor_display || payload?.archived_by_display || payload?.actor_display || '') || 'CloudTMS administrator';
+    const reason = trimStr(payload?.archived_reason_label || payload?.archived_reason_code || it?.reason || '');
+    const activeAdvanceCleared = archived && (payload?.active_advance_cleared === true || Number(payload?.active_advance_rows_cleared || 0) > 0);
+    const consumedAdvanceRetained = archived && (payload?.consumed_advance_history_retained === true || payload?.has_consumed_advance === true);
+    const notes = [];
+    if (activeAdvanceCleared) notes.push('The active Advance instruction was cleared.');
+    if (consumedAdvanceRetained) notes.push('Previously consumed Advance history was retained.');
+    return `
+      <div class="card" style="margin-top:10px;border-color:${archived ? '#b91c1c' : '#2563eb'};">
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div><strong>${archived ? 'Timesheet archived' : 'Timesheet unarchived'}</strong><div class="mini" style="margin-top:5px;">By ${enc(actorDisplay)}${reason ? ` • ${enc(reason)}` : ''}</div></div>
+          <div class="mini">${fmtUkDateTime(it?.ts_utc || payload?.archived_at_utc || null) || '—'}</div>
+        </div>
+        ${notes.length ? `<div class="mini" style="margin-top:8px;">${notes.map(enc).join(' ')}</div>` : ''}
+      </div>`;
+  };
+
   const renderGenericCard = (it) => {
     const whenLabel = fmtUkDateTime(it?.ts_utc || null) || '—';
     const actionLabel = genericActionLabel(it);
@@ -317386,9 +317777,8 @@ function renderTimesheetAuditTab(ctx) {
   };
 
   const cardsHtml = items.map((it) => {
-    if (isChangedChannelAudit(it)) {
-      return renderChangedChannelCard(it);
-    }
+    if (isArchiveAudit(it)) return renderArchiveCard(it);
+    if (isChangedChannelAudit(it)) return renderChangedChannelCard(it);
     return renderGenericCard(it);
   }).join('');
 
@@ -317410,8 +317800,6 @@ function renderTimesheetAuditTab(ctx) {
     </div>
   `;
 }
-
-
 
 
 
@@ -337232,7 +337620,10 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
 
 
 
-
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend body was supplied.
+ * Complete final replacement extracted from and verified against the integrated final main.js.
+ */
 function renderTimesheetOverviewTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OVERVIEW]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -337296,6 +337687,14 @@ function renderTimesheetOverviewTab(ctx) {
     boolish(state?.bulk_authorise_mode) ||
     boolish(row?.suppress_action_buttons) ||
     boolish(row?.bulk_authorise_mode)
+  );
+
+  const archivedAtUtcForOverview = String(
+    row?.archived_at_utc || details?.archived_at_utc || ts?.archived_at_utc || actionFlags?.archived_at_utc || baseSummary?.archived_at_utc || ''
+  ).trim();
+  const isArchivedOverview = !!(
+    archivedAtUtcForOverview || boolish(row?.is_archived) || boolish(details?.is_archived) || boolish(ts?.is_archived) ||
+    boolish(actionFlags?.is_archived) || String(baseSummary?.summary_stage || baseSummary?.tools_stage || '').trim().toUpperCase() === 'ARCHIVED'
   );
 
   const sheetScopeRawForOverview = (
@@ -337972,9 +338371,19 @@ function renderTimesheetOverviewTab(ctx) {
     return `<span class="pill ${cls || 'pill-info'}" style="font-weight:600;"${title ? ` title="${enc(title)}"` : ''}>${enc(key)}</span>`;
   };
 
+  const archivedFinancialStageLabels = new Set([
+    'PAID', 'PART PAID', 'PARTLY PAID', 'PARTIALLY PAID', 'ADVANCED', 'OVERPAID', 'UNDERPAID',
+    'PAY OUTSTANDING', 'PAYMENT OUTSTANDING', 'INVOICED', 'PARTLY INVOICED', 'INVOICE PAID'
+  ]);
+  const stageAllowedWhenArchived = (label) => {
+    if (!isArchivedOverview) return true;
+    const key = String(label || '').trim().toUpperCase();
+    return key === 'ARCHIVED' || archivedFinancialStageLabels.has(key);
+  };
+
   const addStage = (label, cls, title) => {
     const key = String(label || '').trim();
-    if (!key) return;
+    if (!key || !stageAllowedWhenArchived(key)) return;
     if (seenStage.has(key)) return;
     seenStage.add(key);
     stageBadges.push(makeStageBadgeHtml(key, cls, title));
@@ -337982,11 +338391,17 @@ function renderTimesheetOverviewTab(ctx) {
 
   const prependStage = (label, cls, title) => {
     const key = String(label || '').trim();
-    if (!key) return;
+    if (!key || !stageAllowedWhenArchived(key)) return;
     if (seenStage.has(key)) return;
     seenStage.add(key);
-    stageBadges.unshift(makeStageBadgeHtml(key, cls, title));
+    const html = makeStageBadgeHtml(key, cls, title);
+    if (isArchivedOverview && key.toUpperCase() !== 'ARCHIVED') stageBadges.push(html);
+    else stageBadges.unshift(html);
   };
+
+  if (isArchivedOverview) {
+    prependStage('Archived', 'pill-bad', 'This timesheet is archived. Operational lifecycle actions are unavailable until it is unarchived.');
+  }
 
   if (showAuthorisedForPaymentStageBadge) {
     prependStage(
@@ -352737,7 +353152,10 @@ async function saveNhspDeferrals(ctxOrId, deferrals) {
 
 
 
-
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend version was supplied.
+ * Complete replacement: preserve the supplied installed function and amend only the stated contract.
+ */
 async function listTimesheetsSummary(filters = {}) {
   window.__listState = window.__listState || {};
   const st = (window.__listState['timesheets'] ||= {
@@ -352824,6 +353242,7 @@ async function listTimesheetsSummary(filters = {}) {
       const legacy = legacyTsStage || legacySumStage;
       if (legacy === 'UNPROCESSED') f.tools_stage = 'UNPROCESSED';
       else if (legacy === 'INVOICED') f.tools_stage = 'INVOICED';
+      else if (legacy === 'ARCHIVED') f.tools_stage = 'ARCHIVED';
     }
 
     // Always remove legacy keys from the effective snapshot
@@ -352853,7 +353272,8 @@ async function listTimesheetsSummary(filters = {}) {
       'PROCESSING_DELAYED',
       'AWAITING_AUTHORISATION',
       'AUTHORISED_FOR_INVOICING',
-      'INVOICED'
+      'INVOICED',
+      'ARCHIVED'
     ]);
 
     if (Object.prototype.hasOwnProperty.call(f, 'tools_stage')) {
@@ -352982,7 +353402,6 @@ async function listTimesheetsSummary(filters = {}) {
 
   return rows;
 }
-
 
 
 
@@ -353793,14 +354212,16 @@ async function deleteManualTimesheetAndReopenWeek(timesheetId, contractWeekId, o
 
 
 
-
+/* CloudTMS Retention Marker / Unprocess handover
+ * Installed original amended because no candidate frontend version was supplied.
+ * Complete replacement. This is the sole explicit Delete-or-Archive dispatcher.
+ */
 async function deleteTimesheetPermanent(timesheetId, opts = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][DELETE-PERM]');
   GC('deleteTimesheetPermanent');
 
   try {
     const options = (opts && typeof opts === 'object') ? opts : {};
-
     const trimId = (value) => String(value == null ? '' : value).trim();
     const upper = (value) => trimId(value).toUpperCase();
     const pickFirst = (...values) => {
@@ -353812,10 +354233,8 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
     };
     const boolish = (value) => {
       if (value === true) return true;
-      if (value === false) return false;
-      if (value == null) return false;
-      const raw = String(value).trim().toLowerCase();
-      return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
+      if (value === false || value == null) return false;
+      return ['true','1','yes','y','on'].includes(String(value).trim().toLowerCase());
     };
     const num = (value) => {
       const n = Number(value);
@@ -353826,27 +354245,10 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
       const seen = new Set();
       const push = (value) => {
         if (value == null) return;
-        if (Array.isArray(value)) {
-          value.forEach(push);
-          return;
-        }
+        if (Array.isArray(value)) { value.forEach(push); return; }
         if (typeof value === 'object') {
-          if (Array.isArray(value.ids)) {
-            value.ids.forEach(push);
-            return;
-          }
-          if (value.id != null) {
-            push(value.id);
-            return;
-          }
-          if (value.timesheet_id != null) {
-            push(value.timesheet_id);
-            return;
-          }
-          if (value.contract_week_id != null) {
-            push(value.contract_week_id);
-            return;
-          }
+          if (Array.isArray(value.ids)) { value.ids.forEach(push); return; }
+          push(value.id ?? value.timesheet_id ?? value.contract_week_id ?? null);
           return;
         }
         const clean = trimId(value);
@@ -353857,6 +354259,94 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
       sources.forEach(push);
       return out;
     };
+    const encHtml = (value) => {
+      if (typeof escapeHtml === 'function') return escapeHtml(String(value == null ? '' : value));
+      return String(value == null ? '' : value)
+        .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+        .replaceAll('"','&quot;').replaceAll("'",'&#39;');
+    };
+    const confirmUi = async (config) => {
+      if (typeof openUiConfirmModal === 'function') return await openUiConfirmModal(config);
+      const plain = String(config.message || '').trim() || String(config.title || 'Confirm');
+      return { confirmed: typeof confirm === 'function' ? confirm(plain) : false, via: 'fallback-confirm' };
+    };
+    const decisionFrom = (preview) => {
+      const explicit = upper(preview?.decision || preview?.delete_decision || preview?.removal_decision);
+      if (explicit) return explicit;
+      return preview?.eligible === true ? 'PERMANENT_DELETE' : 'BLOCKED';
+    };
+    const blockerMessage = (preview) => {
+      const blockers = Array.isArray(preview?.blocked_reasons) ? preview.blocked_reasons : (Array.isArray(preview?.blockers) ? preview.blockers : []);
+      const messages = blockers.map((item) => trimId(item?.message || item?.code || item)).filter(Boolean);
+      return messages[0] || preview?.message || 'Delete is not available for this timesheet.';
+    };
+    const removalKindForArchive = (kind) => {
+      const value = upper(kind);
+      if (value === 'WEEKLY_CHAIN_DELETE' || value === 'WEEKLY_CHAIN_DELETE_PARENT') return 'WEEKLY_CHAIN_DELETE_PARENT';
+      if (value === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') return value;
+      return 'STANDARD_DELETE';
+    };
+    const archivePrompt = async (preview, context) => {
+      const advance = (preview?.advance && typeof preview.advance === 'object') ? preview.advance : {};
+      const active = boolish(advance.active || preview?.has_active_advance);
+      const consumed = boolish(advance.consumed || preview?.has_consumed_advance);
+      const paragraphs = [
+        '<div style="font-size:14px;font-weight:700;margin-bottom:8px;">This timesheet has a financial history associated with the candidate and cannot be deleted. Would you like to archive it?</div>'
+      ];
+      if (active) {
+        paragraphs.push('<div class="mini" style="white-space:pre-wrap;margin-top:8px;">This timesheet is currently marked as Advanced. Archiving it will remove any active Advance instruction and the timesheet will become Unadvanced. Any amount already paid in advance will remain in the candidate’s payment history and will be treated as an overpayment until repaid or otherwise resolved.</div>');
+      }
+      if (consumed) {
+        paragraphs.push('<div class="mini" style="white-space:pre-wrap;margin-top:8px;">This Advance has already been included in a payment batch. Archiving the timesheet will not cancel or change that batch. Any amount paid from that batch while the timesheet remains unauthorised will be treated as an overpayment.</div>');
+      }
+      const answer = await confirmUi({
+        title: 'Archive timesheet?',
+        message_html: paragraphs.join(''),
+        message: 'This timesheet has a financial history associated with the candidate and cannot be deleted. Would you like to archive it?',
+        confirm_label: 'Archive',
+        cancel_label: 'Cancel',
+        confirm_class: 'btn btn-primary',
+        cancel_class: 'btn btn-outline',
+        kind: 'timesheet-delete-archive-confirm',
+        noParentGate: true
+      });
+      if (!answer || answer.confirmed !== true) {
+        return { ok: false, cancelled: true, decision: 'ARCHIVE_REQUIRED', action: 'ARCHIVE' };
+      }
+      if (typeof requestTimesheetArchiveAction !== 'function') {
+        throw new Error('Archive action is unavailable. No delete was attempted.');
+      }
+      return await requestTimesheetArchiveAction(context.timesheetId, 'ARCHIVE', {
+        confirmed: true,
+        expected_timesheet_id: context.expectedTimesheetId,
+        expected_row_signature: preview?.current_row_signature || context.expectedRowSignature || null,
+        removal_kind: removalKindForArchive(context.deleteKind || preview?.kind || preview?.delete_kind),
+        summaryCtx: options.summaryCtx || options.summary_ctx || null,
+        refreshAuthoritativeState: options.refreshAuthoritativeState
+      });
+    };
+    const permanentDeletePrompt = async (preview) => {
+      const rows = Array.isArray(preview?.delete_items) ? preview.delete_items : [];
+      const detailHtml = rows.length
+        ? `<div class="mini" style="margin-top:8px;white-space:pre-wrap;">${rows.map((row) => {
+            const role = trimId(row?.display_role || 'TIMESHEET').replaceAll('_', ' ');
+            const week = trimId(row?.week_ending_date || '');
+            const booking = trimId(row?.booking_id || '');
+            return encHtml([role, week && `week ${week}`, booking && `booking ${booking}`].filter(Boolean).join(' — '));
+          }).join('<br>')}</div>`
+        : '';
+      return await confirmUi({
+        title: 'Delete timesheet?',
+        message_html: `<div style="font-size:14px;font-weight:700;margin-bottom:6px;">Permanently delete the selected timesheet${rows.length > 1 ? 's' : ''}?</div><div class="mini">This cannot be undone.</div>${detailHtml}`,
+        message: 'Permanently delete this timesheet? This cannot be undone.',
+        confirm_label: 'Delete',
+        cancel_label: 'Cancel',
+        confirm_class: 'btn btn-warn',
+        cancel_class: 'btn btn-outline',
+        kind: 'timesheet-permanent-delete-confirm',
+        noParentGate: true
+      });
+    };
 
     const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
     const det = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
@@ -353864,313 +354354,176 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
     const ts = (det.timesheet && typeof det.timesheet === 'object') ? det.timesheet : {};
     const actionFlags = (det.action_flags && typeof det.action_flags === 'object') ? det.action_flags : {};
 
-    // opts:
-    // - contractWeekId: if provided and timesheetId is null, we treat this as a planned-week delete
-    // - expected_contract_week_id / expectedContractWeekId: expected additional contract_week_id for guarded deletes
-    // - expected_delete_kind / expectedDeleteKind: expected server preview/apply kind for guarded deletes
-    const contractWeekId = pickFirst(
-      options.contractWeekId,
-      options.contract_week_id,
-      options.expected_contract_week_id,
-      options.expectedContractWeekId
-    ) || null;
-
-    // Planned-week delete path (no timesheet_id yet)
+    const contractWeekId = pickFirst(options.contractWeekId, options.contract_week_id, options.expected_contract_week_id, options.expectedContractWeekId) || null;
     if (!timesheetId) {
-      if (!contractWeekId) {
-        throw new Error('deleteTimesheetPermanent: timesheetId is required (or provide opts.contractWeekId for planned-week delete)');
-      }
-
-      const encCw = encodeURIComponent(contractWeekId);
-      const urlPath = `/api/contract-weeks/${encCw}/delete-planned`;
-
+      if (!contractWeekId) throw new Error('deleteTimesheetPermanent: timesheetId is required (or provide opts.contractWeekId for planned-week delete)');
+      const answer = await confirmUi({
+        title: 'Delete planned week?',
+        message: 'Delete this planned contract week? This cannot be undone.',
+        confirm_label: 'Delete', cancel_label: 'Cancel', confirm_class: 'btn btn-warn', cancel_class: 'btn btn-outline',
+        kind: 'planned-week-delete-confirm', noParentGate: true
+      });
+      if (!answer || answer.confirmed !== true) return { ok: false, cancelled: true, decision: 'PERMANENT_DELETE' };
+      const urlPath = `/api/contract-weeks/${encodeURIComponent(contractWeekId)}/delete-planned`;
       L('REQUEST (planned delete)', { urlPath, contractWeekId });
-
-      // Keep behaviour, but use apiPostJson for consistent error shape
-      const json = await apiPostJson(urlPath, {});
+      const json = await apiPostJson(urlPath, { confirm_permanent_delete: true, confirmed_decision: 'PERMANENT_DELETE' });
       L('RESULT (planned delete)', json);
       return json;
     }
 
-    // Normal timesheet delete path (guarded)
     const timesheetIdStr = String(timesheetId);
-    const encId = encodeURIComponent(timesheetIdStr);
-    const urlPath = `/api/timesheets/${encId}`;
-
+    const urlPath = `/api/timesheets/${encodeURIComponent(timesheetIdStr)}`;
     const expectedTimesheetId = pickFirst(
-      options.expected_timesheet_id,
-      options.expectedTimesheetId,
-      mc?.timesheetMeta?.expected_timesheet_id,
-      det?.current_timesheet_id,
-      ts?.timesheet_id,
-      mc?.data?.timesheet_id,
-      timesheetIdStr
+      options.expected_timesheet_id, options.expectedTimesheetId, mc?.timesheetMeta?.expected_timesheet_id,
+      det?.current_timesheet_id, ts?.timesheet_id, mc?.data?.timesheet_id, timesheetIdStr
     ) || timesheetIdStr;
-
+    const expectedRowSignature = pickFirst(
+      options.expected_row_signature, options.expectedRowSignature,
+      det?.row?.backend_row_signature, det?.row?.row_signature,
+      det?.backend_row_signature, det?.row_signature,
+      mc?.data?.backend_row_signature, mc?.data?.row_signature,
+      mc?.__timesheetLifecycleTrusted?.signature
+    ) || null;
     const expectedContractWeekId = pickFirst(
-      options.expected_contract_week_id,
-      options.expectedContractWeekId,
-      options.contractWeekId,
-      options.contract_week_id,
-      mc?.timesheetMeta?.contract_week_id,
-      det?.contract_week_id,
-      cw?.id,
-      mc?.data?.contract_week_id
+      options.expected_contract_week_id, options.expectedContractWeekId, options.contractWeekId, options.contract_week_id,
+      mc?.timesheetMeta?.contract_week_id, det?.contract_week_id, cw?.id, mc?.data?.contract_week_id
     ) || null;
+    const expectedDeleteKind = upper(pickFirst(options.expected_delete_kind, options.expectedDeleteKind, options.delete_kind, options.deleteKind, options.kind)) || null;
+    const sourceContractWeekId = pickFirst(options.source_contract_week_id, options.sourceContractWeekId, options.parent_contract_week_id, options.parentContractWeekId) || null;
+    const sourceTimesheetId = pickFirst(options.source_timesheet_id, options.sourceTimesheetId, options.parent_timesheet_id, options.parentTimesheetId) || null;
 
-    const expectedDeleteKind = upper(pickFirst(
-      options.expected_delete_kind,
-      options.expectedDeleteKind,
-      options.delete_kind,
-      options.deleteKind,
-      options.kind
-    )) || null;
-
-    const sourceContractWeekId = pickFirst(
-      options.source_contract_week_id,
-      options.sourceContractWeekId,
-      options.parent_contract_week_id,
-      options.parentContractWeekId
-    ) || null;
-
-    const sourceTimesheetId = pickFirst(
-      options.source_timesheet_id,
-      options.sourceTimesheetId,
-      options.parent_timesheet_id,
-      options.parentTimesheetId
-    ) || null;
-
-    const routeType = upper(
-      det?.route_type ||
-      det?.effective?.route_type ||
-      actionFlags?.route_type ||
-      cw?.route_type ||
-      mc?.data?.route_type ||
-      ''
-    );
-
-    const routeFamily = upper(
-      det?.route_family ||
-      det?.effective?.route_family ||
-      actionFlags?.route_family ||
-      cw?.route_family ||
-      mc?.data?.route_family ||
-      ''
-    );
-
-    const routeSubfamily = upper(
-      det?.route_subfamily ||
-      det?.effective?.route_subfamily ||
-      actionFlags?.route_subfamily ||
-      cw?.route_subfamily ||
-      mc?.data?.route_subfamily ||
-      ''
-    );
-
-    const underlyingFamily = upper(
-      det?.underlying_channel_family ||
-      det?.effective?.underlying_channel_family ||
-      actionFlags?.underlying_channel_family ||
-      cw?.underlying_channel_family ||
-      mc?.data?.underlying_channel_family ||
-      ''
-    );
-
-    const cwMode = upper(
-      det?.cw_submission_mode_snapshot ||
-      cw?.submission_mode_snapshot ||
-      mc?.timesheetMeta?.cw_submission_mode_snapshot ||
-      mc?.data?.submission_mode_snapshot ||
-      ''
-    );
-
-    const additionalSeq = num(
-      det?.additional_seq ??
-      det?.contract_week_additional_seq ??
-      det?.effective?.additional_seq ??
-      actionFlags?.additional_seq ??
-      cw?.additional_seq ??
-      mc?.data?.additional_seq ??
-      mc?.data?.contract_week_additional_seq ??
-      0
-    );
-
+    const routeType = upper(det?.route_type || det?.effective?.route_type || actionFlags?.route_type || cw?.route_type || mc?.data?.route_type || '');
+    const routeFamily = upper(det?.route_family || det?.effective?.route_family || actionFlags?.route_family || cw?.route_family || mc?.data?.route_family || '');
+    const routeSubfamily = upper(det?.route_subfamily || det?.effective?.route_subfamily || actionFlags?.route_subfamily || cw?.route_subfamily || mc?.data?.route_subfamily || '');
+    const underlyingFamily = upper(det?.underlying_channel_family || det?.effective?.underlying_channel_family || actionFlags?.underlying_channel_family || cw?.underlying_channel_family || mc?.data?.underlying_channel_family || '');
+    const cwMode = upper(det?.cw_submission_mode_snapshot || cw?.submission_mode_snapshot || mc?.timesheetMeta?.cw_submission_mode_snapshot || mc?.data?.submission_mode_snapshot || '');
+    const additionalSeq = num(det?.additional_seq ?? det?.contract_week_additional_seq ?? det?.effective?.additional_seq ?? actionFlags?.additional_seq ?? cw?.additional_seq ?? mc?.data?.additional_seq ?? mc?.data?.contract_week_additional_seq ?? 0);
     const modalLooksManualAdditional = !!(
-      additionalSeq > 0 ||
-      routeType === 'WEEKLY_NHSP_ADJUSTMENT' ||
-      routeType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
-      routeType === 'WEEKLY_MANUAL_ADJUSTMENT' ||
-      routeType.includes('_ADJUSTMENT') ||
-      boolish(det?.is_adjustment) ||
-      boolish(det?.effective?.is_adjustment) ||
-      boolish(actionFlags?.is_adjustment) ||
-      boolish(cw?.is_adjustment) ||
-      boolish(ts?.is_adjustment) ||
-      boolish(mc?.data?.is_adjustment)
-    ) && !!(
-      routeFamily === 'MANUAL_NON_QR' ||
-      routeSubfamily === 'MANUAL_NON_QR' ||
-      underlyingFamily === 'MANUAL_NON_QR' ||
-      cwMode === 'MANUAL' ||
-      additionalSeq > 0
-    );
+      additionalSeq > 0 || routeType === 'WEEKLY_NHSP_ADJUSTMENT' || routeType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+      routeType === 'WEEKLY_MANUAL_ADJUSTMENT' || routeType.includes('_ADJUSTMENT') || boolish(det?.is_adjustment) ||
+      boolish(det?.effective?.is_adjustment) || boolish(actionFlags?.is_adjustment) || boolish(cw?.is_adjustment) ||
+      boolish(ts?.is_adjustment) || boolish(mc?.data?.is_adjustment)
+    ) && !!(routeFamily === 'MANUAL_NON_QR' || routeSubfamily === 'MANUAL_NON_QR' || underlyingFamily === 'MANUAL_NON_QR' || cwMode === 'MANUAL' || additionalSeq > 0);
 
     const suppliedPreview =
       (options.delete_preview && typeof options.delete_preview === 'object') ? options.delete_preview :
       (options.deletePreview && typeof options.deletePreview === 'object') ? options.deletePreview :
-      (options.preview && typeof options.preview === 'object') ? options.preview :
-      null;
-
+      (options.preview && typeof options.preview === 'object') ? options.preview : null;
     const loadFreshDeletePreview = async () => {
       if (suppliedPreview && (options.preview_is_fresh === true || options.fresh_preview === true || options.freshDeletePreview === true)) {
         return suppliedPreview.preview || suppliedPreview.delete_preview || suppliedPreview;
       }
-
       if (typeof fetchTimesheetDeletePreview === 'function') {
         const out = await fetchTimesheetDeletePreview(timesheetIdStr);
         if (out && typeof out === 'object') return out.preview || out.delete_preview || out;
       }
-
       if (typeof authFetch !== 'function' || typeof API !== 'function') {
         if (suppliedPreview) return suppliedPreview.preview || suppliedPreview.delete_preview || suppliedPreview;
         throw new Error('Delete preview refresh is unavailable.');
       }
-
-      const res = await authFetch(API(`/api/timesheets/${encodeURIComponent(timesheetIdStr)}/delete-preview`), {
-        method: 'GET'
-      });
-
+      const res = await authFetch(API(`/api/timesheets/${encodeURIComponent(timesheetIdStr)}/delete-preview`), { method: 'GET' });
       let body = null;
       try { body = await res.json(); } catch { body = null; }
-
-      if (!res.ok || !body) {
-        throw new Error((body && (body.message || body.error)) || 'Delete preview could not be refreshed.');
-      }
-
-      if (body.ok === false) {
-        throw new Error(body.message || body.error || 'Delete preview could not be refreshed.');
-      }
-
+      if (!res.ok || !body || body.ok === false) throw new Error((body && (body.message || body.error)) || 'Delete preview could not be refreshed.');
       return body.preview || body.delete_preview || body;
     };
 
     const preview = await loadFreshDeletePreview();
-    const previewKind = upper(preview?.kind || '');
-    const previewEligible = (preview && typeof preview.eligible === 'boolean') ? preview.eligible : true;
+    const previewKind = upper(preview?.kind || preview?.delete_kind || '');
+    const previewDecision = decisionFrom(preview);
     const previewTimesheetIds = asIdArray(preview?.timesheet_ids, preview?.current_timesheet_id);
     const previewContractWeekIds = asIdArray(preview?.contract_week_ids, preview?.contract_week_id);
-
-    if (previewEligible !== true) {
-      throw new Error('Delete is not available for this timesheet (it may be locked, invoiced/paid, or not eligible).');
-    }
-
+    const previewNhspShiftIds = asIdArray(preview?.nhsp_shift_ids);
+    const previewPreservedSourceTimesheetIds = asIdArray(preview?.preserved_source_timesheet_ids);
+    const previewPreservedSourceContractWeekIds = asIdArray(preview?.preserved_source_contract_week_ids);
     const expectedOrPreviewManualAdjustment = !!(
-      expectedDeleteKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE' ||
-      previewKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE' ||
-      modalLooksManualAdditional
+      expectedDeleteKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE' || previewKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE' || modalLooksManualAdditional
     );
+    const canonicalExpectedContractWeekId = expectedContractWeekId ||
+      (expectedOrPreviewManualAdjustment && previewContractWeekIds.length === 1 ? previewContractWeekIds[0] : null);
 
-    const canonicalExpectedContractWeekId =
-      expectedContractWeekId ||
-      (
-        expectedOrPreviewManualAdjustment &&
-        previewContractWeekIds.length === 1
-          ? previewContractWeekIds[0]
-          : null
-      );
-
-    if (expectedDeleteKind && previewKind && expectedDeleteKind !== previewKind) {
+    if (expectedDeleteKind && previewKind && expectedDeleteKind !== previewKind && !(expectedDeleteKind === 'WEEKLY_CHAIN_DELETE' && previewKind === 'WEEKLY_CHAIN_DELETE_PARENT')) {
       throw new Error(`Delete has been blocked for safety. Expected ${expectedDeleteKind}, but refreshed preview returned ${previewKind}.`);
     }
-
     if (expectedOrPreviewManualAdjustment) {
-      if (previewKind !== 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') {
-        throw new Error('Delete has been blocked for safety. This additional manual adjustment did not return an additional-only delete preview.');
-      }
-
-      if (previewTimesheetIds.length && previewTimesheetIds.some((id) => id && id !== timesheetIdStr && id !== expectedTimesheetId)) {
-        throw new Error('Delete has been blocked for safety. The refreshed preview includes a source/base timesheet as a destructive target.');
-      }
-
-      if (!canonicalExpectedContractWeekId) {
-        throw new Error('Delete has been blocked for safety. The expected additional contract week target could not be verified.');
-      }
-
-      if (previewContractWeekIds.length === 0) {
-        throw new Error('Delete has been blocked for safety. The refreshed preview did not return the expected additional contract week target.');
-      }
-
-      if (previewContractWeekIds.some((id) => id && id !== canonicalExpectedContractWeekId)) {
-        throw new Error('Delete has been blocked for safety. The refreshed preview includes a source/base contract week as a destructive target.');
-      }
+      if (previewKind !== 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') throw new Error('Delete has been blocked for safety. This additional manual adjustment did not return an additional-only delete preview.');
+      if (previewTimesheetIds.length && previewTimesheetIds.some((id) => id && id !== timesheetIdStr && id !== expectedTimesheetId)) throw new Error('Delete has been blocked for safety. The refreshed preview includes a source/base timesheet as a destructive target.');
+      if (!canonicalExpectedContractWeekId) throw new Error('Delete has been blocked for safety. The expected additional contract week target could not be verified.');
+      if (previewContractWeekIds.length === 0) throw new Error('Delete has been blocked for safety. The refreshed preview did not return the expected additional contract week target.');
+      if (previewContractWeekIds.some((id) => id && id !== canonicalExpectedContractWeekId)) throw new Error('Delete has been blocked for safety. The refreshed preview includes a source/base contract week as a destructive target.');
     }
+    if (modalLooksManualAdditional && previewKind === 'WEEKLY_CHAIN_DELETE_PARENT') throw new Error('Delete has been blocked for safety. This is an additional manual adjustment, but the refreshed preview is trying to delete a parent weekly chain.');
 
-    if (modalLooksManualAdditional && previewKind === 'WEEKLY_CHAIN_DELETE_PARENT') {
-      throw new Error('Delete has been blocked for safety. This is an additional manual adjustment, but the refreshed preview is trying to delete a parent weekly chain.');
+    const deleteKind = previewKind || expectedDeleteKind || 'STANDARD_DELETE';
+    const context = { timesheetId: timesheetIdStr, expectedTimesheetId, expectedRowSignature, deleteKind };
+    if (previewDecision === 'BLOCKED') throw new Error(blockerMessage(preview));
+    if (previewDecision === 'ARCHIVE_REQUIRED') {
+      return await archivePrompt(preview, context);
     }
+    if (previewDecision !== 'PERMANENT_DELETE') throw new Error(`Delete preview returned an unsupported decision: ${previewDecision || 'UNKNOWN'}.`);
 
-    const payload = { expected_timesheet_id: expectedTimesheetId };
+    const answer = await permanentDeletePrompt(preview);
+    if (!answer || answer.confirmed !== true) return { ok: false, cancelled: true, decision: 'PERMANENT_DELETE' };
+
+    const payload = {
+      expected_timesheet_id: expectedTimesheetId,
+      expected_row_signature: preview?.current_row_signature || expectedRowSignature || null,
+      expected_delete_kind: deleteKind === 'WEEKLY_CHAIN_DELETE_PARENT' ? 'WEEKLY_CHAIN_DELETE' : deleteKind,
+      confirmed_decision: 'PERMANENT_DELETE',
+      confirm_permanent_delete: true,
+      expected_timesheet_ids: previewTimesheetIds,
+      expected_contract_week_ids: previewContractWeekIds,
+      expected_nhsp_shift_ids: previewNhspShiftIds,
+      expected_preserved_source_timesheet_ids: previewPreservedSourceTimesheetIds,
+      expected_preserved_source_contract_week_ids: previewPreservedSourceContractWeekIds
+    };
     if (canonicalExpectedContractWeekId) payload.expected_contract_week_id = canonicalExpectedContractWeekId;
-    if (expectedDeleteKind || previewKind) payload.expected_delete_kind = expectedDeleteKind || previewKind;
 
-    L('REQUEST', {
-      urlPath,
-      timesheetId: timesheetIdStr,
-      expected: expectedTimesheetId,
-      expected_contract_week_id: payload.expected_contract_week_id || null,
-      expected_delete_kind: payload.expected_delete_kind || null,
-      preview_kind: previewKind || null
-    });
-
-    const json = await apiDeleteJson(urlPath, payload);
+    L('REQUEST', { urlPath, timesheetId: timesheetIdStr, expected: expectedTimesheetId, expected_delete_kind: payload.expected_delete_kind });
+    let json;
+    try {
+      json = await apiDeleteJson(urlPath, payload);
+    } catch (error) {
+      const body = (error && error.json && typeof error.json === 'object') ? error.json : null;
+      const currentDecision = decisionFrom(body || {});
+      if (currentDecision === 'ARCHIVE_REQUIRED' || upper(body?.error_code) === 'ARCHIVE_REQUIRED') {
+        // Apply-time reclassification is a fresh user decision. It is never converted silently.
+        if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
+          try { applyTimesheetLifecyclePatchToModal(mc, body, { action: 'delete', source: 'delete_apply_reclassified', requireSignature: false, showBlockMessage: false }); } catch {}
+        }
+        return await archivePrompt(body, {
+          ...context,
+          expectedTimesheetId: trimId(body?.current_timesheet_id || expectedTimesheetId) || expectedTimesheetId,
+          deleteKind: upper(body?.delete_kind || deleteKind) || deleteKind
+        });
+      }
+      throw error;
+    }
 
     const resultRoot = (json && typeof json === 'object') ? json : {};
     const resultObj = (resultRoot.result && typeof resultRoot.result === 'object') ? resultRoot.result : {};
-    const resultKind = upper(resultRoot.kind || resultObj.kind || '');
-
-    if (expectedOrPreviewManualAdjustment) {
-      if (resultKind !== 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') {
-        throw new Error('Delete safety verification failed: backend did not confirm additional-only delete.');
-      }
-
-      const deletedTimesheetIds = asIdArray(
-        resultRoot.deleted_timesheet_ids,
-        resultObj.deleted_timesheet_ids
-      );
-      const deletedContractWeekIds = asIdArray(
-        resultRoot.deleted_contract_week_ids,
-        resultObj.deleted_contract_week_ids
-      );
-
-      if (deletedTimesheetIds.some((id) => id && id !== timesheetIdStr && id !== expectedTimesheetId)) {
-        throw new Error('Delete safety verification failed: backend reported deletion of an unexpected/source timesheet.');
-      }
-
-      if (deletedTimesheetIds.length > 0 && !deletedTimesheetIds.includes(timesheetIdStr) && !deletedTimesheetIds.includes(expectedTimesheetId)) {
-        throw new Error('Delete safety verification failed: backend did not report deletion of the requested additional timesheet.');
-      }
-
-      if (canonicalExpectedContractWeekId && deletedContractWeekIds.some((id) => id && id !== canonicalExpectedContractWeekId)) {
-        throw new Error('Delete safety verification failed: backend reported deletion of an unexpected/source contract week.');
-      }
-
-      if (canonicalExpectedContractWeekId && deletedContractWeekIds.length > 0 && !deletedContractWeekIds.includes(canonicalExpectedContractWeekId)) {
-        throw new Error('Delete safety verification failed: backend did not report deletion of the expected additional contract week.');
-      }
-
-      if (!canonicalExpectedContractWeekId && deletedContractWeekIds.length > 1) {
-        throw new Error('Delete safety verification failed: backend reported deletion of multiple contract weeks for an additional-only delete.');
-      }
-
-      if (sourceTimesheetId && deletedTimesheetIds.includes(sourceTimesheetId)) {
-        throw new Error('Delete safety verification failed: backend reported deletion of the source timesheet.');
-      }
-
-      if (sourceContractWeekId && deletedContractWeekIds.includes(sourceContractWeekId)) {
-        throw new Error('Delete safety verification failed: backend reported deletion of the source contract week.');
-      }
+    const resultKind = upper(resultRoot.kind || resultRoot.delete_kind || resultObj.kind || '');
+    const resultDecision = decisionFrom(resultRoot);
+    if (resultDecision !== 'PERMANENT_DELETE' || resultRoot.deleted !== true) {
+      throw new Error(resultRoot.message || 'Delete completed without a confirmed permanent-delete result. Refresh authoritative state.');
     }
 
+    if (expectedOrPreviewManualAdjustment) {
+      if (resultKind !== 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') throw new Error('Delete safety verification failed: backend did not confirm additional-only delete.');
+      const deletedTimesheetIds = asIdArray(resultRoot.deleted_timesheet_ids, resultObj.deleted_timesheet_ids);
+      const deletedContractWeekIds = asIdArray(resultRoot.deleted_contract_week_ids, resultObj.deleted_contract_week_ids);
+      if (deletedTimesheetIds.some((id) => id && id !== timesheetIdStr && id !== expectedTimesheetId)) throw new Error('Delete safety verification failed: backend reported deletion of an unexpected/source timesheet.');
+      if (deletedTimesheetIds.length > 0 && !deletedTimesheetIds.includes(timesheetIdStr) && !deletedTimesheetIds.includes(expectedTimesheetId)) throw new Error('Delete safety verification failed: backend did not report deletion of the requested additional timesheet.');
+      if (canonicalExpectedContractWeekId && deletedContractWeekIds.some((id) => id && id !== canonicalExpectedContractWeekId)) throw new Error('Delete safety verification failed: backend reported deletion of an unexpected/source contract week.');
+      if (canonicalExpectedContractWeekId && deletedContractWeekIds.length > 0 && !deletedContractWeekIds.includes(canonicalExpectedContractWeekId)) throw new Error('Delete safety verification failed: backend did not report deletion of the expected additional contract week.');
+      if (!canonicalExpectedContractWeekId && deletedContractWeekIds.length > 1) throw new Error('Delete safety verification failed: backend reported deletion of multiple contract weeks for an additional-only delete.');
+      if (sourceTimesheetId && deletedTimesheetIds.includes(sourceTimesheetId)) throw new Error('Delete safety verification failed: backend reported deletion of the source timesheet.');
+      if (sourceContractWeekId && deletedContractWeekIds.includes(sourceContractWeekId)) throw new Error('Delete safety verification failed: backend reported deletion of the source contract week.');
+    }
+
+    if (typeof reconcileTimesheetArchiveListMembership === 'function') {
+      try { await reconcileTimesheetArchiveListMembership({ timesheet_id: expectedTimesheetId, action: 'PERMANENT_DELETE', result: json }); } catch {}
+    }
     L('RESULT', json);
     return json;
   } finally {
