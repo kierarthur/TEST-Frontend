@@ -326393,7 +326393,21 @@ async function apiDeleteJson(urlPath, bodyObj) {
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
 
   if (!res.ok) {
-    const err = new Error((json && json.error) ? String(json.error) : (text || `Request failed (${res.status})`));
+    const parsedMessage = (() => {
+      if (!json || typeof json !== 'object' || Array.isArray(json)) return '';
+      const candidates = [
+        json.message,
+        (typeof json.error === 'string' ? json.error : null),
+        (json.error && typeof json.error === 'object' ? json.error.message : null),
+        json.error_code
+      ];
+      for (const candidate of candidates) {
+        const clean = String(candidate == null ? '' : candidate).trim();
+        if (clean) return clean;
+      }
+      return '';
+    })();
+    const err = new Error(parsedMessage || (!json && text ? text : `Request failed (${res.status})`));
     err.status = res.status;
     err.json = json;
     err.body = text;
@@ -326402,6 +326416,7 @@ async function apiDeleteJson(urlPath, bodyObj) {
 
   return (json != null ? json : {});
 }
+
 
 async function apiDeleteJobTitle(id) {
   const url = API(`/api/job-titles/${encodeURIComponent(id)}`);
@@ -354216,6 +354231,8 @@ async function deleteManualTimesheetAndReopenWeek(timesheetId, contractWeekId, o
  * Installed original amended because no candidate frontend version was supplied.
  * Complete replacement. This is the sole explicit Delete-or-Archive dispatcher.
  */
+
+
 async function deleteTimesheetPermanent(timesheetId, opts = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][DELETE-PERM]');
   GC('deleteTimesheetPermanent');
@@ -354409,8 +354426,8 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
       (options.delete_preview && typeof options.delete_preview === 'object') ? options.delete_preview :
       (options.deletePreview && typeof options.deletePreview === 'object') ? options.deletePreview :
       (options.preview && typeof options.preview === 'object') ? options.preview : null;
-    const loadFreshDeletePreview = async () => {
-      if (suppliedPreview && (options.preview_is_fresh === true || options.fresh_preview === true || options.freshDeletePreview === true)) {
+    const loadFreshDeletePreview = async (forceAuthoritativeRefresh = false) => {
+      if (!forceAuthoritativeRefresh && suppliedPreview && (options.preview_is_fresh === true || options.fresh_preview === true || options.freshDeletePreview === true)) {
         return suppliedPreview.preview || suppliedPreview.delete_preview || suppliedPreview;
       }
       if (typeof fetchTimesheetDeletePreview === 'function') {
@@ -354418,7 +354435,7 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
         if (out && typeof out === 'object') return out.preview || out.delete_preview || out;
       }
       if (typeof authFetch !== 'function' || typeof API !== 'function') {
-        if (suppliedPreview) return suppliedPreview.preview || suppliedPreview.delete_preview || suppliedPreview;
+        if (!forceAuthoritativeRefresh && suppliedPreview) return suppliedPreview.preview || suppliedPreview.delete_preview || suppliedPreview;
         throw new Error('Delete preview refresh is unavailable.');
       }
       const res = await authFetch(API(`/api/timesheets/${encodeURIComponent(timesheetIdStr)}/delete-preview`), { method: 'GET' });
@@ -354497,6 +354514,63 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
           deleteKind: upper(body?.delete_kind || deleteKind) || deleteKind
         });
       }
+
+      const errorCode = upper(body?.error_code || body?.code || error?.error_code || '');
+      const outcomeUnknown = body?.outcome_unknown === true ||
+        errorCode === 'DELETE_OUTCOME_UNKNOWN' ||
+        errorCode === 'DELETE_RPC_INVALID_RESPONSE';
+      if (outcomeUnknown) {
+        let reconciledPreview = null;
+        let reconciliationSucceeded = false;
+        const authoritativeTimesheetId = trimId(body?.current_timesheet_id || expectedTimesheetId) || expectedTimesheetId;
+
+        if (typeof options.refreshAuthoritativeState === 'function') {
+          try {
+            await options.refreshAuthoritativeState({
+              timesheet_id: authoritativeTimesheetId,
+              reason: errorCode || 'DELETE_OUTCOME_UNKNOWN'
+            });
+            reconciliationSucceeded = true;
+          } catch {}
+        } else {
+          try {
+            reconciledPreview = await loadFreshDeletePreview(true);
+          } catch {
+            reconciledPreview = null;
+          }
+
+          if (reconciledPreview && typeof applyTimesheetLifecyclePatchToModal === 'function') {
+            try {
+              applyTimesheetLifecyclePatchToModal(mc, reconciledPreview, {
+                action: 'delete',
+                source: 'delete_outcome_reconciliation',
+                requireSignature: false,
+                showBlockMessage: false
+              });
+              reconciliationSucceeded = true;
+            } catch {}
+          }
+
+          if (reconciledPreview) {
+            try { mc.timesheetDeletePreview = reconciledPreview; } catch {}
+          }
+
+          if (typeof renderAll === 'function') {
+            try {
+              await renderAll();
+              reconciliationSucceeded = true;
+            } catch {}
+          }
+        }
+
+        error.error_code = errorCode || 'DELETE_OUTCOME_UNKNOWN';
+        error.outcome_unknown = true;
+        error.reconciliation_attempted = true;
+        error.reconciliation_succeeded = reconciliationSucceeded;
+        error.reconciled_preview = reconciledPreview;
+        throw error;
+      }
+
       throw error;
     }
 
@@ -354530,6 +354604,7 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
     GE();
   }
 }
+
 
 
 
