@@ -340104,6 +340104,7 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
  * Installed original amended because no candidate frontend body was supplied.
  * Complete final replacement extracted from and verified against the integrated final main.js.
  */
+
 function renderTimesheetOverviewTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OVERVIEW]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -340731,21 +340732,76 @@ function renderTimesheetOverviewTab(ctx) {
     ) &&
     (lifecycleAuthorisedAtServer || lifecycleAuthorisedAtUtc || authInfo.authorised === true)
   );
+  const lifecycleAuthorisedForActionGating = !!(
+    hasTsNow &&
+    !lifecycleRevokedAt &&
+    (
+      boolish(actionFlags.is_authorised) ||
+      boolish(actionFlags.authorised) ||
+      boolish(details.is_authorised) ||
+      boolish(details.authorised) ||
+      boolish(baseSummary.is_authorised) ||
+      boolish(baseSummary.authorised) ||
+      !!lifecycleAuthorisedAtServer ||
+      !!lifecycleAuthorisedAtUtc ||
+      authInfo.authorised === true
+    )
+  );
+  const modalLifecycleCtxForActions = (
+    window.modalCtx &&
+    typeof window.modalCtx === 'object'
+  ) ? window.modalCtx : {};
+  const trustedLifecycleForActions = (
+    modalLifecycleCtxForActions.__timesheetLifecycleTrusted &&
+    typeof modalLifecycleCtxForActions.__timesheetLifecycleTrusted === 'object'
+  ) ? modalLifecycleCtxForActions.__timesheetLifecycleTrusted : {};
+  const trustedLifecycleActionSignature = String(
+    trustedLifecycleForActions.signature ||
+    trustedLifecycleForActions.backend_row_signature ||
+    trustedLifecycleForActions.mutation_row_signature ||
+    trustedLifecycleForActions.row_signature ||
+    trustedLifecycleForActions.expected_row_signature ||
+    ''
+  ).trim();
+  const trustedLifecycleActionTimesheetId = String(
+    trustedLifecycleForActions.timesheet_id ||
+    trustedLifecycleForActions.current_timesheet_id ||
+    ''
+  ).trim();
+  const lifecyclePermissionSurfaceReadyForActions = !hasTsNow || !!(
+    modalLifecycleCtxForActions.__timesheetLifecycleCriticalStateIncomplete !== true &&
+    modalLifecycleCtxForActions.__timesheetLifecyclePermissionStateComplete === true &&
+    modalLifecycleCtxForActions.__timesheetLifecyclePriorityBadgesComplete === true &&
+    trustedLifecycleForActions.trusted === true &&
+    !!trustedLifecycleActionSignature &&
+    (!trustedLifecycleActionTimesheetId || trustedLifecycleActionTimesheetId === String(tsId || ''))
+  );
+  const sourceTimesheetActionsBlocked = !!(
+    hasTsNow &&
+    (
+      isArchivedOverview ||
+      lifecycleAuthorisedForActionGating ||
+      !lifecyclePermissionSurfaceReadyForActions
+    )
+  );
   const showAuthorisedForPaymentStageBadge = !!lifecycleIsPaymentAuthorised;
 
   const showAdvancePaymentAction =
     !!tsId &&
     hasTsfin &&
+    !sourceTimesheetActionsBlocked &&
     backendCanAdvancePayment;
 
   const showUnadvancePaymentAction =
     !!tsId &&
     hasTsfin &&
+    !sourceTimesheetActionsBlocked &&
     backendCanUnadvancePayment;
 
   const showSnoozePaymentAction =
     !!tsId &&
     hasTsfin &&
+    !sourceTimesheetActionsBlocked &&
     (backendCanSnoozePayment || backendCanClearPaymentSnooze);
 
   // ─────────────────────────────────────────────────────────────
@@ -341253,7 +341309,9 @@ function renderTimesheetOverviewTab(ctx) {
     addStage(
       'Candidate submission disabled',
       'pill-warn',
-      'Candidate submission is disabled for this timesheet. To involve the candidate again, use “Allow electronic again” / “Allow Candidate to submit QR Timesheet hours again” (if available), or “Revert to electronic” where applicable.'
+      lifecycleAuthorisedForActionGating
+        ? 'Candidate submission is disabled for this authorised timesheet. Unauthorise the timesheet before re-enabling electronic or QR submission.'
+        : 'Candidate submission is disabled for this timesheet. To involve the candidate again, use “Allow electronic again” / “Allow Candidate to submit QR Timesheet hours again” (if available), or “Revert to electronic” where applicable.'
     );
   }
 
@@ -341512,8 +341570,9 @@ function renderTimesheetOverviewTab(ctx) {
       !locked &&
       (subModeEff === 'ELECTRONIC');
 
-    // ✅ Adjustment safety: NEVER show conversion/QR/electronic controls on adjustment sheets
-    if (!isAdjustment) {
+    // ✅ Adjustment and lifecycle safety: never mutate the source route while the
+    // timesheet is authorised, archived, or its permission surface is not trusted.
+    if (!isAdjustment && !sourceTimesheetActionsBlocked) {
 
       if (!importAuthoritative && (isWeeklyElectronicWithTs || isPlannedWeeklyElectronic || isDailyElectronicWithTs)) {
         const title = 'Switch this timesheet into admin-managed Manual mode so you can adjust hours/schedule internally.';
@@ -341765,6 +341824,7 @@ function renderTimesheetOverviewTab(ctx) {
     </div>
   `;
 }
+
 
 
 
@@ -357355,8 +357415,6 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
   }
 }
 
-
-
 async function ensureSimpleTimesheetLifecycleHydrated(modalCtxInput, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const ctx = (modalCtxInput && typeof modalCtxInput === 'object')
@@ -357546,6 +357604,173 @@ async function ensureSimpleTimesheetLifecycleHydrated(modalCtxInput, options = {
       trustedAtEntrySourceLower.includes('lifecycle')
     )
   );
+  const boolishNullable = (value) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+    if (value == null || value === '') return null;
+    const raw = String(value).trim().toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(raw)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(raw)) return false;
+    return null;
+  };
+  const firstBoolean = (...values) => {
+    for (const value of values) {
+      const parsed = boolishNullable(value);
+      if (parsed !== null) return parsed;
+    }
+    return null;
+  };
+  const lifecyclePatchIdentity = (candidate) => pick(
+    candidate?.current_timesheet_id,
+    candidate?.timesheet_id,
+    candidate?.expected_timesheet_id,
+    candidate?.identity?.current_timesheet_id,
+    candidate?.identity?.timesheet_id,
+    candidate?.identity?.requested_timesheet_id,
+    candidate?.row_patch?.current_timesheet_id,
+    candidate?.row_patch?.timesheet_id
+  );
+  const lifecyclePatchSignature = (candidate) => pick(
+    candidate?.backend_row_signature,
+    candidate?.mutation_row_signature,
+    candidate?.row_signature,
+    candidate?.expected_row_signature,
+    candidate?.render_signature,
+    candidate?.signature,
+    candidate?.identity?.backend_row_signature,
+    candidate?.identity?.row_signature,
+    candidate?.row_patch?.backend_row_signature,
+    candidate?.row_patch?.row_signature
+  );
+  const trustedLifecyclePatchCandidate = (() => {
+    if (!trustedAtEntryAuthoritative || !trustedAtEntrySignature) return null;
+    const candidates = [];
+    const addCandidate = (value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+      if (!candidates.includes(value)) candidates.push(value);
+    };
+    const archiveState = (ctx.timesheetArchiveState && typeof ctx.timesheetArchiveState === 'object')
+      ? ctx.timesheetArchiveState
+      : null;
+    addCandidate(archiveState?.lifecycle_patch);
+    addCandidate(archiveState?.lifecyclePatch);
+    addCandidate(archiveState?.row);
+    for (const key of ['affected_rows', 'affectedRows', 'rows']) {
+      const rows = archiveState && Array.isArray(archiveState[key]) ? archiveState[key] : [];
+      for (const row of rows) addCandidate(row);
+    }
+    return candidates.find((candidate) => {
+      const candidateId = lifecyclePatchIdentity(candidate);
+      const candidateSignature = lifecyclePatchSignature(candidate);
+      return !!(
+        (!candidateId || candidateId === timesheetId) &&
+        candidateSignature &&
+        candidateSignature === trustedAtEntrySignature
+      );
+    }) || null;
+  })();
+  const trustedLifecycleSurfaceNeedsRepair = () => {
+    const permissionComplete = ctx.__timesheetLifecyclePermissionStateComplete === true;
+    const badgesComplete = ctx.__timesheetLifecyclePriorityBadgesComplete === true;
+    const criticalIncomplete = ctx.__timesheetLifecycleCriticalStateIncomplete === true;
+    if (!permissionComplete || !badgesComplete || criticalIncomplete) return true;
+
+    const dataNow = (ctx.data && typeof ctx.data === 'object') ? ctx.data : {};
+    const detailsNow = (ctx.timesheetDetails && typeof ctx.timesheetDetails === 'object') ? ctx.timesheetDetails : {};
+    const timesheetNow = (detailsNow.timesheet && typeof detailsNow.timesheet === 'object') ? detailsNow.timesheet : {};
+
+    if (dataNow.permission_state_patch_complete !== true || dataNow.priority_badges_patch_complete !== true) return true;
+    if (detailsNow.permission_state_patch_complete !== true || detailsNow.priority_badges_patch_complete !== true) return true;
+
+    const actionSurfaces = [
+      dataNow.action_flags,
+      detailsNow.action_flags,
+      timesheetNow.action_flags
+    ].filter((surface) => surface && typeof surface === 'object' && !Array.isArray(surface));
+
+    if (!actionSurfaces.length) return true;
+
+    const corePermissionKeys = ['can_authorise', 'can_unauthorise', 'can_process', 'can_unprocess'];
+    if (actionSurfaces.some((surface) => corePermissionKeys.some((key) => boolishNullable(surface[key]) === null))) {
+      return true;
+    }
+
+    const candidate = trustedLifecyclePatchCandidate;
+    if (!candidate) return false;
+
+    const expectedPermissions = {
+      can_authorise: firstBoolean(
+        candidate?.action_flags?.can_authorise,
+        candidate?.actions?.can_authorise,
+        candidate?.footer_action_hints?.can_authorise,
+        candidate?.priority_badge_hints?.can_authorise,
+        candidate?.can_authorise
+      ),
+      can_unauthorise: firstBoolean(
+        candidate?.action_flags?.can_unauthorise,
+        candidate?.actions?.can_unauthorise,
+        candidate?.footer_action_hints?.can_unauthorise,
+        candidate?.priority_badge_hints?.can_unauthorise,
+        candidate?.can_unauthorise
+      ),
+      can_process: firstBoolean(
+        candidate?.action_flags?.can_process,
+        candidate?.actions?.can_process,
+        candidate?.can_process
+      ),
+      can_unprocess: firstBoolean(
+        candidate?.action_flags?.can_unprocess,
+        candidate?.actions?.can_unprocess,
+        candidate?.status?.can_unprocess,
+        candidate?.can_unprocess
+      )
+    };
+
+    for (const [key, expected] of Object.entries(expectedPermissions)) {
+      if (expected === null) continue;
+      if (actionSurfaces.some((surface) => boolishNullable(surface[key]) !== expected)) return true;
+    }
+
+    const expectedAuthorised = firstBoolean(
+      candidate?.is_authorised,
+      candidate?.authorised,
+      candidate?.status?.is_authorised,
+      candidate?.status?.authorised,
+      candidate?.priority_badge_hints?.is_authorised,
+      candidate?.priority_badge_hints?.authorised
+    );
+    if (expectedAuthorised !== null) {
+      const authorisationSurfaces = [dataNow, detailsNow, timesheetNow];
+      if (authorisationSurfaces.some((surface) => firstBoolean(surface?.is_authorised, surface?.authorised) !== expectedAuthorised)) {
+        return true;
+      }
+    }
+
+    const expectedReadOnly = firstBoolean(
+      candidate?.edit_permission_hints?.read_only,
+      candidate?.actions?.read_only,
+      candidate?.footer_action_hints?.read_only,
+      candidate?.priority_badge_hints?.read_only,
+      candidate?.action_flags?.read_only,
+      candidate?.read_only
+    );
+    if (expectedReadOnly !== null) {
+      if (actionSurfaces.some((surface) => firstBoolean(surface?.read_only) !== expectedReadOnly)) {
+        return true;
+      }
+      const explicitReadOnlySurfaces = [dataNow, detailsNow, timesheetNow]
+        .filter((surface) => (
+          surface &&
+          typeof surface === 'object' &&
+          Object.prototype.hasOwnProperty.call(surface, 'read_only')
+        ));
+      if (explicitReadOnlySurfaces.some((surface) => firstBoolean(surface.read_only) !== expectedReadOnly)) {
+        return true;
+      }
+    }
+
+    return false;
+  };
   const repairModalSurfaceSignatureFromTrusted = () => {
     if (!trustedAtEntryAuthoritative || !trustedAtEntrySignature) return false;
     let repaired = false;
@@ -357600,33 +357825,94 @@ async function ensureSimpleTimesheetLifecycleHydrated(modalCtxInput, options = {
     modal_signature_snapshot: diagSnapshot(ctx)
   }));
 
+  let trustedCacheSurfaceMismatchDetected = false;
+
   if (allowTrustedCache && (hasTrustedTimesheetLifecycleSignatureResult || trustedAtEntryAuthoritative)) {
     const trusted = ctx.__timesheetLifecycleTrusted || {};
     const returnedSignature = pick(trusted.signature, trusted.backend_row_signature, trusted.mutation_row_signature, trusted.row_signature, trusted.expected_row_signature, trustedAtEntrySignature);
-    const repairedSurfaceSignatures = repairModalSurfaceSignatureFromTrusted();
-    logTimesheetSaveSignatureDiag('ensureSimpleTimesheetLifecycleHydrated.returnTrustedCache', () => ({
+    const permissionSurfaceRepairRequired = trustedLifecycleSurfaceNeedsRepair();
+    let permissionSurfaceRepairResult = null;
+    let repairedPermissionSurfaces = false;
+
+    if (
+      permissionSurfaceRepairRequired &&
+      trustedLifecyclePatchCandidate &&
+      typeof applyTimesheetLifecyclePatchToModal === 'function'
+    ) {
+      permissionSurfaceRepairResult = applyTimesheetLifecyclePatchToModal(ctx, trustedLifecyclePatchCandidate, {
+        action: opts.action || trusted.action || 'lifecycle',
+        source: 'trusted-lifecycle-surface-repair',
+        requireSignature: true,
+        allowFallback: false,
+        timesheet_id: timesheetId,
+        current_timesheet_id: timesheetId,
+        contract_week_id: contractWeekId || undefined,
+        mutationStartedAt: Number(trustedAtEntry.mutation_started_at || trustedAtEntry.patched_at || 0) || Date.now(),
+        signatureAuthority: 'network-affected-rows',
+        candidateMutationSequence: currentMutationSequence || null
+      });
+      repairedPermissionSurfaces = !!(
+        permissionSurfaceRepairResult &&
+        permissionSurfaceRepairResult.applied === true &&
+        permissionSurfaceRepairResult.permissionStateComplete === true &&
+        permissionSurfaceRepairResult.priorityBadgesComplete === true &&
+        !trustedLifecycleSurfaceNeedsRepair()
+      );
+    }
+
+    const trustedPermissionSurfacesReady = !trustedLifecycleSurfaceNeedsRepair();
+    if (trustedPermissionSurfacesReady) {
+      const repairedSurfaceSignatures = repairModalSurfaceSignatureFromTrusted();
+      logTimesheetSaveSignatureDiag('ensureSimpleTimesheetLifecycleHydrated.returnTrustedCache', () => ({
+        action: opts.action || opts.purpose || null,
+        source: opts.source || null,
+        timesheet_id: timesheetId,
+        contract_week_id: contractWeekId || null,
+        booking_id: bookingId || null,
+        returned_signature: returnedSignature || null,
+        returned_source: trusted.source || trusted.signature_source || 'trusted',
+        reason: repairedPermissionSurfaces
+          ? 'authoritative_trusted_permission_surfaces_reapplied'
+          : (hasTrustedTimesheetLifecycleSignatureResult ? 'hasTrustedTimesheetLifecycleSignature_true' : 'authoritative_trusted_signature_surface_repair'),
+        allowTrustedCache,
+        allowTrustedDuringSavePreflight,
+        forceNetwork,
+        repaired_surface_signatures: repairedSurfaceSignatures,
+        repaired_permission_surfaces: repairedPermissionSurfaces,
+        permission_surface_repair_result: permissionSurfaceRepairResult,
+        current_mutation_sequence: currentMutationSequence || null,
+        modal_signature_snapshot: diagSnapshot(ctx)
+      }));
+      return {
+        ok: true,
+        alreadyTrusted: true,
+        signature: returnedSignature,
+        source: 'trusted',
+        repaired_surface_signatures: repairedSurfaceSignatures,
+        repaired_permission_surfaces: repairedPermissionSurfaces
+      };
+    }
+
+    trustedCacheSurfaceMismatchDetected = true;
+    ctx.__timesheetLifecycleCriticalStateIncomplete = true;
+    ctx.__timesheetLifecycleCriticalStateReason = 'TRUSTED_SIGNATURE_PERMISSION_SURFACE_MISMATCH';
+    ctx.__timesheetLifecyclePermissionStateComplete = false;
+    ctx.__timesheetLifecyclePriorityBadgesComplete = false;
+
+    logTimesheetSaveSignatureDiag('ensureSimpleTimesheetLifecycleHydrated.trustedCacheSurfaceMismatch', () => ({
       action: opts.action || opts.purpose || null,
       source: opts.source || null,
       timesheet_id: timesheetId,
       contract_week_id: contractWeekId || null,
       booking_id: bookingId || null,
       returned_signature: returnedSignature || null,
-      returned_source: trusted.source || trusted.signature_source || 'trusted',
-      reason: hasTrustedTimesheetLifecycleSignatureResult ? 'hasTrustedTimesheetLifecycleSignature_true' : 'authoritative_trusted_signature_surface_repair',
-      allowTrustedCache,
-      allowTrustedDuringSavePreflight,
-      forceNetwork,
-      repaired_surface_signatures: repairedSurfaceSignatures,
-      current_mutation_sequence: currentMutationSequence || null,
+      current_trusted_source: trusted.source || trusted.signature_source || null,
+      trusted_patch_available: !!trustedLifecyclePatchCandidate,
+      permission_surface_repair_required: permissionSurfaceRepairRequired,
+      permission_surface_repair_result: permissionSurfaceRepairResult,
+      reason: 'TRUSTED_SIGNATURE_PERMISSION_SURFACE_MISMATCH',
       modal_signature_snapshot: diagSnapshot(ctx)
     }));
-    return {
-      ok: true,
-      alreadyTrusted: true,
-      signature: returnedSignature,
-      source: 'trusted',
-      repaired_surface_signatures: repairedSurfaceSignatures
-    };
   }
 
   const detailsPatchCandidate = {
@@ -357648,7 +357934,11 @@ async function ensureSimpleTimesheetLifecycleHydrated(modalCtxInput, options = {
     expected_timesheet_id: timesheetId
   };
 
-  if (allowTrustedCache && pick(detailsPatchCandidate.backend_row_signature, detailsPatchCandidate.row_signature, detailsPatchCandidate.expected_row_signature)) {
+  if (
+    allowTrustedCache &&
+    !trustedCacheSurfaceMismatchDetected &&
+    pick(detailsPatchCandidate.backend_row_signature, detailsPatchCandidate.row_signature, detailsPatchCandidate.expected_row_signature)
+  ) {
     try {
       const localPatch = (typeof applyTimesheetLifecyclePatchToModal === 'function')
         ? applyTimesheetLifecyclePatchToModal(ctx, detailsPatchCandidate, {
@@ -357817,7 +358107,6 @@ async function ensureSimpleTimesheetLifecycleHydrated(modalCtxInput, options = {
   }));
   return failedReturn;
 }
-
 
 
 async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
