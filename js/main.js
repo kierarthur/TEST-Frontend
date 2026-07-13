@@ -305570,7 +305570,14 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     summaryStage === 'ARCHIVED'
   );
   const backendReadOnly = pickBackendRiskBoolean('read_only');
-  const readOnly = isArchived || backendReadOnly === true;
+  const backendReadOnlyMode = pickBackendUpper('mode');
+  const backendReadOnlyReason = pickBackendUpper('reason');
+  const editReadOnly = isArchived || backendReadOnly === true;
+  const lifecycleActionsBlocked = isArchived;
+  const readOnlyReason = isArchived
+    ? 'ARCHIVED'
+    : (backendReadOnlyReason || backendReadOnlyMode || (backendReadOnly === true ? 'BACKEND_READ_ONLY' : ''));
+  const readOnly = editReadOnly;
   const deleteDecision = pickFirstUpper(
     archiveState.delete_decision,
     archiveState.decision,
@@ -305592,7 +305599,6 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     boolish(data.has_retained_financial_history) ||
     boolish(det.has_retained_financial_history) ||
     archiveRequired ||
-    paidFinancialHistoryPresent ||
     isArchived
   );
   const backendCanAuthorise = pickBackendPermissionBoolean('can_authorise');
@@ -305600,7 +305606,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const backendCanProcess = pickBackendPermissionBoolean('can_process');
   const backendCanDelete = pickBackendPermissionBoolean('can_delete');
   const canonicalCanAuthoriseBase = !!(
-    !readOnly &&
+    !lifecycleActionsBlocked &&
     frameMode === 'view' &&
     hasTs &&
     !locked &&
@@ -305613,12 +305619,12 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     backendCanAuthorise !== false
   );
   const canonicalShowAuthoriseDisabled = !!(
-    !readOnly &&
+    !lifecycleActionsBlocked &&
     localCanAuthoriseBase &&
     qrUnsigned
   );
   const canonicalCanUnauthorise = !!(
-    !readOnly &&
+    !lifecycleActionsBlocked &&
     frameMode === 'view' &&
     hasTs &&
     !locked &&
@@ -305626,12 +305632,12 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     (backendCanUnauthorise === true || (backendCanUnauthorise === null && localCanUnauthorise))
   );
   const canonicalCanProcess = !!(
-    !readOnly &&
+    !lifecycleActionsBlocked &&
     backendCanProcess !== false &&
     (backendCanProcess === true || localCanProcess)
   );
   const canonicalCanDelete = !!(
-    !readOnly &&
+    !lifecycleActionsBlocked &&
     backendCanDelete !== false &&
     localCanDelete
   );
@@ -305646,7 +305652,6 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     !isArchived &&
     !isAuthorised &&
     !locked &&
-    backendReadOnly !== true &&
     archivePermissionGranted
   );
   const canUnarchive = !!(
@@ -305672,7 +305677,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     (localCanUnprocess || backendShowUnprocess === true)
   );
   const canonicalCanUnprocess = !!(
-    !readOnly &&
+    !lifecycleActionsBlocked &&
     !hasRetainedFinancialHistory &&
     !locked &&
     !isAuthorised &&
@@ -305701,6 +305706,11 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     showUnprocess,
     isArchived,
     readOnly,
+    editReadOnly,
+    lifecycleActionsBlocked,
+    readOnlyReason,
+    backendReadOnlyMode,
+    backendReadOnlyReason,
     archivedAtUtc,
     archivedByUserId: archiveState.archived_by_user_id || data.archived_by_user_id || det.archived_by_user_id || null,
     archivedByDisplay: archiveState.archived_by_display || data.archived_by_display || det.archived_by_display || null,
@@ -305715,6 +305725,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     unprocessBlockMessage
   };
 }
+
 
 
 
@@ -311578,6 +311589,44 @@ const setHint = (txt, tone) => {
   if (tone === 'ok')   try { hintEl2.classList.add('ok'); } catch {}
 };
 
+const timesheetReadOnlyMessage = (footerStateLike, actionText = 'editing it') => {
+  const state = (footerStateLike && typeof footerStateLike === 'object') ? footerStateLike : {};
+  if (state.isArchived === true || String(state.readOnlyReason || '').trim().toUpperCase() === 'ARCHIVED') {
+    return `Archived timesheets are read-only. Unarchive the Timesheet before ${actionText}.`;
+  }
+  const reason = String(state.readOnlyReason || '').trim().toUpperCase();
+  if (state.isAuthorised === true || reason === 'AUTHORISED_READ_ONLY' || reason === 'AUTHORIZED_READ_ONLY') {
+    return `This timesheet is authorised. Unauthorise it before ${actionText}.`;
+  }
+  return `This timesheet is currently read-only and cannot be changed.`;
+};
+
+const clearLifecycleButtonArtifacts = (button, options = {}) => {
+  if (!button) return;
+  const opts = (options && typeof options === 'object') ? options : {};
+  const wasLifecycleManaged = !!(
+    button.getAttribute('data-lifecycle-blocked') === '1' ||
+    button.getAttribute('data-lifecycle-busy') === '1'
+  );
+  if (!wasLifecycleManaged) return;
+
+  button.style.opacity = '';
+  button.style.filter = '';
+  button.removeAttribute('aria-busy');
+  button.removeAttribute('aria-disabled');
+  button.removeAttribute('data-disabled');
+  button.removeAttribute('data-lifecycle-busy');
+  button.removeAttribute('data-lifecycle-blocked');
+
+  const previousTitle = button.getAttribute('data-lifecycle-prev-title');
+  button.removeAttribute('data-lifecycle-prev-title');
+  if (opts.restoreTitle !== false) {
+    if (previousTitle) button.setAttribute('title', previousTitle);
+    else button.removeAttribute('title');
+  }
+  if (opts.enable === true) button.disabled = false;
+};
+
 // ✅ Legacy footer conversion buttons are removed.
 // If any old DOM button exists from previous sessions, hide/disable it.
 ['btnTsConvertManual','btnTsRestoreElectronic','btnTsRequestNewElectronic'].forEach(id => {
@@ -311852,6 +311901,12 @@ top._updateButtons = ()=> {
 
   const parentEditable = top.noParentGate ? true : (parent ? (parent.mode==='edit' || parent.mode==='create') : true);
   const relatedBtn = byId('btnRelated');
+
+  if (top.entity !== 'timesheets') {
+    clearLifecycleButtonArtifacts(btnSave, { restoreTitle: false });
+    clearLifecycleButtonArtifacts(btnEdit, { enable: true });
+  }
+
   const primaryLabelNow = resolvePrimaryLabel(top, wantApply);
 
   try {
@@ -312430,12 +312485,12 @@ const lifecycleTrustedNow = (typeof hasTrustedTimesheetLifecycleSignature === 'f
   ? hasTrustedTimesheetLifecycleSignature(mcNow, { timesheet_id: lifecycleTrustTimesheetId })
   : false;
 const lifecycleCriticalBlocked = mcNow.__timesheetLifecycleCriticalStateIncomplete === true && !lifecycleTrustedNow;
-const lifecycleReadOnlyBlocked = readOnlyNow;
+const lifecycleReadOnlyBlocked = footerState.lifecycleActionsBlocked === true || isArchivedNow;
 const lifecycleBlocked = lifecycleBusy || lifecycleCriticalBlocked || lifecycleReadOnlyBlocked;
 const lifecycleBlockedReason = lifecycleBusy
   ? (String(lifecycleBusyState?.reason || 'Timesheet lifecycle update in progress'))
   : (lifecycleReadOnlyBlocked
-      ? 'Archived timesheets are read-only. Unarchive the Timesheet before editing it.'
+      ? 'Archived timesheets must be Unarchived before lifecycle actions.'
       : String(mcNow.__timesheetLifecycleCriticalStateReason || 'Waiting for trusted lifecycle state'));
 
 const styleLifecycleButton = (btn, state) => {
@@ -312486,7 +312541,7 @@ const recomputeLifecycleSaveBlock = () => {
   const latestReason = latestBusy
     ? String(latestBusyState?.reason || 'Timesheet lifecycle update in progress')
     : (latestReadOnly
-        ? 'Archived timesheets are read-only. Unarchive the Timesheet before editing it.'
+        ? timesheetReadOnlyMessage(latestFooterState, 'saving changes')
         : String(latestCtx.__timesheetLifecycleCriticalStateReason || 'Waiting for trusted lifecycle state'));
   return { blocked: latestBusy || latestCritical || latestReadOnly, busy: latestBusy, reason: latestReason };
 };
@@ -312536,11 +312591,20 @@ try {
       try {
         const latestBlock = recomputeLifecycleSaveBlock();
         applyLifecycleSaveButtonState(latestBlock);
-        if (btnEdit && getCanonicalTimesheetFooterState(window.modalCtx || {}, top.mode).readOnly === true) {
+        const latestFooterForEdit = getCanonicalTimesheetFooterState(window.modalCtx || {}, top.mode);
+        if (btnEdit && latestBlock.blocked) {
+          if (!btnEdit.hasAttribute('data-lifecycle-prev-title')) {
+            btnEdit.setAttribute('data-lifecycle-prev-title', btnEdit.getAttribute('title') || '');
+          }
           btnEdit.disabled = true;
           btnEdit.style.opacity = '0.45';
+          btnEdit.style.filter = 'grayscale(55%)';
           btnEdit.setAttribute('aria-disabled', 'true');
-          btnEdit.setAttribute('title', latestBlock.reason || 'Archived timesheets are read-only.');
+          btnEdit.setAttribute('data-disabled', '1');
+          btnEdit.setAttribute('data-lifecycle-blocked', '1');
+          btnEdit.setAttribute('title', latestBlock.reason || timesheetReadOnlyMessage(latestFooterForEdit, 'editing it'));
+        } else {
+          clearLifecycleButtonArtifacts(btnEdit, { enable: true });
         }
       } catch {}
     };
@@ -312620,9 +312684,18 @@ try {
     if (!targetId || latestCtx.__timesheetArchiveStateLoading === true) return;
     const existingId = String(latestCtx.timesheetArchiveState?.current_timesheet_id || '').trim();
     const loadedAt = Number(latestCtx.__timesheetArchiveStateLoadedAt || 0);
-    if (existingId === targetId && loadedAt > 0 && (Date.now() - loadedAt) < 30000) return;
+    const archiveStateNeedsRefresh = latestCtx.__timesheetArchiveStateNeedsRefresh === true;
+    if (!archiveStateNeedsRefresh && existingId === targetId && loadedAt > 0 && (Date.now() - loadedAt) < 30000) return;
 
+    const requestStartedAt = Date.now();
+    const requestMutationSequence = Math.max(
+      Number(latestCtx.__timesheetLifecycleMutationSeq || 0) || 0,
+      Number(latestCtx.__timesheetLatestLifecycleMutationSeq || 0) || 0,
+      Number(latestCtx.__timesheetLifecycleBusy?.sequence || 0) || 0,
+      Number(latestCtx.__timesheetLifecycleBusySeq || 0) || 0
+    );
     latestCtx.__timesheetArchiveStateLoading = true;
+    latestCtx.__timesheetArchiveStateRequestStartedAt = requestStartedAt;
     try {
       const response = await authFetch(API(`/api/timesheets/${encodeURIComponent(targetId)}/archive-state`), { method: 'GET' });
       const text = await response.text().catch(() => '');
@@ -312632,15 +312705,61 @@ try {
         throw new Error(String(payload?.message || payload?.error || text || 'Failed to load Archive state'));
       }
       if (window.modalCtx !== latestCtx) return;
+
+      const latestMutationStartedAt = Math.max(
+        Number(latestCtx.__timesheetLatestLifecycleMutationStartedAt || 0) || 0,
+        Number(latestCtx.__timesheetLatestMutationStartedAt || 0) || 0,
+        Number(latestCtx.__timesheetLatestSavedMutationStartedAt || 0) || 0
+      );
+      const latestMutationSequence = Math.max(
+        Number(latestCtx.__timesheetLifecycleMutationSeq || 0) || 0,
+        Number(latestCtx.__timesheetLatestLifecycleMutationSeq || 0) || 0,
+        Number(latestCtx.__timesheetLifecycleBusy?.sequence || 0) || 0,
+        Number(latestCtx.__timesheetLifecycleBusySeq || 0) || 0
+      );
+      if (
+        latestMutationStartedAt > requestStartedAt ||
+        (latestMutationSequence > requestMutationSequence && latestMutationSequence > 0)
+      ) {
+        latestCtx.__timesheetArchiveStateLoadedAt = 0;
+        latestCtx.__timesheetArchiveStateNeedsRefresh = true;
+        return;
+      }
+
+      const previousArchiveState = latestCtx.timesheetArchiveState;
       latestCtx.timesheetArchiveState = payload;
-      latestCtx.__timesheetArchiveStateLoadedAt = Date.now();
+      latestCtx.__timesheetArchiveStateLoadedAt = 0;
+      latestCtx.__timesheetArchiveStateNeedsRefresh = true;
+
+      let archivePatchResult = null;
       if (payload.lifecycle_patch && typeof applyTimesheetLifecyclePatchToModal === 'function') {
-        applyTimesheetLifecyclePatchToModal(latestCtx, payload.lifecycle_patch, {
+        archivePatchResult = applyTimesheetLifecyclePatchToModal(latestCtx, payload.lifecycle_patch, {
           source: 'timesheet_archive_state',
           action: 'LIFECYCLE_REFRESH',
-          allowExistingSignature: false
+          allowExistingSignature: false,
+          requireSignature: true,
+          signatureAuthority: 'network-affected-rows',
+          mutationStartedAt: requestStartedAt,
+          candidateMutationSequence: requestMutationSequence || null
         });
       }
+
+      if (!(
+        archivePatchResult &&
+        archivePatchResult.applied === true &&
+        archivePatchResult.permissionStateComplete === true &&
+        archivePatchResult.priorityBadgesComplete === true &&
+        latestCtx.__timesheetArchiveStateNeedsRefresh !== true
+      )) {
+        latestCtx.timesheetArchiveState = previousArchiveState;
+        latestCtx.__timesheetArchiveStateLoadedAt = 0;
+        latestCtx.__timesheetArchiveStateNeedsRefresh = true;
+        throw new Error(String(archivePatchResult?.reason || 'Archive state lifecycle patch was incomplete'));
+      }
+
+      latestCtx.__timesheetArchiveStateLoadedAt = Date.now();
+      latestCtx.__timesheetArchiveStateNeedsRefresh = false;
+      delete latestCtx.__timesheetArchiveStateError;
       const liveFrame = (typeof currentFrame === 'function') ? currentFrame() : null;
       if (liveFrame && liveFrame === top && typeof liveFrame._updateButtons === 'function') liveFrame._updateButtons();
     } catch (error) {
@@ -312668,15 +312787,23 @@ try {
   }
 
   if (btnTsArchive) {
+    const canClickArchive = !!(canArchiveNow && !lifecycleBlocked && !top._saving);
     styleLifecycleButton(btnTsArchive, {
       visible: canArchiveNow,
-      enabled: canArchiveNow && !lifecycleBusy && !top._saving,
-      title: canArchiveNow ? 'Archive this financially retained Timesheet.' : 'Archive is not currently available.'
+      enabled: canClickArchive,
+      title: canClickArchive
+        ? 'Archive this financially retained Timesheet.'
+        : (lifecycleBlocked ? lifecycleBlockedReason : 'Archive is not currently available.')
     });
     btnTsArchive.dataset.ownerToken = top._token;
     btnTsArchive.onclick = async () => {
       const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
       if (!fr || btnTsArchive.dataset.ownerToken !== fr._token) return;
+      if (!canClickArchive || btnTsArchive.disabled) {
+        const message = lifecycleBlocked ? lifecycleBlockedReason : 'Archive is not currently available.';
+        if (window.__toast) window.__toast(message); else alert(message);
+        return;
+      }
       try {
         const result = await requestTimesheetArchiveAction(String(tsIdNow), 'ARCHIVE');
         if (result?.cancelled) return;
@@ -312688,15 +312815,23 @@ try {
   }
 
   if (btnTsUnarchive) {
+    const canClickUnarchive = !!(canUnarchiveNow && !lifecycleBusy && !lifecycleCriticalBlocked && !top._saving);
     styleLifecycleButton(btnTsUnarchive, {
       visible: canUnarchiveNow,
-      enabled: canUnarchiveNow && !lifecycleBusy && !top._saving,
-      title: canUnarchiveNow ? 'Return this Timesheet to active lifecycle views.' : 'Unarchive is not currently available.'
+      enabled: canClickUnarchive,
+      title: canClickUnarchive
+        ? 'Return this Timesheet to active lifecycle views.'
+        : ((lifecycleBusy || lifecycleCriticalBlocked) ? lifecycleBlockedReason : 'Unarchive is not currently available.')
     });
     btnTsUnarchive.dataset.ownerToken = top._token;
     btnTsUnarchive.onclick = async () => {
       const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
       if (!fr || btnTsUnarchive.dataset.ownerToken !== fr._token) return;
+      if (!canClickUnarchive || btnTsUnarchive.disabled) {
+        const message = (lifecycleBusy || lifecycleCriticalBlocked) ? lifecycleBlockedReason : 'Unarchive is not currently available.';
+        if (window.__toast) window.__toast(message); else alert(message);
+        return;
+      }
       try {
         const result = await requestTimesheetArchiveAction(String(tsIdNow), 'UNARCHIVE');
         if (result?.cancelled) return;
@@ -312708,22 +312843,39 @@ try {
   }
 
   if (btnTsUnprocess) {
+    const canClickUnprocess = !!(canUnprocessNow && !lifecycleBlocked && !top._saving);
+    const canExplainUnprocessBlock = !!(showUnprocessNow && !canUnprocessNow && !lifecycleBlocked && !top._saving);
     btnTsUnprocess.style.display = showUnprocessNow ? '' : 'none';
-    btnTsUnprocess.disabled = !!(top._saving || lifecycleBusy);
-    btnTsUnprocess.setAttribute('title', canUnprocessNow ? '' : (unprocessBlockMessageNow || 'Unprocess is not currently available.'));
+    btnTsUnprocess.disabled = !!(lifecycleBlocked || top._saving);
+    btnTsUnprocess.setAttribute(
+      'title',
+      canClickUnprocess
+        ? ''
+        : (lifecycleBlocked ? lifecycleBlockedReason : (unprocessBlockMessageNow || 'Unprocess is not currently available.'))
+    );
 
     btnTsUnprocess.dataset.ownerToken = top._token;
     btnTsUnprocess.onclick = async () => {
       const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
       if (!fr || btnTsUnprocess.dataset.ownerToken !== fr._token) return;
 
-      if (!canUnprocessNow) {
+      if (lifecycleBlocked || top._saving || btnTsUnprocess.disabled) {
+        const message = lifecycleBlocked
+          ? lifecycleBlockedReason
+          : 'Unprocess is not currently available.';
+        if (window.__toast) window.__toast(message); else alert(message);
+        return;
+      }
+
+      if (!canClickUnprocess && canExplainUnprocessBlock) {
         const message = unprocessBlockMessageNow || (retainedHistoryNow
           ? 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.'
           : 'Unprocess is not currently available.');
         if (window.__toast) window.__toast(message); else alert(message);
         return;
       }
+
+      if (!canClickUnprocess) return;
 
       const mc = window.modalCtx || {};
       const det = mc.timesheetDetails || {};
@@ -312830,7 +312982,7 @@ try {
 
   // ── Authorise ──
 if (btnTsAuthorise) {
-  const showBtn = (canAuthoriseNow || showAuthoriseDisabled || lifecycleBlocked);
+  const showBtn = (canAuthoriseNow || showAuthoriseDisabled || lifecycleBusy || lifecycleCriticalBlocked);
   const blockedTitle = showAuthoriseDisabled
     ? 'QR Timesheet has not been signed by manager yet'
     : lifecycleBlockedReason;
@@ -312890,7 +313042,7 @@ if (btnTsAuthorise) {
 if (btnTsUnauthorise) {
   const canClickUnauthorise = !!(canUnauthoriseNow && !lifecycleBlocked && !top._saving);
   styleLifecycleButton(btnTsUnauthorise, {
-    visible: canUnauthoriseNow || lifecycleBusy,
+    visible: canUnauthoriseNow || lifecycleBusy || (lifecycleCriticalBlocked && isAuthorisedNow),
     enabled: canClickUnauthorise,
     redAuthorise: false,
     title: canClickUnauthorise ? '' : lifecycleBlockedReason
@@ -312954,13 +313106,20 @@ if (btnTsUnauthorise) {
 
 // ── Process Timesheet ──
 if (btnTsProcess) {
+  const canClickProcess = !!(canProcessNow && !lifecycleBlocked && !top._saving);
   btnTsProcess.style.display = canProcessNow ? '' : 'none';
-  btnTsProcess.disabled      = !!top._saving;
+  btnTsProcess.disabled = !canClickProcess;
+  btnTsProcess.setAttribute('title', canClickProcess ? '' : (lifecycleBlocked ? lifecycleBlockedReason : 'Process Timesheet is not currently available.'));
 
   btnTsProcess.dataset.ownerToken = top._token;
   btnTsProcess.onclick = async () => {
     const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
     if (!fr || btnTsProcess.dataset.ownerToken !== fr._token) return;
+    if (!canClickProcess || btnTsProcess.disabled) {
+      const message = lifecycleBlocked ? lifecycleBlockedReason : 'Process Timesheet is not currently available.';
+      if (window.__toast) window.__toast(message); else alert(message);
+      return;
+    }
 
     try {
       if (fr.entity === 'timesheets' && fr.currentTabKey === 'expenses' && typeof fr.persistCurrentTabState === 'function') {
@@ -313416,13 +313575,20 @@ if (btnTsProcess) {
 
       // ── Delete Timesheet ──
       if (btnTsDelete) {
+        const canClickDelete = !!(canDeleteNow && !lifecycleBlocked && !top._saving);
         btnTsDelete.style.display = canDeleteNow ? '' : 'none';
-        btnTsDelete.disabled      = !!top._saving;
+        btnTsDelete.disabled = !canClickDelete;
+        btnTsDelete.setAttribute('title', canClickDelete ? '' : (lifecycleBlocked ? lifecycleBlockedReason : 'Delete is not currently available.'));
 
         btnTsDelete.dataset.ownerToken = top._token;
         btnTsDelete.onclick = async () => {
           const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
           if (!fr || btnTsDelete.dataset.ownerToken !== fr._token) return;
+          if (!canClickDelete || btnTsDelete.disabled) {
+            const message = lifecycleBlocked ? lifecycleBlockedReason : 'Delete is not currently available.';
+            if (window.__toast) window.__toast(message); else alert(message);
+            return;
+          }
 
           const mc = window.modalCtx || {};
           const det = mc.timesheetDetails || {};
@@ -314297,7 +314463,7 @@ if (!isChild && top.entity === 'contracts') {
       const latestCritical = latestCtx.__timesheetLifecycleCriticalStateIncomplete === true;
       if (latestFooterState.readOnly === true || latestBusy || latestCritical) {
         const message = latestFooterState.readOnly === true
-          ? 'Archived timesheets are read-only. Unarchive the Timesheet before editing it.'
+          ? timesheetReadOnlyMessage(latestFooterState, 'editing it')
           : 'The latest Timesheet lifecycle state is still refreshing. Please wait and try again.';
         if (window.__toast) window.__toast(message); else alert(message);
         return;
@@ -315166,7 +315332,7 @@ async function saveForFrame(fr) {
     const latestCritical = latestCtx.__timesheetLifecycleCriticalStateIncomplete === true;
     if (latestFooterState.readOnly === true || latestBusy || latestCritical) {
       const message = latestFooterState.readOnly === true
-        ? 'Archived timesheets are read-only. Unarchive the Timesheet before saving changes.'
+        ? timesheetReadOnlyMessage(latestFooterState, 'saving changes')
         : 'The latest Timesheet lifecycle state is still refreshing. Please wait and try again.';
       if (window.__toast) window.__toast(message); else alert(message);
       fr._updateButtons && fr._updateButtons();
@@ -315670,6 +315836,7 @@ bindSave(btnSave, top);
 
 
 
+
   byId('modalBack').style.display='flex';
   window.__getModalFrame = currentFrame;
 
@@ -315691,7 +315858,6 @@ bindSave(btnSave, top);
  * Installed original amended because no candidate frontend version was supplied.
  * Complete replacement preserving existing signature/stale-state safeguards.
  */
-
 
 
 
@@ -316157,14 +316323,15 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
     candidateSourceLower.includes('affected_rows')
   );
   const candidateOlderBySequence = !!(currentTrustedSequence > 0 && candidateMutationSequence > 0 && candidateMutationSequence < currentTrustedSequence);
-  const candidateUnsequencedWeakConflict = !!(candidateIsWeakLocalDetails && !candidateIsExplicitNetwork && candidateMutationSequence <= 0);
+  const candidateIsWeakLocalOnly = !!(candidateIsWeakLocalDetails && !candidateIsExplicitNetwork);
+  const candidateUnsequencedWeakConflict = !!(candidateIsWeakLocalOnly && candidateMutationSequence <= 0);
   if (
     patchSignature &&
     currentTrustedIsAuthoritative &&
     currentTrustedSignature &&
     patchSignature !== currentTrustedSignature &&
     !responseUnsafe &&
-    (candidateIsWeakLocalDetails || candidateOlderBySequence || candidateUnsequencedWeakConflict)
+    (candidateIsWeakLocalOnly || candidateOlderBySequence || candidateUnsequencedWeakConflict)
   ) {
     result.reason = 'STALE_LIFECYCLE_SIGNATURE_REJECTED';
     result.signature = currentTrustedSignature;
@@ -316255,12 +316422,10 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
     return finishTimesheetLifecyclePatchForDiag(result);
   }
 
-  const nowIso = new Date().toISOString();
   let authorisedValue = boolish(firstPresent(
     patch.is_authorised,
     patch.authorised,
-    patch.authorized,
-    patch.review_only
+    patch.authorized
   ));
   if (authorisedValue === null && (patch.authorised_at_server || patch.authorised_at_utc || patch.authorized_at_utc)) authorisedValue = true;
   if (authorisedValue === null && responseUnsafe) {
@@ -316280,27 +316445,107 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
   if (authorisedValue === null && !responseUnsafe && action === 'authorise') authorisedValue = true;
   if (authorisedValue === null && !responseUnsafe && action === 'unauthorise') authorisedValue = false;
 
+  const explicitAuthorisedAt = firstPresent(
+    patch.authorised_at_server,
+    patch.authorised_at_utc,
+    patch.authorized_at_utc,
+    patch.authorised_at
+  );
+  const existingAuthorisedAt = firstPresent(
+    ctx?.data?.authorised_at_server,
+    ctx?.data?.authorised_at_utc,
+    ctx?.timesheetDetails?.authorised_at_server,
+    ctx?.timesheetDetails?.authorised_at_utc,
+    ctx?.timesheetDetails?.row?.authorised_at_server,
+    ctx?.timesheetDetails?.row?.authorised_at_utc,
+    ctx?.timesheetDetails?.timesheet?.authorised_at_server,
+    ctx?.timesheetDetails?.timesheet?.authorised_at_utc,
+    ctx?.timesheetDetails?.tsfin?.authorised_at_utc,
+    ctx?.timesheetMeta?.authorised_at_server,
+    ctx?.timesheetMeta?.authorised_at_utc
+  );
   const authorisedAt = authorisedValue === true
-    ? (firstPresent(patch.authorised_at_server, patch.authorised_at_utc, patch.authorized_at_utc, patch.authorised_at, nowIso) || nowIso)
+    ? (explicitAuthorisedAt !== undefined ? explicitAuthorisedAt : (existingAuthorisedAt !== undefined ? existingAuthorisedAt : null))
     : null;
 
+  const existingProcessingStatus = trimStr(firstPresent(
+    ctx?.data?.processing_status,
+    ctx?.timesheetDetails?.processing_status,
+    ctx?.timesheetDetails?.row?.processing_status,
+    ctx?.timesheetDetails?.tsfin?.processing_status
+  ));
   const processingStatus = trimStr(firstPresent(
     patch.processing_status,
     patch.new_processing_status,
     patch.summary_stage,
     patch.tools_stage,
     authorisedValue === false ? 'PENDING_AUTH' : undefined,
-    ctx?.data?.processing_status,
-    ctx?.timesheetDetails?.processing_status,
-    ctx?.timesheetDetails?.row?.processing_status
+    existingProcessingStatus
   ));
-  const summaryStage = trimStr(firstPresent(
+  const incomingSummaryStage = trimStr(firstPresent(
     patch.summary_stage,
-    patch.tools_stage,
-    processingStatus,
-    ctx?.data?.summary_stage,
-    ctx?.timesheetDetails?.summary_stage
+    deepValue(patch, 'status.summary_stage'),
+    deepValue(patch, 'priority_badge_hints.summary_stage')
   ));
+  const incomingToolsStage = trimStr(firstPresent(
+    patch.tools_stage,
+    deepValue(patch, 'status.tools_stage'),
+    deepValue(patch, 'priority_badge_hints.tools_stage')
+  ));
+  const existingSummaryStage = trimStr(firstPresent(
+    ctx?.data?.summary_stage,
+    ctx?.timesheetDetails?.summary_stage,
+    ctx?.timesheetDetails?.row?.summary_stage,
+    ctx?.timesheetDetails?.timesheet?.summary_stage
+  ));
+  const existingToolsStage = trimStr(firstPresent(
+    ctx?.data?.tools_stage,
+    ctx?.timesheetDetails?.tools_stage,
+    ctx?.timesheetDetails?.row?.tools_stage,
+    ctx?.timesheetDetails?.timesheet?.tools_stage
+  ));
+  const processingStatusChanged = !!(
+    processingStatus &&
+    existingProcessingStatus &&
+    processingStatus.toUpperCase() !== existingProcessingStatus.toUpperCase()
+  );
+  const isGenericLifecycleBucketStage = (value) => [
+    'PROCESSED',
+    'AUTHORISED',
+    'AUTHORIZED'
+  ].includes(trimStr(value).toUpperCase());
+  const stagesFromProcessingStatus = (value) => {
+    const statusUpper = trimStr(value).toUpperCase();
+    if (statusUpper === 'UNPROCESSED' || statusUpper === 'UNASSIGNED') {
+      return { summary: 'UNPROCESSED', tools: 'UNPROCESSED' };
+    }
+    if (statusUpper === 'PENDING_AUTH' || statusUpper === 'AWAITING_AUTH' || statusUpper === 'AWAITING_AUTHORISATION') {
+      return { summary: 'AWAITING_AUTHORISATION', tools: 'AWAITING_AUTHORISATION' };
+    }
+    if (statusUpper === 'READY_FOR_INVOICE' || statusUpper === 'READY_TO_INVOICE') {
+      return { summary: 'READY_FOR_INVOICE', tools: 'AUTHORISED_FOR_INVOICING' };
+    }
+    if (statusUpper === 'INVOICED') {
+      return { summary: 'INVOICED', tools: 'INVOICED' };
+    }
+    if (statusUpper === 'ARCHIVED') {
+      return { summary: 'ARCHIVED', tools: 'ARCHIVED' };
+    }
+    return { summary: trimStr(value), tools: trimStr(value) };
+  };
+  const derivedStages = stagesFromProcessingStatus(processingStatus);
+  const chooseLifecycleStage = (incoming, existing, derived) => {
+    const incomingText = trimStr(incoming);
+    const existingText = trimStr(existing);
+    const derivedText = trimStr(derived);
+    if (incomingText && !isGenericLifecycleBucketStage(incomingText)) return incomingText;
+    if (processingStatusChanged && derivedText) return derivedText;
+    if (existingText) return existingText;
+    if (derivedText) return derivedText;
+    return incomingText;
+  };
+  const summaryStage = chooseLifecycleStage(incomingSummaryStage, existingSummaryStage, derivedStages.summary);
+  const toolsStage = chooseLifecycleStage(incomingToolsStage, existingToolsStage, derivedStages.tools);
   const bookingId = trimStr(firstPresent(
     patch.booking_id,
     deepValue(patch, 'identity.booking_id'),
@@ -316362,14 +316607,14 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
   if (patchWeekId || currentWeekId) safePatch.contract_week_id = patchWeekId || currentWeekId;
   if (bookingId) safePatch.booking_id = bookingId;
   if (processingStatus) safePatch.processing_status = processingStatus;
-  if (summaryStage) {
-    safePatch.summary_stage = summaryStage;
-    safePatch.tools_stage = summaryStage;
-  }
+  if (summaryStage) safePatch.summary_stage = summaryStage;
+  if (toolsStage) safePatch.tools_stage = toolsStage;
   if (readyToPay !== undefined) safePatch.ready_to_pay = readyToPay;
   if (authorisedValue === true) {
-    safePatch.authorised_at_server = authorisedAt;
-    safePatch.authorised_at_utc = authorisedAt;
+    if (authorisedAt !== null && authorisedAt !== undefined && trimStr(authorisedAt) !== '') {
+      safePatch.authorised_at_server = authorisedAt;
+      safePatch.authorised_at_utc = authorisedAt;
+    }
     safePatch.is_authorised = true;
     safePatch.authorised = true;
     safePatch.review_only = true;
@@ -316435,6 +316680,49 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
     'delete_decision', 'read_only', 'has_retained_financial_history', 'unprocess_action_visible',
     'unprocess_block_reason', 'unprocess_block_message'
   ].some((key) => hasOwn(safePatch, key) || hasOwn(patch, key) || findExplicitSourceField(key).present);
+
+  const archiveStatePermissionComplete = !!(
+    signature &&
+    explicitPermissionComplete === true &&
+    firstBool(
+      safePatch.is_archived,
+      patch.is_archived,
+      safePatch.archived,
+      patch.archived,
+      safePatch.action_flags?.is_archived,
+      patch.action_flags?.is_archived
+    ) !== null &&
+    permissionBool(
+      safePatch.can_archive,
+      patch.can_archive,
+      safePatch.action_flags?.can_archive,
+      patch.action_flags?.can_archive
+    ) !== null &&
+    permissionBool(
+      safePatch.can_unarchive,
+      patch.can_unarchive,
+      safePatch.action_flags?.can_unarchive,
+      patch.action_flags?.can_unarchive
+    ) !== null &&
+    firstBool(
+      safePatch.archive_required,
+      patch.archive_required,
+      safePatch.action_flags?.archive_required,
+      patch.action_flags?.archive_required
+    ) !== null &&
+    firstBool(
+      safePatch.has_retained_financial_history,
+      patch.has_retained_financial_history,
+      safePatch.action_flags?.has_retained_financial_history,
+      patch.action_flags?.has_retained_financial_history
+    ) !== null &&
+    !!trimStr(firstPresent(
+      safePatch.delete_decision,
+      patch.delete_decision,
+      safePatch.action_flags?.delete_decision,
+      patch.action_flags?.delete_decision
+    ))
+  );
 
   if (archiveSignalPresent) {
     const existingArchiveState = (ctx.timesheetArchiveState && typeof ctx.timesheetArchiveState === 'object')
@@ -316655,7 +316943,14 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
     }
 
     ctx.timesheetDeletePreview = null;
-    ctx.__timesheetArchiveStateLoadedAt = Date.now();
+    if (archiveStatePermissionComplete) {
+      ctx.__timesheetArchiveStateLoadedAt = Date.now();
+      ctx.__timesheetArchiveStateNeedsRefresh = false;
+      delete ctx.__timesheetArchiveStateError;
+    } else {
+      ctx.__timesheetArchiveStateLoadedAt = 0;
+      ctx.__timesheetArchiveStateNeedsRefresh = true;
+    }
   }
   if (hasKeys(priorityBadgeHints)) ctx.timesheetDetails.priority_badge_hints = priorityBadgeHints;
   if (isPlainObject(patch.bulk_authorise)) ctx.timesheetDetails.bulk_authorise = patch.bulk_authorise;
@@ -316671,8 +316966,13 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
   if (authorisedValue === true || authorisedValue === false) {
     ctx.timesheetMeta.isAuthorised = authorisedValue;
     ctx.timesheetMeta.is_authorised = authorisedValue;
-    ctx.timesheetMeta.authorised_at_server = authorisedAt;
-    ctx.timesheetMeta.authorised_at_utc = authorisedAt;
+    if (authorisedValue === false) {
+      ctx.timesheetMeta.authorised_at_server = null;
+      ctx.timesheetMeta.authorised_at_utc = null;
+    } else if (authorisedAt !== null && authorisedAt !== undefined && trimStr(authorisedAt) !== '') {
+      ctx.timesheetMeta.authorised_at_server = authorisedAt;
+      ctx.timesheetMeta.authorised_at_utc = authorisedAt;
+    }
   }
 
   ctx.refresh_required = false;
@@ -316712,6 +317012,9 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
   ctx.__timesheetLifecyclePriorityBadgesComplete = result.priorityBadgesComplete;
   ctx.__timesheetLatestLifecyclePatchAt = patchedAt;
   const mutationStartedAtForTrust = opts.mutationStartedAt || ctx.__timesheetLatestLifecycleMutationStartedAt || ctx.__timesheetLatestMutationStartedAt || patchedAt;
+  const trustedLifecycleSource = candidateIsExplicitNetwork
+    ? 'affected_rows_fallback'
+    : source;
   ctx.__timesheetLifecycleTrusted = {
     timesheet_id: resolvedId || null,
     contract_week_id: patchWeekId || currentWeekId || null,
@@ -316720,7 +317023,8 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
     mutation_row_signature: signature || '',
     row_signature: signature || '',
     expected_row_signature: signature || '',
-    source,
+    source: trustedLifecycleSource,
+    source_detail: source,
     action,
     patched_at: patchedAt,
     mutation_started_at: mutationStartedAtForTrust,
@@ -343490,6 +343794,7 @@ async function saveMyEmailSignature() {
   }
 }
 
+
 async function openTimesheet(row) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OPEN]');
   GC('openTimesheet');
@@ -343502,6 +343807,18 @@ async function openTimesheet(row) {
     }
 
     const baseRow = { ...row, __timesheetWorkbenchFetchPurpose: 'initial_open' };
+    const lifecycleSeedSignature = String(
+      baseRow.backend_row_signature ||
+      baseRow.mutation_row_signature ||
+      baseRow.row_signature ||
+      baseRow.expected_row_signature ||
+      ''
+    ).trim();
+    const lifecycleSeedTrusted = !!(
+      baseRow.lifecycle_state_trusted === true &&
+      baseRow.lifecycle_refresh_required !== true &&
+      lifecycleSeedSignature
+    );
     const ids = timesheetFastOpenIdsFromRow(baseRow);
     const realTsId = ids.realTsId || null;
     const weekId = ids.weekId || null;
@@ -343526,6 +343843,13 @@ async function openTimesheet(row) {
   initialCtx.__timesheetWorkbenchFetchPurpose = 'initial_open';
   initialCtx.__timesheetTabRefreshTokens = initialCtx.__timesheetTabRefreshTokens || {};
   initialCtx.__timesheetLazyTabBadges = initialCtx.__timesheetLazyTabBadges || {};
+  if (!lifecycleSeedTrusted) {
+    initialCtx.__timesheetLifecyclePermissionStateComplete = false;
+    initialCtx.__timesheetLifecyclePriorityBadgesComplete = false;
+    initialCtx.__timesheetLifecycleCriticalStateIncomplete = true;
+    initialCtx.__timesheetLifecycleCriticalStateReason = 'MODAL_OPEN_LIFECYCLE_HYDRATION_PENDING';
+    initialCtx.__timesheetLifecycleTrusted = null;
+  }
     window.modalCtx = initialCtx;
     try { if (typeof modalCtx !== 'undefined') modalCtx = window.modalCtx; } catch {}
 
@@ -343571,7 +343895,7 @@ async function openTimesheet(row) {
       onSaveTimesheet,
       hasRelatedId,
       undefined,
-      { kind: 'timesheets', showSave: false }
+      { kind: 'timesheets' }
     );
 
     Promise.resolve()
@@ -343595,7 +343919,6 @@ async function openTimesheet(row) {
     GE();
   }
 }
-
 
 
 function timesheetFastOpenIdsFromRow(baseRowArg) {
@@ -355280,8 +355603,6 @@ async function saveNhspDeferrals(ctxOrId, deferrals) {
 
 
 
-
-
 async function listTimesheetsSummary(filters = {}) {
   window.__listState = window.__listState || {};
   const st = (window.__listState['timesheets'] ||= {
@@ -355512,6 +355833,393 @@ async function listTimesheetsSummary(filters = {}) {
     }
   });
 
+  const trimLifecycleText = (value) => String(value == null ? '' : value).trim();
+  const lifecycleBool = (value) => {
+    if (value === true || value === false) return value;
+    if (value === 1 || value === '1') return true;
+    if (value === 0 || value === '0') return false;
+    const textValue = trimLifecycleText(value).toLowerCase();
+    if (['true', 't', 'yes', 'y', 'on', 'authorised', 'authorized'].includes(textValue)) return true;
+    if (['false', 'f', 'no', 'n', 'off', 'unauthorised', 'unauthorized'].includes(textValue)) return false;
+    return null;
+  };
+  const firstLifecycleBool = (...values) => {
+    for (const value of values) {
+      const parsed = lifecycleBool(value);
+      if (parsed !== null) return parsed;
+    }
+    return null;
+  };
+  const anyLifecycleTrue = (...values) => values.some((value) => lifecycleBool(value) === true);
+  const lifecycleRowKey = (rowLike) => {
+    const rowValue = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const identity = (rowValue.identity && typeof rowValue.identity === 'object') ? rowValue.identity : {};
+    const timesheetId = trimLifecycleText(
+      rowValue.current_timesheet_id ||
+      rowValue.timesheet_id ||
+      identity.current_timesheet_id ||
+      identity.timesheet_id ||
+      ''
+    );
+    if (timesheetId) return `timesheet:${timesheetId}`;
+    const contractWeekId = trimLifecycleText(rowValue.contract_week_id || identity.contract_week_id || '');
+    if (contractWeekId) return `contract_week:${contractWeekId}`;
+    return '';
+  };
+  const markLifecycleSeedUntrusted = (rowValue) => {
+    const rowObject = (rowValue && typeof rowValue === 'object') ? rowValue : null;
+    if (!rowObject) return;
+    const archivedFromStage = String(rowObject.tools_stage || rowObject.summary_stage || '').trim().toUpperCase() === 'ARCHIVED';
+    rowObject.is_archived = archivedFromStage || rowObject.is_archived === true;
+    rowObject.has_retained_financial_history = null;
+    rowObject.can_authorise = false;
+    rowObject.can_unauthorise = false;
+    rowObject.can_process = false;
+    rowObject.can_unprocess = false;
+    rowObject.can_delete = false;
+    rowObject.can_archive = false;
+    rowObject.can_unarchive = false;
+    rowObject.unprocess_action_visible = false;
+    rowObject.unprocess_block_reason = null;
+    rowObject.unprocess_block_message = null;
+    rowObject.action_flags = {
+      ...((rowObject.action_flags && typeof rowObject.action_flags === 'object' && !Array.isArray(rowObject.action_flags))
+        ? rowObject.action_flags
+        : {}),
+      can_authorise: false,
+      can_unauthorise: false,
+      can_process: false,
+      can_unprocess: false,
+      can_delete: false,
+      can_archive: false,
+      can_unarchive: false,
+      unprocess_action_visible: false,
+      has_retained_financial_history: null
+    };
+    rowObject.lifecycle_state_trusted = false;
+    rowObject.lifecycle_refresh_required = true;
+  };
+  const mergeLifecycleRow = (summaryRow, lifecycleRow, responseMeta = {}, allowResponseCompleteness = false) => {
+    const rowObject = (summaryRow && typeof summaryRow === 'object') ? summaryRow : null;
+    const lifecycleObject = (lifecycleRow && typeof lifecycleRow === 'object') ? lifecycleRow : null;
+    const responseObject = (responseMeta && typeof responseMeta === 'object') ? responseMeta : {};
+    if (!rowObject || !lifecycleObject) return;
+
+    const status = (lifecycleObject.status && typeof lifecycleObject.status === 'object') ? lifecycleObject.status : {};
+    const actions = (lifecycleObject.actions && typeof lifecycleObject.actions === 'object') ? lifecycleObject.actions : {};
+    const flags = (lifecycleObject.action_flags && typeof lifecycleObject.action_flags === 'object') ? lifecycleObject.action_flags : {};
+    const rowPatch = (lifecycleObject.row_patch && typeof lifecycleObject.row_patch === 'object') ? lifecycleObject.row_patch : {};
+    const footerHints = (lifecycleObject.footer_action_hints && typeof lifecycleObject.footer_action_hints === 'object') ? lifecycleObject.footer_action_hints : {};
+    const completeness = (lifecycleObject.patch_completeness && typeof lifecycleObject.patch_completeness === 'object') ? lifecycleObject.patch_completeness : {};
+    const responseCompleteness = (responseObject.patch_completeness && typeof responseObject.patch_completeness === 'object')
+      ? responseObject.patch_completeness
+      : {};
+    const identity = (lifecycleObject.identity && typeof lifecycleObject.identity === 'object') ? lifecycleObject.identity : {};
+    const staleMarkers = (lifecycleObject.stale_markers && typeof lifecycleObject.stale_markers === 'object') ? lifecycleObject.stale_markers : {};
+    const responseStaleMarkers = (responseObject.stale_markers && typeof responseObject.stale_markers === 'object') ? responseObject.stale_markers : {};
+
+    const summaryTimesheetId = trimLifecycleText(rowObject.timesheet_id || rowObject.current_timesheet_id || '');
+    const summaryContractWeekId = trimLifecycleText(rowObject.contract_week_id || '');
+    const returnedTimesheetId = trimLifecycleText(
+      lifecycleObject.current_timesheet_id ||
+      identity.current_timesheet_id ||
+      lifecycleObject.timesheet_id ||
+      identity.timesheet_id ||
+      rowPatch.current_timesheet_id ||
+      rowPatch.timesheet_id ||
+      ''
+    );
+    const returnedContractWeekId = trimLifecycleText(
+      lifecycleObject.contract_week_id ||
+      identity.contract_week_id ||
+      rowPatch.contract_week_id ||
+      ''
+    );
+    const timesheetIdentityMismatch = !!(
+      returnedTimesheetId &&
+      (
+        !summaryTimesheetId ||
+        returnedTimesheetId !== summaryTimesheetId
+      )
+    );
+    const contractWeekIdentityMismatch = !!(
+      returnedContractWeekId &&
+      summaryContractWeekId &&
+      returnedContractWeekId !== summaryContractWeekId
+    );
+
+    const retained = firstLifecycleBool(
+      lifecycleObject.has_retained_financial_history,
+      status.has_retained_financial_history,
+      actions.has_retained_financial_history,
+      flags.has_retained_financial_history,
+      rowPatch.has_retained_financial_history
+    );
+    const isArchived = firstLifecycleBool(lifecycleObject.is_archived, status.is_archived, flags.is_archived);
+    const isAuthorised = firstLifecycleBool(lifecycleObject.is_authorised, lifecycleObject.authorised, status.is_authorised, status.authorised);
+    const canAuthorise = firstLifecycleBool(lifecycleObject.can_authorise, actions.can_authorise, flags.can_authorise, footerHints.can_authorise);
+    const canUnauthorise = firstLifecycleBool(lifecycleObject.can_unauthorise, actions.can_unauthorise, flags.can_unauthorise, footerHints.can_unauthorise);
+    const canProcess = firstLifecycleBool(lifecycleObject.can_process, actions.can_process, flags.can_process, footerHints.can_process);
+    const canUnprocess = firstLifecycleBool(lifecycleObject.can_unprocess, actions.can_unprocess, flags.can_unprocess, rowPatch.can_unprocess, footerHints.can_unprocess);
+    const canDelete = firstLifecycleBool(lifecycleObject.can_delete, actions.can_delete, flags.can_delete, footerHints.can_delete);
+    const canArchive = firstLifecycleBool(lifecycleObject.can_archive, actions.can_archive, flags.can_archive, footerHints.can_archive);
+    const canUnarchive = firstLifecycleBool(lifecycleObject.can_unarchive, actions.can_unarchive, flags.can_unarchive, footerHints.can_unarchive);
+    const archiveRequired = firstLifecycleBool(lifecycleObject.archive_required, actions.archive_required, flags.archive_required, footerHints.archive_required);
+    const showUnprocess = firstLifecycleBool(
+      lifecycleObject.unprocess_action_visible,
+      status.unprocess_action_visible,
+      actions.unprocess_action_visible,
+      flags.unprocess_action_visible,
+      rowPatch.unprocess_action_visible
+    );
+    const readOnly = firstLifecycleBool(lifecycleObject.read_only, actions.read_only, flags.read_only, footerHints.read_only);
+    const signature = trimLifecycleText(
+      lifecycleObject.backend_row_signature ||
+      lifecycleObject.mutation_row_signature ||
+      lifecycleObject.row_signature ||
+      lifecycleObject.expected_row_signature ||
+      rowPatch.backend_row_signature ||
+      rowPatch.row_signature ||
+      ''
+    );
+    const permissionComplete = firstLifecycleBool(
+      lifecycleObject.permission_state_patch_complete,
+      completeness.permission_state_patch_complete,
+      allowResponseCompleteness ? responseObject.permission_state_patch_complete : undefined,
+      allowResponseCompleteness ? responseCompleteness.permission_state_patch_complete : undefined
+    );
+    const badgesComplete = firstLifecycleBool(
+      lifecycleObject.priority_badges_patch_complete,
+      completeness.priority_badges_patch_complete,
+      allowResponseCompleteness ? responseObject.priority_badges_patch_complete : undefined,
+      allowResponseCompleteness ? responseCompleteness.priority_badges_patch_complete : undefined
+    );
+    const refreshRequired = anyLifecycleTrue(
+      lifecycleObject.refresh_required,
+      lifecycleObject.lifecycle_refresh_required,
+      lifecycleObject.requires_refresh,
+      lifecycleObject.requires_affected_row_refresh,
+      lifecycleObject.requires_full_details_refresh,
+      lifecycleObject.row_stale,
+      lifecycleObject.stale,
+      lifecycleObject.was_stale,
+      lifecycleObject.moved,
+      lifecycleObject.timesheet_moved,
+      lifecycleObject.unknown_lifecycle_outcome,
+      staleMarkers.timesheet_moved,
+      staleMarkers.stale_write_detected,
+      responseObject.refresh_required,
+      responseObject.lifecycle_refresh_required,
+      responseObject.requires_refresh,
+      responseObject.requires_affected_row_refresh,
+      responseObject.requires_full_details_refresh,
+      responseObject.row_stale,
+      responseObject.stale,
+      responseObject.was_stale,
+      responseObject.moved,
+      responseObject.timesheet_moved,
+      responseObject.unknown_lifecycle_outcome,
+      responseStaleMarkers.timesheet_moved,
+      responseStaleMarkers.stale_write_detected
+    );
+    const responseFailed = responseObject.ok === false || responseObject.success === false || lifecycleObject.ok === false || lifecycleObject.success === false;
+    const trusted = !!(
+      signature &&
+      permissionComplete === true &&
+      badgesComplete === true &&
+      !refreshRequired &&
+      !responseFailed &&
+      !timesheetIdentityMismatch &&
+      !contractWeekIdentityMismatch
+    );
+
+    rowObject.permission_state_patch_complete = permissionComplete === true;
+    rowObject.priority_badges_patch_complete = badgesComplete === true;
+    rowObject.lifecycle_state_trusted = trusted;
+    rowObject.lifecycle_refresh_required = !trusted;
+
+    if (!trusted) return;
+
+    const unprocessBlockReason = trimLifecycleText(
+      lifecycleObject.unprocess_block_reason ||
+      flags.unprocess_block_reason ||
+      actions.unprocess_block_reason ||
+      rowPatch.unprocess_block_reason ||
+      footerHints.unprocess_block_reason ||
+      ''
+    ) || null;
+    const unprocessBlockMessage = trimLifecycleText(
+      lifecycleObject.unprocess_block_message ||
+      flags.unprocess_block_message ||
+      actions.unprocess_block_message ||
+      rowPatch.unprocess_block_message ||
+      footerHints.unprocess_block_message ||
+      ''
+    ) || null;
+    const deleteDecision = trimLifecycleText(
+      lifecycleObject.delete_decision ||
+      flags.delete_decision ||
+      actions.delete_decision ||
+      footerHints.delete_decision ||
+      ''
+    ) || null;
+    const readOnlyMode = trimLifecycleText(
+      lifecycleObject.mode ||
+      flags.mode ||
+      actions.mode ||
+      footerHints.mode ||
+      ''
+    ) || null;
+    const readOnlyReason = trimLifecycleText(
+      lifecycleObject.reason ||
+      flags.reason ||
+      actions.reason ||
+      footerHints.reason ||
+      ''
+    ) || null;
+    const authorisedAt = trimLifecycleText(
+      lifecycleObject.authorised_at_server ||
+      lifecycleObject.authorised_at_utc ||
+      lifecycleObject.authorized_at_utc ||
+      status.authorised_at_server ||
+      status.authorised_at_utc ||
+      ''
+    ) || null;
+
+    if (retained !== null) rowObject.has_retained_financial_history = retained;
+    if (isArchived !== null) rowObject.is_archived = isArchived;
+    if (isAuthorised !== null) {
+      rowObject.is_authorised = isAuthorised;
+      rowObject.authorised = isAuthorised;
+      if (isAuthorised === false) {
+        rowObject.authorised_at_server = null;
+        rowObject.authorised_at_utc = null;
+      } else if (authorisedAt) {
+        rowObject.authorised_at_server = authorisedAt;
+        rowObject.authorised_at_utc = authorisedAt;
+      }
+    }
+    if (canAuthorise !== null) rowObject.can_authorise = canAuthorise;
+    if (canUnauthorise !== null) rowObject.can_unauthorise = canUnauthorise;
+    if (canProcess !== null) rowObject.can_process = canProcess;
+    if (canUnprocess !== null) rowObject.can_unprocess = canUnprocess;
+    if (canDelete !== null) rowObject.can_delete = canDelete;
+    if (canArchive !== null) rowObject.can_archive = canArchive;
+    if (canUnarchive !== null) rowObject.can_unarchive = canUnarchive;
+    if (archiveRequired !== null) rowObject.archive_required = archiveRequired;
+    rowObject.unprocess_action_visible = showUnprocess === true;
+    if (readOnly !== null) rowObject.read_only = readOnly;
+    if (deleteDecision) rowObject.delete_decision = deleteDecision;
+    rowObject.unprocess_block_reason = unprocessBlockReason;
+    rowObject.unprocess_block_message = unprocessBlockMessage;
+
+    const mergedFlags = {
+      ...((rowObject.action_flags && typeof rowObject.action_flags === 'object' && !Array.isArray(rowObject.action_flags))
+        ? rowObject.action_flags
+        : {}),
+      ...actions,
+      ...footerHints,
+      ...flags
+    };
+    if (retained !== null) mergedFlags.has_retained_financial_history = retained;
+    if (isArchived !== null) mergedFlags.is_archived = isArchived;
+    if (isAuthorised !== null) {
+      mergedFlags.is_authorised = isAuthorised;
+      mergedFlags.authorised = isAuthorised;
+    }
+    if (canAuthorise !== null) mergedFlags.can_authorise = canAuthorise;
+    if (canUnauthorise !== null) mergedFlags.can_unauthorise = canUnauthorise;
+    if (canProcess !== null) mergedFlags.can_process = canProcess;
+    if (canUnprocess !== null) mergedFlags.can_unprocess = canUnprocess;
+    if (canDelete !== null) mergedFlags.can_delete = canDelete;
+    if (canArchive !== null) mergedFlags.can_archive = canArchive;
+    if (canUnarchive !== null) mergedFlags.can_unarchive = canUnarchive;
+    if (archiveRequired !== null) mergedFlags.archive_required = archiveRequired;
+    mergedFlags.unprocess_action_visible = showUnprocess === true;
+    if (readOnly !== null) mergedFlags.read_only = readOnly;
+    if (deleteDecision) mergedFlags.delete_decision = deleteDecision;
+    if (readOnlyMode) mergedFlags.mode = readOnlyMode;
+    if (readOnlyReason) mergedFlags.reason = readOnlyReason;
+    mergedFlags.unprocess_block_reason = unprocessBlockReason;
+    mergedFlags.unprocess_block_message = unprocessBlockMessage;
+    rowObject.action_flags = mergedFlags;
+
+    rowObject.backend_row_signature = signature;
+    rowObject.row_signature = signature;
+    rowObject.expected_row_signature = signature;
+  };
+
+  rows.forEach(markLifecycleSeedUntrusted);
+
+  const lifecycleItems = rows.map((rowValue) => ({
+    context: 'timesheet_modal',
+    row_key: lifecycleRowKey(rowValue) || null,
+    timesheet_id: rowValue?.timesheet_id || null,
+    current_timesheet_id: rowValue?.timesheet_id || null,
+    expected_timesheet_id: rowValue?.timesheet_id || null,
+    contract_week_id: rowValue?.contract_week_id || null,
+    booking_id: rowValue?.booking_id || null
+  })).filter((item) => item.timesheet_id || item.contract_week_id || item.booking_id || item.row_key);
+
+  if (lifecycleItems.length > 0) {
+    try {
+      const summaryRowsByKey = new Map();
+      rows.forEach((rowValue) => {
+        const timesheetId = trimLifecycleText(rowValue?.timesheet_id || rowValue?.current_timesheet_id || '');
+        const contractWeekId = trimLifecycleText(rowValue?.contract_week_id || '');
+        if (timesheetId) summaryRowsByKey.set(`timesheet:${timesheetId}`, rowValue);
+        if (contractWeekId) summaryRowsByKey.set(`contract_week:${contractWeekId}`, rowValue);
+      });
+
+      for (let start = 0; start < lifecycleItems.length; start += 100) {
+        const chunk = lifecycleItems.slice(start, start + 100);
+        const lifecycleResponse = await authFetch(API('/api/timesheets/lifecycle-affected-rows'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            context: 'timesheet_modal',
+            items: chunk
+          })
+        });
+        const lifecycleText = await lifecycleResponse.text();
+        let lifecyclePayload = null;
+        try { lifecyclePayload = lifecycleText ? JSON.parse(lifecycleText) : null; } catch { lifecyclePayload = null; }
+        if (!lifecycleResponse.ok || !lifecyclePayload || lifecyclePayload.ok === false) {
+          throw new Error(String(lifecyclePayload?.message || lifecyclePayload?.error || lifecycleText || `Lifecycle refresh failed (${lifecycleResponse.status})`));
+        }
+        const lifecycleRows = Array.isArray(lifecyclePayload.rows)
+          ? lifecyclePayload.rows
+          : (Array.isArray(lifecyclePayload.affected_rows) ? lifecyclePayload.affected_rows : []);
+        lifecycleRows.forEach((lifecycleRow) => {
+          const identity = (lifecycleRow?.identity && typeof lifecycleRow.identity === 'object') ? lifecycleRow.identity : {};
+          const candidateKeys = [
+            trimLifecycleText(lifecycleRow?.current_timesheet_id || identity.current_timesheet_id || ''),
+            trimLifecycleText(lifecycleRow?.timesheet_id || identity.timesheet_id || ''),
+            trimLifecycleText(lifecycleRow?.requested_timesheet_id || identity.requested_timesheet_id || ''),
+            trimLifecycleText(lifecycleRow?.previous_timesheet_id || identity.previous_timesheet_id || '')
+          ].filter(Boolean).map((id) => `timesheet:${id}`);
+          const contractWeekId = trimLifecycleText(lifecycleRow?.contract_week_id || identity.contract_week_id || '');
+          if (contractWeekId) candidateKeys.push(`contract_week:${contractWeekId}`);
+          const target = candidateKeys.map((key) => summaryRowsByKey.get(key)).find(Boolean) || null;
+          if (target) {
+            mergeLifecycleRow(
+              target,
+              lifecycleRow,
+              lifecyclePayload,
+              chunk.length === 1 && lifecycleRows.length === 1
+            );
+          }
+        });
+      }
+    } catch (lifecycleError) {
+      try {
+        if (window.__LOG_MODAL === true) {
+          console.warn('[TS][SUMMARY] lifecycle enrichment unavailable; rows remain fail-closed', lifecycleError);
+        }
+      } catch {}
+    }
+  }
+
   // ✅ hasMore: use total when available (correct), else fallback to "full page" heuristic
   const hasMore =
     (typeof total === 'number')
@@ -355527,7 +356235,6 @@ async function listTimesheetsSummary(filters = {}) {
 
   return rows;
 }
-
 
 
 async function deleteCandidate(candidateId) {
