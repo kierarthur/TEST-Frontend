@@ -167839,13 +167839,16 @@ function bankingPayResolveBatchCancelMode(batchLike) {
   const wholeBatchCancelAvailable = bool(b.whole_batch_cancel_available ?? nestedBatch.whole_batch_cancel_available);
   const canPreProviderCancel = bool(b.can_pre_provider_cancel ?? nestedBatch.can_pre_provider_cancel);
 
-  if (
-    nextStep === 'VIEW_RECALCULATE_NEXT_STEP' ||
-    action === 'VIEW_RECALCULATE_NEXT_STEP' ||
-    lifecycle === 'CANCELLED_BEFORE_BANK_SUBMISSION' ||
+  const isLocalCancellationContinuationLifecycle = (
     lifecycle === 'PARTIALLY_CANCELLED_BEFORE_BANK_SUBMISSION' ||
-    lifecycle === 'FINANCIALS_REWOUND'
-  ) {
+    lifecycle === 'CANCELLED_BEFORE_BANK_SUBMISSION'
+  );
+  const viewRecalculateRequested = (
+    nextStep === 'VIEW_RECALCULATE_NEXT_STEP' ||
+    action === 'VIEW_RECALCULATE_NEXT_STEP'
+  );
+
+  if (lifecycle === 'FINANCIALS_REWOUND') {
     return 'VIEW_RECALCULATE_NEXT_STEP';
   }
 
@@ -168126,8 +168129,6 @@ function bankingPayResolveBatchCancelMode(batchLike) {
       b.settlementCount,
       b.remittance_count,
       b.remittanceCount,
-      b.total_bank_out,
-      b.totalBankOut,
       nestedBatch.transfer_count,
       nestedBatch.transferCount,
       nestedBatch.pay_bank_transfer_count,
@@ -168151,9 +168152,7 @@ function bankingPayResolveBatchCancelMode(batchLike) {
       nestedBatch.settlement_count,
       nestedBatch.settlementCount,
       nestedBatch.remittance_count,
-      nestedBatch.remittanceCount,
-      nestedBatch.total_bank_out,
-      nestedBatch.totalBankOut
+      nestedBatch.remittanceCount
     ) ||
     hasUnsafeTransferEvidence(
       b.transfers,
@@ -168168,6 +168167,41 @@ function bankingPayResolveBatchCancelMode(batchLike) {
       nestedBatch.payBankTransfers
     )
   );
+  const hasActiveBatchItems = anyPositive(
+    b.active_item_count,
+    b.activeItemCount,
+    b.item_count,
+    b.itemCount,
+    b.durable_counts?.active_item_count,
+    b.durable_counts?.activeItemCount,
+    b.durable_counts?.item_count,
+    b.durable_counts?.itemCount,
+    nestedBatch.active_item_count,
+    nestedBatch.activeItemCount,
+    nestedBatch.item_count,
+    nestedBatch.itemCount,
+    nestedBatch.durable_counts?.active_item_count,
+    nestedBatch.durable_counts?.activeItemCount,
+    nestedBatch.durable_counts?.item_count,
+    nestedBatch.durable_counts?.itemCount
+  );
+  const canResumeLocalCancellation = !!(
+    isLocalCancellationContinuationLifecycle &&
+    hasActiveBatchItems &&
+    hasDraftStatus &&
+    !statusContradictsDraft &&
+    executionCommitState === 'NOT_SUBMITTED' &&
+    !hasProviderOrCommitEvidence
+  );
+
+  if (canResumeLocalCancellation) {
+    return 'CANCEL_NOT_SENT_RECALCULATE';
+  }
+
+  if (isLocalCancellationContinuationLifecycle || viewRecalculateRequested) {
+    return 'VIEW_RECALCULATE_NEXT_STEP';
+  }
+
   const isSafeDraftBatch = !!(
     hasDraftStatus &&
     !statusContradictsDraft &&
@@ -168184,7 +168218,6 @@ function bankingPayResolveBatchCancelMode(batchLike) {
 
   return '';
 }
-
 
 function bankingPayBuildCancelPromptCopy({ batch, mode }) {
   const b = (batch && typeof batch === 'object' && !Array.isArray(batch)) ? batch : {};
@@ -168542,6 +168575,26 @@ async function runBankingPayBatchCancelFlow({
       return { payload: src, score, code };
     };
 
+    const authoritativeTopLevelCandidates = [
+      value?.backendPayload,
+      value?.payload,
+      value?.json,
+      value?.data,
+      value?.response,
+      value
+    ];
+    for (const candidate of authoritativeTopLevelCandidates) {
+      if (!isPlainObject(candidate)) continue;
+      const candidateCode = normaliseFailureCode(candidate.error_code || candidate.errorCode || candidate.code || '');
+      if (
+        candidate.ok === false &&
+        candidateCode &&
+        !isGenericWrapperCode(candidateCode)
+      ) {
+        return candidate;
+      }
+    }
+
     enqueue(value);
     while (queue.length) {
       const current = queue.shift();
@@ -168630,6 +168683,9 @@ async function runBankingPayBatchCancelFlow({
     const titleByCode = {
       PAY_PAYMENT_CANCEL_NOT_SENT_DRAFT_DELETE_OPERATION_IN_PROGRESS: 'Cancel Draft Batch is already running',
       PAY_PAYMENT_CANCEL_NOT_SENT_DRAFT_DELETE_NOT_AVAILABLE: 'Cancel Draft Batch is not available',
+      BATCH_NOT_SAFE_FOR_LOCAL_CANCELLATION: 'Cancel Draft Batch needs the current cancellation state',
+      PAY_PAYMENT_CANCEL_NOT_SENT_NOT_AVAILABLE: 'Cancel Draft Batch needs the current cancellation state',
+      PAY_PAYMENT_CANCEL_NOT_SENT_RESUME_WORK_NOT_FOUND: 'Cancel Draft Batch could not be resumed',
       PAY_PAYMENT_CANCEL_NOT_SENT_COMMIT_BOUNDARY_CROSSED: 'Cancel Draft Batch is no longer safe',
       PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_BLOCKED: 'Cancel Draft Batch could not be completed',
       PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_RETRYABLE: 'Cancel Draft Batch needs a retry',
@@ -168639,6 +168695,9 @@ async function runBankingPayBatchCancelFlow({
     const fallbackMessageByCode = {
       PAY_PAYMENT_CANCEL_NOT_SENT_DRAFT_DELETE_OPERATION_IN_PROGRESS: 'CloudTMS is already cancelling this draft batch. Refresh the batch list in a moment to see the latest status.',
       PAY_PAYMENT_CANCEL_NOT_SENT_DRAFT_DELETE_NOT_AVAILABLE: 'This batch is no longer an unsubmitted draft, so it cannot be cancelled from Cancel Draft Batch.',
+      BATCH_NOT_SAFE_FOR_LOCAL_CANCELLATION: 'This batch is no longer at the original cancellation step. Refresh the batch and use the action shown for its current local cancellation state.',
+      PAY_PAYMENT_CANCEL_NOT_SENT_NOT_AVAILABLE: 'This batch is no longer at the original cancellation step. Refresh the batch and use the action shown for its current local cancellation state.',
+      PAY_PAYMENT_CANCEL_NOT_SENT_RESUME_WORK_NOT_FOUND: 'CloudTMS could not find a safely resumable remaining cancellation work item. Refresh the batch before trying again.',
       PAY_PAYMENT_CANCEL_NOT_SENT_COMMIT_BOUNDARY_CROSSED: 'This batch has crossed the bank/provider submission boundary, so CloudTMS cannot safely cancel it as a draft.',
       PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_BLOCKED: 'CloudTMS could not complete Cancel Draft Batch because the cancellation work item was blocked.',
       PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_RETRYABLE: 'CloudTMS could not complete Cancel Draft Batch because the cancellation work item needs to be retried.',
@@ -169697,8 +169756,6 @@ async function runBankingPayBatchCancelFlow({
     }
   }
 }
-
-
 
 
 
