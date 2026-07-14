@@ -180534,6 +180534,8 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
  * Complete replacement: preserve the supplied installed function and amend only the stated contract.
  */
 
+
+
 function classifyBulkAuthoriseEditability(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const activeCtx = (ctx.active_ctx && typeof ctx.active_ctx === 'object') ? ctx.active_ctx : {};
@@ -180731,9 +180733,6 @@ function classifyBulkAuthoriseEditability(ctxInput) {
   const isImportAuthoritative = domainPolicy ? !!domainPolicy.isOriginalImportAuthoritative : !!(readBool([ctx, 'is_import_authoritative'], [activeCtx, 'is_import_authoritative'], [mergedRow, 'is_import_authoritative']) === true || routeFamily === 'IMPORT_AUTHORITATIVE' || underlyingChannelFamily === 'IMPORT_AUTHORITATIVE');
   const isSegmentOnlyContext = domainPolicy ? !!domainPolicy.isSegmentOnlyContext : !!(readBool([ctx, 'segment_only'], [activeCtx, 'segment_only'], [mergedRow, 'segment_only'], [details, 'segment_only']) === true || upper(readFirst([ctx, 'target_type'], [activeCtx, 'target_type'], [mergedRow, 'target_type']) || '') === 'TIMESHEET_SEGMENT' || hasValue(readFirst([ctx, 'segment_id'], [activeCtx, 'segment_id'], [mergedRow, 'segment_id'], [details, 'segment_id'], [ctx, 'segment_stable_key'], [activeCtx, 'segment_stable_key'], [mergedRow, 'segment_stable_key'])));
 
-  const backendCanManageEvidence = readBool([ctx, 'can_manage_evidence'], [activeCtx, 'can_manage_evidence'], [mergedRow, 'can_manage_evidence']);
-  const backendCanAddAdditionalManual = readBool([ctx, 'can_add_additional_manual'], [activeCtx, 'can_add_additional_manual'], [mergedRow, 'can_add_additional_manual']);
-  const backendCanUnprocess = readBool([ctx, 'can_unprocess'], [activeCtx, 'can_unprocess'], [mergedRow, 'can_unprocess']);
   const lifecycleContainers = [
     activeState,
     ctx,
@@ -180749,8 +180748,61 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     mergedRow?.lifecycle_patch,
     mergedRow?.row_patch,
     details?.lifecycle_patch,
-    details?.row_patch
+    details?.row_patch,
+    activeState?.lifecycle_patch,
+    activeState?.row_patch
   ].filter((container) => container && typeof container === 'object' && !Array.isArray(container));
+  const lifecycleCompletenessContainers = [
+    ...lifecycleContainers,
+    ...lifecycleContainers.map((container) => (
+      container?.patch_completeness && typeof container.patch_completeness === 'object' && !Array.isArray(container.patch_completeness)
+        ? container.patch_completeness
+        : null
+    ))
+  ].filter((container) => container && typeof container === 'object' && !Array.isArray(container));
+  const booleanSignal = (value) => {
+    if (value === true || value === false) return value;
+    if (value == null) return null;
+    if (typeof value === 'number') {
+      if (value === 1) return true;
+      if (value === 0) return false;
+      return null;
+    }
+    if (typeof value !== 'string') return null;
+    const text = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return null;
+  };
+  const lifecycleBooleanValues = (containers, keys) => {
+    const values = [];
+    for (const container of containers) {
+      for (const key of keys) {
+        if (!key || !Object.prototype.hasOwnProperty.call(container, key)) continue;
+        const signal = booleanSignal(container[key]);
+        if (signal !== null) values.push(signal);
+      }
+    }
+    return values;
+  };
+  const readLifecycleTrueWins = (...keys) => {
+    const values = lifecycleBooleanValues(lifecycleContainers, keys);
+    if (values.some((value) => value === true)) return true;
+    if (values.some((value) => value === false)) return false;
+    return null;
+  };
+  const readLifecycleFalseWins = (...keys) => {
+    const values = lifecycleBooleanValues(lifecycleContainers, keys);
+    if (values.some((value) => value === false)) return false;
+    if (values.some((value) => value === true)) return true;
+    return null;
+  };
+  const readCompletenessFalseWins = (...keys) => {
+    const values = lifecycleBooleanValues(lifecycleCompletenessContainers, keys);
+    if (values.some((value) => value === false)) return false;
+    if (values.some((value) => value === true)) return true;
+    return null;
+  };
   const readLifecycleFirst = (...keys) => {
     for (const container of lifecycleContainers) {
       for (const key of keys) {
@@ -180760,114 +180812,131 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     }
     return undefined;
   };
-  const parseLifecycleBoolean = (value) => {
-    if (value === true) return true;
-    if (value === false) return false;
-    if (value == null) return null;
-    const normalised = String(value).trim().toLowerCase();
-    if (normalised === 'true' || normalised === '1' || normalised === 'yes' || normalised === 'y' || normalised === 'on') return true;
-    if (normalised === 'false' || normalised === '0' || normalised === 'no' || normalised === 'n' || normalised === 'off') return false;
-    return null;
+  const readLifecycleText = (...keys) => {
+    const value = readLifecycleFirst(...keys);
+    return value === undefined ? '' : trimStr(value);
   };
-  const readLifecycleBooleanSignals = (...keys) => {
-    let anyTrue = false;
-    let anyFalse = false;
-    for (const container of lifecycleContainers) {
-      for (const key of keys) {
-        if (!key || !Object.prototype.hasOwnProperty.call(container, key)) continue;
-        const parsed = parseLifecycleBoolean(container[key]);
-        if (parsed === true) anyTrue = true;
-        if (parsed === false) anyFalse = true;
-      }
-    }
-    return { anyTrue, anyFalse, present: anyTrue || anyFalse };
-  };
-  const readLifecyclePermissionBool = (...keys) => {
-    const signals = readLifecycleBooleanSignals(...keys);
-    if (signals.anyFalse) return false;
-    if (signals.anyTrue) return true;
-    return null;
-  };
-  const readLifecycleRiskBool = (...keys) => {
-    const signals = readLifecycleBooleanSignals(...keys);
-    if (signals.anyTrue) return true;
-    if (signals.anyFalse) return false;
-    return null;
-  };
-  const lifecycleAnyTrue = (...keys) => readLifecycleRiskBool(...keys) === true;
-  const lifecycleBlockReason = upper(readLifecycleFirst('unprocess_block_reason', 'unprocessBlockReason', 'lifecycle_block_reason', 'lifecycleBlockReason') || '');
-  const lifecycleDeleteDecision = upper(readLifecycleFirst('delete_decision', 'deleteDecision', 'decision') || '');
-  const isArchived = !!(
-    lifecycleAnyTrue('is_archived', 'isArchived', 'archived') ||
-    hasValue(readLifecycleFirst('archived_at_utc', 'archivedAtUtc')) ||
-    lifecycleBlockReason === 'TIMESHEET_ARCHIVED'
+
+  const archivedSignals = lifecycleBooleanValues(lifecycleContainers, ['is_archived', 'isArchived', 'archived']);
+  const canonicalArchived = archivedSignals.some((value) => value === true)
+    ? true
+    : (archivedSignals.some((value) => value === false) ? false : null);
+  const archivedSignalConflict = (
+    archivedSignals.some((value) => value === true) &&
+    archivedSignals.some((value) => value === false)
   );
-  const retainedHistorySignals = readLifecycleBooleanSignals(
+  const canonicalRetainedHistory = readLifecycleTrueWins(
     'has_retained_financial_history',
     'hasRetainedFinancialHistory',
     'retained_financial_history',
-    'retainedFinancialHistory'
+    'retainedFinancialHistory',
+    'financial_history_retained'
   );
-  const retainedAuthorityFlag = readLifecyclePermissionBool(
-    'retainedFinancialHistoryAuthorityPresent',
-    'retained_financial_history_authority_present'
-  );
-  const retainedFinancialHistoryAuthorityPresent = retainedAuthorityFlag === null
-    ? retainedHistorySignals.present
-    : retainedAuthorityFlag === true;
-  const hasRetainedFinancialHistory = retainedFinancialHistoryAuthorityPresent && retainedHistorySignals.anyTrue;
-  const permissionStatePatchComplete = readLifecyclePermissionBool(
+  const canonicalCanUnprocess = readLifecycleFalseWins('can_unprocess', 'canUnprocess');
+  const canonicalShowUnprocess = readLifecycleFalseWins('unprocess_action_visible', 'show_unprocess', 'showUnprocess');
+  const canonicalReadOnly = readLifecycleTrueWins('read_only', 'readOnly', 'review_only', 'reviewOnly');
+  const permissionStateComplete = readCompletenessFalseWins(
     'permission_state_patch_complete',
-    'permissionStatePatchComplete'
+    'permissionStateComplete',
+    'permission_state_complete'
   );
-  const requiresAffectedRowRefresh = readLifecycleRiskBool(
-    'requires_affected_row_refresh',
-    'requiresAffectedRowRefresh'
+  const priorityBadgesComplete = readCompletenessFalseWins(
+    'priority_badges_patch_complete',
+    'priorityBadgesComplete',
+    'priority_badges_complete'
   );
-  const backendLifecycleReadOnly = readLifecycleRiskBool('read_only', 'readOnly');
-  const lifecycleAuthorityIncomplete = !!(
-    hasRealTimesheet &&
-    (
-      !retainedFinancialHistoryAuthorityPresent ||
-      permissionStatePatchComplete === false ||
-      requiresAffectedRowRefresh === true
-    )
+  const lifecyclePatchComplete = readCompletenessFalseWins(
+    'lifecycle_authority_complete',
+    'canonical_lifecycle_complete',
+    'lifecycle_patch_complete',
+    'affected_rows_complete'
   );
-  const editLifecycleReadOnly = isArchived || lifecycleAuthorityIncomplete || backendLifecycleReadOnly === true;
-  const canonicalCanUnprocess = readLifecyclePermissionBool('can_unprocess', 'canUnprocess');
-  const canonicalShowUnprocess = readLifecyclePermissionBool('unprocess_action_visible', 'show_unprocess', 'showUnprocess');
-  const unprocessBlockReason = isArchived
-    ? 'TIMESHEET_ARCHIVED'
-    : (lifecycleAuthorityIncomplete
-      ? 'LIFECYCLE_STATE_INCOMPLETE'
-      : (hasRetainedFinancialHistory ? 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS' : lifecycleBlockReason));
-  const unprocessBlockMessage = trimStr(
-    lifecycleAuthorityIncomplete
-      ? 'The current lifecycle state is incomplete. Refresh the Timesheet before performing lifecycle actions.'
-      : (readLifecycleFirst('unprocess_block_message', 'unprocessBlockMessage') ||
-        (hasRetainedFinancialHistory
-          ? 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.'
-          : (isArchived ? 'This timesheet is archived and cannot be unprocessed. Unarchive the timesheet first.' : '')))
+  const refreshRequiredSignal = readLifecycleTrueWins('refresh_required', 'requires_affected_row_refresh');
+  const archivedAtUtc = readLifecycleText('archived_at_utc', 'archivedAtUtc');
+  const processingStage = upper(
+    readFirst([tsfin, 'processing_status'], [mergedRow, 'processing_status'], [details, 'processing_status'], [base, 'summaryStage']) || ''
   );
-  const canAuthoriseFlag = readBool([ctx, 'can_bulk_authorise'], [activeCtx, 'can_bulk_authorise'], [mergedRow, 'can_bulk_authorise']) === true;
-  const canUnauthoriseFlag = readBool([ctx, 'can_bulk_unauthorise'], [activeCtx, 'can_bulk_unauthorise'], [mergedRow, 'can_bulk_unauthorise']) === true;
+  const archivedStatusConflict = canonicalArchived === false && (processingStage === 'ARCHIVED' || !!archivedAtUtc);
+  const canonicalCoreComplete = (
+    canonicalArchived !== null &&
+    canonicalRetainedHistory !== null &&
+    canonicalCanUnprocess !== null &&
+    canonicalShowUnprocess !== null
+  );
+  const lifecycleAuthorityComplete = !!(
+    canonicalCoreComplete &&
+    permissionStateComplete === true &&
+    priorityBadgesComplete === true &&
+    lifecyclePatchComplete !== false &&
+    refreshRequiredSignal === false &&
+    !archivedSignalConflict &&
+    !archivedStatusConflict
+  );
+
+  const isArchived = canonicalArchived === true || processingStage === 'ARCHIVED' || !!archivedAtUtc;
+  const hasRetainedFinancialHistory = canonicalRetainedHistory === true;
+  const backendCanManageEvidence = readLifecycleFalseWins('can_manage_evidence', 'canManageEvidence');
+  const backendCanManageExpenseEvidence = readLifecycleFalseWins('can_manage_expense_evidence', 'canManageExpenseEvidence');
+  const backendCanEditTimesheetData = readLifecycleFalseWins(
+    'can_edit_timesheet_data',
+    'canEditTimesheetData',
+    'can_edit_hours_schedule',
+    'canEditHoursSchedule',
+    'can_edit'
+  );
+  const backendCanEditExpenses = readLifecycleFalseWins('can_edit_expenses', 'canEditExpenses');
+  const backendCanSave = readLifecycleFalseWins('can_save', 'canSave');
+  const backendCanAddAdditionalManual = readLifecycleFalseWins('can_add_additional_manual', 'canAddAdditionalManual');
+  const backendCanUnprocess = canonicalCanUnprocess;
+  const canAuthorisePermission = readLifecycleFalseWins('can_bulk_authorise', 'can_authorise', 'canAuthorise');
+  const canUnauthorisePermission = readLifecycleFalseWins('can_bulk_unauthorise', 'can_unauthorise', 'canUnauthorise');
+  const lifecycleBlockReason = upper(readLifecycleText(
+    'unprocess_block_reason',
+    'unprocessBlockReason',
+    'lifecycle_block_reason',
+    'lifecycleBlockReason'
+  ));
+  const unprocessBlockReason = !lifecycleAuthorityComplete
+    ? 'LIFECYCLE_AUTHORITY_INCOMPLETE'
+    : (lifecycleBlockReason || (
+        isArchived ? 'TIMESHEET_ARCHIVED' : (hasRetainedFinancialHistory ? 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS' : '')
+      ));
+  const unprocessBlockMessage = !lifecycleAuthorityComplete
+    ? 'The canonical lifecycle state is incomplete. Refresh this row before using lifecycle actions.'
+    : (readLifecycleText('unprocess_block_message', 'unprocessBlockMessage', 'unprocess_message') || (
+        hasRetainedFinancialHistory
+          ? 'This timesheet has retained financial history and cannot be unprocessed. Archive is available where the canonical permissions allow it.'
+          : (isArchived ? 'This timesheet is archived and read-only. Unarchive it before changing its lifecycle.' : '')
+      ));
+  const lifecycleReadOnly = isArchived || canonicalReadOnly === true || !lifecycleAuthorityComplete;
+  const canAuthoriseFlag = lifecycleAuthorityComplete && canAuthorisePermission === true;
+  const canUnauthoriseFlag = lifecycleAuthorityComplete && canUnauthorisePermission === true;
 
   const actionHardLocked = !!(rowLocked || isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock);
   const dataMutationLocked = !!(actionHardLocked || isPaid);
-  const paymentScheduleLocked = !!(isAuthorised || dataMutationLocked || isImportAuthoritative);
-  const paymentScheduleLockReason = isImportAuthoritative
-    ? 'import-authoritative'
-    : (isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock)
-      ? 'invoice/document-locked'
-      : isPaid
-        ? 'paid'
-        : rowLocked
-          ? 'locked'
-          : isAuthorised
-            ? 'authorised'
-            : '';
+  const paymentScheduleLocked = !!(isAuthorised || dataMutationLocked || isImportAuthoritative || lifecycleReadOnly);
+  const paymentScheduleLockReason = !lifecycleAuthorityComplete
+    ? 'lifecycle-authority-incomplete'
+    : isArchived
+      ? 'archived'
+      : isImportAuthoritative
+        ? 'import-authoritative'
+        : (isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock)
+          ? 'invoice/document-locked'
+          : isPaid
+            ? 'paid'
+            : rowLocked
+              ? 'locked'
+              : isAuthorised
+                ? 'authorised'
+                : '';
 
-  const canEditHoursSchedule = domainPolicy ? domainPolicy.canEditHoursSchedule === true : !!(!paymentScheduleLocked && isManual && !isQr && !isElectronic);
+  const canEditHoursSchedule = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanEditTimesheetData === true &&
+    (domainPolicy ? domainPolicy.canEditHoursSchedule === true : !!(!paymentScheduleLocked && isManual && !isQr && !isElectronic))
+  );
   const expenseStorageTarget = domainPolicy ? (domainPolicy.expenseStorageTarget || null) : null;
   const hasContractWeekExpenseDraftTarget = domainPolicy ? !!domainPolicy.hasContractWeekExpenseDraftTarget : false;
   const supportsUnprocessedExpenseDraft = domainPolicy ? !!domainPolicy.supportsUnprocessedExpenseDraft : false;
@@ -180879,11 +180948,29 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     : '';
   const canOpenExpensesRaw = domainPolicy ? !!(domainPolicy.canOpenExpenses === true || expenseStorageTarget) : !!(hasRealTimesheet && !isSegmentOnlyContext);
   const canOpenExpenses = !!(canOpenExpensesRaw && !expensesTabDisabled);
-  const canEditExpenses = domainPolicy ? (domainPolicy.canEditExpenses === true && !!expenseStorageTarget && !expensesActionDisabled) : !!(hasRealTimesheet && hasFinancialSnapshot && !paymentScheduleLocked && !isSegmentOnlyContext && (isQr || isManual || effectiveMode === 'MANUAL'));
-  const expensesReadOnly = domainPolicy ? (domainPolicy.expensesReadOnly === true || expensesActionDisabled || (canOpenExpensesRaw && !canEditExpenses)) : !!(canOpenExpenses && !canEditExpenses);
+  const canEditExpenses = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanEditExpenses === true &&
+    (domainPolicy
+      ? (domainPolicy.canEditExpenses === true && !!expenseStorageTarget && !expensesActionDisabled)
+      : !!(hasRealTimesheet && hasFinancialSnapshot && !paymentScheduleLocked && !isSegmentOnlyContext && (isQr || isManual || effectiveMode === 'MANUAL')))
+  );
+  const expensesReadOnly = !!(
+    lifecycleReadOnly ||
+    (domainPolicy ? (domainPolicy.expensesReadOnly === true || expensesActionDisabled || (canOpenExpensesRaw && !canEditExpenses)) : (canOpenExpenses && !canEditExpenses))
+  );
   const expensesDisabledReason = domainPolicy ? String(domainPolicy.expensesDisabledReason || expensesActionDisabledReason || '') : '';
   const requiresAdditionalManualForExpenses = domainPolicy ? domainPolicy.requiresAdditionalManualForExpenses === true : false;
-  const canManageExpenseEvidence = domainPolicy ? (domainPolicy.canManageExpenseEvidence === true && !!expenseEvidenceStorageTarget) : !!(hasRealTimesheet && !isImportAuthoritative && !isInvoiceDocumentLocked && !hasSegmentInvoiceDocumentLock && backendCanManageEvidence === true);
+  const canManageExpenseEvidence = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanManageEvidence === true &&
+    backendCanManageExpenseEvidence === true &&
+    (domainPolicy
+      ? (domainPolicy.canManageExpenseEvidence === true && !!expenseEvidenceStorageTarget)
+      : !!(hasRealTimesheet && !isImportAuthoritative && !isInvoiceDocumentLocked && !hasSegmentInvoiceDocumentLock))
+  );
   const hasProcessedExpenses = !!(typeof bulkAuthoriseHasProcessedExpensesValue === 'function' && bulkAuthoriseHasProcessedExpensesValue({ ...ctx, details, row: mergedRow, state: activeState, active_ctx: activeCtx }));
 
   const expenseStateContainers = [activeState, activeCtx?.state, activeContext?.state, ctx?.state, ctx, activeCtx, activeContext]
@@ -180922,28 +181009,52 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     boolish(readExpenseState(['expenseDirtyMarker']))
   );
   const expensesDirty = !!((expenseDirtyResult && expenseDirtyResult.dirty === true) || explicitExpensePendingMarker);
-  const scheduleSaveAllowed = !!(!paymentScheduleLocked && canEditHoursSchedule && base.canSave === true);
-  const expensesSaveAllowed = !!(!isAuthorised && !dataMutationLocked && expensesDirty && canEditExpenses);
-
-  const canAddAdditionalManual = domainPolicy
-    ? !!domainPolicy.canAddAdditionalManual
-    : (backendCanAddAdditionalManual === null ? !!base.canAddAdditionalManual : backendCanAddAdditionalManual === true);
-  const canManageEvidence = canManageExpenseEvidence;
-  const computedCanUnprocess = !!(!paymentScheduleLocked && backendCanUnprocess === true && base.canUnprocess === true && isManual && !isQr && !isElectronic);
-  const unprocessActionApplicable = canonicalShowUnprocess === null
-    ? computedCanUnprocess
-    : canonicalShowUnprocess;
-  const canUnprocess = !!(
+  const scheduleSaveAllowed = !!(
+    lifecycleAuthorityComplete &&
+    !paymentScheduleLocked &&
+    backendCanSave === true &&
+    canEditHoursSchedule &&
+    base.canSave === true
+  );
+  const expensesSaveAllowed = !!(
+    lifecycleAuthorityComplete &&
     !isArchived &&
-    !lifecycleAuthorityIncomplete &&
-    unprocessActionApplicable &&
-    !hasRetainedFinancialHistory &&
-    (canonicalCanUnprocess === null ? computedCanUnprocess : canonicalCanUnprocess)
+    backendCanSave === true &&
+    !isAuthorised &&
+    !dataMutationLocked &&
+    expensesDirty &&
+    canEditExpenses
+  );
+
+  const canAddAdditionalManual = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanAddAdditionalManual === true &&
+    (domainPolicy ? domainPolicy.canAddAdditionalManual === true : base.canAddAdditionalManual === true)
+  );
+  const canManageEvidence = canManageExpenseEvidence;
+  const computedCanUnprocess = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    !paymentScheduleLocked &&
+    backendCanUnprocess === true &&
+    base.canUnprocess === true &&
+    isManual &&
+    !isQr &&
+    !isElectronic
   );
   const showUnprocess = !!(
+    lifecycleAuthorityComplete &&
     !isArchived &&
-    !lifecycleAuthorityIncomplete &&
-    unprocessActionApplicable
+    canonicalShowUnprocess === true
+  );
+  const canUnprocess = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    !hasRetainedFinancialHistory &&
+    showUnprocess &&
+    canonicalCanUnprocess === true &&
+    computedCanUnprocess
   );
 
   return {
@@ -180964,50 +181075,58 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     actionHardLocked,
     dataMutationLocked,
     paidFinancialHistoryPresent: isPaid,
-    paymentScheduleLocked: !!(paymentScheduleLocked || isArchived),
-    paymentScheduleLockReason: isArchived ? 'archived' : paymentScheduleLockReason,
+    paymentScheduleLocked,
+    paymentScheduleLockReason,
     evidenceDocumentLocked: !!(isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock),
-    evidenceLockReason: canManageExpenseEvidence
-      ? ''
-      : (!hasRealTimesheet && expenseEvidenceStorageTarget !== 'CONTRACT_WEEK_STAGED_EVIDENCE')
-        ? 'missing-timesheet-id'
-        : isImportAuthoritative
-          ? 'import-authoritative'
-          : (isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock)
-            ? 'invoice/document-locked'
-            : (backendCanManageEvidence !== true && !canManageExpenseEvidence)
-              ? 'backend-denied'
-              : '',
+    evidenceLockReason: !lifecycleAuthorityComplete
+      ? 'lifecycle-authority-incomplete'
+      : canManageExpenseEvidence
+        ? ''
+        : (!hasRealTimesheet && expenseEvidenceStorageTarget !== 'CONTRACT_WEEK_STAGED_EVIDENCE')
+          ? 'missing-timesheet-id'
+          : isImportAuthoritative
+            ? 'import-authoritative'
+            : (isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock)
+              ? 'invoice/document-locked'
+              : (backendCanManageEvidence !== true && !canManageExpenseEvidence)
+                ? 'backend-denied'
+                : '',
     tsId,
     weekId,
     canProcess: false,
-    canSwitchToManual: !!(base.canSwitchToManual && (isQr || isElectronic) && !isManual),
-    canSwitchPlannedWeekToElectronic: !!(base.canSwitchPlannedWeekToElectronic && isManual && !isQr),
-    canRevertToElectronic: !!(base.canRevertToElectronic && isManual && !isQr),
-    canAllowQrAgain: !!(base.canAllowQrAgain && isQr),
-    canAllowElectronicAgain: !!(base.canAllowElectronicAgain && isElectronic),
-    canConvertQrToManualOnly: !!(base.canConvertQrToManualOnly && isQr && !isManual),
-    canAuthorise: !isArchived && !lifecycleAuthorityIncomplete && !isAuthorised && !actionHardLocked && canAuthoriseFlag,
-    canUnauthorise: !isArchived && !lifecycleAuthorityIncomplete && isAuthorised && !actionHardLocked && canUnauthoriseFlag,
-    canEditHoursSchedule: editLifecycleReadOnly ? false : canEditHoursSchedule,
-    canEditTimesheetData: editLifecycleReadOnly ? false : canEditHoursSchedule,
-    canSave: editLifecycleReadOnly ? false : !!(scheduleSaveAllowed || expensesSaveAllowed),
+    canSwitchToManual: !!(!lifecycleReadOnly && base.canSwitchToManual && (isQr || isElectronic) && !isManual),
+    canSwitchPlannedWeekToElectronic: !!(!lifecycleReadOnly && base.canSwitchPlannedWeekToElectronic && isManual && !isQr),
+    canRevertToElectronic: !!(!lifecycleReadOnly && base.canRevertToElectronic && isManual && !isQr),
+    canAllowQrAgain: !!(!lifecycleReadOnly && base.canAllowQrAgain && isQr),
+    canAllowElectronicAgain: !!(!lifecycleReadOnly && base.canAllowElectronicAgain && isElectronic),
+    canConvertQrToManualOnly: !!(!lifecycleReadOnly && base.canConvertQrToManualOnly && isQr && !isManual),
+    canAuthorise: !!(lifecycleAuthorityComplete && !isArchived && !isAuthorised && !actionHardLocked && canAuthoriseFlag),
+    canUnauthorise: !!(lifecycleAuthorityComplete && !isArchived && isAuthorised && !actionHardLocked && canUnauthoriseFlag),
+    canBulkAuthorise: !!(lifecycleAuthorityComplete && !isArchived && !isAuthorised && !actionHardLocked && canAuthoriseFlag),
+    canBulkUnauthorise: !!(lifecycleAuthorityComplete && !isArchived && isAuthorised && !actionHardLocked && canUnauthoriseFlag),
+    canEditHoursSchedule: lifecycleReadOnly ? false : canEditHoursSchedule,
+    canEditTimesheetData: lifecycleReadOnly ? false : canEditHoursSchedule,
+    canSave: lifecycleReadOnly ? false : !!(scheduleSaveAllowed || expensesSaveAllowed),
     hasProcessedExpenses,
     canOpenExpenses: !!canOpenExpenses,
-    canEditExpenses: editLifecycleReadOnly ? false : canEditExpenses,
-    expensesReadOnly: !!(expensesReadOnly || editLifecycleReadOnly || (hasProcessedExpenses && !canEditExpenses)),
-    expensesDisabledReason,
+    canEditExpenses: lifecycleReadOnly ? false : canEditExpenses,
+    expensesReadOnly: lifecycleReadOnly ? true : !!(expensesReadOnly || (hasProcessedExpenses && !canEditExpenses)),
+    expensesDisabledReason: !lifecycleAuthorityComplete
+      ? 'The canonical lifecycle state is incomplete. Refresh this row before editing expenses.'
+      : expensesDisabledReason,
     expensesTabDisabled,
-    expensesActionDisabled: !!expensesActionDisabled,
-    expensesActionDisabledReason,
+    expensesActionDisabled: lifecycleReadOnly ? true : !!expensesActionDisabled,
+    expensesActionDisabledReason: !lifecycleAuthorityComplete
+      ? 'The canonical lifecycle state is incomplete. Refresh this row before using expense actions.'
+      : expensesActionDisabledReason,
     expenseStorageTarget,
     hasContractWeekExpenseDraftTarget,
     supportsUnprocessedExpenseDraft,
     expenseEvidenceStorageTarget,
     canViewExpenses: !!(canOpenExpenses || hasProcessedExpenses),
     requiresAdditionalManualForExpenses,
-    canManageExpenseEvidence: editLifecycleReadOnly ? false : canManageExpenseEvidence,
-    canManageEvidence: editLifecycleReadOnly ? false : canManageEvidence,
+    canManageExpenseEvidence: lifecycleReadOnly ? false : canManageExpenseEvidence,
+    canManageEvidence: lifecycleReadOnly ? false : canManageEvidence,
     canUnprocess,
     showUnprocess,
     unprocess_action_visible: showUnprocess,
@@ -181015,18 +181134,25 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     unprocess_block_reason: unprocessBlockReason,
     unprocessBlockMessage,
     unprocess_block_message: unprocessBlockMessage,
-    retainedFinancialHistoryAuthorityPresent,
-    permissionStatePatchComplete,
-    requiresAffectedRowRefresh,
-    lifecycleAuthorityIncomplete,
     hasRetainedFinancialHistory,
     has_retained_financial_history: hasRetainedFinancialHistory,
+    retained_financial_history: hasRetainedFinancialHistory,
     isArchived,
     is_archived: isArchived,
-    readOnly: editLifecycleReadOnly,
-    read_only: editLifecycleReadOnly,
-    canAddAdditionalManual: editLifecycleReadOnly ? false : canAddAdditionalManual,
-    reviewOnly: !!(editLifecycleReadOnly || base.reviewOnly || paymentScheduleLocked || (!canEditHoursSchedule && !canEditExpenses)),
+    lifecycleAuthorityComplete,
+    lifecycle_authority_complete: lifecycleAuthorityComplete,
+    permissionStatePatchComplete: permissionStateComplete === true,
+    permission_state_patch_complete: permissionStateComplete === true,
+    priorityBadgesPatchComplete: priorityBadgesComplete === true,
+    priority_badges_patch_complete: priorityBadgesComplete === true,
+    refreshRequired: !lifecycleAuthorityComplete,
+    refresh_required: !lifecycleAuthorityComplete,
+    requiresAffectedRowRefresh: !lifecycleAuthorityComplete,
+    requires_affected_row_refresh: !lifecycleAuthorityComplete,
+    readOnly: lifecycleReadOnly,
+    read_only: lifecycleReadOnly,
+    canAddAdditionalManual: lifecycleReadOnly ? false : canAddAdditionalManual,
+    reviewOnly: !!(lifecycleReadOnly || base.reviewOnly || paymentScheduleLocked || (!canEditHoursSchedule && !canEditExpenses)),
     isAuthorised,
     isSegmentOnlyContext
   };
@@ -191321,13 +191447,6 @@ function classifyBulkProcessEditability(ctxInput) {
     hasValue(baseParentTimesheetIdForAdjustment)
   );
 
-  const backendCanSave = readBool([row, 'can_save'], [details, 'can_save'], [actionFlags, 'can_save'], [ctx, 'can_save'], [datasetLifecycleRow, 'can_save']);
-  const backendCanProcess = readBool([row, 'can_process'], [details, 'can_process'], [actionFlags, 'can_process'], [ctx, 'can_process'], [datasetLifecycleRow, 'can_process']);
-  const backendCanUnprocess = readBool([row, 'can_unprocess'], [details, 'can_unprocess'], [actionFlags, 'can_unprocess'], [ctx, 'can_unprocess'], [datasetLifecycleRow, 'can_unprocess']);
-  const backendCanEditTimesheetData = readBool([row, 'can_edit_timesheet_data'], [details, 'can_edit_timesheet_data'], [actionFlags, 'can_edit_timesheet_data'], [ctx, 'can_edit_timesheet_data'], [datasetLifecycleRow, 'can_edit_timesheet_data']);
-  const backendCanAddAdditionalManual = readBool([row, 'can_add_additional_manual'], [details, 'can_add_additional_manual'], [actionFlags, 'can_add_additional_manual'], [ctx, 'can_add_additional_manual'], [datasetLifecycleRow, 'can_add_additional_manual']);
-  const reviewOnly = readBool([row, 'review_only'], [details, 'review_only'], [actionFlags, 'review_only'], [ctx, 'review_only']);
-
   const lifecycleContainers = [
     stateCtx,
     ctx,
@@ -191343,8 +191462,61 @@ function classifyBulkProcessEditability(ctxInput) {
     details?.row_patch,
     datasetLifecycleRow?.lifecycle_patch,
     datasetLifecycleRow?.row_patch,
-    datasetLifecycleRow?.action_flags
+    datasetLifecycleRow?.action_flags,
+    stateCtx?.lifecycle_patch,
+    stateCtx?.row_patch
   ].filter((container) => container && typeof container === 'object' && !Array.isArray(container));
+  const lifecycleCompletenessContainers = [
+    ...lifecycleContainers,
+    ...lifecycleContainers.map((container) => (
+      container?.patch_completeness && typeof container.patch_completeness === 'object' && !Array.isArray(container.patch_completeness)
+        ? container.patch_completeness
+        : null
+    ))
+  ].filter((container) => container && typeof container === 'object' && !Array.isArray(container));
+  const booleanSignal = (value) => {
+    if (value === true || value === false) return value;
+    if (value == null) return null;
+    if (typeof value === 'number') {
+      if (value === 1) return true;
+      if (value === 0) return false;
+      return null;
+    }
+    if (typeof value !== 'string') return null;
+    const text = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return null;
+  };
+  const lifecycleBooleanValues = (containers, keys) => {
+    const values = [];
+    for (const container of containers) {
+      for (const key of keys) {
+        if (!key || !Object.prototype.hasOwnProperty.call(container, key)) continue;
+        const signal = booleanSignal(container[key]);
+        if (signal !== null) values.push(signal);
+      }
+    }
+    return values;
+  };
+  const readLifecycleTrueWins = (...keys) => {
+    const values = lifecycleBooleanValues(lifecycleContainers, keys);
+    if (values.some((value) => value === true)) return true;
+    if (values.some((value) => value === false)) return false;
+    return null;
+  };
+  const readLifecycleFalseWins = (...keys) => {
+    const values = lifecycleBooleanValues(lifecycleContainers, keys);
+    if (values.some((value) => value === false)) return false;
+    if (values.some((value) => value === true)) return true;
+    return null;
+  };
+  const readCompletenessFalseWins = (...keys) => {
+    const values = lifecycleBooleanValues(lifecycleCompletenessContainers, keys);
+    if (values.some((value) => value === false)) return false;
+    if (values.some((value) => value === true)) return true;
+    return null;
+  };
   const readLifecycleFirst = (...keys) => {
     for (const container of lifecycleContainers) {
       for (const key of keys) {
@@ -191354,106 +191526,120 @@ function classifyBulkProcessEditability(ctxInput) {
     }
     return undefined;
   };
-  const parseLifecycleBoolean = (value) => {
-    if (value === true) return true;
-    if (value === false) return false;
-    if (value == null) return null;
-    const normalised = String(value).trim().toLowerCase();
-    if (normalised === 'true' || normalised === '1' || normalised === 'yes' || normalised === 'y' || normalised === 'on') return true;
-    if (normalised === 'false' || normalised === '0' || normalised === 'no' || normalised === 'n' || normalised === 'off') return false;
-    return null;
+  const readLifecycleText = (...keys) => {
+    const value = readLifecycleFirst(...keys);
+    return value === undefined ? '' : trimStr(value);
   };
-  const readLifecycleBooleanSignals = (...keys) => {
-    let anyTrue = false;
-    let anyFalse = false;
-    for (const container of lifecycleContainers) {
-      for (const key of keys) {
-        if (!key || !Object.prototype.hasOwnProperty.call(container, key)) continue;
-        const parsed = parseLifecycleBoolean(container[key]);
-        if (parsed === true) anyTrue = true;
-        if (parsed === false) anyFalse = true;
-      }
-    }
-    return { anyTrue, anyFalse, present: anyTrue || anyFalse };
-  };
-  const readLifecyclePermissionBool = (...keys) => {
-    const signals = readLifecycleBooleanSignals(...keys);
-    if (signals.anyFalse) return false;
-    if (signals.anyTrue) return true;
-    return null;
-  };
-  const readLifecycleRiskBool = (...keys) => {
-    const signals = readLifecycleBooleanSignals(...keys);
-    if (signals.anyTrue) return true;
-    if (signals.anyFalse) return false;
-    return null;
-  };
-  const lifecycleAnyTrue = (...keys) => readLifecycleRiskBool(...keys) === true;
-  const lifecycleBlockReason = upper(readLifecycleFirst('unprocess_block_reason', 'unprocessBlockReason', 'lifecycle_block_reason', 'lifecycleBlockReason') || '');
-  const lifecycleDeleteDecision = upper(readLifecycleFirst('delete_decision', 'deleteDecision', 'decision') || '');
-  const isArchived = !!(
-    lifecycleAnyTrue('is_archived', 'isArchived', 'archived') ||
-    hasValue(readLifecycleFirst('archived_at_utc', 'archivedAtUtc')) ||
-    lifecycleBlockReason === 'TIMESHEET_ARCHIVED'
+
+  const archivedSignals = lifecycleBooleanValues(lifecycleContainers, ['is_archived', 'isArchived', 'archived']);
+  const canonicalArchived = archivedSignals.some((value) => value === true)
+    ? true
+    : (archivedSignals.some((value) => value === false) ? false : null);
+  const archivedSignalConflict = (
+    archivedSignals.some((value) => value === true) &&
+    archivedSignals.some((value) => value === false)
   );
-  const retainedHistorySignals = readLifecycleBooleanSignals(
+  const canonicalRetainedHistory = readLifecycleTrueWins(
     'has_retained_financial_history',
     'hasRetainedFinancialHistory',
     'retained_financial_history',
-    'retainedFinancialHistory'
+    'retainedFinancialHistory',
+    'financial_history_retained'
   );
-  const retainedAuthorityFlag = readLifecyclePermissionBool(
-    'retainedFinancialHistoryAuthorityPresent',
-    'retained_financial_history_authority_present'
-  );
-  const retainedFinancialHistoryAuthorityPresent = retainedAuthorityFlag === null
-    ? retainedHistorySignals.present
-    : retainedAuthorityFlag === true;
-  const hasRetainedFinancialHistory = retainedFinancialHistoryAuthorityPresent && retainedHistorySignals.anyTrue;
-  const permissionStatePatchComplete = readLifecyclePermissionBool(
+  const canonicalCanUnprocess = readLifecycleFalseWins('can_unprocess', 'canUnprocess');
+  const canonicalShowUnprocess = readLifecycleFalseWins('unprocess_action_visible', 'show_unprocess', 'showUnprocess');
+  const canonicalReadOnly = readLifecycleTrueWins('read_only', 'readOnly', 'review_only', 'reviewOnly');
+  const permissionStateComplete = readCompletenessFalseWins(
     'permission_state_patch_complete',
-    'permissionStatePatchComplete'
+    'permissionStateComplete',
+    'permission_state_complete'
   );
-  const requiresAffectedRowRefresh = readLifecycleRiskBool(
-    'requires_affected_row_refresh',
-    'requiresAffectedRowRefresh'
+  const priorityBadgesComplete = readCompletenessFalseWins(
+    'priority_badges_patch_complete',
+    'priorityBadgesComplete',
+    'priority_badges_complete'
   );
-  const backendLifecycleReadOnly = readLifecycleRiskBool('read_only', 'readOnly');
-  const lifecycleAuthorityIncomplete = !!(
-    (tsId || weekId) &&
-    (
-      !retainedFinancialHistoryAuthorityPresent ||
-      permissionStatePatchComplete === false ||
-      requiresAffectedRowRefresh === true
-    )
+  const lifecyclePatchComplete = readCompletenessFalseWins(
+    'lifecycle_authority_complete',
+    'canonical_lifecycle_complete',
+    'lifecycle_patch_complete',
+    'affected_rows_complete'
   );
-  const editLifecycleReadOnly = isArchived || lifecycleAuthorityIncomplete || backendLifecycleReadOnly === true;
-  const canonicalCanUnprocess = readLifecyclePermissionBool('can_unprocess', 'canUnprocess');
-  const canonicalShowUnprocess = readLifecyclePermissionBool('unprocess_action_visible', 'show_unprocess', 'showUnprocess');
-  const unprocessBlockReason = isArchived
-    ? 'TIMESHEET_ARCHIVED'
-    : (lifecycleAuthorityIncomplete
-      ? 'LIFECYCLE_STATE_INCOMPLETE'
-      : (hasRetainedFinancialHistory
-        ? 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS'
-        : lifecycleBlockReason));
-  const unprocessBlockMessage = trimStr(
-    lifecycleAuthorityIncomplete
-      ? 'The current lifecycle state is incomplete. Refresh the Timesheet before performing lifecycle actions.'
-      : (readLifecycleFirst('unprocess_block_message', 'unprocessBlockMessage') ||
-        (hasRetainedFinancialHistory
-          ? 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.'
-          : (isArchived ? 'This timesheet is archived and cannot be unprocessed. Unarchive the timesheet first.' : '')))
+  const refreshRequiredSignal = readLifecycleTrueWins('refresh_required', 'requires_affected_row_refresh');
+  const archivedAtUtc = readLifecycleText('archived_at_utc', 'archivedAtUtc');
+  const archivedStatusConflict = canonicalArchived === false && (rawSummaryStage === 'ARCHIVED' || !!archivedAtUtc);
+  const canonicalCoreComplete = (
+    canonicalArchived !== null &&
+    canonicalRetainedHistory !== null &&
+    canonicalCanUnprocess !== null &&
+    canonicalShowUnprocess !== null
   );
-  const reviewOnlyEffective = reviewOnly === true || hasAnyLockBlocker || isAuthorisedBlocked || editLifecycleReadOnly;
+  const lifecycleAuthorityComplete = !!(
+    canonicalCoreComplete &&
+    permissionStateComplete === true &&
+    priorityBadgesComplete === true &&
+    lifecyclePatchComplete !== false &&
+    refreshRequiredSignal === false &&
+    !archivedSignalConflict &&
+    !archivedStatusConflict
+  );
+
+  const isArchived = canonicalArchived === true || rawSummaryStage === 'ARCHIVED' || !!archivedAtUtc;
+  const hasRetainedFinancialHistory = canonicalRetainedHistory === true;
+  const backendCanSave = readLifecycleFalseWins('can_save', 'canSave');
+  const backendCanProcess = readLifecycleFalseWins('can_process', 'canProcess');
+  const backendCanUnprocess = canonicalCanUnprocess;
+  const backendCanEditTimesheetData = readLifecycleFalseWins(
+    'can_edit_timesheet_data',
+    'canEditTimesheetData',
+    'can_edit_hours_schedule',
+    'canEditHoursSchedule',
+    'can_edit'
+  );
+  const backendCanEditExpenses = readLifecycleFalseWins('can_edit_expenses', 'canEditExpenses');
+  const backendCanManageEvidence = readLifecycleFalseWins('can_manage_evidence', 'canManageEvidence');
+  const backendCanManageExpenseEvidence = readLifecycleFalseWins(
+    'can_manage_expense_evidence',
+    'canManageExpenseEvidence'
+  );
+  const backendCanAddAdditionalManual = readLifecycleFalseWins('can_add_additional_manual', 'canAddAdditionalManual');
+  const reviewOnly = readLifecycleTrueWins('review_only', 'reviewOnly');
+  const lifecycleBlockReason = upper(readLifecycleText(
+    'unprocess_block_reason',
+    'unprocessBlockReason',
+    'lifecycle_block_reason',
+    'lifecycleBlockReason'
+  ));
+  const unprocessBlockReason = !lifecycleAuthorityComplete
+    ? 'LIFECYCLE_AUTHORITY_INCOMPLETE'
+    : (lifecycleBlockReason || (
+        isArchived ? 'TIMESHEET_ARCHIVED' : (hasRetainedFinancialHistory ? 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS' : '')
+      ));
+  const unprocessBlockMessage = !lifecycleAuthorityComplete
+    ? 'The canonical lifecycle state is incomplete. Refresh this row before using lifecycle actions.'
+    : (readLifecycleText('unprocess_block_message', 'unprocessBlockMessage', 'unprocess_message') || (
+        hasRetainedFinancialHistory
+          ? 'This timesheet has retained financial history and cannot be unprocessed. Archive is available where the canonical permissions allow it.'
+          : (isArchived ? 'This timesheet is archived and read-only. Unarchive it before changing its lifecycle.' : '')
+      ));
+  const reviewOnlyEffective = (
+    reviewOnly === true ||
+    canonicalReadOnly === true ||
+    hasAnyLockBlocker ||
+    isAuthorisedBlocked ||
+    isArchived ||
+    !lifecycleAuthorityComplete
+  );
 
   let manualNonQrEditable =
+    lifecycleAuthorityComplete &&
+    !isArchived &&
     isManual &&
     !isQr &&
     !isElectronic &&
     !isImportAuthoritativeCurrent &&
     !reviewOnlyEffective &&
-    backendCanEditTimesheetData !== false;
+    backendCanEditTimesheetData === true;
 
   let summaryStage = rawSummaryStage;
   if (!summaryStage) {
@@ -191538,17 +191724,29 @@ function classifyBulkProcessEditability(ctxInput) {
   const effectiveAdjustmentForEditability = !!(isAdjustment || effectiveAdditionalManualRoute);
 
   manualNonQrEditable =
+    lifecycleAuthorityComplete &&
+    !isArchived &&
     effectiveIsManual &&
     !effectiveIsQr &&
     !effectiveIsElectronic &&
     !isImportAuthoritativeCurrent &&
     !reviewOnlyEffective &&
-    backendCanEditTimesheetData !== false;
+    backendCanEditTimesheetData === true;
 
-  const canEditHoursSchedule = hasSharedDomainPolicy ? !!domainPolicy.canEditHoursSchedule : manualNonQrEditable;
-  const canEditTimesheetData = (typeof domainPolicy.canEditTimesheetData === 'boolean')
-    ? domainPolicy.canEditTimesheetData
-    : manualNonQrEditable;
+  const canEditHoursSchedule = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanEditTimesheetData === true &&
+    (hasSharedDomainPolicy ? domainPolicy.canEditHoursSchedule === true : manualNonQrEditable)
+  );
+  const canEditTimesheetData = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanEditTimesheetData === true &&
+    (typeof domainPolicy.canEditTimesheetData === 'boolean'
+      ? domainPolicy.canEditTimesheetData
+      : manualNonQrEditable)
+  );
   const expenseStorageTarget = hasSharedDomainPolicy ? (domainPolicy.expenseStorageTarget || null) : null;
   const hasContractWeekExpenseDraftTarget = hasSharedDomainPolicy ? !!domainPolicy.hasContractWeekExpenseDraftTarget : false;
   const supportsUnprocessedExpenseDraft = hasSharedDomainPolicy ? !!domainPolicy.supportsUnprocessedExpenseDraft : false;
@@ -191557,11 +191755,26 @@ function classifyBulkProcessEditability(ctxInput) {
   const expensesDisabledReason = hasSharedDomainPolicy ? String(domainPolicy.expensesDisabledReason || '').trim() : '';
   const expensesActionDisabled = hasSharedDomainPolicy ? !!domainPolicy.expensesActionDisabled : false;
   const expensesActionDisabledReason = hasSharedDomainPolicy ? String(domainPolicy.expensesActionDisabledReason || domainPolicy.expensesTabDisabledReason || domainPolicy.expensesDisabledReason || '').trim() : '';
-  const canOpenExpenses = hasSharedDomainPolicy ? !!(domainPolicy.canOpenExpenses || expenseStorageTarget) && !expensesTabDisabled : manualNonQrEditable;
-  const canEditExpenses = hasSharedDomainPolicy ? !!domainPolicy.canEditExpenses && !!expenseStorageTarget && !expensesActionDisabled : manualNonQrEditable;
-  const expensesReadOnly = hasSharedDomainPolicy ? !!domainPolicy.expensesReadOnly || (canOpenExpenses && !canEditExpenses) : false;
+  const canOpenExpenses = hasSharedDomainPolicy ? !!(domainPolicy.canOpenExpenses || expenseStorageTarget) && !expensesTabDisabled : !!expenseStorageTarget;
+  const canEditExpenses = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanEditExpenses === true &&
+    (hasSharedDomainPolicy ? !!domainPolicy.canEditExpenses && !!expenseStorageTarget && !expensesActionDisabled : manualNonQrEditable)
+  );
+  const expensesReadOnly = !!(
+    !lifecycleAuthorityComplete ||
+    isArchived ||
+    (hasSharedDomainPolicy ? !!domainPolicy.expensesReadOnly || (canOpenExpenses && !canEditExpenses) : !canEditExpenses)
+  );
   const requiresAdditionalManualForExpenses = hasSharedDomainPolicy ? !!domainPolicy.requiresAdditionalManualForExpenses : false;
-  const canManageExpenseEvidence = hasSharedDomainPolicy ? !!domainPolicy.canManageExpenseEvidence && !!expenseEvidenceStorageTarget : true;
+  const canManageExpenseEvidence = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanManageEvidence === true &&
+    backendCanManageExpenseEvidence === true &&
+    (hasSharedDomainPolicy ? !!domainPolicy.canManageExpenseEvidence && !!expenseEvidenceStorageTarget : !!expenseEvidenceStorageTarget)
+  );
 
   const expenseContainers = [stateCtx, ctx, row, details].filter((value) => value && typeof value === 'object');
   const readExpenseState = (keys) => {
@@ -191584,11 +191797,16 @@ function classifyBulkProcessEditability(ctxInput) {
     : { dirty: false };
   const expensesMileageDirty = !!(expenseMarkerDirty || expenseDirtyResult?.dirty === true);
 
-  const canSave = backendCanSave !== false && !!(
-    (expensesMileageDirty && canEditExpenses) ||
-    domainPolicy.canSave === true ||
-    canEditTimesheetData ||
-    manualNonQrEditable
+  const canSave = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanSave === true &&
+    (
+      (expensesMileageDirty && canEditExpenses) ||
+      domainPolicy.canSave === true ||
+      canEditTimesheetData ||
+      manualNonQrEditable
+    )
   );
 
   const unprocessedLike = summaryStage === 'UNPROCESSED' || summaryStage === 'UNPROCESSED_DAILY' || summaryStage === 'MANUAL_UNPROCESSED';
@@ -191597,38 +191815,41 @@ function classifyBulkProcessEditability(ctxInput) {
   const weeklyManualProcessTarget = !!(sheetScope === 'WEEKLY' && effectiveIsManual && (!!tsId || !!weekId));
   const domainCanProcess = (typeof domainPolicy.canProcess === 'boolean') ? domainPolicy.canProcess : null;
   const canProcess = !!(
+    lifecycleAuthorityComplete &&
     !isArchived &&
     !isAuthorisedBlocked &&
     !hasDocumentLockBlocker &&
     !isImportAuthoritativeCurrent &&
-    backendCanProcess !== false &&
+    backendCanProcess === true &&
     unprocessedLike &&
     (dailyManualProcessTarget || weeklyManualProcessTarget) &&
-    (domainCanProcess !== false)
+    domainCanProcess !== false
   );
   const computedCanUnprocess = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
     !unprocessedLike &&
     (domainPolicy.canUnprocess === true || manualNonQrEditable) &&
     !!tsId &&
-    backendCanUnprocess !== false
-  );
-  const unprocessActionApplicable = canonicalShowUnprocess === null
-    ? computedCanUnprocess
-    : canonicalShowUnprocess;
-  const canUnprocess = !!(
-    !isArchived &&
-    !lifecycleAuthorityIncomplete &&
-    unprocessActionApplicable &&
-    !hasRetainedFinancialHistory &&
-    (canonicalCanUnprocess === null ? computedCanUnprocess : canonicalCanUnprocess)
+    backendCanUnprocess === true
   );
   const showUnprocess = !!(
+    lifecycleAuthorityComplete &&
     !isArchived &&
-    !lifecycleAuthorityIncomplete &&
-    unprocessActionApplicable
+    canonicalShowUnprocess === true
+  );
+  const canUnprocess = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    !hasRetainedFinancialHistory &&
+    showUnprocess &&
+    canonicalCanUnprocess === true &&
+    computedCanUnprocess
   );
 
   const routeActionBaseAllowed =
+    lifecycleAuthorityComplete &&
+    !isArchived &&
     !effectiveAdjustmentForEditability &&
     !isImportAuthoritativeCurrent &&
     !hasAnyLockBlocker &&
@@ -191682,6 +191903,9 @@ function classifyBulkProcessEditability(ctxInput) {
   );
 
   const canAddAdditionalManual = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanAddAdditionalManual === true &&
     sheetScope === 'WEEKLY' &&
     !!weekId &&
     !isCancelled &&
@@ -191690,12 +191914,13 @@ function classifyBulkProcessEditability(ctxInput) {
     !reviewOnlyEffective &&
     !effectiveAdjustmentForEditability &&
     (
-      backendCanAddAdditionalManual === true ||
       domainPolicy.canAddAdditionalManual === true ||
       originalProtectedSourceNeedsAdditionalManual ||
       (manualNonQrEditable && !effectiveIsQr && !effectiveIsElectronic)
     )
   );
+
+  const finalReadOnly = isArchived || canonicalReadOnly === true || !lifecycleAuthorityComplete;
 
   return {
     sheetScope,
@@ -191731,25 +191956,29 @@ function classifyBulkProcessEditability(ctxInput) {
     backendCanUnprocess,
     backendCanEditTimesheetData,
     backendCanAddAdditionalManual,
-    reviewOnly: !!(reviewOnlyEffective || isArchived),
-    manualNonQrEditable: editLifecycleReadOnly ? false : manualNonQrEditable,
-    canEditHoursSchedule: editLifecycleReadOnly ? false : canEditHoursSchedule,
-    canEditTimesheetData: editLifecycleReadOnly ? false : canEditTimesheetData,
+    reviewOnly: !!(reviewOnlyEffective || finalReadOnly),
+    manualNonQrEditable: finalReadOnly ? false : manualNonQrEditable,
+    canEditHoursSchedule: finalReadOnly ? false : canEditHoursSchedule,
+    canEditTimesheetData: finalReadOnly ? false : canEditTimesheetData,
     canOpenExpenses,
-    canEditExpenses: editLifecycleReadOnly ? false : canEditExpenses,
-    expensesReadOnly: !!(expensesReadOnly || editLifecycleReadOnly),
-    expensesDisabledReason,
+    canEditExpenses: finalReadOnly ? false : canEditExpenses,
+    expensesReadOnly: finalReadOnly ? true : expensesReadOnly,
+    expensesDisabledReason: !lifecycleAuthorityComplete
+      ? 'The canonical lifecycle state is incomplete. Refresh this row before editing expenses.'
+      : expensesDisabledReason,
     expensesTabDisabled,
-    expensesActionDisabled,
-    expensesActionDisabledReason,
+    expensesActionDisabled: finalReadOnly ? true : expensesActionDisabled,
+    expensesActionDisabledReason: !lifecycleAuthorityComplete
+      ? 'The canonical lifecycle state is incomplete. Refresh this row before using expense actions.'
+      : expensesActionDisabledReason,
     expenseStorageTarget,
     hasContractWeekExpenseDraftTarget,
     supportsUnprocessedExpenseDraft,
     expenseEvidenceStorageTarget,
     requiresAdditionalManualForExpenses,
-    canManageExpenseEvidence: editLifecycleReadOnly ? false : canManageExpenseEvidence,
-    canSave: editLifecycleReadOnly ? false : canSave,
-    canProcess: (isArchived || lifecycleAuthorityIncomplete) ? false : canProcess,
+    canManageExpenseEvidence: finalReadOnly ? false : canManageExpenseEvidence,
+    canSave: finalReadOnly ? false : canSave,
+    canProcess: finalReadOnly ? false : canProcess,
     canUnprocess,
     showUnprocess,
     unprocess_action_visible: showUnprocess,
@@ -191757,25 +191986,33 @@ function classifyBulkProcessEditability(ctxInput) {
     unprocess_block_reason: unprocessBlockReason,
     unprocessBlockMessage,
     unprocess_block_message: unprocessBlockMessage,
-    retainedFinancialHistoryAuthorityPresent,
-    permissionStatePatchComplete,
-    requiresAffectedRowRefresh,
-    lifecycleAuthorityIncomplete,
     hasRetainedFinancialHistory,
     has_retained_financial_history: hasRetainedFinancialHistory,
+    retained_financial_history: hasRetainedFinancialHistory,
     isArchived,
     is_archived: isArchived,
-    readOnly: editLifecycleReadOnly,
-    read_only: editLifecycleReadOnly,
-    canSwitchToManual: editLifecycleReadOnly ? false : canSwitchToManual,
-    canSwitchPlannedWeekToElectronic: editLifecycleReadOnly ? false : canSwitchPlannedWeekToElectronic,
-    canRevertToElectronic: editLifecycleReadOnly ? false : canRevertToElectronic,
-    canAllowQrAgain: editLifecycleReadOnly ? false : canAllowQrAgain,
-    canAllowElectronicAgain: editLifecycleReadOnly ? false : canAllowElectronicAgain,
-    canConvertQrToManualOnly: editLifecycleReadOnly ? false : canConvertQrToManualOnly,
-    canAddAdditionalManual: editLifecycleReadOnly ? false : canAddAdditionalManual
+    lifecycleAuthorityComplete,
+    lifecycle_authority_complete: lifecycleAuthorityComplete,
+    permissionStatePatchComplete: permissionStateComplete === true,
+    permission_state_patch_complete: permissionStateComplete === true,
+    priorityBadgesPatchComplete: priorityBadgesComplete === true,
+    priority_badges_patch_complete: priorityBadgesComplete === true,
+    refreshRequired: !lifecycleAuthorityComplete,
+    refresh_required: !lifecycleAuthorityComplete,
+    requiresAffectedRowRefresh: !lifecycleAuthorityComplete,
+    requires_affected_row_refresh: !lifecycleAuthorityComplete,
+    readOnly: finalReadOnly,
+    read_only: finalReadOnly,
+    canSwitchToManual: finalReadOnly ? false : canSwitchToManual,
+    canSwitchPlannedWeekToElectronic: finalReadOnly ? false : canSwitchPlannedWeekToElectronic,
+    canRevertToElectronic: finalReadOnly ? false : canRevertToElectronic,
+    canAllowQrAgain: finalReadOnly ? false : canAllowQrAgain,
+    canAllowElectronicAgain: finalReadOnly ? false : canAllowElectronicAgain,
+    canConvertQrToManualOnly: finalReadOnly ? false : canConvertQrToManualOnly,
+    canAddAdditionalManual: finalReadOnly ? false : canAddAdditionalManual
   };
 }
+
 
 
 function bindBulkProcessManualEditor(state) {
@@ -269439,90 +269676,201 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
   const LOG = (typeof window.__LOG_CAND === 'boolean')
     ? window.__LOG_CAND
     : (typeof window.__LOG_CONTRACTS === 'boolean' ? window.__LOG_CONTRACTS : false);
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const isoDateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const canonicalUuid = (value) => String(value == null ? '' : value).trim().toLowerCase();
+  const safeText = (value, fallback, maxLength = 500) => {
+    const text = String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+    return (text || fallback).slice(0, maxLength);
+  };
+  const makeSafeError = (message, code, extra = {}) => {
+    const error = new Error(safeText(message, 'The pay-method preview could not be verified.'));
+    error.code = safeText(code, 'CANDIDATE_PAY_METHOD_CHANGE_PREVIEW_INVALID', 120);
+    if (Number.isInteger(extra.status) && extra.status >= 0) error.status = extra.status;
+    if (uuidRe.test(canonicalUuid(extra.candidate_id))) error.candidate_id = canonicalUuid(extra.candidate_id);
+    if (extra.refresh_required === true) error.refresh_required = true;
+    return error;
+  };
+  const failContract = (message, code = 'CANDIDATE_PAY_METHOD_CHANGE_PREVIEW_INVALID') => {
+    throw makeSafeError(message, code, { candidate_id: candidateId });
+  };
+  const strictNonNegativeInteger = (value, fieldName) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+      failContract(`The pay-method preview returned an invalid ${fieldName}.`);
+    }
+    return value;
+  };
+  const strictBoolean = (value, fieldName) => {
+    if (value !== true && value !== false) {
+      failContract(`The pay-method preview returned an invalid ${fieldName}.`);
+    }
+    return value;
+  };
+  const canonicalUuidArray = (value, fieldName, requireCanonicalOrder = true) => {
+    if (!Array.isArray(value)) {
+      failContract(`The pay-method preview did not return ${fieldName} as an array.`);
+    }
+    const raw = value.map(canonicalUuid);
+    if (raw.some((entry) => !uuidRe.test(entry))) {
+      failContract(`The pay-method preview returned an invalid UUID in ${fieldName}.`);
+    }
+    const canonical = Array.from(new Set(raw)).sort();
+    if (canonical.length !== raw.length) {
+      failContract(`The pay-method preview returned duplicate UUIDs in ${fieldName}.`);
+    }
+    if (requireCanonicalOrder && raw.some((entry, index) => entry !== canonical[index])) {
+      failContract(`The pay-method preview returned non-canonical ordering in ${fieldName}.`);
+    }
+    return canonical;
+  };
+  const arraysEqual = (left, right) => (
+    left.length === right.length && left.every((entry, index) => entry === right[index])
+  );
+  const isSubset = (subset, superset) => {
+    const allowed = new Set(superset);
+    return subset.every((entry) => allowed.has(entry));
+  };
+  const explicitNumericZero = (object, fieldName) => {
+    if (
+      !Object.prototype.hasOwnProperty.call(object, fieldName) ||
+      typeof object[fieldName] !== 'number' ||
+      !Number.isFinite(object[fieldName]) ||
+      object[fieldName] !== 0
+    ) {
+      failContract(
+        'The pay-method preview did not prove that source financial records were unchanged.',
+        'PAY_METHOD_CHANGE_SOURCE_MUTATION_ASSERTION_FAILED'
+      );
+    }
+    return 0;
+  };
+  const canonicalAuthoritativeSessions = (value, targetedIds, representedIds) => {
+    if (!Array.isArray(value)) {
+      failContract('The pay-method preview did not return authoritative session evidence.');
+    }
+    const seenSessionIds = new Set();
+    const sessions = value.map((session, index) => {
+      if (!isPlainObject(session)) {
+        failContract('The pay-method preview returned invalid authoritative session evidence.');
+      }
+      const sessionId = canonicalUuid(session.session_id);
+      const actorUserId = canonicalUuid(session.actor_user_id);
+      const payDate = String(session.pay_date || '').trim();
+      const weekEndingCutoff = String(session.week_ending_cutoff || '').trim();
+      const sessionVersion = strictNonNegativeInteger(session.session_version, `authoritative_sessions[${index}].session_version`);
+      const progressCounterVersion = strictNonNegativeInteger(
+        session.progress_counter_version,
+        `authoritative_sessions[${index}].progress_counter_version`
+      );
+      const previewRowCount = strictNonNegativeInteger(
+        session.preview_row_count,
+        `authoritative_sessions[${index}].preview_row_count`
+      );
+      const sessionRepresentedIds = canonicalUuidArray(
+        session.represented_timesheet_ids,
+        `authoritative_sessions[${index}].represented_timesheet_ids`
+      );
+      const sessionQualifyingIds = canonicalUuidArray(
+        session.qualifying_timesheet_ids,
+        `authoritative_sessions[${index}].qualifying_timesheet_ids`
+      );
+      const updatedAtUtc = String(session.updated_at_utc || '').trim();
+      if (
+        !uuidRe.test(sessionId) ||
+        !uuidRe.test(actorUserId) ||
+        seenSessionIds.has(sessionId) ||
+        !isoDateRe.test(payDate) ||
+        !isoDateRe.test(weekEndingCutoff) ||
+        sessionVersion < 1 ||
+        !String(session.progress_state || '').trim() ||
+        !updatedAtUtc ||
+        Number.isNaN(Date.parse(updatedAtUtc)) ||
+        previewRowCount < sessionRepresentedIds.length ||
+        !arraysEqual(sessionQualifyingIds, targetedIds) ||
+        !isSubset(sessionRepresentedIds, representedIds)
+      ) {
+        failContract('The pay-method preview returned inconsistent authoritative session evidence.');
+      }
+      seenSessionIds.add(sessionId);
+      return {
+        ...session,
+        session_id: sessionId,
+        actor_user_id: actorUserId,
+        pay_date: payDate,
+        week_ending_cutoff: weekEndingCutoff,
+        session_version: sessionVersion,
+        progress_state: String(session.progress_state).trim().toUpperCase(),
+        progress_counter_version: progressCounterVersion,
+        preview_row_count: previewRowCount,
+        represented_timesheet_ids: sessionRepresentedIds,
+        qualifying_timesheet_ids: sessionQualifyingIds,
+        updated_at_utc: new Date(updatedAtUtc).toISOString()
+      };
+    });
+    return sessions.sort((left, right) => {
+      const dateOrder = Date.parse(right.updated_at_utc) - Date.parse(left.updated_at_utc);
+      return dateOrder || left.session_id.localeCompare(right.session_id);
+    });
+  };
 
-  if (!candidate_id) {
-    throw new Error('fetchCandidatePayMethodChangePreview: candidate_id is required');
+  const candidateId = canonicalUuid(candidate_id);
+  if (!uuidRe.test(candidateId)) {
+    throw makeSafeError(
+      'fetchCandidatePayMethodChangePreview: candidate_id must be a valid UUID',
+      'CANDIDATE_ID_INVALID'
+    );
   }
 
   const method = String(newMethod || '').trim().toUpperCase();
   if (method !== 'PAYE' && method !== 'UMBRELLA') {
-    throw new Error('fetchCandidatePayMethodChangePreview: newMethod must be PAYE or UMBRELLA');
+    throw makeSafeError(
+      'fetchCandidatePayMethodChangePreview: newMethod must be PAYE or UMBRELLA',
+      'PAY_METHOD_INVALID',
+      { candidate_id: candidateId }
+    );
   }
 
-  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  const arraysEqual = (left, right) => (
-    Array.isArray(left) &&
-    Array.isArray(right) &&
-    left.length === right.length &&
-    left.every((value, index) => value === right[index])
-  );
-  const canonicalUuidArray = (value, label) => {
-    if (!Array.isArray(value)) {
-      const error = new Error(`The pay-method preview did not return ${label} as an array.`);
-      error.code = 'CANDIDATE_PAY_METHOD_CHANGE_PREVIEW_INCOMPLETE';
-      throw error;
-    }
-    const ids = value.map(item => String(item || '').trim());
-    if (ids.some(item => !uuidRe.test(item))) {
-      const error = new Error(`The pay-method preview returned an invalid UUID in ${label}.`);
-      error.code = 'CANDIDATE_PAY_METHOD_CHANGE_PREVIEW_INCOMPLETE';
-      throw error;
-    }
-    const canonical = Array.from(new Set(ids)).sort();
-    if (canonical.length !== ids.length || !arraysEqual(ids, canonical)) {
-      const error = new Error(`The pay-method preview did not return ${label} as an exact canonical set.`);
-      error.code = 'CANDIDATE_PAY_METHOD_CHANGE_PREVIEW_INCOMPLETE';
-      throw error;
-    }
-    return canonical;
-  };
-  const nonNegativeInteger = (value, label) => {
-    const number = Number(value);
-    if (!Number.isInteger(number) || number < 0) {
-      const error = new Error(`The pay-method preview did not return a valid ${label}.`);
-      error.code = 'CANDIDATE_PAY_METHOD_CHANGE_PREVIEW_INCOMPLETE';
-      throw error;
-    }
-    return number;
-  };
-  const invalidPreview = (message, details = null) => {
-    const error = new Error(message);
-    error.code = 'CANDIDATE_PAY_METHOD_CHANGE_PREVIEW_INCOMPLETE';
-    error.details = details;
-    throw error;
-  };
-
-  const sourceOptions = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
-  const destinationPatch = (
-    sourceOptions.destination_patch &&
-    typeof sourceOptions.destination_patch === 'object' &&
-    !Array.isArray(sourceOptions.destination_patch)
-  ) ? sourceOptions.destination_patch : {};
-
+  const sourceOptions = isPlainObject(options) ? options : {};
+  const destinationPatch = isPlainObject(sourceOptions.destination_patch) ? sourceOptions.destination_patch : {};
   const qs = new URLSearchParams({ new_method: method });
   if (method === 'UMBRELLA') {
-    const umbrellaId = String(destinationPatch.umbrella_id || sourceOptions.umbrella_id || '').trim();
+    const umbrellaId = canonicalUuid(destinationPatch.umbrella_id || sourceOptions.umbrella_id || '');
+    if (umbrellaId && !uuidRe.test(umbrellaId)) {
+      throw makeSafeError(
+        'The selected umbrella company identifier is invalid.',
+        'CANDIDATE_PAY_METHOD_CHANGE_UMBRELLA_ID_INVALID',
+        { candidate_id: candidateId }
+      );
+    }
     if (umbrellaId) qs.set('umbrella_id', umbrellaId);
   }
 
-  const path = `/api/candidates/${_enc(candidate_id)}/pay-method-change-preview?${qs.toString()}`;
+  const path = `/api/candidates/${_enc(candidateId)}/pay-method-change-preview?${qs.toString()}`;
   const url = API(path);
-
   if (LOG) {
-    console.log('[CAND][PAY-METHOD] preview →', {
-      candidate_id,
+    console.log('[CAND][PAY-METHOD] preview request', {
+      candidate_id: candidateId,
       method,
-      umbrella_id: qs.get('umbrella_id') || null,
-      url
+      umbrella_id_supplied: qs.has('umbrella_id')
     });
   }
 
   let response;
   try {
     response = await authFetch(url);
-  } catch (error) {
-    if (LOG) console.error('[CAND][PAY-METHOD] preview network error', { url, error });
-    throw error;
+  } catch {
+    if (LOG) {
+      console.error('[CAND][PAY-METHOD] preview network error', {
+        candidate_id: candidateId,
+        method
+      });
+    }
+    throw makeSafeError(
+      'The pay-method preview could not be loaded. Refresh and try again.',
+      'CANDIDATE_PAY_METHOD_CHANGE_PREVIEW_NETWORK_ERROR',
+      { candidate_id: candidateId, refresh_required: true }
+    );
   }
 
   const text = await response.text().catch(() => '');
@@ -269534,25 +269882,33 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
   }
 
   if (!response.ok) {
-    const message = String(payload?.error || payload?.message || text || 'Failed to preview pay-method change');
-    const error = new Error(message);
-    error.status = response.status;
-    error.code = payload?.code || null;
-    error.details = payload?.details || null;
-    error.payload = payload;
+    const status = Number.isInteger(response.status) ? response.status : 0;
+    const message = safeText(
+      isPlainObject(payload) ? (payload.error || payload.message) : '',
+      'Failed to preview the pay-method change.'
+    );
+    const code = safeText(
+      isPlainObject(payload) ? payload.code : '',
+      'CANDIDATE_PAY_METHOD_CHANGE_PREVIEW_FAILED',
+      120
+    );
     if (LOG) {
       console.error('[CAND][PAY-METHOD] preview failed', {
-        status: response.status,
-        url,
-        code: error.code,
-        message
+        candidate_id: candidateId,
+        method,
+        status,
+        code
       });
     }
-    throw error;
+    throw makeSafeError(message, code, {
+      status,
+      candidate_id: candidateId,
+      refresh_required: isPlainObject(payload) && payload.refresh_required === true
+    });
   }
 
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new Error('The pay-method preview returned an invalid response.');
+  if (!isPlainObject(payload) || payload.ok !== true) {
+    failContract('The pay-method preview returned an invalid success response.');
   }
 
   const legacyFields = [
@@ -269566,53 +269922,27 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
     'rates_json'
   ].filter((key) => Object.prototype.hasOwnProperty.call(payload, key));
   if (legacyFields.length) {
-    const error = new Error('The server is still returning the obsolete contract-migration pay-method response. Deployment must be updated before continuing.');
-    error.code = 'STALE_PAY_METHOD_CHANGE_DEPLOYMENT';
-    error.legacy_fields = legacyFields;
-    throw error;
+    failContract(
+      'The server is still returning the obsolete contract-migration pay-method response.',
+      'STALE_PAY_METHOD_CHANGE_DEPLOYMENT'
+    );
   }
 
-  const sourceChangeSeq = Number(payload.preview_source_change_seq);
-  if (!Number.isInteger(sourceChangeSeq) || sourceChangeSeq < 0) {
-    throw new Error('The pay-method preview did not return a valid source-change sequence.');
-  }
-
-  const zeroMutationFields = [
-    'contracts_changed',
-    'contract_weeks_changed',
-    'timesheets_changed',
-    'rates_changed',
-    'tsfin_repricing_rows'
-  ];
-  const unsafeFields = zeroMutationFields.filter((key) => (
-    !Object.prototype.hasOwnProperty.call(payload, key) ||
-    typeof payload[key] !== 'number' ||
-    !Number.isInteger(payload[key]) ||
-    payload[key] !== 0
-  ));
-  if (unsafeFields.length) {
-    const error = new Error('The pay-method preview reported source-record changes, which are not permitted.');
-    error.code = 'PAY_METHOD_CHANGE_SOURCE_MUTATION_ASSERTION_FAILED';
-    error.fields = unsafeFields;
-    throw error;
-  }
-
-  const originalMethod = String(payload.original_method || payload.expected_old_method || '').trim().toUpperCase();
-  const expectedOldMethod = String(payload.expected_old_method || payload.original_method || '').trim().toUpperCase();
-  const returnedMethod = String(payload.new_method || '').trim().toUpperCase();
+  const responseCandidateId = canonicalUuid(payload.candidate_id);
+  const originalMethod = String(payload.original_method || '').trim().toUpperCase();
+  const expectedOldMethod = String(payload.expected_old_method || '').trim().toUpperCase();
+  const responseMethod = String(payload.new_method || '').trim().toUpperCase();
   if (
-    payload.ok !== true ||
-    String(payload.candidate_id || '').trim() !== String(candidate_id) ||
-    (originalMethod !== 'PAYE' && originalMethod !== 'UMBRELLA') ||
+    responseCandidateId !== candidateId ||
+    !['PAYE', 'UMBRELLA'].includes(originalMethod) ||
     expectedOldMethod !== originalMethod ||
-    returnedMethod !== method ||
+    responseMethod !== method ||
+    originalMethod === method ||
     String(payload.coverage_basis || '').trim().toUpperCase() !== 'CANONICAL_CURRENT_TIMESHEETS' ||
     payload.coverage_complete !== true ||
-    payload.exact_scope !== true ||
-    payload.prospective_only !== true ||
-    payload.source_records_mutated !== false
+    payload.exact_scope !== true
   ) {
-    invalidPreview('The pay-method preview did not return complete canonical coverage.', payload);
+    failContract('The pay-method preview did not return complete canonical current-Timesheet coverage.');
   }
 
   const representedTimesheetIds = canonicalUuidArray(payload.represented_timesheet_ids, 'represented_timesheet_ids');
@@ -269625,80 +269955,177 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
   );
   const replacedSourceSessionIds = canonicalUuidArray(
     payload.replaced_source_session_ids,
-    'replaced_source_session_ids'
+    'replaced_source_session_ids',
+    false
   );
-  const qualifyingUnion = Array.from(new Set([...authorisedTimesheetIds, ...activeAdvanceTimesheetIds])).sort();
+  const expectedTargetIds = Array.from(new Set([
+    ...authorisedTimesheetIds,
+    ...activeAdvanceTimesheetIds
+  ])).sort();
+  if (
+    !arraysEqual(targetedTimesheetIds, expectedTargetIds) ||
+    !arraysEqual(canonicalQualifyingTimesheetIds, targetedTimesheetIds)
+  ) {
+    failContract('The pay-method preview target set does not equal the exact canonical authorised-or-active-Advance union.');
+  }
 
-  const representedTimesheetCount = nonNegativeInteger(payload.represented_timesheet_count, 'represented_timesheet_count');
-  const authorisedTimesheetCount = nonNegativeInteger(payload.authorised_timesheet_count, 'authorised_timesheet_count');
-  const activeAdvanceTimesheetCount = nonNegativeInteger(payload.active_advance_timesheet_count, 'active_advance_timesheet_count');
-  const targetedTimesheetCount = nonNegativeInteger(payload.targeted_timesheet_count, 'targeted_timesheet_count');
-  const authoritativeSessionCount = nonNegativeInteger(payload.authoritative_session_count, 'authoritative_session_count');
-  const previewRowCount = nonNegativeInteger(payload.preview_row_count, 'preview_row_count');
-
+  const sourceChangeSeq = strictNonNegativeInteger(payload.preview_source_change_seq, 'preview_source_change_seq');
+  const authoritativeSessionCount = strictNonNegativeInteger(payload.authoritative_session_count, 'authoritative_session_count');
+  const previewRowCount = strictNonNegativeInteger(payload.preview_row_count, 'preview_row_count');
+  const representedTimesheetCount = strictNonNegativeInteger(payload.represented_timesheet_count, 'represented_timesheet_count');
+  const authorisedTimesheetCount = strictNonNegativeInteger(payload.authorised_timesheet_count, 'authorised_timesheet_count');
+  const activeAdvanceTimesheetCount = strictNonNegativeInteger(payload.active_advance_timesheet_count, 'active_advance_timesheet_count');
+  const targetedTimesheetCount = strictNonNegativeInteger(payload.targeted_timesheet_count, 'targeted_timesheet_count');
+  const sourceTargetMismatchCount = strictNonNegativeInteger(
+    payload.potential_case_resolution_timesheet_count,
+    'potential_case_resolution_timesheet_count'
+  );
   if (
     representedTimesheetCount !== representedTimesheetIds.length ||
     authorisedTimesheetCount !== authorisedTimesheetIds.length ||
     activeAdvanceTimesheetCount !== activeAdvanceTimesheetIds.length ||
     targetedTimesheetCount !== targetedTimesheetIds.length ||
-    !arraysEqual(targetedTimesheetIds, canonicalQualifyingTimesheetIds) ||
-    !arraysEqual(targetedTimesheetIds, qualifyingUnion) ||
-    Boolean(payload.targeted_scope_is_empty) !== (targetedTimesheetIds.length === 0)
+    sourceTargetMismatchCount > targetedTimesheetIds.length ||
+    strictBoolean(payload.targeted_scope_is_empty, 'targeted_scope_is_empty') !== (targetedTimesheetIds.length === 0)
   ) {
-    invalidPreview('The pay-method preview counts or exact target sets are inconsistent.', payload);
+    failContract('The pay-method preview counts do not match its canonical UUID sets.');
   }
 
-  if (!Array.isArray(payload.authoritative_sessions)) {
-    invalidPreview('The pay-method preview did not return authoritative session evidence.', payload);
+  const authoritativeSessions = canonicalAuthoritativeSessions(
+    payload.authoritative_sessions,
+    targetedTimesheetIds,
+    representedTimesheetIds
+  );
+  if (authoritativeSessionCount !== authoritativeSessions.length) {
+    failContract('The pay-method preview session count does not match its session evidence.');
   }
-  const authoritativeSessions = payload.authoritative_sessions.map((session, index) => {
-    if (!session || typeof session !== 'object' || Array.isArray(session) || !uuidRe.test(String(session.session_id || '').trim())) {
-      invalidPreview(`The pay-method preview returned invalid authoritative session evidence at index ${index}.`, session);
-    }
-    const represented = canonicalUuidArray(session.represented_timesheet_ids, `authoritative_sessions[${index}].represented_timesheet_ids`);
-    const qualifying = canonicalUuidArray(session.qualifying_timesheet_ids, `authoritative_sessions[${index}].qualifying_timesheet_ids`);
-    if (!arraysEqual(qualifying, targetedTimesheetIds)) {
-      invalidPreview(`The pay-method preview authoritative session at index ${index} does not cover the exact target set.`, session);
-    }
-    return { ...session, represented_timesheet_ids: represented, qualifying_timesheet_ids: qualifying };
-  });
-  const authoritativeSessionIds = authoritativeSessions.map(session => String(session.session_id || '').trim());
+  const representedTimesheetIdsFromSessions = Array.from(new Set(
+    authoritativeSessions.flatMap((session) => session.represented_timesheet_ids)
+  )).sort();
+  const previewRowCountFromSessions = authoritativeSessions.reduce(
+    (total, session) => total + session.preview_row_count,
+    0
+  );
   if (
-    authoritativeSessionCount !== authoritativeSessions.length ||
-    new Set(authoritativeSessionIds).size !== authoritativeSessionIds.length
+    !arraysEqual(representedTimesheetIdsFromSessions, representedTimesheetIds) ||
+    previewRowCountFromSessions !== previewRowCount
   ) {
-    invalidPreview('The pay-method preview authoritative-session count is inconsistent.', payload);
+    failContract('The pay-method preview session evidence does not reconcile with its represented Timesheet scope.');
+  }
+  const authoritativeSessionIds = new Set(authoritativeSessions.map((session) => session.session_id));
+  if (replacedSourceSessionIds.some((sessionId) => authoritativeSessionIds.has(sessionId))) {
+    failContract('The pay-method preview returned a session as both current authority and replaced evidence.');
   }
 
   if (!Array.isArray(payload.target_details)) {
-    invalidPreview('The pay-method preview did not return target details.', payload);
+    failContract('The pay-method preview did not return target details as an array.');
   }
-  const targetDetails = payload.target_details.map((detail, index) => {
-    const timesheetId = String(detail?.timesheet_id || '').trim();
-    if (!detail || typeof detail !== 'object' || Array.isArray(detail) || !uuidRe.test(timesheetId)) {
-      invalidPreview(`The pay-method preview returned invalid target detail at index ${index}.`, detail);
+  const authorisedSet = new Set(authorisedTimesheetIds);
+  const activeAdvanceSet = new Set(activeAdvanceTimesheetIds);
+  const targetDetails = payload.target_details.map((detail) => {
+    if (!isPlainObject(detail)) {
+      failContract('The pay-method preview returned invalid target detail evidence.');
     }
-    return { ...detail, timesheet_id: timesheetId };
-  });
-  const targetDetailIds = Array.from(new Set(targetDetails.map(detail => detail.timesheet_id))).sort();
-  if (targetDetails.length !== targetedTimesheetIds.length || !arraysEqual(targetDetailIds, targetedTimesheetIds)) {
-    invalidPreview('The pay-method preview target details do not match the exact target set.', payload);
+    const timesheetId = canonicalUuid(detail.timesheet_id);
+    const sourcePayMethod = String(detail.source_pay_method || '').trim().toUpperCase();
+    const targetPayMethod = String(detail.target_pay_method || '').trim().toUpperCase();
+    if (
+      !uuidRe.test(timesheetId) ||
+      detail.is_authorised !== authorisedSet.has(timesheetId) ||
+      detail.has_active_advance !== activeAdvanceSet.has(timesheetId) ||
+      targetPayMethod !== method ||
+      (sourcePayMethod && !['PAYE', 'UMBRELLA'].includes(sourcePayMethod)) ||
+      detail.source_target_mismatch !== (
+        ['PAYE', 'UMBRELLA'].includes(sourcePayMethod) && sourcePayMethod !== method
+      )
+    ) {
+      failContract('The pay-method preview returned inconsistent target detail evidence.');
+    }
+    return {
+      ...detail,
+      timesheet_id: timesheetId,
+      source_pay_method: sourcePayMethod || null,
+      target_pay_method: targetPayMethod,
+      is_authorised: detail.is_authorised,
+      has_active_advance: detail.has_active_advance,
+      source_target_mismatch: detail.source_target_mismatch
+    };
+  }).sort((left, right) => left.timesheet_id.localeCompare(right.timesheet_id));
+  const targetDetailIds = targetDetails.map((detail) => detail.timesheet_id);
+  if (
+    new Set(targetDetailIds).size !== targetDetailIds.length ||
+    !arraysEqual(targetDetailIds, targetedTimesheetIds) ||
+    targetDetails.filter((detail) => detail.source_target_mismatch).length !== sourceTargetMismatchCount
+  ) {
+    failContract('The pay-method preview target details do not match its exact target set.');
   }
 
-  const blockers = Array.isArray(payload.blockers) ? payload.blockers : [];
-  if (payload.can_apply === true && blockers.length !== 0) {
-    invalidPreview('The pay-method preview marked a blocked change as applicable.', payload);
+  const zeroMutationFields = [
+    'contracts_changed',
+    'contract_weeks_changed',
+    'timesheets_changed',
+    'rates_changed',
+    'tsfin_repricing_rows'
+  ];
+  zeroMutationFields.forEach((fieldName) => explicitNumericZero(payload, fieldName));
+  if (
+    payload.prospective_only !== true ||
+    payload.source_records_mutated !== false ||
+    String(payload.policy_x_authority_scope || '').trim().toUpperCase() !== 'PRE_DRAFT_LIVE_TRUTH' ||
+    payload.policy_x_dirtying_only !== true
+  ) {
+    failContract(
+      'The pay-method preview did not return the required prospective-only Policy X proof.',
+      'PAY_METHOD_CHANGE_POLICY_X_PROOF_INVALID'
+    );
+  }
+
+  if (!Array.isArray(payload.blockers)) {
+    failContract('The pay-method preview returned invalid blocker evidence.');
+  }
+  const blockers = payload.blockers.map((blocker) => ({
+    code: safeText(isPlainObject(blocker) ? blocker.code : '', 'PAY_METHOD_CHANGE_BLOCKED', 120),
+    message: safeText(isPlainObject(blocker) ? blocker.message : '', 'The pay-method change is blocked.')
+  }));
+  if (payload.can_apply !== (blockers.length === 0)) {
+    failContract('The pay-method preview apply decision does not match its blockers.');
+  }
+
+  if (!isPlainObject(payload.destination_patch)) {
+    failContract('The pay-method preview returned an invalid destination patch.');
+  }
+  const validatedDestinationPatch = { ...payload.destination_patch };
+  if (method === 'UMBRELLA') {
+    const destinationKeys = Object.keys(validatedDestinationPatch).sort();
+    if (destinationKeys.length !== 1 || destinationKeys[0] !== 'umbrella_id') {
+      failContract('The UMBRELLA pay-method preview returned unsupported destination fields.');
+    }
+    const umbrellaId = canonicalUuid(validatedDestinationPatch.umbrella_id);
+    const missingUmbrellaBlocked = blockers.some((blocker) => blocker.code === 'MISSING_UMBRELLA_ID');
+    if (uuidRe.test(umbrellaId)) {
+      validatedDestinationPatch.umbrella_id = umbrellaId;
+    } else if (
+      payload.can_apply === false &&
+      missingUmbrellaBlocked &&
+      (validatedDestinationPatch.umbrella_id == null || umbrellaId === '')
+    ) {
+      validatedDestinationPatch.umbrella_id = null;
+    } else {
+      failContract('The pay-method preview did not return a valid umbrella destination.');
+    }
+  } else if (Object.keys(validatedDestinationPatch).length !== 0) {
+    failContract('The PAYE pay-method preview returned an unexpected destination patch.');
   }
 
   const normalised = {
     ...payload,
-    candidate_id,
+    candidate_id: candidateId,
     original_method: originalMethod,
-    new_method: returnedMethod,
+    new_method: method,
     expected_old_method: expectedOldMethod,
     preview_source_change_seq: sourceChangeSeq,
     blockers,
-    can_apply: payload.can_apply === true,
+    can_apply: blockers.length === 0,
     coverage_basis: 'CANONICAL_CURRENT_TIMESHEETS',
     coverage_complete: true,
     exact_scope: true,
@@ -269712,31 +270139,35 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
     active_advance_timesheet_ids: activeAdvanceTimesheetIds,
     active_advance_timesheet_count: activeAdvanceTimesheetCount,
     targeted_timesheet_ids: targetedTimesheetIds,
-    canonical_qualifying_timesheet_ids: canonicalQualifyingTimesheetIds,
+    canonical_qualifying_timesheet_ids: targetedTimesheetIds,
     targeted_timesheet_count: targetedTimesheetCount,
     targeted_scope_is_empty: targetedTimesheetIds.length === 0,
+    potential_case_resolution_timesheet_count: sourceTargetMismatchCount,
     target_details: targetDetails,
     preview_row_count: previewRowCount,
-    destination_patch: (
-      payload.destination_patch &&
-      typeof payload.destination_patch === 'object' &&
-      !Array.isArray(payload.destination_patch)
-    ) ? payload.destination_patch : {},
+    destination_patch: validatedDestinationPatch,
     contracts_changed: 0,
     contract_weeks_changed: 0,
     timesheets_changed: 0,
     rates_changed: 0,
     tsfin_repricing_rows: 0,
     prospective_only: true,
-    source_records_mutated: false
+    source_records_mutated: false,
+    policy_x_authority_scope: 'PRE_DRAFT_LIVE_TRUTH',
+    policy_x_dirtying_only: true
   };
 
-  if (LOG) console.log('[CAND][PAY-METHOD] preview ←', normalised);
+  if (LOG) {
+    console.log('[CAND][PAY-METHOD] preview verified', {
+      candidate_id: candidateId,
+      method,
+      targeted_timesheet_count: targetedTimesheetCount,
+      authoritative_session_count: authoritativeSessionCount,
+      can_apply: normalised.can_apply
+    });
+  }
   return normalised;
 }
-
-
-
 
 
 
@@ -269746,66 +270177,206 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
   const LOG = (typeof window.__LOG_CAND === 'boolean')
     ? window.__LOG_CAND
     : (typeof window.__LOG_CONTRACTS === 'boolean' ? window.__LOG_CONTRACTS : false);
-
-  if (!candidate_id) {
-    throw new Error('applyCandidatePayMethodChange: candidate_id is required');
-  }
-
-  const payload = (body && typeof body === 'object' && !Array.isArray(body)) ? { ...body } : {};
-  const method = String(payload.new_method || '').trim().toUpperCase();
-  const expectedOldMethod = String(payload.expected_old_method || '').trim().toUpperCase();
-  const operationId = String(payload.operation_id || '').trim();
-  const previewSourceChangeSeq = Number(payload.preview_source_change_seq);
-
-  if (method !== 'PAYE' && method !== 'UMBRELLA') {
-    throw new Error('applyCandidatePayMethodChange: payload.new_method must be PAYE or UMBRELLA');
-  }
-  if (expectedOldMethod !== 'PAYE' && expectedOldMethod !== 'UMBRELLA') {
-    throw new Error('applyCandidatePayMethodChange: payload.expected_old_method must be PAYE or UMBRELLA');
-  }
-  if (!operationId) {
-    throw new Error('applyCandidatePayMethodChange: payload.operation_id is required');
-  }
-  if (!Number.isInteger(previewSourceChangeSeq) || previewSourceChangeSeq < 0) {
-    throw new Error('applyCandidatePayMethodChange: payload.preview_source_change_seq must be a non-negative integer');
-  }
-
-  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  const arraysEqual = (left, right) => (
-    Array.isArray(left) &&
-    Array.isArray(right) &&
-    left.length === right.length &&
-    left.every((value, index) => value === right[index])
-  );
-  const canonicalUuidArray = (value, label, requireCanonicalOrder = true) => {
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const isoDateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const canonicalUuid = (value) => String(value == null ? '' : value).trim().toLowerCase();
+  const safeText = (value, fallback, maxLength = 500) => {
+    const text = String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+    return (text || fallback).slice(0, maxLength);
+  };
+  let committedOperationVerifiedForRecovery = false;
+  const makeSafeError = (message, code, extra = {}) => {
+    const error = new Error(safeText(message, 'The pay-method change could not be verified.'));
+    error.code = safeText(code, 'CANDIDATE_PAY_METHOD_CHANGE_INVALID', 120);
+    if (Number.isInteger(extra.status) && extra.status >= 0) error.status = extra.status;
+    if (uuidRe.test(canonicalUuid(extra.candidate_id))) error.candidate_id = canonicalUuid(extra.candidate_id);
+    if (uuidRe.test(canonicalUuid(extra.operation_id))) error.operation_id = canonicalUuid(extra.operation_id);
+    if (extra.refresh_required === true) error.refresh_required = true;
+    if (extra.operation_committed === true) error.operation_committed = true;
+    if (typeof extra.operation_superseded_by_later_change === 'boolean') {
+      error.operation_superseded_by_later_change = extra.operation_superseded_by_later_change;
+    }
+    return error;
+  };
+  const failContract = (message, code = 'CANDIDATE_PAY_METHOD_CHANGE_RESULT_INVALID', extra = {}) => {
+    const recoveryExtra = { ...extra };
+    if (committedOperationVerifiedForRecovery) {
+      recoveryExtra.operation_committed = true;
+      if (typeof recoveryExtra.operation_superseded_by_later_change !== 'boolean') {
+        recoveryExtra.operation_superseded_by_later_change = false;
+      }
+    }
+    throw makeSafeError(message, code, {
+      candidate_id: candidateId,
+      operation_id: operationId,
+      refresh_required: true,
+      ...recoveryExtra
+    });
+  };
+  const strictNonNegativeInteger = (value, fieldName) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+      failContract(`The pay-method change returned an invalid ${fieldName}.`);
+    }
+    return value;
+  };
+  const canonicalUuidArray = (value, fieldName, requireCanonicalOrder = true) => {
     if (!Array.isArray(value)) {
-      const error = new Error(`The pay-method change did not return ${label} as an array.`);
-      error.code = 'CANDIDATE_PAY_METHOD_CHANGE_QUEUE_SET_MISMATCH';
-      throw error;
+      failContract(`The pay-method change did not return ${fieldName} as an array.`);
     }
-    const ids = value.map(item => String(item || '').trim());
-    if (ids.some(item => !uuidRe.test(item))) {
-      const error = new Error(`The pay-method change returned an invalid UUID in ${label}.`);
-      error.code = 'CANDIDATE_PAY_METHOD_CHANGE_QUEUE_SET_MISMATCH';
-      throw error;
+    const raw = value.map(canonicalUuid);
+    if (raw.some((entry) => !uuidRe.test(entry))) {
+      failContract(`The pay-method change returned an invalid UUID in ${fieldName}.`);
     }
-    const canonical = Array.from(new Set(ids)).sort();
-    if (canonical.length !== ids.length || (requireCanonicalOrder && !arraysEqual(ids, canonical))) {
-      const error = new Error(`The pay-method change did not return ${label} as an exact canonical set.`);
-      error.code = 'CANDIDATE_PAY_METHOD_CHANGE_QUEUE_SET_MISMATCH';
-      throw error;
+    const canonical = Array.from(new Set(raw)).sort();
+    if (canonical.length !== raw.length) {
+      failContract(`The pay-method change returned duplicate UUIDs in ${fieldName}.`);
+    }
+    if (requireCanonicalOrder && raw.some((entry, index) => entry !== canonical[index])) {
+      failContract(`The pay-method change returned non-canonical ordering in ${fieldName}.`);
     }
     return canonical;
   };
-  const nonNegativeInteger = (value, label) => {
-    const number = Number(value);
-    if (!Number.isInteger(number) || number < 0) {
-      const error = new Error(`The pay-method change did not return a valid ${label}.`);
-      error.code = 'CANDIDATE_PAY_METHOD_CHANGE_QUEUE_SET_MISMATCH';
-      throw error;
+  const arraysEqual = (left, right) => (
+    left.length === right.length && left.every((entry, index) => entry === right[index])
+  );
+  const explicitNumericZero = (object, fieldName) => {
+    if (
+      !Object.prototype.hasOwnProperty.call(object, fieldName) ||
+      typeof object[fieldName] !== 'number' ||
+      !Number.isFinite(object[fieldName]) ||
+      object[fieldName] !== 0
+    ) {
+      failContract(
+        'The pay-method change did not prove that source financial records were unchanged.',
+        'PAY_METHOD_CHANGE_SOURCE_MUTATION_ASSERTION_FAILED',
+        { operation_committed: object.operation_committed === true }
+      );
     }
-    return number;
+    return 0;
   };
+  const canonicalAuthoritativeSessions = (value, targetedIds) => {
+    if (!Array.isArray(value)) {
+      failContract('The pay-method change did not return authoritative session evidence.');
+    }
+    const seenSessionIds = new Set();
+    const sessions = value.map((session, index) => {
+      if (!isPlainObject(session)) {
+        failContract('The pay-method change returned invalid authoritative session evidence.');
+      }
+      const sessionId = canonicalUuid(session.session_id);
+      const actorUserId = canonicalUuid(session.actor_user_id);
+      const payDate = String(session.pay_date || '').trim();
+      const weekEndingCutoff = String(session.week_ending_cutoff || '').trim();
+      const sessionVersion = strictNonNegativeInteger(session.session_version, `authoritative_sessions[${index}].session_version`);
+      const progressCounterVersion = strictNonNegativeInteger(
+        session.progress_counter_version,
+        `authoritative_sessions[${index}].progress_counter_version`
+      );
+      const previewRowCount = strictNonNegativeInteger(
+        session.preview_row_count,
+        `authoritative_sessions[${index}].preview_row_count`
+      );
+      const representedTimesheetIds = canonicalUuidArray(
+        session.represented_timesheet_ids,
+        `authoritative_sessions[${index}].represented_timesheet_ids`
+      );
+      const qualifyingTimesheetIds = canonicalUuidArray(
+        session.qualifying_timesheet_ids,
+        `authoritative_sessions[${index}].qualifying_timesheet_ids`
+      );
+      const updatedAtUtc = String(session.updated_at_utc || '').trim();
+      if (
+        !uuidRe.test(sessionId) ||
+        !uuidRe.test(actorUserId) ||
+        seenSessionIds.has(sessionId) ||
+        !isoDateRe.test(payDate) ||
+        !isoDateRe.test(weekEndingCutoff) ||
+        sessionVersion < 1 ||
+        !String(session.progress_state || '').trim() ||
+        !updatedAtUtc ||
+        Number.isNaN(Date.parse(updatedAtUtc)) ||
+        previewRowCount < representedTimesheetIds.length ||
+        !arraysEqual(qualifyingTimesheetIds, targetedIds)
+      ) {
+        failContract('The pay-method change returned inconsistent authoritative session evidence.');
+      }
+      seenSessionIds.add(sessionId);
+      return {
+        ...session,
+        session_id: sessionId,
+        actor_user_id: actorUserId,
+        pay_date: payDate,
+        week_ending_cutoff: weekEndingCutoff,
+        session_version: sessionVersion,
+        progress_state: String(session.progress_state).trim().toUpperCase(),
+        progress_counter_version: progressCounterVersion,
+        preview_row_count: previewRowCount,
+        represented_timesheet_ids: representedTimesheetIds,
+        qualifying_timesheet_ids: qualifyingTimesheetIds,
+        updated_at_utc: new Date(updatedAtUtc).toISOString()
+      };
+    });
+    return sessions.sort((left, right) => {
+      const dateOrder = Date.parse(right.updated_at_utc) - Date.parse(left.updated_at_utc);
+      return dateOrder || left.session_id.localeCompare(right.session_id);
+    });
+  };
+
+  const candidateId = canonicalUuid(candidate_id);
+  if (!uuidRe.test(candidateId)) {
+    throw makeSafeError(
+      'applyCandidatePayMethodChange: candidate_id must be a valid UUID',
+      'CANDIDATE_ID_INVALID'
+    );
+  }
+
+  const payload = isPlainObject(body) ? { ...body } : {};
+  const method = String(payload.new_method || '').trim().toUpperCase();
+  const expectedOldMethod = String(payload.expected_old_method || '').trim().toUpperCase();
+  const operationId = canonicalUuid(payload.operation_id);
+  const previewSourceChangeSeq = payload.preview_source_change_seq;
+
+  if (method !== 'PAYE' && method !== 'UMBRELLA') {
+    throw makeSafeError(
+      'applyCandidatePayMethodChange: payload.new_method must be PAYE or UMBRELLA',
+      'PAY_METHOD_INVALID',
+      { candidate_id: candidateId }
+    );
+  }
+  if (expectedOldMethod !== 'PAYE' && expectedOldMethod !== 'UMBRELLA') {
+    throw makeSafeError(
+      'applyCandidatePayMethodChange: payload.expected_old_method must be PAYE or UMBRELLA',
+      'EXPECTED_PAY_METHOD_INVALID',
+      { candidate_id: candidateId }
+    );
+  }
+  if (expectedOldMethod === method) {
+    throw makeSafeError(
+      'The current and target pay methods must differ.',
+      'PAY_METHODS_MUST_DIFFER',
+      { candidate_id: candidateId }
+    );
+  }
+  if (!uuidRe.test(operationId)) {
+    throw makeSafeError(
+      'applyCandidatePayMethodChange: payload.operation_id must be a valid UUID',
+      'OPERATION_ID_INVALID',
+      { candidate_id: candidateId }
+    );
+  }
+  if (
+    typeof previewSourceChangeSeq !== 'number' ||
+    !Number.isFinite(previewSourceChangeSeq) ||
+    !Number.isInteger(previewSourceChangeSeq) ||
+    previewSourceChangeSeq < 0
+  ) {
+    throw makeSafeError(
+      'applyCandidatePayMethodChange: payload.preview_source_change_seq must be a non-negative integer',
+      'PREVIEW_SOURCE_CHANGE_SEQUENCE_INVALID',
+      { candidate_id: candidateId, operation_id: operationId }
+    );
+  }
 
   const legacyFields = [
     'contract_ids',
@@ -269820,35 +270391,122 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
     'affected_timesheet_ids'
   ].filter((key) => Object.prototype.hasOwnProperty.call(payload, key));
   if (legacyFields.length) {
-    const error = new Error('Legacy contract-migration fields are not supported by the prospective-only pay-method change.');
-    error.code = 'LEGACY_CONTRACT_MIGRATION_PLAN_REJECTED';
-    error.fields = legacyFields;
-    throw error;
+    throw makeSafeError(
+      'Legacy contract-migration fields are not supported by the prospective-only pay-method change.',
+      'LEGACY_CONTRACT_MIGRATION_PLAN_REJECTED',
+      { candidate_id: candidateId, operation_id: operationId }
+    );
   }
 
-  const path = `/api/candidates/${_enc(candidate_id)}/pay-method-change`;
-  const url = API(path);
-  const outcomeUnknownError = (cause = null) => {
-    const error = new Error(
-      'The pay-method change outcome could not be confirmed. Do not start a new operation; refresh using this operation ID.'
+  const allowedPayloadKeys = new Set([
+    'new_method',
+    'expected_old_method',
+    'operation_id',
+    'preview_source_change_seq',
+    'destination_patch',
+    'reason'
+  ]);
+  const unsupportedPayloadKeys = Object.keys(payload).filter((key) => !allowedPayloadKeys.has(key));
+  if (unsupportedPayloadKeys.length) {
+    throw makeSafeError(
+      'The pay-method change request contains unsupported fields.',
+      'CANDIDATE_PAY_METHOD_CHANGE_PLAN_FIELDS_UNSUPPORTED',
+      { candidate_id: candidateId, operation_id: operationId }
     );
-    error.status = Number.isFinite(Number(cause?.status)) ? Number(cause.status) : 0;
-    error.code = 'CANDIDATE_PAY_METHOD_CHANGE_OUTCOME_UNKNOWN';
-    error.operation_id = operationId;
-    error.refresh_required = true;
-    if (cause) error.cause = cause;
-    return error;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(payload, 'destination_patch') &&
+    !isPlainObject(payload.destination_patch)
+  ) {
+    throw makeSafeError(
+      'destination_patch must be a JSON object.',
+      'CANDIDATE_PAY_METHOD_CHANGE_DESTINATION_PATCH_INVALID',
+      { candidate_id: candidateId, operation_id: operationId }
+    );
+  }
+  const rawDestinationPatch = isPlainObject(payload.destination_patch) ? payload.destination_patch : {};
+  const allowedDestinationKeys = new Set([
+    'umbrella_id',
+    'account_holder',
+    'bank_name',
+    'sort_code',
+    'account_number'
+  ]);
+  const unsupportedDestinationKeys = Object.keys(rawDestinationPatch)
+    .filter((key) => !allowedDestinationKeys.has(key));
+  if (unsupportedDestinationKeys.length) {
+    throw makeSafeError(
+      'The destination details contain unsupported fields.',
+      'CANDIDATE_PAY_METHOD_CHANGE_DESTINATION_FIELDS_UNSUPPORTED',
+      { candidate_id: candidateId, operation_id: operationId }
+    );
+  }
+
+  const destinationPatch = {};
+  if (method === 'UMBRELLA') {
+    const umbrellaId = canonicalUuid(rawDestinationPatch.umbrella_id);
+    if (!uuidRe.test(umbrellaId)) {
+      throw makeSafeError(
+        'A valid umbrella company is required for the UMBRELLA pay method.',
+        'CANDIDATE_PAY_METHOD_CHANGE_UMBRELLA_ID_INVALID',
+        { candidate_id: candidateId, operation_id: operationId }
+      );
+    }
+    if (['account_holder', 'bank_name', 'sort_code', 'account_number']
+      .some((key) => Object.prototype.hasOwnProperty.call(rawDestinationPatch, key))) {
+      throw makeSafeError(
+        'PAYE bank fields cannot be changed as part of a switch to UMBRELLA.',
+        'CANDIDATE_PAY_METHOD_CHANGE_PAYE_BANK_FIELDS_NOT_ALLOWED_FOR_UMBRELLA',
+        { candidate_id: candidateId, operation_id: operationId }
+      );
+    }
+    destinationPatch.umbrella_id = umbrellaId;
+  } else {
+    if (Object.prototype.hasOwnProperty.call(rawDestinationPatch, 'umbrella_id')) {
+      throw makeSafeError(
+        'An umbrella company cannot be supplied when changing the candidate to PAYE.',
+        'CANDIDATE_PAY_METHOD_CHANGE_UMBRELLA_ID_NOT_ALLOWED_FOR_PAYE',
+        { candidate_id: candidateId, operation_id: operationId }
+      );
+    }
+    ['account_holder', 'bank_name', 'sort_code', 'account_number'].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(rawDestinationPatch, key)) {
+        destinationPatch[key] = rawDestinationPatch[key];
+      }
+    });
+  }
+
+  const requestBody = {
+    new_method: method,
+    expected_old_method: expectedOldMethod,
+    operation_id: operationId,
+    preview_source_change_seq: previewSourceChangeSeq,
+    destination_patch: destinationPatch,
+    reason: safeText(payload.reason, 'PAY_METHOD_CHANGE', 200)
   };
 
+  const path = `/api/candidates/${_enc(candidateId)}/pay-method-change`;
+  const url = API(path);
+  const outcomeUnknownError = (status = 0) => makeSafeError(
+    'The pay-method change outcome could not be confirmed. Do not start a new operation; refresh using this operation ID.',
+    'CANDIDATE_PAY_METHOD_CHANGE_OUTCOME_UNKNOWN',
+    {
+      status: Number.isInteger(status) && status >= 0 ? status : 0,
+      candidate_id: candidateId,
+      operation_id: operationId,
+      refresh_required: true
+    }
+  );
+
   if (LOG) {
-    console.log('[CAND][PAY-METHOD] apply →', {
-      candidate_id,
-      url,
+    console.log('[CAND][PAY-METHOD] apply request', {
+      candidate_id: candidateId,
       new_method: method,
       expected_old_method: expectedOldMethod,
       operation_id: operationId,
       preview_source_change_seq: previewSourceChangeSeq,
-      destination_patch_keys: Object.keys(payload.destination_patch || {})
+      destination_patch_keys: Object.keys(destinationPatch).sort()
     });
   }
 
@@ -269857,11 +270515,16 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
     response = await authFetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: _json(payload)
+      body: _json(requestBody)
     });
-  } catch (error) {
-    if (LOG) console.error('[CAND][PAY-METHOD] apply network error', { url, error, operation_id: operationId });
-    throw outcomeUnknownError(error);
+  } catch {
+    if (LOG) {
+      console.error('[CAND][PAY-METHOD] apply network error', {
+        candidate_id: candidateId,
+        operation_id: operationId
+      });
+    }
+    throw outcomeUnknownError(0);
   }
 
   const text = await response.text().catch(() => '');
@@ -269873,40 +270536,184 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
   }
 
   if (!response.ok) {
-    const status = Number(response.status || 0);
-    const structuredCode = String(result?.code || '').trim() || null;
+    const status = Number.isInteger(response.status) ? response.status : 0;
+    const structuredCode = isPlainObject(result) ? safeText(result.code, '', 120) : '';
     const uncertainStatus = !structuredCode && (
-      !Number.isFinite(status)
-      || status <= 0
-      || [408, 425, 429, 499, 500, 502, 503, 504].includes(status)
-      || (status >= 520 && status <= 526)
+      status <= 0 ||
+      [408, 425, 429, 499, 500, 502, 503, 504].includes(status) ||
+      (status >= 520 && status <= 526)
     );
-    const message = uncertainStatus
-      ? 'The pay-method change outcome could not be confirmed. Do not start a new operation; refresh using this operation ID.'
-      : String(result?.error || result?.message || text || 'Failed to apply pay-method change');
-    const error = new Error(message);
-    error.status = status;
-    error.code = uncertainStatus
-      ? 'CANDIDATE_PAY_METHOD_CHANGE_OUTCOME_UNKNOWN'
-      : structuredCode;
-    error.operation_id = result?.operation_id || operationId;
-    error.refresh_required = uncertainStatus || result?.refresh_required === true;
-    error.details = result?.details || null;
-    error.payload = result;
+    if (uncertainStatus) {
+      if (LOG) {
+        console.error('[CAND][PAY-METHOD] apply outcome unknown', {
+          candidate_id: candidateId,
+          operation_id: operationId,
+          status
+        });
+      }
+      throw outcomeUnknownError(status);
+    }
+    const responseOperationId = isPlainObject(result) ? canonicalUuid(result.operation_id) : '';
+    const responseCandidateId = isPlainObject(result) ? canonicalUuid(result.candidate_id) : '';
+    const responseOriginalMethod = isPlainObject(result)
+      ? String(result.original_method || '').trim().toUpperCase()
+      : '';
+    const responseCommittedMethod = isPlainObject(result)
+      ? String(result.committed_method || result.new_method || '').trim().toUpperCase()
+      : '';
+    const responseCurrentMethod = isPlainObject(result)
+      ? String(result.current_method || '').trim().toUpperCase()
+      : '';
+    const claimsCommitted = isPlainObject(result) && result.operation_committed === true;
+    const hasExplicitSupersessionEvidence = isPlainObject(result)
+      && typeof result.operation_superseded_by_later_change === 'boolean';
+    const claimsSuperseded = hasExplicitSupersessionEvidence
+      && result.operation_superseded_by_later_change === true;
+    const committedIdentityMatches = !!(
+      responseOperationId === operationId &&
+      responseCandidateId === candidateId &&
+      responseOriginalMethod === expectedOldMethod &&
+      responseCommittedMethod === method
+    );
+    if (
+      (claimsCommitted || claimsSuperseded) &&
+      (
+        !committedIdentityMatches ||
+        (claimsSuperseded && !claimsCommitted) ||
+        (claimsSuperseded && !['PAYE', 'UMBRELLA'].includes(responseCurrentMethod)) ||
+        (claimsSuperseded && structuredCode !== 'CANDIDATE_PAY_METHOD_CHANGE_OPERATION_COMMITTED_SUPERSEDED')
+      )
+    ) {
+      if (LOG) {
+        console.error('[CAND][PAY-METHOD] apply returned unbound committed error evidence', {
+          candidate_id: candidateId,
+          operation_id: operationId,
+          status,
+          code: structuredCode || null
+        });
+      }
+      throw outcomeUnknownError(status);
+    }
+    const message = safeText(
+      isPlainObject(result) ? (result.error || result.message) : '',
+      'The pay-method change was rejected.'
+    );
+    const code = structuredCode || 'CANDIDATE_PAY_METHOD_CHANGE_FAILED';
     if (LOG) {
-      console.error('[CAND][PAY-METHOD] apply failed', {
+      console.error('[CAND][PAY-METHOD] apply rejected', {
+        candidate_id: candidateId,
+        operation_id: operationId,
         status,
-        url,
-        code: error.code,
-        operation_id: error.operation_id,
-        message
+        code
       });
     }
-    throw error;
+    throw makeSafeError(message, code, {
+      status,
+      candidate_id: candidateId,
+      operation_id: operationId,
+      refresh_required: isPlainObject(result) && result.refresh_required === true,
+      operation_committed: claimsCommitted && committedIdentityMatches,
+      operation_superseded_by_later_change: committedIdentityMatches && hasExplicitSupersessionEvidence
+        ? result.operation_superseded_by_later_change
+        : undefined
+    });
   }
 
-  if (!result || typeof result !== 'object' || Array.isArray(result) || result.ok !== true) {
-    throw outcomeUnknownError(new Error('The pay-method change returned an invalid success response.'));
+  if (!isPlainObject(result) || result.ok !== true) {
+    throw outcomeUnknownError(Number.isInteger(response.status) ? response.status : 0);
+  }
+
+  const resultOperationId = canonicalUuid(result.operation_id);
+  const resultCandidateId = canonicalUuid(result.candidate_id);
+  const resultOriginalMethod = String(result.original_method || '').trim().toUpperCase();
+  const resultNewMethod = String(result.new_method || '').trim().toUpperCase();
+  const resultCurrentMethod = String(result.current_method || '').trim().toUpperCase();
+  if (
+    result.operation_committed !== true ||
+    result.operation_superseded_by_later_change !== false ||
+    resultOperationId !== operationId ||
+    resultCandidateId !== candidateId ||
+    resultOriginalMethod !== expectedOldMethod ||
+    resultNewMethod !== method ||
+    resultCurrentMethod !== method
+  ) {
+    failContract(
+      'The pay-method change did not return proof for the confirmed committed operation.',
+      'CANDIDATE_PAY_METHOD_CHANGE_OPERATION_PROOF_INVALID',
+      { operation_committed: result.operation_committed === true }
+    );
+  }
+  committedOperationVerifiedForRecovery = true;
+
+  const expectedTargetedIds = canonicalUuidArray(
+    result.expected_targeted_timesheet_ids,
+    'expected_targeted_timesheet_ids'
+  );
+  const persistedTargetedIds = canonicalUuidArray(
+    result.persisted_targeted_timesheet_ids,
+    'persisted_targeted_timesheet_ids'
+  );
+  const targetedTimesheetIds = canonicalUuidArray(result.targeted_timesheet_ids, 'targeted_timesheet_ids');
+  const missingTargetedIds = canonicalUuidArray(result.missing_targeted_timesheet_ids, 'missing_targeted_timesheet_ids');
+  const extraTargetedIds = canonicalUuidArray(result.extra_targeted_timesheet_ids, 'extra_targeted_timesheet_ids');
+  const authorisedTimesheetIds = canonicalUuidArray(result.authorised_timesheet_ids, 'authorised_timesheet_ids');
+  const activeAdvanceTimesheetIds = canonicalUuidArray(
+    result.active_advance_timesheet_ids,
+    'active_advance_timesheet_ids'
+  );
+  const replacedSourceSessionIds = canonicalUuidArray(
+    result.replaced_source_session_ids,
+    'replaced_source_session_ids',
+    false
+  );
+  const canonicalQualifyingIds = Array.from(new Set([
+    ...authorisedTimesheetIds,
+    ...activeAdvanceTimesheetIds
+  ])).sort();
+  const targetedTimesheetCount = strictNonNegativeInteger(result.targeted_timesheet_count, 'targeted_timesheet_count');
+  const authorisedTimesheetCount = strictNonNegativeInteger(
+    result.authorised_timesheet_count,
+    'authorised_timesheet_count'
+  );
+  const activeAdvanceTimesheetCount = strictNonNegativeInteger(
+    result.active_advance_timesheet_count,
+    'active_advance_timesheet_count'
+  );
+  const sourceTargetMismatchCount = strictNonNegativeInteger(
+    result.source_target_mismatch_count,
+    'source_target_mismatch_count'
+  );
+  const effectiveDuplicateCount = strictNonNegativeInteger(result.effective_duplicate_count, 'effective_duplicate_count');
+  const invalidTargetCount = strictNonNegativeInteger(result.invalid_target_count, 'invalid_target_count');
+  const sourceChangeSeq = strictNonNegativeInteger(result.source_change_seq, 'source_change_seq');
+  const resultPreviewSourceChangeSeq = strictNonNegativeInteger(
+    result.preview_source_change_seq,
+    'preview_source_change_seq'
+  );
+  if (
+    String(result.coverage_basis || '').trim().toUpperCase() !== 'CANONICAL_CURRENT_TIMESHEETS' ||
+    result.coverage_complete !== true ||
+    result.exact_target_scope !== true ||
+    result.exact_set_equality !== true ||
+    effectiveDuplicateCount !== 0 ||
+    invalidTargetCount !== 0 ||
+    missingTargetedIds.length !== 0 ||
+    extraTargetedIds.length !== 0 ||
+    targetedTimesheetCount !== targetedTimesheetIds.length ||
+    authorisedTimesheetCount !== authorisedTimesheetIds.length ||
+    activeAdvanceTimesheetCount !== activeAdvanceTimesheetIds.length ||
+    sourceTargetMismatchCount > targetedTimesheetIds.length ||
+    !arraysEqual(expectedTargetedIds, persistedTargetedIds) ||
+    !arraysEqual(expectedTargetedIds, targetedTimesheetIds) ||
+    !arraysEqual(targetedTimesheetIds, canonicalQualifyingIds) ||
+    resultPreviewSourceChangeSeq !== previewSourceChangeSeq ||
+    sourceChangeSeq <= previewSourceChangeSeq
+  ) {
+    failContract(
+      'The committed pay-method change did not return complete exact durable queue proof.',
+      'CANDIDATE_PAY_METHOD_CHANGE_QUEUE_SET_MISMATCH',
+      { operation_committed: true }
+    );
   }
 
   const zeroMutationFields = [
@@ -269916,143 +270723,162 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
     'rates_changed',
     'tsfin_repricing_rows'
   ];
-  const unsafeFields = zeroMutationFields.filter((key) => (
-    !Object.prototype.hasOwnProperty.call(result, key) ||
-    typeof result[key] !== 'number' ||
-    !Number.isInteger(result[key]) ||
-    result[key] !== 0
-  ));
-  if (unsafeFields.length) {
-    const error = new Error('The server returned an unsafe source-mutation result.');
-    error.code = 'PAY_METHOD_CHANGE_SOURCE_MUTATION_ASSERTION_FAILED';
-    error.fields = unsafeFields;
-    error.operation_id = result.operation_id || operationId;
-    throw error;
+  zeroMutationFields.forEach((fieldName) => explicitNumericZero(result, fieldName));
+  if (
+    (Object.prototype.hasOwnProperty.call(result, 'prospective_only') && result.prospective_only !== true) ||
+    (Object.prototype.hasOwnProperty.call(result, 'source_records_mutated') && result.source_records_mutated !== false) ||
+    String(result.policy_x_authority_scope || '').trim().toUpperCase() !== 'PRE_DRAFT_LIVE_TRUTH' ||
+    result.policy_x_dirtying_only !== true ||
+    result.economic_truth_mutation_allowed !== false
+  ) {
+    failContract(
+      'The committed pay-method change did not return the required prospective-only proof.',
+      'PAY_METHOD_CHANGE_POLICY_X_PROOF_INVALID',
+      { operation_committed: true }
+    );
   }
 
-  const resultOperationId = String(result.operation_id || '').trim();
-  const resultCandidateId = String(result.candidate_id || '').trim();
-  const resultOriginalMethod = String(result.original_method || '').trim().toUpperCase();
-  const resultNewMethod = String(result.new_method || '').trim().toUpperCase();
-  const jobId = String(result.job_id || '').trim();
+  const jobId = canonicalUuid(result.job_id);
   const jobStatus = String(result.job_status || '').trim().toUpperCase();
-  const expectedTimesheetIds = canonicalUuidArray(result.expected_targeted_timesheet_ids, 'expected_targeted_timesheet_ids');
-  const persistedTimesheetIds = canonicalUuidArray(result.persisted_targeted_timesheet_ids, 'persisted_targeted_timesheet_ids');
-  const targetedTimesheetIds = canonicalUuidArray(result.targeted_timesheet_ids, 'targeted_timesheet_ids');
-  const missingTimesheetIds = canonicalUuidArray(result.missing_targeted_timesheet_ids, 'missing_targeted_timesheet_ids');
-  const extraTimesheetIds = canonicalUuidArray(result.extra_targeted_timesheet_ids, 'extra_targeted_timesheet_ids');
-  const authorisedTimesheetIds = canonicalUuidArray(result.authorised_timesheet_ids, 'authorised_timesheet_ids');
-  const activeAdvanceTimesheetIds = canonicalUuidArray(result.active_advance_timesheet_ids, 'active_advance_timesheet_ids');
-  const replacedSourceSessionIds = canonicalUuidArray(result.replaced_source_session_ids, 'replaced_source_session_ids', false);
-  const qualifyingUnion = Array.from(new Set([...authorisedTimesheetIds, ...activeAdvanceTimesheetIds])).sort();
-  const targetedTimesheetCount = nonNegativeInteger(result.targeted_timesheet_count, 'targeted_timesheet_count');
-  const effectiveDuplicateCount = nonNegativeInteger(result.effective_duplicate_count, 'effective_duplicate_count');
-  const invalidTargetCount = nonNegativeInteger(result.invalid_target_count, 'invalid_target_count');
-  const sourceChangeSeq = nonNegativeInteger(result.source_change_seq, 'source_change_seq');
-  const refreshCompleted = result.refresh_completed === true;
   const validJobStatuses = new Set(['QUEUED', 'RUNNING', 'SUCCEEDED']);
-  const authoritativeSessions = Array.isArray(result.authoritative_sessions)
-    ? result.authoritative_sessions.map((session, index) => {
-        const sessionId = String(session?.session_id || '').trim();
-        if (!session || typeof session !== 'object' || Array.isArray(session) || !uuidRe.test(sessionId)) {
-          const error = new Error(`The pay-method change returned invalid authoritative session evidence at index ${index}.`);
-          error.code = 'CANDIDATE_PAY_METHOD_CHANGE_QUEUE_SET_MISMATCH';
-          throw error;
-        }
-        const qualifyingIds = canonicalUuidArray(
-          session.qualifying_timesheet_ids,
-          `authoritative_sessions[${index}].qualifying_timesheet_ids`
-        );
-        if (!arraysEqual(qualifyingIds, targetedTimesheetIds)) {
-          const error = new Error(`The pay-method change authoritative session at index ${index} does not cover the exact target set.`);
-          error.code = 'CANDIDATE_PAY_METHOD_CHANGE_QUEUE_SET_MISMATCH';
-          throw error;
-        }
-        return { ...session, session_id: sessionId, qualifying_timesheet_ids: qualifyingIds };
-      })
-    : null;
-  const authoritativeSessionIds = authoritativeSessions
-    ? authoritativeSessions.map(session => session.session_id)
-    : [];
-
+  const refreshCompleted = result.refresh_completed === true;
   if (
-    result.operation_committed !== true ||
-    resultOperationId !== operationId ||
-    resultCandidateId !== String(candidate_id) ||
-    resultOriginalMethod !== expectedOldMethod ||
-    resultNewMethod !== method ||
     !uuidRe.test(jobId) ||
     !validJobStatuses.has(jobStatus) ||
-    String(result.coverage_basis || '').trim().toUpperCase() !== 'CANONICAL_CURRENT_TIMESHEETS' ||
-    result.coverage_complete !== true ||
-    result.exact_target_scope !== true ||
-    result.exact_set_equality !== true ||
     result.refresh_accepted !== true ||
     result.durable_queue_retained !== true ||
-    effectiveDuplicateCount !== 0 ||
-    invalidTargetCount !== 0 ||
-    missingTimesheetIds.length !== 0 ||
-    extraTimesheetIds.length !== 0 ||
-    targetedTimesheetCount !== targetedTimesheetIds.length ||
-    !arraysEqual(expectedTimesheetIds, persistedTimesheetIds) ||
-    !arraysEqual(expectedTimesheetIds, targetedTimesheetIds) ||
-    !arraysEqual(targetedTimesheetIds, qualifyingUnion) ||
     (jobStatus === 'SUCCEEDED') !== refreshCompleted ||
-    sourceChangeSeq < previewSourceChangeSeq ||
-    !authoritativeSessions ||
-    new Set(authoritativeSessionIds).size !== authoritativeSessionIds.length
+    result.refresh_pending !== !refreshCompleted ||
+    result.refreshing !== !refreshCompleted
   ) {
-    const error = new Error('The committed pay-method change did not return complete exact durable queue proof.');
-    error.code = 'CANDIDATE_PAY_METHOD_CHANGE_QUEUE_SET_MISMATCH';
-    error.operation_id = resultOperationId || operationId;
-    error.refresh_required = true;
-    error.details = result;
-    throw error;
+    failContract(
+      'Durable Banking Pay refresh work was not confirmed.',
+      'CANDIDATE_PAY_METHOD_CHANGE_DURABLE_QUEUE_MISSING',
+      { operation_committed: true }
+    );
+  }
+
+  const authoritativeSessions = canonicalAuthoritativeSessions(
+    result.authoritative_sessions,
+    targetedTimesheetIds
+  );
+  if (
+    Object.prototype.hasOwnProperty.call(result, 'authoritative_session_count') &&
+    strictNonNegativeInteger(result.authoritative_session_count, 'authoritative_session_count') !== authoritativeSessions.length
+  ) {
+    failContract('The pay-method change session count does not match its session evidence.');
+  }
+  const authoritativeSessionIds = new Set(authoritativeSessions.map((session) => session.session_id));
+  if (replacedSourceSessionIds.some((sessionId) => authoritativeSessionIds.has(sessionId))) {
+    failContract('The pay-method change returned a session as both current authority and replaced evidence.');
+  }
+
+  if (!Array.isArray(result.target_details)) {
+    failContract('The pay-method change did not return target details as an array.');
+  }
+  const authorisedSet = new Set(authorisedTimesheetIds);
+  const activeAdvanceSet = new Set(activeAdvanceTimesheetIds);
+  const targetDetails = result.target_details.map((detail) => {
+    if (!isPlainObject(detail)) {
+      failContract('The pay-method change returned invalid target detail evidence.');
+    }
+    const timesheetId = canonicalUuid(detail.timesheet_id);
+    const sourcePayMethod = String(detail.source_pay_method || '').trim().toUpperCase();
+    const targetPayMethod = String(detail.target_pay_method || '').trim().toUpperCase();
+    const expectedMismatch = (
+      ['PAYE', 'UMBRELLA'].includes(sourcePayMethod) && sourcePayMethod !== method
+    );
+    if (
+      !uuidRe.test(timesheetId) ||
+      detail.is_authorised !== authorisedSet.has(timesheetId) ||
+      detail.has_active_advance !== activeAdvanceSet.has(timesheetId) ||
+      targetPayMethod !== method ||
+      (sourcePayMethod && !['PAYE', 'UMBRELLA'].includes(sourcePayMethod)) ||
+      detail.source_target_mismatch !== expectedMismatch
+    ) {
+      failContract('The pay-method change returned inconsistent target detail evidence.');
+    }
+    return {
+      ...detail,
+      timesheet_id: timesheetId,
+      source_pay_method: sourcePayMethod || null,
+      target_pay_method: targetPayMethod,
+      is_authorised: detail.is_authorised,
+      has_active_advance: detail.has_active_advance,
+      source_target_mismatch: detail.source_target_mismatch
+    };
+  }).sort((left, right) => left.timesheet_id.localeCompare(right.timesheet_id));
+  const targetDetailIds = targetDetails.map((detail) => detail.timesheet_id);
+  if (
+    new Set(targetDetailIds).size !== targetDetailIds.length ||
+    !arraysEqual(targetDetailIds, targetedTimesheetIds) ||
+    targetDetails.filter((detail) => detail.source_target_mismatch).length !== sourceTargetMismatchCount
+  ) {
+    failContract('The pay-method change target details do not match its exact target set.');
   }
 
   const normalised = {
     ...result,
-    candidate_id: resultCandidateId,
-    original_method: resultOriginalMethod,
-    new_method: resultNewMethod,
-    operation_id: resultOperationId,
-    job_id: jobId,
-    job_status: jobStatus,
+    candidate_id: candidateId,
+    original_method: expectedOldMethod,
+    new_method: method,
+    current_method: method,
+    operation_id: operationId,
+    operation_committed: true,
+    operation_superseded_by_later_change: false,
     coverage_basis: 'CANONICAL_CURRENT_TIMESHEETS',
     coverage_complete: true,
     exact_target_scope: true,
     exact_set_equality: true,
+    expected_targeted_timesheet_ids: expectedTargetedIds,
+    persisted_targeted_timesheet_ids: persistedTargetedIds,
     targeted_timesheet_ids: targetedTimesheetIds,
-    expected_targeted_timesheet_ids: expectedTimesheetIds,
-    persisted_targeted_timesheet_ids: persistedTimesheetIds,
-    missing_targeted_timesheet_ids: missingTimesheetIds,
-    extra_targeted_timesheet_ids: extraTimesheetIds,
+    missing_targeted_timesheet_ids: [],
+    extra_targeted_timesheet_ids: [],
     authorised_timesheet_ids: authorisedTimesheetIds,
     active_advance_timesheet_ids: activeAdvanceTimesheetIds,
     replaced_source_session_ids: replacedSourceSessionIds,
     targeted_timesheet_count: targetedTimesheetCount,
+    authorised_timesheet_count: authorisedTimesheetCount,
+    active_advance_timesheet_count: activeAdvanceTimesheetCount,
+    source_target_mismatch_count: sourceTargetMismatchCount,
     effective_duplicate_count: 0,
     invalid_target_count: 0,
-    source_change_seq: sourceChangeSeq,
     authoritative_sessions: authoritativeSessions,
+    target_details: targetDetails,
+    preview_source_change_seq: resultPreviewSourceChangeSeq,
+    source_change_seq: sourceChangeSeq,
     contracts_changed: 0,
     contract_weeks_changed: 0,
     timesheets_changed: 0,
     rates_changed: 0,
     tsfin_repricing_rows: 0,
+    job_id: jobId,
+    job_status: jobStatus,
     refresh_accepted: true,
     refresh_completed: refreshCompleted,
     refresh_pending: !refreshCompleted,
     refreshing: !refreshCompleted,
     durable_queue_retained: true,
     prospective_only: true,
-    source_records_mutated: false
+    source_records_mutated: false,
+    policy_x_authority_scope: 'PRE_DRAFT_LIVE_TRUTH',
+    policy_x_dirtying_only: true,
+    economic_truth_mutation_allowed: false
   };
 
-  if (LOG) console.log('[CAND][PAY-METHOD] apply ←', normalised);
+  if (LOG) {
+    console.log('[CAND][PAY-METHOD] apply verified', {
+      candidate_id: candidateId,
+      operation_id: operationId,
+      job_id: jobId,
+      job_status: jobStatus,
+      targeted_timesheet_count: targetedTimesheetCount,
+      refresh_completed: refreshCompleted
+    });
+  }
   return normalised;
 }
-
 
 
 
@@ -271071,6 +271897,33 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
   const L = (...args) => { if (LOG) console.log('[CAND][PAY-METHOD][MODAL]', ...args); };
   const W = (...args) => { if (LOG) console.warn('[CAND][PAY-METHOD][MODAL]', ...args); };
   const E = (...args) => { if (LOG) console.error('[CAND][PAY-METHOD][MODAL]', ...args); };
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const canonicalUuid = (value) => String(value == null ? '' : value).trim().toLowerCase();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const canonicalDestinationPatch = (value, method) => {
+    const source = isPlainObject(value) ? value : {};
+    const patch = {};
+    if (method === 'UMBRELLA') {
+      const umbrellaId = canonicalUuid(source.umbrella_id);
+      if (umbrellaId) patch.umbrella_id = umbrellaId;
+      return patch;
+    }
+    ['account_holder', 'bank_name', 'sort_code', 'account_number'].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(source, key)) patch[key] = source[key];
+    });
+    return patch;
+  };
+  const destinationFingerprint = (value, method) => {
+    const patch = canonicalDestinationPatch(value, method);
+    const keys = Object.keys(patch).sort();
+    return JSON.stringify(keys.map((key) => [key, patch[key]]));
+  };
+  const pendingRegistry = () => {
+    if (!isPlainObject(window.__candidatePayMethodPendingOperations)) {
+      window.__candidatePayMethodPendingOperations = Object.create(null);
+    }
+    return window.__candidatePayMethodPendingOperations;
+  };
   const sanitise = (typeof window !== 'undefined' && typeof window.sanitize === 'function')
     ? window.sanitize
     : (value => String(value ?? '')
@@ -271079,6 +271932,12 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;'));
+  const safeErrorSummary = (error) => ({
+    code: String(error?.code || 'CANDIDATE_PAY_METHOD_CHANGE_FAILED').slice(0, 120),
+    message: String(error?.message || 'The pay-method change failed.').slice(0, 500),
+    operation_id: uuidRe.test(canonicalUuid(error?.operation_id)) ? canonicalUuid(error.operation_id) : null,
+    refresh_required: error?.refresh_required === true
+  });
   const createOperationId = () => {
     if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
       return globalThis.crypto.randomUUID();
@@ -271093,27 +271952,51 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
     }
     throw new Error('A secure operation identifier could not be generated.');
   };
+  const renderExactIds = (ids, emptyText) => {
+    const canonicalIds = Array.isArray(ids) ? ids.map(canonicalUuid).filter((id) => uuidRe.test(id)) : [];
+    if (!canonicalIds.length) return `<div class="hint">${sanitise(emptyText)}</div>`;
+    return `<div style="max-height:150px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px"><ul style="margin:0;padding-left:20px">${canonicalIds.map((id) => `<li><code>${sanitise(id)}</code></li>`).join('')}</ul></div>`;
+  };
   const markCandidateRefreshPending = (response, candidateIdValue) => {
-    if (
-      !response ||
-      response.refresh_completed === true ||
-      response.refresh_pending !== true ||
-      response.refreshing !== true ||
-      response.exact_set_equality !== true ||
-      response.durable_queue_retained !== true
-    ) return { marked: false, poll_started: false };
-
-    const candidateIdText = String(candidateIdValue || '').trim();
-    const jobId = String(response.job_id || '').trim();
-    if (!candidateIdText || !jobId) return { marked: false, poll_started: false };
+    const candidateIdText = canonicalUuid(candidateIdValue);
+    const responseCandidateId = canonicalUuid(response?.candidate_id);
+    const operationId = canonicalUuid(response?.operation_id);
+    const jobId = canonicalUuid(response?.job_id);
+    const jobStatus = String(response?.job_status || '').trim().toUpperCase();
+    const allowedPendingStatuses = new Set(['QUEUED', 'RUNNING']);
+    const durablePending = !!(
+      response &&
+      response.operation_committed === true &&
+      response.operation_superseded_by_later_change === false &&
+      response.refresh_accepted === true &&
+      response.durable_queue_retained === true &&
+      response.refresh_completed === false &&
+      response.refresh_pending === true &&
+      response.refreshing === true &&
+      responseCandidateId === candidateIdText &&
+      uuidRe.test(candidateIdText) &&
+      uuidRe.test(operationId) &&
+      uuidRe.test(jobId) &&
+      allowedPendingStatuses.has(jobStatus)
+    );
+    if (!durablePending) {
+      return {
+        durable_pending: false,
+        marked: false,
+        poll_started: false,
+        session_id: null
+      };
+    }
 
     const authoritativeSessionIds = Array.isArray(response.authoritative_sessions)
       ? Array.from(new Set(response.authoritative_sessions
-          .map(session => String(session?.session_id || '').trim())
-          .filter(Boolean)))
+          .map(session => canonicalUuid(session?.session_id))
+          .filter(sessionId => uuidRe.test(sessionId))))
       : [];
     const targetedTimesheetIds = Array.isArray(response.targeted_timesheet_ids)
-      ? Array.from(new Set(response.targeted_timesheet_ids.map(value => String(value || '').trim()).filter(Boolean)))
+      ? Array.from(new Set(response.targeted_timesheet_ids
+          .map(canonicalUuid)
+          .filter(timesheetId => uuidRe.test(timesheetId)))).sort()
       : [];
 
     let bankingState = null;
@@ -271142,14 +272025,12 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
       wizard?.decisions?.session_id
     ];
     const currentSessionId = currentSessionCandidates
-      .map(value => String(value || '').trim())
-      .find(Boolean) || '';
+      .map(canonicalUuid)
+      .find((sessionId) => uuidRe.test(sessionId)) || '';
     const activeSessionId = (
-      currentSessionId && (
-        authoritativeSessionIds.length === 0 || authoritativeSessionIds.includes(currentSessionId)
-      )
+      currentSessionId && authoritativeSessionIds.includes(currentSessionId)
     ) ? currentSessionId : '';
-    const jobStatus = String(response.job_status || 'QUEUED').trim().toUpperCase() || 'QUEUED';
+
     const refreshPayload = {
       ok: true,
       candidate_id: candidateIdText,
@@ -271166,43 +272047,33 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
         job_status: jobStatus,
         candidate_status: 'REFRESHING'
       }],
-      refresh_mode: 'TARGETED_TIMESHEETS',
-      refresh_scope_kind: 'TARGETED_TIMESHEETS',
-      exact_target_scope: true,
-      exact_set_equality: true,
-      coverage_basis: 'CANONICAL_CURRENT_TIMESHEETS',
-      coverage_complete: true,
-      operation_id: response.operation_id || null,
-      job_id: jobId,
-      job_status: jobStatus,
-      refresh_pending: true,
-      refreshing: true,
-      durable_queue_retained: true,
+      refresh_mode: 'EXACT_DURABLE_JOB',
       status: 'REFRESHING_CANDIDATES',
       progress_state: 'REFRESHING_CANDIDATES',
       status_text: 'Refreshing candidate…',
       targeted_refresh_enqueued: true,
       post_action_refresh: {
-        mode: 'TARGETED_TIMESHEETS',
+        mode: 'EXACT_DURABLE_JOB',
         affected_candidate_ids: [candidateIdText],
         targeted_refresh_candidate_ids: [candidateIdText],
         affected_timesheet_ids: targetedTimesheetIds,
         targeted_refresh_enqueued: true,
         targeted_refresh_enqueued_count: 1,
-        operation_id: response.operation_id || null,
+        operation_id: operationId,
         job_id: jobId,
-        source_change_seq: response.source_change_seq ?? null
+        job_status: jobStatus,
+        source_change_seq: response.source_change_seq
       }
     };
     if (activeSessionId) refreshPayload.session_id = activeSessionId;
 
     let marked = false;
-    if (typeof mergePayWorkbenchCandidatePreviewIntoState === 'function') {
+    if (activeSessionId && typeof mergePayWorkbenchCandidatePreviewIntoState === 'function') {
       try {
         mergePayWorkbenchCandidatePreviewIntoState(refreshPayload, bankingState || null);
         marked = true;
       } catch (error) {
-        W('could not mark candidate refresh pending in current Workbench state', error);
+        W('could not mark candidate refresh pending in current Workbench state', safeErrorSummary(error));
       }
     }
 
@@ -271214,22 +272085,29 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
           affected_candidate_ids: [candidateIdText],
           source: 'openCandidatePayMethodChangeModal',
           requirePreviewSectionsAfterReady: false,
-          fullSessionRefreshAfterSettled: false
+          fullSessionRefreshAfterSettled: false,
+          operation_id: operationId,
+          job_id: jobId
         });
         pollStarted = true;
         if (poll && typeof poll.catch === 'function') {
-          poll.catch(error => W('candidate refresh progress poll failed', error));
+          poll.catch(error => W('candidate refresh progress poll failed', safeErrorSummary(error)));
         }
       } catch (error) {
-        W('could not start candidate refresh progress poll', error);
+        W('could not start candidate refresh progress poll', safeErrorSummary(error));
       }
     }
 
-    return { marked, poll_started: pollStarted, session_id: activeSessionId || null };
+    return {
+      durable_pending: true,
+      marked,
+      poll_started: pollStarted,
+      session_id: activeSessionId || null
+    };
   };
 
   const candidateRow = candidate || {};
-  const candidateId = candidateRow.id || context.candidate_id || context.id;
+  const candidateId = canonicalUuid(candidateRow.id || context.candidate_id || context.id);
   const originalMethod = String(context.originalMethod || context.original_method || candidateRow.pay_method || '').trim().toUpperCase();
   const newMethod = String(context.newMethod || context.new_method || '').trim().toUpperCase();
   const destinationPatch = (
@@ -271238,8 +272116,8 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
     !Array.isArray(context.destination_patch)
   ) ? { ...context.destination_patch } : {};
 
-  if (!candidateId) {
-    alert('Candidate id missing for pay-method change.');
+  if (!uuidRe.test(candidateId)) {
+    alert('Candidate id is missing or invalid for this pay-method change.');
     return false;
   }
   if (originalMethod !== 'PAYE' && originalMethod !== 'UMBRELLA') {
@@ -271255,14 +272133,77 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
     return false;
   }
 
+  const requestDestinationFingerprint = destinationFingerprint(destinationPatch, newMethod);
+  const registry = pendingRegistry();
+  const storedPending = isPlainObject(registry[candidateId]) ? registry[candidateId] : null;
+  let recoveryPending = null;
+  if (storedPending) {
+    const pendingCandidateId = canonicalUuid(storedPending.candidate_id);
+    const pendingOriginalMethod = String(storedPending.original_method || '').trim().toUpperCase();
+    const pendingNewMethod = String(storedPending.new_method || '').trim().toUpperCase();
+    const pendingOperationId = canonicalUuid(storedPending.operation_id);
+    const pendingPreviewSeq = storedPending.preview_source_change_seq;
+    const pendingFingerprint = String(storedPending.destination_fingerprint || '');
+    const pendingValid = !!(
+      pendingCandidateId === candidateId &&
+      ['PAYE', 'UMBRELLA'].includes(pendingOriginalMethod) &&
+      ['PAYE', 'UMBRELLA'].includes(pendingNewMethod) &&
+      pendingOriginalMethod !== pendingNewMethod &&
+      uuidRe.test(pendingOperationId) &&
+      typeof pendingPreviewSeq === 'number' &&
+      Number.isInteger(pendingPreviewSeq) &&
+      pendingPreviewSeq >= 0 &&
+      pendingFingerprint &&
+      isPlainObject(storedPending.preview)
+    );
+    if (!pendingValid) {
+      delete registry[candidateId];
+    } else if (
+      pendingOriginalMethod !== originalMethod ||
+      pendingNewMethod !== newMethod ||
+      pendingFingerprint !== requestDestinationFingerprint
+    ) {
+      alert(
+        `A previous pay-method operation for this candidate still has an unconfirmed outcome. Refresh or recover operation ${pendingOperationId} before starting a different route change.`
+      );
+      return false;
+    } else {
+      recoveryPending = storedPending;
+    }
+  }
+
   let preview;
-  try {
-    preview = await fetchCandidatePayMethodChangePreview(candidateId, newMethod, {
-      destination_patch: destinationPatch
+  let operationId;
+  const recoveringExistingOperation = !!recoveryPending;
+  if (recoveringExistingOperation) {
+    preview = recoveryPending.preview;
+    operationId = canonicalUuid(recoveryPending.operation_id);
+    L('reusing pending operation after an uncertain or committed-but-unreconciled outcome', {
+      candidate_id: candidateId,
+      operation_id: operationId
     });
-  } catch (error) {
-    E('preview failed', error);
-    alert(error?.message || 'Failed to preview pay-method change.');
+  } else {
+    try {
+      preview = await fetchCandidatePayMethodChangePreview(candidateId, newMethod, {
+        destination_patch: destinationPatch
+      });
+    } catch (error) {
+      E('preview failed', safeErrorSummary(error));
+      alert(error?.message || 'Failed to preview the pay-method change.');
+      return false;
+    }
+    operationId = createOperationId();
+  }
+
+  if (
+    !isPlainObject(preview) ||
+    preview.candidate_id !== candidateId ||
+    String(preview.original_method || '').trim().toUpperCase() !== originalMethod ||
+    String(preview.new_method || '').trim().toUpperCase() !== newMethod ||
+    !uuidRe.test(operationId)
+  ) {
+    if (recoveringExistingOperation) delete registry[candidateId];
+    alert('The canonical pay-method operation evidence is incomplete. Refresh and try again.');
     return false;
   }
 
@@ -271272,32 +272213,37 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
     candidateRow.tms_ref ||
     candidateId
   );
-  const blockers = Array.isArray(preview.blockers) ? preview.blockers : [];
-  const sessions = Array.isArray(preview.authoritative_sessions) ? preview.authoritative_sessions : [];
-  const targets = Array.isArray(preview.targeted_timesheet_ids) ? preview.targeted_timesheet_ids : [];
-  const replacedSourceSessionIds = Array.isArray(preview.replaced_source_session_ids) ? preview.replaced_source_session_ids : [];
-  const authorisedCount = Number(preview.authorised_timesheet_count || 0);
-  const activeAdvanceCount = Number(preview.active_advance_timesheet_count || 0);
-  const mismatchCount = Number(preview.potential_case_resolution_timesheet_count || 0);
-  const operationId = createOperationId();
+  const blockers = preview.blockers;
+  const sessions = preview.authoritative_sessions;
+  const representedIds = preview.represented_timesheet_ids;
+  const authorisedIds = preview.authorised_timesheet_ids;
+  const activeAdvanceIds = preview.active_advance_timesheet_ids;
+  const targets = preview.targeted_timesheet_ids;
+  const mismatchCount = preview.potential_case_resolution_timesheet_count;
+  const effectiveDestinationPatch = {
+    ...canonicalDestinationPatch(destinationPatch, newMethod),
+    ...canonicalDestinationPatch(preview.destination_patch, newMethod)
+  };
+  const effectiveDestinationFingerprint = destinationFingerprint(effectiveDestinationPatch, newMethod);
+  if (recoveringExistingOperation && effectiveDestinationFingerprint !== requestDestinationFingerprint) {
+    delete registry[candidateId];
+    alert('The stored pay-method operation destination no longer matches the current request. Refresh and review the candidate before continuing.');
+    return false;
+  }
 
   const blockerHtml = blockers.length
-    ? `<div class="group"><div class="hint" style="color:var(--danger,#b42318)"><strong>This change cannot be applied yet:</strong><ul>${blockers.map(blocker => `<li>${sanitise(blocker?.message || blocker?.code || 'Blocked')}</li>`).join('')}</ul></div></div>`
+    ? `<div class="group"><div class="hint" style="color:var(--danger,#b42318)"><strong>This change cannot be applied yet:</strong><ul>${blockers.map(blocker => `<li>${sanitise(blocker.message || blocker.code || 'Blocked')}</li>`).join('')}</ul></div></div>`
     : '';
   const sessionRows = sessions.length
     ? sessions.map(session => `
         <tr>
-          <td>${sanitise(session?.session_id || '')}</td>
-          <td>${sanitise(session?.pay_date || '')}</td>
-          <td>${sanitise(session?.progress_state || '')}</td>
-          <td>${Number(session?.preview_row_count || 0)}</td>
-          <td>${Array.isArray(session?.qualifying_timesheet_ids) ? session.qualifying_timesheet_ids.length : 0}</td>
+          <td><code>${sanitise(session.session_id)}</code></td>
+          <td>${sanitise(session.pay_date)}</td>
+          <td>${sanitise(session.progress_state)}</td>
+          <td>${session.preview_row_count}</td>
+          <td>${session.qualifying_timesheet_ids.length}</td>
         </tr>`).join('')
-    : '<tr><td colspan="5">No current open Banking Pay session contains this candidate. The exact route-change scope remains canonical and will be consumed by the authoritative current or replacement session.</td></tr>';
-
-  const targetRows = targets.length
-    ? targets.map(timesheetId => `<li><code>${sanitise(timesheetId)}</code></li>`).join('')
-    : '<li>No current Timesheet qualifies for route-change refresh.</li>';
+    : '<tr><td colspan="5">No authoritative open Banking Pay session currently represents this candidate. The exact canonical target set is still shown above.</td></tr>';
 
   const bodyHtml = `
     <div class="tabc" id="candPayMethodChange">
@@ -271307,44 +272253,58 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
       </div>
       <div class="group">
         <div class="hint">
-          <strong>Existing contracts and Timesheets will not be changed.</strong>
-          Their contract, payment route, rates, hours, authorisation, Advance state and financial history remain exactly as they are.
-          Banking Pay will re-evaluate every current canonical Timesheet for this candidate that is authorised or covered by an active Advance against the candidate's new target payment method.
+          <strong>Source Timesheets, Contract Weeks, rates and TSFIN rows will not be changed.</strong>
+          Their hours, authorisation, active Advance state and financial history remain exactly as stored.
+          The canonical scope is every current Timesheet for this candidate that is authorised or has an active Advance.
+          Current Workbench representation is evidence only; it does not define or narrow that scope.
+          Only prospective derived Banking Pay Workbench output will be refreshed against the candidate's new target payment method.
         </div>
       </div>
       ${blockerHtml}
       <div class="group">
         <table class="grid compact">
           <tbody>
-            <tr><th>Authorised canonical Timesheets</th><td>${authorisedCount}</td></tr>
-            <tr><th>Active-Advance canonical Timesheets</th><td>${activeAdvanceCount}</td></tr>
-            <tr><th>Exact deduplicated requeue set</th><td>${targets.length}</td></tr>
-            <tr><th>Replaced source sessions</th><td>${replacedSourceSessionIds.length}</td></tr>
+            <tr><th>Canonical current Timesheets represented in Workbench evidence</th><td>${representedIds.length}</td></tr>
+            <tr><th>Canonical authorised Timesheets</th><td>${authorisedIds.length}</td></tr>
+            <tr><th>Canonical active-Advance Timesheets</th><td>${activeAdvanceIds.length}</td></tr>
+            <tr><th>Exact authorised-or-active-Advance target union</th><td>${targets.length}</td></tr>
             <tr><th>Potential cross-route Case Resolution Timesheets</th><td>${mismatchCount}</td></tr>
             <tr><th>Contracts changed</th><td>0</td></tr>
-            <tr><th>Contract weeks changed</th><td>0</td></tr>
+            <tr><th>Contract Weeks changed</th><td>0</td></tr>
             <tr><th>Timesheets changed</th><td>0</td></tr>
             <tr><th>Rates changed</th><td>0</td></tr>
+            <tr><th>TSFIN repricing rows</th><td>0</td></tr>
           </tbody>
         </table>
       </div>
       <div class="group">
-        <div class="hint"><strong>Exact canonical Timesheet targets</strong></div>
-        <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px;margin-top:6px;padding:8px 12px">
-          <ul style="margin:0;padding-left:20px">${targetRows}</ul>
-        </div>
+        <div class="hint"><strong>Exact authorised Timesheet IDs (${authorisedIds.length})</strong></div>
+        ${renderExactIds(authorisedIds, 'No current Timesheet qualifies through authorisation.')}
       </div>
       <div class="group">
-        <div class="hint"><strong>Authoritative Banking Pay sessions</strong></div>
+        <div class="hint"><strong>Exact active-Advance Timesheet IDs (${activeAdvanceIds.length})</strong></div>
+        ${renderExactIds(activeAdvanceIds, 'No current Timesheet qualifies through an active Advance.')}
+      </div>
+      <div class="group">
+        <div class="hint"><strong>Exact canonical current-Timesheet target IDs (${targets.length})</strong></div>
+        ${renderExactIds(targets, 'The canonical target set is exactly empty.')}
+      </div>
+      <div class="group">
+        <div class="hint"><strong>Authoritative Banking Pay session evidence</strong></div>
         <div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;margin-top:6px">
           <table class="grid compact">
-            <thead><tr><th>Session</th><th>Pay date</th><th>Progress</th><th>Preview rows</th><th>Targets</th></tr></thead>
+            <thead><tr><th>Session</th><th>Pay date</th><th>Progress</th><th>Preview rows</th><th>Canonical targets</th></tr></thead>
             <tbody>${sessionRows}</tbody>
           </table>
         </div>
       </div>
+      <div class="group">
+        <div class="hint"><strong>${recoveringExistingOperation ? 'Recovery operation ID' : 'Operation ID'}</strong></div>
+        <div><code>${sanitise(operationId)}</code></div>
+      </div>
       <div class="hint" style="margin-top:10px">
-        After the candidate status commits, Banking Pay may show <strong>Refreshing candidate</strong> until every exact target is complete, superseded or otherwise terminal. Route-sensitive outstanding amounts may move into the existing Case Resolution process.
+        After the candidate change commits, <strong>Refreshing candidate</strong> is shown only when the committed operation has a persisted non-terminal Banking Pay job.
+        The same operation ID is retained through submission, modal reopening and any unknown-outcome recovery.
       </div>
     </div>`;
 
@@ -271367,31 +272327,64 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
         }
 
         try {
-          const response = await applyCandidatePayMethodChange(candidateId, {
+          registry[candidateId] = {
+            candidate_id: candidateId,
+            original_method: originalMethod,
             new_method: newMethod,
-            expected_old_method: preview.expected_old_method || originalMethod,
             operation_id: operationId,
             preview_source_change_seq: preview.preview_source_change_seq,
-            destination_patch: {
-              ...destinationPatch,
-              ...(
-                preview.destination_patch &&
-                typeof preview.destination_patch === 'object' &&
-                !Array.isArray(preview.destination_patch)
-                  ? preview.destination_patch
-                  : {}
-              )
-            },
+            destination_patch: { ...effectiveDestinationPatch },
+            destination_fingerprint: effectiveDestinationFingerprint,
+            preview,
+            recovery_state: 'SUBMITTED_OR_OUTCOME_UNKNOWN',
+            updated_at_utc: new Date().toISOString()
+          };
+          try {
+            if (window.modalCtx && typeof window.modalCtx === 'object') {
+              window.modalCtx.__payMethodChangePendingOperation = registry[candidateId];
+            }
+          } catch {}
+
+          const response = await applyCandidatePayMethodChange(candidateId, {
+            new_method: newMethod,
+            expected_old_method: preview.expected_old_method,
+            operation_id: operationId,
+            preview_source_change_seq: preview.preview_source_change_seq,
+            destination_patch: effectiveDestinationPatch,
             reason: 'PAY_METHOD_CHANGE'
           });
 
-          const refreshUi = markCandidateRefreshPending(response, candidateId);
-          try { await renderAll(); } catch (refreshError) { W('renderAll failed after committed route change', refreshError); }
+          const refreshUi = response.refresh_completed === true
+            ? { durable_pending: false, marked: false, poll_started: false, session_id: null }
+            : markCandidateRefreshPending(response, candidateId);
+          if (response.refresh_completed !== true && refreshUi.durable_pending !== true) {
+            const evidenceError = new Error(
+              'The candidate change committed, but the persisted refresh state could not be represented safely. Refresh using the existing operation ID.'
+            );
+            evidenceError.code = 'CANDIDATE_PAY_METHOD_CHANGE_REFRESH_EVIDENCE_INVALID';
+            evidenceError.operation_id = operationId;
+            evidenceError.refresh_required = true;
+            evidenceError.operation_committed = true;
+            throw evidenceError;
+          }
+
+          try { await renderAll(); } catch (refreshError) { W('renderAll failed after committed route change', safeErrorSummary(refreshError)); }
           try {
             if (window.__toast) {
-              window.__toast(response.refresh_completed === true
-                ? 'Payment status changed and Banking Pay refreshed.'
-                : 'Payment status changed. Banking Pay is refreshing the candidate.');
+              if (response.refresh_completed === true) {
+                window.__toast('Payment status changed and Banking Pay refreshed.');
+              } else if (refreshUi.durable_pending === true) {
+                window.__toast('Payment status changed. Banking Pay is refreshing the candidate.');
+              }
+            }
+          } catch {}
+
+          delete registry[candidateId];
+          try {
+            if (window.modalCtx && typeof window.modalCtx === 'object') {
+              window.modalCtx.__payMethodChangePendingOperation = null;
+              window.modalCtx.__payMethodChangeOperationId = operationId;
+              window.modalCtx.__payMethodChangeJobId = response.job_id || null;
             }
           } catch {}
 
@@ -271399,6 +272392,7 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
             candidate_id: response.candidate_id,
             operation_id: response.operation_id,
             job_id: response.job_id,
+            job_status: response.job_status,
             targeted_timesheet_count: response.targeted_timesheet_count,
             refresh_completed: response.refresh_completed,
             refresh_marked: refreshUi.marked,
@@ -271408,9 +272402,52 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
           finish({ confirmed: true, result: response, preview });
           return true;
         } catch (error) {
-          E('apply failed', error);
-          const suffix = error?.operation_id ? `\n\nOperation ID: ${error.operation_id}` : '';
-          alert(`${error?.message || 'Failed to apply pay-method change.'}${suffix}`);
+          E('apply failed', safeErrorSummary(error));
+          const safeOperationId = uuidRe.test(canonicalUuid(error?.operation_id))
+            ? canonicalUuid(error.operation_id)
+            : operationId;
+          const errorCode = String(error?.code || '').trim().toUpperCase();
+          const preserveForRecovery = !!(
+            safeOperationId === operationId &&
+            error?.operation_superseded_by_later_change !== true &&
+            (
+              errorCode === 'CANDIDATE_PAY_METHOD_CHANGE_OUTCOME_UNKNOWN' ||
+              error?.operation_committed === true ||
+              errorCode === 'CANDIDATE_PAY_METHOD_CHANGE_REFRESH_EVIDENCE_INVALID'
+            )
+          );
+          if (preserveForRecovery) {
+            const pending = isPlainObject(registry[candidateId]) ? registry[candidateId] : {};
+            registry[candidateId] = {
+              ...pending,
+              candidate_id: candidateId,
+              original_method: originalMethod,
+              new_method: newMethod,
+              operation_id: operationId,
+              preview_source_change_seq: preview.preview_source_change_seq,
+              destination_patch: { ...effectiveDestinationPatch },
+              destination_fingerprint: effectiveDestinationFingerprint,
+              preview,
+              recovery_state: error?.operation_committed === true
+                ? 'COMMITTED_RECONCILIATION_REQUIRED'
+                : 'OUTCOME_UNKNOWN',
+              updated_at_utc: new Date().toISOString()
+            };
+            try {
+              if (window.modalCtx && typeof window.modalCtx === 'object') {
+                window.modalCtx.__payMethodChangePendingOperation = registry[candidateId];
+              }
+            } catch {}
+          } else {
+            delete registry[candidateId];
+            try {
+              if (window.modalCtx && typeof window.modalCtx === 'object') {
+                window.modalCtx.__payMethodChangePendingOperation = null;
+              }
+            } catch {}
+          }
+          const suffix = safeOperationId ? `\n\nOperation ID: ${safeOperationId}` : '';
+          alert(`${error?.message || 'Failed to apply the pay-method change.'}${suffix}`);
           return false;
         }
       },
@@ -271423,8 +272460,6 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
     );
   });
 }
-
-
 
 
 
@@ -305685,36 +306720,6 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     return null;
   };
 
-  const parseBooleanSignal = (value) => {
-    if (value === true) return true;
-    if (value === false) return false;
-    if (value == null) return null;
-    const normalised = String(value).trim().toLowerCase();
-    if (normalised === 'true' || normalised === '1' || normalised === 'yes' || normalised === 'y' || normalised === 'on') return true;
-    if (normalised === 'false' || normalised === '0' || normalised === 'no' || normalised === 'n' || normalised === 'off') return false;
-    return null;
-  };
-
-  const pickPermissionSignal = (...values) => {
-    let sawTrue = false;
-    for (const value of values) {
-      const parsed = parseBooleanSignal(value);
-      if (parsed === false) return false;
-      if (parsed === true) sawTrue = true;
-    }
-    return sawTrue ? true : null;
-  };
-
-  const pickRiskSignal = (...values) => {
-    let sawFalse = false;
-    for (const value of values) {
-      const parsed = parseBooleanSignal(value);
-      if (parsed === true) return true;
-      if (parsed === false) sawFalse = true;
-    }
-    return sawFalse ? false : null;
-  };
-
   const pickBackendUpper = (key) => {
     const sources = [
       isPlainObject(det.action_flags) ? det.action_flags : null,
@@ -306088,187 +307093,267 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     (isPlainObject(data.archive_state) ? data.archive_state : null) ||
     {}
   );
+  const lifecycleSources = [
+    archiveState,
+    isPlainObject(archiveState.lifecycle_patch) ? archiveState.lifecycle_patch : null,
+    isPlainObject(archiveState.row_patch) ? archiveState.row_patch : null,
+    isPlainObject(archiveState.action_flags) ? archiveState.action_flags : null,
+    isPlainObject(mc?.timesheetLifecycleState) ? mc.timesheetLifecycleState : null,
+    isPlainObject(mc?.timesheetLifecyclePatch) ? mc.timesheetLifecyclePatch : null,
+    isPlainObject(det.lifecycle_patch) ? det.lifecycle_patch : null,
+    isPlainObject(det.row_patch) ? det.row_patch : null,
+    isPlainObject(det.action_flags) ? det.action_flags : null,
+    isPlainObject(det.bulk_authorise) ? det.bulk_authorise : null,
+    isPlainObject(det.artifact_hints) ? det.artifact_hints : null,
+    isPlainObject(data.lifecycle_patch) ? data.lifecycle_patch : null,
+    isPlainObject(data.row_patch) ? data.row_patch : null,
+    isPlainObject(data.action_flags) ? data.action_flags : null,
+    isPlainObject(data.bulk_authorise) ? data.bulk_authorise : null,
+    isPlainObject(data.artifact_hints) ? data.artifact_hints : null,
+    isPlainObject(ts.action_flags) ? ts.action_flags : null,
+    isPlainObject(cw.action_flags) ? cw.action_flags : null,
+    det,
+    data,
+    ts,
+    cw
+  ].filter(isPlainObject);
+  const lifecycleCompletenessSources = [
+    ...lifecycleSources,
+    ...lifecycleSources.map((container) => (
+      isPlainObject(container.patch_completeness) ? container.patch_completeness : null
+    ))
+  ].filter(isPlainObject);
+  const booleanSignal = (value) => {
+    if (value === true || value === false) return value;
+    if (value == null) return null;
+    if (typeof value === 'number') {
+      if (value === 1) return true;
+      if (value === 0) return false;
+      return null;
+    }
+    if (typeof value !== 'string') return null;
+    const text = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return null;
+  };
+  const lifecycleBooleanValues = (containers, keys) => {
+    const values = [];
+    for (const container of containers) {
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(container, key)) continue;
+        const signal = booleanSignal(container[key]);
+        if (signal !== null) values.push(signal);
+      }
+    }
+    return values;
+  };
+  const readLifecycleTrueWins = (...keys) => {
+    const values = lifecycleBooleanValues(lifecycleSources, keys);
+    if (values.some((value) => value === true)) return true;
+    if (values.some((value) => value === false)) return false;
+    return null;
+  };
+  const readLifecycleFalseWins = (...keys) => {
+    const values = lifecycleBooleanValues(lifecycleSources, keys);
+    if (values.some((value) => value === false)) return false;
+    if (values.some((value) => value === true)) return true;
+    return null;
+  };
+  const readCompletenessFalseWins = (...keys) => {
+    const values = lifecycleBooleanValues(lifecycleCompletenessSources, keys);
+    if (values.some((value) => value === false)) return false;
+    if (values.some((value) => value === true)) return true;
+    return null;
+  };
+  const readLifecycleText = (...keys) => {
+    for (const container of lifecycleSources) {
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(container, key)) continue;
+        const text = String(container[key] == null ? '' : container[key]).trim();
+        if (text) return text;
+      }
+    }
+    return '';
+  };
+
+  const archivedSignals = lifecycleBooleanValues(lifecycleSources, ['is_archived', 'isArchived', 'archived']);
+  const canonicalArchived = archivedSignals.some((value) => value === true)
+    ? true
+    : (archivedSignals.some((value) => value === false) ? false : null);
+  const archivedSignalConflict = (
+    archivedSignals.some((value) => value === true) &&
+    archivedSignals.some((value) => value === false)
+  );
+  const canonicalRetainedHistory = readLifecycleTrueWins(
+    'has_retained_financial_history',
+    'hasRetainedFinancialHistory',
+    'retained_financial_history',
+    'retainedFinancialHistory',
+    'financial_history_retained'
+  );
+  const canonicalCanUnprocess = readLifecycleFalseWins('can_unprocess', 'canUnprocess');
+  const canonicalShowUnprocess = readLifecycleFalseWins(
+    'unprocess_action_visible',
+    'show_unprocess',
+    'showUnprocess'
+  );
+  const canonicalReadOnly = readLifecycleTrueWins('read_only', 'readOnly', 'review_only', 'reviewOnly');
+  const permissionStateComplete = readCompletenessFalseWins(
+    'permission_state_patch_complete',
+    'permissionStateComplete',
+    'permission_state_complete'
+  );
+  const priorityBadgesComplete = readCompletenessFalseWins(
+    'priority_badges_patch_complete',
+    'priorityBadgesComplete',
+    'priority_badges_complete'
+  );
+  const lifecyclePatchComplete = readCompletenessFalseWins(
+    'lifecycle_authority_complete',
+    'canonical_lifecycle_complete',
+    'lifecycle_patch_complete',
+    'affected_rows_complete'
+  );
+  const refreshRequiredSignal = readLifecycleTrueWins('refresh_required', 'requires_affected_row_refresh');
   const archivedAtUtc = archiveState.archived_at_utc || det.archived_at_utc || ts.archived_at_utc || data.archived_at_utc || null;
-  const isArchived = !!(
-    archiveState.is_archived === true ||
-    boolish(det.is_archived) ||
-    boolish(ts.is_archived) ||
-    boolish(data.is_archived) ||
-    archivedAtUtc ||
-    toolsStage === 'ARCHIVED' ||
-    summaryStage === 'ARCHIVED'
+  const archivedStage = toolsStage === 'ARCHIVED' || summaryStage === 'ARCHIVED';
+  const archivedStatusConflict = canonicalArchived === false && (archivedStage || !!archivedAtUtc);
+  const canonicalCoreComplete = (
+    canonicalArchived !== null &&
+    canonicalRetainedHistory !== null &&
+    canonicalCanUnprocess !== null &&
+    canonicalShowUnprocess !== null
   );
-  const backendReadOnly = pickRiskSignal(
-    archiveState.read_only,
-    det.read_only,
-    data.read_only,
-    pickBackendRiskBoolean('read_only')
+  const lifecycleAuthorityComplete = !!(
+    canonicalCoreComplete &&
+    permissionStateComplete === true &&
+    priorityBadgesComplete === true &&
+    lifecyclePatchComplete !== false &&
+    refreshRequiredSignal === false &&
+    !archivedSignalConflict &&
+    !archivedStatusConflict
   );
-  const permissionStatePatchComplete = pickPermissionSignal(
-    archiveState.permission_state_patch_complete,
-    det.permission_state_patch_complete,
-    data.permission_state_patch_complete,
-    pickBackendPermissionBoolean('permission_state_patch_complete')
-  );
-  const requiresAffectedRowRefresh = pickRiskSignal(
-    archiveState.requires_affected_row_refresh,
-    det.requires_affected_row_refresh,
-    data.requires_affected_row_refresh,
-    pickBackendRiskBoolean('requires_affected_row_refresh')
-  );
-  const backendReadOnlyMode = pickBackendUpper('mode');
-  const backendReadOnlyReason = pickBackendUpper('reason');
+
+  const isArchived = canonicalArchived === true || archivedStage || !!archivedAtUtc;
+  const hasRetainedFinancialHistory = canonicalRetainedHistory === true;
   const deleteDecision = pickFirstUpper(
     archiveState.delete_decision,
     archiveState.decision,
     dp?.decision,
     data.delete_decision,
     det.delete_decision,
-    pickBackendUpper('delete_decision')
+    readLifecycleText('delete_decision', 'deleteDecision')
   ) || null;
-  const archiveRequired = !!(
-    archiveState.archive_required === true ||
-    boolish(data.archive_required) ||
-    boolish(det.archive_required) ||
-    pickBackendRiskBoolean('archive_required') === true ||
-    deleteDecision === 'ARCHIVE_REQUIRED'
-  );
-  const retainedBackendSignals = backendBooleanSignals('has_retained_financial_history');
-  const retainedDirectSources = [archiveState, det, data].filter(isPlainObject);
-  const retainedDirectPresent = retainedDirectSources.some(source =>
-    Object.prototype.hasOwnProperty.call(source, 'has_retained_financial_history')
-  );
-  const retainedDirectTrue = retainedDirectSources.some(source =>
-    Object.prototype.hasOwnProperty.call(source, 'has_retained_financial_history') &&
-    boolish(source.has_retained_financial_history)
-  );
-  const retainedFinancialHistoryAuthorityPresent = retainedBackendSignals.present || retainedDirectPresent;
-  const hasRetainedFinancialHistory = retainedBackendSignals.anyTrue || retainedDirectTrue;
-  const lifecycleAuthorityIncomplete = !!(
-    hasTs &&
-    (
-      !retainedFinancialHistoryAuthorityPresent ||
-      permissionStatePatchComplete === false ||
-      requiresAffectedRowRefresh === true
-    )
-  );
-  const editReadOnly = isArchived || backendReadOnly === true || lifecycleAuthorityIncomplete;
-  const lifecycleActionsBlocked = isArchived || lifecycleAuthorityIncomplete;
-  const readOnlyReason = isArchived
-    ? 'ARCHIVED'
-    : (lifecycleAuthorityIncomplete
-      ? 'LIFECYCLE_STATE_INCOMPLETE'
-      : (backendReadOnlyReason || backendReadOnlyMode || (backendReadOnly === true ? 'BACKEND_READ_ONLY' : '')));
+  const archiveRequiredSignal = readLifecycleTrueWins('archive_required', 'archiveRequired');
+  const archiveRequired = archiveRequiredSignal === true || deleteDecision === 'ARCHIVE_REQUIRED';
+  const backendReadOnlyMode = upper(readLifecycleText('mode'));
+  const backendReadOnlyReason = upper(readLifecycleText('read_only_reason', 'readOnlyReason', 'reason'));
+  const editReadOnly = isArchived || canonicalReadOnly === true || !lifecycleAuthorityComplete;
+  const lifecycleActionsBlocked = isArchived || !lifecycleAuthorityComplete;
+  const readOnlyReason = !lifecycleAuthorityComplete
+    ? 'LIFECYCLE_AUTHORITY_INCOMPLETE'
+    : (isArchived
+      ? 'ARCHIVED'
+      : (backendReadOnlyReason || backendReadOnlyMode || (canonicalReadOnly === true ? 'BACKEND_READ_ONLY' : '')));
   const readOnly = editReadOnly;
-  const backendCanAuthorise = pickBackendPermissionBoolean('can_authorise');
-  const backendCanUnauthorise = pickBackendPermissionBoolean('can_unauthorise');
-  const backendCanProcess = pickBackendPermissionBoolean('can_process');
-  const backendCanDelete = pickBackendPermissionBoolean('can_delete');
+
+  const backendCanAuthorise = readLifecycleFalseWins('can_authorise', 'canAuthorise');
+  const backendCanUnauthorise = readLifecycleFalseWins('can_unauthorise', 'canUnauthorise');
+  const backendCanProcess = readLifecycleFalseWins('can_process', 'canProcess');
+  const backendCanDelete = readLifecycleFalseWins('can_delete', 'canDelete');
+  const backendCanArchive = readLifecycleFalseWins('can_archive', 'canArchive');
+  const backendCanUnarchive = readLifecycleFalseWins('can_unarchive', 'canUnarchive');
+
   const canonicalCanAuthoriseBase = !!(
-    !lifecycleActionsBlocked &&
+    lifecycleAuthorityComplete &&
+    !isArchived &&
     frameMode === 'view' &&
     hasTs &&
     !locked &&
     !isAuthorised &&
-    (backendCanAuthorise === true || (backendCanAuthorise === null && localCanAuthoriseBase))
+    backendCanAuthorise === true &&
+    localCanAuthoriseBase
   );
-  const canonicalCanAuthorise = !!(
-    canonicalCanAuthoriseBase &&
-    !qrUnsigned &&
-    backendCanAuthorise !== false
-  );
+  const canonicalCanAuthorise = canonicalCanAuthoriseBase && !qrUnsigned;
   const canonicalShowAuthoriseDisabled = !!(
-    !lifecycleActionsBlocked &&
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanAuthorise === true &&
     localCanAuthoriseBase &&
     qrUnsigned
   );
   const canonicalCanUnauthorise = !!(
-    !lifecycleActionsBlocked &&
+    lifecycleAuthorityComplete &&
+    !isArchived &&
     frameMode === 'view' &&
     hasTs &&
     !locked &&
     isAuthorised &&
-    (backendCanUnauthorise === true || (backendCanUnauthorise === null && localCanUnauthorise))
+    backendCanUnauthorise === true &&
+    localCanUnauthorise
   );
   const canonicalCanProcess = !!(
-    !lifecycleActionsBlocked &&
-    backendCanProcess !== false &&
-    (backendCanProcess === true || localCanProcess)
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanProcess === true &&
+    localCanProcess
   );
   const canonicalCanDelete = !!(
-    !lifecycleActionsBlocked &&
-    backendCanDelete !== false &&
+    lifecycleAuthorityComplete &&
+    !isArchived &&
+    backendCanDelete === true &&
     localCanDelete
   );
-
-  const backendCanArchive = pickBackendPermissionBoolean('can_archive');
-  const backendCanUnarchive = pickBackendPermissionBoolean('can_unarchive');
-  const archivePermissionGranted = pickPermissionSignal(
-    archiveState.can_archive,
-    det.can_archive,
-    data.can_archive,
-    backendCanArchive
-  );
-  const unarchivePermissionGranted = pickPermissionSignal(
-    archiveState.can_unarchive,
-    det.can_unarchive,
-    data.can_unarchive,
-    backendCanUnarchive
-  );
   const canArchive = !!(
+    lifecycleAuthorityComplete &&
     frameMode === 'view' &&
     hasTs &&
     !isArchived &&
-    !lifecycleAuthorityIncomplete &&
     !isAuthorised &&
     !locked &&
-    archivePermissionGranted === true
+    backendCanArchive === true
   );
   const canUnarchive = !!(
+    lifecycleAuthorityComplete &&
     frameMode === 'view' &&
     hasTs &&
     isArchived &&
-    !lifecycleAuthorityIncomplete &&
-    unarchivePermissionGranted === true
+    backendCanUnarchive === true
   );
-  const backendCanUnprocess = pickBackendPermissionBoolean('can_unprocess');
-  const backendShowUnprocess = pickPermissionSignal(
-    archiveState.unprocess_action_visible,
-    det.unprocess_action_visible,
-    data.unprocess_action_visible,
-    pickBackendPermissionBoolean('unprocess_action_visible')
+
+  const suppliedUnprocessBlockReason = upper(
+    readLifecycleText('unprocess_block_reason', 'unprocessBlockReason', 'unprocess_reason', 'unprocess_blocker_code')
   );
-  const unprocessBlockReason = isArchived
-    ? 'TIMESHEET_ARCHIVED'
-    : (lifecycleAuthorityIncomplete
-      ? 'LIFECYCLE_STATE_INCOMPLETE'
-      : (pickBackendUpper('unprocess_block_reason') || (hasRetainedFinancialHistory ? 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS' : '')));
-  const unprocessBlockMessage = isArchived
-    ? 'Archived timesheets must be Unarchived before lifecycle actions.'
-    : (lifecycleAuthorityIncomplete
-      ? 'The current lifecycle state is incomplete. Refresh the Timesheet before performing lifecycle actions.'
-      : (pickBackendString('unprocess_block_message') || (hasRetainedFinancialHistory
-        ? 'This timesheet has already been financially linked and cannot be unprocessed. You can archive the timesheet instead.'
-        : '')));
-  const unprocessActionApplicable = backendShowUnprocess === null
-    ? localCanUnprocess
-    : backendShowUnprocess;
+  const suppliedUnprocessBlockMessage = readLifecycleText('unprocess_block_message', 'unprocessBlockMessage', 'unprocess_message');
+  const unprocessBlockReason = !lifecycleAuthorityComplete
+    ? 'LIFECYCLE_AUTHORITY_INCOMPLETE'
+    : (suppliedUnprocessBlockReason || (
+        isArchived ? 'TIMESHEET_ARCHIVED' : (hasRetainedFinancialHistory ? 'FINANCIAL_HISTORY_PREVENTS_UNPROCESS' : '')
+      ));
+  const unprocessBlockMessage = !lifecycleAuthorityComplete
+    ? 'The canonical lifecycle state is incomplete. Refresh this Timesheet before using lifecycle actions.'
+    : (suppliedUnprocessBlockMessage || (
+        hasRetainedFinancialHistory
+          ? 'This Timesheet has retained financial history and cannot be unprocessed. Archive is available where the canonical permissions allow it.'
+          : (isArchived ? 'This Timesheet is archived and read-only. Unarchive it before changing its lifecycle.' : '')
+      ));
   const showUnprocess = !!(
+    lifecycleAuthorityComplete &&
     !isArchived &&
-    !lifecycleAuthorityIncomplete &&
     frameMode === 'view' &&
     hasTs &&
-    unprocessActionApplicable
+    canonicalShowUnprocess === true
   );
-  const canonicalCanUnprocess = !!(
-    !lifecycleActionsBlocked &&
-    !lifecycleAuthorityIncomplete &&
-    unprocessActionApplicable &&
+  const finalCanUnprocess = !!(
+    lifecycleAuthorityComplete &&
+    !isArchived &&
     !hasRetainedFinancialHistory &&
     !locked &&
     !isAuthorised &&
-    backendCanUnprocess !== false &&
-    (backendCanUnprocess === true || localCanUnprocess)
+    showUnprocess &&
+    canonicalCanUnprocess === true &&
+    localCanUnprocess
   );
   const archiveReason = isArchived
     ? (archiveState.archived_reason_code || data.archived_reason_code || det.archived_reason_code || 'FINANCIAL_HISTORY_PREVENTED_DELETE')
@@ -306288,12 +307373,25 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     canUnauthorise: canonicalCanUnauthorise,
     canProcess: canonicalCanProcess,
     canDelete: canonicalCanDelete,
-    canUnprocess: canonicalCanUnprocess,
+    canUnprocess: finalCanUnprocess,
     showUnprocess,
+    unprocess_action_visible: showUnprocess,
     isArchived,
+    is_archived: isArchived,
     readOnly,
+    read_only: readOnly,
     editReadOnly,
     lifecycleActionsBlocked,
+    lifecycleAuthorityComplete,
+    lifecycle_authority_complete: lifecycleAuthorityComplete,
+    permissionStatePatchComplete: permissionStateComplete === true,
+    permission_state_patch_complete: permissionStateComplete === true,
+    priorityBadgesPatchComplete: priorityBadgesComplete === true,
+    priority_badges_patch_complete: priorityBadgesComplete === true,
+    refreshRequired: !lifecycleAuthorityComplete,
+    refresh_required: !lifecycleAuthorityComplete,
+    requiresAffectedRowRefresh: !lifecycleAuthorityComplete,
+    requires_affected_row_refresh: !lifecycleAuthorityComplete,
     readOnlyReason,
     backendReadOnlyMode,
     backendReadOnlyReason,
@@ -306306,17 +307404,14 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     canUnarchive,
     archiveRequired,
     deleteDecision,
-    retainedFinancialHistoryAuthorityPresent,
-    permissionStatePatchComplete,
-    requiresAffectedRowRefresh,
-    lifecycleAuthorityIncomplete,
-    refreshRequired: lifecycleAuthorityIncomplete,
     hasRetainedFinancialHistory,
+    has_retained_financial_history: hasRetainedFinancialHistory,
     unprocessBlockReason,
-    unprocessBlockMessage
+    unprocess_block_reason: unprocessBlockReason,
+    unprocessBlockMessage,
+    unprocess_block_message: unprocessBlockMessage
   };
 }
-
 
 
 
@@ -318285,77 +319380,282 @@ function showTimesheetRetentionUnprocessBlockedInfo(options = {}) {
  */
 
 
-
 async function requestTimesheetArchiveAction(timesheetId, action, options = {}) {
-  const id = String(timesheetId || '').trim();
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const canonicalUuid = (value) => String(value == null ? '' : value).trim().toLowerCase();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const hasOwn = (object, key) => !!(
+    object && typeof object === 'object' && Object.prototype.hasOwnProperty.call(object, key)
+  );
+  const safeText = (value, fallback, maxLength = 500) => {
+    const text = String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+    return (text || fallback).slice(0, maxLength);
+  };
+  const id = canonicalUuid(timesheetId);
   const requestedAction = String(action || '').trim().toUpperCase();
-  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const opts = isPlainObject(options) ? options : {};
   const LOG = (typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : false;
   const L = (...args) => { if (LOG) console.log('[TIMESHEET][ARCHIVE]', ...args); };
   const E = (...args) => { if (LOG) console.error('[TIMESHEET][ARCHIVE]', ...args); };
-  const stateUrl = API(`/api/timesheets/${encodeURIComponent(id)}/archive-state`);
-  const transitionUrl = API(`/api/timesheets/${encodeURIComponent(id)}/archive-transition`);
-  const parseResponse = async (response) => {
+  const safeErrorSummary = (error) => ({
+    code: safeText(error?.code, 'ARCHIVE_REQUEST_FAILED', 120),
+    message: safeText(error?.message, 'Archive request failed.'),
+    timesheet_id: uuidRe.test(canonicalUuid(error?.timesheet_id)) ? canonicalUuid(error.timesheet_id) : id,
+    action: requestedAction,
+    refresh_required: error?.refresh_required === true
+  });
+  const makeSafeError = (message, code, extra = {}) => {
+    const error = new Error(safeText(message, 'Archive request failed.'));
+    error.code = safeText(code, 'ARCHIVE_REQUEST_FAILED', 120);
+    if (Number.isInteger(extra.status) && extra.status >= 0) error.status = extra.status;
+    if (uuidRe.test(canonicalUuid(extra.timesheet_id))) error.timesheet_id = canonicalUuid(extra.timesheet_id);
+    if (extra.action === 'ARCHIVE' || extra.action === 'UNARCHIVE') error.action = extra.action;
+    if (extra.refresh_required === true) error.refresh_required = true;
+    return error;
+  };
+  const failContract = (message, code = 'ARCHIVE_RESPONSE_INVALID') => {
+    throw makeSafeError(message, code, {
+      timesheet_id: id,
+      action: requestedAction,
+      refresh_required: true
+    });
+  };
+  const nullishMetadata = (value) => value == null || String(value).trim() === '';
+  const canonicalUuidArray = (value, fieldName) => {
+    if (!Array.isArray(value)) failContract(`Archive response did not return ${fieldName} as an array.`);
+    const raw = value.map(canonicalUuid);
+    if (raw.some((entry) => !uuidRe.test(entry))) {
+      failContract(`Archive response returned an invalid UUID in ${fieldName}.`);
+    }
+    const canonical = Array.from(new Set(raw)).sort();
+    if (
+      canonical.length !== raw.length ||
+      raw.some((entry, index) => entry !== canonical[index])
+    ) {
+      failContract(`Archive response returned non-canonical ${fieldName}.`);
+    }
+    return canonical;
+  };
+  const arraysEqual = (left, right) => (
+    left.length === right.length && left.every((entry, index) => entry === right[index])
+  );
+  const assertUnarchivedMetadataCleared = (objects, requireCompleteObject = false) => {
+    const metadataFields = [
+      'archived_at_utc',
+      'archived_by_user_id',
+      'archived_by_display',
+      'archived_by_role',
+      'archived_reason_code'
+    ];
+    let completeObjectFound = false;
+    for (const object of objects) {
+      if (!isPlainObject(object)) continue;
+      const hasCompleteMetadataShape = metadataFields.every((fieldName) => hasOwn(object, fieldName));
+      if (hasCompleteMetadataShape) completeObjectFound = true;
+      for (const fieldName of metadataFields) {
+        if (hasOwn(object, fieldName) && !nullishMetadata(object[fieldName])) {
+          failContract(
+            'Unarchive returned stale Archive metadata. Refresh before continuing.',
+            'UNARCHIVE_METADATA_NOT_CLEARED'
+          );
+        }
+      }
+    }
+    if (requireCompleteObject && !completeObjectFound) {
+      failContract(
+        'Unarchive did not return a complete cleared Archive-metadata contract. Refresh before continuing.',
+        'UNARCHIVE_METADATA_NOT_CLEARED'
+      );
+    }
+  };
+  const validateLifecyclePatch = (patch, expectedTimesheetId, expectedArchived, retainedBefore = null) => {
+    if (!isPlainObject(patch)) {
+      failContract('Archive response did not return a canonical lifecycle patch.');
+    }
+    const patchTimesheetId = canonicalUuid(patch.current_timesheet_id || patch.timesheet_id);
+    const rowSignature = String(
+      patch.backend_row_signature ||
+      patch.mutation_row_signature ||
+      patch.row_signature ||
+      patch.expected_row_signature ||
+      ''
+    ).trim();
+    const retainedPresent = hasOwn(patch, 'has_retained_financial_history');
+    const retainedValue = retainedPresent ? patch.has_retained_financial_history : null;
+    const retainedTruth = retainedBefore === true ? true : retainedValue;
+    const actionFlags = isPlainObject(patch.action_flags) ? patch.action_flags : null;
+    if (
+      patchTimesheetId !== expectedTimesheetId ||
+      !rowSignature ||
+      patch.is_archived !== expectedArchived ||
+      patch.permission_state_patch_complete !== true ||
+      patch.priority_badges_patch_complete !== true ||
+      patch.refresh_required !== false ||
+      patch.requires_affected_row_refresh !== false ||
+      (retainedBefore !== true && (!retainedPresent || typeof retainedValue !== 'boolean')) ||
+      (retainedPresent && typeof retainedValue !== 'boolean') ||
+      (retainedBefore === true && retainedPresent && retainedValue !== true) ||
+      typeof patch.read_only !== 'boolean' ||
+      typeof patch.can_archive !== 'boolean' ||
+      typeof patch.can_unarchive !== 'boolean' ||
+      typeof patch.can_unprocess !== 'boolean' ||
+      typeof patch.unprocess_action_visible !== 'boolean' ||
+      !actionFlags ||
+      actionFlags.is_archived !== expectedArchived ||
+      actionFlags.read_only !== patch.read_only ||
+      actionFlags.can_archive !== patch.can_archive ||
+      actionFlags.can_unarchive !== patch.can_unarchive ||
+      actionFlags.can_unprocess !== patch.can_unprocess ||
+      actionFlags.unprocess_action_visible !== patch.unprocess_action_visible ||
+      actionFlags.permission_state_patch_complete !== true ||
+      actionFlags.priority_badges_patch_complete !== true ||
+      (hasOwn(actionFlags, 'has_retained_financial_history') && actionFlags.has_retained_financial_history !== retainedTruth)
+    ) {
+      failContract('Archive response returned an incomplete or inconsistent canonical lifecycle patch.');
+    }
+    if (retainedBefore === true && retainedTruth !== true) {
+      failContract(
+        'Archive response attempted to clear sticky retained-financial-history truth.',
+        'ARCHIVE_RETAINED_HISTORY_REGRESSION'
+      );
+    }
+    if (expectedArchived) {
+      if (
+        !String(patch.archived_at_utc || '').trim() ||
+        !String(patch.archived_reason_code || '').trim() ||
+        patch.can_archive !== false ||
+        patch.can_unarchive !== true ||
+        patch.read_only !== true
+      ) {
+        failContract('Archive response returned incomplete archived lifecycle metadata.');
+      }
+    } else {
+      assertUnarchivedMetadataCleared([patch], true);
+      if (patch.can_unarchive !== false) {
+        failContract('Unarchive response left the Unarchive action enabled for an active Timesheet.');
+      }
+    }
+    return {
+      ...patch,
+      timesheet_id: patchTimesheetId,
+      current_timesheet_id: patchTimesheetId,
+      backend_row_signature: rowSignature,
+      mutation_row_signature: rowSignature,
+      row_signature: rowSignature,
+      expected_row_signature: rowSignature,
+      is_archived: expectedArchived,
+      has_retained_financial_history: retainedTruth,
+      action_flags: {
+        ...actionFlags,
+        has_retained_financial_history: retainedTruth
+      }
+    };
+  };
+  const validateState = (state) => {
+    if (!isPlainObject(state) || state.ok !== true) {
+      failContract('Archive state returned an invalid success response.');
+    }
+    const requestedTimesheetId = canonicalUuid(state.requested_timesheet_id || id);
+    const currentTimesheetId = canonicalUuid(state.current_timesheet_id);
+    const stateSignature = String(state.backend_row_signature || state.row_signature || '').trim();
+    const removalKind = String(state.removal_kind || '').trim().toUpperCase();
+    const allowedRemovalKinds = new Set([
+      'STANDARD_DELETE',
+      'WEEKLY_CHAIN_DELETE_PARENT',
+      'WEEKLY_MANUAL_ADJUSTMENT_DELETE'
+    ]);
+    if (
+      requestedTimesheetId !== id ||
+      !uuidRe.test(currentTimesheetId) ||
+      !stateSignature ||
+      !allowedRemovalKinds.has(removalKind) ||
+      typeof state.is_archived !== 'boolean' ||
+      typeof state.can_archive !== 'boolean' ||
+      typeof state.can_unarchive !== 'boolean' ||
+      String(state.policy_x_authority_scope || '').trim().toUpperCase() !== 'PRE_DRAFT_LIVE_TRUTH' ||
+      state.policy_x_economic_mutation !== false
+    ) {
+      failContract(
+        !stateSignature
+          ? 'The current Timesheet lifecycle signature is unavailable. Refresh before continuing.'
+          : 'Archive state is incomplete or does not match the current Timesheet.',
+        !stateSignature ? 'EXPECTED_ROW_SIGNATURE_REQUIRED' : 'ARCHIVE_STATE_INCOMPLETE'
+      );
+    }
+    const timesheetIds = canonicalUuidArray(state.timesheet_ids, 'timesheet_ids');
+    const contractWeekIds = canonicalUuidArray(state.contract_week_ids, 'contract_week_ids');
+    if (!timesheetIds.includes(currentTimesheetId)) {
+      failContract('Archive state does not contain the current Timesheet in its removal unit.');
+    }
+    const lifecyclePatch = validateLifecyclePatch(
+      state.lifecycle_patch,
+      currentTimesheetId,
+      state.is_archived,
+      null
+    );
+    if (
+      lifecyclePatch.backend_row_signature !== stateSignature ||
+      lifecyclePatch.can_archive !== state.can_archive ||
+      lifecyclePatch.can_unarchive !== state.can_unarchive ||
+      lifecyclePatch.has_retained_financial_history !== state.has_retained_financial_history
+    ) {
+      failContract('Archive state and its lifecycle patch are inconsistent.');
+    }
+    if (!state.is_archived) {
+      assertUnarchivedMetadataCleared([state, lifecyclePatch], true);
+    }
+    return {
+      ...state,
+      requested_timesheet_id: requestedTimesheetId,
+      current_timesheet_id: currentTimesheetId,
+      expected_timesheet_id: currentTimesheetId,
+      removal_kind: removalKind,
+      backend_row_signature: stateSignature,
+      row_signature: stateSignature,
+      timesheet_ids: timesheetIds,
+      contract_week_ids: contractWeekIds,
+      lifecycle_patch: lifecyclePatch,
+      has_retained_financial_history: lifecyclePatch.has_retained_financial_history,
+      policy_x_authority_scope: 'PRE_DRAFT_LIVE_TRUTH',
+      policy_x_economic_mutation: false
+    };
+  };
+  const parseResponse = async (response, fallbackMessage) => {
     const text = await response.text().catch(() => '');
     let payload = null;
     try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
     if (!response.ok) {
-      const error = new Error(String(payload?.message || payload?.error || text || 'Archive request failed'));
-      error.status = response.status;
-      error.code = payload?.error_code || payload?.code || null;
-      error.payload = payload;
-      error.refresh_required = payload?.refresh_required === true;
-      throw error;
+      const status = Number.isInteger(response.status) ? response.status : 0;
+      const message = safeText(
+        isPlainObject(payload) ? (payload.message || payload.error) : '',
+        fallbackMessage
+      );
+      const code = safeText(
+        isPlainObject(payload) ? (payload.error_code || payload.code) : '',
+        'ARCHIVE_REQUEST_FAILED',
+        120
+      );
+      throw makeSafeError(message, code, {
+        status,
+        timesheet_id: id,
+        action: requestedAction,
+        refresh_required: isPlainObject(payload) && payload.refresh_required === true
+      });
     }
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-      const error = new Error('Archive request returned an invalid response.');
-      error.code = 'ARCHIVE_RESPONSE_INVALID';
-      throw error;
+    if (!isPlainObject(payload)) {
+      failContract('Archive request returned an invalid response.');
     }
     return payload;
   };
-  const hasOwn = (value, key) => (
-    !!value &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    Object.prototype.hasOwnProperty.call(value, key)
-  );
-  const parseBooleanSignal = (value) => {
-    if (value === true) return true;
-    if (value === false) return false;
-    if (value == null) return null;
-    const normalised = String(value).trim().toLowerCase();
-    if (normalised === 'true' || normalised === '1' || normalised === 'yes' || normalised === 'y' || normalised === 'on') return true;
-    if (normalised === 'false' || normalised === '0' || normalised === 'no' || normalised === 'n' || normalised === 'off') return false;
-    return null;
-  };
-  const pickPermissionSignal = (...values) => {
-    let sawTrue = false;
-    for (const value of values) {
-      const parsed = parseBooleanSignal(value);
-      if (parsed === false) return false;
-      if (parsed === true) sawTrue = true;
-    }
-    return sawTrue ? true : null;
-  };
-  const pickRiskSignal = (...values) => {
-    let sawFalse = false;
-    for (const value of values) {
-      const parsed = parseBooleanSignal(value);
-      if (parsed === true) return true;
-      if (parsed === false) sawFalse = true;
-    }
-    return sawFalse ? false : null;
-  };
   const confirmAction = async (state) => {
     const isArchive = requestedAction === 'ARCHIVE';
-    const unitCount = Array.isArray(state?.timesheet_ids) ? state.timesheet_ids.length : 1;
+    const unitCount = state.timesheet_ids.length;
     const unitText = unitCount > 1 ? `${unitCount} Timesheets in this weekly unit` : 'this Timesheet';
-    const archivedBy = String(state?.archived_by_display || '').trim();
-    const archivedAt = String(state?.archived_at_utc || '').trim();
+    const archivedBy = String(state.archived_by_display || '').trim();
+    const archivedAt = String(state.archived_at_utc || '').trim();
     const reasonText = isArchive
-      ? `Archive ${unitText}? The Timesheet financial history will be retained and the Timesheet will move out of active Timesheet views. This does not delete or rewrite any financial record.`
-      : `Unarchive ${unitText}? This restores the Timesheet to active lifecycle views. Archive and Unarchive change lifecycle metadata only; they do not alter financial history or active Advance state.${archivedBy || archivedAt ? `\n\nArchived${archivedBy ? ` by ${archivedBy}` : ''}${archivedAt ? ` on ${archivedAt}` : ''}.` : ''}`;
+      ? `Archive ${unitText}? Archive changes lifecycle metadata only and moves the Timesheet out of active lifecycle views. It does not clear or change any active Advance, payment workflow, Timesheet economics, paid history or source financial record.`
+      : `Unarchive ${unitText}? Unarchive changes lifecycle metadata only and restores the Timesheet to active lifecycle views. It does not create, restore, clear or change any active Advance, payment workflow, Timesheet economics, paid history or source financial record.${archivedBy || archivedAt ? `\n\nArchived${archivedBy ? ` by ${archivedBy}` : ''}${archivedAt ? ` on ${archivedAt}` : ''}.` : ''}`;
 
     if (typeof openUiConfirmModal === 'function') {
       const result = await openUiConfirmModal({
@@ -318374,222 +319674,303 @@ async function requestTimesheetArchiveAction(timesheetId, action, options = {}) 
     }
     return window.confirm(reasonText);
   };
+  const applyCanonicalPatch = (patch, source) => {
+    if (typeof applyTimesheetLifecyclePatchToModal === 'function') {
+      applyTimesheetLifecyclePatchToModal(window.modalCtx || null, patch, {
+        source,
+        action: requestedAction,
+        allowExistingSignature: false
+      });
+    }
+  };
 
-  if (!id) throw new Error('requestTimesheetArchiveAction: timesheetId is required');
+  if (!uuidRe.test(id)) {
+    throw makeSafeError(
+      'requestTimesheetArchiveAction: timesheetId must be a valid UUID',
+      'TIMESHEET_ID_INVALID',
+      { action: requestedAction }
+    );
+  }
   if (requestedAction !== 'ARCHIVE' && requestedAction !== 'UNARCHIVE') {
-    throw new Error('requestTimesheetArchiveAction: action must be ARCHIVE or UNARCHIVE');
+    throw makeSafeError(
+      'requestTimesheetArchiveAction: action must be ARCHIVE or UNARCHIVE',
+      'INVALID_ARCHIVE_ACTION',
+      { timesheet_id: id }
+    );
   }
 
-  L('loading fresh state', { id, action: requestedAction });
+  const stateUrl = API(`/api/timesheets/${encodeURIComponent(id)}/archive-state`);
+  const transitionUrl = API(`/api/timesheets/${encodeURIComponent(id)}/archive-transition`);
+  L('loading fresh state', { timesheet_id: id, action: requestedAction });
   let state;
   try {
-    state = await parseResponse(await authFetch(stateUrl, { method: 'GET' }));
+    state = validateState(await parseResponse(
+      await authFetch(stateUrl, { method: 'GET' }),
+      'Failed to load the Timesheet Archive state.'
+    ));
   } catch (error) {
-    E('state load failed', error);
+    E('state load failed', safeErrorSummary(error));
     throw error;
   }
 
   if (requestedAction === 'ARCHIVE') {
     if (state.is_archived === true) {
-      return { ok: true, action: 'ARCHIVE', already_archived: true, state, lifecycle_patch: state.lifecycle_patch || null };
+      try {
+        applyCanonicalPatch(state.lifecycle_patch, 'timesheet_archive_state');
+      } catch (error) {
+        E('state patch failed', safeErrorSummary(error));
+        throw makeSafeError(
+          'The Timesheet is archived, but its canonical lifecycle patch could not be applied. Refresh the Timesheet.',
+          'ARCHIVE_LIFECYCLE_PATCH_APPLY_FAILED',
+          { timesheet_id: state.current_timesheet_id, action: requestedAction, refresh_required: true }
+        );
+      }
+      return {
+        ok: true,
+        action: 'ARCHIVE',
+        already_archived: true,
+        state,
+        lifecycle_patch: state.lifecycle_patch,
+        policy_x_economic_mutation: false
+      };
     }
     if (state.can_archive !== true) {
       const blockerMessage = Array.isArray(state.blockers) && state.blockers.length
-        ? String(state.blockers[0]?.message || state.blockers[0]?.code || 'Archive is blocked.')
+        ? safeText(state.blockers[0]?.message || state.blockers[0]?.code, 'Archive is blocked.')
         : (state.decision === 'PERMANENT_DELETE'
           ? 'This Timesheet has no retained financial history requiring Archive. Use Delete instead.'
           : 'This Timesheet cannot be archived in its current state.');
-      const error = new Error(blockerMessage);
-      error.code = state.decision === 'PERMANENT_DELETE' ? 'ARCHIVE_NOT_REQUIRED' : 'ARCHIVE_BLOCKED';
-      error.payload = state;
-      throw error;
+      throw makeSafeError(
+        blockerMessage,
+        state.decision === 'PERMANENT_DELETE' ? 'ARCHIVE_NOT_REQUIRED' : 'ARCHIVE_BLOCKED',
+        { timesheet_id: id, action: requestedAction }
+      );
     }
   } else {
     if (state.is_archived !== true) {
-      return { ok: true, action: 'UNARCHIVE', already_unarchived: true, state, lifecycle_patch: state.lifecycle_patch || null };
+      try {
+        applyCanonicalPatch(state.lifecycle_patch, 'timesheet_unarchive_state');
+      } catch (error) {
+        E('state patch failed', safeErrorSummary(error));
+        throw makeSafeError(
+          'The Timesheet is active, but its canonical lifecycle patch could not be applied. Refresh the Timesheet.',
+          'ARCHIVE_LIFECYCLE_PATCH_APPLY_FAILED',
+          { timesheet_id: state.current_timesheet_id, action: requestedAction, refresh_required: true }
+        );
+      }
+      return {
+        ok: true,
+        action: 'UNARCHIVE',
+        already_unarchived: true,
+        state,
+        lifecycle_patch: state.lifecycle_patch,
+        policy_x_economic_mutation: false
+      };
     }
     if (state.can_unarchive !== true) {
-      const error = new Error('This Timesheet cannot currently be unarchived.');
-      error.code = 'UNARCHIVE_BLOCKED';
-      error.payload = state;
-      throw error;
+      throw makeSafeError(
+        'This Timesheet cannot currently be unarchived.',
+        'UNARCHIVE_BLOCKED',
+        { timesheet_id: id, action: requestedAction }
+      );
     }
-  }
-
-  const currentTimesheetId = String(state.current_timesheet_id || id).trim();
-  const currentRowSignature = String(state.backend_row_signature || state.row_signature || '').trim();
-  if (!currentTimesheetId || !currentRowSignature) {
-    const error = new Error('The current Timesheet lifecycle signature is unavailable. Refresh the Timesheet before continuing.');
-    error.code = 'TIMESHEET_LIFECYCLE_REFRESH_REQUIRED';
-    error.refresh_required = true;
-    error.payload = state;
-    throw error;
   }
 
   const confirmed = await confirmAction(state);
-  if (!confirmed) return { ok: false, cancelled: true, action: requestedAction, state };
+  if (!confirmed) {
+    return {
+      ok: false,
+      cancelled: true,
+      action: requestedAction,
+      state,
+      policy_x_economic_mutation: false
+    };
+  }
 
+  const expectedTimesheetId = canonicalUuid(state.current_timesheet_id);
+  const expectedRowSignature = String(state.backend_row_signature || state.row_signature || '').trim();
+  if (!uuidRe.test(expectedTimesheetId) || !expectedRowSignature) {
+    failContract('The current Timesheet identity or lifecycle signature is unavailable. Refresh before continuing.');
+  }
+  const requestedRemovalKind = String(opts.removal_kind || state.removal_kind || 'STANDARD_DELETE').trim().toUpperCase();
+  const allowedRemovalKinds = new Set([
+    'STANDARD_DELETE',
+    'WEEKLY_CHAIN_DELETE_PARENT',
+    'WEEKLY_MANUAL_ADJUSTMENT_DELETE'
+  ]);
+  if (!allowedRemovalKinds.has(requestedRemovalKind) || requestedRemovalKind !== state.removal_kind) {
+    failContract('The Archive removal-unit kind changed. Refresh before continuing.');
+  }
   const body = {
     action: requestedAction,
-    removal_kind: String(state.removal_kind || opts.removal_kind || 'STANDARD_DELETE').trim().toUpperCase(),
-    expected_timesheet_id: currentTimesheetId,
-    expected_row_signature: currentRowSignature,
-    reason: String(opts.reason || (requestedAction === 'ARCHIVE' ? 'FINANCIAL_HISTORY_PREVENTED_DELETE' : 'USER_CONFIRMED_UNARCHIVE')).trim()
+    removal_kind: requestedRemovalKind,
+    expected_timesheet_id: expectedTimesheetId,
+    expected_row_signature: expectedRowSignature,
+    reason: requestedAction === 'ARCHIVE'
+      ? 'FINANCIAL_HISTORY_PREVENTED_DELETE'
+      : 'USER_CONFIRMED_UNARCHIVE'
   };
 
-  L('submitting transition', { id, action: requestedAction, body });
+  L('submitting transition', {
+    timesheet_id: id,
+    action: requestedAction,
+    expected_timesheet_id: expectedTimesheetId,
+    removal_kind: body.removal_kind
+  });
   let result;
   try {
     result = await parseResponse(await authFetch(transitionUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body)
-    }));
+    }), 'Failed to change the Timesheet Archive state.');
   } catch (error) {
-    E('transition failed', error);
+    E('transition failed', safeErrorSummary(error));
     if (error?.refresh_required === true) {
       try { await renderAll(); } catch {}
     }
     throw error;
   }
 
-  const resultAction = String(result.action || '').trim().toUpperCase();
-  const resultIsArchived = result.is_archived === true;
-  const resultMatchesRequestedState = requestedAction === 'ARCHIVE'
-    ? resultIsArchived
-    : result.is_archived === false;
+  const expectedArchived = requestedAction === 'ARCHIVE';
+  const resultRequestedTimesheetId = canonicalUuid(result.requested_timesheet_id);
+  const resultCurrentTimesheetId = canonicalUuid(result.current_timesheet_id);
+  const resultRemovalKind = String(result.removal_kind || '').trim().toUpperCase();
   if (
     result.ok !== true ||
-    resultAction !== requestedAction ||
-    result.policy_x_economic_mutation !== false ||
-    !resultMatchesRequestedState
+    String(result.action || '').trim().toUpperCase() !== requestedAction ||
+    resultRequestedTimesheetId !== id ||
+    resultCurrentTimesheetId !== expectedTimesheetId ||
+    resultRemovalKind !== requestedRemovalKind ||
+    result.is_archived !== expectedArchived
   ) {
-    const error = new Error('The Archive transition returned incomplete or unsafe lifecycle authority. Refresh the Timesheet before continuing.');
-    error.code = 'ARCHIVE_RESPONSE_INVALID';
-    error.refresh_required = true;
-    error.payload = result;
-    throw error;
+    failContract(
+      'Archive transition result does not match the confirmed action and current Timesheet state.',
+      'ARCHIVE_TRANSITION_INVALID'
+    );
+  }
+  if (
+    String(result.policy_x_authority_scope || '').trim().toUpperCase() !== 'PRE_DRAFT_LIVE_TRUTH' ||
+    result.policy_x_economic_mutation !== false
+  ) {
+    failContract(
+      'Archive transition did not return explicit Policy X non-mutation proof.',
+      'ARCHIVE_POLICY_X_CONTRACT_FAILED'
+    );
+  }
+  const prohibitedTrueFields = [
+    'advance_cleared',
+    'advance_removed',
+    'advance_restored',
+    'payment_override_mutated',
+    'source_records_mutated',
+    'economic_mutation'
+  ];
+  if (prohibitedTrueFields.some((fieldName) => result[fieldName] === true)) {
+    failContract(
+      'Archive transition reported a prohibited non-metadata mutation.',
+      'ARCHIVE_POLICY_X_CONTRACT_FAILED'
+    );
+  }
+  const resultTimesheetIds = canonicalUuidArray(result.timesheet_ids, 'timesheet_ids');
+  const resultContractWeekIds = canonicalUuidArray(result.contract_week_ids, 'contract_week_ids');
+  if (
+    !arraysEqual(resultTimesheetIds, state.timesheet_ids) ||
+    !arraysEqual(resultContractWeekIds, state.contract_week_ids) ||
+    !resultTimesheetIds.includes(expectedTimesheetId)
+  ) {
+    failContract(
+      'Archive transition affected-unit evidence changed after confirmation. Refresh before continuing.',
+      'ARCHIVE_TRANSITION_INVALID'
+    );
+  }
+  if (!isPlainObject(result.archive_state)) {
+    failContract('Archive transition did not return canonical Archive metadata.', 'ARCHIVE_TRANSITION_INVALID');
+  }
+  const resultArchiveStateCurrentId = canonicalUuid(
+    result.archive_state.current_timesheet_id || result.archive_state.timesheet_id || expectedTimesheetId
+  );
+  if (
+    resultArchiveStateCurrentId !== expectedTimesheetId ||
+    result.archive_state.is_archived !== expectedArchived
+  ) {
+    failContract('Archive transition returned inconsistent Archive metadata.', 'ARCHIVE_TRANSITION_INVALID');
   }
 
-  const lifecyclePatch = (
-    result.lifecycle_patch && typeof result.lifecycle_patch === 'object' && !Array.isArray(result.lifecycle_patch)
-  ) ? result.lifecycle_patch : null;
-  if (lifecyclePatch && typeof applyTimesheetLifecyclePatchToModal === 'function') {
-    try {
-      applyTimesheetLifecyclePatchToModal(window.modalCtx || null, lifecyclePatch, {
-        source: requestedAction === 'ARCHIVE' ? 'timesheet_archive' : 'timesheet_unarchive',
+  const lifecyclePatch = validateLifecyclePatch(
+    result.lifecycle_patch,
+    expectedTimesheetId,
+    expectedArchived,
+    state.has_retained_financial_history === true
+  );
+  if (
+    result.can_archive !== lifecyclePatch.can_archive ||
+    result.can_unarchive !== lifecyclePatch.can_unarchive ||
+    result.read_only !== lifecyclePatch.read_only
+  ) {
+    failContract('Archive transition result and lifecycle permissions are inconsistent.');
+  }
+  if (!expectedArchived) {
+    assertUnarchivedMetadataCleared([
+      result,
+      result.archive_state,
+      lifecyclePatch
+    ], true);
+  }
+
+  try {
+    applyCanonicalPatch(
+      lifecyclePatch,
+      requestedAction === 'ARCHIVE' ? 'timesheet_archive' : 'timesheet_unarchive'
+    );
+  } catch (error) {
+    E('modal lifecycle patch failed', safeErrorSummary(error));
+    throw makeSafeError(
+      'The Archive change committed, but the canonical lifecycle patch could not be applied. Refresh the Timesheet.',
+      'ARCHIVE_LIFECYCLE_PATCH_APPLY_FAILED',
+      {
+        timesheet_id: expectedTimesheetId,
         action: requestedAction,
-        allowExistingSignature: false
-      });
-    } catch (error) {
-      E('modal lifecycle patch failed', error);
-    }
+        refresh_required: true
+      }
+    );
   }
 
   try {
     if (window.modalCtx && typeof window.modalCtx === 'object') {
-      const finalIsArchived = result.is_archived === true;
-      const finalPatch = (
-        result.lifecycle_patch && typeof result.lifecycle_patch === 'object' && !Array.isArray(result.lifecycle_patch)
-      ) ? result.lifecycle_patch : {};
-      const returnedArchiveState = (
-        result.archive_state && typeof result.archive_state === 'object' && !Array.isArray(result.archive_state)
-      ) ? result.archive_state : {};
-      const priorArchiveState = (
-        window.modalCtx.timesheetArchiveState &&
-        typeof window.modalCtx.timesheetArchiveState === 'object' &&
-        !Array.isArray(window.modalCtx.timesheetArchiveState)
-      ) ? window.modalCtx.timesheetArchiveState : {};
-
-      const permissionStatePatchComplete = pickPermissionSignal(
-        finalPatch.permission_state_patch_complete,
-        finalPatch.action_flags?.permission_state_patch_complete
-      );
-      const requiresAffectedRowRefresh = pickRiskSignal(
-        finalPatch.requires_affected_row_refresh,
-        permissionStatePatchComplete === true ? null : true
-      );
-      const canArchive = permissionStatePatchComplete === true &&
-        pickPermissionSignal(finalPatch.can_archive, finalPatch.action_flags?.can_archive, result.can_archive, returnedArchiveState.can_archive) === true;
-      const canUnarchive = permissionStatePatchComplete === true &&
-        pickPermissionSignal(finalPatch.can_unarchive, finalPatch.action_flags?.can_unarchive, result.can_unarchive, returnedArchiveState.can_unarchive) === true;
-      const finalReadOnly = pickRiskSignal(
-        finalPatch.read_only,
-        finalPatch.action_flags?.read_only,
-        result.read_only,
-        returnedArchiveState.read_only,
-        permissionStatePatchComplete === true ? null : true
-      ) === true;
-      const retainedAuthorityPresent = (
-        hasOwn(finalPatch, 'has_retained_financial_history') ||
-        hasOwn(finalPatch.action_flags, 'has_retained_financial_history') ||
-        hasOwn(returnedArchiveState, 'has_retained_financial_history') ||
-        hasOwn(state, 'has_retained_financial_history') ||
-        hasOwn(priorArchiveState, 'has_retained_financial_history')
-      );
-      const retainedFinancialHistory = pickRiskSignal(
-        finalPatch.has_retained_financial_history,
-        finalPatch.action_flags?.has_retained_financial_history,
-        returnedArchiveState.has_retained_financial_history,
-        state?.has_retained_financial_history,
-        priorArchiveState.has_retained_financial_history
-      );
-      const archiveRequired = pickRiskSignal(
-        finalPatch.archive_required,
-        finalPatch.action_flags?.archive_required,
-        returnedArchiveState.archive_required,
-        state?.archive_required,
-        priorArchiveState.archive_required
-      ) === true;
-
-      const nextArchiveState = {
-        ...(state || {}),
-        ...priorArchiveState,
-        ...returnedArchiveState,
-        is_archived: finalIsArchived,
-        archived: finalIsArchived,
-        archived_at_utc: finalIsArchived
-          ? (finalPatch.archived_at_utc || returnedArchiveState.archived_at_utc || result.archived_at_utc || null)
-          : null,
-        archived_by_user_id: finalIsArchived
-          ? (finalPatch.archived_by_user_id || returnedArchiveState.archived_by_user_id || result.archived_by_user_id || null)
-          : null,
-        archived_by_display: finalIsArchived
-          ? (finalPatch.archived_by_display || returnedArchiveState.archived_by_display || result.archived_by_display || null)
-          : null,
-        archived_by_role: finalIsArchived
-          ? (finalPatch.archived_by_role || returnedArchiveState.archived_by_role || result.archived_by_role || null)
-          : null,
-        archived_reason_code: finalIsArchived
-          ? (finalPatch.archived_reason_code || returnedArchiveState.archived_reason_code || result.archived_reason_code || null)
-          : null,
-        current_timesheet_id: finalPatch.current_timesheet_id || result.current_timesheet_id || currentTimesheetId,
-        backend_row_signature: finalPatch.backend_row_signature || finalPatch.row_signature || result.backend_row_signature || null,
-        row_signature: finalPatch.row_signature || finalPatch.backend_row_signature || result.row_signature || null,
-        read_only: finalReadOnly,
-        can_archive: !finalIsArchived && canArchive,
-        can_unarchive: finalIsArchived && canUnarchive,
-        archive_required: archiveRequired,
-        delete_decision: finalPatch.delete_decision || result.delete_decision || state.delete_decision || priorArchiveState.delete_decision || null,
-        permission_state_patch_complete: permissionStatePatchComplete === true,
-        requires_affected_row_refresh: requiresAffectedRowRefresh === true,
-        refresh_required: finalPatch.refresh_required === true || permissionStatePatchComplete !== true,
-        action_flags: (
-          finalPatch.action_flags &&
-          typeof finalPatch.action_flags === 'object' &&
-          !Array.isArray(finalPatch.action_flags)
-        ) ? { ...finalPatch.action_flags } : {}
+      const retainedTruth = state.has_retained_financial_history === true || lifecyclePatch.has_retained_financial_history === true;
+      window.modalCtx.timesheetArchiveState = {
+        ...state,
+        ...(isPlainObject(result.archive_state) ? result.archive_state : {}),
+        ...lifecyclePatch,
+        requested_timesheet_id: id,
+        current_timesheet_id: expectedTimesheetId,
+        expected_timesheet_id: expectedTimesheetId,
+        timesheet_ids: resultTimesheetIds,
+        contract_week_ids: resultContractWeekIds,
+        is_archived: expectedArchived,
+        can_archive: lifecyclePatch.can_archive,
+        can_unarchive: lifecyclePatch.can_unarchive,
+        archive_required: lifecyclePatch.archive_required === true,
+        delete_decision: lifecyclePatch.delete_decision || state.delete_decision || null,
+        has_retained_financial_history: retainedTruth,
+        lifecycle_patch: {
+          ...lifecyclePatch,
+          has_retained_financial_history: retainedTruth
+        },
+        permission_state_patch_complete: true,
+        priority_badges_patch_complete: true,
+        refresh_required: false,
+        requires_affected_row_refresh: false,
+        policy_x_economic_mutation: false
       };
-      if (retainedAuthorityPresent) {
-        nextArchiveState.has_retained_financial_history = retainedFinancialHistory === true;
-      }
-
-      window.modalCtx.timesheetArchiveState = nextArchiveState;
       window.modalCtx.timesheetDeletePreview = null;
     }
-  } catch {}
+  } catch (error) {
+    E('modal Archive state reconciliation failed', safeErrorSummary(error));
+  }
 
-  try { await renderAll(); } catch (error) { E('authoritative list refresh failed', error); }
+  try { await renderAll(); } catch (error) { E('authoritative list refresh failed', safeErrorSummary(error)); }
   try {
     if (window.__toast) {
       window.__toast(requestedAction === 'ARCHIVE' ? 'Timesheet archived.' : 'Timesheet unarchived.');
@@ -318600,8 +319981,14 @@ async function requestTimesheetArchiveAction(timesheetId, action, options = {}) 
     ...result,
     ok: true,
     action: requestedAction,
+    current_timesheet_id: expectedTimesheetId,
+    is_archived: expectedArchived,
+    timesheet_ids: resultTimesheetIds,
+    contract_week_ids: resultContractWeekIds,
     state_before: state,
-    lifecycle_patch: lifecyclePatch
+    lifecycle_patch: lifecyclePatch,
+    policy_x_authority_scope: 'PRE_DRAFT_LIVE_TRUTH',
+    policy_x_economic_mutation: false
   };
 }
 
