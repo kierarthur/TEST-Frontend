@@ -307117,6 +307117,45 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     ts,
     cw
   ].filter(isPlainObject);
+  const lifecyclePermissionSources = [];
+  const lifecyclePermissionSourceSet = new Set();
+  const addLifecyclePermissionSource = (candidate) => {
+    if (!isPlainObject(candidate) || lifecyclePermissionSourceSet.has(candidate)) return;
+    lifecyclePermissionSourceSet.add(candidate);
+    lifecyclePermissionSources.push(candidate);
+  };
+  const addLifecyclePermissionContainer = (candidate) => {
+    if (!isPlainObject(candidate)) return;
+    addLifecyclePermissionSource(candidate);
+    addLifecyclePermissionSource(candidate.actions);
+    addLifecyclePermissionSource(candidate.action_flags);
+    addLifecyclePermissionSource(candidate.footer_action_hints);
+    addLifecyclePermissionSource(candidate.priority_badge_hints);
+    addLifecyclePermissionSource(candidate.row_patch);
+  };
+  [
+    archiveState,
+    archiveState.lifecycle_patch,
+    archiveState.action_flags,
+    archiveState.actions,
+    archiveState.footer_action_hints,
+    archiveState.row_patch,
+    isPlainObject(mc?.timesheetLifecycleState) ? mc.timesheetLifecycleState : null,
+    isPlainObject(mc?.timesheetLifecyclePatch) ? mc.timesheetLifecyclePatch : null,
+    isPlainObject(det.lifecycle_patch) ? det.lifecycle_patch : null,
+    isPlainObject(det.action_flags) ? det.action_flags : null,
+    isPlainObject(det.actions) ? det.actions : null,
+    isPlainObject(det.footer_action_hints) ? det.footer_action_hints : null,
+    isPlainObject(det.row_patch) ? det.row_patch : null,
+    isPlainObject(data.lifecycle_patch) ? data.lifecycle_patch : null,
+    isPlainObject(data.action_flags) ? data.action_flags : null,
+    isPlainObject(data.actions) ? data.actions : null,
+    isPlainObject(data.footer_action_hints) ? data.footer_action_hints : null,
+    isPlainObject(data.row_patch) ? data.row_patch : null,
+    isPlainObject(ts.action_flags) ? ts.action_flags : null,
+    isPlainObject(cw.action_flags) ? cw.action_flags : null
+  ].forEach(addLifecyclePermissionContainer);
+
   const lifecycleCompletenessSources = [
     ...lifecycleSources,
     ...lifecycleSources.map((container) => (
@@ -307155,7 +307194,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     return null;
   };
   const readLifecycleFalseWins = (...keys) => {
-    const values = lifecycleBooleanValues(lifecycleSources, keys);
+    const values = lifecycleBooleanValues(lifecyclePermissionSources, keys);
     if (values.some((value) => value === false)) return false;
     if (values.some((value) => value === true)) return true;
     return null;
@@ -342170,6 +342209,7 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
  * Complete final replacement extracted from and verified against the integrated final main.js.
  */
 
+
 function renderTimesheetOverviewTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OVERVIEW]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -343790,6 +343830,11 @@ function renderTimesheetOverviewTab(ctx) {
 
   const dpKind = String((dp && dp.kind) ? dp.kind : '').toUpperCase();
   const dpEligible = (dp && typeof dp.eligible === 'boolean') ? dp.eligible : false;
+  const dpDecision = String((dp && dp.decision) ? dp.decision : '').toUpperCase();
+  const dpArchiveRequired = !!(
+    dpDecision === 'ARCHIVE_REQUIRED' ||
+    boolish(dp && dp.archive_required)
+  );
 
   const deletePolicyBadgeHtml = (() => {
     if (manualAdditionalForOverview && dpKind === 'WEEKLY_CHAIN_DELETE_PARENT') {
@@ -343824,24 +343869,39 @@ function renderTimesheetOverviewTab(ctx) {
     }
 
     if (dpKind === 'WEEKLY_CHAIN_DELETE_PARENT') {
-      if (dpEligible) {
-        const t = 'This is the weekly parent; it can be deleted (and will delete related import adjustments) when the chain is safe.';
-        return `<span class="pill pill-ok" style="font-weight:600;" title="${enc(t)}">${enc('Parent Adjustment – Can Delete')}</span>`;
-      } else {
-        const reasons =
-          (dp && Array.isArray(dp.blocked_reasons) && dp.blocked_reasons.length)
-            ? dp.blocked_reasons
-                .map(r => (r && r.message) ? String(r.message) : '')
-                .filter(Boolean)
-                .join(' ')
-            : '';
+      const weeklyParentLabel = isAdjustment ? 'Parent Adjustment' : 'Weekly timesheet';
 
-        const t = reasons
-          ? `Can't delete yet. ${reasons}`
-          : "Can't delete yet. This parent (or a related adjustment) is locked, invoiced, paid, or otherwise not eligible.";
-
-        return `<span class="pill pill-bad" style="font-weight:600;" title="${enc(t)}">${enc("Parent Adjustment – Can't delete yet")}</span>`;
+      if (dpArchiveRequired) {
+        const t = isAdjustment
+          ? 'This parent adjustment has retained financial history and cannot be permanently deleted. Use Archive instead.'
+          : 'This weekly timesheet has retained financial history and cannot be permanently deleted. Use Archive instead.';
+        return `<span class="pill pill-warn" style="font-weight:600;" title="${enc(t)}">${enc(`${weeklyParentLabel} – Archive required`)}</span>`;
       }
+
+      if (dpEligible) {
+        const t = isAdjustment
+          ? 'This is an adjustment parent and can be deleted when the complete weekly chain is safe.'
+          : 'This weekly timesheet can be deleted when the complete weekly chain is safe.';
+        return `<span class="pill pill-ok" style="font-weight:600;" title="${enc(t)}">${enc(`${weeklyParentLabel} – Can Delete`)}</span>`;
+      }
+
+      const reasonRows = [
+        ...(dp && Array.isArray(dp.blocked_reasons) ? dp.blocked_reasons : []),
+        ...(dp && Array.isArray(dp.blockers) ? dp.blockers : [])
+      ];
+      const reasons = Array.from(new Set(
+        reasonRows
+          .map(r => (r && r.message) ? String(r.message).trim() : '')
+          .filter(Boolean)
+      )).join(' ');
+
+      const t = reasons
+        ? `Can't delete yet. ${reasons}`
+        : (isAdjustment
+            ? "Can't delete yet. This adjustment parent or a related row is locked, invoiced, paid, or otherwise not eligible."
+            : "Can't delete yet. This weekly timesheet or a related row is locked, invoiced, paid, or otherwise not eligible.");
+
+      return `<span class="pill pill-bad" style="font-weight:600;" title="${enc(t)}">${enc(`${weeklyParentLabel} – Can't delete yet`)}</span>`;
     }
 
     return '';
@@ -343889,8 +343949,6 @@ function renderTimesheetOverviewTab(ctx) {
     </div>
   `;
 }
-
-
 
 
 async function handleHrRotaFileDrop(file) {
