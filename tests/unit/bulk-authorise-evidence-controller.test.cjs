@@ -34,6 +34,27 @@ function badges(...positiveKinds) {
   }));
 }
 
+function thumbnailButton(item) {
+  const attributes = {
+    'data-attached-id': item.evidence_id || item.id || ''
+  };
+  const classes = new Set(['btn', 'btn-outline']);
+  return {
+    style: {},
+    __listeners: {},
+    getAttribute(name) { return attributes[name] || ''; },
+    setAttribute(name, value) { attributes[name] = String(value); },
+    addEventListener(type, handler) { this.__listeners[type] = handler; },
+    classList: {
+      toggle(name, enabled) {
+        if (enabled) classes.add(name);
+        else classes.delete(name);
+      },
+      contains(name) { return classes.has(name); }
+    }
+  };
+}
+
 function makeState(rows) {
   const activeRow = {
     row_key: 'timesheet:eduardo',
@@ -90,10 +111,11 @@ function makeState(rows) {
   };
 }
 
-function install(state) {
+function install(state, options = {}) {
   const timers = [];
   const listeners = {};
-  const root = { dataset: {}, addEventListener() {} };
+  const thumbnailButtons = Array.isArray(options.thumbnailButtons) ? options.thumbnailButtons : [];
+  const root = { dataset: {}, addEventListener() {}, querySelectorAll() { return []; } };
   const stage = { textContent: 'Preview is loading…', innerHTML: '' };
   let rerenders = 0;
   const document = {
@@ -103,11 +125,15 @@ function install(state) {
       if (id === 'bulkProcessPreviewStage') return stage;
       return null;
     },
-    querySelectorAll() { return []; }
+    querySelectorAll(selector) {
+      return String(selector).includes('[data-bp-preview-attached-thumb="1"]') ? thumbnailButtons : [];
+    }
   };
   const win = {
     document,
     modalCtx: { entity: 'bulk-authorise', bulkAuthoriseState: state },
+    BROKER_BASE_URL: options.brokerBaseUrl || '',
+    authFetch: options.authFetch,
     renderBulkAuthoriseShell() { return '<div id="bulkAuthoriseWorkbenchRoot"></div>'; },
     async refreshBulkAuthoriseActiveContext() { return true; },
     async bindBulkAuthoriseEvidencePane() { return true; },
@@ -198,6 +224,29 @@ test('a thumbnail selection remains canonical without rerendering the whole moda
   assert.equal(state.evidence_pane_state.__preview_load_requested_target_key, '');
 });
 
+test('the active thumbnail border moves with the selected evidence item', async () => {
+  const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const accommodationButton = thumbnailButton(accommodation);
+  const travelButton = thumbnailButton(travel);
+  const state = makeState([accommodation, travel]);
+  const harness = install(state, { thumbnailButtons: [accommodationButton, travelButton] });
+
+  harness.controller.sanitize('initial');
+  harness.controller.renderAttachedSelection();
+
+  assert.equal(accommodationButton.style.border, '2px solid var(--accent,#6ea8fe)');
+  assert.equal(travelButton.style.border, '1px solid var(--line)');
+  assert.equal(accommodationButton.getAttribute('aria-selected'), 'true');
+
+  await harness.controller.selectFromButton(travelButton);
+
+  assert.equal(accommodationButton.style.border, '1px solid var(--line)');
+  assert.equal(travelButton.style.border, '2px solid var(--accent,#6ea8fe)');
+  assert.equal(accommodationButton.getAttribute('aria-selected'), 'false');
+  assert.equal(travelButton.getAttribute('aria-selected'), 'true');
+});
+
 test('Queue preview remains separate and Attached restores the row selection and badges', async () => {
   const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
   const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
@@ -230,6 +279,57 @@ test('Queue preview remains separate and Attached restores the row selection and
   assert.equal(pane.active_attached_id, travel.evidence_id);
   assert.equal(pane.active_attached_item.kind, 'TRAVEL');
   assert.equal(pane.__preview_target_key, harness.api.selectionKey(travel));
+});
+
+test('all dataset row badges hydrate from evidence context before the corrected render', async () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
+  const state = makeState([travel]);
+  state.dataset.rows[0].evidence_badges = badges('TIMESHEET');
+  state.dataset.rows[0].has_any_evidence = true;
+  state.dataset.rows[0].attached_evidence_count = 1;
+  state.active_row.evidence_badges = badges('TIMESHEET');
+  state.dataset.rows.push({
+    ...clone(state.dataset.rows[0]),
+    row_key: 'timesheet:second',
+    timesheet_id: 'second',
+    current_timesheet_id: 'second',
+    requested_timesheet_id: 'second',
+    expected_timesheet_id: 'second',
+    evidence_badges: badges('TIMESHEET')
+  });
+
+  const authFetch = async (url) => {
+    const rowEvidence = String(url).includes('/second/') ? [accommodation] : [travel];
+    return {
+      ok: true,
+      async text() {
+        return JSON.stringify({
+          ok: true,
+          profile: 'evidence',
+          context_profile: 'evidence',
+          evidence_loaded: true,
+          evidence: rowEvidence
+        });
+      }
+    };
+  };
+  const harness = install(state, {
+    brokerBaseUrl: 'https://test-worker.invalid',
+    authFetch
+  });
+
+  const hydration = harness.controller.hydrateDatasetBadges();
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), []);
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[1].evidence_badges), String), []);
+  const result = await hydration;
+
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), ['TRAVEL']);
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[1].evidence_badges), String), ['ACCOMMODATION']);
+  assert.equal(result.succeeded, 2);
+  assert.equal(result.failed, 0);
+  assert.equal(state.__bulk_authorise_badge_hydration_complete, true);
+  assert.equal(harness.rerenders, 1);
 });
 
 test('an unresolved loading state becomes an explicit retryable error', () => {

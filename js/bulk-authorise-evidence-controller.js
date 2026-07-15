@@ -126,12 +126,23 @@
   const positiveBadgeKinds = (badges) => (Array.isArray(badges) ? badges : [])
     .filter((badge) => badge && (badge.present === true || badge.has_evidence === true || Number(badge.count || 0) > 0))
     .map((badge) => evidenceKindOf(badge));
+  const badgeStateFromRows = (rows) => ({
+    evidence_badges: buildBadges(Array.isArray(rows) ? rows : []),
+    has_any_evidence: Array.isArray(rows) && rows.length > 0,
+    attached_evidence_count: Array.isArray(rows) ? rows.length : 0
+  });
 
   class BulkAuthoriseEvidenceController {
     constructor(state) {
       this.state = state;
       this.datasetRef = null;
       this.datasetBadgeTruth = new Map();
+      this.datasetInitialBadgeTruth = new Map();
+      this.datasetPendingBadgeIdentities = new Set();
+      this.badgeHydrationDatasetRef = null;
+      this.badgeHydrationPromise = null;
+      this.badgeHydrationEpoch = 0;
+      this.badgeHydrationAbortControllers = [];
       this.rowsByIdentity = new Map();
       this.selectedByIdentity = new Map();
       this.selectionEpoch = 0;
@@ -186,17 +197,199 @@
     captureDatasetTruth() {
       const dataset = this.state && this.state.dataset;
       if (dataset === this.datasetRef) return;
+      for (const controller of this.badgeHydrationAbortControllers) {
+        try { controller?.abort?.(); } catch {}
+      }
+      this.badgeHydrationAbortControllers = [];
+      this.badgeHydrationEpoch += 1;
+      this.badgeHydrationDatasetRef = null;
+      this.badgeHydrationPromise = null;
       this.datasetRef = dataset || null;
       this.datasetBadgeTruth.clear();
+      this.datasetInitialBadgeTruth.clear();
+      this.datasetPendingBadgeIdentities.clear();
       for (const row of this.datasetRows()) {
         const key = rowKeyOf(row);
         if (!key) continue;
-        this.datasetBadgeTruth.set(key, {
+        const initial = {
           evidence_badges: clone(Array.isArray(row.evidence_badges) ? row.evidence_badges : []),
           has_any_evidence: row.has_any_evidence === true,
-          attached_evidence_count: Number(row.attached_evidence_count || 0) || 0
-        });
+          attached_evidence_count: Number(row.attached_evidence_count || 0) || 0,
+          artifact_hints: {
+            primary_artifact_id: row.primary_artifact_id ?? null,
+            primary_artifact_kind: row.primary_artifact_kind ?? null,
+            primary_artifact_storage_key: row.primary_artifact_storage_key ?? null,
+            manual_pdf_r2_key: row.manual_pdf_r2_key ?? null,
+            manualPdfR2Key: row.manualPdfR2Key ?? null,
+            uploaded_pdf_r2_key: row.uploaded_pdf_r2_key ?? null,
+            uploadedPdfR2Key: row.uploadedPdfR2Key ?? null
+          }
+        };
+        this.datasetBadgeTruth.set(key, clone(initial));
+        this.datasetInitialBadgeTruth.set(key, clone(initial));
       }
+    }
+
+    writeDatasetBadgeState(identity, badgeState, options = {}) {
+      if (!identity || !badgeState) return;
+      const initial = this.datasetInitialBadgeTruth.get(identity) || null;
+      for (const row of this.datasetRows()) {
+        if (rowKeyOf(row) !== identity) continue;
+        row.evidence_badges = clone(badgeState.evidence_badges);
+        row.has_any_evidence = badgeState.has_any_evidence === true;
+        row.attached_evidence_count = Number(badgeState.attached_evidence_count || 0) || 0;
+        if (options.pending === true) {
+          row.primary_artifact_id = null;
+          row.primary_artifact_kind = null;
+          row.primary_artifact_storage_key = null;
+          row.manual_pdf_r2_key = null;
+          row.manualPdfR2Key = null;
+          row.uploaded_pdf_r2_key = null;
+          row.uploadedPdfR2Key = null;
+        } else if (options.restoreArtifactHints === true && initial?.artifact_hints) {
+          Object.assign(row, clone(initial.artifact_hints));
+        }
+      }
+    }
+
+    prepareDatasetBadgeHydration(rows) {
+      const pendingState = badgeStateFromRows([]);
+      for (const row of rows) {
+        const identity = rowKeyOf(row);
+        const timesheetId = trim(row?.current_timesheet_id || row?.timesheet_id || row?.requested_timesheet_id);
+        if (!identity || !timesheetId) continue;
+        this.datasetPendingBadgeIdentities.add(identity);
+        this.datasetBadgeTruth.set(identity, clone(pendingState));
+        this.writeDatasetBadgeState(identity, pendingState, { pending: true });
+      }
+    }
+
+    extractEvidencePayload(payload) {
+      if (!payload || typeof payload !== 'object') return [];
+      const sources = [payload.evidence, payload.details?.evidence, payload.state?.evidence].filter(Array.isArray);
+      const rows = [];
+      const seen = new Set();
+      for (const source of sources) {
+        for (const raw of source) {
+          const item = normaliseEvidence(raw);
+          if (!item) continue;
+          const key = itemKey(item);
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          rows.push(item);
+        }
+      }
+      return rows;
+    }
+
+    async hydrateDatasetBadgeRow(row, datasetRef, epoch) {
+      const identity = rowKeyOf(row);
+      const timesheetId = trim(row?.current_timesheet_id || row?.timesheet_id || row?.requested_timesheet_id);
+      const brokerBaseUrl = trim(win.BROKER_BASE_URL).replace(/\/$/, '');
+      if (!identity || !timesheetId || !brokerBaseUrl || typeof win.authFetch !== 'function') return false;
+
+      const pairs = [
+        ['row_key', identity],
+        ['timesheet_id', timesheetId],
+        ['current_timesheet_id', trim(row?.current_timesheet_id || row?.timesheet_id || timesheetId)],
+        ['requested_timesheet_id', trim(row?.requested_timesheet_id || row?.timesheet_id || timesheetId)],
+        ['expected_timesheet_id', trim(row?.expected_timesheet_id || row?.current_timesheet_id || row?.timesheet_id || timesheetId)],
+        ['contract_week_id', trim(row?.contract_week_id)],
+        ['profile', 'evidence'],
+        ['context_profile', 'evidence'],
+        ['include_evidence', 'true'],
+        ['include_compare', 'false'],
+        ['include_import_source_rows', 'false']
+      ].filter(([, value]) => trim(value));
+      const query = pairs.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&');
+      const endpoint = `${brokerBaseUrl}/api/timesheets/${encodeURIComponent(timesheetId)}/bulk-authorise-context?${query}`;
+      const abortController = typeof win.AbortController === 'function' ? new win.AbortController() : null;
+      if (abortController) this.badgeHydrationAbortControllers.push(abortController);
+
+      try {
+        const response = await win.authFetch(endpoint, abortController ? { signal: abortController.signal } : undefined);
+        const text = await response.text().catch(() => '');
+        if (!response.ok) return false;
+        const payload = text ? JSON.parse(text) : {};
+        if (!payload || typeof payload !== 'object' || payload.ok === false || payload.soft_failure === true || payload.evidence_refresh_failed === true) return false;
+        if (datasetRef !== this.datasetRef || epoch !== this.badgeHydrationEpoch) return false;
+
+        const evidenceRows = this.extractEvidencePayload(payload);
+        const badgeState = badgeStateFromRows(evidenceRows);
+        this.datasetBadgeTruth.set(identity, clone(badgeState));
+        this.datasetPendingBadgeIdentities.delete(identity);
+        this.writeDatasetBadgeState(identity, badgeState, { restoreArtifactHints: evidenceRows.length > 0 });
+        return true;
+      } catch {
+        return false;
+      } finally {
+        if (abortController) {
+          this.badgeHydrationAbortControllers = this.badgeHydrationAbortControllers.filter((candidate) => candidate !== abortController);
+        }
+      }
+    }
+
+    hydrateDatasetBadges() {
+      if (!this.isTimesheets()) return Promise.resolve({ applied: false, reason: 'non-timesheets' });
+      this.captureDatasetTruth();
+      const datasetRef = this.datasetRef;
+      if (!datasetRef) return Promise.resolve({ applied: false, reason: 'no-dataset' });
+      if (this.badgeHydrationDatasetRef === datasetRef && this.badgeHydrationPromise) return this.badgeHydrationPromise;
+      if (this.badgeHydrationDatasetRef === datasetRef && this.state.__bulk_authorise_badge_hydration_complete === true) {
+        return Promise.resolve({ applied: true, cached: true });
+      }
+
+      const rows = this.datasetRows().filter((row) => trim(row?.current_timesheet_id || row?.timesheet_id || row?.requested_timesheet_id));
+      if (!rows.length) return Promise.resolve({ applied: false, reason: 'no-timesheet-rows' });
+      const epoch = ++this.badgeHydrationEpoch;
+      this.badgeHydrationDatasetRef = datasetRef;
+      this.state.__bulk_authorise_badge_hydration_complete = false;
+      this.state.__bulk_authorise_badge_hydration_pending = true;
+      this.prepareDatasetBadgeHydration(rows);
+
+      const work = (async () => {
+        let cursor = 0;
+        let succeeded = 0;
+        let failed = 0;
+        const worker = async () => {
+          while (datasetRef === this.datasetRef && epoch === this.badgeHydrationEpoch) {
+            const index = cursor;
+            cursor += 1;
+            if (index >= rows.length) return;
+            const row = rows[index];
+            const identity = rowKeyOf(row);
+            const ok = await this.hydrateDatasetBadgeRow(row, datasetRef, epoch);
+            if (datasetRef !== this.datasetRef || epoch !== this.badgeHydrationEpoch) return;
+            if (ok) {
+              succeeded += 1;
+            } else {
+              failed += 1;
+              const initial = clone(this.datasetInitialBadgeTruth.get(identity) || null);
+              if (initial) {
+                this.datasetBadgeTruth.set(identity, clone(initial));
+                this.writeDatasetBadgeState(identity, initial, { restoreArtifactHints: true });
+              }
+              this.datasetPendingBadgeIdentities.delete(identity);
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(4, rows.length) }, () => worker()));
+        if (datasetRef !== this.datasetRef || epoch !== this.badgeHydrationEpoch) return { applied: false, stale: true };
+
+        this.state.__bulk_authorise_badge_hydration_pending = false;
+        this.state.__bulk_authorise_badge_hydration_complete = true;
+        this.state.__bulk_authorise_badge_hydration_succeeded = succeeded;
+        this.state.__bulk_authorise_badge_hydration_failed = failed;
+        if (typeof win.rerenderBulkAuthoriseWorkbench === 'function' && this.isLive()) {
+          await win.rerenderBulkAuthoriseWorkbench(this.state, '[TS][BULK-AUTH][EVIDENCE-BADGES]');
+          if (datasetRef === this.datasetRef && epoch === this.badgeHydrationEpoch) this.settle('dataset-badge-hydration-complete');
+        }
+        return { applied: true, succeeded, failed };
+      })();
+      this.badgeHydrationPromise = work.finally(() => {
+        if (datasetRef === this.badgeHydrationDatasetRef) this.badgeHydrationPromise = null;
+      });
+      return this.badgeHydrationPromise;
     }
 
     authoritativeEvidence() {
@@ -554,8 +747,19 @@
       const pane = this.state.evidence_pane_state || {};
       const active = selectionKey(pane.active_attached_item);
       const buttons = doc.querySelectorAll('#bulkAuthoriseWorkbenchRoot [data-bp-preview-attached-thumb="1"]');
+      const identity = rowIdentityOf(this.state);
+      const rows = this.rowsByIdentity.get(identity) || [];
+      let index = 0;
       for (const button of buttons) {
-        const selected = trim(button.getAttribute('data-attached-selection-key')) === active;
+        const item = rows[index] || null;
+        index += 1;
+        const buttonSelection = selectionKey(item) || trim(button.getAttribute('data-attached-selection-key'));
+        if (item) {
+          try { button.setAttribute('data-attached-selection-key', buttonSelection); } catch {}
+          try { button.setAttribute('data-file-key', evidenceFileKeyOf(item)); } catch {}
+          try { button.setAttribute('data-storage-key', evidenceFileKeyOf(item)); } catch {}
+        }
+        const selected = !!buttonSelection && buttonSelection === active;
         if (button.__bulkAuthoriseEvidencePointerBound !== true) {
           button.__bulkAuthoriseEvidencePointerBound = true;
           button.addEventListener('pointerdown', (event) => {
@@ -570,6 +774,8 @@
         try { button.setAttribute('aria-pressed', selected ? 'true' : 'false'); } catch {}
         try { button.setAttribute('aria-selected', selected ? 'true' : 'false'); } catch {}
         try { button.classList.toggle('is-active', selected); } catch {}
+        try { button.style.border = selected ? '2px solid var(--accent,#6ea8fe)' : '1px solid var(--line)'; } catch {}
+        try { button.style.background = selected ? 'rgba(110,168,254,0.12)' : 'var(--panel,#0f1115)'; } catch {}
       }
       const root = doc.getElementById('bulkAuthoriseWorkbenchRoot');
       const canQueryRoot = root && typeof root.querySelectorAll === 'function';
@@ -835,7 +1041,10 @@
     win.openBulkAuthoriseWorkbench = async function openBulkAuthoriseWorkbenchWithEvidenceController(...args) {
       const state = await legacy.open.apply(this, args);
       const controller = controllerFor(state);
-      if (controller) controller.settle('after-open');
+      if (controller) {
+        controller.settle('after-open');
+        void controller.hydrateDatasetBadges();
+      }
       return state;
     };
   }
@@ -846,6 +1055,7 @@
       if (controller) {
         controller.installStateBoundary();
         controller.sanitize('before-shell-render');
+        void controller.hydrateDatasetBadges();
       }
       return legacy.renderShell.call(this, state, ...args);
     };
