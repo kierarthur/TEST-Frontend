@@ -10085,6 +10085,7 @@ function getFinanceCaseActionAvailability(caseRow = {}) {
   };
 }
 
+
 function renderBankingLoansSnoozesTab() {
   const st = bankingGetState();
   const enc = (typeof escapeHtml === 'function')
@@ -10109,7 +10110,8 @@ function renderBankingLoansSnoozesTab() {
       unresolved_finance_cases_count: 0,
       stale_finance_cases_count: 0,
       finance_cases_with_active_snooze_count: 0,
-      timesheet_snoozes_count: 0
+      timesheet_snoozes_count: 0,
+      timesheet_expense_snoozes_count: 0
     },
     finance_cases: [],
     timesheet_snoozes: []
@@ -10266,7 +10268,7 @@ function renderBankingLoansSnoozesTab() {
   const pillClassForStatus = (statusRaw) => {
     const s = String(statusRaw || '').trim().toUpperCase();
     if (s === 'ACTIVE' || s === 'PAID' || s === 'SENT' || s === 'QUEUED' || s === 'SAFE' || s === 'READY') return 'pill-ok';
-    if (s === 'PAUSED' || s === 'PENDING' || s === 'INDEFINITE_SNOOZE' || s === 'DATED_SNOOZE' || s === 'STALE' || s === 'EXPIRED') return 'pill-warn';
+    if (s === 'PAUSED' || s === 'PENDING' || s === 'INDEFINITE_SNOOZE' || s === 'DATED_SNOOZE' || s === 'STALE' || s === 'EXPIRED' || s === 'SOURCE_REPLACED' || s === 'SOURCE_CHANGED' || s === 'SOURCE_UNAVAILABLE') return 'pill-warn';
     if (s === 'CANCELLED' || s === 'FAILED' || s === 'ERROR' || s === 'WRITTEN_OFF' || s === 'BLOCKED' || s === 'CLEARED' || s === 'CLEARED_DELETED_TIMESHEET' || s === 'CLEARED_DELETED_SEGMENT') return 'pill-bad';
     return 'pill';
   };
@@ -10405,6 +10407,10 @@ function renderBankingLoansSnoozesTab() {
       return 'Active snooze';
     }
 
+    if (lifecycle === 'SOURCE_REPLACED') return 'Expense source replaced — unsnooze required';
+    if (lifecycle === 'SOURCE_CHANGED') return 'Expense changed — unsnooze required';
+    if (lifecycle === 'SOURCE_UNAVAILABLE') return 'Expense source unavailable — unsnooze required';
+    if (lifecycle === 'CANCELLED') return 'Cancelled Snooze';
     if (lifecycle === 'EXPIRED') return 'Expired snooze';
     if (clearReason === 'DELETED_TIMESHEET') return 'Cleared — deleted timesheet';
     if (clearReason === 'DELETED_SEGMENT') return 'Cleared — deleted segment';
@@ -10416,6 +10422,10 @@ function renderBankingLoansSnoozesTab() {
     const clearReason = String(row?.clear_reason || '').trim().toUpperCase();
     if (clearReason === 'DELETED_TIMESHEET') return 'The linked timesheet no longer exists.';
     if (clearReason === 'DELETED_SEGMENT') return 'The linked segment no longer exists on the current timesheet.';
+    if (clearReason === 'TIMESHEET_REPLACED') return 'The Timesheet was replaced. Clear this expense Snooze and use the current Timesheet expense line if it still needs Snoozing.';
+    if (clearReason === 'EXPENSE_SOURCE_CHANGED') return 'The exact expense amount or source basis changed. Clear this Snooze and review the current expense line.';
+    if (clearReason === 'EXPENSE_SOURCE_UNAVAILABLE') return 'The exact expense source is no longer available. This Snooze remains clearable by its Snooze ID.';
+    if (clearReason === 'CANCELLED' || clearReason === 'SUPERSEDED_BY_CURRENT_EXPENSE_SOURCE') return 'This Snooze was cancelled or superseded.';
     if (clearReason === 'EXPIRED') return 'This dated snooze has expired.';
     if (clearReason === 'USER_CLEARED') return 'This snooze was cleared manually.';
     return '';
@@ -10425,6 +10435,7 @@ function renderBankingLoansSnoozesTab() {
     const kind = String(row?.row_kind || '').trim().toUpperCase();
     if (kind === 'WHOLE_TIMESHEET') return 'Whole timesheet';
     if (kind === 'SEGMENT') return 'Segment';
+    if (kind === 'TIMESHEET_EXPENSE') return 'Timesheet expense';
     return 'Timesheet';
   };
 
@@ -10488,31 +10499,44 @@ function renderBankingLoansSnoozesTab() {
   const renderTimesheetSnoozeActions = (row) => {
     const actionFlags = (row && row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
     const lifecycle = String(row?.lifecycle_state || '').trim().toUpperCase();
+    const rowKind = String(row?.row_kind || '').trim().toUpperCase();
     const snoozeId = String(row?.snooze_id || '').trim();
     const timesheetId = String(row?.timesheet_id || '').trim();
+    const sourceRef = String(row?.source_ref || '').trim().toLowerCase();
+    const activeLike = ['ACTIVE', 'SOURCE_REPLACED', 'SOURCE_CHANGED', 'SOURCE_UNAVAILABLE'].includes(lifecycle);
 
-    if (!snoozeId || lifecycle !== 'ACTIVE') {
-      return `<span class="mini" style="opacity:.7;">—</span>`;
-    }
+    if (!snoozeId || !activeLike) return `<span class="mini" style="opacity:.7;">—</span>`;
 
+    const canClear = actionFlags.can_unsnooze === true || actionFlags.can_clear_snooze === true;
+    const canAmend = lifecycle === 'ACTIVE' && (
+      actionFlags.can_amend_date === true ||
+      actionFlags.can_change_to_indefinite === true ||
+      actionFlags.can_change_to_dated === true
+    );
     return `
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        ${(actionFlags.can_unsnooze || actionFlags.can_clear_snooze) ? `
+        ${canClear ? `
           <button
             type="button"
             class="btn btn-sm btn-outline"
             data-action="banking:finance:clearTimesheetSnooze"
             data-snooze-id="${enc(snoozeId)}"
             data-timesheet-id="${enc(timesheetId)}"
+            data-source-ref="${enc(sourceRef)}"
+            data-row-kind="${enc(rowKind)}"
           >Unsnooze</button>
         ` : ''}
-        <button
-          type="button"
-          class="btn btn-sm btn-outline"
-          data-action="banking:finance:editTimesheetSnooze"
-          data-snooze-id="${enc(snoozeId)}"
-          data-timesheet-id="${enc(timesheetId)}"
-        >Amend snooze</button>
+        ${canAmend ? `
+          <button
+            type="button"
+            class="btn btn-sm btn-outline"
+            data-action="banking:finance:editTimesheetSnooze"
+            data-snooze-id="${enc(snoozeId)}"
+            data-timesheet-id="${enc(timesheetId)}"
+            data-source-ref="${enc(sourceRef)}"
+            data-row-kind="${enc(rowKind)}"
+          >Amend snooze</button>
+        ` : ''}
       </div>
     `;
   };
@@ -10546,6 +10570,10 @@ function renderBankingLoansSnoozesTab() {
       <div class="card" style="padding:10px;">
         <div class="mini" style="opacity:.8;">Timesheet Snoozes</div>
         <div class="mono" style="font-size:24px;font-weight:800;">${enc(String(Number(summary.timesheet_snoozes_count || 0)))}</div>
+      </div>
+      <div class="card" style="padding:10px;">
+        <div class="mini" style="opacity:.8;">Expense Snoozes</div>
+        <div class="mono" style="font-size:24px;font-weight:800;">${enc(String(Number(summary.timesheet_expense_snoozes_count || 0)))}</div>
       </div>
       <div class="card" style="padding:10px;">
         <div class="mini" style="opacity:.8;">Mixed / blocked / stale</div>
@@ -10765,7 +10793,48 @@ function renderBankingLoansSnoozesTab() {
     `;
   }).join('');
 
-  const timesheetRowsHtml = timesheetSnoozes.map((row) => {
+  const activeExpenseSnoozeGroups = (() => {
+    const groups = new Map();
+    for (const row of timesheetSnoozes) {
+      if (String(row?.row_kind || '').trim().toUpperCase() !== 'TIMESHEET_EXPENSE') continue;
+      const lifecycle = String(row?.lifecycle_state || '').trim().toUpperCase();
+      const snoozeId = String(row?.snooze_id || '').trim();
+      const candidateId = String(row?.candidate_id || '').trim();
+      const timesheetId = String(row?.current_timesheet_id || row?.timesheet_id || row?.original_timesheet_id || '').trim();
+      if (!candidateId || !timesheetId || !snoozeId || !['ACTIVE', 'SOURCE_REPLACED', 'SOURCE_CHANGED', 'SOURCE_UNAVAILABLE'].includes(lifecycle)) continue;
+      const key = `${candidateId}|${timesheetId}`;
+      if (!groups.has(key)) groups.set(key, { candidate_id: candidateId, timesheet_id: timesheetId, rows: [] });
+      groups.get(key).rows.push(row);
+    }
+    return Array.from(groups.values()).filter((group) => group.rows.length > 0);
+  })();
+
+  const expenseGroupRowsHtml = activeExpenseSnoozeGroups.map((group) => {
+    const first = group.rows[0] || {};
+    const candidateLabel = String(first.candidate_display_name || first.candidate_tms_ref || group.candidate_id).trim();
+    const labels = group.rows.map((row) => String(row.expense_label || row.expense_code || 'Expense').trim()).filter(Boolean);
+    return `
+      <tr style="background:rgba(148,163,184,.08);">
+        <td><strong>${enc(candidateLabel || 'Candidate')}</strong></td>
+        <td colspan="3">
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <strong>Expense Snooze group — Timesheet ${enc(group.timesheet_id)}</strong>
+            <div class="mini" style="opacity:.8;">${enc(String(group.rows.length))} active expense Snooze(s): ${enc(labels.join(', '))}. Worked-time segments, whole-Timesheet Snoozes, and finance Snoozes are excluded.</div>
+          </div>
+        </td>
+        <td>
+          <button type="button" class="btn btn-sm btn-outline"
+            data-action="banking:finance:clearAllTimesheetExpenses"
+            data-candidate-id="${enc(group.candidate_id)}"
+            data-timesheet-id="${enc(group.timesheet_id)}"
+            data-expense-count="${enc(String(group.rows.length))}"
+          >Unsnooze all expenses</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  const timesheetRowsHtml = expenseGroupRowsHtml + timesheetSnoozes.map((row) => {
     const candidateLabel = String(row.candidate_display_name || row.candidate_tms_ref || '—').trim() || '—';
     const clientLabel = String(row.client_name || '—').trim() || '—';
     const referenceNumber = String(row.reference_number || '').trim();
@@ -10779,12 +10848,26 @@ function renderBankingLoansSnoozesTab() {
     const segmentCount = Number(row.segment_count || 0);
     const payAmount = Number(row.pay_amount_ex_vat || 0);
     const segmentRows = Array.isArray(row.segment_rows) ? row.segment_rows : [];
-    const hasExpandableDetail = segmentRows.length > 0;
+    const isExpenseRow = String(row?.row_kind || '').trim().toUpperCase() === 'TIMESHEET_EXPENSE';
+    const expenseLabel = String(row.expense_label || row.expense_code || 'Expense').trim() || 'Expense';
+    const expenseCode = String(row.expense_code || '').trim().toUpperCase();
+    const sourceRef = String(row.source_ref || '').trim();
+    const replacementSourceRef = String(row.replacement_expense_source_ref || '').trim();
+    const hasExpandableDetail = !isExpenseRow && segmentRows.length > 0;
     const summaryLabel = rowKind === 'WHOLE_TIMESHEET'
       ? `Show underlying segments (${segmentCount})`
       : 'Show segment detail';
 
-    const detailsHtml = hasExpandableDetail ? `
+    const detailsHtml = isExpenseRow ? `
+      <div class="card" style="padding:8px;margin-top:8px;">
+        <div class="mini" style="display:flex;flex-direction:column;gap:4px;">
+          <div>Expense: <strong>${enc(expenseLabel)}</strong>${expenseCode ? ` • Code <span class="mono">${enc(expenseCode)}</span>` : ''}</div>
+          <div>Exact source: <span class="mono">${enc(sourceRef || 'Unavailable')}</span></div>
+          ${replacementSourceRef ? `<div>Current replacement source: <span class="mono">${enc(replacementSourceRef)}</span></div>` : ''}
+          ${row.expense_source_basis_fingerprint ? `<div>Source fingerprint: <span class="mono">${enc(String(row.expense_source_basis_fingerprint))}</span></div>` : ''}
+        </div>
+      </div>
+    ` : (hasExpandableDetail ? `
       <details style="margin-top:8px;">
         <summary class="mini" style="cursor:pointer;user-select:none;">
           ${enc(summaryLabel)}
@@ -10799,7 +10882,7 @@ function renderBankingLoansSnoozesTab() {
       <div class="mini" style="opacity:.75;margin-top:8px;">
         ${enc(row.lifecycle_state === 'ACTIVE' ? 'No segment detail is available.' : 'No current segment detail is available because this snooze is now history.')}
       </div>
-    `;
+    `);
 
     return `
       <tr>
@@ -10820,9 +10903,10 @@ function renderBankingLoansSnoozesTab() {
               ${originalTimesheetId && originalTimesheetId !== timesheetIdLabel ? `<div>Original timesheet: <span class="mono">${enc(originalTimesheetId)}</span></div>` : ''}
               ${rowKind === 'SEGMENT' ? `<div>Segment: <span class="mono">${enc(segmentIdLabel)}</span></div>` : ''}
               ${rowKind === 'SEGMENT' && segmentStableKey ? `<div>Stable key: <span class="mono">${enc(segmentStableKey)}</span></div>` : ''}
+              ${isExpenseRow ? `<div>Expense: <strong>${enc(expenseLabel)}</strong>${expenseCode ? ` • <span class="mono">${enc(expenseCode)}</span>` : ''}</div>` : ''}
               <div>Reference: <span class="mono">${enc(referenceNumber || '—')}</span></div>
-              ${rowKind === 'WHOLE_TIMESHEET' ? `<div>Week ending: <span class="mono">${enc(fmtDate(row.week_ending_date))}</span></div>` : ''}
-              <div>${rowKind === 'WHOLE_TIMESHEET' ? 'Segments' : 'Segment rows'}: <span class="mono">${enc(String(segmentCount))}</span></div>
+              ${(rowKind === 'WHOLE_TIMESHEET' || isExpenseRow) ? `<div>Week ending: <span class="mono">${enc(fmtDate(row.week_ending_date))}</span></div>` : ''}
+              ${!isExpenseRow ? `<div>${rowKind === 'WHOLE_TIMESHEET' ? 'Segments' : 'Segment rows'}: <span class="mono">${enc(String(segmentCount))}</span></div>` : ''}
               <div>Pay amount: <span class="mono">£${enc(fmtMoney(payAmount))}</span></div>
             </div>
             ${detailsHtml}
@@ -11044,6 +11128,11 @@ function renderBankingLoansSnoozesTab() {
     </div>
   `;
 }
+
+
+
+
+
 async function openBankingFinanceReportExportModal(seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -43773,6 +43862,542 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
   };
 
 
+  const timesheetExpenseSourceRefRe = /^timesheet-expense:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):(expenses|travel|accommodation|other|mileage):([0-9a-f]{32})$/i;
+  const friendlyExpenseLabel = (codeRaw) => {
+    const code = String(codeRaw || '').trim().toUpperCase();
+    return ({ EXPENSES: 'Expenses', TRAVEL: 'Travel', ACCOMMODATION: 'Accommodation', OTHER: 'Other', MILEAGE: 'Mileage' }[code] || 'Expense');
+  };
+  const normalizeExpenseSetItem = (itemLike, modeRaw = 'SNOOZE') => {
+    const item = isPlainObject(itemLike) ? itemLike : {};
+    const itemIdentity = isPlainObject(item.snooze_identity) ? item.snooze_identity : {};
+    const sourceRef = String(item.source_ref || itemIdentity.source_ref || '').trim().toLowerCase();
+    const match = sourceRef.match(timesheetExpenseSourceRefRe);
+    if (!match) return null;
+
+    const normalizedMode = String(modeRaw || 'SNOOZE').trim().toUpperCase() === 'CLEAR' ? 'CLEAR' : 'SNOOZE';
+    const candidateId = String(item.candidate_id || src.candidate_id || '').trim();
+    const sourceTimesheetId = String(match[1] || '').trim();
+    const actionTimesheetId = String(
+      item.current_timesheet_id ||
+      item.currentTimesheetId ||
+      item.timesheet_id ||
+      item.timesheetId ||
+      src.timesheet_id ||
+      src.timesheetId ||
+      itemIdentity.current_timesheet_id ||
+      itemIdentity.currentTimesheetId ||
+      itemIdentity.timesheet_id ||
+      sourceTimesheetId ||
+      ''
+    ).trim();
+    const originalTimesheetId = String(
+      item.original_timesheet_id ||
+      item.originalTimesheetId ||
+      item.stored_timesheet_id ||
+      item.storedTimesheetId ||
+      item.source_timesheet_id ||
+      item.sourceTimesheetId ||
+      itemIdentity.timesheet_id ||
+      sourceTimesheetId ||
+      ''
+    ).trim();
+    const snoozeId = String(item.snooze_id || item.active_snooze_id || '').trim() || null;
+    const sourceIdentityMatches = !!originalTimesheetId && originalTimesheetId.toLowerCase() === sourceTimesheetId.toLowerCase();
+    const currentIdentityMatches = !!actionTimesheetId && actionTimesheetId.toLowerCase() === sourceTimesheetId.toLowerCase();
+
+    if (!candidateId || !actionTimesheetId) return null;
+    if (normalizedMode === 'SNOOZE' && !currentIdentityMatches) return null;
+    if (normalizedMode === 'CLEAR' && (!snoozeId || (!currentIdentityMatches && !sourceIdentityMatches))) return null;
+
+    const bookingId = String(item.booking_id || itemIdentity.booking_id || '').trim();
+    const matchedExpenseCode = String(match[2] || '').trim().toUpperCase();
+    const providedExpenseCode = String(item.expense_code || itemIdentity.expense_code || '').trim().toUpperCase();
+    if (providedExpenseCode && providedExpenseCode !== matchedExpenseCode) return null;
+    const expenseCode = matchedExpenseCode;
+    const matchedFingerprint = String(match[3] || '').trim().toLowerCase();
+    const providedFingerprint = String(item.expense_source_basis_fingerprint || item.source_basis_fingerprint || itemIdentity.source_basis_fingerprint || '').trim().toLowerCase();
+    if (providedFingerprint && providedFingerprint !== matchedFingerprint) return null;
+    const fingerprint = matchedFingerprint;
+    const amount = Number(item.amount_ex_vat ?? item.pay_amount_ex_vat ?? item.preview_amount_ex_vat ?? null);
+    return {
+      candidate_id: candidateId,
+      timesheet_id: actionTimesheetId,
+      source_timesheet_id: sourceTimesheetId,
+      original_timesheet_id: originalTimesheetId || sourceTimesheetId,
+      booking_id: bookingId || null,
+      segment_id: null,
+      segment_stable_key: null,
+      source_ref: sourceRef,
+      expense_code: expenseCode,
+      expense_label: String(item.expense_label || friendlyExpenseLabel(expenseCode)).trim() || friendlyExpenseLabel(expenseCode),
+      expense_source_basis_fingerprint: fingerprint,
+      source_basis_fingerprint: fingerprint,
+      amount_ex_vat: Number.isFinite(amount) ? amount : null,
+      snooze_id: snoozeId,
+      snooze_until_date: String(item.snooze_until_date || item.active_snooze_until_date || '').trim() || null,
+      note: String(item.note || item.snooze_note || '').trim() || null,
+      lifecycle_state: String(item.lifecycle_state || item.lifecycleState || '').trim().toUpperCase() || null,
+      snooze_kind: 'DO_NOT_PAY',
+      snooze_identity: {
+        identity_type: 'TIMESHEET_EXPENSE',
+        candidate_id: candidateId,
+        timesheet_id: sourceTimesheetId,
+        current_timesheet_id: actionTimesheetId,
+        booking_id: bookingId || null,
+        segment_id: null,
+        segment_stable_key: null,
+        source_ref: sourceRef,
+        expense_code: expenseCode,
+        source_basis_fingerprint: fingerprint
+      }
+    };
+  };
+
+  const requestedTargetType = String(src.target_type || src.targetType || src.snooze_scope_kind || src.snoozeScopeKind || '').trim().toUpperCase();
+  if (requestedTargetType === 'TIMESHEET_EXPENSE_SET' || Array.isArray(src.expense_items)) {
+    const setMode = String(src.expense_set_mode || src.expenseSetMode || 'SNOOZE').trim().toUpperCase() === 'CLEAR' ? 'CLEAR' : 'SNOOZE';
+    const bySource = new Map();
+    for (const rawItem of (Array.isArray(src.expense_items) ? src.expense_items : [])) {
+      const item = normalizeExpenseSetItem(rawItem, setMode);
+      if (!item) continue;
+      const existing = bySource.get(item.source_ref);
+      if (!existing || (!existing.snooze_id && item.snooze_id)) bySource.set(item.source_ref, item);
+    }
+    const expenseItems = Array.from(bySource.values()).sort((a, b) => a.source_ref.localeCompare(b.source_ref)).slice(0, 5);
+    if (!expenseItems.length) {
+      alert(setMode === 'CLEAR' ? 'No active expense snoozes were found.' : 'No current expenses were found.');
+      return;
+    }
+    const setCandidateId = String(src.candidate_id || expenseItems[0].candidate_id || '').trim();
+    const setTimesheetId = String(src.timesheet_id || expenseItems[0].timesheet_id || '').trim();
+    if (!setCandidateId || !setTimesheetId || expenseItems.some((item) => item.candidate_id !== setCandidateId || item.timesheet_id !== setTimesheetId)) {
+      alert('The expense set is no longer consistent. Refresh Banking Pay and try again.');
+      return;
+    }
+    if (setMode === 'CLEAR' && expenseItems.some((item) => !uuidRe.test(String(item.snooze_id || '').trim()))) {
+      alert('One or more active expense Snooze IDs are missing. Refresh Loans / Snoozes and try again.');
+      return;
+    }
+
+    const setState = {
+      mode: setMode,
+      candidate_id: setCandidateId,
+      timesheet_id: setTimesheetId,
+      items: expenseItems,
+      indefinite: false,
+      raw_until_input: '',
+      snooze_until_date: '',
+      note: '',
+      busy: false,
+      error: '',
+      results: []
+    };
+
+    const expenseSetResolver = (typeof src.expense_set_resolver === 'function')
+      ? src.expense_set_resolver
+      : null;
+
+    const resolveLatestExpenseSetItems = async () => {
+      if (!expenseSetResolver) return setState.items.map((item) => ({ ...item }));
+      const rawItems = await Promise.resolve(expenseSetResolver());
+      if (!Array.isArray(rawItems)) {
+        throw new Error('The current expense set could not be resolved. Refresh Banking Pay and try again.');
+      }
+      const latestBySource = new Map();
+      for (const rawItem of rawItems) {
+        const item = normalizeExpenseSetItem(rawItem, setState.mode);
+        if (!item) continue;
+        if (item.candidate_id !== setState.candidate_id || item.timesheet_id !== setState.timesheet_id) continue;
+        const existing = latestBySource.get(item.source_ref);
+        if (!existing || (!existing.snooze_id && item.snooze_id)) latestBySource.set(item.source_ref, item);
+      }
+      return Array.from(latestBySource.values())
+        .sort((a, b) => a.source_ref.localeCompare(b.source_ref))
+        .slice(0, 5);
+    };
+
+    const expenseSetIdentityKeys = (items) => {
+      const rows = Array.isArray(items) ? items : [];
+      return rows.map((item) => (
+        setState.mode === 'CLEAR'
+          ? `${String(item.snooze_id || '').trim()}|${String(item.source_ref || '').trim().toLowerCase()}`
+          : String(item.source_ref || '').trim().toLowerCase()
+      )).filter(Boolean).sort();
+    };
+
+    const expenseSetIsSame = (left, right) => {
+      const leftKeys = expenseSetIdentityKeys(left);
+      const rightKeys = expenseSetIdentityKeys(right);
+      return leftKeys.length === rightKeys.length && leftKeys.every((value, index) => value === rightKeys[index]);
+    };
+
+    const confirmSetWarning = async (item, validationResult) => {
+      const result = isPlainObject(validationResult) ? validationResult : {};
+      if (result.warning_required !== true) return { confirmed: true, token: null };
+      const message = String(result.warning_message || '').trim();
+      const token = String(result.acknowledgement_token || '').trim();
+      if (!message || !uuidRe.test(token)) return { confirmed: false, token: null };
+      if (typeof openUiConfirmModal === 'function') {
+        const response = await openUiConfirmModal({
+          title: `Confirm ${item.expense_label} Snooze`,
+          message,
+          confirm_label: 'OK',
+          cancel_label: 'Cancel',
+          confirm_class: 'btn btn-primary',
+          cancel_class: 'btn btn-outline'
+        });
+        return { confirmed: !!(response && response.confirmed === true), token };
+      }
+      try {
+        return { confirmed: typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm(message) : false, token };
+      } catch {
+        return { confirmed: false, token: null };
+      }
+    };
+
+    const validateSetItem = async (item, phase, untilDate) => {
+      const payload = {
+        candidate_id: item.candidate_id,
+        timesheet_id: item.timesheet_id,
+        segment_id: null,
+        segment_stable_key: null,
+        source_ref: item.source_ref,
+        snooze_kind: 'DO_NOT_PAY',
+        snooze_until_date: untilDate || null,
+        validation_phase: String(phase || '').trim().toUpperCase()
+      };
+      const result = await apiPostJson('/api/banking/pay/snooze/validate', payload);
+      return isPlainObject(result) ? result : {};
+    };
+
+    const refreshSetState = async ({ requirePreview = false, requireLoans = false } = {}) => {
+      let loansRefreshed = false;
+      let previewRefreshed = false;
+      let loansError = null;
+      let previewError = null;
+
+      if (typeof bankingLoadLoansSnoozes === 'function') {
+        try {
+          await bankingLoadLoansSnoozes({ force: true });
+          loansRefreshed = true;
+        } catch (error) {
+          loansError = error;
+        }
+      } else if (requireLoans) {
+        loansError = new Error('Loans / Snoozes refresh is not available.');
+      }
+
+      try {
+        const currentState = (typeof bankingGetState === 'function') ? bankingGetState() : st;
+        const payDate = String(currentState?.pay?.draftWizard?.pay_date || currentState?.pay?.pay_date || currentState?.pay?.selectedPayDate || '').trim();
+        if (payDate && typeof bankingPayPreview === 'function') {
+          await bankingPayPreview(payDate);
+          previewRefreshed = true;
+        } else if (requirePreview) {
+          previewError = new Error('The current Banking Pay preview could not be refreshed.');
+        }
+      } catch (error) {
+        previewError = error;
+      }
+
+      try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+      if (requireLoans && !loansRefreshed) {
+        throw new Error(String(loansError?.message || loansError || 'CloudTMS could not refresh Loans / Snoozes.'));
+      }
+      if (requirePreview && !previewRefreshed) {
+        throw new Error(String(previewError?.message || previewError || 'CloudTMS could not refresh the current Banking Pay preview.'));
+      }
+
+      return { loans_refreshed: loansRefreshed, preview_refreshed: previewRefreshed };
+    };
+
+    const reconcileSetResult = () => {
+      const currentState = (typeof bankingGetState === 'function') ? bankingGetState() : st;
+      const latestRows = Array.isArray(currentState?.loansSnoozes?.list?.data?.timesheet_snoozes)
+        ? currentState.loansSnoozes.list.data.timesheet_snoozes
+        : [];
+      const activeBySource = new Map();
+      const activeById = new Map();
+      for (const row of latestRows) {
+        const lifecycle = String(row?.lifecycle_state || '').trim().toUpperCase();
+        if (!['ACTIVE', 'SOURCE_REPLACED', 'SOURCE_CHANGED', 'SOURCE_UNAVAILABLE'].includes(lifecycle)) continue;
+        const sourceRef = String(row?.source_ref || '').trim().toLowerCase();
+        const snoozeId = String(row?.snooze_id || '').trim();
+        if (sourceRef) activeBySource.set(sourceRef, row);
+        if (snoozeId) activeById.set(snoozeId, row);
+      }
+      return setState.items.map((item) => {
+        const isActive = activeBySource.has(item.source_ref);
+        const oldIdStillActive = item.snooze_id ? activeById.has(item.snooze_id) : false;
+        const matched = setState.mode === 'CLEAR' ? !oldIdStillActive : isActive;
+        return { source_ref: item.source_ref, snooze_id: item.snooze_id, expense_label: item.expense_label, matched };
+      });
+    };
+
+    const rerenderSetChild = async () => {
+      try {
+        const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        if (!frame || String(frame.kind || '') !== 'banking-finance-snooze-expense-set') return;
+        try { frame._suppressDirty = true; } catch {}
+        await frame.setTab(String(frame.currentTabKey || 'main').trim() || 'main');
+        try { frame._suppressDirty = false; } catch {}
+        try { frame._updateButtons && frame._updateButtons(); } catch {}
+      } catch {}
+    };
+
+    const wireSetUi = async () => {
+      try {
+        const indefinite = document.getElementById('bankingExpenseSetIndefinite');
+        const dateInput = document.getElementById('bankingExpenseSetUntilDate');
+        const noteInput = document.getElementById('bankingExpenseSetNote');
+        if (indefinite && !indefinite.__wired) {
+          indefinite.__wired = true;
+          indefinite.addEventListener('change', async () => {
+            setState.indefinite = !!indefinite.checked;
+            if (setState.indefinite) {
+              setState.raw_until_input = '';
+              setState.snooze_until_date = '';
+            }
+            await rerenderSetChild();
+          });
+        }
+        if (dateInput && !dateInput.__wired) {
+          dateInput.__wired = true;
+          try { if (typeof attachUkDatePicker === 'function') attachUkDatePicker(dateInput, {}); } catch {}
+          dateInput.addEventListener('input', () => { setState.raw_until_input = String(dateInput.value || '').trim(); });
+          dateInput.addEventListener('change', () => {
+            const raw = String(dateInput.value || '').trim();
+            const parsed = parseToIso(raw);
+            setState.raw_until_input = parsed ? (toUk(parsed) || raw) : raw;
+            setState.snooze_until_date = parsed || '';
+          });
+        }
+        if (noteInput && !noteInput.__wired) {
+          noteInput.__wired = true;
+          noteInput.addEventListener('input', () => { setState.note = String(noteInput.value || '').trim(); });
+        }
+      } catch {}
+    };
+
+    const renderSetMain = () => {
+      const resultHtml = setState.results.length ? `
+        <div class="card" style="padding:10px;">
+          <strong>Last result</strong>
+          <div style="display:flex;flex-direction:column;gap:5px;margin-top:8px;">
+            ${setState.results.map((result) => `<div class="mini"><span class="pill ${result.ok ? 'pill-ok' : 'pill-bad'}">${enc(result.ok ? 'Applied' : 'Not applied')}</span> ${enc(result.expense_label || 'Expense')}${result.message ? ` — ${enc(result.message)}` : ''}</div>`).join('')}
+          </div>
+        </div>
+      ` : '';
+      return `
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          ${setState.error ? `<div class="card" style="padding:10px;border-color:rgba(239,68,68,.45);background:rgba(239,68,68,.06);"><div class="mini" style="white-space:pre-wrap;color:var(--danger,#ef4444);">${enc(setState.error)}</div></div>` : ''}
+          <div class="card" style="padding:10px;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><span class="pill">Expense-only</span><strong>${enc(setState.mode === 'CLEAR' ? 'Unsnooze all expenses on this Timesheet' : 'Snooze all expenses on this Timesheet')}</strong></div>
+            <div class="mini" style="opacity:.8;margin-top:6px;">Timesheet ${enc(setState.timesheet_id)} • ${enc(String(setState.items.length))} exact expense line(s). Worked-time segments are not included.</div>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">${setState.items.map((item) => `<div class="mini"><strong>${enc(item.expense_label)}</strong>${item.amount_ex_vat == null ? '' : ` • £${enc(Number(item.amount_ex_vat).toFixed(2))}`} • <span class="mono">${enc(item.source_ref)}</span></div>`).join('')}</div>
+          </div>
+          ${setState.mode === 'SNOOZE' ? `
+            <div class="card" style="padding:10px;">
+              <div class="row"><label>Snooze indefinitely</label><div class="controls"><label class="inline mini"><input id="bankingExpenseSetIndefinite" type="checkbox" ${setState.indefinite ? 'checked' : ''}/> Keep all listed expenses excluded until manually unsnoozed</label></div></div>
+              <div class="row"><label>Dated snooze until</label><div class="controls"><input id="bankingExpenseSetUntilDate" class="input" type="text" placeholder="DD/MM/YYYY" value="${enc(setState.indefinite ? '' : setState.raw_until_input)}" ${setState.indefinite ? 'disabled aria-disabled="true"' : ''}/></div></div>
+              <div class="row"><label>Note / reason</label><div class="controls"><textarea id="bankingExpenseSetNote" class="input" rows="4" placeholder="Optional note / reason">${enc(setState.note)}</textarea></div></div>
+            </div>
+          ` : `<div class="card" style="padding:10px;"><div class="mini">Each exact active expense Snooze will be cleared sequentially. Whole-Timesheet, segment, and finance Snoozes are excluded.</div></div>`}
+          ${resultHtml}
+        </div>
+      `;
+    };
+
+    const applySet = async () => {
+      if (setState.busy) return false;
+      setState.error = '';
+      let untilIso = null;
+      if (setState.mode === 'SNOOZE' && !setState.indefinite) {
+        const dateInput = document.getElementById('bankingExpenseSetUntilDate');
+        const raw = String((dateInput ? dateInput.value : setState.raw_until_input) || '').trim();
+        untilIso = parseToIso(raw);
+        if (!untilIso) {
+          setState.error = 'A valid snooze-until date is required unless the set is snoozed indefinitely.';
+          await rerenderSetChild();
+          return false;
+        }
+      }
+      setState.busy = true;
+      if (expenseSetResolver) {
+        try {
+          await refreshSetState({
+            requirePreview: setState.mode === 'SNOOZE',
+            requireLoans: false
+          });
+          const latestItems = await resolveLatestExpenseSetItems();
+          if (!expenseSetIsSame(setState.items, latestItems)) {
+            setState.busy = false;
+            setState.error = 'The current expense set changed while this action was open. No expense was changed. Refresh and open the action again.';
+            await rerenderSetChild();
+            return false;
+          }
+          setState.items = latestItems;
+        } catch (error) {
+          setState.busy = false;
+          setState.error = String(error?.message || error || 'The current expense set could not be revalidated. Refresh and try again.');
+          await rerenderSetChild();
+          return false;
+        }
+      }
+      const results = [];
+      const activeWorkbenchSessionId = resolveActiveWorkbenchSessionId();
+      for (const item of setState.items) {
+        try {
+          if (setState.mode === 'CLEAR') {
+            const payload = { snooze_id: item.snooze_id };
+            if (activeWorkbenchSessionId) payload.workbench_session_id = activeWorkbenchSessionId;
+            await apiPostJson('/api/banking/pay/snooze/clear', payload);
+            results.push({ ok: true, expense_label: item.expense_label, source_ref: item.source_ref, snooze_id: item.snooze_id, message: 'Snooze removed' });
+            continue;
+          }
+          const preOpen = await validateSetItem(item, 'PRE_OPEN', null);
+          const preOpenConfirmation = await confirmSetWarning(item, preOpen);
+          if (!preOpenConfirmation.confirmed) throw new Error('Confirmation was not completed.');
+          const preSave = await validateSetItem(item, 'PRE_SAVE', untilIso);
+          const preSaveConfirmation = await confirmSetWarning(item, preSave);
+          if (!preSaveConfirmation.confirmed) throw new Error('Confirmation was not completed.');
+          const payload = {
+            candidate_id: item.candidate_id,
+            timesheet_id: item.timesheet_id,
+            booking_id: item.booking_id,
+            segment_id: null,
+            segment_stable_key: null,
+            source_ref: item.source_ref,
+            snooze_kind: 'DO_NOT_PAY',
+            snooze_until_date: untilIso,
+            note: String(setState.note || '').trim() || null,
+            resolved_rate_acknowledgement_token: preOpenConfirmation.token || null,
+            pay_run_acknowledgement_token: preSaveConfirmation.token || null
+          };
+          if (activeWorkbenchSessionId) payload.workbench_session_id = activeWorkbenchSessionId;
+          const saved = await apiPostJson('/api/banking/pay/snooze/upsert', payload);
+          results.push({ ok: true, expense_label: item.expense_label, source_ref: item.source_ref, snooze_id: String(saved?.snooze_id || '').trim() || null, message: 'Snooze applied' });
+        } catch (error) {
+          const payload = isPlainObject(error?.json) ? error.json : {};
+          results.push({
+            ok: false,
+            expense_label: item.expense_label,
+            source_ref: item.source_ref,
+            snooze_id: item.snooze_id,
+            message: String(payload.message || error?.message || error || 'Action failed').trim(),
+            refresh_required: payload.refresh_required === true
+          });
+        }
+      }
+      let finalVerificationError = null;
+      let remainingItems = null;
+      try {
+        await refreshSetState({
+          requirePreview: setState.mode === 'SNOOZE',
+          requireLoans: false
+        });
+        if (expenseSetResolver) remainingItems = await resolveLatestExpenseSetItems();
+      } catch (error) {
+        finalVerificationError = error;
+      }
+
+      if (expenseSetResolver && !finalVerificationError) {
+        const remainingKeys = new Set(expenseSetIdentityKeys(remainingItems));
+        setState.results = results.map((result) => {
+          if (!result.ok) return result;
+          const resultKey = setState.mode === 'CLEAR'
+            ? `${String(result.snooze_id || '').trim()}|${String(result.source_ref || '').trim().toLowerCase()}`
+            : String(result.source_ref || '').trim().toLowerCase();
+          if (remainingKeys.has(resultKey)) {
+            return {
+              ...result,
+              ok: false,
+              message: setState.mode === 'CLEAR'
+                ? 'This expense Snooze is still active after refresh.'
+                : 'This current expense is not Snoozed after refresh.'
+            };
+          }
+          return result;
+        });
+
+        const existingResultKeys = new Set(setState.results.map((result) => (
+          setState.mode === 'CLEAR'
+            ? `${String(result.snooze_id || '').trim()}|${String(result.source_ref || '').trim().toLowerCase()}`
+            : String(result.source_ref || '').trim().toLowerCase()
+        )));
+        for (const remaining of remainingItems) {
+          const remainingKey = setState.mode === 'CLEAR'
+            ? `${String(remaining.snooze_id || '').trim()}|${String(remaining.source_ref || '').trim().toLowerCase()}`
+            : String(remaining.source_ref || '').trim().toLowerCase();
+          if (existingResultKeys.has(remainingKey)) continue;
+          setState.results.push({
+            ok: false,
+            expense_label: remaining.expense_label,
+            source_ref: remaining.source_ref,
+            snooze_id: remaining.snooze_id,
+            message: setState.mode === 'CLEAR'
+              ? 'A current expense Snooze remains active after refresh.'
+              : 'A current expense remains unsnoozed after refresh.'
+          });
+          existingResultKeys.add(remainingKey);
+        }
+      } else if (expenseSetResolver && finalVerificationError) {
+        setState.results = results.map((result) => (
+          result.ok
+            ? { ...result, ok: false, message: 'The mutation completed but the authoritative final state could not be verified.' }
+            : result
+        ));
+        setState.results.push({
+          ok: false,
+          expense_label: 'Expense set',
+          source_ref: '',
+          snooze_id: null,
+          message: String(finalVerificationError?.message || finalVerificationError || 'The refreshed expense set could not be verified.')
+        });
+      } else {
+        const reconciliation = reconcileSetResult();
+        const reconciliationBySource = new Map(reconciliation.map((row) => [row.source_ref, row]));
+        setState.results = results.map((result) => {
+          const match = reconciliationBySource.get(result.source_ref);
+          if (result.ok && (!match || match.matched !== true)) {
+            return { ...result, ok: false, message: 'The refreshed final state did not match the requested action.' };
+          }
+          return result;
+        });
+      }
+
+      setState.busy = false;
+      const failures = setState.results.filter((result) => !result.ok);
+      if (failures.length) {
+        setState.error = `${setState.results.length - failures.length} of ${setState.results.length} expense action(s) were confirmed after refresh. Review the exact failures below.`;
+        await rerenderSetChild();
+        return false;
+      }
+      try { if (typeof window.__toast === 'function') window.__toast(setState.mode === 'CLEAR' ? 'All expense Snoozes were removed.' : 'All current expenses were Snoozed.'); } catch {}
+      return { ok: true, saved: true, mode: setState.mode, results: setState.results };
+    };
+
+    showModal(
+      setState.mode === 'CLEAR' ? 'Unsnooze All Expenses' : 'Snooze All Expenses',
+      [{ key: 'main', label: 'Expenses' }],
+      () => renderSetMain(),
+      applySet,
+      false,
+      async () => { await wireSetUi(); },
+      {
+        kind: 'banking-finance-snooze-expense-set',
+        noParentGate: true,
+        forceEdit: true,
+        showSave: false,
+        showApply: true,
+        primaryLabel: setState.mode === 'CLEAR' ? 'Unsnooze All Expenses' : 'Apply Snooze to All Expenses',
+        runOnRender: true
+      }
+    );
+    return;
+  }
+
   const financeCaseId = String(src.finance_case_id || src.id || '').trim();
   const candidateId = String(src.candidate_id || '').trim();
   const sourceRefFromSeed = String(src.source_ref || identity.source_ref || '').trim();
@@ -43783,7 +44408,9 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
   const explicitIdentityType = String(identity.identity_type || '').trim().toUpperCase();
   const explicitSnoozeKind = String(src.snooze_kind || '').trim().toUpperCase();
 
+  const expenseSourceMatch = sourceRefFromSeed.toLowerCase().match(timesheetExpenseSourceRefRe);
   const targetType = (() => {
+    if (explicitIdentityType === 'TIMESHEET_EXPENSE' || expenseSourceMatch) return 'TIMESHEET_EXPENSE';
     if (explicitIdentityType === 'FINANCE_CASE') return 'FINANCE_CASE';
     if (explicitIdentityType === 'TIMESHEET_SEGMENT') return 'TIMESHEET_SEGMENT';
     if (explicitIdentityType === 'TIMESHEET') return 'WHOLE_TIMESHEET';
@@ -43794,6 +44421,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
   })();
 
   const snoozeKind = (() => {
+    if (targetType === 'TIMESHEET_EXPENSE') return 'DO_NOT_PAY';
     if (targetType === 'TIMESHEET_SEGMENT') {
       if (explicitSnoozeKind && explicitSnoozeKind !== 'TIMESHEET_PAYMENT') return explicitSnoozeKind;
       return 'DO_NOT_PAY';
@@ -43805,7 +44433,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
 
   const validationSourceRef = targetType === 'FINANCE_CASE'
     ? (sourceRefFromSeed || (financeCaseId ? `advance:${financeCaseId}` : ''))
-    : '';
+    : (targetType === 'TIMESHEET_EXPENSE' ? sourceRefFromSeed.toLowerCase() : '');
 
   if (!candidateId) {
     alert('Candidate context is missing for snooze.');
@@ -43822,7 +44450,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
     return;
   }
 
-  if ((targetType === 'WHOLE_TIMESHEET' || targetType === 'TIMESHEET_SEGMENT') && !timesheetId) {
+  if ((targetType === 'WHOLE_TIMESHEET' || targetType === 'TIMESHEET_SEGMENT' || targetType === 'TIMESHEET_EXPENSE') && !timesheetId) {
     alert('Timesheet context is missing for snooze.');
     return;
   }
@@ -43830,6 +44458,17 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
   if (targetType === 'TIMESHEET_SEGMENT' && !segmentId && !segmentStableKey) {
     alert('Segment context is missing for snooze.');
     return;
+  }
+
+  if (targetType === 'TIMESHEET_EXPENSE') {
+    if (!expenseSourceMatch || expenseSourceMatch[1].toLowerCase() !== timesheetId.toLowerCase()) {
+      alert('This expense identity is no longer current. Refresh Banking Pay and try again.');
+      return;
+    }
+    if (segmentId || segmentStableKey) {
+      alert('Expense Snoozes cannot use segment identity. Refresh Banking Pay and try again.');
+      return;
+    }
   }
 
   if (!snoozeKind) {
@@ -43843,7 +44482,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
       timesheet_id: targetType === 'FINANCE_CASE' ? null : (timesheetId || null),
       segment_id: targetType === 'TIMESHEET_SEGMENT' ? (segmentId || null) : null,
       segment_stable_key: targetType === 'TIMESHEET_SEGMENT' ? (segmentStableKey || null) : null,
-      source_ref: targetType === 'FINANCE_CASE' ? (validationSourceRef || null) : null,
+      source_ref: (targetType === 'FINANCE_CASE' || targetType === 'TIMESHEET_EXPENSE') ? (validationSourceRef || null) : null,
       snooze_kind: snoozeKind,
       snooze_until_date: snoozeUntilDate || null,
       validation_phase: String(validationPhase || '').trim().toUpperCase()
@@ -43950,12 +44589,19 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
   const segmentFinishLabel = String(src.finish || '').trim();
 
   const targetTypeLabel = (() => {
+    if (targetType === 'TIMESHEET_EXPENSE') return 'Timesheet expense';
     if (targetType === 'FINANCE_CASE') return 'Finance case';
     if (targetType === 'TIMESHEET_SEGMENT') return 'Specific segment';
     return 'Whole timesheet';
   })();
 
+  const expenseCode = String(src.expense_code || identity.expense_code || (expenseSourceMatch ? expenseSourceMatch[2] : '') || '').trim().toUpperCase();
+  const expenseLabel = String(src.expense_label || friendlyExpenseLabel(expenseCode)).trim() || friendlyExpenseLabel(expenseCode);
+  const expenseAmount = Number(src.amount_ex_vat ?? src.pay_amount_ex_vat ?? src.preview_amount_ex_vat ?? null);
+  const expenseSourceBasisFingerprint = String(src.expense_source_basis_fingerprint || src.source_basis_fingerprint || identity.source_basis_fingerprint || (expenseSourceMatch ? expenseSourceMatch[3] : '') || '').trim().toLowerCase();
+
   const subjectLabel = (() => {
+    if (targetType === 'TIMESHEET_EXPENSE') return `${expenseLabel} expense`;
     if (targetType === 'TIMESHEET_SEGMENT') {
       const parts = ['Segment payment'];
       if (segmentDateLabel) parts.push(toUk(segmentDateLabel) || segmentDateLabel);
@@ -43996,6 +44642,10 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
     segment_id: segmentId,
     segment_stable_key: segmentStableKey,
     source_ref: effectiveSourceRef,
+    expense_code: expenseCode,
+    expense_label: expenseLabel,
+    expense_amount_ex_vat: Number.isFinite(expenseAmount) ? expenseAmount : null,
+    expense_source_basis_fingerprint: expenseSourceBasisFingerprint,
     snooze_id: existingSnoozeId,
     snooze_kind: snoozeKind,
     indefinite: initialIndefinite,
@@ -44381,6 +45031,12 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
       if (state.segment_stable_key) items.push(`Stable key ${state.segment_stable_key}`);
       if (segmentRoleLabel) items.push(`Role ${segmentRoleLabel}`);
       if (segmentBandLabel) items.push(`Band ${segmentBandLabel}`);
+    } else if (state.target_type === 'TIMESHEET_EXPENSE') {
+      if (state.timesheet_id) items.push(`Timesheet ${state.timesheet_id}`);
+      if (state.booking_id) items.push(`Booking ${state.booking_id}`);
+      if (state.expense_label) items.push(`Expense ${state.expense_label}`);
+      if (state.expense_amount_ex_vat != null) items.push(`Amount £${Number(state.expense_amount_ex_vat).toFixed(2)}`);
+      if (state.source_ref) items.push(`Exact ref ${state.source_ref}`);
     } else {
       if (state.finance_case_id) items.push(`Case ${state.finance_case_id}`);
       if (state.source_ref) items.push(`Ref ${state.source_ref}`);
@@ -44642,7 +45298,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
       segment_id: state.target_type === 'TIMESHEET_SEGMENT' ? (state.segment_id || null) : null,
       booking_id: state.target_type === 'FINANCE_CASE' ? null : (state.booking_id || null),
       segment_stable_key: state.target_type === 'TIMESHEET_SEGMENT' ? (state.segment_stable_key || null) : null,
-      source_ref: state.target_type === 'FINANCE_CASE' ? (state.source_ref || null) : null,
+      source_ref: (state.target_type === 'FINANCE_CASE' || state.target_type === 'TIMESHEET_EXPENSE') ? (state.source_ref || null) : null,
       snooze_kind: state.snooze_kind,
       snooze_until_date: untilIso,
       note: String(state.note || '').trim() || null,
@@ -44684,6 +45340,8 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
         resolvedRateAcknowledgementToken = null;
         payRunAcknowledgementToken = null;
         state.error = String(errorPayload.message || 'The Snooze confirmation is no longer current. Review the warnings again before saving.');
+      } else if (errorPayload.refresh_required === true || String(errorCode || '').startsWith('SNOOZE_EXPENSE_') || errorCode === 'SNOOZE_TIMESHEET_SOURCE_REF_INVALID') {
+        state.error = String(errorPayload.message || 'This expense line changed or was replaced. Refresh Banking Pay and try again.');
       } else {
         state.error = String(errorPayload.message || e?.message || e || 'Failed to save snooze.');
       }
@@ -45037,8 +45695,6 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 }
 
 // Full replacement for renderPayNewBatchWizard from FRONTEND 10052026.js
-
-
 
 
 
@@ -48146,6 +48802,15 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     const segmentId = segmentIdOverride == null ? getIdentityValue(obj, 'segment_id') : trimStr(segmentIdOverride);
     const bookingId = getIdentityValue(obj, 'booking_id') || getIdentityValue(parentObj, 'booking_id');
     const segmentStableKey = getIdentityValue(obj, 'segment_stable_key') || getIdentityValue(parentObj, 'segment_stable_key');
+    const nested = getNestedLinePayload(obj);
+    const identity = getIdentityObject(obj);
+    const sourceRefLower = trimStr(sourceRef).toLowerCase();
+    const exactExpenseMatch = sourceRefLower.match(/^timesheet-expense:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):(expenses|travel|accommodation|other|mileage):([0-9a-f]{32})$/i);
+    const identityType = upperTrim(identity?.identity_type || obj?.snooze_identity_type || nested?.snooze_identity_type || (exactExpenseMatch ? 'TIMESHEET_EXPENSE' : ''));
+    const expenseCode = normaliseExpenseCode(identity?.expense_code || obj?.expense_code || nested?.expense_code || (exactExpenseMatch ? exactExpenseMatch[2] : ''));
+    const expenseFingerprint = trimStr(identity?.source_basis_fingerprint || obj?.expense_source_basis_fingerprint || obj?.source_basis_fingerprint || nested?.expense_source_basis_fingerprint || nested?.source_basis_fingerprint || (exactExpenseMatch ? exactExpenseMatch[3] : '')).toLowerCase();
+    const expenseLabel = trimStr(obj?.expense_label || nested?.expense_label || (expenseCode ? getFriendlyExpenseLabel(expenseCode) : ''));
+    const expenseAmount = firstFinitePreviewNumber(getLineRowLevelAmount(obj), getLineSectionAmount(obj));
     const wholeBlockedRaw = (obj?.whole_timesheet_snooze_action_blocked ?? parentObj?.whole_timesheet_snooze_action_blocked);
     const wholeBlockedReason = trimStr(obj?.whole_timesheet_snooze_action_block_reason ?? parentObj?.whole_timesheet_snooze_action_block_reason ?? '');
     const segmentBlockedRaw = (obj?.segment_snooze_action_blocked ?? parentObj?.segment_snooze_action_blocked);
@@ -48165,20 +48830,28 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     const workbenchSessionId = trimStr(obj?.workbench_session_id ?? parentObj?.workbench_session_id ?? obj?.session_id ?? parentObj?.session_id ?? '');
     const workbenchSessionVersion = trimStr(obj?.workbench_session_version ?? parentObj?.workbench_session_version ?? obj?.session_version ?? parentObj?.session_version ?? '');
     const progressCounterVersion = trimStr(obj?.progress_counter_version ?? parentObj?.progress_counter_version ?? '');
-    const scopeKind = segmentId || segmentStableKey ? 'SEGMENT' : (timesheetId ? 'TIMESHEET' : 'FINANCE_CASE');
+    const scopeKind = identityType === 'TIMESHEET_EXPENSE'
+      ? 'TIMESHEET_EXPENSE'
+      : (segmentId || segmentStableKey ? 'SEGMENT' : (timesheetId ? 'TIMESHEET' : 'FINANCE_CASE'));
 
     return [
       `data-candidate-id="${enc(candidateId)}"`,
       `data-snooze-kind="${enc(trimStr(snoozeKind))}"`,
-      `data-source-ref="${enc(sourceRef)}"`,
+      `data-source-ref="${enc(sourceRefLower || sourceRef)}"`,
       `data-timesheet-id="${enc(timesheetId)}"`,
       `data-segment-id="${enc(segmentId)}"`,
       `data-booking-id="${enc(bookingId)}"`,
       `data-segment-stable-key="${enc(segmentStableKey)}"`,
       `data-snooze-id="${enc(info.snoozeId)}"`,
       `data-snooze-until-date="${enc(info.snoozeUntil)}"`,
+      `data-snooze-state="${enc(info.state)}"`,
       `data-note="${enc(info.note)}"`,
       `data-line-label="${enc(lineLabel)}"`,
+      `data-expense-code="${enc(expenseCode)}"`,
+      `data-expense-label="${enc(expenseLabel)}"`,
+      `data-expense-source-basis-fingerprint="${enc(expenseFingerprint)}"`,
+      `data-expense-amount-ex-vat="${enc(expenseAmount == null ? '' : fmtMoney(expenseAmount))}"`,
+      `data-snooze-identity-type="${enc(identityType)}"`,
       `data-whole-timesheet-snooze-action-blocked="${wholeBlocked ? 'true' : 'false'}"`,
       `data-whole-timesheet-snooze-action-block-reason="${enc(wholeBlockedReason)}"`,
       `data-segment-snooze-action-blocked="${segmentBlocked ? 'true' : 'false'}"`,
@@ -48197,7 +48870,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
   };
 
 
- const resolvedRateBadgeHtml = (line, renderContextSection = '') => {
+  const resolvedRateBadgeHtml = (line, renderContextSection = '') => {
     const nested = getNestedLinePayload(line);
     const summary = isPlainObject(line?.case_resolution_summary)
       ? line.case_resolution_summary
@@ -48341,10 +49014,36 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
 
   const previewActionHtml = (line) => {
     const info = getSnoozeInfo(line);
+    const candidateId = getLineCandidateId(line) || trimStr(line?.candidate_id);
+    if (!candidateId || line?.__payee_readiness_blocker === true) return '';
+
+    const expenseMeta = getExactTimesheetExpenseMeta(line);
+    if (expenseMeta.actionable) {
+      if (upperTrim(expenseMeta.state) === 'STALE_SOURCE_IDENTITY') return '';
+      if (info.isIndefinite) return '';
+      const actionName = info.isDated ? 'banking:pay:manageSnooze' : 'banking:pay:openSnooze';
+      const actionLabel = info.isDated ? 'Manage / Unsnooze' : 'Snooze this expense';
+      const lineLabel = `${expenseMeta.expense_label} expense — ${trimStr(line?.display_name || '') || 'Timesheet'}`;
+      return `
+        <button
+          type="button"
+          class="btn btn-xs btn-outline"
+          data-action="${enc(actionName)}"
+          ${buildSnoozeDataAttrs({
+            obj: line,
+            candidateId,
+            snoozeKind: 'DO_NOT_PAY',
+            lineLabel,
+            sourceRefOverride: expenseMeta.source_ref,
+            timesheetIdOverride: expenseMeta.timesheet_id,
+            segmentIdOverride: ''
+          })}
+          ${getCandidateActionDisabledAttrs(candidateId, info.isDated ? `Manage or unsnooze ${expenseMeta.expense_label}` : `Snooze ${expenseMeta.expense_label} only`)}
+        >${enc(actionLabel)}</button>
+      `;
+    }
+
     if (info.isIndefinite) return '';
-    const candidateId = trimStr(line?.candidate_id);
-    if (!candidateId) return '';
-    if (line?.__payee_readiness_blocker === true) return '';
     const actionLabel = info.isDated ? 'Manage snooze' : 'Snooze';
     const actionName = info.isDated ? 'banking:pay:manageSnooze' : 'banking:pay:openSnooze';
     const lineType = upperTrim(line?.line_type || '');
@@ -48713,6 +49412,125 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     );
   };
 
+  const timesheetExpenseSourceRefRe = /^timesheet-expense:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):(expenses|travel|accommodation|other|mileage):([0-9a-f]{32})$/i;
+
+  const getExactTimesheetExpenseMeta = (obj) => {
+    const line = isPlainObject(obj) ? obj : {};
+    const nested = getNestedLinePayload(line);
+    const identity = getIdentityObject(line);
+    const sourceRef = trimStr(identity?.source_ref || line?.source_ref || line?.sourceRef || nested?.source_ref || nested?.sourceRef || '').toLowerCase();
+    const match = sourceRef.match(timesheetExpenseSourceRefRe);
+    const identityType = upperTrim(identity?.identity_type || line?.snooze_identity_type || nested?.snooze_identity_type || (match ? 'TIMESHEET_EXPENSE' : ''));
+    const keyType = getLineKeyType(line);
+    const componentKeyType = getLineComponentKeyType(line);
+    const isAdditional = keyType === 'ADDITIONAL_CODE' || componentKeyType === 'ADDITIONAL_CODE';
+    const timesheetId = trimStr(identity?.timesheet_id || getLineTimesheetId(line) || (match ? match[1] : ''));
+    const candidateId = getLineCandidateId(line);
+    const bookingId = trimStr(identity?.booking_id || line?.booking_id || nested?.booking_id || '');
+    const expenseCode = normaliseExpenseCode(identity?.expense_code || line?.expense_code || nested?.expense_code || (match ? match[2] : getLineExpenseCode(line)));
+    const fingerprint = trimStr(identity?.source_basis_fingerprint || line?.expense_source_basis_fingerprint || line?.source_basis_fingerprint || nested?.expense_source_basis_fingerprint || nested?.source_basis_fingerprint || (match ? match[3] : '')).toLowerCase();
+    const expenseLabel = trimStr(line?.expense_label || nested?.expense_label || getFriendlyExpenseLabel(expenseCode) || 'Expense');
+    const amount = firstFinitePreviewNumber(getLineRowLevelAmount(line), getLineSectionAmount(line));
+    const snoozeInfo = getSnoozeInfo(line);
+    const actionable = !!(
+      match &&
+      identityType === 'TIMESHEET_EXPENSE' &&
+      !isAdditional &&
+      !isSyntheticTimesheetResidualLine(line) &&
+      candidateId &&
+      timesheetId &&
+      trimStr(identity?.segment_id || line?.segment_id || nested?.segment_id || '') === '' &&
+      trimStr(identity?.segment_stable_key || line?.segment_stable_key || nested?.segment_stable_key || '') === ''
+    );
+    return {
+      actionable,
+      identity_type: identityType,
+      source_ref: sourceRef,
+      candidate_id: candidateId,
+      timesheet_id: timesheetId,
+      booking_id: bookingId,
+      expense_code: expenseCode,
+      expense_label: expenseLabel,
+      source_basis_fingerprint: fingerprint,
+      amount_ex_vat: amount,
+      snooze_id: snoozeInfo.snoozeId,
+      snooze_until_date: snoozeInfo.snoozeUntil,
+      note: snoozeInfo.note,
+      has_active: snoozeInfo.hasActive,
+      is_dated: snoozeInfo.isDated,
+      is_indefinite: snoozeInfo.isIndefinite,
+      state: snoozeInfo.state,
+      presentation_section: getLinePresentationSection(line)
+    };
+  };
+
+  const isExactTimesheetExpenseLine = (obj) => getExactTimesheetExpenseMeta(obj).actionable;
+
+  const getExpenseSnoozeStateLabel = (obj) => {
+    const meta = getExactTimesheetExpenseMeta(obj);
+    if (!meta.actionable) return 'Not available';
+    if (upperTrim(meta.state) === 'STALE_SOURCE_IDENTITY') return 'Expense changed — refresh required';
+    if (meta.is_indefinite) return 'Indefinitely snoozed';
+    if (meta.is_dated) return `Snoozed until ${ymdToUk(meta.snooze_until_date) || meta.snooze_until_date}`;
+    return 'Not snoozed';
+  };
+
+  const collectCurrentExactExpenseRowsForTimesheet = ({ candidateId, timesheetId }) => {
+    const candidateIdText = trimStr(candidateId);
+    const timesheetIdText = trimStr(timesheetId);
+    const sourceRows = [
+      ...asArray(readyPreviewLines),
+      ...asArray(blockedPreviewLines),
+      ...asArray(hiddenPreviewLines),
+      ...asArray(canonicalPreviewLines)
+    ];
+    const bySourceRef = new Map();
+    for (const row of sourceRows) {
+      const meta = getExactTimesheetExpenseMeta(row);
+      if (!meta.actionable) continue;
+      if (candidateIdText && meta.candidate_id !== candidateIdText) continue;
+      if (timesheetIdText && meta.timesheet_id !== timesheetIdText) continue;
+      const existing = bySourceRef.get(meta.source_ref);
+      if (!existing || (!existing.meta.has_active && meta.has_active)) bySourceRef.set(meta.source_ref, { row, meta });
+    }
+    return Array.from(bySourceRef.values()).sort((a, b) => a.meta.source_ref.localeCompare(b.meta.source_ref));
+  };
+
+  const renderTimesheetExpenseGroupActions = ({ candidateId, timesheetId }) => {
+    const rows = collectCurrentExactExpenseRowsForTimesheet({ candidateId, timesheetId });
+    const unsnoozed = rows.filter(({ meta }) => !meta.has_active && meta.presentation_section === 'READY_TO_PAY');
+    const active = rows.filter(({ meta }) => (
+      meta.has_active &&
+      !!meta.snooze_id &&
+      upperTrim(meta.state) !== 'STALE_SOURCE_IDENTITY'
+    ));
+    const buttons = [];
+    if (unsnoozed.length) {
+      buttons.push(`
+        <button type="button" class="btn btn-xs btn-outline"
+          data-action="banking:pay:snoozeAllExpenses"
+          data-candidate-id="${enc(candidateId)}"
+          data-timesheet-id="${enc(timesheetId)}"
+          data-expense-count="${enc(String(unsnoozed.length))}"
+          ${getCandidateActionDisabledAttrs(candidateId, 'Snooze every current expense on this timesheet; worked-time segments are not included')}
+        >Snooze all expenses on this Timesheet</button>
+      `);
+    }
+    if (active.length) {
+      buttons.push(`
+        <button type="button" class="btn btn-xs btn-outline"
+          data-action="banking:pay:unsnoozeAllExpenses"
+          data-candidate-id="${enc(candidateId)}"
+          data-timesheet-id="${enc(timesheetId)}"
+          data-expense-count="${enc(String(active.length))}"
+          ${getCandidateActionDisabledAttrs(candidateId, 'Unsnooze every active expense snooze on this timesheet; worked-time segments are not included')}
+        >Unsnooze all expenses on this Timesheet</button>
+      `);
+    }
+    if (!buttons.length) return '';
+    return `<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;">${buttons.join('')}<div class="mini" style="opacity:.72;">Expense-only action. Worked-time segments are not included.</div></div>`;
+  };
+
   const getFriendlyExpenseLabel = (rawCode) => {
     const code = normaliseExpenseCode(rawCode);
     if (code === 'ACCOMMODATION') return 'Accommodation';
@@ -48876,6 +49694,8 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
               <tr>
                 <th>Expense</th>
                 <th style="text-align:right; white-space:nowrap;">Pay amount</th>
+                <th>Snooze state</th>
+                <th>Action</th>
                 <th>Context</th>
               </tr>
             </thead>
@@ -48888,6 +49708,8 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                   <tr>
                     <td class="mini">${enc(label)}</td>
                     <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(rowAmount))}</td>
+                    <td class="mini" style="white-space:nowrap;">${enc(getExpenseSnoozeStateLabel(row))}</td>
+                    <td style="white-space:nowrap;">${previewActionHtml(row) || `<span class="mini" style="opacity:.7;">—</span>`}</td>
                     <td class="mini">${clampText ? enc(clampText) : '—'}</td>
                   </tr>
                 `;
@@ -49060,8 +49882,8 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                       ${contextText ? `<div class="mini" style="opacity:.75;margin-top:2px;">${enc(contextText)}</div>` : ''}
                     </td>
                     <td class="mono" style="text-align:right;white-space:nowrap;">£${enc(fmtMoney(amount))}</td>
-                    <td class="mini" style="white-space:nowrap;">—</td>
-                    <td style="white-space:nowrap;"><span class="mini" style="opacity:.7;">—</span></td>
+                    <td class="mini" style="white-space:nowrap;">${enc(getExpenseSnoozeStateLabel(line))}</td>
+                    <td style="white-space:nowrap;">${previewActionHtml(line) || `<span class="mini" style="opacity:.7;">—</span>`}</td>
                   </tr>
                 `;
               }
@@ -49230,7 +50052,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             type="button"
             class="btn btn-xs btn-outline"
             data-action="banking:pay:openSnooze"
-            ${buildSnoozeDataAttrs({ obj: representative, candidateId, snoozeKind: trimStr(representative?.snooze_kind || 'TIMESHEET_PAYMENT'), lineLabel, timesheetIdOverride: timesheetId })}
+            ${buildSnoozeDataAttrs({ obj: representative, candidateId, snoozeKind: 'TIMESHEET_PAYMENT', lineLabel, sourceRefOverride: '', timesheetIdOverride: timesheetId, segmentIdOverride: '' })}
             ${getCandidateActionDisabledAttrs(candidateId, 'Snooze this whole timesheet')}
           >Snooze whole timesheet</button>
         `;
@@ -49291,6 +50113,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;">
               ${cancelResolvedRateHtml || ''}
               ${wholeActionHtml || ''}
+              ${renderTimesheetExpenseGroupActions({ candidateId, timesheetId })}
             </div>
           </td>
         </tr>
@@ -49317,7 +50140,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const blockedUi = getPreviewLineBlockedUi(line);
       const wholeActionHtml = (() => {
         const candidateId = trimStr(line?.candidate_id);
-        if (!candidateId) return '';
+        if (!candidateId || isExactTimesheetExpenseLine(line)) return '';
         const info = getSnoozeInfo(line);
         const lineLabel = `${trimStr(line?.line_type || 'Item').replace(/_/g, ' ')} — ${trimStr(line?.display_name || '') || 'Item'}`;
         if (info.hasActive && info.snoozeId) {
@@ -49346,7 +50169,8 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         ? renderCaseActionButtons(line.__case_entry)
         : '';
       const cancelResolvedRateHtml = resolvedRateCancelActionHtml(line, renderContextSection);
-      const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, wholeActionHtml].filter(Boolean).join(' ');
+      const expenseActionHtml = isExactTimesheetExpenseLine(line) ? previewActionHtml(line) : '';
+      const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, expenseActionHtml, wholeActionHtml].filter(Boolean).join(' ');
       const expenseComponentLabel = getExpenseComponentFriendlyLabel(line);
       const detailRowHtml = [
         blockedUi.showSegmentDetail ? renderTimesheetSegmentRows(line) : '',
@@ -52342,8 +53166,6 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     </div>
   `;
 }
-
-
 
 
 
@@ -85441,7 +86263,6 @@ function renderBankingAlertPreferencesPanel() {
   `;
 }
 
-
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -90468,8 +91289,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       return getTimesheetSnoozes().find((row) => {
         const rowSid = String(row?.snooze_id || '').trim();
         const rowTid = String(row?.timesheet_id || '').trim();
-        if (sid && rowSid === sid) return true;
-        if (tid && rowTid === tid) return true;
+        if (sid) return rowSid === sid;
+        if (tid) return rowTid === tid;
         return false;
       }) || null;
     };
@@ -90591,19 +91412,301 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       });
     };
 
- const mapPreviewLineToSnoozeSeed = () => {
+    const timesheetExpenseSourceRefRe = /^timesheet-expense:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):(expenses|travel|accommodation|other|mileage):([0-9a-f]{32})$/i;
+
+    const normaliseTimesheetExpenseItem = (rowLike, sourceKind = '', modeRaw = 'SNOOZE') => {
+      const row = (rowLike && typeof rowLike === 'object' && !Array.isArray(rowLike)) ? rowLike : {};
+      const nested = (row.row_json && typeof row.row_json === 'object' && !Array.isArray(row.row_json))
+        ? row.row_json
+        : ((row.rowJson && typeof row.rowJson === 'object' && !Array.isArray(row.rowJson)) ? row.rowJson : {});
+      const identity = (row.snooze_identity && typeof row.snooze_identity === 'object' && !Array.isArray(row.snooze_identity))
+        ? row.snooze_identity
+        : ((nested.snooze_identity && typeof nested.snooze_identity === 'object' && !Array.isArray(nested.snooze_identity)) ? nested.snooze_identity : {});
+      const normalizedMode = String(modeRaw || 'SNOOZE').trim().toUpperCase() === 'CLEAR' ? 'CLEAR' : 'SNOOZE';
+      const snoozeStateObj = (row.snooze_state && typeof row.snooze_state === 'object' && !Array.isArray(row.snooze_state))
+        ? row.snooze_state
+        : ((nested.snooze_state && typeof nested.snooze_state === 'object' && !Array.isArray(nested.snooze_state)) ? nested.snooze_state : {});
+      const rowStateText = (typeof row.snooze_state === 'string')
+        ? row.snooze_state
+        : ((typeof row.snoozeState === 'string') ? row.snoozeState : ((typeof nested.snooze_state === 'string') ? nested.snooze_state : ''));
+      const stateText = String(snoozeStateObj.state || rowStateText || '').trim().toUpperCase();
+      const currentSourceRef = String(identity.source_ref || row.source_ref || row.sourceRef || nested.source_ref || nested.sourceRef || '').trim().toLowerCase();
+      const staleSourceRef = String(
+        snoozeStateObj.stale_source_ref ||
+        row.stale_source_ref ||
+        row.staleSourceRef ||
+        nested.stale_source_ref ||
+        nested.staleSourceRef ||
+        ''
+      ).trim().toLowerCase();
+      const useHistoricalStaleSource = (
+        normalizedMode === 'CLEAR' &&
+        stateText === 'STALE_SOURCE_IDENTITY' &&
+        timesheetExpenseSourceRefRe.test(staleSourceRef)
+      );
+      const sourceRef = useHistoricalStaleSource ? staleSourceRef : currentSourceRef;
+      const match = sourceRef.match(timesheetExpenseSourceRefRe);
+      const rowKind = String(row.row_kind || row.rowKind || '').trim().toUpperCase();
+      const identityType = String(identity.identity_type || row.snooze_identity_type || nested.snooze_identity_type || (match ? 'TIMESHEET_EXPENSE' : '')).trim().toUpperCase();
+      if (!match || (identityType !== 'TIMESHEET_EXPENSE' && rowKind !== 'TIMESHEET_EXPENSE')) return null;
+
+      const candidateId = String(row.candidate_id || row.candidateId || nested.candidate_id || nested.candidateId || '').trim();
+      const sourceTimesheetId = String(match[1] || '').trim();
+      const currentTimesheetId = String(
+        row.current_timesheet_id ||
+        row.currentTimesheetId ||
+        row.timesheet_id ||
+        row.timesheetId ||
+        nested.current_timesheet_id ||
+        nested.currentTimesheetId ||
+        nested.timesheet_id ||
+        nested.timesheetId ||
+        ''
+      ).trim();
+      const originalTimesheetId = String(
+        row.original_timesheet_id ||
+        row.originalTimesheetId ||
+        row.stored_timesheet_id ||
+        row.storedTimesheetId ||
+        row.source_timesheet_id ||
+        row.sourceTimesheetId ||
+        identity.timesheet_id ||
+        sourceTimesheetId ||
+        ''
+      ).trim();
+      const timesheetId = currentTimesheetId || originalTimesheetId || sourceTimesheetId;
+      const lifecycle = String(row.lifecycle_state || row.lifecycleState || '').trim().toUpperCase();
+      const snoozeId = String(row.snooze_id || row.active_snooze_id || snoozeStateObj.snooze_id || '').trim();
+      const activeLifecycle = ['ACTIVE', 'SOURCE_REPLACED', 'SOURCE_CHANGED', 'SOURCE_UNAVAILABLE'].includes(lifecycle);
+      const historicalSourceAllowed = activeLifecycle && !!snoozeId;
+      const sourceIdentityMatches = (
+        originalTimesheetId &&
+        originalTimesheetId.toLowerCase() === sourceTimesheetId.toLowerCase()
+      );
+      const currentIdentityMatches = (
+        timesheetId &&
+        timesheetId.toLowerCase() === sourceTimesheetId.toLowerCase()
+      );
+      if (!candidateId || !timesheetId || (!currentIdentityMatches && !(historicalSourceAllowed && sourceIdentityMatches))) return null;
+
+      const bookingId = String(identity.booking_id || row.booking_id || row.bookingId || nested.booking_id || nested.bookingId || '').trim();
+      const matchedExpenseCode = String(match[2] || '').trim().toUpperCase();
+      const providedExpenseCode = String(identity.expense_code || row.expense_code || row.expenseCode || nested.expense_code || nested.expenseCode || '').trim().toUpperCase();
+      if (providedExpenseCode && providedExpenseCode !== matchedExpenseCode) return null;
+      const expenseCode = matchedExpenseCode;
+      const expenseLabel = String(row.expense_label || row.expenseLabel || nested.expense_label || nested.expenseLabel || ({
+        EXPENSES: 'Expenses', TRAVEL: 'Travel', ACCOMMODATION: 'Accommodation', OTHER: 'Other', MILEAGE: 'Mileage'
+      }[expenseCode] || 'Expense')).trim();
+      const matchedFingerprint = String(match[3] || '').trim().toLowerCase();
+      const providedFingerprint = String(identity.source_basis_fingerprint || row.expense_source_basis_fingerprint || row.source_basis_fingerprint || nested.expense_source_basis_fingerprint || nested.source_basis_fingerprint || '').trim().toLowerCase();
+      if (providedFingerprint && providedFingerprint !== matchedFingerprint) return null;
+      const fingerprint = matchedFingerprint;
+      const snoozeUntilDate = String(row.snooze_until_date || row.active_snooze_until_date || snoozeStateObj.snooze_until_date || '').trim();
+      const note = String(row.note || row.snooze_note || row.active_snooze_note || snoozeStateObj.note || '').trim();
+      const identityStale = (
+        stateText === 'STALE_SOURCE_IDENTITY' ||
+        row.expense_identity_stale === true ||
+        nested.expense_identity_stale === true
+      );
+      const activeState = !['', 'NONE', 'NOT_SNOOZED', 'CLEARED', 'EXPIRED', 'CANCELLED'].includes(stateText);
+      const active = !!snoozeId && (
+        activeLifecycle ||
+        activeState ||
+        !!snoozeUntilDate ||
+        stateText === 'INDEFINITE_SNOOZED' ||
+        (normalizedMode === 'CLEAR' && identityStale)
+      );
+      const presentationSection = String(
+        row.presentation_section ||
+        row.presentationSection ||
+        nested.presentation_section ||
+        nested.presentationSection ||
+        ''
+      ).trim().toUpperCase();
+      const amountRaw = row.pay_amount_ex_vat ?? row.amount_ex_vat ?? row.preview_amount_ex_vat ?? nested.pay_amount_ex_vat ?? nested.amount_ex_vat ?? null;
+      const amountNum = Number(amountRaw);
+      return {
+        identity_type: 'TIMESHEET_EXPENSE',
+        snooze_scope_kind: 'TIMESHEET_EXPENSE',
+        candidate_id: candidateId,
+        timesheet_id: timesheetId,
+        source_timesheet_id: sourceTimesheetId,
+        original_timesheet_id: originalTimesheetId || sourceTimesheetId,
+        booking_id: bookingId || null,
+        segment_id: null,
+        segment_stable_key: null,
+        source_ref: sourceRef,
+        current_source_ref: currentSourceRef || null,
+        stale_source_ref: staleSourceRef || null,
+        expense_code: expenseCode,
+        expense_label: expenseLabel,
+        expense_source_basis_fingerprint: fingerprint,
+        source_basis_fingerprint: fingerprint,
+        amount_ex_vat: Number.isFinite(amountNum) ? amountNum : null,
+        pay_amount_ex_vat: Number.isFinite(amountNum) ? amountNum : null,
+        snooze_id: snoozeId || null,
+        snooze_until_date: snoozeUntilDate || null,
+        note: note || null,
+        active_snooze: active,
+        identity_stale: identityStale,
+        eligible_for_snooze: !active && !identityStale && presentationSection === 'READY_TO_PAY',
+        presentation_section: presentationSection || null,
+        lifecycle_state: lifecycle || null,
+        source_kind: sourceKind || null,
+        snooze_kind: 'DO_NOT_PAY',
+        snooze_identity: {
+          identity_type: 'TIMESHEET_EXPENSE',
+          candidate_id: candidateId,
+          timesheet_id: sourceTimesheetId,
+          current_timesheet_id: timesheetId,
+          booking_id: bookingId || null,
+          segment_id: null,
+          segment_stable_key: null,
+          source_ref: sourceRef,
+          expense_code: expenseCode,
+          source_basis_fingerprint: fingerprint
+        }
+      };
+    };
+
+    const fetchAuthoritativeTimesheetExpenseSnoozes = async (candidateId) => {
+      const candidateIdText = String(candidateId || '').trim();
+      if (!candidateIdText) throw new Error('Candidate context is required to refresh expense Snoozes.');
+      if (typeof authFetch !== 'function' || typeof API !== 'function') {
+        throw new Error('CloudTMS cannot refresh the authoritative expense Snooze set in this session.');
+      }
+      const params = new URLSearchParams();
+      params.set('candidate_id', candidateIdText);
+      params.set('hide_completed_non_current_items', 'false');
+      const path = `/api/banking/finance/loans-snoozes?${params.toString()}`;
+      const response = await authFetch(API(path));
+      const text = await response.text().catch(() => '');
+      let payload = null;
+      try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+      if (!response.ok || !payload || typeof payload !== 'object') {
+        throw new Error('CloudTMS could not refresh the authoritative expense Snooze set. Refresh Banking and try again.');
+      }
+      return Array.isArray(payload.timesheet_snoozes)
+        ? payload.timesheet_snoozes.filter((row) => String(row?.row_kind || '').trim().toUpperCase() === 'TIMESHEET_EXPENSE')
+        : [];
+    };
+
+    const resolveCurrentExpenseSet = ({ candidateId, timesheetId, mode = 'SNOOZE', authoritativeSnoozeRows = [] } = {}) => {
+      const candidateIdText = String(candidateId || '').trim();
+      const timesheetIdText = String(timesheetId || '').trim();
+      const normalizedMode = String(mode || 'SNOOZE').trim().toUpperCase() === 'CLEAR' ? 'CLEAR' : 'SNOOZE';
+      if (!candidateIdText || !timesheetIdText) return [];
+      const currentState = getState() || st;
+      const roots = [
+        ['AUTHORITATIVE_LOANS_SNOOZES', authoritativeSnoozeRows],
+        ['WORKBENCH_PREVIEW', currentState?.pay?.draftWizard?.preview?.data],
+        ['WORKBENCH_STATE', currentState?.pay?.draftWizard?.workbench],
+        ['WORKBENCH_DECISIONS', currentState?.pay?.draftWizard?.decisions],
+        ['LOANS_SNOOZES', currentState?.loansSnoozes?.list?.data?.timesheet_snoozes]
+      ];
+      const collected = [];
+      const visited = new WeakSet();
+      let visitedCount = 0;
+      const visit = (value, sourceKind, depth = 0) => {
+        if (value == null || depth > 9 || visitedCount > 25000) return;
+        if (Array.isArray(value)) {
+          for (const item of value) visit(item, sourceKind, depth + 1);
+          return;
+        }
+        if (typeof value !== 'object') return;
+        if (visited.has(value)) return;
+        visited.add(value);
+        visitedCount += 1;
+        const item = normaliseTimesheetExpenseItem(value, sourceKind, normalizedMode);
+        if (item && item.candidate_id === candidateIdText && item.timesheet_id === timesheetIdText) collected.push(item);
+        for (const child of Object.values(value)) {
+          if (child && (Array.isArray(child) || typeof child === 'object')) visit(child, sourceKind, depth + 1);
+        }
+      };
+      for (const [sourceKind, root] of roots) visit(root, sourceKind, 0);
+
+      if (normalizedMode === 'CLEAR') {
+        const priority = (item) => {
+          if (item.source_kind === 'AUTHORITATIVE_LOANS_SNOOZES') return 40;
+          if (item.lifecycle_state) return 30;
+          if (item.source_kind === 'LOANS_SNOOZES') return 20;
+          if (item.identity_stale && item.stale_source_ref && item.source_ref === item.stale_source_ref) return 15;
+          return 10;
+        };
+        const bySnoozeId = new Map();
+        for (const item of collected) {
+          if (!item.active_snooze || !item.snooze_id) continue;
+          const key = item.snooze_id;
+          const existing = bySnoozeId.get(key);
+          if (!existing || priority(item) > priority(existing)) bySnoozeId.set(key, item);
+        }
+        return Array.from(bySnoozeId.values())
+          .sort((a, b) => a.source_ref.localeCompare(b.source_ref))
+          .slice(0, 5);
+      }
+
+      const bySourceRef = new Map();
+      for (const item of collected) {
+        const key = item.source_ref;
+        const existing = bySourceRef.get(key);
+        if (!existing) {
+          bySourceRef.set(key, item);
+          continue;
+        }
+        if (!existing.active_snooze && item.active_snooze) bySourceRef.set(key, item);
+        else if (existing.identity_stale && !item.identity_stale) bySourceRef.set(key, item);
+        else if (!existing.snooze_id && item.snooze_id) bySourceRef.set(key, item);
+        else if (existing.source_kind !== 'WORKBENCH_PREVIEW' && item.source_kind === 'WORKBENCH_PREVIEW') {
+          const mergedActiveSnooze = existing.active_snooze === true || item.active_snooze === true;
+          bySourceRef.set(key, {
+            ...item,
+            snooze_id: existing.snooze_id || item.snooze_id,
+            active_snooze: mergedActiveSnooze,
+            eligible_for_snooze: mergedActiveSnooze ? false : item.eligible_for_snooze
+          });
+        }
+      }
+      return Array.from(bySourceRef.values())
+        .filter((item) => (
+          item.eligible_for_snooze === true &&
+          item.active_snooze !== true &&
+          item.identity_stale !== true
+        ))
+        .sort((a, b) => a.source_ref.localeCompare(b.source_ref))
+        .slice(0, 5);
+    };
+
+    const resolveAuthoritativeExpenseSet = async ({ candidateId, timesheetId, mode = 'SNOOZE' } = {}) => {
+      const authoritativeSnoozeRows = await fetchAuthoritativeTimesheetExpenseSnoozes(candidateId);
+      return resolveCurrentExpenseSet({
+        candidateId,
+        timesheetId,
+        mode,
+        authoritativeSnoozeRows
+      });
+    };
+
+    const mapPreviewLineToSnoozeSeed = () => {
       const candidateId = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
       const snoozeKind = String(ds('snoozeKind') || dget('data-snooze-kind') || '').trim().toUpperCase();
-      const sourceRef = String(ds('sourceRef') || dget('data-source-ref') || '').trim();
+      const sourceRef = String(ds('sourceRef') || dget('data-source-ref') || '').trim().toLowerCase();
       const timesheetId = String(ds('timesheetId') || dget('data-timesheet-id') || '').trim();
       const bookingId = String(ds('bookingId') || dget('data-booking-id') || '').trim();
       const segmentId = String(ds('segmentId') || dget('data-segment-id') || '').trim();
       const segmentStableKey = String(ds('segmentStableKey') || dget('data-segment-stable-key') || '').trim();
       const snoozeId = String(ds('snoozeId') || dget('data-snooze-id') || '').trim();
       const snoozeUntilDate = String(ds('snoozeUntilDate') || dget('data-snooze-until-date') || '').trim();
+      const snoozeState = String(ds('snoozeState') || dget('data-snooze-state') || '').trim().toUpperCase();
       const note = String(ds('note') || dget('data-note') || '').trim();
       const lineLabel = String(ds('lineLabel') || dget('data-line-label') || '').trim();
       const scopeKind = String(ds('snoozeScopeKind') || dget('data-snooze-scope-kind') || '').trim().toUpperCase();
+      const identityType = String(ds('snoozeIdentityType') || dget('data-snooze-identity-type') || scopeKind || '').trim().toUpperCase();
+      const expenseCode = String(ds('expenseCode') || dget('data-expense-code') || '').trim().toUpperCase();
+      const expenseLabel = String(ds('expenseLabel') || dget('data-expense-label') || '').trim();
+      const expenseFingerprint = String(ds('expenseSourceBasisFingerprint') || dget('data-expense-source-basis-fingerprint') || '').trim().toLowerCase();
+      const expenseAmountText = String(ds('expenseAmountExVat') || dget('data-expense-amount-ex-vat') || '').trim();
+      const expenseAmount = Number(expenseAmountText);
+      const isTimesheetExpense = identityType === 'TIMESHEET_EXPENSE' || timesheetExpenseSourceRefRe.test(sourceRef);
       const resolvedRateComponentCount = Math.max(0, Math.trunc(Number(ds('resolvedRateComponentCount') || dget('data-resolved-rate-component-count') || 0) || 0));
       const resolvedRateCaseKey = String(ds('resolvedRateCaseKey') || dget('data-resolved-rate-case-key') || '').trim();
       const resolvedRateTimesheetId = String(ds('resolvedRateTimesheetId') || dget('data-resolved-rate-timesheet-id') || '').trim();
@@ -90613,8 +91716,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       const workbenchSessionVersion = String(ds('workbenchSessionVersion') || dget('data-workbench-session-version') || '').trim();
       const progressCounterVersion = String(ds('progressCounterVersion') || dget('data-progress-counter-version') || '').trim();
       const parseDataBool = (v) => {
-        const s = String(v || '').trim().toLowerCase();
-        return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+        const value = String(v || '').trim().toLowerCase();
+        return value === 'true' || value === '1' || value === 'yes' || value === 'y' || value === 'on';
       };
 
       const explicitHasWholeTimesheetSnooze = parseDataBool(ds('hasActiveTimesheetSnooze') || dget('data-has-active-timesheet-snooze'));
@@ -90628,15 +91731,17 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         candidate_id: candidateId,
         snooze_id: snoozeId,
         snooze_until_date: snoozeUntilDate,
+        snooze_state: snoozeState || null,
+        expense_identity_stale: isTimesheetExpense && snoozeState === 'STALE_SOURCE_IDENTITY',
         note,
         subject_label: lineLabel,
         has_active_timesheet_snooze: explicitHasWholeTimesheetSnooze || segmentSnoozeActionBlocked,
         has_active_segment_snoozes: explicitHasSegmentSnoozes || wholeTimesheetSnoozeActionBlocked,
-        whole_timesheet_snooze_action_blocked: wholeTimesheetSnoozeActionBlocked,
-        whole_timesheet_snooze_action_block_reason: wholeTimesheetSnoozeActionBlockReason,
-        segment_snooze_action_blocked: segmentSnoozeActionBlocked,
-        segment_snooze_action_block_reason: segmentSnoozeActionBlockReason,
-        snooze_scope_kind: scopeKind,
+        whole_timesheet_snooze_action_blocked: isTimesheetExpense ? false : wholeTimesheetSnoozeActionBlocked,
+        whole_timesheet_snooze_action_block_reason: isTimesheetExpense ? '' : wholeTimesheetSnoozeActionBlockReason,
+        segment_snooze_action_blocked: isTimesheetExpense ? false : segmentSnoozeActionBlocked,
+        segment_snooze_action_block_reason: isTimesheetExpense ? '' : segmentSnoozeActionBlockReason,
+        snooze_scope_kind: isTimesheetExpense ? 'TIMESHEET_EXPENSE' : scopeKind,
         has_resolved_rate: parseDataBool(ds('hasResolvedRate') || dget('data-has-resolved-rate')),
         resolved_rate_component_count: resolvedRateComponentCount,
         resolved_rate_case_key: resolvedRateCaseKey || null,
@@ -90651,18 +91756,38 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (timesheetId) {
         seed.timesheet_id = timesheetId;
         if (bookingId) seed.booking_id = bookingId;
-        if (segmentId) seed.segment_id = segmentId;
-        if (segmentStableKey) seed.segment_stable_key = segmentStableKey;
+        if (!isTimesheetExpense && segmentId) seed.segment_id = segmentId;
+        if (!isTimesheetExpense && segmentStableKey) seed.segment_stable_key = segmentStableKey;
       }
 
       if (sourceRef) seed.source_ref = sourceRef;
-      if (snoozeKind) seed.snooze_kind = snoozeKind;
+      if (snoozeKind) seed.snooze_kind = isTimesheetExpense ? 'DO_NOT_PAY' : snoozeKind;
+
+      if (isTimesheetExpense) {
+        const match = sourceRef.match(timesheetExpenseSourceRefRe);
+        seed.expense_code = expenseCode || (match ? match[2].toUpperCase() : '');
+        seed.expense_label = expenseLabel || seed.expense_code || 'Expense';
+        seed.expense_source_basis_fingerprint = expenseFingerprint || (match ? match[3].toLowerCase() : '');
+        seed.source_basis_fingerprint = seed.expense_source_basis_fingerprint;
+        if (Number.isFinite(expenseAmount)) seed.amount_ex_vat = expenseAmount;
+        seed.snooze_identity = {
+          identity_type: 'TIMESHEET_EXPENSE',
+          candidate_id: candidateId,
+          timesheet_id: timesheetId,
+          booking_id: bookingId || null,
+          segment_id: null,
+          segment_stable_key: null,
+          source_ref: sourceRef,
+          expense_code: seed.expense_code,
+          source_basis_fingerprint: seed.expense_source_basis_fingerprint
+        };
+      }
 
       if (snoozeKind === 'OVERPAYMENT_RECOVERY') seed.case_type = 'OVERPAYMENT';
       if (snoozeKind === 'PAYMENT_ADVANCE_REPAYMENT') seed.case_type = 'PAYMENT_ADVANCE';
       if (snoozeKind === 'MANUAL_DEBT_RECOVERY') seed.case_type = 'MANUAL_DEBT_ADJUSTMENT';
 
-      if (sourceRef && /^advance:/i.test(sourceRef)) {
+      if (!isTimesheetExpense && sourceRef && /^advance:/i.test(sourceRef)) {
         seed.finance_case_id = sourceRef.replace(/^advance:/i, '').trim();
       }
 
@@ -91509,16 +92634,31 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         }
         const seed = mapPreviewLineToSnoozeSeed();
         const requestedKind = String(seed?.snooze_kind || '').trim().toUpperCase();
+        const requestedScopeKind = String(seed?.snooze_scope_kind || seed?.snooze_identity?.identity_type || '').trim().toUpperCase();
+        const isTimesheetExpenseSnooze = requestedScopeKind === 'TIMESHEET_EXPENSE';
+        const expenseIdentityStale = isTimesheetExpenseSnooze && (
+          seed?.expense_identity_stale === true ||
+          String(seed?.snooze_state || '').trim().toUpperCase() === 'STALE_SOURCE_IDENTITY'
+        );
         const isWholeTimesheetSnooze = requestedKind === 'TIMESHEET_PAYMENT';
         const isExistingManagedSnooze = !!String(seed?.snooze_id || '').trim();
-        const blockedByConflict = isWholeTimesheetSnooze
-          ? (seed?.whole_timesheet_snooze_action_blocked === true)
-          : (seed?.segment_snooze_action_blocked === true);
+        const blockedByConflict = isTimesheetExpenseSnooze
+          ? false
+          : (isWholeTimesheetSnooze
+              ? (seed?.whole_timesheet_snooze_action_blocked === true)
+              : (seed?.segment_snooze_action_blocked === true));
         const conflictMessage = String(
-          isWholeTimesheetSnooze
-            ? (seed?.whole_timesheet_snooze_action_block_reason || '')
-            : (seed?.segment_snooze_action_block_reason || '')
+          isTimesheetExpenseSnooze
+            ? ''
+            : (isWholeTimesheetSnooze
+                ? (seed?.whole_timesheet_snooze_action_block_reason || '')
+                : (seed?.segment_snooze_action_block_reason || ''))
         ).trim();
+
+        if (expenseIdentityStale) {
+          toast('This expense changed after the Snooze was created. Refresh Banking Pay or manage the exact historical Snooze from Loans / Snoozes.');
+          return;
+        }
 
         if (!isExistingManagedSnooze && blockedByConflict) {
           const fallbackMessage = isWholeTimesheetSnooze
@@ -91534,6 +92674,43 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       }
       return;
     }
+    if (a === 'banking:pay:snoozeAllExpenses' || a === 'banking:pay:unsnoozeAllExpenses' || a === 'banking:finance:clearAllTimesheetExpenses') {
+      try {
+        if (typeof openBankingFinanceSnoozeModal !== 'function') throw new Error('Snooze modal is not available');
+        const candidateId = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+        const timesheetId = String(ds('timesheetId') || dget('data-timesheet-id') || '').trim();
+        if (!candidateId || !timesheetId) {
+          toast('Candidate and timesheet context are required for the expense set action.');
+          return;
+        }
+        const clearMode = a === 'banking:pay:unsnoozeAllExpenses' || a === 'banking:finance:clearAllTimesheetExpenses';
+        const resolveExpenseSetNow = () => resolveAuthoritativeExpenseSet({
+          candidateId,
+          timesheetId,
+          mode: clearMode ? 'CLEAR' : 'SNOOZE'
+        });
+        const expenseItems = await resolveExpenseSetNow();
+        if (!expenseItems.length) {
+          toast(clearMode ? 'No active expense snoozes were found for this timesheet.' : 'No current unsnoozed expenses were found for this timesheet.');
+          return;
+        }
+        await openBankingFinanceSnoozeModal({
+          target_type: 'TIMESHEET_EXPENSE_SET',
+          snooze_scope_kind: 'TIMESHEET_EXPENSE_SET',
+          expense_set_mode: clearMode ? 'CLEAR' : 'SNOOZE',
+          candidate_id: candidateId,
+          timesheet_id: timesheetId,
+          expense_items: expenseItems,
+          expense_set_resolver: resolveExpenseSetNow,
+          subject_label: clearMode ? 'Unsnooze all expenses on this Timesheet' : 'Snooze all expenses on this Timesheet',
+          workbench_session_id: getCurrentWorkbenchSessionId() || null
+        });
+      } catch (e) {
+        toast(String(e?.message || e || 'Unable to open the expense set action.'));
+      }
+      return;
+    }
+
     if (a === 'banking:pay:acceptBankDetails') {
       const { entity_kind, entity_id, bank_details_hash, provider, env0, candidate_id } = getBankActionContext();
 
@@ -95351,7 +96528,6 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
   return { ok: true };
 }
-
 
 
 
