@@ -52851,7 +52851,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   };
 
  const renderTaxableFinanceCaseRestructureTeaser = (entry) => {
-  const allowedCaseTypes = new Set(['OVERPAYMENT', 'MANUAL_DEBT_ADJUSTMENT', 'MANUAL_CREDIT_ADJUSTMENT']);
+  const allowedCaseTypes = new Set(['OVERPAYMENT', 'UNDERPAYMENT', 'MANUAL_DEBT_ADJUSTMENT', 'MANUAL_CREDIT_ADJUSTMENT']);
   const caseType = upperTrim(entry?.case_type || '');
   const resolutionFamily = upperTrim(entry?.resolution_family || '');
   if (resolutionFamily !== 'TAXABLE_CHANNEL_RESTRUCTURE') return '';
@@ -57981,6 +57981,76 @@ function renderPayBatchListPanel() {
     };
   };
 
+
+  const deriveDraftStaleHintForBatchListRow = (row) => {
+    const batchRow = isPlainObject(row) ? row : {};
+    const displaySummary = parseBatchListJsonObject(batchRow.display_summary || batchRow.displaySummary || batchRow.display_summary_json || batchRow.displaySummaryJson);
+    const changeScope = parseBatchListJsonObject(
+      batchRow.last_change_scope_json ||
+      batchRow.lastChangeScopeJson ||
+      batchRow.change_scope_json ||
+      batchRow.changeScopeJson ||
+      displaySummary.last_change_scope_json ||
+      displaySummary.lastChangeScopeJson ||
+      displaySummary.change_scope_json ||
+      displaySummary.changeScopeJson
+    );
+    const explicitHint = readActiveDraftCreateBool(
+      batchRow.draft_stale_hint ?? batchRow.draftStaleHint ?? displaySummary.draft_stale_hint ?? displaySummary.draftStaleHint,
+      false
+    );
+    const batchStatus = upperTrim(batchRow.status || batchRow.batch_status || displaySummary.batch_status || displaySummary.batchStatus || '');
+    const changeReason = trimStr(
+      batchRow.draft_stale_reason ||
+      batchRow.draftStaleReason ||
+      batchRow.last_change_reason ||
+      batchRow.lastChangeReason ||
+      displaySummary.draft_stale_reason ||
+      displaySummary.draftStaleReason ||
+      displaySummary.last_change_reason ||
+      displaySummary.lastChangeReason ||
+      changeScope.reason ||
+      changeScope.change_reason ||
+      changeScope.changeReason ||
+      ''
+    );
+    const changedAt = trimStr(
+      batchRow.last_change_at_utc ||
+      batchRow.lastChangeAtUtc ||
+      batchRow.change_signal_updated_at_utc ||
+      batchRow.changeSignalUpdatedAtUtc ||
+      displaySummary.last_change_at_utc ||
+      displaySummary.lastChangeAtUtc ||
+      changeScope.changed_at_utc ||
+      changeScope.changedAtUtc ||
+      ''
+    );
+    const authorityScope = trimStr(
+      batchRow.draft_stale_policy_x_authority_scope ||
+      batchRow.draftStalePolicyXAuthorityScope ||
+      displaySummary.draft_stale_policy_x_authority_scope ||
+      displaySummary.draftStalePolicyXAuthorityScope ||
+      changeScope.policy_x_authority_scope ||
+      changeScope.policyXAuthorityScope ||
+      ''
+    );
+    const draftLike = batchStatus === 'DRAFT' || batchStatus === 'DRAFT_CREATED' || batchStatus === 'AWAITING_AUTHORISATION' || batchStatus === 'AWAITING_AUTHORIZATION';
+    const hasChangedScope = Object.keys(changeScope).length > 0;
+    const hasHint = explicitHint && draftLike;
+    if (!hasHint) return { hasHint: false, label: '', message: '', changedAt: '', authorityScope: '' };
+    const reasonText = changeReason ? changeReason.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase()) : 'Source changed';
+    const changedText = changedAt ? ` Last signal ${fmtUtcToUk(changedAt) || changedAt}.` : '';
+    const scopeText = authorityScope ? ` Authority: ${authorityScope}.` : '';
+    const fallbackDetail = hasChangedScope ? ' Source changes were recorded after this Draft was created.' : '';
+    return {
+      hasHint: true,
+      label: 'Draft stale',
+      message: `Draft may be stale: ${reasonText}.${changedText}${scopeText}${fallbackDetail}`,
+      changedAt,
+      authorityScope
+    };
+  };
+
   const activePaymentExecutionOperationTypes = new Set(['PAYMENT_EXECUTE', 'PAYMENT_RETRY_BLOCKED_FUNDS']);
   const activePaymentExecutionStatuses = new Set([
     'QUEUED', 'RUNNING', 'WAITING', 'RUNNABLE', 'CONTINUING', 'WAITING_RETRY',
@@ -58537,7 +58607,11 @@ function renderPayBatchListPanel() {
     const communicationPillHtml = communicationWarning.hasIssue
       ? ` <span class="pill pill-warn" title="${enc(communicationWarning.message)}">${enc(communicationWarning.label || 'Comms issue')}</span>`
       : '';
-    const issuePillsHtml = `${baseIssuePillsHtml}${communicationPillHtml}`;
+    const draftStaleHint = deriveDraftStaleHintForBatchListRow(r);
+    const draftStalePillHtml = draftStaleHint.hasHint
+      ? ` <span class="pill pill-warn" title="${enc(draftStaleHint.message)}">${enc(draftStaleHint.label || 'Draft stale')}</span>`
+      : '';
+    const issuePillsHtml = `${baseIssuePillsHtml}${communicationPillHtml}${draftStalePillHtml}`;
 
     const pillClass = hasDraftCreationFailure
       ? 'pill-bad'
@@ -58678,7 +58752,7 @@ function renderPayBatchListPanel() {
         <td class="mono">${enc(id ? (id.slice(0, 8) + '…') : '')}</td>
         <td>${enc(payDate ? fmtDateOnly(payDate) : '—')}</td>
         <td>${batchKind ? `<span class="pill pill-info" title="Batch kind">${enc(batchKind)}</span>` : `<span class="mini" style="opacity:.75;">—</span>`}</td>
-        <td><span class="pill ${enc(blockedFundsRow ? 'pill-warn' : pillClass)}">${enc(displayStatus)}</span>${authPill}${issuePillsHtml}${blockedFundsReason ? `<div class="mini" style="margin-top:4px;color:#991b1b;font-weight:700;">${enc(blockedFundsReason)}</div>` : ''}${communicationWarning.hasIssue ? `<div class="mini" style="margin-top:4px;color:#92400e;font-weight:700;">${enc(communicationWarning.message)}</div>` : ''}${lastFundsChecked && blockedFundsRow ? `<div class="mini" style="margin-top:2px;opacity:.82;">Last funds checked ${enc(lastFundsChecked)}</div>` : ''}</td>
+        <td><span class="pill ${enc(blockedFundsRow ? 'pill-warn' : pillClass)}">${enc(displayStatus)}</span>${authPill}${issuePillsHtml}${blockedFundsReason ? `<div class="mini" style="margin-top:4px;color:#991b1b;font-weight:700;">${enc(blockedFundsReason)}</div>` : ''}${communicationWarning.hasIssue ? `<div class="mini" style="margin-top:4px;color:#92400e;font-weight:700;">${enc(communicationWarning.message)}</div>` : ''}${draftStaleHint.hasHint ? `<div class="mini" style="margin-top:4px;color:#92400e;font-weight:700;">${enc(draftStaleHint.message)}</div>` : ''}${lastFundsChecked && blockedFundsRow ? `<div class="mini" style="margin-top:2px;opacity:.82;">Last funds checked ${enc(lastFundsChecked)}</div>` : ''}</td>
         <td class="mini">${enc((prov || '—') + (env ? `/${env}` : ''))}</td>
         <td class="mini">${enc(created || '')}</td>
         <td style="white-space:nowrap;">${batchActionsHtml}</td>
@@ -58802,7 +58876,6 @@ function renderPayBatchListPanel() {
     </div>
   `;
 }
-
 
 
 function deriveTimesheetModalInvoicingState(ctx) {
@@ -86264,7 +86337,6 @@ function renderBankingAlertPreferencesPanel() {
 }
 
 
-
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -86715,6 +86787,27 @@ function attachBankingModalDelegatedHandlers() {
         if (!/^[0-9]{1,18}$/.test(raw)) continue;
         const parsed = Number(raw);
         if (Number.isFinite(parsed) && parsed >= 1) return Math.trunc(parsed);
+      }
+      return null;
+    };
+
+
+    const getCurrentWorkbenchProgressCounterVersion = () => {
+      const candidates = [
+        st.pay?.draftWizard?.workbench?.progress_counter_version,
+        st.pay?.draftWizard?.workbench?.progressCounterVersion,
+        st.pay?.draftWizard?.decisions?.progress_counter_version,
+        st.pay?.draftWizard?.decisions?.progressCounterVersion,
+        st.pay?.draftWizard?.preview?.data?.progress_counter_version,
+        st.pay?.draftWizard?.preview?.data?.progressCounterVersion,
+        st.pay?.draftWizard?.preview?.data?.session?.progress_counter_version,
+        st.pay?.draftWizard?.preview?.data?.session?.progressCounterVersion
+      ];
+      for (const value of candidates) {
+        const raw = String(value == null ? '' : value).trim();
+        if (!/^[0-9]{1,18}$/.test(raw)) continue;
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed) && parsed >= 0) return Math.trunc(parsed);
       }
       return null;
     };
@@ -87563,6 +87656,8 @@ function attachBankingModalDelegatedHandlers() {
           ...(linkedTimesheetId ? { linked_timesheet_id: linkedTimesheetId, timesheet_id: linkedTimesheetId } : {}),
           resolution_family: 'BUCKETED',
           resolve_all_linked_timesheets: resolveAllLinkedTimesheets,
+          ...(getCurrentWorkbenchSessionVersion() != null ? { expected_session_version: getCurrentWorkbenchSessionVersion() } : {}),
+          ...(getCurrentWorkbenchProgressCounterVersion() != null ? { expected_progress_counter_version: getCurrentWorkbenchProgressCounterVersion() } : {}),
           bucket_resolutions: [
             {
               ...(linkedTimesheetId ? { timesheet_id: linkedTimesheetId } : {}),
@@ -87931,7 +88026,9 @@ function attachBankingModalDelegatedHandlers() {
           ...(linkedTimesheetId ? { linked_timesheet_id: linkedTimesheetId, timesheet_id: linkedTimesheetId } : {}),
           resolution_family: 'NON_BUCKET',
           resolution_mode: 'MANUAL_AMOUNT',
-          target_amount_ex_vat: targetAmount
+          target_amount_ex_vat: targetAmount,
+          ...(getCurrentWorkbenchSessionVersion() != null ? { expected_session_version: getCurrentWorkbenchSessionVersion() } : {}),
+          ...(getCurrentWorkbenchProgressCounterVersion() != null ? { expected_progress_counter_version: getCurrentWorkbenchProgressCounterVersion() } : {})
         })
       });
 
@@ -90907,8 +91004,8 @@ const findTaxableFinanceCaseRestructureContext = ({ financeCaseId, candidateId, 
     ...(Array.isArray(previewRoot?.non_paye_payees) ? previewRoot.non_paye_payees : [])
   ];
 
-  const allowedCaseTypes = new Set(['OVERPAYMENT', 'MANUAL_DEBT_ADJUSTMENT', 'MANUAL_CREDIT_ADJUSTMENT']);
-  const blockedCaseTypes = new Set(['PAYMENT_ADVANCE', 'UNDERPAYMENT']);
+  const allowedCaseTypes = new Set(['OVERPAYMENT', 'UNDERPAYMENT', 'MANUAL_DEBT_ADJUSTMENT', 'MANUAL_CREDIT_ADJUSTMENT']);
+  const blockedCaseTypes = new Set(['PAYMENT_ADVANCE']);
 
   const normalizeCandidateContext = (rawCase, sourceCandidate = null) => {
     const envelope = isPlainObject(rawCase) ? rawCase : null;
@@ -92520,7 +92617,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
             ...(financeCaseId ? { finance_case_id: financeCaseId } : {}),
             ...(linkedTimesheetId ? { linked_timesheet_id: linkedTimesheetId, timesheet_id: linkedTimesheetId } : {}),
             ...(resolutionFamily ? { resolution_family: resolutionFamily } : {}),
-            ...(getCurrentWorkbenchSessionVersion() != null ? { expected_session_version: getCurrentWorkbenchSessionVersion() } : {})
+            ...(getCurrentWorkbenchSessionVersion() != null ? { expected_session_version: getCurrentWorkbenchSessionVersion() } : {}),
+            ...(getCurrentWorkbenchProgressCounterVersion() != null ? { expected_progress_counter_version: getCurrentWorkbenchProgressCounterVersion() } : {})
           })
         });
       } catch (e) {
