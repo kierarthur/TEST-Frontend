@@ -233,6 +233,14 @@
       root.dataset.bulkAuthoriseRowEpoch = String(this.rowEpoch);
       root.dataset.bulkAuthoriseDatasetEpoch = String(this.datasetEpoch);
       this.installDomBoundary();
+      const liveState = win.modalCtx?.bulkAuthoriseState || this.state;
+      const evidenceController = win.__bulkAuthoriseEvidenceControllerTest?.controllerFor?.(liveState);
+      if (evidenceController && evidenceController.isTimesheets()) {
+        evidenceController.sanitize('lifecycle-v2-post-render');
+        evidenceController.renderAttachedSelection();
+        evidenceController.schedulePostRenderSettle();
+        void evidenceController.ensureAttachedPreview(false);
+      }
     }
 
     async runOwnedAction(button) {
