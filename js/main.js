@@ -86263,6 +86263,8 @@ function renderBankingAlertPreferencesPanel() {
   `;
 }
 
+
+
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -91508,13 +91510,11 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         row.expense_identity_stale === true ||
         nested.expense_identity_stale === true
       );
-      const activeState = !['', 'NONE', 'NOT_SNOOZED', 'CLEARED', 'EXPIRED', 'CANCELLED'].includes(stateText);
+      const terminalState = ['NONE', 'NOT_SNOOZED', 'CLEARED', 'EXPIRED', 'CANCELLED', 'CANCELED'].includes(stateText);
       const active = !!snoozeId && (
-        activeLifecycle ||
-        activeState ||
-        !!snoozeUntilDate ||
-        stateText === 'INDEFINITE_SNOOZED' ||
-        (normalizedMode === 'CLEAR' && identityStale)
+        lifecycle
+          ? activeLifecycle
+          : !terminalState
       );
       const presentationSection = String(
         row.presentation_section ||
@@ -91544,9 +91544,9 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         source_basis_fingerprint: fingerprint,
         amount_ex_vat: Number.isFinite(amountNum) ? amountNum : null,
         pay_amount_ex_vat: Number.isFinite(amountNum) ? amountNum : null,
-        snooze_id: snoozeId || null,
-        snooze_until_date: snoozeUntilDate || null,
-        note: note || null,
+        snooze_id: active ? snoozeId : null,
+        snooze_until_date: active ? (snoozeUntilDate || null) : null,
+        note: active ? (note || null) : null,
         active_snooze: active,
         identity_stale: identityStale,
         eligible_for_snooze: !active && !identityStale && presentationSection === 'READY_TO_PAY',
@@ -96528,9 +96528,6 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
   return { ok: true };
 }
-
-
-
 
 
 
