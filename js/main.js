@@ -171437,19 +171437,6 @@ function isBulkAuthoriseEditableDirty(state) {
   if (typeof ensureBulkAuthoriseManualDraftState === 'function') {
     try {
       const draftState = ensureBulkAuthoriseManualDraftState(st);
-      if (draftState && typeof draftState.manualSnapshotDiffersFromBaseline === 'function') {
-        const differsFromAuthoritativeBaseline = !!draftState.manualSnapshotDiffersFromBaseline({
-          source: 'isBulkAuthoriseEditableDirty',
-          preferDom: true,
-          writeToActiveState: false,
-          createBaselineIfMissing: true,
-          allowActiveStateBaseline: false
-        });
-        if (differsFromAuthoritativeBaseline) {
-          st.dirty = true;
-          return true;
-        }
-      }
       if (draftState && typeof draftState.isActiveDirty === 'function') {
         const isDraftDirty = !!draftState.isActiveDirty({ source: 'isBulkAuthoriseEditableDirty' });
         if (isDraftDirty) {
@@ -175144,6 +175131,7 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
   };
 
   const preferredKey = trimStr(preferredRowKey || '');
+  const allowEmptySelection = opts.allowEmptySelection === true || opts.allow_empty_selection === true;
   const selectedKeys = Array.isArray(st.selected_row_keys)
     ? st.selected_row_keys.map((key) => trimStr(key)).filter(Boolean)
     : [];
@@ -175160,14 +175148,14 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
   if (preferredKey && visibleRowByKey.has(preferredKey) && rowAllowedForFallback(visibleRowByKey.get(preferredKey))) {
     nextRow = visibleRowByKey.get(preferredKey) || null;
   }
-  if (!nextRow) {
+  if (!nextRow && !allowEmptySelection) {
     const selectedVisible = selectedKeys
       .map((key) => visibleRowByKey.get(key) || null)
       .find((row) => rowAllowedForFallback(row)) || null;
     if (selectedVisible) nextRow = selectedVisible;
   }
-  if (!nextRow) nextRow = (processedRows.find((row) => rowAllowedForFallback(row)) || null);
-  if (!nextRow) nextRow = (authorisedRows.find((row) => rowAllowedForFallback(row)) || null);
+  if (!nextRow && !allowEmptySelection) nextRow = (processedRows.find((row) => rowAllowedForFallback(row)) || null);
+  if (!nextRow && !allowEmptySelection) nextRow = (authorisedRows.find((row) => rowAllowedForFallback(row)) || null);
 
   const nextRowKey = trimStr(nextRow?.row_key || '');
   const nextBackendSignature = nextRow ? getBackendSignatureFromRow(nextRow) : '';
@@ -244256,6 +244244,38 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       return null;
     }
   };
+  const normaliseBulkAuthoriseScheduleForCompare = (value) => {
+    const parsed = parseMaybeJson(value);
+    const sourceRows = Array.isArray(parsed)
+      ? parsed
+      : ((parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? [parsed] : []);
+    const normaliseTime = (input) => {
+      const raw = trimStr(input || '');
+      const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+      if (!match) return raw;
+      const hour = Number(match[1]);
+      const minute = Number(match[2]);
+      if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return raw;
+      return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    };
+    const rows = sourceRows.map((rowLike) => {
+      const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+      const breakValue = Number(row.break_minutes ?? row.break_mins ?? row.breakMinutes ?? 0);
+      return {
+        date: trimStr(row.date || row.work_date || row.shift_date || row.ymd || '').slice(0, 10),
+        ref_num: trimStr(row.ref_num ?? row.ref ?? row.reference ?? ''),
+        start: normaliseTime(row.start ?? row.worked_start ?? row.start_time ?? ''),
+        end: normaliseTime(row.end ?? row.worked_end ?? row.end_time ?? ''),
+        break_start: normaliseTime(row.break_start ?? ''),
+        break_end: normaliseTime(row.break_end ?? ''),
+        break_minutes: Number.isFinite(breakValue) && breakValue > 0 ? Math.round(breakValue * 100) / 100 : 0
+      };
+    }).filter((row) => !!(
+      row.ref_num || row.start || row.end || row.break_start || row.break_end || row.break_minutes
+    ));
+    rows.sort((a, b) => stableStringify(a).localeCompare(stableStringify(b)));
+    return rows;
+  };
   const getDraftController = () => {
     if (typeof ensureBulkAuthoriseManualDraftState !== 'function') return null;
     try { return ensureBulkAuthoriseManualDraftState(st); } catch { return null; }
@@ -244336,7 +244356,6 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     return !!(currentHash && baselineHash && currentHash !== baselineHash);
   };
   const isDirtyWithoutExpenses = (draftLike = null) => {
-    if (manualDraftDiffersFromBaseline(draftLike)) return true;
     if (typeof isBulkAuthoriseEditableDirty === 'function') return isBulkAuthoriseEditableDirty(st);
     return !!st.dirty;
   };
@@ -244360,6 +244379,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       reason: 'manual-editor-weekly-input',
       preferDom: true,
       writeToActiveState: true,
+      markAsUserDirty: false,
       allowActiveStateBaseline: false
     });
     const stateCtx = (liveDraft?.state && typeof liveDraft.state === 'object') ? liveDraft.state : originalStateCtx;
@@ -244480,13 +244500,23 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       Object.prototype.hasOwnProperty.call(stateCtx, 'schedule') &&
       stateCtx.schedule != null
     );
+    const activeDraftEntry = liveDraft?.entry && typeof liveDraft.entry === 'object'
+      ? liveDraft.entry
+      : getActiveDraftEntry();
+    const hasUserManualDirtyIntent = !!(
+      activeDraftEntry &&
+      activeDraftEntry.dirty === true &&
+      activeDraftEntry.dirty_source_type === 'USER'
+    );
     const schedulePayload = hasExplicitScheduleDraft ? stateCtx.schedule : currentWeeklyScheduleBaseline;
     const baselineSchedule = currentWeeklyScheduleBaseline;
     const scheduleChanged = !!(
+      hasUserManualDirtyIntent &&
       hasExplicitScheduleDraft &&
-      stableStringify(schedulePayload || null) !== stableStringify(baselineSchedule || null)
+      stableStringify(normaliseBulkAuthoriseScheduleForCompare(schedulePayload)) !== stableStringify(normaliseBulkAuthoriseScheduleForCompare(baselineSchedule))
     );
     const extrasChanged = !!(
+      hasUserManualDirtyIntent &&
       hasExplicitAdditionalRatesDraft &&
       (stableStringify(currentExtrasWeek) !== stableStringify(stagedExtrasWeek) || stableStringify(currentExtrasPerDay) !== stableStringify(stagedExtrasPerDay))
     );
@@ -244532,7 +244562,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       activeCtx?.supports_unprocessed_expense_draft === true
     );
     const canEditHoursScheduleByPolicy = editability?.canEditHoursSchedule === true;
-    const manualSnapshotChangedRaw = manualDraftDiffersFromBaseline(liveDraft);
+    const manualSnapshotChangedRaw = !!(hasUserManualDirtyIntent && manualDraftDiffersFromBaseline(liveDraft));
     const manualSnapshotChanged = !!(canEditHoursScheduleByPolicy && manualSnapshotChangedRaw);
     const expenseStateContainers = [stateCtx, originalStateCtx, ctx?.state, activeCtx?.state, st?.active_context?.state, st?.active_ctx?.state]
       .filter((entry) => entry && typeof entry === 'object');
@@ -246785,7 +246815,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
   };
   const activeDirtyRequiresSave = () => {
     if (typeof hasBulkAuthoriseGenuineDirtyEdits === 'function') {
-      try { if (hasBulkAuthoriseGenuineDirtyEdits(st, { preferDom: true })) return true; } catch {}
+      try { return !!hasBulkAuthoriseGenuineDirtyEdits(st, { preferDom: true }); } catch {}
     }
     if (typeof isBulkAuthoriseEditableDirty === 'function') {
       try { if (isBulkAuthoriseEditableDirty(st)) return true; } catch {}
@@ -246908,6 +246938,17 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
       return selectionCheck;
     }
 
+    const preMutationProcessedKeys = processedRows.map((row) => rowIdentityKey(row)).filter(Boolean);
+    const preMutationActiveKey = rowIdentityKey(st.active_row || {});
+    const activeSelectionAnchor = selectionKeys.includes(preMutationActiveKey)
+      ? preMutationActiveKey
+      : selectionKeys[selectionKeys.length - 1];
+    const activeSelectionAnchorIndex = preMutationProcessedKeys.indexOf(activeSelectionAnchor);
+    const postAuthoriseFallbackKeys = activeSelectionAnchorIndex >= 0
+      ? preMutationProcessedKeys
+          .slice(activeSelectionAnchorIndex + 1)
+          .filter((key) => !selectionKeys.includes(key))
+      : [];
     const selectedRows = selectionKeys.map((key) => processedByKey.get(key)).filter((row) => row && typeof row === 'object');
     const items = selectedRows.map(buildItem);
     const isMultiRowAction = items.length > 1;
@@ -246998,13 +247039,18 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     st.selected_row_keys = failedProcessedKeys;
     st.selected_section = failedProcessedKeys.length ? 'processed_eligible' : null;
 
-    const activeWasAffected = !!(rowIdentityKey(st.active_row || {}) && selectionKeys.includes(rowIdentityKey(st.active_row || {})));
+    const activeWasAffected = !!(preMutationActiveKey && selectionKeys.includes(preMutationActiveKey));
+    let preferredActiveRowKey = '';
+    let clearActiveAfterAuthorise = false;
     if (activeWasAffected && allSuccess && !postMutationRefreshFailed) {
-      const nextKey = processedKeysAfterRefresh.find((key) => !selectionKeys.includes(key)) || '';
-      if (nextKey && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function') {
+      const processedKeySetAfterRefresh = new Set(processedKeysAfterRefresh);
+      preferredActiveRowKey = postAuthoriseFallbackKeys.find((key) => processedKeySetAfterRefresh.has(key)) || '';
+      clearActiveAfterAuthorise = !preferredActiveRowKey;
+      if (typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function') {
         try {
-          await setActiveBulkAuthoriseRowFromVisibleRows(st, nextKey, {
+          await setActiveBulkAuthoriseRowFromVisibleRows(st, preferredActiveRowKey || null, {
             source: 'affected_row_refresh',
+            allowEmptySelection: clearActiveAfterAuthorise,
             datasetOnly: true,
             minimalOnly: true,
             deferContextRefresh: true,
@@ -247080,6 +247126,11 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
       failed_items: failedRows,
       stale_items: staleRows,
       mutationSeq,
+      pre_mutation_active_row_key: preMutationActiveKey || null,
+      preferred_active_row_key: preferredActiveRowKey || null,
+      fallback_row_keys: postAuthoriseFallbackKeys,
+      clear_active_row: clearActiveAfterAuthorise,
+      ensure_active_row_visible: !!preferredActiveRowKey,
       refresh_failed: postMutationRefreshFailed,
       refresh_error: postMutationRefreshError ? String(postMutationRefreshError?.message || postMutationRefreshError || 'Affected row refresh failed') : null
     };
@@ -247258,6 +247309,8 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
       return selectionCheck;
     }
 
+    const preMutationActiveKey = rowIdentityKey(st.active_row || {});
+    const preMutationUnauthoriseKeys = selectionKeys.slice();
     const selectedRows = selectionKeys.map((key) => authorisedByKey.get(key)).filter((row) => row && typeof row === 'object');
     const items = selectedRows.map(buildItem);
     const isMultiRowAction = items.length > 1;
@@ -247344,16 +247397,29 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
 
     visibleModel = getVisibleModel();
     const authorisedKeysAfterRefresh = (visibleModel.visible_authorised_eligible_rows || []).map((row) => rowIdentityKey(row)).filter(Boolean);
+    const processedKeysAfterRefresh = (visibleModel.visible_processed_eligible_rows || []).map((row) => rowIdentityKey(row)).filter(Boolean);
     const failedAuthorisedKeys = collectFailedKeys(failedRows, authorisedKeysAfterRefresh);
     st.selected_row_keys = failedAuthorisedKeys;
     st.selected_section = failedAuthorisedKeys.length ? 'authorised_eligible' : null;
 
-    const activeWasAffected = !!(rowIdentityKey(st.active_row || {}) && selectionKeys.includes(rowIdentityKey(st.active_row || {})));
-    if (activeWasAffected && allSuccess && !postMutationRefreshFailed) {
-      const nextKey = authorisedKeysAfterRefresh.find((key) => !selectionKeys.includes(key)) || '';
-      if (nextKey && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function') {
+    let preferredActiveRowKey = '';
+    if (allSuccess && !postMutationRefreshFailed) {
+      const processedKeySetAfterRefresh = new Set(processedKeysAfterRefresh);
+      const resultMovedKeys = [
+        ...(Array.isArray(result?.results) ? result.results : []),
+        ...(Array.isArray(result?.affected_rows) ? result.affected_rows : []),
+        ...(Array.isArray(affectedRefresh?.flattened_rows) ? affectedRefresh.flattened_rows : [])
+      ].flatMap((entry) => [
+        firstString(entry?.row_key_after),
+        firstString(entry?.new_row_key),
+        firstString(entry?.row_key),
+        firstString(entry?.previous_row_key)
+      ]).filter(Boolean);
+      preferredActiveRowKey = [...preMutationUnauthoriseKeys, ...resultMovedKeys]
+        .find((key) => processedKeySetAfterRefresh.has(key)) || '';
+      if (preferredActiveRowKey && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function') {
         try {
-          await setActiveBulkAuthoriseRowFromVisibleRows(st, nextKey, {
+          await setActiveBulkAuthoriseRowFromVisibleRows(st, preferredActiveRowKey, {
             source: 'affected_row_refresh',
             datasetOnly: true,
             minimalOnly: true,
@@ -247430,6 +247496,11 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
       failed_items: failedRows,
       stale_items: staleRows,
       mutationSeq,
+      pre_mutation_active_row_key: preMutationActiveKey || null,
+      preferred_active_row_key: preferredActiveRowKey || null,
+      fallback_row_keys: preMutationUnauthoriseKeys,
+      clear_active_row: false,
+      ensure_active_row_visible: !!preferredActiveRowKey,
       refresh_failed: postMutationRefreshFailed,
       refresh_error: postMutationRefreshError ? String(postMutationRefreshError?.message || postMutationRefreshError || 'Affected row refresh failed') : null
     };
@@ -249483,8 +249554,23 @@ function renderBulkAuthoriseActionRow(state) {
     if (editability.canSave && editability.canEditTimesheetData) {
       actions.push(buildBtn('bulkAuthActionRowSaveBtn', 'Save', !busy && contextReady && manualDirty && !validationBlocked, '', 'btn btn-primary', 'save', saveDisabledReason));
     }
-    if (editability.canUnprocess) {
-      actions.push(buildBtn('bulkAuthActionRowUnprocessBtn', 'Unprocess', !busy, '', 'btn btn-warn'));
+    if (editability.showUnprocess) {
+      const unprocessDisabledReason = trimStr(
+        editability.unprocessBlockMessage ||
+        editability.unprocess_block_message ||
+        editability.unprocessBlockReason ||
+        editability.unprocess_block_reason ||
+        'This timesheet cannot currently be unprocessed.'
+      );
+      actions.push(buildBtn(
+        'bulkAuthActionRowUnprocessBtn',
+        'Unprocess',
+        !busy && editability.canUnprocess,
+        '',
+        'btn btn-warn',
+        'unprocess',
+        unprocessDisabledReason
+      ));
     }
     if (editability.canAddAdditionalManual) {
       actions.push(buildBtn('bulkAuthActionRowAddAdditionalBtn', 'Add additional timesheets', !busy));
@@ -249540,14 +249626,18 @@ function renderBulkAuthoriseActionRow(state) {
       data-action-record-identity="${enc(actionRecordIdentity)}"
       data-action-row-section="${enc(section)}">
       <style>
-        #bulkAuthoriseActionRowRoot .btn:disabled {
+        #bulkAuthoriseActionRowRoot .btn:disabled,
+        #bulkAuthoriseActionRowRoot .btn[data-disabled="1"],
+        #bulkAuthoriseActionRowRoot .btn[aria-disabled="true"] {
           opacity: 0.45;
           cursor: not-allowed;
           filter: saturate(0.35);
           box-shadow: none;
           transform: none;
         }
-        #bulkAuthoriseActionRowRoot .btn:disabled:hover {
+        #bulkAuthoriseActionRowRoot .btn:disabled:hover,
+        #bulkAuthoriseActionRowRoot .btn[data-disabled="1"]:hover,
+        #bulkAuthoriseActionRowRoot .btn[aria-disabled="true"]:hover {
           opacity: 0.45;
           cursor: not-allowed;
           filter: saturate(0.35);
@@ -249650,7 +249740,12 @@ function bindBulkAuthoriseActionRow(state) {
     btn.dataset[marker] = '1';
     btn.addEventListener('click', async (ev) => {
       ev.preventDefault();
-      if (btn.disabled || st.loading || st.batch_busy || st.saving || st.unprocessing || st.__workbench_modal_spinner_active) return;
+      const canonicallyDisabled = !!(
+        btn.disabled ||
+        btn.getAttribute('data-disabled') === '1' ||
+        btn.getAttribute('aria-disabled') === 'true'
+      );
+      if (canonicallyDisabled || st.loading || st.batch_busy || st.saving || st.unprocessing || st.__workbench_modal_spinner_active) return;
       const runHandler = async () => {
         await handler();
       };

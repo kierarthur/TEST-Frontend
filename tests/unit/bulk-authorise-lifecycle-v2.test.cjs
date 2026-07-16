@@ -79,11 +79,12 @@ function installHarness(initialState, overrides = {}) {
     async openBulkAuthoriseWorkbench() {
       return initialState;
     },
-    async setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey) {
+    async setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, options = {}) {
       const rows = state.dataset.rows || [];
+      const allowEmptySelection = options.allowEmptySelection === true || options.allow_empty_selection === true;
       const next = rows.find((entry) => entry.row_key === preferredRowKey)
-        || rows.find((entry) => entry.bulk_authorise_section === 'processed_eligible')
-        || rows.find((entry) => entry.bulk_authorise_section === 'authorised_eligible')
+        || (allowEmptySelection ? null : rows.find((entry) => entry.bulk_authorise_section === 'processed_eligible'))
+        || (allowEmptySelection ? null : rows.find((entry) => entry.bulk_authorise_section === 'authorised_eligible'))
         || null;
       state.active_row_key = next ? next.row_key : null;
       state.active_row = next ? clone(next) : null;
@@ -255,6 +256,78 @@ test('post-mutation reconciliation replaces partial rows with the canonical data
   assert.equal(state.selected_section, 'processed_eligible');
   assert.equal(state.active_row_key, 'timesheet:B');
   assert.equal(state.active_row.candidate_name, 'Full Candidate B');
+});
+
+test('authorising the active row selects its original successor without wrapping to the top', async () => {
+  const first = row('timesheet:A');
+  const active = row('timesheet:B');
+  const successor = row('timesheet:C');
+  const state = stateFor([first, active, successor], active.row_key);
+  state.selected_row_keys = [active.row_key];
+  state.selected_section = 'processed_eligible';
+  const canonical = {
+    rows: [first, row(active.row_key, 'authorised_eligible'), successor],
+    counts: { total: 3 }
+  };
+  const { win } = installHarness(state, {
+    async fetchBulkAuthoriseDataset() { return clone(canonical); },
+    async handleBulkAuthoriseSelected() {
+      return { ok: true, batch_completed: true, success_count: 1, failed_items: [], mutationSeq: 12 };
+    }
+  });
+
+  await win.handleBulkAuthoriseSelected(state, {});
+
+  assert.equal(state.active_row_key, successor.row_key);
+  assert.deepEqual(state.selected_row_keys, []);
+});
+
+test('authorising the final processed row leaves a clean empty selection', async () => {
+  const active = row('timesheet:A');
+  const alreadyAuthorised = row('timesheet:B', 'authorised_eligible');
+  const state = stateFor([active, alreadyAuthorised], active.row_key);
+  state.selected_row_keys = [active.row_key];
+  state.selected_section = 'processed_eligible';
+  const canonical = {
+    rows: [row(active.row_key, 'authorised_eligible'), alreadyAuthorised],
+    counts: { total: 2 }
+  };
+  const { win } = installHarness(state, {
+    async fetchBulkAuthoriseDataset() { return clone(canonical); },
+    async handleBulkAuthoriseSelected() {
+      return { ok: true, batch_completed: true, success_count: 1, failed_items: [], mutationSeq: 13 };
+    }
+  });
+
+  await win.handleBulkAuthoriseSelected(state, {});
+
+  assert.equal(state.active_row_key, null);
+  assert.equal(state.active_row, null);
+  assert.deepEqual(state.selected_row_keys, []);
+});
+
+test('unauthorising a row selects the same row in Processed Eligible', async () => {
+  const active = row('timesheet:A', 'authorised_eligible');
+  const other = row('timesheet:B', 'authorised_eligible');
+  const state = stateFor([active, other], active.row_key);
+  state.selected_row_keys = [active.row_key];
+  state.selected_section = 'authorised_eligible';
+  const canonical = {
+    rows: [row(active.row_key, 'processed_eligible'), other],
+    counts: { total: 2 }
+  };
+  const { win } = installHarness(state, {
+    async fetchBulkAuthoriseDataset() { return clone(canonical); },
+    async handleBulkUnauthoriseSelected() {
+      return { ok: true, batch_completed: true, success_count: 1, failed_items: [], mutationSeq: 14 };
+    }
+  });
+
+  await win.handleBulkUnauthoriseSelected(state, {});
+
+  assert.equal(state.active_row_key, active.row_key);
+  assert.equal(state.active_row.bulk_authorise_section, 'processed_eligible');
+  assert.deepEqual(state.selected_row_keys, []);
 });
 
 test('modal dismissal invalidates the controller and clears row-owned state', async () => {

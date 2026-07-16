@@ -68,6 +68,54 @@
     return { ...(state && state.filters ? state.filters : {}), classification: classificationOf(state && state.classification) };
   };
 
+  const captureMutationIntent = (action, state) => {
+    const rows = visibleRowsFor(state);
+    const activeRowKey = trim(state?.active_row_key || rowKeyOf(state?.active_row));
+    const selectedKeys = Array.isArray(state?.selected_row_keys)
+      ? state.selected_row_keys.map(trim).filter(Boolean)
+      : [];
+    const selectedSection = trim(state?.selected_section);
+    const targetSection = action === 'authorise' ? 'processed_eligible' : 'authorised_eligible';
+    const sectionRows = rows.filter((row) => trim(row?.bulk_authorise_section) === targetSection);
+    const sectionKeys = sectionRows.map(rowKeyOf).filter(Boolean);
+    const affectedKeys = selectedKeys.length && selectedSection === targetSection
+      ? selectedKeys.filter((key) => sectionKeys.includes(key))
+      : (activeRowKey && sectionKeys.includes(activeRowKey) ? [activeRowKey] : []);
+    const activeAffected = !!(activeRowKey && affectedKeys.includes(activeRowKey));
+    const anchorKey = activeAffected ? activeRowKey : affectedKeys[affectedKeys.length - 1];
+    const anchorIndex = sectionKeys.indexOf(anchorKey);
+    const fallbackRowKeys = action === 'authorise' && anchorIndex >= 0
+      ? sectionKeys.slice(anchorIndex + 1).filter((key) => !affectedKeys.includes(key))
+      : affectedKeys.slice();
+    const leftPane = win.document?.getElementById?.('bulkAuthoriseLeftPane');
+    return {
+      action,
+      active_row_key: activeRowKey,
+      affected_row_keys: affectedKeys,
+      active_affected: activeAffected,
+      fallback_row_keys: fallbackRowKeys,
+      left_scroll_top: Number(leftPane?.scrollTop || 0)
+    };
+  };
+
+  const restoreLeftPanePosition = (scrollTop, activeRowKey, ensureVisible) => {
+    const apply = () => {
+      const leftPane = win.document?.getElementById?.('bulkAuthoriseLeftPane');
+      if (!leftPane) return;
+      leftPane.scrollTop = Number(scrollTop || 0);
+      if (!ensureVisible || !activeRowKey) return;
+      const rows = Array.from(leftPane.querySelectorAll?.('[data-bulk-authorise-row="1"][data-row-key]') || []);
+      const activeElement = rows.find((row) => trim(row.getAttribute('data-row-key')) === activeRowKey);
+      if (!activeElement || typeof activeElement.getBoundingClientRect !== 'function') return;
+      const hostRect = leftPane.getBoundingClientRect();
+      const rowRect = activeElement.getBoundingClientRect();
+      if (rowRect.top < hostRect.top) leftPane.scrollTop += rowRect.top - hostRect.top;
+      else if (rowRect.bottom > hostRect.bottom) leftPane.scrollTop += rowRect.bottom - hostRect.bottom;
+    };
+    apply();
+    if (typeof win.requestAnimationFrame === 'function') win.requestAnimationFrame(apply);
+  };
+
   function cancelPreviewInflight(pane) {
     const inflight = pane && pane.__preview_presign_inflight;
     if (!inflight || typeof inflight !== 'object') return;
@@ -195,13 +243,14 @@
       return visibleRowsFor(this.state);
     }
 
-    findRow(preferredRowKey) {
+    findRow(preferredRowKey, allowEmptySelection = false) {
       const rows = this.rows();
       const preferred = trim(preferredRowKey);
       if (preferred) {
         const exact = rows.find((row) => rowKeyOf(row) === preferred);
         if (exact) return exact;
       }
+      if (allowEmptySelection) return null;
       return rows.find((row) => trim(row && row.bulk_authorise_section) === 'processed_eligible')
         || rows.find((row) => trim(row && row.bulk_authorise_section) === 'authorised_eligible')
         || rows[0]
@@ -514,7 +563,8 @@
 
     async transitionToRow(preferredRowKey, options = {}) {
       if (this.closed) return false;
-      const target = this.findRow(preferredRowKey);
+      const allowEmptySelection = options.allowEmptySelection === true || options.allow_empty_selection === true;
+      const target = this.findRow(preferredRowKey, allowEmptySelection);
       const targetKey = rowKeyOf(target);
       const currentKey = trim(this.state.active_row_key || rowKeyOf(this.state.active_row));
 
@@ -666,21 +716,32 @@
       }
     }
 
-    chooseActiveAfterMutation(action, previousActiveKey) {
+    chooseActiveAfterMutation(action, mutationIntent = {}, result = {}) {
       const rows = this.rows();
-      const previous = rows.find((row) => rowKeyOf(row) === previousActiveKey) || null;
-      if (action === 'unauthorise' && previous) return rowKeyOf(previous);
-      if (action === 'authorise' && previous && trim(previous.bulk_authorise_section) === 'processed_eligible') return rowKeyOf(previous);
-      const processed = rows.find((row) => trim(row && row.bulk_authorise_section) === 'processed_eligible');
-      if (processed) return rowKeyOf(processed);
-      if (previous) return rowKeyOf(previous);
-      return rowKeyOf(rows[0]);
+      const rowByKey = new Map(rows.map((row) => [rowKeyOf(row), row]).filter(([key]) => !!key));
+      const previousActiveKey = trim(mutationIntent.active_row_key || result.pre_mutation_active_row_key);
+      const previous = rowByKey.get(previousActiveKey) || null;
+      const preferred = trim(result.preferred_active_row_key);
+      const resultFallbacks = Array.isArray(result.fallback_row_keys) ? result.fallback_row_keys.map(trim).filter(Boolean) : [];
+      const intentFallbacks = Array.isArray(mutationIntent.fallback_row_keys) ? mutationIntent.fallback_row_keys.map(trim).filter(Boolean) : [];
+      const affectedKeys = Array.isArray(mutationIntent.affected_row_keys) ? mutationIntent.affected_row_keys.map(trim).filter(Boolean) : [];
+      const candidates = [preferred, ...resultFallbacks, ...intentFallbacks, ...affectedKeys].filter(Boolean);
+
+      if (action === 'unauthorise') {
+        const moved = candidates.find((key) => trim(rowByKey.get(key)?.bulk_authorise_section) === 'processed_eligible');
+        if (moved) return moved;
+        if (previous) return rowKeyOf(previous);
+        return '';
+      }
+
+      if (mutationIntent.active_affected !== true && previous) return rowKeyOf(previous);
+      const nextProcessed = candidates.find((key) => trim(rowByKey.get(key)?.bulk_authorise_section) === 'processed_eligible');
+      return nextProcessed || '';
     }
 
-    async refreshCanonicalDatasetAfterMutation(action, result) {
+    async refreshCanonicalDatasetAfterMutation(action, result, mutationIntent = {}) {
       if (this.closed || !result || result.batch_completed === false || Number(result.success_count || 0) < 1) return false;
       const epoch = ++this.datasetEpoch;
-      const previousActiveKey = trim(this.state.active_row_key || rowKeyOf(this.state.active_row));
       this.state.__bulk_authorise_v2_canonical_refreshing = true;
       try {
         const dataset = await win.fetchBulkAuthoriseDataset(requestFiltersFor(this.state), {
@@ -700,11 +761,18 @@
         this.state.selected_section = failedKeys.length
           ? (action === 'authorise' ? 'processed_eligible' : 'authorised_eligible')
           : null;
-        const nextActiveKey = this.chooseActiveAfterMutation(action, previousActiveKey);
+        const nextActiveKey = this.chooseActiveAfterMutation(action, mutationIntent, result);
+        const clearActiveRowAfterAuthorise = action === 'authorise' && mutationIntent.active_affected === true && !nextActiveKey;
         await this.transitionToRow(nextActiveKey, {
           skipDirtyGuard: true,
-          source: 'canonical-mutation-refresh'
+          source: 'canonical-mutation-refresh',
+          allowEmptySelection: clearActiveRowAfterAuthorise
         });
+        restoreLeftPanePosition(
+          mutationIntent.left_scroll_top,
+          nextActiveKey,
+          action === 'unauthorise' || result.ensure_active_row_visible === true
+        );
         result.canonical_dataset_refreshed = true;
         return true;
       } catch (error) {
@@ -793,18 +861,22 @@
 
   if (typeof legacy.authoriseSelected === 'function') {
     win.handleBulkAuthoriseSelected = async function handleBulkAuthoriseSelectedV2(state, options) {
+      const liveState = currentState(state);
+      const mutationIntent = captureMutationIntent('authorise', liveState);
       const result = await legacy.authoriseSelected(state, options);
-      const controller = controllerFor(state);
-      if (controller) await controller.refreshCanonicalDatasetAfterMutation('authorise', result);
+      const controller = controllerFor(liveState);
+      if (controller) await controller.refreshCanonicalDatasetAfterMutation('authorise', result, mutationIntent);
       return result;
     };
   }
 
   if (typeof legacy.unauthoriseSelected === 'function') {
     win.handleBulkUnauthoriseSelected = async function handleBulkUnauthoriseSelectedV2(state, options) {
+      const liveState = currentState(state);
+      const mutationIntent = captureMutationIntent('unauthorise', liveState);
       const result = await legacy.unauthoriseSelected(state, options);
-      const controller = controllerFor(state);
-      if (controller) await controller.refreshCanonicalDatasetAfterMutation('unauthorise', result);
+      const controller = controllerFor(liveState);
+      if (controller) await controller.refreshCanonicalDatasetAfterMutation('unauthorise', result, mutationIntent);
       return result;
     };
   }

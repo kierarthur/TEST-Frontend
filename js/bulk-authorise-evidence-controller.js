@@ -58,6 +58,18 @@
     if (value === 'ACCOM') return 'ACCOMMODATION';
     return value || 'OTHER';
   };
+  const evidenceFilenameOf = (item) => {
+    const explicit = trim(item && (
+      item.filename ||
+      item.original_filename ||
+      item.file_name ||
+      item.display_name ||
+      item.name
+    ));
+    if (explicit) return explicit;
+    const fileKey = evidenceFileKeyOf(item);
+    return trim(fileKey.split('/').filter(Boolean).pop()) || 'Evidence file';
+  };
   const isSyntheticEvidence = (item) => {
     const id = evidenceIdOf(item);
     return !!(
@@ -78,7 +90,7 @@
     if (staged && !trim(item.evidence_id || item.timesheet_evidence_id) && source !== 'ATTACHED') return null;
     const kind = evidenceKindOf(item);
     const id = evidenceIdOf(item) || `system:${kind}:${fileKey}`;
-    const displayName = trim(item.display_name || item.filename || item.original_filename || item.file_name) || `${kind === 'TIMESHEET' ? 'Timesheet' : 'Evidence'} file`;
+    const displayName = evidenceFilenameOf(item) || `${kind === 'TIMESHEET' ? 'Timesheet' : 'Evidence'} file`;
     return {
       ...clone(item),
       id,
@@ -895,6 +907,19 @@
           }, true);
         }
       }
+      if (trim(pane.active_tab).toLowerCase() === 'attached') this.syncPreviewMetadata(pane.active_attached_item);
+    }
+
+    syncPreviewMetadata(item) {
+      if (!doc || !this.isTimesheets()) return false;
+      const root = doc.getElementById('bulkAuthoriseWorkbenchRoot');
+      const label = root?.querySelector?.('#bulkProcessPreviewLabel');
+      if (!label) return false;
+      const filename = evidenceFilenameOf(item);
+      if (!filename) return false;
+      if (trim(label.textContent) !== filename) label.textContent = filename;
+      if (trim(label.getAttribute?.('title')) !== filename) label.setAttribute('title', filename);
+      return true;
     }
 
     renderPreviewLoading() {
@@ -941,6 +966,7 @@
     renderResolvedPreview(item, signedUrl) {
       const stage = doc && doc.getElementById('bulkProcessPreviewStage');
       if (!stage || typeof doc.createElement !== 'function' || !trim(signedUrl)) return false;
+      this.syncPreviewMetadata(item);
       const fileKey = evidenceFileKeyOf(item);
       const mime = trim(item && (item.mime_type || item.content_type)).toLowerCase();
       const isPdf = mime.includes('pdf') || /\.pdf(?:$|[?#])/i.test(fileKey);
@@ -978,6 +1004,7 @@
       const target = selectionKey(item);
       const fileKey = evidenceFileKeyOf(item);
       if (!identity || !target || !fileKey) return Promise.resolve(false);
+      this.syncPreviewMetadata(item);
       if (!force && trim(pane.__preview_target_key) === target && trim(pane.__preview_signed_url)) {
         const stage = doc && doc.getElementById('bulkProcessPreviewStage');
         const resolved = stage && stage.querySelector('#bulkProcessImagePreviewEl, #bulkProcessPdfPreviewFrame');

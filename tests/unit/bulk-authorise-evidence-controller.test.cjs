@@ -138,7 +138,15 @@ function install(state, options = {}) {
   const listeners = {};
   const thumbnailButtons = Array.isArray(options.thumbnailButtons) ? options.thumbnailButtons : [];
   const elements = options.elements && typeof options.elements === 'object' ? options.elements : {};
-  const root = { dataset: {}, addEventListener() {}, querySelectorAll() { return []; } };
+  const previewLabel = options.previewLabel || null;
+  const root = {
+    dataset: {},
+    addEventListener() {},
+    querySelector(selector) {
+      return selector === '#bulkProcessPreviewLabel' ? previewLabel : null;
+    },
+    querySelectorAll() { return []; }
+  };
   const stage = { textContent: 'Preview is loading…', innerHTML: '' };
   let rerenders = 0;
   const document = {
@@ -291,6 +299,33 @@ test('the active thumbnail border moves with the selected evidence item', async 
   assert.equal(accommodationButton.classList.contains('selected'), false);
   assert.equal(travelButton.classList.contains('active'), true);
   assert.equal(travelButton.classList.contains('selected'), true);
+});
+
+test('the preview heading uses the real filename instead of a generic PDF-style label', async () => {
+  const timesheet = evidence('evidence:timesheet', 'TIMESHEET', 'files/TIMESHEET.jpg', {
+    filename: 'TIMESHEET.jpg',
+    display_name: 'Uploaded timesheet PDF',
+    mime_type: 'image/jpeg'
+  });
+  let textWrites = 0;
+  let labelText = '';
+  const previewLabel = {
+    attributes: {},
+    get textContent() { return labelText; },
+    set textContent(value) { textWrites += 1; labelText = String(value); },
+    getAttribute(name) { return this.attributes[name] || ''; },
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+  };
+  const state = makeState([timesheet]);
+  const harness = install(state, { previewLabel });
+
+  harness.controller.sanitize('initial');
+  await harness.controller.selectAttached(timesheet, 'test-filename');
+  harness.controller.syncPreviewMetadata(timesheet);
+
+  assert.equal(previewLabel.textContent, 'TIMESHEET.jpg');
+  assert.equal(previewLabel.attributes.title, 'TIMESHEET.jpg');
+  assert.equal(textWrites, 1);
 });
 
 test('Attached Previous and Next use the controller selection while Queue navigation remains untouched', async () => {
