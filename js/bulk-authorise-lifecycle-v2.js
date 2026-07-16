@@ -351,9 +351,18 @@
       if (typeof handler !== 'function') return false;
       const execute = () => handler(state, options);
       const label = action === 'authorise' ? 'Authorising' : 'Unauthorising';
-      const outcome = typeof win.withExistingModalLoadingSpinner === 'function'
-        ? await win.withExistingModalLoadingSpinner(state, label, execute)
-        : await execute();
+      let outcome;
+      try {
+        outcome = typeof win.withExistingModalLoadingSpinner === 'function'
+          ? await win.withExistingModalLoadingSpinner(state, label, execute)
+          : await execute();
+      } finally {
+        if (!this.closed && state.__workbench_modal_spinner_active !== true) {
+          try {
+            await this.render(`[TS][BULK-AUTH][LIFECYCLE-V2][${action.toUpperCase()}-ACTION-SETTLED]`);
+          } catch {}
+        }
+      }
 
       const completionModal = selectedControl && outcome && typeof outcome === 'object' ? outcome.completionModal : null;
       if (completionModal?.shouldShow && !state.__workbench_modal_spinner_active && typeof win.openUiConfirmModal === 'function') {

@@ -289,14 +289,13 @@
     }
 
     prepareDatasetBadgeHydration(rows) {
-      const pendingState = badgeStateFromRows([]);
       for (const row of rows) {
         const identity = rowKeyOf(row);
         const timesheetId = trim(row?.current_timesheet_id || row?.timesheet_id || row?.requested_timesheet_id);
         if (!identity || !timesheetId) continue;
         this.datasetPendingBadgeIdentities.add(identity);
-        this.datasetBadgeTruth.set(identity, clone(pendingState));
-        this.writeDatasetBadgeState(identity, pendingState, { pending: true });
+        const initial = this.datasetInitialBadgeTruth.get(identity) || null;
+        if (initial) this.datasetBadgeTruth.set(identity, clone(initial));
       }
     }
 
@@ -1164,7 +1163,12 @@
       const controller = controllerFor(state);
       if (controller) {
         controller.settle('after-open');
-        void controller.hydrateDatasetBadges();
+        const hydration = controller.hydrateDatasetBadges();
+        const datasetRef = controller.datasetRef;
+        const epoch = controller.badgeHydrationEpoch;
+        void Promise.resolve(hydration)
+          .then(() => controller.scheduleDatasetBadgeHydrationRender(datasetRef, epoch, 'after-open-complete'))
+          .catch(() => false);
       }
       return state;
     };

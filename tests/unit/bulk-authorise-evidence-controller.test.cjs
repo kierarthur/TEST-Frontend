@@ -166,6 +166,7 @@ function install(state, options = {}) {
     modalCtx: { entity: 'bulk-authorise', bulkAuthoriseState: state },
     BROKER_BASE_URL: options.brokerBaseUrl || '',
     authFetch: options.authFetch,
+    async openBulkAuthoriseWorkbench() { return state; },
     renderBulkAuthoriseShell() { return '<div id="bulkAuthoriseWorkbenchRoot"></div>'; },
     async refreshBulkAuthoriseActiveContext() { return true; },
     async bindBulkAuthoriseEvidencePane() { return true; },
@@ -439,7 +440,7 @@ test('Queue preview remains separate and Attached restores the row selection and
   assert.equal(pane.__preview_target_key, harness.api.selectionKey(travel));
 });
 
-test('all dataset row badges hydrate from evidence context before the corrected render', async () => {
+test('canonical dataset badges remain visible while verified corrections stream in', async () => {
   const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
   const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
   const state = makeState([travel]);
@@ -481,11 +482,11 @@ test('all dataset row badges hydrate from evidence context before the corrected 
   });
 
   const hydration = harness.controller.hydrateDatasetBadges();
-  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), []);
-  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[1].evidence_badges), String), []);
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), ['TIMESHEET']);
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[1].evidence_badges), String), ['TIMESHEET']);
   for (let attempt = 0; attempt < 20 && harness.rerenders === 0; attempt += 1) await Promise.resolve();
   assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), ['TRAVEL']);
-  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[1].evidence_badges), String), []);
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[1].evidence_badges), String), ['TIMESHEET']);
   assert.ok(harness.rerenders >= 1, 'the first verified row should render before all requests finish');
   releaseSecondResponse();
   const result = await hydration;
@@ -496,6 +497,44 @@ test('all dataset row badges hydrate from evidence context before the corrected 
   assert.equal(result.failed, 0);
   assert.equal(state.__bulk_authorise_badge_hydration_complete, true);
   assert.ok(harness.rerenders >= 2);
+});
+
+test('a badge correction that finishes before the modal is live is rendered after open', async () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([travel]);
+  state.dataset.rows[0].evidence_badges = badges('TIMESHEET');
+  state.dataset.rows[0].has_any_evidence = true;
+  state.dataset.rows[0].attached_evidence_count = 1;
+  const harness = install(state, {
+    brokerBaseUrl: 'https://test-worker.invalid',
+    async authFetch() {
+      return {
+        ok: true,
+        async text() {
+          return JSON.stringify({
+            ok: true,
+            profile: 'evidence',
+            context_profile: 'evidence',
+            evidence_loaded: true,
+            evidence: [travel]
+          });
+        }
+      };
+    }
+  });
+
+  harness.win.modalCtx.bulkAuthoriseState = null;
+  const result = await harness.controller.hydrateDatasetBadges();
+
+  assert.equal(result.succeeded, 1);
+  assert.equal(harness.rerenders, 0);
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), ['TRAVEL']);
+
+  harness.win.modalCtx.bulkAuthoriseState = state;
+  await harness.win.openBulkAuthoriseWorkbench();
+  for (let attempt = 0; attempt < 20 && harness.rerenders === 0; attempt += 1) await Promise.resolve();
+
+  assert.ok(harness.rerenders >= 1, 'the settled badge truth should render once the modal is live');
 });
 
 test('an unresolved loading state becomes an explicit retryable error', () => {

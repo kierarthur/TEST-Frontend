@@ -330,6 +330,44 @@ test('unauthorising a row selects the same row in Processed Eligible', async () 
   assert.deepEqual(state.selected_row_keys, []);
 });
 
+test('the right-pane action renders once more after its modal spinner has cleared', async () => {
+  const active = row('timesheet:A');
+  const state = stateFor([active], active.row_key);
+  const renderStates = [];
+  const { controller } = installHarness(state, {
+    async handleBulkAuthoriseSelected() {
+      return { ok: false, batch_completed: false, success_count: 0 };
+    },
+    async withExistingModalLoadingSpinner(current, _label, run) {
+      current.__workbench_modal_spinner_active = true;
+      try {
+        return await run();
+      } finally {
+        current.__workbench_modal_spinner_active = false;
+      }
+    },
+    async rerenderBulkAuthoriseWorkbench(current, reason) {
+      renderStates.push({
+        reason,
+        spinnerActive: current.__workbench_modal_spinner_active === true
+      });
+      return true;
+    }
+  });
+  const button = {
+    id: 'bulkAuthActionRowAuthoriseBtn',
+    disabled: false,
+    dataset: {},
+    getAttribute() { return ''; }
+  };
+
+  await controller.runOwnedAction(button);
+
+  assert.equal(renderStates.length, 1);
+  assert.match(renderStates[0].reason, /AUTHORISE-ACTION-SETTLED/);
+  assert.equal(renderStates[0].spinnerActive, false);
+});
+
 test('modal dismissal invalidates the controller and clears row-owned state', async () => {
   const first = row('timesheet:A');
   const state = stateFor([first], first.row_key);
