@@ -15891,8 +15891,8 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
   const caseTypeRaw = upperTrim(src.case_type || '');
   if (!isPaymentIssueMode) {
     if (isTaxableChannelRestructure) {
-      if (!(caseTypeRaw === 'OVERPAYMENT' || caseTypeRaw === 'MANUAL_DEBT_ADJUSTMENT' || caseTypeRaw === 'MANUAL_CREDIT_ADJUSTMENT')) {
-        alert('Taxable channel restructure is only available for taxable finance overpayment/manual adjustment cases.');
+      if (!(caseTypeRaw === 'OVERPAYMENT' || caseTypeRaw === 'UNDERPAYMENT' || caseTypeRaw === 'MANUAL_DEBT_ADJUSTMENT' || caseTypeRaw === 'MANUAL_CREDIT_ADJUSTMENT')) {
+        alert('Taxable channel restructure is only available for taxable finance overpayment, underpayment, or manual adjustment cases.');
         return;
       }
     } else if (!(caseTypeRaw === 'PAYMENT_ADVANCE' || caseTypeRaw === 'MANUAL_DEBT_ADJUSTMENT')) {
@@ -16267,6 +16267,7 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
     if (s === 'MANUAL_DEBT_ADJUSTMENT') return 'Manual Debt Adjustment';
     if (s === 'MANUAL_CREDIT_ADJUSTMENT') return 'Manual Credit Adjustment';
     if (s === 'OVERPAYMENT') return 'Overpayment';
+    if (s === 'UNDERPAYMENT') return 'Underpayment credit';
     return String(v || '').trim() || 'Finance Case';
   };
 
@@ -16734,7 +16735,8 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
                 const sourceAmount = firstFiniteNumber(r.source_remaining_amount_ex_vat, r.source_amount_ex_vat, r.remaining_source_amount, r.source_remaining_amount);
                 const targetAmount = firstFiniteNumber(r.target_remaining_amount_ex_vat, r.target_amount_ex_vat, r.suggested_target_amount_ex_vat, r.target_remaining_amount);
                 const componentVat = firstFiniteNumber(r.target_amount_vat, r.vat_amount, r.target_vat_amount);
-                const status = r.conversion_status || r.status || (upperTrim(classification) === 'TAXABLE_CHANNEL_SENSITIVE' ? 'Converted' : 'Unchanged');
+                const isFixedComponent = r.is_fixed_component === true || r.fixed_component_unchanged === true || upperTrim(classification) !== 'TAXABLE_CHANNEL_SENSITIVE';
+                const status = r.conversion_status || r.status || (isFixedComponent ? 'Fixed — unchanged' : 'Taxable conversion');
                 return `
                   <tr>
                     <td style="padding:6px;border-bottom:1px solid var(--line);">${enc(classification)}</td>
@@ -16756,7 +16758,7 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
     return `
       <div class="card" style="padding:10px;">
         <div class="mini" style="opacity:.9;margin-bottom:10px;">
-          The backend has calculated the taxable channel restructure. The frontend only submits the repayment schedule choice and note.
+          The backend has calculated the taxable channel restructure. Fixed/non-taxable components remain unchanged; only the taxable remainder is resolved. The frontend only submits the repayment schedule choice and note.
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
           ${renderArrangementCard('Existing arrangement', existingArrangement, {
@@ -16825,7 +16827,7 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
                 <label class="mini">Effective pay date<input id="paymentIssueManualDate_${enc(c.key)}" class="input" type="text" placeholder="DD/MM/YYYY" value="${enc(toUk(c.allow_effective_pay_date_override ? c.manual_effective_pay_date : c.effective_pay_date) || (c.allow_effective_pay_date_override ? c.manual_effective_pay_date : c.effective_pay_date))}" ${c.allow_effective_pay_date_override ? '' : 'readonly aria-readonly="true" style="opacity:.72;background:rgba(148,163,184,.12);"'}></label>
               </div>
               <label class="mini" style="display:block;margin-top:8px;">Note<textarea id="paymentIssueManualNote_${enc(c.key)}" class="input" rows="3">${enc(c.manual_note || state.note || '')}</textarea></label>
-              <div class="mini" style="opacity:.82;margin-top:6px;">Manual values are sent to the backend suggestion endpoint. The frontend does not calculate ERNI, VAT, target conversion amounts, or hashes.${c.allow_effective_pay_date_override ? '' : ' The effective pay date is locked to the backend correction plan.'}</div>
+              <div class="mini" style="opacity:.82;margin-top:6px;">Manual values are sent to the backend suggestion endpoint. The fixed component total cannot be reduced; the backend allocates only the taxable remainder. The frontend does not calculate ERNI, VAT, target conversion amounts, or hashes.${c.allow_effective_pay_date_override ? '' : ' The effective pay date is locked to the backend correction plan.'}</div>
             </div>
           </div>
         `;
@@ -17551,7 +17553,6 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
     }
   );
 }
-
 
 async function runBulkTimesheetSelectionChunks(action, items, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
@@ -45698,9 +45699,6 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 
 
 
-
-
-
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -48870,7 +48868,186 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
   };
 
 
+
+  const getFinanceResolutionAction = (line) => {
+    if (!line || typeof line !== 'object') return null;
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const directAction = line.clear_resolution_action || line.clearResolutionAction || line.cancel_resolution_action || line.cancelResolveAction || line.resolution_clear_action;
+    if (isPlainObject(directAction)) return directAction;
+    const nestedAction = nested?.clear_resolution_action || nested?.clearResolutionAction || nested?.cancel_resolution_action || nested?.cancelResolveAction || nested?.resolution_clear_action;
+    if (isPlainObject(nestedAction)) return nestedAction;
+    const summaryAction = summary.clear_resolution_action || summary.clearResolutionAction || summary.cancel_resolution_action || summary.cancelResolveAction || summary.resolution_clear_action;
+    if (isPlainObject(summaryAction)) return summaryAction;
+    return null;
+  };
+
+  const getFinanceResolutionState = (line) => {
+    if (!line || typeof line !== 'object') return '';
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const action = getFinanceResolutionAction(line) || {};
+    return upperTrim(
+      line.resolution_state ||
+      line.case_resolution_state ||
+      line.finance_resolution_state ||
+      line.resolutionStatus ||
+      line.caseResolutionState ||
+      nested?.resolution_state ||
+      nested?.case_resolution_state ||
+      summary?.resolution_state ||
+      summary?.case_resolution_state ||
+      action.resolution_state ||
+      action.case_resolution_state ||
+      ''
+    );
+  };
+
+  const getFinanceResolutionFamily = (line) => {
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const action = getFinanceResolutionAction(line) || {};
+    return upperTrim(
+      action.resolution_family ||
+      action.resolutionFamily ||
+      line?.resolution_family ||
+      line?.resolutionFamily ||
+      line?.case_resolution_family ||
+      line?.caseResolutionFamily ||
+      nested?.resolution_family ||
+      nested?.case_resolution_family ||
+      summary?.resolution_family ||
+      summary?.case_resolution_family ||
+      ''
+    );
+  };
+
+  const getFinanceResolutionCaseId = (line) => {
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const action = getFinanceResolutionAction(line) || {};
+    return trimStr(
+      action.finance_case_id ||
+      action.financeCaseId ||
+      line?.finance_case_id ||
+      line?.financeCaseId ||
+      nested?.finance_case_id ||
+      nested?.financeCaseId ||
+      summary?.finance_case_id ||
+      summary?.financeCaseId ||
+      ''
+    );
+  };
+
+  const isResolvedFinanceLine = (line, renderContextSection = '') => {
+    if (!line || typeof line !== 'object') return false;
+    const section = upperTrim(renderContextSection) || getLinePresentationSection(line);
+    if (section !== 'READY_TO_PAY') return false;
+    const family = getFinanceResolutionFamily(line);
+    if (!family || family === 'BUCKETED') return false;
+    const financeCaseId = getFinanceResolutionCaseId(line);
+    if (!financeCaseId) return false;
+    const action = getFinanceResolutionAction(line) || {};
+    const state = getFinanceResolutionState(line);
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const badge = upperTrim(
+      line.resolution_badge ||
+      line.resolutionBadge ||
+      line.presentation_badge ||
+      line.presentationBadge ||
+      nested?.resolution_badge ||
+      nested?.presentation_badge ||
+      summary?.resolution_badge ||
+      action.badge ||
+      ''
+    );
+    return state === 'RESOLVED'
+      || badge === 'RESOLVED'
+      || asBool(action.resolved)
+      || asBool(line.is_resolved)
+      || asBool(line.isResolved)
+      || asBool(nested?.is_resolved)
+      || asBool(summary?.is_resolved);
+  };
+
+  const financeCancelResolveActionHtml = (line, renderContextSection = '') => {
+    if (!isResolvedFinanceLine(line, renderContextSection)) return '';
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const action = getFinanceResolutionAction(line) || {};
+    const financeCaseId = getFinanceResolutionCaseId(line);
+    const candidateId = trimStr(
+      action.candidate_id ||
+      action.candidateId ||
+      line?.candidate_id ||
+      nested?.candidate_id ||
+      summary?.candidate_id ||
+      getLineCandidateId(line) ||
+      ''
+    );
+    const linkedTimesheetId = trimStr(
+      action.linked_timesheet_id ||
+      action.linkedTimesheetId ||
+      action.timesheet_id ||
+      action.timesheetId ||
+      line?.linked_timesheet_id ||
+      line?.timesheet_id ||
+      nested?.linked_timesheet_id ||
+      nested?.timesheet_id ||
+      summary?.linked_timesheet_id ||
+      summary?.timesheet_id ||
+      ''
+    );
+    const caseKey = trimStr(
+      action.case_key ||
+      action.caseKey ||
+      line?.case_key ||
+      line?.caseKey ||
+      nested?.case_key ||
+      summary?.case_key ||
+      (financeCaseId ? `advance:${financeCaseId}` : '')
+    );
+    const family = getFinanceResolutionFamily(line) || 'TAXABLE_CHANNEL_RESTRUCTURE';
+    if (!candidateId || !caseKey || !financeCaseId) return '';
+    const confirmationText = 'Cancel this resolved finance Case Resolution? Existing Draft items remain frozen and may need to be cancelled and regenerated.';
+    return `
+      <button
+        type="button"
+        class="btn btn-xs btn-outline"
+        data-action="banking:pay:componentClearResolution"
+        data-candidate-id="${enc(candidateId)}"
+        data-case-key="${enc(caseKey)}"
+        data-finance-case-id="${enc(financeCaseId)}"
+        ${linkedTimesheetId ? `data-timesheet-id="${enc(linkedTimesheetId)}" data-linked-timesheet-id="${enc(linkedTimesheetId)}"` : ''}
+        data-resolution-family="${enc(family)}"
+        data-confirm-message="${enc(confirmationText)}"
+        ${getCandidateActionDisabledAttrs(candidateId, 'Cancel the resolved finance case')}
+      >Cancel Resolve</button>
+    `;
+  };
+
+  const displayBlockedReasonText = (value) => {
+    const text = trimStr(value || '');
+    if (!text) return '';
+    if (upperTrim(text) === 'NO_PAY_HEADROOM') return 'No credit balance to deduct';
+    return text;
+  };
+
   const resolvedRateBadgeHtml = (line, renderContextSection = '') => {
+    if (isResolvedFinanceLine(line, renderContextSection)) return '<div><span class="pill" style="display:inline-block;background:#b91c1c;color:#fff;border-color:#991b1b;font-weight:800;margin-bottom:4px;">RESOLVED</span></div>';
     const nested = getNestedLinePayload(line);
     const summary = isPlainObject(line?.case_resolution_summary)
       ? line.case_resolution_summary
@@ -48934,6 +49111,8 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
   };
 
   const resolvedRateCancelActionHtml = (line, renderContextSection = '') => {
+    const financeClearHtml = financeCancelResolveActionHtml(line, renderContextSection);
+    if (financeClearHtml) return financeClearHtml;
     const nested = getNestedLinePayload(line);
     const summary = isPlainObject(line?.case_resolution_summary)
       ? line.case_resolution_summary
@@ -52965,7 +53144,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
               ${stalePill}
             </div>
             <div class="mini" style="opacity:.85;">${enc(caseMetaBits.join(' • ') || 'Case detail')}${Number(entry.case_amount || 0) > 0 ? ` • Amount ${enc(fmtMoney(entry.case_amount))}` : ''}</div>
-            ${trimStr(entry.blocked_reason || '') ? `<div class="mini" style="opacity:.9; margin-top:6px;">${enc(trimStr(entry.blocked_reason || ''))}</div>` : ''}
+            ${displayBlockedReasonText(entry.blocked_reason || '') ? `<div class="mini" style="opacity:.9; margin-top:6px;">${enc(displayBlockedReasonText(entry.blocked_reason || ''))}</div>` : ''}
           </div>
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">${renderCaseActionButtons(entry)}</div>
         </div>
@@ -53166,6 +53345,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     </div>
   `;
 }
+
 
 
 
@@ -58038,14 +58218,14 @@ function renderPayBatchListPanel() {
     const hasChangedScope = Object.keys(changeScope).length > 0;
     const hasHint = explicitHint && draftLike;
     if (!hasHint) return { hasHint: false, label: '', message: '', changedAt: '', authorityScope: '' };
-    const reasonText = changeReason ? changeReason.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase()) : 'Source changed';
+    const staleInstruction = 'No longer valid — cancel and regenerate';
     const changedText = changedAt ? ` Last signal ${fmtUtcToUk(changedAt) || changedAt}.` : '';
     const scopeText = authorityScope ? ` Authority: ${authorityScope}.` : '';
     const fallbackDetail = hasChangedScope ? ' Source changes were recorded after this Draft was created.' : '';
     return {
       hasHint: true,
-      label: 'Draft stale',
-      message: `Draft may be stale: ${reasonText}.${changedText}${scopeText}${fallbackDetail}`,
+      label: staleInstruction,
+      message: `${staleInstruction}.${changedText}${scopeText}${fallbackDetail}`,
       changedAt,
       authorityScope
     };
@@ -58609,7 +58789,7 @@ function renderPayBatchListPanel() {
       : '';
     const draftStaleHint = deriveDraftStaleHintForBatchListRow(r);
     const draftStalePillHtml = draftStaleHint.hasHint
-      ? ` <span class="pill pill-warn" title="${enc(draftStaleHint.message)}">${enc(draftStaleHint.label || 'Draft stale')}</span>`
+      ? ` <span class="pill pill-warn" title="${enc(draftStaleHint.message)}">${enc(draftStaleHint.label || 'No longer valid — cancel and regenerate')}</span>`
       : '';
     const issuePillsHtml = `${baseIssuePillsHtml}${communicationPillHtml}${draftStalePillHtml}`;
 
@@ -58876,7 +59056,6 @@ function renderPayBatchListPanel() {
     </div>
   `;
 }
-
 
 function deriveTimesheetModalInvoicingState(ctx) {
   const src = (ctx && typeof ctx === 'object') ? ctx : {};
