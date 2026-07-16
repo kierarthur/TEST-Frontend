@@ -34,11 +34,11 @@ function badges(...positiveKinds) {
   }));
 }
 
-function thumbnailButton(item) {
+function thumbnailButton(item, initialClasses = []) {
   const attributes = {
     'data-attached-id': item.evidence_id || item.id || ''
   };
-  const classes = new Set(['btn', 'btn-outline']);
+  const classes = new Set(['btn', 'btn-outline', ...initialClasses]);
   return {
     style: {},
     __listeners: {},
@@ -51,6 +51,28 @@ function thumbnailButton(item) {
         else classes.delete(name);
       },
       contains(name) { return classes.has(name); }
+    }
+  };
+}
+
+function actionButton() {
+  const listeners = {};
+  return {
+    dataset: {},
+    disabled: false,
+    addEventListener(type, handler) {
+      listeners[type] = listeners[type] || [];
+      listeners[type].push(handler);
+    },
+    async dispatch(type = 'click') {
+      const event = {
+        defaultPrevented: false,
+        immediatePropagationStopped: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopImmediatePropagation() { this.immediatePropagationStopped = true; }
+      };
+      for (const handler of listeners[type] || []) await handler(event);
+      return event;
     }
   };
 }
@@ -115,6 +137,7 @@ function install(state, options = {}) {
   const timers = [];
   const listeners = {};
   const thumbnailButtons = Array.isArray(options.thumbnailButtons) ? options.thumbnailButtons : [];
+  const elements = options.elements && typeof options.elements === 'object' ? options.elements : {};
   const root = { dataset: {}, addEventListener() {}, querySelectorAll() { return []; } };
   const stage = { textContent: 'Preview is loading…', innerHTML: '' };
   let rerenders = 0;
@@ -123,6 +146,7 @@ function install(state, options = {}) {
     getElementById(id) {
       if (id === 'bulkAuthoriseWorkbenchRoot') return root;
       if (id === 'bulkProcessPreviewStage') return stage;
+      if (Object.prototype.hasOwnProperty.call(elements, id)) return elements[id];
       return null;
     },
     querySelectorAll(selector) {
@@ -168,6 +192,20 @@ function install(state, options = {}) {
     api: win.__bulkAuthoriseEvidenceControllerTest
   };
 }
+
+test('authoritative server badge flags remain usable when attachment normalisation yields no rows', () => {
+  const state = makeState([]);
+  const harness = install(state);
+  const badgeState = harness.api.badgeStateFromPayload({
+    evidence_badges: badges('TIMESHEET'),
+    has_any_evidence: true,
+    attached_evidence_count: 1
+  }, []);
+
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(badgeState.evidence_badges), String), ['TIMESHEET']);
+  assert.equal(badgeState.has_any_evidence, true);
+  assert.equal(badgeState.attached_evidence_count, 1);
+});
 
 test('authoritative context removes synthetic Timesheet evidence and derives matching badges', () => {
   const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
@@ -228,7 +266,7 @@ test('the active thumbnail border moves with the selected evidence item', async 
   const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
   const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
   const accommodationButton = thumbnailButton(accommodation);
-  const travelButton = thumbnailButton(travel);
+  const travelButton = thumbnailButton(travel, ['active', 'selected']);
   const state = makeState([accommodation, travel]);
   const harness = install(state, { thumbnailButtons: [accommodationButton, travelButton] });
 
@@ -238,6 +276,10 @@ test('the active thumbnail border moves with the selected evidence item', async 
   assert.equal(accommodationButton.style.border, '2px solid var(--accent,#6ea8fe)');
   assert.equal(travelButton.style.border, '1px solid var(--line)');
   assert.equal(accommodationButton.getAttribute('aria-selected'), 'true');
+  assert.equal(accommodationButton.classList.contains('active'), true);
+  assert.equal(accommodationButton.classList.contains('selected'), true);
+  assert.equal(travelButton.classList.contains('active'), false);
+  assert.equal(travelButton.classList.contains('selected'), false);
 
   await harness.controller.selectFromButton(travelButton);
 
@@ -245,6 +287,87 @@ test('the active thumbnail border moves with the selected evidence item', async 
   assert.equal(travelButton.style.border, '2px solid var(--accent,#6ea8fe)');
   assert.equal(accommodationButton.getAttribute('aria-selected'), 'false');
   assert.equal(travelButton.getAttribute('aria-selected'), 'true');
+  assert.equal(accommodationButton.classList.contains('active'), false);
+  assert.equal(accommodationButton.classList.contains('selected'), false);
+  assert.equal(travelButton.classList.contains('active'), true);
+  assert.equal(travelButton.classList.contains('selected'), true);
+});
+
+test('Attached Previous and Next use the controller selection while Queue navigation remains untouched', async () => {
+  const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const previous = actionButton();
+  const next = actionButton();
+  const state = makeState([accommodation, travel]);
+  const harness = install(state, {
+    elements: {
+      bpQueuePrevBtn: previous,
+      bpQueueNextBtn: next
+    }
+  });
+  harness.controller.sanitize('initial');
+  harness.controller.renderAttachedSelection();
+
+  const attachedNextEvent = await next.dispatch();
+  assert.equal(attachedNextEvent.defaultPrevented, true);
+  assert.equal(attachedNextEvent.immediatePropagationStopped, true);
+  assert.equal(state.evidence_pane_state.active_attached_id, travel.evidence_id);
+  assert.equal(state.evidence_pane_state.__preview_target_key, harness.api.selectionKey(travel));
+
+  const attachedPreviousEvent = await previous.dispatch();
+  assert.equal(attachedPreviousEvent.defaultPrevented, true);
+  assert.equal(attachedPreviousEvent.immediatePropagationStopped, true);
+  assert.equal(state.evidence_pane_state.active_attached_id, accommodation.evidence_id);
+  assert.equal(state.evidence_pane_state.__preview_target_key, harness.api.selectionKey(accommodation));
+
+  state.evidence_pane_state.active_tab = 'queue';
+  state.evidence_pane_state.active_queue_id = 'queue:one';
+  const queueEvent = await next.dispatch();
+  assert.equal(queueEvent.defaultPrevented, false);
+  assert.equal(queueEvent.immediatePropagationStopped, false);
+  assert.equal(state.evidence_pane_state.active_tab, 'queue');
+  assert.equal(state.evidence_pane_state.active_queue_id, 'queue:one');
+});
+
+test('a visibly selected Queue tab wins over stale Attached state and preserves shared Queue navigation', async () => {
+  const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const next = actionButton();
+  const state = makeState([accommodation, travel]);
+  const harness = install(state, {
+    elements: {
+      bpQueueNextBtn: next,
+      bulkProcessEvidenceTabQueue: {
+        getAttribute(name) { return name === 'aria-selected' ? 'true' : ''; },
+        classList: { contains() { return false; } }
+      }
+    }
+  });
+  harness.controller.sanitize('initial');
+  harness.controller.renderAttachedSelection();
+
+  const event = await next.dispatch();
+
+  assert.equal(event.defaultPrevented, false);
+  assert.equal(event.immediatePropagationStopped, false);
+  assert.equal(state.evidence_pane_state.active_attached_id, accommodation.evidence_id);
+});
+
+test('a shared Attached navigation selection survives controller reconciliation', () => {
+  const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([accommodation, travel]);
+  const harness = install(state);
+  harness.controller.sanitize('initial');
+  state.evidence_pane_state.active_attached_id = travel.evidence_id;
+  state.evidence_pane_state.active_attached_item = clone(travel);
+  state.evidence_pane_state.__preview_target_key = harness.api.selectionKey(travel);
+
+  harness.controller.sanitize('after-shared-navigation');
+
+  assert.equal(state.evidence_pane_state.active_attached_id, travel.evidence_id);
+  assert.equal(state.evidence_pane_state.__preview_target_key, harness.api.selectionKey(travel));
+  assert.equal(harness.controller.selectedByIdentity.get(state.active_row_key), harness.api.itemKey(travel));
 });
 
 test('Queue preview remains separate and Attached restores the row selection and badges', async () => {
@@ -299,7 +422,10 @@ test('all dataset row badges hydrate from evidence context before the corrected 
     evidence_badges: badges('TIMESHEET')
   });
 
+  let releaseSecondResponse;
+  const secondResponseGate = new Promise((resolve) => { releaseSecondResponse = resolve; });
   const authFetch = async (url) => {
+    if (String(url).includes('/second/')) await secondResponseGate;
     const rowEvidence = String(url).includes('/second/') ? [accommodation] : [travel];
     return {
       ok: true,
@@ -322,6 +448,11 @@ test('all dataset row badges hydrate from evidence context before the corrected 
   const hydration = harness.controller.hydrateDatasetBadges();
   assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), []);
   assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[1].evidence_badges), String), []);
+  for (let attempt = 0; attempt < 20 && harness.rerenders === 0; attempt += 1) await Promise.resolve();
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), ['TRAVEL']);
+  assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[1].evidence_badges), String), []);
+  assert.ok(harness.rerenders >= 1, 'the first verified row should render before all requests finish');
+  releaseSecondResponse();
   const result = await hydration;
 
   assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), ['TRAVEL']);
@@ -329,7 +460,7 @@ test('all dataset row badges hydrate from evidence context before the corrected 
   assert.equal(result.succeeded, 2);
   assert.equal(result.failed, 0);
   assert.equal(state.__bulk_authorise_badge_hydration_complete, true);
-  assert.equal(harness.rerenders, 1);
+  assert.ok(harness.rerenders >= 2);
 });
 
 test('an unresolved loading state becomes an explicit retryable error', () => {

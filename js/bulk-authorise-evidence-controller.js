@@ -131,6 +131,26 @@
     has_any_evidence: Array.isArray(rows) && rows.length > 0,
     attached_evidence_count: Array.isArray(rows) ? rows.length : 0
   });
+  const badgeStateFromPayload = (payload, evidenceRows) => {
+    const rows = Array.isArray(evidenceRows) ? evidenceRows : [];
+    const serverBadges = Array.isArray(payload?.evidence_badges)
+      ? payload.evidence_badges.filter((badge) => badge && typeof badge === 'object')
+      : [];
+    if (!serverBadges.length) return badgeStateFromRows(rows);
+    const badgeCount = serverBadges.reduce((total, badge) => {
+      const explicit = Number(badge.count || 0) || 0;
+      return total + (explicit > 0 ? explicit : (badge.present === true || badge.has_evidence === true ? 1 : 0));
+    }, 0);
+    const payloadCount = Number(payload?.attached_evidence_count ?? payload?.evidence_count);
+    const attachedCount = Number.isFinite(payloadCount) && payloadCount >= 0
+      ? payloadCount
+      : (rows.length || badgeCount);
+    return {
+      evidence_badges: clone(serverBadges),
+      has_any_evidence: payload?.has_any_evidence === true || attachedCount > 0 || badgeCount > 0,
+      attached_evidence_count: attachedCount
+    };
+  };
 
   class BulkAuthoriseEvidenceController {
     constructor(state) {
@@ -141,6 +161,8 @@
       this.datasetPendingBadgeIdentities = new Set();
       this.badgeHydrationDatasetRef = null;
       this.badgeHydrationPromise = null;
+      this.badgeHydrationRenderPromise = null;
+      this.badgeHydrationRenderRequested = false;
       this.badgeHydrationEpoch = 0;
       this.badgeHydrationAbortControllers = [];
       this.rowsByIdentity = new Map();
@@ -204,6 +226,8 @@
       this.badgeHydrationEpoch += 1;
       this.badgeHydrationDatasetRef = null;
       this.badgeHydrationPromise = null;
+      this.badgeHydrationRenderPromise = null;
+      this.badgeHydrationRenderRequested = false;
       this.datasetRef = dataset || null;
       this.datasetBadgeTruth.clear();
       this.datasetInitialBadgeTruth.clear();
@@ -315,7 +339,7 @@
         if (datasetRef !== this.datasetRef || epoch !== this.badgeHydrationEpoch) return false;
 
         const evidenceRows = this.extractEvidencePayload(payload);
-        const badgeState = badgeStateFromRows(evidenceRows);
+        const badgeState = badgeStateFromPayload(payload, evidenceRows);
         this.datasetBadgeTruth.set(identity, clone(badgeState));
         this.datasetPendingBadgeIdentities.delete(identity);
         this.writeDatasetBadgeState(identity, badgeState, { restoreArtifactHints: evidenceRows.length > 0 });
@@ -327,6 +351,37 @@
           this.badgeHydrationAbortControllers = this.badgeHydrationAbortControllers.filter((candidate) => candidate !== abortController);
         }
       }
+    }
+
+    scheduleDatasetBadgeHydrationRender(datasetRef, epoch, reason = 'row-settled') {
+      if (datasetRef !== this.datasetRef || epoch !== this.badgeHydrationEpoch) return Promise.resolve(false);
+      this.badgeHydrationRenderRequested = true;
+      if (this.badgeHydrationRenderPromise) return this.badgeHydrationRenderPromise;
+
+      const work = (async () => {
+        let rendered = false;
+        while (this.badgeHydrationRenderRequested && datasetRef === this.datasetRef && epoch === this.badgeHydrationEpoch) {
+          this.badgeHydrationRenderRequested = false;
+          await Promise.resolve();
+          if (
+            datasetRef !== this.datasetRef ||
+            epoch !== this.badgeHydrationEpoch ||
+            typeof win.rerenderBulkAuthoriseWorkbench !== 'function' ||
+            !this.isLive()
+          ) continue;
+          await win.rerenderBulkAuthoriseWorkbench(this.state, `[TS][BULK-AUTH][EVIDENCE-BADGES:${reason}]`);
+          rendered = true;
+          if (datasetRef === this.datasetRef && epoch === this.badgeHydrationEpoch) {
+            this.settle(`dataset-badge-hydration:${reason}`);
+          }
+        }
+        return rendered;
+      })();
+      const renderPromise = work.finally(() => {
+        if (this.badgeHydrationRenderPromise === renderPromise) this.badgeHydrationRenderPromise = null;
+      });
+      this.badgeHydrationRenderPromise = renderPromise;
+      return renderPromise;
     }
 
     hydrateDatasetBadges() {
@@ -371,6 +426,7 @@
               }
               this.datasetPendingBadgeIdentities.delete(identity);
             }
+            void this.scheduleDatasetBadgeHydrationRender(datasetRef, epoch, ok ? 'row-verified' : 'row-failed');
           }
         };
         await Promise.all(Array.from({ length: Math.min(4, rows.length) }, () => worker()));
@@ -380,10 +436,7 @@
         this.state.__bulk_authorise_badge_hydration_complete = true;
         this.state.__bulk_authorise_badge_hydration_succeeded = succeeded;
         this.state.__bulk_authorise_badge_hydration_failed = failed;
-        if (typeof win.rerenderBulkAuthoriseWorkbench === 'function' && this.isLive()) {
-          await win.rerenderBulkAuthoriseWorkbench(this.state, '[TS][BULK-AUTH][EVIDENCE-BADGES]');
-          if (datasetRef === this.datasetRef && epoch === this.badgeHydrationEpoch) this.settle('dataset-badge-hydration-complete');
-        }
+        await this.scheduleDatasetBadgeHydrationRender(datasetRef, epoch, 'complete');
         return { applied: true, succeeded, failed };
       })();
       this.badgeHydrationPromise = work.finally(() => {
@@ -512,8 +565,8 @@
 
       const previousItemKey = itemKey(pane.active_attached_item);
       const rememberedKey = this.selectedByIdentity.get(identity) || '';
-      const activeItem = rows.find((item) => itemKey(item) === rememberedKey)
-        || rows.find((item) => itemKey(item) === previousItemKey)
+      const activeItem = rows.find((item) => itemKey(item) === previousItemKey)
+        || rows.find((item) => itemKey(item) === rememberedKey)
         || rows[0]
         || null;
       const activeItemKey = itemKey(activeItem);
@@ -742,6 +795,18 @@
       return item ? this.selectAttached(item, 'retry') : Promise.resolve(false);
     }
 
+    navigateAttached(delta) {
+      const pane = this.state.evidence_pane_state || {};
+      if (trim(pane.active_tab).toLowerCase() !== 'attached') return Promise.resolve(false);
+      const identity = rowIdentityOf(this.state);
+      const rows = this.rowsByIdentity.get(identity) || [];
+      const activeKey = itemKey(pane.active_attached_item) || this.selectedByIdentity.get(identity) || '';
+      const index = rows.findIndex((row) => itemKey(row) === activeKey);
+      const nextIndex = index + Number(delta || 0);
+      const next = index >= 0 && nextIndex >= 0 && nextIndex < rows.length ? rows[nextIndex] : null;
+      return next ? this.selectAttached(next, 'navigation') : Promise.resolve(false);
+    }
+
     renderAttachedSelection() {
       if (!doc || typeof doc.querySelectorAll !== 'function') return;
       const pane = this.state.evidence_pane_state || {};
@@ -774,11 +839,40 @@
         try { button.setAttribute('aria-pressed', selected ? 'true' : 'false'); } catch {}
         try { button.setAttribute('aria-selected', selected ? 'true' : 'false'); } catch {}
         try { button.classList.toggle('is-active', selected); } catch {}
+        try { button.classList.toggle('active', selected); } catch {}
+        try { button.classList.toggle('selected', selected); } catch {}
         try { button.style.border = selected ? '2px solid var(--accent,#6ea8fe)' : '1px solid var(--line)'; } catch {}
         try { button.style.background = selected ? 'rgba(110,168,254,0.12)' : 'var(--panel,#0f1115)'; } catch {}
       }
       const root = doc.getElementById('bulkAuthoriseWorkbenchRoot');
       const canQueryRoot = root && typeof root.querySelectorAll === 'function';
+      for (const [buttonId, delta] of [['bpQueuePrevBtn', -1], ['bpQueueNextBtn', 1]]) {
+        const navButton = doc.getElementById(buttonId);
+        if (!navButton || navButton.__bulkAuthoriseAttachedNavigationBound === true) continue;
+        navButton.__bulkAuthoriseAttachedNavigationBound = true;
+        navButton.addEventListener('click', (event) => {
+          const currentState = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+          const currentController = controllerFor(currentState);
+          const currentPane = currentState && currentState.evidence_pane_state ? currentState.evidence_pane_state : {};
+          const queueTab = doc.getElementById('bulkProcessEvidenceTabQueue');
+          const queueIsVisiblySelected = !!(
+            queueTab && (
+              trim(queueTab.getAttribute?.('aria-selected')).toLowerCase() === 'true' ||
+              queueTab.classList?.contains?.('is-active') ||
+              queueTab.classList?.contains?.('active')
+            )
+          );
+          if (
+            queueIsVisiblySelected ||
+            !currentController ||
+            !currentController.isTimesheets() ||
+            trim(currentPane.active_tab).toLowerCase() !== 'attached'
+          ) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          void currentController.navigateAttached(delta);
+        }, true);
+      }
       for (const queueTab of (canQueryRoot ? root.querySelectorAll('[id="bulkProcessEvidenceTabQueue"]') : [])) {
         if (queueTab.__bulkAuthoriseEvidencePointerBound !== true) {
           queueTab.__bulkAuthoriseEvidencePointerBound = true;
@@ -1194,6 +1288,7 @@
     itemKey,
     selectionKey,
     positiveBadgeKinds,
+    badgeStateFromPayload,
     legacy
   };
 })(window);
