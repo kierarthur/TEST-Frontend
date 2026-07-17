@@ -591,7 +591,11 @@
       }
       this.installDomBoundary();
       const evidenceController = win.__bulkAuthoriseEvidenceControllerTest?.controllerFor?.(liveState);
-      if (evidenceController && evidenceController.isTimesheets()) {
+      if (
+        evidenceController &&
+        evidenceController.isTimesheets() &&
+        evidenceController.isRowTransitionHydrationPending?.() !== true
+      ) {
         evidenceController.sanitize('lifecycle-v2-post-render');
         evidenceController.renderAttachedSelection();
         evidenceController.schedulePostRenderSettle();
@@ -959,8 +963,10 @@
       const selection = selectionMapFor(this.state);
       const epoch = ++this.rowEpoch;
       const expectedClassification = classificationOf(this.state.classification);
-      this.state.__bulk_authorise_row_change_seq = (Number(this.state.__bulk_authorise_row_change_seq || 0) || 0) + 1;
-      const rowChangeSeq = Number(this.state.__bulk_authorise_row_change_seq || 0) || 0;
+      // The legacy selector owns the row-change sequence and increments it for
+      // a genuine row change. Read the committed value after selection; a
+      // lifecycle-side pre-increment makes the context response look stale.
+      let rowChangeSeq = Number(this.state.__bulk_authorise_row_change_seq || 0) || 0;
       this.state.__bulk_authorise_v2_transition_loading = true;
       this.state.__bulk_authorise_last_transition_mode = cachedTarget ? 'validating-cache' : 'full';
 
@@ -972,7 +978,11 @@
           rerender: false,
           datasetOnly: true,
           minimalOnly: true,
-          deferContextRefresh: true,
+          // minimalOnly/datasetOnly already defer the legacy context request.
+          // Keep this explicit flag false because the legacy selector treats
+          // deferContextRefresh:true as an instruction to schedule its own
+          // editor hydration, while this controller owns the full hydration.
+          deferContextRefresh: false,
           refreshContext: false,
           scheduleHydration: false,
           skipEvidenceHydration: true,
@@ -980,6 +990,7 @@
           hydrationRerender: false,
           source: options.source || 'row_click'
         });
+        rowChangeSeq = Number(this.state.__bulk_authorise_row_change_seq || 0) || 0;
         installSelectionMap(this.state, selection);
       };
 
@@ -1022,7 +1033,7 @@
 
       try {
         if (typeof win.refreshBulkAuthoriseActiveContext === 'function') {
-          await win.refreshBulkAuthoriseActiveContext(this.state, {
+          const fullRefresh = await win.refreshBulkAuthoriseActiveContext(this.state, {
             row: this.state.active_row,
             row_key: activeKey,
             rowChangeSeq,
@@ -1038,6 +1049,35 @@
             authoritative: true,
             rerender: false
           });
+          const evidenceLayerLoaded = [
+            this.state.active_context,
+            this.state.active_details
+          ].some((candidate) => candidate && typeof candidate === 'object' && candidate.evidence_loaded === true);
+          if (
+            fullRefresh !== false &&
+            classificationOf(this.state.classification) === 'TIMESHEETS' &&
+            !evidenceLayerLoaded &&
+            this.isCurrentRowTransition(epoch, expectedClassification, activeKey)
+          ) {
+            // The currently deployed context service can return a complete
+            // editor layer without its evidence layer even for profile=full.
+            // Load that missing layer here, still under the single lifecycle
+            // transition, so the preview binder never starts a competing load.
+            await win.refreshBulkAuthoriseActiveContext(this.state, {
+              row: this.state.active_row,
+              row_key: activeKey,
+              rowChangeSeq,
+              source: 'bulk-authorise-lifecycle-v2-row-evidence',
+              profile: 'evidence',
+              context_profile: 'evidence',
+              include_evidence: true,
+              include_compare: false,
+              include_import_source_rows: false,
+              bypassCache: true,
+              authoritative: true,
+              rerender: false
+            });
+          }
         }
       } catch (error) {
         if (this.isCurrentRowTransition(epoch, expectedClassification, activeKey)) {

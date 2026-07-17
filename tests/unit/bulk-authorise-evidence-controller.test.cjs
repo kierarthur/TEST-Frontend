@@ -320,6 +320,80 @@ test('verified dataset badges are stamped into stale Bulk Authorise row markup',
   );
 });
 
+test('row-transition skeleton does not start policy or preview hydration', async () => {
+  const state = makeState([evidence('ev-1', 'TIMESHEET', 'files/timesheet.jpg')]);
+  state.__bulk_authorise_v2_transition_loading = true;
+  state.__bulk_authorise_row_context_ready = false;
+  let policyRequests = 0;
+  const harness = install(state, {
+    brokerBaseUrl: 'https://example.invalid',
+    async authFetch() {
+      policyRequests += 1;
+      return {
+        ok: true,
+        async text() { return JSON.stringify({ ok: true, can_manage_evidence: true }); }
+      };
+    }
+  });
+
+  harness.controller.settle('row-transition-skeleton');
+  assert.equal(harness.controller.isRowTransitionHydrationPending(), true);
+  assert.equal(await harness.controller.ensureAttachedPreview(false), false);
+  assert.equal(await harness.win.bindBulkAuthorisePreviewPane(state), false);
+  await Promise.resolve();
+  assert.equal(policyRequests, 0);
+
+  state.__bulk_authorise_row_context_ready = true;
+  harness.controller.stampMutationControls();
+  await Promise.resolve();
+  assert.equal(harness.controller.isRowTransitionHydrationPending(), true);
+  assert.equal(policyRequests, 0);
+
+  state.__bulk_authorise_v2_transition_loading = false;
+  harness.controller.stampMutationControls();
+  await Promise.resolve();
+  assert.equal(policyRequests, 1);
+});
+
+test('same-row successor controllers share one evidence policy request', async () => {
+  const state = makeState([evidence('ev-1', 'TIMESHEET', 'files/timesheet.jpg')]);
+  let policyRequests = 0;
+  let releasePolicy;
+  const harness = install(state, {
+    brokerBaseUrl: 'https://example.invalid',
+    async authFetch(resource) {
+      if (/bulk-authorise-evidence-policy/i.test(String(resource || ''))) {
+        policyRequests += 1;
+        return new Promise((resolve) => { releasePolicy = resolve; });
+      }
+      return {
+        ok: true,
+        async text() { return JSON.stringify({ signed_url: 'https://example.invalid/file' }); }
+      };
+    }
+  });
+
+  const firstPolicy = harness.controller.ensureMutationPolicy(false);
+  const successorState = makeState([evidence('ev-1', 'TIMESHEET', 'files/timesheet.jpg')]);
+  harness.win.modalCtx.bulkAuthoriseState = successorState;
+  const successorController = harness.api.controllerFor(successorState);
+  const successorPolicy = successorController.ensureMutationPolicy(false);
+
+  assert.equal(policyRequests, 1);
+  releasePolicy({
+    ok: true,
+    async text() { return JSON.stringify({ ok: true, can_manage_evidence: true }); }
+  });
+  const [firstResult, successorResult] = await Promise.all([firstPolicy, successorPolicy]);
+
+  assert.equal(firstResult.can_manage_evidence, true);
+  assert.equal(successorResult.can_manage_evidence, true);
+  assert.equal(successorState.active_context.can_manage_evidence, true);
+  assert.equal(policyRequests, 1);
+  assert.equal((await successorController.ensureMutationPolicy(false)).can_manage_evidence, true);
+  assert.equal(policyRequests, 1);
+});
+
 test('stamp reapplies verified badge truth after a late same-dataset row replacement', () => {
   const state = makeState([]);
   state.dataset.rows[0].backend_row_signature = 'signature:late-replacement';
@@ -1353,6 +1427,34 @@ test('an in-flight shared preview is preserved and does not start a duplicate pr
   assert.equal(state.evidence_pane_state.__preview_load_requested_target_key, target);
   assert.equal(state.evidence_pane_state.__preview_attached_request_key, target);
   assert.equal(state.evidence_pane_state.__preview_loading, true);
+});
+
+test('the controller joins the shared preview presign instead of issuing a second request', async () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([travel]);
+  let requests = 0;
+  const harness = install(state, {
+    brokerBaseUrl: 'https://isolated.test.invalid',
+    authFetch: async () => {
+      requests += 1;
+      return { ok: true, async text() { return JSON.stringify({ signed_url: 'https://example.invalid/duplicate' }); } };
+    }
+  });
+  harness.controller.sanitize('shared-presign-record');
+  const target = harness.api.selectionKey(travel);
+  state.evidence_pane_state.__preview_presign_inflight = {
+    shared: {
+      file_key: travel.storage_key,
+      preview_selection_key: target,
+      promise: Promise.resolve('https://example.invalid/shared')
+    }
+  };
+
+  await harness.controller.ensureAttachedPreview(false);
+
+  assert.equal(requests, 0);
+  assert.equal(state.evidence_pane_state.__preview_signed_url, 'https://example.invalid/shared');
+  assert.equal(state.evidence_pane_state.__preview_loading, false);
 });
 
 test('a completed attached presign hands off to a successor state with the same row and preview target', async () => {

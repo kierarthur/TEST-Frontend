@@ -67259,6 +67259,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
         prev.ui.candidateDetailGeneration = Number(prev.ui.candidateDetailGeneration || 0) + 1;
         prev.ui.candidateDetailPromiseByKey = {};
         prev.ui.candidateDetailLoadingByKey = {};
+        prev.ui.candidateDetailExpandedByKey = {};
       } catch {}
 
       try {
@@ -67434,6 +67435,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       candidateDetailVersionByKey: {},
       candidateDetailRequestSeqByKey: {},
       candidateDetailIdentityByKey: {},
+      candidateDetailExpandedByKey: {},
       candidateDetailGeneration: 0,
       candidateDetailKnownOverviewVersion: null,
       candidateDetailKnownLiveSignalVersion: null,
@@ -67674,6 +67676,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       ui.candidateDetailErrorByKey = {};
       ui.candidateDetailVersionByKey = {};
       ui.candidateDetailRequestSeqByKey = {};
+      ui.candidateDetailExpandedByKey = {};
       ui.candidateDetailInvalidatedAtUtc = new Date().toISOString();
       return true;
     } catch {
@@ -77453,6 +77456,20 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
           return;
         }
 
+        if (act === 'banking:pay:child:toggleCandidateDetailGroup') {
+          const detailKey = String(el.getAttribute('data-detail-expansion-key') || '').trim();
+          if (!detailKey) return;
+          const ui = ensureCandidateDetailUiState();
+          ui.candidateDetailExpandedByKey = (
+            ui.candidateDetailExpandedByKey
+            && typeof ui.candidateDetailExpandedByKey === 'object'
+            && !Array.isArray(ui.candidateDetailExpandedByKey)
+          ) ? ui.candidateDetailExpandedByKey : {};
+          ui.candidateDetailExpandedByKey[detailKey] = ui.candidateDetailExpandedByKey[detailKey] !== true;
+          await rerenderChild();
+          return;
+        }
+
         if (act === 'banking:pay:child:retryCandidateDetail') {
           const identity = candidateDetailIdentityFromActionElement(el);
           const key = String(identity.expansionKey || '').trim();
@@ -81318,10 +81335,34 @@ function renderBankingPayBatchChildModalOverview() {
   );
   const detailTimesheetIdForItem = (item) => firstText(item?.timesheet_id, item?.timesheetId);
   const detailPayChannelForItem = (item) => upperTrim(firstText(item?.pay_channel, item?.payChannel));
-  const compactIdentity = (value) => {
+  const friendlyDetailLabel = (value, fallback = 'Payment line') => {
     const text = trimStr(value);
-    if (!text) return '';
-    return text.length > 12 ? `${text.slice(0, 8)}…` : text;
+    if (!text) return fallback;
+    const key = upperTrim(text).replace(/[\s-]+/g, '_');
+    const known = {
+      DAY: 'Day',
+      NIGHT: 'Night',
+      SAT: 'Saturday',
+      SATURDAY: 'Saturday',
+      SUN: 'Sunday',
+      SUNDAY: 'Sunday',
+      BH: 'Bank holiday',
+      BANK_HOLIDAY: 'Bank holiday',
+      ADDITIONAL: 'Additional units',
+      ADDITIONAL_UNITS: 'Additional units',
+      MILEAGE: 'Mileage',
+      TRAVEL: 'Travel',
+      ACCOMMODATION: 'Accommodation',
+      OVERPAYMENT_RECOVERY: 'Overpayment recovery',
+      MANUAL_DEBT_RECOVERY: 'Manual debt recovery',
+      PAYMENT_ADVANCE_REPAYMENT: 'Payment advance repayment',
+      EXPENSE: 'Payment component'
+    };
+    if (known[key]) return known[key];
+    if (/^[A-Z0-9_]+$/.test(text)) {
+      return text.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+    }
+    return text;
   };
   const frozenDetailTotal = (itemsValue) => asArr(itemsValue).reduce(
     (sum, itemValue) => sum + (Number(frozenAmountForBatchKind(itemValue)) || 0),
@@ -81330,19 +81371,12 @@ function renderBankingPayBatchChildModalOverview() {
 
   const makeTimesheetLabel = (timesheetItems) => {
     const rows = asArr(timesheetItems);
-    const timesheetId = rows.map(detailTimesheetIdForItem).find(Boolean) || '';
     const workedDates = Array.from(new Set(rows.map(detailWorkedDateForItem).filter(Boolean))).sort();
-    let reference = '';
-    for (const row of rows) {
-      reference = firstText(row?.source_reference, row?.sourceRef, row?.source_ref);
-      if (reference) break;
+    if (workedDates.length === 1) return `Timesheet — ${formatIsoToUkLocal(workedDates[0])}`;
+    if (workedDates.length > 1) {
+      return `Timesheet — ${formatIsoToUkLocal(workedDates[0])} to ${formatIsoToUkLocal(workedDates[workedDates.length - 1])} · ${workedDates.length} worked dates`;
     }
-    const safeReference = reference && !/^[0-9a-f-]{36}(?::|$)/i.test(reference) ? reference : '';
-    const identityLabel = safeReference || compactIdentity(timesheetId);
-    const prefix = timesheetId ? `Timesheet${identityLabel ? ` ${identityLabel}` : ''}` : 'Payment item';
-    if (workedDates.length === 1) return `${prefix} · ${formatIsoToUkLocal(workedDates[0])}`;
-    if (workedDates.length > 1) return `${prefix} · ${workedDates.length} worked dates`;
-    return prefix;
+    return 'Timesheet';
   };
 
   const detailLineRowsForItem = (itemValue, itemIndex) => {
@@ -81353,7 +81387,7 @@ function renderBankingPayBatchChildModalOverview() {
         const breakdown = asObj(breakdownValue) || {};
         return {
           stableKey: firstText(breakdown.id, breakdown.breakdown_id, breakdown.operation_source_key, `${itemIndex}:${breakdownIndex}`),
-          label: firstText(
+          label: friendlyDetailLabel(firstText(
             breakdown.unit_name,
             breakdown.bucket_code ? bucketLabel(breakdown.bucket_code, breakdown.unit_name) : '',
             item.unit_label,
@@ -81361,7 +81395,7 @@ function renderBankingPayBatchChildModalOverview() {
             item.description,
             item.item_type,
             'Payment line'
-          ),
+          )),
           kind: firstText(breakdown.line_kind, breakdown.bucket_code, item.item_type),
           workedDate: detailWorkedDateForItem(item),
           units: firstFiniteNumber(breakdown.units, item.units),
@@ -81375,7 +81409,7 @@ function renderBankingPayBatchChildModalOverview() {
     }
     return [{
       stableKey: firstText(item.pay_batch_item_id, item.payBatchItemId, item.id, String(itemIndex)),
-      label: firstText(item.unit_label, item.unit_name, item.description, item.additional_code, item.item_type, 'Payment line'),
+      label: friendlyDetailLabel(firstText(item.unit_label, item.unit_name, item.description, item.additional_code, item.item_type, 'Payment line')),
       kind: firstText(item.line_kind, item.bucket_code, item.item_type),
       workedDate: detailWorkedDateForItem(item),
       units: firstFiniteNumber(item.units),
@@ -81409,13 +81443,18 @@ function renderBankingPayBatchChildModalOverview() {
 
   const groupCandidateDetailItems = (itemsValue) => {
     const weeks = new Map();
+    const adjustments = [];
     asArr(itemsValue).forEach((itemValue, itemIndex) => {
       const item = asObj(itemValue);
       if (!item) return;
       const weekEnding = detailWeekEndingForItem(item) || '';
       const clientName = detailClientForItem(item);
       const timesheetId = detailTimesheetIdForItem(item);
-      const timesheetKey = timesheetId || `no-timesheet:${firstText(item.pay_batch_item_id, item.id, itemIndex)}`;
+      if (!timesheetId) {
+        adjustments.push({ item, itemIndex });
+        return;
+      }
+      const timesheetKey = timesheetId;
       if (!weeks.has(weekEnding)) weeks.set(weekEnding, new Map());
       const clients = weeks.get(weekEnding);
       if (!clients.has(clientName)) clients.set(clientName, new Map());
@@ -81424,7 +81463,7 @@ function renderBankingPayBatchChildModalOverview() {
       timesheets.get(timesheetKey).items.push({ item, itemIndex });
     });
 
-    return Array.from(weeks.entries())
+    const weekGroups = Array.from(weeks.entries())
       .sort((a, b) => {
         if (!a[0] && !b[0]) return 0;
         if (!a[0]) return 1;
@@ -81482,6 +81521,12 @@ function renderBankingPayBatchChildModalOverview() {
           subtotal: clientGroups.reduce((sum, group) => sum + (Number(group.subtotal) || 0), 0)
         };
       });
+    const sortedAdjustments = adjustments.slice().sort((a, b) => detailItemStableId(a).localeCompare(detailItemStableId(b)));
+    return {
+      weeks: weekGroups,
+      adjustments: sortedAdjustments,
+      adjustmentSubtotal: frozenDetailTotal(sortedAdjustments.map((entry) => entry.item))
+    };
   };
 
   const renderCandidateDetail = (summary) => {
@@ -81511,7 +81556,55 @@ function renderBankingPayBatchChildModalOverview() {
       return `<div class="mini" style="padding:10px 12px;opacity:.85;">No frozen payment details were returned for this candidate.</div>`;
     }
 
-    const groups = groupCandidateDetailItems(detailItems);
+    const groupedDetail = groupCandidateDetailItems(detailItems);
+    const groups = asArr(groupedDetail.weeks);
+    const groupExpansionState = asObj(candidateDetailUi.candidateDetailExpandedByKey) || {};
+    const detailExpansionKey = (...parts) => [summary.key, ...parts].map((part) => String(part ?? '')).join('|');
+    const detailToggleButton = (key, isExpanded, label) => `
+      <button
+        type="button"
+        class="btn btn-sm btn-outline"
+        data-action="banking:pay:child:toggleCandidateDetailGroup"
+        data-detail-expansion-key="${enc(key)}"
+        aria-expanded="${isExpanded ? 'true' : 'false'}"
+        aria-label="${enc(`${isExpanded ? 'Collapse' : 'Expand'} ${label}`)}"
+        title="${enc(`${isExpanded ? 'Collapse' : 'Expand'} ${label}`)}"
+        style="min-width:28px;padding:0 7px;line-height:1.35;flex:0 0 auto;"
+      >${isExpanded ? '−' : '+'}</button>
+    `;
+    const renderPaymentLinesTable = (itemRows) => `
+      <div style="overflow:auto;border-top:1px solid var(--line);">
+        <table class="grid" style="min-width:760px;table-layout:auto;margin:0;">
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th style="width:95px;">Worked date</th>
+              <th style="width:70px;text-align:right;">Qty</th>
+              <th style="width:90px;text-align:right;">Rate</th>
+              <th style="width:105px;text-align:right;">Ex VAT</th>
+              <th style="width:90px;text-align:right;">VAT</th>
+              <th style="width:105px;text-align:right;">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${asArr(itemRows).map((line) => `
+              <tr>
+                <td class="mini">
+                  <span>${enc(line.label || 'Payment line')}</span>
+                  ${line.voided ? `<span class="pill" style="margin-left:6px;">Voided</span>` : ''}
+                </td>
+                <td class="mini" style="white-space:nowrap;">${enc(line.workedDate ? formatIsoToUkLocal(line.workedDate) : '—')}</td>
+                <td class="mono" style="text-align:right;">${enc(line.units === null ? '—' : fmtQty(line.units))}</td>
+                <td class="mono" style="text-align:right;">${enc(line.rate === null ? '—' : `£${fmtMoney(line.rate)}`)}</td>
+                <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountExVat))}</td>
+                <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountVat))}</td>
+                <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountIncVat))}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
     const displayedTotal = frozenDetailTotal(detailItems);
     let candidateGrossPreview = null;
     let candidateNetBankAmount = null;
@@ -81530,101 +81623,105 @@ function renderBankingPayBatchChildModalOverview() {
       if (!candidateSettlementStatus) candidateSettlementStatus = upperTrim(firstText(item?.candidate_settlement_status, item?.candidateSettlementStatus, item?.settlement_status, item?.settlementStatus));
     }
     const payeFooterHtml = batchKind === 'PAYE' ? `
-      ${candidateGrossPreview !== null ? `<span class="mini" style="font-weight:700;">Frozen gross <span class="mono">£${enc(fmtMoney(candidateGrossPreview))}</span></span>` : ''}
-      ${candidateAwaitingNetAmount ? '<span class="pill">Awaiting PAYE net amount</span>' : (candidateNetBankAmount !== null ? `<span class="mini" style="font-weight:700;">PAYE bank amount <span class="mono">£${enc(fmtMoney(candidateNetBankAmount))}</span></span>` : '')}
+      ${candidateGrossPreview !== null ? `<span class="mini">Frozen gross <span class="mono">£${enc(fmtMoney(candidateGrossPreview))}</span></span>` : ''}
+      ${candidateAwaitingNetAmount ? '<span class="pill">Awaiting PAYE net amount</span>' : (candidateNetBankAmount !== null ? `<span class="mini">PAYE bank amount <span class="mono">£${enc(fmtMoney(candidateNetBankAmount))}</span></span>` : '')}
       ${candidatePayeState ? `<span class="pill">${enc(candidatePayeState.replace(/_/g, ' '))}</span>` : ''}
       ${candidateSettlementStatus ? `<span class="pill">${enc(candidateSettlementStatus.replace(/_/g, ' '))}</span>` : ''}
     ` : '';
     return `
       <div style="padding:10px 12px;background:rgba(0,0,0,.02);border-top:1px solid var(--line);">
         <div style="max-height:min(46vh,560px);overflow:auto;display:flex;flex-direction:column;gap:10px;">
-          ${groups.map((weekGroup) => `
-            <section style="border:1px solid var(--line);border-radius:9px;background:var(--panel,#fff);overflow:hidden;">
-              <div class="mini" style="padding:7px 9px;font-weight:800;background:rgba(0,0,0,.025);display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                <span>${enc(weekGroup.weekEnding ? `Week ending ${formatIsoToUkLocal(weekGroup.weekEnding)}` : 'Week ending not recorded')}</span>
-                <span class="mono" style="flex:0 0 auto;">£${enc(fmtMoney(weekGroup.subtotal))}</span>
-              </div>
-              ${weekGroup.clients.map((clientGroup) => `
-                <div style="padding:8px 9px;border-top:1px solid var(--line);">
-                  <div class="mini" style="font-weight:800;margin-bottom:7px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${enc(clientGroup.clientName)}</span>
-                    <span class="mono" style="flex:0 0 auto;">£${enc(fmtMoney(clientGroup.subtotal))}</span>
-                  </div>
-                  <div style="display:flex;flex-direction:column;gap:8px;">
-                    ${clientGroup.timesheets.map((timesheetGroup) => {
-                      const itemEntries = timesheetGroup.items;
-                      const itemRows = itemEntries.flatMap((entry) => detailLineRowsForItem(entry.item, entry.itemIndex));
-                      const timesheetLabel = makeTimesheetLabel(itemEntries.map((entry) => entry.item));
-                      const timesheetButton = timesheetGroup.timesheetId ? `
-                        <button
-                          type="button"
-                          class="btn btn-sm btn-outline"
-                          data-action="banking:pay:child:viewTimesheets"
-                          data-batch-id="${enc(id)}"
-                          data-pay-batch-candidate-id="${enc(summary.payBatchCandidateId)}"
-                          data-candidate-id="${enc(summary.candidateId)}"
-                          data-candidate-name="${enc(summary.candidateName)}"
-                          data-timesheet-id="${enc(timesheetGroup.timesheetId)}"
-                          data-timesheet-label="${enc(timesheetLabel)}"
-                          aria-label="Show this timesheet in the Timesheets summary"
-                          title="Show this timesheet in the Timesheets summary"
-                          style="min-width:28px;padding:0 6px;line-height:1.35;"
-                        >🗒️</button>
-                      ` : '';
-                      return `
-                        <div style="border:1px solid var(--line);border-radius:8px;overflow:hidden;">
-                          <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;white-space:nowrap;overflow:hidden;">
-                            ${timesheetButton}
-                            <span class="mini" style="font-weight:800;overflow:hidden;text-overflow:ellipsis;">${enc(timesheetLabel)}</span>
-                            ${timesheetGroup.payChannels.map((channel) => `<span class="pill" style="flex:0 0 auto;">${enc(channel)}</span>`).join('')}
-                            <span style="flex:1 1 auto;min-width:4px;"></span>
-                            <span class="mono mini" style="font-weight:800;flex:0 0 auto;">£${enc(fmtMoney(timesheetGroup.subtotal))}</span>
-                          </div>
-                          <div style="overflow:auto;border-top:1px solid var(--line);">
-                            <table class="grid" style="min-width:760px;table-layout:auto;margin:0;">
-                              <thead>
-                                <tr>
-                                  <th>Payment line</th>
-                                  <th style="width:95px;">Worked date</th>
-                                  <th style="width:70px;text-align:right;">Qty</th>
-                                  <th style="width:90px;text-align:right;">Rate</th>
-                                  <th style="width:105px;text-align:right;">Ex VAT</th>
-                                  <th style="width:90px;text-align:right;">VAT</th>
-                                  <th style="width:105px;text-align:right;">Total</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                ${itemRows.map((line) => `
-                                  <tr>
-                                    <td class="mini">
-                                      <span>${enc(line.label || 'Payment line')}</span>
-                                      ${line.kind ? `<span style="opacity:.65;"> · ${enc(line.kind)}</span>` : ''}
-                                      ${line.voided ? `<span class="pill" style="margin-left:6px;">Voided</span>` : ''}
-                                    </td>
-                                    <td class="mini" style="white-space:nowrap;">${enc(line.workedDate ? formatIsoToUkLocal(line.workedDate) : '—')}</td>
-                                    <td class="mono" style="text-align:right;">${enc(line.units === null ? '—' : fmtQty(line.units))}</td>
-                                    <td class="mono" style="text-align:right;">${enc(line.rate === null ? '—' : `£${fmtMoney(line.rate)}`)}</td>
-                                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountExVat))}</td>
-                                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountVat))}</td>
-                                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountIncVat))}</td>
-                                  </tr>
-                                `).join('')}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      `;
-                    }).join('')}
-                  </div>
+          ${groups.map((weekGroup) => {
+            const weekLabel = weekGroup.weekEnding ? `Week ending ${formatIsoToUkLocal(weekGroup.weekEnding)}` : 'Week ending not recorded';
+            const weekKey = detailExpansionKey('week', weekGroup.weekEnding || 'not-recorded');
+            const weekExpanded = groupExpansionState[weekKey] === true;
+            return `
+              <section style="border:1px solid var(--line);border-radius:9px;background:var(--panel,#fff);overflow:hidden;">
+                <div class="mini" style="padding:7px 9px;background:rgba(0,0,0,.025);display:flex;align-items:center;gap:8px;">
+                  ${detailToggleButton(weekKey, weekExpanded, weekLabel)}
+                  <span style="font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${enc(weekLabel)}</span>
+                  <span style="flex:1 1 auto;min-width:4px;"></span>
+                  <span class="mono" style="flex:0 0 auto;font-weight:400;">£${enc(fmtMoney(weekGroup.subtotal))}</span>
                 </div>
-              `).join('')}
-            </section>
-          `).join('')}
+                ${weekExpanded ? weekGroup.clients.map((clientGroup) => {
+                  const clientKey = detailExpansionKey('week', weekGroup.weekEnding || 'not-recorded', 'client', clientGroup.clientName);
+                  const clientExpanded = groupExpansionState[clientKey] === true;
+                  return `
+                    <div style="border-top:1px solid var(--line);">
+                      <div class="mini" style="padding:7px 9px;display:flex;align-items:center;gap:8px;">
+                        ${detailToggleButton(clientKey, clientExpanded, `client ${clientGroup.clientName}`)}
+                        <span style="font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${enc(clientGroup.clientName)}</span>
+                        <span style="flex:1 1 auto;min-width:4px;"></span>
+                        <span class="mono" style="flex:0 0 auto;font-weight:400;">£${enc(fmtMoney(clientGroup.subtotal))}</span>
+                      </div>
+                      ${clientExpanded ? `<div style="padding:0 9px 9px;display:flex;flex-direction:column;gap:8px;">
+                        ${clientGroup.timesheets.map((timesheetGroup, timesheetIndex) => {
+                          const itemEntries = timesheetGroup.items;
+                          const itemRows = itemEntries.flatMap((entry) => detailLineRowsForItem(entry.item, entry.itemIndex));
+                          const baseTimesheetLabel = makeTimesheetLabel(itemEntries.map((entry) => entry.item));
+                          const timesheetLabel = baseTimesheetLabel === 'Timesheet' && clientGroup.timesheets.length > 1
+                            ? `Timesheet ${timesheetIndex + 1}`
+                            : baseTimesheetLabel;
+                          const timesheetKey = detailExpansionKey('week', weekGroup.weekEnding || 'not-recorded', 'client', clientGroup.clientName, 'timesheet', timesheetGroup.timesheetId || timesheetGroup.sortStableId || timesheetIndex);
+                          const timesheetExpanded = groupExpansionState[timesheetKey] === true;
+                          const timesheetButton = timesheetGroup.timesheetId ? `
+                            <button
+                              type="button"
+                              class="btn btn-sm btn-outline"
+                              data-action="banking:pay:child:viewTimesheets"
+                              data-batch-id="${enc(id)}"
+                              data-pay-batch-candidate-id="${enc(summary.payBatchCandidateId)}"
+                              data-candidate-id="${enc(summary.candidateId)}"
+                              data-candidate-name="${enc(summary.candidateName)}"
+                              data-timesheet-id="${enc(timesheetGroup.timesheetId)}"
+                              data-timesheet-label="${enc(timesheetLabel)}"
+                              aria-label="Show this timesheet in the Timesheets summary"
+                              title="Show this timesheet in the Timesheets summary"
+                              style="min-width:28px;padding:0 6px;line-height:1.35;flex:0 0 auto;"
+                            >🗒️</button>
+                          ` : '';
+                          return `
+                            <div style="border:1px solid var(--line);border-radius:8px;overflow:hidden;">
+                              <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;white-space:nowrap;overflow:hidden;">
+                                ${detailToggleButton(timesheetKey, timesheetExpanded, timesheetLabel)}
+                                ${timesheetButton}
+                                <span class="mini" style="font-weight:400;overflow:hidden;text-overflow:ellipsis;">${enc(timesheetLabel)}</span>
+                                ${timesheetGroup.payChannels.map((channel) => `<span class="pill" style="flex:0 0 auto;">${enc(channel)}</span>`).join('')}
+                                <span style="flex:1 1 auto;min-width:4px;"></span>
+                                <span class="mono mini" style="flex:0 0 auto;font-weight:400;">£${enc(fmtMoney(timesheetGroup.subtotal))}</span>
+                              </div>
+                              ${timesheetExpanded ? renderPaymentLinesTable(itemRows) : ''}
+                            </div>
+                          `;
+                        }).join('')}
+                      </div>` : ''}
+                    </div>
+                  `;
+                }).join('') : ''}
+              </section>
+            `;
+          }).join('')}
+          ${asArr(groupedDetail.adjustments).length ? (() => {
+            const adjustmentKey = detailExpansionKey('adjustments-and-recoveries');
+            const adjustmentExpanded = groupExpansionState[adjustmentKey] === true;
+            const adjustmentRows = asArr(groupedDetail.adjustments).flatMap((entry) => detailLineRowsForItem(entry.item, entry.itemIndex));
+            return `
+              <section style="border:1px solid var(--line);border-radius:9px;background:var(--panel,#fff);overflow:hidden;">
+                <div class="mini" style="padding:7px 9px;background:rgba(0,0,0,.025);display:flex;align-items:center;gap:8px;">
+                  ${detailToggleButton(adjustmentKey, adjustmentExpanded, 'adjustments and recoveries')}
+                  <span style="font-weight:400;">Adjustments and recoveries</span>
+                  <span style="flex:1 1 auto;min-width:4px;"></span>
+                  <span class="mono" style="flex:0 0 auto;font-weight:400;">£${enc(fmtMoney(groupedDetail.adjustmentSubtotal))}</span>
+                </div>
+                ${adjustmentExpanded ? renderPaymentLinesTable(adjustmentRows) : ''}
+              </section>
+            `;
+          })() : ''}
         </div>
         <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap;">
           ${payeFooterHtml}
-          <span class="mini" style="font-weight:800;">Displayed frozen total</span>
-          <span class="mono" style="font-weight:800;">£${enc(fmtMoney(displayedTotal))}</span>
+          <span class="mini">Displayed frozen total</span>
+          <span class="mono">£${enc(fmtMoney(displayedTotal))}</span>
         </div>
       </div>
     `;

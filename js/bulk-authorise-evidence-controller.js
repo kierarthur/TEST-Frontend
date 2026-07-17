@@ -12,6 +12,23 @@
   // so the successor controller can consume the completed request. This cache is
   // cleared for every new modal open and updated after evidence mutations.
   const verifiedBadgeTruthForOpenModal = new Map();
+  // Post-render bindings and the DOM observer can briefly see successor state
+  // objects for the same active row. Share the one active-row policy read at
+  // modal scope so those controllers consume the same result. The entry is
+  // replaced as soon as a different timesheet becomes active and is cleared
+  // after evidence mutation or a new modal open, so it is not a cross-row or
+  // cross-open cache.
+  const mutationPolicyForOpenModal = {
+    timesheetId: '',
+    policy: null,
+    promise: null
+  };
+  const clearSharedMutationPolicy = (timesheetId = '') => {
+    if (timesheetId && mutationPolicyForOpenModal.timesheetId !== timesheetId) return;
+    mutationPolicyForOpenModal.timesheetId = '';
+    mutationPolicyForOpenModal.policy = null;
+    mutationPolicyForOpenModal.promise = null;
+  };
   let activeBulkAuthoriseState = null;
   let activeQueueSelectionStabilizeEpoch = 0;
   const legacy = {
@@ -353,6 +370,14 @@
       );
     }
 
+    isRowTransitionHydrationPending() {
+      // The lifecycle owns the complete transition through its final ready
+      // render. A context can become ready just before that render; allowing
+      // evidence work in that gap starts an early policy/preview pass which
+      // the final render immediately repeats.
+      return this.state?.__bulk_authorise_v2_transition_loading === true;
+    }
+
     mutationEndpoint(suffix = '') {
       const base = trim(win.BROKER_BASE_URL).replace(/\/$/, '');
       const timesheetId = timesheetIdOf(this.state);
@@ -393,47 +418,66 @@
       if (!force && this.mutationPolicyTimesheetId === timesheetId && this.mutationPolicyPromise) return this.mutationPolicyPromise;
       this.mutationPolicyTimesheetId = timesheetId;
       this.mutationPolicy = null;
-      const work = (async () => {
-        try {
-          const response = await win.authFetch(endpoint);
-          const text = await response.text().catch(() => '');
-          const payload = text ? JSON.parse(text) : {};
-          if (!response.ok || payload?.ok === false) throw new Error(payload?.message || 'Evidence policy could not be loaded.');
-          if (timesheetId !== timesheetIdOf(this.state)) return null;
-          this.mutationPolicy = payload;
-          const controlsMissing = !doc?.getElementById?.('bpQueueKindSelect');
-          const contextChanged = this.applyMutationPolicyToEvidenceContext(payload);
-          this.stampMutationControls();
-          if ((contextChanged || controlsMissing) && payload?.can_manage_evidence === true && this.isLive()) {
-            const leftPane = doc?.getElementById?.('bulkAuthoriseLeftPane');
-            const leftScrollTop = Number(leftPane?.scrollTop || 0);
-            if (typeof win.rerenderBulkAuthoriseWorkbench === 'function') {
-              await win.rerenderBulkAuthoriseWorkbench(this.state, '[TS][BULK-AUTH][EVIDENCE-POLICY]');
-            }
-            this.settle('evidence-policy-applied');
-            const restoreScroll = () => {
-              const liveLeftPane = doc?.getElementById?.('bulkAuthoriseLeftPane');
-              if (liveLeftPane) liveLeftPane.scrollTop = leftScrollTop;
-            };
-            restoreScroll();
-            if (typeof win.setTimeout === 'function') {
-              win.setTimeout(restoreScroll, 0);
-              win.setTimeout(restoreScroll, 150);
-            }
-          }
-          return payload;
-        } catch (error) {
-          if (timesheetId === timesheetIdOf(this.state)) {
-            this.mutationPolicy = {
+      if (
+        force ||
+        mutationPolicyForOpenModal.timesheetId !== timesheetId ||
+        (!mutationPolicyForOpenModal.policy && !mutationPolicyForOpenModal.promise)
+      ) {
+        mutationPolicyForOpenModal.timesheetId = timesheetId;
+        mutationPolicyForOpenModal.policy = null;
+        const sharedWork = (async () => {
+          try {
+            const response = await win.authFetch(endpoint);
+            const text = await response.text().catch(() => '');
+            const payload = text ? JSON.parse(text) : {};
+            if (!response.ok || payload?.ok === false) throw new Error(payload?.message || 'Evidence policy could not be loaded.');
+            return payload;
+          } catch (error) {
+            return {
               can_manage_evidence: false,
               protected_reason: 'POLICY_UNAVAILABLE',
               message: trim(error?.message) || 'Evidence policy could not be loaded.'
             };
-            this.stampMutationControls();
           }
-          return this.mutationPolicy;
+        })();
+        const sharedTracked = sharedWork.then((payload) => {
+          if (mutationPolicyForOpenModal.timesheetId === timesheetId) {
+            mutationPolicyForOpenModal.policy = payload;
+            if (mutationPolicyForOpenModal.promise === sharedTracked) mutationPolicyForOpenModal.promise = null;
+          }
+          return payload;
+        });
+        mutationPolicyForOpenModal.promise = sharedTracked;
+      }
+      const sharedPolicy = mutationPolicyForOpenModal.policy;
+      const sharedPromise = sharedPolicy
+        ? Promise.resolve(sharedPolicy)
+        : mutationPolicyForOpenModal.promise;
+      const work = Promise.resolve(sharedPromise).then(async (payload) => {
+        if (!payload || timesheetId !== timesheetIdOf(this.state)) return null;
+        this.mutationPolicy = payload;
+        const controlsMissing = !doc?.getElementById?.('bpQueueKindSelect');
+        const contextChanged = this.applyMutationPolicyToEvidenceContext(payload);
+        this.stampMutationControls();
+        if ((contextChanged || controlsMissing) && payload?.can_manage_evidence === true && this.isLive()) {
+          const leftPane = doc?.getElementById?.('bulkAuthoriseLeftPane');
+          const leftScrollTop = Number(leftPane?.scrollTop || 0);
+          if (typeof win.rerenderBulkAuthoriseWorkbench === 'function') {
+            await win.rerenderBulkAuthoriseWorkbench(this.state, '[TS][BULK-AUTH][EVIDENCE-POLICY]');
+          }
+          this.settle('evidence-policy-applied');
+          const restoreScroll = () => {
+            const liveLeftPane = doc?.getElementById?.('bulkAuthoriseLeftPane');
+            if (liveLeftPane) liveLeftPane.scrollTop = leftScrollTop;
+          };
+          restoreScroll();
+          if (typeof win.setTimeout === 'function') {
+            win.setTimeout(restoreScroll, 0);
+            win.setTimeout(restoreScroll, 150);
+          }
         }
-      })();
+        return payload;
+      });
       const tracked = work.finally(() => {
         if (this.mutationPolicyPromise === tracked) this.mutationPolicyPromise = null;
       });
@@ -594,6 +638,7 @@
       pane.__queue_manual_override = false;
       state.error_text = '';
       state.warning_text = '';
+      clearSharedMutationPolicy(timesheetIdOf(state));
       this.mutationPolicy = null;
       this.mutationPolicyPromise = null;
       let mutationRows = null;
@@ -1248,6 +1293,7 @@
 
     stampMutationControls() {
       if (!doc || !this.isTimesheets()) return;
+      if (this.isRowTransitionHydrationPending()) return;
       const policy = this.mutationPolicyTimesheetId === timesheetIdOf(this.state) ? this.mutationPolicy : null;
       const allowed = policy?.can_manage_evidence === true && !this.mutationInFlight;
       const identity = rowIdentityOf(this.state);
@@ -1998,6 +2044,10 @@
       const liveController = controllerFor(liveBulkAuthoriseState()) || this;
       root.dataset.bulkAuthoriseEvidenceController = 'v19';
       if (liveController.isTimesheets()) {
+        if (liveController.isRowTransitionHydrationPending()) {
+          liveController.stampVisibleRowBadges();
+          return;
+        }
         liveController.sanitize('stamp-live-boundary');
         liveController.stampVisibleRowBadges();
         liveController.renderAttachedSelection();
@@ -2339,6 +2389,7 @@
 
     ensureAttachedPreview(force = false) {
       if (!this.isLive()) return Promise.resolve(false);
+      if (this.isRowTransitionHydrationPending()) return Promise.resolve(false);
       const state = this.state;
       const pane = state.evidence_pane_state || {};
       if (trim(pane.active_tab || 'attached').toLowerCase() !== 'attached') return Promise.resolve(false);
@@ -2353,6 +2404,41 @@
       const fileKey = evidenceFileKeyOf(item);
       if (!identity || !target || !fileKey) return Promise.resolve(false);
       this.syncPreviewMetadata(item);
+      const requestKey = `${identity}|${target}`;
+      const sharedInflight = (pane.__preview_presign_inflight && typeof pane.__preview_presign_inflight === 'object')
+        ? Object.values(pane.__preview_presign_inflight).find((record) => !!(
+            record &&
+            typeof record === 'object' &&
+            record.promise &&
+            trim(record.file_key) === fileKey &&
+            (!trim(record.preview_selection_key) || trim(record.preview_selection_key) === target)
+          ))
+        : null;
+      if (!force && sharedInflight?.promise) {
+        this.previewRequestKey = requestKey;
+        const sharedWork = Promise.resolve(sharedInflight.promise)
+          .then((sharedSignedUrl) => {
+            if (!this.isLive() || rowIdentityOf(state) !== identity) return false;
+            const livePane = state.evidence_pane_state || {};
+            if (trim(livePane.active_tab).toLowerCase() !== 'attached') return false;
+            const signedUrl = trim(livePane.__preview_signed_url || sharedSignedUrl);
+            if (!signedUrl) return false;
+            livePane.__preview_target_key = target;
+            livePane.__preview_signed_url = signedUrl;
+            livePane.__preview_loading = false;
+            livePane.__preview_error = '';
+            return this.renderResolvedPreview(item, signedUrl);
+          })
+          .catch(() => false)
+          .finally(() => {
+            if (this.previewRequestKey === requestKey) {
+              this.previewRequestKey = '';
+              this.previewRequestPromise = null;
+            }
+          });
+        this.previewRequestPromise = sharedWork;
+        return sharedWork;
+      }
       const sharedRequestTarget = trim(pane.__preview_load_requested_target_key || pane.__preview_attached_request_key);
       if (!force && pane.__preview_loading === true && sharedRequestTarget === target && !this.previewRequestPromise) {
         this.scheduleTerminalGuard(identity, target);
@@ -2370,7 +2456,6 @@
         }
         return Promise.resolve(true);
       }
-      const requestKey = `${identity}|${target}`;
       if (!force && this.previewRequestKey === requestKey && this.previewRequestPromise) return this.previewRequestPromise;
       try { this.previewAbortController?.abort?.(); } catch {}
       const abortController = typeof win.AbortController === 'function' ? new win.AbortController() : null;
@@ -2547,6 +2632,7 @@
   if (typeof legacy.open === 'function') {
     win.openBulkAuthoriseWorkbench = async function openBulkAuthoriseWorkbenchWithEvidenceController(...args) {
       verifiedBadgeTruthForOpenModal.clear();
+      clearSharedMutationPolicy();
       const state = await legacy.open.apply(this, args);
       if (state && typeof state === 'object') activeBulkAuthoriseState = state;
       const controller = controllerFor(state);
@@ -2614,6 +2700,7 @@
   if (typeof legacy.bindPreview === 'function') {
     win.bindBulkAuthorisePreviewPane = async function bindBulkAuthorisePreviewWithEvidenceController(state, ...args) {
       const controller = controllerFor(state);
+      if (controller?.isRowTransitionHydrationPending()) return false;
       if (controller) controller.sanitize('before-preview-bind');
       const result = await legacy.bindPreview.call(this, state, ...args);
       if (controller) {

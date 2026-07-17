@@ -178,6 +178,68 @@ test('row navigation preserves checkbox selection and commits one full row conte
   assert.equal(root.dataset.bulkAuthoriseController, 'v2');
 });
 
+test('row navigation leaves all context hydration to the lifecycle full request', async () => {
+  const first = row('timesheet:A');
+  const second = row('timesheet:B');
+  const state = stateFor([first, second], first.row_key);
+  let selectionOptions = null;
+  const contextProfiles = [];
+  const { controller } = installHarness(state, {
+    async setActiveBulkAuthoriseRowFromVisibleRows(current, preferredRowKey, options = {}) {
+      selectionOptions = { ...options };
+      const next = current.dataset.rows.find((entry) => entry.row_key === preferredRowKey) || null;
+      if (next?.row_key !== current.active_row_key) {
+        current.__bulk_authorise_row_change_seq = (Number(current.__bulk_authorise_row_change_seq || 0) || 0) + 1;
+      }
+      current.active_row_key = next ? next.row_key : null;
+      current.active_row = next ? clone(next) : null;
+      current.active_context = next ? { row: clone(next), profile: 'status_header' } : null;
+      return true;
+    },
+    async refreshBulkAuthoriseActiveContext(current, options) {
+      contextProfiles.push(options.profile);
+      assert.equal(options.rowChangeSeq, current.__bulk_authorise_row_change_seq);
+      current.active_context = { row: clone(options.row), profile: options.profile, full_loaded: true, evidence_loaded: true };
+      current.__bulk_authorise_row_context_ready = true;
+      return true;
+    }
+  });
+
+  await controller.transitionToRow(second.row_key, { source: 'row_click' });
+
+  assert.equal(selectionOptions.datasetOnly, true);
+  assert.equal(selectionOptions.minimalOnly, true);
+  assert.equal(selectionOptions.deferContextRefresh, false);
+  assert.equal(selectionOptions.scheduleHydration, false);
+  assert.equal(selectionOptions.skipEvidenceHydration, true);
+  assert.deepEqual(contextProfiles, ['full']);
+});
+
+test('a full response without evidence is completed sequentially before the ready render', async () => {
+  const first = row('timesheet:A');
+  const second = row('timesheet:B');
+  const state = stateFor([first, second], first.row_key);
+  const contextProfiles = [];
+  const { controller, renderReasons } = installHarness(state, {
+    async refreshBulkAuthoriseActiveContext(current, options) {
+      contextProfiles.push(options.profile);
+      current.active_context = {
+        row: clone(options.row),
+        profile: options.profile,
+        full_loaded: true,
+        evidence_loaded: options.profile === 'evidence'
+      };
+      return true;
+    }
+  });
+
+  await controller.transitionToRow(second.row_key, { source: 'row_click' });
+
+  assert.deepEqual(contextProfiles, ['full', 'evidence']);
+  assert.equal(renderReasons.filter((reason) => reason.includes('[ROW-SKELETON]')).length, 1);
+  assert.equal(renderReasons.filter((reason) => reason.includes('[ROW-READY]')).length, 1);
+});
+
 test('same-row lifecycle refresh clears stale authorised context before loading the processed context', async () => {
   const processed = row('timesheet:A', 'processed_eligible', {
     is_authorised: false,
@@ -215,7 +277,8 @@ test('same-row lifecycle refresh clears stale authorised context before loading 
         row: clone(options.row),
         action_flags: { can_bulk_authorise: true, read_only: false },
         profile: 'full',
-        full_loaded: true
+        full_loaded: true,
+        evidence_loaded: true
       };
       return true;
     }
@@ -241,7 +304,7 @@ test('a later row transition wins and the stale transition cannot render ready',
       return new Promise((resolve) => {
         pending.set(options.row_key, () => {
           if (current.active_row_key === options.row_key) {
-            current.active_context = { row: clone(options.row), profile: 'full', full_loaded: true };
+            current.active_context = { row: clone(options.row), profile: 'full', full_loaded: true, evidence_loaded: true };
           }
           resolve(true);
         });
@@ -301,7 +364,7 @@ test('a proven-unchanged revisit restores the cached row without a full render o
     },
     async refreshBulkAuthoriseActiveContext(current, options) {
       contextRefreshes += 1;
-      current.active_context = { row: clone(options.row), profile: 'full', full_loaded: true };
+      current.active_context = { row: clone(options.row), profile: 'full', full_loaded: true, evidence_loaded: true };
       return true;
     }
   });
@@ -349,7 +412,7 @@ test('a changed watch token fails closed to the existing full refresh path', asy
     },
     async refreshBulkAuthoriseActiveContext(current, options) {
       contextRefreshes += 1;
-      current.active_context = { row: clone(options.row), profile: 'full', full_loaded: true };
+      current.active_context = { row: clone(options.row), profile: 'full', full_loaded: true, evidence_loaded: true };
       return true;
     }
   });
