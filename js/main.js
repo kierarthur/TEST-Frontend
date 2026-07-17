@@ -20228,15 +20228,31 @@ async function bankingRerender(tabKey = null) {
       }
     }
 
+    const workbenchScrollSnapshotToRestore = (
+      nextTabKey === 'pay' &&
+      !hasContextChanged &&
+      workbenchStore &&
+      workbenchStore.__ui_scroll_snapshot
+    ) ? workbenchStore.__ui_scroll_snapshot : null;
+
     try { fr._suppressDirty = true; } catch {}
     await fr.setTab(nextTabKey);
+
+    // The Pay tab rebuild replaces its scroll hosts. Restore synchronously so the
+    // replacement cannot paint at scrollTop 0 and flash before the settled pass.
+    try {
+      if (workbenchScrollSnapshotToRestore) {
+        restoreScrollSnapshot(workbenchScrollSnapshotToRestore);
+      }
+    } catch {}
+
     try { fr._suppressDirty = false; } catch {}
     try { fr._updateButtons && fr._updateButtons(); } catch {}
 
     try {
-      if (nextTabKey === 'pay' && !hasContextChanged && workbenchStore && workbenchStore.__ui_scroll_snapshot) {
+      if (workbenchScrollSnapshotToRestore) {
         await waitForNextPaint();
-        restoreScrollSnapshot(workbenchStore.__ui_scroll_snapshot);
+        restoreScrollSnapshot(workbenchScrollSnapshotToRestore);
       }
     } catch {}
 
@@ -49745,6 +49761,148 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
 
   const getExpenseComponentFriendlyLabel = (obj) => isExpenseComponentLine(obj) ? getFriendlyExpenseLabel(getLineExpenseCode(obj)) : '';
 
+  const isOverpaymentRecoveryLine = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    return upperTrim(obj?.line_type || obj?.lineType || nested?.line_type || nested?.lineType || '') === 'OVERPAYMENT_RECOVERY';
+  };
+
+  const getOverpaymentComponentFriendlyLabel = (component) => {
+    const row = isPlainObject(component) ? component : {};
+    const keyType = upperTrim(row.component_key_type || row.componentKeyType || row.key_type || row.keyType || '');
+    const keyValue = trimStr(row.component_key_value || row.componentKeyValue || row.key_value || row.keyValue || '');
+    if (keyType === 'EXPENSE_CODE') return getFriendlyExpenseLabel(keyValue);
+    if (keyType === 'TS_DAY') return `Timesheet pay — ${ymdToUk(keyValue) || keyValue || 'dated amount'}`;
+    if (keyType === 'TS_TOTAL') return 'Timesheet pay';
+
+    const friendlyValue = keyValue
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+    if (keyType === 'ADDITIONAL_CODE') return friendlyValue ? `Additional pay — ${friendlyValue}` : 'Additional pay';
+    if (keyType === 'ADJUSTMENT_CODE') return friendlyValue ? `Pay adjustment — ${friendlyValue}` : 'Pay adjustment';
+    if (keyType === 'MANUAL_CARRY_FORWARD') return friendlyValue ? `Carry-forward adjustment — ${friendlyValue}` : 'Carry-forward adjustment';
+    return friendlyValue || 'Overpayment amount';
+  };
+
+  const getOverpaymentRecoveryPresentation = (obj) => {
+    if (!isOverpaymentRecoveryLine(obj)) return null;
+    const line = isPlainObject(obj) ? obj : {};
+    const nested = getNestedLinePayload(line);
+    const caseSummary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const toMagnitude = (...values) => {
+      const value = firstFinitePreviewNumber(...values);
+      return value === null ? null : Math.abs(Math.round(value * 100) / 100);
+    };
+    const components = getLineCaseComponents(line).map((component, index) => {
+      const original = toMagnitude(
+        component?.source_amount,
+        component?.sourceAmount,
+        component?.source_pay_ex_vat,
+        component?.sourcePayExVat,
+        component?.remaining_source_amount,
+        component?.remainingSourceAmount
+      );
+      const outstanding = toMagnitude(
+        component?.remaining_source_amount,
+        component?.remainingSourceAmount,
+        original
+      );
+      const recoverableThisRun = toMagnitude(
+        component?.preview_due_amount_ex_vat,
+        component?.previewDueAmountExVat,
+        component?.allocated_source_due_amount_ex_vat,
+        component?.allocatedSourceDueAmountExVat,
+        component?.target_pay_ex_vat,
+        component?.targetPayExVat,
+        0
+      ) ?? 0;
+      return {
+        index,
+        label: getOverpaymentComponentFriendlyLabel(component),
+        original,
+        outstanding,
+        recoverable_this_run: recoverableThisRun
+      };
+    }).filter((component) => component.original !== null || component.outstanding !== null);
+
+    const componentOriginalTotal = Math.round(components.reduce((total, component) => total + (component.original ?? 0), 0) * 100) / 100;
+    const componentOutstandingTotal = Math.round(components.reduce((total, component) => total + (component.outstanding ?? 0), 0) * 100) / 100;
+    const componentRecoverableTotal = Math.round(components.reduce((total, component) => total + (component.recoverable_this_run ?? 0), 0) * 100) / 100;
+    const rowRecoverable = toMagnitude(getLineRowLevelAmount(line), getLineSectionAmount(line), 0) ?? 0;
+    const fallbackOutstanding = toMagnitude(
+      line?.nominal_due_amount_ex_vat,
+      line?.nominalDueAmountExVat,
+      nested?.nominal_due_amount_ex_vat,
+      nested?.nominalDueAmountExVat,
+      line?.case_outstanding_amount,
+      line?.caseOutstandingAmount,
+      nested?.case_outstanding_amount,
+      nested?.caseOutstandingAmount,
+      line?.outstanding_amount,
+      line?.outstandingAmount,
+      nested?.outstanding_amount,
+      nested?.outstandingAmount,
+      caseSummary?.nominal_due_amount_ex_vat,
+      caseSummary?.nominalDueAmountExVat,
+      rowRecoverable
+    ) ?? 0;
+    const outstandingTotal = components.length ? componentOutstandingTotal : fallbackOutstanding;
+    const originalTotal = components.length ? componentOriginalTotal : Math.max(outstandingTotal, rowRecoverable);
+    const recoverableThisRun = components.length ? componentRecoverableTotal : rowRecoverable;
+    const blockedReasons = [
+      ...asArray(line?.blocked_reason_codes),
+      ...asArray(line?.blockedReasonCodes),
+      ...asArray(nested?.blocked_reason_codes),
+      ...asArray(nested?.blockedReasonCodes),
+      ...asArray(caseSummary?.blocked_reason_codes),
+      ...asArray(caseSummary?.blockedReasonCodes),
+      line?.presentation_reason,
+      line?.presentationReason,
+      nested?.presentation_reason,
+      nested?.presentationReason
+    ].map((value) => upperTrim(value)).filter(Boolean);
+
+    return {
+      components,
+      original_total: originalTotal,
+      outstanding_total: outstandingTotal,
+      recoverable_this_run: recoverableThisRun,
+      no_available_funds: outstandingTotal > 0 && recoverableThisRun === 0 && blockedReasons.includes('NO_PAY_HEADROOM')
+    };
+  };
+
+  const getPreviewLineDisplayAmount = (line) => {
+    const recovery = getOverpaymentRecoveryPresentation(line);
+    if (recovery && recovery.outstanding_total > 0) return -Math.abs(recovery.outstanding_total);
+    return getLineSectionAmount(line);
+  };
+
+  const renderPreviewLineTypeHtml = (line) => {
+    const label = trimStr(line?.line_type || 'Preview line').replace(/_/g, ' ');
+    const recovery = getOverpaymentRecoveryPresentation(line);
+    return `
+      <div>${enc(label)}</div>
+      ${recovery?.no_available_funds ? '<div class="mini" style="margin-top:4px;opacity:.85;white-space:normal;">No available funds to recover this yet.</div>' : ''}
+    `;
+  };
+
+  const renderPreviewLineAmountHtml = (line, renderContextSection = '') => {
+    const recovery = getOverpaymentRecoveryPresentation(line);
+    if (!recovery) {
+      return `${resolvedRateBadgeHtml(line, renderContextSection)}<div>${enc(fmtMoney(getLineSectionAmount(line)))}</div>`;
+    }
+    return `
+      ${resolvedRateBadgeHtml(line, renderContextSection)}
+      <div>${enc(fmtMoney(-Math.abs(recovery.outstanding_total)))}</div>
+      <div class="mini" style="margin-top:3px;opacity:.8;white-space:normal;">Outstanding recovery</div>
+      <div class="mini" style="margin-top:2px;opacity:.8;white-space:normal;">Recoverable this pay run: ${enc(fmtMoney(recovery.recoverable_this_run))}</div>
+    `;
+  };
+
   const getLineCandidateId = (obj) => {
     const nested = getNestedLinePayload(obj);
     return trimStr(obj?.candidate_id || obj?.candidateId || nested?.candidate_id || nested?.candidateId || '');
@@ -49916,6 +50074,54 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       </details>
     `;
   };
+
+  const renderOverpaymentRecoveryBreakdown = (parentLine) => {
+    const recovery = getOverpaymentRecoveryPresentation(parentLine);
+    if (!recovery?.components?.length) return '';
+
+    return `
+      <details data-overpayment-recovery-breakdown style="margin-top:8px;">
+        <summary class="mini" style="cursor:pointer; user-select:none;">Show overpayment breakdown</summary>
+        <div class="mini" style="margin-top:8px; opacity:.85;">This overpayment is made up of the following amounts.</div>
+        <div style="margin-top:8px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
+          <table class="grid" style="min-width:820px; table-layout:auto;">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th style="text-align:right; white-space:nowrap;">Original overpayment</th>
+                <th style="text-align:right; white-space:nowrap;">Outstanding</th>
+                <th style="text-align:right; white-space:nowrap;">Recoverable this pay run</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${recovery.components.map((component) => `
+                <tr>
+                  <td class="mini">${enc(component.label)}</td>
+                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(-Math.abs(component.original ?? 0)))}</td>
+                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(-Math.abs(component.outstanding ?? 0)))}</td>
+                  <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(component.recoverable_this_run ?? 0))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+            <tfoot>
+              <tr>
+                <th>Total outstanding recovery</th>
+                <th class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(-Math.abs(recovery.original_total)))}</th>
+                <th class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(-Math.abs(recovery.outstanding_total)))}</th>
+                <th class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(recovery.recoverable_this_run))}</th>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </details>
+    `;
+  };
+
+  const renderPreviewLineBreakdown = (line) => (
+    isOverpaymentRecoveryLine(line)
+      ? renderOverpaymentRecoveryBreakdown(line)
+      : renderExpenseComponentBreakdown(line)
+  );
 
   const getReadyTimesheetGroupKey = (line) => {
     const candidateId = getLineCandidateId(line);
@@ -50325,7 +50531,6 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 
   const renderTimesheetParentRows = (lines, renderContextSection = '') => {
     return lines.map((line) => {
-      const amount = getLineSectionAmount(line);
       const client = trimStr(line?.client_name) || '—';
       const displayName = trimStr(line?.display_name) || '—';
       const tmsRef = trimStr(line?.tms_ref);
@@ -50367,10 +50572,10 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const cancelResolvedRateHtml = resolvedRateCancelActionHtml(line, renderContextSection);
       const expenseActionHtml = isExactTimesheetExpenseLine(line) ? previewActionHtml(line) : '';
       const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, expenseActionHtml, wholeActionHtml].filter(Boolean).join(' ');
-      const expenseComponentLabel = getExpenseComponentFriendlyLabel(line);
+      const expenseComponentLabel = isOverpaymentRecoveryLine(line) ? '' : getExpenseComponentFriendlyLabel(line);
       const detailRowHtml = [
         blockedUi.showSegmentDetail ? renderTimesheetSegmentRows(line) : '',
-        renderExpenseComponentBreakdown(line)
+        renderPreviewLineBreakdown(line)
       ].filter(Boolean).join('');
       const advisory = getParentSectionAdvisory(line);
       const segmentCount = getLineSectionSegmentCount(line);
@@ -50407,7 +50612,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
               />
             ` : `<span class="mini" style="opacity:.7;">—</span>`}
           </td>
-          <td class="mini">${enc(trimStr(line?.line_type || 'Preview line').replace(/_/g, ' '))}</td>
+          <td class="mini">${renderPreviewLineTypeHtml(line)}</td>
           <td>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <span class="mono">${enc(tmsRef || '')}</span>
@@ -50420,8 +50625,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
           <td class="mini">${enc(client)}</td>
           <td class="mini" style="white-space:nowrap;">${enc(weekOrDate)}</td>
         <td class="mono" style="text-align:right;white-space:nowrap;">
-            ${resolvedRateBadgeHtml(line, renderContextSection)}
-            <div>${enc(fmtMoney(amount))}</div>
+            ${renderPreviewLineAmountHtml(line, renderContextSection)}
           </td>
           <td>
             <div style="display:flex;flex-direction:column;gap:4px;">
@@ -50444,7 +50648,6 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 
   const renderSimplePreviewRows = (lines, stateLabelOverride = null, renderContextSection = '') => {
     return lines.map((line) => {
-      const amount = getLineSectionAmount(line);
       const client = trimStr(line?.client_name) || '—';
       const displayName = trimStr(line?.display_name) || '—';
       const tmsRef = trimStr(line?.tms_ref);
@@ -50458,8 +50661,8 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         : '';
       const cancelResolvedRateHtml = resolvedRateCancelActionHtml(line, renderContextSection);
       const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, actionHtml].filter(Boolean).join(' ');
-      const expenseComponentLabel = getExpenseComponentFriendlyLabel(line);
-      const detailRowHtml = renderExpenseComponentBreakdown(line);
+      const expenseComponentLabel = isOverpaymentRecoveryLine(line) ? '' : getExpenseComponentFriendlyLabel(line);
+      const detailRowHtml = renderPreviewLineBreakdown(line);
       const info = getSnoozeInfo(line);
       const stateLabel = stateLabelOverride || (
         section === 'BLOCKED_FOR_PAY'
@@ -50501,7 +50704,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
               />
             ` : `<span class="mini" style="opacity:.7;">—</span>`}
           </td>
-          <td class="mini">${enc(trimStr(line?.line_type || 'Preview line').replace(/_/g, ' '))}</td>
+          <td class="mini">${renderPreviewLineTypeHtml(line)}</td>
           <td>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <span class="mono">${enc(tmsRef || '')}</span>
@@ -50513,8 +50716,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
           <td class="mini">${enc(client)}</td>
           <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(trimStr(line?.week_ending_date)) || ymdToUk(trimStr(line?.linked_shift_date)) || '—')}</td>
           <td class="mono" style="text-align:right;white-space:nowrap;">
-            ${resolvedRateBadgeHtml(line, renderContextSection)}
-            <div>${enc(fmtMoney(amount))}</div>
+            ${renderPreviewLineAmountHtml(line, renderContextSection)}
           </td>
           <td>
             <div style="display:flex;flex-direction:column;gap:4px;">
@@ -53222,7 +53424,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     const displayGroups = asArray(groups).filter((group) => isPlainObject(group));
     const totalCases = displayGroups.reduce((acc, group) => acc + group.entries.length, 0);
     const totalCaseAmount = Math.round(displayGroups.flatMap((group) => group.entries).reduce((acc, entry) => acc + toNum(entry.case_amount, 0), 0) * 100) / 100;
-    const totalBlockedLineAmount = Math.round(displayLines.reduce((acc, line) => acc + toNum(getLineSectionAmount(line), 0), 0) * 100) / 100;
+    const totalBlockedLineAmount = Math.round(displayLines.reduce((acc, line) => acc + toNum(getPreviewLineDisplayAmount(line), 0), 0) * 100) / 100;
     const candidateIds = new Set();
     for (const line of displayLines) {
       const candidateId = trimStr(line?.candidate_id);
@@ -176907,6 +177109,57 @@ async function refreshBulkAuthoriseDatasetPreservingState(state, options = {}) {
   }
 }
 
+function captureBulkAuthoriseToolbarFocus() {
+  const doc = (typeof document !== 'undefined') ? document : null;
+  const active = doc?.activeElement || null;
+  if (!active || String(active.id || '') !== 'bulkAuthoriseToolbarTextInput') return null;
+
+  return {
+    element_id: 'bulkAuthoriseToolbarTextInput',
+    selection_start: Number.isInteger(active.selectionStart) ? active.selectionStart : null,
+    selection_end: Number.isInteger(active.selectionEnd) ? active.selectionEnd : null,
+    selection_direction: String(active.selectionDirection || 'none'),
+    scroll_left: Number(active.scrollLeft || 0) || 0
+  };
+}
+
+function restoreBulkAuthoriseToolbarFocus(snapshot) {
+  const snap = (snapshot && typeof snapshot === 'object') ? snapshot : null;
+  if (!snap || String(snap.element_id || '') !== 'bulkAuthoriseToolbarTextInput') return false;
+
+  const doc = (typeof document !== 'undefined') ? document : null;
+  const input = doc?.getElementById?.('bulkAuthoriseToolbarTextInput') || null;
+  if (!doc || !input) return false;
+
+  const active = doc.activeElement || null;
+  const focusCanBeRestored = !active
+    || active === input
+    || active === doc.body
+    || active === doc.documentElement
+    || active.isConnected === false;
+  if (!focusCanBeRestored) return false;
+
+  try {
+    input.focus({ preventScroll: true });
+  } catch {
+    try { input.focus(); } catch { return false; }
+  }
+
+  if (typeof input.setSelectionRange === 'function') {
+    const length = String(input.value == null ? '' : input.value).length;
+    const rawStart = Number.isInteger(snap.selection_start) ? snap.selection_start : length;
+    const rawEnd = Number.isInteger(snap.selection_end) ? snap.selection_end : rawStart;
+    const start = Math.max(0, Math.min(length, rawStart));
+    const end = Math.max(start, Math.min(length, rawEnd));
+    const direction = ['forward', 'backward', 'none'].includes(String(snap.selection_direction || 'none'))
+      ? String(snap.selection_direction || 'none')
+      : 'none';
+    try { input.setSelectionRange(start, end, direction); } catch {}
+  }
+  try { input.scrollLeft = Number(snap.scroll_left || 0) || 0; } catch {}
+  return true;
+}
+
 async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
   const prefix = String(logPrefix || '[TS][BULK-AUTH]');
   const st = (state && typeof state === 'object')
@@ -177049,6 +177302,7 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
       const listsRootEl = document.getElementById('bulkAuthoriseListsRoot');
       const processedListEl = document.querySelector('[data-bulk-authorise-section-scroll="processed_eligible"]');
       const authorisedListEl = document.querySelector('[data-bulk-authorise-section-scroll="authorised_eligible"]');
+      const toolbarFocusSnapshot = captureBulkAuthoriseToolbarFocus();
 
       const scrollSnapshot = {
         left_pane: Number(leftPaneEl?.scrollTop || st?.__bulk_authorise_scroll?.left_pane || 0),
@@ -177083,6 +177337,10 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
         if (nextListsRootEl) nextListsRootEl.scrollTop = Number(scrollSnapshot.lists_root || 0);
         if (nextProcessedListEl) nextProcessedListEl.scrollTop = Number(scrollSnapshot.processed_eligible || 0);
         if (nextAuthorisedListEl) nextAuthorisedListEl.scrollTop = Number(scrollSnapshot.authorised_eligible || 0);
+      };
+      const restoreTransientUiState = () => {
+        restoreScroll();
+        restoreBulkAuthoriseToolbarFocus(toolbarFocusSnapshot);
       };
 
       const tabKey = trimStr(fr.currentTabKey || 'main') || 'main';
@@ -177146,10 +177404,10 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
         }
       }
 
-      restoreScroll();
+      restoreTransientUiState();
       await new Promise((resolve) => {
         const finish = () => {
-          restoreScroll();
+          restoreTransientUiState();
           resolve();
         };
         if (typeof requestAnimationFrame === 'function') requestAnimationFrame(finish);
