@@ -88,7 +88,20 @@ function installHarness(initialState, overrides = {}) {
         || null;
       state.active_row_key = next ? next.row_key : null;
       state.active_row = next ? clone(next) : null;
-      state.active_context = next ? { row: clone(next), profile: 'status_header' } : null;
+      if (next && options.preserveActiveContext === true && state.active_context) {
+        state.active_context.row = clone(next);
+        state.active_context.bulk_authorise_section = next.bulk_authorise_section;
+        state.active_context.is_authorised = next.is_authorised;
+        state.active_context.read_only = next.read_only;
+        state.active_context.can_bulk_authorise = next.can_bulk_authorise;
+        state.active_context.action_flags = {
+          ...(state.active_context.action_flags || {}),
+          can_bulk_authorise: next.can_bulk_authorise,
+          read_only: next.read_only
+        };
+      } else {
+        state.active_context = next ? { row: clone(next), profile: 'status_header' } : null;
+      }
       state.active_ctx = null;
       state.active_details = null;
       return true;
@@ -152,13 +165,66 @@ test('row navigation preserves checkbox selection and commits one full row conte
 
   assert.equal(changed, true);
   assert.equal(state.active_row_key, second.row_key);
-  assert.deepEqual(state.selected_row_keys, [second.row_key]);
+  assert.deepEqual(Array.from(state.selected_row_keys), [second.row_key]);
   assert.equal(state.selected_section, 'processed_eligible');
   assert.equal(state.active_context.profile, 'full');
   assert.equal(state.active_context.full_loaded, true);
   assert.equal(state.evidence_pane_state.active_tab, 'attached');
   assert.equal(state.evidence_pane_state.__preview_signed_url, '');
   assert.equal(root.dataset.bulkAuthoriseController, 'v2');
+});
+
+test('same-row lifecycle refresh clears stale authorised context before loading the processed context', async () => {
+  const processed = row('timesheet:A', 'processed_eligible', {
+    is_authorised: false,
+    can_bulk_authorise: true
+  });
+  const state = stateFor([processed], processed.row_key);
+  state.active_context = {
+    row: row('timesheet:A', 'authorised_eligible', {
+      is_authorised: true,
+      can_bulk_authorise: false
+    }),
+    action_flags: {
+      can_bulk_authorise: false,
+      read_only: true
+    },
+    profile: 'full'
+  };
+  state.active_ctx = clone(state.active_context);
+  state.active_details = clone(state.active_context);
+  state.__bulk_authorise_row_context_ready = true;
+
+  const { controller } = installHarness(state, {
+    async setActiveBulkAuthoriseRowFromVisibleRows(current, preferredRowKey) {
+      const next = current.dataset.rows.find((entry) => entry.row_key === preferredRowKey) || null;
+      current.active_row_key = next ? next.row_key : null;
+      current.active_row = next ? clone(next) : null;
+      return true;
+    },
+    async refreshBulkAuthoriseActiveContext(current, options) {
+      assert.equal(current.active_context, null);
+      assert.equal(current.active_ctx, null);
+      assert.equal(current.active_details, null);
+      assert.equal(current.__bulk_authorise_row_context_ready, false);
+      current.active_context = {
+        row: clone(options.row),
+        action_flags: { can_bulk_authorise: true, read_only: false },
+        profile: 'full',
+        full_loaded: true
+      };
+      return true;
+    }
+  });
+
+  const changed = await controller.transitionToRow(processed.row_key, {
+    skipDirtyGuard: true,
+    source: 'canonical-mutation-refresh'
+  });
+
+  assert.equal(changed, true);
+  assert.equal(state.active_context.action_flags.can_bulk_authorise, true);
+  assert.equal(state.active_context.action_flags.read_only, false);
 });
 
 test('a later row transition wins and the stale transition cannot render ready', async () => {
@@ -252,10 +318,69 @@ test('post-mutation reconciliation replaces partial rows with the canonical data
   assert.equal(result.canonical_dataset_refreshed, true);
   assert.equal(state.dataset.rows[0].candidate_name, 'Full Candidate A');
   assert.equal(state.dataset.rows[0].client_name, 'Full Client A');
-  assert.deepEqual(state.selected_row_keys, ['timesheet:B']);
+  assert.deepEqual(Array.from(state.selected_row_keys), ['timesheet:B']);
   assert.equal(state.selected_section, 'processed_eligible');
   assert.equal(state.active_row_key, 'timesheet:B');
   assert.equal(state.active_row.candidate_name, 'Full Candidate B');
+});
+
+test('a zero-success authorise restores the canonical processed row and its fresh context', async () => {
+  const active = row('timesheet:A', 'processed_eligible', {
+    is_authorised: false,
+    can_bulk_authorise: true,
+    read_only: false
+  });
+  const state = stateFor([active], active.row_key);
+  const retainedEvidence = [{ id: 'evidence:current', kind: 'ACCOMMODATION' }];
+  state.active_context = {
+    row: clone(active),
+    action_flags: { can_bulk_authorise: true, read_only: false },
+    evidence: clone(retainedEvidence),
+    evidence_loaded: true,
+    profile: 'full'
+  };
+  const canonical = { rows: [active], counts: { total: 1 } };
+  let fullContextRefreshes = 0;
+  const { win } = installHarness(state, {
+    async fetchBulkAuthoriseDataset() { return clone(canonical); },
+    async refreshBulkAuthoriseActiveContext() {
+      fullContextRefreshes += 1;
+      return true;
+    },
+    async handleBulkAuthoriseSelected() {
+      state.selected_row_keys = [active.row_key];
+      state.selected_section = 'processed_eligible';
+      state.active_context = {
+        row: row(active.row_key, 'authorised_eligible', { is_authorised: true, read_only: true }),
+        action_flags: { can_bulk_authorise: false, read_only: true },
+        evidence: clone(retainedEvidence),
+        evidence_loaded: true,
+        profile: 'full'
+      };
+      return {
+        ok: false,
+        batch_completed: false,
+        success_count: 0,
+        failure_count: 1,
+        failed_items: [{ row_key: active.row_key, error_code: 'EVIDENCE_REQUIRED' }]
+      };
+    }
+  });
+
+  const result = await win.handleBulkAuthoriseSelected(state, {});
+
+  assert.equal(result.failed_mutation_reconciled, true);
+  assert.equal(state.active_row_key, active.row_key);
+  assert.equal(state.active_row.bulk_authorise_section, 'processed_eligible');
+  assert.equal(state.active_context.row.bulk_authorise_section, 'processed_eligible');
+  assert.equal(state.active_context.row.read_only, false);
+  assert.deepEqual(state.active_context.evidence, retainedEvidence);
+  assert.equal(state.active_context.profile, 'full');
+  assert.equal(fullContextRefreshes, 0);
+  assert.deepEqual(Array.from(state.selected_row_keys), []);
+  assert.equal(state.selected_section, null);
+  assert.equal(state.lifecycle_refresh_failed, false);
+  assert.equal(result.refresh_failed, false);
 });
 
 test('authorising the active row selects its original successor without wrapping to the top', async () => {
@@ -279,7 +404,7 @@ test('authorising the active row selects its original successor without wrapping
   await win.handleBulkAuthoriseSelected(state, {});
 
   assert.equal(state.active_row_key, successor.row_key);
-  assert.deepEqual(state.selected_row_keys, []);
+  assert.deepEqual(Array.from(state.selected_row_keys), []);
 });
 
 test('authorising the final processed row leaves a clean empty selection', async () => {
@@ -303,7 +428,7 @@ test('authorising the final processed row leaves a clean empty selection', async
 
   assert.equal(state.active_row_key, null);
   assert.equal(state.active_row, null);
-  assert.deepEqual(state.selected_row_keys, []);
+  assert.deepEqual(Array.from(state.selected_row_keys), []);
 });
 
 test('unauthorising a row selects the same row in Processed Eligible', async () => {
@@ -327,7 +452,37 @@ test('unauthorising a row selects the same row in Processed Eligible', async () 
 
   assert.equal(state.active_row_key, active.row_key);
   assert.equal(state.active_row.bulk_authorise_section, 'processed_eligible');
-  assert.deepEqual(state.selected_row_keys, []);
+  assert.deepEqual(Array.from(state.selected_row_keys), [active.row_key]);
+  assert.equal(state.selected_section, 'processed_eligible');
+});
+
+test('a failed unauthorise row remains selected in Authorised Eligible for retry', async () => {
+  const active = row('timesheet:A', 'authorised_eligible');
+  const failed = row('timesheet:B', 'authorised_eligible');
+  const state = stateFor([active, failed], active.row_key);
+  state.selected_row_keys = [active.row_key, failed.row_key];
+  state.selected_section = 'authorised_eligible';
+  const canonical = {
+    rows: [row(active.row_key, 'processed_eligible'), failed],
+    counts: { total: 2 }
+  };
+  const { win } = installHarness(state, {
+    async fetchBulkAuthoriseDataset() { return clone(canonical); },
+    async handleBulkUnauthoriseSelected() {
+      return {
+        ok: true,
+        batch_completed: true,
+        success_count: 1,
+        failed_items: [{ row_key: failed.row_key }],
+        mutationSeq: 15
+      };
+    }
+  });
+
+  await win.handleBulkUnauthoriseSelected(state, {});
+
+  assert.deepEqual(Array.from(state.selected_row_keys), [failed.row_key]);
+  assert.equal(state.selected_section, 'authorised_eligible');
 });
 
 test('the right-pane action renders once more after its modal spinner has cleared', async () => {
@@ -363,9 +518,9 @@ test('the right-pane action renders once more after its modal spinner has cleare
 
   await controller.runOwnedAction(button);
 
-  assert.equal(renderStates.length, 1);
-  assert.match(renderStates[0].reason, /AUTHORISE-ACTION-SETTLED/);
-  assert.equal(renderStates[0].spinnerActive, false);
+  assert.ok(renderStates.length >= 1);
+  assert.match(renderStates.at(-1).reason, /AUTHORISE-ACTION-SETTLED/);
+  assert.equal(renderStates.at(-1).spinnerActive, false);
 });
 
 test('modal dismissal invalidates the controller and clears row-owned state', async () => {

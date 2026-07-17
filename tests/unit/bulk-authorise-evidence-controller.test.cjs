@@ -77,6 +77,70 @@ function actionButton() {
   };
 }
 
+function badgeDomElement(tagName = 'div') {
+  const attributes = {};
+  const element = {
+    tagName: String(tagName).toUpperCase(),
+    attributes,
+    children: [],
+    parentElement: null,
+    style: {},
+    className: '',
+    textContent: '',
+    get firstElementChild() { return this.children[0] || null; },
+    getAttribute(name) { return attributes[name] || ''; },
+    setAttribute(name, value) { attributes[name] = String(value); },
+    appendChild(child) { child.parentElement = this; this.children.push(child); return child; },
+    replaceChildren(...children) {
+      for (const child of this.children) child.parentElement = null;
+      this.children = [];
+      for (const child of children) this.appendChild(child);
+    },
+    remove() {
+      if (!this.parentElement) return;
+      this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
+      this.parentElement = null;
+    },
+    querySelectorAll(selector) {
+      const matches = [];
+      const visit = (node) => {
+        for (const child of node.children || []) {
+          if (selector === '.bulk-timesheet-evidence-badge' && String(child.className).split(/\s+/).includes('bulk-timesheet-evidence-badge')) matches.push(child);
+          visit(child);
+        }
+      };
+      visit(this);
+      return matches;
+    },
+    querySelector(selector) {
+      if (selector === '[data-bulk-authorise-evidence-badges="1"]') {
+        const visit = (node) => {
+          for (const child of node.children || []) {
+            if (child.getAttribute?.('data-bulk-authorise-evidence-badges') === '1') return child;
+            const nested = visit(child);
+            if (nested) return nested;
+          }
+          return null;
+        };
+        return visit(this);
+      }
+      return null;
+    }
+  };
+  return element;
+}
+
+function badgeDomRow(identity) {
+  const row = badgeDomElement('div');
+  row.setAttribute('data-row-key', identity);
+  const grid = badgeDomElement('div');
+  grid.appendChild(badgeDomElement('div'));
+  grid.appendChild(badgeDomElement('div'));
+  grid.appendChild(badgeDomElement('div'));
+  row.appendChild(grid);
+  return row;
+}
+
 function makeState(rows) {
   const activeRow = {
     row_key: 'timesheet:eduardo',
@@ -135,8 +199,12 @@ function makeState(rows) {
 
 function install(state, options = {}) {
   const timers = [];
+  const intervals = [];
   const listeners = {};
+  const windowListeners = {};
+  const mutationObservers = [];
   const thumbnailButtons = Array.isArray(options.thumbnailButtons) ? options.thumbnailButtons : [];
+  const badgeRows = Array.isArray(options.badgeRows) ? options.badgeRows : [];
   const elements = options.elements && typeof options.elements === 'object' ? options.elements : {};
   const previewLabel = options.previewLabel || null;
   const root = {
@@ -158,8 +226,10 @@ function install(state, options = {}) {
       return null;
     },
     querySelectorAll(selector) {
+      if (String(selector).includes('[data-bulk-authorise-row="1"]')) return badgeRows;
       return String(selector).includes('[data-bp-preview-attached-thumb="1"]') ? thumbnailButtons : [];
-    }
+    },
+    ...(options.withBadgeDom === true ? { createElement: (tagName) => badgeDomElement(tagName) } : {})
   };
   const win = {
     document,
@@ -169,11 +239,27 @@ function install(state, options = {}) {
     async openBulkAuthoriseWorkbench() { return state; },
     renderBulkAuthoriseShell() { return '<div id="bulkAuthoriseWorkbenchRoot"></div>'; },
     async refreshBulkAuthoriseActiveContext() { return true; },
+    refreshTimesheetImportsQueue: options.refreshTimesheetImportsQueue,
     async bindBulkAuthoriseEvidencePane() { return true; },
     async bindBulkAuthorisePreviewPane() { return true; },
     async rerenderBulkAuthoriseWorkbench() { rerenders += 1; return true; },
-    setTimeout(callback) { timers.push(callback); return timers.length; }
+    addEventListener(type, handler) { windowListeners[type] = handler; },
+    setTimeout(callback) { timers.push(callback); return timers.length; },
+    setInterval(callback) { intervals.push(callback); return intervals.length; }
   };
+  if (options.withMutationObserver === true) {
+    win.MutationObserver = class FakeMutationObserver {
+      constructor(callback) {
+        this.callback = callback;
+        this.observeCalls = 0;
+        this.disconnectCalls = 0;
+        mutationObservers.push(this);
+      }
+      observe() { this.observeCalls += 1; }
+      disconnect() { this.disconnectCalls += 1; }
+      trigger() { this.callback([]); }
+    };
+  }
   const context = {
     window: win,
     console,
@@ -195,12 +281,311 @@ function install(state, options = {}) {
     root,
     stage,
     timers,
+    intervals,
     listeners,
+    windowListeners,
+    mutationObservers,
     get rerenders() { return rerenders; },
     controller: win.__bulkAuthoriseEvidenceControllerTest.controllerFor(state),
     api: win.__bulkAuthoriseEvidenceControllerTest
   };
 }
+
+test('verified dataset badges are stamped into stale Bulk Authorise row markup', () => {
+  const state = makeState([]);
+  const rowElement = badgeDomRow(state.dataset.rows[0].row_key);
+  const harness = install(state, { withBadgeDom: true, badgeRows: [rowElement] });
+
+  harness.controller.captureDatasetTruth();
+  assert.equal(rowElement.querySelectorAll('.bulk-timesheet-evidence-badge').length, 0);
+  assert.equal(harness.controller.stampVisibleRowBadges(), true);
+  assert.deepEqual(
+    rowElement.querySelectorAll('.bulk-timesheet-evidence-badge').map((badge) => badge.getAttribute('data-evidence-kind')),
+    ['TRAVEL', 'ACCOMMODATION']
+  );
+
+  state.dataset.rows[0].evidence_badges = badges('TIMESHEET');
+  state.dataset.rows[0].attached_evidence_count = 1;
+  harness.controller.datasetBadgeTruth.set(state.dataset.rows[0].row_key, {
+    evidence_badges: badges('TRAVEL', 'ACCOMMODATION'),
+    has_any_evidence: true,
+    attached_evidence_count: 2
+  });
+  assert.equal(harness.controller.stampVisibleRowBadges(), true);
+  assert.deepEqual(
+    rowElement.querySelectorAll('.bulk-timesheet-evidence-badge').map((badge) => badge.getAttribute('data-evidence-kind')),
+    ['TIMESHEET']
+  );
+});
+
+test('DOM observer coalesces mutations and disconnects while applying evidence UI state', () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([travel]);
+  const harness = install(state, { withMutationObserver: true });
+  harness.controller.sanitize('initial');
+  state.evidence_pane_state.__preview_target_key = harness.api.selectionKey(travel);
+  state.evidence_pane_state.__preview_loading = false;
+  state.evidence_pane_state.__preview_error = 'The preview could not be prepared.';
+  harness.controller.stamp();
+
+  const observer = harness.mutationObservers[0];
+  assert.ok(observer);
+  assert.equal(observer.observeCalls, 1);
+  const baselineTimers = harness.timers.length;
+  let previewAttempts = 0;
+  harness.controller.ensureAttachedPreview = async () => {
+    previewAttempts += 1;
+    return false;
+  };
+  observer.trigger();
+  observer.trigger();
+
+  assert.equal(harness.timers.length, baselineTimers + 1, 'synchronous DOM mutations must schedule one settle only');
+  harness.timers[baselineTimers]();
+
+  assert.equal(observer.disconnectCalls, 1);
+  assert.equal(observer.observeCalls, 2, 'the observer should resume after the guarded settle');
+  assert.equal(previewAttempts, 0, 'a terminal preview error must wait for an explicit Retry');
+});
+
+test('a completed asynchronous Queue load triggers the missing Bulk Authorise completion render', async () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([travel]);
+  state.evidence_pane_state.active_tab = 'queue';
+  state.evidence_pane_state.__queue_loaded = false;
+  const harness = install(state);
+  const baselineTimers = harness.timers.length;
+
+  assert.equal(harness.controller.scheduleQueueRefreshRender('unit'), true);
+  assert.equal(harness.timers.length, baselineTimers + 1);
+
+  state.evidence_pane_state.__queue_loaded = true;
+  state.evidence_pane_state.queue_rows = [{ id: 'queue:returned', storage_key: 'queue/returned.jpg' }];
+  await harness.timers[baselineTimers]();
+
+  assert.equal(harness.rerenders, 1);
+});
+
+test('Queue completion uses the active Bulk Authorise forced rerender boundary', async () => {
+  const state = makeState([evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg')]);
+  state.evidence_pane_state.active_tab = 'queue';
+  state.evidence_pane_state.__queue_loaded = true;
+  const renderOptions = [];
+  state.__rerenderWorkbench = async (options) => { renderOptions.push(options); return true; };
+  const harness = install(state);
+  const baselineTimers = harness.timers.length;
+
+  harness.controller.scheduleQueueRefreshRender('forced-unit');
+  await harness.timers[baselineTimers]();
+
+  assert.equal(renderOptions.length, 1);
+  assert.equal(renderOptions[0].force, true);
+  assert.match(renderOptions[0].reason, /evidence-refresh-queue-loaded-forced-unit/);
+  assert.equal(harness.rerenders, 0);
+});
+
+test('a stale shared Queue binding is recovered by the Bulk Authorise-only fallback loader', async () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([travel]);
+  state.evidence_pane_state.active_tab = 'queue';
+  state.evidence_pane_state.queue_rows = [];
+  state.evidence_pane_state.__queue_loaded = false;
+  state.evidence_pane_state.__queue_loading = false;
+  let refreshCalls = 0;
+  const harness = install(state, {
+    async refreshTimesheetImportsQueue(pane, options) {
+      refreshCalls += 1;
+      assert.equal(options.owner_kind, 'bulk_authorise');
+      assert.equal(options.queue_scope, 'global:QUEUED');
+      assert.equal(options.force, true);
+      pane.queue_rows = [{ id: 'queue:returned', storage_key: 'queue/returned.jpg' }];
+      pane.__queue_loaded = true;
+      pane.__queue_loaded_scope = 'global:QUEUED';
+      return pane;
+    }
+  });
+  const baselineTimers = harness.timers.length;
+
+  assert.equal(harness.controller.scheduleQueueRefreshRender('stale-binding-unit'), true);
+  await harness.timers[baselineTimers]();
+  await harness.timers[baselineTimers + 1]();
+  await harness.timers[baselineTimers + 2]();
+  await harness.timers[baselineTimers + 3]();
+
+  assert.equal(refreshCalls, 1);
+  assert.equal(state.evidence_pane_state.__queue_loaded, true);
+  assert.equal(state.evidence_pane_state.active_queue_id, 'queue:returned');
+  assert.equal(state.evidence_pane_state.active_queue_item.storage_key, 'queue/returned.jpg');
+  assert.equal(harness.rerenders, 1);
+});
+
+test('the document-level Queue click schedules rendering on the current controller', () => {
+  const state = makeState([evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg')]);
+  const harness = install(state);
+  const queueControl = {};
+  const target = {
+    closest(selector) {
+      if (selector === '#bulkAuthoriseWorkbenchRoot') return harness.root;
+      if (selector === '#bulkProcessEvidenceTabQueue') return queueControl;
+      return null;
+    }
+  };
+  const beforeEpoch = harness.controller.queueRefreshRenderEpoch;
+
+  harness.listeners.click({ target });
+
+  assert.equal(harness.controller.queueRefreshRenderEpoch, beforeEpoch + 1);
+});
+
+test('the watchdog recovers Queue work on the current controller with a single-flight guard', async () => {
+  const state = makeState([evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg')]);
+  state.evidence_pane_state.active_tab = 'queue';
+  state.evidence_pane_state.queue_rows = [];
+  state.evidence_pane_state.__queue_loaded = false;
+  let refreshCalls = 0;
+  const harness = install(state, {
+    async refreshTimesheetImportsQueue(pane) {
+      refreshCalls += 1;
+      pane.queue_rows = [{ id: 'queue:current', storage_key: 'queue/current.jpg' }];
+      pane.__queue_loaded = true;
+      return pane;
+    }
+  });
+  assert.equal(harness.intervals.length, 1);
+  const baselineTimers = harness.timers.length;
+
+  harness.intervals[0]();
+  harness.intervals[0]();
+  assert.equal(harness.controller.queueRefreshRenderPending, true);
+  assert.equal(harness.timers.length, baselineTimers + 1, 'a second watchdog tick must not start duplicate Queue work');
+
+  await harness.timers[baselineTimers]();
+  await harness.timers[baselineTimers + 1]();
+  await harness.timers[baselineTimers + 2]();
+  assert.equal(refreshCalls, 1);
+});
+
+test('Bulk Authorise Queue navigation advances locally without invoking the Bulk Process owner refresh', async () => {
+  const state = makeState([evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg')]);
+  state.evidence_pane_state.active_tab = 'queue';
+  state.evidence_pane_state.__queue_loaded = true;
+  state.evidence_pane_state.__queue_scope = 'global:QUEUED';
+  state.evidence_pane_state.queue_rows = [
+    { id: 'queue:one', storage_key: 'queue/one.jpg' },
+    { id: 'queue:two', storage_key: 'queue/two.jpg' }
+  ];
+  state.evidence_pane_state.active_queue_id = 'queue:one';
+  state.evidence_pane_state.active_queue_item = { id: 'queue:one', storage_key: 'queue/one.jpg' };
+  let sharedRefreshCalls = 0;
+  const previous = actionButton();
+  const next = actionButton();
+  const harness = install(state, {
+    elements: { bpQueuePrevBtn: previous, bpQueueNextBtn: next },
+    async refreshTimesheetImportsQueue() {
+      sharedRefreshCalls += 1;
+    }
+  });
+
+  assert.equal(harness.controller.stampQueueNavigationControls(), true);
+  assert.equal(previous.disabled, true);
+  assert.equal(next.disabled, false);
+
+  assert.equal(await harness.controller.navigateQueue(1), true);
+
+  assert.equal(sharedRefreshCalls, 0);
+  assert.equal(state.evidence_pane_state.active_queue_id, 'queue:two');
+  assert.equal(state.evidence_pane_state.active_queue_item.storage_key, 'queue/two.jpg');
+  assert.equal(state.evidence_pane_state.__preview_target_key, 'queue|queue:two|queue/two.jpg');
+  assert.equal(harness.rerenders, 1);
+  assert.equal(harness.controller.stampQueueNavigationControls(), true);
+  assert.equal(previous.disabled, false);
+  assert.equal(next.disabled, true);
+});
+
+test('an unissued draft invoice policy unlocks evidence only and forces a control rerender', async () => {
+  const state = makeState([evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg')]);
+  state.active_context.can_manage_evidence = false;
+  state.active_context.evidence_document_locked = true;
+  state.active_context.evidence_lock_reason = 'INVOICE_DOCUMENT_LOCKED';
+  state.active_row.locked = true;
+  const harness = install(state, {
+    brokerBaseUrl: 'https://isolated.test',
+    async authFetch() {
+      return {
+        ok: true,
+        async text() {
+          return JSON.stringify({
+            ok: true,
+            can_manage_evidence: true,
+            has_mutable_unissued_invoice: true,
+            invoice_blocked: false
+          });
+        }
+      };
+    }
+  });
+
+  const policy = await harness.controller.ensureMutationPolicy(true);
+
+  assert.equal(policy.can_manage_evidence, true);
+  assert.equal(state.active_context.can_manage_evidence, true);
+  assert.equal(state.active_context.evidence_document_locked, false);
+  assert.equal(state.active_context.evidence_lock_reason, null);
+  assert.equal(state.active_row.locked, true, 'hours and financial locking must remain untouched');
+  assert.equal(state.__bulk_authorise_mutable_unissued_invoice, true);
+  assert.equal(harness.rerenders, 1);
+});
+
+test('window pointer-up defers an attached remove until the physical click has completed', () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([travel]);
+  const harness = install(state);
+  let removeCalls = 0;
+  const removeControl = {};
+  harness.controller.removeEvidence = async (control) => {
+    removeCalls += 1;
+    assert.equal(control, removeControl);
+  };
+  const target = {
+    closest(selector) {
+      if (selector === '#bulkAuthoriseWorkbenchRoot') return harness.root;
+      if (selector === '[data-bp-preview-attached-remove="1"],#bpQueueAttachBtn,#bpUploadEvidenceBtn') return removeControl;
+      if (selector === '[data-bp-preview-attached-remove="1"]') return removeControl;
+      return null;
+    }
+  };
+  const event = {
+    type: 'pointerdown',
+    target,
+    defaultPrevented: false,
+    propagationStopped: false,
+    preventDefault() { this.defaultPrevented = true; },
+    stopImmediatePropagation() { this.propagationStopped = true; }
+  };
+
+  harness.windowListeners.pointerdown(event);
+
+  assert.equal(removeCalls, 0);
+  assert.equal(event.defaultPrevented, false);
+  assert.equal(event.propagationStopped, false);
+
+  event.type = 'pointerup';
+  harness.windowListeners.pointerup(event);
+
+  assert.equal(removeCalls, 0);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(event.propagationStopped, true);
+
+  event.type = 'click';
+  harness.windowListeners.click(event);
+  assert.equal(removeCalls, 0);
+
+  harness.timers.at(-1)();
+
+  assert.equal(removeCalls, 1);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(event.propagationStopped, true);
+});
 
 test('authoritative server badge flags remain usable when attachment normalisation yields no rows', () => {
   const state = makeState([]);
@@ -268,7 +653,7 @@ test('a thumbnail selection remains canonical without rerendering the whole moda
   assert.equal(state.evidence_pane_state.active_attached_id, travel.evidence_id);
   assert.equal(state.evidence_pane_state.active_attached_item.kind, 'TRAVEL');
   assert.equal(state.evidence_pane_state.__preview_target_key, travelSelection);
-  assert.equal(state.evidence_pane_state.__preview_load_requested_target_key, '');
+  assert.equal(state.evidence_pane_state.__preview_load_requested_target_key, travelSelection);
 });
 
 test('the active thumbnail border moves with the selected evidence item', async () => {
@@ -300,6 +685,35 @@ test('the active thumbnail border moves with the selected evidence item', async 
   assert.equal(accommodationButton.classList.contains('selected'), false);
   assert.equal(travelButton.classList.contains('active'), true);
   assert.equal(travelButton.classList.contains('selected'), true);
+});
+
+test('a thumbnail does not consume pointer-down from its remove X control', () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const travelButton = thumbnailButton(travel);
+  const state = makeState([travel]);
+  const harness = install(state, { thumbnailButtons: [travelButton] });
+  harness.controller.sanitize('initial');
+  harness.controller.renderAttachedSelection();
+  let selections = 0;
+  harness.controller.selectFromButton = async () => { selections += 1; };
+  const removeControl = {};
+  const event = {
+    target: {
+      closest(selector) {
+        return selector === '[data-bp-preview-attached-remove="1"]' ? removeControl : null;
+      }
+    },
+    defaultPrevented: false,
+    propagationStopped: false,
+    preventDefault() { this.defaultPrevented = true; },
+    stopImmediatePropagation() { this.propagationStopped = true; }
+  };
+
+  travelButton.__listeners.pointerdown(event);
+
+  assert.equal(selections, 0);
+  assert.equal(event.defaultPrevented, false);
+  assert.equal(event.propagationStopped, false);
 });
 
 test('the preview heading uses the real filename instead of a generic PDF-style label', async () => {
@@ -553,6 +967,124 @@ test('an unresolved loading state becomes an explicit retryable error', () => {
   assert.doesNotMatch(harness.stage.innerHTML, /Preview is loading/);
 });
 
+test('a failed attached preview remains terminal until an explicit retry', async () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/missing-travel.jpg');
+  const state = makeState([travel]);
+  let requests = 0;
+  const harness = install(state, {
+    brokerBaseUrl: 'https://isolated.test.invalid',
+    authFetch: async () => {
+      requests += 1;
+      return {
+        ok: false,
+        async text() { return ''; }
+      };
+    }
+  });
+  harness.controller.sanitize('initial');
+
+  await harness.controller.ensureAttachedPreview(false);
+  assert.equal(requests, 1);
+  assert.equal(state.evidence_pane_state.__preview_error, 'The preview could not be prepared.');
+  assert.equal(state.evidence_pane_state.__preview_loading, false);
+
+  harness.controller.sanitize('observer-reconcile');
+  await harness.controller.ensureAttachedPreview(false);
+
+  assert.equal(requests, 1);
+  assert.equal(state.evidence_pane_state.__preview_error, 'The preview could not be prepared.');
+  assert.equal(state.evidence_pane_state.__preview_loading, false);
+});
+
+test('an in-flight shared preview is preserved and does not start a duplicate presign request', async () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([travel]);
+  let requests = 0;
+  const harness = install(state, {
+    brokerBaseUrl: 'https://isolated.test.invalid',
+    authFetch: async () => {
+      requests += 1;
+      return { ok: true, async text() { return JSON.stringify({ signed_url: 'https://example.invalid/file' }); } };
+    }
+  });
+  const target = harness.api.selectionKey(travel);
+  state.evidence_pane_state.active_attached_item = clone(travel);
+  state.evidence_pane_state.active_attached_id = travel.evidence_id;
+  state.evidence_pane_state.__preview_target_key = target;
+  state.evidence_pane_state.__preview_load_requested_target_key = target;
+  state.evidence_pane_state.__preview_attached_request_key = target;
+  state.evidence_pane_state.__preview_loading = true;
+
+  harness.controller.sanitize('shared-preview-in-flight');
+  await harness.controller.ensureAttachedPreview(false);
+
+  assert.equal(requests, 0);
+  assert.equal(state.evidence_pane_state.__preview_load_requested_target_key, target);
+  assert.equal(state.evidence_pane_state.__preview_attached_request_key, target);
+  assert.equal(state.evidence_pane_state.__preview_loading, true);
+});
+
+test('a completed attached presign hands off to a successor state with the same row and preview target', async () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([travel]);
+  let releaseResponse;
+  const harness = install(state, {
+    brokerBaseUrl: 'https://isolated.test.invalid',
+    authFetch: async () => new Promise(resolve => { releaseResponse = resolve; })
+  });
+  harness.controller.sanitize('initial');
+  const target = harness.api.selectionKey(travel);
+  const request = harness.controller.ensureAttachedPreview(true);
+
+  const successor = makeState([travel]);
+  harness.win.modalCtx.bulkAuthoriseState = successor;
+  const successorController = harness.api.controllerFor(successor);
+  successorController.sanitize('successor');
+  successor.evidence_pane_state.active_tab = 'attached';
+  successor.evidence_pane_state.active_attached_id = travel.evidence_id;
+  successor.evidence_pane_state.active_attached_item = clone(travel);
+  successor.evidence_pane_state.__preview_target_key = target;
+  successor.evidence_pane_state.__preview_load_requested_target_key = target;
+  successor.evidence_pane_state.__preview_loading = true;
+  successor.evidence_pane_state.__preview_error = 'The preview could not be prepared.';
+
+  releaseResponse({
+    ok: true,
+    status: 200,
+    async text() { return JSON.stringify({ signed_url: 'https://example.invalid/file' }); }
+  });
+  await request;
+
+  assert.equal(state.evidence_pane_state.__preview_signed_url, '');
+  assert.equal(successor.evidence_pane_state.__preview_signed_url, 'https://example.invalid/file');
+  assert.equal(successor.evidence_pane_state.__preview_loading, false);
+  assert.equal(successor.evidence_pane_state.__preview_error, '');
+});
+
+test('the post-render boundary is installed once when proxied function reads change identity', async () => {
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const rawState = makeState([travel]);
+  let baseCalls = 0;
+  rawState.__runPostRenderBindings = async () => { baseCalls += 1; };
+  const state = new Proxy(rawState, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property === '__runPostRenderBindings' && typeof value === 'function') return new Proxy(value, {});
+      return value;
+    }
+  });
+  const harness = install(state);
+  let sanitizeCalls = 0;
+  harness.controller.sanitize = () => { sanitizeCalls += 1; return { applied: true }; };
+  harness.controller.stamp = () => {};
+
+  for (let attempt = 0; attempt < 25; attempt += 1) harness.controller.installStateBoundary();
+  await rawState.__runPostRenderBindings();
+
+  assert.equal(baseCalls, 1);
+  assert.equal(sanitizeCalls, 2);
+});
+
 test('non-Timesheets classifications are not changed', () => {
   const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
   const state = makeState([travel]);
@@ -564,4 +1096,173 @@ test('non-Timesheets classifications are not changed', () => {
 
   assert.equal(result.applied, false);
   assert.deepEqual(state, before);
+});
+
+test('a genuine synthetic Timesheet primary artifact remains replaceable', () => {
+  const syntheticTimesheet = evidence('synthetic-attached:primary', 'TIMESHEET', 'files/manual-timesheet.jpg', {
+    evidence_id: null,
+    __synthetic_attached_fallback: true,
+    is_synthetic_attached_fallback: true
+  });
+  const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
+  const state = makeState([syntheticTimesheet, accommodation]);
+  const harness = install(state);
+
+  const rows = harness.api.filterNormalisedEvidenceRows([
+    harness.api.normaliseEvidence(syntheticTimesheet),
+    harness.api.normaliseEvidence(accommodation)
+  ]);
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].kind, 'TIMESHEET');
+  assert.equal(rows[0].evidence_id, null);
+  assert.equal(rows[0].is_synthetic_attached_fallback, true);
+});
+
+test('the authorised replacement empty-queue message is exact and UI-friendly', () => {
+  const state = makeState([]);
+  const harness = install(state);
+  assert.equal(
+    harness.api.SELECT_QUEUE_REPLACEMENT_MESSAGE,
+    'Please select an image from the queue to replace this evidence with'
+  );
+});
+
+test('authorised state is recognised without relying on checkbox selection', () => {
+  const state = makeState([]);
+  const harness = install(state);
+  state.active_row.bulk_authorise_section = 'authorised_eligible';
+  assert.equal(harness.api.isAuthorisedState(state), true);
+  state.active_row.bulk_authorise_section = 'processed_eligible';
+  state.active_row.authorised_at_server = null;
+  state.active_row.authorised = false;
+  assert.equal(harness.api.isAuthorisedState(state), false);
+});
+
+test('a stamped remove control remains identifiable after Queue navigation rebuilds the state cache', () => {
+  const state = makeState([]);
+  const harness = install(state);
+  const attrs = new Map([
+    ['data-attached-selection-key', 'attached|sys:timesheet:test|files/TIMESHEET.jpg'],
+    ['data-attached-id', 'sys:timesheet:test'],
+    ['data-evidence-id', ''],
+    ['data-file-key', 'files/TIMESHEET.jpg'],
+    ['data-kind', 'TIMESHEET'],
+    ['data-display-name', 'TIMESHEET.jpg'],
+    ['data-synthetic', '1']
+  ]);
+  const item = harness.controller.itemForRemoveControl({
+    getAttribute(name) { return attrs.get(name) || ''; }
+  });
+
+  assert.equal(item.kind, 'TIMESHEET');
+  assert.equal(item.display_name, 'TIMESHEET.jpg');
+  assert.equal(item.storage_key, 'files/TIMESHEET.jpg');
+  assert.equal(item.is_synthetic_attached_fallback, true);
+});
+
+test('returning evidence to the queue invalidates the cached global Queue rows', () => {
+  const state = makeState([]);
+  state.evidence_pane_state.queue_rows = [{ queue_id: 'old-queue-item' }];
+  state.evidence_pane_state.__queue_loaded = true;
+  state.evidence_pane_state.__queue_scope = 'global:QUEUED';
+  state.evidence_pane_state.__queue_loaded_scope = 'global:QUEUED';
+  state.evidence_pane_state.__queue_loading = true;
+  state.evidence_pane_state.__queue_loading_scope = 'global:QUEUED';
+  state.evidence_pane_state.__queue_refresh_inflight = Promise.resolve();
+  state.evidence_pane_state.__queue_refresh_inflight_by_owner = { owner: Promise.resolve() };
+  state.evidence_pane_state.__queue_refresh_last_result = 'applied';
+  const harness = install(state);
+
+  const invalidated = harness.controller.invalidateQueueAfterReturn({
+    workbench_queue_created: true,
+    returned_queue_id: 'returned-queue-item'
+  });
+
+  assert.equal(invalidated, true);
+  assert.equal(state.evidence_pane_state.queue_rows.length, 0);
+  assert.equal(state.evidence_pane_state.__queue_loaded, false);
+  assert.equal(state.evidence_pane_state.__queue_loading, false);
+  assert.equal(state.evidence_pane_state.__queue_loading_scope, '');
+  assert.equal(state.evidence_pane_state.__queue_refresh_inflight, null);
+  assert.equal(Object.keys(state.evidence_pane_state.__queue_refresh_inflight_by_owner).length, 0);
+  assert.equal(state.evidence_pane_state.__queue_scope, 'global:QUEUED');
+  assert.equal(state.evidence_pane_state.__queue_loaded_scope, 'global:QUEUED');
+  assert.equal(state.evidence_pane_state.__queue_refresh_last_result, '');
+});
+
+test('an evidence mutation that does not create a queue item preserves the Queue cache', () => {
+  const state = makeState([]);
+  const cachedRows = [{ queue_id: 'cached-queue-item' }];
+  state.evidence_pane_state.queue_rows = cachedRows;
+  state.evidence_pane_state.__queue_loaded = true;
+  const harness = install(state);
+
+  const invalidated = harness.controller.invalidateQueueAfterReturn({
+    workbench_queue_created: false,
+    evidence: []
+  });
+
+  assert.equal(invalidated, false);
+  assert.equal(state.evidence_pane_state.queue_rows, cachedRows);
+  assert.equal(state.evidence_pane_state.__queue_loaded, true);
+});
+
+test('verified badge truth is reused across an unchanged canonical dataset replacement', async () => {
+  const state = makeState([]);
+  state.dataset.rows[0].backend_row_signature = 'signature:unchanged';
+  let contextRequests = 0;
+  const harness = install(state, {
+    brokerBaseUrl: 'https://example.invalid',
+    async authFetch() {
+      contextRequests += 1;
+      throw new Error('A cached row must not be fetched again.');
+    }
+  });
+  harness.controller.captureDatasetTruth();
+  harness.controller.rememberVerifiedBadgeState(
+    state.dataset.rows[0].row_key,
+    {
+      evidence_badges: badges('TIMESHEET'),
+      has_any_evidence: true,
+      attached_evidence_count: 1
+    },
+    state.dataset.rows[0]
+  );
+
+  state.dataset = {
+    rows: [{
+      ...clone(state.dataset.rows[0]),
+      evidence_badges: badges(),
+      has_any_evidence: false,
+      attached_evidence_count: 0
+    }]
+  };
+  harness.controller.captureDatasetTruth();
+  const result = await harness.controller.hydrateDatasetBadges();
+
+  assert.equal(result.cached, true);
+  assert.equal(contextRequests, 0);
+  assert.deepEqual(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), ['TIMESHEET']);
+  assert.equal(state.dataset.rows[0].attached_evidence_count, 1);
+});
+
+test('verified badge truth is invalidated when the canonical row signature changes', () => {
+  const state = makeState([]);
+  state.dataset.rows[0].backend_row_signature = 'signature:before';
+  const harness = install(state);
+  harness.controller.rememberVerifiedBadgeState(
+    state.dataset.rows[0].row_key,
+    {
+      evidence_badges: badges('TRAVEL'),
+      has_any_evidence: true,
+      attached_evidence_count: 1
+    },
+    state.dataset.rows[0]
+  );
+
+  const changedRow = { ...clone(state.dataset.rows[0]), backend_row_signature: 'signature:after' };
+
+  assert.equal(harness.controller.reusableVerifiedBadgeState(changedRow), null);
+  assert.equal(harness.controller.verifiedBadgeTruth.has(changedRow.row_key), false);
 });

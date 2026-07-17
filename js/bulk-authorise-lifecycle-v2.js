@@ -94,6 +94,8 @@
       affected_row_keys: affectedKeys,
       active_affected: activeAffected,
       fallback_row_keys: fallbackRowKeys,
+      selected_row_keys: selectedKeys,
+      selected_section: selectedSection || null,
       left_scroll_top: Number(leftPane?.scrollTop || 0)
     };
   };
@@ -226,6 +228,25 @@
     state.__bulk_authorise_row_context_ready_seq = Number(state.__bulk_authorise_row_change_seq || 0) || 0;
   }
 
+  function clearActiveRowContext(state) {
+    if (!state || typeof state !== 'object') return;
+    state.active_context = null;
+    state.active_ctx = null;
+    state.active_details = null;
+    state.activeRecordIdentity = null;
+    state.activeTimesheetId = null;
+    state.activeContractWeekId = null;
+    state.__bulkAuthoriseRecordIdentity = '';
+    state.__bulk_authorise_active_backend_row_signature = '';
+    state.__bulk_authorise_active_render_signature = '';
+    state.__bulk_authorise_active_row_signature = '';
+    state.__bulk_authorise_row_context_ready = false;
+    state.__bulk_authorise_row_context_ready_backend_signature = '';
+    state.__bulk_authorise_row_context_ready_render_signature = '';
+    state.__bulk_authorise_row_context_ready_signature = '';
+    state.__bulk_authorise_row_context_ready_seq = Number(state.__bulk_authorise_row_change_seq || 0) || 0;
+  }
+
   class BulkAuthoriseLifecycleController {
     constructor(state) {
       this.state = state;
@@ -235,7 +256,7 @@
       this.initialised = false;
       this.frame = null;
       this.frameDismiss = null;
-      state.__bulkAuthoriseLifecycleVersion = 2;
+      state.__bulkAuthoriseLifecycleVersion = 6;
       state.__bulkAuthoriseLifecycleController = this;
     }
 
@@ -589,6 +610,7 @@
       this.state.__bulk_authorise_row_change_seq = (Number(this.state.__bulk_authorise_row_change_seq || 0) || 0) + 1;
       this.state.__bulk_authorise_v2_transition_loading = true;
       clearRowOwnedState(this.state);
+      clearActiveRowContext(this.state);
 
       await legacy.setActiveRow(this.state, targetKey || null, {
         ...options,
@@ -749,7 +771,8 @@
     }
 
     async refreshCanonicalDatasetAfterMutation(action, result, mutationIntent = {}) {
-      if (this.closed || !result || result.batch_completed === false || Number(result.success_count || 0) < 1) return false;
+      if (this.closed || !result) return false;
+      const successCount = Number(result.success_count || 0) || 0;
       const epoch = ++this.datasetEpoch;
       this.state.__bulk_authorise_v2_canonical_refreshing = true;
       try {
@@ -764,13 +787,83 @@
         if (this.closed || this.datasetEpoch !== epoch) return false;
         this.state.dataset = deep(dataset);
 
+        if (successCount < 1) {
+          const visibleKeys = new Set(this.rows().map(rowKeyOf).filter(Boolean));
+          const originalActiveKey = trim(mutationIntent.active_row_key);
+          const nextActiveKey = visibleKeys.has(originalActiveKey) ? originalActiveKey : '';
+          const originalSelectedKeys = Array.isArray(mutationIntent.selected_row_keys)
+            ? mutationIntent.selected_row_keys.map(trim).filter((key) => visibleKeys.has(key))
+            : [];
+          this.state.selected_row_keys = originalSelectedKeys;
+          this.state.selected_section = originalSelectedKeys.length
+            ? (trim(mutationIntent.selected_section) || null)
+            : null;
+          const currentActiveKey = trim(this.state.active_row_key || rowKeyOf(this.state.active_row));
+          const canPreserveCurrentContext = !!(
+            nextActiveKey &&
+            nextActiveKey === currentActiveKey &&
+            this.state.active_context &&
+            typeof this.state.active_context === 'object'
+          );
+          if (canPreserveCurrentContext) {
+            // No row was mutated, so the already-loaded detail/evidence context is
+            // still authoritative. Adopt only the fresh canonical row/status data;
+            // a second full-context request is redundant and can leave the modal
+            // spinner waiting on a slow database connection.
+            this.rowEpoch += 1;
+            await legacy.setActiveRow(this.state, nextActiveKey, {
+              __bulkAuthoriseLifecycleBypass: true,
+              skipDirtyGuard: true,
+              source: 'status_patch',
+              statusPatch: true,
+              preserveActiveContext: true,
+              preserveEvidencePane: true,
+              preserveSignedUrlCache: true,
+              datasetOnly: true,
+              minimalOnly: true,
+              deferContextRefresh: true,
+              refreshContext: false,
+              scheduleHydration: false,
+              skipEvidenceHydration: true,
+              skip_evidence_hydration: true,
+              hydrationRerender: false,
+              rerender: false
+            });
+            await this.render('[TS][BULK-AUTH][LIFECYCLE-V2][FAILED-MUTATION-RECONCILED]');
+          } else {
+            await this.transitionToRow(nextActiveKey, {
+              skipDirtyGuard: true,
+              source: 'canonical-mutation-refresh',
+              allowEmptySelection: !nextActiveKey
+            });
+          }
+          restoreLeftPanePosition(
+            mutationIntent.left_scroll_top,
+            nextActiveKey,
+            result.ensure_active_row_visible === true
+          );
+          this.state.lifecycle_refresh_failed = false;
+          this.state.lifecycle_refresh_error = '';
+          result.canonical_dataset_refreshed = true;
+          result.failed_mutation_reconciled = true;
+          result.refresh_failed = false;
+          result.refresh_error = null;
+          return true;
+        }
+
+        const nextActiveKey = this.chooseActiveAfterMutation(action, mutationIntent, result);
         const visibleKeys = new Set(this.rows().map(rowKeyOf).filter(Boolean));
         const failedKeys = failedRowKeys(result).filter((key) => visibleKeys.has(key));
-        this.state.selected_row_keys = failedKeys;
+        const keepUnauthorisedRowSelected = action === 'unauthorise'
+          && failedKeys.length === 0
+          && !!nextActiveKey
+          && trim(this.rows().find((row) => rowKeyOf(row) === nextActiveKey)?.bulk_authorise_section) === 'processed_eligible';
+        this.state.selected_row_keys = failedKeys.length
+          ? failedKeys
+          : (keepUnauthorisedRowSelected ? [nextActiveKey] : []);
         this.state.selected_section = failedKeys.length
           ? (action === 'authorise' ? 'processed_eligible' : 'authorised_eligible')
-          : null;
-        const nextActiveKey = this.chooseActiveAfterMutation(action, mutationIntent, result);
+          : (keepUnauthorisedRowSelected ? 'processed_eligible' : null);
         const clearActiveRowAfterAuthorise = action === 'authorise' && mutationIntent.active_affected === true && !nextActiveKey;
         await this.transitionToRow(nextActiveKey, {
           skipDirtyGuard: true,
