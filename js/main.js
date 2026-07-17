@@ -88747,10 +88747,17 @@ const normalizePayWizardDecisionState = (input) => {
   };
 
   const normalizeText = (v) => String(v == null ? '' : v).trim();
+  const normalizeSelectedPreviewRowMode = (value) => {
+    const mode = normalizeText(value).toUpperCase();
+    return ['IMPLICIT_ALL', 'EXPLICIT_SUBSET', 'EXPLICIT_NONE'].includes(mode) ? mode : '';
+  };
 
   return {
     candidate_ids: normalizeStringArray(src.candidate_ids),
     selected_preview_row_ids: normalizeStringArray(src.selected_preview_row_ids),
+    selected_preview_row_mode: normalizeSelectedPreviewRowMode(
+      src.selected_preview_row_mode || src.selectedPreviewRowMode || src.__selected_preview_row_mode
+    ),
     case_resolutions: normalizeObjectMap(src.case_resolutions),
     component_resolutions: {},
 
@@ -173471,6 +173478,74 @@ async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}
   GE();
   return out;
 }
+
+async function fetchBulkAuthoriseRowWatch(timesheetIdOrRow, options = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const row = (timesheetIdOrRow && typeof timesheetIdOrRow === 'object' && !Array.isArray(timesheetIdOrRow))
+    ? timesheetIdOrRow
+    : {};
+  const opts = options && typeof options === 'object' ? options : {};
+  const timesheetId = trimStr(
+    (typeof timesheetIdOrRow === 'string' || typeof timesheetIdOrRow === 'number')
+      ? timesheetIdOrRow
+      : (row.current_timesheet_id || row.timesheet_id || opts.current_timesheet_id || opts.timesheet_id)
+  );
+  const rowKey = trimStr(opts.row_key || opts.rowKey || row.row_key);
+  const contractWeekId = trimStr(opts.contract_week_id || opts.contractWeekId || row.contract_week_id);
+  const knownWatchToken = trimStr(opts.known_watch_token || opts.knownWatchToken || opts.watch_token || opts.watchToken);
+  const classification = trimStr(opts.classification || row.bulk_authorise_classification || '').toUpperCase();
+  const includeImport = opts.include_import === true || opts.includeImport === true || ['NHSP', 'HR', 'HEALTHROSTER'].includes(classification);
+  const includeEvidence = opts.include_evidence === true || opts.includeEvidence === true || !includeImport;
+
+  if (!timesheetId || (!rowKey && !contractWeekId)) {
+    return {
+      ok: false,
+      unchanged: false,
+      soft_failure: true,
+      error: 'ROW_WATCH_IDENTITY_REQUIRED'
+    };
+  }
+
+  const qs = new URLSearchParams();
+  if (rowKey) qs.set('row_key', rowKey);
+  if (timesheetId) qs.set('current_timesheet_id', timesheetId);
+  if (contractWeekId) qs.set('contract_week_id', contractWeekId);
+  qs.set('include_evidence', String(includeEvidence));
+  qs.set('include_import', String(includeImport));
+  if (knownWatchToken) qs.set('known_watch_token', knownWatchToken);
+
+  try {
+    const res = await authFetch(API(`/api/timesheets/${encodeURIComponent(timesheetId)}/bulk-authorise-watch?${qs.toString()}`));
+    const text = await res.text().catch(() => '');
+    let payload = {};
+    try { payload = text ? JSON.parse(text) : {}; } catch { payload = {}; }
+    if (!res.ok || !payload || typeof payload !== 'object' || payload.ok !== true) {
+      return {
+        ...(payload && typeof payload === 'object' ? payload : {}),
+        ok: false,
+        unchanged: false,
+        soft_failure: true,
+        status: Number(res.status || 0) || null
+      };
+    }
+    const vector = payload.watch_vector && typeof payload.watch_vector === 'object' ? payload.watch_vector : null;
+    return {
+      ...payload,
+      ok: !!(vector && vector.cacheable === true && trimStr(vector.watch_token)),
+      unchanged: payload.unchanged === true && !!knownWatchToken && trimStr(vector?.watch_token) === knownWatchToken,
+      watch_vector: vector
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      unchanged: false,
+      soft_failure: true,
+      error: trimStr(error?.message || error || 'ROW_WATCH_FAILED')
+    };
+  }
+}
+
+window.fetchBulkAuthoriseRowWatch = fetchBulkAuthoriseRowWatch;
 
 
 

@@ -266,6 +266,105 @@ test('a later row transition wins and the stale transition cannot render ready',
   );
 });
 
+test('a proven-unchanged revisit restores the cached row without a full render or context reload', async () => {
+  const first = row('timesheet:A');
+  const second = row('timesheet:B');
+  const state = stateFor([first, second], first.row_key);
+  state.active_context = {
+    row: clone(first),
+    profile: 'full',
+    full_loaded: true,
+    watch_vector: { cacheable: true, watch_token: 'watch:A' }
+  };
+  state.__bulk_authorise_row_context_ready = true;
+  let contextRefreshes = 0;
+  let busy = false;
+  const surfaces = [];
+  const { controller, renderReasons } = installHarness(state, {
+    __bulkAuthoriseFastSurfaceAdapter: {
+      capture(rowKey) {
+        const surface = { rowKey };
+        surfaces.push(surface);
+        return surface;
+      },
+      restore(surface, rowKey) { return surface.rowKey === rowKey; },
+      setBusy(value) { busy = value === true; },
+      release() {}
+    },
+    async fetchBulkAuthoriseRowWatch(_row, options) {
+      assert.equal(options.known_watch_token, 'watch:A');
+      return {
+        ok: true,
+        unchanged: true,
+        watch_vector: { cacheable: true, watch_token: 'watch:A' }
+      };
+    },
+    async refreshBulkAuthoriseActiveContext(current, options) {
+      contextRefreshes += 1;
+      current.active_context = { row: clone(options.row), profile: 'full', full_loaded: true };
+      return true;
+    }
+  });
+
+  await controller.transitionToRow(second.row_key, { source: 'row_click' });
+  const renderCountBeforeRevisit = renderReasons.length;
+  const refreshCountBeforeRevisit = contextRefreshes;
+  const revisited = await controller.transitionToRow(first.row_key, { source: 'row_click' });
+
+  assert.equal(revisited, true);
+  assert.equal(state.active_row_key, first.row_key);
+  assert.equal(state.__bulk_authorise_last_transition_mode, 'validated-cache-hit');
+  assert.equal(contextRefreshes, refreshCountBeforeRevisit);
+  assert.equal(renderReasons.length, renderCountBeforeRevisit);
+  assert.equal(busy, false);
+  assert.equal(state.evidence_pane_state.__preview_signed_url, 'https://example.invalid/stale');
+  assert.ok(surfaces.length >= 1);
+});
+
+test('a changed watch token fails closed to the existing full refresh path', async () => {
+  const first = row('timesheet:A');
+  const second = row('timesheet:B');
+  const state = stateFor([first, second], first.row_key);
+  state.active_context = {
+    row: clone(first),
+    profile: 'full',
+    full_loaded: true,
+    watch_vector: { cacheable: true, watch_token: 'watch:A' }
+  };
+  state.__bulk_authorise_row_context_ready = true;
+  let contextRefreshes = 0;
+  const { controller, renderReasons } = installHarness(state, {
+    __bulkAuthoriseFastSurfaceAdapter: {
+      capture(rowKey) { return { rowKey }; },
+      restore(surface, rowKey) { return surface.rowKey === rowKey; },
+      setBusy() {},
+      release() {}
+    },
+    async fetchBulkAuthoriseRowWatch() {
+      return {
+        ok: true,
+        unchanged: false,
+        watch_vector: { cacheable: true, watch_token: 'watch:A:changed' }
+      };
+    },
+    async refreshBulkAuthoriseActiveContext(current, options) {
+      contextRefreshes += 1;
+      current.active_context = { row: clone(options.row), profile: 'full', full_loaded: true };
+      return true;
+    }
+  });
+
+  await controller.transitionToRow(second.row_key, { source: 'row_click' });
+  const refreshCountBeforeRevisit = contextRefreshes;
+  const renderCountBeforeRevisit = renderReasons.length;
+  await controller.transitionToRow(first.row_key, { source: 'row_click' });
+
+  assert.equal(state.__bulk_authorise_last_transition_mode, 'cache-invalid-full');
+  assert.equal(contextRefreshes, refreshCountBeforeRevisit + 1);
+  assert.ok(renderReasons.length >= renderCountBeforeRevisit + 2);
+  assert.ok(renderReasons.some((reason) => reason.includes('[ROW-SKELETON]')));
+});
+
 test('classification change to an empty dataset clears active row and every stale preview owner', async () => {
   const first = row('timesheet:A');
   const state = stateFor([first], first.row_key);
