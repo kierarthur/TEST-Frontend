@@ -68,14 +68,42 @@
     return { ...(state && state.filters ? state.filters : {}), classification: classificationOf(state && state.classification) };
   };
 
-  const captureMutationIntent = (action, state) => {
+  const selectionMapFor = (state) => {
+    const source = state?.selected_row_keys_by_section && typeof state.selected_row_keys_by_section === 'object'
+      ? state.selected_row_keys_by_section
+      : {};
+    return {
+      processed_eligible: Array.from(new Set((Array.isArray(source.processed_eligible) ? source.processed_eligible : []).map(trim).filter(Boolean))),
+      authorised_eligible: Array.from(new Set((Array.isArray(source.authorised_eligible) ? source.authorised_eligible : []).map(trim).filter(Boolean)))
+    };
+  };
+  const installSelectionMap = (state, map) => {
+    state.selected_row_keys_by_section = {
+      processed_eligible: Array.isArray(map?.processed_eligible) ? map.processed_eligible.slice() : [],
+      authorised_eligible: Array.isArray(map?.authorised_eligible) ? map.authorised_eligible.slice() : []
+    };
+    // These fields are retained only as the legacy bulk-action execution adapter.
+    state.selected_row_keys = [];
+    state.selected_section = null;
+  };
+  const sectionScrollPositions = () => {
+    const read = (section) => Number(win.document?.querySelector?.(`[data-bulk-authorise-section-scroll="${section}"]`)?.scrollTop || 0);
+    return {
+      processed_eligible: read('processed_eligible'),
+      authorised_eligible: read('authorised_eligible')
+    };
+  };
+
+  const captureMutationIntent = (action, state, options = {}) => {
     const rows = visibleRowsFor(state);
     const activeRowKey = trim(state?.active_row_key || rowKeyOf(state?.active_row));
-    const selectedKeys = Array.isArray(state?.selected_row_keys)
-      ? state.selected_row_keys.map(trim).filter(Boolean)
-      : [];
-    const selectedSection = trim(state?.selected_section);
     const targetSection = action === 'authorise' ? 'processed_eligible' : 'authorised_eligible';
+    const selectionMap = selectionMapFor(state);
+    const source = trim(options?.source).toLowerCase();
+    const selectedKeys = source === 'selected-bulk'
+      ? (Array.isArray(state?.selected_row_keys) ? state.selected_row_keys.map(trim).filter(Boolean) : selectionMap[targetSection])
+      : [];
+    const selectedSection = source === 'selected-bulk' ? trim(state?.selected_section || targetSection) : '';
     const sectionRows = rows.filter((row) => trim(row?.bulk_authorise_section) === targetSection);
     const sectionKeys = sectionRows.map(rowKeyOf).filter(Boolean);
     const affectedKeys = selectedKeys.length && selectedSection === targetSection
@@ -96,23 +124,32 @@
       fallback_row_keys: fallbackRowKeys,
       selected_row_keys: selectedKeys,
       selected_section: selectedSection || null,
+      checkbox_selection: selectionMap,
+      source: source || 'unknown',
+      preserve_checkbox_selection: source !== 'selected-bulk',
+      section_scroll_top: sectionScrollPositions(),
       left_scroll_top: Number(leftPane?.scrollTop || 0)
     };
   };
 
   const restoreLeftPanePosition = (scrollTop, activeRowKey, ensureVisible) => {
     const apply = () => {
-      const leftPane = win.document?.getElementById?.('bulkAuthoriseLeftPane');
-      if (!leftPane) return;
-      leftPane.scrollTop = Number(scrollTop || 0);
+      const positions = scrollTop && typeof scrollTop === 'object' ? scrollTop : {};
+      for (const section of ['processed_eligible', 'authorised_eligible']) {
+        const scroller = win.document?.querySelector?.(`[data-bulk-authorise-section-scroll="${section}"]`);
+        if (scroller) scroller.scrollTop = Number(positions[section] || 0);
+      }
       if (!ensureVisible || !activeRowKey) return;
-      const rows = Array.from(leftPane.querySelectorAll?.('[data-bulk-authorise-row="1"][data-row-key]') || []);
+      const leftPane = win.document?.getElementById?.('bulkAuthoriseLeftPane');
+      const rows = Array.from(leftPane?.querySelectorAll?.('[data-bulk-authorise-row="1"][data-row-key]') || []);
       const activeElement = rows.find((row) => trim(row.getAttribute('data-row-key')) === activeRowKey);
       if (!activeElement || typeof activeElement.getBoundingClientRect !== 'function') return;
-      const hostRect = leftPane.getBoundingClientRect();
+      const host = activeElement.closest?.('[data-bulk-authorise-section-scroll]');
+      if (!host) return;
+      const hostRect = host.getBoundingClientRect();
       const rowRect = activeElement.getBoundingClientRect();
-      if (rowRect.top < hostRect.top) leftPane.scrollTop += rowRect.top - hostRect.top;
-      else if (rowRect.bottom > hostRect.bottom) leftPane.scrollTop += rowRect.bottom - hostRect.bottom;
+      if (rowRect.top < hostRect.top) host.scrollTop += rowRect.top - hostRect.top;
+      else if (rowRect.bottom > hostRect.bottom) host.scrollTop += rowRect.bottom - hostRect.bottom;
     };
     apply();
     if (typeof win.requestAnimationFrame === 'function') win.requestAnimationFrame(apply);
@@ -302,8 +339,29 @@
       root.dataset.bulkAuthoriseController = 'v2';
       root.dataset.bulkAuthoriseRowEpoch = String(this.rowEpoch);
       root.dataset.bulkAuthoriseDatasetEpoch = String(this.datasetEpoch);
-      this.installDomBoundary();
       const liveState = win.modalCtx?.bulkAuthoriseState || this.state;
+      const activeRow = liveState.active_row && typeof liveState.active_row === 'object' ? liveState.active_row : {};
+      const activeRowKey = trim(liveState.active_row_key || rowKeyOf(activeRow));
+      const renderedRows = Array.from(root.querySelectorAll('[data-bulk-authorise-row="1"][data-row-key][data-section]'));
+      const renderedActiveRow = renderedRows.find((row) => activeRowKey && trim(row.getAttribute('data-row-key')) === activeRowKey)
+        || renderedRows.find((row) => trim(row.getAttribute('style')).includes('var(--accent'))
+        || null;
+      const renderedActiveSection = trim(renderedActiveRow?.getAttribute?.('data-section'));
+      const activeIsAuthorised = trim(activeRow.bulk_authorise_section) === 'authorised_eligible'
+        || renderedActiveSection === 'authorised_eligible'
+        || activeRow.is_authorised === true
+        || trim(activeRow.state).toUpperCase() === 'AUTHORISED';
+      if (activeIsAuthorised) {
+        const additionalRateInputs = root.querySelectorAll('#bulkAuthoriseRightPane input[data-extra-code]');
+        for (const input of additionalRateInputs) {
+          input.disabled = true;
+          input.readOnly = true;
+          input.setAttribute('aria-disabled', 'true');
+          input.setAttribute('data-bulk-authorise-authorised-lock', '1');
+          input.title = 'Additional rates cannot be edited after the timesheet is authorised.';
+        }
+      }
+      this.installDomBoundary();
       const evidenceController = win.__bulkAuthoriseEvidenceControllerTest?.controllerFor?.(liveState);
       if (evidenceController && evidenceController.isTimesheets()) {
         evidenceController.sanitize('lifecycle-v2-post-render');
@@ -311,6 +369,61 @@
         evidenceController.schedulePostRenderSettle();
         void evidenceController.ensureAttachedPreview(false);
       }
+    }
+
+    authorisationTargets(selectedControl) {
+      const rows = this.rows();
+      const targetKeys = selectedControl
+        ? selectionMapFor(this.state).processed_eligible
+        : [trim(this.state.active_row_key || rowKeyOf(this.state.active_row))].filter(Boolean);
+      const wanted = new Set(targetKeys);
+      return rows.filter((row) => wanted.has(rowKeyOf(row)) && trim(row?.bulk_authorise_section) === 'processed_eligible');
+    }
+
+    rowHasVerifiedTimesheetEvidence(row) {
+      if (!row || row.__evidence_badges_verified !== true) return null;
+      const badges = Array.isArray(row.evidence_badges) ? row.evidence_badges : [];
+      return badges.some((badge) => {
+        if (typeof badge === 'string') return trim(badge).toUpperCase() === 'TIMESHEET';
+        const kind = trim(badge?.kind || badge?.evidence_kind || badge?.type || badge?.name).toUpperCase();
+        if (kind !== 'TIMESHEET') return false;
+        if (badge?.present === false || badge?.has_evidence === false) return false;
+        return Number(badge?.count ?? 1) > 0;
+      });
+    }
+
+    async confirmMissingRequiredEvidence(selectedControl) {
+      if (classificationOf(this.state.classification) !== 'TIMESHEETS') return true;
+      const targets = this.authorisationTargets(selectedControl);
+      const requiresPhysicalEvidence = targets.filter((row) => row.client_no_timesheet_required === false);
+      if (!requiresPhysicalEvidence.length) return true;
+
+      const evidenceController = win.__bulkAuthoriseEvidenceControllerTest?.controllerFor?.(this.state);
+      if (evidenceController?.hydrateDatasetBadges) await evidenceController.hydrateDatasetBadges();
+      const missing = requiresPhysicalEvidence.filter((row) => this.rowHasVerifiedTimesheetEvidence(row) === false);
+      const unverified = requiresPhysicalEvidence.filter((row) => this.rowHasVerifiedTimesheetEvidence(row) == null);
+      if (unverified.length) {
+        if (typeof win.openUiConfirmModal === 'function') {
+          await win.openUiConfirmModal({
+            title: 'Timesheet evidence could not be verified',
+            message: 'The attached timesheet evidence could not be verified. Please try again before authorising.',
+            confirm_label: 'OK',
+            hide_cancel: true
+          });
+        }
+        return false;
+      }
+      if (!missing.length) return true;
+      if (typeof win.openUiConfirmModal !== 'function') return false;
+      const response = await win.openUiConfirmModal({
+        title: 'Missing timesheet image',
+        message: missing.length === 1
+          ? 'This timesheet has no physical timesheet image attached. Are you sure you want to continue?'
+          : `${missing.length} timesheets have no physical timesheet image attached. Are you sure you want to continue?`,
+        confirm_label: 'OK',
+        cancel_label: 'Cancel'
+      });
+      return response?.confirmed === true;
     }
 
     async runOwnedAction(button) {
@@ -332,11 +445,12 @@
 
       let options;
       if (selectedControl) {
-        const selectedCount = Array.isArray(state.selected_row_keys) ? state.selected_row_keys.length : 0;
-        const selectedSection = trim(state.selected_section);
+        const selectedSection = action === 'authorise' ? 'processed_eligible' : 'authorised_eligible';
+        const selectedKeys = selectionMapFor(state)[selectedSection];
+        const selectedCount = selectedKeys.length;
         if (selectedCount < 1) return false;
-        if (action === 'authorise' && selectedSection !== 'processed_eligible') return false;
-        if (action === 'unauthorise' && selectedSection !== 'authorised_eligible') return false;
+        state.selected_row_keys = selectedKeys.slice();
+        state.selected_section = selectedSection;
         options = {
           source: 'selected-bulk',
           showCompletionModal: false,
@@ -370,6 +484,7 @@
 
       const handler = action === 'authorise' ? win.handleBulkAuthoriseSelected : win.handleBulkUnauthoriseSelected;
       if (typeof handler !== 'function') return false;
+      if (action === 'authorise' && !(await this.confirmMissingRequiredEvidence(selectedControl))) return false;
       const execute = () => handler(state, options);
       const label = action === 'authorise' ? 'Authorising' : 'Unauthorising';
       let outcome;
@@ -603,8 +718,7 @@
         if (!allowed) return false;
       }
 
-      const selection = Array.isArray(this.state.selected_row_keys) ? this.state.selected_row_keys.slice() : [];
-      const selectedSection = this.state.selected_section || null;
+      const selection = selectionMapFor(this.state);
       const epoch = ++this.rowEpoch;
       const expectedClassification = classificationOf(this.state.classification);
       this.state.__bulk_authorise_row_change_seq = (Number(this.state.__bulk_authorise_row_change_seq || 0) || 0) + 1;
@@ -628,8 +742,7 @@
         source: options.source || 'row_click'
       });
 
-      this.state.selected_row_keys = selection;
-      this.state.selected_section = selectedSection;
+      installSelectionMap(this.state, selection);
       const activeKey = trim(this.state.active_row_key || rowKeyOf(this.state.active_row));
       if (!activeKey) {
         this.state.__bulk_authorise_v2_transition_loading = false;
@@ -673,8 +786,7 @@
 
     resetClassificationState(nextClassification) {
       this.state.classification = nextClassification;
-      this.state.selected_row_keys = [];
-      this.state.selected_section = null;
+      installSelectionMap(this.state, { processed_eligible: [], authorised_eligible: [] });
       this.state.middle_pane_mode = 'single';
       this.state.middle_pane_section = 'processed_eligible';
       this.state.imported_evidence_page = 1;
@@ -770,6 +882,48 @@
       return nextProcessed || '';
     }
 
+    reconcileCheckboxSelection(mutationIntent = {}, result = {}) {
+      const snapshot = mutationIntent.checkbox_selection && typeof mutationIntent.checkbox_selection === 'object'
+        ? mutationIntent.checkbox_selection
+        : { processed_eligible: [], authorised_eligible: [] };
+      const selected = new Set([
+        ...(Array.isArray(snapshot.processed_eligible) ? snapshot.processed_eligible : []),
+        ...(Array.isArray(snapshot.authorised_eligible) ? snapshot.authorised_eligible : [])
+      ].map(trim).filter(Boolean));
+      const resultEntries = [
+        ...(Array.isArray(result?.results) ? result.results : []),
+        ...(Array.isArray(result?.affected_rows) ? result.affected_rows : []),
+        ...(Array.isArray(result?.result?.results) ? result.result.results : []),
+        ...(Array.isArray(result?.result?.affected_rows) ? result.result.affected_rows : []),
+        ...(Array.isArray(result?.affected_refresh?.flattened_rows) ? result.affected_refresh.flattened_rows : [])
+      ];
+      const remappedKeys = new Map();
+      for (const entry of resultEntries) {
+        const before = trim(entry?.row_key_before || entry?.previous_row_key || entry?.old_row_key || entry?.row_key);
+        const after = trim(entry?.row_key_after || entry?.new_row_key || entry?.row_key);
+        if (before && after) remappedKeys.set(before, after);
+        if (before && after && before !== after && selected.delete(before)) selected.add(after);
+      }
+
+      if (mutationIntent.preserve_checkbox_selection !== true) {
+        const failed = new Set(failedRowKeys(result).flatMap((key) => [key, remappedKeys.get(key)]).filter(Boolean));
+        for (const key of mutationIntent.affected_row_keys || []) {
+          const normalised = trim(key);
+          const current = remappedKeys.get(normalised) || normalised;
+          if (current && !failed.has(normalised) && !failed.has(current)) selected.delete(current);
+        }
+      }
+
+      const next = { processed_eligible: [], authorised_eligible: [] };
+      for (const row of this.rows()) {
+        const key = rowKeyOf(row);
+        const section = trim(row?.bulk_authorise_section);
+        if (selected.has(key) && Object.prototype.hasOwnProperty.call(next, section)) next[section].push(key);
+      }
+      installSelectionMap(this.state, next);
+      return next;
+    }
+
     async refreshCanonicalDatasetAfterMutation(action, result, mutationIntent = {}) {
       if (this.closed || !result) return false;
       const successCount = Number(result.success_count || 0) || 0;
@@ -791,13 +945,7 @@
           const visibleKeys = new Set(this.rows().map(rowKeyOf).filter(Boolean));
           const originalActiveKey = trim(mutationIntent.active_row_key);
           const nextActiveKey = visibleKeys.has(originalActiveKey) ? originalActiveKey : '';
-          const originalSelectedKeys = Array.isArray(mutationIntent.selected_row_keys)
-            ? mutationIntent.selected_row_keys.map(trim).filter((key) => visibleKeys.has(key))
-            : [];
-          this.state.selected_row_keys = originalSelectedKeys;
-          this.state.selected_section = originalSelectedKeys.length
-            ? (trim(mutationIntent.selected_section) || null)
-            : null;
+          this.reconcileCheckboxSelection(mutationIntent, result);
           const currentActiveKey = trim(this.state.active_row_key || rowKeyOf(this.state.active_row));
           const canPreserveCurrentContext = !!(
             nextActiveKey &&
@@ -838,7 +986,7 @@
             });
           }
           restoreLeftPanePosition(
-            mutationIntent.left_scroll_top,
+            mutationIntent.section_scroll_top,
             nextActiveKey,
             result.ensure_active_row_visible === true
           );
@@ -852,18 +1000,7 @@
         }
 
         const nextActiveKey = this.chooseActiveAfterMutation(action, mutationIntent, result);
-        const visibleKeys = new Set(this.rows().map(rowKeyOf).filter(Boolean));
-        const failedKeys = failedRowKeys(result).filter((key) => visibleKeys.has(key));
-        const keepUnauthorisedRowSelected = action === 'unauthorise'
-          && failedKeys.length === 0
-          && !!nextActiveKey
-          && trim(this.rows().find((row) => rowKeyOf(row) === nextActiveKey)?.bulk_authorise_section) === 'processed_eligible';
-        this.state.selected_row_keys = failedKeys.length
-          ? failedKeys
-          : (keepUnauthorisedRowSelected ? [nextActiveKey] : []);
-        this.state.selected_section = failedKeys.length
-          ? (action === 'authorise' ? 'processed_eligible' : 'authorised_eligible')
-          : (keepUnauthorisedRowSelected ? 'processed_eligible' : null);
+        this.reconcileCheckboxSelection(mutationIntent, result);
         const clearActiveRowAfterAuthorise = action === 'authorise' && mutationIntent.active_affected === true && !nextActiveKey;
         await this.transitionToRow(nextActiveKey, {
           skipDirtyGuard: true,
@@ -871,7 +1008,7 @@
           allowEmptySelection: clearActiveRowAfterAuthorise
         });
         restoreLeftPanePosition(
-          mutationIntent.left_scroll_top,
+          mutationIntent.section_scroll_top,
           nextActiveKey,
           action === 'unauthorise' || result.ensure_active_row_visible === true
         );
@@ -919,8 +1056,7 @@
       if (this.initialised || this.closed) return this.state;
       this.initialised = true;
       this.attachFrameTeardown();
-      this.state.selected_row_keys = [];
-      this.state.selected_section = null;
+      installSelectionMap(this.state, selectionMapFor(this.state));
       const initialKey = trim(this.state.active_row_key || rowKeyOf(this.state.active_row));
       await this.transitionToRow(initialKey, {
         skipDirtyGuard: true,
@@ -964,7 +1100,7 @@
   if (typeof legacy.authoriseSelected === 'function') {
     win.handleBulkAuthoriseSelected = async function handleBulkAuthoriseSelectedV2(state, options) {
       const liveState = currentState(state);
-      const mutationIntent = captureMutationIntent('authorise', liveState);
+      const mutationIntent = captureMutationIntent('authorise', liveState, options);
       const result = await legacy.authoriseSelected(state, options);
       const controller = controllerFor(liveState);
       if (controller) await controller.refreshCanonicalDatasetAfterMutation('authorise', result, mutationIntent);
@@ -975,7 +1111,7 @@
   if (typeof legacy.unauthoriseSelected === 'function') {
     win.handleBulkUnauthoriseSelected = async function handleBulkUnauthoriseSelectedV2(state, options) {
       const liveState = currentState(state);
-      const mutationIntent = captureMutationIntent('unauthorise', liveState);
+      const mutationIntent = captureMutationIntent('unauthorise', liveState, options);
       const result = await legacy.unauthoriseSelected(state, options);
       const controller = controllerFor(liveState);
       if (controller) await controller.refreshCanonicalDatasetAfterMutation('unauthorise', result, mutationIntent);

@@ -238,7 +238,7 @@ function install(state, options = {}) {
     authFetch: options.authFetch,
     async openBulkAuthoriseWorkbench() { return state; },
     renderBulkAuthoriseShell() { return '<div id="bulkAuthoriseWorkbenchRoot"></div>'; },
-    async refreshBulkAuthoriseActiveContext() { return true; },
+    refreshBulkAuthoriseActiveContext: options.refreshBulkAuthoriseActiveContext || (async () => true),
     refreshTimesheetImportsQueue: options.refreshTimesheetImportsQueue,
     async bindBulkAuthoriseEvidencePane() { return true; },
     async bindBulkAuthorisePreviewPane() { return true; },
@@ -297,6 +297,8 @@ test('verified dataset badges are stamped into stale Bulk Authorise row markup',
   const harness = install(state, { withBadgeDom: true, badgeRows: [rowElement] });
 
   harness.controller.captureDatasetTruth();
+  state.__bulk_authorise_badge_hydration_complete = true;
+  state.dataset.rows[0].__evidence_badges_verified = true;
   assert.equal(rowElement.querySelectorAll('.bulk-timesheet-evidence-badge').length, 0);
   assert.equal(harness.controller.stampVisibleRowBadges(), true);
   assert.deepEqual(
@@ -316,6 +318,66 @@ test('verified dataset badges are stamped into stale Bulk Authorise row markup',
     rowElement.querySelectorAll('.bulk-timesheet-evidence-badge').map((badge) => badge.getAttribute('data-evidence-kind')),
     ['TIMESHEET']
   );
+});
+
+test('stamp reapplies verified badge truth after a late same-dataset row replacement', () => {
+  const state = makeState([]);
+  state.dataset.rows[0].backend_row_signature = 'signature:late-replacement';
+  const rowElement = badgeDomRow(state.dataset.rows[0].row_key);
+  const harness = install(state, { withBadgeDom: true, badgeRows: [rowElement] });
+  harness.controller.captureDatasetTruth();
+  harness.controller.rememberVerifiedBadgeState(
+    state.dataset.rows[0].row_key,
+    {
+      evidence_badges: badges('TIMESHEET'),
+      has_any_evidence: true,
+      attached_evidence_count: 1
+    },
+    state.dataset.rows[0]
+  );
+  state.__bulk_authorise_badge_hydration_complete = true;
+  state.dataset.rows = [{
+    ...clone(state.dataset.rows[0]),
+    evidence_badges: badges(),
+    has_any_evidence: false,
+    attached_evidence_count: 0,
+    __evidence_badges_verified: false
+  }];
+
+  assert.equal(harness.controller.stampVisibleRowBadges(), true);
+  assert.deepEqual(
+    rowElement.querySelectorAll('.bulk-timesheet-evidence-badge').map((badge) => badge.getAttribute('data-evidence-kind')),
+    ['TIMESHEET']
+  );
+  assert.equal(state.dataset.rows[0].__evidence_badges_verified, true);
+});
+
+test('verified badge truth crosses a same-modal state/controller replacement', () => {
+  const firstState = makeState([]);
+  firstState.dataset.rows[0].backend_row_signature = 'signature:successor-controller';
+  const harness = install(firstState);
+  harness.controller.captureDatasetTruth();
+  harness.controller.rememberVerifiedBadgeState(
+    firstState.dataset.rows[0].row_key,
+    {
+      evidence_badges: badges('TIMESHEET'),
+      has_any_evidence: true,
+      attached_evidence_count: 1
+    },
+    firstState.dataset.rows[0]
+  );
+
+  const successorState = makeState([]);
+  successorState.dataset.rows[0].backend_row_signature = 'signature:successor-controller';
+  harness.win.modalCtx.bulkAuthoriseState = successorState;
+  const successorController = harness.api.controllerFor(successorState);
+  successorController.captureDatasetTruth();
+
+  assert.deepEqual(
+    Array.from(successorController.reusableVerifiedBadgeState(successorState.dataset.rows[0]).evidence_badges),
+    Array.from(badges('TIMESHEET'))
+  );
+  assert.equal(successorState.dataset.rows[0].__evidence_badges_verified, true);
 });
 
 test('DOM observer coalesces mutations and disconnects while applying evidence UI state', () => {
@@ -502,6 +564,96 @@ test('Bulk Authorise Queue navigation advances locally without invoking the Bulk
   assert.equal(next.disabled, true);
 });
 
+test('Queue selection survives a shared Attached-to-Queue tab reset', () => {
+  const state = makeState([evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg')]);
+  const pane = state.evidence_pane_state;
+  pane.active_tab = 'queue';
+  pane.__queue_loaded = true;
+  pane.queue_rows = [1, 2, 3, 4].map((n) => ({ id: `queue:${n}`, storage_key: `queue/${n}.jpg` }));
+  pane.active_queue_id = 'queue:3';
+  pane.active_queue_item = clone(pane.queue_rows[2]);
+  const harness = install(state);
+
+  harness.controller.rememberQueueSelection('before-attached');
+  pane.active_tab = 'attached';
+  pane.active_queue_id = 'queue:1';
+  pane.active_queue_item = clone(pane.queue_rows[0]);
+  pane.active_tab = 'queue';
+
+  const restored = harness.controller.restoreRememberedQueueSelection('after-queue');
+  assert.equal(restored.restored, true);
+  assert.equal(restored.changed, true);
+  assert.equal(restored.index, 2);
+  assert.equal(pane.active_queue_id, 'queue:3');
+  assert.equal(pane.__preview_target_key, 'queue|queue:3|queue/3.jpg');
+});
+
+test('Queue selection falls back to the same numeric position when its remembered item disappears', () => {
+  const state = makeState([evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg')]);
+  const pane = state.evidence_pane_state;
+  pane.active_tab = 'queue';
+  pane.__queue_loaded = true;
+  pane.queue_rows = [1, 2, 3, 4, 5].map((n) => ({ id: `queue:${n}`, storage_key: `queue/${n}.jpg` }));
+  pane.active_queue_id = 'queue:3';
+  pane.active_queue_item = clone(pane.queue_rows[2]);
+  const harness = install(state);
+  harness.controller.rememberQueueSelection('before-removal');
+
+  pane.queue_rows = [1, 2, 4, 5].map((n) => ({ id: `queue:${n}`, storage_key: `queue/${n}.jpg` }));
+  pane.active_queue_id = 'queue:1';
+  pane.active_queue_item = clone(pane.queue_rows[0]);
+
+  const restored = harness.controller.restoreRememberedQueueSelection('after-removal');
+  assert.equal(restored.index, 2);
+  assert.equal(pane.active_queue_id, 'queue:4');
+  assert.equal(pane.__preview_target_key, 'queue|queue:4|queue/4.jpg');
+});
+
+test('Queue refresh preserves the current item when another item is added', async () => {
+  const state = makeState([evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg')]);
+  const pane = state.evidence_pane_state;
+  pane.active_tab = 'queue';
+  pane.__queue_loaded = false;
+  pane.queue_rows = [1, 2, 3, 4, 5].map((n) => ({ id: `queue:${n}`, storage_key: `queue/${n}.jpg` }));
+  pane.active_queue_id = 'queue:3';
+  pane.active_queue_item = clone(pane.queue_rows[2]);
+  const harness = install(state, {
+    async refreshTimesheetImportsQueue(target, options) {
+      assert.equal(options.preserve_last_viewed_queue, true);
+      target.queue_rows = [
+        { id: 'queue:new', storage_key: 'queue/new.jpg' },
+        ...[1, 2, 3, 4, 5].map((n) => ({ id: `queue:${n}`, storage_key: `queue/${n}.jpg` }))
+      ];
+      target.__queue_loaded = true;
+    }
+  });
+
+  assert.equal(await harness.controller.ensureQueueLoadedForBulkAuthorise('added-item'), true);
+  assert.equal(pane.active_queue_id, 'queue:3');
+  assert.equal(pane.queue_rows.length, 6);
+});
+
+test('Queue refresh keeps the same numeric position when the current item disappears', async () => {
+  const state = makeState([evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg')]);
+  const pane = state.evidence_pane_state;
+  pane.active_tab = 'queue';
+  pane.__queue_loaded = false;
+  pane.queue_rows = [1, 2, 3, 4, 5].map((n) => ({ id: `queue:${n}`, storage_key: `queue/${n}.jpg` }));
+  pane.active_queue_id = 'queue:3';
+  pane.active_queue_item = clone(pane.queue_rows[2]);
+  const harness = install(state, {
+    async refreshTimesheetImportsQueue(target) {
+      target.queue_rows = [1, 2, 4, 5].map((n) => ({ id: `queue:${n}`, storage_key: `queue/${n}.jpg` }));
+      target.__queue_loaded = true;
+    }
+  });
+
+  assert.equal(await harness.controller.ensureQueueLoadedForBulkAuthorise('removed-item'), true);
+  assert.equal(pane.active_queue_id, 'queue:4');
+  assert.equal(pane.__remembered_queue_index, 2);
+  assert.equal(pane.queue_rows.length, 4);
+});
+
 test('an unissued draft invoice policy unlocks evidence only and forces a control rerender', async () => {
   const state = makeState([evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg')]);
   state.active_context.can_manage_evidence = false;
@@ -627,6 +779,36 @@ test('authoritative context removes synthetic Timesheet evidence and derives mat
   assert.equal(state.active_row.has_any_evidence, true);
 });
 
+test('an inherited preview item is suppressed until the Bulk Authorise row owns authoritative evidence', () => {
+  const inherited = evidence('synthetic-attached:previous-row', 'TIMESHEET', 'files/previous-row.jpg', {
+    evidence_id: null,
+    __synthetic_attached_fallback: true,
+    is_synthetic_attached_fallback: true
+  });
+  const state = makeState([]);
+  state.active_context = {};
+  state.active_details = {};
+  state.active_ctx = {};
+  state.evidence_pane_state.attached_rows = [clone(inherited)];
+  state.evidence_pane_state.attached_all_rows = [clone(inherited)];
+  state.evidence_pane_state.active_attached_id = inherited.id;
+  state.evidence_pane_state.active_attached_item = clone(inherited);
+  state.evidence_pane_state.__preview_target_key = 'attached|previous-row';
+  state.evidence_pane_state.__preview_signed_url = 'https://example.invalid/previous-row';
+  state.evidence_pane_state.__preview_loading = true;
+  const harness = install(state);
+
+  harness.controller.sanitize('row-context-pending');
+
+  assert.deepEqual(Array.from(state.evidence_pane_state.attached_rows), []);
+  assert.deepEqual(Array.from(state.evidence_pane_state.attached_all_rows), []);
+  assert.equal(state.evidence_pane_state.active_attached_id, null);
+  assert.equal(state.evidence_pane_state.active_attached_item, null);
+  assert.equal(state.evidence_pane_state.__preview_target_key, '');
+  assert.equal(state.evidence_pane_state.__preview_signed_url, '');
+  assert.equal(state.evidence_pane_state.__preview_loading, false);
+});
+
 test('a thumbnail selection remains canonical without rerendering the whole modal', async () => {
   const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
   const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
@@ -685,6 +867,113 @@ test('the active thumbnail border moves with the selected evidence item', async 
   assert.equal(accommodationButton.classList.contains('selected'), false);
   assert.equal(travelButton.classList.contains('active'), true);
   assert.equal(travelButton.classList.contains('selected'), true);
+});
+
+test('a database UUID in id is retained as the real evidence id', () => {
+  const state = makeState([]);
+  const harness = install(state);
+  const id = '11111111-1111-4111-8111-111111111111';
+  const item = harness.api.normaliseEvidence({
+    id,
+    kind: 'ACCOMMODATION',
+    display_name: 'receipt.png',
+    storage_key: 'files/receipt.png'
+  });
+
+  assert.equal(item.evidence_id, id);
+  assert.equal(item.__synthetic_attached_fallback, false);
+});
+
+test('an evidence mutation overwrites stale compatibility evidence arrays with the server snapshot', async () => {
+  const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([accommodation, travel]);
+  state.active_row.evidence = [clone(accommodation), clone(travel)];
+  state.active_context.row.evidence = [clone(accommodation), clone(travel)];
+  state.dataset.rows[0].evidence = [clone(accommodation), clone(travel)];
+  const harness = install(state, {
+    async refreshBulkAuthoriseActiveContext() {
+      state.active_ctx.state.evidence = [clone(accommodation), clone(travel)];
+      return true;
+    }
+  });
+
+  await harness.controller.refreshAfterMutation({ evidence: [travel] }, 'remove');
+
+  assert.deepEqual(Array.from(state.active_context.evidence, (item) => String(item.kind)), ['TRAVEL']);
+  assert.deepEqual(Array.from(state.active_context.details.evidence, (item) => String(item.kind)), ['TRAVEL']);
+  assert.deepEqual(Array.from(state.active_details.evidence, (item) => String(item.kind)), ['TRAVEL']);
+  assert.deepEqual(Array.from(state.active_ctx.evidence, (item) => String(item.kind)), ['TRAVEL']);
+  assert.deepEqual(Array.from(state.active_ctx.state.evidence, (item) => String(item.kind)), ['TRAVEL']);
+  assert.deepEqual(Array.from(state.active_row.evidence, (item) => String(item.kind)), ['TRAVEL']);
+  assert.deepEqual(Array.from(state.active_context.row.evidence, (item) => String(item.kind)), ['TRAVEL']);
+  assert.deepEqual(Array.from(state.dataset.rows[0].evidence, (item) => String(item.kind)), ['TRAVEL']);
+  assert.deepEqual(Array.from(state.evidence_pane_state.attached_rows, (item) => String(item.kind)), ['TRAVEL']);
+});
+
+test('an evidence mutation uses the refreshed canonical context when an older response omits evidence', async () => {
+  const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
+  const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
+  const state = makeState([accommodation, travel]);
+  const harness = install(state, {
+    async refreshBulkAuthoriseActiveContext() {
+      state.active_context.evidence = [clone(accommodation)];
+      state.active_context.evidence_loaded = true;
+      state.active_ctx.state.evidence = [clone(accommodation), clone(travel)];
+      return true;
+    }
+  });
+
+  await harness.controller.refreshAfterMutation({ action: 'REMOVE' }, 'remove');
+
+  assert.deepEqual(Array.from(state.active_ctx.state.evidence, (item) => String(item.kind)), ['ACCOMMODATION']);
+  assert.deepEqual(Array.from(state.evidence_pane_state.attached_rows, (item) => String(item.kind)), ['ACCOMMODATION']);
+});
+
+test('a successful remove excludes the requested evidence even if a compatibility response is stale', async () => {
+  const accommodation = evidence('11111111-1111-4111-8111-111111111111', 'ACCOMMODATION', 'files/accommodation.jpg', {
+    evidence_id: '11111111-1111-4111-8111-111111111111'
+  });
+  const travel = evidence('22222222-2222-4222-8222-222222222222', 'TRAVEL', 'files/travel.jpg', {
+    evidence_id: '22222222-2222-4222-8222-222222222222'
+  });
+  const state = makeState([accommodation, travel]);
+  const harness = install(state);
+
+  await harness.controller.refreshAfterMutation(
+    { action: 'REMOVE', evidence: [accommodation, travel] },
+    'remove',
+    { action: 'remove', evidence_id: accommodation.evidence_id }
+  );
+
+  assert.deepEqual(Array.from(state.evidence_pane_state.attached_rows, (item) => String(item.kind)), ['TRAVEL']);
+});
+
+test('a mutation result is reconciled into a replacement live state created during context refresh', async () => {
+  const accommodation = evidence('11111111-1111-4111-8111-111111111111', 'ACCOMMODATION', 'files/accommodation.jpg', {
+    evidence_id: '11111111-1111-4111-8111-111111111111'
+  });
+  const travel = evidence('22222222-2222-4222-8222-222222222222', 'TRAVEL', 'files/travel.jpg', {
+    evidence_id: '22222222-2222-4222-8222-222222222222'
+  });
+  const state = makeState([accommodation, travel]);
+  const replacement = makeState([accommodation, travel]);
+  let harness;
+  harness = install(state, {
+    async refreshBulkAuthoriseActiveContext() {
+      harness.win.modalCtx.bulkAuthoriseState = replacement;
+      return true;
+    }
+  });
+
+  await harness.controller.refreshAfterMutation(
+    { action: 'REMOVE', evidence: [travel] },
+    'remove',
+    { action: 'remove', evidence_id: accommodation.evidence_id }
+  );
+
+  assert.deepEqual(Array.from(replacement.active_context.evidence, (item) => String(item.kind)), ['TRAVEL']);
+  assert.deepEqual(Array.from(replacement.evidence_pane_state.attached_rows, (item) => String(item.kind)), ['TRAVEL']);
 });
 
 test('a thumbnail does not consume pointer-down from its remove X control', () => {
@@ -803,6 +1092,47 @@ test('a visibly selected Queue tab wins over stale Attached state and preserves 
   assert.equal(state.evidence_pane_state.active_attached_id, accommodation.evidence_id);
 });
 
+test('window Queue navigation repairs stale Attached state before moving the visible Queue', async () => {
+  const next = actionButton();
+  const queueTab = {
+    getAttribute(name) { return name === 'aria-selected' ? 'true' : ''; },
+    classList: { contains() { return false; } }
+  };
+  const state = makeState([]);
+  state.evidence_pane_state.active_tab = 'attached';
+  state.evidence_pane_state.queue_rows = [
+    { id: 'queue:one', storage_key: 'queue/one.jpg' },
+    { id: 'queue:two', storage_key: 'queue/two.jpg' }
+  ];
+  state.evidence_pane_state.__queue_loaded = true;
+  state.evidence_pane_state.active_queue_id = 'queue:one';
+  state.evidence_pane_state.active_queue_item = clone(state.evidence_pane_state.queue_rows[0]);
+  const harness = install(state, { elements: { bpQueueNextBtn: next, bulkProcessEvidenceTabQueue: queueTab } });
+  const event = {
+    type: 'click',
+    defaultPrevented: false,
+    immediatePropagationStopped: false,
+    preventDefault() { this.defaultPrevented = true; },
+    stopImmediatePropagation() { this.immediatePropagationStopped = true; },
+    target: {
+      closest(selector) {
+        if (selector === '#bulkAuthoriseWorkbenchRoot') return harness.root;
+        if (selector === '#bpQueueNextBtn') return next;
+        return null;
+      }
+    }
+  };
+
+  harness.windowListeners.click(event);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(event.immediatePropagationStopped, true);
+  assert.equal(state.evidence_pane_state.active_tab, 'queue');
+  assert.equal(state.evidence_pane_state.active_queue_id, 'queue:two');
+});
+
 test('a shared Attached navigation selection survives controller reconciliation', () => {
   const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
   const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
@@ -848,13 +1178,13 @@ test('Queue preview remains separate and Attached restores the row selection and
   pane.active_tab = 'attached';
   harness.controller.sanitize('return-attached');
 
-  assert.equal(pane.active_queue_id, null);
+  assert.equal(pane.active_queue_id, 'queue:one');
   assert.equal(pane.active_attached_id, travel.evidence_id);
   assert.equal(pane.active_attached_item.kind, 'TRAVEL');
   assert.equal(pane.__preview_target_key, harness.api.selectionKey(travel));
 });
 
-test('canonical dataset badges remain visible while verified corrections stream in', async () => {
+test('dataset badges stay hidden until all authoritative corrections settle', async () => {
   const travel = evidence('evidence:travel', 'TRAVEL', 'files/travel.jpg');
   const accommodation = evidence('evidence:accommodation', 'ACCOMMODATION', 'files/accommodation.jpg');
   const state = makeState([travel]);
@@ -898,10 +1228,11 @@ test('canonical dataset badges remain visible while verified corrections stream 
   const hydration = harness.controller.hydrateDatasetBadges();
   assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), ['TIMESHEET']);
   assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[1].evidence_badges), String), ['TIMESHEET']);
-  for (let attempt = 0; attempt < 20 && harness.rerenders === 0; attempt += 1) await Promise.resolve();
+  for (let attempt = 0; attempt < 20; attempt += 1) await Promise.resolve();
   assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), String), ['TRAVEL']);
   assert.deepEqual(Array.from(harness.api.positiveBadgeKinds(state.dataset.rows[1].evidence_badges), String), ['TIMESHEET']);
-  assert.ok(harness.rerenders >= 1, 'the first verified row should render before all requests finish');
+  assert.equal(state.__bulk_authorise_badge_hydration_complete, false);
+  assert.equal(harness.rerenders, 0, 'partial badge truth must not be painted into the list');
   releaseSecondResponse();
   const result = await hydration;
 
@@ -910,7 +1241,7 @@ test('canonical dataset badges remain visible while verified corrections stream 
   assert.equal(result.succeeded, 2);
   assert.equal(result.failed, 0);
   assert.equal(state.__bulk_authorise_badge_hydration_complete, true);
-  assert.ok(harness.rerenders >= 2);
+  assert.ok(harness.rerenders >= 1);
 });
 
 test('a badge correction that finishes before the modal is live is rendered after open', async () => {
@@ -1191,6 +1522,23 @@ test('returning evidence to the queue invalidates the cached global Queue rows',
   assert.equal(state.evidence_pane_state.__queue_refresh_last_result, '');
 });
 
+test('attaching a Queue item invalidates the cached Queue membership', () => {
+  const state = makeState([]);
+  state.evidence_pane_state.queue_rows = [{ queue_id: 'attached-queue-item' }];
+  state.evidence_pane_state.__queue_loaded = true;
+  const harness = install(state);
+
+  const invalidated = harness.controller.invalidateQueueAfterReturn({
+    action: 'ATTACH',
+    queue_id: 'attached-queue-item',
+    workbench_queue_created: false
+  });
+
+  assert.equal(invalidated, true);
+  assert.equal(state.evidence_pane_state.queue_rows.length, 0);
+  assert.equal(state.evidence_pane_state.__queue_loaded, false);
+});
+
 test('an evidence mutation that does not create a queue item preserves the Queue cache', () => {
   const state = makeState([]);
   const cachedRows = [{ queue_id: 'cached-queue-item' }];
@@ -1214,7 +1562,13 @@ test('verified badge truth is reused across an unchanged canonical dataset repla
   let contextRequests = 0;
   const harness = install(state, {
     brokerBaseUrl: 'https://example.invalid',
-    async authFetch() {
+    async authFetch(url) {
+      if (!String(url).includes('/bulk-authorise-context')) {
+        return {
+          ok: true,
+          async text() { return JSON.stringify({ ok: true, can_manage_evidence: true }); }
+        };
+      }
       contextRequests += 1;
       throw new Error('A cached row must not be fetched again.');
     }
@@ -1245,6 +1599,58 @@ test('verified badge truth is reused across an unchanged canonical dataset repla
   assert.equal(contextRequests, 0);
   assert.deepEqual(harness.api.positiveBadgeKinds(state.dataset.rows[0].evidence_badges), ['TIMESHEET']);
   assert.equal(state.dataset.rows[0].attached_evidence_count, 1);
+});
+
+test('verified truth is reapplied when rerender replaces rows inside the same dataset container', async () => {
+  const state = makeState([]);
+  state.dataset.rows[0].backend_row_signature = 'dataset:unchanged';
+  let contextRequests = 0;
+  const harness = install(state, {
+    brokerBaseUrl: 'https://example.invalid',
+    async authFetch(url) {
+      if (!String(url).includes('/bulk-authorise-context')) {
+        return {
+          ok: true,
+          async text() { return JSON.stringify({ ok: true, can_manage_evidence: true }); }
+        };
+      }
+      contextRequests += 1;
+      return {
+        ok: true,
+        async text() {
+          return JSON.stringify({
+            ok: true,
+            profile: 'evidence',
+            context_profile: 'evidence',
+            evidence_loaded: true,
+            row: { backend_row_signature: 'evidence-layer:different' },
+            evidence: []
+          });
+        }
+      };
+    }
+  });
+
+  const first = await harness.controller.hydrateDatasetBadges();
+  assert.equal(first.succeeded, 1);
+  assert.equal(contextRequests, 1);
+  assert.equal(state.dataset.rows[0].__evidence_badges_verified, true);
+  assert.equal(
+    harness.controller.verifiedBadgeTruth.get(state.dataset.rows[0].row_key)?.row_signature,
+    'dataset:unchanged'
+  );
+
+  state.dataset.rows = [{
+      ...clone(state.dataset.rows[0]),
+      __evidence_badges_verified: false
+    }];
+  assert.ok(harness.controller.reusableVerifiedBadgeState(state.dataset.rows[0]));
+  const second = await harness.controller.hydrateDatasetBadges();
+
+  assert.equal(second.cached, true);
+  assert.equal(second.reapplied, true);
+  assert.equal(contextRequests, 1);
+  assert.equal(state.dataset.rows[0].__evidence_badges_verified, true);
 });
 
 test('verified badge truth is invalidated when the canonical row signature changes', () => {

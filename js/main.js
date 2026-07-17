@@ -31990,24 +31990,31 @@ async function bankingPayPreview(pay_date) {
           ready: progressObj?.ready === true || progressObj?.ready_flag === true,
           phase: trimStr(progressObj?.phase || ''),
           next: trimStr(progressObj?.next_recommended_action || ''),
+          version: Number(progressObj?.progress_counter_version || progressPayload?.progress_counter_version || 0),
           rows: Number(progressObj?.preview_row_count || 0),
           selected: Number(progressObj?.selected_row_count || 0),
           pending: Number(progressObj?.line_units_pending || 0),
           line_ready: Number(progressObj?.line_units_ready || 0),
           queued: Number(progressObj?.queued_jobs || 0),
-          running: Number(progressObj?.running_jobs || 0)
+          running: Number(progressObj?.running_jobs || 0),
+          failed: Number(progressObj?.failed_candidates || progressObj?.failed_count || progressObj?.candidate_counts?.failed || 0),
+          line_failed: Number(progressObj?.line_units_failed || progressObj?.line_counts?.failed || 0),
+          job_failed: Number(progressObj?.unresolved_failed_jobs || progressObj?.job_counts?.unresolved_failed || 0),
+          job_dead: Number(progressObj?.unresolved_dead_jobs || progressObj?.job_counts?.unresolved_dead || 0),
+          blockers: Array.isArray(progressObj?.blocker_codes) ? progressObj.blocker_codes : []
         });
         const rowsAvailable = workbenchProgressHasRowsAvailable(progressObj) || workbenchProgressHasRowsAvailable(progressPayload);
         const authoritativePollState = getAuthoritativeWorkbenchProgressState({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj });
         const readyNow = authoritativePollState.ready;
-        if (rowsAvailable || readyNow) {
+        const fingerprintChanged = fingerprint !== lastFingerprint;
+        if (fingerprintChanged) lastFingerprint = fingerprint;
+        if (fingerprintChanged && (rowsAvailable || readyNow)) {
           const page = await maybeLoadFirstPreviewPageForPayload({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj, session_id: sessionIdText });
           if (page && wiz.workbench.__candidate_refresh_page_reread_pending === true) {
             wiz.workbench.__candidate_refresh_page_reread_pending = false;
           }
         }
-        if (fingerprint !== lastFingerprint || rowsAvailable || readyNow) {
-          lastFingerprint = fingerprint;
+        if (fingerprintChanged) {
           await rerenderQuietly();
         }
         const pollVisualState = applyAuthoritativePreviewVisualState({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj });
@@ -47244,6 +47251,10 @@ const collectPreviewRowIds = (previewLike) => {
     const knownOperationId = activeDraftCreateOperationId(knownOperation);
     const sessionId = activeDraftCreateWorkbenchSessionId(knownOperation || null);
     if (!sessionId && !knownOperationId) return;
+    wiz.workbench.__active_draft_create_negative_lookup_by_session = isPlainObject(wiz.workbench.__active_draft_create_negative_lookup_by_session)
+      ? wiz.workbench.__active_draft_create_negative_lookup_by_session
+      : {};
+    if (!knownOperationId && sessionId && wiz.workbench.__active_draft_create_negative_lookup_by_session[sessionId] === true) return;
     if (knownOperationId && typeof bankingPayOperationGet !== 'function') return;
     if (!knownOperationId && typeof bankingPayFindActiveDraftCreateOperation !== 'function') return;
 
@@ -47338,6 +47349,12 @@ const collectPreviewRowIds = (previewLike) => {
     Promise.resolve()
       .then(() => knownOperationId ? fetchByKnownOperationId() : findActiveBySession())
       .then((operation) => {
+        if (!isPlainObject(operation)) {
+          if (sessionId) wiz.workbench.__active_draft_create_negative_lookup_by_session[sessionId] = true;
+          clearAutoRefreshTimer();
+          return;
+        }
+        if (sessionId) delete wiz.workbench.__active_draft_create_negative_lookup_by_session[sessionId];
         if (isPlainObject(operation) && (isActiveDraftCreateTerminal(operation) || isActiveDraftCreateFailureOrReview(operation))) {
           clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operation), activeDraftCreateOperationId(operation), operation);
           refreshBatchListAfterDraftCreateTerminal(operation);
@@ -57603,6 +57620,10 @@ function renderPayBatchListPanel() {
     const knownOperationId = activeDraftCreateOperationId(knownOperation);
     const sessionId = activeDraftCreateWorkbenchSessionId(knownOperation || null);
     if (!sessionId && !knownOperationId) return;
+    wiz.workbench.__active_draft_create_negative_lookup_by_session = isPlainObject(wiz.workbench.__active_draft_create_negative_lookup_by_session)
+      ? wiz.workbench.__active_draft_create_negative_lookup_by_session
+      : {};
+    if (!knownOperationId && sessionId && wiz.workbench.__active_draft_create_negative_lookup_by_session[sessionId] === true) return;
     if (knownOperationId && typeof bankingPayOperationGet !== 'function') return;
     if (!knownOperationId && typeof bankingPayFindActiveDraftCreateOperation !== 'function') return;
 
@@ -57697,6 +57718,12 @@ function renderPayBatchListPanel() {
     Promise.resolve()
       .then(() => knownOperationId ? fetchByKnownOperationId() : findActiveBySession())
       .then((operation) => {
+        if (!isPlainObject(operation)) {
+          if (sessionId) wiz.workbench.__active_draft_create_negative_lookup_by_session[sessionId] = true;
+          clearAutoRefreshTimer();
+          return;
+        }
+        if (sessionId) delete wiz.workbench.__active_draft_create_negative_lookup_by_session[sessionId];
         if (isPlainObject(operation) && (isActiveDraftCreateTerminal(operation) || isActiveDraftCreateFailureOrReview(operation))) {
           clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operation), activeDraftCreateOperationId(operation), operation);
           refreshBatchListAfterDraftCreateTerminal(operation);
@@ -161824,6 +161851,9 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
   const showElectronic = Object.prototype.hasOwnProperty.call(f, 'show_electronic') ? f.show_electronic : (Object.prototype.hasOwnProperty.call(f, 'showElectronic') ? f.showElectronic : true);
   const validationAlready = Object.prototype.hasOwnProperty.call(f, 'validation_already') ? f.validation_already : (Object.prototype.hasOwnProperty.call(f, 'validationAlready') ? f.validationAlready : true);
   const validationAwaiting = Object.prototype.hasOwnProperty.call(f, 'validation_awaiting') ? f.validation_awaiting : (Object.prototype.hasOwnProperty.call(f, 'validationAwaiting') ? f.validationAwaiting : true);
+  const showAuthorisedInvoicedUnissued = Object.prototype.hasOwnProperty.call(f, 'show_authorised_invoiced_unissued')
+    ? f.show_authorised_invoiced_unissued
+    : (Object.prototype.hasOwnProperty.call(f, 'showAuthorisedInvoicedUnissued') ? f.showAuthorisedInvoicedUnissued : false);
 
   const classification = (() => {
     const value = String(classificationRaw == null ? '' : classificationRaw).trim().toUpperCase();
@@ -161841,6 +161871,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
   qs.set('show_electronic', String(showElectronic !== false));
   qs.set('validation_already', String(validationAlready !== false));
   qs.set('validation_awaiting', String(validationAwaiting === true));
+  qs.set('show_authorised_invoiced_unissued', String(showAuthorisedInvoicedUnissued === true));
   qs.set('profile', profile);
   qs.set('projection', projection);
 
@@ -161856,6 +161887,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     show_electronic: showElectronic !== false,
     validation_already: validationAlready !== false,
     validation_awaiting: validationAwaiting === true,
+    show_authorised_invoiced_unissued: showAuthorisedInvoicedUnissued === true,
     profile,
     projection
   });
@@ -161932,6 +161964,12 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
       'locked_by_invoice_id',
       'paid_at_utc',
       'invoice_segments_locked',
+      'invoice_segments_total',
+      'invoice_segments_unlocked',
+      'invoice_issue_stage',
+      'has_unissued_invoice',
+      'has_issued_invoice',
+      'is_invoiced',
       'invoice_segment_stage',
       'invoice_is_paid',
       'ready_to_pay',
@@ -162079,6 +162117,13 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     'locked_by_invoice_id',
     'paid_at_utc',
     'invoice_is_paid',
+    'invoice_issue_stage',
+    'invoice_segments_total',
+    'invoice_segments_locked',
+    'invoice_segments_unlocked',
+    'has_unissued_invoice',
+    'has_issued_invoice',
+    'is_invoiced',
     'pay_icon_code',
     'pay_status_code',
     'pay_paid_at_utc'
@@ -162217,6 +162262,9 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     out.can_unprocess = toBool(out.can_unprocess);
     out.can_add_additional_manual = toBool(out.can_add_additional_manual);
     out.review_only = toBool(out.review_only);
+    out.has_unissued_invoice = toBool(out.has_unissued_invoice);
+    out.has_issued_invoice = toBool(out.has_issued_invoice);
+    out.is_invoiced = toBool(out.is_invoiced);
     out.has_timesheet = toBool(out.has_timesheet);
     out.locked = toBool(out.locked);
     out.validation_pre_validated = toBool(out.validation_pre_validated);
@@ -167081,7 +167129,8 @@ async function openBulkAuthoriseWorkbench() {
     show_qr: true,
     show_electronic: true,
     validation_already: true,
-    validation_awaiting: true
+    validation_awaiting: true,
+    show_authorised_invoiced_unissued: false
   };
 
   const state = {
@@ -167108,6 +167157,10 @@ async function openBulkAuthoriseWorkbench() {
     },
     selected_row_keys: [],
     selected_section: null,
+    selected_row_keys_by_section: {
+      processed_eligible: [],
+      authorised_eligible: []
+    },
     sort_state: deep(initialSortState),
     middle_pane_mode: 'single',
     imported_evidence_page_size: 20,
@@ -167171,7 +167224,9 @@ async function openBulkAuthoriseWorkbench() {
       left_pane: 0,
       middle_pane: 0,
       right_pane: 0,
-      lists_root: 0
+      lists_root: 0,
+      processed_eligible: 0,
+      authorised_eligible: 0
     },
     __bulk_authorise_render_inflight: null,
     __bulk_authorise_render_inflight_identity: '',
@@ -168080,8 +168135,9 @@ async function openBulkAuthoriseWorkbench() {
       state.__bulk_authorise_row_change_seq = (Number(state.__bulk_authorise_row_change_seq || 0) || 0) + 1;
       state.active_row_key = nextRowKey || null;
       state.active_row = deep(nextRow);
-      state.selected_row_keys = nextRowKey ? [nextRowKey] : [];
-      state.selected_section = trimStr(nextRow.bulk_authorise_section || '') || null;
+      // Active-row focus is deliberately independent from bulk checkboxes.
+      // Right-pane actions target this row directly; only checkbox controls
+      // populate the bulk-selection fields.
       state.__bulk_authorise_active_backend_row_signature = nextBackendSignature;
       state.__bulk_authorise_active_render_signature = nextRenderSignature;
       state.__bulk_authorise_active_row_signature = nextSignature;
@@ -168496,7 +168552,11 @@ function buildBulkAuthoriseDatasetRequestFilters(state) {
     show_qr: readBool(readFirst(filters.show_qr, filters.showQr), true),
     show_electronic: readBool(readFirst(filters.show_electronic, filters.showElectronic), true),
     validation_already: readBool(readFirst(filters.validation_already, filters.validationAlready), true),
-    validation_awaiting: readBool(readFirst(filters.validation_awaiting, filters.validationAwaiting), true)
+    validation_awaiting: readBool(readFirst(filters.validation_awaiting, filters.validationAwaiting), true),
+    show_authorised_invoiced_unissued: readBool(
+      readFirst(filters.show_authorised_invoiced_unissued, filters.showAuthorisedInvoicedUnissued),
+      false
+    )
   };
 }
 
@@ -171813,6 +171873,20 @@ function renderBulkAuthoriseFiltersToolbar(state) {
               </label>
             </div>
           </div>
+
+          <div class="row" style="margin-top:4px;">
+            <label>Invoices</label>
+            <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+              <label style="display:inline-flex;gap:5px;align-items:center;">
+                <input
+                  type="checkbox"
+                  id="bulkAuthoriseToolbarShowAuthorisedInvoicedUnissued"
+                  ${filters.show_authorised_invoiced_unissued === true ? 'checked' : ''}
+                />
+                <span class="mini">Authorised and invoiced (unissued)</span>
+              </label>
+            </div>
+          </div>
         `
         : ''}
     </div>
@@ -171940,6 +172014,7 @@ function bindBulkAuthoriseClassificationButtons(state) {
       st.__bulk_authorise_row_context_ready_seq = 0;
       st.selected_row_keys = [];
       st.selected_section = null;
+      st.selected_row_keys_by_section = { processed_eligible: [], authorised_eligible: [] };
       st.middle_pane_mode = 'single';
       st.middle_pane_section = 'processed_eligible';
       st.imported_evidence_page = 1;
@@ -172046,6 +172121,7 @@ function bindBulkAuthoriseFiltersToolbar(state) {
       setChecked('bulkAuthoriseToolbarShowElectronic', f.show_electronic !== false);
       setChecked('bulkAuthoriseToolbarValidationAlready', f.validation_already !== false);
       setChecked('bulkAuthoriseToolbarValidationAwaiting', f.validation_awaiting === true);
+      setChecked('bulkAuthoriseToolbarShowAuthorisedInvoicedUnissued', f.show_authorised_invoiced_unissued === true);
     }
   };
 
@@ -172066,6 +172142,10 @@ function bindBulkAuthoriseFiltersToolbar(state) {
       nextFilters.show_electronic = readCheckboxOrCurrent('bulkAuthoriseToolbarShowElectronic', currentFilters.show_electronic !== false);
       nextFilters.validation_already = readCheckboxOrCurrent('bulkAuthoriseToolbarValidationAlready', currentFilters.validation_already !== false);
       nextFilters.validation_awaiting = readCheckboxOrCurrent('bulkAuthoriseToolbarValidationAwaiting', currentFilters.validation_awaiting === true);
+      nextFilters.show_authorised_invoiced_unissued = readCheckboxOrCurrent(
+        'bulkAuthoriseToolbarShowAuthorisedInvoicedUnissued',
+        currentFilters.show_authorised_invoiced_unissued === true
+      );
     }
 
     return nextFilters;
@@ -172114,7 +172194,26 @@ function bindBulkAuthoriseFiltersToolbar(state) {
       }
     }
 
+    const invoiceScopeChanged = !!currentFilters.show_authorised_invoiced_unissued !== !!nextFilters.show_authorised_invoiced_unissued;
     st.filters = nextFilters;
+
+    if (invoiceScopeChanged && typeof fetchBulkAuthoriseDataset === 'function') {
+      st.__bulk_authorise_dataset_refreshing = true;
+      st.__bulk_authorise_dataset_ready = false;
+      try {
+        st.dataset = await fetchBulkAuthoriseDataset(buildBulkAuthoriseDatasetRequestFilters(st), {
+          bypassCache: true,
+          forceFreshDataset: true,
+          noBackgroundRevalidate: true,
+          state: st
+        });
+        st.__bulk_authorise_dataset_ready = true;
+      } catch (error) {
+        st.error_text = trimStr(error?.message || error || 'The invoice filter could not be applied.');
+      } finally {
+        st.__bulk_authorise_dataset_refreshing = false;
+      }
+    }
 
     const visibleModel = getVisibleModel();
     const visibleRowByKey = new Map(
@@ -172123,22 +172222,16 @@ function bindBulkAuthoriseFiltersToolbar(state) {
         .filter(([key]) => !!key)
     );
 
-    const nextSelectedRowKeys = (Array.isArray(st.selected_row_keys) ? st.selected_row_keys : [])
-      .map((key) => trimStr(key))
-      .filter((key) => key && visibleRowByKey.has(key));
-
-    st.selected_row_keys = nextSelectedRowKeys;
-
-    if (!nextSelectedRowKeys.length) {
-      st.selected_section = null;
-    } else {
-      const sectionSet = new Set(
-        nextSelectedRowKeys
-          .map((key) => trimStr(visibleRowByKey.get(key)?.bulk_authorise_section || ''))
-          .filter(Boolean)
-      );
-      st.selected_section = (sectionSet.size === 1) ? Array.from(sectionSet)[0] : null;
+    const selectionMap = (st.selected_row_keys_by_section && typeof st.selected_row_keys_by_section === 'object')
+      ? st.selected_row_keys_by_section
+      : (st.selected_row_keys_by_section = { processed_eligible: [], authorised_eligible: [] });
+    for (const sectionKey of ['processed_eligible', 'authorised_eligible']) {
+      selectionMap[sectionKey] = (Array.isArray(selectionMap[sectionKey]) ? selectionMap[sectionKey] : [])
+        .map((key) => trimStr(key))
+        .filter((key) => key && visibleRowByKey.has(key) && trimStr(visibleRowByKey.get(key)?.bulk_authorise_section || '') === sectionKey);
     }
+    st.selected_row_keys = [];
+    st.selected_section = null;
 
     st.imported_evidence_page_index = 0;
 
@@ -172201,6 +172294,10 @@ function bindBulkAuthoriseFiltersToolbar(state) {
     if (st.loading || st.batch_busy) return;
     await applyFilters();
   });
+  bind('bulkAuthoriseToolbarShowAuthorisedInvoicedUnissued', 'change', async () => {
+    if (st.loading || st.batch_busy) return;
+    await applyFilters();
+  });
 }
 
 
@@ -172230,35 +172327,21 @@ function renderBulkAuthoriseLists(state) {
   const processedRows = Array.isArray(visibleModel.visible_processed_eligible_rows) ? visibleModel.visible_processed_eligible_rows : [];
   const authorisedRows = Array.isArray(visibleModel.visible_authorised_eligible_rows) ? visibleModel.visible_authorised_eligible_rows : [];
   const activeRowKey = String(st.active_row_key || '').trim();
-  const selectedSection = String(st.selected_section || '').trim();
-  const selectedSet = new Set(
-    (Array.isArray(st.selected_row_keys) ? st.selected_row_keys : [])
-      .map((value) => String(value || '').trim())
-      .filter(Boolean)
+  const selectionMap = (st.selected_row_keys_by_section && typeof st.selected_row_keys_by_section === 'object')
+    ? st.selected_row_keys_by_section
+    : {};
+  const processedSelectedSet = new Set(
+    (Array.isArray(selectionMap.processed_eligible) ? selectionMap.processed_eligible : [])
+      .map((value) => String(value || '').trim()).filter(Boolean)
+  );
+  const authorisedSelectedSet = new Set(
+    (Array.isArray(selectionMap.authorised_eligible) ? selectionMap.authorised_eligible : [])
+      .map((value) => String(value || '').trim()).filter(Boolean)
   );
   const processedVisibleSet = new Set(processedRows.map((row) => String(row?.row_key || '').trim()).filter(Boolean));
   const authorisedVisibleSet = new Set(authorisedRows.map((row) => String(row?.row_key || '').trim()).filter(Boolean));
-  const selectedCount = (
-    selectedSection === 'processed_eligible'
-      ? Array.from(selectedSet).filter((key) => processedVisibleSet.has(key)).length
-      : selectedSection === 'authorised_eligible'
-        ? Array.from(selectedSet).filter((key) => authorisedVisibleSet.has(key)).length
-        : 0
-  );
-  const selectedActionLabel = (
-    selectedSection === 'processed_eligible'
-      ? `Authorise selected (${selectedCount})`
-      : selectedSection === 'authorised_eligible'
-        ? `Unauthorise selected (${selectedCount})`
-        : ''
-  );
-  const selectedActionType = (
-    selectedSection === 'processed_eligible'
-      ? 'authorise'
-      : selectedSection === 'authorised_eligible'
-        ? 'unauthorise'
-        : ''
-  );
+  const processedSelectedCount = Array.from(processedSelectedSet).filter((key) => processedVisibleSet.has(key)).length;
+  const authorisedSelectedCount = Array.from(authorisedSelectedSet).filter((key) => authorisedVisibleSet.has(key)).length;
 
   const formatDate = (row) => {
     const raw = String(
@@ -172306,6 +172389,7 @@ function renderBulkAuthoriseLists(state) {
   };
 
   const deriveEvidenceChips = (row) => {
+    if (st.__bulk_authorise_badge_hydration_complete !== true || row?.__evidence_badges_verified !== true) return [];
     const normaliseKind = (value) => {
       const raw = String(value == null ? '' : value).trim().toUpperCase();
       if (!raw) return '';
@@ -172377,11 +172461,8 @@ function renderBulkAuthoriseLists(state) {
   const renderRow = (row, sectionName) => {
     const rowKey = String(row?.row_key || '').trim();
     const isActive = rowKey && rowKey === activeRowKey;
-    const isSelected = selectedSet.has(rowKey);
-    const isCheckboxDisabled = (
-      (selectedSection === 'processed_eligible' && sectionName === 'authorised_eligible') ||
-      (selectedSection === 'authorised_eligible' && sectionName === 'processed_eligible')
-    );
+    const sectionSelectedSet = sectionName === 'processed_eligible' ? processedSelectedSet : authorisedSelectedSet;
+    const isSelected = sectionSelectedSet.has(rowKey);
 
     const candidateText = String(
       row?.candidate_name ||
@@ -172427,7 +172508,6 @@ function renderBulkAuthoriseLists(state) {
               data-row-key="${enc(rowKey)}"
               data-section="${enc(sectionName)}"
               ${isSelected ? 'checked' : ''}
-              ${isCheckboxDisabled ? 'disabled' : ''}
               aria-label="Select ${enc(candidateText)}"
             />
           </div>
@@ -172460,17 +172540,14 @@ function renderBulkAuthoriseLists(state) {
 
   const renderSection = (sectionName, title, rowsInSection) => {
     const rowsArray = Array.isArray(rowsInSection) ? rowsInSection : [];
-    const sectionDisabled = (
-      (selectedSection === 'processed_eligible' && sectionName === 'authorised_eligible') ||
-      (selectedSection === 'authorised_eligible' && sectionName === 'processed_eligible')
-    );
+    const sectionSelectedSet = sectionName === 'processed_eligible' ? processedSelectedSet : authorisedSelectedSet;
     const visibleKeys = rowsArray.map((row) => String(row?.row_key || '').trim()).filter(Boolean);
-    const selectedCount = visibleKeys.filter((key) => selectedSet.has(key)).length;
+    const selectedCount = visibleKeys.filter((key) => sectionSelectedSet.has(key)).length;
     const sectionChecked = !!visibleKeys.length && selectedCount === visibleKeys.length;
     const sectionIndeterminate = selectedCount > 0 && selectedCount < visibleKeys.length;
 
     return `
-      <div class="card" style="margin-top:${sectionName === 'processed_eligible' ? '0' : '8px'};padding:8px 8px 6px 8px;">
+      <div class="card" data-bulk-authorise-section-card="${enc(sectionName)}" style="padding:8px 8px 6px 8px;display:flex;flex-direction:column;min-height:0;overflow:hidden;">
         <div class="row" style="gap:8px;align-items:center;">
           <label style="display:flex;gap:8px;align-items:center;min-width:0;">
             <input
@@ -172478,7 +172555,6 @@ function renderBulkAuthoriseLists(state) {
               data-bulk-authorise-section-checkbox="1"
               data-section="${enc(sectionName)}"
               ${sectionChecked ? 'checked' : ''}
-              ${sectionDisabled ? 'disabled' : ''}
               ${sectionIndeterminate ? 'data-indeterminate="1"' : ''}
               aria-label="Select ${enc(title)}"
             />
@@ -172488,7 +172564,7 @@ function renderBulkAuthoriseLists(state) {
             <span class="mini">${enc(String(rowsArray.length))}</span>
           </div>
         </div>
-        <div style="margin-top:6px;">
+        <div data-bulk-authorise-section-scroll="${enc(sectionName)}" style="margin-top:6px;min-height:0;overflow:auto;overscroll-behavior:contain;padding-right:2px;">
           ${rowsArray.length ? rowsArray.map((row) => renderRow(row, sectionName)).join('') : '<div class="mini" style="opacity:.72;padding:4px 0;">No rows in this section.</div>'}
         </div>
       </div>
@@ -172496,19 +172572,15 @@ function renderBulkAuthoriseLists(state) {
   };
 
   return htmlWrap(`
-    <div id="bulkAuthoriseListsRoot" style="display:flex;flex-direction:column;gap:0;min-width:0;">
-      ${(selectedCount > 0 && selectedActionType)
+    <div id="bulkAuthoriseListsRoot" style="display:grid;grid-template-rows:${(processedSelectedCount > 0 || authorisedSelectedCount > 0) ? 'auto ' : ''}minmax(0,1fr) minmax(0,1fr);gap:8px;min-width:0;min-height:0;flex:1 1 auto;overflow:hidden;">
+      ${(processedSelectedCount > 0 || authorisedSelectedCount > 0)
         ? `
-          <div class="card" style="margin-bottom:8px;padding:8px;">
+          <div class="card" style="padding:8px;">
             <div class="row" style="align-items:center;">
               <label style="margin:0;">Selected action</label>
               <div class="controls" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                <button
-                  type="button"
-                  class="${enc(selectedActionType === 'authorise' ? 'btn btn-primary' : 'btn btn-outline')}"
-                  data-bulk-authorise-selected-action="${enc(selectedActionType)}"
-                  aria-label="${enc(selectedActionLabel)}"
-                >${enc(selectedActionLabel)}</button>
+                ${processedSelectedCount > 0 ? `<button type="button" class="btn btn-primary" data-bulk-authorise-selected-action="authorise" data-section="processed_eligible">Authorise selected (${enc(String(processedSelectedCount))})</button>` : ''}
+                ${authorisedSelectedCount > 0 ? `<button type="button" class="btn btn-outline" data-bulk-authorise-selected-action="unauthorise" data-section="authorised_eligible">Unauthorise selected (${enc(String(authorisedSelectedCount))})</button>` : ''}
               </div>
             </div>
           </div>
@@ -172654,6 +172726,17 @@ function bindBulkAuthoriseLists(state) {
   if (root.dataset.boundBulkAuthoriseLists === '1') return;
   root.dataset.boundBulkAuthoriseLists = '1';
 
+  for (const sectionKey of ['processed_eligible', 'authorised_eligible']) {
+    const scroller = root.querySelector(`[data-bulk-authorise-section-scroll="${sectionKey}"]`);
+    if (!scroller) continue;
+    scroller.addEventListener('scroll', () => {
+      st.__bulk_authorise_scroll = (st.__bulk_authorise_scroll && typeof st.__bulk_authorise_scroll === 'object')
+        ? st.__bulk_authorise_scroll
+        : {};
+      st.__bulk_authorise_scroll[sectionKey] = Number(scroller.scrollTop || 0);
+    }, { passive: true });
+  }
+
   const visibleModel = (typeof getVisibleBulkAuthoriseRows === 'function')
     ? getVisibleBulkAuthoriseRows(st)
     : {
@@ -172715,8 +172798,13 @@ function bindBulkAuthoriseLists(state) {
       if (st.loading || st.batch_busy || st.saving || st.unprocessing || st.__workbench_modal_spinner_active) return;
 
       const action = trimStr(btnEl.getAttribute('data-bulk-authorise-selected-action') || '');
-      const selectedCount = Array.isArray(st.selected_row_keys) ? st.selected_row_keys.length : 0;
-      const selectedSection = trimStr(st.selected_section || '');
+      const selectedSection = action === 'authorise' ? 'processed_eligible' : (action === 'unauthorise' ? 'authorised_eligible' : '');
+      const selectedKeys = Array.isArray(st.selected_row_keys_by_section?.[selectedSection])
+        ? st.selected_row_keys_by_section[selectedSection].map((key) => trimStr(key)).filter(Boolean)
+        : [];
+      const selectedCount = selectedKeys.length;
+      st.selected_row_keys = selectedKeys.slice();
+      st.selected_section = selectedCount ? selectedSection : null;
       if (selectedCount < 1) return;
 
       if (action === 'authorise' && selectedSection === 'processed_eligible' && typeof handleBulkAuthoriseSelected === 'function') {
@@ -172782,42 +172870,17 @@ function setBulkAuthoriseSelectionForSection(state, section, rowKeys, mode) {
   const incomingKeys = Array.isArray(rowKeys)
     ? rowKeys.map((key) => trimStr(key)).filter(Boolean)
     : [];
-  const currentKeys = Array.isArray(st.selected_row_keys)
-    ? st.selected_row_keys.map((key) => trimStr(key)).filter(Boolean)
-    : [];
-  const currentSection = normaliseSection(st.selected_section);
-
-  let nextKeysSet = new Set(currentKeys);
-
-  if (action === 'clear') {
-    if (!targetSection || currentSection === targetSection || !currentSection) {
-      st.selected_row_keys = [];
-      st.selected_section = null;
-      return {
-        selected_row_keys: [],
-        selected_section: null
-      };
-    }
-    st.selected_row_keys = currentKeys.slice();
-    st.selected_section = currentSection || null;
-    return {
-      selected_row_keys: currentKeys.slice(),
-      selected_section: currentSection || null
-    };
+  const map = (st.selected_row_keys_by_section && typeof st.selected_row_keys_by_section === 'object')
+    ? st.selected_row_keys_by_section
+    : (st.selected_row_keys_by_section = { processed_eligible: [], authorised_eligible: [] });
+  for (const sectionKey of ['processed_eligible', 'authorised_eligible']) {
+    if (!Array.isArray(map[sectionKey])) map[sectionKey] = [];
   }
 
-  if (!targetSection) {
-    st.selected_row_keys = currentKeys.slice();
-    st.selected_section = currentSection || null;
-    return {
-      selected_row_keys: currentKeys.slice(),
-      selected_section: currentSection || null
-    };
-  }
+  if (!targetSection) return { selected_row_keys_by_section: map };
+  let nextKeysSet = new Set(map[targetSection].map((key) => trimStr(key)).filter(Boolean));
 
-  if (currentSection && currentSection !== targetSection) {
-    nextKeysSet = new Set();
-  }
+  if (action === 'clear') nextKeysSet.clear();
 
   if (action === 'replace') {
     nextKeysSet = new Set(incomingKeys);
@@ -172828,12 +172891,22 @@ function setBulkAuthoriseSelectionForSection(state, section, rowKeys, mode) {
   }
 
   const nextKeys = Array.from(nextKeysSet).filter(Boolean);
-  st.selected_row_keys = nextKeys;
-  st.selected_section = nextKeys.length ? targetSection : null;
+  map[targetSection] = nextKeys;
+  st.selected_row_keys_by_section = map;
+
+  // Legacy fields are populated only when the user invokes a specific bulk
+  // button. Keeping them empty here prevents a checkbox in one section from
+  // changing the target of a right-pane action or the other section's button.
+  st.selected_row_keys = [];
+  st.selected_section = null;
 
   return {
-    selected_row_keys: nextKeys.slice(),
-    selected_section: st.selected_section
+    selected_row_keys: [],
+    selected_section: null,
+    selected_row_keys_by_section: {
+      processed_eligible: map.processed_eligible.slice(),
+      authorised_eligible: map.authorised_eligible.slice()
+    }
   };
 }
 
@@ -176974,12 +177047,16 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
       const middlePaneEl = document.getElementById('bulkAuthoriseMiddlePane');
       const rightPaneEl = document.getElementById('bulkAuthoriseRightPane');
       const listsRootEl = document.getElementById('bulkAuthoriseListsRoot');
+      const processedListEl = document.querySelector('[data-bulk-authorise-section-scroll="processed_eligible"]');
+      const authorisedListEl = document.querySelector('[data-bulk-authorise-section-scroll="authorised_eligible"]');
 
       const scrollSnapshot = {
         left_pane: Number(leftPaneEl?.scrollTop || st?.__bulk_authorise_scroll?.left_pane || 0),
         middle_pane: Number(middlePaneEl?.scrollTop || st?.__bulk_authorise_scroll?.middle_pane || 0),
         right_pane: Number(rightPaneEl?.scrollTop || st?.__bulk_authorise_scroll?.right_pane || 0),
-        lists_root: Number(listsRootEl?.scrollTop || st?.__bulk_authorise_scroll?.lists_root || 0)
+        lists_root: Number(listsRootEl?.scrollTop || st?.__bulk_authorise_scroll?.lists_root || 0),
+        processed_eligible: Number(processedListEl?.scrollTop || st?.__bulk_authorise_scroll?.processed_eligible || 0),
+        authorised_eligible: Number(authorisedListEl?.scrollTop || st?.__bulk_authorise_scroll?.authorised_eligible || 0)
       };
 
       if (st) {
@@ -176987,7 +177064,9 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
           left_pane: Number(scrollSnapshot.left_pane || 0),
           middle_pane: Number(scrollSnapshot.middle_pane || 0),
           right_pane: Number(scrollSnapshot.right_pane || 0),
-          lists_root: Number(scrollSnapshot.lists_root || 0)
+          lists_root: Number(scrollSnapshot.lists_root || 0),
+          processed_eligible: Number(scrollSnapshot.processed_eligible || 0),
+          authorised_eligible: Number(scrollSnapshot.authorised_eligible || 0)
         };
       }
 
@@ -176996,10 +177075,14 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
         const nextMiddlePaneEl = document.getElementById('bulkAuthoriseMiddlePane');
         const nextRightPaneEl = document.getElementById('bulkAuthoriseRightPane');
         const nextListsRootEl = document.getElementById('bulkAuthoriseListsRoot');
+        const nextProcessedListEl = document.querySelector('[data-bulk-authorise-section-scroll="processed_eligible"]');
+        const nextAuthorisedListEl = document.querySelector('[data-bulk-authorise-section-scroll="authorised_eligible"]');
         if (nextLeftPaneEl) nextLeftPaneEl.scrollTop = Number(scrollSnapshot.left_pane || 0);
         if (nextMiddlePaneEl) nextMiddlePaneEl.scrollTop = Number(scrollSnapshot.middle_pane || 0);
         if (nextRightPaneEl) nextRightPaneEl.scrollTop = Number(scrollSnapshot.right_pane || 0);
         if (nextListsRootEl) nextListsRootEl.scrollTop = Number(scrollSnapshot.lists_root || 0);
+        if (nextProcessedListEl) nextProcessedListEl.scrollTop = Number(scrollSnapshot.processed_eligible || 0);
+        if (nextAuthorisedListEl) nextAuthorisedListEl.scrollTop = Number(scrollSnapshot.authorised_eligible || 0);
       };
 
       const tabKey = trimStr(fr.currentTabKey || 'main') || 'main';
@@ -182464,11 +182547,16 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     canEditExpenses
   );
 
+  const importAdditionalExpenseAllowed = !!(
+    isImportAuthoritative &&
+    !isSegmentOnlyContext &&
+    (hasRealTimesheet || !!weekId)
+  );
   const canAddAdditionalManual = !!(
     lifecycleAuthorityComplete &&
     !isArchived &&
-    backendCanAddAdditionalManual === true &&
-    (domainPolicy ? domainPolicy.canAddAdditionalManual === true : base.canAddAdditionalManual === true)
+    (backendCanAddAdditionalManual === true || importAdditionalExpenseAllowed) &&
+    ((domainPolicy ? domainPolicy.canAddAdditionalManual === true : base.canAddAdditionalManual === true) || importAdditionalExpenseAllowed)
   );
   const canManageEvidence = canManageExpenseEvidence;
   const computedCanUnprocess = !!(
@@ -182729,7 +182817,8 @@ function bindBulkAuthoriseShellControls(state) {
       show_qr: true,
       show_electronic: true,
       validation_already: true,
-      validation_awaiting: false
+      validation_awaiting: false,
+      show_authorised_invoiced_unissued: false
     };
     const activeRowKeyBefore = trimStr(st.active_row_key || st.active_row?.row_key || '');
 
@@ -182752,6 +182841,21 @@ function bindBulkAuthoriseShellControls(state) {
     }
 
     st.filters = nextFilters;
+    if (currentFilters.show_authorised_invoiced_unissued === true && typeof fetchBulkAuthoriseDataset === 'function') {
+      st.__bulk_authorise_dataset_refreshing = true;
+      st.__bulk_authorise_dataset_ready = false;
+      try {
+        st.dataset = await fetchBulkAuthoriseDataset(buildBulkAuthoriseDatasetRequestFilters(st), {
+          bypassCache: true,
+          forceFreshDataset: true,
+          noBackgroundRevalidate: true,
+          state: st
+        });
+        st.__bulk_authorise_dataset_ready = true;
+      } finally {
+        st.__bulk_authorise_dataset_refreshing = false;
+      }
+    }
     st.imported_evidence_page_index = 0;
     await reconcileSelectionAndActiveRow();
     await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][CLEAR-FILTERS]');
@@ -242641,7 +242745,7 @@ function renderBulkAuthoriseShell(state) {
           min-width:0;
         "
       >
-        <div id="bulkAuthoriseLeftPane" style="display:flex;flex-direction:column;gap:5px;max-height:min(78vh,900px);overflow:auto;padding-right:2px;min-width:0;">
+        <div id="bulkAuthoriseLeftPane" style="display:flex;flex-direction:column;gap:5px;height:min(78vh,900px);max-height:min(78vh,900px);overflow:hidden;padding-right:2px;min-width:0;min-height:0;">
           ${classificationHtml}
           ${utilityRowHtml}
           ${orderingToolbarHtml}
@@ -243461,14 +243565,10 @@ async function bindBulkAuthorisePreviewPane(state) {
     const activeRowId = trimStr(st.active_row_key || activeRow.row_key || activeRow.row_id || activeRow.external_row_key || '');
     const activeTsId = trimStr(activeRow.timesheet_id || st.active_timesheet_id || activeRow.current_timesheet_id || activeRow.requested_timesheet_id || '');
     const hasActiveIdentity = !!(activeRowId && activeTsId);
-    const rowContextPending = !!(
-      hasActiveIdentity &&
-      hasRowReadyFlag && (
-        st.__bulk_authorise_row_context_ready !== true ||
-        (rowSig && rowReadySig !== rowSig) ||
-        (hasReadySeqFlag && Number.isFinite(rowSeq) && Number.isFinite(rowReadySeq) && rowReadySeq !== rowSeq)
-      )
-    );
+    // Import-source evidence is fetched from the selected dataset identity and
+    // must not wait for the Timesheets-only detail/evidence hydration signature.
+    // The old gate could never settle for NHSP/HR and left the pane on Loading.
+    const rowContextPending = false;
     const busy = !!(
       st.loading === true ||
       st.__bulk_authorise_dataset_refreshing === true ||
@@ -248174,6 +248274,25 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
       }
     }
 
+    const isImportAuthoritativeSource = !!(
+      readBool([srcRow, 'is_import_authoritative'], [activeContext, 'is_import_authoritative'], [activeCtx || {}, 'is_import_authoritative']) === true ||
+      upper(srcRow.route_family || activeContext.route_family || activeCtx?.route_family || '') === 'IMPORT_AUTHORITATIVE'
+    );
+    if (isImportAuthoritativeSource) {
+      const confirmation = await openUiConfirmModal({
+        title: 'Add additional expense timesheet?',
+        message: 'Are you sure you want to add an unprocessed additional expense timesheet for this timesheet? Once added you will need to amend it in the Bulk Process screen or navigate to the timesheet in the Timesheet summary page',
+        confirm_label: 'Add',
+        cancel_label: 'Cancel',
+        confirm_class: 'btn btn-primary',
+        kind: 'bulk-authorise-add-import-expense-timesheet'
+      });
+      if (!(confirmation && confirmation.confirmed)) {
+        GE();
+        return { ok: false, cancelled: true };
+      }
+    }
+
     try {
       st.__bulk_authorise_direct_handoff_to_bulk_process = false;
       st.__bulkAuthoriseDirectHandoffToBulkProcess = false;
@@ -249511,6 +249630,18 @@ function renderBulkAuthoriseActionRow(state) {
   `;
 
   const actions = [];
+  const isImportAuthoritativeAction = !!(
+    editability.isImportAuthoritative === true ||
+    String(activeRow.route_family || '').trim().toUpperCase() === 'IMPORT_AUTHORITATIVE' ||
+    activeRow.is_import_authoritative === true
+  );
+  const addAdditionalLabel = isImportAuthoritativeAction
+    ? 'Add additional expense timesheet'
+    : 'Add additional timesheets';
+  const importAdditionalActionEligible = !!(
+    isImportAuthoritativeAction &&
+    trimStr(activeRow.current_timesheet_id || activeRow.timesheet_id || activeContext.current_timesheet_id || activeContext.timesheet_id || '')
+  );
   const expenseStorageTarget = trimStr(editability.expenseStorageTarget || editability.expense_storage_target || '').toUpperCase();
   const expensesHaveStorageTarget = expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
   const expensesActionDisabled = !!(
@@ -249543,8 +249674,8 @@ function renderBulkAuthoriseActionRow(state) {
     if (editability.canUnauthorise) {
       actions.push(buildBtn('bulkAuthActionRowUnauthoriseBtn', 'Unauthorise', !busy && contextReady, dirtyActionAttrs, 'btn btn-outline', 'unauthorise'));
     }
-    if (editability.canAddAdditionalManual) {
-      actions.push(buildBtn('bulkAuthActionRowAddAdditionalBtn', 'Add additional timesheets', !busy));
+    if (editability.canAddAdditionalManual || importAdditionalActionEligible) {
+      actions.push(buildBtn('bulkAuthActionRowAddAdditionalBtn', addAdditionalLabel, !busy));
     }
     pushExpensesAction();
   } else {
@@ -249572,8 +249703,8 @@ function renderBulkAuthoriseActionRow(state) {
         unprocessDisabledReason
       ));
     }
-    if (editability.canAddAdditionalManual) {
-      actions.push(buildBtn('bulkAuthActionRowAddAdditionalBtn', 'Add additional timesheets', !busy));
+    if (editability.canAddAdditionalManual || importAdditionalActionEligible) {
+      actions.push(buildBtn('bulkAuthActionRowAddAdditionalBtn', addAdditionalLabel, !busy));
     }
     pushExpensesAction();
     if (!editability.isAuthorised && editability.canSwitchToManual) {
@@ -366698,6 +366829,17 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
         const scheduleWorkbenchCandidateSettlePoll = (watchContext, progressResult, trackedCandidateIds = [], reason = '') => {
           const current = sameBankingPayWorkbenchWatchContext(watchContext);
           if (!current || current.sessionId !== watchContext.sessionId || typeof bankingPayWorkbenchSessionGetProgress !== 'function') return false;
+          const primarySessionPollOwnsCurrentSession = (context) => {
+            const workbench = context?.wizard?.workbench;
+            return !!(
+              trimStr(workbench?.__session_progress_poll_token || '') &&
+              trimStr(workbench?.__session_progress_poll_session_id || '') === current.sessionId
+            );
+          };
+          if (primarySessionPollOwnsCurrentSession(current)) {
+            clearWorkbenchCandidateSettlePoll('primary-session-progress-poll-active');
+            return false;
+          }
           const activeIds = normaliseWorkbenchUuidArray(getActiveWorkbenchDeltaRefreshJobs(progressResult).map((job) => job.candidate_id));
           const tracked = normaliseWorkbenchUuidArray(trackedCandidateIds, activeIds, hb._workbenchCandidateSettlePollTrackedIds || []);
           if (tracked.length <= 0) return false;
@@ -366716,6 +366858,10 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
             const pollContext = sameBankingPayWorkbenchWatchContext(watchContext);
             if (!pollContext || pollContext.sessionId !== current.sessionId) {
               clearWorkbenchCandidateSettlePoll('stale-context');
+              return;
+            }
+            if (primarySessionPollOwnsCurrentSession(pollContext)) {
+              clearWorkbenchCandidateSettlePoll('primary-session-progress-poll-active');
               return;
             }
             const latestTracked = normaliseWorkbenchUuidArray(hb._workbenchCandidateSettlePollTrackedIds || tracked);

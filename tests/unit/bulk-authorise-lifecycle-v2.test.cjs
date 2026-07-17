@@ -31,6 +31,10 @@ function stateFor(rows, activeKey = '') {
     dataset: { rows: clone(rows), counts: {} },
     selected_row_keys: [],
     selected_section: null,
+    selected_row_keys_by_section: {
+      processed_eligible: [],
+      authorised_eligible: []
+    },
     active_row_key: active ? active.row_key : null,
     active_row: active ? clone(active) : null,
     active_context: active ? { row: clone(active) } : null,
@@ -55,7 +59,7 @@ function stateFor(rows, activeKey = '') {
 
 function installHarness(initialState, overrides = {}) {
   const renderReasons = [];
-  const root = { dataset: {} };
+  const root = { dataset: {}, querySelectorAll() { return []; } };
   const frame = { kind: 'bulk-authorise-workbench', _onDismiss() { frame.dismissed = true; } };
   const win = {
     modalCtx: { entity: 'bulk-authorise', bulkAuthoriseState: initialState },
@@ -157,16 +161,16 @@ test('row navigation preserves checkbox selection and commits one full row conte
   const first = row('timesheet:A');
   const second = row('timesheet:B');
   const state = stateFor([first, second], first.row_key);
-  state.selected_row_keys = [second.row_key];
-  state.selected_section = 'processed_eligible';
+  state.selected_row_keys_by_section.processed_eligible = [second.row_key];
   const { controller, root } = installHarness(state);
 
   const changed = await controller.transitionToRow(second.row_key);
 
   assert.equal(changed, true);
   assert.equal(state.active_row_key, second.row_key);
-  assert.deepEqual(Array.from(state.selected_row_keys), [second.row_key]);
-  assert.equal(state.selected_section, 'processed_eligible');
+  assert.deepEqual(Array.from(state.selected_row_keys), []);
+  assert.equal(state.selected_section, null);
+  assert.deepEqual(Array.from(state.selected_row_keys_by_section.processed_eligible), [second.row_key]);
   assert.equal(state.active_context.profile, 'full');
   assert.equal(state.active_context.full_loaded, true);
   assert.equal(state.evidence_pane_state.active_tab, 'attached');
@@ -292,6 +296,7 @@ test('post-mutation reconciliation replaces partial rows with the canonical data
   const partial = row('timesheet:A', 'processed_eligible', { candidate_name: null, client_name: null });
   const failed = row('timesheet:B', 'processed_eligible', { candidate_name: null });
   const state = stateFor([partial, failed], partial.row_key);
+  state.selected_row_keys_by_section.processed_eligible = [partial.row_key, failed.row_key];
   const canonical = {
     rows: [
       row('timesheet:A', 'authorised_eligible', { candidate_name: 'Full Candidate A', client_name: 'Full Client A' }),
@@ -312,14 +317,24 @@ test('post-mutation reconciliation replaces partial rows with the canonical data
     mutationSeq: 9
   };
 
-  const refreshed = await controller.refreshCanonicalDatasetAfterMutation('authorise', result);
+  const refreshed = await controller.refreshCanonicalDatasetAfterMutation('authorise', result, {
+    active_row_key: partial.row_key,
+    affected_row_keys: [partial.row_key, failed.row_key],
+    active_affected: true,
+    fallback_row_keys: [failed.row_key],
+    checkbox_selection: clone(state.selected_row_keys_by_section),
+    source: 'selected-bulk',
+    preserve_checkbox_selection: false,
+    section_scroll_top: {}
+  });
 
   assert.equal(refreshed, true);
   assert.equal(result.canonical_dataset_refreshed, true);
   assert.equal(state.dataset.rows[0].candidate_name, 'Full Candidate A');
   assert.equal(state.dataset.rows[0].client_name, 'Full Client A');
-  assert.deepEqual(Array.from(state.selected_row_keys), ['timesheet:B']);
-  assert.equal(state.selected_section, 'processed_eligible');
+  assert.deepEqual(Array.from(state.selected_row_keys), []);
+  assert.equal(state.selected_section, null);
+  assert.deepEqual(Array.from(state.selected_row_keys_by_section.processed_eligible), ['timesheet:B']);
   assert.equal(state.active_row_key, 'timesheet:B');
   assert.equal(state.active_row.candidate_name, 'Full Candidate B');
 });
@@ -431,12 +446,10 @@ test('authorising the final processed row leaves a clean empty selection', async
   assert.deepEqual(Array.from(state.selected_row_keys), []);
 });
 
-test('unauthorising a row selects the same row in Processed Eligible', async () => {
+test('unauthorising a row keeps it active without changing checkbox state', async () => {
   const active = row('timesheet:A', 'authorised_eligible');
   const other = row('timesheet:B', 'authorised_eligible');
   const state = stateFor([active, other], active.row_key);
-  state.selected_row_keys = [active.row_key];
-  state.selected_section = 'authorised_eligible';
   const canonical = {
     rows: [row(active.row_key, 'processed_eligible'), other],
     counts: { total: 2 }
@@ -452,14 +465,17 @@ test('unauthorising a row selects the same row in Processed Eligible', async () 
 
   assert.equal(state.active_row_key, active.row_key);
   assert.equal(state.active_row.bulk_authorise_section, 'processed_eligible');
-  assert.deepEqual(Array.from(state.selected_row_keys), [active.row_key]);
-  assert.equal(state.selected_section, 'processed_eligible');
+  assert.deepEqual(Array.from(state.selected_row_keys), []);
+  assert.equal(state.selected_section, null);
+  assert.deepEqual(Array.from(state.selected_row_keys_by_section.processed_eligible), []);
+  assert.deepEqual(Array.from(state.selected_row_keys_by_section.authorised_eligible), []);
 });
 
-test('a failed unauthorise row remains selected in Authorised Eligible for retry', async () => {
+test('a bulk unauthorise consumes successes but leaves failed checkboxes for retry', async () => {
   const active = row('timesheet:A', 'authorised_eligible');
   const failed = row('timesheet:B', 'authorised_eligible');
   const state = stateFor([active, failed], active.row_key);
+  state.selected_row_keys_by_section.authorised_eligible = [active.row_key, failed.row_key];
   state.selected_row_keys = [active.row_key, failed.row_key];
   state.selected_section = 'authorised_eligible';
   const canonical = {
@@ -479,10 +495,11 @@ test('a failed unauthorise row remains selected in Authorised Eligible for retry
     }
   });
 
-  await win.handleBulkUnauthoriseSelected(state, {});
+  await win.handleBulkUnauthoriseSelected(state, { source: 'selected-bulk' });
 
-  assert.deepEqual(Array.from(state.selected_row_keys), [failed.row_key]);
-  assert.equal(state.selected_section, 'authorised_eligible');
+  assert.deepEqual(Array.from(state.selected_row_keys), []);
+  assert.equal(state.selected_section, null);
+  assert.deepEqual(Array.from(state.selected_row_keys_by_section.authorised_eligible), [failed.row_key]);
 });
 
 test('the right-pane action renders once more after its modal spinner has cleared', async () => {
@@ -521,6 +538,152 @@ test('the right-pane action renders once more after its modal spinner has cleare
   assert.ok(renderStates.length >= 1);
   assert.match(renderStates.at(-1).reason, /AUTHORISE-ACTION-SETTLED/);
   assert.equal(renderStates.at(-1).spinnerActive, false);
+});
+
+test('required physical evidence uses a UI confirmation before authorise', async () => {
+  const active = row('timesheet:A', 'processed_eligible', {
+    client_no_timesheet_required: false,
+    __evidence_badges_verified: true,
+    evidence_badges: []
+  });
+  const state = stateFor([active], active.row_key);
+  let handlerCalls = 0;
+  let confirmation = null;
+  const { controller } = installHarness(state, {
+    __bulkAuthoriseEvidenceControllerTest: {
+      controllerFor() {
+        return {
+          isTimesheets() { return false; },
+          async hydrateDatasetBadges() { return { applied: true }; }
+        };
+      }
+    },
+    async openUiConfirmModal(options) {
+      confirmation = options;
+      return { confirmed: false };
+    },
+    async handleBulkAuthoriseSelected() {
+      handlerCalls += 1;
+      return { ok: true, success_count: 1 };
+    }
+  });
+  const button = {
+    id: 'bulkAuthActionRowAuthoriseBtn',
+    disabled: false,
+    dataset: {},
+    getAttribute() { return ''; }
+  };
+
+  assert.equal(await controller.runOwnedAction(button), false);
+  assert.equal(handlerCalls, 0);
+  assert.equal(confirmation.title, 'Missing timesheet image');
+  assert.equal(confirmation.message, 'This timesheet has no physical timesheet image attached. Are you sure you want to continue?');
+  assert.equal(confirmation.cancel_label, 'Cancel');
+});
+
+test('effective no-timesheet-required settings skip the physical evidence warning', async () => {
+  const active = row('timesheet:A', 'processed_eligible', {
+    client_no_timesheet_required: true,
+    __evidence_badges_verified: true,
+    evidence_badges: []
+  });
+  const state = stateFor([active], active.row_key);
+  let confirmationCalls = 0;
+  let handlerCalls = 0;
+  const { controller } = installHarness(state, {
+    async openUiConfirmModal() {
+      confirmationCalls += 1;
+      return { confirmed: false };
+    },
+    async handleBulkAuthoriseSelected() {
+      handlerCalls += 1;
+      return { ok: false, batch_completed: false, success_count: 0 };
+    }
+  });
+  const button = {
+    id: 'bulkAuthActionRowAuthoriseBtn',
+    disabled: false,
+    dataset: {},
+    getAttribute() { return ''; }
+  };
+
+  await controller.runOwnedAction(button);
+  assert.equal(confirmationCalls, 0);
+  assert.equal(handlerCalls, 1);
+});
+
+test('a right-pane action preserves every checkbox while the active row moves section', async () => {
+  const active = row('timesheet:A', 'processed_eligible');
+  const processedOther = row('timesheet:B', 'processed_eligible');
+  const authorisedOther = row('timesheet:C', 'authorised_eligible');
+  const state = stateFor([active, processedOther, authorisedOther], active.row_key);
+  state.selected_row_keys_by_section.processed_eligible = [active.row_key, processedOther.row_key];
+  state.selected_row_keys_by_section.authorised_eligible = [authorisedOther.row_key];
+  const canonical = {
+    rows: [row(active.row_key, 'authorised_eligible'), processedOther, authorisedOther],
+    counts: { total: 3 }
+  };
+  const { win } = installHarness(state, {
+    async fetchBulkAuthoriseDataset() { return clone(canonical); },
+    async handleBulkAuthoriseSelected() {
+      return { ok: true, batch_completed: true, success_count: 1, failed_items: [], mutationSeq: 20 };
+    }
+  });
+
+  await win.handleBulkAuthoriseSelected(state, { source: 'action-row' });
+
+  assert.deepEqual(Array.from(state.selected_row_keys_by_section.processed_eligible), [processedOther.row_key]);
+  assert.deepEqual(Array.from(state.selected_row_keys_by_section.authorised_eligible), [active.row_key, authorisedOther.row_key]);
+});
+
+test('authorised Additional Rates controls are locked only inside Bulk Authorise', () => {
+  const active = row('timesheet:A', 'authorised_eligible', { is_authorised: true });
+  const state = stateFor([active], active.row_key);
+  const input = {
+    disabled: false,
+    readOnly: false,
+    title: '',
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; }
+  };
+  const { controller, root } = installHarness(state);
+  root.querySelectorAll = (selector) => selector.includes('input[data-extra-code]') ? [input] : [];
+
+  controller.stampRoot();
+
+  assert.equal(input.disabled, true);
+  assert.equal(input.readOnly, true);
+  assert.equal(input.attributes['data-bulk-authorise-authorised-lock'], '1');
+});
+
+test('an invoice-locked authorised row still locks Additional Rates when its action section is empty', () => {
+  const active = row('timesheet:A', '', { is_authorised: false });
+  const state = stateFor([active], active.row_key);
+  const input = {
+    disabled: false,
+    readOnly: false,
+    title: '',
+    setAttribute() {}
+  };
+  const renderedRow = {
+    getAttribute(name) {
+      if (name === 'data-row-key') return active.row_key;
+      if (name === 'data-section') return 'authorised_eligible';
+      if (name === 'style') return 'border-color:var(--accent,#6ea8fe);';
+      return '';
+    }
+  };
+  const { controller, root } = installHarness(state);
+  root.querySelectorAll = (selector) => {
+    if (selector.includes('[data-bulk-authorise-row')) return [renderedRow];
+    if (selector.includes('input[data-extra-code]')) return [input];
+    return [];
+  };
+
+  controller.stampRoot();
+
+  assert.equal(input.disabled, true);
+  assert.equal(input.readOnly, true);
 });
 
 test('modal dismissal invalidates the controller and clears row-owned state', async () => {

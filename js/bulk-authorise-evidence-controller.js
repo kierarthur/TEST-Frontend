@@ -7,6 +7,13 @@
   const doc = win.document;
   const SELECT_QUEUE_REPLACEMENT_MESSAGE = 'Please select an image from the queue to replace this evidence with';
   const controllers = new WeakMap();
+  // Shell rerenders can replace the Bulk Authorise state object while evidence
+  // verification is in flight. Keep signature-guarded truth at the modal scope
+  // so the successor controller can consume the completed request. This cache is
+  // cleared for every new modal open and updated after evidence mutations.
+  const verifiedBadgeTruthForOpenModal = new Map();
+  let activeBulkAuthoriseState = null;
+  let activeQueueSelectionStabilizeEpoch = 0;
   const legacy = {
     open: win.openBulkAuthoriseWorkbench,
     renderShell: win.renderBulkAuthoriseShell,
@@ -17,6 +24,11 @@
   };
 
   const trim = (value) => String(value == null ? '' : value).trim();
+  const liveBulkAuthoriseState = () => (
+    (win.modalCtx?.bulkAuthoriseState && typeof win.modalCtx.bulkAuthoriseState === 'object')
+      ? win.modalCtx.bulkAuthoriseState
+      : activeBulkAuthoriseState
+  );
   const upper = (value) => trim(value).toUpperCase();
   const clone = (value) => {
     try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
@@ -86,6 +98,14 @@
       systemTimesheet
     );
   };
+  const persistedEvidenceIdOf = (item) => {
+    const explicit = trim(item?.evidence_id || item?.timesheet_evidence_id);
+    if (explicit) return explicit;
+    const id = evidenceIdOf(item);
+    return !isSyntheticEvidence(item) && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+      ? id
+      : '';
+  };
   const normaliseEvidence = (item) => {
     if (!item || typeof item !== 'object') return null;
     const fileKey = evidenceFileKeyOf(item);
@@ -100,7 +120,7 @@
     return {
       ...clone(item),
       id,
-      evidence_id: synthetic ? null : (trim(item.evidence_id || item.timesheet_evidence_id) || (item.system === true ? id : null)),
+      evidence_id: synthetic ? null : (persistedEvidenceIdOf(item) || (item.system === true ? id : null)),
       __synthetic_attached_fallback: synthetic,
       is_synthetic_attached_fallback: synthetic,
       kind,
@@ -288,7 +308,7 @@
       this.datasetBadgeTruth = new Map();
       this.datasetInitialBadgeTruth = new Map();
       this.datasetPendingBadgeIdentities = new Set();
-      this.verifiedBadgeTruth = new Map();
+      this.verifiedBadgeTruth = verifiedBadgeTruthForOpenModal;
       this.badgeHydrationDatasetRef = null;
       this.badgeHydrationPromise = null;
       this.badgeHydrationRenderPromise = null;
@@ -318,6 +338,7 @@
       this.queueRefreshRenderEpoch = 0;
       this.queueRefreshFallbackPromise = null;
       this.queueRefreshRenderPending = false;
+      this.rememberedQueueAnchor = null;
     }
 
     isTimesheets() {
@@ -327,8 +348,7 @@
     isLive() {
       return !!(
         this.isTimesheets() &&
-        win.modalCtx &&
-        win.modalCtx.bulkAuthoriseState === this.state &&
+        liveBulkAuthoriseState() === this.state &&
         doc && doc.getElementById('bulkAuthoriseWorkbenchRoot')
       );
     }
@@ -466,7 +486,7 @@
       const requestedKind = evidenceKindOf({ kind: control?.getAttribute?.('data-kind') });
       const matched = rows.find((item) => requestedSelection && selectionKey(item) === requestedSelection)
         || rows.find((item) => {
-          const realEvidenceId = trim(item?.evidence_id || item?.timesheet_evidence_id);
+          const realEvidenceId = persistedEvidenceIdOf(item);
           const attachedId = evidenceIdOf(item);
           return (
             (!requestedId || realEvidenceId === requestedId) &&
@@ -555,7 +575,7 @@
           error.code = result?.error_code || result?.error || '';
           throw error;
         }
-        await this.refreshAfterMutation(result, payload?.action || 'evidence');
+        await this.refreshAfterMutation(result, payload?.action || 'evidence', payload);
         return result;
       } finally {
         this.mutationInFlight = false;
@@ -563,7 +583,7 @@
       }
     }
 
-    async refreshAfterMutation(result, reason = 'evidence') {
+    async refreshAfterMutation(result, reason = 'evidence', requestPayload = null) {
       const leftPane = doc?.getElementById?.('bulkAuthoriseLeftPane');
       const leftScrollTop = Number(leftPane?.scrollTop || 0);
       const state = this.state;
@@ -572,21 +592,72 @@
       pane.active_tab = 'attached';
       pane.__attached_manual_override = true;
       pane.__queue_manual_override = false;
-      pane.active_queue_id = null;
-      pane.active_queue_item = null;
       state.error_text = '';
       state.warning_text = '';
       this.mutationPolicy = null;
       this.mutationPolicyPromise = null;
+      let mutationRows = null;
+      const applyMutationRowsToState = (targetState) => {
+        if (!Array.isArray(mutationRows) || !targetState || typeof targetState !== 'object') return;
+        const writeRows = (container) => {
+          if (!container || typeof container !== 'object') return;
+          container.evidence = mutationRows.map(clone);
+          container.evidence_loaded = true;
+        };
+        if (!targetState.active_context || typeof targetState.active_context !== 'object') targetState.active_context = {};
+        writeRows(targetState.active_context);
+        writeRows(targetState.active_row);
+        writeRows(targetState.active_context.row);
+        writeRows(targetState.active_context.data_row);
+        writeRows(targetState.active_context.details);
+        writeRows(targetState.active_context.details?.timesheet);
+        targetState.active_context.context_profile = 'evidence';
+        if (!targetState.active_details || typeof targetState.active_details !== 'object') targetState.active_details = {};
+        writeRows(targetState.active_details);
+        writeRows(targetState.active_details.timesheet);
+        writeRows(targetState.active_details.details);
+        writeRows(targetState.active_ctx);
+        writeRows(targetState.active_ctx?.row);
+        writeRows(targetState.active_ctx?.data_row);
+        writeRows(targetState.active_ctx?.state);
+        writeRows(targetState.active_ctx?.state?.timesheet);
+        writeRows(targetState.active_ctx?.details);
+        writeRows(targetState.active_ctx?.details?.timesheet);
+        const activeIdentity = rowIdentityOf(targetState);
+        const dataset = targetState.dataset && typeof targetState.dataset === 'object' ? targetState.dataset : {};
+        const collections = [
+          dataset.rows,
+          dataset.processed_eligible_rows,
+          dataset.authorised_eligible_rows,
+          dataset.unauthorised_rows,
+          dataset.processed_eligible,
+          dataset.authorised_eligible,
+          dataset.authorised_rows
+        ].filter(Array.isArray);
+        for (const collection of collections) {
+          for (const row of collection) {
+            if (rowKeyOf(row) === activeIdentity) writeRows(row);
+          }
+        }
+      };
+      const applyMutationRows = () => {
+        applyMutationRowsToState(state);
+        const liveState = liveBulkAuthoriseState();
+        if (liveState && liveState !== state) applyMutationRowsToState(liveState);
+      };
       if (Array.isArray(result?.evidence)) {
-        const rows = filterNormalisedEvidenceRows(result.evidence.map(normaliseEvidence).filter(Boolean));
-        if (!state.active_context || typeof state.active_context !== 'object') state.active_context = {};
-        state.active_context.evidence = rows.map(clone);
-        state.active_context.evidence_loaded = true;
-        state.active_context.context_profile = 'evidence';
-        if (!state.active_details || typeof state.active_details !== 'object') state.active_details = {};
-        state.active_details.evidence = rows.map(clone);
-        state.active_details.evidence_loaded = true;
+        mutationRows = filterNormalisedEvidenceRows(result.evidence.map(normaliseEvidence).filter(Boolean));
+        applyMutationRows();
+      }
+      if (upper(reason) === 'REMOVE') {
+        const removedId = trim(requestPayload?.evidence_id || result?.removed_evidence_id);
+        const currentRows = Array.isArray(mutationRows)
+          ? mutationRows
+          : (this.rowsByIdentity.get(rowIdentityOf(state)) || this.authoritativeEvidence().rows || []);
+        if (removedId && Array.isArray(currentRows)) {
+          mutationRows = currentRows.filter((item) => persistedEvidenceIdOf(item) !== removedId).map(clone);
+          applyMutationRows();
+        }
       }
       if (typeof win.refreshBulkAuthoriseActiveContext === 'function') {
         await win.refreshBulkAuthoriseActiveContext(state, {
@@ -604,11 +675,29 @@
           rerender: false
         });
       }
+      if (!Array.isArray(mutationRows) && state.active_context?.evidence_loaded === true && Array.isArray(state.active_context.evidence)) {
+        mutationRows = filterNormalisedEvidenceRows(state.active_context.evidence.map(normaliseEvidence).filter(Boolean));
+      }
+      // The mutation response is the authoritative post-write snapshot. Context
+      // refresh can leave older evidence arrays in secondary compatibility
+      // containers, so overwrite every source before reconciliation.
+      applyMutationRows();
       this.sanitize(`mutation:${reason}`);
+      const liveState = liveBulkAuthoriseState();
+      const liveController = liveState && liveState !== state ? controllerFor(liveState) : null;
+      if (liveController) {
+        liveController.invalidateQueueAfterReturn(result);
+        const livePane = liveState.evidence_pane_state || (liveState.evidence_pane_state = {});
+        livePane.active_tab = 'attached';
+        livePane.__attached_manual_override = true;
+        livePane.__queue_manual_override = false;
+        liveController.sanitize(`mutation:${reason}:live-state`);
+      }
       if (typeof win.rerenderBulkAuthoriseWorkbench === 'function') {
-        await win.rerenderBulkAuthoriseWorkbench(state, `[TS][BULK-AUTH][EVIDENCE-MUTATION:${reason}]`);
+        await win.rerenderBulkAuthoriseWorkbench(liveState || state, `[TS][BULK-AUTH][EVIDENCE-MUTATION:${reason}]`);
       }
       this.settle(`mutation:${reason}:settled`);
+      if (liveController) liveController.settle(`mutation:${reason}:live-state-settled`);
       const restoreScroll = () => {
         const liveLeftPane = doc?.getElementById?.('bulkAuthoriseLeftPane');
         if (liveLeftPane) liveLeftPane.scrollTop = leftScrollTop;
@@ -622,7 +711,16 @@
     }
 
     invalidateQueueAfterReturn(result) {
-      if (!result || (result.workbench_queue_created !== true && !trim(result.returned_queue_id))) return false;
+      const action = upper(result?.action);
+      const queueMembershipChanged = !!(
+        result && (
+          result.workbench_queue_created === true ||
+          trim(result.returned_queue_id) ||
+          action === 'ATTACH' ||
+          action === 'REPLACE'
+        )
+      );
+      if (!queueMembershipChanged) return false;
       const state = this.state;
       const pane = state.evidence_pane_state || (state.evidence_pane_state = {});
       const queueScope = trim(pane.__queue_scope || pane.__queue_loaded_scope || 'global:QUEUED') || 'global:QUEUED';
@@ -641,6 +739,138 @@
       pane.__queue_last_error = '';
       pane.queue_loaded_at_utc = '';
       pane.__queue_loaded_at_utc = '';
+      return true;
+    }
+
+    rememberQueueSelection(reason = 'queue-selection') {
+      const pane = this.state.evidence_pane_state || (this.state.evidence_pane_state = {});
+      const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows.filter(Boolean) : [];
+      const item = pane.active_queue_item && typeof pane.active_queue_item === 'object'
+        ? pane.active_queue_item
+        : null;
+      const queueId = trim(item?.id || item?.queue_id || pane.active_queue_id);
+      const storageKey = evidenceFileKeyOf(item);
+      if (!queueId || !storageKey) return this.rememberedQueueAnchor;
+      let index = rows.findIndex((row) => {
+        const rowId = trim(row?.id || row?.queue_id);
+        return rowId === queueId && evidenceFileKeyOf(row) === storageKey;
+      });
+      if (index < 0) index = rows.findIndex((row) => trim(row?.id || row?.queue_id) === queueId);
+      if (index < 0) index = Math.max(0, Number(pane.__remembered_queue_index || 0) || 0);
+      this.rememberedQueueAnchor = {
+        queue_id: queueId,
+        storage_key: storageKey,
+        index,
+        reason: trim(reason) || 'queue-selection'
+      };
+      pane.__bulk_authorise_last_viewed_queue_anchor = clone(this.rememberedQueueAnchor);
+      this.state.__bulk_authorise_last_viewed_queue_anchor = clone(this.rememberedQueueAnchor);
+      pane.__remembered_queue_id = queueId;
+      pane.__remembered_queue_index = index;
+      return this.rememberedQueueAnchor;
+    }
+
+    getRememberedQueueAnchor() {
+      const pane = this.state.evidence_pane_state || {};
+      const anchor = this.rememberedQueueAnchor
+        || pane.__bulk_authorise_last_viewed_queue_anchor
+        || this.state.__bulk_authorise_last_viewed_queue_anchor
+        || null;
+      if (!anchor || typeof anchor !== 'object') return null;
+      const queueId = trim(anchor.queue_id || anchor.queueId);
+      const storageKey = cleanFileKey(anchor.storage_key || anchor.storageKey);
+      if (!queueId || !storageKey) return null;
+      return {
+        queue_id: queueId,
+        storage_key: storageKey,
+        index: Math.max(0, Number(anchor.index || 0) || 0),
+        reason: trim(anchor.reason) || 'queue-selection'
+      };
+    }
+
+    restoreRememberedQueueSelection(reason = 'queue-restore') {
+      const pane = this.state.evidence_pane_state || (this.state.evidence_pane_state = {});
+      const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows.filter(Boolean) : [];
+      const anchor = this.getRememberedQueueAnchor();
+      if (!anchor || !rows.length) return { restored: false, changed: false, index: -1 };
+      let index = rows.findIndex((row) => {
+        const rowId = trim(row?.id || row?.queue_id);
+        return rowId === trim(anchor.queue_id) && evidenceFileKeyOf(row) === evidenceFileKeyOf(anchor);
+      });
+      if (index < 0) index = rows.findIndex((row) => trim(row?.id || row?.queue_id) === trim(anchor.queue_id));
+      if (index < 0) index = Math.min(Math.max(0, Number(anchor.index || 0) || 0), rows.length - 1);
+      const item = rows[index] || null;
+      const queueId = trim(item?.id || item?.queue_id);
+      const storageKey = evidenceFileKeyOf(item);
+      if (!item || !queueId || !storageKey) return { restored: false, changed: false, index: -1 };
+      const currentId = trim(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id);
+      const currentStorageKey = evidenceFileKeyOf(pane.active_queue_item);
+      const changed = currentId !== queueId || currentStorageKey !== storageKey;
+      pane.active_queue_id = queueId;
+      pane.active_queue_item = clone(item);
+      pane.__remembered_queue_id = queueId;
+      pane.__remembered_queue_index = index;
+      this.rememberedQueueAnchor = {
+        queue_id: queueId,
+        storage_key: storageKey,
+        index,
+        reason: trim(reason) || 'queue-restore'
+      };
+      pane.__bulk_authorise_last_viewed_queue_anchor = clone(this.rememberedQueueAnchor);
+      this.state.__bulk_authorise_last_viewed_queue_anchor = clone(this.rememberedQueueAnchor);
+      if (trim(pane.active_tab).toLowerCase() === 'queue') {
+        const target = `queue|${queueId}|${storageKey}`;
+        pane.__queue_manual_override = true;
+        pane.__queue_manual_override_identity = '';
+        pane.__queue_manual_override_scope = trim(pane.__queue_scope || pane.__queue_loaded_scope || 'global:QUEUED') || 'global:QUEUED';
+        if (trim(pane.__preview_target_key) !== target) {
+          pane.active_pdf_page = 1;
+          pane.__preview_target_key = target;
+          pane.__preview_load_requested_target_key = target;
+          pane.__preview_signed_url = '';
+          pane.__preview_signed_url_error = '';
+          pane.__preview_error = '';
+          pane.__preview_loading = true;
+        }
+      }
+      return { restored: true, changed, index };
+    }
+
+    scheduleQueueSelectionStabilization(reason = 'queue-tab') {
+      const scheduledAnchor = this.getRememberedQueueAnchor();
+      if (typeof win.setTimeout !== 'function' || !scheduledAnchor) return false;
+      const epoch = ++activeQueueSelectionStabilizeEpoch;
+      for (const delay of [0, 100, 350, 900, 1500]) {
+        win.setTimeout(async () => {
+          if (epoch !== activeQueueSelectionStabilizeEpoch) return;
+          const liveState = liveBulkAuthoriseState();
+          const liveController = controllerFor(liveState);
+          if (!liveController || !liveController.isLive()) return;
+          if (!liveController.getRememberedQueueAnchor()) {
+            liveController.rememberedQueueAnchor = clone(scheduledAnchor);
+            const livePane = liveState.evidence_pane_state || (liveState.evidence_pane_state = {});
+            livePane.__bulk_authorise_last_viewed_queue_anchor = clone(scheduledAnchor);
+            liveState.__bulk_authorise_last_viewed_queue_anchor = clone(scheduledAnchor);
+          }
+          const pane = liveState.evidence_pane_state || {};
+          if (trim(pane.active_tab).toLowerCase() !== 'queue' || pane.__queue_loaded !== true) return;
+          const restored = liveController.restoreRememberedQueueSelection(`${reason}:${delay}`);
+          const renderedQueueText = trim(doc?.getElementById?.('bulkAuthoriseWorkbenchRoot')?.textContent);
+          const renderedQueueMatch = renderedQueueText.match(/Images in Queue\s+(\d+)\s*\/\s*(\d+)/i);
+          const renderedQueueIndex = renderedQueueMatch ? Math.max(0, Number(renderedQueueMatch[1] || 1) - 1) : -1;
+          if (!restored.changed && renderedQueueIndex === restored.index) return;
+          try {
+            if (typeof win.rerenderBulkAuthoriseWorkbench === 'function') {
+              await win.rerenderBulkAuthoriseWorkbench(liveState, `[TS][BULK-AUTH][QUEUE-SELECTION-RESTORE:${reason}]`);
+            } else if (typeof liveState.__rerenderWorkbench === 'function') {
+              await liveState.__rerenderWorkbench({ reason: `bulk-authorise-queue-selection-restore-${reason}`, force: true });
+            }
+            const settledState = liveBulkAuthoriseState();
+            const settledController = controllerFor(settledState);
+            if (settledController?.isLive?.()) settledController.settle(`queue-selection-restore:${reason}`);
+          } catch {}
+        }, delay);
+      }
       return true;
     }
 
@@ -667,6 +897,10 @@
         win.modalCtx?.__bulk_authorise_owner_identity
       );
       const activeIdentity = rowIdentityOf(state);
+      const previousRows = Array.isArray(pane.queue_rows) ? pane.queue_rows.filter(Boolean) : [];
+      const previousId = trim(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id || pane.__remembered_queue_id);
+      let previousIndex = previousRows.findIndex((item) => trim(item?.id || item?.queue_id) === previousId);
+      if (previousIndex < 0) previousIndex = Math.max(0, Number(pane.__remembered_queue_index || 0) || 0);
 
       const work = (async () => {
         try {
@@ -678,7 +912,7 @@
             active_identity: activeIdentity,
             queue_scope: queueScope,
             status: trim(queueScope.split(':')[1] || 'QUEUED').toUpperCase() || 'QUEUED',
-            preserve_last_viewed_queue: false,
+            preserve_last_viewed_queue: true,
             suppressWhileBusy: true,
             force: true,
             allowWithoutActiveIdentity: true,
@@ -686,10 +920,14 @@
           });
           if (!this.isLive() || state.evidence_pane_state !== pane) return false;
           const rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
-          const activeId = trim(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id);
-          const active = rows.find((item) => trim(item?.id || item?.queue_id) === activeId) || rows[0] || null;
+          const active = rows.find((item) => trim(item?.id || item?.queue_id) === previousId)
+            || rows[Math.min(previousIndex, Math.max(0, rows.length - 1))]
+            || null;
           pane.active_queue_id = active ? (trim(active.id || active.queue_id) || null) : null;
           pane.active_queue_item = active ? clone(active) : null;
+          pane.__remembered_queue_id = pane.active_queue_id;
+          pane.__remembered_queue_index = active ? Math.max(0, rows.indexOf(active)) : 0;
+          if (active) this.rememberQueueSelection(`queue-refresh:${reason}`);
           return pane.__queue_loaded === true;
         } catch (error) {
           if (this.isLive() && state.evidence_pane_state === pane) {
@@ -815,6 +1053,9 @@
       pane.__queue_manual_override_scope = trim(pane.__queue_scope || pane.__queue_loaded_scope || 'global:QUEUED') || 'global:QUEUED';
       pane.active_queue_id = nextId;
       pane.active_queue_item = clone(next);
+      pane.__remembered_queue_id = nextId;
+      pane.__remembered_queue_index = nextIndex;
+      this.rememberQueueSelection('queue-navigation');
       pane.active_pdf_page = 1;
       pane.__preview_target_key = target;
       pane.__preview_load_requested_target_key = target;
@@ -842,6 +1083,21 @@
         return !!(activeId && id === activeId && (!activeFileKey || evidenceFileKeyOf(item) === activeFileKey));
       });
       if (index < 0) index = rows.findIndex((item) => trim(item?.id || item?.queue_id) === activeId);
+      if (index < 0 && rows.length) {
+        const restored = this.restoreRememberedQueueSelection('queue-control-stamp');
+        if (restored.restored) {
+          index = restored.index;
+          if (restored.changed) this.scheduleQueueSelectionStabilization('queue-control-stamp');
+        }
+      }
+      if (index < 0 && rows.length) {
+        index = Math.min(Math.max(0, Number(pane.__remembered_queue_index || 0) || 0), rows.length - 1);
+        const active = rows[index];
+        pane.active_queue_id = trim(active?.id || active?.queue_id) || null;
+        pane.active_queue_item = active ? clone(active) : null;
+        pane.__remembered_queue_index = index;
+        if (active) this.rememberQueueSelection('queue-control-default');
+      }
       const previous = doc?.getElementById?.('bpQueuePrevBtn');
       const next = doc?.getElementById?.('bpQueueNextBtn');
       if (previous) previous.disabled = !(index > 0);
@@ -862,7 +1118,7 @@
         const authorised = typeof policy.authorised === 'boolean'
           ? policy.authorised
           : isAuthorisedState(this.state);
-        const realEvidenceId = trim(item?.evidence_id || item?.timesheet_evidence_id);
+        const realEvidenceId = persistedEvidenceIdOf(item);
         const synthetic = isSyntheticEvidence(item) || !realEvidenceId;
 
         if (authorised && sameKindCount <= 1) {
@@ -1018,7 +1274,7 @@
         remove.setAttribute('aria-label', 'Remove or replace attached evidence');
         remove.setAttribute('title', 'Remove or replace attached evidence');
         remove.setAttribute('data-attached-id', evidenceIdOf(item));
-        remove.setAttribute('data-evidence-id', trim(item?.evidence_id || item?.timesheet_evidence_id));
+        remove.setAttribute('data-evidence-id', persistedEvidenceIdOf(item));
         remove.setAttribute('data-storage-key', evidenceFileKeyOf(item));
         remove.setAttribute('data-file-key', evidenceFileKeyOf(item));
         remove.setAttribute('data-attached-selection-key', selectionKey(item));
@@ -1118,6 +1374,7 @@
         };
         const verified = this.reusableVerifiedBadgeState(row);
         const current = verified || initial;
+        row.__evidence_badges_verified = !!verified;
         this.datasetBadgeTruth.set(key, clone(current));
         this.datasetInitialBadgeTruth.set(key, clone(initial));
         if (verified) {
@@ -1160,6 +1417,8 @@
         row.evidence_badges = clone(badgeState.evidence_badges);
         row.has_any_evidence = badgeState.has_any_evidence === true;
         row.attached_evidence_count = Number(badgeState.attached_evidence_count || 0) || 0;
+        if (options.verified === true) row.__evidence_badges_verified = true;
+        else if (options.verified === false) row.__evidence_badges_verified = false;
         if (options.pending === true) {
           row.primary_artifact_id = null;
           row.primary_artifact_kind = null;
@@ -1244,9 +1503,16 @@
         const evidenceRows = this.extractEvidencePayload(payload);
         const badgeState = badgeStateFromPayload(payload, evidenceRows);
         this.datasetBadgeTruth.set(identity, clone(badgeState));
-        this.rememberVerifiedBadgeState(identity, badgeState, payload?.row || payload?.data_row || row);
+        // Cache against the canonical dataset row signature. Evidence-profile
+        // context payloads can carry a different layer signature; keying the
+        // cache to that signature causes a harmless shell rerender to discard
+        // the successfully verified badge truth for the unchanged list row.
+        this.rememberVerifiedBadgeState(identity, badgeState, row);
         this.datasetPendingBadgeIdentities.delete(identity);
-        this.writeDatasetBadgeState(identity, badgeState, { restoreArtifactHints: evidenceRows.length > 0 });
+        this.writeDatasetBadgeState(identity, badgeState, {
+          restoreArtifactHints: evidenceRows.length > 0,
+          verified: true
+        });
         return true;
       } catch {
         return false;
@@ -1280,7 +1546,7 @@
           rendered = true;
           if (datasetRef === this.datasetRef && epoch === this.badgeHydrationEpoch) {
             this.settle(`dataset-badge-hydration:${reason}`);
-            const liveController = controllerFor(win.modalCtx && win.modalCtx.bulkAuthoriseState) || this;
+            const liveController = controllerFor(liveBulkAuthoriseState()) || this;
             liveController.stampVisibleRowBadges();
           }
         }
@@ -1300,19 +1566,49 @@
       if (!datasetRef) return Promise.resolve({ applied: false, reason: 'no-dataset' });
       if (this.badgeHydrationDatasetRef === datasetRef && this.badgeHydrationPromise) return this.badgeHydrationPromise;
       if (this.badgeHydrationDatasetRef === datasetRef && this.state.__bulk_authorise_badge_hydration_complete === true) {
-        return Promise.resolve({ applied: true, cached: true });
+        const currentRows = this.datasetRows().filter((row) => trim(row?.current_timesheet_id || row?.timesheet_id || row?.requested_timesheet_id));
+        let allCurrentRowsVerified = currentRows.length > 0;
+        for (const row of currentRows) {
+          if (row.__evidence_badges_verified === true) continue;
+          const identity = rowKeyOf(row);
+          const verified = this.reusableVerifiedBadgeState(row);
+          if (!verified) {
+            allCurrentRowsVerified = false;
+            break;
+          }
+          this.datasetBadgeTruth.set(identity, clone(verified));
+          this.writeDatasetBadgeState(identity, verified, { restoreArtifactHints: true, verified: true });
+        }
+        if (allCurrentRowsVerified) return Promise.resolve({ applied: true, cached: true, reapplied: true });
       }
 
       const allRows = this.datasetRows().filter((row) => trim(row?.current_timesheet_id || row?.timesheet_id || row?.requested_timesheet_id));
       if (!allRows.length) return Promise.resolve({ applied: false, reason: 'no-timesheet-rows' });
-      const rows = allRows.filter((row) => !this.reusableVerifiedBadgeState(row));
+      const rows = allRows.filter((row) => {
+        const identity = rowKeyOf(row);
+        const verified = this.reusableVerifiedBadgeState(row);
+        if (!verified) {
+          row.__evidence_badges_verified = false;
+          return true;
+        }
+        this.datasetBadgeTruth.set(identity, clone(verified));
+        this.writeDatasetBadgeState(identity, verified, { restoreArtifactHints: true, verified: true });
+        return false;
+      });
       if (!rows.length) {
         this.badgeHydrationDatasetRef = datasetRef;
         this.state.__bulk_authorise_badge_hydration_pending = false;
         this.state.__bulk_authorise_badge_hydration_complete = true;
         this.state.__bulk_authorise_badge_hydration_succeeded = 0;
         this.state.__bulk_authorise_badge_hydration_failed = 0;
-        return Promise.resolve({ applied: true, cached: true, succeeded: 0, failed: 0 });
+        const settleCached = async () => {
+          if (typeof win.rerenderBulkAuthoriseWorkbench === 'function' && this.isLive()) {
+            await win.rerenderBulkAuthoriseWorkbench(this.state, '[TS][BULK-AUTH][EVIDENCE-BADGES:cached-complete]');
+            this.stampVisibleRowBadges();
+          }
+          return { applied: true, cached: true, succeeded: 0, failed: 0 };
+        };
+        return settleCached();
       }
       const epoch = ++this.badgeHydrationEpoch;
       this.badgeHydrationDatasetRef = datasetRef;
@@ -1340,11 +1636,10 @@
               const initial = clone(this.datasetInitialBadgeTruth.get(identity) || null);
               if (initial) {
                 this.datasetBadgeTruth.set(identity, clone(initial));
-                this.writeDatasetBadgeState(identity, initial, { restoreArtifactHints: true });
+                this.writeDatasetBadgeState(identity, initial, { restoreArtifactHints: true, verified: false });
               }
               this.datasetPendingBadgeIdentities.delete(identity);
             }
-            void this.scheduleDatasetBadgeHydrationRender(datasetRef, epoch, ok ? 'row-verified' : 'row-failed');
           }
         };
         await Promise.all(Array.from({ length: Math.min(2, rows.length) }, () => worker()));
@@ -1503,8 +1798,6 @@
       const activeTab = trim(pane.active_tab || 'attached').toLowerCase() === 'queue' ? 'queue' : 'attached';
       if (activeTab === 'attached') {
         pane.active_tab = 'attached';
-        pane.active_queue_id = null;
-        pane.active_queue_item = null;
         pane.__queue_manual_override = false;
         const nextSelection = selectionKey(activeItem);
         const currentTarget = trim(pane.__preview_target_key);
@@ -1547,6 +1840,31 @@
       const rows = evidence.authoritative
         ? evidence.rows
         : (this.rowsByIdentity.get(identity) || []);
+      // Bulk Authorise can inherit the shared preview owner's last active item
+      // while the newly selected row's evidence context is still loading.  Do
+      // not let that row-external item participate in the shared renderer: it
+      // can create a synthetic thumbnail, trigger another shell render and
+      // repeatedly supersede the dataset-wide badge verification.  Once this
+      // row has authoritative evidence (or a row-owned cache), applyAttachedRows
+      // below installs the canonical selection normally.
+      if (!evidence.authoritative && rows.length === 0) {
+        const pane = this.state.evidence_pane_state && typeof this.state.evidence_pane_state === 'object'
+          ? this.state.evidence_pane_state
+          : (this.state.evidence_pane_state = {});
+        pane.attached_rows = [];
+        pane.attached_all_rows = [];
+        pane.active_attached_id = null;
+        pane.active_attached_item = null;
+        if (trim(pane.active_tab || 'attached').toLowerCase() === 'attached') {
+          pane.__preview_target_key = '';
+          pane.__preview_load_requested_target_key = '';
+          pane.__preview_attached_request_key = '';
+          pane.__active_attached_preview_target = '';
+          pane.__preview_signed_url = '';
+          pane.__preview_error = '';
+          pane.__preview_loading = false;
+        }
+      }
       this.clearFalseTimesheetFallback(rows);
       this.applyEvidenceBadges(rows, evidence.authoritative);
       const applied = this.applyAttachedRows(rows, evidence.authoritative);
@@ -1617,7 +1935,20 @@
         const identity = trim(rowElement?.getAttribute?.('data-row-key'));
         const row = rowsByIdentity.get(identity) || null;
         if (!row) continue;
-        const truth = badgeStateFromPayload(row, []);
+        // A shell rerender can replace the row objects after the hydration
+        // wrapper's pre-render pass. Reapply only signature-matched verified
+        // truth at the final DOM boundary so the fresh row cannot suppress a
+        // badge that was already confirmed by the evidence context request.
+        if (row.__evidence_badges_verified !== true) {
+          const verified = this.reusableVerifiedBadgeState(row);
+          if (verified) {
+            this.datasetBadgeTruth.set(identity, clone(verified));
+            this.writeDatasetBadgeState(identity, verified, { restoreArtifactHints: true, verified: true });
+          }
+        }
+        const badgeTruthReady = this.state.__bulk_authorise_badge_hydration_complete === true
+          && row.__evidence_badges_verified === true;
+        const truth = badgeTruthReady ? badgeStateFromPayload(row, []) : null;
         const positive = new Set(positiveBadgeKinds(truth?.evidence_badges));
         if (!positive.size && truth?.has_any_evidence === true && Number(truth?.attached_evidence_count || 0) > 0) positive.add('EVIDENCE');
         const desiredKinds = order.filter((kind) => positive.has(kind));
@@ -1664,7 +1995,7 @@
     stamp() {
       const root = doc && doc.getElementById('bulkAuthoriseWorkbenchRoot');
       if (!root) return;
-      const liveController = controllerFor(win.modalCtx && win.modalCtx.bulkAuthoriseState) || this;
+      const liveController = controllerFor(liveBulkAuthoriseState()) || this;
       root.dataset.bulkAuthoriseEvidenceController = 'v19';
       if (liveController.isTimesheets()) {
         liveController.sanitize('stamp-live-boundary');
@@ -1683,7 +2014,7 @@
           win.setTimeout(() => {
             root.__bulkAuthoriseEvidenceObserverPending = false;
             if (doc.getElementById('bulkAuthoriseWorkbenchRoot') !== root) return;
-            const currentState = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+            const currentState = liveBulkAuthoriseState();
             const currentController = controllerFor(currentState);
             if (!currentController || !currentController.isLive()) return;
 
@@ -1773,8 +2104,6 @@
       pane.active_tab = 'attached';
       pane.__attached_manual_override = true;
       pane.__queue_manual_override = false;
-      pane.active_queue_id = null;
-      pane.active_queue_item = null;
       pane.active_attached_id = evidenceIdOf(chosen);
       pane.active_attached_item = clone(chosen);
       pane.active_attached_pdf_page = 1;
@@ -1859,7 +2188,7 @@
           button.__bulkAuthoriseEvidencePointerBound = true;
           button.addEventListener('pointerdown', (event) => {
             if (event?.target?.closest?.('[data-bp-preview-attached-remove="1"]')) return;
-            const currentState = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+            const currentState = liveBulkAuthoriseState();
             const currentController = controllerFor(currentState);
             if (!currentController || !currentController.isTimesheets()) return;
             event.preventDefault();
@@ -1882,7 +2211,7 @@
         if (!navButton || navButton.__bulkAuthoriseAttachedNavigationBound === true) continue;
         navButton.__bulkAuthoriseAttachedNavigationBound = true;
         navButton.addEventListener('click', (event) => {
-          const currentState = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+          const currentState = liveBulkAuthoriseState();
           const currentController = controllerFor(currentState);
           const currentPane = currentState && currentState.evidence_pane_state ? currentState.evidence_pane_state : {};
           const queueTab = doc.getElementById('bulkProcessEvidenceTabQueue');
@@ -1908,7 +2237,7 @@
         if (queueTab.__bulkAuthoriseEvidencePointerBound !== true) {
           queueTab.__bulkAuthoriseEvidencePointerBound = true;
           queueTab.addEventListener('pointerdown', () => {
-            const currentState = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+            const currentState = liveBulkAuthoriseState();
             const currentController = controllerFor(currentState);
             if (currentController && currentController.isTimesheets()) currentController.rememberAttachedSelection();
           }, true);
@@ -1918,7 +2247,7 @@
         if (attachedTab.__bulkAuthoriseEvidencePointerBound !== true) {
           attachedTab.__bulkAuthoriseEvidencePointerBound = true;
           attachedTab.addEventListener('pointerdown', () => {
-            const currentState = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+            const currentState = liveBulkAuthoriseState();
             const currentController = controllerFor(currentState);
             if (!currentController || !currentController.isTimesheets()) return;
             currentController.rememberAttachedSelection();
@@ -1970,7 +2299,7 @@
       retry.style.marginTop = '8px';
       retry.textContent = 'Retry preview';
       retry.addEventListener('pointerdown', (event) => {
-        const currentState = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+        const currentState = liveBulkAuthoriseState();
         const currentController = controllerFor(currentState);
         if (!currentController || !currentController.isTimesheets()) return;
         event.preventDefault();
@@ -2100,7 +2429,7 @@
             same_target: trim(commitPane.__preview_target_key) === target
           };
           if (!guard.live || !guard.same_identity || !guard.attached_tab || !guard.same_target) {
-            const successorState = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+            const successorState = liveBulkAuthoriseState();
             const successorController = controllerFor(successorState);
             const successorPane = successorState?.evidence_pane_state || {};
             const successorGuard = {
@@ -2217,7 +2546,9 @@
 
   if (typeof legacy.open === 'function') {
     win.openBulkAuthoriseWorkbench = async function openBulkAuthoriseWorkbenchWithEvidenceController(...args) {
+      verifiedBadgeTruthForOpenModal.clear();
       const state = await legacy.open.apply(this, args);
+      if (state && typeof state === 'object') activeBulkAuthoriseState = state;
       const controller = controllerFor(state);
       if (controller) {
         controller.settle('after-open');
@@ -2234,6 +2565,9 @@
 
   if (typeof legacy.renderShell === 'function') {
     win.renderBulkAuthoriseShell = function renderBulkAuthoriseShellWithEvidenceController(state, ...args) {
+      if (state && typeof state === 'object' && doc?.getElementById?.('bulkAuthoriseWorkbenchRoot')) {
+        activeBulkAuthoriseState = state;
+      }
       const controller = controllerFor(state);
       if (controller) {
         controller.installStateBoundary();
@@ -2259,7 +2593,7 @@
   if (typeof legacy.reconcileEvidence === 'function') {
     win.reconcileBulkProcessEvidenceStateAfterContextRefresh = function reconcileEvidenceWithBulkAuthoriseIsolation(state, ...args) {
       const result = legacy.reconcileEvidence.call(this, state, ...args);
-      if (state && win.modalCtx?.bulkAuthoriseState === state && classificationOf(state) === 'TIMESHEETS') {
+      if (state && liveBulkAuthoriseState() === state && classificationOf(state) === 'TIMESHEETS') {
         const controller = controllerFor(state);
         if (controller) controller.sanitize('after-legacy-reconcile');
       }
@@ -2350,21 +2684,38 @@
     const target = event.target;
     if (!target || typeof target.closest !== 'function') return;
     const root = target.closest('#bulkAuthoriseWorkbenchRoot');
-    const state = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+    const state = liveBulkAuthoriseState();
     const controller = controllerFor(state);
     if (!root || !controller || !controller.isTimesheets()) return;
     const queueNext = target.closest('#bpQueueNextBtn');
     const queuePrevious = target.closest('#bpQueuePrevBtn');
-    if ((queueNext || queuePrevious) && trim(state?.evidence_pane_state?.active_tab).toLowerCase() === 'queue') {
+    const queueTab = doc?.getElementById?.('bulkProcessEvidenceTabQueue');
+    const queueIsVisiblySelected = !!(
+      queueTab && (
+        trim(queueTab.getAttribute?.('aria-selected')).toLowerCase() === 'true' ||
+        queueTab.classList?.contains?.('is-active') ||
+        queueTab.classList?.contains?.('active')
+      )
+    );
+    if ((queueNext || queuePrevious) && (
+      trim(state?.evidence_pane_state?.active_tab).toLowerCase() === 'queue' ||
+      queueIsVisiblySelected
+    )) {
       if (event.type === 'click') {
         event.preventDefault();
         event.stopImmediatePropagation();
+        const pane = state.evidence_pane_state || (state.evidence_pane_state = {});
+        pane.active_tab = 'queue';
         void controller.navigateQueue(queuePrevious ? -1 : 1);
       }
       return;
     }
     const mutationControl = target.closest('[data-bp-preview-attached-remove="1"],#bpQueueAttachBtn,#bpUploadEvidenceBtn');
     if (mutationControl) {
+      if (target.closest('#bpQueueAttachBtn') && queueIsVisiblySelected) {
+        const pane = state.evidence_pane_state || (state.evidence_pane_state = {});
+        pane.active_tab = 'queue';
+      }
       if (event.type === 'pointerup') deferMutationControlEvent(event, controller);
       else if (event.type === 'click' && controller.deferredMutationControl === mutationControl) {
         event.preventDefault();
@@ -2376,10 +2727,17 @@
     const retry = target.closest('[data-bulk-authorise-preview-retry="1"]');
     const thumbnail = target.closest('[data-bp-preview-attached-thumb="1"]');
     if (target.closest('#bulkProcessEvidenceTabQueue')) {
+      if (trim(state?.evidence_pane_state?.active_tab).toLowerCase() === 'queue') {
+        controller.rememberQueueSelection('queue-tab-pointerdown');
+      }
       controller.rememberAttachedSelection();
+      controller.scheduleQueueSelectionStabilization('queue-tab-pointerdown');
       return;
     }
     if (target.closest('#bulkProcessEvidenceTabAttached')) {
+      if (trim(state?.evidence_pane_state?.active_tab).toLowerCase() === 'queue') {
+        controller.rememberQueueSelection('attached-tab-pointerdown');
+      }
       controller.rememberAttachedSelection();
       controller.scheduleAttachedReturn();
       return;
@@ -2402,7 +2760,7 @@
       const target = event.target;
       if (!target || typeof target.closest !== 'function') return;
       const root = target.closest('#bulkAuthoriseWorkbenchRoot');
-      const state = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+      const state = liveBulkAuthoriseState();
       const controller = controllerFor(state);
       if (!root || !controller || !controller.isTimesheets()) return;
       if (target.closest('[data-bp-preview-attached-remove="1"]')) handleMutationControlEvent(event, controller);
@@ -2411,7 +2769,7 @@
       const target = event.target;
       if (!target || typeof target.closest !== 'function') return;
       const root = target.closest('#bulkAuthoriseWorkbenchRoot');
-      const state = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+      const state = liveBulkAuthoriseState();
       const controller = controllerFor(state);
       if (!root || !controller || !controller.isTimesheets()) return;
 
@@ -2434,11 +2792,18 @@
       }
 
       if (target.closest('#bulkProcessEvidenceTabQueue')) {
+        if (trim(state?.evidence_pane_state?.active_tab).toLowerCase() === 'queue') {
+          controller.rememberQueueSelection('queue-tab-click');
+        }
         controller.rememberAttachedSelection();
         controller.scheduleQueueRefreshRender('document-queue-tab-click');
+        controller.scheduleQueueSelectionStabilization('document-queue-tab-click');
         return;
       }
       if (target.closest('#bulkProcessEvidenceTabAttached')) {
+        if (trim(state?.evidence_pane_state?.active_tab).toLowerCase() === 'queue') {
+          controller.rememberQueueSelection('attached-tab-click');
+        }
         controller.rememberAttachedSelection();
         controller.sanitize('return-attached-tab');
       }
@@ -2448,7 +2813,7 @@
   if (typeof win.setInterval === 'function' && !win.__bulkAuthoriseEvidenceWatchdog) {
     win.__bulkAuthoriseEvidenceWatchdog = win.setInterval(() => {
       const root = doc && doc.getElementById('bulkAuthoriseWorkbenchRoot');
-      const state = win.modalCtx && win.modalCtx.bulkAuthoriseState;
+      const state = liveBulkAuthoriseState();
       if (!root || !state || classificationOf(state) !== 'TIMESHEETS') return;
       const controller = controllerFor(state);
       if (!controller || !controller.isLive()) return;
