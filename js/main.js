@@ -24358,18 +24358,6 @@ function renderBankingNavAlertPopover(attentionState) {
     )
   );
   const isActiveAlert = (alert) => !!alert && typeof alert === 'object' && alert.is_active !== false && alert.active !== false && !isAcknowledged(alert);
-  const isSuccessOnlyAlert = (alert) => {
-    const payload = (alert?.payload_json && typeof alert.payload_json === 'object' && !Array.isArray(alert.payload_json))
-      ? alert.payload_json
-      : ((alert?.alert_payload_json && typeof alert.alert_payload_json === 'object' && !Array.isArray(alert.alert_payload_json)) ? alert.alert_payload_json : {});
-    const statusText = toUpper(alert?.current_status || alert?.status || alert?.payment_lifecycle_state || payload.current_status || payload.status || payload.payment_lifecycle_state || '');
-    return alert?.alert_candidate_is_success_only === true ||
-      alert?.success_only === true ||
-      alert?.is_success_only === true ||
-      payload.alert_candidate_is_success_only === true ||
-      payload.success_only === true ||
-      ['SUCCESS', 'COMPLETED', 'COMPLETE', 'PAID', 'SETTLED'].includes(statusText);
-  };
   const alertSummary = (state.alertSummary && typeof state.alertSummary === 'object' && !Array.isArray(state.alertSummary)) ? state.alertSummary : null;
   const bankingSummary = (state.banking_alert_summary && typeof state.banking_alert_summary === 'object' && !Array.isArray(state.banking_alert_summary)) ? state.banking_alert_summary : null;
   const summary = summaryHasRows(alertSummary)
@@ -24392,7 +24380,7 @@ function renderBankingNavAlertPopover(attentionState) {
     ?? rawAlerts.length
   );
   const totalUnacknowledged = Number.isFinite(countCandidate) ? Math.max(0, Math.trunc(countCandidate)) : rawAlerts.filter(isActiveAlert).length;
-  const alerts = totalUnacknowledged > 0 ? rawAlerts.filter((alert) => isActiveAlert(alert) && !isSuccessOnlyAlert(alert)) : [];
+  const alerts = totalUnacknowledged > 0 ? rawAlerts.filter((alert) => isActiveAlert(alert)) : [];
   const detailsLoading = totalUnacknowledged > 0 && alerts.length < 1 && (
     state.detailsLoading === true ||
     state.details_loading === true ||
@@ -24456,7 +24444,9 @@ function renderBankingNavAlertPopover(attentionState) {
       'candidate_count',
       'candidateCount',
       'transfer_count',
-      'transferCount'
+      'transferCount',
+      'individual_payment_count',
+      'individualPaymentCount'
     );
     const completedCount = countValue('progress_completed', 'progressCompleted', 'completed_count', 'completedCount', 'completed');
     const totalCount = countValue('progress_total', 'progressTotal', 'total_count', 'totalCount', 'total');
@@ -24464,7 +24454,7 @@ function renderBankingNavAlertPopover(attentionState) {
     const provider = firstNonBlank(alert.provider, alert.rail_provider, payload.rail_provider, payload.provider);
     const railEnv = firstNonBlank(alert.env, alert.rail_env, payload.rail_env, payload.env);
     const providerLine = [provider, railEnv].filter(Boolean).join(' / ');
-    const timestamp = firstNonBlank(alert.event_time_utc, alert.created_at_utc, payload.event_time_utc, payload.created_at_utc);
+    const timestamp = firstNonBlank(alert.sort_at_utc, alert.event_time_utc, alert.created_at_utc, payload.settled_at_utc, payload.scheduled_at_utc, payload.event_time_utc, payload.created_at_utc);
     const formattedTimestamp = formatDateTime(timestamp);
     const isRetryRunning = kind === 'PROVIDER_OUTAGE_RETRY_RUNNING' ||
       kind === 'RETRY_UNSENT_PAYMENTS_RUNNING' ||
@@ -24514,7 +24504,7 @@ function renderBankingNavAlertPopover(attentionState) {
       <div class="banking-nav-alert-popover-row" data-alert-fingerprint="${enc(fingerprint)}" style="padding:10px 0;border-top:${index === 0 ? '0' : '1px solid var(--line,#e5e7eb)'};">
         <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
           <div style="min-width:0;flex:1;">
-            <div style="font-weight:800;color:${usesCriticalVisual ? '#991b1b' : '#111827'};font-size:13px;">${enc(finalTitle)}</div>
+            <div style="font-weight:800;color:${usesCriticalVisual ? '#fecaca' : 'var(--text,#f8fafc)'};font-size:13px;">${enc(finalTitle)}</div>
             ${batchReference ? `<div class="mini" style="margin-top:2px;opacity:.86;">Pay batch <span class="mono">${enc(batchReference)}</span></div>` : ''}
             ${description ? `<div class="mini" style="margin-top:5px;white-space:normal;">${enc(description)}</div>` : ''}
             ${providerLine ? `<div class="mini" style="margin-top:4px;opacity:.86;">Provider/env: <span class="mono">${enc(providerLine)}</span></div>` : ''}
@@ -24557,7 +24547,7 @@ function renderBankingNavAlertPopover(attentionState) {
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;">
         <div>
           <div style="font-weight:800;font-size:14px;">Banking alerts</div>
-          <div class="mini" style="opacity:.82;">${enc(String(totalUnacknowledged))} urgent alert${totalUnacknowledged === 1 ? '' : 's'} need your attention</div>
+          <div class="mini" style="opacity:.82;">${enc(String(totalUnacknowledged))} unread Banking alert${totalUnacknowledged === 1 ? '' : 's'}</div>
         </div>
         <button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:close" aria-label="Close Banking alerts">×</button>
       </div>
@@ -24597,14 +24587,6 @@ function applyAlertSummaryToState(responsePayload) {
     alert.visible_for_current_user === false ||
     alert.preference_visible === false
   );
-  const isSuccessOnlyAlert = (alert) => {
-    if (!isPlainObject(alert)) return false;
-    const statusText = toText(alert.current_status || alert.status || alert.payment_lifecycle_state || alert.normalised_state || alert.normalized_state).toUpperCase();
-    return alert.alert_candidate_is_success_only === true ||
-      alert.success_only === true ||
-      alert.is_success_only === true ||
-      ['SUCCESS', 'COMPLETED', 'PAID', 'PAID_OR_SETTLED', 'SETTLED'].includes(statusText);
-  };
   const getSuppressionMap = () => {
     if (typeof window === 'undefined') return {};
     if (!window.__bankingLocallyAcknowledgedFingerprints || typeof window.__bankingLocallyAcknowledgedFingerprints !== 'object') {
@@ -24869,7 +24851,7 @@ function applyAlertSummaryToState(responsePayload) {
       alert.banking_alert_acknowledged_for_user === true ||
       alert.alert_acknowledged_for_current_user === true
     );
-    if (acknowledged || isPreferenceHiddenAlert(alert) || isSuccessOnlyAlert(alert)) {
+    if (acknowledged || isPreferenceHiddenAlert(alert)) {
       removedFilteredAlertCount += 1;
       continue;
     }
@@ -25051,7 +25033,7 @@ function applyAlertSummaryToState(responsePayload) {
       const fingerprint = getFingerprint(alert);
       if (!fingerprint) return false;
       if (suppressionMap[fingerprint]) return false;
-      if (isPreferenceHiddenAlert(alert) || isSuccessOnlyAlert(alert)) return false;
+      if (isPreferenceHiddenAlert(alert)) return false;
       if (alert.acknowledged_for_current_user === true || alert.banking_alert_acknowledged_for_user === true || alert.alert_acknowledged_for_current_user === true) return false;
       return true;
     });
@@ -62586,6 +62568,7 @@ function renderBankingPaymentSettingsTab() {
       .map((value) => String(value || '').trim().toUpperCase())
       .filter(Boolean)
   );
+  const successfulPaymentAlertsEnabled = alertPreferenceState.include_success_alerts !== false && currentAlertMode !== 'NO_BANKING_PAY_ALERTS';
   const adminRecipientRole = String(s.payment_return_admin_recipient_role || 'ADMIN').trim() || 'ADMIN';
   const adminNoticeQuietMinutesRaw = Number(s.payment_return_admin_notice_quiet_minutes);
   const adminNoticeQuietMinutes = Number.isFinite(adminNoticeQuietMinutesRaw) ? Math.trunc(adminNoticeQuietMinutesRaw) : 10;
@@ -62649,7 +62632,7 @@ function renderBankingPaymentSettingsTab() {
       <div class="row">
         <label>Banking Alert preferences</label>
         <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-          <div class="mini" style="opacity:.85;">Choose which action-required Banking Pay alerts are shown in your Banking button. Completed successful payments do not create alerts.</div>
+          <div class="mini" style="opacity:.85;">Choose which Banking Pay alerts are shown in your Banking button, including future scheduling and completed settlement.</div>
           <label class="inline mini"><input type="radio" name="bankingAlertPreferenceMode" value="ALL_ACTION_REQUIRED" data-alert-preference-key="mode" ${currentAlertMode === 'ALL_ACTION_REQUIRED' ? 'checked' : ''} /> All action-required Banking Pay alerts</label>
           <label class="inline mini"><input type="radio" name="bankingAlertPreferenceMode" value="SELECTED_FAILURE_REASONS" data-alert-preference-key="mode" ${currentAlertMode === 'SELECTED_FAILURE_REASONS' ? 'checked' : ''} /> Only selected failure reasons</label>
           <label class="inline mini"><input type="radio" name="bankingAlertPreferenceMode" value="NO_BANKING_PAY_ALERTS" data-alert-preference-key="mode" ${currentAlertMode === 'NO_BANKING_PAY_ALERTS' ? 'checked' : ''} /> No Banking Pay alerts</label>
@@ -62665,11 +62648,13 @@ function renderBankingPaymentSettingsTab() {
               <label class="inline mini"><input type="checkbox" data-alert-preference-info-kind="${enc(key)}" ${enabledInfoKinds.size === 0 || enabledInfoKinds.has(key) ? 'checked' : ''} /> ${enc(label)}</label>
             `).join('')}
           </div>
+          <div class="mini" style="font-weight:700;opacity:.9;margin-top:4px;">Successful payments</div>
+          <label class="inline mini"><input type="checkbox" data-alert-preference-success-alerts="1" ${successfulPaymentAlertsEnabled ? 'checked' : ''} /> Future batch scheduled and payment settled alerts</label>
           <div style="display:flex;justify-content:flex-end;">
             <button
               type="button"
               class="btn btn-sm btn-outline"
-              onclick="(async()=>{try{const root=document.getElementById('bankingPaymentSettingsTab')||document;const mode=String(root.querySelector('input[name=&quot;bankingAlertPreferenceMode&quot;]:checked')?.value||'ALL_ACTION_REQUIRED').trim().toUpperCase();const failure_reason_groups=Array.from(root.querySelectorAll('[data-alert-preference-failure-reason]')).filter(el=>el.checked).map(el=>String(el.getAttribute('data-alert-preference-failure-reason')||'').trim().toUpperCase()).filter(Boolean);const informational_alert_kinds=Array.from(root.querySelectorAll('[data-alert-preference-info-kind]')).filter(el=>el.checked).map(el=>String(el.getAttribute('data-alert-preference-info-kind')||'').trim().toUpperCase()).filter(Boolean);const patch={mode,failure_reason_groups,informational_alert_kinds};const fn=window.bankingAlertPreferencesSave||window.bankingAlertPreferencesUpdate||window.bankingAlertPreferencesSet;if(typeof fn!=='function'){alert('Banking Alert preferences save is not available.');return;}const res=await fn(patch);if(res&&res.ok===false){alert(String(res.error||res.message||'Save failed'));return;}if(typeof window.bankingAlertPreferencesFetch==='function')await window.bankingAlertPreferencesFetch();if(typeof window.refreshBankingNavAttentionFromCachedRows==='function')window.refreshBankingNavAttentionFromCachedRows();if(typeof window.__toast==='function')window.__toast('Banking Alert preferences saved');}catch(e){alert(String(e?.message||'Save failed'));}})();"
+              onclick="(async()=>{try{const root=document.getElementById('bankingPaymentSettingsTab')||document;const mode=String(root.querySelector('input[name=&quot;bankingAlertPreferenceMode&quot;]:checked')?.value||'ALL_ACTION_REQUIRED').trim().toUpperCase();const failure_reason_groups=Array.from(root.querySelectorAll('[data-alert-preference-failure-reason]')).filter(el=>el.checked).map(el=>String(el.getAttribute('data-alert-preference-failure-reason')||'').trim().toUpperCase()).filter(Boolean);const informational_alert_kinds=Array.from(root.querySelectorAll('[data-alert-preference-info-kind]')).filter(el=>el.checked).map(el=>String(el.getAttribute('data-alert-preference-info-kind')||'').trim().toUpperCase()).filter(Boolean);const include_success_alerts=mode!=='NO_BANKING_PAY_ALERTS'&&root.querySelector('[data-alert-preference-success-alerts]')?.checked!==false;const patch={mode,failure_reason_groups,informational_alert_kinds,include_success_alerts};const fn=window.bankingAlertPreferencesSave||window.bankingAlertPreferencesUpdate||window.bankingAlertPreferencesSet;if(typeof fn!=='function'){alert('Banking Alert preferences save is not available.');return;}const res=await fn(patch);if(res&&res.ok===false){alert(String(res.error||res.message||'Save failed'));return;}if(typeof window.bankingAlertPreferencesFetch==='function')await window.bankingAlertPreferencesFetch();if(typeof window.refreshBankingNavAttentionFromCachedRows==='function')window.refreshBankingNavAttentionFromCachedRows();if(typeof window.__toast==='function')window.__toast('Banking Alert preferences saved');}catch(e){alert(String(e?.message||'Save failed'));}})();"
             >Save Alert preferences</button>
           </div>
         </div>
@@ -86874,6 +86859,7 @@ function renderBankingAlertPreferencesPanel() {
   const informationalSet = new Set(informationalValues);
   const failureReasonsDefaultChecked = currentMode !== 'SELECTED_FAILURE_REASONS' && failureReasonSet.size === 0;
   const informationalDefaultChecked = informationalSet.size === 0 && prefs.include_progress_alerts !== false && prefs.include_informational_alerts !== false;
+  const includeSuccessAlerts = prefs.include_success_alerts !== false && currentMode !== 'NO_BANKING_PAY_ALERTS';
 
   const snoozedUntilRaw = trimStr(prefs.snoozed_until_utc || prefs.snoozedUntilUtc || prefs.snooze_until_utc || prefs.snoozeUntilUtc || '');
   const toDateTimeLocalValue = (value) => {
@@ -86911,7 +86897,7 @@ function renderBankingAlertPreferencesPanel() {
     ? '<div class="mini" data-banking-alert-preferences-status="1" style="opacity:.78;">Loading saved preferences…</div>'
     : '<div class="mini" data-banking-alert-preferences-status="1" style="opacity:.78;">Payment status will still update in Current Payment Status even if Banking Alerts are disabled.</div>';
 
-  const saveHandlerScript = `(async()=>{try{const root=document.getElementById('bankingAlertPreferencesPanel');if(!root){alert('Banking Alert preferences panel is not available.');return;}const q=(sel)=>root.querySelector(sel);const qa=(sel)=>Array.from(root.querySelectorAll(sel));const mode=String(q('input[name="bankingAlertPreferenceMode"]:checked')?.value||'ALL_ACTION_REQUIRED').trim().toUpperCase();const failure_reason_groups=qa('[data-alert-preference-failure-reason]').filter(el=>el&&el.checked===true).map(el=>String(el.getAttribute('data-alert-preference-failure-reason')||'').trim().toUpperCase()).filter(Boolean);const informational_alert_kinds=qa('[data-alert-preference-info-kind]').filter(el=>el&&el.checked===true).map(el=>String(el.getAttribute('data-alert-preference-info-kind')||'').trim().toUpperCase()).filter(Boolean);const splitList=(value)=>String(value||'').split(/[\\n,]+/g).map(v=>String(v||'').trim()).filter(Boolean).filter((v,i,a)=>a.findIndex(x=>String(x).toLowerCase()===String(v).toLowerCase())===i);const muted_provider_keys=splitList(q('[data-alert-preference-muted-providers]')?.value||'');const muted_pay_batch_ids=splitList(q('[data-alert-preference-muted-batches]')?.value||'');const snoozeRaw=String(q('[data-alert-preference-snoozed-until]')?.value||'').trim();const snoozed_until_utc=snoozeRaw?new Date(snoozeRaw).toISOString():null;const preferences={mode,failure_reason_groups,informational_alert_kinds,muted_provider_keys,muted_pay_batch_ids,snoozed_until_utc,enabled:mode!=='NO_BANKING_PAY_ALERTS',include_action_required:mode!=='NO_BANKING_PAY_ALERTS',include_progress_alerts:mode!=='NO_BANKING_PAY_ALERTS'&&informational_alert_kinds.some(k=>k==='AUTO_UNWIND_PROGRESS'||k==='WHOLE_BATCH_CANCELLATION_PROGRESS'),include_informational_alerts:mode!=='NO_BANKING_PAY_ALERTS'&&informational_alert_kinds.includes('MANUAL_ADJUSTMENTS_CARRIED_FORWARD'),include_success_alerts:false,failure_reason_allowlist:mode==='SELECTED_FAILURE_REASONS'?failure_reason_groups:null,failure_reason_blocklist:[]};const status=root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent='Saving Banking Alert preferences…';const fn=(typeof window.bankingAlertPreferencesSave==='function')?window.bankingAlertPreferencesSave:((typeof bankingAlertPreferencesSave==='function')?bankingAlertPreferencesSave:null);if(typeof fn!=='function'){throw new Error('Banking Alert preferences save is not available');}const result=await fn(preferences);window.__BANKING_ALERT_PREFERENCES_CACHE__={fetched_at_ms:Date.now(),payload:result&&typeof result==='object'?result:{preferences,ok:true},preferences:(result&&typeof result==='object'&&result.preferences&&typeof result.preferences==='object')?result.preferences:preferences,options:(result&&typeof result==='object'&&result.options&&typeof result.options==='object')?result.options:null};try{if(typeof window.bankingAlertPreferencesFetch==='function')await window.bankingAlertPreferencesFetch({silent:true});}catch(_){}try{if(typeof window.refreshBankingNavAttentionFromCachedRows==='function')window.refreshBankingNavAttentionFromCachedRows();else if(typeof refreshBankingNavAttentionFromCachedRows==='function')refreshBankingNavAttentionFromCachedRows();}catch(_){}try{const hb=window.__changesHeartbeat||window.__changeHeartbeat||null;if(hb&&typeof hb.requestBankingAlertSummaryDetailRefresh==='function')hb.requestBankingAlertSummaryDetailRefresh('banking-alert-preferences-panel-save');}catch(_){}if(status)status.textContent='Banking Alert preferences saved. Current Payment Status is unaffected.';if(typeof window.__toast==='function')window.__toast('Banking Alert preferences saved');}catch(e){const msg=String(e&&e.message?e.message:e||'Save failed');const root=document.getElementById('bankingAlertPreferencesPanel');const status=root&&root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent=msg;else alert(msg);}})();`;
+  const saveHandlerScript = `(async()=>{try{const root=document.getElementById('bankingAlertPreferencesPanel');if(!root){alert('Banking Alert preferences panel is not available.');return;}const q=(sel)=>root.querySelector(sel);const qa=(sel)=>Array.from(root.querySelectorAll(sel));const mode=String(q('input[name="bankingAlertPreferenceMode"]:checked')?.value||'ALL_ACTION_REQUIRED').trim().toUpperCase();const failure_reason_groups=qa('[data-alert-preference-failure-reason]').filter(el=>el&&el.checked===true).map(el=>String(el.getAttribute('data-alert-preference-failure-reason')||'').trim().toUpperCase()).filter(Boolean);const informational_alert_kinds=qa('[data-alert-preference-info-kind]').filter(el=>el&&el.checked===true).map(el=>String(el.getAttribute('data-alert-preference-info-kind')||'').trim().toUpperCase()).filter(Boolean);const include_success_alerts=mode!=='NO_BANKING_PAY_ALERTS'&&q('[data-alert-preference-success-alerts]')?.checked!==false;const splitList=(value)=>String(value||'').split(/[\\n,]+/g).map(v=>String(v||'').trim()).filter(Boolean).filter((v,i,a)=>a.findIndex(x=>String(x).toLowerCase()===String(v).toLowerCase())===i);const muted_provider_keys=splitList(q('[data-alert-preference-muted-providers]')?.value||'');const muted_pay_batch_ids=splitList(q('[data-alert-preference-muted-batches]')?.value||'');const snoozeRaw=String(q('[data-alert-preference-snoozed-until]')?.value||'').trim();const snoozed_until_utc=snoozeRaw?new Date(snoozeRaw).toISOString():null;const preferences={mode,failure_reason_groups,informational_alert_kinds,muted_provider_keys,muted_pay_batch_ids,snoozed_until_utc,enabled:mode!=='NO_BANKING_PAY_ALERTS',include_action_required:mode!=='NO_BANKING_PAY_ALERTS',include_progress_alerts:mode!=='NO_BANKING_PAY_ALERTS'&&informational_alert_kinds.some(k=>k==='AUTO_UNWIND_PROGRESS'||k==='WHOLE_BATCH_CANCELLATION_PROGRESS'),include_informational_alerts:mode!=='NO_BANKING_PAY_ALERTS'&&informational_alert_kinds.includes('MANUAL_ADJUSTMENTS_CARRIED_FORWARD'),include_success_alerts,failure_reason_allowlist:mode==='SELECTED_FAILURE_REASONS'?failure_reason_groups:null,failure_reason_blocklist:[]};const status=root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent='Saving Banking Alert preferences…';const fn=(typeof window.bankingAlertPreferencesSave==='function')?window.bankingAlertPreferencesSave:((typeof bankingAlertPreferencesSave==='function')?bankingAlertPreferencesSave:null);if(typeof fn!=='function'){throw new Error('Banking Alert preferences save is not available');}const result=await fn(preferences);window.__BANKING_ALERT_PREFERENCES_CACHE__={fetched_at_ms:Date.now(),payload:result&&typeof result==='object'?result:{preferences,ok:true},preferences:(result&&typeof result==='object'&&result.preferences&&typeof result.preferences==='object')?result.preferences:preferences,options:(result&&typeof result==='object'&&result.options&&typeof result.options==='object')?result.options:null};try{if(typeof window.bankingAlertPreferencesFetch==='function')await window.bankingAlertPreferencesFetch({silent:true});}catch(_){}try{if(typeof window.refreshBankingNavAttentionFromCachedRows==='function')window.refreshBankingNavAttentionFromCachedRows();else if(typeof refreshBankingNavAttentionFromCachedRows==='function')refreshBankingNavAttentionFromCachedRows();}catch(_){}try{const hb=window.__changesHeartbeat||window.__changeHeartbeat||null;if(hb&&typeof hb.requestBankingAlertSummaryDetailRefresh==='function')hb.requestBankingAlertSummaryDetailRefresh('banking-alert-preferences-panel-save');}catch(_){}if(status)status.textContent='Banking Alert preferences saved. Current Payment Status is unaffected.';if(typeof window.__toast==='function')window.__toast('Banking Alert preferences saved');}catch(e){const msg=String(e&&e.message?e.message:e||'Save failed');const root=document.getElementById('bankingAlertPreferencesPanel');const status=root&&root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent=msg;else alert(msg);}})();`;
 
   const refreshHandlerScript = `(async()=>{try{const root=document.getElementById('bankingAlertPreferencesPanel');const status=root&&root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent='Refreshing Banking Alert preferences…';const fn=(typeof window.bankingAlertPreferencesFetch==='function')?window.bankingAlertPreferencesFetch:((typeof bankingAlertPreferencesFetch==='function')?bankingAlertPreferencesFetch:null);if(typeof fn!=='function'){throw new Error('Banking Alert preferences fetch is not available');}const payload=await fn({silent:true});window.__BANKING_ALERT_PREFERENCES_CACHE__={fetched_at_ms:Date.now(),payload:payload&&typeof payload==='object'?payload:{preferences:{},ok:true},preferences:(payload&&typeof payload==='object'&&payload.preferences&&typeof payload.preferences==='object')?payload.preferences:(payload&&typeof payload==='object'?payload:{}),options:(payload&&typeof payload==='object'&&payload.options&&typeof payload.options==='object')?payload.options:null};const renderFn=(typeof window.renderBankingAlertPreferencesPanel==='function')?window.renderBankingAlertPreferencesPanel:((typeof renderBankingAlertPreferencesPanel==='function')?renderBankingAlertPreferencesPanel:null);const panel=renderFn?renderFn():'';if(root&&panel)root.outerHTML=panel;}catch(e){const root=document.getElementById('bankingAlertPreferencesPanel');const status=root&&root.querySelector('[data-banking-alert-preferences-status="1"]');const msg=String(e&&e.message?e.message:e||'Refresh failed');if(status)status.textContent=msg;else alert(msg);}})();`;
 
@@ -86972,6 +86958,14 @@ function renderBankingAlertPreferencesPanel() {
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:7px 12px;align-items:start;">
           ${renderInformationalCheckboxes()}
         </div>
+      </div>
+
+      <div class="card" style="padding:10px;border:1px solid var(--line,#e5e7eb);">
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Successful payment alerts</div>
+        <label class="inline mini" style="display:flex;gap:7px;align-items:flex-start;">
+          <input type="checkbox" data-alert-preference-success-alerts="1" ${includeSuccessAlerts ? 'checked' : ''} />
+          <span>Show alerts when a future payment batch is scheduled and when a payment batch settles. Immediate payments and CSV settlements only alert on settlement.</span>
+        </label>
       </div>
 
       <div class="card" style="padding:10px;border:1px solid var(--line,#e5e7eb);">
@@ -338173,7 +338167,8 @@ async function handleSaveSettings() {
       const hasPreferenceControls = !!(
         modeEl ||
         root.querySelector('[data-alert-preference-failure-reason]') ||
-        root.querySelector('[data-alert-preference-info-kind]')
+        root.querySelector('[data-alert-preference-info-kind]') ||
+        root.querySelector('[data-alert-preference-success-alerts]')
       );
       if (!hasPreferenceControls) return null;
       const mode = String(modeEl?.value || 'ALL_ACTION_REQUIRED').trim().toUpperCase() || 'ALL_ACTION_REQUIRED';
@@ -338185,7 +338180,9 @@ async function handleSaveSettings() {
         .filter((el) => el && el.checked === true)
         .map((el) => String(el.getAttribute('data-alert-preference-info-kind') || '').trim().toUpperCase())
         .filter(Boolean);
-      return { mode, failure_reason_groups, informational_alert_kinds };
+      const include_success_alerts = mode !== 'NO_BANKING_PAY_ALERTS'
+        && root.querySelector('[data-alert-preference-success-alerts]')?.checked !== false;
+      return { mode, failure_reason_groups, informational_alert_kinds, include_success_alerts };
     } catch {
       return null;
     }
@@ -340626,6 +340623,45 @@ async function bankingPayProviderWebhookReplayFailedEvents(provider, webhookPubl
 
 
 
+async function bankingAlertsFetchActive(options = {}) {
+  if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingAlertsFetchActive: authFetch/API is required');
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const requestedLimit = Number(opts.limit ?? 100);
+  const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? Math.trunc(requestedLimit) : 100, 1), 100);
+  const response = await authFetch(API(`/api/banking/alerts?limit=${encodeURIComponent(String(limit))}`), { method: 'GET' });
+  const text = await response.text().catch(() => '');
+  let parsed = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
+  if (!response.ok) {
+    const error = new Error(String(parsed?.error || parsed?.message || text || `Banking alerts request failed (${response.status})`));
+    error.status = response.status;
+    error.body = text;
+    error.json = parsed;
+    if (opts.silent === true) return { ok: false, silent: true, error: error.message, status: response.status };
+    throw error;
+  }
+
+  const payload = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+  const summary = (payload.banking_alert_summary && typeof payload.banking_alert_summary === 'object' && !Array.isArray(payload.banking_alert_summary))
+    ? payload.banking_alert_summary
+    : payload;
+  const normalizedPayload = {
+    ...payload,
+    banking_alert_summary: summary,
+    alert_summary: summary,
+    banking_alert_summary_included: true,
+    banking_alert_summary_deferred: false
+  };
+  if (typeof applyAlertSummaryToState === 'function') applyAlertSummaryToState(normalizedPayload);
+  else if (typeof updateBankingNavAttentionState === 'function') updateBankingNavAttentionState(summary);
+  return normalizedPayload;
+}
+
+try {
+  if (typeof window !== 'undefined') window.bankingAlertsFetchActive = bankingAlertsFetchActive;
+} catch {}
+
+
 async function bankingAlertPreferencesFetch() {
   if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingAlertPreferencesFetch: authFetch/API is required');
 
@@ -340759,7 +340795,7 @@ async function bankingAlertPreferencesFetch() {
     include_action_required: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(rawPrefs.include_action_required, true),
     include_progress_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(rawPrefs.include_progress_alerts, true),
     include_informational_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(rawPrefs.include_informational_alerts, false),
-    include_success_alerts: false,
+    include_success_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(rawPrefs.include_success_alerts, true),
     severity_min: upper(rawPrefs.severity_min || rawPrefs.severityMin || 'ACTION_REQUIRED') || 'ACTION_REQUIRED',
     muted_provider_keys: uniqueText(rawPrefs.muted_provider_keys || rawPrefs.mutedProviderKeys || rawPrefs.muted_providers || rawPrefs.mutedProviders || []),
     muted_pay_batch_ids: uniqueText(rawPrefs.muted_pay_batch_ids || rawPrefs.mutedPayBatchIds || rawPrefs.muted_batch_ids || rawPrefs.mutedBatchIds || []),
@@ -340914,7 +340950,7 @@ async function bankingAlertPreferencesSave(preferences) {
     include_action_required: mode !== 'NO_BANKING_PAY_ALERTS',
     include_progress_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(prefs.include_progress_alerts, true),
     include_informational_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(prefs.include_informational_alerts, false),
-    include_success_alerts: false,
+    include_success_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(prefs.include_success_alerts, true),
     severity_min: upper(prefs.severity_min || prefs.severityMin || 'ACTION_REQUIRED') || 'ACTION_REQUIRED',
     muted_provider_keys: uniqueText(prefs.muted_provider_keys || prefs.mutedProviderKeys || prefs.muted_providers || prefs.mutedProviders || []),
     muted_pay_batch_ids: uniqueText(prefs.muted_pay_batch_ids || prefs.mutedPayBatchIds || prefs.muted_batch_ids || prefs.mutedBatchIds || []),
@@ -340986,15 +341022,8 @@ async function bankingAlertPreferencesSave(preferences) {
     if (summary && typeof updateBankingNavAttentionState === 'function') updateBankingNavAttentionState(summary);
     const hb = (typeof window !== 'undefined') ? (window.__changesHeartbeat || window.__changeHeartbeat || null) : null;
     if (hb && typeof hb.requestBankingAlertSummaryDetailRefresh === 'function') hb.requestBankingAlertSummaryDetailRefresh('banking-alert-preferences-save');
-    if (!summary && typeof authFetch === 'function' && typeof API === 'function') {
-      const pingRes = await authFetch(API('/api/changes/ping'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ force_banking_alert_summary: true })
-      });
-      const pingText = await pingRes.text().catch(() => '');
-      const pingJson = parse(pingText);
-      if (pingRes.ok && pingJson && typeof pingJson === 'object' && typeof applyAlertSummaryToState === 'function') applyAlertSummaryToState(pingJson);
+    if (!summary && typeof bankingAlertsFetchActive === 'function') {
+      await bankingAlertsFetchActive({ silent: true });
     }
   } catch (e) {
     try { console.warn('[BANKING_ALERT_PREFERENCES] alert summary refresh failed', e && e.message ? e.message : String(e)); } catch {}
@@ -369542,7 +369571,17 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
             }
           };
 
-          const bankingAlertStateChanged = applyBankingAlertSummaryFromPing();
+          let bankingAlertStateChanged = applyBankingAlertSummaryFromPing();
+          try {
+            const lastDirectAlertFetchAtMs = Number(hb._lastBankingAlertDirectFetchAtMs || 0) || 0;
+            const directAlertFetchDue = Date.now() - lastDirectAlertFetchAtMs >= 10000
+              || isExplicitBankingAlertDetailRefreshReason(reason);
+            if (directAlertFetchDue && typeof bankingAlertsFetchActive === 'function') {
+              hb._lastBankingAlertDirectFetchAtMs = Date.now();
+              const directAlertPayload = await bankingAlertsFetchActive({ silent: true, limit: 100 });
+              if (directAlertPayload && directAlertPayload.ok !== false) bankingAlertStateChanged = true;
+            }
+          } catch {}
           hb._latestAppliedPingSeq = Math.max(Math.trunc(Number(hb._latestAppliedPingSeq || 0)), requestSeq);
 
           const seqs =
