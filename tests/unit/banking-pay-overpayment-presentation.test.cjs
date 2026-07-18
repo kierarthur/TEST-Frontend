@@ -50,7 +50,7 @@ function installHarness() {
     fmtMoney: (value) => Number(value || 0).toFixed(2),
     resolvedRateBadgeHtml: () => ''
   };
-  vm.runInNewContext(`${helperSource}\nthis.__overpaymentHelpers = { getOverpaymentRecoveryPresentation, buildOverpaymentRecoveryDisplayLines, getPreviewLineDisplayAmount, renderPreviewLineTypeHtml, renderPreviewLineAmountHtml };`, context, {
+  vm.runInNewContext(`${helperSource}\nthis.__overpaymentHelpers = { getOverpaymentRecoveryPresentation, getManualDebtRecoveryPresentation, buildOverpaymentRecoveryDisplayLines, getPreviewLineDisplayAmount, renderPreviewLineTypeHtml, renderPreviewLineAmountHtml };`, context, {
     filename: 'banking-pay-overpayment-presentation-helpers.js'
   });
   return context.__overpaymentHelpers;
@@ -80,6 +80,49 @@ test('shows the full negative outstanding recovery while retaining a zero curren
   assert.match(helpers.renderPreviewLineTypeHtml(eduardoRecoveryRow), /No available funds to recover this yet\./);
   assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), /-15\.84/);
   assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), /Recoverable this pay run: 0\.00/);
+});
+
+test('shows scheduled manual-debt recovery separately from a zero current-run recovery', () => {
+  const helpers = installHarness();
+  const manualDebtRow = {
+    line_type: 'MANUAL_DEBT_RECOVERY',
+    presentation_reason: 'NO_PAY_HEADROOM',
+    blocked_reason_codes: ['NO_PAY_HEADROOM'],
+    amount_ex_vat: '0.00',
+    case_components: [{
+      source_basis_json: { weekly_due: '100.00' },
+      preview_due_amount_ex_vat: '0.00'
+    }]
+  };
+
+  const presentation = helpers.getManualDebtRecoveryPresentation(manualDebtRow);
+  assert.equal(presentation.scheduled_due, 100);
+  assert.equal(presentation.recoverable_this_run, 0);
+  assert.equal(presentation.no_available_funds, true);
+  assert.equal(helpers.getPreviewLineDisplayAmount(manualDebtRow), -100);
+  assert.match(helpers.renderPreviewLineTypeHtml(manualDebtRow), /No unreserved payable earnings are available for this recovery\./);
+  assert.match(helpers.renderPreviewLineAmountHtml(manualDebtRow), /-100\.00/);
+  assert.match(helpers.renderPreviewLineAmountHtml(manualDebtRow), /Scheduled recovery due/);
+  assert.match(helpers.renderPreviewLineAmountHtml(manualDebtRow), /Recoverable this pay run: 0\.00/);
+});
+
+test('never substitutes the scheduled debt amount for a recoverable ready amount', () => {
+  const helpers = installHarness();
+  const readyManualDebtRow = {
+    line_type: 'MANUAL_DEBT_RECOVERY',
+    presentation_reason: 'READY_TO_PAY',
+    nominal_due_amount_ex_vat: '100.00',
+    recoverable_this_pay_run_ex_vat: '50.00',
+    amount_ex_vat: '-50.00'
+  };
+
+  const presentation = helpers.getManualDebtRecoveryPresentation(readyManualDebtRow);
+  assert.equal(presentation.scheduled_due, 100);
+  assert.equal(presentation.recoverable_this_run, 50);
+  assert.equal(presentation.no_available_funds, false);
+  assert.equal(helpers.getPreviewLineDisplayAmount(readyManualDebtRow), -50);
+  assert.match(helpers.renderPreviewLineAmountHtml(readyManualDebtRow), /-50\.00/);
+  assert.doesNotMatch(helpers.renderPreviewLineAmountHtml(readyManualDebtRow), /Scheduled recovery due/);
 });
 
 test('uses friendly descriptions for every overpayment constituent', () => {

@@ -49767,6 +49767,11 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     return upperTrim(obj?.line_type || obj?.lineType || nested?.line_type || nested?.lineType || '') === 'OVERPAYMENT_RECOVERY';
   };
 
+  const isManualDebtRecoveryLine = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    return upperTrim(obj?.line_type || obj?.lineType || nested?.line_type || nested?.lineType || '') === 'MANUAL_DEBT_RECOVERY';
+  };
+
   const getOverpaymentComponentFriendlyLabel = (component) => {
     const row = isPlainObject(component) ? component : {};
     const keyType = upperTrim(row.component_key_type || row.componentKeyType || row.key_type || row.keyType || '');
@@ -49873,6 +49878,69 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       outstanding_total: outstandingTotal,
       recoverable_this_run: recoverableThisRun,
       no_available_funds: outstandingTotal > 0 && recoverableThisRun === 0 && blockedReasons.includes('NO_PAY_HEADROOM')
+    };
+  };
+
+  const getManualDebtRecoveryPresentation = (obj) => {
+    if (!isManualDebtRecoveryLine(obj)) return null;
+    const line = isPlainObject(obj) ? obj : {};
+    const nested = getNestedLinePayload(line);
+    const caseSummary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const components = getLineCaseComponents(line);
+    const componentDueValues = components.flatMap((component) => {
+      const sourceBasis = isPlainObject(component?.source_basis_json)
+        ? component.source_basis_json
+        : (isPlainObject(component?.sourceBasisJson) ? component.sourceBasisJson : {});
+      return [
+        component?.nominal_due_amount_ex_vat,
+        component?.nominalDueAmountExVat,
+        sourceBasis?.nominal_due_amount_ex_vat,
+        sourceBasis?.nominalDueAmountExVat,
+        sourceBasis?.weekly_due,
+        sourceBasis?.weeklyDue
+      ];
+    });
+    const toMagnitude = (...values) => {
+      const value = firstFinitePreviewNumber(...values);
+      return value === null ? null : Math.abs(Math.round(value * 100) / 100);
+    };
+    const scheduledDue = toMagnitude(
+      line?.nominal_due_amount_ex_vat,
+      line?.nominalDueAmountExVat,
+      nested?.nominal_due_amount_ex_vat,
+      nested?.nominalDueAmountExVat,
+      caseSummary?.nominal_due_amount_ex_vat,
+      caseSummary?.nominalDueAmountExVat,
+      ...componentDueValues
+    ) ?? 0;
+    const recoverableThisRun = toMagnitude(
+      line?.recoverable_this_pay_run_ex_vat,
+      line?.recoverableThisPayRunExVat,
+      nested?.recoverable_this_pay_run_ex_vat,
+      nested?.recoverableThisPayRunExVat,
+      getLineRowLevelAmount(line),
+      getLineSectionAmount(line),
+      0
+    ) ?? 0;
+    const blockedReasons = [
+      ...asArray(line?.blocked_reason_codes),
+      ...asArray(line?.blockedReasonCodes),
+      ...asArray(nested?.blocked_reason_codes),
+      ...asArray(nested?.blockedReasonCodes),
+      ...asArray(caseSummary?.blocked_reason_codes),
+      ...asArray(caseSummary?.blockedReasonCodes),
+      line?.presentation_reason,
+      line?.presentationReason,
+      nested?.presentation_reason,
+      nested?.presentationReason
+    ].map((value) => upperTrim(value)).filter(Boolean);
+
+    return {
+      scheduled_due: scheduledDue,
+      recoverable_this_run: recoverableThisRun,
+      no_available_funds: scheduledDue > 0 && recoverableThisRun === 0 && blockedReasons.includes('NO_PAY_HEADROOM')
     };
   };
 
@@ -49995,6 +50063,8 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
   };
 
   const getPreviewLineDisplayAmount = (line) => {
+    const manualDebtRecovery = getManualDebtRecoveryPresentation(line);
+    if (manualDebtRecovery?.no_available_funds) return -Math.abs(manualDebtRecovery.scheduled_due);
     const recovery = getOverpaymentRecoveryPresentation(line);
     if (recovery && recovery.outstanding_total > 0) return -Math.abs(recovery.outstanding_total);
     return getLineSectionAmount(line);
@@ -50003,13 +50073,24 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
   const renderPreviewLineTypeHtml = (line) => {
     const label = trimStr(line?.line_type || 'Preview line').replace(/_/g, ' ');
     const recovery = getOverpaymentRecoveryPresentation(line);
+    const manualDebtRecovery = getManualDebtRecoveryPresentation(line);
     return `
       <div>${enc(label)}</div>
       ${recovery?.no_available_funds ? '<div class="mini" style="margin-top:4px;opacity:.85;white-space:normal;">No available funds to recover this yet.</div>' : ''}
+      ${manualDebtRecovery?.no_available_funds ? '<div class="mini" style="margin-top:4px;opacity:.85;white-space:normal;">No unreserved payable earnings are available for this recovery.</div>' : ''}
     `;
   };
 
   const renderPreviewLineAmountHtml = (line, renderContextSection = '') => {
+    const manualDebtRecovery = getManualDebtRecoveryPresentation(line);
+    if (manualDebtRecovery?.no_available_funds) {
+      return `
+        ${resolvedRateBadgeHtml(line, renderContextSection)}
+        <div>${enc(fmtMoney(-Math.abs(manualDebtRecovery.scheduled_due)))}</div>
+        <div class="mini" style="margin-top:3px;opacity:.8;white-space:normal;">Scheduled recovery due</div>
+        <div class="mini" style="margin-top:2px;opacity:.8;white-space:normal;">Recoverable this pay run: ${enc(fmtMoney(manualDebtRecovery.recoverable_this_run))}</div>
+      `;
+    }
     const recovery = getOverpaymentRecoveryPresentation(line);
     if (!recovery) {
       return `${resolvedRateBadgeHtml(line, renderContextSection)}<div>${enc(fmtMoney(getLineSectionAmount(line)))}</div>`;
@@ -53589,7 +53670,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
               <strong>${enc('Blocked for Pay')}</strong>
               <span class="pill">${enc(String(candidateIds.size))} candidate(s)</span>
               <span class="pill">${enc(String(displayLines.length))} live item(s)</span>
-              <span class="pill">Live amount ${enc(fmtMoney(totalBlockedLineAmount))}</span>
+              <span class="pill">Blocked amount ${enc(fmtMoney(totalBlockedLineAmount))}</span>
               ${totalCases > 0 ? `<span class="pill">${enc(String(totalCases))} case(s)</span>` : ''}
               ${totalCases > 0 ? `<span class="pill">Case amount ${enc(fmtMoney(totalCaseAmount))}</span>` : ''}
             </div>

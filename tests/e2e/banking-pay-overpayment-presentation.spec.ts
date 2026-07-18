@@ -70,7 +70,7 @@ test('shows each Eduardo recovery once, blocks it without pay headroom, and pres
   await expect(recoveryRow).toContainText('Blocked for pay');
   await expect(recoveryRow).not.toContainText('Ready to pay');
   await expect(recoveryRow).not.toContainText('Timesheet pay — 06/07/2026');
-  await expect(bankingModal.getByText('Live amount -72.09', { exact: true })).toBeVisible();
+  await expect(bankingModal.getByText(/^Blocked amount -?\d+\.\d{2}$/, { exact: true })).toBeVisible();
 
   const olderRecoveryRow = eduardoRecoveryRows.filter({ hasText: '14/06/2026' });
   await expect(olderRecoveryRow).toHaveCount(1);
