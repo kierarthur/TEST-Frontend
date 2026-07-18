@@ -49875,6 +49875,124 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     };
   };
 
+  const getOverpaymentRecoveryPresentationGroupKey = (obj) => {
+    if (!isOverpaymentRecoveryLine(obj)) return '';
+    const line = isPlainObject(obj) ? obj : {};
+    const nested = getNestedLinePayload(line);
+    const parentLineId = trimStr(
+      line?.presentation_parent_line_id ||
+      line?.presentationParentLineId ||
+      nested?.presentation_parent_line_id ||
+      nested?.presentationParentLineId ||
+      ''
+    );
+    if (parentLineId) return parentLineId;
+    const financeCaseId = trimStr(
+      line?.finance_case_id ||
+      line?.financeCaseId ||
+      nested?.finance_case_id ||
+      nested?.financeCaseId ||
+      ''
+    );
+    return financeCaseId ? `finance:${financeCaseId}:overpayment_recovery` : '';
+  };
+
+  const buildOverpaymentRecoveryDisplayLines = (sourceLines) => {
+    const orderedItems = [];
+    const groupsByKey = new Map();
+
+    for (const line of asArray(sourceLines)) {
+      if (!isPlainObject(line) || !isOverpaymentRecoveryLine(line)) {
+        orderedItems.push({ kind: 'line', line });
+        continue;
+      }
+      const groupKey = getOverpaymentRecoveryPresentationGroupKey(line);
+      if (!groupKey) {
+        orderedItems.push({ kind: 'line', line });
+        continue;
+      }
+      if (!groupsByKey.has(groupKey)) {
+        const group = { kind: 'overpayment_group', key: groupKey, lines: [] };
+        groupsByKey.set(groupKey, group);
+        orderedItems.push(group);
+      }
+      groupsByKey.get(groupKey).lines.push(line);
+    }
+
+    return orderedItems.map((item) => {
+      if (item.kind === 'line' || item.lines.length <= 1) return item.line || item.lines[0];
+
+      const representative = item.lines[0];
+      const representativeNested = getNestedLinePayload(representative);
+      const componentRows = [];
+      const seenComponentKeys = new Set();
+      for (const line of item.lines) {
+        getLineCaseComponents(line).forEach((component, componentIndex) => {
+          const componentId = trimStr(component?.finance_component_id || component?.financeComponentId || '');
+          const keyType = upperTrim(component?.component_key_type || component?.componentKeyType || component?.key_type || component?.keyType || '');
+          const keyValue = trimStr(component?.component_key_value || component?.componentKeyValue || component?.key_value || component?.keyValue || '');
+          const linkedTimesheetId = trimStr(component?.linked_timesheet_id || component?.linkedTimesheetId || component?.timesheet_id || component?.timesheetId || '');
+          const componentKey = componentId || [keyType, keyValue, linkedTimesheetId, String(componentIndex)].join('|');
+          if (!componentKey || seenComponentKeys.has(componentKey)) return;
+          seenComponentKeys.add(componentKey);
+          componentRows.push(component);
+        });
+      }
+
+      const previewRowIds = uniqTrimmed(item.lines.map((line) => getPreviewRowId(line)));
+      const selectablePreviewRowIds = uniqTrimmed(
+        item.lines
+          .filter((line) => isPreviewRowSelectionAllowed(line))
+          .map((line) => getPreviewRowId(line))
+      );
+      const economicAmount = Math.round(item.lines.reduce((total, line) => total + toNum(getLineRowLevelAmount(line), 0), 0) * 100) / 100;
+      const financeCaseId = trimStr(
+        representative?.finance_case_id ||
+        representative?.financeCaseId ||
+        representativeNested?.finance_case_id ||
+        representativeNested?.financeCaseId ||
+        ''
+      );
+      const blockedReasonCodes = uniqTrimmed(item.lines.flatMap((line) => {
+        const nested = getNestedLinePayload(line);
+        return [
+          ...asArray(line?.blocked_reason_codes),
+          ...asArray(line?.blockedReasonCodes),
+          ...asArray(nested?.blocked_reason_codes),
+          ...asArray(nested?.blockedReasonCodes)
+        ];
+      }));
+      const presentationReason = item.lines.some((line) => {
+        const nested = getNestedLinePayload(line);
+        return upperTrim(line?.presentation_reason || line?.presentationReason || nested?.presentation_reason || nested?.presentationReason || '') === 'NO_PAY_HEADROOM';
+      }) ? 'NO_PAY_HEADROOM' : trimStr(representative?.presentation_reason || representativeNested?.presentation_reason || '');
+
+      return {
+        ...representative,
+        row_json: {
+          ...representativeNested,
+          presentation_role: 'PARENT',
+          presentation_parent_line_id: item.key,
+          amount_ex_vat: economicAmount,
+          case_components: []
+        },
+        presentation_role: 'PARENT',
+        presentation_parent_line_id: item.key,
+        finance_case_id: financeCaseId || representative?.finance_case_id || null,
+        source_ref: financeCaseId ? `advance:${financeCaseId}` : trimStr(representative?.source_ref || ''),
+        snooze_kind: 'OVERPAYMENT_RECOVERY',
+        amount_ex_vat: economicAmount,
+        section_amount_ex_vat: economicAmount,
+        case_components: componentRows,
+        blocked_reason_codes: blockedReasonCodes,
+        presentation_reason: presentationReason,
+        __presentation_group_key: item.key,
+        __presentation_group_preview_row_ids: previewRowIds,
+        __presentation_group_selectable_row_ids: selectablePreviewRowIds
+      };
+    }).filter((line) => isPlainObject(line));
+  };
+
   const getPreviewLineDisplayAmount = (line) => {
     const recovery = getOverpaymentRecoveryPresentation(line);
     if (recovery && recovery.outstanding_total > 0) return -Math.abs(recovery.outstanding_total);
@@ -50678,8 +50796,17 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         : (section === 'CASES_RESOLUTIONS' ? 'pill-warn' : ((info.isDated || upperTrim(line?.line_type || '') === 'BLOCKED_TIMESHEET' || upperTrim(line?.line_type || '') === 'DO_NOT_PAY' || asBool(line?.is_excluded_from_allocation) || (line?.is_ready_for_draft === false) || asBool(line?.case_is_blocked)) ? 'pill-bad' : 'pill-ok'));
       const isBlockedLike = section === 'BLOCKED_FOR_PAY' || section === 'CASES_RESOLUTIONS' || info.isDated || upperTrim(line?.line_type || '') === 'BLOCKED_TIMESHEET' || upperTrim(line?.line_type || '') === 'DO_NOT_PAY' || asBool(line?.is_excluded_from_allocation) || (line?.is_ready_for_draft === false) || asBool(line?.case_is_blocked);
       const previewRowId = getPreviewRowId(line);
-      const selectionAllowed = isPreviewRowSelectionAllowed(line);
-      const selected = selectionAllowed && isPreviewRowSelected(line);
+      const presentationGroupRowIds = uniqTrimmed(asArray(line?.__presentation_group_selectable_row_ids));
+      const selectedPresentationGroupRowIds = presentationGroupRowIds.filter((rowId) => selectedPreviewRowSet.has(rowId));
+      const presentationGroupSelectionState = presentationGroupRowIds.length <= 0
+        ? 'NONE'
+        : (selectedPresentationGroupRowIds.length === presentationGroupRowIds.length
+            ? 'ALL'
+            : (selectedPresentationGroupRowIds.length === 0 ? 'NONE' : 'PARTIAL'));
+      const selectionAllowed = presentationGroupRowIds.length > 0 || isPreviewRowSelectionAllowed(line);
+      const selected = presentationGroupRowIds.length > 0
+        ? presentationGroupSelectionState === 'ALL'
+        : (selectionAllowed && isPreviewRowSelected(line));
       const timesheetId = trimStr(line?.timesheet_id || line?.linked_timesheet_id || '');
       const candidateId = trimStr(line?.candidate_id || '');
       const lineType = upperTrim(line?.line_type || '');
@@ -50689,7 +50816,20 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       return `
         <tr${rowAnchor ? ` data-banking-scroll-anchor="${enc(rowAnchor)}"` : ''}${previewRowId ? ` data-preview-row-id="${enc(previewRowId)}"` : ''}>
           <td style="white-space:nowrap;">
-            ${previewRowId && selectionAllowed ? `
+            ${presentationGroupRowIds.length ? `
+              <input
+                type="checkbox"
+                data-action="banking:pay:toggleTimesheetPreviewGroup"
+                data-preview-row-ids="${enc(JSON.stringify(presentationGroupRowIds))}"
+                data-group-selection-state="${enc(presentationGroupSelectionState)}"
+                data-candidate-id="${enc(candidateId)}"
+                data-line-type="${enc(lineType)}"
+                data-presentation-section="${enc(section)}"
+                aria-checked="${presentationGroupSelectionState === 'PARTIAL' ? 'mixed' : (selected ? 'true' : 'false')}"
+                ${selected ? 'checked' : ''}
+                ${getCandidateActionDisabledAttrs(candidateId, selected ? 'Untick this overpayment recovery' : 'Tick this overpayment recovery')}
+              />
+            ` : (previewRowId && selectionAllowed ? `
               <input
                 type="checkbox"
                 data-action="banking:pay:togglePreviewRow"
@@ -50702,7 +50842,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
                 ${selected ? 'checked' : ''}
                 ${getCandidateActionDisabledAttrs(candidateId, selected ? 'Untick this preview row' : 'Tick this preview row')}
               />
-            ` : `<span class="mini" style="opacity:.7;">—</span>`}
+            ` : `<span class="mini" style="opacity:.7;">—</span>`)}
           </td>
           <td class="mini">${renderPreviewLineTypeHtml(line)}</td>
           <td>
@@ -52786,7 +52926,9 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const hasReadyPaye = readyPayeCandidateIds.size > 0;
   const hasReadyUmbrella = readyUmbrellaCandidateIds.size > 0;
   const hasAnyReadyToPay = readyPreviewLines.length > 0;
-  const hasPendingCandidates = pendingCandidateIds.length > 0;
+  const failedCandidateIdSet = new Set(failedCandidateIds);
+  const activePendingCandidateIds = pendingCandidateIds.filter((candidateId) => !failedCandidateIdSet.has(candidateId));
+  const hasPendingCandidates = activePendingCandidateIds.length > 0;
   const hasFailedCandidates = failedCandidateIds.length > 0;
   const authoritativeRenderState = isPlainObject(previewRowsVm.loadState.authoritativeState)
     ? previewRowsVm.loadState.authoritativeState
@@ -52962,8 +53104,8 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const createDraftTitle = (() => {
     if (cdBusy) return 'Draft creation is already starting.';
     if (activeDraftCreateOperationForRender) return 'A draft creation operation is already running.';
+    if (authoritativeRenderState.hasFailure || hasFailedCandidates) return 'Payment preview preparation failed. Resolve or retry the failed work before creating a draft.';
     if (hasPendingCandidates) return 'Preparing / candidates refreshing. Draft creation re-enables when all candidate refresh work is complete.';
-    if (hasFailedCandidates) return 'One or more sampled candidate refreshes failed. Resolve or retry those candidates before creating a draft.';
     if (!authoritativeRenderState.contractPresent) return 'Authoritative payment preview readiness is unavailable. Refresh Banking Pay before creating a draft.';
     if (!authoritativeRenderState.sessionMatchesCurrent) return 'The displayed preview does not match the current workbench session/version. Refresh Banking Pay.';
     if (authoritativeRenderState.sessionObsolete || authoritativeRenderState.replacementRequired) return 'This payment preview is obsolete or has been replaced. Open the latest preview session.';
@@ -52979,8 +53121,8 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   })();
   const createDraftLabel = (() => {
     if (cdBusy) return 'Creating…';
+    if (authoritativeRenderState.hasFailure || hasFailedCandidates) return 'Refresh failed';
     if (hasPendingCandidates) return 'Preparing…';
-    if (hasFailedCandidates) return 'Refresh failed';
     if (authoritativeRenderState.sessionReady !== true) return 'Preparing…';
     if (authoritativeRenderState.readyForDraft !== true || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) return 'Select rows';
     if (payeCreateBlocked && hasReadyUmbrella && !hasReadyPaye) return 'Create umbrella draft';
@@ -52993,12 +53135,11 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       return `<div class="warn" style="white-space:pre-wrap;">${enc('This Banking Pay preview is obsolete or has been replaced. Draft creation is blocked until the latest workbench session is opened.')}</div>`;
     }
     if (authoritativeRenderState.hasFailure) {
-      const issueCount = authoritativeRenderState.candidateCounts.failed
-        + authoritativeRenderState.candidateCounts.unknown
-        + authoritativeRenderState.lineCounts.failed
-        + authoritativeRenderState.lineCounts.unknown
-        + authoritativeRenderState.jobCounts.unresolved_failed
-        + authoritativeRenderState.jobCounts.unresolved_dead;
+      const issueCount = Math.max(
+        authoritativeRenderState.candidateCounts.failed + authoritativeRenderState.candidateCounts.unknown,
+        authoritativeRenderState.lineCounts.failed + authoritativeRenderState.lineCounts.unknown,
+        authoritativeRenderState.jobCounts.unresolved_failed + authoritativeRenderState.jobCounts.unresolved_dead
+      );
       return `<div class="error" style="white-space:pre-wrap;">${enc(`Payment preview preparation has ${issueCount || 'one or more'} unresolved failure(s). Draft creation remains blocked until they are resolved or successfully refreshed.`)}</div>`;
     }
     if (!authoritativeRenderState.contractPresent || !authoritativeRenderState.sessionMatchesCurrent) {
@@ -53373,7 +53514,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   };
 
   const renderCasesSection = (caseLines, groups) => {
-  const displayLines = asArray(caseLines).filter((line) => isPlainObject(line));
+  const displayLines = buildOverpaymentRecoveryDisplayLines(asArray(caseLines).filter((line) => isPlainObject(line)));
   const displayGroups = asArray(groups).filter((group) => isPlainObject(group));
   const matchedCaseCount = displayGroups.reduce((acc, group) => acc + asArray(group.entries).length, 0);
   const totalCases = Math.max(displayLines.length, matchedCaseCount);
@@ -53420,7 +53561,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 };
 
   const renderBlockedSection = (blockedLines, groups = []) => {
-    const displayLines = asArray(blockedLines).filter((line) => isPlainObject(line));
+    const displayLines = buildOverpaymentRecoveryDisplayLines(asArray(blockedLines).filter((line) => isPlainObject(line)));
     const displayGroups = asArray(groups).filter((group) => isPlainObject(group));
     const totalCases = displayGroups.reduce((acc, group) => acc + group.entries.length, 0);
     const totalCaseAmount = Math.round(displayGroups.flatMap((group) => group.entries).reduce((acc, entry) => acc + toNum(entry.case_amount, 0), 0) * 100) / 100;
@@ -53494,9 +53635,14 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     return hasActivePayFilters ? 'No Blocked for Pay rows match the current Banking Pay filters.' : 'No rows are blocked for pay.';
   };
 
+  const readyNonTimesheetDisplayLines = buildOverpaymentRecoveryDisplayLines(
+    readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT')
+  );
+  const readyDisplayLineCount = readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT').length
+    + readyNonTimesheetDisplayLines.length;
   const readyCanonicalRowsHtml = [
     renderReadyTimesheetGroupedRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
-    renderSimplePreviewRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'), null, 'READY_TO_PAY')
+    renderSimplePreviewRows(readyNonTimesheetDisplayLines, null, 'READY_TO_PAY')
   ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(readyEmptyMessage())}</td></tr>`;
 
   return `
@@ -53539,7 +53685,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                   <strong>${enc('Ready to Pay')}</strong>
                   <span class="pill">${enc(String(readyLineCandidateIds.size))} candidate(s)</span>
-                  <span class="pill">${enc(String(readyPreviewLines.length))} line(s)</span>
+                  <span class="pill">${enc(String(readyDisplayLineCount))} line(s)</span>
                   <span class="pill">Amount ${enc(fmtMoney(readyLineAmountTotal))}</span>
                 </div>
               </div>

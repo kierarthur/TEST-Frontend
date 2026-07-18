@@ -35,8 +35,12 @@ function installHarness() {
       return null;
     },
     getLineCaseComponents: (value) => (Array.isArray(value?.case_components) ? value.case_components : []),
+    getPreviewRowId: (value) => String(value?.preview_row_id || '').trim(),
+    isPreviewRowSelectionAllowed: (value) => value?.selection_allowed !== false,
     getLineRowLevelAmount: (value) => Number(value?.amount_ex_vat || 0),
     getLineSectionAmount: (value) => Number(value?.amount_ex_vat || 0),
+    toNum: (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback,
+    uniqTrimmed: (values) => Array.from(new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean))),
     getFriendlyExpenseLabel: (value) => ({ ACCOMMODATION: 'Accommodation', TRAVEL: 'Travel' }[String(value || '').toUpperCase()] || 'Other Expense'),
     ymdToUk: (value) => {
       const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -46,7 +50,7 @@ function installHarness() {
     fmtMoney: (value) => Number(value || 0).toFixed(2),
     resolvedRateBadgeHtml: () => ''
   };
-  vm.runInNewContext(`${helperSource}\nthis.__overpaymentHelpers = { getOverpaymentRecoveryPresentation, getPreviewLineDisplayAmount, renderPreviewLineTypeHtml, renderPreviewLineAmountHtml };`, context, {
+  vm.runInNewContext(`${helperSource}\nthis.__overpaymentHelpers = { getOverpaymentRecoveryPresentation, buildOverpaymentRecoveryDisplayLines, getPreviewLineDisplayAmount, renderPreviewLineTypeHtml, renderPreviewLineAmountHtml };`, context, {
     filename: 'banking-pay-overpayment-presentation-helpers.js'
   });
   return context.__overpaymentHelpers;
@@ -96,4 +100,44 @@ test('renders a dedicated overpayment breakdown instead of the expense-component
   assert.match(mainSource, /<th[^>]*>Outstanding<\/th>/);
   assert.match(mainSource, /<th[^>]*>Recoverable this pay run<\/th>/);
   assert.match(mainSource, /isOverpaymentRecoveryLine\(line\)[\s\S]*renderOverpaymentRecoveryBreakdown\(line\)[\s\S]*renderExpenseComponentBreakdown\(line\)/);
+});
+
+test('groups one multi-component recovery into one visible parent while preserving every economic row id', () => {
+  const helpers = installHarness();
+  const rows = Array.from({ length: 5 }, (_, index) => ({
+    line_type: 'OVERPAYMENT_RECOVERY',
+    presentation_role: 'CHILD',
+    presentation_parent_line_id: 'finance:case-1:overpayment_recovery',
+    finance_case_id: 'case-1',
+    preview_row_id: `row-${index + 1}`,
+    amount_ex_vat: '-0.25',
+    selection_allowed: true,
+    case_components: [{
+      finance_component_id: `component-${index + 1}`,
+      component_key_type: 'TS_DAY',
+      component_key_value: `2026-07-${String(index + 6).padStart(2, '0')}`,
+      source_amount: '11.25',
+      remaining_source_amount: '11.25',
+      preview_due_amount_ex_vat: '0.25'
+    }]
+  }));
+
+  const displayRows = helpers.buildOverpaymentRecoveryDisplayLines(rows);
+  assert.equal(displayRows.length, 1);
+  assert.deepEqual(Array.from(displayRows[0].__presentation_group_preview_row_ids), ['row-1', 'row-2', 'row-3', 'row-4', 'row-5']);
+  assert.equal(displayRows[0].case_components.length, 5);
+  assert.equal(displayRows[0].amount_ex_vat, -1.25);
+  assert.equal(displayRows[0].presentation_role, 'PARENT');
+  assert.equal(displayRows[0].source_ref, 'advance:case-1');
+
+  const presentation = helpers.getOverpaymentRecoveryPresentation(displayRows[0]);
+  assert.equal(presentation.outstanding_total, 56.25);
+  assert.equal(presentation.recoverable_this_run, 1.25);
+  assert.match(mainSource, /if \(a === 'banking:pay:toggleTimesheetPreviewGroup'\)[\s\S]*setPreviewRowsSelection\(previewRowIds, selectAllChildren\)/);
+});
+
+test('gives terminal failure precedence over stale pending state and de-duplicates failure levels', () => {
+  assert.match(mainSource, /if \(authoritativeRenderState\.hasFailure \|\| hasFailedCandidates\) return 'Refresh failed';\s*if \(hasPendingCandidates\) return 'Preparing…';/);
+  assert.match(mainSource, /const issueCount = Math\.max\([\s\S]*candidateCounts\.failed[\s\S]*lineCounts\.failed[\s\S]*jobCounts\.unresolved_failed/);
+  assert.match(mainSource, /pendingCandidateIds\.filter\(\(candidateId\) => !failedCandidateIdSet\.has\(candidateId\)\)/);
 });
