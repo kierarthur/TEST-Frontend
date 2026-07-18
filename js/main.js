@@ -1624,6 +1624,19 @@ function clearFieldErrors(root) {
     el.classList.remove('field-error');
     el.classList.remove('error');
   });
+  root.querySelectorAll('[aria-invalid="true"]').forEach(el => {
+    el.removeAttribute('aria-invalid');
+    const errorId = String(el.dataset.fieldErrorDescribedby || '').trim();
+    if (errorId) {
+      const keep = String(el.getAttribute('aria-describedby') || '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .filter(id => id !== errorId);
+      if (keep.length) el.setAttribute('aria-describedby', keep.join(' '));
+      else el.removeAttribute('aria-describedby');
+      delete el.dataset.fieldErrorDescribedby;
+    }
+  });
   root.querySelectorAll('.field-error-msg').forEach(el => el.remove());
   root.querySelectorAll('.field-error-icon').forEach(el => el.remove());
 }
@@ -1640,6 +1653,7 @@ function markFieldError(root, fieldName, message) {
   row.classList.add('field-error');
   row.classList.add('error');
   field.classList.add('field-error');
+  field.setAttribute('aria-invalid', 'true');
 
   const label = row.querySelector('label');
   if (label && !label.querySelector('.field-error-icon')) {
@@ -1656,12 +1670,17 @@ function markFieldError(root, fieldName, message) {
     if (!msg) {
       msg = document.createElement('div');
       msg.className = 'field-error-msg';
+      msg.id = `field-error-${String(fieldName || 'field').replace(/[^a-z0-9_-]+/gi, '-')}`;
       msg.style.color = 'red';
       msg.style.fontSize = '0.8em';
       msg.style.marginTop = '4px';
       row.appendChild(msg);
     }
     msg.textContent = message;
+    const describedBy = new Set(String(field.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean));
+    describedBy.add(msg.id);
+    field.setAttribute('aria-describedby', Array.from(describedBy).join(' '));
+    field.dataset.fieldErrorDescribedby = msg.id;
   }
 }
 
@@ -131555,7 +131574,7 @@ function renderContractRatesTab(ctx) {
     <div class="tabc" id="contractRatesTab" data-pay-method="${payMethod}">
       <div class="row" style="display:flex;justify-content:space-between;align-items:center">
         <label class="section">Rates</label>
-        <div class="actions" style="gap:8px">
+        <div class="record-inline-actions">
           <span class="pill" id="presetChip" style="display:none"></span>
           <button type="button" id="btnChoosePreset">Choose preset…</button>
           <button type="button" id="btnResetPreset">Reset preset</button>
@@ -264053,6 +264072,15 @@ function renderCandidateTab(key, row = {}) {
     `);
   }
 
+  if (key === 'bookings' && !String(row?.id || '').trim()) return html(`
+    <div class="tabc">
+      <div class="record-save-first" role="status">
+        <strong>Save this candidate before viewing bookings.</strong>
+        The bookings calendar becomes available as soon as the candidate has been created.
+      </div>
+    </div>
+  `);
+
   if (key === 'bookings') return html(`
     <div id="candidateCalendarHolder" class="tabc">
       <div class="hint">Loading calendar…</div>
@@ -266911,7 +266939,7 @@ async function openCandidate(row) {
   const hasEHistory = !!(full && full.__has_e_history);
 
   showModal(
-    'Candidate',
+    full?.id ? 'View Candidate' : 'Create Candidate',
     [
       { key:'main',     label:'Main Details' },
       { key:'rates',    label:'Care Packages' },
@@ -267868,7 +267896,7 @@ async function renderCandidateRatesTable() {
   if (!rows.length) {
     div.innerHTML = `
       <div class="hint" style="margin-bottom:8px">No candidate-specific overrides. Client defaults will apply.</div>
-      <div class="actions">
+      <div class="record-inline-actions">
         <button id="btnAddRate" class="btn mini"${parentEditable ? '' : ' disabled'}>
           Add rate override
         </button>
@@ -268230,6 +268258,20 @@ function discardAllModalsAndState(){
   // Hide overlay last
   const back = document.getElementById('modalBack');
   if (back) back.style.display = 'none';
+
+  try {
+    document.querySelectorAll('[data-record-modal-inert="1"]').forEach((el) => {
+      el.inert = false;
+      delete el.dataset.recordModalInert;
+    });
+    const restoreFocus = window.__recordModalRestoreFocus;
+    window.__recordModalRestoreFocus = null;
+    if (restoreFocus && restoreFocus.isConnected && typeof restoreFocus.focus === 'function') {
+      requestAnimationFrame(() => {
+        try { restoreFocus.focus({ preventScroll:true }); } catch { try { restoreFocus.focus(); } catch {} }
+      });
+    }
+  } catch {}
 
   console.debug('[MODAL] hard reset complete');
 }
@@ -270263,7 +270305,7 @@ window.modalCtx = {
   // 3) Render modal
   L('calling showModal with hasId=', !!full?.id, 'rawHasIdArg=', full?.id);
   showModal(
-    'Client',
+    full?.id ? 'View Client' : 'Create Client',
     [
       {key:'main',     label:'Main'},
       {key:'rates',    label:'Care Package Rates'},
@@ -283533,7 +283575,7 @@ function renderDayGrid(hostEl, opts) {
   toolbar.style.justifyContent = 'space-between';
   toolbar.style.alignItems = 'center';
   toolbar.innerHTML = `
-    <div class="actions">
+    <div class="record-inline-actions">
       <button id="calPrev">◀</button>
       <button id="calNext">▶</button>
       <button id="calToggle">${view === 'year' ? 'Month view' : 'Year view'}</button>
@@ -283781,7 +283823,7 @@ function renderContractCalendarTab(ctx) {
 
   // --- actions (includes Duplicate)
   const actionsHtml = (c.id
-    ? `<div class="actions" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+    ? `<div class="record-inline-actions" style="margin-top:8px">
          ${inViewMode ? `` : `<button id="btnAddMissing">Add missing weeks</button>
          <button id="btnRemoveAll">Remove all weeks</button>`}
          ${inViewMode ? `<button id="btnCloneExtend" title="${escapeHtml(cloneExtendHint)}">Clone & Extend…</button>
@@ -283849,12 +283891,12 @@ function renderContractCalendarTab(ctx) {
       };
 
       el.innerHTML = `
-        <div class="tabc" style="display:flex;flex-direction:column;gap:8px;height:calc(72vh);max-height:calc(72vh)">
+        <div class="tabc contract-calendar-shell">
           <div class="info-row" style="font-size:13px;">
             <strong>Candidate:</strong>
             <span id="__calCandidateName" style="margin-left:6px;"></span>
           </div>
-          <div id="__calScroll" style="flex:1;min-height:0;overflow:auto;border:1px solid var(--line,#e5e5e5);border-radius:8px;padding:4px;">
+          <div id="__calScroll" style="min-height:0;overflow-x:auto;overflow-y:hidden;border:1px solid var(--line,#e5e5e5);border-radius:8px;padding:4px;">
             <div id="__contractCal"></div>
           </div>
           ${actionsHtml}
@@ -284726,7 +284768,7 @@ if (LOGC) console.log('[CONTRACTS] tabs', tabDefs.map(t => t.key));
 
   showModal(
 
-  isCreate ? 'Create Contract' : 'Edit Contract',
+  isCreate ? 'Create Contract' : 'View Contract',
   tabDefs,
   (key, row) => {
     const ctx = { data: row };
@@ -288090,7 +288132,7 @@ async function renderClientRatesTable() {
     DBG('no staged rows → show empty state');
     div.innerHTML = `
       <div class="hint" style="margin-bottom:8px">No client default windows yet.</div>
-      <div class="actions">
+      <div class="record-inline-actions">
         <button id="btnAddClientRate" class="btn mini"${parentEditable ? '' : ' disabled'}>
           Add / Upsert client window
         </button>
@@ -309557,6 +309599,183 @@ function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
   const parentFrame  = () => (stack().length > 1 ? stack()[stack().length - 2] : null);
   const deep = (o) => JSON.parse(JSON.stringify(o));
 
+  const RECORD_ENTITIES = new Set(['candidates', 'clients', 'contracts']);
+  const isRecordFrame = (fr) => !!(fr && RECORD_ENTITIES.has(String(fr.entity || '').trim().toLowerCase()));
+  const isPrimaryRecordFrame = (fr) => isRecordFrame(fr) && (!fr.kind || fr.kind === 'contracts');
+  const isRecordOwnedFrame = (fr, owner) => isRecordFrame(fr) || isRecordFrame(owner);
+  const resolveRecordModalTitle = (fr) => {
+    if (!isPrimaryRecordFrame(fr)) return String(fr?.title || '');
+    const noun = fr.entity === 'candidates' ? 'Candidate' : (fr.entity === 'clients' ? 'Client' : 'Contract');
+    const verb = fr.mode === 'create' ? 'Create' : (fr.mode === 'edit' ? 'Edit' : 'View');
+    return `${verb} ${noun}`;
+  };
+
+  const recordFieldValue = (fr, name) => {
+    const body = byId('modalBody');
+    const live = body?.querySelector(`[name="${name}"]`);
+    if (live) return live.type === 'checkbox' ? !!live.checked : String(live.value ?? '').trim();
+    const ctx = (fr?._ctxRef && typeof fr._ctxRef === 'object') ? fr._ctxRef : (window.modalCtx || {});
+    const candidates = [ctx?.candidateMainModel, ctx?.formState?.main, ctx?.data];
+    for (const source of candidates) {
+      if (source && Object.prototype.hasOwnProperty.call(source, name)) return String(source[name] ?? '').trim();
+    }
+    return '';
+  };
+
+  const isRecordModalBasicValid = (fr) => {
+    if (!fr || (fr.entity !== 'candidates' && fr.entity !== 'clients')) return true;
+    const value = (name) => String(recordFieldValue(fr, name) ?? '').trim();
+    const emailOk = (raw) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(raw);
+    if (fr.entity === 'candidates') {
+      const first = value('first_name');
+      const last = value('last_name');
+      const phone = value('phone');
+      const email = value('email');
+      const gender = value('gender');
+      const phoneDigits = phone.replace(/\D/g, '');
+      if (!first || !last || !gender || !/^\+?\d+$/.test(phone) || phoneDigits.length < 11 || !emailOk(email)) return false;
+      const ni = value('ni_number').replace(/\s+/g, '').toUpperCase();
+      if (ni && !/^[A-Z]{2}\d{6}[A-Z]$/.test(ni)) return false;
+      const address = ['address_line1','address_line2','address_line3','town_city','county','postcode'].map(value);
+      if (address.some(Boolean) && (!address[0] || !address[5])) return false;
+      return true;
+    }
+    const name = value('name');
+    const email = value('primary_invoice_email');
+    const apPhone = value('ap_phone');
+    if (!name || !emailOk(email)) return false;
+    if (apPhone && (!/^\d+$/.test(apPhone) || apPhone.replace(/\D/g, '').length < 8)) return false;
+    return true;
+  };
+
+  const clearRecordControlError = (control) => {
+    if (!control) return;
+    const errorId = String(control.dataset.fieldErrorDescribedby || '').trim();
+    if (errorId) {
+      const keep = String(control.getAttribute('aria-describedby') || '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .filter((id) => id !== errorId);
+      if (keep.length) control.setAttribute('aria-describedby', keep.join(' '));
+      else control.removeAttribute('aria-describedby');
+      document.getElementById(errorId)?.remove();
+      delete control.dataset.fieldErrorDescribedby;
+    }
+    control.removeAttribute('aria-invalid');
+    control.classList.remove('field-error');
+    const row = control.closest('.row');
+    if (row && !row.querySelector('[aria-invalid="true"]')) {
+      row.classList.remove('field-error', 'error');
+      row.querySelector('.field-error-icon')?.remove();
+    }
+  };
+
+  const syncRecordControlValidity = (fr, control) => {
+    if (!fr || fr.currentTabKey !== 'main' || !(control instanceof HTMLElement)) return;
+    if (fr.entity !== 'candidates' && fr.entity !== 'clients') return;
+    const name = String(control.getAttribute('name') || '').trim();
+    if (!name) return;
+    const raw = String(control.value ?? '').trim();
+    const emailOk = (value) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value);
+    let message = '';
+
+    if (fr.entity === 'candidates') {
+      if (name === 'first_name' && !raw) message = 'First name is required';
+      else if (name === 'last_name' && !raw) message = 'Last name is required';
+      else if (name === 'phone') {
+        const digits = raw.replace(/\D/g, '');
+        if (!raw) message = 'Telephone number is required';
+        else if (!/^\+?\d+$/.test(raw) || digits.length < 11) message = 'Telephone must be numbers only (optionally leading +) and at least 11 digits';
+      } else if (name === 'email') {
+        if (!raw) message = 'Email is required';
+        else if (!emailOk(raw)) message = 'Please enter a valid email address';
+      } else if (name === 'gender' && !raw) message = 'Please select a gender';
+      else if (name === 'ni_number' && raw && !/^[A-Z]{2}\d{6}[A-Z]$/.test(raw.replace(/\s+/g, '').toUpperCase())) message = 'Format must be like JR547853B';
+      else if (name === 'address_line1' || name === 'postcode') {
+        const addressNames = ['address_line1','address_line2','address_line3','town_city','county','postcode'];
+        const anyAddress = addressNames.some((fieldName) => String(recordFieldValue(fr, fieldName) || '').trim());
+        if (anyAddress && !raw) message = name === 'address_line1'
+          ? 'Address line 1 is required when an address is entered'
+          : 'Postcode is required when an address is entered';
+      }
+    } else {
+      if (name === 'name' && !raw) message = 'Client name is required';
+      else if (name === 'primary_invoice_email') {
+        if (!raw) message = 'Primary invoice email is required';
+        else if (!emailOk(raw)) message = 'Please enter a valid invoice email';
+      } else if (name === 'ap_phone' && raw) {
+        const digits = raw.replace(/\D/g, '');
+        if (!/^\d+$/.test(raw) || digits.length < 8) message = 'A/P phone must be numbers only and at least 8 digits if entered';
+      }
+    }
+
+    if (message) markFieldError(byId('modalBody'), name, message);
+    else clearRecordControlError(control);
+  };
+
+  const enhanceRecordModalDom = (fr) => {
+    if (!isRecordOwnedFrame(fr, parentFrame())) return;
+    const body = byId('modalBody');
+    const modal = byId('modal');
+    if (!body || !modal) return;
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'modalTitle');
+    body.setAttribute('role', 'tabpanel');
+    const activeTab = byId('modalTabs')?.querySelector('button[aria-selected="true"]');
+    if (activeTab?.id) body.setAttribute('aria-labelledby', activeTab.id);
+    else body.removeAttribute('aria-labelledby');
+
+    let fieldIndex = 0;
+    body.querySelectorAll('.row').forEach((row) => {
+      const label = row.querySelector(':scope > label');
+      if (!label || label.querySelector('input,select,textarea')) return;
+      const control = row.querySelector(':scope > input:not([type="hidden"]),:scope > select,:scope > textarea,.controls input:not([type="hidden"]),.controls select,.controls textarea');
+      if (!control) return;
+      if (!control.id) {
+        const seed = String(control.name || `${fr.entity}-${fr.currentTabKey}-${++fieldIndex}`).replace(/[^a-z0-9_-]+/gi, '-');
+        control.id = `record-field-${seed}`;
+      }
+      label.htmlFor = control.id;
+      const hint = row.querySelector('.hint');
+      if (hint && !hint.id) hint.id = `${control.id}-hint`;
+      if (hint?.id) {
+        const ids = new Set(String(control.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean));
+        ids.add(hint.id);
+        control.setAttribute('aria-describedby', Array.from(ids).join(' '));
+      }
+    });
+    body.querySelectorAll('.split').forEach((split) => {
+      const control = split.querySelector('input:not([type="hidden"]),select,textarea');
+      const text = String(split.querySelector('.mini')?.textContent || '').trim();
+      if (control && text && !control.getAttribute('aria-label') && !control.getAttribute('aria-labelledby')) control.setAttribute('aria-label', text);
+    });
+    body.querySelectorAll('input:not([type="hidden"]),select,textarea').forEach((control) => {
+      if (control.labels?.length || control.getAttribute('aria-label') || control.getAttribute('aria-labelledby')) return;
+      control.setAttribute('aria-label', String(control.getAttribute('placeholder') || control.name || 'Field').trim());
+    });
+    if (fr.currentTabKey === 'main') {
+      const required = fr.entity === 'candidates'
+        ? ['first_name','last_name','phone','email','gender']
+        : (fr.entity === 'clients' ? ['name','primary_invoice_email'] : []);
+      required.forEach((name) => {
+        const control = body.querySelector(`[name="${name}"]`);
+        if (!control) return;
+        control.required = true;
+        control.setAttribute('aria-required', 'true');
+      });
+    }
+  };
+
+  const focusRecordModalInitially = (fr) => {
+    if (!isRecordOwnedFrame(fr, parentFrame()) || fr._initialFocusApplied) return;
+    fr._initialFocusApplied = true;
+    requestAnimationFrame(() => {
+      const target = byId('modalTabs')?.querySelector('button[aria-selected="true"]') || byId('modal');
+      try { target?.focus({ preventScroll:true }); } catch { try { target?.focus(); } catch {} }
+    });
+  };
+
       let opts = options || {};
   if (onReturn && typeof onReturn === 'object' && options === undefined) { opts = onReturn; onReturn = undefined; }
 
@@ -311489,6 +311708,7 @@ const frame = {
 })(),
 
     isDirty:false, _snapshot:null, _detachDirty:null, _detachGlobal:null, _hasMountedOnce:false, _wired:false, _closing:false, _saving:false, _confirmingDiscard:false,
+    _userInteracted:false, _initialFocusApplied:false,
     _applyDesired:null,
 
 persistCurrentTabState() {
@@ -312386,6 +312606,7 @@ for (const k2 of OPT_KEYS) {
     const root = byId('modalBody'); if (!root) { L('_attachDirtyTracker(skip: no modalBody)'); return; }
     const onDirty = (ev) => {
       if (ev && !ev.isTrusted) return;
+      this._userInteracted = true;
 
      // Allow presets picker to mark the *parent* dirty (only ignore truly load-only frames)
 if (this._loadOnly === true) return;
@@ -312433,11 +312654,14 @@ if (this._loadOnly === true) return;
           this._updateButtons && this._updateButtons();
         }
       }
+      try { syncRecordControlValidity(this, ev?.target); } catch {}
       try { const t=currentFrame(); if (t && t.entity==='candidates' && t.currentTabKey==='rates') { renderCandidateRatesTable?.(); } } catch {}
     };
+    const onIntent = (ev) => { if (ev?.isTrusted) this._userInteracted = true; };
     root.addEventListener('input', onDirty, true);
     root.addEventListener('change',onDirty, true);
-    this._detachDirty = ()=>{ root.removeEventListener('input',onDirty,true); root.removeEventListener('change',onDirty,true); };
+    root.addEventListener('click', onIntent, true);
+    this._detachDirty = ()=>{ root.removeEventListener('input',onDirty,true); root.removeEventListener('change',onDirty,true); root.removeEventListener('click',onIntent,true); };
     L('_attachDirtyTracker: attached');
   },
 async setTab(k) {
@@ -315447,6 +315671,7 @@ try {
   }
 
   this.currentTabKey = k;
+  enhanceRecordModalDom(this);
   this._attachDirtyTracker();
 
   const isChild = (stack().length > 1);
@@ -315919,6 +316144,7 @@ function setFrameMode(frameObj, mode) {
 
   const prev    = frameObj.mode;
   frameObj.mode = mode;
+  if (prev !== mode && (mode === 'edit' || mode === 'create')) frameObj._userInteracted = false;
 
   const isChild = (stack().length > 1);
   const isTop   = (currentFrame && currentFrame() === frameObj);
@@ -316115,6 +316341,18 @@ try {
 const parentOnOpen = currentFrame();
 frame._parentModeOnOpen = parentOnOpen ? parentOnOpen.mode : null;
 
+if (!parentOnOpen && isRecordFrame(frame)) {
+  try {
+    window.__recordModalRestoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    Array.from(document.body.children).forEach((el) => {
+      if (!(el instanceof HTMLElement) || el.id === 'modalBack' || el.id === 'globalLoadingOverlay') return;
+      if (el.inert) return;
+      el.inert = true;
+      el.dataset.recordModalInert = '1';
+    });
+  } catch {}
+}
+
 stack().push(frame);
 byId('modalBack').style.display='flex';
 
@@ -316141,6 +316379,10 @@ function renderTop() {
   const isChild = (stack().length > 1);
   const top     = currentFrame();
   const parent  = parentFrame();
+  const recordOwned = isRecordOwnedFrame(top, parent);
+  try {
+    byId('modal')?.classList.toggle('record-modal', recordOwned);
+  } catch {}
 
   // ✅ Force: these invoice child modals must never show the global footer Save button
   try {
@@ -316176,7 +316418,7 @@ function renderTop() {
       mt.style.flexWrap = 'wrap';
 
       const tSpan = document.createElement('span');
-      tSpan.textContent = String(top.title || '');
+      tSpan.textContent = resolveRecordModalTitle(top);
       mt.appendChild(tSpan);
 
       const badges = Array.isArray(top.titleBadges) ? top.titleBadges : [];
@@ -316199,6 +316441,13 @@ function renderTop() {
   } catch {}
 
   const tabsEl = byId('modalTabs'); tabsEl.innerHTML='';
+  if (recordOwned) {
+    tabsEl.setAttribute('role', 'tablist');
+    tabsEl.setAttribute('aria-label', `${resolveRecordModalTitle(top)} sections`);
+  } else {
+    tabsEl.removeAttribute('role');
+    tabsEl.removeAttribute('aria-label');
+  }
 
 const resolveTabDisabledState = (tabLike) => {
   const tab = (tabLike && typeof tabLike === 'object') ? tabLike : {};
@@ -316296,7 +316545,13 @@ let _pushedRight = false;
 
 (top.tabs||[]).forEach((t,i)=>{
   const b = document.createElement('button');
+  b.type = 'button';
   b.textContent = t.label || t.title || t.key;
+  if (recordOwned) {
+    b.setAttribute('role', 'tab');
+    b.id = `record-tab-${String(top._token || i).replace(/[^a-z0-9_-]+/gi, '-')}-${String(t.key || i).replace(/[^a-z0-9_-]+/gi, '-')}`;
+    b.setAttribute('aria-controls', 'modalBody');
+  }
   try {
     const tabKeyForTest = String(t && t.key ? t.key : '').trim();
     if (top && top.entity === 'timesheets' && tabKeyForTest) b.dataset.testid = `timesheet-tab-${tabKeyForTest}`;
@@ -316322,15 +316577,22 @@ let _pushedRight = false;
   if (isDisabled) {
     b.classList.add('disabled');
     b.dataset.disabled = '1';
+    if (recordOwned) b.setAttribute('aria-disabled', 'true');
     const why = String(disabledState.reason || window.modalCtx?.expenses_tab_reason || 'This tab is currently unavailable.');
     b.setAttribute('title', why);
   } else {
     b.classList.remove('disabled');
     b.dataset.disabled = '';
+    if (recordOwned) b.setAttribute('aria-disabled', 'false');
     b.removeAttribute('title');
   }
 
-  if (t.key === top.currentTabKey) b.classList.add('active');
+  const isActive = (t.key === top.currentTabKey);
+  if (isActive) b.classList.add('active');
+  if (recordOwned) {
+    b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    b.tabIndex = (!isDisabled && isActive) ? 0 : -1;
+  }
 
   b.onclick = () => {
     if (top.mode === 'saving') return;
@@ -316338,9 +316600,32 @@ let _pushedRight = false;
     // ✅ Click-block disabled tabs (non-responsive on click)
     if (isDisabled) return;
 
-    tabsEl.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+    tabsEl.querySelectorAll('button').forEach(x => {
+      x.classList.remove('active');
+      if (recordOwned) {
+        x.setAttribute('aria-selected', 'false');
+        x.tabIndex = -1;
+      }
+    });
     b.classList.add('active');
+    if (recordOwned) {
+      b.setAttribute('aria-selected', 'true');
+      b.tabIndex = 0;
+    }
     top.setTab(t.key);
+  };
+
+  if (recordOwned) b.onkeydown = (ev) => {
+    if (!['ArrowLeft','ArrowRight','Home','End'].includes(ev.key)) return;
+    const enabled = Array.from(tabsEl.querySelectorAll('button[role="tab"]')).filter(x => x.getAttribute('aria-disabled') !== 'true');
+    if (!enabled.length) return;
+    const at = enabled.indexOf(b);
+    const next = ev.key === 'Home' ? enabled[0]
+      : (ev.key === 'End' ? enabled[enabled.length - 1]
+        : enabled[(at + (ev.key === 'ArrowRight' ? 1 : -1) + enabled.length) % enabled.length]);
+    ev.preventDefault();
+    next.focus();
+    next.click();
   };
 
   tabsEl.appendChild(b);
@@ -316440,6 +316725,8 @@ _tabPromise.then(async () => {
   }
 
   await afterTabRendered();
+  enhanceRecordModalDom(top);
+  focusRecordModalInitially(top);
 }).catch((e) => {
   console.warn('[MODAL][renderTop] post-tab wiring failed', e);
   GE();
@@ -316831,6 +317118,14 @@ const wantsConfirmDiscardClose =
 
 top._updateButtons = ()=> {
   try {
+    if (isPrimaryRecordFrame(top)) {
+      const resolvedTitle = resolveRecordModalTitle(top);
+      const titleText = byId('modalTitle')?.querySelector('span');
+      if (titleText) titleText.textContent = resolvedTitle;
+      byId('modalTabs')?.setAttribute('aria-label', `${resolvedTitle} sections`);
+    }
+  } catch {}
+  try {
     const h = document.getElementById('modalHint');
     if (h) {
       h.textContent = '';
@@ -317028,7 +317323,7 @@ top._updateButtons = ()=> {
       let wantApply;
       if (top.kind === 'rate-presets-picker') {
         wantApply = !!top.__canSave;
-      } else if (top.kind === 'client-rate' || top.kind === 'candidate-override') {
+      } else if (top.kind === 'client-rate' || top.kind === 'candidate-override' || top.kind === 'client-hospital') {
         wantApply = (top._applyDesired === true);
       } else {
         wantApply = true;
@@ -319132,6 +319427,8 @@ Operation ID: ${operationId}` : ''}`);
         }
 
         btnSave.disabled = !!top._saving || !gateOk;
+      } else if (top.entity === 'candidates' || top.entity === 'clients') {
+        btnSave.disabled = !!top._saving || !top.isDirty || !isRecordModalBasicValid(top);
       } else if (top.kind === 'timesheet-manual-daily-create') {
         let gateOk = false;
         try {
@@ -319163,7 +319460,9 @@ Operation ID: ${operationId}` : ''}`);
       }
 
       // ✅ Invoice modal: enable Save ONLY when there are staged edits (top.isDirty is driven externally)
-      if (top.entity === 'invoices' && top.kind === 'invoice-modal') {
+      if (top.entity === 'candidates' || top.entity === 'clients') {
+        btnSave.disabled = !!top._saving || !top.isDirty || !isRecordModalBasicValid(top);
+      } else if (top.entity === 'invoices' && top.kind === 'invoice-modal') {
         btnSave.disabled = !!top._saving || !top.isDirty;
       } else {
         btnSave.disabled = (top.entity === 'contracts')
@@ -319259,6 +319558,15 @@ if (!isChild && (top.entity === 'candidates' || top.entity === 'clients')) {
     else if (!canDelete) btnDel.setAttribute('title', 'This record cannot be deleted.');
     else btnDel.removeAttribute('title');
 
+    const deleteHint = byId('modalHint');
+    if (!canDelete && deleteHint) {
+      deleteHint.textContent = `Delete unavailable: ${reason || 'this record is currently in use.'}`;
+      deleteHint.id = 'modalHint';
+      btnDel.setAttribute('aria-describedby', 'modalHint');
+    } else {
+      btnDel.removeAttribute('aria-describedby');
+    }
+
  btnDel.onclick = async (ev) => {
   try { ev && ev.preventDefault && ev.preventDefault(); } catch {}
   try { ev && ev.stopPropagation && ev.stopPropagation(); } catch {}
@@ -319318,6 +319626,7 @@ if (!isChild && (top.entity === 'candidates' || top.entity === 'clients')) {
     btnDel.style.filter  = '';
     btnDel.removeAttribute('title');
     btnDel.removeAttribute('aria-disabled');
+    btnDel.removeAttribute('aria-describedby');
     btnDel.removeAttribute('data-disabled');
   }
 
@@ -320247,7 +320556,11 @@ const resumeParentAfterChildReturn = (closing) => {
 async function saveForFrame(fr) {
   if (!fr || fr._saving) return;
   const onlyDel    = hasStagedClientDeletes();
-  const allowApply = (fr.kind === 'candidate-override' || fr.kind === 'client-rate') && fr._applyDesired === true;
+  const allowApply = (
+    fr.kind === 'candidate-override' ||
+    fr.kind === 'client-rate' ||
+    fr.kind === 'client-hospital'
+  ) && fr._applyDesired === true;
 
   L('saveForFrame ENTER (global)', {
     kind: fr.kind,
@@ -320587,7 +320900,7 @@ const bindSave = (btn, fr) => {
 bindSave(btnSave, top);
 
   // FIX: ignore programmatic "dirty" while suppression is active
-   const onDirtyEvt = ()=> {
+   const onDirtyEvt = (ev)=> {
     const fr = currentFrame();
     if (!fr) return;
     if (fr._suppressDirty) return;
@@ -320610,6 +320923,10 @@ bindSave(btnSave, top);
       // when closing the picker.
       return;
     }
+
+    // Initial Contract rendering dispatches legacy synthetic dirty events. Ignore those
+    // until a real input/change/click proves that the user actually changed something.
+    if (fr.entity === 'contracts' && fr.mode === 'create' && !fr._userInteracted && !ev?.isTrusted) return;
 
     // Allow presets picker dirty → parent (ignore only truly load-only frames)
     if (fr._loadOnly === true) return;
@@ -320644,7 +320961,7 @@ bindSave(btnSave, top);
 
   const onApplyEvt = ev=>{
     const isChildNow=(stack().length>1); if(!isChildNow) return;
-    const t=currentFrame(); if(!(t && (t.kind==='client-rate'||t.kind==='candidate-override'))) return;
+    const t=currentFrame(); if(!(t && (t.kind==='client-rate'||t.kind==='candidate-override'||t.kind==='client-hospital'))) return;
     const enabled=!!(ev && ev.detail && ev.detail.enabled);
     t._applyDesired=enabled;
     t._updateButtons&&t._updateButtons();
@@ -320709,12 +321026,50 @@ bindSave(btnSave, top);
     window.addEventListener('modal-apply-enabled', onApplyEvt);
     window.addEventListener('modal-frame-mode-changed', onModeChanged);
     window.addEventListener('contract-margins-updated', onMarginsEvt);
-    const onEsc=e=>{ if(e.key==='Escape'){ if(top._confirmingDiscard||top._closing) return; e.preventDefault(); byId('btnCloseModal').click(); } };
-    window.addEventListener('keydown', onEsc);
+    const onModalKey = (e) => {
+      if (e.key === 'Escape') {
+        if (top._confirmingDiscard || top._closing) return;
+        e.preventDefault();
+        byId('btnCloseModal').click();
+        return;
+      }
+      if (e.key !== 'Tab' || !isRecordOwnedFrame(top, parent)) return;
+      const modal = byId('modal');
+      if (!modal) return;
+      const focusable = Array.from(modal.querySelectorAll('button,input,select,textarea,a[href],[tabindex]:not([tabindex="-1"])'))
+        .filter(el => !el.disabled && el.getAttribute('aria-disabled') !== 'true' && el.getClientRects().length > 0);
+      if (!focusable.length) {
+        e.preventDefault();
+        modal.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', onModalKey);
+    let viewportRaf = 0;
+    const onViewportChange = () => {
+      if (!isRecordOwnedFrame(currentFrame(), parentFrame())) return;
+      try { cancelAnimationFrame(viewportRaf); } catch {}
+      viewportRaf = requestAnimationFrame(() => {
+        const live = currentFrame();
+        if (!live || !isRecordOwnedFrame(live, parentFrame())) return;
+        applyModalGeometryForKind(byId('modal'), String(live.kind || '').trim(), { forceCenter:false });
+      });
+    };
+    window.addEventListener('resize', onViewportChange);
+    window.addEventListener('orientationchange', onViewportChange);
     const onOverlayClick=e=>{ if(top._confirmingDiscard||top._closing) return; if(e.target===byId('modalBack')) { e.preventDefault(); e.stopPropagation(); return; } };
     byId('modalBack').addEventListener('click', onOverlayClick, true);
 
-    top._detachGlobal = ()=>{ try{window.removeEventListener('modal-dirty',onDirtyEvt);}catch{} try{window.removeEventListener('modal-apply-enabled',onApplyEvt);}catch{} try{window.removeEventListener('modal-frame-mode-changed',onModeChanged);}catch{} try{window.removeEventListener('contract-margins-updated',onMarginsEvt);}catch{} try{window.removeEventListener('keydown',onEsc);}catch{} try{byId('modalBack').removeEventListener('click', onOverlayClick, true);}catch{}; };
+    top._detachGlobal = ()=>{ try{window.removeEventListener('modal-dirty',onDirtyEvt);}catch{} try{window.removeEventListener('modal-apply-enabled',onApplyEvt);}catch{} try{window.removeEventListener('modal-frame-mode-changed',onModeChanged);}catch{} try{window.removeEventListener('contract-margins-updated',onMarginsEvt);}catch{} try{window.removeEventListener('keydown',onModalKey);}catch{} try{window.removeEventListener('resize',onViewportChange);}catch{} try{window.removeEventListener('orientationchange',onViewportChange);}catch{} try{cancelAnimationFrame(viewportRaf);}catch{} try{byId('modalBack').removeEventListener('click', onOverlayClick, true);}catch{}; };
     top._wired = true;
     L('renderTop (global): listeners wired');
   }
@@ -328705,7 +329060,19 @@ function openClientHospitalModal(client_id) {
   showModal(
     'Add Hospital / Ward',
     [{key:'form',label:'Form'}],
-    () => formHtml,
+    () => {
+      setTimeout(() => {
+        const root = document.getElementById('hospitalForm');
+        const name = root?.querySelector('[name="hospital_name_norm"]');
+        if (!name) return;
+        const update = () => window.dispatchEvent(new CustomEvent('modal-apply-enabled', {
+          detail: { enabled: !!String(name.value || '').trim() }
+        }));
+        name.addEventListener('input', update);
+        update();
+      }, 0);
+      return formHtml;
+    },
     async ()=> {
       const pf = _parentFrame();
       // ✅ Allow create OR edit to apply
@@ -328727,8 +329094,7 @@ function openClientHospitalModal(client_id) {
       const parent = _currentFrame();
       if (parent) { parent.currentTabKey = 'hospitals'; parent.setTab('hospitals'); }
     },
-    // ⬇️ Options: bypass parent-gate guard for this child modal only
-    { noParentGate: true, forceEdit: true, kind: 'client-hospital' }
+    { forceEdit: true, kind: 'client-hospital', primaryLabel: 'Add hospital' }
   );
 }
 
@@ -331882,6 +332248,19 @@ function renderClientHospitalsTable() {
     rmBtn.setAttribute('data-action', 'delete');
     rmBtn.setAttribute('data-hid', String(x.id));
     rmBtn.className = 'btnDelHospital';
+    rmBtn.onclick = () => {
+      if (!parentEditable) return;
+      if (!(H.stagedDeletes instanceof Set)) {
+        H.stagedDeletes = new Set(
+          Array.isArray(H.stagedDeletes)
+            ? H.stagedDeletes
+            : Object.keys(H.stagedDeletes || {})
+        );
+      }
+      H.stagedDeletes.add(String(x.id));
+      try { window.dispatchEvent(new CustomEvent('modal-dirty')); } catch {}
+      renderClientHospitalsTable();
+    };
     actTd.appendChild(rmBtn);
 
     tr.appendChild(aliasTd);
@@ -333279,6 +333658,8 @@ function renderContractAdditionalRatesTab(ctx) {
     const freq       = (cfg.frequency || 'ONE_PER_WEEK').toUpperCase();
     const payRate    = (cfg.pay_rate != null && Number.isFinite(Number(cfg.pay_rate))) ? Number(cfg.pay_rate) : null;
     const chargeRate = (cfg.charge_rate != null && Number.isFinite(Number(cfg.charge_rate))) ? Number(cfg.charge_rate) : null;
+    const configured = !!(bucketName || unitName || payRate != null || chargeRate != null);
+    const summaryName = bucketName ? `Bucket ${i} — ${esc(bucketName)}` : `Bucket ${i}`;
 
     let marginStr = '';
     if (payRate != null && chargeRate != null) {
@@ -333316,49 +333697,54 @@ function renderContractAdditionalRatesTab(ctx) {
     }
 
     rowsHtml.push(`
-      <div class="row extra-rate-row" data-slot="${esc(code)}">
-        <label>Bucket ${i}</label>
-        <div class="controls" style="display:flex;flex-direction:column;gap:4px">
-          <div class="grid-6" style="min-width:0;gap:8px;align-items:flex-end;flex-wrap:wrap">
-            <div class="split">
-              <span class="mini">Bucket name</span>
-              <input class="input" name="extra_bucket_name_${i}" value="${esc(bucketName)}" placeholder="e.g. Patient visits" />
+      <details class="contract-extra-rate-card extra-rate-row" data-slot="${esc(code)}" ${configured && i === 1 ? 'open' : ''}>
+        <summary>
+          <span class="contract-extra-rate-summary-main">${summaryName}</span>
+          <span class="contract-extra-rate-summary-state">${configured ? 'Configured' : 'Not configured'}</span>
+        </summary>
+        <div class="contract-extra-rate-body">
+          <div class="controls" style="display:flex;flex-direction:column;gap:8px">
+            <div class="grid-6" style="min-width:0;gap:8px;align-items:end">
+              <div class="split">
+                <span class="mini">Bucket name</span>
+                <input class="input" name="extra_bucket_name_${i}" value="${esc(bucketName)}" placeholder="e.g. Patient visits" />
+              </div>
+              <div class="split">
+                <span class="mini">Unit name</span>
+                <input class="input" name="extra_unit_name_${i}" value="${esc(unitName)}" placeholder="e.g. Number of visits" />
+              </div>
+              <div class="split">
+                <span class="mini">Frequency</span>
+                <select class="input" name="extra_frequency_${i}">
+                  ${freqOptions.map(([val,label]) => `
+                    <option value="${val}" ${val === freq ? 'selected' : ''}>${esc(label)}</option>
+                  `).join('')}
+                </select>
+              </div>
+              <div class="split">
+                <span class="mini">${payLabel} (per unit)</span>
+                <input class="input" type="number" step="0.01" min="0" name="extra_pay_${i}" value="${payRate != null ? esc(payRate.toFixed(2)) : ''}" placeholder="0.00" />
+              </div>
+              <div class="split">
+                <span class="mini">Charge (per unit)</span>
+                <input class="input" type="number" step="0.01" min="0" name="extra_charge_${i}" value="${chargeRate != null ? esc(chargeRate.toFixed(2)) : ''}" placeholder="0.00" />
+              </div>
+              <div class="split">
+                <span class="mini">Margin / unit</span>
+                <span class="mini" data-role="extra-margin" data-slot="${esc(code)}">${marginStr ? `£${esc(marginStr)}` : ''}</span>
+              </div>
             </div>
-            <div class="split">
-              <span class="mini">Unit name</span>
-              <input class="input" name="extra_unit_name_${i}" value="${esc(unitName)}" placeholder="e.g. Number of visits" />
+            <div class="record-inline-actions">
+              <button type="button"
+                      class="btn mini"
+                      data-extra-clear="${esc(code)}"
+                      title="Clear bucket ${i}">
+                Clear bucket
+              </button>
             </div>
-            <div class="split">
-              <span class="mini">Frequency</span>
-              <select class="input" name="extra_frequency_${i}">
-                ${freqOptions.map(([val,label]) => `
-                  <option value="${val}" ${val === freq ? 'selected' : ''}>${esc(label)}</option>
-                `).join('')}
-              </select>
-            </div>
-            <div class="split">
-              <span class="mini">${payLabel} (per unit)</span>
-              <input class="input" type="number" step="0.01" min="0" name="extra_pay_${i}" value="${payRate != null ? esc(payRate.toFixed(2)) : ''}" placeholder="0.00" />
-            </div>
-            <div class="split">
-              <span class="mini">Charge (per unit)</span>
-              <input class="input" type="number" step="0.01" min="0" name="extra_charge_${i}" value="${chargeRate != null ? esc(chargeRate.toFixed(2)) : ''}" placeholder="0.00" />
-            </div>
-            <div class="split">
-              <span class="mini">Margin / unit</span>
-              <span class="mini" data-role="extra-margin" data-slot="${esc(code)}">${marginStr ? `£${esc(marginStr)}` : ''}</span>
-            </div>
-          </div>
-          <div style="margin-top:4px">
-            <button type="button"
-                    class="btn mini"
-                    data-extra-clear="${esc(code)}"
-                    title="Clear bucket ${i}">
-              Clear
-            </button>
           </div>
         </div>
-      </div>
+      </details>
     `);
   }
 
@@ -333472,7 +333858,7 @@ function renderContractAdditionalRatesTab(ctx) {
           const payRaw = String(prEl?.value || '').trim();
           const chargeRaw = String(crEl?.value || '').trim();
 
-          const hasAny = !!(bucket_name || unit_name_raw || freqRaw || payRaw || chargeRaw);
+          const hasAny = !!(bucket_name || unit_name_raw || payRaw || chargeRaw);
           if (!hasAny) continue;
 
           const payNum = payRaw === '' ? null : Number(payRaw);
@@ -333572,6 +333958,22 @@ function renderContractAdditionalRatesTab(ctx) {
 
           // Rebuild authoritative array every time
           stageAdditionalRatesFromDom();
+
+          const card = t.closest('.contract-extra-rate-card');
+          if (card) {
+            const idx = String(card.dataset.slot || '').replace(/^EX/i, '');
+            const bucket = String(card.querySelector(`[name="extra_bucket_name_${idx}"]`)?.value || '').trim();
+            const configuredNow = [
+              card.querySelector(`[name="extra_bucket_name_${idx}"]`)?.value,
+              card.querySelector(`[name="extra_unit_name_${idx}"]`)?.value,
+              card.querySelector(`[name="extra_pay_${idx}"]`)?.value,
+              card.querySelector(`[name="extra_charge_${idx}"]`)?.value
+            ].some(v => String(v || '').trim());
+            const main = card.querySelector('.contract-extra-rate-summary-main');
+            const state = card.querySelector('.contract-extra-rate-summary-state');
+            if (main) main.textContent = bucket ? `Bucket ${idx} — ${bucket}` : `Bucket ${idx}`;
+            if (state) state.textContent = configuredNow ? 'Configured' : 'Not configured';
+          }
 
           // Margin recalc for pay/charge changes (safe to call always, cheap)
           recalcMargins();

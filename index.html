@@ -1395,6 +1395,79 @@ body{
       overflow:auto;
     }
 
+    /* Candidate, Client and Contract editors use one predictable scroll owner. */
+    #modal.record-modal{
+      width:min(1100px,calc(100vw - 24px));
+      max-width:calc(100vw - 24px);
+      max-height:calc(100vh - 24px);
+      min-width:0;
+    }
+    #modal.record-modal .modal-b{
+      display:flex;
+      flex:1 1 auto;
+      flex-direction:column;
+      min-height:0;
+      overflow:hidden;
+    }
+    #modal.record-modal #modalTabs{
+      flex:0 0 auto;
+      overflow-x:auto;
+      overflow-y:hidden;
+      scrollbar-width:thin;
+    }
+    #modal.record-modal #modalTabs button{
+      flex:0 0 auto;
+      white-space:nowrap;
+    }
+    #modal.record-modal #modalBody{
+      flex:1 1 auto;
+      min-height:0;
+      overflow:auto;
+      overscroll-behavior:contain;
+      scrollbar-gutter:stable;
+    }
+    #modal.record-modal #modalActions{
+      flex:0 0 auto;
+      flex-wrap:wrap;
+    }
+    #modal.record-modal .form,
+    #modal.record-modal .form .row,
+    #modal.record-modal .form .controls,
+    #modal.record-modal .split{
+      min-width:0;
+    }
+    #modal.record-modal .form > .row{
+      padding:8px;
+      border:1px solid rgba(148,163,184,.16);
+      border-radius:10px;
+      background:rgba(11,20,39,.52);
+    }
+    #modal.record-modal input,
+    #modal.record-modal select,
+    #modal.record-modal textarea{
+      box-sizing:border-box;
+      max-width:100%;
+    }
+    #modal.record-modal .record-inline-actions{
+      display:flex;
+      align-items:center;
+      justify-content:flex-end;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    #modal.record-modal .record-save-first{
+      border:1px solid var(--line);
+      border-radius:12px;
+      background:#0b1427;
+      padding:18px;
+      line-height:1.5;
+    }
+    #modal.record-modal .record-save-first strong{
+      display:block;
+      margin-bottom:4px;
+      color:var(--text);
+    }
+
     /* ✅ Keep tabs visible when the modal body scrolls (e.g., long Settings → Remittances tab) */
     .tabs{
       display:flex;
@@ -2114,6 +2187,7 @@ body{
     .tabc .grid-2{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
     .tabc .grid-3{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
     .tabc .grid-5{ display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
+    .tabc .grid-6{ display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; }
     .tabc .grid-7{ display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:10px; }
 
     /* Contracts: keep form 2-col, but force schedule section to full width */
@@ -2156,6 +2230,137 @@ body{
       #modal.contract-modal .mini{
       font-size:12px;
       color:var(--sub);
+    }
+
+    /* Contract rates: keep ordinary currency values readable at every supported width. */
+    #modal.record-modal #ratesCards{
+      grid-template-columns:minmax(0,1fr);
+    }
+    #modal.record-modal #ratesCards .grid-5{
+      grid-template-columns:repeat(5,minmax(104px,1fr));
+      overflow-x:auto;
+      padding-bottom:4px;
+    }
+    #modal.record-modal #ratesCards .grid-5 .row{
+      min-width:104px;
+    }
+    #modal.record-modal #ratesCards input[name^="paye_"],
+    #modal.record-modal #ratesCards input[name^="umb_"],
+    #modal.record-modal #ratesCards input[name^="charge_"],
+    #modal.record-modal #ratesCards input[name^="mileage_"]{
+      min-width:92px;
+      padding-left:10px;
+      padding-right:10px;
+      text-align:right;
+      font-variant-numeric:tabular-nums;
+    }
+    #modal.record-modal .contract-extra-rate-card{
+      margin:0 0 10px;
+      border:1px solid var(--line);
+      border-radius:12px;
+      background:#0b1427;
+      overflow:hidden;
+    }
+    #modal.record-modal .contract-extra-rate-card > summary{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      padding:11px 12px;
+      cursor:pointer;
+      list-style:none;
+      user-select:none;
+    }
+    #modal.record-modal .contract-extra-rate-card > summary::-webkit-details-marker{ display:none; }
+    #modal.record-modal .contract-extra-rate-card > summary::before{
+      content:'+';
+      width:22px;
+      height:22px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      flex:0 0 auto;
+      border:1px solid var(--line);
+      border-radius:999px;
+    }
+    #modal.record-modal .contract-extra-rate-card[open] > summary::before{ content:'−'; }
+    #modal.record-modal .contract-extra-rate-summary-main{
+      min-width:0;
+      flex:1 1 auto;
+      font-weight:600;
+    }
+    #modal.record-modal .contract-extra-rate-summary-state{
+      color:var(--sub);
+      font-size:11px;
+      white-space:nowrap;
+    }
+    #modal.record-modal .contract-extra-rate-body{
+      padding:0 12px 12px;
+      border-top:1px solid var(--line);
+    }
+    #modal.record-modal .contract-extra-rate-body .grid-6{
+      grid-template-columns:repeat(3,minmax(150px,1fr));
+      padding-top:12px;
+    }
+    #modal.record-modal #contractCalendarHolder .contract-calendar-shell{
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+      min-height:0;
+    }
+    #modal.record-modal #contractCalendarHolder #__calScroll{
+      overflow-x:auto !important;
+      overflow-y:hidden !important;
+      max-height:none !important;
+    }
+
+    @media (max-width:720px){
+      #modal.record-modal{
+        width:calc(100vw - 12px);
+        max-width:calc(100vw - 12px);
+        max-height:calc(100vh - 12px);
+        border-radius:12px;
+      }
+      #modal.record-modal .modal-h,
+      #modal.record-modal #modalActions{
+        padding:8px;
+      }
+      #modal.record-modal .tabc{ padding:10px; }
+      #modal.record-modal .form{
+        grid-template-columns:minmax(0,1fr);
+        column-gap:0;
+      }
+      #modal.record-modal .tabc .grid-2,
+      #modal.record-modal .tabc .grid-3,
+      #modal.record-modal .tabc .grid-5,
+      #modal.record-modal .tabc .grid-6,
+      #modal.record-modal .tabc .grid-7,
+      #modal.record-modal .contract-extra-rate-body .grid-6{
+        grid-template-columns:minmax(0,1fr);
+        min-width:0 !important;
+      }
+      #modal.record-modal #ratesCards .grid-5{
+        grid-template-columns:repeat(2,minmax(118px,1fr));
+        overflow:visible;
+      }
+      #modal.record-modal #ratesCards .grid-5 .row,
+      #modal.record-modal #ratesCards input[name^="paye_"],
+      #modal.record-modal #ratesCards input[name^="umb_"],
+      #modal.record-modal #ratesCards input[name^="charge_"]{
+        min-width:0;
+      }
+      #modal.record-modal .sched .controls,
+      #modal.record-modal .record-inline-actions{
+        align-items:stretch !important;
+      }
+      #modal.record-modal .sched .controls > .grid-3{
+        min-width:0 !important;
+        width:100%;
+      }
+      #modal.record-modal #modalActions .spacer{ display:none; }
+      #modal.record-modal #modalActions .hint{
+        flex:1 0 100%;
+      }
     }
 
     /* ─────────────────────────────────────────────────────────────
@@ -2484,7 +2689,7 @@ body{
 
   <!-- ===== Draggable modal ===== -->
   <div class="modal-back" id="modalBack" data-testid="modal-backdrop">
-  <div class="modal" id="modal" data-testid="modal">
+  <div class="modal" id="modal" data-testid="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" tabindex="-1">
 
     <div class="modal-h" id="modalDrag">
       <div class="ttl" id="modalTitle" data-testid="modal-title">Details</div>
