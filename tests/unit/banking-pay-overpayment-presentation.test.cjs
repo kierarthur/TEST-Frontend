@@ -184,3 +184,22 @@ test('gives terminal failure precedence over stale pending state and de-duplicat
   assert.match(mainSource, /const issueCount = Math\.max\([\s\S]*candidateCounts\.failed[\s\S]*lineCounts\.failed[\s\S]*jobCounts\.unresolved_failed/);
   assert.match(mainSource, /pendingCandidateIds\.filter\(\(candidateId\) => !failedCandidateIdSet\.has\(candidateId\)\)/);
 });
+
+test('Banking Pay Refresh enqueues a full live workbench refresh without clearing decisions', () => {
+  const helperStart = mainSource.indexOf('async function bankingPayWorkbenchSessionRefresh');
+  const helperEnd = mainSource.indexOf('async function bankingPayWorkbenchSessionClearAllDecisions', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, 'workbench refresh helper must be present');
+  const helperBody = mainSource.slice(helperStart, helperEnd);
+  assert.match(helperBody, /\/api\/banking\/pay\/workbench\/session\/\$\{encodeURIComponent\(sessionIdText\)\}\/refresh/);
+  assert.doesNotMatch(helperBody, /clear-all-decisions|\/discard|create-draft|execute|settle/i);
+
+  const refreshStart = mainSource.indexOf('const refreshBankingPayAll = async');
+  const refreshEnd = mainSource.indexOf('const childResultShouldRefreshPayWorkbench', refreshStart);
+  assert.ok(refreshStart >= 0 && refreshEnd > refreshStart, 'Banking Pay Refresh action must be present');
+  const refreshBody = mainSource.slice(refreshStart, refreshEnd);
+  const enqueueIndex = refreshBody.indexOf('await bankingPayWorkbenchSessionRefresh');
+  const rereadIndex = refreshBody.indexOf('await refreshPayWorkbench');
+  assert.ok(enqueueIndex >= 0, 'Refresh must enqueue authoritative workbench recomputation');
+  assert.ok(rereadIndex > enqueueIndex, 'Refresh must reread the workbench after enqueueing recomputation');
+  assert.doesNotMatch(refreshBody, /bankingPayWorkbenchSessionClearAllDecisions|bankingPayWorkbenchSessionDiscard/);
+});

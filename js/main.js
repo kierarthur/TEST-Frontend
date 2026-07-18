@@ -87328,7 +87328,7 @@ function attachBankingModalDelegatedHandlers() {
       await safeRerender(null);
     };
 
-      const refreshBankingPayAll = async ({ reason = 'PAY_AFFECTING_ACTION', mode = 'SOFT' } = {}) => {
+      const refreshBankingPayAll = async ({ reason = 'USER_REQUESTED_FULL_REFRESH', mode = 'SOFT' } = {}) => {
       const listState = (st.pay && st.pay.list && typeof st.pay.list === 'object') ? st.pay.list : {};
       const requestedLimit = Number(listState.limit || 5);
       const safeLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(200, Math.trunc(requestedLimit))) : 5;
@@ -87368,6 +87368,22 @@ function attachBankingModalDelegatedHandlers() {
         }
       } catch (e) {
         try { bankingHandleApiError?.(e, { action: 'PAY_LIST_LIGHT_REFRESH', errorPath: ['pay', 'list', 'error'] }); } catch {}
+      }
+
+      try {
+        const workbenchSessionId = String(
+          st.pay?.draftWizard?.workbench?.session_id ||
+          st.pay?.draftWizard?.decisions?.session_id ||
+          ''
+        ).trim();
+        if (workbenchSessionId && typeof bankingPayWorkbenchSessionRefresh === 'function') {
+          await bankingPayWorkbenchSessionRefresh(workbenchSessionId, {
+            reason: String(reason || 'USER_REQUESTED_FULL_REFRESH').trim() || 'USER_REQUESTED_FULL_REFRESH'
+          });
+        }
+        await refreshPayWorkbench({ reason, mode });
+      } catch (e) {
+        try { bankingHandleApiError?.(e, { action: 'PAY_WORKBENCH_FULL_REFRESH', errorPath: ['pay', 'draftWizard', 'preview', 'error'] }); } catch {}
       }
 
       try {
@@ -245361,6 +245377,34 @@ function renderBulkAuthoriseRightPane(state) {
   `);
 }
 
+
+async function bankingPayWorkbenchSessionRefresh(sessionId, payload = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const sessionIdText = trimStr(sessionId);
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidRe.test(sessionIdText)) throw new Error('A valid Banking Pay workbench session is required.');
+  if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('Banking Pay refresh is not available.');
+
+  const response = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/refresh`), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify((payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {})
+  });
+  const text = await response.text().catch(() => '');
+  let json = {};
+  try { json = text ? JSON.parse(text) : {}; } catch { json = { message: text }; }
+  if (!response.ok || json?.ok === false) {
+    const message = trimStr(json?.user_message || json?.message || json?.error || `Request failed (${response.status})`) || 'Payment preview could not be refreshed.';
+    const error = new Error(message);
+    error.status = response.status;
+    error.payload = json;
+    error.json = json;
+    error.code = trimStr(json?.error_code || json?.code || 'BANKING_PAY_WORKBENCH_REFRESH_FAILED');
+    error.error_code = error.code;
+    throw error;
+  }
+  return json;
+}
 
 async function bankingPayWorkbenchSessionClearAllDecisions(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
