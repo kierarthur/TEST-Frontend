@@ -137,6 +137,36 @@ function installHarness(initialState, overrides = {}) {
     async handleBulkUnauthoriseSelected() {
       return { ok: false, batch_completed: false, success_count: 0 };
     },
+    bulkRowFreshnessV1: {
+      async fetchDecision(options) {
+        const target = options.row || {};
+        return {
+          accepted: true,
+          stale: false,
+          decision: {
+            ok: true,
+            outcome: 'CURRENT',
+            changed: false,
+            eligible_for_surface: true,
+            previous_row_key: target.row_key,
+            row_key: target.row_key,
+            signature: target.row_signature,
+            target_section: target.bulk_authorise_section,
+            row: clone(target)
+          }
+        };
+      },
+      reconcileBulkAuthorise(state, decision) {
+        const canonical = clone(decision.row || {});
+        const key = decision.row_key || canonical.row_key;
+        state.dataset.rows = (state.dataset.rows || []).filter((entry) => entry.row_key !== decision.previous_row_key && entry.row_key !== key);
+        state.dataset.rows.push(canonical);
+        return { eligible: true, canonical_row_key: key, needs_context: true };
+      },
+      markConfirmed() {},
+      markUnconfirmed() {},
+      async confirmDirtyConflict() { return true; }
+    },
     ...overrides
   };
   const context = {
@@ -312,7 +342,7 @@ test('a later row transition wins and the stale transition cannot render ready',
     }
   });
 
-  const firstTransition = controller.transitionToRow(first.row_key, { skipDirtyGuard: true });
+  const firstTransition = controller.transitionToRow(first.row_key, { skipDirtyGuard: true, source: 'canonical-mutation-refresh' });
   await new Promise((resolve) => setImmediate(resolve));
   const secondTransition = controller.transitionToRow(second.row_key, { skipDirtyGuard: true });
   await new Promise((resolve) => setImmediate(resolve));
@@ -384,7 +414,7 @@ test('a proven-unchanged revisit restores the cached row without a full render o
   assert.ok(surfaces.length >= 1);
 });
 
-test('a changed watch token fails closed to the existing full refresh path', async () => {
+test('a changed click freshness result fails closed to one full refresh path', async () => {
   const first = row('timesheet:A');
   const second = row('timesheet:B');
   const state = stateFor([first, second], first.row_key);
@@ -403,12 +433,34 @@ test('a changed watch token fails closed to the existing full refresh path', asy
       setBusy() {},
       release() {}
     },
-    async fetchBulkAuthoriseRowWatch() {
-      return {
-        ok: true,
-        unchanged: false,
-        watch_vector: { cacheable: true, watch_token: 'watch:A:changed' }
-      };
+    bulkRowFreshnessV1: {
+      async fetchDecision(options) {
+        const target = options.row || {};
+        const changed = target.row_key === first.row_key;
+        return {
+          accepted: true,
+          stale: false,
+          decision: {
+            ok: true,
+            outcome: 'CURRENT',
+            changed,
+            eligible_for_surface: true,
+            previous_row_key: target.row_key,
+            row_key: target.row_key,
+            signature: changed ? `${target.row_signature}:changed` : target.row_signature,
+            target_section: target.bulk_authorise_section,
+            row: clone(target)
+          }
+        };
+      },
+      reconcileBulkAuthorise(current, decision) {
+        const canonical = clone(decision.row || {});
+        current.dataset.rows = current.dataset.rows.map((entry) => entry.row_key === decision.row_key ? canonical : entry);
+        return { eligible: true, canonical_row_key: decision.row_key, needs_context: true };
+      },
+      markConfirmed() {},
+      markUnconfirmed() {},
+      async confirmDirtyConflict() { return true; }
     },
     async refreshBulkAuthoriseActiveContext(current, options) {
       contextRefreshes += 1;
@@ -422,7 +474,7 @@ test('a changed watch token fails closed to the existing full refresh path', asy
   const renderCountBeforeRevisit = renderReasons.length;
   await controller.transitionToRow(first.row_key, { source: 'row_click' });
 
-  assert.equal(state.__bulk_authorise_last_transition_mode, 'cache-invalid-full');
+  assert.equal(state.__bulk_authorise_last_transition_mode, 'full');
   assert.equal(contextRefreshes, refreshCountBeforeRevisit + 1);
   assert.ok(renderReasons.length >= renderCountBeforeRevisit + 2);
   assert.ok(renderReasons.some((reason) => reason.includes('[ROW-SKELETON]')));

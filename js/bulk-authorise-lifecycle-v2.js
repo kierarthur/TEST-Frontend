@@ -660,7 +660,17 @@
 
     async runOwnedAction(button) {
       const state = this.state;
-      if (!button || button.disabled || state.loading || state.batch_busy || state.saving || state.unprocessing || state.__workbench_modal_spinner_active) return false;
+      if (
+        !button ||
+        button.disabled ||
+        state.loading ||
+        state.batch_busy ||
+        state.saving ||
+        state.unprocessing ||
+        state.__workbench_modal_spinner_active ||
+        state.__bulk_authorise_freshness_checking === true ||
+        state.__bulk_authorise_freshness_unconfirmed === true
+      ) return false;
 
       const selectedAction = trim(button.getAttribute('data-bulk-authorise-selected-action') || '').toLowerCase();
       const id = trim(button.id || '');
@@ -941,17 +951,91 @@
     async transitionToRow(preferredRowKey, options = {}) {
       if (this.closed) return false;
       const allowEmptySelection = options.allowEmptySelection === true || options.allow_empty_selection === true;
-      const target = this.findRow(preferredRowKey, allowEmptySelection);
-      const targetKey = rowKeyOf(target);
+      let target = this.findRow(preferredRowKey, allowEmptySelection);
+      let targetKey = rowKeyOf(target);
       const currentKey = trim(this.state.active_row_key || rowKeyOf(this.state.active_row));
       const source = trim(options.source || 'row_click').toLowerCase();
+      const epoch = ++this.rowEpoch;
+      let freshnessChanged = false;
+      let freshnessUnchanged = false;
 
       if (targetKey !== currentKey && options.skipDirtyGuard !== true) {
         const allowed = await this.passDirtyGuard(targetKey, options.intent || options.source || 'row-switch');
         if (!allowed) return false;
+        if (this.closed || this.rowEpoch !== epoch) return false;
+      }
+
+      if (source === 'row_click' && target) {
+        const freshnessApi = win.bulkRowFreshnessV1;
+        if (!freshnessApi || typeof freshnessApi.fetchDecision !== 'function') {
+          this.state.__bulk_authorise_freshness_unconfirmed = true;
+          this.state.warning_text = 'Current server state could not be confirmed. Click the row to retry.';
+          await this.render('[TS][BULK-AUTH][LIFECYCLE-V2][FRESHNESS-UNAVAILABLE]');
+          return false;
+        }
+
+        let freshnessResult = null;
+        try {
+          freshnessResult = await freshnessApi.fetchDecision({
+            surface: 'bulk_authorise',
+            state: this.state,
+            row: target,
+            previousRowKey: targetKey,
+            classification: classificationOf(this.state.classification),
+            currentSection: trim(target.bulk_authorise_section),
+            filters: requestFiltersFor(this.state),
+            timeoutMs: 4500
+          });
+        } catch (error) {
+          freshnessApi.markUnconfirmed?.(this.state, 'bulk_authorise', error);
+          if (this.rowEpoch === epoch) await this.render('[TS][BULK-AUTH][LIFECYCLE-V2][FRESHNESS-FAILED]');
+          return false;
+        }
+        if (!freshnessResult?.accepted || this.closed || this.rowEpoch !== epoch) return false;
+
+        const decision = freshnessResult.decision || {};
+        if (
+          targetKey === currentKey &&
+          this.hasGenuineDirtyEdits() &&
+          (decision.changed === true || decision.outcome === 'REMOVED' || decision.outcome === 'DELETED')
+        ) {
+          const confirmed = await freshnessApi.confirmDirtyConflict?.({
+            surface: 'bulk_authorise',
+            state: this.state,
+            decision
+          });
+          if (!confirmed || this.closed || this.rowEpoch !== epoch) {
+            freshnessApi.markUnconfirmed?.(this.state, 'bulk_authorise', new Error('The server change has not been applied. Click the row to review it again.'));
+            if (this.rowEpoch === epoch) await this.render('[TS][BULK-AUTH][LIFECYCLE-V2][FRESHNESS-CONFLICT-RETAINED]');
+            return false;
+          }
+        }
+
+        freshnessApi.markConfirmed?.(this.state, 'bulk_authorise');
+        freshnessUnchanged = decision.outcome === 'CURRENT' && decision.changed === false;
+        if (freshnessUnchanged && targetKey === currentKey) return true;
+
+        if (!freshnessUnchanged) {
+          const previousTargetKey = targetKey;
+          const reconciliation = freshnessApi.reconcileBulkAuthorise(this.state, decision, target);
+          this.dropSnapshot(previousTargetKey);
+          if (reconciliation?.canonical_row_key) this.dropSnapshot(reconciliation.canonical_row_key);
+          if (!reconciliation?.eligible) {
+            const replacementKey = trim(reconciliation?.replacement_row_key);
+            return await this.transitionToRow(replacementKey || null, {
+              allowEmptySelection: !replacementKey,
+              skipDirtyGuard: true,
+              source: 'freshness_replacement'
+            });
+          }
+          freshnessChanged = true;
+          targetKey = trim(reconciliation.canonical_row_key || decision.row_key || targetKey);
+          target = this.findRow(targetKey, false) || (decision.row && typeof decision.row === 'object' ? decision.row : target);
+        }
       }
 
       const fastPathEligible = !!(
+        !freshnessChanged &&
         target &&
         targetKey &&
         currentKey &&
@@ -961,7 +1045,6 @@
       if (fastPathEligible) this.captureSnapshot(currentKey);
       const cachedTarget = fastPathEligible ? this.rowSnapshots.get(targetKey) : null;
       const selection = selectionMapFor(this.state);
-      const epoch = ++this.rowEpoch;
       const expectedClassification = classificationOf(this.state.classification);
       // The legacy selector owns the row-change sequence and increments it for
       // a genuine row change. Read the committed value after selection; a
@@ -999,7 +1082,9 @@
         const restored = this.restoreSnapshot(cachedTarget, target, rowChangeSeq);
         if (restored) {
           try { this.surfaceAdapter().setBusy?.(true); } catch {}
-          const unchanged = await this.validateSnapshot(cachedTarget, target, rowChangeSeq, epoch, expectedClassification);
+          const unchanged = freshnessUnchanged === true
+            ? true
+            : await this.validateSnapshot(cachedTarget, target, rowChangeSeq, epoch, expectedClassification);
           if (!this.isCurrentRowTransition(epoch, expectedClassification, targetKey)) return false;
           if (unchanged) {
             this.state.__bulk_authorise_v2_transition_loading = false;
@@ -1056,6 +1141,7 @@
           if (
             fullRefresh !== false &&
             classificationOf(this.state.classification) === 'TIMESHEETS' &&
+            freshnessChanged !== true &&
             !evidenceLayerLoaded &&
             this.isCurrentRowTransition(epoch, expectedClassification, activeKey)
           ) {

@@ -1607,6 +1607,7 @@
 
     hydrateDatasetBadges() {
       if (!this.isTimesheets()) return Promise.resolve({ applied: false, reason: 'non-timesheets' });
+      if (this.isRowTransitionHydrationPending()) return Promise.resolve({ applied: false, reason: 'row-transition-owned' });
       this.captureDatasetTruth();
       const datasetRef = this.datasetRef;
       if (!datasetRef) return Promise.resolve({ applied: false, reason: 'no-dataset' });

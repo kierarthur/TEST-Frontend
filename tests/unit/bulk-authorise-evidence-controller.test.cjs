@@ -338,6 +338,9 @@ test('row-transition skeleton does not start policy or preview hydration', async
 
   harness.controller.settle('row-transition-skeleton');
   assert.equal(harness.controller.isRowTransitionHydrationPending(), true);
+  const badgeHydration = await harness.controller.hydrateDatasetBadges();
+  assert.equal(badgeHydration.applied, false);
+  assert.equal(badgeHydration.reason, 'row-transition-owned');
   assert.equal(await harness.controller.ensureAttachedPreview(false), false);
   assert.equal(await harness.win.bindBulkAuthorisePreviewPane(state), false);
   await Promise.resolve();

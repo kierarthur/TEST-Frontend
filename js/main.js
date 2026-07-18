@@ -192232,6 +192232,14 @@ async function openBulkProcessWorkbench(seed = {}) {
     const opts = (options && typeof options === 'object') ? options : {};
     const modalOpenToken = trimStr(opts.modalOpenToken || opts.modal_open_token || state.__bulk_process_modal_open_token || bulkProcessModalOpenToken);
     if (!isBulkProcessModalOpenTokenCurrent(modalOpenToken)) return false;
+    if (state.__bulk_process_row_change_in_progress === true) {
+      const ownedHydration = state.__bulk_process_row_context_hydration_inflight;
+      if (ownedHydration && typeof ownedHydration.then === 'function') {
+        try { await ownedHydration; } catch {}
+        return true;
+      }
+      return false;
+    }
     const binderScopes = (state.__bulk_process_binder_scopes && typeof state.__bulk_process_binder_scopes === 'object')
       ? state.__bulk_process_binder_scopes
       : (state.__bulk_process_binder_scopes = { evidence: false, preview: false, editor: false });
@@ -192350,7 +192358,7 @@ async function openBulkProcessWorkbench(seed = {}) {
           await rerenderWorkbench({ reason: 'scope-enable', force: true });
           return true;
         }
-      } else if (!needsScopeBinding) {
+      } else {
         const renderSeq = Number(state.__bulk_process_render_seq || 0) || 0;
         for (const requestedScope of requestedScopes) {
           if (!requestedScope) continue;
@@ -192358,6 +192366,8 @@ async function openBulkProcessWorkbench(seed = {}) {
           boundScopeIdentity[requestedScope] = liveIdentity;
           boundScopeRenderSeq[requestedScope] = renderSeq;
         }
+        if (!needsScopeBinding) return true;
+        await rerenderWorkbench({ reason: 'scope-enable', force: true });
         return true;
       }
     }
@@ -205775,7 +205785,7 @@ function bindBulkProcessLists(state) {
       preActivationScroll = null;
       st.__bulk_process_left_pane_scroll = { ...scrollSnapshot };
       restoreScroll(scrollSnapshot);
-      await handleBulkProcessRowChange(rowKey);
+      await handleBulkProcessRowChange(rowKey, { explicitActivation: true, source: 'row_click' });
       restoreScroll(scrollSnapshot);
     };
 
@@ -226471,7 +226481,14 @@ async function handleBulkProcessSave(state) {
     return { ok: false };
   }
 
-  if (st.loading || st.saving || st.processing || st.unprocessing) {
+  if (
+    st.loading ||
+    st.saving ||
+    st.processing ||
+    st.unprocessing ||
+    st.__bulk_process_freshness_checking === true ||
+    st.__bulk_process_freshness_unconfirmed === true
+  ) {
     GE();
     return { ok: false, busy: true };
   }
@@ -229091,7 +229108,9 @@ async function handleBulkProcessProcess(state) {
     st.__bulk_process_process_in_flight ||
     st.__bulk_process_unprocess_in_flight ||
     st.__bulk_process_return_to_queue_in_flight ||
-    st.__bulk_process_lifecycle_mutation_token
+    st.__bulk_process_lifecycle_mutation_token ||
+    st.__bulk_process_freshness_checking === true ||
+    st.__bulk_process_freshness_unconfirmed === true
   ) {
     GE();
     return { ok: false, busy: true };
@@ -240967,7 +240986,16 @@ async function handleBulkProcessUnprocess(state) {
     GE();
     return { ok: false, error: 'Bulk Process active row is not available.' };
   }
-  if (st.loading || st.saving || st.processing || st.unprocessing || st.__bulk_process_unprocess_in_flight || st.__bulk_process_lifecycle_mutation_token) {
+  if (
+    st.loading ||
+    st.saving ||
+    st.processing ||
+    st.unprocessing ||
+    st.__bulk_process_unprocess_in_flight ||
+    st.__bulk_process_lifecycle_mutation_token ||
+    st.__bulk_process_freshness_checking === true ||
+    st.__bulk_process_freshness_unconfirmed === true
+  ) {
     GE();
     return { ok: false, busy: true, reason: 'MUTATION_IN_FLIGHT' };
   }
@@ -245588,6 +245616,10 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     GE();
     return { ok: false, error: 'No active Bulk Authorise row is available.' };
   }
+  if (st.__bulk_authorise_freshness_checking === true || st.__bulk_authorise_freshness_unconfirmed === true) {
+    GE();
+    return { ok: false, busy: true, error: 'Current server state has not been confirmed.' };
+  }
 
   const opts = (options && typeof options === 'object') ? options : {};
   const deep = (value) => {
@@ -246893,6 +246925,10 @@ async function handleBulkAuthoriseUnprocess(state, row) {
   if (!st || !srcRowBase) {
     GE();
     return { ok: false, error: 'No Bulk Authorise row is available to unprocess.' };
+  }
+  if (st.__bulk_authorise_freshness_checking === true || st.__bulk_authorise_freshness_unconfirmed === true) {
+    GE();
+    return { ok: false, busy: true, error: 'Current server state has not been confirmed.' };
   }
 
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -250896,7 +250932,15 @@ function renderBulkAuthoriseActionRow(state) {
     (!legacyContextReadySignature || legacyContextReadySignature === activeBackendRowSignature || legacyContextReadySignature === activeRenderSignature) &&
     (Number(st.__bulk_authorise_row_context_ready_seq || 0) || 0) === activeRowChangeSeq
   );
-  const busy = !!(st.loading || st.batch_busy || st.saving || st.unprocessing || st.__workbench_modal_spinner_active);
+  const busy = !!(
+    st.loading ||
+    st.batch_busy ||
+    st.saving ||
+    st.unprocessing ||
+    st.__workbench_modal_spinner_active ||
+    st.__bulk_authorise_freshness_unconfirmed === true ||
+    st.__bulk_authorise_freshness_checking === true
+  );
   const actionRecordIdentity = trimStr(resolvedIdentity.recordIdentity || resolvedIdentity.record_identity || resolvedIdentity.identity || st.__bulkAuthoriseRecordIdentity || '');
   const manualDirty = (typeof hasBulkAuthoriseGenuineDirtyEdits === 'function')
     ? !!hasBulkAuthoriseGenuineDirtyEdits(st, { preferDom: false })
@@ -251207,7 +251251,16 @@ function bindBulkAuthoriseActionRow(state) {
         btn.getAttribute('data-disabled') === '1' ||
         btn.getAttribute('aria-disabled') === 'true'
       );
-      if (canonicallyDisabled || st.loading || st.batch_busy || st.saving || st.unprocessing || st.__workbench_modal_spinner_active) return;
+      if (
+        canonicallyDisabled ||
+        st.loading ||
+        st.batch_busy ||
+        st.saving ||
+        st.unprocessing ||
+        st.__workbench_modal_spinner_active ||
+        st.__bulk_authorise_freshness_checking === true ||
+        st.__bulk_authorise_freshness_unconfirmed === true
+      ) return;
       const runHandler = async () => {
         await handler();
       };
@@ -251308,7 +251361,16 @@ function bindBulkAuthoriseActionRow(state) {
     btn.dataset.boundBulkAuthRouteAction = '1';
     btn.addEventListener('click', async (ev) => {
       ev.preventDefault();
-      if (btn.disabled || st.loading || st.batch_busy || st.saving || st.unprocessing || st.__workbench_modal_spinner_active) return;
+      if (
+        btn.disabled ||
+        st.loading ||
+        st.batch_busy ||
+        st.saving ||
+        st.unprocessing ||
+        st.__workbench_modal_spinner_active ||
+        st.__bulk_authorise_freshness_checking === true ||
+        st.__bulk_authorise_freshness_unconfirmed === true
+      ) return;
       const action = trimStr(btn.getAttribute('data-bulk-authorise-route-action') || '');
       if (!action || typeof handleBulkAuthoriseRouteConversion !== 'function') return;
       await withExistingModalLoadingSpinner(st, 'Working', async () => {
@@ -252111,7 +252173,9 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
   const hasOpenValue = (value) => trimStr(value) !== '';
 
-  const forceRefresh = !!opts.force;
+  let forceRefresh = !!opts.force;
+
+  const explicitActivation = opts.explicitActivation === true || opts.explicit_activation === true;
 
   const expectedRowKey = trimStr(opts.expectedRowKey || opts.expected_row_key || wantedKey || '');
 
@@ -253246,7 +253310,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
   };
 
-  if (wantedKey === currentKey && !forceRefresh && !deferContextRefreshAfterPatch) {
+  if (wantedKey === currentKey && !forceRefresh && !deferContextRefreshAfterPatch && !explicitActivation) {
 
     const sameRowStateCoherent = activeStateCoherentForSameRowNoop();
 
@@ -260252,7 +260316,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
 
 
-  if (!forceRefresh && !skipDirtyGuard && isDirty()) {
+  if (wantedKey !== currentKey && !forceRefresh && !skipDirtyGuard && isDirty()) {
 
     stateAudit('row-change:dirty-guard:prompt', { wanted_key: wantedKey || null, current_key: currentKey || null });
 
@@ -260297,6 +260361,191 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
       GE();
 
       return false;
+
+    }
+
+  }
+
+
+  let freshnessChangedEligible = trimStr(opts.source || opts.refresh_source || '') === 'freshness_replacement';
+
+  if (explicitActivation) {
+
+    const freshnessApi = window.bulkRowFreshnessV1;
+
+    if (!freshnessApi || typeof freshnessApi.fetchDecision !== 'function') {
+
+      st.__bulk_process_freshness_unconfirmed = true;
+
+      st.warning_text = 'Current server state could not be confirmed. Click the row to retry.';
+
+      await rerenderWorkbench('row-freshness-unavailable', false);
+
+      GE();
+
+      return false;
+
+    }
+
+    let freshnessResult = null;
+
+    try {
+
+      freshnessResult = await freshnessApi.fetchDecision({
+
+        surface: 'bulk_process',
+
+        state: st,
+
+        row: nextRow,
+
+        previousRowKey: wantedKey,
+
+        currentSection: trimStr(nextRow.bulk_process_bucket || '').toUpperCase() === 'PROCESSED' ? 'processed_eligible' : 'unprocessed_eligible',
+
+        filters: st.filters || {},
+
+        timeoutMs: 4500
+
+      });
+
+    } catch (error) {
+
+      freshnessApi.markUnconfirmed?.(st, 'bulk_process', error);
+
+      await rerenderWorkbench('row-freshness-failed', false);
+
+      GE();
+
+      return false;
+
+    }
+
+    if (!freshnessResult?.accepted) {
+
+      GE();
+
+      return false;
+
+    }
+
+
+    const freshnessDecision = freshnessResult.decision || {};
+
+    const sameActiveRow = wantedKey === currentKey;
+
+    if (
+
+      sameActiveRow &&
+
+      isDirty() &&
+
+      (freshnessDecision.changed === true || freshnessDecision.outcome === 'REMOVED' || freshnessDecision.outcome === 'DELETED')
+
+    ) {
+
+      const confirmed = await freshnessApi.confirmDirtyConflict?.({
+
+        surface: 'bulk_process',
+
+        state: st,
+
+        decision: freshnessDecision
+
+      });
+
+      if (!confirmed) {
+
+        freshnessApi.markUnconfirmed?.(st, 'bulk_process', new Error('The server change has not been applied. Click the row to review it again.'));
+
+        await rerenderWorkbench('row-freshness-conflict-retained', false);
+
+        GE();
+
+        return false;
+
+      }
+
+    }
+
+
+    freshnessApi.markConfirmed?.(st, 'bulk_process');
+
+    if (freshnessDecision.outcome === 'CURRENT' && freshnessDecision.changed === false) {
+
+      const activeContextHydratedAfterFreshness = !!(
+
+        sameActiveRow &&
+
+        st.__active_context_is_minimal !== true &&
+
+        st.active_context &&
+
+        st.active_ctx &&
+
+        st.active_details &&
+
+        st.active_context.hydration_required !== true &&
+
+        st.active_context.context_stale !== true &&
+
+        !isRowContextPayloadDegraded(st.active_context)
+
+      );
+
+      if (activeContextHydratedAfterFreshness) {
+
+        stateAudit('same-row:freshness-current:return', { wanted_key: wantedKey || null, current_key: currentKey || null });
+
+        GE();
+
+        return true;
+
+      }
+
+    } else {
+
+      const reconciliation = freshnessApi.reconcileBulkProcess(st, freshnessDecision, nextRow);
+
+      if (!reconciliation?.eligible) {
+
+        if (reconciliation?.replacement_row_key) {
+
+          const result = await handleBulkProcessRowChange(st, reconciliation.replacement_row_key, {
+
+            force: true,
+
+            skipDirtyGuard: true,
+
+            source: 'freshness_replacement'
+
+          });
+
+          GE();
+
+          return result;
+
+        }
+
+        await rerenderWorkbench('row-freshness-removed-empty', true);
+
+        GE();
+
+        return true;
+
+      }
+
+      wantedKey = trimStr(reconciliation.canonical_row_key || freshnessDecision.row_key || wantedKey);
+
+      nextRow = (freshnessDecision.row && typeof freshnessDecision.row === 'object')
+
+        ? canonicaliseBulkProcessRowForRowChange(freshnessDecision.row, wantedKey)
+
+        : nextRow;
+
+      freshnessChangedEligible = freshnessDecision.changed === true;
+
+      forceRefresh = true;
 
     }
 
@@ -260782,6 +261031,8 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
     const contextProfile = allowedPrimaryProfiles.has(requestedContextProfile) ? requestedContextProfile : 'editor';
 
+    const primaryContextIncludeEvidence = freshnessChangedEligible || evidenceRefreshRequested;
+
     st.__bulk_process_row_context_hydration_identity = cacheKey;
 
     stateAudit('row-change:primary-context-load:start', {
@@ -260800,7 +261051,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
       profile: contextProfile,
 
-      includeEvidence: false,
+      includeEvidence: primaryContextIncludeEvidence,
 
       force: forceRefresh,
 
@@ -261099,6 +261350,8 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
     );
 
     const shouldHydrateEvidenceAfterNonEvidenceContext = !!(
+
+      !primaryContextIncludeEvidence &&
 
       !finalContextIncludesEvidence &&
 
@@ -280177,7 +280430,14 @@ function renderBulkProcessActionRow(state) {
   const canConvertQrToManualOnly = !!editability.canConvertQrToManualOnly;
   const canAddAdditionalManual = !!editability.canAddAdditionalManual;
   const isDirty = (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty;
-  const busy = !!(st.loading || st.saving || st.processing || st.unprocessing);
+  const busy = !!(
+    st.loading ||
+    st.saving ||
+    st.processing ||
+    st.unprocessing ||
+    st.__bulk_process_freshness_unconfirmed === true ||
+    st.__bulk_process_freshness_checking === true
+  );
   const canSaveNow = !!((canSave || editability.canEditExpenses) && isDirty && !busy);
   const canUnprocessNow = !!(canUnprocess && !busy);
   const canOpenExpenses = !!editability.canOpenExpenses;
