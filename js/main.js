@@ -170762,6 +170762,7 @@ async function runBankingPayBatchCancelFlow({
       PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_BLOCKED: 'Cancel Draft Batch could not be completed',
       PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_RETRYABLE: 'Cancel Draft Batch needs a retry',
       PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_FAILED: 'Cancel Draft Batch failed',
+      WORK_SELECTION_DRIFT: 'Cancel Draft Batch selection could not be verified',
       PAY_PAYMENT_CANCEL_NOT_SENT_NOT_APPLIED: 'Cancel Draft Batch could not be completed'
     };
     const fallbackMessageByCode = {
@@ -170774,6 +170775,7 @@ async function runBankingPayBatchCancelFlow({
       PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_BLOCKED: 'CloudTMS could not complete Cancel Draft Batch because the cancellation work item was blocked.',
       PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_RETRYABLE: 'CloudTMS could not complete Cancel Draft Batch because the cancellation work item needs to be retried.',
       PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_FAILED: 'CloudTMS could not complete Cancel Draft Batch because the cancellation work item failed.',
+      WORK_SELECTION_DRIFT: 'CloudTMS could not safely select the full frozen draft for cancellation. Nothing was cancelled. Refresh Banking Pay and try again.',
       PAY_PAYMENT_CANCEL_NOT_SENT_NOT_APPLIED: 'CloudTMS could not complete Cancel Draft Batch because no cancellation work item was applied.'
     };
     const title = String(
