@@ -428,3 +428,20 @@ test('fresh signed row hydration replaces stale lifecycle flags on the matching 
   assert.match(rowChangeSource, /syncHydratedBulkProcessLifecycleToDataset\(st\.active_row\);/);
   assert.match(rowChangeSource, /harmoniseHydratedBulkProcessLifecycleContext\(finalContext, st\.active_row\);/);
 });
+
+test('Bulk Process stale preview binds cannot overwrite a newer row preview', () => {
+  const binderSource = sliceBetween('function bindBulkProcessPreviewPane(state)', 'function renderBulkProcessDockedEvidenceViewer(state)');
+
+  assert.match(binderSource, /const isBulkProcessPreviewBind = !bulkAuthoriseSurfaceAtBind/);
+  assert.match(binderSource, /root\.dataset\.bulkProcessPreviewBindToken = token/);
+  assert.match(binderSource, /const liveRoot = document\.getElementById\('bulkProcessPreviewPaneRoot'\)/);
+  assert.match(binderSource, /!root\.isConnected \|\| liveRoot !== root/);
+  assert.match(binderSource, /root\.dataset\.bulkProcessPreviewBindToken/);
+  assert.match(binderSource, /signedUrl = await presignRecord\.promise;\s*if \(isBulkProcessPreviewBind && !isActiveBind\(\)\) return;/);
+  assert.match(binderSource, /if \(isBulkProcessPreviewBind && !signedUrl && isActiveBind\(\)\)/);
+  assert.match(binderSource, /let bulkProcessMissingPresignRetryCount = 0/);
+  assert.match(binderSource, /bulkProcessMissingPresignRetryCount < 1/);
+  assert.match(binderSource, /Preview is loading…/);
+  assert.match(binderSource, /Preview could not be loaded\. Select the preview item again to retry\./);
+  assert.match(binderSource, /if \(\s*!signedUrl \|\|[\s\S]*?\) \{\s*if \(isBulkProcessPreviewBind && !isActiveBind\(\)\) return;/);
+});

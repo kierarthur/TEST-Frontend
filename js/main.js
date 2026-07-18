@@ -197807,9 +197807,19 @@ function bindBulkProcessPreviewPane(state) {
   pane.__preview_bind_seq = (Number(pane.__preview_bind_seq || 0) || 0) + 1;
   const bindSeq = pane.__preview_bind_seq;
   pane.__preview_bind_identity = bindIdentity;
+  const isBulkProcessPreviewBind = !bulkAuthoriseSurfaceAtBind && !trimStr(bulkAuthoriseOwnerIdentity || '');
+  const bulkProcessDomBindToken = (() => {
+    if (!isBulkProcessPreviewBind) return '';
+    bindBulkProcessPreviewPane.__bulkProcessDomBindSeq = (Number(bindBulkProcessPreviewPane.__bulkProcessDomBindSeq || 0) || 0) + 1;
+    const token = String(bindBulkProcessPreviewPane.__bulkProcessDomBindSeq);
+    try { root.dataset.bulkProcessPreviewBindToken = token; } catch {}
+    return token;
+  })();
+  let bulkProcessMissingPresignRetryCount = 0;
 
   const isActiveBind = () => {
-    if (!document.getElementById('bulkProcessPreviewPaneRoot')) return false;
+    const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
+    if (!liveRoot) return false;
     if (bulkAuthoriseSurfaceAtBind || bulkAuthoriseOwnerIdentity) {
       if (!trimStr(bulkAuthoriseOwnerIdentity || '')) return false;
       if (!isCurrentBulkAuthorisePreviewSurface()) return false;
@@ -197817,6 +197827,8 @@ function bindBulkProcessPreviewPane(state) {
       if (liveOwnerIdentity && liveOwnerIdentity !== trimStr(bulkAuthoriseOwnerIdentity || '')) return false;
       return Number(pane.__preview_bind_seq || 0) === bindSeq && String(pane.__preview_bind_identity || '') === String(bindIdentity || '');
     }
+    if (!root.isConnected || liveRoot !== root) return false;
+    if (!bulkProcessDomBindToken || trimStr(root.dataset.bulkProcessPreviewBindToken || '') !== bulkProcessDomBindToken) return false;
     const bindStillMatches = !!(
       Number(pane.__preview_bind_seq || 0) === bindSeq &&
       String(pane.__preview_bind_identity || '') === String(bindIdentity || '')
@@ -204103,6 +204115,7 @@ function bindBulkProcessPreviewPane(state) {
 
       try {
         signedUrl = await presignRecord.promise;
+        if (isBulkProcessPreviewBind && !isActiveBind()) return;
         if (!signedUrl) {
           logPreviewCommitEvent(captureBulkAuthorisePreviewSnapshot(previewState), {
             event: 'presign-commit-reject',
@@ -204181,6 +204194,25 @@ function bindBulkProcessPreviewPane(state) {
         if (pane.__preview_presign_inflight[inflightKey] === presignRecord) {
           try { delete pane.__preview_presign_inflight[inflightKey]; } catch {}
         }
+      }
+
+      if (isBulkProcessPreviewBind && !signedUrl && isActiveBind()) {
+        if (bulkProcessMissingPresignRetryCount < 1) {
+          bulkProcessMissingPresignRetryCount += 1;
+          markPreviewLoadRequested(previewSelectionKey);
+          stage.innerHTML = `<span class="mini" style="opacity:.75;">${enc('Preview is loading…')}</span>`;
+          Promise.resolve().then(async () => {
+            if (!isActiveBind()) return;
+            await renderStage();
+          }).catch(() => {});
+          return;
+        }
+        stage.innerHTML = `<span class="mini" style="opacity:.75;">${enc('Preview could not be loaded. Select the preview item again to retry.')}</span>`;
+        renderToolbar(previewState, previewItem, previewSelectionKey, previewRenderKey, '', isPdf, pageCount, activePage, rotationDeg, zoom);
+        return;
+      }
+      if (isBulkProcessPreviewBind && signedUrl) {
+        bulkProcessMissingPresignRetryCount = 0;
       }
 
       const liveIdentity = ensurePreviewIdentityState();
@@ -204347,6 +204379,7 @@ function bindBulkProcessPreviewPane(state) {
         (liveFileKey !== previewFileCacheKey && !liveAttachedSelectionStillCurrentAfterRebase && !harmlessSameSelectionChurn) ||
         (liveSelectionKey !== previewSelectionKey && !liveAttachedSelectionStillCurrentAfterRebase && !harmlessSameSelectionChurn)
       ) {
+        if (isBulkProcessPreviewBind && !isActiveBind()) return;
         if (harmlessSameSelectionChurn && signedUrl) {
           const recoverySnapshot = capturePreviewCommitSnapshot(livePreviewState, { reason: 'same-selection-churn-presign-commit' });
           commitSignedPreviewAtomically(livePreviewState, previewSelectionKey, signedUrl, {
