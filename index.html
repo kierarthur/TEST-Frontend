@@ -1052,9 +1052,9 @@ body{
 }
 
 #modal.bulk-process-workbench{
-  width:1660px;
-  min-width:1660px;
-  max-width:none;
+  width:min(1660px, calc(100vw - 16px));
+  min-width:0;
+  max-width:calc(100vw - 16px);
   max-height:96vh;
 }
 

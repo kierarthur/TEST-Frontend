@@ -177733,17 +177733,21 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
         (Number(livePendingRowDependentBind.rowChangeSeq || 0) || 0) === liveRowChangeSeq
       );
       const pendingRowDependentReason = /\b(context-ready|row-switch|preview-refresh|evidence-refresh|action-row|authorise|unauthorise)\b/i.test(pendingReason);
+      // Import-evidence results change visible middle-pane content without changing row identity.
+      // They need a full DOM render rather than a binder-only pass or duplicate-render skip.
+      const pendingImportEvidenceReason = /\bimport-evidence\b/i.test(pendingReason);
       const pendingIdentityChanged = !!pendingIdentity && pendingIdentity !== renderIdentity;
       const pendingRenderIdentity = pendingIdentity || renderIdentity;
 
-      if (pendingIdentityChanged) {
+      if (pendingIdentityChanged || pendingImportEvidenceReason) {
         if (window.__LOG_MODAL === true) {
           console.log('[TS][BULK-AUTH][PERF] drain-pending-full', {
             reason: pendingReason,
-            fullReason: 'identity-changed',
+            fullReason: pendingIdentityChanged ? 'identity-changed' : 'import-evidence-dom-refresh',
             previousIdentity: renderIdentity,
             nextIdentity: pendingRenderIdentity,
             pendingIdentity,
+            importEvidenceReason: pendingImportEvidenceReason,
             rowDependentReason: pendingRowDependentReason,
             rowDependentBindRequired: liveRowDependentBindRequired,
             contextReadyMatches: liveContextReadyMatches,
@@ -186631,10 +186635,17 @@ function renderBulkProcessPreviewPane(state) {
         };
 
   const pane = st.evidence_pane_state;
+  const renderFrameKind = (() => {
+    try { return String((typeof window.__getModalFrame === 'function' ? window.__getModalFrame()?.kind : '') || '').trim(); } catch { return ''; }
+  })();
   const renderIsBulkAuthoriseContext = !!(
-    st === window.modalCtx?.bulkAuthoriseState ||
-    window.modalCtx?.bulkAuthoriseState === st ||
-    st.bulk_authorise_mode === true
+    renderFrameKind !== 'bulk-process-workbench' &&
+    (
+      renderFrameKind === 'bulk-authorise-workbench' ||
+      st === window.modalCtx?.bulkAuthoriseState ||
+      window.modalCtx?.bulkAuthoriseState === st ||
+      st.bulk_authorise_mode === true
+    )
   );
   if (!renderIsBulkAuthoriseContext && typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
     if (pane.__bulk_process_render_preview_reconcile_guard !== true) {
@@ -186670,6 +186681,11 @@ function renderBulkProcessPreviewPane(state) {
   const activeDetails = (st.active_details && typeof st.active_details === 'object') ? st.active_details : {};
   const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
   const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
+  const previewSettling = !!(
+    !renderIsBulkAuthoriseContext &&
+    trimStr(activeRow?.row_key || st.active_row_key || '') &&
+    st.__active_context_pending === true
+  );
   const upper = (v) => trimStr(v).toUpperCase();
   const isSystemContractWeekPdfArtifactIdForPreview = (value) => /^sys:contract_week_pdf:/i.test(trimStr(value || ''));
   const safeSystemTimesheetArtifactDisplayNameForPreview = () => 'Uploaded timesheet PDF';
@@ -187597,7 +187613,9 @@ function renderBulkProcessPreviewPane(state) {
   }
 
   return htmlWrap(`
-    <div class="card" id="bulkProcessPreviewPaneRoot" style="padding:8px 9px;min-height:560px;display:flex;flex-direction:column;gap:6px;">
+    <div class="card" id="bulkProcessPreviewPaneRoot" data-bulk-process-preview-settling="${previewSettling ? '1' : '0'}" style="position:relative;padding:8px 9px;min-height:560px;display:flex;flex-direction:column;gap:6px;">
+      ${previewSettling ? `<div style="position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;background:var(--panel,#0f1115);border-radius:inherit;"><span class="mini" style="opacity:.78;">Loading selected row preview…</span></div>` : ''}
+      <div data-bulk-process-preview-content="1" style="display:flex;flex:1;min-height:0;flex-direction:column;gap:6px;${previewSettling ? 'opacity:0;pointer-events:none;' : ''}">
       <div class="row">
         <label>Preview</label>
         <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -187622,6 +187640,7 @@ function renderBulkProcessPreviewPane(state) {
 
       <div id="bulkProcessPreviewStage" style="flex:1;min-height:460px;border:1px dashed rgba(255,255,255,.2);border-radius:8px;display:flex;align-items:center;justify-content:center;padding:6px;overflow:auto;">
         ${stageContentHtml}
+      </div>
       </div>
     </div>
   `);
@@ -189341,6 +189360,27 @@ async function openBulkProcessWorkbench(seed = {}) {
     const base = (baseRowLike && typeof baseRowLike === 'object') ? baseRowLike : {};
     const incoming = (incomingRowLike && typeof incomingRowLike === 'object') ? incomingRowLike : {};
     const out = { ...(deep(incoming) || {}) };
+    // Dataset rows own stable list/identity presentation. Profile hydration may
+    // enrich the row, but a sparse profile must never blank or normalise these
+    // fields while the user is changing rows.
+    [
+      'row_key',
+      'candidate_name',
+      'candidate_display_name',
+      'client_name',
+      'client_display_name',
+      'occupant_key_norm',
+      'week_ending_date',
+      'work_date',
+      'date',
+      'contract_week_ending_date',
+      'sheet_scope',
+      'period_type',
+      'job_title',
+      'job_title_norm'
+    ].forEach((key) => {
+      if (hasOpenValue(base[key])) out[key] = deep(base[key]);
+    });
     const baseFlags = (base.action_flags && typeof base.action_flags === 'object') ? base.action_flags : {};
     const outFlagsInitial = (out.action_flags && typeof out.action_flags === 'object') ? out.action_flags : {};
     const baseRouteTypeUpper = bulkProcessUpper(base.route_type || baseFlags.route_type || '');
@@ -189500,6 +189540,12 @@ async function openBulkProcessWorkbench(seed = {}) {
         if (!id || id === fileKey) return '';
         return `attached|${id}|${fileKey}`;
       };
+      const activeIdentityText = trimStr(targetIdentity.identity || targetIdentity.rowKey || activeKey || '');
+      const rememberedAttachedSelectionKey = trimStr(
+        activeIdentityText && pane.__attached_selection_by_identity && typeof pane.__attached_selection_by_identity === 'object'
+          ? pane.__attached_selection_by_identity[activeIdentityText] || ''
+          : ''
+      );
       const currentAttachedId = trimStr(pane.active_attached_id || '');
       const currentPreviewAttachedKey = trimStr(pane.__active_attached_preview_target || pane.__preview_target_key || '').toLowerCase().startsWith('attached|')
         ? trimStr(pane.__active_attached_preview_target || pane.__preview_target_key || '')
@@ -189509,10 +189555,12 @@ async function openBulkProcessWorkbench(seed = {}) {
       pane.__attached_loaded = true;
       pane.__evidence_loaded = true;
       pane.__requires_evidence_hydration = false;
-      const stillSelected = currentAttachedId
+      const rememberedAttached = rememberedAttachedSelectionKey
+        ? evidenceRows.find((item) => buildAttachedSelectionKeyOpen(item) === rememberedAttachedSelectionKey) || null
+        : null;
+      const stillSelected = rememberedAttached || (currentAttachedId
         ? evidenceRows.find((item) => getBulkProcessEvidenceIdOpen(item) === currentAttachedId || trimStr(item.id || '') === currentAttachedId) || null
-        : (currentPreviewAttachedKey ? evidenceRows.find((item) => buildAttachedSelectionKeyOpen(item) === currentPreviewAttachedKey) || null : null);
-      const activeIdentityText = trimStr(targetIdentity.identity || targetIdentity.rowKey || activeKey || '');
+        : (currentPreviewAttachedKey ? evidenceRows.find((item) => buildAttachedSelectionKeyOpen(item) === currentPreviewAttachedKey) || null : null));
       const manualOverrideIdentity = trimStr(pane.__attached_manual_override_identity || '');
       const manualOverrideBelongsToActiveRow = !!(
         pane.__attached_manual_override === true &&
@@ -189537,7 +189585,7 @@ async function openBulkProcessWorkbench(seed = {}) {
           || evidenceRows.find((item) => !isBulkProcessFallbackEvidenceRowOpen(item))
           || evidenceRows[0]
           || null);
-      const nextAttached = manualOverrideBelongsToActiveRow ? stillSelected : canonicalAttached;
+      const nextAttached = rememberedAttached || (manualOverrideBelongsToActiveRow ? stillSelected : canonicalAttached);
       if (nextAttached) {
         const nextKey = buildAttachedSelectionKeyOpen(nextAttached);
         pane.active_tab = 'attached';
@@ -189785,10 +189833,10 @@ async function openBulkProcessWorkbench(seed = {}) {
   };
 
   const computeBulkProcessModalWidth = () => {
-    const targetWidthPx = 1820;
-    const minWidthPx = 1360;
-    const maxWidthPx = 1900;
-    return { widthPx: targetWidthPx, minWidthPx, maxWidthPx };
+    const viewportWidth = Math.max(document.documentElement?.clientWidth || 0, window.innerWidth || 0);
+    const availableWidthPx = Math.max(320, viewportWidth - 16);
+    const widthPx = Math.min(1660, availableWidthPx);
+    return { widthPx, minWidthPx: 0, maxWidthPx: availableWidthPx };
   };
 
   const clampBulkProcessAnchor = (anchor, modalRect) => {
@@ -189829,7 +189877,8 @@ async function openBulkProcessWorkbench(seed = {}) {
       const rect = modalEl.getBoundingClientRect();
       const liveWidthPx = Number(rect?.width || parseFloat(modalEl.style.width) || 0);
       if (Number.isFinite(liveWidthPx) && liveWidthPx > 0) {
-        const lockedWidthPx = Math.max(240, Math.min(1900, Math.round(liveWidthPx)));
+        const viewportWidth = Math.max(document.documentElement?.clientWidth || 0, window.innerWidth || 0);
+        const lockedWidthPx = Math.max(240, Math.min(1660, Math.max(240, viewportWidth - 16), Math.round(liveWidthPx)));
         modalEl.style.width = `${lockedWidthPx}px`;
         modalEl.style.maxWidth = `${lockedWidthPx}px`;
         modalEl.style.minWidth = `${lockedWidthPx}px`;
@@ -193546,6 +193595,83 @@ function classifyBulkProcessEditability(ctxInput) {
     canonicalCanUnprocess !== null &&
     canonicalShowUnprocess !== null
   );
+  const mutationCompletenessContractPresent = !!(
+    permissionStateComplete !== null ||
+    priorityBadgesComplete !== null ||
+    lifecyclePatchComplete !== null ||
+    refreshRequiredSignal !== null
+  );
+  const currentEditorContextContainers = [ctx, details, stateCtx]
+    .filter((container) => container && typeof container === 'object' && !Array.isArray(container));
+  const currentEditorBooleanValues = (...keys) => lifecycleBooleanValues(currentEditorContextContainers, keys);
+  const currentEditorHasTrue = (...keys) => currentEditorBooleanValues(...keys).some((value) => value === true);
+  const activeContextProfile = upper(
+    ctx.context_profile ||
+    ctx.profile ||
+    details.context_profile ||
+    details.profile ||
+    stateCtx.context_profile ||
+    stateCtx.profile ||
+    ''
+  );
+  const editorLayerLoaded = !!(
+    currentEditorHasTrue('editor_loaded') ||
+    currentEditorContextContainers.some((container) => (
+      Array.isArray(container.loaded_layers) &&
+      container.loaded_layers.some((layer) => upper(layer) === 'EDITOR')
+    ))
+  );
+  const editorContextHydrated = currentEditorHasTrue('is_hydrated');
+  const editorScheduleAuthoritative = currentEditorHasTrue('schedule_authoritative');
+  const editorContextDegraded = currentEditorHasTrue(
+    'context_degraded',
+    'degraded_context',
+    'context_stale',
+    'row_stale',
+    '__bulk_process_context_auth_failed',
+    'header_only'
+  );
+  const editorContextRowKey = trimStr(ctx.row_key || row.row_key || details.row_key || '');
+  const editorContextTimesheetId = trimStr(
+    ctx.current_timesheet_id ||
+    ctx.timesheet_id ||
+    row.current_timesheet_id ||
+    row.timesheet_id ||
+    details.current_timesheet_id ||
+    details.timesheet_id ||
+    ts.timesheet_id ||
+    ''
+  );
+  const datasetRowKey = trimStr(datasetLifecycleRow?.row_key || '');
+  const datasetTimesheetId = trimStr(datasetLifecycleRow?.current_timesheet_id || datasetLifecycleRow?.timesheet_id || '');
+  const editorContextIdentityMatches = !!(
+    datasetLifecycleRow &&
+    (
+      (editorContextRowKey && datasetRowKey && editorContextRowKey === datasetRowKey) ||
+      (editorContextTimesheetId && datasetTimesheetId && editorContextTimesheetId === datasetTimesheetId)
+    )
+  );
+  const explicitEditorPermissionState = readLifecycleFalseWins(
+    'can_edit_timesheet_data',
+    'canEditTimesheetData',
+    'can_edit_hours_schedule',
+    'canEditHoursSchedule',
+    'can_edit'
+  );
+  const editorContextAuthorityComplete = !!(
+    !mutationCompletenessContractPresent &&
+    canonicalCoreComplete &&
+    canonicalReadOnly !== null &&
+    explicitEditorPermissionState !== null &&
+    (activeContextProfile === 'EDITOR' || activeContextProfile === 'FULL') &&
+    editorLayerLoaded &&
+    editorContextHydrated &&
+    editorScheduleAuthoritative &&
+    !editorContextDegraded &&
+    editorContextIdentityMatches &&
+    !archivedSignalConflict &&
+    !archivedStatusConflict
+  );
   const lifecycleAuthorityComplete = !!(
     canonicalCoreComplete &&
     permissionStateComplete === true &&
@@ -193555,6 +193681,7 @@ function classifyBulkProcessEditability(ctxInput) {
     !archivedSignalConflict &&
     !archivedStatusConflict
   );
+  const editorDataAuthorityComplete = lifecycleAuthorityComplete || editorContextAuthorityComplete;
 
   const isArchived = canonicalArchived === true || rawSummaryStage === 'ARCHIVED' || !!archivedAtUtc;
   const hasRetainedFinancialHistory = canonicalRetainedHistory === true;
@@ -193600,11 +193727,11 @@ function classifyBulkProcessEditability(ctxInput) {
     hasAnyLockBlocker ||
     isAuthorisedBlocked ||
     isArchived ||
-    !lifecycleAuthorityComplete
+    !editorDataAuthorityComplete
   );
 
   let manualNonQrEditable =
-    lifecycleAuthorityComplete &&
+    editorDataAuthorityComplete &&
     !isArchived &&
     isManual &&
     !isQr &&
@@ -193696,7 +193823,7 @@ function classifyBulkProcessEditability(ctxInput) {
   const effectiveAdjustmentForEditability = !!(isAdjustment || effectiveAdditionalManualRoute);
 
   manualNonQrEditable =
-    lifecycleAuthorityComplete &&
+    editorDataAuthorityComplete &&
     !isArchived &&
     effectiveIsManual &&
     !effectiveIsQr &&
@@ -193706,13 +193833,13 @@ function classifyBulkProcessEditability(ctxInput) {
     backendCanEditTimesheetData === true;
 
   const canEditHoursSchedule = !!(
-    lifecycleAuthorityComplete &&
+    editorDataAuthorityComplete &&
     !isArchived &&
     backendCanEditTimesheetData === true &&
     (hasSharedDomainPolicy ? domainPolicy.canEditHoursSchedule === true : manualNonQrEditable)
   );
   const canEditTimesheetData = !!(
-    lifecycleAuthorityComplete &&
+    editorDataAuthorityComplete &&
     !isArchived &&
     backendCanEditTimesheetData === true &&
     (typeof domainPolicy.canEditTimesheetData === 'boolean'
@@ -193892,7 +194019,7 @@ function classifyBulkProcessEditability(ctxInput) {
     )
   );
 
-  const finalReadOnly = isArchived || canonicalReadOnly === true || !lifecycleAuthorityComplete;
+  const finalReadOnly = isArchived || canonicalReadOnly === true || !editorDataAuthorityComplete;
 
   return {
     sheetScope,
@@ -193965,6 +194092,10 @@ function classifyBulkProcessEditability(ctxInput) {
     is_archived: isArchived,
     lifecycleAuthorityComplete,
     lifecycle_authority_complete: lifecycleAuthorityComplete,
+    editorContextAuthorityComplete,
+    editor_context_authority_complete: editorContextAuthorityComplete,
+    editorDataAuthorityComplete,
+    editor_data_authority_complete: editorDataAuthorityComplete,
     permissionStatePatchComplete: permissionStateComplete === true,
     permission_state_patch_complete: permissionStateComplete === true,
     priorityBadgesPatchComplete: priorityBadgesComplete === true,
@@ -194106,6 +194237,7 @@ function bindBulkProcessManualEditor(state) {
     return !!(stateCtx.bulkAuthoriseForceReadOnly || stateCtx.reviewOnly || activeCtx.review_only || activeCtx.is_authorised);
   };
   const isScheduleMutationReadOnly = () => {
+    if (root.querySelector('[data-bulk-process-import-expense-readonly="1"]')) return true;
     if (isBulkAuthoriseReadOnlySchedule()) return true;
     const editability = getCurrentBulkProcessEditability();
     return editability.canEditHoursSchedule !== true;
@@ -204735,21 +204867,17 @@ function renderBulkProcessShell(state) {
             min-width:0;
           "
         >
-          <div id="bulkProcessLeftPane" style="display:flex;flex-direction:column;gap:5px;max-height:min(78vh,900px);overflow:auto;padding-right:2px;min-width:0;">
+          <div id="bulkProcessLeftPane" style="display:flex;flex-direction:column;gap:5px;height:min(78vh,900px);min-height:0;max-height:min(78vh,900px);overflow:hidden;padding-right:2px;min-width:0;">
             ${filtersHtml}
             ${listsHtml}
-            ${evidenceLockHtml
-              ? `
-                <div class="card">
-                  <div class="row">
-                    <label>Evidence state</label>
-                    <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                      ${evidenceLockHtml}
-                    </div>
-                  </div>
+            <div class="card" id="bulkProcessEvidenceStateSlot" aria-hidden="${evidenceLockHtml ? 'false' : 'true'}" style="height:49px;min-height:49px;flex:0 0 49px;box-sizing:border-box;overflow:hidden;${evidenceLockHtml ? '' : 'visibility:hidden;'}">
+              <div class="row">
+                <label>Evidence state</label>
+                <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  ${evidenceLockHtml || '<span class="mini">Evidence state</span>'}
                 </div>
-              `
-              : ''}
+              </div>
+            </div>
           </div>
 
           <div
@@ -205178,16 +205306,52 @@ function bindBulkProcessLists(state) {
   if (!st || !root || root.dataset.boundBulkProcessLists === '1') return;
   root.dataset.boundBulkProcessLists = '1';
 
+  const captureScroll = () => {
+    const leftPaneEl = document.getElementById('bulkProcessLeftPane');
+    const unprocessedListEl = document.getElementById('bulkProcessUnprocessedList');
+    const processedListEl = document.getElementById('bulkProcessProcessedList');
+    return {
+      container: Number(leftPaneEl?.scrollTop || 0),
+      unprocessed: Number(unprocessedListEl?.scrollTop || 0),
+      processed: Number(processedListEl?.scrollTop || 0)
+    };
+  };
+
+  const restoreScroll = (snapshot) => {
+    const saved = (snapshot && typeof snapshot === 'object') ? snapshot : {};
+    const leftPaneEl = document.getElementById('bulkProcessLeftPane');
+    const unprocessedListEl = document.getElementById('bulkProcessUnprocessedList');
+    const processedListEl = document.getElementById('bulkProcessProcessedList');
+    if (leftPaneEl) leftPaneEl.scrollTop = Number(saved.container || 0);
+    if (unprocessedListEl) unprocessedListEl.scrollTop = Number(saved.unprocessed || 0);
+    if (processedListEl) processedListEl.scrollTop = Number(saved.processed || 0);
+  };
+
   root.querySelectorAll('[data-bulk-process-row="1"][data-row-key]').forEach((rowEl) => {
     if (rowEl.dataset.boundBulkProcessRow === '1') return;
     rowEl.dataset.boundBulkProcessRow = '1';
+
+    let preActivationScroll = null;
 
     const openRow = async () => {
       if (st.__workbench_modal_spinner_active) return;
       const rowKey = String(rowEl.getAttribute('data-row-key') || '').trim();
       if (!rowKey || typeof handleBulkProcessRowChange !== 'function') return;
+      const scrollSnapshot = preActivationScroll || captureScroll();
+      preActivationScroll = null;
+      st.__bulk_process_left_pane_scroll = { ...scrollSnapshot };
+      restoreScroll(scrollSnapshot);
       await handleBulkProcessRowChange(rowKey);
+      restoreScroll(scrollSnapshot);
     };
+
+    rowEl.addEventListener('pointerdown', (ev) => {
+      if (Number(ev.button || 0) !== 0) return;
+      preActivationScroll = captureScroll();
+      st.__bulk_process_left_pane_scroll = { ...preActivationScroll };
+      // Prevent the native button-focus scroll. The click still activates the row.
+      ev.preventDefault();
+    });
 
     rowEl.addEventListener('click', async () => {
       await openRow();
@@ -205196,6 +205360,8 @@ function bindBulkProcessLists(state) {
     rowEl.addEventListener('keydown', async (ev) => {
       const key = String(ev.key || '');
       if (key !== 'Enter' && key !== ' ') return;
+      preActivationScroll = captureScroll();
+      st.__bulk_process_left_pane_scroll = { ...preActivationScroll };
       ev.preventDefault();
       await openRow();
     });
@@ -205279,14 +205445,12 @@ function renderBulkProcessLists(state) {
     return { surname, given, full };
   };
 
-  const ymdForRow = (row) =>
-    String(
-      row?.week_ending_date ||
-      row?.work_date ||
-      row?.date ||
-      row?.contract_week_ending_date ||
-      ''
-    ).trim();
+  const isDailyRow = (row) => String(row?.sheet_scope || row?.period_type || '').trim().toUpperCase() === 'DAILY';
+  const ymdForRow = (row) => String(
+    isDailyRow(row)
+      ? (row?.work_date || row?.date || row?.week_ending_date || row?.contract_week_ending_date || '')
+      : (row?.week_ending_date || row?.contract_week_ending_date || row?.work_date || row?.date || '')
+  ).trim();
 
   const defaultCompare = (a, b) => {
     const aKey = canonicalBulkProcessListRowKey(a);
@@ -205397,14 +205561,9 @@ function renderBulkProcessLists(state) {
       String(row?.candidate_name || row?.candidate_display_name || row?.occupant_key_norm || '—').trim() || '—';
     const clientText =
       String(row?.client_name || '—').trim() || '—';
-    const dateText = formatBulkDate(
-      row?.week_ending_date || row?.work_date || row?.date || row?.contract_week_ending_date || ''
-    );
-    const rawStatusText =
-      String(row?.summary_stage || row?.processing_status || row?.processing_status_display || '—').trim() || '—';
-    const statusText = (String(sectionName || '').toLowerCase() === 'processed' && String(rawStatusText || '').trim().toUpperCase() === 'PENDING_AUTH')
-      ? 'PROCESSED'
-      : rawStatusText;
+    const dateText = formatBulkDate(ymdForRow(row));
+    const sectionKey = String(sectionName || '').trim().toLowerCase();
+    const statusText = sectionKey === 'processed' ? 'PROCESSED' : 'UNPROCESSED';
     const badgesHtml = renderEvidenceBadges(row);
 
     return `
@@ -205431,8 +205590,7 @@ function renderBulkProcessLists(state) {
         </div>
         <div class="mini" style="margin-top:1px;display:flex;gap:4px;flex-wrap:wrap;opacity:.92;line-height:1.1;font-size:10px;">
           <span>${enc(dateText)}</span>
-          <span aria-hidden="true">•</span>
-          <span>${enc(statusText)}</span>
+          <span class="pill bulk-process-lifecycle-badge bulk-process-lifecycle-badge--${enc(sectionKey)}" data-bulk-process-lifecycle="${enc(statusText)}" style="font-size:9px;padding:1px 6px;">${enc(statusText)}</span>
         </div>
         ${badgesHtml ? `<div class="mini" style="margin-top:2px;display:flex;gap:3px;flex-wrap:wrap;">${badgesHtml}</div>` : ''}
       </button>
@@ -205452,7 +205610,7 @@ function renderBulkProcessLists(state) {
       : '';
 
   return htmlWrap(`
-    <div class="card" id="bulkProcessListsRoot" style="padding:7px 8px;">
+    <div class="card" id="bulkProcessListsRoot" style="padding:7px 8px;display:flex;flex:1 1 auto;min-height:0;overflow:hidden;flex-direction:column;">
       <div class="row">
         <label>Eligible Timesheets</label>
         <div class="controls">
@@ -205460,7 +205618,7 @@ function renderBulkProcessLists(state) {
         </div>
       </div>
 
-      <div style="margin-top:4px;">
+      <div style="margin-top:4px;display:flex;flex:1 1 0;min-height:0;overflow:hidden;flex-direction:column;">
         <div class="row">
           <label>Unprocessed Eligible</label>
           <div class="controls">
@@ -205468,14 +205626,14 @@ function renderBulkProcessLists(state) {
           </div>
         </div>
 
-        <div id="bulkProcessUnprocessedList" style="margin-top:2px;height:158px;overflow:auto;padding-right:2px;">
+        <div id="bulkProcessUnprocessedList" style="margin-top:2px;flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:2px;">
           ${unprocessedRows.length
             ? unprocessedRows.map((row) => renderRow(row, 'unprocessed')).join('')
             : '<div class="mini" style="opacity:.75;">No unprocessed eligible rows.</div>'}
         </div>
       </div>
 
-      <div style="margin-top:6px;">
+      <div style="margin-top:6px;display:flex;flex:1 1 0;min-height:0;overflow:hidden;flex-direction:column;">
         <div class="row">
           <label>Processed Eligible</label>
           <div class="controls">
@@ -205483,7 +205641,7 @@ function renderBulkProcessLists(state) {
           </div>
         </div>
 
-        <div id="bulkProcessProcessedList" style="margin-top:2px;height:158px;overflow:auto;padding-right:2px;">
+        <div id="bulkProcessProcessedList" style="margin-top:2px;flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:2px;">
           ${processedRows.length
             ? processedRows.map((row) => renderRow(row, 'processed')).join('')
             : '<div class="mini" style="opacity:.75;">No processed eligible rows.</div>'}
@@ -206124,6 +206282,21 @@ function renderBulkProcessSelectedSummaryStrip(state) {
   const activeCtxKey = contextRowKey(activeCtx);
   const activeContextMatches = !!activeContext && (!activeRowKey || !activeContextKey || activeContextKey === activeRowKey);
   const activeCtxMatches = !!activeCtx && (!activeRowKey || !activeCtxKey || activeCtxKey === activeRowKey);
+  const rowTimesheetId = trimStr(row.timesheet_id || row.current_timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
+  const rowContractWeekId = trimStr(row.contract_week_id || row.contractWeekId || '');
+  const datasetRows = [
+    ...(Array.isArray(st.dataset?.unprocessed_rows) ? st.dataset.unprocessed_rows : []),
+    ...(Array.isArray(st.dataset?.processed_rows) ? st.dataset.processed_rows : [])
+  ];
+  const displayRow = datasetRows.find((candidate) => {
+    if (!candidate || typeof candidate !== 'object') return false;
+    const candidateRowKey = trimStr(candidate.row_key || candidate.new_row_key || '');
+    if (activeRowKey && candidateRowKey && candidateRowKey === activeRowKey) return true;
+    const candidateTimesheetId = trimStr(candidate.timesheet_id || candidate.current_timesheet_id || candidate.requested_timesheet_id || candidate.expected_timesheet_id || '');
+    if (rowTimesheetId && candidateTimesheetId && candidateTimesheetId === rowTimesheetId) return true;
+    const candidateContractWeekId = trimStr(candidate.contract_week_id || candidate.contractWeekId || '');
+    return !!(rowContractWeekId && candidateContractWeekId && candidateContractWeekId === rowContractWeekId);
+  }) || row;
   const editorLoadingForActiveRow = !!(
     activeRowKey &&
     (
@@ -206156,20 +206329,22 @@ function renderBulkProcessSelectedSummaryStrip(state) {
   const ctxState = activeCtxMatches && activeCtx?.state && typeof activeCtx.state === 'object' ? activeCtx.state : {};
 
   const candidateText = trimStr(
+    displayRow.candidate_name ||
+    displayRow.candidate_display_name ||
+    displayRow.occupant_key_norm ||
     contextDetails.candidate_name ||
     ctxRow.candidate_name ||
     row.candidate_name ||
-    row.candidate_display_name ||
-    row.occupant_key_norm ||
     activeContext?.related?.candidate?.display_name ||
     activeCtx?.related?.candidate?.display_name ||
     '—'
   ) || '—';
   const clientText = trimStr(
+    displayRow.client_name ||
+    displayRow.client_display_name ||
     contextDetails.client_name ||
     ctxRow.client_name ||
     row.client_name ||
-    row.client_display_name ||
     activeContext?.related?.client?.name ||
     activeCtx?.related?.client?.name ||
     '—'
@@ -206181,10 +206356,10 @@ function renderBulkProcessSelectedSummaryStrip(state) {
     const [y, m, d] = ymd.split('-');
     return `${d}-${m}-${y}`;
   };
-  const effectivePeriod = upper(contextDetails.sheet_scope || contextDetails.period_type || ctxDetails.sheet_scope || ctxDetails.period_type || row.sheet_scope || row.period_type || '');
+  const effectivePeriod = upper(displayRow.sheet_scope || displayRow.period_type || contextDetails.sheet_scope || contextDetails.period_type || ctxDetails.sheet_scope || ctxDetails.period_type || row.sheet_scope || row.period_type || '');
   const dateSource = effectivePeriod === 'DAILY'
-    ? (contextDetails.work_date || contextDetails.timesheet?.work_date || ctxDetails.work_date || ctxRow.work_date || row.work_date || row.date || row.week_ending_date || row.contract_week_ending_date || '')
-    : (contextDetails.week_ending_date || contextDetails.contract_week?.week_ending_date || ctxDetails.week_ending_date || ctxRow.week_ending_date || row.week_ending_date || row.contract_week_ending_date || row.work_date || row.date || '');
+    ? (displayRow.work_date || displayRow.date || contextDetails.work_date || contextDetails.timesheet?.work_date || ctxDetails.work_date || ctxRow.work_date || row.work_date || row.date || displayRow.week_ending_date || row.week_ending_date || row.contract_week_ending_date || '')
+    : (displayRow.week_ending_date || displayRow.contract_week_ending_date || contextDetails.week_ending_date || contextDetails.contract_week?.week_ending_date || ctxDetails.week_ending_date || ctxRow.week_ending_date || row.week_ending_date || row.contract_week_ending_date || row.work_date || row.date || '');
   const dateText = formatBulkDate(dateSource);
   const resolveStage = (...values) => {
     const terminal = new Set(['UNPROCESSED', 'PROCESSED', 'AUTHORISED', 'AUTHORIZED', 'INVOICED', 'PAID']);
@@ -206228,6 +206403,8 @@ function renderBulkProcessSelectedSummaryStrip(state) {
     ? 'Loading…'
     : (resolvedStage || trimStr(row.processing_status_display || '—') || '—');
   const jobTitleText = [
+    displayRow.job_title,
+    displayRow.job_title_norm,
     contextDetails.job_title,
     ctxRow.job_title,
     row.job_title,
@@ -206291,10 +206468,17 @@ function renderBulkProcessEvidencePane(state) {
         };
 
   const pane = st.evidence_pane_state;
+  const renderFrameKind = (() => {
+    try { return String((typeof window.__getModalFrame === 'function' ? window.__getModalFrame()?.kind : '') || '').trim(); } catch { return ''; }
+  })();
   const renderIsBulkAuthoriseContext = !!(
-    st === window.modalCtx?.bulkAuthoriseState ||
-    window.modalCtx?.bulkAuthoriseState === st ||
-    st.bulk_authorise_mode === true
+    renderFrameKind !== 'bulk-process-workbench' &&
+    (
+      renderFrameKind === 'bulk-authorise-workbench' ||
+      st === window.modalCtx?.bulkAuthoriseState ||
+      window.modalCtx?.bulkAuthoriseState === st ||
+      st.bulk_authorise_mode === true
+    )
   );
   if (!renderIsBulkAuthoriseContext && typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
     if (pane.__bulk_process_render_evidence_reconcile_guard !== true) {
@@ -206337,6 +206521,11 @@ function renderBulkProcessEvidencePane(state) {
   const activeRealTimesheetId = activeRow?.timesheet_id || activeRow?.current_timesheet_id || activeContext?.current_timesheet_id || activeDetails?.current_timesheet_id || activeDetails?.timesheet?.timesheet_id || null;
   const activeContractWeekId = activeRow?.contract_week_id || activeContext?.contract_week_id || activeDetails?.contract_week_id || activeDetails?.contract_week?.id || null;
   const activeRowKey = trimStr(activeRow?.row_key || st.active_row_key || '');
+  const evidenceSettling = !!(
+    !renderIsBulkAuthoriseContext &&
+    activeRowKey &&
+    st.__active_context_pending === true
+  );
   const activeIsContractWeekOnly = !!(
     activeContractWeekId &&
     !activeRealTimesheetId &&
@@ -207190,7 +207379,9 @@ function renderBulkProcessEvidencePane(state) {
     `aria-pressed="${isActive ? 'true' : 'false'}" aria-selected="${isActive ? 'true' : 'false'}" data-active="${isActive ? 'true' : 'false'}" data-state="${isActive ? 'active' : 'inactive'}"`;
 
   return htmlWrap(`
-    <div class="card" id="bulkProcessEvidencePaneRoot" style="padding:6px 7px;overflow:visible;">
+    <div class="card" id="bulkProcessEvidencePaneRoot" data-bulk-process-evidence-settling="${evidenceSettling ? '1' : '0'}" style="position:relative;padding:6px 7px;overflow:visible;">
+      ${evidenceSettling ? `<div style="position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;background:var(--panel,#0f1115);border-radius:inherit;"><span class="mini" style="opacity:.78;">Loading selected row evidence…</span></div>` : ''}
+      <div data-bulk-process-evidence-content="1" style="${evidenceSettling ? 'opacity:0;pointer-events:none;' : ''}">
       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:center;">
         <div style="display:flex;gap:5px;align-items:center;justify-content:flex-start;flex-wrap:wrap;">
           <button type="button" class="btn btn-outline" id="bpQueuePrevBtn" ${queuePrevEnabled ? '' : 'disabled'}>Previous</button>
@@ -207218,6 +207409,7 @@ function renderBulkProcessEvidencePane(state) {
         </div>
       </div>
       ${attachedThumbsHtml}
+      </div>
     </div>
   `);
 }
@@ -208697,9 +208889,30 @@ function ensureBulkAuthoriseManualDraftState(state) {
 
 
 function bindBulkProcessEvidencePane(state) {
-  const st = (state && typeof state === 'object')
-    ? state
-    : ((window.modalCtx?.bulkProcessState && typeof window.modalCtx.bulkProcessState === 'object') ? window.modalCtx.bulkProcessState : null);
+  const incomingState = (state && typeof state === 'object') ? state : null;
+  const liveFrameKind = (() => {
+    try {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      return String(frame?.kind || '').trim();
+    } catch {
+      return '';
+    }
+  })();
+  const incomingIsBulkAuthorise = !!(
+    incomingState &&
+    liveFrameKind !== 'bulk-process-workbench' &&
+    (
+      liveFrameKind === 'bulk-authorise-workbench' ||
+      incomingState === window.modalCtx?.bulkAuthoriseState ||
+      incomingState.bulk_authorise_mode === true
+    )
+  );
+  const canonicalBulkProcessState = (window.modalCtx?.bulkProcessState && typeof window.modalCtx.bulkProcessState === 'object')
+    ? window.modalCtx.bulkProcessState
+    : null;
+  const st = incomingIsBulkAuthorise
+    ? incomingState
+    : (canonicalBulkProcessState || incomingState);
   if (!st) return;
 
   st.evidence_pane_state =
@@ -208742,9 +208955,13 @@ function bindBulkProcessEvidencePane(state) {
   const pane = st.evidence_pane_state;
   const allKinds = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
   const isBulkAuthoriseContext = !!(
-    st === window.modalCtx?.bulkAuthoriseState ||
-    window.modalCtx?.bulkAuthoriseState === st ||
-    st.bulk_authorise_mode === true
+    liveFrameKind !== 'bulk-process-workbench' &&
+    (
+      liveFrameKind === 'bulk-authorise-workbench' ||
+      st === window.modalCtx?.bulkAuthoriseState ||
+      window.modalCtx?.bulkAuthoriseState === st ||
+      st.bulk_authorise_mode === true
+    )
   );
   const isBulkAuthoriseTimesheetsContext = () => {
     const ctx = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
@@ -209786,6 +210003,42 @@ const getAttachedEvidenceId = (item) => {
     return obj;
   };
 
+  const getRememberedAttachedSelectionKey = () => {
+    const identity = trimStr(getActiveIdentity() || '');
+    const selections = (pane.__attached_selection_by_identity && typeof pane.__attached_selection_by_identity === 'object')
+      ? pane.__attached_selection_by_identity
+      : {};
+    const preferenceKey = !isBulkAuthoriseContext ? getBulkProcessEvidenceTabPreferenceKey(st) : '';
+    const sessionSelections = (window.__bulkProcessAttachedSelectionPreferences && typeof window.__bulkProcessAttachedSelectionPreferences === 'object')
+      ? window.__bulkProcessAttachedSelectionPreferences
+      : {};
+    return identity
+      ? normaliseAttachedPreviewSelectionKey((preferenceKey ? sessionSelections[preferenceKey] : '') || selections[identity] || '')
+      : '';
+  };
+
+  const rememberAttachedSelectionKey = (selectionKeyInput = '') => {
+    if (isBulkAuthoriseContext) return;
+    const identity = trimStr(getActiveIdentity() || '');
+    const selectionKey = normaliseAttachedPreviewSelectionKey(selectionKeyInput || '');
+    if (!identity || !selectionKey) return;
+    pane.__attached_selection_by_identity =
+      (pane.__attached_selection_by_identity && typeof pane.__attached_selection_by_identity === 'object')
+        ? pane.__attached_selection_by_identity
+        : {};
+    pane.__attached_selection_by_identity[identity] = selectionKey;
+    const preferenceKey = getBulkProcessEvidenceTabPreferenceKey(st);
+    if (preferenceKey) {
+      const sessionSelections = (window.__bulkProcessAttachedSelectionPreferences && typeof window.__bulkProcessAttachedSelectionPreferences === 'object')
+        ? window.__bulkProcessAttachedSelectionPreferences
+        : {};
+      sessionSelections[preferenceKey] = selectionKey;
+      const keys = Object.keys(sessionSelections);
+      if (keys.length > 100) keys.slice(0, keys.length - 100).forEach((staleKey) => { delete sessionSelections[staleKey]; });
+      window.__bulkProcessAttachedSelectionPreferences = sessionSelections;
+    }
+  };
+
   const selectAttachedEvidenceItem = (itemLike = null, selectOptions = {}) => {
     const opts = (selectOptions && typeof selectOptions === 'object') ? selectOptions : {};
     const candidate = normaliseAttachedEvidenceRow(itemLike || {});
@@ -209803,6 +210056,7 @@ const getAttachedEvidenceId = (item) => {
         pane.active_attached_item = null;
         pane.active_attached_pdf_page = 1;
         pane.__attached_manual_override = true;
+        if (!isBulkAuthoriseContext) pane.__attached_manual_override_identity = getActiveIdentity();
         pane.__queue_manual_override = false;
         pane.__queue_manual_override_identity = '';
         pane.__queue_manual_override_scope = '';
@@ -209833,6 +210087,7 @@ const getAttachedEvidenceId = (item) => {
     pane.active_attached_item = { ...deep(selected) };
     pane.active_attached_pdf_page = previousTarget === selectedSelectionKey ? (Number(pane.active_attached_pdf_page || 1) || 1) : 1;
     pane.__attached_manual_override = true;
+    if (!isBulkAuthoriseContext) pane.__attached_manual_override_identity = getActiveIdentity();
     pane.__queue_manual_override = false;
     pane.__queue_manual_override_identity = '';
     pane.__queue_manual_override_scope = '';
@@ -209843,6 +210098,7 @@ const getAttachedEvidenceId = (item) => {
     pane.__active_attached_preview_target = selectedSelectionKey;
     pane.__preview_target_key = selectedSelectionKey;
     pane.__preview_load_requested_target_key = selectedSelectionKey;
+    rememberAttachedSelectionKey(selectedSelectionKey);
     if (previousTarget !== selectedSelectionKey) {
       pane.__preview_signed_url = '';
       pane.__preview_signed_url_stored_at_ms = 0;
@@ -211550,7 +211806,7 @@ const getAttachedEvidenceId = (item) => {
       pane.attached_all_rows = [];
       pane.active_attached_item = null;
       pane.active_attached_id = null;
-      return [];
+      return { rows: [], badgeRows: [] };
     }
     const sources = [
       ...(activeEvidenceAuthoritative ? [
@@ -211872,6 +212128,7 @@ const getAttachedEvidenceId = (item) => {
     const wantedAttachedKey = normaliseAttachedPreviewSelectionKey(
       opts.wantedAttachedKey ||
       opts.wanted_attached_key ||
+      getRememberedAttachedSelectionKey() ||
       pane.__active_attached_preview_target ||
       (trimStr(pane.__preview_target_key || '').toLowerCase().startsWith('attached|') ? pane.__preview_target_key : '') ||
       buildAttachedPreviewSelectionKey(pane.active_attached_item || {}) ||
@@ -211884,6 +212141,7 @@ const getAttachedEvidenceId = (item) => {
 
     pane.active_tab = 'attached';
     pane.__attached_manual_override = true;
+    if (!isBulkAuthoriseContext) pane.__attached_manual_override_identity = getActiveIdentity();
     pane.__queue_manual_override = false;
     pane.__queue_manual_override_identity = '';
     pane.__queue_manual_override_scope = '';
@@ -211894,6 +212152,7 @@ const getAttachedEvidenceId = (item) => {
     const selectedApplied = selectAttachedEvidenceItem(selectedItem, { forceAttached: true, clearQueue: true });
     pane.active_tab = 'attached';
     pane.__attached_manual_override = true;
+    if (!isBulkAuthoriseContext) pane.__attached_manual_override_identity = getActiveIdentity();
     pane.__queue_manual_override = false;
     pane.__queue_manual_override_identity = '';
     pane.__queue_manual_override_scope = '';
@@ -212013,6 +212272,29 @@ const getAttachedEvidenceId = (item) => {
   };
 
   const getLiveEvidencePaneRoot = () => document.getElementById('bulkProcessEvidencePaneRoot');
+  const promoteBoundBulkProcessStateToModalCtx = () => {
+    if (isBulkAuthoriseContext || !window.modalCtx || typeof window.modalCtx !== 'object') return;
+    const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+    if (frame && String(frame.kind || '').trim() !== 'bulk-process-workbench') return;
+    window.modalCtx.bulkProcessState = st;
+    try {
+      if (typeof installBulkProcessModalCtxPatch === 'function') {
+        installBulkProcessModalCtxPatch(st, { source_context: 'bulk_process' });
+      }
+    } catch {}
+  };
+  const applyExplicitSourcePreferenceToCanonicalState = (tabInput = '') => {
+    if (isBulkAuthoriseContext) return;
+    const tab = trimStr(tabInput || '').toLowerCase();
+    const canonicalState = (window.modalCtx?.bulkProcessState && typeof window.modalCtx.bulkProcessState === 'object')
+      ? window.modalCtx.bulkProcessState
+      : null;
+    if (!canonicalState) return;
+    setBulkProcessEvidenceTabPreference(canonicalState, tab);
+    if (canonicalState !== st && typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
+      reconcileBulkProcessEvidenceStateAfterContextRefresh(canonicalState);
+    }
+  };
   const getEvidenceSourceDomActiveTab = () => {
     const liveRoot = getLiveEvidencePaneRoot();
     if (!liveRoot) return '';
@@ -212053,9 +212335,12 @@ const getAttachedEvidenceId = (item) => {
     if (queueTabBtn && queueTabBtn.dataset.bound !== '1') {
       queueTabBtn.dataset.bound = '1';
       queueTabBtn.addEventListener('click', async () => {
+        if (!isBulkAuthoriseContext) setBulkProcessEvidenceTabPreference(st, 'queue');
+        promoteBoundBulkProcessStateToModalCtx();
         const applyExplicitQueueTabState = () => {
           pane.active_tab = 'queue';
           pane.__attached_manual_override = false;
+          pane.__attached_manual_override_identity = '';
           pane.__queue_manual_override = true;
           pane.__queue_manual_override_identity = '';
           pane.__queue_manual_override_scope = getQueueScope();
@@ -212073,6 +212358,7 @@ const getAttachedEvidenceId = (item) => {
           reconcileEvidenceState();
           applyExplicitQueueTabState();
           restoreLastViewedQueueItemForEvidencePane({ reason: 'queue-tab-after-reconcile', markRequested: true, markTarget: true });
+          applyExplicitSourcePreferenceToCanonicalState('queue');
           await rerenderWorkbench(`evidence-queue-tab${reason ? `-${reason}` : ''}`, { force: true });
         } catch (e) {
           st.error_text = String(e?.message || e || 'Failed to load queue images.');
@@ -212085,10 +212371,13 @@ const getAttachedEvidenceId = (item) => {
     if (attachedTabBtn && attachedTabBtn.dataset.bound !== '1') {
       attachedTabBtn.dataset.bound = '1';
       attachedTabBtn.addEventListener('click', async () => {
+        if (!isBulkAuthoriseContext) setBulkProcessEvidenceTabPreference(st, 'attached');
+        promoteBoundBulkProcessStateToModalCtx();
         rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item || null, { reason: 'attached-tab-before-switch' });
         syncActiveRowEvidencePresence();
         const rowsBeforeRefresh = getAuthoritativeAttachedRows();
         const wantedAttachedKey = normaliseAttachedPreviewSelectionKey(
+          getRememberedAttachedSelectionKey() ||
           pane.__active_attached_preview_target ||
           (trimStr(pane.__preview_target_key || '').toLowerCase().startsWith('attached|') ? pane.__preview_target_key : '') ||
           buildAttachedPreviewSelectionKey(pane.active_attached_item || {}) ||
@@ -212136,6 +212425,7 @@ const getAttachedEvidenceId = (item) => {
           wantedAttachedKey,
           reason: 'attached-tab-after-final-reconcile'
         });
+        applyExplicitSourcePreferenceToCanonicalState('attached');
         await rerenderWorkbench(`evidence-attached-tab${reason ? `-${reason}` : ''}`, { force: true });
       });
     }
@@ -215624,13 +215914,6 @@ function renderBulkProcessManualEditor(state) {
   const activeDetailsRaw = (st.active_details && typeof st.active_details === 'object') ? st.active_details : null;
   const activeDetailsRowKey = resolveContextRowKey(activeDetailsRaw);
   const activeDetailsMatchesRow = !!(activeDetailsRaw && (!activeRowKey || !activeDetailsRowKey || activeDetailsRowKey === activeRowKey));
-  const earlyBulkAuthoriseManualContext = !!(
-    st.bulk_authorise_mode === true ||
-    st.active_ctx?.state?.bulk_authorise_mode === true ||
-    st.active_ctx?.state?.bulkAuthoriseForceReadOnly === true ||
-    window.modalCtx?.bulkAuthoriseState === st
-  );
-
   const boolishManualEditor = (value) => {
     if (value === true || value === 1) return true;
     if (value === false || value == null) return false;
@@ -215701,20 +215984,6 @@ function renderBulkProcessManualEditor(state) {
       sourceHasTrueFlagForManualEditor(['suppress_standard_schedule_fallback', 'keep_additional_manual_adjustment_schedule_empty', '__suppressStandardScheduleFallback', '__keepAdditionalManualAdjustmentScheduleEmpty', 'manual_additional_route', 'additional_manual_route', 'is_adjustment'])
     )
   );
-
-  if (protectedNoTimesheetManualEditorRow && !earlyBulkAuthoriseManualContext) {
-    return htmlWrap(`
-      <div class="card" id="bulkProcessManualEditorRoot" style="padding:6px 7px;min-width:0;">
-        <div class="row">
-          <label>Manual editor</label>
-          <div class="controls" style="display:flex;flex-direction:column;gap:3px;align-items:flex-start;">
-            <span class="mini">This timesheet is not eligible to have hours entered.</span>
-            <span class="mini">No timesheet image can be attached to this record.</span>
-          </div>
-        </div>
-      </div>
-    `);
-  }
 
   if (!activeCtxMatchesRow) {
     return htmlWrap(`
@@ -215841,7 +216110,7 @@ function renderBulkProcessManualEditor(state) {
       })
     : null;
 
-  if (editDomains && editDomains.isAuthoritativeNoTimesheetRequiredRow === true) {
+  if (editDomains && editDomains.isAuthoritativeNoTimesheetRequiredRow === true && !protectedNoTimesheetManualEditorRow) {
     return htmlWrap(`
       <div class="card" id="bulkProcessManualEditorRoot" style="padding:6px 7px;min-width:0;">
         <div class="row">
@@ -215856,8 +216125,13 @@ function renderBulkProcessManualEditor(state) {
   }
 
   const editability = classifyBulkProcessEditability(ctx);
-  const sheetScope = editability.sheetScope;
-  const subMode = editability.effectiveMode;
+  const protectedDatasetScope = upperManualEditor(matchingDatasetRowForManualEditor?.sheet_scope || matchingDatasetRowForManualEditor?.period_type || '');
+  const sheetScope = protectedNoTimesheetManualEditorRow
+    ? (upperManualEditor(editability.sheetScope || row.sheet_scope || row.period_type || protectedDatasetScope || 'WEEKLY') || 'WEEKLY')
+    : editability.sheetScope;
+  const subMode = protectedNoTimesheetManualEditorRow
+    ? 'MANUAL'
+    : editability.effectiveMode;
   const basis = String(tsfin.basis || row.basis || '').toUpperCase();
   const qrStatus = String(details.qr_status || ts.qr_status || row.qr_status || '').toUpperCase();
   const tsId = ts.timesheet_id || row.timesheet_id || details.current_timesheet_id || null;
@@ -216043,7 +216317,7 @@ function renderBulkProcessManualEditor(state) {
     fmtYmdDmy,
     isBulkProcess: isBulkProcessContext,
     enableWeeklyLineActions: enableBulkAuthoriseWeeklyLineActions,
-    forceReadOnly: isBulkProcessContext ? false : manualReadOnly
+    forceReadOnly: protectedNoTimesheetManualEditorRow || (isBulkProcessContext ? false : manualReadOnly)
   });
 
   let linesHtml = '';
@@ -216166,7 +216440,14 @@ function renderBulkProcessManualEditor(state) {
         #bulkProcessManualEditorRoot #tsDailyReference { min-width: 22ch !important; width: 100% !important; max-width: none !important; }
       </style>
       <div id="bulkProcessManualEditorBody" style="margin-top:4px;display:flex;flex-direction:column;gap:5px;max-height:56vh;overflow:auto;overflow-x:auto;padding-right:2px;min-width:0;">
-        ${manualReadOnly && isManualRoute
+        ${protectedNoTimesheetManualEditorRow
+          ? `<div class="mini" data-bulk-process-import-expense-readonly="1" style="opacity:.85;display:flex;flex-direction:column;gap:2px;">
+               <span>This additional expense-only timesheet schedule is read-only in Bulk Process.</span>
+               <span>No timesheet image can be attached to this record.</span>
+             </div>`
+          : ''
+        }
+        ${manualReadOnly && isManualRoute && !protectedNoTimesheetManualEditorRow
           ? `<div class="mini" style="opacity:.85;">Unauthorise first before editing timesheet data.</div>`
           : ''
         }
@@ -216274,12 +216555,15 @@ function resolveBulkAuthoriseTimesheetsEvidenceContext(state, options = {}) {
   const sameModalBulkState = !!(modalBulkState && modalBulkState === st);
 
   const isBulkAuthoriseContext = !!(
-    modalEntity === 'bulk-authorise' ||
-    sameModalBulkState ||
-    st.bulk_authorise_mode === true ||
-    frameKind === 'bulk-authorise-workbench' ||
-    frameEntity === 'bulk-authorise' ||
-    frameCtx?.bulkAuthoriseState === st
+    frameKind !== 'bulk-process-workbench' &&
+    (
+      modalEntity === 'bulk-authorise' ||
+      sameModalBulkState ||
+      st.bulk_authorise_mode === true ||
+      frameKind === 'bulk-authorise-workbench' ||
+      frameEntity === 'bulk-authorise' ||
+      frameCtx?.bulkAuthoriseState === st
+    )
   );
 
   const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
@@ -216506,14 +216790,17 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
   const frameEntity = trimStr(currentFrame?.entity || '').toLowerCase();
   const frameKind = trimStr(currentFrame?.kind || '').toLowerCase();
   const modalEntity = trimStr(window.modalCtx?.entity || '').toLowerCase();
-  const isBulkAuthoriseCall = (
-    sourceContext === 'bulk_authorise' ||
-    frameEntity === 'bulk-authorise' ||
-    frameKind === 'bulk-authorise-workbench' ||
-    modalEntity === 'bulk-authorise' ||
-    window.modalCtx?.bulkAuthoriseState === st ||
-    st?.bulk_authorise_mode === true ||
-    !!st?.__bulkAuthRightPaneCtx
+  const isBulkAuthoriseCall = !!(
+    frameKind !== 'bulk-process-workbench' &&
+    (
+      sourceContext === 'bulk_authorise' ||
+      frameEntity === 'bulk-authorise' ||
+      frameKind === 'bulk-authorise-workbench' ||
+      modalEntity === 'bulk-authorise' ||
+      window.modalCtx?.bulkAuthoriseState === st ||
+      st?.bulk_authorise_mode === true ||
+      !!st?.__bulkAuthRightPaneCtx
+    )
   );
   if (isBulkAuthoriseCall) {
     syncBulkAuthoriseModalCtxToActiveRow(st, { source: 'installBulkProcessModalCtxPatch', force: true });
@@ -218255,6 +218542,45 @@ async function bankingPayProviderSubmitReviewResolve(input, maybeOptions = {}) {
 }
 
 
+
+function getBulkProcessEvidenceTabPreferenceKey(state) {
+  const st = (state && typeof state === 'object') ? state : {};
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const identity = trimStr(
+    (typeof getBulkProcessRecordIdentityFromState === 'function' ? getBulkProcessRecordIdentityFromState(st) : '') ||
+    st.active_row_key ||
+    st.active_row?.row_key ||
+    ''
+  );
+  const modalToken = trimStr(
+    st.__bulk_process_modal_open_token ||
+    st.__bulkProcessModalOpenToken ||
+    window.modalCtx?.__bulk_process_modal_open_token ||
+    window.modalCtx?.__bulkProcessModalOpenToken ||
+    ''
+  );
+  return (modalToken && identity) ? `${modalToken}|${identity}` : '';
+}
+
+function setBulkProcessEvidenceTabPreference(state, tabInput = '') {
+  const key = getBulkProcessEvidenceTabPreferenceKey(state);
+  const tab = String(tabInput == null ? '' : tabInput).trim().toLowerCase();
+  if (!key || (tab !== 'queue' && tab !== 'attached')) return '';
+  const store = (window.__bulkProcessEvidenceTabPreferences && typeof window.__bulkProcessEvidenceTabPreferences === 'object')
+    ? window.__bulkProcessEvidenceTabPreferences
+    : {};
+  store[key] = tab;
+  const keys = Object.keys(store);
+  if (keys.length > 100) keys.slice(0, keys.length - 100).forEach((staleKey) => { delete store[staleKey]; });
+  window.__bulkProcessEvidenceTabPreferences = store;
+  return tab;
+}
+
+function getBulkProcessEvidenceTabPreference(state) {
+  const key = getBulkProcessEvidenceTabPreferenceKey(state);
+  const tab = key ? String(window.__bulkProcessEvidenceTabPreferences?.[key] || '').trim().toLowerCase() : '';
+  return (tab === 'queue' || tab === 'attached') ? tab : '';
+}
 
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
@@ -223726,11 +224052,39 @@ const getAttachedSelectionParts = (item) => {
 
   );
 
+  const activeIdentity = getActiveIdentity();
+
+  const explicitBulkProcessTabPreference = isBulkAuthoriseTimesheets
+    ? ''
+    : getBulkProcessEvidenceTabPreference(st);
+
+  if (explicitBulkProcessTabPreference === 'attached') {
+    pane.active_tab = 'attached';
+    pane.__attached_manual_override = true;
+    pane.__attached_manual_override_identity = activeIdentity || '';
+    pane.__queue_manual_override = false;
+    pane.__queue_manual_override_identity = '';
+    pane.__queue_manual_override_scope = '';
+  } else if (explicitBulkProcessTabPreference === 'queue') {
+    pane.active_tab = 'queue';
+    pane.__attached_manual_override = false;
+    pane.__attached_manual_override_identity = '';
+    pane.__queue_manual_override = true;
+    pane.__queue_manual_override_identity = '';
+    pane.__queue_manual_override_scope = trimStr(pane.__queue_loaded_scope || pane.__queue_scope || 'global:QUEUED') || 'global:QUEUED';
+  }
+
   const hasTimesheetEvidence = isBulkAuthoriseTimesheets ? timesheetRows.length > 0 : realTimesheetRows.length > 0;
 
-  const manualOverride = !!pane.__attached_manual_override;
+  const manualOverrideIdentity = trimStr(pane.__attached_manual_override_identity || '');
 
-  const activeIdentity = getActiveIdentity();
+  const manualOverride = !!(
+    pane.__attached_manual_override === true &&
+    (
+      isBulkAuthoriseTimesheets ||
+      (!!activeIdentity && manualOverrideIdentity === activeIdentity)
+    )
+  );
 
   const queueScope = trimStr(pane.__queue_loaded_scope || pane.__queue_scope || 'global:QUEUED') || 'global:QUEUED';
 
@@ -223842,11 +224196,11 @@ const getAttachedSelectionParts = (item) => {
 
       pane.__queue_manual_override_scope = '';
 
-    } else if (manualOverride && hasAnyAttachedEvidence) {
+    } else if (manualOverride && (hasAnyAttachedEvidence || requestedSource === 'attached')) {
 
       resolvedSource = 'attached';
 
-      pane.__requires_evidence_hydration = false;
+      pane.__requires_evidence_hydration = !!(!hasAnyAttachedEvidence && evidenceExpectation && !allowEvidenceClear);
 
       pane.__synthetic_attached_fallback_suppressed = false;
 
@@ -224350,7 +224704,7 @@ const getAttachedSelectionParts = (item) => {
 
       pane.__active_attached_preview_target = '';
 
-      if (!hasAnyAttachedEvidence && !isBulkAuthoriseTimesheets) {
+      if (!hasAnyAttachedEvidence && !isBulkAuthoriseTimesheets && !manualOverride) {
 
         pane.__attached_manual_override = false;
 
@@ -252637,6 +252991,28 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     const out = { ...(deep(incoming) || {}) };
 
+    // Keep the canonical dataset presentation stable while profile-specific
+    // context hydrates. Lifecycle, permissions, schedule and finance fields
+    // still come from the incoming authoritative profile.
+    [
+      'row_key',
+      'candidate_name',
+      'candidate_display_name',
+      'client_name',
+      'client_display_name',
+      'occupant_key_norm',
+      'week_ending_date',
+      'work_date',
+      'date',
+      'contract_week_ending_date',
+      'sheet_scope',
+      'period_type',
+      'job_title',
+      'job_title_norm'
+    ].forEach((key) => {
+      if (hasOpenValue(base[key])) out[key] = deep(base[key]);
+    });
+
     const baseFlags = (base.action_flags && typeof base.action_flags === 'object') ? base.action_flags : {};
 
     const outFlagsInitial = (out.action_flags && typeof out.action_flags === 'object') ? out.action_flags : {};
@@ -254364,6 +254740,14 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
       });
 
+      const activeIdentityText = trimStr(targetIdentity.identity || targetIdentity.rowKey || activeKey || '');
+
+      const rememberedAttachedSelectionKey = trimStr(
+        activeIdentityText && paneObj.__attached_selection_by_identity && typeof paneObj.__attached_selection_by_identity === 'object'
+          ? paneObj.__attached_selection_by_identity[activeIdentityText] || ''
+          : ''
+      );
+
       const previousSelectionKey = buildBulkProcessAttachedSelectionKeyRowChange(paneObj.active_attached_item || {});
 
       const previousTargetKey = trimStr(paneObj.__active_attached_preview_target || paneObj.__preview_target_key || '').toLowerCase().startsWith('attached|')
@@ -254372,7 +254756,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
         : '';
 
-      const wantedSelectionKey = previousSelectionKey || previousTargetKey;
+      const wantedSelectionKey = rememberedAttachedSelectionKey || previousSelectionKey || previousTargetKey;
 
       paneObj.attached_rows = evidenceRows.map((item) => deep(item));
 
@@ -254387,8 +254771,6 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         ? evidenceRows.find((item) => buildBulkProcessAttachedSelectionKeyRowChange(item) === wantedSelectionKey) || null
 
         : null;
-
-      const activeIdentityText = trimStr(targetIdentity.identity || targetIdentity.rowKey || activeKey || '');
 
       const manualOverrideIdentity = trimStr(paneObj.__attached_manual_override_identity || '');
 
@@ -254426,7 +254808,9 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
         || null;
 
-      const nextAttached = manualOverrideBelongsToActiveRow ? stillSelected : canonicalAttached;
+      const rememberedAttached = rememberedAttachedSelectionKey && stillSelected ? stillSelected : null;
+
+      const nextAttached = rememberedAttached || (manualOverrideBelongsToActiveRow ? stillSelected : canonicalAttached);
 
       if (nextAttached) {
 
@@ -255538,7 +255922,10 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
             st.__suppress_dirty_marking = true;
 
-            st.active_row = clone({ ...(st.active_row || activeRowForHydration || {}), ...(hydratedContext.row || {}) });
+            st.active_row = mergeBulkProcessRowAuthoritySignals(
+              st.active_row || activeRowForHydration || {},
+              hydratedContext.row || st.active_row || activeRowForHydration || {}
+            );
 
             st.active_row_key = trimStr(st.active_row?.row_key || st.active_row_key || '') || st.active_row_key || null;
 
@@ -255975,19 +256362,51 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
     ).toUpperCase();
 
+    const explicitAttachedManualOverrideForActiveRow = !!(
+
+      pane.__attached_manual_override === true &&
+
+      trimStr(pane.__attached_manual_override_identity || '') &&
+
+      trimStr(pane.__attached_manual_override_identity || '') === trimStr(activeIdentity || '')
+
+    );
+
+    if (explicitAttachedManualOverrideForActiveRow) {
+
+      pane.active_tab = 'attached';
+
+      pane.__queue_manual_override = false;
+
+      pane.__queue_manual_override_identity = '';
+
+      pane.__queue_manual_override_scope = '';
+
+      reconcileResult.resolved_source = 'attached';
+
+      if (!effectiveEvidenceRows.length) reconcileResult.requires_evidence_hydration = false;
+
+    }
+
     const activeRowMustDefaultQueueForPreview = !!(
 
-      activeRowLifecycleForPreview === 'UNPROCESSED' ||
+      !explicitAttachedManualOverrideForActiveRow &&
 
-      activeRowLifecycleForPreview === 'QUEUED' ||
+      (
 
-      activeRowLifecycleForPreview === 'PENDING_PROCESS' ||
+        activeRowLifecycleForPreview === 'UNPROCESSED' ||
 
-      activeRowLifecycleForPreview === 'READY_TO_PROCESS' ||
+        activeRowLifecycleForPreview === 'QUEUED' ||
 
-      st.active_row?.processed === false ||
+        activeRowLifecycleForPreview === 'PENDING_PROCESS' ||
 
-      st.active_row?.is_processed === false
+        activeRowLifecycleForPreview === 'READY_TO_PROCESS' ||
+
+        st.active_row?.processed === false ||
+
+        st.active_row?.is_processed === false
+
+      )
 
     );
 
@@ -256411,7 +256830,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
     );
 
-    if (!effectiveTimesheetEvidence && !nonTimesheetEvidenceRowsForPane.length && metadataRequiredEvidenceHydration && evidenceHydrationAttempted && activeIdentity && !activeRowExplicitNoTimesheet) {
+    if (!explicitAttachedManualOverrideForActiveRow && !effectiveTimesheetEvidence && !nonTimesheetEvidenceRowsForPane.length && metadataRequiredEvidenceHydration && evidenceHydrationAttempted && activeIdentity && !activeRowExplicitNoTimesheet) {
 
       if (preserveAttachedPaneForNonEvidenceContext) {
 
