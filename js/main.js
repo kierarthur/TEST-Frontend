@@ -25802,6 +25802,13 @@ async function bankingAcknowledgeAlerts(input = {}) {
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
     const payload = (parsed && typeof parsed === 'object') ? parsed : {};
     if (!response.ok) {
+      const sessionExpired = response.status === 401;
+      const permissionDenied = response.status === 403;
+      const authenticationMessage = sessionExpired
+        ? 'Your session has expired. Please sign in again, then reopen Banking alerts.'
+        : (permissionDenied
+            ? 'Your account does not have permission to clear Banking alerts. Ask an administrator to review your Banking permissions.'
+            : '');
       const detailText = typeof payload.details === 'string' ? payload.details : '';
       let detailJson = null;
       if (detailText) {
@@ -25813,9 +25820,13 @@ async function bankingAcknowledgeAlerts(input = {}) {
         ignored: true,
         ignored_count: 1,
         status: response.status,
-        error: String(payload.error || payload.message || text || 'Unable to acknowledge Banking alert.'),
-        message: String(payload.message || payload.error || text || 'Unable to acknowledge Banking alert.'),
-        error_code: payload.error_code || payload.code || detailJson?.code || null,
+        title: sessionExpired ? 'Session expired' : (permissionDenied ? 'Banking permission required' : undefined),
+        error: String(authenticationMessage || payload.error || payload.message || text || 'Unable to acknowledge Banking alert.'),
+        message: String(authenticationMessage || payload.message || payload.error || text || 'Unable to acknowledge Banking alert.'),
+        user_message: String(authenticationMessage || payload.message || payload.error || text || 'Unable to acknowledge Banking alert.'),
+        error_code: sessionExpired
+          ? 'SESSION_EXPIRED'
+          : (permissionDenied ? 'BANKING_ALERT_PERMISSION_REQUIRED' : (payload.error_code || payload.code || detailJson?.code || null)),
         details: detailJson || payload.details || null,
         body: text
       };

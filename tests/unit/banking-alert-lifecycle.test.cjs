@@ -162,8 +162,10 @@ test('dedicated alert fetch loads full details and applies them', async () => {
   assert.equal(applied.banking_alert_summary.alerts.length, 1);
 });
 
-function createAcknowledgeContext(responseSummary) {
+function createAcknowledgeContext(responseSummary, options = {}) {
   const requests = [];
+  let friendlyModal = null;
+  const configuredResponse = options.response || null;
   const source = sliceBetween('async function bankingAcknowledgeAlerts(input = {})', 'async function bankingPayBatchRetryBlockedFunds');
   const context = {
     window: {
@@ -182,8 +184,9 @@ function createAcknowledgeContext(responseSummary) {
       createElement() { return { innerHTML: '', firstElementChild: null }; }
     },
     API(value) { return value; },
-    async authFetch(url, options) {
-      requests.push({ url, method: options.method, body: JSON.parse(options.body) });
+    async authFetch(url, fetchOptions) {
+      requests.push({ url, method: fetchOptions.method, body: JSON.parse(fetchOptions.body) });
+      if (configuredResponse) return configuredResponse;
       return {
         ok: true,
         status: 200,
@@ -197,6 +200,8 @@ function createAcknowledgeContext(responseSummary) {
         }
       };
     },
+    bankingHandleApiError(error) { return error && error.json ? error.json : {}; },
+    async openUiConfirmModal(config) { friendlyModal = config; },
     applyAlertSummaryToState(payload) {
       const summary = payload.remaining_alert_summary || payload.alert_summary;
       return {
@@ -222,7 +227,7 @@ function createAcknowledgeContext(responseSummary) {
     Error
   };
   vm.runInNewContext(source, context, { filename: 'banking-alert-acknowledge.js' });
-  return { context, requests };
+  return { context, requests, getFriendlyModal: () => friendlyModal };
 }
 
 test('clearing one alert sends its full identity and keeps the remaining message visible', async () => {
@@ -264,6 +269,25 @@ test('clear all sends an explicit clear_all request and empties the alert state'
   assert.equal(result.banking_alerts.length, 0);
   assert.ok(context.window.__bankingLocallyAcknowledgedFingerprints[scheduledAlert.alert_fingerprint]);
   assert.ok(context.window.__bankingLocallyAcknowledgedFingerprints[settledAlert.alert_fingerprint]);
+});
+
+test('expired session gives a specific reason when an alert cannot be cleared', async () => {
+  const { context, getFriendlyModal } = createAcknowledgeContext({ alerts: [], unacknowledged_count: 0 }, {
+    response: {
+      ok: false,
+      status: 401,
+      async text() { return JSON.stringify({ ok: false, error: 'Unauthorized' }); }
+    }
+  });
+
+  await assert.rejects(
+    context.bankingAcknowledgeAlerts(scheduledAlert),
+    /Your session has expired\. Please sign in again, then reopen Banking alerts\./
+  );
+
+  const modal = getFriendlyModal();
+  assert.equal(modal.title, 'Session expired');
+  assert.match(modal.message, /sign in again/i);
 });
 
 test('preferences expose successful lifecycle alerts as enabled by default', () => {
