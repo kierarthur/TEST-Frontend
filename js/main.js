@@ -173002,7 +173002,7 @@ function renderBulkAuthoriseLists(state) {
           </div>
 
           <div style="display:flex;align-items:flex-start;justify-content:flex-end;">
-            <span class="pill" style="font-size:10px;padding:2px 7px;">${enc(sectionName === 'processed_eligible' ? 'Processed' : 'Authorised')}</span>
+            <span class="pill${sectionName === 'authorised_eligible' ? ' pill-ok' : ''}" style="font-size:10px;padding:2px 7px;">${enc(sectionName === 'processed_eligible' ? 'Processed' : 'Authorised')}</span>
           </div>
         </div>
       </div>
@@ -205997,7 +205997,9 @@ function renderBulkProcessLists(state) {
       String(row?.client_name || '—').trim() || '—';
     const dateText = formatBulkDate(ymdForRow(row));
     const sectionKey = String(sectionName || '').trim().toLowerCase();
-    const statusText = sectionKey === 'processed' ? 'PROCESSED' : 'UNPROCESSED';
+    const isProcessed = sectionKey === 'processed';
+    const statusText = isProcessed ? 'Processed' : 'Unprocessed';
+    const statusPillClass = `pill${isProcessed ? ' pill-ok' : ''} bulk-process-lifecycle-badge bulk-process-lifecycle-badge--${sectionKey}`;
     const badgesHtml = renderEvidenceBadges(row);
 
     return `
@@ -206024,7 +206026,7 @@ function renderBulkProcessLists(state) {
         </div>
         <div class="mini" style="margin-top:1px;display:flex;gap:4px;flex-wrap:wrap;opacity:.92;line-height:1.1;font-size:10px;">
           <span>${enc(dateText)}</span>
-          <span class="pill bulk-process-lifecycle-badge bulk-process-lifecycle-badge--${enc(sectionKey)}" data-bulk-process-lifecycle="${enc(statusText)}" style="font-size:9px;padding:1px 6px;">${enc(statusText)}</span>
+          <span class="${enc(statusPillClass)}" data-bulk-process-lifecycle="${enc(statusText)}" style="font-size:9px;padding:1px 6px;">${enc(statusText)}</span>
         </div>
         ${badgesHtml ? `<div class="mini" style="margin-top:2px;display:flex;gap:3px;flex-wrap:wrap;">${badgesHtml}</div>` : ''}
       </button>

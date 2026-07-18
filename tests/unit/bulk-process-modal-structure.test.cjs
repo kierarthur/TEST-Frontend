@@ -66,8 +66,8 @@ test('Bulk Process row statuses are pills and daily rows display work_date', () 
     filters: { show_weekly_manual: true, show_daily_manual: true }
   });
 
-  assert.match(markup, /data-bulk-process-lifecycle="UNPROCESSED"/);
-  assert.match(markup, /data-bulk-process-lifecycle="PROCESSED"/);
+  assert.match(markup, /class="pill bulk-process-lifecycle-badge bulk-process-lifecycle-badge--unprocessed" data-bulk-process-lifecycle="Unprocessed"/);
+  assert.match(markup, /class="pill pill-ok bulk-process-lifecycle-badge bulk-process-lifecycle-badge--processed" data-bulk-process-lifecycle="Processed"/);
   assert.match(markup, /15-07-2026/);
   assert.doesNotMatch(markup, /15-07-2026[\s\S]{0,160}19-07-2026/);
   assert.match(markup, /bulkProcessUnprocessedList" style="[^"]*overflow-y:auto/);
