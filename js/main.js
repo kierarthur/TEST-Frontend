@@ -187499,7 +187499,25 @@ function renderBulkProcessPreviewPane(state) {
       } catch {}
     }
   }
-  const previewUrl = isPdf ? `${signedUrl}#page=${activePage}&zoom=page-width` : '';
+  const renderIsBulkAuthorisePreviewState = isBulkAuthorisePreviewState();
+  const previewAssetBlobCacheHolder = !renderIsBulkAuthorisePreviewState
+    ? bindBulkProcessPreviewPane.__bulkProcessPreviewAssetBlobCache
+    : null;
+  const previewAssetBlobCacheKey = `${previewFileKey}|${signedUrl}`;
+  const cachedPreviewAssetBlobUrl = trimStr(
+    previewAssetBlobCacheHolder?.ownerState === st
+      ? (previewAssetBlobCacheHolder.entries?.get(previewAssetBlobCacheKey)?.objectUrl || '')
+      : ''
+  );
+  const previewAssetDisplayUrl = renderIsBulkAuthorisePreviewState ? signedUrl : cachedPreviewAssetBlobUrl;
+  const hasDisplayableCurrentPreview = !!(
+    hasCurrentSignedUrl &&
+    (
+      (!isPdf && !isImage) ||
+      !!previewAssetDisplayUrl
+    )
+  );
+  const previewUrl = isPdf && previewAssetDisplayUrl ? `${previewAssetDisplayUrl}#page=${activePage}&zoom=page-width` : '';
   const panePreviewIdentity = trimStr(pane.__preview_identity || '');
   const samePreviewIdentity = !!(activeIdentity && panePreviewIdentity && panePreviewIdentity === activeIdentity);
   const visibleContextStillLoading = !!(
@@ -187518,7 +187536,7 @@ function renderBulkProcessPreviewPane(state) {
   const stageHasFallbackLink = !!stageEl?.querySelector?.('a[href]');
   const shouldBlockLoadingPlaceholderWrite = !!(
     (
-      isBulkAuthorisePreviewState() &&
+      renderIsBulkAuthorisePreviewState &&
       !hasCurrentSignedUrl &&
       !!previewItem &&
       (
@@ -187532,8 +187550,8 @@ function renderBulkProcessPreviewPane(state) {
       )
     ) ||
     (
-      !isBulkAuthorisePreviewState() &&
-      !hasCurrentSignedUrl &&
+      !renderIsBulkAuthorisePreviewState &&
+      !hasDisplayableCurrentPreview &&
       samePreviewIdentity &&
       visibleContextStillLoading &&
       (stageHasImage || stageHasPdf || stageHasFallbackLink)
@@ -187545,12 +187563,12 @@ function renderBulkProcessPreviewPane(state) {
     : (visibleContextStillLoading ? 'Loading selected row preview…' : 'Preview is loading…');
   const stageContentHtml = previewItem
     ? (
-        hasCurrentSignedUrl
+        hasDisplayableCurrentPreview
           ? (
               isPdf
                 ? `<iframe id="bulkProcessPdfPreviewFrame" src="${enc(previewUrl)}" title="Bulk Process PDF preview" style="width:100%;min-height:620px;border:0;background:#fff;"></iframe>`
                 : (isImage
-                    ? `<img id="bulkProcessImagePreviewEl" alt="Evidence preview" src="${enc(signedUrl)}" style="max-width:100%;max-height:640px;object-fit:contain;" />`
+                    ? `<img id="bulkProcessImagePreviewEl" alt="Evidence preview" src="${enc(previewAssetDisplayUrl)}" style="max-width:100%;max-height:640px;object-fit:contain;" />`
                     : `<a class="btn btn-outline" href="${enc(signedUrl)}" target="_blank" rel="noopener">Open file</a>`)
             )
           : (
@@ -187565,11 +187583,11 @@ function renderBulkProcessPreviewPane(state) {
           : `<span class="mini" style="opacity:.75;">${enc(noPreviewCopy.message)}</span>`
       );
   if ((typeof window.__LOG_MODAL === 'boolean') && window.__LOG_MODAL === true && previewItem) {
-    const renderedType = hasCurrentSignedUrl ? (isPdf ? 'pdf' : (isImage ? 'image' : 'fallback')) : '';
+    const renderedType = hasDisplayableCurrentPreview ? (isPdf ? 'pdf' : (isImage ? 'image' : 'fallback')) : '';
     console.log('[TS][BULK-AUTH][PREVIEW]', {
       event: 'preview-loading-placeholder-write',
-      phase: hasCurrentSignedUrl
-        ? 'rendered-current-signed-url'
+      phase: hasDisplayableCurrentPreview
+        ? (renderIsBulkAuthorisePreviewState ? 'rendered-current-signed-url' : 'rendered-current-cached-asset')
         : (shouldBlockLoadingPlaceholderWrite ? 'blocked' : 'written'),
       ownerIdentity: trimStr(pane.__preview_identity || ''),
       rowKey: trimStr(st.active_row_key || st.active_row?.row_key || ''),
@@ -187581,7 +187599,7 @@ function renderBulkProcessPreviewPane(state) {
       signedUrlPresent: !!signedUrl,
       targetMatchesSelection,
       requestedMatchesOrBlank,
-      renderedInstead: hasCurrentSignedUrl,
+      renderedInstead: hasDisplayableCurrentPreview,
       renderedType,
       imageElExists: renderedType === 'image',
       pdfFrameExists: renderedType === 'pdf',
@@ -193599,7 +193617,7 @@ function classifyBulkProcessEditability(ctxInput) {
     permissionStateComplete !== null ||
     priorityBadgesComplete !== null ||
     lifecyclePatchComplete !== null ||
-    refreshRequiredSignal !== null
+    refreshRequiredSignal === true
   );
   const currentEditorContextContainers = [ctx, details, stateCtx]
     .filter((container) => container && typeof container === 'object' && !Array.isArray(container));
@@ -193651,6 +193669,49 @@ function classifyBulkProcessEditability(ctxInput) {
       (editorContextTimesheetId && datasetTimesheetId && editorContextTimesheetId === datasetTimesheetId)
     )
   );
+  const datasetLifecycleContainers = [
+    datasetLifecycleRow,
+    datasetLifecycleRow?.row_patch,
+    datasetLifecycleRow?.action_flags
+  ].filter((container) => container && typeof container === 'object' && !Array.isArray(container));
+  const readDatasetLifecycleBoolean = (...keys) => {
+    const values = lifecycleBooleanValues(datasetLifecycleContainers, keys);
+    if (!values.length) return null;
+    if (values.some((value) => value !== values[0])) return null;
+    return values[0];
+  };
+  const datasetLifecycleSignature = trimStr(
+    datasetLifecycleRow?.backend_row_signature ||
+    datasetLifecycleRow?.row_signature ||
+    datasetLifecycleRow?.expected_row_signature ||
+    ''
+  );
+  const datasetLifecycleContractComplete = !!(
+    datasetLifecycleSignature &&
+    readDatasetLifecycleBoolean('is_archived', 'isArchived', 'archived') !== null &&
+    readDatasetLifecycleBoolean(
+      'has_retained_financial_history',
+      'hasRetainedFinancialHistory',
+      'retained_financial_history',
+      'retainedFinancialHistory',
+      'financial_history_retained'
+    ) !== null &&
+    readDatasetLifecycleBoolean('can_process', 'canProcess') !== null &&
+    readDatasetLifecycleBoolean('can_unprocess', 'canUnprocess') !== null &&
+    readDatasetLifecycleBoolean('unprocess_action_visible', 'show_unprocess', 'showUnprocess') !== null &&
+    readDatasetLifecycleBoolean('review_only', 'reviewOnly') !== null
+  );
+  const signedDatasetLifecycleAuthorityComplete = !!(
+    !mutationCompletenessContractPresent &&
+    datasetLifecycleRow &&
+    editorContextIdentityMatches &&
+    datasetLifecycleContractComplete &&
+    canonicalCoreComplete &&
+    lifecyclePatchComplete !== false &&
+    refreshRequiredSignal !== true &&
+    !archivedSignalConflict &&
+    !archivedStatusConflict
+  );
   const explicitEditorPermissionState = readLifecycleFalseWins(
     'can_edit_timesheet_data',
     'canEditTimesheetData',
@@ -193673,13 +193734,16 @@ function classifyBulkProcessEditability(ctxInput) {
     !archivedStatusConflict
   );
   const lifecycleAuthorityComplete = !!(
-    canonicalCoreComplete &&
-    permissionStateComplete === true &&
-    priorityBadgesComplete === true &&
-    lifecyclePatchComplete !== false &&
-    refreshRequiredSignal === false &&
-    !archivedSignalConflict &&
-    !archivedStatusConflict
+    signedDatasetLifecycleAuthorityComplete ||
+    (
+      canonicalCoreComplete &&
+      permissionStateComplete === true &&
+      priorityBadgesComplete === true &&
+      lifecyclePatchComplete !== false &&
+      refreshRequiredSignal === false &&
+      !archivedSignalConflict &&
+      !archivedStatusConflict
+    )
   );
   const editorDataAuthorityComplete = lifecycleAuthorityComplete || editorContextAuthorityComplete;
 
@@ -194092,6 +194156,16 @@ function classifyBulkProcessEditability(ctxInput) {
     is_archived: isArchived,
     lifecycleAuthorityComplete,
     lifecycle_authority_complete: lifecycleAuthorityComplete,
+    signedDatasetLifecycleAuthorityComplete,
+    signed_dataset_lifecycle_authority_complete: signedDatasetLifecycleAuthorityComplete,
+    datasetLifecycleContractComplete,
+    dataset_lifecycle_contract_complete: datasetLifecycleContractComplete,
+    editorContextIdentityMatches,
+    editor_context_identity_matches: editorContextIdentityMatches,
+    canonicalCoreComplete,
+    canonical_core_complete: canonicalCoreComplete,
+    mutationCompletenessContractPresent,
+    mutation_completeness_contract_present: mutationCompletenessContractPresent,
     editorContextAuthorityComplete,
     editor_context_authority_complete: editorContextAuthorityComplete,
     editorDataAuthorityComplete,
@@ -195730,6 +195804,9 @@ function bindBulkProcessManualEditor(state) {
       applyButtonEnabledState(id, enabled);
     });
   };
+  if (!isBulkAuthoriseCtx()) {
+    st.__syncBulkProcessPrimaryActionButtonStates = syncPrimaryActionButtonStates;
+  }
   syncPrimaryActionButtonStates();
 
   const bindBulkAddAdditionalManualAction = () => {
@@ -197554,7 +197631,7 @@ function bindBulkProcessPreviewPane(state) {
 
   const bulkAuthoriseSurfaceAtBind = isCurrentBulkAuthorisePreviewSurface();
   const bulkAuthoriseOwnerIdentity = resolveBulkAuthorisePreviewOwnerIdentity();
-  const isBulkAuthorisePreviewContext = !!trimStr(bulkAuthoriseOwnerIdentity || '');
+  const isBulkAuthorisePreviewContext = !!bulkAuthoriseSurfaceAtBind && !!trimStr(bulkAuthoriseOwnerIdentity || '');
   const activeAuthorisePreviewItemNow = resolveActiveBulkProcessPreviewItem();
   const activeAuthoriseEvidenceIdNow = resolveActiveBulkProcessPreviewEvidenceId(activeAuthorisePreviewItemNow);
   const activeAuthoriseFileKeyNow = resolveActiveBulkProcessPreviewFileKey(activeAuthorisePreviewItemNow);
@@ -202854,13 +202931,104 @@ function bindBulkProcessPreviewPane(state) {
     try { frame.addEventListener('error', () => recoverFailedPdfLoad('pdf-error-event'), { once: true }); } catch {}
   };
 
-  const renderImageStage = (stage, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
+  const getBulkProcessPreviewAssetBlobCache = () => {
+    if (isBulkAuthorisePreviewContext) return null;
+    const ownerToken = trimStr(getPreviewOwnerToken() || '');
+    let holder = bindBulkProcessPreviewPane.__bulkProcessPreviewAssetBlobCache;
+    if (
+      !holder ||
+      holder.ownerState !== st ||
+      trimStr(holder.ownerToken || '') !== ownerToken ||
+      !(holder.entries instanceof Map) ||
+      !(holder.inflight instanceof Map)
+    ) {
+      try {
+        holder?.entries?.forEach((entry) => {
+          if (entry?.objectUrl) URL.revokeObjectURL(entry.objectUrl);
+        });
+      } catch {}
+      holder = { ownerState: st, ownerToken, entries: new Map(), inflight: new Map() };
+      bindBulkProcessPreviewPane.__bulkProcessPreviewAssetBlobCache = holder;
+    }
+    return holder;
+  };
+
+  const getBulkProcessPreviewAssetBlobCacheKey = (signedUrlInput = '', previewFileCacheKeyInput = '') => [
+    trimStr(previewFileCacheKeyInput || '').replace(/^\/+/, ''),
+    trimStr(signedUrlInput || '')
+  ].join('|');
+
+  const resolveBulkProcessPreviewAssetBlobUrl = (signedUrlInput = '', previewFileCacheKeyInput = '') => {
+    const signedUrl = trimStr(signedUrlInput || '');
+    const previewFileCacheKey = trimStr(previewFileCacheKeyInput || '').replace(/^\/+/, '');
+    const holder = getBulkProcessPreviewAssetBlobCache();
+    if (!holder || !signedUrl || !previewFileCacheKey) return Promise.resolve(signedUrl);
+    const cache = holder.entries;
+    const cacheKey = getBulkProcessPreviewAssetBlobCacheKey(signedUrl, previewFileCacheKey);
+    const cached = cache.get(cacheKey);
+    if (cached?.objectUrl) {
+      cache.delete(cacheKey);
+      cache.set(cacheKey, cached);
+      return Promise.resolve(cached.objectUrl);
+    }
+    if (holder.inflight.has(cacheKey)) return holder.inflight.get(cacheKey);
+
+    const request = fetch(signedUrl, { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Preview download failed (${response.status})`);
+        const blob = await response.blob();
+        if (!blob || Number(blob.size || 0) <= 0) throw new Error('Preview download returned an empty file.');
+        const objectUrl = URL.createObjectURL(blob);
+        const liveHolder = bindBulkProcessPreviewPane.__bulkProcessPreviewAssetBlobCache;
+        if (liveHolder !== holder) {
+          try { URL.revokeObjectURL(objectUrl); } catch {}
+          return signedUrl;
+        }
+        cache.set(cacheKey, { objectUrl, signedUrl, previewFileCacheKey });
+        while (cache.size > 12) {
+          const oldestKey = cache.keys().next().value;
+          const oldest = cache.get(oldestKey);
+          cache.delete(oldestKey);
+          try { if (oldest?.objectUrl) URL.revokeObjectURL(oldest.objectUrl); } catch {}
+        }
+        return objectUrl;
+      })
+      .finally(() => {
+        if (holder.inflight.get(cacheKey) === request) holder.inflight.delete(cacheKey);
+      });
+    holder.inflight.set(cacheKey, request);
+    return request;
+  };
+
+  const commitBulkProcessPreviewAssetBlobIfCurrent = (commit = {}) => {
+    const selectionKey = normalisePreviewSelectionKey(commit.selectionKey || '');
+    const fileKey = trimStr(commit.fileKey || '').replace(/^\/+/, '');
+    const signedUrl = trimStr(commit.signedUrl || '');
+    const liveState = getPreviewState();
+    const liveItem = liveState.previewItem;
+    const liveSelectionKey = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+    const liveFileKey = resolvePreviewFileCacheKey(liveItem, liveSelectionKey);
+    const liveSignedUrl = trimStr(pane.__preview_signed_url || '');
+    const liveStage = document.getElementById('bulkProcessPreviewStage');
+    if (
+      !liveStage ||
+      bulkAuthoriseSurfaceAtBind ||
+      isBulkAuthorisePreviewContext ||
+      liveSelectionKey !== selectionKey ||
+      liveFileKey !== fileKey ||
+      (liveSignedUrl && liveSignedUrl !== signedUrl)
+    ) return false;
+    commit.render(liveStage);
+    return true;
+  };
+
+  const renderImageStageWithUrl = (stage, displayUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
     const existingWrap = q('#bulkProcessImagePreviewWrap');
     const existingImg = q('#bulkProcessImagePreviewEl');
     const existingFileKey = trimStr(existingImg?.getAttribute('data-bp-preview-file-key') || existingWrap?.getAttribute('data-bp-preview-file-key') || '');
     const existingSrc = trimStr(existingImg?.getAttribute('src') || '');
 
-    if (existingWrap && existingImg && existingFileKey === previewFileCacheKey && existingSrc === signedUrl) {
+    if (existingWrap && existingImg && existingFileKey === previewFileCacheKey && existingSrc === displayUrl) {
       existingWrap.setAttribute('data-bp-preview-file-key', previewFileCacheKey);
       existingWrap.setAttribute('data-bp-preview-selection-key', previewSelectionKey);
       existingWrap.setAttribute('data-bp-preview-render-key', previewRenderKey);
@@ -202895,7 +203063,7 @@ function bindBulkProcessPreviewPane(state) {
           data-bp-preview-file-key="${enc(previewFileCacheKey)}"
           data-bp-preview-selection-key="${enc(previewSelectionKey)}"
           data-bp-preview-render-key="${enc(previewRenderKey)}"
-          src="${enc(signedUrl)}"
+          src="${enc(displayUrl)}"
           alt="Bulk Process preview"
           style="
             max-width:100%;
@@ -202909,7 +203077,36 @@ function bindBulkProcessPreviewPane(state) {
     bindImagePreviewLoadGuards(q('#bulkProcessImagePreviewEl'), signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
   };
 
-  const renderPdfStage = (stage, previewUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
+  const renderImageStage = (stage, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
+    if (isBulkAuthorisePreviewContext) {
+      renderImageStageWithUrl(stage, signedUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg);
+      return;
+    }
+    const holder = getBulkProcessPreviewAssetBlobCache();
+    const cached = holder?.entries?.get(getBulkProcessPreviewAssetBlobCacheKey(signedUrl, previewFileCacheKey));
+    if (cached?.objectUrl) {
+      renderImageStageWithUrl(stage, cached.objectUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg);
+      return;
+    }
+    stage.innerHTML = `<span class="mini" data-bulk-process-preview-asset-loading="1" style="opacity:.75;">${enc('Preview is loading…')}</span>`;
+    resolveBulkProcessPreviewAssetBlobUrl(signedUrl, previewFileCacheKey).then((displayUrl) => {
+      commitBulkProcessPreviewAssetBlobIfCurrent({
+        selectionKey: previewSelectionKey,
+        fileKey: previewFileCacheKey,
+        signedUrl,
+        render: (liveStage) => renderImageStageWithUrl(liveStage, displayUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg)
+      });
+    }).catch(() => {
+      commitBulkProcessPreviewAssetBlobIfCurrent({
+        selectionKey: previewSelectionKey,
+        fileKey: previewFileCacheKey,
+        signedUrl,
+        render: (liveStage) => renderImageStageWithUrl(liveStage, signedUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg)
+      });
+    });
+  };
+
+  const renderPdfStageWithUrl = (stage, previewUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
     const existingWrap = q('#bulkProcessPdfPreviewWrap');
     const existingFrame = q('#bulkProcessPdfPreviewFrame');
     const existingFileKey = trimStr(existingFrame?.getAttribute('data-bp-preview-file-key') || existingWrap?.getAttribute('data-bp-preview-file-key') || '');
@@ -202967,6 +203164,37 @@ function bindBulkProcessPreviewPane(state) {
       </div>
     `;
     bindPdfPreviewLoadGuards(q('#bulkProcessPdfPreviewFrame'), signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
+  };
+
+  const renderPdfStage = (stage, previewUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
+    if (isBulkAuthorisePreviewContext) {
+      renderPdfStageWithUrl(stage, previewUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg);
+      return;
+    }
+    const fragmentIndex = String(previewUrl || '').indexOf('#');
+    const previewFragment = fragmentIndex >= 0 ? String(previewUrl).slice(fragmentIndex) : '';
+    const holder = getBulkProcessPreviewAssetBlobCache();
+    const cached = holder?.entries?.get(getBulkProcessPreviewAssetBlobCacheKey(signedUrl, previewFileCacheKey));
+    if (cached?.objectUrl) {
+      renderPdfStageWithUrl(stage, `${cached.objectUrl}${previewFragment}`, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg);
+      return;
+    }
+    stage.innerHTML = `<span class="mini" data-bulk-process-preview-asset-loading="1" style="opacity:.75;">${enc('Preview is loading…')}</span>`;
+    resolveBulkProcessPreviewAssetBlobUrl(signedUrl, previewFileCacheKey).then((displayUrl) => {
+      commitBulkProcessPreviewAssetBlobIfCurrent({
+        selectionKey: previewSelectionKey,
+        fileKey: previewFileCacheKey,
+        signedUrl,
+        render: (liveStage) => renderPdfStageWithUrl(liveStage, `${displayUrl}${previewFragment}`, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg)
+      });
+    }).catch(() => {
+      commitBulkProcessPreviewAssetBlobIfCurrent({
+        selectionKey: previewSelectionKey,
+        fileKey: previewFileCacheKey,
+        signedUrl,
+        render: (liveStage) => renderPdfStageWithUrl(liveStage, previewUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg)
+      });
+    });
   };
 
 
@@ -203218,9 +203446,17 @@ function bindBulkProcessPreviewPane(state) {
 
       renderToolbar(livePreviewState, livePreviewItem, selectionKey, previewRenderKey, signedUrl, isPdf, pageCount, activePage, rotationDeg, zoom);
       if (isPdf) {
-        renderBulkAuthoriseLivePdfStage(stage, `${signedUrl}#page=${activePage}&zoom=page-width`, signedUrl, liveFileKey, selectionKey, previewRenderKey, zoom, rotationDeg);
+        if (isBulkAuthorisePreviewContext) {
+          renderBulkAuthoriseLivePdfStage(stage, `${signedUrl}#page=${activePage}&zoom=page-width`, signedUrl, liveFileKey, selectionKey, previewRenderKey, zoom, rotationDeg);
+        } else {
+          renderPdfStage(stage, `${signedUrl}#page=${activePage}&zoom=page-width`, signedUrl, liveFileKey, selectionKey, previewRenderKey, zoom, rotationDeg);
+        }
       } else if (isImage) {
-        renderBulkAuthoriseLiveImageStage(stage, signedUrl, liveFileKey, selectionKey, previewRenderKey, zoom, rotationDeg);
+        if (isBulkAuthorisePreviewContext) {
+          renderBulkAuthoriseLiveImageStage(stage, signedUrl, liveFileKey, selectionKey, previewRenderKey, zoom, rotationDeg);
+        } else {
+          renderImageStage(stage, signedUrl, liveFileKey, selectionKey, previewRenderKey, zoom, rotationDeg);
+        }
       } else {
         stage.innerHTML = `
           <div style="min-height:320px;display:flex;align-items:center;justify-content:center;">
@@ -208888,6 +209124,85 @@ function ensureBulkAuthoriseManualDraftState(state) {
 
 
 
+function openBulkProcessEvidenceDispositionDialog() {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined' || !document.body || typeof document.createElement !== 'function') {
+      resolve('cancel');
+      return;
+    }
+
+    const existing = document.getElementById('bulkProcessEvidenceUiDialog');
+    try { existing?.remove?.(); } catch {}
+
+    const overlay = document.createElement('div');
+    overlay.id = 'bulkProcessEvidenceUiDialog';
+    overlay.dataset.bulkProcessEvidenceUiDialog = '1';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(2,6,23,.78);';
+
+    const panel = document.createElement('div');
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-labelledby', 'bulkProcessEvidenceUiDialogTitle');
+    panel.style.cssText = 'width:min(620px,calc(100vw - 48px));border:1px solid var(--line,#334155);border-radius:12px;background:var(--panel,#0f172a);color:var(--text,#f8fafc);box-shadow:0 24px 70px rgba(0,0,0,.55);overflow:hidden;';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line,#334155);';
+    const title = document.createElement('div');
+    title.id = 'bulkProcessEvidenceUiDialogTitle';
+    title.style.cssText = 'font-weight:800;font-size:14px;';
+    title.textContent = 'Remove attached evidence';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'btn btn-outline';
+    close.setAttribute('aria-label', 'Close and cancel');
+    close.textContent = 'Close';
+    header.append(title, close);
+
+    const body = document.createElement('div');
+    body.style.cssText = 'padding:16px 14px;white-space:pre-wrap;font-size:13px;line-height:1.45;';
+    body.textContent = 'What would you like to do with this evidence?';
+    const footer = document.createElement('div');
+    footer.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:12px 14px;border-top:1px solid var(--line,#334155);';
+    panel.append(header, body, footer);
+    overlay.append(panel);
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      try { document.removeEventListener('keydown', onKeyDown, true); } catch {}
+      try { overlay.remove(); } catch {}
+      resolve(value);
+    };
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      finish('cancel');
+    };
+    close.addEventListener('click', () => finish('cancel'));
+    [
+      { value: 'delete', label: 'Permanently delete', danger: true },
+      { value: 'return-to-queue', label: 'Return to timesheet queue' },
+      { value: 'cancel', label: 'Cancel' }
+    ].forEach((action) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn btn-outline';
+      button.dataset.bulkProcessEvidenceDialogAction = action.value;
+      button.textContent = action.label;
+      if (action.danger) button.style.cssText = 'border-color:rgba(248,113,113,.8);color:#fecaca;background:rgba(127,29,29,.34);';
+      button.addEventListener('click', () => finish(action.value));
+      footer.appendChild(button);
+    });
+
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', onKeyDown, true);
+    const focusTarget = footer.querySelector('button:last-child') || close;
+    try { focusTarget.focus(); } catch {}
+  });
+}
+
 function bindBulkProcessEvidencePane(state) {
   const incomingState = (state && typeof state === 'object') ? state : null;
   const liveFrameKind = (() => {
@@ -213014,19 +213329,24 @@ const getAttachedEvidenceId = (item) => {
           )
         );
 
-        const confirmRes = (typeof openUiConfirmModal === 'function')
-          ? await openUiConfirmModal({
-              title: 'Remove attached file',
-              message: 'Choose where this file should go.',
-              confirm_label: 'Permanently delete',
-              cancel_label: 'Return to timesheet queue',
-              confirm_class: 'btn btn-warn',
-              cancel_class: 'btn btn-outline'
-            })
-          : { confirmed: window.confirm('Permanently delete this attached file?'), via: 'confirm' };
-
-        if (!confirmRes || confirmRes.via === 'close' || (confirmRes.confirmed !== true && confirmRes.via !== 'cancel')) return;
-        const action = confirmRes.confirmed === true ? 'delete' : 'return-to-queue';
+        let action = '';
+        if (isBulkAuthoriseContext) {
+          const confirmRes = (typeof openUiConfirmModal === 'function')
+            ? await openUiConfirmModal({
+                title: 'Remove attached file',
+                message: 'Choose where this file should go.',
+                confirm_label: 'Permanently delete',
+                cancel_label: 'Return to timesheet queue',
+                confirm_class: 'btn btn-warn',
+                cancel_class: 'btn btn-outline'
+              })
+            : null;
+          if (!confirmRes || confirmRes.via === 'close' || (confirmRes.confirmed !== true && confirmRes.via !== 'cancel')) return;
+          action = confirmRes.confirmed === true ? 'delete' : 'return-to-queue';
+        } else {
+          action = await openBulkProcessEvidenceDispositionDialog();
+          if (!['delete', 'return-to-queue'].includes(action)) return;
+        }
         const targetForPrune = {
           selectionKey: clickedSelectionKey || buildAttachedPreviewSelectionKey(selectedForMutation) || buildAttachedPreviewSelectionKey(selected),
           attachedId: selectedId || clickedAttachedId,
@@ -230464,7 +230784,7 @@ async function handleBulkProcessProcess(state) {
   const renderBulkProcessProcessCompletionState = async (reason = '') => {
     const cleanReason = trimStr(reason || 'process-complete') || 'process-complete';
     const activeKeyForCompletion = trimStr(rowKeyOf(st.active_row || {}) || st.active_row_key || '');
-    mirrorBulkProcessProcessCompletionBusyFlags(cleanReason, { releaseMutationToken: false });
+    mirrorBulkProcessProcessCompletionBusyFlags(cleanReason, { releaseMutationToken: true });
     try {
       if (typeof st.__rerenderWorkbench === 'function') {
         await st.__rerenderWorkbench({ reason: cleanReason, logPrefix: `[TS][BULK-PROCESS][PROCESS][${cleanReason.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}]`, force: true });
@@ -230474,6 +230794,11 @@ async function handleBulkProcessProcess(state) {
     } catch (err) {
       if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] forced completion render degraded', { reason: cleanReason, error: err });
     }
+    try {
+      if (typeof st.__syncBulkProcessPrimaryActionButtonStates === 'function') {
+        st.__syncBulkProcessPrimaryActionButtonStates();
+      }
+    } catch {}
     scheduleBulkProcessProcessCompletionButtonSafetyCheck(activeKeyForCompletion, cleanReason);
   };
   const showBulkProcessProcessBlockedModal = async (message, title = 'Timesheet could not be processed') => {
@@ -232282,7 +232607,23 @@ async function handleBulkProcessProcess(state) {
     } catch {}
     const meta = processEvidenceMetaOf(item);
     const status = upper(item.status || item.queue_status || meta.status || meta.queue_status || '');
-    if (status === 'QUEUED' || status === 'STAGED' || status === 'DISCARDED') return false;
+    const activeIdentity = resolveProcessRecordIdentityParts(activeInput);
+    const activeContractWeekId = trimStr(activeIdentity.contractWeekId || '');
+    const activeRowKey = trimStr(activeIdentity.rowKey || '');
+    const activeTimesheetId = trimStr(activeIdentity.timesheetId || activeIdentity.currentTimesheetId || '');
+    const stagedQueueId = evidenceQueueIdOf(item);
+    const isActiveContractWeekStagedEvidence = !!(
+      status === 'STAGED' &&
+      /^contract_week:/i.test(activeRowKey) &&
+      !!activeContractWeekId &&
+      !activeTimesheetId &&
+      processEvidenceStagedSignal(item) === true &&
+      !!stagedQueueId &&
+      !isSyntheticEvidenceId(stagedQueueId) &&
+      !!evidenceKindOf(item)
+    );
+    if (status === 'QUEUED' || status === 'DISCARDED') return false;
+    if (status === 'STAGED') return isActiveContractWeekStagedEvidence;
     const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || meta.timesheet_evidence_id || meta.timesheetEvidenceId || '');
     if (processEvidenceIdentityEqualsActiveTimesheet(evidenceId, activeInput)) return false;
     if (evidenceId && !isSyntheticEvidenceId(evidenceId) && !isSystemContractWeekPdfArtifactIdForProcess(evidenceId)) return true;
@@ -236747,7 +237088,6 @@ async function handleBulkProcessProcess(state) {
     stateAudit('completion-render:before', { previous_row_key: previousRowKey || null, patched_row_key: rowKeyOf(patchedRow) || null });
     await renderBulkProcessProcessCompletionState('process-success-patched');
     stateAudit('return:success', { previous_row_key: previousRowKey || null, patched_row_key: rowKeyOf(patchedRow) || null, process_result_patch_shape: hasRequiredBulkProcessPatchShape(processResult) });
-    releaseProcessMutationToken('process-success');
     GE();
     return { ok: true, result: processResult, row_patch: processResult?.row_patch || patchedRow, data_row: processResult?.data_row || patchedRow };
   } catch (err) {
@@ -236927,8 +237267,8 @@ async function handleBulkProcessProcess(state) {
       st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
       st.__bulk_process_last_process_missing_expense_evidence_kinds = resolvedMissingEvidenceKinds;
     }
+    releaseProcessMutationToken('process-error-reconciliation-complete-before-final-render');
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][ERROR]');
-    releaseProcessMutationToken('process-error-reconciliation-complete-after-final-render');
     if (processEvidenceRequired) {
       await showBulkProcessProcessBlockedModal(st.error_text);
     } else if (previewQueueImageMissing) {
@@ -240726,9 +241066,15 @@ async function handleBulkProcessUnprocess(state) {
     try { if (typeof installBulkProcessModalCtxPatch === 'function') installBulkProcessModalCtxPatch(st, { forceIdentityRebase: true, source_context: 'bulk_process' }); } catch {}
 
     resetBusy('success');
+    releaseLifecycleMutation('success-before-final-render');
     if (typeof rerenderBulkProcessWorkbench === 'function') {
       try { await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][UNPROCESS][AFFECTED-REFRESHED]'); } catch {}
     }
+    try {
+      if (typeof st.__syncBulkProcessPrimaryActionButtonStates === 'function') {
+        st.__syncBulkProcessPrimaryActionButtonStates();
+      }
+    } catch {}
     GE();
     return {
       ok: true,
@@ -240753,6 +241099,7 @@ async function handleBulkProcessUnprocess(state) {
     st.error_text = isTransientLifecycleContention(err) || transientLifecycleContentionPattern.test(rawErrorText)
       ? BULK_PROCESS_SAFE_LIFECYCLE_CONTENTION_MESSAGE
       : rawErrorText;
+    releaseLifecycleMutation('error-before-final-render');
     if (typeof rerenderBulkProcessWorkbench === 'function') {
       try { await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][UNPROCESS][ERROR]'); } catch {}
     }
@@ -253103,6 +253450,166 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
   };
 
+  const syncHydratedBulkProcessLifecycleToDataset = (activeRowLike = {}) => {
+    const activeRow = (activeRowLike && typeof activeRowLike === 'object') ? activeRowLike : {};
+    const activeSignature = trimStr(activeRow.backend_row_signature || activeRow.row_signature || activeRow.expected_row_signature || '');
+    const activeRowKey = trimStr(activeRow.row_key || '');
+    const activeTimesheetId = trimStr(activeRow.current_timesheet_id || activeRow.timesheet_id || activeRow.requested_timesheet_id || activeRow.expected_timesheet_id || '');
+    const activeContractWeekId = trimStr(activeRow.contract_week_id || activeRow.contractWeekId || '');
+    if (!activeSignature || !(activeRowKey || activeTimesheetId || activeContractWeekId)) return false;
+    if (!st.dataset || typeof st.dataset !== 'object') return false;
+
+    const activeFlags = (activeRow.action_flags && typeof activeRow.action_flags === 'object') ? activeRow.action_flags : {};
+    const booleanGroups = [
+      ['can_process', 'canProcess'],
+      ['can_unprocess', 'canUnprocess'],
+      ['unprocess_action_visible', 'show_unprocess', 'showUnprocess'],
+      ['review_only', 'reviewOnly'],
+      ['read_only', 'readOnly'],
+      ['is_archived', 'isArchived', 'archived'],
+      ['has_retained_financial_history', 'hasRetainedFinancialHistory', 'retained_financial_history', 'retainedFinancialHistory', 'financial_history_retained'],
+      ['refresh_required', 'requires_affected_row_refresh'],
+      ['can_edit_timesheet_data', 'canEditTimesheetData'],
+      ['can_add_additional_manual', 'canAddAdditionalManual']
+    ];
+    const readExplicitBoolean = (keys) => {
+      for (const source of [activeRow, activeFlags]) {
+        for (const key of keys) {
+          if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+          const value = source[key];
+          if (value === true || value === false) return value;
+          if (value === 1 || value === 0) return value === 1;
+          if (typeof value === 'string' && ['true', 'false'].includes(value.trim().toLowerCase())) return value.trim().toLowerCase() === 'true';
+        }
+      }
+      return null;
+    };
+    const textKeys = [
+      'processing_status',
+      'summary_stage',
+      'bulk_process_bucket',
+      'status',
+      'backend_row_signature',
+      'row_signature',
+      'expected_row_signature'
+    ];
+    const matchesActive = (rowLike = {}) => {
+      const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+      const rowKey = trimStr(row.row_key || '');
+      const rowTimesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
+      const rowContractWeekId = trimStr(row.contract_week_id || row.contractWeekId || '');
+      return !!(
+        (activeRowKey && rowKey && activeRowKey === rowKey) ||
+        (activeTimesheetId && rowTimesheetId && activeTimesheetId === rowTimesheetId) ||
+        (activeContractWeekId && rowContractWeekId && activeContractWeekId === rowContractWeekId)
+      );
+    };
+    let changed = false;
+    for (const bucketName of ['unprocessed_rows', 'processed_rows']) {
+      if (!Array.isArray(st.dataset[bucketName])) continue;
+      st.dataset[bucketName] = st.dataset[bucketName].map((datasetRow) => {
+        if (!matchesActive(datasetRow)) return datasetRow;
+        const next = { ...(deep(datasetRow) || {}) };
+        const nextFlags = (next.action_flags && typeof next.action_flags === 'object') ? { ...next.action_flags } : {};
+        const nestedLifecycleTargets = [next.row_patch, next.lifecycle_patch]
+          .filter((target) => target && typeof target === 'object' && !Array.isArray(target));
+        booleanGroups.forEach((keys) => {
+          const value = readExplicitBoolean(keys);
+          if (value === null) return;
+          keys.forEach((key) => {
+            next[key] = value;
+            nextFlags[key] = value;
+            nestedLifecycleTargets.forEach((target) => {
+              target[key] = value;
+              if (target.action_flags && typeof target.action_flags === 'object') target.action_flags[key] = value;
+            });
+          });
+        });
+        textKeys.forEach((key) => {
+          if (!Object.prototype.hasOwnProperty.call(activeRow, key)) return;
+          const value = activeRow[key];
+          if (value == null || trimStr(value) === '') return;
+          next[key] = deep(value);
+        });
+        next.action_flags = nextFlags;
+        changed = true;
+        return next;
+      });
+    }
+    return changed;
+  };
+
+  const harmoniseHydratedBulkProcessLifecycleContext = (contextLike = {}, activeRowLike = {}) => {
+    const context = (contextLike && typeof contextLike === 'object') ? contextLike : {};
+    const activeRow = (activeRowLike && typeof activeRowLike === 'object') ? activeRowLike : {};
+    const activeSignature = trimStr(activeRow.backend_row_signature || activeRow.row_signature || activeRow.expected_row_signature || '');
+    if (!activeSignature) return context;
+    const activeFlags = (activeRow.action_flags && typeof activeRow.action_flags === 'object') ? activeRow.action_flags : {};
+    const booleanGroups = [
+      ['can_process', 'canProcess'],
+      ['can_unprocess', 'canUnprocess'],
+      ['unprocess_action_visible', 'show_unprocess', 'showUnprocess'],
+      ['review_only', 'reviewOnly'],
+      ['read_only', 'readOnly'],
+      ['is_archived', 'isArchived', 'archived'],
+      ['has_retained_financial_history', 'hasRetainedFinancialHistory', 'retained_financial_history', 'retainedFinancialHistory', 'financial_history_retained'],
+      ['refresh_required', 'requires_affected_row_refresh'],
+      ['can_edit_timesheet_data', 'canEditTimesheetData'],
+      ['can_add_additional_manual', 'canAddAdditionalManual']
+    ];
+    const readExplicitBoolean = (keys) => {
+      for (const source of [activeRow, activeFlags]) {
+        for (const key of keys) {
+          if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+          const value = source[key];
+          if (value === true || value === false) return value;
+          if (value === 1 || value === 0) return value === 1;
+          if (typeof value === 'string' && ['true', 'false'].includes(value.trim().toLowerCase())) return value.trim().toLowerCase() === 'true';
+        }
+      }
+      return null;
+    };
+    const baseTargets = [
+      activeRow,
+      activeFlags,
+      context.row,
+      context.data_row,
+      context.details,
+      context.ctx,
+      context.ctx?.row,
+      context.ctx?.data_row,
+      context.ctx?.details,
+      context.ctx?.state,
+      context.payload,
+      context.payload?.row,
+      context.payload?.data_row,
+      context.payload?.details,
+      context.payload?.state
+    ].filter((target) => target && typeof target === 'object' && !Array.isArray(target));
+    const targets = [
+      ...baseTargets,
+      ...baseTargets.flatMap((target) => [target.row_patch, target.lifecycle_patch])
+    ].filter((target) => target && typeof target === 'object' && !Array.isArray(target));
+    targets.forEach((target) => {
+      const targetFlags = (target.action_flags && typeof target.action_flags === 'object') ? target.action_flags : null;
+      booleanGroups.forEach((keys) => {
+        const value = readExplicitBoolean(keys);
+        if (value === null) return;
+        keys.forEach((key) => {
+          target[key] = value;
+          if (targetFlags) targetFlags[key] = value;
+        });
+      });
+      ['processing_status', 'summary_stage', 'bulk_process_bucket', 'status', 'backend_row_signature', 'row_signature', 'expected_row_signature'].forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(activeRow, key)) return;
+        const value = activeRow[key];
+        if (value == null || trimStr(value) === '') return;
+        target[key] = deep(value);
+      });
+    });
+    return context;
+  };
+
 
 
   const parseBulkProcessRowChangeMeta = (value) => {
@@ -260773,6 +261280,9 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
     st.active_row_key = trimStr(st.active_row?.row_key || cacheKey || '') || cacheKey || null;
     st.activeRowKey = st.active_row_key || null;
+
+    syncHydratedBulkProcessLifecycleToDataset(st.active_row);
+    harmoniseHydratedBulkProcessLifecycleContext(finalContext, st.active_row);
 
     st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
 

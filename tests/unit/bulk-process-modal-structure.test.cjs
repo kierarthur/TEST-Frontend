@@ -181,6 +181,30 @@ test('Bulk Process preview/evidence waits for a coherent row context instead of 
   assert.match(evidenceSource, /st\.__active_context_pending === true/);
 });
 
+test('Bulk Process reuses a bounded asset blob cache without changing Bulk Authorise preview rendering', () => {
+  const previewSource = sliceBetween('function renderBulkProcessPreviewPane(state)', 'function bindBulkProcessPreviewPane(state)');
+  const binderSource = sliceBetween('function bindBulkProcessPreviewPane(state)', 'function bindBulkProcessEvidencePane(state)');
+  assert.match(previewSource, /bindBulkProcessPreviewPane\.__bulkProcessPreviewAssetBlobCache/);
+  assert.match(previewSource, /const previewAssetDisplayUrl = renderIsBulkAuthorisePreviewState \? signedUrl : cachedPreviewAssetBlobUrl;/);
+  assert.match(previewSource, /const hasDisplayableCurrentPreview =/);
+  assert.match(previewSource, /src="\$\{enc\(previewAssetDisplayUrl\)\}"/);
+  assert.match(binderSource, /const getBulkProcessPreviewAssetBlobCache = \(\) => \{/);
+  assert.match(binderSource, /const isBulkAuthorisePreviewContext = !!bulkAuthoriseSurfaceAtBind && !!trimStr\(bulkAuthoriseOwnerIdentity \|\| ''\);/);
+  assert.match(binderSource, /if \(isBulkAuthorisePreviewContext\) return null;/);
+  assert.match(binderSource, /holder\.ownerState !== st/);
+  assert.match(binderSource, /URL\.createObjectURL\(blob\)/);
+  assert.match(binderSource, /URL\.revokeObjectURL\(oldest\.objectUrl\)/);
+  assert.match(binderSource, /while \(cache\.size > 12\)/);
+  assert.match(binderSource, /holder\.inflight\.has\(cacheKey\)/);
+  assert.match(binderSource, /data-bulk-process-preview-asset-loading="1"/);
+  assert.match(binderSource, /commitBulkProcessPreviewAssetBlobIfCurrent/);
+  assert.match(binderSource, /const renderImageStageWithUrl =/);
+  assert.match(binderSource, /const renderPdfStageWithUrl =/);
+  assert.match(binderSource, /const renderBulkAuthoriseLiveImageStage =/);
+  assert.match(binderSource, /if \(isBulkAuthorisePreviewContext\) \{\s*renderBulkAuthoriseLiveImageStage/);
+  assert.match(binderSource, /else \{\s*renderImageStage\(stage, signedUrl, liveFileKey/);
+});
+
 test('empty Attached is identity-scoped and Queue does not discard the remembered attached selection', () => {
   const binderSource = sliceBetween('function bindBulkProcessEvidencePane(state)', 'function renderBulkProcessManualEditor(state)');
   const evidenceSource = sliceBetween('function renderBulkProcessEvidencePane(state)', 'function bindBulkProcessEvidencePane(state)');
@@ -207,7 +231,7 @@ test('NHSP/HR additional manual rows use the existing schedule renderer in force
   assert.match(binderSource, /root\.querySelector\('\[data-bulk-process-import-expense-readonly="1"\]'\)/);
 });
 
-test('fresh identity-matched editor authority enables data editing without weakening lifecycle patch gates', () => {
+test('signed canonical dataset authority enables valid lifecycle actions without weakening mutation gates', () => {
   const classifierSource = sliceBetween('function classifyBulkProcessEditability(ctxInput)', 'function bindBulkProcessManualEditor(state)');
   const datasetRow = {
     row_key: 'contract_week:weekly-1',
@@ -269,12 +293,13 @@ test('fresh identity-matched editor authority enables data editing without weake
   };
 
   const freshEditor = context.classifyBulkProcessEditability(editorCtx);
-  assert.equal(freshEditor.lifecycleAuthorityComplete, false);
+  assert.equal(freshEditor.lifecycleAuthorityComplete, true);
+  assert.equal(freshEditor.signedDatasetLifecycleAuthorityComplete, true);
   assert.equal(freshEditor.editorContextAuthorityComplete, true);
   assert.equal(freshEditor.editorDataAuthorityComplete, true);
   assert.equal(freshEditor.canEditHoursSchedule, true);
   assert.equal(freshEditor.canEditTimesheetData, true);
-  assert.equal(freshEditor.canProcess, false);
+  assert.equal(freshEditor.canProcess, true);
   assert.equal(freshEditor.canUnprocess, false);
 
   const identityMismatch = context.classifyBulkProcessEditability({
@@ -283,6 +308,7 @@ test('fresh identity-matched editor authority enables data editing without weake
     row: { ...editorCtx.row, row_key: 'contract_week:other-week' }
   });
   assert.equal(identityMismatch.editorContextAuthorityComplete, false);
+  assert.equal(identityMismatch.signedDatasetLifecycleAuthorityComplete, false);
   assert.equal(identityMismatch.canEditHoursSchedule, false);
 
   const incompleteMutationPatch = context.classifyBulkProcessEditability({
@@ -292,10 +318,59 @@ test('fresh identity-matched editor authority enables data editing without weake
     refresh_required: false
   });
   assert.equal(incompleteMutationPatch.editorContextAuthorityComplete, false);
+  assert.equal(incompleteMutationPatch.signedDatasetLifecycleAuthorityComplete, false);
   assert.equal(incompleteMutationPatch.editorDataAuthorityComplete, false);
   assert.equal(incompleteMutationPatch.canEditHoursSchedule, false);
   assert.equal(incompleteMutationPatch.canProcess, false);
   assert.equal(incompleteMutationPatch.canUnprocess, false);
+
+  const unsignedDatasetRow = { ...datasetRow };
+  delete unsignedDatasetRow.row_signature;
+  const unsignedContext = {
+    ...context,
+    window: { modalCtx: { bulkProcessState: { dataset: { unprocessed_rows: [unsignedDatasetRow], processed_rows: [] } } } }
+  };
+  vm.runInNewContext(classifierSource, unsignedContext, { filename: 'bulk-process-editability-unsigned.js' });
+  const unsignedResult = unsignedContext.classifyBulkProcessEditability({
+    ...editorCtx,
+    row: { ...unsignedDatasetRow },
+    details: { ...editorCtx.details, row_signature: '' }
+  });
+  assert.equal(unsignedResult.signedDatasetLifecycleAuthorityComplete, false);
+  assert.equal(unsignedResult.canProcess, false);
+
+  const retainedProcessedRow = {
+    ...datasetRow,
+    row_key: 'timesheet:retained-1',
+    row_signature: 'retained-signature-1',
+    timesheet_id: 'retained-1',
+    contract_week_id: 'weekly-1',
+    summary_stage: 'PROCESSED',
+    bulk_process_bucket: 'PROCESSED',
+    processing_status: 'PENDING_AUTH',
+    has_retained_financial_history: true,
+    can_process: false,
+    can_unprocess: false,
+    unprocess_action_visible: true
+  };
+  const retainedContext = {
+    ...context,
+    window: { modalCtx: { bulkProcessState: { dataset: { unprocessed_rows: [], processed_rows: [retainedProcessedRow] } } } }
+  };
+  vm.runInNewContext(classifierSource, retainedContext, { filename: 'bulk-process-editability-retained.js' });
+  const retainedResult = retainedContext.classifyBulkProcessEditability({
+    ...editorCtx,
+    row_key: retainedProcessedRow.row_key,
+    row: { ...retainedProcessedRow },
+    details: {
+      ...retainedProcessedRow,
+      timesheet: { timesheet_id: 'retained-1', submission_mode: 'MANUAL', sheet_scope: 'WEEKLY' },
+      contract_week: { id: 'weekly-1', submission_mode_snapshot: 'MANUAL' }
+    }
+  });
+  assert.equal(retainedResult.lifecycleAuthorityComplete, true);
+  assert.equal(retainedResult.hasRetainedFinancialHistory, true);
+  assert.equal(retainedResult.canUnprocess, false);
 });
 
 test('Bulk Process modal is viewport bounded and the outer left pane is not scrollable', () => {
@@ -303,4 +378,53 @@ test('Bulk Process modal is viewport bounded and the outer left pane is not scro
   const shellSource = sliceBetween('function renderBulkProcessShell(state)', 'function getBulkProcessVisibleRows(state)');
   assert.match(shellSource, /id="bulkProcessLeftPane"[^>]*overflow:hidden/);
   assert.doesNotMatch(shellSource, /id="bulkProcessLeftPane"[^>]*overflow:auto/);
+});
+
+test('Bulk Process evidence removal exposes delete, return-to-queue, and cancel without changing Bulk Authorise choices', () => {
+  const dialogSource = sliceBetween('function openBulkProcessEvidenceDispositionDialog()', 'function bindBulkProcessEvidencePane(state)');
+  const binderSource = sliceBetween('function bindBulkProcessEvidencePane(state)', 'function normaliseBankingPayOperationProgress(operationPayload = {})');
+  assert.match(dialogSource, /value: 'delete', label: 'Permanently delete'/);
+  assert.match(dialogSource, /value: 'return-to-queue', label: 'Return to timesheet queue'/);
+  assert.match(dialogSource, /value: 'cancel', label: 'Cancel'/);
+  assert.match(binderSource, /if \(isBulkAuthoriseContext\) \{[\s\S]*confirm_label: 'Permanently delete',[\s\S]*cancel_label: 'Return to timesheet queue'/);
+  assert.match(binderSource, /action = await openBulkProcessEvidenceDispositionDialog\(\);[\s\S]*\['delete', 'return-to-queue'\]\.includes\(action\)/);
+  assert.doesNotMatch(binderSource, /window\.confirm\('Permanently delete this attached file\?'\)/);
+});
+
+test('Bulk Process recognises genuine staged contract-week evidence when reprocessing an unprocessed weekly row', () => {
+  const processSource = sliceBetween('async function handleBulkProcessProcess(state)', 'function normaliseBulkProcessRemovedEvidenceKind(value)');
+  assert.match(processSource, /const isActiveContractWeekStagedEvidence = !!\(/);
+  assert.match(processSource, /status === 'STAGED'[\s\S]*\/\^contract_week:\/i\.test\(activeRowKey\)[\s\S]*processEvidenceStagedSignal\(item\) === true/);
+  assert.match(processSource, /!!stagedQueueId[\s\S]*!isSyntheticEvidenceId\(stagedQueueId\)[\s\S]*!!evidenceKindOf\(item\)/);
+  assert.match(processSource, /if \(status === 'QUEUED' \|\| status === 'DISCARDED'\) return false;/);
+  assert.match(processSource, /if \(status === 'STAGED'\) return isActiveContractWeekStagedEvidence;/);
+});
+
+test('Process and Unprocess release lifecycle busy state before their final render', () => {
+  const processSource = sliceBetween('async function handleBulkProcessProcess(state)', 'function normaliseBulkProcessRemovedEvidenceKind(value)');
+  const unprocessSource = sliceBetween('async function handleBulkProcessUnprocess(state)', 'function applyBulkTimesheetRowPatches(state, patches, options = {})');
+  assert.match(processSource, /mirrorBulkProcessProcessCompletionBusyFlags\(cleanReason, \{ releaseMutationToken: true \}\);[\s\S]*await st\.__rerenderWorkbench/);
+  assert.match(processSource, /releaseProcessMutationToken\('process-error-reconciliation-complete-before-final-render'\);\s*await rerenderBulkProcessWorkbench/);
+  assert.match(unprocessSource, /resetBusy\('success'\);\s*releaseLifecycleMutation\('success-before-final-render'\);\s*if \(typeof rerenderBulkProcessWorkbench/);
+  assert.match(unprocessSource, /releaseLifecycleMutation\('error-before-final-render'\);\s*if \(typeof rerenderBulkProcessWorkbench/);
+});
+
+test('Bulk Process lifecycle actions resynchronise rendered action buttons after mutation', () => {
+  const binderSource = sliceBetween('function bindBulkProcessManualEditor(state)', 'function renderBulkProcessEvidencePane(state)');
+  const processSource = sliceBetween('async function handleBulkProcessProcess(state)', 'function normaliseBulkProcessRemovedEvidenceKind(value)');
+  const unprocessSource = sliceBetween('async function handleBulkProcessUnprocess(state)', 'function applyBulkTimesheetRowPatches(state, patches, options = {})');
+
+  assert.match(binderSource, /if \(!isBulkAuthoriseCtx\(\)\)\s*\{\s*st\.__syncBulkProcessPrimaryActionButtonStates = syncPrimaryActionButtonStates;/);
+  assert.match(processSource, /st\.__syncBulkProcessPrimaryActionButtonStates\(\);[\s\S]*scheduleBulkProcessProcessCompletionButtonSafetyCheck/);
+  assert.match(unprocessSource, /\[TS\]\[BULK-PROCESS\]\[UNPROCESS\]\[AFFECTED-REFRESHED\][\s\S]*st\.__syncBulkProcessPrimaryActionButtonStates\(\);/);
+});
+
+test('fresh signed row hydration replaces stale lifecycle flags on the matching dataset row', () => {
+  const rowChangeSource = sliceBetween('async function handleBulkProcessRowChange(nextRowKey, options = {})', 'function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, options = {})');
+  assert.match(rowChangeSource, /const syncHydratedBulkProcessLifecycleToDataset = \(activeRowLike = \{\}\) => \{/);
+  assert.match(rowChangeSource, /const activeSignature = trimStr\(activeRow\.backend_row_signature \|\| activeRow\.row_signature \|\| activeRow\.expected_row_signature/);
+  assert.match(rowChangeSource, /\['unprocess_action_visible', 'show_unprocess', 'showUnprocess'\]/);
+  assert.match(rowChangeSource, /\['refresh_required', 'requires_affected_row_refresh'\]/);
+  assert.match(rowChangeSource, /syncHydratedBulkProcessLifecycleToDataset\(st\.active_row\);/);
+  assert.match(rowChangeSource, /harmoniseHydratedBulkProcessLifecycleContext\(finalContext, st\.active_row\);/);
 });
