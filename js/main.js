@@ -7506,7 +7506,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
   const defaultReason = String(opts.defaultReason || '').trim();
   const authFailedTitle = String(opts.auth_failed_title || 'Authentication failed').trim() || 'Authentication failed';
   const authFailedMessage = String(opts.auth_failed_message || '').trim();
-  const defaultDiscardSession = !!(opts.discard_session ?? opts.defaultDiscardSession ?? false);
 
   const closeTop = () => {
     try {
@@ -7522,7 +7521,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
   const state = {
     password: '',
     reason: defaultReason,
-    discard_session: defaultDiscardSession,
     busy: false,
     err: '',
     notice: '',
@@ -7557,15 +7555,15 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
                       autocomplete="new-password"
                       autocapitalize="off"
                       spellcheck="false"
-                      style="min-width:260px;max-width:420px;"
-                      ${state.busy ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);min-width:260px;max-width:420px;"' : ''}
+                      style="width:min(100%,420px);min-width:0;max-width:420px;box-sizing:border-box;"
+                      ${state.busy ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);width:min(100%,420px);min-width:0;max-width:420px;box-sizing:border-box;"' : ''}
                     />
                   </div>
                 </div>
 
                 <div class="row" style="margin-top:8px;">
                   <label>Reason</label>
-                  <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                  <div class="controls" style="display:flex;gap:10px;align-items:center;flex:1 1 260px;min-width:0;flex-wrap:wrap;">
                     <input
                       id="bankingCancelReason"
                       name="banking_cancel_reason"
@@ -7576,26 +7574,14 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
                       autocomplete="off"
                       autocapitalize="off"
                       spellcheck="false"
-                      style="min-width:360px;max-width:720px;"
-                      ${state.busy ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);min-width:360px;max-width:720px;"' : ''}
+                      style="width:min(100%,720px);min-width:0;max-width:720px;box-sizing:border-box;"
+                      ${state.busy ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);width:min(100%,720px);min-width:0;max-width:720px;box-sizing:border-box;"' : ''}
                     />
                   </div>
                 </div>
 
-                <div class="row" style="margin-top:8px;align-items:flex-start;">
-                  <label>Options</label>
-                  <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
-                    <label class="mini" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;opacity:${state.busy ? '0.55' : '1'};">
-                      <input
-                        id="bankingCancelDiscardSession"
-                        name="banking_cancel_discard_session"
-                        type="checkbox"
-                        ${state.discard_session ? 'checked' : ''}
-                        ${state.busy ? 'disabled' : ''}
-                      />
-                      <span>Discard the staged workbench session as well</span>
-                    </label>
-                  </div>
+                <div class="mini" style="margin-top:10px;opacity:.85;white-space:normal;">
+                  Cancelling returns the draft items to Banking Pay and refreshes each affected candidate using their current pay and finance position.
                 </div>
               </div>
 
@@ -7756,15 +7742,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
       }
     };
 
-    const getDiscardSessionInput = () => {
-      try {
-        const root = getRoot();
-        return root ? root.querySelector('#bankingCancelDiscardSession') : null;
-      } catch {
-        return null;
-      }
-    };
-
     const getLivePassword = () => {
       try {
         const el = getPasswordInput();
@@ -7781,14 +7758,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
       return String(state.reason || '');
     };
 
-    const getLiveDiscardSession = () => {
-      try {
-        const el = getDiscardSessionInput();
-        if (el) return !!el.checked;
-      } catch {}
-      return !!state.discard_session;
-    };
-
     const syncPwFromDom = () => {
       state.__pwTouched = true;
       state.password = getLivePassword();
@@ -7796,10 +7765,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
 
     const syncReasonFromDom = () => {
       state.reason = getLiveReason();
-    };
-
-    const syncDiscardSessionFromDom = () => {
-      state.discard_session = getLiveDiscardSession();
     };
 
     const showAuthFailedModal = async (message) => {
@@ -7841,11 +7806,9 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
       state.notice = '';
       syncPwFromDom();
       syncReasonFromDom();
-      syncDiscardSessionFromDom();
 
       const pw = String(state.password || '');
       const reason = String(state.reason || '').trim();
-      const discardSession = !!state.discard_session;
 
       if (!pw) {
         state.err = 'Password is required.';
@@ -7861,7 +7824,7 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
         return;
       }
 
-      finish({ password: pw, reason, discard_session: discardSession });
+      finish({ password: pw, reason });
       closeTop();
     };
 
@@ -7937,11 +7900,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
 
           if (t.id === 'bankingCancelReason') {
             syncReasonFromDom();
-            return;
-          }
-
-          if (t.id === 'bankingCancelDiscardSession') {
-            syncDiscardSessionFromDom();
           }
         } catch {}
       };
