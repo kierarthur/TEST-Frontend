@@ -45596,7 +45596,7 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
       <div class="card" style="padding:10px;">
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
           <span class="pill">${enc(caseTypeLabel(financeCase.case_type))}</span>
-          ${financeCase.status ? `<span class="pill">${enc(financeCase.status)}</span>` : ''}
+          ${financeCase.status ? `<span class="pill">${enc(friendlyCodeLabel(financeCase.status))}</span>` : ''}
           ${financeCase.payout_status ? `<span class="pill">${enc(`Payout ${financeCase.payout_status}`)}</span>` : ''}
           ${financeCase.candidate_display_name ? `<span>${enc(financeCase.candidate_display_name)}</span>` : ''}
         </div>
@@ -45643,7 +45643,15 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
                     const title = String(ev?.title || ev?.event_type || 'Event').trim() || 'Event';
                     const source = String(ev?.source || '').trim() || 'EVENT';
                     const atUtc = String(ev?.at_utc || ev?.event_at_utc || ev?.created_at_utc || '').trim();
-                    const actor = String(ev?.actor_display_name || ev?.actor_name || ev?.actor_user_id || ev?.created_by || '').trim() || '—';
+                    const actorMeta = (ev && typeof ev.meta === 'object' && ev.meta && !Array.isArray(ev.meta)) ? ev.meta : {};
+                    const actor = String(
+                      ev?.actor_display_name ||
+                      ev?.actor_name ||
+                      actorMeta.actor_display_name ||
+                      actorMeta.actor_display ||
+                      actorMeta.same_week_paye_override_verified_by_display ||
+                      ''
+                    ).trim() || (ev?.actor_user_id || actorMeta.actor_user_id ? 'Former user' : 'System');
                     const reason = String(ev?.reason || '').trim();
                     const note = String(ev?.note || '').trim();
                     const beforeJson = (ev && typeof ev.before_json === 'object' && ev.before_json && !Array.isArray(ev.before_json)) ? ev.before_json : null;
