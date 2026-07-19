@@ -33005,6 +33005,7 @@ async function bankingPayCreateDraft(input = {}) {
       ready_flag: true,
       session_id: sessionId,
       session_version: page.session_version ?? page.sessionVersion ?? wiz?.workbench?.session_version ?? null,
+      progress_counter_version: page.progress_counter_version ?? page.progressCounterVersion ?? wiz?.workbench?.progress_counter_version ?? null,
       session_signature: page.session_signature ?? page.sessionSignature ?? wiz?.workbench?.session_signature ?? null,
       pay_date: pd,
       week_ending_cutoff_date: cutoffIso,
@@ -33612,11 +33613,35 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.decisions.server_selected_preview_row_ids = [...allCurrentSelectedIds];
       wiz.workbench.server_selected_preview_row_ids_provided = true;
       wiz.decisions.server_selected_preview_row_ids_provided = true;
+      const currentProgressCounterVersion = normalizeSessionVersionForCreateDraft(normalisedPage.progress_counter_version ?? normalisedPage.progressCounterVersion);
+      if (currentProgressCounterVersion) {
+        wiz.workbench.progress_counter_version = currentProgressCounterVersion;
+        wiz.decisions.progress_counter_version = currentProgressCounterVersion;
+      }
       wiz.workbench.selected_preview_row_mode = selectedModeNormalised;
       wiz.decisions.selected_preview_row_mode = selectedModeNormalised;
       wiz.selected_preview_row_mode = selectedModeNormalised;
       wiz.local_selected_preview_row_ids_dirty = false;
     } catch {}
+
+    if (remapped) {
+      return {
+        ok: false,
+        error_code: 'WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED',
+        code: 'WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED',
+        title: 'Banking Pay selection changed',
+        message: 'Banking Pay was changed by another user or window. The latest selection is now shown. Review it, then click Create Draft again.',
+        session_id: id,
+        session_version: normalisedPage.session_version ?? normalisedPage.sessionVersion ?? null,
+        progress_counter_version: normalisedPage.progress_counter_version ?? normalisedPage.progressCounterVersion ?? null,
+        previous_selected_preview_row_ids: previousIds,
+        current_selected_preview_row_ids: allCurrentSelectedIds,
+        selection_remapped_to_current_session: true,
+        operation_started: false,
+        no_operation_started: true,
+        no_batch_created: true
+      };
+    }
 
     const selectedPreviewRowContracts = allEligibleSelectedRows.map((row, index) => buildCreateDraftSelectedPreviewRowContract(row, index));
     const selectedEconomicKeys = selectedPreviewRowContracts.map((contract) => buildCreateDraftEconomicKeyContract(contract));
@@ -37751,12 +37776,44 @@ async function bankingPayCreateDraft(input = {}) {
     return deep(finalResult);
   } catch (e) {
     const activeSnoozeFailure = isActiveSnoozeDraftFailure(e);
+    const selectionReviewFailure = [
+      e,
+      e?.payload,
+      e?.json,
+      e?.backendPayload,
+      e?.details,
+      e?.friendly_error
+    ].find((candidate) => {
+      if (!candidate || typeof candidate !== 'object') return false;
+      return upperTrim(candidate.error_code || candidate.errorCode || candidate.code || candidate.friendly_error?.error_code || candidate.friendly_error?.code || '') === 'WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED';
+    }) || null;
     let activeSnoozeReconciliation = null;
     if (activeSnoozeFailure) {
       try { activeSnoozeReconciliation = await reconcileActiveSnoozeDraftFailure(e); } catch {}
     }
     const filteredScopeFailure = extractCreateDraftFilteredScopeFailure(e);
-    const friendly = activeSnoozeFailure
+    const friendly = selectionReviewFailure
+      ? {
+          ok: false,
+          code: 'WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED',
+          error_code: 'WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED',
+          title: 'Banking Pay selection changed',
+          message: 'Banking Pay was changed by another user or window. The latest selection is now shown. Review it, then click Create Draft again.',
+          user_message: 'Banking Pay was changed by another user or window. The latest selection is now shown. Review it, then click Create Draft again.',
+          user_action: 'REVIEW_LATEST_SELECTION',
+          confirm_label: 'OK',
+          show_modal: true,
+          operation_started: false,
+          no_operation_started: true,
+          no_batch_created: true,
+          friendly_error: {
+            code: 'WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED',
+            error_code: 'WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED',
+            title: 'Banking Pay selection changed',
+            message: 'Banking Pay was changed by another user or window. The latest selection is now shown. Review it, then click Create Draft again.'
+          }
+        }
+      : activeSnoozeFailure
       ? {
           ok: false,
           code: 'ACTIVE_SNOOZE_PREVENTS_DRAFT',
@@ -54707,6 +54764,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'RESOLVED_SYNTHETIC_TOTAL_ROW_ITEM_BLOCKED',
     'RESOLVED_SYNTHETIC_TOTAL_ROW_SUPPRESSED',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED',
     'STALE_SESSION',
     'OBSOLETE_SESSION',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
@@ -55049,6 +55107,19 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   }
 
   const templates = {
+    WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Banking Pay selection changed',
+      message: 'Banking Pay was changed by another user or window. The latest selection is now shown. Review it, then click Create Draft again.',
+      user_action: 'REVIEW_LATEST_SELECTION',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      no_operation_started: true,
+      no_batch_created: true
+    },
     EXECUTE_PAYMENT_INVALID_REQUEST: {
       ok: false,
       http_status: 400,
@@ -91008,6 +91079,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       if (!payload || typeof payload !== 'object') return;
       const selectedIds = normalizePreviewRowIdArray(payload.selected_preview_row_ids || payload.server_selected_preview_row_ids);
       const selectedCount = Number(payload.selected_row_count ?? selectedIds.length);
+      const progressCounterVersion = Number(payload.progress_counter_version ?? payload.progressCounterVersion);
       const decisions = ensurePayWizardDecisionState();
       try {
         st.pay.draftWizard.workbench = (st.pay.draftWizard.workbench && typeof st.pay.draftWizard.workbench === 'object') ? st.pay.draftWizard.workbench : {};
@@ -91019,6 +91091,13 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided = payload.server_selected_preview_row_ids_provided === true || payload.selected_preview_row_ids_provided === true;
         decisions.server_selected_preview_row_ids = selectedIds;
         decisions.server_selected_preview_row_ids_provided = st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided;
+        if (Number.isSafeInteger(progressCounterVersion) && progressCounterVersion >= 0) {
+          st.pay.draftWizard.workbench.progress_counter_version = progressCounterVersion;
+          decisions.progress_counter_version = progressCounterVersion;
+          if (st.pay.draftWizard.preview?.data && typeof st.pay.draftWizard.preview.data === 'object') {
+            st.pay.draftWizard.preview.data.progress_counter_version = progressCounterVersion;
+          }
+        }
       } catch {}
     };
 
@@ -91041,6 +91120,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState([rowId], !wantChecked);
+        try { await loadPayWorkbenchPreviewPageForSection('canonical_preview_lines', 'reload'); } catch {}
         throw error;
       }
       return decisions;
@@ -91069,6 +91149,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState(targetIds, !wantChecked);
+        try { await loadPayWorkbenchPreviewPageForSection('canonical_preview_lines', 'reload'); } catch {}
         throw error;
       }
       return decisions;
@@ -91080,12 +91161,18 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       const visibleIds = getVisibleRenderedPreviewRowIds();
       updatePreviewRowSelectionInLoadedState(visibleIds, wantChecked);
       const sessionId = getActivePayWorkbenchSessionIdForSelection();
-      if (sessionId && typeof bankingPayWorkbenchSessionSetSelectedRows === 'function') {
-        const result = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, {
-          section: 'canonical_preview_lines',
-          selection_action: wantChecked ? 'SELECT_ALL_SECTION' : 'CLEAR_SECTION'
-        });
-        applySelectionPayloadSummaryToWizard(result);
+      try {
+        if (sessionId && typeof bankingPayWorkbenchSessionSetSelectedRows === 'function') {
+          const result = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, {
+            section: 'canonical_preview_lines',
+            selection_action: wantChecked ? 'SELECT_ALL_SECTION' : 'CLEAR_SECTION'
+          });
+          applySelectionPayloadSummaryToWizard(result);
+        }
+      } catch (error) {
+        updatePreviewRowSelectionInLoadedState(visibleIds, !wantChecked);
+        try { await loadPayWorkbenchPreviewPageForSection('canonical_preview_lines', 'reload'); } catch {}
+        throw error;
       }
       return decisions;
     };
@@ -91131,11 +91218,14 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       const totalRaw = Number(currentCachedPage.known_count ?? currentCachedPage.knownCount ?? currentCachedPage.total_count ?? currentCachedPage.totalCount ?? currentCachedPage.total_count_estimate ?? currentCachedPage.totalCountEstimate ?? 0);
       const totalPages = Math.max(1, Math.ceil(Math.max(0, Number.isFinite(totalRaw) ? Math.trunc(totalRaw) : 0) / limit) || (currentCachedPage.has_more || currentCachedPage.hasMore ? currentPage + 1 : currentPage));
       const dir = String(direction || '').trim().toLowerCase();
-      const targetPage = dir === 'prev' ? currentPage - 1 : currentPage + 1;
+      const reloadCurrentPage = dir === 'reload' || dir === 'current' || dir === 'refresh';
+      const targetPage = reloadCurrentPage ? currentPage : (dir === 'prev' ? currentPage - 1 : currentPage + 1);
       if (targetPage < 1 || targetPage > totalPages) return;
       const cursorStack = Array.isArray(pageState.cursor_stack) ? pageState.cursor_stack : (Array.isArray(pageState.cursorStack) ? pageState.cursorStack : []);
       let targetCursor = null;
-      if (targetPage > currentPage) {
+      if (reloadCurrentPage) {
+        targetCursor = targetPage > 1 ? (cursorStack[targetPage - 1] || null) : null;
+      } else if (targetPage > currentPage) {
         targetCursor = currentCachedPage.next_cursor ?? currentCachedPage.nextCursor ?? null;
         if (!targetCursor) return;
         cursorStack[targetPage - 1] = targetCursor;
@@ -93205,8 +93295,11 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (kind !== 'change') return;
       const previewRowId = String(ds('previewRowId') || dget('data-preview-row-id') || '').trim();
       const checked = !!(el && el.checked === true);
-      await togglePreviewRowSelection(previewRowId, checked);
-      await safeRerender(null);
+      try {
+        await togglePreviewRowSelection(previewRowId, checked);
+      } finally {
+        await safeRerender(null);
+      }
       return;
     }
 

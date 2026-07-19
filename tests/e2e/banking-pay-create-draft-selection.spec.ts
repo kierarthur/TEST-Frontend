@@ -1,34 +1,18 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { resolve } from 'node:path';
 
 test.use({ serviceWorkers: 'block' });
 
-test('preserves compact IMPLICIT_ALL selection when Create drafts is clicked', async ({ page }) => {
-  test.setTimeout(120_000);
+const testFrontendHost = 'testmode.arthur-rai.co.uk';
+const testBackendHost = 'test-cloudtms-backend.kier-88a.workers.dev';
 
+async function installLocalMain(page: Page) {
   const localMainPath = resolve(__dirname, '../../js/main.js');
   let interceptedMainUrl = '';
-  let preflightSummary: {
-    selectedRowCount: number;
-    requestMode: string;
-    decisionMode: string;
-  } | null = null;
-  let blockedNonPreflightRequests = 0;
-  const unexpectedProductionBackendRequests: string[] = [];
-  const selectionErrors: string[] = [];
-
-  page.on('request', (request) => {
-    const url = request.url();
-    if (url.startsWith('https://cloudtms.kier-88a.workers.dev/')) unexpectedProductionBackendRequests.push(url);
-  });
-  page.on('console', (message) => {
-    const value = message.text();
-    if (/NO_SELECTED_PREVIEW_ROWS|STALE_WORKBENCH_CONTEXT_ABORTED/.test(value)) selectionErrors.push(value);
-  });
 
   await page.route('**/js/main.js', async (route) => {
     const url = new URL(route.request().url());
-    if (url.hostname !== 'testmode.arthur-rai.co.uk' || url.pathname !== '/js/main.js') {
+    if (url.hostname !== testFrontendHost || url.pathname !== '/js/main.js') {
       await route.continue();
       return;
     }
@@ -38,37 +22,18 @@ test('preserves compact IMPLICIT_ALL selection when Create drafts is clicked', a
       contentType: 'application/javascript; charset=utf-8',
       headers: {
         'cache-control': 'no-store',
-        'x-codex-local-asset': 'banking-pay-create-draft-selection'
+        'x-codex-local-asset': 'banking-pay-shared-selection-guard'
       }
     });
   });
 
-  await page.route('**/api/banking/pay/batch/create-draft', async (route) => {
-    let body: Record<string, unknown> = {};
-    try { body = route.request().postDataJSON(); } catch {}
+  return () => interceptedMainUrl;
+}
 
-    if (body.preflight_only === true) {
-      const selectedRows = Array.isArray(body.selected_preview_row_ids) ? body.selected_preview_row_ids : [];
-      const decisions = body.preview_decisions_json && typeof body.preview_decisions_json === 'object'
-        ? body.preview_decisions_json as Record<string, unknown>
-        : {};
-      preflightSummary = {
-        selectedRowCount: selectedRows.length,
-        requestMode: String(body.selected_preview_row_mode || ''),
-        decisionMode: String(decisions.selected_preview_row_mode || decisions.__selected_preview_row_mode || '')
-      };
-      await route.continue();
-      return;
-    }
-
-    blockedNonPreflightRequests += 1;
-    await route.abort('blockedbyclient');
-  });
-
+async function openBankingPay(page: Page) {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
-  expect(new URL(page.url()).hostname).toBe('testmode.arthur-rai.co.uk');
-  expect(interceptedMainUrl).toBe('https://testmode.arthur-rai.co.uk/js/main.js');
+  expect(new URL(page.url()).hostname).toBe(testFrontendHost);
 
   await page.getByRole('button', { name: 'Banking' }).click();
   await page.getByRole('button', { name: 'Pay', exact: true }).click();
@@ -76,46 +41,119 @@ test('preserves compact IMPLICIT_ALL selection when Create drafts is clicked', a
   const createButton = page.getByRole('button', { name: 'Create drafts', exact: true });
   await expect(createButton).toBeVisible({ timeout: 60_000 });
   await expect(createButton).toBeEnabled();
+  return createButton;
+}
 
-  const compactSelection = await page.evaluate(() => {
-    const wizard = window.modalCtx?.banking?.pay?.draftWizard;
-    if (!wizard || !wizard.decisions || !wizard.workbench) throw new Error('Banking Pay wizard state is unavailable');
+test('requires review and starts no draft when the authoritative selection changes', async ({ page }) => {
+  test.setTimeout(120_000);
 
-    wizard.selected_preview_row_mode = 'IMPLICIT_ALL';
-    wizard.decisions.selected_preview_row_mode = 'IMPLICIT_ALL';
-    delete wizard.decisions.__selected_preview_row_mode;
-    wizard.decisions.selected_preview_row_ids = [];
-    wizard.decisions.server_selected_preview_row_ids = [];
-    wizard.decisions.server_selected_preview_row_ids_provided = false;
-    wizard.workbench.selected_preview_row_mode = 'IMPLICIT_ALL';
-    wizard.workbench.selected_preview_row_ids = [];
-    wizard.workbench.server_selected_preview_row_ids = [];
-    wizard.workbench.server_selected_preview_row_ids_provided = false;
-    wizard.local_selected_preview_row_ids_dirty = false;
+  const getInterceptedMainUrl = await installLocalMain(page);
+  const unexpectedProductionBackendRequests: string[] = [];
+  let simulateConcurrentChange = false;
+  let modifiedPreviewResponses = 0;
+  let createDraftRequests = 0;
 
-    return {
-      wizardMode: wizard.selected_preview_row_mode,
-      decisionMode: wizard.decisions.selected_preview_row_mode,
-      selectedIdCount: wizard.decisions.selected_preview_row_ids.length
-    };
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.hostname === 'cloudtms.kier-88a.workers.dev') unexpectedProductionBackendRequests.push(url.pathname);
   });
 
-  expect(compactSelection).toEqual({
-    wizardMode: 'IMPLICIT_ALL',
-    decisionMode: 'IMPLICIT_ALL',
-    selectedIdCount: 0
+  await page.route('**/api/banking/pay/workbench/session/*/preview-page**', async (route) => {
+    const url = new URL(route.request().url());
+    if (!simulateConcurrentChange || url.hostname !== testBackendHost || url.searchParams.get('section') !== 'canonical_preview_lines') {
+      await route.continue();
+      return;
+    }
+
+    const response = await route.fetch();
+    const payload = await response.json() as Record<string, unknown>;
+    const originalRows = Array.isArray(payload.rows)
+      ? payload.rows
+      : (Array.isArray(payload.items) ? payload.items : []);
+    const selectedIndex = originalRows.findIndex((row) => {
+      if (!row || typeof row !== 'object') return false;
+      const value = row as Record<string, unknown>;
+      return value.selected === true && String(value.status || '').toUpperCase() === 'READY';
+    });
+    expect(selectedIndex).toBeGreaterThanOrEqual(0);
+
+    const rows = originalRows.filter((_row, index) => index !== selectedIndex);
+    payload.rows = rows;
+    payload.items = rows;
+    for (const key of ['returned_count', 'returnedCount', 'known_count', 'knownCount', 'total_count', 'totalCount']) {
+      if (Number.isFinite(Number(payload[key]))) payload[key] = Math.max(0, Number(payload[key]) - 1);
+    }
+    modifiedPreviewResponses += 1;
+    simulateConcurrentChange = false;
+
+    await route.fulfill({
+      response,
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify(payload)
+    });
   });
 
+  await page.route('**/api/banking/pay/batch/create-draft', async (route) => {
+    createDraftRequests += 1;
+    await route.abort('blockedbyclient');
+  });
+
+  const createButton = await openBankingPay(page);
+  expect(getInterceptedMainUrl()).toBe('https://testmode.arthur-rai.co.uk/js/main.js');
+
+  simulateConcurrentChange = true;
   await createButton.click();
-  await expect(page.getByText('A PAYE batch already exists for this payroll week', { exact: true })).toBeVisible({ timeout: 60_000 });
 
-  expect(selectionErrors).toEqual([]);
-  expect(preflightSummary).not.toBeNull();
-  expect(preflightSummary?.selectedRowCount).toBeGreaterThan(0);
-  expect(preflightSummary?.requestMode).toBe('IMPLICIT_ALL');
-  expect(preflightSummary?.decisionMode).toBe('IMPLICIT_ALL');
-  expect(blockedNonPreflightRequests).toBe(0);
+  await expect(page.getByText('Banking Pay selection changed', { exact: true }).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('Banking Pay was changed by another user or window. The latest selection is now shown. Review it, then click Create Draft again.', { exact: true }).first()).toBeVisible();
+
+  expect(modifiedPreviewResponses).toBe(1);
+  expect(createDraftRequests).toBe(0);
   expect(unexpectedProductionBackendRequests).toEqual([]);
+  await page.getByRole('button', { name: 'OK', exact: true }).last().click();
+});
 
-  await page.getByRole('button', { name: 'Cancel', exact: true }).last().click();
+test('a rejected row change reloads server truth and repaints the checkbox', async ({ page }) => {
+  test.setTimeout(120_000);
+
+  const getInterceptedMainUrl = await installLocalMain(page);
+  let rejectNextSelection = true;
+  let rejectedSelectionRequests = 0;
+
+  await page.route('**/api/banking/pay/workbench/session/*/selected-rows', async (route) => {
+    const url = new URL(route.request().url());
+    if (!rejectNextSelection || url.hostname !== testBackendHost) {
+      await route.continue();
+      return;
+    }
+    rejectNextSelection = false;
+    rejectedSelectionRequests += 1;
+    await route.fulfill({
+      status: 409,
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify({
+        ok: false,
+        error_code: 'WORKBENCH_SESSION_PROGRESS_CHANGED',
+        code: 'WORKBENCH_SESSION_PROGRESS_CHANGED',
+        title: 'Payment selection changed',
+        message: 'Banking Pay changed in another window. The latest selection has been reloaded.'
+      })
+    });
+  });
+
+  await openBankingPay(page);
+  expect(getInterceptedMainUrl()).toBe('https://testmode.arthur-rai.co.uk/js/main.js');
+
+  const checkbox = page.locator('input[type="checkbox"][data-preview-row-id]').first();
+  await expect(checkbox).toBeVisible({ timeout: 60_000 });
+  const previewRowId = await checkbox.getAttribute('data-preview-row-id');
+  expect(previewRowId).toBeTruthy();
+  const originalChecked = await checkbox.isChecked();
+
+  await checkbox.click();
+  await expect.poll(() => rejectedSelectionRequests).toBe(1);
+
+  const repaintedCheckbox = page.locator('input[type="checkbox"][data-preview-row-id="' + previewRowId + '"]');
+  if (originalChecked) await expect(repaintedCheckbox).toBeChecked({ timeout: 30_000 });
+  else await expect(repaintedCheckbox).not.toBeChecked({ timeout: 30_000 });
 });
