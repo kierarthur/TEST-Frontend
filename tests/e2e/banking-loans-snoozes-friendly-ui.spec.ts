@@ -23,6 +23,130 @@ for (const viewport of VIEWPORTS) {
     let servedMainSha256 = '';
     let mockedLoansRequestCount = 0;
     let mockedAuditRequestCount = 0;
+    const loansRequestUrls: URL[] = [];
+
+    const financeRowsAll: any[] = Array.from({ length: 45 }, (_, index) => {
+      const caseTypes = ['PAYMENT_ADVANCE', 'OVERPAYMENT', 'MANUAL_DEBT_ADJUSTMENT', 'UNDERPAYMENT'];
+      const caseType = caseTypes[index % caseTypes.length];
+      const number = String(index + 1).padStart(2, '0');
+      const created = new Date(Date.UTC(2026, 6, 18, 12, 0, 0) - index * 86_400_000).toISOString();
+      return {
+        finance_case_id: index === 0 ? 'codex-friendly-ui-case' : `codex-finance-case-${number}`,
+        case_type: index === 0 ? 'OVERPAYMENT' : caseType,
+        admin_label: index === 0
+          ? 'Overpayment'
+          : caseType.split('_').map((part) => part[0] + part.slice(1).toLowerCase()).join(' '),
+        candidate_display_name: index === 0 ? 'Test Candidate' : `Candidate ${number}`,
+        client_name: `Test Client ${number}`,
+        status: 'ACTIVE',
+        lifecycle_status_display: 'Active',
+        created_at: created,
+        created_at_utc: created,
+        blocked_state: '',
+        blocked_reason: '',
+        original_amount: 125 + index,
+        outstanding_amount: 75 + index,
+        weekly_due: 25,
+        start_week_start: '2026-07-13',
+        next_due_week_start: '2026-07-20',
+        open_taxable_count: 5,
+        open_reimbursement_count: 0,
+        unresolved_taxable_count: 0,
+        stale_count: 0,
+        is_mixed_case: false,
+        component_resolution_summary_json: {
+          stale_count: 0,
+          is_mixed_case: false,
+          open_taxable_count: 5,
+          open_reimbursement_count: 0,
+          unresolved_taxable_count: 0
+        },
+        adjustment_comment: '',
+        snooze: null,
+        action_flags: {}
+      };
+    }).concat([
+      {
+        finance_case_id: 'codex-written-off-advance',
+        case_type: 'PAYMENT_ADVANCE',
+        admin_label: 'Payment Advance',
+        candidate_display_name: 'Written Off Advance',
+        client_name: 'Test Client',
+        status: 'WRITTEN_OFF',
+        finance_status: 'WRITTEN_OFF',
+        lifecycle_status_display: 'Written off',
+        finance_lifecycle_status_display: 'Written off',
+        created_at: '2026-01-03T10:00:00.000Z',
+        created_at_utc: '2026-01-03T10:00:00.000Z',
+        written_off_at_utc: '2026-07-19T01:10:21.000Z',
+        write_off_reason: 'Approved write-off',
+        original_amount: 100,
+        outstanding_amount: 0,
+        weekly_due: 0,
+        action_flags: {}
+      },
+      {
+        finance_case_id: 'codex-written-off-overpayment',
+        case_type: 'OVERPAYMENT',
+        admin_label: 'Overpayment',
+        candidate_display_name: 'Written Off Overpayment',
+        client_name: 'Test Client',
+        status: 'WRITTEN_OFF',
+        finance_status: 'WRITTEN_OFF',
+        lifecycle_status_display: 'Written off',
+        finance_lifecycle_status_display: 'Written off',
+        created_at: '2026-01-02T10:00:00.000Z',
+        created_at_utc: '2026-01-02T10:00:00.000Z',
+        written_off_at_utc: '2026-07-19T01:10:21.000Z',
+        write_off_reason: 'Approved write-off',
+        original_amount: 100,
+        outstanding_amount: 0,
+        weekly_due: 0,
+        action_flags: {}
+      },
+      {
+        finance_case_id: 'codex-written-off-manual-debt',
+        case_type: 'MANUAL_DEBT_ADJUSTMENT',
+        admin_label: 'Manual Debt Adjustment',
+        candidate_display_name: 'Written Off Manual Debt',
+        client_name: 'Test Client',
+        status: 'WRITTEN_OFF',
+        finance_status: 'WRITTEN_OFF',
+        lifecycle_status_display: 'Written off',
+        finance_lifecycle_status_display: 'Written off',
+        created_at: '2026-01-01T10:00:00.000Z',
+        created_at_utc: '2026-01-01T10:00:00.000Z',
+        written_off_at_utc: '2026-07-19T01:10:21.000Z',
+        write_off_reason: 'Approved write-off',
+        original_amount: 100,
+        outstanding_amount: 0,
+        weekly_due: 0,
+        action_flags: {}
+      }
+    ]);
+
+    const timesheetRowsAll: any[] = Array.from({ length: 25 }, (_, index) => {
+      const number = String(index + 1).padStart(2, '0');
+      const created = new Date(Date.UTC(2026, 6, 18, 11, 0, 0) - index * 3_600_000).toISOString();
+      return {
+        snooze_id: `codex-timesheet-snooze-${number}`,
+        row_kind: 'WHOLE_TIMESHEET',
+        lifecycle_state: 'ACTIVE',
+        snooze_state: 'INDEFINITE_SNOOZE',
+        candidate_display_name: `Snoozed Candidate ${number}`,
+        client_name: `Snooze Client ${number}`,
+        timesheet_id: `timesheet-${number}`,
+        reference_number: `REF-${number}`,
+        week_ending_date: '2026-07-19',
+        snooze_until_date: null,
+        created_at_utc: created,
+        updated_at_utc: created,
+        pay_amount_ex_vat: 100 + index,
+        segment_count: 0,
+        segment_rows: [],
+        action_flags: {}
+      };
+    });
 
     page.on('request', (request) => {
       const url = request.url();
@@ -57,45 +181,90 @@ for (const viewport of VIEWPORTS) {
 
     await page.route('**/api/banking/finance/loans-snoozes**', async (route) => {
       mockedLoansRequestCount += 1;
+      const requestUrl = new URL(route.request().url());
+      loansRequestUrls.push(requestUrl);
+      const hideCompleted = requestUrl.searchParams.get('hide_completed_non_current_items') !== 'false';
+      const caseType = String(requestUrl.searchParams.get('case_type') || '').toUpperCase();
+      const viewMode = String(requestUrl.searchParams.get('view_mode') || '').toUpperCase();
+      const financePage = Math.max(1, Number(requestUrl.searchParams.get('finance_page') || 1));
+      const financePageSize = Math.min(20, Math.max(1, Number(requestUrl.searchParams.get('finance_page_size') || 20)));
+      const timesheetPage = Math.max(1, Number(requestUrl.searchParams.get('timesheet_page') || 1));
+      const timesheetPageSize = Math.min(20, Math.max(1, Number(requestUrl.searchParams.get('timesheet_page_size') || 20)));
+      const financeSortKey = String(requestUrl.searchParams.get('finance_sort_key') || 'created_at');
+      const financeSortDir = String(requestUrl.searchParams.get('finance_sort_dir') || 'desc') === 'asc' ? 'asc' : 'desc';
+
+      const financeFiltered = financeRowsAll
+        .filter((row) => !hideCompleted || !row.written_off_at_utc)
+        .filter((row) => !caseType || row.case_type === caseType)
+        .filter((row) => {
+          if (viewMode === 'HISTORY') return !!row.written_off_at_utc;
+          if (viewMode === 'ACTIVE') return !row.written_off_at_utc;
+          if (viewMode === 'SNOOZED') return false;
+          return true;
+        })
+        .sort((left, right) => {
+          const direction = financeSortDir === 'asc' ? 1 : -1;
+          if (financeSortKey === 'candidate') {
+            return direction * left.candidate_display_name.localeCompare(right.candidate_display_name);
+          }
+          if (financeSortKey === 'case_type') {
+            return direction * left.admin_label.localeCompare(right.admin_label);
+          }
+          return direction * (new Date(left.created_at_utc).getTime() - new Date(right.created_at_utc).getTime());
+        });
+
+      const financeTotalPages = Math.max(1, Math.ceil(financeFiltered.length / financePageSize));
+      const financeActualPage = Math.min(financePage, financeTotalPages);
+      const financeStart = (financeActualPage - 1) * financePageSize;
+      const financePageRows = financeFiltered.slice(financeStart, financeStart + financePageSize);
+
+      const timesheetSorted = [...timesheetRowsAll].sort((left, right) => (
+        new Date(right.created_at_utc).getTime() - new Date(left.created_at_utc).getTime()
+      ));
+      const timesheetTotalPages = Math.max(1, Math.ceil(timesheetSorted.length / timesheetPageSize));
+      const timesheetActualPage = Math.min(timesheetPage, timesheetTotalPages);
+      const timesheetStart = (timesheetActualPage - 1) * timesheetPageSize;
+      const timesheetPageRows = timesheetSorted.slice(timesheetStart, timesheetStart + timesheetPageSize);
+
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           ok: true,
-          summary: {},
-          finance_cases: [
-            {
-              finance_case_id: 'codex-friendly-ui-case',
-              case_type: 'OVERPAYMENT',
-              admin_label: 'Overpayment',
-              candidate_display_name: 'Test Candidate',
-              client_name: 'Test Client',
-              status: 'ACTIVE',
-              blocked_state: '',
-              blocked_reason: '',
-              original_amount: 125,
-              outstanding_amount: 75,
-              weekly_due: 25,
-              start_week_start: '2026-07-13',
-              next_due_week_start: '2026-07-20',
-              open_taxable_count: 5,
-              open_reimbursement_count: 0,
-              unresolved_taxable_count: 0,
-              stale_count: 0,
-              is_mixed_case: false,
-              component_resolution_summary_json: {
-                stale_count: 0,
-                is_mixed_case: false,
-                open_taxable_count: 5,
-                open_reimbursement_count: 0,
-                unresolved_taxable_count: 0
-              },
-              adjustment_comment: '',
-              snooze: null,
-              action_flags: {}
+          filters: { hide_completed_non_current_items: hideCompleted },
+          summary: {
+            payment_advances_active_count: financeFiltered.filter((row) => row.case_type === 'PAYMENT_ADVANCE').length,
+            overpayments_active_count: financeFiltered.filter((row) => row.case_type === 'OVERPAYMENT').length,
+            underpayments_active_count: financeFiltered.filter((row) => row.case_type === 'UNDERPAYMENT').length,
+            manual_debt_adjustments_active_count: financeFiltered.filter((row) => row.case_type === 'MANUAL_DEBT_ADJUSTMENT').length,
+            manual_credit_adjustments_count: 0,
+            mixed_finance_cases_count: 0,
+            unresolved_finance_cases_count: 0,
+            stale_finance_cases_count: 0,
+            finance_cases_with_active_snooze_count: 0,
+            timesheet_snoozes_count: timesheetRowsAll.length,
+            timesheet_expense_snoozes_count: 0
+          },
+          finance_cases: financePageRows,
+          timesheet_snoozes: timesheetPageRows,
+          pagination: {
+            finance_cases: {
+              page: financeActualPage,
+              page_size: financePageSize,
+              total_count: financeFiltered.length,
+              total_pages: financeTotalPages,
+              sort_key: financeSortKey,
+              sort_dir: financeSortDir
+            },
+            timesheet_snoozes: {
+              page: timesheetActualPage,
+              page_size: timesheetPageSize,
+              total_count: timesheetRowsAll.length,
+              total_pages: timesheetTotalPages,
+              sort_key: 'created_at',
+              sort_dir: 'desc'
             }
-          ],
-          timesheet_snoozes: []
+          }
         })
       });
     });
@@ -155,10 +324,81 @@ for (const viewport of VIEWPORTS) {
       .filter({ hasText: 'Recovery / Snooze / Comment' });
     await expect(financeCasesTable).toHaveCount(1);
     await expect(financeCasesTable).toBeVisible({ timeout: 60_000 });
-    await expect(financeCasesTable.locator('tbody tr')).toHaveCount(1);
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]')).toHaveCount(20);
     await expect(financeCasesTable).toContainText('Recovery: 5 taxable recovery items');
     await expect(financeCasesTable).toContainText('Comment: No comment');
     await expect(financeCasesTable).toContainText('Active');
+    await expect(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Case Type' })).toBeVisible();
+    await expect(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Candidate' })).toBeVisible();
+    await expect(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Creation Date' })).toBeVisible();
+
+    const timesheetSnoozesTable = bankingModal
+      .locator('table.grid')
+      .filter({ hasText: 'Snooze / Lifecycle' });
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]')).toHaveCount(20);
+
+    const financePagination = bankingModal.locator('[data-loans-snoozes-pagination="finance_cases"]');
+    const timesheetPagination = bankingModal.locator('[data-loans-snoozes-pagination="timesheet_snoozes"]');
+    const clickModalControl = async (control: ReturnType<typeof bankingModal.locator>) => {
+      await control.evaluate((element) => {
+        let ancestor = element.parentElement;
+        while (ancestor) {
+          const ancestorRect = ancestor.getBoundingClientRect();
+          const elementRect = element.getBoundingClientRect();
+          if (ancestor.scrollHeight > ancestor.clientHeight) {
+            ancestor.scrollTop += elementRect.top - ancestorRect.top - Math.max(0, (ancestorRect.height - elementRect.height) / 2);
+          }
+          if (ancestor.scrollWidth > ancestor.clientWidth) {
+            ancestor.scrollLeft += elementRect.left - ancestorRect.left - Math.max(0, (ancestorRect.width - elementRect.width) / 2);
+          }
+          ancestor = ancestor.parentElement;
+        }
+      });
+      await expect(control).toBeInViewport();
+      await control.click();
+    };
+    await expect(financePagination).toContainText('Page 1 of 3');
+    await expect(timesheetPagination).toContainText('Page 1 of 2');
+    await expect(financePagination.getByRole('button', { name: 'Previous Finance cases page' })).toBeDisabled();
+    await expect(timesheetPagination.getByRole('button', { name: 'Previous Timesheet snoozes page' })).toBeDisabled();
+
+    await clickModalControl(financePagination.getByRole('button', { name: 'Next Finance cases page' }));
+    await expect(financePagination).toContainText('Page 2 of 3');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]')).toHaveCount(20);
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_page')).toBe('2');
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_page')).toBe('1');
+
+    await clickModalControl(timesheetPagination.getByRole('button', { name: 'Next Timesheet snoozes page' }));
+    await expect(timesheetPagination).toContainText('Page 2 of 2');
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]')).toHaveCount(5);
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_page')).toBe('2');
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_page')).toBe('2');
+
+    await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Candidate' }));
+    await expect(financePagination).toContainText('Page 1 of 3');
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_key')).toBe('candidate');
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('asc');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Candidate 02');
+
+    await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Candidate' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('desc');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Test Candidate');
+
+    await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Case Type' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_key')).toBe('case_type');
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('asc');
+    await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Case Type' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('desc');
+
+    await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Creation Date' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_key')).toBe('created_at');
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('desc');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Test Candidate');
+    await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Creation Date' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('asc');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Candidate 45');
+    await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Creation Date' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('desc');
 
     const visibleModalText = await bankingModal.innerText();
     expect(visibleModalText).not.toMatch(/\b(?:stale_count|is_mixed_case|open_taxable_count|open_reimbursement_count|unresolved_taxable_count)\b/i);
@@ -169,7 +409,23 @@ for (const viewport of VIEWPORTS) {
     expect(visibleModalText).not.toContain('Exact source:');
     expect(visibleModalText).not.toMatch(/\b(?:NOT_SNOOZED|INDEFINITE_SNOOZE|DATED_SNOOZE|SOURCE_REPLACED|SOURCE_CHANGED|SOURCE_UNAVAILABLE)\b/);
 
-    await financeCasesTable.getByRole('button', { name: 'Audit', exact: true }).click();
+    const hideCompletedCheckbox = bankingModal.getByRole('checkbox', { name: 'Hide completed / non-current items' });
+    const viewModeSelect = bankingModal.locator('select[data-action="banking:finance:setViewMode"]');
+    await hideCompletedCheckbox.uncheck();
+    await viewModeSelect.selectOption('HISTORY');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]')).toHaveCount(3);
+    await expect(financeCasesTable).toContainText('Written Off Advance');
+    await expect(financeCasesTable).toContainText('Written Off Overpayment');
+    await expect(financeCasesTable).toContainText('Written Off Manual Debt');
+    await expect(financeCasesTable).toContainText('Written off');
+    await expect(financeCasesTable).not.toContainText('Paid off');
+
+    await viewModeSelect.selectOption('');
+    await hideCompletedCheckbox.check();
+    const specialFinanceRow = financeCasesTable
+      .locator('[data-loans-snoozes-record="finance-case"]')
+      .filter({ hasText: 'Test Candidate' });
+    await clickModalControl(specialFinanceRow.getByRole('button', { name: 'Audit', exact: true }));
     const auditModal = page.getByRole('dialog', { name: 'Finance Case Audit' });
     await expect(auditModal).toBeVisible();
     await expect.poll(() => mockedAuditRequestCount, { timeout: 15_000 }).toBe(1);

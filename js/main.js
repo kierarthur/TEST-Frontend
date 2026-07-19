@@ -10105,6 +10105,30 @@ function getFinanceCaseActionAvailability(caseRow = {}) {
 }
 
 
+function clampBankingModalToViewport() {
+  const modal = document.getElementById('modal');
+  if (!modal || !modal.classList.contains('modal')) return false;
+
+  const rect = modal.getBoundingClientRect();
+  const margin = 12;
+  const viewportWidth = Math.max(0, window.innerWidth || document.documentElement.clientWidth || 0);
+  const viewportHeight = Math.max(0, window.innerHeight || document.documentElement.clientHeight || 0);
+  const maxLeft = Math.max(margin, viewportWidth - rect.width - margin);
+  const maxTop = Math.max(margin, viewportHeight - rect.height - margin);
+  const nextLeft = Math.min(Math.max(margin, rect.left), maxLeft);
+  const nextTop = Math.min(Math.max(margin, rect.top), maxTop);
+
+  if (Math.abs(nextLeft - rect.left) < 0.5 && Math.abs(nextTop - rect.top) < 0.5) return false;
+
+  modal.style.position = 'fixed';
+  modal.style.left = `${Math.round(nextLeft)}px`;
+  modal.style.top = `${Math.round(nextTop)}px`;
+  modal.style.right = 'auto';
+  modal.style.bottom = 'auto';
+  modal.style.transform = 'none';
+  return true;
+}
+
 function renderBankingLoansSnoozesTab() {
   const st = bankingGetState();
   const enc = (typeof escapeHtml === 'function')
@@ -10146,6 +10170,26 @@ function renderBankingLoansSnoozesTab() {
     hide_completed_non_current_items: true
   });
 
+  const makeDefaultPagination = () => ({
+    finance_cases: {
+      page: 1,
+      page_size: 20,
+      total_count: 0,
+      total_pages: 1,
+      sort_key: 'created_at',
+      sort_dir: 'desc',
+      sort_explicit: false
+    },
+    timesheet_snoozes: {
+      page: 1,
+      page_size: 20,
+      total_count: 0,
+      total_pages: 1,
+      sort_key: 'created_at',
+      sort_dir: 'desc'
+    }
+  });
+
   const makeDefaultMeta = () => ({
     fetchedAt: '',
     autoLoadedOnce: false,
@@ -10175,6 +10219,7 @@ function renderBankingLoansSnoozesTab() {
           error: ''
         },
         filters: makeDefaultFilters(),
+        pagination: makeDefaultPagination(),
         meta: makeDefaultMeta()
       };
 
@@ -10205,6 +10250,24 @@ function renderBankingLoansSnoozesTab() {
   ls.meta = (ls.meta && typeof ls.meta === 'object')
     ? ls.meta
     : makeDefaultMeta();
+
+  const normalizePageState = (value, fallback) => {
+    const src = (value && typeof value === 'object') ? value : {};
+    return {
+      ...fallback,
+      ...src,
+      page: Math.max(1, Math.trunc(Number(src.page) || fallback.page)),
+      page_size: Math.min(20, Math.max(1, Math.trunc(Number(src.page_size) || fallback.page_size))),
+      total_count: Math.max(0, Math.trunc(Number(src.total_count) || 0)),
+      total_pages: Math.max(1, Math.trunc(Number(src.total_pages) || 1))
+    };
+  };
+  const defaultPagination = makeDefaultPagination();
+  const paginationIn = (ls.pagination && typeof ls.pagination === 'object') ? ls.pagination : {};
+  ls.pagination = {
+    finance_cases: normalizePageState(paginationIn.finance_cases, defaultPagination.finance_cases),
+    timesheet_snoozes: normalizePageState(paginationIn.timesheet_snoozes, defaultPagination.timesheet_snoozes)
+  };
 
   if (typeof ls.list.loading !== 'boolean') ls.list.loading = false;
   if (typeof ls.list.error !== 'string') ls.list.error = '';
@@ -10242,6 +10305,8 @@ function renderBankingLoansSnoozesTab() {
   const financeCases = Array.isArray(data.finance_cases) ? data.finance_cases : [];
   const timesheetSnoozes = Array.isArray(data.timesheet_snoozes) ? data.timesheet_snoozes : [];
   const f = ls.filters;
+  const financePagination = ls.pagination.finance_cases;
+  const timesheetPagination = ls.pagination.timesheet_snoozes;
 
   const fmtMoney = (v) => {
     const n = Number(v);
@@ -10300,6 +10365,57 @@ function renderBankingLoansSnoozesTab() {
     if (s === 'MANUAL_DEBT_ADJUSTMENT') return 'Manual Debt Adjustment';
     if (s === 'MANUAL_CREDIT_ADJUSTMENT') return 'Manual Credit Adjustment';
     return String(raw || '—').trim() || '—';
+  };
+
+  const renderFinanceSortHeader = (label, sortKey) => {
+    const active = String(financePagination.sort_key || '') === sortKey;
+    const direction = String(financePagination.sort_dir || '').toLowerCase() === 'asc' ? 'asc' : 'desc';
+    const indicator = active ? (direction === 'asc' ? '▲' : '▼') : '↕';
+    const ariaSort = active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none';
+    return `
+      <button
+        type="button"
+        class="btn btn-xs btn-outline"
+        data-action="banking:finance:sortCases"
+        data-sort-key="${enc(sortKey)}"
+        aria-label="Sort finance cases by ${enc(label)}"
+        aria-sort="${enc(ariaSort)}"
+        style="white-space:nowrap;"
+      >${enc(label)} <span aria-hidden="true">${enc(indicator)}</span></button>
+    `;
+  };
+
+  const renderPaginationControls = (containerKey, label, pageState) => {
+    const page = Math.max(1, Math.trunc(Number(pageState?.page) || 1));
+    const totalPages = Math.max(1, Math.trunc(Number(pageState?.total_pages) || 1));
+    const totalCount = Math.max(0, Math.trunc(Number(pageState?.total_count) || 0));
+    return `
+      <div
+        data-loans-snoozes-pagination="${enc(containerKey)}"
+        style="display:flex;justify-content:flex-end;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;"
+      >
+        <span class="mini" style="opacity:.8;">${enc(String(totalCount))} ${enc(label.toLowerCase())}</span>
+        <button
+          type="button"
+          class="btn btn-sm btn-outline"
+          data-action="banking:finance:changePage"
+          data-page-container="${enc(containerKey)}"
+          data-page-direction="prev"
+          aria-label="Previous ${enc(label)} page"
+          ${page <= 1 ? 'disabled aria-disabled="true"' : ''}
+        >Previous</button>
+        <span class="mini mono" aria-label="${enc(label)} page ${enc(String(page))} of ${enc(String(totalPages))}">Page ${enc(String(page))} of ${enc(String(totalPages))}</span>
+        <button
+          type="button"
+          class="btn btn-sm btn-outline"
+          data-action="banking:finance:changePage"
+          data-page-container="${enc(containerKey)}"
+          data-page-direction="next"
+          aria-label="Next ${enc(label)} page"
+          ${page >= totalPages ? 'disabled aria-disabled="true"' : ''}
+        >Next</button>
+      </div>
+    `;
   };
 
   const friendlyCodeLabel = (raw, fallback = '—') => {
@@ -10641,6 +10757,7 @@ function renderBankingLoansSnoozesTab() {
     const outstanding = Number(row.outstanding_amount || 0);
     const original = Number(row.original_amount || 0);
     const comment = String(row.adjustment_comment || row.notes || '').trim();
+    const createdAt = String(row.created_at_utc || row.created_at || '').trim();
     const latestRecoveryPayDate = String(row.latest_recovery_pay_date || '').trim();
     const latestRemittanceSentAt = String(row.latest_remittance_sent_at_utc || '').trim();
     const blockedReason = String(row.blocked_reason || '').trim();
@@ -10759,7 +10876,7 @@ function renderBankingLoansSnoozesTab() {
       : `<span class="mini" style="opacity:.75;">—</span>`;
 
     return `
-      <tr>
+      <tr data-loans-snoozes-record="finance-case">
         <td>
           <div style="display:flex;flex-direction:column;gap:6px;">
             <div style="font-weight:700;">${enc(adminLabel)}</div>
@@ -10774,6 +10891,9 @@ function renderBankingLoansSnoozesTab() {
             <div>${enc(candidateLabel)}</div>
             <div class="mini" style="opacity:.8;">${enc(clientLabel)}</div>
           </div>
+        </td>
+        <td class="mini" style="white-space:nowrap;">
+          <span class="mono">${enc(fmtDateTime(createdAt))}</span>
         </td>
         <td>
           <div style="display:flex;flex-direction:column;gap:6px;">
@@ -10834,7 +10954,7 @@ function renderBankingLoansSnoozesTab() {
     const candidateLabel = String(first.candidate_display_name || first.candidate_tms_ref || group.candidate_id).trim();
     const labels = group.rows.map((row) => String(row.expense_label || row.expense_code || 'Expense').trim()).filter(Boolean);
     return `
-      <tr style="background:rgba(148,163,184,.08);">
+      <tr data-loans-snoozes-group="timesheet-expenses" style="background:rgba(148,163,184,.08);">
         <td><strong>${enc(candidateLabel || 'Candidate')}</strong></td>
         <td colspan="3">
           <div style="display:flex;flex-direction:column;gap:4px;">
@@ -10901,7 +11021,7 @@ function renderBankingLoansSnoozesTab() {
     `);
 
     return `
-      <tr>
+      <tr data-loans-snoozes-record="timesheet-snooze">
         <td>
           <div style="display:flex;flex-direction:column;gap:4px;">
             <div>${enc(candidateLabel)}</div>
@@ -11085,14 +11205,15 @@ function renderBankingLoansSnoozesTab() {
           <div class="card" style="padding:10px;">
             <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
               <div style="font-weight:700;">Finance Cases</div>
-              <div class="mini" style="opacity:.8;">${enc(String(Number(ls.meta.finance_case_count || financeCases.length || 0)))} case(s)</div>
+              <div class="mini" style="opacity:.8;">${enc(String(financePagination.total_count))} case(s)</div>
             </div>
             <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
               <table class="grid" style="min-width:1600px;table-layout:auto;">
                 <thead>
                   <tr>
-                    <th>Case Type / State</th>
-                    <th>Candidate / Client</th>
+                    <th>${renderFinanceSortHeader('Case Type', 'case_type')}</th>
+                    <th>${renderFinanceSortHeader('Candidate', 'candidate')}</th>
+                    <th>${renderFinanceSortHeader('Creation Date', 'created_at')}</th>
                     <th>Lifecycle / Blocked reason</th>
                     <th>Amounts</th>
                     <th>Schedule / Dates</th>
@@ -11104,18 +11225,19 @@ function renderBankingLoansSnoozesTab() {
                 <tbody>
                   ${financeRowsHtml || `
                     <tr>
-                      <td colspan="8" class="mini" style="opacity:.85;">No finance cases found.</td>
+                      <td colspan="9" class="mini" style="opacity:.85;">No finance cases found.</td>
                     </tr>
                   `}
                 </tbody>
               </table>
             </div>
+            ${renderPaginationControls('finance_cases', 'Finance cases', financePagination)}
           </div>
 
           <div class="card" style="padding:10px;">
             <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
               <div style="font-weight:700;">Timesheet Snoozes</div>
-              <div class="mini" style="opacity:.8;">${enc(String(Number(ls.meta.timesheet_snooze_count || timesheetSnoozes.length || 0)))} snooze(s)</div>
+              <div class="mini" style="opacity:.8;">${enc(String(timesheetPagination.total_count))} snooze(s)</div>
             </div>
              <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
               <table class="grid" style="min-width:1320px;table-layout:auto;">
@@ -11137,6 +11259,7 @@ function renderBankingLoansSnoozesTab() {
                 </tbody>
               </table>
             </div>
+            ${renderPaginationControls('timesheet_snoozes', 'Timesheet snoozes', timesheetPagination)}
           </div>
         </div>
       </div>
@@ -90314,6 +90437,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       if (!id) return;
       st.loansSnoozes.filters.candidate_id = id;
       st.loansSnoozes.filters.candidate_label = label || '';
+      resetLoansSnoozesPages();
       await loadLoansSnoozes({ force: true });
       await safeRerender(null);
     };
@@ -90325,6 +90449,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       if (!id) return;
       st.loansSnoozes.filters.client_id = id;
       st.loansSnoozes.filters.client_label = label || '';
+      resetLoansSnoozesPages();
       await loadLoansSnoozes({ force: true });
       await safeRerender(null);
     };
@@ -92085,6 +92210,40 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         return { error: String(e?.message || e || 'Unable to open prompt.') };
       }
     };
+    const ensureLoansSnoozesPagination = () => {
+      st.loansSnoozes.pagination = (st.loansSnoozes.pagination && typeof st.loansSnoozes.pagination === 'object')
+        ? st.loansSnoozes.pagination
+        : {};
+      st.loansSnoozes.pagination.finance_cases = (
+        st.loansSnoozes.pagination.finance_cases && typeof st.loansSnoozes.pagination.finance_cases === 'object'
+      ) ? st.loansSnoozes.pagination.finance_cases : {
+        page: 1,
+        page_size: 20,
+        total_count: 0,
+        total_pages: 1,
+        sort_key: 'created_at',
+        sort_dir: 'desc',
+        sort_explicit: false
+      };
+      st.loansSnoozes.pagination.timesheet_snoozes = (
+        st.loansSnoozes.pagination.timesheet_snoozes && typeof st.loansSnoozes.pagination.timesheet_snoozes === 'object'
+      ) ? st.loansSnoozes.pagination.timesheet_snoozes : {
+        page: 1,
+        page_size: 20,
+        total_count: 0,
+        total_pages: 1,
+        sort_key: 'created_at',
+        sort_dir: 'desc'
+      };
+      return st.loansSnoozes.pagination;
+    };
+
+    const resetLoansSnoozesPages = () => {
+      const pagination = ensureLoansSnoozesPagination();
+      pagination.finance_cases.page = 1;
+      pagination.timesheet_snoozes.page = 1;
+    };
+
     const resetLoansSnoozesFilters = () => {
       try {
         st.loansSnoozes.filters = {
@@ -92097,6 +92256,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           snooze_mode: '',
           hide_completed_non_current_items: true
         };
+        resetLoansSnoozesPages();
       } catch {}
     };
 
@@ -92115,6 +92275,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
               hide_completed_non_current_items: true
             };
         st.loansSnoozes.filters[k] = v;
+        resetLoansSnoozesPages();
       } catch {}
     };
 
@@ -93937,6 +94098,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     if (a === 'banking:finance:clearCandidateFilter') {
       st.loansSnoozes.filters.candidate_id = '';
       st.loansSnoozes.filters.candidate_label = '';
+      resetLoansSnoozesPages();
       await loadLoansSnoozes({ force: true });
       await safeRerender(null);
       return;
@@ -93965,6 +94127,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     if (a === 'banking:finance:clearClientFilter') {
       st.loansSnoozes.filters.client_id = '';
       st.loansSnoozes.filters.client_label = '';
+      resetLoansSnoozesPages();
       await loadLoansSnoozes({ force: true });
       await safeRerender(null);
       return;
@@ -93973,35 +94136,81 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     if (a === 'banking:finance:setCandidateId') {
       const v = (el && el.value != null) ? String(el.value) : '';
       setLoansSnoozesFilter('candidate_id', String(v || '').trim());
+      await loadLoansSnoozes({ force: true });
       return;
     }
 
     if (a === 'banking:finance:setClientId') {
       const v = (el && el.value != null) ? String(el.value) : '';
       setLoansSnoozesFilter('client_id', String(v || '').trim());
+      await loadLoansSnoozes({ force: true });
       return;
     }
 
     if (a === 'banking:finance:setCaseType') {
       const v = (el && el.value != null) ? String(el.value) : '';
       setLoansSnoozesFilter('case_type', String(v || '').trim().toUpperCase());
+      await loadLoansSnoozes({ force: true });
       return;
     }
 
     if (a === 'banking:finance:setViewMode') {
       const v = (el && el.value != null) ? String(el.value) : '';
       setLoansSnoozesFilter('view_mode', String(v || '').trim().toUpperCase());
+      await loadLoansSnoozes({ force: true });
       return;
     }
 
     if (a === 'banking:finance:setSnoozeMode') {
       const v = (el && el.value != null) ? String(el.value) : '';
       setLoansSnoozesFilter('snooze_mode', String(v || '').trim().toUpperCase());
+      await loadLoansSnoozes({ force: true });
       return;
     }
     if (a === 'banking:finance:setHideCompletedNonCurrentItems') {
       const checked = !!(el && (el.checked === true || String(el.value || '').trim().toLowerCase() === 'true'));
       setLoansSnoozesFilter('hide_completed_non_current_items', checked);
+      await loadLoansSnoozes({ force: true });
+      return;
+    }
+
+    if (a === 'banking:finance:sortCases') {
+      const sortKey = String(ds('sortKey') || dget('data-sort-key') || '').trim().toLowerCase();
+      if (!['created_at', 'candidate', 'case_type'].includes(sortKey)) {
+        toast('That finance-case sort option is not available.');
+        return;
+      }
+
+      const pagination = ensureLoansSnoozesPagination();
+      const financePage = pagination.finance_cases;
+      const sameExplicitSort = financePage.sort_explicit === true && String(financePage.sort_key || '') === sortKey;
+      const firstDirection = sortKey === 'created_at' ? 'desc' : 'asc';
+      financePage.sort_key = sortKey;
+      financePage.sort_dir = sameExplicitSort
+        ? (String(financePage.sort_dir || '').toLowerCase() === 'asc' ? 'desc' : 'asc')
+        : firstDirection;
+      financePage.sort_explicit = true;
+      financePage.page = 1;
+      await loadLoansSnoozes({ force: true });
+      return;
+    }
+
+    if (a === 'banking:finance:changePage') {
+      const containerKey = String(ds('pageContainer') || dget('data-page-container') || '').trim();
+      const direction = String(ds('pageDirection') || dget('data-page-direction') || '').trim().toLowerCase();
+      if (!['finance_cases', 'timesheet_snoozes'].includes(containerKey) || !['prev', 'next'].includes(direction)) {
+        toast('That page is not available.');
+        return;
+      }
+
+      const pagination = ensureLoansSnoozesPagination();
+      const pageState = pagination[containerKey];
+      const page = Math.max(1, Math.trunc(Number(pageState.page) || 1));
+      const totalPages = Math.max(1, Math.trunc(Number(pageState.total_pages) || 1));
+      pageState.page = direction === 'next'
+        ? Math.min(totalPages, page + 1)
+        : Math.max(1, page - 1);
+      await loadLoansSnoozes({ force: true });
       return;
     }
 
@@ -152509,11 +152718,33 @@ async function bankingLoadLoansSnoozes(opts) {
 
   const makeDefaultFilters = () => ({
     candidate_id: '',
+    candidate_label: '',
     client_id: '',
+    client_label: '',
     case_type: '',
     view_mode: '',
     snooze_mode: '',
     hide_completed_non_current_items: true
+  });
+
+  const makeDefaultPagination = () => ({
+    finance_cases: {
+      page: 1,
+      page_size: 20,
+      total_count: 0,
+      total_pages: 1,
+      sort_key: 'created_at',
+      sort_dir: 'desc',
+      sort_explicit: false
+    },
+    timesheet_snoozes: {
+      page: 1,
+      page_size: 20,
+      total_count: 0,
+      total_pages: 1,
+      sort_key: 'created_at',
+      sort_dir: 'desc'
+    }
   });
 
   const makeDefaultMeta = () => ({
@@ -152541,7 +152772,9 @@ async function bankingLoadLoansSnoozes(opts) {
 
     return {
       candidate_id: String(src.candidate_id || '').trim(),
+      candidate_label: String(src.candidate_label || '').trim(),
       client_id: String(src.client_id || '').trim(),
+      client_label: String(src.client_label || '').trim(),
       case_type: String(src.case_type || '').trim(),
       view_mode: String(src.view_mode || '').trim(),
       snooze_mode: String(src.snooze_mode || '').trim(),
@@ -152561,6 +152794,7 @@ async function bankingLoadLoansSnoozes(opts) {
           error: ''
         },
         filters: makeDefaultFilters(),
+        pagination: makeDefaultPagination(),
         meta: makeDefaultMeta()
       };
 
@@ -152580,6 +152814,30 @@ async function bankingLoadLoansSnoozes(opts) {
   ls.meta = (ls.meta && typeof ls.meta === 'object')
     ? ls.meta
     : makeDefaultMeta();
+
+  const paginationIn = (ls.pagination && typeof ls.pagination === 'object')
+    ? ls.pagination
+    : makeDefaultPagination();
+  const defaultPagination = makeDefaultPagination();
+  const normalizePageState = (value, fallback) => {
+    const src = (value && typeof value === 'object') ? value : {};
+    const page = Math.max(1, Math.trunc(Number(src.page) || fallback.page));
+    const pageSize = Math.min(20, Math.max(1, Math.trunc(Number(src.page_size) || fallback.page_size)));
+    const totalCount = Math.max(0, Math.trunc(Number(src.total_count) || 0));
+    const totalPages = Math.max(1, Math.trunc(Number(src.total_pages) || 1));
+    return {
+      ...fallback,
+      ...src,
+      page,
+      page_size: pageSize,
+      total_count: totalCount,
+      total_pages: totalPages
+    };
+  };
+  ls.pagination = {
+    finance_cases: normalizePageState(paginationIn.finance_cases, defaultPagination.finance_cases),
+    timesheet_snoozes: normalizePageState(paginationIn.timesheet_snoozes, defaultPagination.timesheet_snoozes)
+  };
 
   if (typeof ls.list.loading !== 'boolean') ls.list.loading = false;
   if (typeof ls.list.error !== 'string') ls.list.error = '';
@@ -152807,6 +153065,15 @@ async function bankingLoadLoansSnoozes(opts) {
 
     if (ls.filters.candidate_id) params.set('candidate_id', ls.filters.candidate_id);
     if (ls.filters.client_id) params.set('client_id', ls.filters.client_id);
+    if (ls.filters.case_type) params.set('case_type', ls.filters.case_type);
+    if (ls.filters.view_mode) params.set('view_mode', ls.filters.view_mode);
+    if (ls.filters.snooze_mode) params.set('snooze_mode', ls.filters.snooze_mode);
+    params.set('finance_page', String(ls.pagination.finance_cases.page));
+    params.set('finance_page_size', String(ls.pagination.finance_cases.page_size));
+    params.set('finance_sort_key', String(ls.pagination.finance_cases.sort_key || 'created_at'));
+    params.set('finance_sort_dir', String(ls.pagination.finance_cases.sort_dir || 'desc'));
+    params.set('timesheet_page', String(ls.pagination.timesheet_snoozes.page));
+    params.set('timesheet_page_size', String(ls.pagination.timesheet_snoozes.page_size));
     params.set(
       'hide_completed_non_current_items',
       ls.filters.hide_completed_non_current_items ? 'true' : 'false'
@@ -152856,10 +153123,19 @@ async function bankingLoadLoansSnoozes(opts) {
       ok: (rawDataIn.ok !== false),
       summary: (rawDataIn.summary && typeof rawDataIn.summary === 'object') ? cloneJson(rawDataIn.summary, {}) : {},
       finance_cases: Array.isArray(rawDataIn.finance_cases) ? cloneJson(rawDataIn.finance_cases, []) : [],
-      timesheet_snoozes: Array.isArray(rawDataIn.timesheet_snoozes) ? cloneJson(rawDataIn.timesheet_snoozes, []) : []
+      timesheet_snoozes: Array.isArray(rawDataIn.timesheet_snoozes) ? cloneJson(rawDataIn.timesheet_snoozes, []) : [],
+      pagination: (rawDataIn.pagination && typeof rawDataIn.pagination === 'object')
+        ? cloneJson(rawDataIn.pagination, {})
+        : null
     };
 
-    const filteredFinanceCases = rawData.finance_cases.filter((row) => {
+    const serverOwnsPagination = !!(
+      rawData.pagination &&
+      rawData.pagination.finance_cases &&
+      rawData.pagination.timesheet_snoozes
+    );
+
+    const filteredFinanceCases = serverOwnsPagination ? rawData.finance_cases : rawData.finance_cases.filter((row) => {
       const snoozeObj = (row && row.snooze && typeof row.snooze === 'object') ? row.snooze : row;
       return (
         matchesCandidate(row) &&
@@ -152871,7 +153147,7 @@ async function bankingLoadLoansSnoozes(opts) {
       );
     });
 
-    const filteredTimesheetSnoozes = rawData.timesheet_snoozes.filter((row) => {
+    const filteredTimesheetSnoozes = serverOwnsPagination ? rawData.timesheet_snoozes : rawData.timesheet_snoozes.filter((row) => {
       return (
         matchesCandidate(row) &&
         matchesClient(row) &&
@@ -152883,16 +153159,34 @@ async function bankingLoadLoansSnoozes(opts) {
 
     const filteredData = {
       ok: rawData.ok,
-      summary: buildSummary(filteredFinanceCases, filteredTimesheetSnoozes),
+      summary: serverOwnsPagination
+        ? rawData.summary
+        : buildSummary(filteredFinanceCases, filteredTimesheetSnoozes),
       finance_cases: filteredFinanceCases,
-      timesheet_snoozes: filteredTimesheetSnoozes
+      timesheet_snoozes: filteredTimesheetSnoozes,
+      pagination: serverOwnsPagination ? rawData.pagination : null
     };
+
+    if (serverOwnsPagination) {
+      const financeSortExplicit = ls.pagination.finance_cases.sort_explicit === true;
+      ls.pagination = {
+        finance_cases: {
+          ...normalizePageState(rawData.pagination.finance_cases, defaultPagination.finance_cases),
+          sort_explicit: financeSortExplicit
+        },
+        timesheet_snoozes: normalizePageState(rawData.pagination.timesheet_snoozes, defaultPagination.timesheet_snoozes)
+      };
+    }
 
     ls.list.data = filteredData;
     ls.meta.fetchedAt = new Date().toISOString();
     ls.meta.autoLoadedOnce = true;
-    ls.meta.finance_case_count = filteredFinanceCases.length;
-    ls.meta.timesheet_snooze_count = filteredTimesheetSnoozes.length;
+    ls.meta.finance_case_count = serverOwnsPagination
+      ? ls.pagination.finance_cases.total_count
+      : filteredFinanceCases.length;
+    ls.meta.timesheet_snooze_count = serverOwnsPagination
+      ? ls.pagination.timesheet_snoozes.total_count
+      : filteredTimesheetSnoozes.length;
 
     ls.list.error = '';
     ls._appliedSeq = requestSeq;
@@ -313483,6 +313777,9 @@ async setTab(k) {
 
   if (timesheetTabLifecycleGuard && typeof timesheetTabLifecycleGuard.beforeRender === 'function') timesheetTabLifecycleGuard.beforeRender(merged);
   byId('modalBody').innerHTML = this.renderTab(k, merged) || '';
+  if (this.entity === 'banking' && this.kind === 'banking' && typeof clampBankingModalToViewport === 'function') {
+    try { clampBankingModalToViewport(); } catch {}
+  }
   if (timesheetTabLifecycleGuard && typeof timesheetTabLifecycleGuard.afterRender === 'function') timesheetTabLifecycleGuard.afterRender();
 
   if (this._runOnRender && typeof this.onReturn === 'function') {
