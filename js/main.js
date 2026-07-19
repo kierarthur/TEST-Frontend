@@ -10302,29 +10302,31 @@ function renderBankingLoansSnoozesTab() {
     return String(raw || '—').trim() || '—';
   };
 
-  const compactComponentSummary = (raw) => {
-    if (!raw || typeof raw !== 'object') return '';
-    if (Array.isArray(raw)) {
-      const txt = raw.map((x) => String(x || '').trim()).filter(Boolean).join(' • ');
-      return txt;
-    }
+  const friendlyCodeLabel = (raw, fallback = '—') => {
+    const value = String(raw || '').trim();
+    if (!value) return fallback;
+    if (!/^[A-Z0-9_ -]+$/.test(value)) return value;
+    return value
+      .toLowerCase()
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^./, (ch) => ch.toUpperCase());
+  };
+
+  const recoveryScopeSummary = (row) => {
+    const taxableCount = Math.max(0, asInt(row?.open_taxable_count));
+    const reimbursementCount = Math.max(0, asInt(row?.open_reimbursement_count));
     const parts = [];
-    const summaryText = String(raw.summary || raw.label || raw.description || '').trim();
-    if (summaryText) parts.push(summaryText);
-    const reusable = Number(raw.reusable_count || 0);
-    const fixed = Number(raw.fixed_reimbursement_count || raw.reimbursement_fixed_count || 0);
-    const unresolved = Number(raw.unresolved_taxable_count || 0);
-    const stale = Number(raw.stale_count || 0);
-    if (reusable > 0) parts.push(`${reusable} reusable`);
-    if (fixed > 0) parts.push(`${fixed} fixed reimbursement`);
-    if (unresolved > 0) parts.push(`${unresolved} unresolved taxable`);
-    if (stale > 0) parts.push(`${stale} stale`);
-    if (!parts.length) {
-      const keys = Object.keys(raw);
-      if (!keys.length) return '';
-      return keys.map((k) => `${k}: ${String(raw[k])}`).join(' • ');
+
+    if (taxableCount > 0) {
+      parts.push(`${taxableCount} taxable recovery ${taxableCount === 1 ? 'item' : 'items'}`);
     }
-    return parts.join(' • ');
+    if (reimbursementCount > 0) {
+      parts.push(`${reimbursementCount} reimbursement recovery ${reimbursementCount === 1 ? 'item' : 'items'}`);
+    }
+
+    if (!parts.length) return 'No recovery items currently open';
+    return parts.join(' and ');
   };
 
   const caseScopeBadges = (row) => {
@@ -10333,16 +10335,16 @@ function renderBankingLoansSnoozesTab() {
       badges.push(`<span class="pill pill-warn">Underpayment</span>`);
     }
     if (row?.is_mixed_case === true) {
-      badges.push(`<span class="pill pill-warn">Mixed</span>`);
+      badges.push(`<span class="pill pill-warn">Taxable and reimbursement recovery</span>`);
     }
     if (String(row?.blocked_state || '').trim().toUpperCase().startsWith('BLOCKED')) {
       badges.push(`<span class="pill pill-bad">Blocked</span>`);
     }
     if (Number(row?.unresolved_taxable_count || 0) > 0) {
-      badges.push(`<span class="pill pill-bad">Unresolved taxable: ${enc(String(asInt(row.unresolved_taxable_count)))}</span>`);
+      badges.push(`<span class="pill pill-bad">Payment-channel review needed: ${enc(String(asInt(row.unresolved_taxable_count)))}</span>`);
     }
     if (Number(row?.stale_count || 0) > 0) {
-      badges.push(`<span class="pill pill-warn">Stale: ${enc(String(asInt(row.stale_count)))}</span>`);
+      badges.push(`<span class="pill pill-warn">Needs refreshing: ${enc(String(asInt(row.stale_count)))}</span>`);
     }
     if (Number(row?.open_reimbursement_count || 0) > 0 && Number(row?.open_taxable_count || 0) <= 0) {
       badges.push(`<span class="pill">Reimbursement carry-forward</span>`);
@@ -10595,11 +10597,11 @@ function renderBankingLoansSnoozesTab() {
         <div class="mono" style="font-size:24px;font-weight:800;">${enc(String(Number(summary.timesheet_expense_snoozes_count || 0)))}</div>
       </div>
       <div class="card" style="padding:10px;">
-        <div class="mini" style="opacity:.8;">Mixed / blocked / stale</div>
+        <div class="mini" style="opacity:.8;">Cases needing attention</div>
         <div class="mini" style="display:flex;flex-direction:column;gap:4px;">
-          <div>Mixed: <span class="mono">${enc(String(Number(summary.mixed_finance_cases_count || 0)))}</span></div>
+          <div>Taxable and reimbursement recovery: <span class="mono">${enc(String(Number(summary.mixed_finance_cases_count || 0)))}</span></div>
           <div>Blocked: <span class="mono">${enc(String(Number(summary.unresolved_finance_cases_count || 0)))}</span></div>
-          <div>Stale: <span class="mono">${enc(String(Number(summary.stale_finance_cases_count || 0)))}</span></div>
+          <div>Needs refreshing: <span class="mono">${enc(String(Number(summary.stale_finance_cases_count || 0)))}</span></div>
         </div>
       </div>
     </div>
@@ -10642,7 +10644,7 @@ function renderBankingLoansSnoozesTab() {
     const latestRecoveryPayDate = String(row.latest_recovery_pay_date || '').trim();
     const latestRemittanceSentAt = String(row.latest_remittance_sent_at_utc || '').trim();
     const blockedReason = String(row.blocked_reason || '').trim();
-    const scopeSummary = compactComponentSummary(row.component_resolution_summary_json);
+    const scopeSummary = recoveryScopeSummary(row);
     const scopeBadges = caseScopeBadges(row);
     const hasActiveSnooze = financeHasActiveSnooze(row);
     const snoozeLabel = (() => {
@@ -10749,7 +10751,7 @@ function renderBankingLoansSnoozesTab() {
     const remittanceHtml = latestRemittanceStatus
       ? `
         <div class="mini" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <span class="pill ${enc(pillClassForStatus(latestRemittanceStatus))}">${enc(latestRemittanceStatus)}</span>
+          <span class="pill ${enc(pillClassForStatus(latestRemittanceStatus))}">${enc(friendlyCodeLabel(latestRemittanceStatus))}</span>
           ${latestRemittanceSentAt ? `<span class="mono">${enc(fmtDateTime(latestRemittanceSentAt))}</span>` : ''}
         </div>
         ${remittanceError ? `<div class="mini" style="opacity:.85;color:var(--danger,#ef4444);white-space:pre-wrap;">${enc(remittanceError)}</div>` : ''}
@@ -10775,9 +10777,9 @@ function renderBankingLoansSnoozesTab() {
         </td>
         <td>
           <div style="display:flex;flex-direction:column;gap:6px;">
-            <span class="pill ${enc(pillClassForStatus(status))}">${enc(status)}</span>
-            ${payoutStatus ? `<span class="pill ${enc(pillClassForStatus(payoutStatus))}">${enc(`Payout ${payoutStatus}`)}</span>` : ''}
-            ${blockedReason ? `<div class="mini" style="opacity:.9;white-space:pre-wrap;">Blocked reason: ${enc(blockedReason)}</div>` : `<div class="mini" style="opacity:.65;">Blocked reason: —</div>`}
+            <span class="pill ${enc(pillClassForStatus(status))}">${enc(friendlyCodeLabel(status))}</span>
+            ${payoutStatus ? `<span class="pill ${enc(pillClassForStatus(payoutStatus))}">${enc(`Payout: ${friendlyCodeLabel(payoutStatus)}`)}</span>` : ''}
+            ${blockedReason ? `<div class="mini" style="opacity:.9;white-space:pre-wrap;">Blocked reason: ${enc(friendlyCodeLabel(blockedReason))}</div>` : `<div class="mini" style="opacity:.65;">Blocked reason: —</div>`}
           </div>
         </td>
         <td>
@@ -10797,9 +10799,8 @@ function renderBankingLoansSnoozesTab() {
         <td>
           <div style="display:flex;flex-direction:column;gap:6px;">
             <span class="pill ${enc(pillClassForStatus(snoozeState))}">${enc(snoozeLabel)}</span>
-            ${comment ? `<div class="mini" style="opacity:.9;white-space:pre-wrap;">${enc(comment)}</div>` : `<div class="mini" style="opacity:.65;">No comment</div>`}
-            ${scopeSummary ? `<div class="mini" style="opacity:.85;white-space:pre-wrap;">${enc(scopeSummary)}</div>` : `<div class="mini" style="opacity:.65;">No component summary</div>`}
-            <div class="mini" style="opacity:.85;">Open taxable: <span class="mono">${enc(String(asInt(row.open_taxable_count)))}</span> • Reimbursement: <span class="mono">${enc(String(asInt(row.open_reimbursement_count)))}</span></div>
+            <div class="mini" style="opacity:.9;"><strong>Recovery:</strong> ${enc(scopeSummary)}</div>
+            ${comment ? `<div class="mini" style="opacity:.9;white-space:pre-wrap;"><strong>Comment:</strong> ${enc(comment)}</div>` : `<div class="mini" style="opacity:.65;"><strong>Comment:</strong> No comment</div>`}
           </div>
         </td>
         <td>
@@ -10863,14 +10864,12 @@ function renderBankingLoansSnoozesTab() {
     const timesheetIdLabel = String(row.current_timesheet_id || row.timesheet_id || row.original_timesheet_id || '—').trim() || '—';
     const originalTimesheetId = String(row.original_timesheet_id || '').trim();
     const segmentIdLabel = String(row.segment_id || row.original_segment_id || '—').trim() || '—';
-    const segmentStableKey = String(row.segment_stable_key || '').trim();
     const segmentCount = Number(row.segment_count || 0);
     const payAmount = Number(row.pay_amount_ex_vat || 0);
     const segmentRows = Array.isArray(row.segment_rows) ? row.segment_rows : [];
     const isExpenseRow = String(row?.row_kind || '').trim().toUpperCase() === 'TIMESHEET_EXPENSE';
     const expenseLabel = String(row.expense_label || row.expense_code || 'Expense').trim() || 'Expense';
     const expenseCode = String(row.expense_code || '').trim().toUpperCase();
-    const sourceRef = String(row.source_ref || '').trim();
     const replacementSourceRef = String(row.replacement_expense_source_ref || '').trim();
     const hasExpandableDetail = !isExpenseRow && segmentRows.length > 0;
     const summaryLabel = rowKind === 'WHOLE_TIMESHEET'
@@ -10881,9 +10880,7 @@ function renderBankingLoansSnoozesTab() {
       <div class="card" style="padding:8px;margin-top:8px;">
         <div class="mini" style="display:flex;flex-direction:column;gap:4px;">
           <div>Expense: <strong>${enc(expenseLabel)}</strong>${expenseCode ? ` • Code <span class="mono">${enc(expenseCode)}</span>` : ''}</div>
-          <div>Exact source: <span class="mono">${enc(sourceRef || 'Unavailable')}</span></div>
-          ${replacementSourceRef ? `<div>Current replacement source: <span class="mono">${enc(replacementSourceRef)}</span></div>` : ''}
-          ${row.expense_source_basis_fingerprint ? `<div>Source fingerprint: <span class="mono">${enc(String(row.expense_source_basis_fingerprint))}</span></div>` : ''}
+          ${replacementSourceRef ? '<div>The original expense was replaced by a newer entry.</div>' : ''}
         </div>
       </div>
     ` : (hasExpandableDetail ? `
@@ -10921,7 +10918,6 @@ function renderBankingLoansSnoozesTab() {
               <div>Timesheet: <span class="mono">${enc(timesheetIdLabel)}</span></div>
               ${originalTimesheetId && originalTimesheetId !== timesheetIdLabel ? `<div>Original timesheet: <span class="mono">${enc(originalTimesheetId)}</span></div>` : ''}
               ${rowKind === 'SEGMENT' ? `<div>Segment: <span class="mono">${enc(segmentIdLabel)}</span></div>` : ''}
-              ${rowKind === 'SEGMENT' && segmentStableKey ? `<div>Stable key: <span class="mono">${enc(segmentStableKey)}</span></div>` : ''}
               ${isExpenseRow ? `<div>Expense: <strong>${enc(expenseLabel)}</strong>${expenseCode ? ` • <span class="mono">${enc(expenseCode)}</span>` : ''}</div>` : ''}
               <div>Reference: <span class="mono">${enc(referenceNumber || '—')}</span></div>
               ${(rowKind === 'WHOLE_TIMESHEET' || isExpenseRow) ? `<div>Week ending: <span class="mono">${enc(fmtDate(row.week_ending_date))}</span></div>` : ''}
@@ -11100,7 +11096,7 @@ function renderBankingLoansSnoozesTab() {
                     <th>Lifecycle / Blocked reason</th>
                     <th>Amounts</th>
                     <th>Schedule / Dates</th>
-                    <th>Scope / Snooze / Comment</th>
+                    <th>Recovery / Snooze / Comment</th>
                     <th>Remittance / Notice</th>
                     <th>Actions</th>
                   </tr>
