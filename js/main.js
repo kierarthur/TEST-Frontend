@@ -81878,7 +81878,7 @@ function renderBankingPayBatchChildModalOverview() {
             const weekKey = detailExpansionKey('week', weekGroup.weekEnding || 'not-recorded');
             const weekExpanded = groupExpansionState[weekKey] === true;
             return `
-              <section style="border:1px solid var(--line);border-radius:9px;background:var(--panel,#fff);overflow:hidden;">
+              <section style="flex:0 0 auto;border:1px solid var(--line);border-radius:9px;background:var(--panel,#fff);overflow:hidden;">
                 <div class="mini" style="padding:7px 9px;background:rgba(0,0,0,.025);display:flex;align-items:center;gap:8px;">
                   ${detailToggleButton(weekKey, weekExpanded, weekLabel)}
                   <span style="font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${enc(weekLabel)}</span>
@@ -81948,7 +81948,7 @@ function renderBankingPayBatchChildModalOverview() {
             const adjustmentExpanded = groupExpansionState[adjustmentKey] === true;
             const adjustmentRows = asArr(groupedDetail.adjustments).flatMap((entry) => detailLineRowsForItem(entry.item, entry.itemIndex));
             return `
-              <section style="border:1px solid var(--line);border-radius:9px;background:var(--panel,#fff);overflow:hidden;">
+              <section style="flex:0 0 auto;border:1px solid var(--line);border-radius:9px;background:var(--panel,#fff);overflow:hidden;">
                 <div class="mini" style="padding:7px 9px;background:rgba(0,0,0,.025);display:flex;align-items:center;gap:8px;">
                   ${detailToggleButton(adjustmentKey, adjustmentExpanded, 'adjustments and recoveries')}
                   <span style="font-weight:400;">Adjustments and recoveries</span>

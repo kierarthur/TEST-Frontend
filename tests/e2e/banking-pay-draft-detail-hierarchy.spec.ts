@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { resolve } from 'node:path';
 
-test.use({ serviceWorkers: 'block' });
+test.use({ serviceWorkers: 'block', viewport: { width: 768, height: 900 } });
 
-const BATCH_ID = '3498ccff-a28f-40bc-a157-d19865d6d1e0';
+const BATCH_ID = '6ff3a0d0-64dc-48ce-a983-f51566d33b19';
 
 test('uses frozen draft context and a week/client/timesheet hierarchy without re-offering the reserved recovery', async ({ page }) => {
   test.setTimeout(180_000);
@@ -64,7 +64,7 @@ test('uses frozen draft context and a week/client/timesheet hierarchy without re
   await expect(batchRow).toBeVisible({ timeout: 60_000 });
   await batchRow.dblclick();
 
-  await expect(page.getByText('Pay Batch — 3498ccff', { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('Pay Batch — 6ff3a0d0', { exact: true })).toBeVisible({ timeout: 60_000 });
   const candidateRow = page
     .locator('tr')
     .filter({ has: page.locator('[data-action="banking:pay:child:toggleExpandCandidate"]') })
@@ -117,6 +117,31 @@ test('uses frozen draft context and a week/client/timesheet hierarchy without re
   await adjustments.getByRole('button', { name: 'Expand adjustments and recoveries', exact: true }).click();
   await expect(adjustments).toContainText('Overpayment recovery');
   await expect(adjustments).toContainText('£-2.61');
+
+  const detailSections = detailRow.locator('td[colspan="4"] > div > div > section');
+  expect(await detailSections.count()).toBeGreaterThanOrEqual(5);
+  const detailLayout = await detailSections.evaluateAll((sections) => {
+    const container = sections[0]?.parentElement;
+    const rectangles = sections.map((section) => {
+      const rect = section.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        flexShrink: getComputedStyle(section).flexShrink
+      };
+    });
+    return {
+      clientHeight: container?.clientHeight || 0,
+      scrollHeight: container?.scrollHeight || 0,
+      rectangles
+    };
+  });
+  expect(detailLayout.rectangles.every((rect) => rect.flexShrink === '0')).toBe(true);
+  for (let index = 1; index < detailLayout.rectangles.length; index += 1) {
+    expect(detailLayout.rectangles[index].top).toBeGreaterThanOrEqual(detailLayout.rectangles[index - 1].bottom - 0.5);
+  }
+  expect(detailLayout.scrollHeight).toBeGreaterThan(detailLayout.clientHeight);
+
   await expect(detailRow).not.toContainText('Client not recorded');
   await expect(detailRow).toContainText('Displayed frozen total');
   await expect(detailRow).toContainText('£1120.93');
