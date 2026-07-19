@@ -45429,8 +45429,20 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
   const state = {
     finance_case_id: financeCaseId,
     loading: true,
+    loadStarted: false,
     error: '',
     payload: null
+  };
+
+  const auditStatusLabel = (raw) => {
+    const value = String(raw || '').trim();
+    if (!value) return '—';
+    if (!/^[A-Z0-9_ -]+$/.test(value)) return value;
+    return value
+      .toLowerCase()
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^./, (ch) => ch.toUpperCase());
   };
 
   const fmtDate = (v) => {
@@ -45550,18 +45562,33 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
   };
 
   const rerenderChild = async () => {
+    let frameRepainted = false;
     try {
       const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      if (!fr || String(fr.kind || '') !== 'banking-finance-case-audit') return;
-      const tabKey = String(fr.currentTabKey || 'main').trim() || 'main';
-      try { fr._suppressDirty = true; } catch {}
-      await fr.setTab(tabKey);
-      try { fr._suppressDirty = false; } catch {}
-      try { fr._updateButtons && fr._updateButtons(); } catch {}
+      if (fr && String(fr.kind || '') === 'banking-finance-case-audit' && typeof fr.setTab === 'function') {
+        const tabKey = String(fr.currentTabKey || 'main').trim() || 'main';
+        try { fr._suppressDirty = true; } catch {}
+        await fr.setTab(tabKey);
+        try { fr._suppressDirty = false; } catch {}
+        try { fr._updateButtons && fr._updateButtons(); } catch {}
+        frameRepainted = true;
+      }
+    } catch {}
+
+    // The audit is read-only. If the shared modal frame cannot repaint (or silently
+    // leaves the loading card in place), replace only this mounted audit body so a
+    // successful response can never remain stuck behind "Loading audit…".
+    try {
+      const root = document.getElementById('bankingFinanceCaseAuditModal');
+      if (!root) return;
+      const stillStale = !!root.querySelector('.card .mini') && String(root.textContent || '').includes('Loading audit');
+      if (!frameRepainted || stillStale) root.outerHTML = renderMain();
     } catch {}
   };
 
   const loadAudit = async () => {
+    if (state.loadStarted) return;
+    state.loadStarted = true;
     state.loading = true;
     state.error = '';
     try {
@@ -45596,7 +45623,7 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
       <div class="card" style="padding:10px;">
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
           <span class="pill">${enc(caseTypeLabel(financeCase.case_type))}</span>
-          ${financeCase.status ? `<span class="pill">${enc(friendlyCodeLabel(financeCase.status))}</span>` : ''}
+          ${financeCase.status ? `<span class="pill">${enc(auditStatusLabel(financeCase.status))}</span>` : ''}
           ${financeCase.payout_status ? `<span class="pill">${enc(`Payout ${financeCase.payout_status}`)}</span>` : ''}
           ${financeCase.candidate_display_name ? `<span>${enc(financeCase.candidate_display_name)}</span>` : ''}
         </div>
@@ -45732,6 +45759,12 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
       runOnRender: true
     }
   );
+
+  // Initial showModal rendering does not call onReturn. Start the read-only
+  // request explicitly; loadStarted prevents a later tab repaint duplicating it.
+  setTimeout(() => {
+    loadAudit().catch(() => {});
+  }, 0);
 }
 
 // Full replacement for renderPayNewBatchWizard from FRONTEND 10052026.js

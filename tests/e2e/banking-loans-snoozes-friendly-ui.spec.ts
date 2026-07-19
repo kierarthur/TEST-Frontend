@@ -22,6 +22,7 @@ for (const viewport of VIEWPORTS) {
     let interceptedMainUrl = '';
     let servedMainSha256 = '';
     let mockedLoansRequestCount = 0;
+    let mockedAuditRequestCount = 0;
 
     page.on('request', (request) => {
       const url = request.url();
@@ -99,6 +100,35 @@ for (const viewport of VIEWPORTS) {
       });
     });
 
+    await page.route('**/api/banking/finance/cases/codex-friendly-ui-case/audit', async (route) => {
+      mockedAuditRequestCount += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          finance_case: {
+            finance_case_id: 'codex-friendly-ui-case',
+            case_type: 'OVERPAYMENT',
+            status: 'WRITTEN_OFF',
+            candidate_display_name: 'Test Candidate',
+            outstanding_amount: 0,
+            weekly_due: 0
+          },
+          timeline: [
+            {
+              source: 'FINANCE_CASE_EVENT',
+              event_type: 'WRITTEN_OFF',
+              title: 'Written off',
+              at_utc: '2026-07-19T01:10:21.000Z',
+              actor_display_name: 'Kier Arthur',
+              reason: 'Approved write-off'
+            }
+          ]
+        })
+      });
+    });
+
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
     await expect(page.locator('#globalLoadingOverlay')).toBeHidden({ timeout: 60_000 });
@@ -139,8 +169,18 @@ for (const viewport of VIEWPORTS) {
     expect(visibleModalText).not.toContain('Exact source:');
     expect(visibleModalText).not.toMatch(/\b(?:NOT_SNOOZED|INDEFINITE_SNOOZE|DATED_SNOOZE|SOURCE_REPLACED|SOURCE_CHANGED|SOURCE_UNAVAILABLE)\b/);
 
+    await financeCasesTable.getByRole('button', { name: 'Audit', exact: true }).click();
+    const auditModal = page.getByRole('dialog', { name: 'Finance Case Audit' });
+    await expect(auditModal).toBeVisible();
+    await expect.poll(() => mockedAuditRequestCount, { timeout: 15_000 }).toBe(1);
+    await expect(auditModal).toContainText('Written off');
+    await expect(auditModal).toContainText('Kier Arthur');
+    await expect(auditModal).toContainText('Approved write-off');
+    await expect(auditModal).not.toContainText('Loading audit');
+
     expect(productionBackendRequests).toEqual([]);
     expect(financeMutationRequests).toEqual([]);
     expect(mockedLoansRequestCount).toBeGreaterThan(0);
+    expect(mockedAuditRequestCount).toBe(1);
   });
 }
