@@ -108,9 +108,48 @@ test('popover treats deferred alert detail as loading and never as permanently u
     }
   });
 
-  assert.match(markup, /Loading Banking alert details/);
+  assert.match(markup, /Loading Banking alert messages/);
   assert.doesNotMatch(markup, /details are not available yet/i);
   assert.match(markup, /data-banking-alert-details-loading="1"/);
+  assert.match(markup, /Retry loading alert messages/);
+});
+
+test('count-only refresh cannot replace already-loaded messages for the same alert state', () => {
+  const source = sliceBetween('function renderBankingNavAlertPopover(attentionState)', 'function applyAlertSummaryToState(responsePayload)');
+  const context = {
+    window: {
+      __bankingNavAttentionState: {
+        count: 2,
+        alerts: [scheduledAlert, settledAlert],
+        banking_alert_hash: 'same-alert-hash',
+        banking_alert_summary: {
+          alerts: [scheduledAlert, settledAlert],
+          unacknowledged_count: 2,
+          banking_alert_hash: 'same-alert-hash'
+        }
+      }
+    },
+    Intl,
+    Date,
+    Number,
+    String,
+    Math,
+    Array,
+    Object,
+    JSON,
+    encodeURIComponent
+  };
+  vm.runInNewContext(source, context, { filename: 'banking-alert-popover-preserve.js' });
+  const markup = context.renderBankingNavAlertPopover({
+    count: 2,
+    alerts: [],
+    detailsDeferred: true,
+    banking_alert_hash: 'same-alert-hash'
+  });
+
+  assert.match(markup, /Future payment batch scheduled/);
+  assert.match(markup, /Payment batch settled/);
+  assert.doesNotMatch(markup, /Loading Banking alert messages/);
 });
 
 test('opening a popover with missing rows starts the dedicated full-detail alert fetch', () => {
@@ -118,15 +157,24 @@ test('opening a popover with missing rows starts the dedicated full-detail alert
   assert.match(handlers, /startDirectAlertDetailFetch/);
   assert.match(handlers, /bankingAlertsFetchActive\(\{ silent: true, limit: 100 \}\)/);
   assert.match(handlers, /missingRowsForPositiveCount === true[\s\S]*startDirectAlertDetailFetch\(hash\)/);
+  assert.match(handlers, /if \(attempt >= 3\) return/);
+  assert.match(handlers, /startDirectAlertDetailFetch\(h, \{ attempt: attempt \+ 1 \}\)/);
+  assert.match(handlers, /\.catch\(\(\) => \{[\s\S]*scheduleRetry\(\)/);
 });
 
-test('alert preferences closes the high-layer alert popover before opening preferences', () => {
+test('alert preferences opens a dedicated top-layer dialog before removing its originating popover', () => {
   const handlers = sliceBetween('function attachBankingNavAlertPopoverHandlers()', 'function renderBankingNavAlertPopover(attentionState)');
   const preferencesBranch = handlers.slice(
     handlers.indexOf("if (action === 'banking:nav:alerts:preferences')"),
     handlers.indexOf("if (action === 'banking:nav:alerts:clear')")
   );
-  assert.match(preferencesBranch, /removePopover\(\)/);
+  assert.match(handlers, /const removePreferencesDialog = \(\) =>/);
+  assert.match(handlers, /const openPreferencesDialog = \(\) =>/);
+  assert.match(handlers, /data-banking-alert-preferences-dialog/);
+  assert.match(handlers, /setTimeout\(\(\) => \{[\s\S]*removePopover\(\)/);
+  assert.match(preferencesBranch, /openPreferencesDialog\(\)/);
+  assert.doesNotMatch(preferencesBranch, /openUiConfirmModal/);
+  assert.doesNotMatch(preferencesBranch, /openUiHtmlModal/);
   assert.doesNotMatch(preferencesBranch, /refreshOpenPopover/);
   assert.doesNotMatch(preferencesBranch, /refreshBankingNavAttentionFromCachedRows/);
 });
@@ -387,4 +435,66 @@ test('preferences expose successful lifecycle alerts as enabled by default', () 
   assert.match(mainSource, /Immediate payments and CSV settlements only alert on settlement/);
   assert.match(mainSource, /await bankingAlertsFetchActive\(\{ silent: true, limit: 100 \}\)/);
   assert.doesNotMatch(mainSource, /function renderBankingNavAlertPopover[\s\S]*?isSuccessOnlyAlert/);
+});
+
+function createPreferencesSaveContext() {
+  const requests = [];
+  const source = sliceBetween('async function bankingAlertPreferencesSave(preferences)', 'function startBankingPayBatchLiveWatch');
+  const context = {
+    window: { __changesHeartbeat: {} },
+    API(value) { return value; },
+    async authFetch(url, fetchOptions) {
+      requests.push({ url, method: fetchOptions.method, body: JSON.parse(fetchOptions.body) });
+      return {
+        ok: true,
+        status: 200,
+        async text() { return JSON.stringify({ ok: true, preferences: requests.at(-1).body }); }
+      };
+    },
+    async bankingAlertPreferencesFetch() { return { ok: true, preferences: requests.at(-1).body }; },
+    async bankingAlertsFetchActive() { return { ok: true, alerts: [] }; },
+    applyAlertSummaryToState() {},
+    updateBankingNavAttentionState() {},
+    console,
+    Date,
+    Number,
+    String,
+    Math,
+    Array,
+    Object,
+    JSON,
+    Set,
+    Error
+  };
+  vm.runInNewContext(source, context, { filename: 'banking-alert-preferences-save.js' });
+  return { context, requests };
+}
+
+test('explicit All action-required mode is not silently converted to selected reasons', async () => {
+  const { context, requests } = createPreferencesSaveContext();
+  await context.bankingAlertPreferencesSave({
+    mode: 'ALL_ACTION_REQUIRED',
+    failure_reason_groups: ['INSUFFICIENT_FUNDS', 'BANK_REJECTED'],
+    informational_alert_kinds: [],
+    include_success_alerts: true
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].body.mode, 'ALL_ACTION_REQUIRED');
+  assert.equal(requests[0].body.failure_reason_allowlist, null);
+  assert.equal(Object.prototype.hasOwnProperty.call(requests[0].body, 'failure_reason_groups'), false);
+});
+
+test('Selected failure reasons mode sends only the chosen allow-list', async () => {
+  const { context, requests } = createPreferencesSaveContext();
+  await context.bankingAlertPreferencesSave({
+    mode: 'SELECTED_FAILURE_REASONS',
+    failure_reason_groups: ['INSUFFICIENT_FUNDS'],
+    informational_alert_kinds: [],
+    include_success_alerts: false
+  });
+
+  assert.equal(requests[0].body.mode, 'SELECTED_FAILURE_REASONS');
+  assert.deepEqual(Array.from(requests[0].body.failure_reason_allowlist), ['INSUFFICIENT_FUNDS']);
+  assert.deepEqual(Array.from(requests[0].body.failure_reason_groups), ['INSUFFICIENT_FUNDS']);
 });

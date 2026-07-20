@@ -23684,6 +23684,7 @@ function attachBankingNavAlertPopoverHandlers() {
   window.__bankingNavAlertPopoverHandlersAttached = true;
 
   const queryPopover = () => document.querySelector('.banking-nav-alert-popover[data-banking-nav-alert-popover="1"]');
+  const queryPreferencesDialog = () => document.querySelector('[data-banking-alert-preferences-dialog="1"]');
   const removePopover = () => {
     try {
       document.querySelectorAll('.banking-nav-alert-popover[data-banking-nav-alert-popover="1"]').forEach((node) => {
@@ -23691,6 +23692,52 @@ function attachBankingNavAlertPopoverHandlers() {
       });
       document.querySelectorAll('[data-banking-nav-alert-trigger="1"][aria-expanded="true"]').forEach((node) => node.setAttribute('aria-expanded', 'false'));
     } catch {}
+  };
+  const removePreferencesDialog = () => {
+    try {
+      document.querySelectorAll('[data-banking-alert-preferences-dialog="1"]').forEach((node) => {
+        if (node && node.parentNode) node.parentNode.removeChild(node);
+      });
+    } catch {}
+  };
+  const openPreferencesDialog = () => {
+    if (typeof renderBankingAlertPreferencesPanel !== 'function') return false;
+    const html = renderBankingAlertPreferencesPanel();
+    if (!html) return false;
+
+    removePreferencesDialog();
+    const wrapper = document.createElement('div');
+    wrapper.setAttribute('data-banking-alert-preferences-dialog', '1');
+    wrapper.setAttribute('role', 'dialog');
+    wrapper.setAttribute('aria-modal', 'true');
+    wrapper.setAttribute('aria-label', 'Banking Alert preferences');
+    wrapper.style.position = 'fixed';
+    wrapper.style.zIndex = '2147483002';
+    wrapper.style.inset = '0';
+    wrapper.style.background = 'rgba(15,23,42,.42)';
+    wrapper.style.display = 'flex';
+    wrapper.style.alignItems = 'flex-start';
+    wrapper.style.justifyContent = 'center';
+    wrapper.style.padding = '32px 12px';
+    wrapper.innerHTML = `
+      <div class="card" style="width:min(820px,calc(100vw - 24px));max-height:calc(100vh - 64px);overflow:auto;padding:12px;background:var(--card,#fff);box-shadow:0 18px 48px rgba(15,23,42,.28);">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;">
+          <div style="font-weight:800;">Banking Alert preferences</div>
+          <button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:preferences:close" aria-label="Close Banking Alert preferences">Close</button>
+        </div>
+        ${html}
+      </div>
+    `;
+    document.body.appendChild(wrapper);
+
+    // Keep the originating button connected until the current click has
+    // completed. Removing the popover synchronously during capture made valid
+    // Chromium clicks fail intermittently.
+    setTimeout(() => {
+      try { removePopover(); } catch {}
+      try { wrapper.querySelector('[data-action="banking:nav:alerts:preferences:close"]')?.focus?.(); } catch {}
+    }, 0);
+    return true;
   };
   const parsePayloadAttribute = (value) => {
     const raw = String(value || '').trim();
@@ -23837,22 +23884,38 @@ function attachBankingNavAlertPopoverHandlers() {
     if (!force && detailHashField(hb, '_bankingAlertSummaryDetailRequestedHash') === h) return false;
     return true;
   };
-  const startDirectAlertDetailFetch = (hash) => {
+  const startDirectAlertDetailFetch = (hash, options = {}) => {
     const h = String(hash || '').trim();
     if (typeof bankingAlertsFetchActive !== 'function') return false;
+    const attempt = Math.max(1, Math.trunc(Number(options.attempt || 1) || 1));
     const current = (window.__bankingAlertDirectDetailFetch && typeof window.__bankingAlertDirectDetailFetch === 'object')
       ? window.__bankingAlertDirectDetailFetch
       : null;
     if (current && current.promise && String(current.hash || '') === h) return true;
+    const scheduleRetry = () => {
+      if (attempt >= 3) return;
+      const delayMs = attempt === 1 ? 350 : 1000;
+      setTimeout(() => {
+        try {
+          if (queryPopover()) startDirectAlertDetailFetch(h, { attempt: attempt + 1 });
+        } catch {}
+      }, delayMs);
+    };
 
     const request = Promise.resolve()
       .then(() => bankingAlertsFetchActive({ silent: true, limit: 100 }))
       .then((result) => {
-        if (!result || result.ok === false) return false;
+        if (!result || result.ok === false) {
+          scheduleRetry();
+          return false;
+        }
         refreshOpenPopover(window.__bankingNavAttentionState || result?.banking_alert_summary || result?.alert_summary || null);
         return true;
       })
-      .catch(() => false)
+      .catch(() => {
+        scheduleRetry();
+        return false;
+      })
       .finally(() => {
         try {
           if (window.__bankingAlertDirectDetailFetch?.promise === request) window.__bankingAlertDirectDetailFetch = null;
@@ -24222,6 +24285,8 @@ function attachBankingNavAlertPopoverHandlers() {
 
     if (!target) {
       if (popover && event.target && !popover.contains(event.target)) removePopover();
+      const preferencesDialog = queryPreferencesDialog();
+      if (preferencesDialog && event.target === preferencesDialog) removePreferencesDialog();
       return;
     }
 
@@ -24257,64 +24322,57 @@ function attachBankingNavAlertPopoverHandlers() {
       return;
     }
 
-    if (action === 'banking:nav:alerts:preferences') {
-      removePopover();
+    if (action === 'banking:nav:alerts:preferences:close') {
+      removePreferencesDialog();
+      return;
+    }
+
+    if (action === 'banking:nav:alerts:preferences:refresh') {
       try {
-        if (typeof renderBankingAlertPreferencesPanel === 'function') {
-          const html = renderBankingAlertPreferencesPanel();
-          if (typeof openUiHtmlModal === 'function') {
-            await openUiHtmlModal({
-              title: 'Banking Alert preferences',
-              html,
-              confirm_label: 'Close',
-              hide_cancel: true,
-              kind: 'banking-alert-preferences'
-            });
-          } else if (typeof openUiConfirmModal === 'function') {
-            await openUiConfirmModal({
-              title: 'Banking Alert preferences',
-              message_html: html,
-              confirm_label: 'Close',
-              hide_cancel: true,
-              kind: 'banking-alert-preferences',
-              confirm_class: 'btn btn-primary'
-            });
-          } else if (html) {
-            document.querySelectorAll('[data-banking-alert-preferences-fallback="1"]').forEach((node) => {
-              try { if (node && node.parentNode) node.parentNode.removeChild(node); } catch {}
-            });
-            const wrapper = document.createElement('div');
-            wrapper.setAttribute('data-banking-alert-preferences-fallback', '1');
-            wrapper.style.position = 'fixed';
-            wrapper.style.zIndex = '2147483001';
-            wrapper.style.inset = '0';
-            wrapper.style.background = 'rgba(15,23,42,.24)';
-            wrapper.style.display = 'flex';
-            wrapper.style.alignItems = 'flex-start';
-            wrapper.style.justifyContent = 'center';
-            wrapper.style.padding = '32px 12px';
-            wrapper.innerHTML = `
-              <div class="card" style="width:min(760px,calc(100vw - 24px));max-height:calc(100vh - 64px);overflow:auto;padding:12px;background:var(--card,#fff);box-shadow:0 18px 48px rgba(15,23,42,.22);">
-                <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;">
-                  <div style="font-weight:800;">Banking Alert preferences</div>
-                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:preferences:fallbackClose">Close</button>
-                </div>
-                ${html}
-              </div>
-            `;
-            wrapper.addEventListener('click', (ev) => {
-              try {
-                const close = ev.target && ev.target.closest ? ev.target.closest('[data-action="banking:nav:alerts:preferences:fallbackClose"]') : null;
-                if (close || ev.target === wrapper) {
-                  ev.preventDefault();
-                  ev.stopPropagation();
-                  if (wrapper.parentNode) wrapper.parentNode.removeChild(wrapper);
-                }
-              } catch {}
-            }, true);
-            document.body.appendChild(wrapper);
-          }
-        } else if (typeof openSettings === 'function') {
+        if (typeof bankingAlertPreferencesRefreshPanel !== 'function') throw new Error('Banking Alert preferences refresh is not available');
+        await bankingAlertPreferencesRefreshPanel();
+      } catch (error) {
+        await showPopoverFriendlyError(error, {
+          action: 'banking_nav_alert_preferences_refresh',
+          title: 'Unable to refresh Alert preferences',
+          message: 'CloudTMS could not refresh Banking Alert preferences. Please try again.'
+        });
+      }
+      return;
+    }
+
+    if (action === 'banking:nav:alerts:preferences:save') {
+      try {
+        if (typeof bankingAlertPreferencesSavePanel !== 'function') throw new Error('Banking Alert preferences save is not available');
+        await bankingAlertPreferencesSavePanel();
+      } catch (error) {
+        await showPopoverFriendlyError(error, {
+          action: 'banking_nav_alert_preferences_save',
+          title: 'Unable to save Alert preferences',
+          message: 'CloudTMS could not save Banking Alert preferences. Please review the choices and try again.'
+        });
+      }
+      return;
+    }
+
+    if (action === 'banking:nav:alerts:retryDetails') {
+      const state = getCanonicalAttentionState();
+      const hb = getHeartbeat();
+      const hash = syncDetailHash(state);
+      clearDetailMarkersForHash(hb, hash);
+      if (hb && hash) {
+        hb._bankingAlertSummaryDeferred = true;
+        hb._bankingAlertSummaryDetailForceRefreshHash = hash;
+      }
+      startDirectAlertDetailFetch(hash, { attempt: 1 });
+      requestDeferredAlertDetailRefresh(state, 'banking-alert-popover-user-retry');
+      return;
+    }
+
+    if (action === 'banking:nav:alerts:preferences') {
+      try {
+        const opened = openPreferencesDialog();
+        if (!opened && typeof openSettings === 'function') {
           await openSettings('banking_payments');
         }
       } catch (error) {
@@ -24382,7 +24440,10 @@ function attachBankingNavAlertPopoverHandlers() {
   };
 
   const onKeydown = (event) => {
-    if (event && event.key === 'Escape') removePopover();
+    if (event && event.key === 'Escape') {
+      if (queryPreferencesDialog()) removePreferencesDialog();
+      else removePopover();
+    }
   };
 
   document.addEventListener('click', onClick, true);
@@ -24392,6 +24453,7 @@ function attachBankingNavAlertPopoverHandlers() {
     try { document.removeEventListener('click', onClick, true); } catch {}
     try { document.removeEventListener('keydown', onKeydown, true); } catch {}
     removePopover();
+    removePreferencesDialog();
     window.__bankingNavAlertPopoverHandlersAttached = false;
   };
 }
@@ -24441,7 +24503,51 @@ function renderBankingNavAlertPopover(attentionState) {
     ?? windowRawAlerts.length,
     0
   );
-  const state = (hasExplicitCount(windowState) && windowCount === 0) ? windowState : (Object.keys(providedState).length ? providedState : windowState);
+  const rowsFromState = (candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [];
+    const candidateAlertSummary = (candidate.alertSummary && typeof candidate.alertSummary === 'object' && !Array.isArray(candidate.alertSummary)) ? candidate.alertSummary : null;
+    const candidateBankingSummary = (candidate.banking_alert_summary && typeof candidate.banking_alert_summary === 'object' && !Array.isArray(candidate.banking_alert_summary)) ? candidate.banking_alert_summary : null;
+    const candidateSummary = summaryHasRows(candidateAlertSummary)
+      ? candidateAlertSummary
+      : (summaryHasRows(candidateBankingSummary) ? candidateBankingSummary : (candidateAlertSummary || candidateBankingSummary || null));
+    if (Array.isArray(candidate.alerts) && candidate.alerts.length) return candidate.alerts;
+    if (Array.isArray(candidate.banking_alerts) && candidate.banking_alerts.length) return candidate.banking_alerts;
+    if (Array.isArray(candidateSummary?.alerts) && candidateSummary.alerts.length) return candidateSummary.alerts;
+    if (Array.isArray(candidateSummary?.banking_alerts)) return candidateSummary.banking_alerts;
+    return [];
+  };
+  const hashFromState = (candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return '';
+    const candidateSummary = (candidate.alertSummary && typeof candidate.alertSummary === 'object' && !Array.isArray(candidate.alertSummary))
+      ? candidate.alertSummary
+      : ((candidate.banking_alert_summary && typeof candidate.banking_alert_summary === 'object' && !Array.isArray(candidate.banking_alert_summary)) ? candidate.banking_alert_summary : null);
+    return String(candidate.banking_alert_hash || candidate.banking_alert_summary_signature || candidateSummary?.banking_alert_hash || candidateSummary?.banking_alert_summary_signature || '').trim();
+  };
+  const providedRows = rowsFromState(providedState);
+  const providedSummary = (providedState.alertSummary && typeof providedState.alertSummary === 'object' && !Array.isArray(providedState.alertSummary))
+    ? providedState.alertSummary
+    : ((providedState.banking_alert_summary && typeof providedState.banking_alert_summary === 'object' && !Array.isArray(providedState.banking_alert_summary)) ? providedState.banking_alert_summary : null);
+  const providedCount = toSafeCount(
+    providedState.count
+    ?? providedState.unacknowledgedCount
+    ?? providedState.unacknowledged_count
+    ?? providedState.banking_unacknowledged_alert_count
+    ?? providedSummary?.unacknowledged_count
+    ?? providedSummary?.banking_unacknowledged_alert_count
+    ?? providedRows.length,
+    0
+  );
+  const providedHash = hashFromState(providedState);
+  const windowHash = hashFromState(windowState);
+  const canPreserveLoadedWindowRows = Object.keys(providedState).length > 0
+    && providedCount > 0
+    && providedRows.length < 1
+    && windowRawAlerts.length > 0
+    && providedCount === windowCount
+    && (!providedHash || !windowHash || providedHash === windowHash);
+  const state = (hasExplicitCount(windowState) && windowCount === 0)
+    ? windowState
+    : (canPreserveLoadedWindowRows ? windowState : (Object.keys(providedState).length ? providedState : windowState));
 
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -24688,12 +24794,13 @@ function renderBankingNavAlertPopover(attentionState) {
   };
 
   const hiddenCount = detailsDeferred ? 0 : Math.max(0, totalUnacknowledged - alerts.length);
+  const retryDetailsButton = `<div style="margin-top:8px;"><button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:retryDetails">Retry loading alert messages</button></div>`;
   const rowsHtml = alerts.length
     ? alerts.map(renderAlertRow).join('')
     : (detailsLoading
-      ? `<div class="mini" data-banking-alert-details-deferred="1" data-banking-alert-details-loading="1" style="padding:10px 0;opacity:.9;white-space:normal;">Banking alert details are refreshing. The Banking icon is red because there ${totalUnacknowledged === 1 ? 'is' : 'are'} ${enc(String(totalUnacknowledged))} unacknowledged Banking alert${totalUnacknowledged === 1 ? '' : 's'}.</div>`
+      ? `<div class="mini" data-banking-alert-details-deferred="1" data-banking-alert-details-loading="1" style="padding:10px 0;opacity:.9;white-space:normal;">Banking alert messages are loading. The Banking icon is red because there ${totalUnacknowledged === 1 ? 'is' : 'are'} ${enc(String(totalUnacknowledged))} unacknowledged Banking alert${totalUnacknowledged === 1 ? '' : 's'}.${retryDetailsButton}</div>`
       : (detailsDeferred
-        ? `<div class="mini" data-banking-alert-details-deferred="1" data-banking-alert-details-loading="1" data-banking-alert-details-settled-deferred="${detailsSettledDeferred ? '1' : '0'}" style="padding:10px 0;opacity:.9;white-space:normal;">Loading Banking alert details… The Banking icon is red because there ${totalUnacknowledged === 1 ? 'is' : 'are'} ${enc(String(totalUnacknowledged))} unacknowledged Banking alert${totalUnacknowledged === 1 ? '' : 's'}.</div>`
+        ? `<div class="mini" data-banking-alert-details-deferred="1" data-banking-alert-details-loading="1" data-banking-alert-details-settled-deferred="${detailsSettledDeferred ? '1' : '0'}" style="padding:10px 0;opacity:.9;white-space:normal;">Loading Banking alert messages… The Banking icon is red because there ${totalUnacknowledged === 1 ? 'is' : 'are'} ${enc(String(totalUnacknowledged))} unacknowledged Banking alert${totalUnacknowledged === 1 ? '' : 's'}.${retryDetailsButton}</div>`
         : `<div class="mini" style="padding:10px 0;opacity:.85;">No current unacknowledged Banking alerts.</div>`));
   const clearAllDisabled = totalUnacknowledged <= 0 || clearing;
   const clearAllAttrs = clearAllDisabled ? 'data-disabled="1" aria-disabled="true" disabled' : '';
@@ -63120,6 +63227,10 @@ function renderBankingPaymentSettingsTab() {
     ['COMPLIANCE_REVIEW', 'compliance/review'],
     ['PROVIDER_OUTAGE', 'provider outage'],
     ['PROVIDER_UNKNOWN', 'provider unknown'],
+    ['DUPLICATE_RISK', 'duplicate payment risk'],
+    ['PAID_RECOVERY_REQUIRED', 'paid recovery required'],
+    ['MANUAL_ADJUSTMENT_BLOCKER', 'manual adjustment blocker'],
+    ['WEBHOOK_UNMATCHED', 'unmatched bank webhook'],
     ['PROVIDER_FAILED_UNSPECIFIED', 'unspecified provider failure']
   ];
   const progressInfoOptions = [
@@ -87139,6 +87250,115 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
 
 
 
+function collectBankingAlertPreferencesPanelValue(root = null) {
+  const panel = root || document.getElementById('bankingAlertPreferencesPanel');
+  if (!panel || typeof panel.querySelector !== 'function') throw new Error('Banking Alert preferences panel is not available');
+  const query = (selector) => panel.querySelector(selector);
+  const queryAll = (selector) => Array.from(panel.querySelectorAll(selector));
+  const mode = String(query('input[name="bankingAlertPreferenceMode"]:checked')?.value || 'ALL_ACTION_REQUIRED').trim().toUpperCase();
+  const failureReasonGroups = queryAll('[data-alert-preference-failure-reason]')
+    .filter((element) => element?.checked === true)
+    .map((element) => String(element.getAttribute('data-alert-preference-failure-reason') || '').trim().toUpperCase())
+    .filter(Boolean);
+  if (mode === 'SELECTED_FAILURE_REASONS' && failureReasonGroups.length < 1) {
+    throw new Error('Select at least one failure reason, or choose a different alert mode.');
+  }
+  const informationalAlertKinds = queryAll('[data-alert-preference-info-kind]')
+    .filter((element) => element?.checked === true)
+    .map((element) => String(element.getAttribute('data-alert-preference-info-kind') || '').trim().toUpperCase())
+    .filter(Boolean);
+  const includeSuccessAlerts = mode !== 'NO_BANKING_PAY_ALERTS'
+    && query('[data-alert-preference-success-alerts]')?.checked !== false;
+  const splitList = (value) => String(value || '')
+    .split(/[\n,]+/g)
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .filter((item, index, values) => values.findIndex((candidate) => String(candidate).toLowerCase() === String(item).toLowerCase()) === index);
+  const mutedProviderKeys = splitList(query('[data-alert-preference-muted-providers]')?.value || '');
+  const mutedPayBatchIds = splitList(query('[data-alert-preference-muted-batches]')?.value || '');
+  const snoozeRaw = String(query('[data-alert-preference-snoozed-until]')?.value || '').trim();
+  let snoozedUntilUtc = null;
+  if (snoozeRaw) {
+    const snoozeDate = new Date(snoozeRaw);
+    if (!Number.isFinite(snoozeDate.getTime())) throw new Error('Choose a valid date and time for the alert snooze.');
+    if (snoozeDate.getTime() <= Date.now()) throw new Error('The alert snooze must end in the future.');
+    snoozedUntilUtc = snoozeDate.toISOString();
+  }
+
+  return {
+    mode,
+    failure_reason_groups: failureReasonGroups,
+    informational_alert_kinds: informationalAlertKinds,
+    muted_provider_keys: mutedProviderKeys,
+    muted_pay_batch_ids: mutedPayBatchIds,
+    snoozed_until_utc: snoozedUntilUtc,
+    enabled: mode !== 'NO_BANKING_PAY_ALERTS',
+    include_action_required: mode !== 'NO_BANKING_PAY_ALERTS',
+    include_progress_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && informationalAlertKinds.some((kind) => kind === 'AUTO_UNWIND_PROGRESS' || kind === 'WHOLE_BATCH_CANCELLATION_PROGRESS'),
+    include_informational_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && informationalAlertKinds.includes('MANUAL_ADJUSTMENTS_CARRIED_FORWARD'),
+    include_success_alerts: includeSuccessAlerts,
+    failure_reason_allowlist: mode === 'SELECTED_FAILURE_REASONS' ? failureReasonGroups : null,
+    failure_reason_blocklist: []
+  };
+}
+
+async function bankingAlertPreferencesRefreshPanel() {
+  const root = document.getElementById('bankingAlertPreferencesPanel');
+  const status = root?.querySelector?.('[data-banking-alert-preferences-status="1"]');
+  if (status) status.textContent = 'Refreshing Banking Alert preferences…';
+  if (typeof bankingAlertPreferencesFetch !== 'function') throw new Error('Banking Alert preferences refresh is not available');
+  const payload = await bankingAlertPreferencesFetch({ silent: true });
+  const currentRoot = document.getElementById('bankingAlertPreferencesPanel');
+  if (currentRoot && typeof renderBankingAlertPreferencesPanel === 'function') {
+    currentRoot.outerHTML = renderBankingAlertPreferencesPanel();
+  }
+  return payload;
+}
+
+async function bankingAlertPreferencesSavePanel() {
+  const root = document.getElementById('bankingAlertPreferencesPanel');
+  if (!root) throw new Error('Banking Alert preferences panel is not available');
+  const status = root.querySelector('[data-banking-alert-preferences-status="1"]');
+  const saveButton = root.querySelector('[data-action="banking:nav:alerts:preferences:save"]');
+  if (saveButton?.getAttribute('data-saving') === '1') return null;
+  const preferences = collectBankingAlertPreferencesPanelValue(root);
+
+  if (saveButton) {
+    saveButton.setAttribute('data-saving', '1');
+    saveButton.setAttribute('disabled', '');
+    saveButton.setAttribute('aria-disabled', 'true');
+  }
+  if (status) status.textContent = 'Saving Banking Alert preferences…';
+
+  try {
+    if (typeof bankingAlertPreferencesSave !== 'function') throw new Error('Banking Alert preferences save is not available');
+    const result = await bankingAlertPreferencesSave(preferences);
+    if (result && result.ok === false) throw new Error(String(result.error || result.message || 'Banking Alert preferences could not be saved'));
+    if (typeof bankingAlertsFetchActive === 'function') await bankingAlertsFetchActive({ silent: true, limit: 100 });
+    if (status) status.textContent = 'Banking Alert preferences saved. Current Payment Status is unaffected.';
+    try { if (typeof window.__toast === 'function') window.__toast('Banking Alert preferences saved'); } catch {}
+    return result;
+  } catch (error) {
+    if (status) status.textContent = String(error?.message || error || 'Banking Alert preferences could not be saved');
+    throw error;
+  } finally {
+    if (saveButton) {
+      saveButton.removeAttribute('data-saving');
+      saveButton.removeAttribute('disabled');
+      saveButton.removeAttribute('aria-disabled');
+    }
+  }
+}
+
+try {
+  if (typeof window !== 'undefined') {
+    window.collectBankingAlertPreferencesPanelValue = collectBankingAlertPreferencesPanelValue;
+    window.bankingAlertPreferencesRefreshPanel = bankingAlertPreferencesRefreshPanel;
+    window.bankingAlertPreferencesSavePanel = bankingAlertPreferencesSavePanel;
+  }
+} catch {}
+
+
 function renderBankingAlertPreferencesPanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -87213,6 +87433,10 @@ function renderBankingAlertPreferencesPanel() {
     ['COMPLIANCE_REVIEW', 'compliance/review'],
     ['PROVIDER_OUTAGE', 'provider outage'],
     ['PROVIDER_UNKNOWN', 'provider unknown'],
+    ['DUPLICATE_RISK', 'duplicate payment risk'],
+    ['PAID_RECOVERY_REQUIRED', 'paid recovery required'],
+    ['MANUAL_ADJUSTMENT_BLOCKER', 'manual adjustment blocker'],
+    ['WEBHOOK_UNMATCHED', 'unmatched bank webhook'],
     ['PROVIDER_FAILED_UNSPECIFIED', 'unspecified provider failure']
   ];
   const informationalOptions = [
@@ -87404,7 +87628,10 @@ function renderBankingAlertPreferencesPanel() {
   try {
     if (windowObj) {
       windowObj.renderBankingAlertPreferencesPanel = renderBankingAlertPreferencesPanel;
-      setTimeout(() => triggerAsyncFetchIfNeeded(), 0);
+      setTimeout(() => {
+        triggerAsyncFetchIfNeeded();
+        try { if (typeof attachBankingNavAlertPopoverHandlers === 'function') attachBankingNavAlertPopoverHandlers(); } catch {}
+      }, 0);
     }
   } catch {}
 
@@ -87425,7 +87652,7 @@ function renderBankingAlertPreferencesPanel() {
             These preferences control Banking button and popover visibility only. They do not change audit, webhook ingestion, correction processing, or Current Payment Status.
           </div>
         </div>
-        <button type="button" class="btn btn-sm btn-outline" onclick="${enc(refreshHandlerScript)}">Refresh preferences</button>
+        <button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:preferences:refresh">Refresh preferences</button>
       </div>
 
       <div class="card" style="padding:10px;border:1px solid var(--line,#e5e7eb);">
@@ -87494,7 +87721,7 @@ function renderBankingAlertPreferencesPanel() {
       ${statusLine}
 
       <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
-        <button type="button" class="btn btn-sm btn-primary" onclick="${enc(saveHandlerScript)}">Save Alert preferences</button>
+        <button type="button" class="btn btn-sm btn-primary" data-action="banking:nav:alerts:preferences:save">Save Alert preferences</button>
       </div>
     </div>
   `;
@@ -341723,9 +341950,11 @@ async function bankingAlertPreferencesSave(preferences) {
   );
   const mode = (requestedModeRaw === 'NONE' || requestedModeRaw === 'NO_BANKING_PAY_ALERTS' || prefs.enabled === false)
     ? 'NO_BANKING_PAY_ALERTS'
-    : ((requestedModeRaw === 'SELECTED_FAILURE_REASONS' || requestedModeRaw === 'SELECTED' || requestedReasons.length > 0)
+    : ((requestedModeRaw === 'SELECTED_FAILURE_REASONS' || requestedModeRaw === 'SELECTED')
       ? 'SELECTED_FAILURE_REASONS'
-      : 'ALL_ACTION_REQUIRED');
+      : (requestedModeRaw === 'ALL_ACTION_REQUIRED'
+        ? 'ALL_ACTION_REQUIRED'
+        : (requestedReasons.length > 0 ? 'SELECTED_FAILURE_REASONS' : 'ALL_ACTION_REQUIRED')));
 
   const canonicalPayload = {
     enabled: mode !== 'NO_BANKING_PAY_ALERTS',
@@ -341742,7 +341971,7 @@ async function bankingAlertPreferencesSave(preferences) {
     muted_pay_batch_ids: uniqueText(prefs.muted_pay_batch_ids || prefs.mutedPayBatchIds || prefs.muted_batch_ids || prefs.mutedBatchIds || []),
     snoozed_until_utc: prefs.snoozed_until_utc || prefs.snoozedUntilUtc || prefs.snooze_until_utc || prefs.snoozeUntilUtc || null,
     mode,
-    failure_reason_groups: mode === 'SELECTED_FAILURE_REASONS' ? requestedReasons : [],
+    ...(mode === 'SELECTED_FAILURE_REASONS' ? { failure_reason_groups: requestedReasons } : {}),
     informational_alert_kinds: normaliseInfoKinds(prefs.informational_alert_kinds || prefs.informationalAlertKinds || prefs.progress_alert_kinds || prefs.progressAlertKinds || [])
   };
 
