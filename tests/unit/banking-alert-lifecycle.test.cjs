@@ -432,9 +432,29 @@ test('expired session gives a specific reason when an alert cannot be cleared', 
 test('preferences expose successful lifecycle alerts as enabled by default', () => {
   assert.match(mainSource, /include_success_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr\(rawPrefs\.include_success_alerts, true\)/);
   assert.match(mainSource, /data-alert-preference-success-alerts="1"/);
-  assert.match(mainSource, /Immediate payments and CSV settlements only alert on settlement/);
+  assert.match(mainSource, /Immediate payments alert on settlement only/);
+  assert.match(mainSource, /CSV payments have one settlement alert/);
   assert.match(mainSource, /await bankingAlertsFetchActive\(\{ silent: true, limit: 100 \}\)/);
   assert.doesNotMatch(mainSource, /function renderBankingNavAlertPopover[\s\S]*?isSuccessOnlyAlert/);
+});
+
+test('preferences use professional user-facing wording and a clear layout', () => {
+  const panel = sliceBetween('function renderBankingAlertPreferencesPanel()', 'function attachBankingModalDelegatedHandlers()');
+  const dialog = sliceBetween('function attachBankingNavAlertPopoverHandlers()', 'function renderBankingNavAlertPopover(attentionState)');
+
+  assert.match(dialog, /Banking alert settings/);
+  assert.match(panel, /Which alerts would you like to see\?/);
+  assert.match(panel, /Payment problems/);
+  assert.match(panel, /Other payment updates/);
+  assert.match(panel, /Successful payment updates/);
+  assert.match(panel, /Temporarily pause alerts/);
+  assert.match(panel, /Advanced exclusions/);
+  assert.match(panel, /Save changes/);
+  assert.match(panel, /Payment processing is not affected/);
+  assert.doesNotMatch(panel, />Muted scopes</);
+  assert.doesNotMatch(panel, />auto-unwind progress</);
+  assert.doesNotMatch(panel, />unmatched bank webhook</);
+  assert.doesNotMatch(panel, /webhook ingestion/);
 });
 
 function createPreferencesSaveContext() {

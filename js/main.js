@@ -23710,22 +23710,25 @@ function attachBankingNavAlertPopoverHandlers() {
     wrapper.setAttribute('data-banking-alert-preferences-dialog', '1');
     wrapper.setAttribute('role', 'dialog');
     wrapper.setAttribute('aria-modal', 'true');
-    wrapper.setAttribute('aria-label', 'Banking Alert preferences');
+    wrapper.setAttribute('aria-label', 'Banking alert settings');
     wrapper.style.position = 'fixed';
     wrapper.style.zIndex = '2147483002';
     wrapper.style.inset = '0';
     wrapper.style.background = 'rgba(15,23,42,.42)';
     wrapper.style.display = 'flex';
-    wrapper.style.alignItems = 'flex-start';
+    wrapper.style.alignItems = 'center';
     wrapper.style.justifyContent = 'center';
-    wrapper.style.padding = '32px 12px';
+    wrapper.style.padding = '20px 12px';
     wrapper.innerHTML = `
-      <div class="card" style="width:min(820px,calc(100vw - 24px));max-height:calc(100vh - 64px);overflow:auto;padding:12px;background:var(--card,#fff);box-shadow:0 18px 48px rgba(15,23,42,.28);">
-        <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;">
-          <div style="font-weight:800;">Banking Alert preferences</div>
-          <button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:preferences:close" aria-label="Close Banking Alert preferences">Close</button>
+      <div class="card" style="width:min(900px,calc(100vw - 24px));max-height:calc(100vh - 40px);overflow:hidden;padding:0;background:var(--panel,#0b1221);color:var(--text,#f8fafc);color-scheme:dark;box-shadow:0 22px 60px rgba(0,0,0,.42);border-radius:16px;display:flex;flex-direction:column;">
+        <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:18px 20px;border-bottom:1px solid var(--line,#e5e7eb);">
+          <div style="min-width:0;">
+            <div style="font-weight:800;font-size:18px;line-height:1.25;">Banking alert settings</div>
+            <div class="mini" style="opacity:.82;margin-top:5px;white-space:normal;">Choose which Banking Pay updates appear in your Banking alerts.</div>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:preferences:close" aria-label="Close Banking alert settings">Close</button>
         </div>
-        ${html}
+        <div style="overflow:auto;padding:18px 20px;min-height:0;">${html}</div>
       </div>
     `;
     document.body.appendChild(wrapper);
@@ -24329,13 +24332,13 @@ function attachBankingNavAlertPopoverHandlers() {
 
     if (action === 'banking:nav:alerts:preferences:refresh') {
       try {
-        if (typeof bankingAlertPreferencesRefreshPanel !== 'function') throw new Error('Banking Alert preferences refresh is not available');
+        if (typeof bankingAlertPreferencesRefreshPanel !== 'function') throw new Error('Your saved alert settings could not be reloaded.');
         await bankingAlertPreferencesRefreshPanel();
       } catch (error) {
         await showPopoverFriendlyError(error, {
           action: 'banking_nav_alert_preferences_refresh',
-          title: 'Unable to refresh Alert preferences',
-          message: 'CloudTMS could not refresh Banking Alert preferences. Please try again.'
+          title: 'Alert settings could not be reloaded',
+          message: 'CloudTMS could not reload your saved Banking alert settings. Please try again.'
         });
       }
       return;
@@ -24343,13 +24346,13 @@ function attachBankingNavAlertPopoverHandlers() {
 
     if (action === 'banking:nav:alerts:preferences:save') {
       try {
-        if (typeof bankingAlertPreferencesSavePanel !== 'function') throw new Error('Banking Alert preferences save is not available');
+        if (typeof bankingAlertPreferencesSavePanel !== 'function') throw new Error('Your alert settings could not be saved.');
         await bankingAlertPreferencesSavePanel();
       } catch (error) {
         await showPopoverFriendlyError(error, {
           action: 'banking_nav_alert_preferences_save',
-          title: 'Unable to save Alert preferences',
-          message: 'CloudTMS could not save Banking Alert preferences. Please review the choices and try again.'
+          title: 'Alert settings could not be saved',
+          message: 'CloudTMS could not save your Banking alert settings. Review your choices and try again.'
         });
       }
       return;
@@ -24378,8 +24381,8 @@ function attachBankingNavAlertPopoverHandlers() {
       } catch (error) {
         await showPopoverFriendlyError(error, {
           action: 'banking_nav_alert_preferences',
-          title: 'Unable to open Alert preferences',
-          message: 'CloudTMS could not open Banking Alert preferences. Refresh Banking and try again.'
+          title: 'Alert settings could not be opened',
+          message: 'CloudTMS could not open your Banking alert settings. Refresh the page and try again.'
         });
       }
       return;
@@ -87252,7 +87255,7 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
 
 function collectBankingAlertPreferencesPanelValue(root = null) {
   const panel = root || document.getElementById('bankingAlertPreferencesPanel');
-  if (!panel || typeof panel.querySelector !== 'function') throw new Error('Banking Alert preferences panel is not available');
+  if (!panel || typeof panel.querySelector !== 'function') throw new Error('Banking alert settings are not available. Close this window and try again.');
   const query = (selector) => panel.querySelector(selector);
   const queryAll = (selector) => Array.from(panel.querySelectorAll(selector));
   const mode = String(query('input[name="bankingAlertPreferenceMode"]:checked')?.value || 'ALL_ACTION_REQUIRED').trim().toUpperCase();
@@ -87261,7 +87264,7 @@ function collectBankingAlertPreferencesPanelValue(root = null) {
     .map((element) => String(element.getAttribute('data-alert-preference-failure-reason') || '').trim().toUpperCase())
     .filter(Boolean);
   if (mode === 'SELECTED_FAILURE_REASONS' && failureReasonGroups.length < 1) {
-    throw new Error('Select at least one failure reason, or choose a different alert mode.');
+    throw new Error('Select at least one payment problem, or choose a different alert option.');
   }
   const informationalAlertKinds = queryAll('[data-alert-preference-info-kind]')
     .filter((element) => element?.checked === true)
@@ -87305,8 +87308,8 @@ function collectBankingAlertPreferencesPanelValue(root = null) {
 async function bankingAlertPreferencesRefreshPanel() {
   const root = document.getElementById('bankingAlertPreferencesPanel');
   const status = root?.querySelector?.('[data-banking-alert-preferences-status="1"]');
-  if (status) status.textContent = 'Refreshing Banking Alert preferences…';
-  if (typeof bankingAlertPreferencesFetch !== 'function') throw new Error('Banking Alert preferences refresh is not available');
+  if (status) status.textContent = 'Reloading your saved alert settings…';
+  if (typeof bankingAlertPreferencesFetch !== 'function') throw new Error('Your saved alert settings could not be reloaded. Please try again.');
   const payload = await bankingAlertPreferencesFetch({ silent: true });
   const currentRoot = document.getElementById('bankingAlertPreferencesPanel');
   if (currentRoot && typeof renderBankingAlertPreferencesPanel === 'function') {
@@ -87317,7 +87320,7 @@ async function bankingAlertPreferencesRefreshPanel() {
 
 async function bankingAlertPreferencesSavePanel() {
   const root = document.getElementById('bankingAlertPreferencesPanel');
-  if (!root) throw new Error('Banking Alert preferences panel is not available');
+  if (!root) throw new Error('Banking alert settings are not available. Close this window and try again.');
   const status = root.querySelector('[data-banking-alert-preferences-status="1"]');
   const saveButton = root.querySelector('[data-action="banking:nav:alerts:preferences:save"]');
   if (saveButton?.getAttribute('data-saving') === '1') return null;
@@ -87328,18 +87331,18 @@ async function bankingAlertPreferencesSavePanel() {
     saveButton.setAttribute('disabled', '');
     saveButton.setAttribute('aria-disabled', 'true');
   }
-  if (status) status.textContent = 'Saving Banking Alert preferences…';
+  if (status) status.textContent = 'Saving your alert settings…';
 
   try {
-    if (typeof bankingAlertPreferencesSave !== 'function') throw new Error('Banking Alert preferences save is not available');
+    if (typeof bankingAlertPreferencesSave !== 'function') throw new Error('Your alert settings could not be saved. Close this window and try again.');
     const result = await bankingAlertPreferencesSave(preferences);
-    if (result && result.ok === false) throw new Error(String(result.error || result.message || 'Banking Alert preferences could not be saved'));
+    if (result && result.ok === false) throw new Error(String(result.error || result.message || 'Your alert settings could not be saved. Please try again.'));
     if (typeof bankingAlertsFetchActive === 'function') await bankingAlertsFetchActive({ silent: true, limit: 100 });
-    if (status) status.textContent = 'Banking Alert preferences saved. Current Payment Status is unaffected.';
-    try { if (typeof window.__toast === 'function') window.__toast('Banking Alert preferences saved'); } catch {}
+    if (status) status.textContent = 'Your Banking alert settings have been saved.';
+    try { if (typeof window.__toast === 'function') window.__toast('Banking alert settings saved'); } catch {}
     return result;
   } catch (error) {
-    if (status) status.textContent = String(error?.message || error || 'Banking Alert preferences could not be saved');
+    if (status) status.textContent = String(error?.message || error || 'Your alert settings could not be saved. Please try again.');
     throw error;
   } finally {
     if (saveButton) {
@@ -87425,24 +87428,24 @@ function renderBankingAlertPreferencesPanel() {
   const cacheMaxAgeMs = 5 * 60 * 1000;
 
   const failureReasonOptions = [
-    ['INSUFFICIENT_FUNDS', 'insufficient funds'],
-    ['UNKNOWN_RECIPIENT', 'unknown recipient'],
-    ['INVALID_ACCOUNT', 'invalid account'],
-    ['ACCOUNT_CLOSED', 'account closed'],
-    ['BANK_REJECTED', 'bank rejected'],
-    ['COMPLIANCE_REVIEW', 'compliance/review'],
-    ['PROVIDER_OUTAGE', 'provider outage'],
-    ['PROVIDER_UNKNOWN', 'provider unknown'],
-    ['DUPLICATE_RISK', 'duplicate payment risk'],
-    ['PAID_RECOVERY_REQUIRED', 'paid recovery required'],
-    ['MANUAL_ADJUSTMENT_BLOCKER', 'manual adjustment blocker'],
-    ['WEBHOOK_UNMATCHED', 'unmatched bank webhook'],
-    ['PROVIDER_FAILED_UNSPECIFIED', 'unspecified provider failure']
+    ['INSUFFICIENT_FUNDS', 'Not enough funds'],
+    ['UNKNOWN_RECIPIENT', 'Recipient not found'],
+    ['INVALID_ACCOUNT', 'Bank account details are invalid'],
+    ['ACCOUNT_CLOSED', 'Bank account is closed'],
+    ['BANK_REJECTED', 'Payment rejected by the bank'],
+    ['COMPLIANCE_REVIEW', 'Payment held for compliance review'],
+    ['PROVIDER_OUTAGE', 'Payment provider is unavailable'],
+    ['PROVIDER_UNKNOWN', 'Payment outcome could not be confirmed'],
+    ['DUPLICATE_RISK', 'Possible duplicate payment'],
+    ['PAID_RECOVERY_REQUIRED', 'Paid amount needs to be recovered'],
+    ['MANUAL_ADJUSTMENT_BLOCKER', 'Manual adjustment needs attention'],
+    ['WEBHOOK_UNMATCHED', 'Bank update could not be matched'],
+    ['PROVIDER_FAILED_UNSPECIFIED', 'Other payment provider failure']
   ];
   const informationalOptions = [
-    ['AUTO_UNWIND_PROGRESS', 'auto-unwind progress'],
-    ['WHOLE_BATCH_CANCELLATION_PROGRESS', 'whole-batch cancellation progress'],
-    ['MANUAL_ADJUSTMENTS_CARRIED_FORWARD', 'manual carry-forward informational alerts']
+    ['AUTO_UNWIND_PROGRESS', 'Automatic correction progress', 'Show progress while CloudTMS corrects an unsuccessful payment.'],
+    ['WHOLE_BATCH_CANCELLATION_PROGRESS', 'Payment batch cancellation progress', 'Show progress while an entire payment batch is being cancelled.'],
+    ['MANUAL_ADJUSTMENTS_CARRIED_FORWARD', 'Manual adjustment notices', 'Show a notice when an adjustment is moved to a later payment.']
   ];
 
   const windowObj = getWindow();
@@ -87596,7 +87599,7 @@ function renderBankingAlertPreferencesPanel() {
   };
 
   const renderFailureReasonCheckboxes = () => failureReasonOptions.map(([key, label]) => `
-    <label class="inline mini" style="display:flex;gap:7px;align-items:center;min-width:190px;">
+    <label class="inline" style="display:flex;gap:9px;align-items:center;min-width:220px;padding:9px 10px;border:1px solid var(--line,#e5e7eb);border-radius:9px;background:rgba(148,163,184,.05);font-size:13px;line-height:1.35;">
       <input
         type="checkbox"
         data-alert-preference-failure-reason="${enc(key)}"
@@ -87606,20 +87609,22 @@ function renderBankingAlertPreferencesPanel() {
     </label>
   `).join('');
 
-  const renderInformationalCheckboxes = () => informationalOptions.map(([key, label]) => `
-    <label class="inline mini" style="display:flex;gap:7px;align-items:center;min-width:250px;">
+  const renderInformationalCheckboxes = () => informationalOptions.map(([key, label, description]) => `
+    <label class="inline" style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;align-items:start;min-width:250px;padding:10px;border:1px solid var(--line,#e5e7eb);border-radius:9px;background:rgba(148,163,184,.05);">
       <input
         type="checkbox"
         data-alert-preference-info-kind="${enc(key)}"
         ${informationalDefaultChecked || informationalSet.has(key) ? 'checked' : ''}
+        style="grid-row:1 / span 2;margin-top:2px;"
       />
-      <span>${enc(label)}</span>
+      <span style="font-weight:700;font-size:13px;line-height:1.35;">${enc(label)}</span>
+      <span class="mini" style="opacity:.76;white-space:normal;line-height:1.4;">${enc(description)}</span>
     </label>
   `).join('');
 
   const statusLine = loading
-    ? '<div class="mini" data-banking-alert-preferences-status="1" style="opacity:.78;">Loading saved preferences…</div>'
-    : '<div class="mini" data-banking-alert-preferences-status="1" style="opacity:.78;">Payment status will still update in Current Payment Status even if Banking Alerts are disabled.</div>';
+    ? '<div class="mini" role="status" aria-live="polite" data-banking-alert-preferences-status="1" style="opacity:.82;">Loading your saved alert settings…</div>'
+    : '<div class="mini" role="status" aria-live="polite" data-banking-alert-preferences-status="1" style="min-height:16px;opacity:.82;"></div>';
 
   const saveHandlerScript = `(async()=>{try{const root=document.getElementById('bankingAlertPreferencesPanel');if(!root){alert('Banking Alert preferences panel is not available.');return;}const q=(sel)=>root.querySelector(sel);const qa=(sel)=>Array.from(root.querySelectorAll(sel));const mode=String(q('input[name="bankingAlertPreferenceMode"]:checked')?.value||'ALL_ACTION_REQUIRED').trim().toUpperCase();const failure_reason_groups=qa('[data-alert-preference-failure-reason]').filter(el=>el&&el.checked===true).map(el=>String(el.getAttribute('data-alert-preference-failure-reason')||'').trim().toUpperCase()).filter(Boolean);const informational_alert_kinds=qa('[data-alert-preference-info-kind]').filter(el=>el&&el.checked===true).map(el=>String(el.getAttribute('data-alert-preference-info-kind')||'').trim().toUpperCase()).filter(Boolean);const include_success_alerts=mode!=='NO_BANKING_PAY_ALERTS'&&q('[data-alert-preference-success-alerts]')?.checked!==false;const splitList=(value)=>String(value||'').split(/[\\n,]+/g).map(v=>String(v||'').trim()).filter(Boolean).filter((v,i,a)=>a.findIndex(x=>String(x).toLowerCase()===String(v).toLowerCase())===i);const muted_provider_keys=splitList(q('[data-alert-preference-muted-providers]')?.value||'');const muted_pay_batch_ids=splitList(q('[data-alert-preference-muted-batches]')?.value||'');const snoozeRaw=String(q('[data-alert-preference-snoozed-until]')?.value||'').trim();const snoozed_until_utc=snoozeRaw?new Date(snoozeRaw).toISOString():null;const preferences={mode,failure_reason_groups,informational_alert_kinds,muted_provider_keys,muted_pay_batch_ids,snoozed_until_utc,enabled:mode!=='NO_BANKING_PAY_ALERTS',include_action_required:mode!=='NO_BANKING_PAY_ALERTS',include_progress_alerts:mode!=='NO_BANKING_PAY_ALERTS'&&informational_alert_kinds.some(k=>k==='AUTO_UNWIND_PROGRESS'||k==='WHOLE_BATCH_CANCELLATION_PROGRESS'),include_informational_alerts:mode!=='NO_BANKING_PAY_ALERTS'&&informational_alert_kinds.includes('MANUAL_ADJUSTMENTS_CARRIED_FORWARD'),include_success_alerts,failure_reason_allowlist:mode==='SELECTED_FAILURE_REASONS'?failure_reason_groups:null,failure_reason_blocklist:[]};const status=root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent='Saving Banking Alert preferences…';const fn=(typeof window.bankingAlertPreferencesSave==='function')?window.bankingAlertPreferencesSave:((typeof bankingAlertPreferencesSave==='function')?bankingAlertPreferencesSave:null);if(typeof fn!=='function'){throw new Error('Banking Alert preferences save is not available');}const result=await fn(preferences);window.__BANKING_ALERT_PREFERENCES_CACHE__={fetched_at_ms:Date.now(),payload:result&&typeof result==='object'?result:{preferences,ok:true},preferences:(result&&typeof result==='object'&&result.preferences&&typeof result.preferences==='object')?result.preferences:preferences,options:(result&&typeof result==='object'&&result.options&&typeof result.options==='object')?result.options:null};try{if(typeof window.bankingAlertPreferencesFetch==='function')await window.bankingAlertPreferencesFetch({silent:true});}catch(_){}try{if(typeof window.refreshBankingNavAttentionFromCachedRows==='function')window.refreshBankingNavAttentionFromCachedRows();else if(typeof refreshBankingNavAttentionFromCachedRows==='function')refreshBankingNavAttentionFromCachedRows();}catch(_){}try{const hb=window.__changesHeartbeat||window.__changeHeartbeat||null;if(hb&&typeof hb.requestBankingAlertSummaryDetailRefresh==='function')hb.requestBankingAlertSummaryDetailRefresh('banking-alert-preferences-panel-save');}catch(_){}if(status)status.textContent='Banking Alert preferences saved. Current Payment Status is unaffected.';if(typeof window.__toast==='function')window.__toast('Banking Alert preferences saved');}catch(e){const msg=String(e&&e.message?e.message:e||'Save failed');const root=document.getElementById('bankingAlertPreferencesPanel');const status=root&&root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent=msg;else alert(msg);}})();`;
 
@@ -87640,88 +87645,96 @@ function renderBankingAlertPreferencesPanel() {
   return `
     <div
       id="bankingAlertPreferencesPanel"
-      class="card banking-alert-preferences-panel"
+      class="banking-alert-preferences-panel"
       data-banking-alert-preferences-panel="1"
       data-banking-alert-preferences-options-version="${enc(optionsStamp)}"
-      style="padding:12px;display:flex;flex-direction:column;gap:12px;"
+      style="display:flex;flex-direction:column;gap:16px;"
     >
-      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
-        <div style="min-width:260px;flex:1;">
-          <div style="font-weight:800;font-size:14px;">Banking Alert preferences</div>
-          <div class="mini" style="opacity:.84;margin-top:4px;white-space:normal;">
-            These preferences control Banking button and popover visibility only. They do not change audit, webhook ingestion, correction processing, or Current Payment Status.
-          </div>
-        </div>
-        <button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:preferences:refresh">Refresh preferences</button>
-      </div>
-
-      <div class="card" style="padding:10px;border:1px solid var(--line,#e5e7eb);">
-        <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Alert mode</div>
-        <div style="display:flex;flex-direction:column;gap:7px;">
-          <label class="inline mini" style="display:flex;gap:7px;align-items:center;">
+      <section aria-labelledby="bankingAlertModeHeading" style="padding:14px;border:1px solid var(--line,#e5e7eb);border-radius:12px;background:rgba(148,163,184,.04);">
+        <div id="bankingAlertModeHeading" style="font-weight:800;font-size:14px;">Which alerts would you like to see?</div>
+        <div class="mini" style="opacity:.76;margin-top:4px;margin-bottom:11px;white-space:normal;">Choose the level of Banking Pay notifications shown in the Banking button.</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px;">
+          <label class="inline" style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;align-items:start;padding:11px;border:1px solid var(--line,#e5e7eb);border-radius:10px;background:rgba(15,23,42,.62);">
             <input type="radio" name="bankingAlertPreferenceMode" value="ALL_ACTION_REQUIRED" data-alert-preference-key="mode" ${currentMode === 'ALL_ACTION_REQUIRED' ? 'checked' : ''} />
-            <span>All action-required Banking Pay alerts</span>
+            <span style="font-weight:700;font-size:13px;">All important alerts</span>
+            <span class="mini" style="grid-column:2;opacity:.76;white-space:normal;line-height:1.4;">Show every Banking Pay issue that needs attention.</span>
           </label>
-          <label class="inline mini" style="display:flex;gap:7px;align-items:center;">
+          <label class="inline" style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;align-items:start;padding:11px;border:1px solid var(--line,#e5e7eb);border-radius:10px;background:rgba(15,23,42,.62);">
             <input type="radio" name="bankingAlertPreferenceMode" value="SELECTED_FAILURE_REASONS" data-alert-preference-key="mode" ${currentMode === 'SELECTED_FAILURE_REASONS' ? 'checked' : ''} />
-            <span>Only selected failure reasons</span>
+            <span style="font-weight:700;font-size:13px;">Selected payment problems</span>
+            <span class="mini" style="grid-column:2;opacity:.76;white-space:normal;line-height:1.4;">Only show the payment problems selected below.</span>
           </label>
-          <label class="inline mini" style="display:flex;gap:7px;align-items:center;">
+          <label class="inline" style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;align-items:start;padding:11px;border:1px solid var(--line,#e5e7eb);border-radius:10px;background:rgba(15,23,42,.62);">
             <input type="radio" name="bankingAlertPreferenceMode" value="NO_BANKING_PAY_ALERTS" data-alert-preference-key="mode" ${currentMode === 'NO_BANKING_PAY_ALERTS' ? 'checked' : ''} />
-            <span>No Banking Pay alerts</span>
+            <span style="font-weight:700;font-size:13px;">Turn off Banking Pay alerts</span>
+            <span class="mini" style="grid-column:2;opacity:.76;white-space:normal;line-height:1.4;">Hide Banking alerts without changing payment processing or status.</span>
           </label>
         </div>
-      </div>
+      </section>
 
-      <div class="card" style="padding:10px;border:1px solid var(--line,#e5e7eb);">
-        <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Failure reasons</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:7px 12px;align-items:start;">
+      <section aria-labelledby="bankingAlertProblemsHeading" style="padding:14px;border:1px solid var(--line,#e5e7eb);border-radius:12px;">
+        <div id="bankingAlertProblemsHeading" style="font-weight:800;font-size:14px;">Payment problems</div>
+        <div class="mini" style="opacity:.76;margin-top:4px;margin-bottom:11px;white-space:normal;">These choices apply when <strong>Selected payment problems</strong> is chosen above.</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;align-items:stretch;">
           ${renderFailureReasonCheckboxes()}
         </div>
-      </div>
+      </section>
 
-      <div class="card" style="padding:10px;border:1px solid var(--line,#e5e7eb);">
-        <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Progress and informational alerts</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:7px 12px;align-items:start;">
+      <section aria-labelledby="bankingAlertUpdatesHeading" style="padding:14px;border:1px solid var(--line,#e5e7eb);border-radius:12px;">
+        <div id="bankingAlertUpdatesHeading" style="font-weight:800;font-size:14px;">Other payment updates</div>
+        <div class="mini" style="opacity:.76;margin-top:4px;margin-bottom:11px;white-space:normal;">Choose whether to receive progress and information updates as CloudTMS processes payment changes.</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;align-items:stretch;">
           ${renderInformationalCheckboxes()}
         </div>
-      </div>
+      </section>
 
-      <div class="card" style="padding:10px;border:1px solid var(--line,#e5e7eb);">
-        <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Successful payment alerts</div>
-        <label class="inline mini" style="display:flex;gap:7px;align-items:flex-start;">
+      <section aria-labelledby="bankingAlertSuccessHeading" style="padding:14px;border:1px solid var(--line,#e5e7eb);border-radius:12px;">
+        <div id="bankingAlertSuccessHeading" style="font-weight:800;font-size:14px;">Successful payment updates</div>
+        <label class="inline" style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;align-items:start;margin-top:10px;padding:11px;border:1px solid var(--line,#e5e7eb);border-radius:10px;background:rgba(34,197,94,.06);">
           <input type="checkbox" data-alert-preference-success-alerts="1" ${includeSuccessAlerts ? 'checked' : ''} />
-          <span>Show alerts when a future payment batch is scheduled and when a payment batch settles. Immediate payments and CSV settlements only alert on settlement.</span>
+          <span style="font-weight:700;font-size:13px;">Show successful payment alerts</span>
+          <span class="mini" style="grid-column:2;opacity:.8;white-space:normal;line-height:1.5;">
+            Future-dated payments alert when setup succeeds and again when settlement completes. Immediate payments alert on settlement only. CSV payments have one settlement alert, which records the export and does not mean CloudTMS transferred the money.
+          </span>
         </label>
-      </div>
+      </section>
 
-      <div class="card" style="padding:10px;border:1px solid var(--line,#e5e7eb);">
-        <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Muted scopes</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;align-items:start;">
-          <div style="display:flex;flex-direction:column;gap:5px;">
-            <label class="mini" style="font-weight:700;">Providers</label>
-            <textarea class="input" data-alert-preference-muted-providers="1" rows="3" placeholder="One provider per line, e.g. REVOLUT">${enc(mutedProviders.join('\n'))}</textarea>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:5px;">
-            <label class="mini" style="font-weight:700;">Batches</label>
-            <textarea class="input" data-alert-preference-muted-batches="1" rows="3" placeholder="One pay batch id per line">${enc(mutedBatches.join('\n'))}</textarea>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:5px;">
-            <label class="mini" style="font-weight:700;">Snooze until</label>
-            <input class="input" type="datetime-local" data-alert-preference-snoozed-until="1" value="${enc(toDateTimeLocalValue(snoozedUntilRaw))}" />
-            <div class="mini" style="opacity:.75;">Leave blank for no snooze.</div>
-          </div>
+      <section aria-labelledby="bankingAlertPauseHeading" style="padding:14px;border:1px solid var(--line,#e5e7eb);border-radius:12px;">
+        <div id="bankingAlertPauseHeading" style="font-weight:800;font-size:14px;">Temporarily pause alerts</div>
+        <div class="mini" style="opacity:.76;margin-top:4px;margin-bottom:10px;white-space:normal;">Pause all Banking alerts until a date and time you choose.</div>
+        <div style="display:flex;flex-direction:column;gap:5px;max-width:360px;">
+          <label class="mini" style="font-weight:700;">Pause alerts until</label>
+          <input class="input" type="datetime-local" data-alert-preference-snoozed-until="1" value="${enc(toDateTimeLocalValue(snoozedUntilRaw))}" />
+          <div class="mini" style="opacity:.75;white-space:normal;">Leave this blank to keep alerts active.</div>
         </div>
-      </div>
 
-      <div class="mini" style="padding:9px 10px;border:1px solid var(--line,#e5e7eb);border-radius:10px;background:rgba(59,130,246,.08);white-space:normal;">
-        Payment status will still update in Current Payment Status even if Banking Alerts are disabled.
+        <details style="margin-top:13px;padding-top:12px;border-top:1px solid var(--line,#e5e7eb);">
+          <summary style="cursor:pointer;font-weight:700;font-size:13px;">Advanced exclusions <span class="mini" style="font-weight:400;opacity:.72;">(optional)</span></summary>
+          <div class="mini" style="opacity:.76;margin-top:7px;white-space:normal;">Use these options only when you need to hide alerts from a specific payment provider or payment batch.</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;align-items:start;margin-top:10px;">
+          <div style="display:flex;flex-direction:column;gap:5px;">
+              <label class="mini" style="font-weight:700;">Payment providers to exclude</label>
+              <textarea class="input" data-alert-preference-muted-providers="1" rows="3" placeholder="One provider name per line, for example Revolut">${enc(mutedProviders.join('\n'))}</textarea>
+              <div class="mini" style="opacity:.72;white-space:normal;">Alerts from these providers will be hidden.</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:5px;">
+              <label class="mini" style="font-weight:700;">Payment batches to exclude</label>
+              <textarea class="input" data-alert-preference-muted-batches="1" rows="3" placeholder="One payment batch reference per line">${enc(mutedBatches.join('\n'))}</textarea>
+              <div class="mini" style="opacity:.72;white-space:normal;">Alerts from these payment batches will be hidden.</div>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <div class="mini" style="padding:11px 12px;border:1px solid rgba(59,130,246,.32);border-radius:10px;background:rgba(59,130,246,.08);white-space:normal;line-height:1.5;">
+        <strong>Payment processing is not affected.</strong> Turning alerts off, pausing them or excluding items only changes what appears in the Banking alerts list. Current Payment Status will continue to update normally.
       </div>
 
       ${statusLine}
 
-      <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
-        <button type="button" class="btn btn-sm btn-primary" data-action="banking:nav:alerts:preferences:save">Save Alert preferences</button>
+      <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;flex-wrap:wrap;padding-top:2px;">
+        <button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:preferences:refresh">Reload saved settings</button>
+        <button type="button" class="btn btn-sm btn-primary" data-action="banking:nav:alerts:preferences:save">Save changes</button>
       </div>
     </div>
   `;
@@ -96193,7 +96206,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           const html = renderBankingAlertPreferencesPanel();
           if (typeof openUiHtmlModal === 'function') {
             await openUiHtmlModal({
-              title: 'Banking Alert preferences',
+              title: 'Banking alert settings',
               html,
               confirm_label: 'Close',
               hide_cancel: true,
@@ -96207,10 +96220,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           return;
         }
       } catch (e) {
-        toast(String(e?.message || e || 'Unable to open Banking Alert preferences.'));
+        toast(String(e?.message || e || 'Unable to open Banking alert settings.'));
         return;
       }
-      toast('Banking Alert preferences are not available yet.');
+      toast('Banking alert settings are not available yet.');
       return;
     }
 
