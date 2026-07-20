@@ -187,11 +187,13 @@ for (const viewport of VIEWPORTS) {
       const caseType = String(requestUrl.searchParams.get('case_type') || '').toUpperCase();
       const viewMode = String(requestUrl.searchParams.get('view_mode') || '').toUpperCase();
       const financePage = Math.max(1, Number(requestUrl.searchParams.get('finance_page') || 1));
-      const financePageSize = Math.min(20, Math.max(1, Number(requestUrl.searchParams.get('finance_page_size') || 20)));
+      const financePageSize = Math.min(50, Math.max(1, Number(requestUrl.searchParams.get('finance_page_size') || 10)));
       const timesheetPage = Math.max(1, Number(requestUrl.searchParams.get('timesheet_page') || 1));
-      const timesheetPageSize = Math.min(20, Math.max(1, Number(requestUrl.searchParams.get('timesheet_page_size') || 20)));
+      const timesheetPageSize = Math.min(50, Math.max(1, Number(requestUrl.searchParams.get('timesheet_page_size') || 10)));
       const financeSortKey = String(requestUrl.searchParams.get('finance_sort_key') || 'created_at');
       const financeSortDir = String(requestUrl.searchParams.get('finance_sort_dir') || 'desc') === 'asc' ? 'asc' : 'desc';
+      const timesheetSortKey = String(requestUrl.searchParams.get('timesheet_sort_key') || 'created_at');
+      const timesheetSortDir = String(requestUrl.searchParams.get('timesheet_sort_dir') || 'desc') === 'asc' ? 'asc' : 'desc';
 
       const financeFiltered = financeRowsAll
         .filter((row) => !hideCompleted || !row.written_off_at_utc)
@@ -218,9 +220,16 @@ for (const viewport of VIEWPORTS) {
       const financeStart = (financeActualPage - 1) * financePageSize;
       const financePageRows = financeFiltered.slice(financeStart, financeStart + financePageSize);
 
-      const timesheetSorted = [...timesheetRowsAll].sort((left, right) => (
-        new Date(right.created_at_utc).getTime() - new Date(left.created_at_utc).getTime()
-      ));
+      const timesheetSorted = [...timesheetRowsAll].sort((left, right) => {
+        const direction = timesheetSortDir === 'asc' ? 1 : -1;
+        if (timesheetSortKey === 'candidate') {
+          return direction * left.candidate_display_name.localeCompare(right.candidate_display_name);
+        }
+        if (timesheetSortKey === 'timesheet') {
+          return direction * left.reference_number.localeCompare(right.reference_number);
+        }
+        return direction * (new Date(left.created_at_utc).getTime() - new Date(right.created_at_utc).getTime());
+      });
       const timesheetTotalPages = Math.max(1, Math.ceil(timesheetSorted.length / timesheetPageSize));
       const timesheetActualPage = Math.min(timesheetPage, timesheetTotalPages);
       const timesheetStart = (timesheetActualPage - 1) * timesheetPageSize;
@@ -261,8 +270,8 @@ for (const viewport of VIEWPORTS) {
               page_size: timesheetPageSize,
               total_count: timesheetRowsAll.length,
               total_pages: timesheetTotalPages,
-              sort_key: 'created_at',
-              sort_dir: 'desc'
+              sort_key: timesheetSortKey,
+              sort_dir: timesheetSortDir
             }
           }
         })
@@ -324,7 +333,7 @@ for (const viewport of VIEWPORTS) {
       .filter({ hasText: 'Recovery / Snooze / Comment' });
     await expect(financeCasesTable).toHaveCount(1);
     await expect(financeCasesTable).toBeVisible({ timeout: 60_000 });
-    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]')).toHaveCount(20);
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]')).toHaveCount(10);
     await expect(financeCasesTable).toContainText('Recovery: 5 taxable recovery items');
     await expect(financeCasesTable).toContainText('Comment: No comment');
     await expect(financeCasesTable).toContainText('Active');
@@ -335,12 +344,16 @@ for (const viewport of VIEWPORTS) {
     const timesheetSnoozesTable = bankingModal
       .locator('table.grid')
       .filter({ hasText: 'Snooze / Lifecycle' });
-    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]')).toHaveCount(20);
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]')).toHaveCount(10);
+    await expect(timesheetSnoozesTable.getByRole('button', { name: 'Sort timesheet snoozes by Candidate' })).toBeVisible();
+    await expect(timesheetSnoozesTable.getByRole('button', { name: 'Sort timesheet snoozes by Timesheet' })).toBeVisible();
+    await expect(timesheetSnoozesTable.getByRole('button', { name: 'Sort timesheet snoozes by Creation Date' })).toBeVisible();
 
     const financePagination = bankingModal.locator('[data-loans-snoozes-pagination="finance_cases"]');
     const timesheetPagination = bankingModal.locator('[data-loans-snoozes-pagination="timesheet_snoozes"]');
     const clickModalControl = async (control: ReturnType<typeof bankingModal.locator>) => {
       await control.evaluate((element) => {
+        element.scrollIntoView({ block: 'center', inline: 'center' });
         let ancestor = element.parentElement;
         while (ancestor) {
           const ancestorRect = ancestor.getBoundingClientRect();
@@ -353,52 +366,121 @@ for (const viewport of VIEWPORTS) {
           }
           ancestor = ancestor.parentElement;
         }
+        element.scrollIntoView({ block: 'center', inline: 'center' });
       });
       await expect(control).toBeInViewport();
       await control.click();
     };
-    await expect(financePagination).toContainText('Page 1 of 3');
-    await expect(timesheetPagination).toContainText('Page 1 of 2');
+    const financePageSizeSelect = financePagination.getByRole('combobox', { name: 'Finance cases rows per page' });
+    const timesheetPageSizeSelect = timesheetPagination.getByRole('combobox', { name: 'Timesheet snoozes rows per page' });
+    await expect(financePageSizeSelect).toHaveValue('10');
+    await expect(timesheetPageSizeSelect).toHaveValue('10');
+    await expect(financePageSizeSelect.locator('option')).toHaveText(['5', '10', '20', '50']);
+    await expect(timesheetPageSizeSelect.locator('option')).toHaveText(['5', '10', '20', '50']);
+    await expect(financePagination).toContainText('Page 1 of 5');
+    await expect(timesheetPagination).toContainText('Page 1 of 3');
     await expect(financePagination.getByRole('button', { name: 'Previous Finance cases page' })).toBeDisabled();
     await expect(timesheetPagination.getByRole('button', { name: 'Previous Timesheet snoozes page' })).toBeDisabled();
 
     await clickModalControl(financePagination.getByRole('button', { name: 'Next Finance cases page' }));
-    await expect(financePagination).toContainText('Page 2 of 3');
-    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]')).toHaveCount(20);
+    await expect(financePagination).toContainText('Page 2 of 5');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]')).toHaveCount(10);
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Candidate 11');
     expect(loansRequestUrls.at(-1)?.searchParams.get('finance_page')).toBe('2');
     expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_page')).toBe('1');
+    await clickModalControl(financePagination.getByRole('button', { name: 'Previous Finance cases page' }));
+    await expect(financePagination).toContainText('Page 1 of 5');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Test Candidate');
 
     await clickModalControl(timesheetPagination.getByRole('button', { name: 'Next Timesheet snoozes page' }));
-    await expect(timesheetPagination).toContainText('Page 2 of 2');
-    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]')).toHaveCount(5);
-    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_page')).toBe('2');
+    await expect(timesheetPagination).toContainText('Page 2 of 3');
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]')).toHaveCount(10);
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('Snoozed Candidate 11');
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_page')).toBe('1');
     expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_page')).toBe('2');
+    await clickModalControl(timesheetPagination.getByRole('button', { name: 'Previous Timesheet snoozes page' }));
+    await expect(timesheetPagination).toContainText('Page 1 of 3');
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('Snoozed Candidate 01');
 
     await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Candidate' }));
-    await expect(financePagination).toContainText('Page 1 of 3');
+    await expect(financePagination).toContainText('Page 1 of 5');
     expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_key')).toBe('candidate');
     expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('asc');
     await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Candidate 02');
+    await clickModalControl(financePagination.getByRole('button', { name: 'Next Finance cases page' }));
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Candidate 12');
 
     await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Candidate' }));
     expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('desc');
     await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Test Candidate');
+    await clickModalControl(financePagination.getByRole('button', { name: 'Next Finance cases page' }));
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Candidate 36');
 
     await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Case Type' }));
     expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_key')).toBe('case_type');
     expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('asc');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Manual Debt Adjustment');
+    await clickModalControl(financePagination.getByRole('button', { name: 'Next Finance cases page' }));
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Manual Debt Adjustment');
     await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Case Type' }));
     expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('desc');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Underpayment');
+    await clickModalControl(financePagination.getByRole('button', { name: 'Next Finance cases page' }));
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Underpayment');
 
     await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Creation Date' }));
     expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_key')).toBe('created_at');
     expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('desc');
     await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Test Candidate');
+    await clickModalControl(financePagination.getByRole('button', { name: 'Next Finance cases page' }));
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Candidate 11');
     await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Creation Date' }));
     expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('asc');
     await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Candidate 45');
-    await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Creation Date' }));
-    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('desc');
+    await clickModalControl(financePagination.getByRole('button', { name: 'Next Finance cases page' }));
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]').first()).toContainText('Candidate 35');
+
+    await clickModalControl(timesheetSnoozesTable.getByRole('button', { name: 'Sort timesheet snoozes by Candidate' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_sort_key')).toBe('candidate');
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_sort_dir')).toBe('asc');
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('Snoozed Candidate 01');
+    await clickModalControl(timesheetPagination.getByRole('button', { name: 'Next Timesheet snoozes page' }));
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('Snoozed Candidate 11');
+    await clickModalControl(timesheetSnoozesTable.getByRole('button', { name: 'Sort timesheet snoozes by Candidate' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_sort_dir')).toBe('desc');
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('Snoozed Candidate 25');
+    await clickModalControl(timesheetPagination.getByRole('button', { name: 'Next Timesheet snoozes page' }));
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('Snoozed Candidate 15');
+
+    await clickModalControl(timesheetSnoozesTable.getByRole('button', { name: 'Sort timesheet snoozes by Timesheet' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_sort_key')).toBe('timesheet');
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_sort_dir')).toBe('asc');
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('REF-01');
+    await clickModalControl(timesheetPagination.getByRole('button', { name: 'Next Timesheet snoozes page' }));
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('REF-11');
+    await clickModalControl(timesheetSnoozesTable.getByRole('button', { name: 'Sort timesheet snoozes by Timesheet' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_sort_dir')).toBe('desc');
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('REF-25');
+
+    await clickModalControl(timesheetSnoozesTable.getByRole('button', { name: 'Sort timesheet snoozes by Creation Date' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_sort_key')).toBe('created_at');
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_sort_dir')).toBe('desc');
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('Snoozed Candidate 01');
+    await clickModalControl(timesheetPagination.getByRole('button', { name: 'Next Timesheet snoozes page' }));
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('Snoozed Candidate 11');
+    await clickModalControl(timesheetSnoozesTable.getByRole('button', { name: 'Sort timesheet snoozes by Creation Date' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('timesheet_sort_dir')).toBe('asc');
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('Snoozed Candidate 25');
+    await clickModalControl(timesheetPagination.getByRole('button', { name: 'Next Timesheet snoozes page' }));
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]').first()).toContainText('Snoozed Candidate 15');
+
+    await financePageSizeSelect.selectOption('5');
+    await expect(financePageSizeSelect).toHaveValue('5');
+    await expect(financeCasesTable.locator('[data-loans-snoozes-record="finance-case"]')).toHaveCount(5);
+    await expect(timesheetPageSizeSelect).toHaveValue('10');
+    await timesheetPageSizeSelect.selectOption('5');
+    await expect(timesheetPageSizeSelect).toHaveValue('5');
+    await expect(timesheetSnoozesTable.locator('[data-loans-snoozes-record="timesheet-snooze"]')).toHaveCount(5);
 
     const visibleModalText = await bankingModal.innerText();
     expect(visibleModalText).not.toMatch(/\b(?:stale_count|is_mixed_case|open_taxable_count|open_reimbursement_count|unresolved_taxable_count)\b/i);
@@ -422,6 +504,8 @@ for (const viewport of VIEWPORTS) {
 
     await viewModeSelect.selectOption('');
     await hideCompletedCheckbox.check();
+    await clickModalControl(financeCasesTable.getByRole('button', { name: 'Sort finance cases by Creation Date' }));
+    expect(loansRequestUrls.at(-1)?.searchParams.get('finance_sort_dir')).toBe('desc');
     const specialFinanceRow = financeCasesTable
       .locator('[data-loans-snoozes-record="finance-case"]')
       .filter({ hasText: 'Test Candidate' });
