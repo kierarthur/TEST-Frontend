@@ -48,7 +48,11 @@ test('Create Draft requires review when the authoritative selected set changed',
     'const countEligibleCandidatesForScope ='
   );
 
-  assert.match(refreshBody, /const remapped = previousIds\.length !== allCurrentSelectedIds\.length/);
+  assert.match(refreshBody, /const rawSelectionReviewContext =/);
+  assert.match(refreshBody, /const currentRevisionUnavailable =/);
+  assert.match(refreshBody, /const reviewedProgressChanged =/);
+  assert.match(refreshBody, /reviewedSelectionSetComplete/);
+  assert.match(refreshBody, /const remapped = currentRevisionUnavailable \|\| reviewedProgressChanged/);
   assert.match(refreshBody, /WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED/);
   assert.match(refreshBody, /operation_started: false/);
   assert.match(refreshBody, /no_operation_started: true/);
@@ -61,6 +65,11 @@ test('Create Draft requires review when the authoritative selected set changed',
   const refreshCall = createBody.indexOf('refreshCurrentSelectedPreviewRowsForCreateDraft(');
   const failureStop = createBody.indexOf('if (!currentSelectionBeforeSubmit || currentSelectionBeforeSubmit.ok !== true)');
   const draftRequest = createBody.indexOf('/api/banking/pay/batch/create-draft');
+
+  assert.match(createBody, /const createDraftSelectionReviewSnapshot =/);
+  assert.match(createBody, /selection_review_snapshot/);
+  assert.match(createBody, /expectedSessionVersion,\s*createDraftSelectionReviewSnapshot/);
+  assert.match(mainSource, /captured_from_rendered_workbench: true/);
 
   assert.ok(refreshCall >= 0);
   assert.ok(failureStop > refreshCall, 'selection mismatch must stop after the authoritative refresh');

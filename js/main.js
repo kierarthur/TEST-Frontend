@@ -33341,11 +33341,26 @@ async function bankingPayCreateDraft(input = {}) {
       economic_keyspace: 'timesheet_id,key_type,key_value'
     };
   };
-  const refreshCurrentSelectedPreviewRowsForCreateDraft = async (activeSessionId, previousSelectedRowIds = [], selectedMode = 'IMPLICIT_ALL', channelScope = 'ALL', expectedSessionVersion = null) => {
+  const refreshCurrentSelectedPreviewRowsForCreateDraft = async (activeSessionId, previousSelectedRowIds = [], selectedMode = 'IMPLICIT_ALL', channelScope = 'ALL', expectedSessionVersion = null, selectionReviewContext = null) => {
     const id = trimStr(activeSessionId);
     const requestedScope = upperTrim(channelScope || 'ALL') || 'ALL';
-    const previousIds = uniqTrimmed(previousSelectedRowIds);
+    const rawSelectionReviewContext = isPlainObject(selectionReviewContext) ? selectionReviewContext : {};
+    const reviewContextSessionId = trimStr(rawSelectionReviewContext.session_id || rawSelectionReviewContext.sessionId || '');
+    const reviewContextSessionVersion = normalizeSessionVersionForCreateDraft(rawSelectionReviewContext.session_version ?? rawSelectionReviewContext.sessionVersion);
     const expectedSessionVersionNormalized = normalizeSessionVersionForCreateDraft(expectedSessionVersion);
+    const reviewContextMatchesSession = (
+      (!reviewContextSessionId || reviewContextSessionId === id) &&
+      (!reviewContextSessionVersion || reviewContextSessionVersion === expectedSessionVersionNormalized)
+    );
+    const reviewedSelectionSetComplete = reviewContextMatchesSession && rawSelectionReviewContext.selected_set_complete === true;
+    const reviewedProgressCounterVersion = reviewContextMatchesSession
+      ? normalizeSessionVersionForCreateDraft(rawSelectionReviewContext.progress_counter_version ?? rawSelectionReviewContext.progressCounterVersion)
+      : null;
+    const previousIds = uniqTrimmed(
+      reviewContextMatchesSession && Array.isArray(rawSelectionReviewContext.selected_preview_row_ids)
+        ? rawSelectionReviewContext.selected_preview_row_ids
+        : previousSelectedRowIds
+    );
     if (!id) {
       return {
         ok: false,
@@ -33591,7 +33606,19 @@ async function bankingPayCreateDraft(input = {}) {
     }
 
     const currentSet = new Set(allCurrentSelectedIds);
-    const remapped = previousIds.length !== allCurrentSelectedIds.length || previousIds.some((rowId) => !currentSet.has(rowId));
+    const exactSelectionRemapped = previousIds.length !== allCurrentSelectedIds.length || previousIds.some((rowId) => !currentSet.has(rowId));
+    const currentProgressCounterVersion = normalizeSessionVersionForCreateDraft(normalisedPage.progress_counter_version ?? normalisedPage.progressCounterVersion);
+    const currentRevisionUnavailable = !!reviewedProgressCounterVersion && !currentProgressCounterVersion;
+    const reviewedProgressChanged = !!(
+      reviewedProgressCounterVersion &&
+      currentProgressCounterVersion &&
+      reviewedProgressCounterVersion !== currentProgressCounterVersion
+    );
+    const remapped = currentRevisionUnavailable || reviewedProgressChanged || (
+      reviewedSelectionSetComplete
+        ? exactSelectionRemapped
+        : (!reviewedProgressCounterVersion ? exactSelectionRemapped : false)
+    );
     const selectedModeNormalised = normalizeSelectedPreviewRowMode(selectedMode || 'IMPLICIT_ALL', allCurrentUniverseIds, allCurrentSelectedIds);
 
     try {
@@ -34496,6 +34523,39 @@ async function bankingPayCreateDraft(input = {}) {
   wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
   wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : { data: null, loading: false, error: '', readiness: null, candidateDebtInfo: {}, failure: null, componentStateCache: {} };
   wiz.decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {};
+
+  // Capture what the user actually saw before any asynchronous readiness or page
+  // refresh can adopt changes made in another shared Banking Pay window.
+  const createDraftSelectionReviewSnapshot = (() => {
+    const stored = isPlainObject(wiz.workbench.selection_review_snapshot)
+      ? wiz.workbench.selection_review_snapshot
+      : (isPlainObject(wiz.workbench.selectionReviewSnapshot) ? wiz.workbench.selectionReviewSnapshot : null);
+    if (stored) return deep(stored);
+    const serverSelectionProvided = (
+      wiz.workbench.server_selected_preview_row_ids_provided === true ||
+      wiz.decisions.server_selected_preview_row_ids_provided === true
+    );
+    const selectedIds = uniqTrimmed(
+      wiz.workbench.server_selected_preview_row_ids_provided === true
+        ? wiz.workbench.server_selected_preview_row_ids
+        : (wiz.decisions.server_selected_preview_row_ids_provided === true
+            ? wiz.decisions.server_selected_preview_row_ids
+            : (wiz.decisions.selected_preview_row_ids || wiz.workbench.selected_preview_row_ids || []))
+    );
+    const rawProgress = Number(
+      wiz.workbench.progress_counter_version ??
+      wiz.workbench.progressCounterVersion ??
+      wiz.preview?.data?.progress_counter_version ??
+      wiz.preview?.data?.progressCounterVersion
+    );
+    return {
+      session_id: trimStr(wiz.workbench.session_id || wiz.workbench.sessionId || wiz.preview?.data?.session_id || wiz.preview?.data?.sessionId || ''),
+      session_version: wiz.workbench.session_version ?? wiz.workbench.sessionVersion ?? wiz.preview?.data?.session_version ?? wiz.preview?.data?.sessionVersion ?? null,
+      progress_counter_version: Number.isSafeInteger(rawProgress) && rawProgress >= 0 ? rawProgress : null,
+      selected_preview_row_ids: selectedIds,
+      selected_set_complete: serverSelectionProvided
+    };
+  })();
 
   const createDraftLogTag = `[bankingPayCreateDraft:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}]`;
   const cloneForLog = (value) => {
@@ -36582,7 +36642,8 @@ async function bankingPayCreateDraft(input = {}) {
       syncedSelectedRows,
       selectedPreviewSelection.selected_preview_row_mode,
       payChannelScope || 'ALL',
-      expectedSessionVersion
+      expectedSessionVersion,
+      createDraftSelectionReviewSnapshot
     );
 
     if (currentSelectionBeforeSubmit?.error_code === 'BANKING_PAY_CREATE_DRAFT_NO_ROWS_FOR_SCOPE') {
@@ -52461,6 +52522,40 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   );
   selectedPreviewRowSet = (previewRowsVm.selectedPreviewRowSet instanceof Set) ? previewRowsVm.selectedPreviewRowSet : new Set();
   const effectiveAllPreviewRowIds = uniqTrimmed(previewRowsVm.allSelectableRowIds);
+  try {
+    const renderedServerSelectionProvided = (
+      wiz.workbench.server_selected_preview_row_ids_provided === true ||
+      wiz.decisions.server_selected_preview_row_ids_provided === true
+    );
+    const renderedBaseIds = uniqTrimmed(
+      wiz.workbench.server_selected_preview_row_ids_provided === true
+        ? wiz.workbench.server_selected_preview_row_ids
+        : (wiz.decisions.server_selected_preview_row_ids_provided === true
+            ? wiz.decisions.server_selected_preview_row_ids
+            : (wiz.decisions.selected_preview_row_ids || wiz.workbench.selected_preview_row_ids || []))
+    );
+    const renderedGlobalSelectionSet = new Set(renderedBaseIds);
+    for (const rowId of effectiveAllPreviewRowIds) renderedGlobalSelectionSet.delete(rowId);
+    for (const rowId of selectedPreviewRowSet) renderedGlobalSelectionSet.add(rowId);
+    const rawRenderedProgressCounterVersion = Number(
+      wiz.workbench.progress_counter_version ??
+      wiz.workbench.progressCounterVersion ??
+      wiz.preview?.data?.progress_counter_version ??
+      wiz.preview?.data?.progressCounterVersion
+    );
+    const renderedReviewSnapshot = {
+      session_id: trimStr(wiz.workbench.session_id || wiz.workbench.sessionId || wiz.preview?.data?.session_id || wiz.preview?.data?.sessionId || ''),
+      session_version: wiz.workbench.session_version ?? wiz.workbench.sessionVersion ?? wiz.preview?.data?.session_version ?? wiz.preview?.data?.sessionVersion ?? null,
+      progress_counter_version: Number.isSafeInteger(rawRenderedProgressCounterVersion) && rawRenderedProgressCounterVersion >= 0
+        ? rawRenderedProgressCounterVersion
+        : null,
+      selected_preview_row_ids: Array.from(renderedGlobalSelectionSet),
+      selected_set_complete: renderedServerSelectionProvided,
+      captured_from_rendered_workbench: true
+    };
+    wiz.workbench.selection_review_snapshot = renderedReviewSnapshot;
+    wiz.workbench.selectionReviewSnapshot = renderedReviewSnapshot;
+  } catch {}
   const canonicalPreviewLines = previewRowsVm.canonicalRows;
   const readyPreviewLines = previewRowsVm.readyRows;
   const blockedPreviewLines = previewRowsVm.blockedRows;

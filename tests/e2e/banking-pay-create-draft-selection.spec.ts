@@ -52,6 +52,7 @@ test('requires review and starts no draft when the authoritative selection chang
   let simulateConcurrentChange = false;
   let modifiedPreviewResponses = 0;
   let createDraftRequests = 0;
+  let simulatedRemovedRowId = '';
 
   page.on('request', (request) => {
     const url = new URL(request.url());
@@ -73,7 +74,8 @@ test('requires review and starts no draft when the authoritative selection chang
     const selectedIndex = originalRows.findIndex((row) => {
       if (!row || typeof row !== 'object') return false;
       const value = row as Record<string, unknown>;
-      return value.selected === true && String(value.status || '').toUpperCase() === 'READY';
+      const rowId = String(value.preview_row_id || value.previewRowId || value.id || '');
+      return rowId === simulatedRemovedRowId && value.selected === true && String(value.status || '').toUpperCase() === 'READY';
     });
     expect(selectedIndex).toBeGreaterThanOrEqual(0);
 
@@ -83,8 +85,8 @@ test('requires review and starts no draft when the authoritative selection chang
     for (const key of ['returned_count', 'returnedCount', 'known_count', 'knownCount', 'total_count', 'totalCount']) {
       if (Number.isFinite(Number(payload[key]))) payload[key] = Math.max(0, Number(payload[key]) - 1);
     }
+    payload.progress_counter_version = Number(payload.progress_counter_version || 0) + 2;
     modifiedPreviewResponses += 1;
-    simulateConcurrentChange = false;
 
     await route.fulfill({
       response,
@@ -101,13 +103,37 @@ test('requires review and starts no draft when the authoritative selection chang
   const createButton = await openBankingPay(page);
   expect(getInterceptedMainUrl()).toBe('https://testmode.arthur-rai.co.uk/js/main.js');
 
+  const hiddenConcurrentState = await page.evaluate(() => {
+    const wizard = window.modalCtx?.banking?.pay?.draftWizard;
+    if (!wizard?.workbench || !wizard?.decisions) throw new Error('Banking Pay wizard state is unavailable');
+    const review = wizard.workbench.selection_review_snapshot;
+    const reviewedIds = Array.isArray(review?.selected_preview_row_ids) ? review.selected_preview_row_ids.map(String).filter(Boolean) : [];
+    if (reviewedIds.length < 2) throw new Error('Rendered Banking Pay selection snapshot is unavailable');
+    const rowId = reviewedIds[0];
+    const removeRowId = (value: unknown) => Array.isArray(value) ? value.map(String).filter((id) => id && id !== rowId) : value;
+    for (const target of [wizard.workbench, wizard.decisions, wizard.preview?.data, wizard.preview?.data?.preview]) {
+      if (!target || typeof target !== 'object') continue;
+      for (const key of ['selected_preview_row_ids', 'server_selected_preview_row_ids']) {
+        if (Array.isArray((target as Record<string, unknown>)[key])) {
+          (target as Record<string, unknown>)[key] = removeRowId((target as Record<string, unknown>)[key]);
+        }
+      }
+    }
+    return { rowId, reviewedCount: reviewedIds.length };
+  });
+  simulatedRemovedRowId = hiddenConcurrentState.rowId;
+  expect(hiddenConcurrentState.reviewedCount).toBeGreaterThan(1);
+
   simulateConcurrentChange = true;
   await createButton.click();
+  const confirmButton = page.getByRole('button', { name: 'Confirm', exact: true });
+  await expect(confirmButton).toBeVisible();
+  await confirmButton.click();
 
   await expect(page.getByText('Banking Pay selection changed', { exact: true }).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText('Banking Pay was changed by another user or window. The latest selection is now shown. Review it, then click Create Draft again.', { exact: true }).first()).toBeVisible();
 
-  expect(modifiedPreviewResponses).toBe(1);
+  expect(modifiedPreviewResponses).toBeGreaterThanOrEqual(1);
   expect(createDraftRequests).toBe(0);
   expect(unexpectedProductionBackendRequests).toEqual([]);
   await page.getByRole('button', { name: 'OK', exact: true }).last().click();
