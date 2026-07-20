@@ -80,6 +80,71 @@ test('popover renders successful schedule and settlement messages with clear con
   assert.match(markup, /2 unread Banking alerts/);
 });
 
+test('popover treats deferred alert detail as loading and never as permanently unavailable', () => {
+  const source = sliceBetween('function renderBankingNavAlertPopover(attentionState)', 'function applyAlertSummaryToState(responsePayload)');
+  const context = {
+    window: {},
+    Intl,
+    Date,
+    Number,
+    String,
+    Math,
+    Array,
+    Object,
+    JSON,
+    encodeURIComponent
+  };
+  vm.runInNewContext(source, context, { filename: 'banking-alert-popover.js' });
+  const markup = context.renderBankingNavAlertPopover({
+    count: 3,
+    alerts: [],
+    detailsDeferred: true,
+    detailsSettledDeferred: true,
+    banking_alert_summary: {
+      unacknowledged_count: 3,
+      alerts: [],
+      detailsDeferred: true,
+      detailsSettledDeferred: true
+    }
+  });
+
+  assert.match(markup, /Loading Banking alert details/);
+  assert.doesNotMatch(markup, /details are not available yet/i);
+  assert.match(markup, /data-banking-alert-details-loading="1"/);
+});
+
+test('opening a popover with missing rows starts the dedicated full-detail alert fetch', () => {
+  const handlers = sliceBetween('function attachBankingNavAlertPopoverHandlers()', 'function renderBankingNavAlertPopover(attentionState)');
+  assert.match(handlers, /startDirectAlertDetailFetch/);
+  assert.match(handlers, /bankingAlertsFetchActive\(\{ silent: true, limit: 100 \}\)/);
+  assert.match(handlers, /missingRowsForPositiveCount === true[\s\S]*startDirectAlertDetailFetch\(hash\)/);
+});
+
+test('alert preferences closes the high-layer alert popover before opening preferences', () => {
+  const handlers = sliceBetween('function attachBankingNavAlertPopoverHandlers()', 'function renderBankingNavAlertPopover(attentionState)');
+  const preferencesBranch = handlers.slice(
+    handlers.indexOf("if (action === 'banking:nav:alerts:preferences')"),
+    handlers.indexOf("if (action === 'banking:nav:alerts:clear')")
+  );
+  assert.match(preferencesBranch, /removePopover\(\)/);
+  assert.doesNotMatch(preferencesBranch, /refreshOpenPopover/);
+  assert.doesNotMatch(preferencesBranch, /refreshBankingNavAttentionFromCachedRows/);
+});
+
+test('single-clear handler removes the row optimistically and does not reapply cached batch alerts', () => {
+  const handlers = sliceBetween('function attachBankingNavAlertPopoverHandlers()', 'function renderBankingNavAlertPopover(attentionState)');
+  const clearBranch = handlers.slice(
+    handlers.indexOf("if (action === 'banking:nav:alerts:clear')"),
+    handlers.indexOf("if (action === 'banking:nav:alerts:clearAll')")
+  );
+  assert.match(clearBranch, /optimisticallyRemoveAlertRows\(\{ alertFingerprint \}\)/);
+  assert.match(clearBranch, /alert_kind: alertKind/);
+  assert.match(clearBranch, /entity_id: entityId/);
+  assert.match(clearBranch, /alert_payload_json: payloadJson/);
+  assert.match(clearBranch, /refreshOpenPopover\(stateBeforeClear\)/);
+  assert.doesNotMatch(clearBranch, /refreshBankingNavAttentionFromCachedRows/);
+});
+
 test('summary application no longer filters success-only alerts', () => {
   const source = sliceBetween('function applyAlertSummaryToState(responsePayload)', 'async function bankingAcknowledgeAlerts(input = {})');
   let attentionState = null;
@@ -186,6 +251,7 @@ function createAcknowledgeContext(responseSummary, options = {}) {
     API(value) { return value; },
     async authFetch(url, fetchOptions) {
       requests.push({ url, method: fetchOptions.method, body: JSON.parse(fetchOptions.body) });
+      if (typeof options.authFetch === 'function') return await options.authFetch(url, fetchOptions);
       if (configuredResponse) return configuredResponse;
       return {
         ok: true,
@@ -252,6 +318,30 @@ test('clearing one alert sends its full identity and keeps the remaining message
   assert.ok(context.window.__bankingLocallyAcknowledgedFingerprints[scheduledAlert.alert_fingerprint]);
 });
 
+test('single clear suppresses the selected row while the server response is still in flight', async () => {
+  let releaseResponse;
+  const responsePromise = new Promise((resolve) => { releaseResponse = resolve; });
+  const remainingSummary = {
+    alerts: [settledAlert],
+    unacknowledged_count: 1,
+    banking_unacknowledged_alert_count: 1
+  };
+  const { context } = createAcknowledgeContext(remainingSummary, {
+    async authFetch() { return await responsePromise; }
+  });
+
+  const pending = context.bankingAcknowledgeAlerts(scheduledAlert);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(context.window.__bankingLocallyAcknowledgedFingerprints[scheduledAlert.alert_fingerprint]);
+
+  releaseResponse({
+    ok: true,
+    status: 200,
+    async text() { return JSON.stringify({ ok: true, remaining_alert_summary: remainingSummary }); }
+  });
+  await pending;
+});
+
 test('clear all sends an explicit clear_all request and empties the alert state', async () => {
   const emptySummary = {
     alerts: [],
@@ -288,6 +378,7 @@ test('expired session gives a specific reason when an alert cannot be cleared', 
   const modal = getFriendlyModal();
   assert.equal(modal.title, 'Session expired');
   assert.match(modal.message, /sign in again/i);
+  assert.equal(context.window.__bankingLocallyAcknowledgedFingerprints[scheduledAlert.alert_fingerprint], undefined);
 });
 
 test('preferences expose successful lifecycle alerts as enabled by default', () => {
