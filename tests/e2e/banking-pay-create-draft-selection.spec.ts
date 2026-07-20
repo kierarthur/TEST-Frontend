@@ -139,6 +139,66 @@ test('requires review and starts no draft when the authoritative selection chang
   await page.getByRole('button', { name: 'OK', exact: true }).last().click();
 });
 
+test('an early shared-session revision drift reaches the exact selection review', async ({ page }) => {
+  test.setTimeout(120_000);
+
+  const getInterceptedMainUrl = await installLocalMain(page);
+  let simulateRevisionDrift = false;
+  let modifiedProgressResponses = 0;
+  let modifiedPreviewResponses = 0;
+  let createDraftRequests = 0;
+
+  await page.route('**/api/banking/pay/workbench/session/*/progress**', async (route) => {
+    const url = new URL(route.request().url());
+    if (!simulateRevisionDrift || url.hostname !== testBackendHost) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const payload = await response.json() as Record<string, unknown>;
+    payload.progress_counter_version = Number(payload.progress_counter_version || 0) + 1;
+    if (payload.progress && typeof payload.progress === 'object' && !Array.isArray(payload.progress)) {
+      (payload.progress as Record<string, unknown>).progress_counter_version = payload.progress_counter_version;
+    }
+    modifiedProgressResponses += 1;
+    await route.fulfill({ response, contentType: 'application/json; charset=utf-8', body: JSON.stringify(payload) });
+  });
+
+  await page.route('**/api/banking/pay/workbench/session/*/preview-page**', async (route) => {
+    const url = new URL(route.request().url());
+    if (!simulateRevisionDrift || url.hostname !== testBackendHost || url.searchParams.get('section') !== 'canonical_preview_lines') {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const payload = await response.json() as Record<string, unknown>;
+    payload.progress_counter_version = Number(payload.progress_counter_version || 0) + 1;
+    modifiedPreviewResponses += 1;
+    await route.fulfill({ response, contentType: 'application/json; charset=utf-8', body: JSON.stringify(payload) });
+  });
+
+  await page.route('**/api/banking/pay/batch/create-draft', async (route) => {
+    createDraftRequests += 1;
+    await route.abort('blockedbyclient');
+  });
+
+  const createButton = await openBankingPay(page);
+  expect(getInterceptedMainUrl()).toBe('https://testmode.arthur-rai.co.uk/js/main.js');
+
+  simulateRevisionDrift = true;
+  await createButton.click();
+  const confirmButton = page.getByRole('button', { name: 'Confirm', exact: true });
+  await expect(confirmButton).toBeVisible();
+  await confirmButton.click();
+
+  await expect(page.getByText('Banking Pay selection changed', { exact: true }).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('Banking Pay was changed by another user or window. The latest selection is now shown. Review it, then click Create Draft again.', { exact: true }).first()).toBeVisible();
+  expect(modifiedProgressResponses).toBeGreaterThanOrEqual(1);
+  expect(modifiedPreviewResponses).toBeGreaterThanOrEqual(1);
+  expect(createDraftRequests).toBe(0);
+  await page.getByRole('button', { name: 'OK', exact: true }).last().click();
+});
+
 test('a rejected row change reloads server truth and repaints the checkbox', async ({ page }) => {
   test.setTimeout(120_000);
 

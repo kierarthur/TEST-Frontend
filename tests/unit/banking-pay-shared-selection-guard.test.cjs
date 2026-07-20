@@ -76,6 +76,26 @@ test('Create Draft requires review when the authoritative selected set changed',
   assert.ok(draftRequest > failureStop, 'no create request may be sent before the mismatch stop');
 });
 
+test('an early shared-session revision change reaches the exact selection recheck', () => {
+  const createBody = sliceBetween(
+    'async function bankingPayCreateDraft',
+    'function bankingPayHasPollableRailEvidence'
+  );
+  const progressChangedGuard = createBody.indexOf('if (localExpectedProgressCounterVersion && authoritativeProgressCounterVersion && localExpectedProgressCounterVersion !== authoritativeProgressCounterVersion)');
+  const deferredLog = createBody.indexOf('INITIAL_PROGRESS_COUNTER_CHANGED_DEFERRED_TO_EXACT_SELECTION_RECHECK');
+  const exactSelectionRefresh = createBody.indexOf('const currentSelectionBeforeSubmit = await refreshCurrentSelectedPreviewRowsForCreateDraft(');
+  const draftRequest = createBody.indexOf('/api/banking/pay/batch/create-draft');
+
+  assert.ok(progressChangedGuard >= 0, 'the early revision comparison must remain');
+  assert.ok(deferredLog > progressChangedGuard, 'revision drift must be explicitly deferred');
+  assert.ok(exactSelectionRefresh > deferredLog, 'server truth must be re-read after revision drift');
+  assert.ok(draftRequest > exactSelectionRefresh, 'the draft request must remain after the exact selection guard');
+  assert.doesNotMatch(
+    createBody,
+    /return await rejectAuthoritativeCreateDraftReadiness\('INITIAL_PROGRESS_COUNTER_CHANGED'/
+  );
+});
+
 test('current-page reload keeps the existing page instead of advancing pagination', () => {
   const pageBody = sliceBetween(
     'const loadPayWorkbenchPreviewPageForSection =',

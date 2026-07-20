@@ -36174,14 +36174,15 @@ async function bankingPayCreateDraft(input = {}) {
   }
   const authoritativeProgressCounterVersion = normalizeSessionVersionForCreateDraft(authoritativeReadinessSnapshot.progress_counter_version);
   if (localExpectedProgressCounterVersion && authoritativeProgressCounterVersion && localExpectedProgressCounterVersion !== authoritativeProgressCounterVersion) {
-    return await rejectAuthoritativeCreateDraftReadiness('INITIAL_PROGRESS_COUNTER_CHANGED', {
-      ...authoritativeReadinessSnapshot,
-      gate_ready: false,
-      blocker_codes: uniqTrimmed([...(authoritativeReadinessSnapshot.blocker_codes || []), 'SESSION_PROGRESS_CHANGED_BEFORE_CREATE_DRAFT'])
-    }, {
+    // A shared-workbench revision can advance after this window renders but
+    // before Create Draft is clicked. Do not collapse that known race into the
+    // generic "workbench not ready" path: the exact selection recheck below
+    // reloads server truth, repaints the latest selection, and stops before the
+    // draft endpoint with WORKBENCH_SELECTION_CHANGED_REVIEW_REQUIRED.
+    logTroubleshoot('info', 'INITIAL_PROGRESS_COUNTER_CHANGED_DEFERRED_TO_EXACT_SELECTION_RECHECK', {
       expected_progress_counter_version: localExpectedProgressCounterVersion,
       current_progress_counter_version: authoritativeProgressCounterVersion,
-      local_refresh_diagnostics: localRefreshDiagnostics
+      session_id: sessionId
     });
   }
 
