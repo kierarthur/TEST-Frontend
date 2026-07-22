@@ -588,6 +588,7 @@
       sortBy: prior?.sortBy || String(saved.sort_by || 'CANDIDATE').toUpperCase(),
       sortDirection: prior?.sortDirection || String(saved.sort_direction || 'ASC').toUpperCase(),
       pageData: null,
+      scope: null,
       dirty: prior?.dirty || new Map(),
       expanded: prior?.expanded || new Set([
         ...(Array.isArray(saved.expanded_candidates) ? saved.expanded_candidates : []),
@@ -604,6 +605,8 @@
       confirmAcknowledged: false,
       saveState: '', error: options.message || '', busy: false, screen: 'review', epoch
     };
+    if (isSingleClientHealthRoster(state.review) && state.review.sortBy === 'CLIENT') state.review.sortBy = 'CANDIDATE';
+    state.review.scope = await fetchScope(importId, 1, 25).catch(() => null);
     state.review.pageData = await fetchActionPage(state.review);
     if (epoch !== state.reviewEpoch) return;
     showScreen('Import review', renderReview, 'import-review-v1');
@@ -799,8 +802,11 @@
     const usable = options.filter((option) => option && option.selectable !== false);
     if (!editable) return '';
     if (!options.length) return '<span class="irv1-advisory">No eligible existing option is available. Correct the underlying records, then choose Recheck.</span>';
+    const disabledReason = (option) => option.disabled_reason_code === 'CONTRACT_NOT_ELIGIBLE' ? 'contract is not currently eligible'
+      : option.disabled_reason_code === 'CONTRACT_RATES_INCOMPLETE' ? 'rates are incomplete for authoritative processing'
+        : option.selectable === false ? 'not eligible for this row and date' : '';
     return `<div class="irv1-resolution"><select class="input" data-ir-grade-option="${esc(item.action_id)}">
-      <option value="">Choose an existing option</option>${options.map((option) => `<option value="${esc(option.option_id || '')}" ${option.selectable === false ? 'disabled="disabled"' : ''}>${esc(option.display_label || [option.role, option.band, option.site].filter(Boolean).join(' · ') || 'Existing option')}${option.rate_complete === false ? ' · rates incomplete' : ''}</option>`).join('')}
+      <option value="">Choose an existing option</option>${options.map((option) => `<option value="${esc(option.option_id || '')}" ${option.selectable === false ? 'disabled="disabled"' : ''}>${esc(option.display_label || [option.role, option.band, option.site].filter(Boolean).join(' · ') || 'Existing option')}${disabledReason(option) ? ` · unavailable: ${esc(disabledReason(option))}` : ''}</option>`).join('')}
       </select><button type="button" class="irv1-btn" data-ir-action="resolve-mapping" data-resolution="GRADE" data-action-id="${esc(item.action_id)}" ${usable.length ? '' : 'disabled="disabled" aria-disabled="true"'}>Save mapping</button></div>`;
   }
 
@@ -823,31 +829,77 @@
     return `<tr data-action-id="${esc(item.action_id)}"><td>${checkbox}</td><td>${evidenceCell(item, 'imported_evidence')}</td><td>${evidenceCell(item, 'current_evidence')}</td><td>${differenceCell(item)}</td><td><strong>${esc(item.outcome_label || 'Review item')}</strong>${reason}${excluded ? `<span class="irv1-advisory">${esc(excluded)}</span>` : ''}${advice}${resolution}</td></tr>`;
   }
 
-  function groupItems(items, review) {
-    const groups = new Map();
-    for (const item of items) {
-      const candidate = item.candidate_name || item.summary?.candidate_name || 'Unknown candidate';
-      const candidateId = String(item.candidate_id || item.source_identity || item.action_id);
-      const client = item.client_name || item.summary?.client_name || 'Unknown client';
-      const clientId = String(item.client_id || item.summary?.recipient_scope_key || item.target_key || item.action_id);
-      const week = item.week_ending_date || item.summary?.week_ending_date || item.work_date || item.summary?.work_date || 'Unknown week';
-      if (!groups.has(candidateId)) groups.set(candidateId, { label: candidate, clients: new Map() });
-      const candidateGroup = groups.get(candidateId);
-      if (!candidateGroup.clients.has(clientId)) candidateGroup.clients.set(clientId, { label: client, weeks: new Map() });
-      const clientGroup = candidateGroup.clients.get(clientId);
-      if (!clientGroup.weeks.has(week)) clientGroup.weeks.set(week, []);
-      clientGroup.weeks.get(week).push(item);
+  function reviewRoute(review) {
+    return String(review?.header?.import?.source_route || review?.header?.import?.source_system || '').toUpperCase();
+  }
+
+  function isSingleClientHealthRoster(review) {
+    const route = reviewRoute(review);
+    return route.includes('HR') || route.includes('HEALTHROSTER') ? !route.includes('NHSP') : false;
+  }
+
+  function itemDimension(item, type) {
+    const summary = item.summary || {};
+    if (type === 'candidate') return {
+      id: String(item.candidate_branch_key || item.candidate_id || `source:${String(item.candidate_name || summary.candidate_name || item.source_identity || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '')}:${item.client_id || summary.client_name || ''}`),
+      label: item.candidate_name || summary.candidate_name || 'Unknown candidate',
+      badges: Array.isArray(item.branch_badges) ? item.branch_badges : []
+    };
+    if (type === 'client') return { id: String(item.client_id || summary.client_name || 'unknown'), label: item.client_name || summary.client_name || 'Unknown client' };
+    if (type === 'week') {
+      const value = item.week_ending_date || summary.week_ending_date || item.work_date || summary.work_date || 'unknown';
+      return { id: String(value), label: value === 'unknown' ? 'Unknown week' : `Week ending ${formatDate(value)}` };
     }
-    return Array.from(groups, ([candidateId, candidateGroup]) => {
-      const candidateKey = `candidate:${candidateId}`;
-      const open = review.expanded.has(candidateKey) || review.view === 'PENDING';
-      const clientHtml = Array.from(candidateGroup.clients, ([clientId, clientGroup]) => {
-        const clientKey = `client:${candidateId}:${clientId}`;
-        return `<details class="irv1-group" data-ir-expand-key="${esc(clientKey)}" ${review.expanded.has(clientKey) ? 'open' : ''}><summary>${esc(clientGroup.label)}</summary>${Array.from(clientGroup.weeks, ([week, shifts]) => { const weekKey = `week:${candidateId}:${clientId}:${week}`; return `<details class="irv1-group" data-ir-expand-key="${esc(weekKey)}" ${review.expanded.has(weekKey) ? 'open' : ''}><summary>Week ending ${esc(formatDate(week))} · ${shifts.length} item${shifts.length === 1 ? '' : 's'}</summary><table class="irv1-shifts"><thead><tr><th>Use</th><th>Imported evidence</th><th>Current CloudTMS evidence</th><th>Difference</th><th>Proposed outcome</th></tr></thead><tbody>${shifts.map((item) => shiftRow(item, review)).join('')}</tbody></table></details>`; }).join('')}</details>`;
-      }).join('');
-      const count = Array.from(candidateGroup.clients.values()).reduce((sum, clientGroup) => sum + Array.from(clientGroup.weeks.values()).reduce((n, rows) => n + rows.length, 0), 0);
-      return `<details class="irv1-group" data-ir-expand-key="${esc(candidateKey)}" ${open ? 'open' : ''}><summary>${esc(candidateGroup.label)} · ${count} item(s)</summary>${clientHtml}</details>`;
-    }).join('');
+    if (type === 'date') {
+      const value = item.work_date || summary.work_date || 'unknown';
+      return { id: String(value), label: value === 'unknown' ? 'Unknown date' : formatDate(value) };
+    }
+    if (type === 'action') return { id: String(item.action_kind || 'UNKNOWN'), label: item.outcome_label || 'Review item' };
+    return { id: String(item.action_category || 'UNKNOWN'), label: String(item.action_category || 'Unknown status').toLowerCase().replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase()) };
+  }
+
+  function branchBadgesHtml(badges) {
+    const unique = new Map();
+    for (const badge of (badges || [])) if (badge?.code && !unique.has(badge.code)) unique.set(badge.code, badge);
+    return unique.size ? `<span class="irv1-branch-badges">${Array.from(unique.values()).map((badge) => `<span class="irv1-branch-badge" title="${esc(badge.label || badge.code)}">${esc(badge.label || badge.code)}${Number(badge.count || 0) > 1 ? ` ×${Number(badge.count)}` : ''}</span>`).join('')}</span>` : '';
+  }
+
+  function groupItems(items, review) {
+    const singleClient = isSingleClientHealthRoster(review);
+    const primary = String(review.sortBy || 'CANDIDATE').toUpperCase();
+    const dimensions = primary === 'CLIENT' && !singleClient ? ['client', 'candidate', 'week']
+      : primary === 'WEEK_ENDING' ? ['week', 'candidate', ...(singleClient ? [] : ['client'])]
+        : primary === 'WORK_DATE' ? ['date', 'candidate', ...(singleClient ? [] : ['client']), 'week']
+          : primary === 'ACTION' ? ['action', 'candidate', ...(singleClient ? [] : ['client']), 'week']
+            : primary === 'STATUS' ? ['status', 'candidate', ...(singleClient ? [] : ['client']), 'week']
+              : ['candidate', ...(singleClient ? [] : ['client']), 'week'];
+    const root = { children: new Map(), items: [] };
+    for (const item of items) {
+      let node = root;
+      const path = [];
+      for (const type of dimensions) {
+        const dim = itemDimension(item, type);
+        path.push(`${type}=${dim.id}`);
+        const keyPrefix = type === 'candidate' ? 'candidate' : type === 'client' ? 'client' : type === 'week' ? 'week' : 'shift';
+        const key = `${keyPrefix}:${path.join('|')}`;
+        if (!node.children.has(key)) node.children.set(key, { key, type, label: dim.label, badges: dim.badges || [], children: new Map(), items: [], count: 0 });
+        node = node.children.get(key);
+        if (type === 'candidate' && dim.badges?.length) node.badges = dim.badges;
+        node.count += 1;
+      }
+      node.items.push(item);
+    }
+
+    const table = (rows) => `<table class="irv1-shifts"><thead><tr><th>Use</th><th>Imported evidence</th><th>Current CloudTMS evidence</th><th>Difference</th><th>Proposed outcome</th></tr></thead><tbody>${rows.map((item) => shiftRow(item, review)).join('')}</tbody></table>`;
+    const renderNode = (node, depth) => {
+      const isPrimary = depth === 0;
+      const open = review.expanded.has(node.key) || (review.view === 'PENDING' && isPrimary);
+      const children = Array.from(node.children.values()).map((child) => renderNode(child, depth + 1)).join('');
+      const badges = node.type === 'candidate' ? branchBadgesHtml(node.badges) : '';
+      const bigToggle = isPrimary ? `<button type="button" class="irv1-branch-toggle" data-ir-action="toggle-branch" data-expand="${open ? 'false' : 'true'}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(node.label)} and all sections">${open ? '−' : '+'}</button>` : '';
+      return `<details class="irv1-group" data-ir-expand-key="${esc(node.key)}" ${open ? 'open' : ''}><summary>${bigToggle}<span class="irv1-group-label">${esc(node.label)} · ${node.count} item${node.count === 1 ? '' : 's'}</span>${badges}</summary>${children}${node.items.length ? table(node.items) : ''}</details>`;
+    };
+    return Array.from(root.children.values()).map((node) => renderNode(node, 0)).join('');
   }
 
   function renderEmailGroups(items, review) {
@@ -870,7 +922,7 @@
   }
 
   function sortButtons(review) {
-    const entries = [['CANDIDATE', 'Candidate'], ['CLIENT', 'Client'], ['WEEK_ENDING', 'Week ending'], ['WORK_DATE', 'Date'], ['ACTION', 'Action'], ['STATUS', 'Status']];
+    const entries = [['CANDIDATE', 'Candidate'], ...(isSingleClientHealthRoster(review) ? [] : [['CLIENT', 'Client']]), ['WEEK_ENDING', 'Week ending'], ['WORK_DATE', 'Date'], ['ACTION', 'Action'], ['STATUS', 'Status']];
     return entries.map(([key, label]) => `<button type="button" class="irv1-sort ${review.sortBy === key ? 'is-active' : ''}" data-ir-action="sort" data-sort="${key}">${esc(label)}${review.sortBy === key ? (review.sortDirection === 'ASC' ? ' ↑' : ' ↓') : ''}</button>`).join('');
   }
 
@@ -986,6 +1038,16 @@
     const selectedCount = Number(summary.selected_total ?? (Array.isArray(apply.selected_action_ids) ? apply.selected_action_ids.length : 0));
     const invalidationCount = Number(summary.selected_reference_invalidation_count ?? (Array.isArray(apply.reference_invalidation_action_ids) ? apply.reference_invalidation_action_ids.length : 0));
     const evidence = header.evidence || {};
+    const authority = review.scope?.authority_summary || {};
+    const authorityMode = String(review.scope?.authority_mode || authority.mode || '').toUpperCase();
+    const authorityText = authorityMode === 'AUTHORITATIVE'
+      ? 'Current policy: authoritative. Selected imported shifts may be added, amended or cancelled by TMS after final approval.'
+      : authorityMode === 'VALIDATION_ONLY'
+        ? 'Current policy: validation only. No timesheet hours or financial values will be changed from this import.'
+        : authorityMode === 'MIXED'
+          ? 'Current policy: mixed by contract. Each row is independently restricted to its server-approved authority.'
+          : 'Current policy cannot yet be confirmed. Resolve the outstanding mappings or settings and choose Recheck.';
+    const settingsAsOf = authority.settings_as_of_date ? formatDate(authority.settings_as_of_date) : 'today';
     const items = Array.isArray(confirmation?.items) ? confirmation.items : [];
     const operational = items.filter((item) => ['INCLUDE_SHIFT','APPLY_AMENDMENT','APPLY_CANCELLATION','MARK_VALIDATION_ERROR'].includes(item.action_kind));
     const emails = items.filter((item) => ['EMAIL_ISSUE','EMAIL_REMINDER'].includes(item.action_kind));
@@ -997,6 +1059,7 @@
     const readOnlyReview = { ...review, header: { ...review.header, state: { ...review.header.state, editability: { allowed_commands: [] } } } };
     return `<div class="irv1-shell"><section class="irv1-intro"><div><h3>Final confirmation</h3><p>The server will revalidate the saved review before committing. The browser is not supplying financial values, validation rows or email recipients.</p></div><span class="irv1-contract">${esc(header.state.status)}</span></section>
       ${review.error ? `<div class="irv1-alert error">${esc(review.error)}</div>` : ''}
+      <div class="irv1-alert ${authorityMode === 'UNRESOLVED' || authorityMode === 'OUT_OF_SCOPE' ? 'error' : ''}"><strong>${esc(authorityText)}</strong><div class="mini">Settings checked as of ${esc(settingsAsOf)}; contract date coverage is still checked against each shift date.</div></div>
       <div class="irv1-settings-grid"><div class="irv1-settings-card"><strong>Source and coverage</strong><p>${esc(header.import.filename || 'Import')}<br/>${esc(String(header.import.coverage_mode || '').replaceAll('_', ' '))}<br/>${esc(formatDate(header.import.coverage_start_date))} to ${esc(formatDate(header.import.coverage_end_date))}</p><div class="mini">Verified source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12))} · parser ${esc(evidence.parser_version || '—')} · preview generation ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-settings-card"><strong>Operational changes</strong><p>${Number(summary.selected_change_count || 0)} change(s)<br/>${selectedCount} total saved selection(s)</p></div><div class="irv1-settings-card"><strong>Client query email</strong><p>${Number(summary.selected_email_issue_count || 0)} new issue(s)<br/>${Number(summary.selected_email_reminder_count || 0)} explicit reminder(s)</p><div class="mini">The server groups every selected item into one email per normalised recipient address.</div></div><div class="irv1-settings-card"><strong>Reference decisions</strong><p>${invalidationCount} explicit invalidation(s)<br/>${Number(summary.blocking_count || 0)} unresolved blocker(s)</p></div></div>
       <section class="irv1-confirm-section"><h4>Selected shifts and validation outcomes</h4>${operational.length ? operational.map(confirmationItemHtml).join('') : '<div class="irv1-empty">No shift change or validation action is selected.</div>'}<div class="mini">${noActionCount} selected row(s) require no change. ${Math.max(0, Number(confirmation?.catalogueTotal || 0) - selectedCount)} row(s) are excluded.</div></section>
       <section class="irv1-confirm-section"><h4>DB-owned correction units</h4>${correctionUnits.length ? correctionUnits.map((unit) => `<div class="irv1-confirm-line"><strong>${esc(unit.correction_shape === 'REVERSAL_ONLY' ? 'Reversal only' : 'Reversal and replacement')}</strong><span>Timesheet ${esc(unit.root_timesheet_id || '—')} · source ${esc(unit.source_row_key || '—')} · ${esc(unit.correction_action === 'CANCELLATION' ? 'cancellation' : 'changed hours')}</span></div>`).join('') : '<div class="mini">No reversal correction unit is required.</div>'}<div class="mini">Financial values remain server-owned and are not calculated or displayed by the browser.</div></section>
@@ -1233,7 +1296,7 @@
       if (isDaily) await global.postHrRotaResolveMappings(review.importId, { client_aliases: [alias] });
       else await global.postWeeklyResolveMappings(review.importId, route === 'NHSP' ? 'NHSP' : 'HR_WEEKLY', { candidate_mappings: [], client_aliases: [alias] });
     }
-    await refreshReview();
+    return true;
   }
 
   async function resolveMapping(button) {
@@ -1242,9 +1305,14 @@
     if (!item || !kind || !reviewCan(state.review, 'SAVE_SELECTIONS')) return;
     const summary = item.summary || {};
     const route = String(state.review.header?.import?.source_route || state.review.header?.import?.source_system || '').toUpperCase();
+    const reviewRouteState = { importId: state.review.importId };
     if (kind === 'CANDIDATE') {
       if (typeof global.openCandidatePicker !== 'function') throw new Error('The candidate picker is unavailable.');
-      return global.openCandidatePicker(async ({ id, label }) => persistMapping(item, kind, { id, label }), {
+      return global.openCandidatePicker(async ({ id, label }) => {
+        await persistMapping(item, kind, { id, label });
+        setTimeout(() => { if (state.review?.importId === reviewRouteState.importId) void refreshReview(); }, 0);
+        return true;
+      }, {
         context: { staffName: summary.candidate_name || item.candidate_name, unit: summary.client_name || item.client_name, importId: state.review.importId, dateYmd: item.work_date || summary.work_date },
         seed_hint: { source: 'import_review_v3', display_name: summary.candidate_name || item.candidate_name || '' },
         ignoreMembership: true
@@ -1252,7 +1320,11 @@
     }
     if (kind === 'CLIENT') {
       if (typeof global.openClientPicker !== 'function') throw new Error('The client picker is unavailable.');
-      return global.openClientPicker(async ({ id, label }) => persistMapping(item, kind, { id, label }));
+      return global.openClientPicker(async ({ id, label }) => {
+        await persistMapping(item, kind, { id, label });
+        setTimeout(() => { if (state.review?.importId === reviewRouteState.importId) void refreshReview(); }, 0);
+        return true;
+      });
     }
     if (kind === 'GRADE') {
       const select = document.querySelector(`[data-ir-grade-option="${CSS.escape(item.action_id)}"]`);
@@ -1340,6 +1412,20 @@
       if (action === 'sort') {
         const key = button.getAttribute('data-sort');
         return changeReviewPage({ sortBy: key, sortDirection: state.review.sortBy === key && state.review.sortDirection === 'ASC' ? 'DESC' : 'ASC', page: 1 });
+      }
+      if (action === 'toggle-branch') {
+        const details = button.closest('details[data-ir-expand-key]');
+        if (!details || !state.review) return;
+        const expand = button.getAttribute('data-expand') === 'true';
+        for (const branch of [details, ...details.querySelectorAll('details[data-ir-expand-key]')]) {
+          const key = branch.getAttribute('data-ir-expand-key');
+          branch.open = expand;
+          if (key) { if (expand) state.review.expanded.add(key); else state.review.expanded.delete(key); }
+        }
+        button.textContent = expand ? '−' : '+';
+        button.setAttribute('data-expand', expand ? 'false' : 'true');
+        button.setAttribute('aria-label', `${expand ? 'Collapse' : 'Expand'} this group and all sections`);
+        return;
       }
       if (action === 'refresh') return refreshReview();
       if (action === 'abandon') return abandonReview();

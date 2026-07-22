@@ -31,6 +31,20 @@ test('review pagination uses only the approved page sizes and saves before navig
   assert.match(source, /data-ir-action="sort"/);
 });
 
+test('review nesting follows the active sort and keeps full-branch context', () => {
+  assert.match(source, /primary === 'CLIENT'.*\['client', 'candidate', 'week'\]/s);
+  assert.match(source, /primary === 'WEEK_ENDING'.*\['week', 'candidate'/s);
+  assert.match(source, /primary === 'WORK_DATE'.*\['date', 'candidate'/s);
+  assert.match(source, /primary === 'ACTION'.*\['action', 'candidate'/s);
+  assert.match(source, /primary === 'STATUS'.*\['status', 'candidate'/s);
+  assert.match(source, /isSingleClientHealthRoster/);
+  assert.match(source, /candidate_branch_key/);
+  assert.match(source, /branch_badges/);
+  assert.match(source, /data-ir-action="toggle-branch"/);
+  assert.match(css, /\.irv1-branch-toggle/);
+  assert.match(css, /\.irv1-branch-badge/);
+});
+
 test('review lifecycle supports resume, recheck, abandon, apply status and follow-up retry', () => {
   for (const route of [
     '/refresh', '/abandon', '/apply', '/apply-status', '/follow-up/retry',
@@ -63,6 +77,13 @@ test('V3 grade resolution is server-option-only and route specific', () => {
   assert.match(source, /postHrRotaResolveMappings/);
   assert.match(source, /freshItem\.evidence_fingerprint !== item\.evidence_fingerprint/);
   assert.doesNotMatch(source, /irv2GradeRole|irv2GradeBand|Role code is required/);
+  assert.match(source, /contract is not currently eligible/);
+  assert.match(source, /rates are incomplete for authoritative processing/);
+});
+
+test('candidate and client picker success returns to the intact parent before recheck', () => {
+  assert.match(source, /await persistMapping\(item, kind, \{ id, label \}\);[\s\S]*setTimeout\(\(\) =>/);
+  assert.match(source, /if \(state\.review\?\.importId === reviewRouteState\.importId\) void refreshReview\(\)/);
 });
 
 test('V3 renders imported and current evidence with safe operator wording', () => {
