@@ -41,6 +41,8 @@ test('review nesting follows the active sort and keeps full-branch context', () 
   assert.match(source, /candidate_branch_key/);
   assert.match(source, /branch_badges/);
   assert.match(source, /data-ir-action="toggle-branch"/);
+  assert.match(source, /expanded: prior\?\.expanded \|\| new Set\(\)/);
+  assert.doesNotMatch(source, /review\.view === 'PENDING' && isPrimary/);
   assert.match(css, /\.irv1-branch-toggle/);
   assert.match(css, /\.irv1-branch-badge/);
 });
@@ -98,6 +100,7 @@ test('V3 renders imported and current evidence with safe operator wording', () =
   assert.match(source, /This item needs review/);
   assert.match(source, /function evidenceCell/);
   assert.match(source, /Timesheet shift is missing from the import/);
+  assert.match(source, /Imported shift is not currently in CloudTMS/);
   assert.doesNotMatch(source, /replaceAll\('_', ' '\)\.toLowerCase/);
 });
 

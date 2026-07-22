@@ -590,12 +590,11 @@
       pageData: null,
       scope: null,
       dirty: prior?.dirty || new Map(),
-      expanded: prior?.expanded || new Set([
-        ...(Array.isArray(saved.expanded_candidates) ? saved.expanded_candidates : []),
-        ...(Array.isArray(saved.expanded_clients) ? saved.expanded_clients : []),
-        ...(Array.isArray(saved.expanded_weeks) ? saved.expanded_weeks : []),
-        ...(Array.isArray(saved.expanded_shifts) ? saved.expanded_shifts : [])
-      ]),
+      // A newly opened review starts fully collapsed so the large recursive
+      // expand control is immediately available.  Deliberate branch choices
+      // are still retained while the same review remains open (paging/sort
+      // changes use the existing review state via preserveLocal).
+      expanded: prior?.expanded || new Set(),
       saveChain: prior?.saveChain || Promise.resolve(true),
       pendingSave: prior?.pendingSave || null,
       conflictBuffer: prior?.conflictBuffer || null,
@@ -774,7 +773,7 @@
   function differenceHtml(item) {
     const codes = Array.isArray(item.difference_codes) ? item.difference_codes : [];
     const labels = {
-      NEW_SHIFT: 'Not currently in CloudTMS', TIMESHEET_SELECTION_REQUIRED: 'Timesheet choice required',
+      NEW_SHIFT: 'Imported shift is not currently in CloudTMS', TIMESHEET_SELECTION_REQUIRED: 'Timesheet choice required',
       START_TIME: 'Start differs', END_TIME: 'End differs', START_END_MISMATCH: 'Start/end differs',
       BREAK_MINUTES: 'Break differs', BREAK_MINUTES_MISMATCH: 'Break differs', WORKED_HOURS: 'Hours differ',
       ACTUAL_HOURS_MISMATCH: 'Hours differ', MISSING_FROM_IMPORT: 'Missing from complete import',
@@ -893,7 +892,7 @@
     const table = (rows) => `<table class="irv1-shifts"><thead><tr><th>Use</th><th>Imported evidence</th><th>Current CloudTMS evidence</th><th>Difference</th><th>Proposed outcome</th></tr></thead><tbody>${rows.map((item) => shiftRow(item, review)).join('')}</tbody></table>`;
     const renderNode = (node, depth) => {
       const isPrimary = depth === 0;
-      const open = review.expanded.has(node.key) || (review.view === 'PENDING' && isPrimary);
+      const open = review.expanded.has(node.key);
       const children = Array.from(node.children.values()).map((child) => renderNode(child, depth + 1)).join('');
       const badges = node.type === 'candidate' ? branchBadgesHtml(node.badges) : '';
       const bigToggle = isPrimary ? `<button type="button" class="irv1-branch-toggle" data-ir-action="toggle-branch" data-expand="${open ? 'false' : 'true'}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(node.label)} and all sections">${open ? '−' : '+'}</button>` : '';
