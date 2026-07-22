@@ -783,6 +783,36 @@
     return match ? match[1] : raw || '—';
   }
 
+  function workedHoursForDisplay(evidence) {
+    if (!evidence || typeof evidence !== 'object') return null;
+    const suppliedHours = evidence.worked_hours == null ? null : Number(evidence.worked_hours);
+    if (Number.isFinite(suppliedHours)) return suppliedHours;
+    const suppliedMinutes = evidence.worked_minutes == null ? null : Number(evidence.worked_minutes);
+    if (Number.isFinite(suppliedMinutes)) return Math.round(suppliedMinutes / 60 * 100) / 100;
+
+    const startRaw = String(evidence.start || '');
+    const endRaw = String(evidence.end || '');
+    const startTimestamp = Date.parse(startRaw);
+    const endTimestamp = Date.parse(endRaw);
+    let grossMinutes = Number.isFinite(startTimestamp) && Number.isFinite(endTimestamp)
+      ? Math.round((endTimestamp - startTimestamp) / 60000)
+      : null;
+    if (!Number.isFinite(grossMinutes) || grossMinutes <= 0) {
+      const startMatch = startRaw.match(/(\d{2}):(\d{2})/);
+      const endMatch = endRaw.match(/(\d{2}):(\d{2})/);
+      if (!startMatch || !endMatch) return null;
+      const startMinutes = Number(startMatch[1]) * 60 + Number(startMatch[2]);
+      const endMinutes = Number(endMatch[1]) * 60 + Number(endMatch[2]);
+      grossMinutes = endMinutes - startMinutes;
+      if (grossMinutes <= 0) grossMinutes += 24 * 60;
+    }
+    const breakMinutes = evidence.break_minutes == null ? 0 : Number(evidence.break_minutes);
+    if (!Number.isFinite(breakMinutes)) return null;
+    const workedMinutes = grossMinutes - breakMinutes;
+    if (workedMinutes < 0 || workedMinutes > 24 * 60) return null;
+    return Math.round(workedMinutes / 60 * 100) / 100;
+  }
+
   function selectedFor(item, review) {
     return review.dirty.has(item.action_id) ? review.dirty.get(item.action_id) : item.selected === true;
   }
@@ -804,10 +834,7 @@
 
   function evidenceHtml(evidence) {
     if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return '<span class="mini">—</span>';
-    const minutes = evidence.worked_minutes == null ? null : Number(evidence.worked_minutes);
-    const hours = evidence.worked_hours == null
-      ? (Number.isFinite(minutes) ? Math.round(minutes / 60 * 100) / 100 : null)
-      : Number(evidence.worked_hours);
+    const hours = workedHoursForDisplay(evidence);
     return `<dl class="irv1-evidence-list">
       <div><dt>Date</dt><dd>${esc(formatDate(evidence.work_date))}</dd></div>
       <div><dt>Time</dt><dd>${esc(timeText(evidence.start))}–${esc(timeText(evidence.end))}</dd></div>
@@ -1077,7 +1104,10 @@
   }
 
   function confirmationItemHtml(item) {
-    return `<article class="irv1-confirm-item"><div><strong>${esc(item.outcome_label || 'Review item')}</strong><span>${esc(item.candidate_name || item.summary?.candidate_name || 'Candidate')} · ${esc(item.client_name || item.summary?.client_name || 'Client')}</span></div><div class="irv1-confirm-evidence"><div><b>Imported</b>${evidenceCell(item, 'imported_evidence')}</div><div><b>Current</b>${evidenceCell(item, 'current_evidence')}</div><div><b>Difference</b>${differenceCell(item)}</div></div></article>`;
+    const changesCloudTms = /^TMS will\s/i.test(String(item.outcome_label || ''));
+    const importedLabel = changesCloudTms ? 'After apply (imported)' : 'Imported evidence';
+    const currentLabel = changesCloudTms ? 'Before apply (current)' : 'Current CloudTMS evidence';
+    return `<article class="irv1-confirm-item"><div><strong>${esc(item.outcome_label || 'Review item')}</strong><span>${esc(item.candidate_name || item.summary?.candidate_name || 'Candidate')} · ${esc(item.client_name || item.summary?.client_name || 'Client')}</span></div><div class="irv1-confirm-evidence"><div><b>${importedLabel}</b>${evidenceCell(item, 'imported_evidence')}</div><div><b>${currentLabel}</b>${evidenceCell(item, 'current_evidence')}</div><div><b>Difference</b>${differenceCell(item)}</div></div></article>`;
   }
 
   function renderApplyConfirmation(review) {

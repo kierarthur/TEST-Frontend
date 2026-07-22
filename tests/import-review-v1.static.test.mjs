@@ -131,6 +131,11 @@ test('V4 renders imported and current evidence with safe operator wording', () =
   assert.match(source, /Expenses must be invoiced on a separate timesheet for import-authoritative work/);
   assert.match(source, /This item needs review/);
   assert.match(source, /function evidenceCell/);
+  assert.match(source, /function workedHoursForDisplay/);
+  assert.match(source, /grossMinutes - breakMinutes/);
+  assert.match(source, /grossMinutes \+= 24 \* 60/);
+  assert.match(source, /After apply \(imported\)/);
+  assert.match(source, /Before apply \(current\)/);
   assert.match(source, /Timesheet shift is missing from the import/);
   assert.match(source, /Imported shift is not currently in CloudTMS/);
   assert.doesNotMatch(source, /replaceAll\('_', ' '\)\.toLowerCase/);
