@@ -85,6 +85,13 @@ test('browser sends intent through the Worker and never direct-calls Supabase', 
   assert.doesNotMatch(source, /validation_rows|alternative_email|financial_values/);
 });
 
+test('transient import-review reads retry once without retrying mutations', () => {
+  assert.match(source, /const maxAttempts = method === 'GET' \? 2 : 1/);
+  assert.match(source, /status === 502/);
+  assert.match(source, /global\.setTimeout\(resolve, 250\)/);
+  assert.match(source, /cache: options\.cache \|\| 'no-store'/);
+});
+
 test('email confirmation states and renders one message per shared recipient with contract sections', () => {
   assert.match(source, /One email to/);
   assert.match(source, /combined into one tidy message/);

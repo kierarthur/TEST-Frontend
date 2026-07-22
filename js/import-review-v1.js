@@ -53,20 +53,34 @@
 
   async function request(path, options = {}) {
     if (typeof global.authFetch !== 'function') throw new Error('The signed-in API helper is unavailable.');
-    const response = await global.authFetch(apiUrl(path), options);
-    const text = await response.text().catch(() => '');
-    let payload = null;
-    try { payload = text ? JSON.parse(text) : {}; } catch { payload = { message: text }; }
-    if (!response.ok || payload?.ok === false) {
-      const message = payload?.error?.message || payload?.message || payload?.error_message || `Request failed (${response.status})`;
-      const error = new Error(message);
-      error.status = response.status;
-      error.code = payload?.error?.code || payload?.error_code || 'REQUEST_FAILED';
-      error.action = payload?.error?.action || null;
-      error.payload = payload;
-      throw error;
+    const method = String(options.method || 'GET').toUpperCase();
+    const maxAttempts = method === 'GET' ? 2 : 1;
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await global.authFetch(apiUrl(path), method === 'GET' ? { ...options, cache: options.cache || 'no-store' } : options);
+        const text = await response.text().catch(() => '');
+        let payload = null;
+        try { payload = text ? JSON.parse(text) : {}; } catch { payload = { message: text }; }
+        if (!response.ok || payload?.ok === false) {
+          const message = payload?.error?.message || payload?.message || payload?.error_message || `Request failed (${response.status})`;
+          const error = new Error(message);
+          error.status = response.status;
+          error.code = payload?.error?.code || payload?.error_code || 'REQUEST_FAILED';
+          error.action = payload?.error?.action || null;
+          error.payload = payload;
+          throw error;
+        }
+        return payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
+      } catch (error) {
+        lastError = error;
+        const status = Number(error?.status || 0);
+        const transient = status === 0 || status === 408 || status === 500 || status === 502 || status === 503 || status === 504;
+        if (attempt >= maxAttempts || !transient) throw error;
+        await new Promise((resolve) => global.setTimeout(resolve, 250));
+      }
     }
-    return payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
+    throw lastError;
   }
 
   const IMPORT_SCREEN_KINDS = new Set(['imports-v1', 'import-coverage-v1', 'import-review-v1', 'import-review-confirm-v1']);
