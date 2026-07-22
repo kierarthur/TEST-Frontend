@@ -244,4 +244,5 @@ test('styles provide professional tiles, nested expandables, paging and responsi
     assert.ok(css.includes(selector), `${selector} must be styled`);
   }
   assert.match(css, /@media\(max-width:640px\)/);
+  assert.match(css, /\.irv1-card-filter strong,\.irv1-card-filter span,\.irv1-card-filter small\{display:block\}/);
 });
