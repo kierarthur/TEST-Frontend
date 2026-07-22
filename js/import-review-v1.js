@@ -779,6 +779,13 @@
 
   function timeText(value) {
     const raw = String(value || '');
+    const hasExplicitZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+    const timestamp = hasExplicitZone ? Date.parse(raw) : NaN;
+    if (Number.isFinite(timestamp)) {
+      return new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+      }).format(new Date(timestamp));
+    }
     const match = raw.match(/(\d{2}:\d{2})/);
     return match ? match[1] : raw || '—';
   }

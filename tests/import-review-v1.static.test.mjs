@@ -132,6 +132,8 @@ test('V4 renders imported and current evidence with safe operator wording', () =
   assert.match(source, /This item needs review/);
   assert.match(source, /function evidenceCell/);
   assert.match(source, /function workedHoursForDisplay/);
+  assert.match(source, /timeZone: 'Europe\/London'/);
+  assert.match(source, /hasExplicitZone/);
   assert.match(source, /grossMinutes - breakMinutes/);
   assert.match(source, /grossMinutes \+= 24 \* 60/);
   assert.match(source, /After apply \(imported\)/);
