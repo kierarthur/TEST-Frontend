@@ -20,7 +20,7 @@ test('the frontend fails closed on the full approved DB and Worker contract', ()
   for (const marker of [
     'IMPORT_REVIEW_DB_V1', 'IMPORT_REVIEW_APPLY_V1', 'IMPORT_APPLY_OPERATION_V2',
     'IMPORT_CORRECTION_OPERATION_V2', 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
-    'IMPORT_REVIEW_UI_V5', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
+    'IMPORT_REVIEW_UI_V6', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
   ]) assert.match(source, new RegExp(marker));
   assert.match(source, /legacy_contracts_supported === false/);
 });
@@ -143,15 +143,26 @@ test('V4 renders imported and current evidence with safe operator wording', () =
   assert.doesNotMatch(source, /replaceAll\('_', ' '\)\.toLowerCase/);
 });
 
-test('final confirmation loads every selected action in bounded pages and rechecks before apply', () => {
-  assert.match(source, /page_size: '100'/);
-  assert.match(source, /if \(page > 5\)/);
-  assert.match(source, /Final confirmation could not load every selected action/);
+test('final confirmation is server paged, grouped and rechecked before apply', () => {
+  assert.match(source, /CONFIRM_STANDARD/);
+  assert.match(source, /CONFIRM_NON_STANDARD/);
+  assert.match(source, /CONFIRM_VALIDATION/);
+  assert.match(source, /CONFIRM_EMAIL/);
+  assert.match(source, /CONFIRM_REFERENCE/);
+  assert.match(source, /data-ir-confirm-page-size/);
+  assert.match(source, /Page \$\{page\} of \$\{totalPages\}/);
+  assert.match(source, /candidate_section_total_count/);
+  assert.match(source, /client_section_total_count/);
+  assert.match(source, /Standard imported shifts/);
+  assert.match(source, /Changed and cancelled shifts/);
+  assert.match(source, /Before apply \(current\)/);
+  assert.match(source, /After apply \(imported\)/);
   assert.match(source, /selectedSetFingerprint/);
   assert.match(source, /confirmationStillCurrent/);
-  assert.match(source, /DB-owned correction units/);
   assert.match(source, /Explicit reference decisions/);
-  assert.match(source, /Outgoing client query emails/);
+  assert.match(source, /Outgoing client query email/);
+  assert.doesNotMatch(source, /DB-owned correction units/);
+  assert.doesNotMatch(source, /if \(page > 5\)/);
   assert.match(source, /expected_request_hash: review\.header\.state\.apply_contract\.request_hash/);
 });
 
@@ -301,7 +312,7 @@ test('HealthRoster eligibility is always reloaded without browser cache and inva
 });
 
 test('styles provide professional tiles, nested expandables, paging and responsive layouts', () => {
-  for (const selector of ['.irv1-tiles', '.irv1-tile', '.irv1-group', '.irv1-pager', '.irv1-email-group']) {
+  for (const selector of ['.irv1-tiles', '.irv1-tile', '.irv1-group', '.irv1-pager', '.irv1-email-group', '.irv1-confirm-table', '.irv1-confirm-pager', '.irv1-confirm-candidate']) {
     assert.ok(css.includes(selector), `${selector} must be styled`);
   }
   assert.match(css, /@media\(max-width:640px\)/);

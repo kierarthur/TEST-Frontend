@@ -18,7 +18,7 @@ const contract = {
   correction_operation_version: 'IMPORT_CORRECTION_OPERATION_V2',
   follow_up_component_version: 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
   incremental_apply_version: 'IMPORT_REVIEW_INCREMENTAL_APPLY_V1',
-  review_ui_contract_version: 'IMPORT_REVIEW_UI_V5',
+  review_ui_contract_version: 'IMPORT_REVIEW_UI_V6',
   email_grouping_version: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1',
   legacy_contracts_supported: false
 };
@@ -43,7 +43,7 @@ function header(status = 'READY', importId = IMPORT_ID) {
     },
     evidence: { source_file_sha256: HASH, parser_version: 'CLOUDTMS_IMPORT_REVIEW_PARSER_V1:HR_WEEKLY', preview_fingerprint: PREVIEW, preview_generation: 3 },
     confirmation_summary: {
-      selected_total: 3, selected_change_count: 1, selected_email_count: 2, selected_email_issue_count: 1,
+      selected_total: 1, selected_change_count: 1, selected_email_count: 2, selected_email_issue_count: 1,
       selected_email_reminder_count: 1, selected_reference_invalidation_count: 0, blocking_count: 0
     }
   };
@@ -64,9 +64,9 @@ function action(actionId: string, candidateId: string, candidate: string, client
   };
 }
 
-test('implements the V5 incremental review workflow on desktop and narrow Chromium', async ({ page }) => {
+test('implements the V6 incremental review workflow on desktop and narrow Chromium', async ({ page }) => {
   test.setTimeout(90_000);
-  const verifyDeployedAsset = process.env.VERIFY_DEPLOYED_IMPORT_REVIEW_V5_FULL === '1';
+  const verifyDeployedAsset = process.env.VERIFY_DEPLOYED_IMPORT_REVIEW_V6_FULL === '1';
   const localFiles = new Map([
     ['/index.html', resolve(__dirname, '../../index.html')],
     ['/js/main.js', resolve(__dirname, '../../js/main.js')],
@@ -84,6 +84,7 @@ test('implements the V5 incremental review workflow on desktop and narrow Chromi
   let nativeDialogCount = 0;
   let scopeAuthorityMode: 'AUTHORITATIVE' | 'VALIDATION_ONLY' | 'MIXED' = 'AUTHORITATIVE';
   let scopeSourceRoute = 'NHSP';
+  let finalConfirmationMode = false;
   const intercepted = new Set<string>();
 
   page.on('dialog', async (dialog) => {
@@ -100,7 +101,7 @@ test('implements the V5 incremental review workflow on desktop and narrow Chromi
       intercepted.add(key);
       let body = readFileSync(file);
       if (key === '/index.html') {
-        body = Buffer.from(body.toString('utf8').replace('</head>', '<script>window.__IMPORT_REVIEW_V5_PATCHED_ASSET__=true;</script></head>'));
+        body = Buffer.from(body.toString('utf8').replace('</head>', '<script>window.__IMPORT_REVIEW_V6_PATCHED_ASSET__=true;</script></head>'));
       }
       return route.fulfill({ status: 200, body, contentType: key.endsWith('.css') ? 'text/css' : key.endsWith('.js') ? 'application/javascript' : 'text/html' });
     });
@@ -146,7 +147,7 @@ test('implements the V5 incremental review workflow on desktop and narrow Chromi
     }
     if (path === `/api/import-reviews/${NEW_IMPORT_ID}/refresh` || path === `/api/import-reviews/${IMPORT_ID}/refresh`) {
       const body = JSON.parse(route.request().postData() || '{}');
-      expect(body).toMatchObject({ expected_state_version: 7, max_actions: 500 });
+      expect(body).toMatchObject({ expected_state_version: 7, max_actions: 5000 });
       refreshRequestCount += 1;
       return route.fulfill({ json: { ok: true, data: { status: 'READY', state_version: 8 } } });
     }
@@ -163,6 +164,19 @@ test('implements the V5 incremental review workflow on desktop and narrow Chromi
     if (path === `/api/import-reviews/${IMPORT_ID}/actions`) {
       const view = url.searchParams.get('view');
       const pageNumber = Number(url.searchParams.get('page') || 1);
+      const pageSize = Number(url.searchParams.get('page_size') || 25);
+      if (String(view || '').startsWith('CONFIRM_')) {
+        const total = view === 'CONFIRM_STANDARD' ? 26 : 0;
+        const start = (pageNumber - 1) * pageSize;
+        const items = view === 'CONFIRM_STANDARD'
+          ? Array.from({ length: Math.max(0, Math.min(pageSize, total - start)) }, (_unused, index) => {
+            const position = start + index + 1;
+            return { ...action(`confirm-${position}`, `candidate-${Math.ceil(position / 5)}`, `Candidate ${Math.ceil(position / 5)}`, 'client-1', 'Alpha Trust', true), candidate_section_total_count: Math.min(5, total - (Math.ceil(position / 5) - 1) * 5), client_section_total_count: total };
+          })
+          : [];
+        const totalPages = total ? Math.ceil(total / pageSize) : 0;
+        return route.fulfill({ json: { ok: true, data: { items, view_counts: { PENDING: 0, READY: 26, EMAIL: 0, NO_ACTION: 0 }, confirmation_counts: { selected_total: 26, standard: 26, non_standard: 0, amendment: 0, reversal_replacement: 0, cancellation: 0, reversal_only: 0, validation: 0, email: 0, reference: 0 }, page_number: pageNumber, page_size: pageSize, total_pages: totalPages, total_items: total, has_previous: pageNumber > 1, has_next: pageNumber < totalPages } } });
+      }
       if (view === 'EMAIL') {
         const base = { action_kind: 'EMAIL_ISSUE', action_category: 'EMAIL', selectable: true, selected: true, recipient_email: 'shared@example.test', recipient_group_key: 'RECIPIENT_EMAIL:stable', week_ending_date: '2026-07-05', work_date: '2026-07-02', outcome_label: 'Send new query', evidence_rows: [{ imported_evidence: { work_date: '2026-07-02', start: '08:00', end: '16:00', break_minutes: 30, worked_minutes: 450, role: 'RN' }, current_evidence: { work_date: '2026-07-02', start: '08:30', end: '16:00', break_minutes: 30, worked_minutes: 420, role: 'RN' }, difference_codes: ['START_TIME', 'WORKED_HOURS'] }], summary: { start_time: '08:00', end_time: '16:00', break_minutes: 30, role: 'RN', work_date: '2026-07-02' } };
         return route.fulfill({ json: { ok: true, data: { items: [
@@ -175,7 +189,15 @@ test('implements the V5 incremental review workflow on desktop and narrow Chromi
         : action('action-2', 'candidate-2', 'Adam Jones', 'client-2', 'Beta Trust', true);
       return route.fulfill({ json: { ok: true, data: { items: [item], view_counts: { PENDING: 0, READY: 2, EMAIL: 2, NO_ACTION: 0 }, page_number: pageNumber, total_pages: 2, total_items: 2, has_previous: pageNumber > 1, has_next: pageNumber < 2 } } });
     }
-    if (path === `/api/import-reviews/${IMPORT_ID}`) return route.fulfill({ json: { ok: true, data: header('READY') } });
+    if (path === `/api/import-reviews/${IMPORT_ID}`) {
+      const data = header('READY');
+      if (finalConfirmationMode) {
+        data.state.apply_contract.selected_action_ids = Array.from({ length: 26 }, (_unused, index) => `confirm-${index + 1}`);
+        data.confirmation_summary.selected_total = 26;
+        data.confirmation_summary.selected_change_count = 26;
+      }
+      return route.fulfill({ json: { ok: true, data } });
+    }
     return route.fulfill({ status: 404, json: { ok: false, message: `unhandled ${path}` } });
   });
   await page.route('**/api/healthroster/autoprocess/clients', (route) => {
@@ -188,9 +210,9 @@ test('implements the V5 incremental review workflow on desktop and narrow Chromi
   await page.goto('/');
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
   if (verifyDeployedAsset) {
-    expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V5_PATCHED_ASSET__)).not.toBe(true);
+    expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V6_PATCHED_ASSET__)).not.toBe(true);
   } else {
-    expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V5_PATCHED_ASSET__)).toBe(true);
+    expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V6_PATCHED_ASSET__)).toBe(true);
     expect(intercepted.has('/index.html')).toBe(true);
     expect(intercepted.has('/js/main.js')).toBe(true);
     expect(intercepted.has('/js/import-review-v1.js')).toBe(true);
@@ -210,7 +232,7 @@ test('implements the V5 incremental review workflow on desktop and narrow Chromi
 
   await page.evaluate(() => (window as any).openImportsModal());
   await expect(page.locator('#irv1Home')).toBeVisible();
-  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V5')).toBeVisible();
+  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V6')).toBeVisible();
   await expect(page.locator('[data-ir-client="HR_WEEKLY"] option')).toHaveCount(1);
   await expect(page.locator('[data-ir-client="HR_DAILY"] option')).toHaveCount(1);
   await expect(page.locator('[data-ir-drop="NHSP"] select')).toHaveCount(0);
@@ -424,11 +446,18 @@ test('implements the V5 incremental review workflow on desktop and narrow Chromi
   await expect(page.getByText('Shift 1')).toHaveCount(6);
   await expect(page.getByText('Start differs')).toHaveCount(2);
 
+  finalConfirmationMode = true;
   await page.locator('[data-ir-action="apply-preview"]').click();
   await expect(page.getByText('Final confirmation')).toBeVisible();
   await expect(page.getByText('1 new issue(s)')).toBeVisible();
   await expect(page.getByText('1 explicit reminder(s)')).toBeVisible();
   await expect(page.locator('[data-ir-action="apply-confirm"]')).toBeDisabled();
+  await page.locator('.irv1-confirm-section').filter({ hasText: 'Standard imported shifts' }).locator('summary').first().click();
+  await expect(page.getByText('Page 1 of 2')).toBeVisible();
+  await page.locator('[data-ir-action="confirm-page"][data-section="STANDARD"][data-page="2"]').click();
+  await expect(page.getByText('Page 2 of 2')).toBeVisible();
+  await page.locator('[data-ir-confirm-page-size="STANDARD"]').selectOption('50');
+  await expect(page.getByText('Page 1 of 1')).toBeVisible();
   await page.locator('[data-ir-confirm-ack]').check();
   await expect(page.locator('[data-ir-action="apply-confirm"]')).toBeEnabled();
 
@@ -455,10 +484,10 @@ test('implements the V5 incremental review workflow on desktop and narrow Chromi
   expect(narrowLayout.shellRight).toBeLessThanOrEqual(narrowLayout.modalRight);
 });
 
-test('normal TEST deployment exposes the reviewed V5 asset and contract', async ({ page }) => {
+test('normal TEST deployment exposes the reviewed V6 asset and contract', async ({ page }) => {
   test.skip(
-    process.env.VERIFY_DEPLOYED_IMPORT_REVIEW_V5 !== '1',
-    'Post-deployment runtime proof; set VERIFY_DEPLOYED_IMPORT_REVIEW_V5=1 only after the reviewed DB, Worker and frontend are deployed together.'
+    process.env.VERIFY_DEPLOYED_IMPORT_REVIEW_V6 !== '1',
+    'Post-deployment runtime proof; set VERIFY_DEPLOYED_IMPORT_REVIEW_V6=1 only after the reviewed DB, Worker and frontend are deployed together.'
   );
   const localAsset = readFileSync(resolve(__dirname, '../../js/import-review-v1.js'));
   const deployedAssetResponse = await page.request.get(`https://testmode.arthur-rai.co.uk/js/import-review-v1.js?runtime-proof=${Date.now()}`, {
@@ -481,7 +510,7 @@ test('normal TEST deployment exposes the reviewed V5 asset and contract', async 
   const deployed = payload?.data || payload;
   expect(deployed).toMatchObject(contract);
   await expect(page.locator('#irv1Home')).toBeVisible();
-  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V5')).toBeVisible();
+  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V6')).toBeVisible();
   const refreshedEligibilityPromise = page.waitForResponse((next) => next.url().endsWith('/api/healthroster/autoprocess/clients'));
   await page.locator('[data-ir-action="reload-home"]').click();
   const refreshedEligibilityResponse = await refreshedEligibilityPromise;

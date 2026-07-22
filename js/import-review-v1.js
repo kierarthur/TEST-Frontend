@@ -8,7 +8,7 @@
     correction: 'IMPORT_CORRECTION_OPERATION_V2',
     followUp: 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
     incrementalApply: 'IMPORT_REVIEW_INCREMENTAL_APPLY_V1',
-    ui: 'IMPORT_REVIEW_UI_V5',
+    ui: 'IMPORT_REVIEW_UI_V6',
     emailGrouping: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
   });
   const PAGE_SIZES = Object.freeze([25, 50, 75, 100]);
@@ -606,7 +606,7 @@
         await request(`/api/import-reviews/${encodeURIComponent(importId)}/refresh`, {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
             expected_state_version: header.state.state_version,
-            max_actions: 500
+            max_actions: 5000
           })
         });
         header = await fetchReviewHeader(importId);
@@ -1027,6 +1027,28 @@
     return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
   }
 
+  const CONFIRMATION_SECTIONS = Object.freeze({
+    STANDARD: Object.freeze({ view: 'CONFIRM_STANDARD', title: 'Standard imported shifts' }),
+    NON_STANDARD: Object.freeze({ view: 'CONFIRM_NON_STANDARD', title: 'Changed and cancelled shifts' }),
+    VALIDATION: Object.freeze({ view: 'CONFIRM_VALIDATION', title: 'Timesheet validation outcomes' }),
+    EMAIL: Object.freeze({ view: 'CONFIRM_EMAIL', title: 'Outgoing client query email' }),
+    REFERENCE: Object.freeze({ view: 'CONFIRM_REFERENCE', title: 'Explicit reference decisions' })
+  });
+
+  function confirmationSectionCount(counts, key) {
+    const fields = { STANDARD: 'standard', NON_STANDARD: 'non_standard', VALIDATION: 'validation', EMAIL: 'email', REFERENCE: 'reference' };
+    return Number(counts?.[fields[key]] || 0);
+  }
+
+  async function fetchConfirmationSection(review, key, page = 1, pageSize = 25) {
+    const definition = CONFIRMATION_SECTIONS[key];
+    if (!definition) throw new Error('The requested confirmation section is not supported.');
+    const params = new URLSearchParams({
+      page: String(page), page_size: String(pageSize), sort_by: 'CANDIDATE', sort_direction: 'ASC', view: definition.view
+    });
+    return request(`/api/import-reviews/${encodeURIComponent(review.importId)}/actions?${params.toString()}`);
+  }
+
   async function loadApplyConfirmation() {
     const review = state.review;
     if (!review) return false;
@@ -1040,23 +1062,18 @@
       }
       const selectedIds = Array.isArray(start.state.apply_contract?.selected_action_ids)
         ? start.state.apply_contract.selected_action_ids.map(String) : [];
-      if (selectedIds.length > 500) throw new Error('The selected action set exceeds the bounded confirmation limit.');
-      const selected = new Set(selectedIds);
-      const found = new Map();
-      let catalogueTotal = 0;
-      let page = 1;
-      let totalPages = 1;
-      do {
-        if (page > 5) throw new Error('The action catalogue exceeds the bounded confirmation limit.');
-        const params = new URLSearchParams({ page: String(page), page_size: '100', sort_by: 'ACTION', sort_direction: 'ASC', view: 'ALL' });
-        const result = await request(`/api/import-reviews/${encodeURIComponent(review.importId)}/actions?${params.toString()}`);
-        catalogueTotal = Number(result?.total_items || 0);
-        for (const item of (result?.items || [])) if (selected.has(String(item.action_id))) found.set(String(item.action_id), item);
-        totalPages = Math.max(1, Number(result?.total_pages || 0));
-        page += 1;
-      } while (page <= totalPages);
-      const missing = selectedIds.filter((id) => !found.has(id));
-      if (missing.length) throw new Error('Final confirmation could not load every selected action. Return to the review and choose Recheck.');
+      if (!selectedIds.length || selectedIds.length > 5000) throw new Error('The selected action set is empty or exceeds the bounded 5,000-action application limit.');
+      const first = await fetchConfirmationSection(review, 'STANDARD', 1, 25);
+      const counts = first?.confirmation_counts || {};
+      if (Number(counts.selected_total || 0) !== selectedIds.length) {
+        throw new Error('The server confirmation count does not match the selected application batch. Return to the review and choose Recheck.');
+      }
+      const sectionData = { STANDARD: first };
+      const isNhsp = reviewRoute(review) === 'NHSP';
+      const remainingKeys = Object.keys(CONFIRMATION_SECTIONS).filter((key) => key !== 'STANDARD'
+        && confirmationSectionCount(counts, key) > 0 && !(key === 'EMAIL' && isNhsp));
+      const remaining = await Promise.all(remainingKeys.map((key) => fetchConfirmationSection(review, key, 1, 25)));
+      remainingKeys.forEach((key, index) => { sectionData[key] = remaining[index]; });
 
       const end = await fetchReviewHeader(review.importId);
       const startRequestHash = String(start.state.apply_contract?.request_hash || '');
@@ -1072,13 +1089,11 @@
         || startSelectionFingerprint !== endSelectionFingerprint) {
         throw new Error('The review changed while final confirmation was loading. Check the refreshed review before applying.');
       }
-      const items = selectedIds.map((id) => found.get(id));
       review.header = end;
       review.confirmation = {
         stateVersion: Number(end.state.state_version), requestHash: endRequestHash,
         previewFingerprint: endPreview, selectedSetFingerprint: endSelectionFingerprint,
-        selectedIds, items, catalogueTotal,
-        correctionUnits: end.state.apply_contract?.request_envelope?.correction_units || []
+        selectedIds, counts, sections: sectionData, openSections: new Set(['NON_STANDARD'])
       };
       review.confirmAcknowledged = false;
       review.busy = false;
@@ -1092,6 +1107,29 @@
       review.error = error.message || 'The final confirmation could not be loaded safely.';
       showScreen('Import review', renderReview, 'import-review-v1');
       return false;
+    }
+  }
+
+  async function loadConfirmationSection(key, page, pageSize) {
+    const review = state.review;
+    if (!review?.confirmation || !CONFIRMATION_SECTIONS[key]) return;
+    review.busy = true;
+    review.error = '';
+    showScreen('Import review', renderReview, 'import-review-v1');
+    try {
+      const result = await fetchConfirmationSection(review, key, page, pageSize);
+      if (!(await confirmationStillCurrent(review))) {
+        review.confirmation = null;
+        review.screen = 'review';
+        review.error = 'The review changed while the confirmation page was loading. Check the refreshed review before applying.';
+      } else {
+        review.confirmation.sections[key] = result;
+      }
+    } catch (error) {
+      review.error = error.message || 'The confirmation page could not be loaded.';
+    } finally {
+      review.busy = false;
+      showScreen('Import review', renderReview, 'import-review-v1');
     }
   }
 
@@ -1110,11 +1148,62 @@
     return matches;
   }
 
-  function confirmationItemHtml(item) {
-    const changesCloudTms = /^TMS will\s/i.test(String(item.outcome_label || ''));
-    const importedLabel = changesCloudTms ? 'After apply (imported)' : 'Imported evidence';
-    const currentLabel = changesCloudTms ? 'Before apply (current)' : 'Current CloudTMS evidence';
-    return `<article class="irv1-confirm-item"><div><strong>${esc(item.outcome_label || 'Review item')}</strong><span>${esc(item.candidate_name || item.summary?.candidate_name || 'Candidate')} · ${esc(item.client_name || item.summary?.client_name || 'Client')}</span></div><div class="irv1-confirm-evidence"><div><b>${importedLabel}</b>${evidenceCell(item, 'imported_evidence')}</div><div><b>${currentLabel}</b>${evidenceCell(item, 'current_evidence')}</div><div><b>Difference</b>${differenceCell(item)}</div></div></article>`;
+  function confirmationEvidenceSummary(evidence, { includeDate = false } = {}) {
+    if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return '<span class="mini">—</span>';
+    const hours = workedHoursForDisplay(evidence);
+    return `<div class="irv1-confirm-compact">${includeDate ? `<span><b>Date</b>${esc(formatDate(evidence.work_date))}</span>` : ''}<span><b>Shift</b>${esc(timeText(evidence.start))}–${esc(timeText(evidence.end))}</span><span><b>Break</b>${esc(evidence.break_minutes == null ? '—' : `${evidence.break_minutes} min`)}</span><span><b>Hours</b>${esc(Number.isFinite(hours) ? hours : '—')}</span><span><b>Role / band</b>${esc([evidence.role, evidence.band].filter(Boolean).join(' · ') || '—')}</span><span><b>Reference</b>${esc(evidence.reference || '—')}</span></div>`;
+  }
+
+  function confirmationActionLabel(item) {
+    const protectedShift = item.protection?.paid === true || item.protection?.invoice_locked === true;
+    if (item.action_kind === 'APPLY_AMENDMENT') return protectedShift ? 'TMS will reverse and create replacement' : 'TMS will amend shift';
+    if (item.action_kind === 'APPLY_CANCELLATION') return protectedShift ? 'TMS will reverse shift' : 'TMS will cancel shift';
+    return item.outcome_label || 'TMS will process this item';
+  }
+
+  function confirmationTable(items, key) {
+    if (key === 'STANDARD') return `<div class="irv1-confirm-table-wrap"><table class="irv1-confirm-table"><thead><tr><th>Date</th><th>Shift</th><th>Break</th><th>Hours</th><th>Role / band</th><th>Reference</th><th>Action</th></tr></thead><tbody>${items.map((item) => { const evidence = item.imported_evidence || {}; const hours = workedHoursForDisplay(evidence); return `<tr><td class="nowrap">${esc(formatDate(evidence.work_date || item.work_date))}</td><td class="nowrap">${esc(timeText(evidence.start))}–${esc(timeText(evidence.end))}</td><td>${esc(evidence.break_minutes == null ? '—' : `${evidence.break_minutes} min`)}</td><td>${esc(Number.isFinite(hours) ? hours : '—')}</td><td>${esc([evidence.role, evidence.band].filter(Boolean).join(' · ') || '—')}</td><td>${esc(evidence.reference || '—')}</td><td><span class="irv1-confirm-action is-ready">${esc(confirmationActionLabel(item))}</span></td></tr>`; }).join('')}</tbody></table></div>`;
+    const headers = key === 'NON_STANDARD'
+      ? ['Date', 'Before apply (current)', 'After apply (imported)', 'Difference', 'Action']
+      : key === 'VALIDATION'
+        ? ['Date', 'Imported evidence', 'Current CloudTMS evidence', 'Difference', 'Outcome']
+        : ['Date', 'Imported evidence', 'Current CloudTMS evidence', 'Reason', 'Decision'];
+    return `<div class="irv1-confirm-table-wrap"><table class="irv1-confirm-table is-comparison"><thead><tr>${headers.map((value) => `<th>${esc(value)}</th>`).join('')}</tr></thead><tbody>${items.map((item) => `<tr><td class="nowrap">${esc(formatDate(item.imported_evidence?.work_date || item.current_evidence?.work_date || item.work_date))}</td><td>${confirmationEvidenceSummary(key === 'NON_STANDARD' ? item.current_evidence : item.imported_evidence)}</td><td>${confirmationEvidenceSummary(key === 'NON_STANDARD' ? item.imported_evidence : item.current_evidence)}</td><td>${differenceCell(item)}</td><td><span class="irv1-confirm-action ${key === 'NON_STANDARD' ? 'is-ready' : ''}">${esc(confirmationActionLabel(item))}</span></td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  function confirmationGroupedRows(items, review, key) {
+    const clients = new Map();
+    const singleClient = isSingleClientHealthRoster(review);
+    for (const item of items) {
+      const clientKey = singleClient ? 'single-client' : String(item.client_id || item.client_name || 'unknown-client');
+      if (!clients.has(clientKey)) clients.set(clientKey, { label: item.client_name || 'Client', candidates: new Map(), total: Number(item.client_section_total_count || 0) });
+      const client = clients.get(clientKey);
+      const candidateKey = String(item.candidate_branch_key || item.candidate_id || item.candidate_name || 'unknown-candidate');
+      if (!client.candidates.has(candidateKey)) client.candidates.set(candidateKey, { label: item.candidate_name || 'Candidate', rows: [], total: Number(item.candidate_section_total_count || 0) });
+      client.candidates.get(candidateKey).rows.push(item);
+    }
+    const candidatesHtml = (client) => Array.from(client.candidates.values(), (candidate) => `<details class="irv1-confirm-candidate"><summary><span>${esc(candidate.label)}</span><small>${candidate.rows.length} on this page${candidate.total > candidate.rows.length ? ` · ${candidate.total} total` : ''}</small></summary>${confirmationTable(candidate.rows, key)}</details>`).join('');
+    return Array.from(clients.values(), (client) => singleClient
+      ? candidatesHtml(client)
+      : `<section class="irv1-confirm-client"><h5>${esc(client.label)}<small>${client.total || Array.from(client.candidates.values()).reduce((sum, candidate) => sum + candidate.rows.length, 0)} item(s)</small></h5>${candidatesHtml(client)}</section>`).join('');
+  }
+
+  function confirmationPager(key, data) {
+    const page = Number(data?.page_number || 1);
+    const pageSize = Number(data?.page_size || 25);
+    const totalPages = Math.max(1, Number(data?.total_pages || 0));
+    return `<div class="irv1-confirm-pager"><label>Rows per page <select class="input" data-ir-confirm-page-size="${esc(key)}">${PAGE_SIZES.map((size) => `<option value="${size}" ${size === pageSize ? 'selected' : ''}>${size}</option>`).join('')}</select></label><div><button type="button" class="irv1-btn" data-ir-action="confirm-page" data-section="${esc(key)}" data-page="${page - 1}" ${data?.has_previous ? '' : 'disabled="disabled"'}>Previous</button><span>Page ${page} of ${totalPages}</span><button type="button" class="irv1-btn" data-ir-action="confirm-page" data-section="${esc(key)}" data-page="${page + 1}" ${data?.has_next ? '' : 'disabled="disabled"'}>Next</button></div></div>`;
+  }
+
+  function confirmationSectionHtml(review, key, { open = false } = {}) {
+    const confirmation = review.confirmation;
+    const data = confirmation?.sections?.[key];
+    const count = confirmationSectionCount(confirmation?.counts, key);
+    if (!count || !data) return '';
+    const items = Array.isArray(data.items) ? data.items : [];
+    const body = key === 'EMAIL' ? renderEmailGroups(items, { ...review, header: { ...review.header, state: { ...review.header.state, editability: { allowed_commands: [] } } } }) : confirmationGroupedRows(items, review, key);
+    const isOpen = open || confirmation.openSections?.has(key);
+    return `<details class="irv1-confirm-section" data-ir-confirm-section="${esc(key)}" ${isOpen ? 'open' : ''}><summary><span>${esc(CONFIRMATION_SECTIONS[key].title)}</span><strong>${count}</strong></summary><div class="irv1-confirm-section-body">${body || '<div class="irv1-empty">No items on this page.</div>'}${confirmationPager(key, data)}</div></details>`;
   }
 
   function renderApplyConfirmation(review) {
@@ -1136,26 +1225,23 @@
           ? 'Current policy: mixed by contract. Each row is independently restricted to its server-approved authority.'
           : 'Current policy cannot yet be confirmed. Resolve the outstanding mappings or settings and choose Recheck.';
     const settingsAsOf = authority.settings_as_of_date ? formatDate(authority.settings_as_of_date) : 'today';
-    const items = Array.isArray(confirmation?.items) ? confirmation.items : [];
-    const operational = items.filter((item) => ['INCLUDE_SHIFT','APPLY_AMENDMENT','APPLY_CANCELLATION','MARK_VALIDATION_ERROR'].includes(item.action_kind));
-    const emails = items.filter((item) => ['EMAIL_ISSUE','EMAIL_REMINDER'].includes(item.action_kind));
-    const invalidations = items.filter((item) => item.action_kind === 'INVALIDATE_REFERENCE');
-    const noActionCount = items.filter((item) => item.action_kind === 'NO_ACTION').length;
-    const correctionUnits = Array.isArray(confirmation?.correctionUnits) ? confirmation.correctionUnits : [];
-    const complete = !!confirmation && confirmation.selectedIds.length === items.length;
+    const counts = confirmation?.counts || {};
+    const complete = !!confirmation && Number(counts.selected_total || 0) === selectedCount;
     const canApply = complete && reviewCan(review, 'APPLY') && Number(summary.batch_blocking_count || 0) === 0;
-    const readOnlyReview = { ...review, header: { ...review.header, state: { ...review.header.state, editability: { allowed_commands: [] } } } };
     return `<div class="irv1-shell"><section class="irv1-intro"><div><h3>Final confirmation</h3><p>The server will revalidate the saved review before committing. The browser is not supplying financial values, validation rows or email recipients.</p></div><span class="irv1-contract">${esc(displayReviewStatus(header.state.status, header.state.partial_application === true))}</span></section>
       ${review.error ? `<div class="irv1-alert error">${esc(review.error)}</div>` : ''}
       <div class="irv1-alert ${authorityMode === 'UNRESOLVED' || authorityMode === 'OUT_OF_SCOPE' ? 'error' : ''}"><strong>${esc(authorityText)}</strong><div class="mini">Settings checked as of ${esc(settingsAsOf)}; contract date coverage is still checked against each shift date.</div></div>
       <div class="irv1-settings-grid"><div class="irv1-settings-card"><strong>Source and coverage</strong><p>${esc(header.import.filename || 'Import')}<br/>${esc(String(header.import.coverage_mode || '').replaceAll('_', ' '))}<br/>${esc(formatDate(header.import.coverage_start_date))} to ${esc(formatDate(header.import.coverage_end_date))}</p><div class="mini">Verified source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12))} · parser ${esc(evidence.parser_version || '—')} · preview generation ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-settings-card"><strong>This application batch</strong><p>${Number(summary.selected_change_count || 0)} change(s)<br/>${selectedCount} selected ready action(s)</p><div class="mini">Only fully resolved candidate/client units in this confirmation can be processed.</div></div>${isNhsp ? '' : `<div class="irv1-settings-card"><strong>Client query email</strong><p>${Number(summary.selected_email_issue_count || 0)} new issue(s)<br/>${Number(summary.selected_email_reminder_count || 0)} explicit reminder(s)</p><div class="mini">The server groups every selected item into one email per normalised recipient address.</div></div>`}<div class="irv1-settings-card"><strong>Remaining review</strong><p>${Number(summary.blocking_count || 0)} unresolved blocker(s)<br/>${Number(summary.deferred_count || 0)} deferred action(s)</p><div class="mini">Pending and deferred work remains saved after this batch.</div></div></div>
-      <section class="irv1-confirm-section"><h4>Selected shifts and validation outcomes</h4>${operational.length ? operational.map(confirmationItemHtml).join('') : '<div class="irv1-empty">No shift change or validation action is selected.</div>'}<div class="mini">${noActionCount} selected row(s) require no change. ${Number(summary.deferred_count || 0)} action(s) are deferred and can be selected later.</div></section>
-      <section class="irv1-confirm-section"><h4>DB-owned correction units</h4>${correctionUnits.length ? correctionUnits.map((unit) => `<div class="irv1-confirm-line"><strong>${esc(unit.correction_shape === 'REVERSAL_ONLY' ? 'Reversal only' : 'Reversal and replacement')}</strong><span>Timesheet ${esc(unit.root_timesheet_id || '—')} · source ${esc(unit.source_row_key || '—')} · ${esc(unit.correction_action === 'CANCELLATION' ? 'cancellation' : 'changed hours')}</span></div>`).join('') : '<div class="mini">No reversal correction unit is required.</div>'}<div class="mini">Financial values remain server-owned and are not calculated or displayed by the browser.</div></section>
-      <section class="irv1-confirm-section"><h4>Explicit reference decisions</h4>${invalidations.length ? invalidations.map(confirmationItemHtml).join('') : '<div class="mini">No reference number will be cleared.</div>'}</section>
-      ${isNhsp ? '' : `<section class="irv1-confirm-section"><h4>Outgoing client query emails</h4>${emails.length ? renderEmailGroups(emails, readOnlyReview) : '<div class="mini">No client query email will be queued.</div>'}</section>`}
+      <div class="irv1-confirm-summary"><span><strong>${Number(counts.standard || 0)}</strong> standard shift(s)</span><span><strong>${Number(counts.amendment || 0)}</strong> amendment(s)</span><span><strong>${Number(counts.reversal_replacement || 0)}</strong> reversal + replacement</span><span><strong>${Number(counts.cancellation || 0) + Number(counts.reversal_only || 0)}</strong> cancellation / reversal</span>${Number(counts.validation || 0) ? `<span><strong>${Number(counts.validation || 0)}</strong> validation outcome(s)</span>` : ''}</div>
+      ${confirmationSectionHtml(review, 'STANDARD')}
+      ${confirmationSectionHtml(review, 'NON_STANDARD', { open: true })}
+      ${confirmationSectionHtml(review, 'VALIDATION')}
+      ${isNhsp ? '' : confirmationSectionHtml(review, 'EMAIL')}
+      ${confirmationSectionHtml(review, 'REFERENCE')}
+      <div class="mini">${Number(summary.deferred_count || 0)} action(s) are deferred and remain available when this review is reopened. Financial values remain server-owned and are recalculated only by the approved database functions.</div>
       ${invalidationCount === 0 ? '<div class="irv1-alert">No reference numbers will be cleared. A missing selection is explicit and clears nothing.</div>' : `<div class="irv1-alert">${invalidationCount} reference invalidation action(s) are explicitly selected. Only eligible, unlocked references can be cleared.</div>`}
       <label class="irv1-choice"><input type="checkbox" data-ir-confirm-ack ${review.confirmAcknowledged ? 'checked' : ''}/><span><strong>I have checked this ready application batch</strong><span>${isNhsp ? 'Only the selected, server-approved CloudTMS actions shown above will be committed. Pending and deferred work will remain open.' : 'Selected query emails are queued only after the source commit. Pending and deferred work remains open, and only explicitly selected eligible references can be cleared.'}</span></span></label>
-      <div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="apply-back">Back to review</button><button class="irv1-btn primary" data-ir-action="apply-confirm" ${review.busy || !review.confirmAcknowledged || !canApply ? 'disabled="disabled" aria-disabled="true"' : 'aria-disabled="false"'}>${review.busy ? 'Applying safely…' : 'Confirm and apply'}</button></div>
+      <div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="apply-back">Back to review</button><button class="irv1-btn primary" data-ir-action="apply-confirm" ${review.busy || !review.confirmAcknowledged || !canApply ? 'disabled="disabled" aria-disabled="true"' : 'aria-disabled="false"'}>${review.busy ? 'Applying safely…' : `Confirm and apply ${selectedCount} action${selectedCount === 1 ? '' : 's'}`}</button></div>
     </div>`;
   }
 
@@ -1232,7 +1318,7 @@
     if (!(await flushSelections({ quiet: true }))) return;
     try {
       await request(`/api/import-reviews/${encodeURIComponent(review.importId)}/refresh`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expected_state_version: review.header.state.state_version, max_actions: 500 })
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expected_state_version: review.header.state.state_version, max_actions: 5000 })
       });
       await openReview(review.importId, { page: 1, skipAutoRecheck: true });
     } catch (error) {
@@ -1531,6 +1617,9 @@
         return loadApplyConfirmation();
       }
       if (action === 'apply-back') { state.review.confirmation = null; state.review.confirmAcknowledged = false; state.review.screen = 'review'; return showScreen('Import review', renderReview, 'import-review-v1'); }
+      if (action === 'confirm-page') {
+        return loadConfirmationSection(button.getAttribute('data-section'), Number(button.getAttribute('data-page')), Number(state.review.confirmation?.sections?.[button.getAttribute('data-section')]?.page_size || 25));
+      }
       if (action === 'apply-confirm') return applyReview();
       if (action === 'status') return refreshApplyStatus();
       if (action === 'retry') return retryFollowUp();
@@ -1656,6 +1745,12 @@
       if (PAGE_SIZES.includes(size)) void changeReviewPage({ pageSize: size, page: 1 });
       return;
     }
+    if (target.matches('[data-ir-confirm-page-size]') && state.review?.confirmation) {
+      const key = target.getAttribute('data-ir-confirm-page-size');
+      const size = Number(target.value);
+      if (PAGE_SIZES.includes(size)) void loadConfirmationSection(key, 1, size);
+      return;
+    }
     if (target.matches('[data-ir-daily-resolution]') && target.value) void saveDailyResolution(target);
     if (target.matches('[data-ir-confirm-ack]') && state.review) {
       state.review.confirmAcknowledged = target.checked;
@@ -1664,6 +1759,12 @@
   }, true);
 
   document.addEventListener('toggle', (event) => {
+    const confirmationSection = event.target.closest('[data-ir-confirm-section]');
+    if (confirmationSection && state.review?.confirmation) {
+      const key = confirmationSection.getAttribute('data-ir-confirm-section');
+      if (confirmationSection.open) state.review.confirmation.openSections.add(key); else state.review.confirmation.openSections.delete(key);
+      return;
+    }
     const details = event.target.closest('[data-ir-expand-key]');
     if (!details || !state.review) return;
     const key = details.getAttribute('data-ir-expand-key');
