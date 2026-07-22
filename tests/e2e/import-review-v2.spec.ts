@@ -61,6 +61,7 @@ function action(actionId: string, candidateId: string, candidate: string, client
 
 test('implements the V3 review workflow on desktop and narrow Chromium', async ({ page }) => {
   test.setTimeout(180_000);
+  const verifyDeployedAsset = process.env.VERIFY_DEPLOYED_IMPORT_REVIEW_V3_FULL === '1';
   const localFiles = new Map([
     ['/index.html', resolve(__dirname, '../../index.html')],
     ['/js/main.js', resolve(__dirname, '../../js/main.js')],
@@ -84,18 +85,26 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
     await dialog.dismiss();
   });
 
-  await page.route('https://testmode.arthur-rai.co.uk/**', async (route) => {
-    const url = new URL(route.request().url());
-    const key = url.pathname === '/' ? '/index.html' : url.pathname;
-    const file = localFiles.get(key);
-    if (!file) return route.continue();
-    intercepted.add(key);
-    let body = readFileSync(file);
-    if (key === '/index.html') {
-      body = Buffer.from(body.toString('utf8').replace('</head>', '<script>window.__IMPORT_REVIEW_V3_PATCHED_ASSET__=true;</script></head>'));
-    }
-    return route.fulfill({ status: 200, body, contentType: key.endsWith('.css') ? 'text/css' : key.endsWith('.js') ? 'application/javascript' : 'text/html' });
-  });
+  if (!verifyDeployedAsset) {
+    await page.route('https://testmode.arthur-rai.co.uk/**', async (route) => {
+      const url = new URL(route.request().url());
+      const key = url.pathname === '/' ? '/index.html' : url.pathname;
+      const file = localFiles.get(key);
+      if (!file) return route.continue();
+      intercepted.add(key);
+      let body = readFileSync(file);
+      if (key === '/index.html') {
+        body = Buffer.from(body.toString('utf8').replace('</head>', '<script>window.__IMPORT_REVIEW_V3_PATCHED_ASSET__=true;</script></head>'));
+      }
+      return route.fulfill({ status: 200, body, contentType: key.endsWith('.css') ? 'text/css' : key.endsWith('.js') ? 'application/javascript' : 'text/html' });
+    });
+  } else {
+    const deployedAssetResponse = await page.request.get(`https://testmode.arthur-rai.co.uk/js/import-review-v1.js?full-runtime-proof=${Date.now()}`, {
+      headers: { 'cache-control': 'no-cache' }
+    });
+    expect(deployedAssetResponse.status()).toBe(200);
+    expect(createHash('sha256').update(await deployedAssetResponse.body()).digest('hex')).toBe(hashes.get('/js/import-review-v1.js'));
+  }
 
   await page.route('**/api/import-review/contract', (route) => route.fulfill({ json: { ok: true, data: contract } }));
   await page.route('**/api/import-reviews**', async (route) => {
@@ -164,10 +173,14 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
-  expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V3_PATCHED_ASSET__)).toBe(true);
-  expect(intercepted.has('/index.html')).toBe(true);
-  expect(intercepted.has('/js/main.js')).toBe(true);
-  expect(intercepted.has('/js/import-review-v1.js')).toBe(true);
+  if (verifyDeployedAsset) {
+    expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V3_PATCHED_ASSET__)).not.toBe(true);
+  } else {
+    expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V3_PATCHED_ASSET__)).toBe(true);
+    expect(intercepted.has('/index.html')).toBe(true);
+    expect(intercepted.has('/js/main.js')).toBe(true);
+    expect(intercepted.has('/js/import-review-v1.js')).toBe(true);
+  }
   expect(hashes.get('/js/import-review-v1.js')).toBe(createHash('sha256').update(readFileSync(localFiles.get('/js/import-review-v1.js')!)).digest('hex'));
 
   await page.evaluate(() => {
