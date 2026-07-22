@@ -4065,7 +4065,7 @@ async function refreshHrRotaSummary(importId) {
   } catch (e) {
     console.error('[IMPORTS][HR_ROTA][REFRESH] failed', e);
     const msg = e?.message || 'Failed to refresh HR rota daily summary.';
-    if (window.__toast) window.__toast(msg); else alert(msg);
+    if (window.__toast) window.__toast(msg); else void showImportFlowNotice(msg);
   }
 }
 
@@ -4074,11 +4074,11 @@ async function openHrRotaAssignRoleModal(importId, rowIndex) {
   const impId = String(importId || '').trim();
   const idx = Number(rowIndex);
   if (!impId) {
-    alert('Missing import_id for role assignment.');
+    void showImportFlowNotice('Missing import_id for role assignment.');
     return;
   }
   if (!Number.isFinite(idx) || idx < 0) {
-    alert('Invalid row index for role assignment.');
+    void showImportFlowNotice('Invalid row index for role assignment.');
     return;
   }
 
@@ -4100,13 +4100,13 @@ async function openHrRotaAssignRoleModal(importId, rowIndex) {
   const rows = st && Array.isArray(st.rows) ? st.rows : [];
   const row = (idx >= 0 && idx < rows.length) ? rows[idx] : null;
   if (!row) {
-    alert('Row not found for role assignment.');
+    void showImportFlowNotice('Row not found for role assignment.');
     return;
   }
 
   const hrRowId = row.hr_row_id ? String(row.hr_row_id).trim() : '';
   if (!hrRowId) {
-    alert('This row has no hr_row_id, so a timesheet target selection cannot be saved safely.');
+    void showImportFlowNotice('This row has no hr_row_id, so a timesheet target selection cannot be saved safely.');
     return;
   }
 
@@ -4188,7 +4188,7 @@ async function openHrRotaAssignRoleModal(importId, rowIndex) {
   }).filter(x => x && x.id);
 
   if (!options.length) {
-    alert('No timesheet target options were provided for this row.');
+    void showImportFlowNotice('No timesheet target options were provided for this row.');
     return;
   }
 
@@ -4361,7 +4361,7 @@ async function openHrRotaAssignRoleModal(importId, rowIndex) {
         const s = state();
         const selectedId = String(s.selectedTargetId || '').trim();
         if (!selectedId) {
-          alert('Select a timesheet first.');
+          void showImportFlowNotice('Select a timesheet first.');
           return;
         }
 
@@ -4378,7 +4378,7 @@ async function openHrRotaAssignRoleModal(importId, rowIndex) {
         };
 
         if (typeof postHrRotaResolveMappings !== 'function') {
-          alert('postHrRotaResolveMappings is not defined (cannot persist timesheet selection).');
+          void showImportFlowNotice('The Daily mapping service is unavailable. Refresh the page and try again.');
           return;
         }
 
@@ -4403,7 +4403,7 @@ async function openHrRotaAssignRoleModal(importId, rowIndex) {
           if (closeBtn) closeBtn.click();
         } catch (err) {
           console.error('[HR_ROTA][ROLE] save failed', err);
-          alert(err?.message || 'Failed to save timesheet selection.');
+          void showImportFlowNotice(err?.message || 'Failed to save timesheet selection.');
         }
       }
     }, true);
@@ -4476,13 +4476,13 @@ function openHrRotaAssignCandidateModal(importId, rowIndex) {
       } catch (err) {
         console.error('[IMPORTS][HR_ROTA][ASSIGN_CAND] failed', err);
         const msg = err?.message || 'Failed to assign candidate for HR rota row.';
-        if (window.__toast) window.__toast(msg); else alert(msg);
+        if (window.__toast) window.__toast(msg); else void showImportFlowNotice(msg);
       }
     });
   } catch (e) {
     console.error('[IMPORTS][HR_ROTA][ASSIGN_CAND] open failed', e);
     const msg = e?.message || 'Failed to open Assign candidate dialog.';
-    if (window.__toast) window.__toast(msg); else alert(msg);
+    if (window.__toast) window.__toast(msg); else void showImportFlowNotice(msg);
   }
 }
 
@@ -4494,7 +4494,7 @@ async function openHrRotaResolveGradeRoleModal(importId, rowIndex) {
       }[c]));
 
   if (!importId) {
-    alert('Missing importId.');
+    void showImportFlowNotice('Missing import identifier.');
     return;
   }
 
@@ -4510,14 +4510,14 @@ async function openHrRotaResolveGradeRoleModal(importId, rowIndex) {
   const row = (Number.isFinite(idx) && idx >= 0 && idx < rows.length) ? rows[idx] : null;
 
   if (!row) {
-    alert('Row not found for grade/role resolution.');
+    void showImportFlowNotice('Row not found for grade/role resolution.');
     return;
   }
 
   const incomingGradeNorm = String(row.incoming_grade_norm || '').trim();
   const gradeRaw = String(row.grade_raw || incomingGradeNorm || '').trim();
   if (!incomingGradeNorm) {
-    alert('This row is missing incoming_grade_norm, so it cannot be resolved.');
+    void showImportFlowNotice('This row is missing its incoming grade, so it cannot be resolved.');
     return;
   }
 
@@ -4544,7 +4544,7 @@ async function openHrRotaResolveGradeRoleModal(importId, rowIndex) {
   const clientId = String(st?.client_id || st?.summary?.client_id || row.client_id || '').trim();
 
   if (typeof showModal !== 'function') {
-    alert('showModal is not available.');
+    void showImportFlowNotice('The CloudTMS modal service is unavailable. Refresh the page and try again.');
     return;
   }
 
@@ -4632,7 +4632,7 @@ async function openHrRotaResolveGradeRoleModal(importId, rowIndex) {
     const bandNorm = String(document.getElementById(BAND_INPUT_ID)?.value || '').trim();
 
     if (!roleCode) {
-      alert('Role is required.');
+      void showImportFlowNotice('Role is required.');
       return false;
     }
 
@@ -4755,13 +4755,13 @@ function openHrRotaAssignClientModal(importId, rowIndex) {
       } catch (err) {
         console.error('[IMPORTS][HR_ROTA][ASSIGN_CLIENT] failed', err);
         const msg = err?.message || 'Failed to assign client/site for HR rota row.';
-        if (window.__toast) window.__toast(msg); else alert(msg);
+        if (window.__toast) window.__toast(msg); else void showImportFlowNotice(msg);
       }
     });
   } catch (e) {
     console.error('[IMPORTS][HR_ROTA][ASSIGN_CLIENT] open failed', e);
     const msg = e?.message || 'Failed to open Assign client/site dialog.';
-    if (window.__toast) window.__toast(msg); else alert(msg);
+    if (window.__toast) window.__toast(msg); else void showImportFlowNotice(msg);
   }
 }
 
@@ -115628,7 +115628,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             await openWeeklyCandidateResolveModal('HR_WEEKLY', impId, idx);
           } catch (e) {
             console.error('[IMPORTS][HR_WEEKLY][VAL] resolve-candidate failed', e);
-            alert(e?.message || 'Assign candidate failed.');
+            await showImportFlowNotice(e?.message || 'Assign candidate failed.', {
+              title: 'Candidate could not be linked'
+            });
           }
           return;
         }
@@ -115658,7 +115660,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             });
           } catch (e) {
             console.error('[IMPORTS][HR_WEEKLY][VAL] fix-band failed', e);
-            alert(e?.message || 'Fix band mapping failed.');
+            await showImportFlowNotice(e?.message || 'Fix band mapping failed.', {
+              title: 'Band mapping could not be fixed'
+            });
           }
           return;
         }
@@ -115672,7 +115676,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             hydrateDefaultsOnce();
           } catch (e) {
             console.error('[IMPORTS][HR_WEEKLY][VAL] reclassify failed', e);
-            alert(e?.message || 'Reclassify failed.');
+            await showImportFlowNotice(e?.message || 'Reclassify failed.', {
+              title: 'Import could not be rechecked'
+            });
           }
           return;
         }
@@ -115683,11 +115689,14 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             if (isResolveGatedNow(container)) {
               const msg = 'Resolve required first. Complete all resolve items, then the mismatch/email sections will appear automatically.';
               if (typeof window.__toast === 'function') window.__toast(msg);
-              else alert(msg);
+              else void showImportFlowNotice(msg, { title: 'Resolve items first' });
               return;
             }
 
-            const ok = window.confirm('Are you sure you want to finalise now?');
+            const ok = await showImportFlowConfirm('Finalise this reviewed import now?', {
+              title: 'Finalise import?',
+              confirm_label: 'Finalise import'
+            });
             if (!ok) return;
 
             if (typeof applyWeeklyImportTransactional !== 'function') {
@@ -115732,9 +115741,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
               }
 
               if (bad.length) {
-                alert(
-                  'Alternative Email is required for one or more selected emails (default recipient is unavailable).\n\n' +
-                  'Please enter an Alternative Email for the selected group(s) before finalising.'
+                await showImportFlowNotice(
+                  'Alternative Email is required for one or more selected emails because the default recipient is unavailable. Please enter an Alternative Email for the selected group(s) before finalising.',
+                  { title: 'Email recipient required' }
                 );
                 return;
               }
@@ -115800,7 +115809,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             const result = await applyWeeklyImportTransactional('HR_WEEKLY', impId, payload) || {};
 
             // ✅ Finalised message (keep your existing behaviour)
-            alert(`Import ${result.import_id || impId} has been finalised.`);
+            await showImportFlowNotice(`Import ${result.import_id || impId} has been finalised.`, {
+              title: 'Import finalised'
+            });
 
             // ✅ NEW: Optional QR reissue modal (post-apply)
             try {
@@ -115828,7 +115839,7 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
                         : `QR reissue complete: ${okN} succeeded.`;
 
                     if (window.__toast) window.__toast(msg);
-                    else alert(msg);
+                    else await showImportFlowNotice(msg, { title: 'QR reissue complete' });
                   }
                 }
               }
@@ -115843,7 +115854,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             }
           } catch (e) {
             console.error('[IMPORTS][HR_WEEKLY][VAL] finalise failed', e);
-            alert(e?.message || 'Finalise failed.');
+            await showImportFlowNotice(e?.message || 'Finalise failed.', {
+              title: 'Import could not be finalised'
+            });
           }
         }
       }, true);
@@ -116824,7 +116837,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             await openWeeklyCandidateResolveModal('HR_WEEKLY', impId, idx);
           } catch (e) {
             console.error('[IMPORTS][HR_WEEKLY][VAL] resolve-candidate failed', e);
-            alert(e?.message || 'Assign candidate failed.');
+            await showImportFlowNotice(e?.message || 'Assign candidate failed.', {
+              title: 'Candidate could not be linked'
+            });
           }
           return;
         }
@@ -116854,7 +116869,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             });
           } catch (e) {
             console.error('[IMPORTS][HR_WEEKLY][VAL] fix-band failed', e);
-            alert(e?.message || 'Fix band mapping failed.');
+            await showImportFlowNotice(e?.message || 'Fix band mapping failed.', {
+              title: 'Band mapping could not be fixed'
+            });
           }
           return;
         }
@@ -116868,14 +116885,19 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             hydrateDefaultsOnce();
           } catch (e) {
             console.error('[IMPORTS][HR_WEEKLY][VAL] reclassify failed', e);
-            alert(e?.message || 'Reclassify failed.');
+            await showImportFlowNotice(e?.message || 'Reclassify failed.', {
+              title: 'Import could not be rechecked'
+            });
           }
           return;
         }
 
         if (act === 'hr-weekly-val-finalise') {
           try {
-            const ok = window.confirm('Are you sure you want to finalise now?');
+            const ok = await showImportFlowConfirm('Finalise this reviewed import now?', {
+              title: 'Finalise import?',
+              confirm_label: 'Finalise import'
+            });
             if (!ok) return;
 
             if (typeof applyWeeklyImportTransactional !== 'function') {
@@ -116920,9 +116942,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
               }
 
               if (bad.length) {
-                alert(
-                  'Alternative Email is required for one or more selected emails (default recipient is unavailable).\n\n' +
-                  'Please enter an Alternative Email for the selected group(s) before finalising.'
+                await showImportFlowNotice(
+                  'Alternative Email is required for one or more selected emails because the default recipient is unavailable. Please enter an Alternative Email for the selected group(s) before finalising.',
+                  { title: 'Email recipient required' }
                 );
                 return;
               }
@@ -116988,7 +117010,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             const result = await applyWeeklyImportTransactional('HR_WEEKLY', impId, payload) || {};
 
             // ✅ Finalised message (keep your existing behaviour)
-            alert(`Import ${result.import_id || impId} has been finalised.`);
+            await showImportFlowNotice(`Import ${result.import_id || impId} has been finalised.`, {
+              title: 'Import finalised'
+            });
 
             // ✅ NEW: Optional QR reissue modal (post-apply)
             try {
@@ -117016,7 +117040,7 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
                         : `QR reissue complete: ${okN} succeeded.`;
 
                     if (window.__toast) window.__toast(msg);
-                    else alert(msg);
+                    else await showImportFlowNotice(msg, { title: 'QR reissue complete' });
                   }
                 }
               }
@@ -117031,7 +117055,9 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             }
           } catch (e) {
             console.error('[IMPORTS][HR_WEEKLY][VAL] finalise failed', e);
-            alert(e?.message || 'Finalise failed.');
+            await showImportFlowNotice(e?.message || 'Finalise failed.', {
+              title: 'Import could not be finalised'
+            });
           }
         }
       }, true);
@@ -134005,6 +134031,52 @@ async function openUiConfirmModal(opts = {}) {
   });
 }
 
+
+async function showImportFlowNotice(message, opts = {}) {
+  const text = String(message || opts.fallback_message || 'The import action could not be completed.').trim();
+  const title = String(opts.title || 'Import needs attention').trim() || 'Import needs attention';
+
+  if (typeof openUiConfirmModal !== 'function') {
+    if (typeof window.__toast === 'function') window.__toast(text);
+    else console.warn('[IMPORTS][NOTICE]', text);
+    return false;
+  }
+
+  await openUiConfirmModal({
+    title,
+    message: text,
+    confirm_label: String(opts.confirm_label || 'OK'),
+    hide_cancel: true,
+    confirm_class: String(opts.confirm_class || 'btn btn-primary'),
+    kind: 'import-flow-notice'
+  });
+  return true;
+}
+
+async function showImportFlowConfirm(message, opts = {}) {
+  const text = String(message || opts.fallback_message || 'Continue with this import action?').trim();
+  const title = String(opts.title || 'Please confirm').trim() || 'Please confirm';
+
+  if (typeof openUiConfirmModal !== 'function') {
+    if (typeof window.__toast === 'function') {
+      window.__toast('The CloudTMS confirmation window is unavailable. Refresh the page and try again.');
+    } else {
+      console.warn('[IMPORTS][CONFIRM] CloudTMS confirmation window unavailable');
+    }
+    return false;
+  }
+
+  const result = await openUiConfirmModal({
+    title,
+    message: text,
+    confirm_label: String(opts.confirm_label || 'Confirm'),
+    cancel_label: String(opts.cancel_label || 'Cancel'),
+    confirm_class: opts.danger === true ? 'btn btn-warn' : 'btn btn-primary',
+    cancel_class: 'btn btn-outline',
+    kind: 'import-flow-confirm'
+  });
+  return !!(result && result.confirmed === true);
+}
 
 async function openBanking() {
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
@@ -275791,7 +275863,9 @@ async function openCandidatePicker(onPick, options) {
 
       applySelection = async (_triggerClose) => {
         if (!selectedId) {
-          alert('Please select a candidate first.');
+          await showImportFlowNotice('Please select a candidate first.', {
+            title: 'Choose a candidate'
+          });
           return false;
         }
         if (LOGC) console.log('[PICKER][candidates] applySelection()', { selectedId, selectedLabel });
@@ -275802,7 +275876,9 @@ async function openCandidatePicker(onPick, options) {
           }
         } catch (err) {
           console.warn('[PICKER][candidates] selection validation failed', err);
-          alert(err?.message || 'Selection could not be validated.');
+          await showImportFlowNotice(err?.message || 'Selection could not be validated.', {
+            title: 'Candidate could not be linked'
+          });
           return false;
         }
         return true;
@@ -276268,7 +276344,9 @@ async function openClientPicker(onPick, opts) {
 
       applySelection = async (_triggerClose) => {
         if (!selectedId) {
-          alert('Please select a client first.');
+          await showImportFlowNotice('Please select a client first.', {
+            title: 'Choose a client'
+          });
           return false;
         }
         if (LOGC) console.log('[PICKER][clients] applySelection()', { selectedId, selectedLabel });
@@ -276281,7 +276359,9 @@ async function openClientPicker(onPick, opts) {
           }
         } catch (err) {
           console.warn('[PICKER][clients] selection validation failed', err);
-          alert(err?.message || 'Selection could not be validated.');
+          await showImportFlowNotice(err?.message || 'Selection could not be validated.', {
+            title: 'Client could not be linked'
+          });
           return false;
         }
         return true;
@@ -326385,7 +326465,7 @@ function openImportColumnAliasesModal(opts) {
       addSave.addEventListener('click', async () => {
         const aliasName = String(state.add_alias_name || '').trim();
         if (!aliasName) {
-          alert('Alias name is required.');
+          await showImportFlowNotice('Alias name is required.', { title: 'Alias needs attention' });
           return;
         }
         try {
@@ -326411,7 +326491,7 @@ function openImportColumnAliasesModal(opts) {
           state.error = e?.message || String(e);
           state.loading = false;
           repaint();
-          alert(state.error);
+          await showImportFlowNotice(state.error, { title: 'Alias could not be added' });
         }
       });
     }
@@ -326437,7 +326517,7 @@ function openImportColumnAliasesModal(opts) {
 
         const aliasName = String(state.edit_alias_name || '').trim();
         if (!aliasName) {
-          alert('Alias name is required.');
+          await showImportFlowNotice('Alias name is required.', { title: 'Alias needs attention' });
           return;
         }
 
@@ -326459,7 +326539,7 @@ function openImportColumnAliasesModal(opts) {
           state.error = e?.message || String(e);
           state.loading = false;
           repaint();
-          alert(state.error);
+          await showImportFlowNotice(state.error, { title: 'Alias could not be updated' });
         }
       });
     }
@@ -326505,13 +326585,17 @@ function openImportColumnAliasesModal(opts) {
             state.error = e?.message || String(e);
             state.loading = false;
             repaint();
-            alert(state.error);
+            await showImportFlowNotice(state.error, { title: 'Alias could not be updated' });
           }
           return;
         }
 
         if (act === 'ica-delete') {
-          const ok = window.confirm('Remove this alias? (It will be deactivated for safety)');
+          const ok = await showImportFlowConfirm('Remove this alias? It will be deactivated for safety.', {
+            title: 'Remove import alias?',
+            confirm_label: 'Remove alias',
+            danger: true
+          });
           if (!ok) return;
 
           try {
@@ -326528,7 +326612,7 @@ function openImportColumnAliasesModal(opts) {
             state.error = e?.message || String(e);
             state.loading = false;
             repaint();
-            alert(state.error);
+            await showImportFlowNotice(state.error, { title: 'Alias could not be removed' });
           }
           return;
         }
@@ -327142,7 +327226,9 @@ async function openTimesheetsResolveModal(selectedRows) {
     }
   } catch (err) {
     console.error('[TS][RESOLVE] failed to fetch resolve-preview', err);
-    alert(err?.message || 'Failed to load resolve preview.');
+    await showImportFlowNotice(err?.message || 'Failed to load resolve preview.', {
+      title: 'Resolve preview unavailable'
+    });
     return;
   }
 
@@ -327348,11 +327434,15 @@ function renderTimesheetsResolveModal(state) {
 // Wrapper: use contract-style candidate picker with hint-seeded suggestions
 async function openResolveCandidatePicker(resolveRow) {
   if (!resolveRow || !resolveRow.timesheet_id) {
-    alert('Timesheet context missing for resolve.');
+    await showImportFlowNotice('Timesheet context is missing for this resolution.', {
+      title: 'Cannot resolve candidate'
+    });
     return;
   }
   if (typeof openCandidatePicker !== 'function') {
-    alert('Candidate picker is not available.');
+    await showImportFlowNotice('The candidate picker is unavailable. Refresh the page and try again.', {
+      title: 'Cannot resolve candidate'
+    });
     return;
   }
 
@@ -327433,7 +327523,9 @@ async function openResolveCandidatePicker(resolveRow) {
         return;
       }
       console.error('[TS][RESOLVE] apiResolveTimesheetCandidate failed', err);
-      alert(err?.message || 'Failed to assign candidate.');
+      await showImportFlowNotice(err?.message || 'Failed to assign candidate.', {
+        title: 'Candidate could not be linked'
+      });
     }
   }, {
     context: ctx,
@@ -327447,11 +327539,15 @@ async function openResolveCandidatePicker(resolveRow) {
 // Wrapper: use contract-style client picker; prefill from hospital_norm where possible
 async function openResolveClientPicker(resolveRow) {
   if (!resolveRow || !resolveRow.timesheet_id) {
-    alert('Timesheet context missing for resolve.');
+    await showImportFlowNotice('Timesheet context is missing for this resolution.', {
+      title: 'Cannot resolve client'
+    });
     return;
   }
   if (typeof openClientPicker !== 'function') {
-    alert('Client picker is not available.');
+    await showImportFlowNotice('The client picker is unavailable. Refresh the page and try again.', {
+      title: 'Cannot resolve client'
+    });
     return;
   }
 
@@ -327508,7 +327604,9 @@ async function openResolveClientPicker(resolveRow) {
         return;
       }
       console.error('[TS][RESOLVE] apiResolveTimesheetClient failed', err);
-      alert(err?.message || 'Failed to assign client.');
+      await showImportFlowNotice(err?.message || 'Failed to assign client.', {
+        title: 'Client could not be linked'
+      });
     }
   }, {
     context: {
@@ -327842,7 +327940,7 @@ function wireImportDropzones() {
           ev.target.value = ''; // reset
         } catch (err) {
           console.error('[IMPORTS] file handler failed', err);
-          alert(err?.message || 'Import failed.');
+          await showImportFlowNotice(err?.message || 'Import failed.', { title: 'Import failed' });
         }
       });
     }
@@ -327873,7 +327971,7 @@ function wireImportDropzones() {
           await handler(f);
         } catch (err) {
           console.error('[IMPORTS] drop handler failed', err);
-          alert(err?.message || 'Import failed.');
+          await showImportFlowNotice(err?.message || 'Import failed.', { title: 'Import failed' });
         }
       });
     }
@@ -328370,7 +328468,9 @@ async function handleHrWeeklyFileDrop(file) {
       summaryEl.textContent =
         `HealthRoster weekly import failed: ${err?.message || 'Unknown error'}`;
     }
-    alert(err?.message || 'HealthRoster weekly import failed.');
+    await showImportFlowNotice(err?.message || 'HealthRoster weekly import failed.', {
+      title: 'HealthRoster Weekly import failed'
+    });
   }
 }
 
@@ -329060,7 +329160,7 @@ async function applyShortlistFilter(section, { ids }) {
   ));
 
   if (!cleanIds.length) {
-    alert('No records selected to focus.');
+    void showImportFlowNotice('No records are selected to focus.', { title: 'Select records first' });
     return;
   }
 
@@ -329174,7 +329274,7 @@ async function focusCurrentSelection(section) {
   const resolvedIds = await resolveFocusedSelectionIds();
 
   if (!resolvedIds.length) {
-    alert('No records selected to focus.');
+    void showImportFlowNotice('No records are selected to focus.', { title: 'Select records first' });
     return;
   }
 
@@ -329522,7 +329622,7 @@ async function applySelectionAsFilter(section, selectionSnapshot) {
     const shortlistIds = await resolveSelectionToExplicitIds();
 
     if (!shortlistIds.length) {
-      alert('No records selected to focus.');
+      void showImportFlowNotice('No records are selected to focus.', { title: 'Select records first' });
       return;
     }
 
@@ -330173,13 +330273,15 @@ async function openHrWeeklyBandResolveModal(opts) {
         try {
           const selId = String(state.selected_contract_id || '').trim();
           if (!selId) {
-            alert('Pick a contract row first.');
+            await showImportFlowNotice('Pick a contract row first.', { title: 'Choose a contract' });
             return;
           }
 
           const c = (state.contracts || []).find(x => String(x?.id || '').trim() === selId) || null;
           if (!c) {
-            alert('Selected contract not found (please refresh).');
+            await showImportFlowNotice('The selected contract is no longer available. Refresh and choose again.', {
+              title: 'Contract changed'
+            });
             return;
           }
 
@@ -330189,8 +330291,12 @@ async function openHrWeeklyBandResolveModal(opts) {
           // band_match_pattern is still required by schema; keep it readable even though contract target is authoritative.
           const bandPattern = (band || role || 'Contract').trim();
 
-          const ok = window.confirm(
-            `Create candidate+client mapping?\n\nIncoming code: ${state.incoming_code}\nTarget: ${bandPattern}\n\nThis will affect future HR weekly imports for this candidate + client.`
+          const ok = await showImportFlowConfirm(
+            `Incoming code: ${state.incoming_code}\nTarget: ${bandPattern}\n\nThis will affect future HealthRoster Weekly imports for this candidate and client.`,
+            {
+              title: 'Create candidate and client mapping?',
+              confirm_label: 'Create mapping'
+            }
           );
           if (!ok) return;
 
@@ -330228,7 +330334,7 @@ async function openHrWeeklyBandResolveModal(opts) {
           state.loading = false;
           state.error = e?.message || String(e);
           repaint();
-          alert(state.error);
+          await showImportFlowNotice(state.error, { title: 'Mapping could not be saved' });
         }
       }
     });
@@ -330286,12 +330392,16 @@ async function openHrWeeklyClientPicker() {
     items = Array.isArray(json.items) ? json.items : [];
   } catch (e) {
     console.error('[IMPORTS][HR_WEEKLY] failed to load clients', e);
-    alert(e?.message || 'Failed to load HealthRoster clients for weekly import.');
+    await showImportFlowNotice(e?.message || 'Failed to load HealthRoster clients for weekly import.', {
+      title: 'HealthRoster clients unavailable'
+    });
     return null;
   }
 
   if (!items.length) {
-    alert('No HealthRoster weekly import clients are configured.');
+    await showImportFlowNotice('No HealthRoster Weekly import clients are configured.', {
+      title: 'No eligible clients'
+    });
     return null;
   }
 
@@ -330328,7 +330438,7 @@ async function openHrWeeklyClientPicker() {
       async () => {
         const sel = document.getElementById('hrWeeklyClientSelect');
         if (!sel || !sel.value) {
-          alert('Please select a client to continue.');
+          await showImportFlowNotice('Please select a client to continue.', { title: 'Choose a client' });
           return false; // keep modal open
         }
 
@@ -330393,7 +330503,10 @@ function openClientHospitalModal(client_id) {
 
       const raw  = collectForm('#hospitalForm');
       const name = String(raw.hospital_name_norm || '').trim();
-      if (!name) { alert('Hospital / Trust is required'); return false; }
+      if (!name) {
+        await showImportFlowNotice('Hospital / Trust is required.', { title: 'Hospital details required' });
+        return false;
+      }
 
       const H = ctx.hospitalsState || (ctx.hospitalsState = { existing: [], stagedNew: [], stagedEdits:{}, stagedDeletes: new Set() });
       H.stagedNew.push({ hospital_name_norm: name, ward_hint: (raw.ward_hint || '').trim() || null });
@@ -330446,7 +330559,9 @@ async function openWeeklyClientResolveModal(importType, importId, rowIdx) {
   const rows = st && Array.isArray(st.rows) ? st.rows : [];
   const row  = (rowIdx >= 0 && rowIdx < rows.length) ? rows[rowIdx] : null;
   if (!row) {
-    alert('Row not found for client resolve.');
+    await showImportFlowNotice('The import row could not be found for client resolution.', {
+      title: 'Cannot resolve client'
+    });
     return;
   }
 
@@ -330598,7 +330713,9 @@ async function openWeeklyClientResolveModal(importType, importId, rowIdx) {
       }
     } catch (err) {
       console.error('[WEEKLY][RESOLVE] client search failed', err);
-      alert(err?.message || 'Client search failed.');
+      await showImportFlowNotice(err?.message || 'Client search failed.', {
+        title: 'Client search failed'
+      });
       window.__weeklyResolveClientState.results = [];
       window.__weeklyResolveClientState.selectedClientId = null;
     }
@@ -330642,7 +330759,7 @@ async function openWeeklyClientResolveModal(importType, importId, rowIdx) {
     if (!root.__wkResolveActionsWired.has('import-summary-weekly-resolve-client')) {
       root.__wkResolveActionsWired.add('import-summary-weekly-resolve-client');
 
-      root.addEventListener('click', (ev) => {
+      root.addEventListener('click', async (ev) => {
         const frNow = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
         if (!frNow || frNow.kind !== 'import-summary-weekly-resolve-client') return;
 
@@ -330661,7 +330778,9 @@ async function openWeeklyClientResolveModal(importType, importId, rowIdx) {
         if (act === 'weekly-client-link') {
           const selectedId = s.selectedClientId;
           if (!selectedId) {
-            alert('Select a client from the list on the right first.');
+            await showImportFlowNotice('Select a client from the list on the right first.', {
+              title: 'Choose a client'
+            });
             return;
           }
 
@@ -330714,7 +330833,9 @@ async function openWeeklyCandidateResolveModal(importType, importId, rowIdx) {
   const row  = (rowIdx >= 0 && rowIdx < rows.length) ? rows[rowIdx] : null;
 
   if (!row) {
-    alert('Row not found for candidate resolve.');
+    await showImportFlowNotice('The import row could not be found for candidate resolution.', {
+      title: 'Cannot resolve candidate'
+    });
     return;
   }
 
@@ -330722,15 +330843,21 @@ async function openWeeklyCandidateResolveModal(importType, importId, rowIdx) {
   const unitRaw  = row.unit || row.hospital_or_trust || row.hospital_norm || '';
 
   if (typeof openCandidatePicker !== 'function') {
-    alert('Candidate picker is not available (openCandidatePicker is missing).');
+    await showImportFlowNotice('The candidate picker is unavailable. Refresh the page and try again.', {
+      title: 'Cannot resolve candidate'
+    });
     return;
   }
   if (typeof postWeeklyResolveMappings !== 'function') {
-    alert('postWeeklyResolveMappings is not defined.');
+    await showImportFlowNotice('The Weekly mapping service is unavailable. Refresh the page and try again.', {
+      title: 'Cannot resolve candidate'
+    });
     return;
   }
   if (typeof refreshWeeklyImportSummary !== 'function') {
-    alert('refreshWeeklyImportSummary is not defined.');
+    await showImportFlowNotice('The Weekly review refresh service is unavailable. Refresh the page and try again.', {
+      title: 'Cannot resolve candidate'
+    });
     return;
   }
 
@@ -331375,8 +331502,14 @@ function openAssignmentBandMappingsModal(opts) {
         const incoming = String(state.add_incoming_code || '').trim();
         const pattern  = String(state.add_band_match_pattern || '').trim();
 
-        if (!incoming) { alert('Incoming code is required.'); return; }
-        if (!pattern)  { alert('Band match pattern is required.'); return; }
+        if (!incoming) {
+          await showImportFlowNotice('Incoming code is required.', { title: 'Mapping needs attention' });
+          return;
+        }
+        if (!pattern) {
+          await showImportFlowNotice('Band match pattern is required.', { title: 'Mapping needs attention' });
+          return;
+        }
 
         const scope = String(state.add_scope || 'GLOBAL').toUpperCase();
         let candidate_id = null;
@@ -331384,10 +331517,16 @@ function openAssignmentBandMappingsModal(opts) {
 
         if (scope === 'CANDIDATE') {
           candidate_id = state.add_candidate_id || null;
-          if (!candidate_id) { alert('Pick a candidate for a candidate-specific rule.'); return; }
+          if (!candidate_id) {
+            await showImportFlowNotice('Pick a candidate for a candidate-specific rule.', { title: 'Choose a candidate' });
+            return;
+          }
         } else if (scope === 'CLIENT') {
           client_id = state.add_client_id || null;
-          if (!client_id) { alert('Pick a client for a client-specific rule.'); return; }
+          if (!client_id) {
+            await showImportFlowNotice('Pick a client for a client-specific rule.', { title: 'Choose a client' });
+            return;
+          }
         }
 
         try {
@@ -331416,7 +331555,7 @@ function openAssignmentBandMappingsModal(opts) {
           state.error = e?.message || String(e);
           state.loading = false;
           repaint();
-          alert(state.error);
+          await showImportFlowNotice(state.error, { title: 'Mapping could not be added' });
         }
       });
     }
@@ -331441,7 +331580,10 @@ function openAssignmentBandMappingsModal(opts) {
         const id = state.editing.id;
 
         const pattern = String(state.edit_band_match_pattern || '').trim();
-        if (!pattern) { alert('Band match pattern is required.'); return; }
+        if (!pattern) {
+          await showImportFlowNotice('Band match pattern is required.', { title: 'Mapping needs attention' });
+          return;
+        }
 
         try {
           state.loading = true;
@@ -331461,7 +331603,7 @@ function openAssignmentBandMappingsModal(opts) {
           state.error = e?.message || String(e);
           state.loading = false;
           repaint();
-          alert(state.error);
+          await showImportFlowNotice(state.error, { title: 'Mapping could not be updated' });
         }
       });
     }
@@ -331572,14 +331714,18 @@ function openAssignmentBandMappingsModal(opts) {
             state.error = e?.message || String(e);
             state.loading = false;
             repaint();
-            alert(state.error);
+            await showImportFlowNotice(state.error, { title: 'Mapping could not be updated' });
           }
           return;
         }
 
         if (act === 'abm-delete') {
           const id = btn.getAttribute('data-id');
-          const ok = window.confirm('Remove this mapping? (It will be deactivated for safety)');
+          const ok = await showImportFlowConfirm('Remove this mapping? It will be deactivated for safety.', {
+            title: 'Remove mapping?',
+            confirm_label: 'Remove mapping',
+            danger: true
+          });
           if (!ok) return;
 
           try {
@@ -331596,7 +331742,7 @@ function openAssignmentBandMappingsModal(opts) {
             state.error = e?.message || String(e);
             state.loading = false;
             repaint();
-            alert(state.error);
+            await showImportFlowNotice(state.error, { title: 'Mapping could not be removed' });
           }
           return;
         }
@@ -331897,7 +332043,7 @@ async function handleNhspFileDrop(file) {
     if (summaryEl) {
       summaryEl.textContent = `NHSP import failed: ${err?.message || 'Unknown error'}`;
     }
-    alert(err?.message || 'NHSP import failed.');
+    await showImportFlowNotice(err?.message || 'NHSP import failed.', { title: 'NHSP import failed' });
   }
 }
 
@@ -332142,7 +332288,7 @@ async function refreshWeeklyImportSummary(type, importId) {
   } catch (e) {
     console.error('[IMPORTS][WEEKLY][REFRESH] failed', e);
     const msg = e?.message || 'Failed to refresh weekly import summary.';
-    if (window.__toast) window.__toast(msg); else alert(msg);
+    if (window.__toast) window.__toast(msg); else void showImportFlowNotice(msg);
   }
 }
 
@@ -332948,7 +333094,9 @@ function renderWeeklyImportSummary(type, importId, rows, ss) {
               await refreshWeeklyImportSummary(type, importId);
             } catch (err) {
               console.error('[IMPORTS][WEEKLY] resolve-candidate failed', err);
-              alert(err?.message || 'Failed to resolve candidate.');
+              await showImportFlowNotice(err?.message || 'Failed to resolve candidate.', {
+                title: 'Candidate could not be linked'
+              });
             }
           }, { context: { importId, staffName: staffRaw, unit: hospRaw, source_system: type, rowIndex: idx } });
         }
@@ -332966,7 +333114,9 @@ function renderWeeklyImportSummary(type, importId, rows, ss) {
               await refreshWeeklyImportSummary(type, importId);
             } catch (err) {
               console.error('[IMPORTS][WEEKLY] resolve-client failed', err);
-              alert(err?.message || 'Failed to resolve client.');
+              await showImportFlowNotice(err?.message || 'Failed to resolve client.', {
+                title: 'Client could not be linked'
+              });
             }
           }, { nhspOnly: (type === 'NHSP'), hrAutoOnly: (type === 'HR_WEEKLY'), context: { importId, unit: hospRaw } });
         }
@@ -332977,7 +333127,10 @@ function renderWeeklyImportSummary(type, importId, rows, ss) {
         btnRefresh.__weeklyRefreshWired = true;
         btnRefresh.addEventListener('click', async () => {
           try { await refreshWeeklyImportSummary(type, importId); }
-          catch (err) { console.error('[IMPORTS][WEEKLY] refresh failed', err); alert(err?.message || 'Refresh failed.'); }
+          catch (err) {
+            console.error('[IMPORTS][WEEKLY] refresh failed', err);
+            await showImportFlowNotice(err?.message || 'Refresh failed.', { title: 'Import refresh failed' });
+          }
         });
       }
 
@@ -332986,7 +333139,10 @@ function renderWeeklyImportSummary(type, importId, rows, ss) {
         btnApply.__weeklyApplyWired = true;
         btnApply.addEventListener('click', async () => {
           try {
-            const ok = window.confirm('Are you sure you want to finalise now?');
+            const ok = await showImportFlowConfirm('Finalise this reviewed import now?', {
+              title: 'Finalise import?',
+              confirm_label: 'Finalise import'
+            });
             if (!ok) return;
 
             if (typeof applyWeeklyImportTransactional !== 'function') {
@@ -333003,11 +333159,15 @@ function renderWeeklyImportSummary(type, importId, rows, ss) {
               decisions: {}
             }) || {};
 
-            alert(`Import ${result.import_id || importId} has been finalised.`);
+            await showImportFlowNotice(`Import ${result.import_id || importId} has been finalised.`, {
+              title: 'Import finalised'
+            });
             await refreshWeeklyImportSummary(type, importId);
           } catch (err) {
             console.error('[IMPORTS][WEEKLY] apply failed', err);
-            alert(err?.message || 'Weekly import apply failed.');
+            await showImportFlowNotice(err?.message || 'Weekly import apply failed.', {
+              title: 'Import could not be finalised'
+            });
           }
         });
       }
@@ -348943,12 +349103,16 @@ async function handleHrRotaFileDrop(file) {
         items = Array.isArray(json.items) ? json.items : [];
       } catch (e) {
         console.error('[IMPORTS][HR_ROTA] failed to load clients', e);
-        alert(e?.message || 'Failed to load HealthRoster clients for daily import.');
+        await showImportFlowNotice(e?.message || 'Failed to load HealthRoster clients for daily import.', {
+          title: 'HealthRoster clients unavailable'
+        });
         return;
       }
 
       if (!items.length) {
-        alert('No HealthRoster clients are configured.');
+        await showImportFlowNotice('No HealthRoster Daily clients are configured.', {
+          title: 'No eligible clients'
+        });
         return;
       }
 
@@ -349002,7 +349166,7 @@ async function handleHrRotaFileDrop(file) {
           async () => {
             const sel = document.getElementById('hrRotaClientSelect');
             if (!sel || !sel.value) {
-              alert('Please select a client to continue.');
+              await showImportFlowNotice('Please select a client to continue.', { title: 'Choose a client' });
               return false; // keep modal open
             }
             const cid = String(sel.value || '').trim();
@@ -349114,7 +349278,9 @@ async function handleHrRotaFileDrop(file) {
       summaryEl.textContent =
         `HR rota daily import failed: ${err?.message || 'Unknown error'}`;
     }
-    alert(err?.message || 'HR rota daily import failed.');
+    await showImportFlowNotice(err?.message || 'HealthRoster Daily import failed.', {
+      title: 'HealthRoster Daily import failed'
+    });
   }
 }
 

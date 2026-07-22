@@ -99,11 +99,13 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
       return route.fulfill({ status: 200, body, contentType: key.endsWith('.css') ? 'text/css' : key.endsWith('.js') ? 'application/javascript' : 'text/html' });
     });
   } else {
-    const deployedAssetResponse = await page.request.get(`https://testmode.arthur-rai.co.uk/js/import-review-v1.js?full-runtime-proof=${Date.now()}`, {
-      headers: { 'cache-control': 'no-cache' }
-    });
-    expect(deployedAssetResponse.status()).toBe(200);
-    expect(createHash('sha256').update(await deployedAssetResponse.body()).digest('hex')).toBe(hashes.get('/js/import-review-v1.js'));
+    for (const asset of ['/js/main.js', '/js/import-review-v1.js']) {
+      const deployedAssetResponse = await page.request.get(`https://testmode.arthur-rai.co.uk${asset}?full-runtime-proof=${Date.now()}`, {
+        headers: { 'cache-control': 'no-cache' }
+      });
+      expect(deployedAssetResponse.status()).toBe(200);
+      expect(createHash('sha256').update(await deployedAssetResponse.body()).digest('hex')).toBe(hashes.get(asset));
+    }
   }
 
   await page.route('**/api/import-review/contract', (route) => route.fulfill({ json: { ok: true, data: contract } }));
@@ -267,6 +269,66 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
   await page.getByRole('button', { name: 'Discard import' }).click();
   await expect(page.locator('#modalBack')).toBeHidden();
   expect(nativeDialogCount).toBe(0);
+
+  await page.evaluate(() => {
+    (window as any).showModal(
+      'Import review parent',
+      [{ key: 'main', label: 'Review' }],
+      () => '<div id="importParentProof">Parent import review remains available.</div>',
+      async () => true,
+      false,
+      null,
+      { kind: 'test-import-parent', noParentGate: true }
+    );
+  });
+  await expect(page.locator('#modalTitle')).toHaveText('Import review parent');
+  await expect(page.locator('#importParentProof')).toBeVisible();
+
+  await page.evaluate(() => {
+    (window as any).openCandidatePicker(async () => {
+      throw new Error('Due to security reasons when linking a candidate they must have a valid contract. Please create the contract and try again.');
+    }, {
+      title: 'Link candidate',
+      force_constrained_source: true,
+      source_rows: [{ id: 'candidate-test-1', first_name: 'Jane', last_name: 'Smith', display_name: 'Jane Smith', active: true }]
+    });
+  });
+  await expect(page.locator('#modalTitle')).toHaveText('Link candidate');
+  await page.locator('#pickerTBody tr[data-id="candidate-test-1"]').click();
+  await page.locator('#btnSave').click();
+  await expect(page.locator('#modalTitle')).toHaveText('Candidate could not be linked');
+  await expect(page.getByText(/Due to security reasons when linking a candidate/)).toBeVisible();
+  expect(nativeDialogCount).toBe(0);
+  await page.getByRole('button', { name: 'OK' }).click();
+  await expect(page.locator('#modalTitle')).toHaveText('Link candidate');
+  await expect(page.locator('#pickerTBody tr[data-id="candidate-test-1"]')).toHaveClass(/active/);
+  await expect(page.locator('#pickerSearch')).toBeVisible();
+  await page.locator('#btnCloseModal').click();
+  await expect(page.locator('#modalTitle')).toHaveText('Import review parent');
+  await expect(page.locator('#importParentProof')).toBeVisible();
+
+  await page.evaluate(() => {
+    (window as any).openClientPicker(async () => {
+      throw new Error('The selected client cannot be linked to this import row.');
+    }, {
+      title: 'Link client',
+      force_constrained_source: true,
+      source_rows: [{ id: 'client-test-1', name: 'Test Client', display_name: 'Test Client', active: true }]
+    });
+  });
+  await expect(page.locator('#modalTitle')).toHaveText('Link client');
+  await page.locator('#pickerTBody tr[data-id="client-test-1"]').click();
+  await page.locator('#btnSave').click();
+  await expect(page.locator('#modalTitle')).toHaveText('Client could not be linked');
+  await expect(page.getByText(/selected client cannot be linked/)).toBeVisible();
+  expect(nativeDialogCount).toBe(0);
+  await page.getByRole('button', { name: 'OK' }).click();
+  await expect(page.locator('#modalTitle')).toHaveText('Link client');
+  await expect(page.locator('#pickerTBody tr[data-id="client-test-1"]')).toHaveClass(/active/);
+  await page.locator('#btnCloseModal').click();
+  await expect(page.locator('#modalTitle')).toHaveText('Import review parent');
+  await expect(page.locator('#importParentProof')).toBeVisible();
+  await page.locator('#btnCloseModal').click();
 
   scopeAuthorityMode = 'VALIDATION_ONLY';
   scopeSourceRoute = 'HR_DAILY';

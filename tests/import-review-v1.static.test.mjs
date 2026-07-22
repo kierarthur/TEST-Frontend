@@ -144,6 +144,49 @@ test('import screens reuse one modal frame and use only the CloudTMS confirmatio
   assert.doesNotMatch(source, /\b(?:global|window)\.(?:confirm|alert|prompt)\s*\(/);
 });
 
+test('all import, mapping and timesheet-resolution flows avoid native browser dialogs', () => {
+  const topLevelFunction = (name) => {
+    const signature = new RegExp(`^(?:async\\s+)?function\\s+${name}\\s*\\(`, 'm');
+    const match = signature.exec(main);
+    assert.ok(match, `${name} must exist`);
+    const start = match.index;
+    const remainder = main.slice(start + match[0].length);
+    const next = /\n(?:async\s+)?function\s+[A-Za-z0-9_$]+\s*\(/.exec(remainder);
+    return main.slice(start, next ? start + match[0].length + next.index : main.length);
+  };
+
+  const auditedFunctions = [
+    'postWeeklyResolveMappings', 'refreshHrRotaSummary', 'openHrRotaAssignRoleModal',
+    'openHrRotaAssignCandidateModal', 'openHrRotaResolveGradeRoleModal', 'openHrRotaAssignClientModal',
+    'openCandidatePicker', 'openClientPicker', 'openImportColumnAliasesModal',
+    'openTimesheetsResolveModal', 'openResolveCandidatePicker', 'openResolveClientPicker',
+    'openImportsModal', 'wireImportDropzones', 'handleHrWeeklyFileDrop',
+    'openHrWeeklyBandResolveModal', 'openHrWeeklyClientPicker', 'openClientHospitalModal',
+    'openWeeklyClientResolveModal', 'openWeeklyCandidateResolveModal', 'openAssignmentBandMappingsModal',
+    'openWeeklyImportOptionsModal', 'handleNhspFileDrop', 'refreshWeeklyImportSummary',
+    'renderWeeklyImportSummary', 'applyWeeklyImportTransactional', 'handleHrRotaFileDrop',
+    'postHrRotaResolveMappings'
+  ];
+  const nativeDialog = /\b(?:window\.)?(?:alert|confirm|prompt)\s*\(/;
+  for (const name of auditedFunctions) {
+    assert.doesNotMatch(topLevelFunction(name), nativeDialog, `${name} must use the CloudTMS modal system`);
+  }
+
+  const topLevelMatches = [...main.matchAll(/^(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(/gm)];
+  for (let index = 0; index < topLevelMatches.length; index += 1) {
+    const name = topLevelMatches[index][1];
+    if (!/(?:import|resolve|mapping|alias|hrrota|healthroster|nhsp|hrweekly|weeklyvalidation)/i.test(name)) continue;
+    const body = main.slice(topLevelMatches[index].index, topLevelMatches[index + 1]?.index ?? main.length);
+    assert.doesNotMatch(body, nativeDialog, `${name} must not expose a native browser dialog`);
+  }
+
+  assert.match(main, /async function showImportFlowNotice/);
+  assert.match(main, /hide_cancel: true/);
+  assert.match(main, /kind: 'import-flow-notice'/);
+  assert.match(main, /async function showImportFlowConfirm/);
+  assert.match(main, /kind: 'import-flow-confirm'/);
+});
+
 test('save, close, conflict and apply recovery state are durable', () => {
   assert.match(source, /saveChain/);
   assert.match(source, /conflictBuffer/);
