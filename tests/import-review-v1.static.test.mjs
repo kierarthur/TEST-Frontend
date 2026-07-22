@@ -30,6 +30,7 @@ test('review pagination uses only the approved page sizes and saves before navig
   assert.match(source, /await flushSelections\(\{ quiet: true \}\)/);
   assert.match(source, /sort_by/);
   assert.match(source, /data-ir-action="sort"/);
+  assert.match(source, /review\.saveState = 'Selections saved';\s*if \(!quiet\) showScreen\('Import review', renderReview, 'import-review-v1'\)/);
 });
 
 test('review nesting follows the active sort and keeps full-branch context', () => {

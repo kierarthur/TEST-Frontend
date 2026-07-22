@@ -706,6 +706,7 @@
       if (result.preview_generation != null) review.header.state.preview_generation = result.preview_generation;
       if (result.preview_fingerprint) review.header.state.preview_fingerprint = result.preview_fingerprint;
       review.saveState = 'Selections saved';
+      if (!quiet) showScreen('Import review', renderReview, 'import-review-v1');
       return true;
     } catch (error) {
       if (state.review !== review) return false;
