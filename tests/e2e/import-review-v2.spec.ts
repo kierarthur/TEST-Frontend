@@ -17,7 +17,7 @@ const contract = {
   apply_operation_version: 'IMPORT_APPLY_OPERATION_V2',
   correction_operation_version: 'IMPORT_CORRECTION_OPERATION_V2',
   follow_up_component_version: 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
-  review_ui_contract_version: 'IMPORT_REVIEW_UI_V3',
+  review_ui_contract_version: 'IMPORT_REVIEW_UI_V4',
   email_grouping_version: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1',
   legacy_contracts_supported: false
 };
@@ -59,9 +59,9 @@ function action(actionId: string, candidateId: string, candidate: string, client
   };
 }
 
-test('implements the V3 review workflow on desktop and narrow Chromium', async ({ page }) => {
-  test.setTimeout(180_000);
-  const verifyDeployedAsset = process.env.VERIFY_DEPLOYED_IMPORT_REVIEW_V3_FULL === '1';
+test('implements the V4 review workflow on desktop and narrow Chromium', async ({ page }) => {
+  test.setTimeout(90_000);
+  const verifyDeployedAsset = process.env.VERIFY_DEPLOYED_IMPORT_REVIEW_V4_FULL === '1';
   const localFiles = new Map([
     ['/index.html', resolve(__dirname, '../../index.html')],
     ['/js/main.js', resolve(__dirname, '../../js/main.js')],
@@ -75,6 +75,7 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
   let createReviewPayload: Record<string, any> | null = null;
   let createdReview = false;
   let failCreatedReviewLoad = false;
+  let refreshRequestCount = 0;
   let nativeDialogCount = 0;
   let scopeAuthorityMode: 'AUTHORITATIVE' | 'VALIDATION_ONLY' | 'MIXED' = 'AUTHORITATIVE';
   let scopeSourceRoute = 'NHSP';
@@ -94,7 +95,7 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
       intercepted.add(key);
       let body = readFileSync(file);
       if (key === '/index.html') {
-        body = Buffer.from(body.toString('utf8').replace('</head>', '<script>window.__IMPORT_REVIEW_V3_PATCHED_ASSET__=true;</script></head>'));
+        body = Buffer.from(body.toString('utf8').replace('</head>', '<script>window.__IMPORT_REVIEW_V4_PATCHED_ASSET__=true;</script></head>'));
       }
       return route.fulfill({ status: 200, body, contentType: key.endsWith('.css') ? 'text/css' : key.endsWith('.js') ? 'application/javascript' : 'text/html' });
     });
@@ -138,6 +139,12 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
         overlapping_unfinished_reviews: [{ import_id: IMPORT_ID, state_version: 4, filename: 'earlier.xlsx', status: 'IN_REVIEW', coverage_start_date: '2026-07-01', coverage_end_date: '2026-07-07' }]
       } } });
     }
+    if (path === `/api/import-reviews/${NEW_IMPORT_ID}/refresh` || path === `/api/import-reviews/${IMPORT_ID}/refresh`) {
+      const body = JSON.parse(route.request().postData() || '{}');
+      expect(body).toMatchObject({ expected_state_version: 7, max_actions: 500 });
+      refreshRequestCount += 1;
+      return route.fulfill({ json: { ok: true, data: { status: 'READY', state_version: 8 } } });
+    }
     if (path === `/api/import-reviews/${NEW_IMPORT_ID}/actions`) {
       if (failCreatedReviewLoad) return route.fulfill({ status: 409, json: { ok: false, error: { code: 'TIMESHEET_QUERY_CLIENT_REQUIRED', message: 'A query recipient needs attention.' } } });
       return route.fulfill({ json: { ok: true, data: { items: [], view_counts: { PENDING: 2, READY: 0, EMAIL: 0, NO_ACTION: 0 }, page_number: 1, total_pages: 1, total_items: 0, has_previous: false, has_next: false } } });
@@ -176,9 +183,9 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
   await page.goto('/');
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
   if (verifyDeployedAsset) {
-    expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V3_PATCHED_ASSET__)).not.toBe(true);
+    expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V4_PATCHED_ASSET__)).not.toBe(true);
   } else {
-    expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V3_PATCHED_ASSET__)).toBe(true);
+    expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V4_PATCHED_ASSET__)).toBe(true);
     expect(intercepted.has('/index.html')).toBe(true);
     expect(intercepted.has('/js/main.js')).toBe(true);
     expect(intercepted.has('/js/import-review-v1.js')).toBe(true);
@@ -198,7 +205,7 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
 
   await page.evaluate(() => (window as any).openImportsModal());
   await expect(page.locator('#irv1Home')).toBeVisible();
-  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V3')).toBeVisible();
+  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V4')).toBeVisible();
   await expect(page.locator('[data-ir-client="HR_WEEKLY"] option')).toHaveCount(1);
   await expect(page.locator('[data-ir-client="HR_DAILY"] option')).toHaveCount(1);
   await expect(page.locator('[data-ir-drop="NHSP"] select')).toHaveCount(0);
@@ -361,7 +368,7 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
   await expect(page.locator('#irv1Coverage')).toBeVisible();
 
   await page.locator('input[name="irCoverage"][value="COMPLETE_ALL"]').check();
-  await page.locator('[data-ir-action="overlap-separate"]').click();
+  await page.locator('[data-ir-action="overlap-replace"]').click();
   await expect(page.locator('[data-ir-action="coverage-create"]')).toBeEnabled();
   failCreatedReviewLoad = true;
   await page.locator('[data-ir-action="coverage-create"]').click();
@@ -370,6 +377,7 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
   failCreatedReviewLoad = false;
   await page.locator(`[data-ir-action="continue"][data-import-id="${NEW_IMPORT_ID}"]`).click();
   await expect(page.locator('#irv1Review')).toBeVisible();
+  expect(refreshRequestCount).toBe(1);
   expect(createReviewPayload).not.toBeNull();
   expect(createReviewPayload?.coverage_mode).toBe('COMPLETE_ALL');
   expect(createReviewPayload?.scope_candidates).toEqual([]);
@@ -385,20 +393,19 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
   await page.locator(`[data-ir-action="continue"][data-import-id="${IMPORT_ID}"]`).click();
 
   await expect(page.locator('#irv1Review')).toBeVisible();
+  expect(refreshRequestCount).toBe(2);
   await page.locator('[data-ir-action="review-view"][data-view="READY"]').click();
   await page.locator('details[data-ir-expand-key^="candidate:"] > summary').click();
-  await page.locator('details[data-ir-expand-key^="client:"] > summary').click();
   await page.locator('details[data-ir-expand-key^="week:"] > summary').click();
   const first = page.locator('[data-ir-select="action-1"]');
   await first.uncheck();
   await page.locator('[data-ir-action="review-page"][data-page="2"]').click();
   await page.locator('details[data-ir-expand-key^="candidate:"] > summary').click();
-  await page.locator('details[data-ir-expand-key^="client:"] > summary').click();
   await page.locator('details[data-ir-expand-key^="week:"] > summary').click();
   await expect(page.locator('[data-ir-select="action-2"]')).toBeChecked();
   await page.locator('[data-ir-action="review-page"][data-page="1"]').click();
   await expect(page.locator('details[data-ir-expand-key^="candidate:"]')).toHaveAttribute('open', '');
-  await expect(page.locator('details[data-ir-expand-key^="client:"]')).toHaveAttribute('open', '');
+  await expect(page.locator('details[data-ir-expand-key^="client:"]')).toHaveCount(0);
   await expect(page.locator('details[data-ir-expand-key^="week:"]')).toHaveAttribute('open', '');
   await expect(page.locator('[data-ir-select="action-1"]')).not.toBeChecked();
 
@@ -440,10 +447,10 @@ test('implements the V3 review workflow on desktop and narrow Chromium', async (
   expect(narrowLayout.shellRight).toBeLessThanOrEqual(narrowLayout.modalRight);
 });
 
-test('normal TEST deployment exposes the reviewed V3 asset and contract', async ({ page }) => {
+test('normal TEST deployment exposes the reviewed V4 asset and contract', async ({ page }) => {
   test.skip(
-    process.env.VERIFY_DEPLOYED_IMPORT_REVIEW_V3 !== '1',
-    'Post-deployment runtime proof; set VERIFY_DEPLOYED_IMPORT_REVIEW_V3=1 only after the reviewed DB, Worker and frontend are deployed together.'
+    process.env.VERIFY_DEPLOYED_IMPORT_REVIEW_V4 !== '1',
+    'Post-deployment runtime proof; set VERIFY_DEPLOYED_IMPORT_REVIEW_V4=1 only after the reviewed DB, Worker and frontend are deployed together.'
   );
   const localAsset = readFileSync(resolve(__dirname, '../../js/import-review-v1.js'));
   const deployedAssetResponse = await page.request.get(`https://testmode.arthur-rai.co.uk/js/import-review-v1.js?runtime-proof=${Date.now()}`, {
@@ -466,7 +473,7 @@ test('normal TEST deployment exposes the reviewed V3 asset and contract', async 
   const deployed = payload?.data || payload;
   expect(deployed).toMatchObject(contract);
   await expect(page.locator('#irv1Home')).toBeVisible();
-  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V3')).toBeVisible();
+  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V4')).toBeVisible();
   const refreshedEligibilityPromise = page.waitForResponse((next) => next.url().endsWith('/api/healthroster/autoprocess/clients'));
   await page.locator('[data-ir-action="reload-home"]').click();
   const refreshedEligibilityResponse = await refreshedEligibilityPromise;

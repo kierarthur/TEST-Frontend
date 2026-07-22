@@ -7,7 +7,7 @@
     operation: 'IMPORT_APPLY_OPERATION_V2',
     correction: 'IMPORT_CORRECTION_OPERATION_V2',
     followUp: 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
-    ui: 'IMPORT_REVIEW_UI_V3',
+    ui: 'IMPORT_REVIEW_UI_V4',
     emailGrouping: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
   });
   const PAGE_SIZES = Object.freeze([25, 50, 75, 100]);
@@ -402,7 +402,7 @@
       candidatePageSize: 25,
       overlapChoice: null,
       selectedOverlapId: (scope.overlapping_unfinished_reviews || [])[0]?.import_id || null,
-      createOperationKey: `import-review-create-ui-v3:${importId}:${scope.source_file_sha256}`,
+      createOperationKey: `import-review-create-ui-v4:${importId}:${scope.source_file_sha256}`,
       error: '',
       busy: false
     };
@@ -455,10 +455,12 @@
       return `<span class="irv1-chip irv1-scope-chip is-${status}" data-mapping-status="${status}" aria-label="${resolved ? 'Matched' : 'Unmatched'} client: ${esc(label)}"><span aria-hidden="true">${resolved ? '✓' : '!'}</span>${esc(label)}</span>`;
     }).join('');
     const overlaps = Array.isArray(c.scope.overlapping_unfinished_reviews) ? c.scope.overlapping_unfinished_reviews : [];
-    const overlapHtml = overlaps.length ? `<section class="irv1-overlap"><div class="irv1-alert"><strong>An unfinished review already covers this client and some of these dates.</strong><br/>Choose what this new file means before creating another review.</div><div class="irv1-overlap-list">${overlaps.map((item) => `<label class="irv1-choice"><input type="radio" name="irOverlapTarget" value="${esc(item.import_id)}" ${c.selectedOverlapId === item.import_id ? 'checked' : ''}/><span><strong>${esc(item.filename || 'Earlier import')}</strong><span>${esc(formatDate(item.coverage_start_date))} to ${esc(formatDate(item.coverage_end_date))} · ${esc(item.status)}</span></span></label>`).join('')}</div><div class="irv1-overlap-actions"><button class="irv1-btn" data-ir-action="overlap-resume">Resume selected review</button><button class="irv1-btn" data-ir-action="overlap-separate" ${c.overlapChoice === 'START_SEPARATE' ? 'aria-pressed="true"' : ''}>Keep both as separate reviews</button><button class="irv1-btn danger" data-ir-action="overlap-replace" ${c.overlapChoice === 'SUPERSEDE' ? 'aria-pressed="true"' : ''}>Replace selected review with this file</button></div><div class="mini">A separate review leaves the earlier review active. Replace creates this review first, then marks the selected earlier review as superseded.</div></section>` : '';
+    const selectedOverlap = overlaps.find((item) => String(item.import_id) === String(c.selectedOverlapId || ''));
+    const replaceAllowed = overlaps.length === 1 && selectedOverlap && String(selectedOverlap.status || '').toUpperCase() !== 'APPLYING';
+    const overlapHtml = overlaps.length ? `<section class="irv1-overlap"><div class="irv1-alert"><strong>An unfinished review already covers this ${String(c.scope.source_route || '').toUpperCase() === 'NHSP' ? 'NHSP period' : 'client and some of these dates'}.</strong><br/>Continue the existing review, or replace it atomically with this new file. Two overlapping active reviews are not permitted.</div><div class="irv1-overlap-list">${overlaps.map((item) => `<label class="irv1-choice"><input type="radio" name="irOverlapTarget" value="${esc(item.import_id)}" ${c.selectedOverlapId === item.import_id ? 'checked' : ''}/><span><strong>${esc(item.filename || 'Earlier import')}</strong><span>${esc(formatDate(item.coverage_start_date))} to ${esc(formatDate(item.coverage_end_date))} · ${esc(item.status)}</span></span></label>`).join('')}</div><div class="irv1-overlap-actions"><button class="irv1-btn" data-ir-action="overlap-resume">Continue existing review</button><button class="irv1-btn danger" data-ir-action="overlap-replace" ${replaceAllowed ? '' : 'disabled="disabled" aria-disabled="true"'} ${c.overlapChoice === 'SUPERSEDE' ? 'aria-pressed="true"' : ''}>Replace existing review</button><button class="irv1-btn" data-ir-action="overlap-cancel">Cancel new import</button></div><div class="mini">Replacement is one database transaction: the new review is created only if the selected existing review can be marked superseded at the same time.${overlaps.length > 1 ? ' Resolve the existing overlapping reviews before replacing this file.' : String(selectedOverlap?.status || '').toUpperCase() === 'APPLYING' ? ' An applying review cannot be replaced; continue it and check its outcome.' : ''}</div></section>` : '';
     const copy = coverageCopy(c.scope);
     const coverageChosen = !!c.mode;
-    const overlapChosen = overlaps.length === 0 || ['START_SEPARATE','SUPERSEDE'].includes(c.overlapChoice);
+    const overlapChosen = overlaps.length === 0 || (c.overlapChoice === 'SUPERSEDE' && replaceAllowed);
     return `<div class="irv1-shell" id="irv1Coverage" data-coverage-mode="${esc(c.mode || '')}" data-authority-mode="${esc(copy.authority)}" data-overlap-choice="${esc(c.overlapChoice || '')}">
       <section class="irv1-intro"><div><h3>${esc(c.scope.filename || 'Staged import')}</h3><p>${esc(formatDate(c.scope.coverage_start_date))} to ${esc(formatDate(c.scope.coverage_end_date))} · ${Number(c.scope.staged_row_count || 0)} parsed rows. Coverage becomes immutable when the review is created.</p></div><span class="irv1-contract">${esc(c.scope.source_route || '')}</span></section>
       ${error}
@@ -471,7 +473,7 @@
         <label class="irv1-choice"><input type="radio" name="irCoverage" value="PARTIAL" ${c.mode === 'PARTIAL' ? 'checked' : ''}/><span><strong>${esc(copy.partial.title)}</strong><span>${esc(copy.partial.body)}</span></span></label>
       </section>
       ${renderCoverageCandidates()}
-      <div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="coverage-cancel">Back</button><button class="irv1-btn primary" data-ir-action="coverage-create" ${c.busy || !coverageChosen || !overlapChosen ? 'disabled="disabled" aria-disabled="true"' : 'aria-disabled="false"'}>${c.busy ? 'Creating review…' : 'Create review'}</button></div>
+      <div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="coverage-cancel">Back</button><button class="irv1-btn primary" data-ir-action="coverage-create" ${c.busy || !coverageChosen || !overlapChosen ? 'disabled="disabled" aria-disabled="true"' : 'aria-disabled="false"'}>${c.busy ? 'Creating review…' : overlaps.length ? 'Replace and create review' : 'Create review'}</button></div>
     </div>`;
   }
 
@@ -492,8 +494,8 @@
       return;
     }
     const overlaps = Array.isArray(c.scope.overlapping_unfinished_reviews) ? c.scope.overlapping_unfinished_reviews : [];
-    if (overlaps.length && !['START_SEPARATE','SUPERSEDE'].includes(c.overlapChoice)) {
-      c.error = 'Resume the earlier review, keep both reviews, or replace the selected earlier review.';
+    if (overlaps.length && c.overlapChoice !== 'SUPERSEDE') {
+      c.error = 'Continue the existing review, replace it, or cancel this new import.';
       showScreen('Confirm import coverage', renderCoverage, 'import-coverage-v1');
       return;
     }
@@ -517,8 +519,7 @@
         if (!pageScope.candidate_has_next) break;
         pageScope = await fetchScope(c.importId, Number(pageScope.candidate_page || 1) + 1, 100);
       }
-      await request('/api/import-reviews', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+      const createPayload = {
           import_id: c.importId,
           coverage_mode: c.mode,
           coverage_start_date: allScope.coverage_start_date,
@@ -528,22 +529,21 @@
           expected_source_file_sha256: allScope.source_file_sha256,
           expected_parser_version: allScope.parser_version,
           operation_key: c.createOperationKey
-        })
+      };
+      if (c.overlapChoice === 'SUPERSEDE') {
+        const freshOverlaps = Array.isArray(allScope.overlapping_unfinished_reviews) ? allScope.overlapping_unfinished_reviews : [];
+        const targetId = String(c.selectedOverlapId || '');
+        const target = freshOverlaps.find((item) => String(item.import_id) === targetId);
+        if (freshOverlaps.length !== 1 || !target) throw new Error('The overlapping review changed. Continue it or reopen this file before replacing.');
+        if (String(target.status || '').toUpperCase() === 'APPLYING') throw new Error('An applying review cannot be replaced. Continue it and check its outcome.');
+        createPayload.supersede_import_id = targetId;
+        createPayload.expected_supersede_state_version = Number(target.state_version);
+      }
+      await request('/api/import-reviews', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(createPayload)
       });
       reviewCreated = true;
-      if (c.overlapChoice === 'SUPERSEDE') {
-        const targetId = String(c.selectedOverlapId || '');
-        const target = overlaps.find((item) => String(item.import_id) === targetId);
-        if (!target) throw new Error('Choose the unfinished review that this new file replaces.');
-        const oldHeader = await fetchReviewHeader(targetId);
-        await request(`/api/import-reviews/${encodeURIComponent(targetId)}/supersede`, {
-          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
-            new_import_id: c.importId,
-            expected_state_version: oldHeader.state.state_version
-          })
-        });
-      }
-      await openReview(c.importId);
+      await openReview(c.importId, { skipAutoRecheck: true });
     } catch (error) {
       if (reviewCreated) {
         state.coverage = null;
@@ -573,8 +573,28 @@
 
   async function openReview(importId, options = {}) {
     const epoch = ++state.reviewEpoch;
-    const header = await fetchReviewHeader(importId);
+    let header = await fetchReviewHeader(importId);
     if (epoch !== state.reviewEpoch) return;
+    let autoRecheckWarning = '';
+    const canRefresh = Array.isArray(header?.state?.editability?.allowed_commands)
+      && header.state.editability.allowed_commands.includes('REFRESH');
+    if (options.skipAutoRecheck !== true && canRefresh) {
+      try {
+        await request(`/api/import-reviews/${encodeURIComponent(importId)}/refresh`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+            expected_state_version: header.state.state_version,
+            max_actions: 500
+          })
+        });
+        header = await fetchReviewHeader(importId);
+      } catch (error) {
+        // Reopening must remain recoverable if evidence refresh is temporarily
+        // unavailable. The saved snapshot is shown explicitly as stale and the
+        // normal Recheck control remains available; nothing is ever applied.
+        header = await fetchReviewHeader(importId).catch(() => header);
+        autoRecheckWarning = `Current records could not be rechecked automatically. This saved view may be out of date; choose Recheck before continuing. ${error?.message || ''}`.trim();
+      }
+    }
     const saved = header?.state?.ui_state || {};
     const prior = options.preserveLocal === true && state.review && state.review.importId === importId ? state.review : null;
     const savedView = ACTIVE_VIEWS.includes(String(saved.active_section || '').toUpperCase()) ? String(saved.active_section).toUpperCase() : 'PENDING';
@@ -602,7 +622,7 @@
       requestHash: recoveryFor(importId)?.request_hash || null,
       confirmation: null,
       confirmAcknowledged: false,
-      saveState: '', error: options.message || '', busy: false, screen: 'review', epoch
+      saveState: '', error: options.message || autoRecheckWarning || '', busy: false, screen: 'review', epoch
     };
     if (isSingleClientHealthRoster(state.review) && state.review.sortBy === 'CLIENT') state.review.sortBy = 'CANDIDATE';
     state.review.scope = await fetchScope(importId, 1, 25).catch(() => null);
@@ -704,6 +724,10 @@
       CONTRACT_RATES_INCOMPLETE: 'The selected contract is missing required pay or charge rates. Amend the contract outside this review, then choose Recheck; rates cannot be edited here.',
       GRADE_MAPPING_REQUIRED: 'The imported grade is not mapped. Choose one of the eligible existing records shown here; if none is suitable, correct the underlying records and choose Recheck.',
       TIMESHEET_NOT_FOUND: 'No eligible existing daily timesheet was found. Correct the timesheet records outside this review, then return and recheck.',
+      WEEKLY_TIMESHEET_NOT_SUBMITTED: 'Request timesheet from candidate. The candidate has not submitted an eligible weekly timesheet for this client and week. Ask them to submit one containing this shift, then choose Recheck.',
+      DAILY_TIMESHEET_NOT_SUBMITTED: 'Request timesheet from candidate. The candidate has not submitted an eligible Daily timesheet for this client and date. Ask them to submit one containing this shift, then choose Recheck.',
+      WEEKLY_SHIFT_ABSENT_FROM_TIMESHEET: 'Candidate timesheet states they did not work this shift. HealthRoster contains the shift, but the submitted candidate timesheet does not. The HealthRoster record likely needs correcting or removing. This item is not included in the client query email.',
+      DAILY_SHIFT_ABSENT_FROM_TIMESHEET: 'Candidate timesheet states they did not work this shift. HealthRoster contains the shift, but the submitted candidate Daily timesheet does not. The HealthRoster record likely needs correcting or removing. This item is not included in the client query email.',
       TIMESHEET_AMBIGUOUS: 'Choose the existing timesheet that this HealthRoster row validates.',
       ACTUAL_HOURS_MISMATCH: 'Imported worked hours differ from the current CloudTMS timesheet. Review both sides before continuing.',
       START_END_MISMATCH: 'Imported start or end time differs from the current CloudTMS timesheet. Review both sides before continuing.',
@@ -1128,7 +1152,7 @@
           request_id: makeUuid()
         })
       });
-      await openReview(review.importId);
+      await openReview(review.importId, { skipAutoRecheck: true });
     } catch (error) {
       review.error = error.message || 'The existing timesheet selection was not saved.';
       showScreen('Import review', renderReview, 'import-review-v1');
@@ -1143,7 +1167,7 @@
       await request(`/api/import-reviews/${encodeURIComponent(review.importId)}/refresh`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expected_state_version: review.header.state.state_version, max_actions: 500 })
       });
-      await openReview(review.importId, { page: 1 });
+      await openReview(review.importId, { page: 1, skipAutoRecheck: true });
     } catch (error) {
       review.error = error.message || 'The review could not be rechecked.';
       showScreen('Import review', renderReview, 'import-review-v1');
@@ -1380,8 +1404,8 @@
         await loadHome({ resetPaging: false });
         return showScreen('Imports', renderHome, 'imports-v1');
       }
-      if (action === 'home' || action === 'coverage-cancel') {
-        if (action === 'coverage-cancel') {
+      if (action === 'home' || action === 'coverage-cancel' || action === 'overlap-cancel') {
+        if (action === 'coverage-cancel' || action === 'overlap-cancel') {
           if (!(await confirmCoverageDiscard())) return;
           state.coverage = null;
         }
@@ -1400,7 +1424,6 @@
       if (action === 'coverage-page') return loadCoveragePage(Number(button.getAttribute('data-page')));
       if (action === 'coverage-create') return createReviewFromCoverage();
       if (action === 'overlap-resume') return openReview(state.coverage?.selectedOverlapId);
-      if (action === 'overlap-separate') { state.coverage.overlapChoice = 'START_SEPARATE'; state.coverage.error = ''; return showScreen('Confirm import coverage', renderCoverage, 'import-coverage-v1'); }
       if (action === 'overlap-replace') { state.coverage.overlapChoice = 'SUPERSEDE'; state.coverage.error = ''; return showScreen('Confirm import coverage', renderCoverage, 'import-coverage-v1'); }
       if (action === 'review-view') {
         const nextView = button.getAttribute('data-view');

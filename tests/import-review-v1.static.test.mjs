@@ -19,7 +19,7 @@ test('the frontend fails closed on the full approved DB and Worker contract', ()
   for (const marker of [
     'IMPORT_REVIEW_DB_V1', 'IMPORT_REVIEW_APPLY_V1', 'IMPORT_APPLY_OPERATION_V2',
     'IMPORT_CORRECTION_OPERATION_V2', 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
-    'IMPORT_REVIEW_UI_V3', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
+    'IMPORT_REVIEW_UI_V4', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
   ]) assert.match(source, new RegExp(marker));
   assert.match(source, /legacy_contracts_supported === false/);
 });
@@ -71,7 +71,7 @@ test('email confirmation states and renders one message per shared recipient wit
   assert.match(source, /Client → Contract → Shift/);
 });
 
-test('V3 grade resolution is server-option-only and route specific', () => {
+test('V4 grade resolution is server-option-only and route specific', () => {
   assert.match(source, /resolution_options/);
   assert.match(source, /WEEKLY_ASSIGNMENT_CONTRACT/);
   assert.match(source, /DAILY_GRADE_ROLE/);
@@ -88,7 +88,7 @@ test('candidate and client picker success returns to the intact parent before re
   assert.match(source, /if \(state\.review\?\.importId === reviewRouteState\.importId\) void refreshReview\(\)/);
 });
 
-test('V3 renders imported and current evidence with safe operator wording', () => {
+test('V4 renders imported and current evidence with safe operator wording', () => {
   for (const token of ['imported_evidence', 'current_evidence', 'difference_codes', 'evidence_rows', 'outcome_label']) {
     assert.match(source, new RegExp(token));
   }
@@ -119,10 +119,32 @@ test('final confirmation loads every selected action in bounded pages and rechec
 test('coverage and overlap choices are explicit and review editing is server-authoritative', () => {
   assert.match(source, /mode: null/);
   assert.match(source, /overlapping_unfinished_reviews/);
-  assert.match(source, /START_SEPARATE/);
   assert.match(source, /SUPERSEDE/);
+  assert.match(source, /Continue existing review/);
+  assert.match(source, /Replace existing review/);
+  assert.match(source, /Cancel new import/);
+  assert.match(source, /supersede_import_id/);
+  assert.match(source, /expected_supersede_state_version/);
+  assert.doesNotMatch(source, /Keep both as separate reviews|START_SEPARATE/);
   assert.match(source, /editability\?\.allowed_commands/);
   assert.match(source, /createOperationKey/);
+});
+
+test('reopening an editable saved review automatically rechecks current server evidence', () => {
+  assert.match(source, /options\.skipAutoRecheck !== true && canRefresh/);
+  assert.match(source, /expected_state_version: header\.state\.state_version/);
+  assert.match(source, /Current records could not be rechecked automatically/);
+  assert.match(source, /This saved view may be out of date/);
+});
+
+test('Weekly and Daily distinguish no submitted timesheet from an omitted shift', () => {
+  for (const code of [
+    'WEEKLY_TIMESHEET_NOT_SUBMITTED', 'DAILY_TIMESHEET_NOT_SUBMITTED',
+    'WEEKLY_SHIFT_ABSENT_FROM_TIMESHEET', 'DAILY_SHIFT_ABSENT_FROM_TIMESHEET'
+  ]) assert.match(source, new RegExp(code));
+  assert.match(source, /Request timesheet from candidate/);
+  assert.match(source, /Candidate timesheet states they did not work this shift/);
+  assert.match(source, /not included in the client query email/);
 });
 
 test('coverage sends only the Worker-approved scope fields and shows mapping status in every mode', () => {
