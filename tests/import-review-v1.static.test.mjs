@@ -19,7 +19,7 @@ test('the frontend fails closed on the full approved DB and Worker contract', ()
   for (const marker of [
     'IMPORT_REVIEW_DB_V1', 'IMPORT_REVIEW_APPLY_V1', 'IMPORT_APPLY_OPERATION_V2',
     'IMPORT_CORRECTION_OPERATION_V2', 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
-    'IMPORT_REVIEW_UI_V1', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
+    'IMPORT_REVIEW_UI_V2', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
   ]) assert.match(source, new RegExp(marker));
   assert.match(source, /legacy_contracts_supported === false/);
 });
@@ -33,9 +33,8 @@ test('review pagination uses only the approved page sizes and saves before navig
 
 test('review lifecycle supports resume, recheck, abandon, apply status and follow-up retry', () => {
   for (const route of [
-    '/api/import-reviews?status_class=ACTIVE',
     '/refresh', '/abandon', '/apply', '/apply-status', '/follow-up/retry',
-    '/daily-timesheet-resolution'
+    '/apply-recover', '/daily-timesheet-resolution'
   ]) assert.ok(source.includes(route), `${route} must be wired`);
   assert.match(source, /Save & close/);
   assert.match(source, /Abandon import/);
@@ -53,6 +52,24 @@ test('email confirmation states and renders one message per shared recipient wit
   assert.match(source, /combined into one tidy message/);
   assert.match(source, /contract_label/);
   assert.match(source, /recipient_email/);
+  assert.match(source, /Client → Contract → Shift/);
+});
+
+test('coverage and overlap choices are explicit and review editing is server-authoritative', () => {
+  assert.match(source, /mode: null/);
+  assert.match(source, /overlapping_unfinished_reviews/);
+  assert.match(source, /START_SEPARATE/);
+  assert.match(source, /SUPERSEDE/);
+  assert.match(source, /editability\?\.allowed_commands/);
+  assert.match(source, /createOperationKey/);
+});
+
+test('save, close, conflict and apply recovery state are durable', () => {
+  assert.match(source, /saveChain/);
+  assert.match(source, /conflictBuffer/);
+  assert.match(source, /sessionStorage/);
+  assert.match(source, /FAILED_BEFORE_COMMIT/);
+  assert.match(source, /btnCloseModal/);
 });
 
 test('global, eligible-client and independent contract query settings are wired', () => {
@@ -61,6 +78,7 @@ test('global, eligible-client and independent contract query settings are wired'
   assert.match(source, /data-ir-contract-query-enabled/);
   assert.match(main, /send_ts_queries_to_different_email/);
   assert.match(main, /ts_queries_alt_email_address/);
+  assert.doesNotMatch(source, /settingsValue\(source, 'reversal_complete_financials_date', 'NOW'\)/);
 });
 
 test('styles provide professional tiles, nested expandables, paging and responsive layouts', () => {
