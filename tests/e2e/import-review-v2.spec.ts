@@ -202,6 +202,13 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
 });
 
 test('normal TEST Worker exposes the deployed V2 contract', async ({ page }) => {
+  const localAsset = readFileSync(resolve(__dirname, '../../js/import-review-v1.js'));
+  const deployedAssetResponse = await page.request.get(`https://testmode.arthur-rai.co.uk/js/import-review-v1.js?runtime-proof=${Date.now()}`, {
+    headers: { 'cache-control': 'no-cache' }
+  });
+  expect(deployedAssetResponse.status()).toBe(200);
+  expect(createHash('sha256').update(await deployedAssetResponse.body()).digest('hex'))
+    .toBe(createHash('sha256').update(localAsset).digest('hex'));
   await page.goto('/');
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
   const responsePromise = page.waitForResponse((response) => response.url().endsWith('/api/import-review/contract'));
@@ -211,4 +218,13 @@ test('normal TEST Worker exposes the deployed V2 contract', async ({ page }) => 
   expect(response.status()).toBe(200);
   const deployed = payload?.data || payload;
   expect(deployed).toMatchObject(contract);
+  await expect(page.locator('#irv1Home')).toBeVisible();
+  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V2')).toBeVisible();
+  await page.setViewportSize({ width: 412, height: 915 });
+  const deployedModalBounds = await page.locator('#modal').evaluate((modal) => {
+    const bounds = modal.getBoundingClientRect();
+    return { left: bounds.left, right: bounds.right, viewport: window.innerWidth };
+  });
+  expect(deployedModalBounds.left).toBeGreaterThanOrEqual(0);
+  expect(deployedModalBounds.right).toBeLessThanOrEqual(deployedModalBounds.viewport);
 });
