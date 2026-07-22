@@ -19,7 +19,7 @@ test('the frontend fails closed on the full approved DB and Worker contract', ()
   for (const marker of [
     'IMPORT_REVIEW_DB_V1', 'IMPORT_REVIEW_APPLY_V1', 'IMPORT_APPLY_OPERATION_V2',
     'IMPORT_CORRECTION_OPERATION_V2', 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
-    'IMPORT_REVIEW_UI_V2', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
+    'IMPORT_REVIEW_UI_V3', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
   ]) assert.match(source, new RegExp(marker));
   assert.match(source, /legacy_contracts_supported === false/);
 });
@@ -55,6 +55,43 @@ test('email confirmation states and renders one message per shared recipient wit
   assert.match(source, /Client → Contract → Shift/);
 });
 
+test('V3 grade resolution is server-option-only and route specific', () => {
+  assert.match(source, /resolution_options/);
+  assert.match(source, /WEEKLY_ASSIGNMENT_CONTRACT/);
+  assert.match(source, /DAILY_GRADE_ROLE/);
+  assert.match(source, /apiCreateAssignmentBandMapping/);
+  assert.match(source, /postHrRotaResolveMappings/);
+  assert.match(source, /freshItem\.evidence_fingerprint !== item\.evidence_fingerprint/);
+  assert.doesNotMatch(source, /irv2GradeRole|irv2GradeBand|Role code is required/);
+});
+
+test('V3 renders imported and current evidence with safe operator wording', () => {
+  for (const token of ['imported_evidence', 'current_evidence', 'difference_codes', 'evidence_rows', 'outcome_label']) {
+    assert.match(source, new RegExp(token));
+  }
+  for (const code of [
+    'ACTUAL_HOURS_MISMATCH', 'START_END_MISMATCH', 'BREAK_MINUTES_MISMATCH',
+    'MISSING_FROM_IMPORT', 'REFERENCE_ON_SHIFT_MISSING_FROM_COMPLETE_IMPORT',
+    'CONTRACT_OUT_OF_SCOPE', 'CONTRACT_RATES_INCOMPLETE'
+  ]) assert.match(source, new RegExp(code));
+  assert.match(source, /This item needs review/);
+  assert.match(source, /function evidenceCell/);
+  assert.match(source, /Timesheet shift is missing from the import/);
+  assert.doesNotMatch(source, /replaceAll\('_', ' '\)\.toLowerCase/);
+});
+
+test('final confirmation loads every selected action in bounded pages and rechecks before apply', () => {
+  assert.match(source, /page_size: '100'/);
+  assert.match(source, /if \(page > 5\)/);
+  assert.match(source, /Final confirmation could not load every selected action/);
+  assert.match(source, /selectedSetFingerprint/);
+  assert.match(source, /confirmationStillCurrent/);
+  assert.match(source, /DB-owned correction units/);
+  assert.match(source, /Explicit reference decisions/);
+  assert.match(source, /Outgoing client query emails/);
+  assert.match(source, /expected_request_hash: review\.header\.state\.apply_contract\.request_hash/);
+});
+
 test('coverage and overlap choices are explicit and review editing is server-authoritative', () => {
   assert.match(source, /mode: null/);
   assert.match(source, /overlapping_unfinished_reviews/);
@@ -64,12 +101,57 @@ test('coverage and overlap choices are explicit and review editing is server-aut
   assert.match(source, /createOperationKey/);
 });
 
+test('coverage sends only the Worker-approved scope fields and shows mapping status in every mode', () => {
+  assert.match(source, /function clientScopeRequest/);
+  assert.match(source, /function candidateScopeRequest/);
+  assert.match(source, /scope_clients: \(allScope\.scope_clients \|\| \[\]\)\.map\(clientScopeRequest\)/);
+  assert.match(source, /candidates\.map\(candidateScopeRequest\)/);
+  assert.match(source, /if \(!coverage \|\| !coverage\.mode\) return ''/);
+  assert.match(source, /Candidates covered by all shifts for this period/);
+  assert.match(source, /Candidates found in this partial file/);
+  assert.match(source, /data-mapping-status/);
+  assert.match(css, /\.irv1-scope-chip\.is-matched/);
+  assert.match(css, /\.irv1-scope-chip\.is-unmatched/);
+  assert.match(css, /\.irv1-candidate-row\.is-matched/);
+  assert.match(css, /\.irv1-candidate-row\.is-unmatched/);
+});
+
+test('coverage wording is explicit for validation-only, authoritative and mixed files', () => {
+  for (const text of [
+    'Complete validation file – all candidates',
+    'Complete validation file – selected candidates',
+    'Partial validation file',
+    'No timesheet hours or financial values will be changed',
+    'Complete authoritative file – all candidates',
+    'Complete authoritative file – selected candidates',
+    'Their imported shifts may be added or amended in CloudTMS',
+    'Partial authoritative file',
+    'Complete mixed file – all candidates',
+    'Complete mixed file – selected candidates',
+    'Partial mixed file'
+  ]) assert.match(source, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(source, /scope\?\.authority_mode/);
+  assert.match(source, /data-authority-mode/);
+  assert.match(source, /No browser choice can grant financial authority/);
+});
+
+test('import screens reuse one modal frame and use only the CloudTMS confirmation modal', () => {
+  assert.match(source, /function repaintImportFrame/);
+  assert.match(source, /if \(repaintImportFrame\(title, render, kind\)\) return/);
+  assert.match(source, /openUiConfirmModal/);
+  assert.match(source, /Discard staged import\?/);
+  assert.match(source, /Discard unsaved review changes\?/);
+  assert.doesNotMatch(source, /\b(?:global|window)\.(?:confirm|alert|prompt)\s*\(/);
+});
+
 test('save, close, conflict and apply recovery state are durable', () => {
   assert.match(source, /saveChain/);
   assert.match(source, /conflictBuffer/);
   assert.match(source, /sessionStorage/);
   assert.match(source, /FAILED_BEFORE_COMMIT/);
   assert.match(source, /btnCloseModal/);
+  assert.match(source, /let reviewCreated = false/);
+  assert.match(source, /The review was created, but its next screen could not be loaded safely/);
 });
 
 test('global, eligible-client and independent contract query settings are wired', () => {

@@ -17,17 +17,17 @@ const contract = {
   apply_operation_version: 'IMPORT_APPLY_OPERATION_V2',
   correction_operation_version: 'IMPORT_CORRECTION_OPERATION_V2',
   follow_up_component_version: 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
-  review_ui_contract_version: 'IMPORT_REVIEW_UI_V2',
+  review_ui_contract_version: 'IMPORT_REVIEW_UI_V3',
   email_grouping_version: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1',
   legacy_contracts_supported: false
 };
 
-function header(status = 'READY') {
+function header(status = 'READY', importId = IMPORT_ID) {
   const editable = ['STAGED', 'IN_REVIEW', 'BLOCKED', 'READY'].includes(status);
   const commands = editable ? ['SAVE_SELECTIONS', 'REFRESH', 'ABANDON', 'RESOLVE_DAILY_TIMESHEET', ...(status === 'READY' ? ['APPLY'] : [])] : ['VIEW_APPLY_STATUS'];
   return {
     import: {
-      id: IMPORT_ID, filename: 'review-fixture.xlsx', source_system: 'HEALTHROSTER', source_route: 'HR_WEEKLY',
+      id: importId, filename: importId === NEW_IMPORT_ID ? 'replacement.xlsx' : 'review-fixture.xlsx', source_system: importId === NEW_IMPORT_ID ? 'NHSP' : 'HEALTHROSTER', source_route: importId === NEW_IMPORT_ID ? 'NHSP' : 'HR_WEEKLY',
       coverage_mode: 'COMPLETE_ALL', coverage_start_date: '2026-07-01', coverage_end_date: '2026-07-07'
     },
     state: {
@@ -53,11 +53,13 @@ function action(actionId: string, candidateId: string, candidate: string, client
     action_id: actionId, action_kind: 'INCLUDE_SHIFT', action_category: 'READY', selectable: true, selected,
     candidate_id: candidateId, candidate_name: candidate, client_id: clientId, client_name: client,
     week_ending_date: '2026-07-05', work_date: '2026-07-02', evidence_fingerprint: HASH,
+    imported_evidence: { work_date: '2026-07-02', start: '08:00', end: '16:00', break_minutes: 30, worked_minutes: 450, role: 'RN' },
+    current_evidence: null, difference_codes: ['NEW_SHIFT'], outcome_label: 'Add imported shift',
     summary: { candidate_name: candidate, client_name: client, work_date: '2026-07-02', week_ending_date: '2026-07-05', start_time: '08:00', end_time: '16:00', break_minutes: 30, role: 'RN' }
   };
 }
 
-test('implements the V2 review workflow on desktop and narrow Chromium', async ({ page }) => {
+test('implements the V3 review workflow on desktop and narrow Chromium', async ({ page }) => {
   test.setTimeout(180_000);
   const localFiles = new Map([
     ['/index.html', resolve(__dirname, '../../index.html')],
@@ -69,7 +71,18 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
   let selectedOne = true;
   let eligibleClients: Array<{ client_id: string; client_name: string }> = [];
   let eligibilityRequestCount = 0;
+  let createReviewPayload: Record<string, any> | null = null;
+  let createdReview = false;
+  let failCreatedReviewLoad = false;
+  let nativeDialogCount = 0;
+  let scopeAuthorityMode: 'AUTHORITATIVE' | 'VALIDATION_ONLY' | 'MIXED' = 'AUTHORITATIVE';
+  let scopeSourceRoute = 'NHSP';
   const intercepted = new Set<string>();
+
+  page.on('dialog', async (dialog) => {
+    nativeDialogCount += 1;
+    await dialog.dismiss();
+  });
 
   await page.route('https://testmode.arthur-rai.co.uk/**', async (route) => {
     const url = new URL(route.request().url());
@@ -79,7 +92,7 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
     intercepted.add(key);
     let body = readFileSync(file);
     if (key === '/index.html') {
-      body = Buffer.from(body.toString('utf8').replace('</head>', '<script>window.__IMPORT_REVIEW_V2_PATCHED_ASSET__=true;</script></head>'));
+      body = Buffer.from(body.toString('utf8').replace('</head>', '<script>window.__IMPORT_REVIEW_V3_PATCHED_ASSET__=true;</script></head>'));
     }
     return route.fulfill({ status: 200, body, contentType: key.endsWith('.css') ? 'text/css' : key.endsWith('.js') ? 'application/javascript' : 'text/html' });
   });
@@ -89,17 +102,36 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
     const url = new URL(route.request().url());
     const path = url.pathname;
     if (path === '/api/import-reviews') {
-      return route.fulfill({ json: { ok: true, data: { items: [{ import_id: IMPORT_ID, filename: 'review-fixture.xlsx', source_route: 'HR_WEEKLY', coverage_start_date: '2026-07-01', coverage_end_date: '2026-07-07', status: 'READY', updated_at_utc: '2026-07-22T08:00:00Z' }], page_size: 25, next_cursor: null } } });
+      if (route.request().method() === 'POST') {
+        createReviewPayload = JSON.parse(route.request().postData() || '{}');
+        createdReview = true;
+        return route.fulfill({ status: 201, json: { ok: true, data: { import_id: NEW_IMPORT_ID, status: 'BLOCKED' } } });
+      }
+      const items = [{ import_id: IMPORT_ID, filename: 'review-fixture.xlsx', source_route: 'HR_WEEKLY', coverage_start_date: '2026-07-01', coverage_end_date: '2026-07-07', status: 'READY', updated_at_utc: '2026-07-22T08:00:00Z' }];
+      if (createdReview) items.unshift({ import_id: NEW_IMPORT_ID, filename: 'replacement.xlsx', source_route: 'NHSP', coverage_start_date: '2026-07-01', coverage_end_date: '2026-07-07', status: 'BLOCKED', updated_at_utc: '2026-07-22T08:01:00Z' });
+      return route.fulfill({ json: { ok: true, data: { items, page_size: 25, next_cursor: null } } });
     }
     if (path === `/api/import-reviews/staged/${NEW_IMPORT_ID}/scope`) {
       return route.fulfill({ json: { ok: true, data: {
-        import_id: NEW_IMPORT_ID, filename: 'replacement.xlsx', source_route: 'NHSP', source_system: 'NHSP', source_file_sha256: HASH,
+        import_id: NEW_IMPORT_ID, filename: 'replacement.xlsx', source_route: scopeSourceRoute, source_system: scopeSourceRoute === 'HR_DAILY' ? 'HEALTHROSTER_DAILY' : scopeSourceRoute === 'HR_WEEKLY' ? 'HEALTHROSTER' : 'NHSP', source_file_sha256: HASH,
         parser_version: 'CLOUDTMS_IMPORT_REVIEW_PARSER_V1:NHSP', coverage_start_date: '2026-07-01', coverage_end_date: '2026-07-07', staged_row_count: 2,
-        scope_clients: [{ source_client_key: 'client:test', source_display_label: 'Test Client', client_id: '30000000-0000-4000-8000-000000000001', resolved: true }],
-        candidate_options: [], candidate_page: 1, candidate_total_pages: 1, review_already_created: false,
+        authority_mode: scopeAuthorityMode, authority_summary: { mode: scopeAuthorityMode, source_route: scopeSourceRoute, basis: 'TEST_SERVER_OWNED_AUTHORITY' },
+        scope_clients: [
+          { source_client_key: 'client:test', source_display_label: 'Test Client source', client_id: '30000000-0000-4000-8000-000000000001', resolved_display_name: 'Test Client', resolved: true },
+          { source_client_key: 'client:unmatched', source_display_label: 'Made up Trust', client_id: null, resolved_display_name: null, resolved: false }
+        ],
+        candidate_options: [
+          { source_candidate_key: 'candidate:matched', source_display_label: 'Smith Jane', candidate_id: '40000000-0000-4000-8000-000000000001', resolved_display_name: 'Jane Smith', resolved: true },
+          { source_candidate_key: 'candidate:unmatched', source_display_label: 'Unknown Worker', candidate_id: null, resolved_display_name: null, resolved: false }
+        ], candidate_page: 1, candidate_total: 2, candidate_total_pages: 1, candidate_has_previous: false, candidate_has_next: false, review_already_created: false,
         overlapping_unfinished_reviews: [{ import_id: IMPORT_ID, state_version: 4, filename: 'earlier.xlsx', status: 'IN_REVIEW', coverage_start_date: '2026-07-01', coverage_end_date: '2026-07-07' }]
       } } });
     }
+    if (path === `/api/import-reviews/${NEW_IMPORT_ID}/actions`) {
+      if (failCreatedReviewLoad) return route.fulfill({ status: 409, json: { ok: false, error: { code: 'TIMESHEET_QUERY_CLIENT_REQUIRED', message: 'A query recipient needs attention.' } } });
+      return route.fulfill({ json: { ok: true, data: { items: [], view_counts: { PENDING: 2, READY: 0, EMAIL: 0, NO_ACTION: 0 }, page_number: 1, total_pages: 1, total_items: 0, has_previous: false, has_next: false } } });
+    }
+    if (path === `/api/import-reviews/${NEW_IMPORT_ID}`) return route.fulfill({ json: { ok: true, data: header('BLOCKED', NEW_IMPORT_ID) } });
     if (path === `/api/import-reviews/${IMPORT_ID}/selections`) {
       const body = JSON.parse(route.request().postData() || '{}');
       selectedOne = body.action_changes?.[0]?.selected ?? selectedOne;
@@ -109,7 +141,7 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
       const view = url.searchParams.get('view');
       const pageNumber = Number(url.searchParams.get('page') || 1);
       if (view === 'EMAIL') {
-        const base = { action_kind: 'EMAIL_ISSUE', action_category: 'EMAIL', selectable: true, selected: true, recipient_email: 'shared@example.test', recipient_group_key: 'RECIPIENT_EMAIL:stable', week_ending_date: '2026-07-05', work_date: '2026-07-02', summary: { start_time: '08:00', end_time: '16:00', break_minutes: 30, role: 'RN', work_date: '2026-07-02' } };
+        const base = { action_kind: 'EMAIL_ISSUE', action_category: 'EMAIL', selectable: true, selected: true, recipient_email: 'shared@example.test', recipient_group_key: 'RECIPIENT_EMAIL:stable', week_ending_date: '2026-07-05', work_date: '2026-07-02', outcome_label: 'Send new query', evidence_rows: [{ imported_evidence: { work_date: '2026-07-02', start: '08:00', end: '16:00', break_minutes: 30, worked_minutes: 450, role: 'RN' }, current_evidence: { work_date: '2026-07-02', start: '08:30', end: '16:00', break_minutes: 30, worked_minutes: 420, role: 'RN' }, difference_codes: ['START_TIME', 'WORKED_HOURS'] }], summary: { start_time: '08:00', end_time: '16:00', break_minutes: 30, role: 'RN', work_date: '2026-07-02' } };
         return route.fulfill({ json: { ok: true, data: { items: [
           { ...base, action_id: 'email-1', client_id: 'client-1', client_name: 'Alpha Trust', contract_id: 'contract-1', contract_label: 'Ward A · RN' },
           { ...base, action_id: 'email-2', client_id: 'client-2', client_name: 'Beta Trust', contract_id: 'contract-2', contract_label: 'Ward B · RN' }
@@ -132,7 +164,7 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
-  expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V2_PATCHED_ASSET__)).toBe(true);
+  expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_V3_PATCHED_ASSET__)).toBe(true);
   expect(intercepted.has('/index.html')).toBe(true);
   expect(intercepted.has('/js/main.js')).toBe(true);
   expect(intercepted.has('/js/import-review-v1.js')).toBe(true);
@@ -151,7 +183,7 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
 
   await page.evaluate(() => (window as any).openImportsModal());
   await expect(page.locator('#irv1Home')).toBeVisible();
-  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V2')).toBeVisible();
+  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V3')).toBeVisible();
   await expect(page.locator('[data-ir-client="HR_WEEKLY"] option')).toHaveCount(1);
   await expect(page.locator('[data-ir-client="HR_DAILY"] option')).toHaveCount(1);
   await expect(page.locator('[data-ir-drop="NHSP"] select')).toHaveCount(0);
@@ -176,12 +208,106 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
   await page.evaluate(() => { (window as any).uploadImportFileToR2 = async () => ({ fileKey: 'mock/replacement.xlsx', filename: 'replacement.xlsx' }); });
   await page.locator('[data-ir-drop="NHSP"] [data-ir-file]').setInputFiles({ name: 'replacement.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('fixture') });
   await expect(page.locator('#irv1Coverage')).toBeVisible();
+  await expect(page.locator('#irv1Coverage')).toHaveAttribute('data-authority-mode', 'AUTHORITATIVE');
+  await expect(page.getByText('Complete authoritative file – all candidates')).toBeVisible();
+  await expect(page.getByText('Complete authoritative file – selected candidates')).toBeVisible();
+  await expect(page.getByText(/Their imported shifts may be added or amended in CloudTMS/)).toBeVisible();
+  await expect(page.getByText('Partial authoritative file')).toBeVisible();
   await expect(page.locator('[data-ir-action="coverage-create"]')).toBeDisabled();
+
+  await expect(page.locator('.irv1-scope-chip.is-matched[data-mapping-status="matched"]')).toHaveCount(1);
+  await expect(page.locator('.irv1-scope-chip.is-unmatched[data-mapping-status="unmatched"]')).toHaveCount(1);
   await page.locator('input[name="irCoverage"][value="PARTIAL"]').check();
+  await expect(page.getByText('Candidates found in this partial file')).toBeVisible();
+  await expect(page.locator('.irv1-candidate-row')).toHaveCount(2);
+  await expect(page.locator('.irv1-candidate-row.is-matched')).toHaveCount(1);
+  await expect(page.locator('.irv1-candidate-row.is-unmatched')).toHaveCount(1);
+  await expect(page.locator('[data-ir-coverage-candidate]')).toHaveCount(0);
   await expect(page.locator('[data-ir-action="coverage-create"]')).toBeDisabled();
+
+  await page.locator('input[name="irCoverage"][value="COMPLETE_ALL"]').check();
+  await expect(page.getByText('Candidates covered by all shifts for this period')).toBeVisible();
+  await expect(page.locator('.irv1-candidate-row')).toHaveCount(2);
+  await expect(page.locator('[data-ir-coverage-candidate]')).toHaveCount(0);
+
+  await page.locator('input[name="irCoverage"][value="COMPLETE_SELECTED_CANDIDATES"]').check();
+  await expect(page.locator('[data-ir-coverage-candidate]')).toHaveCount(2);
+  await page.locator('[data-ir-coverage-candidate="candidate:matched"]').check();
+  await page.locator('input[name="irCoverage"][value="PARTIAL"]').check();
+  await expect(page.locator('[data-ir-coverage-candidate]')).toHaveCount(0);
+  await page.locator('input[name="irCoverage"][value="COMPLETE_SELECTED_CANDIDATES"]').check();
+  await expect(page.locator('[data-ir-coverage-candidate="candidate:matched"]')).toBeChecked();
+
+  await page.locator('[data-ir-action="coverage-cancel"]').click();
+  await expect(page.locator('#modalTitle')).toHaveText('Discard staged import?');
+  await page.getByRole('button', { name: 'Keep reviewing' }).click();
+  await expect(page.locator('#irv1Coverage')).toBeVisible();
+
+  await page.locator('#btnCloseModal').click();
+  await expect(page.locator('#modalTitle')).toHaveText('Discard staged import?');
+  await page.getByRole('button', { name: 'Keep reviewing' }).click();
+  await expect(page.locator('#irv1Coverage')).toBeVisible();
+  expect(nativeDialogCount).toBe(0);
+
+  await page.locator('#btnCloseModal').click();
+  await expect(page.locator('#modalTitle')).toHaveText('Discard staged import?');
+  await page.getByRole('button', { name: 'Discard import' }).click();
+  await expect(page.locator('#modalBack')).toBeHidden();
+  expect(nativeDialogCount).toBe(0);
+
+  scopeAuthorityMode = 'VALIDATION_ONLY';
+  scopeSourceRoute = 'HR_DAILY';
+  await page.evaluate(() => (window as any).openImportsModal());
+  await page.locator('[data-ir-drop="NHSP"] [data-ir-file]').setInputFiles({ name: 'validation.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('fixture') });
+  await expect(page.locator('#irv1Coverage')).toHaveAttribute('data-authority-mode', 'VALIDATION_ONLY');
+  await expect(page.getByText('Complete validation file – all candidates')).toBeVisible();
+  await expect(page.getByText('Complete validation file – selected candidates')).toBeVisible();
+  await expect(page.getByText('Partial validation file')).toBeVisible();
+  await expect(page.getByText(/No timesheet hours or financial values will be changed/)).toHaveCount(3);
+  await page.locator('#btnCloseModal').click();
+  await page.getByRole('button', { name: 'Discard import' }).click();
+
+  scopeAuthorityMode = 'MIXED';
+  scopeSourceRoute = 'HR_WEEKLY';
+  await page.evaluate(() => (window as any).openImportsModal());
+  await page.locator('[data-ir-drop="NHSP"] [data-ir-file]').setInputFiles({ name: 'mixed.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('fixture') });
+  await expect(page.locator('#irv1Coverage')).toHaveAttribute('data-authority-mode', 'MIXED');
+  await expect(page.getByText('Complete mixed file – all candidates')).toBeVisible();
+  await expect(page.getByText('Complete mixed file – selected candidates')).toBeVisible();
+  await expect(page.getByText('Partial mixed file')).toBeVisible();
+  await page.locator('#btnCloseModal').click();
+  await page.getByRole('button', { name: 'Discard import' }).click();
+
+  scopeAuthorityMode = 'AUTHORITATIVE';
+  scopeSourceRoute = 'NHSP';
+  await page.evaluate(() => (window as any).openImportsModal());
+  await expect(page.locator('#irv1Home')).toBeVisible();
+  await page.locator('[data-ir-drop="NHSP"] [data-ir-file]').setInputFiles({ name: 'replacement.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('fixture') });
+  await expect(page.locator('#irv1Coverage')).toBeVisible();
+
+  await page.locator('input[name="irCoverage"][value="COMPLETE_ALL"]').check();
   await page.locator('[data-ir-action="overlap-separate"]').click();
   await expect(page.locator('[data-ir-action="coverage-create"]')).toBeEnabled();
-  await page.locator('[data-ir-action="overlap-resume"]').click();
+  failCreatedReviewLoad = true;
+  await page.locator('[data-ir-action="coverage-create"]').click();
+  await expect(page.locator('#irv1Home')).toBeVisible();
+  await expect(page.getByText(/The review was created, but its next screen could not be loaded safely/)).toBeVisible();
+  failCreatedReviewLoad = false;
+  await page.locator(`[data-ir-action="continue"][data-import-id="${NEW_IMPORT_ID}"]`).click();
+  await expect(page.locator('#irv1Review')).toBeVisible();
+  expect(createReviewPayload).not.toBeNull();
+  expect(createReviewPayload?.coverage_mode).toBe('COMPLETE_ALL');
+  expect(createReviewPayload?.scope_candidates).toEqual([]);
+  expect(createReviewPayload?.scope_clients).toHaveLength(2);
+  for (const client of createReviewPayload?.scope_clients || []) {
+    expect(Object.keys(client).sort()).toEqual(['client_id', 'source_client_key', 'source_display_label']);
+  }
+  expect(JSON.stringify(createReviewPayload)).not.toContain('resolved_display_name');
+  expect(JSON.stringify(createReviewPayload)).not.toContain('"resolved"');
+
+  await page.locator('[data-ir-action="home"]').click();
+  await expect(page.locator('#irv1Home')).toBeVisible();
+  await page.locator(`[data-ir-action="continue"][data-import-id="${IMPORT_ID}"]`).click();
 
   await expect(page.locator('#irv1Review')).toBeVisible();
   await page.locator('[data-ir-action="review-view"][data-view="READY"]').click();
@@ -205,6 +331,8 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
   await expect(page.getByText('One email to shared@example.test')).toHaveCount(1);
   await expect(page.getByText('Alpha Trust')).toBeVisible();
   await expect(page.getByText('Beta Trust')).toBeVisible();
+  await expect(page.getByText('Shift 1')).toHaveCount(6);
+  await expect(page.getByText('Start differs')).toHaveCount(2);
 
   await page.locator('[data-ir-action="apply-preview"]').click();
   await expect(page.getByText('Final confirmation')).toBeVisible();
@@ -237,7 +365,11 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
   expect(narrowLayout.shellRight).toBeLessThanOrEqual(narrowLayout.modalRight);
 });
 
-test('normal TEST Worker exposes the deployed V2 contract', async ({ page }) => {
+test('normal TEST deployment exposes the reviewed V3 asset and contract', async ({ page }) => {
+  test.skip(
+    process.env.VERIFY_DEPLOYED_IMPORT_REVIEW_V3 !== '1',
+    'Post-deployment runtime proof; set VERIFY_DEPLOYED_IMPORT_REVIEW_V3=1 only after the reviewed DB, Worker and frontend are deployed together.'
+  );
   const localAsset = readFileSync(resolve(__dirname, '../../js/import-review-v1.js'));
   const deployedAssetResponse = await page.request.get(`https://testmode.arthur-rai.co.uk/js/import-review-v1.js?runtime-proof=${Date.now()}`, {
     headers: { 'cache-control': 'no-cache' }
@@ -259,7 +391,7 @@ test('normal TEST Worker exposes the deployed V2 contract', async ({ page }) => 
   const deployed = payload?.data || payload;
   expect(deployed).toMatchObject(contract);
   await expect(page.locator('#irv1Home')).toBeVisible();
-  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V2')).toBeVisible();
+  await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V3')).toBeVisible();
   const refreshedEligibilityPromise = page.waitForResponse((next) => next.url().endsWith('/api/healthroster/autoprocess/clients'));
   await page.locator('[data-ir-action="reload-home"]').click();
   const refreshedEligibilityResponse = await refreshedEligibilityPromise;

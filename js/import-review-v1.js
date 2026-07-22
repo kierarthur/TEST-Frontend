@@ -7,7 +7,7 @@
     operation: 'IMPORT_APPLY_OPERATION_V2',
     correction: 'IMPORT_CORRECTION_OPERATION_V2',
     followUp: 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
-    ui: 'IMPORT_REVIEW_UI_V2',
+    ui: 'IMPORT_REVIEW_UI_V3',
     emailGrouping: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
   });
   const PAGE_SIZES = Object.freeze([25, 50, 75, 100]);
@@ -39,7 +39,7 @@
         const r = Math.random() * 16 | 0;
         return (c === 'x' ? r : (r & 3 | 8)).toString(16);
       });
-  const recoveryKey = (importId) => `cloudtms:import-review:v2:apply:${importId}`;
+  const recoveryKey = (importId) => `cloudtms:import-review:v3:apply:${importId}`;
   function recoveryFor(importId) {
     try { return JSON.parse(global.sessionStorage.getItem(recoveryKey(importId)) || 'null'); } catch { return null; }
   }
@@ -68,8 +68,78 @@
     return payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
   }
 
+  const IMPORT_SCREEN_KINDS = new Set(['imports-v1', 'import-coverage-v1', 'import-review-v1', 'import-review-confirm-v1']);
+
+  function notify(message) {
+    const text = String(message || '').trim();
+    if (!text) return;
+    if (typeof global.__toast === 'function') global.__toast(text);
+    else if (global.console && typeof global.console.warn === 'function') global.console.warn(text);
+  }
+
+  async function importUiConfirm({ title, messageHtml, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false } = {}) {
+    if (typeof global.openUiConfirmModal !== 'function') {
+      notify('The CloudTMS confirmation window is unavailable. Refresh the page and try again.');
+      return false;
+    }
+    const result = await global.openUiConfirmModal({
+      title: String(title || 'Please confirm'),
+      message_html: String(messageHtml || ''),
+      confirm_label: String(confirmLabel || 'Confirm'),
+      cancel_label: String(cancelLabel || 'Cancel'),
+      confirm_class: danger ? 'btn btn-warn' : 'btn btn-primary',
+      cancel_class: 'btn btn-outline'
+    });
+    return !!(result && result.confirmed === true);
+  }
+
+  function confirmCoverageDiscard() {
+    return importUiConfirm({
+      title: 'Discard staged import?',
+      messageHtml: '<div style="font-size:14px;font-weight:700;margin-bottom:6px;">Discard this staged import?</div><div class="mini">The review has not been created. You can upload the source file again later to start from the beginning.</div>',
+      confirmLabel: 'Discard import',
+      cancelLabel: 'Keep reviewing',
+      danger: true
+    });
+  }
+
+  function currentImportFrame() {
+    const frames = Array.isArray(global.__modalStack) ? global.__modalStack : [];
+    const top = frames[frames.length - 1] || null;
+    return top && IMPORT_SCREEN_KINDS.has(String(top.kind || '')) ? top : null;
+  }
+
+  function repaintImportFrame(title, render, kind) {
+    const frame = currentImportFrame();
+    if (!frame) return false;
+    const changedScreen = String(frame.kind || '') !== String(kind || '');
+    frame.title = title;
+    frame.kind = kind;
+    frame.entity = kind;
+    frame.currentTabKey = 'main';
+    frame.renderTab = (key) => key === 'main' ? render() : '';
+    frame._ctxRef = global.modalCtx;
+    frame.mode = 'edit';
+    frame.noParentGate = true;
+    frame.dirtyClosePolicy = 'close';
+    frame._closing = false;
+    if (changedScreen) {
+      frame.isDirty = false;
+      frame._snapshot = null;
+    }
+    const titleNode = document.getElementById('modalTitle');
+    if (titleNode) titleNode.textContent = title;
+    const tabNode = document.querySelector('#modalTabs button');
+    if (tabNode) tabNode.textContent = title;
+    const body = document.getElementById('modalBody');
+    if (body) body.innerHTML = render();
+    if (typeof frame._updateButtons === 'function') frame._updateButtons();
+    return true;
+  }
+
   function showScreen(title, render, kind) {
     global.modalCtx = { entity: kind, data: {}, importsState: state };
+    if (repaintImportFrame(title, render, kind)) return;
     global.showModal(
       title,
       [{ key: 'main', label: title }],
@@ -77,7 +147,7 @@
       null,
       false,
       null,
-      { kind, noParentGate: true, showSave: false, stayOpenOnSave: true }
+      { kind, noParentGate: true, forceEdit: true, dirtyClosePolicy: 'close', showSave: false, stayOpenOnSave: true }
     );
   }
 
@@ -241,6 +311,85 @@
     return request(`/api/import-reviews/staged/${encodeURIComponent(importId)}/scope?candidate_page=${page}&candidate_page_size=${size}`);
   }
 
+  function scopeIsResolved(item, idField) {
+    return item?.resolved === true || !!String(item?.[idField] || '').trim();
+  }
+
+  function clientScopeRequest(item) {
+    return {
+      source_client_key: String(item?.source_client_key || '').trim(),
+      source_display_label: item?.source_display_label == null ? null : String(item.source_display_label),
+      client_id: item?.client_id || null
+    };
+  }
+
+  function candidateScopeRequest(item) {
+    return {
+      source_candidate_key: String(item?.source_candidate_key || '').trim(),
+      source_display_label: item?.source_display_label == null ? null : String(item.source_display_label),
+      candidate_id: item?.candidate_id || null
+    };
+  }
+
+  function coverageCopy(scope) {
+    const authority = String(scope?.authority_mode || scope?.authority_summary?.mode || 'UNRESOLVED').toUpperCase();
+    if (authority === 'VALIDATION_ONLY') return {
+      authority,
+      banner: '<strong>Validation-only import.</strong> The existing timesheet remains authoritative. This import can create validation, reference-review and email items, but it will not change timesheet hours or financial values.',
+      completeAll: {
+        title: 'Complete validation file – all candidates',
+        body: 'Check every covered candidate. Missing or mismatched shifts can become validation, reference-review and email items. No timesheet hours or financial values will be changed.'
+      },
+      completeSelected: {
+        title: 'Complete validation file – selected candidates',
+        body: 'Apply the same validation checks only to the candidates you select. Everyone else is outside scope. No timesheet hours or financial values will be changed.'
+      },
+      partial: {
+        title: 'Partial validation file',
+        body: 'Validate only rows present in the file. Missing rows create no missing-shift, reference or email issue. No timesheet hours or financial values will be changed.'
+      }
+    };
+    if (authority === 'AUTHORITATIVE') return {
+      authority,
+      banner: '<strong>Import-authoritative file.</strong> Your coverage choice controls which imported shifts can be added or amended and whether omitted shifts can be reversed or cancelled after review.',
+      completeAll: {
+        title: 'Complete authoritative file – all candidates',
+        body: 'Treat this as the complete shift record for every covered candidate and date. Imported shifts may be added or amended in CloudTMS, and omitted import-authoritative shifts may be reversed or cancelled after review. Timesheet and financial outcomes may change, subject to protected-financial and Banking Pay controls.'
+      },
+      completeSelected: {
+        title: 'Complete authoritative file – selected candidates',
+        body: 'Apply authoritative processing only to the candidates you select. Their imported shifts may be added or amended in CloudTMS, and their omitted import-authoritative shifts may be reversed or cancelled after review. Other candidates are outside scope and will not be changed because they are absent. Timesheet and financial outcomes may change, subject to protected-financial and Banking Pay controls.'
+      },
+      partial: {
+        title: 'Partial authoritative file',
+        body: 'Process only shifts present in this file. Missing shifts will not be reversed or cancelled, and no omission-based reference or missing-shift issue will be created.'
+      }
+    };
+    if (authority === 'MIXED') return {
+      authority,
+      banner: '<strong>Mixed-authority HealthRoster file.</strong> Import-authoritative contract rows may change shifts and financial outcomes. Timesheet-required contract rows remain validation-only and cannot replace timesheet hours or financial values.',
+      completeAll: {
+        title: 'Complete mixed file – all candidates',
+        body: 'Check every covered candidate. Authoritative rows may be added or amended and omitted authoritative shifts may be reversed or cancelled after review. Timesheet-required rows create validation, reference-review and email items only.'
+      },
+      completeSelected: {
+        title: 'Complete mixed file – selected candidates',
+        body: 'Apply each contract’s server-resolved authority only to the candidates you select. Other candidates are outside scope and will not be changed because they are absent.'
+      },
+      partial: {
+        title: 'Partial mixed file',
+        body: 'Process or validate only rows present in the file according to each contract’s authority. Missing rows create no cancellation, reversal, reference or missing-shift email action.'
+      }
+    };
+    return {
+      authority,
+      banner: '<strong>Authority will be confirmed by the server.</strong> Unresolved mappings must be fixed before anything can be applied. No browser choice can grant financial authority.',
+      completeAll: { title: 'Complete file – all candidates', body: 'Treat omissions as meaningful for every covered candidate after the server resolves each row’s authority.' },
+      completeSelected: { title: 'Complete file – selected candidates', body: 'Treat omissions as meaningful only for the selected candidates after the server resolves each row’s authority.' },
+      partial: { title: 'Partial file', body: 'Process only rows present in the file. Missing rows create no cancellation, reference or missing-shift email action.' }
+    };
+  }
+
   async function openCoverage(importId) {
     const scope = await fetchScope(importId, 1, 25);
     if (scope.review_already_created) return openReview(importId);
@@ -253,7 +402,7 @@
       candidatePageSize: 25,
       overlapChoice: null,
       selectedOverlapId: (scope.overlapping_unfinished_reviews || [])[0]?.import_id || null,
-      createOperationKey: `import-review-create-ui-v2:${importId}:${scope.source_file_sha256}`,
+      createOperationKey: `import-review-create-ui-v3:${importId}:${scope.source_file_sha256}`,
       error: '',
       busy: false
     };
@@ -262,14 +411,34 @@
 
   function renderCoverageCandidates() {
     const coverage = state.coverage;
-    if (!coverage || coverage.mode !== 'COMPLETE_SELECTED_CANDIDATES') return '';
+    if (!coverage || !coverage.mode) return '';
+    const selectable = coverage.mode === 'COMPLETE_SELECTED_CANDIDATES';
     const items = Array.isArray(coverage.scope.candidate_options) ? coverage.scope.candidate_options : [];
     const rows = items.map((item) => {
       const key = String(item.source_candidate_key || '');
       const checked = coverage.selectedCandidates.has(key);
-      return `<label class="irv1-candidate-row"><input type="checkbox" data-ir-coverage-candidate="${esc(key)}" ${checked ? 'checked' : ''}/><span>${esc(item.source_display_label || 'Unnamed candidate')}</span><small>${item.resolved ? `Matched to ${esc(item.resolved_display_name || 'candidate')}` : 'Mapping unresolved — review will be blocked until fixed'}</small></label>`;
+      const resolved = scopeIsResolved(item, 'candidate_id');
+      const status = resolved ? 'matched' : 'unmatched';
+      const selector = selectable
+        ? `<input type="checkbox" data-ir-coverage-candidate="${esc(key)}" ${checked ? 'checked' : ''}/>`
+        : `<span class="irv1-candidate-marker" aria-hidden="true">${resolved ? '✓' : '!'}</span>`;
+      const content = `${selector}<span>${esc(item.source_display_label || 'Unnamed candidate')}</span><small>${resolved ? `Matched to ${esc(item.resolved_display_name || 'candidate')}` : 'Mapping unresolved — review will be blocked until fixed'}</small>`;
+      return selectable
+        ? `<label class="irv1-candidate-row is-${status}" data-mapping-status="${status}">${content}</label>`
+        : `<div class="irv1-candidate-row is-${status}" data-mapping-status="${status}">${content}</div>`;
     }).join('');
-    return `<section><div class="irv1-history-head"><div><strong>Select the candidates covered by this file</strong><div class="mini">Selections remain selected while you move between pages.</div></div><span class="irv1-chip">${coverage.selectedCandidates.size} selected</span></div>
+    const heading = selectable
+      ? 'Select the candidates covered by this file'
+      : coverage.mode === 'COMPLETE_ALL'
+        ? 'Candidates covered by all shifts for this period'
+        : 'Candidates found in this partial file';
+    const help = selectable
+      ? 'Selections remain selected while you move between pages.'
+      : coverage.mode === 'COMPLETE_ALL'
+        ? 'Every listed candidate is in scope. Mapping status is shown for review; this list is read-only.'
+        : 'Mapping status is shown for review; this list is read-only and omitted shifts have no meaning.';
+    const count = selectable ? `${coverage.selectedCandidates.size} selected` : `${Number(coverage.scope.candidate_total || items.length)} candidate${Number(coverage.scope.candidate_total || items.length) === 1 ? '' : 's'}`;
+    return `<section><div class="irv1-history-head"><div><strong>${heading}</strong><div class="mini">${help}</div></div><span class="irv1-chip">${count}</span></div>
       <div class="irv1-candidate-picker">${rows || '<div class="irv1-empty">No candidates were found.</div>'}</div>
       <div class="irv1-pager"><button class="irv1-btn" data-ir-action="coverage-page" data-page="${coverage.candidatePage - 1}" ${coverage.scope.candidate_has_previous ? '' : 'disabled="disabled" aria-disabled="true"'}>Previous</button><span>Page ${coverage.candidatePage} of ${coverage.scope.candidate_total_pages || 1}</span><button class="irv1-btn" data-ir-action="coverage-page" data-page="${coverage.candidatePage + 1}" ${coverage.scope.candidate_has_next ? '' : 'disabled="disabled" aria-disabled="true"'}>Next</button></div>
     </section>`;
@@ -279,21 +448,27 @@
     const c = state.coverage;
     if (!c) return '<div class="irv1-empty">No staged import is open.</div>';
     const error = c.error ? `<div class="irv1-alert error">${esc(c.error)}</div>` : '';
-    const clients = (c.scope.scope_clients || []).map((client) => `<span class="irv1-chip">${esc(client.resolved_display_name || client.source_display_label || 'Unresolved client')}</span>`).join('');
+    const clients = (c.scope.scope_clients || []).map((client) => {
+      const resolved = scopeIsResolved(client, 'client_id');
+      const status = resolved ? 'matched' : 'unmatched';
+      const label = client.resolved_display_name || client.source_display_label || 'Unresolved client';
+      return `<span class="irv1-chip irv1-scope-chip is-${status}" data-mapping-status="${status}" aria-label="${resolved ? 'Matched' : 'Unmatched'} client: ${esc(label)}"><span aria-hidden="true">${resolved ? '✓' : '!'}</span>${esc(label)}</span>`;
+    }).join('');
     const overlaps = Array.isArray(c.scope.overlapping_unfinished_reviews) ? c.scope.overlapping_unfinished_reviews : [];
     const overlapHtml = overlaps.length ? `<section class="irv1-overlap"><div class="irv1-alert"><strong>An unfinished review already covers this client and some of these dates.</strong><br/>Choose what this new file means before creating another review.</div><div class="irv1-overlap-list">${overlaps.map((item) => `<label class="irv1-choice"><input type="radio" name="irOverlapTarget" value="${esc(item.import_id)}" ${c.selectedOverlapId === item.import_id ? 'checked' : ''}/><span><strong>${esc(item.filename || 'Earlier import')}</strong><span>${esc(formatDate(item.coverage_start_date))} to ${esc(formatDate(item.coverage_end_date))} · ${esc(item.status)}</span></span></label>`).join('')}</div><div class="irv1-overlap-actions"><button class="irv1-btn" data-ir-action="overlap-resume">Resume selected review</button><button class="irv1-btn" data-ir-action="overlap-separate" ${c.overlapChoice === 'START_SEPARATE' ? 'aria-pressed="true"' : ''}>Keep both as separate reviews</button><button class="irv1-btn danger" data-ir-action="overlap-replace" ${c.overlapChoice === 'SUPERSEDE' ? 'aria-pressed="true"' : ''}>Replace selected review with this file</button></div><div class="mini">A separate review leaves the earlier review active. Replace creates this review first, then marks the selected earlier review as superseded.</div></section>` : '';
+    const copy = coverageCopy(c.scope);
     const coverageChosen = !!c.mode;
     const overlapChosen = overlaps.length === 0 || ['START_SEPARATE','SUPERSEDE'].includes(c.overlapChoice);
-    return `<div class="irv1-shell" id="irv1Coverage" data-coverage-mode="${esc(c.mode || '')}" data-overlap-choice="${esc(c.overlapChoice || '')}">
+    return `<div class="irv1-shell" id="irv1Coverage" data-coverage-mode="${esc(c.mode || '')}" data-authority-mode="${esc(copy.authority)}" data-overlap-choice="${esc(c.overlapChoice || '')}">
       <section class="irv1-intro"><div><h3>${esc(c.scope.filename || 'Staged import')}</h3><p>${esc(formatDate(c.scope.coverage_start_date))} to ${esc(formatDate(c.scope.coverage_end_date))} · ${Number(c.scope.staged_row_count || 0)} parsed rows. Coverage becomes immutable when the review is created.</p></div><span class="irv1-contract">${esc(c.scope.source_route || '')}</span></section>
       ${error}
       <div class="irv1-scope-summary">${clients || '<span class="irv1-chip">Client mapping will be reviewed</span>'}</div>
       ${overlapHtml}
-      <div class="irv1-alert"><strong>Confirm the file coverage.</strong> No option is preselected because this choice controls whether omitted shifts are meaningful.</div>
+      <div class="irv1-alert">${copy.banner}<br/>No option is preselected because this choice controls whether omitted shifts are meaningful.</div>
       <section class="irv1-coverage-options">
-        <label class="irv1-choice"><input type="radio" name="irCoverage" value="COMPLETE_ALL" ${c.mode === 'COMPLETE_ALL' ? 'checked' : ''}/><span><strong>All shifts for this period</strong><span>Omissions can be treated as meaningful for every candidate in the file period.</span></span></label>
-        <label class="irv1-choice"><input type="radio" name="irCoverage" value="COMPLETE_SELECTED_CANDIDATES" ${c.mode === 'COMPLETE_SELECTED_CANDIDATES' ? 'checked' : ''}/><span><strong>All shifts for selected candidates</strong><span>Only the candidates you choose are complete; other candidates are outside scope.</span></span></label>
-        <label class="irv1-choice"><input type="radio" name="irCoverage" value="PARTIAL" ${c.mode === 'PARTIAL' ? 'checked' : ''}/><span><strong>Partial file</strong><span>Omitted shifts are not cancellations, reference problems or missing-shift email issues.</span></span></label>
+        <label class="irv1-choice"><input type="radio" name="irCoverage" value="COMPLETE_ALL" ${c.mode === 'COMPLETE_ALL' ? 'checked' : ''}/><span><strong>${esc(copy.completeAll.title)}</strong><span>${esc(copy.completeAll.body)}</span></span></label>
+        <label class="irv1-choice"><input type="radio" name="irCoverage" value="COMPLETE_SELECTED_CANDIDATES" ${c.mode === 'COMPLETE_SELECTED_CANDIDATES' ? 'checked' : ''}/><span><strong>${esc(copy.completeSelected.title)}</strong><span>${esc(copy.completeSelected.body)}</span></span></label>
+        <label class="irv1-choice"><input type="radio" name="irCoverage" value="PARTIAL" ${c.mode === 'PARTIAL' ? 'checked' : ''}/><span><strong>${esc(copy.partial.title)}</strong><span>${esc(copy.partial.body)}</span></span></label>
       </section>
       ${renderCoverageCandidates()}
       <div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="coverage-cancel">Back</button><button class="irv1-btn primary" data-ir-action="coverage-create" ${c.busy || !coverageChosen || !overlapChosen ? 'disabled="disabled" aria-disabled="true"' : 'aria-disabled="false"'}>${c.busy ? 'Creating review…' : 'Create review'}</button></div>
@@ -330,6 +505,7 @@
     c.busy = true;
     c.error = '';
     showScreen('Confirm import coverage', renderCoverage, 'import-coverage-v1');
+    let reviewCreated = false;
     try {
       const allScope = await fetchScope(c.importId, 1, 100);
       const candidates = [];
@@ -347,13 +523,14 @@
           coverage_mode: c.mode,
           coverage_start_date: allScope.coverage_start_date,
           coverage_end_date: allScope.coverage_end_date,
-          scope_clients: allScope.scope_clients || [],
-          scope_candidates: c.mode === 'COMPLETE_SELECTED_CANDIDATES' ? candidates : [],
+          scope_clients: (allScope.scope_clients || []).map(clientScopeRequest),
+          scope_candidates: c.mode === 'COMPLETE_SELECTED_CANDIDATES' ? candidates.map(candidateScopeRequest) : [],
           expected_source_file_sha256: allScope.source_file_sha256,
           expected_parser_version: allScope.parser_version,
           operation_key: c.createOperationKey
         })
       });
+      reviewCreated = true;
       if (c.overlapChoice === 'SUPERSEDE') {
         const targetId = String(c.selectedOverlapId || '');
         const target = overlaps.find((item) => String(item.import_id) === targetId);
@@ -368,6 +545,14 @@
       }
       await openReview(c.importId);
     } catch (error) {
+      if (reviewCreated) {
+        state.coverage = null;
+        state.review = null;
+        try { await loadHome({ resetPaging: true }); } catch {}
+        state.home.error = `The review was created, but its next screen could not be loaded safely. Open it from the unfinished reviews list and choose Recheck. ${error.message || ''}`.trim();
+        showScreen('Imports', renderHome, 'imports-v1');
+        return;
+      }
       c.busy = false;
       c.error = error.message || 'The review could not be created.';
       showScreen('Confirm import coverage', renderCoverage, 'import-coverage-v1');
@@ -415,6 +600,7 @@
       conflictBuffer: prior?.conflictBuffer || null,
       operationId: recoveryFor(importId)?.operation_id || null,
       requestHash: recoveryFor(importId)?.request_hash || null,
+      confirmation: null,
       confirmAcknowledged: false,
       saveState: '', error: options.message || '', busy: false, screen: 'review', epoch
     };
@@ -508,16 +694,37 @@
 
   function reasonText(code) {
     const labels = {
-      CANDIDATE_UNRESOLVED: 'Candidate mapping is unresolved. Leave this import, update the candidate mapping, then return and recheck.',
-      CLIENT_UNRESOLVED: 'Client mapping is unresolved. Leave this import, update the client mapping, then return and recheck.',
+      CANDIDATE_UNRESOLVED: 'This imported worker is not linked. Link an existing candidate here, or leave the review to create the missing candidate, then choose Recheck.',
+      CLIENT_UNRESOLVED: 'This imported organisation is not linked. Link an existing client here, or leave the review to create the missing client, then choose Recheck.',
       CONTRACT_MISSING: 'No matching contract exists for this worker and date. Create or correct the contract outside this review, then return and recheck.',
+      CONTRACT_OUT_OF_SCOPE: 'The mapped contract is not active or eligible for this worker, client, route and date. Correct the mapping or contract, then choose Recheck.',
       CONTRACT_AMBIGUOUS: 'More than one contract matches this worker and date. Correct the contracts outside this review, then return and recheck.',
-      GRADE_MAPPING_REQUIRED: 'The HealthRoster grade needs a role mapping. Configure it outside this review, then return and recheck.',
+      CONTRACT_RATES_INCOMPLETE: 'The selected contract is missing required pay or charge rates. Amend the contract outside this review, then choose Recheck; rates cannot be edited here.',
+      GRADE_MAPPING_REQUIRED: 'The imported grade is not mapped. Choose one of the eligible existing records shown here; if none is suitable, correct the underlying records and choose Recheck.',
       TIMESHEET_NOT_FOUND: 'No eligible existing daily timesheet was found. Correct the timesheet records outside this review, then return and recheck.',
       TIMESHEET_AMBIGUOUS: 'Choose the existing timesheet that this HealthRoster row validates.',
-      BLOCKED_ACTIVE_PAY_DRAFT: 'An active Banking Pay draft protects this timesheet. Resolve the draft outside the import.'
+      ACTUAL_HOURS_MISMATCH: 'Imported worked hours differ from the current CloudTMS timesheet. Review both sides before continuing.',
+      START_END_MISMATCH: 'Imported start or end time differs from the current CloudTMS timesheet. Review both sides before continuing.',
+      BREAK_MINUTES_MISMATCH: 'Imported break minutes differ from the current CloudTMS timesheet. Review both sides before continuing.',
+      HEALTHROSTER_WEEKLY: 'The HealthRoster weekly evidence differs from the current timesheet. Review the day comparisons and select the required query.',
+      MISSING_FROM_IMPORT: 'This current CloudTMS shift is absent from a complete import. Review the shift, email and reference choices separately.',
+      MISSING_FROM_COMPLETE_IMPORT: 'This current shift is absent from the complete import and is proposed for cancellation.',
+      REFERENCE_ON_SHIFT_MISSING_FROM_COMPLETE_IMPORT: 'This current shift is absent from the complete import and has a stored reference. Clearing it is a separate explicit choice.',
+      REFERENCE_ON_SHIFT_MISSING_OR_MISMATCHED_IN_COMPLETE_IMPORT: 'The stored reference is missing or differs in the complete import. Clearing it is a separate explicit choice.',
+      QUERY_RECIPIENT_EMAIL_MISSING_OR_INVALID: 'No valid query recipient is configured. Correct the client or contract query email outside this review, then choose Recheck.',
+      BLOCKED_ACTIVE_PAY_DRAFT: 'An active Banking Pay draft protects this timesheet. Resolve the draft outside the import, then choose Recheck.'
     };
-    return labels[String(code || '').toUpperCase()] || String(code || '').replaceAll('_', ' ').toLowerCase();
+    return labels[String(code || '').toUpperCase()] || 'This item needs review. Check the imported and current evidence, resolve the underlying record if necessary, then choose Recheck.';
+  }
+
+  function excludedReasonText(code) {
+    const labels = {
+      PREVIOUS_OR_LEGACY_HISTORY_REQUIRES_EXPLICIT_REMINDER: 'Previously recorded issue: excluded by default. Tick it only when you deliberately want to send a reminder.',
+      REFERENCE_INVALIDATION_REQUIRES_EXPLICIT_SELECTION: 'Reference clearing is excluded by default and happens only when explicitly selected.',
+      QUERY_RECIPIENT_EMAIL_MISSING_OR_INVALID: 'Excluded because the client or contract has no valid query recipient email.',
+      BLOCKED_ACTIVE_PAY_DRAFT: 'Excluded because an active Banking Pay draft protects this timesheet.'
+    };
+    return labels[String(code || '').toUpperCase()] || '';
   }
 
   function timeText(value) {
@@ -540,27 +747,80 @@
     const current = item.timesheet_id || '';
     const disabled = reviewCan(review, 'RESOLVE_DAILY_TIMESHEET') ? '' : 'disabled="disabled" aria-disabled="true"';
     return `<div class="irv1-resolution"><select class="input" ${disabled} data-ir-daily-resolution="${esc(item.action_id)}" data-hr-row-id="${esc(item.hr_row_id || '')}" data-evidence="${esc(item.evidence_fingerprint || '')}"><option value="">${current ? 'Saved timesheet choice' : 'Choose an existing timesheet'}</option>${options.map((option) => {
-      const label = `${formatDate(option.worked_start_iso)} · ${timeText(option.worked_start_iso)}–${timeText(option.worked_end_iso)} · ${Math.round(Number(option.worked_minutes || 0) / 60 * 100) / 100} hours${option.reference_number ? ` · ref ${option.reference_number}` : ''}`;
+      const label = option.display_label || `${formatDate(option.worked_start_iso)} · ${timeText(option.worked_start_iso)}–${timeText(option.worked_end_iso)} · ${Math.round(Number(option.worked_minutes || 0) / 60 * 100) / 100} hours${option.role ? ` · ${option.role}` : ''}${option.band ? ` · ${option.band}` : ''}${option.site ? ` · ${option.site}` : ''}${option.reference_number ? ` · ref ${option.reference_number}` : ''}`;
       return `<option value="${esc(option.timesheet_id)}" ${String(option.timesheet_id) === String(current) ? 'selected' : ''}>${esc(label)}</option>`;
     }).join('')}</select>${current ? `<button type="button" class="irv1-btn" ${disabled} data-ir-action="daily-clear" data-action-id="${esc(item.action_id)}">Clear saved choice</button>` : ''}</div>`;
   }
 
+  function evidenceHtml(evidence) {
+    if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return '<span class="mini">—</span>';
+    const minutes = evidence.worked_minutes == null ? null : Number(evidence.worked_minutes);
+    const hours = evidence.worked_hours == null
+      ? (Number.isFinite(minutes) ? Math.round(minutes / 60 * 100) / 100 : null)
+      : Number(evidence.worked_hours);
+    return `<dl class="irv1-evidence-list">
+      <div><dt>Date</dt><dd>${esc(formatDate(evidence.work_date))}</dd></div>
+      <div><dt>Time</dt><dd>${esc(timeText(evidence.start))}–${esc(timeText(evidence.end))}</dd></div>
+      <div><dt>Break</dt><dd>${esc(evidence.break_minutes == null ? '—' : `${evidence.break_minutes} min`)}</dd></div>
+      <div><dt>Hours</dt><dd>${esc(Number.isFinite(hours) ? hours : '—')}</dd></div>
+      <div><dt>Role / band</dt><dd>${esc([evidence.role, evidence.band].filter(Boolean).join(' · ') || '—')}</dd></div>
+      <div><dt>Reference</dt><dd>${esc(evidence.reference || '—')}</dd></div>
+    </dl>`;
+  }
+
+  function differenceHtml(item) {
+    const codes = Array.isArray(item.difference_codes) ? item.difference_codes : [];
+    const labels = {
+      NEW_SHIFT: 'Not currently in CloudTMS', TIMESHEET_SELECTION_REQUIRED: 'Timesheet choice required',
+      START_TIME: 'Start differs', END_TIME: 'End differs', START_END_MISMATCH: 'Start/end differs',
+      BREAK_MINUTES: 'Break differs', BREAK_MINUTES_MISMATCH: 'Break differs', WORKED_HOURS: 'Hours differ',
+      ACTUAL_HOURS_MISMATCH: 'Hours differ', MISSING_FROM_IMPORT: 'Missing from complete import',
+      MISSING_FROM_COMPLETE_IMPORT: 'Missing from complete import', UNMATCHED: 'Timesheet shift is missing from the import',
+      HR_ONLY: 'Imported shift is missing from the timesheet', AMBIGUOUS: 'Shift pairing is ambiguous',
+      MISMATCH: 'Start, end or break differs', REFERENCE: 'Reference differs'
+    };
+    return codes.length ? `<ul class="irv1-differences">${codes.map((code) => `<li>${esc(labels[String(code).toUpperCase()] || 'Evidence differs')}</li>`).join('')}</ul>` : '<span class="mini">No difference</span>';
+  }
+
+  function evidenceCell(item, field) {
+    const rows = Array.isArray(item.evidence_rows) ? item.evidence_rows : [];
+    if (!rows.length) return evidenceHtml(item[field]);
+    return `<div class="irv1-evidence-rows">${rows.map((row, index) => `<section><span class="irv1-evidence-row-label">Shift ${index + 1}</span>${evidenceHtml(row?.[field])}</section>`).join('')}</div>`;
+  }
+
+  function differenceCell(item) {
+    const rows = Array.isArray(item.evidence_rows) ? item.evidence_rows : [];
+    if (!rows.length) return differenceHtml(item);
+    return `<div class="irv1-evidence-rows">${rows.map((row, index) => `<section><span class="irv1-evidence-row-label">Shift ${index + 1}</span>${differenceHtml({ difference_codes: row?.difference_codes || [] })}</section>`).join('')}</div>`;
+  }
+
+  function gradeResolutionControl(item, editable) {
+    const options = Array.isArray(item.resolution_options) ? item.resolution_options : [];
+    const usable = options.filter((option) => option && option.selectable !== false);
+    if (!editable) return '';
+    if (!options.length) return '<span class="irv1-advisory">No eligible existing option is available. Correct the underlying records, then choose Recheck.</span>';
+    return `<div class="irv1-resolution"><select class="input" data-ir-grade-option="${esc(item.action_id)}">
+      <option value="">Choose an existing option</option>${options.map((option) => `<option value="${esc(option.option_id || '')}" ${option.selectable === false ? 'disabled="disabled"' : ''}>${esc(option.display_label || [option.role, option.band, option.site].filter(Boolean).join(' · ') || 'Existing option')}${option.rate_complete === false ? ' · rates incomplete' : ''}</option>`).join('')}
+      </select><button type="button" class="irv1-btn" data-ir-action="resolve-mapping" data-resolution="GRADE" data-action-id="${esc(item.action_id)}" ${usable.length ? '' : 'disabled="disabled" aria-disabled="true"'}>Save mapping</button></div>`;
+  }
+
   function shiftRow(item, review) {
     const summary = item.summary || {};
+    const reasonCode = String(summary.reason_code || '').toUpperCase();
     const reason = summary.reason_code ? `<span class="irv1-reason">${esc(reasonText(summary.reason_code))}</span>` : '';
-    const advice = item.action_kind === 'ADVISORY' ? '<span class="irv1-advisory">This is an advisory. Use Save & close, fix it in the relevant record, then reopen and choose Recheck.</span>' : '';
+    const excluded = excludedReasonText(item.default_excluded_reason || summary.default_excluded_reason);
+    const inlineResolution = ['CANDIDATE_UNRESOLVED','CLIENT_UNRESOLVED','GRADE_MAPPING_REQUIRED'].includes(reasonCode);
+    const advice = item.action_kind === 'ADVISORY' && !inlineResolution ? '<span class="irv1-advisory">This is an advisory. Use Save & close, fix it in the relevant record, then reopen and choose Recheck.</span>' : '';
     const editable = reviewCan(review, 'SAVE_SELECTIONS');
     const checkbox = item.selectable
       ? `<input type="checkbox" data-ir-select="${esc(item.action_id)}" ${selectedFor(item, review) ? 'checked' : ''} ${editable ? '' : 'disabled="disabled" aria-disabled="true"'} aria-label="Include ${esc(item.action_kind)}"/>`
       : item.action_kind === 'DAILY_TIMESHEET_RESOLUTION' ? dailySelect(item, review) : '';
-    const reasonCode = String(summary.reason_code || '').toUpperCase();
     const resolution = reasonCode === 'CANDIDATE_UNRESOLVED' && editable
       ? `<button type="button" class="irv1-btn" data-ir-action="resolve-mapping" data-resolution="CANDIDATE" data-action-id="${esc(item.action_id)}">Link candidate</button>`
       : reasonCode === 'CLIENT_UNRESOLVED' && editable
         ? `<button type="button" class="irv1-btn" data-ir-action="resolve-mapping" data-resolution="CLIENT" data-action-id="${esc(item.action_id)}">Link client</button>`
-        : reasonCode === 'GRADE_MAPPING_REQUIRED' && editable
-          ? `<button type="button" class="irv1-btn" data-ir-action="resolve-mapping" data-resolution="GRADE" data-action-id="${esc(item.action_id)}">Map grade to role</button>` : '';
-    return `<tr data-action-id="${esc(item.action_id)}"><td>${checkbox}</td><td>${esc(formatDate(item.work_date || summary.work_date))}</td><td>${esc(timeText(summary.start_time))}</td><td>${esc(timeText(summary.end_time))}</td><td>${esc(summary.break_minutes == null ? '—' : `${summary.break_minutes} min`)}</td><td>${esc(summary.role || '—')}</td><td><strong>${esc(String(item.action_kind || '').replaceAll('_', ' '))}</strong>${reason}${advice}${resolution}</td></tr>`;
+        : reasonCode === 'GRADE_MAPPING_REQUIRED' ? gradeResolutionControl(item, editable) : '';
+    return `<tr data-action-id="${esc(item.action_id)}"><td>${checkbox}</td><td>${evidenceCell(item, 'imported_evidence')}</td><td>${evidenceCell(item, 'current_evidence')}</td><td>${differenceCell(item)}</td><td><strong>${esc(item.outcome_label || 'Review item')}</strong>${reason}${excluded ? `<span class="irv1-advisory">${esc(excluded)}</span>` : ''}${advice}${resolution}</td></tr>`;
   }
 
   function groupItems(items, review) {
@@ -583,7 +843,7 @@
       const open = review.expanded.has(candidateKey) || review.view === 'PENDING';
       const clientHtml = Array.from(candidateGroup.clients, ([clientId, clientGroup]) => {
         const clientKey = `client:${candidateId}:${clientId}`;
-        return `<details class="irv1-group" data-ir-expand-key="${esc(clientKey)}" ${review.expanded.has(clientKey) ? 'open' : ''}><summary>${esc(clientGroup.label)}</summary>${Array.from(clientGroup.weeks, ([week, shifts]) => { const weekKey = `week:${candidateId}:${clientId}:${week}`; return `<details class="irv1-group" data-ir-expand-key="${esc(weekKey)}" ${review.expanded.has(weekKey) ? 'open' : ''}><summary>Week ending ${esc(formatDate(week))} · ${shifts.length} item${shifts.length === 1 ? '' : 's'}</summary><table class="irv1-shifts"><thead><tr><th>Use</th><th>Date</th><th>Start</th><th>End</th><th>Break</th><th>Role</th><th>Review item</th></tr></thead><tbody>${shifts.map((item) => shiftRow(item, review)).join('')}</tbody></table></details>`; }).join('')}</details>`;
+        return `<details class="irv1-group" data-ir-expand-key="${esc(clientKey)}" ${review.expanded.has(clientKey) ? 'open' : ''}><summary>${esc(clientGroup.label)}</summary>${Array.from(clientGroup.weeks, ([week, shifts]) => { const weekKey = `week:${candidateId}:${clientId}:${week}`; return `<details class="irv1-group" data-ir-expand-key="${esc(weekKey)}" ${review.expanded.has(weekKey) ? 'open' : ''}><summary>Week ending ${esc(formatDate(week))} · ${shifts.length} item${shifts.length === 1 ? '' : 's'}</summary><table class="irv1-shifts"><thead><tr><th>Use</th><th>Imported evidence</th><th>Current CloudTMS evidence</th><th>Difference</th><th>Proposed outcome</th></tr></thead><tbody>${shifts.map((item) => shiftRow(item, review)).join('')}</tbody></table></details>`; }).join('')}</details>`;
       }).join('');
       const count = Array.from(candidateGroup.clients.values()).reduce((sum, clientGroup) => sum + Array.from(clientGroup.weeks.values()).reduce((n, rows) => n + rows.length, 0), 0);
       return `<details class="irv1-group" data-ir-expand-key="${esc(candidateKey)}" ${open ? 'open' : ''}><summary>${esc(candidateGroup.label)} · ${count} item(s)</summary>${clientHtml}</details>`;
@@ -606,7 +866,7 @@
       if (!client.contracts.has(contractKey)) client.contracts.set(contractKey, { label: contractLabel, rows: [] });
       client.contracts.get(contractKey).rows.push(item);
     }
-    return Array.from(groups, ([recipientKey, group]) => `<section class="irv1-email-group"><h4>One email to ${esc(group.recipient)}</h4><div class="mini">All selected rows are combined into one tidy message. They are shown below as Client → Contract → Shift.</div>${Array.from(group.clients, ([clientKey, client]) => { const expandClient = `client:email:${recipientKey}:${clientKey}`; return `<details class="irv1-group" data-ir-expand-key="${esc(expandClient)}" ${review.expanded.has(expandClient) ? 'open' : ''}><summary>${esc(client.label)}</summary>${Array.from(client.contracts, ([contractKey, contract]) => { const expandContract = `week:email:${recipientKey}:${clientKey}:${contractKey}`; return `<details class="irv1-group" data-ir-expand-key="${esc(expandContract)}" ${review.expanded.has(expandContract) ? 'open' : ''}><summary>${esc(contract.label)} · ${contract.rows.length} shift${contract.rows.length === 1 ? '' : 's'}</summary><table class="irv1-shifts"><thead><tr><th>Use</th><th>Date</th><th>Start</th><th>End</th><th>Break</th><th>Role</th><th>Query</th></tr></thead><tbody>${contract.rows.map((item) => shiftRow(item, review)).join('')}</tbody></table></details>`; }).join('')}</details>`; }).join('')}</section>`).join('');
+    return Array.from(groups, ([recipientKey, group]) => `<section class="irv1-email-group"><h4>One email to ${esc(group.recipient)}</h4><div class="mini">All selected rows are combined into one tidy message. They are shown below as Client → Contract → Shift.</div>${Array.from(group.clients, ([clientKey, client]) => { const expandClient = `client:email:${recipientKey}:${clientKey}`; return `<details class="irv1-group" data-ir-expand-key="${esc(expandClient)}" ${review.expanded.has(expandClient) ? 'open' : ''}><summary>${esc(client.label)}</summary>${Array.from(client.contracts, ([contractKey, contract]) => { const expandContract = `week:email:${recipientKey}:${clientKey}:${contractKey}`; return `<details class="irv1-group" data-ir-expand-key="${esc(expandContract)}" ${review.expanded.has(expandContract) ? 'open' : ''}><summary>${esc(contract.label)} · ${contract.rows.length} shift${contract.rows.length === 1 ? '' : 's'}</summary><table class="irv1-shifts"><thead><tr><th>Use</th><th>Imported evidence</th><th>Current CloudTMS evidence</th><th>Difference</th><th>Proposed outcome</th></tr></thead><tbody>${contract.rows.map((item) => shiftRow(item, review)).join('')}</tbody></table></details>`; }).join('')}</details>`; }).join('')}</section>`).join('');
   }
 
   function sortButtons(review) {
@@ -625,17 +885,123 @@
     return cards.map(([view, label, help]) => `<button type="button" class="irv1-card-filter ${review.view === view ? 'is-active' : ''}" data-ir-action="review-view" data-view="${view}"><strong>${Number(counts[view] || 0)}</strong><span>${esc(label)}</span><small>${esc(help)}</small></button>`).join('');
   }
 
+  async function selectedSetFingerprint(ids) {
+    const canonical = [...new Set(Array.isArray(ids) ? ids.map(String) : [])].sort().join('|');
+    const digest = await global.crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function loadApplyConfirmation() {
+    const review = state.review;
+    if (!review) return false;
+    review.busy = true;
+    review.error = '';
+    showScreen('Import review', renderReview, 'import-review-v1');
+    try {
+      const start = await fetchReviewHeader(review.importId);
+      if (String(start?.state?.status || '').toUpperCase() !== 'READY' || !reviewCan({ header: start }, 'APPLY')) {
+        throw new Error('The server no longer permits apply. Recheck the review status.');
+      }
+      const selectedIds = Array.isArray(start.state.apply_contract?.selected_action_ids)
+        ? start.state.apply_contract.selected_action_ids.map(String) : [];
+      if (selectedIds.length > 500) throw new Error('The selected action set exceeds the bounded confirmation limit.');
+      const selected = new Set(selectedIds);
+      const found = new Map();
+      let catalogueTotal = 0;
+      let page = 1;
+      let totalPages = 1;
+      do {
+        if (page > 5) throw new Error('The action catalogue exceeds the bounded confirmation limit.');
+        const params = new URLSearchParams({ page: String(page), page_size: '100', sort_by: 'ACTION', sort_direction: 'ASC', view: 'ALL' });
+        const result = await request(`/api/import-reviews/${encodeURIComponent(review.importId)}/actions?${params.toString()}`);
+        catalogueTotal = Number(result?.total_items || 0);
+        for (const item of (result?.items || [])) if (selected.has(String(item.action_id))) found.set(String(item.action_id), item);
+        totalPages = Math.max(1, Number(result?.total_pages || 0));
+        page += 1;
+      } while (page <= totalPages);
+      const missing = selectedIds.filter((id) => !found.has(id));
+      if (missing.length) throw new Error('Final confirmation could not load every selected action. Return to the review and choose Recheck.');
+
+      const end = await fetchReviewHeader(review.importId);
+      const startRequestHash = String(start.state.apply_contract?.request_hash || '');
+      const endRequestHash = String(end.state.apply_contract?.request_hash || '');
+      const startPreview = String(start.state.preview_fingerprint || '');
+      const endPreview = String(end.state.preview_fingerprint || '');
+      const endIds = Array.isArray(end.state.apply_contract?.selected_action_ids) ? end.state.apply_contract.selected_action_ids.map(String) : [];
+      const [startSelectionFingerprint, endSelectionFingerprint] = await Promise.all([
+        selectedSetFingerprint(selectedIds), selectedSetFingerprint(endIds)
+      ]);
+      if (startRequestHash !== endRequestHash || startPreview !== endPreview
+        || Number(start.state.state_version) !== Number(end.state.state_version)
+        || startSelectionFingerprint !== endSelectionFingerprint) {
+        throw new Error('The review changed while final confirmation was loading. Check the refreshed review before applying.');
+      }
+      const items = selectedIds.map((id) => found.get(id));
+      review.header = end;
+      review.confirmation = {
+        stateVersion: Number(end.state.state_version), requestHash: endRequestHash,
+        previewFingerprint: endPreview, selectedSetFingerprint: endSelectionFingerprint,
+        selectedIds, items, catalogueTotal,
+        correctionUnits: end.state.apply_contract?.request_envelope?.correction_units || []
+      };
+      review.confirmAcknowledged = false;
+      review.busy = false;
+      review.screen = 'confirm';
+      showScreen('Import review', renderReview, 'import-review-v1');
+      return true;
+    } catch (error) {
+      review.busy = false;
+      review.confirmation = null;
+      review.screen = 'review';
+      review.error = error.message || 'The final confirmation could not be loaded safely.';
+      showScreen('Import review', renderReview, 'import-review-v1');
+      return false;
+    }
+  }
+
+  async function confirmationStillCurrent(review) {
+    const confirmation = review?.confirmation;
+    if (!review || !confirmation) return false;
+    const current = await fetchReviewHeader(review.importId);
+    const ids = Array.isArray(current.state.apply_contract?.selected_action_ids) ? current.state.apply_contract.selected_action_ids.map(String) : [];
+    const fingerprint = await selectedSetFingerprint(ids);
+    const matches = String(current.state.status || '').toUpperCase() === 'READY'
+      && Number(current.state.state_version) === confirmation.stateVersion
+      && String(current.state.preview_fingerprint || '') === confirmation.previewFingerprint
+      && String(current.state.apply_contract?.request_hash || '') === confirmation.requestHash
+      && fingerprint === confirmation.selectedSetFingerprint;
+    if (matches) review.header = current;
+    return matches;
+  }
+
+  function confirmationItemHtml(item) {
+    return `<article class="irv1-confirm-item"><div><strong>${esc(item.outcome_label || 'Review item')}</strong><span>${esc(item.candidate_name || item.summary?.candidate_name || 'Candidate')} · ${esc(item.client_name || item.summary?.client_name || 'Client')}</span></div><div class="irv1-confirm-evidence"><div><b>Imported</b>${evidenceCell(item, 'imported_evidence')}</div><div><b>Current</b>${evidenceCell(item, 'current_evidence')}</div><div><b>Difference</b>${differenceCell(item)}</div></div></article>`;
+  }
+
   function renderApplyConfirmation(review) {
     const header = review.header;
     const apply = header.state.apply_contract || {};
     const summary = header.confirmation_summary || {};
+    const confirmation = review.confirmation;
     const selectedCount = Number(summary.selected_total ?? (Array.isArray(apply.selected_action_ids) ? apply.selected_action_ids.length : 0));
     const invalidationCount = Number(summary.selected_reference_invalidation_count ?? (Array.isArray(apply.reference_invalidation_action_ids) ? apply.reference_invalidation_action_ids.length : 0));
     const evidence = header.evidence || {};
-    const canApply = reviewCan(review, 'APPLY') && Number(summary.blocking_count || 0) === 0;
+    const items = Array.isArray(confirmation?.items) ? confirmation.items : [];
+    const operational = items.filter((item) => ['INCLUDE_SHIFT','APPLY_AMENDMENT','APPLY_CANCELLATION','MARK_VALIDATION_ERROR'].includes(item.action_kind));
+    const emails = items.filter((item) => ['EMAIL_ISSUE','EMAIL_REMINDER'].includes(item.action_kind));
+    const invalidations = items.filter((item) => item.action_kind === 'INVALIDATE_REFERENCE');
+    const noActionCount = items.filter((item) => item.action_kind === 'NO_ACTION').length;
+    const correctionUnits = Array.isArray(confirmation?.correctionUnits) ? confirmation.correctionUnits : [];
+    const complete = !!confirmation && confirmation.selectedIds.length === items.length;
+    const canApply = complete && reviewCan(review, 'APPLY') && Number(summary.blocking_count || 0) === 0;
+    const readOnlyReview = { ...review, header: { ...review.header, state: { ...review.header.state, editability: { allowed_commands: [] } } } };
     return `<div class="irv1-shell"><section class="irv1-intro"><div><h3>Final confirmation</h3><p>The server will revalidate the saved review before committing. The browser is not supplying financial values, validation rows or email recipients.</p></div><span class="irv1-contract">${esc(header.state.status)}</span></section>
       ${review.error ? `<div class="irv1-alert error">${esc(review.error)}</div>` : ''}
       <div class="irv1-settings-grid"><div class="irv1-settings-card"><strong>Source and coverage</strong><p>${esc(header.import.filename || 'Import')}<br/>${esc(String(header.import.coverage_mode || '').replaceAll('_', ' '))}<br/>${esc(formatDate(header.import.coverage_start_date))} to ${esc(formatDate(header.import.coverage_end_date))}</p><div class="mini">Verified source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12))} · parser ${esc(evidence.parser_version || '—')} · preview generation ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-settings-card"><strong>Operational changes</strong><p>${Number(summary.selected_change_count || 0)} change(s)<br/>${selectedCount} total saved selection(s)</p></div><div class="irv1-settings-card"><strong>Client query email</strong><p>${Number(summary.selected_email_issue_count || 0)} new issue(s)<br/>${Number(summary.selected_email_reminder_count || 0)} explicit reminder(s)</p><div class="mini">The server groups every selected item into one email per normalised recipient address.</div></div><div class="irv1-settings-card"><strong>Reference decisions</strong><p>${invalidationCount} explicit invalidation(s)<br/>${Number(summary.blocking_count || 0)} unresolved blocker(s)</p></div></div>
+      <section class="irv1-confirm-section"><h4>Selected shifts and validation outcomes</h4>${operational.length ? operational.map(confirmationItemHtml).join('') : '<div class="irv1-empty">No shift change or validation action is selected.</div>'}<div class="mini">${noActionCount} selected row(s) require no change. ${Math.max(0, Number(confirmation?.catalogueTotal || 0) - selectedCount)} row(s) are excluded.</div></section>
+      <section class="irv1-confirm-section"><h4>DB-owned correction units</h4>${correctionUnits.length ? correctionUnits.map((unit) => `<div class="irv1-confirm-line"><strong>${esc(unit.correction_shape === 'REVERSAL_ONLY' ? 'Reversal only' : 'Reversal and replacement')}</strong><span>Timesheet ${esc(unit.root_timesheet_id || '—')} · source ${esc(unit.source_row_key || '—')} · ${esc(unit.correction_action === 'CANCELLATION' ? 'cancellation' : 'changed hours')}</span></div>`).join('') : '<div class="mini">No reversal correction unit is required.</div>'}<div class="mini">Financial values remain server-owned and are not calculated or displayed by the browser.</div></section>
+      <section class="irv1-confirm-section"><h4>Explicit reference decisions</h4>${invalidations.length ? invalidations.map(confirmationItemHtml).join('') : '<div class="mini">No reference number will be cleared.</div>'}</section>
+      <section class="irv1-confirm-section"><h4>Outgoing client query emails</h4>${emails.length ? renderEmailGroups(emails, readOnlyReview) : '<div class="mini">No client query email will be queued.</div>'}</section>
       ${invalidationCount === 0 ? '<div class="irv1-alert">No reference numbers will be cleared. A missing selection is explicit and clears nothing.</div>' : `<div class="irv1-alert">${invalidationCount} reference invalidation action(s) are explicitly selected. Only eligible, unlocked references can be cleared.</div>`}
       <label class="irv1-choice"><input type="checkbox" data-ir-confirm-ack ${review.confirmAcknowledged ? 'checked' : ''}/><span><strong>I have checked the coverage and selected actions</strong><span>I understand that selected email issues/reminders will be queued after the source import commits, while reference invalidation clears only the explicitly selected eligible references.</span></span></label>
       <div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="apply-back">Back to review</button><button class="irv1-btn primary" data-ir-action="apply-confirm" ${review.busy || !review.confirmAcknowledged || !canApply ? 'disabled="disabled" aria-disabled="true"' : 'aria-disabled="false"'}>${review.busy ? 'Applying safely…' : 'Confirm and apply'}</button></div>
@@ -724,7 +1090,15 @@
 
   async function abandonReview() {
     const review = state.review;
-    if (!review || !global.confirm('Abandon this import review? The staged import will remain in history, but this review cannot be resumed.')) return;
+    if (!review) return;
+    const confirmed = await importUiConfirm({
+      title: 'Abandon import review?',
+      messageHtml: '<div style="font-size:14px;font-weight:700;margin-bottom:6px;">Abandon this import review?</div><div class="mini">The staged import will remain in history, but this review cannot be resumed. You can reimport the source file to start again.</div>',
+      confirmLabel: 'Abandon import',
+      cancelLabel: 'Keep reviewing',
+      danger: true
+    });
+    if (!confirmed) return;
     await request(`/api/import-reviews/${encodeURIComponent(review.importId)}/abandon`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
         expected_state_version: review.header.state.state_version,
@@ -741,6 +1115,15 @@
     review.error = '';
     showScreen('Import review', renderReview, 'import-review-v1');
     try {
+      if (!(await confirmationStillCurrent(review))) {
+        review.busy = false;
+        review.confirmation = null;
+        review.confirmAcknowledged = false;
+        review.screen = 'review';
+        review.error = 'The review changed after final confirmation. Check the refreshed review before applying.';
+        showScreen('Import review', renderReview, 'import-review-v1');
+        return;
+      }
       const operationId = makeUuid();
       review.operationId = operationId;
       review.requestHash = review.header.state.apply_contract.request_hash;
@@ -858,11 +1241,12 @@
     const kind = button.getAttribute('data-resolution');
     if (!item || !kind || !reviewCan(state.review, 'SAVE_SELECTIONS')) return;
     const summary = item.summary || {};
+    const route = String(state.review.header?.import?.source_route || state.review.header?.import?.source_system || '').toUpperCase();
     if (kind === 'CANDIDATE') {
       if (typeof global.openCandidatePicker !== 'function') throw new Error('The candidate picker is unavailable.');
       return global.openCandidatePicker(async ({ id, label }) => persistMapping(item, kind, { id, label }), {
         context: { staffName: summary.candidate_name || item.candidate_name, unit: summary.client_name || item.client_name, importId: state.review.importId, dateYmd: item.work_date || summary.work_date },
-        seed_hint: { source: 'import_review_v2', display_name: summary.candidate_name || item.candidate_name || '' },
+        seed_hint: { source: 'import_review_v3', display_name: summary.candidate_name || item.candidate_name || '' },
         ignoreMembership: true
       });
     }
@@ -871,16 +1255,49 @@
       return global.openClientPicker(async ({ id, label }) => persistMapping(item, kind, { id, label }));
     }
     if (kind === 'GRADE') {
-      const incoming = String(summary.role || '').trim();
+      const select = document.querySelector(`[data-ir-grade-option="${CSS.escape(item.action_id)}"]`);
+      const optionId = String(select?.value || '').trim();
+      if (!optionId) throw new Error('Choose an existing mapping option first.');
+
+      // Re-read the same bounded action page immediately before saving.  A
+      // changed evidence fingerprint or removed option fails closed rather
+      // than persisting a stale browser choice.
+      const freshPage = await fetchActionPage(state.review);
+      const freshItem = (freshPage?.items || []).find((entry) => String(entry.action_id) === String(item.action_id));
+      const freshOption = (freshItem?.resolution_options || []).find((entry) => String(entry?.option_id || '') === optionId);
+      if (!freshItem || freshItem.evidence_fingerprint !== item.evidence_fingerprint || !freshOption || freshOption.selectable === false) {
+        state.review.pageData = freshPage;
+        state.review.error = 'The mapping evidence changed. Check the refreshed options and choose again.';
+        showScreen('Import review', renderReview, 'import-review-v1');
+        return;
+      }
+
+      const incoming = String(freshItem.imported_evidence?.role || freshItem.summary?.role || '').trim();
       if (!incoming) throw new Error('The incoming grade is unavailable for this row.');
-      let saved = false;
-      global.showModal('Map HealthRoster grade to role', [{ key: 'main', label: 'Mapping' }], () => `<div class="form"><div class="irv1-settings-card"><p>Incoming grade: <strong>${esc(incoming)}</strong></p><label>Role code<input class="input" id="irv2GradeRole" placeholder="For example RMN"/></label><label>Band (optional)<input class="input" id="irv2GradeBand" placeholder="For example Band 5"/></label></div></div>`, async () => {
-        const role = String(document.getElementById('irv2GradeRole')?.value || '').trim().toUpperCase();
-        if (!role) { global.alert('Role code is required.'); return false; }
-        await global.postHrRotaResolveMappings(state.review.importId, { grade_role_mappings: [{ incoming_grade_norm: incoming.toLowerCase(), role_code: role, band_norm: String(document.getElementById('irv2GradeBand')?.value || '').trim() || null }] });
-        saved = true;
-        return true;
-      }, false, () => { if (saved) void refreshReview(); }, { kind: 'import-review-grade-map-v2', noParentGate: true, showSave: true, primaryLabel: 'Save mapping' });
+      const resolutionKind = String(freshItem.resolution_kind || '').toUpperCase();
+      if (resolutionKind === 'WEEKLY_ASSIGNMENT_CONTRACT') {
+        if (typeof global.apiCreateAssignmentBandMapping !== 'function') throw new Error('The weekly contract-mapping service is unavailable.');
+        const contractId = String(freshOption.contract_id || '').trim();
+        if (!contractId) throw new Error('The selected contract option is invalid.');
+        await global.apiCreateAssignmentBandMapping({
+          system_type: route === 'NHSP' ? 'NHSP' : 'HR_WEEKLY', incoming_code: incoming,
+          candidate_id: freshItem.candidate_id, client_id: freshItem.client_id,
+          target_contract_id: contractId,
+          band_match_pattern: String(freshOption.band || freshOption.role || 'Contract').trim(),
+          active: true, scope_kind: 'CANDIDATE_CLIENT', allow_candidate_client_scope: true,
+          notes: `Resolved through durable import review ${state.review.importId}.`
+        });
+      } else if (resolutionKind === 'DAILY_GRADE_ROLE') {
+        if (typeof global.postHrRotaResolveMappings !== 'function') throw new Error('The Daily grade-mapping service is unavailable.');
+        const roleCode = String(freshOption.role_code || '').trim();
+        if (!roleCode) throw new Error('The selected role option is invalid.');
+        await global.postHrRotaResolveMappings(state.review.importId, {
+          grade_role_mappings: [{ incoming_grade_norm: incoming.toLowerCase(), role_code: roleCode, band_norm: freshOption.band_norm || null }]
+        });
+      } else {
+        throw new Error('This review item does not expose an approved grade-mapping action.');
+      }
+      await refreshReview();
     }
   }
 
@@ -893,6 +1310,10 @@
         return showScreen('Imports', renderHome, 'imports-v1');
       }
       if (action === 'home' || action === 'coverage-cancel') {
+        if (action === 'coverage-cancel') {
+          if (!(await confirmCoverageDiscard())) return;
+          state.coverage = null;
+        }
         if (action === 'home' && !(await flushSelections({ quiet: true }))) return;
         return openImportsModalV1();
       }
@@ -932,12 +1353,9 @@
       if (action === 'conflict-discard') { state.review.dirty.clear(); state.review.pendingSave = null; state.review.conflictBuffer = null; state.review.error = ''; return openReview(state.review.importId); }
       if (action === 'apply-preview') {
         if (!(await flushSelections({ quiet: true }))) return;
-        state.review.header = await fetchReviewHeader(state.review.importId);
-        if (!reviewCan(state.review, 'APPLY')) { state.review.error = 'The server no longer permits apply. Recheck the review status.'; return showScreen('Import review', renderReview, 'import-review-v1'); }
-        state.review.screen = 'confirm';
-        return showScreen('Import review', renderReview, 'import-review-v1');
+        return loadApplyConfirmation();
       }
-      if (action === 'apply-back') { state.review.screen = 'review'; return showScreen('Import review', renderReview, 'import-review-v1'); }
+      if (action === 'apply-back') { state.review.confirmation = null; state.review.confirmAcknowledged = false; state.review.screen = 'review'; return showScreen('Import review', renderReview, 'import-review-v1'); }
       if (action === 'apply-confirm') return applyReview();
       if (action === 'status') return refreshApplyStatus();
       if (action === 'retry') return retryFollowUp();
@@ -967,18 +1385,50 @@
     }
   }, true);
 
+  function dismissActiveImportModal() {
+    const frame = currentImportFrame();
+    if (frame) {
+      frame.isDirty = false;
+      frame._snapshot = null;
+      frame._closing = false;
+      if (typeof frame._updateButtons === 'function') frame._updateButtons();
+    }
+    const close = document.getElementById('btnCloseModal');
+    if (!close) return;
+    state.closeBypass = true;
+    try { close.click(); } finally { state.closeBypass = false; }
+  }
+
   document.addEventListener('click', (event) => {
     const close = event.target.closest?.('#btnCloseModal');
-    const review = state.review;
-    if (!close || !document.getElementById('irv1Review') || state.closeBypass || !review) return;
-    if (review.dirty.size === 0 && !review.pendingSave && review.saveState !== 'Saving selections…') return;
+    const coverageOpen = !!document.getElementById('irv1Coverage');
+    const reviewOpen = !!document.getElementById('irv1Review');
+    if (!close || state.closeBypass || (!coverageOpen && !reviewOpen)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     void (async () => {
+      if (coverageOpen) {
+        const confirmed = await confirmCoverageDiscard();
+        if (!confirmed) return;
+        state.coverage = null;
+        dismissActiveImportModal();
+        return;
+      }
+
+      const review = state.review;
+      if (!review) return dismissActiveImportModal();
+      const hasUnsavedSelections = review.dirty.size > 0 || !!review.pendingSave || review.saveState === 'Saving selections…';
+      if (!hasUnsavedSelections) return dismissActiveImportModal();
       const saved = await flushSelections({ quiet: true });
-      if (!saved && !global.confirm('Your selection changes could not be saved. Discard the unsaved changes and close?')) return;
-      state.closeBypass = true;
-      try { close.click(); } finally { state.closeBypass = false; }
+      if (saved) return dismissActiveImportModal();
+      const discard = await importUiConfirm({
+        title: 'Discard unsaved review changes?',
+        messageHtml: '<div style="font-size:14px;font-weight:700;margin-bottom:6px;">Your selection changes could not be saved.</div><div class="mini">Discard only the unsaved browser changes and close this review?</div>',
+        confirmLabel: 'Discard unsaved changes',
+        cancelLabel: 'Keep reviewing',
+        danger: true
+      });
+      if (discard) dismissActiveImportModal();
     })();
   }, true);
 
