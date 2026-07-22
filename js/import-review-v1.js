@@ -7,6 +7,7 @@
     operation: 'IMPORT_APPLY_OPERATION_V2',
     correction: 'IMPORT_CORRECTION_OPERATION_V2',
     followUp: 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
+    tsfinSettlement: 'IMPORT_REVIEW_TSFIN_SETTLEMENT_V1',
     incrementalApply: 'IMPORT_REVIEW_INCREMENTAL_APPLY_V1',
     ui: 'IMPORT_REVIEW_UI_V6',
     emailGrouping: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
@@ -198,6 +199,7 @@
       && contract.apply_operation_version === CONTRACT.operation
       && contract.correction_operation_version === CONTRACT.correction
       && contract.follow_up_component_version === CONTRACT.followUp
+      && contract.tsfin_follow_up_settlement_version === CONTRACT.tsfinSettlement
       && contract.incremental_apply_version === CONTRACT.incrementalApply
       && contract.review_ui_contract_version === CONTRACT.ui
       && contract.email_grouping_version === CONTRACT.emailGrouping
@@ -1394,6 +1396,11 @@
       const status = await request(`/api/import-reviews/${encodeURIComponent(importId)}/apply-status?operation_id=${encodeURIComponent(operationId)}&request_hash=${encodeURIComponent(requestHash)}`);
       const outcome = String(status?.outcome || '').toUpperCase();
       if (outcome.startsWith('COMMITTED_')) {
+        const followUpStatus = String(status?.follow_up_status || '').toUpperCase();
+        if (outcome === 'COMMITTED_WITH_FOLLOW_UP_PENDING' && followUpStatus === 'PENDING') {
+          await new Promise((resolve) => setTimeout(resolve, 900 + attempt * 200));
+          continue;
+        }
         storeRecovery(importId, null);
         return openReview(importId);
       }
@@ -1441,10 +1448,23 @@
     const op = review?.header?.state?.last_operation_id;
     const hash = review?.header?.state?.last_operation_request_hash;
     if (!review || !op || !hash) return;
+    const priorRetryCount = Number(review?.header?.state?.follow_up_retry_count || 0);
     await request(`/api/import-reviews/${encodeURIComponent(review.importId)}/follow-up/retry`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operation_id: op, request_hash: hash })
     });
-    await openReview(review.importId);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const status = await request(`/api/import-reviews/${encodeURIComponent(review.importId)}/apply-status?operation_id=${encodeURIComponent(op)}&request_hash=${encodeURIComponent(hash)}`);
+      const followUpStatus = String(status?.follow_up_status || '').toUpperCase();
+      const retryCount = Number(status?.follow_up_retry_count || 0);
+      if (followUpStatus === 'COMPLETE' || followUpStatus === 'NOT_REQUIRED') {
+        return openReview(review.importId);
+      }
+      if (followUpStatus === 'FAILED_RETRYABLE' && retryCount > priorRetryCount) {
+        return openReview(review.importId);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    await openReview(review.importId, { message: 'Post-commit work is still running. Use Refresh apply status to check it again; the source import will not be repeated.' });
   }
 
   function reviewItem(actionId) {

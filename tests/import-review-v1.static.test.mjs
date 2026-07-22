@@ -20,6 +20,7 @@ test('the frontend fails closed on the full approved DB and Worker contract', ()
   for (const marker of [
     'IMPORT_REVIEW_DB_V1', 'IMPORT_REVIEW_APPLY_V1', 'IMPORT_APPLY_OPERATION_V2',
     'IMPORT_CORRECTION_OPERATION_V2', 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
+    'IMPORT_REVIEW_TSFIN_SETTLEMENT_V1',
     'IMPORT_REVIEW_UI_V6', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
   ]) assert.match(source, new RegExp(marker));
   assert.match(source, /legacy_contracts_supported === false/);
@@ -61,6 +62,7 @@ test('review lifecycle supports resume, recheck, abandon, apply status and follo
   assert.match(source, /displayReviewStatus\(header\.state\.status, header\.state\.partial_application === true\)/);
   assert.match(source, /last_operation_request_hash[\s\S]*?recovery\?\.request_hash[\s\S]*?review\?\.requestHash/);
   assert.match(source, /const hash = review\?\.header\?\.state\?\.last_operation_request_hash;[\s\S]*?follow-up\/retry/);
+  assert.match(source, /for \(let attempt = 0; attempt < 30; attempt \+= 1\)[\s\S]*?followUpStatus === 'COMPLETE'[\s\S]*?retryCount > priorRetryCount/);
 });
 
 test('NHSP segment timesheets use the compact non-wrapping Lines presentation only for NHSP bases', () => {
