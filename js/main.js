@@ -286419,6 +286419,31 @@ let require_reference_to_invoice = boolTriFromFS('require_reference_to_invoice')
 let reference_number_required_to_issue_invoice = boolTriFromFS('reference_number_required_to_issue_invoice');
 let send_manual_invoices_to_different_email    = boolTriFromFS('send_manual_invoices_to_different_email');
 
+// Timesheet-query routing is an independent contract override. It is not gated
+// by invoice routing or by overrideclientsettings.
+const send_ts_queries_to_different_email = boolFromFS(
+  'send_ts_queries_to_different_email',
+  !!base.send_ts_queries_to_different_email
+);
+let ts_queries_alt_email_address = null;
+try {
+  const rawTsQueryAddress =
+    (fs && fs.main && Object.prototype.hasOwnProperty.call(fs.main, 'ts_queries_alt_email_address'))
+      ? fs.main.ts_queries_alt_email_address
+      : (base.ts_queries_alt_email_address ?? null);
+  ts_queries_alt_email_address = send_ts_queries_to_different_email
+    ? (String(rawTsQueryAddress || '').trim().toLowerCase() || null)
+    : null;
+} catch {
+  ts_queries_alt_email_address = null;
+}
+if (send_ts_queries_to_different_email && !ts_queries_alt_email_address) {
+  alert('Contract timesheet query email is required when the contract override is enabled.');
+  window.modalCtx._saveInFlight = false;
+  console.groupEnd?.();
+  return false;
+}
+
 // contract-level string (nullable)
 let manual_invoices_alt_email_address = null;
 try {
@@ -286466,6 +286491,8 @@ const settingsChanged =
   (normTri(base.reference_number_required_to_issue_invoice) !== normTri(reference_number_required_to_issue_invoice)) ||
   (normTri(base.send_manual_invoices_to_different_email) !== normTri(send_manual_invoices_to_different_email)) ||
   (String((base.manual_invoices_alt_email_address ?? '')).trim() !== String((manual_invoices_alt_email_address ?? '')).trim()) ||
+  (!!base.send_ts_queries_to_different_email !== !!send_ts_queries_to_different_email) ||
+  (String((base.ts_queries_alt_email_address ?? '')).trim().toLowerCase() !== String((ts_queries_alt_email_address ?? '')).trim().toLowerCase()) ||
    (String((base.default_submission_mode ?? '')).trim().toUpperCase() !== String((default_submission_mode ?? '')).trim().toUpperCase());
 
 const contractSettingsTouched = !!window.modalCtx?.__contractSettingsDirty;
@@ -286640,6 +286667,10 @@ const data = {
   reference_number_required_to_issue_invoice,
   send_manual_invoices_to_different_email,
   manual_invoices_alt_email_address,
+
+  // Independent contract-level query-email route.
+  send_ts_queries_to_different_email,
+  ts_queries_alt_email_address,
 
   rates_json: mergedRates,
   std_hours_json,
