@@ -124,8 +124,11 @@ test('V4 renders imported and current evidence with safe operator wording', () =
   for (const code of [
     'ACTUAL_HOURS_MISMATCH', 'START_END_MISMATCH', 'BREAK_MINUTES_MISMATCH',
     'MISSING_FROM_IMPORT', 'REFERENCE_ON_SHIFT_MISSING_FROM_COMPLETE_IMPORT',
-    'CONTRACT_OUT_OF_SCOPE', 'CONTRACT_RATES_INCOMPLETE'
+    'CONTRACT_OUT_OF_SCOPE', 'CONTRACT_RATES_INCOMPLETE',
+    'TIMESHEET_OCCUPIED_BY_EXPENSES'
   ]) assert.match(source, new RegExp(code));
+  assert.match(source, /Remove the expenses from this timesheet, save or recalculate it, then choose Recheck/);
+  assert.match(source, /Expenses must be invoiced on a separate timesheet for import-authoritative work/);
   assert.match(source, /This item needs review/);
   assert.match(source, /function evidenceCell/);
   assert.match(source, /Timesheet shift is missing from the import/);

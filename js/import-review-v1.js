@@ -745,6 +745,7 @@
       CONTRACT_OUT_OF_SCOPE: 'The mapped contract is not active or eligible for this worker, client, route and date. Correct the mapping or contract, then choose Recheck.',
       CONTRACT_AMBIGUOUS: 'More than one contract matches this worker and date. Correct the contracts outside this review, then return and recheck.',
       CONTRACT_RATES_INCOMPLETE: 'The selected contract is missing required pay or charge rates. Amend the contract outside this review, then choose Recheck; rates cannot be edited here.',
+      TIMESHEET_OCCUPIED_BY_EXPENSES: 'Remove the expenses from this timesheet, save or recalculate it, then choose Recheck. Expenses must be invoiced on a separate timesheet for import-authoritative work.',
       GRADE_MAPPING_REQUIRED: 'The imported grade is not mapped. Choose one of the eligible existing records shown here; if none is suitable, correct the underlying records and choose Recheck.',
       TIMESHEET_NOT_FOUND: 'No eligible existing daily timesheet was found. Correct the timesheet records outside this review, then return and recheck.',
       WEEKLY_TIMESHEET_NOT_SUBMITTED: 'Request timesheet from candidate. The candidate has not submitted an eligible weekly timesheet for this client and week. Ask them to submit one containing this shift, then choose Recheck.',
