@@ -137,12 +137,16 @@
     const contract = await ensureContract(true);
     const [reviewList, clients] = await Promise.all([
       request(reviewListPath()),
-      request('/api/healthroster/autoprocess/clients').catch(() => ({ items: [] }))
+      request('/api/healthroster/autoprocess/clients', { method: 'GET', cache: 'no-store' }).catch(() => ({ items: [] }))
     ]);
     state.contract = contract;
     state.home.reviews = Array.isArray(reviewList?.items) ? reviewList.items : [];
     state.home.clients = Array.isArray(clients?.items) ? clients.items : [];
     state.home.nextCursor = reviewList?.next_cursor || null;
+  }
+
+  function invalidateClientEligibility() {
+    state.home.clients = [];
   }
 
   function clientOptions() {
@@ -1041,6 +1045,8 @@
     if (details.open) state.review.expanded.add(key); else state.review.expanded.delete(key);
   }, true);
 
+  global.addEventListener('cloudtms:client-saved', invalidateClientEligibility);
+
   for (const eventName of ['dragenter', 'dragover', 'dragleave', 'drop']) {
     document.addEventListener(eventName, (event) => {
       const tile = event.target.closest?.('[data-ir-drop]');
@@ -1220,6 +1226,7 @@
     pageSizes: PAGE_SIZES,
     openImportsModal: openImportsModalV1,
     ensureContract,
+    invalidateClientEligibility,
     formatDate,
     reasonText,
     _state: state

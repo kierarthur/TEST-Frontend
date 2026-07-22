@@ -81,6 +81,15 @@ test('global, eligible-client and independent contract query settings are wired'
   assert.doesNotMatch(source, /settingsValue\(source, 'reversal_complete_financials_date', 'NOW'\)/);
 });
 
+test('HealthRoster eligibility is always reloaded without browser cache and invalidated after a client save', () => {
+  assert.match(source, /request\('\/api\/healthroster\/autoprocess\/clients', \{ method: 'GET', cache: 'no-store' \}\)/);
+  assert.match(source, /function invalidateClientEligibility\(\) \{[\s\S]*state\.home\.clients = \[\]/);
+  assert.match(source, /addEventListener\('cloudtms:client-saved', invalidateClientEligibility\)/);
+  assert.match(source, /async function openImportsModalV1\(\) \{[\s\S]*await loadHome\(\)/);
+  assert.match(source, /if \(action === 'reload-home'\) \{[\s\S]*await loadHome\(\{ resetPaging: false \}\)/);
+  assert.match(main, /dispatchEvent\(new CustomEvent\('cloudtms:client-saved'/);
+});
+
 test('styles provide professional tiles, nested expandables, paging and responsive layouts', () => {
   for (const selector of ['.irv1-tiles', '.irv1-tile', '.irv1-group', '.irv1-pager', '.irv1-email-group']) {
     assert.ok(css.includes(selector), `${selector} must be styled`);

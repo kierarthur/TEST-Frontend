@@ -67,6 +67,8 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
   ]);
   const hashes = new Map(Array.from(localFiles, ([key, file]) => [key, createHash('sha256').update(readFileSync(file)).digest('hex')]));
   let selectedOne = true;
+  let eligibleClients: Array<{ client_id: string; client_name: string }> = [];
+  let eligibilityRequestCount = 0;
   const intercepted = new Set<string>();
 
   await page.route('https://testmode.arthur-rai.co.uk/**', async (route) => {
@@ -121,7 +123,10 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
     if (path === `/api/import-reviews/${IMPORT_ID}`) return route.fulfill({ json: { ok: true, data: header('READY') } });
     return route.fulfill({ status: 404, json: { ok: false, message: `unhandled ${path}` } });
   });
-  await page.route('**/api/healthroster/autoprocess/clients', (route) => route.fulfill({ json: { ok: true, data: { items: [{ client_id: '30000000-0000-4000-8000-000000000001', client_name: 'Test Client' }] } } }));
+  await page.route('**/api/healthroster/autoprocess/clients', (route) => {
+    eligibilityRequestCount += 1;
+    return route.fulfill({ json: { ok: true, data: { items: eligibleClients } } });
+  });
   await page.route('**/api/nhsp/import', (route) => route.fulfill({ json: { ok: true, data: { import_id: NEW_IMPORT_ID } } }));
 
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -133,9 +138,40 @@ test('implements the V2 review workflow on desktop and narrow Chromium', async (
   expect(intercepted.has('/js/import-review-v1.js')).toBe(true);
   expect(hashes.get('/js/import-review-v1.js')).toBe(createHash('sha256').update(readFileSync(localFiles.get('/js/import-review-v1.js')!)).digest('hex'));
 
+  await page.evaluate(() => {
+    const original = (window as any).authFetch;
+    (window as any).__IMPORT_REVIEW_ELIGIBILITY_CACHE_MODES__ = [];
+    (window as any).authFetch = function (...args: any[]) {
+      if (String(args[0] || '').includes('/api/healthroster/autoprocess/clients')) {
+        (window as any).__IMPORT_REVIEW_ELIGIBILITY_CACHE_MODES__.push(args[1]?.cache || null);
+      }
+      return original.apply(this, args);
+    };
+  });
+
   await page.evaluate(() => (window as any).openImportsModal());
   await expect(page.locator('#irv1Home')).toBeVisible();
   await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V2')).toBeVisible();
+  await expect(page.locator('[data-ir-client="HR_WEEKLY"] option')).toHaveCount(1);
+  await expect(page.locator('[data-ir-client="HR_DAILY"] option')).toHaveCount(1);
+  await expect(page.locator('[data-ir-drop="NHSP"] select')).toHaveCount(0);
+  expect(eligibilityRequestCount).toBe(1);
+
+  eligibleClients = [{ client_id: '30000000-0000-4000-8000-000000000001', client_name: 'Test Client' }];
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('cloudtms:client-saved', { detail: { client: { id: '30000000-0000-4000-8000-000000000001' } } })));
+  expect(await page.evaluate(() => (window as any).CloudTmsImportReviewV1._state.home.clients.length)).toBe(0);
+  await page.locator('[data-ir-action="reload-home"]').click();
+  await expect(page.locator('[data-ir-client="HR_WEEKLY"] option', { hasText: 'Test Client' })).toHaveCount(1);
+  await expect(page.locator('[data-ir-client="HR_DAILY"] option', { hasText: 'Test Client' })).toHaveCount(1);
+  expect(eligibilityRequestCount).toBe(2);
+
+  eligibleClients = [];
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('cloudtms:client-saved', { detail: { client: { id: '30000000-0000-4000-8000-000000000001' } } })));
+  await page.locator('[data-ir-action="reload-home"]').click();
+  await expect(page.locator('[data-ir-client="HR_WEEKLY"] option')).toHaveCount(1);
+  await expect(page.locator('[data-ir-client="HR_DAILY"] option')).toHaveCount(1);
+  expect(eligibilityRequestCount).toBe(3);
+  expect(await page.evaluate(() => (window as any).__IMPORT_REVIEW_ELIGIBILITY_CACHE_MODES__)).toEqual(['no-store', 'no-store', 'no-store']);
 
   await page.evaluate(() => { (window as any).uploadImportFileToR2 = async () => ({ fileKey: 'mock/replacement.xlsx', filename: 'replacement.xlsx' }); });
   await page.locator('[data-ir-drop="NHSP"] [data-ir-file]').setInputFiles({ name: 'replacement.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('fixture') });
@@ -212,14 +248,23 @@ test('normal TEST Worker exposes the deployed V2 contract', async ({ page }) => 
   await page.goto('/');
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
   const responsePromise = page.waitForResponse((response) => response.url().endsWith('/api/import-review/contract'));
+  const eligibilityPromise = page.waitForResponse((response) => response.url().endsWith('/api/healthroster/autoprocess/clients'));
   await page.evaluate(() => (window as any).openImportsModal());
   const response = await responsePromise;
+  const eligibilityResponse = await eligibilityPromise;
   const payload = await response.json();
   expect(response.status()).toBe(200);
+  expect(eligibilityResponse.status()).toBe(200);
+  expect(eligibilityResponse.headers()['cache-control']).toContain('no-store');
   const deployed = payload?.data || payload;
   expect(deployed).toMatchObject(contract);
   await expect(page.locator('#irv1Home')).toBeVisible();
   await expect(page.getByText('Approved contract IMPORT_REVIEW_UI_V2')).toBeVisible();
+  const refreshedEligibilityPromise = page.waitForResponse((next) => next.url().endsWith('/api/healthroster/autoprocess/clients'));
+  await page.locator('[data-ir-action="reload-home"]').click();
+  const refreshedEligibilityResponse = await refreshedEligibilityPromise;
+  expect(refreshedEligibilityResponse.status()).toBe(200);
+  expect(refreshedEligibilityResponse.headers()['cache-control']).toContain('no-store');
   await page.setViewportSize({ width: 412, height: 915 });
   const deployedModalBounds = await page.locator('#modal').evaluate((modal) => {
     const bounds = modal.getBoundingClientRect();
