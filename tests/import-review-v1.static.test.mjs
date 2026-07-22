@@ -6,6 +6,7 @@ const source = readFileSync(new URL('../js/import-review-v1.js', import.meta.url
 const main = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../css/import-review-v1.css', import.meta.url), 'utf8');
+const nhspLinesCss = readFileSync(new URL('../css/timesheet-nhsp-lines.css', import.meta.url), 'utf8');
 
 test('the isolated import-review asset is loaded after the legacy application asset', () => {
   const legacy = html.indexOf('./js/main.js');
@@ -19,7 +20,7 @@ test('the frontend fails closed on the full approved DB and Worker contract', ()
   for (const marker of [
     'IMPORT_REVIEW_DB_V1', 'IMPORT_REVIEW_APPLY_V1', 'IMPORT_APPLY_OPERATION_V2',
     'IMPORT_CORRECTION_OPERATION_V2', 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
-    'IMPORT_REVIEW_UI_V4', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
+    'IMPORT_REVIEW_UI_V5', 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
   ]) assert.match(source, new RegExp(marker));
   assert.match(source, /legacy_contracts_supported === false/);
 });
@@ -54,6 +55,27 @@ test('review lifecycle supports resume, recheck, abandon, apply status and follo
   ]) assert.ok(source.includes(route), `${route} must be wired`);
   assert.match(source, /Save & close/);
   assert.match(source, /Abandon import/);
+  assert.match(source, /if \(normalized === 'BLOCKED'\) return 'NEEDS ATTENTION'/);
+  assert.match(source, /displayReviewStatus\(item\.status, item\.partial_application === true\)/);
+  assert.match(source, /displayReviewStatus\(header\.state\.status, header\.state\.partial_application === true\)/);
+});
+
+test('NHSP segment timesheets use the compact non-wrapping Lines presentation only for NHSP bases', () => {
+  assert.match(html, /css\/timesheet-nhsp-lines\.css/);
+  assert.match(main, /const isNhspBasis = \[[\s\S]*?'NHSP'[\s\S]*?'NHSP_ADJUSTMENT'[\s\S]*?\]\.includes\(basis\)/);
+  for (const heading of ['Date', 'Reference', 'Shift', 'Break', 'Hours', 'Financials', 'Pay status', 'Snooze', 'Exclude pay', 'Invoice delay']) {
+    assert.match(main, new RegExp(`<th>${heading}</th>`));
+  }
+  assert.match(main, /class="nhsp-date" data-label="Date"/);
+  assert.match(main, /class="nhsp-shift" data-label="Shift"/);
+  assert.match(main, /Pay \$\{esc\(fmtMoney\(pay\)\)\}/);
+  assert.match(main, /Charge \$\{esc\(fmtMoney\(charge\)\)\}/);
+  assert.match(main, /aria-label="Exclude this line from pay"/);
+  assert.match(main, /aria-label="Delay invoicing until date in DD\/MM\/YYYY format"/);
+  assert.match(main, /Changes to pay exclusion and invoice delay are staged until you click Save/);
+  assert.match(nhspLinesCss, /\.nhsp-date\{[^}]*white-space:nowrap/);
+  assert.match(nhspLinesCss, /\.nhsp-invoice-date\{[^}]*width:120px!important/);
+  assert.match(nhspLinesCss, /@media\(max-width:900px\)/);
 });
 
 test('browser sends intent through the Worker and never direct-calls Supabase', () => {

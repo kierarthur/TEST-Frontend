@@ -298238,6 +298238,16 @@ function renderTimesheetLinesTab(ctx) {
     return `<span class="pill pill-warn" title="${esc(info.note || 'This segment is snoozed until a specific date.')}">Snoozed until ${esc(fmtYmdDmy(info.snooze_until_date || '') || info.snooze_until_date || '')}</span>`;
   };
 
+  const renderNhspSnoozePill = (seg) => {
+    const info = getSegmentSnoozeInfo(seg);
+    if (!info.hasActive) return '<span class="mini">—</span>';
+    if (info.isIndefinite) {
+      return '<span class="pill pill-warn" title="This line is snoozed indefinitely.">Indefinite</span>';
+    }
+    const until = fmtYmdDmySlash(info.snooze_until_date || '') || info.snooze_until_date || '';
+    return `<span class="pill pill-warn" title="${esc(info.note || `This line is snoozed until ${until}.`)}">Until ${esc(until)}</span>`;
+  };
+
   const renderPayStatePill = (comp) => {
     if (!comp || typeof comp !== 'object') return '<span class="mini">—</span>';
 
@@ -298328,6 +298338,11 @@ function renderTimesheetLinesTab(ctx) {
   const wholeInvoiceId = String(tsfin?.locked_by_invoice_id || details?.locked_by_invoice_id || row?.locked_by_invoice_id || '').trim();
   const wholeInvoiceHint = wholeInvoiceId ? fmtInvoiceHint(wholeInvoiceId) : '';
 
+  const isNhspBasis = [
+    'NHSP',
+    'NHSP_ADJUSTMENT'
+  ].includes(basis);
+
   const isNhspOrHrSelfBillBasis = [
     'NHSP',
     'NHSP_ADJUSTMENT',
@@ -298378,6 +298393,23 @@ function renderTimesheetLinesTab(ctx) {
     if (!m) return ymd;
     const [, y, mo, d] = m;
     return `${d}-${mo}-${y}`;
+  };
+
+  const fmtYmdDmySlash = (ymd) => {
+    if (!ymd || typeof ymd !== 'string') return ymd || '';
+    const m = ymd.slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return ymd;
+    const [, y, mo, d] = m;
+    return `${d}/${mo}/${y}`;
+  };
+
+  const fmtMoney = (value) => {
+    if (value == null || value === '') return '—';
+    const raw = String(value).trim();
+    if (!raw) return '—';
+    if (/^[£$€]/.test(raw)) return raw;
+    const amount = Number(raw.replace(/,/g, ''));
+    return Number.isFinite(amount) ? `£${amount.toFixed(2)}` : raw;
   };
 
   const toYmd = (d) => {
@@ -298472,7 +298504,7 @@ function renderTimesheetLinesTab(ctx) {
     segs.some(seg => segHasTiming(seg))
   );
 
-  const buildInvoiceWeekSelectHtml = (seg) => {
+  const buildInvoiceWeekSelectHtml = (seg, { compact = false } = {}) => {
     if (!isNhspOrHrSelfBillBasis) return '<span class="mini">—</span>';
     const segId = String(seg.segment_id || '');
     if (!segId) return '<span class="mini">—</span>';
@@ -298569,6 +298601,41 @@ function renderTimesheetLinesTab(ctx) {
 
     const pauseChecked = isPaused ? 'checked' : '';
 
+    if (compact) {
+      const compactState = isSegLocked
+        ? 'Invoiced'
+        : (isPermanentDelay ? 'Indefinite' : (isInvoiceDelayed ? `Delayed to ${fmtYmdDmySlash(targetForDelay)}` : '—'));
+      return `
+        <div class="nhsp-invoice-control">
+          <div class="nhsp-invoice-control-row">
+            <input
+              type="text"
+              class="input mini nhsp-invoice-date"
+              name="seg_invoice_week"
+              data-segment-id="${segId}"
+              aria-label="Delay invoicing until date in DD/MM/YYYY format"
+              title="Enter the invoice delay date in DD/MM/YYYY format"
+              placeholder="DD/MM/YYYY"
+              value="${valueUk}"
+              ${dateDisabled}
+            />
+            <label class="mini nhsp-invoice-indefinite" title="Delay invoicing indefinitely">
+              <input
+                type="checkbox"
+                name="seg_invoice_pause"
+                data-segment-id="${segId}"
+                aria-label="Delay invoicing indefinitely"
+                ${pauseChecked}
+                ${pauseDisabled}
+              />
+              Indefinite
+            </label>
+          </div>
+          <span class="mini nhsp-invoice-state" title="${esc(invoiceStateHint)}">${esc(compactState)}</span>
+        </div>
+      `;
+    }
+
     return `
       <div style="display:flex;flex-direction:column;gap:4px;">
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
@@ -298598,7 +298665,24 @@ function renderTimesheetLinesTab(ctx) {
   };
 
   if (isSegments && segs.length && isNhspOrHrSelfBillBasis) {
-      const headHtml = showSegmentsTimeView
+      const headHtml = isNhspBasis
+      ? `
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Reference</th>
+            <th>Shift</th>
+            <th>Break</th>
+            <th>Hours</th>
+            <th>Financials</th>
+            <th>Pay status</th>
+            <th>Snooze</th>
+            <th>Exclude pay</th>
+            <th>Invoice delay</th>
+          </tr>
+        </thead>
+      `
+      : showSegmentsTimeView
       ? `
         <thead>
           <tr>
@@ -298644,7 +298728,7 @@ function renderTimesheetLinesTab(ctx) {
       const srcRaw = seg.source_system || (seg.segment_id || '').split(':')[0] || '';
       const src  = srcRaw || '';
       const rawDate = seg.date || seg.work_date || '';
-      const displayDate = rawDate ? fmtYmdDmy(rawDate) : '';
+      const displayDate = rawDate ? (isNhspBasis ? fmtYmdDmySlash(rawDate) : fmtYmdDmy(rawDate)) : '';
       const dateCellHtml = displayDate || '<span class="mini">—</span>';
 
       const hours = seg.total_hours ?? seg.hours_day ?? seg.hours_night ?? seg.hours ?? '';
@@ -298658,7 +298742,7 @@ function renderTimesheetLinesTab(ctx) {
       const segPayState = getPayStateForSegment(seg);
       const segPayStateHtml = renderPayStatePill(segPayState);
       const segSnoozeInfo = getSegmentSnoozeInfo(seg);
-      const segSnoozeHtml = renderSegmentSnoozePill(seg);
+      const segSnoozeHtml = isNhspBasis ? renderNhspSnoozePill(seg) : renderSegmentSnoozePill(seg);
 
       // ✅ MUST capture these BEFORE buildInvoiceWeekSelectHtml() mutates segTargets[segId]
       const hadStagedBefore = Object.prototype.hasOwnProperty.call(segTargets, segId);
@@ -298666,7 +298750,7 @@ function renderTimesheetLinesTab(ctx) {
       const lockedInvoiceId = String(seg.invoice_locked_invoice_id || '').trim();
 
       // build HTML (this may write segTargets[segId])
-      const invoiceWeekCellHtml = buildInvoiceWeekSelectHtml(seg);
+      const invoiceWeekCellHtml = buildInvoiceWeekSelectHtml(seg, { compact: isNhspBasis });
 
       // ✅ Determine delay using SQL semantics (explicit stored OR staged-before)
       const hasExplicitTarget = hadStagedBefore || !!storedTargetRaw;
@@ -298696,6 +298780,39 @@ function renderTimesheetLinesTab(ctx) {
 
       const startEnd = pickSegStartEnd(seg);
       const brMins = pickSegBreakMins(seg);
+
+      if (isNhspBasis) {
+        const shiftLabel = startEnd.start && startEnd.end
+          ? `${startEnd.start}–${startEnd.end}`
+          : (startEnd.start || startEnd.end || '—');
+        const referenceHtml = ref
+          ? esc(ref)
+          : (reqId ? esc(reqId) : '<span class="mini">—</span>');
+        return `
+          <tr data-segment-id="${seg.segment_id}"${rowStyle}>
+            <td class="nhsp-date" data-label="Date">${dateCellHtml}</td>
+            <td class="nhsp-reference" data-label="Reference">${referenceHtml}</td>
+            <td class="nhsp-shift" data-label="Shift">${esc(shiftLabel)}</td>
+            <td class="nhsp-break" data-label="Break">${Number.isFinite(brMins) ? `${esc(String(brMins))} min` : '<span class="mini">—</span>'}</td>
+            <td class="nhsp-hours" data-label="Hours">${hours !== '' ? esc(hours) : '<span class="mini">—</span>'}</td>
+            <td class="nhsp-financials" data-label="Financials"><span>Pay ${esc(fmtMoney(pay))}</span><span>Charge ${esc(fmtMoney(charge))}</span></td>
+            <td class="nhsp-pay-state" data-label="Pay status">${segPayStateHtml}</td>
+            <td class="nhsp-snooze" data-label="Snooze">${segSnoozeHtml}</td>
+            <td class="nhsp-exclude" data-label="Exclude pay">
+              <input
+                type="checkbox"
+                name="seg_exclude_from_pay"
+                data-segment-id="${seg.segment_id}"
+                aria-label="Exclude this line from pay"
+                title="Exclude this line from pay. The change is staged until Save."
+                ${effExclude ? 'checked' : ''}
+                ${disabledExcludeAttr}
+              />
+            </td>
+            <td class="nhsp-invoice" data-label="Invoice delay">${invoiceWeekCellHtml}</td>
+          </tr>
+        `;
+      }
 
       if (!showSegmentsTimeView) {
          return `
@@ -298758,6 +298875,28 @@ function renderTimesheetLinesTab(ctx) {
         </tr>
       `;
     }).join('');
+
+    if (isNhspBasis) {
+      return `
+        <div class="tabc nhsp-lines-tab">
+          <div class="card nhsp-lines-summary">
+            <div><span>Timesheet ID</span><strong>${esc(tsId || 'Unknown')}</strong></div>
+            <div><span>Mode</span><strong>${esc(String(mode || 'Segments').toLowerCase().replace(/^./, (ch) => ch.toUpperCase()))}</strong></div>
+            <div><span>Basis</span><strong>${basis === 'NHSP_ADJUSTMENT' ? 'NHSP adjustment' : 'NHSP'}</strong></div>
+          </div>
+
+          <div class="card" style="margin-top:10px;">
+            <div class="nhsp-lines-scroll">
+              <table class="grid mini nhsp-lines-table">
+                ${headHtml}
+                <tbody>${bodyRows}</tbody>
+              </table>
+            </div>
+            <span class="mini nhsp-lines-help">Changes to pay exclusion and invoice delay are staged until you click Save.</span>
+          </div>
+        </div>
+      `;
+    }
 
     return `
       <div class="tabc">

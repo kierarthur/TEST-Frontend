@@ -170,6 +170,13 @@
     }).format(date).replace(',', '');
   }
 
+  function displayReviewStatus(status, partialApplication = false) {
+    const normalized = String(status || '').trim().toUpperCase();
+    if (partialApplication && normalized !== 'APPLIED') return 'PARTIALLY APPLIED';
+    if (normalized === 'BLOCKED') return 'NEEDS ATTENTION';
+    return normalized || 'IN REVIEW';
+  }
+
   function contractIsValid(contract) {
     return contract?.ok === true
       && contract.schema_contract_version === CONTRACT.schema
@@ -246,7 +253,7 @@
     const rows = state.home.reviews.length ? state.home.reviews.map((item) => `<div class="irv1-history-row">
       <div><strong>${esc(item.filename || 'Import')}</strong><small>${esc(item.source_route || item.source_system || '')}</small></div>
       <div>${esc(formatDate(item.coverage_start_date))} – ${esc(formatDate(item.coverage_end_date))}</div>
-      <div><span class="irv1-status">${esc(item.status || 'IN REVIEW')}</span><small>Updated ${esc(formatDateTime(item.updated_at_utc))}</small></div>
+      <div><span class="irv1-status">${esc(displayReviewStatus(item.status, item.partial_application === true))}</span><small>Updated ${esc(formatDateTime(item.updated_at_utc))}</small></div>
       <button type="button" class="irv1-btn" data-ir-action="continue" data-import-id="${esc(item.import_id)}">Continue</button>
     </div>`).join('') : '<div class="irv1-empty">There are no unfinished import reviews.</div>';
     const busy = state.home.busy ? `<div class="irv1-alert">${esc(state.home.busy)}</div>` : '';
@@ -459,7 +466,7 @@
     const overlaps = Array.isArray(c.scope.overlapping_unfinished_reviews) ? c.scope.overlapping_unfinished_reviews : [];
     const selectedOverlap = overlaps.find((item) => String(item.import_id) === String(c.selectedOverlapId || ''));
     const replaceAllowed = overlaps.length === 1 && selectedOverlap && String(selectedOverlap.status || '').toUpperCase() !== 'APPLYING';
-    const overlapHtml = overlaps.length ? `<section class="irv1-overlap"><div class="irv1-alert"><strong>An unfinished review already covers this ${String(c.scope.source_route || '').toUpperCase() === 'NHSP' ? 'NHSP period' : 'client and some of these dates'}.</strong><br/>Continue the existing review, or replace it atomically with this new file. Two overlapping active reviews are not permitted.</div><div class="irv1-overlap-list">${overlaps.map((item) => `<label class="irv1-choice"><input type="radio" name="irOverlapTarget" value="${esc(item.import_id)}" ${c.selectedOverlapId === item.import_id ? 'checked' : ''}/><span><strong>${esc(item.filename || 'Earlier import')}</strong><span>${esc(formatDate(item.coverage_start_date))} to ${esc(formatDate(item.coverage_end_date))} · ${esc(item.status)}</span></span></label>`).join('')}</div><div class="irv1-overlap-actions"><button class="irv1-btn" data-ir-action="overlap-resume">Continue existing review</button><button class="irv1-btn danger" data-ir-action="overlap-replace" ${replaceAllowed ? '' : 'disabled="disabled" aria-disabled="true"'} ${c.overlapChoice === 'SUPERSEDE' ? 'aria-pressed="true"' : ''}>Replace existing review</button><button class="irv1-btn" data-ir-action="overlap-cancel">Cancel new import</button></div><div class="mini">Replacement is one database transaction: the new review is created only if the selected existing review can be marked superseded at the same time.${overlaps.length > 1 ? ' Resolve the existing overlapping reviews before replacing this file.' : String(selectedOverlap?.status || '').toUpperCase() === 'APPLYING' ? ' An applying review cannot be replaced; continue it and check its outcome.' : ''}</div></section>` : '';
+    const overlapHtml = overlaps.length ? `<section class="irv1-overlap"><div class="irv1-alert"><strong>An unfinished review already covers this ${String(c.scope.source_route || '').toUpperCase() === 'NHSP' ? 'NHSP period' : 'client and some of these dates'}.</strong><br/>Continue the existing review, or replace it atomically with this new file. Two overlapping active reviews are not permitted.</div><div class="irv1-overlap-list">${overlaps.map((item) => `<label class="irv1-choice"><input type="radio" name="irOverlapTarget" value="${esc(item.import_id)}" ${c.selectedOverlapId === item.import_id ? 'checked' : ''}/><span><strong>${esc(item.filename || 'Earlier import')}</strong><span>${esc(formatDate(item.coverage_start_date))} to ${esc(formatDate(item.coverage_end_date))} · ${esc(displayReviewStatus(item.status, item.partial_application === true))}</span></span></label>`).join('')}</div><div class="irv1-overlap-actions"><button class="irv1-btn" data-ir-action="overlap-resume">Continue existing review</button><button class="irv1-btn danger" data-ir-action="overlap-replace" ${replaceAllowed ? '' : 'disabled="disabled" aria-disabled="true"'} ${c.overlapChoice === 'SUPERSEDE' ? 'aria-pressed="true"' : ''}>Replace existing review</button><button class="irv1-btn" data-ir-action="overlap-cancel">Cancel new import</button></div><div class="mini">Replacement is one database transaction: the new review is created only if the selected existing review can be marked superseded at the same time.${overlaps.length > 1 ? ' Resolve the existing overlapping reviews before replacing this file.' : String(selectedOverlap?.status || '').toUpperCase() === 'APPLYING' ? ' An applying review cannot be replaced; continue it and check its outcome.' : ''}</div></section>` : '';
     const copy = coverageCopy(c.scope);
     const coverageChosen = !!c.mode;
     const overlapChosen = overlaps.length === 0 || (c.overlapChoice === 'SUPERSEDE' && replaceAllowed);
@@ -1086,7 +1093,7 @@
     const complete = !!confirmation && confirmation.selectedIds.length === items.length;
     const canApply = complete && reviewCan(review, 'APPLY') && Number(summary.batch_blocking_count || 0) === 0;
     const readOnlyReview = { ...review, header: { ...review.header, state: { ...review.header.state, editability: { allowed_commands: [] } } } };
-    return `<div class="irv1-shell"><section class="irv1-intro"><div><h3>Final confirmation</h3><p>The server will revalidate the saved review before committing. The browser is not supplying financial values, validation rows or email recipients.</p></div><span class="irv1-contract">${esc(header.state.status)}</span></section>
+    return `<div class="irv1-shell"><section class="irv1-intro"><div><h3>Final confirmation</h3><p>The server will revalidate the saved review before committing. The browser is not supplying financial values, validation rows or email recipients.</p></div><span class="irv1-contract">${esc(displayReviewStatus(header.state.status, header.state.partial_application === true))}</span></section>
       ${review.error ? `<div class="irv1-alert error">${esc(review.error)}</div>` : ''}
       <div class="irv1-alert ${authorityMode === 'UNRESOLVED' || authorityMode === 'OUT_OF_SCOPE' ? 'error' : ''}"><strong>${esc(authorityText)}</strong><div class="mini">Settings checked as of ${esc(settingsAsOf)}; contract date coverage is still checked against each shift date.</div></div>
       <div class="irv1-settings-grid"><div class="irv1-settings-card"><strong>Source and coverage</strong><p>${esc(header.import.filename || 'Import')}<br/>${esc(String(header.import.coverage_mode || '').replaceAll('_', ' '))}<br/>${esc(formatDate(header.import.coverage_start_date))} to ${esc(formatDate(header.import.coverage_end_date))}</p><div class="mini">Verified source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12))} · parser ${esc(evidence.parser_version || '—')} · preview generation ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-settings-card"><strong>This application batch</strong><p>${Number(summary.selected_change_count || 0)} change(s)<br/>${selectedCount} selected ready action(s)</p><div class="mini">Only fully resolved candidate/client units in this confirmation can be processed.</div></div>${isNhsp ? '' : `<div class="irv1-settings-card"><strong>Client query email</strong><p>${Number(summary.selected_email_issue_count || 0)} new issue(s)<br/>${Number(summary.selected_email_reminder_count || 0)} explicit reminder(s)</p><div class="mini">The server groups every selected item into one email per normalised recipient address.</div></div>`}<div class="irv1-settings-card"><strong>Remaining review</strong><p>${Number(summary.blocking_count || 0)} unresolved blocker(s)<br/>${Number(summary.deferred_count || 0)} deferred action(s)</p><div class="mini">Pending and deferred work remains saved after this batch.</div></div></div>
@@ -1110,8 +1117,7 @@
     const editability = header.state.editability || {};
     const readOnly = editability.read_only === true;
     const followUp = String(header.state.follow_up_status || 'NOT_REQUIRED').toUpperCase();
-    const displayStatus = header.state.partial_application === true && String(header.state.status || '').toUpperCase() !== 'APPLIED'
-      ? 'PARTIALLY APPLIED' : header.state.status;
+    const displayStatus = displayReviewStatus(header.state.status, header.state.partial_application === true);
     const body = items.length
       ? (review.view === 'EMAIL' ? renderEmailGroups(items, review) : groupItems(items, review))
       : `<div class="irv1-empty">There are no ${esc(review.view.toLowerCase().replaceAll('_', ' '))} items on this page.</div>`;
