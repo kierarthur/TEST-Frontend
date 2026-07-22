@@ -59,6 +59,8 @@ test('review lifecycle supports resume, recheck, abandon, apply status and follo
   assert.match(source, /if \(normalized === 'BLOCKED'\) return 'NEEDS ATTENTION'/);
   assert.match(source, /displayReviewStatus\(item\.status, item\.partial_application === true\)/);
   assert.match(source, /displayReviewStatus\(header\.state\.status, header\.state\.partial_application === true\)/);
+  assert.match(source, /last_operation_request_hash[\s\S]*?recovery\?\.request_hash[\s\S]*?review\?\.requestHash/);
+  assert.match(source, /const hash = review\?\.header\?\.state\?\.last_operation_request_hash;[\s\S]*?follow-up\/retry/);
 });
 
 test('NHSP segment timesheets use the compact non-wrapping Lines presentation only for NHSP bases', () => {

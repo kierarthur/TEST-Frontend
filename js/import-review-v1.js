@@ -1428,7 +1428,10 @@
     const review = state.review;
     const recovery = recoveryFor(review?.importId);
     const op = review?.header?.state?.last_operation_id || recovery?.operation_id || review?.operationId;
-    const hash = recovery?.request_hash || review?.requestHash || review?.header?.state?.apply_contract?.request_hash;
+    const hash = review?.header?.state?.last_operation_request_hash
+      || recovery?.request_hash
+      || review?.requestHash
+      || review?.header?.state?.apply_contract?.request_hash;
     if (!review || !op || !hash) return openReview(review.importId);
     await pollApplyStatus(review.importId, op, hash);
   }
@@ -1436,7 +1439,7 @@
   async function retryFollowUp() {
     const review = state.review;
     const op = review?.header?.state?.last_operation_id;
-    const hash = review?.header?.state?.apply_contract?.request_hash;
+    const hash = review?.header?.state?.last_operation_request_hash;
     if (!review || !op || !hash) return;
     await request(`/api/import-reviews/${encodeURIComponent(review.importId)}/follow-up/retry`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operation_id: op, request_hash: hash })
