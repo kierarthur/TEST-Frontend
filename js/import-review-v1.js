@@ -7,7 +7,8 @@
     operation: 'IMPORT_APPLY_OPERATION_V2',
     correction: 'IMPORT_CORRECTION_OPERATION_V2',
     followUp: 'IMPORT_REVIEW_FOLLOW_UP_COMPONENT_V1',
-    ui: 'IMPORT_REVIEW_UI_V4',
+    incrementalApply: 'IMPORT_REVIEW_INCREMENTAL_APPLY_V1',
+    ui: 'IMPORT_REVIEW_UI_V5',
     emailGrouping: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
   });
   const PAGE_SIZES = Object.freeze([25, 50, 75, 100]);
@@ -176,6 +177,7 @@
       && contract.apply_operation_version === CONTRACT.operation
       && contract.correction_operation_version === CONTRACT.correction
       && contract.follow_up_component_version === CONTRACT.followUp
+      && contract.incremental_apply_version === CONTRACT.incrementalApply
       && contract.review_ui_contract_version === CONTRACT.ui
       && contract.email_grouping_version === CONTRACT.emailGrouping
       && contract.legacy_contracts_supported === false;
@@ -745,10 +747,10 @@
 
   function excludedReasonText(code) {
     const labels = {
-      PREVIOUS_OR_LEGACY_HISTORY_REQUIRES_EXPLICIT_REMINDER: 'Previously recorded issue: excluded by default. Tick it only when you deliberately want to send a reminder.',
-      REFERENCE_INVALIDATION_REQUIRES_EXPLICIT_SELECTION: 'Reference clearing is excluded by default and happens only when explicitly selected.',
-      QUERY_RECIPIENT_EMAIL_MISSING_OR_INVALID: 'Excluded because the client or contract has no valid query recipient email.',
-      BLOCKED_ACTIVE_PAY_DRAFT: 'Excluded because an active Banking Pay draft protects this timesheet.'
+      PREVIOUS_OR_LEGACY_HISTORY_REQUIRES_EXPLICIT_REMINDER: 'Previously recorded issue: deferred by default. Tick it only when you deliberately want to send a reminder.',
+      REFERENCE_INVALIDATION_REQUIRES_EXPLICIT_SELECTION: 'Reference clearing is deferred by default and happens only when explicitly selected.',
+      QUERY_RECIPIENT_EMAIL_MISSING_OR_INVALID: 'Deferred because the client or contract has no valid query recipient email.',
+      BLOCKED_ACTIVE_PAY_DRAFT: 'Deferred because an active Banking Pay draft protects this timesheet.'
     };
     return labels[String(code || '').toUpperCase()] || '';
   }
@@ -884,7 +886,10 @@
   function branchBadgesHtml(badges) {
     const unique = new Map();
     for (const badge of (badges || [])) if (badge?.code && !unique.has(badge.code)) unique.set(badge.code, badge);
-    return unique.size ? `<span class="irv1-branch-badges">${Array.from(unique.values()).map((badge) => `<span class="irv1-branch-badge" title="${esc(badge.label || badge.code)}">${esc(badge.label || badge.code)}${Number(badge.count || 0) > 1 ? ` ×${Number(badge.count)}` : ''}</span>`).join('')}</span>` : '';
+    return unique.size ? `<span class="irv1-branch-badges">${Array.from(unique.values()).map((badge) => {
+      const tone = String(badge.tone || 'ISSUE').toLowerCase();
+      return `<span class="irv1-branch-badge is-${esc(tone)}" title="${esc(badge.label || badge.code)}">${esc(badge.label || badge.code)}${Number(badge.count || 0) > 1 ? ` ×${Number(badge.count)}` : ''}</span>`;
+    }).join('')}</span>` : '';
   }
 
   function groupItems(items, review) {
@@ -954,7 +959,7 @@
     const cards = [
       ['PENDING', 'Pending action', 'Resolve blockers or choose required evidence'],
       ['READY', 'Ready', 'Changes and selections ready to apply'],
-      ['EMAIL', 'Emails', 'Client query rows selected for grouped emails'],
+      ...(reviewRoute(review) === 'NHSP' ? [] : [['EMAIL', 'Emails', 'Client query rows selected for grouped emails']]),
       ['NO_ACTION', 'No action required', 'Automatic and unchanged rows']
     ];
     return cards.map(([view, label, help]) => `<button type="button" class="irv1-card-filter ${review.view === view ? 'is-active' : ''}" data-ir-action="review-view" data-view="${view}"><strong>${Number(counts[view] || 0)}</strong><span>${esc(label)}</span><small>${esc(help)}</small></button>`).join('');
@@ -974,8 +979,8 @@
     showScreen('Import review', renderReview, 'import-review-v1');
     try {
       const start = await fetchReviewHeader(review.importId);
-      if (String(start?.state?.status || '').toUpperCase() !== 'READY' || !reviewCan({ header: start }, 'APPLY')) {
-        throw new Error('The server no longer permits apply. Recheck the review status.');
+      if (!reviewCan({ header: start }, 'APPLY')) {
+        throw new Error('No selected candidate/client unit is currently ready. Recheck the review or resolve its remaining blockers.');
       }
       const selectedIds = Array.isArray(start.state.apply_contract?.selected_action_ids)
         ? start.state.apply_contract.selected_action_ids.map(String) : [];
@@ -1040,7 +1045,7 @@
     const current = await fetchReviewHeader(review.importId);
     const ids = Array.isArray(current.state.apply_contract?.selected_action_ids) ? current.state.apply_contract.selected_action_ids.map(String) : [];
     const fingerprint = await selectedSetFingerprint(ids);
-    const matches = String(current.state.status || '').toUpperCase() === 'READY'
+    const matches = reviewCan({ header: current }, 'APPLY')
       && Number(current.state.state_version) === confirmation.stateVersion
       && String(current.state.preview_fingerprint || '') === confirmation.previewFingerprint
       && String(current.state.apply_contract?.request_hash || '') === confirmation.requestHash
@@ -1062,6 +1067,7 @@
     const invalidationCount = Number(summary.selected_reference_invalidation_count ?? (Array.isArray(apply.reference_invalidation_action_ids) ? apply.reference_invalidation_action_ids.length : 0));
     const evidence = header.evidence || {};
     const authority = review.scope?.authority_summary || {};
+    const isNhsp = reviewRoute(review) === 'NHSP';
     const authorityMode = String(review.scope?.authority_mode || authority.mode || '').toUpperCase();
     const authorityText = authorityMode === 'AUTHORITATIVE'
       ? 'Current policy: authoritative. Selected imported shifts may be added, amended or cancelled by TMS after final approval.'
@@ -1078,18 +1084,18 @@
     const noActionCount = items.filter((item) => item.action_kind === 'NO_ACTION').length;
     const correctionUnits = Array.isArray(confirmation?.correctionUnits) ? confirmation.correctionUnits : [];
     const complete = !!confirmation && confirmation.selectedIds.length === items.length;
-    const canApply = complete && reviewCan(review, 'APPLY') && Number(summary.blocking_count || 0) === 0;
+    const canApply = complete && reviewCan(review, 'APPLY') && Number(summary.batch_blocking_count || 0) === 0;
     const readOnlyReview = { ...review, header: { ...review.header, state: { ...review.header.state, editability: { allowed_commands: [] } } } };
     return `<div class="irv1-shell"><section class="irv1-intro"><div><h3>Final confirmation</h3><p>The server will revalidate the saved review before committing. The browser is not supplying financial values, validation rows or email recipients.</p></div><span class="irv1-contract">${esc(header.state.status)}</span></section>
       ${review.error ? `<div class="irv1-alert error">${esc(review.error)}</div>` : ''}
       <div class="irv1-alert ${authorityMode === 'UNRESOLVED' || authorityMode === 'OUT_OF_SCOPE' ? 'error' : ''}"><strong>${esc(authorityText)}</strong><div class="mini">Settings checked as of ${esc(settingsAsOf)}; contract date coverage is still checked against each shift date.</div></div>
-      <div class="irv1-settings-grid"><div class="irv1-settings-card"><strong>Source and coverage</strong><p>${esc(header.import.filename || 'Import')}<br/>${esc(String(header.import.coverage_mode || '').replaceAll('_', ' '))}<br/>${esc(formatDate(header.import.coverage_start_date))} to ${esc(formatDate(header.import.coverage_end_date))}</p><div class="mini">Verified source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12))} · parser ${esc(evidence.parser_version || '—')} · preview generation ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-settings-card"><strong>Operational changes</strong><p>${Number(summary.selected_change_count || 0)} change(s)<br/>${selectedCount} total saved selection(s)</p></div><div class="irv1-settings-card"><strong>Client query email</strong><p>${Number(summary.selected_email_issue_count || 0)} new issue(s)<br/>${Number(summary.selected_email_reminder_count || 0)} explicit reminder(s)</p><div class="mini">The server groups every selected item into one email per normalised recipient address.</div></div><div class="irv1-settings-card"><strong>Reference decisions</strong><p>${invalidationCount} explicit invalidation(s)<br/>${Number(summary.blocking_count || 0)} unresolved blocker(s)</p></div></div>
-      <section class="irv1-confirm-section"><h4>Selected shifts and validation outcomes</h4>${operational.length ? operational.map(confirmationItemHtml).join('') : '<div class="irv1-empty">No shift change or validation action is selected.</div>'}<div class="mini">${noActionCount} selected row(s) require no change. ${Math.max(0, Number(confirmation?.catalogueTotal || 0) - selectedCount)} row(s) are excluded.</div></section>
+      <div class="irv1-settings-grid"><div class="irv1-settings-card"><strong>Source and coverage</strong><p>${esc(header.import.filename || 'Import')}<br/>${esc(String(header.import.coverage_mode || '').replaceAll('_', ' '))}<br/>${esc(formatDate(header.import.coverage_start_date))} to ${esc(formatDate(header.import.coverage_end_date))}</p><div class="mini">Verified source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12))} · parser ${esc(evidence.parser_version || '—')} · preview generation ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-settings-card"><strong>This application batch</strong><p>${Number(summary.selected_change_count || 0)} change(s)<br/>${selectedCount} selected ready action(s)</p><div class="mini">Only fully resolved candidate/client units in this confirmation can be processed.</div></div>${isNhsp ? '' : `<div class="irv1-settings-card"><strong>Client query email</strong><p>${Number(summary.selected_email_issue_count || 0)} new issue(s)<br/>${Number(summary.selected_email_reminder_count || 0)} explicit reminder(s)</p><div class="mini">The server groups every selected item into one email per normalised recipient address.</div></div>`}<div class="irv1-settings-card"><strong>Remaining review</strong><p>${Number(summary.blocking_count || 0)} unresolved blocker(s)<br/>${Number(summary.deferred_count || 0)} deferred action(s)</p><div class="mini">Pending and deferred work remains saved after this batch.</div></div></div>
+      <section class="irv1-confirm-section"><h4>Selected shifts and validation outcomes</h4>${operational.length ? operational.map(confirmationItemHtml).join('') : '<div class="irv1-empty">No shift change or validation action is selected.</div>'}<div class="mini">${noActionCount} selected row(s) require no change. ${Number(summary.deferred_count || 0)} action(s) are deferred and can be selected later.</div></section>
       <section class="irv1-confirm-section"><h4>DB-owned correction units</h4>${correctionUnits.length ? correctionUnits.map((unit) => `<div class="irv1-confirm-line"><strong>${esc(unit.correction_shape === 'REVERSAL_ONLY' ? 'Reversal only' : 'Reversal and replacement')}</strong><span>Timesheet ${esc(unit.root_timesheet_id || '—')} · source ${esc(unit.source_row_key || '—')} · ${esc(unit.correction_action === 'CANCELLATION' ? 'cancellation' : 'changed hours')}</span></div>`).join('') : '<div class="mini">No reversal correction unit is required.</div>'}<div class="mini">Financial values remain server-owned and are not calculated or displayed by the browser.</div></section>
       <section class="irv1-confirm-section"><h4>Explicit reference decisions</h4>${invalidations.length ? invalidations.map(confirmationItemHtml).join('') : '<div class="mini">No reference number will be cleared.</div>'}</section>
-      <section class="irv1-confirm-section"><h4>Outgoing client query emails</h4>${emails.length ? renderEmailGroups(emails, readOnlyReview) : '<div class="mini">No client query email will be queued.</div>'}</section>
+      ${isNhsp ? '' : `<section class="irv1-confirm-section"><h4>Outgoing client query emails</h4>${emails.length ? renderEmailGroups(emails, readOnlyReview) : '<div class="mini">No client query email will be queued.</div>'}</section>`}
       ${invalidationCount === 0 ? '<div class="irv1-alert">No reference numbers will be cleared. A missing selection is explicit and clears nothing.</div>' : `<div class="irv1-alert">${invalidationCount} reference invalidation action(s) are explicitly selected. Only eligible, unlocked references can be cleared.</div>`}
-      <label class="irv1-choice"><input type="checkbox" data-ir-confirm-ack ${review.confirmAcknowledged ? 'checked' : ''}/><span><strong>I have checked the coverage and selected actions</strong><span>I understand that selected email issues/reminders will be queued after the source import commits, while reference invalidation clears only the explicitly selected eligible references.</span></span></label>
+      <label class="irv1-choice"><input type="checkbox" data-ir-confirm-ack ${review.confirmAcknowledged ? 'checked' : ''}/><span><strong>I have checked this ready application batch</strong><span>${isNhsp ? 'Only the selected, server-approved CloudTMS actions shown above will be committed. Pending and deferred work will remain open.' : 'Selected query emails are queued only after the source commit. Pending and deferred work remains open, and only explicitly selected eligible references can be cleared.'}</span></span></label>
       <div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="apply-back">Back to review</button><button class="irv1-btn primary" data-ir-action="apply-confirm" ${review.busy || !review.confirmAcknowledged || !canApply ? 'disabled="disabled" aria-disabled="true"' : 'aria-disabled="false"'}>${review.busy ? 'Applying safely…' : 'Confirm and apply'}</button></div>
     </div>`;
   }
@@ -1104,6 +1110,8 @@
     const editability = header.state.editability || {};
     const readOnly = editability.read_only === true;
     const followUp = String(header.state.follow_up_status || 'NOT_REQUIRED').toUpperCase();
+    const displayStatus = header.state.partial_application === true && String(header.state.status || '').toUpperCase() !== 'APPLIED'
+      ? 'PARTIALLY APPLIED' : header.state.status;
     const body = items.length
       ? (review.view === 'EMAIL' ? renderEmailGroups(items, review) : groupItems(items, review))
       : `<div class="irv1-empty">There are no ${esc(review.view.toLowerCase().replaceAll('_', ' '))} items on this page.</div>`;
@@ -1113,9 +1121,10 @@
     const evidence = header.evidence || {};
     const conflictActions = review.conflictBuffer ? '<div class="irv1-alert"><strong>Your local choices are buffered.</strong><div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="conflict-save">Save buffered choices against refreshed rows</button><button class="irv1-btn" data-ir-action="conflict-discard">Discard buffered choices</button></div></div>' : '';
     return `<div class="irv1-shell" id="irv1Review">
-      <section class="irv1-review-head"><div><h3 class="irv1-title">${esc(header.import.filename || 'Import review')}</h3><div class="irv1-review-meta"><span class="irv1-chip">${esc(header.import.source_route || header.import.source_system || '')}</span><span class="irv1-chip">${esc(formatDate(header.import.coverage_start_date))} – ${esc(formatDate(header.import.coverage_end_date))}</span><span class="irv1-status">${esc(header.state.status)}</span><span class="irv1-chip">Follow-up: ${esc(followUp)}</span></div><div class="mini irv1-evidence">Server evidence: source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12) || 'unavailable')} · parser ${esc(evidence.parser_version || 'unavailable')} · preview ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="home">${readOnly ? 'Close' : 'Save & close'}</button>${reviewCan(review, 'REFRESH') ? '<button class="irv1-btn" data-ir-action="refresh">Recheck</button>' : ''}${reviewCan(review, 'ABANDON') ? '<button class="irv1-btn danger" data-ir-action="abandon">Abandon import</button>' : ''}${statusActions}<button class="irv1-btn primary" data-ir-action="apply-preview" ${reviewCan(review, 'APPLY') ? 'aria-disabled="false"' : 'disabled="disabled" aria-disabled="true"'}>Review and apply</button></div></section>
+      <section class="irv1-review-head"><div><h3 class="irv1-title">${esc(header.import.filename || 'Import review')}</h3><div class="irv1-review-meta"><span class="irv1-chip">${esc(header.import.source_route || header.import.source_system || '')}</span><span class="irv1-chip">${esc(formatDate(header.import.coverage_start_date))} – ${esc(formatDate(header.import.coverage_end_date))}</span><span class="irv1-status">${esc(displayStatus)}</span><span class="irv1-chip">Follow-up: ${esc(followUp)}</span></div><div class="mini irv1-evidence">Server evidence: source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12) || 'unavailable')} · parser ${esc(evidence.parser_version || 'unavailable')} · preview ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="home">${readOnly ? 'Close' : 'Save & close'}</button>${reviewCan(review, 'REFRESH') ? '<button class="irv1-btn" data-ir-action="refresh">Recheck</button>' : ''}${reviewCan(review, 'ABANDON') ? '<button class="irv1-btn danger" data-ir-action="abandon">Abandon import</button>' : ''}${statusActions}<button class="irv1-btn primary" data-ir-action="apply-preview" ${reviewCan(review, 'APPLY') ? 'aria-disabled="false" title="Review and apply the currently selected ready candidate/client units"' : 'disabled="disabled" aria-disabled="true" title="No selected candidate/client unit is currently ready"'}>Review and apply</button></div></section>
       ${review.error ? `<div class="irv1-alert error">${esc(review.error)}</div>` : ''}
       ${header.state.follow_up_error_message ? `<div class="irv1-alert error">${esc(header.state.follow_up_error_message)}</div>` : ''}
+      ${header.state.partial_application === true ? `<div class="irv1-alert"><strong>${Number(header.state.applied_outcome_count || 0)} action(s) have already been completed.</strong><div class="mini">Completed work is locked. Resolve or reselect the remaining pending and deferred actions, then use Review and apply again.</div></div>` : ''}
       ${conflictActions}
       <section class="irv1-cards">${reviewCards(review)}</section>
       <section class="irv1-toolbar"><div class="irv1-toolbar-group"><span class="mini">Sort:</span>${sortButtons(review)}</div><div class="irv1-toolbar-group"><label>Rows per page <select class="input" data-ir-page-size>${PAGE_SIZES.map((size) => `<option value="${size}" ${review.pageSize === size ? 'selected' : ''}>${size}</option>`).join('')}</select></label><span class="irv1-save-state ${review.saveState === 'Selections saved' ? 'is-ok' : ''}">${esc(review.saveState)}</span></div></section>

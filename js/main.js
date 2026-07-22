@@ -1789,12 +1789,11 @@ function validateClientMain(payload) {
     markFieldError(root, 'name', 'Client name is required');
   }
 
-  // Primary invoice email: required, simple email format
+  // Primary invoice email is optional. Existing clients may legitimately have no
+  // contact details yet, and that must not block an unrelated Client settings save.
+  // When supplied, still reject malformed addresses.
   const emailRaw = (payload.primary_invoice_email || '').trim();
-  if (!emailRaw) {
-    ok = false;
-    markFieldError(root, 'primary_invoice_email', 'Primary invoice email is required');
-  } else {
+  if (emailRaw) {
     const emailPattern = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
     if (!emailPattern.test(emailRaw)) {
       ok = false;
@@ -311033,7 +311032,7 @@ function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
     const name = value('name');
     const email = value('primary_invoice_email');
     const apPhone = value('ap_phone');
-    if (!name || !emailOk(email)) return false;
+    if (!name || (email && !emailOk(email))) return false;
     if (apPhone && (!/^\d+$/.test(apPhone) || apPhone.replace(/\D/g, '').length < 8)) return false;
     return true;
   };
@@ -311091,8 +311090,7 @@ function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
     } else {
       if (name === 'name' && !raw) message = 'Client name is required';
       else if (name === 'primary_invoice_email') {
-        if (!raw) message = 'Primary invoice email is required';
-        else if (!emailOk(raw)) message = 'Please enter a valid invoice email';
+        if (raw && !emailOk(raw)) message = 'Please enter a valid invoice email';
       } else if (name === 'ap_phone' && raw) {
         const digits = raw.replace(/\D/g, '');
         if (!/^\d+$/.test(raw) || digits.length < 8) message = 'A/P phone must be numbers only and at least 8 digits if entered';
@@ -311147,7 +311145,7 @@ function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
     if (fr.currentTabKey === 'main') {
       const required = fr.entity === 'candidates'
         ? ['first_name','last_name','phone','email','gender']
-        : (fr.entity === 'clients' ? ['name','primary_invoice_email'] : []);
+        : (fr.entity === 'clients' ? ['name'] : []);
       required.forEach((name) => {
         const control = body.querySelector(`[name="${name}"]`);
         if (!control) return;
@@ -334438,17 +334436,24 @@ async function renderClientSettingsUI(settingsObj){
     ctx.clientSettingsState = next;
     lastValid = { ...next };
 
+    // Client settings live outside the main client form and some choices repaint
+    // their own panel. Signal the owning modal explicitly for every accepted
+    // settings edit so the parent Save button remains visible/enabled even after
+    // a tab switch or a panel repaint.
+    try {
+      window.dispatchEvent(new CustomEvent('modal-dirty', {
+        detail: { source: 'client-settings' }
+      }));
+    } catch {}
+
     if (invModePrev !== invModeNext) {
       paintRightPanels('inv');
-      try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
     }
 
     if (gatePrev !== gateNext) {
       paintRightPanels('both');
-      try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
     } else if (manualFlagPrev !== manualFlagNext) {
       paintRightPanels('flags');
-      try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
     }
   };
 
@@ -334467,7 +334472,6 @@ if (btnClear && !btnClear.__wired) {
     });
 
     applyFromDOM(false);
-    try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
   });
 }
 

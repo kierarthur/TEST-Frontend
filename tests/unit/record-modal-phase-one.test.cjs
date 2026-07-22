@@ -49,6 +49,25 @@ test('record modal accessibility and truthful save gates are installed', () => {
   assert.match(main, /syncRecordControlValidity\(this, ev\?\.target\)/);
 });
 
+test('Client contact details are optional and Client settings always dirty the owning modal', () => {
+  const validateStart = main.indexOf('function validateClientMain(payload)');
+  const validateEnd = main.indexOf('async function restoreGridPrefsToDefault', validateStart);
+  const validateClient = main.slice(validateStart, validateEnd);
+  assert.match(validateClient, /if \(emailRaw\) \{/);
+  assert.doesNotMatch(validateClient, /Primary invoice email is required/);
+
+  const modalStart = main.indexOf('function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options)');
+  const modalEnd = main.indexOf('async function upsertClient(payload, id)', modalStart);
+  const modal = main.slice(modalStart, modalEnd);
+  assert.match(modal, /if \(!name \|\| \(email && !emailOk\(email\)\)\) return false/);
+  assert.match(modal, /fr\.entity === 'clients' \? \['name'\] : \[\]/);
+
+  const settingsStart = main.indexOf('async function renderClientSettingsUI(settingsObj)');
+  const settingsEnd = main.indexOf('async function upsertClient(payload, id)', settingsStart);
+  const settings = main.slice(settingsStart, settingsEnd);
+  assert.match(settings, /new CustomEvent\('modal-dirty', \{[\s\S]*?source: 'client-settings'/);
+});
+
 test('Client hospital child action is genuinely unavailable until a name is entered', () => {
   assert.match(main, /t\.kind==='client-hospital'/);
   assert.match(main, /modal-apply-enabled'[\s\S]*?enabled: !!String\(name\.value \|\| ''\)\.trim\(\)/);
