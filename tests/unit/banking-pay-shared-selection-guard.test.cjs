@@ -28,6 +28,48 @@ test('successful selection changes store the returned server progress revision',
   assert.match(body, /decisions\.progress_counter_version = progressCounterVersion/);
 });
 
+test('optimistic selection traversal is cycle-safe and bounded', () => {
+  const body = sliceBetween(
+    'const updatePreviewRowSelectionInLoadedState =',
+    'const applySelectionPayloadSummaryToWizard ='
+  );
+
+  assert.match(body, /const visited = new WeakSet\(\)/);
+  assert.match(body, /const MAX_VISITED_SELECTION_NODES = 20000/);
+  assert.match(body, /if \(visited\.has\(node\)\) return/);
+  assert.match(body, /visited\.add\(node\)/);
+  assert.match(body, /if \(visitedNodeCount > MAX_VISITED_SELECTION_NODES\) return/);
+
+  const row = {
+    preview_row_id: 'row-1',
+    selected: true,
+    selection_state: 'SELECTED',
+    row_json: {}
+  };
+  const workbench = { rows: [row] };
+  const draftWizard = { workbench, preview: { data: workbench } };
+  workbench.preview = draftWizard;
+  const context = {
+    Set,
+    WeakSet,
+    Array,
+    String,
+    st: { pay: { draftWizard } },
+    normalizePreviewRowIdArray: (values) => Array.from(new Set(Array.isArray(values) ? values.map(String) : [])),
+    getPreviewRowIdFromRow: (value) => String(value?.preview_row_id || '')
+  };
+  vm.runInNewContext(
+    body + '\nthis.__updateSelection = updatePreviewRowSelectionInLoadedState;',
+    context,
+    { filename: 'banking-selection-cycle-guard.js' }
+  );
+
+  assert.doesNotThrow(() => context.__updateSelection(['row-1'], false));
+  assert.equal(row.selected, false);
+  assert.equal(row.selection_state, 'UNSELECTED');
+  assert.equal(row.row_json.selected, false);
+});
+
 test('a rejected optimistic selection reloads the canonical page and always repaints', () => {
   const toggleBody = sliceBetween(
     'const togglePreviewRowSelection =',

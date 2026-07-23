@@ -65529,6 +65529,12 @@ async function openBankingPayFiltersModal(seed = {}) {
     const nextCandidateFilterId = trimStr(state.candidate_filter_id);
     const nextClientFilterId = trimStr(state.client_filter_id);
     const nextDraftScope = normaliseBankingPayDraftScope(state.draft_scope, 'ALL');
+    const previousSessionId = trimStr(
+      wiz.workbench?.session_id ||
+      wiz.decisions?.session_id ||
+      wiz.preview?.data?.session_id ||
+      ''
+    );
 
     const previousSignature = (() => {
       const fromWorkbench = trimStr(wiz.workbench?.session_signature || '');
@@ -65563,7 +65569,7 @@ async function openBankingPayFiltersModal(seed = {}) {
 
     if (contextChanged) {
       if (typeof resetPayPreviewAndDecisions === 'function') {
-        await resetPayPreviewAndDecisions({
+        const resetOutcome = await resetPayPreviewAndDecisions({
           mode: 'HARD_SESSION_RELOAD',
           contextOverrides: {
             pay_date: trimStr(wiz.pay_date || st.pay?.pay_date || st.pay?.selectedPayDate || ''),
@@ -65572,12 +65578,48 @@ async function openBankingPayFiltersModal(seed = {}) {
           },
           reason: 'FILTER_CONTEXT_CHANGED'
         });
+        const adoptedSessionId = trimStr(
+          resetOutcome?.session_id ||
+          wiz.workbench?.session_id ||
+          wiz.decisions?.session_id ||
+          ''
+        );
+        if (
+          resetOutcome?.ok === false ||
+          !adoptedSessionId ||
+          (previousSessionId && adoptedSessionId === previousSessionId)
+        ) {
+          const refreshError = new Error(
+            trimStr(resetOutcome?.error || '') ||
+            'CloudTMS could not apply the Banking Pay filters. The previous payment preview remains unchanged; please try again.'
+          );
+          refreshError.code = 'BANKING_PAY_FILTER_SESSION_NOT_ADOPTED';
+          refreshError.error_code = refreshError.code;
+          throw refreshError;
+        }
       } else if (typeof bankingPayPreview === 'function') {
-        await bankingPayPreview({
+        const previewOutcome = await bankingPayPreview({
           pay_date: trimStr(wiz.pay_date || st.pay?.pay_date || st.pay?.selectedPayDate || ''),
           hard_session_reload: true,
           mode: 'HARD_SESSION_RELOAD'
         });
+        const adoptedSessionId = trimStr(
+          previewOutcome?.session_id ||
+          wiz.workbench?.session_id ||
+          wiz.decisions?.session_id ||
+          ''
+        );
+        if (
+          !adoptedSessionId ||
+          (previousSessionId && adoptedSessionId === previousSessionId)
+        ) {
+          const refreshError = new Error(
+            'CloudTMS could not apply the Banking Pay filters. The previous payment preview remains unchanged; please try again.'
+          );
+          refreshError.code = 'BANKING_PAY_FILTER_SESSION_NOT_ADOPTED';
+          refreshError.error_code = refreshError.code;
+          throw refreshError;
+        }
       }
     } else {
       const hasSession = !!trimStr(wiz.workbench?.session_id || '');
@@ -91513,8 +91555,15 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     const updatePreviewRowSelectionInLoadedState = (previewRowIds, selected) => {
       const ids = new Set(normalizePreviewRowIdArray(previewRowIds));
       if (!ids.size) return;
+      const visited = new WeakSet();
+      let visitedNodeCount = 0;
+      const MAX_VISITED_SELECTION_NODES = 20000;
       const visit = (node) => {
         if (!node || typeof node !== 'object') return;
+        if (visited.has(node)) return;
+        visited.add(node);
+        visitedNodeCount += 1;
+        if (visitedNodeCount > MAX_VISITED_SELECTION_NODES) return;
         if (Array.isArray(node)) {
           for (const item of node) visit(item);
           return;
