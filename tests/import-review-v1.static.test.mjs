@@ -166,6 +166,13 @@ test('final confirmation is server paged, grouped and rechecked before apply', (
   assert.match(source, /confirmationStillCurrent/);
   assert.match(source, /Explicit reference decisions/);
   assert.match(source, /Outgoing client query email/);
+  assert.match(source, /selectedOutcomeCount/);
+  assert.match(source, /selectedActionCount/);
+  assert.match(source, /reviewed outcome\(s\)/);
+  assert.match(source, /Unchanged outcomes are recorded for audit without changing CloudTMS data/);
+  assert.match(source, /Selected batch: server-approved import-authoritative action/);
+  assert.match(source, /unresolved rows remain pending/);
+  assert.doesNotMatch(source, /selected ready action\(s\)/);
   assert.doesNotMatch(source, /DB-owned correction units/);
   assert.doesNotMatch(source, /if \(page > 5\)/);
   assert.match(source, /expected_request_hash: review\.header\.state\.apply_contract\.request_hash/);

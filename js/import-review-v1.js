@@ -1214,27 +1214,40 @@
     const apply = header.state.apply_contract || {};
     const summary = header.confirmation_summary || {};
     const confirmation = review.confirmation;
-    const selectedCount = Number(summary.selected_total ?? (Array.isArray(apply.selected_action_ids) ? apply.selected_action_ids.length : 0));
+    const selectedOutcomeCount = Number(summary.selected_total ?? (Array.isArray(apply.selected_action_ids) ? apply.selected_action_ids.length : 0));
+    const selectedChangeCount = Number(summary.selected_change_count || 0);
+    const selectedEmailCount = Number(summary.selected_email_count || 0);
     const invalidationCount = Number(summary.selected_reference_invalidation_count ?? (Array.isArray(apply.reference_invalidation_action_ids) ? apply.reference_invalidation_action_ids.length : 0));
+    const selectedActionCount = selectedChangeCount + selectedEmailCount + invalidationCount;
     const evidence = header.evidence || {};
     const authority = review.scope?.authority_summary || {};
     const isNhsp = reviewRoute(review) === 'NHSP';
     const authorityMode = String(review.scope?.authority_mode || authority.mode || '').toUpperCase();
+    const counts = confirmation?.counts || {};
+    const selectedAuthoritativeCount = Number(counts.standard || 0) + Number(counts.non_standard || 0);
+    const selectedValidationCount = Number(counts.validation || 0) + Number(counts.email || 0) + Number(counts.reference || 0);
+    const selectedBatchAuthorityResolved = selectedAuthoritativeCount > 0 || selectedValidationCount > 0;
     const authorityText = authorityMode === 'AUTHORITATIVE'
       ? 'Current policy: authoritative. Selected imported shifts may be added, amended or cancelled by TMS after final approval.'
       : authorityMode === 'VALIDATION_ONLY'
         ? 'Current policy: validation only. No timesheet hours or financial values will be changed from this import.'
         : authorityMode === 'MIXED'
           ? 'Current policy: mixed by contract. Each row is independently restricted to its server-approved authority.'
-          : 'Current policy cannot yet be confirmed. Resolve the outstanding mappings or settings and choose Recheck.';
+          : selectedAuthoritativeCount > 0
+            ? 'Selected batch: server-approved import-authoritative action. Only the confirmed items below can change CloudTMS; unresolved rows remain pending.'
+            : selectedValidationCount > 0
+              ? 'Selected batch: server-approved validation outcomes. No timesheet hours or financial values will be changed by these validation-only items.'
+              : 'Current policy cannot yet be confirmed. Resolve the outstanding mappings or settings and choose Recheck.';
     const settingsAsOf = authority.settings_as_of_date ? formatDate(authority.settings_as_of_date) : 'today';
-    const counts = confirmation?.counts || {};
-    const complete = !!confirmation && Number(counts.selected_total || 0) === selectedCount;
+    const complete = !!confirmation && Number(counts.selected_total || 0) === selectedOutcomeCount;
     const canApply = complete && reviewCan(review, 'APPLY') && Number(summary.batch_blocking_count || 0) === 0;
+    const confirmLabel = selectedOutcomeCount > selectedActionCount
+      ? `Confirm ${selectedActionCount} action${selectedActionCount === 1 ? '' : 's'} and record ${selectedOutcomeCount} outcome${selectedOutcomeCount === 1 ? '' : 's'}`
+      : `Confirm and apply ${selectedActionCount} action${selectedActionCount === 1 ? '' : 's'}`;
     return `<div class="irv1-shell"><section class="irv1-intro"><div><h3>Final confirmation</h3><p>The server will revalidate the saved review before committing. The browser is not supplying financial values, validation rows or email recipients.</p></div><span class="irv1-contract">${esc(displayReviewStatus(header.state.status, header.state.partial_application === true))}</span></section>
       ${review.error ? `<div class="irv1-alert error">${esc(review.error)}</div>` : ''}
-      <div class="irv1-alert ${authorityMode === 'UNRESOLVED' || authorityMode === 'OUT_OF_SCOPE' ? 'error' : ''}"><strong>${esc(authorityText)}</strong><div class="mini">Settings checked as of ${esc(settingsAsOf)}; contract date coverage is still checked against each shift date.</div></div>
-      <div class="irv1-settings-grid"><div class="irv1-settings-card"><strong>Source and coverage</strong><p>${esc(header.import.filename || 'Import')}<br/>${esc(String(header.import.coverage_mode || '').replaceAll('_', ' '))}<br/>${esc(formatDate(header.import.coverage_start_date))} to ${esc(formatDate(header.import.coverage_end_date))}</p><div class="mini">Verified source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12))} · parser ${esc(evidence.parser_version || '—')} · preview generation ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-settings-card"><strong>This application batch</strong><p>${Number(summary.selected_change_count || 0)} change(s)<br/>${selectedCount} selected ready action(s)</p><div class="mini">Only fully resolved candidate/client units in this confirmation can be processed.</div></div>${isNhsp ? '' : `<div class="irv1-settings-card"><strong>Client query email</strong><p>${Number(summary.selected_email_issue_count || 0)} new issue(s)<br/>${Number(summary.selected_email_reminder_count || 0)} explicit reminder(s)</p><div class="mini">The server groups every selected item into one email per normalised recipient address.</div></div>`}<div class="irv1-settings-card"><strong>Remaining review</strong><p>${Number(summary.blocking_count || 0)} unresolved blocker(s)<br/>${Number(summary.deferred_count || 0)} deferred action(s)</p><div class="mini">Pending and deferred work remains saved after this batch.</div></div></div>
+      <div class="irv1-alert ${(authorityMode === 'UNRESOLVED' || authorityMode === 'OUT_OF_SCOPE') && !selectedBatchAuthorityResolved ? 'error' : ''}"><strong>${esc(authorityText)}</strong><div class="mini">Settings checked as of ${esc(settingsAsOf)}; contract date coverage is still checked against each shift date.</div></div>
+      <div class="irv1-settings-grid"><div class="irv1-settings-card"><strong>Source and coverage</strong><p>${esc(header.import.filename || 'Import')}<br/>${esc(String(header.import.coverage_mode || '').replaceAll('_', ' '))}<br/>${esc(formatDate(header.import.coverage_start_date))} to ${esc(formatDate(header.import.coverage_end_date))}</p><div class="mini">Verified source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12))} · parser ${esc(evidence.parser_version || '—')} · preview generation ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-settings-card"><strong>This application batch</strong><p>${selectedActionCount} action(s)<br/>${selectedOutcomeCount} reviewed outcome(s)</p><div class="mini">Unchanged outcomes are recorded for audit without changing CloudTMS data. Only fully resolved candidate/client units in this confirmation can be processed.</div></div>${isNhsp ? '' : `<div class="irv1-settings-card"><strong>Client query email</strong><p>${Number(summary.selected_email_issue_count || 0)} new issue(s)<br/>${Number(summary.selected_email_reminder_count || 0)} explicit reminder(s)</p><div class="mini">The server groups every selected item into one email per normalised recipient address.</div></div>`}<div class="irv1-settings-card"><strong>Remaining review</strong><p>${Number(summary.blocking_count || 0)} unresolved blocker(s)<br/>${Number(summary.deferred_count || 0)} deferred action(s)</p><div class="mini">Pending and deferred work remains saved after this batch.</div></div></div>
       <div class="irv1-confirm-summary"><span><strong>${Number(counts.standard || 0)}</strong> standard shift(s)</span><span><strong>${Number(counts.amendment || 0)}</strong> amendment(s)</span><span><strong>${Number(counts.reversal_replacement || 0)}</strong> reversal + replacement</span><span><strong>${Number(counts.cancellation || 0) + Number(counts.reversal_only || 0)}</strong> cancellation / reversal</span>${Number(counts.validation || 0) ? `<span><strong>${Number(counts.validation || 0)}</strong> validation outcome(s)</span>` : ''}</div>
       ${confirmationSectionHtml(review, 'STANDARD')}
       ${confirmationSectionHtml(review, 'NON_STANDARD', { open: true })}
@@ -1244,7 +1257,7 @@
       <div class="mini">${Number(summary.deferred_count || 0)} action(s) are deferred and remain available when this review is reopened. Financial values remain server-owned and are recalculated only by the approved database functions.</div>
       ${invalidationCount === 0 ? '<div class="irv1-alert">No reference numbers will be cleared. A missing selection is explicit and clears nothing.</div>' : `<div class="irv1-alert">${invalidationCount} reference invalidation action(s) are explicitly selected. Only eligible, unlocked references can be cleared.</div>`}
       <label class="irv1-choice"><input type="checkbox" data-ir-confirm-ack ${review.confirmAcknowledged ? 'checked' : ''}/><span><strong>I have checked this ready application batch</strong><span>${isNhsp ? 'Only the selected, server-approved CloudTMS actions shown above will be committed. Pending and deferred work will remain open.' : 'Selected query emails are queued only after the source commit. Pending and deferred work remains open, and only explicitly selected eligible references can be cleared.'}</span></span></label>
-      <div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="apply-back">Back to review</button><button class="irv1-btn primary" data-ir-action="apply-confirm" ${review.busy || !review.confirmAcknowledged || !canApply ? 'disabled="disabled" aria-disabled="true"' : 'aria-disabled="false"'}>${review.busy ? 'Applying safely…' : `Confirm and apply ${selectedCount} action${selectedCount === 1 ? '' : 's'}`}</button></div>
+      <div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="apply-back">Back to review</button><button class="irv1-btn primary" data-ir-action="apply-confirm" ${review.busy || !review.confirmAcknowledged || !canApply ? 'disabled="disabled" aria-disabled="true"' : 'aria-disabled="false"'}>${review.busy ? 'Applying safely…' : esc(confirmLabel)}</button></div>
     </div>`;
   }
 
