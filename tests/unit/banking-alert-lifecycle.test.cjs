@@ -275,6 +275,56 @@ test('dedicated alert fetch loads full details and applies them', async () => {
   assert.equal(applied.banking_alert_summary.alerts.length, 1);
 });
 
+test('dedicated alert fetch coalesces concurrent requests for the same limit', async () => {
+  const source = sliceBetween('async function bankingAlertsFetchActive(options = {})', 'async function bankingAlertPreferencesFetch()');
+  let requestCount = 0;
+  let releaseFetch;
+  const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
+  const responsePayload = {
+    ok: true,
+    alerts: [],
+    unacknowledged_count: 0,
+    banking_unacknowledged_alert_count: 0,
+    banking_alert_hash: 'hash-empty'
+  };
+  const context = {
+    window: {},
+    API(value) { return value; },
+    async authFetch(url, options) {
+      requestCount += 1;
+      assert.equal(url, '/api/banking/alerts?limit=100');
+      assert.equal(options.method, 'GET');
+      await fetchGate;
+      return {
+        ok: true,
+        status: 200,
+        async text() { return JSON.stringify(responsePayload); }
+      };
+    },
+    applyAlertSummaryToState() {},
+    encodeURIComponent,
+    Number,
+    String,
+    Math,
+    Array,
+    Object,
+    JSON,
+    Error
+  };
+  vm.runInNewContext(source, context, { filename: 'banking-alert-fetch.js' });
+
+  const first = context.bankingAlertsFetchActive({ silent: true, limit: 100 });
+  const second = context.bankingAlertsFetchActive({ limit: 100 });
+  await Promise.resolve();
+  assert.equal(requestCount, 1);
+  releaseFetch();
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+
+  assert.equal(firstResult.ok, true);
+  assert.equal(secondResult.ok, true);
+  assert.equal(requestCount, 1);
+});
+
 function createAcknowledgeContext(responseSummary, options = {}) {
   const requests = [];
   let friendlyModal = null;

@@ -341988,10 +341988,28 @@ async function bankingAlertsFetchActive(options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const requestedLimit = Number(opts.limit ?? 100);
   const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? Math.trunc(requestedLimit) : 100, 1), 100);
-  const response = await authFetch(API(`/api/banking/alerts?limit=${encodeURIComponent(String(limit))}`), { method: 'GET' });
-  const text = await response.text().catch(() => '');
-  let parsed = null;
-  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
+  const inFlightOwner = (typeof window !== 'undefined' && window) ? window : bankingAlertsFetchActive;
+  const inFlightStore = (inFlightOwner.__bankingAlertsFetchActiveInFlight
+    && typeof inFlightOwner.__bankingAlertsFetchActiveInFlight === 'object')
+    ? inFlightOwner.__bankingAlertsFetchActiveInFlight
+    : (inFlightOwner.__bankingAlertsFetchActiveInFlight = Object.create(null));
+  const inFlightKey = `limit:${limit}`;
+  let request = inFlightStore[inFlightKey];
+  if (!request) {
+    request = (async () => {
+      const response = await authFetch(API(`/api/banking/alerts?limit=${encodeURIComponent(String(limit))}`), { method: 'GET' });
+      const text = await response.text().catch(() => '');
+      let parsed = null;
+      try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
+      return { response, text, parsed };
+    })();
+    inFlightStore[inFlightKey] = request;
+    request.then(
+      () => { if (inFlightStore[inFlightKey] === request) delete inFlightStore[inFlightKey]; },
+      () => { if (inFlightStore[inFlightKey] === request) delete inFlightStore[inFlightKey]; }
+    );
+  }
+  const { response, text, parsed } = await request;
   if (!response.ok) {
     const error = new Error(String(parsed?.error || parsed?.message || text || `Banking alerts request failed (${response.status})`));
     error.status = response.status;
