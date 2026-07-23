@@ -86728,7 +86728,19 @@ function renderBankingPayBatchChildModalRemittanceTab() {
     if (!recipientLabel && recipientKind === 'umbrella' && recipientId && umbrellaNameById.has(recipientId)) recipientLabel = umbrellaNameById.get(recipientId) || '';
     if (!recipientLabel) recipientLabel = toAddress || recipientId || 'Recipient';
 
-    const typeLabel = kindKey === 'PAYOUT_NOTICE' ? 'Candidate payout notice' : 'Umbrella remittance';
+    const typeLabel = (() => {
+      if (kindKey === 'PAYOUT_NOTICE') return 'Candidate payout notice';
+      const isCandidateRemittance =
+        kindRaw === 'CANDIDATE_REMITTANCE' ||
+        recipientKind === 'candidate' ||
+        referenceLower.includes('candidate_remittance');
+      if (isCandidateRemittance) return 'Candidate remittance';
+      const isUmbrellaRemittance =
+        kindRaw === 'UMBRELLA_REMITTANCE' ||
+        recipientKind === 'umbrella' ||
+        referenceLower.includes('umbrella_remittance');
+      return isUmbrellaRemittance ? 'Umbrella remittance' : 'Remittance';
+    })();
     const latestResultLabel = (() => {
       if (queueState === 'READ') return 'Read';
       if (queueState === 'DELIVERED') return 'Delivered';
@@ -86778,7 +86790,7 @@ function renderBankingPayBatchChildModalRemittanceTab() {
     ? [...remittanceSection.rows, ...communicationSection.rows].map(normalizeOutboxRow)
     : asArr(data?.communications?.items || data?.outbox_rows || data?.remittance_rows || []).map(normalizeOutboxRow);
 
-  const umbrellaRows = items.filter((row) => upperTrim(row?.kind_key) === 'REMITTANCE');
+  const remittanceRows = items.filter((row) => upperTrim(row?.kind_key) === 'REMITTANCE');
   const payoutRows = items.filter((row) => upperTrim(row?.kind_key) === 'PAYOUT_NOTICE');
   const countByState = (rows, state) => rows.filter((row) => upperTrim(row?.queue_state || row?.status) === state).length;
 
@@ -86861,7 +86873,7 @@ function renderBankingPayBatchChildModalRemittanceTab() {
       <div class="card" style="padding:10px; margin-bottom:10px;">
         <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Communication summary</div>
         <div style="display:grid; grid-template-columns:repeat(3,minmax(200px,1fr)); gap:8px;">
-          ${sectionSummaryHtml('Umbrella remittance rows', umbrellaRows, remittanceTargetCount, remittanceQueuedCount, remittanceSentCount, remittanceSkippedCount, remittanceSection)}
+          ${sectionSummaryHtml('Remittance rows', remittanceRows, remittanceTargetCount, remittanceQueuedCount, remittanceSentCount, remittanceSkippedCount, remittanceSection)}
           ${sectionSummaryHtml('Candidate payout notice rows', payoutRows, payoutNoticeTargetCount, payoutQueuedCount, payoutSentCount, payoutSkippedCount, communicationSection)}
           <div class="card" style="padding:8px;">
             <div class="mini" style="opacity:.8;">Outbox load state</div>
@@ -86871,7 +86883,7 @@ function renderBankingPayBatchChildModalRemittanceTab() {
         </div>
       </div>
       ${loadingHtml}
-      <div class="card" style="padding:10px; margin-bottom:10px;"><div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Umbrella remittance rows</div>${rowsTableHtml(umbrellaRows, hasRemittances ? 'No umbrella remittance rows are currently loaded in this modal.' : 'This batch currently has no umbrella remittance items.')}</div>
+      <div class="card" style="padding:10px; margin-bottom:10px;"><div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Remittance rows</div>${rowsTableHtml(remittanceRows, hasRemittances ? 'No remittance rows are currently loaded in this modal.' : 'This batch currently has no remittance items.')}</div>
       <div class="card" style="padding:10px;"><div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Candidate payout notice rows</div>${rowsTableHtml(payoutRows, hasPayoutNotices ? 'No candidate payout-notice rows are currently loaded in this modal.' : 'This batch currently has no candidate payout-notice items.')}</div>
     </div>
   `;
