@@ -72238,6 +72238,34 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     return await loadPromise;
   };
 
+  const refreshRemittanceSections = async (options = {}) => {
+    const optsLocal = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+    if (!isBootstrapBatchPayload(child.data)) return { ok: true, refreshed: false, reason: 'NOT_BOOTSTRAP' };
+    const expectedOpenToken = String(child.openToken || '').trim();
+    const reason = String(optsLocal.reason || 'remittance-tab-refresh').trim() || 'remittance-tab-refresh';
+    const sectionKeys = ['remittances', 'communications'];
+
+    for (const sectionKey of sectionKeys) {
+      markChildSectionStale(sectionKey, reason, { preserveDataRows: true });
+    }
+
+    const results = await Promise.all(sectionKeys.map((sectionKey) => loadChildSectionPage(sectionKey, {
+      reset: true,
+      silent: true,
+      forceRetry: true,
+      reason,
+      userInitiated: optsLocal.userInitiated === true
+    })));
+
+    syncChildCommunicationsState(child.data);
+    if (optsLocal.rerender !== false && shouldApplyChildMutation(expectedOpenToken, null)) {
+      await rerenderChild();
+    }
+    return { ok: true, refreshed: true, sections: sectionKeys, results };
+  };
+
+  child.__refreshRemittanceSections = refreshRemittanceSections;
+
   const ensureFirstPageForActiveTab = (tabKey) => {
     try {
       if (!isBootstrapBatchPayload(child.data)) return;
@@ -76565,6 +76593,14 @@ const retryUnsentPaymentsPipeline = async () => {
            child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
           child.ui.activeTabKey = nextTabKey;
           if (nextTabKey !== 'payment_issues') clearPaymentIssueSupportExpansion();
+          if (nextTabKey === 'remittance') {
+            await refreshRemittanceSections({
+              reason: 'remittance-tab-open',
+              userInitiated: true,
+              rerender: true
+            });
+            return;
+          }
           ensureFirstPageForActiveTab(nextTabKey);
           await rerenderChild();
           return;
@@ -80873,9 +80909,39 @@ function renderBankingPayBatchChildModalOverview() {
   const communicationSummarySource = asObj(child.communications?.summary) || asObj(data.communications) || {};
   const remittanceSummary = asObj(communicationSummarySource.remittance) || {};
   const remittanceResult = asObj(child.communications?.result?.remittance) || {};
+  const remittanceSectionForOverview = asObj(child.sections?.remittances) || {};
+  const communicationSectionForOverview = asObj(child.sections?.communications) || {};
+  const communicationRowsForOverview = [
+    ...asArr(remittanceSectionForOverview.rows || remittanceSectionForOverview.items),
+    ...asArr(communicationSectionForOverview.rows || communicationSectionForOverview.items)
+  ];
+  const remittanceRowsForOverview = communicationRowsForOverview.filter((rowLike) => {
+    const row = asObj(rowLike) || {};
+    const kind = upperTrim(row.message_kind || row.remittance_type || row.job_kind || row.type || '');
+    const recipientKind = lowerTrim(row.recipient_kind);
+    const reference = lowerTrim(row.reference || row.deterministic_outbox_key);
+    return kind === 'REMITTANCE'
+      || kind === 'CANDIDATE_REMITTANCE'
+      || kind === 'UMBRELLA_REMITTANCE'
+      || recipientKind === 'candidate'
+      || recipientKind === 'umbrella'
+      || reference.startsWith('remittance:');
+  });
+  const remittanceRowState = (rowLike) => upperTrim(
+    rowLike?.queue_state ||
+    rowLike?.delivery_status ||
+    rowLike?.provider_status ||
+    rowLike?.status
+  );
+  const remittanceSentFromRows = remittanceRowsForOverview.some((row) => ['SENT', 'DELIVERED', 'READ', 'ACCEPTED', 'SUCCESS', 'OK'].includes(remittanceRowState(row)));
+  const remittancePendingFromRows = remittanceRowsForOverview.some((row) => ['QUEUED', 'SCHEDULED', 'PENDING', 'PROCESSING'].includes(remittanceRowState(row)));
+  const remittanceRowsLoaded = remittanceSectionForOverview.loaded === true || communicationSectionForOverview.loaded === true;
   const remittancesSent = readBool(
     data.remittances_sent ?? batch.remittances_sent ?? child.communications?.remittances_sent ?? communicationSummarySource.remittances_sent
-  ) || pickCount(remittanceResult, ['sent_count', 'candidate_count_sent']) > 0 || pickCount(remittanceSummary, ['sent_count', 'candidate_count_sent']) > 0;
+  ) || pickCount(remittanceResult, ['sent_count', 'candidate_count_sent']) > 0 || pickCount(remittanceSummary, ['sent_count', 'candidate_count_sent']) > 0 || remittanceSentFromRows;
+  const remittanceStatusLabel = remittancesSent
+    ? 'Yes'
+    : (remittancePendingFromRows ? 'Pending' : (remittanceRowsLoaded ? 'No' : 'Open Remittance tab to check'));
 
   const readFirstBool = (...values) => {
     for (const value of values) {
@@ -82710,7 +82776,7 @@ function renderBankingPayBatchChildModalOverview() {
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailPdf">Detailed PDF</button>
                 ${busyLine}
               </div>
-              <div class="mini" style="opacity:.88;">Remittances sent: <span class="mono">${enc(remittancesSent ? 'Yes' : 'No')}</span></div>
+              <div class="mini" style="opacity:.88;">Remittances sent: <span class="mono">${enc(remittanceStatusLabel)}</span></div>
               <div class="mini" style="opacity:.82;">${enc(isTrueEmptyShell ? emptyShellMessage : (executionRefreshApplied ? 'Batch overview and payment status have been refreshed after payment execution. Detail tabs still load paged rows on demand.' : 'This batch is in bootstrap mode. Open the relevant detail tabs to load paged rows.'))}</div>
             </div>
           </div>
@@ -82879,7 +82945,7 @@ function renderBankingPayBatchChildModalOverview() {
               </div>
             </div>
 
-            <div class="mini" style="opacity:.88;">Remittances sent: <span class="mono">${enc(remittancesSent ? 'Yes' : 'No')}</span></div>
+            <div class="mini" style="opacity:.88;">Remittances sent: <span class="mono">${enc(remittanceStatusLabel)}</span></div>
 
             <div class="card" style="padding:10px;">
               <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Beneficiaries</div>
@@ -86730,13 +86796,13 @@ function renderBankingPayBatchChildModalRemittanceTab() {
     })();
     const recipientKind = lowerTrim(row.recipient_kind);
     const recipientId = trimStr(row.recipient_id || row.candidate_id || row.umbrella_id);
-    const toAddress = trimStr(row.to_address || row.to);
+    const toAddress = trimStr(row.to_address || row.mail_to || row.to);
     const subject = trimStr(row.subject);
     const bodyPreview = trimStr(row.body_preview) || trimStr(row.preview) || trimStr(row.body_text) || trimStr(row.message_preview) || '';
     let recipientLabel = trimStr(row.recipient_display_name) || trimStr(row.recipient_label);
     if (!recipientLabel && recipientKind === 'candidate' && recipientId && candidateNameById.has(recipientId)) recipientLabel = candidateNameById.get(recipientId) || '';
     if (!recipientLabel && recipientKind === 'umbrella' && recipientId && umbrellaNameById.has(recipientId)) recipientLabel = umbrellaNameById.get(recipientId) || '';
-    if (!recipientLabel) recipientLabel = toAddress || recipientId || 'Recipient';
+    if (!recipientLabel) recipientLabel = toAddress || recipientId || 'Recipient unavailable';
 
     const typeLabel = (() => {
       if (kindKey === 'SYSTEM_PAYMENT_NOTICE') return 'System payment notice';
@@ -86832,7 +86898,7 @@ function renderBankingPayBatchChildModalRemittanceTab() {
           return `
             <tr${previewableAttrs} title="${enc(row.is_previewable ? 'Double-click to open the exact rendered communication.' : 'No exact rendered outbox item is available for preview.')}">
               <td class="mini" style="white-space:nowrap;">${enc(row.created_at_utc ? fmtUtcToUk(row.created_at_utc) : '—')}</td>
-              <td><div style="display:flex; flex-direction:column; gap:4px;"><div>${enc(row.recipient_label || 'Recipient')}</div>${trimStr(row.to_address) ? `<div class="mini mono" style="opacity:.8;">${enc(row.to_address)}</div>` : ''}</div></td>
+              <td><div style="display:flex; flex-direction:column; gap:4px;"><div>${enc(row.recipient_label || 'Recipient unavailable')}</div>${trimStr(row.to_address) ? `<div class="mini mono" style="opacity:.8;">${enc(row.to_address)}</div>` : ''}</div></td>
               <td><span class="pill ${upperTrim(row.kind_key) === 'PAYOUT_NOTICE' ? 'pill-warn' : 'pill-info'}">${enc(row.kind_label || 'Communication')}</span></td>
               <td><span class="${enc(row.result_pill_class || 'pill')}">${enc(row.latest_result_label || '—')}</span>${latestMetaHtml}</td>
               <td><div>${enc(trimStr(row.subject) || '—')}</div>${previewHtml}</td>
@@ -96077,6 +96143,14 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         st.pay.child.ui = (st.pay.child.ui && typeof st.pay.child.ui === 'object') ? st.pay.child.ui : {};
         st.pay.child.ui.activeTabKey = tabKey;
         st.pay.child.ui.active_tab_key = tabKey;
+        if (tabKey === 'remittance' && typeof st.pay.child.__refreshRemittanceSections === 'function') {
+          await st.pay.child.__refreshRemittanceSections({
+            reason: 'remittance-tab-open-global-handler',
+            userInitiated: true,
+            rerender: true
+          });
+          return;
+        }
         if (typeof st.pay.child.__rerenderChild === 'function') {
           await st.pay.child.__rerenderChild();
           return;
@@ -341540,6 +341614,24 @@ async function applyBankingPayLiveRefresh(signalPayload) {
 
   try {
     await applyWorkbenchPostActionRefreshMetadata();
+    if (remittanceSignalChanged) {
+      markSectionStale('remittances', 'watch-remittance-change');
+      markSectionStale('communications', 'watch-remittance-change');
+      const remittanceRefreshResults = {};
+      for (const sectionName of ['remittances', 'communications']) {
+        try {
+          remittanceRefreshResults[sectionName] = await fetchSectionPage(sectionName, 'remittance', {
+            cursor: null,
+            limit: 100,
+            action_context: 'remittance'
+          });
+          pushRefreshed(sectionName);
+        } catch (sectionError) {
+          remittanceRefreshResults[`${sectionName}_error`] = String(sectionError?.message || sectionError || 'Remittance section refresh failed');
+        }
+      }
+      result.remittance_sections = remittanceRefreshResults;
+    }
     if (shouldForcePaymentExecuteBatchRefresh && typeof forceRefreshBankingPayBatchChildModalAfterOperation === 'function') {
       result.batch = await forceRefreshBankingPayBatchChildModalAfterOperation(batchId, childExecutionOperationId || operationIdFromSignal, 'watch-signal', {
         signal: payload,

@@ -34,3 +34,23 @@ test('classifies shared processing and completion broadcasts as system payment n
   assert.match(renderer, /sectionSummaryHtml\('System payment notice rows', systemNoticeRows/);
   assert.match(renderer, />System payment notice rows<\/div>\$\{rowsTableHtml\(systemNoticeRows/);
 });
+
+test('uses server-resolved recipient names and never renders the generic Recipient placeholder', () => {
+  assert.match(renderer, /row\.recipient_display_name/);
+  assert.match(renderer, /Recipient unavailable/);
+  assert.doesNotMatch(renderer, /\|\| 'Recipient'/);
+});
+
+test('the Banking Pay child refreshes both communication sections when Remittance is opened', () => {
+  assert.match(source, /const refreshRemittanceSections = async/);
+  assert.match(source, /const sectionKeys = \['remittances', 'communications'\]/);
+  assert.match(source, /reason: 'remittance-tab-open'/);
+  assert.match(source, /reason: 'remittance-tab-open-global-handler'/);
+});
+
+test('the live batch watcher refreshes remittance and communication rows after delivery changes', () => {
+  assert.match(source, /if \(remittanceSignalChanged\)/);
+  assert.match(source, /markSectionStale\('remittances', 'watch-remittance-change'\)/);
+  assert.match(source, /markSectionStale\('communications', 'watch-remittance-change'\)/);
+  assert.match(source, /fetchSectionPage\(sectionName, 'remittance'/);
+});
