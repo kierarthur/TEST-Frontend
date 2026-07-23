@@ -276059,13 +276059,20 @@ async function openCandidatePicker(onPick, options) {
         } catch {}
       }, 0);
     },
-    { kind: 'candidate-picker', noParentGate: true }
+    { kind: 'candidate-picker', noParentGate: true, runOnRender: true }
   );
 
   setTimeout(() => {
     try {
       const fr = window.__getModalFrame?.();
-      const willCall = !!(fr && fr.kind === 'candidate-picker' && typeof fr.onReturn === 'function' && !fr.__pickerInit);
+      const pickerAlreadyWired = !!document.getElementById('pickerSearch')?.__wiredInput;
+      const willCall = !!(
+        fr &&
+        fr.kind === 'candidate-picker' &&
+        typeof fr.onReturn === 'function' &&
+        !fr.__pickerInit &&
+        !pickerAlreadyWired
+      );
       if (LOGC) console.log('[PICKER][candidates] post-render kick', { willCall });
       if (willCall) {
         fr.__pickerInit = true;
@@ -276541,13 +276548,20 @@ async function openClientPicker(onPick, opts) {
         } catch {}
       }, 0);
     },
-    { kind: 'client-picker', noParentGate: true }
+    { kind: 'client-picker', noParentGate: true, runOnRender: true }
   );
 
   setTimeout(() => {
     try {
       const fr = window.__getModalFrame?.();
-      const willCall = !!(fr && fr.kind === 'client-picker' && typeof fr.onReturn === 'function' && !fr.__pickerInit);
+      const pickerAlreadyWired = !!document.getElementById('pickerSearch')?.__wiredInput;
+      const willCall = !!(
+        fr &&
+        fr.kind === 'client-picker' &&
+        typeof fr.onReturn === 'function' &&
+        !fr.__pickerInit &&
+        !pickerAlreadyWired
+      );
       if (LOGC) console.log('[PICKER][clients] post-render kick', { willCall });
       if (willCall) {
         fr.__pickerInit = true;
