@@ -274791,16 +274791,20 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
     expectedOldMethod !== originalMethod ||
     responseMethod !== method ||
     originalMethod === method ||
-    String(payload.coverage_basis || '').trim().toUpperCase() !== 'CANONICAL_CURRENT_TIMESHEETS' ||
+    String(payload.coverage_basis || '').trim().toUpperCase() !== 'CANONICAL_TIMESHEETS_WITH_RETAINED_FINANCE_AUTHORITY' ||
     payload.coverage_complete !== true ||
     payload.exact_scope !== true
   ) {
-    failContract('The pay-method preview did not return complete canonical current-Timesheet coverage.');
+    failContract('The pay-method preview did not return complete retained-finance-aware canonical Timesheet coverage.');
   }
 
   const representedTimesheetIds = canonicalUuidArray(payload.represented_timesheet_ids, 'represented_timesheet_ids');
   const authorisedTimesheetIds = canonicalUuidArray(payload.authorised_timesheet_ids, 'authorised_timesheet_ids');
   const activeAdvanceTimesheetIds = canonicalUuidArray(payload.active_advance_timesheet_ids, 'active_advance_timesheet_ids');
+  const retainedFinanceTimesheetIds = canonicalUuidArray(
+    payload.retained_finance_timesheet_ids,
+    'retained_finance_timesheet_ids'
+  );
   const targetedTimesheetIds = canonicalUuidArray(payload.targeted_timesheet_ids, 'targeted_timesheet_ids');
   const canonicalQualifyingTimesheetIds = canonicalUuidArray(
     payload.canonical_qualifying_timesheet_ids,
@@ -274813,13 +274817,14 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
   );
   const expectedTargetIds = Array.from(new Set([
     ...authorisedTimesheetIds,
-    ...activeAdvanceTimesheetIds
+    ...activeAdvanceTimesheetIds,
+    ...retainedFinanceTimesheetIds
   ])).sort();
   if (
     !arraysEqual(targetedTimesheetIds, expectedTargetIds) ||
     !arraysEqual(canonicalQualifyingTimesheetIds, targetedTimesheetIds)
   ) {
-    failContract('The pay-method preview target set does not equal the exact canonical authorised-or-active-Advance union.');
+    failContract('The pay-method preview target set does not equal the exact canonical authorised, active-Advance or retained-finance union.');
   }
 
   const sourceChangeSeq = strictNonNegativeInteger(payload.preview_source_change_seq, 'preview_source_change_seq');
@@ -274828,6 +274833,10 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
   const representedTimesheetCount = strictNonNegativeInteger(payload.represented_timesheet_count, 'represented_timesheet_count');
   const authorisedTimesheetCount = strictNonNegativeInteger(payload.authorised_timesheet_count, 'authorised_timesheet_count');
   const activeAdvanceTimesheetCount = strictNonNegativeInteger(payload.active_advance_timesheet_count, 'active_advance_timesheet_count');
+  const retainedFinanceTimesheetCount = strictNonNegativeInteger(
+    payload.retained_finance_timesheet_count,
+    'retained_finance_timesheet_count'
+  );
   const targetedTimesheetCount = strictNonNegativeInteger(payload.targeted_timesheet_count, 'targeted_timesheet_count');
   const sourceTargetMismatchCount = strictNonNegativeInteger(
     payload.potential_case_resolution_timesheet_count,
@@ -274837,6 +274846,7 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
     representedTimesheetCount !== representedTimesheetIds.length ||
     authorisedTimesheetCount !== authorisedTimesheetIds.length ||
     activeAdvanceTimesheetCount !== activeAdvanceTimesheetIds.length ||
+    retainedFinanceTimesheetCount !== retainedFinanceTimesheetIds.length ||
     targetedTimesheetCount !== targetedTimesheetIds.length ||
     sourceTargetMismatchCount > targetedTimesheetIds.length ||
     strictBoolean(payload.targeted_scope_is_empty, 'targeted_scope_is_empty') !== (targetedTimesheetIds.length === 0)
@@ -274875,6 +274885,7 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
   }
   const authorisedSet = new Set(authorisedTimesheetIds);
   const activeAdvanceSet = new Set(activeAdvanceTimesheetIds);
+  const retainedFinanceSet = new Set(retainedFinanceTimesheetIds);
   const targetDetails = payload.target_details.map((detail) => {
     if (!isPlainObject(detail)) {
       failContract('The pay-method preview returned invalid target detail evidence.');
@@ -274886,6 +274897,7 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
       !uuidRe.test(timesheetId) ||
       detail.is_authorised !== authorisedSet.has(timesheetId) ||
       detail.has_active_advance !== activeAdvanceSet.has(timesheetId) ||
+      detail.has_retained_finance_authority !== retainedFinanceSet.has(timesheetId) ||
       targetPayMethod !== method ||
       (sourcePayMethod && !['PAYE', 'UMBRELLA'].includes(sourcePayMethod)) ||
       detail.source_target_mismatch !== (
@@ -274901,6 +274913,7 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
       target_pay_method: targetPayMethod,
       is_authorised: detail.is_authorised,
       has_active_advance: detail.has_active_advance,
+      has_retained_finance_authority: detail.has_retained_finance_authority,
       source_target_mismatch: detail.source_target_mismatch
     };
   }).sort((left, right) => left.timesheet_id.localeCompare(right.timesheet_id));
@@ -274979,7 +274992,7 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
     preview_source_change_seq: sourceChangeSeq,
     blockers,
     can_apply: blockers.length === 0,
-    coverage_basis: 'CANONICAL_CURRENT_TIMESHEETS',
+    coverage_basis: 'CANONICAL_TIMESHEETS_WITH_RETAINED_FINANCE_AUTHORITY',
     coverage_complete: true,
     exact_scope: true,
     authoritative_sessions: authoritativeSessions,
@@ -274991,6 +275004,8 @@ async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod, opt
     authorised_timesheet_count: authorisedTimesheetCount,
     active_advance_timesheet_ids: activeAdvanceTimesheetIds,
     active_advance_timesheet_count: activeAdvanceTimesheetCount,
+    retained_finance_timesheet_ids: retainedFinanceTimesheetIds,
+    retained_finance_timesheet_count: retainedFinanceTimesheetCount,
     targeted_timesheet_ids: targetedTimesheetIds,
     canonical_qualifying_timesheet_ids: targetedTimesheetIds,
     targeted_timesheet_count: targetedTimesheetCount,
@@ -275514,6 +275529,10 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
     result.active_advance_timesheet_ids,
     'active_advance_timesheet_ids'
   );
+  const retainedFinanceTimesheetIds = canonicalUuidArray(
+    result.retained_finance_timesheet_ids,
+    'retained_finance_timesheet_ids'
+  );
   const replacedSourceSessionIds = canonicalUuidArray(
     result.replaced_source_session_ids,
     'replaced_source_session_ids',
@@ -275521,7 +275540,8 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
   );
   const canonicalQualifyingIds = Array.from(new Set([
     ...authorisedTimesheetIds,
-    ...activeAdvanceTimesheetIds
+    ...activeAdvanceTimesheetIds,
+    ...retainedFinanceTimesheetIds
   ])).sort();
   const targetedTimesheetCount = strictNonNegativeInteger(result.targeted_timesheet_count, 'targeted_timesheet_count');
   const authorisedTimesheetCount = strictNonNegativeInteger(
@@ -275531,6 +275551,10 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
   const activeAdvanceTimesheetCount = strictNonNegativeInteger(
     result.active_advance_timesheet_count,
     'active_advance_timesheet_count'
+  );
+  const retainedFinanceTimesheetCount = strictNonNegativeInteger(
+    result.retained_finance_timesheet_count,
+    'retained_finance_timesheet_count'
   );
   const sourceTargetMismatchCount = strictNonNegativeInteger(
     result.source_target_mismatch_count,
@@ -275544,7 +275568,7 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
     'preview_source_change_seq'
   );
   if (
-    String(result.coverage_basis || '').trim().toUpperCase() !== 'CANONICAL_CURRENT_TIMESHEETS' ||
+    String(result.coverage_basis || '').trim().toUpperCase() !== 'CANONICAL_TIMESHEETS_WITH_RETAINED_FINANCE_AUTHORITY' ||
     result.coverage_complete !== true ||
     result.exact_target_scope !== true ||
     result.exact_set_equality !== true ||
@@ -275555,6 +275579,7 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
     targetedTimesheetCount !== targetedTimesheetIds.length ||
     authorisedTimesheetCount !== authorisedTimesheetIds.length ||
     activeAdvanceTimesheetCount !== activeAdvanceTimesheetIds.length ||
+    retainedFinanceTimesheetCount !== retainedFinanceTimesheetIds.length ||
     sourceTargetMismatchCount > targetedTimesheetIds.length ||
     !arraysEqual(expectedTargetedIds, persistedTargetedIds) ||
     !arraysEqual(expectedTargetedIds, targetedTimesheetIds) ||
@@ -275631,6 +275656,7 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
   }
   const authorisedSet = new Set(authorisedTimesheetIds);
   const activeAdvanceSet = new Set(activeAdvanceTimesheetIds);
+  const retainedFinanceSet = new Set(retainedFinanceTimesheetIds);
   const targetDetails = result.target_details.map((detail) => {
     if (!isPlainObject(detail)) {
       failContract('The pay-method change returned invalid target detail evidence.');
@@ -275645,6 +275671,7 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
       !uuidRe.test(timesheetId) ||
       detail.is_authorised !== authorisedSet.has(timesheetId) ||
       detail.has_active_advance !== activeAdvanceSet.has(timesheetId) ||
+      detail.has_retained_finance_authority !== retainedFinanceSet.has(timesheetId) ||
       targetPayMethod !== method ||
       (sourcePayMethod && !['PAYE', 'UMBRELLA'].includes(sourcePayMethod)) ||
       detail.source_target_mismatch !== expectedMismatch
@@ -275658,6 +275685,7 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
       target_pay_method: targetPayMethod,
       is_authorised: detail.is_authorised,
       has_active_advance: detail.has_active_advance,
+      has_retained_finance_authority: detail.has_retained_finance_authority,
       source_target_mismatch: detail.source_target_mismatch
     };
   }).sort((left, right) => left.timesheet_id.localeCompare(right.timesheet_id));
@@ -275679,7 +275707,7 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
     operation_id: operationId,
     operation_committed: true,
     operation_superseded_by_later_change: false,
-    coverage_basis: 'CANONICAL_CURRENT_TIMESHEETS',
+    coverage_basis: 'CANONICAL_TIMESHEETS_WITH_RETAINED_FINANCE_AUTHORITY',
     coverage_complete: true,
     exact_target_scope: true,
     exact_set_equality: true,
@@ -275690,10 +275718,12 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
     extra_targeted_timesheet_ids: [],
     authorised_timesheet_ids: authorisedTimesheetIds,
     active_advance_timesheet_ids: activeAdvanceTimesheetIds,
+    retained_finance_timesheet_ids: retainedFinanceTimesheetIds,
     replaced_source_session_ids: replacedSourceSessionIds,
     targeted_timesheet_count: targetedTimesheetCount,
     authorised_timesheet_count: authorisedTimesheetCount,
     active_advance_timesheet_count: activeAdvanceTimesheetCount,
+    retained_finance_timesheet_count: retainedFinanceTimesheetCount,
     source_target_mismatch_count: sourceTargetMismatchCount,
     effective_duplicate_count: 0,
     invalid_target_count: 0,
@@ -277142,6 +277172,7 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
   const representedIds = preview.represented_timesheet_ids;
   const authorisedIds = preview.authorised_timesheet_ids;
   const activeAdvanceIds = preview.active_advance_timesheet_ids;
+  const retainedFinanceIds = preview.retained_finance_timesheet_ids;
   const targets = preview.targeted_timesheet_ids;
   const mismatchCount = preview.potential_case_resolution_timesheet_count;
   const effectiveDestinationPatch = {
@@ -277179,7 +277210,8 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
         <div class="hint">
           <strong>Source Timesheets, Contract Weeks, rates and TSFIN rows will not be changed.</strong>
           Their hours, authorisation, active Advance state and financial history remain exactly as stored.
-          The canonical scope is every current Timesheet for this candidate that is authorised or has an active Advance.
+          The canonical scope is every current Timesheet for this candidate that is authorised, has an active Advance,
+          or retains frozen financial authority that Banking Pay must continue to recognise.
           Current Workbench representation is evidence only; it does not define or narrow that scope.
           Only prospective derived Banking Pay Workbench output will be refreshed against the candidate's new target payment method.
         </div>
@@ -277191,7 +277223,8 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
             <tr><th>Canonical current Timesheets represented in Workbench evidence</th><td>${representedIds.length}</td></tr>
             <tr><th>Canonical authorised Timesheets</th><td>${authorisedIds.length}</td></tr>
             <tr><th>Canonical active-Advance Timesheets</th><td>${activeAdvanceIds.length}</td></tr>
-            <tr><th>Exact authorised-or-active-Advance target union</th><td>${targets.length}</td></tr>
+            <tr><th>Canonical retained-finance Timesheets</th><td>${retainedFinanceIds.length}</td></tr>
+            <tr><th>Exact qualifying target union</th><td>${targets.length}</td></tr>
             <tr><th>Potential cross-route Case Resolution Timesheets</th><td>${mismatchCount}</td></tr>
             <tr><th>Contracts changed</th><td>0</td></tr>
             <tr><th>Contract Weeks changed</th><td>0</td></tr>
@@ -277210,7 +277243,11 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
         ${renderExactIds(activeAdvanceIds, 'No current Timesheet qualifies through an active Advance.')}
       </div>
       <div class="group">
-        <div class="hint"><strong>Exact canonical current-Timesheet target IDs (${targets.length})</strong></div>
+        <div class="hint"><strong>Exact retained-finance Timesheet IDs (${retainedFinanceIds.length})</strong></div>
+        ${renderExactIds(retainedFinanceIds, 'No current Timesheet qualifies through retained financial authority.')}
+      </div>
+      <div class="group">
+        <div class="hint"><strong>Exact retained-finance-aware canonical target IDs (${targets.length})</strong></div>
         ${renderExactIds(targets, 'The canonical target set is exactly empty.')}
       </div>
       <div class="group">
