@@ -27,6 +27,9 @@ test('candidate picker wires its controls during the live modal render', () => {
   );
   assert.match(source, /if \(!search\.__wiredInput\)/);
   assert.match(source, /search\.addEventListener\('input'/);
+  assert.match(source, /const wireCandidatePicker = \(\) =>/);
+  assert.match(source, /scheduleCandidatePickerWire\(\)/);
+  assert.match(source, /data-picker-kind="candidate"/);
   assert.match(source, /pickerAlreadyWired/);
 });
 
@@ -42,5 +45,8 @@ test('client picker uses the same deterministic render wiring', () => {
   );
   assert.match(source, /if \(!search\.__wiredInput\)/);
   assert.match(source, /search\.addEventListener\('input'/);
+  assert.match(source, /const wireClientPicker = \(\) =>/);
+  assert.match(source, /scheduleClientPickerWire\(\)/);
+  assert.match(source, /data-picker-kind="client"/);
   assert.match(source, /pickerAlreadyWired/);
 });

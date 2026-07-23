@@ -275684,7 +275684,7 @@ async function openCandidatePicker(onPick, options) {
     : '';
 
   const html = `
-    <div class="tabc">
+    <div class="tabc" data-picker-kind="candidate">
       ${ctxHtml}
       <div class="row">
         <label>Search</label>
@@ -275741,13 +275741,7 @@ async function openCandidatePicker(onPick, options) {
     seedQuery
   });
 
-  showModal(
-    customTitle || 'Pick Candidate',
-    [{ key: 'p', title: 'Candidates' }],
-    renderTab,
-    onSave,
-    false,
-    () => {
+  const wireCandidatePicker = () => {
       const tbody         = document.getElementById('pickerTBody');
       const search        = document.getElementById('pickerSearch');
       const table         = document.getElementById('pickerTable');
@@ -276058,14 +276052,37 @@ async function openCandidatePicker(onPick, options) {
           }
         } catch {}
       }, 0);
-    },
+  };
+
+  showModal(
+    customTitle || 'Pick Candidate',
+    [{ key: 'p', title: 'Candidates' }],
+    renderTab,
+    onSave,
+    false,
+    wireCandidatePicker,
     { kind: 'candidate-picker', noParentGate: true, runOnRender: true }
   );
+
+  const scheduleCandidatePickerWire = (attemptsLeft = 8) => {
+    setTimeout(() => {
+      const root = document.querySelector('#modalBody [data-picker-kind="candidate"]');
+      const search = root?.querySelector('#pickerSearch');
+      if (search && !search.__wiredInput) {
+        wireCandidatePicker();
+      }
+      if ((!search || !search.__wiredInput) && attemptsLeft > 1) {
+        scheduleCandidatePickerWire(attemptsLeft - 1);
+      }
+    }, 25);
+  };
+
+  scheduleCandidatePickerWire();
 
   setTimeout(() => {
     try {
       const fr = window.__getModalFrame?.();
-      const pickerAlreadyWired = !!document.getElementById('pickerSearch')?.__wiredInput;
+      const pickerAlreadyWired = !!document.querySelector('#modalBody [data-picker-kind="candidate"] #pickerSearch')?.__wiredInput;
       const willCall = !!(
         fr &&
         fr.kind === 'candidate-picker' &&
@@ -276174,7 +276191,7 @@ async function openClientPicker(onPick, opts) {
     : '';
 
   const html = `
-    <div class="tabc">
+    <div class="tabc" data-picker-kind="client">
       ${ctxHtml}
       <div class="row">
         <label>Search</label>
@@ -276231,13 +276248,7 @@ async function openClientPicker(onPick, opts) {
     seedQuery
   });
 
-  showModal(
-    customTitle || 'Pick Client',
-    [{ key: 'p', title: 'Clients' }],
-    renderTab,
-    onSave,
-    false,
-    () => {
+  const wireClientPicker = () => {
       const tbody         = document.getElementById('pickerTBody');
       const search        = document.getElementById('pickerSearch');
       const table         = document.getElementById('pickerTable');
@@ -276547,14 +276558,37 @@ async function openClientPicker(onPick, opts) {
           }
         } catch {}
       }, 0);
-    },
+  };
+
+  showModal(
+    customTitle || 'Pick Client',
+    [{ key: 'p', title: 'Clients' }],
+    renderTab,
+    onSave,
+    false,
+    wireClientPicker,
     { kind: 'client-picker', noParentGate: true, runOnRender: true }
   );
+
+  const scheduleClientPickerWire = (attemptsLeft = 8) => {
+    setTimeout(() => {
+      const root = document.querySelector('#modalBody [data-picker-kind="client"]');
+      const search = root?.querySelector('#pickerSearch');
+      if (search && !search.__wiredInput) {
+        wireClientPicker();
+      }
+      if ((!search || !search.__wiredInput) && attemptsLeft > 1) {
+        scheduleClientPickerWire(attemptsLeft - 1);
+      }
+    }, 25);
+  };
+
+  scheduleClientPickerWire();
 
   setTimeout(() => {
     try {
       const fr = window.__getModalFrame?.();
-      const pickerAlreadyWired = !!document.getElementById('pickerSearch')?.__wiredInput;
+      const pickerAlreadyWired = !!document.querySelector('#modalBody [data-picker-kind="client"] #pickerSearch')?.__wiredInput;
       const willCall = !!(
         fr &&
         fr.kind === 'client-picker' &&
