@@ -275724,6 +275724,7 @@ async function openCandidatePicker(onPick, options) {
   let selectedId = null;
   let selectedLabel = '';
   let applySelection = null;
+  let retainedCandidateQuery = seedQuery;
 
   const renderTab = () => html;
 
@@ -275979,6 +275980,7 @@ async function openCandidatePicker(onPick, options) {
         search.__wiredInput = true;
         search.addEventListener('input', () => {
           const q = search.value.trim();
+          retainedCandidateQuery = q;
           if (LOGC) console.log('[PICKER][candidates] search input', { q });
           if (debounceTimer) clearTimeout(debounceTimer);
           debounceTimer = setTimeout(() => {
@@ -276046,9 +276048,10 @@ async function openCandidatePicker(onPick, options) {
       setTimeout(() => {
         try {
           search.focus();
-          if (seedQuery && !useConstrainedSource) {
-            search.value = seedQuery;
-            fetchRemoteRows(seedQuery, 1, false);
+          const liveQuery = String(retainedCandidateQuery || '').trim();
+          search.value = liveQuery;
+          if (liveQuery) {
+            fetchRemoteRows(liveQuery, 1, false);
           }
         } catch {}
       }, 0);
@@ -276230,6 +276233,7 @@ async function openClientPicker(onPick, opts) {
   let selectedId = null;
   let selectedLabel = '';
   let applySelection = null;
+  let retainedClientQuery = seedQuery;
 
   const renderTab = () => html;
 
@@ -276484,6 +276488,7 @@ async function openClientPicker(onPick, opts) {
         search.__wiredInput = true;
         search.addEventListener('input', () => {
           const q = search.value.trim();
+          retainedClientQuery = q;
           if (LOGC) console.log('[PICKER][clients] search input', { q });
           if (debounceTimer) clearTimeout(debounceTimer);
           debounceTimer = setTimeout(() => {
@@ -276552,9 +276557,10 @@ async function openClientPicker(onPick, opts) {
       setTimeout(() => {
         try {
           search.focus();
-          if (seedQuery && !useConstrainedSource) {
-            search.value = seedQuery;
-            fetchRemoteRows(seedQuery, 1, false);
+          const liveQuery = String(retainedClientQuery || '').trim();
+          search.value = liveQuery;
+          if (liveQuery) {
+            fetchRemoteRows(liveQuery, 1, false);
           }
         } catch {}
       }, 0);
