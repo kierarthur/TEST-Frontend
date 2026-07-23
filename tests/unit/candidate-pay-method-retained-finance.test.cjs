@@ -51,4 +51,7 @@ test('confirmation explains retained financial authority without changing stored
   assert.match(modal, /Canonical retained-finance Timesheets/);
   assert.match(modal, /Exact retained-finance-aware canonical target IDs/);
   assert.match(modal, /Source Timesheets, Contract Weeks, rates and TSFIN rows will not be changed/);
+  assert.match(modal, /showSave:\s*false/);
+  assert.match(modal, /showApply:\s*true/);
+  assert.match(modal, /primaryLabel:\s*'Confirm change'/);
 });

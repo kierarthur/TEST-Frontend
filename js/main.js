@@ -277420,7 +277420,14 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
         W('closed without confirmation');
         finish(false);
       },
-      { kind: 'candidate-pay-method-change', noParentGate: true, forceEdit: true }
+      {
+        kind: 'candidate-pay-method-change',
+        noParentGate: true,
+        forceEdit: true,
+        showSave: false,
+        showApply: true,
+        primaryLabel: 'Confirm change'
+      }
     );
   });
 }
