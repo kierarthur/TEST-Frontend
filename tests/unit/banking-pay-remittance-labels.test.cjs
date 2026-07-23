@@ -14,17 +14,23 @@ assert.ok(start >= 0 && end > start, 'Remittance tab renderer must be present');
 
 const renderer = source.slice(start, end);
 
-test('labels PAYE candidate remittances independently from umbrella remittances', () => {
-  assert.match(renderer, /kindRaw === 'CANDIDATE_REMITTANCE'/);
-  assert.match(renderer, /recipientKind === 'candidate'/);
-  assert.match(renderer, /return 'Candidate remittance'/);
-  assert.match(renderer, /kindRaw === 'UMBRELLA_REMITTANCE'/);
-  assert.match(renderer, /recipientKind === 'umbrella'/);
-  assert.match(renderer, /return isUmbrellaRemittance \? 'Umbrella remittance' : 'Remittance'/);
+test('classifies PAYE and umbrella remittances independently', () => {
+  assert.match(renderer, /return 'PAYE_REMITTANCE'/);
+  assert.match(renderer, /return 'UMBRELLA_REMITTANCE'/);
+  assert.match(renderer, /return 'PAYE remittance'/);
+  assert.match(renderer, /return 'Umbrella remittance'/);
 });
 
 test('uses neutral remittance section headings for mixed PAYE and umbrella batches', () => {
   assert.match(renderer, /sectionSummaryHtml\('Remittance rows', remittanceRows/);
   assert.match(renderer, />Remittance rows<\/div>\$\{rowsTableHtml\(remittanceRows/);
   assert.doesNotMatch(renderer, /sectionSummaryHtml\('Umbrella remittance rows'/);
+});
+
+test('classifies shared processing and completion broadcasts as system payment notices', () => {
+  assert.match(renderer, /referenceLower\.startsWith\('pay_batch_'\)/);
+  assert.match(renderer, /return 'SYSTEM_PAYMENT_NOTICE'/);
+  assert.match(renderer, /return 'System payment notice'/);
+  assert.match(renderer, /sectionSummaryHtml\('System payment notice rows', systemNoticeRows/);
+  assert.match(renderer, />System payment notice rows<\/div>\$\{rowsTableHtml\(systemNoticeRows/);
 });

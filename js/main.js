@@ -86717,7 +86717,17 @@ function renderBankingPayBatchChildModalRemittanceTab() {
     const reference = trimStr(row.reference);
     const referenceLower = reference.toLowerCase();
     const kindRaw = upperTrim(row.kind_key || row.remittance_type || row.message_kind || row.job_kind || row.type || '');
-    const kindKey = kindRaw === 'PAYOUT_NOTICE' || referenceLower.startsWith('payout_notice:') ? 'PAYOUT_NOTICE' : 'REMITTANCE';
+    const kindKey = (() => {
+      if (
+        kindRaw === 'SYSTEM_PAYMENT_NOTICE' ||
+        kindRaw === 'PAYMENT_NOTICE' ||
+        referenceLower.startsWith('pay_batch_')
+      ) return 'SYSTEM_PAYMENT_NOTICE';
+      if (kindRaw === 'PAYOUT_NOTICE' || referenceLower.startsWith('payout_notice:')) return 'PAYOUT_NOTICE';
+      if (kindRaw === 'CANDIDATE_REMITTANCE' || referenceLower.includes('candidate_remittance')) return 'PAYE_REMITTANCE';
+      if (kindRaw === 'UMBRELLA_REMITTANCE' || referenceLower.includes('umbrella_remittance')) return 'UMBRELLA_REMITTANCE';
+      return 'REMITTANCE';
+    })();
     const recipientKind = lowerTrim(row.recipient_kind);
     const recipientId = trimStr(row.recipient_id || row.candidate_id || row.umbrella_id);
     const toAddress = trimStr(row.to_address || row.to);
@@ -86729,17 +86739,11 @@ function renderBankingPayBatchChildModalRemittanceTab() {
     if (!recipientLabel) recipientLabel = toAddress || recipientId || 'Recipient';
 
     const typeLabel = (() => {
+      if (kindKey === 'SYSTEM_PAYMENT_NOTICE') return 'System payment notice';
       if (kindKey === 'PAYOUT_NOTICE') return 'Candidate payout notice';
-      const isCandidateRemittance =
-        kindRaw === 'CANDIDATE_REMITTANCE' ||
-        recipientKind === 'candidate' ||
-        referenceLower.includes('candidate_remittance');
-      if (isCandidateRemittance) return 'Candidate remittance';
-      const isUmbrellaRemittance =
-        kindRaw === 'UMBRELLA_REMITTANCE' ||
-        recipientKind === 'umbrella' ||
-        referenceLower.includes('umbrella_remittance');
-      return isUmbrellaRemittance ? 'Umbrella remittance' : 'Remittance';
+      if (kindKey === 'PAYE_REMITTANCE' || recipientKind === 'candidate') return 'PAYE remittance';
+      if (kindKey === 'UMBRELLA_REMITTANCE' || recipientKind === 'umbrella') return 'Umbrella remittance';
+      return 'Remittance';
     })();
     const latestResultLabel = (() => {
       if (queueState === 'READ') return 'Read';
@@ -86790,7 +86794,8 @@ function renderBankingPayBatchChildModalRemittanceTab() {
     ? [...remittanceSection.rows, ...communicationSection.rows].map(normalizeOutboxRow)
     : asArr(data?.communications?.items || data?.outbox_rows || data?.remittance_rows || []).map(normalizeOutboxRow);
 
-  const remittanceRows = items.filter((row) => upperTrim(row?.kind_key) === 'REMITTANCE');
+  const remittanceRows = items.filter((row) => ['REMITTANCE', 'PAYE_REMITTANCE', 'UMBRELLA_REMITTANCE'].includes(upperTrim(row?.kind_key)));
+  const systemNoticeRows = items.filter((row) => upperTrim(row?.kind_key) === 'SYSTEM_PAYMENT_NOTICE');
   const payoutRows = items.filter((row) => upperTrim(row?.kind_key) === 'PAYOUT_NOTICE');
   const countByState = (rows, state) => rows.filter((row) => upperTrim(row?.queue_state || row?.status) === state).length;
 
@@ -86872,9 +86877,10 @@ function renderBankingPayBatchChildModalRemittanceTab() {
       ${errorHtml}
       <div class="card" style="padding:10px; margin-bottom:10px;">
         <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Communication summary</div>
-        <div style="display:grid; grid-template-columns:repeat(3,minmax(200px,1fr)); gap:8px;">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:8px;">
           ${sectionSummaryHtml('Remittance rows', remittanceRows, remittanceTargetCount, remittanceQueuedCount, remittanceSentCount, remittanceSkippedCount, remittanceSection)}
           ${sectionSummaryHtml('Candidate payout notice rows', payoutRows, payoutNoticeTargetCount, payoutQueuedCount, payoutSentCount, payoutSkippedCount, communicationSection)}
+          ${sectionSummaryHtml('System payment notice rows', systemNoticeRows, systemNoticeRows.length, countByState(systemNoticeRows, 'QUEUED'), countByState(systemNoticeRows, 'SENT'), countByState(systemNoticeRows, 'SKIPPED'))}
           <div class="card" style="padding:8px;">
             <div class="mini" style="opacity:.8;">Outbox load state</div>
             <div class="mono">${enc(String(loadedRowsCount))}${totalRowsCount > loadedRowsCount ? ` / ${enc(String(totalRowsCount))}` : ''}</div>
@@ -86884,6 +86890,7 @@ function renderBankingPayBatchChildModalRemittanceTab() {
       </div>
       ${loadingHtml}
       <div class="card" style="padding:10px; margin-bottom:10px;"><div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Remittance rows</div>${rowsTableHtml(remittanceRows, hasRemittances ? 'No remittance rows are currently loaded in this modal.' : 'This batch currently has no remittance items.')}</div>
+      ${systemNoticeRows.length ? `<div class="card" style="padding:10px; margin-bottom:10px;"><div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">System payment notice rows</div>${rowsTableHtml(systemNoticeRows, 'No system payment notice rows are currently loaded in this modal.')}</div>` : ''}
       <div class="card" style="padding:10px;"><div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Candidate payout notice rows</div>${rowsTableHtml(payoutRows, hasPayoutNotices ? 'No candidate payout-notice rows are currently loaded in this modal.' : 'This batch currently has no candidate payout-notice items.')}</div>
     </div>
   `;
