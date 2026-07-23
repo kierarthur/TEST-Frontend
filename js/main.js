@@ -32323,11 +32323,14 @@ async function bankingPayPreview(pay_date) {
           await rerenderQuietly();
           return;
         }
+        // Rendering is driven only by user-visible state. The backend progress
+        // counter also changes for bookkeeping/job retries; including it here
+        // caused the complete Banking modal to be rebuilt every second even
+        // when nothing visible had changed.
         const fingerprint = JSON.stringify({
           ready: progressObj?.ready === true || progressObj?.ready_flag === true,
           phase: trimStr(progressObj?.phase || ''),
           next: trimStr(progressObj?.next_recommended_action || ''),
-          version: Number(progressObj?.progress_counter_version || progressPayload?.progress_counter_version || 0),
           rows: Number(progressObj?.preview_row_count || 0),
           selected: Number(progressObj?.selected_row_count || 0),
           pending: Number(progressObj?.line_units_pending || 0),
@@ -32351,21 +32354,18 @@ async function bankingPayPreview(pay_date) {
             wiz.workbench.__candidate_refresh_page_reread_pending = false;
           }
         }
-        if (fingerprintChanged) {
-          await rerenderQuietly();
-        }
         const pollVisualState = applyAuthoritativePreviewVisualState({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj });
         if (readyNow && pollVisualState.readyVisual) {
           clearPollToken();
-          await rerenderQuietly();
+          if (fingerprintChanged) await rerenderQuietly();
           return;
         }
         if (authoritativePollState.obsolete || authoritativePollState.replacementRequired || authoritativePollState.failure) {
           clearPollToken();
-          applyAuthoritativePreviewVisualState({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj });
-          await rerenderQuietly();
+          if (fingerprintChanged) await rerenderQuietly();
           return;
         }
+        if (fingerprintChanged) await rerenderQuietly();
         if (attemptIndex >= maxAttempts - 1) {
           clearPollToken();
           applyAuthoritativePreviewVisualState({ ...(isPlainObject(progressPayload) ? progressPayload : {}), progress: progressObj });
@@ -90695,6 +90695,16 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         clearPayload.reason = trimStr(source.reason || source.reset_reason);
       }
       const clearResult = await bankingPayWorkbenchSessionClearAllDecisions(currentSessionId, clearPayload);
+      if (
+        clearResult?.server_selected_preview_row_ids_provided !== true ||
+        !Array.isArray(clearResult?.server_selected_preview_row_ids) ||
+        clearResult.server_selected_preview_row_ids.length !== 0
+      ) {
+        const contractError = new Error('CloudTMS could not confirm that all Banking Pay decisions were cleared. Refresh Banking Pay and try again.');
+        contractError.code = 'BANKING_PAY_CLEAR_DECISIONS_CONTRACT_INVALID';
+        contractError.error_code = contractError.code;
+        throw contractError;
+      }
       markExplicitNoSelection();
       if (clearResult?.session_version !== null && clearResult?.session_version !== undefined) {
         wizard.workbench.session_version = clearResult.session_version;
@@ -91870,7 +91880,10 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     const existingSelected = uniqTrimmed(selectedIds).filter((rowId) => validPreviewRowIdSet.has(rowId));
     const mode = normalizeSelectedPreviewRowMode(modeRaw, validPreviewRowIds, existingSelected);
     if (validPreviewRowIds.length <= 0) {
-      return { selected_preview_row_ids: [], selected_preview_row_mode: 'IMPLICIT_ALL' };
+      return {
+        selected_preview_row_ids: [],
+        selected_preview_row_mode: mode === 'EXPLICIT_NONE' ? 'EXPLICIT_NONE' : 'IMPLICIT_ALL'
+      };
     }
     if (mode === 'EXPLICIT_NONE') {
       return { selected_preview_row_ids: [], selected_preview_row_mode: 'EXPLICIT_NONE' };
@@ -91922,12 +91935,8 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
 
   wiz.workbench.pending_candidate_ids = pendingCandidateIds;
   wiz.workbench.failed_candidate_ids = failedCandidateIds;
-  wiz.workbench.server_selected_preview_row_ids = [];
-  wiz.workbench.server_selected_preview_row_ids_provided = false;
   wiz.workbench.dirty_candidate_ids = uniqTrimmed([...pendingCandidateIds, ...failedCandidateIds]);
   decisions.dirty_candidate_ids = [...wiz.workbench.dirty_candidate_ids];
-  decisions.server_selected_preview_row_ids = [];
-  decisions.server_selected_preview_row_ids_provided = false;
 
   const pendingRows = asArray(wiz.workbench.pending_candidate_rows).filter((row) => isPlainObject(row));
   const failedRows = asArray(wiz.workbench.failed_candidate_rows).filter((row) => isPlainObject(row));
@@ -121829,6 +121838,28 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     hasOwn(previewObj, 'server_selected_preview_row_ids') ||
     hasOwn(previewObj, 'serverSelectedPreviewRowIds')
   );
+  const existingAuthoritativeServerSelectedPreviewRowIds = normalizeStringArray(
+    workbenchBeforeNormalization.server_selected_preview_row_ids ??
+    workbenchBeforeNormalization.serverSelectedPreviewRowIds ??
+    decisionsBeforeNormalization.server_selected_preview_row_ids ??
+    decisionsBeforeNormalization.serverSelectedPreviewRowIds ??
+    []
+  );
+  const existingAuthoritativeServerSelectionProvided = (
+    workbenchBeforeNormalization.server_selected_preview_row_ids_provided === true ||
+    workbenchBeforeNormalization.serverSelectedPreviewRowIdsProvided === true ||
+    decisionsBeforeNormalization.server_selected_preview_row_ids_provided === true ||
+    decisionsBeforeNormalization.serverSelectedPreviewRowIdsProvided === true
+  );
+  const preserveExistingAuthoritativeServerSelection = (
+    !serverSelectionProvidedMarkerPresent &&
+    !explicitSelectedPreviewRowIdsFieldPresent &&
+    !serverSelectedPreviewRowIdsFieldPresent &&
+    existingAuthoritativeServerSelectionProvided &&
+    !!sessionId &&
+    !!previousSessionId &&
+    sessionId === previousSessionId
+  );
   const rawServerSelectedPreviewRowIds =
     responseObj.selected_preview_row_ids ??
     responseObj.selectedPreviewRowIds ??
@@ -121842,13 +121873,14 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     responseObj.session?.serverSelectedPreviewRowIds ??
     previewObj.server_selected_preview_row_ids ??
     previewObj.serverSelectedPreviewRowIds ??
-    [];
+    (preserveExistingAuthoritativeServerSelection ? existingAuthoritativeServerSelectedPreviewRowIds : []);
   const serverSelectedPreviewRowIds = normalizeStringArray(rawServerSelectedPreviewRowIds);
   const serverSelectedPreviewRowIdsProvided = serverSelectionProvidedMarkerPresent
     ? serverSelectionProvidedMarkerValue
     : (
       explicitSelectedPreviewRowIdsFieldPresent ||
-      (serverSelectedPreviewRowIdsFieldPresent && serverSelectedPreviewRowIds.length > 0)
+      (serverSelectedPreviewRowIdsFieldPresent && serverSelectedPreviewRowIds.length > 0) ||
+      preserveExistingAuthoritativeServerSelection
     );
   const previewComponentStateCache = mergeComponentStateCaches(previewObj);
   const responseComponentStateCache = mergeComponentStateCaches(responseObj);
@@ -122171,12 +122203,17 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const postMutationFullPreviewWithRows = previewPayloadHasRows && (explicitPostMutationPreviewContext || rowBearingReplacementSessionContext);
   const postMutationSelectionForcedExplicitNone = isPostMutationPreviewPayload === true && !previewPayloadHasRows;
   const patchCloneExplicitSelectedPreviewRowIds = normalizeStringArray(explicitlySelectedPreviewRowIdsFromRows);
+  const preserveAuthoritativeServerSelection = serverSelectedPreviewRowIdsProvided === true;
   const effectiveServerSelectedPreviewRowIds = cloneOrPatchContext
     ? patchCloneExplicitSelectedPreviewRowIds
-    : ((postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows) ? [] : serverSelectedPreviewRowIds);
+    : (preserveAuthoritativeServerSelection
+        ? serverSelectedPreviewRowIds
+        : ((postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows) ? [] : serverSelectedPreviewRowIds));
   const effectiveServerSelectedPreviewRowIdsProvided = cloneOrPatchContext
     ? true
-    : (postMutationSelectionForcedExplicitNone ? true : (postMutationFullPreviewWithRows ? false : serverSelectedPreviewRowIdsProvided));
+    : (preserveAuthoritativeServerSelection
+        ? true
+        : (postMutationSelectionForcedExplicitNone ? true : (postMutationFullPreviewWithRows ? false : serverSelectedPreviewRowIdsProvided)));
   const rawLocalSelectionMode = existingLocalSelectionMode;
   const localSelectionDirty = (postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows || cloneOrPatchContext)
     ? false
@@ -123606,6 +123643,18 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     responseObj.session?.server_selected_preview_row_ids_provided === true ||
     responsePreview?.server_selected_preview_row_ids_provided === true
   );
+  const currentServerSelectedPreviewRowIds =
+    currentEnvelope.server_selected_preview_row_ids ??
+    currentSession.server_selected_preview_row_ids ??
+    wiz.workbench?.server_selected_preview_row_ids ??
+    wiz.decisions?.server_selected_preview_row_ids ??
+    [];
+  const currentServerSelectedPreviewRowIdsProvided = (
+    currentEnvelope.server_selected_preview_row_ids_provided === true ||
+    currentSession.server_selected_preview_row_ids_provided === true ||
+    wiz.workbench?.server_selected_preview_row_ids_provided === true ||
+    wiz.decisions?.server_selected_preview_row_ids_provided === true
+  );
   const rawServerSelectedPreviewRowIds =
     responseObj.server_selected_preview_row_ids ??
     responseObj.selected_preview_row_ids ??
@@ -123613,9 +123662,11 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     responseObj.session?.selected_preview_row_ids ??
     responsePreview?.server_selected_preview_row_ids ??
     responsePreview?.selected_preview_row_ids ??
-    [];
+    currentServerSelectedPreviewRowIds;
   const serverSelectedPreviewRowIds = normalizeStringArray(rawServerSelectedPreviewRowIds);
-  const serverSelectedPreviewRowIdsProvided = markerProvided || (!markerPresent && serverSelectedPreviewRowIds.length > 0);
+  const serverSelectedPreviewRowIdsProvided = markerPresent
+    ? markerProvided
+    : (currentServerSelectedPreviewRowIdsProvided || serverSelectedPreviewRowIds.length > 0);
   nextEnvelope.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
   nextPreview.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
   nextEnvelopeSession.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
@@ -124709,6 +124760,18 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     responseObj.session?.server_selected_preview_row_ids_provided === true ||
     responsePreview?.server_selected_preview_row_ids_provided === true
   );
+  const currentServerSelectedPreviewRowIds =
+    currentEnvelope.server_selected_preview_row_ids ??
+    currentSession.server_selected_preview_row_ids ??
+    wiz.workbench?.server_selected_preview_row_ids ??
+    wiz.decisions?.server_selected_preview_row_ids ??
+    [];
+  const currentServerSelectedPreviewRowIdsProvided = (
+    currentEnvelope.server_selected_preview_row_ids_provided === true ||
+    currentSession.server_selected_preview_row_ids_provided === true ||
+    wiz.workbench?.server_selected_preview_row_ids_provided === true ||
+    wiz.decisions?.server_selected_preview_row_ids_provided === true
+  );
   const rawServerSelectedPreviewRowIds =
     responseObj.server_selected_preview_row_ids ??
     responseObj.selected_preview_row_ids ??
@@ -124716,9 +124779,11 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     responseObj.session?.selected_preview_row_ids ??
     responsePreview?.server_selected_preview_row_ids ??
     responsePreview?.selected_preview_row_ids ??
-    [];
+    currentServerSelectedPreviewRowIds;
   const serverSelectedPreviewRowIds = normalizeStringArray(rawServerSelectedPreviewRowIds);
-  const serverSelectedPreviewRowIdsProvided = markerProvided || (!markerPresent && serverSelectedPreviewRowIds.length > 0);
+  const serverSelectedPreviewRowIdsProvided = markerPresent
+    ? markerProvided
+    : (currentServerSelectedPreviewRowIdsProvided || serverSelectedPreviewRowIds.length > 0);
   nextEnvelope.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
   nextPreview.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
   nextEnvelopeSession.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
