@@ -268714,6 +268714,21 @@ async function openCandidate(row) {
       }
 
       if (payload.pay_method === 'UMBRELLA') {
+        if (!payload.umbrella_id || payload.umbrella_id === '') {
+          try {
+            const resolver = window.modalCtx?.resolveCandidateUmbrellaSelection;
+            const resolved = (typeof resolver === 'function') ? await resolver() : null;
+            const resolvedId = String(resolved?.id || '').trim();
+            if (resolvedId) {
+              payload.umbrella_id = resolvedId;
+              if (window.modalCtx?.formState?.pay) {
+                window.modalCtx.formState.pay.umbrella_id = resolvedId;
+              }
+            }
+          } catch (error) {
+            W('[onSave] umbrella selection resolution failed', error);
+          }
+        }
         if ((!payload.umbrella_id || payload.umbrella_id === '') && full?.umbrella_id) {
           payload.umbrella_id = full.umbrella_id;
         }
@@ -268728,7 +268743,13 @@ async function openCandidate(row) {
         payload.umbrella_id = null;
       } else if (payload.pay_method === 'UMBRELLA') {
         if (!payload.umbrella_id || payload.umbrella_id === '') {
-          alert('Select an umbrella company for UMBRELLA pay.');
+          await openUiConfirmModal({
+            title: 'Select an umbrella company',
+            message: 'Choose an enabled umbrella company from the search results before saving UMBRELLA pay.',
+            confirm_label: 'OK',
+            hide_cancel: true,
+            kind: 'candidate-pay-method-notice'
+          });
           return { ok:false };
         }
       }
@@ -268834,7 +268855,13 @@ async function openCandidate(row) {
         if (newMethod === 'UMBRELLA') {
           const effectiveUmbrellaId = payload.umbrella_id || stagedPayAtFlip.umbrella_id || full.umbrella_id || null;
           if (!effectiveUmbrellaId) {
-            alert('Select an umbrella company before changing the candidate to UMBRELLA.');
+            await openUiConfirmModal({
+              title: 'Select an umbrella company',
+              message: 'Choose an enabled umbrella company before changing the candidate to UMBRELLA.',
+              confirm_label: 'OK',
+              hide_cancel: true,
+              kind: 'candidate-pay-method-notice'
+            });
             return { ok:false };
           }
           destinationPatch.umbrella_id = effectiveUmbrellaId;
@@ -268907,7 +268934,13 @@ async function openCandidate(row) {
         } catch (error) {
           W('prospective-only pay-method change failed', error);
           const suffix = error?.operation_id ? `\n\nOperation ID: ${error.operation_id}` : '';
-          alert(`${error?.message || 'Failed to process pay-method change.'}${suffix}`);
+          await openUiConfirmModal({
+            title: 'Payment method change could not be completed',
+            message: `${error?.message || 'Failed to process pay-method change.'}${suffix}`,
+            confirm_label: 'OK',
+            hide_cancel: true,
+            kind: 'candidate-pay-method-notice'
+          });
           return { ok:false };
         }
       }
@@ -273385,6 +273418,7 @@ async function mountCandidatePayTab() {
     const qs = new URLSearchParams();
     qs.set('page', '1');
     qs.set('page_size', '50');
+    qs.set('enabled', 'true');
     if (t) qs.set('q', t);
 
     const url = `/api/search/umbrellas?${qs.toString()}`;
@@ -273444,7 +273478,7 @@ async function mountCandidatePayTab() {
     }
   }
 
-  function syncUmbrellaSelection() {
+  async function syncUmbrellaSelection() {
     const val = (nameInput && nameInput.value) ? nameInput.value.trim() : '';
 
     if (!val) {
@@ -273471,8 +273505,13 @@ async function mountCandidatePayTab() {
       return;
     }
 
-    const allOpts = Array.from((listEl && listEl.options) ? listEl.options : []);
-    const hitOpt = allOpts.find(o => o.value === val);
+    let allOpts = Array.from((listEl && listEl.options) ? listEl.options : []);
+    let hitOpt = allOpts.find(o => String(o.value || '').trim().toLowerCase() === val.toLowerCase());
+    if (!hitOpt) {
+      await loadUmbrellaList(val);
+      allOpts = Array.from((listEl && listEl.options) ? listEl.options : []);
+      hitOpt = allOpts.find(o => String(o.value || '').trim().toLowerCase() === val.toLowerCase());
+    }
     const id = hitOpt && hitOpt.getAttribute('data-id');
 
     if (id) {
@@ -273483,8 +273522,8 @@ async function mountCandidatePayTab() {
       stagedPay.umbrella_id   = id;
       stagedPay.__forMethod   = payMethod || 'UMBRELLA';
 
-      fetchAndPrefill(id);
-      return;
+      await fetchAndPrefill(id);
+      return { id, name: val };
     }
 
     // Not an exact match yet (user still typing): keep typed text, but clear any previous selection + bank
@@ -273513,6 +273552,7 @@ async function mountCandidatePayTab() {
     }
 
     stageRemittanceFromDom();
+    return null;
   }
 
   // ----- Staged state helpers / flags --------------------------------------
@@ -273668,7 +273708,7 @@ async function mountCandidatePayTab() {
         const hadId = !!(idHidden && String(idHidden.value || '').trim());
         if (hadId && term !== String(stagedPay.umbrella_name || '').trim()) {
           // User is changing away from an existing selection: clear selection + bank fields
-          syncUmbrellaSelection();
+          syncUmbrellaSelection().catch(() => {});
         } else {
           stagedPay.umbrella_name = term;
           stagedPay.umbrella_id = '';
@@ -273680,12 +273720,18 @@ async function mountCandidatePayTab() {
       };
 
       // onchange is where we attempt an exact match and set the umbrella id
-      nameInput.onchange = syncUmbrellaSelection;
+      nameInput.onchange = () => { syncUmbrellaSelection().catch(() => {}); };
     }
 
     if (idHidden) {
       idHidden.onchange = () => fetchAndPrefill(idHidden.value);
     }
+
+    window.modalCtx.resolveCandidateUmbrellaSelection = async () => {
+      const resolved = await syncUmbrellaSelection();
+      const selectedId = String(idHidden?.value || resolved?.id || '').trim();
+      return selectedId ? { id: selectedId, name: String(nameInput?.value || '').trim() } : null;
+    };
 
   } else {
     // PAYE branch
@@ -273697,6 +273743,7 @@ async function mountCandidatePayTab() {
       if (nameInput) { nameInput.oninput = null; nameInput.onchange = null; }
       if (idHidden)  { idHidden.onchange = null; }
       if (listEl)    { listEl.innerHTML = ''; }
+      if (window.modalCtx) window.modalCtx.resolveCandidateUmbrellaSelection = null;
     } catch {}
 
     if (hadStagedAtEntry) {
@@ -276765,6 +276812,15 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
   const L = (...args) => { if (LOG) console.log('[CAND][PAY-METHOD][MODAL]', ...args); };
   const W = (...args) => { if (LOG) console.warn('[CAND][PAY-METHOD][MODAL]', ...args); };
   const E = (...args) => { if (LOG) console.error('[CAND][PAY-METHOD][MODAL]', ...args); };
+  const presentNotice = async (message, title = 'Payment method change') => {
+    await openUiConfirmModal({
+      title,
+      message: String(message || 'The payment method change could not be completed.'),
+      confirm_label: 'OK',
+      hide_cancel: true,
+      kind: 'candidate-pay-method-notice'
+    });
+  };
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const canonicalUuid = (value) => String(value == null ? '' : value).trim().toLowerCase();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -276985,19 +277041,19 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
   ) ? { ...context.destination_patch } : {};
 
   if (!uuidRe.test(candidateId)) {
-    alert('Candidate id is missing or invalid for this pay-method change.');
+    await presentNotice('Candidate id is missing or invalid for this pay-method change.');
     return false;
   }
   if (originalMethod !== 'PAYE' && originalMethod !== 'UMBRELLA') {
-    alert('Current pay method must be PAYE or UMBRELLA.');
+    await presentNotice('Current pay method must be PAYE or UMBRELLA.');
     return false;
   }
   if (newMethod !== 'PAYE' && newMethod !== 'UMBRELLA') {
-    alert('New pay method must be PAYE or UMBRELLA.');
+    await presentNotice('New pay method must be PAYE or UMBRELLA.');
     return false;
   }
   if (originalMethod === newMethod) {
-    alert('New pay method is the same as the current one.');
+    await presentNotice('New pay method is the same as the current one.');
     return false;
   }
 
@@ -277031,7 +277087,7 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
       pendingNewMethod !== newMethod ||
       pendingFingerprint !== requestDestinationFingerprint
     ) {
-      alert(
+      await presentNotice(
         `A previous pay-method operation for this candidate still has an unconfirmed outcome. Refresh or recover operation ${pendingOperationId} before starting a different route change.`
       );
       return false;
@@ -277057,7 +277113,7 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
       });
     } catch (error) {
       E('preview failed', safeErrorSummary(error));
-      alert(error?.message || 'Failed to preview the pay-method change.');
+      await presentNotice(error?.message || 'Failed to preview the pay-method change.', 'Payment method preview could not be loaded');
       return false;
     }
     operationId = createOperationId();
@@ -277071,7 +277127,7 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
     !uuidRe.test(operationId)
   ) {
     if (recoveringExistingOperation) delete registry[candidateId];
-    alert('The canonical pay-method operation evidence is incomplete. Refresh and try again.');
+    await presentNotice('The canonical pay-method operation evidence is incomplete. Refresh and try again.');
     return false;
   }
 
@@ -277095,7 +277151,7 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
   const effectiveDestinationFingerprint = destinationFingerprint(effectiveDestinationPatch, newMethod);
   if (recoveringExistingOperation && effectiveDestinationFingerprint !== requestDestinationFingerprint) {
     delete registry[candidateId];
-    alert('The stored pay-method operation destination no longer matches the current request. Refresh and review the candidate before continuing.');
+    await presentNotice('The stored pay-method operation destination no longer matches the current request. Refresh and review the candidate before continuing.');
     return false;
   }
 
@@ -277190,7 +277246,7 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
       () => bodyHtml,
       async () => {
         if (blockers.length || preview.can_apply !== true) {
-          alert(blockers[0]?.message || 'This pay-method change is currently blocked.');
+          await presentNotice(blockers[0]?.message || 'This pay-method change is currently blocked.');
           return false;
         }
 
@@ -277315,7 +277371,10 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
             } catch {}
           }
           const suffix = safeOperationId ? `\n\nOperation ID: ${safeOperationId}` : '';
-          alert(`${error?.message || 'Failed to apply the pay-method change.'}${suffix}`);
+          await presentNotice(
+            `${error?.message || 'Failed to apply the pay-method change.'}${suffix}`,
+            'Payment method change could not be completed'
+          );
           return false;
         }
       },
