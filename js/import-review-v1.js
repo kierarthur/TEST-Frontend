@@ -699,6 +699,10 @@
       });
       if (state.review !== review) return true;
       for (const change of changes) {
+        const currentItem = (review.pageData?.items || []).find(
+          (item) => String(item.action_id) === String(change.action_id)
+        );
+        if (currentItem) currentItem.selected = change.selected === true;
         if (review.dirty.get(change.action_id) === change.selected) review.dirty.delete(change.action_id);
       }
       review.pendingSave = null;

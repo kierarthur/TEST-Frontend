@@ -16825,11 +16825,47 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
   const renderTaxableBreakdown = () => {
     if (!isTaxableChannelRestructure) return '';
 
-    const erniRate = firstFiniteNumber(suggestedArrangement.erni_rate, src.erni_rate, src.erni_percent, src.suggestion?.erni_rate, src.suggestion?.erni_percent);
+    const erniRate = firstFiniteNumber(
+      suggestedArrangement.erni_rate,
+      suggestedArrangement.erni_rate_pct,
+      src.erni_rate,
+      src.erni_rate_pct,
+      src.erni_percent,
+      src.suggestion?.erni_rate,
+      src.suggestion?.erni_rate_pct,
+      src.suggestion?.erni_percent
+    );
     const erniComponent = firstFiniteNumber(suggestedArrangement.erni_component, suggestedArrangement.erni_component_ex_vat, src.erni_component, src.erni_component_ex_vat, src.suggestion?.erni_component, src.suggestion?.erni_component_ex_vat);
-    const vatRate = firstFiniteNumber(suggestedArrangement.vat_rate, suggestedArrangement.vat_rate_percent, src.vat_rate, src.vat_rate_percent, src.suggestion?.vat_rate, src.suggestion?.vat_rate_percent);
-    const vatAmount = firstFiniteNumber(suggestedArrangement.target_amount_vat, suggestedArrangement.vat_amount, src.target_amount_vat, src.vat_amount, src.suggestion?.target_amount_vat, src.suggestion?.vat_amount);
-    const targetInc = firstFiniteNumber(suggestedArrangement.target_amount_inc_vat, src.target_amount_inc_vat, src.suggestion?.target_amount_inc_vat);
+    const vatRate = firstFiniteNumber(
+      suggestedArrangement.vat_rate,
+      suggestedArrangement.vat_rate_pct,
+      suggestedArrangement.vat_rate_percent,
+      src.vat_rate,
+      src.vat_rate_pct,
+      src.vat_rate_percent,
+      src.suggestion?.vat_rate,
+      src.suggestion?.vat_rate_pct,
+      src.suggestion?.vat_rate_percent
+    );
+    const vatAmount = firstFiniteNumber(
+      suggestedArrangement.target_amount_vat,
+      suggestedArrangement.target_remaining_balance_vat,
+      suggestedArrangement.vat_amount,
+      src.target_amount_vat,
+      src.target_remaining_balance_vat,
+      src.vat_amount,
+      src.suggestion?.target_amount_vat,
+      src.suggestion?.target_remaining_balance_vat,
+      src.suggestion?.vat_amount
+    );
+    const targetInc = firstFiniteNumber(
+      suggestedArrangement.target_amount_inc_vat,
+      suggestedArrangement.target_remaining_balance_inc_vat,
+      src.target_amount_inc_vat,
+      src.target_remaining_balance_inc_vat,
+      src.suggestion?.target_amount_inc_vat,
+      src.suggestion?.target_remaining_balance_inc_vat
+    );
     const vatChargeable = suggestedArrangement.umbrella_vat_chargeable ?? src.umbrella_vat_chargeable ?? src.suggestion?.umbrella_vat_chargeable;
 
     const componentRows = componentBreakdown.length ? `
@@ -16856,7 +16892,12 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
                 const targetMethod = r.target_pay_method || r.target_method || '—';
                 const sourceAmount = firstFiniteNumber(r.source_remaining_amount_ex_vat, r.source_amount_ex_vat, r.remaining_source_amount, r.source_remaining_amount);
                 const targetAmount = firstFiniteNumber(r.target_remaining_amount_ex_vat, r.target_amount_ex_vat, r.suggested_target_amount_ex_vat, r.target_remaining_amount);
-                const componentVat = firstFiniteNumber(r.target_amount_vat, r.vat_amount, r.target_vat_amount);
+                const componentVat = firstFiniteNumber(
+                  r.target_amount_vat,
+                  r.target_remaining_amount_vat,
+                  r.vat_amount,
+                  r.target_vat_amount
+                );
                 const isFixedComponent = r.is_fixed_component === true || r.fixed_component_unchanged === true || upperTrim(classification) !== 'TAXABLE_CHANNEL_SENSITIVE';
                 const status = r.conversion_status || r.status || (isFixedComponent ? 'Fixed — unchanged' : 'Taxable conversion');
                 return `
@@ -17175,7 +17216,7 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
                 class="input"
                 type="text"
                 placeholder="DD/MM/YYYY"
-                value="${enc(toUk(state.new_start_week_start))}"
+                value="${enc(toUk(parseToIso(state.new_start_week_start) || state.new_start_week_start))}"
               />
               <div class="mini" style="opacity:.8;margin-top:6px;">${isTaxableChannelRestructure ? 'Choose the pay date the revised taxable restructure takes effect from.' : 'Choose the Monday the revised schedule should begin from.'}</div>
             </div>
@@ -33104,7 +33145,10 @@ async function bankingPayCreateDraft(input = {}) {
     });
     if (siblingHasRealTsDayRow) return true;
 
-    return !createDraftHasRealWorkDate(row) && createDraftSegmentRows(row).length <= 0;
+    // A genuine TS_TOTAL payment has no work date or segment rows by design.
+    // It is synthetic only when the source explicitly says that dated rows
+    // replace it, or when a real TS_DAY sibling proves that replacement.
+    return false;
   };
   const collectPageRowsFromNode = (nodeLike) => {
     const node = isPlainObject(nodeLike) ? nodeLike : {};
@@ -50008,7 +50052,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     );
   };
 
-  const isSyntheticTimesheetResidualLine = (obj) => {
+  const isSyntheticTimesheetResidualLine = (obj, siblingRows = []) => {
     if (!isPlainObject(obj)) return false;
     const nested = getNestedLinePayload(obj);
     const sourceBasis = getLineSourceBasisJson(obj);
@@ -50032,17 +50076,29 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     ].map((value) => trimStr(value).toLowerCase()).filter(Boolean).join('|');
     const sourceKeyType = upperTrim(sourceBasis?.component_key_type || sourceBasis?.componentKeyType || '');
     const sourceKeyValue = upperTrim(sourceBasis?.component_key_value || sourceBasis?.componentKeyValue || '');
-    const hasRealWorkDate = !!trimStr(obj?.work_date || obj?.workDate || obj?.date || nested?.work_date || nested?.workDate || nested?.date || '');
-    const hasSegmentRows = getLineSectionSegmentRows(obj).length > 0;
-    return !!(
-      !hasRealWorkDate &&
-      !hasSegmentRows &&
-      identityText.includes(':non_segment:total') &&
-      (
-        (keyType === 'TS_TOTAL' && keyValue === 'TOTAL') ||
-        (sourceKeyType === 'TS_TOTAL' && sourceKeyValue === 'TOTAL')
-      )
+    const isTimesheetTotal = (
+      (keyType === 'TS_TOTAL' && keyValue === 'TOTAL') ||
+      (sourceKeyType === 'TS_TOTAL' && sourceKeyValue === 'TOTAL')
     );
+    if (!identityText.includes(':non_segment:total') || !isTimesheetTotal) return false;
+
+    const explicitResolvedReplacementMarker = booleanFlag(
+      obj?.resolved_segment_rows_replace_source_total ??
+      obj?.resolvedSegmentRowsReplaceSourceTotal ??
+      nested?.resolved_segment_rows_replace_source_total ??
+      nested?.resolvedSegmentRowsReplaceSourceTotal ??
+      sourceBasis?.resolved_segment_rows_replace_source_total ??
+      sourceBasis?.resolvedSegmentRowsReplaceSourceTotal
+    );
+    if (explicitResolvedReplacementMarker) return true;
+
+    const timesheetId = getLineTimesheetId(obj);
+    return asArray(siblingRows).some((candidate) => {
+      if (!isPlainObject(candidate) || candidate === obj) return false;
+      if (getLineKeyType(candidate) !== 'TS_DAY') return false;
+      const candidateTimesheetId = getLineTimesheetId(candidate);
+      return (!timesheetId || !candidateTimesheetId || candidateTimesheetId === timesheetId);
+    });
   };
 
   const getLineComponentKeyType = (obj) => {
@@ -51078,7 +51134,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     for (const line of asArray(lines).filter((item) => isPlainObject(item))) {
       const groupKey = getReadyTimesheetGroupKey(line);
       if (!groupKey) {
-        if (!isSyntheticTimesheetResidualLine(line)) orderedItems.push({ kind: 'line', line });
+        if (!isSyntheticTimesheetResidualLine(line, lines)) orderedItems.push({ kind: 'line', line });
         continue;
       }
       if (!groupByKey.has(groupKey)) {
@@ -51095,7 +51151,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       }
 
       const groupLines = item.lines;
-      const payableGroupLines = groupLines.filter((line) => !isSyntheticTimesheetResidualLine(line));
+      const payableGroupLines = groupLines.filter((line) => !isSyntheticTimesheetResidualLine(line, groupLines));
       if (!payableGroupLines.length) return '';
       const representative = payableGroupLines.find((line) => !!resolvedRateCancelActionHtml(line, 'READY_TO_PAY')) || payableGroupLines[0];
       const candidateId = getLineCandidateId(representative);

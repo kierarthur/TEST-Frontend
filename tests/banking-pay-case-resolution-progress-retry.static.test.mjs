@@ -99,3 +99,18 @@ test('does not retry a changed decision session version', async () => {
   );
   assert.equal(calls.length, 1);
 });
+
+test('taxable restructure renders the installed ERNI, VAT and inclusive-total aliases', () => {
+  assert.match(source, /suggestedArrangement\.erni_rate_pct/);
+  assert.match(source, /suggestedArrangement\.vat_rate_pct/);
+  assert.match(source, /suggestedArrangement\.target_remaining_balance_vat/);
+  assert.match(source, /suggestedArrangement\.target_remaining_balance_inc_vat/);
+  assert.match(source, /r\.target_remaining_amount_vat/);
+});
+
+test('effective pay date survives a validation rerender after being entered in UK format', () => {
+  assert.match(
+    source,
+    /value="\$\{enc\(toUk\(parseToIso\(state\.new_start_week_start\) \|\| state\.new_start_week_start\)\)\}"/
+  );
+});
