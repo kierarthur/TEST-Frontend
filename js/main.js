@@ -41993,7 +41993,9 @@ function renderBankingTab(key, row) {
       try {
         const fn = (typeof window[fnName] === 'function') ? window[fnName] : (typeof globalThis[fnName] === 'function' ? globalThis[fnName] : null);
         if (fn) return fn(...args);
-      } catch {}
+      } catch (err) {
+        console.error(`[Banking] ${fnName} renderer failed`, err);
+      }
       return null;
     };
 
@@ -50082,7 +50084,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     );
     if (!identityText.includes(':non_segment:total') || !isTimesheetTotal) return false;
 
-    const explicitResolvedReplacementMarker = booleanFlag(
+    const explicitResolvedReplacementMarker = asBool(
       obj?.resolved_segment_rows_replace_source_total ??
       obj?.resolvedSegmentRowsReplaceSourceTotal ??
       nested?.resolved_segment_rows_replace_source_total ??

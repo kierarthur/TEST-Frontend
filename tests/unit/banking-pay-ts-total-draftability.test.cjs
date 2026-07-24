@@ -14,6 +14,10 @@ const helperEnd = mainSource.indexOf('\n  const collectPageRowsFromNode =', sele
 assert.ok(selectedStart >= 0 && helperEnd > selectedStart, 'TS_TOTAL create-draft helper must be present');
 
 const helperSource = mainSource.slice(selectedStart, helperEnd);
+const renderedHelperStart = mainSource.indexOf('const isSyntheticTimesheetResidualLine =');
+const renderedHelperEnd = mainSource.indexOf('\n  const getLineComponentKeyType =', renderedHelperStart);
+assert.ok(renderedHelperStart >= 0 && renderedHelperEnd > renderedHelperStart, 'rendered TS_TOTAL helper must be present');
+const renderedHelperSource = mainSource.slice(renderedHelperStart, renderedHelperEnd);
 
 function installHarness() {
   const context = {
@@ -77,4 +81,9 @@ test('rejects a stale TS_TOTAL row when a real TS_DAY sibling exists', () => {
     status: 'READY'
   };
   assert.equal(isSynthetic(total, [total, day]), true);
+});
+
+test('uses the renderer-local boolean parser for the displayed TS_TOTAL decision', () => {
+  assert.match(renderedHelperSource, /const explicitResolvedReplacementMarker = asBool\(/);
+  assert.doesNotMatch(renderedHelperSource, /\bbooleanFlag\(/);
 });

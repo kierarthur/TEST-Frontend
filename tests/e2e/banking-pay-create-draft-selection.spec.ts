@@ -10,7 +10,7 @@ async function installLocalMain(page: Page) {
   const localMainPath = resolve(__dirname, '../../js/main.js');
   let interceptedMainUrl = '';
 
-  await page.route('**/js/main.js', async (route) => {
+  await page.route('**/js/main.js*', async (route) => {
     const url = new URL(route.request().url());
     if (url.hostname !== testFrontendHost || url.pathname !== '/js/main.js') {
       await route.continue();
@@ -101,7 +101,7 @@ test('requires review and starts no draft when the authoritative selection chang
   });
 
   const createButton = await openBankingPay(page);
-  expect(getInterceptedMainUrl()).toBe('https://testmode.arthur-rai.co.uk/js/main.js');
+  expect(new URL(getInterceptedMainUrl()).pathname).toBe('/js/main.js');
 
   const hiddenConcurrentState = await page.evaluate(() => {
     const wizard = window.modalCtx?.banking?.pay?.draftWizard;
@@ -183,7 +183,7 @@ test('an early shared-session revision drift reaches the exact selection review'
   });
 
   const createButton = await openBankingPay(page);
-  expect(getInterceptedMainUrl()).toBe('https://testmode.arthur-rai.co.uk/js/main.js');
+  expect(new URL(getInterceptedMainUrl()).pathname).toBe('/js/main.js');
 
   simulateRevisionDrift = true;
   await createButton.click();
@@ -228,7 +228,7 @@ test('a rejected row change reloads server truth and repaints the checkbox', asy
   });
 
   await openBankingPay(page);
-  expect(getInterceptedMainUrl()).toBe('https://testmode.arthur-rai.co.uk/js/main.js');
+  expect(new URL(getInterceptedMainUrl()).pathname).toBe('/js/main.js');
 
   const checkbox = page.locator('input[type="checkbox"][data-preview-row-id]').first();
   await expect(checkbox).toBeVisible({ timeout: 60_000 });
