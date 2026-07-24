@@ -6978,6 +6978,7 @@ async function openBankingReauthModal(opts = {}) {
       }[c]));
 
   const purpose = String(opts.purpose || 'PAYMENT_SCHEDULE').trim().toUpperCase() || 'PAYMENT_SCHEDULE';
+  const executionMode = String(opts.executionMode || opts.execution_mode || '').trim().toUpperCase();
   const isPaymentIssueReauth = purpose === 'PAYMENT_REVERSAL';
   const isPayeSameWeekOverride = purpose === 'PAYE_SAME_WEEK_OVERRIDE';
   const reauthIntro = isPaymentIssueReauth
@@ -7374,7 +7375,11 @@ async function openBankingReauthModal(opts = {}) {
             rerender();
 
             try {
-              const { res, j, msg } = await apiPost('/auth/reauth/start', { password: pw, purpose });
+              const { res, j, msg } = await apiPost('/auth/reauth/start', {
+                password: pw,
+                purpose,
+                execution_mode: executionMode || null
+              });
 
               if (res.status === 401) {
                 state.busySend = false;
@@ -7386,6 +7391,13 @@ async function openBankingReauthModal(opts = {}) {
 
               if (!res.ok) {
                 throw new Error(String(msg || `Request failed (${res.status})`));
+              }
+
+              const directToken = String(j?.reauth_token || j?.reauthToken || '').trim();
+              if (directToken && j?.tfa_required === false) {
+                finish(directToken);
+                closeTop();
+                return;
               }
 
               const cid = String(j?.challenge_id || '').trim();
@@ -75399,7 +75411,12 @@ const executePaymentPipeline = async () => {
 
     let reauthToken = null;
     try {
-      if (typeof openBankingReauthModal === 'function') reauthToken = await openBankingReauthModal({ purpose: 'PAYMENT_SCHEDULE' });
+      if (typeof openBankingReauthModal === 'function') {
+        reauthToken = await openBankingReauthModal({
+          purpose: 'PAYMENT_SCHEDULE',
+          executionMode: execution_mode
+        });
+      }
       else throw new Error('Payment verification modal is not available.');
     } catch (e) {
       throw new Error(String(e?.message || e || 'Payment verification failed'));
