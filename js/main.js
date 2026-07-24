@@ -130298,15 +130298,76 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     const requestPayload = (typeof bankingPayAugmentWorkbenchFreshnessPayload === 'function')
       ? bankingPayAugmentWorkbenchFreshnessPayload(sessionIdText, payloadWithOperation)
       : payloadWithOperation;
-    const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution`), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(requestPayload)
-    });
-    const json = await parseJsonResponse(res);
-    if (!res.ok) {
+    const readNestedInteger = (value, keys, minimum = 0) => {
+      const wanted = new Set(keys);
+      const queue = [{ value, depth: 0 }];
+      const seen = new Set();
+      while (queue.length) {
+        const current = queue.shift();
+        if (current.depth > 5 || current.value == null) continue;
+        if (typeof current.value === 'string') {
+          const text = trimStr(current.value);
+          if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+            try { queue.push({ value: JSON.parse(text), depth: current.depth + 1 }); } catch {}
+          }
+          continue;
+        }
+        if (!isPlainObject(current.value) || seen.has(current.value)) continue;
+        seen.add(current.value);
+        for (const [key, nested] of Object.entries(current.value)) {
+          if (wanted.has(key)) {
+            const parsed = Number(nested);
+            if (Number.isSafeInteger(parsed) && parsed >= minimum) return parsed;
+          }
+          if (isPlainObject(nested) || typeof nested === 'string') {
+            queue.push({ value: nested, depth: current.depth + 1 });
+          }
+        }
+      }
+      return null;
+    };
+
+    let activeRequestPayload = requestPayload;
+    let res = null;
+    let json = {};
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(activeRequestPayload)
+      });
+      json = await parseJsonResponse(res);
+      if (res.ok) break;
+
       const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      const failureCode = normalizeWorkbenchFailureCode(
+        failureEnvelope?.error_code ||
+        failureEnvelope?.code ||
+        extractPayloadCode(json)
+      );
+      if (attempt === 0 && res.status === 409 && failureCode === 'WORKBENCH_SESSION_PROGRESS_CHANGED') {
+        const requestedSessionVersion = Number(activeRequestPayload.expected_session_version);
+        const currentSessionVersion = readNestedInteger(json, ['current_session_version', 'currentSessionVersion'], 1);
+        const currentProgressCounterVersion = readNestedInteger(json, ['current_progress_counter_version', 'currentProgressCounterVersion'], 0);
+        if (
+          Number.isSafeInteger(requestedSessionVersion) &&
+          currentSessionVersion === requestedSessionVersion &&
+          currentProgressCounterVersion != null
+        ) {
+          activeRequestPayload = {
+            ...activeRequestPayload,
+            expected_session_version: currentSessionVersion,
+            expected_progress_counter_version: currentProgressCounterVersion
+          };
+          continue;
+        }
+      }
+
       throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    if (!res || !res.ok) {
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, Number(res?.status || 409), `Request failed (${Number(res?.status || 409)})`);
     }
     const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
     if (successFailureEnvelope) {
