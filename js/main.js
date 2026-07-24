@@ -103409,7 +103409,8 @@ async function handleOutboxDeleteAction(rowOrItem, opts = {}) {
   if (!channel) throw new Error('channel is required');
   if (!outboxId) throw new Error('outbox id is required');
 
-  const titleBase = 'Delete Outbox item';
+  const isInvoiceOperation = channel === 'INVOICE';
+  const titleBase = isInvoiceOperation ? 'Cancel invoice operation' : 'Delete Outbox item';
 
   const showInfo = async ({
     title = titleBase,
@@ -103436,9 +103437,9 @@ async function handleOutboxDeleteAction(rowOrItem, opts = {}) {
   };
 
   const askConfirm = async ({
-    title = 'Delete Outbox item?',
-    message = 'This will attempt to delete the selected Outbox row.',
-    confirm_label = 'Delete',
+    title = isInvoiceOperation ? 'Cancel invoice operation?' : 'Delete Outbox item?',
+    message = isInvoiceOperation ? 'This cancels the selected nonterminal invoice operation. Completed legal issue artifacts are preserved.' : 'This will attempt to delete the selected Outbox row.',
+    confirm_label = isInvoiceOperation ? 'Cancel operation' : 'Delete',
     cancel_label = 'Cancel',
     confirm_class = 'btn btn-warn',
     cancel_class = 'btn btn-outline'
@@ -103492,9 +103493,9 @@ async function handleOutboxDeleteAction(rowOrItem, opts = {}) {
     : null;
 
   const confirmed = await askConfirm({
-    title: 'Delete Outbox item?',
-    message: 'This will attempt to delete the selected Outbox row.',
-    confirm_label: 'Delete',
+    title: isInvoiceOperation ? 'Cancel invoice operation?' : 'Delete Outbox item?',
+    message: isInvoiceOperation ? 'This cancels the selected nonterminal invoice operation. Completed legal issue artifacts are preserved.' : 'This will attempt to delete the selected Outbox row.',
+    confirm_label: isInvoiceOperation ? 'Cancel operation' : 'Delete',
     cancel_label: 'Cancel',
     confirm_class: 'btn btn-warn',
     cancel_class: 'btn btn-outline'
@@ -103555,7 +103556,7 @@ async function handleOutboxDeleteAction(rowOrItem, opts = {}) {
     return result;
   } catch (e) {
     await showInfo({
-      title: 'Delete failed',
+      title: isInvoiceOperation ? 'Cancellation failed' : 'Delete failed',
       message: String(e?.message || e || 'Failed to delete Outbox item.'),
       confirm_label: 'OK',
       hide_cancel: true,
@@ -293843,41 +293844,65 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
     // 2) ISSUE / UNISSUE
     if (wantIssued !== null && wantIssued !== curIsIssued) {
       if (wantIssued) {
+        const canDeliver = modalCtx?.invoiceDetail?.can_issue_and_deliver === true
+          || modalCtx?.dataLoaded?.can_issue_and_deliver === true;
+        const sendNow = canDeliver ? await promptSendInvoiceEmailNow({
+          toEmail: modalCtx?.invoiceDetail?.email_summary?.to
+            || modalCtx?.dataLoaded?.email_summary?.to
+            || null
+        }) : false;
+        const issueCommandToken = String(
+          modalCtx?.invoiceAsync?.issue_command_token || crypto.randomUUID()
+        );
+        modalCtx.invoiceAsync = (modalCtx.invoiceAsync && typeof modalCtx.invoiceAsync === 'object')
+          ? modalCtx.invoiceAsync : {};
+        modalCtx.invoiceAsync.issue_command_token = issueCommandToken;
+
         const issueRes = await invoiceModalFetchJson(`/api/invoices/${encodeURIComponent(invoiceId)}/issue`, {
           method: 'POST',
-          body: JSON.stringify({})
+          body: JSON.stringify({
+            command_token: issueCommandToken,
+            deliver: sendNow,
+            delivery_request_token: sendNow ? issueCommandToken : undefined
+          })
         });
 
-        const st2 = String(issueRes?.status || '').toUpperCase();
-        if (st2 === 'ON_HOLD') {
-          const reasons = Array.isArray(issueRes?.reasons) ? issueRes.reasons : [];
-          const msg = reasons.length
-            ? `Invoice is ON HOLD and cannot be issued: ${reasons.join(', ')}`
-            : 'Invoice is ON HOLD and cannot be issued.';
-          throw new Error(msg);
-        }
-        if (st2 !== 'ISSUED') {
-          throw new Error('Failed to issue invoice.');
-        }
+        const asyncAccepted = issueRes?.accepted === true
+          || Number(issueRes?.accepted_count || 0) > 0
+          || Array.isArray(issueRes?.operation_ids) && issueRes.operation_ids.length > 0;
+        if (asyncAccepted) {
+          try {
+            window.registerInvoiceOperationsFromResponse?.(issueRes, {
+              entity_type: 'INVOICE',
+              entity_id: invoiceId,
+              purpose: sendNow ? 'ISSUE_AND_DELIVER' : 'ISSUE',
+              command_token: issueCommandToken,
+              modal_identity: `invoice:${invoiceId}`
+            });
+          } catch {}
+          toast(sendNow
+            ? 'Invoice issue and delivery preparation started. You can close this window.'
+            : 'Invoice issue preparation started. You can close this window.');
+        } else {
+          const st2 = String(issueRes?.status || '').toUpperCase();
+          if (st2 === 'ON_HOLD') {
+            const reasons = Array.isArray(issueRes?.reasons) ? issueRes.reasons : [];
+            const msg = reasons.length
+              ? `Invoice is ON HOLD and cannot be issued: ${reasons.join(', ')}`
+              : 'Invoice is ON HOLD and cannot be issued.';
+            throw new Error(msg);
+          }
+          if (st2 !== 'ISSUED') throw new Error(issueRes?.error || 'Failed to issue invoice.');
 
-        // ✅ NEW: Ask whether to email now (only if backend says eligible)
-        const emailEligible = (issueRes?.email_eligible === true);
-
-        if (emailEligible) {
-          const sendNow = await promptSendInvoiceEmailNow({
-            toEmail: issueRes?.email_to_suggest || issueRes?.email_to || null
-          });
-
-          if (sendNow) {
+          if (sendNow && issueRes?.email_eligible === true) {
             try {
               await invoiceModalFetchJson(`/api/invoices/${encodeURIComponent(invoiceId)}/email`, {
                 method: 'POST',
-                body: JSON.stringify({})
+                body: JSON.stringify({ command_token: issueCommandToken })
               });
               toast('Invoice email queued.');
             } catch (err) {
-              const msg = String(err?.message || err || 'Failed to queue invoice email.');
-              toast(msg);
+              toast(String(err?.message || err || 'Failed to queue invoice email.'));
             }
           }
         }
@@ -308346,13 +308371,18 @@ async function openInvoiceBatchIssueModal() {
       paint();
 
       try {
+        state.commandToken = state.commandToken || crypto.randomUUID();
         const out = await apiPostJsonLocal(API_CONFIRM, {
           allow_early: !!state.allowEarly,
-          invoice_ids: ids
+          invoice_ids: ids,
+          deliver: true,
+          command_token: state.commandToken,
+          delivery_request_token: state.commandToken
         });
 
         state.results = out || {};
-        window.__toast && window.__toast('Batch issue complete.');
+        try { window.registerInvoiceOperationsFromResponse?.(out, { purpose: 'BATCH_ISSUE_AND_DELIVER', command_token: state.commandToken }); } catch {}
+        window.__toast && window.__toast(Number(out?.accepted_count || 0) > 0 ? 'Batch issue and delivery preparation started. You can close this window.' : 'Batch issue request reviewed.');
       } catch (e) {
         state.error = String(e?.message || e);
       } finally {
@@ -309237,13 +309267,16 @@ async function openInvoiceBatchGenerateModal() {
       paint();
 
       try {
+        state.commandToken = state.commandToken || crypto.randomUUID();
         const out = await apiPostJsonLocal(API_CONFIRM, {
           allow_early: !!state.allowEarly,
-          rows: rowsPayload
+          rows: rowsPayload,
+          command_token: state.commandToken
         });
 
         state.results = out || {};
-        window.__toast && window.__toast(`Batch generate complete (generated: ${Number(out?.generated || 0)}).`);
+        try { window.registerInvoiceOperationsFromResponse?.(out, { purpose: 'BATCH_GENERATE', command_token: state.commandToken }); } catch {}
+        window.__toast && window.__toast(Number(out?.accepted_count || 0) > 0 ? 'Batch generation started. You can close this window.' : `Batch generation reviewed (ready: ${Number(out?.reused_ready_count || out?.generated || 0)}).`);
       } catch (e) {
         state.error = String(e?.message || e);
       } finally {
@@ -371165,6 +371198,15 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
               last_seen: buildHeartbeatLastSeenForRequest(requestedWorkbenchContext),
               banking_alert_hash: payloadHash
             };
+            try {
+              const invoiceWatches = typeof window.buildInvoiceHeartbeatWatches === 'function'
+                ? window.buildInvoiceHeartbeatWatches()
+                : [];
+              if (invoiceWatches.length) {
+                payload.last_seen = isHeartbeatPlainObject(payload.last_seen) ? payload.last_seen : {};
+                payload.last_seen.watched_invoice_operation_ids = invoiceWatches;
+              }
+            } catch {}
             if (requestedWorkbenchContext && requestedWorkbenchEntityKey) {
               const watchedKeys = Array.isArray(payload.last_seen?.__watched_entity_keys) ? payload.last_seen.__watched_entity_keys : [];
               const hasRequestedWatchKey = watchedKeys.some((row) => String(row?.entity_key || '').trim() === requestedWorkbenchEntityKey);
@@ -371267,6 +371309,12 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
             }
             return;
           }
+
+          try {
+            if (typeof window.applyInvoiceOperationUpdates === 'function') {
+              window.applyInvoiceOperationUpdates(json);
+            }
+          } catch {}
 
           if (requestSeq < Math.max(0, Math.trunc(Number(hb._latestAppliedPingSeq || 0)))) {
             if (requestedBankingAlertDetailRefresh && requestedBankingAlertDetailRefreshHash) clearBankingAlertDetailInFlightForHash(requestedBankingAlertDetailRefreshHash);
