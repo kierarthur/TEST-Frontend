@@ -10,7 +10,9 @@
     tsfinSettlement: 'IMPORT_REVIEW_TSFIN_SETTLEMENT_V1',
     incrementalApply: 'IMPORT_REVIEW_INCREMENTAL_APPLY_V1',
     ui: 'IMPORT_REVIEW_UI_V6',
-    emailGrouping: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1'
+    emailGrouping: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1',
+    canonicalCorrectionCarrier:
+      'BANKING_PAY_CANONICAL_CORRECTION_CARRIER_V1'
   });
   const PAGE_SIZES = Object.freeze([25, 50, 75, 100]);
   const ACTIVE_VIEWS = Object.freeze(['PENDING', 'READY', 'EMAIL', 'NO_ACTION']);
@@ -203,6 +205,8 @@
       && contract.incremental_apply_version === CONTRACT.incrementalApply
       && contract.review_ui_contract_version === CONTRACT.ui
       && contract.email_grouping_version === CONTRACT.emailGrouping
+      && contract.canonical_correction_carrier_version
+        === CONTRACT.canonicalCorrectionCarrier
       && contract.legacy_contracts_supported === false;
   }
 
