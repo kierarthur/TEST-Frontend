@@ -68,4 +68,3 @@ test('import review contract refuses a Worker without canonical carrier support'
     /contract\.canonical_correction_carrier_version[\s\S]*CONTRACT\.canonicalCorrectionCarrier/
   );
 });
-
