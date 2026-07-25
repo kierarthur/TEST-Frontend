@@ -52773,7 +52773,19 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       selectedPreviewRowMode
     );
     const rowIdSet = new Set(allSelectableRowIds);
+    const serverSelectionProvidedForRows = (
+      wiz.workbench.server_selected_preview_row_ids_provided === true ||
+      wiz.decisions.server_selected_preview_row_ids_provided === true
+    );
+    const serverSelectedRowIdSet = new Set(uniqTrimmed(
+      wiz.workbench.server_selected_preview_row_ids_provided === true
+        ? wiz.workbench.server_selected_preview_row_ids
+        : wiz.decisions.server_selected_preview_row_ids
+    ));
     const selectedSetForRows = (() => {
+      if (serverSelectionProvidedForRows) {
+        return new Set(allSelectableRowIds.filter((rowId) => serverSelectedRowIdSet.has(rowId)));
+      }
       if (reconciledSelectionForRows.selected_preview_row_mode === 'EXPLICIT_NONE') return new Set();
       if (reconciledSelectionForRows.selected_preview_row_mode === 'IMPLICIT_ALL') {
         return new Set(readyRows

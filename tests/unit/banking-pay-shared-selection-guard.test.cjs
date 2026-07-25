@@ -28,6 +28,22 @@ test('successful selection changes store the returned server progress revision',
   assert.match(body, /decisions\.progress_counter_version = progressCounterVersion/);
 });
 
+test('rendered preview checkboxes use the complete server-owned selection when provided', () => {
+  const body = sliceBetween(
+    'const buildPayPreviewRowsViewModel =',
+    'const previewRowsVm = buildPayPreviewRowsViewModel()'
+  );
+
+  assert.match(body, /const serverSelectionProvidedForRows =/);
+  assert.match(body, /workbench\.server_selected_preview_row_ids_provided === true/);
+  assert.match(body, /decisions\.server_selected_preview_row_ids_provided === true/);
+  assert.match(body, /const serverSelectedRowIdSet = new Set\(uniqTrimmed/);
+  assert.match(
+    body,
+    /if \(serverSelectionProvidedForRows\) \{\s*return new Set\(allSelectableRowIds\.filter\(\(rowId\) => serverSelectedRowIdSet\.has\(rowId\)\)\);\s*\}/
+  );
+});
+
 test('optimistic selection traversal is cycle-safe and bounded', () => {
   const body = sliceBetween(
     'const updatePreviewRowSelectionInLoadedState =',
