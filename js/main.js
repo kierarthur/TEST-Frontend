@@ -119832,16 +119832,46 @@ function bankingPayPreviewCanonicalStableKey(row, sectionHint = '') {
 }
 
 
+function createBankingPayGraphCloneV1() {
+  const memo = new WeakMap();
+
+  const clone = (value) => {
+    if (value == null || typeof value !== 'object') return value;
+    if (memo.has(value)) return memo.get(value);
+
+    if (value instanceof Date) {
+      const copiedDate = new Date(value.getTime());
+      memo.set(value, copiedDate);
+      memo.set(copiedDate, copiedDate);
+      return copiedDate;
+    }
+
+    if (Array.isArray(value)) {
+      const copiedArray = [];
+      memo.set(value, copiedArray);
+      memo.set(copiedArray, copiedArray);
+      for (const item of value) copiedArray.push(clone(item));
+      return copiedArray;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return value;
+
+    const copiedObject = {};
+    memo.set(value, copiedObject);
+    memo.set(copiedObject, copiedObject);
+    for (const [key, item] of Object.entries(value)) copiedObject[key] = clone(item);
+    return copiedObject;
+  };
+
+  return clone;
+}
+
+
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
-  const cloneJson = (value) => {
-    try {
-      return JSON.parse(JSON.stringify(value));
-    } catch {
-      return null;
-    }
-  };
+  const cloneJson = createBankingPayGraphCloneV1();
   const asArray = (value) => Array.isArray(value) ? value : [];
   const normalizeStringArray = (arr) => Array.isArray(arr)
     ? Array.from(new Set(arr.map((x) => trimStr(x)).filter(Boolean)))
@@ -123069,13 +123099,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
 function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
-  const cloneJson = (value) => {
-    try {
-      return JSON.parse(JSON.stringify(value));
-    } catch {
-      return null;
-    }
-  };
+  const cloneJson = createBankingPayGraphCloneV1();
   const asArray = (value) => Array.isArray(value) ? value : [];
   const normalizeStringArray = (arr) => Array.isArray(arr)
     ? Array.from(new Set(arr.map((x) => trimStr(x)).filter(Boolean)))
@@ -133614,6 +133638,41 @@ async function openBanking() {
           if (typeof d2 === 'function') d2();
         } catch {}
       }
+
+      // Banking Pay intentionally keeps a bounded, paged workbench while the
+      // modal is open. Release every reference to that graph on dismissal so
+      // late settled promises or detached controls cannot retain a complete
+      // preview after the modal frame has gone.
+      try {
+        const payState = (st?.pay && typeof st.pay === 'object') ? st.pay : null;
+        const wizard = (payState?.draftWizard && typeof payState.draftWizard === 'object')
+          ? payState.draftWizard
+          : null;
+        if (wizard) {
+          for (const key of Object.keys(wizard)) delete wizard[key];
+          wizard.preview = {
+            data: null,
+            loading: false,
+            error: '',
+            readiness: null,
+            candidateDebtInfo: {},
+            failure: null,
+            componentStateCache: {}
+          };
+          wizard.decisions = {};
+          wizard.workbench = {};
+        }
+        if (payState) {
+          if (payState.list && typeof payState.list === 'object') payState.list.items = [];
+          if (payState.selected && typeof payState.selected === 'object') payState.selected.data = null;
+          payState.draftWizard = null;
+        }
+        if (st.settings && typeof st.settings === 'object') {
+          st.settings.raw = null;
+          st.settings.response = null;
+        }
+        if (st.caps && typeof st.caps === 'object') st.caps.raw = null;
+      } catch {}
 
       try { if (ctx.__bankingDelegated) ctx.__bankingDelegated = null; } catch {}
       try { if (st) st._detach = null; } catch {}
@@ -322071,7 +322130,21 @@ bindSave(btnSave, top);
     const onOverlayClick=e=>{ if(top._confirmingDiscard||top._closing) return; if(e.target===byId('modalBack')) { e.preventDefault(); e.stopPropagation(); return; } };
     byId('modalBack').addEventListener('click', onOverlayClick, true);
 
-    top._detachGlobal = ()=>{ try{window.removeEventListener('modal-dirty',onDirtyEvt);}catch{} try{window.removeEventListener('modal-apply-enabled',onApplyEvt);}catch{} try{window.removeEventListener('modal-frame-mode-changed',onModeChanged);}catch{} try{window.removeEventListener('contract-margins-updated',onMarginsEvt);}catch{} try{window.removeEventListener('keydown',onModalKey);}catch{} try{window.removeEventListener('resize',onViewportChange);}catch{} try{window.removeEventListener('orientationchange',onViewportChange);}catch{} try{cancelAnimationFrame(viewportRaf);}catch{} try{byId('modalBack').removeEventListener('click', onOverlayClick, true);}catch{}; };
+    const previousDetachGlobal = (typeof top._detachGlobal === 'function') ? top._detachGlobal : null;
+    top._detachGlobal = ()=>{
+      try{window.removeEventListener('modal-dirty',onDirtyEvt);}catch{}
+      try{window.removeEventListener('modal-apply-enabled',onApplyEvt);}catch{}
+      try{window.removeEventListener('modal-frame-mode-changed',onModeChanged);}catch{}
+      try{window.removeEventListener('contract-margins-updated',onMarginsEvt);}catch{}
+      try{window.removeEventListener('keydown',onModalKey);}catch{}
+      try{window.removeEventListener('resize',onViewportChange);}catch{}
+      try{window.removeEventListener('orientationchange',onViewportChange);}catch{}
+      try{cancelAnimationFrame(viewportRaf);}catch{}
+      try{byId('modalBack').removeEventListener('click', onOverlayClick, true);}catch{}
+      if (previousDetachGlobal) {
+        try { previousDetachGlobal(); } catch {}
+      }
+    };
     top._wired = true;
     L('renderTop (global): listeners wired');
   }
