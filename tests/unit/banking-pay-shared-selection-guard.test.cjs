@@ -89,10 +89,14 @@ test('case rows present an expense only as a separate independently selected com
 
 test('active-draft reservations are excluded from display and candidate refresh caches', () => {
   const renderBody = sliceBetween(
-    'const pushUniquePreviewRows =',
+    'const isActiveDraftReservedRenderedRow =',
     'const collectRowsFromPageCaches ='
   );
-  assert.match(renderBody, /if \(isPostDraftUnavailablePreviewRow\(line\)\) continue/);
+  assert.match(renderBody, /post_draft_unavailable/);
+  assert.match(renderBody, /post_draft_overlay_active/);
+  assert.match(renderBody, /post_draft_overlay_operation_type/);
+  assert.match(renderBody, /\['DRAFT_CREATE', 'PAYMENT_EXECUTE', 'PAYMENT_SETTLE'\]/);
+  assert.match(renderBody, /if \(isActiveDraftReservedRenderedRow\(line\)\) continue/);
 
   const mergeBody = sliceBetween(
     'function mergePayWorkbenchCandidatePreviewIntoState(',

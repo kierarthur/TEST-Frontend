@@ -51534,10 +51534,51 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 
   const normalisePreviewRowArray = (value) => asArray(value).filter((line) => isPlainObject(line));
 
+  const isActiveDraftReservedRenderedRow = (line) => {
+    if (!isPlainObject(line)) return false;
+    const rowJson = isPlainObject(line.row_json)
+      ? line.row_json
+      : (isPlainObject(line.rowJson) ? line.rowJson : {});
+    const firstDefined = (...values) => {
+      for (const value of values) {
+        if (value !== undefined && value !== null && !(typeof value === 'string' && trimStr(value) === '')) return value;
+      }
+      return undefined;
+    };
+    const explicitlyUnavailable = firstDefined(
+      line.post_draft_unavailable,
+      line.postDraftUnavailable,
+      rowJson.post_draft_unavailable,
+      rowJson.postDraftUnavailable
+    );
+    if (explicitlyUnavailable !== undefined && asBool(explicitlyUnavailable)) return true;
+    const overlayActive = firstDefined(
+      line.post_draft_overlay_active,
+      line.postDraftOverlayActive,
+      rowJson.post_draft_overlay_active,
+      rowJson.postDraftOverlayActive
+    );
+    if (overlayActive !== undefined && !asBool(overlayActive)) return false;
+    const overlayApplied = firstDefined(
+      line.post_draft_overlay_applied,
+      line.postDraftOverlayApplied,
+      rowJson.post_draft_overlay_applied,
+      rowJson.postDraftOverlayApplied
+    );
+    if (!asBool(overlayApplied)) return false;
+    const operationType = upperTrim(firstDefined(
+      line.post_draft_overlay_operation_type,
+      line.postDraftOverlayOperationType,
+      rowJson.post_draft_overlay_operation_type,
+      rowJson.postDraftOverlayOperationType
+    ) || '');
+    return ['DRAFT_CREATE', 'PAYMENT_EXECUTE', 'PAYMENT_SETTLE'].includes(operationType);
+  };
+
   const pushUniquePreviewRows = (out, seen, rows, sourceName = '', filterFn = null) => {
     const source = trimStr(sourceName);
     for (const line of normalisePreviewRowArray(rows)) {
-      if (isPostDraftUnavailablePreviewRow(line)) continue;
+      if (isActiveDraftReservedRenderedRow(line)) continue;
       if (filterFn && !filterFn(line, source)) continue;
       const rowId = getPreviewRowId(line);
       const dedupeKey = rowId || [
