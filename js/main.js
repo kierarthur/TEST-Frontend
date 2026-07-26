@@ -292950,6 +292950,62 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
   if (reference_updates_compiled.length) payload.reference_updates = reference_updates_compiled;
 
   const hasApplyEdits = Object.keys(payload).length > 0;
+  const asyncInvoiceUiEnabled =
+    typeof window.isInvoiceAsyncUiEnabled === 'function'
+    && window.isInvoiceAsyncUiEnabled();
+  const asyncIssueAfterEdits =
+    asyncInvoiceUiEnabled
+    && hasApplyEdits
+    && wantIssued === true
+    && curIsIssued !== true;
+
+  const submitAsyncIssueFromCurrentDetail = async () => {
+    const canDeliver = modalCtx?.invoiceDetail?.can_issue_and_deliver === true
+      || modalCtx?.dataLoaded?.can_issue_and_deliver === true;
+    const sendNow = canDeliver ? await promptSendInvoiceEmailNow({
+      toEmail: modalCtx?.invoiceDetail?.email_summary?.to
+        || modalCtx?.dataLoaded?.email_summary?.to
+        || null
+    }) : false;
+    const issueCommandToken = String(
+      modalCtx?.invoiceAsync?.issue_command_token || crypto.randomUUID()
+    );
+    modalCtx.invoiceAsync = (modalCtx.invoiceAsync && typeof modalCtx.invoiceAsync === 'object')
+      ? modalCtx.invoiceAsync : {};
+    modalCtx.invoiceAsync.issue_command_token = issueCommandToken;
+    const expectedIssueRevision = String(
+      modalCtx?.invoiceDetail?.invoice?.document_revision
+      ?? modalCtx?.dataLoaded?.invoice?.document_revision
+      ?? modalCtx?.data?.document_revision
+      ?? ''
+    ).trim();
+    if (!/^[1-9][0-9]*$/.test(expectedIssueRevision)) {
+      throw new Error('The invoice revision is missing. Reload the invoice before issuing it.');
+    }
+    const issueRes = await invoiceModalFetchJson(`/api/invoices/${encodeURIComponent(invoiceId)}/issue`, {
+      method: 'POST',
+      body: JSON.stringify({
+        command_token: issueCommandToken,
+        expected_revision: expectedIssueRevision,
+        deliver: sendNow,
+        delivery_request_token: sendNow ? issueCommandToken : undefined
+      })
+    });
+    const operations = window.registerInvoiceOperationsFromResponse?.(issueRes, {
+      entity_type: 'INVOICE',
+      entity_id: invoiceId,
+      operation_type: 'ISSUE_INVOICES',
+      purpose: sendNow ? 'ISSUE_AND_DELIVER' : 'ISSUE',
+      command_token: issueCommandToken,
+      modal_identity: `invoice:${invoiceId}`,
+      explicit_operation_ids: true
+    }) || [];
+    modalCtx.invoiceAsync.issue_operation = operations[0] || null;
+    toast(sendNow
+      ? 'Invoice issue and delivery preparation started. You can close this window.'
+      : 'Invoice issue preparation started. You can close this window.');
+    return issueRes;
+  };
 
   // ✅ Confirm dialogs (status changes only)
   // (Do this BEFORE we mark the modal busy)
@@ -292977,7 +293033,7 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
   // If there are apply-edits staged, we must ensure invoice will NOT be ISSUED/PAID at apply time.
   if (hasApplyEdits) {
     const willStillBeIssued = (wantIssued == null) ? curIsIssued : wantIssued;
-    if (willStillBeIssued) {
+    if (willStillBeIssued && !asyncIssueAfterEdits) {
       throw new Error('Cannot edit invoice lines/segments/refs while invoice is ISSUED. Unissue first (staged) and Save again.');
     }
 
@@ -293014,6 +293070,9 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
     // 2) ISSUE / UNISSUE
     if (wantIssued !== null && wantIssued !== curIsIssued) {
       if (wantIssued) {
+        if (asyncInvoiceUiEnabled) {
+          if (!asyncIssueAfterEdits) await submitAsyncIssueFromCurrentDetail();
+        } else {
         const canDeliver = modalCtx?.invoiceDetail?.can_issue_and_deliver === true
           || modalCtx?.dataLoaded?.can_issue_and_deliver === true;
         const sendNow = canDeliver ? await promptSendInvoiceEmailNow({
@@ -293075,6 +293134,7 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
               toast(String(err?.message || err || 'Failed to queue invoice email.'));
             }
           }
+        }
         }
       } else {
         // ✅ clear_pdf MUST be true on unissue (invalidate bundle)
@@ -293152,6 +293212,14 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
         rerender();
         throw err;
       }
+    }
+
+    // Async issue must use the revision returned after edits are committed.
+    // Rendering and delivery remain background operations; this only submits
+    // the legal issue command against the freshly reloaded revision.
+    if (asyncIssueAfterEdits) {
+      await reload();
+      await submitAsyncIssueFromCurrentDetail();
     }
 
     // 5) Clear staged edits + exit edit mode
@@ -344612,6 +344680,28 @@ function renderTimesheetEvidenceTab(ctx) {
 
         const kindU = String(ev?.kind || '').trim().toUpperCase();
         const isAuthorisationRow = (kindU === 'AUTHORISATION');
+        const assetState = String(ev?.asset_state || '').trim();
+        const assetOperationId = String(ev?.asset_operation_id || ev?.asset_operation?.operation_id || '').trim();
+        const timesheetDocumentState = String(ev?.timesheet_document_state || '').trim();
+        const documentOperationId = String(
+          ev?.timesheet_document_operation_id
+          || ev?.document_operation_id
+          || ev?.timesheet_document_operation?.operation_id
+          || ''
+        ).trim();
+        const asyncProcessingHtml = (
+          typeof window.isInvoiceAsyncUiEnabled === 'function'
+          && window.isInvoiceAsyncUiEnabled()
+          && typeof window.renderTimesheetEvidenceProcessingState === 'function'
+          && (assetState || assetOperationId || timesheetDocumentState || documentOperationId)
+        ) ? window.renderTimesheetEvidenceProcessingState({
+          asset_state: assetState || 'QUEUED',
+          asset_error: ev?.asset_error || ev?.asset_error_code || null,
+          asset_operation_id: assetOperationId || null,
+          asset_operation: ev?.asset_operation || null,
+          timesheet_document_state: timesheetDocumentState || 'NOT_READY',
+          timesheet_document_operation: ev?.timesheet_document_operation || null
+        }) : '';
 
         const viewBtn = isAuthorisationRow
           ? ''
@@ -344670,6 +344760,11 @@ function renderTimesheetEvidenceTab(ctx) {
 
         return `
           <tr data-evidence-id="${escapeHtml(id)}"
+              data-timesheet-id="${escapeHtml(tsId)}"
+              data-asset-state="${escapeHtml(assetState)}"
+              data-asset-operation-id="${escapeHtml(assetOperationId)}"
+              data-timesheet-document-state="${escapeHtml(timesheetDocumentState)}"
+              data-document-operation-id="${escapeHtml(documentOperationId)}"
               class="${system ? 'system-evidence' : ''}">
             <td>${fileName}</td>
             <td>${type}</td>
@@ -344686,6 +344781,7 @@ function renderTimesheetEvidenceTab(ctx) {
               ${returnBtn}
               ${dlBtn}
               ${delBtn}
+              ${asyncProcessingHtml ? `<div style="white-space:normal;text-align:left;">${asyncProcessingHtml}</div>` : ''}
             </td>
           </tr>
         `;
@@ -359609,6 +359705,28 @@ function renderTimesheetEvidenceTab(ctx) {
 
         const kindU = String(ev?.kind || '').trim().toUpperCase();
         const isAuthorisationRow = (kindU === 'AUTHORISATION');
+        const assetState = String(ev?.asset_state || '').trim();
+        const assetOperationId = String(ev?.asset_operation_id || ev?.asset_operation?.operation_id || '').trim();
+        const timesheetDocumentState = String(ev?.timesheet_document_state || '').trim();
+        const documentOperationId = String(
+          ev?.timesheet_document_operation_id
+          || ev?.document_operation_id
+          || ev?.timesheet_document_operation?.operation_id
+          || ''
+        ).trim();
+        const asyncProcessingHtml = (
+          typeof window.isInvoiceAsyncUiEnabled === 'function'
+          && window.isInvoiceAsyncUiEnabled()
+          && typeof window.renderTimesheetEvidenceProcessingState === 'function'
+          && (assetState || assetOperationId || timesheetDocumentState || documentOperationId)
+        ) ? window.renderTimesheetEvidenceProcessingState({
+          asset_state: assetState || 'QUEUED',
+          asset_error: ev?.asset_error || ev?.asset_error_code || null,
+          asset_operation_id: assetOperationId || null,
+          asset_operation: ev?.asset_operation || null,
+          timesheet_document_state: timesheetDocumentState || 'NOT_READY',
+          timesheet_document_operation: ev?.timesheet_document_operation || null
+        }) : '';
 
         const viewBtn = isAuthorisationRow
           ? ''
@@ -359667,6 +359785,11 @@ function renderTimesheetEvidenceTab(ctx) {
 
         return `
           <tr data-evidence-id="${escapeHtml(id)}"
+              data-timesheet-id="${escapeHtml(tsId)}"
+              data-asset-state="${escapeHtml(assetState)}"
+              data-asset-operation-id="${escapeHtml(assetOperationId)}"
+              data-timesheet-document-state="${escapeHtml(timesheetDocumentState)}"
+              data-document-operation-id="${escapeHtml(documentOperationId)}"
               class="${system ? 'system-evidence' : ''}">
             <td>${fileName}</td>
             <td>${type}</td>
@@ -359683,6 +359806,7 @@ function renderTimesheetEvidenceTab(ctx) {
               ${returnBtn}
               ${dlBtn}
               ${delBtn}
+              ${asyncProcessingHtml ? `<div style="white-space:normal;text-align:left;">${asyncProcessingHtml}</div>` : ''}
             </td>
           </tr>
         `;
@@ -367893,6 +368017,14 @@ async function bootstrapApp(){
     } catch {}
   } catch {}
 
+  // Capability-gated invoice async UI. A failed or ineligible capability
+  // check deliberately leaves every legacy invoice function untouched.
+  try {
+    if (typeof window.initialiseInvoiceAsyncUi === 'function') {
+      await window.initialiseInvoiceAsyncUi({ force: true });
+    }
+  } catch {}
+
   // ✅ NEW: pay_auth_token deep link (payment authorisation) — open approval modal on boot
   try {
     const u = new URL(location.href);
@@ -370827,6 +370959,16 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
   }
 }
 
+// Invoice async uses this existing section pipeline only for debounced,
+// material terminal changes. It preserves the active summary state and does
+// not add another polling loop.
+window.invoiceAsyncRefreshVisibleSection = async function invoiceAsyncRefreshVisibleSection() {
+  if (currentSection !== 'invoices') return false;
+  const data = await loadSection();
+  renderSummary(data);
+  try { renderTools(); } catch {}
+  return true;
+};
 
 // Initialize
 initAuthUI();

@@ -8,6 +8,6 @@ const html = fs.readFileSync(path.resolve(__dirname, '../../index.html'), 'utf8'
 test('loads the current main frontend asset through an explicit cache version', () => {
   assert.match(
     html,
-    /<script src="\.\/js\/main\.js\?v=20260726-active-draft-exclusion-v3"><\/script>/
+    /<script src="\.\/js\/main\.js\?v=20260726-invoice-batch-v1"><\/script>/
   );
 });
