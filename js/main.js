@@ -48764,7 +48764,7 @@ const collectPreviewRowIds = (previewLike) => {
     return trimStr(line.preview_row_id || line.previewRowId || line.row_id || line.rowId || line.line_id || line.lineId || line.id);
   };
 
-const isPreviewRowSelectionAllowed = (line) => {
+  const isPreviewRowSelectionAllowed = (line) => {
     if (!isPlainObject(line)) return false;
 
     const rowJson = isPlainObject(line.row_json)
@@ -48941,7 +48941,6 @@ const isPreviewRowSelectionAllowed = (line) => {
 
     return !!getPreviewRowId(line);
   };
-
 
   const allPreviewRowIds = uniqTrimmed(collectPreviewRowIds(pv));
   const allPreviewRowIdSet = new Set(allPreviewRowIds);
@@ -50890,10 +50889,12 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     `;
   };
 
-  const renderPreviewLineBreakdown = (line) => (
+  const renderPreviewLineBreakdown = (line, renderContextSection = '') => (
     isOverpaymentRecoveryLine(line)
       ? renderOverpaymentRecoveryBreakdown(line)
-      : renderExpenseComponentBreakdown(line)
+      : (upperTrim(renderContextSection || getLinePresentationSection(line)) === 'CASES_RESOLUTIONS'
+          ? ''
+          : renderExpenseComponentBreakdown(line))
   );
 
   const getReadyTimesheetGroupKey = (line) => {
@@ -51348,7 +51349,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const expenseComponentLabel = isExactTimesheetExpenseLine(line) ? getExpenseComponentFriendlyLabel(line) : '';
       const detailRowHtml = [
         blockedUi.showSegmentDetail ? renderTimesheetSegmentRows(line) : '',
-        renderPreviewLineBreakdown(line)
+        renderPreviewLineBreakdown(line, renderContextSection)
       ].filter(Boolean).join('');
       const advisory = getParentSectionAdvisory(line);
       const segmentCount = getLineSectionSegmentCount(line);
@@ -51435,7 +51436,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const cancelResolvedRateHtml = resolvedRateCancelActionHtml(line, renderContextSection);
       const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, actionHtml].filter(Boolean).join(' ');
       const expenseComponentLabel = isExactTimesheetExpenseLine(line) ? getExpenseComponentFriendlyLabel(line) : '';
-      const detailRowHtml = renderPreviewLineBreakdown(line);
+      const detailRowHtml = renderPreviewLineBreakdown(line, renderContextSection);
       const info = getSnoozeInfo(line);
       const stateLabel = stateLabelOverride || (
         section === 'BLOCKED_FOR_PAY'
@@ -51536,6 +51537,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const pushUniquePreviewRows = (out, seen, rows, sourceName = '', filterFn = null) => {
     const source = trimStr(sourceName);
     for (const line of normalisePreviewRowArray(rows)) {
+      if (isPostDraftUnavailablePreviewRow(line)) continue;
       if (filterFn && !filterFn(line, source)) continue;
       const rowId = getPreviewRowId(line);
       const dedupeKey = rowId || [
@@ -123118,6 +123120,48 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     ? (cloneJson(rows.slice(0, Math.max(0, Math.min(MAX_CANDIDATE_MERGE_ROWS, Math.trunc(Number(limit) || MAX_CANDIDATE_MERGE_ROWS))))) || [])
     : [];
   const boolish = (value) => value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(trimStr(value).toLowerCase());
+  const isActiveDraftReservedCandidateRow = (row) => {
+    if (!isPlainObject(row)) return false;
+    const rowJson = isPlainObject(row.row_json)
+      ? row.row_json
+      : (isPlainObject(row.rowJson) ? row.rowJson : {});
+    const firstDefined = (...values) => {
+      for (const value of values) {
+        if (value !== undefined && value !== null && !(typeof value === 'string' && trimStr(value) === '')) return value;
+      }
+      return undefined;
+    };
+    const explicitlyUnavailable = firstDefined(
+      row.post_draft_unavailable,
+      row.postDraftUnavailable,
+      rowJson.post_draft_unavailable,
+      rowJson.postDraftUnavailable
+    );
+    if (explicitlyUnavailable !== undefined && boolish(explicitlyUnavailable)) return true;
+    const overlayActive = firstDefined(
+      row.post_draft_overlay_active,
+      row.postDraftOverlayActive,
+      rowJson.post_draft_overlay_active,
+      rowJson.postDraftOverlayActive
+    );
+    if (overlayActive !== undefined && !boolish(overlayActive)) return false;
+    const overlayApplied = firstDefined(
+      row.post_draft_overlay_applied,
+      row.postDraftOverlayApplied,
+      rowJson.post_draft_overlay_applied,
+      rowJson.postDraftOverlayApplied
+    );
+    if (!boolish(overlayApplied)) return false;
+    const operationType = trimStr(firstDefined(
+      row.post_draft_overlay_operation_type,
+      row.postDraftOverlayOperationType,
+      rowJson.post_draft_overlay_operation_type,
+      rowJson.postDraftOverlayOperationType
+    ) || '').toUpperCase();
+    return ['DRAFT_CREATE', 'PAYMENT_EXECUTE', 'PAYMENT_SETTLE'].includes(operationType);
+  };
+  const filterActiveDraftReservedCandidateRows = (rows) => asArray(rows)
+    .filter((row) => !isActiveDraftReservedCandidateRow(row));
   const firstArrayValue = (...values) => {
     for (const value of values) if (Array.isArray(value)) return value;
     return [];
@@ -123660,7 +123704,7 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
       responseObj.candidate_preview?.rows,
       responseObj.candidate_preview?.items
     );
-    if (Array.isArray(directRows)) return capRows(directRows);
+    if (Array.isArray(directRows)) return capRows(filterActiveDraftReservedCandidateRows(directRows));
     const combined = [];
     const pushRows = (rows) => {
       if (!Array.isArray(rows)) return;
@@ -123687,7 +123731,7 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     pushRows(responsePreview?.ready_preview_lines);
     pushRows(responsePreview?.blocked_preview_lines);
     pushRows(responsePreview?.case_resolution_states);
-    return capRows(combined);
+    return capRows(filterActiveDraftReservedCandidateRows(combined));
   };
   const candidateRowPayloadProvided = !!(
     Array.isArray(responseObj.preview_rows) ||
@@ -123717,7 +123761,13 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   })();
   const mergeRowsForKey = (key, sections = ['canonical_preview_lines']) => {
     const explicit = firstArrayOrNull(responseObj[key], responsePreview?.[key], responseObj.candidate_preview?.[key]);
-    if (Array.isArray(explicit)) return mergeRowsForCandidate(nextPreview[key], capRows(explicit), responseCandidateId);
+    if (Array.isArray(explicit)) {
+      return mergeRowsForCandidate(
+        nextPreview[key],
+        capRows(filterActiveDraftReservedCandidateRows(explicit)),
+        responseCandidateId
+      );
+    }
     if (!candidateRowPayloadProvided) return Array.isArray(nextPreview[key]) ? capRows(nextPreview[key]) : [];
     const incoming = [];
     for (const section of sections) incoming.push(...asArray(candidateRowsBySection[section]));

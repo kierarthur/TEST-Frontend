@@ -74,15 +74,38 @@ test('a resolved Ready row is not hidden by its historical case-readiness label'
 test('case rows present an expense only as a separate independently selected component', () => {
   const body = sliceBetween(
     'const renderExpenseComponentBreakdown =',
-    'const renderPreviewLineBreakdown ='
+    'const getReadyTimesheetGroupKey ='
   );
 
   assert.match(body, /Show separate expense component/);
   assert.match(body, /It is not part of this case resolution and keeps its own selection\./);
+  assert.match(body, /upperTrim\(renderContextSection \|\| getLinePresentationSection\(line\)\) === 'CASES_RESOLUTIONS'/);
+  assert.match(body, /\? ''\s*:\s*renderExpenseComponentBreakdown\(line\)/);
   assert.match(
     mainSource,
     /const expenseComponentLabel = isExactTimesheetExpenseLine\(line\) \? getExpenseComponentFriendlyLabel\(line\) : '';/g
   );
+});
+
+test('active-draft reservations are excluded from display and candidate refresh caches', () => {
+  const renderBody = sliceBetween(
+    'const pushUniquePreviewRows =',
+    'const collectRowsFromPageCaches ='
+  );
+  assert.match(renderBody, /if \(isPostDraftUnavailablePreviewRow\(line\)\) continue/);
+
+  const mergeBody = sliceBetween(
+    'function mergePayWorkbenchCandidatePreviewIntoState(',
+    'async function bankingPayWorkbench'
+  );
+  assert.match(mergeBody, /const isActiveDraftReservedCandidateRow =/);
+  assert.match(mergeBody, /post_draft_unavailable/);
+  assert.match(mergeBody, /post_draft_overlay_active/);
+  assert.match(mergeBody, /post_draft_overlay_operation_type/);
+  assert.match(mergeBody, /\['DRAFT_CREATE', 'PAYMENT_EXECUTE', 'PAYMENT_SETTLE'\]/);
+  assert.match(mergeBody, /filterActiveDraftReservedCandidateRows\(directRows\)/);
+  assert.match(mergeBody, /filterActiveDraftReservedCandidateRows\(combined\)/);
+  assert.match(mergeBody, /filterActiveDraftReservedCandidateRows\(explicit\)/);
 });
 
 test('optimistic selection traversal is cycle-safe and bounded', () => {
