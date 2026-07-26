@@ -112,6 +112,19 @@ test('active-draft reservations are excluded from display and candidate refresh 
   assert.match(mergeBody, /filterActiveDraftReservedCandidateRows\(explicit\)/);
 });
 
+test('the canonical page replaces stale session selection totals with current eligible selections', () => {
+  const body = sliceBetween(
+    'const applyPreviewPagePayloadToState =',
+    'const applyAuthoritativePreviewVisualState ='
+  );
+
+  assert.match(body, /if \(resolvedSection === 'canonical_preview_lines'\)/);
+  assert.match(body, /page\.selected_row_count/);
+  assert.match(body, /page\.selected_eligible_ready_row_count/);
+  assert.match(body, /wiz\.workbench\.selected_row_count = boundedSelectedEligibleCount/);
+  assert.match(body, /wiz\.workbench\.selected_eligible_ready_row_count = boundedSelectedEligibleCount/);
+});
+
 test('optimistic selection traversal is cycle-safe and bounded', () => {
   const body = sliceBetween(
     'const updatePreviewRowSelectionInLoadedState =',

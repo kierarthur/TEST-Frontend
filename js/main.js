@@ -30928,6 +30928,20 @@ async function bankingPayPreview(pay_date) {
     wiz.workbench.required_preview_sections_loaded = loadedSections;
     wiz.workbench.requiredPreviewSectionsLoaded = { ...loadedSections };
 
+    if (resolvedSection === 'canonical_preview_lines') {
+      const selectedEligibleCount = Number(
+        page.selected_row_count ??
+        page.selectedRowCount ??
+        page.selected_eligible_ready_row_count ??
+        page.selectedEligibleReadyRowCount
+      );
+      if (Number.isFinite(selectedEligibleCount) && selectedEligibleCount >= 0) {
+        const boundedSelectedEligibleCount = Math.trunc(selectedEligibleCount);
+        wiz.workbench.selected_row_count = boundedSelectedEligibleCount;
+        wiz.workbench.selected_eligible_ready_row_count = boundedSelectedEligibleCount;
+      }
+    }
+
     const syntheticPayload = buildSectionSpecificSyntheticPreviewPayload(resolvedSection, pageRows, cachedPage, sourcePayload);
     if (typeof applyPayWorkbenchPreviewToState === 'function') {
       try {
