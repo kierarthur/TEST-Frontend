@@ -1151,7 +1151,17 @@
   });
 
   window.__invoiceAsyncCapability = unavailableCapabilities('NOT_INITIALISED');
-  const begin = () => initialiseInvoiceAsyncUi().catch(() => unavailableCapabilities());
+  const begin = () => {
+    // The capability endpoint is authenticated. On the signed-out login page,
+    // wait for bootstrapApp() after login instead of creating an expected 401
+    // request and a noisy browser console entry.
+    if (!capabilityCacheKey()) {
+      return Promise.resolve(cacheInvoiceAsyncCapabilities(
+        unavailableCapabilities('INVOICE_ASYNC_AUTHENTICATED_USER_REQUIRED')
+      ));
+    }
+    return initialiseInvoiceAsyncUi().catch(() => unavailableCapabilities());
+  };
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', begin, { once: true });
   } else {

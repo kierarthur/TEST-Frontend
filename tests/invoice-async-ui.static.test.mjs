@@ -12,6 +12,7 @@ test('capability gating is V7-exact and does not install async overrides uncondi
   assert.match(uiSource, /INVOICE_DOCUMENT_VERSION_ACCESS_V1/);
   assert.match(uiSource, /enabled_for_user\s*!==\s*true/);
   assert.match(uiSource, /initialiseInvoiceAsyncUi/);
+  assert.match(uiSource, /if\s*\(!capabilityCacheKey\(\)\)/);
   assert.doesNotMatch(uiSource, /installOverrides\(\);\s*document\.addEventListener/);
   assert.doesNotMatch(uiSource, /installAsyncFetchObserver/);
   assert.doesNotMatch(uiSource, /window\.authFetch\s*=\s*observed/);
