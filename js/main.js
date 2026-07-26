@@ -91791,7 +91791,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           st.pay.draftWizard.workbench.selected_eligible_ready_row_count = Math.max(0, Math.trunc(selectedCount));
         }
         st.pay.draftWizard.workbench.server_selected_preview_row_ids = selectedIds;
-        st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided = payload.server_selected_preview_row_ids_provided === true || payload.selected_preview_row_ids_provided === true;
+        st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided =
+          payload.server_selected_preview_row_ids_provided === true ||
+          payload.selected_preview_row_ids_provided === true ||
+          Array.isArray(payload.server_selected_preview_row_ids) ||
+          Array.isArray(payload.selected_preview_row_ids);
         decisions.server_selected_preview_row_ids = selectedIds;
         decisions.server_selected_preview_row_ids_provided = st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided;
         if (Number.isSafeInteger(progressCounterVersion) && progressCounterVersion >= 0) {

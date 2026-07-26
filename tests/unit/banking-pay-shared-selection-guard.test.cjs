@@ -28,6 +28,20 @@ test('successful selection changes store the returned server progress revision',
   assert.match(body, /decisions\.progress_counter_version = progressCounterVersion/);
 });
 
+test('successful selection changes treat a returned selected-row array as complete server authority', () => {
+  const body = sliceBetween(
+    'const applySelectionPayloadSummaryToWizard =',
+    'const togglePreviewRowSelection ='
+  );
+
+  assert.match(body, /Array\.isArray\(payload\.server_selected_preview_row_ids\)/);
+  assert.match(body, /Array\.isArray\(payload\.selected_preview_row_ids\)/);
+  assert.match(
+    body,
+    /workbench\.server_selected_preview_row_ids_provided =[\s\S]*payload\.server_selected_preview_row_ids_provided === true[\s\S]*payload\.selected_preview_row_ids_provided === true[\s\S]*Array\.isArray\(payload\.server_selected_preview_row_ids\)[\s\S]*Array\.isArray\(payload\.selected_preview_row_ids\)/
+  );
+});
+
 test('rendered preview checkboxes use the complete server-owned selection when provided', () => {
   const body = sliceBetween(
     'const buildPayPreviewRowsViewModel =',
