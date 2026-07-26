@@ -48870,22 +48870,6 @@ const isPreviewRowSelectionAllowed = (line) => {
     const rowKey = trimStr(firstDefined(line.row_key, line.rowKey, line.line_key, line.lineKey, rowJson.row_key, rowJson.rowKey, rowJson.line_key, rowJson.lineKey) || '');
     if (rowKey.toLowerCase().startsWith('timesheet_snapshot:')) return false;
 
-    const readinessState = normaliseSelectionSection(firstDefined(
-      line.readiness_state,
-      line.readinessState,
-      rowJson.readiness_state,
-      rowJson.readinessState
-    ));
-    if (forbiddenSections.has(readinessState)) return false;
-
-    const lineType = normaliseSelectionSection(firstDefined(line.line_type, line.lineType, rowJson.line_type, rowJson.lineType));
-    if (lineType === 'BLOCKED_FOR_PAY' || lineType === 'CASES_RESOLUTIONS' || lineType === 'INTERNAL_ONLY') return false;
-
-    if (asBool(firstDefined(line.internal_only, line.internalOnly, rowJson.internal_only, rowJson.internalOnly))) return false;
-    if (asBool(firstDefined(line.is_excluded_from_allocation, line.isExcludedFromAllocation, rowJson.is_excluded_from_allocation, rowJson.isExcludedFromAllocation))) return false;
-    if (asBool(firstDefined(line.do_not_pay, line.doNotPay, rowJson.do_not_pay, rowJson.doNotPay))) return false;
-    if (asBool(firstDefined(line.case_is_blocked, line.caseIsBlocked, rowJson.case_is_blocked, rowJson.caseIsBlocked))) return false;
-
     const explicitSelectionAllowed = firstDefined(
       line.selection_allowed,
       line.selectionAllowed,
@@ -48894,8 +48878,6 @@ const isPreviewRowSelectionAllowed = (line) => {
       previewContract.selection_allowed,
       previewContract.selectionAllowed
     );
-    if (explicitSelectionAllowed !== undefined && !asBool(explicitSelectionAllowed)) return false;
-
     const explicitReadyForDraft = firstDefined(
       line.is_ready_for_draft,
       line.isReadyForDraft,
@@ -48908,8 +48890,6 @@ const isPreviewRowSelectionAllowed = (line) => {
       previewContract.is_ready_for_draft,
       previewContract.isReadyForDraft
     );
-    if (explicitReadyForDraft !== undefined && !asBool(explicitReadyForDraft)) return false;
-
     const explicitDraftable = firstDefined(
       line.draftable,
       line.is_draftable,
@@ -48919,6 +48899,35 @@ const isPreviewRowSelectionAllowed = (line) => {
       rowJson.isDraftable,
       previewContract.draftable
     );
+    const currentReadyContract = sectionSignals.some((section) => section === 'READY_TO_PAY')
+      && asBool(explicitSelectionAllowed)
+      && asBool(explicitReadyForDraft)
+      && asBool(explicitDraftable);
+
+    const readinessState = normaliseSelectionSection(firstDefined(
+      line.readiness_state,
+      line.readinessState,
+      rowJson.readiness_state,
+      rowJson.readinessState
+    ));
+    // A resolved case may retain its historical CASES_RESOLUTIONS readiness
+    // label after the database has promoted it to a current READY_TO_PAY row.
+    // The current server-owned selection/draft contract wins; the backend
+    // still revalidates the exact row before any draft is created.
+    if (forbiddenSections.has(readinessState) && !currentReadyContract) return false;
+
+    const lineType = normaliseSelectionSection(firstDefined(line.line_type, line.lineType, rowJson.line_type, rowJson.lineType));
+    if (lineType === 'BLOCKED_FOR_PAY' || lineType === 'CASES_RESOLUTIONS' || lineType === 'INTERNAL_ONLY') return false;
+
+    if (asBool(firstDefined(line.internal_only, line.internalOnly, rowJson.internal_only, rowJson.internalOnly))) return false;
+    if (asBool(firstDefined(line.is_excluded_from_allocation, line.isExcludedFromAllocation, rowJson.is_excluded_from_allocation, rowJson.isExcludedFromAllocation))) return false;
+    if (asBool(firstDefined(line.do_not_pay, line.doNotPay, rowJson.do_not_pay, rowJson.doNotPay))) return false;
+    if (asBool(firstDefined(line.case_is_blocked, line.caseIsBlocked, rowJson.case_is_blocked, rowJson.caseIsBlocked))) return false;
+
+    if (explicitSelectionAllowed !== undefined && !asBool(explicitSelectionAllowed)) return false;
+
+    if (explicitReadyForDraft !== undefined && !asBool(explicitReadyForDraft)) return false;
+
     if (explicitDraftable !== undefined && !asBool(explicitDraftable)) return false;
 
     const hasReadySection = sectionSignals.some((section) => section === 'READY_TO_PAY') || readinessState === 'READY_TO_PAY';
@@ -50796,11 +50805,11 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     if (!expenseRows.length) return '';
 
     const summaryText = expenseRows.length > 1
-      ? `Show expense breakdown (${expenseRows.length})`
-      : 'Show expense component';
+      ? `Show separate expense components (${expenseRows.length})`
+      : 'Show separate expense component';
     const explanation = expenseRows.length > 1
-      ? 'This timesheet has separate payable expense components. Each visible line remains a separate selected payment row.'
-      : 'This visible line is a separate payable expense component.';
+      ? 'This timesheet also has separate payable expense components. They are not part of this case resolution and each keeps its own selection.'
+      : 'This timesheet also has a separate payable expense component. It is not part of this case resolution and keeps its own selection.';
 
     return `
       <details style="margin-top:8px;">
@@ -51336,7 +51345,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const cancelResolvedRateHtml = resolvedRateCancelActionHtml(line, renderContextSection);
       const expenseActionHtml = isExactTimesheetExpenseLine(line) ? previewActionHtml(line) : '';
       const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, expenseActionHtml, wholeActionHtml].filter(Boolean).join(' ');
-      const expenseComponentLabel = isOverpaymentRecoveryLine(line) ? '' : getExpenseComponentFriendlyLabel(line);
+      const expenseComponentLabel = isExactTimesheetExpenseLine(line) ? getExpenseComponentFriendlyLabel(line) : '';
       const detailRowHtml = [
         blockedUi.showSegmentDetail ? renderTimesheetSegmentRows(line) : '',
         renderPreviewLineBreakdown(line)
@@ -51425,7 +51434,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         : '';
       const cancelResolvedRateHtml = resolvedRateCancelActionHtml(line, renderContextSection);
       const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, actionHtml].filter(Boolean).join(' ');
-      const expenseComponentLabel = isOverpaymentRecoveryLine(line) ? '' : getExpenseComponentFriendlyLabel(line);
+      const expenseComponentLabel = isExactTimesheetExpenseLine(line) ? getExpenseComponentFriendlyLabel(line) : '';
       const detailRowHtml = renderPreviewLineBreakdown(line);
       const info = getSnoozeInfo(line);
       const stateLabel = stateLabelOverride || (

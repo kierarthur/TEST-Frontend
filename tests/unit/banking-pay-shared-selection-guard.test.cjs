@@ -58,6 +58,33 @@ test('rendered preview checkboxes use the complete server-owned selection when p
   );
 });
 
+test('a resolved Ready row is not hidden by its historical case-readiness label', () => {
+  const body = sliceBetween(
+    'const isPreviewRowSelectionAllowed =',
+    'const allPreviewRowIds ='
+  );
+
+  assert.match(body, /const currentReadyContract = sectionSignals\.some\(\(section\) => section === 'READY_TO_PAY'\)/);
+  assert.match(body, /&& asBool\(explicitSelectionAllowed\)/);
+  assert.match(body, /&& asBool\(explicitReadyForDraft\)/);
+  assert.match(body, /&& asBool\(explicitDraftable\)/);
+  assert.match(body, /if \(forbiddenSections\.has\(readinessState\) && !currentReadyContract\) return false/);
+});
+
+test('case rows present an expense only as a separate independently selected component', () => {
+  const body = sliceBetween(
+    'const renderExpenseComponentBreakdown =',
+    'const renderPreviewLineBreakdown ='
+  );
+
+  assert.match(body, /Show separate expense component/);
+  assert.match(body, /It is not part of this case resolution and keeps its own selection\./);
+  assert.match(
+    mainSource,
+    /const expenseComponentLabel = isExactTimesheetExpenseLine\(line\) \? getExpenseComponentFriendlyLabel\(line\) : '';/g
+  );
+});
+
 test('optimistic selection traversal is cycle-safe and bounded', () => {
   const body = sliceBetween(
     'const updatePreviewRowSelectionInLoadedState =',
