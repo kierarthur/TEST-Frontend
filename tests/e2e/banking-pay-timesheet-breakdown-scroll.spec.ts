@@ -15,7 +15,7 @@ test('opens timesheet breakdowns without flashing the Ready list back to the top
     if (url.startsWith('https://cloudtms.kier-88a.workers.dev/')) unexpectedProductionBackendRequests.push(url);
   });
 
-  await page.route('**/js/main.js', async (route) => {
+  await page.route('**/js/main.js*', async (route) => {
     const url = new URL(route.request().url());
     if (url.hostname !== 'testmode.arthur-rai.co.uk' || url.pathname !== '/js/main.js') {
       await route.continue();
@@ -36,7 +36,7 @@ test('opens timesheet breakdowns without flashing the Ready list back to the top
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
   expect(new URL(page.url()).hostname).toBe('testmode.arthur-rai.co.uk');
-  expect(interceptedMainUrl).toBe('https://testmode.arthur-rai.co.uk/js/main.js');
+  expect(new URL(interceptedMainUrl).pathname).toBe('/js/main.js');
 
   await page.getByRole('button', { name: 'Banking' }).click();
   await page.getByRole('button', { name: 'Pay', exact: true }).click();
@@ -206,5 +206,117 @@ test('opens timesheet breakdowns without flashing the Ready list back to the top
   expect(unscrolledExpandedSamples.length).toBeGreaterThan(0);
   expect(unscrolledExpandedSamples.every((sample) => sample.scrollTop === 0)).toBe(true);
   expect(Array.from(new Set(unscrolledExpandedSamples.map((sample) => sample.rowTop)))).toEqual([unscrolledInitial.rowTop]);
+  expect(unexpectedProductionBackendRequests).toEqual([]);
+});
+
+test('shows canonical correction date and correction-specific actions in a Ready timesheet breakdown', async ({ page }) => {
+  test.setTimeout(120_000);
+
+  const localMainPath = resolve(__dirname, '../../js/main.js');
+  let interceptedMainUrl = '';
+  const unexpectedProductionBackendRequests: string[] = [];
+
+  page.on('request', (request) => {
+    const url = request.url();
+    if (url.startsWith('https://cloudtms.kier-88a.workers.dev/')) unexpectedProductionBackendRequests.push(url);
+  });
+
+  await page.route('**/js/main.js*', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.hostname !== 'testmode.arthur-rai.co.uk' || url.pathname !== '/js/main.js') {
+      await route.continue();
+      return;
+    }
+    interceptedMainUrl = url.href;
+    await route.fulfill({
+      path: localMainPath,
+      contentType: 'application/javascript; charset=utf-8',
+      headers: {
+        'cache-control': 'no-store',
+        'x-codex-local-asset': 'banking-pay-correction-carrier-presentation'
+      }
+    });
+  });
+
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
+  expect(new URL(page.url()).hostname).toBe('testmode.arthur-rai.co.uk');
+  expect(new URL(interceptedMainUrl).pathname).toBe('/js/main.js');
+
+  await page.getByRole('button', { name: 'Banking' }).click();
+  await page.getByRole('button', { name: 'Pay', exact: true }).click();
+
+  const readyHost = page.locator('#bankingPayReadyScrollHost');
+  await expect(readyHost).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('#bankingPayPreviewProgress[data-progress-active="false"]')).toBeVisible({ timeout: 60_000 });
+
+  await page.evaluate(async () => {
+    const appWindow = window as typeof window & {
+      bankingGetState?: () => any;
+      bankingRerender?: (tabKey?: string | null) => Promise<void>;
+    };
+    const state = appWindow.bankingGetState?.();
+    if (!state?.pay?.draftWizard || typeof appWindow.bankingRerender !== 'function') {
+      throw new Error('Banking Pay state is not available for the correction carrier fixture');
+    }
+
+    const previewRowId = '50000000-0000-4000-8000-000000000001';
+    const timesheetId = '60000000-0000-4000-8000-000000000001';
+    const fixture = {
+      preview_row_id: previewRowId,
+      row_key: 'correction-chain:70000000-0000-4000-8000-000000000001:ts_day:2026-06-30',
+      line_type: 'TIMESHEET_PAYMENT',
+      item_type: 'SEGMENT_DELTA',
+      presentation_section: 'READY_TO_PAY',
+      presentation_role: 'PARENT',
+      readiness_state: 'READY_TO_PAY',
+      is_ready_for_draft: true,
+      draftable: true,
+      selected: true,
+      selection_state: 'SELECTED',
+      candidate_id: '80000000-0000-4000-8000-000000000001',
+      timesheet_id: timesheetId,
+      display_name: 'Correction Carrier Browser Fixture',
+      tms_ref: 'CCR-TEST',
+      client_name: 'Browser test client',
+      role: 'CPN',
+      band: '6',
+      week_ending_date: '2026-07-05',
+      key_type: 'TS_DAY',
+      key_value: '2026-06-30',
+      pay_channel: 'UMBRELLA',
+      paye_treatment: 'NONE',
+      amount_ex_vat: 130,
+      section_amount_ex_vat: 130,
+      has_resolved_rate: true
+    };
+
+    const wizard = state.pay.draftWizard;
+    wizard.workbench = wizard.workbench && typeof wizard.workbench === 'object' ? wizard.workbench : {};
+    wizard.workbench.ready_preview_lines = [fixture];
+    wizard.workbench.canonical_preview_lines = [fixture];
+    wizard.ui_state = wizard.ui_state && typeof wizard.ui_state === 'object' ? wizard.ui_state : {};
+    wizard.ui_state.ready_timesheet_breakdown_open_keys = [];
+    await appWindow.bankingRerender(null);
+  });
+
+  const parentRow = readyHost
+    .locator('tr[data-timesheet-group-key][data-candidate-id]')
+    .filter({ hasText: 'Correction Carrier Browser Fixture' })
+    .filter({ has: page.locator('[data-action="banking:pay:toggleTimesheetBreakdown"]') })
+    .first();
+  await expect(parentRow).toBeVisible({ timeout: 60_000 });
+  await parentRow.getByRole('button', { name: /Show timesheet breakdown/ }).click();
+
+  const breakdownRow = readyHost
+    .locator('tr[data-preview-row-id="50000000-0000-4000-8000-000000000001"]')
+    .filter({ hasText: 'Resolved correction' })
+    .last();
+  await expect(breakdownRow).toContainText('30/06/2026');
+  await expect(breakdownRow).toContainText('Correction date');
+  await expect(breakdownRow).toContainText('Resolved correction');
+  await expect(breakdownRow.getByRole('button', { name: 'Snooze correction' })).toBeVisible();
+  await expect(breakdownRow).not.toContainText('Snooze segment');
   expect(unexpectedProductionBackendRequests).toEqual([]);
 });

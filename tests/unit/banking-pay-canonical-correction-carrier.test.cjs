@@ -72,6 +72,20 @@ test('carry state is retained and rendered as deferred or review-required work',
   );
 });
 
+test('canonical correction breakdown uses its dated key and correction-specific wording', () => {
+  assert.match(
+    main,
+    /const isCanonicalCorrectionCarrierLine = \(obj\) => \{[\s\S]*?rowKey\.startsWith\('correction-chain:'\)/
+  );
+  assert.match(
+    main,
+    /const canonicalWorkDate = getLineKeyType\(line\) === 'TS_DAY' \? trimStr\(getLineKeyValue\(line\)\) : ''/
+  );
+  assert.match(main, /Correction date/);
+  assert.match(main, /Resolved correction/);
+  assert.match(main, /Snooze correction/);
+});
+
 test('import review contract refuses a Worker without canonical carrier support', () => {
   assert.match(
     importReview,

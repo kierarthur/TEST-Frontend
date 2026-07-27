@@ -49442,6 +49442,18 @@ const collectPreviewRowIds = (previewLike) => {
     return 0;
   };
 
+  const isCanonicalCorrectionCarrierLine = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    const rowKey = trimStr(
+      obj?.row_key ||
+      obj?.rowKey ||
+      nested?.row_key ||
+      nested?.rowKey ||
+      ''
+    ).toLowerCase();
+    return rowKey.startsWith('correction-chain:');
+  };
+
   const getParentSectionAdvisory = (obj) => {
     const section = getLinePresentationSection(obj);
     if (section === 'READY_TO_PAY' && asBool(obj?.is_partially_ready)) return 'Some segments are blocked.';
@@ -51149,7 +51161,17 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
               }
 
               const nestedSegment = getNestedLinePayload(segment);
-              const segmentDate = trimStr(segment?.date || segment?.work_date || segment?.linked_shift_date || nestedSegment?.date || nestedSegment?.work_date || '');
+              const correctionCarrier = isCanonicalCorrectionCarrierLine(line);
+              const canonicalWorkDate = getLineKeyType(line) === 'TS_DAY' ? trimStr(getLineKeyValue(line)) : '';
+              const segmentDate = trimStr(
+                segment?.date ||
+                segment?.work_date ||
+                segment?.linked_shift_date ||
+                nestedSegment?.date ||
+                nestedSegment?.work_date ||
+                (correctionCarrier ? canonicalWorkDate : '') ||
+                ''
+              );
               const clientName = trimStr(segment?.client_name || segment?.trust_name || nestedSegment?.client_name || line?.client_name || line?.trust_name || '') || '—';
               const role = trimStr(segment?.role || segment?.job_title || nestedSegment?.role || nestedSegment?.job_title || line?.role || line?.job_title || '') || '—';
               const band = trimStr(segment?.band || segment?.band_name || nestedSegment?.band || line?.band || '') || '—';
@@ -51202,13 +51224,13 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                     parentObj: line,
                     candidateId,
                     snoozeKind: 'DO_NOT_PAY',
-                    lineLabel: ['Segment', trimStr(line?.display_name), segmentDate ? (ymdToUk(segmentDate) || segmentDate) : '', (startVal || finishVal) ? `${startVal || '—'}-${finishVal || '—'}` : ''].filter(Boolean).join(' — '),
+                    lineLabel: [correctionCarrier ? 'Correction' : 'Segment', trimStr(line?.display_name), segmentDate ? (ymdToUk(segmentDate) || segmentDate) : '', (!correctionCarrier && (startVal || finishVal)) ? `${startVal || '—'}-${finishVal || '—'}` : ''].filter(Boolean).join(' — '),
                     sourceRefOverride: '',
                     timesheetIdOverride: getIdentityValue(segment, 'timesheet_id') || timesheetId,
                     segmentIdOverride: getIdentityValue(segment, 'segment_id')
                   })}
-                  ${getCandidateActionDisabledAttrs(candidateId, snoozeInfo.isDated ? 'Manage snooze' : 'Snooze this segment')}
-                >${enc(snoozeInfo.isDated ? 'Manage snooze' : 'Snooze segment')}</button>`;
+                  ${getCandidateActionDisabledAttrs(candidateId, snoozeInfo.isDated ? 'Manage snooze' : (correctionCarrier ? 'Snooze this correction' : 'Snooze this segment'))}
+                >${enc(snoozeInfo.isDated ? 'Manage snooze' : (correctionCarrier ? 'Snooze correction' : 'Snooze segment'))}</button>`;
 
               return `
                 <tr${previewRowId ? ` data-preview-row-id="${enc(previewRowId)}"` : ''} data-timesheet-group-key="${enc(groupKey)}">
@@ -51230,14 +51252,20 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                       ` : `<span class="mini" style="opacity:.7;">—</span>`}
                     </td>
                   ` : ''}
-                  <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(segmentDate) || segmentDate || '—')}</td>
+                  <td class="mini" style="white-space:nowrap;">
+                    <div>${enc(ymdToUk(segmentDate) || segmentDate || '—')}</div>
+                    ${correctionCarrier ? `<div class="mini" style="opacity:.72;">Correction date</div>` : ''}
+                  </td>
                   <td class="mini">${enc(clientName)}</td>
                   <td class="mini">${enc(role)}</td>
                   <td class="mini">${enc(band)}</td>
-                  <td class="mini" style="white-space:nowrap;">${enc(startVal)}</td>
-                  <td class="mini" style="white-space:nowrap;">${enc(finishVal)}</td>
-                  <td class="mini" style="white-space:nowrap;">${enc(breakLabel)}</td>
-                  <td class="mono" style="text-align:right;white-space:nowrap;">${payableAmountHtml}</td>
+                  <td class="mini" style="white-space:nowrap;"${correctionCarrier ? ` title="This correction can represent several source and replacement records, so no single start time applies."` : ''}>${enc(startVal)}</td>
+                  <td class="mini" style="white-space:nowrap;"${correctionCarrier ? ` title="This correction can represent several source and replacement records, so no single finish time applies."` : ''}>${enc(finishVal)}</td>
+                  <td class="mini" style="white-space:nowrap;"${correctionCarrier ? ` title="This correction can represent several source and replacement records, so no single break applies."` : ''}>${enc(breakLabel)}</td>
+                  <td class="mono" style="text-align:right;white-space:nowrap;">
+                    <div>${payableAmountHtml}</div>
+                    ${correctionCarrier ? `<div class="mini" style="opacity:.72;">Resolved correction</div>` : ''}
+                  </td>
                   <td class="mini" style="white-space:nowrap;">${enc(snoozeState)}</td>
                   <td style="white-space:nowrap;">${actionHtml || `<span class="mini" style="opacity:.7;">—</span>`}</td>
                 </tr>
