@@ -171576,6 +171576,93 @@ async function runBankingPayBatchCancelFlow({
       return nextRow;
     });
 
+  const reconcileCancelPatchSelectionState = (patchResult) => {
+    const patch = isPlainObject(patchResult) ? patchResult : {};
+    const payState = resolvePayState();
+    const wizard = isPlainObject(payState?.draftWizard) ? payState.draftWizard : null;
+    if (!wizard) return { applied: false, removed_preview_row_ids: [], selected_preview_row_ids: [] };
+
+    wizard.workbench = isPlainObject(wizard.workbench) ? wizard.workbench : {};
+    wizard.decisions = isPlainObject(wizard.decisions) ? wizard.decisions : {};
+
+    const patchedRows = readPatchPreviewRows(patch);
+    const rowIdOf = (row) => String(
+      row?.preview_row_id ||
+      row?.previewRowId ||
+      row?.row_id ||
+      row?.rowId ||
+      row?.line_id ||
+      row?.lineId ||
+      row?.id ||
+      ''
+    ).trim();
+    const rowSelected = (row) => {
+      const rowJson = isPlainObject(row?.row_json) ? row.row_json : (isPlainObject(row?.rowJson) ? row.rowJson : {});
+      return (row?.selected === true || rowJson.selected === true)
+        && upper(row?.selection_state || row?.selectionState || rowJson.selection_state || rowJson.selectionState || '') === 'SELECTED';
+    };
+    const returnedRowIds = uniqStrings(patchedRows.map(rowIdOf));
+    const affectedRowIds = uniqStrings(
+      returnedRowIds,
+      readIdsFromCancelPatch(
+        patch,
+        'patched_row_ids',
+        'patchedRowIds',
+        'affected_preview_row_ids',
+        'affectedPreviewRowIds',
+        'restored_preview_row_ids',
+        'restoredPreviewRowIds'
+      )
+    );
+    if (affectedRowIds.length <= 0) {
+      return {
+        applied: false,
+        removed_preview_row_ids: [],
+        selected_preview_row_ids: uniqStrings(
+          wizard.workbench.server_selected_preview_row_ids,
+          wizard.decisions.server_selected_preview_row_ids
+        )
+      };
+    }
+
+    const affectedSet = new Set(affectedRowIds);
+    const selectedReturnedIds = new Set(patchedRows.filter(rowSelected).map(rowIdOf).filter(Boolean));
+    const currentSelectedIds = uniqStrings(
+      wizard.workbench.server_selected_preview_row_ids,
+      wizard.decisions.server_selected_preview_row_ids,
+      wizard.workbench.selected_preview_row_ids,
+      wizard.decisions.selected_preview_row_ids,
+      wizard.selected_preview_row_ids
+    );
+    const nextSelectedIds = uniqStrings(
+      currentSelectedIds.filter((rowId) => !affectedSet.has(rowId)),
+      Array.from(selectedReturnedIds)
+    );
+    const nextMode = nextSelectedIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE';
+
+    for (const target of [wizard.workbench, wizard.decisions]) {
+      target.server_selected_preview_row_ids = [...nextSelectedIds];
+      target.serverSelectedPreviewRowIds = [...nextSelectedIds];
+      target.server_selected_preview_row_ids_provided = true;
+      target.serverSelectedPreviewRowIdsProvided = true;
+      target.selected_preview_row_ids = [...nextSelectedIds];
+      target.selectedPreviewRowIds = [...nextSelectedIds];
+      target.selected_preview_row_mode = nextMode;
+      target.selectedPreviewRowMode = nextMode;
+    }
+    wizard.selected_preview_row_ids = [...nextSelectedIds];
+    wizard.selectedPreviewRowIds = [...nextSelectedIds];
+    wizard.selected_preview_row_mode = nextMode;
+    wizard.selectedPreviewRowMode = nextMode;
+    wizard.local_selected_preview_row_ids_dirty = false;
+    wizard.localSelectedPreviewRowIdsDirty = false;
+
+    return {
+      applied: true,
+      removed_preview_row_ids: affectedRowIds.filter((rowId) => !selectedReturnedIds.has(rowId)),
+      selected_preview_row_ids: nextSelectedIds
+    };
+  };
   const markCancelPatchCandidatesRefreshing = (patchResult) => {
     const patch = isPlainObject(patchResult) ? patchResult : {};
     const sessionId = String(patch.session_id || patch.sessionId || patch.source_session_id || patch.sourceSessionId || cancellationWorkbenchContext.session_id || '').trim();
@@ -171649,6 +171736,10 @@ async function runBankingPayBatchCancelFlow({
     const patch = isPlainObject(patchResult) ? patchResult : {};
     const sessionId = String(patch.session_id || patch.sessionId || patch.source_session_id || patch.sourceSessionId || cancellationWorkbenchContext.session_id || '').trim();
     const rows = sanitizeCancelPatchPreviewRows(readPatchPreviewRows(patch));
+    const selectionReconciliation = reconcileCancelPatchSelectionState({
+      ...patch,
+      rows
+    });
     let rowsApplied = false;
     if (rows.length > 0 && typeof applyPayWorkbenchPreviewToState === 'function') {
       try {
@@ -171672,7 +171763,12 @@ async function runBankingPayBatchCancelFlow({
       }
     }
     const marked = markCancelPatchCandidatesRefreshing(patch);
-    return { rows_applied: rowsApplied, rows_count: rows.length, candidate_refresh_marking: marked };
+    return {
+      rows_applied: rowsApplied,
+      rows_count: rows.length,
+      candidate_refresh_marking: marked,
+      selection_reconciliation: selectionReconciliation
+    };
   };
 
   const readCancelWorkbenchRefreshRequired = (result, replacement = null) => {

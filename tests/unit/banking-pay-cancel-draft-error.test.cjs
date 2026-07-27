@@ -67,3 +67,65 @@ test('a stopped payment operation waiting for user review does not impersonate p
   assert.match(source, /'REVIEW_REQUIRED'/);
   assert.match(source, /'WAITING_USER_REVIEW'/);
 });
+
+test('successful draft cancellation immediately clears only affected visible selections', () => {
+  const source = sliceBetween(
+    '  const reconcileCancelPatchSelectionState =',
+    '  const markCancelPatchCandidatesRefreshing ='
+  );
+  const wizard = {
+    workbench: {
+      server_selected_preview_row_ids: ['cancelled-row', 'unrelated-row'],
+      selected_preview_row_ids: ['cancelled-row', 'unrelated-row']
+    },
+    decisions: {
+      server_selected_preview_row_ids: ['cancelled-row', 'unrelated-row'],
+      selected_preview_row_ids: ['cancelled-row', 'unrelated-row']
+    },
+    selected_preview_row_ids: ['cancelled-row', 'unrelated-row'],
+    local_selected_preview_row_ids_dirty: true
+  };
+  const context = {
+    Set,
+    Array,
+    String,
+    Object,
+    isPlainObject(value) { return !!value && typeof value === 'object' && !Array.isArray(value); },
+    resolvePayState() { return { draftWizard: wizard }; },
+    readPatchPreviewRows(value) { return Array.isArray(value?.rows) ? value.rows : []; },
+    readIdsFromCancelPatch(value, ...keys) { return keys.flatMap((key) => Array.isArray(value?.[key]) ? value[key] : []); },
+    upper(value) { return String(value == null ? '' : value).trim().toUpperCase(); },
+    uniqStrings(...values) {
+      const out = [];
+      const add = (value) => {
+        if (Array.isArray(value)) return value.forEach(add);
+        const text = String(value == null ? '' : value).trim();
+        if (text && !out.includes(text)) out.push(text);
+      };
+      values.forEach(add);
+      return out;
+    }
+  };
+  vm.runInNewContext(
+    `${source}\nglobalThis.reconcileCancelPatchSelectionStateForTest = reconcileCancelPatchSelectionState;`,
+    context,
+    { filename: 'cancel-draft-selection-ui.js' }
+  );
+
+  const result = context.reconcileCancelPatchSelectionStateForTest({
+    patched_row_ids: ['cancelled-row'],
+    rows: [{
+      preview_row_id: 'cancelled-row',
+      selected: false,
+      selection_state: 'UNSELECTED'
+    }]
+  });
+
+  assert.equal(result.applied, true);
+  assert.deepEqual(Array.from(result.removed_preview_row_ids), ['cancelled-row']);
+  assert.deepEqual(Array.from(wizard.workbench.server_selected_preview_row_ids), ['unrelated-row']);
+  assert.deepEqual(Array.from(wizard.decisions.selected_preview_row_ids), ['unrelated-row']);
+  assert.equal(wizard.workbench.server_selected_preview_row_ids_provided, true);
+  assert.equal(wizard.selected_preview_row_mode, 'EXPLICIT_SUBSET');
+  assert.equal(wizard.local_selected_preview_row_ids_dirty, false);
+});
