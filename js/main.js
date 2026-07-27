@@ -50789,11 +50789,18 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     });
   };
 
-  const getExpenseClampContextText = (row, label) => {
+  const getPayOutstandingClampAmounts = (row) => {
     const nested = getNestedLinePayload(row);
     const sourceBasis = getLineSourceBasisJson(row);
     const clamped = asBool(row?.pay_outstanding_clamped ?? row?.payOutstandingClamped ?? nested?.pay_outstanding_clamped ?? nested?.payOutstandingClamped ?? row?.case_resolution_summary?.pay_outstanding_clamped ?? nested?.case_resolution_summary?.pay_outstanding_clamped);
-    if (!clamped) return '';
+    if (!clamped) {
+      return {
+        clamped: false,
+        original: null,
+        remaining: null,
+        accounted: null
+      };
+    }
 
     const original = firstFinitePreviewNumber(
       row?.pay_outstanding_original_amount_ex_vat,
@@ -50819,6 +50826,19 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       getLineRowLevelAmount(row)
     );
     const accounted = (original !== null && remaining !== null) ? Math.max(0, Math.round((original - remaining) * 100) / 100) : null;
+    return {
+      clamped: true,
+      original,
+      remaining,
+      accounted
+    };
+  };
+
+  const getExpenseClampContextText = (row, label) => {
+    const clampAmounts = getPayOutstandingClampAmounts(row);
+    if (!clampAmounts.clamped) return '';
+
+    const { original, remaining, accounted } = clampAmounts;
     const labelText = trimStr(label).toLowerCase() || 'expense';
     const parts = [];
     if (original !== null) parts.push(`Original ${labelText} amount: ${fmtMoney(original)}`);
@@ -51100,6 +51120,16 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
               const startVal = trimStr(segment?.start || segment?.start_time || nestedSegment?.start || nestedSegment?.start_time || '') || '—';
               const finishVal = trimStr(segment?.finish || segment?.finish_time || nestedSegment?.finish || nestedSegment?.finish_time || '') || '—';
               const amount = segment?.pay_amount_ex_vat ?? segment?.amount_ex_vat ?? segment?.pay_amount ?? nestedSegment?.pay_amount_ex_vat ?? nestedSegment?.amount_ex_vat ?? getLineSectionAmount(line);
+              const clampAmounts = getPayOutstandingClampAmounts(line);
+              const payableAmountHtml = clampAmounts.clamped
+                ? (index === 0
+                    ? `
+                      <div style="font-weight:700;">£${enc(fmtMoney(clampAmounts.remaining))} payable</div>
+                      ${clampAmounts.original !== null ? `<div class="mini" style="opacity:.75;">£${enc(fmtMoney(clampAmounts.original))} original</div>` : ''}
+                      ${operationalRows.length > 1 ? `<div class="mini" style="opacity:.75;">Total for this component</div>` : ''}
+                    `
+                    : `<span class="mini" style="opacity:.7;">Included above</span>`)
+                : `£${enc(fmtMoney(amount))}`;
               const snoozeInfo = getSnoozeInfo(segment);
               const breakStart = trimStr(segment?.break_start || nestedSegment?.break_start || '');
               const breakEnd = trimStr(segment?.break_end || nestedSegment?.break_end || '');
@@ -51169,7 +51199,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                   <td class="mini" style="white-space:nowrap;">${enc(startVal)}</td>
                   <td class="mini" style="white-space:nowrap;">${enc(finishVal)}</td>
                   <td class="mini" style="white-space:nowrap;">${enc(breakLabel)}</td>
-                  <td class="mono" style="text-align:right;white-space:nowrap;">£${enc(fmtMoney(amount))}</td>
+                  <td class="mono" style="text-align:right;white-space:nowrap;">${payableAmountHtml}</td>
                   <td class="mini" style="white-space:nowrap;">${enc(snoozeState)}</td>
                   <td style="white-space:nowrap;">${actionHtml || `<span class="mini" style="opacity:.7;">—</span>`}</td>
                 </tr>
