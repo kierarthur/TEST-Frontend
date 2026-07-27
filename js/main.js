@@ -42019,7 +42019,13 @@ function renderBankingTab(key, row) {
 
     const callIfFn = (fnName, ...args) => {
       try {
-        const fn = (typeof window[fnName] === 'function') ? window[fnName] : (typeof globalThis[fnName] === 'function' ? globalThis[fnName] : null);
+        const localFn = (() => {
+          if (fnName === 'renderBankingPayTab' && typeof renderBankingPayTab === 'function') return renderBankingPayTab;
+          if (fnName === 'renderBankingLoansSnoozesTab' && typeof renderBankingLoansSnoozesTab === 'function') return renderBankingLoansSnoozesTab;
+          if (fnName === 'renderBankingIdTab' && typeof renderBankingIdTab === 'function') return renderBankingIdTab;
+          return null;
+        })();
+        const fn = localFn || ((typeof window[fnName] === 'function') ? window[fnName] : (typeof globalThis[fnName] === 'function' ? globalThis[fnName] : null));
         if (fn) return fn(...args);
       } catch (err) {
         console.error(`[Banking] ${fnName} renderer failed`, err);
