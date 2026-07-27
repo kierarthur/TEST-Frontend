@@ -40,6 +40,8 @@ test('successful selection changes treat a returned selected-row array as comple
     body,
     /workbench\.server_selected_preview_row_ids_provided =[\s\S]*payload\.server_selected_preview_row_ids_provided === true[\s\S]*payload\.selected_preview_row_ids_provided === true[\s\S]*Array\.isArray\(payload\.server_selected_preview_row_ids\)[\s\S]*Array\.isArray\(payload\.selected_preview_row_ids\)/
   );
+  assert.match(body, /local_selected_preview_row_ids_dirty = false/);
+  assert.match(body, /localSelectedPreviewRowIdsDirty = false/);
 });
 
 test('rendered preview checkboxes use the complete server-owned selection when provided', () => {
@@ -123,6 +125,65 @@ test('the canonical page replaces stale session selection totals with current el
   assert.match(body, /page\.selected_eligible_ready_row_count/);
   assert.match(body, /wiz\.workbench\.selected_row_count = boundedSelectedEligibleCount/);
   assert.match(body, /wiz\.workbench\.selected_eligible_ready_row_count = boundedSelectedEligibleCount/);
+});
+
+test('a canonical page with an authoritative zero selection clears stale visible ticks', () => {
+  const body = sliceBetween(
+    'const buildSectionSpecificSyntheticPreviewPayload =',
+    'const applyPreviewPagePayloadToState ='
+  );
+
+  assert.match(body, /const authoritativePageSelectionIsEmpty =/);
+  assert.match(body, /normalisedSection === 'canonical_preview_lines'/);
+  assert.match(body, /Math\.trunc\(selectedCount\) === 0/);
+  assert.match(body, /wiz\.local_selected_preview_row_ids_dirty !== true/);
+  assert.match(body, /synthetic\.server_selected_preview_row_ids_provided = true/);
+  assert.match(body, /synthetic\.server_selected_preview_row_ids = \[\]/);
+  assert.match(body, /preview\.server_selected_preview_row_ids_provided = true/);
+
+  const context = {
+    Number,
+    Math,
+    Object,
+    Array,
+    normalisePreviewPageSectionName: (value) => String(value || '').toLowerCase(),
+    normalisePreviewPagePayloadForState: (value) => ({ ...(value || {}) }),
+    deep: (value) => JSON.parse(JSON.stringify(value)),
+    isPlainObject: (value) => !!value && typeof value === 'object' && !Array.isArray(value),
+    hasActiveWorkbenchPendingWork: () => false,
+    trimStr: (value) => String(value == null ? '' : value).trim(),
+    effectivePayDate: '2026-07-31',
+    weekEndingCutoffDate: '2026-07-26',
+    wiz: {
+      local_selected_preview_row_ids_dirty: false,
+      localSelectedPreviewRowIdsDirty: false,
+      workbench: { snapshot_run_id: 'snapshot-1', session_version: 1, session_signature: 'sig-1' }
+    }
+  };
+  vm.runInNewContext(
+    body + '\nthis.__buildSynthetic = buildSectionSpecificSyntheticPreviewPayload;',
+    context,
+    { filename: 'banking-canonical-page-selection-contract.js' }
+  );
+
+  const authoritativeEmpty = context.__buildSynthetic(
+    'canonical_preview_lines',
+    [{ id: 'row-1', selected: false, selection_state: 'UNSELECTED' }],
+    { session_id: 'session-1', selected_row_count: 0, rows: [] }
+  );
+  assert.equal(authoritativeEmpty.server_selected_preview_row_ids_provided, true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(authoritativeEmpty.server_selected_preview_row_ids)),
+    []
+  );
+
+  context.wiz.local_selected_preview_row_ids_dirty = true;
+  const inFlightLocalChange = context.__buildSynthetic(
+    'canonical_preview_lines',
+    [{ id: 'row-1', selected: false, selection_state: 'UNSELECTED' }],
+    { session_id: 'session-1', selected_row_count: 0, rows: [] }
+  );
+  assert.equal(inFlightLocalChange.server_selected_preview_row_ids_provided, undefined);
 });
 
 test('optimistic selection traversal is cycle-safe and bounded', () => {

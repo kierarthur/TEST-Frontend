@@ -30845,6 +30845,22 @@ async function bankingPayPreview(pay_date) {
     const normalisedSection = normalisePreviewPageSectionName(section);
     const page = normalisePreviewPagePayloadForState(pagePayload, normalisedSection);
     const safeRows = deep(Array.isArray(rows) ? rows : []) || [];
+    const hasOwn = (objectLike, key) => !!objectLike && typeof objectLike === 'object' && Object.prototype.hasOwnProperty.call(objectLike, key);
+    const selectedCountRaw = page.selected_row_count ?? page.selectedRowCount ?? page.selected_eligible_ready_row_count ?? page.selectedEligibleReadyRowCount;
+    const selectedCount = Number(selectedCountRaw);
+    const authoritativePageSelectionIsEmpty = !!(
+      normalisedSection === 'canonical_preview_lines' &&
+      (
+        hasOwn(page, 'selected_row_count') ||
+        hasOwn(page, 'selectedRowCount') ||
+        hasOwn(page, 'selected_eligible_ready_row_count') ||
+        hasOwn(page, 'selectedEligibleReadyRowCount')
+      ) &&
+      Number.isFinite(selectedCount) &&
+      Math.trunc(selectedCount) === 0 &&
+      wiz.local_selected_preview_row_ids_dirty !== true &&
+      wiz.localSelectedPreviewRowIdsDirty !== true
+    );
     const componentStateCache = {};
     const preview = { ok: true, componentStateCache };
     const synthetic = {
@@ -30869,6 +30885,18 @@ async function bankingPayPreview(pay_date) {
       },
       progress: isPlainObject(sourcePayload?.progress) ? (deep(sourcePayload.progress) || sourcePayload.progress) : (isPlainObject(sourcePayload) ? (deep(sourcePayload) || sourcePayload) : {})
     };
+    if (Number.isFinite(selectedCount) && selectedCount >= 0) {
+      synthetic.selected_row_count = Math.trunc(selectedCount);
+      synthetic.selected_eligible_ready_row_count = Math.trunc(selectedCount);
+      preview.selected_row_count = Math.trunc(selectedCount);
+      preview.selected_eligible_ready_row_count = Math.trunc(selectedCount);
+    }
+    if (authoritativePageSelectionIsEmpty) {
+      synthetic.server_selected_preview_row_ids_provided = true;
+      synthetic.server_selected_preview_row_ids = [];
+      preview.server_selected_preview_row_ids_provided = true;
+      preview.server_selected_preview_row_ids = [];
+    }
     if (normalisedSection === 'canonical_preview_lines') {
       synthetic.canonical_preview_lines = safeRows;
       synthetic.preview_rows = safeRows;
@@ -68948,12 +68976,26 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const currentChildStateMatches = () => {
     try {
       const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-      if (!ctx || String(ctx.entity || '') !== 'banking') return false;
-      const c2 = (ctx.banking && ctx.banking.pay && ctx.banking.pay.child && typeof ctx.banking.pay.child === 'object') ? ctx.banking.pay.child : null;
-      if (!c2) return false;
-      if (String(c2.batchId || '') !== id) return false;
-      if (String(c2.openToken || '') !== String(child.openToken || '')) return false;
-      return true;
+      const contextMatches = (candidateCtx) => {
+        if (!candidateCtx || String(candidateCtx.entity || '') !== 'banking') return false;
+        const candidateChild = (candidateCtx.banking && candidateCtx.banking.pay && candidateCtx.banking.pay.child && typeof candidateCtx.banking.pay.child === 'object')
+          ? candidateCtx.banking.pay.child
+          : null;
+        if (!candidateChild) return false;
+        if (String(candidateChild.batchId || '') !== id) return false;
+        if (String(candidateChild.openToken || '') !== String(child.openToken || '')) return false;
+        return true;
+      };
+      if (contextMatches(ctx)) return true;
+      const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+      return stack.some((frame) => {
+        if (!frame || String(frame.kind || '') !== KIND) return false;
+        const frameToken = getFrameOpenTokenSafe(frame);
+        const frameBatchId = getFrameBatchIdSafe(frame);
+        if (frameToken && frameToken !== String(child.openToken || '')) return false;
+        if (frameBatchId && frameBatchId !== id) return false;
+        return contextMatches(frame._ctxRef);
+      });
     } catch {
       return false;
     }
@@ -91947,6 +91989,10 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           Array.isArray(payload.selected_preview_row_ids);
         decisions.server_selected_preview_row_ids = selectedIds;
         decisions.server_selected_preview_row_ids_provided = st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided;
+        if (st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided === true) {
+          st.pay.draftWizard.local_selected_preview_row_ids_dirty = false;
+          st.pay.draftWizard.localSelectedPreviewRowIdsDirty = false;
+        }
         if (Number.isSafeInteger(progressCounterVersion) && progressCounterVersion >= 0) {
           st.pay.draftWizard.workbench.progress_counter_version = progressCounterVersion;
           decisions.progress_counter_version = progressCounterVersion;
@@ -121777,24 +121823,21 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const pageBlockedRows = asArray(mergedPreviewPageRowsBySection.blocked_for_pay);
   const applyMergedPreviewPagesToState = (targetEnvelope = null) => {
     const pageMap = isPlainObject(mergedPreviewPages) ? (cloneJson(mergedPreviewPages) || {}) : {};
-    wiz.workbench.preview_pages = pageMap;
-    wiz.workbench.previewPages = cloneJson(pageMap) || {};
-    wiz.workbench.preview_page_cache = cloneJson(pageMap) || {};
-    wiz.workbench.previewPageCache = cloneJson(pageMap) || {};
-    wiz.workbench.page_cache = cloneJson(pageMap) || {};
-    wiz.workbench.pageCache = cloneJson(pageMap) || {};
-    if (targetEnvelope && typeof targetEnvelope === 'object') {
-      targetEnvelope.preview_pages = cloneJson(pageMap) || {};
-      targetEnvelope.previewPageCache = cloneJson(pageMap) || {};
-      targetEnvelope.preview_page_cache = cloneJson(pageMap) || {};
-      targetEnvelope.page_cache = cloneJson(pageMap) || {};
-    }
-    if (wiz.preview && isPlainObject(wiz.preview.data)) {
-      wiz.preview.data.preview_pages = cloneJson(pageMap) || {};
-      wiz.preview.data.previewPageCache = cloneJson(pageMap) || {};
-      wiz.preview.data.preview_page_cache = cloneJson(pageMap) || {};
-      wiz.preview.data.page_cache = cloneJson(pageMap) || {};
-    }
+    const attachPageMapAliases = (target) => {
+      if (!target || typeof target !== 'object') return;
+      target.preview_pages = pageMap;
+      target.previewPages = pageMap;
+      target.preview_page_cache = pageMap;
+      target.previewPageCache = pageMap;
+      target.page_cache = pageMap;
+      target.pageCache = pageMap;
+    };
+    // These keys are compatibility aliases for the same bounded page cache.
+    // Keeping one graph prevents each heartbeat from retaining many identical
+    // copies of every preview row while preserving all existing readers.
+    attachPageMapAliases(wiz.workbench);
+    attachPageMapAliases(targetEnvelope);
+    if (wiz.preview && isPlainObject(wiz.preview.data)) attachPageMapAliases(wiz.preview.data);
   };
   const responseMutationContext = trimStr(responseObj.post_mutation_context || responseObj.mutation_context || responseObj.action || '').toUpperCase();
   const previewPayloadHasRows = payloadHasPreviewRows(previewObj, responseObj);
@@ -123633,7 +123676,10 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     ? normalizePayWizardDecisionState(wiz.decisions)
     : ((wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {});
 
-  const currentEnvelope = isPlainObject(wiz.preview.data) ? (cloneJson(wiz.preview.data) || {}) : {};
+  // Treat the installed preview envelope as immutable input. Cloning it here and
+  // then cloning currentPreview below duplicated the complete bounded workbench
+  // graph on every candidate heartbeat. Build one successor graph instead.
+  const currentEnvelope = isPlainObject(wiz.preview.data) ? wiz.preview.data : {};
   const currentPreview = isPlainObject(currentEnvelope.preview) ? currentEnvelope.preview : currentEnvelope;
   const currentSession = isPlainObject(currentEnvelope.session) ? currentEnvelope.session : {};
   const responseObj = isPlainObject(candidateResponse) ? (cloneJson(candidateResponse) || {}) : {};
@@ -124180,10 +124226,10 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
       'blocked_now', 'ready_to_pay_now', 'blocked_for_pay_now', 'hidden_indefinite_snoozes',
       'blocked_preview_lines', 'hidden_preview_lines'
     ]) {
-      if (Array.isArray(nextPreview[key])) nextEnvelope[key] = cloneJson(nextPreview[key]) || [];
+      if (Array.isArray(nextPreview[key])) nextEnvelope[key] = nextPreview[key];
     }
     for (const key of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
-      if (isPlainObject(nextPreview[key])) nextEnvelope[key] = cloneJson(nextPreview[key]) || {};
+      if (isPlainObject(nextPreview[key])) nextEnvelope[key] = nextPreview[key];
     }
   }
 
@@ -370619,6 +370665,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
               hb._workbenchCandidateSettlePollTimer = setTimeout(runPoll, pollDelayMs);
               return;
             }
+            const beforeProgressAdoption = getWorkbenchProgressSnapshot(afterRead);
             const nextActiveIds = normaliseWorkbenchUuidArray(getActiveWorkbenchDeltaRefreshJobs(nextProgress).map((job) => job.candidate_id));
             const mergedTracked = normaliseWorkbenchUuidArray(latestTracked, nextActiveIds);
             hb._workbenchCandidateSettlePollTrackedIds = mergedTracked;
@@ -370628,7 +370675,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
               activeJobs: getActiveWorkbenchDeltaRefreshJobs(nextProgress)
             });
             if (isWorkbenchProgressReadyForCandidateSettle(nextProgress, mergedTracked)) {
-              const merged = await refreshWorkbenchVisiblePageAfterProgress(watchContext, nextProgress, getWorkbenchProgressSnapshot(watchContext), {
+              const merged = await refreshWorkbenchVisiblePageAfterProgress(watchContext, nextProgress, beforeProgressAdoption, {
                 settleRefresh: true,
                 trackedCandidateIds: mergedTracked,
                 reason: 'candidate-settle-poll'
