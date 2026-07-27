@@ -56,12 +56,28 @@
 
   async function request(path, options = {}) {
     if (typeof global.authFetch !== 'function') throw new Error('The signed-in API helper is unavailable.');
-    const method = String(options.method || 'GET').toUpperCase();
+    const { timeoutMs: requestedTimeoutMs = 0, ...requestOptions } = options || {};
+    const method = String(requestOptions.method || 'GET').toUpperCase();
     const maxAttempts = method === 'GET' ? 2 : 1;
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const timeoutMs = Number(requestedTimeoutMs || 0);
+      const timeoutController = timeoutMs > 0 && typeof global.AbortController === 'function'
+        ? new global.AbortController()
+        : null;
+      const timeoutId = timeoutController
+        ? global.setTimeout(() => timeoutController.abort(), timeoutMs)
+        : null;
       try {
-        const response = await global.authFetch(apiUrl(path), method === 'GET' ? { ...options, cache: options.cache || 'no-store' } : options);
+        const fetchOptions = timeoutController
+          ? { ...requestOptions, signal: timeoutController.signal }
+          : requestOptions;
+        const response = await global.authFetch(
+          apiUrl(path),
+          method === 'GET'
+            ? { ...fetchOptions, cache: fetchOptions.cache || 'no-store' }
+            : fetchOptions
+        );
         const text = await response.text().catch(() => '');
         let payload = null;
         try { payload = text ? JSON.parse(text) : {}; } catch { payload = { message: text }; }
@@ -76,14 +92,35 @@
         }
         return payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
       } catch (error) {
+        if (timeoutController?.signal?.aborted && String(error?.name || '') === 'AbortError') {
+          error.code = 'REQUEST_TIMEOUT';
+          error.action = 'CHECK_APPLY_STATUS';
+          error.message = 'The server response timed out. The saved operation will be checked before any further action.';
+        }
         lastError = error;
         const status = Number(error?.status || 0);
         const transient = status === 0 || status === 408 || status === 500 || status === 502 || status === 503 || status === 504;
         if (attempt >= maxAttempts || !transient) throw error;
         await new Promise((resolve) => global.setTimeout(resolve, 250));
+      } finally {
+        if (timeoutId !== null) global.clearTimeout(timeoutId);
       }
     }
     throw lastError;
+  }
+
+  function shouldRecoverApplyOutcome(error) {
+    const status = Number(error?.status || 0);
+    return error?.action === 'CHECK_APPLY_STATUS'
+      || error?.code === 'REQUEST_TIMEOUT'
+      || String(error?.name || '') === 'AbortError'
+      || status === 0
+      || status === 202
+      || status === 408
+      || status === 500
+      || status === 502
+      || status === 503
+      || status === 504;
   }
 
   const IMPORT_SCREEN_KINDS = new Set(['imports-v1', 'import-coverage-v1', 'import-review-v1', 'import-review-confirm-v1']);
@@ -1396,13 +1433,14 @@
           operation_id: operationId,
           expected_state_version: review.header.state.state_version,
           expected_request_hash: review.header.state.apply_contract.request_hash
-        })
+        }),
+        timeoutMs: 40000
       });
       if (result?.operation?.outcome || result?.apply?.ok) { storeRecovery(review.importId, null); await openReview(review.importId); }
       else await pollApplyStatus(review.importId, operationId, review.requestHash);
     } catch (error) {
       review.busy = false;
-      if (error.status === 202 || error.action === 'CHECK_APPLY_STATUS') {
+      if (review.operationId && review.requestHash && shouldRecoverApplyOutcome(error)) {
         await pollApplyStatus(review.importId, review.operationId, review.requestHash);
       } else {
         review.error = error.message || 'The import was not applied.';

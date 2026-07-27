@@ -66,6 +66,16 @@ test('review lifecycle supports resume, recheck, abandon, apply status and follo
   assert.match(source, /for \(let attempt = 0; attempt < 30; attempt \+= 1\)[\s\S]*?followUpStatus === 'COMPLETE'[\s\S]*?retryCount > priorRetryCount/);
 });
 
+test('unknown apply responses are status-checked and never reposted automatically', () => {
+  assert.match(source, /timeoutMs:\s*40000/);
+  assert.match(source, /function shouldRecoverApplyOutcome\(error\)/);
+  assert.match(source, /review\.operationId && review\.requestHash && shouldRecoverApplyOutcome\(error\)/);
+  assert.match(source, /error\.code = 'REQUEST_TIMEOUT'/);
+  assert.match(source, /error\.action = 'CHECK_APPLY_STATUS'/);
+  assert.match(source, /const maxAttempts = method === 'GET' \? 2 : 1/);
+  assert.match(source, /timeoutController\.abort\(\)/);
+});
+
 test('NHSP segment timesheets use the compact non-wrapping Lines presentation only for NHSP bases', () => {
   assert.match(html, /css\/timesheet-nhsp-lines\.css/);
   assert.match(main, /const isNhspBasis = \[[\s\S]*?'NHSP'[\s\S]*?'NHSP_ADJUSTMENT'[\s\S]*?\]\.includes\(basis\)/);
@@ -95,7 +105,7 @@ test('transient import-review reads retry once without retrying mutations', () =
   assert.match(source, /const maxAttempts = method === 'GET' \? 2 : 1/);
   assert.match(source, /status === 502/);
   assert.match(source, /global\.setTimeout\(resolve, 250\)/);
-  assert.match(source, /cache: options\.cache \|\| 'no-store'/);
+  assert.match(source, /cache: fetchOptions\.cache \|\| 'no-store'/);
 });
 
 test('email confirmation states and renders one message per shared recipient with contract sections', () => {
