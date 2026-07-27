@@ -129,3 +129,144 @@ test('successful draft cancellation immediately clears only affected visible sel
   assert.equal(wizard.selected_preview_row_mode, 'EXPLICIT_SUBSET');
   assert.equal(wizard.local_selected_preview_row_ids_dirty, false);
 });
+
+test('settled candidate refresh removes a cancelled row tick from every paged cache', () => {
+  const source = sliceBetween(
+    'function mergePayWorkbenchCandidatePreviewIntoState',
+    'async function pollPayWorkbenchCandidateUntilSettled'
+  );
+  const candidateId = 'bfdc14ec-82a6-566c-b6d5-bf760ecaf030';
+  const previewRowId = '52aea6d8-cdd9-4c5f-bb87-32ceff983735';
+  const staleRow = {
+    preview_row_id: previewRowId,
+    candidate_id: candidateId,
+    presentation_section: 'READY_TO_PAY',
+    status: 'READY',
+    selected: true,
+    selection_state: 'SELECTED',
+    selection_allowed: true,
+    draftable: true,
+    is_ready_for_draft: true,
+    row_json: {
+      preview_row_id: previewRowId,
+      candidate_id: candidateId,
+      selected: true,
+      selection_state: 'SELECTED'
+    }
+  };
+  const freshRow = {
+    ...staleRow,
+    selected: false,
+    selection_state: 'UNSELECTED',
+    row_json: {
+      ...staleRow.row_json,
+      selected: false,
+      selection_state: 'UNSELECTED'
+    }
+  };
+  const makePageMap = () => ({
+    canonical_preview_lines: {
+      section: 'canonical_preview_lines',
+      resolved_section: 'canonical_preview_lines',
+      rows: [structuredClone(staleRow)],
+      items: [structuredClone(staleRow)],
+      returned_count: 1,
+      rows_count: 1
+    }
+  });
+  const wizard = {
+    preview: {
+      data: {
+        session_id: 'f3523145-c8d6-42e1-9e95-510e4da1db67',
+        session: {
+          session_id: 'f3523145-c8d6-42e1-9e95-510e4da1db67',
+          session_version: 7,
+          server_selected_preview_row_ids_provided: true,
+          server_selected_preview_row_ids: [previewRowId]
+        },
+        preview: {
+          canonical_preview_lines: [structuredClone(staleRow)],
+          preview_pages: makePageMap()
+        }
+      },
+      preview_pages: makePageMap(),
+      componentStateCache: {
+        canonical_preview_lines: [structuredClone(staleRow)],
+        ready_preview_lines: [structuredClone(staleRow)],
+        ready_to_pay_now: [structuredClone(staleRow)],
+        draftable_now: [structuredClone(staleRow)]
+      }
+    },
+    workbench: {
+      session_id: 'f3523145-c8d6-42e1-9e95-510e4da1db67',
+      session_version: 7,
+      server_selected_preview_row_ids_provided: true,
+      server_selected_preview_row_ids: [previewRowId],
+      preview_pages: makePageMap(),
+      preview_page_cache: makePageMap(),
+      canonical_preview_lines: [structuredClone(staleRow)]
+    },
+    decisions: {
+      session_id: 'f3523145-c8d6-42e1-9e95-510e4da1db67',
+      server_selected_preview_row_ids_provided: true,
+      server_selected_preview_row_ids: [previewRowId],
+      selected_preview_row_ids: [previewRowId]
+    },
+    selected_preview_row_mode: 'EXPLICIT_SUBSET',
+    local_selected_preview_row_ids_dirty: false
+  };
+  const context = {
+    Set,
+    WeakSet,
+    Array,
+    String,
+    Number,
+    Object,
+    Date,
+    Math,
+    structuredClone,
+    createBankingPayGraphCloneV1() {
+      return (value) => structuredClone(value);
+    }
+  };
+  vm.runInNewContext(
+    `${source}\nglobalThis.mergePayWorkbenchCandidatePreviewIntoStateForTest = mergePayWorkbenchCandidatePreviewIntoState;`,
+    context,
+    { filename: 'candidate-refresh-selection-cache.js' }
+  );
+
+  const state = { pay: { draftWizard: wizard } };
+  context.mergePayWorkbenchCandidatePreviewIntoStateForTest({
+    ok: true,
+    ready: true,
+    status: 'READY',
+    session_id: 'f3523145-c8d6-42e1-9e95-510e4da1db67',
+    session_version: 7,
+    candidate_id: candidateId,
+    server_selected_preview_row_ids_provided: true,
+    server_selected_preview_row_ids: [],
+    canonical_preview_lines: [freshRow],
+    ready_to_pay_now: [freshRow],
+    draftable_now: [freshRow],
+    ready_preview_lines: [freshRow]
+  }, state);
+
+  for (const [label, row] of [
+    ['workbench preview pages', wizard.workbench.preview_pages.canonical_preview_lines.rows[0]],
+    ['workbench preview-page cache', wizard.workbench.preview_page_cache.canonical_preview_lines.items[0]],
+    ['preview pages', wizard.preview.preview_pages.canonical_preview_lines.rows[0]],
+    ['preview data pages', wizard.preview.data.preview.preview_pages.canonical_preview_lines.rows[0]],
+    ['component cache', wizard.preview.componentStateCache.ready_to_pay_now[0]],
+    ['workbench canonical rows', wizard.workbench.canonical_preview_lines[0]]
+  ]) {
+    assert.ok(row, `${label} should retain the row`);
+    assert.equal(row.selected, false);
+    assert.equal(row.selection_state, 'UNSELECTED');
+    assert.equal(row.row_json.selected, false);
+    assert.equal(row.row_json.selection_state, 'UNSELECTED');
+  }
+  assert.deepEqual(Array.from(wizard.workbench.server_selected_preview_row_ids), []);
+  assert.equal(wizard.workbench.server_selected_preview_row_ids_provided, true);
+  assert.deepEqual(Array.from(wizard.decisions.selected_preview_row_ids), []);
+  assert.equal(wizard.selected_preview_row_mode, 'EXPLICIT_NONE');
+});

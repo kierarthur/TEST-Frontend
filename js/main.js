@@ -123947,6 +123947,92 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     }
     return out;
   };
+  const reconcileAuthoritativeSelectionInRow = (row, selectedRowIdSet) => {
+    if (!isPlainObject(row)) return row;
+    const rowId = trimStr(
+      row.preview_row_id ||
+      row.previewRowId ||
+      row.row_id ||
+      row.rowId ||
+      row.line_id ||
+      row.lineId ||
+      row.id ||
+      row.row_json?.preview_row_id ||
+      row.rowJson?.preview_row_id ||
+      ''
+    );
+    if (!rowId) return row;
+    const selected = selectedRowIdSet.has(rowId);
+    const currentSelectionState = trimStr(
+      row.selection_state ||
+      row.selectionState ||
+      row.row_json?.selection_state ||
+      row.rowJson?.selection_state ||
+      row.preview_contract?.selection_state ||
+      ''
+    ).toUpperCase();
+    const selectionState = selected
+      ? 'SELECTED'
+      : (['NOT_SELECTABLE', 'SUPERSEDED'].includes(currentSelectionState) ? currentSelectionState : 'UNSELECTED');
+    row.selected = selected;
+    row.selection_state = selectionState;
+    if (isPlainObject(row.row_json)) {
+      row.row_json.selected = selected;
+      row.row_json.selection_state = selectionState;
+    }
+    if (isPlainObject(row.rowJson)) {
+      row.rowJson.selected = selected;
+      row.rowJson.selection_state = selectionState;
+    }
+    if (isPlainObject(row.preview_contract)) {
+      row.preview_contract.selected = selected;
+      row.preview_contract.selection_state = selectionState;
+    }
+    if (isPlainObject(row.previewContract)) {
+      row.previewContract.selected = selected;
+      row.previewContract.selection_state = selectionState;
+    }
+    return row;
+  };
+  const reconcileAuthoritativeSelectionInNode = (node, selectedRowIds, provided) => {
+    if (!provided || !isPlainObject(node)) return;
+    const selectedRowIdSet = new Set(normalizeStringArray(selectedRowIds));
+    const reconcileRows = (rows) => {
+      if (!Array.isArray(rows)) return rows;
+      return rows.map((row) => reconcileAuthoritativeSelectionInRow(row, selectedRowIdSet));
+    };
+    const rowKeys = [
+      'canonical_preview_lines', 'canonicalPreviewLines', 'preview_rows', 'previewRows',
+      'ready_preview_lines', 'readyPreviewLines', 'ready_to_pay_now', 'readyToPayNow',
+      'draftable_now', 'draftableNow', 'rows', 'items', 'itemisation', 'itemization'
+    ];
+    for (const key of rowKeys) {
+      if (Array.isArray(node[key])) node[key] = reconcileRows(node[key]);
+    }
+    for (const bucketKey of ['paye_candidates', 'payeCandidates', 'non_paye_payees', 'nonPayePayees', 'payees', 'candidates']) {
+      if (!Array.isArray(node[bucketKey])) continue;
+      for (const candidate of node[bucketKey]) {
+        if (!isPlainObject(candidate)) continue;
+        for (const key of rowKeys) {
+          if (Array.isArray(candidate[key])) candidate[key] = reconcileRows(candidate[key]);
+        }
+      }
+    }
+    for (const cacheKey of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
+      const pageMap = node[cacheKey];
+      if (!isPlainObject(pageMap)) continue;
+      for (const page of Object.values(pageMap)) {
+        if (!isPlainObject(page)) continue;
+        if (Array.isArray(page.rows)) page.rows = reconcileRows(page.rows);
+        if (Array.isArray(page.items)) page.items = reconcileRows(page.items);
+      }
+    }
+    if (isPlainObject(node.componentStateCache)) {
+      for (const key of rowKeys) {
+        if (Array.isArray(node.componentStateCache[key])) node.componentStateCache[key] = reconcileRows(node.componentStateCache[key]);
+      }
+    }
+  };
 
   const nextPreview = cloneJson(currentPreview) || {};
   nextPreview.paye_candidates = asArray(nextPreview.paye_candidates);
@@ -124140,6 +124226,15 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     try { delete nextEnvelope.server_selected_preview_row_ids; } catch {}
     try { delete nextPreview.server_selected_preview_row_ids; } catch {}
     try { delete nextEnvelopeSession.server_selected_preview_row_ids; } catch {}
+  }
+  for (const node of [
+    nextPreview,
+    nextEnvelope,
+    wiz.preview,
+    wiz.workbench,
+    wiz.decisions
+  ]) {
+    reconcileAuthoritativeSelectionInNode(node, serverSelectedPreviewRowIds, serverSelectedPreviewRowIdsProvided);
   }
 
   let pendingCandidateIds = pendingCandidateIdsProvided
