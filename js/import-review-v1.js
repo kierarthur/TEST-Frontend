@@ -1167,7 +1167,7 @@
 
   function confirmationActionLabel(item) {
     const protectedShift = item.protection?.paid === true || item.protection?.invoice_locked === true;
-    if (item.action_kind === 'APPLY_AMENDMENT') return protectedShift ? 'TMS will reverse and create replacement' : 'TMS will amend shift';
+    if (item.action_kind === 'APPLY_AMENDMENT') return item.outcome_label || (protectedShift ? 'TMS will reverse and create replacement' : 'TMS will amend shift');
     if (item.action_kind === 'APPLY_CANCELLATION') return protectedShift ? 'TMS will reverse shift' : 'TMS will cancel shift';
     return item.outcome_label || 'TMS will process this item';
   }
