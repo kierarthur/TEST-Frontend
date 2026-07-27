@@ -47,3 +47,13 @@ test('selection drift displays a specific readable cancellation explanation', as
   assert.equal(modalInput.message, result.message);
   assert.equal(modalInput.hide_cancel, true);
 });
+
+test('safe draft cancellation remains available after a pre-provider review failure', () => {
+  const source = sliceBetween('  const canShowDraftCancel = !!(', '  const canShowCancelReverseCorrectPanel = !!(');
+
+  assert.match(source, /overviewCancelMode === 'DRAFT_DELETE'/);
+  assert.match(source, /providerSubmitOverviewModel\.hasIssue !== true/);
+  assert.match(source, /overviewHasExecutionEvidence !== true/);
+  assert.doesNotMatch(source, /!activePaymentExecuteOperation/);
+  assert.doesNotMatch(source, /!reviewRequired/);
+});

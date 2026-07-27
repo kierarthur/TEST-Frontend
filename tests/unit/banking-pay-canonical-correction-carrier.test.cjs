@@ -39,6 +39,20 @@ test('canonical correction key wins over volatile preview row identifiers', () =
   );
 });
 
+test('case-resolution buckets use the canonical correction anchor before source-carrier provenance', () => {
+  assert.match(
+    main,
+    /timesheet_id:\s*trimStr\(\s*row\.timesheet_id\s*\|\|\s*rawComponent\.timesheet_id\s*\|\|\s*linkedTimesheetIdText\s*\|\|\s*rawSourceBasisJson\.timesheet_id\s*\)/s
+  );
+});
+
+test('canonical correction modal uses the correction root before linked-scope seed aliases', () => {
+  assert.match(
+    main,
+    /const canonicalCorrectionAnchorTimesheetId = \(\(\) => \{[\s\S]*?\^correction-chain:[\s\S]*?const anchorTimesheetId = trimStr\(pickText\(\s*canonicalCorrectionAnchorTimesheetId,\s*linkedScope\.seed_timesheet_id/s
+  );
+});
+
 test('expenses and additional-code rows retain independent row identity', () => {
   assert.match(
     main,

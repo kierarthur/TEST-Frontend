@@ -38253,6 +38253,20 @@ async function bankingPayCreateDraft(input = {}) {
     } catch {}
 
     await presentCreateDraftFriendlyError(friendlyForDisplay, 'Payment batch could not be created', errMessage);
+    try {
+      wiz.createDraftBusy = false;
+      const activeModalContext = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object')
+        ? window.modalCtx
+        : null;
+      const activeModalEpoch = trimStr(activeModalContext?.openToken || activeModalContext?.banking?.openToken || '');
+      if (
+        activeModalContext === sourceModalContext &&
+        (!sourceModalEpoch || !activeModalEpoch || activeModalEpoch === sourceModalEpoch) &&
+        typeof bankingRerender === 'function'
+      ) {
+        await bankingRerender(null);
+      }
+    } catch {}
     return null;
   } finally {
     try { wiz.createDraftBusy = false; } catch {}
@@ -82153,9 +82167,7 @@ function renderBankingPayBatchChildModalOverview() {
     overviewCancelMode === 'DRAFT_DELETE' &&
     providerSubmitOverviewModel.hasIssue !== true &&
     overviewHasExecutionEvidence !== true &&
-    !activePaymentExecuteOperation &&
     !waitingAuthorisation &&
-    !reviewRequired &&
     !child.actionsBusy?.executing &&
     !child.loading &&
     !child.__loadInFlight &&
@@ -82423,6 +82435,22 @@ function renderBankingPayBatchChildModalOverview() {
     if (breakdowns.length) {
       return breakdowns.map((breakdownValue, breakdownIndex) => {
         const breakdown = asObj(breakdownValue) || {};
+        const breakdownMeta = asObj(breakdown.meta_json || breakdown.metaJson) || {};
+        const amountExVat = firstFiniteNumber(
+          breakdown.amount_ex_vat,
+          breakdown.amountExVat,
+          item.frozen_target_amount_ex_vat,
+          item.amount_ex_vat,
+          0
+        ) ?? 0;
+        const fullResolvedTargetAmountExVat = firstFiniteNumber(
+          breakdownMeta.full_resolved_target_amount_ex_vat,
+          breakdownMeta.fullResolvedTargetAmountExVat
+        );
+        const isPayableRemainder = (
+          fullResolvedTargetAmountExVat !== null
+          && Math.abs(Number(fullResolvedTargetAmountExVat) - Number(amountExVat)) >= 0.005
+        );
         return {
           stableKey: firstText(breakdown.id, breakdown.breakdown_id, breakdown.operation_source_key, `${itemIndex}:${breakdownIndex}`),
           label: friendlyDetailLabel(firstText(
@@ -82438,9 +82466,11 @@ function renderBankingPayBatchChildModalOverview() {
           workedDate: detailWorkedDateForItem(item),
           units: firstFiniteNumber(breakdown.units, item.units),
           rate: firstFiniteNumber(breakdown.rate, item.rate, item.source_rate),
-          amountExVat: firstFiniteNumber(breakdown.amount_ex_vat, breakdown.amountExVat, item.frozen_target_amount_ex_vat, item.amount_ex_vat, 0) ?? 0,
+          amountExVat,
           amountVat: firstFiniteNumber(breakdown.amount_vat, breakdown.amountVat, item.frozen_target_amount_vat, item.amount_vat, 0) ?? 0,
           amountIncVat: firstFiniteNumber(breakdown.amount_inc_vat, breakdown.amountIncVat, item.frozen_target_amount_inc_vat, item.amount_inc_vat, item.frozen_target_amount_ex_vat, item.amount_ex_vat, 0) ?? 0,
+          fullResolvedTargetAmountExVat,
+          isPayableRemainder,
           voided: readBool(item.is_voided || item.isVoided)
         };
       });
@@ -82625,20 +82655,33 @@ function renderBankingPayBatchChildModalOverview() {
             </tr>
           </thead>
           <tbody>
-            ${asArr(itemRows).map((line) => `
+            ${asArr(itemRows).map((line) => {
+              const fullBasisParts = [];
+              if (line.units !== null) fullBasisParts.push(fmtQty(line.units));
+              if (line.rate !== null) fullBasisParts.push(`£${fmtMoney(line.rate)}`);
+              const fullBasisText = fullBasisParts.length === 2 ? ` (${fullBasisParts.join(' × ')})` : '';
+              const remainderExplanation = line.isPayableRemainder
+                ? `Payable remainder · full resolved value £${fmtMoney(line.fullResolvedTargetAmountExVat)}${fullBasisText}`
+                : '';
+              const remainderCellTitle = line.isPayableRemainder
+                ? 'This row pays only the remaining amount. The full resolved quantity and rate are shown in the description.'
+                : '';
+              return `
               <tr>
                 <td class="mini">
                   <span>${enc(line.label || 'Payment line')}</span>
                   ${line.voided ? `<span class="pill" style="margin-left:6px;">Voided</span>` : ''}
+                  ${remainderExplanation ? `<div style="margin-top:3px;opacity:.78;" title="${enc(remainderCellTitle)}">${enc(remainderExplanation)}</div>` : ''}
                 </td>
                 <td class="mini" style="white-space:nowrap;">${enc(line.workedDate ? formatIsoToUkLocal(line.workedDate) : '—')}</td>
-                <td class="mono" style="text-align:right;">${enc(line.units === null ? '—' : fmtQty(line.units))}</td>
-                <td class="mono" style="text-align:right;">${enc(line.rate === null ? '—' : `£${fmtMoney(line.rate)}`)}</td>
+                <td class="mono" style="text-align:right;"${remainderCellTitle ? ` title="${enc(remainderCellTitle)}"` : ''}>${enc(line.isPayableRemainder || line.units === null ? '—' : fmtQty(line.units))}</td>
+                <td class="mono" style="text-align:right;"${remainderCellTitle ? ` title="${enc(remainderCellTitle)}"` : ''}>${enc(line.isPayableRemainder || line.rate === null ? '—' : `£${fmtMoney(line.rate)}`)}</td>
                 <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountExVat))}</td>
                 <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountVat))}</td>
                 <td class="mono" style="text-align:right;">£${enc(fmtMoney(line.amountIncVat))}</td>
               </tr>
-            `).join('')}
+            `;
+            }).join('')}
           </tbody>
         </table>
       </div>
@@ -100220,8 +100263,8 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         timesheet_id: trimStr(
           row.timesheet_id ||
           rawComponent.timesheet_id ||
-          rawSourceBasisJson.timesheet_id ||
-          linkedTimesheetIdText
+          linkedTimesheetIdText ||
+          rawSourceBasisJson.timesheet_id
         ) || null,
         finance_component_id: trimStr(row.finance_component_id || rawComponent.finance_component_id || '') || null,
         source_family_key: trimStr(row.source_family_key || rawComponent.source_family_key || '') || (trimStr(rawCase?.timesheet_id || rawCase?.linked_timesheet_id || '') ? `timesheet:${trimStr(rawCase?.timesheet_id || rawCase?.linked_timesheet_id || '')}` : ''),
@@ -100372,7 +100415,14 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   const existingCaseResolution = isPlainObject(decisions?.case_resolutions?.[ctx.case_key]) ? decisions.case_resolutions[ctx.case_key] : null;
 
   const linkedScope = isPlainObject(ctx.linked_resolution_scope_json) ? ctx.linked_resolution_scope_json : {};
+  const canonicalCorrectionAnchorTimesheetId = (() => {
+    const match = trimStr(ctx.case_key).match(
+      /^correction-chain:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::|$)/i
+    );
+    return match ? match[1] : '';
+  })();
   const anchorTimesheetId = trimStr(pickText(
+    canonicalCorrectionAnchorTimesheetId,
     linkedScope.seed_timesheet_id,
     linkedScope.anchor_timesheet_id,
     ctx.linked_timesheet_id,

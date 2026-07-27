@@ -262,6 +262,34 @@ test('selection-review failure retains its specific user-friendly browser messag
   assert.match(createBody, /const selectionReviewFailure = \[/);
   assert.match(createBody, /const friendly = selectionReviewFailure/);
 });
+test('a rejected draft request clears busy state and repaints the same Banking modal', () => {
+  const createBody = sliceBetween(
+    'async function bankingPayCreateDraft',
+    'function bankingPayHasPollableRailEvidence'
+  );
+
+  assert.match(createBody, /await presentCreateDraftFriendlyError\(friendlyForDisplay/);
+  assert.match(createBody, /wiz\.createDraftBusy = false/);
+  assert.match(createBody, /activeModalContext === sourceModalContext/);
+  assert.match(createBody, /activeModalEpoch === sourceModalEpoch/);
+  assert.match(createBody, /await bankingRerender\(null\)/);
+
+  const friendlyPosition = createBody.lastIndexOf('await presentCreateDraftFriendlyError(friendlyForDisplay');
+  const repaintPosition = createBody.indexOf('await bankingRerender(null)', friendlyPosition);
+  const returnPosition = createBody.indexOf('return null;', repaintPosition);
+  assert.ok(friendlyPosition >= 0);
+  assert.ok(repaintPosition > friendlyPosition, 'the parent repaint must happen after the friendly modal closes');
+  assert.ok(returnPosition > repaintPosition, 'the failed request must repaint before returning');
+});
+
+test('frozen batch detail distinguishes a payable remainder from its full resolved basis', () => {
+  assert.match(mainSource, /full_resolved_target_amount_ex_vat/);
+  assert.match(mainSource, /Payable remainder · full resolved value/);
+  assert.match(mainSource, /This row pays only the remaining amount/);
+  assert.match(mainSource, /line\.isPayableRemainder \|\| line\.units === null \? '—'/);
+  assert.match(mainSource, /line\.isPayableRemainder \|\| line\.rate === null \? '—'/);
+});
+
 test('normalizer behavior preserves the selection-review code and copy', () => {
   const normalizerBody = sliceBetween(
     'function bankingNormalizeApiError',
