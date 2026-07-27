@@ -19,6 +19,10 @@ test('ready-to-pay breakdown uses authoritative payable remainder for clamped wo
 test('multi-segment clamped rows do not invent a payable allocation per segment', () => {
   assert.match(
     mainSource,
-    /operationalRows\.length > 1[\s\S]*Total for this component[\s\S]*Included above/
+    /segment_index: index,[\s\S]*segment_count: operationalRows\.length/
+  );
+  assert.match(
+    mainSource,
+    /segmentIndex === 0[\s\S]*segmentCount > 1[\s\S]*Total for this component[\s\S]*Included above/
   );
 });

@@ -51021,6 +51021,8 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
           entry_type: 'SEGMENT',
           line,
           segment,
+          segment_index: index,
+          segment_count: operationalRows.length,
           preview_row_id: previewRowId,
           preview_row_span: operationalRows.length,
           show_preview_checkbox: index === 0
@@ -51127,12 +51129,14 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
               const finishVal = trimStr(segment?.finish || segment?.finish_time || nestedSegment?.finish || nestedSegment?.finish_time || '') || '—';
               const amount = segment?.pay_amount_ex_vat ?? segment?.amount_ex_vat ?? segment?.pay_amount ?? nestedSegment?.pay_amount_ex_vat ?? nestedSegment?.amount_ex_vat ?? getLineSectionAmount(line);
               const clampAmounts = getPayOutstandingClampAmounts(line);
+              const segmentIndex = Number.isFinite(Number(entry.segment_index)) ? Number(entry.segment_index) : 0;
+              const segmentCount = Number.isFinite(Number(entry.segment_count)) ? Math.max(1, Number(entry.segment_count)) : Math.max(1, Number(entry.preview_row_span) || 1);
               const payableAmountHtml = clampAmounts.clamped
-                ? (index === 0
+                ? (segmentIndex === 0
                     ? `
                       <div style="font-weight:700;">£${enc(fmtMoney(clampAmounts.remaining))} payable</div>
                       ${clampAmounts.original !== null ? `<div class="mini" style="opacity:.75;">£${enc(fmtMoney(clampAmounts.original))} original</div>` : ''}
-                      ${operationalRows.length > 1 ? `<div class="mini" style="opacity:.75;">Total for this component</div>` : ''}
+                      ${segmentCount > 1 ? `<div class="mini" style="opacity:.75;">Total for this component</div>` : ''}
                     `
                     : `<span class="mini" style="opacity:.7;">Included above</span>`)
                 : `£${enc(fmtMoney(amount))}`;
