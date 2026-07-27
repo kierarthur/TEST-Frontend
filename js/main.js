@@ -170428,7 +170428,7 @@ function bankingPayResolveBatchCancelMode(batchLike) {
   ));
   const activeOperationStatus = upper(first(b.active_operation_status, b.activeOperationStatus, nestedBatch.active_operation_status, nestedBatch.activeOperationStatus));
   const activeOperationKind = upper(first(b.active_operation_kind, b.activeOperationKind, b.active_operation_type, b.activeOperationType, nestedBatch.active_operation_kind, nestedBatch.activeOperationKind, nestedBatch.active_operation_type, nestedBatch.activeOperationType));
-  const terminalOperationStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE', 'FAILED', 'ERROR', 'ERRORED', 'REVIEW_REQUIRED', 'CANCELLED', 'CANCELED', 'ABORTED']);
+  const terminalOperationStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE', 'FAILED', 'ERROR', 'ERRORED', 'REVIEW_REQUIRED', 'WAITING_USER_REVIEW', 'CANCELLED', 'CANCELED', 'ABORTED']);
   const activeOperationStatuses = new Set([
     'QUEUED',
     'RUNNABLE',

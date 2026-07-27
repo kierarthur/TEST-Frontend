@@ -57,3 +57,13 @@ test('safe draft cancellation remains available after a pre-provider review fail
   assert.doesNotMatch(source, /!activePaymentExecuteOperation/);
   assert.doesNotMatch(source, /!reviewRequired/);
 });
+
+test('a stopped payment operation waiting for user review does not impersonate provider activity', () => {
+  const source = sliceBetween(
+    "  const terminalOperationStatuses = new Set(['COMPLETE'",
+    '  const activeOperationStatuses = new Set('
+  );
+
+  assert.match(source, /'REVIEW_REQUIRED'/);
+  assert.match(source, /'WAITING_USER_REVIEW'/);
+});
