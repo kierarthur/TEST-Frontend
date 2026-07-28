@@ -298433,6 +298433,18 @@ function deriveTimesheetInvoicingDisplay(row) {
   return 'INVOICED_NOT_ISSUED';
 }
 
+function getSuccessfulHealthRosterValidation(details = {}) {
+  const validations = Array.isArray(details?.validations) ? details.validations : [];
+  const latest = validations.find((row) => row && typeof row === 'object') || null;
+  if (!latest) return null;
+
+  const status = String(latest.status || '').trim().toUpperCase();
+  const reason = String(latest.reason_code || '').trim().toUpperCase();
+  if (!['VALIDATION_OK', 'OVERRIDDEN', 'OVERRIDE'].includes(status)) return null;
+  if (reason !== 'HEALTHROSTER_DAILY' && reason !== 'HEALTHROSTER_WEEKLY') return null;
+  return latest;
+}
+
 function renderTimesheetLinesTab(ctx) {
     const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -298447,6 +298459,7 @@ function renderTimesheetLinesTab(ctx) {
   const mode    = ib && typeof ib.mode === 'string' ? ib.mode : null;
   const shifts  = Array.isArray(details.shifts) ? details.shifts : [];
   const isSegments = !!details.isSegmentsMode;
+  const successfulHealthRosterValidation = getSuccessfulHealthRosterValidation(details);
 
   const sheetScope = (details.sheet_scope || row.sheet_scope || ts.sheet_scope || '').toUpperCase();
   const subMode    = (row.submission_mode || ts.submission_mode || '').toUpperCase();
@@ -300974,8 +300987,14 @@ function renderTimesheetLinesTab(ctx) {
 
     const badgeHtml = `
       <span class="pill pill-elec">Electronic daily shift</span>
+      ${successfulHealthRosterValidation ? '<span class="pill pill-ok">Validated</span>' : ''}
       <span class="mini" style="margin-left:8px;">Start/End and break times are shown read-only.</span>
     `;
+    const bookingReferenceNumber = String(
+      ts.reference_number ||
+      successfulHealthRosterValidation?.hr_request_id ||
+      ''
+    ).trim();
 
     return `
       <div class="tabc">
@@ -301032,7 +301051,7 @@ function renderTimesheetLinesTab(ctx) {
                 </table>
               </div>
               <span class="mini" style="display:block;margin-top:4px;">
-                Bucketed hours and pay/charge for this shift are shown in the Finance tab.
+                Booking Reference Number – <strong>${esc(bookingReferenceNumber || 'Not recorded')}</strong>
               </span>
             </div>
           </div>
@@ -347939,6 +347958,7 @@ function renderTimesheetOverviewTab(ctx) {
   const rCand = related.candidate || {};
   const rCli  = related.client    || {};
   const rCtr  = related.contract  || {};
+  const successfulHealthRosterValidation = getSuccessfulHealthRosterValidation(details);
 
   const actionFlags = (details.action_flags && typeof details.action_flags === 'object')
     ? details.action_flags
@@ -348766,6 +348786,14 @@ function renderTimesheetOverviewTab(ctx) {
       'Authorised for Payment',
       'pill-ok',
       'This timesheet is authorised for payment.'
+    );
+  }
+
+  if (successfulHealthRosterValidation) {
+    addStage(
+      'Validated',
+      'pill-ok',
+      'HealthRoster has successfully validated the stored timesheet hours and references.'
     );
   }
 
