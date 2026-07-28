@@ -9,6 +9,7 @@
   const PROGRESS_VERSION = 'INVOICE_BATCH_PROGRESS_V2';
   const PAGE_SIZE = 100;
   const MAX_RULES = 10000;
+  const MAX_GROUP_SELECTORS = 300;
   const MODES = new Set(['GENERATE', 'ISSUE']);
   const DISPLAY_MODES = ['ALL', 'BLOCKED', 'READY'];
   const GROUP_PRESETS = [
@@ -375,6 +376,7 @@
       selection_summary_pending: true,
       selection_summary_error: null,
       group_selection: [],
+      page_group_selection_seed: [],
       facets_by_kind: {},
       facet_cursors: {},
       facet_history: {},
@@ -560,7 +562,10 @@
       state.selection_hash = clean(payload.selection_hash);
       state.page_cursor = clean(payload.page?.next_cursor) || null;
       state.totals = asObject(payload.totals);
-      state.group_selection = asArray(payload.group_selection);
+      state.page_group_selection_seed = asArray(payload.group_selection);
+      state.group_selection = [];
+      state.selection_summary_pending = true;
+      state.selection_summary_error = null;
       if (payload.selection_summary?.exact === true) {
         state.selection_summary = asObject(payload.selection_summary);
         state.selection_summary_pending = false;
@@ -589,7 +594,7 @@
     const selectors = [];
     const seen = new Set();
     const visit = node => {
-      const selector = groupSelectorForRows(node.level, node.rows);
+      const selector = node.selector || groupSelectorForNode(node, state.grouping);
       if (selector) {
         const identity = selectorIdentity(selector);
         if (!seen.has(identity)) {
@@ -599,8 +604,14 @@
       }
       asArray(node.children).forEach(visit);
     };
-    buildGroups(asArray(state.candidate_page?.rows), groupLevels(state)).forEach(visit);
-    return selectors.slice(0, 500);
+    buildGroups(
+      asArray(state.candidate_page?.rows),
+      groupLevels(state),
+      0,
+      {},
+      state.grouping
+    ).forEach(visit);
+    return selectors.slice(0, MAX_GROUP_SELECTORS);
   }
 
   async function loadInvoiceBatchSelectionSummary(state, options = {}) {
@@ -613,16 +624,37 @@
     state.selection_summary_error = null;
     renderInvoiceBatchModal(state);
     try {
+      const requestedSelectors = asArray(
+        options.group_selectors || visibleInvoiceBatchGroupSelectors(state)
+      ).map(canonicalSelector);
       const payload = await fetchInvoiceBatchCandidatePage(state, {
         mode: 'SUMMARY',
-        group_selectors: options.group_selectors || visibleInvoiceBatchGroupSelectors(state),
+        group_selectors: requestedSelectors,
         signal: controller.signal
       });
       if (state.destroyed || serial !== state.summary_request_serial) return null;
       if (payload.selection_summary?.exact !== true) throw new Error('BATCH_SELECTION_SUMMARY_NOT_EXACT');
+      const returnedGroups = asArray(payload.group_selection);
+      const groupsByIdentity = new Map();
+      for (const group of returnedGroups) {
+        if (!group?.selector) throw new Error('INVOICE_BATCH_GROUP_SELECTION_CONTRACT_MISMATCH');
+        const identity = selectorIdentity(group.selector);
+        if (groupsByIdentity.has(identity)) {
+          throw new Error('INVOICE_BATCH_GROUP_SELECTION_CONTRACT_MISMATCH');
+        }
+        groupsByIdentity.set(identity, group);
+      }
+      if (groupsByIdentity.size !== requestedSelectors.length) {
+        throw new Error('INVOICE_BATCH_GROUP_SELECTION_CONTRACT_MISMATCH');
+      }
+      const orderedGroups = requestedSelectors.map(selector => {
+        const group = groupsByIdentity.get(selectorIdentity(selector));
+        if (!group) throw new Error('INVOICE_BATCH_GROUP_SELECTION_CONTRACT_MISMATCH');
+        return group;
+      });
       state.selection_summary = asObject(payload.selection_summary);
       state.selection_hash = clean(payload.selection_hash) || state.selection_hash;
-      state.group_selection = asArray(payload.group_selection);
+      state.group_selection = orderedGroups;
       state.totals = asObject(payload.totals);
       state.selection_summary_pending = false;
       return payload;
@@ -839,46 +871,74 @@
     return clean(row.row_status || row.generation_state || row.generated_state).replaceAll('_', ' ') || 'Unknown status';
   }
 
-  function groupSelectorForRows(level, rows) {
-    const first = rows[0] || {};
-    const weeks = [...new Set(asArray(rows).flatMap(row => normaliseStringArray(row.week_ending_dates || [row.week_ending_date])))];
-    const clients = [...new Set(asArray(rows).map(row => clean(row.client_id).toLowerCase()).filter(Boolean))];
-    const candidateSets = asArray(rows).map(rowCandidateIds);
-    const commonCandidates = candidateSets.length
-      ? candidateSets[0].filter(id => candidateSets.every(ids => ids.includes(id)))
-      : [];
+  function exactGroupDimension(level, rows) {
     if (level === 'WEEK') {
-      return weeks.length === 1 ? { type: 'WEEK', week_ending_date: weeks[0] } : null;
+      const weeks = [...new Set(asArray(rows).flatMap(row =>
+        normaliseStringArray(row.week_ending_dates || [row.week_ending_date])
+      ))];
+      return weeks.length === 1 ? { week_ending_date: weeks[0] } : {};
     }
     if (level === 'CLIENT') {
-      if (clients.length !== 1) return null;
-      if (weeks.length === 1 && commonCandidates.length === 1) {
-        return { type: 'WEEK_CLIENT_CANDIDATE', week_ending_date: weeks[0], client_id: clients[0], candidate_id: commonCandidates[0] };
-      }
-      if (weeks.length === 1) return { type: 'WEEK_CLIENT', week_ending_date: weeks[0], client_id: clients[0] };
-      return { type: 'CLIENT', client_id: clients[0] };
+      const clients = [...new Set(asArray(rows)
+        .map(row => clean(row.client_id).toLowerCase())
+        .filter(Boolean))];
+      return clients.length === 1 ? { client_id: clients[0] } : {};
     }
     if (level === 'CANDIDATE') {
-      const ids = rowCandidateIds(first);
-      if (ids.length !== 1) return null;
-      if (weeks.length === 1 && clients.length === 1) {
-        return { type: 'WEEK_CLIENT_CANDIDATE', week_ending_date: weeks[0], client_id: clients[0], candidate_id: ids[0] };
-      }
-      return { type: 'CANDIDATE', candidate_id: ids[0] };
+      const candidateSets = asArray(rows).map(rowCandidateIds);
+      const common = candidateSets.length
+        ? candidateSets[0].filter(id => candidateSets.every(ids => ids.includes(id)))
+        : [];
+      return common.length === 1 ? { candidate_id: common[0] } : {};
     }
     if (level === 'STATUS') {
-      const statuses = [...new Set(asArray(rows).map(row => upper(row.status_code || row.row_status || row.status)).filter(Boolean))];
-      if (statuses.length !== 1) return null;
-      if (weeks.length === 1 && clients.length === 1) {
-        return { type: 'STATUS_WEEK_CLIENT', status_code: statuses[0], week_ending_date: weeks[0], client_id: clients[0] };
+      const statuses = [...new Set(asArray(rows)
+        .map(row => upper(row.status_code || row.row_status || row.status))
+        .filter(Boolean))];
+      return statuses.length === 1 ? { status_code: statuses[0] } : {};
+    }
+    return {};
+  }
+
+  function groupSelectorForNode(node, groupingValue) {
+    const grouping = upper(groupingValue);
+    const level = upper(node?.level);
+    const dimensions = asObject(node?.dimensions);
+    const week = dimensions.week_ending_date;
+    const client = dimensions.client_id;
+    const candidate = dimensions.candidate_id;
+    const status = dimensions.status_code;
+    if (grouping === 'WEEK_CLIENT_CANDIDATE') {
+      if (level === 'WEEK' && week) return { type: 'WEEK', week_ending_date: week };
+      if (level === 'CLIENT' && week && client) return { type: 'WEEK_CLIENT', week_ending_date: week, client_id: client };
+      if (level === 'CANDIDATE' && week && client && candidate) {
+        return { type: 'WEEK_CLIENT_CANDIDATE', week_ending_date: week, client_id: client, candidate_id: candidate };
       }
-      if (weeks.length === 1) return { type: 'STATUS_WEEK', status_code: statuses[0], week_ending_date: weeks[0] };
-      return { type: 'STATUS', status_code: statuses[0] };
+    }
+    if (grouping === 'CLIENT_WEEK_CANDIDATE') {
+      if (level === 'CLIENT' && client) return { type: 'CLIENT', client_id: client };
+      if (level === 'WEEK' && week && client) return { type: 'WEEK_CLIENT', week_ending_date: week, client_id: client };
+      if (level === 'CANDIDATE' && week && client && candidate) {
+        return { type: 'WEEK_CLIENT_CANDIDATE', week_ending_date: week, client_id: client, candidate_id: candidate };
+      }
+    }
+    if (grouping === 'CANDIDATE_WEEK_CLIENT') {
+      if (level === 'CANDIDATE' && candidate) return { type: 'CANDIDATE', candidate_id: candidate };
+      if (level === 'CLIENT' && week && client && candidate) {
+        return { type: 'WEEK_CLIENT_CANDIDATE', week_ending_date: week, client_id: client, candidate_id: candidate };
+      }
+    }
+    if (grouping === 'STATUS_WEEK_CLIENT') {
+      if (level === 'STATUS' && status) return { type: 'STATUS', status_code: status };
+      if (level === 'WEEK' && status && week) return { type: 'STATUS_WEEK', status_code: status, week_ending_date: week };
+      if (level === 'CLIENT' && status && week && client) {
+        return { type: 'STATUS_WEEK_CLIENT', status_code: status, week_ending_date: week, client_id: client };
+      }
     }
     return null;
   }
 
-  function buildGroups(rows, levels, depth = 0) {
+  function buildGroups(rows, levels, depth = 0, ancestry = {}, grouping = '') {
     if (depth >= levels.length) return asArray(rows);
     const level = levels[depth];
     const map = new Map();
@@ -887,21 +947,37 @@
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(row);
     }
-    return [...map.entries()].map(([key, children]) => ({
-      key,
-      level,
-      label: groupLabel(children[0], level),
-      rows: children,
-      children: buildGroups(children, levels, depth + 1)
-    }));
+    return [...map.entries()].map(([key, children]) => {
+      const dimensions = {
+        ...ancestry,
+        ...exactGroupDimension(level, children)
+      };
+      const node = {
+        key,
+        level,
+        label: groupLabel(children[0], level),
+        rows: children,
+        dimensions
+      };
+      node.selector = groupSelectorForNode(node, grouping);
+      node.children = buildGroups(
+        children,
+        levels,
+        depth + 1,
+        dimensions,
+        grouping
+      );
+      return node;
+    });
   }
 
   function renderGroupNode(node, state, depth = 0) {
     if (!node) return '';
     if (Array.isArray(node)) return node.map(child => renderGroupNode(child, state, depth)).join('');
     if (!Array.isArray(node.rows)) return renderInvoiceBatchRow(node, state);
-    const selector = groupSelectorForRows(node.level, node.rows);
-    const groupState = selector
+    const selector = node.selector || groupSelectorForNode(node, state.grouping);
+    const groupState = selector && state.selection_summary_pending !== true
+      && !state.selection_summary_error
       ? deriveInvoiceBatchGroupSelectionState(state.selection, node.rows, selector, state.group_selection)
       : 'DISABLED';
     const eligibleCount = node.rows.filter(row => row.selectable === true).length;
@@ -913,7 +989,7 @@
         <header class="invbatch-group-header">
           ${checkbox}
           <span>${escapeHtml(node.label)}</span>
-          <span class="invbatch-group-count">${eligibleCount} eligible · ${node.rows.length - eligibleCount} blocked</span>
+          <span class="invbatch-group-count">${eligibleCount} eligible · ${node.rows.length - eligibleCount} blocked on this page</span>
         </header>
         <div class="invbatch-group-body">${asArray(node.children)
           .map(child => renderGroupNode(child, state, depth + 1))
@@ -924,7 +1000,7 @@
   function renderInvoiceBatchGroups(state) {
     const rows = asArray(state.candidate_page?.rows);
     if (!rows.length) return '<div class="invbatch-empty">No matching items.</div>';
-    const grouped = buildGroups(rows, groupLevels(state));
+    const grouped = buildGroups(rows, groupLevels(state), 0, {}, state.grouping);
     return grouped.map(group => renderGroupNode(group, state)).join('');
   }
 
@@ -1736,19 +1812,23 @@
         state.page_history.push({
           page: state.candidate_page,
           next_cursor: state.page_cursor,
-          page_start_ordinal: state.page_start_ordinal,
-          group_selection: state.group_selection
+          page_start_ordinal: state.page_start_ordinal
         });
         state.page_start_ordinal += asArray(state.candidate_page?.rows).length;
-        await loadInvoiceBatchCandidatePage(state, { cursor: state.page_cursor });
+        const page = await loadInvoiceBatchCandidatePage(state, { cursor: state.page_cursor });
+        if (page) await loadInvoiceBatchSelectionSummary(state);
       } else if (action === 'page-back' && state.page_history.length) {
         const prior = state.page_history.pop();
         state.candidate_page = prior.page;
         state.page_start_ordinal = Number(prior.page_start_ordinal || 0);
-        state.group_selection = asArray(prior.group_selection);
+        state.group_selection = [];
+        state.page_group_selection_seed = asArray(state.candidate_page?.group_selection);
+        state.selection_summary_pending = true;
+        state.selection_summary_error = null;
         state.page_cursor = clean(state.candidate_page?.page?.next_cursor) || null;
         state.totals = asObject(state.candidate_page?.totals);
         renderInvoiceBatchModal(state);
+        await loadInvoiceBatchSelectionSummary(state);
       } else if (action === 'refresh-stale') {
         await reloadFirstPage(state);
       } else if (action === 'confirm-open') {
@@ -1892,6 +1972,9 @@
     applyInvoiceBatchSelectionRule,
     isInvoiceBatchRowSelected,
     deriveInvoiceBatchGroupSelectionState,
+    buildInvoiceBatchGroups: buildGroups,
+    groupSelectorForNode,
+    visibleInvoiceBatchGroupSelectors,
     resetInvoiceBatchSelection,
     buildInvoiceBatchSelectionContract,
     buildInvoiceBatchCandidateRequest,
@@ -1928,6 +2011,9 @@
     applyInvoiceBatchSelectionRule,
     isInvoiceBatchRowSelected,
     deriveInvoiceBatchGroupSelectionState,
+    buildInvoiceBatchGroups: buildGroups,
+    groupSelectorForNode,
+    visibleInvoiceBatchGroupSelectors,
     resetInvoiceBatchSelection,
     buildInvoiceBatchSelectionContract,
     renderInvoiceBatchRow,

@@ -2,7 +2,8 @@
   'use strict';
 
   const CAPABILITY_CACHE_KEY = 'cloudtms.invoiceAsyncCapabilities.v8';
-  const WATCH_STORAGE_KEY = 'cloudtms.invoiceOperationWatches.v8';
+  const WATCH_STORAGE_KEY_PREFIX = 'cloudtms.invoiceOperationWatches.v8';
+  const LEGACY_WATCH_STORAGE_KEY = 'cloudtms.invoiceOperationWatches.v8';
   const EXPECTED_BACKEND_CONTRACT = 'INVOICE_ASYNC_BACKEND_V8';
   const EXPECTED_DOCUMENT_CONTRACT = 'INVOICE_DOCUMENT_VERSION_ACCESS_V1';
   const SUPPORTED_MEDIA = Object.freeze(['application/pdf', 'image/jpeg', 'image/png']);
@@ -40,6 +41,7 @@
   let installed = false;
   let delegatedClickInstalled = false;
   let refreshTimer = null;
+  let activeWatchStorageKey = null;
   const activeInvoiceViewers = new Map();
 
   const clean = value => String(value == null ? '' : value).trim();
@@ -52,10 +54,24 @@
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[character]);
 
-  function capabilityCacheKey() {
+  function invoiceAsyncIdentity() {
     const userId = clean(window.__USER_ID || window.__auth?.user?.id || window.SESSION?.user?.id).toLowerCase();
     const environment = clean(window.location?.host || 'unknown').toLowerCase();
-    return UUID_RE.test(userId) ? `${CAPABILITY_CACHE_KEY}:${environment}:${userId}` : null;
+    return UUID_RE.test(userId) ? { environment, user_id: userId } : null;
+  }
+
+  function capabilityCacheKey() {
+    const identity = invoiceAsyncIdentity();
+    return identity
+      ? `${CAPABILITY_CACHE_KEY}:${identity.environment}:${identity.user_id}`
+      : null;
+  }
+
+  function operationWatchStorageKey() {
+    const identity = invoiceAsyncIdentity();
+    return identity
+      ? `${WATCH_STORAGE_KEY_PREFIX}:${identity.environment}:${identity.user_id}`
+      : null;
   }
 
   function exactMediaContract(value) {
@@ -236,7 +252,6 @@
         row.effective_change_seq ?? row.change_seq ?? row.changeSeq ?? context.effective_change_seq ?? 0
       ) || 0)),
       document_version_id: clean(row.document_version_id || row.documentVersionId || context.document_version_id).toLowerCase() || null,
-      ready_key: clean(row.ready_key || context.ready_key) || null,
       error_code: upper(row.error_code || row.errorCode || context.error_code) || null,
       error_summary: clean(row.error_summary || row.errorSummary || row.message || context.error_summary) || null,
       retry_available: row.retry_available === true || row.can_retry === true,
@@ -265,7 +280,6 @@
       entity_type: incoming.entity_type || previous.entity_type,
       entity_id: incoming.entity_id || previous.entity_id,
       document_version_id: incoming.document_version_id || previous.document_version_id,
-      ready_key: incoming.ready_key || previous.ready_key,
       error_code: incoming.error_code || previous.error_code,
       error_summary: incoming.error_summary || previous.error_summary,
       progress: { ...asObject(previous.progress), ...asObject(incoming.progress) },
@@ -308,7 +322,10 @@
 
   function loadInvoiceOperationWatches() {
     try {
-      return pruneInvoiceOperationWatches(JSON.parse(sessionStorage.getItem(WATCH_STORAGE_KEY) || '[]'));
+      sessionStorage.removeItem(LEGACY_WATCH_STORAGE_KEY);
+      const key = operationWatchStorageKey();
+      if (!key) return [];
+      return pruneInvoiceOperationWatches(JSON.parse(sessionStorage.getItem(key) || '[]'));
     } catch {
       return [];
     }
@@ -316,7 +333,16 @@
 
   function saveInvoiceOperationWatches(rows) {
     const saved = pruneInvoiceOperationWatches(rows);
-    try { sessionStorage.setItem(WATCH_STORAGE_KEY, JSON.stringify(saved)); } catch {}
+    const key = operationWatchStorageKey();
+    if (!key) {
+      window.__invoiceOperationWatches = [];
+      return [];
+    }
+    try {
+      sessionStorage.removeItem(LEGACY_WATCH_STORAGE_KEY);
+      sessionStorage.setItem(key, JSON.stringify(saved));
+    } catch {}
+    activeWatchStorageKey = key;
     window.__invoiceOperationWatches = saved;
     return saved;
   }
@@ -400,7 +426,12 @@
     const phase = upper(row.phase || row.current_phase || status);
     const failed = ['FAILED', 'DEAD_LETTER', 'BLOCKED'].includes(status);
     const cancelled = ['CANCELLED', 'SUPERSEDED'].includes(status);
-    const ready = ['COMPLETE', 'READY', 'ISSUED'].includes(status) || !!row.document_version_id;
+    const documentFamily = ['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(family);
+    const documentVersionId = clean(row.document_version_id).toLowerCase();
+    const exactDocumentReady = UUID_RE.test(documentVersionId);
+    const ready = documentFamily
+      ? exactDocumentReady
+      : ['COMPLETE', 'READY', 'ISSUED'].includes(status) || exactDocumentReady;
     const retry = row.retry_available === true;
     const base = {
       family,
@@ -409,7 +440,7 @@
       terminal: TERMINAL.has(status),
       retry_available: retry,
       view_available: ready && !!row.document_version_id,
-      document_version_id: row.document_version_id || null,
+      document_version_id: exactDocumentReady ? documentVersionId : null,
       tone: 'muted',
       label: status || 'Not started',
       button_label: '',
@@ -465,14 +496,15 @@
     const preparingLabel = timesheet ? 'Preparing timesheet…' : 'Preparing PDF…';
     const readyLabel = timesheet ? 'View timesheet PDF' : 'View invoice PDF';
     const failedLabel = timesheet ? 'Timesheet PDF failed' : 'PDF failed — retry';
+    const terminalWithoutVersion = TERMINAL.has(status) && !exactDocumentReady;
     return {
       ...base,
-      tone: ready ? 'ready' : (failed ? 'error' : (ACTIVE.has(status) ? 'amber' : 'muted')),
-      label: ready ? readyLabel : (failed ? failedLabel : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Prepare invoice PDF'))),
-      button_label: ready ? readyLabel : (failed && retry ? 'Retry PDF' : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Prepare invoice PDF'))),
-      disabled: ACTIVE.has(status) || (failed && !retry),
+      tone: ready ? 'ready' : (failed || terminalWithoutVersion ? 'error' : (ACTIVE.has(status) ? 'amber' : 'muted')),
+      label: ready ? readyLabel : (terminalWithoutVersion ? 'Document unavailable' : (failed ? failedLabel : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Prepare invoice PDF')))),
+      button_label: ready ? readyLabel : (terminalWithoutVersion ? 'Document unavailable' : (failed && retry ? 'Retry PDF' : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Prepare invoice PDF')))),
+      disabled: terminalWithoutVersion || ACTIVE.has(status) || (failed && !retry),
       aria_busy: ACTIVE.has(status),
-      view_available: ready && !!row.document_version_id
+      view_available: exactDocumentReady
     };
   }
 
@@ -583,19 +615,38 @@
   function updateOpenInvoiceModalFromSignal(signal) {
     const signalEntityId = clean(signal.entity_id).toLowerCase();
     const viewerModal = activeInvoiceViewers.get(signalEntityId);
+    const family = operationFamily(signal);
     if (
       viewerModal
       && signal.document_version_id
-      && ['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(operationFamily(signal))
+      && ['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(family)
     ) {
-      Promise.resolve(completeInvoiceAsyncViewer(viewerModal, signal.document_version_id)).catch(() => {});
+      const viewer = asObject(viewerModal.invoiceAsync?.viewer_request);
+      const operationId = clean(signal.operation_id).toLowerCase();
+      if (
+        viewer.open
+        && viewer.entity_id === signalEntityId
+        && viewer.entity_type === (family === 'TIMESHEET_DOCUMENT' ? 'TIMESHEET' : 'INVOICE')
+        && (!viewer.operation_id || viewer.operation_id === operationId)
+        && (!viewer.purpose || !signal.purpose || viewer.purpose === signal.purpose)
+      ) {
+        Promise.resolve(completeInvoiceAsyncViewer(
+          viewerModal,
+          signal.document_version_id,
+          {
+            request_serial: viewer.request_serial,
+            entity_id: signalEntityId,
+            operation_id: viewer.operation_id || operationId,
+            purpose: viewer.purpose || signal.purpose
+          }
+        )).catch(() => {});
+      }
     }
     const modal = window.modalCtx;
     if (!modal || typeof modal !== 'object') return false;
     const invoiceId = clean(modal.invoiceId || modal.invoiceDetail?.invoice?.id || modal.dataLoaded?.invoice?.id || modal.data?.id).toLowerCase();
     if (invoiceId && signalEntityId !== invoiceId) return false;
     modal.invoiceAsync = asObject(modal.invoiceAsync);
-    const family = operationFamily(signal);
     const slot = family === 'ISSUE' ? 'issue_operation'
       : family === 'DELIVERY' ? 'delivery_operation'
         : family === 'ASSET' ? 'asset_operation'
@@ -875,7 +926,8 @@
     if (!UUID_RE.test(id)) throw new Error('READY_DOCUMENT_VERSION_ID_INVALID');
     const presign = await window.authFetch(invoiceApi(`/api/invoice-document-versions/${encodeURIComponent(id)}/presign`), {
       method: 'POST',
-      headers: { accept: 'application/json' }
+      headers: { accept: 'application/json' },
+      signal: options.signal
     });
     const descriptor = await presign.json().catch(() => ({}));
     if (!presign.ok || !descriptor.url || clean(descriptor.document_version_id).toLowerCase() !== id) {
@@ -883,7 +935,8 @@
     }
     const documentResponse = await window.authFetch(descriptor.url, {
       method: 'GET',
-      headers: { accept: 'application/pdf' }
+      headers: { accept: 'application/pdf' },
+      signal: options.signal
     });
     if (!documentResponse.ok) throw new Error(`READY_DOCUMENT_DOWNLOAD_FAILED_${documentResponse.status}`);
     const blob = await documentResponse.blob();
@@ -943,28 +996,35 @@
   }
 
   function openPreparingInvoiceViewer(modalCtx, entityType, entityId, purpose, commandToken) {
+    const canonicalEntityType = upper(entityType);
+    const canonicalEntityId = clean(entityId).toLowerCase();
+    const requestedPurpose = upper(purpose);
     modalCtx.invoiceAsync = asObject(modalCtx.invoiceAsync);
+    try { modalCtx.invoiceAsync.viewer_request?.abort_controller?.abort(); } catch {}
     revokeInvoiceAsyncViewerBlob(modalCtx);
     const requestSerial = crypto.randomUUID();
+    const abortController = new AbortController();
     modalCtx.invoiceAsync.viewer_request = {
       contract_version: 'INVOICE_VIEWER_V2',
-      entity_type: entityType,
-      entity_id: entityId,
-      purpose,
+      entity_type: canonicalEntityType,
+      entity_id: canonicalEntityId,
+      purpose: requestedPurpose,
+      requested_purpose: requestedPurpose,
       command_token: commandToken,
       request_serial: requestSerial,
+      abort_controller: abortController,
       open: true,
       viewer_state: 'PREPARING',
-      status_message: entityType === 'TIMESHEET' ? 'Preparing timesheet' : 'Preparing preview',
+      status_message: canonicalEntityType === 'TIMESHEET' ? 'Preparing timesheet' : 'Preparing preview',
       document_version_id: null,
       operation_id: null,
       blob_url: null,
       error: null
     };
-    activeInvoiceViewers.set(entityId, modalCtx);
+    activeInvoiceViewers.set(canonicalEntityId, modalCtx);
     if (typeof window.showModal !== 'function') return requestSerial;
     window.showModal(
-      entityType === 'TIMESHEET' ? 'Timesheet PDF' : 'Invoice PDF Preview',
+      canonicalEntityType === 'TIMESHEET' ? 'Timesheet PDF' : 'Invoice PDF Preview',
       [{ key: 'main', label: 'PDF' }],
       () => renderInvoiceAsyncViewerContent(modalCtx),
       null,
@@ -976,8 +1036,9 @@
         onDismiss: () => {
           const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
           viewer.open = false;
+          try { viewer.abort_controller?.abort(); } catch {}
           revokeInvoiceAsyncViewerBlob(modalCtx);
-          activeInvoiceViewers.delete(entityId);
+          activeInvoiceViewers.delete(canonicalEntityId);
         }
       }
     );
@@ -990,16 +1051,21 @@
     if (!viewer.open || !UUID_RE.test(canonicalVersion)) return null;
     if (expected.request_serial && viewer.request_serial !== expected.request_serial) return null;
     if (expected.entity_id && viewer.entity_id !== expected.entity_id) return null;
+    if (expected.operation_id && viewer.operation_id !== expected.operation_id) return null;
     if (expected.purpose && viewer.purpose !== expected.purpose) return null;
     if (viewer.document_version_id === canonicalVersion && viewer.blob_url) return viewer;
     viewer.status_message = 'Opening exact document version';
     viewer.error = null;
     repaintInvoiceAsyncViewer(modalCtx);
     try {
-      const result = await openExactReadyDocument(canonicalVersion, { returnBlobUrl: true });
+      const result = await openExactReadyDocument(canonicalVersion, {
+        returnBlobUrl: true,
+        signal: viewer.abort_controller?.signal
+      });
       if (!viewer.open
           || (expected.request_serial && viewer.request_serial !== expected.request_serial)
           || (expected.entity_id && viewer.entity_id !== expected.entity_id)
+          || (expected.operation_id && viewer.operation_id !== expected.operation_id)
           || (expected.purpose && viewer.purpose !== expected.purpose)) {
         result.revoke?.();
         return null;
@@ -1065,25 +1131,59 @@
       response = await window.authFetch(invoiceApi(`/api/invoices/${encodeURIComponent(invoiceId)}/render`), {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': commandToken },
-        body: JSON.stringify({ command_token: commandToken, priority_reason: 'VIEW_NOW' })
+        body: JSON.stringify({ command_token: commandToken, priority_reason: 'VIEW_NOW' }),
+        signal: modalCtx.invoiceAsync.viewer_request.abort_controller.signal
       });
     } catch (error) {
-      modalCtx.invoiceAsync.viewer_request.status_message = 'Preview failed';
-      modalCtx.invoiceAsync.viewer_request.error = clean(error?.message || error);
-      repaintInvoiceAsyncViewer(modalCtx);
+      const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
+      if (viewer.open && viewer.request_serial === requestSerial
+          && viewer.entity_type === 'INVOICE' && viewer.entity_id === invoiceId) {
+        viewer.status_message = 'Preview failed';
+        viewer.error = clean(error?.message || error);
+        repaintInvoiceAsyncViewer(modalCtx);
+      }
       throw error;
     }
     const payload = await response.json().catch(() => ({}));
+    const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
+    const currentRequest = viewer.open
+      && viewer.request_serial === requestSerial
+      && viewer.entity_type === 'INVOICE'
+      && viewer.entity_id === invoiceId;
     if (clean(payload.contract_version) !== 'INVOICE_VIEWER_V2') {
-      modalCtx.invoiceAsync.viewer_request.viewer_state = 'BLOCKED';
-      modalCtx.invoiceAsync.viewer_request.status_message = 'Preview failed';
-      modalCtx.invoiceAsync.viewer_request.error = 'INVOICE_VIEWER_CONTRACT_MISMATCH';
-      repaintInvoiceAsyncViewer(modalCtx);
+      if (currentRequest) {
+        viewer.viewer_state = 'BLOCKED';
+        viewer.status_message = 'Preview failed';
+        viewer.error = 'INVOICE_VIEWER_CONTRACT_MISMATCH';
+        repaintInvoiceAsyncViewer(modalCtx);
+      }
       throw new Error('INVOICE_VIEWER_CONTRACT_MISMATCH');
     }
     const viewerState = upper(payload.viewer_state);
     const purpose = upper(payload.purpose || 'DRAFT_PREVIEW');
     const versionId = clean(payload.document_version?.id || payload.document_version_id).toLowerCase();
+    if (!currentRequest) return payload;
+    if (!['DRAFT_PREVIEW', 'FINAL_ISSUE'].includes(purpose)) {
+      viewer.viewer_state = 'BLOCKED';
+      viewer.status_message = 'Preview failed';
+      viewer.error = 'INVOICE_VIEWER_PURPOSE_INVALID';
+      repaintInvoiceAsyncViewer(modalCtx);
+      throw new Error('INVOICE_VIEWER_PURPOSE_INVALID');
+    }
+    const invoiceStatus = upper(
+      modalCtx?.invoiceDetail?.invoice?.status
+      || modalCtx?.dataLoaded?.invoice?.status
+      || modalCtx?.data?.status
+    );
+    if (['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'].includes(invoiceStatus)
+        && purpose !== 'FINAL_ISSUE') {
+      viewer.viewer_state = 'BLOCKED';
+      viewer.status_message = 'Issued document unavailable';
+      viewer.error = 'ISSUED_DOCUMENT_PURPOSE_INVALID';
+      repaintInvoiceAsyncViewer(modalCtx);
+      throw new Error('ISSUED_DOCUMENT_PURPOSE_INVALID');
+    }
+    viewer.purpose = purpose;
     if (response.status === 200 && viewerState === 'READY' && UUID_RE.test(versionId)) {
       await completeInvoiceAsyncViewer(modalCtx, versionId, {
         request_serial: requestSerial,
@@ -1104,8 +1204,15 @@
         explicit_operation_ids: true
       });
       const operation = operations[0];
-      modalCtx.invoiceAsync.viewer_request.operation_id = operation?.operation_id || null;
-      modalCtx.invoiceAsync.viewer_request.status_message = payload.status_message || 'Preparing preview';
+      if (!UUID_RE.test(clean(operation?.operation_id))) {
+        viewer.viewer_state = 'BLOCKED';
+        viewer.status_message = 'Preview failed';
+        viewer.error = 'INVOICE_VIEWER_CONTRACT_MISMATCH';
+        repaintInvoiceAsyncViewer(modalCtx);
+        throw new Error('INVOICE_VIEWER_CONTRACT_MISMATCH');
+      }
+      viewer.operation_id = operation.operation_id;
+      viewer.status_message = payload.status_message || 'Preparing preview';
       modalCtx.invoiceAsync = {
         ...asObject(modalCtx.invoiceAsync),
         document_operation: operation,
@@ -1117,9 +1224,9 @@
       return payload;
     }
     const errorCode = clean(payload.error_code || payload.error || payload.message || `INVOICE_DOCUMENT_HTTP_${response.status}`);
-    modalCtx.invoiceAsync.viewer_request.status_message = 'Preview failed';
-    modalCtx.invoiceAsync.viewer_request.viewer_state = 'BLOCKED';
-    modalCtx.invoiceAsync.viewer_request.error = errorCode;
+    viewer.status_message = 'Preview failed';
+    viewer.viewer_state = 'BLOCKED';
+    viewer.error = errorCode;
     repaintInvoiceAsyncViewer(modalCtx);
     if (errorCode === 'ISSUED_DOCUMENT_INTEGRITY_FAILURE' || errorCode === 'ISSUED_DOCUMENT_POINTER_MISSING') {
       throw new Error(`The issued legal document cannot be opened (${errorCode}).`);
@@ -1147,7 +1254,8 @@
       response = await window.authFetch(invoiceApi(`/api/timesheets/${encodeURIComponent(canonicalId)}/pdf`), {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': commandToken },
-        body: JSON.stringify({ command_token: commandToken, priority_reason: 'VIEW_NOW' })
+        body: JSON.stringify({ command_token: commandToken, priority_reason: 'VIEW_NOW' }),
+        signal: modalCtx.invoiceAsync.viewer_request.abort_controller.signal
       });
     } catch (error) {
       const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
@@ -1160,9 +1268,13 @@
       throw error;
     }
     const payload = await response.json().catch(() => ({}));
+    const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
+    const currentRequest = viewer.open
+      && viewer.request_serial === requestSerial
+      && viewer.entity_type === 'TIMESHEET'
+      && viewer.entity_id === canonicalId;
     if (clean(payload.contract_version) !== 'INVOICE_VIEWER_V2') {
-      const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
-      if (viewer.request_serial === requestSerial) {
+      if (currentRequest) {
         viewer.viewer_state = 'BLOCKED';
         viewer.status_message = 'Timesheet document failed';
         viewer.error = 'INVOICE_VIEWER_CONTRACT_MISMATCH';
@@ -1173,6 +1285,15 @@
     const viewerState = upper(payload.viewer_state);
     const purpose = upper(payload.purpose || 'TIMESHEET');
     const versionId = clean(payload.document_version?.id || payload.document_version_id).toLowerCase();
+    if (!currentRequest) return payload;
+    if (purpose !== 'TIMESHEET') {
+      viewer.viewer_state = 'BLOCKED';
+      viewer.status_message = 'Timesheet document failed';
+      viewer.error = 'INVOICE_VIEWER_PURPOSE_INVALID';
+      repaintInvoiceAsyncViewer(modalCtx);
+      throw new Error('INVOICE_VIEWER_PURPOSE_INVALID');
+    }
+    viewer.purpose = purpose;
     if (response.status === 200 && viewerState === 'READY' && UUID_RE.test(versionId)) {
       await completeInvoiceAsyncViewer(modalCtx, versionId, {
         request_serial: requestSerial,
@@ -1198,8 +1319,7 @@
       return payload;
     }
     const errorCode = clean(payload.error_code || payload.error || payload.message || `TIMESHEET_DOCUMENT_HTTP_${response.status}`);
-    const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
-    if (viewer.request_serial === requestSerial) {
+    if (currentRequest) {
       viewer.viewer_state = 'BLOCKED';
       viewer.status_message = payload.status_message || 'Timesheet document blocked';
       viewer.error = errorCode;
@@ -1313,26 +1433,57 @@
     return true;
   }
 
-  function uninstallOverrides() {
+  function uninstallOverrides(options = {}) {
+    const reason = clean(options.reason || 'capability-unavailable').toLowerCase();
+    const priorWatchKey = clean(options.previous_watch_storage_key || activeWatchStorageKey);
     for (const modalCtx of activeInvoiceViewers.values()) {
       const viewer = asObject(modalCtx?.invoiceAsync?.viewer_request);
       viewer.open = false;
+      try { viewer.abort_controller?.abort(); } catch {}
       revokeInvoiceAsyncViewerBlob(modalCtx);
     }
     activeInvoiceViewers.clear();
     try { window.InvoiceBatchModalV8?.close?.(); } catch {}
     detachInvoiceAsyncDelegatedHandlers();
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = null;
+    window.__invoiceOperationWatches = [];
+    if (['logout', 'user-replacement'].includes(reason)) {
+      try {
+        if (priorWatchKey) sessionStorage.removeItem(priorWatchKey);
+        sessionStorage.removeItem(LEGACY_WATCH_STORAGE_KEY);
+      } catch {}
+      activeWatchStorageKey = null;
+    }
     installed = false;
     installInvoiceAsyncUnavailableActions();
     return true;
   }
 
   async function initialiseInvoiceAsyncUi(options = {}) {
+    const requestedWatchKey = operationWatchStorageKey();
+    if (activeWatchStorageKey && activeWatchStorageKey !== requestedWatchKey) {
+      uninstallOverrides({
+        reason: requestedWatchKey ? 'user-replacement' : 'logout',
+        previous_watch_storage_key: activeWatchStorageKey
+      });
+    }
     const capabilities = await loadInvoiceAsyncCapabilities(options);
+    const resolvedWatchKey = operationWatchStorageKey();
+    if (requestedWatchKey !== resolvedWatchKey) {
+      uninstallOverrides({
+        reason: resolvedWatchKey ? 'user-replacement' : 'logout',
+        previous_watch_storage_key: activeWatchStorageKey
+      });
+    }
     if (capabilities.enabled_for_user !== true) {
-      uninstallOverrides();
+      uninstallOverrides({
+        reason: resolvedWatchKey ? 'capability-unavailable' : 'logout',
+        previous_watch_storage_key: activeWatchStorageKey
+      });
       return capabilities;
     }
+    activeWatchStorageKey = resolvedWatchKey;
     installOverrides();
     return capabilities;
   }
@@ -1382,6 +1533,7 @@
   window.addEventListener('pagehide', () => {
     for (const modalCtx of activeInvoiceViewers.values()) {
       revokeInvoiceAsyncViewerBlob(modalCtx);
+      try { modalCtx?.invoiceAsync?.viewer_request?.abort_controller?.abort(); } catch {}
     }
     activeInvoiceViewers.clear();
   });

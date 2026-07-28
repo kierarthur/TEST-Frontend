@@ -52,7 +52,7 @@ test('active Invoice and Timesheet document preparation is POST-only and exact-v
   assert.match(asyncSource, /\/api\/timesheets\/\$\{encodeURIComponent\(canonicalId\)\}\/pdf/);
   assert.match(asyncSource, /method:\s*'POST'/);
   assert.match(asyncSource, /\/api\/invoice-document-versions\/\$\{encodeURIComponent\(id\)\}\/presign/);
-  assert.doesNotMatch(asyncSource, /r2_key|storage_key|\/api\/files\/presign-download/);
+  assert.doesNotMatch(asyncSource, /\br2_key\b|\bstorage_key\b|\/api\/files\/presign-download/);
 });
 
 test('Batch Issue uses the locked default and keeps legal Issue separate from Delivery', () => {

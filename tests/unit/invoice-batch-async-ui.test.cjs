@@ -156,6 +156,128 @@ test('nested batch groups terminate in candidate rows without treating rows as g
   assert.match(html, /type="checkbox"/);
 });
 
+test('all four grouping presets derive exact selectors from the complete ancestry', () => {
+  const { window } = loadScript(batchRuntimeSource);
+  const row = {
+    selection_key: 'scope:ancestor',
+    selectable: true,
+    row_status: 'READY',
+    client_id: UUID_A,
+    client_name: 'TEST client',
+    candidate_ids: [UUID_B],
+    candidate_names: ['TEST candidate'],
+    week_ending_date: '2026-07-26'
+  };
+  const flatten = nodes => nodes.flatMap(node => [
+    node,
+    ...flatten((node.children || []).filter(child => Array.isArray(child.rows)))
+  ]);
+  const cases = [
+    ['WEEK_CLIENT_CANDIDATE', ['WEEK', 'WEEK_CLIENT', 'WEEK_CLIENT_CANDIDATE']],
+    ['CLIENT_WEEK_CANDIDATE', ['CLIENT', 'WEEK_CLIENT', 'WEEK_CLIENT_CANDIDATE']],
+    ['CANDIDATE_WEEK_CLIENT', ['CANDIDATE', null, 'WEEK_CLIENT_CANDIDATE']],
+    ['STATUS_WEEK_CLIENT', ['STATUS', 'STATUS_WEEK', 'STATUS_WEEK_CLIENT']]
+  ];
+  for (const [preset, expectedTypes] of cases) {
+    const levels = preset.split('_').reduce((result, value, index, values) => {
+      if (preset === 'STATUS_WEEK_CLIENT') return index < 3 ? [...result, value] : result;
+      if (preset === 'WEEK_CLIENT_CANDIDATE') return index < 3 ? [...result, value] : result;
+      if (preset === 'CLIENT_WEEK_CANDIDATE') return index < 3 ? [...result, value] : result;
+      if (preset === 'CANDIDATE_WEEK_CLIENT') return index < 3 ? [...result, value] : result;
+      return result;
+    }, []);
+    const nodes = flatten(window.buildInvoiceBatchGroups([row], levels, 0, {}, preset));
+    assert.equal(
+      JSON.stringify(nodes.map(node => node.selector?.type || null)),
+      JSON.stringify(expectedTypes),
+      preset
+    );
+  }
+});
+
+test('SUMMARY group authority is pending after PAGE load and rejects incomplete coverage', async () => {
+  const snapshot = {
+    contract_version: 'INVOICE_BATCH_SNAPSHOT_V2',
+    action: 'GENERATE',
+    at_utc: '2026-07-26T12:00:00.000Z',
+    revision: 7,
+    expires_at_utc: '2026-07-26T12:30:00.000Z',
+    key_id: 'test-key',
+    token: 'opaque'
+  };
+  const row = {
+    selection_key: 'scope:summary',
+    selectable: true,
+    row_status: 'READY',
+    client_id: UUID_A,
+    candidate_ids: [UUID_B],
+    week_ending_date: '2026-07-26'
+  };
+  let call = 0;
+  const { window } = loadScript(batchRuntimeSource, {
+    window: {
+      authFetch: async () => {
+        call += 1;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => call === 1 ? {
+            contract_version: 'INVOICE_BATCH_CANDIDATES_V2',
+            action: 'GENERATE',
+            mode: 'PAGE',
+            snapshot,
+            query_hash: '1'.repeat(64),
+            filter_hash: '2'.repeat(64),
+            selection_hash: '3'.repeat(64),
+            rows: [row],
+            page: { total_count: 1, has_more: false, next_cursor: null },
+            totals: {},
+            selection_summary: { exact: false },
+            facets: {},
+            group_selection: [{
+              selector: { type: 'WEEK', week_ending_date: '2026-07-26' },
+              group_key: 'page-leaf',
+              eligible_total: 1,
+              selected_total: 1,
+              state: 'CHECKED',
+              has_hidden_override: false
+            }],
+            normalised_filter: {},
+            normalised_sort: {
+              group_preset: 'WEEK_CLIENT_CANDIDATE',
+              sort_key: 'WEEK_ENDING_DATE',
+              sort_direction: 'DESC'
+            }
+          } : {
+            contract_version: 'INVOICE_BATCH_CANDIDATES_V2',
+            action: 'GENERATE',
+            mode: 'SUMMARY',
+            snapshot,
+            query_hash: '1'.repeat(64),
+            filter_hash: '2'.repeat(64),
+            selection_hash: '3'.repeat(64),
+            rows: [],
+            page: { total_count: 1, has_more: false, next_cursor: null },
+            totals: {},
+            selection_summary: { exact: true, eligible_total: 1, selected_total: 1, blocked_total: 0 },
+            group_selection: [],
+            facets: {}
+          }
+        };
+      }
+    }
+  });
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
+  const page = await window.loadInvoiceBatchCandidatePage(state);
+  assert.ok(page);
+  assert.equal(state.selection_summary_pending, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.group_selection)), []);
+  const summary = await window.loadInvoiceBatchSelectionSummary(state);
+  assert.equal(summary, null);
+  assert.equal(state.selection_summary_error, 'INVOICE_BATCH_GROUP_SELECTION_CONTRACT_MISMATCH');
+  assert.equal(state.selection_summary_pending, false);
+});
+
 test('implicit-all selection persists exclusions and later child rules override group rules', () => {
   const { window } = loadScript(batchRuntimeSource);
   const selection = window.InvoiceBatchModalV8.createInvoiceBatchSelectionState();
@@ -359,6 +481,195 @@ test('document action states expose visible labels, disabled state and ARIA busy
   });
   assert.equal(readyAlias.tone, 'ready');
   assert.equal(readyAlias.button_label, 'View invoice PDF');
+
+  const terminalWithoutVersion = window.deriveInvoiceAsyncActionState({
+    operation_type: 'VIEW_INVOICE_DOCUMENT',
+    status: 'COMPLETE'
+  });
+  assert.equal(terminalWithoutVersion.tone, 'error');
+  assert.equal(terminalWithoutVersion.view_available, false);
+  assert.equal(terminalWithoutVersion.button_label, 'Document unavailable');
+  assert.equal(terminalWithoutVersion.disabled, true);
+});
+
+test('issued invoice viewer adopts FINAL_ISSUE and opens only the exact returned version', async () => {
+  const calls = [];
+  const { window } = loadScript(asyncSource, {
+    window: {
+      authFetch: async (url, init) => {
+        calls.push({ url, init });
+        if (calls.length === 1) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              contract_version: 'INVOICE_VIEWER_V2',
+              viewer_state: 'READY',
+              purpose: 'FINAL_ISSUE',
+              document_version_id: UUID_B
+            })
+          };
+        }
+        if (calls.length === 2) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              document_version_id: UUID_B,
+              purpose: 'FINAL_ISSUE',
+              url: `https://test-cloudtms-backend.example/api/invoice-document-versions/${UUID_B}/download?token=opaque`
+            })
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          blob: async () => new Blob(['%PDF-final'], { type: 'application/pdf' })
+        };
+      }
+    }
+  });
+  const modalCtx = {
+    invoiceId: UUID_A,
+    invoiceDetail: { invoice: { id: UUID_A, status: 'ISSUED' } },
+    invoiceAsync: {}
+  };
+  await window.handleInvoiceRenderPdfAsync(modalCtx);
+  assert.equal(modalCtx.invoiceAsync.viewer_request.purpose, 'FINAL_ISSUE');
+  assert.equal(modalCtx.invoiceAsync.viewer_request.viewer_state, 'READY');
+  assert.equal(modalCtx.invoiceAsync.viewer_request.document_version_id, UUID_B);
+  assert.match(calls[1].url, new RegExp(`/api/invoice-document-versions/${UUID_B}/presign$`));
+  window.revokeInvoiceAsyncViewerBlob(modalCtx);
+});
+
+test('viewer adopts PREPARING purpose only for its current request and ignores a late replacement', async () => {
+  const { window } = loadScript(asyncSource, {
+    window: {
+      authFetch: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          contract_version: 'INVOICE_VIEWER_V2',
+          viewer_state: 'PREPARING',
+          purpose: 'FINAL_ISSUE',
+          operation: {
+            operation_id: UUID_B,
+            operation_type: 'VIEW_INVOICE_DOCUMENT',
+            entity_type: 'INVOICE',
+            entity_id: UUID_A,
+            status: 'QUEUED',
+            purpose: 'FINAL_ISSUE'
+          }
+        })
+      })
+    }
+  });
+  const modalCtx = {
+    invoiceId: UUID_A,
+    invoiceDetail: { invoice: { id: UUID_A, status: 'ISSUED' } },
+    invoiceAsync: {}
+  };
+  await window.handleInvoiceRenderPdfAsync(modalCtx);
+  assert.equal(modalCtx.invoiceAsync.viewer_request.purpose, 'FINAL_ISSUE');
+  assert.equal(modalCtx.invoiceAsync.viewer_request.operation_id, UUID_B);
+
+  let resolveRender;
+  window.authFetch = () => new Promise(resolve => { resolveRender = resolve; });
+  const lateCtx = {
+    invoiceId: UUID_A,
+    invoiceDetail: { invoice: { id: UUID_A, status: 'ISSUED' } },
+    invoiceAsync: {}
+  };
+  const pending = window.handleInvoiceRenderPdfAsync(lateCtx);
+  await Promise.resolve();
+  const originalSerial = lateCtx.invoiceAsync.viewer_request.request_serial;
+  lateCtx.invoiceAsync.viewer_request = {
+    ...lateCtx.invoiceAsync.viewer_request,
+    request_serial: UUID_C,
+    purpose: 'DRAFT_PREVIEW'
+  };
+  resolveRender({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      contract_version: 'INVOICE_VIEWER_V2',
+      viewer_state: 'READY',
+      purpose: 'FINAL_ISSUE',
+      document_version_id: UUID_B
+    })
+  });
+  await pending;
+  assert.notEqual(lateCtx.invoiceAsync.viewer_request.request_serial, originalSerial);
+  assert.equal(lateCtx.invoiceAsync.viewer_request.purpose, 'DRAFT_PREVIEW');
+  assert.equal(lateCtx.invoiceAsync.viewer_request.document_version_id, null);
+});
+
+test('operation watches are scoped by environment and user and omit internal ready metadata', async () => {
+  const enabledCapabilities = {
+    contract_version: 'INVOICE_ASYNC_BACKEND_V8',
+    backend_contract_version: 'INVOICE_ASYNC_BACKEND_V8',
+    database_contract_ready: true,
+    deployment_contract_ready: true,
+    pipeline_enabled: true,
+    processor_enabled: true,
+    enabled_for_user: true,
+    controlled_cohort: true,
+    scheduled_enabled: false,
+    supported_media_types: ['application/pdf', 'image/jpeg', 'image/png'],
+    document_view_contract_version: 'INVOICE_DOCUMENT_VERSION_ACCESS_V1',
+    heartbeat_supported: true,
+    feature_flags: {
+      batch_candidate_paging_v2: true,
+      batch_selection_rules_v2: true,
+      batch_selection_summary_v2: true,
+      batch_facets_v2: true,
+      batch_result_paging_v2: true,
+      generate_and_view_v2: true,
+      exact_document_version_access_v1: true,
+      separate_issue_delivery_state_v2: true,
+      bounded_viewer_contract_v2: true
+    }
+  };
+  const { window, session } = loadScript(asyncSource, {
+    window: {
+      authFetch: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => enabledCapabilities
+      }),
+      InvoiceBatchModalV8: { install() {}, close() {} }
+    }
+  });
+  session.setItem('cloudtms.invoiceOperationWatches.v8', JSON.stringify([{ operation_id: UUID_C }]));
+  window.__USER_ID = UUID_A;
+  const watch = window.normaliseInvoiceOperationWatch({
+    operation_id: UUID_B,
+    operation_type: 'VIEW_INVOICE_DOCUMENT',
+    status: 'COMPLETE',
+    document_version_id: UUID_C,
+    ready_key: 'must-not-persist'
+  });
+  assert.equal(Object.hasOwn(watch, 'ready_key'), false);
+  window.saveInvoiceOperationWatches([watch]);
+  const keyA = `cloudtms.invoiceOperationWatches.v8:testmode.arthur-rai.co.uk:${UUID_A}`;
+  const keyB = `cloudtms.invoiceOperationWatches.v8:testmode.arthur-rai.co.uk:${UUID_B}`;
+  assert.equal(session.getItem('cloudtms.invoiceOperationWatches.v8'), null);
+  assert.doesNotMatch(session.getItem(keyA), /ready_key|must-not-persist/);
+
+  window.__USER_ID = UUID_B;
+  assert.deepEqual(JSON.parse(JSON.stringify(window.loadInvoiceOperationWatches())), []);
+  await window.initialiseInvoiceAsyncUi({ force: true });
+  assert.equal(session.getItem(keyA), null);
+  window.saveInvoiceOperationWatches([{
+    ...watch,
+    operation_id: UUID_C,
+    root_operation_id: UUID_C
+  }]);
+  assert.ok(session.getItem(keyB));
+
+  window.authFetch = async () => { throw new Error('temporary capability failure'); };
+  await window.initialiseInvoiceAsyncUi({ force: true });
+  assert.ok(session.getItem(keyB));
 });
 
 test('evidence retry submits only the operation identity through the control route', async () => {
