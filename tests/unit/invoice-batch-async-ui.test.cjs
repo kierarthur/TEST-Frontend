@@ -7,6 +7,8 @@ const { webcrypto } = require('node:crypto');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const batchSource = fs.readFileSync(path.join(repoRoot, 'js', 'invoice-batch-modal.js'), 'utf8');
+const diagnosticSource = fs.readFileSync(path.join(repoRoot, 'js', 'invoice-diagnostic-catalog.js'), 'utf8');
+const batchRuntimeSource = `${diagnosticSource}\n${batchSource}`;
 const asyncSource = fs.readFileSync(path.join(repoRoot, 'js', 'invoice-async-ui.js'), 'utf8');
 
 function storage() {
@@ -70,6 +72,7 @@ function loadScript(source, additions = {}) {
     Promise,
     RegExp,
     Error,
+    structuredClone,
     crypto: webcrypto,
     CSS: { escape: value => String(value) },
     setTimeout,
@@ -87,8 +90,8 @@ const UUID_B = '241fc420-cbb9-4ed5-b92b-fc3c2ae03078';
 const UUID_C = '4ed82adf-da4d-4de6-866b-492d06ba1a77';
 
 test('blocked candidates never receive a checkbox while delivery-blocked issue rows remain selectable', () => {
-  const { window } = loadScript(batchSource);
-  const state = window.InvoiceBatchModalV1.createInvoiceBatchModalState('ISSUE');
+  const { window } = loadScript(batchRuntimeSource);
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('ISSUE');
   const blocked = {
     selection_key: 'blocked',
     invoice_number: 'INV-1',
@@ -106,16 +109,16 @@ test('blocked candidates never receive a checkbox while delivery-blocked issue r
     client_id: UUID_A,
     candidate_ids: [UUID_B]
   };
-  const blockedHtml = window.InvoiceBatchModalV1.renderInvoiceBatchRow(blocked, state);
-  const deliveryHtml = window.InvoiceBatchModalV1.renderInvoiceBatchRow(deliveryBlocked, state);
+  const blockedHtml = window.InvoiceBatchModalV8.renderInvoiceBatchRow(blocked, state);
+  const deliveryHtml = window.InvoiceBatchModalV8.renderInvoiceBatchRow(deliveryBlocked, state);
   assert.doesNotMatch(blockedHtml, /type="checkbox"/);
   assert.match(deliveryHtml, /type="checkbox"/);
   assert.match(deliveryHtml, /Blocked for sending/);
 });
 
 test('eligible not-generated rows remain selectable and show their neutral generation state', () => {
-  const { window } = loadScript(batchSource);
-  const state = window.InvoiceBatchModalV1.createInvoiceBatchModalState('GENERATE');
+  const { window } = loadScript(batchRuntimeSource);
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
   const row = {
     selection_key: 'generate:ready',
     selectable: true,
@@ -124,7 +127,7 @@ test('eligible not-generated rows remain selectable and show their neutral gener
     client_id: UUID_A,
     candidate_ids: [UUID_B]
   };
-  const html = window.InvoiceBatchModalV1.renderInvoiceBatchRow(row, state);
+  const html = window.InvoiceBatchModalV8.renderInvoiceBatchRow(row, state);
   assert.match(html, /type="checkbox"/);
   assert.match(html, /Not generated/);
   assert.match(html, /invbatch-badge--neutral/);
@@ -132,8 +135,8 @@ test('eligible not-generated rows remain selectable and show their neutral gener
 });
 
 test('nested batch groups terminate in candidate rows without treating rows as groups', () => {
-  const { window } = loadScript(batchSource);
-  const state = window.InvoiceBatchModalV1.createInvoiceBatchModalState('GENERATE');
+  const { window } = loadScript(batchRuntimeSource);
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
   state.candidate_page = {
     rows: [{
       selection_key: 'scope:nested',
@@ -154,8 +157,8 @@ test('nested batch groups terminate in candidate rows without treating rows as g
 });
 
 test('implicit-all selection persists exclusions and later child rules override group rules', () => {
-  const { window } = loadScript(batchSource);
-  const selection = window.InvoiceBatchModalV1.createInvoiceBatchSelectionState();
+  const { window } = loadScript(batchRuntimeSource);
+  const selection = window.InvoiceBatchModalV8.createInvoiceBatchSelectionState();
   const row = {
     selection_key: 'scope:a',
     selectable: true,
@@ -163,32 +166,39 @@ test('implicit-all selection persists exclusions and later child rules override 
     client_id: UUID_A,
     candidate_ids: [UUID_B]
   };
-  assert.equal(window.InvoiceBatchModalV1.isInvoiceBatchRowSelected(selection, row), true);
-  window.InvoiceBatchModalV1.applyInvoiceBatchSelectionRule(
+  assert.equal(window.InvoiceBatchModalV8.isInvoiceBatchRowSelected(selection, row), true);
+  window.InvoiceBatchModalV8.applyInvoiceBatchSelectionRule(
     selection,
     'EXCLUDE',
     { type: 'WEEK', week_ending_date: '2026-07-26' }
   );
-  assert.equal(window.InvoiceBatchModalV1.isInvoiceBatchRowSelected(selection, row), false);
-  window.InvoiceBatchModalV1.applyInvoiceBatchSelectionRule(
+  assert.equal(window.InvoiceBatchModalV8.isInvoiceBatchRowSelected(selection, row), false);
+  window.InvoiceBatchModalV8.applyInvoiceBatchSelectionRule(
     selection,
     'INCLUDE',
     { type: 'ROW', selection_key: 'scope:a' }
   );
-  assert.equal(window.InvoiceBatchModalV1.isInvoiceBatchRowSelected(selection, row), true);
+  assert.equal(window.InvoiceBatchModalV8.isInvoiceBatchRowSelected(selection, row), true);
   assert.equal(
-    window.InvoiceBatchModalV1.deriveInvoiceBatchGroupSelectionState(
+    window.InvoiceBatchModalV8.deriveInvoiceBatchGroupSelectionState(
       selection,
       [row],
-      { type: 'WEEK', week_ending_date: '2026-07-26' }
+      { type: 'WEEK', week_ending_date: '2026-07-26' },
+      [{
+        selector: { type: 'WEEK', week_ending_date: '2026-07-26' },
+        eligible_total: 2,
+        selected_total: 1,
+        state: 'INDETERMINATE',
+        has_hidden_override: true
+      }]
     ),
     'INDETERMINATE'
   );
 });
 
 test('a later hidden descendant rule keeps its parent group indeterminate', () => {
-  const { window } = loadScript(batchSource);
-  const selection = window.InvoiceBatchModalV1.createInvoiceBatchSelectionState();
+  const { window } = loadScript(batchRuntimeSource);
+  const selection = window.InvoiceBatchModalV8.createInvoiceBatchSelectionState();
   const visibleRow = {
     selection_key: 'scope:visible',
     selectable: true,
@@ -196,39 +206,54 @@ test('a later hidden descendant rule keeps its parent group indeterminate', () =
     client_id: UUID_A,
     candidate_ids: [UUID_B]
   };
-  window.InvoiceBatchModalV1.applyInvoiceBatchSelectionRule(
+  window.InvoiceBatchModalV8.applyInvoiceBatchSelectionRule(
     selection,
     'INCLUDE',
     { type: 'WEEK', week_ending_date: '2026-07-26' }
   );
-  window.InvoiceBatchModalV1.applyInvoiceBatchSelectionRule(
+  window.InvoiceBatchModalV8.applyInvoiceBatchSelectionRule(
     selection,
     'EXCLUDE',
     { type: 'WEEK_CLIENT', week_ending_date: '2026-07-26', client_id: UUID_C }
   );
   assert.equal(
-    window.InvoiceBatchModalV1.deriveInvoiceBatchGroupSelectionState(
+    window.InvoiceBatchModalV8.deriveInvoiceBatchGroupSelectionState(
       selection,
       [visibleRow],
-      { type: 'WEEK', week_ending_date: '2026-07-26' }
+      { type: 'WEEK', week_ending_date: '2026-07-26' },
+      [{
+        selector: { type: 'WEEK', week_ending_date: '2026-07-26' },
+        eligible_total: 3,
+        selected_total: 2,
+        state: 'INDETERMINATE',
+        has_hidden_override: true
+      }]
     ),
     'INDETERMINATE'
   );
 });
 
 test('selection submission uses the locked query and implicit selection contracts', () => {
-  const { window } = loadScript(batchSource);
-  const state = window.InvoiceBatchModalV1.createInvoiceBatchModalState('GENERATE');
-  state.snapshot_at_utc = '2026-07-26T12:00:00.000Z';
+  const { window } = loadScript(batchRuntimeSource);
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
+  state.snapshot = {
+    contract_version: 'INVOICE_BATCH_SNAPSHOT_V2',
+    action: 'GENERATE',
+    at_utc: '2026-07-26T12:00:00.000Z',
+    revision: 7,
+    expires_at_utc: '2026-07-26T12:30:00.000Z',
+    key_id: 'test-key',
+    token: 'opaque'
+  };
   state.filter.allow_early = false;
   state.display_mode = 'BLOCKED';
-  const contract = window.InvoiceBatchModalV1.buildInvoiceBatchSelectionContract(state);
-  assert.equal(contract.contract_version, 'INVOICE_BATCH_SELECTION_V1');
-  assert.equal(contract.query.contract_version, 'INVOICE_BATCH_QUERY_V1');
+  const contract = window.InvoiceBatchModalV8.buildInvoiceBatchSelectionContract(state);
+  assert.equal(contract.contract_version, 'INVOICE_BATCH_SELECTION_ROOT_V2');
+  assert.equal(contract.query.contract_version, 'INVOICE_BATCH_QUERY_V2');
   assert.equal(contract.query.action, 'GENERATE');
-  assert.equal(contract.query.snapshot_at_utc, state.snapshot_at_utc);
-  assert.equal(contract.query.allow_early, false);
-  assert.equal(contract.query.display_mode, 'BLOCKED');
+  assert.deepEqual(JSON.parse(JSON.stringify(contract.query.snapshot)), state.snapshot);
+  assert.equal(contract.query.filters.allow_early, false);
+  assert.equal(contract.query.filters.display_mode, 'BLOCKED');
   assert.equal(contract.selection.mode, 'IMPLICIT_ALL');
   assert.equal(contract.selection.default_selected, true);
 });
@@ -236,8 +261,10 @@ test('selection submission uses the locked query and implicit selection contract
 test('capabilities reject contract drift and arbitrary UUID objects are not operations', () => {
   const { window } = loadScript(asyncSource);
   const valid = {
-    contract_version: 'INVOICE_ASYNC_BACKEND_V7',
-    backend_contract_version: 'INVOICE_ASYNC_BACKEND_V7',
+    contract_version: 'INVOICE_ASYNC_BACKEND_V8',
+    backend_contract_version: 'INVOICE_ASYNC_BACKEND_V8',
+    database_contract_ready: true,
+    deployment_contract_ready: true,
     pipeline_enabled: true,
     processor_enabled: true,
     enabled_for_user: true,
@@ -247,12 +274,15 @@ test('capabilities reject contract drift and arbitrary UUID objects are not oper
     document_view_contract_version: 'INVOICE_DOCUMENT_VERSION_ACCESS_V1',
     heartbeat_supported: true,
     feature_flags: {
-      batch_candidate_paging_v1: true,
-      batch_selection_rules_v1: true,
-      batch_result_paging_v1: true,
-      generate_and_view_v1: true,
+      batch_candidate_paging_v2: true,
+      batch_selection_rules_v2: true,
+      batch_selection_summary_v2: true,
+      batch_facets_v2: true,
+      batch_result_paging_v2: true,
+      generate_and_view_v2: true,
       exact_document_version_access_v1: true,
-      separate_issue_delivery_state_v1: true
+      separate_issue_delivery_state_v2: true,
+      bounded_viewer_contract_v2: true
     }
   };
   assert.equal(window.validateInvoiceAsyncCapabilities(valid).enabled_for_user, true);
@@ -275,7 +305,7 @@ test('capabilities reject contract drift and arbitrary UUID objects are not oper
   );
 });
 
-test('disabled capability leaves legacy functions intact and enabled capability installs exactly once', () => {
+test('disabled capability installs unavailable actions and enabled capability installs V8 exactly once', async () => {
   const legacyRender = () => 'legacy-render';
   const legacyEmail = () => 'legacy-email';
   let batchInstalls = 0;
@@ -284,13 +314,14 @@ test('disabled capability leaves legacy functions intact and enabled capability 
       handleInvoiceRenderPdf: legacyRender,
       handleInvoiceEmail: legacyEmail,
       renderInvoiceModalContent: () => '<div>legacy</div>',
-      InvoiceBatchModalV1: { install: () => { batchInstalls += 1; } }
+      InvoiceBatchModalV8: { install: () => { batchInstalls += 1; } }
     }
   });
   window.__invoiceAsyncCapability = { enabled_for_user: false };
   assert.equal(window.installInvoiceAsyncOverrides(), false);
-  assert.equal(window.handleInvoiceRenderPdf, legacyRender);
-  assert.equal(window.handleInvoiceEmail, legacyEmail);
+  assert.notEqual(window.handleInvoiceRenderPdf, legacyRender);
+  assert.notEqual(window.handleInvoiceEmail, legacyEmail);
+  assert.equal(await window.handleInvoiceRenderPdf(), null);
 
   window.__invoiceAsyncCapability = { enabled_for_user: true };
   assert.equal(window.installInvoiceAsyncOverrides(), true);
@@ -354,11 +385,14 @@ test('evidence retry submits only the operation identity through the control rou
   await window.retryInvoiceEvidenceOperation(UUID_A);
   assert.match(calls[0].url, /\/api\/invoice-operations\/control$/);
   const body = JSON.parse(calls[0].init.body);
-  assert.deepEqual(body, { actions: [{ operation_id: UUID_A, action: 'RETRY' }] });
+  assert.equal(body.contract_version, 'INVOICE_OPERATION_CONTROL_V2');
+  assert.equal(body.command_token, body.request_token);
+  assert.deepEqual(body.actions, [{ operation_id: UUID_A, action: 'RETRY' }]);
+  assert.equal(calls[0].init.headers['idempotency-key'], body.request_token);
   assert.doesNotMatch(calls[0].init.body, /work_key|fence|plan_generation|replacement_payload/);
 });
 
-test('capability failure leaves the legacy UI untouched', async () => {
+test('capability failure installs unavailable actions rather than legacy processing', async () => {
   const legacyRender = () => 'legacy-render';
   const legacyEmail = () => 'legacy-email';
   const { window } = loadScript(asyncSource, {
@@ -370,8 +404,8 @@ test('capability failure leaves the legacy UI untouched', async () => {
   });
   const capability = await window.initialiseInvoiceAsyncUi({ force: true });
   assert.equal(capability.enabled_for_user, false);
-  assert.equal(window.handleInvoiceRenderPdf, legacyRender);
-  assert.equal(window.handleInvoiceEmail, legacyEmail);
+  assert.notEqual(window.handleInvoiceRenderPdf, legacyRender);
+  assert.notEqual(window.handleInvoiceEmail, legacyEmail);
   assert.equal(window.__invoiceAsyncOverridesInstalled, false);
 });
 
@@ -466,4 +500,152 @@ test('exact document access sends only the document-version id', async () => {
   assert.doesNotMatch(JSON.stringify(calls), /r2_key|ready_key|presign-download/);
   assert.equal(result.document_version_id, UUID_A);
   result.revoke();
+});
+
+test('all nine V2 selectors are accepted and GROUP_KEY is rejected', () => {
+  const { window } = loadScript(batchRuntimeSource);
+  const selection = window.InvoiceBatchModalV8.createInvoiceBatchSelectionState();
+  const selectors = [
+    { type: 'ROW', selection_key: 'generate:one' },
+    { type: 'WEEK', week_ending_date: '2026-07-26' },
+    { type: 'CLIENT', client_id: UUID_A },
+    { type: 'CANDIDATE', candidate_id: UUID_B },
+    { type: 'STATUS', status_code: 'READY' },
+    { type: 'WEEK_CLIENT', week_ending_date: '2026-07-26', client_id: UUID_A },
+    { type: 'WEEK_CLIENT_CANDIDATE', week_ending_date: '2026-07-26', client_id: UUID_A, candidate_id: UUID_B },
+    { type: 'STATUS_WEEK', status_code: 'READY', week_ending_date: '2026-07-26' },
+    { type: 'STATUS_WEEK_CLIENT', status_code: 'READY', week_ending_date: '2026-07-26', client_id: UUID_A }
+  ];
+  for (const selector of selectors) {
+    window.InvoiceBatchModalV8.applyInvoiceBatchSelectionRule(selection, 'EXCLUDE', selector);
+  }
+  assert.equal(selection.rules.length, 9);
+  assert.throws(
+    () => window.InvoiceBatchModalV8.applyInvoiceBatchSelectionRule(
+      selection,
+      'EXCLUDE',
+      { type: 'GROUP_KEY', group_key: 'opaque' }
+    ),
+    /BATCH_SELECTION_SELECTOR_INVALID/
+  );
+});
+
+test('V2 candidate requests keep signed cursors opaque and browser explicit hydration is exactly one key', () => {
+  const { window } = loadScript(batchRuntimeSource);
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
+  state.snapshot = {
+    contract_version: 'INVOICE_BATCH_SNAPSHOT_V2',
+    action: 'GENERATE',
+    at_utc: '2026-07-26T12:00:00.000Z',
+    revision: 9,
+    expires_at_utc: '2026-07-26T12:30:00.000Z',
+    key_id: 'key-1',
+    token: 'signed-snapshot'
+  };
+  const opaque = 'opaque.signed.cursor';
+  const page = window.buildInvoiceBatchCandidateRequest(state, 'PAGE', { cursor: opaque });
+  assert.equal(page.cursor, opaque);
+  assert.equal(page.mode, 'PAGE');
+  assert.equal(page.contract_version, 'INVOICE_BATCH_QUERY_V2');
+  const explicit = window.buildInvoiceBatchCandidateRequest(state, 'EXPLICIT_KEYS', {
+    selection_keys: ['generate:one'],
+    expected_source_revisions: { 'generate:one': 'revision-1' }
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(explicit.selection_keys)), ['generate:one']);
+  assert.throws(
+    () => window.buildInvoiceBatchCandidateRequest(state, 'EXPLICIT_KEYS', {
+      selection_keys: ['generate:one', 'generate:two'],
+      expected_source_revisions: { 'generate:one': 'revision-1', 'generate:two': 'revision-2' }
+    }),
+    /BATCH_EXPLICIT_KEYS_INVALID/
+  );
+});
+
+test('Batch Issue defaults to Issue and send with distinct durable identities', async () => {
+  const calls = [];
+  const { window } = loadScript(batchRuntimeSource, {
+    window: {
+      authFetch: async (url, init) => {
+        calls.push({ url, init });
+        return {
+          status: 202,
+          ok: true,
+          json: async () => ({ root_operation_id: UUID_A, status: 'QUEUED' })
+        };
+      },
+      registerInvoiceOperationsFromResponse: () => [{
+        operation_id: UUID_A,
+        status: 'QUEUED',
+        phase: 'BUILD_MANIFEST'
+      }],
+      registerInvoiceOperationWatch() {}
+    }
+  });
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('ISSUE');
+  state.snapshot = {
+    contract_version: 'INVOICE_BATCH_SNAPSHOT_V2',
+    action: 'ISSUE',
+    at_utc: '2026-07-26T12:00:00.000Z',
+    revision: 3,
+    expires_at_utc: '2026-07-26T12:30:00.000Z',
+    key_id: 'key-1',
+    token: 'signed-snapshot'
+  };
+  await window.submitInvoiceBatchOperation(state);
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(state.issue_mode, 'ISSUE_AND_SEND');
+  assert.equal(body.deliver, true);
+  assert.equal(body.delivery_intent.route_mode, 'SERVER_RESOLVED');
+  assert.equal(body.delivery_intent.template_version, 'INVOICE_EMAIL_V2');
+  assert.notEqual(body.command_token, body.delivery_request_token);
+  assert.equal(calls[0].init.headers['idempotency-key'], body.command_token);
+});
+
+test('stale result cursors recover to page one once and retain the root/category', async () => {
+  const calls = [];
+  const revision = '12';
+  const { window } = loadScript(batchRuntimeSource, {
+    window: {
+      authFetch: async (url, init) => {
+        calls.push(JSON.parse(init.body));
+        if (calls.length === 1) {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({ error: 'OPERATION_RESULT_CURSOR_STALE', result_page_revision: revision })
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            operations: [{ operation_id: UUID_A, result_page_revision: revision }],
+            result_page: {
+              contract_version: 'INVOICE_BATCH_RESULT_PAGE_V2',
+              root_operation_id: UUID_A,
+              category: 'FAILED',
+              result_page_revision: revision,
+              rows: [],
+              has_more: false,
+              total_count: 0,
+              next_cursor: null
+            }
+          })
+        };
+      }
+    }
+  });
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
+  state.root_operation_id = UUID_A;
+  state.result_page_revision = revision;
+  await window.loadInvoiceBatchResultPage(state, {
+    category: 'FAILED',
+    cursor: 'opaque.stale.cursor'
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].result_cursor, 'opaque.stale.cursor');
+  assert.equal(calls[1].result_cursor, undefined);
+  assert.equal(calls[1].operation_ids[0], UUID_A);
+  assert.equal(calls[1].result_category, 'FAILED');
 });

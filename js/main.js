@@ -292211,6 +292211,12 @@ async function handleInvoiceDelete(modalCtx) {
 
 
 async function handleInvoiceRenderPdf(modalCtx) {
+  if (typeof window.handleInvoiceRenderPdfAsync === 'function') {
+    return window.handleInvoiceRenderPdfAsync(modalCtx);
+  }
+  alert('Invoice processing is temporarily unavailable while the new invoice system is being updated.');
+  return null;
+
   const mc = modalCtx || {};
   const invoiceId =
     String(mc?.invoiceId || mc?.dataLoaded?.invoice?.id || mc?.dataLoaded?.invoice_row?.id || mc?.data?.id || '').trim();
@@ -292395,6 +292401,12 @@ async function handleInvoiceRenderPdf(modalCtx) {
 
 
 async function handleInvoiceEmail(modalCtx) {
+  if (typeof window.handleInvoiceEmailAsync === 'function') {
+    return window.handleInvoiceEmailAsync(modalCtx);
+  }
+  alert('Invoice processing is temporarily unavailable while the new invoice system is being updated.');
+  return null;
+
   const mc = modalCtx || {};
   const inv = mc.invoiceDetail?.invoice || mc.data || null;
   const invoiceId = String(inv?.id || '').trim();
@@ -293328,6 +293340,13 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
     modalCtx.invoiceAsync = (modalCtx.invoiceAsync && typeof modalCtx.invoiceAsync === 'object')
       ? modalCtx.invoiceAsync : {};
     modalCtx.invoiceAsync.issue_command_token = issueCommandToken;
+    const deliveryRequestToken = sendNow
+      ? String(modalCtx.invoiceAsync.delivery_request_token || crypto.randomUUID())
+      : null;
+    if (sendNow && deliveryRequestToken === issueCommandToken) {
+      throw new Error('Delivery request identity must be distinct from the Issue command identity.');
+    }
+    modalCtx.invoiceAsync.delivery_request_token = deliveryRequestToken;
     const expectedIssueRevision = String(
       modalCtx?.invoiceDetail?.invoice?.document_revision
       ?? modalCtx?.dataLoaded?.invoice?.document_revision
@@ -293339,11 +293358,12 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
     }
     const issueRes = await invoiceModalFetchJson(`/api/invoices/${encodeURIComponent(invoiceId)}/issue`, {
       method: 'POST',
+      headers: { 'Idempotency-Key': issueCommandToken },
       body: JSON.stringify({
         command_token: issueCommandToken,
         expected_revision: expectedIssueRevision,
         deliver: sendNow,
-        delivery_request_token: sendNow ? issueCommandToken : undefined
+        delivery_request_token: deliveryRequestToken || undefined
       })
     });
     const operations = window.registerInvoiceOperationsFromResponse?.(issueRes, {
@@ -293424,6 +293444,9 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
 
     // 2) ISSUE / UNISSUE
     if (wantIssued !== null && wantIssued !== curIsIssued) {
+      if (!asyncInvoiceUiEnabled || wantIssued !== true) {
+        throw new Error('Invoice processing is temporarily unavailable while the new invoice system is being updated.');
+      }
       if (wantIssued) {
         if (asyncInvoiceUiEnabled) {
           if (!asyncIssueAfterEdits) await submitAsyncIssueFromCurrentDetail();
@@ -307453,6 +307476,12 @@ const getSelectionUiState = () => {
 
 
 async function openInvoiceBatchIssueModal() {
+  if (window.InvoiceBatchModalV8?.open) {
+    return window.InvoiceBatchModalV8.open('ISSUE');
+  }
+  alert('Invoice processing is temporarily unavailable while the new invoice system is being updated.');
+  return null;
+
   // ─────────────────────────────────────────────────────────────
   // Batch Issue — server authoritative gating
   // - candidates endpoint uses invoice_batch_issue_candidates(p_allow_early, p_limit)
@@ -308341,6 +308370,12 @@ async function openInvoiceBatchIssueModal() {
 
 
 async function openInvoiceBatchGenerateModal() {
+  if (window.InvoiceBatchModalV8?.open) {
+    return window.InvoiceBatchModalV8.open('GENERATE');
+  }
+  alert('Invoice processing is temporarily unavailable while the new invoice system is being updated.');
+  return null;
+
   // ─────────────────────────────────────────────────────────────
   // Batch Generate (Invoices)
   //
@@ -346166,23 +346201,13 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 
   if (isSystemGeneratedTimesheetPdf) {
     try {
-      if (typeof getTimesheetPdfUrl !== 'function') {
+      if (typeof window.openTimesheetDocumentV8 !== 'function') {
         GE();
-        throw new Error('getTimesheetPdfUrl is not available.');
+        throw new Error('The V8 Timesheet document viewer is not available.');
       }
-
-      const pdfInfo = await getTimesheetPdfUrl(tsIdForPdf);
-
-      // Back-compat: allow getTimesheetPdfUrl to return either a string or an object
-      if (typeof pdfInfo === 'string') {
-        signedUrl = pdfInfo;
-      } else if (pdfInfo && typeof pdfInfo === 'object') {
-        signedUrl = pdfInfo.url || null;
-      } else {
-        signedUrl = null;
-      }
-
-      if (!signedUrl) throw new Error('No URL returned for timesheet PDF.');
+      await window.openTimesheetDocumentV8(tsIdForPdf);
+      GE();
+      return;
     } catch (err) {
       if (await handleMovedInViewer(err, 'evidence-viewer-open-sys-pdf')) {
         GE();
@@ -350955,6 +350980,11 @@ function resolveTimesheetLiveFinanceTotals(input = {}) {
 
 
 async function getTimesheetPdfUrl(timesheetId) {
+  if (typeof window.openTimesheetDocumentV8 === 'function') {
+    return window.openTimesheetDocumentV8(timesheetId);
+  }
+  throw new Error('Timesheet document viewing is temporarily unavailable while the new invoice system is being updated.');
+
   const LOGM = (typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : false;
   const L    = (...a) => { if (LOGM) console.log('[TS][PDF][GET]', ...a); };
   const GC   = (label) => { if (LOGM) console.groupCollapsed('[TS][PDF][GET]', label); };
@@ -361820,18 +361850,11 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
           );
 
         if (isSystemGeneratedTimesheetPdf) {
-          if (typeof getTimesheetPdfUrl !== 'function') {
+          if (typeof window.openTimesheetDocumentV8 !== 'function') {
             window.__toast && window.__toast('Timesheet PDF endpoint is not available');
             return;
           }
-
-          const url = await getTimesheetPdfUrl(idNow);
-          if (!url) {
-            window.__toast && window.__toast('Failed to open timesheet PDF');
-            return;
-          }
-
-          window.open(url, '_blank', 'noopener,noreferrer');
+          await window.openTimesheetDocumentV8(idNow);
           return;
         }
 
@@ -361877,6 +361900,11 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
 
 
 async function getTimesheetPdfUrl(timesheetId) {
+  if (typeof window.openTimesheetDocumentV8 === 'function') {
+    return window.openTimesheetDocumentV8(timesheetId);
+  }
+  throw new Error('Timesheet document viewing is temporarily unavailable while the new invoice system is being updated.');
+
   const LOGM = (typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : false;
   const L    = (...a) => { if (LOGM) console.log('[TS][PDF][GET]', ...a); };
   const GC   = (label) => { if (LOGM) console.groupCollapsed('[TS][PDF][GET]', label); };
@@ -361957,6 +361985,11 @@ async function getTimesheetPdfUrl(timesheetId) {
 }
 
 async function openTimesheetPdf(timesheetId) {
+  if (typeof window.openTimesheetDocumentV8 === 'function') {
+    return window.openTimesheetDocumentV8(timesheetId);
+  }
+  throw new Error('Timesheet document viewing is temporarily unavailable while the new invoice system is being updated.');
+
   const LOGM = (typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : false;
   const L    = (...a) => { if (LOGM) console.log('[TS][PDF]', ...a); };
   const GC   = (label) => { if (LOGM) console.groupCollapsed('[TS][PDF]', label); };
