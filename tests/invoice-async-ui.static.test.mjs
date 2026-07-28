@@ -75,8 +75,8 @@ test('batch UI is server-paged, selection-contract based and loaded before the a
   assert.ok(indexSource.indexOf('js/main.js?v=20260728-invoice-v8-banking-correction-carrier-v4')
     < indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8'));
   assert.ok(indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8')
-    < indexSource.indexOf('js/invoice-batch-modal.js?v=20260728-invoice-v8-presentation-r1'));
-  assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260728-invoice-v8-presentation-r1')
+    < indexSource.indexOf('js/invoice-batch-modal.js?v=20260728-invoice-v8-presentation-r2'));
+  assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260728-invoice-v8-presentation-r2')
     < indexSource.indexOf('js/invoice-async-ui.js?v=20260728-invoice-async-v8-correction-r5'));
 });
 
