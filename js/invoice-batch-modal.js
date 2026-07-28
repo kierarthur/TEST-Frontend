@@ -659,7 +659,7 @@
     const serial = ++state.summary_request_serial;
     state.selection_summary_pending = true;
     state.selection_summary_error = null;
-    renderInvoiceBatchModal(state);
+    markInvoiceBatchSelectionSummaryPending(state);
     try {
       const requestedSelectors = asArray(
         options.group_selectors || visibleInvoiceBatchGroupSelectors(state)
@@ -712,7 +712,7 @@
     state.summary_timer = setTimeout(() => {
       loadInvoiceBatchSelectionSummary(state).catch(() => {});
     }, 180);
-    renderInvoiceBatchModal(state);
+    markInvoiceBatchSelectionSummaryPending(state);
   }
 
   async function loadInvoiceBatchFacets(state, kindValue, options = {}) {
@@ -1150,6 +1150,23 @@
     return { exact, count, label: exact ? count.toLocaleString('en-GB') : 'Calculating…' };
   }
 
+  function markInvoiceBatchSelectionSummaryPending(state) {
+    const root = state?.root_element;
+    if (!root || state.destroyed) return;
+    const primary = root.querySelector('[data-batch-action="confirm-open"]');
+    if (primary) primary.disabled = true;
+    const selectedCount = root.querySelector('[data-batch-selected-count]');
+    if (selectedCount) selectedCount.textContent = 'Calculating…';
+    if (!root.querySelector('.invbatch-summary-pending')) {
+      const pending = document.createElement('div');
+      pending.className = 'invbatch-summary-pending';
+      pending.setAttribute('aria-live', 'polite');
+      pending.textContent = 'Updating the exact selection summary…';
+      const list = root.querySelector('.invbatch-list');
+      if (list?.parentNode) list.parentNode.insertBefore(pending, list);
+    }
+  }
+
   function renderInvoiceBatchFooter(state) {
     const selected = selectedSummary(state);
     const summary = asObject(state.selection_summary);
@@ -1158,7 +1175,7 @@
     const primary = state.mode === 'ISSUE' ? 'Issue selected invoices' : 'Generate selected';
     return `
       <footer class="invbatch-footer">
-        <div><span><strong>${ready.toLocaleString('en-GB')}</strong> eligible</span><span><strong>${escapeHtml(selected.label)}</strong> selected</span><span><strong>${blocked.toLocaleString('en-GB')}</strong> blocked</span></div>
+        <div><span><strong>${ready.toLocaleString('en-GB')}</strong> eligible</span><span><strong data-batch-selected-count>${escapeHtml(selected.label)}</strong> selected</span><span><strong>${blocked.toLocaleString('en-GB')}</strong> blocked</span></div>
         ${state.selection_summary_error ? `<div class="invbatch-error" role="alert">${escapeHtml(state.selection_summary_error)}</div>` : ''}
         <div><button type="button" class="btn btn-outline" data-batch-action="close">Cancel</button><button type="button" class="btn btn-primary" data-batch-action="confirm-open" ${(selected.exact && selected.count > 0 && !state.submitting) ? '' : 'disabled'}>${escapeHtml(primary)}</button></div>
       </footer>`;

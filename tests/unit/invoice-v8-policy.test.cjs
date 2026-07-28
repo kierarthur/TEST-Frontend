@@ -119,3 +119,14 @@ test('batch grouping is a four-level draggable order and the filter drawer remai
   assert.match(batchCss, /\.invbatch-filter-drawer[\s\S]*inset: 58px 10px 10px auto/);
   assert.match(batchCss, /\.invbatch-filter-drawer header[\s\S]*position: sticky/);
 });
+
+test('batch selection gives immediate local feedback without rebuilding the whole modal', () => {
+  assert.match(batchSource, /function markInvoiceBatchSelectionSummaryPending/);
+  assert.match(batchSource, /data-batch-selected-count/);
+  assert.match(batchSource, /primary\.disabled = true/);
+  assert.match(batchSource, /selectedCount\.textContent = 'Calculating…'/);
+  assert.match(
+    batchSource,
+    /function scheduleInvoiceBatchSelectionSummary[\s\S]*markInvoiceBatchSelectionSummaryPending\(state\)/,
+  );
+});
