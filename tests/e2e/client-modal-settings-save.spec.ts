@@ -52,7 +52,8 @@ test('Client settings can be saved with blank contact details and remain dirty a
           id: CLIENT_ID,
           name: 'Contact-free settings fixture',
           primary_invoice_email: null,
-          ap_phone: null,
+          ts_queries_email: null,
+          ap_phone: '020 7272 3070',
           contact_title: null,
           contact_known_as: null,
           contact_forename: null,
@@ -72,7 +73,10 @@ test('Client settings can be saved with blank contact details and remain dirty a
           sun_start: '00:00', sun_end: '00:00',
           bh_start: '00:00', bh_end: '00:00',
           week_ending_weekday: 0,
-          default_submission_mode: 'ELECTRONIC'
+          default_submission_mode: 'ELECTRONIC',
+          autoprocess_hr: true,
+          requires_hr: true,
+          no_timesheet_required: false
         },
         has_e_history: false
       } });
@@ -100,6 +104,8 @@ test('Client settings can be saved with blank contact details and remain dirty a
   await page.getByRole('tab', { name: 'Client settings' }).click();
   const timezone = page.locator('#clientSettingsForm input[name="timezone_id"]');
   await timezone.fill('Etc/UTC');
+  const queryEmail = page.locator('#clientSettingsForm input[name="ts_queries_email"]');
+  await queryEmail.fill('kier@arthur-rai.co.uk');
   await expect(page.locator('#btnSave')).toBeVisible();
   await expect(page.locator('#btnSave')).toBeEnabled();
 
@@ -107,13 +113,11 @@ test('Client settings can be saved with blank contact details and remain dirty a
   await expect(page.locator('#tab-main input[name="primary_invoice_email"]')).toHaveValue('');
   await expect(page.locator('#btnSave')).toBeVisible();
   await expect(page.locator('#btnSave')).toBeEnabled();
-
-  await page.getByRole('tab', { name: 'Client settings' }).click();
-  await expect(timezone).toHaveValue('Etc/UTC');
   await page.locator('#btnSave').click();
 
   await expect.poll(() => putBodies.length).toBe(2);
   expect(putBodies[0].primary_invoice_email).toBeUndefined();
+  expect(putBodies[0].ts_queries_email).toBe('kier@arthur-rai.co.uk');
   expect(putBodies[1]).toHaveProperty('client_settings');
   expect((putBodies[1].client_settings as Record<string, unknown>).timezone_id).toBe('Etc/UTC');
   expect(nativeDialogCount).toBe(0);

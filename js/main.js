@@ -1802,14 +1802,13 @@ function validateClientMain(payload) {
     }
   }
 
-  // A/P phone: blank OR >= 8 digits, numbers only (no letters)
+  // A/P phone: blank OR an ordinary formatted telephone number with >= 8 digits.
   const apPhoneRaw = (payload.ap_phone || '').trim();
   if (apPhoneRaw) {
-    const digitsOnly = /^\d+$/;
     const digits = apPhoneRaw.replace(/\D/g, '');
-    if (!digitsOnly.test(apPhoneRaw) || digits.length < 8) {
+    if (!/^[+\d\s().-]+$/.test(apPhoneRaw) || digits.length < 8) {
       ok = false;
-      markFieldError(root, 'ap_phone', 'A/P phone must be numbers only and at least 8 digits if entered');
+      markFieldError(root, 'ap_phone', 'A/P phone must be a valid telephone number with at least 8 digits if entered');
     }
   }
 
@@ -126978,8 +126977,8 @@ function classifyTimesheetEditDomains(ctxInput) {
     anyBool('client_no_timesheet_required', 'no_timesheet_required', 'contract_no_timesheet_required') ||
     routeText.includes('NO_TIMESHEET_REQUIRED')
   );
-  const noTimesheetAuthoritativeRoute = !!(
-    noTimesheetRequired ||
+  const explicitImportAuthoritative = firstBoolIfPresent('is_import_authoritative', 'import_authoritative');
+  const legacyNoTimesheetAuthoritativeRoute = !!(
     basisU === 'NHSP' ||
     basisU === 'HEALTHROSTER_SELF_BILL' ||
     basisU === 'NHSP_ADJUSTMENT' ||
@@ -126988,19 +126987,27 @@ function classifyTimesheetEditDomains(ctxInput) {
     weeklySourceU === 'HEALTHROSTER' ||
     weeklySourceU === 'HEALTHROSTER_DAILY' ||
     routeText.includes('NHSP') ||
-    routeText.includes('HEALTHROSTER') ||
-    routeText.includes('NO_TIMESHEET_REQUIRED') ||
-    (routeText.includes('IMPORT_AUTHORITATIVE') && anyBool('is_import_authoritative', 'import_authoritative'))
+    routeText.includes('HEALTHROSTER')
+  );
+  const noTimesheetAuthoritativeRoute = !!(
+    noTimesheetRequired ||
+    explicitImportAuthoritative === true ||
+    (explicitImportAuthoritative === null && legacyNoTimesheetAuthoritativeRoute)
   );
   const actualSourceSuggestsProtectedImport = !!(
-    basisU === 'NHSP' ||
-    basisU === 'HEALTHROSTER_SELF_BILL' ||
-    routeText.includes('IMPORT') ||
-    routeText.includes('IMPORT_AUTHORITATIVE') ||
-    routeText.includes('NHSP') ||
-    routeText.includes('HEALTHROSTER') ||
-    routeText.includes('NO_TIMESHEET_REQUIRED') ||
-    anyBool('is_import_authoritative', 'import_authoritative')
+    explicitImportAuthoritative === true ||
+    (
+      explicitImportAuthoritative === null &&
+      (
+        basisU === 'NHSP' ||
+        basisU === 'HEALTHROSTER_SELF_BILL' ||
+        routeText.includes('IMPORT') ||
+        routeText.includes('IMPORT_AUTHORITATIVE') ||
+        routeText.includes('NHSP') ||
+        routeText.includes('HEALTHROSTER') ||
+        routeText.includes('NO_TIMESHEET_REQUIRED')
+      )
+    )
   );
   const clientNhspLineage = anyBool('client_is_nhsp', 'is_nhsp');
   const clientLineageSupportedByRowSource = !!(clientNhspLineage && (actualSourceSuggestsProtectedImport || noTimesheetRequired));
@@ -232465,16 +232472,32 @@ async function handleBulkProcessProcess(state) {
       ].map((value) => upper(value)).filter(Boolean).join('|');
     }).filter(Boolean).join('|');
     const boolish = (...values) => values.some((value) => value === true || value === 1 || upper(value) === 'TRUE' || upper(value) === 'YES' || upper(value) === 'Y' || upper(value) === '1');
+    const firstExplicitBoolean = (...keys) => {
+      for (const source of sources) {
+        const flags = (source?.action_flags && typeof source.action_flags === 'object') ? source.action_flags : {};
+        for (const key of keys) {
+          for (const value of [source?.[key], flags[key]]) {
+            if (value === undefined || value === null || value === '') continue;
+            return boolish(value);
+          }
+        }
+      }
+      return null;
+    };
     const flagTrue = (...keys) => sources.some((source) => {
       const flags = (source?.action_flags && typeof source.action_flags === 'object') ? source.action_flags : {};
       return keys.some((key) => boolish(source?.[key], flags[key]));
     });
+    const explicitImportAuthoritative = firstExplicitBoolean('is_import_authoritative', 'import_authoritative');
     const routeNoTimesheet = !!(
       routeTokens.includes('NO_TIMESHEET_REQUIRED') ||
       routeTokens.includes('NO TIMESHEET') ||
       routeTokens.includes('NO_TIMESHEET') ||
-      routeTokens.includes('NHSP') ||
-      routeTokens.includes('HEALTHROSTER')
+      explicitImportAuthoritative === true ||
+      (
+        explicitImportAuthoritative === null &&
+        (routeTokens.includes('NHSP') || routeTokens.includes('HEALTHROSTER'))
+      )
     );
     const explicitNoTimesheet = flagTrue(
       'client_no_timesheet_required',
@@ -232484,8 +232507,7 @@ async function handleBulkProcessProcess(state) {
       'timesheet_not_required',
       '__bulkProcessExplicitNoTimesheet',
       '__bulk_process_explicit_no_timesheet',
-      'client_is_nhsp',
-      'client_is_healthroster'
+      'client_is_nhsp'
     );
     return !!(
       contractWeekId &&
@@ -271788,6 +271810,10 @@ window.modalCtx = {
             payload.ts_queries_email = v;
           }
         } catch {}
+      } else if (Object.prototype.hasOwnProperty.call(window.modalCtx?.data || {}, 'ts_queries_email')) {
+        // The settings panel can be unmounted when the user saves from another
+        // client tab. Preserve the value that applyFromDOM staged in modal data.
+        payload.ts_queries_email = String(window.modalCtx.data.ts_queries_email ?? '').trim();
       }
 
       if (shouldValidateSettings) {
@@ -311521,7 +311547,7 @@ function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
     const email = value('primary_invoice_email');
     const apPhone = value('ap_phone');
     if (!name || (email && !emailOk(email))) return false;
-    if (apPhone && (!/^\d+$/.test(apPhone) || apPhone.replace(/\D/g, '').length < 8)) return false;
+    if (apPhone && (!/^[+\d\s().-]+$/.test(apPhone) || apPhone.replace(/\D/g, '').length < 8)) return false;
     return true;
   };
 
@@ -311581,7 +311607,7 @@ function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
         if (raw && !emailOk(raw)) message = 'Please enter a valid invoice email';
       } else if (name === 'ap_phone' && raw) {
         const digits = raw.replace(/\D/g, '');
-        if (!/^\d+$/.test(raw) || digits.length < 8) message = 'A/P phone must be numbers only and at least 8 digits if entered';
+        if (!/^[+\d\s().-]+$/.test(raw) || digits.length < 8) message = 'A/P phone must be a valid telephone number with at least 8 digits if entered';
       }
     }
 
@@ -312597,9 +312623,14 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const archiveRequired = archiveRequiredSignal === true || deleteDecision === 'ARCHIVE_REQUIRED';
   const backendReadOnlyMode = upper(readLifecycleText('mode'));
   const backendReadOnlyReason = upper(readLifecycleText('read_only_reason', 'readOnlyReason', 'reason'));
-  const editReadOnly = isArchived || canonicalReadOnly === true || !lifecycleAuthorityComplete;
-  const lifecycleActionsBlocked = isArchived || !lifecycleAuthorityComplete;
-  const readOnlyReason = !lifecycleAuthorityComplete
+  // Planned contract weeks have no physical timesheet row and therefore cannot
+  // provide the real-timesheet lifecycle signature. Their editable/processable
+  // state is owned by the current contract-week snapshot instead. Keep the strict
+  // lifecycle completeness requirement unchanged for every physical timesheet.
+  const lifecycleAuthoritySatisfied = isPlannedWeek || lifecycleAuthorityComplete;
+  const editReadOnly = isArchived || canonicalReadOnly === true || !lifecycleAuthoritySatisfied;
+  const lifecycleActionsBlocked = isArchived || !lifecycleAuthoritySatisfied;
+  const readOnlyReason = !lifecycleAuthoritySatisfied
     ? 'LIFECYCLE_AUTHORITY_INCOMPLETE'
     : (isArchived
       ? 'ARCHIVED'
@@ -351780,11 +351811,21 @@ async function openTimesheet(row) {
   initialCtx.__timesheetWorkbenchFetchPurpose = 'initial_open';
   initialCtx.__timesheetTabRefreshTokens = initialCtx.__timesheetTabRefreshTokens || {};
   initialCtx.__timesheetLazyTabBadges = initialCtx.__timesheetLazyTabBadges || {};
-  if (!lifecycleSeedTrusted) {
+  if (!lifecycleSeedTrusted && !isPlannedWeek) {
     initialCtx.__timesheetLifecyclePermissionStateComplete = false;
     initialCtx.__timesheetLifecyclePriorityBadgesComplete = false;
     initialCtx.__timesheetLifecycleCriticalStateIncomplete = true;
     initialCtx.__timesheetLifecycleCriticalStateReason = 'MODAL_OPEN_LIFECYCLE_HYDRATION_PENDING';
+    initialCtx.__timesheetLifecycleTrusted = null;
+  } else if (isPlannedWeek) {
+    // A planned Manual contract week has no physical timesheet lifecycle row to
+    // hydrate yet. Its edit authority comes from the contract-week route and
+    // submission-mode snapshot, while the normal lifecycle gates take over as
+    // soon as the first physical timesheet is created.
+    initialCtx.__timesheetLifecyclePermissionStateComplete = true;
+    initialCtx.__timesheetLifecyclePriorityBadgesComplete = true;
+    initialCtx.__timesheetLifecycleCriticalStateIncomplete = false;
+    initialCtx.__timesheetLifecycleCriticalStateReason = '';
     initialCtx.__timesheetLifecycleTrusted = null;
   }
     window.modalCtx = initialCtx;

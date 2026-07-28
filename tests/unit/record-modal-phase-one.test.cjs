@@ -66,6 +66,37 @@ test('Client contact details are optional and Client settings always dirty the o
   const settingsEnd = main.indexOf('async function upsertClient(payload, id)', settingsStart);
   const settings = main.slice(settingsStart, settingsEnd);
   assert.match(settings, /new CustomEvent\('modal-dirty', \{[\s\S]*?source: 'client-settings'/);
+  assert.ok(main.includes("Object.prototype.hasOwnProperty.call(window.modalCtx?.data || {}, 'ts_queries_email')"));
+  assert.ok(main.includes("payload.ts_queries_email = String(window.modalCtx.data.ts_queries_email ?? '').trim();"));
+});
+
+test('Client A/P phone accepts ordinary display formatting without blocking unrelated settings saves', () => {
+  assert.ok(main.includes("!/^[+\\d\\s().-]+$/.test(apPhone)"));
+  assert.match(main, /apPhone\.replace\(\/\\D\/g, ''\)\.length < 8/);
+  assert.match(main, /A\/P phone must be a valid telephone number with at least 8 digits if entered/);
+});
+
+test('planned Manual weeks use contract-week authority while real timesheets retain lifecycle completeness gating', () => {
+  const start = main.indexOf('function getCanonicalTimesheetFooterState');
+  const end = main.indexOf('function syncCanonicalTimesheetFooterState', start);
+  const footer = main.slice(start, end);
+  assert.match(footer, /const lifecycleAuthoritySatisfied = isPlannedWeek \|\| lifecycleAuthorityComplete/);
+  assert.match(footer, /const editReadOnly = isArchived \|\| canonicalReadOnly === true \|\| !lifecycleAuthoritySatisfied/);
+  assert.match(footer, /const lifecycleActionsBlocked = isArchived \|\| !lifecycleAuthoritySatisfied/);
+  assert.match(main, /if \(!lifecycleSeedTrusted && !isPlannedWeek\) \{/);
+  assert.match(main, /else if \(isPlannedWeek\) \{[\s\S]*?__timesheetLifecycleCriticalStateIncomplete = false;/);
+});
+
+test('explicit validation-only HealthRoster authority wins over legacy route-name inference', () => {
+  const processStart = main.indexOf('const isAuthoritativeNoTimesheetRequiredProcessRow = (active) =>');
+  const processEnd = main.indexOf('const activeHasEnteredWorkedHoursForProcess = (active) =>', processStart);
+  const processGuard = main.slice(processStart, processEnd);
+  assert.match(main, /const explicitImportAuthoritative = firstBoolIfPresent\('is_import_authoritative', 'import_authoritative'\)/);
+  assert.match(main, /explicitImportAuthoritative === true \|\|[\s\S]*?explicitImportAuthoritative === null && legacyNoTimesheetAuthoritativeRoute/);
+  assert.match(main, /explicitImportAuthoritative === null &&[\s\S]*?routeText\.includes\('HEALTHROSTER'\)/);
+  assert.match(processGuard, /const firstExplicitBoolean = \(\.\.\.keys\) =>/);
+  assert.match(processGuard, /explicitImportAuthoritative === null &&[\s\S]*?\(routeTokens\.includes\('NHSP'\) \|\| routeTokens\.includes\('HEALTHROSTER'\)\)/);
+  assert.doesNotMatch(processGuard, /'client_is_nhsp',\s*'client_is_healthroster'/);
 });
 
 test('Client hospital child action is genuinely unavailable until a name is entered', () => {
