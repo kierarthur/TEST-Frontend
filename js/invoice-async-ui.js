@@ -497,7 +497,7 @@
     }
     const timesheet = family === 'TIMESHEET_DOCUMENT';
     const preparingLabel = timesheet ? 'Preparing timesheet…' : 'Generating invoice PDF…';
-    const readyLabel = timesheet ? 'View timesheet PDF' : 'View invoice PDF';
+    const readyLabel = timesheet ? 'Open timesheet PDF' : 'Open invoice PDF';
     const failedLabel = timesheet ? 'Timesheet PDF failed' : 'Invoice PDF failed';
     const terminalWithoutVersion = TERMINAL.has(status) && !exactDocumentReady;
     return {

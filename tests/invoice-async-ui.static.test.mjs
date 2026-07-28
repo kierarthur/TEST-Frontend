@@ -77,7 +77,7 @@ test('batch UI is server-paged, selection-contract based and loaded before the a
   assert.ok(indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1')
     < indexSource.indexOf('js/invoice-batch-modal.js?v=20260728-invoice-v8-presentation-r3'));
   assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260728-invoice-v8-presentation-r3')
-    < indexSource.indexOf('js/invoice-async-ui.js?v=20260728-invoice-async-v8-correction-r6'));
+    < indexSource.indexOf('js/invoice-async-ui.js?v=20260728-invoice-async-v8-correction-r7'));
 });
 
 test('Timesheet and Invoice preparation use V8 POST identities and no active raw-key path', () => {

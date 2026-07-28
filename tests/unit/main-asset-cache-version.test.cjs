@@ -11,7 +11,7 @@ test('loads the current main frontend asset through an explicit cache version', 
   const mainAsset = 'main.js?v=20260728-invoice-v8-banking-correction-carrier-v5';
   const diagnosticAsset = 'invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1';
   const batchAsset = `invoice-batch-modal.js?v=${scriptBuildVersion}`;
-  const asyncAsset = 'invoice-async-ui.js?v=20260728-invoice-async-v8-correction-r6';
+  const asyncAsset = 'invoice-async-ui.js?v=20260728-invoice-async-v8-correction-r7';
   const stylesheetAsset = `invoice-batch-modal.css?v=${stylesheetBuildVersion}`;
   assert.match(
     html,
@@ -21,7 +21,7 @@ test('loads the current main frontend asset through an explicit cache version', 
   assert.match(html, /invoice-diagnostic-catalog\.js\?v=20260728-invoice-async-v8-source-evidence-r1/);
   assert.match(html, /invoice-batch-modal\.js\?v=20260728-invoice-v8-presentation-r3/);
   assert.doesNotMatch(html, /invoice-batch-modal\.js\?v=20260728-invoice-v8-presentation-r[12]["']/);
-  assert.match(html, /invoice-async-ui\.js\?v=20260728-invoice-async-v8-correction-r6/);
+  assert.match(html, /invoice-async-ui\.js\?v=20260728-invoice-async-v8-correction-r7/);
   assert.doesNotMatch(
     html,
     /invoice-batch-modal\.js\?v=20260728-invoice-async-v8(?:-correction-r5)?["']/

@@ -519,7 +519,7 @@ test('document action states expose visible labels, disabled state and ARIA busy
     document_version_id: UUID_A
   });
   assert.equal(ready.tone, 'ready');
-  assert.equal(ready.button_label, 'View invoice PDF');
+  assert.equal(ready.button_label, 'Open invoice PDF');
   assert.equal(ready.view_available, true);
   assert.equal(window.renderInvoiceProgressText({
     operation_type: 'VIEW_INVOICE_DOCUMENT',
@@ -534,7 +534,7 @@ test('document action states expose visible labels, disabled state and ARIA busy
     document_version_id: UUID_A
   });
   assert.equal(readyAlias.tone, 'ready');
-  assert.equal(readyAlias.button_label, 'View invoice PDF');
+  assert.equal(readyAlias.button_label, 'Open invoice PDF');
 
   const terminalWithoutVersion = window.deriveInvoiceAsyncActionState({
     operation_type: 'VIEW_INVOICE_DOCUMENT',
