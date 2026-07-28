@@ -102,3 +102,20 @@ test('the V8 batch modal remains usable at a narrow viewport without global styl
   assert.match(batchCss, /#modal\.invbatch-modal \.invbatch-footer[\s\S]*flex-direction: column/);
   assert.doesNotMatch(batchCss, /(?:^|\n)\s*(?:button|input|select|table|\.modal)\s*\{/);
 });
+
+test('batch grouping is a four-level draggable order and the filter drawer remains closable above modal bands', () => {
+  assert.match(batchSource, /DEFAULT_GROUP_ORDER[\s\S]*'WEEK', 'CLIENT', 'CANDIDATE', 'STATUS'/);
+  assert.match(batchSource, /draggable="true"/);
+  assert.match(batchSource, /data-batch-action="group-up"/);
+  assert.match(batchSource, /data-batch-action="group-down"/);
+  assert.doesNotMatch(batchSource, /data-batch-field="grouping"/);
+  assert.match(batchSource, /class="invbatch-row invbatch-row--header"/);
+  assert.match(batchSource, /class="btn btn-sm btn-outline invbatch-drawer-close"/);
+  assert.match(batchSource, /captureInvoiceBatchViewport/);
+  assert.match(batchSource, /restoreInvoiceBatchViewport/);
+  assert.match(batchSource, /focus\(\{ preventScroll: true \}\)/);
+  assert.match(batchCss, /#modal\.invbatch-modal\s*\{[\s\S]*position: relative/);
+  assert.match(batchCss, /\.invbatch-filter-drawer[\s\S]*z-index: 120/);
+  assert.match(batchCss, /\.invbatch-filter-drawer[\s\S]*inset: 58px 10px 10px auto/);
+  assert.match(batchCss, /\.invbatch-filter-drawer header[\s\S]*position: sticky/);
+});

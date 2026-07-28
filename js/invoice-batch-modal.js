@@ -9,15 +9,17 @@
   const PROGRESS_VERSION = 'INVOICE_BATCH_PROGRESS_V2';
   const PAGE_SIZE = 100;
   const MAX_RULES = 10000;
-  const MAX_GROUP_SELECTORS = 300;
+  const MAX_GROUP_SELECTORS = 400;
   const MODES = new Set(['GENERATE', 'ISSUE']);
   const DISPLAY_MODES = ['ALL', 'BLOCKED', 'READY'];
-  const GROUP_PRESETS = [
+  const GROUP_DIMENSIONS = Object.freeze(['WEEK', 'CLIENT', 'CANDIDATE', 'STATUS']);
+  const DEFAULT_GROUP_ORDER = Object.freeze(['WEEK', 'CLIENT', 'CANDIDATE', 'STATUS']);
+  const SERVER_GROUP_PRESETS = Object.freeze([
     'WEEK_CLIENT_CANDIDATE',
     'CLIENT_WEEK_CANDIDATE',
     'CANDIDATE_WEEK_CLIENT',
     'STATUS_WEEK_CLIENT'
-  ];
+  ]);
   const SORT_KEYS = {
     GENERATE: ['WEEK_ENDING_DATE', 'CLIENT_NAME', 'CANDIDATE_NAME', 'TOTAL_EX_VAT', 'TOTAL_INC_VAT', 'STATUS'],
     ISSUE: ['WEEK_ENDING_DATE', 'CLIENT_NAME', 'CANDIDATE_NAME', 'TOTAL_EX_VAT', 'TOTAL_INC_VAT', 'STATUS', 'INVOICE_NUMBER']
@@ -137,7 +139,7 @@
     const groupPreset = upper(source.group_preset || 'WEEK_CLIENT_CANDIDATE');
     const sortKey = upper(source.sort_key || 'WEEK_ENDING_DATE');
     const sortDirection = upper(source.sort_direction || 'DESC');
-    const valid = GROUP_PRESETS.includes(groupPreset)
+    const valid = SERVER_GROUP_PRESETS.includes(groupPreset)
       && SORT_KEYS[canonicalMode].includes(sortKey)
       && ['ASC', 'DESC'].includes(sortDirection);
     if (!valid && options.persisted !== true) throw new Error('INVOICE_BATCH_SORT_INVALID');
@@ -148,6 +150,15 @@
     };
   }
 
+  function normaliseGroupOrder(value, options = {}) {
+    const supplied = asArray(value).map(upper);
+    const valid = supplied.length === GROUP_DIMENSIONS.length
+      && new Set(supplied).size === GROUP_DIMENSIONS.length
+      && supplied.every(dimension => GROUP_DIMENSIONS.includes(dimension));
+    if (!valid && options.persisted !== true) throw new Error('INVOICE_BATCH_GROUP_ORDER_INVALID');
+    return valid ? supplied : [...DEFAULT_GROUP_ORDER];
+  }
+
   function preferenceKey(mode) {
     const environment = clean(window.location?.host || 'unknown').toLowerCase();
     const userId = clean(window.__USER_ID || window.__auth?.user?.id || window.SESSION?.user?.id || 'anonymous').toLowerCase();
@@ -156,14 +167,25 @@
 
   function loadInvoiceBatchPreferences(mode) {
     try {
-      return normaliseSort(JSON.parse(localStorage.getItem(preferenceKey(mode)) || '{}'), mode, { persisted: true });
+      const stored = asObject(JSON.parse(localStorage.getItem(preferenceKey(mode)) || '{}'));
+      return {
+        sort: normaliseSort(stored.sort || stored, mode, { persisted: true }),
+        group_order: normaliseGroupOrder(stored.group_order, { persisted: true })
+      };
     } catch {
-      return normaliseSort({}, mode, { persisted: true });
+      return {
+        sort: normaliseSort({}, mode, { persisted: true }),
+        group_order: [...DEFAULT_GROUP_ORDER]
+      };
     }
   }
 
   function saveInvoiceBatchPreferences(mode, value) {
-    const saved = normaliseSort(value, mode);
+    const source = asObject(value);
+    const saved = {
+      sort: normaliseSort(source.sort || source, mode),
+      group_order: normaliseGroupOrder(source.group_order || DEFAULT_GROUP_ORDER)
+    };
     try { localStorage.setItem(preferenceKey(mode), JSON.stringify(saved)); } catch {}
     return saved;
   }
@@ -190,7 +212,8 @@
       WEEK_CLIENT: ['type', 'week_ending_date', 'client_id'],
       WEEK_CLIENT_CANDIDATE: ['type', 'week_ending_date', 'client_id', 'candidate_id'],
       STATUS_WEEK: ['type', 'status_code', 'week_ending_date'],
-      STATUS_WEEK_CLIENT: ['type', 'status_code', 'week_ending_date', 'client_id']
+      STATUS_WEEK_CLIENT: ['type', 'status_code', 'week_ending_date', 'client_id'],
+      DIMENSION_GROUP: ['type', 'week_ending_date', 'client_id', 'candidate_id', 'status_code']
     };
     const allowedFields = fieldsByType[type];
     if (!allowedFields || Object.keys(source).some(key => !allowedFields.includes(key))) {
@@ -202,21 +225,28 @@
       if (!selector.selection_key || selector.selection_key.length > 512) throw new Error('BATCH_SELECTION_SELECTOR_INVALID');
       return selector;
     }
-    if (['WEEK', 'WEEK_CLIENT', 'WEEK_CLIENT_CANDIDATE', 'STATUS_WEEK', 'STATUS_WEEK_CLIENT'].includes(type)) {
+    if (['WEEK', 'WEEK_CLIENT', 'WEEK_CLIENT_CANDIDATE', 'STATUS_WEEK', 'STATUS_WEEK_CLIENT'].includes(type)
+        || (type === 'DIMENSION_GROUP' && source.week_ending_date != null)) {
       selector.week_ending_date = clean(source.week_ending_date);
       if (!validIsoDate(selector.week_ending_date)) throw new Error('BATCH_SELECTION_SELECTOR_INVALID');
     }
-    if (['CLIENT', 'WEEK_CLIENT', 'WEEK_CLIENT_CANDIDATE', 'STATUS_WEEK_CLIENT'].includes(type)) {
+    if (['CLIENT', 'WEEK_CLIENT', 'WEEK_CLIENT_CANDIDATE', 'STATUS_WEEK_CLIENT'].includes(type)
+        || (type === 'DIMENSION_GROUP' && source.client_id != null)) {
       selector.client_id = clean(source.client_id).toLowerCase();
       if (!UUID_RE.test(selector.client_id)) throw new Error('BATCH_SELECTION_SELECTOR_INVALID');
     }
-    if (['CANDIDATE', 'WEEK_CLIENT_CANDIDATE'].includes(type)) {
+    if (['CANDIDATE', 'WEEK_CLIENT_CANDIDATE'].includes(type)
+        || (type === 'DIMENSION_GROUP' && source.candidate_id != null)) {
       selector.candidate_id = clean(source.candidate_id).toLowerCase();
       if (!UUID_RE.test(selector.candidate_id)) throw new Error('BATCH_SELECTION_SELECTOR_INVALID');
     }
-    if (['STATUS', 'STATUS_WEEK', 'STATUS_WEEK_CLIENT'].includes(type)) {
+    if (['STATUS', 'STATUS_WEEK', 'STATUS_WEEK_CLIENT'].includes(type)
+        || (type === 'DIMENSION_GROUP' && source.status_code != null)) {
       selector.status_code = upper(source.status_code);
       if (!STATUS_RE.test(selector.status_code)) throw new Error('BATCH_SELECTION_SELECTOR_INVALID');
+    }
+    if (type === 'DIMENSION_GROUP' && Object.keys(selector).length === 1) {
+      throw new Error('BATCH_SELECTION_SELECTOR_INVALID');
     }
     return selector;
   }
@@ -270,6 +300,12 @@
       return upper(row.status_code || row.row_status || row.status) === selector.status_code
         && week === selector.week_ending_date;
     }
+    if (selector.type === 'DIMENSION_GROUP') {
+      return (!selector.week_ending_date || week === selector.week_ending_date)
+        && (!selector.client_id || client === selector.client_id)
+        && (!selector.candidate_id || candidates.includes(selector.candidate_id))
+        && (!selector.status_code || upper(row.status_code || row.row_status || row.status) === selector.status_code);
+    }
     return upper(row.status_code || row.row_status || row.status) === selector.status_code
       && week === selector.week_ending_date
       && client === selector.client_id;
@@ -296,7 +332,7 @@
     const specificity = {
       WEEK: 1, CLIENT: 1, CANDIDATE: 1, STATUS: 1,
       WEEK_CLIENT: 2, STATUS_WEEK: 2,
-      WEEK_CLIENT_CANDIDATE: 3, STATUS_WEEK_CLIENT: 3, ROW: 4
+      WEEK_CLIENT_CANDIDATE: 3, STATUS_WEEK_CLIENT: 3, DIMENSION_GROUP: Object.keys(parent).length - 1, ROW: 5
     };
     return (specificity[child.type] || 0) >= (specificity[parent.type] || 0);
   }
@@ -356,7 +392,8 @@
 
   function createInvoiceBatchModalState(mode) {
     const canonicalMode = normaliseMode(mode);
-    const sort = loadInvoiceBatchPreferences(canonicalMode);
+    const preferences = loadInvoiceBatchPreferences(canonicalMode);
+    const sort = preferences.sort;
     return {
       id: `invoice-batch:${canonicalMode.toLowerCase()}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       mode: canonicalMode,
@@ -371,7 +408,8 @@
       filter: emptyFilter(),
       display_mode: 'ALL',
       sort,
-      grouping: sort.group_preset,
+      group_order: preferences.group_order,
+      dragged_group_dimension: null,
       selection_summary: null,
       selection_summary_pending: true,
       selection_summary_error: null,
@@ -573,7 +611,6 @@
       state.filter = normaliseFilter(payload.normalised_filter || payload.normalized_filter || state.filter, state.mode);
       state.display_mode = state.filter.display_mode;
       state.sort = normaliseSort(payload.normalised_sort || payload.normalized_sort || state.sort, state.mode);
-      state.grouping = state.sort.group_preset;
       return payload;
     } catch (error) {
       if (error?.name !== 'AbortError' && serial === state.request_serial) {
@@ -594,7 +631,7 @@
     const selectors = [];
     const seen = new Set();
     const visit = node => {
-      const selector = node.selector || groupSelectorForNode(node, state.grouping);
+      const selector = node.selector || groupSelectorForNode(node);
       if (selector) {
         const identity = selectorIdentity(selector);
         if (!seen.has(identity)) {
@@ -608,10 +645,10 @@
       asArray(state.candidate_page?.rows),
       groupLevels(state),
       0,
-      {},
-      state.grouping
+      {}
     ).forEach(visit);
-    return selectors.slice(0, MAX_GROUP_SELECTORS);
+    if (selectors.length > MAX_GROUP_SELECTORS) throw new Error('INVOICE_BATCH_GROUP_SELECTOR_LIMIT_EXCEEDED');
+    return selectors;
   }
 
   async function loadInvoiceBatchSelectionSummary(state, options = {}) {
@@ -841,11 +878,7 @@
   }
 
   function groupLevels(state) {
-    const preset = state.grouping || state.sort.group_preset;
-    if (preset === 'CLIENT_WEEK_CANDIDATE') return ['CLIENT', 'WEEK', 'CANDIDATE'];
-    if (preset === 'CANDIDATE_WEEK_CLIENT') return ['CANDIDATE', 'WEEK', 'CLIENT'];
-    if (preset === 'STATUS_WEEK_CLIENT') return ['STATUS', 'WEEK', 'CLIENT'];
-    return ['WEEK', 'CLIENT', 'CANDIDATE'];
+    return normaliseGroupOrder(state.group_order, { persisted: true });
   }
 
   function groupValue(row, level) {
@@ -900,45 +933,16 @@
     return {};
   }
 
-  function groupSelectorForNode(node, groupingValue) {
-    const grouping = upper(groupingValue);
-    const level = upper(node?.level);
+  function groupSelectorForNode(node) {
     const dimensions = asObject(node?.dimensions);
-    const week = dimensions.week_ending_date;
-    const client = dimensions.client_id;
-    const candidate = dimensions.candidate_id;
-    const status = dimensions.status_code;
-    if (grouping === 'WEEK_CLIENT_CANDIDATE') {
-      if (level === 'WEEK' && week) return { type: 'WEEK', week_ending_date: week };
-      if (level === 'CLIENT' && week && client) return { type: 'WEEK_CLIENT', week_ending_date: week, client_id: client };
-      if (level === 'CANDIDATE' && week && client && candidate) {
-        return { type: 'WEEK_CLIENT_CANDIDATE', week_ending_date: week, client_id: client, candidate_id: candidate };
-      }
+    const selector = { type: 'DIMENSION_GROUP' };
+    for (const field of ['week_ending_date', 'client_id', 'candidate_id', 'status_code']) {
+      if (dimensions[field]) selector[field] = dimensions[field];
     }
-    if (grouping === 'CLIENT_WEEK_CANDIDATE') {
-      if (level === 'CLIENT' && client) return { type: 'CLIENT', client_id: client };
-      if (level === 'WEEK' && week && client) return { type: 'WEEK_CLIENT', week_ending_date: week, client_id: client };
-      if (level === 'CANDIDATE' && week && client && candidate) {
-        return { type: 'WEEK_CLIENT_CANDIDATE', week_ending_date: week, client_id: client, candidate_id: candidate };
-      }
-    }
-    if (grouping === 'CANDIDATE_WEEK_CLIENT') {
-      if (level === 'CANDIDATE' && candidate) return { type: 'CANDIDATE', candidate_id: candidate };
-      if (level === 'CLIENT' && week && client && candidate) {
-        return { type: 'WEEK_CLIENT_CANDIDATE', week_ending_date: week, client_id: client, candidate_id: candidate };
-      }
-    }
-    if (grouping === 'STATUS_WEEK_CLIENT') {
-      if (level === 'STATUS' && status) return { type: 'STATUS', status_code: status };
-      if (level === 'WEEK' && status && week) return { type: 'STATUS_WEEK', status_code: status, week_ending_date: week };
-      if (level === 'CLIENT' && status && week && client) {
-        return { type: 'STATUS_WEEK_CLIENT', status_code: status, week_ending_date: week, client_id: client };
-      }
-    }
-    return null;
+    try { return canonicalSelector(selector); } catch { return null; }
   }
 
-  function buildGroups(rows, levels, depth = 0, ancestry = {}, grouping = '') {
+  function buildGroups(rows, levels, depth = 0, ancestry = {}) {
     if (depth >= levels.length) return asArray(rows);
     const level = levels[depth];
     const map = new Map();
@@ -959,13 +963,12 @@
         rows: children,
         dimensions
       };
-      node.selector = groupSelectorForNode(node, grouping);
+      node.selector = groupSelectorForNode(node);
       node.children = buildGroups(
         children,
         levels,
         depth + 1,
-        dimensions,
-        grouping
+        dimensions
       );
       return node;
     });
@@ -975,7 +978,7 @@
     if (!node) return '';
     if (Array.isArray(node)) return node.map(child => renderGroupNode(child, state, depth)).join('');
     if (!Array.isArray(node.rows)) return renderInvoiceBatchRow(node, state);
-    const selector = node.selector || groupSelectorForNode(node, state.grouping);
+    const selector = node.selector || groupSelectorForNode(node);
     const groupState = selector && state.selection_summary_pending !== true
       && !state.selection_summary_error
       ? deriveInvoiceBatchGroupSelectionState(state.selection, node.rows, selector, state.group_selection)
@@ -1000,8 +1003,20 @@
   function renderInvoiceBatchGroups(state) {
     const rows = asArray(state.candidate_page?.rows);
     if (!rows.length) return '<div class="invbatch-empty">No matching items.</div>';
-    const grouped = buildGroups(rows, groupLevels(state), 0, {}, state.grouping);
-    return grouped.map(group => renderGroupNode(group, state)).join('');
+    const grouped = buildGroups(rows, groupLevels(state), 0, {});
+    const header = `
+      <div class="invbatch-row invbatch-row--header" role="row">
+        <div class="invbatch-cell invbatch-cell--select" role="columnheader"><span class="sr-only">Select</span></div>
+        ${state.mode === 'ISSUE' ? '<div class="invbatch-cell invbatch-cell--invoice" role="columnheader">Invoice</div>' : ''}
+        <div class="invbatch-cell" role="columnheader">Client</div>
+        <div class="invbatch-cell" role="columnheader">Week ending</div>
+        <div class="invbatch-cell" role="columnheader">Candidate / worker</div>
+        <div class="invbatch-cell invbatch-cell--money" role="columnheader">Net</div>
+        <div class="invbatch-cell invbatch-cell--money" role="columnheader">Gross</div>
+        <div class="invbatch-cell invbatch-cell--status" role="columnheader">Status</div>
+        <div class="invbatch-cell invbatch-cell--actions" role="columnheader">Actions</div>
+      </div>`;
+    return `${header}${grouped.map(group => renderGroupNode(group, state)).join('')}`;
   }
 
   function displayModeLabel(state) {
@@ -1013,13 +1028,28 @@
 
   function renderInvoiceBatchToolbar(state) {
     const sortOptions = SORT_KEYS[state.mode].map(key => `<option value="${key}" ${state.sort.sort_key === key ? 'selected' : ''}>${escapeHtml(key.replaceAll('_', ' ').toLowerCase().replace(/^\w/, value => value.toUpperCase()))}</option>`).join('');
-    const groupOptions = GROUP_PRESETS.map(key => `<option value="${key}" ${state.grouping === key ? 'selected' : ''}>${escapeHtml(key.replaceAll('_', ' › ').toLowerCase().replace(/^\w/, value => value.toUpperCase()))}</option>`).join('');
+    const groupLabels = {
+      WEEK: 'Week ending',
+      CLIENT: 'Client',
+      CANDIDATE: 'Candidate / worker',
+      STATUS: 'Status'
+    };
+    const groupOrder = normaliseGroupOrder(state.group_order, { persisted: true });
+    const groupOrderEditor = groupOrder.map((dimension, index) => `
+      <li class="invbatch-group-order-item" draggable="true" data-group-dimension="${dimension}" tabindex="0">
+        <span class="invbatch-drag-handle" aria-hidden="true">⋮⋮</span>
+        <span>${escapeHtml(groupLabels[dimension])}</span>
+        <span class="invbatch-group-order-actions">
+          <button type="button" class="btn btn-xs btn-outline" data-batch-action="group-up" data-group-dimension="${dimension}" ${index === 0 ? 'disabled' : ''} aria-label="Move ${escapeHtml(groupLabels[dimension])} up">↑</button>
+          <button type="button" class="btn btn-xs btn-outline" data-batch-action="group-down" data-group-dimension="${dimension}" ${index === groupOrder.length - 1 ? 'disabled' : ''} aria-label="Move ${escapeHtml(groupLabels[dimension])} down">↓</button>
+        </span>
+      </li>`).join('');
     return `
       <div class="invbatch-toolbar">
         <button type="button" class="btn btn-sm btn-outline" data-batch-action="cycle-display">${escapeHtml(displayModeLabel(state))}</button>
         <button type="button" class="btn btn-sm btn-outline" data-batch-action="open-filter" aria-expanded="${state.filter_drawer_open ? 'true' : 'false'}">Filter</button>
         <label class="invbatch-toggle"><input type="checkbox" data-batch-field="allow-early" ${state.filter.allow_early ? 'checked' : ''}> Batch early</label>
-        <label>Group by <select data-batch-field="grouping">${groupOptions}</select></label>
+        <fieldset class="invbatch-group-order"><legend>Group by (drag to reorder)</legend><ol>${groupOrderEditor}</ol></fieldset>
         <label>Sort <select data-batch-field="sort-key">${sortOptions}</select></label>
         <label>Direction <select data-batch-field="sort-direction"><option value="DESC" ${state.sort.sort_direction === 'DESC' ? 'selected' : ''}>Descending</option><option value="ASC" ${state.sort.sort_direction === 'ASC' ? 'selected' : ''}>Ascending</option></select></label>
         <label class="invbatch-search"><span class="sr-only">Search</span><input type="search" data-batch-field="toolbar-search" value="${escapeHtml(state.filter.search || '')}" placeholder="Search"><button type="button" class="btn btn-sm btn-outline" data-batch-action="apply-search">Search</button></label>
@@ -1084,7 +1114,7 @@
     };
     return `
       <aside class="invbatch-filter-drawer" data-batch-filter-drawer role="dialog" aria-modal="true" aria-label="Invoice batch filters">
-        <header><h3>Filter</h3><button type="button" class="btn btn-sm btn-outline" data-batch-action="close-filter">Close</button></header>
+        <header><h3>Filter</h3><button type="button" class="btn btn-sm btn-outline invbatch-drawer-close" data-batch-action="close-filter" aria-label="Close filters" title="Close filters">×</button></header>
         <label>Search<input type="search" data-filter-field="search" value="${escapeHtml(draft.search || '')}"></label>
         <div class="invbatch-filter-dates"><label>Week ending from<input type="date" data-filter-field="week_ending_from" value="${escapeHtml(draft.week_ending_from || '')}"></label><label>Week ending to<input type="date" data-filter-field="week_ending_to" value="${escapeHtml(draft.week_ending_to || '')}"></label></div>
         <fieldset><legend>Week ending</legend>${facetStatus('WEEK_ENDINGS')}<div class="invbatch-filter-options">${renderCheckOptions(weeks, draft.week_endings, 'week_endings')}</div></fieldset>
@@ -1322,9 +1352,49 @@
     for (const checkbox of root?.querySelectorAll?.('input[data-indeterminate="true"]') || []) checkbox.indeterminate = true;
   }
 
+  function captureInvoiceBatchViewport(root) {
+    const list = root?.querySelector?.('.invbatch-list');
+    const scrollHost = root?.parentElement;
+    const active = document.activeElement;
+    let focusSelector = null;
+    if (active && root?.contains(active)) {
+      const field = active.closest?.('[data-batch-field]');
+      const action = active.closest?.('[data-batch-action]');
+      if (field?.dataset.selectionKey) {
+        focusSelector = `[data-batch-field="${CSS.escape(field.dataset.batchField)}"][data-selection-key="${CSS.escape(field.dataset.selectionKey)}"]`;
+      } else if (field?.dataset.selector) {
+        focusSelector = `[data-batch-field="${CSS.escape(field.dataset.batchField)}"][data-selector="${CSS.escape(field.dataset.selector)}"]`;
+      } else if (action?.dataset.groupDimension) {
+        focusSelector = `[data-batch-action="${CSS.escape(action.dataset.batchAction)}"][data-group-dimension="${CSS.escape(action.dataset.groupDimension)}"]`;
+      }
+    }
+    return {
+      root_scroll_top: Number(root?.scrollTop || 0),
+      host_scroll_top: Number(scrollHost?.scrollTop || 0),
+      list_scroll_top: Number(list?.scrollTop || 0),
+      focus_selector: focusSelector
+    };
+  }
+
+  function restoreInvoiceBatchViewport(root, viewport) {
+    if (!root || !viewport) return;
+    const restore = () => {
+      root.scrollTop = viewport.root_scroll_top;
+      if (root.parentElement) root.parentElement.scrollTop = viewport.host_scroll_top;
+      const list = root.querySelector('.invbatch-list');
+      if (list) list.scrollTop = viewport.list_scroll_top;
+    };
+    restore();
+    if (viewport.focus_selector) {
+      try { root.querySelector(viewport.focus_selector)?.focus({ preventScroll: true }); } catch {}
+    }
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
+  }
+
   function renderInvoiceBatchModal(state) {
     const root = state.root_element;
     if (!root || state.destroyed) return '';
+    const viewport = captureInvoiceBatchViewport(root);
     let body;
     if (state.result_page && TERMINAL.has(upper(state.progress?.status))) body = renderInvoiceBatchResultSummary(state);
     else if (state.root_operation_id) body = renderInvoiceBatchProgress(state);
@@ -1349,6 +1419,7 @@
       ${renderViewer(state)}`;
     root.innerHTML = body;
     applyIndeterminateCheckboxes(root);
+    restoreInvoiceBatchViewport(root, viewport);
     if (state.filter_drawer_open) {
       const drawer = root.querySelector('[data-batch-filter-drawer]');
       const first = drawer?.querySelector('input,select,button');
@@ -1556,10 +1627,14 @@
     state.result_cursor = clean(payload.result_page?.next_cursor) || null;
     const viewerRow = asArray(state.result_page?.rows).find(row =>
       clean(row.selection_key) === clean(state.viewer_request?.selection_key)
-      && UUID_RE.test(clean(row.document_version_id))
     );
     if (viewerRow && state.viewer_request?.open && !state.viewer_request?.blob_url) {
-      await openExactVersionInViewer(viewerRow.document_version_id, state);
+      if (UUID_RE.test(clean(viewerRow.document_version_id))) {
+        await openExactVersionInViewer(viewerRow.document_version_id, state);
+      } else if (UUID_RE.test(clean(viewerRow.invoice_id))
+          && state.viewer_request?.preview_request_started !== true) {
+        await prepareGeneratedInvoiceForBatchViewer(viewerRow.invoice_id, state);
+      }
     }
     renderInvoiceBatchModal(state);
     return payload;
@@ -1619,6 +1694,70 @@
     renderInvoiceBatchModal(state);
   }
 
+  async function prepareGeneratedInvoiceForBatchViewer(invoiceIdValue, state) {
+    const invoiceId = clean(invoiceIdValue).toLowerCase();
+    const viewer = asObject(state.viewer_request);
+    if (!viewer.open || !UUID_RE.test(invoiceId) || viewer.preview_request_started === true) return null;
+    const requestSerial = viewer.request_serial;
+    const commandToken = viewer.preview_command_token || crypto.randomUUID();
+    viewer.preview_request_started = true;
+    viewer.preview_command_token = commandToken;
+    viewer.invoice_id = invoiceId;
+    viewer.status_message = 'Preparing preview';
+    state.viewer_request = viewer;
+    renderInvoiceBatchModal(state);
+    try {
+      const response = await window.authFetch(invoiceApi(`/api/invoices/${encodeURIComponent(invoiceId)}/render`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': commandToken },
+        body: JSON.stringify({ command_token: commandToken, priority_reason: 'VIEW_NOW' })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!viewer.open || state.viewer_request?.request_serial !== requestSerial) return payload;
+      if (clean(payload.contract_version) !== 'INVOICE_VIEWER_V2') {
+        throw new Error('INVOICE_VIEWER_CONTRACT_MISMATCH');
+      }
+      const viewerState = upper(payload.viewer_state);
+      const purpose = upper(payload.purpose || 'DRAFT_PREVIEW');
+      if (purpose !== 'DRAFT_PREVIEW') throw new Error('INVOICE_VIEWER_PURPOSE_INVALID');
+      const versionId = clean(payload.document_version?.id || payload.document_version_id).toLowerCase();
+      if (response.status === 200 && viewerState === 'READY' && UUID_RE.test(versionId)) {
+        await openExactVersionInViewer(versionId, state);
+        return payload;
+      }
+      if (response.status === 202 && viewerState === 'PREPARING') {
+        const registered = window.registerInvoiceOperationsFromResponse?.(payload, {
+          response_family: 'VIEW',
+          operation_type: 'VIEW_INVOICE_DOCUMENT',
+          entity_type: 'INVOICE',
+          entity_id: invoiceId,
+          purpose: 'DRAFT_PREVIEW',
+          command_token: commandToken,
+          modal_identity: state.id,
+          explicit_operation_ids: true
+        }) || [];
+        const operationId = clean(payload.operation_id || registered[0]?.operation_id).toLowerCase();
+        if (!UUID_RE.test(operationId)) throw new Error('INVOICE_VIEWER_CONTRACT_MISMATCH');
+        viewer.operation_id = operationId;
+        viewer.status_message = payload.status_message || 'Preparing preview';
+        rootOperationStates.set(operationId, state);
+        return payload;
+      }
+      throw new Error(clean(payload.error_code || payload.error || payload.message || `INVOICE_DOCUMENT_HTTP_${response.status}`));
+    } catch (error) {
+      if (viewer.open && state.viewer_request?.request_serial === requestSerial) {
+        viewer.error = clean(error?.message || error);
+        viewer.status_message = 'Preview failed';
+      }
+      return null;
+    } finally {
+      if (viewer.open && state.viewer_request?.request_serial === requestSerial) {
+        state.viewer_request = viewer;
+        renderInvoiceBatchModal(state);
+      }
+    }
+  }
+
   async function generateAndViewInvoiceCandidate(state, row) {
     if (!row?.selectable || state.viewer_request?.submitting) return null;
     state.viewer_request = {
@@ -1670,7 +1809,11 @@
       }) || [];
       const operationId = clean(payload.root_operation_id || registered[0]?.operation_id).toLowerCase();
       state.viewer_request.operation_id = operationId;
-      if (operationId) rootOperationStates.set(operationId, state);
+      if (operationId) {
+        state.root_operation_id = operationId;
+        state.progress = { ...asObject(state.progress), ...asObject(registered[0]), operation_id: operationId };
+        rootOperationStates.set(operationId, state);
+      }
       const readyVersionId = clean(payload.document_version_id || payload.document_version?.id);
       if (readyVersionId) await openExactVersionInViewer(readyVersionId, state);
       return payload;
@@ -1721,6 +1864,10 @@
       state.root_element.removeEventListener('click', state.delegated_handler);
       state.root_element.removeEventListener('change', state.delegated_handler);
       state.root_element.removeEventListener('keydown', state.delegated_handler);
+      state.root_element.removeEventListener('dragstart', state.delegated_handler);
+      state.root_element.removeEventListener('dragover', state.delegated_handler);
+      state.root_element.removeEventListener('drop', state.delegated_handler);
+      state.root_element.removeEventListener('dragend', state.delegated_handler);
     }
     if (state.keydown_handler) document.removeEventListener('keydown', state.keydown_handler, true);
     activeModalStates.delete(state.id);
@@ -1733,12 +1880,69 @@
     } catch {}
   }
 
+  function setInvoiceBatchGroupOrder(state, nextOrder) {
+    const saved = saveInvoiceBatchPreferences(state.mode, {
+      sort: state.sort,
+      group_order: normaliseGroupOrder(nextOrder)
+    });
+    state.sort = saved.sort;
+    state.group_order = saved.group_order;
+    state.group_selection = [];
+    state.selection_summary_pending = true;
+    state.selection_summary_error = null;
+    scheduleInvoiceBatchSelectionSummary(state);
+  }
+
+  function moveInvoiceBatchGroupDimension(state, dimensionValue, targetValue, direction = 0) {
+    const order = normaliseGroupOrder(state.group_order, { persisted: true });
+    const dimension = upper(dimensionValue);
+    const from = order.indexOf(dimension);
+    if (from < 0) return;
+    let to = targetValue ? order.indexOf(upper(targetValue)) : from + Number(direction || 0);
+    if (to < 0 || to >= order.length || to === from) return;
+    order.splice(from, 1);
+    if (targetValue && from < to) to -= 1;
+    order.splice(to, 0, dimension);
+    setInvoiceBatchGroupOrder(state, order);
+  }
+
   function attachInvoiceBatchModalDelegatedHandlers(state) {
     const root = state.root_element;
     if (!root || state.delegated_handler) return;
     const handler = async event => {
       const actionElement = event.target.closest?.('[data-batch-action]');
       const field = event.target.closest?.('[data-batch-field]');
+      const groupItem = event.target.closest?.('[data-group-dimension]');
+      if (event.type === 'dragstart' && groupItem) {
+        state.dragged_group_dimension = upper(groupItem.dataset.groupDimension);
+        groupItem.classList.add('is-dragging');
+        try {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', state.dragged_group_dimension);
+        } catch {}
+        return;
+      }
+      if (event.type === 'dragover' && groupItem && state.dragged_group_dimension) {
+        event.preventDefault();
+        try { event.dataTransfer.dropEffect = 'move'; } catch {}
+        return;
+      }
+      if (event.type === 'drop' && groupItem && state.dragged_group_dimension) {
+        event.preventDefault();
+        moveInvoiceBatchGroupDimension(
+          state,
+          state.dragged_group_dimension,
+          groupItem.dataset.groupDimension
+        );
+        state.dragged_group_dimension = null;
+        return;
+      }
+      if (event.type === 'dragend') {
+        state.dragged_group_dimension = null;
+        root.querySelectorAll('.invbatch-group-order-item.is-dragging')
+          .forEach(item => item.classList.remove('is-dragging'));
+        return;
+      }
       if (event.type === 'keydown' && field?.dataset.batchField === 'toolbar-search' && event.key === 'Enter') {
         event.preventDefault();
         state.filter.search = clean(field.value) || null;
@@ -1761,22 +1965,29 @@
         } else if (name === 'allow-early') {
           state.filter.allow_early = field.checked === true;
           await reloadFirstPage(state);
-        } else if (name === 'grouping') {
-          state.grouping = upper(field.value);
-          state.sort.group_preset = state.grouping;
-          saveInvoiceBatchPreferences(state.mode, state.sort);
-          await reloadFirstPage(state);
         } else if (name === 'sort-key' || name === 'sort-direction') {
           if (name === 'sort-key') state.sort.sort_key = upper(field.value);
           else state.sort.sort_direction = upper(field.value);
-          state.sort = saveInvoiceBatchPreferences(state.mode, state.sort);
+          const saved = saveInvoiceBatchPreferences(state.mode, {
+            sort: state.sort,
+            group_order: state.group_order
+          });
+          state.sort = saved.sort;
+          state.group_order = saved.group_order;
           await reloadFirstPage(state);
         }
         return;
       }
       if (event.type !== 'click' || !actionElement) return;
       const action = actionElement.dataset.batchAction;
-      if (action === 'cycle-display') {
+      if (action === 'group-up' || action === 'group-down') {
+        moveInvoiceBatchGroupDimension(
+          state,
+          actionElement.dataset.groupDimension,
+          null,
+          action === 'group-up' ? -1 : 1
+        );
+      } else if (action === 'cycle-display') {
         state.display_mode = DISPLAY_MODES[(DISPLAY_MODES.indexOf(state.display_mode) + 1) % DISPLAY_MODES.length];
         state.filter.display_mode = state.display_mode;
         await reloadFirstPage(state);
@@ -1888,6 +2099,10 @@
     root.addEventListener('click', handler);
     root.addEventListener('change', handler);
     root.addEventListener('keydown', handler);
+    root.addEventListener('dragstart', handler);
+    root.addEventListener('dragover', handler);
+    root.addEventListener('drop', handler);
+    root.addEventListener('dragend', handler);
     state.keydown_handler = event => focusTrap(event, state);
     document.addEventListener('keydown', state.keydown_handler, true);
   }
@@ -1966,6 +2181,8 @@
 
   Object.assign(window, {
     createInvoiceBatchModalState,
+    normaliseInvoiceBatchGroupOrder: normaliseGroupOrder,
+    moveInvoiceBatchGroupDimension,
     loadInvoiceBatchPreferences,
     saveInvoiceBatchPreferences,
     createInvoiceBatchSelectionState,
@@ -1998,6 +2215,7 @@
     renderInvoiceBatchResultSummary,
     openInvoiceBatchRowDetails,
     generateAndViewInvoiceCandidate,
+    prepareGeneratedInvoiceForBatchViewer,
     revokeInvoiceBatchViewerBlob,
     closeInvoiceBatchModal,
     attachInvoiceBatchModalDelegatedHandlers
@@ -2007,6 +2225,8 @@
     install: installInvoiceBatchModalOverrides,
     open: openInvoiceBatchModal,
     createInvoiceBatchModalState,
+    normaliseInvoiceBatchGroupOrder: normaliseGroupOrder,
+    moveInvoiceBatchGroupDimension,
     createInvoiceBatchSelectionState,
     applyInvoiceBatchSelectionRule,
     isInvoiceBatchRowSelected,

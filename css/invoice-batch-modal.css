@@ -6,6 +6,10 @@
   max-height: calc(100vh - 32px);
 }
 
+#modal.invbatch-modal {
+  position: relative;
+}
+
 #modal.invbatch-modal .invbatch-root {
   min-height: 300px;
   color: var(--text);
@@ -37,6 +41,62 @@
   z-index: 3;
   padding: 10px 0;
   background: var(--bg);
+}
+
+#modal.invbatch-modal .invbatch-group-order {
+  min-width: 210px;
+  margin: 0;
+  padding: 6px 8px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+#modal.invbatch-modal .invbatch-group-order legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#modal.invbatch-modal .invbatch-group-order ol {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#modal.invbatch-modal .invbatch-group-order-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: grab;
+  font-size: 12px;
+}
+
+#modal.invbatch-modal .invbatch-group-order-item.is-dragging {
+  opacity: 0.55;
+}
+
+#modal.invbatch-modal .invbatch-drag-handle {
+  color: var(--muted);
+  letter-spacing: -3px;
+}
+
+#modal.invbatch-modal .invbatch-group-order-actions {
+  display: inline-flex;
+  gap: 3px;
+}
+
+#modal.invbatch-modal .invbatch-group-order-actions .btn {
+  min-width: 26px;
+  padding: 2px 5px;
 }
 
 #modal.invbatch-modal .invbatch-toolbar label,
@@ -75,9 +135,6 @@
 }
 
 #modal.invbatch-modal .invbatch-group-header {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -96,6 +153,11 @@
   font-weight: 600;
 }
 
+#modal.invbatch-modal .invbatch-group--depth-3 .invbatch-group-header {
+  padding-left: 64px;
+  font-weight: 550;
+}
+
 #modal.invbatch-modal .invbatch-group-count {
   margin-left: auto;
   color: var(--muted);
@@ -105,7 +167,7 @@
 
 #modal.invbatch-modal .invbatch-row {
   display: grid;
-  grid-template-columns: 38px minmax(145px, 1.4fr) minmax(120px, 0.9fr) minmax(150px, 1.2fr) minmax(120px, 0.8fr) minmax(170px, 1.4fr) minmax(150px, auto);
+  grid-template-columns: 38px minmax(170px, 1.2fr) minmax(110px, 0.7fr) minmax(160px, 1.1fr) minmax(95px, 0.65fr) minmax(95px, 0.65fr) minmax(170px, 1.2fr) minmax(150px, auto);
   align-items: center;
   gap: 8px;
   min-height: 52px;
@@ -114,7 +176,24 @@
 }
 
 #modal.invbatch-modal.invbatch-issue-modal .invbatch-row {
-  grid-template-columns: 38px minmax(120px, 0.8fr) minmax(145px, 1.2fr) minmax(120px, 0.9fr) minmax(150px, 1.1fr) minmax(120px, 0.8fr) minmax(170px, 1.3fr) minmax(120px, auto);
+  grid-template-columns: 38px minmax(120px, 0.8fr) minmax(170px, 1.2fr) minmax(110px, 0.7fr) minmax(160px, 1.1fr) minmax(95px, 0.65fr) minmax(95px, 0.65fr) minmax(170px, 1.2fr) minmax(150px, auto);
+}
+
+#modal.invbatch-modal .invbatch-row--header {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  min-height: 38px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-top: 0;
+  border-bottom: 2px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 #modal.invbatch-modal .invbatch-row.is-blocked {
@@ -221,8 +300,8 @@
 #modal.invbatch-modal .invbatch-detail-panel,
 #modal.invbatch-modal .invbatch-viewer {
   position: absolute;
-  inset: 10px 10px 10px auto;
-  z-index: 10;
+  inset: 58px 10px 10px auto;
+  z-index: 120;
   width: min(430px, calc(100% - 20px));
   overflow: auto;
   padding: 16px;
@@ -233,7 +312,7 @@
 }
 
 #modal.invbatch-modal .invbatch-viewer {
-  inset: 10px;
+  inset: 58px 10px 10px;
   width: auto;
 }
 
@@ -244,6 +323,27 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+#modal.invbatch-modal .invbatch-filter-drawer header {
+  position: sticky;
+  top: -16px;
+  z-index: 2;
+  margin: -16px -16px 12px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+#modal.invbatch-modal .invbatch-drawer-close {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 24px;
+  line-height: 1;
 }
 
 #modal.invbatch-modal .invbatch-filter-drawer fieldset {
@@ -354,6 +454,10 @@
 }
 
 @media (max-width: 900px) {
+  #modal.invbatch-modal .invbatch-row--header {
+    display: none;
+  }
+
   #modal.invbatch-modal .invbatch-row,
   #modal.invbatch-modal.invbatch-issue-modal .invbatch-row {
     grid-template-columns: 34px minmax(130px, 1fr) minmax(130px, 1fr);
@@ -387,6 +491,10 @@
   #modal.invbatch-modal .invbatch-footer,
   #modal.invbatch-modal .invbatch-pager {
     align-items: stretch;
+  }
+
+  #modal.invbatch-modal .invbatch-group-order {
+    width: min(100%, 280px);
   }
 
   #modal.invbatch-modal .invbatch-toolbar label:not(.invbatch-toggle),

@@ -156,7 +156,7 @@ test('nested batch groups terminate in candidate rows without treating rows as g
   assert.match(html, /type="checkbox"/);
 });
 
-test('all four grouping presets derive exact selectors from the complete ancestry', () => {
+test('all 24 four-level group orders derive exact semantic selectors from complete ancestry', () => {
   const { window } = loadScript(batchRuntimeSource);
   const row = {
     selection_key: 'scope:ancestor',
@@ -172,27 +172,37 @@ test('all four grouping presets derive exact selectors from the complete ancestr
     node,
     ...flatten((node.children || []).filter(child => Array.isArray(child.rows)))
   ]);
-  const cases = [
-    ['WEEK_CLIENT_CANDIDATE', ['WEEK', 'WEEK_CLIENT', 'WEEK_CLIENT_CANDIDATE']],
-    ['CLIENT_WEEK_CANDIDATE', ['CLIENT', 'WEEK_CLIENT', 'WEEK_CLIENT_CANDIDATE']],
-    ['CANDIDATE_WEEK_CLIENT', ['CANDIDATE', null, 'WEEK_CLIENT_CANDIDATE']],
-    ['STATUS_WEEK_CLIENT', ['STATUS', 'STATUS_WEEK', 'STATUS_WEEK_CLIENT']]
-  ];
-  for (const [preset, expectedTypes] of cases) {
-    const levels = preset.split('_').reduce((result, value, index, values) => {
-      if (preset === 'STATUS_WEEK_CLIENT') return index < 3 ? [...result, value] : result;
-      if (preset === 'WEEK_CLIENT_CANDIDATE') return index < 3 ? [...result, value] : result;
-      if (preset === 'CLIENT_WEEK_CANDIDATE') return index < 3 ? [...result, value] : result;
-      if (preset === 'CANDIDATE_WEEK_CLIENT') return index < 3 ? [...result, value] : result;
-      return result;
-    }, []);
-    const nodes = flatten(window.buildInvoiceBatchGroups([row], levels, 0, {}, preset));
-    assert.equal(
-      JSON.stringify(nodes.map(node => node.selector?.type || null)),
-      JSON.stringify(expectedTypes),
-      preset
-    );
+  const permutations = values => values.length < 2
+    ? [values]
+    : values.flatMap((value, index) =>
+      permutations(values.filter((_, itemIndex) => itemIndex !== index))
+        .map(rest => [value, ...rest]));
+  const fieldByDimension = {
+    WEEK: 'week_ending_date',
+    CLIENT: 'client_id',
+    CANDIDATE: 'candidate_id',
+    STATUS: 'status_code'
+  };
+  const orders = permutations(['WEEK', 'CLIENT', 'CANDIDATE', 'STATUS']);
+  assert.equal(orders.length, 24);
+  for (const order of orders) {
+    const nodes = flatten(window.buildInvoiceBatchGroups([row], order, 0, {}));
+    assert.equal(nodes.length, 4, order.join(' > '));
+    nodes.forEach((node, index) => {
+      assert.equal(node.selector?.type, 'DIMENSION_GROUP');
+      const expectedFields = order.slice(0, index + 1).map(dimension => fieldByDimension[dimension]).sort();
+      assert.deepEqual(
+        Object.keys(node.selector).filter(key => key !== 'type').sort(),
+        expectedFields,
+        order.join(' > ')
+      );
+    });
   }
+  const defaultState = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(defaultState.group_order)),
+    ['WEEK', 'CLIENT', 'CANDIDATE', 'STATUS']
+  );
 });
 
 test('SUMMARY group authority is pending after PAGE load and rejects incomplete coverage', async () => {
@@ -378,6 +388,44 @@ test('selection submission uses the locked query and implicit selection contract
   assert.equal(contract.query.filters.display_mode, 'BLOCKED');
   assert.equal(contract.selection.mode, 'IMPLICIT_ALL');
   assert.equal(contract.selection.default_selected, true);
+});
+
+test('Generate and view starts document preparation only after the invoice record exists', async () => {
+  const calls = [];
+  const { window } = loadScript(batchRuntimeSource, {
+    window: {
+      authFetch: async (url, init) => {
+        calls.push({ url, init });
+        return {
+          status: 200,
+          json: async () => ({
+            contract_version: 'INVOICE_VIEWER_V2',
+            viewer_state: 'READY',
+            purpose: 'DRAFT_PREVIEW',
+            document_version_id: UUID_B
+          })
+        };
+      },
+      openExactReadyDocument: async documentVersionId => ({
+        document_version_id: documentVersionId,
+        blob_url: 'blob:test-preview'
+      })
+    }
+  });
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
+  state.viewer_request = {
+    open: true,
+    selection_key: 'scope:generated',
+    request_serial: 1,
+    blob_url: null
+  };
+  await window.prepareGeneratedInvoiceForBatchViewer(UUID_A, state);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, new RegExp(`/api/invoices/${UUID_A}/render$`));
+  assert.equal(calls[0].init.method, 'POST');
+  assert.match(calls[0].init.body, /VIEW_NOW/);
+  assert.equal(state.viewer_request.document_version_id, UUID_B);
+  assert.equal(state.viewer_request.blob_url, 'blob:test-preview');
 });
 
 test('capabilities reject contract drift and arbitrary UUID objects are not operations', () => {
@@ -813,7 +861,7 @@ test('exact document access sends only the document-version id', async () => {
   result.revoke();
 });
 
-test('all nine V2 selectors are accepted and GROUP_KEY is rejected', () => {
+test('all semantic V2 selectors are accepted and GROUP_KEY is rejected', () => {
   const { window } = loadScript(batchRuntimeSource);
   const selection = window.InvoiceBatchModalV8.createInvoiceBatchSelectionState();
   const selectors = [
@@ -825,12 +873,19 @@ test('all nine V2 selectors are accepted and GROUP_KEY is rejected', () => {
     { type: 'WEEK_CLIENT', week_ending_date: '2026-07-26', client_id: UUID_A },
     { type: 'WEEK_CLIENT_CANDIDATE', week_ending_date: '2026-07-26', client_id: UUID_A, candidate_id: UUID_B },
     { type: 'STATUS_WEEK', status_code: 'READY', week_ending_date: '2026-07-26' },
-    { type: 'STATUS_WEEK_CLIENT', status_code: 'READY', week_ending_date: '2026-07-26', client_id: UUID_A }
+    { type: 'STATUS_WEEK_CLIENT', status_code: 'READY', week_ending_date: '2026-07-26', client_id: UUID_A },
+    {
+      type: 'DIMENSION_GROUP',
+      status_code: 'READY',
+      week_ending_date: '2026-07-26',
+      client_id: UUID_A,
+      candidate_id: UUID_B
+    }
   ];
   for (const selector of selectors) {
     window.InvoiceBatchModalV8.applyInvoiceBatchSelectionRule(selection, 'EXCLUDE', selector);
   }
-  assert.equal(selection.rules.length, 9);
+  assert.equal(selection.rules.length, 10);
   assert.throws(
     () => window.InvoiceBatchModalV8.applyInvoiceBatchSelectionRule(
       selection,
