@@ -509,7 +509,7 @@ test('document action states expose visible labels, disabled state and ARIA busy
     phase: 'SOURCE_RENDER'
   });
   assert.equal(preparing.tone, 'amber');
-  assert.equal(preparing.button_label, 'Preparing PDF…');
+  assert.equal(preparing.button_label, 'Generating invoice PDF…');
   assert.equal(preparing.disabled, true);
   assert.equal(preparing.aria_busy, true);
 
@@ -521,6 +521,12 @@ test('document action states expose visible labels, disabled state and ARIA busy
   assert.equal(ready.tone, 'ready');
   assert.equal(ready.button_label, 'View invoice PDF');
   assert.equal(ready.view_available, true);
+  assert.equal(window.renderInvoiceProgressText({
+    operation_type: 'VIEW_INVOICE_DOCUMENT',
+    status: 'COMPLETE',
+    document_version_id: UUID_A,
+    progress: { completed_units: 4, total_units: 5 }
+  }), 'Ready');
 
   const readyAlias = window.deriveInvoiceAsyncActionState({
     operation_type: 'VIEW_INVOICE_DOCUMENT',
@@ -538,6 +544,14 @@ test('document action states expose visible labels, disabled state and ARIA busy
   assert.equal(terminalWithoutVersion.view_available, false);
   assert.equal(terminalWithoutVersion.button_label, 'Document unavailable');
   assert.equal(terminalWithoutVersion.disabled, true);
+
+  const activeWithStaleVersion = window.deriveInvoiceAsyncActionState({
+    operation_type: 'VIEW_INVOICE_DOCUMENT',
+    status: 'RUNNING',
+    document_version_id: UUID_A
+  });
+  assert.equal(activeWithStaleVersion.view_available, false);
+  assert.equal(activeWithStaleVersion.button_label, 'Generating invoice PDF…');
 });
 
 test('issued invoice viewer adopts FINAL_ISSUE and opens only the exact returned version', async () => {
@@ -587,6 +601,43 @@ test('issued invoice viewer adopts FINAL_ISSUE and opens only the exact returned
   assert.equal(modalCtx.invoiceAsync.viewer_request.viewer_state, 'READY');
   assert.equal(modalCtx.invoiceAsync.viewer_request.document_version_id, UUID_B);
   assert.match(calls[1].url, new RegExp(`/api/invoice-document-versions/${UUID_B}/presign$`));
+  window.revokeInvoiceAsyncViewerBlob(modalCtx);
+});
+
+test('a completed document signal opens its exact version without starting another render', async () => {
+  const calls = [];
+  const { window } = loadScript(asyncSource, {
+    window: {
+      authFetch: async (url) => {
+        calls.push(url);
+        if (calls.length === 1) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              document_version_id: UUID_B,
+              purpose: 'DRAFT_PREVIEW',
+              url: `https://test-cloudtms-backend.example/api/invoice-document-versions/${UUID_B}/download?token=opaque`
+            })
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          blob: async () => new Blob(['%PDF-ready'], { type: 'application/pdf' })
+        };
+      }
+    }
+  });
+  const modalCtx = {
+    invoiceId: UUID_A,
+    invoiceDetail: { invoice: { id: UUID_A, status: 'DRAFT', document_state: 'PREPARING' } },
+    invoiceAsync: { document_version_id: UUID_B }
+  };
+  await window.handleInvoiceRenderPdfAsync(modalCtx);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0], new RegExp(`/api/invoice-document-versions/${UUID_B}/presign$`));
+  assert.doesNotMatch(calls[0], /\/api\/invoices\/.+\/render/);
   window.revokeInvoiceAsyncViewerBlob(modalCtx);
 });
 

@@ -428,7 +428,10 @@
     const cancelled = ['CANCELLED', 'SUPERSEDED'].includes(status);
     const documentFamily = ['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(family);
     const documentVersionId = clean(row.document_version_id).toLowerCase();
-    const exactDocumentReady = UUID_RE.test(documentVersionId);
+    const exactDocumentReady = UUID_RE.test(documentVersionId)
+      && !ACTIVE.has(status)
+      && !failed
+      && !cancelled;
     const ready = documentFamily
       ? exactDocumentReady
       : ['COMPLETE', 'READY', 'ISSUED'].includes(status) || exactDocumentReady;
@@ -493,15 +496,15 @@
       };
     }
     const timesheet = family === 'TIMESHEET_DOCUMENT';
-    const preparingLabel = timesheet ? 'Preparing timesheet…' : 'Preparing PDF…';
+    const preparingLabel = timesheet ? 'Preparing timesheet…' : 'Generating invoice PDF…';
     const readyLabel = timesheet ? 'View timesheet PDF' : 'View invoice PDF';
-    const failedLabel = timesheet ? 'Timesheet PDF failed' : 'PDF failed — retry';
+    const failedLabel = timesheet ? 'Timesheet PDF failed' : 'Invoice PDF failed';
     const terminalWithoutVersion = TERMINAL.has(status) && !exactDocumentReady;
     return {
       ...base,
       tone: ready ? 'ready' : (failed || terminalWithoutVersion ? 'error' : (ACTIVE.has(status) ? 'amber' : 'muted')),
       label: ready ? readyLabel : (terminalWithoutVersion ? 'Document unavailable' : (failed ? failedLabel : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Prepare invoice PDF')))),
-      button_label: ready ? readyLabel : (terminalWithoutVersion ? 'Document unavailable' : (failed && retry ? 'Retry PDF' : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Prepare invoice PDF')))),
+      button_label: ready ? readyLabel : (terminalWithoutVersion ? 'Document unavailable' : (failed && retry ? (timesheet ? 'Retry timesheet PDF' : 'Retry invoice PDF') : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Generate invoice PDF')))),
       disabled: terminalWithoutVersion || ACTIVE.has(status) || (failed && !retry),
       aria_busy: ACTIVE.has(status),
       view_available: exactDocumentReady
@@ -511,6 +514,8 @@
   function renderInvoiceProgressText(value) {
     const row = asObject(value);
     const state = deriveInvoiceAsyncActionState(row);
+    if (state.view_available) return 'Ready';
+    if (state.terminal) return state.label;
     const progress = asObject(row.progress);
     const current = Number(progress.completed_units ?? progress.completed ?? progress.current);
     const total = Number(progress.total_units ?? progress.total);
@@ -527,6 +532,8 @@
 
   function renderDocumentAssetBadge(value, family = '') {
     const state = deriveInvoiceAsyncActionState(value, family);
+    const documentFamily = ['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(state.family);
+    const displayLabel = documentFamily && state.view_available ? 'Ready' : state.label;
     const colours = {
       ready: ['#14532d', '#dcfce7'],
       amber: ['#78350f', '#fef3c7'],
@@ -534,7 +541,7 @@
       muted: ['#334155', '#e2e8f0']
     };
     const [colour, background] = colours[state.tone] || colours.muted;
-    return `<span class="invoice-async-badge invoice-async-badge--${escapeHtml(state.tone)}" data-tone="${escapeHtml(state.tone)}" style="display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:750;color:${colour};background:${background};">${escapeHtml(state.label)}</span>`;
+    return `<span class="invoice-async-badge invoice-async-badge--${escapeHtml(state.tone)}" data-tone="${escapeHtml(state.tone)}" style="display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:750;color:${colour};background:${background};">${escapeHtml(displayLabel)}</span>`;
   }
 
   function renderDiagnosticList(title, values, tone) {
@@ -1115,6 +1122,50 @@
       return null;
     }
     modalCtx.invoiceAsync = asObject(modalCtx.invoiceAsync);
+    const invoiceRecord = asObject(
+      modalCtx?.invoiceDetail?.invoice
+      || modalCtx?.dataLoaded?.invoice
+      || modalCtx?.dataLoaded?.invoice_row
+      || modalCtx?.data
+    );
+    const invoiceStatusAtOpen = upper(invoiceRecord.status);
+    const signalReadyVersionId = clean(modalCtx.invoiceAsync.document_version_id).toLowerCase();
+    const recordReadyVersionId = clean(
+      ['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'].includes(invoiceStatusAtOpen)
+        ? invoiceRecord.issued_document_version_id
+        : invoiceRecord.preview_document_version_id
+    ).toLowerCase();
+    const readyVersionId = UUID_RE.test(signalReadyVersionId)
+      ? signalReadyVersionId
+      : recordReadyVersionId;
+    const exactReadyFromSignal = UUID_RE.test(signalReadyVersionId);
+    const exactReadyFromRecord = upper(invoiceRecord.document_state) === 'READY'
+      && UUID_RE.test(recordReadyVersionId);
+    if (exactReadyFromSignal || exactReadyFromRecord) {
+      const purpose = ['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'].includes(invoiceStatusAtOpen)
+        ? 'FINAL_ISSUE'
+        : 'DRAFT_PREVIEW';
+      const commandToken = crypto.randomUUID();
+      const requestSerial = openPreparingInvoiceViewer(
+        modalCtx,
+        'INVOICE',
+        invoiceId,
+        purpose,
+        commandToken
+      );
+      modalCtx.invoiceAsync.viewer_request.purpose = purpose;
+      await completeInvoiceAsyncViewer(modalCtx, readyVersionId, {
+        request_serial: requestSerial,
+        entity_id: invoiceId,
+        purpose
+      });
+      return {
+        contract_version: 'INVOICE_VIEWER_V2',
+        viewer_state: 'READY',
+        purpose,
+        document_version_id: readyVersionId
+      };
+    }
     const retained = asObject(modalCtx.invoiceAsync.viewer_request);
     const commandToken = retained.open && retained.entity_id === invoiceId && clean(retained.command_token)
       ? clean(retained.command_token)

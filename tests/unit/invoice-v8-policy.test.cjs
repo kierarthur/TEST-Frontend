@@ -108,6 +108,11 @@ test('batch grouping is a four-level draggable order and the filter drawer remai
   assert.match(batchSource, /draggable="true"/);
   assert.match(batchSource, /data-batch-action="group-up"/);
   assert.match(batchSource, /data-batch-action="group-down"/);
+  assert.match(batchSource, /data-batch-action="toggle-group"/);
+  assert.match(batchSource, /data-batch-action="toggle-group-all"/);
+  assert.match(batchSource, /collapsed_group_ids: new Set\(\)/);
+  assert.match(batchSource, /invbatch-toolbar-row--primary/);
+  assert.match(batchSource, /invbatch-toolbar-row--secondary/);
   assert.doesNotMatch(batchSource, /data-batch-field="grouping"/);
   assert.match(batchSource, /class="invbatch-row invbatch-row--header"/);
   assert.match(batchSource, /class="btn btn-sm btn-outline invbatch-drawer-close"/);
@@ -118,6 +123,8 @@ test('batch grouping is a four-level draggable order and the filter drawer remai
   assert.match(batchCss, /\.invbatch-filter-drawer[\s\S]*z-index: 120/);
   assert.match(batchCss, /\.invbatch-filter-drawer[\s\S]*inset: 58px 10px 10px auto/);
   assert.match(batchCss, /\.invbatch-filter-drawer header[\s\S]*position: sticky/);
+  assert.match(batchCss, /\.invbatch-group-toggle-all[\s\S]*width: 32px/);
+  assert.match(batchCss, /\.invbatch-badge--ready[\s\S]*background: #86efac/);
 });
 
 test('batch selection gives immediate local feedback without rebuilding the whole modal', () => {
@@ -129,4 +136,16 @@ test('batch selection gives immediate local feedback without rebuilding the whol
     batchSource,
     /function scheduleInvoiceBatchSelectionSummary[\s\S]*markInvoiceBatchSelectionSummaryPending\(state\)/,
   );
+});
+
+test('Invoice Summary uses one fixed attachment column and invoice document actions expose exact lifecycle labels', () => {
+  assert.match(mainSource, /cols\.splice\(invoiceNumberIndex >= 0 \? invoiceNumberIndex \+ 1 : 0, 0, 'attachment_state'\)/);
+  assert.match(mainSource, /label = 'Attachment'/);
+  assert.match(mainSource, /function paintInvoiceAttachmentIndicator/);
+  assert.match(mainSource, /Invoice attachment waiting to be generated/);
+  assert.match(mainSource, /Invoice attachment generated/);
+  assert.match(mainSource, /Generating invoice PDF…/);
+  assert.match(mainSource, /Generate invoice PDF/);
+  assert.match(mainSource, /Open invoice PDF/);
+  assert.match(asyncSource, /if \(state\.view_available\) return 'Ready'/);
 });

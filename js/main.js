@@ -283,6 +283,7 @@ const GRID_COLUMN_META_DEFAULTS = {
     id:                     { selectable: true },
     type:                   { selectable: true },
     invoice_no:             { selectable: true },
+    attachment_state:       { selectable: false },
     client_id:              { selectable: true },
     client_name:            { selectable: true }, // joined from clients
     issued_at_utc:          { selectable: true },
@@ -109333,6 +109334,10 @@ function summaryUpdateRowDom(section, id, patchedRow) {
       return td;
     }
 
+    if (section === 'invoices' && colKey === 'attachment_state') {
+      return paintInvoiceAttachmentIndicator(td, row);
+    }
+
     if (section === 'invoices' && colKey === 'invoice_no') {
       const txt = String((typeof formatDisplayValue === 'function' ? formatDisplayValue(colKey, v) : (v ?? '')) ?? '');
       const isPaid = !!row?.paid_at_utc;
@@ -110001,6 +110006,10 @@ function summaryInsertRowDom(section, patchedRow) {
         td.textContent = txt;
       }
       return td;
+    }
+
+    if (section === 'invoices' && colKey === 'attachment_state') {
+      return paintInvoiceAttachmentIndicator(td, row);
     }
 
     if (section === 'invoices' && colKey === 'invoice_no') {
@@ -120181,6 +120190,43 @@ function bankingPayPreviewCanonicalStableKey(row, sectionHint = '') {
     return `economic:${section}:${timesheetId}:${keyType}:${keyValue}`;
   }
   return '';
+}
+
+function paintInvoiceAttachmentIndicator(td, row) {
+  if (!td) return td;
+  td.textContent = '';
+  td.classList.add('invoice-attachment-cell');
+  td.style.width = '86px';
+  td.style.minWidth = '86px';
+  td.style.maxWidth = '86px';
+  td.style.textAlign = 'center';
+  td.style.verticalAlign = 'middle';
+
+  const state = String(row?.attachment_state || '').trim().toUpperCase();
+  if (!row?.attachment_expected || !['PENDING', 'READY'].includes(state)) return td;
+
+  const ready = state === 'READY' && row?.attachment_ready === true;
+  const icon = document.createElement('span');
+  icon.textContent = '📎';
+  icon.setAttribute('role', 'img');
+  icon.setAttribute(
+    'aria-label',
+    ready ? 'Invoice attachment generated' : 'Invoice attachment waiting to be generated'
+  );
+  icon.title = ready
+    ? 'Invoice attachment generated'
+    : 'Invoice attachment waiting to be generated';
+  icon.style.display = 'inline-flex';
+  icon.style.alignItems = 'center';
+  icon.style.justifyContent = 'center';
+  icon.style.width = '24px';
+  icon.style.height = '24px';
+  icon.style.fontSize = '17px';
+  icon.style.lineHeight = '1';
+  icon.style.fontFamily = '"Segoe UI Symbol", sans-serif';
+  icon.style.color = ready ? '#22c55e' : '#64748b';
+  td.appendChild(icon);
+  return td;
 }
 
 
@@ -297297,6 +297343,61 @@ const hasRefEdits = (() => {
   const addDisabledAttr = canEditLines ? '' : 'disabled';
   const addDisabledTitle = canEditLines ? '' : 'title="Unissue and unpay the invoice first (staged), then you can edit lines."';
 
+  const invoiceAsyncState = (modalCtx?.invoiceAsync && typeof modalCtx.invoiceAsync === 'object')
+    ? modalCtx.invoiceAsync
+    : {};
+  const documentOperation = (invoiceAsyncState.document_operation && typeof invoiceAsyncState.document_operation === 'object')
+    ? invoiceAsyncState.document_operation
+    : {};
+  const documentOperationStatus = String(
+    documentOperation.status
+    || documentOperation.operation_status
+    || ''
+  ).trim().toUpperCase();
+  const documentOperationId = String(
+    documentOperation.operation_id
+    || invoice.active_document_operation_id
+    || ''
+  ).trim().toLowerCase();
+  const activeDocumentStatuses = new Set([
+    'PENDING', 'QUEUED', 'CLAIMED', 'RUNNING', 'PROCESSING',
+    'RETRY_WAIT', 'WAITING', 'BUILDING', 'RENDERING'
+  ]);
+  const documentGenerating = activeDocumentStatuses.has(documentOperationStatus)
+    || (!!documentOperationId && !['COMPLETE', 'READY', 'FAILED', 'BLOCKED', 'CANCELLED', 'SUPERSEDED'].includes(documentOperationStatus));
+  const issuedDocumentAuthority = !!(
+    effIssued
+    || invoice.issued_at_utc
+    || ['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'].includes(String(invoice.status || '').trim().toUpperCase())
+  );
+  const exactDocumentVersionId = String(
+    invoiceAsyncState.document_version_id
+    || (issuedDocumentAuthority
+      ? invoice.issued_document_version_id
+      : invoice.preview_document_version_id)
+    || ''
+  ).trim().toLowerCase();
+  const invoiceUuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const exactDocumentReady = String(invoice.document_state || '').trim().toUpperCase() === 'READY'
+    && invoiceUuidRe.test(exactDocumentVersionId)
+    && !documentGenerating;
+  const documentFailed = ['FAILED', 'BLOCKED', 'CANCELLED', 'SUPERSEDED'].includes(documentOperationStatus);
+  const invoicePdfLabel = exactDocumentReady
+    ? 'Open invoice PDF'
+    : documentGenerating
+      ? 'Generating invoice PDF…'
+      : documentFailed
+        ? 'Retry invoice PDF'
+        : 'Generate invoice PDF';
+  const invoicePdfDisabled = documentGenerating ? 'disabled' : '';
+  const invoicePdfBusy = documentGenerating ? 'true' : 'false';
+  const invoicePdfOperationAttr = documentOperationId
+    ? ` data-invoice-async-operation-id="${escapeHtml(documentOperationId)}"`
+    : '';
+  const invoicePdfVersionAttr = exactDocumentReady
+    ? ` data-document-version-id="${escapeHtml(exactDocumentVersionId)}"`
+    : '';
+
   const holdReason = (invoice.on_hold_reason != null && String(invoice.on_hold_reason).trim())
     ? String(invoice.on_hold_reason)
     : '';
@@ -297350,8 +297451,10 @@ const hasRefEdits = (() => {
       </div>
 
       <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
-        <button type="button" class="btn btn-sm btn-primary" data-action="inv-open-pdf">
-          Open invoice PDF
+        <button type="button" class="btn btn-sm btn-primary" data-action="inv-open-pdf"
+          data-invoice-async-family="DOCUMENT"${invoicePdfOperationAttr}${invoicePdfVersionAttr}
+          aria-busy="${invoicePdfBusy}" aria-disabled="${documentGenerating ? 'true' : 'false'}" ${invoicePdfDisabled}>
+          ${escapeHtml(invoicePdfLabel)}
         </button>
 
         <button type="button" class="btn btn-sm btn-secondary" data-action="inv-email" ${emailDisabledAttr} ${emailTitle}>
@@ -306523,6 +306626,12 @@ const getSelectionUiState = () => {
       cols.unshift('issue_codes');
     }
   }
+  if (currentSection === 'invoices') {
+    const existingAttachmentIndex = cols.indexOf('attachment_state');
+    if (existingAttachmentIndex >= 0) cols.splice(existingAttachmentIndex, 1);
+    const invoiceNumberIndex = cols.indexOf('invoice_no');
+    cols.splice(invoiceNumberIndex >= 0 ? invoiceNumberIndex + 1 : 0, 0, 'attachment_state');
+  }
 
   // Header checkbox (first column)
   const thSel = document.createElement('th');
@@ -306658,6 +306767,14 @@ const getSelectionUiState = () => {
     let label = getFriendlyHeaderLabel(currentSection, c);
     if (currentSection === 'timesheets' && c === 'issue_codes') {
       label = 'Issues';
+    }
+    if (currentSection === 'invoices' && c === 'attachment_state') {
+      label = 'Attachment';
+      th.style.width = '86px';
+      th.style.minWidth = '86px';
+      th.style.maxWidth = '86px';
+      th.style.textAlign = 'center';
+      th.style.cursor = 'default';
     }
     // Only show sort arrow for backend-supported keys when required
     const isSortable =
@@ -306908,6 +307025,9 @@ const getSelectionUiState = () => {
         } else {
           td.textContent = txt;
         }
+
+      } else if (currentSection === 'invoices' && c === 'attachment_state') {
+        paintInvoiceAttachmentIndicator(td, r);
 
       } else if (currentSection === 'invoices' && c === 'invoice_no') {
         // Paid coin in invoice number cell

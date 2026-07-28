@@ -410,6 +410,7 @@
       sort,
       group_order: preferences.group_order,
       dragged_group_dimension: null,
+      collapsed_group_ids: new Set(),
       selection_summary: null,
       selection_summary_pending: true,
       selection_summary_error: null,
@@ -942,6 +943,25 @@
     try { return canonicalSelector(selector); } catch { return null; }
   }
 
+  function groupCollapseIdentity(node, depth = 0) {
+    const dimensions = asObject(node?.dimensions);
+    const orderedDimensions = {};
+    for (const field of ['week_ending_date', 'client_id', 'candidate_id', 'status_code']) {
+      if (dimensions[field]) orderedDimensions[field] = dimensions[field];
+    }
+    return `${Number(depth) || 0}:${upper(node?.level)}:${clean(node?.key)}:${JSON.stringify(orderedDimensions)}`;
+  }
+
+  function groupCollapseIdentities(node, depth = 0) {
+    if (!node || !Array.isArray(node.rows)) return [];
+    return [
+      groupCollapseIdentity(node, depth),
+      ...asArray(node.children).flatMap(child => (
+        Array.isArray(child?.rows) ? groupCollapseIdentities(child, depth + 1) : []
+      ))
+    ];
+  }
+
   function buildGroups(rows, levels, depth = 0, ancestry = {}) {
     if (depth >= levels.length) return asArray(rows);
     const level = levels[depth];
@@ -987,14 +1007,27 @@
     const checkbox = selector && groupState !== 'DISABLED'
       ? `<input type="checkbox" data-batch-field="group-selection" data-selector="${escapeHtml(encodeSelector(selector))}" ${groupState === 'CHECKED' ? 'checked' : ''} data-indeterminate="${groupState === 'INDETERMINATE' ? 'true' : 'false'}" aria-label="Select ${escapeHtml(node.label)}">`
       : '';
+    const collapseId = groupCollapseIdentity(node, depth);
+    const collapsed = state.collapsed_group_ids instanceof Set
+      && state.collapsed_group_ids.has(collapseId);
+    const descendantIds = groupCollapseIdentities(node, depth);
+    const recursivelyCollapsed = collapsed || (
+      descendantIds.length > 0
+      && descendantIds.every(id => state.collapsed_group_ids?.has?.(id))
+    );
+    const branchLabel = `${node.label} group`;
     return `
-      <section class="invbatch-group invbatch-group--depth-${depth}">
+      <section class="invbatch-group invbatch-group--depth-${depth}${collapsed ? ' is-collapsed' : ''}" data-group-collapse-id="${escapeHtml(collapseId)}">
         <header class="invbatch-group-header">
+          <span class="invbatch-group-collapse-controls">
+            <button type="button" class="btn btn-xs btn-outline invbatch-group-toggle" data-batch-action="toggle-group" data-group-collapse-id="${escapeHtml(collapseId)}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${escapeHtml(branchLabel)}">${collapsed ? '+' : '−'}</button>
+            ${depth === 0 ? `<button type="button" class="btn btn-sm btn-outline invbatch-group-toggle-all" data-batch-action="toggle-group-all" data-group-collapse-id="${escapeHtml(collapseId)}" aria-expanded="${recursivelyCollapsed ? 'false' : 'true'}" aria-label="${recursivelyCollapsed ? 'Expand all groups in' : 'Collapse all groups in'} ${escapeHtml(node.label)}">${recursivelyCollapsed ? '+' : '−'}</button>` : ''}
+          </span>
           ${checkbox}
           <span>${escapeHtml(node.label)}</span>
           <span class="invbatch-group-count">${eligibleCount} eligible · ${node.rows.length - eligibleCount} blocked on this page</span>
         </header>
-        <div class="invbatch-group-body">${asArray(node.children)
+        <div class="invbatch-group-body" ${collapsed ? 'hidden' : ''}>${asArray(node.children)
           .map(child => renderGroupNode(child, state, depth + 1))
           .join('')}</div>
       </section>`;
@@ -1045,16 +1078,22 @@
         </span>
       </li>`).join('');
     return `
-      <div class="invbatch-toolbar">
-        <button type="button" class="btn btn-sm btn-outline" data-batch-action="cycle-display">${escapeHtml(displayModeLabel(state))}</button>
-        <button type="button" class="btn btn-sm btn-outline" data-batch-action="open-filter" aria-expanded="${state.filter_drawer_open ? 'true' : 'false'}">Filter</button>
-        <label class="invbatch-toggle"><input type="checkbox" data-batch-field="allow-early" ${state.filter.allow_early ? 'checked' : ''}> Batch early</label>
-        <fieldset class="invbatch-group-order"><legend>Group by (drag to reorder)</legend><ol>${groupOrderEditor}</ol></fieldset>
-        <label>Sort <select data-batch-field="sort-key">${sortOptions}</select></label>
-        <label>Direction <select data-batch-field="sort-direction"><option value="DESC" ${state.sort.sort_direction === 'DESC' ? 'selected' : ''}>Descending</option><option value="ASC" ${state.sort.sort_direction === 'ASC' ? 'selected' : ''}>Ascending</option></select></label>
-        <label class="invbatch-search"><span class="sr-only">Search</span><input type="search" data-batch-field="toolbar-search" value="${escapeHtml(state.filter.search || '')}" placeholder="Search"><button type="button" class="btn btn-sm btn-outline" data-batch-action="apply-search">Search</button></label>
-        <button type="button" class="btn btn-sm btn-outline" data-batch-action="reset-selection">Reset selection</button>
-      </div>`;
+      <section class="invbatch-toolbar-card" aria-label="Batch controls">
+        <div class="invbatch-toolbar-row invbatch-toolbar-row--primary">
+          <button type="button" class="btn btn-sm btn-outline" data-batch-action="cycle-display">${escapeHtml(displayModeLabel(state))}</button>
+          <button type="button" class="btn btn-sm btn-outline" data-batch-action="open-filter" aria-expanded="${state.filter_drawer_open ? 'true' : 'false'}">Filter</button>
+          <label class="invbatch-toggle"><input type="checkbox" data-batch-field="allow-early" ${state.filter.allow_early ? 'checked' : ''}> Batch early</label>
+          <label class="invbatch-search"><span class="sr-only">Search</span><input type="search" data-batch-field="toolbar-search" value="${escapeHtml(state.filter.search || '')}" placeholder="Search"><button type="button" class="btn btn-sm btn-outline" data-batch-action="apply-search">Search</button></label>
+        </div>
+        <div class="invbatch-toolbar-row invbatch-toolbar-row--secondary">
+          <fieldset class="invbatch-group-order"><legend>Group by (drag to reorder)</legend><ol>${groupOrderEditor}</ol></fieldset>
+          <div class="invbatch-sort-controls">
+            <label>Sort <select data-batch-field="sort-key">${sortOptions}</select></label>
+            <label>Direction <select data-batch-field="sort-direction"><option value="DESC" ${state.sort.sort_direction === 'DESC' ? 'selected' : ''}>Descending</option><option value="ASC" ${state.sort.sort_direction === 'ASC' ? 'selected' : ''}>Ascending</option></select></label>
+            <button type="button" class="btn btn-sm btn-outline" data-batch-action="reset-selection">Reset selection</button>
+          </div>
+        </div>
+      </section>`;
   }
 
   function facetOptions(state, kind) {
@@ -1383,6 +1422,8 @@
         focusSelector = `[data-batch-field="${CSS.escape(field.dataset.batchField)}"][data-selector="${CSS.escape(field.dataset.selector)}"]`;
       } else if (action?.dataset.groupDimension) {
         focusSelector = `[data-batch-action="${CSS.escape(action.dataset.batchAction)}"][data-group-dimension="${CSS.escape(action.dataset.groupDimension)}"]`;
+      } else if (action?.dataset.groupCollapseId) {
+        focusSelector = `[data-batch-action="${CSS.escape(action.dataset.batchAction)}"][data-group-collapse-id="${CSS.escape(action.dataset.groupCollapseId)}"]`;
       }
     }
     return {
@@ -2004,6 +2045,28 @@
           null,
           action === 'group-up' ? -1 : 1
         );
+      } else if (action === 'toggle-group') {
+        const collapseId = clean(actionElement.dataset.groupCollapseId);
+        if (!(state.collapsed_group_ids instanceof Set)) state.collapsed_group_ids = new Set();
+        if (state.collapsed_group_ids.has(collapseId)) state.collapsed_group_ids.delete(collapseId);
+        else state.collapsed_group_ids.add(collapseId);
+        renderInvoiceBatchModal(state);
+      } else if (action === 'toggle-group-all') {
+        const section = actionElement.closest('.invbatch-group--depth-0');
+        const collapseIds = [...new Set(
+          [...(section?.querySelectorAll?.('[data-group-collapse-id]') || [])]
+            .map(element => clean(element.dataset.groupCollapseId))
+            .filter(Boolean)
+        )];
+        if (!(state.collapsed_group_ids instanceof Set)) state.collapsed_group_ids = new Set();
+        const topLevelId = clean(actionElement.dataset.groupCollapseId);
+        const expandAll = state.collapsed_group_ids.has(topLevelId)
+          || (collapseIds.length > 0 && collapseIds.every(id => state.collapsed_group_ids.has(id)));
+        for (const collapseId of collapseIds) {
+          if (expandAll) state.collapsed_group_ids.delete(collapseId);
+          else state.collapsed_group_ids.add(collapseId);
+        }
+        renderInvoiceBatchModal(state);
       } else if (action === 'cycle-display') {
         state.display_mode = DISPLAY_MODES[(DISPLAY_MODES.indexOf(state.display_mode) + 1) % DISPLAY_MODES.length];
         state.filter.display_mode = state.display_mode;
