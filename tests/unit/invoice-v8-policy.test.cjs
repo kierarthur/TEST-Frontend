@@ -19,6 +19,7 @@ test('shared diagnostic catalogue exposes locked labels and a bounded unknown fa
     ['INVOICE_CORRECTION_CONTRACT_MISMATCH', 'Contract mismatch'],
     ['INVOICE_CORRECTION_STREAM_MISMATCH', 'Invoice stream mismatch'],
     ['INVOICE_REFERENCE_REQUIRED', 'Missing refs'],
+    ['MISSING_IMPORT_SOURCE_EVIDENCE', 'Source evidence missing'],
     ['NOT_READY_FOR_INVOICE', 'Not ready'],
     ['SEGMENT_ALREADY_LOCKED', 'Already locked'],
     ['BLOCKED_FOR_SENDING', 'Blocked for sending']

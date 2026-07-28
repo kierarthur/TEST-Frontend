@@ -9,6 +9,7 @@
     REFERENCE_REQUIRED: ['Missing refs', 'Add the required invoice reference before continuing.', 'red', 'ACTION'],
     VAT_REGISTRATION_NUMBER_REQUIRED: ['Missing VAT', 'Add the required VAT registration details before continuing.', 'red', 'ACTION'],
     MISSING_VAT_REGISTRATION: ['Missing VAT', 'Add the required VAT registration details before continuing.', 'red', 'ACTION'],
+    MISSING_IMPORT_SOURCE_EVIDENCE: ['Source evidence missing', 'The authoritative NHSP or HealthRoster source evidence is missing. Restore the import lineage before issuing.', 'red', 'ACTION'],
     NOT_READY_FOR_INVOICE: ['Not ready', 'The source record is not ready for invoicing.', 'red', 'ACTION'],
     SEGMENT_ALREADY_LOCKED: ['Already locked', 'This item is already reserved by another active operation.', 'amber', 'ACTION'],
     STALE: ['Stale', 'The source changed after this document was prepared. Regenerate it before issue.', 'amber', 'DOCUMENT'],
