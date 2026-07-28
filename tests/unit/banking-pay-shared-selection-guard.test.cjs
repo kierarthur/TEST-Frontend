@@ -28,6 +28,54 @@ test('successful selection changes store the returned server progress revision',
   assert.match(body, /decisions\.progress_counter_version = progressCounterVersion/);
 });
 
+test('selection requests use the highest adopted progress revision across overlapping page state', () => {
+  const body = sliceBetween(
+    'function bankingPayAugmentWorkbenchFreshnessPayload',
+    'async function bankingPayWorkbenchSessionClearCaseResolution'
+  );
+  const state = {
+    pay: {
+      draftWizard: {
+        selection_progress_counter_floor: 4491,
+        workbench: {
+          session_id: 'session-1',
+          session_version: 16,
+          progress_counter_version: 4489
+        },
+        decisions: {
+          session_id: 'session-1',
+          session_version: 16,
+          progress_counter_version: 4489
+        },
+        preview: {
+          data: {
+            session_id: 'session-1',
+            session_version: 16,
+            progress_counter_version: 4489
+          }
+        }
+      }
+    }
+  };
+  const context = {
+    JSON,
+    String,
+    Number,
+    Object,
+    Array,
+    bankingGetState: () => state
+  };
+  vm.runInNewContext(
+    body + '\nthis.__augment = bankingPayAugmentWorkbenchFreshnessPayload;',
+    context,
+    { filename: 'banking-selection-progress-monotonic.js' }
+  );
+
+  const payload = context.__augment('session-1', { section: 'canonical_preview_lines' });
+  assert.equal(payload.expected_session_version, 16);
+  assert.equal(payload.expected_progress_counter_version, 4491);
+});
+
 test('successful selection changes immediately adopt authoritative draft readiness', () => {
   const body = sliceBetween(
     'const applySelectionPayloadSummaryToWizard =',
@@ -265,6 +313,30 @@ test('a rejected optimistic selection reloads the canonical page and always repa
   );
 });
 
+test('a successful selection reloads the canonical page so server-side headroom promotion is adopted', () => {
+  const toggleBody = sliceBetween(
+    'const togglePreviewRowSelection =',
+    'const setPreviewRowsSelection ='
+  );
+  const groupedBody = sliceBetween(
+    'const setPreviewRowsSelection =',
+    'const setPreviewRowsGlobalSelection ='
+  );
+  const globalBody = sliceBetween(
+    'const setPreviewRowsGlobalSelection =',
+    'const normalisePayPreviewPageUiSection ='
+  );
+  const helperBody = sliceBetween(
+    'const reloadCanonicalPreviewAfterSelectionMutation =',
+    'const togglePreviewRowSelection ='
+  );
+
+  assert.match(helperBody, /loadPayWorkbenchPreviewPageForSection\('canonical_preview_lines', 'reload'\)/);
+  assert.match(toggleBody, /applySelectionPayloadSummaryToWizard\(result\);\s*await reloadCanonicalPreviewAfterSelectionMutation\(\);/);
+  assert.match(groupedBody, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*await reloadCanonicalPreviewAfterSelectionMutation\(\);/);
+  assert.match(globalBody, /applySelectionPayloadSummaryToWizard\(result\);\s*await reloadCanonicalPreviewAfterSelectionMutation\(\);/);
+});
+
 test('Create Draft requires review when the authoritative selected set changed', () => {
   const refreshBody = sliceBetween(
     'const refreshCurrentSelectedPreviewRowsForCreateDraft =',
@@ -327,6 +399,17 @@ test('current-page reload keeps the existing page instead of advancing paginatio
 
   assert.match(pageBody, /reloadCurrentPage = dir === 'reload'/);
   assert.match(pageBody, /targetPage = reloadCurrentPage \? currentPage/);
+});
+test('selection-driven page reload preserves the authoritative session context for the next selection', () => {
+  const pageBody = sliceBetween(
+    'const loadPayWorkbenchPreviewPageForSection =',
+    'const ensurePayWorkbenchUiState ='
+  );
+
+  assert.match(pageBody, /session_version: appliedPage\.session_version \?\? appliedPage\.sessionVersion \?\? null/);
+  assert.match(pageBody, /session_signature: appliedPage\.session_signature \?\? appliedPage\.sessionSignature \?\? null/);
+  assert.match(pageBody, /progress_counter_version: appliedPage\.progress_counter_version \?\? appliedPage\.progressCounterVersion \?\? null/);
+  assert.match(pageBody, /ready: appliedPage\.ready !== false/);
 });
 test('selection-review failure retains its specific user-friendly browser message', () => {
   const normalizerBody = sliceBetween(

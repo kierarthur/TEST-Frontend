@@ -179,6 +179,49 @@ test('groups one multi-component recovery into one visible parent while preservi
   assert.match(mainSource, /if \(a === 'banking:pay:toggleTimesheetPreviewGroup'\)[\s\S]*setPreviewRowsSelection\(previewRowIds, selectAllChildren\)/);
 });
 
+test('caps a grouped recovery breakdown to the row-level pre-draft headroom', () => {
+  const helpers = installHarness();
+  const rows = [
+    ['row-1', '2026-06-29', 79.72],
+    ['row-2', '2026-06-30', 87.53],
+    ['row-3', '2026-07-01', 87.53],
+    ['row-4', '2026-07-02', 56.08]
+  ].map(([previewRowId, componentDate, recoverable]) => ({
+    line_type: 'OVERPAYMENT_RECOVERY',
+    presentation_role: 'CHILD',
+    presentation_parent_line_id: 'finance:case-kier:overpayment_recovery',
+    finance_case_id: 'case-kier',
+    preview_row_id: previewRowId,
+    amount_display: String(-recoverable),
+    amount_ex_vat: String(-recoverable),
+    section_amount_display: String(-recoverable),
+    selection_allowed: true,
+    case_components: [{
+      finance_component_id: `component-${previewRowId}`,
+      component_key_type: 'TS_DAY',
+      component_key_value: componentDate,
+      source_amount: '270.876',
+      remaining_source_amount: '270.876',
+      preview_due_amount_ex_vat: '486.94'
+    }]
+  }));
+
+  const grouped = helpers.buildOverpaymentRecoveryDisplayLines(rows)[0];
+  const presentation = helpers.getOverpaymentRecoveryPresentation(grouped);
+
+  assert.equal(grouped.amount_ex_vat, -310.86);
+  assert.equal(grouped.amount_display, -310.86);
+  assert.equal(grouped.section_amount_display, -310.86);
+  assert.equal(presentation.outstanding_total, 1083.52);
+  assert.equal(presentation.recoverable_this_run, 310.86);
+  assert.deepEqual(
+    Array.from(presentation.components, (component) => component.recoverable_this_run),
+    [79.72, 87.53, 87.53, 56.08]
+  );
+  assert.match(helpers.renderPreviewLineAmountHtml(grouped), /-1083\.52/);
+  assert.match(helpers.renderPreviewLineAmountHtml(grouped), /Recoverable this pay run: 310\.86/);
+});
+
 test('gives terminal failure precedence over stale pending state and de-duplicates failure levels', () => {
   assert.match(mainSource, /if \(authoritativeRenderState\.hasFailure \|\| hasFailedCandidates\) return 'Refresh failed';\s*if \(hasPendingCandidates\) return 'Preparing…';/);
   assert.match(mainSource, /const issueCount = Math\.max\([\s\S]*candidateCounts\.failed[\s\S]*lineCounts\.failed[\s\S]*jobCounts\.unresolved_failed/);

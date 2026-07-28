@@ -50449,7 +50449,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       const value = firstFinitePreviewNumber(...values);
       return value === null ? null : Math.abs(Math.round(value * 100) / 100);
     };
-    const components = getLineCaseComponents(line).map((component, index) => {
+    const rawComponents = getLineCaseComponents(line).map((component, index) => {
       const original = toMagnitude(
         component?.source_amount,
         component?.sourceAmount,
@@ -50481,10 +50481,20 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       };
     }).filter((component) => component.original !== null || component.outstanding !== null);
 
+    const rowRecoverable = toMagnitude(getLineRowLevelAmount(line), getLineSectionAmount(line), 0) ?? 0;
+    let remainingRowRecovery = rowRecoverable;
+    const components = rawComponents.map((component) => {
+      const rawRecoverable = Math.max(0, component.recoverable_this_run ?? 0);
+      const allocatedRecoverable = Math.round(Math.min(rawRecoverable, remainingRowRecovery) * 100) / 100;
+      remainingRowRecovery = Math.round(Math.max(remainingRowRecovery - allocatedRecoverable, 0) * 100) / 100;
+      return {
+        ...component,
+        recoverable_this_run: allocatedRecoverable
+      };
+    });
     const componentOriginalTotal = Math.round(components.reduce((total, component) => total + (component.original ?? 0), 0) * 100) / 100;
     const componentOutstandingTotal = Math.round(components.reduce((total, component) => total + (component.outstanding ?? 0), 0) * 100) / 100;
     const componentRecoverableTotal = Math.round(components.reduce((total, component) => total + (component.recoverable_this_run ?? 0), 0) * 100) / 100;
-    const rowRecoverable = toMagnitude(getLineRowLevelAmount(line), getLineSectionAmount(line), 0) ?? 0;
     const fallbackOutstanding = toMagnitude(
       line?.nominal_due_amount_ex_vat,
       line?.nominalDueAmountExVat,
@@ -50504,7 +50514,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     ) ?? 0;
     const outstandingTotal = components.length ? componentOutstandingTotal : fallbackOutstanding;
     const originalTotal = components.length ? componentOriginalTotal : Math.max(outstandingTotal, rowRecoverable);
-    const recoverableThisRun = components.length ? componentRecoverableTotal : rowRecoverable;
+    const recoverableThisRun = components.length ? Math.min(componentRecoverableTotal, rowRecoverable) : rowRecoverable;
     const blockedReasons = [
       ...asArray(line?.blocked_reason_codes),
       ...asArray(line?.blockedReasonCodes),
@@ -50642,6 +50652,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       const componentRows = [];
       const seenComponentKeys = new Set();
       for (const line of item.lines) {
+        let remainingLineRecovery = Math.abs(Math.round(toNum(getLineRowLevelAmount(line), 0) * 100) / 100);
         getLineCaseComponents(line).forEach((component, componentIndex) => {
           const componentId = trimStr(component?.finance_component_id || component?.financeComponentId || '');
           const keyType = upperTrim(component?.component_key_type || component?.componentKeyType || component?.key_type || component?.keyType || '');
@@ -50650,7 +50661,21 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
           const componentKey = componentId || [keyType, keyValue, linkedTimesheetId, String(componentIndex)].join('|');
           if (!componentKey || seenComponentKeys.has(componentKey)) return;
           seenComponentKeys.add(componentKey);
-          componentRows.push(component);
+          const rawComponentRecovery = Math.max(0, firstFinitePreviewNumber(
+            component?.preview_due_amount_ex_vat,
+            component?.previewDueAmountExVat,
+            component?.allocated_source_due_amount_ex_vat,
+            component?.allocatedSourceDueAmountExVat,
+            component?.target_pay_ex_vat,
+            component?.targetPayExVat,
+            0
+          ) ?? 0);
+          const componentRecovery = Math.round(Math.min(rawComponentRecovery, remainingLineRecovery) * 100) / 100;
+          remainingLineRecovery = Math.round(Math.max(remainingLineRecovery - componentRecovery, 0) * 100) / 100;
+          componentRows.push({
+            ...component,
+            preview_due_amount_ex_vat: componentRecovery
+          });
         });
       }
 
@@ -50688,7 +50713,14 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
           ...representativeNested,
           presentation_role: 'PARENT',
           presentation_parent_line_id: item.key,
+          amount_display: economicAmount,
+          amountDisplay: economicAmount,
           amount_ex_vat: economicAmount,
+          amountExVat: economicAmount,
+          section_amount_display: economicAmount,
+          sectionAmountDisplay: economicAmount,
+          section_amount_ex_vat: economicAmount,
+          sectionAmountExVat: economicAmount,
           case_components: []
         },
         presentation_role: 'PARENT',
@@ -50696,8 +50728,14 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
         finance_case_id: financeCaseId || representative?.finance_case_id || null,
         source_ref: financeCaseId ? `advance:${financeCaseId}` : trimStr(representative?.source_ref || ''),
         snooze_kind: 'OVERPAYMENT_RECOVERY',
+        amount_display: economicAmount,
+        amountDisplay: economicAmount,
         amount_ex_vat: economicAmount,
+        amountExVat: economicAmount,
+        section_amount_display: economicAmount,
+        sectionAmountDisplay: economicAmount,
         section_amount_ex_vat: economicAmount,
+        sectionAmountExVat: economicAmount,
         case_components: componentRows,
         blocked_reason_codes: blockedReasonCodes,
         presentation_reason: presentationReason,
@@ -88662,6 +88700,8 @@ function attachBankingModalDelegatedHandlers() {
       const candidates = [
         st.pay?.draftWizard?.workbench?.progress_counter_version,
         st.pay?.draftWizard?.workbench?.progressCounterVersion,
+        st.pay?.draftWizard?.selection_progress_counter_floor,
+        st.pay?.draftWizard?.selectionProgressCounterFloor,
         st.pay?.draftWizard?.decisions?.progress_counter_version,
         st.pay?.draftWizard?.decisions?.progressCounterVersion,
         st.pay?.draftWizard?.preview?.data?.progress_counter_version,
@@ -88669,13 +88709,16 @@ function attachBankingModalDelegatedHandlers() {
         st.pay?.draftWizard?.preview?.data?.session?.progress_counter_version,
         st.pay?.draftWizard?.preview?.data?.session?.progressCounterVersion
       ];
+      let highest = null;
       for (const value of candidates) {
         const raw = String(value == null ? '' : value).trim();
         if (!/^[0-9]{1,18}$/.test(raw)) continue;
         const parsed = Number(raw);
-        if (Number.isFinite(parsed) && parsed >= 0) return Math.trunc(parsed);
+        if (!Number.isSafeInteger(parsed) || parsed < 0) continue;
+        const bounded = Math.trunc(parsed);
+        if (highest == null || bounded > highest) highest = bounded;
       }
-      return null;
+      return highest;
     };
 
     const getPayWizardWeekEndingCutoff = () => String(
@@ -92075,6 +92118,15 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           }
         }
         if (Number.isSafeInteger(progressCounterVersion) && progressCounterVersion >= 0) {
+          const previousSelectionFloor = Number(
+            st.pay.draftWizard.selection_progress_counter_floor ??
+            st.pay.draftWizard.selectionProgressCounterFloor
+          );
+          const nextSelectionFloor = Number.isSafeInteger(previousSelectionFloor) && previousSelectionFloor >= 0
+            ? Math.max(previousSelectionFloor, progressCounterVersion)
+            : progressCounterVersion;
+          st.pay.draftWizard.selection_progress_counter_floor = nextSelectionFloor;
+          st.pay.draftWizard.selectionProgressCounterFloor = nextSelectionFloor;
           st.pay.draftWizard.workbench.progress_counter_version = progressCounterVersion;
           decisions.progress_counter_version = progressCounterVersion;
           if (st.pay.draftWizard.preview?.data && typeof st.pay.draftWizard.preview.data === 'object') {
@@ -92085,6 +92137,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           adoptSelectionSummaryIntoProgressNode(progressNode);
         }
       } catch {}
+    };
+
+    const reloadCanonicalPreviewAfterSelectionMutation = async () => {
+      if (typeof loadPayWorkbenchPreviewPageForSection !== 'function') return;
+      await loadPayWorkbenchPreviewPageForSection('canonical_preview_lines', 'reload');
     };
 
     const togglePreviewRowSelection = async (previewRowId, checked) => {
@@ -92103,6 +92160,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
             ? { section: 'canonical_preview_lines', select_preview_row_ids: [rowId] }
             : { section: 'canonical_preview_lines', deselect_preview_row_ids: [rowId] });
           applySelectionPayloadSummaryToWizard(result);
+          await reloadCanonicalPreviewAfterSelectionMutation();
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState([rowId], !wantChecked);
@@ -92132,6 +92190,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
               : { section: 'canonical_preview_lines', deselect_preview_row_ids: chunkIds });
             applySelectionPayloadSummaryToWizard(result);
           }
+          await reloadCanonicalPreviewAfterSelectionMutation();
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState(targetIds, !wantChecked);
@@ -92154,6 +92213,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
             selection_action: wantChecked ? 'SELECT_ALL_SECTION' : 'CLEAR_SECTION'
           });
           applySelectionPayloadSummaryToWizard(result);
+          await reloadCanonicalPreviewAfterSelectionMutation();
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState(visibleIds, !wantChecked);
@@ -92253,6 +92313,12 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           applyPayWorkbenchPreviewToState({
             ok: true,
             session_id: sessionId,
+            session_version: appliedPage.session_version ?? appliedPage.sessionVersion ?? null,
+            session_signature: appliedPage.session_signature ?? appliedPage.sessionSignature ?? null,
+            progress_counter_version: appliedPage.progress_counter_version ?? appliedPage.progressCounterVersion ?? null,
+            ready: appliedPage.ready !== false,
+            progress_state: appliedPage.ready === false ? null : 'READY',
+            selected_row_count: appliedPage.selected_row_count ?? appliedPage.selectedRowCount ?? null,
             preview_pages: { [section]: appliedPage },
             previewPageCache: { [section]: appliedPage },
             preview: { preview_pages: { [section]: appliedPage }, previewPageCache: { [section]: appliedPage } }
@@ -129870,13 +129936,15 @@ function bankingPayAugmentWorkbenchFreshnessPayload(sessionId, payload = {}, opt
     return null;
   };
   const readNonNegativeInteger = (...values) => {
+    let highest = null;
     for (const value of values) {
       const raw = trimStr(value);
       if (!/^[0-9]{1,18}$/.test(raw)) continue;
       const parsed = Number(raw);
-      if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
+      if (!Number.isSafeInteger(parsed) || parsed < 0) continue;
+      if (highest == null || parsed > highest) highest = parsed;
     }
-    return null;
+    return highest;
   };
   const hasAny = (source, keys) => keys.some((key) => Object.prototype.hasOwnProperty.call(source, key) && trimStr(source[key]) !== '');
 
@@ -129946,6 +130014,8 @@ function bankingPayAugmentWorkbenchFreshnessPayload(sessionId, payload = {}, opt
     source.progressCounterVersion,
     wizard.workbench?.progress_counter_version,
     wizard.workbench?.progressCounterVersion,
+    wizard.selection_progress_counter_floor,
+    wizard.selectionProgressCounterFloor,
     wizard.decisions?.progress_counter_version,
     wizard.decisions?.progressCounterVersion,
     wizard.preview?.data?.progress_counter_version,
