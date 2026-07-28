@@ -28,6 +28,29 @@ test('successful selection changes store the returned server progress revision',
   assert.match(body, /decisions\.progress_counter_version = progressCounterVersion/);
 });
 
+test('successful selection changes immediately adopt authoritative draft readiness', () => {
+  const body = sliceBetween(
+    'const applySelectionPayloadSummaryToWizard =',
+    'const togglePreviewRowSelection ='
+  );
+
+  assert.match(body, /readyForDraftProvided/);
+  assert.match(body, /workbench\.ready_for_draft = readyForDraft/);
+  assert.match(body, /workbench\.can_create_draft = readyForDraft/);
+  assert.match(body, /decisions\.ready_for_draft = readyForDraft/);
+  assert.match(body, /preview\.data\.ready_for_draft = readyForDraft/);
+  assert.match(body, /workbench\.draft_blocker_codes = safeBlockerCodes/);
+  assert.match(body, /const authoritativeProgressNodes = \[/);
+  assert.match(body, /workbench\.progress/);
+  assert.match(body, /decisions\.progress/);
+  assert.match(body, /preview\?\.data\?\.progress/);
+  assert.match(body, /preview\?\.data\?\.preview\?\.progress/);
+  assert.match(body, /node\.selected_eligible_ready_row_count = boundedSelectedCount/);
+  assert.match(body, /node\.ready_for_draft = readyForDraft/);
+  assert.match(body, /node\.draft_blocker_codes = \[\.\.\.draftBlockerCodes\]/);
+  assert.match(body, /node\.progress_counter_version = progressCounterVersion/);
+});
+
 test('successful selection changes treat a returned selected-row array as complete server authority', () => {
   const body = sliceBetween(
     'const applySelectionPayloadSummaryToWizard =',

@@ -92002,9 +92002,41 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       const selectedIds = normalizePreviewRowIdArray(payload.selected_preview_row_ids || payload.server_selected_preview_row_ids);
       const selectedCount = Number(payload.selected_row_count ?? selectedIds.length);
       const progressCounterVersion = Number(payload.progress_counter_version ?? payload.progressCounterVersion);
+      const readyForDraftProvided = Object.prototype.hasOwnProperty.call(payload, 'ready_for_draft') ||
+        Object.prototype.hasOwnProperty.call(payload, 'can_create_draft');
+      const readyForDraft = payload.ready_for_draft === true || payload.can_create_draft === true;
+      const draftBlockerCodes = Array.isArray(payload.draft_blocker_codes)
+        ? payload.draft_blocker_codes
+        : (Array.isArray(payload.blocker_codes) ? payload.blocker_codes : null);
       const decisions = ensurePayWizardDecisionState();
       try {
         st.pay.draftWizard.workbench = (st.pay.draftWizard.workbench && typeof st.pay.draftWizard.workbench === 'object') ? st.pay.draftWizard.workbench : {};
+        const authoritativeProgressNodes = [
+          st.pay.draftWizard.workbench.progress,
+          decisions.progress,
+          st.pay.draftWizard.preview?.data?.progress,
+          st.pay.draftWizard.preview?.data?.preview?.progress
+        ].filter((node) => node && typeof node === 'object' && !Array.isArray(node));
+        const adoptSelectionSummaryIntoProgressNode = (node) => {
+          if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+          if (Number.isFinite(selectedCount)) {
+            const boundedSelectedCount = Math.max(0, Math.trunc(selectedCount));
+            node.selected_row_count = boundedSelectedCount;
+            node.selected_eligible_ready_row_count = boundedSelectedCount;
+            node.selected_rows_available = boundedSelectedCount > 0;
+          }
+          if (readyForDraftProvided) {
+            node.ready_for_draft = readyForDraft;
+            node.can_create_draft = readyForDraft;
+          }
+          if (draftBlockerCodes) {
+            node.draft_blocker_codes = [...draftBlockerCodes];
+            node.blocker_codes = [...draftBlockerCodes];
+          }
+          if (Number.isSafeInteger(progressCounterVersion) && progressCounterVersion >= 0) {
+            node.progress_counter_version = progressCounterVersion;
+          }
+        };
         if (Number.isFinite(selectedCount)) {
           st.pay.draftWizard.workbench.selected_row_count = Math.max(0, Math.trunc(selectedCount));
           st.pay.draftWizard.workbench.selected_eligible_ready_row_count = Math.max(0, Math.trunc(selectedCount));
@@ -92021,12 +92053,36 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           st.pay.draftWizard.local_selected_preview_row_ids_dirty = false;
           st.pay.draftWizard.localSelectedPreviewRowIdsDirty = false;
         }
+        if (readyForDraftProvided) {
+          st.pay.draftWizard.workbench.ready_for_draft = readyForDraft;
+          st.pay.draftWizard.workbench.can_create_draft = readyForDraft;
+          decisions.ready_for_draft = readyForDraft;
+          decisions.can_create_draft = readyForDraft;
+          if (st.pay.draftWizard.preview?.data && typeof st.pay.draftWizard.preview.data === 'object') {
+            st.pay.draftWizard.preview.data.ready_for_draft = readyForDraft;
+            st.pay.draftWizard.preview.data.can_create_draft = readyForDraft;
+          }
+        }
+        if (draftBlockerCodes) {
+          const safeBlockerCodes = [...draftBlockerCodes];
+          st.pay.draftWizard.workbench.draft_blocker_codes = safeBlockerCodes;
+          st.pay.draftWizard.workbench.blocker_codes = [...safeBlockerCodes];
+          decisions.draft_blocker_codes = [...safeBlockerCodes];
+          decisions.blocker_codes = [...safeBlockerCodes];
+          if (st.pay.draftWizard.preview?.data && typeof st.pay.draftWizard.preview.data === 'object') {
+            st.pay.draftWizard.preview.data.draft_blocker_codes = [...safeBlockerCodes];
+            st.pay.draftWizard.preview.data.blocker_codes = [...safeBlockerCodes];
+          }
+        }
         if (Number.isSafeInteger(progressCounterVersion) && progressCounterVersion >= 0) {
           st.pay.draftWizard.workbench.progress_counter_version = progressCounterVersion;
           decisions.progress_counter_version = progressCounterVersion;
           if (st.pay.draftWizard.preview?.data && typeof st.pay.draftWizard.preview.data === 'object') {
             st.pay.draftWizard.preview.data.progress_counter_version = progressCounterVersion;
           }
+        }
+        for (const progressNode of authoritativeProgressNodes) {
+          adoptSelectionSummaryIntoProgressNode(progressNode);
         }
       } catch {}
     };
