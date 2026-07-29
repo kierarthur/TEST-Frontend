@@ -50699,14 +50699,6 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     if (!isOverpaymentRecoveryLine(obj)) return '';
     const line = isPlainObject(obj) ? obj : {};
     const nested = getNestedLinePayload(line);
-    const parentLineId = trimStr(
-      line?.presentation_parent_line_id ||
-      line?.presentationParentLineId ||
-      nested?.presentation_parent_line_id ||
-      nested?.presentationParentLineId ||
-      ''
-    );
-    if (parentLineId) return parentLineId;
     const financeCaseId = trimStr(
       line?.finance_case_id ||
       line?.financeCaseId ||
@@ -50714,7 +50706,15 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       nested?.financeCaseId ||
       ''
     );
-    return financeCaseId ? `finance:${financeCaseId}:overpayment_recovery` : '';
+    if (financeCaseId) return `finance:${financeCaseId}:overpayment_recovery`;
+    const parentLineId = trimStr(
+      line?.presentation_parent_line_id ||
+      line?.presentationParentLineId ||
+      nested?.presentation_parent_line_id ||
+      nested?.presentationParentLineId ||
+      ''
+    );
+    return parentLineId;
   };
 
   const buildOverpaymentRecoveryDisplayLines = (sourceLines) => {
@@ -50841,11 +50841,88 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     }).filter((line) => isPlainObject(line));
   };
 
+  const buildOverpaymentRecoverySectionDisplayState = ({
+    readyLines = [],
+    caseLines = [],
+    blockedLines = []
+  } = {}) => {
+    const sections = {
+      READY_TO_PAY: asArray(readyLines).filter((line) => isPlainObject(line) && !isOverpaymentRecoveryLine(line)),
+      CASES_RESOLUTIONS: asArray(caseLines).filter((line) => isPlainObject(line) && !isOverpaymentRecoveryLine(line)),
+      BLOCKED_FOR_PAY: asArray(blockedLines).filter((line) => isPlainObject(line) && !isOverpaymentRecoveryLine(line))
+    };
+    const recoveryGroups = new Map();
+    const addRecoveryLines = (section, lines) => {
+      for (const line of asArray(lines)) {
+        if (!isPlainObject(line) || !isOverpaymentRecoveryLine(line)) continue;
+        const groupKey = getOverpaymentRecoveryPresentationGroupKey(line);
+        if (!groupKey) {
+          sections[section].push(line);
+          continue;
+        }
+        if (!recoveryGroups.has(groupKey)) {
+          recoveryGroups.set(groupKey, {
+            READY_TO_PAY: [],
+            CASES_RESOLUTIONS: [],
+            BLOCKED_FOR_PAY: []
+          });
+        }
+        recoveryGroups.get(groupKey)[section].push(line);
+      }
+    };
+
+    addRecoveryLines('READY_TO_PAY', readyLines);
+    addRecoveryLines('CASES_RESOLUTIONS', caseLines);
+    addRecoveryLines('BLOCKED_FOR_PAY', blockedLines);
+
+    for (const groupedSections of recoveryGroups.values()) {
+      const targetSection = groupedSections.CASES_RESOLUTIONS.length > 0
+        ? 'CASES_RESOLUTIONS'
+        : (groupedSections.READY_TO_PAY.length > 0 ? 'READY_TO_PAY' : 'BLOCKED_FOR_PAY');
+      const orderedGroupLines = [
+        ...groupedSections[targetSection],
+        ...groupedSections.READY_TO_PAY.filter((line) => !groupedSections[targetSection].includes(line)),
+        ...groupedSections.CASES_RESOLUTIONS.filter((line) => !groupedSections[targetSection].includes(line)),
+        ...groupedSections.BLOCKED_FOR_PAY.filter((line) => !groupedSections[targetSection].includes(line))
+      ];
+      const groupedLine = buildOverpaymentRecoveryDisplayLines(orderedGroupLines)[0];
+      if (isPlainObject(groupedLine)) {
+        const targetBlockedReasonCodes = uniqTrimmed(groupedSections[targetSection].flatMap((line) => {
+          const nested = getNestedLinePayload(line);
+          return [
+            ...asArray(line?.blocked_reason_codes),
+            ...asArray(line?.blockedReasonCodes),
+            ...asArray(nested?.blocked_reason_codes),
+            ...asArray(nested?.blockedReasonCodes)
+          ];
+        }));
+        const targetPresentationReason = trimStr(groupedSections[targetSection].map((line) => {
+          const nested = getNestedLinePayload(line);
+          return line?.presentation_reason || line?.presentationReason || nested?.presentation_reason || nested?.presentationReason || '';
+        }).find((value) => trimStr(value)) || '');
+        groupedLine.__presentation_render_section = targetSection;
+        groupedLine.blocked_reason_codes = targetBlockedReasonCodes;
+        groupedLine.presentation_reason = targetPresentationReason;
+        if (isPlainObject(groupedLine.row_json)) {
+          groupedLine.row_json.blocked_reason_codes = targetBlockedReasonCodes;
+          groupedLine.row_json.presentation_reason = targetPresentationReason;
+        }
+        sections[targetSection].push(groupedLine);
+      }
+    }
+
+    return {
+      readyLines: sections.READY_TO_PAY,
+      caseLines: sections.CASES_RESOLUTIONS,
+      blockedLines: sections.BLOCKED_FOR_PAY
+    };
+  };
+
   const getPreviewLineDisplayAmount = (line) => {
     const manualDebtRecovery = getManualDebtRecoveryPresentation(line);
     if (manualDebtRecovery?.no_available_funds) return -Math.abs(manualDebtRecovery.scheduled_due);
     const recovery = getOverpaymentRecoveryPresentation(line);
-    if (recovery && recovery.outstanding_total > 0) return -Math.abs(recovery.outstanding_total);
+    if (recovery) return recovery.recoverable_this_run > 0 ? -Math.abs(recovery.recoverable_this_run) : 0;
     return getLineSectionAmount(line);
   };
 
@@ -50874,11 +50951,14 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     if (!recovery) {
       return `${resolvedRateBadgeHtml(line, renderContextSection)}<div>${enc(fmtMoney(getLineSectionAmount(line)))}</div>`;
     }
+    const recoverableThisRun = Math.abs(recovery.recoverable_this_run);
+    const recoverySummary = recoverableThisRun > 0
+      ? `${fmtMoney(recoverableThisRun)} will be recovered from the total outstanding amount of ${fmtMoney(recovery.outstanding_total)}.`
+      : `No recovery can be made this pay run from the total outstanding amount of ${fmtMoney(recovery.outstanding_total)}.`;
     return `
       ${resolvedRateBadgeHtml(line, renderContextSection)}
-      <div>${enc(fmtMoney(-Math.abs(recovery.outstanding_total)))}</div>
-      <div class="mini" style="margin-top:3px;opacity:.8;white-space:normal;">Outstanding recovery</div>
-      <div class="mini" style="margin-top:2px;opacity:.8;white-space:normal;">Recoverable this pay run: ${enc(fmtMoney(recovery.recoverable_this_run))}</div>
+      <div>${enc(fmtMoney(-recoverableThisRun))}</div>
+      <div class="mini" style="margin-top:3px;opacity:.8;white-space:normal;">${enc(recoverySummary)}</div>
     `;
   };
 
@@ -53426,10 +53506,18 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     return out;
   };
   const payeeReadinessBlockedLines = collectPayeeReadinessBlockedLines();
-  const blockedLinesForDisplay = [
+  const blockedLinesForDisplayRaw = [
     ...blockedPreviewLines,
     ...payeeReadinessBlockedLines.filter((line) => rowMatchesActivePayFilters(line, 'BLOCKED_FOR_PAY'))
   ];
+  const overpaymentRecoveryDisplaySections = buildOverpaymentRecoverySectionDisplayState({
+    readyLines: readyPreviewLines,
+    caseLines: casePreviewLines,
+    blockedLines: blockedLinesForDisplayRaw
+  });
+  const readyPreviewLinesForDisplay = overpaymentRecoveryDisplaySections.readyLines;
+  const casePreviewLinesForDisplay = overpaymentRecoveryDisplaySections.caseLines;
+  const blockedLinesForDisplay = overpaymentRecoveryDisplaySections.blockedLines;
 
   const groupEntriesByCandidate = (arr) => {
     const map = new Map();
@@ -53909,14 +53997,14 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     previewRoot: pv,
     candidateRows: allCandidates,
     cache: componentStateCache,
-    caseLines: casePreviewLines
+    caseLines: casePreviewLinesForDisplay
   });
   const caseGroups = asArray(caseResolutionDisplayState?.caseGroups).filter((group) => isPlainObject(group));
   const casePreviewLinesEnriched = asArray(caseResolutionDisplayState?.casePreviewLinesEnriched).filter((line) => isPlainObject(line));
 
-  const readyLineAmountTotal = Math.round(readyPreviewLines.reduce((acc, line) => acc + toNum(getLineSectionAmount(line), 0), 0) * 100) / 100;
-  const blockedLineAmountTotal = Math.round(blockedLinesForDisplay.reduce((acc, line) => acc + toNum(getLineSectionAmount(line), 0), 0) * 100) / 100;
-  const readyLineCandidateIds = new Set(readyPreviewLines.map((line) => trimStr(line?.candidate_id)).filter(Boolean));
+  const readyLineAmountTotal = Math.round(readyPreviewLinesForDisplay.reduce((acc, line) => acc + toNum(getPreviewLineDisplayAmount(line), 0), 0) * 100) / 100;
+  const blockedLineAmountTotal = Math.round(blockedLinesForDisplay.reduce((acc, line) => acc + toNum(getPreviewLineDisplayAmount(line), 0), 0) * 100) / 100;
+  const readyLineCandidateIds = new Set(readyPreviewLinesForDisplay.map((line) => trimStr(line?.candidate_id)).filter(Boolean));
   const blockedLineCandidateIds = new Set(blockedLinesForDisplay.map((line) => trimStr(line?.candidate_id)).filter(Boolean));
   const readyPayeCandidateIds = new Set(readyPreviewLines.filter((line) => upperTrim(line?.pay_channel || candidateMetaById.get(trimStr(line?.candidate_id))?.current_pay_method || '') === 'PAYE').map((line) => trimStr(line?.candidate_id)).filter(Boolean));
   const readyUmbrellaCandidateIds = new Set(readyPreviewLines.filter((line) => {
@@ -54637,12 +54725,12 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   };
 
   const readyNonTimesheetDisplayLines = buildOverpaymentRecoveryDisplayLines(
-    readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT')
+    readyPreviewLinesForDisplay.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT')
   );
-  const readyDisplayLineCount = readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT').length
+  const readyDisplayLineCount = readyPreviewLinesForDisplay.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT').length
     + readyNonTimesheetDisplayLines.length;
   const readyCanonicalRowsHtml = [
-    renderReadyTimesheetGroupedRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
+    renderReadyTimesheetGroupedRows(readyPreviewLinesForDisplay.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
     renderSimplePreviewRows(readyNonTimesheetDisplayLines, null, 'READY_TO_PAY')
   ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(readyEmptyMessage())}</td></tr>`;
 
@@ -88409,6 +88497,50 @@ function attachBankingModalDelegatedHandlers() {
     } catch {}
   };
 
+  const setPreviewSelectionControlsBusy = (busy) => {
+    try {
+      const root = targetEl;
+      if (!root || typeof root.querySelectorAll !== 'function') return;
+      const controls = root.querySelectorAll(
+        '[data-action="banking:pay:togglePreviewRow"], ' +
+        '[data-action="banking:pay:toggleTimesheetPreviewGroup"], ' +
+        '[data-action="banking:pay:selectAllPreviewRows"], ' +
+        '[data-action="banking:pay:clearAllPreviewRows"]'
+      );
+      for (const control of controls) {
+        if (busy) {
+          if (control.disabled !== true) {
+            control.setAttribute('data-banking-selection-busy-owned', '1');
+            control.disabled = true;
+          }
+          control.setAttribute('aria-busy', 'true');
+        } else {
+          if (control.getAttribute('data-banking-selection-busy-owned') === '1') {
+            control.disabled = false;
+            control.removeAttribute('data-banking-selection-busy-owned');
+          }
+          control.removeAttribute('aria-busy');
+        }
+      }
+    } catch {}
+  };
+
+  const runPreviewSelectionMutation = async (mutation) => {
+    if (targetEl.getAttribute('data-banking-selection-mutation-pending') === '1') {
+      return false;
+    }
+    targetEl.setAttribute('data-banking-selection-mutation-pending', '1');
+    setPreviewSelectionControlsBusy(true);
+    try {
+      await mutation();
+      return true;
+    } finally {
+      targetEl.removeAttribute('data-banking-selection-mutation-pending');
+      setPreviewSelectionControlsBusy(false);
+      syncTimesheetGroupCheckboxes(targetEl);
+    }
+  };
+
   try {
     const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
     if (mc && mc.__bankingDelegated && mc.__bankingDelegated.targetEl === targetEl) {
@@ -94419,10 +94551,11 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (kind !== 'change') return;
       const previewRowIds = parsePreviewRowIdsAttribute(ds('previewRowIds') || dget('data-preview-row-ids'));
       if (!previewRowIds.length) return;
-      const currentState = String(ds('groupSelectionState') || dget('data-group-selection-state') || '').trim().toUpperCase();
-      const selectAllChildren = currentState !== 'ALL';
-      await setPreviewRowsSelection(previewRowIds, selectAllChildren);
-      await safeRerender(null);
+      const selectAllChildren = !!(el && el.checked === true);
+      await runPreviewSelectionMutation(async () => {
+        await setPreviewRowsSelection(previewRowIds, selectAllChildren);
+        await safeRerender(null);
+      });
       return;
     }
 
@@ -94468,25 +94601,31 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (kind !== 'change') return;
       const previewRowId = String(ds('previewRowId') || dget('data-preview-row-id') || '').trim();
       const checked = !!(el && el.checked === true);
-      try {
-        await togglePreviewRowSelection(previewRowId, checked);
-      } finally {
-        await safeRerender(null);
-      }
+      await runPreviewSelectionMutation(async () => {
+        try {
+          await togglePreviewRowSelection(previewRowId, checked);
+        } finally {
+          await safeRerender(null);
+        }
+      });
       return;
     }
 
     if (a === 'banking:pay:selectAllPreviewRows') {
       if (kind !== 'click') return;
-      await setPreviewRowsGlobalSelection(true);
-      await safeRerender(null);
+      await runPreviewSelectionMutation(async () => {
+        await setPreviewRowsGlobalSelection(true);
+        await safeRerender(null);
+      });
       return;
     }
 
     if (a === 'banking:pay:clearAllPreviewRows') {
       if (kind !== 'click') return;
-      await setPreviewRowsGlobalSelection(false);
-      await safeRerender(null);
+      await runPreviewSelectionMutation(async () => {
+        await setPreviewRowsGlobalSelection(false);
+        await safeRerender(null);
+      });
       return;
     }
 
@@ -120398,6 +120537,22 @@ function createBankingPayGraphCloneV1() {
   return clone;
 }
 
+function didPayWorkbenchSessionIdentityChangeV1(previous, current) {
+  const before = (previous && typeof previous === 'object') ? previous : {};
+  const after = (current && typeof current === 'object') ? current : {};
+  const changed = (nextValue, previousValue) => {
+    const next = String(nextValue || '').trim();
+    const prior = String(previousValue || '').trim();
+    return !!(next && prior && next !== prior);
+  };
+  return !!(
+    changed(after.pay_date, before.pay_date) ||
+    changed(after.week_ending_cutoff_date, before.week_ending_cutoff_date) ||
+    changed(after.session_id, before.session_id) ||
+    changed(after.session_signature, before.session_signature)
+  );
+}
+
 
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -121676,7 +121831,6 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const previousWeekEndingCutoffDate = trimStr(wiz.week_ending_cutoff_date || st.pay?.week_ending_cutoff_date || wiz.workbench?.week_ending_cutoff_date || wiz.decisions?.week_ending_cutoff_date || '');
   const previousSessionId = trimStr(wiz.workbench?.session_id || wiz.workbench?.sessionId || wiz.decisions?.session_id || wiz.decisions?.sessionId || '');
   const previousSessionSignature = trimStr(wiz.workbench?.session_signature || wiz.workbench?.sessionSignature || wiz.decisions?.session_signature || wiz.decisions?.sessionSignature || '');
-  const previousSessionVersion = wiz.workbench?.session_version ?? wiz.workbench?.sessionVersion ?? wiz.decisions?.session_version ?? wiz.decisions?.sessionVersion ?? null;
   const canonicalPayDate = trimStr(responseObj.pay_date || responseObj.session?.pay_date || previewObj.pay_date || '');
   const canonicalWeekEndingCutoffDate = trimStr(
     responseObj.week_ending_cutoff_date ||
@@ -121702,13 +121856,20 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   );
   const sessionVersionRaw = responseObj.session_version ?? responseObj.sessionVersion ?? responseObj.session?.session_version ?? responseObj.session?.sessionVersion ?? previewObj.session_version ?? previewObj.sessionVersion ?? null;
   const canonicalSessionSignature = trimStr(responseObj.session?.session_signature || responseObj.session?.sessionSignature || responseObj.session_signature || responseObj.sessionSignature || previewObj.session_signature || previewObj.sessionSignature || '');
-  const activeSessionChanged = !!(
-    (canonicalPayDate && previousPayDate && canonicalPayDate !== previousPayDate) ||
-    (canonicalWeekEndingCutoffDate && previousWeekEndingCutoffDate && canonicalWeekEndingCutoffDate !== previousWeekEndingCutoffDate) ||
-    (sessionId && previousSessionId && sessionId !== previousSessionId) ||
-    (canonicalSessionSignature && previousSessionSignature && canonicalSessionSignature !== previousSessionSignature) ||
-    (sessionVersionRaw !== null && sessionVersionRaw !== undefined && previousSessionVersion !== null && previousSessionVersion !== undefined && String(sessionVersionRaw) !== String(previousSessionVersion))
-  );
+  // A selection mutation advances the version of the same workbench session
+  // while returning only the section that changed. Only a genuine session
+  // identity/context change may clear unfetched preview sections.
+  const activeSessionChanged = didPayWorkbenchSessionIdentityChangeV1({
+    pay_date: previousPayDate,
+    week_ending_cutoff_date: previousWeekEndingCutoffDate,
+    session_id: previousSessionId,
+    session_signature: previousSessionSignature
+  }, {
+    pay_date: canonicalPayDate,
+    week_ending_cutoff_date: canonicalWeekEndingCutoffDate,
+    session_id: sessionId,
+    session_signature: canonicalSessionSignature
+  });
   const progressObj = isPlainObject(responseObj.progress)
     ? responseObj.progress
     : (isPlainObject(responseObj.progress_json)

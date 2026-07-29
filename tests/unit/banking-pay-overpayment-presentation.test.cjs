@@ -50,7 +50,7 @@ function installHarness() {
     fmtMoney: (value) => Number(value || 0).toFixed(2),
     resolvedRateBadgeHtml: () => ''
   };
-  vm.runInNewContext(`${helperSource}\nthis.__overpaymentHelpers = { getOverpaymentRecoveryPresentation, getManualDebtRecoveryPresentation, buildOverpaymentRecoveryDisplayLines, getPreviewLineDisplayAmount, renderPreviewLineTypeHtml, renderPreviewLineAmountHtml };`, context, {
+  vm.runInNewContext(`${helperSource}\nthis.__overpaymentHelpers = { getOverpaymentRecoveryPresentation, getManualDebtRecoveryPresentation, buildOverpaymentRecoveryDisplayLines, buildOverpaymentRecoverySectionDisplayState, getPreviewLineDisplayAmount, renderPreviewLineTypeHtml, renderPreviewLineAmountHtml };`, context, {
     filename: 'banking-pay-overpayment-presentation-helpers.js'
   });
   return context.__overpaymentHelpers;
@@ -69,17 +69,17 @@ const eduardoRecoveryRow = {
   ]
 };
 
-test('shows the full negative outstanding recovery while retaining a zero current-run recovery', () => {
+test('shows zero recoverable now and explains the full outstanding recovery separately', () => {
   const helpers = installHarness();
   const presentation = helpers.getOverpaymentRecoveryPresentation(eduardoRecoveryRow);
 
   assert.equal(presentation.outstanding_total, 15.84);
   assert.equal(presentation.recoverable_this_run, 0);
   assert.equal(presentation.no_available_funds, true);
-  assert.equal(helpers.getPreviewLineDisplayAmount(eduardoRecoveryRow), -15.84);
+  assert.equal(helpers.getPreviewLineDisplayAmount(eduardoRecoveryRow), 0);
   assert.match(helpers.renderPreviewLineTypeHtml(eduardoRecoveryRow), /No available funds to recover this yet\./);
-  assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), /-15\.84/);
-  assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), /Recoverable this pay run: 0\.00/);
+  assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), />0\.00</);
+  assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), /No recovery can be made this pay run from the total outstanding amount of 15\.84\./);
 });
 
 test('shows scheduled manual-debt recovery separately from a zero current-run recovery', () => {
@@ -218,8 +218,89 @@ test('caps a grouped recovery breakdown to the row-level pre-draft headroom', ()
     Array.from(presentation.components, (component) => component.recoverable_this_run),
     [79.72, 87.53, 87.53, 56.08]
   );
-  assert.match(helpers.renderPreviewLineAmountHtml(grouped), /-1083\.52/);
-  assert.match(helpers.renderPreviewLineAmountHtml(grouped), /Recoverable this pay run: 310\.86/);
+  assert.match(helpers.renderPreviewLineAmountHtml(grouped), /-310\.86/);
+  assert.match(helpers.renderPreviewLineAmountHtml(grouped), /310\.86 will be recovered from the total outstanding amount of 1083\.52\./);
+});
+
+test('presents one finance-case recovery in Ready while preserving only selectable economic row ids', () => {
+  const helpers = installHarness();
+  const readyComponent = {
+    line_type: 'OVERPAYMENT_RECOVERY',
+    presentation_parent_line_id: 'finance:case-kier:overpayment_recovery',
+    finance_case_id: 'case-kier',
+    preview_row_id: 'ready-row',
+    amount_ex_vat: '-1.00',
+    selection_allowed: true,
+    case_components: [{
+      finance_component_id: 'component-ready',
+      component_key_type: 'EXPENSE_CODE',
+      component_key_value: 'ACCOMMODATION',
+      remaining_source_amount: '221.73',
+      preview_due_amount_ex_vat: '1.00'
+    }]
+  };
+  const blockedComponents = [
+    ['blocked-1', 'component-1', '243.47'],
+    ['blocked-2', 'component-2', '243.47'],
+    ['blocked-3', 'component-3', '293.49'],
+    ['blocked-4', 'component-4', '352.22']
+  ].map(([previewRowId, financeComponentId, outstanding]) => ({
+    line_type: 'OVERPAYMENT_RECOVERY',
+    presentation_parent_line_id: `component-parent:${financeComponentId}`,
+    finance_case_id: 'case-kier',
+    preview_row_id: previewRowId,
+    amount_ex_vat: '0.00',
+    selection_allowed: false,
+    presentation_reason: 'NO_PAY_HEADROOM',
+    case_components: [{
+      finance_component_id: financeComponentId,
+      component_key_type: 'TS_DAY',
+      component_key_value: previewRowId,
+      remaining_source_amount: outstanding,
+      preview_due_amount_ex_vat: '0.00'
+    }]
+  }));
+
+  const state = helpers.buildOverpaymentRecoverySectionDisplayState({
+    readyLines: [readyComponent],
+    blockedLines: blockedComponents
+  });
+
+  assert.equal(state.readyLines.length, 1);
+  assert.equal(state.blockedLines.length, 0);
+  assert.deepEqual(Array.from(state.readyLines[0].__presentation_group_preview_row_ids), [
+    'ready-row',
+    'blocked-1',
+    'blocked-2',
+    'blocked-3',
+    'blocked-4'
+  ]);
+  assert.deepEqual(Array.from(state.readyLines[0].__presentation_group_selectable_row_ids), ['ready-row']);
+  const presentation = helpers.getOverpaymentRecoveryPresentation(state.readyLines[0]);
+  assert.equal(presentation.outstanding_total, 1354.38);
+  assert.equal(presentation.recoverable_this_run, 1);
+  assert.equal(presentation.no_available_funds, false);
+  assert.equal(helpers.getPreviewLineDisplayAmount(state.readyLines[0]), -1);
+  assert.match(helpers.renderPreviewLineAmountHtml(state.readyLines[0]), /1\.00 will be recovered from the total outstanding amount of 1354\.38\./);
+});
+
+test('presentation grouping cannot broaden the authoritative draft selection', () => {
+  const selectionStart = mainSource.indexOf('const localSelectedCurrentEligibleReadyRows =');
+  const displayStart = mainSource.indexOf('const overpaymentRecoveryDisplaySections =');
+  const createGateStart = mainSource.indexOf('const authoritativeSelectedCurrentEligibleReadyRowCount =');
+  assert.ok(selectionStart >= 0 && displayStart >= 0 && createGateStart >= 0);
+  assert.match(
+    mainSource.slice(selectionStart, createGateStart),
+    /localSelectedCurrentEligibleReadyRows = readyPreviewLines\.filter/
+  );
+  assert.doesNotMatch(
+    mainSource.slice(selectionStart, createGateStart),
+    /localSelectedCurrentEligibleReadyRows = readyPreviewLinesForDisplay\.filter/
+  );
+  assert.match(
+    mainSource,
+    /__presentation_group_selectable_row_ids: selectablePreviewRowIds/
+  );
 });
 
 test('gives terminal failure precedence over stale pending state and de-duplicates failure levels', () => {

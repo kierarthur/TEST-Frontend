@@ -9,7 +9,7 @@ const main = fs.readFileSync(path.join(root, 'js/main.js'), 'utf8');
 
 test('Banking Pay graph cloning preserves shared aliases and cycles', () => {
   const start = main.indexOf('function createBankingPayGraphCloneV1()');
-  const end = main.indexOf('\n\nfunction applyPayWorkbenchPreviewToState', start);
+  const end = main.indexOf('\n\nfunction didPayWorkbenchSessionIdentityChangeV1', start);
   assert.ok(start >= 0);
   assert.ok(end > start);
 
@@ -47,6 +47,38 @@ test('full and candidate preview state application use the bounded graph clone',
   assert.match(mergeBody, /const cloneJson = createBankingPayGraphCloneV1\(\);/);
   assert.doesNotMatch(fullBody, /JSON\.parse\(JSON\.stringify\(value\)\)/);
   assert.doesNotMatch(mergeBody, /JSON\.parse\(JSON\.stringify\(value\)\)/);
+});
+
+test('a version-only selection update preserves unfetched workbench sections', () => {
+  const start = main.indexOf('function didPayWorkbenchSessionIdentityChangeV1(');
+  const end = main.indexOf('\n\nfunction applyPayWorkbenchPreviewToState', start);
+  assert.ok(start >= 0);
+  assert.ok(end > start);
+  const helperSource = main.slice(start, end);
+  const result = vm.runInNewContext(`
+    ${helperSource}
+    ({
+      sameIdentity: didPayWorkbenchSessionIdentityChangeV1(
+        { pay_date: '2026-07-24', week_ending_cutoff_date: '2026-07-19', session_id: 'session-1', session_signature: 'signature-1', session_version: 7 },
+        { pay_date: '2026-07-24', week_ending_cutoff_date: '2026-07-19', session_id: 'session-1', session_signature: 'signature-1', session_version: 8 }
+      ),
+      replacementIdentity: didPayWorkbenchSessionIdentityChangeV1(
+        { pay_date: '2026-07-24', week_ending_cutoff_date: '2026-07-19', session_id: 'session-1', session_signature: 'signature-1' },
+        { pay_date: '2026-07-24', week_ending_cutoff_date: '2026-07-19', session_id: 'session-2', session_signature: 'signature-2' }
+      )
+    });
+  `);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result)),
+    { sameIdentity: false, replacementIdentity: true }
+  );
+
+  const applyStart = main.indexOf('function applyPayWorkbenchPreviewToState(');
+  const applyEnd = main.indexOf('\nfunction ', applyStart + 1);
+  const applyBody = main.slice(applyStart, applyEnd);
+  assert.match(applyBody, /activeSessionChanged = didPayWorkbenchSessionIdentityChangeV1/);
+  assert.doesNotMatch(applyBody, /activeSessionChanged[\s\S]{0,500}sessionVersionRaw/);
+  assert.match(applyBody, /mergeSectionRowsPreservingUnfetchedSections\(previousRowsBySection, incomingPreviewPageRowsBySection, fetchedPreviewSections\)/);
 });
 
 test('candidate refresh builds one successor graph without cloning the installed envelope first', () => {
@@ -115,6 +147,24 @@ test('Banking modal dismissal releases the paged workbench graph', () => {
   assert.match(body, /payState\.draftWizard = null/);
   assert.match(body, /st\.settings\.raw = null/);
   assert.match(body, /st\.caps\.raw = null/);
+});
+
+test('Banking Pay selection changes are serialized until the server result is adopted', () => {
+  const start = main.indexOf('function attachBankingModalDelegatedHandlers()');
+  const end = main.indexOf('function timesheetDiagSanitiseForConsole', start);
+  assert.ok(start >= 0);
+  assert.ok(end > start);
+  const body = main.slice(start, end);
+
+  assert.match(body, /const runPreviewSelectionMutation = async \(mutation\) => \{/);
+  assert.match(body, /data-banking-selection-mutation-pending/);
+  assert.match(body, /setPreviewSelectionControlsBusy\(true\)/);
+  assert.match(body, /setPreviewSelectionControlsBusy\(false\)/);
+  assert.match(body, /const selectAllChildren = !!\(el && el\.checked === true\)/);
+  assert.doesNotMatch(
+    body,
+    /const currentState = String\(ds\('groupSelectionState'\)[\s\S]{0,200}const selectAllChildren = currentState !== 'ALL'/
+  );
 });
 
 test('modal global listener cleanup retains the existing drag cleanup chain', () => {

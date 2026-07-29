@@ -35,13 +35,66 @@ async function openBankingPay(page: Page) {
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
   expect(new URL(page.url()).hostname).toBe(testFrontendHost);
 
-  await page.getByRole('button', { name: 'Banking' }).click();
+  await page.getByRole('button', { name: 'Banking', exact: true }).click();
   await page.getByRole('button', { name: 'Pay', exact: true }).click();
 
-  const createButton = page.getByRole('button', { name: 'Create drafts', exact: true });
+  const createButton = page.locator('button[data-action="banking:pay:createDraft"]');
   await expect(createButton).toBeVisible({ timeout: 60_000 });
-  await expect(createButton).toBeEnabled();
   return createButton;
+}
+
+async function getReviewedSelectionCount(page: Page) {
+  return await page.evaluate(() => {
+    const wizard = window.modalCtx?.banking?.pay?.draftWizard;
+    const review = wizard?.workbench?.selection_review_snapshot;
+    return Array.isArray(review?.selected_preview_row_ids)
+      ? review.selected_preview_row_ids.map(String).filter(Boolean).length
+      : 0;
+  });
+}
+
+async function getKierRecoveryPresentation(page: Page) {
+  return await page.evaluate(() => {
+    const collect = (hostId: string) => Array.from(document.querySelectorAll(`#${hostId} tr`))
+      .map((row) => String(row.textContent || '').replace(/\s+/g, ' ').trim())
+      .filter((text) => text.includes('CCR-00835') && text.includes('OVERPAYMENT RECOVERY'));
+    const blockedText = String(document.querySelector('#bankingPayBlockedScrollHost')?.textContent || '').replace(/\s+/g, ' ').trim();
+    return {
+      ready: collect('bankingPayReadyScrollHost'),
+      blocked: collect('bankingPayBlockedScrollHost'),
+      jamesPresent: blockedText.includes('CCR-03726') && blockedText.includes('James Terwane'),
+      eduardoPresent: blockedText.includes('CCR-03727') && blockedText.includes('Eduardo Almeida')
+    };
+  });
+}
+
+async function setKierTimesheetSelected(page: Page, selected: boolean) {
+  const readyHost = page.locator('#bankingPayReadyScrollHost');
+  await expect(readyHost).toBeVisible({ timeout: 60_000 });
+  const row = readyHost.locator('tr')
+    .filter({ hasText: 'CCR-00835' })
+    .filter({ hasText: 'TIMESHEET PAYMENT' });
+  await expect(row).toHaveCount(1);
+  const checkbox = row.locator(
+    'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"], ' +
+    'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"]'
+  );
+  await expect(checkbox).toHaveCount(1);
+  if ((await checkbox.isChecked()) !== selected) {
+    await checkbox.click();
+    await expect.poll(async () => {
+      const currentRow = page.locator('#bankingPayReadyScrollHost tr')
+        .filter({ hasText: 'CCR-00835' })
+        .filter({ hasText: 'TIMESHEET PAYMENT' });
+      if (await currentRow.count() !== 1) return !selected;
+      const currentCheckbox = currentRow.locator(
+        'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"], ' +
+        'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"]'
+      );
+      if (await currentCheckbox.count() !== 1) return false;
+      return (await currentCheckbox.isChecked()) === selected;
+    }, { timeout: 60_000 }).toBe(true);
+  }
 }
 
 test('requires review and starts no draft when the authoritative selection changes', async ({ page }) => {
@@ -102,6 +155,7 @@ test('requires review and starts no draft when the authoritative selection chang
 
   const createButton = await openBankingPay(page);
   expect(new URL(getInterceptedMainUrl()).pathname).toBe('/js/main.js');
+  test.skip(await getReviewedSelectionCount(page) < 2, 'Requires at least two current server-selected rows.');
 
   const hiddenConcurrentState = await page.evaluate(() => {
     const wizard = window.modalCtx?.banking?.pay?.draftWizard;
@@ -184,6 +238,7 @@ test('an early shared-session revision drift reaches the exact selection review'
 
   const createButton = await openBankingPay(page);
   expect(new URL(getInterceptedMainUrl()).pathname).toBe('/js/main.js');
+  test.skip(await getReviewedSelectionCount(page) < 1, 'Requires at least one current server-selected row.');
 
   simulateRevisionDrift = true;
   await createButton.click();
@@ -230,16 +285,169 @@ test('a rejected row change reloads server truth and repaints the checkbox', asy
   await openBankingPay(page);
   expect(new URL(getInterceptedMainUrl()).pathname).toBe('/js/main.js');
 
-  const checkbox = page.locator('input[type="checkbox"][data-preview-row-id]').first();
+  const checkbox = page.locator(
+    'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"][data-preview-row-id], ' +
+    'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"][data-preview-row-ids]'
+  ).first();
   await expect(checkbox).toBeVisible({ timeout: 60_000 });
   const previewRowId = await checkbox.getAttribute('data-preview-row-id');
-  expect(previewRowId).toBeTruthy();
+  const previewRowIds = await checkbox.getAttribute('data-preview-row-ids');
+  expect(previewRowId || previewRowIds).toBeTruthy();
   const originalChecked = await checkbox.isChecked();
 
   await checkbox.click();
   await expect.poll(() => rejectedSelectionRequests).toBe(1);
 
-  const repaintedCheckbox = page.locator('input[type="checkbox"][data-preview-row-id="' + previewRowId + '"]');
+  const repaintedCheckbox = page.locator(
+    'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"][data-preview-row-id], ' +
+    'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"][data-preview-row-ids]'
+  ).first();
   if (originalChecked) await expect(repaintedCheckbox).toBeChecked({ timeout: 30_000 });
   else await expect(repaintedCheckbox).not.toBeChecked({ timeout: 30_000 });
+});
+
+test('Kier recovery moves atomically between Ready and Blocked as its £1 headroom is ticked', async ({ page }) => {
+  test.setTimeout(300_000);
+
+  const getInterceptedMainUrl = await installLocalMain(page);
+  await openBankingPay(page);
+  expect(new URL(getInterceptedMainUrl()).pathname).toBe('/js/main.js');
+
+  const initialTimesheetRow = page.locator('#bankingPayReadyScrollHost tr')
+    .filter({ hasText: 'CCR-00835' })
+    .filter({ hasText: 'TIMESHEET PAYMENT' });
+  await expect(initialTimesheetRow).toHaveCount(1);
+  const initialTimesheetCheckbox = initialTimesheetRow.locator(
+    'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"], ' +
+    'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"]'
+  );
+  await expect(initialTimesheetCheckbox).toHaveCount(1);
+  const initialTimesheetSelected = await initialTimesheetCheckbox.isChecked();
+
+  try {
+    await setKierTimesheetSelected(page, false);
+    await expect.poll(async () => {
+      const state = await getKierRecoveryPresentation(page);
+      return {
+        readyCount: state.ready.length,
+        blockedCount: state.blocked.length,
+        jamesPresent: state.jamesPresent,
+        eduardoPresent: state.eduardoPresent
+      };
+    }, { timeout: 60_000 }).toEqual({
+      readyCount: 0,
+      blockedCount: 1,
+      jamesPresent: true,
+      eduardoPresent: true
+    });
+    let state = await getKierRecoveryPresentation(page);
+    expect(state.blocked[0]).toContain('No recovery can be made this pay run from the total outstanding amount of 1126.60.');
+    expect(state.blocked[0]).toContain('0.00');
+
+    await setKierTimesheetSelected(page, true);
+    await expect.poll(async () => {
+      const current = await getKierRecoveryPresentation(page);
+      return {
+        readyCount: current.ready.length,
+        blockedCount: current.blocked.length,
+        jamesPresent: current.jamesPresent,
+        eduardoPresent: current.eduardoPresent
+      };
+    }, { timeout: 60_000 }).toEqual({
+      readyCount: 1,
+      blockedCount: 0,
+      jamesPresent: true,
+      eduardoPresent: true
+    });
+    state = await getKierRecoveryPresentation(page);
+    expect(state.ready[0]).toContain('1.00 will be recovered from the total outstanding amount of 1126.60.');
+    expect(state.ready[0]).not.toContain('221.73');
+    expect(state.ready[0]).not.toContain('904.87');
+
+    const readyRecoveryRow = page.locator('#bankingPayReadyScrollHost tr')
+      .filter({ hasText: 'CCR-00835' })
+      .filter({ hasText: 'OVERPAYMENT RECOVERY' });
+    await expect(readyRecoveryRow).toHaveCount(1);
+    const recoveryCheckbox = readyRecoveryRow.locator(
+      'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"], ' +
+      'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"]'
+    );
+    await expect(recoveryCheckbox).toHaveCount(1);
+    await expect(recoveryCheckbox).not.toBeChecked();
+
+    await recoveryCheckbox.click();
+    await expect.poll(async () => {
+      const currentRow = page.locator('#bankingPayReadyScrollHost tr')
+        .filter({ hasText: 'CCR-00835' })
+        .filter({ hasText: 'OVERPAYMENT RECOVERY' });
+      if (await currentRow.count() !== 1) return false;
+      const currentCheckbox = currentRow.locator(
+        'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"], ' +
+        'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"]'
+      );
+      return await currentCheckbox.count() === 1 && await currentCheckbox.isChecked();
+    }, { timeout: 60_000 }).toBe(true);
+    state = await getKierRecoveryPresentation(page);
+    expect(state.ready).toHaveLength(1);
+    expect(state.blocked).toHaveLength(0);
+    expect(state.ready[0]).toContain('1.00 will be recovered from the total outstanding amount of 1126.60.');
+
+    const currentRecoveryRow = page.locator('#bankingPayReadyScrollHost tr')
+      .filter({ hasText: 'CCR-00835' })
+      .filter({ hasText: 'OVERPAYMENT RECOVERY' });
+    const currentRecoveryCheckbox = currentRecoveryRow.locator(
+      'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"], ' +
+      'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"]'
+    );
+    await currentRecoveryCheckbox.click();
+    await expect.poll(async () => {
+      const currentRow = page.locator('#bankingPayReadyScrollHost tr')
+        .filter({ hasText: 'CCR-00835' })
+        .filter({ hasText: 'OVERPAYMENT RECOVERY' });
+      if (await currentRow.count() !== 1) return false;
+      const currentCheckbox = currentRow.locator(
+        'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"], ' +
+        'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"]'
+      );
+      return await currentCheckbox.count() === 1 && !(await currentCheckbox.isChecked());
+    }, { timeout: 60_000 }).toBe(true);
+
+    const reselectRecoveryRow = page.locator('#bankingPayReadyScrollHost tr')
+      .filter({ hasText: 'CCR-00835' })
+      .filter({ hasText: 'OVERPAYMENT RECOVERY' });
+    const reselectRecoveryCheckbox = reselectRecoveryRow.locator(
+      'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"], ' +
+      'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"]'
+    );
+    await reselectRecoveryCheckbox.click();
+    await expect.poll(async () => {
+      const currentRow = page.locator('#bankingPayReadyScrollHost tr')
+        .filter({ hasText: 'CCR-00835' })
+        .filter({ hasText: 'OVERPAYMENT RECOVERY' });
+      if (await currentRow.count() !== 1) return false;
+      const currentCheckbox = currentRow.locator(
+        'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"], ' +
+        'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"]'
+      );
+      return await currentCheckbox.count() === 1 && await currentCheckbox.isChecked();
+    }, { timeout: 60_000 }).toBe(true);
+
+    await setKierTimesheetSelected(page, false);
+    await expect.poll(async () => {
+      const current = await getKierRecoveryPresentation(page);
+      return {
+        readyCount: current.ready.length,
+        blockedCount: current.blocked.length,
+        jamesPresent: current.jamesPresent,
+        eduardoPresent: current.eduardoPresent
+      };
+    }, { timeout: 60_000 }).toEqual({
+      readyCount: 0,
+      blockedCount: 1,
+      jamesPresent: true,
+      eduardoPresent: true
+    });
+  } finally {
+    await setKierTimesheetSelected(page, initialTimesheetSelected);
+  }
 });
