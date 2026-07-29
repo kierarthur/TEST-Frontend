@@ -339,4 +339,1300 @@
       return [];
     }
     try {
-      sessionStorage.removeItem(LEGA×žxÒÚ$z{-®éÜj×54”ärr’°¢F‡&÷ræWrW'&÷"†F†R—77VVBÆVvÂFö7VÖVçB6ææ÷B&R÷VæVB‚G¶W'&÷$6öFWÒ’æ“°¢Ð¢F‡&÷ræWrW'&÷"†W'&÷$6öFR“°¢Ð ¢7–æ2gVæ7F–öâ÷VåF–ÖW6†VWDFö7VÖVçEc‚‡F–ÖW6†VWD–BÂ÷F–öç2Ò·Ò’°¢6öç7B6æöæ–6Ä–BÒ6ÆVâ‡F–ÖW6†VWD–B’çFôÆ÷vW$66R‚“°¢–b‚UT”Eõ$RçFW7B†6æöæ–6Ä–B’’F‡&÷ræWrW'&÷"‚uD”ÔU4„TUEô”Eô”ådÄ”Br“°¢6öç7BÖöFÄ7G‚Ò7F—fT–çfö–6Uf–WvW'2ævWB†6æöæ–6Ä–B’ÇÂ²–çfö–6T7–æ3¢·ÒÓ°¢6öç7B&WF–æVBÒ4ö&¦V7B†ÖöFÄ7G‚æ–çfö–6T7–æ3òçf–WvW%÷&WVW7B“°¢6öç7B6öÖÖæEFö¶VâÒ6ÆVâ†÷F–öç2æ6öÖÖæE÷Fö¶Vâ¢ÇÂ‡&WF–æVBæ÷Vâbb&WF–æVBæVçF—G•ö–BÓÓÒ6æöæ–6Ä–Bò6ÆVâ‡&WF–æVBæ6öÖÖæE÷Fö¶Vâ’¢rr¢ÇÂ7'—Fòç&æFöÕUT”B‚“°¢6öç7B&WVW7E6W&–ÂÒ÷Vå&W&–æt–çfö–6Uf–WvW"€¢ÖöFÄ7G‚À¢uD”ÔU4„TUBrÀ¢6æöæ–6Ä–BÀ¢uD”ÔU4„TUBrÀ¢6öÖÖæEFö¶Và¢“°¢ÆWB&W7öç6S°¢G'’°¢&W7öç6RÒv—Bv–æF÷ræWF„fWF6‚†–çfö–6T’†ö’÷F–ÖW6†VWG2òG¶Væ6öFUU$”6ö×öæVçB†6æöæ–6Ä–B—Ò÷Ff’Â°¢ÖWF†öC¢uõ5BrÀ¢†VFW'3¢²v6öçFVçB×G—Rs¢vÆ–6F–öâö§6öârÂv–FV×÷FVæ7’Ö¶W’s¢6öÖÖæEFö¶VâÒÀ¢&öG“¢¥4ôâç7G&–æv–g’‡²6öÖÖæE÷Fö¶Vã¢6öÖÖæEFö¶VâÂ&–÷&—G•÷&V6öã¢ud”UuôäõrrÒ’À¢6–væÃ¢ÖöFÄ7G‚æ–çfö–6T7–æ2çf–WvW%÷&WVW7Bæ&÷'Eö6öçG&öÆÆW"ç6–væÀ¢Ò“°¢Ò6F6‚†W'&÷"’°¢6öç7Bf–WvW"Ò4ö&¦V7B†ÖöFÄ7G‚æ–çfö–6T7–æ3òçf–WvW%÷&WVW7B“°¢–b‡f–WvW"ç&WVW7E÷6W&–ÂÓÓÒ&WVW7E6W&–Â’°¢f–WvW"çf–WvW%÷7FFRÒt$Äô4´TBs°¢f–WvW"ç7FGW5öÖW76vRÒuF–ÖW6†VWBFö7VÖVçBf–ÆVBs°¢f–WvW"æW'&÷"Ò6ÆVâ†W'&÷#òæÖW76vRÇÂW'&÷"“°¢&W–çD–çfö–6T7–æ5f–WvW"†ÖöFÄ7G‚“°¢Ð¢F‡&÷rW'&÷#°¢Ð¢6öç7B–ÆöBÒv—B&W7öç6Ræ§6öâ‚’æ6F6‚‚‚’Óâ‡·Ò’“°¢6öç7Bf–WvW"Ò4ö&¦V7B†ÖöFÄ7G‚æ–çfö–6T7–æ3òçf–WvW%÷&WVW7B“°¢6öç7B7W'&VçE&WVW7BÒf–WvW"æ÷Và¢bbf–WvW"ç&WVW7E÷6W&–ÂÓÓÒ&WVW7E6W&–À¢bbf–WvW"æVçF—G•÷G—RÓÓÒuD”ÔU4„TUBp¢bbf–WvW"æVçF—G•ö–BÓÓÒ6æöæ–6Ä–C°¢–b†6ÆVâ‡–ÆöBæ6öçG&7E÷fW'6–öâ’ÓÒt”ådô”4Uõd”UtU%õc"r’°¢–b†7W'&VçE&WVW7B’°¢f–WvW"çf–WvW%÷7FFRÒt$Äô4´TBs°¢f–WvW"ç7FGW5öÖW76vRÒuF–ÖW6†VWBFö7VÖVçBf–ÆVBs°¢f–WvW"æW'&÷"Òt”ådô”4Uõd”UtU%ô4ôåE$5EôÔ•4ÔD4‚s°¢&W–çD–çfö–6T7–æ5f–WvW"†ÖöFÄ7G‚“°¢Ð¢F‡&÷ræWrW'&÷"‚t”ådô”4Uõd”UtU%ô4ôåE$5EôÔ•4ÔD4‚r“°¢Ð¢6öç7Bf–WvW%7FFRÒWW"‡–ÆöBçf–WvW%÷7FFR“°¢6öç7BW'÷6RÒWW"‡–ÆöBçW'÷6RÇÂuD”ÔU4„TUBr“°¢6öç7BfW'6–öä–BÒ6ÆVâ‡–ÆöBæFö7VÖVçE÷fW'6–öãòæ–BÇÂ–ÆöBæFö7VÖVçE÷fW'6–öåö–B’çFôÆ÷vW$66R‚“°¢–b‚7W'&VçE&WVW7B’&WGW&â–ÆöC°¢–b‡W'÷6RÓÒuD”ÔU4„TUBr’°¢f–WvW"çf–WvW%÷7FFRÒt$Äô4´TBs°¢f–WvW"ç7FGW5öÖW76vRÒuF–ÖW6†VWBFö7VÖVçBf–ÆVBs°¢f–WvW"æW'&÷"Òt”ådô”4Uõd”UtU%õU%õ4Uô”ådÄ”Bs°¢&W–çD–çfö–6T7–æ5f–WvW"†ÖöFÄ7G‚“°¢F‡&÷ræWrW'&÷"‚t”ådô”4Uõd”UtU%õU%õ4Uô”ådÄ”Br“°¢Ð¢f–WvW"çW'÷6RÒW'÷6S°¢–b‡&W7öç6Rç7FGW2ÓÓÒ#bbf–WvW%7FFRÓÓÒu$TE’rbbUT”Eõ$RçFW7B‡fW'6–öä–B’’°¢v—B6ö×ÆWFT–çfö–6T7–æ5f–WvW"†ÖöFÄ7G‚ÂfW'6–öä–BÂ°¢&WVW7E÷6W&–Ã¢&WVW7E6W&–ÂÀ¢VçF—G•ö–C¢6æöæ–6Ä–BÀ¢W'÷6P¢Ò“°¢&WGW&â–ÆöC°¢Ð¢–b‡&W7öç6Rç7FGW2ÓÓÒ#"bbf–WvW%7FFRÓÓÒu$U$”ärrbbUT”Eõ$RçFW7B†6ÆVâ‡–ÆöBæ÷W&F–öåö–B’’’°¢6öç7B¶÷W&F–öåÒÒ&Vv—7FW$–çfö–6T÷W&F–öåvF6‚‡°¢÷W&F–öåö–C¢–ÆöBæ÷W&F–öåö–BÀ¢÷W&F–öå÷G—S¢ud”UuõD”ÔU4„TUEôDô5TÔTåBrÀ¢VçF—G•÷G—S¢uD”ÔU4„TUBrÀ¢VçF—G•ö–C¢6æöæ–6Ä–BÀ¢W'÷6RÀ¢7FGW3¢uTUTTBrÀ¢†6S¢t%U4”äU55õtõ$²rÀ¢6öÖÖæE÷Fö¶Vã¢6öÖÖæEFö¶VâÀ¢ÖöFÅö–FVçF—G“¢F–ÖW6†VWC¢G¶6æöæ–6Ä–GÖ ¢ÒÂ²&W7öç6UöfÖ–Ç“¢ud”UrrÂW‡Æ–6—Eö÷W&F–öåö–G3¢G'VRÒ“°¢ÖöFÄ7G‚æ–çfö–6T7–æ2çf–WvW%÷&WVW7Bæ÷W&F–öåö–BÒ÷W&F–öãòæ÷W&F–öåö–BÇÂ–ÆöBæ÷W&F–öåö–C°¢ÖöFÄ7G‚æ–çfö–6T7–æ2çf–WvW%÷&WVW7Bç7FGW5öÖW76vRÒ–ÆöBç7FGW5öÖW76vRÇÂu&W&–ærF–ÖW6†VWBs°¢&WGW&â–ÆöC°¢Ð¢6öç7BW'&÷$6öFRÒ6ÆVâ‡–ÆöBæW'&÷%ö6öFRÇÂ–ÆöBæW'&÷"ÇÂ–ÆöBæÖW76vRÇÂD”ÔU4„TUEôDô5TÔTåEô…EEòG·&W7öç6Rç7FGW7Ö“°¢–b†7W'&VçE&WVW7B’°¢f–WvW"çf–WvW%÷7FFRÒt$Äô4´TBs°¢f–WvW"ç7FGW5öÖW76vRÒ–ÆöBç7FGW5öÖW76vRÇÂuF–ÖW6†VWBFö7VÖVçB&Æö6¶VBs°¢f–WvW"æW'&÷"ÒW'&÷$6öFS°¢&W–çD–çfö–6T7–æ5f–WvW"†ÖöFÄ7G‚“°¢Ð¢F‡&÷ræWrW'&÷"†W'&÷$6öFR“°¢Ð ¢7–æ2gVæ7F–öâ†æFÆT–çfö–6TVÖ–Ä7–æ2†ÖöFÄ7G‚Â÷F–öç2Ò·Ò’°¢6öç7B–çfö–6T–BÒ6ÆVâ†ÖöFÄ7Gƒòæ–çfö–6T–BÇÂÖöFÄ7Gƒòæ–çfö–6TFWF–Ãòæ–çfö–6Sòæ–BÇÂÖöFÄ7GƒòæFFòæ–B’çFôÆ÷vW$66R‚“°¢–b‚UT”Eõ$RçFW7B†–çfö–6T–B’’°¢v–æF÷ræÆW'Còâ‚t–çfö–6R–BÖ—76–ærr“°¢&WGW&âçVÆÃ°¢Ð¢ÖöFÄ7G‚æ–çfö–6T7–æ2Ò4ö&¦V7B†ÖöFÄ7G‚æ–çfö–6T7–æ2“°¢6öç7BW‡Æ–6—E&W6VæBÒ÷F–öç2ç&W6VæBÓÓÒG'VS°¢6öç7B6öÖÖæEFö¶VâÒW‡Æ–6—E&W6VæBÇÂ6ÆVâ†ÖöFÄ7G‚æ–çfö–6T7–æ2æFVÆ—fW'•ö6öÖÖæE÷Fö¶Vâ¢ò7'—Fòç&æFöÕUT”B‚¢¢6ÆVâ†ÖöFÄ7G‚æ–çfö–6T7–æ2æFVÆ—fW'•ö6öÖÖæE÷Fö¶Vâ“°¢6öç7BFVÆ—fW'•Fö¶VâÒW‡Æ–6—E&W6VæBÇÂ6ÆVâ†ÖöFÄ7G‚æ–çfö–6T7–æ2æFVÆ—fW'•÷&WVW7E÷Fö¶Vâ¢ò7'—Fòç&æFöÕUT”B‚¢¢6ÆVâ†ÖöFÄ7G‚æ–çfö–6T7–æ2æFVÆ—fW'•÷&WVW7E÷Fö¶Vâ“°¢–b†6öÖÖæEFö¶VâÓÓÒFVÆ—fW'•Fö¶Vâ’F‡&÷ræWrW'&÷"‚tDTÄ•dU%•õ$UTU5EõDô´Tåô”ådÄ”Br“°¢ÖöFÄ7G‚æ–çfö–6T7–æ2æFVÆ—fW'•ö6öÖÖæE÷Fö¶VâÒ6öÖÖæEFö¶Vã°¢ÖöFÄ7G‚æ–çfö–6T7–æ2æFVÆ—fW'•÷&WVW7E÷Fö¶VâÒFVÆ—fW'•Fö¶Vã°¢6öç7B&öG’Ò°¢6öÖÖæE÷Fö¶Vã¢6öÖÖæEFö¶VâÀ¢FVÆ—fW'•÷&WVW7E÷Fö¶Vã¢FVÆ—fW'•Fö¶Và¢Ó°¢6öç7BFVÆ—fW'’Ò4ö&¦V7B†ÖöFÄ7G‚æ–çfö–6T7–æ2æFVÆ—fW'•ö–çFVçBÇÂÖöFÄ7G‚æFVÆ—fW'•ö–çFVçB“°¢–b†FVÆ—fW'’æFVÆ—fW'•÷öÆ–7’’&öG’æFVÆ—fW'•÷öÆ–7’ÒFVÆ—fW'’æFVÆ—fW'•÷öÆ–7“°¢–b†FVÆ—fW'’ç&V6—–VçE÷6WB’&öG’ç&V6—–VçE÷6WBÒFVÆ—fW'’ç&V6—–VçE÷6WC°¢–b†FVÆ—fW'’æ62’&öG’æ62ÒFVÆ—fW'’æ63°¢–b†FVÆ—fW'’æ&62’&öG’æ&62ÒFVÆ—fW'’æ&63°¢6öç7B&W7öç6RÒv—Bv–æF÷ræWF„fWF6‚†–çfö–6T’†ö’ö–çfö–6W2òG¶Væ6öFUU$”6ö×öæVçB†–çfö–6T–B—ÒöVÖ–Æ’Â°¢ÖWF†öC¢uõ5BrÀ¢†VFW'3¢²v6öçFVçB×G—Rs¢vÆ–6F–öâö§6öârÂv–FV×÷FVæ7’Ö¶W’s¢6öÖÖæEFö¶VâÒÀ¢&öG“¢¥4ôâç7G&–æv–g’†&öG’¢Ò“°¢6öç7B–ÆöBÒv—B&W7öç6Ræ§6öâ‚’æ6F6‚‚‚’Óâ‡·Ò’“°¢–b‚³#Â#"Â#uÒæ–æ6ÇVFW2‡&W7öç6Rç7FGW2’’°¢F‡&÷ræWrW'&÷"‡–ÆöBæW'&÷"ÇÂ–ÆöBæÖW76vRÇÂ”ådô”4UôDTÄ•dU%•ô…EEòG·&W7öç6Rç7FGW7Ö“°¢Ð¢6öç7B÷W&F–öç2Ò&Vv—7FW$–çfö–6T÷W&F–öç4g&öÕ&W7öç6R‡–ÆöBÂ°¢&W7öç6UöfÖ–Ç“¢tDTÄ•dU%’rÀ¢÷W&F–öå÷G—S¢tDTÄ•dU%ô”ådô”4U2rÀ¢VçF—G•÷G—S¢t”ådô”4RrÀ¢VçF—G•ö–C¢–çfö–6T–BÀ¢W'÷6S¢tDTÄ•dU%’rÀ¢6öÖÖæE÷Fö¶Vã¢6öÖÖæEFö¶VâÀ¢ÖöFÅö–FVçF—G“¢–çfö–6S¢G¶–çfö–6T–GÖÀ¢W‡Æ–6—Eö÷W&F–öåö–G3¢G'VP¢Ò“°¢6öç7B÷W&F–öâÒ÷W&F–öç5³Ó°¢ÖöFÄ7G‚æ–çfö–6T7–æ2æFVÆ—fW'•ö÷W&F–öâÒ÷W&F–öã°¢GF6„÷W&F–öåFô'WGFöç2†÷W&F–öâÂtDTÄ•dU%’r“°¢G'’²v–æF÷råõ÷Fö7Còâ†W‡Æ–6—E&W6VæBòtæWr–çfö–6RFVÆ—fW'’GFV×B†27F'FVBâr¢t–çfö–6RFVÆ—fW'’&W&F–öâ7F'FVBâr“²Ò6F6‚·Ð¢&WGW&â–ÆöC°¢Ð ¢gVæ7F–öâVvÖVçD–çfö–6TÖöFÅ&VæFW&W"‚’°¢6öç7B÷&–v–æÂÒv–æF÷rç&VæFW$–çfö–6TÖöFÄ6öçFVçC°¢–b‡G—Vöb÷&–v–æÂÓÒvgVæ7F–öârÇÂ÷&–v–æÂåõö–çfö–6T7–æ5w&VB’&WGW&ã°¢6öç7Bw&VBÒgVæ7F–öâ–çfö–6T7–æ4ÖöFÅ&VæFW&W"†ÖöFÄ7G‚Â–çfö–6TFF’°¢6öç7B‡FÖÂÒ÷&–v–æÂæÇ’‡F†—2Â&wVÖVçG2“°¢6öç7BFWF–ÂÒ4ö&¦V7B†–çfö–6TFFÇÂÖöFÄ7Gƒòæ–çfö–6TFWF–Â“°¢6öç7B7–æ57FFRÒ²ââæFWF–ÂÂââæ4ö&¦V7B†ÖöFÄ7Gƒòæ–çfö–6T7–æ2’Ó°¢&WGW&âG¶‡FÖÇÓÆF—bFFÖ–çfö–6RÖ7–æ2×7FFRÖ†÷7CâG·&VæFW$–çfö–6T7–æ57FFR†7–æ57FFR—ÓÂöF—cæ°¢Ó°¢w&VBåõö–çfö–6T7–æ5w&VBÒG'VS°¢w&VBåõö–çfö–6T7–æ4÷&–v–æÂÒ÷&–v–æÃ°¢v–æF÷rç&VæFW$–çfö–6TÖöFÄ6öçFVçBÒw&VC°¢Ð ¢7–æ2gVæ7F–öâ–çfö–6T7–æ5Væf–Æ&ÆT7F–öâ†7F–öäæÖRÒçVÆÂÂ&w2ÒµÒ’°¢–b†7F–öäæÖRbbG—Vöbv–æF÷ræ–æ—F–Æ—6T–çfö–6T7–æ5V’ÓÓÒvgVæ7F–öâr’°¢6öç7B6&–Æ—F–W2Òv—Bv–æF÷ræ–æ—F–Æ—6T–çfö–6T7–æ5V’‡²f÷&6S¢G'VRÒ’æ6F6‚‚‚’ÓâçVÆÂ“°¢6öç7B&V6÷fW&VBÒv–æF÷u¶7F–öäæÖUÓ°¢–b€¢6&–Æ—F–W3òæVæ&ÆVEöf÷%÷W6W"ÓÓÒG'VP¢bbG—Vöb&V6÷fW&VBÓÓÒvgVæ7F–öâp¢bb&V6÷fW&VBÓÒVæf–Æ&ÆT–çfö–6T7F–öä†æFÆW'5¶7F–öäæÖUÐ¢’°¢&WGW&â&V6÷fW&VB‚ââæ&w2“°¢Ð¢Ð¢6öç7BÖW76vRÒt–çfö–6R&ö6W76–ær—2FV×÷&&–Ç’Væf–Æ&ÆRv†–ÆRF†RæWr–çfö–6R7—7FVÒ—2&V–ærWFFVBâs°¢G'’²v–æF÷råõ÷Fö7Còâ†ÖW76vR“²Ò6F6‚·Ð¢–b‡G—Vöbv–æF÷råõ÷Fö7BÓÒvgVæ7F–öâr’v–æF÷ræÆW'Còâ†ÖW76vR“°¢&WGW&âçVÆÃ°¢Ð ¢6öç7BVæf–Æ&ÆT–çfö–6T7F–öä†æFÆW'2Òö&¦V7Bæg&VW¦R‡°¢†æFÆT–çfö–6U&VæFW%Fc¢‚ââæ&w2’Óâ–çfö–6T7–æ5Væf–Æ&ÆT7F–öâ‚v†æFÆT–çfö–6U&VæFW%FbrÂ&w2’À¢†æFÆT–çfö–6TVÖ–Ã¢‚ââæ&w2’Óâ–çfö–6T7–æ5Væf–Æ&ÆT7F–öâ‚v†æFÆT–çfö–6TVÖ–ÂrÂ&w2’À¢÷Vä–çfö–6T&F6„vVæW&FTÖöFÃ¢‚ââæ&w2’Óâ–çfö–6T7–æ5Væf–Æ&ÆT7F–öâ‚v÷Vä–çfö–6T&F6„vVæW&FTÖöFÂrÂ&w2’À¢÷Vä–çfö–6T&F6„—77VTÖöFÃ¢‚ââæ&w2’Óâ–çfö–6T7–æ5Væf–Æ&ÆT7F–öâ‚v÷Vä–çfö–6T&F6„—77VTÖöFÂrÂ&w2’À¢vWEF–ÖW6†VWEFeW&Ã¢‚ââæ&w2’Óâ–çfö–6T7–æ5Væf–Æ&ÆT7F–öâ‚vvWEF–ÖW6†VWEFeW&ÂrÂ&w2’À¢÷VåF–ÖW6†VWEFc¢‚ââæ&w2’Óâ–çfö–6T7–æ5Væf–Æ&ÆT7F–öâ‚v÷VåF–ÖW6†VWEFbrÂ&w2’À¢÷VåF–ÖW6†VWDFö7VÖVçEcƒ¢‚ââæ&w2’Óâ–çfö–6T7–æ5Væf–Æ&ÆT7F–öâ‚v÷VåF–ÖW6†VWDFö7VÖVçEc‚rÂ&w2¢Ò“° ¢gVæ7F–öâ–ç7FÆÄ–çfö–6T7–æ5Væf–Æ&ÆT7F–öç2‚’°¢ö&¦V7Bæ76–vâ‡v–æF÷rÂVæf–Æ&ÆT–çfö–6T7F–öä†æFÆW'2“°¢v–æF÷råõö–çfö–6T7–æ4÷fW'&–FW4–ç7FÆÆVBÒfÇ6S°¢v–æF÷råõö–çfö–6T&F6„ÖöFÄ÷fW'&–FW4–ç7FÆÆVBÒfÇ6S°¢&WGW&âG'VS°¢Ð ¢gVæ7F–öâ–ç7FÆÄ÷fW'&–FW2‚’°¢–b†–ç7FÆÆVB’&WGW&âG'VS°¢–b‡v–æF÷råõö–çfö–6T7–æ46&–Æ—G“òæVæ&ÆVEöf÷%÷W6W"ÓÒG'VR’&WGW&âfÇ6S°¢VvÖVçD–çfö–6TÖöFÅ&VæFW&W"‚“°¢v–æF÷ræ†æFÆT–çfö–6U&VæFW%FbÒ†æFÆT–çfö–6U&VæFW%Fd7–æ3°¢v–æF÷ræ†æFÆT–çfö–6TVÖ–ÂÒ†æFÆT–çfö–6TVÖ–Ä7–æ3°¢v–æF÷rævWEF–ÖW6†VWEFeW&ÂÒ÷VåF–ÖW6†VWDFö7VÖVçEcƒ°¢v–æF÷ræ÷VåF–ÖW6†VWEFbÒ÷VåF–ÖW6†VWDFö7VÖVçEcƒ°¢v–æF÷ræ÷VåF–ÖW6†VWDFö7VÖVçEc‚Ò÷VåF–ÖW6†VWDFö7VÖVçEcƒ°¢v–æF÷rä–çfö–6T&F6„ÖöFÅcƒòæ–ç7FÆÃòâ‚“°¢GF6„–çfö–6T7–æ4FVÆVvFVD†æFÆW'2‚“°¢6fT–çfö–6T÷W&F–öåvF6†W2†ÆöD–çfö–6T÷W&F–öåvF6†W2‚’“°¢Ç”–çfö–6T7F–öä'WGFöå7FFR†Fö7VÖVçB“°¢‡–G&FUf—6–&ÆUF–ÖW6†VWDWf–FVæ6U&ö6W76–æu7FFW2†Fö7VÖVçB“°¢–ç7FÆÆVBÒG'VS°¢v–æF÷råõö–çfö–6T7–æ4÷fW'&–FW4–ç7FÆÆVBÒG'VS°¢&WGW&âG'VS°¢Ð ¢gVæ7F–öâVæ–ç7FÆÄ÷fW'&–FW2†÷F–öç2Ò·Ò’°¢6öç7B&V6öâÒ6ÆVâ†÷F–öç2ç&V6öâÇÂv6&–Æ—G’×Væf–Æ&ÆRr’çFôÆ÷vW$66R‚“°¢6öç7B&–÷%vF6„¶W’Ò6ÆVâ†÷F–öç2ç&Wf–÷W5÷vF6…÷7F÷&vUö¶W’ÇÂ7F—fUvF6…7F÷&vT¶W’“°¢f÷"†6öç7BÖöFÄ7G‚öb7F—fT–çfö–6Uf–WvW'2çfÇVW2‚’’°¢6öç7Bf–WvW"Ò4ö&¦V7B†ÖöFÄ7Gƒòæ–çfö–6T7–æ3òçf–WvW%÷&WVW7B“°¢f–WvW"æ÷VâÒfÇ6S°¢G'’²f–WvW"æ&÷'Eö6öçG&öÆÆW#òæ&÷'B‚“²Ò6F6‚·Ð¢&Wfö¶T–çfö–6T7–æ5f–WvW$&Æö"†ÖöFÄ7G‚“°¢Ð¢7F—fT–çfö–6Uf–WvW'2æ6ÆV"‚“°¢G'’²v–æF÷rä–çfö–6T&F6„ÖöFÅcƒòæ6Æ÷6Sòâ‚“²Ò6F6‚·Ð¢FWF6„–çfö–6T7–æ4FVÆVvFVD†æFÆW'2‚“°¢–b‡&Vg&W6…F–ÖW"’6ÆV%F–ÖV÷WB‡&Vg&W6…F–ÖW"“°¢&Vg&W6…F–ÖW"ÒçVÆÃ°¢v–æF÷råõö–çfö–6T÷W&F–öåvF6†W2ÒµÓ°¢–b…²vÆöv÷WBrÂwW6W"×&WÆ6VÖVçBuÒæ–æ6ÇVFW2‡&V6öâ’’°¢G'’°¢–b‡&–÷%vF6„¶W’’6W76–öå7F÷&vRç&VÖ÷fT—FVÒ‡&–÷%vF6„¶W’“°¢6W76–öå7F÷&vRç&VÖ÷fT—FVÒ„ÄTt5•õtD4…õ5Dõ$tUô´U’“°¢Ò6F6‚·Ð¢7F—fUvF6…7F÷&vT¶W’ÒçVÆÃ°¢Ð¢–ç7FÆÆVBÒfÇ6S°¢–ç7FÆÄ–çfö–6T7–æ5Væf–Æ&ÆT7F–öç2‚“°¢&WGW&âG'VS°¢Ð ¢7–æ2gVæ7F–öâ–æ—F–Æ—6T–çfö–6T7–æ5V’†÷F–öç2Ò·Ò’°¢6öç7B&WVW7FVEvF6„¶W’Ò÷W&F–öåvF6…7F÷&vT¶W’‚“°¢–b†7F—fUvF6…7F÷&vT¶W’bb7F—fUvF6…7F÷&vT¶W’ÓÒ&WVW7FVEvF6„¶W’’°¢Væ–ç7FÆÄ÷fW'&–FW2‡°¢&V6öã¢&WVW7FVEvF6„¶W’òwW6W"×&WÆ6VÖVçBr¢vÆöv÷WBrÀ¢&Wf–÷W5÷vF6…÷7F÷&vUö¶W“¢7F—fUvF6…7F÷&vT¶W¢Ò“°¢Ð¢6öç7B6&–Æ—F–W2Òv—BÆöD–çfö–6T7–æ46&–Æ—F–W2†÷F–öç2“°¢6öç7B&W6öÇfVEvF6„¶W’Ò÷W&F–öåvF6…7F÷&vT¶W’‚“°¢–b‡&WVW7FVEvF6„¶W’ÓÒ&W6öÇfVEvF6„¶W’’°¢Væ–ç7FÆÄ÷fW'&–FW2‡°¢&V6öã¢&W6öÇfVEvF6„¶W’òwW6W"×&WÆ6VÖVçBr¢vÆöv÷WBrÀ¢&Wf–÷W5÷vF6…÷7F÷&vUö¶W“¢7F—fUvF6…7F÷&vT¶W¢Ò“°¢Ð¢–b†6&–Æ—F–W2æVæ&ÆVEöf÷%÷W6W"ÓÒG'VR’°¢Væ–ç7FÆÄ÷fW'&–FW2‡°¢&V6öã¢&W6öÇfVEvF6„¶W’òv6&–Æ—G’×Væf–Æ&ÆRr¢vÆöv÷WBrÀ¢&Wf–÷W5÷vF6…÷7F÷&vUö¶W“¢7F—fUvF6…7F÷&vT¶W¢Ò“°¢&WGW&â6&–Æ—F–W3°¢Ð¢7F—fUvF6…7F÷&vT¶W’Ò&W6öÇfVEvF6„¶W“°¢–ç7FÆÄ÷fW'&–FW2‚“°¢&WGW&â6&–Æ—F–W3°¢Ð ¢ö&¦V7Bæ76–vâ‡v–æF÷rÂ°¢fWF6„–çfö–6T7–æ46&–Æ—F–W2À¢fÆ–FFT–çfö–6T7–æ46&–Æ—F–W2À¢66†T–çfö–6T7–æ46&–Æ—F–W2À¢ÆöD–çfö–6T7–æ46&–Æ—F–W2À¢—4–çfö–6T7–æ5V”Væ&ÆVBÀ¢–æ—F–Æ—6T–çfö–6T7–æ5V’À¢–ç7FÆÄ–çfö–6T7–æ4÷fW'&–FW3¢–ç7FÆÄ÷fW'&–FW2À¢–ç7FÆÄ–çfö–6T7–æ5Væf–Æ&ÆT7F–öç2À¢Væ–ç7FÆÄ–çfö–6T7–æ4÷fW'&–FW3¢Væ–ç7FÆÄ÷fW'&–FW2À¢ÆöD–çfö–6T÷W&F–öåvF6†W2À¢æ÷&ÖÆ—6T–çfö–6T÷W&F–öåvF6‚À¢FVGWÆ–6FT–çfö–6T÷W&F–öåvF6‚À¢'VæT–çfö–6T÷W&F–öåvF6†W2À¢6fT–çfö–6T÷W&F–öåvF6†W2À¢&Vv—7FW$–çfö–6T÷W&F–öåvF6‚À¢W‡G&7D–çfö–6T÷W&F–öå&÷w3¢W‡G&7D÷W&F–öå&÷w2À¢&Vv—7FW$–çfö–6T÷W&F–öç4g&öÕ&W7öç6RÀ¢Ö&´–çfö–6T÷W&F–öä†æFÆVBÀ¢6¶æ÷vÆVFvT–çfö–6T÷W&F–öäæ÷F–f–6F–öâÀ¢'V–ÆD–çfö–6T†V'F&VEvF6†W2À¢Ç”–çfö–6T÷W&F–öåWFFW2À¢&VæFW$–çfö–6T7–æ57FFRÀ¢FW&—fT–çfö–6T7–æ47F–öå7FFRÀ¢&VæFW$–çfö–6U&öw&W75FW‡BÀ¢&VæFW$–çfö–6T÷W&F–öäW'&÷"À¢&VæFW$Fö7VÖVçD76WD&FvRÀ¢Ç”–çfö–6T7F–öä'WGFöå7FFRÀ¢&VæFW%F–ÖW6†VWDWf–FVæ6U&ö6W76–æu7FFRÀ¢‡–G&FUf—6–&ÆUF–ÖW6†VWDWf–FVæ6U&ö6W76–æu7FFW2À¢&WG'”–çfö–6TWf–FVæ6T÷W&F–öâÀ¢7V&Ö—D–çfö–6T÷W&F–öä6öçG&öÂÀ¢÷VäW†7E&VG”Fö7VÖVçBÀ¢&Wfö¶T–çfö–6T7–æ5f–WvW$&Æö"À¢6ö×ÆWFT–çfö–6T7–æ5f–WvW"À¢÷VåF–ÖW6†VWDFö7VÖVçEc‚À¢†æFÆT–çfö–6U&VæFW%Fd7–æ2À¢†æFÆT–çfö–6TVÖ–Ä7–æ0¢Ò“° ¢v–æF÷råõö–çfö–6T7–æ46&–Æ—G’ÒVæf–Æ&ÆT6&–Æ—F–W2‚täõEô”ä•D”Ä•4TBr“°¢–ç7FÆÄ–çfö–6T7–æ5Væf–Æ&ÆT7F–öç2‚“°¢v–æF÷ræFDWfVçDÆ—7FVæW"‚wvV†–FRrÂ‚’Óâ°¢f÷"†6öç7BÖöFÄ7G‚öb7F—fT–çfö–6Uf–WvW'2çfÇVW2‚’’°¢&Wfö¶T–çfö–6T7–æ5f–WvW$&Æö"†ÖöFÄ7G‚“°¢G'’²ÖöFÄ7Gƒòæ–çfö–6T7–æ3òçf–WvW%÷&WVW7Còæ&÷'Eö6öçG&öÆÆW#òæ&÷'B‚“²Ò6F6‚·Ð¢Ð¢7F—fT–çfö–6Uf–WvW'2æ6ÆV"‚“°¢Ò“°¢6öç7B&Vv–âÒ‚’Óâ°¢òòF†R6&–Æ—G’VæGö–çB—2WF†VçF–6FVBâöâF†R6–væVBÖ÷WBÆöv–âvRÀ¢òòv—Bf÷"&ö÷G7G&‚’gFW"Æöv–â–ç7FVBöb7&VF–ærâW‡V7FVBC¢òò&WVW7BæBæö—7’'&÷w6W"6öç6öÆRVçG'’à¢–b‚6&–Æ—G”66†T¶W’‚’’°¢&WGW&â&öÖ—6Rç&W6öÇfR†66†T–çfö–6T7–æ46&–Æ—F–W2€¢Væf–Æ&ÆT6&–Æ—F–W2‚t”ådô”4Uô5”ä5ôUD„TåD”4DTEõU4U%õ$UT•$TBr¢’“°¢Ð¢&WGW&â–æ—F–Æ—6T–çfö–6T7–æ5V’‚’æ6F6‚‚‚’ÓâVæf–Æ&ÆT6&–Æ—F–W2‚’“°¢Ó°¢–b†Fö7VÖVçBç&VG•7FFRÓÓÒvÆöF–ærr’°¢Fö7VÖVçBæFDWfVçDÆ—7FVæW"‚tDôÔ6öçFVçDÆöFVBrÂ&Vv–âÂ²öæ6S¢G'VRÒ“°¢ÒVÇ6R°¢VWVTÖ–7&÷F6²†&Vv–â“°¢Ð§Ò’‚“°
+      sessionStorage.removeItem(LEGACY_WATCH_STORAGE_KEY);
+      sessionStorage.setItem(key, JSON.stringify(saved));
+    } catch {}
+    activeWatchStorageKey = key;
+    window.__invoiceOperationWatches = saved;
+    return saved;
+  }
+
+  function registerInvoiceOperationWatch(value, context = {}) {
+    const values = asArray(value).length || Array.isArray(value) ? asArray(value) : [value];
+    const accepted = values.map(item => normaliseInvoiceOperationWatch(item, context)).filter(Boolean);
+    if (!accepted.length) return [];
+    const existing = loadInvoiceOperationWatches();
+    const map = new Map(existing.map(row => [row.operation_id, row]));
+    for (const row of accepted) map.set(row.operation_id, mergeWatch(map.get(row.operation_id), row));
+    saveInvoiceOperationWatches([...map.values()]);
+    return accepted;
+  }
+
+  function extractOperationRows(payload, context = {}) {
+    const source = asObject(payload);
+    const rows = [];
+    const direct = normaliseInvoiceOperationWatch(source, context);
+    if (direct) rows.push(direct);
+    const singular = normaliseInvoiceOperationWatch(source.operation, context);
+    if (singular) rows.push(singular);
+    for (const field of OPERATION_ARRAY_FIELDS) {
+      for (const value of asArray(source[field])) {
+        const row = normaliseInvoiceOperationWatch(value, context);
+        if (row) rows.push(row);
+      }
+    }
+    for (const value of asArray(source.operation_ids)) {
+      const row = normaliseInvoiceOperationWatch(value, { ...context, explicit_operation_ids: true });
+      if (row) rows.push(row);
+    }
+    return deduplicateInvoiceOperationWatch(rows);
+  }
+
+  function registerInvoiceOperationsFromResponse(payload, context = {}) {
+    const rows = extractOperationRows(payload, context);
+    if (rows.length) registerInvoiceOperationWatch(rows, context);
+    return rows;
+  }
+
+  function markInvoiceOperationHandled(operationId) {
+    const canonicalId = clean(operationId).toLowerCase();
+    const handledAt = nowIso();
+    return saveInvoiceOperationWatches(loadInvoiceOperationWatches().map(row =>
+      row.operation_id === canonicalId ? { ...row, terminal_handled_at_utc: handledAt } : row
+    ));
+  }
+
+  function acknowledgeInvoiceOperationNotification(operationId, notificationKey) {
+    const canonicalId = clean(operationId).toLowerCase();
+    return saveInvoiceOperationWatches(loadInvoiceOperationWatches().map(row => row.operation_id === canonicalId
+      ? {
+        ...row,
+        notification_state: { ...asObject(row.notification_state), [clean(notificationKey)]: true }
+      }
+      : row));
+  }
+
+  function buildInvoiceHeartbeatWatches() {
+    return loadInvoiceOperationWatches().slice(0, MAX_WATCHES).map(row => ({
+      operation_id: row.operation_id,
+      known_change_seq: row.effective_change_seq
+    }));
+  }
+
+  function operationFamily(value) {
+    const row = asObject(value);
+    const combined = `${upper(row.operation_type)} ${upper(row.purpose)} ${upper(row.phase)}`;
+    if (/DELIVER|DELIVERY|EMAIL/.test(combined)) return 'DELIVERY';
+    if (/ISSUE|LEGAL|FREEZE|FINALISE/.test(combined)) return 'ISSUE';
+    if (/ASSET|INSPECT|NORMALIS/.test(combined)) return 'ASSET';
+    if (/TIMESHEET/.test(combined)) return 'TIMESHEET_DOCUMENT';
+    return 'DOCUMENT';
+  }
+
+  function deriveInvoiceAsyncActionState(value, familyOverride = '') {
+    const row = asObject(value);
+    const family = upper(familyOverride) || operationFamily(row);
+    const status = upper(row.status || row.operation_status || row.state);
+    const phase = upper(row.phase || row.current_phase || status);
+    const failed = ['FAILED', 'DEAD_LETTER', 'BLOCKED'].includes(status);
+    const cancelled = ['CANCELLED', 'SUPERSEDED'].includes(status);
+    const documentFamily = ['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(family);
+    const documentVersionId = clean(row.document_version_id).toLowerCase();
+    const exactDocumentReady = UUID_RE.test(documentVersionId)
+      && !ACTIVE.has(status)
+      && !failed
+      && !cancelled;
+    const ready = documentFamily
+      ? exactDocumentReady
+      : ['COMPLETE', 'READY', 'ISSUED'].includes(status) || exactDocumentReady;
+    const retry = row.retry_available === true;
+    const base = {
+      family,
+      status,
+      phase,
+      terminal: TERMINAL.has(status),
+      retry_available: retry,
+      view_available: ready && !!row.document_version_id,
+      document_version_id: exactDocumentReady ? documentVersionId : null,
+      tone: 'muted',
+      label: status || 'Not started',
+      button_label: '',
+      disabled: false,
+      aria_busy: false
+    };
+    if (family === 'ASSET') {
+      const labels = {
+        QUEUED: 'Queued', ASSET_INSPECT: 'Inspecting', INSPECTING: 'Inspecting',
+        ASSET_NORMALISE: 'Normalising', NORMALISING: 'Normalising', COMPLETE: 'Ready',
+        ASSET_MEDIA_TYPE_UNSUPPORTED: 'Unsupported', ASSET_CORRUPT: 'Corrupt',
+        ASSET_MISSING: 'Missing', FAILED: 'Failed', DEAD_LETTER: 'Failed', RETRY_WAIT: 'Retry scheduled'
+      };
+      return {
+        ...base,
+        tone: ready ? 'ready' : (failed ? 'error' : (ACTIVE.has(status) ? 'amber' : 'muted')),
+        label: labels[phase] || labels[status] || clean(phase.replaceAll('_', ' ')) || 'Queued',
+        button_label: retry ? 'Retry evidence' : '',
+        disabled: !retry,
+        aria_busy: ACTIVE.has(status)
+      };
+    }
+    if (family === 'DELIVERY') {
+      const label = ready ? 'Email queued'
+        : failed ? (status === 'BLOCKED' ? 'Delivery blocked' : 'Delivery failed')
+          : (ACTIVE.has(status) ? 'Preparing emailâ€¦' : 'Email not requested');
+      return {
+        ...base,
+        tone: ready ? 'ready' : (failed ? 'error' : (ACTIVE.has(status) ? 'amber' : 'muted')),
+        label,
+        button_label: retry ? 'Retry delivery' : (ready ? 'Email queued' : 'Email invoice'),
+        disabled: ACTIVE.has(status) || ready || (failed && !retry),
+        aria_busy: ACTIVE.has(status)
+      };
+    }
+    if (family === 'ISSUE') {
+      let label = 'Issue invoice';
+      if (/VALIDAT/.test(phase)) label = 'Validatingâ€¦';
+      else if (/FREEZE|FINAL_DOCUMENT|RENDER|MERGE|VERIFY/.test(phase)) label = 'Preparing final documentâ€¦';
+      else if (/FINALIS|LEGAL/.test(phase)) label = 'Finalising issueâ€¦';
+      else if (ready) label = 'Issued';
+      else if (failed) label = 'Issue blocked';
+      return {
+        ...base,
+        tone: ready ? 'ready' : (failed ? 'error' : (ACTIVE.has(status) ? 'amber' : 'muted')),
+        label,
+        button_label: retry ? 'Retry issue' : label,
+        disabled: ACTIVE.has(status) || ready || (failed && !retry),
+        aria_busy: ACTIVE.has(status)
+      };
+    }
+    const timesheet = family === 'TIMESHEET_DOCUMENT';
+    const preparingLabel = timesheet ? 'Preparing timesheetâ€¦' : 'Generating invoice PDFâ€¦';
+    const readyLabel = timesheet ? 'Open timesheet PDF' : 'Open invoice PDF';
+    const failedLabel = timesheet ? 'Timesheet PDF failed' : 'Invoice PDF failed';
+    const terminalWithoutVersion = TERMINAL.has(status) && !exactDocumentReady;
+    return {
+      ...base,
+      tone: ready ? 'ready' : (failed || terminalWithoutVersion ? 'error' : (ACTIVE.has(status) ? 'amber' : 'muted')),
+      label: ready ? readyLabel : (terminalWithoutVersion ? 'Document unavailable' : (failed ? failedLabel : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Prepare invoice PDF')))),
+      button_label: ready ? readyLabel : (terminalWithoutVersion ? 'Document unavailable' : (failed && retry ? (timesheet ? 'Retry timesheet PDF' : 'Retry invoice PDF') : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Generate invoice PDF')))),
+      disabled: terminalWithoutVersion || ACTIVE.has(status) || (failed && !retry),
+      aria_busy: ACTIVE.has(status),
+      view_available: exactDocumentReady
+    };
+  }
+
+  function renderInvoiceProgressText(value) {
+    const row = asObject(value);
+    const state = deriveInvoiceAsyncActionState(row);
+    if (state.view_available) return 'Ready';
+    if (state.terminal) return state.label;
+    if (['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(state.family)) return state.label;
+    const progress = asObject(row.progress);
+    const current = Number(progress.completed_units ?? progress.completed ?? progress.current);
+    const total = Number(progress.total_units ?? progress.total);
+    return Number.isFinite(current) && Number.isFinite(total) && total > 0
+      ? `${state.label} â€” ${current}/${total}`
+      : state.label;
+  }
+
+  function renderInvoiceOperationError(value) {
+    const row = asObject(value);
+    const diagnostic = window.invoiceDiagnosticForCode?.(row.error_code);
+    return clean(diagnostic?.long_explanation || row.error_summary || diagnostic?.short_label);
+  }
+
+  function renderDocumentAssetBadge(value, family = '') {
+    const state = deriveInvoiceAsyncActionState(value, family);
+    const documentFamily = ['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(state.family);
+    const displayLabel = documentFamily && state.view_available ? 'Ready' : state.label;
+    const colours = {
+      ready: ['#14532d', '#dcfce7'],
+      amber: ['#78350f', '#fef3c7'],
+      error: ['#7f1d1d', '#fee2e2'],
+      muted: ['#334155', '#e2e8f0']
+    };
+    const [colour, background] = colours[state.tone] || colours.muted;
+    return `<span class="invoice-async-badge invoice-async-badge--${escapeHtml(state.tone)}" data-tone="${escapeHtml(state.tone)}" style="display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:750;color:${colour};background:${background};">${escapeHtml(displayLabel)}</span>`;
+  }
+
+  function renderDiagnosticList(title, values, tone) {
+    const rows = asArray(values).map(value => {
+      const code = typeof value === 'string' ? value : value?.code;
+      const diagnostic = window.invoiceDiagnosticForCode?.(code);
+      return {
+        label: clean(diagnostic?.short_label || value?.label || 'Needs attention'),
+        explanation: clean(diagnostic?.long_explanation || value?.message || 'Review this item before continuing.'),
+        code: upper(code)
+      };
+    }).filter(value => value.label);
+    if (!rows.length) return '';
+    return `<details class="invoice-async-diagnostic invoice-async-diagnostic--${tone}" style="margin-top:6px;"><summary>${escapeHtml(title)} (${rows.length})</summary><ul>${rows.map(value => `<li><strong>${escapeHtml(value.label)}</strong> â€” ${escapeHtml(value.explanation)}${value.code ? `<span class="sr-only"> (${escapeHtml(value.code)})</span>` : ''}</li>`).join('')}</ul></details>`;
+  }
+
+  function renderInvoiceAsyncState(detail = {}) {
+    const source = asObject(detail);
+    const sections = [
+      ['Invoice document', source.document_operation || source.document_state, 'DOCUMENT'],
+      ['Timesheet document', source.timesheet_document_operation || source.timesheet_document_state, 'TIMESHEET_DOCUMENT'],
+      ['Legal issue', source.issue_operation || source.legal_issue_state, 'ISSUE'],
+      ['Delivery', source.delivery_operation || source.delivery_state, 'DELIVERY'],
+      ['Asset processing', source.asset_operation || source.asset_state, 'ASSET']
+    ].filter(([, value]) => value != null);
+    return `${sections.length ? `<section class="card invoice-async-state" data-invoice-async-state style="margin-top:12px;">
+      <h3>Document and delivery progress</h3>
+      ${sections.map(([label, value, family]) => {
+        const row = typeof value === 'string' ? { status: value } : asObject(value);
+        return `<div class="invoice-async-state-row" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;border-top:1px solid var(--line);"><span>${escapeHtml(label)}</span><span>${renderDocumentAssetBadge(row, family)}</span></div>`;
+      }).join('')}
+    </section>` : ''}
+    <div class="invoice-async-diagnostics">
+      ${renderDiagnosticList('Hard issue blockers', source.hard_blockers || source.hard_blocker_codes, 'error')}
+      ${renderDiagnosticList('Document dependencies', source.document_dependencies || source.document_dependency_codes, 'amber')}
+      ${renderDiagnosticList('Delivery blockers', source.delivery_blockers || source.delivery_blocker_codes, 'error')}
+      ${renderDiagnosticList('Warnings', source.warnings || source.warning_codes, 'amber')}
+    </div>`;
+  }
+
+  function applyInvoiceActionButtonState(root = document) {
+    const watches = new Map(loadInvoiceOperationWatches().map(row => [row.operation_id, row]));
+    for (const button of root?.querySelectorAll?.('[data-invoice-async-operation-id]') || []) {
+      const operationId = clean(button.dataset.invoiceAsyncOperationId).toLowerCase();
+      const watch = watches.get(operationId);
+      if (!watch) continue;
+      const state = deriveInvoiceAsyncActionState(watch, button.dataset.invoiceAsyncFamily);
+      if (!button.dataset.invoiceAsyncOriginalLabel) button.dataset.invoiceAsyncOriginalLabel = clean(button.textContent);
+      button.dataset.invoiceAsyncTone = state.tone;
+      button.dataset.documentVersionId = state.document_version_id || '';
+      button.classList.toggle('is-processing', state.tone === 'amber');
+      button.classList.toggle('is-ready', state.tone === 'ready');
+      button.classList.toggle('is-failed', state.tone === 'error');
+      button.style.borderColor = state.tone === 'amber' ? '#d97706'
+        : state.tone === 'ready' ? '#16a34a'
+          : state.tone === 'error' ? '#dc2626' : '';
+      button.disabled = state.disabled;
+      button.setAttribute('aria-busy', String(state.aria_busy));
+      button.setAttribute('aria-disabled', String(state.disabled));
+      const visibleLabel = state.button_label || state.label || button.dataset.invoiceAsyncOriginalLabel;
+      if (state.aria_busy) {
+        button.innerHTML = `<span aria-hidden="true">âŸ³</span> <span>${escapeHtml(visibleLabel)}</span>`;
+      } else {
+        button.textContent = visibleLabel;
+      }
+      button.title = renderInvoiceOperationError(watch) || renderInvoiceProgressText(watch);
+      let status = button.parentElement?.querySelector(`[data-invoice-button-status="${CSS.escape(operationId)}"]`);
+      if (!status) {
+        status = document.createElement('span');
+        status.className = 'sr-only invoice-async-button-status';
+        status.style.cssText = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;';
+        status.setAttribute('aria-live', 'polite');
+        status.dataset.invoiceButtonStatus = operationId;
+        button.insertAdjacentElement('afterend', status);
+      }
+      status.textContent = state.label;
+    }
+  }
+
+  function updateOpenInvoiceModalFromSignal(signal) {
+    const signalEntityId = clean(signal.entity_id).toLowerCase();
+    const viewerModal = activeInvoiceViewers.get(signalEntityId);
+    const family = operationFamily(signal);
+    if (
+      viewerModal
+      && signal.document_version_id
+      && ['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(family)
+    ) {
+      const viewer = asObject(viewerModal.invoiceAsync?.viewer_request);
+      const operationId = clean(signal.operation_id).toLowerCase();
+      if (
+        viewer.open
+        && viewer.entity_id === signalEntityId
+        && viewer.entity_type === (family === 'TIMESHEET_DOCUMENT' ? 'TIMESHEET' : 'INVOICE')
+        && (!viewer.operation_id || viewer.operation_id === operationId)
+        && (!viewer.purpose || !signal.purpose || viewer.purpose === signal.purpose)
+      ) {
+        Promise.resolve(completeInvoiceAsyncViewer(
+          viewerModal,
+          signal.document_version_id,
+          {
+            request_serial: viewer.request_serial,
+            entity_id: signalEntityId,
+            operation_id: viewer.operation_id || operationId,
+            purpose: viewer.purpose || signal.purpose
+          }
+        )).catch(() => {});
+      }
+    }
+    const modal = window.modalCtx;
+    if (!modal || typeof modal !== 'object') return false;
+    const invoiceId = clean(modal.invoiceId || modal.invoiceDetail?.invoice?.id || modal.dataLoaded?.invoice?.id || modal.data?.id).toLowerCase();
+    if (invoiceId && signalEntityId !== invoiceId) return false;
+    modal.invoiceAsync = asObject(modal.invoiceAsync);
+    const slot = family === 'ISSUE' ? 'issue_operation'
+      : family === 'DELIVERY' ? 'delivery_operation'
+        : family === 'ASSET' ? 'asset_operation'
+          : family === 'TIMESHEET_DOCUMENT' ? 'timesheet_document_operation'
+            : 'document_operation';
+    const previous = asObject(modal.invoiceAsync[slot]);
+    if (Number(signal.effective_change_seq) < Number(previous.effective_change_seq || 0)) return false;
+    modal.invoiceAsync[slot] = { ...previous, ...signal };
+    if (signal.document_version_id && ['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(family)) {
+      modal.invoiceAsync.document_version_id = signal.document_version_id;
+    }
+    const host = document.querySelector('[data-invoice-async-state-host]');
+    if (host) host.innerHTML = renderInvoiceAsyncState({ ...asObject(modal.invoiceDetail), ...modal.invoiceAsync });
+    applyInvoiceActionButtonState(document);
+    return true;
+  }
+
+  function updateOpenInvoiceBatchModalFromSignal(signal) {
+    return window.InvoiceBatchModalV8?.applyInvoiceBatchOperationSignal?.(signal)
+      || window.applyInvoiceBatchOperationSignal?.(signal)
+      || false;
+  }
+
+  function renderTimesheetEvidenceProcessingState(value) {
+    const row = asObject(value);
+    const asset = typeof row.asset_state === 'string' ? { status: row.asset_state, error_code: row.asset_error } : asObject(row.asset_operation || row.asset_state);
+    const documentState = typeof row.timesheet_document_state === 'string'
+      ? { status: row.timesheet_document_state }
+      : asObject(row.timesheet_document_operation || row.timesheet_document_state);
+    const error = renderInvoiceOperationError(asset);
+    const retryOperationId = clean(asset.operation_id || row.asset_operation_id).toLowerCase();
+    return `<div class="timesheet-evidence-processing" data-timesheet-evidence-processing style="display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin-top:6px;">
+      <span>Source ${renderDocumentAssetBadge(asset, 'ASSET')}</span>
+      <span>Timesheet PDF ${renderDocumentAssetBadge(documentState, 'TIMESHEET_DOCUMENT')}</span>
+      ${error ? `<span class="mini error">${escapeHtml(error)}</span>` : ''}
+      ${asset.retry_available === true && UUID_RE.test(retryOperationId)
+        ? `<button type="button" class="btn btn-xs btn-outline" data-invoice-evidence-retry data-operation-id="${escapeHtml(retryOperationId)}">Retry</button>`
+        : ''}
+      ${upper(asset.error_code) === 'ASSET_MEDIA_TYPE_UNSUPPORTED' ? '<span class="mini">PDF, JPEG/JPG and static PNG only</span>' : ''}
+    </div>`;
+  }
+
+  async function submitInvoiceOperationControl(actions, options = {}) {
+    const canonicalActions = asArray(actions).map(action => {
+      const source = asObject(action);
+      const type = upper(source.action);
+      const operationId = clean(source.operation_id).toLowerCase();
+      if (!['RETRY', 'CANCEL', 'RESCHEDULE', 'RAISE_PRIORITY'].includes(type)
+          || !UUID_RE.test(operationId)) {
+        throw new Error('OPERATION_CONTROL_ACTION_SCHEMA_INVALID');
+      }
+      const result = { action: type, operation_id: operationId };
+      if (type === 'RETRY' && source.retry_chunk_id != null) {
+        const chunkId = clean(source.retry_chunk_id).toLowerCase();
+        if (!UUID_RE.test(chunkId)) throw new Error('OPERATION_CONTROL_ACTION_SCHEMA_INVALID');
+        result.retry_chunk_id = chunkId;
+      }
+      if (type === 'RESCHEDULE') {
+        const date = new Date(source.run_after_utc || '');
+        if (!Number.isFinite(date.getTime())) throw new Error('OPERATION_CONTROL_ACTION_SCHEMA_INVALID');
+        result.run_after_utc = date.toISOString();
+      }
+      return result;
+    });
+    if (!canonicalActions.length) throw new Error('OPERATION_CONTROL_ACTION_SCHEMA_INVALID');
+    const requestToken = clean(options.request_token) || crypto.randomUUID();
+    const response = await window.authFetch(invoiceApi('/api/invoice-operations/control'), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': requestToken
+      },
+      body: JSON.stringify({
+        contract_version: 'INVOICE_OPERATION_CONTROL_V2',
+        command_token: requestToken,
+        request_token: requestToken,
+        actions: canonicalActions
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw Object.assign(
+      new Error(payload.error || payload.message || `INVOICE_OPERATION_CONTROL_HTTP_${response.status}`),
+      { request_token: requestToken }
+    );
+    return { ...payload, request_token: requestToken };
+  }
+
+  async function retryInvoiceEvidenceOperation(operationId, button) {
+    const canonicalId = clean(operationId).toLowerCase();
+    if (!UUID_RE.test(canonicalId)) throw new Error('INVOICE_EVIDENCE_OPERATION_ID_INVALID');
+    if (button) {
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+    }
+    try {
+      const retainedToken = clean(button?.dataset?.operationControlToken) || crypto.randomUUID();
+      if (button) button.dataset.operationControlToken = retainedToken;
+      const payload = await submitInvoiceOperationControl(
+        [{ operation_id: canonicalId, action: 'RETRY' }],
+        { request_token: retainedToken }
+      );
+      const results = asArray(payload.results).filter(row => clean(row?.operation_id).toLowerCase() === canonicalId);
+      if (results.length) {
+        registerInvoiceOperationWatch(results, {
+          explicit_operation_ids: true,
+          operation_type: 'PREPARE_INVOICE_ASSET',
+          purpose: 'ASSET'
+        });
+        applyInvoiceOperationUpdates({ watched_invoice_operations: results });
+      }
+      try { window.__toast?.('Evidence retry queued.'); } catch {}
+      if (button) delete button.dataset.operationControlToken;
+      return payload;
+    } finally {
+      if (button?.isConnected) {
+        button.disabled = false;
+        button.setAttribute('aria-busy', 'false');
+      }
+    }
+  }
+
+  function handleInvoiceAsyncDelegatedClick(event) {
+    const button = event?.target?.closest?.('[data-invoice-evidence-retry]');
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    retryInvoiceEvidenceOperation(button.dataset.operationId, button)
+      .catch(error => {
+        try { window.__toast?.(clean(error?.message || error) || 'Evidence retry failed.'); } catch {}
+      });
+  }
+
+  function attachInvoiceAsyncDelegatedHandlers() {
+    if (delegatedClickInstalled) return;
+    document.addEventListener('click', handleInvoiceAsyncDelegatedClick);
+    delegatedClickInstalled = true;
+  }
+
+  function detachInvoiceAsyncDelegatedHandlers() {
+    if (!delegatedClickInstalled) return;
+    document.removeEventListener('click', handleInvoiceAsyncDelegatedClick);
+    delegatedClickInstalled = false;
+  }
+
+  function updateVisibleAssetStateFromSignal(signal) {
+    const entityId = clean(signal.entity_id);
+    if (!entityId) return false;
+    let applied = false;
+    const selector = [
+      `[data-evidence-id="${CSS.escape(entityId)}"]`,
+      `[data-timesheet-id="${CSS.escape(entityId)}"]`,
+      `[data-asset-id="${CSS.escape(entityId)}"]`
+    ].join(',');
+    for (const target of document.querySelectorAll(selector)) {
+      const family = operationFamily(signal);
+      const model = family === 'ASSET'
+        ? { asset_operation: signal, timesheet_document_state: target.dataset.timesheetDocumentState || 'NOT_READY' }
+        : { asset_state: target.dataset.assetState || 'QUEUED', timesheet_document_operation: signal };
+      target.dataset.asyncState = upper(signal.status);
+      let host = target.querySelector('[data-timesheet-evidence-processing-host]');
+      if (!host) {
+        host = document.createElement('div');
+        host.dataset.timesheetEvidenceProcessingHost = '1';
+        target.appendChild(host);
+      }
+      host.innerHTML = renderTimesheetEvidenceProcessingState(model);
+      applied = true;
+    }
+    return applied;
+  }
+
+  function hydrateVisibleTimesheetEvidenceProcessingStates(root = document) {
+    let applied = 0;
+    for (const target of root?.querySelectorAll?.('[data-evidence-id], [data-timesheet-id]') || []) {
+      const assetState = clean(target.dataset.assetState || target.dataset.processingState);
+      const documentState = clean(target.dataset.timesheetDocumentState || target.dataset.documentState);
+      const assetOperationId = clean(target.dataset.assetOperationId);
+      const documentOperationId = clean(target.dataset.documentOperationId);
+      if (!assetState && !documentState && !assetOperationId && !documentOperationId) continue;
+      const watches = loadInvoiceOperationWatches();
+      const assetOperation = watches.find(row => row.operation_id === assetOperationId);
+      const documentOperation = watches.find(row => row.operation_id === documentOperationId);
+      let host = target.querySelector('[data-timesheet-evidence-processing-host]');
+      if (!host) {
+        host = document.createElement('div');
+        host.dataset.timesheetEvidenceProcessingHost = '1';
+        target.appendChild(host);
+      }
+      host.innerHTML = renderTimesheetEvidenceProcessingState({
+        asset_state: assetState || 'QUEUED',
+        asset_operation: assetOperation,
+        timesheet_document_state: documentState || 'NOT_READY',
+        timesheet_document_operation: documentOperation
+      });
+      applied += 1;
+    }
+    return applied;
+  }
+
+  function notificationMessage(signal) {
+    const family = operationFamily(signal);
+    const success = signal.status === 'COMPLETE' || !!signal.document_version_id;
+    if (family === 'DELIVERY') return success ? 'Invoice email has been queued.' : 'Invoice delivery needs attention.';
+    if (family === 'ISSUE') return success ? 'Invoice issue completed.' : 'Invoice issue needs attention.';
+    if (family === 'ASSET') {
+      if (signal.error_code === 'ASSET_MEDIA_TYPE_UNSUPPORTED') return 'Evidence image is unsupported. Use PDF, JPEG/JPG or static PNG.';
+      return success ? 'Evidence is ready.' : 'Evidence processing needs attention.';
+    }
+    if (family === 'TIMESHEET_DOCUMENT') return success ? 'Timesheet PDF is ready.' : 'Timesheet PDF preparation failed.';
+    return success ? 'Invoice PDF is ready.' : 'Invoice document preparation failed.';
+  }
+
+  function markSharedInvoiceUpdate(message) {
+    window.__updatesAvailable = window.__updatesAvailable || {};
+    window.__updatesAvailable.invoices = true;
+    window.__invoiceAsyncLastUpdateMessage = clean(message);
+    try { window.renderTools?.(); } catch {}
+  }
+
+  function notifyInvoiceOperationResult(signal, previous) {
+    if (signal.notify !== true && !TERMINAL.has(signal.status) && !signal.document_version_id) return null;
+    const key = `${signal.operation_id}:${signal.effective_change_seq}:${signal.status}:${signal.document_version_id || ''}`;
+    if (asObject(previous?.notification_state)[key]) return null;
+    const message = notificationMessage(signal);
+    try { window.__toast?.(message); } catch {}
+    signal.notification_state = { ...asObject(previous?.notification_state), [key]: true };
+    markSharedInvoiceUpdate(message);
+    return key;
+  }
+
+  function scheduleInvoiceSectionRefresh(reason = 'invoice-operation-update') {
+    markSharedInvoiceUpdate(reason);
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(async () => {
+      refreshTimer = null;
+      try {
+        if (typeof window.invoiceAsyncRefreshVisibleSection === 'function') {
+          await window.invoiceAsyncRefreshVisibleSection({ reason });
+        } else if (clean(window.currentSection).toLowerCase() === 'invoices' && typeof window.refreshCurrentSection === 'function') {
+          await window.refreshCurrentSection({ preserve_state: true, reason });
+        } else {
+          window.renderTools?.();
+        }
+      } catch {}
+    }, 500);
+  }
+
+  function applyInvoiceOperationUpdates(payload) {
+    const signals = Array.isArray(payload) ? payload : asArray(payload?.watched_invoice_operations);
+    if (!signals.length) return [];
+    const map = new Map(loadInvoiceOperationWatches().map(row => [row.operation_id, row]));
+    const applied = [];
+    for (const value of signals) {
+      const signal = normaliseInvoiceOperationWatch(value);
+      if (!signal) continue;
+      const previous = map.get(signal.operation_id);
+      if (previous && signal.effective_change_seq < previous.effective_change_seq) continue;
+      const merged = mergeWatch(previous, signal);
+      notifyInvoiceOperationResult(merged, previous);
+      map.set(merged.operation_id, merged);
+      updateOpenInvoiceModalFromSignal(merged);
+      Promise.resolve(updateOpenInvoiceBatchModalFromSignal(merged)).catch(() => {});
+      updateVisibleAssetStateFromSignal(merged);
+      applied.push(merged);
+    }
+    saveInvoiceOperationWatches([...map.values()]);
+    applyInvoiceActionButtonState(document);
+    if (applied.some(row => TERMINAL.has(row.status) || row.document_version_id)) {
+      scheduleInvoiceSectionRefresh('Invoice processing updated');
+    }
+    return applied;
+  }
+
+  async function openExactReadyDocument(documentVersionId, options = {}) {
+    const id = clean(typeof documentVersionId === 'string'
+      ? documentVersionId
+      : documentVersionId?.document_version_id || documentVersionId?.id).toLowerCase();
+    if (!UUID_RE.test(id)) throw new Error('READY_DOCUMENT_VERSION_ID_INVALID');
+    const presign = await window.authFetch(invoiceApi(`/api/invoice-document-versions/${encodeURIComponent(id)}/presign`), {
+      method: 'POST',
+      headers: { accept: 'application/json' },
+      signal: options.signal
+    });
+    const descriptor = await presign.json().catch(() => ({}));
+    if (!presign.ok || !descriptor.url || clean(descriptor.document_version_id).toLowerCase() !== id) {
+      throw new Error(descriptor.error || `READY_DOCUMENT_ACCESS_FAILED_${presign.status}`);
+    }
+    const documentResponse = await window.authFetch(descriptor.url, {
+      method: 'GET',
+      headers: { accept: 'application/pdf' },
+      signal: options.signal
+    });
+    if (!documentResponse.ok) throw new Error(`READY_DOCUMENT_DOWNLOAD_FAILED_${documentResponse.status}`);
+    const blob = await documentResponse.blob();
+    if (blob.type && blob.type !== 'application/pdf') throw new Error('READY_DOCUMENT_MEDIA_TYPE_INVALID');
+    const blobUrl = URL.createObjectURL(blob);
+    if (options.returnBlobUrl === true) {
+      return {
+        document_version_id: id,
+        purpose: descriptor.purpose || null,
+        blob_url: blobUrl,
+        revoke: () => URL.revokeObjectURL(blobUrl)
+      };
+    }
+    const opened = window.open(blobUrl, '_blank', 'noopener');
+    if (!opened) {
+      const anchor = document.createElement('a');
+      anchor.href = blobUrl;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener';
+      anchor.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 5 * 60 * 1000);
+    return { document_version_id: id, purpose: descriptor.purpose || null };
+  }
+
+  function renderInvoiceAsyncViewerContent(modalCtx) {
+    const viewer = asObject(modalCtx?.invoiceAsync?.viewer_request);
+    const diagnostic = viewer.error
+      ? (window.invoiceDiagnosticForCode?.(viewer.error) || { short_label: 'Needs attention' })
+      : null;
+    const title = viewer.entity_type === 'TIMESHEET' ? 'Timesheet PDF' : 'Invoice PDF';
+    return `<div class="invoice-async-viewer" data-invoice-async-viewer="${escapeHtml(viewer.entity_id || '')}">
+      <div class="invoice-async-viewer-status" aria-live="polite">
+        ${viewer.error ? `<span class="error">${escapeHtml(diagnostic.short_label)}</span>` : escapeHtml(viewer.status_message || 'Preparing document')}
+      </div>
+      ${viewer.blob_url
+        ? `<iframe src="${escapeHtml(viewer.blob_url)}" title="${escapeHtml(title)} preview" style="width:100%;height:75vh;border:1px solid var(--line);border-radius:10px;background:#111;"></iframe>`
+        : viewer.viewer_state === 'BLOCKED'
+          ? ''
+          : '<div style="display:grid;place-items:center;min-height:55vh;gap:10px;"><span class="invbatch-spinner" aria-hidden="true"></span><span>Preparing document</span></div>'}
+    </div>`;
+  }
+
+  function repaintInvoiceAsyncViewer(modalCtx) {
+    const entityId = clean(modalCtx?.invoiceAsync?.viewer_request?.entity_id);
+    if (!entityId) return;
+    const host = document.querySelector(`[data-invoice-async-viewer="${CSS.escape(entityId)}"]`);
+    if (host) host.outerHTML = renderInvoiceAsyncViewerContent(modalCtx);
+  }
+
+  function revokeInvoiceAsyncViewerBlob(modalCtx) {
+    const viewer = asObject(modalCtx?.invoiceAsync?.viewer_request);
+    if (viewer.blob_url) {
+      try { URL.revokeObjectURL(viewer.blob_url); } catch {}
+      viewer.blob_url = null;
+    }
+  }
+
+  function openPreparingInvoiceViewer(modalCtx, entityType, entityId, purpose, commandToken, options = {}) {
+    const canonicalEntityType = upper(entityType);
+    const canonicalEntityId = clean(entityId).toLowerCase();
+    const requestedPurpose = upper(purpose);
+    modalCtx.invoiceAsync = asObject(modalCtx.invoiceAsync);
+    try { modalCtx.invoiceAsync.viewer_request?.abort_controller?.abort(); } catch {}
+    revokeInvoiceAsyncViewerBlob(modalCtx);
+    const requestSerial = crypto.randomUUID();
+    const abortController = new AbortController();
+    modalCtx.invoiceAsync.viewer_request = {
+      contract_version: 'INVOICE_VIEWER_V2',
+      entity_type: canonicalEntityType,
+      entity_id: canonicalEntityId,
+      purpose: requestedPurpose,
+      requested_purpose: requestedPurpose,
+      command_token: commandToken,
+      request_serial: requestSerial,
+      abort_controller: abortController,
+      open: true,
+      viewer_state: 'PREPARING',
+      status_message: canonicalEntityType === 'TIMESHEET' ? 'Preparing timesheet' : 'Preparing preview',
+      document_version_id: null,
+      operation_id: null,
+      blob_url: null,
+      error: null
+    };
+    const showViewer = options.show_viewer !== false;
+    if (showViewer) activeInvoiceViewers.set(canonicalEntityId, modalCtx);
+    else activeInvoiceViewers.delete(canonicalEntityId);
+    if (!showViewer) return requestSerial;
+    if (typeof window.showModal !== 'function') return requestSerial;
+    window.showModal(
+      canonicalEntityType === 'TIMESHEET' ? 'Timesheet PDF' : 'Invoice PDF Preview',
+      [{ key: 'main', label: 'PDF' }],
+      () => renderInvoiceAsyncViewerContent(modalCtx),
+      null,
+      true,
+      null,
+      {
+        kind: 'invoice-async-document-viewer-v8',
+        noParentGate: true,
+        onDismiss: () => {
+          const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
+          viewer.open = false;
+          try { viewer.abort_controller?.abort(); } catch {}
+          revokeInvoiceAsyncViewerBlob(modalCtx);
+          activeInvoiceViewers.delete(canonicalEntityId);
+        }
+      }
+    );
+    return requestSerial;
+  }
+
+  async function completeInvoiceAsyncViewer(modalCtx, documentVersionId, expected = {}) {
+    const viewer = asObject(modalCtx?.invoiceAsync?.viewer_request);
+    const canonicalVersion = clean(documentVersionId).toLowerCase();
+    if (!viewer.open || !UUID_RE.test(canonicalVersion)) return null;
+    if (expected.request_serial && viewer.request_serial !== expected.request_serial) return null;
+    if (expected.entity_id && viewer.entity_id !== expected.entity_id) return null;
+    if (expected.operation_id && viewer.operation_id !== expected.operation_id) return null;
+    if (expected.purpose && viewer.purpose !== expected.purpose) return null;
+    if (viewer.document_version_id === canonicalVersion && viewer.blob_url) return viewer;
+    viewer.status_message = 'Opening exact document version';
+    viewer.error = null;
+    repaintInvoiceAsyncViewer(modalCtx);
+    try {
+      const result = await openExactReadyDocument(canonicalVersion, {
+        returnBlobUrl: true,
+        signal: viewer.abort_controller?.signal
+      });
+      if (!viewer.open
+          || (expected.request_serial && viewer.request_serial !== expected.request_serial)
+          || (expected.entity_id && viewer.entity_id !== expected.entity_id)
+          || (expected.operation_id && viewer.operation_id !== expected.operation_id)
+          || (expected.purpose && viewer.purpose !== expected.purpose)) {
+        result.revoke?.();
+        return null;
+      }
+      revokeInvoiceAsyncViewerBlob(modalCtx);
+      viewer.document_version_id = canonicalVersion;
+      viewer.blob_url = result.blob_url;
+      viewer.viewer_state = 'READY';
+      viewer.status_message = viewer.entity_type === 'TIMESHEET' ? 'Timesheet PDF ready' : 'Invoice PDF ready';
+      viewer.error = null;
+      repaintInvoiceAsyncViewer(modalCtx);
+      return viewer;
+    } catch (error) {
+      viewer.status_message = 'Preview failed';
+      viewer.viewer_state = 'BLOCKED';
+      viewer.error = clean(error?.message || error);
+      repaintInvoiceAsyncViewer(modalCtx);
+      return null;
+    }
+  }
+
+  function attachOperationToButtons(operation, family) {
+    if (!operation?.operation_id) return;
+    const modal = window.modalCtx;
+    const selectors = family === 'DELIVERY'
+      ? ['[data-action*="email"]', '#btnInvoiceEmail']
+      : ['[data-action*="pdf"]', '[data-action*="render"]', '#btnInvoiceRenderPdf'];
+    for (const selector of selectors) {
+      for (const button of document.querySelectorAll(selector)) {
+        button.dataset.invoiceAsyncOperationId = operation.operation_id;
+        button.dataset.invoiceAsyncFamily = family;
+        if (modal?.invoiceId) button.dataset.invoiceId = modal.invoiceId;
+      }
+    }
+    applyInvoiceActionButtonState(document);
+  }
+
+  async function handleInvoiceRenderPdfAsync(modalCtx) {
+    const invoiceId = clean(
+      modalCtx?.invoiceId
+      || modalCtx?.invoiceDetail?.invoice?.id
+      || modalCtx?.dataLoaded?.invoice?.id
+      || modalCtx?.data?.id
+    ).toLowerCase();
+    if (!UUID_RE.test(invoiceId)) {
+      window.alert?.('Invoice id missing');
+      return null;
+    }
+    modalCtx.invoiceAsync = asObject(modalCtx.invoiceAsync);
+    const invoiceRecord = asObject(
+      modalCtx?.invoiceDetail?.invoice
+      || modalCtx?.dataLoaded?.invoice
+      || modalCtx?.dataLoaded?.invoice_row
+      || modalCtx?.data
+    );
+    const invoiceStatusAtOpen = upper(invoiceRecord.status);
+    const signalReadyVersionId = clean(modalCtx.invoiceAsync.document_version_id).toLowerCase();
+    const recordReadyVersionId = clean(
+      ['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'].includes(invoiceStatusAtOpen)
+        ? invoiceRecord.issued_document_version_id
+        : invoiceRecord.preview_document_version_id
+    ).toLowerCase();
+    const readyVersionId = UUID_RE.test(signalReadyVersionId)
+      ? signalReadyVersionId
+      : recordReadyVersionId;
+    const exactReadyFromSignal = UUID_RE.test(signalReadyVersionId);
+    const exactReadyFromRecord = upper(invoiceRecord.document_state) === 'READY'
+      && UUID_RE.test(recordReadyVersionId);
+    if (exactReadyFromSignal || exactReadyFromRecord) {
+      const purpose = ['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'].includes(invoiceStatusAtOpen)
+        ? 'FINAL_ISSUE'
+        : 'DRAFT_PREVIEW';
+      const commandToken = crypto.randomUUID();
+      const requestSerial = openPreparingInvoiceViewer(
+        modalCtx,
+        'INVOICE',
+        invoiceId,
+        purpose,
+        commandToken
+      );
+      modalCtx.invoiceAsync.viewer_request.purpose = purpose;
+      await completeInvoiceAsyncViewer(modalCtx, readyVersionId, {
+        request_serial: requestSerial,
+        entity_id: invoiceId,
+        purpose
+      });
+      return {
+        contract_version: 'INVOICE_VIEWER_V2',
+        viewer_state: 'READY',
+        purpose,
+        document_version_id: readyVersionId
+      };
+    }
+    const retained = asObject(modalCtx.invoiceAsync.viewer_request);
+    const commandToken = retained.open && retained.entity_id === invoiceId && clean(retained.command_token)
+      ? clean(retained.command_token)
+      : crypto.randomUUID();
+    const requestSerial = openPreparingInvoiceViewer(
+      modalCtx,
+      'INVOICE',
+      invoiceId,
+      'DRAFT_PREVIEW',
+      commandToken,
+      { show_viewer: false }
+    );
+    let response;
+    try {
+      response = await window.authFetch(invoiceApi(`/api/invoices/${encodeURIComponent(invoiceId)}/render`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': commandToken },
+        body: JSON.stringify({ command_token: commandToken, priority_reason: 'VIEW_NOW' }),
+        signal: modalCtx.invoiceAsync.viewer_request.abort_controller.signal
+      });
+    } catch (error) {
+      const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
+      if (viewer.open && viewer.request_serial === requestSerial
+          && viewer.entity_type === 'INVOICE' && viewer.entity_id === invoiceId) {
+        viewer.status_message = 'Preview failed';
+        viewer.error = clean(error?.message || error);
+        repaintInvoiceAsyncViewer(modalCtx);
+      }
+      throw error;
+    }
+    const payload = await response.json().catch(() => ({}));
+    const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
+    const currentRequest = viewer.open
+      && viewer.request_serial === requestSerial
+      && viewer.entity_type === 'INVOICE'
+      && viewer.entity_id === invoiceId;
+    if (clean(payload.contract_version) !== 'INVOICE_VIEWER_V2') {
+      if (currentRequest) {
+        viewer.viewer_state = 'BLOCKED';
+        viewer.status_message = 'Preview failed';
+        viewer.error = 'INVOICE_VIEWER_CONTRACT_MISMATCH';
+        repaintInvoiceAsyncViewer(modalCtx);
+      }
+      throw new Error('INVOICE_VIEWER_CONTRACT_MISMATCH');
+    }
+    const viewerState = upper(payload.viewer_state);
+    const purpose = upper(payload.purpose || 'DRAFT_PREVIEW');
+    const versionId = clean(payload.document_version?.id || payload.document_version_id).toLowerCase();
+    if (!currentRequest) return payload;
+    if (!['DRAFT_PREVIEW', 'FINAL_ISSUE'].includes(purpose)) {
+      viewer.viewer_state = 'BLOCKED';
+      viewer.status_message = 'Preview failed';
+      viewer.error = 'INVOICE_VIEWER_PURPOSE_INVALID';
+      repaintInvoiceAsyncViewer(modalCtx);
+      throw new Error('INVOICE_VIEWER_PURPOSE_INVALID');
+    }
+    const invoiceStatus = upper(
+      modalCtx?.invoiceDetail?.invoice?.status
+      || modalCtx?.dataLoaded?.invoice?.status
+      || modalCtx?.data?.status
+    );
+    if (['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'].includes(invoiceStatus)
+        && purpose !== 'FINAL_ISSUE') {
+      viewer.viewer_state = 'BLOCKED';
+      viewer.status_message = 'Issued document unavailable';
+      viewer.error = 'ISSUED_DOCUMENT_PURPOSE_INVALID';
+      repaintInvoiceAsyncViewer(modalCtx);
+      throw new Error('ISSUED_DOCUMENT_PURPOSE_INVALID');
+    }
+    viewer.purpose = purpose;
+    if (response.status === 200 && viewerState === 'READY' && UUID_RE.test(versionId)) {
+      viewer.open = false;
+      viewer.viewer_state = 'READY';
+      viewer.document_version_id = versionId;
+      viewer.status_message = 'Invoice PDF ready';
+      modalCtx.invoiceAsync.document_version_id = versionId;
+      modalCtx.invoiceAsync.document_state = 'READY';
+      modalCtx.invoiceAsync.document_operation = {
+        ...asObject(payload.operation),
+        operation_id: clean(payload.operation?.operation_id).toLowerCase() || null,
+        operation_type: payload.operation?.operation_type || 'VIEW_INVOICE_DOCUMENT',
+        entity_type: 'INVOICE',
+        entity_id: invoiceId,
+        status: 'COMPLETE',
+        purpose,
+        document_version_id: versionId
+      };
+      const host = document.querySelector('[data-invoice-async-state-host]');
+      if (host) host.innerHTML = renderInvoiceAsyncState({ ...asObject(modalCtx.invoiceDetail), ...modalCtx.invoiceAsync });
+      const pdfButton = document.querySelector('[data-action="inv-open-pdf"]');
+      if (pdfButton) {
+        pdfButton.disabled = false;
+        pdfButton.textContent = 'Open invoice PDF';
+        pdfButton.dataset.documentVersionId = versionId;
+        pdfButton.setAttribute('aria-busy', 'false');
+        pdfButton.setAttribute('aria-disabled', 'false');
+      }
+      try { window.__toast?.('Invoice PDF is ready to open.'); } catch {}
+      return payload;
+    }
+    if (response.status === 202 && viewerState === 'PREPARING') {
+      const operations = registerInvoiceOperationsFromResponse(payload, {
+        response_family: 'VIEW',
+        operation_type: 'VIEW_INVOICE_DOCUMENT',
+        entity_type: 'INVOICE',
+        entity_id: invoiceId,
+        purpose,
+        command_token: commandToken,
+        modal_identity: `invoice:${invoiceId}`,
+        explicit_operation_ids: true
+      });
+      const operation = operations[0];
+      if (!UUID_RE.test(clean(operation?.operation_id))) {
+        viewer.viewer_state = 'BLOCKED';
+        viewer.status_message = 'Preview failed';
+        viewer.error = 'INVOICE_VIEWER_CONTRACT_MISMATCH';
+        repaintInvoiceAsyncViewer(modalCtx);
+        throw new Error('INVOICE_VIEWER_CONTRACT_MISMATCH');
+      }
+      viewer.operation_id = operation.operation_id;
+      viewer.status_message = payload.status_message || 'Generating invoice PDF';
+      modalCtx.invoiceAsync = {
+        ...asObject(modalCtx.invoiceAsync),
+        document_operation: operation,
+        document_state: 'PREPARING'
+      };
+      const host = document.querySelector('[data-invoice-async-state-host]');
+      if (host) host.innerHTML = renderInvoiceAsyncState({ ...asObject(modalCtx.invoiceDetail), ...modalCtx.invoiceAsync });
+      attachOperationToButtons(operation, 'DOCUMENT');
+      try { window.__toast?.('Invoice PDF generation started. This button will update when it is ready.'); } catch {}
+      return payload;
+    }
+    const errorCode = clean(payload.error_code || payload.error || payload.message || `INVOICE_DOCUMENT_HTTP_${response.status}`);
+    viewer.status_message = 'Preview failed';
+    viewer.viewer_state = 'BLOCKED';
+    viewer.error = errorCode;
+    repaintInvoiceAsyncViewer(modalCtx);
+    if (errorCode === 'ISSUED_DOCUMENT_INTEGRITY_FAILURE' || errorCode === 'ISSUED_DOCUMENT_POINTER_MISSING') {
+      throw new Error(`The issued legal document cannot be opened (${errorCode}).`);
+    }
+    throw new Error(errorCode);
+  }
+
+  async function openTimesheetDocumentV8(timesheetId, options = {}) {
+    const canonicalId = clean(timesheetId).toLowerCase();
+    if (!UUID_RE.test(canonicalId)) throw new Error('TIMESHEET_ID_INVALID');
+    const modalCtx = activeInvoiceViewers.get(canonicalId) || { invoiceAsync: {} };
+    const retained = asObject(modalCtx.invoiceAsync?.viewer_request);
+    const commandToken = clean(options.command_token)
+      || (retained.open && retained.entity_id === canonicalId ? clean(retained.command_token) : '')
+      || crypto.randomUUID();
+    const requestSerial = openPreparingInvoiceViewer(
+      modalCtx,
+      'TIMESHEET',
+      canonicalId,
+      'TIMESHEET',
+      commandToken
+    );
+    let response;
+    try {
+      response = await window.authFetch(invoiceApi(`/api/timesheets/${encodeURIComponent(canonicalId)}/pdf`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': commandToken },
+        body: JSON.stringify({ command_token: commandToken, priority_reason: 'VIEW_NOW' }),
+        signal: modalCtx.invoiceAsync.viewer_request.abort_controller.signal
+      });
+    } catch (error) {
+      const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
+      if (viewer.request_serial === requestSerial) {
+        viewer.viewer_state = 'BLOCKED';
+        viewer.status_message = 'Timesheet document failed';
+        viewer.error = clean(error?.message || error);
+        repaintInvoiceAsyncViewer(modalCtx);
+      }
+      throw error;
+    }
+    const payload = await response.json().catch(() => ({}));
+    const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
+    const currentRequest = viewer.open
+      && viewer.request_serial === requestSerial
+      && viewer.entity_type === 'TIMESHEET'
+      && viewer.entity_id === canonicalId;
+    if (clean(payload.contract_version) !== 'INVOICE_VIEWER_V2') {
+      if (currentRequest) {
+        viewer.viewer_state = 'BLOCKED';
+        viewer.status_message = 'Timesheet document failed';
+        viewer.error = 'INVOICE_VIEWER_CONTRACT_MISMATCH';
+        repaintInvoiceAsyncViewer(modalCtx);
+      }
+      throw new Error('INVOICE_VIEWER_CONTRACT_MISMATCH');
+    }
+    const viewerState = upper(payload.viewer_state);
+    const purpose = upper(payload.purpose || 'TIMESHEET');
+    const versionId = clean(payload.document_version?.id || payload.document_version_id).toLowerCase();
+    if (!currentRequest) return payload;
+    if (purpose !== 'TIMESHEET') {
+      viewer.viewer_state = 'BLOCKED';
+      viewer.status_message = 'Timesheet document failed';
+      viewer.error = 'INVOICE_VIEWER_PURPOSE_INVALID';
+      repaintInvoiceAsyncViewer(modalCtx);
+      throw new Error('INVOICE_VIEWER_PURPOSE_INVALID');
+    }
+    viewer.purpose = purpose;
+    if (response.status === 200 && viewerState === 'READY' && UUID_RE.test(versionId)) {
+      await completeInvoiceAsyncViewer(modalCtx, versionId, {
+        request_serial: requestSerial,
+        entity_id: canonicalId,
+        purpose
+      });
+      return payload;
+    }
+    if (response.status === 202 && viewerState === 'PREPARING' && UUID_RE.test(clean(payload.operation_id))) {
+      const [operation] = registerInvoiceOperationWatch({
+        operation_id: payload.operation_id,
+        operation_type: 'VIEW_TIMESHEET_DOCUMENT',
+        entity_type: 'TIMESHEET',
+        entity_id: canonicalId,
+        purpose,
+        status: 'QUEUED',
+        phase: 'BUSINESS_WORK',
+        command_token: commandToken,
+        modal_identity: `timesheet:${canonicalId}`
+      }, { response_family: 'VIEW', explicit_operation_ids: true });
+      modalCtx.invoiceAsync.viewer_request.operation_id = operation?.operation_id || payload.operation_id;
+      modalCtx.invoiceAsync.viewer_request.status_message = payload.status_message || 'Preparing timesheet';
+      return payload;
+    }
+    const errorCode = clean(payload.error_code || payload.error || payload.message || `TIMESHEET_DOCUMENT_HTTP_${response.status}`);
+    if (currentRequest) {
+      viewer.viewer_state = 'BLOCKED';
+      viewer.status_message = payload.status_message || 'Timesheet document blocked';
+      viewer.error = errorCode;
+      repaintInvoiceAsyncViewer(modalCtx);
+    }
+    throw new Error(errorCode);
+  }
+
+  async function handleInvoiceEmailAsync(modalCtx, options = {}) {
+    const invoiceId = clean(modalCtx?.invoiceId || modalCtx?.invoiceDetail?.invoice?.id || modalCtx?.data?.id).toLowerCase();
+    if (!UUID_RE.test(invoiceId)) {
+      window.alert?.('Invoice id missing');
+      return null;
+    }
+    modalCtx.invoiceAsync = asObject(modalCtx.invoiceAsync);
+    const explicitResend = options.resend === true;
+    const commandToken = explicitResend || !clean(modalCtx.invoiceAsync.delivery_command_token)
+      ? crypto.randomUUID()
+      : clean(modalCtx.invoiceAsync.delivery_command_token);
+    const deliveryToken = explicitResend || !clean(modalCtx.invoiceAsync.delivery_request_token)
+      ? crypto.randomUUID()
+      : clean(modalCtx.invoiceAsync.delivery_request_token);
+    if (commandToken === deliveryToken) throw new Error('DELIVERY_REQUEST_TOKEN_INVALID');
+    modalCtx.invoiceAsync.delivery_command_token = commandToken;
+    modalCtx.invoiceAsync.delivery_request_token = deliveryToken;
+    const body = {
+      command_token: commandToken,
+      delivery_request_token: deliveryToken
+    };
+    const delivery = asObject(modalCtx.invoiceAsync.delivery_intent || modalCtx.delivery_intent);
+    if (delivery.delivery_policy) body.delivery_policy = delivery.delivery_policy;
+    if (delivery.recipient_set) body.recipient_set = delivery.recipient_set;
+    if (delivery.cc) body.cc = delivery.cc;
+    if (delivery.bcc) body.bcc = delivery.bcc;
+    const response = await window.authFetch(invoiceApi(`/api/invoices/${encodeURIComponent(invoiceId)}/email`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': commandToken },
+      body: JSON.stringify(body)
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (![200, 202, 207].includes(response.status)) {
+      throw new Error(payload.error || payload.message || `INVOICE_DELIVERY_HTTP_${response.status}`);
+    }
+    const operations = registerInvoiceOperationsFromResponse(payload, {
+      response_family: 'DELIVERY',
+      operation_type: 'DELIVER_INVOICES',
+      entity_type: 'INVOICE',
+      entity_id: invoiceId,
+      purpose: 'DELIVERY',
+      command_token: commandToken,
+      modal_identity: `invoice:${invoiceId}`,
+      explicit_operation_ids: true
+    });
+    const operation = operations[0];
+    modalCtx.invoiceAsync.delivery_operation = operation;
+    attachOperationToButtons(operation, 'DELIVERY');
+    try { window.__toast?.(explicitResend ? 'A new invoice delivery attempt has started.' : 'Invoice delivery preparation started.'); } catch {}
+    return payload;
+  }
+
+  function augmentInvoiceModalRenderer() {
+    const original = window.renderInvoiceModalContent;
+    if (typeof original !== 'function' || original.__invoiceAsyncWrapped) return;
+    const wrapped = function invoiceAsyncModalRenderer(modalCtx, invoiceData) {
+      const html = original.apply(this, arguments);
+      const detail = asObject(invoiceData || modalCtx?.invoiceDetail);
+      const asyncState = { ...detail, ...asObject(modalCtx?.invoiceAsync) };
+      return `${html}<div data-invoice-async-state-host>${renderInvoiceAsyncState(asyncState)}</div>`;
+    };
+    wrapped.__invoiceAsyncWrapped = true;
+    wrapped.__invoiceAsyncOriginal = original;
+    window.renderInvoiceModalContent = wrapped;
+  }
+
+  function invoiceAsyncUnavailableAction() {
+    const message = 'Invoice processing is temporarily unavailable while the new invoice system is being updated.';
+    try { window.__toast?.(message); } catch {}
+    if (typeof window.__toast !== 'function') window.alert?.(message);
+    return Promise.resolve(null);
+  }
+
+  function installInvoiceAsyncUnavailableActions() {
+    window.handleInvoiceRenderPdf = invoiceAsyncUnavailableAction;
+    window.handleInvoiceEmail = invoiceAsyncUnavailableAction;
+    window.openInvoiceBatchGenerateModal = invoiceAsyncUnavailableAction;
+    window.openInvoiceBatchIssueModal = invoiceAsyncUnavailableAction;
+    window.getTimesheetPdfUrl = invoiceAsyncUnavailableAction;
+    window.openTimesheetPdf = invoiceAsyncUnavailableAction;
+    window.openTimesheetDocumentV8 = invoiceAsyncUnavailableAction;
+    window.__invoiceAsyncOverridesInstalled = false;
+    window.__invoiceBatchModalOverridesInstalled = false;
+    return true;
+  }
+
+  function installOverrides() {
+    if (installed) return true;
+    if (window.__invoiceAsyncCapability?.enabled_for_user !== true) return false;
+    augmentInvoiceModalRenderer();
+    window.handleInvoiceRenderPdf = handleInvoiceRenderPdfAsync;
+    window.handleInvoiceEmail = handleInvoiceEmailAsync;
+    window.getTimesheetPdfUrl = openTimesheetDocumentV8;
+    window.openTimesheetPdf = openTimesheetDocumentV8;
+    window.openTimesheetDocumentV8 = openTimesheetDocumentV8;
+    window.InvoiceBatchModalV8?.install?.();
+    attachInvoiceAsyncDelegatedHandlers();
+    saveInvoiceOperationWatches(loadInvoiceOperationWatches());
+    applyInvoiceActionButtonState(document);
+    hydrateVisibleTimesheetEvidenceProcessingStates(document);
+    installed = true;
+    window.__invoiceAsyncOverridesInstalled = true;
+    return true;
+  }
+
+  function uninstallOverrides(options = {}) {
+    const reason = clean(options.reason || 'capability-unavailable').toLowerCase();
+    const priorWatchKey = clean(options.previous_watch_storage_key || activeWatchStorageKey);
+    for (const modalCtx of activeInvoiceViewers.values()) {
+      const viewer = asObject(modalCtx?.invoiceAsync?.viewer_request);
+      viewer.open = false;
+      try { viewer.abort_controller?.abort(); } catch {}
+      revokeInvoiceAsyncViewerBlob(modalCtx);
+    }
+    activeInvoiceViewers.clear();
+    try { window.InvoiceBatchModalV8?.close?.(); } catch {}
+    detachInvoiceAsyncDelegatedHandlers();
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = null;
+    window.__invoiceOperationWatches = [];
+    if (['logout', 'user-replacement'].includes(reason)) {
+      try {
+        if (priorWatchKey) sessionStorage.removeItem(priorWatchKey);
+        sessionStorage.removeItem(LEGACY_WATCH_STORAGE_KEY);
+      } catch {}
+      activeWatchStorageKey = null;
+    }
+    installed = false;
+    installInvoiceAsyncUnavailableActions();
+    return true;
+  }
+
+  async function initialiseInvoiceAsyncUi(options = {}) {
+    const requestedWatchKey = operationWatchStorageKey();
+    if (activeWatchStorageKey && activeWatchStorageKey !== requestedWatchKey) {
+      uninstallOverrides({
+        reason: requestedWatchKey ? 'user-replacement' : 'logout',
+        previous_watch_storage_key: activeWatchStorageKey
+      });
+    }
+    const capabilities = await loadInvoiceAsyncCapabilities(options);
+    const resolvedWatchKey = operationWatchStorageKey();
+    if (requestedWatchKey !== resolvedWatchKey) {
+      uninstallOverrides({
+        reason: resolvedWatchKey ? 'user-replacement' : 'logout',
+        previous_watch_storage_key: activeWatchStorageKey
+      });
+    }
+    if (capabilities.enabled_for_user !== true) {
+      uninstallOverrides({
+        reason: resolvedWatchKey ? 'capability-unavailable' : 'logout',
+        previous_watch_storage_key: activeWatchStorageKey
+      });
+      return capabilities;
+    }
+    activeWatchStorageKey = resolvedWatchKey;
+    installOverrides();
+    return capabilities;
+  }
+
+  Object.assign(window, {
+    fetchInvoiceAsyncCapabilities,
+    validateInvoiceAsyncCapabilities,
+    cacheInvoiceAsyncCapabilities,
+    loadInvoiceAsyncCapabilities,
+    isInvoiceAsyncUiEnabled,
+    initialiseInvoiceAsyncUi,
+    installInvoiceAsyncOverrides: installOverrides,
+    installInvoiceAsyncUnavailableActions,
+    uninstallInvoiceAsyncOverrides: uninstallOverrides,
+    loadInvoiceOperationWatches,
+    normaliseInvoiceOperationWatch,
+    deduplicateInvoiceOperationWatch,
+    pruneInvoiceOperationWatches,
+    saveInvoiceOperationWatches,
+    registerInvoiceOperationWatch,
+    extractInvoiceOperationRows: extractOperationRows,
+    registerInvoiceOperationsFromResponse,
+    markInvoiceOperationHandled,
+    acknowledgeInvoiceOperationNotification,
+    buildInvoiceHeartbeatWatches,
+    applyInvoiceOperationUpdates,
+    renderInvoiceAsyncState,
+    deriveInvoiceAsyncActionState,
+    renderInvoiceProgressText,
+    renderInvoiceOperationError,
+    renderDocumentAssetBadge,
+    applyInvoiceActionButtonState,
+    renderTimesheetEvidenceProcessingState,
+    hydrateVisibleTimesheetEvidenceProcessingStates,
+    retryInvoiceEvidenceOperation,
+    submitInvoiceOperationControl,
+    openExactReadyDocument,
+    revokeInvoiceAsyncViewerBlob,
+    completeInvoiceAsyncViewer,
+    openTimesheetDocumentV8,
+    handleInvoiceRenderPdfAsync,
+    handleInvoiceEmailAsync
+  });
+
+  window.__invoiceAsyncCapability = unavailableCapabilities('NOT_INITIALISED');
+  installInvoiceAsyncUnavailableActions();
+  window.addEventListener('pagehide', () => {
+    for (const modalCtx of activeInvoiceViewers.values()) {
+      revokeInvoiceAsyncViewerBlob(modalCtx);
+      try { modalCtx?.invoiceAsync?.viewer_request?.abort_controller?.abort(); } catch {}
+    }
+    activeInvoiceViewers.clear();
+  });
+  const begin = () => {
+    // The capability endpoint is authenticated. On the signed-out login page,
+    // wait for bootstrapApp() after login instead of creating an expected 401
+    // request and a noisy browser console entry.
+    if (!capabilityCacheKey()) {
+      return Promise.resolve(cacheInvoiceAsyncCapabilities(
+        unavailableCapabilities('INVOICE_ASYNC_AUTHENTICATED_USER_REQUIRED')
+      ));
+    }
+    return initialiseInvoiceAsyncUi().catch(() => unavailableCapabilities());
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', begin, { once: true });
+  } else {
+    queueMicrotask(begin);
+  }
+})();
