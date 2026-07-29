@@ -81,6 +81,33 @@ test('a version-only selection update preserves unfetched workbench sections', (
   assert.match(applyBody, /mergeSectionRowsPreservingUnfetchedSections\(previousRowsBySection, incomingPreviewPageRowsBySection, fetchedPreviewSections\)/);
 });
 
+test('same-session page reloads cannot regress the accepted workbench version', () => {
+  const start = main.indexOf('function resolvePayWorkbenchSessionVersionV1(');
+  const end = main.indexOf('\n\nfunction applyPayWorkbenchPreviewToState', start);
+  assert.ok(start >= 0);
+  assert.ok(end > start);
+  const helperSource = main.slice(start, end);
+  const result = vm.runInNewContext(`
+    ${helperSource}
+    ({
+      sameSession: resolvePayWorkbenchSessionVersionV1([12, 11, null], 10, false),
+      advancedSession: resolvePayWorkbenchSessionVersionV1([12, 11], 13, false),
+      replacementSession: resolvePayWorkbenchSessionVersionV1([12, 11], 1, true)
+    });
+  `);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result)),
+    { sameSession: 12, advancedSession: 13, replacementSession: 1 }
+  );
+
+  const applyStart = main.indexOf('function applyPayWorkbenchPreviewToState(');
+  const applyEnd = main.indexOf('\nfunction ', applyStart + 1);
+  const applyBody = main.slice(applyStart, applyEnd);
+  assert.match(applyBody, /effectiveSessionVersion = resolvePayWorkbenchSessionVersionV1/);
+  assert.match(applyBody, /wiz\.decisions\.session_version = effectiveSessionVersion/);
+  assert.match(applyBody, /wiz\.workbench\.session_version = effectiveSessionVersion/);
+});
+
 test('candidate refresh builds one successor graph without cloning the installed envelope first', () => {
   const start = main.indexOf('function mergePayWorkbenchCandidatePreviewIntoState(');
   const end = main.indexOf('\n\nasync function bankingPayWorkbench', start);
@@ -157,6 +184,11 @@ test('Banking Pay selection changes are serialized until the server result is ad
   const body = main.slice(start, end);
 
   assert.match(body, /const runPreviewSelectionMutation = async \(mutation\) => \{/);
+  assert.match(body, /let previewSelectionMutationTail = Promise\.resolve\(\)/);
+  assert.match(body, /queuedPreviewSelectionMutationCount \+= 1/);
+  assert.match(body, /previewSelectionMutationTail\.then\(executeMutation, executeMutation\)/);
+  assert.match(body, /if \(queuedPreviewSelectionMutationCount === 0\)/);
+  assert.doesNotMatch(body, /data-banking-selection-mutation-pending'\) === '1'[\s\S]{0,120}return false/);
   assert.match(body, /data-banking-selection-mutation-pending/);
   assert.match(body, /setPreviewSelectionControlsBusy\(true\)/);
   assert.match(body, /setPreviewSelectionControlsBusy\(false\)/);
@@ -164,6 +196,27 @@ test('Banking Pay selection changes are serialized until the server result is ad
   assert.doesNotMatch(
     body,
     /const currentState = String\(ds\('groupSelectionState'\)[\s\S]{0,200}const selectAllChildren = currentState !== 'ALL'/
+  );
+});
+
+test('the authoritative selection is re-applied after all affected preview sections reload', () => {
+  const start = main.indexOf('const togglePreviewRowSelection = async');
+  const end = main.indexOf('    const normalisePayPreviewPageUiSection =', start);
+  assert.ok(start >= 0);
+  assert.ok(end > start);
+  const body = main.slice(start, end);
+
+  assert.match(
+    body,
+    /applySelectionPayloadSummaryToWizard\(result\);\s*await reloadCanonicalPreviewAfterSelectionMutation\(\);\s*applySelectionPayloadSummaryToWizard\(result\);/
+  );
+  assert.match(
+    main,
+    /writePreviewSelectionState\(decisions, selectedIds, authoritativeMode\);\s*updatePreviewRowSelectionInLoadedState\(getRenderedPreviewRowIds\(\), false\);\s*updatePreviewRowSelectionInLoadedState\(selectedIds, true\);/
+  );
+  assert.match(
+    main,
+    /if \(includeBlocked\) await loadPayWorkbenchPreviewPageForSection\('blocked_for_pay', 'reload'\);/
   );
 });
 

@@ -88525,19 +88525,29 @@ function attachBankingModalDelegatedHandlers() {
     } catch {}
   };
 
+  let previewSelectionMutationTail = Promise.resolve();
+  let queuedPreviewSelectionMutationCount = 0;
   const runPreviewSelectionMutation = async (mutation) => {
-    if (targetEl.getAttribute('data-banking-selection-mutation-pending') === '1') {
-      return false;
-    }
+    queuedPreviewSelectionMutationCount += 1;
     targetEl.setAttribute('data-banking-selection-mutation-pending', '1');
     setPreviewSelectionControlsBusy(true);
-    try {
+
+    const executeMutation = async () => {
       await mutation();
       return true;
+    };
+    const queuedMutation = previewSelectionMutationTail.then(executeMutation, executeMutation);
+    previewSelectionMutationTail = queuedMutation.catch(() => false);
+
+    try {
+      return await queuedMutation;
     } finally {
-      targetEl.removeAttribute('data-banking-selection-mutation-pending');
-      setPreviewSelectionControlsBusy(false);
-      syncTimesheetGroupCheckboxes(targetEl);
+      queuedPreviewSelectionMutationCount = Math.max(0, queuedPreviewSelectionMutationCount - 1);
+      if (queuedPreviewSelectionMutationCount === 0) {
+        targetEl.removeAttribute('data-banking-selection-mutation-pending');
+        setPreviewSelectionControlsBusy(false);
+        syncTimesheetGroupCheckboxes(targetEl);
+      }
     }
   };
 
@@ -92346,6 +92356,17 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         decisions.server_selected_preview_row_ids = selectedIds;
         decisions.server_selected_preview_row_ids_provided = st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided;
         if (st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided === true) {
+          const payloadMode = String(
+            payload.selected_preview_row_mode ||
+            payload.selectedPreviewRowMode ||
+            ''
+          ).trim().toUpperCase();
+          const authoritativeMode = ['IMPLICIT_ALL', 'EXPLICIT_SUBSET', 'EXPLICIT_NONE'].includes(payloadMode)
+            ? payloadMode
+            : (selectedIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE');
+          writePreviewSelectionState(decisions, selectedIds, authoritativeMode);
+          updatePreviewRowSelectionInLoadedState(getRenderedPreviewRowIds(), false);
+          updatePreviewRowSelectionInLoadedState(selectedIds, true);
           st.pay.draftWizard.local_selected_preview_row_ids_dirty = false;
           st.pay.draftWizard.localSelectedPreviewRowIdsDirty = false;
         }
@@ -92392,9 +92413,10 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       } catch {}
     };
 
-    const reloadCanonicalPreviewAfterSelectionMutation = async () => {
+    const reloadCanonicalPreviewAfterSelectionMutation = async ({ includeBlocked = false } = {}) => {
       if (typeof loadPayWorkbenchPreviewPageForSection !== 'function') return;
       await loadPayWorkbenchPreviewPageForSection('canonical_preview_lines', 'reload');
+      if (includeBlocked) await loadPayWorkbenchPreviewPageForSection('blocked_for_pay', 'reload');
     };
 
     const togglePreviewRowSelection = async (previewRowId, checked) => {
@@ -92414,6 +92436,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
             : { section: 'canonical_preview_lines', deselect_preview_row_ids: [rowId] });
           applySelectionPayloadSummaryToWizard(result);
           await reloadCanonicalPreviewAfterSelectionMutation();
+          applySelectionPayloadSummaryToWizard(result);
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState([rowId], !wantChecked);
@@ -92435,15 +92458,18 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       try {
         const sessionId = getActivePayWorkbenchSessionIdForSelection();
         if (sessionId && typeof bankingPayWorkbenchSessionSetSelectedRows === 'function') {
+          let latestSelectionResult = null;
           for (let offset = 0; offset < targetIds.length; offset += 100) {
             const chunkIds = targetIds.slice(offset, offset + 100);
             if (!chunkIds.length) continue;
             const result = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, wantChecked
               ? { section: 'canonical_preview_lines', select_preview_row_ids: chunkIds }
               : { section: 'canonical_preview_lines', deselect_preview_row_ids: chunkIds });
+            latestSelectionResult = result;
             applySelectionPayloadSummaryToWizard(result);
           }
-          await reloadCanonicalPreviewAfterSelectionMutation();
+          await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true });
+          if (latestSelectionResult) applySelectionPayloadSummaryToWizard(latestSelectionResult);
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState(targetIds, !wantChecked);
@@ -92466,7 +92492,8 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
             selection_action: wantChecked ? 'SELECT_ALL_SECTION' : 'CLEAR_SECTION'
           });
           applySelectionPayloadSummaryToWizard(result);
-          await reloadCanonicalPreviewAfterSelectionMutation();
+          await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true });
+          applySelectionPayloadSummaryToWizard(result);
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState(visibleIds, !wantChecked);
@@ -120553,6 +120580,22 @@ function didPayWorkbenchSessionIdentityChangeV1(previous, current) {
   );
 }
 
+function resolvePayWorkbenchSessionVersionV1(previousVersions, currentVersion, sessionIdentityChanged = false) {
+  const readVersion = (value) => {
+    const text = String(value == null ? '' : value).trim();
+    if (!/^[0-9]{1,18}$/.test(text)) return null;
+    const parsed = Number(text);
+    return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : null;
+  };
+  const incoming = readVersion(currentVersion);
+  if (sessionIdentityChanged) return incoming ?? currentVersion ?? null;
+  const candidates = [
+    ...(Array.isArray(previousVersions) ? previousVersions : [previousVersions]),
+    incoming
+  ].map(readVersion).filter((value) => value !== null);
+  return candidates.length ? Math.max(...candidates) : (currentVersion ?? null);
+}
+
 
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -121870,6 +121913,16 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     session_id: sessionId,
     session_signature: canonicalSessionSignature
   });
+  const effectiveSessionVersion = resolvePayWorkbenchSessionVersionV1([
+    workbenchBeforeNormalization.session_version,
+    workbenchBeforeNormalization.sessionVersion,
+    decisionsBeforeNormalization.session_version,
+    decisionsBeforeNormalization.sessionVersion,
+    wiz.preview?.data?.session_version,
+    wiz.preview?.data?.sessionVersion,
+    wiz.preview?.data?.session?.session_version,
+    wiz.preview?.data?.session?.sessionVersion
+  ], sessionVersionRaw, activeSessionChanged);
   const progressObj = isPlainObject(responseObj.progress)
     ? responseObj.progress
     : (isPlainObject(responseObj.progress_json)
@@ -122268,7 +122321,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       ...existingIncomingPage,
       ok: existingIncomingPage.ok !== false,
       session_id: sessionId || existingIncomingPage.session_id || null,
-      session_version: sessionVersionRaw ?? existingIncomingPage.session_version ?? null,
+      session_version: effectiveSessionVersion ?? existingIncomingPage.session_version ?? null,
       session_signature: canonicalSessionSignature || existingIncomingPage.session_signature || null,
       requested_section: section,
       resolved_section: section,
@@ -122598,7 +122651,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       progress_only: !responseReadyEmpty,
       session_id: sessionId || responseObj.session_id || null,
       snapshot_run_id: snapshotRunId || responseObj.snapshot_run_id || null,
-      session_version: sessionVersionRaw,
+      session_version: effectiveSessionVersion,
       session_signature: canonicalSessionSignature || responseObj.session_signature || null,
       pay_date: canonicalPayDate || null,
       week_ending_cutoff_date: canonicalWeekEndingCutoffDate || null,
@@ -122737,7 +122790,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       wiz.workbench.post_cancel_preview_refresh_failed = false;
       if (sessionId) wiz.workbench.session_id = sessionId;
       if (snapshotRunId) wiz.workbench.snapshot_run_id = snapshotRunId;
-      if (sessionVersionRaw !== null && sessionVersionRaw !== undefined) wiz.workbench.session_version = sessionVersionRaw;
+      if (effectiveSessionVersion !== null && effectiveSessionVersion !== undefined) wiz.workbench.session_version = effectiveSessionVersion;
       if (canonicalSessionSignature) wiz.workbench.session_signature = canonicalSessionSignature;
       applyMergedPreviewPagesToState(pendingPreviewEnvelope);
       return pendingPreviewEnvelope;
@@ -122783,7 +122836,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
 
     wiz.workbench.session_id = responseReadyEmpty ? (sessionId || null) : null;
     wiz.workbench.snapshot_run_id = responseReadyEmpty ? (snapshotRunId || null) : null;
-    wiz.workbench.session_version = responseReadyEmpty ? sessionVersionRaw : null;
+    wiz.workbench.session_version = responseReadyEmpty ? effectiveSessionVersion : null;
     wiz.workbench.session_signature = responseReadyEmpty ? (canonicalSessionSignature || '') : '';
     wiz.workbench.selected_preview_row_ids = [];
     wiz.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
@@ -123493,7 +123546,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       week_ending_cutoff_date: canonicalWeekEndingCutoffDate || null,
       snapshot_run_id: snapshotRunId || null,
       source_snapshot_run_id: snapshotRunId || null,
-      session_version: sessionVersionRaw,
+      session_version: effectiveSessionVersion,
       session_signature: canonicalSessionSignature || null,
       server_selected_preview_row_ids_provided: effectiveServerSelectedPreviewRowIdsProvided,
       serverSelectedPreviewRowIdsProvided: effectiveServerSelectedPreviewRowIdsProvided,
@@ -123620,8 +123673,8 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.decisions.sessionId = sessionId || null;
   wiz.decisions.snapshot_run_id = snapshotRunId || null;
   wiz.decisions.snapshotRunId = snapshotRunId || null;
-  wiz.decisions.session_version = sessionVersionRaw;
-  wiz.decisions.sessionVersion = sessionVersionRaw;
+  wiz.decisions.session_version = effectiveSessionVersion;
+  wiz.decisions.sessionVersion = effectiveSessionVersion;
   wiz.decisions.session_signature = canonicalSessionSignature || '';
   wiz.decisions.sessionSignature = canonicalSessionSignature || '';
   wiz.decisions.pay_date = canonicalPayDate || wiz.decisions.pay_date || null;
@@ -123675,8 +123728,8 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.sessionId = sessionId || null;
   wiz.workbench.snapshot_run_id = snapshotRunId || null;
   wiz.workbench.snapshotRunId = snapshotRunId || null;
-  wiz.workbench.session_version = sessionVersionRaw;
-  wiz.workbench.sessionVersion = sessionVersionRaw;
+  wiz.workbench.session_version = effectiveSessionVersion;
+  wiz.workbench.sessionVersion = effectiveSessionVersion;
   wiz.workbench.session_signature = canonicalSessionSignature || '';
   wiz.workbench.sessionSignature = canonicalSessionSignature || '';
   wiz.workbench.pay_date = canonicalPayDate || wiz.workbench.pay_date || null;

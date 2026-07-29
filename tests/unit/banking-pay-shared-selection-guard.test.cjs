@@ -333,8 +333,9 @@ test('a successful selection reloads the canonical page so server-side headroom 
 
   assert.match(helperBody, /loadPayWorkbenchPreviewPageForSection\('canonical_preview_lines', 'reload'\)/);
   assert.match(toggleBody, /applySelectionPayloadSummaryToWizard\(result\);\s*await reloadCanonicalPreviewAfterSelectionMutation\(\);/);
-  assert.match(groupedBody, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*await reloadCanonicalPreviewAfterSelectionMutation\(\);/);
-  assert.match(globalBody, /applySelectionPayloadSummaryToWizard\(result\);\s*await reloadCanonicalPreviewAfterSelectionMutation\(\);/);
+  assert.match(groupedBody, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\)/);
+  assert.match(groupedBody, /if \(latestSelectionResult\) applySelectionPayloadSummaryToWizard\(latestSelectionResult\)/);
+  assert.match(globalBody, /applySelectionPayloadSummaryToWizard\(result\);\s*await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\);/);
 });
 
 test('Create Draft requires review when the authoritative selected set changed', () => {
