@@ -86,3 +86,50 @@ test('finance-case state fields survive normalisation for accurate summaries and
   }
   assert.match(fetcher, /rawSummary\.component_totals/);
 });
+
+test('candidate finance report defaults to active outstanding cases and updates immediately', () => {
+  const reportModal = section(
+    'async function openCandidateLoansOverpaymentsModal',
+    'function renderOutboxRunsTab'
+  );
+
+  assert.match(reportModal, /active_only:\s*true/);
+  assert.match(
+    reportModal,
+    /Number\(row\?\.outstanding_amount \|\| 0\) > 0\.004[\s\S]*!isWrittenOffFinanceCase\(row\)/
+  );
+  assert.match(
+    reportModal,
+    /state\.active_only \? items\.filter\(isActiveFinanceCase\) : items/
+  );
+  assert.match(reportModal, /data-action="candidateFinance:activeOnly"/);
+  assert.match(reportModal, /data-view-action="candidate-finance-report-filter"/);
+  assert.match(reportModal, /activeOnly\.addEventListener\('change'/);
+  assert.match(reportModal, /state\.active_only = activeOnly\.checked === true/);
+
+  const readOnly = section(
+    'function setFormReadOnly',
+    '// Timesheet domain-level lock overrides (existing)'
+  );
+  assert.match(readOnly, /top\?\.kind === 'candidate-finance-report'/);
+  assert.match(readOnly, /viewAction === 'candidate-finance-report-filter'/);
+});
+
+test('candidate finance report uses plain labels and tidy non-wrapping status pills', () => {
+  const reportModal = section(
+    'async function openCandidateLoansOverpaymentsModal',
+    'function renderOutboxRunsTab'
+  );
+
+  assert.match(reportModal, /General \/ no specific client/);
+  assert.match(reportModal, /Recovered from taxable pay/);
+  assert.match(reportModal, /Reimbursement carried forward/);
+  assert.match(reportModal, /finance-report-pill[\s\S]*white-space:\s*nowrap/);
+  assert.match(reportModal, /<th>Status<\/th>/);
+  assert.match(reportModal, /<th>Latest communication<\/th>/);
+  assert.doesNotMatch(reportModal, /Lifecycle \/ state/);
+  assert.doesNotMatch(reportModal, /Not snoozed/);
+  assert.doesNotMatch(reportModal, /stale_count:/);
+  assert.doesNotMatch(reportModal, /is_mixed_case:/);
+  assert.doesNotMatch(reportModal, /open_taxable_count:/);
+});

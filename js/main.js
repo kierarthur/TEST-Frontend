@@ -265984,57 +265984,68 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
     return String(v || 'Finance Case').trim() || 'Finance Case';
   };
 
-  const statusPillClass = (value) => {
-    const s = String(value || '').trim().toUpperCase();
-    if (s === 'ACTIVE' || s === 'PAID' || s === 'SETTLED' || s === 'SENT' || s === 'QUEUED' || s === 'SAFE') return 'pill-ok';
-    if (s === 'PAUSED' || s === 'PENDING' || s === 'AUTHORISED_FOR_PAYMENT' || s === 'AWAITING_AUTHORISATION' || s === 'STALE') return 'pill-warn';
-    if (s === 'CANCELLED' || s === 'FAILED' || s === 'ERROR' || s === 'WRITTEN_OFF' || s === 'BLOCKED') return 'pill-bad';
-    return 'pill';
+  const isWrittenOffFinanceCase = (row) => {
+    const states = [
+      row?.status,
+      row?.lifecycle_state,
+      row?.payout_or_recovery_status
+    ].map((value) => String(value || '').trim().toUpperCase());
+    return states.some((value) => value === 'WRITTEN_OFF') ||
+      !!String(row?.raw?.written_off_at_utc || '').trim();
   };
 
-  const compactComponentSummary = (raw) => {
-    if (!raw || typeof raw !== 'object') return '';
-    if (Array.isArray(raw)) {
-      return raw.map((x) => String(x || '').trim()).filter(Boolean).join(' • ');
+  const isActiveFinanceCase = (row) => (
+    Number(row?.outstanding_amount || 0) > 0.004 &&
+    !isWrittenOffFinanceCase(row)
+  );
+
+  const friendlyLifecycleLabel = (row) => {
+    const status = String(row?.status || '').trim().toUpperCase();
+    const lifecycle = String(row?.lifecycle_state || '').trim().toUpperCase();
+    if (isWrittenOffFinanceCase(row)) return 'Written off';
+    if (!isActiveFinanceCase(row)) {
+      if (status === 'CANCELLED' || lifecycle === 'CANCELLED') return 'Cancelled';
+      return 'Paid off';
     }
-    const parts = [];
-    const summaryText = String(raw.summary || raw.label || raw.description || '').trim();
-    if (summaryText) parts.push(summaryText);
-    const reusable = Number(raw.reusable_count || 0);
-    const fixed = Number(raw.fixed_reimbursement_count || raw.reimbursement_fixed_count || 0);
-    const unresolved = Number(raw.unresolved_taxable_count || 0);
-    const stale = Number(raw.stale_count || 0);
-    if (reusable > 0) parts.push(`${reusable} reusable`);
-    if (fixed > 0) parts.push(`${fixed} fixed reimbursement`);
-    if (unresolved > 0) parts.push(`${unresolved} unresolved taxable`);
-    if (stale > 0) parts.push(`${stale} stale`);
-    if (!parts.length) {
-      const keys = Object.keys(raw);
-      if (!keys.length) return '';
-      return keys.map((k) => `${k}: ${String(raw[k])}`).join(' • ');
-    }
-    return parts.join(' • ');
+    if (row?.has_active_snooze === true) return 'Snoozed';
+    if (status === 'PAUSED' || lifecycle === 'PAUSED') return 'Paused';
+    return 'Active';
+  };
+
+  const friendlyPayoutLabel = (row) => {
+    const payoutStatus = String(row?.payout_status || '').trim().toUpperCase();
+    if (!payoutStatus || payoutStatus === 'NOT_PAID') return '';
+    if (payoutStatus === 'PENDING') return 'Awaiting payment';
+    if (payoutStatus === 'PAID') return 'Paid';
+    if (payoutStatus === 'CANCELLED') return 'Payment cancelled';
+    return '';
+  };
+
+  const friendlyCommsLabel = (value) => {
+    const status = String(value || '').trim().toUpperCase();
+    if (!status) return '';
+    if (status === 'SENT') return 'Sent';
+    if (status === 'QUEUED' || status === 'PENDING') return 'Queued';
+    if (status === 'FAILED' || status === 'ERROR') return 'Failed';
+    return String(value || '').trim();
   };
 
   const stateBadgesHtml = (row) => {
     const bits = [];
-    if (String(row?.case_type || '').trim().toUpperCase() === 'UNDERPAYMENT') {
-      bits.push(`<span class="pill pill-warn">Underpayment</span>`);
-    }
     if (row?.is_mixed_case === true) {
-      bits.push(`<span class="pill pill-warn">Mixed</span>`);
+      bits.push(`<span class="finance-report-pill pill-warn">Mixed calculation</span>`);
     }
     if (Number(row?.unresolved_taxable_count || 0) > 0) {
-      bits.push(`<span class="pill pill-bad">Unresolved taxable: ${enc(String(Number(row.unresolved_taxable_count || 0)))}</span>`);
+      bits.push(`<span class="finance-report-pill pill-bad">Needs review</span>`);
     }
     if (Number(row?.stale_count || 0) > 0) {
-      bits.push(`<span class="pill pill-warn">Stale: ${enc(String(Number(row.stale_count || 0)))}</span>`);
+      bits.push(`<span class="finance-report-pill pill-warn">Needs refreshing</span>`);
     }
     if (Number(row?.open_reimbursement_count || 0) > 0 && Number(row?.open_taxable_count || 0) <= 0) {
-      bits.push(`<span class="pill">Reimbursement carry-forward</span>`);
+      bits.push(`<span class="finance-report-pill">Reimbursement carried forward</span>`);
     }
     if (Number(row?.open_taxable_count || 0) > 0) {
-      bits.push(`<span class="pill">Taxable recovery</span>`);
+      bits.push(`<span class="finance-report-pill">Recovered from taxable pay</span>`);
     }
     return bits.join(' ');
   };
@@ -266072,90 +266083,124 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
     candidate_id: cid,
     candidate_name: candidateName,
     candidate_ref: candidateRef,
+    active_only: true,
     loading: true,
     error: '',
     entry: { report: null, fetched_at: '' }
   };
 
+  const visibleFinanceRows = (rows) => {
+    const items = Array.isArray(rows) ? rows : [];
+    return state.active_only ? items.filter(isActiveFinanceCase) : items;
+  };
+
+  const sumOutstanding = (rows) => (
+    visibleFinanceRows(rows).reduce((total, row) => total + Number(row?.outstanding_amount || 0), 0)
+  );
+
   const renderSummaryCards = (report) => {
-    const summary = (report && typeof report.summary === 'object') ? report.summary : {};
+    const sections = [
+      {
+        label: 'Payment advances',
+        rows: report?.payment_advances,
+        amount: sumOutstanding(report?.payment_advances)
+      },
+      {
+        label: 'Overpayments',
+        rows: report?.overpayments,
+        amount: sumOutstanding(report?.overpayments)
+      },
+      {
+        label: 'Underpayments',
+        rows: report?.underpayments,
+        amount: sumOutstanding(report?.underpayments)
+      },
+      {
+        label: 'Manual debt adjustments',
+        rows: report?.manual_debt_adjustments,
+        amount: sumOutstanding(report?.manual_debt_adjustments)
+      },
+      {
+        label: 'Manual credit adjustments',
+        rows: report?.manual_credit_adjustments,
+        amount: sumOutstanding(report?.manual_credit_adjustments)
+      }
+    ];
+    const visibleRows = sections.flatMap((section) => visibleFinanceRows(section.rows));
+    const mixedCount = visibleRows.filter((row) => row?.is_mixed_case === true).length;
+    const reviewCount = visibleRows.filter((row) => Number(row?.unresolved_taxable_count || 0) > 0).length;
+    const refreshCount = visibleRows.filter((row) => Number(row?.stale_count || 0) > 0).length;
+    const warnings = [
+      mixedCount > 0 ? `${mixedCount} mixed calculation${mixedCount === 1 ? '' : 's'}` : '',
+      reviewCount > 0 ? `${reviewCount} case${reviewCount === 1 ? '' : 's'} need review` : '',
+      refreshCount > 0 ? `${refreshCount} case${refreshCount === 1 ? '' : 's'} need refreshing` : ''
+    ].filter(Boolean);
+
     return `
-      <div class="card" style="padding:10px;margin-top:10px;">
-        <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Summary</div>
-        <div style="display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:8px;">
-          <div class="card" style="padding:8px;">
-            <div class="mini" style="opacity:.8;">Payment Advances</div>
-            <div class="mono">${enc(String(summary.payment_advances_count ?? 0))}</div>
-            <div class="mini" style="opacity:.8;">£${enc(fmtMoney(summary.payment_advances_outstanding_total ?? 0))} outstanding</div>
-          </div>
-          <div class="card" style="padding:8px;">
-            <div class="mini" style="opacity:.8;">Overpayments</div>
-            <div class="mono">${enc(String(summary.overpayments_count ?? 0))}</div>
-            <div class="mini" style="opacity:.8;">£${enc(fmtMoney(summary.overpayments_outstanding_total ?? 0))} outstanding</div>
-          </div>
-          <div class="card" style="padding:8px;">
-            <div class="mini" style="opacity:.8;">Underpayments</div>
-            <div class="mono">${enc(String(summary.underpayments_count ?? 0))}</div>
-            <div class="mini" style="opacity:.8;">£${enc(fmtMoney(summary.underpayments_outstanding_total ?? 0))} outstanding</div>
-          </div>
-          <div class="card" style="padding:8px;">
-            <div class="mini" style="opacity:.8;">Manual Debt Adjustments</div>
-            <div class="mono">${enc(String(summary.manual_debt_adjustments_count ?? 0))}</div>
-            <div class="mini" style="opacity:.8;">£${enc(fmtMoney(summary.manual_debt_adjustments_outstanding_total ?? 0))} outstanding</div>
-          </div>
-          <div class="card" style="padding:8px;">
-            <div class="mini" style="opacity:.8;">Manual Credit Adjustments</div>
-            <div class="mono">${enc(String(summary.manual_credit_adjustments_count ?? 0))}</div>
-            <div class="mini" style="opacity:.8;">£${enc(fmtMoney(summary.manual_credit_adjustments_total ?? 0))} total</div>
-          </div>
-          <div class="card" style="padding:8px;">
-            <div class="mini" style="opacity:.8;">Mixed cases</div>
-            <div class="mono">${enc(String(summary.mixed_finance_cases_count ?? 0))}</div>
-          </div>
-          <div class="card" style="padding:8px;">
-            <div class="mini" style="opacity:.8;">Unresolved taxable</div>
-            <div class="mono">${enc(String(summary.unresolved_finance_cases_count ?? 0))}</div>
-          </div>
-          <div class="card" style="padding:8px;">
-            <div class="mini" style="opacity:.8;">Stale cases</div>
-            <div class="mono">${enc(String(summary.stale_finance_cases_count ?? 0))}</div>
-          </div>
+      <div class="card finance-report-summary">
+        <div class="finance-report-section-title">Summary</div>
+        <div class="finance-report-summary-grid">
+          ${sections.map((section) => {
+            const rows = visibleFinanceRows(section.rows);
+            return `
+              <div class="card finance-report-summary-card">
+                <div class="mini">${enc(section.label)}</div>
+                <div class="finance-report-summary-value">${enc(String(rows.length))}</div>
+                <div class="mini">£${enc(fmtMoney(section.amount))} outstanding</div>
+              </div>
+            `;
+          }).join('')}
         </div>
+        ${warnings.length ? `
+          <div class="finance-report-warning" role="status">
+            ${enc(warnings.join(' • '))}
+          </div>
+        ` : ''}
       </div>
     `;
   };
 
   const renderFinanceSection = (title, rows, opts = {}) => {
-    const items = Array.isArray(rows) ? rows : [];
-    const emptyText = String(opts.emptyText || 'No items in this section.').trim();
+    const items = visibleFinanceRows(rows);
+    const emptyText = String(
+      state.active_only
+        ? (opts.activeEmptyText || `No active ${String(title || 'items').toLowerCase()}.`)
+        : (opts.emptyText || `No ${String(title || 'items').toLowerCase()} found.`)
+    ).trim();
 
     const body = items.length ? items.map((row) => {
-      const status = String(row?.status || '').trim() || '—';
-      const payoutStatus = String(row?.payout_status || '').trim();
-      const commsStatus = String(row?.latest_remittance_trigger_status || '').trim();
+      const lifecycleLabel = friendlyLifecycleLabel(row);
+      const payoutLabel = friendlyPayoutLabel(row);
+      const commsStatus = friendlyCommsLabel(row?.latest_remittance_trigger_status);
       const commsError = String(row?.last_remittance_error || '').trim();
-      const clientName = String(row?.client_name || '').trim() || '—';
+      const clientName = String(row?.client_name || '').trim() || 'General / no specific client';
       const comment = String(row?.adjustment_comment || row?.notes || '').trim();
       const blockedReason = String(row?.blocked_reason || '').trim();
-      const componentSummary = compactComponentSummary(row?.component_resolution_summary_json);
-      const snoozeState = row?.has_active_snooze
+      const snoozeState = row?.has_active_snooze === true
         ? (String(row?.snooze_until_date || '').trim()
             ? `Snoozed until ${formatIsoToUkLocal(row.snooze_until_date)}`
-            : 'Indefinite snooze')
-        : 'Not snoozed';
+            : 'Snoozed indefinitely')
+        : '';
+      const lifecycleClass = lifecycleLabel === 'Active'
+        ? 'pill-ok'
+        : (lifecycleLabel === 'Paused' || lifecycleLabel === 'Snoozed' ? 'pill-warn' : 'pill');
+      const historicalClass = isActiveFinanceCase(row) ? '' : 'finance-report-historical-row';
+      const notes = [
+        comment,
+        snoozeState,
+        blockedReason ? `Needs attention: ${blockedReason}` : ''
+      ].filter(Boolean);
 
       return `
-        <tr>
+        <tr class="${historicalClass}">
           <td class="mini">${enc(clientName)}</td>
           <td>
-            <div style="display:flex;flex-direction:column;gap:4px;">
-              <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-                <span class="pill ${enc(statusPillClass(status))}">${enc(status)}</span>
-                ${payoutStatus ? `<span class="pill ${enc(statusPillClass(payoutStatus))}">${enc(`Payout ${payoutStatus}`)}</span>` : ''}
-              </div>
-              <div class="mini" style="opacity:.8;">${enc(caseTypeLabel(row?.case_type))}</div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-                ${stateBadgesHtml(row) || `<span class="pill">Standard</span>`}
+            <div class="finance-report-status">
+              <div class="finance-report-case-type">${enc(caseTypeLabel(row?.case_type))}</div>
+              <div class="finance-report-pills">
+                <span class="finance-report-pill ${enc(lifecycleClass)}">${enc(lifecycleLabel)}</span>
+                ${payoutLabel ? `<span class="finance-report-pill">${enc(payoutLabel)}</span>` : ''}
+                ${stateBadgesHtml(row)}
               </div>
             </div>
           </td>
@@ -266163,19 +266208,12 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
           <td class="mono" style="text-align:right;">£${enc(fmtMoney(row?.outstanding_amount || 0))}</td>
           <td class="mono" style="text-align:right;">${row?.weekly_due != null ? `£${enc(fmtMoney(row.weekly_due))}` : '—'}</td>
           <td class="mini">${enc(formatIsoToUkLocal(row?.next_due_week_start || row?.start_week_start || ''))}</td>
+          <td class="mini">${enc(notes.join(' • ') || 'None')}</td>
           <td>
-            <div class="mini" style="display:flex;flex-direction:column;gap:4px;">
-              <div>${enc(comment || '—')}</div>
-              <div style="opacity:.8;">${enc(snoozeState)}</div>
-              ${blockedReason ? `<div style="opacity:.9;white-space:pre-wrap;">Blocked reason: ${enc(blockedReason)}</div>` : ''}
-              ${componentSummary ? `<div style="opacity:.85;white-space:pre-wrap;">${enc(componentSummary)}</div>` : ''}
-            </div>
-          </td>
-          <td>
-            <div class="mini" style="display:flex;flex-direction:column;gap:4px;">
-              <div>${enc(commsStatus || '—')}</div>
-              <div style="opacity:.8;">${enc(row?.latest_remittance_sent_at_utc ? fmtDateTimeUk(row.latest_remittance_sent_at_utc) : '—')}</div>
-              ${commsError ? `<div style="opacity:.8;white-space:pre-wrap;">${enc(commsError)}</div>` : ``}
+            <div class="mini finance-report-comms">
+              <div>${enc(commsStatus || 'None recorded')}</div>
+              ${row?.latest_remittance_sent_at_utc ? `<div>${enc(fmtDateTimeUk(row.latest_remittance_sent_at_utc))}</div>` : ''}
+              ${commsError ? `<div class="error">${enc(commsError)}</div>` : ``}
             </div>
           </td>
         </tr>
@@ -266183,20 +266221,20 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
     }).join('') : `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(emptyText)}</td></tr>`;
 
     return `
-      <div class="card" style="padding:10px;margin-top:10px;">
-        <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">${enc(title)}</div>
-        <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
-          <table class="grid" style="min-width:1240px;table-layout:auto;">
+      <div class="card finance-report-section">
+        <div class="finance-report-section-title">${enc(title)}</div>
+        <div class="finance-report-table-wrap">
+          <table class="grid finance-report-table">
             <thead>
               <tr>
                 <th>Client</th>
-                <th>Lifecycle / state</th>
+                <th>Status</th>
                 <th style="text-align:right;">Original</th>
                 <th style="text-align:right;">Outstanding</th>
-                <th style="text-align:right;">Weekly due</th>
-                <th>Next due</th>
-                <th>Comment / state</th>
-                <th>Latest comms</th>
+                <th style="text-align:right;">Weekly amount</th>
+                <th>Next date</th>
+                <th>Notes</th>
+                <th>Latest communication</th>
               </tr>
             </thead>
             <tbody>${body}</tbody>
@@ -266207,14 +266245,20 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
   };
 
   const renderSnoozedDeferredSection = (report) => {
-    const items = Array.isArray(report?.snoozed_deferred_items) ? report.snoozed_deferred_items : [];
+    const allItems = Array.isArray(report?.snoozed_deferred_items) ? report.snoozed_deferred_items : [];
+    const items = state.active_only
+      ? allItems.filter((item) => (
+          String(item?.item_type || '').trim() === 'TIMESHEET_SNOOZE' ||
+          isActiveFinanceCase(item)
+        ))
+      : allItems;
 
     const body = items.length ? items.map((item) => {
       if (String(item?.item_type || '').trim() === 'TIMESHEET_SNOOZE') {
         return `
           <tr>
             <td class="mini">Timesheet payment</td>
-            <td class="mini">${enc(item?.client_name || '—')}</td>
+            <td class="mini">${enc(item?.client_name || 'General / no specific client')}</td>
             <td class="mini">${enc(item?.reference_number || formatIsoToUkLocal(item?.week_ending_date || '') || '—')}</td>
             <td class="mini">${enc(
               String(item?.snooze_until_date || '').trim()
@@ -266228,12 +266272,10 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
       }
 
       const blockedReason = String(item?.blocked_reason || '').trim();
-      const componentSummary = compactComponentSummary(item?.component_resolution_summary_json);
-
       return `
         <tr>
           <td class="mini">${enc(caseTypeLabel(item?.case_type))}</td>
-          <td class="mini">${enc(item?.client_name || '—')}</td>
+          <td class="mini">${enc(item?.client_name || 'General / no specific client')}</td>
           <td>
             <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
               ${stateBadgesHtml(item) || `<span class="pill">Snoozed</span>`}
@@ -266246,29 +266288,28 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
           )}</td>
           <td>
             <div class="mini" style="display:flex;flex-direction:column;gap:4px;">
-              <div>${enc(item?.snooze_note || item?.notes || item?.adjustment_comment || '—')}</div>
-              ${blockedReason ? `<div>${enc(`Blocked reason: ${blockedReason}`)}</div>` : ''}
-              ${componentSummary ? `<div>${enc(componentSummary)}</div>` : ''}
+              <div>${enc(item?.snooze_note || item?.notes || item?.adjustment_comment || 'None')}</div>
+              ${blockedReason ? `<div>${enc(`Needs attention: ${blockedReason}`)}</div>` : ''}
             </div>
           </td>
-          <td class="mini">${enc(item?.latest_remittance_trigger_status || item?.payout_status || '—')}</td>
+          <td class="mini">${enc(friendlyCommsLabel(item?.latest_remittance_trigger_status || item?.payout_status) || 'None recorded')}</td>
         </tr>
       `;
     }).join('') : `<tr><td colspan="6" class="mini" style="opacity:.85;">No active snoozed or deferred items.</td></tr>`;
 
     return `
-      <div class="card" style="padding:10px;margin-top:10px;">
-        <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Snoozed / Deferred items</div>
-        <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
-          <table class="grid" style="min-width:1080px;table-layout:auto;">
+      <div class="card finance-report-section">
+        <div class="finance-report-section-title">Snoozed / deferred items</div>
+        <div class="finance-report-table-wrap">
+          <table class="grid finance-report-table">
             <thead>
               <tr>
                 <th>Item</th>
                 <th>Client</th>
-                <th>State</th>
-                <th>Snooze state</th>
-                <th>Comment / note</th>
-                <th>Latest payout / comms</th>
+                <th>Status</th>
+                <th>Snoozed until</th>
+                <th>Notes</th>
+                <th>Latest communication</th>
               </tr>
             </thead>
             <tbody>${body}</tbody>
@@ -266335,6 +266376,114 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
 
     return `
       <div class="tabc">
+        <style>
+          .candidate-finance-report-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--line);
+          }
+          .candidate-finance-active-filter {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 34px;
+            padding: 6px 10px;
+            border: 1px solid var(--line);
+            border-radius: 9px;
+            cursor: pointer;
+            user-select: none;
+          }
+          .candidate-finance-active-filter input {
+            width: 18px;
+            height: 18px;
+            margin: 0;
+          }
+          .finance-report-summary,
+          .finance-report-section {
+            padding: 12px;
+            margin-top: 10px;
+          }
+          .finance-report-section-title {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 9px;
+          }
+          .finance-report-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+            gap: 8px;
+          }
+          .finance-report-summary-card {
+            padding: 10px;
+          }
+          .finance-report-summary-value {
+            margin: 2px 0;
+            font-size: 20px;
+            font-weight: 750;
+          }
+          .finance-report-warning {
+            margin-top: 10px;
+            padding: 9px 10px;
+            border: 1px solid var(--warn, #b98500);
+            border-radius: 9px;
+            font-size: 12px;
+          }
+          .finance-report-table-wrap {
+            overflow: auto;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+          }
+          .finance-report-table {
+            min-width: 1120px;
+            table-layout: auto;
+          }
+          .finance-report-status,
+          .finance-report-comms {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+          }
+          .finance-report-case-type {
+            font-size: 12px;
+            font-weight: 700;
+          }
+          .finance-report-pills {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex-wrap: wrap;
+          }
+          .finance-report-pill {
+            display: inline-flex;
+            align-items: center;
+            width: auto;
+            max-width: 100%;
+            min-height: 24px;
+            padding: 3px 8px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            font-size: 11px;
+            line-height: 1.2;
+            white-space: nowrap;
+          }
+          .finance-report-historical-row {
+            opacity: .66;
+          }
+          @media (max-width: 760px) {
+            .candidate-finance-report-toolbar {
+              align-items: flex-start;
+              flex-direction: column;
+            }
+            .finance-report-table {
+              min-width: 980px;
+            }
+          }
+        </style>
         <div class="card">
           <div class="row">
             <label>Candidate</label>
@@ -266345,6 +266494,22 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
               </div>
               <div class="mini" style="opacity:.8;margin-top:6px;">
                 Read-only finance report. Operational changes are managed from Banking → Loans / Snoozes.
+              </div>
+              <div class="candidate-finance-report-toolbar">
+                <label class="candidate-finance-active-filter">
+                  <input
+                    type="checkbox"
+                    data-action="candidateFinance:activeOnly"
+                    data-view-action="candidate-finance-report-filter"
+                    ${state.active_only ? 'checked' : ''}
+                  >
+                  <span>Active only</span>
+                </label>
+                <div class="mini" style="opacity:.8;">
+                  ${state.active_only
+                    ? 'Showing outstanding cases that have not been written off.'
+                    : 'Showing active and historical cases.'}
+                </div>
               </div>
             </div>
           </div>
@@ -266388,6 +266553,14 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
             state.loading = false;
             state.error = String(e?.message || e || 'Failed to load candidate finance report');
           }
+          await rerender();
+        });
+      }
+      const activeOnly = document.querySelector('[data-action="candidateFinance:activeOnly"]');
+      if (activeOnly && !activeOnly.__candidateFinanceActiveFilterWired) {
+        activeOnly.__candidateFinanceActiveFilterWired = true;
+        activeOnly.addEventListener('change', async () => {
+          state.active_only = activeOnly.checked === true;
           await rerender();
         });
       }
@@ -313430,12 +313603,19 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
     try {
       if (!ro) return false;
 
+      // Candidate Finance Report's Active-only checkbox changes presentation
+      // only. It must remain usable without putting the Candidate into Edit.
+      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+      const viewAction = String(el.getAttribute('data-view-action') || '').trim();
+      if (top?.kind === 'candidate-finance-report' && viewAction === 'candidate-finance-report-filter') {
+        return true;
+      }
+
       // ✅ Settings → Remittances scope selector must remain usable in VIEW mode
       // (pure UI selector; not a persisted field)
       const id = String(el.id || '');
       if (id !== 'remScopeSelect') return false;
 
-      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
       const ent = String((top && top.entity) || (window.modalCtx && window.modalCtx.entity) || '');
       return ent === 'settings';
     } catch {
