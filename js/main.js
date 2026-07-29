@@ -49145,26 +49145,57 @@ const collectPreviewRowIds = (previewLike) => {
     return [];
   };
 
+  const getBankPayeeContext = (obj) => {
+    return isPlainObject(obj?.payee_context) ? obj.payee_context : {};
+  };
+
+  const hasBankBlockerContract = (obj) => {
+    if (!isPlainObject(obj)) return false;
+    const payeeContext = getBankPayeeContext(obj);
+    return ['blockers', 'blocked_reason_codes', 'blockedReasonCodes'].some((key) => (
+      Object.prototype.hasOwnProperty.call(obj, key) ||
+      Object.prototype.hasOwnProperty.call(payeeContext, key)
+    ));
+  };
+
+  const getBankBlockerCodes = (obj) => {
+    if (!isPlainObject(obj)) return [];
+    const payeeContext = getBankPayeeContext(obj);
+    return Array.from(new Set([
+      ...parseBlockerCodes(obj.blockers),
+      ...parseBlockerCodes(obj.blocked_reason_codes),
+      ...parseBlockerCodes(obj.blockedReasonCodes),
+      ...parseBlockerCodes(payeeContext.blockers),
+      ...parseBlockerCodes(payeeContext.blocked_reason_codes),
+      ...parseBlockerCodes(payeeContext.blockedReasonCodes)
+    ]));
+  };
+
   const candidateMetaById = new Map();
   for (const c of allCandidates) {
     const cid = trimStr(c.candidate_id);
     if (!cid) continue;
+    const payeeContext = getBankPayeeContext(c);
     candidateMetaById.set(cid, {
       candidate_id: cid,
       display_name: trimStr(c.display_name || c.candidate_name || ''),
       tms_ref: trimStr(c.tms_ref || ''),
       current_pay_method: upperTrim(c.current_pay_method || ''),
       is_ready_for_draft: asBool(c.is_ready_for_draft),
-      blockers: Array.isArray(c.blockers) ? c.blockers.map((x) => upperTrim(x)).filter(Boolean) : [],
-      payee_entity_kind: upperTrim(c.payee_entity_kind || ''),
-      payee_entity_id: trimStr(c.payee_entity_id || ''),
-      bank_details_hash: trimStr(c.bank_details_hash || c.payee_bank_hash || c.bank_details_hash_snapshot || c.snapshot_bank_details_hash || ''),
-      payee_bank_hash: trimStr(c.payee_bank_hash || c.bank_details_hash || ''),
-      bank_details_hash_snapshot: trimStr(c.bank_details_hash_snapshot || c.snapshot_bank_details_hash || ''),
-      snapshot_bank_details_hash: trimStr(c.snapshot_bank_details_hash || c.bank_details_hash_snapshot || ''),
-      name_check_status: upperTrim(c.name_check_status || ''),
-      name_check_has_override: asBool(c.name_check_has_override),
-      payee_map_present: asBool(c.payee_map_present),
+      blockers: getBankBlockerCodes(c),
+      payee_entity_kind: upperTrim(c.payee_entity_kind || payeeContext.payee_entity_kind || ''),
+      payee_entity_id: trimStr(c.payee_entity_id || payeeContext.payee_entity_id || ''),
+      bank_details_hash: trimStr(c.bank_details_hash || c.payee_bank_hash || c.bank_details_hash_snapshot || c.snapshot_bank_details_hash || payeeContext.bank_details_hash || payeeContext.payee_bank_hash || ''),
+      payee_bank_hash: trimStr(c.payee_bank_hash || c.bank_details_hash || payeeContext.payee_bank_hash || payeeContext.bank_details_hash || ''),
+      bank_details_hash_snapshot: trimStr(c.bank_details_hash_snapshot || c.snapshot_bank_details_hash || payeeContext.bank_details_hash_snapshot || payeeContext.snapshot_bank_details_hash || ''),
+      snapshot_bank_details_hash: trimStr(c.snapshot_bank_details_hash || c.bank_details_hash_snapshot || payeeContext.snapshot_bank_details_hash || payeeContext.bank_details_hash_snapshot || ''),
+      name_check_status: upperTrim(c.name_check_status || payeeContext.name_check_status || ''),
+      name_check_has_override: Object.prototype.hasOwnProperty.call(c, 'name_check_has_override')
+        ? asBool(c.name_check_has_override)
+        : asBool(payeeContext.name_check_has_override),
+      payee_map_present: Object.prototype.hasOwnProperty.call(c, 'payee_map_present')
+        ? asBool(c.payee_map_present)
+        : asBool(payeeContext.payee_map_present),
       payee_readiness_status: upperTrim(c.payee_readiness_status || c.readiness_status || c.payee_setup_status || ''),
       payee_readiness_job_status: upperTrim(c.payee_readiness_job_status || c.readiness_job_status || c.latest_payee_readiness_job_status || ''),
       latest_job_type: upperTrim(c.latest_job_type || ''),
@@ -49260,15 +49291,25 @@ const collectPreviewRowIds = (previewLike) => {
   };
 
   const getExactBankTargetHash = (obj, fallbackMeta = null) => {
+    const payeeContext = getBankPayeeContext(obj);
+    const fallbackPayeeContext = getBankPayeeContext(fallbackMeta);
     return trimStr(
       obj?.bank_details_hash ||
       obj?.payee_bank_hash ||
       obj?.bank_details_hash_snapshot ||
       obj?.snapshot_bank_details_hash ||
+      payeeContext.bank_details_hash ||
+      payeeContext.payee_bank_hash ||
+      payeeContext.bank_details_hash_snapshot ||
+      payeeContext.snapshot_bank_details_hash ||
       fallbackMeta?.bank_details_hash ||
       fallbackMeta?.payee_bank_hash ||
       fallbackMeta?.bank_details_hash_snapshot ||
       fallbackMeta?.snapshot_bank_details_hash ||
+      fallbackPayeeContext.bank_details_hash ||
+      fallbackPayeeContext.payee_bank_hash ||
+      fallbackPayeeContext.bank_details_hash_snapshot ||
+      fallbackPayeeContext.snapshot_bank_details_hash ||
       ''
     );
   };
@@ -49277,9 +49318,8 @@ const collectPreviewRowIds = (previewLike) => {
     if (!isPlainObject(line)) return null;
     const candidateId = trimStr(line?.candidate_id);
     const candidateMeta = candidateMetaById.get(candidateId) || null;
-    const lineBlockersRaw = Object.prototype.hasOwnProperty.call(line, 'blockers')
-      ? line.blockers
-      : (candidateMeta ? candidateMeta.blockers : null);
+    const payeeContext = getBankPayeeContext(line);
+    const lineHasBlockerContract = hasBankBlockerContract(line);
 
     return {
       candidate_id: candidateId || trimStr(candidateMeta?.candidate_id || ''),
@@ -49290,20 +49330,24 @@ const collectPreviewRowIds = (previewLike) => {
       is_ready_for_draft: Object.prototype.hasOwnProperty.call(line, 'is_ready_for_draft')
         ? asBool(line?.is_ready_for_draft)
         : asBool(candidateMeta?.is_ready_for_draft),
-      blockers: parseBlockerCodes(lineBlockersRaw),
-      payee_entity_kind: upperTrim(line?.payee_entity_kind || candidateMeta?.payee_entity_kind || ''),
-      payee_entity_id: trimStr(line?.payee_entity_id || candidateMeta?.payee_entity_id || ''),
+      blockers: lineHasBlockerContract ? getBankBlockerCodes(line) : getBankBlockerCodes(candidateMeta),
+      payee_entity_kind: upperTrim(line?.payee_entity_kind || payeeContext.payee_entity_kind || candidateMeta?.payee_entity_kind || ''),
+      payee_entity_id: trimStr(line?.payee_entity_id || payeeContext.payee_entity_id || candidateMeta?.payee_entity_id || ''),
       bank_details_hash: getExactBankTargetHash(line, candidateMeta),
-      payee_bank_hash: trimStr(line?.payee_bank_hash || candidateMeta?.payee_bank_hash || ''),
-      bank_details_hash_snapshot: trimStr(line?.bank_details_hash_snapshot || candidateMeta?.bank_details_hash_snapshot || ''),
-      snapshot_bank_details_hash: trimStr(line?.snapshot_bank_details_hash || candidateMeta?.snapshot_bank_details_hash || ''),
-      name_check_status: upperTrim(line?.name_check_status || candidateMeta?.name_check_status || ''),
+      payee_bank_hash: trimStr(line?.payee_bank_hash || payeeContext.payee_bank_hash || candidateMeta?.payee_bank_hash || ''),
+      bank_details_hash_snapshot: trimStr(line?.bank_details_hash_snapshot || payeeContext.bank_details_hash_snapshot || candidateMeta?.bank_details_hash_snapshot || ''),
+      snapshot_bank_details_hash: trimStr(line?.snapshot_bank_details_hash || payeeContext.snapshot_bank_details_hash || candidateMeta?.snapshot_bank_details_hash || ''),
+      name_check_status: upperTrim(line?.name_check_status || payeeContext.name_check_status || candidateMeta?.name_check_status || ''),
       name_check_has_override: Object.prototype.hasOwnProperty.call(line, 'name_check_has_override')
         ? asBool(line?.name_check_has_override)
-        : asBool(candidateMeta?.name_check_has_override),
+        : (Object.prototype.hasOwnProperty.call(payeeContext, 'name_check_has_override')
+            ? asBool(payeeContext.name_check_has_override)
+            : asBool(candidateMeta?.name_check_has_override)),
       payee_map_present: Object.prototype.hasOwnProperty.call(line, 'payee_map_present')
         ? asBool(line?.payee_map_present)
-        : asBool(candidateMeta?.payee_map_present)
+        : (Object.prototype.hasOwnProperty.call(payeeContext, 'payee_map_present')
+            ? asBool(payeeContext.payee_map_present)
+            : asBool(candidateMeta?.payee_map_present))
     };
   };
 
