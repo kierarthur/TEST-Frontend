@@ -265574,6 +265574,8 @@ async function fetchCandidateAdvances(candidateId) {
 
   window.appState = window.appState || {};
   const S = (window.appState.candidateAdvances ||= {});
+  const inFlight = (window.__candidateFinanceReportFetches ||= {});
+  if (inFlight[cid]) return inFlight[cid];
 
   const reportUrl = API(`/api/candidates/${encodeURIComponent(cid)}/advances/report`);
 
@@ -265694,8 +265696,20 @@ async function fetchCandidateAdvances(candidateId) {
       weekly_due: asNum(row?.weekly_due, asNum(row?.due_this_week, 0)),
       next_due_week_start: pickFirstText(row?.next_due_week_start),
       start_week_start: pickFirstText(row?.start_week_start),
+      recovered_total: asNum(row?.recovered_total, 0),
+      recovered_wtd: asNum(row?.recovered_wtd, 0),
+      lifecycle_state: pickFirstText(row?.lifecycle_state),
+      authoritative_payment_date: pickFirstText(row?.authoritative_payment_date),
+      payout_or_recovery_status: pickFirstText(row?.payout_or_recovery_status),
       adjustment_comment: pickFirstText(row?.adjustment_comment),
       notes: pickFirstText(row?.notes, row?.note),
+      blocked_reason: pickFirstText(row?.blocked_reason),
+      is_mixed_case: row?.is_mixed_case === true,
+      open_taxable_count: asNum(row?.open_taxable_count, 0),
+      open_reimbursement_count: asNum(row?.open_reimbursement_count, 0),
+      unresolved_taxable_count: asNum(row?.unresolved_taxable_count, 0),
+      stale_count: asNum(row?.stale_count, 0),
+      component_resolution_summary_json: asObj(row?.component_resolution_summary_json),
       latest_remittance_trigger_status: pickFirstText(
         row?.latest_remittance_trigger_status,
         row?.remittance_trigger_status
@@ -265796,10 +265810,14 @@ async function fetchCandidateAdvances(candidateId) {
       overpayments_outstanding_total: overpayments.reduce((a, row) => a + asNum(row.outstanding_amount), 0),
       underpayments_outstanding_total: underpayments.reduce((a, row) => a + asNum(row.outstanding_amount), 0),
       manual_debt_adjustments_outstanding_total: manual_debt_adjustments.reduce((a, row) => a + asNum(row.outstanding_amount), 0),
-      manual_credit_adjustments_total: manual_credit_adjustments.reduce((a, row) => a + asNum(row.original_amount), 0)
+      manual_credit_adjustments_total: manual_credit_adjustments.reduce((a, row) => a + asNum(row.original_amount), 0),
+      mixed_finance_cases_count: finance_cases.filter((row) => row.is_mixed_case === true).length,
+      unresolved_finance_cases_count: finance_cases.filter((row) => asNum(row.unresolved_taxable_count) > 0).length,
+      stale_finance_cases_count: finance_cases.filter((row) => asNum(row.stale_count) > 0).length
     };
 
     const rawSummary = asObj(root.summary);
+    const rawComponentTotals = asObj(rawSummary.component_totals);
     const summary = {
       payment_advances_count: asNum(rawSummary.payment_advances_count, derivedSummary.payment_advances_count),
       overpayments_count: asNum(rawSummary.overpayments_count, derivedSummary.overpayments_count),
@@ -265812,7 +265830,10 @@ async function fetchCandidateAdvances(candidateId) {
       overpayments_outstanding_total: asNum(rawSummary.overpayments_outstanding_total, derivedSummary.overpayments_outstanding_total),
       underpayments_outstanding_total: asNum(rawSummary.underpayments_outstanding_total, derivedSummary.underpayments_outstanding_total),
       manual_debt_adjustments_outstanding_total: asNum(rawSummary.manual_debt_adjustments_outstanding_total, derivedSummary.manual_debt_adjustments_outstanding_total),
-      manual_credit_adjustments_total: asNum(rawSummary.manual_credit_adjustments_total, derivedSummary.manual_credit_adjustments_total)
+      manual_credit_adjustments_total: asNum(rawSummary.manual_credit_adjustments_total, derivedSummary.manual_credit_adjustments_total),
+      mixed_finance_cases_count: asNum(rawSummary.mixed_finance_cases_count, asNum(rawComponentTotals.mixed_case_count, derivedSummary.mixed_finance_cases_count)),
+      unresolved_finance_cases_count: asNum(rawSummary.unresolved_finance_cases_count, asNum(rawComponentTotals.unresolved_taxable_count_total, derivedSummary.unresolved_finance_cases_count)),
+      stale_finance_cases_count: asNum(rawSummary.stale_finance_cases_count, asNum(rawComponentTotals.stale_count_total, derivedSummary.stale_finance_cases_count))
     };
 
     return {
@@ -265829,58 +265850,73 @@ async function fetchCandidateAdvances(candidateId) {
     };
   };
 
-  let report = {
-    candidate: {},
-    summary: {
-      payment_advances_count: 0,
-      overpayments_count: 0,
-      underpayments_count: 0,
-      manual_debt_adjustments_count: 0,
-      manual_credit_adjustments_count: 0,
-      snoozed_finance_cases_count: 0,
-      active_timesheet_snoozes_count: 0,
-      payment_advances_outstanding_total: 0,
-      overpayments_outstanding_total: 0,
-      underpayments_outstanding_total: 0,
-      manual_debt_adjustments_outstanding_total: 0,
-      manual_credit_adjustments_total: 0
-    },
-    finance_cases: [],
-    payment_advances: [],
-    overpayments: [],
-    underpayments: [],
-    manual_debt_adjustments: [],
-    manual_credit_adjustments: [],
-    timesheet_snoozes: [],
-    snoozed_deferred_items: []
-  };
-
-  try {
-    const res = await authFetch(reportUrl);
-    if (!res.ok) {
-      const txt = await res.text().catch(() => '');
-      throw new Error(txt || `Request failed (${res.status})`);
-    }
-    const json = await res.json().catch(() => ({}));
-    report = buildCanonicalReport(json);
-  } catch (e) {
-    console.warn('[CANDIDATE_FINANCE] fetchCandidateAdvances failed', e);
-  }
-
+  const previous = (S[cid] && typeof S[cid] === 'object') ? S[cid] : {};
+  const previousReport = (previous.report && typeof previous.report === 'object') ? previous.report : null;
   S[cid] = {
-    report,
-    list: report.finance_cases.slice(),
-    summary: { ...report.summary },
-    fetched_at: new Date().toISOString()
+    ...previous,
+    report: previousReport,
+    list: previousReport ? previousReport.finance_cases.slice() : [],
+    summary: previousReport ? { ...previousReport.summary } : {},
+    loading: true,
+    status: 'loading',
+    error: ''
   };
 
   try {
-    if (typeof updateCandidateAdvancesUI === 'function') {
-      updateCandidateAdvancesUI(cid);
+    if (typeof updateCandidateAdvancesUI === 'function') updateCandidateAdvancesUI(cid);
+  } catch {}
+
+  const request = (async () => {
+    try {
+      const res = await authFetch(reportUrl, { cache: 'no-store' });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        const err = new Error(txt || `Request failed (${res.status})`);
+        err.http_status = res.status;
+        throw err;
+      }
+      const json = await res.json().catch(() => ({}));
+      const report = buildCanonicalReport(json);
+
+      S[cid] = {
+        report,
+        list: report.finance_cases.slice(),
+        summary: { ...report.summary },
+        fetched_at: new Date().toISOString(),
+        loading: false,
+        status: 'ready',
+        error: ''
+      };
+
+      return S[cid];
+    } catch (e) {
+      console.warn('[CANDIDATE_FINANCE] fetchCandidateAdvances failed', e);
+      const userMessage = 'Candidate finance data could not be loaded. Nothing has been treated as zero; retry when the service is available.';
+      S[cid] = {
+        ...previous,
+        report: previousReport,
+        list: previousReport ? previousReport.finance_cases.slice() : [],
+        summary: previousReport ? { ...previousReport.summary } : {},
+        fetched_at: String(previous.fetched_at || '').trim(),
+        loading: false,
+        status: 'error',
+        error: userMessage
+      };
+      const safeError = new Error(userMessage);
+      safeError.cause = e;
+      throw safeError;
+    } finally {
+      delete inFlight[cid];
+      try {
+        if (typeof updateCandidateAdvancesUI === 'function') updateCandidateAdvancesUI(cid);
+      } catch (e) {
+        console.warn('[CANDIDATE_FINANCE] updateCandidateAdvancesUI failed', e);
+      }
     }
-  } catch (e) {
-    console.warn('[CANDIDATE_FINANCE] updateCandidateAdvancesUI failed', e);
-  }
+  })();
+
+  inFlight[cid] = request;
+  return request;
 }
 
 async function openCandidateLoansOverpaymentsModal(candidateId) {
@@ -266266,6 +266302,7 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
               <label>Candidate Finance Report</label>
               <div class="controls">
                 <div class="error" style="white-space:pre-wrap;">${enc(state.error)}</div>
+                <button type="button" class="btn mini" data-action="candidateFinance:retry" data-view-action="candidate-finance-report" style="margin-top:10px;">Retry</button>
               </div>
             </div>
           </div>
@@ -266336,6 +266373,24 @@ async function openCandidateLoansOverpaymentsModal(candidateId) {
       if (!fr) return;
       await fr.setTab(fr.currentTabKey || 'report');
       fr._updateButtons && fr._updateButtons();
+      const retry = document.querySelector('[data-action="candidateFinance:retry"]');
+      if (retry && !retry.__candidateFinanceRetryWired) {
+        retry.__candidateFinanceRetryWired = true;
+        retry.addEventListener('click', async () => {
+          state.loading = true;
+          state.error = '';
+          await rerender();
+          try {
+            state.entry = await loadEntry();
+            state.loading = false;
+            state.error = '';
+          } catch (e) {
+            state.loading = false;
+            state.error = String(e?.message || e || 'Failed to load candidate finance report');
+          }
+          await rerender();
+        });
+      }
     } catch {}
   };
 
@@ -267848,6 +267903,8 @@ function updateCandidateAdvancesUI(candidateId) {
   const S = (window.appState && window.appState.candidateAdvances) || {};
   const entry = (S[cid] && typeof S[cid] === 'object') ? S[cid] : { report: null, summary: {} };
   const report = (entry.report && typeof entry.report === 'object') ? entry.report : null;
+  const loading = entry.loading === true || String(entry.status || '') === 'loading';
+  const loadError = String(entry.error || '').trim();
   const summary = (report && report.summary && typeof report.summary === 'object')
     ? report.summary
     : ((entry.summary && typeof entry.summary === 'object') ? entry.summary : {});
@@ -267866,41 +267923,57 @@ function updateCandidateAdvancesUI(candidateId) {
         type="button"
         class="btn mini"
         id="candidateFinanceReportLaunchBtn"
+        data-view-action="candidate-finance-report"
       >Open Candidate Finance Report</button>
     </div>
   `;
 
-  const wireLaunchButton = () => {
+  const wireFinanceButtons = () => {
     const btn = document.getElementById('candidateFinanceReportLaunchBtn');
-    if (!btn || btn.__candFinanceWired) return;
-
-    btn.__candFinanceWired = true;
-    btn.addEventListener('click', async () => {
-      try {
-        if (typeof openCandidateLoansOverpaymentsModal !== 'function') {
-          throw new Error('Candidate Finance Report modal is not available.');
-        }
-        await openCandidateLoansOverpaymentsModal(cid);
-      } catch (e) {
+    if (btn && !btn.__candFinanceWired) {
+      btn.__candFinanceWired = true;
+      btn.addEventListener('click', async () => {
         try {
-          if (typeof window.__toast === 'function') {
-            window.__toast(String(e?.message || e || 'Unable to open Candidate Finance Report.'));
-            return;
+          if (typeof openCandidateLoansOverpaymentsModal !== 'function') {
+            throw new Error('Candidate Finance Report modal is not available.');
           }
-        } catch {}
+          await openCandidateLoansOverpaymentsModal(cid);
+        } catch (e) {
+          try { window.__toast?.(String(e?.message || e || 'Unable to open Candidate Finance Report.')); } catch {}
+        }
+      });
+    }
+
+    const retry = document.getElementById('candidateFinanceReportRetryBtn');
+    if (retry && !retry.__candFinanceRetryWired) {
+      retry.__candFinanceRetryWired = true;
+      retry.addEventListener('click', async () => {
+        retry.disabled = true;
         try {
-          alert(String(e?.message || e || 'Unable to open Candidate Finance Report.'));
-        } catch {}
-      }
-    });
+          await fetchCandidateAdvances(cid);
+        } catch (e) {
+          try { window.__toast?.(String(e?.message || e || 'Unable to refresh Candidate Finance Report.')); } catch {}
+        }
+      });
+    }
   };
 
   if (sumEl) {
+    const loadStateHtml = loading
+      ? `<div class="mini" role="status" style="opacity:.85;">Loading current candidate finance data…</div>`
+      : loadError
+        ? `
+          <div class="error" role="alert" style="white-space:pre-wrap;">${escapeHtml(loadError)}</div>
+          ${report ? `<div class="mini" style="margin-top:6px;opacity:.8;">The figures below are from the last successful refresh and may be out of date.</div>` : ''}
+          <button type="button" class="btn mini" id="candidateFinanceReportRetryBtn" data-view-action="candidate-finance-report" style="margin-top:8px;">Retry finance report</button>
+        `
+        : '';
     sumEl.innerHTML = `
-      ${renderAdvancesSummary(summary)}
+      ${loadStateHtml}
+      ${report ? renderAdvancesSummary(summary) : ''}
       ${launchBlockHtml}
     `;
-    wireLaunchButton();
+    wireFinanceButtons();
   }
 
   if (missEl) {
@@ -313227,6 +313300,18 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
       }
     } catch {}
 
+    // Candidate Finance Report is a read-only navigation action. It must remain
+    // available while the Candidate itself is in View mode; opening a report
+    // must never require entering Edit mode or changing the parent dirty state.
+    try {
+      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+      const viewAction = String(el.getAttribute('data-view-action') || '').trim();
+      if (ro && top?.entity === 'candidates' && viewAction === 'candidate-finance-report') {
+        el.disabled = false;
+        return;
+      }
+    } catch {}
+
     // Keep Timesheet action buttons enabled in VIEW only if they are "safe view actions".
     // Do NOT keep weekly schedule edit buttons enabled (reset / add/remove shift lines).
     try {
@@ -315231,15 +315316,13 @@ if (this.entity === 'imports' && this.kind === 'imports' && k === 'main') {
         window.appState = window.appState || {};
         const cache = (window.appState.candidateAdvances ||= {});
 
-        if (cache[candId]) {
-          // Already cached this session → repaint into fresh DOM
-          updateCandidateAdvancesUI(candId);
-        } else {
-          // First time on this candidate → fetch from backend
-          fetchCandidateAdvances(candId).catch(err => {
-            console.warn('[CAND][PAY][FINANCE_REPORT] fetch failed', err);
-          });
-        }
+        // Repaint any last successful result immediately, then always refresh from
+        // current server truth. A prior failure or old finance-case snapshot must
+        // never remain authoritative merely because this candidate was cached.
+        if (cache[candId]) updateCandidateAdvancesUI(candId);
+        fetchCandidateAdvances(candId).catch(err => {
+          console.warn('[CAND][PAY][FINANCE_REPORT] fetch failed', err);
+        });
 
         const payRoot =
           document.getElementById('tab-pay') ||
@@ -315269,14 +315352,13 @@ if (this.entity === 'imports' && this.kind === 'imports' && k === 'main') {
             ).trim();
 
             if (!btnCandId) {
-              if (typeof window.__toast === 'function') window.__toast('candidate_id is required');
-              else alert('candidate_id is required');
+              try { window.__toast?.('candidate_id is required'); } catch {}
               return;
             }
 
             if (typeof openCandidateLoansOverpaymentsModal !== 'function') {
               console.warn('[CAND][PAY][FINANCE_REPORT] openCandidateLoansOverpaymentsModal missing');
-              alert('Candidate Finance Report is not available.');
+              try { window.__toast?.('Candidate Finance Report is not available.'); } catch {}
               return;
             }
 
@@ -315284,7 +315366,7 @@ if (this.entity === 'imports' && this.kind === 'imports' && k === 'main') {
               await openCandidateLoansOverpaymentsModal(btnCandId);
             } catch (err) {
               console.warn('[CAND][PAY][FINANCE_REPORT] open report failed', err);
-              alert(err?.message || 'Failed to open Candidate Finance Report.');
+              try { window.__toast?.(err?.message || 'Failed to open Candidate Finance Report.'); } catch {}
             }
           });
         }
