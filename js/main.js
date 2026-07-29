@@ -45398,7 +45398,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
     } catch {}
   };
 
-  const refreshAfterMutation = async () => {
+  const refreshAfterMutation = async (mutationResult = null) => {
     try {
       if (typeof bankingLoadLoansSnoozes === 'function') {
         await bankingLoadLoansSnoozes({ force: true });
@@ -45411,12 +45411,54 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
       }
     } catch {}
 
+    let candidateSettled = false;
+    try {
+      const activeWorkbenchSessionId = resolveActiveWorkbenchSessionId();
+      const candidateIdText = String(
+        mutationResult?.candidate_id ||
+        mutationResult?.candidateId ||
+        state.candidate_id ||
+        ''
+      ).trim();
+      if (
+        uuidRe.test(activeWorkbenchSessionId) &&
+        uuidRe.test(candidateIdText) &&
+        typeof pollPayWorkbenchCandidateUntilSettled === 'function'
+      ) {
+        const settledResult = await pollPayWorkbenchCandidateUntilSettled(
+          activeWorkbenchSessionId,
+          candidateIdText,
+          {
+            updateState: true,
+            reason: 'BANKING_SNOOZE_MUTATION'
+          }
+        );
+        candidateSettled = !!(
+          settledResult &&
+          settledResult.ok !== false &&
+          settledResult.aborted !== true &&
+          settledResult.timed_out !== true &&
+          settledResult.still_refreshing !== true &&
+          (
+            settledResult.candidate_preview ||
+            settledResult.full_session_refresh_applied === true ||
+            settledResult.full_session
+          )
+        );
+      }
+    } catch {}
+
     try {
       const pd = String(st?.pay?.draftWizard?.pay_date || '').trim();
-      if (pd && typeof bankingPayPreview === 'function') {
+      if (!candidateSettled && pd && typeof bankingPayPreview === 'function') {
         await bankingPayPreview(pd);
       }
     } catch {}
+
+    return {
+      candidate_settled: candidateSettled,
+      full_workbench_refresh_used: !candidateSettled
+    };
   };
 
   const wireUi = async () => {
@@ -45607,9 +45649,19 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
           if (!snoozeId) return;
           if (state.clearBusy) return;
 
-          const okToProceed = (() => {
-            try { return window.confirm('Cancel this snooze?'); } catch { return true; }
-          })();
+          let okToProceed = false;
+          if (typeof openUiConfirmModal === 'function') {
+            const confirmation = await openUiConfirmModal({
+              title: 'Cancel Snooze',
+              message: 'Cancel this snooze?',
+              confirm_label: 'Cancel snooze',
+              cancel_label: 'Keep snooze',
+              confirm_class: 'btn btn-danger',
+              cancel_class: 'btn btn-outline',
+              kind: 'banking-finance-snooze-cancel-confirm'
+            });
+            okToProceed = confirmation?.confirmed === true;
+          }
           if (!okToProceed) return;
 
           state.error = '';
@@ -45621,7 +45673,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
               clearPayload.workbench_session_id = activeWorkbenchSessionId;
             }
 
-            await apiPostJson('/api/banking/pay/snooze/clear', clearPayload);
+            const clearResult = await apiPostJson('/api/banking/pay/snooze/clear', clearPayload);
 
             state.snooze_id = '';
             state.active_snooze = false;
@@ -45632,7 +45684,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
             state.should_remain_visible_in_live_pay_workbench = true;
             state.live_pay_bucket = 'BLOCKED_FOR_PAY';
 
-            await refreshAfterMutation();
+            await refreshAfterMutation(clearResult);
 
             try {
               if (typeof window.__toast === 'function') {
@@ -45954,7 +46006,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
 
       applyResultState(result);
 
-      await refreshAfterMutation();
+      await refreshAfterMutation(result);
 
       try {
         if (typeof window.__toast === 'function') {

@@ -41,3 +41,30 @@ test('payee-map failure uses the safe backend envelope rather than raw provider 
   assert.doesNotMatch(source, /rawRailError/);
   assert.doesNotMatch(source, /providerMessage/);
 });
+
+test('snooze mutations adopt the settled candidate and only fall back to a full workbench refresh', () => {
+  const source = sliceBetween(
+    'async function openBankingFinanceSnoozeModal(seed = {}) {',
+    'async function openBankingFinanceCaseAuditModal(seed = {}) {'
+  );
+
+  assert.match(source, /const refreshAfterMutation = async \(mutationResult = null\) =>/);
+  assert.match(source, /pollPayWorkbenchCandidateUntilSettled\(/);
+  assert.match(source, /reason: 'BANKING_SNOOZE_MUTATION'/);
+  assert.match(source, /if \(!candidateSettled && pd && typeof bankingPayPreview === 'function'\)/);
+  assert.match(source, /await refreshAfterMutation\(clearResult\)/);
+  assert.match(source, /await refreshAfterMutation\(result\)/);
+  assert.match(source, /full_workbench_refresh_used: !candidateSettled/);
+});
+
+test('snooze cancellation uses the friendly UI confirmation and no native browser confirmation', () => {
+  const source = sliceBetween(
+    'async function openBankingFinanceSnoozeModal(seed = {}) {',
+    'async function openBankingFinanceCaseAuditModal(seed = {}) {'
+  );
+
+  assert.match(source, /openUiConfirmModal\(\{/);
+  assert.match(source, /kind: 'banking-finance-snooze-cancel-confirm'/);
+  assert.match(source, /okToProceed = confirmation\?\.confirmed === true/);
+  assert.doesNotMatch(source, /window\.confirm\('Cancel this snooze\?'\)/);
+});
