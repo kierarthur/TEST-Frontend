@@ -143,6 +143,13 @@ test('opening a batch modal rechecks a transiently unavailable capability', () =
     /openInvoiceBatchModal\(mode\)[\s\S]*initialiseInvoiceAsyncUi\(\{ force: true \}\)[\s\S]*refreshed\?\.enabled_for_user !== true/,
   );
 });
+test('unavailable Invoice actions recover through a fresh authenticated capability check', () => {
+  assert.match(
+    asyncSource,
+    /invoiceAsyncUnavailableAction\(actionName[\s\S]*initialiseInvoiceAsyncUi\(\{ force: true \}\)[\s\S]*recovered !== unavailableInvoiceActionHandlers\[actionName\]/,
+  );
+  assert.match(asyncSource, /openInvoiceBatchGenerateModal:[\s\S]*openInvoiceBatchIssueModal:/);
+});
 
 test('batch selection gives immediate local feedback without rebuilding the whole modal', () => {
   assert.match(batchSource, /function markInvoiceBatchSelectionSummaryPending/);

@@ -1476,21 +1476,36 @@
     window.renderInvoiceModalContent = wrapped;
   }
 
-  function invoiceAsyncUnavailableAction() {
+  async function invoiceAsyncUnavailableAction(actionName = null, args = []) {
+    if (actionName && typeof window.initialiseInvoiceAsyncUi === 'function') {
+      const capabilities = await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null);
+      const recovered = window[actionName];
+      if (
+        capabilities?.enabled_for_user === true
+        && typeof recovered === 'function'
+        && recovered !== unavailableInvoiceActionHandlers[actionName]
+      ) {
+        return recovered(...args);
+      }
+    }
     const message = 'Invoice processing is temporarily unavailable while the new invoice system is being updated.';
     try { window.__toast?.(message); } catch {}
     if (typeof window.__toast !== 'function') window.alert?.(message);
-    return Promise.resolve(null);
+    return null;
   }
 
+  const unavailableInvoiceActionHandlers = Object.freeze({
+    handleInvoiceRenderPdf: (...args) => invoiceAsyncUnavailableAction('handleInvoiceRenderPdf', args),
+    handleInvoiceEmail: (...args) => invoiceAsyncUnavailableAction('handleInvoiceEmail', args),
+    openInvoiceBatchGenerateModal: (...args) => invoiceAsyncUnavailableAction('openInvoiceBatchGenerateModal', args),
+    openInvoiceBatchIssueModal: (...args) => invoiceAsyncUnavailableAction('openInvoiceBatchIssueModal', args),
+    getTimesheetPdfUrl: (...args) => invoiceAsyncUnavailableAction('getTimesheetPdfUrl', args),
+    openTimesheetPdf: (...args) => invoiceAsyncUnavailableAction('openTimesheetPdf', args),
+    openTimesheetDocumentV8: (...args) => invoiceAsyncUnavailableAction('openTimesheetDocumentV8', args)
+  });
+
   function installInvoiceAsyncUnavailableActions() {
-    window.handleInvoiceRenderPdf = invoiceAsyncUnavailableAction;
-    window.handleInvoiceEmail = invoiceAsyncUnavailableAction;
-    window.openInvoiceBatchGenerateModal = invoiceAsyncUnavailableAction;
-    window.openInvoiceBatchIssueModal = invoiceAsyncUnavailableAction;
-    window.getTimesheetPdfUrl = invoiceAsyncUnavailableAction;
-    window.openTimesheetPdf = invoiceAsyncUnavailableAction;
-    window.openTimesheetDocumentV8 = invoiceAsyncUnavailableAction;
+    Object.assign(window, unavailableInvoiceActionHandlers);
     window.__invoiceAsyncOverridesInstalled = false;
     window.__invoiceBatchModalOverridesInstalled = false;
     return true;
