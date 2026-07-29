@@ -23943,6 +23943,15 @@ function attachBankingNavAlertPopoverHandlers() {
     const h = String(hash || '').trim();
     if (typeof bankingAlertsFetchActive !== 'function') return false;
     const attempt = Math.max(1, Math.trunc(Number(options.attempt || 1) || 1));
+    const forceRefreshRequested = options.forceRefresh === true || options.force_refresh === true;
+    const lastForcedAtMs = Number(window.__bankingAlertLastUserForcedRefreshAtMs || 0) || 0;
+    const forceRefresh = forceRefreshRequested && (
+      options.retryForceRefresh === true ||
+      Date.now() - lastForcedAtMs >= 60000
+    );
+    if (forceRefresh && options.retryForceRefresh !== true) {
+      window.__bankingAlertLastUserForcedRefreshAtMs = Date.now();
+    }
     const current = (window.__bankingAlertDirectDetailFetch && typeof window.__bankingAlertDirectDetailFetch === 'object')
       ? window.__bankingAlertDirectDetailFetch
       : null;
@@ -23952,13 +23961,19 @@ function attachBankingNavAlertPopoverHandlers() {
       const delayMs = attempt === 1 ? 350 : 1000;
       setTimeout(() => {
         try {
-          if (queryPopover()) startDirectAlertDetailFetch(h, { attempt: attempt + 1 });
+          if (queryPopover()) {
+            startDirectAlertDetailFetch(h, {
+              attempt: attempt + 1,
+              forceRefresh: forceRefreshRequested,
+              retryForceRefresh: forceRefresh
+            });
+          }
         } catch {}
       }, delayMs);
     };
 
     const request = Promise.resolve()
-      .then(() => bankingAlertsFetchActive({ silent: true, limit: 100 }))
+      .then(() => bankingAlertsFetchActive({ silent: true, limit: 100, forceRefresh }))
       .then((result) => {
         if (!result || result.ok === false) {
           scheduleRetry();
@@ -24039,6 +24054,10 @@ function attachBankingNavAlertPopoverHandlers() {
     document.body.appendChild(popover);
     positionPopover(popover, trigger);
     trigger?.setAttribute?.('aria-expanded', 'true');
+    startDirectAlertDetailFetch(syncDetailHash(attentionState), {
+      attempt: 1,
+      forceRefresh: true
+    });
     requestDeferredAlertDetailRefresh(attentionState, 'banking-alert-popover-open');
   };
   const setPopoverClearingState = (busy) => {
@@ -371509,7 +371528,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
           try {
             const lastDirectAlertFetchAtMs = Number(hb._lastBankingAlertDirectFetchAtMs || 0) || 0;
             const explicitAlertRefresh = isExplicitBankingAlertDetailRefreshReason(reason);
-            const periodicAlertRefreshDue = Date.now() - lastDirectAlertFetchAtMs >= (5 * 60 * 1000);
+            const periodicAlertRefreshDue = Date.now() - lastDirectAlertFetchAtMs >= (10 * 60 * 1000);
             const directAlertFetchDue = requestedBankingAlertDetailRefresh
               || explicitAlertRefresh
               || periodicAlertRefreshDue;

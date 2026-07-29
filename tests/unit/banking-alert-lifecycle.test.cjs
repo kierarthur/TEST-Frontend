@@ -155,10 +155,12 @@ test('count-only refresh cannot replace already-loaded messages for the same ale
 test('opening a popover with missing rows starts the dedicated full-detail alert fetch', () => {
   const handlers = sliceBetween('function attachBankingNavAlertPopoverHandlers()', 'function renderBankingNavAlertPopover(attentionState)');
   assert.match(handlers, /startDirectAlertDetailFetch/);
-  assert.match(handlers, /bankingAlertsFetchActive\(\{ silent: true, limit: 100 \}\)/);
+  assert.match(handlers, /bankingAlertsFetchActive\(\{ silent: true, limit: 100, forceRefresh \}\)/);
+  assert.match(handlers, /forceRefresh: true/);
+  assert.match(handlers, /Date\.now\(\) - lastForcedAtMs >= 60000/);
   assert.match(handlers, /missingRowsForPositiveCount === true[\s\S]*startDirectAlertDetailFetch\(hash\)/);
   assert.match(handlers, /if \(attempt >= 3\) return/);
-  assert.match(handlers, /startDirectAlertDetailFetch\(h, \{ attempt: attempt \+ 1 \}\)/);
+  assert.match(handlers, /startDirectAlertDetailFetch\(h, \{[\s\S]*attempt: attempt \+ 1,[\s\S]*forceRefresh: forceRefreshRequested,[\s\S]*retryForceRefresh: forceRefresh/);
   assert.match(handlers, /\.catch\(\(\) => \{[\s\S]*scheduleRetry\(\)/);
 });
 
@@ -305,8 +307,8 @@ test('explicit alert refresh bypasses the routine server-side summary cache', as
   assert.equal(requestedUrl, '/api/banking/alerts?limit=100&refresh=1');
 });
 
-test('heartbeat rate-limits routine alert detail reads to five minutes', () => {
-  assert.match(mainSource, /periodicAlertRefreshDue = Date\.now\(\) - lastDirectAlertFetchAtMs >= \(5 \* 60 \* 1000\)/);
+test('heartbeat uses a ten-minute recovery backstop for routine alert detail reads', () => {
+  assert.match(mainSource, /periodicAlertRefreshDue = Date\.now\(\) - lastDirectAlertFetchAtMs >= \(10 \* 60 \* 1000\)/);
   assert.match(mainSource, /forceRefresh: explicitAlertRefresh/);
   assert.doesNotMatch(mainSource, /directAlertFetchDue = Date\.now\(\) - lastDirectAlertFetchAtMs >= 10000/);
 });
