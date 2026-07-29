@@ -13,6 +13,18 @@
   const DISPLAY_MODES = ['ALL', 'BLOCKED', 'READY'];
   const GROUP_DIMENSIONS = Object.freeze(['WEEK', 'CLIENT', 'CANDIDATE', 'STATUS']);
   const DEFAULT_GROUP_ORDER = Object.freeze(['WEEK', 'CLIENT', 'CANDIDATE', 'STATUS']);
+  const GROUP_DIMENSION_SORT_KEYS = Object.freeze({
+    WEEK: 'WEEK_ENDING_DATE',
+    CLIENT: 'CLIENT_NAME',
+    CANDIDATE: 'CANDIDATE_NAME',
+    STATUS: 'STATUS'
+  });
+  const GROUP_DIMENSION_PRESETS = Object.freeze({
+    WEEK: 'WEEK_CLIENT_CANDIDATE',
+    CLIENT: 'CLIENT_WEEK_CANDIDATE',
+    CANDIDATE: 'CANDIDATE_WEEK_CLIENT',
+    STATUS: 'STATUS_WEEK_CLIENT'
+  });
   const SERVER_GROUP_PRESETS = Object.freeze([
     'WEEK_CLIENT_CANDIDATE',
     'CLIENT_WEEK_CANDIDATE',
@@ -158,6 +170,16 @@
     return valid ? supplied : [...DEFAULT_GROUP_ORDER];
   }
 
+  function sortForGroupOrder(value, groupOrderValue, mode) {
+    const groupOrder = normaliseGroupOrder(groupOrderValue, { persisted: true });
+    const primaryDimension = groupOrder[0];
+    return normaliseSort({
+      ...normaliseSort(value, mode, { persisted: true }),
+      group_preset: GROUP_DIMENSION_PRESETS[primaryDimension],
+      sort_key: GROUP_DIMENSION_SORT_KEYS[primaryDimension]
+    }, mode);
+  }
+
   function preferenceKey(mode) {
     const environment = clean(window.location?.host || 'unknown').toLowerCase();
     const userId = clean(window.__USER_ID || window.__auth?.user?.id || window.SESSION?.user?.id || 'anonymous').toLowerCase();
@@ -167,23 +189,26 @@
   function loadInvoiceBatchPreferences(mode) {
     try {
       const stored = asObject(JSON.parse(localStorage.getItem(preferenceKey(mode)) || '{}'));
+      const groupOrder = normaliseGroupOrder(stored.group_order, { persisted: true });
       return {
-        sort: normaliseSort(stored.sort || stored, mode, { persisted: true }),
-        group_order: normaliseGroupOrder(stored.group_order, { persisted: true })
+        sort: sortForGroupOrder(stored.sort || stored, groupOrder, mode),
+        group_order: groupOrder
       };
     } catch {
+      const groupOrder = [...DEFAULT_GROUP_ORDER];
       return {
-        sort: normaliseSort({}, mode, { persisted: true }),
-        group_order: [...DEFAULT_GROUP_ORDER]
+        sort: sortForGroupOrder({}, groupOrder, mode),
+        group_order: groupOrder
       };
     }
   }
 
   function saveInvoiceBatchPreferences(mode, value) {
     const source = asObject(value);
+    const groupOrder = normaliseGroupOrder(source.group_order || DEFAULT_GROUP_ORDER);
     const saved = {
-      sort: normaliseSort(source.sort || source, mode),
-      group_order: normaliseGroupOrder(source.group_order || DEFAULT_GROUP_ORDER)
+      sort: sortForGroupOrder(source.sort || source, groupOrder, mode),
+      group_order: groupOrder
     };
     try { localStorage.setItem(preferenceKey(mode), JSON.stringify(saved)); } catch {}
     return saved;
@@ -862,10 +887,7 @@
 
   function rowsInInvoiceBatchDisplayOrder(state) {
     const rows = [...asArray(state.candidate_page?.rows)];
-    const keys = [
-      upper(state.sort?.sort_key),
-      ...normaliseGroupOrder(state.group_order, { persisted: true })
-    ].filter((key, index, values) => values.indexOf(key) === index);
+    const keys = normaliseGroupOrder(state.group_order, { persisted: true });
     const direction = upper(state.sort?.sort_direction) === 'ASC' ? 1 : -1;
     return rows.sort((left, right) => {
       for (const key of keys) {
@@ -921,7 +943,6 @@
   }
 
   function renderInvoiceBatchToolbar(state) {
-    const sortOptions = SORT_KEYS[state.mode].map(key => `<option value="${key}" ${state.sort.sort_key === key ? 'selected' : ''}>${escapeHtml(key.replaceAll('_', ' ').toLowerCase().replace(/^\w/, value => value.toUpperCase()))}</option>`).join('');
     const groupLabels = {
       WEEK: 'Week ending',
       CLIENT: 'Client',
@@ -945,8 +966,7 @@
         <div class="invbatch-toolbar-row invbatch-toolbar-row--secondary">
           <fieldset class="invbatch-group-order"><legend>Sort priority (drag only)</legend><ol>${groupOrderEditor}</ol></fieldset>
           <div class="invbatch-sort-controls">
-            <label>Primary sort <select data-batch-field="sort-key">${sortOptions}</select></label>
-            <label>Direction <select data-batch-field="sort-direction"><option value="DESC" ${state.sort.sort_direction === 'DESC' ? 'selected' : ''}>Descending</option><option value="ASC" ${state.sort.sort_direction === 'ASC' ? 'selected' : ''}>Ascending</option></select></label>
+            <label>Sort direction <select data-batch-field="sort-direction"><option value="DESC" ${state.sort.sort_direction === 'DESC' ? 'selected' : ''}>Descending</option><option value="ASC" ${state.sort.sort_direction === 'ASC' ? 'selected' : ''}>Ascending</option></select></label>
             <button type="button" class="btn btn-sm btn-outline" data-batch-action="reset-selection">Reset selection</button>
           </div>
         </div>
@@ -1819,6 +1839,13 @@
     return true;
   }
 
+  async function applyInvoiceBatchSortPriorityChange(state, dimensionValue, targetValue) {
+    const moved = moveInvoiceBatchGroupDimension(state, dimensionValue, targetValue);
+    if (!moved) return false;
+    await reloadFirstPage(state);
+    return true;
+  }
+
   function attachInvoiceBatchModalDelegatedHandlers(state) {
     const root = state.root_element;
     if (!root || state.delegated_handler) return;
@@ -1842,12 +1869,13 @@
       }
       if (event.type === 'drop' && groupItem && state.dragged_group_dimension) {
         event.preventDefault();
-        moveInvoiceBatchGroupDimension(
+        const draggedDimension = state.dragged_group_dimension;
+        state.dragged_group_dimension = null;
+        await applyInvoiceBatchSortPriorityChange(
           state,
-          state.dragged_group_dimension,
+          draggedDimension,
           groupItem.dataset.groupDimension
         );
-        state.dragged_group_dimension = null;
         return;
       }
       if (event.type === 'dragend') {
@@ -1875,9 +1903,8 @@
         } else if (name === 'allow-early') {
           state.filter.allow_early = field.checked === true;
           await reloadFirstPage(state);
-        } else if (name === 'sort-key' || name === 'sort-direction') {
-          if (name === 'sort-key') state.sort.sort_key = upper(field.value);
-          else state.sort.sort_direction = upper(field.value);
+        } else if (name === 'sort-direction') {
+          state.sort.sort_direction = upper(field.value);
           const saved = saveInvoiceBatchPreferences(state.mode, {
             sort: state.sort,
             group_order: state.group_order
@@ -2091,6 +2118,7 @@
     createInvoiceBatchModalState,
     normaliseInvoiceBatchGroupOrder: normaliseGroupOrder,
     moveInvoiceBatchGroupDimension,
+    applyInvoiceBatchSortPriorityChange,
     loadInvoiceBatchPreferences,
     saveInvoiceBatchPreferences,
     createInvoiceBatchSelectionState,
@@ -2133,6 +2161,7 @@
     createInvoiceBatchModalState,
     normaliseInvoiceBatchGroupOrder: normaliseGroupOrder,
     moveInvoiceBatchGroupDimension,
+    applyInvoiceBatchSortPriorityChange,
     createInvoiceBatchSelectionState,
     applyInvoiceBatchSelectionRule,
     isInvoiceBatchRowSelected,

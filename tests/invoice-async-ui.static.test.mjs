@@ -42,6 +42,21 @@ test('operation watches use the existing global heartbeat and reject arbitrary U
   assert.doesNotMatch(uiSource, /setInterval\s*\(/);
 });
 
+test('individual Generate uses one bounded foreground watcher without changing the global heartbeat', () => {
+  assert.match(uiSource, /DOCUMENT_FOREGROUND_WATCH_FAST_MS\s*=\s*30\s*\*\s*1000/);
+  assert.match(uiSource, /DOCUMENT_FOREGROUND_WATCH_MEDIUM_MS\s*=\s*2\s*\*\s*60\s*\*\s*1000/);
+  assert.match(uiSource, /DOCUMENT_FOREGROUND_WATCH_MAX_MS\s*=\s*5\s*\*\s*60\s*\*\s*1000/);
+  assert.match(uiSource, /return 2000[\s\S]*return 5000[\s\S]*return 15000/);
+  assert.match(uiSource, /__changesHeartbeat[\s\S]*pingOnce/);
+  assert.match(uiSource, /if \(watch\.in_flight === true\) return false/);
+  assert.match(uiSource, /deadline_timer\s*=\s*setTimeout[\s\S]*DOCUMENT_FOREGROUND_WATCH_MAX_MS/);
+  assert.match(uiSource, /response\.status === 202 && viewerState === 'PREPARING'[\s\S]*startInvoiceDocumentForegroundWatch/);
+  assert.match(uiSource, /stopAllInvoiceDocumentForegroundWatches\(reason\)/);
+  assert.match(uiSource, /stopAllInvoiceDocumentForegroundWatches\('pagehide'\)/);
+  assert.doesNotMatch(uiSource, /setInterval\s*\(/);
+  assert.match(mainSource, /hb\.intervalMs\s*=\s*Number\(hb\.intervalMs \|\| 45000\)/);
+});
+
 test('async document access uses only exact document-version identity', () => {
   assert.match(uiSource, /\/api\/invoice-document-versions\/\$\{encodeURIComponent\(id\)\}\/presign/);
   assert.doesNotMatch(uiSource, /\/api\/files\/presign-download/);
@@ -72,12 +87,12 @@ test('batch UI is server-paged, selection-contract based and loaded before the a
   assert.match(batchSource, /selection_contract:\s*buildInvoiceBatchSelectionContract/);
   assert.match(batchSource, /row\.selectable === true/);
   assert.match(indexSource, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
-  assert.ok(indexSource.indexOf('js/main.js?v=20260728-invoice-v8-banking-correction-carrier-v5')
+  assert.ok(indexSource.indexOf('js/main.js?v=20260729-banking-targeted-family-cancel-v6')
     < indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1'));
   assert.ok(indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1')
-    < indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-flat-table-r5'));
-  assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-flat-table-r5')
-    < indexSource.indexOf('js/invoice-async-ui.js?v=20260729-invoice-async-v8-correction-r9'));
+    < indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-sort-auto-r6'));
+  assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-sort-auto-r6')
+    < indexSource.indexOf('js/invoice-async-ui.js?v=20260729-invoice-foreground-watch-r10'));
 });
 
 test('Timesheet and Invoice preparation use V8 POST identities and no active raw-key path', () => {

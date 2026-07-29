@@ -60,7 +60,7 @@ function loadScript(source, additions = {}) {
     Blob,
     AbortController,
     Intl,
-    Date,
+    Date: additions.Date || Date,
     Math,
     JSON,
     Number,
@@ -75,8 +75,8 @@ function loadScript(source, additions = {}) {
     structuredClone,
     crypto: webcrypto,
     CSS: { escape: value => String(value) },
-    setTimeout,
-    clearTimeout,
+    setTimeout: additions.setTimeout || setTimeout,
+    clearTimeout: additions.clearTimeout || clearTimeout,
     queueMicrotask: additions.queueMicrotask || (() => {}),
     console
   };
@@ -176,10 +176,78 @@ test('sort priority defaults to week, client, candidate and status and reorders 
     JSON.parse(JSON.stringify(defaultState.group_order)),
     ['STATUS', 'WEEK', 'CLIENT', 'CANDIDATE']
   );
+  assert.equal(defaultState.sort.sort_key, 'STATUS');
+  assert.equal(defaultState.sort.group_preset, 'STATUS_WEEK_CLIENT');
   const toolbar = window.renderInvoiceBatchToolbar(defaultState);
   assert.match(toolbar, /Sort priority \(drag only\)/);
   assert.match(toolbar, /draggable="true"/);
   assert.doesNotMatch(toolbar, /group-up|group-down|↑|↓/);
+  assert.doesNotMatch(toolbar, /Primary sort|data-batch-field="sort-key"/);
+});
+
+test('drag sort priority is the sole authority and automatically reloads PAGE and SUMMARY', async () => {
+  const requestBodies = [];
+  const snapshot = {
+    contract_version: 'INVOICE_BATCH_SNAPSHOT_V2',
+    action: 'GENERATE',
+    revision: 1,
+    at_utc: '2026-07-29T12:00:00.000Z',
+    expires_at_utc: '2026-07-29T13:00:00.000Z',
+    key_id: 'test-key',
+    token: 'opaque.snapshot'
+  };
+  const { window } = loadScript(batchRuntimeSource, {
+    window: {
+      authFetch: async (_url, init) => {
+        const body = JSON.parse(init.body);
+        requestBodies.push(body);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            contract_version: 'INVOICE_BATCH_CANDIDATES_V2',
+            action: 'GENERATE',
+            mode: body.mode,
+            snapshot,
+            query_hash: '1'.repeat(64),
+            filter_hash: '2'.repeat(64),
+            selection_hash: '3'.repeat(64),
+            rows: [],
+            page: { next_cursor: null, total_count: 0 },
+            totals: {},
+            selection_summary: {
+              exact: true,
+              eligible_total: 0,
+              selected_total: 0,
+              blocked_total: 0
+            },
+            group_selection: [],
+            facets: {},
+            normalised_filter: body.filters,
+            normalised_sort: body.sort
+          })
+        };
+      }
+    }
+  });
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
+  const changed = await window.InvoiceBatchModalV8.applyInvoiceBatchSortPriorityChange(
+    state,
+    'STATUS',
+    'WEEK'
+  );
+  assert.equal(changed, true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(state.group_order)),
+    ['STATUS', 'WEEK', 'CLIENT', 'CANDIDATE']
+  );
+  assert.equal(requestBodies.length, 2);
+  assert.equal(requestBodies[0].mode, 'PAGE');
+  assert.equal(requestBodies[1].mode, 'SUMMARY');
+  assert.equal(requestBodies[0].sort.sort_key, 'STATUS');
+  assert.equal(requestBodies[0].sort.group_preset, 'STATUS_WEEK_CLIENT');
+  assert.equal(requestBodies[0].sort.sort_direction, 'DESC');
+  assert.deepEqual(JSON.parse(JSON.stringify(state.page_history)), []);
 });
 
 test('flat table SUMMARY requests exact totals without obsolete group selectors', async () => {
@@ -489,7 +557,7 @@ test('document action states expose visible labels, disabled state and ARIA busy
     phase: 'SOURCE_RENDER'
   });
   assert.equal(preparing.tone, 'amber');
-  assert.equal(preparing.button_label, 'Generating invoice PDF…');
+  assert.equal(preparing.button_label, 'Preparing invoice PDF…');
   assert.equal(preparing.disabled, true);
   assert.equal(preparing.aria_busy, true);
 
@@ -499,20 +567,20 @@ test('document action states expose visible labels, disabled state and ARIA busy
     document_version_id: UUID_A
   });
   assert.equal(ready.tone, 'ready');
-  assert.equal(ready.button_label, 'Open invoice PDF');
+  assert.equal(ready.button_label, 'View invoice PDF');
   assert.equal(ready.view_available, true);
   assert.equal(window.renderInvoiceProgressText({
     operation_type: 'VIEW_INVOICE_DOCUMENT',
     status: 'RUNNING',
     progress: { completed_units: 4, total_units: 5 }
-  }), 'Generating invoice PDF…');
+  }), 'Preparing invoice PDF…');
   assert.doesNotMatch(window.renderInvoiceAsyncState({
     document_operation: {
       operation_type: 'VIEW_INVOICE_DOCUMENT',
       status: 'RUNNING',
       progress: { completed_units: 4, total_units: 5 }
     }
-  }), /4\/5|Generating invoice PDF….*Generating invoice PDF…/s);
+  }), /4\/5|Preparing invoice PDF….*Preparing invoice PDF…/s);
 
   const readyAlias = window.deriveInvoiceAsyncActionState({
     operation_type: 'VIEW_INVOICE_DOCUMENT',
@@ -520,7 +588,7 @@ test('document action states expose visible labels, disabled state and ARIA busy
     document_version_id: UUID_A
   });
   assert.equal(readyAlias.tone, 'ready');
-  assert.equal(readyAlias.button_label, 'Open invoice PDF');
+  assert.equal(readyAlias.button_label, 'View invoice PDF');
 
   const terminalWithoutVersion = window.deriveInvoiceAsyncActionState({
     operation_type: 'VIEW_INVOICE_DOCUMENT',
@@ -537,7 +605,210 @@ test('document action states expose visible labels, disabled state and ARIA busy
     document_version_id: UUID_A
   });
   assert.equal(activeWithStaleVersion.view_available, false);
-  assert.equal(activeWithStaleVersion.button_label, 'Generating invoice PDF…');
+  assert.equal(activeWithStaleVersion.button_label, 'Preparing invoice PDF…');
+});
+
+test('individual PREPARING starts one immediate non-overlapping watcher and exact READY stops it', async () => {
+  const scheduled = [];
+  let pingCalls = 0;
+  let releasePing;
+  const pendingPing = new Promise(resolve => { releasePing = resolve; });
+  const { window } = loadScript(asyncSource, {
+    setTimeout: (fn, ms) => {
+      const timer = { fn, ms, cleared: false, unref() {} };
+      scheduled.push(timer);
+      return timer;
+    },
+    clearTimeout: timer => { if (timer) timer.cleared = true; },
+    window: {
+      __USER_ID: UUID_C,
+      authFetch: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          contract_version: 'INVOICE_VIEWER_V2',
+          viewer_state: 'PREPARING',
+          purpose: 'DRAFT_PREVIEW',
+          operation: {
+            operation_id: UUID_B,
+            operation_type: 'VIEW_INVOICE_DOCUMENT',
+            entity_type: 'INVOICE',
+            entity_id: UUID_A,
+            status: 'QUEUED',
+            purpose: 'DRAFT_PREVIEW'
+          }
+        })
+      }),
+      __changesHeartbeat: {
+        pingOnce: async () => {
+          pingCalls += 1;
+          await pendingPing;
+        }
+      }
+    }
+  });
+  const modalCtx = {
+    invoiceId: UUID_A,
+    invoiceDetail: { invoice: { id: UUID_A, status: 'DRAFT' } },
+    invoiceAsync: {}
+  };
+  window.modalCtx = modalCtx;
+  await window.handleInvoiceRenderPdfAsync(modalCtx);
+  await Promise.resolve();
+  assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 1);
+  assert.equal(pingCalls, 1);
+  assert.equal(scheduled.filter(timer => timer.ms === 5 * 60 * 1000).length, 1);
+  const requestSerial = modalCtx.invoiceAsync.viewer_request.request_serial;
+  assert.equal(await window.runInvoiceDocumentForegroundWatch(requestSerial), false);
+  assert.equal(pingCalls, 1);
+  releasePing();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(scheduled.filter(timer => timer.ms === 2000).length, 1);
+
+  window.applyInvoiceOperationUpdates({
+    watched_invoice_operations: [{
+      operation_id: UUID_B,
+      operation_type: 'VIEW_INVOICE_DOCUMENT',
+      entity_type: 'INVOICE',
+      entity_id: UUID_A,
+      status: 'COMPLETE',
+      purpose: 'DRAFT_PREVIEW',
+      document_version_id: UUID_C,
+      change_seq: 1
+    }]
+  });
+  assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 0);
+  assert.equal(modalCtx.invoiceAsync.document_version_id, UUID_C);
+  assert.equal(window.deriveInvoiceAsyncActionState(modalCtx.invoiceAsync.document_operation).button_label, 'View invoice PDF');
+});
+
+test('foreground watcher stops for every terminal viewer signal without inventing document readiness', async () => {
+  for (const status of ['READY', 'BLOCKED', 'FAILED', 'CANCELLED', 'SUPERSEDED']) {
+    const { window } = loadScript(asyncSource, {
+      window: {
+        authFetch: async () => ({
+          ok: true,
+          status: 202,
+          json: async () => ({
+            contract_version: 'INVOICE_VIEWER_V2',
+            viewer_state: 'PREPARING',
+            purpose: 'DRAFT_PREVIEW',
+            operation: {
+              operation_id: UUID_B,
+              operation_type: 'VIEW_INVOICE_DOCUMENT',
+              entity_type: 'INVOICE',
+              entity_id: UUID_A,
+              status: 'QUEUED',
+              purpose: 'DRAFT_PREVIEW'
+            }
+          })
+        }),
+        __changesHeartbeat: { pingOnce: async () => {} }
+      }
+    });
+    const modalCtx = {
+      invoiceId: UUID_A,
+      invoiceDetail: { invoice: { id: UUID_A, status: 'DRAFT' } },
+      invoiceAsync: {}
+    };
+    window.modalCtx = modalCtx;
+    await window.handleInvoiceRenderPdfAsync(modalCtx);
+    await Promise.resolve();
+    assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 1, status);
+    window.applyInvoiceOperationUpdates({
+      watched_invoice_operations: [{
+        operation_id: UUID_B,
+        operation_type: 'VIEW_INVOICE_DOCUMENT',
+        entity_type: 'INVOICE',
+        entity_id: UUID_A,
+        status,
+        purpose: 'DRAFT_PREVIEW',
+        change_seq: 1
+      }]
+    });
+    assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 0, status);
+    assert.equal(window.deriveInvoiceAsyncActionState(modalCtx.invoiceAsync.document_operation).view_available, false, status);
+  }
+});
+
+test('foreground watcher exits on modal replacement, logout and its bounded maximum duration', async () => {
+  const scheduled = [];
+  let nowMs = Date.UTC(2026, 6, 29, 12, 0, 0);
+  class FakeDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [nowMs])); }
+    static now() { return nowMs; }
+  }
+  const { window } = loadScript(asyncSource, {
+    Date: FakeDate,
+    setTimeout: (fn, ms) => {
+      const timer = { fn, ms, cleared: false, unref() {} };
+      scheduled.push(timer);
+      return timer;
+    },
+    clearTimeout: timer => { if (timer) timer.cleared = true; },
+    window: {
+      __USER_ID: UUID_C,
+      authFetch: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          contract_version: 'INVOICE_VIEWER_V2',
+          viewer_state: 'PREPARING',
+          purpose: 'DRAFT_PREVIEW',
+          operation: {
+            operation_id: UUID_B,
+            operation_type: 'VIEW_INVOICE_DOCUMENT',
+            entity_type: 'INVOICE',
+            entity_id: UUID_A,
+            status: 'QUEUED',
+            purpose: 'DRAFT_PREVIEW'
+          }
+        })
+      }),
+      __changesHeartbeat: { pingOnce: async () => {} }
+    }
+  });
+  const modalCtx = {
+    invoiceId: UUID_A,
+    invoiceDetail: { invoice: { id: UUID_A, status: 'DRAFT' } },
+    invoiceAsync: {}
+  };
+  window.modalCtx = modalCtx;
+  await window.handleInvoiceRenderPdfAsync(modalCtx);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 1);
+  window.modalCtx = {};
+  const closeTimer = scheduled.find(timer => timer.ms === 2000 && timer.cleared !== true);
+  assert.ok(closeTimer);
+  closeTimer.cleared = true;
+  await closeTimer.fn();
+  assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 0);
+
+  window.modalCtx = modalCtx;
+  await window.handleInvoiceRenderPdfAsync(modalCtx);
+  await Promise.resolve();
+  const firstSerial = modalCtx.invoiceAsync.viewer_request.request_serial;
+  assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 1);
+  await window.handleInvoiceRenderPdfAsync(modalCtx);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.notEqual(modalCtx.invoiceAsync.viewer_request.request_serial, firstSerial);
+  assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 1);
+
+  nowMs += 5 * 60 * 1000 + 1;
+  const foregroundTimer = [...scheduled].reverse().find(timer => timer.ms === 2000 && timer.cleared !== true);
+  assert.ok(foregroundTimer);
+  foregroundTimer.cleared = true;
+  await foregroundTimer.fn();
+  await Promise.resolve();
+  assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 0);
+  assert.equal(window.loadInvoiceOperationWatches().some(row => row.operation_id === UUID_B), true);
+
+  await window.handleInvoiceRenderPdfAsync(modalCtx);
+  await Promise.resolve();
+  assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 1);
+  window.uninstallInvoiceAsyncOverrides({ reason: 'logout' });
+  assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 0);
 });
 
 test('issued invoice viewer adopts FINAL_ISSUE and opens only the exact returned version', async () => {
@@ -628,6 +899,7 @@ test('a completed document signal opens its exact version without starting anoth
   };
   await window.handleInvoiceRenderPdfAsync(modalCtx);
   assert.equal(calls.length, 2);
+  assert.equal(window.activeInvoiceDocumentForegroundWatchCount(), 0);
   assert.match(calls[0], new RegExp(`/api/invoice-document-versions/${UUID_B}/presign$`));
   assert.doesNotMatch(calls[0], /\/api\/invoices\/.+\/render/);
   window.revokeInvoiceAsyncViewerBlob(modalCtx);

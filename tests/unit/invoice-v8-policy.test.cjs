@@ -110,6 +110,8 @@ test('batch tables use drag-only sort priority and the filter drawer remains clo
   assert.match(batchSource, /DEFAULT_GROUP_ORDER[\s\S]*'WEEK', 'CLIENT', 'CANDIDATE', 'STATUS'/);
   assert.match(batchSource, /draggable="true"/);
   assert.match(batchSource, /Sort priority \(drag only\)/);
+  assert.match(batchSource, /applyInvoiceBatchSortPriorityChange[\s\S]*await reloadFirstPage\(state\)/);
+  assert.doesNotMatch(batchSource, /Primary sort|data-batch-field="sort-key"/);
   assert.doesNotMatch(batchSource, /data-batch-action="group-up"/);
   assert.doesNotMatch(batchSource, /data-batch-action="group-down"/);
   assert.doesNotMatch(batchSource, /data-batch-action="toggle-group"/);

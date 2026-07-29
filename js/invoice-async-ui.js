@@ -19,6 +19,9 @@
     'bounded_viewer_contract_v2'
   ]);
   const MAX_WATCHES = 100;
+  const DOCUMENT_FOREGROUND_WATCH_FAST_MS = 30 * 1000;
+  const DOCUMENT_FOREGROUND_WATCH_MEDIUM_MS = 2 * 60 * 1000;
+  const DOCUMENT_FOREGROUND_WATCH_MAX_MS = 5 * 60 * 1000;
   const ACTIVE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
   const TERMINAL_UNHANDLED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   const TERMINAL_HANDLED_GRACE_MS = 15 * 60 * 1000;
@@ -43,6 +46,7 @@
   let refreshTimer = null;
   let activeWatchStorageKey = null;
   const activeInvoiceViewers = new Map();
+  const invoiceDocumentForegroundWatches = new Map();
 
   const clean = value => String(value == null ? '' : value).trim();
   const upper = value => clean(value).toUpperCase();
@@ -409,6 +413,176 @@
     }));
   }
 
+  function invoiceDocumentForegroundWatchDelay(elapsedMs) {
+    if (elapsedMs < DOCUMENT_FOREGROUND_WATCH_FAST_MS) return 2000;
+    if (elapsedMs < DOCUMENT_FOREGROUND_WATCH_MEDIUM_MS) return 5000;
+    if (elapsedMs < DOCUMENT_FOREGROUND_WATCH_MAX_MS) return 15000;
+    return null;
+  }
+
+  function invoiceDocumentForegroundWatchMatches(watch) {
+    if (!watch || watch.stopped === true) return false;
+    const viewer = asObject(watch.modal_ctx?.invoiceAsync?.viewer_request);
+    if (
+      !viewer.open
+      || viewer.request_serial !== watch.request_serial
+      || viewer.entity_type !== 'INVOICE'
+      || viewer.entity_id !== watch.entity_id
+      || viewer.operation_id !== watch.operation_id
+      || (watch.purpose && viewer.purpose !== watch.purpose)
+      || viewer.abort_controller?.signal?.aborted === true
+    ) return false;
+    if (window.modalCtx && window.modalCtx !== watch.modal_ctx) return false;
+    return true;
+  }
+
+  function stopInvoiceDocumentForegroundWatch(target, reason = 'stopped') {
+    const requestSerial = typeof target === 'string' ? clean(target) : '';
+    const matching = [...invoiceDocumentForegroundWatches.values()].filter(watch =>
+      (requestSerial && watch.request_serial === requestSerial)
+      || (!requestSerial && target && watch.modal_ctx === target)
+    );
+    for (const watch of matching) {
+      watch.stopped = true;
+      watch.stop_reason = clean(reason) || 'stopped';
+      if (watch.timer) clearTimeout(watch.timer);
+      if (watch.deadline_timer) clearTimeout(watch.deadline_timer);
+      watch.timer = null;
+      watch.deadline_timer = null;
+      try {
+        watch.abort_signal?.removeEventListener?.('abort', watch.abort_handler);
+      } catch {}
+      invoiceDocumentForegroundWatches.delete(watch.request_serial);
+    }
+    return matching.length;
+  }
+
+  function stopAllInvoiceDocumentForegroundWatches(reason = 'stopped') {
+    let stopped = 0;
+    for (const requestSerial of [...invoiceDocumentForegroundWatches.keys()]) {
+      stopped += stopInvoiceDocumentForegroundWatch(requestSerial, reason);
+    }
+    return stopped;
+  }
+
+  async function requestInvoiceDocumentForegroundUpdate(watch) {
+    const heartbeat = window.__changesHeartbeat || window.__changeHeartbeat;
+    if (typeof heartbeat?.pingOnce !== 'function') return false;
+    await heartbeat.pingOnce(`invoice-document-foreground:${watch.operation_id}`);
+    return true;
+  }
+
+  async function runInvoiceDocumentForegroundWatch(target) {
+    const watch = typeof target === 'string'
+      ? invoiceDocumentForegroundWatches.get(clean(target))
+      : target;
+    if (!watch || watch.stopped === true) return false;
+    if (!invoiceDocumentForegroundWatchMatches(watch)) {
+      stopInvoiceDocumentForegroundWatch(watch.request_serial, 'lifecycle-exit');
+      return false;
+    }
+    const elapsedMs = Date.now() - watch.started_at_ms;
+    if (elapsedMs >= DOCUMENT_FOREGROUND_WATCH_MAX_MS) {
+      stopInvoiceDocumentForegroundWatch(watch.request_serial, 'maximum-duration');
+      return false;
+    }
+    if (watch.in_flight === true) return false;
+    watch.in_flight = true;
+    try {
+      await requestInvoiceDocumentForegroundUpdate(watch);
+    } catch (error) {
+      if (watch.abort_signal?.aborted === true) {
+        stopInvoiceDocumentForegroundWatch(watch.request_serial, 'request-abort');
+        return false;
+      }
+      watch.last_error = clean(error?.message || error);
+    } finally {
+      watch.in_flight = false;
+    }
+    if (!invoiceDocumentForegroundWatchMatches(watch)) {
+      stopInvoiceDocumentForegroundWatch(watch.request_serial, 'lifecycle-exit');
+      return false;
+    }
+    const delayMs = invoiceDocumentForegroundWatchDelay(Date.now() - watch.started_at_ms);
+    if (delayMs == null) {
+      stopInvoiceDocumentForegroundWatch(watch.request_serial, 'maximum-duration');
+      return false;
+    }
+    watch.timer = setTimeout(() => {
+      watch.timer = null;
+      Promise.resolve(runInvoiceDocumentForegroundWatch(watch)).catch(() => {});
+    }, delayMs);
+    try { watch.timer?.unref?.(); } catch {}
+    return true;
+  }
+
+  function startInvoiceDocumentForegroundWatch(modalCtx, options = {}) {
+    const viewer = asObject(modalCtx?.invoiceAsync?.viewer_request);
+    const operationId = clean(options.operation_id || viewer.operation_id).toLowerCase();
+    const entityId = clean(options.entity_id || viewer.entity_id).toLowerCase();
+    const requestSerial = clean(options.request_serial || viewer.request_serial);
+    const purpose = upper(options.purpose || viewer.purpose);
+    if (
+      !viewer.open
+      || viewer.entity_type !== 'INVOICE'
+      || !UUID_RE.test(operationId)
+      || !UUID_RE.test(entityId)
+      || !requestSerial
+      || viewer.request_serial !== requestSerial
+      || viewer.operation_id !== operationId
+      || viewer.entity_id !== entityId
+      || (purpose && viewer.purpose !== purpose)
+    ) return null;
+    stopInvoiceDocumentForegroundWatch(modalCtx, 'watch-replacement');
+    const watch = {
+      modal_ctx: modalCtx,
+      request_serial: requestSerial,
+      entity_id: entityId,
+      operation_id: operationId,
+      purpose,
+      started_at_ms: Date.now(),
+      in_flight: false,
+      stopped: false,
+      timer: null,
+      deadline_timer: null,
+      abort_signal: viewer.abort_controller?.signal || null,
+      abort_handler: null,
+      last_error: null
+    };
+    watch.abort_handler = () => stopInvoiceDocumentForegroundWatch(requestSerial, 'request-abort');
+    try { watch.abort_signal?.addEventListener?.('abort', watch.abort_handler, { once: true }); } catch {}
+    invoiceDocumentForegroundWatches.set(requestSerial, watch);
+    watch.deadline_timer = setTimeout(() => {
+      stopInvoiceDocumentForegroundWatch(requestSerial, 'maximum-duration');
+    }, DOCUMENT_FOREGROUND_WATCH_MAX_MS);
+    try { watch.deadline_timer?.unref?.(); } catch {}
+    Promise.resolve(runInvoiceDocumentForegroundWatch(watch)).catch(() => {});
+    return {
+      request_serial: requestSerial,
+      entity_id: entityId,
+      operation_id: operationId,
+      purpose
+    };
+  }
+
+  function stopInvoiceDocumentForegroundWatchForSignal(signal) {
+    const operationId = clean(signal?.operation_id).toLowerCase();
+    const entityId = clean(signal?.entity_id).toLowerCase();
+    const status = upper(signal?.status || signal?.operation_status || signal?.state);
+    if (!UUID_RE.test(operationId) || (!TERMINAL.has(status) && status !== 'READY')) return 0;
+    let stopped = 0;
+    for (const watch of [...invoiceDocumentForegroundWatches.values()]) {
+      if (watch.operation_id === operationId && (!entityId || watch.entity_id === entityId)) {
+        stopped += stopInvoiceDocumentForegroundWatch(watch.request_serial, `operation-${status.toLowerCase()}`);
+      }
+    }
+    return stopped;
+  }
+
+  function activeInvoiceDocumentForegroundWatchCount() {
+    return invoiceDocumentForegroundWatches.size;
+  }
+
   function operationFamily(value) {
     const row = asObject(value);
     const combined = `${upper(row.operation_type)} ${upper(row.purpose)} ${upper(row.phase)}`;
@@ -496,8 +670,8 @@
       };
     }
     const timesheet = family === 'TIMESHEET_DOCUMENT';
-    const preparingLabel = timesheet ? 'Preparing timesheet…' : 'Generating invoice PDF…';
-    const readyLabel = timesheet ? 'Open timesheet PDF' : 'Open invoice PDF';
+    const preparingLabel = timesheet ? 'Preparing timesheet…' : 'Preparing invoice PDF…';
+    const readyLabel = timesheet ? 'Open timesheet PDF' : 'View invoice PDF';
     const failedLabel = timesheet ? 'Timesheet PDF failed' : 'Invoice PDF failed';
     const terminalWithoutVersion = TERMINAL.has(status) && !exactDocumentReady;
     return {
@@ -623,6 +797,7 @@
   }
 
   function updateOpenInvoiceModalFromSignal(signal) {
+    stopInvoiceDocumentForegroundWatchForSignal(signal);
     const signalEntityId = clean(signal.entity_id).toLowerCase();
     const viewerModal = activeInvoiceViewers.get(signalEntityId);
     const family = operationFamily(signal);
@@ -1011,6 +1186,7 @@
     const canonicalEntityId = clean(entityId).toLowerCase();
     const requestedPurpose = upper(purpose);
     modalCtx.invoiceAsync = asObject(modalCtx.invoiceAsync);
+    stopInvoiceDocumentForegroundWatch(modalCtx, 'viewer-replacement');
     try { modalCtx.invoiceAsync.viewer_request?.abort_controller?.abort(); } catch {}
     revokeInvoiceAsyncViewerBlob(modalCtx);
     const requestSerial = crypto.randomUUID();
@@ -1049,6 +1225,7 @@
         noParentGate: true,
         onDismiss: () => {
           const viewer = asObject(modalCtx.invoiceAsync?.viewer_request);
+          stopInvoiceDocumentForegroundWatch(modalCtx, 'viewer-close');
           viewer.open = false;
           try { viewer.abort_controller?.abort(); } catch {}
           revokeInvoiceAsyncViewerBlob(modalCtx);
@@ -1067,6 +1244,7 @@
     if (expected.entity_id && viewer.entity_id !== expected.entity_id) return null;
     if (expected.operation_id && viewer.operation_id !== expected.operation_id) return null;
     if (expected.purpose && viewer.purpose !== expected.purpose) return null;
+    stopInvoiceDocumentForegroundWatch(modalCtx, 'document-ready');
     if (viewer.document_version_id === canonicalVersion && viewer.blob_url) return viewer;
     viewer.status_message = 'Opening exact document version';
     viewer.error = null;
@@ -1265,7 +1443,7 @@
       const pdfButton = document.querySelector('[data-action="inv-open-pdf"]');
       if (pdfButton) {
         pdfButton.disabled = false;
-        pdfButton.textContent = 'Open invoice PDF';
+        pdfButton.textContent = 'View invoice PDF';
         pdfButton.dataset.documentVersionId = versionId;
         pdfButton.setAttribute('aria-busy', 'false');
         pdfButton.setAttribute('aria-disabled', 'false');
@@ -1302,6 +1480,12 @@
       const host = document.querySelector('[data-invoice-async-state-host]');
       if (host) host.innerHTML = renderInvoiceAsyncState({ ...asObject(modalCtx.invoiceDetail), ...modalCtx.invoiceAsync });
       attachOperationToButtons(operation, 'DOCUMENT');
+      startInvoiceDocumentForegroundWatch(modalCtx, {
+        request_serial: requestSerial,
+        entity_id: invoiceId,
+        operation_id: operation.operation_id,
+        purpose
+      });
       try { window.__toast?.('Invoice PDF generation started. This button will update when it is ready.'); } catch {}
       return payload;
     }
@@ -1533,6 +1717,7 @@
   function uninstallOverrides(options = {}) {
     const reason = clean(options.reason || 'capability-unavailable').toLowerCase();
     const priorWatchKey = clean(options.previous_watch_storage_key || activeWatchStorageKey);
+    stopAllInvoiceDocumentForegroundWatches(reason);
     for (const modalCtx of activeInvoiceViewers.values()) {
       const viewer = asObject(modalCtx?.invoiceAsync?.viewer_request);
       viewer.open = false;
@@ -1606,6 +1791,11 @@
     markInvoiceOperationHandled,
     acknowledgeInvoiceOperationNotification,
     buildInvoiceHeartbeatWatches,
+    startInvoiceDocumentForegroundWatch,
+    stopInvoiceDocumentForegroundWatch,
+    stopAllInvoiceDocumentForegroundWatches,
+    runInvoiceDocumentForegroundWatch,
+    activeInvoiceDocumentForegroundWatchCount,
     applyInvoiceOperationUpdates,
     renderInvoiceAsyncState,
     deriveInvoiceAsyncActionState,
@@ -1628,6 +1818,7 @@
   window.__invoiceAsyncCapability = unavailableCapabilities('NOT_INITIALISED');
   installInvoiceAsyncUnavailableActions();
   window.addEventListener('pagehide', () => {
+    stopAllInvoiceDocumentForegroundWatches('pagehide');
     for (const modalCtx of activeInvoiceViewers.values()) {
       revokeInvoiceAsyncViewerBlob(modalCtx);
       try { modalCtx?.invoiceAsync?.viewer_request?.abort_controller?.abort(); } catch {}

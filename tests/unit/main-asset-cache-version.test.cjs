@@ -6,12 +6,12 @@ const test = require('node:test');
 const html = fs.readFileSync(path.resolve(__dirname, '../../index.html'), 'utf8');
 
 test('loads the current main frontend asset through an explicit cache version', () => {
-  const scriptBuildVersion = '20260729-invoice-v8-flat-table-r5';
+  const scriptBuildVersion = '20260729-invoice-v8-sort-auto-r6';
   const stylesheetBuildVersion = '20260729-invoice-v8-flat-table-r5';
   const mainAsset = 'main.js?v=20260729-banking-targeted-family-cancel-v6';
   const diagnosticAsset = 'invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1';
   const batchAsset = `invoice-batch-modal.js?v=${scriptBuildVersion}`;
-  const asyncAsset = 'invoice-async-ui.js?v=20260729-invoice-async-v8-correction-r9';
+  const asyncAsset = 'invoice-async-ui.js?v=20260729-invoice-foreground-watch-r10';
   const stylesheetAsset = `invoice-batch-modal.css?v=${stylesheetBuildVersion}`;
   assert.match(
     html,
@@ -19,9 +19,9 @@ test('loads the current main frontend asset through an explicit cache version', 
   );
   assert.match(html, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
   assert.match(html, /invoice-diagnostic-catalog\.js\?v=20260728-invoice-async-v8-source-evidence-r1/);
-  assert.match(html, /invoice-batch-modal\.js\?v=20260729-invoice-v8-flat-table-r5/);
+  assert.match(html, /invoice-batch-modal\.js\?v=20260729-invoice-v8-sort-auto-r6/);
   assert.doesNotMatch(html, /invoice-batch-modal\.(?:js|css)\?v=20260728-invoice-v8-presentation-r[123]["']/);
-  assert.match(html, /invoice-async-ui\.js\?v=20260729-invoice-async-v8-correction-r9/);
+  assert.match(html, /invoice-async-ui\.js\?v=20260729-invoice-foreground-watch-r10/);
   assert.doesNotMatch(
     html,
     /invoice-batch-modal\.js\?v=20260728-invoice-async-v8(?:-correction-r5)?["']/
