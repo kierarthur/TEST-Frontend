@@ -67,4 +67,7 @@ test('snooze cancellation uses the friendly UI confirmation and no native browse
   assert.match(source, /kind: 'banking-finance-snooze-cancel-confirm'/);
   assert.match(source, /okToProceed = confirmation\?\.confirmed === true/);
   assert.doesNotMatch(source, /window\.confirm\('Cancel this snooze\?'\)/);
+  assert.match(source, /kind: 'banking-finance-snooze-message'/);
+  assert.doesNotMatch(source, /\balert\(/);
+  assert.doesNotMatch(source, /window\.confirm\(/);
 });

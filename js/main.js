@@ -44389,10 +44389,21 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
         '"': '&quot;',
         "'": '&#39;'
       }[c]));
+  const showSnoozeMessage = async (message, title = 'Banking Pay') => {
+    if (typeof openUiConfirmModal !== 'function') return;
+    await openUiConfirmModal({
+      title,
+      message: String(message || '').trim() || 'CloudTMS could not complete this action.',
+      confirm_label: 'OK',
+      hide_cancel: true,
+      confirm_class: 'btn btn-primary',
+      kind: 'banking-finance-snooze-message'
+    });
+  };
 
   const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
   if (!st) {
-    alert('Banking state is not available.');
+    await showSnoozeMessage('Banking state is not available.');
     return;
   }
 
@@ -44602,17 +44613,17 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
     }
     const expenseItems = Array.from(bySource.values()).sort((a, b) => a.source_ref.localeCompare(b.source_ref)).slice(0, 5);
     if (!expenseItems.length) {
-      alert(setMode === 'CLEAR' ? 'No active expense snoozes were found.' : 'No current expenses were found.');
+      await showSnoozeMessage(setMode === 'CLEAR' ? 'No active expense snoozes were found.' : 'No current expenses were found.');
       return;
     }
     const setCandidateId = String(src.candidate_id || expenseItems[0].candidate_id || '').trim();
     const setTimesheetId = String(src.timesheet_id || expenseItems[0].timesheet_id || '').trim();
     if (!setCandidateId || !setTimesheetId || expenseItems.some((item) => item.candidate_id !== setCandidateId || item.timesheet_id !== setTimesheetId)) {
-      alert('The expense set is no longer consistent. Refresh Banking Pay and try again.');
+      await showSnoozeMessage('The expense set is no longer consistent. Refresh Banking Pay and try again.');
       return;
     }
     if (setMode === 'CLEAR' && expenseItems.some((item) => !uuidRe.test(String(item.snooze_id || '').trim()))) {
-      alert('One or more active expense Snooze IDs are missing. Refresh Loans / Snoozes and try again.');
+      await showSnoozeMessage('One or more active expense Snooze IDs are missing. Refresh Loans / Snoozes and try again.');
       return;
     }
 
@@ -44685,11 +44696,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
         });
         return { confirmed: !!(response && response.confirmed === true), token };
       }
-      try {
-        return { confirmed: typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm(message) : false, token };
-      } catch {
-        return { confirmed: false, token: null };
-      }
+      return { confirmed: false, token: null };
     };
 
     const validateSetItem = async (item, phase, untilDate) => {
@@ -45073,43 +45080,43 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
     : (targetType === 'TIMESHEET_EXPENSE' ? sourceRefFromSeed.toLowerCase() : '');
 
   if (!candidateId) {
-    alert('Candidate context is missing for snooze.');
+    await showSnoozeMessage('Candidate context is missing for snooze.');
     return;
   }
 
   if (!targetType) {
-    alert('Snooze target is missing.');
+    await showSnoozeMessage('Snooze target is missing.');
     return;
   }
 
   if (targetType === 'FINANCE_CASE' && !financeCaseId && !sourceRefFromSeed) {
-    alert('Finance case is missing for snooze.');
+    await showSnoozeMessage('Finance case is missing for snooze.');
     return;
   }
 
   if ((targetType === 'WHOLE_TIMESHEET' || targetType === 'TIMESHEET_SEGMENT' || targetType === 'TIMESHEET_EXPENSE') && !timesheetId) {
-    alert('Timesheet context is missing for snooze.');
+    await showSnoozeMessage('Timesheet context is missing for snooze.');
     return;
   }
 
   if (targetType === 'TIMESHEET_SEGMENT' && !segmentId && !segmentStableKey) {
-    alert('Segment context is missing for snooze.');
+    await showSnoozeMessage('Segment context is missing for snooze.');
     return;
   }
 
   if (targetType === 'TIMESHEET_EXPENSE') {
     if (!expenseSourceMatch || expenseSourceMatch[1].toLowerCase() !== timesheetId.toLowerCase()) {
-      alert('This expense identity is no longer current. Refresh Banking Pay and try again.');
+      await showSnoozeMessage('This expense identity is no longer current. Refresh Banking Pay and try again.');
       return;
     }
     if (segmentId || segmentStableKey) {
-      alert('Expense Snoozes cannot use segment identity. Refresh Banking Pay and try again.');
+      await showSnoozeMessage('Expense Snoozes cannot use segment identity. Refresh Banking Pay and try again.');
       return;
     }
   }
 
   if (!snoozeKind) {
-    alert('This item cannot be snoozed from this action.');
+    await showSnoozeMessage('This item cannot be snoozed from this action.');
     return;
   }
 
@@ -45158,20 +45165,17 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
       });
       return !!(response && response.confirmed === true);
     }
-    try {
-      return typeof window !== 'undefined' && typeof window.confirm === 'function'
-        ? window.confirm(message)
-        : false;
-    } catch {
-      return false;
-    }
+    return false;
   };
 
   let preOpenValidation = null;
   try {
     preOpenValidation = await requestSnoozeValidation('PRE_OPEN', null);
   } catch (validationError) {
-    alert(String(validationError?.message || validationError || 'CloudTMS could not validate this snooze. Refresh the page and try again.'));
+    await showSnoozeMessage(
+      String(validationError?.message || validationError || 'CloudTMS could not validate this snooze. Refresh the page and try again.'),
+      'Snooze unavailable'
+    );
     return;
   }
 
@@ -45180,7 +45184,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
     if (!confirmed) return;
     const acknowledgementToken = String(preOpenValidation.acknowledgement_token || '').trim();
     if (!uuidRe.test(acknowledgementToken)) {
-      alert('CloudTMS could not record the resolved-rate confirmation. Refresh the page and try again.');
+      await showSnoozeMessage('CloudTMS could not record the resolved-rate confirmation. Refresh the page and try again.');
       return;
     }
     resolvedRateAcknowledgementToken = acknowledgementToken;
