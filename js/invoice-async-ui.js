@@ -516,6 +516,7 @@
     const state = deriveInvoiceAsyncActionState(row);
     if (state.view_available) return 'Ready';
     if (state.terminal) return state.label;
+    if (['DOCUMENT', 'TIMESHEET_DOCUMENT'].includes(state.family)) return state.label;
     const progress = asObject(row.progress);
     const current = Number(progress.completed_units ?? progress.completed ?? progress.current);
     const total = Number(progress.total_units ?? progress.total);
@@ -571,7 +572,7 @@
       <h3>Document and delivery progress</h3>
       ${sections.map(([label, value, family]) => {
         const row = typeof value === 'string' ? { status: value } : asObject(value);
-        return `<div class="invoice-async-state-row" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;border-top:1px solid var(--line);"><span>${escapeHtml(label)}</span><span>${renderDocumentAssetBadge(row, family)} <span class="mini">${escapeHtml(renderInvoiceProgressText(row))}</span></span></div>`;
+        return `<div class="invoice-async-state-row" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;border-top:1px solid var(--line);"><span>${escapeHtml(label)}</span><span>${renderDocumentAssetBadge(row, family)}</span></div>`;
       }).join('')}
     </section>` : ''}
     <div class="invoice-async-diagnostics">
@@ -611,7 +612,9 @@
       let status = button.parentElement?.querySelector(`[data-invoice-button-status="${CSS.escape(operationId)}"]`);
       if (!status) {
         status = document.createElement('span');
-        status.className = 'sr-only';
+        status.className = 'sr-only invoice-async-button-status';
+        status.style.cssText = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;';
+        status.setAttribute('aria-live', 'polite');
         status.dataset.invoiceButtonStatus = operationId;
         button.insertAdjacentElement('afterend', status);
       }
@@ -920,6 +923,7 @@
       applied.push(merged);
     }
     saveInvoiceOperationWatches([...map.values()]);
+    applyInvoiceActionButtonState(document);
     if (applied.some(row => TERMINAL.has(row.status) || row.document_version_id)) {
       scheduleInvoiceSectionRefresh('Invoice processing updated');
     }
@@ -1002,7 +1006,7 @@
     }
   }
 
-  function openPreparingInvoiceViewer(modalCtx, entityType, entityId, purpose, commandToken) {
+  function openPreparingInvoiceViewer(modalCtx, entityType, entityId, purpose, commandToken, options = {}) {
     const canonicalEntityType = upper(entityType);
     const canonicalEntityId = clean(entityId).toLowerCase();
     const requestedPurpose = upper(purpose);
@@ -1028,7 +1032,10 @@
       blob_url: null,
       error: null
     };
-    activeInvoiceViewers.set(canonicalEntityId, modalCtx);
+    const showViewer = options.show_viewer !== false;
+    if (showViewer) activeInvoiceViewers.set(canonicalEntityId, modalCtx);
+    else activeInvoiceViewers.delete(canonicalEntityId);
+    if (!showViewer) return requestSerial;
     if (typeof window.showModal !== 'function') return requestSerial;
     window.showModal(
       canonicalEntityType === 'TIMESHEET' ? 'Timesheet PDF' : 'Invoice PDF Preview',
@@ -1175,7 +1182,8 @@
       'INVOICE',
       invoiceId,
       'DRAFT_PREVIEW',
-      commandToken
+      commandToken,
+      { show_viewer: false }
     );
     let response;
     try {
@@ -1236,11 +1244,33 @@
     }
     viewer.purpose = purpose;
     if (response.status === 200 && viewerState === 'READY' && UUID_RE.test(versionId)) {
-      await completeInvoiceAsyncViewer(modalCtx, versionId, {
-        request_serial: requestSerial,
+      viewer.open = false;
+      viewer.viewer_state = 'READY';
+      viewer.document_version_id = versionId;
+      viewer.status_message = 'Invoice PDF ready';
+      modalCtx.invoiceAsync.document_version_id = versionId;
+      modalCtx.invoiceAsync.document_state = 'READY';
+      modalCtx.invoiceAsync.document_operation = {
+        ...asObject(payload.operation),
+        operation_id: clean(payload.operation?.operation_id).toLowerCase() || null,
+        operation_type: payload.operation?.operation_type || 'VIEW_INVOICE_DOCUMENT',
+        entity_type: 'INVOICE',
         entity_id: invoiceId,
-        purpose
-      });
+        status: 'COMPLETE',
+        purpose,
+        document_version_id: versionId
+      };
+      const host = document.querySelector('[data-invoice-async-state-host]');
+      if (host) host.innerHTML = renderInvoiceAsyncState({ ...asObject(modalCtx.invoiceDetail), ...modalCtx.invoiceAsync });
+      const pdfButton = document.querySelector('[data-action="inv-open-pdf"]');
+      if (pdfButton) {
+        pdfButton.disabled = false;
+        pdfButton.textContent = 'Open invoice PDF';
+        pdfButton.dataset.documentVersionId = versionId;
+        pdfButton.setAttribute('aria-busy', 'false');
+        pdfButton.setAttribute('aria-disabled', 'false');
+      }
+      try { window.__toast?.('Invoice PDF is ready to open.'); } catch {}
       return payload;
     }
     if (response.status === 202 && viewerState === 'PREPARING') {
@@ -1263,15 +1293,16 @@
         throw new Error('INVOICE_VIEWER_CONTRACT_MISMATCH');
       }
       viewer.operation_id = operation.operation_id;
-      viewer.status_message = payload.status_message || 'Preparing preview';
+      viewer.status_message = payload.status_message || 'Generating invoice PDF';
       modalCtx.invoiceAsync = {
         ...asObject(modalCtx.invoiceAsync),
         document_operation: operation,
         document_state: 'PREPARING'
       };
-      repaintInvoiceAsyncViewer(modalCtx);
+      const host = document.querySelector('[data-invoice-async-state-host]');
+      if (host) host.innerHTML = renderInvoiceAsyncState({ ...asObject(modalCtx.invoiceDetail), ...modalCtx.invoiceAsync });
       attachOperationToButtons(operation, 'DOCUMENT');
-      try { window.__toast?.(payload.status_message || 'Invoice PDF preparation started. You can close this window.'); } catch {}
+      try { window.__toast?.('Invoice PDF generation started. This button will update when it is ready.'); } catch {}
       return payload;
     }
     const errorCode = clean(payload.error_code || payload.error || payload.message || `INVOICE_DOCUMENT_HTTP_${response.status}`);

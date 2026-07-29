@@ -523,10 +523,16 @@ test('document action states expose visible labels, disabled state and ARIA busy
   assert.equal(ready.view_available, true);
   assert.equal(window.renderInvoiceProgressText({
     operation_type: 'VIEW_INVOICE_DOCUMENT',
-    status: 'COMPLETE',
-    document_version_id: UUID_A,
+    status: 'RUNNING',
     progress: { completed_units: 4, total_units: 5 }
-  }), 'Ready');
+  }), 'Generating invoice PDF…');
+  assert.doesNotMatch(window.renderInvoiceAsyncState({
+    document_operation: {
+      operation_type: 'VIEW_INVOICE_DOCUMENT',
+      status: 'RUNNING',
+      progress: { completed_units: 4, total_units: 5 }
+    }
+  }), /4\/5|Generating invoice PDF….*Generating invoice PDF…/s);
 
   const readyAlias = window.deriveInvoiceAsyncActionState({
     operation_type: 'VIEW_INVOICE_DOCUMENT',
@@ -556,8 +562,10 @@ test('document action states expose visible labels, disabled state and ARIA busy
 
 test('issued invoice viewer adopts FINAL_ISSUE and opens only the exact returned version', async () => {
   const calls = [];
+  let viewerOpenCount = 0;
   const { window } = loadScript(asyncSource, {
     window: {
+      showModal: () => { viewerOpenCount += 1; },
       authFetch: async (url, init) => {
         calls.push({ url, init });
         if (calls.length === 1) {
@@ -600,6 +608,10 @@ test('issued invoice viewer adopts FINAL_ISSUE and opens only the exact returned
   assert.equal(modalCtx.invoiceAsync.viewer_request.purpose, 'FINAL_ISSUE');
   assert.equal(modalCtx.invoiceAsync.viewer_request.viewer_state, 'READY');
   assert.equal(modalCtx.invoiceAsync.viewer_request.document_version_id, UUID_B);
+  assert.equal(calls.length, 1);
+  assert.equal(viewerOpenCount, 0);
+  await window.handleInvoiceRenderPdfAsync(modalCtx);
+  assert.equal(viewerOpenCount, 1);
   assert.match(calls[1].url, new RegExp(`/api/invoice-document-versions/${UUID_B}/presign$`));
   window.revokeInvoiceAsyncViewerBlob(modalCtx);
 });
@@ -642,8 +654,10 @@ test('a completed document signal opens its exact version without starting anoth
 });
 
 test('viewer adopts PREPARING purpose only for its current request and ignores a late replacement', async () => {
+  let viewerOpenCount = 0;
   const { window } = loadScript(asyncSource, {
     window: {
+      showModal: () => { viewerOpenCount += 1; },
       authFetch: async () => ({
         ok: true,
         status: 202,
@@ -671,6 +685,7 @@ test('viewer adopts PREPARING purpose only for its current request and ignores a
   await window.handleInvoiceRenderPdfAsync(modalCtx);
   assert.equal(modalCtx.invoiceAsync.viewer_request.purpose, 'FINAL_ISSUE');
   assert.equal(modalCtx.invoiceAsync.viewer_request.operation_id, UUID_B);
+  assert.equal(viewerOpenCount, 0);
 
   let resolveRender;
   window.authFetch = () => new Promise(resolve => { resolveRender = resolve; });
