@@ -89512,6 +89512,7 @@ function attachBankingModalDelegatedHandlers() {
       ).trim();
 
       let candidateSettled = false;
+      let candidateSettleResult = null;
       if (candidateIdText && sessionId && typeof pollPayWorkbenchCandidateUntilSettled === 'function') {
         try {
           markCandidatePendingLocal(
@@ -89522,17 +89523,42 @@ function attachBankingModalDelegatedHandlers() {
         } catch {}
 
         try {
-          await pollPayWorkbenchCandidateUntilSettled(sessionId, candidateIdText, {
+          candidateSettleResult = await pollPayWorkbenchCandidateUntilSettled(sessionId, candidateIdText, {
             updateState: true,
             source: 'attachBankingModalDelegatedHandlers.refreshPayWorkbenchAfterCandidateAction'
           });
-          candidateSettled = true;
-          await safeRerender(null);
+          candidateSettled = !!(
+            candidateSettleResult &&
+            candidateSettleResult.ok === true &&
+            candidateSettleResult.aborted !== true &&
+            candidateSettleResult.timed_out !== true &&
+            candidateSettleResult.still_refreshing !== true &&
+            candidateSettleResult.stillRefreshing !== true &&
+            (
+              candidateSettleResult.candidate_preview ||
+              candidateSettleResult.full_session ||
+              candidateSettleResult.full_session_refresh_applied === true
+            )
+          );
+          if (candidateSettled) await safeRerender(null);
         } catch {}
       }
 
-      await refreshPayWorkbench({ reason, mode });
-      return { ok: true, candidate_settled: candidateSettled };
+      // The settled poll has already fetched, merged and rendered the final
+      // authoritative candidate fragment. Starting another full workbench
+      // refresh here re-opened the session seed lifecycle, left the just-
+      // settled row looking stale, and could keep a large Banking modal busy.
+      // Retain the existing full refresh only as the recovery path when the
+      // candidate did not settle or could not be adopted safely.
+      if (!candidateSettled) {
+        await refreshPayWorkbench({ reason, mode });
+      }
+      return {
+        ok: true,
+        candidate_settled: candidateSettled,
+        full_workbench_refresh_used: !candidateSettled,
+        candidate_settle_result: candidateSettleResult
+      };
     };
 
     const runWorkbenchCandidateMutation = async ({ candidateId, mutate }) => {
@@ -95080,34 +95106,47 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           try { parsedPayload = JSON.parse(rawMessage); } catch {}
         }
 
-        const railSetup =
-          (parsedPayload && parsedPayload.rail_setup && typeof parsedPayload.rail_setup === 'object')
-            ? parsedPayload.rail_setup
-            : (e?.rail_setup && typeof e.rail_setup === 'object')
-              ? e.rail_setup
-              : (e?.data?.rail_setup && typeof e.data.rail_setup === 'object')
-                ? e.data.rail_setup
-                : (e?.body?.rail_setup && typeof e.body.rail_setup === 'object')
-                  ? e.body.rail_setup
-                  : null;
+        const errorPayloadCandidates = [
+          parsedPayload,
+          e?.backendPayload,
+          e?.json,
+          e?.payload,
+          e?.data,
+          (e?.body && typeof e.body === 'object') ? e.body : null
+        ].filter((value) => value && typeof value === 'object' && !Array.isArray(value));
 
-        const rawRailError = String(railSetup?.error || '').trim();
-        const combinedMessage = rawRailError || rawMessage;
-
-        let providerMessage = '';
-        const jsonStart = combinedMessage.indexOf('{');
-        if (jsonStart >= 0) {
-          try {
-            const inner = JSON.parse(combinedMessage.slice(jsonStart));
-            providerMessage = String(inner?.message || '').trim();
-          } catch {}
-        }
-
+        const errorPayload = errorPayloadCandidates.find((value) => (
+          value.rail_setup && typeof value.rail_setup === 'object'
+        )) || errorPayloadCandidates[0] || null;
+        const railSetup = (errorPayload?.rail_setup && typeof errorPayload.rail_setup === 'object')
+          ? errorPayload.rail_setup
+          : ((e?.rail_setup && typeof e.rail_setup === 'object') ? e.rail_setup : null);
+        const failureCode = String(
+          errorPayload?.error_code ||
+          errorPayload?.code ||
+          railSetup?.reason ||
+          e?.error_code ||
+          e?.code ||
+          ''
+        ).trim().toUpperCase();
+        const safeBackendMessage = String(
+          errorPayload?.user_message ||
+          errorPayload?.message ||
+          e?.user_message ||
+          ''
+        ).trim();
+        const fallbackByCode = {
+          NAME_CHECK_REQUIRED: 'The bank-name check must be completed or accepted before this bank account can be set up.',
+          MISSING_BANK_FIELDS: 'The current bank details are incomplete or no longer match this Banking Pay row.',
+          PAYEE_TARGET_NOT_FOUND: 'The current bank details are incomplete or no longer match this Banking Pay row.',
+          RAIL_NOT_AVAILABLE: 'The configured payment provider is not currently available to set up this bank account.',
+          RAIL_CAPABILITIES_FAILED: 'The configured payment provider is not currently available to set up this bank account.',
+          RAIL_PROVIDER_SETUP_FAILED: 'The configured payment provider rejected or could not complete this bank-account setup. No payment or draft was created.'
+        };
         const friendlyMessage =
-          providerMessage ||
-          rawRailError ||
-          rawMessage ||
-          'Unable to set up bank account.';
+          safeBackendMessage ||
+          fallbackByCode[failureCode] ||
+          'CloudTMS could not safely set up this bank account with the configured payment provider.';
 
              let handled = false;
         const confirmFn =
