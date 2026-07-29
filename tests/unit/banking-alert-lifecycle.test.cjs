@@ -275,6 +275,42 @@ test('dedicated alert fetch loads full details and applies them', async () => {
   assert.equal(applied.banking_alert_summary.alerts.length, 1);
 });
 
+test('explicit alert refresh bypasses the routine server-side summary cache', async () => {
+  const source = sliceBetween('async function bankingAlertsFetchActive(options = {})', 'async function bankingAlertPreferencesFetch()');
+  let requestedUrl = '';
+  const context = {
+    window: {},
+    API(value) { return value; },
+    async authFetch(url) {
+      requestedUrl = url;
+      return {
+        ok: true,
+        status: 200,
+        async text() { return JSON.stringify({ ok: true, alerts: [], unacknowledged_count: 0 }); }
+      };
+    },
+    applyAlertSummaryToState() {},
+    encodeURIComponent,
+    Number,
+    String,
+    Math,
+    Array,
+    Object,
+    JSON,
+    Error
+  };
+  vm.runInNewContext(source, context, { filename: 'banking-alert-force-refresh.js' });
+
+  await context.bankingAlertsFetchActive({ limit: 100, forceRefresh: true });
+  assert.equal(requestedUrl, '/api/banking/alerts?limit=100&refresh=1');
+});
+
+test('heartbeat rate-limits routine alert detail reads to five minutes', () => {
+  assert.match(mainSource, /periodicAlertRefreshDue = Date\.now\(\) - lastDirectAlertFetchAtMs >= \(5 \* 60 \* 1000\)/);
+  assert.match(mainSource, /forceRefresh: explicitAlertRefresh/);
+  assert.doesNotMatch(mainSource, /directAlertFetchDue = Date\.now\(\) - lastDirectAlertFetchAtMs >= 10000/);
+});
+
 test('dedicated alert fetch coalesces concurrent requests for the same limit', async () => {
   const source = sliceBetween('async function bankingAlertsFetchActive(options = {})', 'async function bankingAlertPreferencesFetch()');
   let requestCount = 0;

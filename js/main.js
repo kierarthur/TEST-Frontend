@@ -134530,7 +134530,7 @@ const maybeAutoloadPayWorkbench = async () => {
     try {
       bankingState.pay.draftWizard.preview.loading = true;
       bankingState.pay.draftWizard.preview.error = '';
-      bankingState.pay.draftWizard.preview.status_text = 'Preparing preview';
+      bankingState.pay.draftWizard.preview.status_text = 'Loading Banking Pay';
       bankingState.pay.draftWizard.preview.progress_only = true;
       bankingState.pay.draftWizard.preview.bootstrap_only = true;
     } catch {}
@@ -134580,15 +134580,13 @@ const maybeAutoloadPayWorkbench = async () => {
       return bankingPayPreview(previewOptions);
     }).catch(() => null);
 
-    Promise.resolve(listPromise).then(async () => {
-      if (!autoloadStillCurrent()) return;
-      try { await safeRerender(); } catch {}
-    }).catch(() => {});
-
-    Promise.resolve(previewPromise).then(async () => {
-      if (!autoloadStillCurrent()) return;
-      try { await safeRerender(); } catch {}
-    }).catch(() => {});
+    // bankingPayBatchesList() and bankingPayPreview() each adopt their own
+    // authoritative response and render it. Do not render those same responses
+    // again from the autoload wrapper: on large Banking Pay views that duplicated
+    // the most expensive UI work and made an ordinary modal open look like a
+    // second refresh cycle.
+    Promise.resolve(listPromise).catch(() => {});
+    Promise.resolve(previewPromise).catch(() => {});
 
     bankingState.pay.refreshWorkbench = async (opts = {}) => {
       if (!stillActive()) return null;
@@ -342439,16 +342437,18 @@ async function bankingAlertsFetchActive(options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const requestedLimit = Number(opts.limit ?? 100);
   const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? Math.trunc(requestedLimit) : 100, 1), 100);
+  const forceRefresh = opts.forceRefresh === true || opts.force_refresh === true;
   const inFlightOwner = (typeof window !== 'undefined' && window) ? window : bankingAlertsFetchActive;
   const inFlightStore = (inFlightOwner.__bankingAlertsFetchActiveInFlight
     && typeof inFlightOwner.__bankingAlertsFetchActiveInFlight === 'object')
     ? inFlightOwner.__bankingAlertsFetchActiveInFlight
     : (inFlightOwner.__bankingAlertsFetchActiveInFlight = Object.create(null));
-  const inFlightKey = `limit:${limit}`;
+  const inFlightKey = `limit:${limit}:refresh:${forceRefresh ? 1 : 0}`;
   let request = inFlightStore[inFlightKey];
   if (!request) {
     request = (async () => {
-      const response = await authFetch(API(`/api/banking/alerts?limit=${encodeURIComponent(String(limit))}`), { method: 'GET' });
+      const refreshQuery = forceRefresh ? '&refresh=1' : '';
+      const response = await authFetch(API(`/api/banking/alerts?limit=${encodeURIComponent(String(limit))}${refreshQuery}`), { method: 'GET' });
       const text = await response.text().catch(() => '');
       let parsed = null;
       try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
@@ -371508,11 +371508,18 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
           let bankingAlertStateChanged = applyBankingAlertSummaryFromPing();
           try {
             const lastDirectAlertFetchAtMs = Number(hb._lastBankingAlertDirectFetchAtMs || 0) || 0;
-            const directAlertFetchDue = Date.now() - lastDirectAlertFetchAtMs >= 10000
-              || isExplicitBankingAlertDetailRefreshReason(reason);
+            const explicitAlertRefresh = isExplicitBankingAlertDetailRefreshReason(reason);
+            const periodicAlertRefreshDue = Date.now() - lastDirectAlertFetchAtMs >= (5 * 60 * 1000);
+            const directAlertFetchDue = requestedBankingAlertDetailRefresh
+              || explicitAlertRefresh
+              || periodicAlertRefreshDue;
             if (directAlertFetchDue && typeof bankingAlertsFetchActive === 'function') {
               hb._lastBankingAlertDirectFetchAtMs = Date.now();
-              const directAlertPayload = await bankingAlertsFetchActive({ silent: true, limit: 100 });
+              const directAlertPayload = await bankingAlertsFetchActive({
+                silent: true,
+                limit: 100,
+                forceRefresh: explicitAlertRefresh
+              });
               if (directAlertPayload && directAlertPayload.ok !== false) bankingAlertStateChanged = true;
             }
           } catch {}
