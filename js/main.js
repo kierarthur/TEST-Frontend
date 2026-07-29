@@ -36960,6 +36960,24 @@ async function bankingPayCreateDraft(input = {}) {
   wiz.createDraftError = '';
   wiz.createDraftFriendlyError = null;
   try { wiz.lastCreateDraftResult = null; } catch {}
+  const finishCancelledCreateDraft = async (resultLike) => {
+    const result = resultLike || makeCreateDraftCancelledResult('BANKING_PAY_CREATE_DRAFT_CANCELLED');
+    try {
+      wiz.createDraftBusy = false;
+      const activeModalContext = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object')
+        ? window.modalCtx
+        : null;
+      const activeModalEpoch = trimStr(activeModalContext?.openToken || activeModalContext?.banking?.openToken || '');
+      if (
+        activeModalContext === sourceModalContext &&
+        (!sourceModalEpoch || !activeModalEpoch || activeModalEpoch === sourceModalEpoch) &&
+        typeof bankingRerender === 'function'
+      ) {
+        await bankingRerender(null);
+      }
+    } catch {}
+    return deep(result);
+  };
 
   try {
     logTroubleshoot('info', 'AUTHORITATIVE_SESSION_SELECTION_RECHECK_START', requestSummary);
@@ -37671,7 +37689,9 @@ async function bankingPayCreateDraft(input = {}) {
 
     if (preflightActionRequired) {
       const actionDecision = await applyCreateDraftActionRequiredDecision(preflightPayload, 'CREATE_DRAFT_PREFLIGHT');
-      if (actionDecision?.cancelled) return deep(actionDecision.result || makeCreateDraftCancelledResult('BANKING_PAY_CREATE_DRAFT_CANCELLED'));
+      if (actionDecision?.cancelled) {
+        return await finishCancelledCreateDraft(actionDecision.result);
+      }
     } else if (preflightPayload.can_start !== true) {
       const payloadCode = trimStr(preflightPayload.error_code || preflightPayload.code || 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_BLOCKED') || 'BANKING_PAY_CREATE_DRAFT_PREFLIGHT_BLOCKED';
       throwCreateDraftFailureEnvelope({
@@ -37748,7 +37768,7 @@ async function bankingPayCreateDraft(input = {}) {
     }
 
     if (finalSubmissionCancelledResult) {
-      return deep(finalSubmissionCancelledResult);
+      return await finishCancelledCreateDraft(finalSubmissionCancelledResult);
     }
 
     if (!operationPayload) {

@@ -39,3 +39,17 @@ test('cancel request keeps the workbench context server-controlled', () => {
   assert.match(flow, /expected_source_session_version/);
   assert.match(flow, /PRE_PROVIDER_CANCEL_AND_RECALCULATE/);
 });
+
+test('same-week PAYE draft cancellation repaints the intact Banking modal', () => {
+  const flow = sliceBetween(
+    'async function bankingPayCreateDraft',
+    'async function openPayeSameWeekOverrideDecisionModal'
+  );
+
+  assert.match(flow, /const finishCancelledCreateDraft = async \(resultLike\) =>/);
+  assert.match(flow, /wiz\.createDraftBusy = false/);
+  assert.match(flow, /activeModalContext === sourceModalContext/);
+  assert.match(flow, /await bankingRerender\(null\)/);
+  assert.match(flow, /return await finishCancelledCreateDraft\(actionDecision\.result\)/);
+  assert.match(flow, /return await finishCancelledCreateDraft\(finalSubmissionCancelledResult\)/);
+});
