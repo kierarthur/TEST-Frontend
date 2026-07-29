@@ -914,7 +914,10 @@
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw Object.assign(
       new Error(payload.error || payload.message || `INVOICE_OPERATION_CONTROL_HTTP_${response.status}`),
-      { request_token: requestToken }
+      {
+        request_token: requestToken,
+        operation_control_response_definitive: true
+      }
     );
     return { ...payload, request_token: requestToken };
   }
@@ -926,6 +929,7 @@
       button.disabled = true;
       button.setAttribute('aria-busy', 'true');
     }
+    let definitiveResponse = false;
     try {
       const retainedToken = clean(button?.dataset?.operationControlToken) || crypto.randomUUID();
       if (button) button.dataset.operationControlToken = retainedToken;
@@ -933,7 +937,18 @@
         [{ operation_id: canonicalId, action: 'RETRY' }],
         { request_token: retainedToken }
       );
+      definitiveResponse = true;
       const results = asArray(payload.results).filter(row => clean(row?.operation_id).toLowerCase() === canonicalId);
+      const rejected = results.find(row => row?.accepted === false);
+      if (rejected) {
+        const rejectionCode = clean(
+          rejected?.error?.code
+          || rejected?.error_code
+          || rejected?.code
+        );
+        throw new Error(rejectionCode || 'INVOICE_EVIDENCE_RETRY_REJECTED');
+      }
+      if (!results.length) throw new Error('INVOICE_EVIDENCE_RETRY_RESULT_MISSING');
       if (results.length) {
         registerInvoiceOperationWatch(results, {
           explicit_operation_ids: true,
@@ -945,6 +960,14 @@
       try { window.__toast?.('Evidence retry queued.'); } catch {}
       if (button) delete button.dataset.operationControlToken;
       return payload;
+    } catch (error) {
+      if (button && (
+        definitiveResponse
+        || error?.operation_control_response_definitive === true
+      )) {
+        delete button.dataset.operationControlToken;
+      }
+      throw error;
     } finally {
       if (button?.isConnected) {
         button.disabled = false;

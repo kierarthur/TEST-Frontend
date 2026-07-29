@@ -1067,6 +1067,7 @@ test('evidence retry submits only the operation identity through the control rou
             results: [{
               operation_id: UUID_A,
               operation_type: 'PREPARE_INVOICE_ASSET',
+              accepted: true,
               status: 'QUEUED',
               change_seq: 9
             }]
@@ -1083,6 +1084,96 @@ test('evidence retry submits only the operation identity through the control rou
   assert.deepEqual(body.actions, [{ operation_id: UUID_A, action: 'RETRY' }]);
   assert.equal(calls[0].init.headers['idempotency-key'], body.request_token);
   assert.doesNotMatch(calls[0].init.body, /work_key|fence|plan_generation|replacement_payload/);
+});
+
+test('definitive evidence retry rejection clears its token and a deliberate retry uses a fresh token', async () => {
+  const calls = [];
+  const toasts = [];
+  let requestCount = 0;
+  const { window } = loadScript(asyncSource, {
+    window: {
+      __toast: message => toasts.push(message),
+      authFetch: async (url, init) => {
+        calls.push({ url, init });
+        requestCount += 1;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            results: [{
+              operation_id: UUID_A,
+              action: 'RETRY',
+              accepted: requestCount > 1,
+              status: requestCount > 1 ? 'QUEUED' : 'WAITING',
+              error: requestCount > 1 ? null : { code: 'OPERATION_NOT_RETRYABLE' }
+            }]
+          })
+        };
+      }
+    }
+  });
+  const button = {
+    dataset: {},
+    disabled: false,
+    isConnected: true,
+    setAttribute() {}
+  };
+  await assert.rejects(
+    window.retryInvoiceEvidenceOperation(UUID_A, button),
+    /OPERATION_NOT_RETRYABLE/
+  );
+  const rejectedToken = JSON.parse(calls[0].init.body).request_token;
+  assert.equal(Object.hasOwn(button.dataset, 'operationControlToken'), false);
+  assert.deepEqual(toasts, []);
+
+  await window.retryInvoiceEvidenceOperation(UUID_A, button);
+  const acceptedToken = JSON.parse(calls[1].init.body).request_token;
+  assert.notEqual(acceptedToken, rejectedToken);
+  assert.equal(Object.hasOwn(button.dataset, 'operationControlToken'), false);
+  assert.deepEqual(toasts, ['Evidence retry queued.']);
+});
+
+test('uncertain evidence retry response retains its token for an idempotent replay', async () => {
+  const calls = [];
+  let requestCount = 0;
+  const { window } = loadScript(asyncSource, {
+    window: {
+      authFetch: async (url, init) => {
+        calls.push({ url, init });
+        requestCount += 1;
+        if (requestCount === 1) throw new Error('network response unavailable');
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            results: [{
+              operation_id: UUID_A,
+              action: 'RETRY',
+              accepted: true,
+              status: 'QUEUED'
+            }]
+          })
+        };
+      }
+    }
+  });
+  const button = {
+    dataset: {},
+    disabled: false,
+    isConnected: true,
+    setAttribute() {}
+  };
+  await assert.rejects(
+    window.retryInvoiceEvidenceOperation(UUID_A, button),
+    /network response unavailable/
+  );
+  const uncertainToken = JSON.parse(calls[0].init.body).request_token;
+  assert.equal(button.dataset.operationControlToken, uncertainToken);
+
+  await window.retryInvoiceEvidenceOperation(UUID_A, button);
+  const replayToken = JSON.parse(calls[1].init.body).request_token;
+  assert.equal(replayToken, uncertainToken);
+  assert.equal(Object.hasOwn(button.dataset, 'operationControlToken'), false);
 });
 
 test('capability failure installs unavailable actions rather than legacy processing', async () => {
