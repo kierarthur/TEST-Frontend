@@ -88658,23 +88658,23 @@ function attachBankingModalDelegatedHandlers() {
 
     const showBankingPayNoticeModal = async ({
       title = 'Banking Pay updated',
-      message = 'Banking Pay will refresh now.',
-      kind = 'import-summary-ui-confirm-banking-pay-notice'
+      message = 'Banking Pay will refresh now.'
     } = {}) => {
-      const confirmFn = getBankingUiConfirmModal();
-
-      if (!confirmFn) {
-        toast(String(message || title || 'Banking Pay will refresh now.'));
+      // A nested confirmation rebuilds the complete Banking Pay parent when
+      // it closes. On memory-constrained browsers that parent render followed
+      // immediately by the candidate refresh can exhaust the renderer.
+      // This is an informational result, so keep it visible without creating
+      // a second modal frame or requiring an acknowledgement click.
+      const notice = String(message || title || 'Banking Pay will refresh now.');
+      const hint = document.getElementById('modalHint');
+      if (hint && typeof showModalHint === 'function') {
+        const tone = /passed|set up|success/i.test(notice)
+          ? 'ok'
+          : (/review|failed|unavailable|blocked/i.test(notice) ? 'warn' : null);
+        showModalHint(notice, tone);
         return;
       }
-
-      await confirmFn({
-        title: String(title || 'Banking Pay updated'),
-        message: String(message || 'Banking Pay will refresh now.'),
-        confirm_label: 'OK',
-        hide_cancel: true,
-        kind
-      });
+      toast(notice);
     };
 
     const confirmBankingPayAction = async ({
@@ -89761,7 +89761,9 @@ function attachBankingModalDelegatedHandlers() {
             candidateIdText,
             resultObj.fast_lane || resultObj.queue_result || resultObj.queued_job_metadata || resultObj
           );
-          await safeRerender(null);
+          // The progress poll owns the first meaningful repaint. Rendering the
+          // full workbench here and again for the first progress response
+          // creates a large avoidable peak on mobile browsers.
         } catch {}
 
         try {
@@ -95328,6 +95330,15 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           result: readinessResult,
           reason: 'PAYEE_READINESS_ENSURE',
           mode: 'SOFT'
+        });
+
+        // Candidate progress renders intentionally clear transient modal hints.
+        // Reapply the provider outcome after the authoritative row is installed
+        // so the final review instruction remains visible.
+        await showBankingPayNoticeModal({
+          title: 'Bank/name check',
+          message,
+          kind: 'import-summary-ui-confirm-banking-pay-name-check-run'
         });
       } catch (e) {
         let handled = false;
@@ -126212,6 +126223,8 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
   const candidatePreviewHasSessionSummary = (candidatePreview) => {
     const cp = isPlainObject(candidatePreview) ? candidatePreview : {};
     return !!(
+      isPlainObject(cp.summary) ||
+      isPlainObject(cp.updated_summary) ||
       isPlainObject(cp.session) ||
       isPlainObject(cp.preview) ||
       isPlainObject(cp.workbench) ||

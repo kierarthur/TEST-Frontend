@@ -24,7 +24,48 @@ test('a settled candidate action adopts its final fragment without reopening the
   assert.match(source, /candidateSettleResult\.full_session_refresh_applied === true/);
   assert.match(source, /if \(!candidateSettled\) \{\s*await refreshPayWorkbench/);
   assert.match(source, /full_workbench_refresh_used: !candidateSettled/);
+  assert.doesNotMatch(
+    source,
+    /markCandidatePendingLocal\([\s\S]*?\);\s*await safeRerender\(null\);/,
+    'the progress poll must own the first workbench repaint'
+  );
   assert.doesNotMatch(source, /\n\s*await refreshPayWorkbench\(\{ reason, mode \}\);\s*\n\s*return \{ ok: true/);
+});
+
+test('candidate summary response avoids the redundant full-session fallback', () => {
+  const source = sliceBetween(
+    '  const candidatePreviewHasSessionSummary = (candidatePreview) => {',
+    '  const guardedSleep = async (ms) => {'
+  );
+
+  assert.match(source, /isPlainObject\(cp\.summary\)/);
+  assert.match(source, /isPlainObject\(cp\.updated_summary\)/);
+  assert.match(source, /isPlainObject\(cp\.session\)/);
+});
+
+test('informational bank-check result does not open a nested workbench modal', () => {
+  const source = sliceBetween(
+    '    const showBankingPayNoticeModal = async ({',
+    '    const confirmBankingPayAction = async ({'
+  );
+
+  assert.match(source, /showModalHint\(notice, tone\)/);
+  assert.match(source, /document\.getElementById\('modalHint'\)/);
+  assert.match(source, /toast\(notice\)/);
+  assert.doesNotMatch(source, /getBankingUiConfirmModal/);
+  assert.doesNotMatch(source, /await confirmFn/);
+});
+
+test('bank-check outcome is restored after the candidate refresh repaint', () => {
+  const source = sliceBetween(
+    "    if (a === 'banking:pay:runBankNameCheck' || a === 'banking:pay:ensurePayeeReadiness') {",
+    "    if (a === 'banking:pay:ensurePayeeMap') {"
+  );
+
+  const refreshAt = source.indexOf('await refreshPayWorkbenchAfterCandidateAction({');
+  const finalNoticeAt = source.indexOf('await showBankingPayNoticeModal({', refreshAt);
+  assert.ok(refreshAt >= 0);
+  assert.ok(finalNoticeAt > refreshAt);
 });
 
 test('payee-map failure uses the safe backend envelope rather than raw provider details', () => {
