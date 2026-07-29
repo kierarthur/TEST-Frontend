@@ -1681,8 +1681,6 @@
   const unavailableInvoiceActionHandlers = Object.freeze({
     handleInvoiceRenderPdf: (...args) => invoiceAsyncUnavailableAction('handleInvoiceRenderPdf', args),
     handleInvoiceEmail: (...args) => invoiceAsyncUnavailableAction('handleInvoiceEmail', args),
-    openInvoiceBatchGenerateModal: (...args) => invoiceAsyncUnavailableAction('openInvoiceBatchGenerateModal', args),
-    openInvoiceBatchIssueModal: (...args) => invoiceAsyncUnavailableAction('openInvoiceBatchIssueModal', args),
     getTimesheetPdfUrl: (...args) => invoiceAsyncUnavailableAction('getTimesheetPdfUrl', args),
     openTimesheetPdf: (...args) => invoiceAsyncUnavailableAction('openTimesheetPdf', args),
     openTimesheetDocumentV8: (...args) => invoiceAsyncUnavailableAction('openTimesheetDocumentV8', args)
@@ -1691,7 +1689,7 @@
   function installInvoiceAsyncUnavailableActions() {
     Object.assign(window, unavailableInvoiceActionHandlers);
     window.__invoiceAsyncOverridesInstalled = false;
-    window.__invoiceBatchModalOverridesInstalled = false;
+    window.InvoiceBatchModalV8?.install?.();
     return true;
   }
 

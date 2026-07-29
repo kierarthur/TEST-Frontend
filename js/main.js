@@ -6598,7 +6598,7 @@ function renderTopNav(){
         m.style.left = `${Math.round(window.scrollX + r.left)}px`;
         m.style.top  = `${Math.round(window.scrollY + r.bottom + 6)}px`;
 
-        m.addEventListener('click', (e) => {
+        m.addEventListener('click', async (e) => {
           const it = e.target.closest('.inv-menu-item');
           if (!it) return;
           const k = it.getAttribute('data-k');
@@ -6608,19 +6608,19 @@ function renderTopNav(){
 
           if (k === 'batch-generate') {
             if (typeof openInvoiceBatchGenerateModal !== 'function') {
-              alert('Batch Generate modal not yet implemented.');
+              await openInvoiceBatchV8WhenReady('GENERATE');
               return;
             }
-            openInvoiceBatchGenerateModal();
+            await openInvoiceBatchGenerateModal();
             return;
           }
 
           if (k === 'batch-issue') {
             if (typeof openInvoiceBatchIssueModal !== 'function') {
-              alert('Batch Issue modal not yet implemented.');
+              await openInvoiceBatchV8WhenReady('ISSUE');
               return;
             }
-            openInvoiceBatchIssueModal();
+            await openInvoiceBatchIssueModal();
             return;
           }
         });
@@ -307803,12 +307803,21 @@ const getSelectionUiState = () => {
 
 
 
-async function openInvoiceBatchIssueModal() {
-  if (window.InvoiceBatchModalV8?.open) {
-    return window.InvoiceBatchModalV8.open('ISSUE');
+async function openInvoiceBatchV8WhenReady(mode) {
+  const canonicalMode = String(mode || '').trim().toUpperCase() === 'ISSUE' ? 'ISSUE' : 'GENERATE';
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (typeof window.InvoiceBatchModalV8?.open === 'function') {
+      window.InvoiceBatchModalV8.install?.();
+      return window.InvoiceBatchModalV8.open(canonicalMode);
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
   }
-  alert('Invoice processing is temporarily unavailable while the new invoice system is being updated.');
+  try { window.__toast?.('Invoice tools are still loading. Please try again.'); } catch {}
   return null;
+}
+
+async function openInvoiceBatchIssueModal() {
+  return openInvoiceBatchV8WhenReady('ISSUE');
 
   // ─────────────────────────────────────────────────────────────
   // Batch Issue — server authoritative gating
@@ -308698,11 +308707,7 @@ async function openInvoiceBatchIssueModal() {
 
 
 async function openInvoiceBatchGenerateModal() {
-  if (window.InvoiceBatchModalV8?.open) {
-    return window.InvoiceBatchModalV8.open('GENERATE');
-  }
-  alert('Invoice processing is temporarily unavailable while the new invoice system is being updated.');
-  return null;
+  return openInvoiceBatchV8WhenReady('GENERATE');
 
   // ─────────────────────────────────────────────────────────────
   // Batch Generate (Invoices)

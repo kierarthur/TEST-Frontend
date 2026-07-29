@@ -39,7 +39,14 @@ test('hard cutover never restores captured legacy Invoice actions', () => {
   assert.doesNotMatch(asyncSource, /captureOriginalFunctions/);
   assert.doesNotMatch(asyncSource, /originalFunctions/);
   assert.doesNotMatch(asyncSource, /InvoiceBatchModalV1/);
-  assert.match(mainSource, /window\.InvoiceBatchModalV8\?\.open/);
+  assert.match(mainSource, /openInvoiceBatchV8WhenReady[\s\S]*window\.InvoiceBatchModalV8\?\.open/);
+  assert.doesNotMatch(mainSource, /Batch (?:Generate|Issue) modal not yet implemented/);
+  assert.doesNotMatch(
+    mainSource,
+    /openInvoiceBatch(?:Generate|Issue)Modal\(\)[\s\S]{0,300}alert\('Invoice processing is temporarily unavailable/,
+  );
+  assert.match(batchSource, /installInvoiceBatchModalOverrides\(\);\s*\n\}\)\(\);/);
+  assert.match(batchSource, /__invoiceBatchModalV8 = true/);
 });
 
 test('browser-side V8 never decodes candidate, facet or result keysets', () => {
@@ -145,12 +152,14 @@ test('opening a batch modal rechecks a transiently unavailable capability', () =
     /openInvoiceBatchModal\(mode\)[\s\S]*initialiseInvoiceAsyncUi\(\{ force: true \}\)[\s\S]*refreshed\?\.enabled_for_user !== true/,
   );
 });
-test('unavailable Invoice actions recover through a fresh authenticated capability check', () => {
+test('unavailable document actions recover without replacing stable Batch Generate and Issue entry points', () => {
   assert.match(
     asyncSource,
     /invoiceAsyncUnavailableAction\(actionName[\s\S]*initialiseInvoiceAsyncUi\(\{ force: true \}\)[\s\S]*recovered !== unavailableInvoiceActionHandlers\[actionName\]/,
   );
-  assert.match(asyncSource, /openInvoiceBatchGenerateModal:[\s\S]*openInvoiceBatchIssueModal:/);
+  assert.doesNotMatch(asyncSource, /openInvoiceBatchGenerateModal:\s*\(\.\.\.args\)/);
+  assert.doesNotMatch(asyncSource, /openInvoiceBatchIssueModal:\s*\(\.\.\.args\)/);
+  assert.match(asyncSource, /installInvoiceAsyncUnavailableActions\(\)[\s\S]*InvoiceBatchModalV8\?\.install\?\.\(\)/);
 });
 
 test('batch selection gives immediate local feedback without rebuilding the whole modal', () => {

@@ -86,13 +86,18 @@ test('batch UI is server-paged, selection-contract based and loaded before the a
   assert.match(batchSource, /next_cursor/);
   assert.match(batchSource, /selection_contract:\s*buildInvoiceBatchSelectionContract/);
   assert.match(batchSource, /row\.selectable === true/);
+  assert.match(batchSource, /installInvoiceBatchModalOverrides\(\);\s*\n\}\)\(\);/);
+  assert.doesNotMatch(uiSource, /openInvoiceBatchGenerateModal:\s*\(\.\.\.args\)/);
+  assert.doesNotMatch(uiSource, /openInvoiceBatchIssueModal:\s*\(\.\.\.args\)/);
+  assert.match(mainSource, /openInvoiceBatchV8WhenReady/);
+  assert.doesNotMatch(mainSource, /Batch (?:Generate|Issue) modal not yet implemented/);
   assert.match(indexSource, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
-  assert.ok(indexSource.indexOf('js/main.js?v=20260729-banking-targeted-family-cancel-v6')
+  assert.ok(indexSource.indexOf('js/main.js?v=20260729-invoice-batch-loader-race-v7')
     < indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1'));
   assert.ok(indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1')
-    < indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-sort-auto-r6'));
-  assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-sort-auto-r6')
-    < indexSource.indexOf('js/invoice-async-ui.js?v=20260729-invoice-foreground-watch-r10'));
+    < indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-sort-auto-r7'));
+  assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-sort-auto-r7')
+    < indexSource.indexOf('js/invoice-async-ui.js?v=20260729-invoice-foreground-watch-r11'));
 });
 
 test('Timesheet and Invoice preparation use V8 POST identities and no active raw-key path', () => {

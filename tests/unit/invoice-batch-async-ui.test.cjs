@@ -523,7 +523,7 @@ test('capabilities reject contract drift and arbitrary UUID objects are not oper
   );
 });
 
-test('disabled capability installs unavailable actions and enabled capability installs V8 exactly once', async () => {
+test('disabled capability preserves the stable batch installer and enabled capability installs V8 idempotently', async () => {
   const legacyRender = () => 'legacy-render';
   const legacyEmail = () => 'legacy-email';
   let batchInstalls = 0;
@@ -545,8 +545,24 @@ test('disabled capability installs unavailable actions and enabled capability in
   assert.equal(window.installInvoiceAsyncOverrides(), true);
   assert.notEqual(window.handleInvoiceRenderPdf, legacyRender);
   assert.notEqual(window.handleInvoiceEmail, legacyEmail);
+  const installsAfterEnable = batchInstalls;
   assert.equal(window.installInvoiceAsyncOverrides(), true);
-  assert.equal(batchInstalls, 1);
+  assert.equal(batchInstalls, installsAfterEnable);
+});
+
+test('Batch Generate and Issue entry points remain stable across async startup and unavailable capability installs', () => {
+  const { window, context } = loadScript(batchRuntimeSource);
+  const generate = window.openInvoiceBatchGenerateModal;
+  const issue = window.openInvoiceBatchIssueModal;
+  assert.equal(generate.__invoiceBatchModalV8, true);
+  assert.equal(issue.__invoiceBatchModalV8, true);
+
+  vm.runInNewContext(asyncSource, context, { filename: 'invoice-async-ui.js' });
+  assert.equal(window.openInvoiceBatchGenerateModal, generate);
+  assert.equal(window.openInvoiceBatchIssueModal, issue);
+  window.installInvoiceAsyncUnavailableActions();
+  assert.equal(window.openInvoiceBatchGenerateModal, generate);
+  assert.equal(window.openInvoiceBatchIssueModal, issue);
 });
 
 test('document action states expose visible labels, disabled state and ARIA busy semantics', () => {

@@ -2064,7 +2064,10 @@
         ? await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null)
         : null;
       if (refreshed?.enabled_for_user !== true) {
-        return window.installInvoiceAsyncUnavailableActions?.();
+        window.installInvoiceAsyncUnavailableActions?.();
+        window.InvoiceBatchModalV8?.install?.();
+        try { window.__toast?.('Invoice tools could not be loaded. Please try again.'); } catch {}
+        return null;
       }
     }
     const state = createInvoiceBatchModalState(mode);
@@ -2107,10 +2110,18 @@
   }
 
   function installInvoiceBatchModalOverrides() {
-    if (window.__invoiceBatchModalOverridesInstalled) return true;
+    if (
+      window.__invoiceBatchModalOverridesInstalled
+      && window.openInvoiceBatchGenerateModal?.__invoiceBatchModalV8 === true
+      && window.openInvoiceBatchIssueModal?.__invoiceBatchModalV8 === true
+    ) return true;
+    const openGenerate = () => openInvoiceBatchModal('GENERATE');
+    const openIssue = () => openInvoiceBatchModal('ISSUE');
+    openGenerate.__invoiceBatchModalV8 = true;
+    openIssue.__invoiceBatchModalV8 = true;
     window.__invoiceBatchModalOverridesInstalled = true;
-    window.openInvoiceBatchGenerateModal = () => openInvoiceBatchModal('GENERATE');
-    window.openInvoiceBatchIssueModal = () => openInvoiceBatchModal('ISSUE');
+    window.openInvoiceBatchGenerateModal = openGenerate;
+    window.openInvoiceBatchIssueModal = openIssue;
     return true;
   }
 
@@ -2178,4 +2189,5 @@
       for (const state of activeModalStates.values()) closeInvoiceBatchModal(state);
     }
   });
+  installInvoiceBatchModalOverrides();
 })();
