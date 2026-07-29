@@ -71,12 +71,12 @@ test('batch UI is server-paged, selection-contract based and loaded before the a
   assert.match(batchSource, /next_cursor/);
   assert.match(batchSource, /selection_contract:\s*buildInvoiceBatchSelectionContract/);
   assert.match(batchSource, /row\.selectable === true/);
-  assert.match(indexSource, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r4/);
+  assert.match(indexSource, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
   assert.ok(indexSource.indexOf('js/main.js?v=20260728-invoice-v8-banking-correction-carrier-v5')
     < indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1'));
   assert.ok(indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1')
-    < indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-flat-table-r4'));
-  assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-flat-table-r4')
+    < indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-flat-table-r5'));
+  assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-flat-table-r5')
     < indexSource.indexOf('js/invoice-async-ui.js?v=20260729-invoice-async-v8-correction-r8'));
 });
 

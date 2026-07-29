@@ -137,6 +137,13 @@ test('batch tables use drag-only sort priority and the filter drawer remains clo
   assert.match(batchCss, /\.invbatch-badge--ready[\s\S]*background: #86efac/);
 });
 
+test('opening a batch modal rechecks a transiently unavailable capability', () => {
+  assert.match(
+    batchSource,
+    /openInvoiceBatchModal\(mode\)[\s\S]*initialiseInvoiceAsyncUi\(\{ force: true \}\)[\s\S]*refreshed\?\.enabled_for_user !== true/,
+  );
+});
+
 test('batch selection gives immediate local feedback without rebuilding the whole modal', () => {
   assert.match(batchSource, /function markInvoiceBatchSelectionSummaryPending/);
   assert.match(batchSource, /data-batch-selected-count/);

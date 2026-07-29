@@ -2033,7 +2033,12 @@
 
   async function openInvoiceBatchModal(mode) {
     if (window.__invoiceAsyncCapability?.enabled_for_user !== true) {
-      return window.installInvoiceAsyncUnavailableActions?.();
+      const refreshed = typeof window.initialiseInvoiceAsyncUi === 'function'
+        ? await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null)
+        : null;
+      if (refreshed?.enabled_for_user !== true) {
+        return window.installInvoiceAsyncUnavailableActions?.();
+      }
     }
     const state = createInvoiceBatchModalState(mode);
     activeModalStates.set(state.id, state);
