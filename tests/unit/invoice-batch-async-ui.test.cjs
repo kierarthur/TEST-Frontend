@@ -134,7 +134,7 @@ test('eligible not-generated rows remain selectable and show their neutral gener
   assert.doesNotMatch(html, /invbatch-badge--red[^>]*>Not generated/);
 });
 
-test('nested batch groups terminate in candidate rows without treating rows as groups', () => {
+test('batch candidates render in a semantic flat table with fixed aligned columns', () => {
   const { window } = loadScript(batchRuntimeSource);
   const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
   state.candidate_page = {
@@ -151,61 +151,38 @@ test('nested batch groups terminate in candidate rows without treating rows as g
     }]
   };
   const html = window.renderInvoiceBatchGroups(state);
+  assert.match(html, /<table class="invbatch-candidate-table">/);
+  assert.match(html, /<thead>/);
+  assert.match(html, /<tbody>/);
+  assert.match(html, /<th[^>]*>Week ending<\/th>[\s\S]*<th[^>]*>Trust \/ client<\/th>[\s\S]*<th[^>]*>Candidate \/ worker<\/th>[\s\S]*<th[^>]*>Status<\/th>/);
+  assert.doesNotMatch(html, /invbatch-group-header|toggle-group|group-selection/);
   assert.match(html, /data-selection-key="scope:nested"/);
   assert.match(html, /TEST candidate/);
   assert.match(html, /type="checkbox"/);
 });
 
-test('all 24 four-level group orders derive exact semantic selectors from complete ancestry', () => {
+test('sort priority defaults to week, client, candidate and status and reorders by drag authority', () => {
   const { window } = loadScript(batchRuntimeSource);
-  const row = {
-    selection_key: 'scope:ancestor',
-    selectable: true,
-    row_status: 'READY',
-    client_id: UUID_A,
-    client_name: 'TEST client',
-    candidate_ids: [UUID_B],
-    candidate_names: ['TEST candidate'],
-    week_ending_date: '2026-07-26'
-  };
-  const flatten = nodes => nodes.flatMap(node => [
-    node,
-    ...flatten((node.children || []).filter(child => Array.isArray(child.rows)))
-  ]);
-  const permutations = values => values.length < 2
-    ? [values]
-    : values.flatMap((value, index) =>
-      permutations(values.filter((_, itemIndex) => itemIndex !== index))
-        .map(rest => [value, ...rest]));
-  const fieldByDimension = {
-    WEEK: 'week_ending_date',
-    CLIENT: 'client_id',
-    CANDIDATE: 'candidate_id',
-    STATUS: 'status_code'
-  };
-  const orders = permutations(['WEEK', 'CLIENT', 'CANDIDATE', 'STATUS']);
-  assert.equal(orders.length, 24);
-  for (const order of orders) {
-    const nodes = flatten(window.buildInvoiceBatchGroups([row], order, 0, {}));
-    assert.equal(nodes.length, 4, order.join(' > '));
-    nodes.forEach((node, index) => {
-      assert.equal(node.selector?.type, 'DIMENSION_GROUP');
-      const expectedFields = order.slice(0, index + 1).map(dimension => fieldByDimension[dimension]).sort();
-      assert.deepEqual(
-        Object.keys(node.selector).filter(key => key !== 'type').sort(),
-        expectedFields,
-        order.join(' > ')
-      );
-    });
-  }
   const defaultState = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
   assert.deepEqual(
     JSON.parse(JSON.stringify(defaultState.group_order)),
     ['WEEK', 'CLIENT', 'CANDIDATE', 'STATUS']
   );
+  assert.equal(
+    window.InvoiceBatchModalV8.moveInvoiceBatchGroupDimension(defaultState, 'STATUS', 'WEEK'),
+    true
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(defaultState.group_order)),
+    ['STATUS', 'WEEK', 'CLIENT', 'CANDIDATE']
+  );
+  const toolbar = window.renderInvoiceBatchToolbar(defaultState);
+  assert.match(toolbar, /Sort priority \(drag only\)/);
+  assert.match(toolbar, /draggable="true"/);
+  assert.doesNotMatch(toolbar, /group-up|group-down|↑|↓/);
 });
 
-test('SUMMARY group authority is pending after PAGE load and rejects incomplete coverage', async () => {
+test('flat table SUMMARY requests exact totals without obsolete group selectors', async () => {
   const snapshot = {
     contract_version: 'INVOICE_BATCH_SNAPSHOT_V2',
     action: 'GENERATE',
@@ -224,10 +201,12 @@ test('SUMMARY group authority is pending after PAGE load and rejects incomplete 
     week_ending_date: '2026-07-26'
   };
   let call = 0;
+  const requestBodies = [];
   const { window } = loadScript(batchRuntimeSource, {
     window: {
-      authFetch: async () => {
+      authFetch: async (_url, options) => {
         call += 1;
+        requestBodies.push(JSON.parse(options.body));
         return {
           ok: true,
           status: 200,
@@ -283,9 +262,10 @@ test('SUMMARY group authority is pending after PAGE load and rejects incomplete 
   assert.equal(state.selection_summary_pending, true);
   assert.deepEqual(JSON.parse(JSON.stringify(state.group_selection)), []);
   const summary = await window.loadInvoiceBatchSelectionSummary(state);
-  assert.equal(summary, null);
-  assert.equal(state.selection_summary_error, 'INVOICE_BATCH_GROUP_SELECTION_CONTRACT_MISMATCH');
+  assert.ok(summary);
+  assert.equal(state.selection_summary_error, null);
   assert.equal(state.selection_summary_pending, false);
+  assert.deepEqual(requestBodies[1].group_selectors, []);
 });
 
 test('implicit-all selection persists exclusions and later child rules override group rules', () => {

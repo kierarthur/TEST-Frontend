@@ -9,7 +9,6 @@
   const PROGRESS_VERSION = 'INVOICE_BATCH_PROGRESS_V2';
   const PAGE_SIZE = 100;
   const MAX_RULES = 10000;
-  const MAX_GROUP_SELECTORS = 400;
   const MODES = new Set(['GENERATE', 'ISSUE']);
   const DISPLAY_MODES = ['ALL', 'BLOCKED', 'READY'];
   const GROUP_DIMENSIONS = Object.freeze(['WEEK', 'CLIENT', 'CANDIDATE', 'STATUS']);
@@ -410,7 +409,6 @@
       sort,
       group_order: preferences.group_order,
       dragged_group_dimension: null,
-      collapsed_group_ids: new Set(),
       selection_summary: null,
       selection_summary_pending: true,
       selection_summary_error: null,
@@ -629,27 +627,8 @@
   }
 
   function visibleInvoiceBatchGroupSelectors(state) {
-    const selectors = [];
-    const seen = new Set();
-    const visit = node => {
-      const selector = node.selector || groupSelectorForNode(node);
-      if (selector) {
-        const identity = selectorIdentity(selector);
-        if (!seen.has(identity)) {
-          seen.add(identity);
-          selectors.push(selector);
-        }
-      }
-      asArray(node.children).forEach(visit);
-    };
-    buildGroups(
-      asArray(state.candidate_page?.rows),
-      groupLevels(state),
-      0,
-      {}
-    ).forEach(visit);
-    if (selectors.length > MAX_GROUP_SELECTORS) throw new Error('INVOICE_BATCH_GROUP_SELECTOR_LIMIT_EXCEEDED');
-    return selectors;
+    void state;
+    return [];
   }
 
   async function loadInvoiceBatchSelectionSummary(state, options = {}) {
@@ -841,14 +820,6 @@
     return { type: 'ROW', selection_key: clean(row.selection_key) };
   }
 
-  function encodeSelector(selector) {
-    return encodeURIComponent(JSON.stringify(canonicalSelector(selector)));
-  }
-
-  function decodeSelector(value) {
-    try { return canonicalSelector(JSON.parse(decodeURIComponent(value))); } catch { throw new Error('BATCH_SELECTION_SELECTOR_INVALID'); }
-  }
-
   function renderInvoiceBatchRow(row, state) {
     const selected = isInvoiceBatchRowSelected(state.selection, row);
     const issue = state.mode === 'ISSUE';
@@ -862,194 +833,84 @@
       ? `<button type="button" class="btn btn-xs btn-outline" data-batch-action="view-document" data-document-version-id="${escapeHtml(row.document_version_id)}">View</button>`
       : '';
     return `
-      <div class="invbatch-row ${row.selectable === true ? '' : 'is-blocked'}" data-selection-key="${escapeHtml(row.selection_key)}" role="row">
-        <div class="invbatch-cell invbatch-cell--select" role="cell">${checkbox}</div>
-        ${issue ? `<div class="invbatch-cell invbatch-cell--invoice" role="cell"><strong>${escapeHtml(row.invoice_number || '—')}</strong></div>` : ''}
-        <div class="invbatch-cell" role="cell"><strong>${escapeHtml(row.client_name || '—')}</strong></div>
-        <div class="invbatch-cell" role="cell">${escapeHtml(weekDisplay(row))}</div>
-        <div class="invbatch-cell" role="cell">${escapeHtml(candidateDisplay(row))}</div>
-        <div class="invbatch-cell invbatch-cell--money" role="cell">${escapeHtml(formatMoney(row.total_ex_vat, row.currency))}</div>
-        <div class="invbatch-cell invbatch-cell--money" role="cell">${escapeHtml(formatMoney(row.total_inc_vat, row.currency))}</div>
-        <div class="invbatch-cell invbatch-cell--status" role="cell">${renderInvoiceBatchBadges(row, state.mode) || '<span class="invbatch-badge invbatch-badge--ready">Ready</span>'}</div>
-        <div class="invbatch-cell invbatch-cell--actions" role="cell">
+      <tr class="invbatch-row ${row.selectable === true ? '' : 'is-blocked'}" data-selection-key="${escapeHtml(row.selection_key)}">
+        <td class="invbatch-cell invbatch-cell--select">${checkbox}</td>
+        ${issue ? `<td class="invbatch-cell invbatch-cell--invoice"><strong>${escapeHtml(row.invoice_number || '—')}</strong></td>` : ''}
+        <td class="invbatch-cell invbatch-cell--week">${escapeHtml(weekDisplay(row))}</td>
+        <td class="invbatch-cell invbatch-cell--client"><strong>${escapeHtml(row.client_name || '—')}</strong></td>
+        <td class="invbatch-cell invbatch-cell--candidate">${escapeHtml(candidateDisplay(row))}</td>
+        <td class="invbatch-cell invbatch-cell--status">${renderInvoiceBatchBadges(row, state.mode) || '<span class="invbatch-badge invbatch-badge--ready">Ready</span>'}</td>
+        <td class="invbatch-cell invbatch-cell--money">${escapeHtml(formatMoney(row.total_ex_vat, row.currency))}</td>
+        <td class="invbatch-cell invbatch-cell--money">${escapeHtml(formatMoney(row.total_inc_vat, row.currency))}</td>
+        <td class="invbatch-cell invbatch-cell--actions">
           ${previewAction}${viewAction}
           <button type="button" class="btn btn-xs btn-outline" data-batch-action="row-details" data-selection-key="${escapeHtml(row.selection_key)}">Details</button>
-        </div>
-      </div>`;
+        </td>
+      </tr>`;
   }
 
-  function groupLevels(state) {
-    return normaliseGroupOrder(state.group_order, { persisted: true });
+  function displaySortValue(row, key) {
+    if (key === 'WEEK_ENDING_DATE' || key === 'WEEK') return clean(row.week_ending_date || asArray(row.week_ending_dates)[0]);
+    if (key === 'CLIENT_NAME' || key === 'CLIENT') return clean(row.client_name).toLocaleLowerCase('en-GB');
+    if (key === 'CANDIDATE_NAME' || key === 'CANDIDATE') return candidateDisplay(row).toLocaleLowerCase('en-GB');
+    if (key === 'STATUS') return upper(row.row_status || row.generation_state || row.generated_state);
+    if (key === 'INVOICE_NUMBER') return clean(row.invoice_number).toLocaleLowerCase('en-GB');
+    if (key === 'TOTAL_EX_VAT') return Number(row.total_ex_vat || 0);
+    if (key === 'TOTAL_INC_VAT') return Number(row.total_inc_vat || 0);
+    return '';
   }
 
-  function groupValue(row, level) {
-    if (level === 'WEEK') {
-      const weeks = normaliseStringArray(row.week_ending_dates || [row.week_ending_date]);
-      return weeks.length > 1 ? `multiple:${weeks.join(',')}` : (weeks[0] || 'unknown');
-    }
-    if (level === 'CLIENT') return clean(row.client_id).toLowerCase() || 'unknown';
-    if (level === 'CANDIDATE') {
-      const ids = rowCandidateIds(row);
-      return ids.length === 1 ? ids[0] : `multiple:${ids.join(',')}`;
-    }
-    return upper(row.row_status || row.generation_state || row.generated_state || 'UNKNOWN');
-  }
-
-  function groupLabel(row, level) {
-    if (level === 'WEEK') {
-      const weeks = normaliseStringArray(row.week_ending_dates || [row.week_ending_date]);
-      return weeks.length > 1 ? 'Multiple weeks' : (clean(row.week_ending_display || weeks[0]) || 'Unknown week');
-    }
-    if (level === 'CLIENT') return clean(row.client_name) || 'Unknown client';
-    if (level === 'CANDIDATE') return candidateDisplay(row);
-    return clean(row.row_status || row.generation_state || row.generated_state).replaceAll('_', ' ') || 'Unknown status';
-  }
-
-  function exactGroupDimension(level, rows) {
-    if (level === 'WEEK') {
-      const weeks = [...new Set(asArray(rows).flatMap(row =>
-        normaliseStringArray(row.week_ending_dates || [row.week_ending_date])
-      ))];
-      return weeks.length === 1 ? { week_ending_date: weeks[0] } : {};
-    }
-    if (level === 'CLIENT') {
-      const clients = [...new Set(asArray(rows)
-        .map(row => clean(row.client_id).toLowerCase())
-        .filter(Boolean))];
-      return clients.length === 1 ? { client_id: clients[0] } : {};
-    }
-    if (level === 'CANDIDATE') {
-      const candidateSets = asArray(rows).map(rowCandidateIds);
-      const common = candidateSets.length
-        ? candidateSets[0].filter(id => candidateSets.every(ids => ids.includes(id)))
-        : [];
-      return common.length === 1 ? { candidate_id: common[0] } : {};
-    }
-    if (level === 'STATUS') {
-      const statuses = [...new Set(asArray(rows)
-        .map(row => upper(row.status_code || row.row_status || row.status))
-        .filter(Boolean))];
-      return statuses.length === 1 ? { status_code: statuses[0] } : {};
-    }
-    return {};
-  }
-
-  function groupSelectorForNode(node) {
-    const dimensions = asObject(node?.dimensions);
-    const selector = { type: 'DIMENSION_GROUP' };
-    for (const field of ['week_ending_date', 'client_id', 'candidate_id', 'status_code']) {
-      if (dimensions[field]) selector[field] = dimensions[field];
-    }
-    try { return canonicalSelector(selector); } catch { return null; }
-  }
-
-  function groupCollapseIdentity(node, depth = 0) {
-    const dimensions = asObject(node?.dimensions);
-    const orderedDimensions = {};
-    for (const field of ['week_ending_date', 'client_id', 'candidate_id', 'status_code']) {
-      if (dimensions[field]) orderedDimensions[field] = dimensions[field];
-    }
-    return `${Number(depth) || 0}:${upper(node?.level)}:${clean(node?.key)}:${JSON.stringify(orderedDimensions)}`;
-  }
-
-  function groupCollapseIdentities(node, depth = 0) {
-    if (!node || !Array.isArray(node.rows)) return [];
-    return [
-      groupCollapseIdentity(node, depth),
-      ...asArray(node.children).flatMap(child => (
-        Array.isArray(child?.rows) ? groupCollapseIdentities(child, depth + 1) : []
-      ))
-    ];
-  }
-
-  function buildGroups(rows, levels, depth = 0, ancestry = {}) {
-    if (depth >= levels.length) return asArray(rows);
-    const level = levels[depth];
-    const map = new Map();
-    for (const row of rows) {
-      const key = groupValue(row, level);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(row);
-    }
-    return [...map.entries()].map(([key, children]) => {
-      const dimensions = {
-        ...ancestry,
-        ...exactGroupDimension(level, children)
-      };
-      const node = {
-        key,
-        level,
-        label: groupLabel(children[0], level),
-        rows: children,
-        dimensions
-      };
-      node.selector = groupSelectorForNode(node);
-      node.children = buildGroups(
-        children,
-        levels,
-        depth + 1,
-        dimensions
-      );
-      return node;
+  function rowsInInvoiceBatchDisplayOrder(state) {
+    const rows = [...asArray(state.candidate_page?.rows)];
+    const keys = [
+      upper(state.sort?.sort_key),
+      ...normaliseGroupOrder(state.group_order, { persisted: true })
+    ].filter((key, index, values) => values.indexOf(key) === index);
+    const direction = upper(state.sort?.sort_direction) === 'ASC' ? 1 : -1;
+    return rows.sort((left, right) => {
+      for (const key of keys) {
+        const leftValue = displaySortValue(left, key);
+        const rightValue = displaySortValue(right, key);
+        const comparison = typeof leftValue === 'number' && typeof rightValue === 'number'
+          ? leftValue - rightValue
+          : String(leftValue).localeCompare(String(rightValue), 'en-GB', { numeric: true, sensitivity: 'base' });
+        if (comparison) return comparison * direction;
+      }
+      return clean(left.selection_key).localeCompare(clean(right.selection_key), 'en-GB');
     });
   }
 
-  function renderGroupNode(node, state, depth = 0) {
-    if (!node) return '';
-    if (Array.isArray(node)) return node.map(child => renderGroupNode(child, state, depth)).join('');
-    if (!Array.isArray(node.rows)) return renderInvoiceBatchRow(node, state);
-    const selector = node.selector || groupSelectorForNode(node);
-    const groupState = selector && state.selection_summary_pending !== true
-      && !state.selection_summary_error
-      ? deriveInvoiceBatchGroupSelectionState(state.selection, node.rows, selector, state.group_selection)
-      : 'DISABLED';
-    const eligibleCount = node.rows.filter(row => row.selectable === true).length;
-    const checkbox = selector && groupState !== 'DISABLED'
-      ? `<input type="checkbox" data-batch-field="group-selection" data-selector="${escapeHtml(encodeSelector(selector))}" ${groupState === 'CHECKED' ? 'checked' : ''} data-indeterminate="${groupState === 'INDETERMINATE' ? 'true' : 'false'}" aria-label="Select ${escapeHtml(node.label)}">`
-      : '';
-    const collapseId = groupCollapseIdentity(node, depth);
-    const collapsed = state.collapsed_group_ids instanceof Set
-      && state.collapsed_group_ids.has(collapseId);
-    const descendantIds = groupCollapseIdentities(node, depth);
-    const recursivelyCollapsed = collapsed || (
-      descendantIds.length > 0
-      && descendantIds.every(id => state.collapsed_group_ids?.has?.(id))
-    );
-    const branchLabel = `${node.label} group`;
-    return `
-      <section class="invbatch-group invbatch-group--depth-${depth}${collapsed ? ' is-collapsed' : ''}" data-group-collapse-id="${escapeHtml(collapseId)}">
-        <header class="invbatch-group-header">
-          <span class="invbatch-group-collapse-controls">
-            <button type="button" class="btn btn-xs btn-outline invbatch-group-toggle" data-batch-action="toggle-group" data-group-collapse-id="${escapeHtml(collapseId)}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${escapeHtml(branchLabel)}">${collapsed ? '+' : '−'}</button>
-            ${depth === 0 ? `<button type="button" class="btn btn-sm btn-outline invbatch-group-toggle-all" data-batch-action="toggle-group-all" data-group-collapse-id="${escapeHtml(collapseId)}" aria-expanded="${recursivelyCollapsed ? 'false' : 'true'}" aria-label="${recursivelyCollapsed ? 'Expand all groups in' : 'Collapse all groups in'} ${escapeHtml(node.label)}">${recursivelyCollapsed ? '+' : '−'}</button>` : ''}
-          </span>
-          ${checkbox}
-          <span>${escapeHtml(node.label)}</span>
-          <span class="invbatch-group-count">${eligibleCount} eligible · ${node.rows.length - eligibleCount} blocked on this page</span>
-        </header>
-        <div class="invbatch-group-body" ${collapsed ? 'hidden' : ''}>${asArray(node.children)
-          .map(child => renderGroupNode(child, state, depth + 1))
-          .join('')}</div>
-      </section>`;
-  }
-
   function renderInvoiceBatchGroups(state) {
-    const rows = asArray(state.candidate_page?.rows);
+    const rows = rowsInInvoiceBatchDisplayOrder(state);
     if (!rows.length) return '<div class="invbatch-empty">No matching items.</div>';
-    const grouped = buildGroups(rows, groupLevels(state), 0, {});
-    const header = `
-      <div class="invbatch-row invbatch-row--header" role="row">
-        <div class="invbatch-cell invbatch-cell--select" role="columnheader"><span class="sr-only">Select</span></div>
-        ${state.mode === 'ISSUE' ? '<div class="invbatch-cell invbatch-cell--invoice" role="columnheader">Invoice</div>' : ''}
-        <div class="invbatch-cell" role="columnheader">Client</div>
-        <div class="invbatch-cell" role="columnheader">Week ending</div>
-        <div class="invbatch-cell" role="columnheader">Candidate / worker</div>
-        <div class="invbatch-cell invbatch-cell--money" role="columnheader">Net</div>
-        <div class="invbatch-cell invbatch-cell--money" role="columnheader">Gross</div>
-        <div class="invbatch-cell invbatch-cell--status" role="columnheader">Status</div>
-        <div class="invbatch-cell invbatch-cell--actions" role="columnheader">Actions</div>
-      </div>`;
-    return `${header}${grouped.map(group => renderGroupNode(group, state)).join('')}`;
+    return `
+      <table class="invbatch-candidate-table">
+        <colgroup>
+          <col class="invbatch-col-select">
+          ${state.mode === 'ISSUE' ? '<col class="invbatch-col-invoice">' : ''}
+          <col class="invbatch-col-week">
+          <col class="invbatch-col-client">
+          <col class="invbatch-col-candidate">
+          <col class="invbatch-col-status">
+          <col class="invbatch-col-money">
+          <col class="invbatch-col-money">
+          <col class="invbatch-col-actions">
+        </colgroup>
+        <thead>
+          <tr class="invbatch-row invbatch-row--header">
+            <th class="invbatch-cell invbatch-cell--select" scope="col" aria-label="Select"></th>
+            ${state.mode === 'ISSUE' ? '<th class="invbatch-cell invbatch-cell--invoice" scope="col">Invoice</th>' : ''}
+            <th class="invbatch-cell invbatch-cell--week" scope="col">Week ending</th>
+            <th class="invbatch-cell invbatch-cell--client" scope="col">Trust / client</th>
+            <th class="invbatch-cell invbatch-cell--candidate" scope="col">Candidate / worker</th>
+            <th class="invbatch-cell invbatch-cell--status" scope="col">Status</th>
+            <th class="invbatch-cell invbatch-cell--money" scope="col">Net</th>
+            <th class="invbatch-cell invbatch-cell--money" scope="col">Gross</th>
+            <th class="invbatch-cell invbatch-cell--actions" scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows.map(row => renderInvoiceBatchRow(row, state)).join('')}</tbody>
+      </table>`;
   }
 
   function displayModeLabel(state) {
@@ -1068,14 +929,10 @@
       STATUS: 'Status'
     };
     const groupOrder = normaliseGroupOrder(state.group_order, { persisted: true });
-    const groupOrderEditor = groupOrder.map((dimension, index) => `
+    const groupOrderEditor = groupOrder.map(dimension => `
       <li class="invbatch-group-order-item" draggable="true" data-group-dimension="${dimension}" tabindex="0">
         <span class="invbatch-drag-handle" aria-hidden="true">⋮⋮</span>
         <span>${escapeHtml(groupLabels[dimension])}</span>
-        <span class="invbatch-group-order-actions">
-          <button type="button" class="btn btn-xs btn-outline" data-batch-action="group-up" data-group-dimension="${dimension}" ${index === 0 ? 'disabled' : ''} aria-label="Move ${escapeHtml(groupLabels[dimension])} up">↑</button>
-          <button type="button" class="btn btn-xs btn-outline" data-batch-action="group-down" data-group-dimension="${dimension}" ${index === groupOrder.length - 1 ? 'disabled' : ''} aria-label="Move ${escapeHtml(groupLabels[dimension])} down">↓</button>
-        </span>
       </li>`).join('');
     return `
       <section class="invbatch-toolbar-card" aria-label="Batch controls">
@@ -1086,9 +943,9 @@
           <label class="invbatch-search"><span class="sr-only">Search</span><input type="search" data-batch-field="toolbar-search" value="${escapeHtml(state.filter.search || '')}" placeholder="Search"><button type="button" class="btn btn-sm btn-outline" data-batch-action="apply-search">Search</button></label>
         </div>
         <div class="invbatch-toolbar-row invbatch-toolbar-row--secondary">
-          <fieldset class="invbatch-group-order"><legend>Group by (drag to reorder)</legend><ol>${groupOrderEditor}</ol></fieldset>
+          <fieldset class="invbatch-group-order"><legend>Sort priority (drag only)</legend><ol>${groupOrderEditor}</ol></fieldset>
           <div class="invbatch-sort-controls">
-            <label>Sort <select data-batch-field="sort-key">${sortOptions}</select></label>
+            <label>Primary sort <select data-batch-field="sort-key">${sortOptions}</select></label>
             <label>Direction <select data-batch-field="sort-direction"><option value="DESC" ${state.sort.sort_direction === 'DESC' ? 'selected' : ''}>Descending</option><option value="ASC" ${state.sort.sort_direction === 'ASC' ? 'selected' : ''}>Ascending</option></select></label>
             <button type="button" class="btn btn-sm btn-outline" data-batch-action="reset-selection">Reset selection</button>
           </div>
@@ -1172,10 +1029,12 @@
     const returned = asArray(state.candidate_page?.rows).length;
     const start = returned ? Number(state.page_start_ordinal || 0) + 1 : 0;
     const end = returned ? start + returned - 1 : 0;
+    const currentPage = Math.max(1, Number(state.page_history?.length || 0) + 1);
+    const totalPages = Math.max(1, Math.ceil(Math.max(total, end) / PAGE_SIZE));
     return `
       <div class="invbatch-pager">
         <span>Showing ${start.toLocaleString('en-GB')}–${end.toLocaleString('en-GB')} of ${Math.max(total, end).toLocaleString('en-GB')}</span>
-        <span><button type="button" class="btn btn-sm btn-outline" data-batch-action="page-back" ${state.page_history.length ? '' : 'disabled'}>Back</button><button type="button" class="btn btn-sm btn-outline" data-batch-action="page-next" ${page.has_more && state.page_cursor ? '' : 'disabled'}>Next</button></span>
+        <span class="invbatch-page-controls"><button type="button" class="btn btn-sm btn-outline" data-batch-action="page-back" ${state.page_history.length ? '' : 'disabled'}>Previous</button><strong>Page ${currentPage.toLocaleString('en-GB')} of ${totalPages.toLocaleString('en-GB')}</strong><button type="button" class="btn btn-sm btn-outline" data-batch-action="page-next" ${page.has_more && state.page_cursor ? '' : 'disabled'}>Next</button></span>
       </div>`;
   }
 
@@ -1422,8 +1281,6 @@
         focusSelector = `[data-batch-field="${CSS.escape(field.dataset.batchField)}"][data-selector="${CSS.escape(field.dataset.selector)}"]`;
       } else if (action?.dataset.groupDimension) {
         focusSelector = `[data-batch-action="${CSS.escape(action.dataset.batchAction)}"][data-group-dimension="${CSS.escape(action.dataset.groupDimension)}"]`;
-      } else if (action?.dataset.groupCollapseId) {
-        focusSelector = `[data-batch-action="${CSS.escape(action.dataset.batchAction)}"][data-group-collapse-id="${CSS.escape(action.dataset.groupCollapseId)}"]`;
       }
     }
     return {
@@ -1467,7 +1324,7 @@
       ${state.list_stale ? '<div class="invbatch-stale" role="alert">The candidate list changed. Your filters and unticks are preserved. <button type="button" class="btn btn-sm btn-outline" data-batch-action="refresh-stale">Refresh</button></div>' : ''}
       ${state.selection_summary_pending ? '<div class="invbatch-summary-pending" aria-live="polite">Updating the exact selection summary…</div>' : ''}
       ${state.error ? `<div class="invbatch-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
-      <div class="invbatch-list" role="table" aria-busy="${state.loading ? 'true' : 'false'}">
+      <div class="invbatch-list" aria-busy="${state.loading ? 'true' : 'false'}">
         ${state.loading && !state.candidate_page ? '<div class="invbatch-empty"><div class="invbatch-spinner"></div> Loading candidates…</div>' : renderInvoiceBatchGroups(state)}
       </div>
       ${renderInvoiceBatchPager(state)}
@@ -1945,10 +1802,7 @@
     });
     state.sort = saved.sort;
     state.group_order = saved.group_order;
-    state.group_selection = [];
-    state.selection_summary_pending = true;
-    state.selection_summary_error = null;
-    scheduleInvoiceBatchSelectionSummary(state);
+    renderInvoiceBatchModal(state);
   }
 
   function moveInvoiceBatchGroupDimension(state, dimensionValue, targetValue, direction = 0) {
@@ -1957,11 +1811,12 @@
     const from = order.indexOf(dimension);
     if (from < 0) return;
     let to = targetValue ? order.indexOf(upper(targetValue)) : from + Number(direction || 0);
-    if (to < 0 || to >= order.length || to === from) return;
+    if (to < 0 || to >= order.length || to === from) return false;
     order.splice(from, 1);
     if (targetValue && from < to) to -= 1;
     order.splice(to, 0, dimension);
     setInvoiceBatchGroupOrder(state, order);
+    return true;
   }
 
   function attachInvoiceBatchModalDelegatedHandlers(state) {
@@ -2013,9 +1868,6 @@
           const row = findRow(state, field.dataset.selectionKey);
           if (row?.selectable === true) applyInvoiceBatchSelectionRule(state.selection, field.checked ? 'INCLUDE' : 'EXCLUDE', rowSelector(row));
           scheduleInvoiceBatchSelectionSummary(state);
-        } else if (name === 'group-selection') {
-          applyInvoiceBatchSelectionRule(state.selection, field.checked ? 'INCLUDE' : 'EXCLUDE', decodeSelector(field.dataset.selector));
-          scheduleInvoiceBatchSelectionSummary(state);
         } else if (name === 'issue-mode') {
           state.issue_mode = upper(field.value) === 'ISSUE_ONLY' ? 'ISSUE_ONLY' : 'ISSUE_AND_SEND';
           if (state.issue_mode === 'ISSUE_ONLY') state.delivery_request_token = null;
@@ -2038,36 +1890,7 @@
       }
       if (event.type !== 'click' || !actionElement) return;
       const action = actionElement.dataset.batchAction;
-      if (action === 'group-up' || action === 'group-down') {
-        moveInvoiceBatchGroupDimension(
-          state,
-          actionElement.dataset.groupDimension,
-          null,
-          action === 'group-up' ? -1 : 1
-        );
-      } else if (action === 'toggle-group') {
-        const collapseId = clean(actionElement.dataset.groupCollapseId);
-        if (!(state.collapsed_group_ids instanceof Set)) state.collapsed_group_ids = new Set();
-        if (state.collapsed_group_ids.has(collapseId)) state.collapsed_group_ids.delete(collapseId);
-        else state.collapsed_group_ids.add(collapseId);
-        renderInvoiceBatchModal(state);
-      } else if (action === 'toggle-group-all') {
-        const section = actionElement.closest('.invbatch-group--depth-0');
-        const collapseIds = [...new Set(
-          [...(section?.querySelectorAll?.('[data-group-collapse-id]') || [])]
-            .map(element => clean(element.dataset.groupCollapseId))
-            .filter(Boolean)
-        )];
-        if (!(state.collapsed_group_ids instanceof Set)) state.collapsed_group_ids = new Set();
-        const topLevelId = clean(actionElement.dataset.groupCollapseId);
-        const expandAll = state.collapsed_group_ids.has(topLevelId)
-          || (collapseIds.length > 0 && collapseIds.every(id => state.collapsed_group_ids.has(id)));
-        for (const collapseId of collapseIds) {
-          if (expandAll) state.collapsed_group_ids.delete(collapseId);
-          else state.collapsed_group_ids.add(collapseId);
-        }
-        renderInvoiceBatchModal(state);
-      } else if (action === 'cycle-display') {
+      if (action === 'cycle-display') {
         state.display_mode = DISPLAY_MODES[(DISPLAY_MODES.indexOf(state.display_mode) + 1) % DISPLAY_MODES.length];
         state.filter.display_mode = state.display_mode;
         await reloadFirstPage(state);
@@ -2269,8 +2092,6 @@
     applyInvoiceBatchSelectionRule,
     isInvoiceBatchRowSelected,
     deriveInvoiceBatchGroupSelectionState,
-    buildInvoiceBatchGroups: buildGroups,
-    groupSelectorForNode,
     visibleInvoiceBatchGroupSelectors,
     resetInvoiceBatchSelection,
     buildInvoiceBatchSelectionContract,
@@ -2311,8 +2132,6 @@
     applyInvoiceBatchSelectionRule,
     isInvoiceBatchRowSelected,
     deriveInvoiceBatchGroupSelectionState,
-    buildInvoiceBatchGroups: buildGroups,
-    groupSelectorForNode,
     visibleInvoiceBatchGroupSelectors,
     resetInvoiceBatchSelection,
     buildInvoiceBatchSelectionContract,

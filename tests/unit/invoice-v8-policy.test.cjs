@@ -11,6 +11,7 @@ const batchSource = read('js/invoice-batch-modal.js');
 const mainSource = read('js/main.js');
 const diagnosticSource = read('js/invoice-diagnostic-catalog.js');
 const batchCss = read('css/invoice-batch-modal.css');
+const indexSource = read('index.html');
 
 test('shared diagnostic catalogue exposes locked labels and a bounded unknown fallback', () => {
   const window = {};
@@ -99,23 +100,30 @@ test('Timesheet hard-cutover callers delegate to the unified V8 viewer', () => {
 
 test('the V8 batch modal remains usable at a narrow viewport without global style drift', () => {
   assert.match(batchCss, /@media \(max-width: 600px\)/);
-  assert.match(batchCss, /#modal\.invbatch-modal \.invbatch-row[\s\S]*grid-template-columns: 28px minmax\(0, 1fr\)/);
+  assert.match(batchCss, /#modal\.invbatch-modal \.invbatch-candidate-table[\s\S]*table-layout: fixed/);
+  assert.match(batchCss, /#modal\.invbatch-modal \.invbatch-list[\s\S]*overflow: auto/);
   assert.match(batchCss, /#modal\.invbatch-modal \.invbatch-footer[\s\S]*flex-direction: column/);
   assert.doesNotMatch(batchCss, /(?:^|\n)\s*(?:button|input|select|table|\.modal)\s*\{/);
 });
 
-test('batch grouping is a four-level draggable order and the filter drawer remains closable above modal bands', () => {
+test('batch tables use drag-only sort priority and the filter drawer remains closable above modal bands', () => {
   assert.match(batchSource, /DEFAULT_GROUP_ORDER[\s\S]*'WEEK', 'CLIENT', 'CANDIDATE', 'STATUS'/);
   assert.match(batchSource, /draggable="true"/);
-  assert.match(batchSource, /data-batch-action="group-up"/);
-  assert.match(batchSource, /data-batch-action="group-down"/);
-  assert.match(batchSource, /data-batch-action="toggle-group"/);
-  assert.match(batchSource, /data-batch-action="toggle-group-all"/);
-  assert.match(batchSource, /collapsed_group_ids: new Set\(\)/);
+  assert.match(batchSource, /Sort priority \(drag only\)/);
+  assert.doesNotMatch(batchSource, /data-batch-action="group-up"/);
+  assert.doesNotMatch(batchSource, /data-batch-action="group-down"/);
+  assert.doesNotMatch(batchSource, /data-batch-action="toggle-group"/);
+  assert.doesNotMatch(batchSource, /data-batch-action="toggle-group-all"/);
+  assert.doesNotMatch(batchSource, /collapsed_group_ids: new Set\(\)/);
+  assert.doesNotMatch(indexSource, /#modal\.invbatch-modal \.invbatch-row\s*\{[\s\S]*display:flex/);
+  assert.doesNotMatch(indexSource, /#modal\.invbatch-modal \.invbatch-badge\s*\{[\s\S]*background:#0b152a/);
   assert.match(batchSource, /invbatch-toolbar-row--primary/);
   assert.match(batchSource, /invbatch-toolbar-row--secondary/);
   assert.doesNotMatch(batchSource, /data-batch-field="grouping"/);
-  assert.match(batchSource, /class="invbatch-row invbatch-row--header"/);
+  assert.match(batchSource, /<table class="invbatch-candidate-table">/);
+  assert.match(batchSource, /<th class="invbatch-cell invbatch-cell--week" scope="col">Week ending<\/th>/);
+  assert.match(batchSource, /<th class="invbatch-cell invbatch-cell--client" scope="col">Trust \/ client<\/th>/);
+  assert.doesNotMatch(batchSource, /invbatch-group-header/);
   assert.match(batchSource, /class="btn btn-sm btn-outline invbatch-drawer-close"/);
   assert.match(batchSource, /captureInvoiceBatchViewport/);
   assert.match(batchSource, /restoreInvoiceBatchViewport/);
@@ -124,7 +132,8 @@ test('batch grouping is a four-level draggable order and the filter drawer remai
   assert.match(batchCss, /\.invbatch-filter-drawer[\s\S]*z-index: 120/);
   assert.match(batchCss, /\.invbatch-filter-drawer[\s\S]*inset: 58px 10px 10px auto/);
   assert.match(batchCss, /\.invbatch-filter-drawer header[\s\S]*position: sticky/);
-  assert.match(batchCss, /\.invbatch-group-toggle-all[\s\S]*width: 32px/);
+  assert.doesNotMatch(batchCss, /\.invbatch-group-toggle-all/);
+  assert.match(batchCss, /\.invbatch-cell[\s\S]*border-right:[\s\S]*border-bottom:/);
   assert.match(batchCss, /\.invbatch-badge--ready[\s\S]*background: #86efac/);
 });
 
