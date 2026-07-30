@@ -29326,6 +29326,9 @@ async function bankingPayPreview(pay_date) {
       hasOwnProgressField(progress, 'replacement_required') &&
       hasOwnProgressField(progress, 'replacement_session_id') &&
       hasOwnProgressField(progress, 'stored_ready_mismatch') &&
+      hasOwnProgressField(progress, 'recovery_required') &&
+      hasOwnProgressField(progress, 'recovery_scheduled') &&
+      Array.isArray(progress.pending_owner_failures) &&
       hasOwnProgressField(progress, 'selected_eligible_ready_row_count') &&
       (hasOwnProgressField(progress, 'session_status') || hasOwnProgressField(progress, 'status')) &&
       Array.isArray(progress.session_blocker_codes) &&
@@ -29417,6 +29420,13 @@ async function bankingPayPreview(pay_date) {
     const sectionCounts = isPlainObject(progress?.section_counts) ? progress.section_counts : {};
     const sessionBlockerCodes = blockerCodes(progress?.session_blocker_codes);
     const draftBlockerCodes = blockerCodes(progress?.draft_blocker_codes);
+    const recoveryRequiredCount = count(progress, 'recovery_required_count');
+    const recoveryScheduledCount = count(progress, 'recovery_scheduled_count');
+    const recoveryRequired = progress?.recovery_required === true || recoveryRequiredCount > 0;
+    const recoveryScheduled = progress?.recovery_scheduled === true || recoveryScheduledCount > 0;
+    const pendingOwnerFailures = Array.isArray(progress?.pending_owner_failures)
+      ? progress.pending_owner_failures.filter((row) => isPlainObject(row)).slice(0, 10)
+      : [];
     const sessionStatus = trimStr(progress?.session_status || progress?.status || '').toUpperCase();
     const replacementSessionIdText = trimStr(progress?.replacement_session_id || '');
     const obsolete = !!(
@@ -29458,6 +29468,7 @@ async function bankingPayPreview(pay_date) {
       count(lineCounts, 'unknown') > 0 ||
       count(jobCounts, 'unresolved_failed') > 0 ||
       count(jobCounts, 'unresolved_dead') > 0 ||
+      recoveryRequired ||
       blockerIndicatesFailure ||
       ['FAILED', 'ERROR'].includes(trimStr(progress?.phase || progress?.progress_state || '').toUpperCase())
     );
@@ -29507,7 +29518,9 @@ async function bankingPayPreview(pay_date) {
       : (obsolete
           ? 'Payment preview is obsolete.'
           : (failure
-              ? 'Payment preview could not be prepared for every candidate.'
+              ? (recoveryRequired
+                  ? (backendStatusText || 'Payment preview stopped because a candidate refresh no longer has an active job. Refresh Banking Pay to retry safely.')
+                  : 'Payment preview could not be prepared for every candidate.')
               : (ready
                   ? (readyEmpty ? 'No payable rows found.' : 'Payment preview is ready.')
                   : ((sessionReadyReported || storedReadyMismatch || backendClaimsReady)
@@ -29527,6 +29540,11 @@ async function bankingPayPreview(pay_date) {
       storedReadyMismatch,
       sessionBlockerCodes,
       draftBlockerCodes,
+      recoveryRequired,
+      recoveryRequiredCount,
+      recoveryScheduled,
+      recoveryScheduledCount,
+      pendingOwnerFailures,
       obsolete,
       replacementRequired,
       replacementSessionId: replacementSessionIdText || null,
@@ -29569,6 +29587,8 @@ async function bankingPayPreview(pay_date) {
       pushRows(source.activeJobs);
       pushRows(source.pending_candidate_jobs);
       pushRows(source.pendingCandidateJobs);
+      pushRows(source.pending_owner_failures);
+      pushRows(source.pendingOwnerFailures);
       pushRows(source.candidate_status_rows);
       pushRows(source.candidate_statuses);
       pushRows(source.candidate_sample_rows);
@@ -29587,6 +29607,27 @@ async function bankingPayPreview(pay_date) {
     const normaliseRow = (row) => {
       const cloned = Object.assign({}, row);
       const candidateId = trimStr(cloned.candidate_id || cloned.candidateId || cloned.candidate_uuid || cloned.candidateUuid || '');
+      const ownerFailureCode = trimStr(cloned.failure_code || cloned.error_code || '').toUpperCase();
+      const ownerRecoveryScheduled = cloned.automatic_recovery_scheduled === true || cloned.recovery_scheduled === true;
+      if (candidateId && ownerFailureCode === 'WORKBENCH_PENDING_SCOPE_WITHOUT_ACTIVE_JOB') {
+        const terminalStatus = ownerRecoveryScheduled ? 'QUEUED' : 'FAILED';
+        cloned.candidate_id = candidateId;
+        cloned.candidateId = candidateId;
+        cloned.job_status = terminalStatus;
+        cloned.latest_job_status = terminalStatus;
+        cloned.status = terminalStatus;
+        cloned.candidate_status = terminalStatus;
+        cloned.error_code = ownerFailureCode;
+        cloned.failure_code = ownerFailureCode;
+        cloned.status_text = trimStr(cloned.message || cloned.status_text || '') || (
+          ownerRecoveryScheduled
+            ? 'CloudTMS is reconnecting this candidate to its active refresh job.'
+            : 'This candidate is pending without a valid active refresh job.'
+        );
+        cloned.display_status_text = cloned.status_text;
+        cloned.recovery_scheduled = ownerRecoveryScheduled;
+        cloned.terminal_owner_failure = !ownerRecoveryScheduled;
+      }
       const jobTypeRaw = trimStr(cloned.latest_job_type || cloned.latestJobType || cloned.job_type || cloned.jobType || cloned.canonical_job_type || cloned.canonicalJobType || cloned.resolved_job_type || cloned.resolvedJobType || cloned.type || '').toUpperCase();
       const statusRaw = trimStr(cloned.latest_job_status || cloned.latestJobStatus || cloned.job_status || cloned.jobStatus || cloned.latest_status || cloned.latestStatus || cloned.status || cloned.new_status || cloned.newStatus || cloned.candidate_status || cloned.phase || cloned.state || '').toUpperCase();
       const looksLikeDeltaJob = candidateId && deltaJobTypes.has(jobTypeRaw);
@@ -31009,6 +31050,7 @@ async function bankingPayPreview(pay_date) {
 
   const applyAuthoritativePreviewVisualState = (sourcePayload = null) => {
     const state = getAuthoritativeWorkbenchProgressState(sourcePayload);
+    const recoveryFailure = state.recoveryRequired === true;
     const firstPageSessionId = trimStr(wiz.preview.__canonical_first_page_session_id || '');
     const firstPageSessionVersion = normaliseWorkbenchSessionVersion(wiz.preview.__canonical_first_page_session_version || '');
     const firstPageApplied = !!(
@@ -31033,6 +31075,91 @@ async function bankingPayPreview(pay_date) {
     wiz.preview.progress_only = !readyVisual;
     wiz.preview.bootstrap_only = false;
     wiz.preview.loading = readyVisual ? false : !terminalWithoutReady;
+
+    if (recoveryFailure) {
+      const failureCode = 'WORKBENCH_PENDING_SCOPE_WITHOUT_ACTIVE_JOB';
+      const failureMessage = state.statusText || 'Payment preview stopped because a candidate refresh no longer has an active job. Refresh Banking Pay to retry safely.';
+      const failureRows = Array.isArray(state.pendingOwnerFailures) ? state.pendingOwnerFailures.slice(0, 10) : [];
+      const progressCopy = state.progress ? (deep(state.progress) || state.progress) : {};
+      wiz.preview.loading = false;
+      wiz.preview.error = failureMessage;
+      wiz.preview.failure = {
+        ok: false,
+        code: failureCode,
+        error_code: failureCode,
+        message: failureMessage,
+        can_retry: true,
+        recovery_required: true,
+        recovery_required_count: state.recoveryRequiredCount,
+        pending_owner_failures: failureRows
+      };
+      wiz.preview.data = {
+        ok: true,
+        session_id: state.progressSessionId || state.currentSessionId || null,
+        session_version: state.progressSessionVersion || state.currentSessionVersion || null,
+        ready: false,
+        ready_flag: false,
+        progress_only: true,
+        preview_ready_visual: false,
+        status_text: failureMessage,
+        progress: progressCopy,
+        failure: deep(wiz.preview.failure) || wiz.preview.failure
+      };
+      wiz.preview.readiness = null;
+      wiz.preview.candidateDebtInfo = {};
+      wiz.preview.pageData = null;
+      wiz.preview.page_data = null;
+      wiz.preview.pages = {};
+      wiz.preview.pageCache = {};
+      wiz.preview.page_cache = {};
+      wiz.preview.previewPageCache = {};
+      wiz.preview.preview_page_cache = {};
+      wiz.preview.first_page_applied = false;
+      wiz.preview.__canonical_first_page_session_id = '';
+      wiz.preview.__canonical_first_page_session_version = '';
+      wiz.workbench.canonical_preview_lines = [];
+      wiz.workbench.preview_rows = [];
+      wiz.workbench.ready_preview_lines = [];
+      wiz.workbench.preview_pages = {};
+      wiz.workbench.preview_page_cache = {};
+      wiz.workbench.pageCache = {};
+      wiz.workbench.payees = [];
+      wiz.workbench.summary = {};
+      wiz.workbench.create_draft_refresh_pending = false;
+      wiz.workbench.preview_reopen_required = false;
+      if (wiz.decisions && typeof wiz.decisions === 'object') {
+        wiz.decisions.create_draft_refresh_pending = false;
+        wiz.decisions.canonical_preview_lines = [];
+        wiz.decisions.preview_rows = [];
+        wiz.decisions.ready_preview_lines = [];
+        wiz.decisions.draftable_now = [];
+        wiz.decisions.ready_to_pay_now = [];
+        wiz.decisions.blocked_now = [];
+        wiz.decisions.blocked_for_pay_now = [];
+      }
+
+      const notificationKey = [
+        failureCode,
+        state.progressSessionId || state.currentSessionId || '',
+        state.progressSessionVersion || state.currentSessionVersion || '',
+        String(state.recoveryRequiredCount || 0)
+      ].join(':');
+      if (trimStr(wiz.workbench.__owner_recovery_failure_notice_key || '') !== notificationKey) {
+        wiz.workbench.__owner_recovery_failure_notice_key = notificationKey;
+        if (typeof openUiConfirmModal === 'function') {
+          Promise.resolve().then(() => openUiConfirmModal({
+            title: 'Banking Pay could not finish refreshing',
+            message: `${failureMessage}\n\nNo payment draft was created. Refresh Banking Pay to let CloudTMS retry the affected candidate safely.`,
+            confirm_label: 'OK',
+            hide_cancel: true,
+            confirm_class: 'btn btn-primary',
+            kind: 'banking-pay-owner-recovery-notice'
+          })).catch(() => {});
+        } else if (typeof window !== 'undefined' && typeof window.__toast === 'function') {
+          window.__toast(`${failureMessage} No payment draft was created. Refresh Banking Pay to retry safely.`);
+        }
+      }
+    }
 
     const applyFlags = (target) => {
       if (!isPlainObject(target)) return;
@@ -32461,6 +32588,10 @@ async function bankingPayPreview(pay_date) {
           line_failed: Number(progressObj?.line_units_failed || progressObj?.line_counts?.failed || 0),
           job_failed: Number(progressObj?.unresolved_failed_jobs || progressObj?.job_counts?.unresolved_failed || 0),
           job_dead: Number(progressObj?.unresolved_dead_jobs || progressObj?.job_counts?.unresolved_dead || 0),
+          recovery_required: progressObj?.recovery_required === true,
+          recovery_required_count: Number(progressObj?.recovery_required_count || 0),
+          recovery_scheduled: progressObj?.recovery_scheduled === true,
+          recovery_scheduled_count: Number(progressObj?.recovery_scheduled_count || 0),
           blockers: Array.isArray(progressObj?.blocker_codes) ? progressObj.blocker_codes : []
         });
         const rowsAvailable = workbenchProgressHasRowsAvailable(progressObj) || workbenchProgressHasRowsAvailable(progressPayload);
