@@ -23745,6 +23745,12 @@ function attachBankingNavAlertPopoverHandlers() {
       document.querySelectorAll('[data-banking-nav-alert-trigger="1"][aria-expanded="true"]').forEach((node) => node.setAttribute('aria-expanded', 'false'));
     } catch {}
   };
+  const uiConfirm = async (title, message) => {
+    if (typeof uiConfirmModal === 'function') {
+      return !!(await uiConfirmModal(title, message, { kind: 'warn' }));
+    }
+    return !!window.confirm(message);
+  };
   const removePreferencesDialog = () => {
     try {
       document.querySelectorAll('[data-banking-alert-preferences-dialog="1"]').forEach((node) => {
@@ -293655,6 +293661,7 @@ function invoiceModalResetEdits(modalCtx) {
     // ✅ References: support BOTH legacy array + new keyed staging model
     reference_updates: [],
     reference_updates_by_key: {},
+    timesheet_location_updates_by_id: {},
 
     // status staging
     staged_status: { issued: null, paid: null, on_hold: null },
@@ -293675,6 +293682,7 @@ function invoiceModalResetEdits(modalCtx) {
         add_segment_refs: [],
         reference_updates: [],
         reference_updates_by_key: {},
+        timesheet_location_updates_by_id: {},
         staged_status: { issued: null, paid: null, on_hold: null },
         staged_dates: { issued_at_utc: null, paid_at_utc: null, status_date_utc: null }
       };
@@ -293709,6 +293717,7 @@ function invoiceModalHasPendingEdits(modalCtx) {
     nonEmpty(e.reference_updates_by_key) ||
     nonEmpty(e.reference_updates_map) ||
     nonEmpty(e.reference_updates);
+  const hasLocations = nonEmpty(e.timesheet_location_updates_by_id);
 
   return (
     hasStagedStatus ||
@@ -293717,7 +293726,8 @@ function invoiceModalHasPendingEdits(modalCtx) {
     (Array.isArray(e.add_adjustments) && e.add_adjustments.length > 0) ||
     nonEmpty(e.remove_segment_refs) ||
     nonEmpty(e.add_segment_refs) ||
-    hasRefs
+    hasRefs ||
+    hasLocations
   );
 }
 
@@ -294392,6 +294402,53 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
 
   // Compile now (but do NOT mutate staged row-level updates)
   const reference_updates_compiled = compileReferenceUpdatesForDb(reference_updates);
+  const canonicalLocation = (value) => String(value == null ? '' : value)
+    .trim().replace(/\s+/g, ' ').toLowerCase();
+  const compileLocationUpdatesForDb = () => {
+    const staged =
+      (e.timesheet_location_updates_by_id
+        && typeof e.timesheet_location_updates_by_id === 'object'
+        && !Array.isArray(e.timesheet_location_updates_by_id))
+        ? e.timesheet_location_updates_by_id
+        : {};
+    if (!Object.keys(staged).length) return [];
+    const sourcesById =
+      (modalCtx?.timesheet_reference_sources_by_id
+        && typeof modalCtx.timesheet_reference_sources_by_id === 'object')
+        ? modalCtx.timesheet_reference_sources_by_id
+        : modalCtx?.dataLoaded?.timesheet_reference_sources_by_id;
+    if (!sourcesById || typeof sourcesById !== 'object') {
+      throw new Error('Timesheet hospital and ward sources are missing. Reload the invoice and try again.');
+    }
+    return Object.keys(staged).sort().flatMap(timesheetId => {
+      const update = staged[timesheetId] || {};
+      const source = sourcesById[timesheetId];
+      if (!source || typeof source !== 'object') {
+        throw new Error('A timesheet on this invoice has changed. Reload the invoice and try again.');
+      }
+      const hospital = canonicalLocation(update.hospital_norm);
+      const ward = canonicalLocation(update.ward_norm);
+      if (
+        hospital === canonicalLocation(source.hospital_norm)
+        && ward === canonicalLocation(source.ward_norm)
+      ) return [];
+      return [{
+        timesheet_id: timesheetId,
+        hospital_norm: hospital || null,
+        ward_norm: ward || null
+      }];
+    });
+  };
+  const timesheet_location_updates = compileLocationUpdatesForDb();
+  const hasTimesheetSourceEdits =
+    reference_updates_compiled.length > 0 || timesheet_location_updates.length > 0;
+  const invoiceHadGeneratedOrActivePreview = !!(
+    inv.preview_document_version_id
+    || inv.invoice_pdf_r2_key
+    || inv.invoice_pdf_generated_at_utc
+    || inv.active_document_operation_id
+    || String(inv.document_state || '').trim().toUpperCase() === 'READY'
+  );
 
   const payload = {};
   if (remove_invoice_line_ids.length) payload.remove_invoice_line_ids = remove_invoice_line_ids;
@@ -294402,6 +294459,13 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
 
   // ✅ Only send DB-applied compiled updates (never row-level edits)
   if (reference_updates_compiled.length) payload.reference_updates = reference_updates_compiled;
+  if (timesheet_location_updates.length) {
+    payload.timesheet_location_updates = timesheet_location_updates;
+  }
+  if (hasTimesheetSourceEdits) {
+    payload.request_timesheet_documents = true;
+    if (invoiceHadGeneratedOrActivePreview) payload.request_preview = true;
+  }
 
   const hasApplyEdits = Object.keys(payload).length > 0;
   const asyncInvoiceUiEnabled =
@@ -294471,6 +294535,13 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
 
   // ✅ Confirm dialogs (status changes only)
   // (Do this BEFORE we mark the modal busy)
+  if (hasTimesheetSourceEdits) {
+    const message = invoiceHadGeneratedOrActivePreview
+      ? 'These changes will force a new timesheet image to be generated and will queue an invoice to be regenerated. Are you sure you want to proceed?'
+      : 'These changes will force a new timesheet image to be generated. Are you sure you want to proceed?';
+    const ok = await uiConfirm('Regenerate document images?', message);
+    if (!ok) return;
+  }
   if (wantHold !== null && wantHold !== curIsHold) {
     const ok = window.confirm(wantHold ? 'Put this invoice ON HOLD?' : 'Remove ON HOLD from this invoice?');
     if (!ok) return;
@@ -294640,6 +294711,17 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
         const out = (res && typeof res === 'object') ? res : {};
         if (!out.ok) {
           throw new Error(out.error || 'Failed to save edits');
+        }
+        if (Array.isArray(out.accepted_operations) && out.accepted_operations.length) {
+          try {
+            window.registerInvoiceOperationsFromResponse?.(out, {
+              modal_identity: `invoice:${invoiceId}`,
+              explicit_operation_ids: true
+            });
+          } catch {}
+        }
+        if (out.operation_submission_error?.message) {
+          toast('The changes were saved and the replacement documents were queued, but immediate processing could not be confirmed.');
         }
 
         // invoice content changed → eligibility cache must be treated as stale
@@ -295038,8 +295120,9 @@ function attachInvoiceModalDelegatedHandlers(modalCtx, rootEl, deps) {
         nonEmpty(e.reference_updates_by_key) ||
         nonEmpty(e.reference_updates_map) ||
         nonEmpty(e.reference_updates);
+      const hasLocations = nonEmpty(e.timesheet_location_updates_by_id);
 
-      return !!(hasStatus || hasLines || hasSeg || hasRefs);
+      return !!(hasStatus || hasLines || hasSeg || hasRefs || hasLocations);
     } catch {
       return false;
     }
@@ -295167,6 +295250,9 @@ function attachInvoiceModalDelegatedHandlers(modalCtx, rootEl, deps) {
     // New canonical keyed container (JSON-safe object map)
     if (!mc.invoiceEdits.reference_updates_by_key || typeof mc.invoiceEdits.reference_updates_by_key !== 'object' || Array.isArray(mc.invoiceEdits.reference_updates_by_key)) {
       mc.invoiceEdits.reference_updates_by_key = {};
+    }
+    if (!mc.invoiceEdits.timesheet_location_updates_by_id || typeof mc.invoiceEdits.timesheet_location_updates_by_id !== 'object' || Array.isArray(mc.invoiceEdits.timesheet_location_updates_by_id)) {
+      mc.invoiceEdits.timesheet_location_updates_by_id = {};
     }
   };
 
@@ -295724,6 +295810,7 @@ async function openInvoiceModal(row) {
   // ✅ References: support BOTH legacy array + new keyed staging model
   reference_updates: [],
   reference_updates_by_key: {},
+  timesheet_location_updates_by_id: {},
 
   // ✅ NEW: staged status toggles (null = unchanged, boolean = desired state)
   staged_status: { issued: null, paid: null, on_hold: null },
@@ -295769,6 +295856,7 @@ async function openInvoiceModal(row) {
     add_segment_refs: [],
     reference_updates: [],
     reference_updates_by_key: {},
+    timesheet_location_updates_by_id: {},
     staged_status: { issued: null, paid: null, on_hold: null },
     staged_dates: { issued_at_utc: null, paid_at_utc: null, status_date_utc: null }
   };
@@ -295798,6 +295886,10 @@ async function openInvoiceModal(row) {
   out.reference_updates_by_key =
     (e.reference_updates_by_key && typeof e.reference_updates_by_key === 'object' && !Array.isArray(e.reference_updates_by_key))
       ? cloneJson(e.reference_updates_by_key, {})
+      : {};
+  out.timesheet_location_updates_by_id =
+    (e.timesheet_location_updates_by_id && typeof e.timesheet_location_updates_by_id === 'object' && !Array.isArray(e.timesheet_location_updates_by_id))
+      ? cloneJson(e.timesheet_location_updates_by_id, {})
       : {};
 
   // staged objects
@@ -295873,6 +295965,8 @@ async function openInvoiceModal(row) {
   remove_segment_refs: [],
   add_segment_refs: [],
   reference_updates: [],
+  reference_updates_by_key: {},
+  timesheet_location_updates_by_id: {},
   staged_status: { issued: null, paid: null, on_hold: null },
   staged_dates: { issued_at_utc: null, paid_at_utc: null, status_date_utc: null }
 };
@@ -295895,6 +295989,10 @@ const byKey =
     : {};
 
 e.reference_updates_by_key = byKey;
+e.timesheet_location_updates_by_id =
+  (j?.timesheet_location_updates_by_id && typeof j.timesheet_location_updates_by_id === 'object' && !Array.isArray(j.timesheet_location_updates_by_id))
+    ? cloneJson(j.timesheet_location_updates_by_id, {})
+    : {};
 
 if (byKey && typeof byKey === 'object' && Object.keys(byKey).length > 0) {
   const keys = Object.keys(byKey).sort();
@@ -295927,6 +296025,18 @@ if (byKey && typeof byKey === 'object' && Object.keys(byKey).length > 0) {
         if (!Array.isArray(e.remove_segment_refs)) e.remove_segment_refs = Array.isArray(j?.remove_segment_refs) ? cloneJson(j.remove_segment_refs, []) : [];
         if (!Array.isArray(e.add_segment_refs)) e.add_segment_refs = Array.isArray(j?.add_segment_refs) ? cloneJson(j.add_segment_refs, []) : [];
         if (!Array.isArray(e.reference_updates)) e.reference_updates = Array.isArray(j?.reference_updates) ? cloneJson(j.reference_updates, []) : [];
+        if (!e.reference_updates_by_key || typeof e.reference_updates_by_key !== 'object' || Array.isArray(e.reference_updates_by_key)) {
+          e.reference_updates_by_key =
+            (j?.reference_updates_by_key && typeof j.reference_updates_by_key === 'object' && !Array.isArray(j.reference_updates_by_key))
+              ? cloneJson(j.reference_updates_by_key, {})
+              : {};
+        }
+        if (!e.timesheet_location_updates_by_id || typeof e.timesheet_location_updates_by_id !== 'object' || Array.isArray(e.timesheet_location_updates_by_id)) {
+          e.timesheet_location_updates_by_id =
+            (j?.timesheet_location_updates_by_id && typeof j.timesheet_location_updates_by_id === 'object' && !Array.isArray(j.timesheet_location_updates_by_id))
+              ? cloneJson(j.timesheet_location_updates_by_id, {})
+              : {};
+        }
         if (!e.staged_status || typeof e.staged_status !== 'object') {
           e.staged_status = (j?.staged_status && typeof j.staged_status === 'object')
             ? { issued: j.staged_status.issued ?? null, paid: j.staged_status.paid ?? null, on_hold: j.staged_status.on_hold ?? null }
@@ -295989,6 +296099,11 @@ if (byKey && typeof byKey === 'object' && Object.keys(byKey).length > 0) {
   const hasRefStaging =
   (e.reference_updates_by_key && typeof e.reference_updates_by_key === 'object' && !Array.isArray(e.reference_updates_by_key) && Object.keys(e.reference_updates_by_key).length > 0) ||
   (Array.isArray(e.reference_updates) && e.reference_updates.length > 0);
+  const hasLocationStaging =
+    e.timesheet_location_updates_by_id
+    && typeof e.timesheet_location_updates_by_id === 'object'
+    && !Array.isArray(e.timesheet_location_updates_by_id)
+    && Object.keys(e.timesheet_location_updates_by_id).length > 0;
 
 return (
   hasStagedStatus ||
@@ -295997,7 +296112,8 @@ return (
   (Array.isArray(e.add_adjustments) && e.add_adjustments.length > 0) ||
   (Array.isArray(e.remove_segment_refs) && e.remove_segment_refs.length > 0) ||
   (Array.isArray(e.add_segment_refs) && e.add_segment_refs.length > 0) ||
-  hasRefStaging
+  hasRefStaging ||
+  hasLocationStaging
 );
 
   };
@@ -297080,10 +297196,8 @@ function invoiceModalGetInvoiceData(modalCtx) {
 async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {}) {
   if (!parentModalCtx || typeof parentModalCtx !== 'object') throw new Error('Missing parent modal context.');
 
-  // Ensure showModal uses the invoice modal ctx (shared context across modal stack)
   try { window.modalCtx = parentModalCtx; } catch {}
 
-  // Determine whether invoice is currently editable (source-of-truth = invoice modal frame mode)
   let canEdit = !!parentModalCtx.isEditing;
   try {
     const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
@@ -297093,36 +297207,46 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
     }
   } catch {}
 
-  // Source rows must already be present (zero extra calls)
-  // Prefer invoiceModalGetInvoiceData() so rows are normalised (row_key/kind/day_date).
   const invData = (typeof invoiceModalGetInvoiceData === 'function') ? invoiceModalGetInvoiceData(parentModalCtx) : null;
-
+  const invoice = invData?.invoice || {};
+  const invoiceStatus = String(invoice.status || '').trim().toUpperCase();
+  canEdit = !!(
+    canEdit
+    && !invoice.issued_at_utc
+    && !invoice.paid_at_utc
+    && !['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'].includes(invoiceStatus)
+    && ['DRAFT', 'ON_HOLD'].includes(invoiceStatus)
+  );
   const refRows = Array.isArray(invData?.reference_rows)
     ? invData.reference_rows
     : (Array.isArray(parentModalCtx?.reference_rows) ? parentModalCtx.reference_rows
       : (Array.isArray(parentModalCtx?.data?.reference_rows) ? parentModalCtx.data.reference_rows : []));
-
   const refRowsByKey = (invData?.reference_rows_by_key && typeof invData.reference_rows_by_key === 'object')
     ? invData.reference_rows_by_key
     : ((parentModalCtx?.reference_rows_by_key && typeof parentModalCtx.reference_rows_by_key === 'object')
         ? parentModalCtx.reference_rows_by_key
         : {});
+  const sourcesById =
+    (invData?.timesheet_reference_sources_by_id && typeof invData.timesheet_reference_sources_by_id === 'object')
+      ? invData.timesheet_reference_sources_by_id
+      : {};
 
-  // Ensure staging container exists
   parentModalCtx.invoiceEdits = (parentModalCtx.invoiceEdits && typeof parentModalCtx.invoiceEdits === 'object')
     ? parentModalCtx.invoiceEdits
     : {};
-
-  // ✅ Use keyed staging model (JSON-safe) so rows never collide and Save pipeline can serialise deterministically.
   parentModalCtx.invoiceEdits.reference_updates_by_key =
     (parentModalCtx.invoiceEdits.reference_updates_by_key && typeof parentModalCtx.invoiceEdits.reference_updates_by_key === 'object')
       ? parentModalCtx.invoiceEdits.reference_updates_by_key
       : {};
-
-  // Keep legacy array for backward compatibility (some renderers still look at reference_updates[])
   parentModalCtx.invoiceEdits.reference_updates = Array.isArray(parentModalCtx.invoiceEdits.reference_updates)
     ? parentModalCtx.invoiceEdits.reference_updates
     : [];
+  parentModalCtx.invoiceEdits.timesheet_location_updates_by_id =
+    (parentModalCtx.invoiceEdits.timesheet_location_updates_by_id
+      && typeof parentModalCtx.invoiceEdits.timesheet_location_updates_by_id === 'object'
+      && !Array.isArray(parentModalCtx.invoiceEdits.timesheet_location_updates_by_id))
+      ? parentModalCtx.invoiceEdits.timesheet_location_updates_by_id
+      : {};
 
   const rowKeyOf = (r) => {
     if (!r || typeof r !== 'object') return '';
@@ -297139,7 +297263,6 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
     return `${tsid}::${kind}::${sid}::${dt}::${st}::${en}`;
   };
 
-  // Existing staged edits map by row key (priority: by_key, else legacy array)
   const stagedByKey = new Map();
   try {
     const byKey = parentModalCtx.invoiceEdits.reference_updates_by_key || {};
@@ -297160,7 +297283,17 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
     }
   } catch {}
 
-  // ✅ UPDATED: do NOT fall back to showing timesheet_id anywhere.
+  const canonicalLocation = (value) => String(value == null ? '' : value)
+    .trim().replace(/\s+/g, ' ').toLowerCase();
+  const professionalLocation = (value) => {
+    const canonical = canonicalLocation(value);
+    if (!canonical) return '';
+    return canonical
+      .replace(/\b[a-z]/g, character => character.toUpperCase())
+      .replace(/\bSt Richards\b/g, "St Richard's")
+      .replace(/\bNhs\b/g, 'NHS')
+      .replace(/\bIcu\b/g, 'ICU');
+  };
   const fmtRowCandidate = (r) => {
     const name =
       r?.candidate_display ||
@@ -297184,7 +297317,7 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
     return s;
   };
 
-  const initialValueFor = (r) => {
+  const initialReferenceValueFor = (r) => {
     const k = rowKeyOf(r);
     const staged = stagedByKey.get(k);
     if (staged && staged.current_reference != null) return String(staged.current_reference);
@@ -297192,56 +297325,81 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
     return '';
   };
 
+  const initialLocationValueFor = (timesheetId, field) => {
+    const staged = parentModalCtx.invoiceEdits.timesheet_location_updates_by_id?.[timesheetId];
+    if (staged && Object.prototype.hasOwnProperty.call(staged, field)) {
+      return professionalLocation(staged[field]);
+    }
+    return professionalLocation(sourcesById?.[timesheetId]?.[field]);
+  };
+
+  const groupedRows = (() => {
+    const groups = new Map();
+    for (const row of refRows) {
+      const timesheetId = String(row?.timesheet_id || '').trim();
+      if (!timesheetId) continue;
+      if (!groups.has(timesheetId)) groups.set(timesheetId, []);
+      groups.get(timesheetId).push(row);
+    }
+    for (const timesheetId of Object.keys(sourcesById || {}).sort()) {
+      if (!groups.has(timesheetId)) groups.set(timesheetId, [{ timesheet_id: timesheetId }]);
+    }
+    return Array.from(groups.entries()).map(([timesheetId, rows]) => ({ timesheetId, rows }));
+  })();
+
   const disabledAttr = canEdit ? '' : 'disabled';
   const readOnlyAttr = canEdit ? '' : 'readonly';
 
   const renderTableRows = () => {
-    if (!refRows.length) {
-      return `<tr><td colspan="5" class="text-muted">No reference rows on this invoice.</td></tr>`;
+    if (!groupedRows.length) {
+      return `<tr><td colspan="7" class="text-muted">No timesheet source rows are available on this invoice.</td></tr>`;
     }
-
-    return refRows.map((r) => {
+    return groupedRows.flatMap(group => group.rows.map((r, rowIndex) => {
       const k = rowKeyOf(r);
       const who = escapeHtml(fmtRowCandidate(r));
       const dt = escapeHtml(fmtRowDate(r));
       const isReq = !!r?.is_required;
-
-      const cur = initialValueFor(r);
-      const curTrim = String(cur || '').trim();
-      const missing = isReq && !curTrim;
-
-      const reqTxt = isReq ? 'Yes' : 'No';
-      const missChip = missing ? `<span class="pill pill-warn">Missing</span>` : '';
-
+      const cur = initialReferenceValueFor(r);
+      const missing = isReq && !String(cur || '').trim();
+      const span = group.rows.length;
+      const referenceCell = k ? `
+        <input type="text" class="form-control form-control-sm"
+          data-ref-input="1" data-ref-row="${escapeHtml(k)}"
+          value="${escapeHtml(cur)}" placeholder="Enter reference"
+          ${disabledAttr} ${readOnlyAttr} />` : '<span class="text-muted">—</span>';
+      const locationCells = rowIndex === 0 ? `
+        <td rowspan="${span}" style="min-width:210px;vertical-align:middle;">
+          <input type="text" class="form-control form-control-sm"
+            data-location-input="hospital_norm"
+            data-timesheet-id="${escapeHtml(group.timesheetId)}"
+            value="${escapeHtml(initialLocationValueFor(group.timesheetId, 'hospital_norm'))}"
+            placeholder="Hospital" ${disabledAttr} ${readOnlyAttr} />
+        </td>
+        <td rowspan="${span}" style="min-width:170px;vertical-align:middle;">
+          <input type="text" class="form-control form-control-sm"
+            data-location-input="ward_norm"
+            data-timesheet-id="${escapeHtml(group.timesheetId)}"
+            value="${escapeHtml(initialLocationValueFor(group.timesheetId, 'ward_norm'))}"
+            placeholder="Ward" ${disabledAttr} ${readOnlyAttr} />
+        </td>` : '';
       return `
-        <tr data-ref-row="${escapeHtml(k)}">
+        <tr data-ref-row="${escapeHtml(k)}" data-timesheet-id="${escapeHtml(group.timesheetId)}">
           <td>${who || '—'}</td>
           <td>${dt || '—'}</td>
-          <td style="min-width:240px;">
-            <input type="text"
-              class="form-control form-control-sm"
-              data-ref-input="1"
-              data-ref-row="${escapeHtml(k)}"
-              value="${escapeHtml(cur)}"
-              placeholder="Enter reference"
-              ${disabledAttr}
-              ${readOnlyAttr}
-            />
-          </td>
-          <td>${escapeHtml(reqTxt)}</td>
-          <td class="text-end">${missChip}</td>
-        </tr>
-      `;
-    }).join('');
+          <td style="min-width:220px;">${referenceCell}</td>
+          <td>${isReq ? 'Yes' : 'No'} ${missing ? '<span class="pill pill-warn">Missing</span>' : ''}</td>
+          ${locationCells}
+        </tr>`;
+    })).join('');
   };
 
   const hintText = canEdit
-    ? `Edit references below. Click <b>Apply</b> to stage changes, then <b>Save</b> the invoice to commit.`
-    : `View-only. Click <b>Edit</b> on the invoice to amend reference numbers.`;
+    ? `Edit references, hospital or ward below. Click <b>Apply</b> to stage material changes, then <b>Save</b> the invoice to commit.`
+    : `View-only. Click <b>Edit</b> on the invoice to amend references, hospital or ward.`;
 
   const html = `
     <div class="p-3">
-      <div class="h6 mb-3">Reference Numbers</div>
+      <div class="h6 mb-3">Refs and Ward</div>
 
       <div class="text-muted small mb-2">
         ${hintText}
@@ -297255,7 +297413,8 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
               <th>Date</th>
               <th>Reference</th>
               <th>Required</th>
-              <th class="text-end"></th>
+              <th>Hospital</th>
+              <th>Ward</th>
             </tr>
           </thead>
           <tbody>
@@ -297266,15 +297425,15 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
 
       ${canEdit ? `
         <div class="d-flex justify-content-end gap-2 mt-3">
-          <button type="button" class="btn btn-sm btn-primary" id="invRefApply" ${refRows.length ? '' : 'disabled'}>Apply</button>
+          <button type="button" class="btn btn-sm btn-primary" id="invRefApply" ${groupedRows.length ? '' : 'disabled'}>Apply</button>
         </div>
       ` : ``}
     </div>
   `;
 
   showModal(
-    'Reference Numbers',
-    [{ key: 'main', label: 'References' }],
+    'Refs and Ward',
+    [{ key: 'main', label: 'References and ward' }],
     () => html,
     null,
     true,
@@ -297298,8 +297457,6 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
       // Build staged updates (do not submit)
       const listRoot = document.querySelector('#modalBody');
       const inputs = listRoot ? Array.from(listRoot.querySelectorAll('input[data-ref-input="1"]')) : [];
-
-      // Start from existing staged updates, then overwrite with current inputs
       const nextByKey = { ...(parentModalCtx.invoiceEdits.reference_updates_by_key || {}) };
 
       for (const inp of inputs) {
@@ -297311,28 +297468,57 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
         const src =
           (refRowsByKey && refRowsByKey[k]) ? refRowsByKey[k]
           : (refRows.find(r => rowKeyOf(r) === k) || null);
+        const original = String(src?.current_reference || '').trim();
+        if (val === original) {
+          delete nextByKey[k];
+        } else {
+          nextByKey[k] = {
+            row_key: k,
+            timesheet_id: src?.timesheet_id != null ? String(src.timesheet_id) : null,
+            ref_target: src?.ref_target != null ? String(src.ref_target) : (src?.kind != null ? String(src.kind) : null),
+            segment_id: src?.segment_id != null ? String(src.segment_id) : null,
+            day_ymd: src?.day_ymd != null ? String(src.day_ymd) : (src?.day_date != null ? String(src.day_date) : null),
+            start_utc: src?.start_utc != null ? String(src.start_utc) : null,
+            end_utc: src?.end_utc != null ? String(src.end_utc) : null,
+            current_reference: val
+          };
+        }
+      }
 
-        const upd = {
-          row_key: k,
-
-          // Always include the timesheet_id so Save pipeline accepts it.
-          timesheet_id: src?.timesheet_id != null ? String(src.timesheet_id) : null,
-
-          // Preserve DB-derived identifiers for later compile step (segment/freeform/timesheet)
-          ref_target: src?.ref_target != null ? String(src.ref_target) : (src?.kind != null ? String(src.kind) : null),
-          segment_id: src?.segment_id != null ? String(src.segment_id) : null,
-          day_ymd: src?.day_ymd != null ? String(src.day_ymd) : (src?.day_date != null ? String(src.day_date) : null),
-          start_utc: src?.start_utc != null ? String(src.start_utc) : null,
-          end_utc: src?.end_utc != null ? String(src.end_utc) : null,
-
-          // The edited value (still opaque at this stage; compilation happens in Save pipeline)
-          current_reference: val
-        };
-
-        nextByKey[k] = upd;
+      const nextLocations = {
+        ...(parentModalCtx.invoiceEdits.timesheet_location_updates_by_id || {})
+      };
+      const locationInputs = listRoot
+        ? Array.from(listRoot.querySelectorAll('input[data-location-input][data-timesheet-id]'))
+        : [];
+      const locationValues = new Map();
+      for (const inp of locationInputs) {
+        const timesheetId = String(inp.getAttribute('data-timesheet-id') || '').trim();
+        const field = String(inp.getAttribute('data-location-input') || '').trim();
+        if (!timesheetId || !['hospital_norm', 'ward_norm'].includes(field)) continue;
+        if (!locationValues.has(timesheetId)) locationValues.set(timesheetId, {});
+        locationValues.get(timesheetId)[field] = canonicalLocation(inp.value);
+      }
+      for (const [timesheetId, values] of locationValues) {
+        const base = sourcesById?.[timesheetId] || {};
+        const hospital = canonicalLocation(values.hospital_norm);
+        const ward = canonicalLocation(values.ward_norm);
+        if (
+          hospital === canonicalLocation(base.hospital_norm)
+          && ward === canonicalLocation(base.ward_norm)
+        ) {
+          delete nextLocations[timesheetId];
+        } else {
+          nextLocations[timesheetId] = {
+            timesheet_id: timesheetId,
+            hospital_norm: hospital,
+            ward_norm: ward
+          };
+        }
       }
 
       parentModalCtx.invoiceEdits.reference_updates_by_key = nextByKey;
+      parentModalCtx.invoiceEdits.timesheet_location_updates_by_id = nextLocations;
 
       try {
         const keys = Object.keys(nextByKey).sort();
@@ -297355,13 +297541,16 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
 
         parentModalCtx.invoiceState.invoiceEdits_json.reference_updates_by_key = cloneJsonLocal(nextByKey);
         parentModalCtx.invoiceState.invoiceEdits_json.reference_updates = cloneJsonLocal(parentModalCtx.invoiceEdits.reference_updates);
+        parentModalCtx.invoiceState.invoiceEdits_json.timesheet_location_updates_by_id = cloneJsonLocal(nextLocations);
 
         try { parentModalCtx._editsJsonSig = JSON.stringify(parentModalCtx.invoiceState.invoiceEdits_json || {}); } catch {}
       } catch {}
 
       closeTop();
 
-      try { window.dispatchEvent(new CustomEvent('modal-dirty')); } catch {}
+      if (Object.keys(nextByKey).length || Object.keys(nextLocations).length) {
+        try { window.dispatchEvent(new CustomEvent('modal-dirty')); } catch {}
+      }
       try { setTimeout(() => { rerender && rerender(); }, 0); } catch {}
     };
   }
@@ -298087,7 +298276,8 @@ function renderInvoiceModalContent(modalCtx, invoiceData) {
     header_snapshot_json,
     items,
     email_summary,
-    reference_rows
+    reference_rows,
+    timesheet_reference_sources_by_id
   } = invData || {};
 
   if (!invoice) return `<div class="p-3 text-muted">Invoice not found.</div>`;
@@ -298192,6 +298382,10 @@ const hasRefEdits = (() => {
     if (Object.keys(e.reference_updates_by_key).length > 0) return true;
   }
 
+  if (e.timesheet_location_updates_by_id && typeof e.timesheet_location_updates_by_id === 'object' && !Array.isArray(e.timesheet_location_updates_by_id)) {
+    if (Object.keys(e.timesheet_location_updates_by_id).length > 0) return true;
+  }
+
   return (Array.isArray(e.reference_updates) && e.reference_updates.length > 0);
 })();
 
@@ -298251,9 +298445,15 @@ const hasRefEdits = (() => {
   const emailDisabledAttr = doNotSend ? 'disabled' : '';
   const emailTitle = doNotSend ? 'title="Do not send invoice (closeout)"' : '';
 
-  const hasRefRows = Array.isArray(reference_rows) && reference_rows.length > 0;
-  const refDisabledAttr = hasRefRows ? '' : 'disabled';
-  const refTitle = hasRefRows ? '' : 'title="No reference rows on this invoice"';
+  const hasRefOrLocationRows =
+    (Array.isArray(reference_rows) && reference_rows.length > 0)
+    || (
+      timesheet_reference_sources_by_id
+      && typeof timesheet_reference_sources_by_id === 'object'
+      && Object.keys(timesheet_reference_sources_by_id).length > 0
+    );
+  const refDisabledAttr = hasRefOrLocationRows ? '' : 'disabled';
+  const refTitle = hasRefOrLocationRows ? '' : 'title="No timesheet reference or ward rows on this invoice"';
 
   const addDisabledAttr = canEditLines ? '' : 'disabled';
   const addDisabledTitle = canEditLines ? '' : 'title="Unissue and unpay the invoice first (staged), then you can edit lines."';
@@ -298300,11 +298500,11 @@ const hasRefEdits = (() => {
   const invoicePdfLabel = exactDocumentReady
     ? 'Open invoice PDF'
     : documentGenerating
-      ? 'Generating invoice PDF…'
+      ? 'Generate invoice PDF now'
       : documentFailed
         ? 'Retry invoice PDF'
         : 'Generate invoice PDF';
-  const invoicePdfDisabled = documentGenerating ? 'disabled' : '';
+  const invoicePdfDisabled = '';
   const invoicePdfBusy = documentGenerating ? 'true' : 'false';
   const invoicePdfOperationAttr = documentOperationId
     ? ` data-invoice-async-operation-id="${escapeHtml(documentOperationId)}"`
@@ -298368,7 +298568,7 @@ const hasRefEdits = (() => {
       <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
         <button type="button" class="btn btn-sm btn-primary" data-action="inv-open-pdf"
           data-invoice-async-family="DOCUMENT"${invoicePdfOperationAttr}${invoicePdfVersionAttr}
-          aria-busy="${invoicePdfBusy}" aria-disabled="${documentGenerating ? 'true' : 'false'}" ${invoicePdfDisabled}>
+          aria-busy="${invoicePdfBusy}" aria-disabled="false" ${invoicePdfDisabled}>
           ${escapeHtml(invoicePdfLabel)}
         </button>
 
@@ -298377,7 +298577,7 @@ const hasRefEdits = (() => {
         </button>
 
         <button type="button" class="btn btn-sm btn-outline-secondary" data-action="inv-open-reference-numbers" ${refDisabledAttr} ${refTitle}>
-          Reference Numbers
+          Refs and Ward
         </button>
 
         ${isEditing ? `
@@ -323946,6 +324146,7 @@ bindSave(btnSave, top);
       top.kind === 'timesheets-resolve' ||
       top.kind === 'resolve-candidate'  ||
       top.kind === 'resolve-client'     ||
+      top.kind === 'invoice-reference-numbers' ||
       top.kind === 'banking-pay-batch-child' ||
       isImportSummaryUtilityKind(top.kind) ||
       (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||

@@ -208,7 +208,7 @@ test('Invoice Summary uses one fixed attachment column and invoice document acti
   assert.match(mainSource, /function paintInvoiceAttachmentIndicator/);
   assert.match(mainSource, /Invoice attachment waiting to be generated/);
   assert.match(mainSource, /Invoice attachment generated/);
-  assert.match(mainSource, /Generating invoice PDF…/);
+  assert.match(mainSource, /Generate invoice PDF now/);
   assert.match(mainSource, /Generate invoice PDF/);
   assert.match(mainSource, /Open invoice PDF/);
   assert.match(asyncSource, /if \(state\.view_available\) return 'Ready'/);

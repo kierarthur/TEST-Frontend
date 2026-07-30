@@ -96,12 +96,12 @@ test('batch UI is server-paged, selection-contract based and loaded before the a
   assert.match(mainSource, /openInvoiceBatchV8WhenReady/);
   assert.doesNotMatch(mainSource, /Batch (?:Generate|Issue) modal not yet implemented/);
   assert.match(indexSource, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
-  assert.ok(indexSource.indexOf('js/main.js?v=20260730-invoice-async-auto-recovery-r8')
+  assert.ok(indexSource.indexOf('js/main.js?v=20260730-invoice-refs-ward-r9')
     < indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1'));
   assert.ok(indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1')
     < indexSource.indexOf('js/invoice-batch-modal.js?v=20260730-invoice-v8-auto-recovery-r8'));
   assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260730-invoice-v8-auto-recovery-r8')
-    < indexSource.indexOf('js/invoice-async-ui.js?v=20260730-invoice-auto-recovery-r12'));
+    < indexSource.indexOf('js/invoice-async-ui.js?v=20260730-invoice-refs-ward-r13'));
 });
 
 test('Timesheet and Invoice preparation use V8 POST identities and no active raw-key path', () => {
@@ -126,4 +126,45 @@ test('the effective evidence renderer exposes separate source and document async
   assert.match(effectiveRenderer, /data-asset-operation-id=/);
   assert.match(effectiveRenderer, /data-timesheet-document-state=/);
   assert.match(effectiveRenderer, /data-document-operation-id=/);
+});
+
+test('Refs and Ward stages only material editable source changes and confirms regeneration', () => {
+  assert.match(mainSource, /Refs and Ward/);
+  assert.match(mainSource, /data-location-input="hospital_norm"/);
+  assert.match(mainSource, /data-location-input="ward_norm"/);
+  assert.match(mainSource, /timesheet_location_updates_by_id/);
+  assert.match(
+    mainSource,
+    /canEdit[\s\S]*!\['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'\]\.includes\(invoiceStatus\)[\s\S]*\['DRAFT', 'ON_HOLD'\]\.includes\(invoiceStatus\)/
+  );
+  assert.match(
+    mainSource,
+    /hospital === canonicalLocation\(base\.hospital_norm\)[\s\S]*ward === canonicalLocation\(base\.ward_norm\)[\s\S]*delete nextLocations\[timesheetId\]/
+  );
+  assert.match(
+    mainSource,
+    /val === original[\s\S]*delete nextByKey\[k\]/
+  );
+  assert.match(
+    mainSource,
+    /These changes will force a new timesheet image to be generated and will queue an invoice to be regenerated/
+  );
+  assert.match(
+    mainSource,
+    /These changes will force a new timesheet image to be generated\. Are you sure you want to proceed\?/
+  );
+  assert.match(mainSource, /payload\.request_timesheet_documents = true/);
+  assert.match(mainSource, /payload\.request_preview = true/);
+  assert.match(mainSource, /k === 'invoice-reference-numbers'/);
+});
+
+test('an active invoice build remains an immediate Generate action rather than a disabled wait', () => {
+  assert.match(uiSource, /activeInvoiceCanAdvance/);
+  assert.match(uiSource, /Generate invoice PDF now/);
+  assert.match(
+    uiSource,
+    /disabled: terminalWithoutVersion \|\| \(activeDocument && !activeInvoiceCanAdvance\)/
+  );
+  assert.match(mainSource, /const invoicePdfDisabled = ''/);
+  assert.match(mainSource, /aria-disabled="false"/);
 });

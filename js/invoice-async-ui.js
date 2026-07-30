@@ -693,6 +693,8 @@
       };
     }
     const timesheet = family === 'TIMESHEET_DOCUMENT';
+    const activeDocument = ACTIVE.has(status);
+    const activeInvoiceCanAdvance = family === 'DOCUMENT' && activeDocument;
     const preparingLabel = timesheet ? 'Preparing timesheet…' : 'Preparing invoice PDF…';
     const readyLabel = timesheet ? 'Open timesheet PDF' : 'View invoice PDF';
     const failedLabel = timesheet ? 'Timesheet PDF failed' : 'Invoice PDF failed';
@@ -701,9 +703,9 @@
       ...base,
       tone: ready ? 'ready' : (failed || terminalWithoutVersion ? 'error' : (ACTIVE.has(status) ? 'amber' : 'muted')),
       label: ready ? readyLabel : (terminalWithoutVersion ? 'Document unavailable' : (failed ? failedLabel : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Prepare invoice PDF')))),
-      button_label: ready ? readyLabel : (terminalWithoutVersion ? 'Document unavailable' : (failed && retry ? (timesheet ? 'Retry timesheet PDF' : 'Retry invoice PDF') : (ACTIVE.has(status) ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Generate invoice PDF')))),
-      disabled: terminalWithoutVersion || ACTIVE.has(status) || (failed && !retry),
-      aria_busy: ACTIVE.has(status),
+      button_label: ready ? readyLabel : (terminalWithoutVersion ? 'Document unavailable' : (failed && retry ? (timesheet ? 'Retry timesheet PDF' : 'Retry invoice PDF') : (activeInvoiceCanAdvance ? 'Generate invoice PDF now' : (activeDocument ? preparingLabel : (timesheet ? 'Prepare timesheet PDF' : 'Generate invoice PDF'))))),
+      disabled: terminalWithoutVersion || (activeDocument && !activeInvoiceCanAdvance) || (failed && !retry),
+      aria_busy: activeDocument,
       view_available: exactDocumentReady
     };
   }

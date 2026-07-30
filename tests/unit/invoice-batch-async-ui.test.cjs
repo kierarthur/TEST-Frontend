@@ -587,8 +587,8 @@ test('document action states expose visible labels, disabled state and ARIA busy
     phase: 'SOURCE_RENDER'
   });
   assert.equal(preparing.tone, 'amber');
-  assert.equal(preparing.button_label, 'Preparing invoice PDF…');
-  assert.equal(preparing.disabled, true);
+  assert.equal(preparing.button_label, 'Generate invoice PDF now');
+  assert.equal(preparing.disabled, false);
   assert.equal(preparing.aria_busy, true);
 
   const ready = window.deriveInvoiceAsyncActionState({
@@ -635,7 +635,8 @@ test('document action states expose visible labels, disabled state and ARIA busy
     document_version_id: UUID_A
   });
   assert.equal(activeWithStaleVersion.view_available, false);
-  assert.equal(activeWithStaleVersion.button_label, 'Preparing invoice PDF…');
+  assert.equal(activeWithStaleVersion.button_label, 'Generate invoice PDF now');
+  assert.equal(activeWithStaleVersion.disabled, false);
 });
 
 test('individual PREPARING starts one immediate non-overlapping watcher and exact READY stops it', async () => {
