@@ -294511,7 +294511,14 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
 
       if (!changedRefNum && !changedDayRefs && !changedSched) continue;
 
-      const obj = { timesheet_id: tsid };
+      const expectedRevision = String(base.document_revision ?? '').trim();
+      if (!/^[1-9][0-9]*$/.test(expectedRevision)) {
+        throw new Error(`The current document revision is missing for timesheet ${tsid}. Reload the invoice and try again.`);
+      }
+      const obj = {
+        timesheet_id: tsid,
+        expected_document_revision: Number(expectedRevision)
+      };
 
       if (changedRefNum) obj.reference_number = newRefNum;
 
@@ -294565,6 +294572,13 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
       ) return [];
       return [{
         timesheet_id: timesheetId,
+        expected_document_revision: (() => {
+          const revision = String(source.document_revision ?? '').trim();
+          if (!/^[1-9][0-9]*$/.test(revision)) {
+            throw new Error('A timesheet document revision is missing. Reload the invoice and try again.');
+          }
+          return Number(revision);
+        })(),
         hospital_norm: hospital || null,
         ward_norm: ward || null
       }];
@@ -294573,12 +294587,9 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
   const timesheet_location_updates = compileLocationUpdatesForDb();
   const hasTimesheetSourceEdits =
     reference_updates_compiled.length > 0 || timesheet_location_updates.length > 0;
-  const invoiceHadGeneratedOrActivePreview = !!(
-    inv.preview_document_version_id
-    || inv.invoice_pdf_r2_key
-    || inv.invoice_pdf_generated_at_utc
-    || inv.active_document_operation_id
-    || String(inv.document_state || '').trim().toUpperCase() === 'READY'
+  const invoiceHadGeneratedOrActivePreview = (
+    modalCtx?.invoiceDetail?.source_edit_will_replace_preview === true
+    || modalCtx?.dataLoaded?.source_edit_will_replace_preview === true
   );
 
   const payload = {};
@@ -294593,11 +294604,6 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
   if (timesheet_location_updates.length) {
     payload.timesheet_location_updates = timesheet_location_updates;
   }
-  if (hasTimesheetSourceEdits) {
-    payload.request_timesheet_documents = true;
-    if (invoiceHadGeneratedOrActivePreview) payload.request_preview = true;
-  }
-
   const hasApplyEdits = Object.keys(payload).length > 0;
   const asyncInvoiceUiEnabled =
     typeof window.isInvoiceAsyncUiEnabled === 'function'
@@ -294670,8 +294676,15 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
     const message = invoiceHadGeneratedOrActivePreview
       ? 'These changes will force a new timesheet image to be generated and will queue an invoice to be regenerated. Are you sure you want to proceed?'
       : 'These changes will force a new timesheet image to be generated. Are you sure you want to proceed?';
-    const ok = await uiConfirm('Regenerate document images?', message);
-    if (!ok) return;
+    const confirmation = await openUiConfirmModal({
+      title: 'Regenerate document images?',
+      message,
+      confirm_label: 'Proceed',
+      cancel_label: 'Cancel',
+      kind: 'invoice-source-edit-confirm',
+      suppress_parent_persist: true
+    });
+    if (confirmation?.confirmed !== true) return;
   }
   if (wantHold !== null && wantHold !== curIsHold) {
     const ok = window.confirm(wantHold ? 'Put this invoice ON HOLD?' : 'Remove ON HOLD from this invoice?');
@@ -294862,6 +294875,15 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
         } catch {}
       } catch (err) {
         const msg = String(err?.message || err || '');
+
+        if (/changed after the invoice was opened|stale revision/i.test(msg)) {
+          try { await reload(); } catch {}
+          modalCtx.error =
+            'This timesheet changed after the invoice was opened. Review the refreshed values before saving again.';
+          toast(modalCtx.error);
+          rerender();
+          throw err;
+        }
 
         if (/Segment already invoiced/i.test(msg) || /already invoiced/i.test(msg) || /no longer available/i.test(msg)) {
           modalCtx.error =
@@ -297340,14 +297362,11 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
 
   const invData = (typeof invoiceModalGetInvoiceData === 'function') ? invoiceModalGetInvoiceData(parentModalCtx) : null;
   const invoice = invData?.invoice || {};
-  const invoiceStatus = String(invoice.status || '').trim().toUpperCase();
-  canEdit = !!(
-    canEdit
-    && !invoice.issued_at_utc
-    && !invoice.paid_at_utc
-    && !['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'].includes(invoiceStatus)
-    && ['DRAFT', 'ON_HOLD'].includes(invoiceStatus)
-  );
+  const sourceEditAllowed = invData?.raw?.actions?.can_edit_source === true;
+  const sourceEditBlockers = Array.isArray(invData?.raw?.source_edit_blocker_codes)
+    ? invData.raw.source_edit_blocker_codes
+    : [];
+  canEdit = !!(canEdit && sourceEditAllowed);
   const refRows = Array.isArray(invData?.reference_rows)
     ? invData.reference_rows
     : (Array.isArray(parentModalCtx?.reference_rows) ? parentModalCtx.reference_rows
@@ -297473,7 +297492,15 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
       groups.get(timesheetId).push(row);
     }
     for (const timesheetId of Object.keys(sourcesById || {}).sort()) {
-      if (!groups.has(timesheetId)) groups.set(timesheetId, [{ timesheet_id: timesheetId }]);
+      if (!groups.has(timesheetId)) {
+        groups.set(timesheetId, [{
+          timesheet_id: timesheetId,
+          candidate_id: sourcesById[timesheetId]?.candidate_id ?? null,
+          candidate_display: sourcesById[timesheetId]?.candidate_display ?? '',
+          week_ending_date: sourcesById[timesheetId]?.week_ending_date ?? '',
+          document_revision: sourcesById[timesheetId]?.document_revision ?? null
+        }]);
+      }
     }
     return Array.from(groups.entries()).map(([timesheetId, rows]) => ({ timesheetId, rows }));
   })();
@@ -297526,7 +297553,9 @@ async function openInvoiceReferenceNumbersModal(parentModalCtx, { rerender } = {
 
   const hintText = canEdit
     ? `Edit references, hospital or ward below. Click <b>Apply</b> to stage material changes, then <b>Save</b> the invoice to commit.`
-    : `View-only. Click <b>Edit</b> on the invoice to amend references, hospital or ward.`;
+    : (sourceEditBlockers.length
+      ? `View-only. Reference, hospital and ward editing is unavailable while this invoice is issued, paid, issuing or controlled by an import correction.`
+      : `View-only. Click <b>Edit</b> on the invoice to amend references, hospital or ward.`);
 
   const html = `
     <div class="p-3">

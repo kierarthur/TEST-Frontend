@@ -96,7 +96,7 @@ test('batch UI is server-paged, selection-contract based and loaded before the a
   assert.match(mainSource, /openInvoiceBatchV8WhenReady/);
   assert.doesNotMatch(mainSource, /Batch (?:Generate|Issue) modal not yet implemented/);
   assert.match(indexSource, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
-  assert.ok(indexSource.indexOf('js/main.js?v=20260730-invoice-refs-ward-r9')
+  assert.ok(indexSource.indexOf('js/main.js?v=20260730-invoice-refs-ward-r10')
     < indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1'));
   assert.ok(indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1')
     < indexSource.indexOf('js/invoice-batch-modal.js?v=20260730-invoice-v8-auto-recovery-r8'));
@@ -135,7 +135,7 @@ test('Refs and Ward stages only material editable source changes and confirms re
   assert.match(mainSource, /timesheet_location_updates_by_id/);
   assert.match(
     mainSource,
-    /canEdit[\s\S]*!\['ISSUED', 'PAID', 'PART_PAID', 'PARTIALLY_PAID'\]\.includes\(invoiceStatus\)[\s\S]*\['DRAFT', 'ON_HOLD'\]\.includes\(invoiceStatus\)/
+    /sourceEditAllowed = invData\?\.raw\?\.actions\?\.can_edit_source === true[\s\S]*canEdit = !!\(canEdit && sourceEditAllowed\)/
   );
   assert.match(
     mainSource,
@@ -153,8 +153,16 @@ test('Refs and Ward stages only material editable source changes and confirms re
     mainSource,
     /These changes will force a new timesheet image to be generated\. Are you sure you want to proceed\?/
   );
-  assert.match(mainSource, /payload\.request_timesheet_documents = true/);
-  assert.match(mainSource, /payload\.request_preview = true/);
+  assert.match(mainSource, /expected_document_revision: Number\(expectedRevision\)/);
+  assert.match(mainSource, /expected_document_revision:[\s\S]*source\.document_revision/);
+  assert.match(mainSource, /await openUiConfirmModal\(\{/);
+  assert.match(mainSource, /confirmation\?\.confirmed !== true/);
+  const saveStart = mainSource.indexOf('async function invoiceModalSaveEdits');
+  const saveEnd = mainSource.indexOf('\nfunction invoiceModalRound2', saveStart);
+  const saveSource = mainSource.slice(saveStart, saveEnd);
+  assert.doesNotMatch(saveSource, /payload\.request_timesheet_documents\s*=/);
+  assert.doesNotMatch(saveSource, /payload\.request_preview\s*=/);
+  assert.doesNotMatch(saveSource, /await uiConfirm\(/);
   assert.match(mainSource, /k === 'invoice-reference-numbers'/);
 });
 
