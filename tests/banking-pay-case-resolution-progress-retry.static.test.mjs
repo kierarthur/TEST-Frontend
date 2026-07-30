@@ -100,6 +100,13 @@ test('does not retry a changed decision session version', async () => {
   assert.equal(calls.length, 1);
 });
 
+test('suggested-rate apply uses the exact fence returned by its immediate discovery', () => {
+  assert.match(
+    source,
+    /bucket_resolutions:\s*deep\(bucketResolutions\),\s*expected_session_version:\s*authoritativeScope\.session_version,\s*expected_progress_counter_version:\s*authoritativeScope\.progress_counter_version/
+  );
+});
+
 test('taxable restructure renders the installed ERNI, VAT and inclusive-total aliases', () => {
   assert.match(source, /suggestedArrangement\.erni_rate_pct/);
   assert.match(source, /suggestedArrangement\.vat_rate_pct/);

@@ -102280,7 +102280,9 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
                 timesheet_id: anchorTimesheetId,
                 resolution_family: 'BUCKETED',
                 resolve_all_linked_timesheets: applyLinked,
-                bucket_resolutions: deep(bucketResolutions)
+                bucket_resolutions: deep(bucketResolutions),
+                expected_session_version: authoritativeScope.session_version,
+                expected_progress_counter_version: authoritativeScope.progress_counter_version
               });
               return validateAppliedScopeResult(result, applyLinked);
             }, { resolveAllLinked: applyLinked });
