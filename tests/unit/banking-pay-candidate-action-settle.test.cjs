@@ -22,14 +22,54 @@ test('a settled candidate action adopts its final fragment without reopening the
   assert.match(source, /candidateSettleResult = await pollPayWorkbenchCandidateUntilSettled/);
   assert.match(source, /candidateSettleResult\.candidate_preview/);
   assert.match(source, /candidateSettleResult\.full_session_refresh_applied === true/);
-  assert.match(source, /if \(!candidateSettled\) \{\s*await refreshPayWorkbench/);
-  assert.match(source, /full_workbench_refresh_used: !candidateSettled/);
+  assert.match(source, /if \(!candidateSettled\) \{[\s\S]*?await refreshPayWorkbench/);
+  assert.match(source, /full_workbench_refresh_used: fullWorkbenchRefreshUsed/);
   assert.doesNotMatch(
     source,
     /markCandidatePendingLocal\([\s\S]*?\);\s*await safeRerender\(null\);/,
     'the progress poll must own the first workbench repaint'
   );
   assert.doesNotMatch(source, /\n\s*await refreshPayWorkbench\(\{ reason, mode \}\);\s*\n\s*return \{ ok: true/);
+});
+
+test('candidate action waits for a newer workbench version before adopting the result', () => {
+  const refreshSource = sliceBetween(
+    '    const refreshPayWorkbenchAfterCandidateAction = async ({',
+    '    const runWorkbenchCandidateMutation = async ({'
+  );
+  const pollSource = sliceBetween(
+    'async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, options = {}) {',
+    'async function bankingPayWorkbenchSessionOpen(payload = {}) {'
+  );
+
+  assert.match(refreshSource, /currentSessionVersionRaw \+ 1/);
+  assert.match(refreshSource, /minimumSessionVersion: candidateMinimumSessionVersion/);
+  assert.match(refreshSource, /expectedSessionId: sessionId/);
+  assert.match(pollSource, /const minimumCandidateVersionReached = minimumSessionVersion == null/);
+  assert.match(pollSource, /progressSessionVersion >= minimumSessionVersion/);
+  assert.match(pollSource, /if \(!normalized\.isAnyWatchedPending && minimumCandidateVersionReached\)/);
+});
+
+test('accepted bank details surface partial provider-setup failure in the friendly UI modal', () => {
+  const helperSource = sliceBetween(
+    '    const showBankingPayFailureModal = async ({',
+    '    const confirmBankingPayAction = async ({'
+  );
+  const actionSource = sliceBetween(
+    "    if (a === 'banking:pay:acceptBankDetails') {",
+    "    if (a === 'banking:pay:runBankNameCheck' || a === 'banking:pay:ensurePayeeReadiness') {"
+  );
+
+  assert.match(helperSource, /getBankingUiConfirmModal\(\)/);
+  assert.match(helperSource, /confirm_label: 'OK'/);
+  assert.match(helperSource, /RAIL_PROVIDER_SETUP_FAILED/);
+  assert.match(actionSource, /railSetupFailed/);
+  assert.match(actionSource, /Bank details accepted — account setup incomplete/);
+  assert.match(actionSource, /No payment or draft was created/);
+  assert.match(actionSource, /Do not accept the same bank details again/);
+  assert.match(actionSource, /userInitiated: true/);
+  assert.doesNotMatch(actionSource, /\balert\(/);
+  assert.doesNotMatch(actionSource, /window\.confirm\(/);
 });
 
 test('candidate summary response avoids the redundant full-session fallback', () => {
@@ -46,7 +86,7 @@ test('candidate summary response avoids the redundant full-session fallback', ()
 test('informational bank-check result does not open a nested workbench modal', () => {
   const source = sliceBetween(
     '    const showBankingPayNoticeModal = async ({',
-    '    const confirmBankingPayAction = async ({'
+    '    const showBankingPayFailureModal = async ({'
   );
 
   assert.match(source, /showModalHint\(notice, tone\)/);

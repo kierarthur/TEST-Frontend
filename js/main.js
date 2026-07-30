@@ -88677,6 +88677,44 @@ function attachBankingModalDelegatedHandlers() {
       toast(notice);
     };
 
+    const showBankingPayFailureModal = async ({
+      title = 'Banking action incomplete',
+      message = 'CloudTMS could not complete this Banking action. Please refresh and try again.',
+      kind = 'banking-pay-friendly-failure'
+    } = {}) => {
+      const safeTitle = String(title || 'Banking action incomplete').trim() || 'Banking action incomplete';
+      const safeMessage = String(message || 'CloudTMS could not complete this Banking action. Please refresh and try again.').trim()
+        || 'CloudTMS could not complete this Banking action. Please refresh and try again.';
+      const confirmFn = getBankingUiConfirmModal();
+
+      if (!confirmFn) {
+        toast(safeMessage);
+        return;
+      }
+
+      await confirmFn({
+        title: safeTitle,
+        message: safeMessage,
+        confirm_label: 'OK',
+        hide_cancel: true,
+        kind
+      });
+    };
+
+    const getFriendlyRailSetupFailureMessage = (railSetup = null) => {
+      const setup = (railSetup && typeof railSetup === 'object' && !Array.isArray(railSetup)) ? railSetup : {};
+      const reason = String(setup.reason || '').trim().toUpperCase();
+      const messages = {
+        NAME_CHECK_REQUIRED: 'The bank-name check must be completed or accepted before this bank account can be set up.',
+        MISSING_BANK_FIELDS: 'The current bank details are incomplete or no longer match this Banking Pay row.',
+        PAYEE_TARGET_NOT_FOUND: 'The current bank details are incomplete or no longer match this Banking Pay row.',
+        RAIL_NOT_AVAILABLE: 'The configured payment provider is not currently available to set up this bank account.',
+        RAIL_CAPABILITIES_FAILED: 'The configured payment provider is not currently available to set up this bank account.',
+        RAIL_PROVIDER_SETUP_FAILED: 'The configured payment provider rejected or could not complete this bank-account setup.'
+      };
+      return messages[reason] || 'CloudTMS could not safely set up this bank account with the configured payment provider.';
+    };
+
     const confirmBankingPayAction = async ({
       title = 'Confirm Banking Pay action',
       message = '',
@@ -89732,7 +89770,8 @@ function attachBankingModalDelegatedHandlers() {
       candidateId = '',
       result = null,
       reason = 'PAY_AFFECTING_ACTION',
-      mode = 'SOFT'
+      mode = 'SOFT',
+      minimumSessionVersion = null
     } = {}) => {
       const resultObj = (result && typeof result === 'object') ? result : {};
       const refreshHint = (resultObj.refresh_hint && typeof resultObj.refresh_hint === 'object') ? resultObj.refresh_hint : {};
@@ -89752,9 +89791,29 @@ function attachBankingModalDelegatedHandlers() {
         getCurrentWorkbenchSessionId() ||
         ''
       ).trim();
+      const currentSessionVersionRaw = (typeof getCurrentWorkbenchSessionVersion === 'function')
+        ? Number(getCurrentWorkbenchSessionVersion())
+        : null;
+      const resultSessionVersionRaw = Number(
+        resultObj.session_version ??
+        resultObj.sessionVersion ??
+        resultObj.version ??
+        refreshHint.session_version ??
+        refreshHint.sessionVersion ??
+        ''
+      );
+      const requestedMinimumVersionRaw = Number(minimumSessionVersion);
+      const candidateMinimumSessionVersion = Number.isSafeInteger(requestedMinimumVersionRaw) && requestedMinimumVersionRaw >= 1
+        ? requestedMinimumVersionRaw
+        : (Number.isSafeInteger(resultSessionVersionRaw) && resultSessionVersionRaw >= 1
+            ? resultSessionVersionRaw
+            : (Number.isSafeInteger(currentSessionVersionRaw) && currentSessionVersionRaw >= 1
+                ? currentSessionVersionRaw + 1
+                : null));
 
       let candidateSettled = false;
       let candidateSettleResult = null;
+      let candidateSettleError = null;
       if (candidateIdText && sessionId && typeof pollPayWorkbenchCandidateUntilSettled === 'function') {
         try {
           markCandidatePendingLocal(
@@ -89769,6 +89828,8 @@ function attachBankingModalDelegatedHandlers() {
         try {
           candidateSettleResult = await pollPayWorkbenchCandidateUntilSettled(sessionId, candidateIdText, {
             updateState: true,
+            expectedSessionId: sessionId,
+            ...(candidateMinimumSessionVersion != null ? { minimumSessionVersion: candidateMinimumSessionVersion } : {}),
             source: 'attachBankingModalDelegatedHandlers.refreshPayWorkbenchAfterCandidateAction'
           });
           candidateSettled = !!(
@@ -89785,7 +89846,9 @@ function attachBankingModalDelegatedHandlers() {
             )
           );
           if (candidateSettled) await safeRerender(null);
-        } catch {}
+        } catch (error) {
+          candidateSettleError = error;
+        }
       }
 
       // The settled poll has already fetched, merged and rendered the final
@@ -89794,14 +89857,27 @@ function attachBankingModalDelegatedHandlers() {
       // settled row looking stale, and could keep a large Banking modal busy.
       // Retain the existing full refresh only as the recovery path when the
       // candidate did not settle or could not be adopted safely.
+      let fullWorkbenchRefreshUsed = false;
+      let fullWorkbenchRefreshSucceeded = false;
+      let fullWorkbenchRefreshError = null;
       if (!candidateSettled) {
-        await refreshPayWorkbench({ reason, mode });
+        fullWorkbenchRefreshUsed = true;
+        try {
+          const fallbackResult = await refreshPayWorkbench({ reason, mode });
+          fullWorkbenchRefreshSucceeded = fallbackResult !== false;
+        } catch (error) {
+          fullWorkbenchRefreshError = error;
+        }
       }
       return {
-        ok: true,
+        ok: candidateSettled || fullWorkbenchRefreshSucceeded,
         candidate_settled: candidateSettled,
-        full_workbench_refresh_used: !candidateSettled,
-        candidate_settle_result: candidateSettleResult
+        full_workbench_refresh_used: fullWorkbenchRefreshUsed,
+        full_workbench_refresh_succeeded: fullWorkbenchRefreshSucceeded,
+        candidate_settle_result: candidateSettleResult,
+        candidate_settle_error: candidateSettleError,
+        full_workbench_refresh_error: fullWorkbenchRefreshError,
+        minimum_session_version: candidateMinimumSessionVersion
       };
     };
 
@@ -95224,6 +95300,12 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     if (a === 'banking:pay:acceptBankDetails') {
       const { entity_kind, entity_id, bank_details_hash, provider, env0, candidate_id } = getBankActionContext();
+      const beforeAcceptanceSessionVersionRaw = (typeof getCurrentWorkbenchSessionVersion === 'function')
+        ? Number(getCurrentWorkbenchSessionVersion())
+        : null;
+      const minimumAcceptanceSessionVersion = Number.isSafeInteger(beforeAcceptanceSessionVersionRaw) && beforeAcceptanceSessionVersionRaw >= 1
+        ? beforeAcceptanceSessionVersionRaw + 1
+        : null;
 
       if (!entity_kind || !(entity_kind === 'CANDIDATE' || entity_kind === 'UMBRELLA')) { toast('entity_kind must be CANDIDATE or UMBRELLA'); return; }
       if (!entity_id) { toast('entity_id is required'); return; }
@@ -95272,17 +95354,43 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           reason
         });
 
-        await refreshPayWorkbenchAfterCandidateAction({
+        const refreshResult = await refreshPayWorkbenchAfterCandidateAction({
           candidateId: candidate_id || (entity_kind === 'CANDIDATE' ? entity_id : ''),
           result: overrideResult,
           reason: 'BANK_NAME_CHECK_OVERRIDE',
-          mode: 'SOFT'
+          mode: 'SOFT',
+          minimumSessionVersion: minimumAcceptanceSessionVersion
         });
+
+        if (!refreshResult || refreshResult.ok !== true) {
+          await showBankingPayFailureModal({
+            title: 'Bank details accepted — refresh incomplete',
+            message: 'The bank details were accepted and audited, but Banking Pay could not load the updated candidate. Refresh Banking Pay to read the saved result. Do not accept the same bank details again.',
+            kind: 'banking-pay-accept-bank-details-refresh-incomplete'
+          });
+          return;
+        }
+
+        const railSetup = (overrideResult?.rail_setup && typeof overrideResult.rail_setup === 'object' && !Array.isArray(overrideResult.rail_setup))
+          ? overrideResult.rail_setup
+          : null;
+        const railSetupFailed = !!(
+          railSetup &&
+          railSetup.ok === false &&
+          !(railSetup.skipped === true && String(railSetup.reason || '').trim().toUpperCase() === 'RAIL_DOES_NOT_REQUIRE_PROVIDER_PAYEE_SETUP')
+        );
+        if (railSetupFailed) {
+          await showBankingPayFailureModal({
+            title: 'Bank details accepted — account setup incomplete',
+            message: `The bank details were accepted and audited. ${getFriendlyRailSetupFailureMessage(railSetup)} No payment or draft was created. Use “Set up bank account” to retry.`,
+            kind: 'banking-pay-accept-bank-details-rail-setup-incomplete'
+          });
+        }
       } catch (e) {
         let handled = false;
         try {
           if (typeof bankingHandleApiError === 'function') {
-            bankingHandleApiError(e, { action: 'BANK_NAME_CHECK_OVERRIDE', scope: null, batchId: null, errorPath: ['ui', 'globalError'] });
+            bankingHandleApiError(e, { action: 'BANK_NAME_CHECK_OVERRIDE', scope: null, batchId: null, errorPath: ['ui', 'globalError'], userInitiated: true });
             handled = true;
           }
         } catch {}
@@ -95344,7 +95452,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         let handled = false;
         try {
           if (typeof bankingHandleApiError === 'function') {
-            bankingHandleApiError(e, { action: 'PAYEE_READINESS_ENSURE', scope: null, batchId: null, errorPath: ['ui', 'globalError'] });
+            bankingHandleApiError(e, { action: 'PAYEE_READINESS_ENSURE', scope: null, batchId: null, errorPath: ['ui', 'globalError'], userInitiated: true });
             handled = true;
           }
         } catch {}
@@ -95489,7 +95597,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         let handled = false;
         try {
           if (typeof bankingHandleApiError === 'function') {
-            bankingHandleApiError(e, { action: 'BANK_NAME_CHECK_OVERRIDE', scope: null, batchId: null, errorPath: ['ui', 'globalError'] });
+            bankingHandleApiError(e, { action: 'BANK_NAME_CHECK_OVERRIDE', scope: null, batchId: null, errorPath: ['ui', 'globalError'], userInitiated: true });
             handled = true;
           }
         } catch {}
@@ -95524,7 +95632,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         let handled = false;
         try {
           if (typeof bankingHandleApiError === 'function') {
-            bankingHandleApiError(e, { action: 'BANK_NAME_CHECK_CLEAR_OVERRIDE', scope: null, batchId: null, errorPath: ['ui', 'globalError'] });
+            bankingHandleApiError(e, { action: 'BANK_NAME_CHECK_CLEAR_OVERRIDE', scope: null, batchId: null, errorPath: ['ui', 'globalError'], userInitiated: true });
             handled = true;
           }
         } catch {}
@@ -126342,7 +126450,16 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       throw error;
     }
 
-    if (!normalized.isAnyWatchedPending) {
+    const progressSessionVersion = readSessionVersion(progress);
+    const minimumCandidateVersionReached = minimumSessionVersion == null || (
+      progressSessionVersion != null && progressSessionVersion >= minimumSessionVersion
+    );
+
+    // A mutation can commit before its candidate recompute job is visible.
+    // Do not mistake the pre-action READY fragment for the post-action result:
+    // the targeted candidate is settled only after the session version moves
+    // to the version required by the mutation.
+    if (!normalized.isAnyWatchedPending && minimumCandidateVersionReached) {
       const beforeSettledWriteGuard = evaluateStalenessGuard('before_settled_state_write', {
         progress: cloneJson(progress)
       });
