@@ -149,7 +149,7 @@ test('batch tables use drag-only sort priority and the filter drawer remains clo
 test('opening a batch modal rechecks a transiently unavailable capability', () => {
   assert.match(
     batchSource,
-    /openInvoiceBatchModal\(mode\)[\s\S]*initialiseInvoiceAsyncUi\(\{ force: true \}\)[\s\S]*refreshed\?\.enabled_for_user !== true/,
+    /openInvoiceBatchModal\(mode\)[\s\S]*recoverInvoiceAsyncUiCapability\(\)[\s\S]*refreshed\?\.enabled_for_user !== true/,
   );
 });
 test('unavailable document actions recover without replacing stable Batch Generate and Issue entry points', () => {
@@ -160,6 +160,35 @@ test('unavailable document actions recover without replacing stable Batch Genera
   assert.doesNotMatch(asyncSource, /openInvoiceBatchGenerateModal:\s*\(\.\.\.args\)/);
   assert.doesNotMatch(asyncSource, /openInvoiceBatchIssueModal:\s*\(\.\.\.args\)/);
   assert.match(asyncSource, /installInvoiceAsyncUnavailableActions\(\)[\s\S]*InvoiceBatchModalV8\?\.install\?\.\(\)/);
+  assert.match(mainSource, /function reloadInvoiceAsyncUiAsset\(\)[\s\S]*invoice_async_recovery/);
+  assert.match(mainSource, /invokeInvoiceAsyncActionWithRecovery\('handleInvoiceRenderPdfAsync', \[modalCtx\]\)/);
+  assert.match(mainSource, /invokeInvoiceAsyncActionWithRecovery\('handleInvoiceEmailAsync', \[modalCtx\]\)/);
+  assert.match(asyncSource, /const retryDelaysMs = \[0, 250, 1000\]/);
+  const unavailableStart = asyncSource.indexOf('async function invoiceAsyncUnavailableAction');
+  const unavailableEnd = asyncSource.indexOf('const unavailableInvoiceActionHandlers', unavailableStart);
+  assert.ok(unavailableStart >= 0 && unavailableEnd > unavailableStart);
+  assert.doesNotMatch(asyncSource.slice(unavailableStart, unavailableEnd), /window\.alert|\balert\s*\(/);
+  const renderFallbackStart = mainSource.indexOf('async function handleInvoiceRenderPdf');
+  const renderFallbackEnd = mainSource.indexOf('async function handleInvoiceEmail', renderFallbackStart);
+  assert.ok(renderFallbackStart >= 0 && renderFallbackEnd > renderFallbackStart);
+  assert.doesNotMatch(mainSource.slice(renderFallbackStart, renderFallbackEnd), /temporarily unavailable while the new invoice system/);
+});
+
+test('existing document readers stay installed when generation readiness is false', () => {
+  assert.match(asyncSource, /document_read_ready/);
+  assert.match(asyncSource, /document_generation_ready/);
+  assert.match(
+    asyncSource,
+    /window\.handleInvoiceRenderPdf\s*=\s*handleInvoiceRenderPdfAsync[\s\S]*window\.openTimesheetDocumentV8\s*=\s*openTimesheetDocumentV8/
+  );
+  assert.match(
+    asyncSource,
+    /window\.handleInvoiceEmail\s*=\s*generationEnabled[\s\S]*unavailableInvoiceActionHandlers\.handleInvoiceEmail/
+  );
+  assert.match(
+    asyncSource,
+    /if \(capabilities\.document_read_ready !== true\)[\s\S]*uninstallOverrides/
+  );
 });
 
 test('batch selection gives immediate local feedback without rebuilding the whole modal', () => {

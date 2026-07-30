@@ -100,29 +100,43 @@
     if (!exactMediaContract(source.supported_media_types)) {
       throw new Error('INVOICE_ASYNC_MEDIA_CONTRACT_MISMATCH');
     }
-    if (source.heartbeat_supported !== true || REQUIRED_FEATURES.some(key => !featureEnabled(source, key))) {
+    if (source.heartbeat_supported !== true) {
       throw new Error('INVOICE_ASYNC_REQUIRED_FEATURE_MISSING');
     }
-    if (source.database_contract_ready !== true || source.deployment_contract_ready !== true) {
+    const documentReadReady = source.document_read_ready === true
+      || (source.document_read_ready == null && source.deployment_contract_ready === true);
+    const documentGenerationReady = source.document_generation_ready === true
+      || (source.document_generation_ready == null && source.deployment_contract_ready === true);
+    if (documentGenerationReady && REQUIRED_FEATURES.some(key => !featureEnabled(source, key))) {
+      throw new Error('INVOICE_ASYNC_REQUIRED_FEATURE_MISSING');
+    }
+    if (!documentReadReady) {
       throw new Error('INVOICE_ASYNC_DEPLOYMENT_CONTRACT_MISMATCH');
     }
+    const generationReady = documentGenerationReady
+      && source.database_contract_ready === true
+      && source.deployment_contract_ready === true
+      && source.pipeline_enabled === true
+      && source.processor_enabled === true;
     return Object.freeze({
       available: true,
       contract_version: backendContract,
       backend_contract_version: backendContract,
-      database_contract_ready: true,
-      deployment_contract_ready: true,
+      database_contract_ready: source.database_contract_ready === true,
+      deployment_contract_ready: source.deployment_contract_ready === true,
+      document_read_ready: documentReadReady,
+      document_generation_ready: generationReady,
       pipeline_enabled: source.pipeline_enabled === true,
       processor_enabled: source.processor_enabled === true,
-      enabled_for_user: source.enabled_for_user === true
-        && source.pipeline_enabled === true
-        && source.processor_enabled === true,
+      enabled_for_user: source.enabled_for_user === true && generationReady,
       controlled_cohort: source.controlled_cohort === true,
       scheduled_enabled: source.scheduled_enabled === true,
       heartbeat_supported: true,
       supported_media_types: Object.freeze([...SUPPORTED_MEDIA]),
       document_view_contract_version: EXPECTED_DOCUMENT_CONTRACT,
-      feature_flags: Object.freeze(Object.fromEntries(REQUIRED_FEATURES.map(key => [key, true])))
+      feature_flags: Object.freeze(Object.fromEntries(
+        REQUIRED_FEATURES.map(key => [key, featureEnabled(source, key)])
+      ))
     });
   }
 
@@ -131,6 +145,8 @@
       available: false,
       database_contract_ready: false,
       deployment_contract_ready: false,
+      document_read_ready: false,
+      document_generation_ready: false,
       enabled_for_user: false,
       pipeline_enabled: false,
       processor_enabled: false,
@@ -210,7 +226,14 @@
   }
 
   function isInvoiceAsyncUiEnabled() {
-    return window.__invoiceAsyncCapability?.enabled_for_user === true && installed === true;
+    return window.__invoiceAsyncCapability?.enabled_for_user === true
+      && window.__invoiceAsyncGenerationInstalled === true
+      && installed === true;
+  }
+
+  function isInvoiceAsyncDocumentReadEnabled() {
+    return window.__invoiceAsyncCapability?.document_read_ready === true
+      && installed === true;
   }
 
   function hasOperationMarker(row, context = {}) {
@@ -1684,20 +1707,24 @@
   }
 
   async function invoiceAsyncUnavailableAction(actionName = null, args = []) {
-    if (actionName && typeof window.initialiseInvoiceAsyncUi === 'function') {
-      const capabilities = await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null);
-      const recovered = window[actionName];
-      if (
-        capabilities?.enabled_for_user === true
-        && typeof recovered === 'function'
-        && recovered !== unavailableInvoiceActionHandlers[actionName]
-      ) {
-        return recovered(...args);
+    const retryDelaysMs = [0, 250, 1000];
+    for (const delayMs of retryDelaysMs) {
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      if (actionName && typeof window.initialiseInvoiceAsyncUi === 'function') {
+        const capabilities = await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null);
+        const recovered = window[actionName];
+        if (
+          capabilities?.enabled_for_user === true
+          && typeof recovered === 'function'
+          && recovered !== unavailableInvoiceActionHandlers[actionName]
+        ) {
+          return recovered(...args);
+        }
       }
     }
-    const message = 'Invoice processing is temporarily unavailable while the new invoice system is being updated.';
+    const message = 'Invoice processing could not reconnect automatically. The action was not started.';
     try { window.__toast?.(message); } catch {}
-    if (typeof window.__toast !== 'function') window.alert?.(message);
+    try { console.warn('[INVOICE_ASYNC_RECOVERY]', message); } catch {}
     return null;
   }
 
@@ -1712,26 +1739,37 @@
   function installInvoiceAsyncUnavailableActions() {
     Object.assign(window, unavailableInvoiceActionHandlers);
     window.__invoiceAsyncOverridesInstalled = false;
+    window.__invoiceAsyncGenerationInstalled = false;
     window.InvoiceBatchModalV8?.install?.();
     return true;
   }
 
   function installOverrides() {
-    if (installed) return true;
-    if (window.__invoiceAsyncCapability?.enabled_for_user !== true) return false;
+    if (window.__invoiceAsyncCapability?.document_read_ready !== true) return false;
+    const generationEnabled = window.__invoiceAsyncCapability?.enabled_for_user === true
+      && window.__invoiceAsyncCapability?.document_generation_ready === true;
+    const firstInstall = installed !== true;
     augmentInvoiceModalRenderer();
     window.handleInvoiceRenderPdf = handleInvoiceRenderPdfAsync;
-    window.handleInvoiceEmail = handleInvoiceEmailAsync;
     window.getTimesheetPdfUrl = openTimesheetDocumentV8;
     window.openTimesheetPdf = openTimesheetDocumentV8;
     window.openTimesheetDocumentV8 = openTimesheetDocumentV8;
-    window.InvoiceBatchModalV8?.install?.();
-    attachInvoiceAsyncDelegatedHandlers();
-    saveInvoiceOperationWatches(loadInvoiceOperationWatches());
+    if (firstInstall) window.InvoiceBatchModalV8?.install?.();
+    window.handleInvoiceEmail = generationEnabled
+      ? handleInvoiceEmailAsync
+      : unavailableInvoiceActionHandlers.handleInvoiceEmail;
+    if (generationEnabled) {
+      attachInvoiceAsyncDelegatedHandlers();
+      saveInvoiceOperationWatches(loadInvoiceOperationWatches());
+    } else {
+      detachInvoiceAsyncDelegatedHandlers();
+      window.__invoiceOperationWatches = [];
+    }
     applyInvoiceActionButtonState(document);
     hydrateVisibleTimesheetEvidenceProcessingStates(document);
     installed = true;
     window.__invoiceAsyncOverridesInstalled = true;
+    window.__invoiceAsyncGenerationInstalled = generationEnabled;
     return true;
   }
 
@@ -1779,7 +1817,7 @@
         previous_watch_storage_key: activeWatchStorageKey
       });
     }
-    if (capabilities.enabled_for_user !== true) {
+    if (capabilities.document_read_ready !== true) {
       uninstallOverrides({
         reason: resolvedWatchKey ? 'capability-unavailable' : 'logout',
         previous_watch_storage_key: activeWatchStorageKey
@@ -1797,6 +1835,7 @@
     cacheInvoiceAsyncCapabilities,
     loadInvoiceAsyncCapabilities,
     isInvoiceAsyncUiEnabled,
+    isInvoiceAsyncDocumentReadEnabled,
     initialiseInvoiceAsyncUi,
     installInvoiceAsyncOverrides: installOverrides,
     installInvoiceAsyncUnavailableActions,

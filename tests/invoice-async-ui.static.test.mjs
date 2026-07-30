@@ -7,12 +7,16 @@ const batchSource = await readFile(new URL('../js/invoice-batch-modal.js', impor
 const mainSource = await readFile(new URL('../js/main.js', import.meta.url), 'utf8');
 const indexSource = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 
-test('capability gating is V8-exact and disabled state installs no legacy fallback', () => {
+test('capability gating is V8-exact and keeps READY document reads separate from generation', () => {
   assert.match(uiSource, /INVOICE_ASYNC_BACKEND_V8/);
   assert.match(uiSource, /INVOICE_DOCUMENT_VERSION_ACCESS_V1/);
-  assert.match(uiSource, /database_contract_ready\s*!==\s*true/);
-  assert.match(uiSource, /deployment_contract_ready\s*!==\s*true/);
-  assert.match(uiSource, /enabled_for_user\s*!==\s*true/);
+  assert.match(uiSource, /document_read_ready/);
+  assert.match(uiSource, /document_generation_ready/);
+  assert.match(
+    uiSource,
+    /window\.handleInvoiceRenderPdf\s*=\s*handleInvoiceRenderPdfAsync[\s\S]*window\.handleInvoiceEmail\s*=\s*generationEnabled/
+  );
+  assert.match(uiSource, /if\s*\(capabilities\.document_read_ready\s*!==\s*true\)/);
   assert.match(uiSource, /installInvoiceAsyncUnavailableActions/);
   assert.match(uiSource, /initialiseInvoiceAsyncUi/);
   assert.match(uiSource, /if\s*\(!capabilityCacheKey\(\)\)/);
@@ -92,12 +96,12 @@ test('batch UI is server-paged, selection-contract based and loaded before the a
   assert.match(mainSource, /openInvoiceBatchV8WhenReady/);
   assert.doesNotMatch(mainSource, /Batch (?:Generate|Issue) modal not yet implemented/);
   assert.match(indexSource, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
-  assert.ok(indexSource.indexOf('js/main.js?v=20260729-invoice-batch-loader-race-v7')
+  assert.ok(indexSource.indexOf('js/main.js?v=20260730-invoice-async-auto-recovery-r8')
     < indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1'));
   assert.ok(indexSource.indexOf('js/invoice-diagnostic-catalog.js?v=20260728-invoice-async-v8-source-evidence-r1')
-    < indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-sort-auto-r7'));
-  assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260729-invoice-v8-sort-auto-r7')
-    < indexSource.indexOf('js/invoice-async-ui.js?v=20260729-invoice-foreground-watch-r11'));
+    < indexSource.indexOf('js/invoice-batch-modal.js?v=20260730-invoice-v8-auto-recovery-r8'));
+  assert.ok(indexSource.indexOf('js/invoice-batch-modal.js?v=20260730-invoice-v8-auto-recovery-r8')
+    < indexSource.indexOf('js/invoice-async-ui.js?v=20260730-invoice-auto-recovery-r12'));
 });
 
 test('Timesheet and Invoice preparation use V8 POST identities and no active raw-key path', () => {

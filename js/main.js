@@ -250920,6 +250920,25 @@ async function openBulkQrReissueDecisionModal(row = {}, options = {}) {
   });
 }
 
+const qrTimesheetSendIdempotencyTokens = new Map();
+
+function createQrTimesheetSendIdempotencyToken(timesheetId, context) {
+  const random = (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `qr-send:${String(timesheetId || '').trim()}:${String(context || 'interactive').trim()}:${random}`;
+}
+
+function isUncertainQrTimesheetSendError(error) {
+  const status = Number(error?.status || 0);
+  const code = String(
+    error?.json?.error_code || error?.json?.code || error?.json?.error || ''
+  ).trim();
+  return !code && (
+    !status || [408, 425, 429, 500, 502, 503, 504, 520, 522, 524].includes(status)
+  );
+}
+
 async function enqueueQrTimesheetEmail(timesheetId, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][QR][ENQUEUE]');
   GC('enqueueQrTimesheetEmail');
@@ -250958,11 +250977,14 @@ async function enqueueQrTimesheetEmail(timesheetId, options = {}) {
   const bulkProcess = opts.bulk_process === true || opts.bulkProcess === true || context === 'bulk_process';
   const bulkAuthorise = opts.bulk_authorise === true || opts.bulkAuthorise === true || context === 'bulk_authorise';
   const rowSignature = trimStr(opts.row_signature || opts.rowSignature || opts.expected_row_signature || opts.expectedRowSignature || '');
+  const pendingTokenKey = `${id}|${context}`;
   const idempotencyKey = trimStr(
     opts.idempotency_key ||
     opts.idempotencyKey ||
-    `qr-send:${id}:${expectedTimesheetId}:${context}:${rowSignature || 'no-row-signature'}`
+    qrTimesheetSendIdempotencyTokens.get(pendingTokenKey) ||
+    createQrTimesheetSendIdempotencyToken(id, context)
   );
+  qrTimesheetSendIdempotencyTokens.set(pendingTokenKey, idempotencyKey);
 
   const payload = {
     expected_timesheet_id: expectedTimesheetId,
@@ -250984,7 +251006,16 @@ async function enqueueQrTimesheetEmail(timesheetId, options = {}) {
   const endpoint = trimStr(opts.endpoint || opts.url_path || opts.urlPath || '') || `/api/timesheets/${encodeURIComponent(id)}/qr-resend`;
   L('REQUEST', { endpoint, timesheet_id: id, expected_timesheet_id: expectedTimesheetId, idempotency_key: idempotencyKey, context });
 
-  const json = await apiPostJson(endpoint, payload);
+  let json;
+  try {
+    json = await apiPostJson(endpoint, payload);
+    qrTimesheetSendIdempotencyTokens.delete(pendingTokenKey);
+  } catch (error) {
+    if (!isUncertainQrTimesheetSendError(error)) {
+      qrTimesheetSendIdempotencyTokens.delete(pendingTokenKey);
+    }
+    throw error;
+  }
   const src = (json && typeof json === 'object') ? json : {};
   const rowPatch = (src.row_patch && typeof src.row_patch === 'object')
     ? src.row_patch
@@ -293203,13 +293234,80 @@ async function handleInvoiceDelete(modalCtx) {
 }
 
 
-async function handleInvoiceRenderPdf(modalCtx) {
-  if (typeof window.handleInvoiceRenderPdfAsync === 'function') {
-    return window.handleInvoiceRenderPdfAsync(modalCtx);
-  }
-  alert('Invoice processing is temporarily unavailable while the new invoice system is being updated.');
-  return null;
+let invoiceAsyncUiRecoveryPromise = null;
 
+function reloadInvoiceAsyncUiAsset() {
+  if (invoiceAsyncUiRecoveryPromise) return invoiceAsyncUiRecoveryPromise;
+  invoiceAsyncUiRecoveryPromise = new Promise((resolve) => {
+    const existing = Array.from(document.scripts || []).find((script) => {
+      try { return new URL(script.src, window.location.href).pathname === '/js/invoice-async-ui.js'; }
+      catch { return false; }
+    });
+    const recoveryUrl = new URL(existing?.src || '/js/invoice-async-ui.js', window.location.href);
+    recoveryUrl.searchParams.set('invoice_async_recovery', String(Date.now()));
+    const script = document.createElement('script');
+    script.src = recoveryUrl.href;
+    script.async = true;
+    script.dataset.invoiceAsyncRecovery = '1';
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    (document.head || document.documentElement).appendChild(script);
+  }).finally(() => {
+    invoiceAsyncUiRecoveryPromise = null;
+  });
+  return invoiceAsyncUiRecoveryPromise;
+}
+
+async function recoverInvoiceAsyncUiCapability() {
+  const delays = [0, 250, 1000];
+  for (const delayMs of delays) {
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    if (typeof window.initialiseInvoiceAsyncUi === 'function') {
+      const capabilities = await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null);
+      if (capabilities?.enabled_for_user === true) return capabilities;
+    }
+    await reloadInvoiceAsyncUiAsset().catch(() => false);
+    if (typeof window.initialiseInvoiceAsyncUi === 'function') {
+      const capabilities = await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null);
+      if (capabilities?.enabled_for_user === true) return capabilities;
+    }
+  }
+  return null;
+}
+async function invokeInvoiceAsyncActionWithRecovery(handlerName, args = []) {
+  const invoke = () => {
+    const handler = window[handlerName];
+    return typeof handler === 'function' ? handler : null;
+  };
+  const delays = [0, 250, 1000];
+  for (const delayMs of delays) {
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    let handler = invoke();
+    if (handler) return handler(...args);
+    if (typeof window.initialiseInvoiceAsyncUi === 'function') {
+      await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null);
+      handler = invoke();
+      if (handler) return handler(...args);
+    }
+    await reloadInvoiceAsyncUiAsset().catch(() => false);
+    if (typeof window.initialiseInvoiceAsyncUi === 'function') {
+      await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null);
+    }
+    handler = invoke();
+    if (handler) return handler(...args);
+  }
+  const message = 'Invoice processing could not reconnect automatically. The action was not started.';
+  try { window.__toast?.(message); } catch {}
+  try { console.warn('[INVOICE_ASYNC_RECOVERY]', message); } catch {}
+  return null;
+}
+
+window.reloadInvoiceAsyncUiAsset = reloadInvoiceAsyncUiAsset;
+window.recoverInvoiceAsyncUiCapability = recoverInvoiceAsyncUiCapability;
+window.invokeInvoiceAsyncActionWithRecovery = invokeInvoiceAsyncActionWithRecovery;
+
+async function handleInvoiceRenderPdf(modalCtx) {
+  return invokeInvoiceAsyncActionWithRecovery('handleInvoiceRenderPdfAsync', [modalCtx]);
   const mc = modalCtx || {};
   const invoiceId =
     String(mc?.invoiceId || mc?.dataLoaded?.invoice?.id || mc?.dataLoaded?.invoice_row?.id || mc?.data?.id || '').trim();
@@ -293394,11 +293492,7 @@ async function handleInvoiceRenderPdf(modalCtx) {
 
 
 async function handleInvoiceEmail(modalCtx) {
-  if (typeof window.handleInvoiceEmailAsync === 'function') {
-    return window.handleInvoiceEmailAsync(modalCtx);
-  }
-  alert('Invoice processing is temporarily unavailable while the new invoice system is being updated.');
-  return null;
+  return invokeInvoiceAsyncActionWithRecovery('handleInvoiceEmailAsync', [modalCtx]);
 
   const mc = modalCtx || {};
   const inv = mc.invoiceDetail?.invoice || mc.data || null;
@@ -368022,12 +368116,20 @@ async function resendQrTimesheetEmail(timesheetId) {
     } catch {}
   };
 
+  const pendingTokenKey = `${String(timesheetId)}|interactive`;
+  const idempotencyKey = qrTimesheetSendIdempotencyTokens.get(pendingTokenKey)
+    || createQrTimesheetSendIdempotencyToken(timesheetId, 'interactive');
+  qrTimesheetSendIdempotencyTokens.set(pendingTokenKey, idempotencyKey);
+
   const postOnce = async (id, expectedId) => {
     const encId = encodeURIComponent(id);
     const urlPath = `/api/timesheets/${encId}/qr-resend`;
     L('REQUEST', { urlPath, timesheetId: id, expected: expectedId });
     // ✅ Use apiPostJson so 409 carries err.status + err.json (thrown)
-    return apiPostJson(urlPath, { expected_timesheet_id: expectedId });
+    return apiPostJson(urlPath, {
+      expected_timesheet_id: expectedId,
+      idempotency_key: idempotencyKey
+    });
   };
 
   const adoptMovedId = (movedTo) => {
@@ -368091,14 +368193,22 @@ async function resendQrTimesheetEmail(timesheetId) {
       try {
         json = await postOnce(adoptedId, adoptedId);
       } catch (err2) {
+        if (!isUncertainQrTimesheetSendError(err2)) {
+          qrTimesheetSendIdempotencyTokens.delete(pendingTokenKey);
+        }
         GE();
         throw err2;
       }
     } else {
+      if (!isUncertainQrTimesheetSendError(err)) {
+        qrTimesheetSendIdempotencyTokens.delete(pendingTokenKey);
+      }
       GE();
       throw err;
     }
   }
+
+  qrTimesheetSendIdempotencyTokens.delete(pendingTokenKey);
 
   // ✅ Defensive adoption on success (if backend returns current_timesheet_id)
   try {

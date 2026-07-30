@@ -541,8 +541,22 @@ test('disabled capability preserves the stable batch installer and enabled capab
   assert.notEqual(window.handleInvoiceEmail, legacyEmail);
   assert.equal(await window.handleInvoiceRenderPdf(), null);
 
-  window.__invoiceAsyncCapability = { enabled_for_user: true };
+  window.__invoiceAsyncCapability = {
+    enabled_for_user: false,
+    document_read_ready: true,
+    document_generation_ready: false
+  };
   assert.equal(window.installInvoiceAsyncOverrides(), true);
+  assert.equal(window.__invoiceAsyncOverridesInstalled, true);
+  assert.equal(window.__invoiceAsyncGenerationInstalled, false);
+
+  window.__invoiceAsyncCapability = {
+    enabled_for_user: true,
+    document_read_ready: true,
+    document_generation_ready: true
+  };
+  assert.equal(window.installInvoiceAsyncOverrides(), true);
+  assert.equal(window.__invoiceAsyncGenerationInstalled, true);
   assert.notEqual(window.handleInvoiceRenderPdf, legacyRender);
   assert.notEqual(window.handleInvoiceEmail, legacyEmail);
   const installsAfterEnable = batchInstalls;

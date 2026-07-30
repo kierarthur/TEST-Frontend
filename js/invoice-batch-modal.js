@@ -2060,13 +2060,17 @@
 
   async function openInvoiceBatchModal(mode) {
     if (window.__invoiceAsyncCapability?.enabled_for_user !== true) {
-      const refreshed = typeof window.initialiseInvoiceAsyncUi === 'function'
-        ? await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null)
-        : null;
+      const refreshed = typeof window.recoverInvoiceAsyncUiCapability === 'function'
+        ? await window.recoverInvoiceAsyncUiCapability().catch(() => null)
+        : (typeof window.initialiseInvoiceAsyncUi === 'function'
+            ? await window.initialiseInvoiceAsyncUi({ force: true }).catch(() => null)
+            : null);
       if (refreshed?.enabled_for_user !== true) {
         window.installInvoiceAsyncUnavailableActions?.();
         window.InvoiceBatchModalV8?.install?.();
-        try { window.__toast?.('Invoice tools could not be loaded. Please try again.'); } catch {}
+        const message = 'Invoice tools could not reconnect automatically. The batch action was not started.';
+        try { window.__toast?.(message); } catch {}
+        try { console.warn('[INVOICE_ASYNC_RECOVERY]', message); } catch {}
         return null;
       }
     }
