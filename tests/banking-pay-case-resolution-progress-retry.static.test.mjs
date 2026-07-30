@@ -107,6 +107,51 @@ test('suggested-rate apply uses the exact fence returned by its immediate discov
   );
 });
 
+test('single-candidate resolution success adopts the candidate refresh without waiting for unrelated work', () => {
+  assert.match(
+    source,
+    /const refreshCandidateId = affectedCandidateIds\.length === 1 \? affectedCandidateIds\[0\] : '';\s*settledResult = await pollPayWorkbenchCandidateUntilSettled\(sessionId, refreshCandidateId,/
+  );
+  assert.match(
+    source,
+    /queued\.needs_full_session_refresh === true[\s\S]*queued\.full_session_refresh_required === true[\s\S]*refresh_scope/
+  );
+  assert.doesNotMatch(
+    source,
+    /shouldForceFullSessionRefreshAfterMutation[\s\S]{0,1200}Array\.isArray\(queued\.case_resolution_ids\)/
+  );
+  assert.match(
+    source,
+    /settled:\s*true,\s*ready:\s*true,\s*required_preview_sections_loaded:\s*true,\s*session_id:\s*sessionIdText/
+  );
+});
+
+test('overpayment presentation uses resolved target-channel amounts after a pay-method change', () => {
+  assert.match(
+    source,
+    /const original = toMagnitude\(\s*component\?\.resolved_target_amount_ex_vat,[\s\S]*component\?\.target_pay_ex_vat,[\s\S]*component\?\.source_amount,/
+  );
+  assert.match(
+    source,
+    /const outstanding = toMagnitude\(\s*component\?\.target_outstanding_ex_vat,[\s\S]*component\?\.remaining_source_amount,/
+  );
+});
+
+test('bucketed custom rate remains reachable when no single suggestion is honest', () => {
+  assert.match(
+    source,
+    /const hasManualRateBasis = \([\s\S]*Number\.isFinite\(sourceUnits\)[\s\S]*Number\.isFinite\(sourceRate\)[\s\S]*Number\.isFinite\(sourceChargeRate\)/
+  );
+  assert.match(
+    source,
+    /\|\| hasManualRateBasis/
+  );
+  assert.match(
+    source,
+    /const toNum = \(v\) => \{\s*if \(v == null\) return null;\s*if \(typeof v === 'string' && !trimStr\(v\)\) return null;/
+  );
+});
+
 test('taxable restructure renders the installed ERNI, VAT and inclusive-total aliases', () => {
   assert.match(source, /suggestedArrangement\.erni_rate_pct/);
   assert.match(source, /suggestedArrangement\.vat_rate_pct/);

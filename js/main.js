@@ -50590,6 +50590,10 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     };
     const rawComponents = getLineCaseComponents(line).map((component, index) => {
       const original = toMagnitude(
+        component?.resolved_target_amount_ex_vat,
+        component?.resolvedTargetAmountExVat,
+        component?.target_pay_ex_vat,
+        component?.targetPayExVat,
         component?.source_amount,
         component?.sourceAmount,
         component?.source_pay_ex_vat,
@@ -50598,6 +50602,8 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
         component?.remainingSourceAmount
       );
       const outstanding = toMagnitude(
+        component?.target_outstanding_ex_vat,
+        component?.targetOutstandingExVat,
         component?.remaining_source_amount,
         component?.remainingSourceAmount,
         original
@@ -53653,8 +53659,29 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         component.suggested_resolution_available
       ));
 
-      return (hasSuggestedFlag || !!suggestedPayload || !!suggestedResult)
-        && (!!suggestedPayload || !!suggestedResult);
+      const sourceUnits = Number(component.source_units);
+      const sourceRate = Number(component.source_rate);
+      const sourceChargeRate = Number(component.source_charge_rate);
+      const componentKeyType = upperTrim(component.component_key_type);
+      const bucketCode = upperTrim(
+        component.bucket_code ||
+        component.source_basis_json?.bucket_code ||
+        ''
+      );
+      const hasManualRateBasis = (
+        ['TS_DAY', 'TS_TOTAL', 'ADDITIONAL_CODE', 'PAY_CODE', 'ADDITIONAL_PAY_CODE', 'ADDITIONAL_UNIT', 'ADDITIONAL_UNITS'].includes(componentKeyType) &&
+        Number.isFinite(sourceUnits) &&
+        Math.abs(sourceUnits) > 0.000000001 &&
+        Number.isFinite(sourceRate) &&
+        Number.isFinite(sourceChargeRate) &&
+        (!['TS_DAY', 'TS_TOTAL'].includes(componentKeyType) || !!bucketCode)
+      );
+
+      return (
+        ((hasSuggestedFlag || !!suggestedPayload || !!suggestedResult)
+          && (!!suggestedPayload || !!suggestedResult))
+        || hasManualRateBasis
+      );
     });
     const makeScopedKey = (prefix, candidateId, value) => {
       const candidateIdText = trimStr(candidateId);
@@ -100262,6 +100289,8 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   const requestedLinkedTimesheetId = trimStr(src.linked_timesheet_id || src.linkedTimesheetId || src.timesheet_id || src.timesheetId || '');
 
   const toNum = (v) => {
+    if (v == null) return null;
+    if (typeof v === 'string' && !trimStr(v)) return null;
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
   };
@@ -100843,18 +100872,12 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
 
   const shouldForceFullSessionRefreshAfterMutation = (queued, requestedResolveAllLinked) => {
     if (!queued || typeof queued !== 'object') return !!requestedResolveAllLinked;
-    const queuedSessionVersion = queued.session_version ?? queued.preview?.session_version ?? queued.session?.session_version ?? null;
-    const currentSessionVersion = wiz.workbench?.session_version ?? wiz.preview?.data?.session_version ?? wiz.preview?.data?.session?.session_version ?? null;
-    const sessionVersionChanged = queuedSessionVersion != null && currentSessionVersion != null && String(queuedSessionVersion) !== String(currentSessionVersion);
     return !!(
       requestedResolveAllLinked === true ||
-      queued.state_changed === true ||
-      sessionVersionChanged ||
-      (Array.isArray(queued.case_resolution_ids) && queued.case_resolution_ids.length > 0) ||
-      (Array.isArray(queued.dirty_candidate_ids) && queued.dirty_candidate_ids.length > 0) ||
-      (Array.isArray(queued.affected_candidate_ids) && queued.affected_candidate_ids.length > 0) ||
-      (Array.isArray(queued.pending_candidate_ids) && queued.pending_candidate_ids.length > 0) ||
-      trimStr(queued.job_id || queued.refresh_job_id || queued.recompute_job_id || queued.queued_job_metadata?.job_id || '')
+      queued.needs_full_session_refresh === true ||
+      queued.full_session_refresh_required === true ||
+      trimStr(queued.refresh_scope || '').toUpperCase() === 'SESSION' ||
+      trimStr(queued.refresh_scope || '').toUpperCase() === 'FULL_SESSION'
     );
   };
 
@@ -102115,7 +102138,8 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
           throw new Error('The payment decision was saved, but the updated Banking Pay session version was not returned. Refresh Banking Pay to read the latest state.');
         }
 
-        settledResult = await pollPayWorkbenchCandidateUntilSettled(sessionId, '', {
+        const refreshCandidateId = affectedCandidateIds.length === 1 ? affectedCandidateIds[0] : '';
+        settledResult = await pollPayWorkbenchCandidateUntilSettled(sessionId, refreshCandidateId, {
           updateState: true,
           expectedSessionId: sessionId,
           minimumSessionVersion,
@@ -126548,6 +126572,9 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
 
       return {
         ok: true,
+        settled: true,
+        ready: true,
+        required_preview_sections_loaded: true,
         session_id: sessionIdText,
         candidate_id: candidateScopedPoll ? candidateIdText : null,
         watched_candidate_ids: [...watchCandidateIds],
