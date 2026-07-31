@@ -53144,7 +53144,10 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       || !!replacementSessionId;
     const storedReadyMismatch = asBool(raw.stored_ready_mismatch);
     const sessionReady = contractPresent && asBool(raw.session_ready);
-    const readyForDraft = contractPresent && asBool(raw.ready_for_draft);
+    const displayReady = contractPresent && asBool(raw.display_ready);
+    const draftSafe = contractPresent && asBool(raw.draft_safe);
+    const draftBlockReasonCode = upperTrim(raw.draft_block_reason_code || '');
+    const readyForDraft = contractPresent && asBool(raw.ready_for_draft) && draftSafe;
     const selectedEligibleReadyRowCount = nonNegativeCount(raw, ['selected_eligible_ready_row_count'], raw.blocker_counts, ['selected_eligible_ready_rows']);
     const rowsAvailable = asBool(raw.rows_available)
       || asBool(raw.has_materialised_preview_rows)
@@ -53183,6 +53186,9 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     appendSessionBlocker('WORKBENCH_JOBS_ACTIVE', jobCounts.queued > 0 || jobCounts.running > 0 || jobCounts.active > 0);
     appendSessionBlocker('WORKBENCH_JOBS_FAILED', jobCounts.unresolved_failed > 0 || jobCounts.unresolved_dead > 0);
     appendSessionBlocker('STORED_READY_MISMATCH', storedReadyMismatch);
+    if (!draftSafe && draftBlockReasonCode && !draftBlockerCodes.includes(draftBlockReasonCode)) {
+      draftBlockerCodes.push(draftBlockReasonCode);
+    }
     const allBlockerCodes = Array.from(new Set([...sessionBlockerCodes, ...draftBlockerCodes]));
     const hasFailure = candidateCounts.failed > 0
       || candidateCounts.unknown > 0
@@ -53208,6 +53214,9 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       contractPresent,
       sessionReady,
       readyForDraft,
+      displayReady,
+      draftSafe,
+      draftBlockReasonCode,
       sessionMatchesCurrent,
       localSessionId,
       localSessionVersion,
@@ -54835,6 +54844,11 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     if (cdBusy) return 'Draft creation is already starting.';
     if (activeDraftCreateOperationForRender) return 'A draft creation operation is already running.';
     if (authoritativeRenderState.hasFailure || hasFailedCandidates) return 'Payment preview preparation failed. Resolve or retry the failed work before creating a draft.';
+    if (authoritativeRenderState.displayReady && !authoritativeRenderState.draftSafe) {
+      if (authoritativeRenderState.draftBlockReasonCode === 'REFRESH_FAILED') return 'A Banking Pay refresh failed. Retry it before creating a draft.';
+      if (authoritativeRenderState.draftBlockReasonCode === 'CANDIDATE_REFRESH_IN_PROGRESS') return 'Updating candidate payment information. Draft creation re-enables automatically when it is complete.';
+      return 'Checking for recent Banking Pay changes. Existing rows remain available while this finishes.';
+    }
     if (hasPendingCandidates) return 'Preparing / candidates refreshing. Draft creation re-enables when all candidate refresh work is complete.';
     if (!authoritativeRenderState.contractPresent) return 'Authoritative payment preview readiness is unavailable. Refresh Banking Pay before creating a draft.';
     if (!authoritativeRenderState.sessionMatchesCurrent) return 'The displayed preview does not match the current workbench session/version. Refresh Banking Pay.';
@@ -54852,6 +54866,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const createDraftLabel = (() => {
     if (cdBusy) return 'Creating…';
     if (authoritativeRenderState.hasFailure || hasFailedCandidates) return 'Refresh failed';
+    if (authoritativeRenderState.displayReady && !authoritativeRenderState.draftSafe) return 'Checking changes…';
     if (hasPendingCandidates) return 'Preparing…';
     if (authoritativeRenderState.sessionReady !== true) return 'Preparing…';
     if (authoritativeRenderState.readyForDraft !== true || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) return 'Select rows';
@@ -54874,6 +54889,21 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     }
     if (!authoritativeRenderState.contractPresent || !authoritativeRenderState.sessionMatchesCurrent) {
       return `<div class="warn" style="white-space:pre-wrap;">${enc('Authoritative readiness for the current workbench session/version is unavailable. Refresh Banking Pay before creating a draft.')}</div>`;
+    }
+    if (authoritativeRenderState.displayReady && !authoritativeRenderState.draftSafe) {
+      const statusText = authoritativeRenderState.draftBlockReasonCode === 'CANDIDATE_REFRESH_IN_PROGRESS'
+        ? 'Updating candidate payment information.'
+        : (authoritativeRenderState.draftBlockReasonCode === 'REFRESH_FAILED'
+          ? 'A Banking Pay refresh failed. Retry the refresh before creating a draft.'
+          : 'Checking for recent Banking Pay changes.');
+      return `
+        <div class="card" style="margin-top:10px;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span class="pill pill-warn">${enc(statusText)}</span>
+            <span class="mini" style="opacity:.78;">${enc('The current materialised rows remain available; Create Draft will re-enable automatically when the backend confirms the scope is current.')}</span>
+          </div>
+        </div>
+      `;
     }
     if (!authoritativeRenderState.sessionReady || authoritativeRenderState.hasOutstandingWork) {
       return `
