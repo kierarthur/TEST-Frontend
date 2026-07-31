@@ -193,6 +193,9 @@ test('single-clear handler removes the row optimistically and does not reapply c
   assert.match(clearBranch, /alert_payload_json: payloadJson/);
   assert.match(clearBranch, /refreshOpenPopover\(stateBeforeClear\)/);
   assert.doesNotMatch(clearBranch, /refreshBankingNavAttentionFromCachedRows/);
+  assert.match(handlers, /const remainingAlerts = clearAll[\s\S]*currentAlerts\.filter/);
+  assert.match(handlers, /updateBankingNavAttentionState\(nextState\)/);
+  assert.match(clearBranch, /updateBankingNavAttentionState\(\{ \.\.\.stateBeforeClear, keepPopoverOpen: true, forceReapply: true \}\)/);
 });
 
 test('summary application no longer filters success-only alerts', () => {
@@ -234,6 +237,73 @@ test('summary application no longer filters success-only alerts', () => {
   assert.equal(result.alerts.length, 2);
   assert.equal(attentionState.count, 2);
   assert.deepEqual(Array.from(attentionState.alerts, (alert) => alert.alert_kind), ['BATCH_SCHEDULED_SUCCESS', 'BATCH_SETTLED_SUCCESS']);
+});
+
+test('a changed-hash count-only response after one clear preserves exactly the unsuppressed message and corrected badge count', () => {
+  const source = sliceBetween('function applyAlertSummaryToState(responsePayload)', 'async function bankingAcknowledgeAlerts(input = {})');
+  let attentionState = null;
+  const now = Date.now();
+  const loadedSummary = {
+    alerts: [scheduledAlert, settledAlert],
+    banking_alerts: [scheduledAlert, settledAlert],
+    unacknowledged_count: 2,
+    banking_unacknowledged_alert_count: 2,
+    banking_alert_hash: 'old-alert-hash',
+    banking_alert_summary_signature: 'old-alert-hash'
+  };
+  const context = {
+    window: {
+      modalCtx: { banking: { pay: { list: { banking_alert_summary: loadedSummary } } } },
+      __bankingNavAttentionState: {
+        count: 2,
+        alerts: [scheduledAlert, settledAlert],
+        banking_alerts: [scheduledAlert, settledAlert],
+        banking_alert_summary: loadedSummary,
+        banking_alert_hash: 'old-alert-hash'
+      },
+      __bankingAlertSummary: loadedSummary,
+      __bankingLocallyAcknowledgedFingerprints: {
+        [scheduledAlert.alert_fingerprint]: now
+      },
+      __bankingLastAlertAckMutationAtMs: now,
+      __changesHeartbeat: { _lastBankingAckMutationAtMs: now }
+    },
+    document: { querySelector() { return null; }, createElement() { return { innerHTML: '', firstElementChild: null }; } },
+    updateBankingNavAttentionState(value) { attentionState = value; context.window.__bankingNavAttentionState = value; },
+    console,
+    setTimeout,
+    clearTimeout,
+    Date,
+    Number,
+    String,
+    Math,
+    Array,
+    Object,
+    JSON,
+    Set
+  };
+  vm.runInNewContext(source, context, { filename: 'banking-alert-changed-hash-reconcile.js' });
+  const result = context.applyAlertSummaryToState({
+    banking_alert_hash: 'new-alert-hash',
+    banking_alert_summary_signature: 'new-alert-hash',
+    banking_unacknowledged_alert_count: 1,
+    alert_summary: {
+      alerts: [],
+      banking_alerts: [],
+      unacknowledged_count: 1,
+      banking_unacknowledged_alert_count: 1,
+      banking_alert_hash: 'new-alert-hash',
+      banking_alert_summary_signature: 'new-alert-hash',
+      banking_alert_summary_deferred: true
+    }
+  });
+
+  assert.equal(result.count, 1);
+  assert.equal(result.alerts.length, 1);
+  assert.equal(result.alerts[0].alert_fingerprint, settledAlert.alert_fingerprint);
+  assert.equal(attentionState.count, 1);
+  assert.equal(attentionState.alerts[0].description, settledAlert.description);
+  assert.equal(attentionState.banking_alert_hash, 'new-alert-hash');
 });
 
 test('dedicated alert fetch loads full details and applies them', async () => {
