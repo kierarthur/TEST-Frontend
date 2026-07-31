@@ -164099,6 +164099,11 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
       'timesheet_scope',
       'route_family',
       'route_subfamily',
+      'correction_id',
+      'correction_kind',
+      'adjustment_origin',
+      'correction_source_system',
+      'correction_display_label',
       'underlying_channel_family',
       'is_import_authoritative',
       'compare_block_required',
@@ -164203,6 +164208,11 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     'sheet_scope',
     'route_family',
     'route_subfamily',
+    'correction_id',
+    'correction_kind',
+    'adjustment_origin',
+    'correction_source_system',
+    'correction_display_label',
     'bulk_authorise_classification',
     'bulk_authorise_section',
     'requires_authorisation',
@@ -174571,6 +174581,19 @@ function renderBulkAuthoriseLists(state) {
   };
 
   const deriveTypeLabel = (row) => {
+    const correctionId = String(row?.correction_id || '').trim();
+    const correctionKind = String(row?.correction_kind || '').trim().toUpperCase();
+    const correctionOrigin = String(row?.adjustment_origin || '').trim().toUpperCase();
+    const correctionSource = String(row?.correction_source_system || '').trim().toUpperCase();
+    const correctionLabel = String(row?.correction_display_label || '').trim();
+    const validCorrectionLabel = (
+      (correctionSource === 'NHSP' && correctionKind === 'CHANGED_HOURS_REVERSAL' && correctionLabel === 'NHSP Reversal') ||
+      (correctionSource === 'NHSP' && correctionKind === 'CHANGED_HOURS_REPLACEMENT' && correctionLabel === 'NHSP Corrected Hours') ||
+      (correctionSource === 'HEALTHROSTER' && correctionKind === 'CHANGED_HOURS_REVERSAL' && correctionLabel === 'HealthRoster Reversal') ||
+      (correctionSource === 'HEALTHROSTER' && correctionKind === 'CHANGED_HOURS_REPLACEMENT' && correctionLabel === 'HealthRoster Corrected Hours')
+    );
+    if (correctionId && correctionOrigin === 'IMPORT_CORRECTION' && validCorrectionLabel) return correctionLabel;
+
     const family = String(row?.route_family || '').trim().toUpperCase();
     if (family === 'MANUAL_NON_QR') return 'Manual';
     if (family === 'QR') return 'QR';

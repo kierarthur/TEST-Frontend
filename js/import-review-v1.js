@@ -810,7 +810,22 @@
       REFERENCE_ON_SHIFT_MISSING_FROM_COMPLETE_IMPORT: 'This current shift is absent from the complete import and has a stored reference. Clearing it is a separate explicit choice.',
       REFERENCE_ON_SHIFT_MISSING_OR_MISMATCHED_IN_COMPLETE_IMPORT: 'The stored reference is missing or differs in the complete import. Clearing it is a separate explicit choice.',
       QUERY_RECIPIENT_EMAIL_MISSING_OR_INVALID: 'No valid query recipient is configured. Correct the client or contract query email outside this review, then choose Recheck.',
-      BLOCKED_ACTIVE_PAY_DRAFT: 'An active Banking Pay draft protects this timesheet. Resolve the draft outside the import, then choose Recheck.'
+      BLOCKED_ACTIVE_PAY_DRAFT: 'An active Banking Pay draft protects this timesheet. Resolve the draft outside the import, then choose Recheck.',
+      IMPORT_REVIEW_CORRECTION_GENERATION_PARTIALLY_INVOICED: 'The current correction generation is only partly invoiced. CloudTMS cannot safely amend it or create a further correction generation while one member remains uninvoiced. Resolve the invoice state through the existing invoice process, then choose Recheck.',
+      IMPORT_REVIEW_ARCHIVED_GENERATION_ACTIVE_MEMBER_CONFLICT: 'An inactive Archived correction record has an active partner still outstanding. CloudTMS will not restore or reuse the Archived generation. Resolve the active record through the normal timesheet lifecycle, then choose Recheck.',
+      IMPORT_REVIEW_ARCHIVED_INVOICE_STATE_CONFLICT: 'An Archived timesheet also has frozen invoice evidence, which is not a supported lifecycle state. Nothing was selected. Resolve the conflicting historical state, then choose Recheck.',
+      IMPORT_REVIEW_INVOICE_ACTIVITY_IN_PROGRESS: 'An invoice, issue, unissue or credit operation is changing the financial position for this shift. Nothing was changed. Choose Recheck when that operation has finished.',
+      IMPORT_REVIEW_INVOICE_COMPONENT_SCOPE_UNPROVABLE: 'CloudTMS found frozen invoice value but could not prove which part belongs to this exact imported shift. Nothing was selected. Resolve the historical source evidence, then choose Recheck.',
+      IMPORT_REVIEW_EFFECTIVE_POSITION_NOT_STANDARD_REPRESENTABLE: 'The complete frozen invoice position is valid, but it cannot be represented by the standard NHSP or HealthRoster correction timesheet shape. Nothing was selected. Refer the source for financial lifecycle review.',
+      IMPORT_REVIEW_PAID_MUTABLE_GENERATION_ROLLOVER_UNAVAILABLE: 'The active correction generation has been paid but is not fully invoiced. Payment is not invoice evidence, and the existing paid-timesheet rollover cannot safely transition this correction unit. Resolve the normal financial lifecycle, then choose Recheck.',
+      IMPORT_REVIEW_ZERO_EFFECTIVE_POSITION_HAS_ACTIVE_CORRECTION_GENERATION: 'The frozen invoice position is zero but an active correction generation remains outstanding. CloudTMS cannot create a false zero reversal. Resolve the active generation, then choose Recheck.',
+      IMPORT_REVIEW_EFFECTIVE_ZERO_NO_ACTIVE_SOURCE: 'The frozen invoice position is zero and there is no active ordinary source timesheet that can safely carry the authoritative shift. Nothing was selected.',
+      IMPORT_REVIEW_SELECTED_ACTION_STALE: 'The source, invoice or correction state changed after this review was prepared. Nothing was changed. Recheck and approve the refreshed action.',
+      IMPORT_REVIEW_RECONCILIATION_BALANCE_MISMATCH: 'The recalculated timesheets do not match the approved frozen reconciliation. Nothing was authorised. Recheck the affected source.',
+      IMPORT_REVIEW_SOURCE_LIMIT_EXCEEDED: 'The historical evidence for this source exceeds the safe automatic-review limit. Nothing was selected. Refer the source for bounded financial-history review.',
+      IMPORT_REVIEW_INVOICE_LINE_EVIDENCE_LIMIT_EXCEEDED: 'The historical evidence for this source exceeds the safe automatic-review limit. Nothing was selected. Refer the source for bounded financial-history review.',
+      IMPORT_REVIEW_AUDIT_EVIDENCE_LIMIT_EXCEEDED: 'The historical evidence for this source exceeds the safe automatic-review limit. Nothing was selected. Refer the source for bounded financial-history review.',
+      IMPORT_REVIEW_OPERATION_EVIDENCE_LIMIT_EXCEEDED: 'The historical evidence for this source exceeds the safe automatic-review limit. Nothing was selected. Refer the source for bounded financial-history review.'
     };
     return labels[String(code || '').toUpperCase()] || 'This item needs review. Check the imported and current evidence, resolve the underlying record if necessary, then choose Recheck.';
   }
@@ -1204,7 +1219,14 @@
 
   function confirmationActionLabel(item) {
     const protectedShift = item.protection?.paid === true || item.protection?.invoice_locked === true;
-    if (item.action_kind === 'APPLY_AMENDMENT') return item.outcome_label || (protectedShift ? 'TMS will reverse and create replacement' : 'TMS will amend shift');
+    if (item.action_kind === 'APPLY_AMENDMENT') {
+      const route = String(item.amendment_route || item.summary_json?.amendment_route || '').trim().toUpperCase();
+      if (route === 'AMEND_PAID_UNINVOICED_SOURCE') return 'TMS will use the existing paid-but-uninvoiced rollover, update the same shift and replace its import evidence. Payment is not being treated as invoice evidence.';
+      if (route === 'AMEND_EXISTING_REPLACEMENT') return 'TMS will repair the active uninvoiced correction generation. Missing or incorrect active members will be normalised under the same correction ID. No additional correction generation will be created.';
+      if (route === 'CREATE_REVERSAL_REPLACEMENT') return 'TMS will use the complete signed frozen invoice history for this exact shift, create one standard reversal and one standard corrected-hours timesheet, and leave all historical issued invoices unchanged.';
+      if (route === 'AMEND_SOURCE') return 'TMS will update the existing shift and replace its current import evidence. No reversal or corrected-hours timesheet will be created.';
+      return item.outcome_label || (protectedShift ? 'TMS will reverse and create replacement' : 'TMS will amend shift');
+    }
     if (item.action_kind === 'APPLY_CANCELLATION') return protectedShift ? 'TMS will reverse shift' : 'TMS will cancel shift';
     return item.outcome_label || 'TMS will process this item';
   }

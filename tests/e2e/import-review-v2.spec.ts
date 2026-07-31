@@ -21,6 +21,7 @@ const contract = {
   incremental_apply_version: 'IMPORT_REVIEW_INCREMENTAL_APPLY_V1',
   review_ui_contract_version: 'IMPORT_REVIEW_UI_V6',
   email_grouping_version: 'TIMESHEET_QUERY_RECIPIENT_EMAIL_V1',
+  canonical_correction_carrier_version: 'BANKING_PAY_CANONICAL_CORRECTION_CARRIER_V1',
   legacy_contracts_supported: false
 };
 

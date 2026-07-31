@@ -180,7 +180,11 @@ test('final confirmation is server paged, grouped and rechecked before apply', (
   assert.match(source, /selectedOutcomeCount/);
   assert.match(source, /selectedActionCount/);
   assert.match(source, /reviewed outcome\(s\)/);
-  assert.match(source, /item\.action_kind === 'APPLY_AMENDMENT'\) return item\.outcome_label \|\|/);
+  assert.match(source, /route === 'AMEND_SOURCE'/);
+  assert.match(source, /route === 'AMEND_PAID_UNINVOICED_SOURCE'/);
+  assert.match(source, /route === 'AMEND_EXISTING_REPLACEMENT'/);
+  assert.match(source, /route === 'CREATE_REVERSAL_REPLACEMENT'/);
+  assert.match(source, /complete signed frozen invoice history/);
   assert.match(source, /Unchanged outcomes are recorded for audit without changing CloudTMS data/);
   assert.match(source, /Selected batch: server-approved import-authoritative action/);
   assert.match(source, /unresolved rows remain pending/);
