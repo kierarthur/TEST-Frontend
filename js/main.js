@@ -24066,22 +24066,74 @@ function attachBankingNavAlertPopoverHandlers() {
     });
     requestDeferredAlertDetailRefresh(attentionState, 'banking-alert-popover-open');
   };
-  const setPopoverClearingState = (busy) => {
+  const getClearOperationState = () => {
+    if (!window.__bankingAlertClearOperations || typeof window.__bankingAlertClearOperations !== 'object') {
+      window.__bankingAlertClearOperations = {
+        generation: Math.max(0, Math.trunc(Number(window.__bankingAlertAckMutationGeneration || 0) || 0)),
+        pending: Object.create(null),
+        clearAllPending: false
+      };
+    }
+    const state = window.__bankingAlertClearOperations;
+    if (!state.pending || typeof state.pending !== 'object') state.pending = Object.create(null);
+    state.generation = Math.max(0, Math.trunc(Number(state.generation || 0) || 0));
+    return state;
+  };
+  const pendingClearCount = () => {
+    const state = getClearOperationState();
+    return Object.keys(state.pending).length + (state.clearAllPending === true ? 1 : 0);
+  };
+  const beginClearOperation = (alertFingerprint = '', clearAll = false) => {
+    const state = getClearOperationState();
+    const fingerprint = String(alertFingerprint || '').trim();
+    if (clearAll) {
+      if (state.clearAllPending === true || Object.keys(state.pending).length > 0) return null;
+    } else if (!fingerprint || state.clearAllPending === true || state.pending[fingerprint]) {
+      return null;
+    }
+    const generation = Math.max(
+      state.generation,
+      Math.trunc(Number(window.__bankingAlertAckMutationGeneration || 0) || 0)
+    ) + 1;
+    state.generation = generation;
+    window.__bankingAlertAckMutationGeneration = generation;
+    const operation = { generation, alertFingerprint: fingerprint, clearAll: clearAll === true };
+    if (clearAll) state.clearAllPending = true;
+    else state.pending[fingerprint] = operation;
+    return operation;
+  };
+  const finishClearOperation = (operation) => {
+    if (!operation || typeof operation !== 'object') return;
+    const state = getClearOperationState();
+    if (operation.clearAll === true) state.clearAllPending = false;
+    else if (operation.alertFingerprint && state.pending[operation.alertFingerprint] === operation) delete state.pending[operation.alertFingerprint];
+  };
+  const setPopoverClearingState = () => {
     const popover = queryPopover();
     if (!popover) return;
-    const isBusy = busy === true;
+    const activeCount = pendingClearCount();
+    const isBusy = activeCount > 0;
+    const alertCount = Math.max(0, Math.trunc(Number(popover.getAttribute('data-banking-alert-count') || 0) || 0));
+    const disableClearAll = isBusy || alertCount < 1;
     popover.setAttribute('data-clearing', isBusy ? '1' : '0');
     try {
-      popover.querySelectorAll('[data-action="banking:nav:alerts:clear"], [data-action="banking:nav:alerts:clearAll"]').forEach((node) => {
+      popover.querySelectorAll('[data-action="banking:nav:alerts:clearAll"]').forEach((node) => {
         if (!node || !node.setAttribute) return;
-        if (isBusy) {
+        if (disableClearAll) {
           node.setAttribute('data-disabled', '1');
           node.setAttribute('aria-disabled', 'true');
-          node.classList && node.classList.add('is-busy');
+          node.setAttribute('disabled', '');
+          if (isBusy) node.classList && node.classList.add('is-busy');
+          else node.classList && node.classList.remove('is-busy');
         } else {
           node.removeAttribute('data-disabled');
           node.removeAttribute('aria-disabled');
+          node.removeAttribute('disabled');
           node.classList && node.classList.remove('is-busy');
+          if (node.style) {
+            node.style.opacity = '';
+            node.style.filter = '';
+          }
         }
       });
       let status = popover.querySelector('[data-banking-alert-clearing-status="1"]');
@@ -24089,8 +24141,10 @@ function attachBankingNavAlertPopoverHandlers() {
         status = document.createElement('div');
         status.setAttribute('data-banking-alert-clearing-status', '1');
         status.className = 'banking-nav-alert-clearing-status muted small';
-        status.textContent = 'Clearing…';
         popover.appendChild(status);
+      }
+      if (isBusy && status) {
+        status.textContent = activeCount === 1 ? 'Clearing 1 alert…' : `Clearing ${activeCount} alerts…`;
       } else if (!isBusy && status && status.parentNode) {
         status.parentNode.removeChild(status);
       }
@@ -24322,6 +24376,93 @@ function attachBankingNavAlertPopoverHandlers() {
   const cloneAttentionState = (value) => {
     try { return JSON.parse(JSON.stringify(value && typeof value === 'object' ? value : {})); } catch { return value || {}; }
   };
+  const getAlertFingerprint = (alert) => String(
+    alert?.alert_fingerprint
+    || alert?.alertFingerprint
+    || alert?.fingerprint
+    || alert?.banking_alert_fingerprint
+    || alert?.payload_json?.alert_fingerprint
+    || alert?.alert_payload_json?.alert_fingerprint
+    || ''
+  ).trim();
+  const restoreOptimisticallyRemovedAlert = ({ alertFingerprint = '', alertSnapshot = null, stateBeforeClear = null } = {}) => {
+    const targetFingerprint = String(alertFingerprint || '').trim();
+    if (!targetFingerprint) return null;
+    const currentState = getCanonicalAttentionState();
+    const currentAlerts = getAttentionAlerts(currentState);
+    if (currentAlerts.some((alert) => getAlertFingerprint(alert) === targetFingerprint)) return currentState;
+    const previousAlerts = getAttentionAlerts(stateBeforeClear || {});
+    const restoredAlert = alertSnapshot || previousAlerts.find((alert) => getAlertFingerprint(alert) === targetFingerprint) || null;
+    if (!restoredAlert) return null;
+    const suppressionMap = (window.__bankingLocallyAcknowledgedFingerprints && typeof window.__bankingLocallyAcknowledgedFingerprints === 'object')
+      ? window.__bankingLocallyAcknowledgedFingerprints
+      : {};
+    const mergedAlerts = [...currentAlerts, restoredAlert]
+      .filter((alert, index, rows) => {
+        const fingerprint = getAlertFingerprint(alert);
+        if (!fingerprint || suppressionMap[fingerprint]) return false;
+        return rows.findIndex((candidate) => getAlertFingerprint(candidate) === fingerprint) === index;
+      })
+      .sort((left, right) => {
+        const leftIndex = previousAlerts.findIndex((alert) => getAlertFingerprint(alert) === getAlertFingerprint(left));
+        const rightIndex = previousAlerts.findIndex((alert) => getAlertFingerprint(alert) === getAlertFingerprint(right));
+        if (leftIndex < 0 && rightIndex < 0) return 0;
+        if (leftIndex < 0) return 1;
+        if (rightIndex < 0) return -1;
+        return leftIndex - rightIndex;
+      });
+    const count = mergedAlerts.length;
+    const currentSummary = (currentState.alertSummary && typeof currentState.alertSummary === 'object' && !Array.isArray(currentState.alertSummary))
+      ? currentState.alertSummary
+      : ((currentState.banking_alert_summary && typeof currentState.banking_alert_summary === 'object' && !Array.isArray(currentState.banking_alert_summary)) ? currentState.banking_alert_summary : {});
+    const highestLabel = count > 0 ? String(mergedAlerts[0]?.label || mergedAlerts[0]?.title || 'Banking issue') : null;
+    const highestSeverity = count > 0 ? String(mergedAlerts[0]?.severity || 'critical') : null;
+    const nextSummary = {
+      ...currentSummary,
+      alerts: mergedAlerts,
+      banking_alerts: mergedAlerts,
+      unacknowledged_count: count,
+      banking_unacknowledged_alert_count: count,
+      banking_alert_group_count: count,
+      grouped_alert_count: count,
+      highest_label: highestLabel,
+      banking_highest_alert_label: highestLabel,
+      highest_severity: highestSeverity,
+      banking_highest_alert_severity: highestSeverity,
+      banking_alert_summary_deferred: false,
+      detailsDeferred: false,
+      detailsLoading: false
+    };
+    const nextState = {
+      ...currentState,
+      requiresAttention: count > 0,
+      count,
+      unacknowledgedCount: count,
+      unacknowledged_count: count,
+      banking_unacknowledged_alert_count: count,
+      alerts: mergedAlerts,
+      banking_alerts: mergedAlerts,
+      highestPriorityLabel: highestLabel,
+      highest_label: highestLabel,
+      banking_highest_alert_label: highestLabel,
+      highestSeverity,
+      highest_severity: highestSeverity,
+      banking_highest_alert_severity: highestSeverity,
+      alertSummary: nextSummary,
+      banking_alert_summary: nextSummary,
+      banking_alert_summary_deferred: false,
+      detailsDeferred: false,
+      detailsLoading: false,
+      title: count > 0 ? highestLabel : 'No current unacknowledged Banking alerts',
+      keepPopoverOpen: true,
+      forceReapply: true
+    };
+    window.__bankingAlertSummary = cloneAttentionState(nextSummary);
+    window.__bankingAlertCount = count;
+    if (typeof updateBankingNavAttentionState === 'function') updateBankingNavAttentionState(nextState);
+    else window.__bankingNavAttentionState = nextState;
+    return nextState;
+  };
   const optimisticallyRemoveAlertRows = ({ alertFingerprint = '', clearAll = false } = {}) => {
     const popover = queryPopover();
     if (!popover) return false;
@@ -24537,50 +24678,51 @@ function attachBankingNavAlertPopoverHandlers() {
     }
 
     if (action === 'banking:nav:alerts:clear') {
-      const activePopover = queryPopover();
-      if (target.getAttribute('data-disabled') === '1' || target.getAttribute('aria-disabled') === 'true' || activePopover?.getAttribute('data-clearing') === '1') return;
       const alertFingerprint = String(target.getAttribute('data-alert-fingerprint') || '').trim();
       const alertKind = String(target.getAttribute('data-alert-kind') || '').trim().toUpperCase();
       const entityKind = String(target.getAttribute('data-entity-kind') || 'pay_batch').trim().toLowerCase() || 'pay_batch';
       const entityId = String(target.getAttribute('data-entity-id') || '').trim();
       const payloadJson = parsePayloadAttribute(target.getAttribute('data-alert-payload-json') || '');
       if (!alertFingerprint) return;
+      const operation = beginClearOperation(alertFingerprint, false);
+      if (!operation) return;
       const stateBeforeClear = cloneAttentionState(window.__bankingNavAttentionState || {});
+      const alertSnapshot = getAttentionAlerts(stateBeforeClear).find((alert) => getAlertFingerprint(alert) === alertFingerprint) || null;
       optimisticallyRemoveAlertRows({ alertFingerprint });
-      setPopoverClearingState(true);
+      setPopoverClearingState();
       try {
         const result = await bankingAcknowledgeAlerts({
           alert_fingerprint: alertFingerprint,
           alert_kind: alertKind,
           entity_kind: entityKind,
           entity_id: entityId,
-          alert_payload_json: payloadJson
+          alert_payload_json: payloadJson,
+          client_mutation_generation: operation.generation
         });
         refreshOpenPopover(result?.__banking_alert_attention_state || window.__bankingNavAttentionState || result?.alert_summary || result?.remaining_alert_summary || null);
       } catch (error) {
-        try {
-          if (typeof updateBankingNavAttentionState === 'function') updateBankingNavAttentionState({ ...stateBeforeClear, keepPopoverOpen: true, forceReapply: true });
-          else window.__bankingNavAttentionState = stateBeforeClear;
-        } catch {}
-        refreshOpenPopover(stateBeforeClear);
+        const restoredState = restoreOptimisticallyRemovedAlert({ alertFingerprint, alertSnapshot, stateBeforeClear }) || stateBeforeClear;
+        refreshOpenPopover(restoredState);
         await showPopoverFriendlyError(error, {
           action: 'acknowledge_alert',
           title: 'Alert could not be cleared',
           message: 'CloudTMS could not clear this Banking alert. Refresh Banking and try again.'
         });
-        setPopoverClearingState(false);
+      } finally {
+        finishClearOperation(operation);
+        setPopoverClearingState();
       }
       return;
     }
 
     if (action === 'banking:nav:alerts:clearAll') {
-      const activePopover = queryPopover();
-      if (target.getAttribute('data-disabled') === '1' || target.getAttribute('aria-disabled') === 'true' || activePopover?.getAttribute('data-clearing') === '1') return;
+      const operation = beginClearOperation('', true);
+      if (!operation) return;
       const stateBeforeClear = cloneAttentionState(window.__bankingNavAttentionState || {});
       optimisticallyRemoveAlertRows({ clearAll: true });
-      setPopoverClearingState(true);
+      setPopoverClearingState();
       try {
-        const result = await bankingAcknowledgeAlerts({ clearAll: true });
+        const result = await bankingAcknowledgeAlerts({ clearAll: true, client_mutation_generation: operation.generation });
         refreshOpenPopover(result?.__banking_alert_attention_state || window.__bankingNavAttentionState || result?.alert_summary || result?.remaining_alert_summary || null);
       } catch (error) {
         try {
@@ -24593,7 +24735,9 @@ function attachBankingNavAlertPopoverHandlers() {
           title: 'Alerts could not be cleared',
           message: 'CloudTMS could not clear these Banking alerts. Refresh Banking and try again.'
         });
-        setPopoverClearingState(false);
+      } finally {
+        finishClearOperation(operation);
+        setPopoverClearingState();
       }
     }
   };
@@ -24825,7 +24969,14 @@ function renderBankingNavAlertPopover(attentionState) {
     summary?.details_deferred === true ||
     summary?.banking_alert_summary_deferred === true
   );
-  const clearing = state.clearing === true
+  const clearOperationState = (typeof window !== 'undefined' && window.__bankingAlertClearOperations && typeof window.__bankingAlertClearOperations === 'object')
+    ? window.__bankingAlertClearOperations
+    : {};
+  const pendingClearFingerprints = (clearOperationState.pending && typeof clearOperationState.pending === 'object')
+    ? clearOperationState.pending
+    : {};
+  const activeClearCount = Object.keys(pendingClearFingerprints).length + (clearOperationState.clearAllPending === true ? 1 : 0);
+  const clearing = activeClearCount > 0 || state.clearing === true
     || state.isClearing === true
     || state.acknowledgementInFlight === true
     || state.acknowledge_in_flight === true
@@ -24834,9 +24985,6 @@ function renderBankingNavAlertPopover(attentionState) {
       || window.__bankingAlertClearingInFlight === true
       || window.__bankingAcknowledgeInFlight === true
     ));
-  const disabledAttrs = clearing ? 'data-disabled="1" aria-disabled="true" disabled' : '';
-  const disabledStyle = clearing ? ' style="opacity:.55;filter:saturate(.6) brightness(.95);pointer-events:none;"' : '';
-
   const renderAlertRow = (alert, index) => {
     const payload = (alert.payload_json && typeof alert.payload_json === 'object' && !Array.isArray(alert.payload_json))
       ? alert.payload_json
@@ -24848,6 +24996,9 @@ function renderBankingNavAlertPopover(attentionState) {
     const payBatchId = firstNonBlank(alert.pay_batch_id, alert.payBatchId, alert.entity_id, alert.entityId, payload.pay_batch_id, payload.payBatchId);
     const batchReference = firstNonBlank(alert.batch_reference, alert.batchReference, alert.pay_batch_reference, alert.payBatchReference, payload.batch_reference, payload.batchReference, payload.pay_batch_reference, payload.payBatchReference, shortBatchId(payBatchId));
     const fingerprint = firstNonBlank(alert.alert_fingerprint, alert.fingerprint, alert.banking_alert_fingerprint, payload.stable_issue_key, payload.dedupe_key, `fallback:${kind || 'UNKNOWN'}:${payBatchId || index}`);
+    const rowClearing = clearOperationState.clearAllPending === true || !!pendingClearFingerprints[fingerprint];
+    const rowDisabledAttrs = rowClearing ? 'data-disabled="1" aria-disabled="true" disabled' : '';
+    const rowDisabledStyle = rowClearing ? ' style="opacity:.55;filter:saturate(.6) brightness(.95);pointer-events:none;"' : '';
     const entityKind = firstNonBlank(alert.entity_kind, alert.entityKind, payBatchId ? 'pay_batch' : '');
     const countValue = (...keys) => {
       for (const key of keys) {
@@ -24935,7 +25086,7 @@ function renderBankingNavAlertPopover(attentionState) {
           </div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
-          ${payBatchId ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:openBatch" data-batch-id="${enc(payBatchId)}" data-alert-kind="${enc(kind)}" ${clearing ? 'data-disabled="1" aria-disabled="true" disabled style="opacity:.55;filter:saturate(.6) brightness(.95);pointer-events:none;"' : ''}>Open batch</button>` : ''}
+          ${payBatchId ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:openBatch" data-batch-id="${enc(payBatchId)}" data-alert-kind="${enc(kind)}">Open batch</button>` : ''}
           <button
             type="button"
             class="btn btn-sm btn-outline"
@@ -24945,8 +25096,8 @@ function renderBankingNavAlertPopover(attentionState) {
             data-entity-kind="${enc(entityKind || 'pay_batch')}"
             data-entity-id="${enc(payBatchId || firstNonBlank(alert.entity_id, alert.entityId))}"
             data-alert-payload-json="${enc(payloadForAttr)}"
-            ${disabledAttrs}${disabledStyle}
-          >${clearing ? 'Clearing…' : 'Clear'}</button>
+            ${rowDisabledAttrs}${rowDisabledStyle}
+          >${rowClearing ? 'Clearing…' : 'Clear'}</button>
         </div>
       </div>
     `;
@@ -24974,7 +25125,7 @@ function renderBankingNavAlertPopover(attentionState) {
         </div>
         <button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:close" aria-label="Close Banking alerts">×</button>
       </div>
-      ${clearing ? `<div data-banking-alert-clearing-status="1" class="banking-nav-alert-clearing-status muted small" style="margin-top:8px;">Clearing…</div>` : ''}
+      ${clearing ? `<div data-banking-alert-clearing-status="1" class="banking-nav-alert-clearing-status muted small" style="margin-top:8px;">${activeClearCount === 1 ? 'Clearing 1 alert…' : (activeClearCount > 1 ? `Clearing ${activeClearCount} alerts…` : 'Clearing…')}</div>` : ''}
       <div data-banking-alert-rows="1" style="margin-top:8px;">${rowsHtml}</div>
       ${hiddenCount > 0 ? `<div class="mini" style="margin-top:8px;opacity:.78;">${enc(String(hiddenCount))} more alert${hiddenCount === 1 ? '' : 's'} not shown in this popover.</div>` : ''}
       <div style="border-top:1px solid var(--line,#e5e7eb);margin-top:10px;padding-top:10px;display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
@@ -25073,6 +25224,18 @@ function applyAlertSummaryToState(responsePayload) {
       Number((typeof window !== 'undefined' && window.__bankingLastAlertAckMutationAtMs) || 0) || 0,
       Number(hb?._lastBankingAckMutationAtMs || 0) || 0
     );
+  };
+  const hasActiveAcknowledgementMutation = () => {
+    if (typeof window === 'undefined') return false;
+    const operations = (window.__bankingAlertClearOperations && typeof window.__bankingAlertClearOperations === 'object')
+      ? window.__bankingAlertClearOperations
+      : null;
+    const pending = (operations?.pending && typeof operations.pending === 'object') ? operations.pending : {};
+    return operations?.clearAllPending === true || Object.keys(pending).length > 0;
+  };
+  const hasRecentAcknowledgementMutation = () => {
+    const ackAt = currentAckMutationAtMs();
+    return ackAt > 0 && Date.now() - ackAt < 15000;
   };
   const syncDetailHashState = (candidateHash = '') => {
     const hb = getHeartbeat();
@@ -25487,6 +25650,7 @@ function applyAlertSummaryToState(responsePayload) {
     if (typeof window === 'undefined') return null;
     const expectedCount = toCount(targetCount, 0);
     if (expectedCount < 1) return null;
+    const canReconcileOptimisticCount = hasActiveAcknowledgementMutation() || hasRecentAcknowledgementMutation();
     const candidates = [
       window.__bankingNavAttentionState,
       window.__bankingAlertSummary,
@@ -25504,12 +25668,16 @@ function applyAlertSummaryToState(responsePayload) {
         if (alert.acknowledged_for_current_user === true || alert.banking_alert_acknowledged_for_user === true || alert.alert_acknowledged_for_current_user === true) return false;
         return true;
       });
-      if (rows.length !== expectedCount) continue;
+      if (canReconcileOptimisticCount) {
+        if (rows.length < 1 || rows.length > expectedCount) continue;
+      } else if (rows.length !== expectedCount) {
+        continue;
+      }
       return {
         hash: toText(targetHash || resolveDetailHash(targetHash)),
         rows,
         summary: candidateSummary,
-        count: expectedCount
+        count: canReconcileOptimisticCount ? rows.length : expectedCount
       };
     }
     return null;
@@ -25669,6 +25837,28 @@ function applyAlertSummaryToState(responsePayload) {
   };
 
   if (positiveWithoutUsableAlertRows) {
+    if (hasActiveAcknowledgementMutation()) {
+      try {
+        const currentState = (typeof window !== 'undefined' && window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object')
+          ? window.__bankingNavAttentionState
+          : null;
+        const currentStateCount = toCount(
+          currentState?.count
+          ?? currentState?.unacknowledgedCount
+          ?? currentState?.unacknowledged_count
+          ?? currentState?.banking_unacknowledged_alert_count,
+          0
+        );
+        const currentStateRows = collectAlertRows(currentState, currentState?.alertSummary, currentState?.banking_alert_summary).filter((alert) => {
+          const fingerprint = getFingerprint(alert);
+          return !!fingerprint && !suppressionMap[fingerprint] && !isPreferenceHiddenAlert(alert)
+            && alert.acknowledged_for_current_user !== true
+            && alert.banking_alert_acknowledged_for_user !== true
+            && alert.alert_acknowledged_for_current_user !== true;
+        });
+        if (currentState && currentStateCount === 0 && currentStateRows.length === 0) return currentState;
+      } catch {}
+    }
     const preservedDetails = readReconciledDetailedAttentionState(alertHash || resolveDetailHash(alertHash), rawCount)
       || readExistingDetailedAttentionStateForHash(alertHash || resolveDetailHash(alertHash), rawCount);
     const preservedState = preserveExistingDetailedState(preservedDetails);
@@ -26503,6 +26693,21 @@ async function bankingAcknowledgeAlerts(input = {}) {
     const inputObj = isPlainObject(input) ? input : { alerts: Array.isArray(input) ? input : [input] };
     const note = toText(inputObj.note || inputObj.reason || '');
     const clearAll = inputObj.clearAll === true || inputObj.clear_all === true || inputObj.acknowledgeAll === true || inputObj.acknowledge_all === true;
+    let clientMutationGeneration = toCount(
+      inputObj.client_mutation_generation
+      ?? inputObj.clientMutationGeneration
+      ?? inputObj.ack_mutation_generation
+      ?? inputObj.ackMutationGeneration,
+      0
+    );
+    if (typeof window !== 'undefined') {
+      const currentGeneration = toCount(window.__bankingAlertAckMutationGeneration, 0);
+      if (clientMutationGeneration < 1) clientMutationGeneration = currentGeneration + 1;
+      window.__bankingAlertAckMutationGeneration = Math.max(currentGeneration, clientMutationGeneration);
+    }
+    const isSupersededMutation = () => typeof window !== 'undefined'
+      && clientMutationGeneration > 0
+      && toCount(window.__bankingAlertAckMutationGeneration, 0) > clientMutationGeneration;
 
     let body;
     let suppressedFingerprints = [];
@@ -26561,6 +26766,7 @@ async function bankingAcknowledgeAlerts(input = {}) {
           body: JSON.stringify(body)
         });
         const payload = await parseResponse(response);
+        payload.banking_alert_client_mutation_generation = clientMutationGeneration;
         suppressedFingerprints.push(...extractAcknowledgedFingerprintsFromPayload(payload));
         if (payload.already_acknowledged === true || payload.idempotent === true || payload.acknowledge_result?.already_acknowledged === true) {
           suppressedFingerprints.push(...(clearAll ? currentAlertFingerprints() : []));
@@ -26585,9 +26791,11 @@ async function bankingAcknowledgeAlerts(input = {}) {
           payload.acknowledge_result.banking_unacknowledged_alert_count = attentionState.count;
         }
 
+        const responseIsSuperseded = isSupersededMutation();
+        if (responseIsSuperseded) payload.banking_alert_response_ignored_as_stale = true;
         try {
           const hash = toText(payload.banking_alert_hash || payload.banking_alert_summary_signature || normalisedSummary.banking_alert_hash || '');
-          if (hash) {
+          if (hash && !responseIsSuperseded) {
             window.__bankingAlertHash = hash;
             window.__bankingAlertSummarySignature = hash;
             const hb = window.__changesHeartbeat || window.__changeHeartbeat;
@@ -26599,7 +26807,7 @@ async function bankingAcknowledgeAlerts(input = {}) {
         } catch {}
 
         let appliedState = null;
-        if (typeof applyAlertSummaryToState === 'function') {
+        if (!responseIsSuperseded && typeof applyAlertSummaryToState === 'function') {
           try {
             appliedState = applyAlertSummaryToState(payload);
           } catch {
@@ -26607,7 +26815,12 @@ async function bankingAcknowledgeAlerts(input = {}) {
           }
         }
 
-        const finalState = (appliedState && typeof appliedState === 'object') ? appliedState : attentionState;
+        const currentAttentionState = (typeof window !== 'undefined' && window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object')
+          ? window.__bankingNavAttentionState
+          : null;
+        const finalState = responseIsSuperseded && currentAttentionState
+          ? currentAttentionState
+          : ((appliedState && typeof appliedState === 'object') ? appliedState : attentionState);
         try {
           window.__bankingNavAttentionState = finalState;
           window.__bankingAlertSummary = finalState.alertSummary || finalState.banking_alert_summary || normalisedSummary;
@@ -26649,8 +26862,14 @@ async function bankingAcknowledgeAlerts(input = {}) {
           duplicatePayload.banking_alerts = deepClone(attentionState.alerts) || [];
           duplicatePayload.banking_unacknowledged_alert_count = attentionState.count;
           duplicatePayload.__banking_alert_attention_state = deepClone(attentionState) || attentionState;
-          if (typeof applyAlertSummaryToState === 'function') applyAlertSummaryToState(duplicatePayload);
-          refreshOpenPopoverFromState(attentionState);
+          const duplicateResponseIsSuperseded = isSupersededMutation();
+          if (duplicateResponseIsSuperseded) duplicatePayload.banking_alert_response_ignored_as_stale = true;
+          if (!duplicateResponseIsSuperseded && typeof applyAlertSummaryToState === 'function') applyAlertSummaryToState(duplicatePayload);
+          const duplicateFinalState = duplicateResponseIsSuperseded && window.__bankingNavAttentionState
+            ? window.__bankingNavAttentionState
+            : attentionState;
+          duplicatePayload.__banking_alert_attention_state = deepClone(duplicateFinalState) || duplicateFinalState;
+          refreshOpenPopoverFromState(duplicateFinalState);
           return duplicatePayload;
         }
         rollbackLocalAcknowledgements(localAcknowledgementSnapshot, optimisticAckAtMs);

@@ -48,6 +48,22 @@ const settledAlert = {
   }
 };
 
+const failedAlert = {
+  ...scheduledAlert,
+  alert_kind: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
+  alert_fingerprint: 'banking-alert-failed',
+  entity_id: '22222222-2222-4222-8222-222222222222',
+  pay_batch_id: '22222222-2222-4222-8222-222222222222',
+  label: 'Payment needs checking',
+  description: 'A payment needs checking before it can continue.',
+  payload_json: {
+    ...scheduledAlert.payload_json,
+    alert_kind: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
+    user_label: 'Payment needs checking',
+    user_description: 'A payment needs checking before it can continue.'
+  }
+};
+
 test('popover renders successful schedule and settlement messages with clear controls', () => {
   const source = sliceBetween('function renderBankingNavAlertPopover(attentionState)', 'function applyAlertSummaryToState(responsePayload)');
   const context = {
@@ -191,11 +207,16 @@ test('single-clear handler removes the row optimistically and does not reapply c
   assert.match(clearBranch, /alert_kind: alertKind/);
   assert.match(clearBranch, /entity_id: entityId/);
   assert.match(clearBranch, /alert_payload_json: payloadJson/);
-  assert.match(clearBranch, /refreshOpenPopover\(stateBeforeClear\)/);
+  assert.match(clearBranch, /beginClearOperation\(alertFingerprint, false\)/);
+  assert.match(clearBranch, /client_mutation_generation: operation\.generation/);
+  assert.match(clearBranch, /restoreOptimisticallyRemovedAlert\(\{ alertFingerprint, alertSnapshot, stateBeforeClear \}\)/);
+  assert.match(clearBranch, /refreshOpenPopover\(restoredState\)/);
+  assert.match(clearBranch, /finally \{[\s\S]*finishClearOperation\(operation\)/);
+  assert.doesNotMatch(clearBranch, /activePopover\?\.getAttribute\('data-clearing'\)/);
   assert.doesNotMatch(clearBranch, /refreshBankingNavAttentionFromCachedRows/);
   assert.match(handlers, /const remainingAlerts = clearAll[\s\S]*currentAlerts\.filter/);
   assert.match(handlers, /updateBankingNavAttentionState\(nextState\)/);
-  assert.match(clearBranch, /updateBankingNavAttentionState\(\{ \.\.\.stateBeforeClear, keepPopoverOpen: true, forceReapply: true \}\)/);
+  assert.match(handlers, /querySelectorAll\('\[data-action="banking:nav:alerts:clearAll"\]'\)/);
 });
 
 test('summary application no longer filters success-only alerts', () => {
@@ -304,6 +325,196 @@ test('a changed-hash count-only response after one clear preserves exactly the u
   assert.equal(attentionState.count, 1);
   assert.equal(attentionState.alerts[0].description, settledAlert.description);
   assert.equal(attentionState.banking_alert_hash, 'new-alert-hash');
+});
+
+test('a stale higher count-only refresh during two rapid clears keeps the remaining message and monotonic badge', () => {
+  const source = sliceBetween('function applyAlertSummaryToState(responsePayload)', 'async function bankingAcknowledgeAlerts(input = {})');
+  let attentionState = null;
+  const now = Date.now();
+  const optimisticSummary = {
+    alerts: [failedAlert],
+    banking_alerts: [failedAlert],
+    unacknowledged_count: 1,
+    banking_unacknowledged_alert_count: 1,
+    banking_alert_hash: 'optimistic-alert-hash',
+    banking_alert_summary_signature: 'optimistic-alert-hash'
+  };
+  const context = {
+    window: {
+      modalCtx: { banking: { pay: { list: { banking_alert_summary: optimisticSummary } } } },
+      __bankingNavAttentionState: {
+        count: 1,
+        alerts: [failedAlert],
+        banking_alerts: [failedAlert],
+        banking_alert_summary: optimisticSummary,
+        banking_alert_hash: 'optimistic-alert-hash'
+      },
+      __bankingAlertSummary: optimisticSummary,
+      __bankingLocallyAcknowledgedFingerprints: {
+        [scheduledAlert.alert_fingerprint]: now,
+        [settledAlert.alert_fingerprint]: now
+      },
+      __bankingLastAlertAckMutationAtMs: now,
+      __bankingAlertClearOperations: {
+        generation: 2,
+        pending: {
+          [scheduledAlert.alert_fingerprint]: { generation: 1 },
+          [settledAlert.alert_fingerprint]: { generation: 2 }
+        },
+        clearAllPending: false
+      },
+      __changesHeartbeat: { _lastBankingAckMutationAtMs: now }
+    },
+    document: { querySelector() { return null; }, createElement() { return { innerHTML: '', firstElementChild: null }; } },
+    updateBankingNavAttentionState(value) { attentionState = value; context.window.__bankingNavAttentionState = value; },
+    console,
+    setTimeout,
+    clearTimeout,
+    Date,
+    Number,
+    String,
+    Math,
+    Array,
+    Object,
+    JSON,
+    Set
+  };
+  vm.runInNewContext(source, context, { filename: 'banking-alert-rapid-clear-count-only.js' });
+  const result = context.applyAlertSummaryToState({
+    banking_alert_hash: 'stale-higher-hash',
+    banking_alert_summary_signature: 'stale-higher-hash',
+    banking_unacknowledged_alert_count: 3,
+    alert_summary: {
+      alerts: [],
+      banking_alerts: [],
+      unacknowledged_count: 3,
+      banking_unacknowledged_alert_count: 3,
+      banking_alert_hash: 'stale-higher-hash',
+      banking_alert_summary_signature: 'stale-higher-hash',
+      banking_alert_summary_deferred: true
+    }
+  });
+
+  assert.equal(result.count, 1);
+  assert.equal(result.alerts.length, 1);
+  assert.equal(result.alerts[0].alert_fingerprint, failedAlert.alert_fingerprint);
+  assert.equal(attentionState.count, 1);
+  assert.equal(attentionState.alerts[0].description, failedAlert.description);
+});
+
+test('two distinct rapid clears remain monotonic in both acknowledgement response orders', async () => {
+  const source = sliceBetween('function applyAlertSummaryToState(responsePayload)', 'async function bankingPayBatchRetryBlockedFunds');
+
+  const runOrder = async (order) => {
+    const releases = Object.create(null);
+    const requests = [];
+    const initialSummary = {
+      alerts: [scheduledAlert, settledAlert],
+      banking_alerts: [scheduledAlert, settledAlert],
+      unacknowledged_count: 2,
+      banking_unacknowledged_alert_count: 2,
+      banking_alert_hash: 'initial-hash',
+      banking_alert_summary_signature: 'initial-hash'
+    };
+    const context = {
+      window: {
+        modalCtx: { banking: { pay: { list: { banking_alert_summary: initialSummary } } } },
+        __bankingNavAttentionState: {
+          count: 2,
+          alerts: [scheduledAlert, settledAlert],
+          banking_alerts: [scheduledAlert, settledAlert],
+          alertSummary: initialSummary,
+          banking_alert_summary: initialSummary
+        },
+        __bankingAlertSummary: initialSummary,
+        __bankingAlertClearOperations: {
+          generation: 2,
+          pending: {
+            [scheduledAlert.alert_fingerprint]: { generation: 1 },
+            [settledAlert.alert_fingerprint]: { generation: 2 }
+          },
+          clearAllPending: false
+        },
+        __bankingAlertAckMutationGeneration: 2,
+        __changesHeartbeat: {}
+      },
+      document: {
+        querySelector() { return null; },
+        createElement() { return { innerHTML: '', firstElementChild: null }; }
+      },
+      API(value) { return value; },
+      async authFetch(url, fetchOptions) {
+        const body = JSON.parse(fetchOptions.body);
+        requests.push({ url, body });
+        return await new Promise((resolve) => { releases[body.alert_fingerprint] = resolve; });
+      },
+      bankingHandleApiError(error) { return error && error.json ? error.json : {}; },
+      async openUiConfirmModal() {},
+      updateBankingNavAttentionState(value) { context.window.__bankingNavAttentionState = value; },
+      renderBankingNavAlertPopover() { return '<div></div>'; },
+      attachBankingNavAlertPopoverHandlers() {},
+      console,
+      setTimeout,
+      clearTimeout,
+      Date,
+      Number,
+      String,
+      Math,
+      Array,
+      Object,
+      JSON,
+      Set,
+      Error
+    };
+    vm.runInNewContext(source, context, { filename: `banking-alert-rapid-clear-${order.join('-')}.js` });
+
+    const first = context.bankingAcknowledgeAlerts({ ...scheduledAlert, client_mutation_generation: 1 });
+    const second = context.bankingAcknowledgeAlerts({ ...settledAlert, client_mutation_generation: 2 });
+    await new Promise((resolve) => setImmediate(resolve));
+    context.window.__bankingNavAttentionState = {
+      count: 0,
+      alerts: [],
+      banking_alerts: [],
+      alertSummary: { alerts: [], banking_alerts: [], unacknowledged_count: 0, banking_unacknowledged_alert_count: 0 },
+      banking_alert_summary: { alerts: [], banking_alerts: [], unacknowledged_count: 0, banking_unacknowledged_alert_count: 0 }
+    };
+
+    const release = (fingerprint) => {
+      const remainingAlert = fingerprint === scheduledAlert.alert_fingerprint ? settledAlert : scheduledAlert;
+      releases[fingerprint]({
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({
+            ok: true,
+            acknowledged: true,
+            remaining_alert_summary: {
+              alerts: [remainingAlert],
+              banking_alerts: [remainingAlert],
+              unacknowledged_count: 1,
+              banking_unacknowledged_alert_count: 1
+            }
+          });
+        }
+      });
+    };
+
+    release(order[0]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(context.window.__bankingNavAttentionState.count, 0);
+    assert.equal(context.window.__bankingNavAttentionState.alerts.length, 0);
+    release(order[1]);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    assert.equal(context.window.__bankingNavAttentionState.count, 0);
+    assert.equal(context.window.__bankingNavAttentionState.alerts.length, 0);
+    assert.equal(requests.length, 2);
+    assert.equal(firstResult.banking_alert_response_ignored_as_stale, true);
+    assert.notEqual(secondResult.banking_alert_response_ignored_as_stale, true);
+  };
+
+  await runOrder([scheduledAlert.alert_fingerprint, settledAlert.alert_fingerprint]);
+  await runOrder([settledAlert.alert_fingerprint, scheduledAlert.alert_fingerprint]);
 });
 
 test('dedicated alert fetch loads full details and applies them', async () => {
