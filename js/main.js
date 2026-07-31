@@ -44602,6 +44602,11 @@ function renderBankingPayTab(scopePreset) {
   if (boolish(workbench.fallback_recalculation_pending || workbench.targeted_refresh_enqueued || progress.targeted_refresh_enqueued)) explicitStatePills.push(['falling back to full calculation', 'Affected candidates are recalculating through the legacy-safe path.']);
   if (boolish(workbench.shadow_compare_failed || progress.shadow_compare_failed)) explicitStatePills.push(['shadow compare failed', 'Delta output was rejected and targeted recalculation is running.']);
   if (boolish(workbench.projection_blocked || progress.projection_blocked)) explicitStatePills.push(['projection blocked', 'Delta projection was blocked for safety.']);
+  if (Object.prototype.hasOwnProperty.call(progress, 'draft_safe') && progress.draft_safe !== true) {
+    selectedRowUnsafeReasons.push(
+      String(progress.draft_block_reason_code || 'BACKEND_DRAFT_UNSAFE').trim().toUpperCase()
+    );
+  }
   const carryPendingCount = Math.max(0, Number(workbench.case_resolution_carry_pending_count || 0) || 0);
   const carryReviewCount = Math.max(0, Number(workbench.case_resolution_carry_review_count || 0) || 0);
   if (carryPendingCount > 0) {

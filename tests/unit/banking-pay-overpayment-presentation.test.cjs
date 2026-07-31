@@ -304,7 +304,7 @@ test('presentation grouping cannot broaden the authoritative draft selection', (
 });
 
 test('gives terminal failure precedence over stale pending state and de-duplicates failure levels', () => {
-  assert.match(mainSource, /if \(authoritativeRenderState\.hasFailure \|\| hasFailedCandidates\) return 'Refresh failed';\s*if \(hasPendingCandidates\) return 'Preparing…';/);
+  assert.match(mainSource, /if \(authoritativeRenderState\.hasFailure \|\| hasFailedCandidates\) return 'Refresh failed';\s*if \(authoritativeRenderState\.displayReady && !authoritativeRenderState\.draftSafe\) return 'Checking changes…';\s*if \(hasPendingCandidates\) return 'Preparing…';/);
   assert.match(mainSource, /const issueCount = Math\.max\([\s\S]*candidateCounts\.failed[\s\S]*lineCounts\.failed[\s\S]*jobCounts\.unresolved_failed/);
   assert.match(mainSource, /pendingCandidateIds\.filter\(\(candidateId\) => !failedCandidateIdSet\.has\(candidateId\)\)/);
 });
