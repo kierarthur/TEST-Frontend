@@ -64958,6 +64958,47 @@ async function contractWeekManualDraftUpsert(weekId, payload, options = {}) {
     }
   }
 
+  const firstSignature = (...values) => {
+    for (const value of values) {
+      const text = trimStr(value);
+      if (text) return text;
+    }
+    return '';
+  };
+  const modalDetails = (window?.modalCtx?.timesheetDetails && typeof window.modalCtx.timesheetDetails === 'object')
+    ? window.modalCtx.timesheetDetails
+    : {};
+  const modalContractWeek = (modalDetails.contract_week && typeof modalDetails.contract_week === 'object')
+    ? modalDetails.contract_week
+    : {};
+  const modalData = (window?.modalCtx?.data && typeof window.modalCtx.data === 'object')
+    ? window.modalCtx.data
+    : {};
+  const expectedPlannedRowSignature = firstSignature(
+    safePayload.expected_row_signature,
+    safePayload.expectedRowSignature,
+    safePayload.backend_row_signature,
+    safePayload.backendRowSignature,
+    safePayload.row_signature,
+    safePayload.rowSignature,
+    modalDetails.backend_row_signature,
+    modalDetails.row_signature,
+    modalDetails.expected_row_signature,
+    modalContractWeek.backend_row_signature,
+    modalContractWeek.row_signature,
+    modalContractWeek.expected_row_signature,
+    modalData.backend_row_signature,
+    modalData.row_signature,
+    modalData.expected_row_signature
+  );
+  if (!expectedPlannedRowSignature) {
+    GE();
+    throw new Error('The current planned week signature is unavailable. Refresh the record and try again.');
+  }
+  safePayload.expected_row_signature = expectedPlannedRowSignature;
+  safePayload.backend_row_signature = expectedPlannedRowSignature;
+  safePayload.row_signature = expectedPlannedRowSignature;
+
   const encId   = encodeURIComponent(weekId);
   const urlPath = `/api/contract-weeks/${encId}/manual-draft-upsert`;
 
@@ -64965,6 +65006,47 @@ async function contractWeekManualDraftUpsert(weekId, payload, options = {}) {
 
   // Use apiPostJson for consistent error shape + status handling
   const json = await apiPostJson(urlPath, safePayload);
+
+  const returnedPlannedRowSignature = firstSignature(
+    json?.backend_row_signature,
+    json?.mutation_row_signature,
+    json?.row_signature,
+    json?.expected_row_signature
+  );
+  if (!returnedPlannedRowSignature || json?.planned_contract_week_authority_complete !== true) {
+    GE();
+    throw new Error('The draft was saved, but the refreshed planned-week authority was not returned. Refresh the record before continuing.');
+  }
+
+  try {
+    const ctx = window.modalCtx || null;
+    if (ctx && String(ctx?.data?.contract_week_id || ctx?.timesheetDetails?.contract_week_id || ctx?.timesheetDetails?.contract_week?.id || '') === String(weekId)) {
+      const stamp = (target) => {
+        if (!target || typeof target !== 'object' || Array.isArray(target)) return;
+        target.backend_row_signature = returnedPlannedRowSignature;
+        target.row_signature = returnedPlannedRowSignature;
+        target.expected_row_signature = returnedPlannedRowSignature;
+        target.planned_contract_week_authority_complete = true;
+        target.planned_contract_week_authority_contract_week_id = String(weekId);
+        target.refresh_required = false;
+      };
+      stamp(ctx.data);
+      stamp(ctx.timesheetDetails);
+      stamp(ctx.timesheetDetails?.contract_week);
+      stamp(ctx.timesheetDetails?.action_flags);
+      if (ctx.timesheetDetails && json && typeof json === 'object') {
+        ctx.timesheetDetails.contract_week = {
+          ...(ctx.timesheetDetails.contract_week || {}),
+          ...json,
+          backend_row_signature: returnedPlannedRowSignature,
+          row_signature: returnedPlannedRowSignature,
+          expected_row_signature: returnedPlannedRowSignature,
+          planned_contract_week_authority_complete: true,
+          planned_contract_week_authority_contract_week_id: String(weekId)
+        };
+      }
+    }
+  } catch {}
 
   const optionBag = (options && typeof options === 'object') ? options : {};
   const skipTargetSummaryRefresh = !!(
@@ -146024,10 +146106,44 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
       return { ok: false };
     }
   }
-   // Post-save row update: adopt trusted lifecycle/signature state first, then keep non-critical refreshes lazy.
-  let canTrustLifecycleAfterSave = (typeof hasTrustedTimesheetLifecycleSignature === 'function')
-    ? hasTrustedTimesheetLifecycleSignature(window.modalCtx || {}, { timesheet_id: tsIdSave })
-    : false;
+   // Post-save row update: a planned contract week uses its own guarded row
+  // signature. Physical timesheets continue to require the unchanged lifecycle
+  // signature authority.
+  const plannedDetailsAfterSave = (window.modalCtx?.timesheetDetails && typeof window.modalCtx.timesheetDetails === 'object')
+    ? window.modalCtx.timesheetDetails
+    : {};
+  const plannedContractWeekAfterSave = (plannedDetailsAfterSave.contract_week && typeof plannedDetailsAfterSave.contract_week === 'object')
+    ? plannedDetailsAfterSave.contract_week
+    : {};
+  const plannedDataAfterSave = (window.modalCtx?.data && typeof window.modalCtx.data === 'object')
+    ? window.modalCtx.data
+    : {};
+  const plannedSignatureAfterSave = pickSignature(
+    plannedDetailsAfterSave.backend_row_signature,
+    plannedDetailsAfterSave.row_signature,
+    plannedDetailsAfterSave.expected_row_signature,
+    plannedContractWeekAfterSave.backend_row_signature,
+    plannedContractWeekAfterSave.row_signature,
+    plannedContractWeekAfterSave.expected_row_signature,
+    plannedDataAfterSave.backend_row_signature,
+    plannedDataAfterSave.row_signature,
+    plannedDataAfterSave.expected_row_signature
+  );
+  const plannedAuthorityAfterSave = !!(
+    isPlannedWeeklyWithoutTs &&
+    plannedSignatureAfterSave &&
+    (
+      plannedDetailsAfterSave.planned_contract_week_authority_complete === true ||
+      plannedContractWeekAfterSave.planned_contract_week_authority_complete === true ||
+      plannedDetailsAfterSave.action_flags?.planned_contract_week_authority_complete === true ||
+      plannedDataAfterSave.planned_contract_week_authority_complete === true
+    )
+  );
+  let canTrustLifecycleAfterSave = isPlannedWeeklyWithoutTs
+    ? plannedAuthorityAfterSave
+    : ((typeof hasTrustedTimesheetLifecycleSignature === 'function')
+        ? hasTrustedTimesheetLifecycleSignature(window.modalCtx || {}, { timesheet_id: tsIdSave })
+        : false);
 
   const finalRefreshNeededForNonLifecycle = !!(
     scheduleChangedWeekly || scheduleChangedDaily || extrasChangedWeekly ||
@@ -314581,11 +314697,35 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const archiveRequired = archiveRequiredSignal === true || deleteDecision === 'ARCHIVE_REQUIRED';
   const backendReadOnlyMode = upper(readLifecycleText('mode'));
   const backendReadOnlyReason = upper(readLifecycleText('read_only_reason', 'readOnlyReason', 'reason'));
-  // Planned contract weeks have no physical timesheet row and therefore cannot
-  // provide the real-timesheet lifecycle signature. Their editable/processable
-  // state is owned by the current contract-week snapshot instead. Keep the strict
-  // lifecycle completeness requirement unchanged for every physical timesheet.
-  const lifecycleAuthoritySatisfied = isPlannedWeek || lifecycleAuthorityComplete;
+  const plannedAuthoritySignal = readLifecycleTrueWins(
+    'planned_contract_week_authority_complete',
+    'plannedContractWeekAuthorityComplete'
+  );
+  const plannedAuthorityContractWeekId = readLifecycleText(
+    'planned_contract_week_authority_contract_week_id',
+    'plannedContractWeekAuthorityContractWeekId'
+  );
+  const plannedAuthoritySignature = readLifecycleText(
+    'backend_row_signature',
+    'backendRowSignature',
+    'row_signature',
+    'rowSignature',
+    'expected_row_signature',
+    'expectedRowSignature'
+  );
+  const plannedContractWeekAuthorityComplete = !!(
+    isPlannedWeek &&
+    plannedAuthoritySignal === true &&
+    plannedAuthoritySignature &&
+    plannedAuthorityContractWeekId &&
+    String(plannedAuthorityContractWeekId) === String(contractWeekId)
+  );
+  // Planned contract weeks have a separate guarded row signature. Physical
+  // timesheets continue to require the full lifecycle authority without any
+  // relaxation or fallback.
+  const lifecycleAuthoritySatisfied = isPlannedWeek
+    ? plannedContractWeekAuthorityComplete
+    : lifecycleAuthorityComplete;
   const editReadOnly = isArchived || canonicalReadOnly === true || !lifecycleAuthoritySatisfied;
   const lifecycleActionsBlocked = isArchived || !lifecycleAuthoritySatisfied;
   const readOnlyReason = !lifecycleAuthoritySatisfied
@@ -314631,7 +314771,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     localCanUnauthorise
   );
   const canonicalCanProcess = !!(
-    lifecycleAuthorityComplete &&
+    lifecycleAuthoritySatisfied &&
     !isArchived &&
     backendCanProcess === true &&
     localCanProcess
@@ -322633,11 +322773,43 @@ if (btnTsProcess) {
         } catch {}
         const stagedExpenses = normaliseExpensesDraft(mc?.timesheetState?.expensesDraft || {});
 
+        const plannedRowSignature = (typeof timesheetDiagFirstNonBlank === 'function')
+          ? timesheetDiagFirstNonBlank(
+              det.backend_row_signature,
+              det.row_signature,
+              det.expected_row_signature,
+              cw.backend_row_signature,
+              cw.row_signature,
+              cw.expected_row_signature,
+              mc?.data?.backend_row_signature,
+              mc?.data?.row_signature,
+              mc?.data?.expected_row_signature
+            )
+          : String(
+              det.backend_row_signature ||
+              det.row_signature ||
+              det.expected_row_signature ||
+              cw.backend_row_signature ||
+              cw.row_signature ||
+              cw.expected_row_signature ||
+              mc?.data?.backend_row_signature ||
+              mc?.data?.row_signature ||
+              mc?.data?.expected_row_signature ||
+              ''
+            ).trim();
+        if (!plannedRowSignature) {
+          alert('The current planned week signature is unavailable. Refresh the record and try again.');
+          return;
+        }
+
         const payload = {
           actual_schedule_json: sanitizeSchedule(scheduleX),
           additional_units_week: auWeek,
           additional_units_per_day: auPerDay,
-          expenses_draft: JSON.parse(JSON.stringify(stagedExpenses))
+          expenses_draft: JSON.parse(JSON.stringify(stagedExpenses)),
+          expected_row_signature: plannedRowSignature,
+          backend_row_signature: plannedRowSignature,
+          row_signature: plannedRowSignature
         };
 
         const result = await manualUpsertContractWeek(String(weekIdX), payload);

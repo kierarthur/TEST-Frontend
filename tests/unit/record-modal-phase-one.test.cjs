@@ -78,9 +78,12 @@ test('Client A/P phone accepts ordinary display formatting without blocking unre
 
 test('planned Manual weeks use contract-week authority while real timesheets retain lifecycle completeness gating', () => {
   const start = main.indexOf('function getCanonicalTimesheetFooterState');
-  const end = main.indexOf('function syncCanonicalTimesheetFooterState', start);
+  const end = main.indexOf('function setFormReadOnly', start);
   const footer = main.slice(start, end);
-  assert.match(footer, /const lifecycleAuthoritySatisfied = isPlannedWeek \|\| lifecycleAuthorityComplete/);
+  assert.match(footer, /const plannedContractWeekAuthorityComplete = !!\(/);
+  assert.match(footer, /plannedAuthoritySignal === true/);
+  assert.match(footer, /String\(plannedAuthorityContractWeekId\) === String\(contractWeekId\)/);
+  assert.match(footer, /const lifecycleAuthoritySatisfied = isPlannedWeek[\s\S]*?plannedContractWeekAuthorityComplete[\s\S]*?: lifecycleAuthorityComplete/);
   assert.match(footer, /const editReadOnly = isArchived \|\| canonicalReadOnly === true \|\| !lifecycleAuthoritySatisfied/);
   assert.match(footer, /const lifecycleActionsBlocked = isArchived \|\| !lifecycleAuthoritySatisfied/);
   assert.match(main, /if \(!lifecycleSeedTrusted && !isPlannedWeek\) \{/);
