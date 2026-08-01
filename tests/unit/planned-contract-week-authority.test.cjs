@@ -34,6 +34,36 @@ test('post-save authority uses planned-row proof only for a row without a timesh
   assert.match(source, /planned_contract_week_authority_complete/);
 });
 
+test('planned post-save completion never enters the physical-timesheet lifecycle patch path', () => {
+  const start = main.indexOf('// Post-save row update: a planned contract week uses its own guarded row');
+  assert.notEqual(start, -1);
+  const source = main.slice(start, start + 17000);
+  assert.match(source, /if \(isPlannedWeeklyWithoutTs\) \{\s*clearPlannedContractWeekSavePending\(window\.modalCtx\);\s*\} else try \{/);
+  assert.match(source, /applyTimesheetLifecyclePatchToModal\(window\.modalCtx, savePatch/);
+  assert.match(source, /!isPlannedWeeklyWithoutTs && canTrustLifecycleAfterSave && typeof scheduleTimesheetPostMutationLazyRefresh/);
+});
+
+test('planned draft save does not invalidate physical-timesheet lifecycle trust', () => {
+  const source = section(
+    'const saveLifecycleMutationStartedAt = isPlannedWeeklyWithoutTs',
+    '// Run tasks with guarded-write conflict handling'
+  );
+  assert.match(source, /isPlannedWeeklyWithoutTs\s*\? null\s*:\s*invalidateTimesheetLifecycleTrustForSave/);
+  assert.match(source, /if \(!isPlannedWeeklyWithoutTs\)/);
+});
+
+test('planned save cleanup removes only physical lifecycle refresh blockers', () => {
+  const source = section(
+    'const clearPlannedContractWeekSavePending',
+    'const adoptSimpleTimesheetLifecycleSignatureFromSaveResponse'
+  );
+  assert.match(source, /delete ctx\.__timesheetLifecycleCriticalStateIncomplete/);
+  assert.match(source, /delete ctx\.__timesheetLifecyclePermissionStateComplete/);
+  assert.match(source, /delete ctx\.__timesheetLifecyclePriorityBadgesComplete/);
+  assert.match(source, /delete ctx\.__simpleTimesheetLifecycleRefreshRequired/);
+  assert.doesNotMatch(source, /planned_contract_week_authority_complete\s*=/);
+});
+
 test('footer allows planned Process only with the separate planned authority', () => {
   const source = section(
     'function getCanonicalTimesheetFooterState',

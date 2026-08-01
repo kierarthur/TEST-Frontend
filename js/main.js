@@ -144653,6 +144653,33 @@ const onSaveTimesheet = async () => {
     } catch {}
   };
 
+  const clearPlannedContractWeekSavePending = (ctxInput) => {
+    try {
+      const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : (window.modalCtx || null);
+      if (!ctx || typeof ctx !== 'object') return;
+
+      // Planned contract weeks have no physical timesheet lifecycle row. Their
+      // guarded contract-week signature is the authority for Edit and Process,
+      // so physical save/authorise refresh flags must not survive a successful
+      // planned-week draft save.
+      ctx.__timesheetLifecycleSaveInFlight = false;
+      ctx.__timesheetSaveLifecyclePatchPending = false;
+      delete ctx.__timesheetLifecycleSignatureTrustedAfterSave;
+      delete ctx.__timesheetLifecycleCriticalStateIncomplete;
+      delete ctx.__timesheetLifecycleCriticalStateReason;
+      delete ctx.__timesheetLifecyclePermissionStateComplete;
+      delete ctx.__timesheetLifecyclePriorityBadgesComplete;
+      delete ctx.__timesheetLifecycleTrustRequiresNetworkBeforeAuthorise;
+      delete ctx.__simpleTimesheetPostSaveLifecyclePending;
+      delete ctx.__timesheetLifecycleSaveResponseRefreshRequired;
+      delete ctx.__timesheetLifecycleSaveResponseRequiresAffectedRowRefresh;
+      delete ctx.__timesheetAuthorisePreflightRefreshRequired;
+      delete ctx.__simpleTimesheetLifecycleRefreshRequired;
+      delete ctx.__simpleTimesheetLifecycleRefreshTimesheetId;
+      delete ctx.__simpleTimesheetLifecycleRefreshMessage;
+    } catch {}
+  };
+
   const adoptSimpleTimesheetLifecycleSignatureFromSaveResponse = (saveResult, args = {}) => {
   const ctx = window.modalCtx || null;
   if (!ctx) return { ok: false, reason: 'NO_MODAL_CONTEXT' };
@@ -145904,8 +145931,12 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
     return { ok: true, saved: rowNow };
   }
 
-  const saveLifecycleMutationStartedAt = invalidateTimesheetLifecycleTrustForSave('timesheet-save', tsIdSave || rowNow.current_timesheet_id || rowNow.timesheet_id || null);
-  L('save lifecycle trust invalidated before mutation tasks', { timesheet_id: tsIdSave || rowNow.current_timesheet_id || rowNow.timesheet_id || null, mutation_started_at: saveLifecycleMutationStartedAt });
+  const saveLifecycleMutationStartedAt = isPlannedWeeklyWithoutTs
+    ? null
+    : invalidateTimesheetLifecycleTrustForSave('timesheet-save', tsIdSave || rowNow.current_timesheet_id || rowNow.timesheet_id || null);
+  if (!isPlannedWeeklyWithoutTs) {
+    L('save lifecycle trust invalidated before mutation tasks', { timesheet_id: tsIdSave || rowNow.current_timesheet_id || rowNow.timesheet_id || null, mutation_started_at: saveLifecycleMutationStartedAt });
+  }
 
   // Run tasks with guarded-write conflict handling (409 TIMESHEET_MOVED)
   for (let i = 0; i < tasks.length; i++) {
@@ -146252,10 +146283,10 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
   }
 
   try {
-    if (canTrustLifecycleAfterSave && typeof noteTimesheetLifecycleMutationSequence === 'function') {
+    if (!isPlannedWeeklyWithoutTs && canTrustLifecycleAfterSave && typeof noteTimesheetLifecycleMutationSequence === 'function') {
       noteTimesheetLifecycleMutationSequence(window.modalCtx || {}, Number(window.modalCtx?.__timesheetLifecycleMutationSeq || 0) || null);
     }
-    if (canTrustLifecycleAfterSave && typeof scheduleTimesheetPostMutationLazyRefresh === 'function') {
+    if (!isPlannedWeeklyWithoutTs && canTrustLifecycleAfterSave && typeof scheduleTimesheetPostMutationLazyRefresh === 'function') {
       const saveLazyId = String(
         window.modalCtx?.data?.current_timesheet_id ||
         window.modalCtx?.data?.timesheet_id ||
@@ -146306,7 +146337,9 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
     ? String(finalRefresh.payStateError || '')
     : String(window.modalCtx.timesheetPayStateError || '');
 
-  try {
+  if (isPlannedWeeklyWithoutTs) {
+    clearPlannedContractWeekSavePending(window.modalCtx);
+  } else try {
     const trustedAfterSave = (
       typeof hasTrustedTimesheetLifecycleSignature === 'function' &&
       hasTrustedTimesheetLifecycleSignature(window.modalCtx || {}, { timesheet_id: finalTsId }) &&
