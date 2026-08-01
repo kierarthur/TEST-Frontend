@@ -19,3 +19,14 @@ test('the central Banking Pay action gate fails closed on backend draft_safe', (
   );
   assert.match(source, /wizard\.createDraftDisabled = createDraftBlocked/);
 });
+
+test('Banking Pay explains authoritative shadow and recovery blockers without hiding rows', () => {
+  assert.match(source, /SCOPE_RECONCILIATION_SHADOW_MODE/);
+  assert.match(source, /running in verification mode/);
+  assert.match(source, /UPSTREAM_SCOPE_FAILURE_UNRESOLVED/);
+  assert.match(source, /has not yet been recovered/);
+  assert.match(source, /CANDIDATE_REFRESH_FAILED/);
+  assert.match(source, /Retry or recover it before creating a draft/);
+  assert.match(source, /authoritativeRenderState\.displayReady && !authoritativeRenderState\.draftSafe/);
+  assert.match(source, /const statusText = backendDraftBlockMessage/);
+});

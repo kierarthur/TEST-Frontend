@@ -54845,15 +54845,26 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     !createDraftBusyState &&
     payeGuardAllowsCreate
   );
+  const backendDraftBlockMessage = (() => {
+    switch (authoritativeRenderState.draftBlockReasonCode) {
+      case 'SCOPE_RECONCILIATION_SHADOW_MODE':
+        return 'Banking Pay scope checking is running in verification mode. Draft creation remains unavailable until authoritative reconciliation is enabled.';
+      case 'UPSTREAM_SCOPE_FAILURE_UNRESOLVED':
+        return 'A background Banking Pay scope update failed and has not yet been recovered.';
+      case 'CANDIDATE_REFRESH_FAILED':
+      case 'REFRESH_FAILED':
+        return 'A candidate payment refresh failed. Retry or recover it before creating a draft.';
+      case 'CANDIDATE_REFRESH_IN_PROGRESS':
+        return 'Updating candidate payment information. Draft creation re-enables automatically when it is complete.';
+      default:
+        return 'Checking for recent Banking Pay changes. Existing rows remain available while this finishes.';
+    }
+  })();
   const createDraftTitle = (() => {
     if (cdBusy) return 'Draft creation is already starting.';
     if (activeDraftCreateOperationForRender) return 'A draft creation operation is already running.';
     if (authoritativeRenderState.hasFailure || hasFailedCandidates) return 'Payment preview preparation failed. Resolve or retry the failed work before creating a draft.';
-    if (authoritativeRenderState.displayReady && !authoritativeRenderState.draftSafe) {
-      if (authoritativeRenderState.draftBlockReasonCode === 'REFRESH_FAILED') return 'A Banking Pay refresh failed. Retry it before creating a draft.';
-      if (authoritativeRenderState.draftBlockReasonCode === 'CANDIDATE_REFRESH_IN_PROGRESS') return 'Updating candidate payment information. Draft creation re-enables automatically when it is complete.';
-      return 'Checking for recent Banking Pay changes. Existing rows remain available while this finishes.';
-    }
+    if (authoritativeRenderState.displayReady && !authoritativeRenderState.draftSafe) return backendDraftBlockMessage;
     if (hasPendingCandidates) return 'Preparing / candidates refreshing. Draft creation re-enables when all candidate refresh work is complete.';
     if (!authoritativeRenderState.contractPresent) return 'Authoritative payment preview readiness is unavailable. Refresh Banking Pay before creating a draft.';
     if (!authoritativeRenderState.sessionMatchesCurrent) return 'The displayed preview does not match the current workbench session/version. Refresh Banking Pay.';
@@ -54896,11 +54907,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       return `<div class="warn" style="white-space:pre-wrap;">${enc('Authoritative readiness for the current workbench session/version is unavailable. Refresh Banking Pay before creating a draft.')}</div>`;
     }
     if (authoritativeRenderState.displayReady && !authoritativeRenderState.draftSafe) {
-      const statusText = authoritativeRenderState.draftBlockReasonCode === 'CANDIDATE_REFRESH_IN_PROGRESS'
-        ? 'Updating candidate payment information.'
-        : (authoritativeRenderState.draftBlockReasonCode === 'REFRESH_FAILED'
-          ? 'A Banking Pay refresh failed. Retry the refresh before creating a draft.'
-          : 'Checking for recent Banking Pay changes.');
+      const statusText = backendDraftBlockMessage;
       return `
         <div class="card" style="margin-top:10px;">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
