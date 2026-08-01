@@ -299227,9 +299227,11 @@ function invoiceModalEmailPolicyState(invoiceData) {
   const invoice = (invData.invoice && typeof invData.invoice === 'object') ? invData.invoice : {};
   const raw = (invData.raw && typeof invData.raw === 'object') ? invData.raw : invData;
   const issue = (raw.issue && typeof raw.issue === 'object') ? raw.issue : {};
-  const routePolicy = (issue.route_policy && typeof issue.route_policy === 'object')
-    ? issue.route_policy
-    : ((raw.route_policy && typeof raw.route_policy === 'object') ? raw.route_policy : {});
+  const routePolicy = (raw.email_delivery_policy && typeof raw.email_delivery_policy === 'object')
+    ? raw.email_delivery_policy
+    : ((issue.route_policy && typeof issue.route_policy === 'object')
+        ? issue.route_policy
+        : ((raw.route_policy && typeof raw.route_policy === 'object') ? raw.route_policy : {}));
   const header = (invData.header_snapshot_json && typeof invData.header_snapshot_json === 'object')
     ? invData.header_snapshot_json
     : ((invoice.header_snapshot_json && typeof invoice.header_snapshot_json === 'object')
@@ -299247,13 +299249,30 @@ function invoiceModalEmailPolicyState(invoiceData) {
     };
   }
 
+  const hasResolvedSuppression = Object.prototype.hasOwnProperty.call(
+    routePolicy,
+    'delivery_suppressed'
+  );
+  if (hasResolvedSuppression) {
+    if (boolish(routePolicy.delivery_suppressed)) {
+      return {
+        disabled: true,
+        reason_code: 'INVOICE_DELIVERY_SUPPRESSED',
+        hint: 'Invoices are not sent to this client under its invoicing policy.'
+      };
+    }
+    return { disabled: false, reason_code: null, hint: '' };
+  }
+
+  // Legacy/fallback detail only: fail closed when no resolved route policy was
+  // returned. An explicit backend decision above always outranks this marker.
   const isSelfBill = boolish(meta.self_bill)
     || String(meta.source || '').trim().toUpperCase() === 'TSFIN_SEGMENTS';
-  if (boolish(routePolicy.delivery_suppressed) || isSelfBill) {
+  if (isSelfBill) {
     return {
       disabled: true,
-      reason_code: 'INVOICE_DELIVERY_SUPPRESSED',
-      hint: 'Invoices are not sent to this client under its invoicing policy.'
+      reason_code: 'INVOICE_DELIVERY_POLICY_UNAVAILABLE',
+      hint: 'CloudTMS could not confirm this self-bill invoice\'s delivery policy.'
     };
   }
 

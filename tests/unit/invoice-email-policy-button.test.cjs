@@ -36,8 +36,23 @@ test('legacy self-bill evidence fails closed even if route-policy data is absent
   for (const meta of [{ self_bill: true }, { source: 'TSFIN_SEGMENTS' }]) {
     const state = policyState({ invoice: {}, raw: {}, header_snapshot_json: { meta } });
     assert.equal(state.disabled, true);
-    assert.equal(state.reason_code, 'INVOICE_DELIVERY_SUPPRESSED');
+    assert.equal(state.reason_code, 'INVOICE_DELIVERY_POLICY_UNAVAILABLE');
   }
+});
+
+test('resolved backend policy outranks the frozen self-bill marker', () => {
+  const state = policyState({
+    invoice: { do_not_send: false },
+    raw: {
+      email_delivery_policy: { resolved: true, delivery_suppressed: false },
+      issue: { route_policy: { delivery_suppressed: true } }
+    },
+    header_snapshot_json: { meta: { self_bill: true, source: 'TSFIN_SEGMENTS' } }
+  });
+
+  assert.equal(state.disabled, false);
+  assert.equal(state.reason_code, null);
+  assert.equal(state.hint, '');
 });
 
 test('do-not-send invoices have their distinct explanation', () => {
