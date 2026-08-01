@@ -314737,7 +314737,27 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
 
   const backendCanAuthorise = readLifecycleFalseWins('can_authorise', 'canAuthorise');
   const backendCanUnauthorise = readLifecycleFalseWins('can_unauthorise', 'canUnauthorise');
-  const backendCanProcess = readLifecycleFalseWins('can_process', 'canProcess');
+  const plannedBackendCanProcess = (() => {
+    // A planned row can arrive with a stale summary-row `can_process=false`
+    // captured before the guarded contract-week details were loaded. Once the
+    // planned authority is complete, use only that canonical detail response
+    // for Process. Physical timesheets continue to use the full false-wins
+    // lifecycle merge below without any relaxation.
+    const plannedSources = [
+      isPlainObject(det.action_flags) ? det.action_flags : null,
+      isPlainObject(det.actions) ? det.actions : null,
+      isPlainObject(cw.action_flags) ? cw.action_flags : null,
+      det,
+      cw
+    ].filter(isPlainObject);
+    const values = lifecycleBooleanValues(plannedSources, ['can_process', 'canProcess']);
+    if (values.some((value) => value === false)) return false;
+    if (values.some((value) => value === true)) return true;
+    return null;
+  })();
+  const backendCanProcess = (isPlannedWeek && plannedContractWeekAuthorityComplete)
+    ? plannedBackendCanProcess
+    : readLifecycleFalseWins('can_process', 'canProcess');
   const backendCanDelete = readLifecycleFalseWins('can_delete', 'canDelete');
   const backendCanArchive = readLifecycleFalseWins('can_archive', 'canArchive');
   const backendCanUnarchive = readLifecycleFalseWins('can_unarchive', 'canUnarchive');

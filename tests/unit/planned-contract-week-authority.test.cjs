@@ -43,6 +43,9 @@ test('footer allows planned Process only with the separate planned authority', (
   assert.match(source, /String\(plannedAuthorityContractWeekId\) === String\(contractWeekId\)/);
   assert.match(source, /const lifecycleAuthoritySatisfied = isPlannedWeek[\s\S]*plannedContractWeekAuthorityComplete[\s\S]*lifecycleAuthorityComplete/);
   assert.match(source, /const canonicalCanProcess = !!\([\s\S]*lifecycleAuthoritySatisfied/);
+  assert.match(source, /const plannedBackendCanProcess = \(\(\) => \{/);
+  assert.match(source, /const plannedSources = \[[\s\S]*det\.action_flags[\s\S]*det,[\s\S]*cw/);
+  assert.match(source, /isPlannedWeek && plannedContractWeekAuthorityComplete[\s\S]*plannedBackendCanProcess[\s\S]*readLifecycleFalseWins\('can_process'/);
   assert.match(source, /const canonicalCanAuthoriseBase = !!\([\s\S]*lifecycleAuthorityComplete/);
   assert.match(source, /const localCanUnprocess[\s\S]*hasTs/);
 });
