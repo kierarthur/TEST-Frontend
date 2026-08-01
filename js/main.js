@@ -296367,8 +296367,9 @@ function attachInvoiceModalDelegatedHandlers(modalCtx, rootEl, deps) {
         }
 
         case 'inv-email': {
-          if (invoice && invoice.do_not_send === true) {
-            mc.error = 'Do not send invoice (closeout).';
+          const emailPolicy = invoiceModalEmailPolicyState(invData);
+          if (emailPolicy.disabled) {
+            mc.error = emailPolicy.hint;
             safeRerender();
             return;
           }
@@ -299221,6 +299222,45 @@ function renderInvoiceModalHistoryTab(modalCtx, invoiceData) {
 }
 
 
+function invoiceModalEmailPolicyState(invoiceData) {
+  const invData = (invoiceData && typeof invoiceData === 'object') ? invoiceData : {};
+  const invoice = (invData.invoice && typeof invData.invoice === 'object') ? invData.invoice : {};
+  const raw = (invData.raw && typeof invData.raw === 'object') ? invData.raw : invData;
+  const issue = (raw.issue && typeof raw.issue === 'object') ? raw.issue : {};
+  const routePolicy = (issue.route_policy && typeof issue.route_policy === 'object')
+    ? issue.route_policy
+    : ((raw.route_policy && typeof raw.route_policy === 'object') ? raw.route_policy : {});
+  const header = (invData.header_snapshot_json && typeof invData.header_snapshot_json === 'object')
+    ? invData.header_snapshot_json
+    : ((invoice.header_snapshot_json && typeof invoice.header_snapshot_json === 'object')
+        ? invoice.header_snapshot_json
+        : {});
+  const meta = (header.meta && typeof header.meta === 'object') ? header.meta : {};
+  const boolish = (value) => value === true
+    || ['1', 'true', 'yes', 'y'].includes(String(value ?? '').trim().toLowerCase());
+
+  if (boolish(invoice.do_not_send) || boolish(routePolicy.do_not_send)) {
+    return {
+      disabled: true,
+      reason_code: 'DO_NOT_SEND',
+      hint: 'This invoice is marked as not to be sent.'
+    };
+  }
+
+  const isSelfBill = boolish(meta.self_bill)
+    || String(meta.source || '').trim().toUpperCase() === 'TSFIN_SEGMENTS';
+  if (boolish(routePolicy.delivery_suppressed) || isSelfBill) {
+    return {
+      disabled: true,
+      reason_code: 'INVOICE_DELIVERY_SUPPRESSED',
+      hint: 'Invoices are not sent to this client under its invoicing policy.'
+    };
+  }
+
+  return { disabled: false, reason_code: null, hint: '' };
+}
+
+
 function renderInvoiceModalContent(modalCtx, invoiceData) {
   const fmtMoneyLocal = (n) => {
     const x = invoiceModalRound2(Number(n || 0));
@@ -299401,10 +299441,22 @@ const hasRefEdits = (() => {
 
   const emailedOnce = !!email_summary?.emailed_once;
   const emailLabel = emailedOnce ? 'Re-email' : 'Email';
-
-  const doNotSend = !!invoice.do_not_send;
-  const emailDisabledAttr = doNotSend ? 'disabled' : '';
-  const emailTitle = doNotSend ? 'title="Do not send invoice (closeout)"' : '';
+  const emailPolicy = invoiceModalEmailPolicyState(invData);
+  const emailDisabledAttr = emailPolicy.disabled
+    ? 'disabled data-disabled="1" aria-disabled="true" style="pointer-events:none;"'
+    : 'aria-disabled="false"';
+  const emailButtonHtml = `
+    <button type="button" class="btn btn-sm btn-secondary" data-action="inv-email" ${emailDisabledAttr}>
+      ${escapeHtml(emailLabel)}
+    </button>
+  `;
+  const emailActionHtml = emailPolicy.disabled ? `
+    <span class="invoice-email-policy-hint" data-invoice-email-policy="${escapeHtml(emailPolicy.reason_code || 'BLOCKED')}"
+      title="${escapeHtml(emailPolicy.hint)}" aria-label="${escapeHtml(`${emailLabel} unavailable. ${emailPolicy.hint}`)}"
+      tabindex="0" style="display:inline-flex;">
+      ${emailButtonHtml}
+    </span>
+  ` : emailButtonHtml;
 
   const hasRefOrLocationRows =
     (Array.isArray(reference_rows) && reference_rows.length > 0)
@@ -299533,9 +299585,7 @@ const hasRefEdits = (() => {
           ${escapeHtml(invoicePdfLabel)}
         </button>
 
-        <button type="button" class="btn btn-sm btn-secondary" data-action="inv-email" ${emailDisabledAttr} ${emailTitle}>
-          ${escapeHtml(emailLabel)}
-        </button>
+        ${emailActionHtml}
 
         <button type="button" class="btn btn-sm btn-outline-secondary" data-action="inv-open-reference-numbers" ${refDisabledAttr} ${refTitle}>
           Refs and Ward
@@ -315301,6 +315351,10 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
       ]);
 
       if (isInvoiceFrame && ro && act && safeDataActions.has(act)) {
+        if (el.getAttribute('data-disabled') === '1' || el.getAttribute('data-disabled') === 'true') {
+          el.disabled = true;
+          return;
+        }
         el.disabled = false;
         return;
       }
