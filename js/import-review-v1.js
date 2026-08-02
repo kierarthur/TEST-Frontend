@@ -1051,7 +1051,11 @@
         const dim = itemDimension(item, type);
         path.push(`${type}=${dim.id}`);
         const keyPrefix = type === 'candidate' ? 'candidate' : type === 'client' ? 'client' : type === 'week' ? 'week' : 'shift';
-        const key = `${keyPrefix}:${path.join('|')}`;
+        // Expansion state is presentation-only.  Persist an opaque token rather
+        // than candidate/client/action identifiers, otherwise a harmless UI
+        // preference can look like financial or recipient authority to the
+        // database validator.
+        const key = `${keyPrefix}:u-${opaqueUiToken(path.join('|'))}`;
         if (!node.children.has(key)) node.children.set(key, { key, type, label: dim.label, badges: dim.badges || [], children: new Map(), items: [], count: 0 });
         node = node.children.get(key);
         if (type === 'candidate' && dim.badges?.length) node.badges = dim.badges;

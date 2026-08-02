@@ -46,6 +46,7 @@ test('review nesting follows the active sort and keeps full-branch context', () 
   assert.match(source, /branch_badges/);
   assert.match(source, /data-ir-action="toggle-branch"/);
   assert.match(source, /expanded: prior\?\.expanded \|\| new Set\(\)/);
+  assert.match(source, /const key = `\$\{keyPrefix\}:u-\$\{opaqueUiToken\(path\.join\('\|'\)\)\}`/);
   assert.doesNotMatch(source, /review\.view === 'PENDING' && isPrimary/);
   assert.match(css, /\.irv1-branch-toggle/);
   assert.match(css, /\.irv1-branch-badge/);
