@@ -240,6 +240,8 @@ test('validation-only review presents passed rows without duplicating mismatches
   assert.match(source, /CANDIDATE_DID_NOT_WORK_CONFIRMED/);
   assert.match(source, /Undo confirmation/);
   assert.match(source, /openUiConfirmModal/);
+  assert.match(source, /week_validation_badges/);
+  assert.match(source, /node\.type === 'week' \? branchBadgesHtml\(node\.badges\) : ''/);
   assert.doesNotMatch(source, /client:email:/);
   assert.doesNotMatch(source, /week:email:/);
 });

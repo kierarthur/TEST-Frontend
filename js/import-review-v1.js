@@ -1016,7 +1016,11 @@
     if (type === 'client') return { id: String(item.client_id || summary.client_name || 'unknown'), label: item.client_name || summary.client_name || 'Unknown client' };
     if (type === 'week') {
       const value = item.week_ending_date || summary.week_ending_date || item.work_date || summary.work_date || 'unknown';
-      return { id: String(value), label: value === 'unknown' ? 'Unknown week' : `Week ending ${formatDate(value)}` };
+      return {
+        id: String(value),
+        label: value === 'unknown' ? 'Unknown week' : `Week ending ${formatDate(value)}`,
+        badges: Array.isArray(item.week_validation_badges) ? item.week_validation_badges : []
+      };
     }
     if (type === 'date') {
       const value = item.work_date || summary.work_date || 'unknown';
@@ -1070,9 +1074,10 @@
       const isPrimary = depth === 0;
       const open = review.expanded.has(node.key);
       const children = Array.from(node.children.values()).map((child) => renderNode(child, depth + 1)).join('');
-      // Issue badges belong to the affected shift row.  Candidate-level badge
-      // rolls made unrelated rows look as if they shared the same problem.
-      const badges = '';
+      // Detailed issue badges stay on their affected shift.  A single
+      // server-derived badge on the week node makes it clear when individually
+      // passed rows do not yet mean the complete Weekly timesheet is validated.
+      const badges = node.type === 'week' ? branchBadgesHtml(node.badges) : '';
       const bigToggle = isPrimary ? `<button type="button" class="irv1-branch-toggle" data-ir-action="toggle-branch" data-expand="${open ? 'false' : 'true'}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(node.label)} and all sections">${open ? '−' : '+'}</button>` : '';
       return `<details class="irv1-group" data-ir-expand-key="${esc(node.key)}" ${open ? 'open' : ''}><summary>${bigToggle}<span class="irv1-group-label">${esc(node.label)} · ${node.count} item${node.count === 1 ? '' : 's'}</span>${badges}</summary>${children}${node.items.length ? table(node.items) : ''}</details>`;
     };
