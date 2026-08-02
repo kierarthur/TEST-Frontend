@@ -762,6 +762,7 @@
       review.header.state.status = result.status;
       if (result.preview_generation != null) review.header.state.preview_generation = result.preview_generation;
       if (result.preview_fingerprint) review.header.state.preview_fingerprint = result.preview_fingerprint;
+      review.error = '';
       review.saveState = 'Selections saved';
       if (!quiet) showScreen('Import review', renderReview, 'import-review-v1');
       return true;

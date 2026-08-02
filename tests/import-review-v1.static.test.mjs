@@ -32,6 +32,7 @@ test('review pagination uses only the approved page sizes and saves before navig
   assert.match(source, /sort_by/);
   assert.match(source, /data-ir-action="sort"/);
   assert.match(source, /currentItem\.selected = change\.selected === true/);
+  assert.match(source, /review\.error = '';\s*review\.saveState = 'Selections saved'/);
   assert.match(source, /review\.saveState = 'Selections saved';\s*if \(!quiet\) showScreen\('Import review', renderReview, 'import-review-v1'\)/);
 });
 
