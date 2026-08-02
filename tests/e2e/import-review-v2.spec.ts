@@ -427,7 +427,8 @@ test('implements the V6 incremental review workflow on desktop and narrow Chromi
   await page.locator('[data-ir-action="review-view"][data-view="READY"]').click();
   await page.locator('details[data-ir-expand-key^="candidate:"] > summary').click();
   await page.locator('details[data-ir-expand-key^="week:"] > summary').click();
-  await expect(page.locator('.irv1-branch-badge.is-ready', { hasText: 'TMS to add shift' })).toBeVisible();
+  await expect(page.getByText('TMS will add shift', { exact: true })).toBeVisible();
+  await expect(page.locator('.irv1-branch-badge.is-ready', { hasText: 'TMS to add shift' })).toHaveCount(0);
   const first = page.locator('[data-ir-select="action-1"]');
   await first.uncheck();
   await page.locator('[data-ir-action="review-page"][data-page="2"]').click();
@@ -439,7 +440,7 @@ test('implements the V6 incremental review workflow on desktop and narrow Chromi
   await expect(page.locator('details[data-ir-expand-key^="client:"]')).toHaveCount(0);
   await expect(page.locator('details[data-ir-expand-key^="week:"]')).toHaveAttribute('open', '');
   await expect(page.locator('[data-ir-select="action-1"]')).not.toBeChecked();
-  await expect(page.locator('.irv1-branch-badge.is-deferred', { hasText: 'Deferred' })).toBeVisible();
+  await expect(page.locator('.irv1-branch-badge.is-deferred', { hasText: 'Deferred' })).toHaveCount(0);
 
   await page.locator('[data-ir-action="review-view"][data-view="EMAIL"]').click();
   await expect(page.getByText('One email to shared@example.test')).toHaveCount(1);
