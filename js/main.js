@@ -266042,7 +266042,10 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
       response_contract_week_status_after: json?.contract_week_status_after || json?.week_status_after || json?.contract_week_status || null
     }));
 
-    const unauthoriseResponseNeedsRefresh = responseNeedsLifecycleReconcile(json);
+    const successfulPairUnauthorise = json?.ok === true
+      && json?.success === true
+      && String(json?.operation || '').toLowerCase() === 'correction_pair_unauthorise';
+    const unauthoriseResponseNeedsRefresh = !successfulPairUnauthorise && responseNeedsLifecycleReconcile(json);
     try {
       if (typeof tsHandleLifecycleReconcileModal === 'function' && unauthoriseResponseNeedsRefresh) {
         const reconciled = await tsHandleLifecycleReconcileModal(json, {
@@ -303867,7 +303870,10 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       response_contract_week_status_after: json?.contract_week_status_after || json?.week_status_after || json?.contract_week_status || null
     }));
 
-    const authoriseResponseNeedsRefresh = responseNeedsLifecycleReconcile(json);
+    const successfulPairAuthorise = json?.ok === true
+      && json?.success === true
+      && String(json?.operation || '').toLowerCase() === 'correction_pair_authorise';
+    const authoriseResponseNeedsRefresh = !successfulPairAuthorise && responseNeedsLifecycleReconcile(json);
     try {
       if (typeof tsHandleLifecycleReconcileModal === 'function' && authoriseResponseNeedsRefresh) {
         const reconciled = await tsHandleLifecycleReconcileModal(json, {
