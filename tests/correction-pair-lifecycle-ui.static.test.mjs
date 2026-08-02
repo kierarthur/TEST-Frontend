@@ -42,3 +42,10 @@ test('the incomplete placement blocker has a friendly Import Review explanation'
   assert.match(importReview, /IMPORT_REVIEW_CORRECTION_PAIR_PLACEMENT_INCOMPLETE/i);
   assert.match(importReview, /temporarily split while one member is being moved between invoices/i);
 });
+
+test('simple correction-pair confirmation is not covered by the global loading overlay', () => {
+  assert.match(main, /GE\(\);\s*const confirmation = await openUiConfirmModal\(\{\s*title: 'Unauthorise linked correction pair'/s);
+  assert.match(main, /GC\('unauthoriseTimesheet\.confirmedPair'\);\s*json = await apiPostJson\(urlPath, \{ \.\.\.payload, confirm_pair_lifecycle: true \}\)/s);
+  assert.match(main, /GE\(\);\s*const confirmation = await openUiConfirmModal\(\{\s*title: 'Authorise linked correction pair'/s);
+  assert.match(main, /GC\('authoriseTimesheet\.confirmedPair'\);\s*json = await apiPostJson\(urlPath, \{ \.\.\.payload, confirm_pair_lifecycle: true \}\)/s);
+});

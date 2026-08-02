@@ -265983,6 +265983,7 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
     } catch (err) {
       if (String(err?.json?.error_code || err?.json?.error || '').toUpperCase() === 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') {
         const preview = err?.json?.pair_lifecycle || {};
+        GE();
         const confirmation = await openUiConfirmModal({
           title: 'Unauthorise linked correction pair',
           message: `This timesheet is one half of a linked correction pair. Both timesheets will be unauthorised together (${Number(preview.affected_timesheet_count || 2)} timesheets affected). Continue?`,
@@ -265992,6 +265993,7 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
           GE();
           return { ok: false, cancelled: true };
         }
+        GC('unauthoriseTimesheet.confirmedPair');
         json = await apiPostJson(urlPath, { ...payload, confirm_pair_lifecycle: true });
       }
       if (!json) {
@@ -303806,6 +303808,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     } catch (err) {
       if (String(err?.json?.error_code || err?.json?.error || '').toUpperCase() === 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') {
         const preview = err?.json?.pair_lifecycle || {};
+        GE();
         const confirmation = await openUiConfirmModal({
           title: 'Authorise linked correction pair',
           message: `This timesheet is one half of a linked correction pair. Both timesheets will be authorised together (${Number(preview.affected_timesheet_count || 2)} timesheets affected). Continue?`,
@@ -303815,6 +303818,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
           GE();
           return { ok: false, cancelled: true };
         }
+        GC('authoriseTimesheet.confirmedPair');
         json = await apiPostJson(urlPath, { ...payload, confirm_pair_lifecycle: true });
       }
       if (!json) {
