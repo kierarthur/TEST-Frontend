@@ -110,10 +110,14 @@ test('transient import-review reads retry once without retrying mutations', () =
 
 test('email confirmation states and renders one message per shared recipient with contract sections', () => {
   assert.match(source, /One email to/);
-  assert.match(source, /combined into one tidy message/);
+  assert.match(source, /combined into one message/);
   assert.match(source, /contract_label/);
   assert.match(source, /recipient_email/);
-  assert.match(source, /Client → Contract → Shift/);
+  assert.match(source, /Client → Candidate → Contract → Shift/);
+  assert.match(source, /opaqueUiToken/);
+  assert.match(source, /validation failed:/);
+  assert.match(source, /Previously sent/);
+  assert.match(source, /reminder is never selected automatically/);
 });
 
 test('V4 grade resolution is server-option-only and route specific', () => {
@@ -221,8 +225,19 @@ test('Weekly and Daily distinguish no submitted timesheet from an omitted shift'
     'WEEKLY_SHIFT_ABSENT_FROM_TIMESHEET', 'DAILY_SHIFT_ABSENT_FROM_TIMESHEET'
   ]) assert.match(source, new RegExp(code));
   assert.match(source, /Request timesheet from candidate/);
-  assert.match(source, /Candidate timesheet states they did not work this shift/);
-  assert.match(source, /not included in the client query email/);
+  assert.match(source, /Confirm candidate did not work this shift/);
+  assert.match(source, /submitted Weekly candidate timesheet/);
+  assert.match(source, /No timesheet hours, TSFIN, invoice, payment or financial record will be changed/);
+  assert.match(source, /weekly-candidate-not-worked/);
+});
+
+test('validation-only review presents passed rows without duplicating mismatches', () => {
+  assert.match(source, /Passed checks/);
+  assert.match(source, /CANDIDATE_DID_NOT_WORK_CONFIRMED/);
+  assert.match(source, /Undo confirmation/);
+  assert.match(source, /openUiConfirmModal/);
+  assert.doesNotMatch(source, /client:email:/);
+  assert.doesNotMatch(source, /week:email:/);
 });
 
 test('coverage sends only the Worker-approved scope fields and shows mapping status in every mode', () => {
