@@ -110635,6 +110635,9 @@ function summaryUpdateRowDom(section, id, patchedRow) {
 
       span.className = cls;
       span.textContent = label;
+      if (label === 'Paired needs invoicing') {
+        span.title = 'This paired timesheet needs invoicing. The other timesheet is attached to an invoice, this timesheet needs attaching as soon as possible';
+      }
       wrap.appendChild(span);
     });
 
@@ -111310,6 +111313,9 @@ function summaryInsertRowDom(section, patchedRow) {
 
       span.className = cls;
       span.textContent = label;
+      if (label === 'Paired needs invoicing') {
+        span.title = 'This paired timesheet needs invoicing. The other timesheet is attached to an invoice, this timesheet needs attaching as soon as possible';
+      }
       wrap.appendChild(span);
     });
 
@@ -187372,7 +187378,22 @@ async function authoriseSelectedTimesheets(payload) {
 
   let json;
   if (typeof apiPostJson === 'function') {
-    json = await apiPostJson(urlPath, { ...body, items, context: body.context || 'bulk_authorise', response_context: 'minimal_lifecycle_mutation', minimal_lifecycle_mutation: true });
+    const requestPayload = { ...body, items, context: body.context || 'bulk_authorise', response_context: 'minimal_lifecycle_mutation', minimal_lifecycle_mutation: true };
+    try {
+      json = await apiPostJson(urlPath, requestPayload);
+    } catch (error) {
+      if (String(error?.json?.error_code || error?.json?.error || '').toUpperCase() !== 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') throw error;
+      const preview = error?.json?.pair_lifecycle || {};
+      const pairCount = Number(preview.correction_pair_count || 0) || 0;
+      const affectedCount = Number(preview.affected_timesheet_count || 0) || items.length;
+      const confirmed = await openUiConfirmModal({
+        title: 'Authorise linked correction pair',
+        message: `${pairCount} linked correction pair${pairCount === 1 ? '' : 's'} ${pairCount === 1 ? 'is' : 'are'} included. Both timesheets in each pair will be authorised together (${affectedCount} timesheets affected). Continue?`,
+        confirm_label: 'Authorise pair', cancel_label: 'Cancel', confirm_class: 'btn btn-primary'
+      });
+      if (!confirmed) throw new Error('Authorisation cancelled.');
+      json = await apiPostJson(urlPath, { ...requestPayload, confirm_pair_lifecycle: true });
+    }
   } else {
     const res = await authFetch(API(urlPath), {
       method: 'POST',
@@ -187614,7 +187635,22 @@ async function unauthoriseSelectedTimesheets(payload) {
 
   let json;
   if (typeof apiPostJson === 'function') {
-    json = await apiPostJson(urlPath, { ...body, items, context: body.context || 'bulk_authorise', response_context: 'minimal_lifecycle_mutation', minimal_lifecycle_mutation: true });
+    const requestPayload = { ...body, items, context: body.context || 'bulk_authorise', response_context: 'minimal_lifecycle_mutation', minimal_lifecycle_mutation: true };
+    try {
+      json = await apiPostJson(urlPath, requestPayload);
+    } catch (error) {
+      if (String(error?.json?.error_code || error?.json?.error || '').toUpperCase() !== 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') throw error;
+      const preview = error?.json?.pair_lifecycle || {};
+      const pairCount = Number(preview.correction_pair_count || 0) || 0;
+      const affectedCount = Number(preview.affected_timesheet_count || 0) || items.length;
+      const confirmed = await openUiConfirmModal({
+        title: 'Unauthorise linked correction pair',
+        message: `${pairCount} linked correction pair${pairCount === 1 ? '' : 's'} ${pairCount === 1 ? 'is' : 'are'} included. Both timesheets in each pair will be unauthorised together (${affectedCount} timesheets affected). Continue?`,
+        confirm_label: 'Unauthorise pair', cancel_label: 'Cancel', confirm_class: 'btn btn-primary'
+      });
+      if (!confirmed) throw new Error('Unauthorisation cancelled.');
+      json = await apiPostJson(urlPath, { ...requestPayload, confirm_pair_lifecycle: true });
+    }
   } else {
     const res = await authFetch(API(urlPath), {
       method: 'POST',
@@ -265945,6 +265981,20 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
     try {
       json = await apiPostJson(urlPath, payload);
     } catch (err) {
+      if (String(err?.json?.error_code || err?.json?.error || '').toUpperCase() === 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') {
+        const preview = err?.json?.pair_lifecycle || {};
+        const confirmed = await openUiConfirmModal({
+          title: 'Unauthorise linked correction pair',
+          message: `This timesheet is one half of a linked correction pair. Both timesheets will be unauthorised together (${Number(preview.affected_timesheet_count || 2)} timesheets affected). Continue?`,
+          confirm_label: 'Unauthorise pair', cancel_label: 'Cancel', confirm_class: 'btn btn-primary'
+        });
+        if (!confirmed) {
+          GE();
+          return { ok: false, cancelled: true };
+        }
+        json = await apiPostJson(urlPath, { ...payload, confirm_pair_lifecycle: true });
+      }
+      if (!json) {
       try {
         if (typeof tsHandleLifecycleReconcileModal === 'function') {
           const reconciled = await tsHandleLifecycleReconcileModal(err, {
@@ -265976,6 +266026,7 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
       } catch {}
       GE();
       throw err;
+      }
     }
     L('unauthorise result', json);
     logTimesheetSaveSignatureDiag('unauthoriseTimesheet.responseBeforeAdoption', () => ({
@@ -303753,6 +303804,20 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     try {
       json = await apiPostJson(urlPath, payload);
     } catch (err) {
+      if (String(err?.json?.error_code || err?.json?.error || '').toUpperCase() === 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') {
+        const preview = err?.json?.pair_lifecycle || {};
+        const confirmed = await openUiConfirmModal({
+          title: 'Authorise linked correction pair',
+          message: `This timesheet is one half of a linked correction pair. Both timesheets will be authorised together (${Number(preview.affected_timesheet_count || 2)} timesheets affected). Continue?`,
+          confirm_label: 'Authorise pair', cancel_label: 'Cancel', confirm_class: 'btn btn-primary'
+        });
+        if (!confirmed) {
+          GE();
+          return { ok: false, cancelled: true };
+        }
+        json = await apiPostJson(urlPath, { ...payload, confirm_pair_lifecycle: true });
+      }
+      if (!json) {
       try {
         if (typeof tsHandleLifecycleReconcileModal === 'function') {
           const reconciled = await tsHandleLifecycleReconcileModal(err, {
@@ -303784,6 +303849,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       } catch {}
       GE();
       throw err;
+      }
     }
 
     logTimesheetSaveSignatureDiag('authoriseTimesheet.responseBeforeAdoption', () => ({
@@ -306351,6 +306417,9 @@ function renderSummary(rows){
 
       span.className = cls;
       span.textContent = label;
+      if (label === 'Paired needs invoicing') {
+        span.title = 'This paired timesheet needs invoicing. The other timesheet is attached to an invoice, this timesheet needs attaching as soon as possible';
+      }
       wrap.appendChild(span);
     });
 
@@ -323241,6 +323310,10 @@ if (btnTsProcess) {
           };
            const roleLabel = (it) => {
             const r = String(it?.display_role || '').toUpperCase();
+            const correctionKind = String(it?.correction_kind || '').toUpperCase();
+            const correctionSource = String(freshDpX?.source_system || '').toUpperCase().includes('NHSP') ? 'NHSP' : 'HealthRoster';
+            if (correctionKind === 'CHANGED_HOURS_REVERSAL') return `${correctionSource} Reversal`;
+            if (correctionKind === 'CHANGED_HOURS_REPLACEMENT') return `${correctionSource} Corrected Hours`;
             if (dpKindX === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') return 'Manual Adjustment';
             if (r === 'PARENT') return 'Parent';
             if (r === 'MANUAL_ADJUSTMENT') return 'Manual Adjustment';
@@ -323306,7 +323379,17 @@ if (btnTsProcess) {
             `;
           };
 
-            const dpItems = (!isPlannedOnly && freshDpX && Array.isArray(freshDpX.delete_items)) ? freshDpX.delete_items : [];
+          const pairMemberById = new Map(
+            Array.isArray(freshDpX?.members)
+              ? freshDpX.members.map((member) => [String(member?.timesheet_id || ''), member])
+              : []
+          );
+          const dpItems = (!isPlannedOnly && freshDpX && Array.isArray(freshDpX.delete_items))
+            ? freshDpX.delete_items.map((item) => ({
+                ...item,
+                ...(pairMemberById.get(String(item?.timesheet_id || '')) || {})
+              }))
+            : [];
           const weYmdX =
             (dpItems[0] && dpItems[0].week_ending_date) ? String(dpItems[0].week_ending_date) :
             (det?.timesheet?.week_ending_date) ? String(det.timesheet.week_ending_date) :
@@ -323348,10 +323431,10 @@ if (btnTsProcess) {
                 `
                 : `
                   <div style="font-size:14px;font-weight:700;margin-bottom:6px;">
-                    Delete timesheet(s) for week ending ${enc2(weYmdX || 'Unknown')}?
+                    ${freshDpX?.correction_pair === true ? 'Delete both linked correction-pair timesheets' : 'Delete timesheet(s)'} for week ending ${enc2(weYmdX || 'Unknown')}?
                   </div>
                   <div class="mini" style="white-space:pre-wrap;">
-                    This will permanently delete the timesheet(s) listed below. Associated evidence, images and files will also be permanently deleted and will not return to Timesheet Imports.
+                    ${freshDpX?.correction_pair === true ? 'The reversal and corrected-hours timesheets must be deleted together. ' : ''}This will permanently delete the timesheet(s) listed below. Associated evidence, images and files will also be permanently deleted and will not return to Timesheet Imports.
                   </div>
                   <div class="mini" style="margin-top:10px;opacity:.8;">
                     This action cannot be undone.
@@ -327455,12 +327538,15 @@ async function requestTimesheetArchiveAction(timesheetId, action, options = {}) 
   const confirmAction = async (state) => {
     const isArchive = requestedAction === 'ARCHIVE';
     const unitCount = state.timesheet_ids.length;
-    const unitText = unitCount > 1 ? `${unitCount} Timesheets in this weekly unit` : 'this Timesheet';
+    const isCorrectionPair = state.correction_pair === true && unitCount === 2;
+    const unitText = isCorrectionPair
+      ? 'both linked correction-pair Timesheets'
+      : (unitCount > 1 ? `${unitCount} Timesheets in this weekly unit` : 'this Timesheet');
     const archivedBy = String(state.archived_by_display || '').trim();
     const archivedAt = String(state.archived_at_utc || '').trim();
     const reasonText = isArchive
-      ? `Archive ${unitText}? Archive changes lifecycle metadata only and moves the Timesheet out of active lifecycle views. It does not clear or change any active Advance, payment workflow, Timesheet economics, paid history or source financial record.`
-      : `Unarchive ${unitText}? Unarchive changes lifecycle metadata only and restores the Timesheet to active lifecycle views. It does not create, restore, clear or change any active Advance, payment workflow, Timesheet economics, paid history or source financial record.${archivedBy || archivedAt ? `\n\nArchived${archivedBy ? ` by ${archivedBy}` : ''}${archivedAt ? ` on ${archivedAt}` : ''}.` : ''}`;
+      ? `Archive ${unitText}?${isCorrectionPair ? ' The reversal and corrected-hours Timesheets must be archived together.' : ''} Archive changes lifecycle metadata only and moves the Timesheet out of active lifecycle views. It does not clear or change any active Advance, payment workflow, Timesheet economics, paid history or source financial record.`
+      : `Unarchive ${unitText}?${isCorrectionPair ? ' The reversal and corrected-hours Timesheets must be unarchived together.' : ''} Unarchive changes lifecycle metadata only and restores the Timesheet to active lifecycle views. It does not create, restore, clear or change any active Advance, payment workflow, Timesheet economics, paid history or source financial record.${archivedBy || archivedAt ? `\n\nArchived${archivedBy ? ` by ${archivedBy}` : ''}${archivedAt ? ` on ${archivedAt}` : ''}.` : ''}`;
 
     if (typeof openUiConfirmModal === 'function') {
       const result = await openUiConfirmModal({

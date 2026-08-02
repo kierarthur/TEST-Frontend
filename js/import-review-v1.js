@@ -24,6 +24,7 @@
     coverage: null,
     review: null,
     saveTimer: null,
+    documentPollTimer: null,
     reviewEpoch: 0,
     closeBypass: false
   };
@@ -214,6 +215,50 @@
       null,
       { kind, noParentGate: true, forceEdit: true, dirtyClosePolicy: 'close', showSave: false, stayOpenOnSave: true }
     );
+  }
+
+  function cancelDocumentPreparationPoll() {
+    if (state.documentPollTimer !== null) {
+      global.clearTimeout(state.documentPollTimer);
+      state.documentPollTimer = null;
+    }
+  }
+
+  function pageNeedsDocumentPreparationPoll(review) {
+    const items = Array.isArray(review?.pageData?.items) ? review.pageData.items : [];
+    return items.some((item) => {
+      try {
+        return JSON.stringify(item || {}).toUpperCase().includes('TIMESHEET_EVIDENCE_PREPARING');
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  function scheduleDocumentPreparationPoll(review) {
+    cancelDocumentPreparationPoll();
+    if (!review || state.review !== review || !pageNeedsDocumentPreparationPoll(review)) return;
+    const importId = review.importId;
+    const epoch = review.epoch;
+    state.documentPollTimer = global.setTimeout(async () => {
+      state.documentPollTimer = null;
+      const current = state.review;
+      if (!current || current !== review || current.importId !== importId || current.epoch !== epoch) return;
+      if (!currentImportFrame() || current.screen !== 'review') return;
+      if (current.pendingSave || current.dirty?.size) {
+        scheduleDocumentPreparationPoll(current);
+        return;
+      }
+      try {
+        await openReview(importId, { preserveLocal: true, documentPoll: true });
+      } catch (error) {
+        if (state.review === current) {
+          current.error = `Timesheet evidence is still being prepared. CloudTMS will check again automatically. ${error?.message || ''}`.trim();
+          showScreen('Import review', renderReview, 'import-review-v1');
+          scheduleDocumentPreparationPoll(current);
+        }
+      }
+    }, 1800);
   }
 
   function formatDate(value) {
@@ -648,6 +693,7 @@
   }
 
   async function openReview(importId, options = {}) {
+    cancelDocumentPreparationPoll();
     const epoch = ++state.reviewEpoch;
     let header = await fetchReviewHeader(importId);
     if (epoch !== state.reviewEpoch) return;
@@ -705,6 +751,7 @@
     state.review.pageData = await fetchActionPage(state.review);
     if (epoch !== state.reviewEpoch) return;
     showScreen('Import review', renderReview, 'import-review-v1');
+    scheduleDocumentPreparationPoll(state.review);
   }
 
   function reviewUiState(review) {
@@ -825,7 +872,8 @@
       BLOCKED_ACTIVE_PAY_DRAFT: 'An active Banking Pay draft protects this timesheet. Resolve the draft outside the import, then choose Recheck.',
       TIMESHEET_PRESENT_BUT_INVOICED: 'Timesheet present but invoiced. Remove it from the invoice (and unissue first if required), then choose Recheck before validating it.',
       TIMESHEET_EVIDENCE_INCOMPLETE: 'Timesheet evidence incomplete. The submitted timesheet must contain its hours and all required signatures or manual/QR evidence before a correction email can be sent.',
-      TIMESHEET_EVIDENCE_PREPARING: 'Preparing timesheet evidence. CloudTMS is generating the current timesheet PDF asynchronously; choose Recheck when preparation has completed.',
+      TIMESHEET_EVIDENCE_PREPARING: 'Preparing timesheet evidence. CloudTMS has queued the current timesheet PDF for immediate asynchronous generation and will refresh this review automatically when it is ready.',
+      IMPORT_REVIEW_CORRECTION_PAIR_PLACEMENT_INCOMPLETE: 'This correction pair is temporarily split while one member is being moved between invoices. Attach the outstanding member to a compatible invoice, then choose Recheck.',
       IMPORT_REVIEW_CORRECTION_GENERATION_PARTIALLY_INVOICED: 'The current correction generation is only partly invoiced. CloudTMS cannot safely amend it or create a further correction generation while one member remains uninvoiced. Resolve the invoice state through the existing invoice process, then choose Recheck.',
       IMPORT_REVIEW_ARCHIVED_GENERATION_ACTIVE_MEMBER_CONFLICT: 'An inactive Archived correction record has an active partner still outstanding. CloudTMS will not restore or reuse the Archived generation. Resolve the active record through the normal timesheet lifecycle, then choose Recheck.',
       IMPORT_REVIEW_ARCHIVED_INVOICE_STATE_CONFLICT: 'An Archived timesheet also has frozen invoice evidence, which is not a supported lifecycle state. Nothing was selected. Resolve the conflicting historical state, then choose Recheck.',
@@ -853,7 +901,7 @@
       BLOCKED_ACTIVE_PAY_DRAFT: 'Deferred because an active Banking Pay draft protects this timesheet.',
       TIMESHEET_PRESENT_BUT_INVOICED: 'This validation is unavailable while the timesheet is attached to an invoice.',
       TIMESHEET_EVIDENCE_INCOMPLETE: 'The correction email cannot be selected until the timesheet evidence is complete.',
-      TIMESHEET_EVIDENCE_PREPARING: 'The correction email cannot be selected until the current timesheet PDF is ready.'
+      TIMESHEET_EVIDENCE_PREPARING: 'The correction email will become available automatically when the queued timesheet PDF is ready.'
     };
     return labels[String(code || '').toUpperCase()] || '';
   }
@@ -1440,6 +1488,7 @@
     review.error = '';
     review.pageData = await fetchActionPage(review);
     showScreen('Import review', renderReview, 'import-review-v1');
+    scheduleDocumentPreparationPoll(review);
   }
 
   async function saveDailyResolution(select, explicitTimesheetId) {
@@ -1769,6 +1818,7 @@
         return showScreen('Imports', renderHome, 'imports-v1');
       }
       if (action === 'home' || action === 'coverage-cancel' || action === 'overlap-cancel') {
+        cancelDocumentPreparationPoll();
         if (action === 'coverage-cancel' || action === 'overlap-cancel') {
           if (!(await confirmCoverageDiscard())) return;
           state.coverage = null;
