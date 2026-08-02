@@ -320,7 +320,7 @@
     const rows = state.home.reviews.length ? state.home.reviews.map((item) => `<div class="irv1-history-row">
       <div><strong>${esc(item.filename || 'Import')}</strong><small>${esc(item.source_route || item.source_system || '')}</small></div>
       <div>${esc(formatDate(item.coverage_start_date))} – ${esc(formatDate(item.coverage_end_date))}</div>
-      <div><span class="irv1-status">${esc(displayReviewStatus(item.status, item.partial_application === true))}</span><small>Updated ${esc(formatDateTime(item.updated_at_utc))}</small></div>
+      <div><span class="irv1-status ${String(item.display_status || '').toUpperCase() === 'SUCCESS' ? 'is-success' : ''}">${esc(displayReviewStatus(item.display_status || item.status, item.partial_application === true))}</span><small>Updated ${esc(formatDateTime(item.updated_at_utc))}</small></div>
       <button type="button" class="irv1-btn" data-ir-action="continue" data-import-id="${esc(item.import_id)}">Continue</button>
     </div>`).join('') : '<div class="irv1-empty">There are no unfinished import reviews.</div>';
     const busy = state.home.busy ? `<div class="irv1-alert">${esc(state.home.busy)}</div>` : '';
@@ -823,6 +823,9 @@
       REFERENCE_ON_SHIFT_MISSING_OR_MISMATCHED_IN_COMPLETE_IMPORT: 'The stored reference is missing or differs in the complete import. Clearing it is a separate explicit choice.',
       QUERY_RECIPIENT_EMAIL_MISSING_OR_INVALID: 'No valid query recipient is configured. Correct the client or contract query email outside this review, then choose Recheck.',
       BLOCKED_ACTIVE_PAY_DRAFT: 'An active Banking Pay draft protects this timesheet. Resolve the draft outside the import, then choose Recheck.',
+      TIMESHEET_PRESENT_BUT_INVOICED: 'Timesheet present but invoiced. Remove it from the invoice (and unissue first if required), then choose Recheck before validating it.',
+      TIMESHEET_EVIDENCE_INCOMPLETE: 'Timesheet evidence incomplete. The submitted timesheet must contain its hours and all required signatures or manual/QR evidence before a correction email can be sent.',
+      TIMESHEET_EVIDENCE_PREPARING: 'Preparing timesheet evidence. CloudTMS is generating the current timesheet PDF asynchronously; choose Recheck when preparation has completed.',
       IMPORT_REVIEW_CORRECTION_GENERATION_PARTIALLY_INVOICED: 'The current correction generation is only partly invoiced. CloudTMS cannot safely amend it or create a further correction generation while one member remains uninvoiced. Resolve the invoice state through the existing invoice process, then choose Recheck.',
       IMPORT_REVIEW_ARCHIVED_GENERATION_ACTIVE_MEMBER_CONFLICT: 'An inactive Archived correction record has an active partner still outstanding. CloudTMS will not restore or reuse the Archived generation. Resolve the active record through the normal timesheet lifecycle, then choose Recheck.',
       IMPORT_REVIEW_ARCHIVED_INVOICE_STATE_CONFLICT: 'An Archived timesheet also has frozen invoice evidence, which is not a supported lifecycle state. Nothing was selected. Resolve the conflicting historical state, then choose Recheck.',
@@ -847,7 +850,10 @@
       PREVIOUS_OR_LEGACY_HISTORY_REQUIRES_EXPLICIT_REMINDER: 'Previously recorded issue: deferred by default. Tick it only when you deliberately want to send a reminder.',
       REFERENCE_INVALIDATION_REQUIRES_EXPLICIT_SELECTION: 'Reference clearing is deferred by default and happens only when explicitly selected.',
       QUERY_RECIPIENT_EMAIL_MISSING_OR_INVALID: 'Deferred because the client or contract has no valid query recipient email.',
-      BLOCKED_ACTIVE_PAY_DRAFT: 'Deferred because an active Banking Pay draft protects this timesheet.'
+      BLOCKED_ACTIVE_PAY_DRAFT: 'Deferred because an active Banking Pay draft protects this timesheet.',
+      TIMESHEET_PRESENT_BUT_INVOICED: 'This validation is unavailable while the timesheet is attached to an invoice.',
+      TIMESHEET_EVIDENCE_INCOMPLETE: 'The correction email cannot be selected until the timesheet evidence is complete.',
+      TIMESHEET_EVIDENCE_PREPARING: 'The correction email cannot be selected until the current timesheet PDF is ready.'
     };
     return labels[String(code || '').toUpperCase()] || '';
   }
