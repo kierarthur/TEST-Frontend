@@ -827,10 +827,16 @@
       }
       review.pendingSave = null;
       review.conflictBuffer = null;
-      review.header.state.state_version = result.state_version;
-      review.header.state.status = result.status;
-      if (result.preview_generation != null) review.header.state.preview_generation = result.preview_generation;
-      if (result.preview_fingerprint) review.header.state.preview_fingerprint = result.preview_fingerprint;
+      const freshHeader = await fetchReviewHeader(review.importId).catch(() => null);
+      if (state.review !== review) return true;
+      if (freshHeader?.state) {
+        review.header = freshHeader;
+      } else {
+        review.header.state.state_version = result.state_version;
+        review.header.state.status = result.status;
+        if (result.preview_generation != null) review.header.state.preview_generation = result.preview_generation;
+        if (result.preview_fingerprint) review.header.state.preview_fingerprint = result.preview_fingerprint;
+      }
       review.error = '';
       review.saveState = 'Selections saved';
       if (!quiet) showScreen('Import review', renderReview, 'import-review-v1');

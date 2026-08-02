@@ -342,6 +342,11 @@ test('save, close, conflict and apply recovery state are durable', () => {
   assert.match(source, /The review was created, but its next screen could not be loaded safely/);
 });
 
+test('saved selections refresh server editability before repainting the review', () => {
+  assert.match(source, /const freshHeader = await fetchReviewHeader\(review\.importId\)\.catch\(\(\) => null\)/);
+  assert.match(source, /if \(freshHeader\?\.state\) \{\s*review\.header = freshHeader;/);
+});
+
 test('global, eligible-client and independent contract query settings are wired', () => {
   assert.match(source, /data-ir-global-policy/);
   assert.match(source, /data-ir-client-policy/);
