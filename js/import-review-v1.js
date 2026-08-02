@@ -1113,8 +1113,12 @@
           const totalShifts = Number(summaryRow.validation_total_shift_count || candidateRows.reduce((n, row) => n + Math.max(1, Array.isArray(row.evidence_rows) ? row.evidence_rows.length : 1), 0));
           const differenceCount = Number(summaryRow.validation_difference_count || candidateRows.reduce((n, row) => n + Math.max(1, Array.isArray(row.evidence_rows) ? row.evidence_rows.length : 1), 0));
           const weekEnding = candidateRows[0]?.week_ending_date || summaryRow.week_ending_date;
+          const workDate = candidateRows[0]?.work_date || summaryRow.work_date;
+          const periodLabel = reviewRoute(review).includes('DAILY')
+            ? `Date ${formatDate(workDate)}`
+            : `Week ending ${formatDate(weekEnding)}`;
           const validationLabel = totalShifts > 0
-            ? `${candidate.label} · Week ending ${formatDate(weekEnding)} — validation failed: ${differenceCount} of ${totalShifts} shift${totalShifts===1?'':'s'} differ${differenceCount===1?'s':''}`
+            ? `${candidate.label} · ${periodLabel} — validation failed: ${differenceCount} of ${totalShifts} shift${totalShifts===1?'':'s'} differ${differenceCount===1?'s':''}`
             : candidate.label;
           return `<details class="irv1-group" data-ir-expand-key="${esc(expandCandidate)}" ${review.expanded.has(expandCandidate) ? 'open' : ''}><summary>${esc(validationLabel)}</summary>${Array.from(candidate.contracts, ([contractKey, contract]) => {
             const expandContract = `week:u-${routeToken}-${opaqueUiToken(`${clientKey}|${candidateKey}|${contractKey}`)}`;

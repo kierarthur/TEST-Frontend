@@ -118,6 +118,8 @@ test('email confirmation states and renders one message per shared recipient wit
   assert.match(source, /Client → Candidate → Contract → Shift/);
   assert.match(source, /opaqueUiToken/);
   assert.match(source, /validation failed:/);
+  assert.match(source, /reviewRoute\(review\)\.includes\('DAILY'\)/);
+  assert.match(source, /Date \$\{formatDate\(workDate\)\}/);
   assert.match(source, /Previously sent/);
   assert.match(source, /reminder is never selected automatically/);
 });
