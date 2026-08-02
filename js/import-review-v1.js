@@ -171,13 +171,35 @@
 
   function currentImportFrame() {
     const frames = Array.isArray(global.__modalStack) ? global.__modalStack : [];
-    const top = frames[frames.length - 1] || null;
+    let top = frames[frames.length - 1] || null;
+    if (!top && typeof global.__getModalFrame === 'function') {
+      try { top = global.__getModalFrame(); } catch { top = null; }
+    }
     return top && IMPORT_SCREEN_KINDS.has(String(top.kind || '')) ? top : null;
+  }
+
+  function currentImportScreenIsVisible() {
+    if (currentImportFrame()) return true;
+    const root = document.getElementById('irv1Review');
+    return !!(root && root.isConnected);
   }
 
   function repaintImportFrame(title, render, kind) {
     const frame = currentImportFrame();
-    if (!frame) return false;
+    if (!frame) {
+      // Some modal-host refreshes can briefly lose the JS frame while leaving
+      // the live Import Review DOM mounted. Repaint that mounted screen rather
+      // than opening a duplicate dialog or stopping document-ready polling.
+      const existingRoot = document.getElementById('irv1Review');
+      const body = document.getElementById('modalBody');
+      if (!existingRoot || !existingRoot.isConnected || !body) return false;
+      const titleNode = document.getElementById('modalTitle');
+      if (titleNode) titleNode.textContent = title;
+      const tabNode = document.querySelector('#modalTabs button');
+      if (tabNode) tabNode.textContent = title;
+      body.innerHTML = render();
+      return true;
+    }
     const changedScreen = String(frame.kind || '') !== String(kind || '');
     frame.title = title;
     frame.kind = kind;
@@ -244,7 +266,7 @@
       state.documentPollTimer = null;
       const current = state.review;
       if (!current || current !== review || current.importId !== importId || current.epoch !== epoch) return;
-      if (!currentImportFrame() || current.screen !== 'review') return;
+      if (!currentImportScreenIsVisible() || current.screen !== 'review') return;
       if (current.pendingSave || current.dirty?.size) {
         scheduleDocumentPreparationPoll(current);
         return;

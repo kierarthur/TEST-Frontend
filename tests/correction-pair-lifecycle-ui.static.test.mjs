@@ -26,6 +26,9 @@ test('the incomplete invoice placement issue has the exact user guidance', () =>
 test('document preparation polls automatically without asking for Recheck', () => {
   assert.match(importReview, /scheduleDocumentPreparationPoll/i);
   assert.match(importReview, /openReview\(importId, \{ preserveLocal: true, documentPoll: true \}\)/i);
+  assert.match(importReview, /currentImportScreenIsVisible\(\)/i);
+  assert.match(importReview, /document\.getElementById\('irv1Review'\)[\s\S]*root\.isConnected/i);
+  assert.match(importReview, /typeof global\.__getModalFrame === 'function'/i);
   assert.match(importReview, /queued the current timesheet PDF for immediate asynchronous generation/i);
   assert.doesNotMatch(
     importReview,
