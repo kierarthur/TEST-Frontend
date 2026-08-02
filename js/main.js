@@ -187386,12 +187386,12 @@ async function authoriseSelectedTimesheets(payload) {
       const preview = error?.json?.pair_lifecycle || {};
       const pairCount = Number(preview.correction_pair_count || 0) || 0;
       const affectedCount = Number(preview.affected_timesheet_count || 0) || items.length;
-      const confirmed = await openUiConfirmModal({
+      const confirmation = await openUiConfirmModal({
         title: 'Authorise linked correction pair',
         message: `${pairCount} linked correction pair${pairCount === 1 ? '' : 's'} ${pairCount === 1 ? 'is' : 'are'} included. Both timesheets in each pair will be authorised together (${affectedCount} timesheets affected). Continue?`,
         confirm_label: 'Authorise pair', cancel_label: 'Cancel', confirm_class: 'btn btn-primary'
       });
-      if (!confirmed) throw new Error('Authorisation cancelled.');
+      if (!(confirmation && confirmation.confirmed === true)) throw new Error('Authorisation cancelled.');
       json = await apiPostJson(urlPath, { ...requestPayload, confirm_pair_lifecycle: true });
     }
   } else {
@@ -187643,12 +187643,12 @@ async function unauthoriseSelectedTimesheets(payload) {
       const preview = error?.json?.pair_lifecycle || {};
       const pairCount = Number(preview.correction_pair_count || 0) || 0;
       const affectedCount = Number(preview.affected_timesheet_count || 0) || items.length;
-      const confirmed = await openUiConfirmModal({
+      const confirmation = await openUiConfirmModal({
         title: 'Unauthorise linked correction pair',
         message: `${pairCount} linked correction pair${pairCount === 1 ? '' : 's'} ${pairCount === 1 ? 'is' : 'are'} included. Both timesheets in each pair will be unauthorised together (${affectedCount} timesheets affected). Continue?`,
         confirm_label: 'Unauthorise pair', cancel_label: 'Cancel', confirm_class: 'btn btn-primary'
       });
-      if (!confirmed) throw new Error('Unauthorisation cancelled.');
+      if (!(confirmation && confirmation.confirmed === true)) throw new Error('Unauthorisation cancelled.');
       json = await apiPostJson(urlPath, { ...requestPayload, confirm_pair_lifecycle: true });
     }
   } else {
@@ -265983,12 +265983,12 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
     } catch (err) {
       if (String(err?.json?.error_code || err?.json?.error || '').toUpperCase() === 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') {
         const preview = err?.json?.pair_lifecycle || {};
-        const confirmed = await openUiConfirmModal({
+        const confirmation = await openUiConfirmModal({
           title: 'Unauthorise linked correction pair',
           message: `This timesheet is one half of a linked correction pair. Both timesheets will be unauthorised together (${Number(preview.affected_timesheet_count || 2)} timesheets affected). Continue?`,
           confirm_label: 'Unauthorise pair', cancel_label: 'Cancel', confirm_class: 'btn btn-primary'
         });
-        if (!confirmed) {
+        if (!(confirmation && confirmation.confirmed === true)) {
           GE();
           return { ok: false, cancelled: true };
         }
@@ -303806,12 +303806,12 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     } catch (err) {
       if (String(err?.json?.error_code || err?.json?.error || '').toUpperCase() === 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') {
         const preview = err?.json?.pair_lifecycle || {};
-        const confirmed = await openUiConfirmModal({
+        const confirmation = await openUiConfirmModal({
           title: 'Authorise linked correction pair',
           message: `This timesheet is one half of a linked correction pair. Both timesheets will be authorised together (${Number(preview.affected_timesheet_count || 2)} timesheets affected). Continue?`,
           confirm_label: 'Authorise pair', cancel_label: 'Cancel', confirm_class: 'btn btn-primary'
         });
-        if (!confirmed) {
+        if (!(confirmation && confirmation.confirmed === true)) {
           GE();
           return { ok: false, cancelled: true };
         }

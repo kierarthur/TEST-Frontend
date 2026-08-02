@@ -7,6 +7,7 @@ const importReview = readFileSync(new URL('../js/import-review-v1.js', import.me
 
 test('simple and bulk lifecycle actions use the friendly pair confirmation', () => {
   assert.ok((main.match(/CORRECTION_PAIR_CONFIRMATION_REQUIRED/g) || []).length >= 4);
+  assert.ok((main.match(/confirmation\.confirmed === true/g) || []).length >= 4);
   assert.match(main, /openUiConfirmModal[\s\S]*linked correction pair/i);
   assert.match(main, /confirm_pair_lifecycle:\s*true/i);
 });
