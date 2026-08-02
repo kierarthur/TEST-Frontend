@@ -32,6 +32,11 @@ test('document preparation polls automatically without asking for Recheck', () =
   );
 });
 
+test('a deduplicated validation blocker still displays preserved delivery history', () => {
+  assert.match(importReview, /\['EMAIL_ISSUE','EMAIL_REMINDER'\]\.includes\(item\.action_kind\)[\s\S]*Number\(summary\.sent_count \|\| 0\) > 0/);
+  assert.match(importReview, /Previously sent \$\{Number\(summary\.sent_count\)\}/);
+});
+
 test('the incomplete placement blocker has a friendly Import Review explanation', () => {
   assert.match(importReview, /IMPORT_REVIEW_CORRECTION_PAIR_PLACEMENT_INCOMPLETE/i);
   assert.match(importReview, /temporarily split while one member is being moved between invoices/i);

@@ -1044,6 +1044,7 @@
               ? `<button type="button" class="irv1-btn" data-ir-action="weekly-candidate-not-worked" data-action-id="${esc(item.action_id)}" data-confirmed="false">Undo confirmation</button>`
               : '';
     const deliveryStatus = ['EMAIL_ISSUE','EMAIL_REMINDER'].includes(item.action_kind)
+      || Number(summary.sent_count || 0) > 0
       ? `<span class="irv1-advisory">${Number(summary.sent_count || 0)>0
           ? `Previously sent ${Number(summary.sent_count)} time${Number(summary.sent_count)===1?'':'s'} · ${esc(String(summary.delivery_history_status || 'SENT_VERIFIED').replaceAll('_',' ').toLowerCase())}`
           : 'Not previously sent. A reminder is never selected automatically.'}</span>`
