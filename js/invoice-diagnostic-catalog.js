@@ -12,7 +12,7 @@
     MISSING_IMPORT_SOURCE_EVIDENCE: ['Source evidence missing', 'The authoritative NHSP or HealthRoster source evidence is missing. Restore the import lineage before issuing.', 'red', 'ACTION'],
     MANUAL_TIMESHEET_SOURCE_MISSING: ['Signed timesheet missing', 'CloudTMS cannot find the signed manual timesheet required for this invoice. Attach or restore the signed timesheet, then refresh this list.', 'red', 'DOCUMENT'],
     ASSET_NOT_REGISTERED: ['Timesheet file not ready', 'The timesheet file has not finished being prepared. Try again shortly. If it remains unavailable, open the timesheet and regenerate or reattach it.', 'red', 'DOCUMENT'],
-    MISSING_RECIPIENT: ['No email recipient', 'No invoice email address is available for this client. Add the correct recipient before choosing “Issue and send.”', 'amber', 'DELIVERY', 'Cannot be emailed'],
+    MISSING_RECIPIENT: ['No email recipient', 'No invoice email address is available for this client. Add the correct recipient before choosing “Issue and email.”', 'amber', 'DELIVERY', 'Cannot be emailed'],
     NOT_READY_FOR_INVOICE: ['Not ready', 'The source record is not ready for invoicing.', 'red', 'ACTION'],
     SEGMENT_ALREADY_LOCKED: ['Already locked', 'This item is already reserved by another active operation.', 'amber', 'ACTION'],
     STALE: ['Stale', 'The source changed after this document was prepared. Regenerate it before issue.', 'amber', 'DOCUMENT'],

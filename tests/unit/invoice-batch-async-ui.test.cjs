@@ -1367,7 +1367,7 @@ test('V2 candidate requests keep signed cursors opaque and browser explicit hydr
   );
 });
 
-test('Batch Issue defaults to Issue and send with distinct durable identities', async () => {
+test('Batch Issue defaults to Issue and email with distinct durable identities', async () => {
   const calls = [];
   const { window } = loadScript(batchRuntimeSource, {
     window: {
