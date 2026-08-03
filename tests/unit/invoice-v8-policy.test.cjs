@@ -31,7 +31,47 @@ test('shared diagnostic catalogue exposes locked labels and a bounded unknown fa
     assert.ok(diagnostic.long_explanation.length > 10);
     assert.ok(diagnostic.family);
   }
-  assert.equal(window.invoiceDiagnosticForCode('FUTURE_CODE').short_label, 'Needs attention');
+  assert.equal(window.invoiceDiagnosticForCode('FUTURE_CODE').short_label, 'Unable to continue');
+  assert.equal(
+    window.invoiceDiagnosticForCode('FUTURE_CODE').long_explanation,
+    'CloudTMS could not complete one of its checks. Refresh the list and try again. If the problem remains, contact support.'
+  );
+});
+
+test('invoice diagnostics combine related causes and keep issue and delivery messages distinct', () => {
+  const window = {};
+  vm.runInNewContext(diagnosticSource, { window, Object, String, Array, Set });
+
+  const combined = window.invoiceDiagnosticsForCodes([
+    'MANUAL_TIMESHEET_SOURCE_MISSING',
+    'ASSET_NOT_REGISTERED',
+    'MISSING_RECIPIENT'
+  ]);
+  assert.deepEqual(Array.from(combined, item => item.short_label), [
+    'Signed timesheet missing',
+    'No email recipient'
+  ]);
+  assert.equal(combined[0].family, 'DOCUMENT');
+  assert.equal(combined[1].family, 'DELIVERY');
+  assert.equal(combined[1].detail_label, 'Cannot be emailed');
+
+  const assetOnly = window.invoiceDiagnosticsForCodes(['ASSET_NOT_REGISTERED']);
+  assert.equal(assetOnly.length, 1);
+  assert.equal(assetOnly[0].short_label, 'Timesheet file not ready');
+
+  const unknowns = window.invoiceDiagnosticsForCodes(['FUTURE_CODE_A', 'FUTURE_CODE_B']);
+  assert.equal(unknowns.length, 1);
+  assert.equal(unknowns[0].short_label, 'Unable to continue');
+});
+
+test('invoice item details use clear status and separated explanations without technical boilerplate', () => {
+  assert.match(batchSource, /rawState === 'BLOCKED'[\s\S]*'Cannot issue yet'/);
+  assert.match(batchSource, /This invoice cannot be issued yet/);
+  assert.match(batchSource, /aria-label="What needs fixing"/);
+  assert.match(batchSource, /aria-label="Sending"/);
+  assert.match(batchSource, /Nothing will be issued until the required checks pass/);
+  assert.doesNotMatch(batchSource, /Eligibility and legal status are determined by the server/);
+  assert.doesNotMatch(batchSource, /Internal technical details are intentionally hidden/);
 });
 
 test('hard cutover never restores captured legacy Invoice actions', () => {

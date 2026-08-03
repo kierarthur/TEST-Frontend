@@ -800,9 +800,11 @@
     const diagnostic = window.invoiceDiagnosticForCode?.(code) || {};
     return {
       code,
-      label: clean(diagnostic.short_label || diagnostic.label || 'Needs attention'),
+      label: clean(diagnostic.short_label || diagnostic.label || 'Unable to continue'),
+      detail_label: clean(diagnostic.detail_label || diagnostic.short_label || diagnostic.label || 'Unable to continue'),
       explanation: clean(diagnostic.long_explanation || diagnostic.explanation),
-      tone: clean(diagnostic.tone || 'red')
+      tone: clean(diagnostic.tone || 'red'),
+      family: upper(diagnostic.family || 'UNKNOWN')
     };
   }
 
@@ -834,10 +836,25 @@
     return [...new Set(codes.map(upper).filter(Boolean))];
   }
 
+  function diagnosticsForRow(row, mode) {
+    const codes = rowBadgeCodes(row, mode);
+    const resolved = window.invoiceDiagnosticsForCodes?.(codes);
+    if (Array.isArray(resolved)) {
+      return resolved.map(diagnostic => ({
+        code: upper(diagnostic.code),
+        label: clean(diagnostic.short_label || diagnostic.label || 'Unable to continue'),
+        detail_label: clean(diagnostic.detail_label || diagnostic.short_label || diagnostic.label || 'Unable to continue'),
+        explanation: clean(diagnostic.long_explanation || diagnostic.explanation || 'CloudTMS could not complete one of its checks. Refresh the list and try again. If the problem remains, contact support.'),
+        tone: clean(diagnostic.tone || 'red'),
+        family: upper(diagnostic.family || 'UNKNOWN')
+      }));
+    }
+    return codes.map(diagnosticForBadge);
+  }
+
   function renderInvoiceBatchBadges(row, mode) {
-    return rowBadgeCodes(row, mode).map(code => {
-      const badge = diagnosticForBadge(code);
-      return `<span class="invbatch-badge invbatch-badge--${escapeHtml(badge.tone)}" title="${escapeHtml(badge.explanation || code)}">${escapeHtml(badge.label)}</span>`;
+    return diagnosticsForRow(row, mode).map(badge => {
+      return `<span class="invbatch-badge invbatch-badge--${escapeHtml(badge.tone)}" title="${escapeHtml(badge.explanation)}">${escapeHtml(badge.label)}</span>`;
     }).join('');
   }
 
@@ -1235,7 +1252,17 @@
   function renderRowDetails(state) {
     const row = state.detail_row;
     if (!row) return '';
-    const codes = rowBadgeCodes(row, state.mode);
+    const diagnostics = diagnosticsForRow(row, state.mode);
+    const issueDiagnostics = diagnostics.filter(diagnostic => diagnostic.family !== 'DELIVERY');
+    const deliveryDiagnostics = diagnostics.filter(diagnostic => diagnostic.family === 'DELIVERY');
+    const rawState = upper(row.row_status || row.generation_state || row.generated_state);
+    const currentState = rawState === 'BLOCKED'
+      ? 'Cannot issue yet'
+      : clean(row.row_status || row.generation_state || row.generated_state || '—');
+    const blocked = rawState === 'BLOCKED';
+    const renderDiagnosticItems = items => items.map(diagnostic => `
+      <p><strong>${escapeHtml(diagnostic.detail_label)}:</strong><br>${escapeHtml(diagnostic.explanation)}</p>
+    `).join('');
     return `<aside class="invbatch-detail-panel" role="dialog" aria-modal="true" aria-label="Invoice batch item details">
       <header><h3>Item details</h3><button type="button" class="btn btn-sm btn-outline" data-batch-action="close-details">Close</button></header>
       <dl>
@@ -1243,14 +1270,15 @@
         <dt>Client</dt><dd>${escapeHtml(row.client_name || '—')}</dd>
         <dt>Candidate</dt><dd>${escapeHtml(candidateDisplay(row))}</dd>
         <dt>Week ending</dt><dd>${escapeHtml(weekDisplay(row))}</dd>
-        <dt>Current state</dt><dd>${escapeHtml(row.row_status || row.generation_state || row.generated_state || '—')}</dd>
+        <dt>Current state</dt><dd>${escapeHtml(currentState)}</dd>
       </dl>
-      <h4>Why this item needs attention</h4>
-      ${codes.length ? `<ul>${codes.map(code => {
-        const diagnostic = diagnosticForBadge(code);
-        return `<li><strong>${escapeHtml(diagnostic.label)}:</strong> ${escapeHtml(diagnostic.explanation || 'Review this item before continuing.')}</li>`;
-      }).join('')}</ul>` : '<p>No blockers were reported by the backend.</p>'}
-      <p class="mini">Eligibility and legal status are determined by the server. Internal technical details are intentionally hidden.</p>
+      <h4>${blocked ? 'This invoice cannot be issued yet' : 'What needs attention'}</h4>
+      ${issueDiagnostics.length ? `<section class="invbatch-detail-reasons" aria-label="What needs fixing"><h5>What needs fixing</h5>${renderDiagnosticItems(issueDiagnostics)}</section>` : ''}
+      ${deliveryDiagnostics.length ? `<section class="invbatch-detail-reasons" aria-label="Sending"><h5>Sending</h5>${renderDiagnosticItems(deliveryDiagnostics)}</section>` : ''}
+      ${diagnostics.length ? '' : '<p>No blockers were reported by CloudTMS.</p>'}
+      ${blocked
+        ? '<p>Fix the items above, then refresh the list. Nothing will be issued until the required checks pass.</p>'
+        : (deliveryDiagnostics.length ? '<p>This invoice can still be issued, but it cannot be emailed until the sending problem is fixed.</p>' : '')}
     </aside>`;
   }
 

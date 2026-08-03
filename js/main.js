@@ -163915,6 +163915,51 @@ function formatUkTimestampFromUtc(isoLike){
   return `${dd}/${mm}/${yyyy} ${hh}${mi}hrs`;
 }
 
+// SUMMARY_MONEY_FORMAT_START
+const SUMMARY_MONEY_COLUMN_KEYS = Object.freeze({
+  timesheets: new Set([
+    'total_pay_ex_vat', 'total_charge_ex_vat', 'margin_ex_vat', 'net_delta_ex_vat',
+    'pay_total', 'charge_total', 'margin_total',
+    'pay_rate_day', 'pay_rate_night', 'pay_rate_sat', 'pay_rate_sun', 'pay_rate_bh',
+    'charge_rate_day', 'charge_rate_night', 'charge_rate_sat', 'charge_rate_sun', 'charge_rate_bh',
+    'mileage_pay_rate', 'mileage_charge_rate',
+    'additional_pay_ex_vat', 'additional_charge_ex_vat', 'additional_margin_ex_vat',
+    'expenses_pay_ex_vat', 'expenses_charge_ex_vat', 'expenses_margin_ex_vat',
+    'mileage_pay_ex_vat', 'mileage_charge_ex_vat', 'mileage_margin_ex_vat',
+    'travel_pay_ex_vat', 'travel_charge_ex_vat', 'travel_margin_ex_vat',
+    'accommodation_pay_ex_vat', 'accommodation_charge_ex_vat', 'accommodation_margin_ex_vat',
+    'other_pay_ex_vat', 'other_charge_ex_vat', 'other_margin_ex_vat'
+  ]),
+  invoices: new Set([
+    'subtotal_ex_vat', 'vat_amount', 'total_inc_vat',
+    'credit_note_total', 'balance_outstanding',
+    'total_pay_ex_vat', 'total_charge_ex_vat', 'margin_ex_vat',
+    'amount_paid', 'amount_credited', 'net', 'gross'
+  ])
+});
+
+function isSummaryMoneyColumn(section, key) {
+  const sectionKey = String(section || '').trim().toLowerCase();
+  const columnKey = String(key || '').trim().toLowerCase();
+  return SUMMARY_MONEY_COLUMN_KEYS[sectionKey]?.has(columnKey) === true;
+}
+
+function formatSummaryMoneyValue(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return String(value);
+  const displayAmount = Object.is(amount, -0) ? 0 : amount;
+  return displayAmount.toFixed(2);
+}
+
+if (typeof window !== 'undefined') {
+  Object.assign(window, {
+    isSummaryMoneyColumn,
+    formatSummaryMoneyValue
+  });
+}
+// SUMMARY_MONEY_FORMAT_END
+
 function formatDisplayValue(key, val){
   if (val === null || val === undefined || val === '') return '—';
   if (typeof val === 'boolean') return val ? 'Yes' : 'No';
@@ -309332,6 +309377,10 @@ const getSelectionUiState = () => {
       } else if (currentSection === 'invoices' && c === 'client_name') {
         // Flattened client name (already set in pre-normalisation)
         td.textContent = String(r.client_name || '');
+
+      } else if (isSummaryMoneyColumn(currentSection, c)) {
+        td.classList.add('summary-money-cell');
+        td.textContent = formatSummaryMoneyValue(v);
 
       } else {
         td.textContent = formatDisplayValue(c, v);

@@ -10,6 +10,9 @@
     VAT_REGISTRATION_NUMBER_REQUIRED: ['Missing VAT', 'Add the required VAT registration details before continuing.', 'red', 'ACTION'],
     MISSING_VAT_REGISTRATION: ['Missing VAT', 'Add the required VAT registration details before continuing.', 'red', 'ACTION'],
     MISSING_IMPORT_SOURCE_EVIDENCE: ['Source evidence missing', 'The authoritative NHSP or HealthRoster source evidence is missing. Restore the import lineage before issuing.', 'red', 'ACTION'],
+    MANUAL_TIMESHEET_SOURCE_MISSING: ['Signed timesheet missing', 'CloudTMS cannot find the signed manual timesheet required for this invoice. Attach or restore the signed timesheet, then refresh this list.', 'red', 'DOCUMENT'],
+    ASSET_NOT_REGISTERED: ['Timesheet file not ready', 'The timesheet file has not finished being prepared. Try again shortly. If it remains unavailable, open the timesheet and regenerate or reattach it.', 'red', 'DOCUMENT'],
+    MISSING_RECIPIENT: ['No email recipient', 'No invoice email address is available for this client. Add the correct recipient before choosing “Issue and send.”', 'amber', 'DELIVERY', 'Cannot be emailed'],
     NOT_READY_FOR_INVOICE: ['Not ready', 'The source record is not ready for invoicing.', 'red', 'ACTION'],
     SEGMENT_ALREADY_LOCKED: ['Already locked', 'This item is already reserved by another active operation.', 'amber', 'ACTION'],
     STALE: ['Stale', 'The source changed after this document was prepared. Regenerate it before issue.', 'amber', 'DOCUMENT'],
@@ -46,10 +49,11 @@
     if (!entry) {
       return Object.freeze({
         code,
-        short_label: 'Needs attention',
-        long_explanation: 'Review this item before continuing.',
+        short_label: 'Unable to continue',
+        long_explanation: 'CloudTMS could not complete one of its checks. Refresh the list and try again. If the problem remains, contact support.',
         tone: 'red',
-        family: 'UNKNOWN'
+        family: 'UNKNOWN',
+        detail_label: 'Unable to continue'
       });
     }
     return Object.freeze({
@@ -57,12 +61,41 @@
       short_label: entry[0],
       long_explanation: entry[1],
       tone: entry[2],
-      family: entry[3]
+      family: entry[3],
+      detail_label: entry[4] || entry[0]
     });
+  }
+
+  function invoiceDiagnosticsForCodes(values) {
+    const codes = [...new Set((Array.isArray(values) ? values : [values])
+      .map(value => String(value == null ? '' : value).trim().toUpperCase())
+      .filter(Boolean))];
+
+    const effectiveCodes = codes.includes('MANUAL_TIMESHEET_SOURCE_MISSING')
+      ? codes.filter(code => code !== 'ASSET_NOT_REGISTERED')
+      : codes;
+
+    const diagnostics = [];
+    const seenMessages = new Set();
+    for (const code of effectiveCodes) {
+      const diagnostic = invoiceDiagnosticForCode(code);
+      const messageIdentity = [
+        diagnostic.short_label,
+        diagnostic.long_explanation,
+        diagnostic.tone,
+        diagnostic.family,
+        diagnostic.detail_label
+      ].join('|');
+      if (seenMessages.has(messageIdentity)) continue;
+      seenMessages.add(messageIdentity);
+      diagnostics.push(diagnostic);
+    }
+    return Object.freeze(diagnostics);
   }
 
   Object.assign(window, {
     invoiceDiagnosticForCode,
+    invoiceDiagnosticsForCodes,
     INVOICE_DIAGNOSTIC_CATALOGUE_V8: CATALOGUE
   });
 })();
