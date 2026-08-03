@@ -106,8 +106,8 @@ test('active Invoice and Timesheet document preparation is POST-only and exact-v
 
 test('Batch Issue uses the locked default and keeps legal Issue separate from Delivery', () => {
   assert.match(batchSource, /issue_mode:\s*'ISSUE_AND_SEND'/);
-  assert.match(batchSource, /Issue and send/);
-  assert.match(batchSource, /Issue only/);
+  assert.match(batchSource, /Issue and email/);
+  assert.match(batchSource, /Issue without emailing/);
   assert.match(batchSource, /Issued but delivery suppressed/);
   assert.match(batchSource, /delivery_request_token/);
   assert.match(batchSource, /SERVER_RESOLVED/);

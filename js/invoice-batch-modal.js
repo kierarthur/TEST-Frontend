@@ -1118,23 +1118,46 @@
 
   function renderInvoiceBatchConfirmation(state) {
     const selected = selectedSummary(state);
-    const early = state.filter.allow_early === true ? 'Batch early is included.' : 'Batch early is not included.';
     if (state.mode === 'ISSUE') {
       const issueAndSend = state.issue_mode !== 'ISSUE_ONLY';
-      return `<section class="invbatch-confirmation" role="alertdialog" aria-modal="true" aria-label="Confirm legal invoice issue">
-        <h3>Issue selected invoices?</h3>
-        <fieldset class="invbatch-issue-mode"><legend>After issue</legend>
-          <label><input type="radio" name="invoice-batch-issue-mode" data-batch-field="issue-mode" value="ISSUE_AND_SEND" ${issueAndSend ? 'checked' : ''}> <strong>Issue and send</strong> <span>Default. Delivery is resolved separately for each invoice.</span></label>
-          <label><input type="radio" name="invoice-batch-issue-mode" data-batch-field="issue-mode" value="ISSUE_ONLY" ${issueAndSend ? '' : 'checked'}> <strong>Issue only</strong> <span>Legally issue without requesting delivery.</span></label>
+      const selectedCount = Math.max(0, Number(selected.count || 0));
+      const selectedNoun = selectedCount === 1 ? 'invoice' : 'invoices';
+      const deliveryBlocked = Math.max(0, Number(
+        state.totals?.issued_send_blocked_total
+        || state.totals?.delivery_blocked_total
+        || state.totals?.blocked_for_sending
+        || 0
+      ));
+      const blocked = Math.max(0, Number(state.selection_summary?.blocked_total || 0));
+      const outcomeLines = [];
+      if (issueAndSend && deliveryBlocked === 0) {
+        outcomeLines.push(`<li><strong>${escapeHtml(selected.label)} ${selectedNoun}</strong> will be issued and emailed.</li>`);
+      } else if (issueAndSend) {
+        outcomeLines.push(`<li><strong>${escapeHtml(selected.label)} ${selectedNoun}</strong> will be issued. CloudTMS will email each one that has a valid recipient.</li>`);
+        outcomeLines.push(`<li><strong>${deliveryBlocked.toLocaleString('en-GB')} ${deliveryBlocked === 1 ? 'invoice' : 'invoices'}</strong> cannot be emailed and will be issued without email.</li>`);
+      } else {
+        outcomeLines.push(`<li><strong>${escapeHtml(selected.label)} ${selectedNoun}</strong> will be issued without emailing.</li>`);
+      }
+      if (blocked > 0) {
+        outcomeLines.push(`<li><strong>${blocked.toLocaleString('en-GB')} ${blocked === 1 ? 'invoice' : 'invoices'}</strong> ${blocked === 1 ? 'is' : 'are'} not ready and will be left unchanged.</li>`);
+      }
+      if (state.filter.allow_early === true) {
+        outcomeLines.push('<li>Eligible invoices before the normal batch date are included.</li>');
+      }
+      return `<section class="invbatch-confirmation" role="alertdialog" aria-modal="true" aria-label="Confirm invoice issue">
+        <h3>Issue ${escapeHtml(selected.label)} ${selectedNoun}?</h3>
+        <p>Choose whether CloudTMS should email ${selectedCount === 1 ? 'this invoice' : 'the invoices'} after issuing.</p>
+        <fieldset class="invbatch-issue-mode"><legend>Email option</legend>
+          <label><input type="radio" name="invoice-batch-issue-mode" data-batch-field="issue-mode" value="ISSUE_AND_SEND" ${issueAndSend ? 'checked' : ''}> <strong>Issue and email</strong> <span>Recommended. Email each invoice to its saved recipient when an email address is available.</span></label>
+          <label><input type="radio" name="invoice-batch-issue-mode" data-batch-field="issue-mode" value="ISSUE_ONLY" ${issueAndSend ? '' : 'checked'}> <strong>Issue without emailing</strong> <span>Issue each invoice but do not send an email.</span></label>
         </fieldset>
-        <p><strong>${escapeHtml(selected.label)}</strong> invoices will be legally issued${issueAndSend ? ' and eligible deliveries will be requested' : ' without delivery'}.</p>
-        <p>${Number(state.totals?.issued_send_blocked_total || state.totals?.delivery_blocked_total || state.totals?.blocked_for_sending || 0).toLocaleString('en-GB')} invoices can be issued but delivery will be suppressed.</p>
-        <p>${Number(state.selection_summary?.blocked_total || 0).toLocaleString('en-GB')} invoices cannot be issued and will be skipped.</p>
-        <p>${escapeHtml(early)}</p>
-        <p class="invbatch-legal-warning">Issuing invoices is a legal action. Only generated, fresh and verified invoices will be issued.</p>
-        <div><button type="button" class="btn btn-outline" data-batch-action="confirm-cancel">Back</button><button type="button" class="btn btn-primary" data-batch-action="submit" ${state.submitting ? 'disabled' : ''}>Issue selected invoices</button></div>
+        <h4>What will happen</h4>
+        <ul>${outcomeLines.join('')}</ul>
+        <p class="invbatch-legal-warning">Issuing creates the official invoice. CloudTMS will issue only invoices that are fully generated and have passed all required checks.</p>
+        <div><button type="button" class="btn btn-outline" data-batch-action="confirm-cancel">Back</button><button type="button" class="btn btn-primary" data-batch-action="submit" ${state.submitting ? 'disabled' : ''}>Issue ${escapeHtml(selected.label)} ${selectedNoun}</button></div>
       </section>`;
     }
+    const early = state.filter.allow_early === true ? 'Batch early is included.' : 'Batch early is not included.';
     return `<section class="invbatch-confirmation" role="dialog" aria-modal="true" aria-label="Confirm invoice generation">
       <h3>Generate selected items?</h3>
       <p><strong>${escapeHtml(selected.label)}</strong> items will be submitted.</p>

@@ -1407,6 +1407,64 @@ test('Batch Issue defaults to Issue and send with distinct durable identities', 
   assert.equal(calls[0].init.headers['idempotency-key'], body.command_token);
 });
 
+test('Batch Issue confirmation uses plain-English singular wording and omits zero-value noise', () => {
+  const { window } = loadScript(batchRuntimeSource);
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('ISSUE');
+  state.selection_summary_pending = false;
+  state.selection_summary = {
+    exact: true,
+    selected_total: 1,
+    blocked_total: 31
+  };
+  state.totals = { delivery_blocked_total: 0 };
+  const html = window.renderInvoiceBatchConfirmation(state);
+  assert.match(html, /<h3>Issue 1 invoice\?<\/h3>/);
+  assert.match(html, /Issue and email/);
+  assert.match(html, /Recommended\. Email each invoice to its saved recipient/);
+  assert.match(html, /<strong>1 invoice<\/strong> will be issued and emailed\./);
+  assert.match(html, /<strong>31 invoices<\/strong> are not ready and will be left unchanged\./);
+  assert.match(html, /Issuing creates the official invoice\./);
+  assert.match(html, />Issue 1 invoice<\/button>/);
+  assert.doesNotMatch(html, /Delivery is resolved separately|legally issued|delivery will be suppressed|will be skipped|Batch early is not included|0 invoices/);
+});
+
+test('Batch Issue confirmation uses plural issue-only wording and mentions early batching only when enabled', () => {
+  const { window } = loadScript(batchRuntimeSource);
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('ISSUE');
+  state.issue_mode = 'ISSUE_ONLY';
+  state.filter.allow_early = true;
+  state.selection_summary_pending = false;
+  state.selection_summary = {
+    exact: true,
+    selected_total: 2,
+    blocked_total: 0
+  };
+  state.totals = { delivery_blocked_total: 5 };
+  const html = window.renderInvoiceBatchConfirmation(state);
+  assert.match(html, /<h3>Issue 2 invoices\?<\/h3>/);
+  assert.match(html, /Issue without emailing/);
+  assert.match(html, /<strong>2 invoices<\/strong> will be issued without emailing\./);
+  assert.match(html, /Eligible invoices before the normal batch date are included\./);
+  assert.match(html, />Issue 2 invoices<\/button>/);
+  assert.doesNotMatch(html, /5 invoices|cannot be emailed|0 invoices/);
+});
+
+test('Batch Issue confirmation explains non-zero email blockers without jargon', () => {
+  const { window } = loadScript(batchRuntimeSource);
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('ISSUE');
+  state.selection_summary_pending = false;
+  state.selection_summary = {
+    exact: true,
+    selected_total: 3,
+    blocked_total: 0
+  };
+  state.totals = { delivery_blocked_total: 1 };
+  const html = window.renderInvoiceBatchConfirmation(state);
+  assert.match(html, /<strong>3 invoices<\/strong> will be issued\. CloudTMS will email each one that has a valid recipient\./);
+  assert.match(html, /<strong>1 invoice<\/strong> cannot be emailed and will be issued without email\./);
+  assert.doesNotMatch(html, /delivery will be suppressed|eligible deliveries|legally issue/);
+});
+
 test('stale result cursors recover to page one once and retain the root/category', async () => {
   const calls = [];
   const revision = '12';
