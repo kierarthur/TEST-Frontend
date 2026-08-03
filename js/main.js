@@ -110471,9 +110471,7 @@ function summaryUpdateRowDom(section, id, patchedRow) {
         paymentTokens.has('__PAY_BADGE_ADV__') ||
         payStatus === 'ADVANCED',
       showOverpaid:
-        paymentTokens.has('__PAY_BADGE_OVERPAID__') ||
-        payStatus === 'OVERPAID' ||
-        iconCode === 'RED_COIN',
+        paymentTokens.has('__PAY_BADGE_OVERPAID__'),
       showProcessingOverlay:
         paymentTokens.has('__PAY_BADGE_PROCESSING__')
     };
@@ -110611,10 +110609,6 @@ function summaryUpdateRowDom(section, id, patchedRow) {
     );
 
     if (!businessIssues.length && !hasPaymentDisplay) {
-      const ok = document.createElement('span');
-      ok.className = 'pill pill-ok';
-      ok.textContent = 'OK';
-      wrap.appendChild(ok);
       return wrap;
     }
 
@@ -110637,6 +110631,8 @@ function summaryUpdateRowDom(section, id, patchedRow) {
       span.textContent = label;
       if (label === 'Paired needs invoicing') {
         span.title = 'This paired timesheet needs invoicing. The other timesheet is attached to an invoice, this timesheet needs attaching as soon as possible';
+      } else if (label === 'Refs missing') {
+        span.title = 'A required reference is missing.';
       }
       wrap.appendChild(span);
     });
@@ -111149,9 +111145,7 @@ function summaryInsertRowDom(section, patchedRow) {
         paymentTokens.has('__PAY_BADGE_ADV__') ||
         payStatus === 'ADVANCED',
       showOverpaid:
-        paymentTokens.has('__PAY_BADGE_OVERPAID__') ||
-        payStatus === 'OVERPAID' ||
-        iconCode === 'RED_COIN',
+        paymentTokens.has('__PAY_BADGE_OVERPAID__'),
       showProcessingOverlay:
         paymentTokens.has('__PAY_BADGE_PROCESSING__')
     };
@@ -111289,10 +111283,6 @@ function summaryInsertRowDom(section, patchedRow) {
     );
 
     if (!businessIssues.length && !hasPaymentDisplay) {
-      const ok = document.createElement('span');
-      ok.className = 'pill pill-ok';
-      ok.textContent = 'OK';
-      wrap.appendChild(ok);
       return wrap;
     }
 
@@ -111315,6 +111305,8 @@ function summaryInsertRowDom(section, patchedRow) {
       span.textContent = label;
       if (label === 'Paired needs invoicing') {
         span.title = 'This paired timesheet needs invoicing. The other timesheet is attached to an invoice, this timesheet needs attaching as soon as possible';
+      } else if (label === 'Refs missing') {
+        span.title = 'A required reference is missing.';
       }
       wrap.appendChild(span);
     });
@@ -136239,7 +136231,7 @@ function buildTimesheetSummaryFilterSpec(input = {}) {
     if (statusCodeUp === 'NO_MATCH_ID') effectiveIssues = 'NO_MATCH_ID';
     else if (statusCodeUp === 'RATE_MISSING') effectiveIssues = 'RATE_MISSING';
     else if (statusCodeUp === 'PAY_CHAN_MISS') effectiveIssues = 'PAY_CHAN_MISS';
-    else if (statusCodeUp === 'READY_FOR_HR') effectiveIssues = 'AWAITING_HR_VALIDATION';
+    else if (statusCodeUp === 'READY_FOR_HR') effectiveIssues = 'AWAITING_VALIDATION';
     else if (statusCodeUp === 'HR_HOURS_MISMATCH') effectiveIssues = 'HR_HOURS_MISMATCH';
   }
   if (effectiveIssues === 'ALL') effectiveIssues = null;
@@ -138878,23 +138870,21 @@ async function openSearchModal(opts = {}) {
       row('Issues', `
         <select name="issues_filter">
           <option value="">Any</option>
-          <option value="NO_MATCH_ID">No match to Candidate/Client</option>
+          <option value="NO_MATCH_ID">Candidate/client missing</option>
           <option value="RATE_MISSING">Rate missing</option>
           <option value="PAY_CHAN_MISS">Pay channel missing</option>
-          <option value="AWAITING_HR_VALIDATION">Awaiting HR validation</option>
+          <option value="ON_HOLD">On hold</option>
           <option value="HR_HOURS_MISMATCH">Hours mismatch (HealthRoster)</option>
           <option value="HR_HOURS_MISSING">HR hours missing</option>
           <option value="DUPLICATE_CONTRACTS">Duplicate contracts</option>
-          <option value="TIMESHEET_EVIDENCE">Timesheet evidence missing</option>
           <option value="EXPENSES_EVIDENCE">Expenses evidence missing</option>
           <option value="MILEAGE_EVIDENCE">Mileage evidence missing</option>
-          <option value="REFERENCE_MISSING">Reference missing</option>
-          <option value="REFS_PDF_INVALID">Refs - Timesheet PDF invalid</option>
-          <option value="VALIDATION">Validation</option>
-          <option value="ON_HOLD">On hold</option>
-          <option value="AUTHORISATION">Awaiting Authorisation</option>
-          <option value="QR_NOT_ISSUED">QR not issued</option>
+          <option value="REFS_MISSING">Refs missing</option>
+          <option value="AWAITING_VALIDATION">Awaiting validation</option>
+          <option value="VALIDATION_FAILED">Validation failed</option>
           <option value="QR_AWAITING_SIGNATURE">QR awaiting signature</option>
+          <option value="PAIRED_NEEDS_INVOICING">Paired needs invoicing</option>
+          <option value="OVERPAID">Overpaid</option>
         </select>`),
       row('Route', `
         <select name="route_type">
@@ -306308,9 +306298,7 @@ function renderSummary(rows){
         paymentTokens.has('__PAY_BADGE_ADV__') ||
         payStatus === 'ADVANCED',
       showOverpaid:
-        paymentTokens.has('__PAY_BADGE_OVERPAID__') ||
-        payStatus === 'OVERPAID' ||
-        iconCode === 'RED_COIN',
+        paymentTokens.has('__PAY_BADGE_OVERPAID__'),
       showProcessingOverlay:
         paymentTokens.has('__PAY_BADGE_PROCESSING__')
     };
@@ -306448,10 +306436,6 @@ function renderSummary(rows){
     );
 
     if (!businessIssues.length && !hasPaymentDisplay) {
-      const ok = document.createElement('span');
-      ok.className = 'pill pill-ok';
-      ok.textContent = 'OK';
-      wrap.appendChild(ok);
       return wrap;
     }
 
@@ -306474,6 +306458,8 @@ function renderSummary(rows){
       span.textContent = label;
       if (label === 'Paired needs invoicing') {
         span.title = 'This paired timesheet needs invoicing. The other timesheet is attached to an invoice, this timesheet needs attaching as soon as possible';
+      } else if (label === 'Refs missing') {
+        span.title = 'A required reference is missing.';
       }
       wrap.appendChild(span);
     });
@@ -307292,7 +307278,7 @@ const applyToolsUiState = () => {
         else if (sc === 'RATE_MISSING') stFilters.issues_filter = 'RATE_MISSING';
         else if (sc === 'PAY_CHAN_MISS') stFilters.issues_filter = 'PAY_CHAN_MISS';
         else if (sc === 'HR_HOURS_MISMATCH') stFilters.issues_filter = 'HR_HOURS_MISMATCH';
-        else if (sc === 'READY_FOR_HR') stFilters.issues_filter = 'AWAITING_HR_VALIDATION';
+        else if (sc === 'READY_FOR_HR') stFilters.issues_filter = 'AWAITING_VALIDATION';
       }
       if (Object.prototype.hasOwnProperty.call(stFilters, 'status_code')) delete stFilters.status_code;
       if (Object.prototype.hasOwnProperty.call(stFilters, 'processing_status')) delete stFilters.processing_status;
@@ -307308,23 +307294,21 @@ const applyToolsUiState = () => {
 
    const issuesOpts = [
   ['ALL',                   'All'],
-  ['NO_MATCH_ID',           'No match to Candidate/Client'],
+  ['NO_MATCH_ID',           'Candidate/client missing'],
   ['RATE_MISSING',          'Rate missing'],
   ['PAY_CHAN_MISS',         'Pay channel missing'],
-  ['AWAITING_HR_VALIDATION','Awaiting HR validation'],
+  ['ON_HOLD',               'On hold'],
   ['HR_HOURS_MISMATCH',     'Hours mismatch (HealthRoster)'],
   ['HR_HOURS_MISSING',      'HR hours missing'],
   ['DUPLICATE_CONTRACTS',   'Duplicate contracts'],
-  ['TIMESHEET_EVIDENCE',    'Timesheet evidence missing'],
   ['EXPENSES_EVIDENCE',     'Expenses evidence missing'],
   ['MILEAGE_EVIDENCE',      'Mileage evidence missing'],
-  ['REFERENCE_MISSING',     'Reference missing'],
-  ['REFS_PDF_INVALID',      'Refs - Timesheet PDF invalid'],
-  ['VALIDATION',            'Validation'],
-  ['ON_HOLD',               'On hold'],
-  ['AUTHORISATION',         'Awaiting Authorisation'],
-  ['QR_NOT_ISSUED',         'QR not issued'],
-  ['QR_AWAITING_SIGNATURE', 'QR awaiting signature']
+  ['REFS_MISSING',          'Refs missing'],
+  ['AWAITING_VALIDATION',   'Awaiting validation'],
+  ['VALIDATION_FAILED',     'Validation failed'],
+  ['QR_AWAITING_SIGNATURE', 'QR awaiting signature'],
+  ['PAIRED_NEEDS_INVOICING','Paired needs invoicing'],
+  ['OVERPAID',              'Overpaid']
 ];
 
     const issuesCur = String(stFilters.issues_filter || 'ALL').toUpperCase();
@@ -366203,7 +366187,7 @@ async function listTimesheetsSummary(filters = {}) {
       else if (sc === 'RATE_MISSING') f.issues_filter = 'RATE_MISSING';
       else if (sc === 'PAY_CHAN_MISS') f.issues_filter = 'PAY_CHAN_MISS';
       else if (sc === 'HR_HOURS_MISMATCH') f.issues_filter = 'HR_HOURS_MISMATCH';
-      else if (sc === 'READY_FOR_HR') f.issues_filter = 'AWAITING_HR_VALIDATION';
+      else if (sc === 'READY_FOR_HR') f.issues_filter = 'AWAITING_VALIDATION';
     }
 
     if (Object.prototype.hasOwnProperty.call(f, 'status_code')) delete f.status_code;
