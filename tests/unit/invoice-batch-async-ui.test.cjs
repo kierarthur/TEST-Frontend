@@ -116,7 +116,7 @@ test('blocked candidates never receive a checkbox while delivery-blocked issue r
   assert.match(deliveryHtml, /Blocked for sending/);
 });
 
-test('eligible not-generated rows remain selectable and show their neutral generation state', () => {
+test('eligible not-generated rows remain selectable without a redundant generation badge', () => {
   const { window } = loadScript(batchRuntimeSource);
   const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
   const row = {
@@ -129,9 +129,24 @@ test('eligible not-generated rows remain selectable and show their neutral gener
   };
   const html = window.InvoiceBatchModalV8.renderInvoiceBatchRow(row, state);
   assert.match(html, /type="checkbox"/);
-  assert.match(html, /Not generated/);
-  assert.match(html, /invbatch-badge--neutral/);
-  assert.doesNotMatch(html, /invbatch-badge--red[^>]*>Not generated/);
+  assert.doesNotMatch(html, /Not generated/);
+});
+
+test('Generate hides document-not-ready noise but preserves stale and failed document warnings', () => {
+  const { window } = loadScript(batchRuntimeSource);
+  const state = window.InvoiceBatchModalV8.createInvoiceBatchModalState('GENERATE');
+  const row = {
+    selection_key: 'generate:stale',
+    selectable: false,
+    generation_state: 'STALE',
+    document_dependency_codes: ['DOCUMENT_NOT_READY', 'DOCUMENT_STALE'],
+    client_name: 'TEST client',
+    client_id: UUID_A,
+    candidate_ids: [UUID_B]
+  };
+  const html = window.InvoiceBatchModalV8.renderInvoiceBatchRow(row, state);
+  assert.doesNotMatch(html, /Not generated/);
+  assert.match(html, /Stale/);
 });
 
 test('batch candidates render in a semantic flat table with fixed aligned columns', () => {

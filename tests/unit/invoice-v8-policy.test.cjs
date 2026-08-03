@@ -20,8 +20,10 @@ test('shared diagnostic catalogue exposes locked labels and a bounded unknown fa
     ['INVOICE_CORRECTION_CONTRACT_MISMATCH', 'Contract mismatch'],
     ['INVOICE_CORRECTION_STREAM_MISMATCH', 'Invoice stream mismatch'],
     ['INVOICE_REFERENCE_REQUIRED', 'Missing refs'],
+    ['MISSING_REFERENCE', 'Missing refs'],
     ['MISSING_IMPORT_SOURCE_EVIDENCE', 'Source evidence missing'],
-    ['NOT_READY_FOR_INVOICE', 'Not ready'],
+    ['HR_VALIDATION_BLOCKED', 'Validation failed'],
+    ['NOT_READY_FOR_INVOICE', 'Timesheet not ready'],
     ['SEGMENT_ALREADY_LOCKED', 'Already locked'],
     ['BLOCKED_FOR_SENDING', 'Blocked for sending']
   ]);
@@ -65,11 +67,12 @@ test('invoice diagnostics combine related causes and keep issue and delivery mes
 });
 
 test('invoice item details use clear status and separated explanations without technical boilerplate', () => {
-  assert.match(batchSource, /rawState === 'BLOCKED'[\s\S]*'Cannot issue yet'/);
+  assert.match(batchSource, /isGenerate \? 'Cannot generate yet' : 'Cannot issue yet'/);
+  assert.match(batchSource, /This invoice cannot be generated yet/);
   assert.match(batchSource, /This invoice cannot be issued yet/);
   assert.match(batchSource, /aria-label="What needs fixing"/);
   assert.match(batchSource, /aria-label="Sending"/);
-  assert.match(batchSource, /Nothing will be issued until the required checks pass/);
+  assert.match(batchSource, /isGenerate \? 'generated' : 'issued'/);
   assert.doesNotMatch(batchSource, /Eligibility and legal status are determined by the server/);
   assert.doesNotMatch(batchSource, /Internal technical details are intentionally hidden/);
 });

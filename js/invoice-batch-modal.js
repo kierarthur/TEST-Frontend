@@ -826,14 +826,17 @@
       ];
     if (mode === 'GENERATE') {
       const generationState = upper(row.generation_state);
-      if (['NOT_GENERATED', 'STALE', 'FAILED', 'GENERATION_FAILED'].includes(generationState)) {
+      if (['STALE', 'FAILED', 'GENERATION_FAILED'].includes(generationState)) {
         codes.push(generationState);
       }
     }
     if (row.is_early === true) codes.push('EARLY');
     if (row.blocked_for_sending === true) codes.push('BLOCKED_FOR_SENDING');
     if (upper(row.row_status) === 'IN_PROGRESS') codes.push('IN_PROGRESS');
-    return [...new Set(codes.map(upper).filter(Boolean))];
+    const uniqueCodes = [...new Set(codes.map(upper).filter(Boolean))];
+    return mode === 'GENERATE'
+      ? uniqueCodes.filter(code => !['NOT_GENERATED', 'DOCUMENT_NOT_READY'].includes(code))
+      : uniqueCodes;
   }
 
   function diagnosticsForRow(row, mode) {
@@ -1279,8 +1282,9 @@
     const issueDiagnostics = diagnostics.filter(diagnostic => diagnostic.family !== 'DELIVERY');
     const deliveryDiagnostics = diagnostics.filter(diagnostic => diagnostic.family === 'DELIVERY');
     const rawState = upper(row.row_status || row.generation_state || row.generated_state);
+    const isGenerate = state.mode === 'GENERATE';
     const currentState = rawState === 'BLOCKED'
-      ? 'Cannot issue yet'
+      ? (isGenerate ? 'Cannot generate yet' : 'Cannot issue yet')
       : clean(row.row_status || row.generation_state || row.generated_state || '—');
     const blocked = rawState === 'BLOCKED';
     const renderDiagnosticItems = items => items.map(diagnostic => `
@@ -1295,12 +1299,12 @@
         <dt>Week ending</dt><dd>${escapeHtml(weekDisplay(row))}</dd>
         <dt>Current state</dt><dd>${escapeHtml(currentState)}</dd>
       </dl>
-      <h4>${blocked ? 'This invoice cannot be issued yet' : 'What needs attention'}</h4>
+      <h4>${blocked ? (isGenerate ? 'This invoice cannot be generated yet' : 'This invoice cannot be issued yet') : 'What needs attention'}</h4>
       ${issueDiagnostics.length ? `<section class="invbatch-detail-reasons" aria-label="What needs fixing"><h5>What needs fixing</h5>${renderDiagnosticItems(issueDiagnostics)}</section>` : ''}
       ${deliveryDiagnostics.length ? `<section class="invbatch-detail-reasons" aria-label="Sending"><h5>Sending</h5>${renderDiagnosticItems(deliveryDiagnostics)}</section>` : ''}
       ${diagnostics.length ? '' : '<p>No blockers were reported by CloudTMS.</p>'}
       ${blocked
-        ? '<p>Fix the items above, then refresh the list. Nothing will be issued until the required checks pass.</p>'
+        ? `<p>Fix the items above, then refresh the list. Nothing will be ${isGenerate ? 'generated' : 'issued'} until the required checks pass.</p>`
         : (deliveryDiagnostics.length ? '<p>This invoice can still be issued, but it cannot be emailed until the sending problem is fixed.</p>' : '')}
     </aside>`;
   }
