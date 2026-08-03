@@ -313298,16 +313298,6 @@ async function apiListOutbox(opts = {}) {
   const sortBy = String(src.sort_by || src.sortBy || '').trim();
   const sortDir = String(src.sort_dir || src.sortDir || '').trim().toLowerCase();
 
-  const qs = new URLSearchParams();
-  qs.set('limit', String(limit));
-  qs.set('offset', String(offset));
-  if (search) qs.set('search', search);
-  if (channel) qs.set('channel', channel);
-  if (queueState) qs.set('queue_state', queueState);
-  if (status) qs.set('status', status);
-  if (sortBy) qs.set('sort_by', sortBy);
-  if (sortDir) qs.set('sort_dir', sortDir === 'desc' ? 'desc' : 'asc');
-
   const safeJson = async (res) => { try { return await res.json(); } catch { return null; } };
 
   const normalizeRow = (row) => {
@@ -313371,15 +313361,74 @@ async function apiListOutbox(opts = {}) {
     };
   };
 
-  const res = await authFetch(API(`/api/outbox?${qs.toString()}`));
-  const payload = await safeJson(res);
+  const fetchPagePayload = async ({ requestLimit, requestOffset = 0, cursor = '' }) => {
+    const qs = new URLSearchParams();
+    qs.set('limit', String(Math.min(500, Math.max(1, toInt(requestLimit, limit)))));
+    qs.set('offset', String(Math.max(0, toInt(requestOffset, 0))));
+    if (search) qs.set('search', search);
+    if (channel) qs.set('channel', channel);
+    if (queueState) qs.set('queue_state', queueState);
+    if (status) qs.set('status', status);
+    if (sortBy) qs.set('sort_by', sortBy);
+    if (sortDir) qs.set('sort_dir', sortDir === 'desc' ? 'desc' : 'asc');
+    if (cursor) qs.set('cursor', String(cursor));
 
-  if (!res.ok) {
-    const msg =
-      (payload && typeof payload === 'object' && (payload.error || payload.message))
-        ? String(payload.error || payload.message)
-        : 'Failed to load outbox';
-    throw new Error(msg);
+    const res = await authFetch(API(`/api/outbox?${qs.toString()}`));
+    const payload = await safeJson(res);
+    if (!res.ok) {
+      const msg =
+        (payload && typeof payload === 'object' && (payload.error || payload.message))
+          ? String(payload.error || payload.message)
+          : 'Failed to load outbox';
+      throw new Error(msg);
+    }
+    return (payload && typeof payload === 'object') ? payload : {};
+  };
+
+  const payloadRows = (payload) => (
+    Array.isArray(payload) ? payload :
+    (payload && Array.isArray(payload.items)) ? payload.items :
+    (payload && Array.isArray(payload.rows)) ? payload.rows :
+    []
+  );
+
+  let payload;
+  if (!channel && offset > 0) {
+    // The unified Outbox is a stable, signed-cursor feed. Keep the page-number UI,
+    // but resolve its requested offset through the cursor contract instead of
+    // sending a non-zero offset that the backend deliberately rejects.
+    let remaining = offset;
+    let cursor = '';
+    let exhaustedPayload = null;
+
+    while (remaining > 0) {
+      const requestLimit = Math.min(500, remaining);
+      const bridgePayload = await fetchPagePayload({ requestLimit, requestOffset: 0, cursor });
+      const bridgeRows = payloadRows(bridgePayload);
+      const nextCursor = String(bridgePayload.next_cursor || bridgePayload.nextCursor || '').trim();
+
+      remaining -= bridgeRows.length;
+      if (remaining <= 0 && nextCursor) {
+        cursor = nextCursor;
+        break;
+      }
+
+      if (!bridgeRows.length || !nextCursor) {
+        exhaustedPayload = bridgePayload;
+        break;
+      }
+      cursor = nextCursor;
+    }
+
+    payload = exhaustedPayload
+      ? { ...exhaustedPayload, items: [], rows: [], has_more: false, next_cursor: null }
+      : await fetchPagePayload({ requestLimit: limit, requestOffset: 0, cursor });
+  } else {
+    payload = await fetchPagePayload({
+      requestLimit: limit,
+      requestOffset: channel ? offset : 0,
+      cursor: String(src.cursor || src.next_cursor || '').trim()
+    });
   }
 
   const rows =
@@ -313399,7 +313448,10 @@ async function apiListOutbox(opts = {}) {
     limit:
       (payload && typeof payload.limit === 'number') ? Number(payload.limit) : limit,
     offset:
-      (payload && typeof payload.offset === 'number') ? Number(payload.offset) : offset
+      (payload && typeof payload.offset === 'number' && channel) ? Number(payload.offset) : offset,
+    has_more: payload && (payload.has_more === true || payload.hasMore === true),
+    next_cursor: payload ? (payload.next_cursor ?? payload.nextCursor ?? null) : null,
+    snapshot_at_utc: payload ? (payload.snapshot_at_utc ?? payload.snapshotAtUtc ?? null) : null
   };
 }
 
