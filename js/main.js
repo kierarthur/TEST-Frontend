@@ -22620,7 +22620,7 @@ async function bankingPayPaymentCorrectionAuthAction(correctionRequestId, payloa
 
 
 
-async function bankingPayPaymentCorrectionStatus(correctionRequestId) {
+async function bankingPayPaymentCorrectionStatus(correctionRequestId, options = {}) {
   const id = String(correctionRequestId == null ? '' : correctionRequestId).trim();
   if (!id) throw new Error('Payment issue ID is required.');
   if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingPayPaymentCorrectionStatus: authFetch/API is required');
@@ -22631,7 +22631,7 @@ async function bankingPayPaymentCorrectionStatus(correctionRequestId) {
   const upper = (value) => String(value == null ? '' : value).trim().toUpperCase();
   const lowerText = (value) => String(value == null ? '' : value).trim().toLowerCase();
 
-  const res = await authFetch(API(`/api/banking/pay/correction/${encodeURIComponent(id)}/status`));
+  const res = await authFetch(API(`/api/banking/pay/correction/${encodeURIComponent(id)}/status`), options?.signal ? { signal: options.signal } : undefined);
   const txt = await res.text().catch(() => '');
   const json = safeParse(txt);
 
@@ -22763,58 +22763,224 @@ async function bankingPayPaymentCorrectionStatus(correctionRequestId) {
 async function bankingPayPaymentCorrectionProcess(correctionRequestId, limit = 50) {
   const id = String(correctionRequestId == null ? '' : correctionRequestId).trim();
   if (!id) throw new Error('Payment issue ID is required.');
-  if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingPayPaymentCorrectionProcess: authFetch/API is required');
-
-  const safeParse = (text) => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
-  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
-  const parsedLimit = Number(limit);
-  const safeLimit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(100, Math.trunc(parsedLimit))) : 50;
-
-  const res = await authFetch(API(`/api/banking/pay/correction/${encodeURIComponent(id)}/process`), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ limit: safeLimit })
-  });
-  const txt = await res.text().catch(() => '');
-  const json = safeParse(txt);
-
-  if (!res.ok) {
-    const err = new Error(typeof sanitizeBankingPaymentIssueError === 'function'
-      ? sanitizeBankingPaymentIssueError(json || txt, 'process')
-      : String((json && (json.error || json.message)) || txt || `Process request failed (${res.status})`));
-    err.status = res.status;
-    err.body = txt || '';
-    err.json = json;
-    throw err;
-  }
-
-  const out = isPlainObject(json) ? { ...json } : {};
-  const liveSignal = isPlainObject(out.live_signal) ? out.live_signal : null;
-  const result = {
-    ...out,
-    ok: out.ok !== false,
-    correction_request_id: String(out.correction_request_id || out.id || id),
-    limit: safeLimit,
-    progress: isPlainObject(out.progress) ? out.progress : (isPlainObject(out.chunk_result) ? out.chunk_result : null),
-    changed_scope_json: isPlainObject(out.changed_scope_json) ? out.changed_scope_json : (isPlainObject(out.changed_scope) ? out.changed_scope : {}),
-    grouped_alert_summary: out.grouped_alert_summary || out.alert_summary || null,
-    live_signal: liveSignal,
-    live_signal_version: out.live_signal_version ?? liveSignal?.version ?? null,
-    payment_status_version: out.payment_status_version ?? liveSignal?.payment_status_version ?? null,
-    correction_progress_version: out.correction_progress_version ?? liveSignal?.correction_progress_version ?? null,
-    alert_version: out.alert_version ?? liveSignal?.alert_version ?? null,
-    overview_version: out.overview_version ?? liveSignal?.overview_version ?? null
-  };
-
-  try {
-    if (liveSignal && typeof applyBankingPayLiveRefresh === 'function') await applyBankingPayLiveRefresh(liveSignal);
-  } catch {}
-
-  return result;
+  void limit;
+  // Compatibility façade: the browser never advances cancellation work. The queue
+  // is the sole continuation owner, so historical callers receive durable status.
+  return bankingPayPaymentCorrectionStatus(id);
 }
 
 
 
+
+
+async function bankingPayPaymentStatusPage(payBatchId, options = {}) {
+  const id = String(payBatchId || '').trim();
+  if (!id) throw new Error('Pay batch ID is required.');
+  const source = options && typeof options === 'object' ? options : {};
+  const params = new URLSearchParams();
+  params.set('limit', String(Math.min(100, Math.max(1, Number(source.limit || 25)))));
+  params.set('sort_key', String(source.sort_key || source.sortKey || 'STATUS'));
+  params.set('sort_direction', String(source.sort_direction || source.sortDirection || 'ASC'));
+  if (source.filter && typeof source.filter === 'object') params.set('filter', JSON.stringify(source.filter));
+  if (source.cursor && typeof source.cursor === 'object') params.set('cursor', JSON.stringify(source.cursor));
+  const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/payment-status?${params.toString()}`));
+  const text = await response.text().catch(() => '');
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : null; } catch {}
+  if (!response.ok) throw Object.assign(new Error(String(payload?.message || payload?.error || 'Current Payment Status could not be loaded.')), { status: response.status, json: payload });
+  return payload && typeof payload === 'object' ? payload : {};
+}
+
+async function bankingPayPaymentCorrectionReauth(correctionRequestId, reauthToken) {
+  const id = String(correctionRequestId || '').trim();
+  if (!id || !String(reauthToken || '').trim()) throw new Error('Payment cancellation reauthentication is required.');
+  const response = await authFetch(API(`/api/banking/pay/correction/${encodeURIComponent(id)}/reauth`), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reauth_token: String(reauthToken).trim() })
+  });
+  const text = await response.text().catch(() => '');
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : null; } catch {}
+  if (!response.ok) throw Object.assign(new Error(String(payload?.message || payload?.error || 'Please verify your identity again.')), { status: response.status, json: payload });
+  return payload && typeof payload === 'object' ? payload : {};
+}
+
+const bankingPayCancellationProgressState = {
+  correctionRequestId: '', payBatchId: '', status: null, timer: null,
+  abortController: null, financialRefreshDone: false, visible: false, error: ''
+};
+
+function closeBankingPayCancellationProgressModal() {
+  const state = bankingPayCancellationProgressState;
+  state.visible = false;
+  if (state.timer) clearTimeout(state.timer);
+  state.timer = null;
+  try { state.abortController?.abort(); } catch {}
+  state.abortController = null;
+  try { document.getElementById('bankingPayCancellationProgressModal')?.remove(); } catch {}
+}
+
+function bankingPayCancellationProgressIsFinanciallyTerminal(status) {
+  return ['APPLIED','APPLIED_WITH_BLOCKERS','BLOCKED','FAILED','REJECTED','CANCELLED'].includes(String(status || '').trim().toUpperCase());
+}
+
+function renderBankingPayCancellationProgressModal() {
+  const state = bankingPayCancellationProgressState;
+  if (!state.visible) return;
+  let root = document.getElementById('bankingPayCancellationProgressModal');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'bankingPayCancellationProgressModal';
+    root.setAttribute('role', 'dialog');
+    root.setAttribute('aria-modal', 'true');
+    root.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(14,23,38,.58);display:flex;align-items:center;justify-content:center;padding:20px;';
+    document.body.appendChild(root);
+  }
+  const status = state.status && typeof state.status === 'object' ? state.status : {};
+  const requestStatus = String(status.request_status || status.status || (state.error ? 'ERROR' : 'LOADING')).trim().toUpperCase();
+  const operationStatus = String(status.operation_status || '').trim().toUpperCase();
+  const phase = String(status.phase || '').trim().toUpperCase();
+  const counts = status.candidate_counts && typeof status.candidate_counts === 'object' ? status.candidate_counts : {};
+  const workbench = status.workbench_refresh && typeof status.workbench_refresh === 'object' ? status.workbench_refresh : {};
+  const workbenchStatus = String(workbench.status || workbench.workbench_refresh_status || 'NOT_STAGED').trim().toUpperCase();
+  const terminal = bankingPayCancellationProgressIsFinanciallyTerminal(requestStatus);
+  const planningReady = requestStatus === 'PLANNED';
+  const message = state.error || status.user_message || status.message || (planningReady
+    ? 'The exact payment selection is ready. Continue to verify your identity.'
+    : (terminal ? 'The financial cancellation stage is complete.' : 'CloudTMS is processing the cancellation in the background.'));
+  const selected = Number(counts.selected ?? counts.total ?? counts.selected_candidate_count ?? 0) || 0;
+  const applied = Number(counts.applied ?? counts.applied_candidate_count ?? 0) || 0;
+  const blocked = Number(counts.blocked ?? counts.blocked_candidate_count ?? 0) || 0;
+  const availabilityText = workbenchStatus === 'CURRENT' ? 'Payment availability is up to date'
+    : (workbenchStatus === 'FAILED' ? 'Payment availability refresh needs review'
+      : (workbenchStatus === 'NOT_STAGED' ? 'Payment availability has not been refreshed yet' : 'Payment availability is refreshing'));
+  root.innerHTML = `
+    <div class="card" style="width:min(620px,100%);max-height:90vh;overflow:auto;padding:18px;background:var(--panel,#fff);">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+        <div><div style="font-weight:800;font-size:18px;">Payment cancellation progress</div><div class="mini" style="margin-top:3px;">You can close this window. Processing will continue safely.</div></div>
+        <button type="button" class="btn btn-sm btn-outline" data-banking-pay-cancellation-close="1">Close</button>
+      </div>
+      <div style="margin-top:16px;display:grid;gap:10px;">
+        <div><strong>Status:</strong> ${enc(status.user_title || requestStatus.replaceAll('_', ' '))}</div>
+        ${phase ? `<div><strong>Stage:</strong> ${enc(phase.replaceAll('_', ' '))}${operationStatus ? ` · ${enc(operationStatus.replaceAll('_', ' '))}` : ''}</div>` : ''}
+        <div style="white-space:pre-wrap;">${enc(message)}</div>
+        ${(selected || applied || blocked) ? `<div class="mini">Selected ${enc(selected)} · Applied ${enc(applied)} · Needs review ${enc(blocked)}</div>` : ''}
+        <div class="card" style="padding:10px;"><div style="font-weight:700;">Payment availability</div><div class="mini">${enc(availabilityText)}</div></div>
+        ${planningReady ? '<button type="button" class="btn btn-primary" data-banking-pay-cancellation-verify="1">Continue to verification</button>' : ''}
+        ${terminal ? '<div class="mini">Overview, Current Payment Status and the PAYE schedule are refreshed from the remaining active payment scope.</div>' : ''}
+      </div>
+    </div>`;
+  root.querySelector('[data-banking-pay-cancellation-close="1"]')?.addEventListener('click', closeBankingPayCancellationProgressModal, { once: true });
+  root.querySelector('[data-banking-pay-cancellation-verify="1"]')?.addEventListener('click', async () => {
+    try {
+      const credentials = await openPayBatchPasswordConfirmModal({ title: 'Verify payment cancellation', subtitle: 'Confirm your identity for this exact reviewed payment selection.', defaultReason: '' });
+      if (!credentials) return;
+      const ceremonyToken = String(credentials.reauth_token || credentials.reauthToken || '').trim();
+      if (!ceremonyToken) throw new Error('Identity verification did not return a valid proof.');
+      const bound = await bankingPayPaymentCorrectionReauth(state.correctionRequestId, ceremonyToken);
+      const proofToken = String(bound.reauth_proof_token || '').trim();
+      if (!proofToken) throw new Error('Identity verification proof was not returned.');
+      await bankingPayPaymentCorrectionStart(state.payBatchId, { correction_request_id: state.correctionRequestId, reauth_proof_token: proofToken });
+      state.error = '';
+      state.status = await bankingPayPaymentCorrectionStatus(state.correctionRequestId);
+      renderBankingPayCancellationProgressModal();
+      scheduleBankingPayCancellationProgressPoll();
+    } catch (error) {
+      state.error = String(error?.message || error || 'Please verify your identity again.');
+      renderBankingPayCancellationProgressModal();
+    }
+  }, { once: true });
+}
+
+async function refreshBankingPayCancellationFinancialViews() {
+  const state = bankingPayCancellationProgressState;
+  if (state.financialRefreshDone || !state.payBatchId) return;
+  state.financialRefreshDone = true;
+  try { await bankingPayBatchGet(state.payBatchId, { detail_mode: 'BOOTSTRAP_ONLY', silent: true, reportError: false, throwOnError: false }); } catch {}
+  try { await bankingPayBatchesList({ silent: true, background: true, preservePage: true }); } catch {}
+  try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+  try { window.dispatchEvent(new CustomEvent('banking-pay-cancellation-financial-complete', { detail: { pay_batch_id: state.payBatchId, correction_request_id: state.correctionRequestId } })); } catch {}
+}
+
+function scheduleBankingPayCancellationProgressPoll(delayMs = 1800) {
+  const state = bankingPayCancellationProgressState;
+  if (state.timer) clearTimeout(state.timer);
+  if (!state.visible || !state.correctionRequestId || state.abortController) return;
+  const terminal = bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status);
+  const workbenchStatus = String(state.status?.workbench_refresh?.status || state.status?.workbench_refresh?.workbench_refresh_status || '').toUpperCase();
+  if (terminal && workbenchStatus === 'CURRENT') return;
+  state.timer = setTimeout(async () => {
+    try {
+      state.abortController = new AbortController();
+      state.status = await bankingPayPaymentCorrectionStatus(state.correctionRequestId, { signal: state.abortController.signal });
+      state.error = '';
+      if (bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status)) await refreshBankingPayCancellationFinancialViews();
+    } catch (error) {
+      state.error = String(error?.message || error || 'Status is temporarily unavailable. CloudTMS will try again.');
+    } finally {
+      state.abortController = null;
+      renderBankingPayCancellationProgressModal();
+      scheduleBankingPayCancellationProgressPoll(Math.min(10000, state.error ? 5000 : 2000));
+    }
+  }, Math.max(750, Number(delayMs) || 1800));
+}
+
+async function openBankingPayCancellationProgressModal({ correctionRequestId = '', payBatchId = '' } = {}) {
+  const state = bankingPayCancellationProgressState;
+  const nextCorrectionRequestId = String(correctionRequestId || state.correctionRequestId || '').trim();
+  if (nextCorrectionRequestId && nextCorrectionRequestId !== state.correctionRequestId) state.financialRefreshDone = false;
+  state.correctionRequestId = nextCorrectionRequestId;
+  state.payBatchId = String(payBatchId || state.payBatchId || '').trim();
+  if (!state.correctionRequestId) throw new Error('Payment cancellation request ID is required.');
+  state.visible = true;
+  state.error = '';
+  renderBankingPayCancellationProgressModal();
+  try {
+    state.abortController = new AbortController();
+    state.status = await bankingPayPaymentCorrectionStatus(state.correctionRequestId, { signal: state.abortController.signal });
+    state.payBatchId = String(state.status?.pay_batch_id || state.payBatchId || '').trim();
+    if (bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status)) await refreshBankingPayCancellationFinancialViews();
+  } catch (error) { if (error?.name !== 'AbortError') state.error = String(error?.message || error || 'Payment cancellation status is temporarily unavailable.'); }
+  finally { state.abortController = null; }
+  renderBankingPayCancellationProgressModal();
+  scheduleBankingPayCancellationProgressPoll();
+  return true;
+}
+
+async function openLatestBankingPayCancellationProgress(payBatchOrId) {
+  const batch = payBatchOrId && typeof payBatchOrId === 'object' ? payBatchOrId : null;
+  const payBatchId = String(batch?.id || batch?.pay_batch_id || payBatchOrId || bankingPayCancellationProgressState.payBatchId || '').trim();
+  let correctionRequestId = String(batch?.latest_correction_request_id || batch?.latestCorrectionRequestId || batch?.latest_correction_request?.id || batch?.latestCorrectionRequest?.id || bankingPayCancellationProgressState.correctionRequestId || '').trim();
+  if (!correctionRequestId && payBatchId) {
+    try {
+      const current = await bankingPayBatchGet(payBatchId, { detail_mode: 'BOOTSTRAP_ONLY', silent: true, reportError: false, throwOnError: false });
+      correctionRequestId = String(current?.latest_correction_request_id || current?.latest_correction_request?.id || current?.batch?.latest_correction_request_id || '').trim();
+    } catch {}
+  }
+  if (!correctionRequestId) throw new Error('No payment cancellation progress is available for this batch.');
+  return openBankingPayCancellationProgressModal({ correctionRequestId, payBatchId });
+}
+
+try {
+  Object.assign(window, {
+    bankingPayPaymentStatusPage, bankingPayPaymentCorrectionReauth,
+    openBankingPayCancellationProgressModal, closeBankingPayCancellationProgressModal,
+    renderBankingPayCancellationProgressModal, scheduleBankingPayCancellationProgressPoll,
+    openLatestBankingPayCancellationProgress
+  });
+  if (window.__bankingPayCancellationProgressClickBound !== true) {
+    window.__bankingPayCancellationProgressClickBound = true;
+    document.addEventListener('click', (event) => {
+      const button = event.target?.closest?.('[data-banking-pay-cancellation-open="1"]');
+      if (!button) return;
+      event.preventDefault();
+      const correctionRequestId = String(button.getAttribute('data-correction-request-id') || '').trim();
+      const payBatchId = String(bankingPayCancellationProgressState.payBatchId || '').trim();
+      openBankingPayCancellationProgressModal({ correctionRequestId, payBatchId }).catch((error) => {
+        try { if (typeof window.__toast === 'function') window.__toast(String(error?.message || error || 'Progress could not be opened.')); } catch {}
+      });
+    });
+  }
+} catch {}
 
 
 function getBankingPaymentIssueActionLabel(rowOrState) {
@@ -77646,7 +77812,28 @@ const retryUnsentPaymentsPipeline = async () => {
     return `<div id="${enc(rootId)}" class="banking-pay-batch-child-overview-fallback-root">${fallbackHtml}${source}</div>`;
   };
 
-  const renderChildOverviewHtml = () => injectOverviewExecuteFallback(renderBankingPayBatchChildModalOverview());
+  const injectCancellationProgressCard = (html) => {
+    const source = String(html || '');
+    const data = child.data && typeof child.data === 'object' ? child.data : {};
+    const batch = deriveBatchObj(data) || {};
+    const requestId = String(
+      data.latest_correction_request_id || data.latestCorrectionRequestId ||
+      data.latest_correction_request?.id || data.latestCorrectionRequest?.id ||
+      batch.latest_correction_request_id || batch.latestCorrectionRequestId ||
+      ((typeof bankingPayCancellationProgressState !== 'undefined' && bankingPayCancellationProgressState.payBatchId === id) ? bankingPayCancellationProgressState.correctionRequestId : '') || ''
+    ).trim();
+    if (!requestId || source.includes('data-banking-pay-cancellation-progress-card="1"')) return source;
+    const card = `
+      <div class="card" data-banking-pay-cancellation-progress-card="1" style="padding:10px;margin-bottom:10px;border:1px solid var(--line);">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <div><div style="font-weight:800;font-size:14px;">Payment cancellation</div><div class="mini">Processing continues in the background. Open progress for the latest durable status.</div></div>
+          <button type="button" class="btn btn-sm btn-outline" data-banking-pay-cancellation-open="1" data-correction-request-id="${enc(requestId)}">Open progress</button>
+        </div>
+      </div>`;
+    return `${card}${source}`;
+  };
+
+  const renderChildOverviewHtml = () => injectCancellationProgressCard(injectOverviewExecuteFallback(renderBankingPayBatchChildModalOverview()));
 
   const renderCurrentPaymentStatusSectionErrorHtml = () => {
     try {
@@ -174193,6 +174380,19 @@ async function runBankingPayBatchCancelFlow({
       const result = await bankingPayCancelNotSentAndRecalculate(id, requestPayload);
       if (!result || result.ok === false) {
         throw buildCancelStructuredError(result || { ok: false, pay_batch_id: id }, 409);
+      }
+      const asynchronousCorrectionRequestId = String(result.correction_request_id || result.request_id || '').trim();
+      if (asynchronousCorrectionRequestId) {
+        await setProgressMessage('Cancellation accepted — CloudTMS is preparing the exact payment selection.', { result, asynchronous: true });
+        try {
+          await openBankingPayCancellationProgressModal({ correctionRequestId: asynchronousCorrectionRequestId, payBatchId: id });
+        } catch (progressError) {
+          try { if (typeof window.__toast === 'function') window.__toast(String(progressError?.message || progressError || 'Cancellation is continuing in the background.')); } catch {}
+        }
+        if (typeof onSuccess === 'function') {
+          try { await onSuccess({ id, responsePayload: result, asynchronous: true, correction_request_id: asynchronousCorrectionRequestId }); } catch {}
+        }
+        return true;
       }
       const progress = (result && typeof result.progress === 'object') ? result.progress : {};
       const completed = Number(progress.completed ?? result.completed ?? 0) || 0;
