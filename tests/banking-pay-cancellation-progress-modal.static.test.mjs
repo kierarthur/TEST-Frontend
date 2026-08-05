@@ -39,6 +39,12 @@ test('financial completion refreshes Overview, Current Payment Status and PAYE a
   assert.match(refresh, /bankingPayBatchesList/);
   assert.match(refresh, /bankingRerender/);
   assert.match(refresh, /active_paye_schedule_line_count/);
+  assert.match(refresh, /window\?\.modalCtx\?\.banking\?\.pay\?\.selected/);
+  assert.match(refresh, /current_payment_status_rows: statusRows/);
+  assert.match(refresh, /original_overview_amount_pence/);
+  assert.match(refresh, /latest_correction_request/);
+  assert.ok(refresh.indexOf('selected.data = {') < refresh.indexOf("if (typeof bankingRerender === 'function')"));
+  assert.ok(refresh.indexOf("if (typeof bankingRerender === 'function')") < refresh.indexOf('await bankingPayBatchesList'));
   assert.match(refresh, /state\.financialRefreshDone = true;\s*}\s*$/);
   assert.doesNotMatch(refresh, /for\s*\([^)]*candidate|Promise\.all/);
 });

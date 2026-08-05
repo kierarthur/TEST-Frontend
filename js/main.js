@@ -22916,17 +22916,67 @@ function renderBankingPayCancellationProgressModal() {
 async function refreshBankingPayCancellationFinancialViews() {
   const state = bankingPayCancellationProgressState;
   if (state.financialRefreshDone || !state.payBatchId) return;
+  state.financialRefreshDone = false;
   const batchSummary = await bankingPayBatchGet(state.payBatchId, { detail_mode: 'BOOTSTRAP_ONLY', silent: true, reportError: false, throwOnError: true });
   const paymentStatus = await bankingPayPaymentStatusPage(state.payBatchId, { limit: 25, sort_key: 'STATUS', sort_direction: 'ASC' });
-  await bankingPayBatchesList({ silent: true, background: true, preservePage: true });
-  if (typeof bankingRerender === 'function') await bankingRerender(null);
+  const selected = window?.modalCtx?.banking?.pay?.selected;
+  if (!selected || !selected.data || typeof selected.data !== 'object' || Array.isArray(selected.data)) {
+    throw new Error('The refreshed payment batch is not available in the Banking Pay modal state.');
+  }
+  const selectedBatchId = String(selected.data?.id || selected.data?.pay_batch_id || selected.data?.batch?.id || selected.data?.batch?.pay_batch_id || '').trim();
+  if (selectedBatchId && selectedBatchId !== String(state.payBatchId).trim()) {
+    throw new Error('The refreshed payment batch no longer matches the cancellation progress batch.');
+  }
+  const activeOverviewAmountPence = Number(paymentStatus?.active_overview_amount_pence || 0);
+  const activeOverviewAmount = activeOverviewAmountPence / 100;
+  const statusRows = Array.isArray(paymentStatus?.rows) ? paymentStatus.rows.slice(0, 100) : [];
   const projection = {
     active_overview_candidate_count: Number(paymentStatus?.active_overview_candidate_count || 0),
-    active_overview_amount_pence: Number(paymentStatus?.active_overview_amount_pence || 0),
+    active_overview_amount_pence: activeOverviewAmountPence,
+    original_overview_amount_pence: Number(paymentStatus?.original_overview_amount_pence || 0),
     active_paye_schedule_line_count: Number(paymentStatus?.active_paye_schedule_line_count || 0),
-    active_paye_schedule_amount_pence: Number(paymentStatus?.active_paye_schedule_amount_pence || 0)
+    active_paye_schedule_amount_pence: Number(paymentStatus?.active_paye_schedule_amount_pence || 0),
+    latest_correction_request: paymentStatus?.latest_correction_request || null
   };
+  const current = selected.data;
+  const currentBatch = current.batch && typeof current.batch === 'object' && !Array.isArray(current.batch) ? current.batch : {};
+  const currentDisplaySummary = current.pay_batch_display_summary && typeof current.pay_batch_display_summary === 'object' && !Array.isArray(current.pay_batch_display_summary)
+    ? current.pay_batch_display_summary
+    : {};
+  selected.data = {
+    ...current,
+    ...projection,
+    current_payment_status_rows: statusRows,
+    currentPaymentStatusRows: statusRows,
+    payment_status_rows: statusRows,
+    paymentStatusRows: statusRows,
+    latest_correction_request_id: projection.latest_correction_request?.id || projection.latest_correction_request?.correction_request_id || null,
+    display_total_bank_out: activeOverviewAmount,
+    total_bank_out: activeOverviewAmount,
+    pay_batch_display_summary: {
+      ...currentDisplaySummary,
+      display_total_bank_out: activeOverviewAmount,
+      total_bank_out: activeOverviewAmount,
+      ...projection
+    },
+    batch: {
+      ...currentBatch,
+      display_total_bank_out: activeOverviewAmount,
+      total_bank_out: activeOverviewAmount,
+      ...projection
+    }
+  };
+  const child = window?.modalCtx?.banking?.pay?.child;
+  if (child && typeof child === 'object' && !Array.isArray(child)) {
+    child.data = selected.data;
+    child.correction = child.correction && typeof child.correction === 'object' && !Array.isArray(child.correction) ? child.correction : {};
+    child.correction.current_payment_status_rows = statusRows;
+    child.correction.currentPaymentStatusRows = statusRows;
+    child.correction.latest_correction_request = projection.latest_correction_request;
+  }
   window.__bankingPayCancellationActiveProjection = projection;
+  if (typeof bankingRerender === 'function') await bankingRerender(null);
+  await bankingPayBatchesList({ silent: true, background: true, preservePage: true });
   window.dispatchEvent(new CustomEvent('banking-pay-cancellation-financial-complete', { detail: {
     pay_batch_id: state.payBatchId,
     correction_request_id: state.correctionRequestId,
