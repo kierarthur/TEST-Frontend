@@ -35,9 +35,19 @@ test('financial completion and Workbench freshness are displayed independently',
 test('financial completion refreshes Overview, Current Payment Status and PAYE authority without candidate fan-out', () => {
   const refresh = slice('async function refreshBankingPayCancellationFinancialViews', 'function scheduleBankingPayCancellationProgressPoll');
   assert.match(refresh, /bankingPayBatchGet/);
+  assert.match(refresh, /bankingPayPaymentStatusPage/);
   assert.match(refresh, /bankingPayBatchesList/);
   assert.match(refresh, /bankingRerender/);
+  assert.match(refresh, /active_paye_schedule_line_count/);
+  assert.match(refresh, /state\.financialRefreshDone = true;\s*}\s*$/);
   assert.doesNotMatch(refresh, /for\s*\([^)]*candidate|Promise\.all/);
+});
+
+test('terminal refresh failures retain a bounded server-owned retry', () => {
+  const polling = slice('function scheduleBankingPayCancellationProgressPoll', 'async function openBankingPayCancellationProgressModal');
+  assert.match(polling, /state\.error \? 5000 : null/);
+  assert.match(polling, /serverValue == null \? fallback : serverValue/);
+  assert.match(polling, /Math\.min\(5000, Math\.max\(1000/);
 });
 
 test('historical browser process helper reads status and never advances cancellation work', () => {
