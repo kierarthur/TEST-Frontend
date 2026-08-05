@@ -22913,32 +22913,51 @@ function renderBankingPayCancellationProgressModal() {
   }, { once: true });
 }
 
-async function refreshBankingPayCancellationFinancialViews() {
-  const state = bankingPayCancellationProgressState;
-  if (state.financialRefreshDone || !state.payBatchId) return;
-  state.financialRefreshDone = false;
-  const batchSummary = await bankingPayBatchGet(state.payBatchId, { detail_mode: 'BOOTSTRAP_ONLY', silent: true, reportError: false, throwOnError: true });
-  const paymentStatus = await bankingPayPaymentStatusPage(state.payBatchId, { limit: 25, sort_key: 'STATUS', sort_direction: 'ASC' });
+function buildBankingPayCancellationActiveProjection(paymentStatus) {
+  const status = paymentStatus && typeof paymentStatus === 'object' && !Array.isArray(paymentStatus) ? paymentStatus : {};
+  const readFlag = (value) => value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(String(value == null ? '' : value).trim().toLowerCase());
+  const sourceRows = Array.isArray(status.rows) ? status.rows.slice(0, 100) : [];
+  const markActiveRow = (row) => ({
+    ...(row && typeof row === 'object' && !Array.isArray(row) ? row : {}),
+    active_projection_row: true
+  });
+  const activeOverviewRows = sourceRows.filter((row) => readFlag(row?.include_in_active_overview)).map(markActiveRow);
+  const activePayeScheduleRows = sourceRows.filter((row) => readFlag(row?.include_in_active_paye_schedule)).map(markActiveRow);
+  const latestCorrectionRequest = status.latest_correction_request && typeof status.latest_correction_request === 'object' && !Array.isArray(status.latest_correction_request)
+    ? status.latest_correction_request
+    : null;
+  return {
+    active_overview_candidate_count: Number(status.active_overview_candidate_count || 0),
+    active_overview_amount_pence: Number(status.active_overview_amount_pence || 0),
+    original_overview_amount_pence: Number(status.original_overview_amount_pence || 0),
+    active_paye_schedule_line_count: Number(status.active_paye_schedule_line_count || 0),
+    active_paye_schedule_amount_pence: Number(status.active_paye_schedule_amount_pence || 0),
+    latest_correction_request: latestCorrectionRequest,
+    active_overview_rows: activeOverviewRows,
+    active_paye_schedule_rows: activePayeScheduleRows,
+    active_overview_projection_authoritative: true,
+    active_paye_schedule_projection_authoritative: true,
+    active_overview_projection_page_limited: Number(status.active_overview_candidate_count || 0) > activeOverviewRows.length,
+    active_paye_schedule_projection_page_limited: Number(status.active_paye_schedule_line_count || 0) > activePayeScheduleRows.length
+  };
+}
+
+function applyBankingPayCancellationActiveProjection(paymentStatus, payBatchId) {
+  const projection = buildBankingPayCancellationActiveProjection(paymentStatus);
+  const expectedBatchId = String(payBatchId || paymentStatus?.pay_batch_id || '').trim();
   const selected = window?.modalCtx?.banking?.pay?.selected;
+  const child = window?.modalCtx?.banking?.pay?.child;
   if (!selected || !selected.data || typeof selected.data !== 'object' || Array.isArray(selected.data)) {
     throw new Error('The refreshed payment batch is not available in the Banking Pay modal state.');
   }
   const selectedBatchId = String(selected.data?.id || selected.data?.pay_batch_id || selected.data?.batch?.id || selected.data?.batch?.pay_batch_id || '').trim();
-  if (selectedBatchId && selectedBatchId !== String(state.payBatchId).trim()) {
+  if (expectedBatchId && selectedBatchId && selectedBatchId !== expectedBatchId) {
     throw new Error('The refreshed payment batch no longer matches the cancellation progress batch.');
   }
-  const activeOverviewAmountPence = Number(paymentStatus?.active_overview_amount_pence || 0);
-  const activeOverviewAmount = activeOverviewAmountPence / 100;
-  const statusRows = Array.isArray(paymentStatus?.rows) ? paymentStatus.rows.slice(0, 100) : [];
-  const projection = {
-    active_overview_candidate_count: Number(paymentStatus?.active_overview_candidate_count || 0),
-    active_overview_amount_pence: activeOverviewAmountPence,
-    original_overview_amount_pence: Number(paymentStatus?.original_overview_amount_pence || 0),
-    active_paye_schedule_line_count: Number(paymentStatus?.active_paye_schedule_line_count || 0),
-    active_paye_schedule_amount_pence: Number(paymentStatus?.active_paye_schedule_amount_pence || 0),
-    latest_correction_request: paymentStatus?.latest_correction_request || null
-  };
-  const current = selected.data;
+  const activeOverviewAmount = projection.active_overview_amount_pence / 100;
+  const childData = child && child.data && typeof child.data === 'object' && !Array.isArray(child.data) ? child.data : null;
+  const childBatchId = String(childData?.id || childData?.pay_batch_id || childData?.batch?.id || childData?.batch?.pay_batch_id || '').trim();
+  const current = childData && (!expectedBatchId || !childBatchId || childBatchId === expectedBatchId) ? childData : selected.data;
   const currentBatch = current.batch && typeof current.batch === 'object' && !Array.isArray(current.batch) ? current.batch : {};
   const currentDisplaySummary = current.pay_batch_display_summary && typeof current.pay_batch_display_summary === 'object' && !Array.isArray(current.pay_batch_display_summary)
     ? current.pay_batch_display_summary
@@ -22946,10 +22965,10 @@ async function refreshBankingPayCancellationFinancialViews() {
   selected.data = {
     ...current,
     ...projection,
-    current_payment_status_rows: statusRows,
-    currentPaymentStatusRows: statusRows,
-    payment_status_rows: statusRows,
-    paymentStatusRows: statusRows,
+    current_payment_status_rows: Array.isArray(paymentStatus?.rows) ? paymentStatus.rows.slice(0, 100) : [],
+    currentPaymentStatusRows: Array.isArray(paymentStatus?.rows) ? paymentStatus.rows.slice(0, 100) : [],
+    payment_status_rows: Array.isArray(paymentStatus?.rows) ? paymentStatus.rows.slice(0, 100) : [],
+    paymentStatusRows: Array.isArray(paymentStatus?.rows) ? paymentStatus.rows.slice(0, 100) : [],
     latest_correction_request_id: projection.latest_correction_request?.id || projection.latest_correction_request?.correction_request_id || null,
     display_total_bank_out: activeOverviewAmount,
     total_bank_out: activeOverviewAmount,
@@ -22966,15 +22985,28 @@ async function refreshBankingPayCancellationFinancialViews() {
       ...projection
     }
   };
-  const child = window?.modalCtx?.banking?.pay?.child;
   if (child && typeof child === 'object' && !Array.isArray(child)) {
     child.data = selected.data;
+    child.activeOverviewRows = projection.active_overview_rows.slice();
+    child.activePayeScheduleRows = projection.active_paye_schedule_rows.slice();
+    child.activeOverviewProjectionAuthoritative = true;
+    child.activePayeScheduleProjectionAuthoritative = true;
     child.correction = child.correction && typeof child.correction === 'object' && !Array.isArray(child.correction) ? child.correction : {};
-    child.correction.current_payment_status_rows = statusRows;
-    child.correction.currentPaymentStatusRows = statusRows;
+    child.correction.current_payment_status_rows = selected.data.current_payment_status_rows;
+    child.correction.currentPaymentStatusRows = selected.data.current_payment_status_rows;
     child.correction.latest_correction_request = projection.latest_correction_request;
   }
   window.__bankingPayCancellationActiveProjection = projection;
+  return projection;
+}
+
+async function refreshBankingPayCancellationFinancialViews() {
+  const state = bankingPayCancellationProgressState;
+  if (state.financialRefreshDone || !state.payBatchId) return;
+  state.financialRefreshDone = false;
+  const batchSummary = await bankingPayBatchGet(state.payBatchId, { detail_mode: 'BOOTSTRAP_ONLY', silent: true, reportError: false, throwOnError: true });
+  const paymentStatus = await bankingPayPaymentStatusPage(state.payBatchId, { limit: 100, sort_key: 'STATUS', sort_direction: 'ASC' });
+  const projection = applyBankingPayCancellationActiveProjection(paymentStatus, state.payBatchId);
   if (typeof bankingRerender === 'function') await bankingRerender(null);
   await bankingPayBatchesList({ silent: true, background: true, preservePage: true });
   window.dispatchEvent(new CustomEvent('banking-pay-cancellation-financial-complete', { detail: {
@@ -75838,6 +75870,20 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
       return shouldApplyChildMutation(expectedOpenToken, requestSeq);
     };
 
+    const hydrateCancellationActiveProjection = async () => {
+      if (opts.noPaymentCancelRefresh === true || opts.no_payment_cancel_refresh === true) return null;
+      child.activeOverviewRows = [];
+      child.activePayeScheduleRows = [];
+      child.activeOverviewProjectionAuthoritative = false;
+      child.activePayeScheduleProjectionAuthoritative = false;
+      const paymentStatus = await bankingPayPaymentStatusPage(id, { limit: 100, sort_key: 'STATUS', sort_direction: 'ASC' });
+      const latestCorrectionRequest = paymentStatus?.latest_correction_request && typeof paymentStatus.latest_correction_request === 'object' && !Array.isArray(paymentStatus.latest_correction_request)
+        ? paymentStatus.latest_correction_request
+        : null;
+      if (!latestCorrectionRequest) return null;
+      return applyBankingPayCancellationActiveProjection(paymentStatus, id);
+    };
+
     try {
       const detailMode = String(opts.detail_mode || opts.detailMode || (forcePoll ? 'AUTO' : 'BOOTSTRAP_ONLY')).trim().toUpperCase() || (forcePoll ? 'AUTO' : 'BOOTSTRAP_ONLY');
       const obj = (typeof bankingPayBatchGet === 'function')
@@ -75865,6 +75911,9 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
 
       if (!await applyLoadedData(obj)) return;
 
+      await hydrateCancellationActiveProjection();
+      if (!shouldApplyChildMutation(expectedOpenToken, requestSeq)) return;
+
       try { child.ui.last_poll_note = ''; } catch {}
 
       await rerenderChild();
@@ -75891,6 +75940,8 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
 
             const polled = await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/poll`, {});
             if (!await applyLoadedData(polled)) return;
+            await hydrateCancellationActiveProjection();
+            if (!shouldApplyChildMutation(expectedOpenToken, requestSeq)) return;
 
             try {
               const pr = (child.data && typeof child.data === 'object') ? child.data.poll_result : null;
@@ -81650,12 +81701,29 @@ function renderBankingPayBatchChildModalOverview() {
     }
     return out;
   };
+  const activeOverviewProjectionSources = [
+    child.activeOverviewRows,
+    child.active_overview_rows,
+    data.active_overview_rows,
+    data.activeOverviewRows
+  ];
+  const activeOverviewProjectionPresent = child.activeOverviewProjectionAuthoritative === true
+    || child.active_overview_projection_authoritative === true
+    || data.active_overview_projection_authoritative === true
+    || data.activeOverviewProjectionAuthoritative === true
+    || activeOverviewProjectionSources.some((value) => Array.isArray(value));
   const collectOverviewItemPages = () => {
     const readRows = (value) => {
       if (Array.isArray(value)) return value.filter((row) => asObj(row));
       if (asObj(value)) return asArr(value.rows || value.items || value.data).filter((row) => asObj(row));
       return [];
     };
+    if (activeOverviewProjectionPresent) {
+      for (const source of activeOverviewProjectionSources) {
+        if (Array.isArray(source)) return dedupeOverviewRows(readRows(source));
+      }
+      return [];
+    }
     const sectionPages = asObj(child.sectionPages || child.section_pages || data.sectionPages || data.section_pages) || {};
     const pages = asObj(child.pages || data.pages || child.pageCache || child.page_cache || data.pageCache || data.page_cache) || {};
     const preferredSources = [
@@ -82874,6 +82942,19 @@ function renderBankingPayBatchChildModalOverview() {
   };
 
   const payableDraftContentState = (() => {
+    if (activeOverviewProjectionPresent) {
+      const activeCandidateCount = firstPositiveOrNonNegativeInteger(data.active_overview_candidate_count, data.activeOverviewCandidateCount, overviewRows.length) ?? 0;
+      const activeAmountPence = firstFiniteNumber(data.active_overview_amount_pence, data.activeOverviewAmountPence);
+      const activeAmount = activeAmountPence === null ? null : activeAmountPence / 100;
+      const activeItemCount = overviewRows.reduce((sum, row) => sum + Math.max(0, Number(row?.active_item_count || 0) || 0), 0);
+      return {
+        known: true,
+        knownEmpty: activeCandidateCount <= 0,
+        hasPayableContent: activeCandidateCount > 0,
+        itemCount: activeItemCount,
+        totalPayable: activeAmount
+      };
+    }
     const itemRowSources = dedupeOverviewRows([
       ...asArr(overviewRows),
       ...asArr(items)
@@ -83018,9 +83099,11 @@ function renderBankingPayBatchChildModalOverview() {
     batch.itemCount,
     payableDraftContentState.itemCount
   );
-  const hasFrozenNonVoidItemsForPaymentActions = frozenNonVoidItemCountForPaymentActions !== null
-    ? frozenNonVoidItemCountForPaymentActions > 0
-    : payableDraftContentState.hasPayableContent === true;
+  const hasFrozenNonVoidItemsForPaymentActions = activeOverviewProjectionPresent
+    ? payableDraftContentState.hasPayableContent === true
+    : (frozenNonVoidItemCountForPaymentActions !== null
+      ? frozenNonVoidItemCountForPaymentActions > 0
+      : payableDraftContentState.hasPayableContent === true);
   const hasExecutablePaymentScopeForBatch = routeCapabilityContractPresent
     ? (
         authoritativePayeMissing !== true &&
@@ -83748,6 +83831,9 @@ function renderBankingPayBatchChildModalOverview() {
           payeeName: firstText(row.payee_display_name, row.payeeDisplayName, row.payee_name, row.payeeName, row.umbrella_name, row.umbrellaName),
           rows: [],
           amount: 0,
+          activeItemCount: 0,
+          activeProjection: false,
+          paymentDisplayState: '',
           newestWeekEnding: '',
           timesheetIds: new Set()
         };
@@ -83755,7 +83841,15 @@ function renderBankingPayBatchChildModalOverview() {
         ordered.push(summary);
       }
       summary.rows.push(row);
-      summary.amount += Number(frozenAmountForBatchKind(row)) || 0;
+      const isActiveProjectionRow = row.active_projection_row === true
+        || Object.prototype.hasOwnProperty.call(row, 'include_in_active_overview')
+        || Object.prototype.hasOwnProperty.call(row, 'active_payment_amount_pence');
+      summary.activeProjection = summary.activeProjection || isActiveProjectionRow;
+      summary.activeItemCount += Math.max(0, Number(row.active_item_count || 0) || 0);
+      if (!summary.paymentDisplayState) summary.paymentDisplayState = firstText(row.payment_display_state, row.display_status);
+      summary.amount += isActiveProjectionRow
+        ? ((Number(row.active_payment_amount_pence || 0) || 0) / 100)
+        : (Number(frozenAmountForBatchKind(row)) || 0);
       const timesheetId = firstText(row.timesheet_id, row.timesheetId);
       if (timesheetId) summary.timesheetIds.add(timesheetId);
       const weekEnding = firstText(row.week_ending_date, row.weekEndingDate, row.display_context_json?.week_ending_date, row.displayContextJson?.weekEndingDate);
@@ -84389,10 +84483,14 @@ function renderBankingPayBatchChildModalOverview() {
             const expandedCandidate = !!expanded[summary.key];
             const candidateDetailState = detailStateForCandidate(summary);
             const uniqueTimesheetCount = summary.timesheetIds.size;
-            const detailText = `${uniqueTimesheetCount} timesheet${uniqueTimesheetCount === 1 ? '' : 's'} · ${summary.rows.length} payment item${summary.rows.length === 1 ? '' : 's'}`;
-            const contextText = summary.newestWeekEnding
+            const detailText = summary.activeProjection
+              ? `${summary.activeItemCount} active payment item${summary.activeItemCount === 1 ? '' : 's'}`
+              : `${uniqueTimesheetCount} timesheet${uniqueTimesheetCount === 1 ? '' : 's'} · ${summary.rows.length} payment item${summary.rows.length === 1 ? '' : 's'}`;
+            const contextText = summary.activeProjection
+              ? (summary.paymentDisplayState ? summary.paymentDisplayState.replace(/_/g, ' ') : 'Current active payment')
+              : (summary.newestWeekEnding
               ? `Newest week ${formatIsoToUkLocal(summary.newestWeekEnding)}`
-              : (overviewIsPreSubmissionDraft ? 'Draft — not sent' : 'Frozen batch detail');
+              : (overviewIsPreSubmissionDraft ? 'Draft — not sent' : 'Frozen batch detail'));
             const candidateTimesheetButton = summary.candidateId ? `
               <button
                 type="button"
@@ -84443,7 +84541,7 @@ function renderBankingPayBatchChildModalOverview() {
         </tbody>
       </table>
     </div>
-  ` : '';
+  ` : (activeOverviewProjectionPresent ? '<div class="mini" data-banking-pay-active-overview-empty="1" style="padding:10px;opacity:.85;">No active payment lines remain in this batch. Historical payment details are retained in Current Payment Status.</div>' : '');
   const overviewRowsCardHtml = overviewRowsHtml ? `
     <div class="card" style="padding:10px;">
       <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Beneficiaries</div>
@@ -88804,6 +88902,20 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
   const itemsSection = sectionState('items');
   const candidateRowsFromSection = candidatesSection.rows.filter((row) => row && typeof row === 'object');
   const fullCandidates = Array.isArray(data?.candidates) ? data.candidates : [];
+  const activePayeProjectionSources = [
+    child.activePayeScheduleRows,
+    child.active_paye_schedule_rows,
+    data?.active_paye_schedule_rows,
+    data?.activePayeScheduleRows
+  ];
+  const activePayeProjectionPresent = child.activePayeScheduleProjectionAuthoritative === true
+    || child.active_paye_schedule_projection_authoritative === true
+    || data?.active_paye_schedule_projection_authoritative === true
+    || data?.activePayeScheduleProjectionAuthoritative === true
+    || activePayeProjectionSources.some((value) => Array.isArray(value));
+  const activePayeProjectionRows = activePayeProjectionPresent
+    ? (activePayeProjectionSources.find((value) => Array.isArray(value)) || []).filter((row) => row && typeof row === 'object' && !Array.isArray(row))
+    : [];
 
   const candidateRowKey = (candidate, fallbackIndex = 0) => {
     const candidateId = String(candidate?.candidate_id || candidate?.candidateId || '').trim();
@@ -88845,7 +88957,29 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
     return merged;
   };
 
-  const candidatesAll = mergePayeCandidateRows(fullCandidates, candidateRowsFromSection);
+  const historicalCandidates = mergePayeCandidateRows(fullCandidates, candidateRowsFromSection);
+  const candidatesAll = activePayeProjectionPresent
+    ? activePayeProjectionRows.map((activeRow, index) => {
+        const activePayBatchCandidateId = String(activeRow.pay_batch_candidate_id || activeRow.payBatchCandidateId || '').trim();
+        const activeCandidateId = String(activeRow.candidate_id || activeRow.candidateId || '').trim();
+        const historical = historicalCandidates.find((candidate) => {
+          const candidatePayBatchCandidateId = String(candidate?.pay_batch_candidate_id || candidate?.payBatchCandidateId || candidate?.id || '').trim();
+          const candidateId = String(candidate?.candidate_id || candidate?.candidateId || '').trim();
+          return (activePayBatchCandidateId && candidatePayBatchCandidateId === activePayBatchCandidateId)
+            || (activeCandidateId && candidateId === activeCandidateId);
+        }) || {};
+        const activeAmountPence = Number(activeRow.active_payment_amount_pence);
+        return {
+          ...historical,
+          ...activeRow,
+          pay_batch_candidate_id: activePayBatchCandidateId || historical.pay_batch_candidate_id || historical.id || '',
+          candidate_id: activeCandidateId || historical.candidate_id || '',
+          net_bank_amount: Number.isFinite(activeAmountPence) ? activeAmountPence / 100 : historical.net_bank_amount,
+          active_projection_row: true,
+          active_projection_ordinal: index + 1
+        };
+      })
+    : historicalCandidates;
 
   const readCandidatePayeNetAmount = (candidate) => {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
@@ -88868,15 +89002,18 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
         .map((row) => Object.assign({}, row));
       if (!data || typeof data !== 'object' || Array.isArray(data)) return;
       if (!listForHandlers.length && !candidateRowsFromSection.length && !fullCandidates.length) return;
-      data.candidates = listForHandlers.slice();
+      if (!activePayeProjectionPresent) data.candidates = listForHandlers.slice();
+      data.active_paye_schedule_rows = activePayeProjectionPresent ? listForHandlers.slice() : data.active_paye_schedule_rows;
       data.paye_candidates = payeListForHandlers.slice();
       data.payeCandidates = payeListForHandlers.slice();
       if (batch && typeof batch === 'object' && !Array.isArray(batch)) {
-        batch.candidates = listForHandlers.slice();
+        if (!activePayeProjectionPresent) batch.candidates = listForHandlers.slice();
+        batch.active_paye_schedule_rows = activePayeProjectionPresent ? listForHandlers.slice() : batch.active_paye_schedule_rows;
         batch.paye_candidates = payeListForHandlers.slice();
         batch.payeCandidates = payeListForHandlers.slice();
       }
-      child.candidates = listForHandlers.slice();
+      if (!activePayeProjectionPresent) child.candidates = listForHandlers.slice();
+      child.activePayeScheduleRows = activePayeProjectionPresent ? listForHandlers.slice() : child.activePayeScheduleRows;
       child.paye_candidates = payeListForHandlers.slice();
       child.payeCandidates = payeListForHandlers.slice();
     } catch {}
@@ -88914,6 +89051,7 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
   }
 
   const candidates = candidatesAll.filter((candidate) => {
+    if (activePayeProjectionPresent) return candidate?.include_in_active_paye_schedule === true || candidate?.active_projection_row === true;
     const payeState = String(candidate?.paye_state || '').trim();
     if (payeState) return true;
     const summary = (typeof bankingNormalizeCandidateDeductionsSummary === 'function') ? bankingNormalizeCandidateDeductionsSummary(candidate) : null;
