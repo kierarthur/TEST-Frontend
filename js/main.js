@@ -51089,6 +51089,24 @@ const collectPreviewRowIds = (previewLike) => {
     return rowKey.startsWith('correction-chain:');
   };
 
+  const isAutomaticCorrectionCarrierLine = (obj) => {
+    if (!isCanonicalCorrectionCarrierLine(obj)) return false;
+    const nested = getNestedLinePayload(obj);
+    const component = isPlainObject(obj?.correction_chain_component)
+      ? obj.correction_chain_component
+      : (isPlainObject(nested?.correction_chain_component)
+          ? nested.correction_chain_component
+          : {});
+    const resolutionRequired = component.resolution_required ?? component.resolutionRequired;
+    const caseNeedsResolution =
+      obj?.case_needs_resolution ??
+      obj?.caseNeedsResolution ??
+      nested?.case_needs_resolution ??
+      nested?.caseNeedsResolution;
+    const isExplicitFalse = (value) => value === false || upperTrim(value) === 'FALSE';
+    return isExplicitFalse(resolutionRequired) && isExplicitFalse(caseNeedsResolution);
+  };
+
   const getParentSectionAdvisory = (obj) => {
     const section = getLinePresentationSection(obj);
     if (section === 'READY_TO_PAY' && asBool(obj?.is_partially_ready)) return 'Some segments are blocked.';
@@ -51252,6 +51270,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
 
   const isResolvedFinanceLine = (line, renderContextSection = '') => {
     if (!line || typeof line !== 'object') return false;
+    if (isAutomaticCorrectionCarrierLine(line)) return false;
     const section = upperTrim(renderContextSection) || getLinePresentationSection(line);
     if (section !== 'READY_TO_PAY') return false;
     const family = getFinanceResolutionFamily(line);
@@ -51350,6 +51369,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
   };
 
   const resolvedRateBadgeHtml = (line, renderContextSection = '') => {
+    if (isAutomaticCorrectionCarrierLine(line)) return '<div><span class="pill" style="display:inline-block;background:#1d4ed8;color:#fff;border-color:#1e40af;font-weight:800;margin-bottom:4px;">Correction</span></div>';
     if (isResolvedFinanceLine(line, renderContextSection)) return '<div><span class="pill" style="display:inline-block;background:#b91c1c;color:#fff;border-color:#991b1b;font-weight:800;margin-bottom:4px;">RESOLVED</span></div>';
     const nested = getNestedLinePayload(line);
     const summary = isPlainObject(line?.case_resolution_summary)
@@ -51414,6 +51434,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
   };
 
   const resolvedRateCancelActionHtml = (line, renderContextSection = '') => {
+    if (isAutomaticCorrectionCarrierLine(line)) return '';
     const financeClearHtml = financeCancelResolveActionHtml(line, renderContextSection);
     if (financeClearHtml) return financeClearHtml;
     const nested = getNestedLinePayload(line);
@@ -53122,7 +53143,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                   <td class="mini" style="white-space:nowrap;"${correctionCarrier ? ` title="This correction can represent several source and replacement records, so no single break applies."` : ''}>${enc(breakLabel)}</td>
                   <td class="mono" style="text-align:right;white-space:nowrap;">
                     <div>${payableAmountHtml}</div>
-                    ${correctionCarrier ? `<div class="mini" style="opacity:.72;">Resolved correction</div>` : ''}
+                    ${correctionCarrier ? `<div class="mini" style="opacity:.72;">Correction</div>` : ''}
                   </td>
                   <td class="mini" style="white-space:nowrap;">${enc(snoozeState)}</td>
                   <td style="white-space:nowrap;">${actionHtml || `<span class="mini" style="opacity:.7;">—</span>`}</td>

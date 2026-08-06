@@ -311,11 +311,11 @@ test('shows canonical correction date and correction-specific actions in a Ready
 
   const breakdownRow = readyHost
     .locator('tr[data-preview-row-id="50000000-0000-4000-8000-000000000001"]')
-    .filter({ hasText: 'Resolved correction' })
+    .filter({ hasText: 'Correction' })
     .last();
   await expect(breakdownRow).toContainText('30/06/2026');
   await expect(breakdownRow).toContainText('Correction date');
-  await expect(breakdownRow).toContainText('Resolved correction');
+  await expect(breakdownRow).toContainText('Correction');
   await expect(breakdownRow.getByRole('button', { name: 'Snooze correction' })).toBeVisible();
   await expect(breakdownRow).not.toContainText('Snooze segment');
   expect(unexpectedProductionBackendRequests).toEqual([]);

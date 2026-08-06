@@ -82,7 +82,16 @@ test('canonical correction breakdown uses its dated key and correction-specific 
     /const canonicalWorkDate = getLineKeyType\(line\) === 'TS_DAY' \? trimStr\(getLineKeyValue\(line\)\) : ''/
   );
   assert.match(main, /Correction date/);
-  assert.match(main, /Resolved correction/);
+  assert.match(
+    main,
+    /const isAutomaticCorrectionCarrierLine = \(obj\) => \{[\s\S]*?isExplicitFalse\(resolutionRequired\)[\s\S]*?isExplicitFalse\(caseNeedsResolution\)/
+  );
+  assert.match(main, />Correction<\/span>/);
+  assert.doesNotMatch(main, /Resolved correction/);
+  assert.match(
+    main,
+    /const resolvedRateCancelActionHtml = \(line, renderContextSection = ''\) => \{[\s\S]*?if \(isAutomaticCorrectionCarrierLine\(line\)\) return '';/
+  );
   assert.match(main, /Snooze correction/);
 });
 
