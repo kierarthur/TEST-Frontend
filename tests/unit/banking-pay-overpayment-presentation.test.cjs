@@ -50,7 +50,7 @@ function installHarness() {
     fmtMoney: (value) => Number(value || 0).toFixed(2),
     resolvedRateBadgeHtml: () => ''
   };
-  vm.runInNewContext(`${helperSource}\nthis.__overpaymentHelpers = { getOverpaymentRecoveryPresentation, getManualDebtRecoveryPresentation, buildOverpaymentRecoveryDisplayLines, buildOverpaymentRecoverySectionDisplayState, getPreviewLineDisplayAmount, renderPreviewLineTypeHtml, renderPreviewLineAmountHtml };`, context, {
+  vm.runInNewContext(`${helperSource}\nthis.__overpaymentHelpers = { getOverpaymentRecoveryPresentation, getManualDebtRecoveryPresentation, buildOverpaymentRecoveryDisplayLines, buildOverpaymentRecoverySectionDisplayState, getPreviewLineDisplayAmount, getCaseResolutionDisplayAmount, renderPreviewLineTypeHtml, renderPreviewLineAmountHtml };`, context, {
     filename: 'banking-pay-overpayment-presentation-helpers.js'
   });
   return context.__overpaymentHelpers;
@@ -80,6 +80,52 @@ test('shows zero recoverable now and explains the full outstanding recovery sepa
   assert.match(helpers.renderPreviewLineTypeHtml(eduardoRecoveryRow), /No available funds to recover this yet\./);
   assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), />0\.00</);
   assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), /No recovery can be made this pay run from the total outstanding amount of 15\.84\./);
+});
+
+test('shows the unresolved correction amount in Cases / Resolutions without treating it as allocatable pay', () => {
+  const helpers = installHarness();
+  const unresolvedCorrection = {
+    line_type: 'TIMESHEET_PAYMENT',
+    presentation_section: 'CASES_RESOLUTIONS',
+    presentation_reason: 'PAY_METHOD_RESOLUTION_REQUIRED',
+    amount_ex_vat: '0.00',
+    section_amount_ex_vat: '0.00',
+    nominal_due_amount_ex_vat: '67.50',
+    case_resolution_summary: {
+      case_needs_resolution: true,
+      unresolved_taxable_amount_ex_vat: '67.50',
+      blocked_case_amount_ex_vat: '0.00',
+      safe_amount_ex_vat: '0.00'
+    },
+    selection_allowed: false,
+    draftable: false,
+    is_ready_for_draft: false
+  };
+
+  assert.equal(helpers.getCaseResolutionDisplayAmount(unresolvedCorrection), 67.5);
+  assert.match(
+    helpers.renderPreviewLineAmountHtml(unresolvedCorrection, 'CASES_RESOLUTIONS'),
+    />67\.50</
+  );
+  assert.equal(unresolvedCorrection.amount_ex_vat, '0.00');
+  assert.equal(unresolvedCorrection.selection_allowed, false);
+  assert.equal(unresolvedCorrection.draftable, false);
+});
+
+test('keeps an ordinary zero-value case at zero when no unresolved amount exists', () => {
+  const helpers = installHarness();
+  const zeroCase = {
+    line_type: 'TIMESHEET_PAYMENT',
+    presentation_section: 'CASES_RESOLUTIONS',
+    amount_ex_vat: '0.00',
+    case_resolution_summary: {
+      case_needs_resolution: false,
+      unresolved_taxable_amount_ex_vat: '0.00'
+    }
+  };
+
+  assert.equal(helpers.getCaseResolutionDisplayAmount(zeroCase), 0);
+  assert.match(helpers.renderPreviewLineAmountHtml(zeroCase, 'CASES_RESOLUTIONS'), />0\.00</);
 });
 
 test('shows scheduled manual-debt recovery separately from a zero current-run recovery', () => {

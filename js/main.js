@@ -52493,6 +52493,34 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     return getLineSectionAmount(line);
   };
 
+  const getCaseResolutionDisplayAmount = (line) => {
+    const ordinaryAmount = firstFinitePreviewNumber(getLineSectionAmount(line));
+    if (ordinaryAmount !== null && Math.round(Math.abs(ordinaryAmount) * 100) > 0) {
+      return ordinaryAmount;
+    }
+
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const unresolvedAmount = firstFinitePreviewNumber(
+      summary?.unresolved_taxable_amount_ex_vat,
+      summary?.unresolvedTaxableAmountExVat,
+      line?.nominal_due_amount_ex_vat,
+      line?.nominalDueAmountExVat,
+      nested?.nominal_due_amount_ex_vat,
+      nested?.nominalDueAmountExVat,
+      summary?.blocked_case_amount_ex_vat,
+      summary?.blockedCaseAmountExVat,
+      summary?.safe_amount_ex_vat,
+      summary?.safeAmountExVat
+    );
+    if (unresolvedAmount !== null && Math.round(Math.abs(unresolvedAmount) * 100) > 0) {
+      return Math.round(Math.abs(unresolvedAmount) * 100) / 100;
+    }
+    return ordinaryAmount ?? 0;
+  };
+
   const renderPreviewLineTypeHtml = (line) => {
     const label = trimStr(line?.line_type || 'Preview line').replace(/_/g, ' ');
     const recovery = getOverpaymentRecoveryPresentation(line);
@@ -52516,7 +52544,10 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     }
     const recovery = getOverpaymentRecoveryPresentation(line);
     if (!recovery) {
-      return `${resolvedRateBadgeHtml(line, renderContextSection)}<div>${enc(fmtMoney(getLineSectionAmount(line)))}</div>`;
+      const displayAmount = upperTrim(renderContextSection) === 'CASES_RESOLUTIONS'
+        ? getCaseResolutionDisplayAmount(line)
+        : getLineSectionAmount(line);
+      return `${resolvedRateBadgeHtml(line, renderContextSection)}<div>${enc(fmtMoney(displayAmount))}</div>`;
     }
     const recoverableThisRun = Math.abs(recovery.recoverable_this_run);
     const recoverySummary = recoverableThisRun > 0
@@ -56334,7 +56365,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const displayGroups = asArray(groups).filter((group) => isPlainObject(group));
   const matchedCaseCount = displayGroups.reduce((acc, group) => acc + asArray(group.entries).length, 0);
   const totalCases = Math.max(displayLines.length, matchedCaseCount);
-  const totalCaseAmount = Math.round(displayLines.reduce((acc, line) => acc + toNum(getLineSectionAmount(line), 0), 0) * 100) / 100;
+  const totalCaseAmount = Math.round(displayLines.reduce((acc, line) => acc + toNum(getCaseResolutionDisplayAmount(line), 0), 0) * 100) / 100;
   const candidateIds = new Set();
   for (const line of displayLines) {
     const candidateId = trimStr(line?.candidate_id);
