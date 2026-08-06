@@ -36,11 +36,14 @@ test('Stage 3 consumes only server-returned candidate tokens and available actio
   assert.equal(row.selectable, true);
   const blocked = api.normalise({ candidate_token: 'candidate-2', payment_display_state: 'ACTIVE', available_actions: [], pre_provider_cancel_eligible: true }, state);
   assert.equal(blocked.selectable, false);
+  const legacyAliasOnly = api.normalise({ candidate_token: 'candidate-3', available_actions: [], eligible_action_codes: ['CANCEL_PAYMENT'] }, state);
+  assert.equal(legacyAliasOnly.selectable, false);
+  assert.deepEqual(Array.from(legacyAliasOnly.available_actions), []);
 });
 
 test('explicit selection emits the exact Stage 2 contract with no filter authority', () => {
   const api = stage3Context();
-  const state = { stage3Enabled: true, stage3SnapshotToken: 'snapshot-1', stage3SortKey: 'STATUS', stage3SortDirection: 'ASC' };
+  const state = { stage3Enabled: true, stage3SnapshotToken: 'filtered-snapshot', stage3ExplicitSnapshotToken: 'explicit-snapshot-1', stage3SortKey: 'STATUS', stage3SortDirection: 'ASC' };
   const selection = api.ensure(state);
   selection.explicitCandidateTokens.add('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
   selection.explicitCandidateTokens.add('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
@@ -51,13 +54,14 @@ test('explicit selection emits the exact Stage 2 contract with no filter authori
   assert.equal(payload.context, 'CURRENT_PAYMENT_STATUS');
   assert.equal(payload.contract_version, 1);
   assert.equal(payload.mode, 'EXPLICIT');
+  assert.equal(payload.snapshot_token, 'explicit-snapshot-1');
   assert.deepEqual(Array.from(payload.explicit_candidate_tokens), ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']);
   assert.equal(Object.hasOwn(payload, 'filter_json'), false);
 });
 
 test('all-matching selection freezes filter, action, snapshot and exclusions', () => {
   const api = stage3Context();
-  const state = { stage3Enabled: true, stage3SnapshotToken: 'snapshot-2', stage3Filter: { status: 'NOT_PAID' }, stage3SortKey: 'AMOUNT', stage3SortDirection: 'DESC' };
+  const state = { stage3Enabled: true, stage3SnapshotToken: 'snapshot-2', stage3Filter: { status: 'NOT_PAID', action: 'RELEASE_FAILED_PAYMENT' }, stage3SortKey: 'AMOUNT', stage3SortDirection: 'DESC' };
   const selection = api.ensure(state);
   selection.mode = 'ALL_MATCHING';
   selection.requestedAction = 'RELEASE_FAILED_PAYMENT';
@@ -65,7 +69,8 @@ test('all-matching selection freezes filter, action, snapshot and exclusions', (
   const payload = api.build(state, 'RELEASE_FAILED_PAYMENT');
   assert.equal(payload.requested_action, 'NO_MONEY_RELEASE');
   assert.equal(payload.filter_json.action, 'RELEASE_FAILED_PAYMENT');
-  assert.equal(payload.filter_json.actionable_only, true);
+  assert.equal(payload.filter_json.status, 'NOT_PAID');
+  assert.equal(payload.filter_json.actionable_only, undefined);
   assert.deepEqual(Array.from(payload.excluded_candidate_tokens), ['cccccccc-cccc-4ccc-8ccc-cccccccccccc']);
   assert.equal(Object.hasOwn(payload, 'explicit_candidate_tokens'), false);
 });
@@ -101,6 +106,10 @@ test('progress modal obeys server-safe action and polling contracts', () => {
   assert.match(modal, /AUTHORISE/);
   assert.match(modal, /REJECT/);
   assert.match(modal, /REAUTHORISE_REMAINING/);
+  assert.match(modal, /USE_GOLDEN_KEY/);
+  assert.match(modal, /selected_amount_pence/);
+  assert.match(modal, /remaining_amount_pence/);
+  assert.match(modal, /<progress/);
   assert.doesNotMatch(modal, /JSON\.stringify\(status|provider_event_id|plan_hash|selection_hash/);
   const polling = slice('function scheduleBankingPayCancellationProgressPoll', 'async function openBankingPayCancellationProgressModal');
   assert.match(polling, /poll_after_ms/);
@@ -110,8 +119,51 @@ test('progress modal obeys server-safe action and polling contracts', () => {
 
 test('Stage 3 performs one plan request and never loops candidate mutations', () => {
   const handlers = slice('function installBankingPayStage3Handlers', 'function renderBankingPaymentIssuePanel');
-  assert.match(handlers, /await bankingPayPaymentCorrectionPlan\(payBatchId, prepared\)/);
+  assert.match(handlers, /await bankingPayPaymentCorrectionPlan\(payBatchId, prepared, \{ reason: confirmation\.reason \}\)/);
+  assert.match(handlers, /openBankingPayStage3CancellationConfirmation/);
+  assert.match(handlers, /openBankingReauthModal\(\{ purpose: 'PAYMENT_REVERSAL' \}\)/);
   assert.match(handlers, /openBankingPayCancellationProgressModal/);
   assert.doesNotMatch(handlers, /for\s*\([^)]*candidate|forEach\([^)]*(correctionPlan|correctionStart)|Promise\.all/);
   assert.doesNotMatch(handlers, /bankingPayPaymentCorrectionProcess/);
+});
+
+test('multi-row selections never expose payment-status resolution', () => {
+  const api = stage3Context();
+  const state = {};
+  const selection = api.ensure(state);
+  for (const token of ['candidate-1', 'candidate-2']) {
+    selection.explicitCandidateTokens.add(token);
+    selection.tokenActions.set(token, ['RESOLVE_PAYMENT_STATUS']);
+  }
+  assert.deepEqual(Array.from(api.selectedActions(state)), []);
+});
+
+test('active Overview and PAYE projections remain complete above 100 rows', () => {
+  const code = slice('function buildBankingPayCancellationActiveProjection', 'function applyBankingPayCancellationActiveProjection');
+  const context = { Number, Array, Object, String, Intl };
+  vm.runInNewContext(`${code}\nthis.build = buildBankingPayCancellationActiveProjection;`, context);
+  const rows = Array.from({ length: 150 }, (_, index) => ({
+    candidate_token: `candidate-${index + 1}`,
+    include_in_active_overview: true,
+    include_in_active_paye_schedule: true
+  }));
+  const projection = context.build({
+    rows,
+    projection_complete: true,
+    active_overview_candidate_count: 150,
+    active_paye_schedule_line_count: 150
+  });
+  assert.equal(projection.active_overview_rows.length, 150);
+  assert.equal(projection.active_paye_schedule_rows.length, 150);
+  assert.equal(projection.active_overview_projection_authoritative, true);
+  assert.equal(projection.active_paye_schedule_projection_authoritative, true);
+});
+
+test('executed cancellation sends one shared reason and top-level requested action', () => {
+  const wrapper = slice('async function bankingPayPaymentCorrectionPlan', 'async function bankingPayPaymentCorrectionStatus');
+  assert.match(wrapper, /requested_action: upper\(selection\?\.requested_action\)/);
+  assert.match(wrapper, /if \(reason\) body\.reason = reason/);
+  const confirmation = slice('async function openBankingPayStage3CancellationConfirmation', 'async function bankingPayPaymentCorrectionReauth');
+  assert.match(confirmation, /Reason for cancellation/);
+  assert.match(confirmation, /Enter one shared reason/);
 });

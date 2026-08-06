@@ -34,17 +34,21 @@ test('financial completion and Workbench freshness are displayed independently',
 
 test('financial completion refreshes Overview, Current Payment Status and PAYE authority without candidate fan-out', () => {
   const refresh = slice('async function refreshBankingPayCancellationFinancialViews', 'function scheduleBankingPayCancellationProgressPoll');
+  const completeProjection = slice('async function loadCompleteBankingPayCancellationProjectionStatus', 'function buildBankingPayCancellationActiveProjection');
   assert.match(refresh, /bankingPayBatchGet/);
-  assert.match(refresh, /bankingPayPaymentStatusPage/);
+  assert.match(refresh, /loadCompleteBankingPayCancellationProjectionStatus/);
+  assert.match(completeProjection, /bankingPayPaymentStatusPage/);
   assert.match(refresh, /bankingPayBatchesList/);
   assert.match(refresh, /bankingRerender/);
   assert.match(source, /active_paye_schedule_line_count/);
-  assert.match(refresh, /limit: 100/);
+  assert.match(completeProjection, /limit: 100/);
+  assert.match(completeProjection, /rows\.length < 10000/);
+  assert.match(completeProjection, /projection_complete: true/);
   assert.match(refresh, /applyBankingPayCancellationActiveProjection/);
   assert.ok(refresh.indexOf('applyBankingPayCancellationActiveProjection') < refresh.indexOf("if (typeof bankingRerender === 'function')"));
   assert.ok(refresh.indexOf("if (typeof bankingRerender === 'function')") < refresh.indexOf('await bankingPayBatchesList'));
   assert.match(refresh, /state\.financialRefreshDone = true;\s*}\s*$/);
-  assert.doesNotMatch(refresh, /for\s*\([^)]*candidate|Promise\.all/);
+  assert.doesNotMatch(`${refresh}\n${completeProjection}`, /for\s*\([^)]*candidate|Promise\.all/);
 });
 
 test('terminal refresh failures retain a bounded server-owned retry', () => {

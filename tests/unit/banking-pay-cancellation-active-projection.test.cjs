@@ -49,6 +49,7 @@ test('active cancellation projection removes cancelled lines while retaining his
     original_overview_amount_pence: 6000,
     active_paye_schedule_line_count: 1,
     active_paye_schedule_amount_pence: 1000,
+    projection_complete: true,
     latest_correction_request: { id: 'request-1' },
     rows: [
       { pay_batch_candidate_id: 'a', include_in_active_overview: true, include_in_active_paye_schedule: true, active_payment_amount_pence: 1000 },
@@ -81,6 +82,7 @@ test('all-cancelled status produces an authoritative empty active schedule witho
     original_overview_amount_pence: 1000,
     active_paye_schedule_line_count: 0,
     active_paye_schedule_amount_pence: 0,
+    projection_complete: true,
     latest_correction_request: { id: 'request-2' },
     rows: [{ pay_batch_candidate_id: 'a', include_in_active_overview: false, include_in_active_paye_schedule: false }]
   }, 'batch-2');
@@ -103,16 +105,22 @@ test('Overview and PAYE renderers prefer dedicated active projection rows includ
   assert.match(paye, /if \(!activePayeProjectionPresent\) data\.candidates/);
 });
 
-test('batch modal load performs one bounded status read before its first authoritative render', () => {
+test('batch modal load completes sequential bounded status paging before its first authoritative render', () => {
   const start = source.indexOf('const loadBatch = async (opts = {}) =>');
   const end = source.indexOf('\n  const firstRefreshText', start);
   assert.ok(start >= 0 && end > start);
   const loadBatch = source.slice(start, end);
-  assert.match(loadBatch, /bankingPayPaymentStatusPage\(id, \{ limit: 100/);
+  assert.match(loadBatch, /loadCompleteBankingPayCancellationProjectionStatus\(id\)/);
   assert.match(loadBatch, /applyBankingPayCancellationActiveProjection/);
   const loadedAt = loadBatch.indexOf('if (!await applyLoadedData(obj)) return;');
   const hydratedAt = loadBatch.indexOf('await hydrateCancellationActiveProjection()', loadedAt);
   const renderedAt = loadBatch.indexOf('await rerenderChild()', hydratedAt);
   assert.ok(loadedAt >= 0 && hydratedAt > loadedAt && renderedAt > hydratedAt);
   assert.doesNotMatch(loadBatch, /for\s*\([^)]*candidate|Promise\.all/);
+
+  const completeProjection = functionBody('loadCompleteBankingPayCancellationProjectionStatus');
+  assert.match(completeProjection, /bankingPayPaymentStatusPage\(id, \{/);
+  assert.match(completeProjection, /limit: 100/);
+  assert.match(completeProjection, /rows\.length < 10000/);
+  assert.doesNotMatch(completeProjection, /Promise\.all/);
 });
