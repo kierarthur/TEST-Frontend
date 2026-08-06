@@ -23190,10 +23190,12 @@ function renderBankingPayCancellationProgressModal() {
   const status = state.status && typeof state.status === 'object' ? state.status : {};
   const requestStatus = String(status.request_status || '').trim().toUpperCase();
   const progressStage = String(status.progress_stage || (state.error ? 'FAILED' : 'PLANNING')).trim().toUpperCase();
+  const requestKind = String(status.request_kind || 'CANCEL_PAYMENT').trim().toUpperCase();
+  const processingLabel = requestKind === 'RELEASE_FAILED_PAYMENT' ? 'Releasing failed payments' : 'Cancelling payments';
   const stageLabels = new Map([
     ['PLANNING', 'Preparing payment selection'], ['REVIEW', 'Ready to review'],
     ['REAUTHENTICATION', 'Verifying identity'], ['AUTHORISATION', 'Awaiting approval'],
-    ['EXPANDING', 'Preparing cancellation work'], ['PROCESSING', 'Cancelling payments'],
+    ['EXPANDING', requestKind === 'RELEASE_FAILED_PAYMENT' ? 'Preparing failed payment release' : 'Preparing cancellation work'], ['PROCESSING', processingLabel],
     ['FINALISING', 'Updating batch totals'], ['REFRESHING_AVAILABILITY', 'Refreshing payment availability'],
     ['COMPLETE', 'Cancellation complete'], ['COMPLETE_WITH_BLOCKERS', 'Complete with payments needing review'],
     ['BLOCKED', 'No payment was cancelled'], ['FAILED', 'Cancellation safely stopped'],
@@ -23206,7 +23208,6 @@ function renderBankingPayCancellationProgressModal() {
   const terminal = status.terminal === true || status.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(requestStatus);
   const availableActions = Array.isArray(status.available_actions) ? status.available_actions.map((value) => String(value || '').trim().toUpperCase()) : [];
   const planningReady = availableActions.includes('REAUTHENTICATE');
-  const requestKind = String(status.request_kind || 'CANCEL_PAYMENT').trim().toUpperCase();
   const requestKindLabel = requestKind === 'DRAFT_CANCEL' ? 'Draft payment cancellation'
     : (requestKind === 'RELEASE_FAILED_PAYMENT' ? 'Failed payment release' : 'Payment cancellation');
   const message = state.error || status.user_message || status.message || (planningReady
@@ -24281,12 +24282,15 @@ function refreshBankingPayStage3SelectedRows(correctionState) {
 async function resolveBankingPayStage3PaymentStatus(row) {
   const source = row && typeof row === 'object' ? row : {};
   const { payBatchId } = getBankingPayStage3Context();
-  const operationId = String(source.operation_id || source.banking_pay_operation_id || '').trim();
-  const transferId = String(source.pay_bank_transfer_id || (Array.isArray(source.pay_bank_transfer_ids) ? source.pay_bank_transfer_ids[0] : '') || '').trim();
-  const instructionScopeIds = Array.from(new Set((Array.isArray(source.instruction_scope_ids) ? source.instruction_scope_ids : (Array.isArray(source.pay_bank_transfer_ids) ? source.pay_bank_transfer_ids : [transferId])).map((value) => String(value || '').trim()).filter(Boolean)));
-  const candidateId = String(source.pay_batch_candidate_id || source.candidate_id || '').trim();
-  const snapshotToken = String(source.snapshot_token || getBankingPayStage3Context().correctionState.stage3SnapshotToken || '').trim();
-  if (!operationId || !transferId || !instructionScopeIds.length || !snapshotToken) throw new Error('The bank-outcome evidence is incomplete. Refresh Current Payment Status and try again.');
+  const resolutionContext = source.resolution_context && typeof source.resolution_context === 'object' && !Array.isArray(source.resolution_context)
+    ? source.resolution_context
+    : null;
+  if (!resolutionContext || Number(resolutionContext.version) !== 1
+      || !String(resolutionContext.candidate_token || '').trim()
+      || !String(resolutionContext.active_batch_scope_hash || '').trim()
+      || !String(resolutionContext.context_token || '').trim()) {
+    throw new Error('The bank-outcome evidence is incomplete. Refresh Current Payment Status and try again.');
+  }
   const decision = await new Promise((resolve) => {
     const root = document.createElement('div');
     root.setAttribute('role', 'dialog');
@@ -24308,8 +24312,13 @@ async function resolveBankingPayStage3PaymentStatus(row) {
   if (!reauthToken) return false;
   const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(payBatchId)}/payment-status/resolve`), {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-      common_outcome: decision.outcome, operation_id: operationId, instruction_scope_ids: instructionScopeIds,
-      pay_bank_transfer_id: transferId, candidate_id: candidateId || null, snapshot_token: snapshotToken,
+      common_outcome: decision.outcome,
+      resolution_context: {
+        version: 1,
+        candidate_token: String(resolutionContext.candidate_token).trim(),
+        active_batch_scope_hash: String(resolutionContext.active_batch_scope_hash).trim(),
+        context_token: String(resolutionContext.context_token).trim()
+      },
       evidence_reference: decision.evidenceReference, reauth_token: reauthToken
     })
   });

@@ -23,7 +23,8 @@ function stage3Context() {
     Set, Map, Array, Object, String, Number, Math, Date, Error, AbortController,
     bankingPayPaymentStatusPage: async () => ({}), bankingRerender: async () => {}
   };
-  vm.runInNewContext(`${code}\nthis.api = { canonical: bankingPayStage3CanonicalStatusAction, ensure: ensureBankingPayStage3SelectionState, normalise: normaliseBankingPayStage3StatusRow, apply: applyBankingPayStage3StatusPage, selectedActions: bankingPayStage3SelectedActions, build: buildBankingPayStage3Selection };`, context);
+  vm.runInNewContext(`${code}\nthis.api = { canonical: bankingPayStage3CanonicalStatusAction, ensure: ensureBankingPayStage3SelectionState, normalise: normaliseBankingPayStage3StatusRow, apply: applyBankingPayStage3StatusPage, load: loadBankingPayStage3StatusPage, selectedActions: bankingPayStage3SelectedActions, build: buildBankingPayStage3Selection }; this.setStatusPage = (value) => { bankingPayPaymentStatusPage = value; };`, context);
+  context.api.setStatusPage = context.setStatusPage;
   return context.api;
 }
 
@@ -94,6 +95,31 @@ test('All loading is sequential, snapshot-bound and capped at 10,000 candidates'
   assert.doesNotMatch(loader, /Promise\.all|candidate.*authFetch|forEach\([^)]*bankingPayPaymentStatusPage/);
 });
 
+test('exactly 10,000 rows complete in 100 sequential pages without a false overflow', async () => {
+  const api = stage3Context();
+  let callCount = 0;
+  api.setStatusPage(async () => {
+    const pageIndex = callCount++;
+    return {
+      ok: true,
+      snapshot_token: 'stable-snapshot',
+      explicit_snapshot_token: 'explicit-snapshot',
+      sort_key: 'STATUS',
+      sort_direction: 'ASC',
+      page_size: 100,
+      rows: Array.from({ length: 100 }, (_, offset) => ({
+        candidate_token: `candidate-${pageIndex * 100 + offset + 1}`,
+        available_actions: []
+      })),
+      next_cursor_json: pageIndex < 99 ? { page: pageIndex + 1 } : null
+    };
+  });
+  const result = await api.load({ all: true, pageSize: 'ALL', silent: true, resetHistory: true });
+  assert.equal(callCount, 100);
+  assert.equal(result.rows.length, 10000);
+  assert.equal(result.next_cursor_json, null);
+});
+
 test('progress modal obeys server-safe action and polling contracts', () => {
   const modal = slice('function renderBankingPayCancellationProgressModal', 'function buildBankingPayCancellationActiveProjection');
   assert.match(modal, /status\.progress_stage/);
@@ -110,11 +136,23 @@ test('progress modal obeys server-safe action and polling contracts', () => {
   assert.match(modal, /selected_amount_pence/);
   assert.match(modal, /remaining_amount_pence/);
   assert.match(modal, /<progress/);
+  assert.match(modal, /Releasing failed payments/);
   assert.doesNotMatch(modal, /JSON\.stringify\(status|provider_event_id|plan_hash|selection_hash/);
   const polling = slice('function scheduleBankingPayCancellationProgressPoll', 'async function openBankingPayCancellationProgressModal');
   assert.match(polling, /poll_after_ms/);
   assert.match(polling, /Math\.min\(5000, Math\.max\(1000/);
   assert.match(polling, /state\.abortController/);
+});
+
+test('payment-status resolution sends only the bounded server context and user evidence', () => {
+  const resolver = slice('async function resolveBankingPayStage3PaymentStatus', 'function installBankingPayStage3Handlers');
+  assert.match(resolver, /source\.resolution_context/);
+  assert.match(resolver, /candidate_token/);
+  assert.match(resolver, /active_batch_scope_hash/);
+  assert.match(resolver, /context_token/);
+  assert.match(resolver, /evidence_reference/);
+  assert.match(resolver, /reauth_token/);
+  assert.doesNotMatch(resolver, /source\.operation_id|source\.banking_pay_operation_id|source\.pay_bank_transfer_id|instruction_scope_ids:/);
 });
 
 test('Stage 3 performs one plan request and never loops candidate mutations', () => {
