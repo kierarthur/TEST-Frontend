@@ -22777,13 +22777,20 @@ async function bankingPayPaymentStatusPage(payBatchId, options = {}) {
   const id = String(payBatchId || '').trim();
   if (!id) throw new Error('Pay batch ID is required.');
   const source = options && typeof options === 'object' ? options : {};
+  const requestedLimit = Number(source.limit || source.page_size || source.pageSize || 25);
+  const allowedLimits = new Set([25, 50, 75, 100]);
+  const limit = allowedLimits.has(requestedLimit) ? requestedLimit : 25;
+  const sortKey = String(source.sort_key || source.sortKey || 'STATUS').trim().toUpperCase();
+  const sortDirection = String(source.sort_direction || source.sortDirection || 'ASC').trim().toUpperCase();
+  if (!['STATUS', 'CANDIDATE', 'AMOUNT'].includes(sortKey)) throw new Error('Unsupported Current Payment Status sort.');
+  if (!['ASC', 'DESC'].includes(sortDirection)) throw new Error('Unsupported Current Payment Status sort direction.');
   const params = new URLSearchParams();
-  params.set('limit', String(Math.min(100, Math.max(1, Number(source.limit || 25)))));
-  params.set('sort_key', String(source.sort_key || source.sortKey || 'STATUS'));
-  params.set('sort_direction', String(source.sort_direction || source.sortDirection || 'ASC'));
+  params.set('limit', String(limit));
+  params.set('sort_key', sortKey);
+  params.set('sort_direction', sortDirection);
   if (source.filter && typeof source.filter === 'object') params.set('filter', JSON.stringify(source.filter));
   if (source.cursor && typeof source.cursor === 'object') params.set('cursor', JSON.stringify(source.cursor));
-  const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/payment-status?${params.toString()}`));
+  const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/payment-status?${params.toString()}`), { signal: source.signal });
   const text = await response.text().catch(() => '');
   let payload = null;
   try { payload = text ? JSON.parse(text) : null; } catch {}
@@ -22791,6 +22798,199 @@ async function bankingPayPaymentStatusPage(payBatchId, options = {}) {
   return payload && typeof payload === 'object' ? payload : {};
 }
 
+const BANKING_PAY_STAGE3_STATUS_ACTIONS = Object.freeze(['DRAFT_CANCEL', 'CANCEL_PAYMENT', 'RELEASE_FAILED_PAYMENT', 'RESOLVE_PAYMENT_STATUS']);
+
+function bankingPayStage3CanonicalStatusAction(value) {
+  const action = String(value == null ? '' : value).trim().toUpperCase();
+  if (['PRE_BANK_CANCEL', 'PRE_PROVIDER_CANCEL_AND_RECALCULATE'].includes(action)) return 'CANCEL_PAYMENT';
+  if (['NO_MONEY_RELEASE', 'NO_MONEY_UNWIND', 'NO_MONEY_UNWIND_AND_RECALCULATE'].includes(action)) return 'RELEASE_FAILED_PAYMENT';
+  return BANKING_PAY_STAGE3_STATUS_ACTIONS.includes(action) ? action : '';
+}
+
+function bankingPayStage3PlanningAction(value) {
+  const action = bankingPayStage3CanonicalStatusAction(value);
+  return action === 'RELEASE_FAILED_PAYMENT' ? 'NO_MONEY_RELEASE' : action;
+}
+
+function bankingPayStage3NewIdempotencyKey() {
+  try { if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID(); } catch {}
+  return `payment-correction-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function bankingPayStage3Set(value) {
+  return value instanceof Set ? value : new Set(Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : []);
+}
+
+function ensureBankingPayStage3SelectionState(correctionState) {
+  const state = correctionState && typeof correctionState === 'object' ? correctionState : {};
+  state.stage3Selection = state.stage3Selection && typeof state.stage3Selection === 'object' ? state.stage3Selection : {};
+  const selection = state.stage3Selection;
+  selection.mode = String(selection.mode || 'EXPLICIT').toUpperCase() === 'ALL_MATCHING' ? 'ALL_MATCHING' : 'EXPLICIT';
+  selection.explicitCandidateTokens = bankingPayStage3Set(selection.explicitCandidateTokens);
+  selection.excludedCandidateTokens = bankingPayStage3Set(selection.excludedCandidateTokens);
+  selection.tokenActions = selection.tokenActions instanceof Map ? selection.tokenActions : new Map();
+  selection.requestedAction = bankingPayStage3CanonicalStatusAction(selection.requestedAction);
+  selection.idempotencyKey = String(selection.idempotencyKey || bankingPayStage3NewIdempotencyKey());
+  return selection;
+}
+
+function resetBankingPayStage3Selection(correctionState) {
+  const state = correctionState && typeof correctionState === 'object' ? correctionState : {};
+  state.stage3Selection = {
+    mode: 'EXPLICIT', explicitCandidateTokens: new Set(), excludedCandidateTokens: new Set(),
+    tokenActions: new Map(), requestedAction: '', idempotencyKey: bankingPayStage3NewIdempotencyKey()
+  };
+  state.plan = null;
+  state.planError = '';
+  return state.stage3Selection;
+}
+
+function normaliseBankingPayStage3StatusRow(row, correctionState) {
+  const source = row && typeof row === 'object' && !Array.isArray(row) ? row : {};
+  const selection = ensureBankingPayStage3SelectionState(correctionState);
+  const token = String(source.candidate_token || source.selection_token || source.pay_batch_candidate_id || '').trim();
+  const actions = Array.from(new Set([...(Array.isArray(source.available_actions) ? source.available_actions : []), ...(Array.isArray(source.eligible_action_codes) ? source.eligible_action_codes : [])]
+    .map(bankingPayStage3CanonicalStatusAction).filter(Boolean)));
+  const selected = selection.mode === 'ALL_MATCHING'
+    ? (!!selection.requestedAction && actions.includes(selection.requestedAction) && !selection.excludedCandidateTokens.has(token))
+    : selection.explicitCandidateTokens.has(token);
+  return {
+    ...source, rowKey: String(source.row_key || token).trim(), row_key: String(source.row_key || token).trim(),
+    candidateToken: token, candidate_token: token,
+    candidateName: String(source.candidate_display_name || source.candidate_display || source.candidate_name || '').trim(),
+    payeeName: String(source.payee_display || source.payee_display_name || '').trim(),
+    statusLabel: String(source.payment_display_state || source.display_status || 'ACTIVE').trim(),
+    paymentAmountPence: Number(source.active_payment_amount_pence ?? source.active_amount_pence ?? source.original_payment_amount_pence ?? 0) || 0,
+    paymentAmount: (Number(source.active_payment_amount_pence ?? source.active_amount_pence ?? source.original_payment_amount_pence ?? 0) || 0) / 100,
+    availableActions: actions, available_actions: actions, selectable: !!token && actions.length > 0, selected,
+    plainBlocker: String(source.plain_blocker || '').trim(), progressDisplay: String(source.progress_display || '').trim()
+  };
+}
+
+function applyBankingPayStage3StatusPage(correctionState, page, options = {}) {
+  const state = correctionState && typeof correctionState === 'object' ? correctionState : {};
+  const payload = page && typeof page === 'object' && !Array.isArray(page) ? page : {};
+  const oldSnapshot = String(state.stage3SnapshotToken || '').trim();
+  const snapshot = String(payload.snapshot_token || '').trim();
+  if (oldSnapshot && snapshot && oldSnapshot !== snapshot) resetBankingPayStage3Selection(state);
+  state.stage3Enabled = true;
+  state.stage3StatusPageLoaded = true;
+  state.stage3SnapshotToken = snapshot;
+  state.stage3StatusPage = payload;
+  state.stage3Filter = options.filter && typeof options.filter === 'object' ? { ...options.filter } : (state.stage3Filter || {});
+  state.stage3SortKey = String(payload.sort_key || options.sortKey || state.stage3SortKey || 'STATUS').toUpperCase();
+  state.stage3SortDirection = String(payload.sort_direction || options.sortDirection || state.stage3SortDirection || 'ASC').toUpperCase();
+  state.stage3PageSize = options.all === true ? 'ALL' : Number(payload.page_size || options.limit || state.stage3PageSize || 25);
+  state.stage3CurrentCursor = options.cursor && typeof options.cursor === 'object' ? options.cursor : null;
+  state.stage3PageRows = (Array.isArray(payload.rows) ? payload.rows : []).map((item) => normaliseBankingPayStage3StatusRow(item, state));
+  state.rows = state.stage3PageRows;
+  state.issueRows = state.stage3PageRows;
+  state.current_payment_status_rows = state.stage3PageRows;
+  state.currentPaymentStatusRows = state.stage3PageRows;
+  state.latest_correction_request = payload.latest_correction_request || null;
+  state.current_payment_status_loaded = true;
+  state.currentPaymentStatusLoaded = true;
+  state.current_payment_status_loading = false;
+  state.currentPaymentStatusLoading = false;
+  state.current_payment_status_error = '';
+  state.currentPaymentStatusError = '';
+  return state;
+}
+
+function getBankingPayStage3Context() {
+  const mc = window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : {};
+  const pay = mc?.banking?.pay || {};
+  const child = pay.child && typeof pay.child === 'object' ? pay.child : {};
+  child.correction = child.correction && typeof child.correction === 'object' ? child.correction : {};
+  const batch = child.data && typeof child.data === 'object' ? child.data : (pay.selected?.data || {});
+  const payBatchId = String(child.batchId || child.payBatchId || child.pay_batch_id || batch.id || batch.pay_batch_id || '').trim();
+  return { child, batch, payBatchId, correctionState: child.correction };
+}
+
+async function loadBankingPayStage3StatusPage(options = {}) {
+  const { child, payBatchId, correctionState } = getBankingPayStage3Context();
+  if (!payBatchId) throw new Error('Pay batch ID is required.');
+  const source = options && typeof options === 'object' ? options : {};
+  const filter = source.filter && typeof source.filter === 'object' ? { ...source.filter } : { ...(correctionState.stage3Filter || {}) };
+  const sortKey = String(source.sortKey || correctionState.stage3SortKey || 'STATUS').toUpperCase();
+  const sortDirection = String(source.sortDirection || correctionState.stage3SortDirection || 'ASC').toUpperCase();
+  const all = source.all === true || source.pageSize === 'ALL' || correctionState.stage3PageSize === 'ALL';
+  const requestedSize = Number(source.pageSize || correctionState.stage3PageSize || 25);
+  const limit = all ? 100 : ([25, 50, 75, 100].includes(requestedSize) ? requestedSize : 25);
+  try { correctionState.stage3AbortController?.abort(); } catch {}
+  const controller = new AbortController();
+  correctionState.stage3AbortController = controller;
+  correctionState.current_payment_status_loading = true;
+  correctionState.currentPaymentStatusLoading = true;
+  correctionState.current_payment_status_error = '';
+  correctionState.currentPaymentStatusError = '';
+  if (typeof bankingRerender === 'function' && source.silent !== true) await bankingRerender(null);
+  try {
+    let page = await bankingPayPaymentStatusPage(payBatchId, { limit, sort_key: sortKey, sort_direction: sortDirection, filter, cursor: source.cursor && typeof source.cursor === 'object' ? source.cursor : null, signal: controller.signal });
+    if (all) {
+      const rows = Array.isArray(page.rows) ? page.rows.slice() : [];
+      const snapshot = String(page.snapshot_token || '').trim();
+      let cursor = page.next_cursor_json || page.next_cursor || null;
+      let pageCount = 1;
+      while (cursor && rows.length < 10000 && pageCount < 100) {
+        const next = await bankingPayPaymentStatusPage(payBatchId, { limit: 100, sort_key: sortKey, sort_direction: sortDirection, filter, cursor, signal: controller.signal });
+        if (snapshot && String(next.snapshot_token || '').trim() !== snapshot) throw new Error('Current Payment Status changed while all matching rows were loading. Refresh and review the selection again.');
+        rows.push(...(Array.isArray(next.rows) ? next.rows : []));
+        cursor = next.next_cursor_json || next.next_cursor || null;
+        page = { ...page, ...next, rows, row_count: rows.length, next_cursor_json: cursor, next_cursor: cursor, page_size: 'ALL' };
+        pageCount += 1;
+      }
+      if (cursor) throw new Error('Current Payment Status exceeds the supported 10,000-payment review limit. Narrow the filters and try again.');
+    }
+    applyBankingPayStage3StatusPage(correctionState, page, { filter, sortKey, sortDirection, limit, all, cursor: source.cursor });
+    if (source.resetHistory === true || !Array.isArray(correctionState.stage3CursorHistory)) correctionState.stage3CursorHistory = [];
+    if (Array.isArray(source.history)) correctionState.stage3CursorHistory = source.history.slice();
+    child.correction = correctionState;
+    if (child.data && typeof child.data === 'object') {
+      child.data.current_payment_status_rows = correctionState.stage3PageRows.slice();
+      child.data.currentPaymentStatusRows = correctionState.stage3PageRows.slice();
+    }
+    return page;
+  } catch (error) {
+    if (error?.name !== 'AbortError') {
+      correctionState.current_payment_status_error = String(error?.message || error || 'Current Payment Status could not be loaded.');
+      correctionState.currentPaymentStatusError = correctionState.current_payment_status_error;
+    }
+    throw error;
+  } finally {
+    if (correctionState.stage3AbortController === controller) correctionState.stage3AbortController = null;
+    correctionState.current_payment_status_loading = false;
+    correctionState.currentPaymentStatusLoading = false;
+    if (typeof bankingRerender === 'function' && source.silent !== true) await bankingRerender(null);
+  }
+}
+
+function bankingPayStage3SelectedActions(correctionState) {
+  const selection = ensureBankingPayStage3SelectionState(correctionState);
+  if (selection.mode === 'ALL_MATCHING') return selection.requestedAction ? [selection.requestedAction] : [];
+  const tokenSets = Array.from(selection.explicitCandidateTokens).map((token) => new Set(selection.tokenActions.get(token) || []));
+  if (!tokenSets.length) return [];
+  return Array.from(tokenSets.slice(1).reduce((common, actions) => new Set(Array.from(common).filter((action) => actions.has(action))), tokenSets[0])).sort();
+}
+
+function buildBankingPayStage3Selection(correctionState, requestedAction) {
+  const state = correctionState && typeof correctionState === 'object' ? correctionState : {};
+  const selection = ensureBankingPayStage3SelectionState(state);
+  const statusAction = bankingPayStage3CanonicalStatusAction(requestedAction || selection.requestedAction);
+  const planningAction = bankingPayStage3PlanningAction(statusAction);
+  const snapshotToken = String(state.stage3SnapshotToken || state.stage3StatusPage?.snapshot_token || '').trim();
+  if (!snapshotToken) return { error: true, message: 'Refresh Current Payment Status before reviewing this cancellation.' };
+  if (!['DRAFT_CANCEL', 'CANCEL_PAYMENT', 'NO_MONEY_RELEASE'].includes(planningAction)) return { error: true, message: 'Select payments that share one cancellation action.' };
+  const base = {
+    command: 'PREPARE', context: 'CURRENT_PAYMENT_STATUS', contract_version: 1,
+    mode: selection.mode, requested_action: planningAction, snapshot_token: snapshotToken,
+    sort_key: String(state.stage3SortKey || 'STATUS').toUpperCase(), sort_direction: String(state.stage3SortDirection || 'ASC').toUpperCase(),
+    idempotency_key: String(selection.idempotencyKey || bankingPayStage3NewIdempotencyKey())
+  };
+  if (selection.mode === 'ALL_MATCHING') return { ...base, filter_json: { ...(state.stage3Filter || {}), action: statusAction, actionable_only: true }, excluded_candidate_tokens: Array.from(selection.excludedCandidateTokens).sort() };
+  const tokens = Array.from(selection.explicitCandidateTokens).sort();
+  return tokens.length ? { ...base, explicit_candidate_tokens: tokens } : null;
+}
 async function bankingPayPaymentCorrectionReauth(correctionRequestId, reauthToken) {
   const id = String(correctionRequestId || '').trim();
   if (!id || !String(reauthToken || '').trim()) throw new Error('Payment cancellation reauthentication is required.');
@@ -22851,8 +23051,9 @@ function renderBankingPayCancellationProgressModal() {
   const counts = status.candidate_counts && typeof status.candidate_counts === 'object' ? status.candidate_counts : {};
   const workbench = status.workbench_refresh && typeof status.workbench_refresh === 'object' ? status.workbench_refresh : {};
   const workbenchStatus = String(workbench.status || workbench.workbench_refresh_status || 'NOT_STAGED').trim().toUpperCase();
-  const terminal = bankingPayCancellationProgressIsFinanciallyTerminal(requestStatus);
-  const planningReady = requestStatus === 'PLANNED';
+  const terminal = status.terminal === true || status.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(requestStatus);
+  const availableActions = Array.isArray(status.available_actions) ? status.available_actions.map((value) => String(value || '').trim().toUpperCase()) : [];
+  const planningReady = availableActions.includes('REAUTHENTICATE');
   const message = state.error || status.user_message || status.message || (planningReady
     ? 'The exact payment selection is ready. Continue to verify your identity.'
     : (terminal ? 'The financial cancellation stage is complete.' : 'CloudTMS is processing the cancellation in the background.'));
@@ -22874,6 +23075,10 @@ function renderBankingPayCancellationProgressModal() {
   const availabilityText = workbenchStatus === 'CURRENT' ? 'Payment availability is up to date'
     : (workbenchStatus === 'FAILED' ? 'Payment availability refresh needs review'
       : (workbenchStatus === 'NOT_STAGED' ? 'Payment availability has not been refreshed yet' : 'Payment availability is refreshing'));
+  const authActionLabels = { AUTHORISE: 'Authorise cancellation', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Reauthorise remaining payments' };
+  const authActionButtons = availableActions.filter((action) => Object.prototype.hasOwnProperty.call(authActionLabels, action))
+    .map((action) => `<button type="button" class="btn btn-sm ${action === 'AUTHORISE' ? 'btn-primary' : 'btn-outline'}" data-banking-pay-cancellation-auth-action="${enc(action)}">${enc(authActionLabels[action])}</button>`)
+    .join('');
   root.innerHTML = `
     <div class="card" style="width:min(620px,100%);max-height:90vh;overflow:auto;padding:18px;background:var(--panel,#fff);">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
@@ -22888,6 +23093,7 @@ function renderBankingPayCancellationProgressModal() {
         ${blockerRows.length ? `<div class="card" style="padding:10px;"><div style="font-weight:700;">Payments needing review</div>${blockerRows.map((item) => `<div class="mini">${enc(item.label)}${item.count ? ` (${enc(item.count)})` : ''}</div>`).join('')}</div>` : ''}
         <div class="card" style="padding:10px;"><div style="font-weight:700;">Payment availability</div><div class="mini">${enc(availabilityText)}</div></div>
         ${planningReady ? '<button type="button" class="btn btn-primary" data-banking-pay-cancellation-verify="1">Continue to verification</button>' : ''}
+        ${authActionButtons ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">${authActionButtons}</div>` : ''}
         ${terminal ? '<div class="mini">Overview, Current Payment Status and the PAYE schedule are refreshed from the remaining active payment scope.</div>' : ''}
       </div>
     </div>`;
@@ -22911,6 +23117,29 @@ function renderBankingPayCancellationProgressModal() {
       renderBankingPayCancellationProgressModal();
     }
   }, { once: true });
+  root.querySelectorAll('[data-banking-pay-cancellation-auth-action]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const action = String(button.getAttribute('data-banking-pay-cancellation-auth-action') || '').trim().toUpperCase();
+      if (!availableActions.includes(action)) return;
+      try {
+        if (action === 'REAUTHORISE_REMAINING') {
+          await bankingPayBatchPrepare(state.payBatchId, []);
+          closeBankingPayCancellationProgressModal();
+          return;
+        }
+        const rpcAction = action === 'CANCEL_REQUEST' ? 'CANCEL' : action;
+        const result = await bankingPayPaymentCorrectionAuthAction(state.correctionRequestId, { action: rpcAction });
+        state.error = '';
+        state.status = await bankingPayPaymentCorrectionStatus(state.correctionRequestId);
+        renderBankingPayCancellationProgressModal();
+        scheduleBankingPayCancellationProgressPoll();
+        return result;
+      } catch (error) {
+        state.error = String(error?.message || error || 'The cancellation action could not be completed.');
+        renderBankingPayCancellationProgressModal();
+      }
+    }, { once: true });
+  });
 }
 
 function buildBankingPayCancellationActiveProjection(paymentStatus) {
@@ -23022,7 +23251,7 @@ function scheduleBankingPayCancellationProgressPoll(delayMs = null) {
   const state = bankingPayCancellationProgressState;
   if (state.timer) clearTimeout(state.timer);
   if (!state.visible || !state.correctionRequestId || state.abortController) return;
-  const terminal = bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status);
+  const terminal = state.status?.terminal === true || state.status?.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status);
   const workbenchStatus = String(state.status?.workbench_refresh?.status || state.status?.workbench_refresh?.workbench_refresh_status || '').toUpperCase();
   if (terminal && workbenchStatus === 'CURRENT') return;
   const serverDelay = statusPollDelay(state.status, delayMs);
@@ -23032,7 +23261,7 @@ function scheduleBankingPayCancellationProgressPoll(delayMs = null) {
       state.abortController = new AbortController();
       state.status = await bankingPayPaymentCorrectionStatus(state.correctionRequestId, { signal: state.abortController.signal });
       state.error = '';
-      if (bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status)) await refreshBankingPayCancellationFinancialViews();
+      if (state.status?.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status)) await refreshBankingPayCancellationFinancialViews();
     } catch (error) {
       state.error = String(error?.message || error || 'Status is temporarily unavailable. CloudTMS will try again.');
     } finally {
@@ -23065,7 +23294,7 @@ async function openBankingPayCancellationProgressModal({ correctionRequestId = '
     state.abortController = new AbortController();
     state.status = await bankingPayPaymentCorrectionStatus(state.correctionRequestId, { signal: state.abortController.signal });
     state.payBatchId = String(state.status?.pay_batch_id || state.payBatchId || '').trim();
-    if (bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status)) await refreshBankingPayCancellationFinancialViews();
+    if (state.status?.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status)) await refreshBankingPayCancellationFinancialViews();
   } catch (error) { if (error?.name !== 'AbortError') state.error = String(error?.message || error || 'Payment cancellation status is temporarily unavailable.'); }
   finally { state.abortController = null; }
   renderBankingPayCancellationProgressModal();
@@ -23723,9 +23952,240 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
 
 
 
+function renderBankingPayStage3StatusPanel(batchPayload, correctionState) {
+  const state = correctionState && typeof correctionState === 'object' ? correctionState : {};
+  const page = state.stage3StatusPage && typeof state.stage3StatusPage === 'object' ? state.stage3StatusPage : {};
+  const rows = (Array.isArray(state.stage3PageRows) ? state.stage3PageRows : []).slice(0, state.stage3PageSize === 'ALL' ? 200 : 100);
+  const selection = ensureBankingPayStage3SelectionState(state);
+  const enc = typeof escapeHtml === 'function' ? escapeHtml : (value) => String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
+  const fmtAmount = (pence) => { try { return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format((Number(pence) || 0) / 100); } catch { return `£${((Number(pence) || 0) / 100).toFixed(2)}`; } };
+  const filter = state.stage3Filter && typeof state.stage3Filter === 'object' ? state.stage3Filter : {};
+  const filterAction = bankingPayStage3CanonicalStatusAction(filter.action);
+  const commonActions = bankingPayStage3SelectedActions(state);
+  const selectedCount = selection.mode === 'ALL_MATCHING'
+    ? Math.max(0, Number(page.eligible_matching_count || page.total_matching_count || 0) - selection.excludedCandidateTokens.size)
+    : selection.explicitCandidateTokens.size;
+  const headerChecked = selection.mode === 'ALL_MATCHING' && !!selection.requestedAction;
+  const headerDisabled = !filterAction || !['DRAFT_CANCEL', 'CANCEL_PAYMENT', 'RELEASE_FAILED_PAYMENT'].includes(filterAction);
+  const actionLabels = {
+    DRAFT_CANCEL: 'Cancel draft payments',
+    CANCEL_PAYMENT: 'Cancel selected payments',
+    RELEASE_FAILED_PAYMENT: 'Release failed payments',
+    RESOLVE_PAYMENT_STATUS: 'Record confirmed bank outcome'
+  };
+  const statusOptions = ['', 'ACTIVE', 'NOT_PAID', 'AMBIGUOUS', 'BLOCKED', 'FAILED', 'CANCELLED', 'RELEASED', 'SETTLED'];
+  const actionOptions = ['', ...BANKING_PAY_STAGE3_STATUS_ACTIONS];
+  const sortKey = String(state.stage3SortKey || 'STATUS').toUpperCase();
+  const sortDirection = String(state.stage3SortDirection || 'ASC').toUpperCase();
+  const pageSize = String(state.stage3PageSize || 25).toUpperCase();
+  const nextCursor = page.next_cursor_json || page.next_cursor || null;
+  const history = Array.isArray(state.stage3CursorHistory) ? state.stage3CursorHistory : [];
+  const rowHtml = rows.map((row) => {
+    const token = String(row.candidate_token || '').trim();
+    const actions = Array.isArray(row.available_actions) ? row.available_actions : [];
+    const selected = row.selected === true;
+    const selectable = !!token && actions.length > 0;
+    const detail = String(row.plainBlocker || row.progressDisplay || '').trim();
+    return `<tr${selected ? ' class="payment-issue-row-selected"' : ''}>
+      <td>${selectable ? `<input type="checkbox" data-banking-pay-stage3-action="toggle-row" data-candidate-token="${enc(token)}"${selected ? ' checked' : ''} aria-label="Select ${enc(row.candidateName || 'payment')}">` : ''}</td>
+      <td>${enc(row.statusLabel || '')}</td>
+      <td>${enc(row.candidateName || '')}${row.payeeName ? `<div class="mini">${enc(row.payeeName)}</div>` : ''}</td>
+      <td class="mono" style="text-align:right;">${enc(fmtAmount(row.paymentAmountPence))}</td>
+      <td>${enc(actions.map((action) => actionLabels[action] || action).join(' · '))}</td>
+      <td>${detail ? enc(detail) : '<span class="mini">No action blocker</span>'}</td>
+    </tr>`;
+  }).join('');
+  const actionButtons = commonActions.filter((action) => ['DRAFT_CANCEL', 'CANCEL_PAYMENT', 'RELEASE_FAILED_PAYMENT', 'RESOLVE_PAYMENT_STATUS'].includes(action))
+    .map((action) => `<button type="button" class="btn btn-sm btn-primary" data-banking-pay-stage3-action="review" data-requested-action="${enc(action)}">${enc(actionLabels[action] || action)}</button>`).join('');
+  const latestRequest = page.latest_correction_request || state.latest_correction_request || null;
+  const latestRequestId = String(latestRequest?.id || latestRequest?.correction_request_id || '').trim();
+  return `<section class="banking-payment-issue-panel" data-banking-pay-stage3-panel="1">
+    <div class="card" style="padding:12px;margin-bottom:10px;display:grid;gap:10px;">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+        <div><div style="font-weight:800;">Current Payment Status</div><div class="mini">Select payments first. CloudTMS will then show only actions shared by the exact selection.</div></div>
+        <div class="mini">${enc(selectedCount)} selected${state.stage3PageSize === 'ALL' && state.stage3PageRows.length > rows.length ? ` · ${enc(rows.length)} of ${enc(state.stage3PageRows.length)} rows rendered` : ''}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;">
+        <label class="mini">Status<select class="input" data-banking-pay-stage3-field="status"><option value="">All</option>${statusOptions.slice(1).map((value) => `<option value="${value}"${String(filter.status || '').toUpperCase() === value ? ' selected' : ''}>${enc(value.replaceAll('_', ' '))}</option>`).join('')}</select></label>
+        <label class="mini">Action<select class="input" data-banking-pay-stage3-field="action"><option value="">All</option>${actionOptions.slice(1).map((value) => `<option value="${value}"${filterAction === value ? ' selected' : ''}>${enc(actionLabels[value] || value)}</option>`).join('')}</select></label>
+        <label class="mini">Search<input class="input" data-banking-pay-stage3-field="search" value="${enc(filter.search || '')}" placeholder="Candidate or payee"></label>
+        <label class="mini">Sort<select class="input" data-banking-pay-stage3-field="sort"><option value="STATUS"${sortKey === 'STATUS' ? ' selected' : ''}>Status</option><option value="CANDIDATE"${sortKey === 'CANDIDATE' ? ' selected' : ''}>Candidate</option><option value="AMOUNT"${sortKey === 'AMOUNT' ? ' selected' : ''}>Amount</option></select></label>
+        <button type="button" class="btn btn-sm btn-outline" data-banking-pay-stage3-action="sort-direction">${sortDirection === 'ASC' ? 'Ascending' : 'Descending'}</button>
+        <label class="mini">Rows<select class="input" data-banking-pay-stage3-field="page-size">${['25','50','75','100','ALL'].map((value) => `<option value="${value}"${pageSize === value ? ' selected' : ''}>${value === 'ALL' ? 'All' : value}</option>`).join('')}</select></label>
+        <button type="button" class="btn btn-sm btn-outline" data-banking-pay-stage3-action="refresh">Refresh</button>
+      </div>
+      ${headerDisabled ? '<div class="mini">Choose one cancellation action before using the header checkbox for all matching payments.</div>' : ''}
+      ${state.planError ? `<div class="notice warning mini">${enc(state.planError)}</div>` : ''}
+      ${selectedCount > 0 && commonActions.length === 0 ? '<div class="notice warning mini">Mixed statuses selected. Select payments that share an available action.</div>' : ''}
+      ${actionButtons ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">${actionButtons}</div>` : ''}
+      ${latestRequestId ? '<button type="button" class="btn btn-sm btn-outline" data-banking-pay-stage3-action="open-progress">View cancellation progress</button>' : ''}
+    </div>
+    <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;"><table class="grid banking-payment-issue-table" style="min-width:900px;margin:0;">
+      <thead><tr><th style="width:56px;"><input type="checkbox" data-banking-pay-stage3-action="toggle-all"${headerChecked ? ' checked' : ''}${headerDisabled ? ' disabled' : ''} aria-label="Select all matching payments"></th><th>Status</th><th>Candidate / Payee</th><th style="text-align:right;">Amount</th><th>Available action</th><th>Information</th></tr></thead>
+      <tbody>${rowHtml || `<tr><td colspan="6"><div class="mini">${state.current_payment_status_loading ? 'Loading Current Payment Status…' : 'No payments match the current filters.'}</div></td></tr>`}</tbody>
+    </table></div>
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:10px;">
+      <button type="button" class="btn btn-sm btn-outline" data-banking-pay-stage3-action="previous"${history.length ? '' : ' disabled'}>Previous</button>
+      <span class="mini">${enc(page.page_label || `Page ${history.length + 1}`)}</span>
+      <button type="button" class="btn btn-sm btn-outline" data-banking-pay-stage3-action="next"${nextCursor ? '' : ' disabled'}>Next</button>
+    </div>
+  </section>`;
+}
+
+function refreshBankingPayStage3SelectedRows(correctionState) {
+  const state = correctionState && typeof correctionState === 'object' ? correctionState : {};
+  state.stage3PageRows = (Array.isArray(state.stage3StatusPage?.rows) ? state.stage3StatusPage.rows : []).map((row) => normaliseBankingPayStage3StatusRow(row, state));
+  state.rows = state.stage3PageRows;
+  state.current_payment_status_rows = state.stage3PageRows;
+  state.currentPaymentStatusRows = state.stage3PageRows;
+  state.plan = null;
+  state.planError = '';
+}
+
+async function resolveBankingPayStage3PaymentStatus(row) {
+  const source = row && typeof row === 'object' ? row : {};
+  const { payBatchId } = getBankingPayStage3Context();
+  const operationId = String(source.operation_id || source.banking_pay_operation_id || '').trim();
+  const transferId = String(source.pay_bank_transfer_id || (Array.isArray(source.pay_bank_transfer_ids) ? source.pay_bank_transfer_ids[0] : '') || '').trim();
+  const instructionScopeIds = Array.from(new Set((Array.isArray(source.instruction_scope_ids) ? source.instruction_scope_ids : (Array.isArray(source.pay_bank_transfer_ids) ? source.pay_bank_transfer_ids : [transferId])).map((value) => String(value || '').trim()).filter(Boolean)));
+  const candidateId = String(source.pay_batch_candidate_id || source.candidate_id || '').trim();
+  const snapshotToken = String(source.snapshot_token || getBankingPayStage3Context().correctionState.stage3SnapshotToken || '').trim();
+  if (!operationId || !transferId || !instructionScopeIds.length || !snapshotToken) throw new Error('The bank-outcome evidence is incomplete. Refresh Current Payment Status and try again.');
+  const decision = await new Promise((resolve) => {
+    const root = document.createElement('div');
+    root.setAttribute('role', 'dialog');
+    root.setAttribute('aria-modal', 'true');
+    root.style.cssText = 'position:fixed;inset:0;z-index:10060;background:rgba(14,23,38,.58);display:flex;align-items:center;justify-content:center;padding:20px;';
+    root.innerHTML = `<div class="card" style="width:min(560px,100%);padding:18px;background:var(--panel,#fff);"><div style="font-weight:800;font-size:18px;">Record confirmed bank outcome</div><div class="mini" style="margin-top:5px;">Use verified bank evidence only. Recording not paid does not automatically release the payment.</div><div style="display:grid;gap:10px;margin-top:14px;"><label><input type="radio" name="banking-pay-stage3-outcome" value="CONFIRMED_NOT_PAID"> Confirmed not paid</label><label><input type="radio" name="banking-pay-stage3-outcome" value="CONFIRMED_PAID"> Confirmed paid</label><label class="mini">Evidence reference<textarea class="input" data-stage3-evidence maxlength="1000" rows="3" placeholder="Reference the verified bank evidence"></textarea></label><div data-stage3-error class="mini" style="color:var(--danger,#b91c1c);"></div><div style="display:flex;justify-content:flex-end;gap:8px;"><button type="button" class="btn btn-outline" data-stage3-cancel>Cancel</button><button type="button" class="btn btn-primary" data-stage3-continue>Continue</button></div></div></div>`;
+    document.body.appendChild(root);
+    const finish = (value) => { try { root.remove(); } catch {} resolve(value); };
+    root.querySelector('[data-stage3-cancel]')?.addEventListener('click', () => finish(null), { once: true });
+    root.querySelector('[data-stage3-continue]')?.addEventListener('click', () => {
+      const outcome = String(root.querySelector('input[name="banking-pay-stage3-outcome"]:checked')?.value || '').trim();
+      const evidenceReference = String(root.querySelector('[data-stage3-evidence]')?.value || '').trim();
+      if (!outcome || !evidenceReference) { const error = root.querySelector('[data-stage3-error]'); if (error) error.textContent = 'Choose the confirmed outcome and enter the evidence reference.'; return; }
+      finish({ outcome, evidenceReference });
+    });
+  });
+  if (!decision) return false;
+  const credentials = await openPayBatchPasswordConfirmModal({ title: 'Verify bank outcome', subtitle: 'Confirm your identity before recording this verified bank evidence.', defaultReason: '' });
+  if (!credentials) return false;
+  const reauthToken = String(credentials.reauth_token || credentials.reauthToken || '').trim();
+  if (!reauthToken) throw new Error('Identity verification did not return a valid proof.');
+  const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(payBatchId)}/payment-status/resolve`), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      common_outcome: decision.outcome, operation_id: operationId, instruction_scope_ids: instructionScopeIds,
+      pay_bank_transfer_id: transferId, candidate_id: candidateId || null, snapshot_token: snapshotToken,
+      evidence_reference: decision.evidenceReference, reauth_token: reauthToken
+    })
+  });
+  const text = await response.text().catch(() => '');
+  let payload = null; try { payload = text ? JSON.parse(text) : null; } catch {}
+  if (!response.ok) throw new Error(String(payload?.message || payload?.error || 'The bank outcome could not be recorded.'));
+  await loadBankingPayStage3StatusPage({ resetHistory: true });
+  return true;
+}
+
+function installBankingPayStage3Handlers() {
+  if (typeof document === 'undefined' || window.__bankingPayStage3HandlersInstalled === true) return;
+  window.__bankingPayStage3HandlersInstalled = true;
+  const rerender = async () => { if (typeof bankingRerender === 'function') await bankingRerender(null); };
+  const fail = async (error) => { const { correctionState } = getBankingPayStage3Context(); correctionState.planError = String(error?.message || error || 'Current Payment Status could not be updated.'); try { toast(correctionState.planError); } catch {} await rerender(); };
+  document.addEventListener('click', async (event) => {
+    const element = event.target?.closest?.('[data-banking-pay-stage3-action]');
+    if (!element) return;
+    event.preventDefault();
+    const action = String(element.getAttribute('data-banking-pay-stage3-action') || '').trim();
+    const { batch, payBatchId, correctionState } = getBankingPayStage3Context();
+    const selection = ensureBankingPayStage3SelectionState(correctionState);
+    try {
+      if (action === 'toggle-row') {
+        const token = String(element.getAttribute('data-candidate-token') || '').trim();
+        const row = correctionState.stage3PageRows.find((item) => item.candidate_token === token);
+        if (!row) return;
+        const checked = element.checked === true;
+        if (selection.mode === 'ALL_MATCHING') {
+          if (checked) selection.excludedCandidateTokens.delete(token); else selection.excludedCandidateTokens.add(token);
+        } else if (checked) {
+          selection.explicitCandidateTokens.add(token);
+          selection.tokenActions.set(token, Array.isArray(row.available_actions) ? row.available_actions.slice() : []);
+        } else {
+          selection.explicitCandidateTokens.delete(token);
+          selection.tokenActions.delete(token);
+        }
+        selection.idempotencyKey = bankingPayStage3NewIdempotencyKey();
+        refreshBankingPayStage3SelectedRows(correctionState);
+        await rerender();
+      } else if (action === 'toggle-all') {
+        const filterAction = bankingPayStage3CanonicalStatusAction(correctionState.stage3Filter?.action);
+        if (element.checked && filterAction) {
+          selection.mode = 'ALL_MATCHING'; selection.requestedAction = filterAction;
+          selection.explicitCandidateTokens.clear(); selection.tokenActions.clear(); selection.excludedCandidateTokens.clear();
+        } else resetBankingPayStage3Selection(correctionState);
+        selection.idempotencyKey = bankingPayStage3NewIdempotencyKey();
+        refreshBankingPayStage3SelectedRows(correctionState);
+        await rerender();
+      } else if (action === 'refresh') {
+        resetBankingPayStage3Selection(correctionState);
+        await loadBankingPayStage3StatusPage({ resetHistory: true });
+      } else if (action === 'sort-direction') {
+        resetBankingPayStage3Selection(correctionState);
+        correctionState.stage3SortDirection = String(correctionState.stage3SortDirection || 'ASC').toUpperCase() === 'ASC' ? 'DESC' : 'ASC';
+        await loadBankingPayStage3StatusPage({ sortDirection: correctionState.stage3SortDirection, resetHistory: true });
+      } else if (action === 'next') {
+        const cursor = correctionState.stage3StatusPage?.next_cursor_json || correctionState.stage3StatusPage?.next_cursor;
+        if (!cursor) return;
+        const history = [...(correctionState.stage3CursorHistory || []), correctionState.stage3CurrentCursor || null];
+        await loadBankingPayStage3StatusPage({ cursor, history });
+      } else if (action === 'previous') {
+        const history = [...(correctionState.stage3CursorHistory || [])];
+        if (!history.length) return;
+        const cursor = history.pop();
+        await loadBankingPayStage3StatusPage({ cursor, history });
+      } else if (action === 'open-progress') {
+        await openLatestBankingPayCancellationProgress(batch || payBatchId);
+      } else if (action === 'review') {
+        const requestedAction = bankingPayStage3CanonicalStatusAction(element.getAttribute('data-requested-action'));
+        if (requestedAction === 'RESOLVE_PAYMENT_STATUS') {
+          const selectedRows = correctionState.stage3PageRows.filter((row) => row.selected === true);
+          if (selectedRows.length !== 1 || selection.mode !== 'EXPLICIT') throw new Error('Select exactly one payment when recording a confirmed bank outcome.');
+          await resolveBankingPayStage3PaymentStatus(selectedRows[0]);
+          return;
+        }
+        const prepared = buildBankingPayStage3Selection(correctionState, requestedAction);
+        if (!prepared || prepared.error) throw new Error(prepared?.message || 'Select a payment first.');
+        correctionState.planError = '';
+        const result = await bankingPayPaymentCorrectionPlan(payBatchId, prepared);
+        correctionState.plan = result;
+        const requestId = String(result?.correction_request_id || result?.request_id || result?.request?.id || result?.correction_request?.id || '').trim();
+        if (!requestId) throw new Error('The cancellation request was created but its progress reference was not returned. Refresh Current Payment Status.');
+        await openBankingPayCancellationProgressModal({ correctionRequestId: requestId, payBatchId });
+      }
+    } catch (error) { await fail(error); }
+  }, true);
+  document.addEventListener('change', async (event) => {
+    const element = event.target?.closest?.('[data-banking-pay-stage3-field]');
+    if (!element) return;
+    const field = String(element.getAttribute('data-banking-pay-stage3-field') || '');
+    const value = String(element.value || '').trim();
+    const { correctionState } = getBankingPayStage3Context();
+    resetBankingPayStage3Selection(correctionState);
+    if (field === 'status' || field === 'action' || field === 'search') {
+      correctionState.stage3Filter = { ...(correctionState.stage3Filter || {}), [field]: value || undefined };
+    } else if (field === 'sort') correctionState.stage3SortKey = value || 'STATUS';
+    else if (field === 'page-size') correctionState.stage3PageSize = value === 'ALL' ? 'ALL' : Number(value || 25);
+    try { await loadBankingPayStage3StatusPage({ all: correctionState.stage3PageSize === 'ALL', resetHistory: true }); } catch (error) { await fail(error); }
+  }, true);
+}
+
+installBankingPayStage3Handlers();
+
 function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
   const payload = (batchPayload && typeof batchPayload === 'object' && !Array.isArray(batchPayload)) ? batchPayload : {};
   const state = (correctionState && typeof correctionState === 'object' && !Array.isArray(correctionState)) ? correctionState : {};
+  if (state.stage3StatusPageLoaded === true || state.stage3Enabled === true) {
+    return renderBankingPayStage3StatusPanel(payload, state);
+  }
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (value) => String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -27419,6 +27879,7 @@ function getBankingPaymentIssueFinanceSuggestion(plan) {
 
 function buildBankingPaymentIssueSelection(correctionState, explicitAction) {
   const state = (correctionState && typeof correctionState === 'object' && !Array.isArray(correctionState)) ? correctionState : {};
+  if (state.stage3Enabled === true || state.stage3StatusPageLoaded === true) return buildBankingPayStage3Selection(state, explicitAction);
   const rows = Array.isArray(state.rows) ? state.rows : (Array.isArray(state.issueRows) ? state.issueRows : []);
   const selectedRows = rows.filter((row) => row && row.selected === true);
   if (!selectedRows.length) return null;
@@ -75877,10 +76338,13 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
       child.activeOverviewProjectionAuthoritative = false;
       child.activePayeScheduleProjectionAuthoritative = false;
       const paymentStatus = await bankingPayPaymentStatusPage(id, { limit: 100, sort_key: 'STATUS', sort_direction: 'ASC' });
-      const latestCorrectionRequest = paymentStatus?.latest_correction_request && typeof paymentStatus.latest_correction_request === 'object' && !Array.isArray(paymentStatus.latest_correction_request)
-        ? paymentStatus.latest_correction_request
-        : null;
-      if (!latestCorrectionRequest) return null;
+      child.correction = child.correction && typeof child.correction === 'object' ? child.correction : {};
+      applyBankingPayStage3StatusPage(child.correction, paymentStatus, { filter: {}, sortKey: 'STATUS', sortDirection: 'ASC', limit: 100 });
+      child.correction.stage3CursorHistory = [];
+      if (child.data && typeof child.data === 'object') {
+        child.data.current_payment_status_rows = child.correction.stage3PageRows.slice();
+        child.data.currentPaymentStatusRows = child.correction.stage3PageRows.slice();
+      }
       return applyBankingPayCancellationActiveProjection(paymentStatus, id);
     };
 
