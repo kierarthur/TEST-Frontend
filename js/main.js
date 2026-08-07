@@ -77663,13 +77663,17 @@ const createPaymentExecutionTerminalCallbacks = (source = '') => {
   };
 };
 
-const executePaymentPipeline = async () => {
+const executePaymentPipeline = async (pipelineOptions = {}) => {
   if (child.actionsBusy.executing) return;
   if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
 
   let lastExecutionScopeForError = deriveScopeForBatch(child.data);
 
-  const retryPreProviderOperationId = (() => {
+  const requestedRetryOperationId = (() => {
+    const value = String(pipelineOptions?.retryPreProviderOperationId || pipelineOptions?.retry_pre_provider_operation_id || '').trim().toLowerCase();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value) ? value : '';
+  })();
+  const retryPreProviderOperationId = requestedRetryOperationId || (() => {
     const dataObject = (child.data && typeof child.data === 'object' && !Array.isArray(child.data)) ? child.data : {};
     const batchObject = (dataObject.batch && typeof dataObject.batch === 'object' && !Array.isArray(dataObject.batch)) ? dataObject.batch : {};
     const candidates = [
@@ -80568,7 +80572,10 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
         }
 
         if (act === 'banking:pay:child:executePayment') {
-          await executePaymentPipeline();
+          const retryRequested = String(el.getAttribute('data-retry-pre-provider-failure') || '').trim().toLowerCase() === 'true';
+          await executePaymentPipeline({
+            retryPreProviderOperationId: retryRequested ? String(el.getAttribute('data-retry-operation-id') || '').trim() : ''
+          });
           return;
         }
 
