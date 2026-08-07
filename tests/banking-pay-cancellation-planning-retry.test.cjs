@@ -21,5 +21,5 @@ test('planning retry reuses the existing correction auth-action route', () => {
 });
 
 test('the deployed entry point cache-busts the cancellation progress bundle', () => {
-  assert.match(indexSource, /banking-cancellation-progress=20260807-r5/);
+  assert.match(indexSource, /banking-cancellation-progress=20260807-r6/);
 });

@@ -7238,22 +7238,11 @@ async function openBankingReauthModal(opts = {}) {
 
     const detachDelegated = () => {
       try {
-        const body = document.getElementById('modalBody');
-        if (!body) return;
-        const h = body.__bankingReauthHandler;
+        const h = window.__bankingReauthHandler;
         if (!h || String(h.openToken || '') !== String(openToken || '')) return;
-
-        try { body.removeEventListener('click', h.onClick, true); } catch {}
-        try { body.removeEventListener('input', h.onInput, true); } catch {}
-        delete body.__bankingReauthHandler;
-      } catch {}
-      try {
-        const root = document.getElementById(rootId);
-        const h = root && root.__bankingReauthHandler;
-        if (!root || !h || String(h.openToken || '') !== String(openToken || '')) return;
-        try { root.removeEventListener('click', h.onClick, true); } catch {}
-        try { root.removeEventListener('input', h.onInput, true); } catch {}
-        delete root.__bankingReauthHandler;
+        try { window.removeEventListener('click', h.onClick, true); } catch {}
+        try { window.removeEventListener('input', h.onInput, true); } catch {}
+        delete window.__bankingReauthHandler;
       } catch {}
     };
 
@@ -7296,7 +7285,7 @@ async function openBankingReauthModal(opts = {}) {
         return;
       }
 
-      if (reauthRoot.__bankingReauthHandler && String(reauthRoot.__bankingReauthHandler.openToken || '') === String(openToken || '')) {
+      if (window.__bankingReauthHandler && String(window.__bankingReauthHandler.openToken || '') === String(openToken || '')) {
         return;
       }
 
@@ -7507,9 +7496,9 @@ async function openBankingReauthModal(opts = {}) {
         } catch {}
       };
 
-      reauthRoot.addEventListener('click', onClick, true);
-      reauthRoot.addEventListener('input', onInput, true);
-      reauthRoot.__bankingReauthHandler = { openToken, onClick, onInput };
+      window.addEventListener('click', onClick, true);
+      window.addEventListener('input', onInput, true);
+      window.__bankingReauthHandler = { openToken, onClick, onInput };
       reauthRoot.setAttribute('data-banking-reauth-wired', '1');
 
       focusField('bankingReauthPassword');
