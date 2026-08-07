@@ -68357,7 +68357,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
 
   const parseTimeHm = (raw) => {
     const s = String(raw || '').trim().replace(/\s+/g, '');
-    const m = s.match(/^(\d{2})(\d{2})$/);
+    const m = s.match(/^(\d{2}):?(\d{2})$/);
     if (!m) return null;
     const hh = Number(m[1]);
     const mm = Number(m[2]);
@@ -68365,8 +68365,6 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
     return { hh, mm };
   };
-
-  const sanitizeTimeDigits = (raw) => String(raw || '').replace(/[^\d]/g, '').slice(0, 4);
 
   const ukLocalToUtcIso = (ymd, hm) => {
     const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -68986,7 +68984,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     execution_mode: defaultMode,
     schedule_kind: 'IMMEDIATE',
     date_uk: '',
-    time_uk: '',
+    time_uk: '02:00',
     payment_date_uk: '',
     auth_mode: 'NORMAL',
     funding_account_ref: resolvedFundingAccountRef || '',
@@ -69179,8 +69177,9 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
                         <input id="payExecDateUk" class="input" type="text" value="${enc(state.date_uk)}" placeholder="DD/MM/YYYY" data-uk-date="1" data-action="pay-exec:setDateUk" ${dis} />
                       </div>
                       <div style="min-width:180px;">
-                        <label class="inline mini" style="opacity:.85;">Time (UK, HHMM)</label>
-                        <input id="payExecTimeUk" class="input mono" type="text" value="${enc(state.time_uk)}" placeholder="e.g. 0930" maxlength="4" inputmode="numeric" data-action="pay-exec:setTimeUk" ${dis} />
+                        <label class="inline mini" style="opacity:.85;">Time (UK, 24-hour)</label>
+                        <input id="payExecTimeUk" class="input mono" type="time" value="${enc(state.time_uk || '02:00')}" step="60" data-action="pay-exec:setTimeUk" ${dis} />
+                        <div class="mini" style="opacity:.75; margin-top:4px;">Enter hours and minutes. Seconds are always 00.</div>
                       </div>
                     </div>
                   ` : ''}
@@ -69339,6 +69338,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
           if (act === 'pay-exec:setScheduleKind') {
             const v = String(t.value || '').trim().toUpperCase();
             state.schedule_kind = (v === 'SCHEDULED') ? 'SCHEDULED' : 'IMMEDIATE';
+            if (state.schedule_kind === 'SCHEDULED' && !parseTimeHm(state.time_uk)) state.time_uk = '02:00';
             state.err = '';
             rerender();
             return;
@@ -69400,7 +69400,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
 
           if (act === 'pay-exec:setPaymentDateUk') { state.payment_date_uk = String(t.value || '').trim(); state.err = ''; return; }
           if (act === 'pay-exec:setDateUk') { state.date_uk = String(t.value || ''); state.err = ''; return; }
-          if (act === 'pay-exec:setTimeUk') { const cleaned = sanitizeTimeDigits(String(t.value || '')); state.time_uk = cleaned; try { t.value = cleaned; } catch {} state.err = ''; return; }
+          if (act === 'pay-exec:setTimeUk') { state.time_uk = String(t.value || '').trim(); state.err = ''; return; }
           if (act === 'pay-exec:setFundingAccountRef') { state.funding_account_ref = String(t.value || ''); state.err = ''; return; }
           if (act === 'pay-exec:setWarningHoursJson') { state.warning_hours_json_raw = String(t.value || ''); state.err = ''; return; }
           if (act === 'pay-exec:setCsvBankConfirmRef') { state.csv_bank_confirm_ref = String(t.value || ''); state.err = ''; return; }
@@ -69447,7 +69447,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
               const iso = parseUkDateToIsoLocal(state.date_uk);
               const hm = parseTimeHm(state.time_uk);
               if (!iso) { state.err = 'Scheduled date is required (DD/MM/YYYY).'; rerender(); return; }
-              if (!hm) { state.err = 'Scheduled time is required in 24-hour HHMM format (e.g. 0200, 2311).'; rerender(); return; }
+              if (!hm) { state.err = 'Scheduled time is required in 24-hour HH:MM format (e.g. 02:00, 23:11).'; rerender(); return; }
               const utcIso = ukLocalToUtcIso(iso, hm);
               if (!utcIso) { state.err = 'Unable to convert the selected UK date/time.'; rerender(); return; }
               scheduled_at_utc = utcIso;
@@ -73926,10 +73926,10 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     try {
       const entries = buildChildPayePatchEntries();
 
-      await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/manual`, { entries });
+      const mutationResult = await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/manual`, { entries });
 
       child.paye.netDraft = {};
-      await loadBatch({ forcePoll: false });
+      await refreshChildAfterPayeNetMutation(mutationResult);
 
       toast('PAYE net payments saved');
       return true;
@@ -74640,6 +74640,53 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
     child.__sectionLoadPromises[pageKey] = loadPromise;
     return await loadPromise;
+  };
+
+  const waitForChildBatchLoadIdle = async (timeoutMs = 15000) => {
+    const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || 15000);
+    while (child.__loadInFlight || child.loading) {
+      if (!stillTopIsThisChild()) throw new Error('The payment batch was closed before its saved PAYE amounts could be refreshed.');
+      if (Date.now() >= deadline) throw new Error('The payment batch is still refreshing. Close and reopen it before continuing.');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  const refreshChildAfterPayeNetMutation = async (mutationResult) => {
+    await waitForChildBatchLoadIdle();
+    if (!stillTopIsThisChild()) throw new Error('The payment batch was closed before its saved PAYE amounts could be refreshed.');
+
+    const previousLoadSequence = Number(child.__loadSeq || 0);
+    child.error = '';
+    await loadBatch({
+      forcePoll: false,
+      silent: true,
+      expectedOpenToken: String(child.openToken || '').trim()
+    });
+
+    if (Number(child.__loadSeq || 0) <= previousLoadSequence || child.__loadInFlight || child.loading) {
+      throw new Error('The saved PAYE amounts could not be refreshed in the open payment batch.');
+    }
+    if (String(child.error || '').trim()) throw new Error(String(child.error).trim());
+    if (child.activeOverviewProjectionAuthoritative !== true || child.activePayeScheduleProjectionAuthoritative !== true) {
+      throw new Error('The saved PAYE amounts were not confirmed by the complete payment projection.');
+    }
+
+    const expectedCandidates = Array.isArray(mutationResult?.candidate_summaries)
+      ? mutationResult.candidate_summaries
+      : (Array.isArray(mutationResult?.import?.candidate_summaries) ? mutationResult.import.candidate_summaries : []);
+    const projectedRows = Array.isArray(child.data?.current_payment_status_rows)
+      ? child.data.current_payment_status_rows
+      : (Array.isArray(child.data?.currentPaymentStatusRows) ? child.data.currentPaymentStatusRows : []);
+    for (const expected of expectedCandidates) {
+      const candidateId = String(expected?.pay_batch_candidate_id || '').trim();
+      const expectedAmount = Number(expected?.net_bank_amount);
+      if (!candidateId || !Number.isFinite(expectedAmount)) continue;
+      const projected = projectedRows.find((row) => String(row?.pay_batch_candidate_id || row?.candidate_token || '').trim() === candidateId);
+      const projectedPence = Number(projected?.active_payment_amount_pence);
+      if (!projected || !Number.isFinite(projectedPence) || projectedPence !== Math.round(expectedAmount * 100)) {
+        throw new Error('The saved PAYE amount is not yet reflected in Current Payment Status. Refresh the batch before continuing.');
+      }
+    }
   };
 
   const refreshRemittanceSections = async (options = {}) => {
@@ -80818,13 +80865,13 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
               const text = await f.text();
               if (!String(text || '').trim()) throw new Error('File is empty');
 
-              await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/sage`, {
+              const mutationResult = await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/sage`, {
                 csv_raw: text,
                 source_filename: name
               });
 
               child.paye.netDraft = {};
-              await loadBatch({ forcePoll: false });
+              await refreshChildAfterPayeNetMutation(mutationResult);
 
               toast('Sage import applied');
             } catch (e2) {
@@ -87595,43 +87642,29 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
   };
 
   const refreshParentBankingSurfaces = async () => {
-    try {
-      if (typeof bankingPayBatchGet === 'function') {
-        await bankingPayBatchGet(id);
-      } else {
-        const obj0 = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
-        const obj = deep(obj0);
-        if (obj && typeof obj === 'object' && Array.isArray(obj.candidates)) {
-          obj.candidates = sortCandidatesBySurname(obj.candidates);
-        }
-        payBanking.selected = (payBanking.selected && typeof payBanking.selected === 'object') ? payBanking.selected : { data: null, loading: false, error: '' };
-        payBanking.selected.data = obj;
-        payBanking.selected.loading = false;
-        payBanking.selected.error = '';
-        payBanking.selectedBatchId = id;
-      }
-    } catch {}
+    const obj0 = (typeof bankingPayBatchGet === 'function')
+      ? await bankingPayBatchGet(id, { detail_mode: 'BOOTSTRAP_ONLY', silent: true, reportError: false, throwOnError: true })
+      : await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}?detail_mode=BOOTSTRAP_ONLY`);
+    const obj = deep(obj0) || {};
+    if (Array.isArray(obj.candidates)) obj.candidates = sortCandidatesBySurname(obj.candidates);
 
-    try {
-      const childState = (payBanking && payBanking.child && typeof payBanking.child === 'object') ? payBanking.child : null;
-      if (childState && String(childState.batchId || '').trim() === id) {
-        if (typeof bankingPayBatchGet === 'function') {
-          const obj = await bankingPayBatchGet(id);
-          childState.data = deep(obj);
-          childState.error = '';
-          childState.loading = false;
-        } else {
-          const obj0 = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
-          const obj = deep(obj0);
-          if (obj && typeof obj === 'object' && Array.isArray(obj.candidates)) {
-            obj.candidates = sortCandidatesBySurname(obj.candidates);
-          }
-          childState.data = obj;
-          childState.error = '';
-          childState.loading = false;
-        }
-      }
-    } catch {}
+    payBanking.selected = (payBanking.selected && typeof payBanking.selected === 'object')
+      ? payBanking.selected
+      : { data: null, loading: false, error: '' };
+    payBanking.selected.data = obj;
+    payBanking.selected.loading = false;
+    payBanking.selected.error = '';
+    payBanking.selectedBatchId = id;
+
+    const childState = (payBanking && payBanking.child && typeof payBanking.child === 'object') ? payBanking.child : null;
+    if (childState && String(childState.batchId || '').trim() === id) {
+      childState.data = deep(obj);
+      childState.error = '';
+      childState.loading = false;
+    }
+
+    const paymentStatus = await loadCompleteBankingPayCancellationProjectionStatus(id);
+    const projection = applyBankingPayCancellationActiveProjection(paymentStatus, id);
 
     try {
       if (typeof bankingPayBatchesList === 'function') {
@@ -87644,6 +87677,7 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     } catch {}
 
     try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+    return { batch: obj, paymentStatus, projection };
   };
 
 
@@ -88131,6 +88165,45 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     }
   };
 
+  const waitForPayeEntryLoadIdle = async (timeoutMs = 15000) => {
+    const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || 15000);
+    const ctxState = ensureCtxState();
+    const pe = ctxState ? ctxState.pe : null;
+    while (pe?.__loadInFlight) {
+      if (!stillTopIsThisModal()) throw new Error('PAYE Entry was closed before the saved amounts could be refreshed.');
+      if (Date.now() >= deadline) throw new Error('PAYE Entry is still refreshing. Try again when the current refresh has finished.');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  const refreshPayeEntryAfterMutation = async (mutationResult) => {
+    await waitForPayeEntryLoadIdle();
+    if (!stillTopIsThisModal()) throw new Error('PAYE Entry was closed before the saved amounts could be refreshed.');
+
+    const ctxState = ensureCtxState();
+    if (!ctxState) throw new Error('PAYE Entry is no longer available.');
+    ctxState.pe.error = '';
+    await loadBatchIntoModal({ silent: true });
+    if (String(ctxState.pe.error || '').trim()) throw new Error(String(ctxState.pe.error).trim());
+
+    const refreshed = await refreshParentBankingSurfaces();
+    const expectedCandidates = Array.isArray(mutationResult?.candidate_summaries)
+      ? mutationResult.candidate_summaries
+      : (Array.isArray(mutationResult?.import?.candidate_summaries) ? mutationResult.import.candidate_summaries : []);
+    const projectedRows = Array.isArray(refreshed?.paymentStatus?.rows) ? refreshed.paymentStatus.rows : [];
+    for (const expected of expectedCandidates) {
+      const candidateId = String(expected?.pay_batch_candidate_id || '').trim();
+      const expectedAmount = Number(expected?.net_bank_amount);
+      if (!candidateId || !Number.isFinite(expectedAmount)) continue;
+      const projected = projectedRows.find((row) => String(row?.pay_batch_candidate_id || row?.candidate_token || '').trim() === candidateId);
+      const projectedPence = Number(projected?.active_payment_amount_pence);
+      if (!projected || !Number.isFinite(projectedPence) || projectedPence !== Math.round(expectedAmount * 100)) {
+        throw new Error('The saved PAYE amount is not yet reflected in the payment batch. Refresh the batch before continuing.');
+      }
+    }
+    return refreshed;
+  };
+
   const renderTab = (key) => {
     try {
       const ctxState = ensureCtxState();
@@ -88154,7 +88227,7 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       }
     } catch {}
 
-    try { refreshParentBankingSurfaces(); } catch {}
+    try { void refreshParentBankingSurfaces().catch(() => {}); } catch {}
   };
 
   const buildPatchEntries = (ctx, pe) => {
@@ -88292,16 +88365,14 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
         return false;
       }
 
-      await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/manual`, { entries });
+      const mutationResult = await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/manual`, { entries });
 
-      await loadBatchIntoModal({ silent: true });
+      await refreshPayeEntryAfterMutation(mutationResult);
 
       pe.netDraft = {};
       computeBaselinesFromData(ctx.data);
       syncPayeEntryFrameState();
       await rerender();
-
-      await refreshParentBankingSurfaces();
 
       try { if (typeof window.__toast === 'function') window.__toast('PAYE net payments saved'); } catch {}
 
@@ -88590,19 +88661,17 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
               const text = await f.text();
               if (!String(text || '').trim()) throw new Error('File is empty');
 
-              await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/sage`, {
+              const mutationResult = await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/sage`, {
                 csv_raw: text,
                 source_filename: name
               });
 
               pe.lastImportFilename = name;
 
-              await loadBatchIntoModal({ silent: true });
+              await refreshPayeEntryAfterMutation(mutationResult);
               pe.netDraft = {};
               computeBaselinesFromData(ctxState.ctx.data);
               syncPayeEntryFrameState();
-
-              await refreshParentBankingSurfaces();
 
               try { if (typeof window.__toast === 'function') window.__toast('Sage import applied'); } catch {}
             } catch (e2) {
