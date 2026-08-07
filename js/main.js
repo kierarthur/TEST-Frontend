@@ -7502,7 +7502,7 @@ async function openBankingReauthModal(opts = {}) {
       focusField('bankingReauthPassword');
     };
 
-    try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
+    setTimeout(wire, 0);
   });
 }
 
