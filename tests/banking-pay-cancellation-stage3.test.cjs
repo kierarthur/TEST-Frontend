@@ -125,25 +125,34 @@ test('progress modal obeys server-safe action and polling contracts', () => {
   const modal = slice('function renderBankingPayCancellationProgressModal', 'function buildBankingPayCancellationActiveProjection');
   assert.match(modal, /const enc = typeof escapeHtml === 'function'/);
   assert.match(modal, /status\.progress_stage/);
-  assert.match(modal, /status\.user_title/);
   assert.match(modal, /status\.user_message/);
   assert.match(modal, /status\.candidate_counts/);
   assert.match(modal, /status\.blockers/);
-  assert.match(modal, /status\.workbench_refresh/);
   assert.match(modal, /availableActions\.includes\('REAUTHENTICATE'\)/);
   assert.match(modal, /AUTHORISE/);
   assert.match(modal, /REJECT/);
   assert.match(modal, /REAUTHORISE_REMAINING/);
   assert.match(modal, /USE_GOLDEN_KEY/);
   assert.match(modal, /selected_amount_pence/);
-  assert.match(modal, /remaining_amount_pence/);
   assert.match(modal, /<progress/);
-  assert.match(modal, /Releasing failed payments/);
+  assert.match(modal, /Releasing failed payment/);
+  assert.match(modal, /Still working/);
+  assert.match(modal, /Payment cancellation complete/);
+  assert.doesNotMatch(modal, /<strong>Status:<\/strong>|<strong>Stage:<\/strong>|Payment availability/);
   assert.doesNotMatch(modal, /JSON\.stringify\(status|provider_event_id|plan_hash|selection_hash/);
   const polling = slice('function scheduleBankingPayCancellationProgressPoll', 'async function openBankingPayCancellationProgressModal');
   assert.match(polling, /poll_after_ms/);
   assert.match(polling, /Math\.min\(5000, Math\.max\(1000/);
   assert.match(polling, /state\.abortController/);
+});
+
+test('nested payment verification keeps its delegated handlers attached', () => {
+  const reauth = slice('async function openBankingReauthModal', 'async function openPayBatchPasswordConfirmModal');
+  assert.match(reauth, /body\.addEventListener\('click', onClick, true\)/);
+  assert.match(reauth, /body\.addEventListener\('input', onInput, true\)/);
+  assert.match(reauth, /body\.__bankingReauthHandler = \{ openToken, onClick, onInput \}/);
+  const afterAttach = reauth.slice(reauth.indexOf("body.addEventListener('click', onClick, true)"));
+  assert.doesNotMatch(afterAttach.slice(0, 500), /rerender\(\)/);
 });
 
 test('payment-status resolution sends only the bounded server context and user evidence', () => {

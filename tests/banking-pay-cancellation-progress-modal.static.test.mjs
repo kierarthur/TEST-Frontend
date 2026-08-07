@@ -24,12 +24,12 @@ test('progress modal is read-only, closeable and reopenable from durable request
   assert.doesNotMatch(modal, /localStorage|sessionStorage/);
 });
 
-test('financial completion and Workbench freshness are displayed independently', () => {
+test('financial completion is not obscured by internal Workbench refresh detail', () => {
   const modal = slice('function renderBankingPayCancellationProgressModal', 'async function refreshBankingPayCancellationFinancialViews');
-  assert.match(modal, /Payment availability/);
-  assert.match(modal, /NOT_STAGED/);
-  assert.match(modal, /STAGED|PENDING|CURRENT|FAILED/);
-  assert.match(modal, /financial cancellation stage is complete/i);
+  assert.match(modal, /status\.financial_complete === true/);
+  assert.match(modal, /const terminalSuccess = terminal/);
+  assert.match(modal, /Payment cancellation complete/);
+  assert.doesNotMatch(modal, /Payment availability|workbench_refresh|NOT_STAGED|STAGED|PENDING|CURRENT/);
 });
 
 test('financial completion refreshes Overview, Current Payment Status and PAYE authority without candidate fan-out', () => {

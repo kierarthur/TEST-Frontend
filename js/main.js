@@ -7491,7 +7491,6 @@ async function openBankingReauthModal(opts = {}) {
       body.addEventListener('input', onInput, true);
       body.__bankingReauthHandler = { openToken, onClick, onInput };
 
-      try { rerender(); } catch {}
       focusField('bankingReauthPassword');
     };
 
@@ -23194,7 +23193,7 @@ function renderBankingPayCancellationProgressModal() {
   const requestStatus = String(status.request_status || '').trim().toUpperCase();
   const progressStage = String(status.progress_stage || (state.error ? 'FAILED' : 'PLANNING')).trim().toUpperCase();
   const requestKind = String(status.request_kind || 'CANCEL_PAYMENT').trim().toUpperCase();
-  const processingLabel = requestKind === 'RELEASE_FAILED_PAYMENT' ? 'Releasing failed payments' : 'Cancelling payments';
+  const processingLabel = requestKind === 'RELEASE_FAILED_PAYMENT' ? 'Releasing failed payment' : 'Cancelling payment';
   const stageLabels = new Map([
     ['PLANNING', 'Preparing payment selection'], ['REVIEW', 'Ready to review'],
     ['REAUTHENTICATION', 'Verifying identity'], ['AUTHORISATION', 'Awaiting approval'],
@@ -23206,16 +23205,9 @@ function renderBankingPayCancellationProgressModal() {
   ]);
   const stageLabel = stageLabels.get(progressStage) || 'Payment cancellation in progress';
   const counts = status.candidate_counts && typeof status.candidate_counts === 'object' ? status.candidate_counts : {};
-  const workbench = status.workbench_refresh && typeof status.workbench_refresh === 'object' ? status.workbench_refresh : {};
-  const workbenchStatus = String(workbench.status || workbench.workbench_refresh_status || 'NOT_STAGED').trim().toUpperCase();
   const terminal = status.terminal === true || status.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(requestStatus);
   const availableActions = Array.isArray(status.available_actions) ? status.available_actions.map((value) => String(value || '').trim().toUpperCase()) : [];
   const planningReady = availableActions.includes('REAUTHENTICATE');
-  const requestKindLabel = requestKind === 'DRAFT_CANCEL' ? 'Draft payment cancellation'
-    : (requestKind === 'RELEASE_FAILED_PAYMENT' ? 'Failed payment release' : 'Payment cancellation');
-  const message = state.error || status.user_message || status.message || (planningReady
-    ? 'The exact payment selection is ready. Continue to verify your identity.'
-    : (terminal ? 'The financial cancellation stage is complete.' : 'CloudTMS is processing the cancellation in the background.'));
   const progress = status.progress && typeof status.progress === 'object' ? status.progress : {};
   const selected = Number(status.selected_count ?? progress.selected_count ?? counts.total ?? 0) || 0;
   const completed = Number(status.completed_count ?? progress.completed_count ?? 0) || 0;
@@ -23231,31 +23223,49 @@ function renderBankingPayCancellationProgressModal() {
     label: String(item?.label || '').trim() || 'A selected payment needs review.',
     count: Math.max(0, Number(item?.count || 0) || 0)
   }));
-  const availabilityText = workbenchStatus === 'CURRENT' ? 'Payment availability is up to date'
-    : (workbenchStatus === 'FAILED' ? 'Payment availability refresh needs review'
-      : (workbenchStatus === 'NOT_STAGED' ? 'Payment availability has not been refreshed yet' : 'Payment availability is refreshing'));
   const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Reauthorise remaining payments', RETRY_PLANNING: 'Retry cancellation preparation' };
-  const authActionButtons = availableActions.filter((action) => Object.prototype.hasOwnProperty.call(authActionLabels, action))
-    .map((action) => `<button type="button" class="btn btn-sm ${['AUTHORISE', 'RETRY_PLANNING'].includes(action) ? 'btn-primary' : 'btn-outline'}" data-banking-pay-cancellation-auth-action="${enc(action)}">${enc(authActionLabels[action])}</button>`)
+  const primaryAction = ['RETRY_PLANNING', 'AUTHORISE', 'USE_GOLDEN_KEY', 'REAUTHORISE_REMAINING']
+    .find((action) => availableActions.includes(action)) || '';
+  const secondaryActions = ['REJECT', 'CANCEL_REQUEST'].filter((action) => availableActions.includes(action));
+  const actionButtons = [primaryAction, ...secondaryActions].filter(Boolean)
+    .map((action) => `<button type="button" class="btn btn-sm ${action === primaryAction ? 'btn-primary' : 'btn-outline'}" data-banking-pay-cancellation-auth-action="${enc(action)}">${enc(authActionLabels[action])}</button>`)
     .join('');
+  const terminalSuccess = terminal && (applied > 0 || ['APPLIED', 'APPLIED_WITH_BLOCKERS'].includes(requestStatus));
+  const needsApproval = availableActions.includes('AUTHORISE') || availableActions.includes('USE_GOLDEN_KEY');
+  const waitingForApproval = progressStage === 'AUTHORISATION' && !needsApproval;
+  const retryPlanning = availableActions.includes('RETRY_PLANNING');
+  const stillWorking = !terminal && !planningReady && !retryPlanning && !needsApproval && !waitingForApproval && !state.error;
+  const friendlyTitle = state.error ? 'Cancellation needs attention'
+    : (planningReady ? 'Ready to continue'
+      : (retryPlanning ? 'Cancellation preparation needs attention'
+        : (needsApproval ? 'Approval needed'
+          : (waitingForApproval ? 'Waiting for approval'
+            : (terminalSuccess ? 'Payment cancellation complete'
+              : (terminal ? 'Cancellation ended' : processingLabel))))));
+  const selectedSummary = selected > 0
+    ? `${selected} payment${selected === 1 ? '' : 's'} · ${formatPence(status.selected_amount_pence)}`
+    : '';
+  const friendlyMessage = state.error
+    || (planningReady ? `${selectedSummary || 'The selected payment'} is ready. Confirm your identity to continue.`
+      : (retryPlanning ? 'No payment was changed. Retry preparation to continue this same cancellation request.'
+        : (needsApproval ? 'Review the selected payment, then approve or reject the cancellation.'
+          : (waitingForApproval ? 'An authorised person needs to approve this cancellation.'
+            : (terminalSuccess ? `Done. ${applied || selected} payment${(applied || selected) === 1 ? '' : 's'} totalling ${formatPence(status.removed_amount_pence)} ${((applied || selected) === 1) ? 'was' : 'were'} removed from this batch.`
+              : (terminal ? (String(status.user_message || '').trim() || 'No payment was changed. Review the issue below.')
+                : 'CloudTMS is working safely in the background. You can close this window and come back later.'))))));
   root.innerHTML = `
     <div class="card" style="width:min(620px,100%);max-height:90vh;overflow:auto;padding:18px;background:var(--panel,#fff);">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
-        <div><div style="font-weight:800;font-size:18px;">${enc(requestKindLabel)} progress</div><div class="mini" style="margin-top:3px;">You can close this window. Processing will continue safely.</div></div>
+        <div><div style="font-weight:800;font-size:20px;">${enc(friendlyTitle)}</div></div>
         <button type="button" class="btn btn-sm btn-outline" data-banking-pay-cancellation-close="1">Close</button>
       </div>
-      <div style="margin-top:16px;display:grid;gap:10px;">
-        <div><strong>Status:</strong> ${enc(status.user_title || stageLabel)}</div>
-        <div><strong>Stage:</strong> ${enc(stageLabel)}</div>
-        <div style="white-space:pre-wrap;">${enc(message)}</div>
-        ${(selected || completed || applied || blocked) ? `<div class="mini">Selected ${enc(selected)} · Completed ${enc(completed)} · Applied ${enc(applied)} · Needs review ${enc(blocked)} · Remaining ${enc(remaining)}</div>` : ''}
-        ${selected ? `<div><progress value="${enc(progressPercent)}" max="100" style="width:100%;"></progress><div class="mini">${enc(Math.trunc(progressPercent))}% complete</div></div>` : ''}
-        ${selected ? `<div class="mini">Selected ${enc(formatPence(status.selected_amount_pence))} · Removed ${enc(formatPence(status.removed_amount_pence))} · Remaining active ${enc(formatPence(status.remaining_amount_pence))}</div>` : ''}
-        ${blockerRows.length ? `<div class="card" style="padding:10px;"><div style="font-weight:700;">Payments needing review</div>${blockerRows.map((item) => `<div class="mini">${enc(item.label)}${item.count ? ` (${enc(item.count)})` : ''}</div>`).join('')}</div>` : ''}
-        <div class="card" style="padding:10px;"><div style="font-weight:700;">Payment availability</div><div class="mini">${enc(availabilityText)}</div></div>
+      <div style="margin-top:18px;display:grid;gap:14px;">
+        <div style="font-size:16px;line-height:1.5;white-space:pre-wrap;">${enc(friendlyMessage)}</div>
+        ${selectedSummary ? `<div class="card" style="padding:12px;font-weight:700;">${enc(selectedSummary)}</div>` : ''}
+        ${stillWorking ? `<div><progress ${progressPercent > 0 ? `value="${enc(progressPercent)}"` : ''} max="100" aria-label="Cancellation in progress" style="width:100%;"></progress><div class="mini" style="margin-top:4px;">Still working…</div></div>` : ''}
+        ${(terminal && blockerRows.length) ? `<div class="card" style="padding:10px;"><div style="font-weight:700;">What needs attention</div>${blockerRows.slice(0, 3).map((item) => `<div class="mini">${enc(item.label)}${item.count ? ` (${enc(item.count)})` : ''}</div>`).join('')}</div>` : ''}
         ${planningReady ? '<button type="button" class="btn btn-primary" data-banking-pay-cancellation-verify="1">Continue to verification</button>' : ''}
-        ${authActionButtons ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">${authActionButtons}</div>` : ''}
-        ${terminal ? '<div class="mini">Overview, Current Payment Status and the PAYE schedule are refreshed from the remaining active payment scope.</div>' : ''}
+        ${actionButtons ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">${actionButtons}</div>` : ''}
       </div>
     </div>`;
   root.querySelector('[data-banking-pay-cancellation-close="1"]')?.addEventListener('click', closeBankingPayCancellationProgressModal, { once: true });
