@@ -123,6 +123,7 @@ test('exactly 10,000 rows complete in 100 sequential pages without a false overf
 
 test('progress modal obeys server-safe action and polling contracts', () => {
   const modal = slice('function renderBankingPayCancellationProgressModal', 'function buildBankingPayCancellationActiveProjection');
+  assert.match(modal, /const enc = typeof escapeHtml === 'function'/);
   assert.match(modal, /status\.progress_stage/);
   assert.match(modal, /status\.user_title/);
   assert.match(modal, /status\.user_message/);

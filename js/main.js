@@ -23179,6 +23179,8 @@ async function maybeStartPendingDraftBankingPayCancellation() {
 function renderBankingPayCancellationProgressModal() {
   const state = bankingPayCancellationProgressState;
   if (!state.visible) return;
+  const enc = typeof escapeHtml === 'function' ? escapeHtml : (value) => String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
   let root = document.getElementById('bankingPayCancellationProgressModal');
   if (!root) {
     root = document.createElement('div');
