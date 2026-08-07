@@ -25,11 +25,13 @@ test('a payment-execute review summary may offer retry but the server remains fi
   assert.match(source, /canStartStandardExecution === true \|\| preProviderRetryRequested/);
   assert.match(source, /retry_pre_provider_failure: !!retryPreProviderOperationId/);
   assert.match(source, /retry_pre_provider_operation_id: retryPreProviderOperationId \|\| null/);
+  assert.match(source, /'retry_pre_provider_failure', 'retryPreProviderFailure'/);
+  assert.match(source, /'retry_pre_provider_operation_id', 'retryPreProviderOperationId'/);
 });
 
 test('the deployed HTML cache key loads the guarded retry and PAYE schedule asset', () => {
   assert.match(indexSource, /banking-paye-net-schedule=20260807-r1/);
-  assert.match(indexSource, /banking-pre-provider-retry=20260807-r3/);
+  assert.match(indexSource, /banking-pre-provider-retry=20260807-r4/);
 });
 
 test('the retry command carries the exact failed operation through normal reauthentication', () => {
@@ -40,4 +42,13 @@ test('the retry command carries the exact failed operation through normal reauth
   assert.match(source, /operationStatus === 'REVIEW_REQUIRED'/);
   assert.match(source, /failureCode === 'PAYMENT_EXECUTE_OPERATION_FAILED'/);
   assert.match(source, /retry_pre_provider_failure: !!retryPreProviderOperationId/);
+});
+
+test('the final execution request sanitizer preserves the guarded retry authority', () => {
+  const start = source.indexOf('const sanitiseExecutionStartPayload = (source) => {');
+  const end = source.indexOf('const boundedHints = {', start);
+  assert.ok(start >= 0 && end > start, 'execution request sanitizer must be present');
+  const sanitizer = source.slice(start, end);
+  assert.match(sanitizer, /'retry_pre_provider_failure', 'retryPreProviderFailure'/);
+  assert.match(sanitizer, /'retry_pre_provider_operation_id', 'retryPreProviderOperationId'/);
 });

@@ -69876,6 +69876,8 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
       'rail_env_snapshot', 'railEnvSnapshot',
       'provider_environment', 'providerEnvironment',
       'retry_blocked_funds', 'retryBlockedFunds',
+      'retry_pre_provider_failure', 'retryPreProviderFailure',
+      'retry_pre_provider_operation_id', 'retryPreProviderOperationId',
       'actor_intent', 'actorIntent',
       'csv_uploaded_confirmed', 'csvUploadedConfirmed',
       'csv_bank_confirm_ref', 'csvBankConfirmRef',
