@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8');
+const indexSource = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
 test('the progress modal accepts only the server-returned planning retry action', () => {
   assert.match(source, /'CANCEL_REQUEST', 'REAUTHORISE_REMAINING', 'RETRY_PLANNING'/);
@@ -17,4 +18,8 @@ test('planning retry reuses the existing correction auth-action route', () => {
   assert.match(source, /data-banking-pay-cancellation-auth-action/);
   assert.match(source, /const rpcAction = action === 'CANCEL_REQUEST' \? 'CANCEL' : action/);
   assert.match(source, /bankingPayPaymentCorrectionAuthAction\(state\.correctionRequestId, \{ action: rpcAction \}\)/);
+});
+
+test('the deployed entry point cache-busts the cancellation progress bundle', () => {
+  assert.match(indexSource, /banking-cancellation-progress=20260807-r2/);
 });
