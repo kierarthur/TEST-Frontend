@@ -7498,11 +7498,12 @@ async function openBankingReauthModal(opts = {}) {
       body.addEventListener('click', onClick, true);
       body.addEventListener('input', onInput, true);
       body.__bankingReauthHandler = { openToken, onClick, onInput };
+      reauthRoot.setAttribute('data-banking-reauth-wired', '1');
 
       focusField('bankingReauthPassword');
     };
 
-    setTimeout(wire, 0);
+    wire();
   });
 }
 
