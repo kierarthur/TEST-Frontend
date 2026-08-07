@@ -22901,14 +22901,26 @@ function normaliseBankingPayStage3StatusRow(row, correctionState) {
   const selected = selection.mode === 'ALL_MATCHING'
     ? (!!selection.requestedAction && actions.includes(selection.requestedAction) && !selection.excludedCandidateTokens.has(token))
     : selection.explicitCandidateTokens.has(token);
+  const payChannel = String(source.pay_channel || '').trim().toUpperCase();
+  const statusLabel = String(source.payment_display_state || source.display_status || 'ACTIVE').trim().toUpperCase();
+  const activePaymentAmountPence = Number(source.active_payment_amount_pence ?? source.active_amount_pence ?? source.original_payment_amount_pence ?? 0) || 0;
+  const originalPaymentAmountPence = Number(source.original_payment_amount_pence ?? source.original_amount_pence ?? 0) || 0;
+  const cancelledGrossBaseAmountPence = Number(source.cancelled_gross_base_amount_pence ?? 0) || 0;
+  const cancelledPayableAmountPence = Number(source.cancelled_payable_amount_pence ?? 0) || 0;
+  const cancelledBankAmountPence = Number(source.cancelled_bank_amount_pence ?? originalPaymentAmountPence) || 0;
   return {
     ...source, rowKey: String(source.row_key || token).trim(), row_key: String(source.row_key || token).trim(),
     candidateToken: token, candidate_token: token,
     candidateName: String(source.candidate_display_name || source.candidate_display || source.candidate_name || '').trim(),
     payeeName: String(source.payee_display || source.payee_display_name || '').trim(),
-    statusLabel: String(source.payment_display_state || source.display_status || 'ACTIVE').trim(),
-    paymentAmountPence: Number(source.active_payment_amount_pence ?? source.active_amount_pence ?? source.original_payment_amount_pence ?? 0) || 0,
-    paymentAmount: (Number(source.active_payment_amount_pence ?? source.active_amount_pence ?? source.original_payment_amount_pence ?? 0) || 0) / 100,
+    statusLabel,
+    payChannel,
+    paymentAmountPence: activePaymentAmountPence,
+    paymentAmount: activePaymentAmountPence / 100,
+    originalPaymentAmountPence,
+    cancelledGrossBaseAmountPence,
+    cancelledPayableAmountPence,
+    cancelledBankAmountPence,
     availableActions: actions, available_actions: actions, selectable: !!token && actions.length > 0, selected,
     plainBlocker: String(source.plain_blocker || '').trim(), progressDisplay: String(source.progress_display || '').trim()
   };
@@ -24302,11 +24314,16 @@ function renderBankingPayStage3StatusPanel(batchPayload, correctionState) {
     const selected = row.selected === true;
     const selectable = !!token && actions.length > 0;
     const detail = String(row.plainBlocker || row.progressDisplay || '').trim();
+    const historicalRemoval = row.statusLabel === 'CANCELLED' || row.statusLabel === 'RELEASED';
+    const historicalVerb = row.statusLabel === 'RELEASED' ? 'Released' : 'Cancelled';
+    const historicalAmountHtml = row.payChannel === 'PAYE'
+      ? `<div style="display:grid;gap:2px;text-align:right;"><strong>${enc(`Gross/base ${fmtAmount(row.cancelledGrossBaseAmountPence)}`)}</strong><span class="mini">${enc(`Net ${historicalVerb.toLowerCase()} ${fmtAmount(row.cancelledBankAmountPence)}`)}</span></div>`
+      : `<div style="display:grid;gap:2px;text-align:right;"><strong>${enc(fmtAmount(row.cancelledPayableAmountPence || row.cancelledBankAmountPence))}</strong><span class="mini">${enc(`${historicalVerb} amount`)}</span></div>`;
     return `<tr${selected ? ' class="payment-issue-row-selected"' : ''}>
       <td>${selectable ? `<input type="checkbox" data-banking-pay-stage3-action="toggle-row" data-candidate-token="${enc(token)}"${selected ? ' checked' : ''} aria-label="Select ${enc(row.candidateName || 'payment')}">` : ''}</td>
       <td>${enc(row.statusLabel || '')}</td>
       <td>${enc(row.candidateName || '')}${row.payeeName ? `<div class="mini">${enc(row.payeeName)}</div>` : ''}</td>
-      <td class="mono" style="text-align:right;">${enc(fmtAmount(row.paymentAmountPence))}</td>
+      <td class="mono" style="text-align:right;">${historicalRemoval ? historicalAmountHtml : enc(fmtAmount(row.paymentAmountPence))}</td>
       <td>${enc(actions.map((action) => actionLabels[action] || action).join(' · '))}</td>
       <td>${detail ? enc(detail) : '<span class="mini">No action blocker</span>'}</td>
     </tr>`;
@@ -43577,15 +43594,7 @@ function renderBankingTab(key, row) {
       <div class="row">
         <label>Status</label>
         <div class="controls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <span class="pill ${enc(topChipClass)}" title="${enc(isHealthy ? 'Banking is connected and ready.' : (defaultReason || 'Banking connection is not healthy. See Diagnostics for details.'))}">${enc(railLabel)}</span>
-          <span class="pill ${enc(testChipClass)}" title="${enc(isTestMode ? 'TEST MODE is ON' : 'TEST MODE is OFF')}">${enc(`Test mode: ${isTestMode ? 'On' : 'Off'}`)}</span>
-
-          <details style="margin-left:6px;">
-            <summary class="mini" style="cursor:pointer;opacity:.9;">Diagnostics ▸</summary>
-            <div class="mini" style="margin-top:6px;opacity:.9;white-space:pre-wrap;">
-              ${enc(diagLines)}
-            </div>
-          </details>
+          <span class="pill ${enc(topChipClass)}" title="${enc(isHealthy ? 'Banking is connected and ready.' : (defaultReason || 'Banking connection is not ready. Refresh Banking Pay and try again.'))}">${enc(railLabel)}</span>
         </div>
       </div>
     </div>
@@ -48584,7 +48593,7 @@ const collectPreviewRowIds = (previewLike) => {
   const clearFiltersTitle = hasActivePayFilters
     ? 'Clear payment route, candidate and client filters'
     : 'No Banking Pay filters are currently applied';
-  const filterSummary = `Payment route ${draftScopeLabel}, Candidate ${hasCandidateFilter ? candDisplay : 'ALL candidates'}, Client ${hasClientFilter ? clientDisplay : 'ALL clients'}`;
+  const filterSummary = `Scope: ${draftScopeLabel} • ${hasCandidateFilter ? candDisplay : 'All candidates'} • ${hasClientFilter ? clientDisplay : 'All clients'}`;
   const previewEnvelope = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : {};
   const pv = (previewEnvelope.preview && typeof previewEnvelope.preview === 'object' && !Array.isArray(previewEnvelope.preview)) ? previewEnvelope.preview : previewEnvelope;
   const readiness = (previewEnvelope.readiness && typeof previewEnvelope.readiness === 'object' && !Array.isArray(previewEnvelope.readiness))
@@ -56095,7 +56104,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       return `<div class="mini" style="opacity:.9;white-space:pre-wrap;">${enc('Loading the first Ready to Pay preview page.')}</div>`;
     }
     if (!authoritativeRenderState.readyForDraft || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) {
-      return `<div class="warn" style="white-space:pre-wrap;">${enc('Select at least one current eligible Ready to Pay row before creating a draft.')}</div>`;
+      return '';
     }
     return '';
   })();
@@ -56580,9 +56589,18 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 
   return `
     <div class="card" id="bankingPayNewBatchWizard">
-      <div class="row" style="gap:10px;">
-        <label>Create / Preview</label>
-        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+      <div style="display:grid;gap:10px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:800;">Create payment batch</div>
+            <div class="mini" style="opacity:.82;">Choose Ready to Pay rows, then create a draft.</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <span class="pill">${enc(String(authoritativeSelectedCurrentEligibleReadyRowCount))} selected</span>
+            <span class="mini" style="opacity:.78;">${enc(`${selectedPreviewRowSet.size}/${effectiveAllPreviewRowIds.length || 0} on this page`)}</span>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
           ${pvFriendly ? `<div class="error"><div style="font-weight:700;margin-bottom:4px;">${enc(pvFriendlyTitle)}</div><div style="white-space:pre-wrap;">${enc(pvFriendlyMessage)}</div></div>` : (pvErr ? `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>` : '')}
           ${cdFriendly ? `<div class="error"><div style="font-weight:700;margin-bottom:4px;">${enc(cdFriendlyTitle)}</div><div style="white-space:pre-wrap;">${enc(cdFriendlyMessage)}</div></div>` : (cdErr ? `<div class="error" style="white-space:pre-wrap;">${enc(cdErr)}</div>` : '')}
           ${activeDraftCreateStatusBannerHtml}
@@ -56609,7 +56627,6 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             </div>
           </div>
 
-          <div class="mini" style="opacity:.85;">${enc(`Selected current eligible Ready to Pay rows: ${authoritativeSelectedCurrentEligibleReadyRowCount} • Visible selected on this page: ${selectedPreviewRowSet.size}/${effectiveAllPreviewRowIds.length || 0}`)}</div>
           ${previewProgressHtml}
 
           <div class="card" style="margin-top:10px;">

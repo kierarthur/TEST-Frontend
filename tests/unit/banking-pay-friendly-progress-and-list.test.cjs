@@ -52,3 +52,25 @@ test('a failed cancellation start remains visible until status changes or the us
   assert.match(cancellation, /data-banking-pay-cancellation-refresh="1"/);
   assert.doesNotMatch(cancellation, /Retry cancellation preparation/);
 });
+
+test('Banking Pay keeps operational diagnostics out of the customer modal and presents a compact create summary', () => {
+  const banking = sliceBetween('function renderBankingTab', 'function renderBankingPayTab');
+  assert.doesNotMatch(banking, /Test mode: $\{isTestMode \? 'On' : 'Off'\}/);
+  assert.doesNotMatch(banking, /<summary[^>]*>Diagnostics/);
+
+  const wizard = sliceBetween('const readyEmptyMessage', 'function deriveBankingAttentionStateFromBatchList');
+  assert.match(wizard, /Create payment batch/);
+  assert.match(wizard, /Choose Ready to Pay rows, then create a draft/);
+  assert.match(source, /const filterSummary = `Scope:/);
+  assert.doesNotMatch(wizard, /Create \/ Preview/);
+  assert.doesNotMatch(wizard, /Selected current eligible Ready to Pay rows:/);
+});
+
+test('Current Payment Status presents cancelled PAYE gross and net and one Umbrella payable amount', () => {
+  const panel = sliceBetween('function renderBankingPayStage3StatusPanel', 'function refreshBankingPayStage3SelectedRows');
+  assert.match(panel, /Gross\/base/);
+  assert.match(panel, /historicalVerb\.toLowerCase/);
+  assert.match(panel, /cancelledGrossBaseAmountPence/);
+  assert.match(panel, /cancelledPayableAmountPence/);
+  assert.match(panel, /cancelledBankAmountPence/);
+});

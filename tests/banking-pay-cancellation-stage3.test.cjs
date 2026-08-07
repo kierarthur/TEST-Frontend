@@ -42,6 +42,37 @@ test('Stage 3 consumes only server-returned candidate tokens and available actio
   assert.deepEqual(Array.from(legacyAliasOnly.available_actions), []);
 });
 
+test('cancelled payment rows preserve channel-specific frozen amounts instead of displaying active zero', () => {
+  const api = stage3Context();
+  const paye = api.normalise({
+    candidate_token: 'candidate-paye',
+    payment_display_state: 'CANCELLED',
+    pay_channel: 'PAYE',
+    available_actions: [],
+    active_payment_amount_pence: 0,
+    original_payment_amount_pence: 5,
+    cancelled_gross_base_amount_pence: 14882,
+    cancelled_payable_amount_pence: 14882,
+    cancelled_bank_amount_pence: 5
+  }, {});
+  assert.equal(paye.paymentAmountPence, 0);
+  assert.equal(paye.cancelledGrossBaseAmountPence, 14882);
+  assert.equal(paye.cancelledBankAmountPence, 5);
+  assert.equal(paye.payChannel, 'PAYE');
+
+  const umbrella = api.normalise({
+    candidate_token: 'candidate-umbrella',
+    payment_display_state: 'CANCELLED',
+    pay_channel: 'UMBRELLA',
+    available_actions: [],
+    active_payment_amount_pence: 0,
+    cancelled_payable_amount_pence: 22500,
+    cancelled_bank_amount_pence: 22500
+  }, {});
+  assert.equal(umbrella.cancelledPayableAmountPence, 22500);
+  assert.equal(umbrella.payChannel, 'UMBRELLA');
+});
+
 test('explicit selection emits the exact Stage 2 contract with no filter authority', () => {
   const api = stage3Context();
   const state = { stage3Enabled: true, stage3SnapshotToken: 'filtered-snapshot', stage3ExplicitSnapshotToken: 'explicit-snapshot-1', stage3SortKey: 'STATUS', stage3SortDirection: 'ASC' };
