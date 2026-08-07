@@ -23125,8 +23125,30 @@ async function bankingPayPaymentCorrectionReauth(correctionRequestId, reauthToke
 const bankingPayCancellationProgressState = {
   correctionRequestId: '', payBatchId: '', status: null, timer: null,
   abortController: null, financialRefreshDone: false, visible: false, error: '',
-  pendingDraftReauthToken: '', verificationInFlight: false
+  errorStatusKey: '', pendingDraftReauthToken: '', verificationInFlight: false
 };
+
+function bankingPayCancellationStatusKey(status) {
+  const source = status && typeof status === 'object' ? status : {};
+  return [
+    source.request_status || source.status,
+    source.progress_stage,
+    source.completed_count,
+    source.applied_count,
+    source.blocked_count,
+    source.financial_complete,
+    source.terminal
+  ].map((value) => String(value == null ? '' : value).trim().toUpperCase()).join('|');
+}
+
+function setBankingPayCancellationStartError(error) {
+  const state = bankingPayCancellationProgressState;
+  state.errorStatusKey = bankingPayCancellationStatusKey(state.status);
+  const status = Number(error?.status || error?.response?.status || 0);
+  state.error = status === 401 || status === 403
+    ? 'Your identity confirmation has expired. No payment was changed. Close this message and confirm your identity again when you are ready.'
+    : 'Identity was confirmed, but CloudTMS could not start the cancellation. No payment was changed. Refresh the status to check this same request.';
+}
 
 function closeBankingPayCancellationProgressModal() {
   const state = bankingPayCancellationProgressState;
@@ -23158,6 +23180,7 @@ async function startPreparedBankingPayCancellation(ceremonyToken) {
     });
     state.pendingDraftReauthToken = '';
     state.error = '';
+    state.errorStatusKey = '';
     state.status = await bankingPayPaymentCorrectionStatus(state.correctionRequestId);
     return true;
   } finally {
@@ -23176,7 +23199,7 @@ async function maybeStartPendingDraftBankingPayCancellation() {
     return await startPreparedBankingPayCancellation(token);
   } catch (error) {
     state.pendingDraftReauthToken = '';
-    state.error = String(error?.message || error || 'Please verify your identity again.');
+    setBankingPayCancellationStartError(error);
     return false;
   }
 }
@@ -23213,7 +23236,7 @@ function renderBankingPayCancellationProgressModal() {
   const counts = status.candidate_counts && typeof status.candidate_counts === 'object' ? status.candidate_counts : {};
   const terminal = status.terminal === true || status.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(requestStatus);
   const availableActions = Array.isArray(status.available_actions) ? status.available_actions.map((value) => String(value || '').trim().toUpperCase()) : [];
-  const planningReady = availableActions.includes('REAUTHENTICATE');
+  const planningReady = !state.error && availableActions.includes('REAUTHENTICATE');
   const progress = status.progress && typeof status.progress === 'object' ? status.progress : {};
   const selected = Number(status.selected_count ?? progress.selected_count ?? counts.total ?? 0) || 0;
   const completed = Number(status.completed_count ?? progress.completed_count ?? 0) || 0;
@@ -23229,7 +23252,7 @@ function renderBankingPayCancellationProgressModal() {
     label: String(item?.label || '').trim() || 'A selected payment needs review.',
     count: Math.max(0, Number(item?.count || 0) || 0)
   }));
-  const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Reauthorise remaining payments', RETRY_PLANNING: 'Retry cancellation preparation' };
+  const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Reauthorise remaining payments', RETRY_PLANNING: 'Continue preparation' };
   const primaryAction = ['RETRY_PLANNING', 'AUTHORISE', 'USE_GOLDEN_KEY', 'REAUTHORISE_REMAINING']
     .find((action) => availableActions.includes(action)) || '';
   const secondaryActions = ['REJECT', 'CANCEL_REQUEST'].filter((action) => availableActions.includes(action));
@@ -23261,7 +23284,7 @@ function renderBankingPayCancellationProgressModal() {
                 : 'CloudTMS is working safely in the background. You can close this window and come back later.'))))));
   root.innerHTML = `
     <style>
-      #bankingPayCancellationProgressModal, #bankingPayCancellationProgressModal * { box-sizing:border-box; font-family:Arial,Helvetica,sans-serif; }
+      #bankingPayCancellationProgressModal, #bankingPayCancellationProgressModal * { box-sizing:border-box; font-family:inherit; }
       #bankingPayCancellationProgressModal .ctms-cancel-dialog { width:min(620px,100%);max-height:90vh;overflow:auto;padding:22px;background:#0b1629;color:#f8fafc;border:1px solid #33445f;border-radius:18px;box-shadow:0 24px 70px rgba(0,0,0,.42); }
       #bankingPayCancellationProgressModal .ctms-cancel-title { margin:0;font-size:22px;line-height:1.25;font-weight:750;letter-spacing:0; }
       #bankingPayCancellationProgressModal .ctms-cancel-message { font-size:16px;line-height:1.55;color:#e2e8f0;white-space:pre-wrap; }
@@ -23284,11 +23307,27 @@ function renderBankingPayCancellationProgressModal() {
         ${selectedSummary ? `<div class="ctms-cancel-summary">${enc(selectedSummary)}</div>` : ''}
         ${stillWorking ? `<div><progress class="ctms-cancel-progress" ${progressPercent > 0 ? `value="${enc(progressPercent)}"` : ''} max="100" aria-label="Cancellation in progress"></progress><div class="ctms-cancel-mini">Still working…</div></div>` : ''}
         ${(terminal && blockerRows.length) ? `<div class="ctms-cancel-summary"><div style="font-weight:700;">What needs attention</div>${blockerRows.slice(0, 3).map((item) => `<div class="ctms-cancel-mini">${enc(item.label)}${item.count ? ` (${enc(item.count)})` : ''}</div>`).join('')}</div>` : ''}
+        ${state.error ? '<div class="ctms-cancel-actions"><button type="button" class="ctms-cancel-btn is-primary" data-banking-pay-cancellation-refresh="1">Refresh status</button></div>' : ''}
         ${planningReady ? '<div class="ctms-cancel-actions"><button type="button" class="ctms-cancel-btn is-primary" data-banking-pay-cancellation-verify="1">Continue to verification</button></div>' : ''}
-        ${actionButtons ? `<div class="ctms-cancel-actions">${actionButtons}</div>` : ''}
+        ${!state.error && actionButtons ? `<div class="ctms-cancel-actions">${actionButtons}</div>` : ''}
       </div>
     </div>`;
   root.querySelector('[data-banking-pay-cancellation-close="1"]')?.addEventListener('click', closeBankingPayCancellationProgressModal, { once: true });
+  root.querySelector('[data-banking-pay-cancellation-refresh="1"]')?.addEventListener('click', async () => {
+    try {
+      state.error = '';
+      state.errorStatusKey = '';
+      state.abortController = new AbortController();
+      state.status = await bankingPayPaymentCorrectionStatus(state.correctionRequestId, { signal: state.abortController.signal });
+    } catch (error) {
+      state.error = 'CloudTMS could not refresh the cancellation status. No payment was changed. Please try refreshing again shortly.';
+      state.errorStatusKey = bankingPayCancellationStatusKey(state.status);
+    } finally {
+      state.abortController = null;
+      renderBankingPayCancellationProgressModal();
+      scheduleBankingPayCancellationProgressPoll(state.error ? 5000 : null);
+    }
+  }, { once: true });
   root.querySelector('[data-banking-pay-cancellation-verify="1"]')?.addEventListener('click', async () => {
     try {
       closeBankingPayCancellationProgressModal();
@@ -23304,7 +23343,7 @@ function renderBankingPayCancellationProgressModal() {
       scheduleBankingPayCancellationProgressPoll();
     } catch (error) {
       state.visible = true;
-      state.error = String(error?.message || error || 'Please verify your identity again.');
+      setBankingPayCancellationStartError(error);
       renderBankingPayCancellationProgressModal();
       scheduleBankingPayCancellationProgressPoll();
     }
@@ -23509,8 +23548,13 @@ function scheduleBankingPayCancellationProgressPoll(delayMs = null) {
   state.timer = setTimeout(async () => {
     try {
       state.abortController = new AbortController();
-      state.status = await bankingPayPaymentCorrectionStatus(state.correctionRequestId, { signal: state.abortController.signal });
-      state.error = '';
+      const nextStatus = await bankingPayPaymentCorrectionStatus(state.correctionRequestId, { signal: state.abortController.signal });
+      const nextStatusKey = bankingPayCancellationStatusKey(nextStatus);
+      state.status = nextStatus;
+      if (!state.error || !state.errorStatusKey || nextStatusKey !== state.errorStatusKey) {
+        state.error = '';
+        state.errorStatusKey = '';
+      }
       await maybeStartPendingDraftBankingPayCancellation();
       if (state.status?.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status)) await refreshBankingPayCancellationFinancialViews();
     } catch (error) {
@@ -23543,6 +23587,7 @@ async function openBankingPayCancellationProgressModal({ correctionRequestId = '
   if (!state.correctionRequestId) throw new Error('Payment cancellation request ID is required.');
   state.visible = true;
   state.error = '';
+  state.errorStatusKey = '';
   renderBankingPayCancellationProgressModal();
   try {
     state.abortController = new AbortController();
@@ -59935,7 +59980,7 @@ function formatBankingPayScheduledAtUkDisplay(value) {
     const parts = new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Europe/London',
       year: 'numeric',
-      month: 'long',
+      month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
@@ -59949,20 +59994,14 @@ function formatBankingPayScheduledAtUkDisplay(value) {
     const hour = read('hour').padStart(2, '0');
     const minute = read('minute').padStart(2, '0');
     if (!Number.isInteger(day) || day <= 0 || !month || !year || !/^\d{2}$/.test(hour) || !/^\d{2}$/.test(minute)) return '';
-    const mod100 = day % 100;
-    const suffix = (mod100 >= 11 && mod100 <= 13)
-      ? 'th'
-      : day % 10 === 1
-        ? 'st'
-        : day % 10 === 2
-          ? 'nd'
-          : day % 10 === 3
-            ? 'rd'
-            : 'th';
-    return `${day}${suffix} ${month} ${year} at ${hour}${minute}hrs`;
+    return `${day} ${month} ${year} at ${hour}${minute}hrs`;
   } catch {
     return '';
   }
+}
+
+function formatBankingPayUkTimingDisplay(value) {
+  return formatBankingPayScheduledAtUkDisplay(value);
 }
 
 
@@ -62043,27 +62082,28 @@ function renderPayBatchListPanel() {
     const commitState = String(r?.execution_commit_state || '').trim().toUpperCase();
     const prov = String(r?.rail_provider_snapshot || r?.rail_provider || '').trim().toUpperCase();
     const env = String(r?.rail_env_snapshot || r?.rail_env || '').trim().toUpperCase();
-    const created = fmtUtcToUk(r?.created_at_utc || r?.created_at || '');
+    const created = formatBankingPayUkTimingDisplay(r?.created_at_utc || r?.created_at || '');
     const lastFundsChecked = fmtUtcToUk(r?.last_funds_check_at_utc || r?.last_funds_check_json?.checked_at_utc || '');
     const scheduleKind = upperTrim(r?.schedule_kind || r?.scheduleKind || '');
     const scheduledAtUtc = trimStr(r?.scheduled_at_utc || r?.scheduledAtUtc || '');
     const scheduledAtUkLabel = scheduleKind === 'SCHEDULED' && scheduledAtUtc
       ? formatBankingPayScheduledAtUkDisplay(scheduledAtUtc)
       : '';
-    const scheduledPaymentListHtml = scheduledAtUkLabel
-      ? `
-        <div
-          class="banking-pay-scheduled-payment-list-label"
-          data-banking-pay-scheduled-payment="1"
-          style="min-width:250px;padding:8px 10px;border:2px solid #2563eb;border-radius:10px;background:#dbeafe;color:#1e3a8a;box-shadow:0 1px 3px rgba(37,99,235,.18);"
-          title="Scheduled payment time shown in UK local time"
-        >
-          <div style="font-weight:900;line-height:1.2;">Scheduled payment</div>
-          <div class="mini" style="font-weight:800;margin-top:3px;">${enc(scheduledAtUkLabel)}</div>
-          <div class="mini" style="opacity:.82;margin-top:2px;">UK time</div>
-        </div>
-      `
-      : `<span class="mini" style="opacity:.65;">—</span>`;
+    const paidAtUkLabel = formatBankingPayUkTimingDisplay(
+      r?.paid_at_utc || r?.paidAtUtc || r?.settled_at_utc || r?.settledAtUtc ||
+      r?.payment_completed_at_utc || r?.paymentCompletedAtUtc ||
+      ((stx === 'SETTLED' || stx === 'PAID') ? (r?.completed_at_utc || r?.completedAtUtc) : '')
+    );
+    const cancelledAtUkLabel = formatBankingPayUkTimingDisplay(
+      r?.cancelled_at_utc || r?.cancelledAtUtc || r?.canceled_at_utc || r?.canceledAtUtc ||
+      ((stx === 'CANCELLED' || stx === 'CANCELED') ? (r?.completed_at_utc || r?.completedAtUtc) : '')
+    );
+    const payDateLabel = (() => {
+      if (!payDate) return '';
+      const date = new Date(`${payDate.slice(0, 10)}T12:00:00Z`);
+      if (!Number.isFinite(date.getTime())) return fmtDateOnly(payDate);
+      return new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+    })();
     const activePaymentExecutionOperation = normaliseActivePaymentExecutionOperationForListRow(r);
     const activePaymentExecutionOperationId = trimStr(activePaymentExecutionOperation?.operation_id || activePaymentExecutionOperation?.operationId || '');
     const activePaymentExecutionStatusLabel = activePaymentExecutionOperation ? formatActivePaymentExecutionStatusLabel(activePaymentExecutionOperation) : '';
@@ -62092,6 +62132,18 @@ function renderPayBatchListPanel() {
 
     const batchKindRaw = String(r?.batch_kind || r?.batchKind || '').trim().toUpperCase();
     const batchKind = (batchKindRaw === 'PAYE' || batchKindRaw === 'UMBRELLA' || batchKindRaw === 'MIXED') ? batchKindRaw : '';
+
+    const routeLabel = (() => {
+      const rawRoute = [
+        r?.payment_route, r?.paymentRoute, r?.settlement_route, r?.settlementRoute,
+        r?.rail_kind, r?.railKind, r?.rail_provider_snapshot, r?.rail_provider
+      ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean).join(' ');
+      if (/CSV|FILE/.test(rawRoute)) return 'CSV upload';
+      if (/CASHLESS|NO[_ -]?BANK|INTERNAL[_ -]?SETTLEMENT/.test(rawRoute)) return 'Cashless settlement';
+      if (/REVOLUT/.test(rawRoute)) return 'Revolut';
+      if (prov) return prov.slice(0, 1) + prov.slice(1).toLowerCase();
+      return '—';
+    })();
 
     const isActive = (id && selectedId && id === selectedId);
     const issueBadge = bankingPayNormaliseBatchIssueBadge(r);
@@ -62249,12 +62301,36 @@ function renderPayBatchListPanel() {
       `
       : '';
 
-    const batchActionsHtml = `
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-        ${batchTimesheetsBtn}
-        ${deleteDraftBtn}
-      </div>
-    `;
+    const cleanStatus = (() => {
+      if (hasDraftCreationFailure) return 'Draft creation failed';
+      if (['CANCELLED', 'CANCELED'].includes(stx) || /CANCELLED|CANCELED/.test(String(displayStatus).toUpperCase())) return 'Cancelled';
+      if (['SETTLED', 'PAID'].includes(stx) || paidAtUkLabel) return 'Paid';
+      if (scheduleKind === 'SCHEDULED' && scheduledAtUkLabel) return 'Scheduled';
+      if (stx === 'DRAFT') return 'Draft';
+      return String(displayStatus || safeBatchStatusLabel(stx, r) || 'Not paid').replace(/[_-]+/g, ' ').trim();
+    })();
+    const cleanStatusClass = cleanStatus === 'Paid' ? 'pill-ok'
+      : cleanStatus === 'Scheduled' ? 'pill-info'
+        : (cleanStatus === 'Cancelled' || cleanStatus === 'Draft creation failed') ? 'pill-bad'
+          : blockedFundsRow ? 'pill-warn' : pillClass;
+    const statusNote = communicationWarning.hasIssue
+      ? communicationWarning.message
+      : draftStaleHint.hasHint
+        ? draftStaleHint.message
+        : blockedFundsReason || '';
+    const timingPrimary = paidAtUkLabel
+      ? `Paid ${paidAtUkLabel}`
+      : cancelledAtUkLabel
+        ? `Cancelled ${cancelledAtUkLabel}`
+        : scheduledAtUkLabel
+          ? `Scheduled for ${scheduledAtUkLabel}`
+          : '';
+    const timingHtml = `
+      <div class="banking-pay-batch-timing" title="Times shown in UK local time">
+        ${timingPrimary ? `<div style="font-weight:800;line-height:1.35;">${enc(timingPrimary)}</div>` : ''}
+        ${payDateLabel ? `<div class="mini" style="margin-top:${timingPrimary ? '4px' : '0'};">Pay date ${enc(payDateLabel)}</div>` : ''}
+        ${created ? `<div class="mini" style="margin-top:3px;opacity:.82;">Created ${enc(created)}</div>` : ''}
+      </div>`;
 
     return `
       <tr
@@ -62263,21 +62339,19 @@ function renderPayBatchListPanel() {
         data-batch-id="${enc(id)}"
         data-has-payment-issue="${communicationWarning.hasIssue ? '1' : (hasDraftCreationFailure ? '1' : (hasPaymentOutcome ? (paymentOutcome.hasIssues ? '1' : '0') : (issueBadge.hasPaymentIssue || paymentIssuesRequired ? '1' : '0')))}"
         data-focus-payment-issue-panel="${communicationWarning.hasIssue ? '1' : (hasDraftCreationFailure ? '1' : (hasPaymentOutcome ? (paymentOutcome.showCurrentPaymentStatusAction ? '1' : '0') : (issueBadge.focusPaymentIssuePanel || paymentIssuesRequired ? '1' : '0')))}"
-        title="${enc(id)}"
+        aria-label="${enc(`${batchKind || 'Payment'} batch — ${cleanStatus}`)}"
       >
-        <td class="mono">${enc(id ? (id.slice(0, 8) + '…') : '')}</td>
-        <td>${enc(payDate ? fmtDateOnly(payDate) : '—')}</td>
         <td>${batchKind ? `<span class="pill pill-info" title="Batch kind">${enc(batchKind)}</span>` : `<span class="mini" style="opacity:.75;">—</span>`}</td>
-        <td><span class="pill ${enc(blockedFundsRow ? 'pill-warn' : pillClass)}">${enc(displayStatus)}</span>${scheduledAtUkLabel ? ` <span class="pill pill-info" style="font-weight:900;">Scheduled</span>` : ''}${authPill}${issuePillsHtml}${blockedFundsReason ? `<div class="mini" style="margin-top:4px;color:#991b1b;font-weight:700;">${enc(blockedFundsReason)}</div>` : ''}${communicationWarning.hasIssue ? `<div class="mini" style="margin-top:4px;color:#92400e;font-weight:700;">${enc(communicationWarning.message)}</div>` : ''}${draftStaleHint.hasHint ? `<div class="mini" style="margin-top:4px;color:#92400e;font-weight:700;">${enc(draftStaleHint.message)}</div>` : ''}${lastFundsChecked && blockedFundsRow ? `<div class="mini" style="margin-top:2px;opacity:.82;">Last funds checked ${enc(lastFundsChecked)}</div>` : ''}</td>
-        <td>${scheduledPaymentListHtml}</td>
-        <td class="mini">${enc((prov || '—') + (env ? `/${env}` : ''))}</td>
-        <td class="mini">${enc(created || '')}</td>
-        <td style="white-space:nowrap;">${batchActionsHtml}</td>
+        <td><span class="pill ${enc(cleanStatusClass)}">${enc(cleanStatus)}</span>${statusNote ? `<div class="mini" style="margin-top:5px;max-width:240px;line-height:1.35;">${enc(statusNote)}</div>` : ''}</td>
+        <td style="min-width:220px;">${timingHtml}</td>
+        <td class="mini" style="font-weight:700;">${enc(routeLabel)}</td>
+        <td style="text-align:center;white-space:nowrap;">${batchTimesheetsBtn}</td>
+        <td style="white-space:nowrap;">${deleteDraftBtn}</td>
       </tr>
     `;
   }).join('');
   const emptyHtml = (!loading && items.length === 0)
-    ? `<tr><td colspan="8" class="mini" style="opacity:.85;">No batches found for current filters.</td></tr>`
+    ? `<tr><td colspan="6" class="mini" style="opacity:.85;">No batches found for current filters.</td></tr>`
     : '';
 
   const prevOffset = Math.max(0, offsetNow - limitNow);
@@ -62326,17 +62400,15 @@ function renderPayBatchListPanel() {
           </div>
 
           <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-            <table class="grid" style="min-width:980px; table-layout:auto;">
+            <table class="grid banking-pay-batch-list" style="min-width:900px; table-layout:fixed;">
               <thead>
                 <tr>
-                  <th>ID</th>
-                  <th>Pay date</th>
-                  <th>Kind</th>
-                  <th>Status</th>
-                  <th>Schedule</th>
-                  <th>Rail</th>
-                  <th>Created</th>
-                  <th style="width:240px;">Actions</th>
+                  <th style="width:90px;">Type</th>
+                  <th style="width:210px;">Status</th>
+                  <th style="width:260px;">Timing</th>
+                  <th style="width:140px;">Route</th>
+                  <th style="width:90px;text-align:center;">Timesheets</th>
+                  <th style="width:190px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -182609,7 +182681,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   cleanupStaleBankingOperationProgressOverlays();
 
   const instanceId = `banking_pay_operation_progress_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const modalState = { closed: false, operation: state, nudgeInFlight: false, pollTimer: null, pollInFlight: false, terminalPainted: false, terminalPaintedAtUtc: null, terminalChildVerificationInFlight: false, terminalObservedNotified: false, terminalCloseNotified: false };
+  const modalState = { closed: false, operation: state, nudgeInFlight: false, pollTimer: null, pollInFlight: false, terminalPainted: false, terminalPaintedAtUtc: null, terminalChildVerificationInFlight: false, terminalObservedNotified: false, terminalCloseNotified: false, maxMeaningfulPercent: 0 };
   const overlay = document.createElement('div');
   overlay.id = `${instanceId}_overlay`;
   overlay.setAttribute('data-cloudtms-banking-pay-operation-progress', 'true');
@@ -182619,35 +182691,36 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   root.id = `${instanceId}_root`;
   root.setAttribute('role', 'dialog');
   root.setAttribute('aria-modal', 'true');
-  root.style.cssText = 'width:min(820px,calc(100vw - 36px));max-height:calc(100vh - 36px);overflow:hidden;border-radius:18px;background:#fff;box-shadow:0 24px 70px rgba(15,23,42,0.32);border:1px solid rgba(148,163,184,0.35);font-family:inherit;color:#0f172a';
+  root.style.cssText = 'width:min(620px,calc(100vw - 36px));max-height:calc(100vh - 36px);overflow:hidden;border-radius:18px;background:#0b1629;box-shadow:0 24px 70px rgba(0,0,0,0.42);border:1px solid #33445f;font-family:inherit;color:#f8fafc';
   root.innerHTML = `
-    <div style="padding:20px 22px 16px;border-bottom:1px solid rgba(226,232,240,0.95);display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
+    <style>
+      @keyframes cloudtmsOperationProgressMove { from { transform:translateX(-120%); } to { transform:translateX(310%); } }
+      [data-cloudtms-banking-pay-operation-progress] .ctms-op-btn { appearance:none;min-height:40px;padding:9px 15px;border-radius:10px;border:1px solid #526681;background:#13233a;color:#f8fafc;font:inherit;font-size:14px;font-weight:700;cursor:pointer; }
+      [data-cloudtms-banking-pay-operation-progress] .ctms-op-btn:hover { filter:brightness(1.08); }
+      [data-cloudtms-banking-pay-operation-progress] .ctms-op-btn.is-primary { background:#16834b;border-color:#22a762;color:#fff; }
+      [data-cloudtms-banking-pay-operation-progress] [data-role="op-bar"].is-indeterminate { width:34%!important;animation:cloudtmsOperationProgressMove 1.25s ease-in-out infinite; }
+    </style>
+    <div style="padding:22px 22px 16px;border-bottom:1px solid #263853;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
       <div>
-        <div data-role="op-title" style="font-size:18px;font-weight:800;letter-spacing:-0.01em;"></div>
-        <div data-role="op-status" style="font-size:13px;color:#475569;margin-top:6px;line-height:1.45;"></div>
-        <div data-role="op-safe-close" style="font-size:12px;color:#64748b;margin-top:8px;">Safe to close — closing this window does not cancel backend execution.</div>
+        <div data-role="op-title" style="font-size:22px;font-weight:800;letter-spacing:-0.01em;"></div>
+        <div data-role="op-status" style="font-size:16px;color:#e2e8f0;margin-top:10px;line-height:1.5;"></div>
+        <div data-role="op-safe-close" style="font-size:13px;color:#b9c6d8;margin-top:10px;">Safe to close — CloudTMS will keep working.</div>
       </div>
-      <div data-role="op-chip" style="flex:0 0 auto;border-radius:999px;background:#eef2ff;color:#3730a3;padding:6px 10px;font-size:12px;font-weight:800;white-space:nowrap;">0%</div>
+      <div data-role="op-chip" style="flex:0 0 auto;border-radius:999px;background:#172742;color:#dbeafe;padding:7px 11px;font-size:12px;font-weight:800;white-space:nowrap;">Working</div>
     </div>
-    <div style="padding:18px 22px 16px;overflow:auto;max-height:calc(100vh - 190px);">
-      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;">
-        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;"><div data-role="op-total-label" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Total</div><div data-role="op-total" style="font-size:20px;font-weight:900;margin-top:3px;">0</div></div>
-        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;"><div data-role="op-completed-label" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Completed</div><div data-role="op-completed" style="font-size:20px;font-weight:900;margin-top:3px;">0</div></div>
-        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;"><div data-role="op-failed-label" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Failed</div><div data-role="op-failed" style="font-size:20px;font-weight:900;margin-top:3px;">0</div></div>
-        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;"><div data-role="op-chunk-label" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Chunk</div><div data-role="op-chunk" style="font-size:20px;font-weight:900;margin-top:3px;">0/0</div></div>
-      </div>
-      <div style="height:12px;border-radius:999px;background:#e2e8f0;overflow:hidden;border:1px solid rgba(148,163,184,0.38);"><div data-role="op-bar" style="height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#22c55e);transition:width .18s ease;"></div></div>
-      <div data-role="op-meta" style="font-size:12px;color:#64748b;margin-top:9px;line-height:1.45;"></div>
-      <div data-role="op-review" style="display:none;margin-top:14px;border:1px solid #fed7aa;background:#fff7ed;color:#9a3412;border-radius:14px;padding:10px 12px;font-size:13px;line-height:1.45;"></div>
-      <div data-role="op-child" style="display:none;margin-top:14px;border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;border-radius:14px;padding:10px 12px;font-size:13px;line-height:1.45;"></div>
-      <div data-role="op-final" style="display:none;margin-top:14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#14532d;border-radius:14px;padding:10px 12px;font-size:13px;line-height:1.45;"></div>
+    <div style="padding:22px;overflow:auto;max-height:calc(100vh - 190px);">
+      <div style="height:12px;border-radius:999px;background:#1f3049;overflow:hidden;border:1px solid #33445f;"><div data-role="op-bar" style="height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#2f7eea,#22a762);transition:width .2s ease;"></div></div>
+      <div data-role="op-meta" style="font-size:13px;color:#b9c6d8;margin-top:9px;line-height:1.45;">CloudTMS is working safely.</div>
+      <div data-role="op-review" style="display:none;margin-top:16px;border:1px solid #92400e;background:#2a1b12;color:#fed7aa;border-radius:12px;padding:12px 14px;font-size:14px;line-height:1.5;"></div>
+      <div data-role="op-child" style="display:none;"></div>
+      <div data-role="op-final" style="display:none;margin-top:16px;border:1px solid #1f7a4d;background:#102b22;color:#bbf7d0;border-radius:12px;padding:12px 14px;font-size:14px;line-height:1.5;"></div>
     </div>
-    <div style="padding:14px 22px 20px;border-top:1px solid rgba(226,232,240,0.95);display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap;">
-      <button type="button" data-act="op-refresh" class="btn btn-sm btn-outline">Refresh status</button>
-      <button type="button" data-act="op-nudge" class="btn btn-sm btn-outline" style="display:none;">Nudge / resume</button>
-      <button type="button" data-act="op-authorise" class="btn btn-sm btn-outline" style="display:none;">Authorisation required</button>
-      <button type="button" data-act="op-review" class="btn btn-sm btn-outline" style="display:none;">Review payment issue</button>
-      <button type="button" data-act="op-close" class="btn btn-primary" style="min-width:110px;">Close</button>
+    <div style="padding:15px 22px 20px;border-top:1px solid #263853;display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap;">
+      <button type="button" data-act="op-refresh" class="ctms-op-btn">Refresh status</button>
+      <button type="button" data-act="op-nudge" class="ctms-op-btn is-primary" style="display:none;">Continue processing</button>
+      <button type="button" data-act="op-authorise" class="ctms-op-btn is-primary" style="display:none;">Continue to approval</button>
+      <button type="button" data-act="op-review" class="ctms-op-btn is-primary" style="display:none;">Review payment issue</button>
+      <button type="button" data-act="op-close" class="ctms-op-btn" style="min-width:100px;">Close</button>
     </div>
   `;
   overlay.appendChild(root);
@@ -182702,14 +182775,34 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     const completedUnits = Number(op.display_completed_units ?? op.displayCompletedUnits ?? op.completed_units ?? op.completedUnits ?? 0) || 0;
     const failedUnits = Number(op.display_failed_units ?? op.displayFailedUnits ?? op.failed_units ?? op.failedUnits ?? 0) || 0;
     const rawPercent = Number(op.display_percent ?? op.displayPercent ?? op.percent ?? op.percent_complete ?? op.percentComplete);
-    const attemptedUnits = Math.max(0, completedUnits + failedUnits);
-    const canInferPercentFromCounters = totalUnits > 0 && attemptedUnits <= totalUnits;
-    const inferredPercent = canInferPercentFromCounters ? Math.round((attemptedUnits / totalUnits) * 100) : (isTerminal(op) && ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE'].includes(operationStatus(op)) ? 100 : 0);
-    const percent = Math.max(0, Math.min(100, Number.isFinite(rawPercent) ? rawPercent : inferredPercent));
+    const operationType = operationTypeOf(op);
+    const counterMode = upperTrim(op.display_counter_mode || op.displayCounterMode || op.counter_mode || op.counterMode || '');
+    const counterScope = upperTrim(op.display_counter_scope || op.displayCounterScope || op.counter_scope || op.counterScope || '');
+    const completedSuccessfully = isTerminal(op) && ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE'].includes(operationStatus(op));
+    const trustworthyPercent = completedSuccessfully
+      ? 100
+      : (Number.isFinite(rawPercent) && (
+          (operationType === 'DRAFT_CREATE' && counterScope === 'DRAFT_CREATE') ||
+          (counterMode === 'CUMULATIVE' && (!counterScope || counterScope === operationType))
+        ) ? Math.max(0, Math.min(99, Math.round(rawPercent))) : null);
+    if (Number.isFinite(trustworthyPercent)) modalState.maxMeaningfulPercent = Math.max(modalState.maxMeaningfulPercent || 0, trustworthyPercent);
+    const percent = Number.isFinite(trustworthyPercent) ? modalState.maxMeaningfulPercent : null;
     const draftCreateFields = renderDraftCreateProgressFields(op);
     if (role('op-title')) role('op-title').textContent = displayTitleForOperation(op);
-    if (role('op-status')) role('op-status').textContent = displayStatusForOperation(op);
-    if (role('op-chip')) role('op-chip').textContent = `${Math.round(percent)}%`;
+    if (role('op-status')) {
+      role('op-status').textContent = completedSuccessfully
+        ? (operationType === 'DRAFT_CREATE' ? 'Your payment draft is ready.' : 'Payment processing is complete.')
+        : isReviewRequired(op)
+          ? 'CloudTMS paused safely because this payment needs attention.'
+          : isWaitingAuthorisation(op)
+            ? 'Waiting for approval before CloudTMS can continue.'
+            : isWaitingProvider(op)
+              ? 'Waiting for the bank to confirm the payment.'
+              : (operationType === 'DRAFT_CREATE' ? 'CloudTMS is preparing your payment draft.' : 'CloudTMS is processing this payment safely.');
+    }
+    if (role('op-chip')) role('op-chip').textContent = Number.isFinite(percent)
+      ? `${Math.round(percent)}%`
+      : (isReviewRequired(op) ? 'Needs attention' : (isWaitingAuthorisation(op) ? 'Waiting' : 'Working'));
     if (role('op-total-label')) role('op-total-label').textContent = draftCreateFields.total_label;
     if (role('op-completed-label')) role('op-completed-label').textContent = draftCreateFields.completed_label;
     if (role('op-failed-label')) role('op-failed-label').textContent = draftCreateFields.failed_label;
@@ -182718,44 +182811,28 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     if (role('op-completed')) role('op-completed').textContent = draftCreateFields.completed_text;
     if (role('op-failed')) role('op-failed').textContent = draftCreateFields.failed_text;
     if (role('op-chunk')) role('op-chunk').textContent = draftCreateFields.chunk_text;
-    if (role('op-bar')) role('op-bar').style.width = `${percent}%`;
+    if (role('op-bar')) {
+      role('op-bar').classList.toggle('is-indeterminate', !Number.isFinite(percent) && !isTerminal(op) && !isReviewRequired(op) && !isWaitingAuthorisation(op));
+      role('op-bar').style.width = Number.isFinite(percent) ? `${percent}%` : (completedSuccessfully ? '100%' : (isTerminal(op) || isReviewRequired(op) || isWaitingAuthorisation(op) ? '0%' : '34%'));
+    }
     if (role('op-meta')) {
-      const meta = [
-        draftCreateFields.meta_prefix,
-        op.runner_state || op.runnerState ? `Runner: ${op.runner_state || op.runnerState}.` : '',
-        op.server_running || op.serverRunning ? 'Server running.' : '',
-        op.lease_owner || op.leaseOwner ? `Lease: ${op.lease_owner || op.leaseOwner}${op.lease_expires_at_utc || op.leaseExpiresAtUtc ? ` until ${formatIso(op.lease_expires_at_utc || op.leaseExpiresAtUtc)}` : ''}.` : '',
-        op.heartbeat_at_utc || op.heartbeatAtUtc ? `Heartbeat: ${formatIso(op.heartbeat_at_utc || op.heartbeatAtUtc)}.` : '',
-        op.last_advanced_at_utc || op.lastAdvancedAtUtc ? `Last advanced: ${formatIso(op.last_advanced_at_utc || op.lastAdvancedAtUtc)}.` : '',
-        op.run_after_utc || op.runAfterUtc ? `Run after: ${formatIso(op.run_after_utc || op.runAfterUtc)}.` : '',
-        op.resume_reason || op.resumeReason ? `Resume reason: ${op.resume_reason || op.resumeReason}.` : ''
-      ].filter(Boolean).join(' ');
-      role('op-meta').textContent = meta;
+      role('op-meta').textContent = completedSuccessfully
+        ? 'Done.'
+        : (Number.isFinite(percent) ? 'This progress covers the complete operation and will not move backwards.' : 'Still working…');
     }
     if (role('op-review')) {
-      const reviewText = summariseReview(op);
-      role('op-review').style.display = reviewText || isReviewRequired(op) || isWaitingAuthorisation(op) ? '' : 'none';
-      role('op-review').textContent = reviewText || (isWaitingAuthorisation(op) ? 'Authorisation is required before this payment can continue.' : (isReviewRequired(op) ? 'This payment requires review.' : ''));
+      role('op-review').style.display = isReviewRequired(op) || isWaitingAuthorisation(op) ? '' : 'none';
+      role('op-review').textContent = isWaitingAuthorisation(op)
+        ? 'An authorised user needs to approve this payment before it can continue.'
+        : (isReviewRequired(op) ? 'Open the payment issue to see what needs to be resolved.' : '');
     }
 
-    if (role('op-child')) {
-      const child = activeChildForDisplay(op);
-      if (child && typeof child === 'object') {
-        const childType = operationTypeOf(child) || op.active_child_operation_type || op.activeChildOperationType || 'CHILD_OPERATION';
-        const childPhase = firstText(child.phase_label, child.phaseLabel, humanisePhaseName(child.phase || child.operation_phase || child.operationPhase || ''));
-        const childStatus = firstText(child.status_text, child.statusText, displayStatusForOperation(child));
-        const childFields = renderDraftCreateProgressFields(child);
-        const childProgressText = childFields && childFields.meta_prefix ? ` ${childFields.meta_prefix}` : '';
-        role('op-child').style.display = '';
-        role('op-child').textContent = `${childType.replace(/_/g, ' ')}: ${childPhase}${childStatus ? ` — ${childStatus}` : ''}${childProgressText}`;
-      } else {
-        role('op-child').style.display = 'none';
-        role('op-child').textContent = '';
-      }
-    }
+    if (role('op-child')) { role('op-child').style.display = 'none'; role('op-child').textContent = ''; }
     if (role('op-final')) {
       role('op-final').style.display = isTerminal(op) || op.still_running || op.stillRunning || op.backend_execution_continues || op.backendExecutionContinues ? '' : 'none';
-      role('op-final').textContent = displayFinalTextForOperation(op);
+      role('op-final').textContent = completedSuccessfully
+        ? (operationType === 'DRAFT_CREATE' ? 'Payment draft created successfully.' : 'Payment processing completed successfully.')
+        : (isReviewRequired(op) ? 'No further automatic step will run until the issue is reviewed.' : (isTerminal(op) ? 'CloudTMS has safely stopped this operation.' : 'CloudTMS is continuing safely in the background.'));
     }
     const draftCreateActions = buildDraftCreateProgressModalActions(op);
     if (role('op-safe-close')) role('op-safe-close').textContent = draftCreateActions.safe_close_text;
