@@ -44316,7 +44316,7 @@ function renderBankingTab(key, row) {
   })();
 
   return `
-    <div class="tabc">
+    <div class="tabc banking-modal-content">
       ${headerChips}
       ${bannersHtml}
       ${tabContent}
@@ -48124,8 +48124,8 @@ function renderPayNewBatchWizard() {
   };
 
   const stickyPreviewHeaderCellStyle = 'position:sticky;top:0;z-index:2;background:var(--panel,#fff);box-shadow:inset 0 -1px 0 var(--line);';
-  const sectionScrollHostStyle = 'margin-top:10px;max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;scrollbar-gutter:stable;overscroll-behavior:contain;background:var(--panel,#fff);';
-  const expandedSectionScrollHostStyle = 'margin-top:10px;max-height:calc(100vh - 250px);min-height:min(620px, calc(100vh - 250px));overflow:auto;border:1px solid var(--line);border-radius:10px;scrollbar-gutter:stable;overscroll-behavior:contain;background:var(--panel,#fff);';
+  const sectionScrollHostStyle = 'width:100%;max-width:100%;min-width:0;box-sizing:border-box;margin-top:10px;max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;scrollbar-gutter:stable;overscroll-behavior:contain;background:var(--panel,#fff);';
+  const expandedSectionScrollHostStyle = 'width:100%;max-width:100%;min-width:0;box-sizing:border-box;margin-top:10px;max-height:calc(100vh - 250px);min-height:min(620px, calc(100vh - 250px));overflow:auto;border:1px solid var(--line);border-radius:10px;scrollbar-gutter:stable;overscroll-behavior:contain;background:var(--panel,#fff);';
   const caseCardStackStyle = 'padding:10px;display:flex;flex-direction:column;gap:12px;';
   wiz.ui_state = (wiz.ui_state && typeof wiz.ui_state === 'object' && !Array.isArray(wiz.ui_state)) ? wiz.ui_state : {};
   const validWorkbenchSectionKeys = new Set(['READY_TO_PAY', 'CASES_RESOLUTIONS', 'BLOCKED_FOR_PAY']);
@@ -56588,9 +56588,9 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(readyEmptyMessage())}</td></tr>`;
 
   return `
-    <div class="card" id="bankingPayNewBatchWizard">
+    <div class="card banking-pay-create-card" id="bankingPayNewBatchWizard">
       <div style="display:grid;gap:10px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+        <div class="banking-pay-create-header" style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
           <div>
             <div style="font-weight:800;">Create payment batch</div>
             <div class="mini" style="opacity:.82;">Choose Ready to Pay rows, then create a draft.</div>
@@ -56616,8 +56616,8 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             </div>
           ` : ''}
 
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <div class="mini" style="opacity:.85;flex:1;min-width:320px;">${enc(filterSummary)}</div>
+          <div class="banking-pay-create-toolbar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div class="mini banking-pay-scope-summary" style="opacity:.85;flex:1;min-width:320px;">${enc(filterSummary)}</div>
             <div class="actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto;">
               <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:openFiltersModal" title="Open Banking Pay filters">Filters</button>
               <button type="button" class="btn btn-sm btn-primary ${createBtnDisabled ? 'disabled' : ''}" ${createBtnDisabled ? 'disabled data-disabled="1" aria-disabled="true"' : 'data-disabled="0" aria-disabled="false"'} data-action="banking:pay:createDraft" title="${enc(createDraftTitle)}" style="font-weight:700;background:#198754;border-color:#198754;color:#fff;">${enc(createDraftLabel)}</button>
@@ -62416,7 +62416,7 @@ function renderPayBatchListPanel() {
             </div>
           </div>
 
-          <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+          <div class="banking-pay-batch-table-scroll" style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
             <table class="grid banking-pay-batch-list" style="min-width:900px; table-layout:fixed;">
               <thead>
                 <tr>
@@ -136929,6 +136929,7 @@ async function showImportFlowConfirm(message, opts = {}) {
 async function openBanking() {
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
   const trimStr = (v) => String(v == null ? '' : v).trim();
+  const MODAL_CLASS = 'banking-modal';
 
   // Unique token for this modal open (used to prevent late async writes after close)
   const openToken = `banking:${Date.now()}:${Math.random().toString(36).slice(2)}`;
@@ -137163,6 +137164,10 @@ async function openBanking() {
 
   const onDismiss = () => {
     try {
+      try {
+        const modal = document.getElementById('modal');
+        if (modal && modal.classList) modal.classList.remove(MODAL_CLASS);
+      } catch {}
       const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
       if (!ctx || String(ctx.entity || '') !== 'banking') return;
       if (String(ctx.openToken || '') !== String(openToken)) return;
@@ -137238,6 +137243,11 @@ async function openBanking() {
       onDismiss
     }
   );
+
+  try {
+    const modal = document.getElementById('modal');
+    if (modal && modal.classList) modal.classList.add(MODAL_CLASS);
+  } catch {}
 
   // Attach delegated handlers ONCE for this banking modal instance and store detach hook
   try {

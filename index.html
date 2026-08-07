@@ -992,6 +992,134 @@ body{
   overflow: hidden; /* ✅ IMPORTANT: avoid outer modal scrollbar */
 }
 
+/* ===== Banking modal: responsive shell + one predictable outer scroll owner ===== */
+#modal.banking-modal{
+  width:min(1520px,calc(100vw - 20px));
+  max-width:calc(100vw - 20px);
+  max-height:96vh;
+  min-width:0;
+}
+#modal.banking-modal .modal-b{
+  padding:0;
+  min-width:0;
+  min-height:0;
+  display:flex;
+  flex:1 1 auto;
+  flex-direction:column;
+  overflow:hidden;
+}
+#modal.banking-modal .modal-b > .tabs{
+  flex:0 0 auto;
+  min-width:0;
+  overflow-x:auto;
+  overflow-y:hidden;
+  scrollbar-width:thin;
+}
+#modal.banking-modal .modal-b > .tabs button{
+  flex:0 0 auto;
+  white-space:nowrap;
+}
+#modal.banking-modal .modal-b > #modalBody{
+  flex:1 1 auto;
+  min-width:0;
+  min-height:0;
+  padding:12px;
+  overflow-x:hidden;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  scrollbar-gutter:stable;
+}
+#modal.banking-modal #modalBody > .banking-modal-content{
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:10px;
+  width:100%;
+  min-width:0;
+  max-width:100%;
+  box-sizing:border-box;
+}
+#modal.banking-modal #modalBody > .banking-modal-content > .card{
+  margin:0;
+}
+#modal.banking-modal .banking-modal-content,
+#modal.banking-modal .banking-modal-content .card,
+#modal.banking-modal .banking-modal-content .row,
+#modal.banking-modal .banking-modal-content .controls,
+#modal.banking-modal #bankingPayNewBatchWizard,
+#modal.banking-modal #bankingPayNewBatchWizard > div,
+#modal.banking-modal #bankingPayTabRoot,
+#modal.banking-modal #bankingPayBatchListPanel{
+  width:100%;
+  min-width:0;
+  max-width:100%;
+  box-sizing:border-box;
+}
+#modal.banking-modal #bankingPayNewBatchWizard > div{
+  grid-template-columns:minmax(0,1fr);
+}
+#modal.banking-modal #bankingPayNewBatchWizard > div > *{
+  min-width:0;
+  max-width:100%;
+  box-sizing:border-box;
+}
+#modal.banking-modal #bankingPayReadyScrollHost,
+#modal.banking-modal #bankingPayCasesScrollHost,
+#modal.banking-modal #bankingPayBlockedScrollHost,
+#modal.banking-modal .banking-pay-batch-table-scroll{
+  width:100%;
+  max-width:100%;
+  min-width:0;
+  box-sizing:border-box;
+  overflow:auto;
+  overscroll-behavior:contain;
+}
+#modal.banking-modal #bankingPayBatchListPanel > .row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:8px;
+}
+#modal.banking-modal #bankingPayBatchListPanel > .row > label{
+  font-size:14px;
+  font-weight:700;
+}
+#modal.banking-modal #bankingPayBatchListPanel > .row > .controls{
+  width:100%;
+}
+#modal.banking-modal .banking-pay-create-header,
+#modal.banking-modal .banking-pay-create-toolbar{
+  min-width:0;
+}
+#modal.banking-modal .banking-pay-create-toolbar .actions{
+  max-width:100%;
+}
+#modal.banking-modal .banking-pay-scope-summary{
+  min-width:240px !important;
+  overflow-wrap:anywhere;
+}
+#modal.banking-modal .grid th,
+#modal.banking-modal .grid td{
+  vertical-align:middle;
+}
+
+@media (max-width:760px){
+  #modal.banking-modal{
+    width:calc(100vw - 8px);
+    max-width:calc(100vw - 8px);
+    max-height:calc(100dvh - 8px);
+  }
+  #modal.banking-modal .modal-b > #modalBody{
+    padding:8px;
+  }
+  #modal.banking-modal .banking-pay-scope-summary{
+    flex-basis:100%;
+    min-width:0 !important;
+  }
+  #modal.banking-modal .banking-pay-create-toolbar .actions{
+    width:100%;
+    margin-left:0 !important;
+  }
+}
+
  /* ===== Banking Pay child batch modal: wider/taller + controlled inner scrolling ===== */
 #modal.banking-pay-batch-child-modal{
   width:min(1400px,98vw);
@@ -2812,7 +2940,7 @@ body{
   </script>
 
  <!-- 2) Load the application logic -->
-<script src="./js/main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recovery=20260730-r1&planned-week-authority=20260801-r3&invoice-email-policy=20260801-r2&summary-money=20260803-r1&outbox-cursor-pagination=20260803-r1&banking-paye-net-schedule=20260807-r1&banking-pre-provider-retry=20260807-r4&banking-cancellation-progress=20260807-r9"></script>
+<script src="./js/main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recovery=20260730-r1&planned-week-authority=20260801-r3&invoice-email-policy=20260801-r2&summary-money=20260803-r1&outbox-cursor-pagination=20260803-r1&banking-paye-net-schedule=20260807-r1&banking-pre-provider-retry=20260807-r4&banking-cancellation-progress=20260807-r9&banking-responsive-layout=20260807-r1"></script>
  <script src="./js/invoice-diagnostic-catalog.js?v=20260803-invoice-reference-policy-r2"></script>
  <script src="./js/invoice-batch-modal.js?v=20260803-invoice-reference-policy-r2"></script>
 <script src="./js/invoice-async-ui.js?v=20260730-invoice-refs-ward-r13"></script>
