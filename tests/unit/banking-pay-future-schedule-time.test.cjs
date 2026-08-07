@@ -23,3 +23,25 @@ test('future schedule parsing accepts colon-delimited 24-hour time without secon
 test('switching to scheduled execution restores the 02:00 default if time is empty', () => {
   assert.match(source, /state\.schedule_kind === 'SCHEDULED' && !parseTimeHm\(state\.time_uk\)\) state\.time_uk = '02:00'/);
 });
+
+test('scheduled payment display uses ordinal UK date and compact 24-hour UK time', () => {
+  const start = source.indexOf('function formatBankingPayScheduledAtUkDisplay');
+  const end = source.indexOf('\n\nfunction renderPayBatchListPanel', start);
+  assert.ok(start >= 0 && end > start, 'scheduled payment formatter must be present');
+  const formatter = new Function(`${source.slice(start, end)}; return formatBankingPayScheduledAtUkDisplay;`)();
+  assert.equal(formatter('2026-01-01T02:00:00.000Z'), '1st January 2026 at 0200hrs');
+  assert.equal(formatter('2026-08-13T01:00:00.000Z'), '13th August 2026 at 0200hrs');
+  assert.equal(formatter('2026-01-22T14:09:00.000Z'), '22nd January 2026 at 1409hrs');
+});
+
+test('scheduled payment is prominent in both the main batch list and batch overview', () => {
+  const list = source.slice(source.indexOf('function renderPayBatchListPanel'), source.indexOf('function deriveTimesheetModalInvoicingState'));
+  const overviewStart = source.indexOf('function renderBankingPayBatchChildModalOverview');
+  const overview = source.slice(overviewStart, source.indexOf('function openBulkTimesheetActionProgressModal', overviewStart));
+  assert.match(list, /banking-pay-scheduled-payment-list-label/);
+  assert.match(list, /<th>Schedule<\/th>/);
+  assert.match(list, /Scheduled payment/);
+  assert.match(overview, /banking-pay-scheduled-payment-banner/);
+  assert.match(overview, /scheduledPaymentBannerHtml/);
+  assert.match(overview, /UK time/);
+});

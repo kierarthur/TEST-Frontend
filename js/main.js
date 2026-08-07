@@ -59888,6 +59888,46 @@ function refreshBankingNavAttentionFromCachedRows() {
 }
 
 
+function formatBankingPayScheduledAtUkDisplay(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  const date = new Date(raw);
+  if (!Number.isFinite(date.getTime())) return '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/London',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      hourCycle: 'h23'
+    }).formatToParts(date);
+    const read = (type) => String(parts.find((part) => part.type === type)?.value || '').trim();
+    const day = Number(read('day'));
+    const month = read('month');
+    const year = read('year');
+    const hour = read('hour').padStart(2, '0');
+    const minute = read('minute').padStart(2, '0');
+    if (!Number.isInteger(day) || day <= 0 || !month || !year || !/^\d{2}$/.test(hour) || !/^\d{2}$/.test(minute)) return '';
+    const mod100 = day % 100;
+    const suffix = (mod100 >= 11 && mod100 <= 13)
+      ? 'th'
+      : day % 10 === 1
+        ? 'st'
+        : day % 10 === 2
+          ? 'nd'
+          : day % 10 === 3
+            ? 'rd'
+            : 'th';
+    return `${day}${suffix} ${month} ${year} at ${hour}${minute}hrs`;
+  } catch {
+    return '';
+  }
+}
+
+
 function renderPayBatchListPanel() {
   try { installBankingPayBatchTimesheetSummaryShortcut(); } catch {}
   const enc = (typeof escapeHtml === 'function')
@@ -61967,6 +62007,25 @@ function renderPayBatchListPanel() {
     const env = String(r?.rail_env_snapshot || r?.rail_env || '').trim().toUpperCase();
     const created = fmtUtcToUk(r?.created_at_utc || r?.created_at || '');
     const lastFundsChecked = fmtUtcToUk(r?.last_funds_check_at_utc || r?.last_funds_check_json?.checked_at_utc || '');
+    const scheduleKind = upperTrim(r?.schedule_kind || r?.scheduleKind || '');
+    const scheduledAtUtc = trimStr(r?.scheduled_at_utc || r?.scheduledAtUtc || '');
+    const scheduledAtUkLabel = scheduleKind === 'SCHEDULED' && scheduledAtUtc
+      ? formatBankingPayScheduledAtUkDisplay(scheduledAtUtc)
+      : '';
+    const scheduledPaymentListHtml = scheduledAtUkLabel
+      ? `
+        <div
+          class="banking-pay-scheduled-payment-list-label"
+          data-banking-pay-scheduled-payment="1"
+          style="min-width:250px;padding:8px 10px;border:2px solid #2563eb;border-radius:10px;background:#dbeafe;color:#1e3a8a;box-shadow:0 1px 3px rgba(37,99,235,.18);"
+          title="Scheduled payment time shown in UK local time"
+        >
+          <div style="font-weight:900;line-height:1.2;">Scheduled payment</div>
+          <div class="mini" style="font-weight:800;margin-top:3px;">${enc(scheduledAtUkLabel)}</div>
+          <div class="mini" style="opacity:.82;margin-top:2px;">UK time</div>
+        </div>
+      `
+      : `<span class="mini" style="opacity:.65;">—</span>`;
     const activePaymentExecutionOperation = normaliseActivePaymentExecutionOperationForListRow(r);
     const activePaymentExecutionOperationId = trimStr(activePaymentExecutionOperation?.operation_id || activePaymentExecutionOperation?.operationId || '');
     const activePaymentExecutionStatusLabel = activePaymentExecutionOperation ? formatActivePaymentExecutionStatusLabel(activePaymentExecutionOperation) : '';
@@ -62171,7 +62230,8 @@ function renderPayBatchListPanel() {
         <td class="mono">${enc(id ? (id.slice(0, 8) + '…') : '')}</td>
         <td>${enc(payDate ? fmtDateOnly(payDate) : '—')}</td>
         <td>${batchKind ? `<span class="pill pill-info" title="Batch kind">${enc(batchKind)}</span>` : `<span class="mini" style="opacity:.75;">—</span>`}</td>
-        <td><span class="pill ${enc(blockedFundsRow ? 'pill-warn' : pillClass)}">${enc(displayStatus)}</span>${authPill}${issuePillsHtml}${blockedFundsReason ? `<div class="mini" style="margin-top:4px;color:#991b1b;font-weight:700;">${enc(blockedFundsReason)}</div>` : ''}${communicationWarning.hasIssue ? `<div class="mini" style="margin-top:4px;color:#92400e;font-weight:700;">${enc(communicationWarning.message)}</div>` : ''}${draftStaleHint.hasHint ? `<div class="mini" style="margin-top:4px;color:#92400e;font-weight:700;">${enc(draftStaleHint.message)}</div>` : ''}${lastFundsChecked && blockedFundsRow ? `<div class="mini" style="margin-top:2px;opacity:.82;">Last funds checked ${enc(lastFundsChecked)}</div>` : ''}</td>
+        <td><span class="pill ${enc(blockedFundsRow ? 'pill-warn' : pillClass)}">${enc(displayStatus)}</span>${scheduledAtUkLabel ? ` <span class="pill pill-info" style="font-weight:900;">Scheduled</span>` : ''}${authPill}${issuePillsHtml}${blockedFundsReason ? `<div class="mini" style="margin-top:4px;color:#991b1b;font-weight:700;">${enc(blockedFundsReason)}</div>` : ''}${communicationWarning.hasIssue ? `<div class="mini" style="margin-top:4px;color:#92400e;font-weight:700;">${enc(communicationWarning.message)}</div>` : ''}${draftStaleHint.hasHint ? `<div class="mini" style="margin-top:4px;color:#92400e;font-weight:700;">${enc(draftStaleHint.message)}</div>` : ''}${lastFundsChecked && blockedFundsRow ? `<div class="mini" style="margin-top:2px;opacity:.82;">Last funds checked ${enc(lastFundsChecked)}</div>` : ''}</td>
+        <td>${scheduledPaymentListHtml}</td>
         <td class="mini">${enc((prov || '—') + (env ? `/${env}` : ''))}</td>
         <td class="mini">${enc(created || '')}</td>
         <td style="white-space:nowrap;">${batchActionsHtml}</td>
@@ -62179,7 +62239,7 @@ function renderPayBatchListPanel() {
     `;
   }).join('');
   const emptyHtml = (!loading && items.length === 0)
-    ? `<tr><td colspan="7" class="mini" style="opacity:.85;">No batches found for current filters.</td></tr>`
+    ? `<tr><td colspan="8" class="mini" style="opacity:.85;">No batches found for current filters.</td></tr>`
     : '';
 
   const prevOffset = Math.max(0, offsetNow - limitNow);
@@ -62235,6 +62295,7 @@ function renderPayBatchListPanel() {
                   <th>Pay date</th>
                   <th>Kind</th>
                   <th>Status</th>
+                  <th>Schedule</th>
                   <th>Rail</th>
                   <th>Created</th>
                   <th style="width:240px;">Actions</th>
@@ -82713,6 +82774,25 @@ function renderBankingPayBatchChildModalOverview() {
   const env = upperTrim(batch.rail_env_snapshot || batch.rail_env || data.rail_env_snapshot || data.rail_env || '');
   const providerEnvHeader = `${batchKind || 'UNKNOWN'} · ${(provider || '—')}${env ? `/${env}` : ''}`;
   const payDate = trimStr(batch.pay_date || data.pay_date || batch.authoritative_payment_date || data.authoritative_payment_date || '');
+  const scheduleKind = upperTrim(batch.schedule_kind || batch.scheduleKind || data.schedule_kind || data.scheduleKind || displaySummary.schedule_kind || displaySummary.scheduleKind || '');
+  const scheduledAtUtc = trimStr(batch.scheduled_at_utc || batch.scheduledAtUtc || data.scheduled_at_utc || data.scheduledAtUtc || displaySummary.scheduled_at_utc || displaySummary.scheduledAtUtc || '');
+  const scheduledAtUkLabel = scheduleKind === 'SCHEDULED' && scheduledAtUtc
+    ? formatBankingPayScheduledAtUkDisplay(scheduledAtUtc)
+    : '';
+  const scheduledPaymentBannerHtml = scheduledAtUkLabel
+    ? `
+      <div
+        class="card banking-pay-scheduled-payment-banner"
+        data-banking-pay-scheduled-payment="1"
+        style="padding:14px 16px;border:2px solid #2563eb;background:#dbeafe;color:#1e3a8a;box-shadow:0 2px 7px rgba(37,99,235,.22);"
+        title="Scheduled payment time shown in UK local time"
+      >
+        <div style="font-size:17px;font-weight:950;letter-spacing:.01em;">Scheduled payment</div>
+        <div style="font-size:20px;font-weight:950;margin-top:5px;">${enc(scheduledAtUkLabel)}</div>
+        <div class="mini" style="font-weight:800;opacity:.82;margin-top:4px;">UK time</div>
+      </div>
+    `
+    : '';
 
   const readIssueSummaryCount = (key) => {
     const n = Number(issueSummaryCounts[key]);
@@ -85541,6 +85621,7 @@ function renderBankingPayBatchChildModalOverview() {
                   <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
                 </div>
               </div>
+              ${scheduledPaymentBannerHtml}
               ${batchOutcomeHtml}
               ${postSettlementCommunicationWarningHtml}
               ${providerSubmitOverviewHtml}
@@ -85705,6 +85786,7 @@ function renderBankingPayBatchChildModalOverview() {
               </div>
             </div>
 
+            ${scheduledPaymentBannerHtml}
             ${batchOutcomeHtml}
             ${postSettlementCommunicationWarningHtml}
             ${providerSubmitOverviewHtml}
