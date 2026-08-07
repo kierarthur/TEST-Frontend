@@ -84179,11 +84179,7 @@ function renderBankingPayBatchChildModalOverview() {
   const retryablePreProviderFailure = !!(
     activeOperationId &&
     activeOperationType === 'PAYMENT_EXECUTE' &&
-    activeOperationStatus === 'REVIEW_REQUIRED' &&
-    (
-      activeOperationResumeReason === 'PAYMENT_EXECUTE_OPERATION_FAILED' ||
-      !activeOperationResumeReason
-    )
+    activeOperationStatus === 'REVIEW_REQUIRED'
   );
   const activeOperationTerminal = !!(activeOperation && activeOperationSignals.some((signal) => terminalOperationStates.has(signal)));
   const activeOperationStatusLabel = formatOperationStatusLabel(activeOperationStatus || activeRunnerState || activeOperationPhase) || 'In progress';
