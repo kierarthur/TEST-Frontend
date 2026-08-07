@@ -7220,6 +7220,7 @@ async function openBankingReauthModal(opts = {}) {
         const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
         if (fr && typeof fr.setTab === 'function') {
           fr.setTab('main');
+          setTimeout(wire, 0);
           return;
         }
       } catch {}
@@ -7228,7 +7229,10 @@ async function openBankingReauthModal(opts = {}) {
         if (!stillTopIsThisModal()) return;
 
         const body = document.getElementById('modalBody');
-        if (body) body.innerHTML = render();
+        if (body) {
+          body.innerHTML = render();
+          setTimeout(wire, 0);
+        }
       } catch {}
     };
 
@@ -7242,6 +7246,14 @@ async function openBankingReauthModal(opts = {}) {
         try { body.removeEventListener('click', h.onClick, true); } catch {}
         try { body.removeEventListener('input', h.onInput, true); } catch {}
         delete body.__bankingReauthHandler;
+      } catch {}
+      try {
+        const root = document.getElementById(rootId);
+        const h = root && root.__bankingReauthHandler;
+        if (!root || !h || String(h.openToken || '') !== String(openToken || '')) return;
+        try { root.removeEventListener('click', h.onClick, true); } catch {}
+        try { root.removeEventListener('input', h.onInput, true); } catch {}
+        delete root.__bankingReauthHandler;
       } catch {}
     };
 
@@ -7284,7 +7296,7 @@ async function openBankingReauthModal(opts = {}) {
         return;
       }
 
-      if (body.__bankingReauthHandler && String(body.__bankingReauthHandler.openToken || '') === String(openToken || '')) {
+      if (reauthRoot.__bankingReauthHandler && String(reauthRoot.__bankingReauthHandler.openToken || '') === String(openToken || '')) {
         return;
       }
 
@@ -7495,9 +7507,9 @@ async function openBankingReauthModal(opts = {}) {
         } catch {}
       };
 
-      body.addEventListener('click', onClick, true);
-      body.addEventListener('input', onInput, true);
-      body.__bankingReauthHandler = { openToken, onClick, onInput };
+      reauthRoot.addEventListener('click', onClick, true);
+      reauthRoot.addEventListener('input', onInput, true);
+      reauthRoot.__bankingReauthHandler = { openToken, onClick, onInput };
       reauthRoot.setAttribute('data-banking-reauth-wired', '1');
 
       focusField('bankingReauthPassword');

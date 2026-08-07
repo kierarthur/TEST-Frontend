@@ -155,10 +155,11 @@ test('nested payment verification keeps its delegated handlers attached', () => 
   assert.match(reauth, /reauthRoot\.setAttribute\('data-banking-reauth-wired', '1'\)/);
   assert.match(reauth, /\n    wire\(\);/);
   assert.doesNotMatch(reauth, /requestAnimationFrame\(\(\) => requestAnimationFrame\(wire\)\)/);
-  assert.match(reauth, /body\.addEventListener\('click', onClick, true\)/);
-  assert.match(reauth, /body\.addEventListener\('input', onInput, true\)/);
-  assert.match(reauth, /body\.__bankingReauthHandler = \{ openToken, onClick, onInput \}/);
-  const afterAttach = reauth.slice(reauth.indexOf("body.addEventListener('click', onClick, true)"));
+  assert.match(reauth, /reauthRoot\.addEventListener\('click', onClick, true\)/);
+  assert.match(reauth, /reauthRoot\.addEventListener\('input', onInput, true\)/);
+  assert.match(reauth, /setTimeout\(wire, 0\)/);
+  assert.match(reauth, /reauthRoot\.__bankingReauthHandler = \{ openToken, onClick, onInput \}/);
+  const afterAttach = reauth.slice(reauth.indexOf("reauthRoot.addEventListener('click', onClick, true)"));
   assert.doesNotMatch(afterAttach.slice(0, 500), /rerender\(\)/);
 });
 
