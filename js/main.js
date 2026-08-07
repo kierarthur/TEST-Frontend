@@ -22656,7 +22656,7 @@ async function bankingPayPaymentCorrectionStatus(correctionRequestId, options = 
   const candidateCounts = isPlainObject(out.candidate_counts) ? out.candidate_counts : {};
   const safeActions = new Set([
     'REAUTHENTICATE', 'AUTHORISE', 'USE_GOLDEN_KEY', 'REJECT',
-    'CANCEL_REQUEST', 'REAUTHORISE_REMAINING'
+    'CANCEL_REQUEST', 'REAUTHORISE_REMAINING', 'RETRY_PLANNING'
   ]);
   const availableActions = Array.isArray(out.available_actions)
     ? Array.from(new Set(out.available_actions.map(upper).filter((action) => safeActions.has(action))))
@@ -23234,9 +23234,9 @@ function renderBankingPayCancellationProgressModal() {
   const availabilityText = workbenchStatus === 'CURRENT' ? 'Payment availability is up to date'
     : (workbenchStatus === 'FAILED' ? 'Payment availability refresh needs review'
       : (workbenchStatus === 'NOT_STAGED' ? 'Payment availability has not been refreshed yet' : 'Payment availability is refreshing'));
-  const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Reauthorise remaining payments' };
+  const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Reauthorise remaining payments', RETRY_PLANNING: 'Retry cancellation preparation' };
   const authActionButtons = availableActions.filter((action) => Object.prototype.hasOwnProperty.call(authActionLabels, action))
-    .map((action) => `<button type="button" class="btn btn-sm ${action === 'AUTHORISE' ? 'btn-primary' : 'btn-outline'}" data-banking-pay-cancellation-auth-action="${enc(action)}">${enc(authActionLabels[action])}</button>`)
+    .map((action) => `<button type="button" class="btn btn-sm ${['AUTHORISE', 'RETRY_PLANNING'].includes(action) ? 'btn-primary' : 'btn-outline'}" data-banking-pay-cancellation-auth-action="${enc(action)}">${enc(authActionLabels[action])}</button>`)
     .join('');
   root.innerHTML = `
     <div class="card" style="width:min(620px,100%);max-height:90vh;overflow:auto;padding:18px;background:var(--panel,#fff);">
