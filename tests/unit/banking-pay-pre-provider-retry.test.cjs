@@ -21,11 +21,15 @@ test('a payment-execute review summary may offer retry but the server remains fi
   assert.match(source, /retry_pre_provider_operation_id: retryPreProviderOperationId \|\| null/);
   assert.match(source, /retryPreProviderOperationId: retryRequested \? String\(el\.getAttribute\('data-retry-operation-id'\)/);
   assert.match(source, /const retryPreProviderOperationId = requestedRetryOperationId \|\| \(\(\) => \{/);
+  assert.match(source, /const preProviderRetryRequested = \(opts\.retry_pre_provider_failure === true/);
+  assert.match(source, /canStartStandardExecution === true \|\| preProviderRetryRequested/);
+  assert.match(source, /retry_pre_provider_failure: !!retryPreProviderOperationId/);
+  assert.match(source, /retry_pre_provider_operation_id: retryPreProviderOperationId \|\| null/);
 });
 
 test('the deployed HTML cache key loads the guarded retry and PAYE schedule asset', () => {
   assert.match(indexSource, /banking-paye-net-schedule=20260807-r1/);
-  assert.match(indexSource, /banking-pre-provider-retry=20260807-r2/);
+  assert.match(indexSource, /banking-pre-provider-retry=20260807-r3/);
 });
 
 test('the retry command carries the exact failed operation through normal reauthentication', () => {

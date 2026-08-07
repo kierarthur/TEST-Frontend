@@ -68296,6 +68296,9 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
   const batchData = (opts.batch && typeof opts.batch === 'object') ? opts.batch : ((opts.data && typeof opts.data === 'object') ? opts.data : null);
   const batch = (batchData && batchData.batch && typeof batchData.batch === 'object') ? batchData.batch : null;
   const manualResolutionMode = opts.manual_resolution_mode === true || opts.manualResolutionMode === true;
+  const preProviderRetryOperationId = String(opts.retry_pre_provider_operation_id || opts.retryPreProviderOperationId || '').trim().toLowerCase();
+  const preProviderRetryRequested = (opts.retry_pre_provider_failure === true || opts.retryPreProviderFailure === true) &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(preProviderRetryOperationId);
   const titleOverride = String(opts.title_override || opts.titleOverride || '').trim();
   const confirmLabelOverride = String(opts.confirm_label_override || opts.confirmLabelOverride || '').trim();
   const allowedExecutionModes = Array.isArray(opts.allowed_execution_modes)
@@ -68565,10 +68568,10 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
       desc: pureAllZero
         ? 'Authorise and settle this batch without creating or sending a bank/provider transfer because every required PAYE net is explicitly £0.00.'
         : 'Payment will be made directly and automatically through your configured bank.',
-      enabled: canStartStandardExecution === true && standardExecutionExplicitlyDisabled !== true && payeInputBlocked !== true,
+      enabled: (canStartStandardExecution === true || preProviderRetryRequested) && standardExecutionExplicitlyDisabled !== true && payeInputBlocked !== true,
       disabledReason: payeInputBlocked
         ? 'Every required PAYE net amount must be explicitly entered or imported before payment execution can start.'
-        : standardExecutionUnavailableReason
+        : (preProviderRetryRequested ? '' : standardExecutionUnavailableReason)
     },
     CSV_SETTLEMENT: {
       label: 'CSV settlement',
@@ -77792,7 +77795,11 @@ const executePaymentPipeline = async (pipelineOptions = {}) => {
           bank_csv_stale_reason: currentRouteContract.bank_csv_stale_reason,
           bankCsvStaleReason: currentRouteContract.bankCsvStaleReason,
           server_owned_capabilities: true,
-          serverOwnedCapabilities: true
+          serverOwnedCapabilities: true,
+          retry_pre_provider_failure: !!retryPreProviderOperationId,
+          retryPreProviderFailure: !!retryPreProviderOperationId,
+          retry_pre_provider_operation_id: retryPreProviderOperationId || null,
+          retryPreProviderOperationId: retryPreProviderOperationId || null
         };
         if (typeof hasGoldenKey === 'boolean') payload.has_golden_key = hasGoldenKey;
         execCfg = await openBankingPayExecuteConfirmModal(payload);
