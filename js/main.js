@@ -22847,6 +22847,7 @@ function bankingPayStage3CanonicalStatusAction(value) {
 
 function bankingPayStage3PlanningAction(value) {
   const action = bankingPayStage3CanonicalStatusAction(value);
+  if (action === 'CANCEL_PAYMENT') return 'PRE_BANK_CANCEL';
   return action === 'RELEASE_FAILED_PAYMENT' ? 'NO_MONEY_RELEASE' : action;
 }
 
@@ -23031,7 +23032,7 @@ function buildBankingPayStage3Selection(correctionState, requestedAction) {
       : (state.stage3SnapshotToken || state.stage3StatusPage?.snapshot_token || '')
   ).trim();
   if (!snapshotToken) return { error: true, message: 'Refresh Current Payment Status before reviewing this cancellation.' };
-  if (!['DRAFT_CANCEL', 'CANCEL_PAYMENT', 'NO_MONEY_RELEASE'].includes(planningAction)) return { error: true, message: 'Select payments that share one cancellation action.' };
+  if (!['DRAFT_CANCEL', 'PRE_BANK_CANCEL', 'NO_MONEY_RELEASE'].includes(planningAction)) return { error: true, message: 'Select payments that share one cancellation action.' };
   const base = {
     command: 'PREPARE', context: 'CURRENT_PAYMENT_STATUS', contract_version: 1,
     mode: selection.mode, requested_action: planningAction, snapshot_token: snapshotToken,

@@ -56,6 +56,7 @@ test('explicit selection emits the exact Stage 2 contract with no filter authori
   assert.equal(payload.contract_version, 1);
   assert.equal(payload.mode, 'EXPLICIT');
   assert.equal(payload.snapshot_token, 'explicit-snapshot-1');
+  assert.equal(payload.requested_action, 'PRE_BANK_CANCEL');
   assert.deepEqual(Array.from(payload.explicit_candidate_tokens), ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']);
   assert.equal(Object.hasOwn(payload, 'filter_json'), false);
 });
