@@ -148,6 +148,10 @@ test('progress modal obeys server-safe action and polling contracts', () => {
 
 test('nested payment verification keeps its delegated handlers attached', () => {
   const reauth = slice('async function openBankingReauthModal', 'async function openPayBatchPasswordConfirmModal');
+  assert.match(reauth, /let wireAttempts = 0/);
+  assert.match(reauth, /if \(!body \|\| !reauthRoot\)/);
+  assert.match(reauth, /wireAttempts < 60/);
+  assert.match(reauth, /setTimeout\(wire, 50\)/);
   assert.match(reauth, /body\.addEventListener\('click', onClick, true\)/);
   assert.match(reauth, /body\.addEventListener\('input', onInput, true\)/);
   assert.match(reauth, /body\.__bankingReauthHandler = \{ openToken, onClick, onInput \}/);

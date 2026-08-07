@@ -7272,9 +7272,17 @@ async function openBankingReauthModal(opts = {}) {
       }
     );
 
+    let wireAttempts = 0;
     const wire = () => {
       const body = document.getElementById('modalBody');
-      if (!body) return;
+      const reauthRoot = document.getElementById(rootId);
+      if (!body || !reauthRoot) {
+        if (!done && wireAttempts < 60) {
+          wireAttempts += 1;
+          setTimeout(wire, 50);
+        }
+        return;
+      }
 
       if (body.__bankingReauthHandler && String(body.__bankingReauthHandler.openToken || '') === String(openToken || '')) {
         return;
