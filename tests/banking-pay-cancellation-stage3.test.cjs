@@ -138,6 +138,8 @@ test('progress modal obeys server-safe action and polling contracts', () => {
   assert.match(modal, /Releasing failed payment/);
   assert.match(modal, /Still working/);
   assert.match(modal, /Payment cancellation complete/);
+  assert.match(modal, /closeBankingPayCancellationProgressModal\(\);\s*const ceremonyToken/);
+  assert.match(modal, /ctms-cancel-btn is-primary/);
   assert.doesNotMatch(modal, /<strong>Status:<\/strong>|<strong>Stage:<\/strong>|Payment availability/);
   assert.doesNotMatch(modal, /JSON\.stringify\(status|provider_event_id|plan_hash|selection_hash/);
   const polling = slice('function scheduleBankingPayCancellationProgressPoll', 'async function openBankingPayCancellationProgressModal');

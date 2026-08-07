@@ -7147,13 +7147,9 @@ async function openBankingReauthModal(opts = {}) {
 
     const stillTopIsThisModal = () => {
       try {
-        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-        if (!fr) return false;
-        if (String(fr.kind || '') !== String(kind || '')) return false;
-        const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-        if (!ctx || String(ctx.entity || '') !== 'reauth') return false;
-        if (ctxSeed && fr._ctxRef !== ctxSeed) return false;
-        return true;
+        const root = document.getElementById(rootId);
+        if (!root) return false;
+        return String(root.getAttribute('data-open-token') || '').trim() === String(openToken || '').trim();
       } catch {
         return false;
       }
@@ -23238,7 +23234,7 @@ function renderBankingPayCancellationProgressModal() {
     .find((action) => availableActions.includes(action)) || '';
   const secondaryActions = ['REJECT', 'CANCEL_REQUEST'].filter((action) => availableActions.includes(action));
   const actionButtons = [primaryAction, ...secondaryActions].filter(Boolean)
-    .map((action) => `<button type="button" class="btn btn-sm ${action === primaryAction ? 'btn-primary' : 'btn-outline'}" data-banking-pay-cancellation-auth-action="${enc(action)}">${enc(authActionLabels[action])}</button>`)
+    .map((action) => `<button type="button" class="ctms-cancel-btn ${action === primaryAction ? 'is-primary' : 'is-danger'}" data-banking-pay-cancellation-auth-action="${enc(action)}">${enc(authActionLabels[action])}</button>`)
     .join('');
   const terminalSuccess = terminal && (applied > 0 || ['APPLIED', 'APPLIED_WITH_BLOCKERS'].includes(requestStatus));
   const needsApproval = availableActions.includes('AUTHORISE') || availableActions.includes('USE_GOLDEN_KEY');
@@ -23264,31 +23260,53 @@ function renderBankingPayCancellationProgressModal() {
               : (terminal ? (String(status.user_message || '').trim() || 'No payment was changed. Review the issue below.')
                 : 'CloudTMS is working safely in the background. You can close this window and come back later.'))))));
   root.innerHTML = `
-    <div class="card" style="width:min(620px,100%);max-height:90vh;overflow:auto;padding:18px;background:var(--panel,#fff);">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
-        <div><div style="font-weight:800;font-size:20px;">${enc(friendlyTitle)}</div></div>
-        <button type="button" class="btn btn-sm btn-outline" data-banking-pay-cancellation-close="1">Close</button>
+    <style>
+      #bankingPayCancellationProgressModal, #bankingPayCancellationProgressModal * { box-sizing:border-box; font-family:Arial,Helvetica,sans-serif; }
+      #bankingPayCancellationProgressModal .ctms-cancel-dialog { width:min(620px,100%);max-height:90vh;overflow:auto;padding:22px;background:#0b1629;color:#f8fafc;border:1px solid #33445f;border-radius:18px;box-shadow:0 24px 70px rgba(0,0,0,.42); }
+      #bankingPayCancellationProgressModal .ctms-cancel-title { margin:0;font-size:22px;line-height:1.25;font-weight:750;letter-spacing:0; }
+      #bankingPayCancellationProgressModal .ctms-cancel-message { font-size:16px;line-height:1.55;color:#e2e8f0;white-space:pre-wrap; }
+      #bankingPayCancellationProgressModal .ctms-cancel-summary { padding:13px 14px;background:#111f35;border:1px solid #33445f;border-radius:12px;font-size:15px;font-weight:700;color:#f8fafc; }
+      #bankingPayCancellationProgressModal .ctms-cancel-actions { display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
+      #bankingPayCancellationProgressModal .ctms-cancel-btn { appearance:none;width:auto;min-height:40px;padding:9px 15px;border-radius:10px;border:1px solid #526681;background:#13233a;color:#f8fafc;font-size:14px;line-height:1.2;font-weight:700;cursor:pointer;box-shadow:none; }
+      #bankingPayCancellationProgressModal .ctms-cancel-btn:hover { filter:brightness(1.08); }
+      #bankingPayCancellationProgressModal .ctms-cancel-btn.is-primary { background:#16834b;border-color:#22a762;color:#fff; }
+      #bankingPayCancellationProgressModal .ctms-cancel-btn.is-danger { background:transparent;border-color:#ef4444;color:#fecaca; }
+      #bankingPayCancellationProgressModal .ctms-cancel-progress { width:100%;accent-color:#22a762; }
+      #bankingPayCancellationProgressModal .ctms-cancel-mini { margin-top:5px;color:#b9c6d8;font-size:13px; }
+    </style>
+    <div class="ctms-cancel-dialog">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
+        <h2 class="ctms-cancel-title">${enc(friendlyTitle)}</h2>
+        <button type="button" class="ctms-cancel-btn" data-banking-pay-cancellation-close="1">Close</button>
       </div>
       <div style="margin-top:18px;display:grid;gap:14px;">
-        <div style="font-size:16px;line-height:1.5;white-space:pre-wrap;">${enc(friendlyMessage)}</div>
-        ${selectedSummary ? `<div class="card" style="padding:12px;font-weight:700;">${enc(selectedSummary)}</div>` : ''}
-        ${stillWorking ? `<div><progress ${progressPercent > 0 ? `value="${enc(progressPercent)}"` : ''} max="100" aria-label="Cancellation in progress" style="width:100%;"></progress><div class="mini" style="margin-top:4px;">Still working…</div></div>` : ''}
-        ${(terminal && blockerRows.length) ? `<div class="card" style="padding:10px;"><div style="font-weight:700;">What needs attention</div>${blockerRows.slice(0, 3).map((item) => `<div class="mini">${enc(item.label)}${item.count ? ` (${enc(item.count)})` : ''}</div>`).join('')}</div>` : ''}
-        ${planningReady ? '<button type="button" class="btn btn-primary" data-banking-pay-cancellation-verify="1">Continue to verification</button>' : ''}
-        ${actionButtons ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">${actionButtons}</div>` : ''}
+        <div class="ctms-cancel-message">${enc(friendlyMessage)}</div>
+        ${selectedSummary ? `<div class="ctms-cancel-summary">${enc(selectedSummary)}</div>` : ''}
+        ${stillWorking ? `<div><progress class="ctms-cancel-progress" ${progressPercent > 0 ? `value="${enc(progressPercent)}"` : ''} max="100" aria-label="Cancellation in progress"></progress><div class="ctms-cancel-mini">Still working…</div></div>` : ''}
+        ${(terminal && blockerRows.length) ? `<div class="ctms-cancel-summary"><div style="font-weight:700;">What needs attention</div>${blockerRows.slice(0, 3).map((item) => `<div class="ctms-cancel-mini">${enc(item.label)}${item.count ? ` (${enc(item.count)})` : ''}</div>`).join('')}</div>` : ''}
+        ${planningReady ? '<div class="ctms-cancel-actions"><button type="button" class="ctms-cancel-btn is-primary" data-banking-pay-cancellation-verify="1">Continue to verification</button></div>' : ''}
+        ${actionButtons ? `<div class="ctms-cancel-actions">${actionButtons}</div>` : ''}
       </div>
     </div>`;
   root.querySelector('[data-banking-pay-cancellation-close="1"]')?.addEventListener('click', closeBankingPayCancellationProgressModal, { once: true });
   root.querySelector('[data-banking-pay-cancellation-verify="1"]')?.addEventListener('click', async () => {
     try {
+      closeBankingPayCancellationProgressModal();
       const ceremonyToken = String(await openBankingReauthModal({ purpose: 'PAYMENT_REVERSAL' }) || '').trim();
-      if (!ceremonyToken) return;
+      state.visible = true;
+      if (!ceremonyToken) {
+        renderBankingPayCancellationProgressModal();
+        scheduleBankingPayCancellationProgressPoll();
+        return;
+      }
       await startPreparedBankingPayCancellation(ceremonyToken);
       renderBankingPayCancellationProgressModal();
       scheduleBankingPayCancellationProgressPoll();
     } catch (error) {
+      state.visible = true;
       state.error = String(error?.message || error || 'Please verify your identity again.');
       renderBankingPayCancellationProgressModal();
+      scheduleBankingPayCancellationProgressPoll();
     }
   }, { once: true });
   root.querySelectorAll('[data-banking-pay-cancellation-auth-action]').forEach((button) => {
