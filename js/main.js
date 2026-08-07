@@ -77669,10 +77669,40 @@ const executePaymentPipeline = async () => {
 
   let lastExecutionScopeForError = deriveScopeForBatch(child.data);
 
+  const retryPreProviderOperationId = (() => {
+    const dataObject = (child.data && typeof child.data === 'object' && !Array.isArray(child.data)) ? child.data : {};
+    const batchObject = (dataObject.batch && typeof dataObject.batch === 'object' && !Array.isArray(dataObject.batch)) ? dataObject.batch : {};
+    const candidates = [
+      child.activeOperation,
+      child.active_operation,
+      child.activePaymentOperation,
+      child.active_payment_operation,
+      dataObject.active_payment_operation,
+      dataObject.activePaymentOperation,
+      dataObject.payment_execute_operation,
+      dataObject.paymentExecuteOperation,
+      batchObject.active_payment_operation,
+      batchObject.activePaymentOperation,
+      batchObject.payment_execute_operation,
+      batchObject.paymentExecuteOperation
+    ];
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+      const errorJson = (candidate.error_json && typeof candidate.error_json === 'object' && !Array.isArray(candidate.error_json)) ? candidate.error_json : ((candidate.errorJson && typeof candidate.errorJson === 'object' && !Array.isArray(candidate.errorJson)) ? candidate.errorJson : {});
+      const progressJson = (candidate.progress_json && typeof candidate.progress_json === 'object' && !Array.isArray(candidate.progress_json)) ? candidate.progress_json : ((candidate.progressJson && typeof candidate.progressJson === 'object' && !Array.isArray(candidate.progressJson)) ? candidate.progressJson : {});
+      const operationId = String(candidate.operation_id || candidate.operationId || candidate.id || '').trim();
+      const operationType = String(candidate.operation_type || candidate.operationType || '').trim().toUpperCase();
+      const operationStatus = String(candidate.status || candidate.operation_status || candidate.operationStatus || '').trim().toUpperCase();
+      const failureCode = String(candidate.resume_reason || candidate.resumeReason || errorJson.code || errorJson.error_code || progressJson.code || progressJson.error_code || '').trim().toUpperCase();
+      if (operationId && operationType === 'PAYMENT_EXECUTE' && operationStatus === 'REVIEW_REQUIRED' && failureCode === 'PAYMENT_EXECUTE_OPERATION_FAILED') return operationId;
+    }
+    return '';
+  })();
+
   const routeContract = getAuthoritativePaymentCapabilityContract(child.data);
   const executeCapability = routeContract.execute_any;
 
-  if (executeCapability.state === false) {
+  if (executeCapability.state === false && !retryPreProviderOperationId) {
     const message = getCapabilityDisabledMessage(executeCapability, 'This payment cannot be executed in its current state. Refresh the batch and review Current Payment Status before trying again.');
     child.error = message;
     try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
@@ -77680,12 +77710,12 @@ const executePaymentPipeline = async () => {
     return;
   }
 
-  if (executeCapability.state !== true && !hasActivePaymentsForBatch(child.data)) {
+  if (executeCapability.state !== true && !retryPreProviderOperationId && !hasActivePaymentsForBatch(child.data)) {
     await blockNoActivePaymentsAction();
     return;
   }
 
-  if (executeCapability.state !== true && !isExecuteAllowedByStatus(child.data)) {
+  if (executeCapability.state !== true && !retryPreProviderOperationId && !isExecuteAllowedByStatus(child.data)) {
     const message = getCapabilityDisabledMessage(executeCapability, 'This payment cannot be executed in its current state. Refresh the batch and review Current Payment Status before trying again.');
     child.error = message;
     try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
@@ -77909,6 +77939,8 @@ const executePaymentPipeline = async () => {
       csv_uploaded_confirmed,
       csv_bank_confirm_ref,
       external_settlement_comment,
+      retry_pre_provider_failure: !!retryPreProviderOperationId,
+      retry_pre_provider_operation_id: retryPreProviderOperationId || null,
       reauth_token: reauthToken
     });
 
@@ -84133,6 +84165,23 @@ function renderBankingPayBatchChildModalOverview() {
   const activeOperationPhase = upperTrim(activeOperation?.phase || data.active_payment_operation_phase || data.activePaymentOperationPhase || data.payment_execute_operation_phase || data.paymentExecuteOperationPhase || batch.active_payment_operation_phase || batch.activePaymentOperationPhase || batch.payment_execute_operation_phase || batch.paymentExecuteOperationPhase || '');
   const activeRunnerState = upperTrim(activeOperation?.runner_state || activeOperation?.runnerState || data.active_payment_operation_runner_state || data.activePaymentOperationRunnerState || data.payment_execute_operation_runner_state || data.paymentExecuteOperationRunnerState || batch.active_payment_operation_runner_state || batch.activePaymentOperationRunnerState || batch.payment_execute_operation_runner_state || batch.paymentExecuteOperationRunnerState || '');
   const activeOperationId = trimStr(activeOperation?.operation_id || activeOperation?.operationId || activeOperation?.id || data.active_payment_operation_id || data.activePaymentOperationId || data.payment_execute_operation_id || data.paymentExecuteOperationId || batch.active_payment_operation_id || batch.activePaymentOperationId || batch.payment_execute_operation_id || batch.paymentExecuteOperationId || '');
+  const activeOperationError = asObj(activeOperation?.error_json || activeOperation?.errorJson) || {};
+  const activeOperationProgress = asObj(activeOperation?.progress_json || activeOperation?.progressJson || activeOperation?.progress) || {};
+  const activeOperationResumeReason = upperTrim(
+    activeOperation?.resume_reason ||
+    activeOperation?.resumeReason ||
+    activeOperationError.code ||
+    activeOperationError.error_code ||
+    activeOperationProgress.code ||
+    activeOperationProgress.error_code ||
+    ''
+  );
+  const retryablePreProviderFailure = !!(
+    activeOperationId &&
+    activeOperationType === 'PAYMENT_EXECUTE' &&
+    activeOperationStatus === 'REVIEW_REQUIRED' &&
+    activeOperationResumeReason === 'PAYMENT_EXECUTE_OPERATION_FAILED'
+  );
   const activeOperationTerminal = !!(activeOperation && activeOperationSignals.some((signal) => terminalOperationStates.has(signal)));
   const activeOperationStatusLabel = formatOperationStatusLabel(activeOperationStatus || activeRunnerState || activeOperationPhase) || 'In progress';
   const activeOperationLeased = readFirstBool(activeOperation?.server_running, activeOperation?.serverRunning, activeOperation?.leased, activeOperation?.lease_active, activeOperation?.leaseActive) || !!trimStr(activeOperation?.lease_owner || activeOperation?.leaseOwner || '');
@@ -84142,7 +84191,7 @@ function renderBankingPayBatchChildModalOverview() {
     ['WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION'].includes(upperTrim(status)) ||
     readFirstBool(activeOperation?.waiting_for_authorisation, activeOperation?.waitingForAuthorisation, activeOperation?.waiting_for_authorization, activeOperation?.waitingForAuthorization)
   );
-  const reviewRequired = !!(
+  const reviewRequired = !retryablePreProviderFailure && !!(
     activeOperationStatus === 'REVIEW_REQUIRED' ||
     activeOperationPhase === 'REVIEW_REQUIRED' ||
     activeRunnerState === 'REVIEW_REQUIRED' ||
@@ -84152,6 +84201,7 @@ function renderBankingPayBatchChildModalOverview() {
   const activePaymentExecuteOperation = !!(
     activeOperation &&
     activeOperationId &&
+    !retryablePreProviderFailure &&
     paymentOperationTypes.has(activeOperationType) &&
     !activeOperationTerminal &&
     (
@@ -84305,15 +84355,24 @@ function renderBankingPayBatchChildModalOverview() {
     (fallbackExplicitExecuteAllowed || (!fallbackExplicitExecuteDenied && cleanDraftExecutionInference))
   );
   const canShowExecutePayment = routeCapabilityContractPresent
-    ? !!(
+    ? (retryablePreProviderFailure ? !!(
+        hasExecutablePaymentScopeForBatch &&
+        overviewStatusAllowsExecute &&
+        !waitingAuthorisation
+      ) : !!(
         anyExecuteRouteAllowed &&
         hasExecutablePaymentScopeForBatch &&
         overviewStatusAllowsExecute &&
         !activePaymentExecuteOperation &&
         !waitingAuthorisation &&
         !reviewRequired
-      )
-    : fallbackCanShowExecutePayment;
+      ))
+    : (retryablePreProviderFailure ? !!(
+        hasActiveBatchPayments &&
+        overviewStatusAllowsExecute &&
+        !waitingAuthorisation &&
+        amountAllowsExecution
+      ) : fallbackCanShowExecutePayment);
 
   const canShowPayeEntry = !!(
     batchKindInfo.isPayeish === true &&
@@ -84563,7 +84622,7 @@ function renderBankingPayBatchChildModalOverview() {
       ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:deleteDraft" title="Cancel this unsubmitted draft batch before it is sent to the bank/provider" style="font-weight:800;background:#dc2626;border-color:#dc2626;color:#fff;">Cancel Draft Batch</button>`
       : '',
     canShowExecutePayment
-      ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:executePayment"${executeButtonDisabledAttr}${executeButtonSuccessStyle} title="${enc(authoritativeNoBankPaymentState ? 'Authorise and settle this batch without sending a provider transfer' : 'Execute eligible payments')}">${child.actionsBusy?.executing ? 'Executing…' : 'Execute payment'}</button>`
+      ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:executePayment" data-retry-pre-provider-failure="${retryablePreProviderFailure ? 'true' : 'false'}" data-retry-operation-id="${enc(retryablePreProviderFailure ? activeOperationId : '')}"${executeButtonDisabledAttr}${executeButtonSuccessStyle} title="${enc(retryablePreProviderFailure ? 'Retry this payment after server-side pre-provider safety checks' : (authoritativeNoBankPaymentState ? 'Authorise and settle this batch without sending a provider transfer' : 'Execute eligible payments'))}">${child.actionsBusy?.executing ? 'Executing…' : (retryablePreProviderFailure ? 'Retry payment' : 'Execute payment')}</button>`
       : '',
     canShowPayeEntry
       ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPayeEntry"${actionDisabledAttr(!!child.loading || !!child.__loadInFlight || !!child.actionsBusy?.refreshing || !!child.actionsBusy?.polling, 'PAYE entry is unavailable while the batch is refreshing')} title="Enter PAYE net payments">Enter PAYE payments</button>`
