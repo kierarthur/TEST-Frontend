@@ -10,6 +10,7 @@ test('a typed pre-provider failure exposes retry instead of a dead review-only a
   assert.match(source, /const retryablePreProviderFailure = !!\(/);
   assert.match(source, /activeOperationType === 'PAYMENT_EXECUTE'/);
   assert.match(source, /activeOperationStatus === 'REVIEW_REQUIRED'/);
+  assert.match(source, /\['PAYMENT_EXECUTE_OPERATION_FAILED', 'BATCH_STALE'\]\.includes\(activeOperationResumeReason\)/);
   assert.match(source, /!retryablePreProviderFailure && !!\(/);
   assert.match(source, /retryablePreProviderFailure \? 'Retry payment' : 'Execute payment'/);
   assert.match(source, /data-retry-pre-provider-failure=/);
@@ -31,7 +32,7 @@ test('a payment-execute review summary may offer retry but the server remains fi
 
 test('the deployed HTML cache key loads the guarded retry and PAYE schedule asset', () => {
   assert.match(indexSource, /banking-paye-net-schedule=20260807-r1/);
-  assert.match(indexSource, /banking-pre-provider-retry=20260807-r4/);
+  assert.match(indexSource, /banking-pre-provider-retry=20260808-r1/);
 });
 
 test('the retry command carries the exact failed operation through normal reauthentication', () => {
@@ -40,7 +41,7 @@ test('the retry command carries the exact failed operation through normal reauth
   assert.ok(reauthIndex >= 0);
   assert.ok(requestIndex > reauthIndex);
   assert.match(source, /operationStatus === 'REVIEW_REQUIRED'/);
-  assert.match(source, /failureCode === 'PAYMENT_EXECUTE_OPERATION_FAILED'/);
+  assert.match(source, /\['PAYMENT_EXECUTE_OPERATION_FAILED', 'BATCH_STALE'\]\.includes\(failureCode\)/);
   assert.match(source, /retry_pre_provider_failure: !!retryPreProviderOperationId/);
 });
 

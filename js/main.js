@@ -77903,7 +77903,12 @@ const executePaymentPipeline = async (pipelineOptions = {}) => {
       const operationType = String(candidate.operation_type || candidate.operationType || '').trim().toUpperCase();
       const operationStatus = String(candidate.status || candidate.operation_status || candidate.operationStatus || '').trim().toUpperCase();
       const failureCode = String(candidate.resume_reason || candidate.resumeReason || errorJson.code || errorJson.error_code || progressJson.code || progressJson.error_code || '').trim().toUpperCase();
-      if (operationId && operationType === 'PAYMENT_EXECUTE' && operationStatus === 'REVIEW_REQUIRED' && failureCode === 'PAYMENT_EXECUTE_OPERATION_FAILED') return operationId;
+      if (
+        operationId &&
+        operationType === 'PAYMENT_EXECUTE' &&
+        operationStatus === 'REVIEW_REQUIRED' &&
+        ['PAYMENT_EXECUTE_OPERATION_FAILED', 'BATCH_STALE'].includes(failureCode)
+      ) return operationId;
     }
     return '';
   })();
@@ -84416,7 +84421,8 @@ function renderBankingPayBatchChildModalOverview() {
   const retryablePreProviderFailure = !!(
     activeOperationId &&
     activeOperationType === 'PAYMENT_EXECUTE' &&
-    activeOperationStatus === 'REVIEW_REQUIRED'
+    activeOperationStatus === 'REVIEW_REQUIRED' &&
+    ['PAYMENT_EXECUTE_OPERATION_FAILED', 'BATCH_STALE'].includes(activeOperationResumeReason)
   );
   const activeOperationTerminal = !!(activeOperation && activeOperationSignals.some((signal) => terminalOperationStates.has(signal)));
   const activeOperationStatusLabel = formatOperationStatusLabel(activeOperationStatus || activeRunnerState || activeOperationPhase) || 'In progress';
