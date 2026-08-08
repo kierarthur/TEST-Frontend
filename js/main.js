@@ -31350,6 +31350,11 @@ async function bankingPayPreview(pay_date) {
     };
     wiz.workbench.last_progress_at = new Date().toISOString();
 
+    if (progressReady) {
+      wiz.createDraftError = '';
+      wiz.createDraftFriendlyError = null;
+    }
+
     if (progressReadyEmpty) {
       wiz.preview.ready_empty = true;
       wiz.preview.status_text = 'No payable rows found.';

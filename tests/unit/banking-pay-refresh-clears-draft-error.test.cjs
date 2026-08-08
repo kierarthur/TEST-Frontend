@@ -29,3 +29,7 @@ test('a failed refresh cannot clear the prior Draft failure context', () => {
   const clearAt = refreshBody.indexOf("refreshedWizard.createDraftError = '';");
   assert.ok(previewCallAt >= 0 && successGuardAt > previewCallAt && clearAt > successGuardAt);
 });
+
+test('an authoritative READY progress update clears a stale Draft failure banner', () => {
+  assert.match(source, /if \(progressReady\) \{\s*wiz\.createDraftError = '';\s*wiz\.createDraftFriendlyError = null;\s*\}/);
+});
