@@ -91248,7 +91248,7 @@ function attachBankingModalDelegatedHandlers() {
 
       try {
         if (pd && typeof bankingPayPreview === 'function') {
-          await bankingPayPreview({
+          const refreshedPreview = await bankingPayPreview({
             pay_date: pd,
             mode: hardMode ? 'HARD_SESSION_RELOAD' : 'SOFT_REFRESH',
             hard_session_reload: hardMode,
@@ -91257,7 +91257,14 @@ function attachBankingModalDelegatedHandlers() {
             silent: true,
             background: true
           });
-          return;
+          if (refreshedPreview && refreshedPreview.ok !== false) {
+            const refreshedWizard = st.pay?.draftWizard;
+            if (refreshedWizard && typeof refreshedWizard === 'object') {
+              refreshedWizard.createDraftError = '';
+              refreshedWizard.createDraftFriendlyError = null;
+            }
+          }
+          return refreshedPreview;
         }
       } catch {}
 
