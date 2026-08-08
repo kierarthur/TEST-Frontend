@@ -24,6 +24,13 @@ test('switching to scheduled execution restores the 02:00 default if time is emp
   assert.match(source, /state\.schedule_kind === 'SCHEDULED' && !parseTimeHm\(state\.time_uk\)\) state\.time_uk = '02:00'/);
 });
 
+test('payment reauthentication carries the exact future schedule into its purpose-bound token request', () => {
+  assert.match(source, /const scheduleKind = String\(opts\.scheduleKind \|\| opts\.schedule_kind \|\| ''\)/);
+  assert.match(source, /const scheduledAtUtc = String\(opts\.scheduledAtUtc \|\| opts\.scheduled_at_utc \|\| ''\)/);
+  assert.match(source, /execution_mode: executionMode \|\| null,[\s\S]{0,180}schedule_kind: scheduleKind \|\| null,[\s\S]{0,180}scheduled_at_utc: scheduledAtUtc \|\| null/);
+  assert.match(source, /purpose: 'PAYMENT_SCHEDULE',[\s\S]{0,180}executionMode: execution_mode,[\s\S]{0,180}scheduleKind,[\s\S]{0,180}scheduledAtUtc/);
+});
+
 test('scheduled payment display uses abbreviated UK date and compact 24-hour UK time', () => {
   const start = source.indexOf('function formatBankingPayScheduledAtUkDisplay');
   const end = source.indexOf('\n\nfunction renderPayBatchListPanel', start);

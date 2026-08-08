@@ -8,14 +8,14 @@ const html = fs.readFileSync(path.resolve(__dirname, '../../index.html'), 'utf8'
 test('loads the current main frontend asset through an explicit cache version', () => {
   const scriptBuildVersion = '20260803-invoice-reference-policy-r2';
   const stylesheetBuildVersion = '20260729-invoice-v8-flat-table-r5';
-  const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recovery=20260730-r1&planned-week-authority=20260801-r3&invoice-email-policy=20260801-r2&summary-money=20260803-r1&outbox-cursor-pagination=20260803-r1&banking-paye-net-schedule=20260807-r1&banking-pre-provider-retry=20260807-r4&banking-cancellation-progress=20260807-r9';
+  const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recovery=20260730-r1&planned-week-authority=20260801-r3&invoice-email-policy=20260801-r2&summary-money=20260803-r1&outbox-cursor-pagination=20260803-r1&banking-paye-net-schedule=20260807-r1&banking-pre-provider-retry=20260807-r4&banking-cancellation-progress=20260807-r9&banking-responsive-layout=20260807-r1&banking-test-reauth=20260808-r1';
   const diagnosticAsset = 'invoice-diagnostic-catalog.js?v=20260803-invoice-reference-policy-r2';
   const batchAsset = `invoice-batch-modal.js?v=${scriptBuildVersion}`;
   const asyncAsset = 'invoice-async-ui.js?v=20260730-invoice-refs-ward-r13';
   const stylesheetAsset = `invoice-batch-modal.css?v=${stylesheetBuildVersion}`;
   assert.match(
     html,
-    /<script src="\.\/js\/main\.js\?v=20260730-invoice-refs-ward-r10&banking-owner-recovery=20260730-r1&planned-week-authority=20260801-r3&invoice-email-policy=20260801-r2&summary-money=20260803-r1&outbox-cursor-pagination=20260803-r1&banking-paye-net-schedule=20260807-r1&banking-pre-provider-retry=20260807-r4&banking-cancellation-progress=20260807-r9"><\/script>/
+    /<script src="\.\/js\/main\.js\?v=20260730-invoice-refs-ward-r10&banking-owner-recovery=20260730-r1&planned-week-authority=20260801-r3&invoice-email-policy=20260801-r2&summary-money=20260803-r1&outbox-cursor-pagination=20260803-r1&banking-paye-net-schedule=20260807-r1&banking-pre-provider-retry=20260807-r4&banking-cancellation-progress=20260807-r9&banking-responsive-layout=20260807-r1&banking-test-reauth=20260808-r1"><\/script>/
   );
   assert.match(html, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
   assert.match(html, /invoice-diagnostic-catalog\.js\?v=20260803-invoice-reference-policy-r2/);

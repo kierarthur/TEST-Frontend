@@ -6979,6 +6979,8 @@ async function openBankingReauthModal(opts = {}) {
 
   const purpose = String(opts.purpose || 'PAYMENT_SCHEDULE').trim().toUpperCase() || 'PAYMENT_SCHEDULE';
   const executionMode = String(opts.executionMode || opts.execution_mode || '').trim().toUpperCase();
+  const scheduleKind = String(opts.scheduleKind || opts.schedule_kind || '').trim().toUpperCase();
+  const scheduledAtUtc = String(opts.scheduledAtUtc || opts.scheduled_at_utc || '').trim();
   const isPaymentIssueReauth = purpose === 'PAYMENT_REVERSAL';
   const isPayeSameWeekOverride = purpose === 'PAYE_SAME_WEEK_OVERRIDE';
   const reauthIntro = isPaymentIssueReauth
@@ -7383,7 +7385,9 @@ async function openBankingReauthModal(opts = {}) {
               const { res, j, msg } = await apiPost('/auth/reauth/start', {
                 password: pw,
                 purpose,
-                execution_mode: executionMode || null
+                execution_mode: executionMode || null,
+                schedule_kind: scheduleKind || null,
+                scheduled_at_utc: scheduledAtUtc || null
               });
 
               if (res.status === 401) {
@@ -78109,7 +78113,9 @@ const executePaymentPipeline = async (pipelineOptions = {}) => {
       if (typeof openBankingReauthModal === 'function') {
         reauthToken = await openBankingReauthModal({
           purpose: 'PAYMENT_SCHEDULE',
-          executionMode: execution_mode
+          executionMode: execution_mode,
+          scheduleKind,
+          scheduledAtUtc
         });
       }
       else throw new Error('Payment verification modal is not available.');
