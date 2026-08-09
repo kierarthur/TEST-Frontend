@@ -208,7 +208,7 @@ test('the authoritative selection is re-applied after all affected preview secti
 
   assert.match(
     body,
-    /applySelectionPayloadSummaryToWizard\(result\);\s*await reloadCanonicalPreviewAfterSelectionMutation\(\);\s*applySelectionPayloadSummaryToWizard\(result\);/
+    /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*?await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\);/
   );
   assert.match(
     main,
@@ -272,4 +272,68 @@ test('a hidden Banking Pay batch child remains a valid refresh target under its 
     JSON.parse(JSON.stringify(outcome)),
     { hiddenParentMatches: true, wrongTokenRejected: false }
   );
+});
+
+test('successful Banking reauthentication closes the verified child without invoking the discard button', () => {
+  const start = main.indexOf('    const finishVerified = (token) => {');
+  const end = main.indexOf('    const onDismiss =', start);
+  assert.ok(start >= 0);
+  assert.ok(end > start);
+  const body = main.slice(start, end);
+
+  assert.match(body, /frame\.isDirty = false/);
+  assert.match(body, /frame\._snapshot = null/);
+  assert.match(body, /typeof closeModal === 'function'\) closeModal\(\)/);
+  assert.doesNotMatch(body, /btnCloseModal/);
+  assert.doesNotMatch(body, /\.click\(\)/);
+});
+
+test('cancellation completion is owned by the open batch watcher, not the progress child timer', () => {
+  const scheduleStart = main.indexOf('function scheduleBankingPayCancellationProgressPoll(');
+  const scheduleEnd = main.indexOf('\n\nfunction statusPollDelay', scheduleStart);
+  assert.ok(scheduleStart >= 0);
+  assert.ok(scheduleEnd > scheduleStart);
+  const scheduleBody = main.slice(scheduleStart, scheduleEnd);
+  assert.match(scheduleBody, /startBankingPayBatchLiveWatch\(state\.payBatchId/);
+  assert.match(scheduleBody, /stopWhenClosed:\s*true/);
+  assert.doesNotMatch(scheduleBody, /setTimeout\(/);
+  assert.doesNotMatch(scheduleBody, /state\.visible/);
+
+  const closeStart = main.indexOf('function closeBankingPayCancellationProgressModal()');
+  const closeEnd = main.indexOf('\n\nfunction bankingPayCancellationProgressIsFinanciallyTerminal', closeStart);
+  const closeBody = main.slice(closeStart, closeEnd);
+  assert.doesNotMatch(closeBody, /stopBankingPayBatchLiveWatch/);
+});
+
+test('the 45-second heartbeat carries batch watermarks and reuses the same quiet watcher consumer', () => {
+  const buildStart = main.indexOf('function buildBankingPayBatchHeartbeatWatches()');
+  const buildEnd = main.indexOf('\n\nasync function consumeBankingPayBatchHeartbeatSignals', buildStart);
+  assert.ok(buildStart >= 0);
+  assert.ok(buildEnd > buildStart);
+  const buildBody = main.slice(buildStart, buildEnd);
+  for (const field of [
+    'known_version',
+    'known_payment_status_version',
+    'known_correction_progress_version',
+    'known_alert_version',
+    'known_overview_version'
+  ]) assert.match(buildBody, new RegExp(field));
+
+  assert.match(main, /payload\.watched_pay_batches = batchWatches/);
+  assert.match(main, /consumeBankingPayBatchHeartbeatSignals\(json\.watched_batch_signals\)/);
+  assert.match(main, /watcher\.consumeSignal\(signal, \{ source: 'changes-heartbeat' \}\)/);
+  assert.doesNotMatch(buildBody, /openUiConfirmModal|alert\(/);
+});
+
+test('missing or different selected batch state is a quiet cancellation projection no-op', () => {
+  const start = main.indexOf('function applyBankingPayCancellationActiveProjection(');
+  const end = main.indexOf('\n\nasync function refreshBankingPayCancellationFinancialViews', start);
+  assert.ok(start >= 0);
+  assert.ok(end > start);
+  const body = main.slice(start, end);
+  assert.match(body, /modal_state_reason = 'NO_SELECTED_PAYMENT_BATCH'/);
+  assert.match(body, /modal_state_reason = 'DIFFERENT_PAYMENT_BATCH_SELECTED'/);
+  assert.doesNotMatch(body, /Cancellation needs attention/);
+  assert.doesNotMatch(body, /refreshed payment batch is not available/i);
+  assert.doesNotMatch(body, /openUiConfirmModal|alert\(/);
 });

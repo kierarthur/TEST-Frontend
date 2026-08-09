@@ -7260,9 +7260,10 @@ async function openBankingReauthModal(opts = {}) {
             frame.isDirty = false;
             frame._snapshot = null;
           }
-          const closeButton = document.getElementById('btnCloseModal');
-          if (closeButton && typeof closeButton.click === 'function') closeButton.click();
-          else if (typeof closeModal === 'function') closeModal();
+          // Verification completed successfully. Close the exact child frame
+          // directly; clicking the shared Close button invokes the generic
+          // dirty/discard ceremony and can show an irrelevant native prompt.
+          if (typeof closeModal === 'function') closeModal();
         }
       } catch {}
       resolve(verifiedToken);
@@ -23165,7 +23166,9 @@ async function bankingPayPaymentCorrectionReauth(correctionRequestId, reauthToke
 const bankingPayCancellationProgressState = {
   correctionRequestId: '', payBatchId: '', status: null, timer: null,
   abortController: null, financialRefreshDone: false, visible: false, error: '',
-  errorStatusKey: '', pendingDraftReauthToken: '', verificationInFlight: false
+  errorStatusKey: '', pendingDraftReauthToken: '', verificationInFlight: false,
+  sharedRefreshPromise: null, lastObservedCorrectionProgressVersion: null,
+  lastObservedWorkbenchStatus: ''
 };
 
 function bankingPayCancellationStatusKey(status) {
@@ -23584,35 +23587,102 @@ async function refreshBankingPayCancellationFinancialViews() {
   state.financialRefreshDone = true;
 }
 
+async function syncBankingPayCancellationFromBatchSignal(payBatchId, signal = {}, options = {}) {
+  const id = String(payBatchId || '').trim();
+  if (!id) return { refreshed: false, reason: 'PAY_BATCH_ID_REQUIRED' };
+  const state = bankingPayCancellationProgressState;
+  const source = signal && typeof signal === 'object' && !Array.isArray(signal) ? signal : {};
+  const opts = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
+  const changedAreas = Array.isArray(source.changed_areas)
+    ? source.changed_areas.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  const correctionVersion = source.correction_progress_version ?? source.correctionProgressVersion ?? null;
+  const relevant = opts.force === true
+    || source.changed === true
+    || changedAreas.includes('correction_progress')
+    || changedAreas.includes('payment_status')
+    || changedAreas.includes('overview');
+  if (!relevant) return { refreshed: false, reason: 'NO_RELEVANT_CHANGE' };
+  if (state.sharedRefreshPromise && typeof state.sharedRefreshPromise.then === 'function') return state.sharedRefreshPromise;
+
+  const refreshPromise = (async () => {
+    let correctionRequestId = String(state.payBatchId === id ? state.correctionRequestId : '').trim();
+    if (!correctionRequestId) {
+      const current = await bankingPayPaymentStatusPage(id, {
+        limit: 1,
+        sort_key: 'STATUS',
+        sort_direction: 'ASC',
+        filter: {},
+        signal: opts.signal
+      });
+      correctionRequestId = String(
+        current?.latest_correction_request?.id
+        || current?.latest_correction_request?.correction_request_id
+        || current?.latest_correction_request_id
+        || ''
+      ).trim();
+    }
+    if (!correctionRequestId) {
+      state.lastObservedCorrectionProgressVersion = correctionVersion;
+      return { refreshed: false, reason: 'NO_CANCELLATION_REQUEST' };
+    }
+
+    if (state.correctionRequestId !== correctionRequestId || state.payBatchId !== id) {
+      state.correctionRequestId = correctionRequestId;
+      state.payBatchId = id;
+      state.status = null;
+      state.error = '';
+      state.errorStatusKey = '';
+      state.pendingDraftReauthToken = '';
+      state.financialRefreshDone = false;
+      state.lastObservedWorkbenchStatus = '';
+    }
+    const nextStatus = await bankingPayPaymentCorrectionStatus(correctionRequestId, { signal: opts.signal });
+    const nextStatusKey = bankingPayCancellationStatusKey(nextStatus);
+    state.status = nextStatus;
+    state.lastObservedCorrectionProgressVersion = correctionVersion;
+    const nextWorkbenchStatus = String(nextStatus?.workbench_refresh?.status || nextStatus?.workbench_refresh?.workbench_refresh_status || '').trim().toUpperCase();
+    if (nextWorkbenchStatus === 'CURRENT' && state.lastObservedWorkbenchStatus !== 'CURRENT') state.financialRefreshDone = false;
+    state.lastObservedWorkbenchStatus = nextWorkbenchStatus;
+    if (!state.error || !state.errorStatusKey || nextStatusKey !== state.errorStatusKey) {
+      state.error = '';
+      state.errorStatusKey = '';
+    }
+    if (state.pendingDraftReauthToken) await maybeStartPendingDraftBankingPayCancellation();
+    if (nextStatus?.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(nextStatus?.request_status || nextStatus?.status)) {
+      await refreshBankingPayCancellationFinancialViews();
+    }
+    if (state.visible) renderBankingPayCancellationProgressModal();
+    return {
+      refreshed: true,
+      pay_batch_id: id,
+      correction_request_id: correctionRequestId,
+      financial_complete: nextStatus?.financial_complete === true
+    };
+  })().catch((error) => {
+    if (state.visible && error?.name !== 'AbortError') {
+      state.error = String(error?.message || error || 'Status is temporarily unavailable. CloudTMS will try again.');
+      renderBankingPayCancellationProgressModal();
+    }
+    return { refreshed: false, reason: 'STATUS_REFRESH_FAILED' };
+  }).finally(() => {
+    if (state.sharedRefreshPromise === refreshPromise) state.sharedRefreshPromise = null;
+  });
+  state.sharedRefreshPromise = refreshPromise;
+  return refreshPromise;
+}
+
 function scheduleBankingPayCancellationProgressPoll(delayMs = null) {
   const state = bankingPayCancellationProgressState;
   if (state.timer) clearTimeout(state.timer);
-  if (!state.visible || !state.correctionRequestId || state.abortController) return;
-  const terminal = state.status?.terminal === true || state.status?.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status);
-  const workbenchStatus = String(state.status?.workbench_refresh?.status || state.status?.workbench_refresh?.workbench_refresh_status || '').toUpperCase();
-  if (terminal && workbenchStatus === 'CURRENT') return;
-  const serverDelay = statusPollDelay(state.status, delayMs);
-  if (serverDelay == null) return;
-  state.timer = setTimeout(async () => {
-    try {
-      state.abortController = new AbortController();
-      const nextStatus = await bankingPayPaymentCorrectionStatus(state.correctionRequestId, { signal: state.abortController.signal });
-      const nextStatusKey = bankingPayCancellationStatusKey(nextStatus);
-      state.status = nextStatus;
-      if (!state.error || !state.errorStatusKey || nextStatusKey !== state.errorStatusKey) {
-        state.error = '';
-        state.errorStatusKey = '';
-      }
-      await maybeStartPendingDraftBankingPayCancellation();
-      if (state.status?.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status)) await refreshBankingPayCancellationFinancialViews();
-    } catch (error) {
-      state.error = String(error?.message || error || 'Status is temporarily unavailable. CloudTMS will try again.');
-    } finally {
-      state.abortController = null;
-      renderBankingPayCancellationProgressModal();
-      scheduleBankingPayCancellationProgressPoll(state.error ? 5000 : null);
-    }
-  }, serverDelay);
+  state.timer = null;
+  if (!state.payBatchId || typeof startBankingPayBatchLiveWatch !== 'function') return null;
+  // The open batch owns the lightweight watcher. Closing the progress child
+  // therefore never stops cancellation completion tracking.
+  return startBankingPayBatchLiveWatch(state.payBatchId, {
+    initial_delay_ms: delayMs == null ? 250 : Math.max(0, Number(delayMs) || 0),
+    stopWhenClosed: true
+  });
 }
 
 function statusPollDelay(status, fallback = null) {
@@ -23628,6 +23698,8 @@ async function openBankingPayCancellationProgressModal({ correctionRequestId = '
   const nextCorrectionRequestId = String(correctionRequestId || state.correctionRequestId || '').trim();
   if (nextCorrectionRequestId && nextCorrectionRequestId !== state.correctionRequestId) {
     state.financialRefreshDone = false;
+    state.lastObservedWorkbenchStatus = '';
+    state.lastObservedCorrectionProgressVersion = null;
     state.pendingDraftReauthToken = String(draftReauthToken || '').trim();
   }
   state.correctionRequestId = nextCorrectionRequestId;
@@ -48315,6 +48387,58 @@ function renderPayNewBatchWizard() {
             </thead>
   `;
 
+  const renderReadyPreviewTableHeaderHtml = () => {
+    const hasReadyRows = getWorkbenchSectionPageMeta('READY_TO_PAY').totalCount > 0;
+    const allSelected = hasReadyRows
+      && selectedPreviewRowMode === 'IMPLICIT_ALL'
+      && authoritativeSelectedCurrentEligibleReadyRowCount > 0;
+    const partiallySelected = !allSelected && authoritativeSelectedCurrentEligibleReadyRowCount > 0;
+    return `
+      <thead>
+        <tr>
+          <th style="width:44px;text-align:center;white-space:nowrap;${stickyPreviewHeaderCellStyle}">
+            <input
+              type="checkbox"
+              data-action="banking:pay:toggleAllReadyPreviewRows"
+              data-ready-select-all-state="${partiallySelected ? 'PARTIAL' : (allSelected ? 'ALL' : 'NONE')}"
+              aria-label="${allSelected ? 'Untick all eligible Ready to Pay lines across every page' : 'Tick all eligible Ready to Pay lines across every page'}"
+              aria-checked="${partiallySelected ? 'mixed' : (allSelected ? 'true' : 'false')}"
+              title="${allSelected ? 'Untick all Ready to Pay lines across every page' : 'Tick all Ready to Pay lines across every page'}"
+              ${allSelected ? 'checked' : ''}
+              ${hasReadyRows ? '' : 'disabled aria-disabled="true"'}
+            />
+          </th>
+          <th style="white-space:nowrap;${stickyPreviewHeaderCellStyle}">Line type</th>
+          <th style="white-space:nowrap;${stickyPreviewHeaderCellStyle}">Candidate</th>
+          <th style="white-space:nowrap;${stickyPreviewHeaderCellStyle}">Client</th>
+          <th style="white-space:nowrap;${stickyPreviewHeaderCellStyle}">Week / Date</th>
+          <th style="white-space:nowrap;${stickyPreviewHeaderCellStyle}">Channel</th>
+          <th style="text-align:right;white-space:nowrap;${stickyPreviewHeaderCellStyle}">Amount</th>
+          <th style="white-space:nowrap;${stickyPreviewHeaderCellStyle}">State</th>
+          <th style="white-space:nowrap;${stickyPreviewHeaderCellStyle}">Action</th>
+        </tr>
+      </thead>
+    `;
+  };
+
+  const renderPayChannelBadge = (rawChannel) => {
+    const channel = upperTrim(rawChannel);
+    const label = channel === 'UMBRELLA' ? 'Umbrella' : (channel === 'PAYE' ? 'PAYE' : (channel || '—'));
+    const tone = channel === 'UMBRELLA'
+      ? 'background:#ede9fe;color:#5b21b6;border-color:#c4b5fd;'
+      : (channel === 'PAYE' ? 'background:#e0f2fe;color:#075985;border-color:#7dd3fc;' : '');
+    return `<span class="pill" style="display:inline-block;white-space:nowrap;font-weight:800;${tone}">${enc(label)}</span>`;
+  };
+
+  const formatCompactPayAmount = (value) => {
+    const amount = toNum(value, 0);
+    return `${amount < 0 ? '-£' : '£'}${fmtMoney(Math.abs(amount))}`;
+  };
+  const renderCompactReadyAmountHtml = (line) => {
+    const amount = getPreviewLineDisplayAmount(line);
+    return `<span style="display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap;">${resolvedRateBadgeHtml(line, 'READY_TO_PAY')}<span>${enc(formatCompactPayAmount(amount))}</span></span>`;
+  };
+
   const normalizeSelectedPreviewRowMode = (raw, validPreviewRowIds = [], selectedPreviewRowIds = []) => {
     const s = upperTrim(raw);
     if (s === 'IMPLICIT_ALL' || s === 'EXPLICIT_SUBSET' || s === 'EXPLICIT_NONE') return s;
@@ -51766,7 +51890,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     return { detailTexts, showSegmentDetail, extraActionHtml };
   };
 
-  const renderTimesheetSegmentRows = (parentLine) => {
+  const renderTimesheetSegmentRows = (parentLine, options = {}) => {
     const segmentRows = getLineSectionSegmentRows(parentLine);
     if (!segmentRows.length) return '';
 
@@ -51777,9 +51901,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
         ? `Show timesheet breakdown (${segmentRows.length})`
         : `Show segments (${segmentRows.length})`;
 
-    return `
-      <details style="margin-top:8px;">
-        <summary class="mini" style="cursor:pointer; user-select:none;">${enc(summaryText)}</summary>
+    const breakdownBody = `
         <div style="margin-top:8px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
           <table class="grid" style="min-width:1120px; table-layout:auto;">
             <thead>
@@ -51874,6 +51996,12 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
             </tbody>
           </table>
         </div>
+    `;
+    if (options && options.expandedBodyOnly === true) return breakdownBody;
+    return `
+      <details style="margin-top:8px;">
+        <summary class="mini" style="cursor:pointer; user-select:none;">${enc(summaryText)}</summary>
+        ${breakdownBody}
       </details>
     `;
   };
@@ -52939,7 +53067,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     return parts.join(' • ');
   };
 
-  const renderExpenseComponentBreakdown = (parentLine) => {
+  const renderExpenseComponentBreakdown = (parentLine, options = {}) => {
     const expenseRows = getLoadedExpenseComponentRows(parentLine);
     if (!expenseRows.length) return '';
 
@@ -52950,9 +53078,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       ? 'This timesheet also has separate payable expense components. They are not part of this case resolution and each keeps its own selection.'
       : 'This timesheet also has a separate payable expense component. It is not part of this case resolution and keeps its own selection.';
 
-    return `
-      <details style="margin-top:8px;">
-        <summary class="mini" style="cursor:pointer; user-select:none;">${enc(summaryText)}</summary>
+    const breakdownBody = `
         <div class="mini" style="margin-top:8px; opacity:.85;">${enc(explanation)}</div>
         <div style="margin-top:8px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
           <table class="grid" style="min-width:720px; table-layout:auto;">
@@ -52983,17 +53109,21 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
             </tbody>
           </table>
         </div>
+    `;
+    if (options && options.expandedBodyOnly === true) return breakdownBody;
+    return `
+      <details style="margin-top:8px;">
+        <summary class="mini" style="cursor:pointer; user-select:none;">${enc(summaryText)}</summary>
+        ${breakdownBody}
       </details>
     `;
   };
 
-  const renderOverpaymentRecoveryBreakdown = (parentLine) => {
+  const renderOverpaymentRecoveryBreakdown = (parentLine, options = {}) => {
     const recovery = getOverpaymentRecoveryPresentation(parentLine);
     if (!recovery?.components?.length) return '';
 
-    return `
-      <details data-overpayment-recovery-breakdown style="margin-top:8px;">
-        <summary class="mini" style="cursor:pointer; user-select:none;">Show overpayment breakdown</summary>
+    const breakdownBody = `
         <div class="mini" style="margin-top:8px; opacity:.85;">This overpayment is made up of the following amounts.</div>
         <div style="margin-top:8px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
           <table class="grid" style="min-width:820px; table-layout:auto;">
@@ -53025,16 +53155,22 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
             </tfoot>
           </table>
         </div>
+    `;
+    if (options && options.expandedBodyOnly === true) return breakdownBody;
+    return `
+      <details data-overpayment-recovery-breakdown style="margin-top:8px;">
+        <summary class="mini" style="cursor:pointer; user-select:none;">Show overpayment breakdown</summary>
+        ${breakdownBody}
       </details>
     `;
   };
 
-  const renderPreviewLineBreakdown = (line, renderContextSection = '') => (
+  const renderPreviewLineBreakdown = (line, renderContextSection = '', options = {}) => (
     isOverpaymentRecoveryLine(line)
-      ? renderOverpaymentRecoveryBreakdown(line)
+      ? renderOverpaymentRecoveryBreakdown(line, options)
       : (upperTrim(renderContextSection || getLinePresentationSection(line)) === 'CASES_RESOLUTIONS'
           ? ''
-          : renderExpenseComponentBreakdown(line))
+          : renderExpenseComponentBreakdown(line, options))
   );
 
   const getReadyTimesheetGroupKey = (line) => {
@@ -53374,9 +53510,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const client = trimStr(representative?.client_name || nested?.client_name || representative?.trust_name || nested?.trust_name || '') || '—';
       const weekOrDate = ymdToUk(trimStr(representative?.week_ending_date || nested?.week_ending_date || '')) || ymdToUk(trimStr(representative?.linked_shift_date || nested?.linked_shift_date || '')) || '—';
       const payChannels = uniqTrimmed(payableGroupLines.map((line) => upperTrim(line?.pay_channel || getNestedLinePayload(line)?.pay_channel || '')));
-      const payeTreatments = uniqTrimmed(payableGroupLines.map((line) => upperTrim(line?.paye_treatment || getNestedLinePayload(line)?.paye_treatment || '')));
       const payChannel = payChannels.length > 1 ? 'MIXED' : (payChannels[0] || '—');
-      const payeTreatment = payeTreatments.length > 1 ? 'MIXED' : (payeTreatments[0] || '');
       const cancelResolvedRateHtml = resolvedRateCancelActionHtml(representative, 'READY_TO_PAY');
       const wholeActionHtml = (() => {
         const info = getSnoozeInfo(representative);
@@ -53404,16 +53538,12 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         `;
       })();
     const groupAnchor = makeScrollAnchor('ready-timesheet', `${candidateId}:${timesheetId}`);
-      const amountHtml = `
-        ${resolvedRateBadgeHtml(representative, 'READY_TO_PAY')}
-        <div>£${enc(fmtMoney(fullAmount))}</div>
-        ${selectionState === 'PARTIAL' ? `<div class="mini" style="color:#c62828;font-weight:700;margin-top:2px;">£${enc(fmtMoney(selectedAmount))} selected</div>` : ''}
-      `;
+      const amountHtml = `<span style="display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap;">${resolvedRateBadgeHtml(representative, 'READY_TO_PAY')}<span>${enc(formatCompactPayAmount(fullAmount))}</span>${selectionState === 'PARTIAL' ? `<span class="mini" style="color:#c62828;font-weight:700;">(${enc(formatCompactPayAmount(selectedAmount))} selected)</span>` : ''}</span>`;
 
 
       return `
         <tr${groupAnchor ? ` data-banking-scroll-anchor="${enc(groupAnchor)}"` : ''} data-timesheet-group-key="${enc(item.key)}" data-candidate-id="${enc(candidateId)}" data-timesheet-id="${enc(timesheetId)}">
-          <td style="white-space:nowrap;vertical-align:top;">
+          <td style="width:44px;text-align:center;white-space:nowrap;vertical-align:middle;padding-top:6px;padding-bottom:6px;">
             ${previewRowIds.length ? `
               <input
                 type="checkbox"
@@ -53429,35 +53559,39 @@ const renderReadyTimesheetGroupedRows = (lines) => {
               />
             ` : `<span class="mini" style="opacity:.7;">—</span>`}
           </td>
-          <td class="mini">TIMESHEET PAYMENT</td>
-          <td>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <td class="mini" style="white-space:nowrap;vertical-align:middle;">
+            <span style="display:inline-flex;gap:6px;align-items:center;white-space:nowrap;">
+              <span>Timesheet Payment</span>
+              ${breakdownCount ? `
+                <button
+                  type="button"
+                  class="btn btn-xs btn-outline"
+                  style="width:24px;height:24px;min-width:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:16px;line-height:1;font-weight:800;"
+                  data-action="banking:pay:toggleTimesheetBreakdown"
+                  data-breakdown-key="${enc(item.key)}"
+                  data-timesheet-group-key="${enc(item.key)}"
+                  aria-label="${enc(`${isBreakdownOpen ? 'Hide' : 'Show'} timesheet breakdown (${breakdownCount})`)}"
+                  title="${enc(`${isBreakdownOpen ? 'Hide' : 'Show'} timesheet breakdown (${breakdownCount})`)}"
+                  aria-expanded="${isBreakdownOpen ? 'true' : 'false'}"
+                >${isBreakdownOpen ? '−' : '+'}</button>
+              ` : ''}
+            </span>
+          </td>
+          <td style="white-space:nowrap;vertical-align:middle;">
+            <div style="display:flex;gap:6px;align-items:center;white-space:nowrap;">
               <span class="mono">${enc(tmsRef)}</span>
               <span>${enc(displayName)}</span>
               ${renderRowTimesheetShortcut(payableGroupLines, displayName)}
               ${renderCandidateWorkbenchIndicators(candidateId)}
-              <span class="mini" style="opacity:.75;">${enc(String(breakdownCount))} breakdown row(s)</span>
             </div>
-            <button
-              type="button"
-              class="btn btn-xs btn-outline"
-              style="margin-top:6px;"
-              data-action="banking:pay:toggleTimesheetBreakdown"
-              data-timesheet-group-key="${enc(item.key)}"
-              aria-expanded="${isBreakdownOpen ? 'true' : 'false'}"
-            >${enc(`${isBreakdownOpen ? 'Hide' : 'Show'} timesheet breakdown (${breakdownCount})`)}</button>
           </td>
-          <td class="mini">${enc(client)}</td>
-          <td class="mini" style="white-space:nowrap;">${enc(weekOrDate)}</td>
+          <td class="mini" style="white-space:nowrap;vertical-align:middle;">${enc(client)}</td>
+          <td class="mini" style="white-space:nowrap;vertical-align:middle;">${enc(weekOrDate)}</td>
+          <td style="white-space:nowrap;vertical-align:middle;">${renderPayChannelBadge(payChannel)}</td>
           <td class="mono" style="text-align:right;white-space:nowrap;">${amountHtml}</td>
-          <td>
-            <div style="display:flex;flex-direction:column;gap:4px;">
-              <span class="pill pill-ok">Ready to pay</span>
-              <div class="mini" style="opacity:.85;">${enc(payChannel)}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}</div>
-            </div>
-          </td>
+          <td style="white-space:nowrap;vertical-align:middle;"><span class="pill pill-ok">Ready to pay</span></td>
           <td style="white-space:nowrap;">
-            <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;">
+            <div style="display:flex;gap:6px;align-items:center;white-space:nowrap;">
               ${cancelResolvedRateHtml || ''}
               ${wholeActionHtml || ''}
               ${renderTimesheetExpenseGroupActions({ candidateId, timesheetId })}
@@ -53466,7 +53600,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         </tr>
         ${isBreakdownOpen ? `
           <tr data-timesheet-group-key="${enc(item.key)}">
-            <td colspan="8" style="padding-top:0;">${renderReadyTimesheetBreakdown(item.key, payableGroupLines, candidateId, timesheetId)}</td>
+            <td colspan="9" style="padding-top:0;">${renderReadyTimesheetBreakdown(item.key, payableGroupLines, candidateId, timesheetId)}</td>
           </tr>
         ` : ''}
       `;
@@ -53483,6 +53617,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const payChannel = upperTrim(line?.pay_channel || '');
       const payeTreatment = upperTrim(line?.paye_treatment || '');
       const section = getLinePresentationSection(line);
+      const compactReady = upperTrim(renderContextSection || section) === 'READY_TO_PAY';
       const blockedUi = getPreviewLineBlockedUi(line);
       const wholeActionHtml = (() => {
         const candidateId = trimStr(line?.candidate_id);
@@ -53519,8 +53654,12 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, expenseActionHtml, wholeActionHtml].filter(Boolean).join(' ');
       const expenseComponentLabel = isExactTimesheetExpenseLine(line) ? getExpenseComponentFriendlyLabel(line) : '';
       const detailRowHtml = [
-        blockedUi.showSegmentDetail ? renderTimesheetSegmentRows(line) : '',
-        renderPreviewLineBreakdown(line, renderContextSection)
+        blockedUi.showSegmentDetail ? renderTimesheetSegmentRows(line, compactReady ? { expandedBodyOnly: true } : {}) : '',
+        renderPreviewLineBreakdown(
+          line,
+          renderContextSection,
+          compactReady ? { expandedBodyOnly: true } : {}
+        )
       ].filter(Boolean).join('');
       const advisory = getParentSectionAdvisory(line);
       const segmentCount = getLineSectionSegmentCount(line);
@@ -53537,11 +53676,15 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const candidateId = trimStr(line?.candidate_id || '');
       const lineType = upperTrim(line?.line_type || '');
       const selectionScope = 'TIMESHEET_PARENT';
+      const readyBreakdownKey = compactReady && detailRowHtml
+        ? `READY_PARENT_DETAIL|${previewRowId || trimStr(line?.row_key || line?.rowKey || line?.line_key || line?.lineKey || '')}`
+        : '';
+      const readyBreakdownOpen = !!(readyBreakdownKey && openReadyTimesheetBreakdownKeys.has(readyBreakdownKey));
 
       const rowAnchor = makeScrollAnchor('preview', previewRowId);
       return `
         <tr${rowAnchor ? ` data-banking-scroll-anchor="${enc(rowAnchor)}"` : ''}${previewRowId ? ` data-preview-row-id="${enc(previewRowId)}"` : ''}>
-          <td style="white-space:nowrap;">
+          <td style="${compactReady ? 'width:44px;text-align:center;' : ''}white-space:nowrap;vertical-align:middle;${compactReady ? 'padding-top:6px;padding-bottom:6px;' : ''}">
             ${previewRowId && selectionAllowed ? `
               <input
                 type="checkbox"
@@ -53557,35 +53700,38 @@ const renderReadyTimesheetGroupedRows = (lines) => {
               />
             ` : `<span class="mini" style="opacity:.7;">—</span>`}
           </td>
-          <td class="mini">${renderPreviewLineTypeHtml(line)}</td>
-          <td>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <td class="mini" style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">
+            ${compactReady ? `<span style="display:inline-flex;gap:6px;align-items:center;white-space:nowrap;"><span>${renderPreviewLineTypeHtml(line)}</span>${readyBreakdownKey ? `<button type="button" class="btn btn-xs btn-outline" style="width:24px;height:24px;min-width:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:16px;line-height:1;font-weight:800;" data-action="banking:pay:toggleTimesheetBreakdown" data-breakdown-key="${enc(readyBreakdownKey)}" aria-label="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" title="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" aria-expanded="${readyBreakdownOpen ? 'true' : 'false'}">${readyBreakdownOpen ? '−' : '+'}</button>` : ''}</span>` : renderPreviewLineTypeHtml(line)}
+          </td>
+          <td style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">
+            <div style="display:flex;gap:${compactReady ? '6' : '8'}px;align-items:center;${compactReady ? 'white-space:nowrap;' : 'flex-wrap:wrap;'}">
               <span class="mono">${enc(tmsRef || '')}</span>
               <span>${enc(displayName)}</span>
               ${renderRowTimesheetShortcut(line, displayName)}
               ${renderCandidateWorkbenchIndicators(candidateId)}
               ${expenseComponentLabel ? `<span class="mini" style="opacity:.75;">${enc(expenseComponentLabel)}</span>` : ''}
-              ${segmentCount ? `<span class="mini" style="opacity:.75;">${enc(String(segmentCount))} segment(s)</span>` : ''}
+              ${!compactReady && segmentCount ? `<span class="mini" style="opacity:.75;">${enc(String(segmentCount))} segment(s)</span>` : ''}
             </div>
           </td>
-          <td class="mini">${enc(client)}</td>
-          <td class="mini" style="white-space:nowrap;">${enc(weekOrDate)}</td>
-        <td class="mono" style="text-align:right;white-space:nowrap;">
-            ${renderPreviewLineAmountHtml(line, renderContextSection)}
+          <td class="mini" style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">${enc(client)}</td>
+          <td class="mini" style="white-space:nowrap;vertical-align:middle;">${enc(weekOrDate)}</td>
+          ${compactReady ? `<td style="white-space:nowrap;vertical-align:middle;">${renderPayChannelBadge(payChannel)}</td>` : ''}
+          <td class="mono" style="text-align:right;white-space:nowrap;vertical-align:middle;">
+            ${compactReady ? renderCompactReadyAmountHtml(line) : renderPreviewLineAmountHtml(line, renderContextSection)}
           </td>
           <td>
-            <div style="display:flex;flex-direction:column;gap:4px;">
+            <div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;gap:4px;'}">
               <span class="pill ${enc(statePillClass)}">${enc(stateLabel)}</span>
               ${blockedUi.detailTexts.length ? `<div class="mini" style="opacity:.85;">${blockedUi.detailTexts.map((txt) => enc(txt)).join('<br/>')}</div>` : ''}
               ${advisory ? `<div class="mini" style="opacity:.85;">${enc(advisory)}</div>` : ''}
-              <div class="mini" style="opacity:.85;">${enc(payChannel || '—')}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}</div>
+              ${compactReady ? '' : `<div class="mini" style="opacity:.85;">${enc(payChannel || '—')}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}</div>`}
             </div>
           </td>
-          <td style="white-space:nowrap;">${combinedActionHtml ? `<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;">${combinedActionHtml}</div>` : `<span class="mini" style="opacity:.7;">—</span>`}</td>
+          <td style="white-space:nowrap;vertical-align:middle;">${combinedActionHtml ? `<div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;align-items:flex-start;'}gap:6px;">${combinedActionHtml}</div>` : `<span class="mini" style="opacity:.7;">—</span>`}</td>
         </tr>
-        ${detailRowHtml ? `
+        ${detailRowHtml && (!compactReady || readyBreakdownOpen) ? `
           <tr>
-            <td colspan="8" style="padding-top:0;">${detailRowHtml}</td>
+            <td colspan="${compactReady ? '9' : '8'}" style="padding-top:0;">${detailRowHtml}</td>
           </tr>
         ` : ''}
       `;
@@ -53608,7 +53754,12 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const cancelResolvedRateHtml = resolvedRateCancelActionHtml(line, renderContextSection);
       const combinedActionHtml = [caseActionHtml, cancelResolvedRateHtml, blockedUi.extraActionHtml, actionHtml].filter(Boolean).join(' ');
       const expenseComponentLabel = isExactTimesheetExpenseLine(line) ? getExpenseComponentFriendlyLabel(line) : '';
-      const detailRowHtml = renderPreviewLineBreakdown(line, renderContextSection);
+      const compactReady = upperTrim(renderContextSection || section) === 'READY_TO_PAY';
+      const detailRowHtml = renderPreviewLineBreakdown(
+        line,
+        renderContextSection,
+        compactReady ? { expandedBodyOnly: true } : {}
+      );
       const info = getSnoozeInfo(line);
       const stateLabel = stateLabelOverride || (
         section === 'BLOCKED_FOR_PAY'
@@ -53639,11 +53790,15 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const candidateId = trimStr(line?.candidate_id || '');
       const lineType = upperTrim(line?.line_type || '');
       const selectionScope = 'SINGLE_PREVIEW_ROW';
+      const readyBreakdownKey = compactReady && detailRowHtml
+        ? `READY_DETAIL|${previewRowId || trimStr(line?.row_key || line?.rowKey || line?.line_key || line?.lineKey || '')}`
+        : '';
+      const readyBreakdownOpen = !!(readyBreakdownKey && openReadyTimesheetBreakdownKeys.has(readyBreakdownKey));
 
       const rowAnchor = makeScrollAnchor('preview', previewRowId);
       return `
         <tr${rowAnchor ? ` data-banking-scroll-anchor="${enc(rowAnchor)}"` : ''}${previewRowId ? ` data-preview-row-id="${enc(previewRowId)}"` : ''}>
-          <td style="white-space:nowrap;">
+          <td style="${compactReady ? 'width:44px;text-align:center;' : ''}white-space:nowrap;vertical-align:middle;${compactReady ? 'padding-top:6px;padding-bottom:6px;' : ''}">
             ${presentationGroupRowIds.length ? `
               <input
                 type="checkbox"
@@ -53672,9 +53827,11 @@ const renderReadyTimesheetGroupedRows = (lines) => {
               />
             ` : `<span class="mini" style="opacity:.7;">—</span>`)}
           </td>
-          <td class="mini">${renderPreviewLineTypeHtml(line)}</td>
-          <td>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <td class="mini" style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">
+            ${compactReady ? `<span style="display:inline-flex;gap:6px;align-items:center;white-space:nowrap;"><span>${renderPreviewLineTypeHtml(line)}</span>${readyBreakdownKey ? `<button type="button" class="btn btn-xs btn-outline" style="width:24px;height:24px;min-width:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:16px;line-height:1;font-weight:800;" data-action="banking:pay:toggleTimesheetBreakdown" data-breakdown-key="${enc(readyBreakdownKey)}" aria-label="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" title="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" aria-expanded="${readyBreakdownOpen ? 'true' : 'false'}">${readyBreakdownOpen ? '−' : '+'}</button>` : ''}</span>` : renderPreviewLineTypeHtml(line)}
+          </td>
+          <td style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">
+            <div style="display:flex;gap:${compactReady ? '6' : '8'}px;align-items:center;${compactReady ? 'white-space:nowrap;' : 'flex-wrap:wrap;'}">
               <span class="mono">${enc(tmsRef || '')}</span>
               <span>${enc(displayName)}</span>
               ${renderRowTimesheetShortcut(line, displayName)}
@@ -53682,23 +53839,24 @@ const renderReadyTimesheetGroupedRows = (lines) => {
               ${expenseComponentLabel ? `<span class="mini" style="opacity:.75;">${enc(expenseComponentLabel)}</span>` : ''}
             </div>
           </td>
-          <td class="mini">${enc(client)}</td>
-          <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(trimStr(line?.week_ending_date)) || ymdToUk(trimStr(line?.linked_shift_date)) || '—')}</td>
+          <td class="mini" style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">${enc(client)}</td>
+          <td class="mini" style="white-space:nowrap;vertical-align:middle;">${enc(ymdToUk(trimStr(line?.week_ending_date)) || ymdToUk(trimStr(line?.linked_shift_date)) || '—')}</td>
+          ${compactReady ? `<td style="white-space:nowrap;vertical-align:middle;">${renderPayChannelBadge(payChannel)}</td>` : ''}
           <td class="mono" style="text-align:right;white-space:nowrap;">
-            ${renderPreviewLineAmountHtml(line, renderContextSection)}
+            ${compactReady ? renderCompactReadyAmountHtml(line) : renderPreviewLineAmountHtml(line, renderContextSection)}
           </td>
           <td>
-            <div style="display:flex;flex-direction:column;gap:4px;">
+            <div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;gap:4px;'}">
               <span class="pill ${enc(statePillClass || (isBlockedLike ? 'pill-bad' : 'pill-ok'))}">${enc(stateLabel)}</span>
               ${blockedUi.detailTexts.length ? `<div class="mini" style="opacity:.85;">${blockedUi.detailTexts.map((txt) => enc(txt)).join('<br/>')}</div>` : ''}
-              <div class="mini" style="opacity:.85;">${enc(payChannel || '—')}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}</div>
+              ${compactReady ? '' : `<div class="mini" style="opacity:.85;">${enc(payChannel || '—')}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}</div>`}
             </div>
           </td>
-          <td style="white-space:nowrap;">${combinedActionHtml ? `<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;">${combinedActionHtml}</div>` : `<span class="mini" style="opacity:.7;">—</span>`}</td>
+          <td style="white-space:nowrap;vertical-align:middle;">${combinedActionHtml ? `<div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;align-items:flex-start;'}gap:6px;">${combinedActionHtml}</div>` : `<span class="mini" style="opacity:.7;">—</span>`}</td>
         </tr>
-        ${detailRowHtml ? `
+        ${detailRowHtml && (!compactReady || readyBreakdownOpen) ? `
           <tr>
-            <td colspan="8" style="padding-top:0;">${detailRowHtml}</td>
+            <td colspan="${compactReady ? '9' : '8'}" style="padding-top:0;">${detailRowHtml}</td>
           </tr>
         ` : ''}
       `;
@@ -56626,7 +56784,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const readyCanonicalRowsHtml = [
     renderReadyTimesheetGroupedRows(readyPreviewLinesForDisplay.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
     renderSimplePreviewRows(readyNonTimesheetDisplayLines, null, 'READY_TO_PAY')
-  ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(readyEmptyMessage())}</td></tr>`;
+  ].filter(Boolean).join('') || `<tr><td colspan="9" class="mini" style="opacity:.85;">${enc(readyEmptyMessage())}</td></tr>`;
 
   return `
     <div class="card banking-pay-create-card" id="bankingPayNewBatchWizard">
@@ -56662,8 +56820,6 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             <div class="actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto;">
               <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:openFiltersModal" title="Open Banking Pay filters">Filters</button>
               <button type="button" class="btn btn-sm btn-primary ${createBtnDisabled ? 'disabled' : ''}" ${createBtnDisabled ? 'disabled data-disabled="1" aria-disabled="true"' : 'data-disabled="0" aria-disabled="false"'} data-action="banking:pay:createDraft" title="${enc(createDraftTitle)}" style="font-weight:700;background:#198754;border-color:#198754;color:#fff;">${enc(createDraftLabel)}</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:selectAllPreviewRows" title="Select all eligible Ready to Pay rows across every page" ${getWorkbenchSectionPageMeta('READY_TO_PAY').totalCount ? '' : 'disabled'}>Select all</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearAllPreviewRows" title="Clear all eligible Ready to Pay rows across every page" ${getWorkbenchSectionPageMeta('READY_TO_PAY').totalCount ? '' : 'disabled'}>Clear selection</button>
               <button type="button" class="btn btn-sm btn-outline ${hasActivePayFilters ? '' : 'disabled'}" ${hasActivePayFilters ? '' : 'aria-disabled="true"'} data-action="banking:pay:clearFilters" title="${enc(clearFiltersTitle)}">Clear filters</button>
             </div>
           </div>
@@ -56686,7 +56842,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             ${isWorkbenchSectionBodyVisible('READY_TO_PAY') ? `
               <div id="bankingPayReadyScrollHost" data-banking-scroll-host="ready" style="${getWorkbenchSectionScrollHostStyle('READY_TO_PAY')}">
                 <table class="grid" style="${previewTableStyle}">
-                  ${previewTableHeaderHtml}
+                  ${renderReadyPreviewTableHeaderHtml()}
                   <tbody>${readyCanonicalRowsHtml}</tbody>
                 </table>
               </div>
@@ -91055,6 +91211,15 @@ function attachBankingModalDelegatedHandlers() {
         checkbox.indeterminate = isPartial;
         checkbox.setAttribute('aria-checked', isPartial ? 'mixed' : (isAll ? 'true' : 'false'));
       }
+      const readyHeaderCheckbox = root.querySelector('[data-action="banking:pay:toggleAllReadyPreviewRows"]');
+      if (readyHeaderCheckbox) {
+        const state = String(readyHeaderCheckbox.getAttribute('data-ready-select-all-state') || '').trim().toUpperCase();
+        const isAll = state === 'ALL';
+        const isPartial = state === 'PARTIAL';
+        readyHeaderCheckbox.checked = isAll;
+        readyHeaderCheckbox.indeterminate = isPartial;
+        readyHeaderCheckbox.setAttribute('aria-checked', isPartial ? 'mixed' : (isAll ? 'true' : 'false'));
+      }
     } catch {}
   };
 
@@ -91065,6 +91230,7 @@ function attachBankingModalDelegatedHandlers() {
       const controls = root.querySelectorAll(
         '[data-action="banking:pay:togglePreviewRow"], ' +
         '[data-action="banking:pay:toggleTimesheetPreviewGroup"], ' +
+        '[data-action="banking:pay:toggleAllReadyPreviewRows"], ' +
         '[data-action="banking:pay:selectAllPreviewRows"], ' +
         '[data-action="banking:pay:clearAllPreviewRows"]'
       );
@@ -95081,12 +95247,15 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
             ? { section: 'canonical_preview_lines', select_preview_row_ids: [rowId] }
             : { section: 'canonical_preview_lines', deselect_preview_row_ids: [rowId] });
           applySelectionPayloadSummaryToWizard(result);
-          await reloadCanonicalPreviewAfterSelectionMutation();
+          // A single positive-row change can promote or block same-candidate
+          // recovery rows. Refresh both projections so one recovery identity
+          // never remains rendered in the wrong section.
+          await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true });
           applySelectionPayloadSummaryToWizard(result);
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState([rowId], !wantChecked);
-        try { await loadPayWorkbenchPreviewPageForSection('canonical_preview_lines', 'reload'); } catch {}
+        try { await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true }); } catch {}
         throw error;
       }
       return decisions;
@@ -97234,7 +97403,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     if (a === 'banking:pay:toggleTimesheetBreakdown') {
       if (kind !== 'click') return;
-      const groupKey = String(ds('timesheetGroupKey') || dget('data-timesheet-group-key') || '').trim();
+      const groupKey = String(ds('breakdownKey') || dget('data-breakdown-key') || ds('timesheetGroupKey') || dget('data-timesheet-group-key') || '').trim();
       if (!groupKey) return;
       const uiState = ensurePayWorkbenchUiState();
       const openKeys = new Set(normalizePreviewRowIdArray(uiState.ready_timesheet_breakdown_open_keys));
@@ -97242,6 +97411,16 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       else openKeys.add(groupKey);
       uiState.ready_timesheet_breakdown_open_keys = Array.from(openKeys);
       await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:pay:toggleAllReadyPreviewRows') {
+      if (kind !== 'change') return;
+      const checked = !!(el && el.checked === true);
+      await runPreviewSelectionMutation(async () => {
+        await setPreviewRowsGlobalSelection(checked);
+        await safeRerender(null);
+      });
       return;
     }
 
@@ -347218,6 +347397,8 @@ function startBankingPayBatchLiveWatch(batchId, options = {}) {
     lastRunAt: 0,
     lastSignal: null,
     getCurrentContext: typeof opts.getCurrentContext === 'function' ? opts.getCurrentContext : null,
+    readCurrentContext: currentContext,
+    consumePromise: null,
     openToken: visibleOpenToken || null
   };
   root.watchers[id] = watcher;
@@ -347269,6 +347450,38 @@ function startBankingPayBatchLiveWatch(batchId, options = {}) {
     };
   };
 
+  const consumeSignal = async (signal, context = null) => {
+    if (!signal || typeof signal !== 'object' || watcher.stopped || root.watchers[id] !== watcher) return false;
+    if (watcher.consumePromise && typeof watcher.consumePromise.then === 'function') return watcher.consumePromise;
+    const consumePromise = (async () => {
+      watcher.lastSignal = signal;
+      updateKnownFromSignal(signal);
+      let changed = false;
+      if (shouldApplyLiveRefreshSignal(signal) && typeof applyBankingPayLiveRefresh === 'function') {
+        const liveResult = await applyBankingPayLiveRefresh({ ...signal, __watcher_batch_id: id, __watcher_context: context || currentContext() });
+        watcher.lastLiveRefreshResult = liveResult && typeof liveResult === 'object' ? clone(liveResult) : liveResult;
+        if (liveResult && liveResult.targeted_refresh_enqueued === true) watcher.targetedRefreshPending = true;
+        if (liveResult && liveResult.replacement_session_created === true && liveResult.replacement_session_id) {
+          watcher.replacementSessionCreated = true;
+          watcher.replacementSessionId = liveResult.replacement_session_id;
+        }
+        changed = true;
+      }
+      if (typeof syncBankingPayCancellationFromBatchSignal === 'function') {
+        const cancellationResult = await syncBankingPayCancellationFromBatchSignal(id, signal);
+        watcher.lastCancellationRefreshResult = cancellationResult && typeof cancellationResult === 'object' ? clone(cancellationResult) : cancellationResult;
+        if (cancellationResult?.refreshed === true) changed = true;
+      }
+      return changed;
+    })().finally(() => {
+      if (watcher.consumePromise === consumePromise) watcher.consumePromise = null;
+    });
+    watcher.consumePromise = consumePromise;
+    return consumePromise;
+  };
+  watcher.consumeSignal = consumeSignal;
+  watcher.updateKnownFromSignal = updateKnownFromSignal;
+
   async function tick() {
     if (watcher.stopped) return;
     if (!isModalOpen()) {
@@ -347294,17 +347507,7 @@ function startBankingPayBatchLiveWatch(batchId, options = {}) {
       });
       if (watcher.stopped || root.watchers[id] !== watcher || !isModalOpen()) return;
       watcher.errorCount = 0;
-      watcher.lastSignal = signal;
-      updateKnownFromSignal(signal);
-      if (signal && shouldApplyLiveRefreshSignal(signal) && typeof applyBankingPayLiveRefresh === 'function') {
-        const liveResult = await applyBankingPayLiveRefresh({ ...signal, __watcher_batch_id: id, __watcher_context: ctx });
-        watcher.lastLiveRefreshResult = liveResult && typeof liveResult === 'object' ? clone(liveResult) : liveResult;
-        if (liveResult && liveResult.targeted_refresh_enqueued === true) watcher.targetedRefreshPending = true;
-        if (liveResult && liveResult.replacement_session_created === true && liveResult.replacement_session_id) {
-          watcher.replacementSessionCreated = true;
-          watcher.replacementSessionId = liveResult.replacement_session_id;
-        }
-      }
+      await consumeSignal(signal, ctx);
     } catch (e) {
       if (!(e && (e.name === 'AbortError' || e.code === 'ABORT_ERR'))) {
         watcher.errorCount += 1;
@@ -347323,6 +347526,48 @@ function startBankingPayBatchLiveWatch(batchId, options = {}) {
 
   schedule(clamp(opts.initial_delay_ms ?? opts.initialDelayMs, 250, 0, 6000));
   return watcher;
+}
+
+function buildBankingPayBatchHeartbeatWatches() {
+  const root = window.__bankingPayBatchLiveWatch;
+  const watchers = root && root.watchers && typeof root.watchers === 'object' ? root.watchers : {};
+  const descriptors = [];
+  for (const [payBatchId, watcher] of Object.entries(watchers)) {
+    if (descriptors.length >= 20 || !watcher || watcher.stopped === true) continue;
+    let context = {};
+    try { context = typeof watcher.readCurrentContext === 'function' ? (watcher.readCurrentContext() || {}) : {}; } catch { context = {}; }
+    const known = watcher.knownState && typeof watcher.knownState === 'object' ? watcher.knownState : {};
+    descriptors.push({
+      pay_batch_id: String(payBatchId || '').trim(),
+      known_version: known.known_version ?? known.version ?? null,
+      known_payment_status_version: known.known_payment_status_version ?? known.payment_status_version ?? null,
+      known_correction_progress_version: known.known_correction_progress_version ?? known.correction_progress_version ?? null,
+      known_alert_version: known.known_alert_version ?? known.alert_version ?? null,
+      known_overview_version: known.known_overview_version ?? known.overview_version ?? null,
+      current_tab: String(context.current_tab || 'OVERVIEW').trim().toUpperCase(),
+      current_section_json: context.current_section_json && typeof context.current_section_json === 'object' && !Array.isArray(context.current_section_json)
+        ? context.current_section_json
+        : { source: 'changes-heartbeat' }
+    });
+  }
+  return descriptors;
+}
+
+async function consumeBankingPayBatchHeartbeatSignals(signals) {
+  const rows = Array.isArray(signals) ? signals.slice(0, 20) : [];
+  const root = window.__bankingPayBatchLiveWatch;
+  const watchers = root && root.watchers && typeof root.watchers === 'object' ? root.watchers : {};
+  let changed = false;
+  for (const signal of rows) {
+    const payBatchId = String(signal?.pay_batch_id || signal?.payBatchId || '').trim();
+    const watcher = payBatchId ? watchers[payBatchId] : null;
+    if (!watcher || watcher.stopped === true || typeof watcher.consumeSignal !== 'function') continue;
+    try {
+      const applied = await watcher.consumeSignal(signal, { source: 'changes-heartbeat' });
+      if (applied === true) changed = true;
+    } catch {}
+  }
+  return changed;
 }
 
 
@@ -375337,6 +375582,15 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
               banking_alert_hash: payloadHash
             };
             try {
+              const batchWatches = typeof buildBankingPayBatchHeartbeatWatches === 'function'
+                ? buildBankingPayBatchHeartbeatWatches()
+                : [];
+              if (batchWatches.length) {
+                payload.watched_pay_batches = batchWatches;
+                payload.watched_pay_batch_ids = batchWatches.map((row) => row.pay_batch_id);
+              }
+            } catch {}
+            try {
               const invoiceWatches = typeof window.buildInvoiceHeartbeatWatches === 'function'
                 ? window.buildInvoiceHeartbeatWatches()
                 : [];
@@ -375604,6 +375858,12 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
           };
 
           let bankingAlertStateChanged = applyBankingAlertSummaryFromPing();
+          let bankingPayBatchStateChanged = false;
+          try {
+            if (typeof consumeBankingPayBatchHeartbeatSignals === 'function') {
+              bankingPayBatchStateChanged = await consumeBankingPayBatchHeartbeatSignals(json.watched_batch_signals);
+            }
+          } catch {}
           try {
             const lastDirectAlertFetchAtMs = Number(hb._lastBankingAlertDirectFetchAtMs || 0) || 0;
             const explicitAlertRefresh = isExplicitBankingAlertDetailRefreshReason(reason);
@@ -375706,7 +375966,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
             pruneWorkbenchSessionSeqs('');
           }
 
-          if ((!genericChanged || !genericChanged.length) && !bankingAlertStateChanged && !workbenchStateChanged) {
+          if ((!genericChanged || !genericChanged.length) && !bankingAlertStateChanged && !workbenchStateChanged && !bankingPayBatchStateChanged) {
             if (hb._pendingPingReason) {
               const pendingReason = hb._pendingPingReason;
               hb._pendingPingReason = '';

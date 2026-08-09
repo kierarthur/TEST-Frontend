@@ -153,7 +153,7 @@ test('case rows present an expense only as a separate independently selected com
   assert.match(body, /Show separate expense component/);
   assert.match(body, /It is not part of this case resolution and keeps its own selection\./);
   assert.match(body, /upperTrim\(renderContextSection \|\| getLinePresentationSection\(line\)\) === 'CASES_RESOLUTIONS'/);
-  assert.match(body, /\? ''\s*:\s*renderExpenseComponentBreakdown\(line\)/);
+  assert.match(body, /\? ''\s*:\s*renderExpenseComponentBreakdown\(line, options\)/);
   assert.match(
     mainSource,
     /const expenseComponentLabel = isExactTimesheetExpenseLine\(line\) \? getExpenseComponentFriendlyLabel\(line\) : '';/g
@@ -299,13 +299,13 @@ test('optimistic selection traversal is cycle-safe and bounded', () => {
   assert.equal(row.row_json.selected, false);
 });
 
-test('a rejected optimistic selection reloads the canonical page and always repaints', () => {
+test('a rejected optimistic selection reloads ready and blocked pages and always repaints', () => {
   const toggleBody = sliceBetween(
     'const togglePreviewRowSelection =',
     'const setPreviewRowsSelection ='
   );
   assert.match(toggleBody, /updatePreviewRowSelectionInLoadedState\(\[rowId\], !wantChecked\)/);
-  assert.match(toggleBody, /loadPayWorkbenchPreviewPageForSection\('canonical_preview_lines', 'reload'\)/);
+  assert.match(toggleBody, /reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\)/);
 
   assert.match(
     mainSource,
@@ -313,7 +313,7 @@ test('a rejected optimistic selection reloads the canonical page and always repa
   );
 });
 
-test('a successful selection reloads the canonical page so server-side headroom promotion is adopted', () => {
+test('a successful selection reloads ready and blocked pages so headroom movement is adopted', () => {
   const toggleBody = sliceBetween(
     'const togglePreviewRowSelection =',
     'const setPreviewRowsSelection ='
@@ -332,7 +332,7 @@ test('a successful selection reloads the canonical page so server-side headroom 
   );
 
   assert.match(helperBody, /loadPayWorkbenchPreviewPageForSection\('canonical_preview_lines', 'reload'\)/);
-  assert.match(toggleBody, /applySelectionPayloadSummaryToWizard\(result\);\s*await reloadCanonicalPreviewAfterSelectionMutation\(\);/);
+  assert.match(toggleBody, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\)/);
   assert.match(groupedBody, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\)/);
   assert.match(groupedBody, /if \(latestSelectionResult\) applySelectionPayloadSummaryToWizard\(latestSelectionResult\)/);
   assert.match(globalBody, /applySelectionPayloadSummaryToWizard\(result\);\s*await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\);/);

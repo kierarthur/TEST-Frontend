@@ -188,7 +188,7 @@ test('renders a dedicated overpayment breakdown instead of the expense-component
   assert.match(mainSource, /<th[^>]*>Original overpayment<\/th>/);
   assert.match(mainSource, /<th[^>]*>Outstanding<\/th>/);
   assert.match(mainSource, /<th[^>]*>Recoverable this pay run<\/th>/);
-  assert.match(mainSource, /isOverpaymentRecoveryLine\(line\)[\s\S]*renderOverpaymentRecoveryBreakdown\(line\)[\s\S]*renderExpenseComponentBreakdown\(line\)/);
+  assert.match(mainSource, /isOverpaymentRecoveryLine\(line\)[\s\S]*renderOverpaymentRecoveryBreakdown\(line, options\)[\s\S]*renderExpenseComponentBreakdown\(line, options\)/);
 });
 
 test('groups one multi-component recovery into one visible parent while preserving every economic row id', () => {
