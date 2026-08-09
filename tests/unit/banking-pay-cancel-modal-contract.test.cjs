@@ -40,6 +40,23 @@ test('cancel request keeps the workbench context server-controlled', () => {
   assert.match(flow, /PRE_PROVIDER_CANCEL_AND_RECALCULATE/);
 });
 
+test('draft cancellation uses the payment-reversal ceremony and the strict draft endpoint', () => {
+  const flow = sliceBetween(
+    'async function runBankingPayBatchCancelFlow',
+    'function isBulkAuthoriseEditableDirty'
+  );
+  const request = sliceBetween(
+    'async function bankingPayCancelNotSentAndRecalculate',
+    'async function bankingPayConfirmNoMoneyAndUnwind'
+  );
+
+  assert.match(flow, /isDraftDeleteMode && typeof openBankingReauthModal === 'function'/);
+  assert.match(flow, /purpose: 'PAYMENT_REVERSAL'/);
+  assert.match(flow, /draft_cancel_request: true,\s*reauth_token: reauthToken/);
+  assert.match(request, /isDraftCancelRequest \? 'cancel' : 'cancel-not-sent-recalculate'/);
+  assert.match(request, /isDraftCancelRequest\s*\? \{ reauth_token:/);
+});
+
 test('same-week PAYE draft cancellation repaints the intact Banking modal', () => {
   const flow = sliceBetween(
     'async function bankingPayCreateDraft',

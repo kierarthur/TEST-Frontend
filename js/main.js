@@ -175735,7 +175735,13 @@ async function runBankingPayBatchCancelFlow({
   while (true) {
     let creds = null;
     try {
-      if (typeof openPayBatchPasswordConfirmModal === 'function') {
+      if (isDraftDeleteMode && typeof openBankingReauthModal === 'function') {
+        const draftReauthToken = String(await openBankingReauthModal({
+          purpose: 'PAYMENT_REVERSAL',
+          kind: 'banking-pay-draft-cancel-reauth'
+        }) || '').trim();
+        if (draftReauthToken) creds = { reauth_token: draftReauthToken };
+      } else if (typeof openPayBatchPasswordConfirmModal === 'function') {
         creds = await openPayBatchPasswordConfirmModal({
           title: promptCopy.title,
           subtitle: promptCopy.subtitle,
@@ -175751,9 +175757,12 @@ async function runBankingPayBatchCancelFlow({
     const password = String(creds.password || '').trim();
     const reauthToken = String(creds.reauth_token || creds.reauthToken || '').trim();
     const reason = String(creds.reason || '').trim();
-    if ((!password && !reauthToken) || !reason) return false;
+    if (isDraftDeleteMode ? !reauthToken : ((!password && !reauthToken) || !reason)) return false;
 
-    const requestPayload = {
+    const requestPayload = isDraftDeleteMode ? {
+      draft_cancel_request: true,
+      reauth_token: reauthToken
+    } : {
       password: password || undefined,
       reauth_token: reauthToken || undefined,
       reason,
@@ -345942,6 +345951,7 @@ async function bankingPayCancelNotSentAndRecalculate(payBatchId, payload) {
   const id = String(payBatchId == null ? '' : payBatchId).trim();
   if (!id) throw new Error('bankingPayCancelNotSentAndRecalculate: payBatchId is required');
   const body = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? { ...payload } : {};
+  const isDraftCancelRequest = body.draft_cancel_request === true || body.draftCancelRequest === true;
   const parse = (text) => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
   const upper = (value) => String(value == null ? '' : value).trim().toUpperCase();
   const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -345994,7 +346004,9 @@ async function bankingPayCancelNotSentAndRecalculate(payBatchId, payload) {
     throw new Error('This action cannot be sent through the local cancellation wrapper. Refresh the batch and use the current payment status action.');
   }
 
-  const cleanBody = { ...body };
+  const cleanBody = isDraftCancelRequest
+    ? { reauth_token: String(body.reauth_token || body.reauthToken || '').trim() }
+    : { ...body };
   if (isObject(cleanBody.selection) && !isObject(cleanBody.selection_json)) cleanBody.selection_json = cleanBody.selection;
   if (isObject(cleanBody.selectionJson) && !isObject(cleanBody.selection_json)) cleanBody.selection_json = cleanBody.selectionJson;
   if (isObject(cleanBody.confirmation) && !isObject(cleanBody.confirmation_json)) cleanBody.confirmation_json = cleanBody.confirmation;
@@ -346216,7 +346228,8 @@ async function bankingPayCancelNotSentAndRecalculate(payBatchId, payload) {
   let obj;
   if (typeof apiPostJson === 'function') {
     try {
-      obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel-not-sent-recalculate`, cleanBody, { action: 'CANCEL_NOT_SENT_RECALCULATE' });
+      const endpoint = isDraftCancelRequest ? 'cancel' : 'cancel-not-sent-recalculate';
+      obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/${endpoint}`, cleanBody, { action: isDraftCancelRequest ? 'CANCEL_DRAFT_BATCH' : 'CANCEL_NOT_SENT_RECALCULATE' });
     } catch (e) {
       const structuredPayload = extractStructuredFailurePayload(e);
       if (structuredPayload) {
@@ -346226,7 +346239,8 @@ async function bankingPayCancelNotSentAndRecalculate(payBatchId, payload) {
     }
   } else {
     if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingPayCancelNotSentAndRecalculate: authFetch/API is required');
-    const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel-not-sent-recalculate`), {
+    const endpoint = isDraftCancelRequest ? 'cancel' : 'cancel-not-sent-recalculate';
+    const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/${endpoint}`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cleanBody)
