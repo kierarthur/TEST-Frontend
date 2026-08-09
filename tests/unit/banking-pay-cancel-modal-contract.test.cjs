@@ -57,6 +57,20 @@ test('draft cancellation uses the payment-reversal ceremony and the strict draft
   assert.match(request, /isDraftCancelRequest\s*\? \{ reauth_token:/);
 });
 
+test('cancellation authentication modals remain interactive under the shared modal framework', () => {
+  const reauthModal = sliceBetween(
+    'async function openBankingReauthModal',
+    'async function openPayBatchPasswordConfirmModal'
+  );
+  const passwordModal = sliceBetween(
+    'async function openPayBatchPasswordConfirmModal',
+    'async function openUiPromptModal'
+  );
+
+  assert.match(reauthModal, /noParentGate: true,\s*forceEdit: true,/);
+  assert.match(passwordModal, /noParentGate: true,\s*forceEdit: true,/);
+});
+
 test('same-week PAYE draft cancellation repaints the intact Banking modal', () => {
   const flow = sliceBetween(
     'async function bankingPayCreateDraft',

@@ -7264,6 +7264,7 @@ async function openBankingReauthModal(opts = {}) {
       {
         kind,
         noParentGate: true,
+        forceEdit: true,
         showSave: false,
         showApply: false,
         stayOpenOnSave: false,
@@ -7858,6 +7859,7 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
       {
         kind,
         noParentGate: true,
+        forceEdit: true,
         showSave: false,
         showApply: false,
         stayOpenOnSave: false,
