@@ -48237,6 +48237,8 @@ function renderPayNewBatchWizard() {
   };
 
   const stickyPreviewHeaderCellStyle = 'position:sticky;top:0;z-index:2;background:var(--panel,#fff);box-shadow:inset 0 -1px 0 var(--line);';
+  const stickyReadySelectHeaderCellStyle = 'position:sticky;top:0;left:0;z-index:5;background:var(--panel,#fff);box-shadow:inset 0 -1px 0 var(--line),1px 0 0 var(--line);';
+  const stickyReadySelectBodyCellStyle = 'position:sticky;left:0;z-index:1;background:var(--panel,#fff);box-shadow:1px 0 0 var(--line);';
   const sectionScrollHostStyle = 'width:100%;max-width:100%;min-width:0;box-sizing:border-box;margin-top:10px;max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;scrollbar-gutter:stable;overscroll-behavior:contain;background:var(--panel,#fff);';
   const expandedSectionScrollHostStyle = 'width:100%;max-width:100%;min-width:0;box-sizing:border-box;margin-top:10px;max-height:calc(100vh - 250px);min-height:min(620px, calc(100vh - 250px));overflow:auto;border:1px solid var(--line);border-radius:10px;scrollbar-gutter:stable;overscroll-behavior:contain;background:var(--panel,#fff);';
   const caseCardStackStyle = 'padding:10px;display:flex;flex-direction:column;gap:12px;';
@@ -48396,7 +48398,7 @@ function renderPayNewBatchWizard() {
     return `
       <thead>
         <tr>
-          <th style="width:44px;text-align:center;white-space:nowrap;${stickyPreviewHeaderCellStyle}">
+          <th style="width:44px;min-width:44px;text-align:center;white-space:nowrap;${stickyReadySelectHeaderCellStyle}">
             <input
               type="checkbox"
               data-action="banking:pay:toggleAllReadyPreviewRows"
@@ -53543,7 +53545,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 
       return `
         <tr${groupAnchor ? ` data-banking-scroll-anchor="${enc(groupAnchor)}"` : ''} data-timesheet-group-key="${enc(item.key)}" data-candidate-id="${enc(candidateId)}" data-timesheet-id="${enc(timesheetId)}">
-          <td style="width:44px;text-align:center;white-space:nowrap;vertical-align:middle;padding-top:6px;padding-bottom:6px;">
+          <td style="width:44px;min-width:44px;text-align:center;white-space:nowrap;vertical-align:middle;padding-top:6px;padding-bottom:6px;${stickyReadySelectBodyCellStyle}">
             ${previewRowIds.length ? `
               <input
                 type="checkbox"
@@ -53684,7 +53686,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const rowAnchor = makeScrollAnchor('preview', previewRowId);
       return `
         <tr${rowAnchor ? ` data-banking-scroll-anchor="${enc(rowAnchor)}"` : ''}${previewRowId ? ` data-preview-row-id="${enc(previewRowId)}"` : ''}>
-          <td style="${compactReady ? 'width:44px;text-align:center;' : ''}white-space:nowrap;vertical-align:middle;${compactReady ? 'padding-top:6px;padding-bottom:6px;' : ''}">
+          <td style="${compactReady ? `width:44px;min-width:44px;text-align:center;padding-top:6px;padding-bottom:6px;${stickyReadySelectBodyCellStyle}` : ''}white-space:nowrap;vertical-align:middle;">
             ${previewRowId && selectionAllowed ? `
               <input
                 type="checkbox"
@@ -53798,7 +53800,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const rowAnchor = makeScrollAnchor('preview', previewRowId);
       return `
         <tr${rowAnchor ? ` data-banking-scroll-anchor="${enc(rowAnchor)}"` : ''}${previewRowId ? ` data-preview-row-id="${enc(previewRowId)}"` : ''}>
-          <td style="${compactReady ? 'width:44px;text-align:center;' : ''}white-space:nowrap;vertical-align:middle;${compactReady ? 'padding-top:6px;padding-bottom:6px;' : ''}">
+          <td style="${compactReady ? `width:44px;min-width:44px;text-align:center;padding-top:6px;padding-bottom:6px;${stickyReadySelectBodyCellStyle}` : ''}white-space:nowrap;vertical-align:middle;">
             ${presentationGroupRowIds.length ? `
               <input
                 type="checkbox"
@@ -95117,7 +95119,13 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
 
     const applySelectionPayloadSummaryToWizard = (payload) => {
       if (!payload || typeof payload !== 'object') return;
-      const selectedIds = normalizePreviewRowIdArray(payload.selected_preview_row_ids || payload.server_selected_preview_row_ids);
+      const serverSelectedIdsProvided = payload.server_selected_preview_row_ids_provided === true ||
+        Array.isArray(payload.server_selected_preview_row_ids);
+      const selectedIds = normalizePreviewRowIdArray(
+        serverSelectedIdsProvided
+          ? payload.server_selected_preview_row_ids
+          : payload.selected_preview_row_ids
+      );
       const selectedCount = Number(payload.selected_row_count ?? selectedIds.length);
       const progressCounterVersion = Number(payload.progress_counter_version ?? payload.progressCounterVersion);
       const readyForDraftProvided = Object.prototype.hasOwnProperty.call(payload, 'ready_for_draft') ||
@@ -95171,6 +95179,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           const payloadMode = String(
             payload.selected_preview_row_mode ||
             payload.selectedPreviewRowMode ||
+            (String(payload.selection_intent_mode || payload.selectionIntentMode || '').trim().toUpperCase() === 'IMPLICIT_ALL'
+              ? 'IMPLICIT_ALL'
+              : (String(payload.selection_intent_mode || payload.selectionIntentMode || '').trim().toUpperCase() === 'EXPLICIT_INCLUDE'
+                  ? (selectedIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE')
+                  : '')) ||
             ''
           ).trim().toUpperCase();
           const authoritativeMode = ['IMPLICIT_ALL', 'EXPLICIT_SUBSET', 'EXPLICIT_NONE'].includes(payloadMode)
@@ -134425,15 +134438,27 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
       throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-    const selectedRows = Array.isArray(payloadObj.selected_preview_row_ids)
-      ? payloadObj.selected_preview_row_ids
-      : (Array.isArray(payloadObj.server_selected_preview_row_ids) ? payloadObj.server_selected_preview_row_ids : (Array.isArray(requestPayload.selected_preview_row_ids) ? requestPayload.selected_preview_row_ids : []));
+    const serverSelectedRowsProvided = payloadObj.server_selected_preview_row_ids_provided === true ||
+      Array.isArray(payloadObj.server_selected_preview_row_ids);
+    const selectedRows = serverSelectedRowsProvided && Array.isArray(payloadObj.server_selected_preview_row_ids)
+      ? payloadObj.server_selected_preview_row_ids
+      : (Array.isArray(payloadObj.selected_preview_row_ids)
+          ? payloadObj.selected_preview_row_ids
+          : (Array.isArray(requestPayload.selected_preview_row_ids) ? requestPayload.selected_preview_row_ids : []));
+    const selectionIntentMode = trimStr(payloadObj.selection_intent_mode || payloadObj.selectionIntentMode).toUpperCase();
+    const selectedPreviewRowMode = selectionIntentMode === 'IMPLICIT_ALL'
+      ? 'IMPLICIT_ALL'
+      : (selectionIntentMode === 'EXPLICIT_INCLUDE'
+          ? (selectedRows.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE')
+          : trimStr(payloadObj.selected_preview_row_mode || payloadObj.selectedPreviewRowMode));
     return {
       ok: true,
       ...(cloneJson(payloadObj) || {}),
       session_id: trimStr(payloadObj.session_id || sessionIdText),
       session_version: payloadObj.session_version ?? null,
-      selected_preview_row_ids: cloneJson(selectedRows) || []
+      selected_preview_row_ids: cloneJson(selectedRows) || [],
+      selected_preview_row_ids_provided: serverSelectedRowsProvided || payloadObj.selected_preview_row_ids_provided === true,
+      selected_preview_row_mode: selectedPreviewRowMode || (selectedRows.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE')
     };
   } catch (error) {
     const friendly = (typeof bankingNormalizeApiError === 'function')
