@@ -196,6 +196,17 @@ test('nested payment verification keeps its delegated handlers attached', () => 
   assert.doesNotMatch(afterAttach.slice(0, 500), /rerender\(\)/);
 });
 
+test('successful payment verification closes directly without the dirty-form discard prompt', () => {
+  const reauth = slice('async function openBankingReauthModal', 'async function openPayBatchPasswordConfirmModal');
+  assert.match(reauth, /const finishVerified = \(token\) =>/);
+  assert.match(reauth, /done = true;\s*detachDelegated\(\);/);
+  assert.match(reauth, /stillTopIsThisModal\(\) && typeof closeModal === 'function'/);
+  assert.match(reauth, /if \(directToken && j\?\.tfa_required === false\) \{\s*finishVerified\(directToken\);/);
+  assert.match(reauth, /const tok2 = String\(j\?\.reauth_token \|\| ''\)\.trim\(\);[\s\S]*?finishVerified\(tok2\);/);
+  assert.doesNotMatch(reauth, /finish\(directToken\);\s*closeTop\(\)/);
+  assert.doesNotMatch(reauth, /finish\(tok2\);\s*closeTop\(\)/);
+});
+
 test('payment-status resolution sends only the bounded server context and user evidence', () => {
   const resolver = slice('async function resolveBankingPayStage3PaymentStatus', 'function installBankingPayStage3Handlers');
   assert.match(resolver, /source\.resolution_context/);

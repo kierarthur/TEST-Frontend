@@ -7244,6 +7244,21 @@ async function openBankingReauthModal(opts = {}) {
       } catch {}
     };
 
+    const finishVerified = (token) => {
+      const verifiedToken = String(token || '').trim();
+      if (done || !verifiedToken) return;
+
+      // Successful verification is not an abandoned edit. Close this exact
+      // reauthentication frame directly so the shared dirty-form close guard
+      // cannot show an irrelevant native discard confirmation.
+      done = true;
+      detachDelegated();
+      try {
+        if (stillTopIsThisModal() && typeof closeModal === 'function') closeModal();
+      } catch {}
+      resolve(verifiedToken);
+    };
+
     const onDismiss = () => {
       detachDelegated();
       finish(null);
@@ -7405,8 +7420,7 @@ async function openBankingReauthModal(opts = {}) {
 
               const directToken = String(j?.reauth_token || j?.reauthToken || '').trim();
               if (directToken && j?.tfa_required === false) {
-                finish(directToken);
-                closeTop();
+                finishVerified(directToken);
                 return;
               }
 
@@ -7481,8 +7495,7 @@ async function openBankingReauthModal(opts = {}) {
               const tok2 = String(j?.reauth_token || '').trim();
               if (!tok2) throw new Error('reauth_token missing');
 
-              finish(tok2);
-              closeTop();
+              finishVerified(tok2);
             } catch (e) {
               state.err = String(e?.message || e || 'Verification failed');
               rerender();
