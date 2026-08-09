@@ -48422,6 +48422,20 @@ function renderPayNewBatchWizard() {
       </thead>
     `;
   };
+  const renderReadyToPayExportControl = () => {
+    const disabled = getWorkbenchSectionPageMeta('READY_TO_PAY').totalCount <= 0;
+    return `
+      <button
+        type="button"
+        class="btn btn-xs btn-outline"
+        data-action="banking:pay:exportReadyToPayCsv"
+        aria-label="Download all Ready to Pay line breakdowns as CSV"
+        title="Download every Ready to Pay line across all pages, including selection status and full breakdown"
+        style="min-width:34px;padding-left:7px;padding-right:7px;font-weight:800;"
+        ${disabled ? 'disabled aria-disabled="true"' : ''}
+      >⇩ CSV</button>
+    `;
+  };
 
   const renderPayChannelBadge = (rawChannel) => {
     const channel = upperTrim(rawChannel);
@@ -50003,10 +50017,7 @@ const collectPreviewRowIds = (previewLike) => {
       } catch {}
       return raw;
     };
-    const actionButtons = [
-      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'View status')}>View status</button>`,
-      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'Refresh status', 'banking:pay:refreshDraftCreateStatus')}>Refresh status</button>`
-    ].filter(Boolean).join(' ');
+    const actionButtons = `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'View status')}>View status</button>`;
     const barInnerStyle = `width:${Math.max(0, Math.min(100, barPercent))}%;height:100%;background:var(--accent,#3b82f6);transition:width .25s ease;`;
     const statusBits = [
       stageCountText,
@@ -56838,7 +56849,10 @@ const renderReadyTimesheetGroupedRows = (lines) => {
                   <span class="pill">Amount ${enc(fmtMoney(readyLineAmountTotal))}</span>
                 </div>
               </div>
-              ${renderWorkbenchSectionExpandControl('READY_TO_PAY')}
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                ${renderReadyToPayExportControl()}
+                ${renderWorkbenchSectionExpandControl('READY_TO_PAY')}
+              </div>
               ${renderWorkbenchSectionPaginationControls('READY_TO_PAY')}
             </div>
             ${isWorkbenchSectionBodyVisible('READY_TO_PAY') ? `
@@ -61433,10 +61447,7 @@ function renderPayBatchListPanel() {
       } catch {}
       return raw;
     };
-    const actionButtons = [
-      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'View status')}>View status</button>`,
-      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'Refresh status', 'banking:pay:refreshDraftCreateStatus')}>Refresh status</button>`
-    ].filter(Boolean).join(' ');
+    const actionButtons = `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'View status')}>View status</button>`;
     const barInnerStyle = `width:${Math.max(0, Math.min(100, barPercent))}%;height:100%;background:var(--accent,#3b82f6);transition:width .25s ease;`;
     const statusBits = [
       stageCountText,
@@ -97434,6 +97445,30 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         await setPreviewRowsGlobalSelection(checked);
         await safeRerender(null);
       });
+      return;
+    }
+
+    if (a === 'banking:pay:exportReadyToPayCsv') {
+      if (kind !== 'click') return;
+      const button = el;
+      const priorText = button ? button.textContent : '';
+      if (button) {
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        button.textContent = '…';
+      }
+      try {
+        const result = await bankingPayWorkbenchExportReadyToPayCsv();
+        toast(`Ready to Pay export downloaded (${Number(result?.exported_breakdown_row_count || 0)} breakdown line(s)).`);
+      } catch (error) {
+        toast(error?.message || error || 'Ready to Pay export could not be downloaded.');
+      } finally {
+        if (button && button.isConnected) {
+          button.disabled = false;
+          button.removeAttribute('aria-busy');
+          button.textContent = priorText || '⇩ CSV';
+        }
+      }
       return;
     }
 
@@ -183072,6 +183107,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     const failedUnits = Number(op.display_failed_units ?? op.displayFailedUnits ?? op.failed_units ?? op.failedUnits ?? 0) || 0;
     const rawPercent = Number(op.display_percent ?? op.displayPercent ?? op.percent ?? op.percent_complete ?? op.percentComplete);
     const operationType = operationTypeOf(op);
+    if (refreshButton) refreshButton.style.display = operationType === 'DRAFT_CREATE' ? 'none' : '';
     const counterMode = upperTrim(op.display_counter_mode || op.displayCounterMode || op.counter_mode || op.counterMode || '');
     const counterScope = upperTrim(op.display_counter_scope || op.displayCounterScope || op.counter_scope || op.counterScope || '');
     const completedSuccessfully = isTerminal(op) && ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE'].includes(operationStatus(op));
@@ -187087,7 +187123,9 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
   const rowsCountRaw = Number(payload.rows_count ?? payload.rowsCount ?? payload.row_count ?? payload.rowCount ?? payload.total_count ?? payload.totalCount ?? payload.total_count_estimate ?? payload.totalCountEstimate ?? returnedCountRaw);
   const hasMore = payload.has_more === true || payload.hasMore === true || !!(payload.next_cursor ?? payload.nextCursor);
   const totalCountEstimateRaw = Number(payload.total_count_estimate ?? payload.totalCountEstimate ?? payload.total_count ?? payload.totalCount ?? rowsCountRaw);
-  const cursorStored = storePreviewPageCursor(payload, rows);
+  const cursorStored = (opts.store_cursor === false || opts.storeCursor === false)
+    ? false
+    : storePreviewPageCursor(payload, rows);
 
   const requestedSection = normalizePreviewPageSectionName(payload.requested_section || payload.requestedSection || sectionText);
   const resolvedSection = normalizePreviewPageSectionName(payload.resolved_section || payload.resolvedSection || payload.section || requestedSection);
@@ -213909,6 +213947,224 @@ function openBulkProcessEvidenceDispositionDialog() {
     const focusTarget = footer.querySelector('button:last-child') || close;
     try { focusTarget.focus(); } catch {}
   });
+}
+
+async function bankingPayWorkbenchExportReadyToPayCsv(options = {}) {
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const trim = (value) => String(value == null ? '' : value).trim();
+  const upper = (value) => trim(value).toUpperCase();
+  const plain = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+  const array = (value) => Array.isArray(value) ? value.filter((item) => item && typeof item === 'object' && !Array.isArray(item)) : [];
+  const bool = (value) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0 || value == null) return false;
+    return ['TRUE', 'T', '1', 'YES', 'Y', 'ON'].includes(upper(value));
+  };
+  const first = (...values) => {
+    for (const value of values) {
+      if (value !== undefined && value !== null && trim(value) !== '') return value;
+    }
+    return '';
+  };
+  const number = (...values) => {
+    for (const value of values) {
+      if (value === undefined || value === null || trim(value) === '') continue;
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return Math.round(parsed * 100) / 100;
+    }
+    return 0;
+  };
+  const ukDate = (value) => {
+    const raw = trim(value);
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : raw;
+  };
+  const csvCell = (value) => `"${String(value == null ? '' : value).replace(/"/g, '""')}"`;
+  const breakLabel = (row) => {
+    const start = trim(first(row.break_start, row.breakStart));
+    const finish = trim(first(row.break_end, row.breakEnd));
+    if (start || finish) return `${start || '—'} - ${finish || '—'}`;
+    const minutes = number(row.break_mins, row.break_minutes, row.breakMins, row.breakMinutes);
+    if (minutes > 0) return `${Math.round(minutes)} mins`;
+    const breaks = array(row.breaks);
+    return breaks.map((entry) => {
+      const from = trim(first(entry.start, entry.break_start, entry.breakStart));
+      const to = trim(first(entry.end, entry.break_end, entry.breakEnd));
+      const mins = number(entry.break_mins, entry.break_minutes, entry.minutes, entry.duration_minutes);
+      if (from || to) return `${from || '—'} - ${to || '—'}`;
+      return mins > 0 ? `${Math.round(mins)} mins` : '';
+    }).filter(Boolean).join('; ');
+  };
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  const wizard = st?.pay?.draftWizard;
+  const sessionId = trim(
+    opts.session_id || opts.sessionId ||
+    wizard?.workbench?.session_id || wizard?.workbench?.sessionId ||
+    wizard?.preview?.data?.session_id || wizard?.preview?.data?.sessionId || ''
+  );
+  if (!sessionId) throw new Error('Open Banking Pay before exporting Ready to Pay.');
+
+  const allRows = [];
+  const seenRows = new Set();
+  const seenCursors = new Set();
+  let cursor = null;
+  let expectedSessionVersion = '';
+  let pageCount = 0;
+  do {
+    pageCount += 1;
+    if (pageCount > 1000) throw new Error('Ready to Pay export exceeded its safe page limit. Refresh Banking Pay and try again.');
+    const page = await bankingPayWorkbenchSessionGetPreviewPage(sessionId, 'canonical_preview_lines', {
+      limit: 100,
+      cursor,
+      store_cursor: false,
+      userInitiated: true,
+      mutationContext: 'BANKING_PAY_READY_TO_PAY_EXPORT'
+    });
+    if (!page || page.ok === false || page.rebase_required === true || page.requires_new_session === true) {
+      throw new Error('Banking Pay changed while the export was being prepared. Refresh the modal and export again.');
+    }
+    const pageSessionId = trim(page.session_id || page.sessionId);
+    const pageSessionVersion = trim(page.session_version ?? page.sessionVersion);
+    if (pageSessionId && pageSessionId !== sessionId) throw new Error('Banking Pay changed while the export was being prepared.');
+    if (!expectedSessionVersion) expectedSessionVersion = pageSessionVersion;
+    if (expectedSessionVersion && pageSessionVersion && expectedSessionVersion !== pageSessionVersion) {
+      throw new Error('Banking Pay changed while the export was being prepared. Refresh the modal and export again.');
+    }
+    for (const row of (Array.isArray(page.rows) ? page.rows : [])) {
+      const nested = plain(row?.row_json || row?.rowJson);
+      const rowId = trim(first(row?.id, row?.preview_row_id, row?.previewRowId, nested.id, nested.preview_row_id, nested.previewRowId));
+      const rowKey = rowId || [first(row?.candidate_id, nested.candidate_id), first(row?.row_key, nested.row_key, row?.line_key, nested.line_key), first(row?.row_ordinal, nested.row_ordinal)].map(trim).join('|');
+      if (!rowKey || seenRows.has(rowKey)) continue;
+      seenRows.add(rowKey);
+      allRows.push(row);
+    }
+    cursor = page.next_cursor ?? page.nextCursor ?? null;
+    if (cursor !== null && cursor !== undefined && cursor !== '') {
+      const cursorKey = typeof cursor === 'string' ? cursor : JSON.stringify(cursor);
+      if (seenCursors.has(cursorKey)) throw new Error('Ready to Pay export paging repeated unexpectedly. Refresh Banking Pay and try again.');
+      seenCursors.add(cursorKey);
+    }
+    if (!(page.has_more === true || page.hasMore === true) || cursor === null || cursor === undefined || cursor === '') break;
+  } while (true);
+
+  const exportRows = [];
+  for (const row of allRows) {
+    const nested = plain(row?.row_json || row?.rowJson);
+    const previewRowId = trim(first(row?.id, row?.preview_row_id, row?.previewRowId, nested.id, nested.preview_row_id, nested.previewRowId));
+    const included = bool(first(row?.selected, nested.selected)) && upper(first(row?.selection_state, row?.selectionState, nested.selection_state, nested.selectionState)) === 'SELECTED';
+    const lineType = upper(first(row?.line_type, row?.lineType, nested.line_type, nested.lineType)).replace(/_/g, ' ');
+    const candidateRef = trim(first(row?.tms_ref, row?.tmsRef, nested.tms_ref, nested.tmsRef));
+    const candidateName = trim(first(row?.display_name, row?.displayName, nested.display_name, nested.displayName));
+    const client = trim(first(row?.client_name, row?.clientName, nested.client_name, nested.clientName));
+    const channel = upper(first(row?.pay_channel, row?.payChannel, nested.pay_channel, nested.payChannel));
+    const timesheetId = trim(first(row?.timesheet_id, row?.timesheetId, nested.timesheet_id, nested.timesheetId));
+    const keyType = upper(first(row?.key_type, row?.keyType, nested.key_type, nested.keyType));
+    const keyValue = trim(first(row?.key_value, row?.keyValue, nested.key_value, nested.keyValue));
+    const parentDate = ukDate(first(row?.week_ending_date, row?.weekEndingDate, row?.linked_shift_date, nested.week_ending_date, nested.linked_shift_date, nested.date));
+    const base = {
+      included: included ? 'Yes' : 'No',
+      lineType: lineType || 'READY TO PAY',
+      candidateRef,
+      candidateName,
+      client,
+      date: parentDate,
+      channel,
+      timesheetId,
+      keyType,
+      keyValue,
+      previewRowId
+    };
+    const segmentRows = [
+      ...array(row?.section_segment_rows),
+      ...array(row?.sectionSegmentRows),
+      ...array(nested.section_segment_rows),
+      ...array(nested.sectionSegmentRows),
+      ...array(row?.segment_rows),
+      ...array(row?.segmentRows),
+      ...array(nested.segment_rows),
+      ...array(nested.segmentRows)
+    ];
+    const uniqueSegments = [];
+    const segmentKeys = new Set();
+    for (const segment of segmentRows) {
+      const segmentKey = trim(first(segment.segment_id, segment.segmentId, segment.segment_key, segment.segmentKey, segment.segment_stable_key, segment.segmentStableKey)) || JSON.stringify(segment);
+      if (segmentKeys.has(segmentKey)) continue;
+      segmentKeys.add(segmentKey);
+      uniqueSegments.push(segment);
+    }
+    if (uniqueSegments.length) {
+      for (const segment of uniqueSegments) {
+        exportRows.push({
+          ...base,
+          detailType: 'Timesheet segment',
+          date: ukDate(first(segment.date, segment.work_date, segment.workDate, segment.linked_shift_date, base.date)),
+          client: trim(first(segment.client_name, segment.clientName, base.client)),
+          amount: number(segment.pay_amount_ex_vat, segment.payAmountExVat, segment.amount_ex_vat, segment.amountExVat),
+          role: trim(first(segment.role, nested.role, row?.role)),
+          band: trim(first(segment.band, nested.band, row?.band)),
+          start: trim(first(segment.start, segment.start_time, segment.startTime)),
+          finish: trim(first(segment.finish, segment.end, segment.finish_time, segment.finishTime)),
+          break: breakLabel(segment),
+          detail: trim(first(segment.description, segment.label, segment.item_label, segment.itemLabel))
+        });
+      }
+      continue;
+    }
+    const components = [
+      ...array(row?.case_components),
+      ...array(row?.caseComponents),
+      ...array(nested.case_components),
+      ...array(nested.caseComponents)
+    ];
+    if (components.length && lineType.includes('RECOVERY')) {
+      for (const component of components) {
+        const componentAmount = number(component.preview_due_amount_ex_vat, component.previewDueAmountExVat, component.recoverable_this_pay_run_ex_vat, component.recoverableThisPayRunExVat, component.target_pay_ex_vat, component.targetPayExVat);
+        exportRows.push({
+          ...base,
+          detailType: 'Recovery component',
+          amount: componentAmount > 0 ? -Math.abs(componentAmount) : componentAmount,
+          role: '',
+          band: '',
+          start: '',
+          finish: '',
+          break: '',
+          detail: trim(first(component.description, component.label, component.component_label, component.componentLabel, component.component_key_value, component.componentKeyValue))
+        });
+      }
+      continue;
+    }
+    exportRows.push({
+      ...base,
+      detailType: keyType === 'EXPENSE_CODE' ? 'Expense component' : 'Payment line',
+      amount: number(row?.amount_display, row?.amountDisplay, row?.amount_ex_vat, row?.amountExVat, nested.amount_display, nested.amount_ex_vat, nested.section_amount_ex_vat),
+      role: trim(first(row?.role, nested.role)),
+      band: trim(first(row?.band, nested.band)),
+      start: trim(first(row?.start, nested.start)),
+      finish: trim(first(row?.finish, nested.finish)),
+      break: breakLabel(row),
+      detail: trim(first(row?.expense_label, row?.expenseLabel, nested.expense_label, nested.expenseLabel, row?.description, nested.description))
+    });
+  }
+
+  const headers = ['Included', 'Line type', 'Breakdown type', 'Candidate ref', 'Candidate', 'Client', 'Week / Date', 'Channel', 'Amount', 'Timesheet ID', 'Economic key type', 'Economic key value', 'Role', 'Band', 'Start', 'Finish', 'Break', 'Detail', 'Preview row ID'];
+  const matrix = exportRows.map((row) => [
+    row.included, row.lineType, row.detailType, row.candidateRef, row.candidateName, row.client, row.date, row.channel,
+    Number(row.amount || 0).toFixed(2), row.timesheetId, row.keyType, row.keyValue, row.role, row.band, row.start, row.finish, row.break, row.detail, row.previewRowId
+  ]);
+  const csv = [headers, ...matrix].map((cells) => cells.map(csvCell).join(',')).join('\r\n');
+  const blob = new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const now = new Date();
+  const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `banking_pay_ready_to_pay_${stamp}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  return { ok: true, session_id: sessionId, session_version: expectedSessionVersion || null, page_count: pageCount, canonical_row_count: allRows.length, exported_breakdown_row_count: exportRows.length };
 }
 
 function bindBulkProcessEvidencePane(state) {

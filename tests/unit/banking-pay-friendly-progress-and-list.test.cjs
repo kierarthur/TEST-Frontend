@@ -42,6 +42,8 @@ test('draft and payment progress use friendly operation-wide or indeterminate pr
   assert.doesNotMatch(modal, /Heartbeat:/);
   assert.doesNotMatch(modal, /Resume reason:/);
   assert.doesNotMatch(modal, /Lease:/);
+  assert.match(modal, /refreshButton\.style\.display = operationType === 'DRAFT_CREATE' \? 'none' : ''/);
+  assert.doesNotMatch(source, /handleViewActiveDraftCreateStatus\(operation, 'Refresh status'/);
 });
 
 test('a failed cancellation start remains visible until status changes or the user refreshes', () => {
