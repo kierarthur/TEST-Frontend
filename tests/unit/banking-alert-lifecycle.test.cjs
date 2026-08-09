@@ -96,6 +96,51 @@ test('popover renders successful schedule and settlement messages with clear con
   assert.match(markup, /2 unread Banking alerts/);
 });
 
+test('popover shows expanded Banking alerts newest first by date and time', () => {
+  const source = sliceBetween('function renderBankingNavAlertPopover(attentionState)', 'function applyAlertSummaryToState(responsePayload)');
+  const context = {
+    window: {},
+    Intl,
+    Date,
+    Number,
+    String,
+    Math,
+    Array,
+    Object,
+    JSON,
+    encodeURIComponent
+  };
+  vm.runInNewContext(source, context, { filename: 'banking-alert-popover-order.js' });
+  const older = {
+    ...failedAlert,
+    alert_fingerprint: 'older-alert',
+    label: 'Older alert',
+    description: 'Older alert description',
+    created_at_utc: '2026-08-09T09:15:00Z'
+  };
+  const newer = {
+    ...failedAlert,
+    alert_fingerprint: 'newer-alert',
+    label: 'Newer alert',
+    description: 'Newer alert description',
+    created_at_utc: '2026-08-09T19:45:00Z'
+  };
+  const undated = {
+    ...failedAlert,
+    alert_fingerprint: 'undated-alert',
+    label: 'Undated alert',
+    description: 'Undated alert description'
+  };
+  const markup = context.renderBankingNavAlertPopover({
+    count: 3,
+    alerts: [undated, older, newer],
+    banking_alert_summary: { unacknowledged_count: 3, alerts: [undated, older, newer] }
+  });
+
+  assert.ok(markup.indexOf('Newer alert') < markup.indexOf('Older alert'));
+  assert.ok(markup.indexOf('Older alert') < markup.indexOf('Undated alert'));
+});
+
 test('popover treats deferred alert detail as loading and never as permanently unavailable', () => {
   const source = sliceBetween('function renderBankingNavAlertPopover(attentionState)', 'function applyAlertSummaryToState(responsePayload)');
   const context = {

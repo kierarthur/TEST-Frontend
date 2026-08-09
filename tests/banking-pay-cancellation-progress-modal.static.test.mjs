@@ -33,7 +33,7 @@ test('financial completion is not obscured by internal Workbench refresh detail'
 });
 
 test('financial completion refreshes Overview, Current Payment Status and PAYE authority without candidate fan-out', () => {
-  const refresh = slice('async function refreshBankingPayCancellationFinancialViews', 'function scheduleBankingPayCancellationProgressPoll');
+  const refresh = slice('async function refreshBankingPayCancellationFinancialViews', 'async function syncBankingPayCancellationFromBatchSignal');
   const completeProjection = slice('async function loadCompleteBankingPayCancellationProjectionStatus', 'function buildBankingPayCancellationActiveProjection');
   assert.match(refresh, /bankingPayBatchGet/);
   assert.match(refresh, /loadCompleteBankingPayCancellationProjectionStatus/);
@@ -51,9 +51,12 @@ test('financial completion refreshes Overview, Current Payment Status and PAYE a
   assert.doesNotMatch(`${refresh}\n${completeProjection}`, /for\s*\([^)]*candidate|Promise\.all/);
 });
 
-test('terminal refresh failures retain a bounded server-owned retry', () => {
+test('terminal refresh continues through the bounded batch-owned watcher after the progress modal closes', () => {
   const polling = slice('function scheduleBankingPayCancellationProgressPoll', 'async function openBankingPayCancellationProgressModal');
-  assert.match(polling, /state\.error \? 5000 : null/);
+  assert.match(polling, /startBankingPayBatchLiveWatch/);
+  assert.match(polling, /interval_ms: 2000/);
+  assert.match(polling, /forceCancellationStatusPoll: true/);
+  assert.match(polling, /stopWhenClosed: true/);
   assert.match(polling, /serverValue == null \? fallback : serverValue/);
   assert.match(polling, /Math\.min\(5000, Math\.max\(1000/);
 });

@@ -26203,7 +26203,45 @@ function renderBankingNavAlertPopover(attentionState) {
     ?? rawAlerts.length
   );
   const totalUnacknowledged = Number.isFinite(countCandidate) ? Math.max(0, Math.trunc(countCandidate)) : rawAlerts.filter(isActiveAlert).length;
-  const alerts = totalUnacknowledged > 0 ? rawAlerts.filter((alert) => isActiveAlert(alert)) : [];
+  const alertSortTimestampMs = (alert) => {
+    const payload = (alert?.payload_json && typeof alert.payload_json === 'object' && !Array.isArray(alert.payload_json))
+      ? alert.payload_json
+      : ((alert?.alert_payload_json && typeof alert.alert_payload_json === 'object' && !Array.isArray(alert.alert_payload_json)) ? alert.alert_payload_json : {});
+    const value = firstNonBlank(
+      alert?.sort_at_utc,
+      alert?.event_time_utc,
+      alert?.updated_at_utc,
+      alert?.created_at_utc,
+      payload?.settled_at_utc,
+      payload?.scheduled_at_utc,
+      payload?.event_time_utc,
+      payload?.updated_at_utc,
+      payload?.created_at_utc
+    );
+    if (!value) return Number.NEGATIVE_INFINITY;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  };
+  const alertStableSortKey = (alert, index) => firstNonBlank(
+    alert?.alert_fingerprint,
+    alert?.fingerprint,
+    alert?.banking_alert_fingerprint,
+    alert?.pay_batch_id,
+    alert?.entity_id,
+    String(index)
+  );
+  const alerts = totalUnacknowledged > 0
+    ? rawAlerts
+        .filter((alert) => isActiveAlert(alert))
+        .map((alert, index) => ({ alert, index }))
+        .sort((left, right) => {
+          const leftTime = alertSortTimestampMs(left.alert);
+          const rightTime = alertSortTimestampMs(right.alert);
+          if (leftTime !== rightTime) return rightTime > leftTime ? 1 : -1;
+          return alertStableSortKey(left.alert, left.index).localeCompare(alertStableSortKey(right.alert, right.index));
+        })
+        .map((entry) => entry.alert)
+    : [];
   const detailsLoading = totalUnacknowledged > 0 && alerts.length < 1 && (
     state.detailsLoading === true ||
     state.details_loading === true ||
