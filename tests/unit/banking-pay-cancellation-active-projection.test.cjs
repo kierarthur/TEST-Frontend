@@ -93,6 +93,47 @@ test('all-cancelled status produces an authoritative empty active schedule witho
   assert.equal(selected.data.total_bank_out, 0);
 });
 
+test('financial completion remains successful when the cancelled batch modal is no longer selected', () => {
+  const context = {
+    window: { modalCtx: { banking: { pay: {} } } },
+    Number,
+    String,
+    Array,
+    Object,
+    Error
+  };
+  vm.runInNewContext(`${functionBody('buildBankingPayCancellationActiveProjection')}\n${functionBody('applyBankingPayCancellationActiveProjection')}\nthis.applyProjection = applyBankingPayCancellationActiveProjection;`, context);
+  const projection = context.applyProjection({
+    pay_batch_id: 'batch-cancelled',
+    active_overview_candidate_count: 0,
+    active_overview_amount_pence: 0,
+    active_paye_schedule_line_count: 0,
+    active_paye_schedule_amount_pence: 0,
+    projection_complete: true,
+    rows: []
+  }, 'batch-cancelled');
+  assert.equal(projection.modal_state_applied, false);
+  assert.equal(projection.modal_state_reason, 'NO_SELECTED_PAYMENT_BATCH');
+  assert.equal(context.window.__bankingPayCancellationActiveProjection, projection);
+});
+
+test('financial completion never overwrites a different batch selected while cancellation finishes', () => {
+  const initialData = { id: 'batch-now-selected', batch: { id: 'batch-now-selected' }, total_bank_out: 12 };
+  const { context, selected } = buildProjectionContext(initialData);
+  const projection = context.applyProjection({
+    pay_batch_id: 'batch-that-finished',
+    active_overview_candidate_count: 0,
+    active_overview_amount_pence: 0,
+    active_paye_schedule_line_count: 0,
+    active_paye_schedule_amount_pence: 0,
+    projection_complete: true,
+    rows: []
+  }, 'batch-that-finished');
+  assert.equal(projection.modal_state_applied, false);
+  assert.equal(projection.modal_state_reason, 'DIFFERENT_PAYMENT_BATCH_SELECTED');
+  assert.equal(selected.data.total_bank_out, 12);
+});
+
 test('Overview and PAYE renderers prefer dedicated active projection rows including an empty projection', () => {
   const overview = functionBody('renderBankingPayBatchChildModalOverview');
   const paye = functionBody('renderBankingPayBatchChildModalPayeWorksheetTab');

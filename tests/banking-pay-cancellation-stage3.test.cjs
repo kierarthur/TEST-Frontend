@@ -196,11 +196,14 @@ test('nested payment verification keeps its delegated handlers attached', () => 
   assert.doesNotMatch(afterAttach.slice(0, 500), /rerender\(\)/);
 });
 
-test('successful payment verification closes directly without the dirty-form discard prompt', () => {
+test('successful payment verification closes its clean child without the dirty-form discard prompt', () => {
   const reauth = slice('async function openBankingReauthModal', 'async function openPayBatchPasswordConfirmModal');
   assert.match(reauth, /const finishVerified = \(token\) =>/);
   assert.match(reauth, /done = true;\s*detachDelegated\(\);/);
-  assert.match(reauth, /stillTopIsThisModal\(\) && typeof closeModal === 'function'/);
+  assert.match(reauth, /frame\.isDirty = false;/);
+  assert.match(reauth, /frame\._snapshot = null;/);
+  assert.match(reauth, /document\.getElementById\('btnCloseModal'\)/);
+  assert.match(reauth, /closeButton && typeof closeButton\.click === 'function'/);
   assert.match(reauth, /if \(directToken && j\?\.tfa_required === false\) \{\s*finishVerified\(directToken\);/);
   assert.match(reauth, /const tok2 = String\(j\?\.reauth_token \|\| ''\)\.trim\(\);[\s\S]*?finishVerified\(tok2\);/);
   assert.doesNotMatch(reauth, /finish\(directToken\);\s*closeTop\(\)/);

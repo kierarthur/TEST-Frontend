@@ -7248,13 +7248,22 @@ async function openBankingReauthModal(opts = {}) {
       const verifiedToken = String(token || '').trim();
       if (done || !verifiedToken) return;
 
-      // Successful verification is not an abandoned edit. Close this exact
-      // reauthentication frame directly so the shared dirty-form close guard
-      // cannot show an irrelevant native discard confirmation.
+      // Successful verification is not an abandoned edit. Mark this exact
+      // child clean, then use the shared close path so its parent Banking
+      // context is restored without an irrelevant discard confirmation.
       done = true;
       detachDelegated();
       try {
-        if (stillTopIsThisModal() && typeof closeModal === 'function') closeModal();
+        if (stillTopIsThisModal()) {
+          const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (frame) {
+            frame.isDirty = false;
+            frame._snapshot = null;
+          }
+          const closeButton = document.getElementById('btnCloseModal');
+          if (closeButton && typeof closeButton.click === 'function') closeButton.click();
+          else if (typeof closeModal === 'function') closeModal();
+        }
       } catch {}
       resolve(verifiedToken);
     };
@@ -23497,11 +23506,17 @@ function applyBankingPayCancellationActiveProjection(paymentStatus, payBatchId) 
   const selected = window?.modalCtx?.banking?.pay?.selected;
   const child = window?.modalCtx?.banking?.pay?.child;
   if (!selected || !selected.data || typeof selected.data !== 'object' || Array.isArray(selected.data)) {
-    throw new Error('The refreshed payment batch is not available in the Banking Pay modal state.');
+    projection.modal_state_applied = false;
+    projection.modal_state_reason = 'NO_SELECTED_PAYMENT_BATCH';
+    window.__bankingPayCancellationActiveProjection = projection;
+    return projection;
   }
   const selectedBatchId = String(selected.data?.id || selected.data?.pay_batch_id || selected.data?.batch?.id || selected.data?.batch?.pay_batch_id || '').trim();
   if (expectedBatchId && selectedBatchId && selectedBatchId !== expectedBatchId) {
-    throw new Error('The refreshed payment batch no longer matches the cancellation progress batch.');
+    projection.modal_state_applied = false;
+    projection.modal_state_reason = 'DIFFERENT_PAYMENT_BATCH_SELECTED';
+    window.__bankingPayCancellationActiveProjection = projection;
+    return projection;
   }
   const activeOverviewAmount = projection.active_overview_amount_pence / 100;
   const childData = child && child.data && typeof child.data === 'object' && !Array.isArray(child.data) ? child.data : null;
@@ -23545,6 +23560,8 @@ function applyBankingPayCancellationActiveProjection(paymentStatus, payBatchId) 
     child.correction.currentPaymentStatusRows = selected.data.current_payment_status_rows;
     child.correction.latest_correction_request = projection.latest_correction_request;
   }
+  projection.modal_state_applied = true;
+  projection.modal_state_reason = '';
   window.__bankingPayCancellationActiveProjection = projection;
   return projection;
 }
