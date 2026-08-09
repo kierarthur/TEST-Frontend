@@ -115,3 +115,21 @@ test('frontend Draft preflight does not bypass the static contract without a val
   row.section = 'canonical_preview_lines';
   assert.equal(harness.eligible(row, [row]), false);
 });
+
+test('frontend Draft authoritative recheck includes physically blocked promoted recoveries', () => {
+  assert.match(
+    source,
+    /selectionAuthoritySections\s*=\s*\['canonical_preview_lines',\s*'blocked_for_pay'\]/,
+    'Draft recheck must fetch both physical sections that can supply the effective Ready selection'
+  );
+  assert.match(
+    source,
+    /getCreateDraftEffectivePreviewSection\(row\)\s*!==\s*'canonical_preview_lines'/,
+    'Draft scope classification must use the certified effective section rather than physical storage alone'
+  );
+  assert.doesNotMatch(
+    source,
+    /const canonicalRows = asArray\(rowsBySection\.canonical_preview_lines\)[\s\S]{0,400}isDraftCreateEligiblePreviewRow\(row, canonicalRows\)/,
+    'Draft scope classification must not discard selected recoveries by inspecting only the physical Ready section'
+  );
+});

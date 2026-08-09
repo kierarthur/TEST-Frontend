@@ -35578,126 +35578,145 @@ async function bankingPayCreateDraft(input = {}) {
     const collectedRows = [];
     let normalisedPage = null;
     let displayNormalisedPage = null;
-    let pageCursor = null;
     let knownCount = 0;
     let returnedCount = 0;
     let pageHasMore = false;
-    let lastNextCursor = null;
+    const selectionAuthoritySections = ['canonical_preview_lines', 'blocked_for_pay'];
 
-    for (let pageIndex = 0; pageIndex < maxPreviewPagesForDraftSelection; pageIndex += 1) {
-      let page = null;
-      try {
-        page = await bankingPayWorkbenchSessionGetPreviewPage(id, 'canonical_preview_lines', {
-          limit: pageLimit,
-          cursor: pageCursor,
-          cursor_json: pageCursor,
-          mode: 'PAGE',
-          expected_session_id: id,
-          current_session_id: id,
-          force_current: true,
-          forceCurrent: true,
-          bypass_cache: true,
-          bypassCache: true,
-          source: 'bankingPayCreateDraft.refreshCurrentSelectedPreviewRowsForCreateDraft'
-        });
-      } catch (error) {
-        return {
-          ok: false,
-          error_code: 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
-          message: 'The current selected payment rows could not be re-read before draft creation.',
-          error: trimStr(error?.message || error || '') || null
-        };
+    // A selected recovery remains physically stored in Blocked for Pay. Its
+    // certified PRE_DRAFT_LIVE_TRUTH overlay is the only authority that may
+    // promote it into the effective Ready-to-Pay selection. Re-read both
+    // physical sections so the authoritative recheck does not silently drop a
+    // promoted recovery and report a false selection remap.
+    for (const selectionAuthoritySection of selectionAuthoritySections) {
+      let pageCursor = null;
+      let sectionKnownCount = 0;
+      let sectionReturnedCount = 0;
+
+      for (let pageIndex = 0; pageIndex < maxPreviewPagesForDraftSelection; pageIndex += 1) {
+        let page = null;
+        try {
+          page = await bankingPayWorkbenchSessionGetPreviewPage(id, selectionAuthoritySection, {
+            limit: pageLimit,
+            cursor: pageCursor,
+            cursor_json: pageCursor,
+            mode: 'PAGE',
+            expected_session_id: id,
+            current_session_id: id,
+            force_current: true,
+            forceCurrent: true,
+            bypass_cache: true,
+            bypassCache: true,
+            source: 'bankingPayCreateDraft.refreshCurrentSelectedPreviewRowsForCreateDraft'
+          });
+        } catch (error) {
+          return {
+            ok: false,
+            error_code: 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
+            message: 'The current selected payment rows could not be re-read before draft creation.',
+            error: trimStr(error?.message || error || '') || null,
+            requested_section: selectionAuthoritySection
+          };
+        }
+
+        const pagePayload = normaliseCreateDraftPreviewPage(page, selectionAuthoritySection);
+        const resolvedSection = normalisePreviewPageSectionName(pagePayload.resolved_section || pagePayload.section || pagePayload.requested_section || selectionAuthoritySection);
+        const returnedSessionId = trimStr(pagePayload.session_id || pagePayload.sessionId || '');
+        const returnedSessionVersionNormalized = normalizeSessionVersionForCreateDraft(pagePayload.session_version ?? pagePayload.sessionVersion);
+        if (pagePayload.ok === false) {
+          return {
+            ok: false,
+            error_code: trimStr(pagePayload.error_code || pagePayload.code || 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED') || 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
+            message: trimStr(pagePayload.message || pagePayload.error || 'The current Banking Pay preview rows could not be re-read before draft creation.'),
+            session_id: returnedSessionId || id,
+            session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
+            requested_section: selectionAuthoritySection
+          };
+        }
+        if (resolvedSection !== selectionAuthoritySection) {
+          return {
+            ok: false,
+            error_code: 'BANKING_PAY_CURRENT_SELECTION_SECTION_MISMATCH',
+            message: 'The current Banking Pay preview page could not be verified.',
+            expected_section: selectionAuthoritySection,
+            returned_section: resolvedSection
+          };
+        }
+        if (!returnedSessionId || returnedSessionId !== id) {
+          return {
+            ok: false,
+            error_code: 'BANKING_PAY_CURRENT_SELECTION_SESSION_MISMATCH',
+            message: 'The Banking Pay preview page belongs to a different workbench session.',
+            expected_session_id: id,
+            returned_session_id: returnedSessionId || null,
+            requested_section: selectionAuthoritySection
+          };
+        }
+        if (!returnedSessionVersionNormalized || returnedSessionVersionNormalized !== expectedSessionVersionNormalized) {
+          return {
+            ok: false,
+            error_code: 'BANKING_PAY_CURRENT_SELECTION_SESSION_VERSION_CHANGED',
+            message: 'The Banking Pay preview session changed while preparing draft creation.',
+            expected_session_version: expectedSessionVersionNormalized,
+            returned_session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
+            returned_session_version_normalized: returnedSessionVersionNormalized,
+            requested_section: selectionAuthoritySection
+          };
+        }
+
+        const pageRows = previewPageRows(pagePayload).filter((row) => isPlainObject(row));
+        if (selectionAuthoritySection === 'canonical_preview_lines' && !displayNormalisedPage) displayNormalisedPage = pagePayload;
+        collectedRows.push(...pageRows);
+
+        const knownCountRaw = Number(pagePayload.known_count ?? pagePayload.knownCount ?? pagePayload.total_count ?? pagePayload.totalCount ?? sectionReturnedCount + pageRows.length);
+        const returnedCountRaw = Number(pagePayload.returned_count ?? pagePayload.returnedCount ?? pageRows.length);
+        if (Number.isFinite(knownCountRaw)) sectionKnownCount = Math.max(sectionKnownCount, Math.max(0, Math.trunc(knownCountRaw)));
+        sectionReturnedCount += Number.isFinite(returnedCountRaw) ? Math.max(0, Math.trunc(returnedCountRaw)) : pageRows.length;
+        const lastNextCursor = pagePayload.next_cursor ?? pagePayload.nextCursor ?? null;
+        pageHasMore = booleanFlag(pagePayload.has_more ?? pagePayload.hasMore) || cursorHasValueForCreateDraft(lastNextCursor);
+
+        if (collectedRows.length > maxPreviewRowsForDraftSelection) {
+          return {
+            ok: false,
+            error_code: 'BANKING_PAY_CURRENT_SELECTION_TOO_LARGE_TO_VERIFY_CLIENT_SIDE',
+            message: 'The current selected payment rows exceed the client-side verification limit. Refresh Banking Pay and try again, or narrow the filters.',
+            session_id: id,
+            session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
+            row_count: collectedRows.length,
+            max_row_count: maxPreviewRowsForDraftSelection
+          };
+        }
+
+        if (!pageHasMore) break;
+        if (!cursorHasValueForCreateDraft(lastNextCursor)) {
+          return {
+            ok: false,
+            error_code: 'BANKING_PAY_CURRENT_SELECTION_NEXT_CURSOR_MISSING',
+            message: 'The current Banking Pay preview page did not return a cursor for the next selected-row verification page.',
+            session_id: id,
+            session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
+            row_count: collectedRows.length,
+            requested_section: selectionAuthoritySection
+          };
+        }
+        pageCursor = lastNextCursor;
+
+        if (pageIndex === maxPreviewPagesForDraftSelection - 1) {
+          return {
+            ok: false,
+            error_code: 'BANKING_PAY_CURRENT_SELECTION_TOO_MANY_PAGES_TO_VERIFY_CLIENT_SIDE',
+            message: 'The current selected payment rows span too many preview pages to verify safely before draft creation.',
+            session_id: id,
+            session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
+            page_count: maxPreviewPagesForDraftSelection,
+            row_count: collectedRows.length,
+            requested_section: selectionAuthoritySection
+          };
+        }
       }
 
-      const pagePayload = normaliseCreateDraftPreviewPage(page, 'canonical_preview_lines');
-      const resolvedSection = normalisePreviewPageSectionName(pagePayload.resolved_section || pagePayload.section || pagePayload.requested_section || 'canonical_preview_lines');
-      const returnedSessionId = trimStr(pagePayload.session_id || pagePayload.sessionId || '');
-      const returnedSessionVersionNormalized = normalizeSessionVersionForCreateDraft(pagePayload.session_version ?? pagePayload.sessionVersion);
-      if (pagePayload.ok === false) {
-        return {
-          ok: false,
-          error_code: trimStr(pagePayload.error_code || pagePayload.code || 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED') || 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
-          message: trimStr(pagePayload.message || pagePayload.error || 'The current Banking Pay preview rows could not be re-read before draft creation.'),
-          session_id: returnedSessionId || id,
-          session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null
-        };
-      }
-      if (resolvedSection !== 'canonical_preview_lines') {
-        return {
-          ok: false,
-          error_code: 'BANKING_PAY_CURRENT_SELECTION_SECTION_MISMATCH',
-          message: 'The current Banking Pay canonical preview page could not be verified.',
-          expected_section: 'canonical_preview_lines',
-          returned_section: resolvedSection
-        };
-      }
-      if (!returnedSessionId || returnedSessionId !== id) {
-        return {
-          ok: false,
-          error_code: 'BANKING_PAY_CURRENT_SELECTION_SESSION_MISMATCH',
-          message: 'The Banking Pay preview page belongs to a different workbench session.',
-          expected_session_id: id,
-          returned_session_id: returnedSessionId || null
-        };
-      }
-      if (!returnedSessionVersionNormalized || returnedSessionVersionNormalized !== expectedSessionVersionNormalized) {
-        return {
-          ok: false,
-          error_code: 'BANKING_PAY_CURRENT_SELECTION_SESSION_VERSION_CHANGED',
-          message: 'The Banking Pay preview session changed while preparing draft creation.',
-          expected_session_version: expectedSessionVersionNormalized,
-          returned_session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
-          returned_session_version_normalized: returnedSessionVersionNormalized
-        };
-      }
-
-      const pageRows = previewPageRows(pagePayload).filter((row) => isPlainObject(row));
-      if (!displayNormalisedPage) displayNormalisedPage = pagePayload;
-      collectedRows.push(...pageRows);
-
-      const knownCountRaw = Number(pagePayload.known_count ?? pagePayload.knownCount ?? pagePayload.total_count ?? pagePayload.totalCount ?? collectedRows.length);
-      const returnedCountRaw = Number(pagePayload.returned_count ?? pagePayload.returnedCount ?? pageRows.length);
-      if (Number.isFinite(knownCountRaw)) knownCount = Math.max(knownCount, Math.max(0, Math.trunc(knownCountRaw)));
-      returnedCount += Number.isFinite(returnedCountRaw) ? Math.max(0, Math.trunc(returnedCountRaw)) : pageRows.length;
-      lastNextCursor = pagePayload.next_cursor ?? pagePayload.nextCursor ?? null;
-      pageHasMore = booleanFlag(pagePayload.has_more ?? pagePayload.hasMore) || cursorHasValueForCreateDraft(lastNextCursor);
-
-      if (collectedRows.length > maxPreviewRowsForDraftSelection) {
-        return {
-          ok: false,
-          error_code: 'BANKING_PAY_CURRENT_SELECTION_TOO_LARGE_TO_VERIFY_CLIENT_SIDE',
-          message: 'The current selected payment rows exceed the client-side verification limit. Refresh Banking Pay and try again, or narrow the filters.',
-          session_id: id,
-          session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
-          row_count: collectedRows.length,
-          max_row_count: maxPreviewRowsForDraftSelection
-        };
-      }
-
-      if (!pageHasMore) break;
-      if (!cursorHasValueForCreateDraft(lastNextCursor)) {
-        return {
-          ok: false,
-          error_code: 'BANKING_PAY_CURRENT_SELECTION_NEXT_CURSOR_MISSING',
-          message: 'The current Banking Pay preview page did not return a cursor for the next selected-row verification page.',
-          session_id: id,
-          session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
-          row_count: collectedRows.length
-        };
-      }
-      pageCursor = lastNextCursor;
-
-      if (pageIndex === maxPreviewPagesForDraftSelection - 1) {
-        return {
-          ok: false,
-          error_code: 'BANKING_PAY_CURRENT_SELECTION_TOO_MANY_PAGES_TO_VERIFY_CLIENT_SIDE',
-          message: 'The current selected payment rows span too many preview pages to verify safely before draft creation.',
-          session_id: id,
-          session_version: pagePayload.session_version ?? pagePayload.sessionVersion ?? null,
-          page_count: maxPreviewPagesForDraftSelection,
-          row_count: collectedRows.length
-        };
-      }
+      knownCount += Math.max(sectionKnownCount, sectionReturnedCount);
+      returnedCount += sectionReturnedCount;
     }
 
     const rows = collectedRows;
@@ -38717,10 +38736,22 @@ async function bankingPayCreateDraft(input = {}) {
     const selectedSet = new Set(uniqTrimmed(selectedRowIds));
     const scope = normaliseDraftScopeForCreate(scopeValue) || 'ALL';
     const rowsBySection = collectLoadedPreviewRowsBySectionForCreateDraft();
-    const canonicalRows = asArray(rowsBySection.canonical_preview_lines).filter((row) => isPlainObject(row));
-    const eligibleSelectedRows = canonicalRows
+    const selectionAuthorityRows = [];
+    const seenAuthorityRowIds = new Set();
+    for (const row of [
+      ...asArray(rowsBySection.canonical_preview_lines),
+      ...asArray(rowsBySection.blocked_for_pay)
+    ]) {
+      if (!isPlainObject(row) || getCreateDraftEffectivePreviewSection(row) !== 'canonical_preview_lines') continue;
+      const rowId = getPreviewRowId(row);
+      const dedupeKey = rowId || JSON.stringify(row);
+      if (seenAuthorityRowIds.has(dedupeKey)) continue;
+      seenAuthorityRowIds.add(dedupeKey);
+      selectionAuthorityRows.push(row);
+    }
+    const eligibleSelectedRows = selectionAuthorityRows
       .filter((row) => createDraftNodeMatchesActiveFilters(row))
-      .filter((row) => isDraftCreateEligiblePreviewRow(row, canonicalRows))
+      .filter((row) => isDraftCreateEligiblePreviewRow(row, selectionAuthorityRows))
       .filter((row) => {
         const rowId = getPreviewRowId(row);
         return rowId && selectedSet.has(rowId);
