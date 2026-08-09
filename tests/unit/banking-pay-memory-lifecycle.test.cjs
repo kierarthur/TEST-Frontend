@@ -284,6 +284,7 @@ test('successful Banking reauthentication closes the verified child without invo
   assert.match(body, /frame\.isDirty = false/);
   assert.match(body, /frame\._snapshot = null/);
   assert.match(body, /typeof closeModal === 'function'\) closeModal\(\)/);
+  assert.match(body, /restoreParentModalCtx\(\)/);
   assert.doesNotMatch(body, /btnCloseModal/);
   assert.doesNotMatch(body, /\.click\(\)/);
 });
@@ -295,6 +296,8 @@ test('cancellation completion is owned by the open batch watcher, not the progre
   assert.ok(scheduleEnd > scheduleStart);
   const scheduleBody = main.slice(scheduleStart, scheduleEnd);
   assert.match(scheduleBody, /startBankingPayBatchLiveWatch\(state\.payBatchId/);
+  assert.match(scheduleBody, /interval_ms:\s*2000/);
+  assert.match(scheduleBody, /forceCancellationStatusPoll:\s*true/);
   assert.match(scheduleBody, /stopWhenClosed:\s*true/);
   assert.doesNotMatch(scheduleBody, /setTimeout\(/);
   assert.doesNotMatch(scheduleBody, /state\.visible/);
@@ -303,6 +306,18 @@ test('cancellation completion is owned by the open batch watcher, not the progre
   const closeEnd = main.indexOf('\n\nfunction bankingPayCancellationProgressIsFinanciallyTerminal', closeStart);
   const closeBody = main.slice(closeStart, closeEnd);
   assert.doesNotMatch(closeBody, /stopBankingPayBatchLiveWatch/);
+});
+
+test('the batch watcher force-polls an active cancellation until terminal view refresh succeeds', () => {
+  const start = main.indexOf('function startBankingPayBatchLiveWatch(');
+  const end = main.indexOf('\n\nfunction buildBankingPayBatchHeartbeatWatches', start);
+  assert.ok(start >= 0);
+  assert.ok(end > start);
+  const body = main.slice(start, end);
+  assert.match(body, /forceCancellationStatusPoll/);
+  assert.match(body, /forceCancellationRefresh/);
+  assert.match(body, /\{ force: forceCancellationRefresh \}/);
+  assert.match(body, /cancellationState\.financialRefreshDone !== true/);
 });
 
 test('the 45-second heartbeat carries batch watermarks and reuses the same quiet watcher consumer', () => {

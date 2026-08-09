@@ -68,6 +68,8 @@ test('cancellation authentication modals remain interactive under the shared mod
   );
 
   assert.match(reauthModal, /noParentGate: true,\s*forceEdit: true,/);
+  assert.match(reauthModal, /const parentModalCtx/);
+  assert.match(reauthModal, /restoreParentModalCtx/);
   assert.match(passwordModal, /noParentGate: true,\s*forceEdit: true,/);
 });
 

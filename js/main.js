@@ -6994,6 +6994,16 @@ async function openBankingReauthModal(opts = {}) {
       ? 'You won’t be logged out. This verifies the same-week PAYE override before draft creation.'
       : 'You won’t be logged out. This just verifies you before scheduling.');
   const kind = String(opts.kind || 'import-summary-banking-reauth').trim() || 'import-summary-banking-reauth';
+  const parentModalCtx = (() => {
+    try { return window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : null; }
+    catch { return null; }
+  })();
+
+  const restoreParentModalCtx = () => {
+    if (!parentModalCtx) return;
+    try { window.modalCtx = parentModalCtx; } catch {}
+    try { if (typeof modalCtx !== 'undefined') modalCtx = parentModalCtx; } catch {}
+  };
 
   const closeTop = () => {
     try {
@@ -7266,11 +7276,13 @@ async function openBankingReauthModal(opts = {}) {
           if (typeof closeModal === 'function') closeModal();
         }
       } catch {}
+      restoreParentModalCtx();
       resolve(verifiedToken);
     };
 
     const onDismiss = () => {
       detachDelegated();
+      restoreParentModalCtx();
       finish(null);
     };
 
@@ -23650,7 +23662,17 @@ async function syncBankingPayCancellationFromBatchSignal(payBatchId, signal = {}
     }
     if (state.pendingDraftReauthToken) await maybeStartPendingDraftBankingPayCancellation();
     if (nextStatus?.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(nextStatus?.request_status || nextStatus?.status)) {
-      await refreshBankingPayCancellationFinancialViews();
+      try {
+        await refreshBankingPayCancellationFinancialViews();
+        state.financialRefreshError = '';
+      } catch (refreshError) {
+        // The financial cancellation is already terminal.  A stale or closed
+        // parent batch view must not leave the progress window saying that
+        // cancellation itself is still running (or failed).  Keep the batch
+        // watcher alive so the lightweight view refresh can retry.
+        state.financialRefreshDone = false;
+        state.financialRefreshError = String(refreshError?.message || refreshError || 'Batch view refresh is pending.');
+      }
     }
     if (state.visible) renderBankingPayCancellationProgressModal();
     return {
@@ -23681,6 +23703,8 @@ function scheduleBankingPayCancellationProgressPoll(delayMs = null) {
   // therefore never stops cancellation completion tracking.
   return startBankingPayBatchLiveWatch(state.payBatchId, {
     initial_delay_ms: delayMs == null ? 250 : Math.max(0, Number(delayMs) || 0),
+    interval_ms: 2000,
+    forceCancellationStatusPoll: true,
     stopWhenClosed: true
   });
 }
@@ -347684,7 +347708,13 @@ function startBankingPayBatchLiveWatch(batchId, options = {}) {
   };
   root.watchers[id] = watcher;
 
-  const activeIntervalMs = clamp(opts.interval_ms ?? opts.intervalMs, 5000, 4000, 6000);
+  const forceCancellationStatusPoll = opts.forceCancellationStatusPoll === true;
+  const activeIntervalMs = clamp(
+    opts.interval_ms ?? opts.intervalMs,
+    forceCancellationStatusPoll ? 2000 : 5000,
+    forceCancellationStatusPoll ? 1500 : 4000,
+    6000
+  );
   const hiddenIntervalMs = clamp(opts.hidden_interval_ms ?? opts.hiddenIntervalMs, 20000, 15000, 30000);
   const maxBackoffMs = clamp(opts.max_backoff_ms ?? opts.maxBackoffMs, 30000, 10000, 120000);
 
@@ -347749,7 +347779,23 @@ function startBankingPayBatchLiveWatch(batchId, options = {}) {
         changed = true;
       }
       if (typeof syncBankingPayCancellationFromBatchSignal === 'function') {
-        const cancellationResult = await syncBankingPayCancellationFromBatchSignal(id, signal);
+        const cancellationState = typeof bankingPayCancellationProgressState === 'object'
+          ? bankingPayCancellationProgressState
+          : null;
+        const cancellationTerminal = cancellationState
+          ? (cancellationState.status?.financial_complete === true
+            || bankingPayCancellationProgressIsFinanciallyTerminal(
+              cancellationState.status?.request_status || cancellationState.status?.status
+            ))
+          : false;
+        const forceCancellationRefresh = watcher.options?.forceCancellationStatusPoll === true
+          && cancellationState?.payBatchId === id
+          && (!cancellationTerminal || cancellationState.financialRefreshDone !== true);
+        const cancellationResult = await syncBankingPayCancellationFromBatchSignal(
+          id,
+          signal,
+          { force: forceCancellationRefresh }
+        );
         watcher.lastCancellationRefreshResult = cancellationResult && typeof cancellationResult === 'object' ? clone(cancellationResult) : cancellationResult;
         if (cancellationResult?.refreshed === true) changed = true;
       }
