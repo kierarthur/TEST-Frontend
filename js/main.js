@@ -23705,6 +23705,7 @@ function scheduleBankingPayCancellationProgressPoll(delayMs = null) {
     initial_delay_ms: delayMs == null ? 250 : Math.max(0, Number(delayMs) || 0),
     interval_ms: 2000,
     forceCancellationStatusPoll: true,
+    allowAnyBankingModal: true,
     stopWhenClosed: true
   });
 }
@@ -347643,10 +347644,13 @@ function startBankingPayBatchLiveWatch(batchId, options = {}) {
 
   const isModalOpen = () => {
     try {
-      if (typeof opts.isModalOpen === 'function') return opts.isModalOpen(id) !== false;
+      const currentOpts = root?.watchers?.[id]?.options && typeof root.watchers[id].options === 'object'
+        ? root.watchers[id].options
+        : opts;
+      if (typeof currentOpts.isModalOpen === 'function') return currentOpts.isModalOpen(id) !== false;
       const mc = window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : null;
       if (!mc || String(mc.entity || '') !== 'banking') return false;
-      if (opts.allowAnyBankingModal === true) return true;
+      if (currentOpts.allowAnyBankingModal === true) return true;
       const modalBatchId = getModalBatchId();
       return modalBatchId === id;
     } catch {

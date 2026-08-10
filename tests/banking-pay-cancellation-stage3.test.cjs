@@ -174,9 +174,9 @@ test('progress modal obeys server-safe action and polling contracts', () => {
   assert.doesNotMatch(modal, /<strong>Status:<\/strong>|<strong>Stage:<\/strong>|Payment availability/);
   assert.doesNotMatch(modal, /JSON\.stringify\(status|provider_event_id|plan_hash|selection_hash/);
   const polling = slice('function scheduleBankingPayCancellationProgressPoll', 'async function openBankingPayCancellationProgressModal');
-  assert.match(polling, /poll_after_ms/);
-  assert.match(polling, /Math\.min\(5000, Math\.max\(1000/);
-  assert.match(polling, /state\.abortController/);
+  assert.match(polling, /startBankingPayBatchLiveWatch\(state\.payBatchId/);
+  assert.match(polling, /forceCancellationStatusPoll:\s*true/);
+  assert.match(polling, /allowAnyBankingModal:\s*true/);
 });
 
 test('nested payment verification keeps its delegated handlers attached', () => {
@@ -202,8 +202,8 @@ test('successful payment verification closes its clean child without the dirty-f
   assert.match(reauth, /done = true;\s*detachDelegated\(\);/);
   assert.match(reauth, /frame\.isDirty = false;/);
   assert.match(reauth, /frame\._snapshot = null;/);
-  assert.match(reauth, /document\.getElementById\('btnCloseModal'\)/);
-  assert.match(reauth, /closeButton && typeof closeButton\.click === 'function'/);
+  assert.match(reauth, /if \(typeof closeModal === 'function'\) closeModal\(\);/);
+  assert.doesNotMatch(reauth, /finishVerified[\s\S]{0,900}?document\.getElementById\('btnCloseModal'\)/);
   assert.match(reauth, /if \(directToken && j\?\.tfa_required === false\) \{\s*finishVerified\(directToken\);/);
   assert.match(reauth, /const tok2 = String\(j\?\.reauth_token \|\| ''\)\.trim\(\);[\s\S]*?finishVerified\(tok2\);/);
   assert.doesNotMatch(reauth, /finish\(directToken\);\s*closeTop\(\)/);

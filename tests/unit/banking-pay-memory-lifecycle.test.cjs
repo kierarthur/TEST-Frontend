@@ -298,6 +298,7 @@ test('cancellation completion is owned by the open batch watcher, not the progre
   assert.match(scheduleBody, /startBankingPayBatchLiveWatch\(state\.payBatchId/);
   assert.match(scheduleBody, /interval_ms:\s*2000/);
   assert.match(scheduleBody, /forceCancellationStatusPoll:\s*true/);
+  assert.match(scheduleBody, /allowAnyBankingModal:\s*true/);
   assert.match(scheduleBody, /stopWhenClosed:\s*true/);
   assert.doesNotMatch(scheduleBody, /setTimeout\(/);
   assert.doesNotMatch(scheduleBody, /state\.visible/);
@@ -315,6 +316,8 @@ test('the batch watcher force-polls an active cancellation until terminal view r
   assert.ok(end > start);
   const body = main.slice(start, end);
   assert.match(body, /forceCancellationStatusPoll/);
+  assert.match(body, /root\?\.watchers\?\.\[id\]\?\.options/);
+  assert.match(body, /currentOpts\.allowAnyBankingModal/);
   assert.match(body, /forceCancellationRefresh/);
   assert.match(body, /\{ force: forceCancellationRefresh \}/);
   assert.match(body, /cancellationState\.financialRefreshDone !== true/);
