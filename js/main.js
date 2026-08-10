@@ -22702,7 +22702,7 @@ async function bankingPayPaymentCorrectionStatus(correctionRequestId, options = 
   const candidateCounts = isPlainObject(out.candidate_counts) ? out.candidate_counts : {};
   const safeActions = new Set([
     'REAUTHENTICATE', 'AUTHORISE', 'USE_GOLDEN_KEY', 'REJECT',
-    'CANCEL_REQUEST', 'REAUTHORISE_REMAINING', 'RETRY_PLANNING'
+    'CANCEL_REQUEST', 'REAUTHORISE_REMAINING', 'RETRY_PLANNING', 'RETRY_PROCESSING'
   ]);
   const availableActions = Array.isArray(out.available_actions)
     ? Array.from(new Set(out.available_actions.map(upper).filter((action) => safeActions.has(action))))
@@ -23321,8 +23321,8 @@ function renderBankingPayCancellationProgressModal() {
     label: String(item?.label || '').trim() || 'A selected payment needs review.',
     count: Math.max(0, Number(item?.count || 0) || 0)
   }));
-  const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Reauthorise remaining payments', RETRY_PLANNING: 'Continue preparation' };
-  const primaryAction = ['RETRY_PLANNING', 'AUTHORISE', 'USE_GOLDEN_KEY', 'REAUTHORISE_REMAINING']
+  const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Reauthorise remaining payments', RETRY_PLANNING: 'Continue preparation', RETRY_PROCESSING: 'Continue cancellation' };
+  const primaryAction = ['RETRY_PROCESSING', 'RETRY_PLANNING', 'AUTHORISE', 'USE_GOLDEN_KEY', 'REAUTHORISE_REMAINING']
     .find((action) => availableActions.includes(action)) || '';
   const secondaryActions = ['REJECT', 'CANCEL_REQUEST'].filter((action) => availableActions.includes(action));
   const actionButtons = [primaryAction, ...secondaryActions].filter(Boolean)
@@ -23334,11 +23334,13 @@ function renderBankingPayCancellationProgressModal() {
   const needsApproval = availableActions.includes('AUTHORISE') || availableActions.includes('USE_GOLDEN_KEY');
   const waitingForApproval = progressStage === 'AUTHORISATION' && !needsApproval;
   const retryPlanning = availableActions.includes('RETRY_PLANNING');
-  const stillWorking = ((!terminal && !planningReady && !retryPlanning && !needsApproval && !waitingForApproval)
+  const retryProcessing = availableActions.includes('RETRY_PROCESSING');
+  const retryAvailable = retryPlanning || retryProcessing;
+  const stillWorking = ((!terminal && !planningReady && !retryAvailable && !needsApproval && !waitingForApproval)
     || workbenchPending) && !state.error;
   const friendlyTitle = state.error ? 'Cancellation needs attention'
     : (planningReady ? 'Ready to continue'
-      : (retryPlanning ? 'Cancellation preparation needs attention'
+      : (retryAvailable ? (retryProcessing ? 'Cancellation processing needs attention' : 'Cancellation preparation needs attention')
         : (needsApproval ? 'Approval needed'
           : (waitingForApproval ? 'Waiting for approval'
             : (terminalSuccess ? (workbenchPending ? 'Payment cancelled — Banking Pay is updating' : 'Payment cancellation complete')
@@ -23348,7 +23350,9 @@ function renderBankingPayCancellationProgressModal() {
     : '';
   const friendlyMessage = state.error
     || (planningReady ? `${selectedSummary || 'The selected payment'} is ready. Confirm your identity to continue.`
-      : (retryPlanning ? 'No payment was changed. Retry preparation to continue this same cancellation request.'
+      : (retryAvailable ? (retryProcessing
+        ? 'No cancellation work was committed. Continue this same cancellation request safely.'
+        : 'No payment was changed. Retry preparation to continue this same cancellation request.')
         : (needsApproval ? 'Review the selected payment, then approve or reject the cancellation.'
           : (waitingForApproval ? 'An authorised person needs to approve this cancellation.'
             : (terminalSuccess ? (workbenchPending
