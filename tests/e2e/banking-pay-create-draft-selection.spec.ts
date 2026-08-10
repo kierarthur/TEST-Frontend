@@ -60,7 +60,7 @@ async function getReviewedSelectionCount(page: Page) {
 
 async function getKierRecoveryPresentation(page: Page) {
   return await page.evaluate(() => {
-    const collect = (hostId: string) => Array.from(document.querySelectorAll(`#${hostId} tr`))
+    const collect = (hostId: string) => Array.from(document.querySelectorAll(`#${hostId} tr[data-preview-row-id]`))
       .map((row) => String(row.textContent || '').replace(/\s+/g, ' ').trim())
       .filter((text) => text.includes('CCR-00835') && text.includes('OVERPAYMENT RECOVERY'));
     const blockedText = String(document.querySelector('#bankingPayBlockedScrollHost')?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -85,7 +85,7 @@ async function waitForBankingSelectionIdle(page: Page) {
 async function setKierTimesheetSelected(page: Page, selected: boolean) {
   const readyHost = page.locator('#bankingPayReadyScrollHost');
   await expect(readyHost).toBeVisible({ timeout: 60_000 });
-  const row = readyHost.locator('tr')
+  const row = readyHost.locator('tr[data-preview-row-id]')
     .filter({ hasText: 'CCR-00835' })
     .filter({ hasText: 'TIMESHEET PAYMENT' });
   await expect(row).toHaveCount(1);
@@ -106,7 +106,7 @@ async function setKierTimesheetSelected(page: Page, selected: boolean) {
     expect(response.status()).toBe(200);
     await waitForBankingSelectionIdle(page);
     await expect.poll(async () => {
-      const currentRow = page.locator('#bankingPayReadyScrollHost tr')
+      const currentRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
         .filter({ hasText: 'CCR-00835' })
         .filter({ hasText: 'TIMESHEET PAYMENT' });
       if (await currentRow.count() !== 1) return !selected;
@@ -121,7 +121,7 @@ async function setKierTimesheetSelected(page: Page, selected: boolean) {
 }
 
 async function setKierRecoverySelected(page: Page, selected: boolean) {
-  const row = page.locator('#bankingPayReadyScrollHost tr')
+  const row = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
     .filter({ hasText: 'CCR-00835' })
     .filter({ hasText: 'OVERPAYMENT RECOVERY' });
   if (await row.count() !== 1) return;
@@ -140,7 +140,7 @@ async function setKierRecoverySelected(page: Page, selected: boolean) {
   const response = await responsePromise;
   expect(response.status()).toBe(200);
   await waitForBankingSelectionIdle(page);
-  const currentRow = page.locator('#bankingPayReadyScrollHost tr')
+  const currentRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
     .filter({ hasText: 'CCR-00835' })
     .filter({ hasText: 'OVERPAYMENT RECOVERY' });
   const currentCheckbox = currentRow.locator(
@@ -360,6 +360,35 @@ test('a rejected row change reloads server truth and repaints the checkbox', asy
   else await expect(repaintedCheckbox).not.toBeChecked({ timeout: 30_000 });
 });
 
+test('a certified promoted Kier recovery renders as one selectable Ready row', async ({ page }) => {
+  test.setTimeout(120_000);
+
+  const getInterceptedMainUrl = await installLocalMain(page);
+  await openBankingPay(page);
+  expect(new URL(getInterceptedMainUrl()).pathname).toBe('/js/main.js');
+
+  const readyRecoveryRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
+    .filter({ hasText: 'CCR-00835' })
+    .filter({ hasText: 'OVERPAYMENT RECOVERY' });
+  await expect(readyRecoveryRow).toHaveCount(1);
+  const recoveryCheckbox = readyRecoveryRow.locator(
+    'input[type="checkbox"][data-action="banking:pay:togglePreviewRow"], ' +
+    'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"]'
+  );
+  await expect(recoveryCheckbox).toHaveCount(1);
+  await expect(recoveryCheckbox).toBeEnabled();
+
+  const readyRecoverySourceRef = await readyRecoveryRow
+    .locator('[data-source-ref]')
+    .first()
+    .getAttribute('data-source-ref');
+  expect(readyRecoverySourceRef).toBeTruthy();
+  const duplicatedBlockedRecovery = page.locator(
+    `#bankingPayBlockedScrollHost tr[data-preview-row-id] [data-source-ref="${readyRecoverySourceRef}"]`
+  );
+  await expect(duplicatedBlockedRecovery).toHaveCount(0);
+});
+
 test('Kier recovery moves atomically between Ready and Blocked as its £1 headroom is ticked', async ({ page }) => {
   test.setTimeout(300_000);
 
@@ -374,7 +403,7 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
   await openBankingPay(page);
   expect(new URL(getInterceptedMainUrl()).pathname).toBe('/js/main.js');
 
-  const initialTimesheetRow = page.locator('#bankingPayReadyScrollHost tr')
+  const initialTimesheetRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
     .filter({ hasText: 'CCR-00835' })
     .filter({ hasText: 'TIMESHEET PAYMENT' });
   await expect(initialTimesheetRow).toHaveCount(1);
@@ -384,7 +413,7 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
   );
   await expect(initialTimesheetCheckbox).toHaveCount(1);
   const initialTimesheetSelected = await initialTimesheetCheckbox.isChecked();
-  const initialRecoveryRow = page.locator('#bankingPayReadyScrollHost tr')
+  const initialRecoveryRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
     .filter({ hasText: 'CCR-00835' })
     .filter({ hasText: 'OVERPAYMENT RECOVERY' });
   const initialRecoveryCheckbox = initialRecoveryRow.locator(
@@ -435,7 +464,7 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
     expect(state.ready[0]).not.toContain('221.73');
     expect(state.ready[0]).not.toContain('904.87');
 
-    const readyRecoveryRow = page.locator('#bankingPayReadyScrollHost tr')
+    const readyRecoveryRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
       .filter({ hasText: 'CCR-00835' })
       .filter({ hasText: 'OVERPAYMENT RECOVERY' });
     await expect(readyRecoveryRow).toHaveCount(1);
@@ -468,7 +497,7 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
     await recoveryCheckbox.click();
     await expect.poll(() => selectedRowsRequestCount, { timeout: 30_000 }).toBe(requestCountBeforeRecoverySelection + 1);
     await expect.poll(async () => {
-      const currentRow = page.locator('#bankingPayReadyScrollHost tr')
+      const currentRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
         .filter({ hasText: 'CCR-00835' })
         .filter({ hasText: 'OVERPAYMENT RECOVERY' });
       if (await currentRow.count() !== 1) return false;
@@ -484,7 +513,7 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
     expect(state.blocked).toHaveLength(0);
     expect(state.ready[0]).toContain('1.00 will be recovered from the total outstanding amount of 1126.60.');
 
-    const currentRecoveryRow = page.locator('#bankingPayReadyScrollHost tr')
+    const currentRecoveryRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
       .filter({ hasText: 'CCR-00835' })
       .filter({ hasText: 'OVERPAYMENT RECOVERY' });
     const currentRecoveryCheckbox = currentRecoveryRow.locator(
@@ -495,7 +524,7 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
     await currentRecoveryCheckbox.click();
     await expect.poll(() => selectedRowsRequestCount, { timeout: 30_000 }).toBe(requestCountBeforeRecoveryClear + 1);
     await expect.poll(async () => {
-      const currentRow = page.locator('#bankingPayReadyScrollHost tr')
+      const currentRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
         .filter({ hasText: 'CCR-00835' })
         .filter({ hasText: 'OVERPAYMENT RECOVERY' });
       if (await currentRow.count() !== 1) return false;
@@ -506,7 +535,7 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
       return await currentCheckbox.count() === 1 && !(await currentCheckbox.isChecked());
     }, { timeout: 60_000 }).toBe(true);
 
-    const reselectRecoveryRow = page.locator('#bankingPayReadyScrollHost tr')
+    const reselectRecoveryRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
       .filter({ hasText: 'CCR-00835' })
       .filter({ hasText: 'OVERPAYMENT RECOVERY' });
     const reselectRecoveryCheckbox = reselectRecoveryRow.locator(
@@ -517,7 +546,7 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
     await reselectRecoveryCheckbox.click();
     await expect.poll(() => selectedRowsRequestCount, { timeout: 30_000 }).toBe(requestCountBeforeRecoveryReselect + 1);
     await expect.poll(async () => {
-      const currentRow = page.locator('#bankingPayReadyScrollHost tr')
+      const currentRow = page.locator('#bankingPayReadyScrollHost tr[data-preview-row-id]')
         .filter({ hasText: 'CCR-00835' })
         .filter({ hasText: 'OVERPAYMENT RECOVERY' });
       if (await currentRow.count() !== 1) return false;

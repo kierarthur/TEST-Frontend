@@ -34704,7 +34704,9 @@ async function bankingPayCreateDraft(input = {}) {
     const rowJson = isPlainObject(row.row_json) ? row.row_json : (isPlainObject(row.rowJson) ? row.rowJson : {});
     const overlay = isPlainObject(rowJson.selection_recovery_headroom_v1)
       ? rowJson.selection_recovery_headroom_v1
-      : {};
+      : (isPlainObject(row.selection_recovery_headroom_v1)
+          ? row.selection_recovery_headroom_v1
+          : {});
     const candidateId = trimStr(row.candidate_id || row.candidateId || rowJson.candidate_id || rowJson.candidateId || '');
     const payChannel = upperTrim(row.pay_channel || row.payChannel || rowJson.pay_channel || rowJson.current_pay_method || rowJson.candidate_pay_method || '');
     const lineType = upperTrim(row.line_type || row.lineType || rowJson.line_type || rowJson.item_type || '');
@@ -50917,7 +50919,9 @@ const collectPreviewRowIds = (previewLike) => {
     const recoverySelectionOverlay = (() => {
       const overlay = isPlainObject(rowJson.selection_recovery_headroom_v1)
         ? rowJson.selection_recovery_headroom_v1
-        : {};
+        : (isPlainObject(line.selection_recovery_headroom_v1)
+            ? line.selection_recovery_headroom_v1
+            : {});
       const candidateId = trimStr(line.candidate_id || line.candidateId || rowJson.candidate_id || rowJson.candidateId || '');
       const payChannel = upperTrim(line.pay_channel || line.payChannel || rowJson.pay_channel || rowJson.current_pay_method || rowJson.candidate_pay_method || '');
       const lineType = upperTrim(line.line_type || line.lineType || rowJson.line_type || rowJson.item_type || '');

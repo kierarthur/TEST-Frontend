@@ -92,6 +92,20 @@ test('frontend Draft preflight accepts a strictly certified promoted recovery', 
   assert.equal(harness.readOverlay(row).overlay_digest, '0123456789abcdef0123456789abcdef');
 });
 
+test('frontend Draft preflight accepts the same strict certificate after a preview row is flattened', () => {
+  const harness = installHarness();
+  const nestedRow = validPromotedRecovery();
+  const flattenedRow = {
+    ...nestedRow,
+    ...nestedRow.row_json,
+    row_json: undefined,
+    selection_recovery_headroom_v1: nestedRow.row_json.selection_recovery_headroom_v1
+  };
+  assert.equal(harness.effectiveSection(flattenedRow), 'canonical_preview_lines');
+  assert.equal(harness.eligible(flattenedRow, [flattenedRow]), true);
+  assert.equal(harness.readOverlay(flattenedRow).overlay_digest, '0123456789abcdef0123456789abcdef');
+});
+
 test('frontend Draft preflight rejects malformed or economically inconsistent recovery overlays', () => {
   const harness = installHarness();
   for (const mutate of [
