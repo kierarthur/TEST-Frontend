@@ -99,18 +99,18 @@ test('successful selection changes immediately adopt authoritative draft readine
   assert.match(body, /node\.progress_counter_version = progressCounterVersion/);
 });
 
-test('successful selection changes treat a returned selected-row array as complete server authority', () => {
+test('selection changes respect an explicit incomplete server-selected-row set', () => {
   const body = sliceBetween(
     'const applySelectionPayloadSummaryToWizard =',
     'const togglePreviewRowSelection ='
   );
 
   assert.match(body, /Array\.isArray\(payload\.server_selected_preview_row_ids\)/);
-  assert.match(body, /Array\.isArray\(payload\.selected_preview_row_ids\)/);
-  assert.match(
-    body,
-    /workbench\.server_selected_preview_row_ids_provided =[\s\S]*payload\.server_selected_preview_row_ids_provided === true[\s\S]*payload\.selected_preview_row_ids_provided === true[\s\S]*Array\.isArray\(payload\.server_selected_preview_row_ids\)[\s\S]*Array\.isArray\(payload\.selected_preview_row_ids\)/
-  );
+  assert.match(body, /Object\.prototype\.hasOwnProperty\.call\(payload, 'server_selected_preview_row_ids_provided'\)/);
+  assert.match(body, /payload\.server_selected_preview_row_ids_provided === true/);
+  assert.match(body, /Object\.prototype\.hasOwnProperty\.call\(payload, 'selected_preview_row_ids_provided'\)/);
+  assert.match(body, /payload\.selected_preview_row_ids_provided === true/);
+  assert.match(body, /workbench\.server_selected_preview_row_ids_provided = serverSelectedIdsProvided/);
   assert.match(body, /local_selected_preview_row_ids_dirty = false/);
   assert.match(body, /localSelectedPreviewRowIdsDirty = false/);
 });

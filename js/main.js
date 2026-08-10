@@ -95294,8 +95294,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
 
     const applySelectionPayloadSummaryToWizard = (payload) => {
       if (!payload || typeof payload !== 'object') return;
-      const serverSelectedIdsProvided = payload.server_selected_preview_row_ids_provided === true ||
-        Array.isArray(payload.server_selected_preview_row_ids);
+      const serverSelectedIdsProvided = Object.prototype.hasOwnProperty.call(payload, 'server_selected_preview_row_ids_provided')
+        ? payload.server_selected_preview_row_ids_provided === true
+        : (Object.prototype.hasOwnProperty.call(payload, 'selected_preview_row_ids_provided')
+            ? payload.selected_preview_row_ids_provided === true
+            : Array.isArray(payload.server_selected_preview_row_ids));
       const selectedIds = normalizePreviewRowIdArray(
         serverSelectedIdsProvided
           ? payload.server_selected_preview_row_ids
@@ -95343,11 +95346,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           st.pay.draftWizard.workbench.selected_eligible_ready_row_count = Math.max(0, Math.trunc(selectedCount));
         }
         st.pay.draftWizard.workbench.server_selected_preview_row_ids = selectedIds;
-        st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided =
-          payload.server_selected_preview_row_ids_provided === true ||
-          payload.selected_preview_row_ids_provided === true ||
-          Array.isArray(payload.server_selected_preview_row_ids) ||
-          Array.isArray(payload.selected_preview_row_ids);
+        st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided = serverSelectedIdsProvided;
         decisions.server_selected_preview_row_ids = selectedIds;
         decisions.server_selected_preview_row_ids_provided = st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided;
         if (st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided === true) {
@@ -134637,8 +134636,11 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
       throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-    const serverSelectedRowsProvided = payloadObj.server_selected_preview_row_ids_provided === true ||
-      Array.isArray(payloadObj.server_selected_preview_row_ids);
+    const serverSelectedRowsProvided = Object.prototype.hasOwnProperty.call(payloadObj, 'server_selected_preview_row_ids_provided')
+      ? payloadObj.server_selected_preview_row_ids_provided === true
+      : (Object.prototype.hasOwnProperty.call(payloadObj, 'selected_preview_row_ids_provided')
+          ? payloadObj.selected_preview_row_ids_provided === true
+          : Array.isArray(payloadObj.server_selected_preview_row_ids));
     const selectedRows = serverSelectedRowsProvided && Array.isArray(payloadObj.server_selected_preview_row_ids)
       ? payloadObj.server_selected_preview_row_ids
       : (Array.isArray(payloadObj.selected_preview_row_ids)

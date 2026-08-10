@@ -75,8 +75,10 @@ test('Ready selection response adopts the server-owned complete selected ID set'
 
   assert.match(applyBody, /serverSelectedIdsProvided/);
   assert.match(applyBody, /payload\.server_selected_preview_row_ids/);
+  assert.match(applyBody, /Object\.prototype\.hasOwnProperty\.call\(payload, 'server_selected_preview_row_ids_provided'\)/);
   assert.match(applyBody, /payload\.selection_intent_mode/);
   assert.match(requestBody, /serverSelectedRowsProvided/);
+  assert.match(requestBody, /Object\.prototype\.hasOwnProperty\.call\(payloadObj, 'server_selected_preview_row_ids_provided'\)/);
   assert.match(requestBody, /selectionIntentMode === 'IMPLICIT_ALL'/);
   assert.match(requestBody, /selected_preview_row_mode: selectedPreviewRowMode/);
 });
