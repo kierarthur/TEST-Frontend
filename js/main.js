@@ -50866,6 +50866,7 @@ const collectPreviewRowIds = (previewLike) => {
       : (isPlainObject(rowJson.preview_contract)
           ? rowJson.preview_contract
           : (isPlainObject(rowJson.previewContract) ? rowJson.previewContract : {}));
+    const recoverySelectionOverlay = readCreateDraftRecoverySelectionOverlay(line);
 
     const firstDefined = (...values) => {
       for (const value of values) {
@@ -50915,25 +50916,41 @@ const collectPreviewRowIds = (previewLike) => {
       return raw.toUpperCase();
     };
 
-    const sectionSignals = [
-      line.presentation_section,
-      line.presentationSection,
-      rowJson.presentation_section,
-      rowJson.presentationSection,
-      line.section,
-      rowJson.section,
-      line.resolved_section,
-      line.resolvedSection,
-      rowJson.resolved_section,
-      rowJson.resolvedSection,
-      line.requested_section,
-      line.requestedSection,
-      rowJson.requested_section,
-      rowJson.requestedSection,
-      previewContract.section,
-      previewContract.presentation_section,
-      previewContract.presentationSection
-    ].map(normaliseSelectionSection).filter(Boolean);
+    const sectionSignals = (recoverySelectionOverlay
+      ? [
+          recoverySelectionOverlay.effective_section,
+          line.presentation_section,
+          line.presentationSection,
+          rowJson.presentation_section,
+          rowJson.presentationSection,
+          line.resolved_section,
+          line.resolvedSection,
+          rowJson.resolved_section,
+          rowJson.resolvedSection,
+          line.requested_section,
+          line.requestedSection,
+          rowJson.requested_section,
+          rowJson.requestedSection
+        ]
+      : [
+          line.presentation_section,
+          line.presentationSection,
+          rowJson.presentation_section,
+          rowJson.presentationSection,
+          line.section,
+          rowJson.section,
+          line.resolved_section,
+          line.resolvedSection,
+          rowJson.resolved_section,
+          rowJson.resolvedSection,
+          line.requested_section,
+          line.requestedSection,
+          rowJson.requested_section,
+          rowJson.requestedSection,
+          previewContract.section,
+          previewContract.presentation_section,
+          previewContract.presentationSection
+        ]).map(normaliseSelectionSection).filter(Boolean);
 
     const forbiddenSections = new Set(['CASES_RESOLUTIONS', 'BLOCKED_FOR_PAY', 'INTERNAL_ONLY']);
     if (sectionSignals.some((section) => forbiddenSections.has(section))) return false;

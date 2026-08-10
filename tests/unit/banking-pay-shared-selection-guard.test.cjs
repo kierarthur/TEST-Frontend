@@ -144,6 +144,21 @@ test('a resolved Ready row is not hidden by its historical case-readiness label'
   assert.match(body, /if \(forbiddenSections\.has\(readinessState\) && !currentReadyContract\) return false/);
 });
 
+test('a certified promoted recovery uses its effective Ready section for the row checkbox', () => {
+  const body = sliceBetween(
+    'const isPreviewRowSelectionAllowed =',
+    'const allPreviewRowIds ='
+  );
+
+  assert.match(body, /const recoverySelectionOverlay = readCreateDraftRecoverySelectionOverlay\(line\)/);
+  assert.match(body, /recoverySelectionOverlay\.effective_section/);
+  assert.match(
+    body,
+    /const sectionSignals = \(recoverySelectionOverlay[\s\S]*?: \[[\s\S]*?line\.section/,
+    'the physical Blocked partition must remain a veto only when no certified effective overlay exists'
+  );
+});
+
 test('case rows present an expense only as a separate independently selected component', () => {
   const body = sliceBetween(
     'const renderExpenseComponentBreakdown =',
