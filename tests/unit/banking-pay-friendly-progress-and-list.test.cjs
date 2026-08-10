@@ -55,6 +55,15 @@ test('a failed cancellation start remains visible until status changes or the us
   assert.doesNotMatch(cancellation, /Retry cancellation preparation/);
 });
 
+test('cancellation authenticates before the progress modal and uses a calm Workbench-pending state', () => {
+  const cancellation = sliceBetween('const bankingPayCancellationProgressState', 'async function loadCompleteBankingPayCancellationProjectionStatus');
+  assert.match(source, /const requiresCancellationReauth = \['DRAFT_CANCEL', 'PRE_PROVIDER_CANCEL_AND_RECALCULATE'\]/);
+  assert.match(source, /if \(requiresCancellationReauth && !draftReauthToken\) return/);
+  assert.match(cancellation, /Financial cancellation is complete\./);
+  assert.match(cancellation, /Banking Pay is updating quietly in the background\./);
+  assert.doesNotMatch(cancellation, /aria-label="\$\{workbenchPending \? 'Banking Pay update in progress'/);
+});
+
 test('Banking Pay keeps operational diagnostics out of the customer modal and presents a compact create summary', () => {
   const banking = sliceBetween('function renderBankingTab', 'function renderBankingPayTab');
   assert.doesNotMatch(banking, /Test mode: $\{isTestMode \? 'On' : 'Off'\}/);

@@ -320,7 +320,21 @@ test('the batch watcher force-polls an active cancellation until terminal view r
   assert.match(body, /currentOpts\.allowAnyBankingModal/);
   assert.match(body, /forceCancellationRefresh/);
   assert.match(body, /\{ force: forceCancellationRefresh \}/);
+  assert.match(body, /bankingPayCancellationWorkbenchIsCurrent/);
+  assert.match(body, /!cancellationWorkbenchCurrent/);
   assert.match(body, /cancellationState\.financialRefreshDone !== true/);
+});
+
+test('a terminal cancellation reloads the open Current Payment Status child from server truth', () => {
+  const start = main.indexOf('async function refreshBankingPayCancellationFinancialViews()');
+  const end = main.indexOf('\n\nasync function syncBankingPayCancellationFromBatchSignal', start);
+  assert.ok(start >= 0);
+  assert.ok(end > start);
+  const body = main.slice(start, end);
+  assert.match(body, /getBankingPayStage3Context/);
+  assert.match(body, /stage3StatusPageLoaded === true/);
+  assert.match(body, /loadBankingPayStage3StatusPage/);
+  assert.match(body, /resetHistory: true/);
 });
 
 test('the 45-second heartbeat carries batch watermarks and reuses the same quiet watcher consumer', () => {

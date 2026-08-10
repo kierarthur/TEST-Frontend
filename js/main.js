@@ -23219,6 +23219,15 @@ function bankingPayCancellationProgressIsFinanciallyTerminal(status) {
   return ['APPLIED','APPLIED_WITH_BLOCKERS','BLOCKED','FAILED','REJECTED','CANCELLED'].includes(String(status || '').trim().toUpperCase());
 }
 
+function bankingPayCancellationWorkbenchIsCurrent(status) {
+  const source = status && typeof status === 'object' && !Array.isArray(status) ? status : {};
+  const workbench = source.workbench_refresh && typeof source.workbench_refresh === 'object'
+    ? source.workbench_refresh : {};
+  return ['CURRENT', 'NOT_REQUIRED', 'NOT_REQUIRED_NO_SOURCE_SESSION'].includes(String(
+    workbench.status || workbench.workbench_refresh_status || ''
+  ).trim().toUpperCase());
+}
+
 async function startPreparedBankingPayCancellation(ceremonyToken) {
   const state = bankingPayCancellationProgressState;
   const token = String(ceremonyToken || '').trim();
@@ -23370,7 +23379,9 @@ function renderBankingPayCancellationProgressModal() {
       <div style="margin-top:18px;display:grid;gap:14px;">
         <div class="ctms-cancel-message">${enc(friendlyMessage)}</div>
         ${selectedSummary ? `<div class="ctms-cancel-summary">${enc(selectedSummary)}</div>` : ''}
-        ${stillWorking ? `<div><progress class="ctms-cancel-progress" ${progressPercent > 0 && !workbenchPending ? `value="${enc(progressPercent)}"` : ''} max="100" aria-label="${workbenchPending ? 'Banking Pay update in progress' : 'Cancellation in progress'}"></progress><div class="ctms-cancel-mini">${workbenchPending ? 'Financial cancellation complete · updating Banking Pay…' : 'Still working…'}</div></div>` : ''}
+        ${stillWorking ? (workbenchPending
+          ? '<div class="ctms-cancel-summary" role="status"><div>Financial cancellation is complete.</div><div class="ctms-cancel-mini">Banking Pay is updating quietly in the background.</div></div>'
+          : `<div><progress class="ctms-cancel-progress" ${progressPercent > 0 ? `value="${enc(progressPercent)}"` : ''} max="100" aria-label="Cancellation in progress"></progress><div class="ctms-cancel-mini">Still working…</div></div>`) : ''}
         ${(terminal && blockerRows.length) ? `<div class="ctms-cancel-summary"><div style="font-weight:700;">What needs attention</div>${blockerRows.slice(0, 3).map((item) => `<div class="ctms-cancel-mini">${enc(item.label)}${item.count ? ` (${enc(item.count)})` : ''}</div>`).join('')}</div>` : ''}
         ${state.error ? '<div class="ctms-cancel-actions"><button type="button" class="ctms-cancel-btn is-primary" data-banking-pay-cancellation-refresh="1">Refresh status</button></div>' : ''}
         ${planningReady ? '<div class="ctms-cancel-actions"><button type="button" class="ctms-cancel-btn is-primary" data-banking-pay-cancellation-verify="1">Continue to verification</button></div>' : ''}
@@ -23598,6 +23609,20 @@ async function refreshBankingPayCancellationFinancialViews() {
   const batchSummary = await bankingPayBatchGet(state.payBatchId, { detail_mode: 'BOOTSTRAP_ONLY', silent: true, reportError: false, throwOnError: true });
   const paymentStatus = await loadCompleteBankingPayCancellationProjectionStatus(state.payBatchId);
   const projection = applyBankingPayCancellationActiveProjection(paymentStatus, state.payBatchId);
+  const stage3Context = typeof getBankingPayStage3Context === 'function' ? getBankingPayStage3Context() : null;
+  if (stage3Context?.payBatchId === state.payBatchId
+      && stage3Context?.correctionState?.stage3StatusPageLoaded === true
+      && typeof loadBankingPayStage3StatusPage === 'function') {
+    await loadBankingPayStage3StatusPage({
+      silent: true,
+      filter: { ...(stage3Context.correctionState.stage3Filter || {}) },
+      sortKey: stage3Context.correctionState.stage3SortKey || 'STATUS',
+      sortDirection: stage3Context.correctionState.stage3SortDirection || 'ASC',
+      pageSize: stage3Context.correctionState.stage3PageSize || 25,
+      all: stage3Context.correctionState.stage3PageSize === 'ALL',
+      resetHistory: true
+    });
+  }
   if (typeof bankingRerender === 'function') await bankingRerender(null);
   await bankingPayBatchesList({ silent: true, background: true, preservePage: true });
   window.dispatchEvent(new CustomEvent('banking-pay-cancellation-financial-complete', { detail: {
@@ -24665,10 +24690,12 @@ function installBankingPayStage3Handlers() {
           wholeBatch
         });
         if (!confirmation) return;
-        const draftReauthToken = requestedAction === 'DRAFT_CANCEL'
+        const requiresCancellationReauth = ['DRAFT_CANCEL', 'PRE_PROVIDER_CANCEL_AND_RECALCULATE']
+          .includes(requestedAction);
+        const draftReauthToken = requiresCancellationReauth
           ? String(await openBankingReauthModal({ purpose: 'PAYMENT_REVERSAL' }) || '').trim()
           : '';
-        if (requestedAction === 'DRAFT_CANCEL' && !draftReauthToken) return;
+        if (requiresCancellationReauth && !draftReauthToken) return;
         correctionState.planError = '';
         const result = await bankingPayPaymentCorrectionPlan(payBatchId, prepared, { reason: confirmation.reason });
         correctionState.plan = result;
@@ -348017,9 +348044,14 @@ function startBankingPayBatchLiveWatch(batchId, options = {}) {
               cancellationState.status?.request_status || cancellationState.status?.status
             ))
           : false;
+        const cancellationWorkbenchCurrent = cancellationState
+          ? bankingPayCancellationWorkbenchIsCurrent(cancellationState.status)
+          : false;
         const forceCancellationRefresh = watcher.options?.forceCancellationStatusPoll === true
           && cancellationState?.payBatchId === id
-          && (!cancellationTerminal || cancellationState.financialRefreshDone !== true);
+          && (!cancellationTerminal
+            || !cancellationWorkbenchCurrent
+            || cancellationState.financialRefreshDone !== true);
         const cancellationResult = await syncBankingPayCancellationFromBatchSignal(
           id,
           signal,
