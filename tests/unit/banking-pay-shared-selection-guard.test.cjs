@@ -150,7 +150,11 @@ test('a certified promoted recovery uses its effective Ready section for the row
     'const allPreviewRowIds ='
   );
 
-  assert.match(body, /const recoverySelectionOverlay = readCreateDraftRecoverySelectionOverlay\(line\)/);
+  assert.doesNotMatch(body, /readCreateDraftRecoverySelectionOverlay\(line\)/);
+  assert.match(body, /selection_recovery_headroom_v1/);
+  assert.match(body, /overlay\.contract_version\) === 1/);
+  assert.match(body, /overlay\.static_recovery_eligible/);
+  assert.match(body, /overlay\.policy_x_authority_scope/);
   assert.match(body, /recoverySelectionOverlay\.effective_section/);
   assert.match(
     body,

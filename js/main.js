@@ -50866,8 +50866,6 @@ const collectPreviewRowIds = (previewLike) => {
       : (isPlainObject(rowJson.preview_contract)
           ? rowJson.preview_contract
           : (isPlainObject(rowJson.previewContract) ? rowJson.previewContract : {}));
-    const recoverySelectionOverlay = readCreateDraftRecoverySelectionOverlay(line);
-
     const firstDefined = (...values) => {
       for (const value of values) {
         if (value !== undefined && value !== null && !(typeof value === 'string' && trimStr(value) === '')) return value;
@@ -50915,6 +50913,57 @@ const collectPreviewRowIds = (previewLike) => {
       if (internalAliases.has(raw) || internalAliases.has(compact)) return 'INTERNAL_ONLY';
       return raw.toUpperCase();
     };
+
+    const recoverySelectionOverlay = (() => {
+      const overlay = isPlainObject(rowJson.selection_recovery_headroom_v1)
+        ? rowJson.selection_recovery_headroom_v1
+        : {};
+      const candidateId = trimStr(line.candidate_id || line.candidateId || rowJson.candidate_id || rowJson.candidateId || '');
+      const payChannel = upperTrim(line.pay_channel || line.payChannel || rowJson.pay_channel || rowJson.current_pay_method || rowJson.candidate_pay_method || '');
+      const lineType = upperTrim(line.line_type || line.lineType || rowJson.line_type || rowJson.item_type || '');
+      const parseAmount = (value) => {
+        const raw = trimStr(value);
+        if (!/^-?[0-9]+(\.[0-9]+)?$/.test(raw)) return null;
+        return Math.round(Number(raw) * 100) / 100;
+      };
+      const selectedPositiveHeadroom = parseAmount(overlay.selected_positive_headroom_ex_vat);
+      const recoverableAmount = parseAmount(overlay.recoverable_amount_ex_vat);
+      const nominalDueAmount = parseAmount(overlay.nominal_due_amount_ex_vat);
+      const rowAmount = parseAmount(line.amount_ex_vat ?? line.amountExVat ?? line.preview_amount_ex_vat ?? line.previewAmountExVat ?? rowJson.amount_ex_vat);
+      const physicalSection = normaliseSelectionSection(overlay.physical_section || '');
+      const effectiveSection = normaliseSelectionSection(overlay.effective_section || '');
+      const overlayDigest = trimStr(overlay.overlay_digest || '');
+      const staticRecoveryEligible = overlay.static_recovery_eligible === true
+        || ['true', 't', '1', 'yes', 'y', 'on'].includes(trimStr(overlay.static_recovery_eligible).toLowerCase());
+      const recoveryLineTypes = new Set([
+        'OVERPAYMENT_RECOVERY',
+        'MANUAL_DEBT_RECOVERY',
+        'PAYMENT_ADVANCE_REPAYMENT',
+        'LOAN_REPAYMENT'
+      ]);
+      const valid = Number(overlay.contract_version) === 1
+        && !!candidateId
+        && trimStr(overlay.candidate_id || '') === candidateId
+        && ['PAYE', 'UMBRELLA'].includes(payChannel)
+        && upperTrim(overlay.pay_channel || '') === payChannel
+        && recoveryLineTypes.has(lineType)
+        && physicalSection === 'BLOCKED_FOR_PAY'
+        && effectiveSection === 'CANONICAL_PREVIEW_LINES'
+        && selectedPositiveHeadroom !== null
+        && selectedPositiveHeadroom > 0
+        && recoverableAmount !== null
+        && recoverableAmount > 0
+        && recoverableAmount <= selectedPositiveHeadroom
+        && nominalDueAmount !== null
+        && nominalDueAmount >= recoverableAmount
+        && rowAmount !== null
+        && rowAmount < 0
+        && Math.round(Math.abs(rowAmount) * 100) === Math.round(recoverableAmount * 100)
+        && staticRecoveryEligible
+        && /^[0-9a-f]{32}$/i.test(overlayDigest)
+        && upperTrim(overlay.policy_x_authority_scope || '') === 'PRE_DRAFT_LIVE_TRUTH';
+      return valid ? { effective_section: effectiveSection } : null;
+    })();
 
     const sectionSignals = (recoverySelectionOverlay
       ? [
