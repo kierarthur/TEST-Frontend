@@ -23293,6 +23293,11 @@ function renderBankingPayCancellationProgressModal() {
   const availableActions = Array.isArray(status.available_actions) ? status.available_actions.map((value) => String(value || '').trim().toUpperCase()) : [];
   const planningReady = !state.error && availableActions.includes('REAUTHENTICATE');
   const progress = status.progress && typeof status.progress === 'object' ? status.progress : {};
+  const workbenchRefresh = status.workbench_refresh && typeof status.workbench_refresh === 'object'
+    ? status.workbench_refresh : {};
+  const workbenchRefreshStatus = String(
+    workbenchRefresh.status || workbenchRefresh.workbench_refresh_status || ''
+  ).trim().toUpperCase();
   const selected = Number(status.selected_count ?? progress.selected_count ?? counts.total ?? 0) || 0;
   const completed = Number(status.completed_count ?? progress.completed_count ?? 0) || 0;
   const applied = Number(status.applied_count ?? progress.applied_count ?? counts.applied ?? 0) || 0;
@@ -23315,16 +23320,19 @@ function renderBankingPayCancellationProgressModal() {
     .map((action) => `<button type="button" class="ctms-cancel-btn ${action === primaryAction ? 'is-primary' : 'is-danger'}" data-banking-pay-cancellation-auth-action="${enc(action)}">${enc(authActionLabels[action])}</button>`)
     .join('');
   const terminalSuccess = terminal && (applied > 0 || ['APPLIED', 'APPLIED_WITH_BLOCKERS'].includes(requestStatus));
+  const workbenchCurrent = ['CURRENT', 'NOT_REQUIRED', 'NOT_REQUIRED_NO_SOURCE_SESSION'].includes(workbenchRefreshStatus);
+  const workbenchPending = terminalSuccess && !workbenchCurrent;
   const needsApproval = availableActions.includes('AUTHORISE') || availableActions.includes('USE_GOLDEN_KEY');
   const waitingForApproval = progressStage === 'AUTHORISATION' && !needsApproval;
   const retryPlanning = availableActions.includes('RETRY_PLANNING');
-  const stillWorking = !terminal && !planningReady && !retryPlanning && !needsApproval && !waitingForApproval && !state.error;
+  const stillWorking = ((!terminal && !planningReady && !retryPlanning && !needsApproval && !waitingForApproval)
+    || workbenchPending) && !state.error;
   const friendlyTitle = state.error ? 'Cancellation needs attention'
     : (planningReady ? 'Ready to continue'
       : (retryPlanning ? 'Cancellation preparation needs attention'
         : (needsApproval ? 'Approval needed'
           : (waitingForApproval ? 'Waiting for approval'
-            : (terminalSuccess ? 'Payment cancellation complete'
+            : (terminalSuccess ? (workbenchPending ? 'Payment cancelled — Banking Pay is updating' : 'Payment cancellation complete')
               : (terminal ? 'Cancellation ended' : processingLabel))))));
   const selectedSummary = selected > 0
     ? `${selected} payment${selected === 1 ? '' : 's'} · ${formatPence(status.selected_amount_pence)}`
@@ -23334,7 +23342,9 @@ function renderBankingPayCancellationProgressModal() {
       : (retryPlanning ? 'No payment was changed. Retry preparation to continue this same cancellation request.'
         : (needsApproval ? 'Review the selected payment, then approve or reject the cancellation.'
           : (waitingForApproval ? 'An authorised person needs to approve this cancellation.'
-            : (terminalSuccess ? `Done. ${applied || selected} payment${(applied || selected) === 1 ? '' : 's'} totalling ${formatPence(status.removed_amount_pence)} ${((applied || selected) === 1) ? 'was' : 'were'} removed from this batch.`
+            : (terminalSuccess ? (workbenchPending
+              ? `${applied || selected} payment${(applied || selected) === 1 ? '' : 's'} ${((applied || selected) === 1) ? 'has' : 'have'} been cancelled. Banking Pay is now restoring the current Ready to Pay view; you can close this window safely.`
+              : `Done. ${applied || selected} payment${(applied || selected) === 1 ? '' : 's'} totalling ${formatPence(status.removed_amount_pence)} ${((applied || selected) === 1) ? 'was' : 'were'} removed from this batch.`)
               : (terminal ? (String(status.user_message || '').trim() || 'No payment was changed. Review the issue below.')
                 : 'CloudTMS is working safely in the background. You can close this window and come back later.'))))));
   root.innerHTML = `
@@ -23360,7 +23370,7 @@ function renderBankingPayCancellationProgressModal() {
       <div style="margin-top:18px;display:grid;gap:14px;">
         <div class="ctms-cancel-message">${enc(friendlyMessage)}</div>
         ${selectedSummary ? `<div class="ctms-cancel-summary">${enc(selectedSummary)}</div>` : ''}
-        ${stillWorking ? `<div><progress class="ctms-cancel-progress" ${progressPercent > 0 ? `value="${enc(progressPercent)}"` : ''} max="100" aria-label="Cancellation in progress"></progress><div class="ctms-cancel-mini">Still working…</div></div>` : ''}
+        ${stillWorking ? `<div><progress class="ctms-cancel-progress" ${progressPercent > 0 && !workbenchPending ? `value="${enc(progressPercent)}"` : ''} max="100" aria-label="${workbenchPending ? 'Banking Pay update in progress' : 'Cancellation in progress'}"></progress><div class="ctms-cancel-mini">${workbenchPending ? 'Financial cancellation complete · updating Banking Pay…' : 'Still working…'}</div></div>` : ''}
         ${(terminal && blockerRows.length) ? `<div class="ctms-cancel-summary"><div style="font-weight:700;">What needs attention</div>${blockerRows.slice(0, 3).map((item) => `<div class="ctms-cancel-mini">${enc(item.label)}${item.count ? ` (${enc(item.count)})` : ''}</div>`).join('')}</div>` : ''}
         ${state.error ? '<div class="ctms-cancel-actions"><button type="button" class="ctms-cancel-btn is-primary" data-banking-pay-cancellation-refresh="1">Refresh status</button></div>' : ''}
         ${planningReady ? '<div class="ctms-cancel-actions"><button type="button" class="ctms-cancel-btn is-primary" data-banking-pay-cancellation-verify="1">Continue to verification</button></div>' : ''}
@@ -219741,6 +219751,9 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
   const phaseLabel = trimStr(src.phase_label || src.phaseLabel || progress.phase_label || phaseLabels[phase] || phase.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()));
   let title = trimStr(src.title || progress.title || operationTitles[operationType] || 'Processing payment operation');
   let statusText = trimStr(src.status_text || src.statusText || progress.status_text || progress.message || src.message || (notClaimed ? 'Another operation step is finishing. CloudTMS will retry shortly.' : (waiting ? `${phaseLabel}...` : phaseLabel)));
+  if (operationType === 'DRAFT_CREATE' && terminal !== true && displayPercent >= 95) {
+    statusText = 'Finalising Draft and checking payment evidence…';
+  }
   if (reviewRequired && providerSubmitDiagnosticEvidencePresent && providerSubmitReviewText) statusText = providerSubmitReviewText;
 
   if (isRetryUnsentOperation) {
