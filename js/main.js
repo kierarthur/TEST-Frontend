@@ -50948,7 +50948,7 @@ const collectPreviewRowIds = (previewLike) => {
         && upperTrim(overlay.pay_channel || '') === payChannel
         && recoveryLineTypes.has(lineType)
         && physicalSection === 'BLOCKED_FOR_PAY'
-        && effectiveSection === 'CANONICAL_PREVIEW_LINES'
+        && effectiveSection === 'READY_TO_PAY'
         && selectedPositiveHeadroom !== null
         && selectedPositiveHeadroom > 0
         && recoverableAmount !== null
