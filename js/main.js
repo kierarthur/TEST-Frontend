@@ -22946,6 +22946,70 @@ function resetBankingPayStage3Selection(correctionState) {
   return state.stage3Selection;
 }
 
+function bankingPayCandidateAwaitingPayeNetAmount(batchPayload, candidateRow) {
+  const root = batchPayload && typeof batchPayload === 'object' && !Array.isArray(batchPayload) ? batchPayload : {};
+  const batch = root.batch && typeof root.batch === 'object' && !Array.isArray(root.batch) ? root.batch : {};
+  const row = candidateRow && typeof candidateRow === 'object' && !Array.isArray(candidateRow) ? candidateRow : {};
+  const text = (value) => String(value == null ? '' : value).trim();
+  const upper = (value) => text(value).toUpperCase();
+  const rowCandidateId = text(row.candidate_id || row.candidateId);
+  const rowBatchCandidateId = text(row.pay_batch_candidate_id || row.payBatchCandidateId || row.candidate_token || row.candidateToken);
+  const batchKind = upper(root.batch_kind || root.batchKind || batch.batch_kind || batch.batchKind || batch.batch_kind_fixed || batch.batchKindFixed);
+  const payChannel = upper(row.pay_channel || row.payChannel || (batchKind === 'PAYE' ? 'PAYE' : ''));
+  if (payChannel !== 'PAYE') return false;
+
+  const candidates = [
+    root.candidates,
+    batch.candidates,
+    root.paye_candidates,
+    root.payeCandidates,
+    batch.paye_candidates,
+    batch.payeCandidates,
+    root.active_paye_schedule_rows,
+    root.activePayeScheduleRows
+  ].flatMap((value) => Array.isArray(value) ? value : []);
+  const matches = candidates.filter((candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
+    const candidateId = text(candidate.candidate_id || candidate.candidateId || candidate.id);
+    const batchCandidateId = text(candidate.pay_batch_candidate_id || candidate.payBatchCandidateId);
+    return (rowBatchCandidateId && batchCandidateId === rowBatchCandidateId)
+      || (rowCandidateId && candidateId === rowCandidateId);
+  });
+  const authorities = [row, ...matches];
+  const hasValue = (value) => value !== null && value !== undefined && text(value) !== '';
+  const hasExplicitNet = authorities.some((authority) => {
+    const latest = authority?.latest_paye_net_input && typeof authority.latest_paye_net_input === 'object'
+      ? authority.latest_paye_net_input
+      : (authority?.latestPayeNetInput && typeof authority.latestPayeNetInput === 'object' ? authority.latestPayeNetInput : null);
+    return hasValue(authority?.paye_net_amount)
+      || hasValue(authority?.payeNetAmount)
+      || hasValue(latest?.net_amount)
+      || hasValue(latest?.netAmount);
+  });
+  if (hasExplicitNet) return false;
+
+  const awaitingFlag = authorities.some((authority) => authority?.awaiting_net_amount === true
+    || authority?.awaitingNetAmount === true
+    || authority?.candidate_awaiting_net_amount === true
+    || authority?.candidateAwaitingNetAmount === true
+    || authority?.deductions_summary?.awaitingNet === true
+    || authority?.deductions_summary?.awaiting_net === true
+    || authority?.deductionsSummary?.awaitingNet === true);
+  const awaitingState = authorities.some((authority) => ['AWAITING_NET', 'AWAITING_NET_AMOUNT', 'AWAITING_PAYE_NET', 'AWAITING_PAYE_NET_AMOUNT', 'PENDING_NET'].includes(upper(authority?.paye_state || authority?.payeState)));
+  if (awaitingFlag || awaitingState) return true;
+
+  const missingCount = [
+    root.global_missing_explicit_paye_input_count,
+    root.globalMissingExplicitPayeInputCount,
+    root.missing_explicit_paye_input_count,
+    root.missingExplicitPayeInputCount,
+    batch.global_missing_explicit_paye_input_count,
+    batch.globalMissingExplicitPayeInputCount
+  ].map(Number).find((value) => Number.isFinite(value));
+  const batchStatus = upper(batch.status || root.status);
+  return ['DRAFT', 'DRAFT_CREATED'].includes(batchStatus) && Number(missingCount) > 0;
+}
+
 function normaliseBankingPayStage3StatusRow(row, correctionState) {
   const source = row && typeof row === 'object' && !Array.isArray(row) ? row : {};
   const selection = ensureBankingPayStage3SelectionState(correctionState);
@@ -24507,11 +24571,15 @@ function renderBankingPayStage3StatusPanel(batchPayload, correctionState) {
     const historicalAmountHtml = row.payChannel === 'PAYE'
       ? `<div style="display:grid;gap:2px;text-align:right;"><strong>${enc(`Gross/base ${fmtAmount(row.cancelledGrossBaseAmountPence)}`)}</strong><span class="mini">${enc(`Net ${historicalVerb.toLowerCase()} ${fmtAmount(row.cancelledBankAmountPence)}`)}</span></div>`
       : `<div style="display:grid;gap:2px;text-align:right;"><strong>${enc(fmtAmount(row.cancelledPayableAmountPence || row.cancelledBankAmountPence))}</strong><span class="mini">${enc(`${historicalVerb} amount`)}</span></div>`;
+    const awaitingPayeNetAmount = !historicalRemoval && bankingPayCandidateAwaitingPayeNetAmount(batchPayload, row);
+    const currentAmountHtml = awaitingPayeNetAmount
+      ? '<span class="mini" data-banking-pay-awaiting-paye-net="1">Awaiting PAYE net amount</span>'
+      : enc(fmtAmount(row.paymentAmountPence));
     return `<tr${selected ? ' class="payment-issue-row-selected"' : ''}>
       <td>${selectable ? `<input type="checkbox" data-banking-pay-stage3-action="toggle-row" data-candidate-token="${enc(token)}"${selected ? ' checked' : ''} aria-label="Select ${enc(row.candidateName || 'payment')}">` : ''}</td>
       <td>${enc(row.statusLabel || '')}</td>
       <td>${enc(row.candidateName || '')}${row.payeeName ? `<div class="mini">${enc(row.payeeName)}</div>` : ''}</td>
-      <td class="mono" style="text-align:right;">${historicalRemoval ? historicalAmountHtml : enc(fmtAmount(row.paymentAmountPence))}</td>
+      <td class="mono" style="text-align:right;">${historicalRemoval ? historicalAmountHtml : currentAmountHtml}</td>
       <td>${enc(actions.map((action) => actionLabels[action] || action).join(' · '))}</td>
       <td>${detail ? enc(detail) : '<span class="mini">No action blocker</span>'}</td>
     </tr>`;
@@ -75389,6 +75457,21 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       throw new Error('The saved PAYE amounts were not confirmed by the complete payment projection.');
     }
 
+    // The complete batch projection and the paged Current Payment Status view
+    // have independent caches. PAYE net entry changes the amount displayed by
+    // both, so refresh the already-open status page before reporting success.
+    markChildSectionStale('current_payment_status', 'paye-net-mutation', { preserveDataRows: true });
+    const refreshedPaymentStatus = await loadChildSectionPage('current_payment_status', {
+      reset: true,
+      silent: true,
+      forceRetry: true,
+      reason: 'paye-net-mutation',
+      userInitiated: false
+    });
+    if (String(refreshedPaymentStatus?.error || '').trim()) {
+      throw new Error(String(refreshedPaymentStatus.error).trim());
+    }
+
     const expectedCandidates = Array.isArray(mutationResult?.candidate_summaries)
       ? mutationResult.candidate_summaries
       : (Array.isArray(mutationResult?.import?.candidate_summaries) ? mutationResult.import.candidate_summaries : []);
@@ -81568,10 +81651,50 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
           ui.expanded[key] = !currentlyExpanded;
 
           if (currentlyExpanded) {
+            ui.candidateDetailExpandAllByKey = (
+              ui.candidateDetailExpandAllByKey
+              && typeof ui.candidateDetailExpandAllByKey === 'object'
+              && !Array.isArray(ui.candidateDetailExpandAllByKey)
+            ) ? ui.candidateDetailExpandAllByKey : {};
+            ui.candidateDetailExpandAllByKey[key] = false;
             await rerenderChild();
             return;
           }
 
+          const loadPromise = candidateDetailCacheIsCurrent(key)
+            ? null
+            : loadCandidateDetailForIdentity(identity, { force: false, userInitiated: true });
+          await rerenderChild();
+          if (loadPromise) await loadPromise;
+          return;
+        }
+
+        if (act === 'banking:pay:child:toggleCandidateTree') {
+          const identity = candidateDetailIdentityFromActionElement(el);
+          const key = String(identity.expansionKey || '').trim();
+          if (!key) return;
+          const ui = ensureCandidateDetailUiState();
+          ui.expanded = (ui.expanded && typeof ui.expanded === 'object' && !Array.isArray(ui.expanded)) ? ui.expanded : {};
+          ui.candidateDetailExpandAllByKey = (
+            ui.candidateDetailExpandAllByKey
+            && typeof ui.candidateDetailExpandAllByKey === 'object'
+            && !Array.isArray(ui.candidateDetailExpandAllByKey)
+          ) ? ui.candidateDetailExpandAllByKey : {};
+          const fullyExpanded = ui.expanded[key] === true && ui.candidateDetailExpandAllByKey[key] === true;
+          ui.expanded[key] = !fullyExpanded;
+          ui.candidateDetailExpandAllByKey[key] = !fullyExpanded;
+          ui.candidateDetailExpandedByKey = (
+            ui.candidateDetailExpandedByKey
+            && typeof ui.candidateDetailExpandedByKey === 'object'
+            && !Array.isArray(ui.candidateDetailExpandedByKey)
+          ) ? ui.candidateDetailExpandedByKey : {};
+          if (fullyExpanded) {
+            for (const detailKey of Object.keys(ui.candidateDetailExpandedByKey)) {
+              if (detailKey === key || detailKey.startsWith(`${key}|`)) delete ui.candidateDetailExpandedByKey[detailKey];
+            }
+            await rerenderChild();
+            return;
+          }
           const loadPromise = candidateDetailCacheIsCurrent(key)
             ? null
             : loadCandidateDetailForIdentity(identity, { force: false, userInitiated: true });
@@ -81589,6 +81712,13 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
             && typeof ui.candidateDetailExpandedByKey === 'object'
             && !Array.isArray(ui.candidateDetailExpandedByKey)
           ) ? ui.candidateDetailExpandedByKey : {};
+          ui.candidateDetailExpandAllByKey = (
+            ui.candidateDetailExpandAllByKey
+            && typeof ui.candidateDetailExpandAllByKey === 'object'
+            && !Array.isArray(ui.candidateDetailExpandAllByKey)
+          ) ? ui.candidateDetailExpandAllByKey : {};
+          const candidateKey = detailKey.split('|')[0];
+          if (candidateKey) ui.candidateDetailExpandAllByKey[candidateKey] = false;
           ui.candidateDetailExpandedByKey[detailKey] = ui.candidateDetailExpandedByKey[detailKey] !== true;
           await rerenderChild();
           return;
@@ -83969,7 +84099,11 @@ function renderBankingPayBatchChildModalOverview() {
       c.finalPayable,
       gross
     ) ?? 0;
-    return { gross, overpayment, loan, finalPayable };
+    const awaitingPayeNetAmount = bankingPayCandidateAwaitingPayeNetAmount(data, {
+      ...c,
+      pay_channel: c.pay_channel || c.payChannel || (batchKind === 'PAYE' ? 'PAYE' : '')
+    });
+    return { gross, overpayment, loan, finalPayable, awaitingPayeNetAmount };
   };
 
   const candidateHasPaymentIssue = (candidate) => {
@@ -84212,7 +84346,20 @@ function renderBankingPayBatchChildModalOverview() {
     return summary;
   })();
 
-  const renderPaymentSummaryHtml = () => `
+  const draftAwaitingPayeNetCount = overviewIsPreSubmissionDraft
+    ? candidateViewModels.filter((row) => row.financials.awaitingPayeNetAmount === true).length
+    : 0;
+
+  const renderPaymentSummaryHtml = () => overviewIsPreSubmissionDraft ? `
+    <div class="card" style="padding:10px;">
+      <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Payment status</div>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+        ${draftAwaitingPayeNetCount > 0
+          ? `<span class="mini" data-banking-pay-draft-awaiting-paye-net="1">PAYE net amount required: <span class="mono">${enc(String(draftAwaitingPayeNetCount))}</span></span>`
+          : `<span class="mini" data-banking-pay-draft-ready-to-execute="1">Ready to execute: <span class="mono">${enc(String(paymentSummary.notSentCount))}</span> · <span class="mono">£${enc(fmtMoney(paymentSummary.notSentAmount))}</span></span>`}
+      </div>
+    </div>
+  ` : `
     <div class="card" style="padding:10px;">
       <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Payment status</div>
       <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
@@ -85496,6 +85643,7 @@ function renderBankingPayBatchChildModalOverview() {
           activeItemCount: 0,
           activeProjection: false,
           paymentDisplayState: '',
+          awaitingPayeNetAmount: false,
           newestWeekEnding: '',
           timesheetIds: new Set()
         };
@@ -85509,6 +85657,10 @@ function renderBankingPayBatchChildModalOverview() {
       summary.activeProjection = summary.activeProjection || isActiveProjectionRow;
       summary.activeItemCount += Math.max(0, Number(row.active_item_count || 0) || 0);
       if (!summary.paymentDisplayState) summary.paymentDisplayState = firstText(row.payment_display_state, row.display_status);
+      summary.awaitingPayeNetAmount = summary.awaitingPayeNetAmount || bankingPayCandidateAwaitingPayeNetAmount(data, {
+        ...row,
+        pay_channel: row.pay_channel || row.payChannel || (batchKind === 'PAYE' ? 'PAYE' : '')
+      });
       summary.amount += isActiveProjectionRow
         ? ((Number(row.active_payment_amount_pence || 0) || 0) / 100)
         : (Number(frozenAmountForBatchKind(row)) || 0);
@@ -85948,6 +86100,7 @@ function renderBankingPayBatchChildModalOverview() {
     const groupedDetail = groupCandidateDetailItems(detailItems);
     const groups = asArr(groupedDetail.weeks);
     const groupExpansionState = asObj(candidateDetailUi.candidateDetailExpandedByKey) || {};
+    const expandWholeTree = asObj(candidateDetailUi.candidateDetailExpandAllByKey)?.[summary.key] === true;
     const detailExpansionKey = (...parts) => [summary.key, ...parts].map((part) => String(part ?? '')).join('|');
     const detailToggleButton = (key, isExpanded, label) => `
       <button
@@ -86036,7 +86189,7 @@ function renderBankingPayBatchChildModalOverview() {
           ${groups.map((weekGroup) => {
             const weekLabel = weekGroup.weekEnding ? `Week ending ${formatIsoToUkLocal(weekGroup.weekEnding)}` : 'Week ending not recorded';
             const weekKey = detailExpansionKey('week', weekGroup.weekEnding || 'not-recorded');
-            const weekExpanded = groupExpansionState[weekKey] === true;
+            const weekExpanded = expandWholeTree || groupExpansionState[weekKey] === true;
             return `
               <section style="flex:0 0 auto;border:1px solid var(--line);border-radius:9px;background:var(--panel,#fff);overflow:hidden;">
                 <div class="mini" style="padding:7px 9px;background:rgba(0,0,0,.025);display:flex;align-items:center;gap:8px;">
@@ -86047,7 +86200,7 @@ function renderBankingPayBatchChildModalOverview() {
                 </div>
                 ${weekExpanded ? weekGroup.clients.map((clientGroup) => {
                   const clientKey = detailExpansionKey('week', weekGroup.weekEnding || 'not-recorded', 'client', clientGroup.clientName);
-                  const clientExpanded = groupExpansionState[clientKey] === true;
+                  const clientExpanded = expandWholeTree || groupExpansionState[clientKey] === true;
                   return `
                     <div style="border-top:1px solid var(--line);">
                       <div class="mini" style="padding:7px 9px;display:flex;align-items:center;gap:8px;">
@@ -86065,7 +86218,7 @@ function renderBankingPayBatchChildModalOverview() {
                             ? `Timesheet ${timesheetIndex + 1}`
                             : baseTimesheetLabel;
                           const timesheetKey = detailExpansionKey('week', weekGroup.weekEnding || 'not-recorded', 'client', clientGroup.clientName, 'timesheet', timesheetGroup.timesheetId || timesheetGroup.sortStableId || timesheetIndex);
-                          const timesheetExpanded = groupExpansionState[timesheetKey] === true;
+                          const timesheetExpanded = expandWholeTree || groupExpansionState[timesheetKey] === true;
                           const timesheetButton = timesheetGroup.timesheetId ? `
                             <button
                               type="button"
@@ -86105,7 +86258,7 @@ function renderBankingPayBatchChildModalOverview() {
           }).join('')}
           ${asArr(groupedDetail.adjustments).length ? (() => {
             const adjustmentKey = detailExpansionKey('adjustments-and-recoveries');
-            const adjustmentExpanded = groupExpansionState[adjustmentKey] === true;
+            const adjustmentExpanded = expandWholeTree || groupExpansionState[adjustmentKey] === true;
             const adjustmentRows = asArr(groupedDetail.adjustments).flatMap((entry) => detailLineRowsForItem(entry.item, entry.itemIndex));
             return `
               <section style="flex:0 0 auto;border:1px solid var(--line);border-radius:9px;background:var(--panel,#fff);overflow:hidden;">
@@ -86182,10 +86335,26 @@ function renderBankingPayBatchChildModalOverview() {
                 style="min-width:28px;padding:0 7px;line-height:1.35;"
               >${expandedCandidate ? '−' : '+'}</button>
             ` : '';
+            const wholeTreeExpanded = expandedCandidate && asObj(candidateDetailUi.candidateDetailExpandAllByKey)?.[summary.key] === true;
+            const wholeTreeButton = summary.payBatchCandidateId && summary.candidateId ? `
+              <button
+                type="button"
+                class="btn btn-outline"
+                data-action="banking:pay:child:toggleCandidateTree"
+                data-candidate-id="${enc(summary.key)}"
+                data-pay-batch-candidate-id="${enc(summary.payBatchCandidateId)}"
+                data-actual-candidate-id="${enc(summary.candidateId)}"
+                aria-expanded="${wholeTreeExpanded ? 'true' : 'false'}"
+                aria-label="${wholeTreeExpanded ? 'Collapse' : 'Expand'} every payment detail for ${enc(summary.candidateName)}"
+                title="${wholeTreeExpanded ? 'Collapse' : 'Expand'} the entire candidate tree"
+                style="min-width:40px;height:34px;padding:0 10px;line-height:1;font-size:21px;font-weight:950;flex:0 0 auto;"
+              >${wholeTreeExpanded ? '−' : '+'}</button>
+            ` : '';
             return `
               <tr>
                 <td style="max-width:390px;">
                   <div style="display:flex;align-items:center;gap:5px;white-space:nowrap;min-width:0;overflow:hidden;">
+                    ${wholeTreeButton}
                     ${expansionButton}
                     ${candidateTimesheetButton}
                     <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;">${enc(summary.candidateName)}</span>
@@ -86195,7 +86364,9 @@ function renderBankingPayBatchChildModalOverview() {
                 </td>
                 <td class="mini" style="white-space:nowrap;">${enc(detailText)}</td>
                 <td><span class="pill">${enc(contextText)}</span></td>
-                <td class="mono" style="text-align:right;">${enc(formatMaybeMoney(summary.amount, overviewItemsLoading))}</td>
+                <td class="mono" style="text-align:right;">${summary.awaitingPayeNetAmount
+                  ? '<span class="mini" data-banking-pay-awaiting-paye-net="1">Awaiting PAYE net amount</span>'
+                  : enc(formatMaybeMoney(summary.amount, overviewItemsLoading))}</td>
               </tr>
               ${expandedCandidate ? `<tr><td colspan="4" style="padding:0;">${renderCandidateDetail(summary)}</td></tr>` : ''}
             `;
@@ -88497,6 +88668,40 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
 
     const paymentStatus = await loadCompleteBankingPayCancellationProjectionStatus(id);
     const projection = applyBankingPayCancellationActiveProjection(paymentStatus, id);
+    if (childState && String(childState.batchId || '').trim() === id) {
+      const freshRows = Array.isArray(paymentStatus?.rows) ? paymentStatus.rows.slice() : [];
+      const currentSection = childState.sections?.current_payment_status && typeof childState.sections.current_payment_status === 'object'
+        ? childState.sections.current_payment_status
+        : {};
+      const refreshedSection = {
+        ...currentSection,
+        ...paymentStatus,
+        rows: freshRows,
+        items: freshRows,
+        loaded: true,
+        loading: false,
+        stale: false,
+        error: '',
+        stale_reason: '',
+        staleReason: '',
+        in_flight_key: '',
+        inFlightKey: '',
+        pending_request_key: '',
+        pendingRequestKey: ''
+      };
+      childState.sections = childState.sections && typeof childState.sections === 'object' && !Array.isArray(childState.sections) ? childState.sections : {};
+      childState.sectionPages = childState.sectionPages && typeof childState.sectionPages === 'object' && !Array.isArray(childState.sectionPages) ? childState.sectionPages : {};
+      childState.sections.current_payment_status = refreshedSection;
+      childState.sectionPages.current_payment_status = refreshedSection;
+      childState.lazy_sections = childState.sections;
+      childState.correction = childState.correction && typeof childState.correction === 'object' && !Array.isArray(childState.correction) ? childState.correction : {};
+      if (typeof applyBankingPayStage3StatusPage === 'function') {
+        applyBankingPayStage3StatusPage(childState.correction, paymentStatus, {
+          resetWindow: true,
+          resetHistory: true
+        });
+      }
+    }
 
     try {
       if (typeof bankingPayBatchesList === 'function') {

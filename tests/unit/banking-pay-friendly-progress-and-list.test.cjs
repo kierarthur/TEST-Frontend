@@ -90,3 +90,27 @@ test('Current Payment Status presents cancelled PAYE gross and net and one Umbre
   assert.match(panel, /cancelledPayableAmountPence/);
   assert.match(panel, /cancelledBankAmountPence/);
 });
+
+test('Draft PAYE amounts distinguish missing net input from a real zero bank payment', () => {
+  const helper = sliceBetween('function bankingPayCandidateAwaitingPayeNetAmount', 'function normaliseBankingPayStage3StatusRow');
+  const statusPanel = sliceBetween('function renderBankingPayStage3StatusPanel', 'function refreshBankingPayStage3SelectedRows');
+  const overview = sliceBetween('function renderBankingPayBatchChildModalOverview', 'function renderBankingPayBatchChildModalRemittanceTab');
+  assert.match(helper, /latest_paye_net_input/);
+  assert.match(helper, /global_missing_explicit_paye_input_count/);
+  assert.match(statusPanel, /Awaiting PAYE net amount/);
+  assert.match(overview, /PAYE net amount required/);
+  assert.match(overview, /Ready to execute/);
+  assert.match(overview, /data-banking-pay-awaiting-paye-net/);
+});
+
+test('Overview has a prominent whole-candidate tree toggle in addition to nested toggles', () => {
+  const overview = sliceBetween('function renderBankingPayBatchChildModalOverview', 'function renderBankingPayBatchChildModalRemittanceTab');
+  const handlers = sliceBetween("if (act === 'banking:pay:child:expandAll')", 'const onChange = async');
+  assert.match(overview, /data-action="banking:pay:child:toggleCandidateTree"/);
+  assert.match(overview, /font-size:21px/);
+  assert.match(overview, /expandWholeTree \|\| groupExpansionState\[weekKey\]/);
+  assert.match(overview, /expandWholeTree \|\| groupExpansionState\[clientKey\]/);
+  assert.match(overview, /expandWholeTree \|\| groupExpansionState\[timesheetKey\]/);
+  assert.match(handlers, /toggleCandidateTree/);
+  assert.match(handlers, /candidateDetailExpandAllByKey/);
+});
