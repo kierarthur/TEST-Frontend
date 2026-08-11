@@ -8065,7 +8065,10 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
       focusField('bankingCancelPassword');
     };
 
-    try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
+    // Wire through a timer as well as animation frames: background or throttled
+    // browser tabs may not run requestAnimationFrame before the user clicks.
+    setTimeout(wire, 0);
+    try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch {}
   });
 }
 async function openMailshotTemplatesSettingsModal() {

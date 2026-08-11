@@ -123,6 +123,8 @@ test('payment execution confirmation retains an exact DOM ownership fence withou
   assert.match(confirmation, /let wireAttempts = 0/);
   assert.match(confirmation, /if \(wireAttempts < 40\) setTimeout\(wire, 50\)/);
   assert.match(confirmation, /document\.addEventListener\('click', onClick, true\)/);
+  assert.match(confirmation, /setTimeout\(wire, 0\)/);
+  assert.match(confirmation, /requestAnimationFrame\(\(\) => requestAnimationFrame\(wire\)\)/);
   assert.match(confirmation, /const bodyNow = getBody\(\)/);
   assert.match(confirmation, /if \(!bodyNow \|\| !root \|\| !bodyNow\.contains\(root\)\) return false/);
   assert.doesNotMatch(confirmation, /ctxSeed && fr\._ctxRef/);
