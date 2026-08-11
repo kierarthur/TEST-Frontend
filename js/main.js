@@ -56460,27 +56460,54 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     const progressSource = isPlainObject(authoritativeProgress) ? authoritativeProgress : {};
     const previewPayloadSource = isPlainObject(pv) ? pv : {};
     const previewDataSource = isPlainObject(previewEnvelope) ? previewEnvelope : {};
-    const candidates = [
-      workbenchSource.selected_row_count,
-      workbenchSource.selectedRowCount,
-      workbenchSource.server_selected_row_count,
-      workbenchSource.serverSelectedRowCount,
-      workbenchSource.selected_eligible_ready_row_count,
-      workbenchSource.selectedEligibleReadyRowCount,
-      progressSource.selected_row_count,
-      progressSource.selectedRowCount,
-      progressSource.selected_eligible_ready_row_count,
-      progressSource.selectedEligibleReadyRowCount,
-      previewPayloadSource.selected_row_count,
-      previewPayloadSource.selectedRowCount,
-      previewPayloadSource.server_selected_row_count,
-      previewPayloadSource.serverSelectedRowCount,
-      previewDataSource.selected_row_count,
-      previewDataSource.selectedRowCount
-    ];
-    for (const value of candidates) {
-      const n = Number(value);
-      if (Number.isFinite(n) && n >= 0) return Math.trunc(n);
+    const firstCount = (source) => {
+      const values = [
+        source.selected_row_count,
+        source.selectedRowCount,
+        source.server_selected_row_count,
+        source.serverSelectedRowCount,
+        source.selected_eligible_ready_row_count,
+        source.selectedEligibleReadyRowCount
+      ];
+      for (const value of values) {
+        const count = Number(value);
+        if (Number.isFinite(count) && count >= 0) return Math.trunc(count);
+      }
+      return null;
+    };
+    const firstRevision = (source) => {
+      const revision = Number(source.progress_counter_version ?? source.progressCounterVersion);
+      return Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
+    };
+    const envelopes = [
+      { source: 'progress', value: firstCount(progressSource), revision: firstRevision(progressSource) },
+      { source: 'preview-payload', value: firstCount(previewPayloadSource), revision: firstRevision(previewPayloadSource) },
+      { source: 'preview-data', value: firstCount(previewDataSource), revision: firstRevision(previewDataSource) },
+      { source: 'workbench', value: firstCount(workbenchSource), revision: firstRevision(workbenchSource) }
+    ].filter((item) => item.value !== null);
+    const versioned = envelopes.filter((item) => item.revision !== null);
+    if (versioned.length) {
+      const latestRevision = Math.max(...versioned.map((item) => item.revision));
+      const latest = versioned.filter((item) => item.revision === latestRevision);
+      const counts = new Set(latest.map((item) => item.value));
+      if (counts.size === 1) {
+        wiz.selectionCountAuthorityConflict = null;
+        return latest[0].value;
+      }
+      // Same-revision disagreement is an authority conflict. Fail closed rather
+      // than allowing an arbitrary cached value to enable Draft creation.
+      wiz.selectionCountAuthorityConflict = {
+        progress_counter_version: latestRevision,
+        sources: latest.map((item) => ({ source: item.source, selected_row_count: item.value }))
+      };
+      return 0;
+    }
+    // An unversioned cached zero must never override the current positive row
+    // membership that the browser has already applied for this session.
+    const unversionedPositive = envelopes.find((item) => item.value > 0);
+    if (unversionedPositive) {
+      wiz.selectionCountAuthorityConflict = null;
+      return unversionedPositive.value;
     }
     if (selectedPreviewRowMode === 'IMPLICIT_ALL' && readyMeta.totalCount > 0) return readyMeta.totalCount;
     return localSelectedCurrentEligibleReadyRowCount;
@@ -56488,7 +56515,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 
   const payeCreateBlocked = !!(payeGuardrails && payeGuardrails.create_paye_blocked === true);
   const payeOverrideRequired = !!(payeGuardrails && payeGuardrails.override_required === true);
-  const createDraftBusyState = !!(cdBusy || pvLoading || effectivePvLoading || activeDraftCreateOperationForRender);
+  const createDraftBusyState = !!(cdBusy || wiz.draftSubmissionState?.active === true || pvLoading || effectivePvLoading || activeDraftCreateOperationForRender);
   const payeGuardAllowsCreate = !(payeCreateBlocked && !hasReadyUmbrella);
   const authoritativeGateAllowsCreate = !!(
     authoritativeRenderState.contractPresent &&
@@ -69684,7 +69711,6 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     payment_date_uk: '',
     auth_mode: 'NORMAL',
     funding_account_ref: resolvedFundingAccountRef || '',
-    warning_hours_json_raw: '',
     suppress_remittances: false,
     suppress_remittances_confirmed: false,
     csv_uploaded_confirmed: false,
@@ -69880,21 +69906,6 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
                     </div>
                   ` : ''}
 
-                  <details style="border:1px solid var(--line); border-radius:10px; padding:10px;">
-                    <summary class="mini" style="cursor:pointer;opacity:.9;">Advanced ▸</summary>
-                    <div style="margin-top:10px; display:flex; flex-direction:column; gap:10px;">
-                      ${!isNoBankMode ? `
-                        <div>
-                          <label class="inline mini" style="opacity:.85;">Funding account ref</label>
-                          <input id="payExecFundingAccountRef" class="input" type="text" value="${enc(state.funding_account_ref)}" placeholder="(optional)" data-action="pay-exec:setFundingAccountRef" ${dis} />
-                        </div>
-                      ` : ''}
-                      <div>
-                        <label class="inline mini" style="opacity:.85;">Warning hours JSON</label>
-                        <textarea id="payExecWarningHoursJson" class="input" rows="4" placeholder='(optional) JSON array, e.g. [{"name":"...","hours":12}]' data-action="pay-exec:setWarningHoursJson" ${dis} style="width:100%;">${enc(state.warning_hours_json_raw || '')}</textarea>
-                      </div>
-                    </div>
-                  </details>
                 ` : ''}
 
                 ${isCsv ? `
@@ -69991,12 +70002,12 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
           const elDate = r.querySelector('#payExecDateUk');
           if (elDate && typeof attachUkDatePicker === 'function' && !elDate.__ukdp) {
             elDate.__ukdp = true;
-            try { attachUkDatePicker(elDate, {}); } catch {}
+            try { attachUkDatePicker(elDate, { minDate: londonTodayIsoLocal() }); } catch {}
           }
           const elPaymentDate = r.querySelector('#payExecPaymentDateUk');
           if (elPaymentDate && typeof attachUkDatePicker === 'function' && !elPaymentDate.__ukdp) {
             elPaymentDate.__ukdp = true;
-            try { attachUkDatePicker(elPaymentDate, {}); } catch {}
+            try { attachUkDatePicker(elPaymentDate, { minDate: londonTodayIsoLocal() }); } catch {}
           }
         } catch {}
       };
@@ -70049,7 +70060,16 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
           }
 
           if (act === 'pay-exec:setDateUk') {
-            state.date_uk = String(t.value || '');
+            const nextDateUk = String(t.value || '');
+            const nextDateIso = parseUkDateToIsoLocal(nextDateUk);
+            const todayIso = londonTodayIsoLocal();
+            if (nextDateIso && todayIso && nextDateIso < todayIso) {
+              state.err = 'The scheduled payment date must be today or in the future.';
+              t.value = state.date_uk;
+              rerender();
+              return;
+            }
+            state.date_uk = nextDateUk;
             state.err = '';
             rerender();
             return;
@@ -70095,10 +70115,20 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
           const act = String(t.getAttribute && t.getAttribute('data-action') || '').trim();
 
           if (act === 'pay-exec:setPaymentDateUk') { state.payment_date_uk = String(t.value || '').trim(); state.err = ''; return; }
-          if (act === 'pay-exec:setDateUk') { state.date_uk = String(t.value || ''); state.err = ''; return; }
+          if (act === 'pay-exec:setDateUk') {
+            const nextDateUk = String(t.value || '');
+            const nextDateIso = parseUkDateToIsoLocal(nextDateUk);
+            const todayIso = londonTodayIsoLocal();
+            if (nextDateIso && todayIso && nextDateIso < todayIso) {
+              state.err = 'The scheduled payment date must be today or in the future.';
+              return;
+            }
+            state.date_uk = nextDateUk;
+            state.err = '';
+            return;
+          }
           if (act === 'pay-exec:setTimeUk') { state.time_uk = String(t.value || '').trim(); state.err = ''; return; }
           if (act === 'pay-exec:setFundingAccountRef') { state.funding_account_ref = String(t.value || ''); state.err = ''; return; }
-          if (act === 'pay-exec:setWarningHoursJson') { state.warning_hours_json_raw = String(t.value || ''); state.err = ''; return; }
           if (act === 'pay-exec:setCsvBankConfirmRef') { state.csv_bank_confirm_ref = String(t.value || ''); state.err = ''; return; }
           if (act === 'pay-exec:setExternalComment') { state.external_settlement_comment = String(t.value || ''); state.err = ''; return; }
         } catch {}
@@ -70143,6 +70173,8 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
               const iso = parseUkDateToIsoLocal(state.date_uk);
               const hm = parseTimeHm(state.time_uk);
               if (!iso) { state.err = 'Scheduled date is required (DD/MM/YYYY).'; rerender(); return; }
+              const todayIso = londonTodayIsoLocal();
+              if (todayIso && iso < todayIso) { state.err = 'The scheduled payment date must be today or in the future.'; rerender(); return; }
               if (!hm) { state.err = 'Scheduled time is required in 24-hour HH:MM format (e.g. 02:00, 23:11).'; rerender(); return; }
               const utcIso = ukLocalToUtcIso(iso, hm);
               if (!utcIso) { state.err = 'Unable to convert the selected UK date/time.'; rerender(); return; }
@@ -70157,18 +70189,6 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
               return;
             }
             funding_account_ref = String(state.funding_account_ref || '').trim() || null;
-            const rawWarn = String(state.warning_hours_json_raw || '').trim();
-            if (rawWarn) {
-              try {
-                const j = JSON.parse(rawWarn);
-                if (!Array.isArray(j)) { state.err = 'Warning hours JSON must be a JSON array.'; rerender(); return; }
-                warning_hours_json = j;
-              } catch {
-                state.err = 'Warning hours JSON is invalid JSON.';
-                rerender();
-                return;
-              }
-            }
           } else if (pureAllZero) {
             payment_date = /^\d{4}-\d{2}-\d{2}$/.test(accountingPaymentDate) ? accountingPaymentDate : null;
             if (!payment_date) {
@@ -77347,7 +77367,17 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
     const expectedOpenToken = String(opts.expectedOpenToken || child.openToken || '').trim();
 
     if (!shouldApplyChildMutation(expectedOpenToken, null)) return;
-    if (child.__loadInFlight) return;
+    if (child.__loadInFlight) {
+      const mustRunAfterCurrentLoad = opts.executionRefresh === true ||
+        opts.execution_refresh === true ||
+        opts.userInitiated === true ||
+        opts.user_initiated === true;
+      if (!mustRunAfterCurrentLoad) return child.data || null;
+      child.__loadIdleWaiters = Array.isArray(child.__loadIdleWaiters) ? child.__loadIdleWaiters : [];
+      await new Promise((resolve) => child.__loadIdleWaiters.push(resolve));
+      if (!shouldApplyChildMutation(expectedOpenToken, null)) return child.data || null;
+      return loadBatch({ ...opts, __queuedAfterInFlight: true });
+    }
     if (!silent && child.loading) return;
 
     const requestSeq = Number(child.__loadSeq || 0) + 1;
@@ -77524,6 +77554,10 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
         try { child.loading = false; } catch {}
         try { child.__loadInFlight = false; } catch { child.__loadInFlight = false; }
         await rerenderChild();
+      }
+      const idleWaiters = Array.isArray(child.__loadIdleWaiters) ? child.__loadIdleWaiters.splice(0) : [];
+      for (const resolve of idleWaiters) {
+        try { resolve(child.data || null); } catch {}
       }
     }
   };
@@ -77890,7 +77924,9 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
       optsLocal.kind
     ));
     const opId = firstRefreshText(operationId, optsLocal.operationId, optsLocal.operation_id, suppliedOperationPayload?.operation_id, suppliedOperationPayload?.operationId, getPaymentExecuteRefreshOperationId());
-    const operationTypeForRefresh = suppliedOperationType || getPaymentExecuteRefreshOperationType();
+    const operationTypeForRefresh = suppliedOperationType ||
+      getPaymentExecuteRefreshOperationType() ||
+      (hasPaymentExecuteRefreshRequiredFlag() ? 'PAYMENT_EXECUTE' : '');
     const refreshReason = String(reason || optsLocal.reason || 'payment-operation-refresh').trim() || 'payment-operation-refresh';
     if (!id) return null;
     if (!isPaymentExecuteRefreshOperationType(operationTypeForRefresh)) {
@@ -81141,7 +81177,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
         }
 
         if (act === 'banking:pay:child:refresh') {
-          if (hasPaymentExecuteRefreshContext()) {
+          if (hasPaymentExecuteRefreshContext() || hasPaymentExecuteRefreshRequiredFlag()) {
             await forceChildExecutionRefresh(getPaymentExecuteRefreshOperationId(), 'refresh-button', { userInitiated: true, source: 'openBankingPayBatchChildModal.refreshButton' });
           } else {
             await loadBatch({ forcePoll: false });
@@ -94284,6 +94320,25 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     wizard.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
   };
 
+  const markImplicitAllSelection = (selectedRowIds = []) => {
+    const canonicalIds = uniqueStrings(selectedRowIds);
+    wizard.selected_preview_row_ids = [...canonicalIds];
+    wizard.selectedPreviewRowIds = [...canonicalIds];
+    wizard.selected_preview_row_mode = 'IMPLICIT_ALL';
+    wizard.selectedPreviewRowMode = 'IMPLICIT_ALL';
+    wizard.local_selected_preview_row_ids_dirty = false;
+    wizard.workbench.selected_preview_row_ids = [...canonicalIds];
+    wizard.workbench.server_selected_preview_row_ids = [...canonicalIds];
+    wizard.workbench.server_selected_preview_row_ids_provided = true;
+    wizard.workbench.selected_preview_row_mode = 'IMPLICIT_ALL';
+    wizard.workbench.selection_intent_mode = 'IMPLICIT_ALL';
+    wizard.decisions.selected_preview_row_ids = [...canonicalIds];
+    wizard.decisions.server_selected_preview_row_ids = [...canonicalIds];
+    wizard.decisions.server_selected_preview_row_ids_provided = true;
+    wizard.decisions.selected_preview_row_mode = 'IMPLICIT_ALL';
+    wizard.decisions.selection_intent_mode = 'IMPLICIT_ALL';
+  };
+
   const clearSourceSessionState = () => {
     const previewDataSessionId = trimStr(wizard.preview.data?.session_id || wizard.preview.data?.session?.session_id || '');
     const firstPageSessionId = trimStr(wizard.preview.__canonical_first_page_session_id || wizard.preview.canonical_first_page_session_id || '');
@@ -94568,17 +94623,21 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       if (
         clearResult?.server_selected_preview_row_ids_provided !== true ||
         !Array.isArray(clearResult?.server_selected_preview_row_ids) ||
-        clearResult.server_selected_preview_row_ids.length !== 0
+        trimStr(clearResult?.selection_intent_mode || clearResult?.selected_preview_row_mode).toUpperCase() !== 'IMPLICIT_ALL'
       ) {
-        const contractError = new Error('CloudTMS could not confirm that all Banking Pay decisions were cleared. Refresh Banking Pay and try again.');
+        const contractError = new Error('CloudTMS could not confirm the default Ready-to-Pay selection after clearing decisions. Refresh Banking Pay and try again.');
         contractError.code = 'BANKING_PAY_CLEAR_DECISIONS_CONTRACT_INVALID';
         contractError.error_code = contractError.code;
         throw contractError;
       }
-      markExplicitNoSelection();
+      markImplicitAllSelection(clearResult.server_selected_preview_row_ids);
       if (clearResult?.session_version !== null && clearResult?.session_version !== undefined) {
         wizard.workbench.session_version = clearResult.session_version;
         wizard.decisions.session_version = clearResult.session_version;
+      }
+      if (clearResult?.progress_counter_version !== null && clearResult?.progress_counter_version !== undefined) {
+        wizard.workbench.progress_counter_version = clearResult.progress_counter_version;
+        wizard.decisions.progress_counter_version = clearResult.progress_counter_version;
       }
       const pendingCandidateIds = uniqueStrings(clearResult?.requeue_candidate_ids || clearResult?.pending_candidate_ids || clearResult?.dirty_candidate_ids || []);
       wizard.workbench.pending_candidate_ids = pendingCandidateIds.slice(0, 25);
@@ -97690,17 +97749,47 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     }
 
     if (a === 'banking:pay:createDraft') {
+      const wiz = st.pay?.draftWizard;
+      if (!wiz || typeof wiz !== 'object') return;
+      wiz.draftSubmissionState = (wiz.draftSubmissionState && typeof wiz.draftSubmissionState === 'object')
+        ? wiz.draftSubmissionState
+        : { active: false, key: '' };
+      if (wiz.draftSubmissionState.active === true) return;
       const g = safeGate('CREATE_DRAFT');
       if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
       const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
       const dec = ensurePayWizardDecisionState();
-      await bankingPayCreateDraft?.({
-        pay_date: pd,
-        preview_decisions_json: dec,
-        userInitiated: true,
-        silent: false,
-        background: false
-      });
+      const submissionKey = [
+        String(wiz.workbench?.session_id || wiz.workbench?.id || ''),
+        String(wiz.workbench?.session_version ?? ''),
+        String(wiz.workbench?.progress_counter_version ?? ''),
+        pd
+      ].join(':');
+      wiz.draftSubmissionState = { active: true, key: submissionKey, started_at_ms: Date.now() };
+      wiz.createDraftBusy = true;
+      if (el && typeof el.setAttribute === 'function') {
+        el.disabled = true;
+        el.setAttribute('disabled', '');
+        el.setAttribute('data-disabled', '1');
+        el.setAttribute('aria-disabled', 'true');
+        el.setAttribute('aria-busy', 'true');
+      }
+      try {
+        await bankingPayCreateDraft?.({
+          pay_date: pd,
+          preview_decisions_json: dec,
+          userInitiated: true,
+          silent: false,
+          background: false
+        });
+      } finally {
+        if (wiz.draftSubmissionState?.key === submissionKey) {
+          wiz.draftSubmissionState = { active: false, key: '' };
+        }
+        if (el && typeof el.removeAttribute === 'function') {
+          el.removeAttribute('aria-busy');
+        }
+      }
       return;
     }
 
@@ -97870,7 +97959,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       try {
         confirmed = await confirmBankingPayAction({
           title: 'Clear all Decisions',
-          message: 'This will clear saved decisions, exclusions and selected rows, then reload the latest live Banking view.',
+          message: 'This will clear saved resolutions and exclusions, then restore the default selection of every eligible Ready-to-Pay row.',
           confirmLabel: 'Clear all Decisions',
           cancelLabel: 'Cancel',
           kind: 'banking-pay-clear-all-decisions'
