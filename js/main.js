@@ -70067,15 +70067,9 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
           const bodyNow = getBody();
           const root = getRoot();
           if (!bodyNow || !root || !bodyNow.contains(root)) return false;
-          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-          // Some bootstrap/modal-host paths intentionally expose no frame globals.
-          // The execution root living in the current modal body is still an exact,
-          // short-lived ownership fence; an overlaid modal replaces this body.
-          if (!fr) return true;
-          if (String(fr.kind || '') !== String(kind || '')) return false;
-          const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-          if (ctx && String(ctx.entity || '') !== 'banking-pay-exec-confirm') return false;
-          if (ctxSeed && fr._ctxRef && fr._ctxRef !== ctxSeed) return false;
+          // This unique, short-lived root is the authoritative interaction fence.
+          // An overlaid/restored modal replaces modalBody, so the old root can no
+          // longer pass this check even where optional frame globals drift.
           return true;
         } catch { return false; }
       };

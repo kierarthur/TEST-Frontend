@@ -120,11 +120,10 @@ test('Overview has a prominent whole-candidate tree toggle in addition to nested
 test('payment execution confirmation retains an exact DOM ownership fence without modal frame globals', () => {
   const confirmation = sliceBetween('async function openBankingPayExecuteConfirmModal', 'async function bankingPayBatchExecutePayment');
   assert.match(confirmation, /const root = getRoot\(\)/);
-  assert.match(confirmation, /if \(!fr\) return true/);
-  assert.match(confirmation, /if \(String\(fr\.kind \|\| ''\) !== String\(kind \|\| ''\)\) return false/);
   assert.match(confirmation, /let wireAttempts = 0/);
   assert.match(confirmation, /if \(wireAttempts < 40\) setTimeout\(wire, 50\)/);
   assert.match(confirmation, /document\.addEventListener\('click', onClick, true\)/);
   assert.match(confirmation, /const bodyNow = getBody\(\)/);
   assert.match(confirmation, /if \(!bodyNow \|\| !root \|\| !bodyNow\.contains\(root\)\) return false/);
+  assert.doesNotMatch(confirmation, /ctxSeed && fr\._ctxRef/);
 });
