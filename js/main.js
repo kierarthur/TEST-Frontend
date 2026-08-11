@@ -326562,6 +326562,10 @@ if (!isChild && top.entity === 'contracts') {
     const isChildNow    = (stack().length > 1);
     const isRatePreset  = (top.kind === 'rate-preset');
     const isPayeEntry   = (top.kind === 'banking-pay-paye-entry');
+    const isPayeBatchWorksheet = (
+      top.kind === 'banking-pay-batch-child' &&
+      String(top.currentTabKey || '').trim() === 'paye_worksheet'
+    );
 
     if (top.entity === 'timesheets') {
       const latestCtx = window.modalCtx || {};
@@ -326580,9 +326584,9 @@ if (!isChild && top.entity === 'contracts') {
       }
     }
 
-    // Block Edit for search & normal child-apply modals,
-    // but allow Edit for rate-preset (and PAYE Entry) even when opened as a child.
-    if (!isRatePreset && !isPayeEntry && (isChildNow || top.kind === 'advanced-search')) return;
+    // Block Edit for search & normal child-apply modals. PAYE editing is also
+    // available on the integrated batch worksheet, not only its legacy entry modal.
+    if (!isRatePreset && !isPayeEntry && !isPayeBatchWorksheet && (isChildNow || top.kind === 'advanced-search')) return;
 
   if (top.mode === 'view') {
   if (top.entity === 'timesheets' && typeof hydrateTimesheetEditStateFromDetails === 'function') {

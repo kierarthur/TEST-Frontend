@@ -7,7 +7,17 @@ const source = fs.readFileSync(path.resolve(__dirname, '..', '..', 'js', 'main.j
 const indexSource = fs.readFileSync(path.resolve(__dirname, '..', '..', 'index.html'), 'utf8');
 
 test('the Wave 1 browser asset is cache-busted after the progress-copy correction', () => {
-  assert.match(indexSource, /banking-wave1=20260811-r2/);
+  assert.match(indexSource, /banking-wave1=20260811-r3/);
+});
+
+test('the integrated batch PAYE worksheet can enter Edit mode without enabling unrelated child modals', () => {
+  const start = source.indexOf('btnEdit.onclick = async ()=> {');
+  const end = source.indexOf('\n  const restoreFrameSnapshot = (fr) => {', start);
+  assert.ok(start >= 0 && end > start, 'shared Edit handler must exist');
+  const body = source.slice(start, end);
+  assert.match(body, /top\.kind === 'banking-pay-batch-child'/);
+  assert.match(body, /String\(top\.currentTabKey \|\| ''\)\.trim\(\) === 'paye_worksheet'/);
+  assert.match(body, /!isPayeBatchWorksheet/);
 });
 
 test('Create Draft selection count follows the newest progress revision and fails closed on conflict', () => {
