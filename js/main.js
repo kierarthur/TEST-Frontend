@@ -70055,11 +70055,17 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
 
       const stillTopIsThisModal = () => {
         try {
+          const root = getRoot();
+          if (!root || !body.contains(root)) return false;
           const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-          if (!fr || String(fr.kind || '') !== String(kind || '')) return false;
+          // Some bootstrap/modal-host paths intentionally expose no frame globals.
+          // The execution root living in the current modal body is still an exact,
+          // short-lived ownership fence; an overlaid modal replaces this body.
+          if (!fr) return true;
+          if (String(fr.kind || '') !== String(kind || '')) return false;
           const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-          if (!ctx || String(ctx.entity || '') !== 'banking-pay-exec-confirm') return false;
-          if (ctxSeed && fr._ctxRef !== ctxSeed) return false;
+          if (ctx && String(ctx.entity || '') !== 'banking-pay-exec-confirm') return false;
+          if (ctxSeed && fr._ctxRef && fr._ctxRef !== ctxSeed) return false;
           return true;
         } catch { return false; }
       };

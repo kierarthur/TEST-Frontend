@@ -116,3 +116,11 @@ test('Overview has a prominent whole-candidate tree toggle in addition to nested
   assert.match(handlers, /toggleCandidateTree/);
   assert.match(handlers, /candidateDetailExpandAllByKey/);
 });
+
+test('payment execution confirmation retains an exact DOM ownership fence without modal frame globals', () => {
+  const confirmation = sliceBetween('async function openBankingPayExecuteConfirmModal', 'async function bankingPayBatchExecutePayment');
+  assert.match(confirmation, /const root = getRoot\(\)/);
+  assert.match(confirmation, /if \(!root \|\| !body\.contains\(root\)\) return false/);
+  assert.match(confirmation, /if \(!fr\) return true/);
+  assert.match(confirmation, /if \(String\(fr\.kind \|\| ''\) !== String\(kind \|\| ''\)\) return false/);
+});
