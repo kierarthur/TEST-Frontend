@@ -100,6 +100,8 @@ test('Draft PAYE amounts distinguish missing net input from a real zero bank pay
   assert.match(statusPanel, /Awaiting PAYE net amount/);
   assert.match(overview, /PAYE net amount required/);
   assert.match(overview, /Ready to execute/);
+  assert.match(overview, /active_overview_candidate_count/);
+  assert.match(overview, /active_overview_amount_pence/);
   assert.match(overview, /data-banking-pay-awaiting-paye-net/);
 });
 

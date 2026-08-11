@@ -84349,6 +84349,23 @@ function renderBankingPayBatchChildModalOverview() {
   const draftAwaitingPayeNetCount = overviewIsPreSubmissionDraft
     ? candidateViewModels.filter((row) => row.financials.awaitingPayeNetAmount === true).length
     : 0;
+  const draftReadyPaymentCount = firstFiniteNonNegativeInteger(
+    data.active_overview_candidate_count,
+    data.activeOverviewCandidateCount,
+    batch.active_overview_candidate_count,
+    batch.activeOverviewCandidateCount,
+    candidateViewModels.length,
+    paymentSummary.notSentCount
+  ) ?? 0;
+  const draftReadyPaymentAmountPence = firstFiniteNumber(
+    data.active_overview_amount_pence,
+    data.activeOverviewAmountPence,
+    batch.active_overview_amount_pence,
+    batch.activeOverviewAmountPence
+  );
+  const draftReadyPaymentAmount = draftReadyPaymentAmountPence !== null
+    ? draftReadyPaymentAmountPence / 100
+    : paymentSummary.notSentAmount;
 
   const renderPaymentSummaryHtml = () => overviewIsPreSubmissionDraft ? `
     <div class="card" style="padding:10px;">
@@ -84356,7 +84373,7 @@ function renderBankingPayBatchChildModalOverview() {
       <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
         ${draftAwaitingPayeNetCount > 0
           ? `<span class="mini" data-banking-pay-draft-awaiting-paye-net="1">PAYE net amount required: <span class="mono">${enc(String(draftAwaitingPayeNetCount))}</span></span>`
-          : `<span class="mini" data-banking-pay-draft-ready-to-execute="1">Ready to execute: <span class="mono">${enc(String(paymentSummary.notSentCount))}</span> · <span class="mono">£${enc(fmtMoney(paymentSummary.notSentAmount))}</span></span>`}
+          : `<span class="mini" data-banking-pay-draft-ready-to-execute="1">Ready to execute: <span class="mono">${enc(String(draftReadyPaymentCount))}</span> · <span class="mono">£${enc(fmtMoney(draftReadyPaymentAmount))}</span></span>`}
       </div>
     </div>
   ` : `
