@@ -9,9 +9,11 @@ const indexSource = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'u
 test('the progress modal accepts only the server-returned safe retry actions', () => {
   assert.match(source, /'CANCEL_REQUEST', 'REAUTHORISE_REMAINING', 'RETRY_PLANNING', 'RETRY_PROCESSING'/);
   assert.match(source, /RETRY_PLANNING: 'Continue preparation'/);
-  assert.match(source, /RETRY_PROCESSING: 'Continue cancellation'/);
-  assert.match(source, /const primaryAction = \['RETRY_PROCESSING', 'RETRY_PLANNING', 'AUTHORISE', 'USE_GOLDEN_KEY', 'REAUTHORISE_REMAINING'\]/);
-  assert.match(source, /const retryProcessing = availableActions\.includes\('RETRY_PROCESSING'\)/);
+  assert.match(source, /RETRY_PROCESSING: 'Retry Banking Pay update'/);
+  assert.match(source, /const retryProcessingAllowed = availableActions\.includes\('RETRY_PROCESSING'\)/);
+  assert.match(source, /status\.financial_complete === true && workbenchRefreshStatus === 'FAILED'/);
+  assert.match(source, /\.\.\.\(retryProcessingAllowed \? \['RETRY_PROCESSING'\] : \[\]\)/);
+  assert.match(source, /const retryProcessing = retryProcessingAllowed/);
   assert.match(source, /const secondaryActions = \['REJECT', 'CANCEL_REQUEST'\]\.filter\(\(action\) => availableActions\.includes\(action\)\)/);
   assert.match(source, /\[primaryAction, \.\.\.secondaryActions\]\.filter\(Boolean\)/);
 });
@@ -23,5 +25,5 @@ test('planning retry reuses the existing correction auth-action route', () => {
 });
 
 test('the deployed entry point cache-busts the cancellation progress bundle', () => {
-  assert.match(indexSource, /banking-cancellation-progress=20260810-r13/);
+  assert.match(indexSource, /banking-cancellation-progress=20260812-r14/);
 });
