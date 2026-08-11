@@ -70048,23 +70048,25 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
 
     const wire = () => {
       wireAttempts += 1;
-      const body = document.getElementById('modalBody');
+      const getBody = () => document.getElementById('modalBody');
+      const body = getBody();
       if (!body) {
         if (wireAttempts < 40) setTimeout(wire, 50);
         return;
       }
-      const getRoot = () => { try { return body.querySelector(`#${CSS.escape(rootId)}`); } catch { return body.querySelector(`#${rootId}`); } };
+      const getRoot = () => document.getElementById(rootId);
       if (!getRoot()) {
         if (wireAttempts < 40) setTimeout(wire, 50);
         return;
       }
-      if (body.__payExecConfirmWiredToken === rootId) return;
-      body.__payExecConfirmWiredToken = rootId;
+      if (document.__payExecConfirmWiredToken === rootId) return;
+      document.__payExecConfirmWiredToken = rootId;
 
       const stillTopIsThisModal = () => {
         try {
+          const bodyNow = getBody();
           const root = getRoot();
-          if (!root || !body.contains(root)) return false;
+          if (!bodyNow || !root || !bodyNow.contains(root)) return false;
           const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
           // Some bootstrap/modal-host paths intentionally expose no frame globals.
           // The execution root living in the current modal body is still an exact,
@@ -70102,7 +70104,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
             return;
           }
         } catch {}
-        try { body.innerHTML = render(); } catch {}
+        try { const bodyNow = getBody(); if (bodyNow) bodyNow.innerHTML = render(); } catch {}
         try { ensureDatePicker(); } catch {}
       };
 
@@ -70337,14 +70339,14 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
         } catch {}
       };
 
-      body.addEventListener('change', onChange, true);
-      body.addEventListener('input', onInput, true);
-      body.addEventListener('click', onClick, true);
+      document.addEventListener('change', onChange, true);
+      document.addEventListener('input', onInput, true);
+      document.addEventListener('click', onClick, true);
       detachHandlers = () => {
-        try { body.removeEventListener('change', onChange, true); } catch {}
-        try { body.removeEventListener('input', onInput, true); } catch {}
-        try { body.removeEventListener('click', onClick, true); } catch {}
-        try { if (body.__payExecConfirmWiredToken === rootId) body.__payExecConfirmWiredToken = null; } catch {}
+        try { document.removeEventListener('change', onChange, true); } catch {}
+        try { document.removeEventListener('input', onInput, true); } catch {}
+        try { document.removeEventListener('click', onClick, true); } catch {}
+        try { if (document.__payExecConfirmWiredToken === rootId) document.__payExecConfirmWiredToken = null; } catch {}
       };
 
       ensureDatePicker();
