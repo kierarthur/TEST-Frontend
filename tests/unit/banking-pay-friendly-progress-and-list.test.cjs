@@ -57,8 +57,12 @@ test('a failed cancellation start remains visible until status changes or the us
 
 test('cancellation authenticates before the progress modal and uses a calm Workbench-pending state', () => {
   const cancellation = sliceBetween('const bankingPayCancellationProgressState', 'async function loadCompleteBankingPayCancellationProjectionStatus');
+  const reauth = sliceBetween('async function openBankingReauthModal', 'async function openPayBatchPasswordConfirmModal');
   assert.match(source, /const requiresCancellationReauth = \['DRAFT_CANCEL', 'CANCEL_PAYMENT'\]/);
   assert.match(source, /if \(requiresCancellationReauth && !draftReauthToken\) return/);
+  assert.match(reauth, /const lexicalParentModalCtx =/);
+  assert.match(reauth, /const restoredModalCtx = parentModalCtx \|\| lexicalParentModalCtx/);
+  assert.match(reauth, /if \(title\) title\.textContent = parentModalTitle/);
   assert.match(cancellation, /Financial cancellation is complete\./);
   assert.match(cancellation, /Banking Pay is updating quietly in the background\./);
   assert.doesNotMatch(cancellation, /aria-label="\$\{workbenchPending \? 'Banking Pay update in progress'/);

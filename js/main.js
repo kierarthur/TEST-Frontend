@@ -6998,11 +6998,27 @@ async function openBankingReauthModal(opts = {}) {
     try { return window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : null; }
     catch { return null; }
   })();
+  const lexicalParentModalCtx = (() => {
+    try { return (typeof modalCtx !== 'undefined' && modalCtx && typeof modalCtx === 'object') ? modalCtx : null; }
+    catch { return null; }
+  })();
+  const parentModalTitle = (() => {
+    try { return String(document.getElementById('modalTitle')?.textContent || '').trim(); }
+    catch { return ''; }
+  })();
 
   const restoreParentModalCtx = () => {
-    if (!parentModalCtx) return;
-    try { window.modalCtx = parentModalCtx; } catch {}
-    try { if (typeof modalCtx !== 'undefined') modalCtx = parentModalCtx; } catch {}
+    const restoredModalCtx = parentModalCtx || lexicalParentModalCtx;
+    if (restoredModalCtx) {
+      try { window.modalCtx = restoredModalCtx; } catch {}
+      try { if (typeof modalCtx !== 'undefined') modalCtx = restoredModalCtx; } catch {}
+    }
+    if (parentModalTitle) {
+      try {
+        const title = document.getElementById('modalTitle');
+        if (title) title.textContent = parentModalTitle;
+      } catch {}
+    }
   };
 
   const closeTop = () => {
