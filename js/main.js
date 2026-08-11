@@ -183531,9 +183531,11 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
       role('op-bar').style.width = Number.isFinite(percent) ? `${percent}%` : (completedSuccessfully ? '100%' : (isTerminal(op) || isReviewRequired(op) || isWaitingAuthorisation(op) ? '0%' : '34%'));
     }
     if (role('op-meta')) {
-      role('op-meta').textContent = completedSuccessfully
+      const progressMetaText = completedSuccessfully
         ? 'Done.'
-        : (Number.isFinite(percent) ? 'This progress covers the complete operation and will not move backwards.' : 'Still working…');
+        : (Number.isFinite(percent) ? '' : 'Still working…');
+      role('op-meta').textContent = progressMetaText;
+      role('op-meta').style.display = progressMetaText ? '' : 'none';
     }
     if (role('op-review')) {
       role('op-review').style.display = isReviewRequired(op) || isWaitingAuthorisation(op) ? '' : 'none';

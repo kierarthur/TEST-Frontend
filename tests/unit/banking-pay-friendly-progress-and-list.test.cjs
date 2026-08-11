@@ -36,6 +36,7 @@ test('draft and payment progress use friendly operation-wide or indeterminate pr
   assert.match(modal, /counterMode === 'CUMULATIVE'/);
   assert.match(modal, /counterScope === 'DRAFT_CREATE'/);
   assert.match(modal, /is-indeterminate/);
+  assert.doesNotMatch(modal, /This progress covers the complete operation and will not move backwards/);
   assert.doesNotMatch(modal, /data-role="op-total"/);
   assert.doesNotMatch(modal, /data-role="op-chunk"/);
   assert.doesNotMatch(modal, /data-role="op-failed"/);

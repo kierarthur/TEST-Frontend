@@ -4,6 +4,11 @@ const path = require('node:path');
 const test = require('node:test');
 
 const source = fs.readFileSync(path.resolve(__dirname, '..', '..', 'js', 'main.js'), 'utf8');
+const indexSource = fs.readFileSync(path.resolve(__dirname, '..', '..', 'index.html'), 'utf8');
+
+test('the Wave 1 browser asset is cache-busted after the progress-copy correction', () => {
+  assert.match(indexSource, /banking-wave1=20260811-r2/);
+});
 
 test('Create Draft selection count follows the newest progress revision and fails closed on conflict', () => {
   const start = source.indexOf('const authoritativeSelectedCurrentEligibleReadyRowCount = (() => {');
