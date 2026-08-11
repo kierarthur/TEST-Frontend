@@ -123,4 +123,6 @@ test('payment execution confirmation retains an exact DOM ownership fence withou
   assert.match(confirmation, /if \(!root \|\| !body\.contains\(root\)\) return false/);
   assert.match(confirmation, /if \(!fr\) return true/);
   assert.match(confirmation, /if \(String\(fr\.kind \|\| ''\) !== String\(kind \|\| ''\)\) return false/);
+  assert.match(confirmation, /let wireAttempts = 0/);
+  assert.match(confirmation, /if \(wireAttempts < 40\) setTimeout\(wire, 50\)/);
 });

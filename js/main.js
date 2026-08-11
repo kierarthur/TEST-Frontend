@@ -70036,6 +70036,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
   return await new Promise((resolve) => {
     let done = false;
     let detachHandlers = null;
+    let wireAttempts = 0;
 
     const finish = (res) => { if (done) return; done = true; resolve(res || null); };
     const onDismiss = () => { try { if (typeof detachHandlers === 'function') detachHandlers(); } catch {} finish({ cancelled: true }); };
@@ -70046,10 +70047,17 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     });
 
     const wire = () => {
+      wireAttempts += 1;
       const body = document.getElementById('modalBody');
-      if (!body) return;
+      if (!body) {
+        if (wireAttempts < 40) setTimeout(wire, 50);
+        return;
+      }
       const getRoot = () => { try { return body.querySelector(`#${CSS.escape(rootId)}`); } catch { return body.querySelector(`#${rootId}`); } };
-      if (!getRoot()) return;
+      if (!getRoot()) {
+        if (wireAttempts < 40) setTimeout(wire, 50);
+        return;
+      }
       if (body.__payExecConfirmWiredToken === rootId) return;
       body.__payExecConfirmWiredToken = rootId;
 
