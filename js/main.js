@@ -78411,8 +78411,7 @@ const refreshBankingPayParentBatchListLightBestEffort = async (context = {}) => 
 };
 
 const createPaymentExecutionTerminalCallbacks = (source = '') => {
-  let observedApplied = false;
-  let closeApplied = false;
+  let terminalRefreshPromise = null;
   const applyOnce = async (operationResult, reason = 'payment_execute_terminal_refresh') => {
     const result = operationResult && typeof operationResult === 'object' ? operationResult : {};
     const opId = firstRefreshText(result.operation_id, result.operationId, result.id, getPaymentExecuteRefreshOperationId());
@@ -78474,21 +78473,27 @@ const createPaymentExecutionTerminalCallbacks = (source = '') => {
     await rerenderChild();
     return child.data;
   };
+  const applyTerminalOnce = (operationResult, reason = 'payment_execute_terminal_refresh') => {
+    if (terminalRefreshPromise && typeof terminalRefreshPromise.then === 'function') return terminalRefreshPromise;
+    terminalRefreshPromise = Promise.resolve().then(() => applyOnce(operationResult, reason));
+    return terminalRefreshPromise;
+  };
+  const handleNonTerminalClose = async () => {
+    try { await refreshBankingPayParentBatchListLightBestEffort({ source: `${source || 'openBankingPayBatchChildModal.paymentOperationTerminal'}.nonTerminalClose` }); } catch {}
+    try { await rerenderChild(); } catch {}
+    return child.data;
+  };
   return {
     onTerminalObserved: async (operationResult) => {
-      if (observedApplied === true) return child.data;
-      observedApplied = true;
-      return applyOnce(operationResult, 'terminal');
+      return applyTerminalOnce(operationResult, 'terminal');
     },
     onTerminalClose: async (operationResult) => {
-      if (closeApplied === true) return child.data;
-      closeApplied = true;
-      return applyOnce(operationResult, 'terminal-close');
+      if (isPaymentExecuteRefreshTerminalState(operationResult || {})) return applyTerminalOnce(operationResult, 'terminal-close');
+      return handleNonTerminalClose();
     },
     onClose: async (operationResult) => {
-      if (closeApplied === true) return child.data;
-      closeApplied = true;
-      return applyOnce(operationResult, 'modal-close');
+      if (isPaymentExecuteRefreshTerminalState(operationResult || {})) return applyTerminalOnce(operationResult, 'modal-close');
+      return handleNonTerminalClose();
     }
   };
 };
@@ -78891,12 +78896,6 @@ const executePaymentPipeline = async (pipelineOptions = {}) => {
 
     try {
       markPaymentExecuteRefreshDirty(operationId, activeOperationPayload, 'execute-start-mark-dirty');
-      const startRefresh = forceChildExecutionRefresh(operationId, 'execute-start', {
-        operation: activeOperationPayload,
-        userInitiated: false,
-        source: 'openBankingPayBatchChildModal.executePaymentPipeline.execute-start'
-      });
-      if (startRefresh && typeof startRefresh.catch === 'function') startRefresh.catch(() => {});
     } catch {}
 
     await rerenderChild();
@@ -86435,10 +86434,24 @@ function renderBankingPayBatchChildModalOverview() {
     data.payment_execute_operation?.operation_id,
     data.paymentExecuteOperation?.operationId
   );
+  const executionRefreshAlreadyRunning = child.executionRefreshInFlight === true
+    || child.execution_refresh_in_flight === true
+    || !!(child.__paymentExecutionRefreshInFlight && typeof child.__paymentExecutionRefreshInFlight.then === 'function');
+  const executionRefreshOperationTerminal = isPaymentExecuteRefreshTerminalState(
+    child.activeOperation ||
+    child.active_operation ||
+    child.payment_execute_operation ||
+    child.paymentExecuteOperation ||
+    data.active_operation ||
+    data.activeOperation ||
+    data.payment_execute_operation ||
+    data.paymentExecuteOperation ||
+    {}
+  );
 
   if (isBootstrapOnly && executionRefreshRequired) {
     try {
-      if (id && typeof forceRefreshBankingPayBatchChildModalAfterOperation === 'function' && child.__queuedExecutionRefreshFromOverviewRender !== true) {
+      if (id && executionRefreshOperationTerminal === true && executionRefreshAlreadyRunning !== true && typeof forceRefreshBankingPayBatchChildModalAfterOperation === 'function' && child.__queuedExecutionRefreshFromOverviewRender !== true) {
         child.__queuedExecutionRefreshFromOverviewRender = true;
         setTimeout(() => {
           try {

@@ -33,3 +33,35 @@ test('Refresh Batch recovers the stale post-execution screen even if operation i
     /if \(hasPaymentExecuteRefreshContext\(\) \|\| hasPaymentExecuteRefreshRequiredFlag\(\)\) \{[\s\S]*forceChildExecutionRefresh/
   );
 });
+
+test('payment execution does not start a full child refresh before the operation is terminal', () => {
+  const start = source.indexOf("markPaymentExecuteRefreshDirty(operationId, activeOperationPayload, 'execute-start-mark-dirty')");
+  const end = source.indexOf('await rerenderChild();', start);
+  assert.ok(start >= 0 && end > start);
+  const body = source.slice(start, end);
+  assert.doesNotMatch(body, /forceChildExecutionRefresh/);
+});
+
+test('terminal observation and progress-modal close share one authoritative refresh', () => {
+  const start = source.indexOf('const createPaymentExecutionTerminalCallbacks =');
+  const end = source.indexOf('const executePaymentPipeline =', start);
+  assert.ok(start >= 0 && end > start);
+  const body = source.slice(start, end);
+  assert.match(body, /let terminalRefreshPromise = null/);
+  assert.match(body, /if \(terminalRefreshPromise && typeof terminalRefreshPromise\.then === 'function'\) return terminalRefreshPromise/);
+  assert.match(body, /onTerminalObserved:[\s\S]*applyTerminalOnce/);
+  assert.match(body, /onTerminalClose:[\s\S]*isPaymentExecuteRefreshTerminalState/);
+  assert.match(body, /onClose:[\s\S]*isPaymentExecuteRefreshTerminalState/);
+});
+
+test('bootstrap Overview does not recursively enqueue while its terminal refresh is already running', () => {
+  const start = source.indexOf('const executionRefreshAlreadyRunning =');
+  const end = source.indexOf('if (isBootstrapOnly && executionRefreshRequired)', start);
+  assert.ok(start >= 0 && end > start);
+  const setup = source.slice(start, end);
+  assert.match(setup, /child\.__paymentExecutionRefreshInFlight/);
+  assert.match(setup, /executionRefreshOperationTerminal/);
+  const branch = source.slice(end, source.indexOf('if (isBootstrapOnly) {', end));
+  assert.match(branch, /executionRefreshOperationTerminal === true/);
+  assert.match(branch, /executionRefreshAlreadyRunning !== true/);
+});
