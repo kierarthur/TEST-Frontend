@@ -24694,7 +24694,7 @@ function installBankingPayStage3Handlers() {
           wholeBatch
         });
         if (!confirmation) return;
-        const requiresCancellationReauth = ['DRAFT_CANCEL', 'PRE_PROVIDER_CANCEL_AND_RECALCULATE']
+        const requiresCancellationReauth = ['DRAFT_CANCEL', 'CANCEL_PAYMENT']
           .includes(requestedAction);
         const draftReauthToken = requiresCancellationReauth
           ? String(await openBankingReauthModal({ purpose: 'PAYMENT_REVERSAL' }) || '').trim()

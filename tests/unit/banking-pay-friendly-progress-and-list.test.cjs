@@ -57,7 +57,7 @@ test('a failed cancellation start remains visible until status changes or the us
 
 test('cancellation authenticates before the progress modal and uses a calm Workbench-pending state', () => {
   const cancellation = sliceBetween('const bankingPayCancellationProgressState', 'async function loadCompleteBankingPayCancellationProjectionStatus');
-  assert.match(source, /const requiresCancellationReauth = \['DRAFT_CANCEL', 'PRE_PROVIDER_CANCEL_AND_RECALCULATE'\]/);
+  assert.match(source, /const requiresCancellationReauth = \['DRAFT_CANCEL', 'CANCEL_PAYMENT'\]/);
   assert.match(source, /if \(requiresCancellationReauth && !draftReauthToken\) return/);
   assert.match(cancellation, /Financial cancellation is complete\./);
   assert.match(cancellation, /Banking Pay is updating quietly in the background\./);
