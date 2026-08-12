@@ -162,4 +162,5 @@ test('awaiting-authorisation batch opens the normal reauthorisation review', () 
   assert.match(source, /reauthorisationRequired \? 'Review and reauthorise batch' : 'Execute payment'/);
   assert.match(source, /function readFirstBool\(\.\.\.values\) \{/);
   assert.doesNotMatch(source, /const readFirstBool = \(\.\.\.values\) => \{/);
+  assert.match(source, /const lowerTrim = \(v\) => trimStr\(v\)\.toLowerCase\(\);/);
 });

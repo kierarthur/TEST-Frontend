@@ -83093,6 +83093,7 @@ function renderBankingPayBatchChildModalOverview() {
   const asArr = (v) => Array.isArray(v) ? v : [];
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const upperTrim = (v) => trimStr(v).toUpperCase();
+  const lowerTrim = (v) => trimStr(v).toLowerCase();
   const asNum = (v, dflt = 0) => {
     const n = Number(v);
     return Number.isFinite(n) ? n : dflt;
