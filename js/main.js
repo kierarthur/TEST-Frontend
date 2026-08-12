@@ -84593,7 +84593,7 @@ function renderBankingPayBatchChildModalOverview() {
     ? 'Yes'
     : (remittancePendingFromRows ? 'Pending' : (remittanceRowsLoaded ? 'No' : 'Open Remittance tab to check'));
 
-  const readFirstBool = (...values) => {
+  function readFirstBool(...values) {
     for (const value of values) {
       if (value === true) return true;
       if (value === false) return false;
@@ -84603,7 +84603,7 @@ function renderBankingPayBatchChildModalOverview() {
       return readBool(text);
     }
     return false;
-  };
+  }
 
   const readOptionalBool = (value) => {
     if (value === true) return true;
