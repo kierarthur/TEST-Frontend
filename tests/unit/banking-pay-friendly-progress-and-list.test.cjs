@@ -71,6 +71,7 @@ test('cancellation authenticates before the progress modal and uses a calm Workb
 
 test('terminal cancellation results say failed explicitly and distinguish mixed outcomes', () => {
   const cancellation = sliceBetween('const bankingPayCancellationProgressState', 'async function loadCompleteBankingPayCancellationProjectionStatus');
+  const batchChild = sliceBetween('async function openBankingPayBatchChildModal', 'function openBulkTimesheetActionProgressModal');
   assert.match(cancellation, /\['BLOCKED', 'Cancellation failed'\]/);
   assert.match(cancellation, /terminalFailedCount/);
   assert.match(cancellation, /terminalMixedResult/);
@@ -78,7 +79,12 @@ test('terminal cancellation results say failed explicitly and distinguish mixed 
   assert.match(cancellation, /Cancellation failed\. No payment was cancelled/);
   assert.match(cancellation, /succeeded and/);
   assert.match(cancellation, /failed\. Failed payments were left unchanged/);
-  assert.match(cancellation, /REAUTHORISE_REMAINING: 'Verify and retry failed cancellations'/);
+  assert.match(cancellation, /REAUTHORISE_REMAINING: 'Review and reauthorise remaining batch'/);
+  assert.match(cancellation, /typeof batchChild\.openReauthorisationReview !== 'function'/);
+  assert.match(cancellation, /await batchChild\.openReauthorisationReview\(\)/);
+  assert.doesNotMatch(cancellation, /if \(action === 'REAUTHORISE_REMAINING'\) \{\s*await bankingPayBatchPrepare/);
+  assert.match(batchChild, /child\.openReauthorisationReview = async \(\) =>/);
+  assert.match(batchChild, /return executePaymentPipeline\(\{ reauthoriseRemaining: true \}\)/);
   assert.doesNotMatch(cancellation, /terminal \? 'Cancellation ended'/);
 });
 

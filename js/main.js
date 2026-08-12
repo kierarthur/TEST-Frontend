@@ -23401,7 +23401,7 @@ function renderBankingPayCancellationProgressModal() {
     label: String(item?.label || '').trim() || 'A selected payment needs review.',
     count: Math.max(0, Number(item?.count || 0) || 0)
   }));
-  const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Verify and retry failed cancellations', RETRY_PLANNING: 'Continue preparation', RETRY_PROCESSING: 'Retry Banking Pay update' };
+  const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Review and reauthorise remaining batch', RETRY_PLANNING: 'Continue preparation', RETRY_PROCESSING: 'Retry Banking Pay update' };
   const retryProcessingAllowed = availableActions.includes('RETRY_PROCESSING')
     && status.financial_complete === true && workbenchRefreshStatus === 'FAILED';
   const primaryAction = ['RETRY_PLANNING', 'AUTHORISE', 'USE_GOLDEN_KEY', 'REAUTHORISE_REMAINING',
@@ -23530,8 +23530,24 @@ function renderBankingPayCancellationProgressModal() {
       if (!availableActions.includes(action)) return;
       try {
         if (action === 'REAUTHORISE_REMAINING') {
-          await bankingPayBatchPrepare(state.payBatchId, []);
+          const resolveChild = () => {
+            const modalContext = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+            const candidateChild = modalContext?.banking?.pay?.child;
+            return candidateChild &&
+              String(candidateChild.batchId || candidateChild.payBatchId || candidateChild.pay_batch_id || '').trim() === String(state.payBatchId || '').trim()
+              ? candidateChild
+              : null;
+          };
+          let batchChild = resolveChild();
           closeBankingPayCancellationProgressModal();
+          if (!batchChild && typeof openBankingPayBatchChildModal === 'function') {
+            await openBankingPayBatchChildModal(state.payBatchId, { activeTabKey: 'overview' });
+            batchChild = resolveChild();
+          }
+          if (!batchChild || typeof batchChild.openReauthorisationReview !== 'function') {
+            throw new Error('The remaining batch could not be opened for reauthorisation. Reopen the batch and choose Execute payment.');
+          }
+          await batchChild.openReauthorisationReview();
           return;
         }
         const rpcAction = action === 'CANCEL_REQUEST' ? 'CANCEL' : action;
@@ -23542,6 +23558,7 @@ function renderBankingPayCancellationProgressModal() {
         scheduleBankingPayCancellationProgressPoll();
         return result;
       } catch (error) {
+        if (action === 'REAUTHORISE_REMAINING') state.visible = true;
         state.error = String(error?.message || error || 'The cancellation action could not be completed.');
         renderBankingPayCancellationProgressModal();
       }
@@ -79334,6 +79351,17 @@ const executePaymentPipeline = async (pipelineOptions = {}) => {
     child.actionsBusy.executing = false;
     await rerenderChild();
   }
+};
+
+child.openReauthorisationReview = async () => {
+  await loadBatch({
+    forcePoll: false,
+    silent: true,
+    executionRefresh: true,
+    userInitiated: true,
+    expectedOpenToken: child.openToken
+  });
+  return executePaymentPipeline({ reauthoriseRemaining: true });
 };
 
 const retryUnsentPaymentsPipeline = async () => {
