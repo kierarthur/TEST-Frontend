@@ -115,6 +115,35 @@ test('selection changes respect an explicit incomplete server-selected-row set',
   assert.match(body, /localSelectedPreviewRowIdsDirty = false/);
 });
 
+test('all-pages selection adopts the authoritative mode without requiring a complete selected-ID array', () => {
+  const body = sliceBetween(
+    'const applySelectionPayloadSummaryToWizard =',
+    'const togglePreviewRowSelection ='
+  );
+
+  assert.match(body, /const payloadMode = String\(/);
+  assert.match(body, /payload\.selection_intent_mode/);
+  assert.match(body, /else if \(payloadMode === 'IMPLICIT_ALL' \|\| payloadMode === 'EXPLICIT_NONE'\)/);
+  assert.match(body, /writePreviewSelectionState\(decisions, \[\], payloadMode\)/);
+  assert.match(body, /workbench\.authoritative_selected_preview_row_mode = payloadMode/);
+  assert.match(body, /selection_mutation_authority = \{/);
+  assert.match(body, /progress_counter_version: progressCounterVersion/);
+  assert.match(body, /getRenderedPreviewRowIds\(\),\s*payloadMode === 'IMPLICIT_ALL'/);
+  assert.match(body, /local_selected_preview_row_ids_dirty = false/);
+});
+
+test('an in-flight Ready to Pay selection refresh is shown as quiet progress rather than a stale-row warning', () => {
+  const body = sliceBetween(
+    'function renderBankingPayTab(scopePreset)',
+    'function renderPayNewBatchWizard()'
+  );
+
+  assert.match(body, /data-banking-selection-mutation-pending/);
+  assert.match(body, /Updating selection…/);
+  assert.match(body, /selectionMutationPending \?/);
+  assert.match(body, /Create Draft disabled: selected rows need refresh/);
+});
+
 test('rendered preview checkboxes use the complete server-owned selection when provided', () => {
   const body = sliceBetween(
     'const buildPayPreviewRowsViewModel =',

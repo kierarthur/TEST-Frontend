@@ -46187,12 +46187,19 @@ function renderBankingPayTab(scopePreset) {
   }
   const createDraftBlocked = selectedRowUnsafeReasons.length > 0;
   const uniqueCreateDraftBlockers = Array.from(new Set(selectedRowUnsafeReasons));
+  const selectionMutationPending = (() => {
+    try {
+      return document.getElementById('modalBody')?.getAttribute('data-banking-selection-mutation-pending') === '1';
+    } catch {
+      return false;
+    }
+  })();
   wizard.create_draft_disabled = createDraftBlocked;
   wizard.createDraftDisabled = createDraftBlocked;
   wizard.create_draft_blocker_codes = uniqueCreateDraftBlockers;
   wizard.createDraftBlockerCodes = uniqueCreateDraftBlockers;
   const statusBannerHtml = explicitStatePills.length > 0 || createDraftBlocked
-    ? `<div class="card" style="margin-bottom:10px;"><div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${explicitStatePills.map(([label, title]) => `<span class="pill pill-info" title="${enc(title)}">${enc(label)}</span>`).join('')}${createDraftBlocked ? `<span class="pill pill-warn" title="${enc(uniqueCreateDraftBlockers.join(', '))}">Create Draft disabled: selected rows need refresh</span>` : ''}</div></div>`
+    ? `<div class="card" style="margin-bottom:10px;"><div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${explicitStatePills.map(([label, title]) => `<span class="pill pill-info" title="${enc(title)}">${enc(label)}</span>`).join('')}${selectionMutationPending ? `<span class="pill pill-info" title="CloudTMS is saving the new Ready to Pay selection.">Updating selection…</span>` : (createDraftBlocked ? `<span class="pill pill-warn" title="${enc(uniqueCreateDraftBlockers.join(', '))}">Create Draft disabled: selected rows need refresh</span>` : '')}</div></div>`
     : '';
   const payListHtml = (typeof renderPayBatchListPanel === 'function') ? renderPayBatchListPanel() : '';
   const wizardHtml = (typeof renderPayNewBatchWizard === 'function') ? renderPayNewBatchWizard() : '';
@@ -48724,8 +48731,17 @@ function renderPayNewBatchWizard() {
 
   const renderReadyPreviewTableHeaderHtml = () => {
     const hasReadyRows = getWorkbenchSectionPageMeta('READY_TO_PAY').totalCount > 0;
+    const selectionMutationAuthority = isPlainObject(wiz.selection_mutation_authority)
+      ? wiz.selection_mutation_authority
+      : {};
+    const authoritativeAllPagesSelectionMode = upperTrim(
+      selectionMutationAuthority.selected_preview_row_mode ||
+      wiz.workbench?.authoritative_selected_preview_row_mode ||
+      wiz.decisions?.authoritative_selected_preview_row_mode ||
+      selectedPreviewRowMode
+    );
     const allSelected = hasReadyRows
-      && selectedPreviewRowMode === 'IMPLICIT_ALL'
+      && authoritativeAllPagesSelectionMode === 'IMPLICIT_ALL'
       && authoritativeSelectedCurrentEligibleReadyRowCount > 0;
     const partiallySelected = !allSelected && authoritativeSelectedCurrentEligibleReadyRowCount > 0;
     return `
@@ -56566,6 +56582,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const authoritativeSelectedCurrentEligibleReadyRowCount = (() => {
     const readyMeta = getWorkbenchSectionPageMeta('READY_TO_PAY');
     const workbenchSource = isPlainObject(wiz.workbench) ? wiz.workbench : {};
+    const selectionMutationSource = isPlainObject(wiz.selection_mutation_authority) ? wiz.selection_mutation_authority : {};
     const progressSource = isPlainObject(authoritativeProgress) ? authoritativeProgress : {};
     const previewPayloadSource = isPlainObject(pv) ? pv : {};
     const previewDataSource = isPlainObject(previewEnvelope) ? previewEnvelope : {};
@@ -56594,7 +56611,22 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       { source: 'preview-data', value: firstCount(previewDataSource), revision: firstRevision(previewDataSource) },
       { source: 'workbench', value: firstCount(workbenchSource), revision: firstRevision(workbenchSource) }
     ].filter((item) => item.value !== null);
+    const selectionMutationCount = firstCount(selectionMutationSource);
+    const selectionMutationRevision = firstRevision(selectionMutationSource);
     const versioned = envelopes.filter((item) => item.revision !== null);
+    // The mutation response is the direct server acknowledgement of the
+    // click. Keep it authoritative until a strictly newer progress revision
+    // arrives; page counts can describe presentation rows and legitimately
+    // differ from the economic selected-row count at the same revision.
+    if (selectionMutationCount !== null && selectionMutationRevision !== null) {
+      const latestOtherRevision = versioned.length
+        ? Math.max(...versioned.map((item) => item.revision))
+        : -1;
+      if (selectionMutationRevision >= latestOtherRevision) {
+        wiz.selectionCountAuthorityConflict = null;
+        return selectionMutationCount;
+      }
+    }
     if (versioned.length) {
       const latestRevision = Math.max(...versioned.map((item) => item.revision));
       const latest = versioned.filter((item) => item.revision === latestRevision);
@@ -95927,6 +95959,16 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           : payload.selected_preview_row_ids
       );
       const selectedCount = Number(payload.selected_row_count ?? selectedIds.length);
+      const payloadMode = String(
+        payload.selected_preview_row_mode ||
+        payload.selectedPreviewRowMode ||
+        (String(payload.selection_intent_mode || payload.selectionIntentMode || '').trim().toUpperCase() === 'IMPLICIT_ALL'
+          ? 'IMPLICIT_ALL'
+          : (String(payload.selection_intent_mode || payload.selectionIntentMode || '').trim().toUpperCase() === 'EXPLICIT_INCLUDE'
+              ? (selectedIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE')
+              : '')) ||
+        ''
+      ).trim().toUpperCase();
       const progressCounterVersion = Number(payload.progress_counter_version ?? payload.progressCounterVersion);
       const readyForDraftProvided = Object.prototype.hasOwnProperty.call(payload, 'ready_for_draft') ||
         Object.prototype.hasOwnProperty.call(payload, 'can_create_draft');
@@ -95969,25 +96011,44 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         }
         st.pay.draftWizard.workbench.server_selected_preview_row_ids = selectedIds;
         st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided = serverSelectedIdsProvided;
+        if (payloadMode === 'IMPLICIT_ALL' || payloadMode === 'EXPLICIT_SUBSET' || payloadMode === 'EXPLICIT_NONE') {
+          st.pay.draftWizard.workbench.authoritative_selected_preview_row_mode = payloadMode;
+          decisions.authoritative_selected_preview_row_mode = payloadMode;
+        }
+        if (
+          (payloadMode === 'IMPLICIT_ALL' || payloadMode === 'EXPLICIT_SUBSET' || payloadMode === 'EXPLICIT_NONE') &&
+          Number.isFinite(selectedCount) && selectedCount >= 0 &&
+          Number.isSafeInteger(progressCounterVersion) && progressCounterVersion >= 0
+        ) {
+          st.pay.draftWizard.selection_mutation_authority = {
+            selected_preview_row_mode: payloadMode,
+            selected_row_count: Math.trunc(selectedCount),
+            progress_counter_version: progressCounterVersion
+          };
+        }
         decisions.server_selected_preview_row_ids = selectedIds;
         decisions.server_selected_preview_row_ids_provided = st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided;
         if (st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided === true) {
-          const payloadMode = String(
-            payload.selected_preview_row_mode ||
-            payload.selectedPreviewRowMode ||
-            (String(payload.selection_intent_mode || payload.selectionIntentMode || '').trim().toUpperCase() === 'IMPLICIT_ALL'
-              ? 'IMPLICIT_ALL'
-              : (String(payload.selection_intent_mode || payload.selectionIntentMode || '').trim().toUpperCase() === 'EXPLICIT_INCLUDE'
-                  ? (selectedIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE')
-                  : '')) ||
-            ''
-          ).trim().toUpperCase();
           const authoritativeMode = ['IMPLICIT_ALL', 'EXPLICIT_SUBSET', 'EXPLICIT_NONE'].includes(payloadMode)
             ? payloadMode
             : (selectedIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE');
           writePreviewSelectionState(decisions, selectedIds, authoritativeMode);
           updatePreviewRowSelectionInLoadedState(getRenderedPreviewRowIds(), false);
           updatePreviewRowSelectionInLoadedState(selectedIds, true);
+          st.pay.draftWizard.local_selected_preview_row_ids_dirty = false;
+          st.pay.draftWizard.localSelectedPreviewRowIdsDirty = false;
+        } else if (payloadMode === 'IMPLICIT_ALL' || payloadMode === 'EXPLICIT_NONE') {
+          // All-pages selection actions deliberately return an authoritative
+          // selection mode without materialising every selected preview-row
+          // identity. Adopt that mode even when the complete ID array is not
+          // supplied; otherwise a preceding EXPLICIT_NONE/IMPLICIT_ALL state
+          // can repaint the header and counters with the opposite decision
+          // while the server and the rendered row contracts already agree.
+          writePreviewSelectionState(decisions, [], payloadMode);
+          updatePreviewRowSelectionInLoadedState(
+            getRenderedPreviewRowIds(),
+            payloadMode === 'IMPLICIT_ALL'
+          );
           st.pay.draftWizard.local_selected_preview_row_ids_dirty = false;
           st.pay.draftWizard.localSelectedPreviewRowIdsDirty = false;
         }

@@ -24,6 +24,8 @@ test('Ready to Pay header uses an all-pages checkbox and a dedicated Channel col
   );
 
   assert.match(body, /data-action="banking:pay:toggleAllReadyPreviewRows"/);
+  assert.match(body, /authoritativeAllPagesSelectionMode === 'IMPLICIT_ALL'/);
+  assert.match(body, /selectionMutationAuthority\.selected_preview_row_mode/);
   assert.match(body, /Tick all eligible Ready to Pay lines across every page/);
   assert.doesNotMatch(body, />Tick<\/th>/);
   assert.ok(body.indexOf('>Channel</th>') < body.indexOf('>Amount</th>'));
