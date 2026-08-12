@@ -238,7 +238,7 @@ test('a hidden Banking Pay batch child remains a valid refresh target under its 
   const outcome = vm.runInNewContext(`
     const id = 'batch-1';
     const KIND = 'banking-pay-batch-child';
-    const child = { batchId: id, openToken: 'child-token' };
+    const child = { batchId: id, openToken: 'child-token', __modalShown: true };
     const getFrameOpenTokenSafe = (frame) => String(frame?.childOpenToken || frame?._childOpenToken || frame?.openToken || '');
     const getFrameBatchIdSafe = (frame) => String(frame?.payBatchId || frame?.batchId || '');
     const window = {
@@ -270,13 +270,17 @@ test('a hidden Banking Pay batch child remains a valid refresh target under its 
           banking: { pay: { child } }
         };
         return currentChildStateMatches();
+      })(),
+      boundedPreOpenContextAccepted: (() => {
+        child.__modalShown = false;
+        return currentChildStateMatches();
       })()
     });
   `);
 
   assert.deepEqual(
     JSON.parse(JSON.stringify(outcome)),
-    { hiddenParentMatches: true, wrongTokenRejected: false, orphanWithoutFrameRejected: false }
+    { hiddenParentMatches: true, wrongTokenRejected: false, orphanWithoutFrameRejected: false, boundedPreOpenContextAccepted: true }
   );
 });
 

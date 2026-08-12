@@ -71122,7 +71122,9 @@ function dismissOrphanedBankingPayBatchChildV1(options = {}) {
       title.startsWith('Pay Batch —')
     );
     const overlayVisible = !!(back && back.style.display !== 'none');
-    if (!child || !childShellPresent || !overlayVisible) return false;
+    const exactPayBatchTitle = /^Pay Batch \u2014 [0-9a-f]{8}$/i.test(title);
+    if (!childShellPresent || !overlayVisible) return false;
+    if (!child && !exactPayBatchTitle) return false;
 
     try {
       if (typeof child.__dismissOwnedChild === 'function') child.__dismissOwnedChild();
@@ -72063,6 +72065,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
   const currentChildStateMatches = () => {
     try {
+      const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
       const contextMatches = (candidateCtx) => {
         if (!candidateCtx || String(candidateCtx.entity || '') !== 'banking') return false;
         const candidateChild = (candidateCtx.banking && candidateCtx.banking.pay && candidateCtx.banking.pay.child && typeof candidateCtx.banking.pay.child === 'object')
@@ -72073,6 +72076,11 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
         if (String(candidateChild.openToken || '') !== String(child.openToken || '')) return false;
         return true;
       };
+      // The first read-only batch load intentionally occurs before showModal()
+      // creates the child frame. Permit only that bounded pre-open phase to use
+      // the live Banking context. Once the shell has been shown, every async
+      // update must prove the matching frame still exists.
+      if (child.__modalShown !== true && contextMatches(ctx)) return true;
       const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
       return stack.some((frame) => {
         if (!frame || String(frame.kind || '') !== KIND) return false;
