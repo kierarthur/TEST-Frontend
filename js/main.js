@@ -24652,7 +24652,7 @@ function renderBankingPayStage3StatusPanel(batchPayload, correctionState) {
     const historicalRemoval = row.statusLabel === 'CANCELLED' || row.statusLabel === 'RELEASED';
     const historicalVerb = row.statusLabel === 'RELEASED' ? 'Released' : 'Cancelled';
     const historicalAmountHtml = row.payChannel === 'PAYE'
-      ? `<div style="display:grid;gap:2px;text-align:right;"><strong>${enc(`Gross/base ${fmtAmount(row.cancelledGrossBaseAmountPence)}`)}</strong><span class="mini">${enc(`Net ${historicalVerb.toLowerCase()} ${fmtAmount(row.cancelledBankAmountPence)}`)}</span></div>`
+      ? `<div style="display:grid;gap:2px;text-align:right;"><strong>${enc(`Gross after deductions ${fmtAmount(row.cancelledPayableAmountPence)}`)}</strong><span class="mini">${enc(`Net ${historicalVerb.toLowerCase()} ${fmtAmount(row.cancelledBankAmountPence)}`)}</span></div>`
       : `<div style="display:grid;gap:2px;text-align:right;"><strong>${enc(fmtAmount(row.cancelledPayableAmountPence || row.cancelledBankAmountPence))}</strong><span class="mini">${enc(`${historicalVerb} amount`)}</span></div>`;
     const awaitingPayeNetAmount = !historicalRemoval && bankingPayCandidateAwaitingPayeNetAmount(batchPayload, row);
     const currentAmountHtml = awaitingPayeNetAmount

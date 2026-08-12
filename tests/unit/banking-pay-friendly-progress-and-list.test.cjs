@@ -117,13 +117,13 @@ test('Banking Pay keeps operational diagnostics out of the customer modal and pr
   assert.doesNotMatch(wizard, /Selected current eligible Ready to Pay rows:/);
 });
 
-test('Current Payment Status presents cancelled PAYE gross and net and one Umbrella payable amount', () => {
+test('Current Payment Status presents cancelled PAYE gross after deductions and net and one Umbrella payable amount', () => {
   const panel = sliceBetween('function renderBankingPayStage3StatusPanel', 'function refreshBankingPayStage3SelectedRows');
-  assert.match(panel, /Gross\/base/);
+  assert.match(panel, /Gross after deductions/);
   assert.match(panel, /historicalVerb\.toLowerCase/);
-  assert.match(panel, /cancelledGrossBaseAmountPence/);
   assert.match(panel, /cancelledPayableAmountPence/);
   assert.match(panel, /cancelledBankAmountPence/);
+  assert.doesNotMatch(panel, /Gross\/base/);
 });
 
 test('Draft PAYE amounts distinguish missing net input from a real zero bank payment', () => {
