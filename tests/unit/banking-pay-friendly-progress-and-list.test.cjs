@@ -158,4 +158,6 @@ test('awaiting-authorisation batch opens the normal reauthorisation review', () 
   assert.match(batchChild, /act === 'banking:pay:child:openAuthorisation'/);
   assert.match(batchChild, /await child\.openReauthorisationReview\(\)/);
   assert.match(source, /title="Review and reauthorise the remaining batch">Review and reauthorise batch<\/button>/);
+  assert.match(source, /const reauthorisationRequired = readFirstBool\(/);
+  assert.match(source, /reauthorisationRequired \? 'Review and reauthorise batch' : 'Execute payment'/);
 });

@@ -83554,6 +83554,18 @@ function renderBankingPayBatchChildModalOverview() {
     : '';
   const data = asObj(child.data) || {};
   const batch = asObj(data.batch) || {};
+  const executionIntent = asObj(
+    data.execution_intent_json || data.executionIntentJson ||
+    batch.execution_intent_json || batch.executionIntentJson
+  ) || {};
+  const reauthorisationRequired = readFirstBool(
+    executionIntent.reauthorisation_required,
+    executionIntent.reauthorization_required,
+    data.reauthorisation_required,
+    data.reauthorization_required,
+    batch.reauthorisation_required,
+    batch.reauthorization_required
+  ) === true;
   const isOverviewPaymentExecuteRefreshTerminalState = (operationLike = null) => {
     const operation = asObj(operationLike) || {};
     const status = upperTrim(firstText(operation.status, operation.operation_status, operation.operationStatus, operation.state, operation.phase_status));
@@ -85712,7 +85724,7 @@ function renderBankingPayBatchChildModalOverview() {
       ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:deleteDraft" title="Cancel this unsubmitted draft batch before it is sent to the bank/provider" style="font-weight:800;background:#dc2626;border-color:#dc2626;color:#fff;">Cancel Draft Batch</button>`
       : '',
     canShowExecutePayment
-      ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:executePayment" data-retry-pre-provider-failure="${retryablePreProviderFailure ? 'true' : 'false'}" data-retry-operation-id="${enc(retryablePreProviderFailure ? activeOperationId : '')}"${executeButtonDisabledAttr}${executeButtonSuccessStyle} title="${enc(retryablePreProviderFailure ? 'Retry this payment after server-side pre-provider safety checks' : (authoritativeNoBankPaymentState ? 'Authorise and settle this batch without sending a provider transfer' : 'Execute eligible payments'))}">${child.actionsBusy?.executing ? 'Executing…' : (retryablePreProviderFailure ? 'Retry payment' : 'Execute payment')}</button>`
+      ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:executePayment" data-retry-pre-provider-failure="${retryablePreProviderFailure ? 'true' : 'false'}" data-retry-operation-id="${enc(retryablePreProviderFailure ? activeOperationId : '')}"${executeButtonDisabledAttr}${executeButtonSuccessStyle} title="${enc(retryablePreProviderFailure ? 'Retry this payment after server-side pre-provider safety checks' : (reauthorisationRequired ? 'Review the remaining payment, choose its date and time, and reauthorise it' : (authoritativeNoBankPaymentState ? 'Authorise and settle this batch without sending a provider transfer' : 'Execute eligible payments')))}">${child.actionsBusy?.executing ? 'Executing…' : (retryablePreProviderFailure ? 'Retry payment' : (reauthorisationRequired ? 'Review and reauthorise batch' : 'Execute payment'))}</button>`
       : '',
     canShowPayeEntry
       ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPayeEntry"${actionDisabledAttr(!!child.loading || !!child.__loadInFlight || !!child.actionsBusy?.refreshing || !!child.actionsBusy?.polling, 'PAYE entry is unavailable while the batch is refreshing')} title="Enter PAYE net payments">Enter PAYE payments</button>`

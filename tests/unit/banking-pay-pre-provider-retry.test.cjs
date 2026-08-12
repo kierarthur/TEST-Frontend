@@ -12,7 +12,7 @@ test('a typed pre-provider failure exposes retry instead of a dead review-only a
   assert.match(source, /activeOperationStatus === 'REVIEW_REQUIRED'/);
   assert.match(source, /\['PAYMENT_EXECUTE_OPERATION_FAILED', 'BATCH_STALE'\]\.includes\(activeOperationResumeReason\)/);
   assert.match(source, /!retryablePreProviderFailure && !!\(/);
-  assert.match(source, /retryablePreProviderFailure \? 'Retry payment' : 'Execute payment'/);
+  assert.match(source, /retryablePreProviderFailure \? 'Retry payment' : \(reauthorisationRequired \? 'Review and reauthorise batch' : 'Execute payment'\)/);
   assert.match(source, /data-retry-pre-provider-failure=/);
 });
 
