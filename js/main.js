@@ -76729,8 +76729,7 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
                 : (weekRaw || 'Not recorded');
               const amountNumber = Number(item.payment_amount ?? item.paymentAmount);
               const amount = Number.isFinite(amountNumber) ? `£${amountNumber.toFixed(2)}` : 'Amount unavailable';
-              const payment = String(item.description || item.source_ref || item.sourceRef || item.item_type || item.itemType || 'payment').trim();
-              return `${tmsRef ? `${tmsRef} — ` : ''}${candidate}; ${client}; week ending ${weekEnding}; ${amount}; ${payment}`;
+              return `${tmsRef ? `${tmsRef} — ` : ''}${candidate}; ${client}; week ending ${weekEnding}; ${amount}`;
             }).filter(Boolean);
             const staleTitle = staleFailureRows.length
               ? 'Reauthorisation blocked by changed payments'

@@ -20,6 +20,7 @@ test('reauthorisation freshness failures name affected payments and give an acti
   assert.match(source, /Remove or resolve every payment listed, then reauthorise the remaining batch/);
   assert.match(source, /If these are the only freshness failures, reauthorisation can proceed/);
   assert.match(source, /Additional failures exist/);
+  assert.doesNotMatch(source, /item\.description \|\| item\.source_ref/);
 });
 
 test('freshness reason codes are converted to plain-English explanations', () => {
