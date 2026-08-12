@@ -364,7 +364,7 @@ test('a rejected optimistic selection reloads ready and blocked pages and always
   );
 });
 
-test('a successful selection reloads ready and blocked pages so headroom movement is adopted', () => {
+test('a successful selection reloads ready and blocked pages without replaying a stale mutation snapshot', () => {
   const toggleBody = sliceBetween(
     'const togglePreviewRowSelection =',
     'const setPreviewRowsSelection ='
@@ -385,8 +385,9 @@ test('a successful selection reloads ready and blocked pages so headroom movemen
   assert.match(helperBody, /loadPayWorkbenchPreviewPageForSection\('canonical_preview_lines', 'reload'\)/);
   assert.match(toggleBody, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\)/);
   assert.match(groupedBody, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\)/);
-  assert.match(groupedBody, /if \(latestSelectionResult\) applySelectionPayloadSummaryToWizard\(latestSelectionResult\)/);
-  assert.match(globalBody, /applySelectionPayloadSummaryToWizard\(result\);\s*await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\);/);
+  assert.doesNotMatch(toggleBody, /reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\)/);
+  assert.doesNotMatch(groupedBody, /latestSelectionResult/);
+  assert.doesNotMatch(globalBody, /reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\)/);
 });
 
 test('Create Draft requires review when the authoritative selected set changed', () => {

@@ -95960,6 +95960,9 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         : (Object.prototype.hasOwnProperty.call(payload, 'selected_preview_row_ids_provided')
             ? payload.selected_preview_row_ids_provided === true
             : Array.isArray(payload.server_selected_preview_row_ids));
+      const selectionMembershipSnapshotProvided = serverSelectedIdsProvided ||
+        payload.selected_preview_row_ids_snapshot_provided === true ||
+        payload.selectedPreviewRowIdsSnapshotProvided === true;
       const selectedIds = normalizePreviewRowIdArray(
         serverSelectedIdsProvided
           ? payload.server_selected_preview_row_ids
@@ -96043,11 +96046,16 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         }
         decisions.server_selected_preview_row_ids = selectedIds;
         decisions.server_selected_preview_row_ids_provided = st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided;
-        if (st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided === true) {
+        if (selectionMembershipSnapshotProvided) {
           const authoritativeMode = ['IMPLICIT_ALL', 'EXPLICIT_SUBSET', 'EXPLICIT_NONE'].includes(payloadMode)
             ? payloadMode
             : (selectedIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE');
           writePreviewSelectionState(decisions, selectedIds, authoritativeMode);
+          // A row-patch response carries an exact, point-in-time membership
+          // snapshot even when the durable intent remains IMPLICIT_ALL so
+          // genuinely new eligible rows default to selected. Use the snapshot
+          // for the current render; never interpret that future-row intent as
+          // an instruction to tick every row already on screen.
           updatePreviewRowSelectionInLoadedState(getRenderedPreviewRowIds(), false);
           updatePreviewRowSelectionInLoadedState(selectedIds, true);
           st.pay.draftWizard.local_selected_preview_row_ids_dirty = false;
@@ -96136,7 +96144,6 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           // recovery rows. Refresh both projections so one recovery identity
           // never remains rendered in the wrong section.
           await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true });
-          applySelectionPayloadSummaryToWizard(result);
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState([rowId], !wantChecked);
@@ -96158,18 +96165,15 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       try {
         const sessionId = getActivePayWorkbenchSessionIdForSelection();
         if (sessionId && typeof bankingPayWorkbenchSessionSetSelectedRows === 'function') {
-          let latestSelectionResult = null;
           for (let offset = 0; offset < targetIds.length; offset += 100) {
             const chunkIds = targetIds.slice(offset, offset + 100);
             if (!chunkIds.length) continue;
             const result = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, wantChecked
               ? { section: 'canonical_preview_lines', select_preview_row_ids: chunkIds }
               : { section: 'canonical_preview_lines', deselect_preview_row_ids: chunkIds });
-            latestSelectionResult = result;
             applySelectionPayloadSummaryToWizard(result);
           }
           await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true });
-          if (latestSelectionResult) applySelectionPayloadSummaryToWizard(latestSelectionResult);
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState(targetIds, !wantChecked);
@@ -96193,7 +96197,6 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           });
           applySelectionPayloadSummaryToWizard(result);
           await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true });
-          applySelectionPayloadSummaryToWizard(result);
         }
       } catch (error) {
         updatePreviewRowSelectionInLoadedState(visibleIds, !wantChecked);
@@ -102839,6 +102842,28 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
   targetEl.addEventListener('keydown', onKeyDown, true);
   targetEl.addEventListener('dblclick', onDblClick, true);
 
+  // Banking can replace the modal body's descendants during background page
+  // adoption without replacing the delegated root. Native checkbox
+  // `indeterminate` is a DOM property (not an HTML attribute), so restore it
+  // after every descendant replacement as well as after user mutations.
+  let previewSelectionSyncObserver = null;
+  try {
+    if (typeof MutationObserver === 'function') {
+      let selectionSyncQueued = false;
+      previewSelectionSyncObserver = new MutationObserver(() => {
+        if (selectionSyncQueued) return;
+        selectionSyncQueued = true;
+        Promise.resolve().then(() => {
+          selectionSyncQueued = false;
+          syncTimesheetGroupCheckboxes(targetEl);
+        });
+      });
+      previewSelectionSyncObserver.observe(targetEl, { childList: true, subtree: true });
+    }
+  } catch {
+    previewSelectionSyncObserver = null;
+  }
+
   try {
     setTimeout(() => {
       try {
@@ -102894,6 +102919,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           try { targetEl.removeEventListener('input', onInput, true); } catch {}
           try { targetEl.removeEventListener('keydown', onKeyDown, true); } catch {}
           try { targetEl.removeEventListener('dblclick', onDblClick, true); } catch {}
+          try { previewSelectionSyncObserver?.disconnect(); } catch {}
         }
       };
     }
@@ -135364,6 +135390,7 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
       throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
+    const selectedPreviewRowIdsSnapshotProvided = Array.isArray(payloadObj.selected_preview_row_ids);
     const serverSelectedRowsProvided = Object.prototype.hasOwnProperty.call(payloadObj, 'server_selected_preview_row_ids_provided')
       ? payloadObj.server_selected_preview_row_ids_provided === true
       : (Object.prototype.hasOwnProperty.call(payloadObj, 'selected_preview_row_ids_provided')
@@ -135387,6 +135414,7 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
       session_version: payloadObj.session_version ?? null,
       selected_preview_row_ids: cloneJson(selectedRows) || [],
       selected_preview_row_ids_provided: serverSelectedRowsProvided || payloadObj.selected_preview_row_ids_provided === true,
+      selected_preview_row_ids_snapshot_provided: selectedPreviewRowIdsSnapshotProvided,
       selected_preview_row_mode: selectedPreviewRowMode || (selectedRows.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE')
     };
   } catch (error) {

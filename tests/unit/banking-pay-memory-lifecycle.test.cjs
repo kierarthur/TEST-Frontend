@@ -199,20 +199,18 @@ test('Banking Pay selection changes are serialized until the server result is ad
   );
 });
 
-test('the authoritative selection is re-applied after all affected preview sections reload', () => {
+test('the exact mutation snapshot is applied once and refreshed row contracts are not overwritten', () => {
   const start = main.indexOf('const togglePreviewRowSelection = async');
   const end = main.indexOf('    const normalisePayPreviewPageUiSection =', start);
   assert.ok(start >= 0);
   assert.ok(end > start);
   const body = main.slice(start, end);
 
-  assert.match(
-    body,
-    /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*?await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\);/
-  );
+  assert.match(body, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*?await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);/);
+  assert.doesNotMatch(body, /reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\);/);
   assert.match(
     main,
-    /writePreviewSelectionState\(decisions, selectedIds, authoritativeMode\);\s*updatePreviewRowSelectionInLoadedState\(getRenderedPreviewRowIds\(\), false\);\s*updatePreviewRowSelectionInLoadedState\(selectedIds, true\);/
+    /selectionMembershipSnapshotProvided[\s\S]*writePreviewSelectionState\(decisions, selectedIds, authoritativeMode\);[\s\S]*updatePreviewRowSelectionInLoadedState\(getRenderedPreviewRowIds\(\), false\);\s*updatePreviewRowSelectionInLoadedState\(selectedIds, true\);/
   );
   assert.match(
     main,

@@ -34,6 +34,13 @@ test('Ready to Pay header uses an all-pages checkbox and a dedicated Channel col
   assert.match(body, /stickyReadySelectHeaderCellStyle/);
 });
 
+test('Ready partial-selection state is restored after background modal descendant replacement', () => {
+  assert.match(source, /previewSelectionSyncObserver = new MutationObserver/);
+  assert.match(source, /previewSelectionSyncObserver\.observe\(targetEl, \{ childList: true, subtree: true \}\)/);
+  assert.match(source, /syncTimesheetGroupCheckboxes\(targetEl\)/);
+  assert.match(source, /previewSelectionSyncObserver\?\.disconnect\(\)/);
+});
+
 test('Ready to Pay rows are compact and expose breakdowns with a small plus or minus control', () => {
   const groupedBody = sliceBetween(
     'const renderReadyTimesheetGroupedRows =',
@@ -81,10 +88,14 @@ test('Ready selection response adopts the server-owned complete selected ID set'
   assert.match(applyBody, /payload\.server_selected_preview_row_ids/);
   assert.match(applyBody, /Object\.prototype\.hasOwnProperty\.call\(payload, 'server_selected_preview_row_ids_provided'\)/);
   assert.match(applyBody, /payload\.selection_intent_mode/);
+  assert.match(applyBody, /selectionMembershipSnapshotProvided/);
+  assert.match(applyBody, /payload\.selected_preview_row_ids_snapshot_provided === true/);
   assert.match(requestBody, /serverSelectedRowsProvided/);
+  assert.match(requestBody, /const selectedPreviewRowIdsSnapshotProvided = Array\.isArray\(payloadObj\.selected_preview_row_ids\)/);
   assert.match(requestBody, /Object\.prototype\.hasOwnProperty\.call\(payloadObj, 'server_selected_preview_row_ids_provided'\)/);
   assert.match(requestBody, /selectionIntentMode === 'IMPLICIT_ALL'/);
   assert.match(requestBody, /selected_preview_row_mode: selectedPreviewRowMode/);
+  assert.match(requestBody, /selected_preview_row_ids_snapshot_provided: selectedPreviewRowIdsSnapshotProvided/);
 });
 
 test('Ready header selection delegates to the server-owned all-pages selection action', () => {
