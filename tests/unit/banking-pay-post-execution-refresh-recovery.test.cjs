@@ -65,3 +65,23 @@ test('bootstrap Overview does not recursively enqueue while its terminal refresh
   assert.match(branch, /executionRefreshOperationTerminal === true/);
   assert.match(branch, /executionRefreshAlreadyRunning !== true/);
 });
+
+test('Pay Batch Overview uses a renderer-local terminal-state helper', () => {
+  const rendererStart = source.indexOf('function renderBankingPayBatchChildModalOverview()');
+  const rendererEnd = source.indexOf('function renderBankingPayBatchChildModalPaymentIssues', rendererStart);
+  assert.ok(rendererStart >= 0 && rendererEnd > rendererStart);
+  const renderer = source.slice(rendererStart, rendererEnd);
+  assert.match(renderer, /const isOverviewPaymentExecuteRefreshTerminalState =/);
+  assert.match(renderer, /const executionRefreshOperationTerminal = isOverviewPaymentExecuteRefreshTerminalState\(/);
+  assert.doesNotMatch(renderer, /const executionRefreshOperationTerminal = isPaymentExecuteRefreshTerminalState\(/);
+});
+
+test('Pay Batch child renders a recoverable error card instead of stranding the modal', () => {
+  const childStart = source.indexOf('async function openBankingPayBatchChildModal');
+  const rendererStart = source.indexOf('function renderBankingPayBatchChildModalOverview()', childStart);
+  assert.ok(childStart >= 0 && rendererStart > childStart);
+  const childOwner = source.slice(childStart, rendererStart);
+  assert.match(childOwner, /data-banking-pay-child-overview-render-error="1"/);
+  assert.match(childOwner, /data-action="banking:pay:child:refresh"/);
+  assert.match(childOwner, /data-action="modal:close"/);
+});

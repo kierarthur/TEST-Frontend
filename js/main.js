@@ -79690,7 +79690,23 @@ const retryUnsentPaymentsPipeline = async () => {
     return `${card}${source}`;
   };
 
-  const renderChildOverviewHtml = () => injectCancellationProgressCard(injectOverviewExecuteFallback(renderBankingPayBatchChildModalOverview()));
+  const renderChildOverviewHtml = () => {
+    try {
+      return injectCancellationProgressCard(injectOverviewExecuteFallback(renderBankingPayBatchChildModalOverview()));
+    } catch (error) {
+      try { console.warn('[BANKING][PAY BATCH] Overview render failed', error); } catch {}
+      return `
+        <div id="${enc(rootId)}" class="card" data-banking-pay-child-overview-render-error="1" style="padding:12px;">
+          <div style="font-weight:800;margin-bottom:6px;">Pay Batch could not be displayed</div>
+          <div class="mini" style="opacity:.86;margin-bottom:10px;">The batch is unchanged. Refresh this window or close it and try again.</div>
+          <div class="controls">
+            <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh">Refresh Batch</button>
+            <button type="button" class="btn btn-sm btn-outline" data-action="modal:close">Close</button>
+          </div>
+        </div>
+      `;
+    }
+  };
 
   const renderCurrentPaymentStatusSectionErrorHtml = () => {
     try {
@@ -83433,6 +83449,25 @@ function renderBankingPayBatchChildModalOverview() {
     : '';
   const data = asObj(child.data) || {};
   const batch = asObj(data.batch) || {};
+  const isOverviewPaymentExecuteRefreshTerminalState = (operationLike = null) => {
+    const operation = asObj(operationLike) || {};
+    const status = upperTrim(firstText(operation.status, operation.operation_status, operation.operationStatus, operation.state, operation.phase_status));
+    const phase = upperTrim(firstText(operation.phase, operation.operation_phase, operation.operationPhase));
+    const commitState = upperTrim(firstText(
+      operation.execution_commit_state,
+      operation.executionCommitState,
+      data.execution_commit_state,
+      data.executionCommitState,
+      batch.execution_commit_state,
+      batch.executionCommitState
+    ));
+    const batchStatus = upperTrim(firstText(data.status, data.batch_status, data.batchStatus, batch.status, batch.batch_status, batch.batchStatus));
+    return operation.terminal === true || operation.review_required === true || operation.reviewRequired === true ||
+      ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE', 'FAILED', 'ERROR', 'REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW', 'CANCELLED', 'CANCELED'].includes(status) ||
+      ['COMPLETE', 'COMPLETED', 'FAILED', 'ERROR', 'REVIEW_REQUIRED', 'CANCELLED', 'CANCELED'].includes(phase) ||
+      ['COMMITTED', 'FAILED', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED'].includes(commitState) ||
+      ['SETTLED', 'FAILED', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED'].includes(batchStatus);
+  };
   const displaySummary = asObj(data.pay_batch_display_summary || data.payBatchDisplaySummary || data.display_summary || data.displaySummary || batch.pay_batch_display_summary || batch.payBatchDisplaySummary || batch.display_summary || batch.displaySummary) || {};
   const issueSummaryCounts = asObj(displaySummary.issue_summary_counts || displaySummary.issueSummaryCounts || data.issue_summary_counts || data.issueSummaryCounts || batch.issue_summary_counts || batch.issueSummaryCounts) || {};
   const durableCounts = asObj(data.durable_counts || data.durableCounts || batch.durable_counts || batch.durableCounts) || {};
@@ -86440,7 +86475,7 @@ function renderBankingPayBatchChildModalOverview() {
   const executionRefreshAlreadyRunning = child.executionRefreshInFlight === true
     || child.execution_refresh_in_flight === true
     || !!(child.__paymentExecutionRefreshInFlight && typeof child.__paymentExecutionRefreshInFlight.then === 'function');
-  const executionRefreshOperationTerminal = isPaymentExecuteRefreshTerminalState(
+  const executionRefreshOperationTerminal = isOverviewPaymentExecuteRefreshTerminalState(
     child.activeOperation ||
     child.active_operation ||
     child.payment_execute_operation ||
