@@ -21282,6 +21282,9 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
 
   const statusNorm = String(stRaw || '').trim().toUpperCase();
 
+  const listLoadSequence = Math.max(0, Number(pay.list.__loadSequence || 0) || 0) + 1;
+  pay.list.__loadSequence = listLoadSequence;
+
   const qs = new URLSearchParams();
   qs.set('limit', String(lim));
   qs.set('offset', String(off));
@@ -21436,6 +21439,21 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
               ? Math.max(0, Math.trunc(Number(obj.count)))
               : items.length));
 
+    // Only the newest parent-list request may replace the visible page. A
+    // child-close refresh can overlap another list refresh and return later.
+    if (Number(pay.list.__loadSequence || 0) !== listLoadSequence) {
+      return deep({
+        ok: true,
+        stale: true,
+        items,
+        count: totalCount,
+        total_count: totalCount,
+        limit: lim,
+        offset: off,
+        status: statusNorm
+      });
+    }
+
     pay.list.items = deep(items) || [];
     pay.list.limit = lim;
     pay.list.display_mode = 'LIGHT';
@@ -21487,6 +21505,7 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
       }
     } catch {}
 
+    pay.list.loading = false;
     try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
 
     return deep({
@@ -21508,6 +21527,7 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
     });
 
   } catch (e) {
+    if (Number(pay.list.__loadSequence || 0) !== listLoadSequence) return null;
     const friendlyError = makeFriendlyListError(e, 'PAY_BATCH_GET_FAILED');
     try { pay.list.error = String(friendlyError.json?.user_message || friendlyError.json?.message || friendlyError.message || 'Unable to load payment batches. Please refresh and try again.').trim(); } catch {}
     await reportFriendlyListError(friendlyError);
@@ -21515,7 +21535,16 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
     return null;
 
   } finally {
-    try { pay.list.loading = false; } catch {}
+    if (Number(pay.list.__loadSequence || 0) === listLoadSequence) {
+      let finalRenderRequired = false;
+      try {
+        finalRenderRequired = pay.list.loading === true;
+        pay.list.loading = false;
+      } catch {}
+      if (finalRenderRequired) {
+        try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+      }
+    }
   }
 }
 
@@ -23077,6 +23106,27 @@ function applyBankingPayStage3StatusPage(correctionState, page, options = {}) {
   state.current_payment_status_error = '';
   state.currentPaymentStatusError = '';
   return state;
+}
+
+function bankingPayCorrectionRequestIsActive(requestLike) {
+  const request = requestLike && typeof requestLike === 'object' && !Array.isArray(requestLike) ? requestLike : {};
+  const readOptionalFlag = (value) => {
+    if (value === true || value === false) return value;
+    const text = String(value == null ? '' : value).trim().toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return null;
+  };
+  const activeFlag = readOptionalFlag(request.is_active ?? request.isActive);
+  const terminalFlag = readOptionalFlag(request.is_terminal ?? request.isTerminal);
+  if (terminalFlag === true || activeFlag === false) return false;
+  if (activeFlag === true) return true;
+  const status = String(
+    request.request_status || request.requestStatus ||
+    request.status || request.correction_status || request.correctionStatus || ''
+  ).trim().toUpperCase();
+  if (['APPLIED', 'APPLIED_WITH_BLOCKERS', 'BLOCKED', 'FAILED', 'REJECTED', 'CANCELLED', 'CANCELED'].includes(status)) return false;
+  return ['PLANNING', 'PLANNED', 'REQUESTED', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'AUTHORISED', 'AUTHORIZED', 'EXPANDED', 'PROCESSING'].includes(status);
 }
 
 function getBankingPayStage3Context() {
@@ -79853,13 +79903,26 @@ const retryUnsentPaymentsPipeline = async () => {
     const source = String(html || '');
     const data = child.data && typeof child.data === 'object' ? child.data : {};
     const batch = deriveBatchObj(data) || {};
+    const progressState = (typeof bankingPayCancellationProgressState !== 'undefined' && bankingPayCancellationProgressState.payBatchId === id)
+      ? bankingPayCancellationProgressState
+      : null;
+    const request = (
+      (data.latest_correction_request && typeof data.latest_correction_request === 'object' ? data.latest_correction_request : null) ||
+      (data.latestCorrectionRequest && typeof data.latestCorrectionRequest === 'object' ? data.latestCorrectionRequest : null) ||
+      (batch.latest_correction_request && typeof batch.latest_correction_request === 'object' ? batch.latest_correction_request : null) ||
+      (batch.latestCorrectionRequest && typeof batch.latestCorrectionRequest === 'object' ? batch.latestCorrectionRequest : null) ||
+      (child.correction?.latest_correction_request && typeof child.correction.latest_correction_request === 'object' ? child.correction.latest_correction_request : null) ||
+      (progressState?.status && typeof progressState.status === 'object' ? progressState.status : null) ||
+      {}
+    );
     const requestId = String(
       data.latest_correction_request_id || data.latestCorrectionRequestId ||
       data.latest_correction_request?.id || data.latestCorrectionRequest?.id ||
       batch.latest_correction_request_id || batch.latestCorrectionRequestId ||
-      ((typeof bankingPayCancellationProgressState !== 'undefined' && bankingPayCancellationProgressState.payBatchId === id) ? bankingPayCancellationProgressState.correctionRequestId : '') || ''
+      request.id || request.correction_request_id || request.correctionRequestId ||
+      progressState?.correctionRequestId || ''
     ).trim();
-    if (!requestId || source.includes('data-banking-pay-cancellation-progress-card="1"')) return source;
+    if (!requestId || !bankingPayCorrectionRequestIsActive(request) || source.includes('data-banking-pay-cancellation-progress-card="1"')) return source;
     const card = `
       <div class="card" data-banking-pay-cancellation-progress-card="1" style="padding:10px;margin-bottom:10px;border:1px solid var(--line);">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">

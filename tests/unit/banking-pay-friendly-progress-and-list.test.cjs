@@ -27,6 +27,22 @@ test('Banking Pay batch list hides technical ids and presents one status with UK
   assert.match(list, /Created \$\{enc\(created\)\}/);
   assert.match(list, /Scheduled for \$\{scheduledAtUkLabel\}/);
   assert.doesNotMatch(list, /class="mono">\$\{enc\(id/);
+  assert.match(source, /const listLoadSequence =/);
+  assert.match(source, /pay\.list\.loading = false;\s*try \{ if \(typeof bankingRerender/);
+  assert.match(source, /if \(Number\(pay\.list\.__loadSequence \|\| 0\) === listLoadSequence\)/);
+});
+
+test('completed cancellation history does not render an in-progress batch banner', () => {
+  const helper = sliceBetween('function bankingPayCorrectionRequestIsActive', 'function getBankingPayStage3Context');
+  const batchChild = sliceBetween('async function openBankingPayBatchChildModal', 'function openBulkTimesheetActionProgressModal');
+  const classify = new Function(`${helper}; return bankingPayCorrectionRequestIsActive;`)();
+  assert.match(helper, /terminalFlag === true \|\| activeFlag === false/);
+  assert.match(helper, /'APPLIED', 'APPLIED_WITH_BLOCKERS', 'BLOCKED', 'FAILED', 'REJECTED', 'CANCELLED'/);
+  assert.match(helper, /'PLANNING', 'PLANNED', 'REQUESTED', 'AWAITING_AUTHORISATION'/);
+  assert.match(batchChild, /!bankingPayCorrectionRequestIsActive\(request\)/);
+  assert.equal(classify({ id: 'request-active', status: 'PROCESSING', is_active: true, is_terminal: false }), true);
+  assert.equal(classify({ id: 'request-complete', status: 'APPLIED', is_active: false, is_terminal: true }), false);
+  assert.equal(classify({ id: 'request-history-only' }), false);
 });
 
 test('draft and payment progress use friendly operation-wide or indeterminate progress only', () => {

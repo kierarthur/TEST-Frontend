@@ -112,6 +112,7 @@ test('double-clicking a batch opens and closes the Pay Batch child without stran
   await completedCancellationRow.dblclick();
   await expect(page.locator('#modalTitle')).toHaveText('Pay Batch \u2014 ff47372f', { timeout: 60_000 });
   await expect(page.locator('#modalBody')).toContainText(/Raw status:\s*CANCELLED/i, { timeout: 60_000 });
+  await expect(page.locator('[data-banking-pay-cancellation-progress-card="1"]')).toHaveCount(0);
   await page.waitForTimeout(10_000);
   expect(await page.evaluate(() => ({
     stackDepth: Array.isArray((window as any).__modalStack) ? (window as any).__modalStack.length : -1,
@@ -120,6 +121,8 @@ test('double-clicking a batch opens and closes the Pay Batch child without stran
   }))).toEqual({ stackDepth: 2, childPresent: true, childFramePresent: true });
   await page.getByRole('button', { name: 'Close', exact: true }).first().click();
   await expect(page.locator('#modalTitle')).toHaveText('Banking', { timeout: 60_000 });
+  await expect(batchPanel.locator('.mini', { hasText: /^Loading(?:\.{3}|…)$/ })).toHaveCount(0, { timeout: 60_000 });
+  await expect(batchPanel.locator('tr[data-batch-id]')).toHaveCount(5, { timeout: 60_000 });
 
   await batchRow.dblclick();
   await expect(page.locator('#modalTitle')).toHaveText(`Pay Batch — ${batchId.slice(0, 8)}`, { timeout: 60_000 });
