@@ -80049,6 +80049,18 @@ const retryUnsentPaymentsPipeline = async () => {
           return;
         }
 
+        if (
+          act === 'banking:pay:child:openAuthorisation' ||
+          act === 'banking:pay:child:openAuthorization' ||
+          act === 'banking:pay:child:authorisationRequired' ||
+          act === 'banking:pay:child:authorizationRequired' ||
+          act === 'banking:pay:child:openAuthorisationRequired' ||
+          act === 'banking:pay:child:openAuthorizationRequired'
+        ) {
+          await child.openReauthorisationReview();
+          return;
+        }
+
           if (act === 'banking:pay:child:loadSectionMore') {
           const sectionKey = normaliseChildSectionKey(
             el.getAttribute('data-section') ||
@@ -85684,7 +85696,7 @@ function renderBankingPayBatchChildModalOverview() {
       ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:viewExecutionStatus" data-batch-id="${enc(id)}" data-operation-id="${enc(activeOperationId)}" data-operation-type="${enc(activeOperationType || 'PAYMENT_EXECUTE')}" data-operation-status="${enc(activeOperationStatus)}" data-operation-phase="${enc(activeOperationPhase)}" data-runner-state="${enc(activeRunnerState)}" data-payment-execute="true" title="View backend execution progress">View execution status</button>`
       : '',
     waitingAuthorisation && !activePaymentExecuteOperation
-      ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openAuthorisation" data-operation-id="${enc(activeOperationId)}" title="Open authorisation workflow">Authorisation required</button>`
+      ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openAuthorisation" data-operation-id="${enc(activeOperationId)}" title="Review and reauthorise the remaining batch">Review and reauthorise batch</button>`
       : '',
     reviewRequired && !activePaymentExecuteOperation && !waitingAuthorisation
       ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPaymentIssues" data-operation-id="${enc(activeOperationId)}" title="Review payment issue">Review payment issue</button>`

@@ -152,3 +152,10 @@ test('batch child error and recovery cards close through the owning capture hand
   const batchChild = sliceBetween('async function openBankingPayBatchChildModal', 'function openBulkTimesheetActionProgressModal');
   assert.match(batchChild, /if \(act === 'modal:close' \|\| act === 'banking:pay:child:close'\) \{\s*closeTop\(\);\s*return;/);
 });
+
+test('awaiting-authorisation batch opens the normal reauthorisation review', () => {
+  const batchChild = sliceBetween('async function openBankingPayBatchChildModal', 'function openBulkTimesheetActionProgressModal');
+  assert.match(batchChild, /act === 'banking:pay:child:openAuthorisation'/);
+  assert.match(batchChild, /await child\.openReauthorisationReview\(\)/);
+  assert.match(source, /title="Review and reauthorise the remaining batch">Review and reauthorise batch<\/button>/);
+});
