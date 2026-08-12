@@ -48740,9 +48740,16 @@ function renderPayNewBatchWizard() {
       wiz.decisions?.authoritative_selected_preview_row_mode ||
       selectedPreviewRowMode
     );
+    const loadedSelectablePreviewRowIds = uniqTrimmed(previewRowsVm?.allSelectableRowIds);
+    const loadedSelectedPreviewRowSet = previewRowsVm?.selectedPreviewRowSet instanceof Set
+      ? previewRowsVm.selectedPreviewRowSet
+      : new Set();
+    const allLoadedSelectableRowsSelected = loadedSelectablePreviewRowIds.length > 0
+      && loadedSelectablePreviewRowIds.every((rowId) => loadedSelectedPreviewRowSet.has(rowId));
     const allSelected = hasReadyRows
       && authoritativeAllPagesSelectionMode === 'IMPLICIT_ALL'
-      && authoritativeSelectedCurrentEligibleReadyRowCount > 0;
+      && authoritativeSelectedCurrentEligibleReadyRowCount > 0
+      && allLoadedSelectableRowsSelected;
     const partiallySelected = !allSelected && authoritativeSelectedCurrentEligibleReadyRowCount > 0;
     return `
       <thead>
