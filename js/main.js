@@ -79872,24 +79872,6 @@ const retryUnsentPaymentsPipeline = async () => {
         }
       }
     } catch {}
-    try {
-      setTimeout(() => {
-        try {
-          const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-          const parentCtx = (frame && frame._ctxRef && typeof frame._ctxRef === 'object') ? frame._ctxRef : null;
-          if (!frame || String(frame.kind || '') !== 'banking' || String(frame.entity || '') !== 'banking' || !parentCtx) return;
-          window.modalCtx = parentCtx;
-          try { if (typeof modalCtx !== 'undefined') modalCtx = parentCtx; } catch {}
-          const delegated = (parentCtx.__bankingDelegated && typeof parentCtx.__bankingDelegated === 'object')
-            ? parentCtx.__bankingDelegated
-            : null;
-          try { if (delegated && typeof delegated.detach === 'function') delegated.detach(); } catch {}
-          parentCtx.__bankingDelegated = null;
-          if (parentCtx.banking && typeof parentCtx.banking === 'object') parentCtx.banking._detach = null;
-          if (typeof attachBankingModalDelegatedHandlers === 'function') attachBankingModalDelegatedHandlers();
-        } catch {}
-      }, 0);
-    } catch {}
   };
 
   const wire = () => {
@@ -327669,6 +327651,28 @@ const resumeParentAfterChildReturn = (closing) => {
     } catch {}
 
       syncParentChromeAfterChildReturn(p);
+
+      try {
+        if (String(p.kind || '') === 'banking' && String(p.entity || '') === 'banking') {
+          setTimeout(() => {
+            try {
+              const activeParent = currentFrame();
+              if (!activeParent || activeParent !== p) return;
+              const parentCtx = (p._ctxRef && typeof p._ctxRef === 'object') ? p._ctxRef : null;
+              if (!parentCtx) return;
+              window.modalCtx = parentCtx;
+              try { if (typeof modalCtx !== 'undefined') modalCtx = parentCtx; } catch {}
+              const delegated = (parentCtx.__bankingDelegated && typeof parentCtx.__bankingDelegated === 'object')
+                ? parentCtx.__bankingDelegated
+                : null;
+              try { if (delegated && typeof delegated.detach === 'function') delegated.detach(); } catch {}
+              parentCtx.__bankingDelegated = null;
+              if (parentCtx.banking && typeof parentCtx.banking === 'object') parentCtx.banking._detach = null;
+              if (typeof attachBankingModalDelegatedHandlers === 'function') attachBankingModalDelegatedHandlers();
+            } catch {}
+          }, 0);
+        }
+      } catch {}
 
       try { p.onReturn && p.onReturn(); } catch {}
 

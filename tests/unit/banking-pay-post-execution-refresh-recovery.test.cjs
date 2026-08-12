@@ -87,12 +87,13 @@ test('Pay Batch child renders a recoverable error card instead of stranding the 
 });
 
 test('closing a Pay Batch child reattaches the Banking parent delegated controls', () => {
-  const childStart = source.indexOf('async function openBankingPayBatchChildModal');
-  const rendererStart = source.indexOf('function renderBankingPayBatchChildModalOverview()', childStart);
-  assert.ok(childStart >= 0 && rendererStart > childStart);
-  const childOwner = source.slice(childStart, rendererStart);
-  assert.match(childOwner, /String\(frame\.kind \|\| ''\) !== 'banking'/);
-  assert.match(childOwner, /delegated && typeof delegated\.detach === 'function'/);
-  assert.match(childOwner, /parentCtx\.__bankingDelegated = null/);
-  assert.match(childOwner, /attachBankingModalDelegatedHandlers\(\)/);
+  const resumeStart = source.indexOf('const resumeParentAfterChildReturn =');
+  const resumeEnd = source.indexOf('bindClose(btnClose, top);', resumeStart);
+  assert.ok(resumeStart >= 0 && resumeEnd > resumeStart);
+  const resumeOwner = source.slice(resumeStart, resumeEnd);
+  assert.match(resumeOwner, /String\(p\.kind \|\| ''\) === 'banking'/);
+  assert.match(resumeOwner, /activeParent !== p/);
+  assert.match(resumeOwner, /delegated && typeof delegated\.detach === 'function'/);
+  assert.match(resumeOwner, /parentCtx\.__bankingDelegated = null/);
+  assert.match(resumeOwner, /attachBankingModalDelegatedHandlers\(\)/);
 });
