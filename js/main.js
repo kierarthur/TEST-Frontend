@@ -71153,7 +71153,9 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
 
 function dismissOrphanedBankingPayBatchChildV1(options = {}) {
   try {
-    const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+    const stack = Array.isArray(options?.stackSnapshot)
+      ? options.stackSnapshot
+      : (Array.isArray(window.__modalStack) ? window.__modalStack : []);
     if (stack.some((frame) => String(frame?.kind || '') === 'banking-pay-batch-child')) return false;
 
     const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
@@ -327975,11 +327977,17 @@ if (!isChild && top.entity === 'contracts') {
     if (!topNow) {
       try {
         if (typeof dismissOrphanedBankingPayBatchChildV1 === 'function' &&
-            dismissOrphanedBankingPayBatchChildV1({ source: 'shared-header-close' })) return;
+            dismissOrphanedBankingPayBatchChildV1({ source: 'shared-header-close', stackSnapshot: stack() })) return;
       } catch {}
       return;
     }
-    if (bound !== topNow._token) return;
+    if (bound !== topNow._token) {
+      try {
+        if (typeof dismissOrphanedBankingPayBatchChildV1 === 'function' &&
+            dismissOrphanedBankingPayBatchChildV1({ source: 'shared-header-owner-mismatch', stackSnapshot: stack() })) return;
+      } catch {}
+      return;
+    }
     handleSecondary(ev);
   };
 

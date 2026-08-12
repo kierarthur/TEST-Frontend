@@ -5,6 +5,60 @@ import { resolve } from 'node:path';
 
 test.use({ serviceWorkers: 'block', viewport: { width: 1600, height: 1000 } });
 
+test.describe('orphaned Pay Batch child recovery', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+test('an orphaned Pay Batch child with a stale header owner is dismissed without removing its unrelated parent frame', async ({ page }) => {
+  const localMainPath = resolve(__dirname, '../../js/main.js');
+  const localMain = readFileSync(localMainPath, 'utf8');
+  const helperStart = localMain.indexOf('function dismissOrphanedBankingPayBatchChildV1(options = {})');
+  const helperEnd = localMain.indexOf('\n\nasync function openBankingPayBatchChildModal', helperStart);
+  expect(helperStart).toBeGreaterThan(-1);
+  expect(helperEnd).toBeGreaterThan(helperStart);
+  const helperSource = localMain.slice(helperStart, helperEnd);
+
+  await page.setContent(`
+    <div id="modalBack" style="display:flex;">
+      <div id="modal" class="modal banking-modal banking-pay-batch-child-modal">
+        <div id="modalTitle">Pay Batch — a2cfddcf</div>
+        <button id="btnCloseModal" data-owner-token="f:stale-child-owner">Close</button>
+        <div id="modalTabs"></div>
+        <div id="modalBody"><div id="orphanedPayBatchChild"></div></div>
+      </div>
+    </div>
+  `);
+  await page.addScriptTag({ content: `window.dismissOrphanedBankingPayBatchChildV1 = (${helperSource});` });
+  const result = await page.evaluate(() => {
+    const unrelatedParent = { kind: 'banking', _token: 'f:unrelated-parent-frame' };
+    (window as any).__modalStack = [unrelatedParent];
+    (window as any).modalCtx = { entity: 'banking', banking: { pay: { child: null } } };
+    const dismissed = (window as any).dismissOrphanedBankingPayBatchChildV1({
+      source: 'e2e-stale-owner-mismatch',
+      stackSnapshot: (window as any).__modalStack
+    });
+    return {
+      dismissed,
+      backdropDisplay: document.getElementById('modalBack')?.style.display,
+      modalClassPresent: document.getElementById('modal')?.classList.contains('banking-pay-batch-child-modal') === true,
+      bodyText: document.getElementById('modalBody')?.textContent || '',
+      closeOwnerToken: document.getElementById('btnCloseModal')?.dataset?.ownerToken || '',
+      parentStackDepth: (window as any).__modalStack.length,
+      parentKind: (window as any).__modalStack[0]?.kind
+    };
+  });
+
+  expect(result).toEqual({
+    dismissed: true,
+    backdropDisplay: 'none',
+    modalClassPresent: false,
+    bodyText: '',
+    closeOwnerToken: '',
+    parentStackDepth: 1,
+    parentKind: 'banking'
+  });
+});
+});
+
 test('double-clicking a batch opens and closes the Pay Batch child without stranding Banking', async ({ page }) => {
   test.setTimeout(180_000);
 

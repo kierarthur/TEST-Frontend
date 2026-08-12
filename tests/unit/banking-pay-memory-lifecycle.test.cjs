@@ -291,6 +291,7 @@ test('an orphaned Pay Batch child cannot receive late refreshes and its shared C
   assert.ok(orphanEnd > orphanStart);
   const orphanBody = main.slice(orphanStart, orphanEnd);
   assert.match(orphanBody, /banking-pay-batch-child/);
+  assert.match(orphanBody, /Array\.isArray\(options\?\.stackSnapshot\)/);
   assert.match(orphanBody, /if \(stack\.some\([\s\S]*\)\) return false/);
   assert.match(orphanBody, /child\.__dismissOwnedChild/);
   assert.match(orphanBody, /pay\.child = null/);
@@ -303,7 +304,9 @@ test('an orphaned Pay Batch child cannot receive late refreshes and its shared C
   assert.ok(closeEnd > closeStart);
   const closeBody = main.slice(closeStart, closeEnd);
   assert.match(closeBody,
-    /if \(!topNow\)[\s\S]*dismissOrphanedBankingPayBatchChildV1\(\{ source: 'shared-header-close' \}\)/);
+    /if \(!topNow\)[\s\S]*dismissOrphanedBankingPayBatchChildV1\(\{ source: 'shared-header-close', stackSnapshot: stack\(\) \}\)/);
+  assert.match(closeBody,
+    /if \(bound !== topNow\._token\)[\s\S]*dismissOrphanedBankingPayBatchChildV1\(\{ source: 'shared-header-owner-mismatch', stackSnapshot: stack\(\) \}\)/);
 
   const refreshStart = main.indexOf('async function forceRefreshBankingPayBatchChildModalAfterOperation(');
   const refreshEnd = main.indexOf('\n\nfunction ', refreshStart + 1);
