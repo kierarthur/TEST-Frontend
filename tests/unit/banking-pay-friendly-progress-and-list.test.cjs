@@ -147,3 +147,8 @@ test('payment execution confirmation retains an exact DOM ownership fence withou
   assert.match(confirmation, /if \(!bodyNow \|\| !root \|\| !bodyNow\.contains\(root\)\) return false/);
   assert.doesNotMatch(confirmation, /ctxSeed && fr\._ctxRef/);
 });
+
+test('batch child error and recovery cards close through the owning capture handler', () => {
+  const batchChild = sliceBetween('async function openBankingPayBatchChildModal', 'function openBulkTimesheetActionProgressModal');
+  assert.match(batchChild, /if \(act === 'modal:close' \|\| act === 'banking:pay:child:close'\) \{\s*closeTop\(\);\s*return;/);
+});

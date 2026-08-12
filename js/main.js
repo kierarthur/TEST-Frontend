@@ -80044,6 +80044,11 @@ const retryUnsentPaymentsPipeline = async () => {
         ev.preventDefault();
         ev.stopPropagation();
 
+        if (act === 'modal:close' || act === 'banking:pay:child:close') {
+          closeTop();
+          return;
+        }
+
           if (act === 'banking:pay:child:loadSectionMore') {
           const sectionKey = normaliseChildSectionKey(
             el.getAttribute('data-section') ||
