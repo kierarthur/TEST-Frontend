@@ -95959,7 +95959,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           : payload.selected_preview_row_ids
       );
       const selectedCount = Number(payload.selected_row_count ?? selectedIds.length);
-      const payloadMode = String(
+      const reportedPayloadMode = String(
         payload.selected_preview_row_mode ||
         payload.selectedPreviewRowMode ||
         (String(payload.selection_intent_mode || payload.selectionIntentMode || '').trim().toUpperCase() === 'IMPLICIT_ALL'
@@ -95969,6 +95969,14 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
               : '')) ||
         ''
       ).trim().toUpperCase();
+      // The selection-intent contract can retain IMPLICIT_ALL after an exact
+      // CLEAR_SECTION mutation even though the authoritative selected count is
+      // zero. For browser state, zero membership is explicitly none; retaining
+      // IMPLICIT_ALL here can briefly repaint every row while the next
+      // individual-row mutation is being adopted.
+      const payloadMode = Number.isFinite(selectedCount) && selectedCount === 0
+        ? 'EXPLICIT_NONE'
+        : reportedPayloadMode;
       const progressCounterVersion = Number(payload.progress_counter_version ?? payload.progressCounterVersion);
       const readyForDraftProvided = Object.prototype.hasOwnProperty.call(payload, 'ready_for_draft') ||
         Object.prototype.hasOwnProperty.call(payload, 'can_create_draft');

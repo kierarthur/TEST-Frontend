@@ -121,8 +121,9 @@ test('all-pages selection adopts the authoritative mode without requiring a comp
     'const togglePreviewRowSelection ='
   );
 
-  assert.match(body, /const payloadMode = String\(/);
+  assert.match(body, /const reportedPayloadMode = String\(/);
   assert.match(body, /payload\.selection_intent_mode/);
+  assert.match(body, /selectedCount === 0\s*\? 'EXPLICIT_NONE'/);
   assert.match(body, /else if \(payloadMode === 'IMPLICIT_ALL' \|\| payloadMode === 'EXPLICIT_NONE'\)/);
   assert.match(body, /writePreviewSelectionState\(decisions, \[\], payloadMode\)/);
   assert.match(body, /workbench\.authoritative_selected_preview_row_mode = payloadMode/);
