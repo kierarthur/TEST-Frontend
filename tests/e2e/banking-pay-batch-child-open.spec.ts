@@ -86,6 +86,7 @@ test('double-clicking a batch opens and closes the Pay Batch child without stran
     await page.getByRole('button', { name: 'Close', exact: true }).first().click();
     await expect(page.locator('#modalTitle')).toHaveText('Banking', { timeout: 60_000 });
     await expect(page.locator('#bankingPayBatchListPanel')).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(1_500);
   }
 
   expect(interceptedIndex).toBeGreaterThan(0);
