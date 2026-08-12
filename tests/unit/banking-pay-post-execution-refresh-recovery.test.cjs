@@ -86,6 +86,20 @@ test('Pay Batch child renders a recoverable error card instead of stranding the 
   assert.match(childOwner, /data-action="modal:close"/);
 });
 
+test('post-execution Overview render failure retries the authoritative refresh without looping forever', () => {
+  const childStart = source.indexOf('async function openBankingPayBatchChildModal');
+  const rendererStart = source.indexOf('function renderBankingPayBatchChildModalOverview()', childStart);
+  assert.ok(childStart >= 0 && rendererStart > childStart);
+  const childOwner = source.slice(childStart, rendererStart);
+  assert.match(childOwner, /postExecutionRecoveryRequired/);
+  assert.match(childOwner, /recoveryAttempts < 3/);
+  assert.match(childOwner, /!hasPaymentExecuteRefreshRequiredFlag\(\) && !child\.__overviewRenderRecoveryTimer/);
+  assert.match(childOwner, /overview-render-recovery/);
+  assert.match(childOwner, /await forceChildExecutionRefresh/);
+  assert.match(childOwner, /data-banking-pay-child-overview-render-recovering="1"/);
+  assert.match(childOwner, /Payment execution completed\. CloudTMS is reloading the latest batch details automatically\./);
+});
+
 test('closing a Pay Batch child reattaches the Banking parent delegated controls', () => {
   const resumeStart = source.indexOf('const resumeParentAfterChildReturn =');
   const resumeEnd = source.indexOf('bindClose(btnClose, top);', resumeStart);

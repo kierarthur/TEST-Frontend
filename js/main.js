@@ -23372,8 +23372,8 @@ function renderBankingPayCancellationProgressModal() {
     ['REAUTHENTICATION', 'Verifying identity'], ['AUTHORISATION', 'Awaiting approval'],
     ['EXPANDING', requestKind === 'RELEASE_FAILED_PAYMENT' ? 'Preparing failed payment release' : 'Preparing cancellation work'], ['PROCESSING', processingLabel],
     ['FINALISING', 'Updating batch totals'], ['REFRESHING_AVAILABILITY', 'Refreshing payment availability'],
-    ['COMPLETE', 'Cancellation complete'], ['COMPLETE_WITH_BLOCKERS', 'Complete with payments needing review'],
-    ['BLOCKED', 'No payment was cancelled'], ['FAILED', 'Cancellation safely stopped'],
+    ['COMPLETE', 'Cancellation complete'], ['COMPLETE_WITH_BLOCKERS', 'Some cancellations failed'],
+    ['BLOCKED', 'Cancellation failed'], ['FAILED', 'Cancellation failed'],
     ['REJECTED', 'Cancellation rejected'], ['CANCELLED', 'Cancellation request ended']
   ]);
   const stageLabel = stageLabels.get(progressStage) || 'Payment cancellation in progress';
@@ -23401,7 +23401,7 @@ function renderBankingPayCancellationProgressModal() {
     label: String(item?.label || '').trim() || 'A selected payment needs review.',
     count: Math.max(0, Number(item?.count || 0) || 0)
   }));
-  const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Reauthorise remaining payments', RETRY_PLANNING: 'Continue preparation', RETRY_PROCESSING: 'Retry Banking Pay update' };
+  const authActionLabels = { AUTHORISE: 'Authorise cancellation', USE_GOLDEN_KEY: 'Use Golden Key', REJECT: 'Reject cancellation', CANCEL_REQUEST: 'Cancel request', REAUTHORISE_REMAINING: 'Verify and retry failed cancellations', RETRY_PLANNING: 'Continue preparation', RETRY_PROCESSING: 'Retry Banking Pay update' };
   const retryProcessingAllowed = availableActions.includes('RETRY_PROCESSING')
     && status.financial_complete === true && workbenchRefreshStatus === 'FAILED';
   const primaryAction = ['RETRY_PLANNING', 'AUTHORISE', 'USE_GOLDEN_KEY', 'REAUTHORISE_REMAINING',
@@ -23412,6 +23412,11 @@ function renderBankingPayCancellationProgressModal() {
     .map((action) => `<button type="button" class="ctms-cancel-btn ${action === primaryAction ? 'is-primary' : 'is-danger'}" data-banking-pay-cancellation-auth-action="${enc(action)}">${enc(authActionLabels[action])}</button>`)
     .join('');
   const terminalSuccess = terminal && (applied > 0 || ['APPLIED', 'APPLIED_WITH_BLOCKERS'].includes(requestStatus));
+  const terminalFailedCount = terminal
+    ? Math.max(blocked, selected > 0 ? selected - applied : 0)
+    : 0;
+  const terminalMixedResult = terminalSuccess && terminalFailedCount > 0;
+  const terminalFailedResult = terminal && !terminalSuccess;
   const workbenchCurrent = ['CURRENT', 'NOT_REQUIRED', 'NOT_REQUIRED_NO_SOURCE_SESSION'].includes(workbenchRefreshStatus);
   const workbenchPending = terminalSuccess && !workbenchCurrent;
   const needsApproval = availableActions.includes('AUTHORISE') || availableActions.includes('USE_GOLDEN_KEY');
@@ -23421,28 +23426,36 @@ function renderBankingPayCancellationProgressModal() {
   const retryAvailable = retryPlanning || retryProcessing;
   const stillWorking = ((!terminal && !planningReady && !retryAvailable && !needsApproval && !waitingForApproval)
     || workbenchPending) && !state.error;
-  const friendlyTitle = state.error ? 'Cancellation needs attention'
-    : (planningReady ? 'Ready to continue'
-      : (terminalSuccess ? (workbenchPending ? 'Payment cancelled — Banking Pay is updating' : 'Payment cancellation complete')
-        : (retryAvailable ? (retryProcessing ? 'Banking Pay update needs attention' : 'Cancellation preparation needs attention')
-        : (needsApproval ? 'Approval needed'
-          : (waitingForApproval ? 'Waiting for approval'
-            : (terminal ? 'Cancellation ended' : processingLabel))))));
+  let friendlyTitle = processingLabel;
+  if (state.error) friendlyTitle = 'Cancellation needs attention';
+  else if (planningReady) friendlyTitle = 'Ready to continue';
+  else if (terminalMixedResult) friendlyTitle = 'Cancellation partly completed — some payments failed';
+  else if (terminalFailedResult) friendlyTitle = 'Cancellation failed';
+  else if (terminalSuccess) friendlyTitle = workbenchPending
+    ? 'Payment cancelled — Banking Pay is updating'
+    : 'Payment cancellation complete';
+  else if (retryAvailable) friendlyTitle = retryProcessing
+    ? 'Banking Pay update needs attention'
+    : 'Cancellation preparation needs attention';
+  else if (needsApproval) friendlyTitle = 'Approval needed';
+  else if (waitingForApproval) friendlyTitle = 'Waiting for approval';
+  else if (terminal) friendlyTitle = 'Cancellation failed';
   const selectedSummary = selected > 0
     ? `${selected} payment${selected === 1 ? '' : 's'} · ${formatPence(status.selected_amount_pence)}`
     : '';
-  const friendlyMessage = state.error
-    || (planningReady ? `${selectedSummary || 'The selected payment'} is ready. Confirm your identity to continue.`
-      : (retryAvailable ? (retryProcessing
-        ? 'The financial cancellation is complete. Retry only the Banking Pay update.'
-        : 'No payment was changed. Retry preparation to continue this same cancellation request.')
-        : (needsApproval ? 'Review the selected payment, then approve or reject the cancellation.'
-          : (waitingForApproval ? 'An authorised person needs to approve this cancellation.'
-            : (terminalSuccess ? (workbenchPending
-              ? `${applied || selected} payment${(applied || selected) === 1 ? '' : 's'} ${((applied || selected) === 1) ? 'has' : 'have'} been cancelled. Banking Pay is now restoring the current Ready to Pay view; you can close this window safely.`
-              : `Done. ${applied || selected} payment${(applied || selected) === 1 ? '' : 's'} totalling ${formatPence(status.removed_amount_pence)} ${((applied || selected) === 1) ? 'was' : 'were'} removed from this batch.`)
-              : (terminal ? (String(status.user_message || '').trim() || 'No payment was changed. Review the issue below.')
-                : 'CloudTMS is working safely in the background. You can close this window and come back later.'))))));
+  let friendlyMessage = 'CloudTMS is working safely in the background. You can close this window and come back later.';
+  if (state.error) friendlyMessage = state.error;
+  else if (planningReady) friendlyMessage = `${selectedSummary || 'The selected payment'} is ready. Confirm your identity to continue.`;
+  else if (retryAvailable) friendlyMessage = retryProcessing
+    ? 'The financial cancellation is complete. Retry only the Banking Pay update.'
+    : 'No payment was changed. Retry preparation to continue this same cancellation request.';
+  else if (needsApproval) friendlyMessage = 'Review the selected payment, then approve or reject the cancellation.';
+  else if (waitingForApproval) friendlyMessage = 'An authorised person needs to approve this cancellation.';
+  else if (terminalMixedResult) friendlyMessage = `${applied} payment${applied === 1 ? '' : 's'} succeeded and ${terminalFailedCount} payment${terminalFailedCount === 1 ? '' : 's'} failed. Failed payments were left unchanged.`;
+  else if (terminalFailedResult) friendlyMessage = `Cancellation failed. No payment was cancelled${selected > 0 ? `; all ${selected} selected payment${selected === 1 ? ' was' : 's were'} left unchanged` : ''}.`;
+  else if (terminalSuccess && workbenchPending) friendlyMessage = `${applied || selected} payment${(applied || selected) === 1 ? '' : 's'} ${((applied || selected) === 1) ? 'has' : 'have'} been cancelled. Banking Pay is now restoring the current Ready to Pay view; you can close this window safely.`;
+  else if (terminalSuccess) friendlyMessage = `Done. ${applied || selected} payment${(applied || selected) === 1 ? '' : 's'} totalling ${formatPence(status.removed_amount_pence)} ${((applied || selected) === 1) ? 'was' : 'were'} removed from this batch.`;
+  else if (terminal) friendlyMessage = String(status.user_message || '').trim() || 'Cancellation failed. No payment was changed. Review the issue below.';
   root.innerHTML = `
     <style>
       #bankingPayCancellationProgressModal, #bankingPayCancellationProgressModal * { box-sizing:border-box; font-family:inherit; }
@@ -79692,9 +79705,56 @@ const retryUnsentPaymentsPipeline = async () => {
 
   const renderChildOverviewHtml = () => {
     try {
-      return injectCancellationProgressCard(injectOverviewExecuteFallback(renderBankingPayBatchChildModalOverview()));
+      const html = injectCancellationProgressCard(injectOverviewExecuteFallback(renderBankingPayBatchChildModalOverview()));
+      if (!hasPaymentExecuteRefreshRequiredFlag() && !child.__overviewRenderRecoveryTimer) {
+        child.__overviewRenderRecoveryAttempts = 0;
+        child.__overviewRenderLastError = '';
+      }
+      return html;
     } catch (error) {
       try { console.warn('[BANKING][PAY BATCH] Overview render failed', error); } catch {}
+      const postExecutionRecoveryRequired = hasPaymentExecuteRefreshRequiredFlag() || hasPaymentExecuteRefreshContext() || !!(
+        child.executionRefreshAppliedAtUtc ||
+        child.execution_refresh_applied_at_utc ||
+        child.data?.__payment_execution_refresh_applied_at_utc ||
+        child.data?.payment_execution_refresh_applied_at_utc
+      );
+      const recoveryAttempts = Math.max(0, Number(child.__overviewRenderRecoveryAttempts || 0) || 0);
+      child.__overviewRenderLastError = String(error?.message || error || 'OVERVIEW_RENDER_FAILED').trim() || 'OVERVIEW_RENDER_FAILED';
+
+      if (postExecutionRecoveryRequired && recoveryAttempts < 3 && !child.__overviewRenderRecoveryTimer) {
+        child.__overviewRenderRecoveryAttempts = recoveryAttempts + 1;
+        child.executionRefreshRequired = true;
+        child.execution_refresh_required = true;
+        child.paymentExecutionRefreshRequired = true;
+        child.payment_execution_refresh_required = true;
+        child.__overviewRenderRecoveryTimer = setTimeout(async () => {
+          child.__overviewRenderRecoveryTimer = null;
+          try {
+            await forceChildExecutionRefresh(
+              getPaymentExecuteRefreshOperationId(),
+              'overview-render-recovery',
+              { executionRefresh: true, source: 'openBankingPayBatchChildModal.overviewRenderRecovery' }
+            );
+          } catch (refreshError) {
+            try { console.warn('[BANKING][PAY BATCH] Overview recovery refresh failed', refreshError); } catch {}
+          }
+          try { await rerenderChild(); } catch {}
+        }, Math.min(1_500, 250 * (recoveryAttempts + 1)));
+      }
+
+      if (postExecutionRecoveryRequired && recoveryAttempts < 3) {
+        return `
+          <div id="${enc(rootId)}" class="card" data-banking-pay-child-overview-render-recovering="1" style="padding:12px;">
+            <div style="font-weight:800;margin-bottom:6px;">Updating the scheduled payment…</div>
+            <div class="mini" style="opacity:.86;margin-bottom:10px;">Payment execution completed. CloudTMS is reloading the latest batch details automatically.</div>
+            <div class="controls">
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh">Refresh Batch</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="modal:close">Close</button>
+            </div>
+          </div>
+        `;
+      }
       return `
         <div id="${enc(rootId)}" class="card" data-banking-pay-child-overview-render-error="1" style="padding:12px;">
           <div style="font-weight:800;margin-bottom:6px;">Pay Batch could not be displayed</div>

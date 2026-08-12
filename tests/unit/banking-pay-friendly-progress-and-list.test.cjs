@@ -69,6 +69,19 @@ test('cancellation authenticates before the progress modal and uses a calm Workb
   assert.doesNotMatch(cancellation, /aria-label="\$\{workbenchPending \? 'Banking Pay update in progress'/);
 });
 
+test('terminal cancellation results say failed explicitly and distinguish mixed outcomes', () => {
+  const cancellation = sliceBetween('const bankingPayCancellationProgressState', 'async function loadCompleteBankingPayCancellationProjectionStatus');
+  assert.match(cancellation, /\['BLOCKED', 'Cancellation failed'\]/);
+  assert.match(cancellation, /terminalFailedCount/);
+  assert.match(cancellation, /terminalMixedResult/);
+  assert.match(cancellation, /Cancellation partly completed — some payments failed/);
+  assert.match(cancellation, /Cancellation failed\. No payment was cancelled/);
+  assert.match(cancellation, /succeeded and/);
+  assert.match(cancellation, /failed\. Failed payments were left unchanged/);
+  assert.match(cancellation, /REAUTHORISE_REMAINING: 'Verify and retry failed cancellations'/);
+  assert.doesNotMatch(cancellation, /terminal \? 'Cancellation ended'/);
+});
+
 test('Banking Pay keeps operational diagnostics out of the customer modal and presents a compact create summary', () => {
   const banking = sliceBetween('function renderBankingTab', 'function renderBankingPayTab');
   assert.doesNotMatch(banking, /Test mode: $\{isTestMode \? 'On' : 'Off'\}/);

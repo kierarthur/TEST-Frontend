@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.resolve(__dirname, '..', '..', 'js', 'main.j
 const indexSource = fs.readFileSync(path.resolve(__dirname, '..', '..', 'index.html'), 'utf8');
 
 test('the Wave 1 browser asset is cache-busted after the progress-copy correction', () => {
-  assert.match(indexSource, /banking-wave1=20260811-r3/);
+  assert.match(indexSource, /banking-wave1=20260811-r12/);
 });
 
 test('the integrated batch PAYE worksheet can enter Edit mode without enabling unrelated child modals', () => {
