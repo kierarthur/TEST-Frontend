@@ -71101,6 +71101,69 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
 
 
 
+function dismissOrphanedBankingPayBatchChildV1(options = {}) {
+  try {
+    const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+    if (stack.some((frame) => String(frame?.kind || '') === 'banking-pay-batch-child')) return false;
+
+    const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    const pay = (ctx?.banking?.pay && typeof ctx.banking.pay === 'object') ? ctx.banking.pay : null;
+    const child = (pay?.child && typeof pay.child === 'object') ? pay.child : null;
+    const modal = document.getElementById('modal');
+    const back = document.getElementById('modalBack');
+    const body = document.getElementById('modalBody');
+    const title = String(document.getElementById('modalTitle')?.textContent || '').trim();
+    const rootId = String(child?.rootId || '').trim();
+    const childRoot = rootId ? document.getElementById(rootId) : null;
+    const childRootPresent = !!(childRoot && body && body.contains(childRoot));
+    const childShellPresent = !!(
+      modal?.classList?.contains('banking-pay-batch-child-modal') ||
+      childRootPresent ||
+      title.startsWith('Pay Batch —')
+    );
+    const overlayVisible = !!(back && back.style.display !== 'none');
+    if (!child || !childShellPresent || !overlayVisible) return false;
+
+    try {
+      if (typeof child.__dismissOwnedChild === 'function') child.__dismissOwnedChild();
+    } catch {}
+    try {
+      child.openToken = `closed:orphan:${Date.now()}`;
+      child.__dismissed = true;
+    } catch {}
+    try { if (pay?.child === child) pay.child = null; } catch {}
+    try {
+      if (body?.__bankingPayBatchChildHandler) {
+        const handler = body.__bankingPayBatchChildHandler;
+        if (handler.onClick) body.removeEventListener('click', handler.onClick, true);
+        if (handler.onChange) body.removeEventListener('change', handler.onChange, true);
+        if (handler.onInput) body.removeEventListener('input', handler.onInput, true);
+        if (handler.onDblClick) body.removeEventListener('dblclick', handler.onDblClick, true);
+        delete body.__bankingPayBatchChildHandler;
+      }
+    } catch {}
+    try { body?.replaceChildren(); } catch { try { if (body) body.innerHTML = ''; } catch {} }
+    try { document.getElementById('modalTabs')?.replaceChildren(); } catch {}
+    try { if (modal) modal.classList.remove('banking-pay-batch-child-modal', 'dragging'); } catch {}
+    try { if (back) back.style.display = 'none'; } catch {}
+    try { document.getElementById('modalTitle').textContent = ''; } catch {}
+    try {
+      const closeButton = document.getElementById('btnCloseModal');
+      if (closeButton?.dataset?.ownerToken) delete closeButton.dataset.ownerToken;
+    } catch {}
+    try { window.__getModalFrame = () => null; } catch {}
+    try {
+      console.warn('[BANKING][PAY BATCH] Orphaned child modal dismissed safely.', {
+        contract_version: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1',
+        source: String(options?.source || 'shared-close')
+      });
+    } catch {}
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -72000,7 +72063,6 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
   const currentChildStateMatches = () => {
     try {
-      const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
       const contextMatches = (candidateCtx) => {
         if (!candidateCtx || String(candidateCtx.entity || '') !== 'banking') return false;
         const candidateChild = (candidateCtx.banking && candidateCtx.banking.pay && candidateCtx.banking.pay.child && typeof candidateCtx.banking.pay.child === 'object')
@@ -72011,7 +72073,6 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
         if (String(candidateChild.openToken || '') !== String(child.openToken || '')) return false;
         return true;
       };
-      if (contextMatches(ctx)) return true;
       const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
       return stack.some((frame) => {
         if (!frame || String(frame.kind || '') !== KIND) return false;
@@ -79990,6 +80051,9 @@ const retryUnsentPaymentsPipeline = async () => {
     `;
   };
   const onDismiss = () => {
+    if (child.__dismissed === true) return;
+    child.__dismissed = true;
+    const dismissedOpenToken = String(child.openToken || '');
     try { stopAutoPoll(); } catch {}
     try { stopChildLiveWatch(); } catch {}
     try {
@@ -80025,12 +80089,14 @@ const retryUnsentPaymentsPipeline = async () => {
     try {
       if (pay && pay.child && typeof pay.child === 'object') {
         const tok = String(pay.child.openToken || '');
-        if (tok && tok === String(child.openToken || '')) {
+        if (pay.child === child || (tok && tok === dismissedOpenToken)) {
           pay.child = null;
         }
       }
     } catch {}
+    try { child.openToken = `closed:${dismissedOpenToken || id}:${Date.now()}`; } catch {}
   };
+  child.__dismissOwnedChild = onDismiss;
 
   const wire = () => {
     const body = document.getElementById('modalBody');
@@ -82192,6 +82258,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
     }
   );
 
+  let childFrameBound = false;
   try {
     const fr = getTopModalFrameSafe();
     if (fr && String(fr.kind || '') === KIND) {
@@ -82199,8 +82266,16 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
       fr._childOpenToken = child.openToken;
       fr.payBatchId = id;
       fr.batchId = id;
+      child.frameToken = String(fr._token || '');
+      childFrameBound = !!child.frameToken;
     }
   } catch {}
+
+  if (!childFrameBound) {
+    try { dismissOrphanedBankingPayBatchChildV1({ source: 'open-without-frame' }); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast('The payment batch could not be opened safely. Please try again.'); } catch {}
+    return;
+  }
 
   child.__modalShown = true;
 
@@ -185861,6 +185936,29 @@ async function forceRefreshBankingPayBatchChildModalAfterOperation(payBatchId, o
       console.info('[BP][BATCH-REFRESH-AFTER-EXEC]', { event, ...safePayload });
     } catch {}
   };
+  const childHasOwnerFrame = (child) => {
+    try {
+      if (!child || typeof child !== 'object') return false;
+      const childToken = trimStr(child.openToken);
+      const childBatchId = firstText(child.batchId, child.pay_batch_id, child.payBatchId);
+      const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+      return stack.some((frame) => {
+        if (!frame || trimStr(frame.kind) !== 'banking-pay-batch-child') return false;
+        const frameToken = firstText(
+          frame.childOpenToken,frame._childOpenToken,frame.openToken,frame._openToken,
+          frame.options?.childOpenToken,frame.opts?.childOpenToken
+        );
+        const frameBatchId = firstText(
+          frame.payBatchId,frame.pay_batch_id,frame.batchId,frame.batch_id,
+          frame.options?.payBatchId,frame.options?.pay_batch_id,
+          frame.opts?.payBatchId,frame.opts?.pay_batch_id
+        );
+        if (childToken && frameToken !== childToken) return false;
+        if (childBatchId && frameBatchId !== childBatchId) return false;
+        return true;
+      });
+    } catch { return false; }
+  };
   const extractChild = () => {
     try {
       const modalCtx = (typeof window !== 'undefined' && window && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
@@ -185868,7 +185966,7 @@ async function forceRefreshBankingPayBatchChildModalAfterOperation(payBatchId, o
       const pay = banking && banking.pay && typeof banking.pay === 'object' ? banking.pay : null;
       const child = pay && pay.child && typeof pay.child === 'object' ? pay.child : null;
       const childBatchId = firstText(child?.batchId, child?.pay_batch_id, child?.payBatchId, child?.data?.pay_batch_id, child?.data?.payBatchId, child?.data?.id);
-      return child && (!childBatchId || childBatchId === id) ? child : null;
+      return child && (!childBatchId || childBatchId === id) && childHasOwnerFrame(child) ? child : null;
     } catch { return null; }
   };
   const batchSummary = (payload = null) => {
@@ -327803,7 +327901,14 @@ if (!isChild && top.entity === 'contracts') {
     const btn = ev?.currentTarget || byId('btnCloseModal');
     const bound = btn?.dataset?.ownerToken;
     const topNow = currentFrame();
-    if (!topNow || bound !== topNow._token) return;
+    if (!topNow) {
+      try {
+        if (typeof dismissOrphanedBankingPayBatchChildV1 === 'function' &&
+            dismissOrphanedBankingPayBatchChildV1({ source: 'shared-header-close' })) return;
+      } catch {}
+      return;
+    }
+    if (bound !== topNow._token) return;
     handleSecondary(ev);
   };
 

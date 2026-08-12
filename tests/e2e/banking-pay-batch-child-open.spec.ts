@@ -89,6 +89,29 @@ test('double-clicking a batch opens and closes the Pay Batch child without stran
     await page.waitForTimeout(1_500);
   }
 
+  await batchRow.dblclick();
+  await expect(page.locator('#modalTitle')).toHaveText(`Pay Batch — ${batchId.slice(0, 8)}`, { timeout: 60_000 });
+  const orphanFixture = await page.evaluate(() => {
+    const child = (window as any).modalCtx?.banking?.pay?.child || null;
+    (window as any).__modalStack = [];
+    (window as any).__getModalFrame = () => null;
+    return {
+      childPresent: !!child,
+      childOpenToken: String(child?.openToken || ''),
+      modalClassPresent: document.getElementById('modal')?.classList.contains('banking-pay-batch-child-modal') === true
+    };
+  });
+  expect(orphanFixture.childPresent).toBe(true);
+  expect(orphanFixture.childOpenToken).not.toBe('');
+  expect(orphanFixture.modalClassPresent).toBe(true);
+  await page.getByRole('button', { name: 'Close', exact: true }).first().click();
+  await expect(page.locator('#modalBack')).toBeHidden();
+  expect(await page.evaluate(() => ({
+    child: (window as any).modalCtx?.banking?.pay?.child || null,
+    stackDepth: Array.isArray((window as any).__modalStack) ? (window as any).__modalStack.length : -1,
+    modalClassPresent: document.getElementById('modal')?.classList.contains('banking-pay-batch-child-modal') === true
+  }))).toEqual({ child: null, stackDepth: 0, modalClassPresent: false });
+
   expect(interceptedIndex).toBeGreaterThan(0);
   expect(interceptedMain).toBeGreaterThan(0);
   expect(pageErrors).toEqual([]);

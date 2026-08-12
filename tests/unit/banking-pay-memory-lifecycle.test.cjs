@@ -262,14 +262,52 @@ test('a hidden Banking Pay batch child remains a valid refresh target under its 
       wrongTokenRejected: (() => {
         window.__modalStack[0].childOpenToken = 'other-token';
         return currentChildStateMatches();
+      })(),
+      orphanWithoutFrameRejected: (() => {
+        window.__modalStack = [];
+        window.modalCtx = {
+          entity: 'banking',
+          banking: { pay: { child } }
+        };
+        return currentChildStateMatches();
       })()
     });
   `);
 
   assert.deepEqual(
     JSON.parse(JSON.stringify(outcome)),
-    { hiddenParentMatches: true, wrongTokenRejected: false }
+    { hiddenParentMatches: true, wrongTokenRejected: false, orphanWithoutFrameRejected: false }
   );
+});
+
+test('an orphaned Pay Batch child cannot receive late refreshes and its shared Close has a narrow recovery', () => {
+  const orphanStart = main.indexOf('function dismissOrphanedBankingPayBatchChildV1(');
+  const orphanEnd = main.indexOf('\n\nasync function openBankingPayBatchChildModal', orphanStart);
+  assert.ok(orphanStart >= 0);
+  assert.ok(orphanEnd > orphanStart);
+  const orphanBody = main.slice(orphanStart, orphanEnd);
+  assert.match(orphanBody, /banking-pay-batch-child/);
+  assert.match(orphanBody, /if \(stack\.some\([\s\S]*\)\) return false/);
+  assert.match(orphanBody, /child\.__dismissOwnedChild/);
+  assert.match(orphanBody, /pay\.child = null/);
+  assert.match(orphanBody, /back\.style\.display = 'none'/);
+  assert.doesNotMatch(orphanBody, /discardAllModalsAndState/);
+
+  const closeStart = main.indexOf('  const onCloseClick = (ev) => {');
+  const closeEnd = main.indexOf('    const bindClose = (btn, fr) => {', closeStart);
+  assert.ok(closeStart >= 0);
+  assert.ok(closeEnd > closeStart);
+  const closeBody = main.slice(closeStart, closeEnd);
+  assert.match(closeBody,
+    /if \(!topNow\)[\s\S]*dismissOrphanedBankingPayBatchChildV1\(\{ source: 'shared-header-close' \}\)/);
+
+  const refreshStart = main.indexOf('async function forceRefreshBankingPayBatchChildModalAfterOperation(');
+  const refreshEnd = main.indexOf('\n\nfunction ', refreshStart + 1);
+  assert.ok(refreshStart >= 0);
+  assert.ok(refreshEnd > refreshStart);
+  const refreshBody = main.slice(refreshStart, refreshEnd);
+  assert.match(refreshBody, /const childHasOwnerFrame = \(child\) => \{/);
+  assert.match(refreshBody, /childHasOwnerFrame\(child\) \? child : null/);
 });
 
 test('successful Banking reauthentication closes the verified child without invoking the discard button', () => {
