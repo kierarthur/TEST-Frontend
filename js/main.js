@@ -38531,7 +38531,7 @@ async function bankingPayCreateDraft(input = {}) {
     }
     return null;
   };
-  const localExpectedProgressCounterVersion = readLocalProgressCounterVersionForCreateDraft();
+  let localExpectedProgressCounterVersion = readLocalProgressCounterVersionForCreateDraft();
 
   let authoritativeReadinessSnapshot = await readAuthoritativeCreateDraftReadiness(sessionId, expectedSessionVersion, 'INITIAL_READINESS');
   if (!authoritativeReadinessSnapshot || authoritativeReadinessSnapshot.ok !== true || authoritativeReadinessSnapshot.gate_ready !== true) {
@@ -39072,6 +39072,14 @@ async function bankingPayCreateDraft(input = {}) {
         previous_selected_preview_row_ids: syncedSelectedRows
       }, 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED');
     }
+
+    // The exact selection recheck above reloads the authoritative preview and
+    // may legitimately advance the shared progress counter for this window's
+    // own selection change.  From this point the refreshed counter is the
+    // reviewed baseline; retaining the pre-recheck value would make Create
+    // Draft reject its own successful selection refresh as concurrent drift.
+    localExpectedProgressCounterVersion = readLocalProgressCounterVersionForCreateDraft()
+      || localExpectedProgressCounterVersion;
 
     syncedSelectedRows = uniqTrimmed(currentSelectionBeforeSubmit.selected_preview_row_ids);
     selectedPreviewRowIdsForServer = [...syncedSelectedRows];

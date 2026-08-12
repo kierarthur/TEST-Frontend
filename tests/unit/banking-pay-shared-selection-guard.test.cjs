@@ -413,6 +413,23 @@ test('an early shared-session revision change reaches the exact selection rechec
   );
 });
 
+test('Create Draft adopts the progress counter refreshed by its exact selection recheck', () => {
+  const createBody = sliceBetween(
+    'async function bankingPayCreateDraft',
+    'function bankingPayHasPollableRailEvidence'
+  );
+  const exactSelectionRefresh = createBody.indexOf('const currentSelectionBeforeSubmit = await refreshCurrentSelectedPreviewRowsForCreateDraft(');
+  const refreshedBaseline = createBody.indexOf(
+    'localExpectedProgressCounterVersion = readLocalProgressCounterVersionForCreateDraft()',
+    exactSelectionRefresh
+  );
+  const finalReadiness = createBody.indexOf("readAuthoritativeCreateDraftReadiness(sessionId, expectedSessionVersion, 'FINAL_PRE_BACKEND_POST_READINESS')");
+
+  assert.match(createBody, /let localExpectedProgressCounterVersion = readLocalProgressCounterVersionForCreateDraft\(\)/);
+  assert.ok(refreshedBaseline > exactSelectionRefresh, 'the reviewed selection refresh must establish the new progress baseline');
+  assert.ok(finalReadiness > refreshedBaseline, 'the final readiness fence must compare against the refreshed baseline');
+});
+
 test('current-page reload keeps the existing page instead of advancing pagination', () => {
   const pageBody = sliceBetween(
     'const loadPayWorkbenchPreviewPageForSection =',
