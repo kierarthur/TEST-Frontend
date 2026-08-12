@@ -76712,12 +76712,36 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
           const isPreviewRefreshAction = normalizedAction === 'PREVIEW' || normalizedAction === 'PREVIEW_REFRESH' || normalizedAction === 'POST_ACTION_PREVIEW_REFRESH' || fallbackCodeForContext === 'BANKING_PAY_PREVIEW_FAILED';
           const isPollAction = normalizedAction === 'POLL_BANK_STATUS' || normalizedAction === 'CHECK_BANK_STATUS' || normalizedAction === 'BANKING_PAY_POLL' || normalizedAction === 'POLL';
           if (normalizedCode === 'BATCH_STALE') {
-            const staleTitle = isPreviewRefreshAction ? 'Payment preview needs refreshing' : 'Payment batch has changed';
-            const staleMessage = (normalizedAction === 'RETRY_BLOCKED_FUNDS' || normalizedAction === 'RETRY_UNSENT_PAYMENTS')
-              ? 'Retry unsent payments could not start because this batch is no longer up to date. Refresh the batch and review the latest Current Payment Status.'
-              : (isPreviewRefreshAction
-                  ? 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.'
-                  : 'This payment batch has changed. Refresh the batch, review the latest details, then try again.');
+            const staleFailureEnvelope = backendPayload?.details?.stale_payment_failures
+              || backendPayload?.details?.stalePaymentFailures
+              || backendPayload?.error?.details?.stale_payment_failures
+              || backendPayload?.stale_payment_failures
+              || null;
+            const staleFailureRows = Array.isArray(staleFailureEnvelope?.failures) ? staleFailureEnvelope.failures : [];
+            const staleFailureNames = staleFailureRows.slice(0, 3).map((row) => {
+              const item = row && typeof row === 'object' ? row : {};
+              const candidate = String(item.candidate_display_name || item.candidateDisplayName || 'Unknown candidate').trim();
+              const tmsRef = String(item.candidate_tms_ref || item.candidateTmsRef || '').trim();
+              const client = String(item.client_name || item.clientName || 'Client not recorded').trim();
+              const weekRaw = String(item.week_ending_date || item.weekEndingDate || '').trim();
+              const weekEnding = /^\d{4}-\d{2}-\d{2}$/.test(weekRaw)
+                ? `${weekRaw.slice(8, 10)}/${weekRaw.slice(5, 7)}/${weekRaw.slice(0, 4)}`
+                : (weekRaw || 'Not recorded');
+              const amountNumber = Number(item.payment_amount ?? item.paymentAmount);
+              const amount = Number.isFinite(amountNumber) ? `£${amountNumber.toFixed(2)}` : 'Amount unavailable';
+              const payment = String(item.description || item.source_ref || item.sourceRef || item.item_type || item.itemType || 'payment').trim();
+              return `${tmsRef ? `${tmsRef} — ` : ''}${candidate}; ${client}; week ending ${weekEnding}; ${amount}; ${payment}`;
+            }).filter(Boolean);
+            const staleTitle = staleFailureRows.length
+              ? 'Reauthorisation blocked by changed payments'
+              : (isPreviewRefreshAction ? 'Payment preview needs refreshing' : 'Payment batch has changed');
+            const staleMessage = staleFailureRows.length
+              ? `${staleFailureNames.join('; ')}${staleFailureRows.length > 3 ? '; and more' : ''}. Remove or resolve every listed payment, then reauthorise the remaining batch. If these are the only freshness failures, reauthorisation can proceed.`
+              : ((normalizedAction === 'RETRY_BLOCKED_FUNDS' || normalizedAction === 'RETRY_UNSENT_PAYMENTS')
+                  ? 'Retry unsent payments could not start because this batch is no longer up to date. Refresh the batch and review the latest Current Payment Status.'
+                  : (isPreviewRefreshAction
+                      ? 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.'
+                      : 'This payment batch has changed. Refresh the batch, review the latest details, then try again.'));
             return {
               ...normalized,
               ok: false,
@@ -183731,6 +183755,98 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     if (operationState?.provider_submission_status) parts.push(`Provider status: ${operationState.provider_submission_status}`);
     return parts.join(' ');
   };
+  const stalePaymentFailureEnvelope = (operationState) => {
+    const op = operationState && typeof operationState === 'object' ? operationState : {};
+    const raw = op.raw_payload && typeof op.raw_payload === 'object' ? op.raw_payload : {};
+    const error = op.error && typeof op.error === 'object' ? op.error : {};
+    const rawError = raw.error_json && typeof raw.error_json === 'object'
+      ? raw.error_json
+      : (raw.error && typeof raw.error === 'object' ? raw.error : {});
+    const candidates = [
+      op.stale_payment_failures,
+      op.stalePaymentFailures,
+      error.stale_payment_failures,
+      error.stalePaymentFailures,
+      error.details?.stale_payment_failures,
+      error.details?.stalePaymentFailures,
+      raw.stale_payment_failures,
+      raw.stalePaymentFailures,
+      rawError.stale_payment_failures,
+      rawError.stalePaymentFailures,
+      rawError.details?.stale_payment_failures,
+      rawError.details?.stalePaymentFailures,
+      raw.progress_json?.stale_payment_failures,
+      raw.result_json?.stale_payment_failures
+    ];
+    return candidates.find((value) => value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.failures)) || null;
+  };
+  const staleReasonLabel = (reasonValue) => {
+    const reason = upperTrim(reasonValue);
+    const labels = {
+      PAY_BATCH_ITEM_MISSING: 'The frozen payment item is no longer available.',
+      PAY_BATCH_ITEM_VOIDED: 'The payment item has already been removed or voided.',
+      POST_DRAFT_KEY_RESOLUTION_FAILED: 'CloudTMS can no longer resolve the frozen payment identity safely.',
+      KEY_RESOLUTION_FAILED: 'CloudTMS can no longer resolve the frozen payment identity safely.',
+      ECONOMIC_KEY_TYPE_CHANGED: 'The payment component type changed after the Draft was created.',
+      ECONOMIC_KEY_VALUE_CHANGED: 'The payment component identity changed after the Draft was created.',
+      ECONOMIC_TIMESHEET_CHANGED: 'The payment now points to a different timesheet.',
+      AMOUNT_EX_VAT_CHANGED: 'The frozen payment amount changed.',
+      AMOUNT_VAT_CHANGED: 'The frozen VAT amount changed.',
+      AMOUNT_INC_VAT_CHANGED: 'The frozen total amount changed.',
+      ACTIVE_SNOOZE_CHANGED: 'A current Snooze now blocks this payment.'
+    };
+    return labels[reason] || (reason ? reason.toLowerCase().replace(/_/g, ' ').replace(/^./, (ch) => ch.toUpperCase()) + '.' : 'The payment failed freshness validation.');
+  };
+  const stalePaymentFailureHtml = (operationState) => {
+    const envelope = stalePaymentFailureEnvelope(operationState);
+    if (!envelope) return '';
+    const failures = Array.isArray(envelope.failures) ? envelope.failures : [];
+    const rows = failures.map((failure) => {
+      const item = failure && typeof failure === 'object' ? failure : {};
+      const candidate = firstText(item.candidate_display_name, item.candidateDisplayName, 'Unknown candidate');
+      const tmsRef = firstText(item.candidate_tms_ref, item.candidateTmsRef);
+      const client = firstText(item.client_name, item.clientName, '—');
+      const weekRaw = firstText(item.week_ending_date, item.weekEndingDate);
+      const weekEnding = /^\d{4}-\d{2}-\d{2}$/.test(weekRaw)
+        ? `${weekRaw.slice(8, 10)}/${weekRaw.slice(5, 7)}/${weekRaw.slice(0, 4)}`
+        : (weekRaw || '—');
+      const amountNumber = Number(item.payment_amount ?? item.paymentAmount);
+      const amount = Number.isFinite(amountNumber) ? `£${amountNumber.toFixed(2)}` : '—';
+      const reasons = Array.isArray(item.reason_codes) ? item.reason_codes : (Array.isArray(item.reasonCodes) ? item.reasonCodes : []);
+      const reasonText = (reasons.length ? reasons : ['BATCH_STALE']).map(staleReasonLabel).join(' ');
+      return `<tr>
+        <td style="padding:8px;vertical-align:top;border-bottom:1px solid rgba(148,163,184,.2);font-weight:700;">${enc(tmsRef ? `${tmsRef} — ${candidate}` : candidate)}</td>
+        <td style="padding:8px;vertical-align:top;border-bottom:1px solid rgba(148,163,184,.2);">${enc(client)}</td>
+        <td style="padding:8px;vertical-align:top;border-bottom:1px solid rgba(148,163,184,.2);white-space:nowrap;">${enc(weekEnding)}</td>
+        <td style="padding:8px;vertical-align:top;border-bottom:1px solid rgba(148,163,184,.2);white-space:nowrap;text-align:right;font-weight:800;">${enc(amount)}</td>
+        <td style="padding:8px;vertical-align:top;border-bottom:1px solid rgba(148,163,184,.2);color:#fed7aa;">${enc(reasonText)}</td>
+      </tr>`;
+    }).join('');
+    const count = Number(envelope.failure_count ?? envelope.failureCount ?? failures.length) || failures.length;
+    const truncated = envelope.truncated === true || envelope.all_failures_listed === false || envelope.allFailuresListed === false;
+    const instruction = firstText(
+      envelope.instruction,
+      'Remove or resolve every payment listed, then reauthorise the remaining batch. If these are the only freshness failures, reauthorisation can proceed.'
+    );
+    return `
+      <div style="font-weight:800;margin-bottom:8px;">Reauthorisation blocked by changed payments</div>
+      <div style="margin-bottom:10px;">${enc(`${count} payment${count === 1 ? '' : 's'} failed freshness checks. No payment was submitted.`)}</div>
+      ${rows ? `<div style="overflow:auto;max-width:100%;border:1px solid rgba(148,163,184,.25);border-radius:10px;">
+        <table style="width:100%;border-collapse:collapse;min-width:760px;font-size:13px;">
+          <thead><tr style="background:rgba(15,23,42,.55);text-align:left;">
+            <th style="padding:8px;">Candidate</th>
+            <th style="padding:8px;">Client</th>
+            <th style="padding:8px;white-space:nowrap;">Week ending</th>
+            <th style="padding:8px;text-align:right;">Amount</th>
+            <th style="padding:8px;">Why it failed</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>` : ''}
+      <div style="font-weight:700;margin-top:10px;">${enc(instruction)}</div>
+      ${truncated ? '<div style="margin-top:8px;">Additional failures exist. Refresh after removing or resolving those shown to see the remainder.</div>' : ''}
+    `;
+  };
 
   const cleanupStaleBankingOperationProgressOverlays = () => {
     try {
@@ -183889,6 +184005,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
 
   const render = () => {
     const op = modalState.operation || {};
+    const staleFailuresHtml = stalePaymentFailureHtml(op);
     const totalUnits = Number(op.display_total_units ?? op.displayTotalUnits ?? op.total_units ?? op.totalUnits ?? 0) || 0;
     const completedUnits = Number(op.display_completed_units ?? op.displayCompletedUnits ?? op.completed_units ?? op.completedUnits ?? 0) || 0;
     const failedUnits = Number(op.display_failed_units ?? op.displayFailedUnits ?? op.failed_units ?? op.failedUnits ?? 0) || 0;
@@ -183912,7 +184029,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
       role('op-status').textContent = completedSuccessfully
         ? (operationType === 'DRAFT_CREATE' ? 'Your payment draft is ready.' : 'Payment processing is complete.')
         : isReviewRequired(op)
-          ? 'CloudTMS paused safely because this payment needs attention.'
+          ? (staleFailuresHtml ? 'Reauthorisation is blocked because one or more payments changed.' : 'CloudTMS paused safely because this payment needs attention.')
           : isWaitingAuthorisation(op)
             ? 'Waiting for approval before CloudTMS can continue.'
             : isWaitingProvider(op)
@@ -183943,9 +184060,13 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     }
     if (role('op-review')) {
       role('op-review').style.display = isReviewRequired(op) || isWaitingAuthorisation(op) ? '' : 'none';
-      role('op-review').textContent = isWaitingAuthorisation(op)
-        ? 'An authorised user needs to approve this payment before it can continue.'
-        : (isReviewRequired(op) ? 'Open the payment issue to see what needs to be resolved.' : '');
+      if (staleFailuresHtml && isReviewRequired(op)) {
+        role('op-review').innerHTML = staleFailuresHtml;
+      } else {
+        role('op-review').textContent = isWaitingAuthorisation(op)
+          ? 'An authorised user needs to approve this payment before it can continue.'
+          : (isReviewRequired(op) ? 'Open the payment issue to see what needs to be resolved.' : '');
+      }
     }
 
     if (role('op-child')) { role('op-child').style.display = 'none'; role('op-child').textContent = ''; }
@@ -183953,7 +184074,9 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
       role('op-final').style.display = isTerminal(op) || op.still_running || op.stillRunning || op.backend_execution_continues || op.backendExecutionContinues ? '' : 'none';
       role('op-final').textContent = completedSuccessfully
         ? (operationType === 'DRAFT_CREATE' ? 'Payment draft created successfully.' : 'Payment processing completed successfully.')
-        : (isReviewRequired(op) ? 'No further automatic step will run until the issue is reviewed.' : (isTerminal(op) ? 'CloudTMS has safely stopped this operation.' : 'CloudTMS is continuing safely in the background.'));
+        : (isReviewRequired(op)
+            ? (staleFailuresHtml ? 'Remove or resolve the listed payments before reauthorising the remaining batch.' : 'No further automatic step will run until the issue is reviewed.')
+            : (isTerminal(op) ? 'CloudTMS has safely stopped this operation.' : 'CloudTMS is continuing safely in the background.'));
     }
     const draftCreateActions = buildDraftCreateProgressModalActions(op);
     if (role('op-safe-close')) role('op-safe-close').textContent = draftCreateActions.safe_close_text;
