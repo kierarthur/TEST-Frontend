@@ -92088,6 +92088,48 @@ function renderBankingAlertPreferencesPanel() {
 }
 
 
+function bankingPaySelectionAuthorityDecisionV1(options = {}) {
+  const normaliseRevision = (value) => {
+    const text = String(value == null ? '' : value).trim();
+    if (!/^[0-9]{1,18}$/.test(text)) return null;
+    const parsed = Number(text);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+  };
+  const digestIds = (values) => Array.from(new Set(
+    (Array.isArray(values) ? values : [])
+      .map((value) => String(value == null ? '' : value).trim())
+      .filter(Boolean)
+  )).sort().join('|');
+  const incomingSessionId = String(options.incomingSessionId || '').trim();
+  const acceptedSessionId = String(options.acceptedSessionId || '').trim();
+  const incomingRevision = normaliseRevision(options.incomingRevision);
+  const acceptedRevision = normaliseRevision(options.acceptedRevision);
+  const wrongSession = !!(
+    incomingSessionId && acceptedSessionId && incomingSessionId !== acceptedSessionId
+  );
+  const staleRevision = acceptedRevision !== null && (
+    incomingRevision === null || incomingRevision < acceptedRevision
+  );
+  const sameRevisionDigestMismatch = !!(
+    options.incomingMembershipProvided === true &&
+    options.acceptedMembershipProvided === true &&
+    acceptedRevision !== null &&
+    incomingRevision === acceptedRevision &&
+    digestIds(options.incomingIds) !== digestIds(options.acceptedIds)
+  );
+  const suppress = wrongSession || staleRevision || sameRevisionDigestMismatch;
+  return {
+    suppress,
+    reason: wrongSession
+      ? 'SELECTION_SESSION_LINEAGE_MISMATCH'
+      : (sameRevisionDigestMismatch
+          ? 'SELECTION_SAME_REVISION_DIGEST_MISMATCH'
+          : (staleRevision ? 'SELECTION_REVISION_BELOW_ACCEPTED_FLOOR' : '')),
+    incomingRevision,
+    acceptedRevision
+  };
+}
+
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -92218,12 +92260,38 @@ function attachBankingModalDelegatedHandlers() {
   let previewSelectionMutationTail = Promise.resolve();
   let queuedPreviewSelectionMutationCount = 0;
   const runPreviewSelectionMutation = async (mutation) => {
+    let mutationEpoch = null;
+    try {
+      const selectionState = getState();
+      const wizard = selectionState?.pay?.draftWizard;
+      if (wizard && typeof wizard === 'object') {
+        mutationEpoch = Math.max(0, Number(wizard.selection_authority_epoch || 0)) + 1;
+        wizard.selection_authority_epoch = mutationEpoch;
+        wizard.selection_authority_last_intent = {
+          epoch: mutationEpoch,
+          launched_at_ms: Date.now()
+        };
+      }
+    } catch {}
     queuedPreviewSelectionMutationCount += 1;
     targetEl.setAttribute('data-banking-selection-mutation-pending', '1');
     setPreviewSelectionControlsBusy(true);
 
     const executeMutation = async () => {
       await mutation();
+      try {
+        const selectionState = getState();
+        const wizard = selectionState?.pay?.draftWizard;
+        if (wizard && typeof wizard === 'object' && mutationEpoch !== null) {
+          wizard.selection_authority_last_completed = {
+            epoch: mutationEpoch,
+            completed_at_ms: Date.now(),
+            progress_counter_version: Number(
+              wizard.selection_progress_counter_floor ?? wizard.selectionProgressCounterFloor
+            )
+          };
+        }
+      } catch {}
       return true;
     };
     const queuedMutation = previewSelectionMutationTail.then(executeMutation, executeMutation);
@@ -96143,6 +96211,45 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         ? payload.draft_blocker_codes
         : (Array.isArray(payload.blocker_codes) ? payload.blocker_codes : null);
       const decisions = ensurePayWizardDecisionState();
+      const incomingSessionId = String(
+        payload.session_id || payload.sessionId || payload.workbench_session_id || payload.workbenchSessionId || ''
+      ).trim();
+      const activeSessionId = getActivePayWorkbenchSessionIdForSelection();
+      const selectionFloor = Number(
+        st.pay?.draftWizard?.selection_progress_counter_floor ??
+        st.pay?.draftWizard?.selectionProgressCounterFloor
+      );
+      const existingServerSelectedIds = normalizePreviewRowIdArray(
+        st.pay?.draftWizard?.workbench?.server_selected_preview_row_ids ??
+        decisions.server_selected_preview_row_ids ??
+        []
+      );
+      const existingServerSelectionProvided = !!(
+        st.pay?.draftWizard?.workbench?.server_selected_preview_row_ids_provided === true ||
+        decisions.server_selected_preview_row_ids_provided === true
+      );
+      const authorityDecision = bankingPaySelectionAuthorityDecisionV1({
+        incomingSessionId,
+        acceptedSessionId: activeSessionId,
+        incomingRevision: progressCounterVersion,
+        acceptedRevision: selectionFloor,
+        incomingMembershipProvided: selectionMembershipSnapshotProvided,
+        acceptedMembershipProvided: existingServerSelectionProvided,
+        incomingIds: selectedIds,
+        acceptedIds: existingServerSelectedIds
+      });
+      if (authorityDecision.suppress) {
+        st.pay.draftWizard.selection_authority_last_suppressed = {
+          reason: authorityDecision.reason,
+          incoming_progress_counter_version: authorityDecision.incomingRevision,
+          accepted_progress_counter_floor: authorityDecision.acceptedRevision
+        };
+        st.pay.draftWizard.selection_authority_suppressed_count = Math.max(
+          0,
+          Number(st.pay.draftWizard.selection_authority_suppressed_count || 0)
+        ) + 1;
+        return;
+      }
       try {
         st.pay.draftWizard.workbench = (st.pay.draftWizard.workbench && typeof st.pay.draftWizard.workbench === 'object') ? st.pay.draftWizard.workbench : {};
         const authoritativeProgressNodes = [
@@ -125904,6 +126011,33 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     : (isPlainObject(responseObj.progress_json)
         ? responseObj.progress_json
         : (isPlainObject(responseObj.progressJson) ? responseObj.progressJson : {}));
+  const readSelectionRevision = (...values) => {
+    for (const value of values) {
+      const text = trimStr(value);
+      if (!/^[0-9]{1,18}$/.test(text)) continue;
+      const parsed = Number(text);
+      if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
+    }
+    return null;
+  };
+  const incomingSelectionRevision = readSelectionRevision(
+    responseObj.progress_counter_version,
+    responseObj.progressCounterVersion,
+    responseObj.session?.progress_counter_version,
+    responseObj.session?.progressCounterVersion,
+    previewObj.progress_counter_version,
+    previewObj.progressCounterVersion,
+    progressObj.progress_counter_version,
+    progressObj.progressCounterVersion
+  );
+  const acceptedSelectionRevisionFloor = readSelectionRevision(
+    wiz.selection_progress_counter_floor,
+    wiz.selectionProgressCounterFloor,
+    workbenchBeforeNormalization.progress_counter_version,
+    workbenchBeforeNormalization.progressCounterVersion,
+    decisionsBeforeNormalization.progress_counter_version,
+    decisionsBeforeNormalization.progressCounterVersion
+  );
   const postActionRefresh = readPostActionRefreshPayload(responseObj, previewObj, progressObj);
   const postActionMode = trimStr(postActionRefresh?.mode || postActionRefresh?.refresh_mode || postActionRefresh?.refreshMode || '').toUpperCase();
   const cloneOrPatchContext = !!(
@@ -126993,6 +127127,48 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       (serverSelectedPreviewRowIdsFieldPresent && serverSelectedPreviewRowIds.length > 0) ||
       preserveExistingAuthoritativeServerSelection
     );
+  const responseCarriesSelectionMembership = !!(
+    serverSelectionProvidedMarkerPresent ||
+    explicitSelectedPreviewRowIdsFieldPresent ||
+    serverSelectedPreviewRowIdsFieldPresent
+  );
+  const sameSelectionSession = !!(sessionId && previousSessionId && sessionId === previousSessionId);
+  const authorityDecision = bankingPaySelectionAuthorityDecisionV1({
+    incomingSessionId: sessionId,
+    acceptedSessionId: previousSessionId,
+    incomingRevision: incomingSelectionRevision,
+    acceptedRevision: sameSelectionSession ? acceptedSelectionRevisionFloor : null,
+    incomingMembershipProvided: responseCarriesSelectionMembership,
+    acceptedMembershipProvided: existingAuthoritativeServerSelectionProvided,
+    incomingIds: serverSelectedPreviewRowIds,
+    acceptedIds: existingAuthoritativeServerSelectedPreviewRowIds
+  });
+  const suppressIncomingSelectionMembership = authorityDecision.suppress;
+  if (suppressIncomingSelectionMembership) {
+    wiz.selection_authority_last_suppressed = {
+      reason: authorityDecision.reason,
+      incoming_progress_counter_version: authorityDecision.incomingRevision,
+      accepted_progress_counter_floor: authorityDecision.acceptedRevision
+    };
+    wiz.selection_authority_suppressed_count = Math.max(0, Number(wiz.selection_authority_suppressed_count || 0)) + 1;
+    const authoritativeSelectedCount = existingAuthoritativeServerSelectedPreviewRowIds.length;
+    responseObj.progress_counter_version = acceptedSelectionRevisionFloor;
+    if (isPlainObject(responseObj.session)) responseObj.session.progress_counter_version = acceptedSelectionRevisionFloor;
+    progressObj.progress_counter_version = acceptedSelectionRevisionFloor;
+    for (const target of [responseObj, responseObj.session, previewObj, progressObj]) {
+      if (!isPlainObject(target)) continue;
+      if (Object.prototype.hasOwnProperty.call(target, 'selected_row_count')) target.selected_row_count = authoritativeSelectedCount;
+      if (Object.prototype.hasOwnProperty.call(target, 'selected_eligible_ready_row_count')) {
+        target.selected_eligible_ready_row_count = authoritativeSelectedCount;
+      }
+    }
+  } else if (incomingSelectionRevision !== null) {
+    const nextFloor = Number.isSafeInteger(acceptedSelectionRevisionFloor)
+      ? Math.max(acceptedSelectionRevisionFloor, incomingSelectionRevision)
+      : incomingSelectionRevision;
+    wiz.selection_progress_counter_floor = nextFloor;
+    wiz.selectionProgressCounterFloor = nextFloor;
+  }
   const previewComponentStateCache = mergeComponentStateCaches(previewObj);
   const responseComponentStateCache = mergeComponentStateCaches(responseObj);
   const explicitBlockedCaseStates = firstPresentArray(
@@ -127315,18 +127491,23 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const postMutationSelectionForcedExplicitNone = isPostMutationPreviewPayload === true && !previewPayloadHasRows;
   const patchCloneExplicitSelectedPreviewRowIds = normalizeStringArray(explicitlySelectedPreviewRowIdsFromRows);
   const preserveAuthoritativeServerSelection = serverSelectedPreviewRowIdsProvided === true;
-  const effectiveServerSelectedPreviewRowIds = cloneOrPatchContext
-    ? patchCloneExplicitSelectedPreviewRowIds
-    : (preserveAuthoritativeServerSelection
-        ? serverSelectedPreviewRowIds
-        : ((postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows) ? [] : serverSelectedPreviewRowIds));
-  const effectiveServerSelectedPreviewRowIdsProvided = cloneOrPatchContext
-    ? true
-    : (preserveAuthoritativeServerSelection
+  const effectiveServerSelectedPreviewRowIds = suppressIncomingSelectionMembership
+    ? existingAuthoritativeServerSelectedPreviewRowIds
+    : (cloneOrPatchContext
+        ? patchCloneExplicitSelectedPreviewRowIds
+        : (preserveAuthoritativeServerSelection
+            ? serverSelectedPreviewRowIds
+            : ((postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows) ? [] : serverSelectedPreviewRowIds)));
+  const effectiveServerSelectedPreviewRowIdsProvided = suppressIncomingSelectionMembership
+    ? existingAuthoritativeServerSelectionProvided
+    : (cloneOrPatchContext
         ? true
-        : (postMutationSelectionForcedExplicitNone ? true : (postMutationFullPreviewWithRows ? false : serverSelectedPreviewRowIdsProvided)));
+        : (preserveAuthoritativeServerSelection
+            ? true
+            : (postMutationSelectionForcedExplicitNone ? true : (postMutationFullPreviewWithRows ? false : serverSelectedPreviewRowIdsProvided))));
   const rawLocalSelectionMode = existingLocalSelectionMode;
-  const localSelectionDirty = (postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows || cloneOrPatchContext)
+  const incomingSelectionMayReplaceMembership = !suppressIncomingSelectionMembership;
+  const localSelectionDirty = (incomingSelectionMayReplaceMembership && (postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows || cloneOrPatchContext))
     ? false
     : ((activeSessionChanged || effectiveServerSelectedPreviewRowIdsProvided) ? false : existingLocalSelectionDirty);
   const shouldDefaultFullPreviewSelection = !!(
@@ -127341,20 +127522,20 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       rawLocalSelectionMode === 'EXPLICIT_NONE'
     )
   );
-  const localSelectedPreviewRowIds = (postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows || activeSessionChanged || shouldDefaultFullPreviewSelection)
+  const localSelectedPreviewRowIds = (incomingSelectionMayReplaceMembership && (postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows || activeSessionChanged || shouldDefaultFullPreviewSelection))
     ? []
     : existingLocalSelectedPreviewRowIds;
   const localSelectionMode = normalizeSelectedPreviewRowMode(
-    postMutationSelectionForcedExplicitNone
+    (postMutationSelectionForcedExplicitNone && incomingSelectionMayReplaceMembership)
       ? 'EXPLICIT_NONE'
-      : ((postMutationFullPreviewWithRows || activeSessionChanged || shouldDefaultFullPreviewSelection) ? 'IMPLICIT_ALL' : (existingLocalSelectionMode || 'IMPLICIT_ALL')),
+      : ((incomingSelectionMayReplaceMembership && (postMutationFullPreviewWithRows || activeSessionChanged || shouldDefaultFullPreviewSelection)) ? 'IMPLICIT_ALL' : (existingLocalSelectionMode || 'IMPLICIT_ALL')),
     previewRowUniverse,
     localSelectedPreviewRowIds
   );
   let selectionState = null;
-  if (postMutationSelectionForcedExplicitNone) {
+  if (postMutationSelectionForcedExplicitNone && !suppressIncomingSelectionMembership) {
     selectionState = { selected_preview_row_ids: [], selected_preview_row_mode: 'EXPLICIT_NONE' };
-  } else if (cloneOrPatchContext) {
+  } else if (cloneOrPatchContext && !suppressIncomingSelectionMembership) {
     selectionState = effectiveServerSelectedPreviewRowIds.length > 0
       ? reconcileSelectedPreviewSelection(effectiveServerSelectedPreviewRowIds, previewRowUniverse, 'EXPLICIT_SUBSET')
       : { selected_preview_row_ids: [], selected_preview_row_mode: 'EXPLICIT_NONE' };
@@ -127370,6 +127551,26 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       previewRowUniverse,
       localSelectionMode
     );
+  }
+  if (suppressIncomingSelectionMembership) {
+    const selectedIdSet = new Set(effectiveServerSelectedPreviewRowIds);
+    for (const row of previewRowUniverse) {
+      if (!isPlainObject(row)) continue;
+      const rowId = rowIdFromPreviewRow(row);
+      if (!rowId) continue;
+      const selected = selectedIdSet.has(rowId);
+      row.selected = selected;
+      row.selection_state = selected ? 'SELECTED' : 'UNSELECTED';
+      row.selectionState = row.selection_state;
+      if (isPlainObject(row.row_json)) {
+        row.row_json.selected = selected;
+        row.row_json.selection_state = row.selection_state;
+      }
+      if (isPlainObject(row.rowJson)) {
+        row.rowJson.selected = selected;
+        row.rowJson.selection_state = row.selection_state;
+      }
+    }
   }
   const genericPayloadSection = normalizePreviewPageSection(
     responseObj.resolved_section || responseObj.resolvedSection || responseObj.section || responseObj.requested_section || responseObj.requestedSection || previewObj.resolved_section || previewObj.resolvedSection || previewObj.section || 'canonical_preview_lines'

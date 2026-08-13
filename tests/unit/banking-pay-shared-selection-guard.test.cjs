@@ -17,6 +17,65 @@ function sliceBetween(startMarker, endMarker) {
   return mainSource.slice(start, end);
 }
 
+test('selection authority accepts only the newest shared database revision', () => {
+  const body = sliceBetween(
+    'function bankingPaySelectionAuthorityDecisionV1',
+    'function attachBankingModalDelegatedHandlers'
+  );
+  const context = { Array, Set, String, Number, Object };
+  vm.runInNewContext(
+    body + '\nthis.__decide = bankingPaySelectionAuthorityDecisionV1;',
+    context,
+    { filename: 'banking-selection-authority-decision.js' }
+  );
+
+  const current = {
+    incomingSessionId: 'session-1',
+    acceptedSessionId: 'session-1',
+    incomingRevision: 42,
+    acceptedRevision: 42,
+    incomingMembershipProvided: true,
+    acceptedMembershipProvided: true,
+    incomingIds: ['row-2', 'row-1'],
+    acceptedIds: ['row-1', 'row-2']
+  };
+  assert.equal(context.__decide(current).suppress, false);
+  assert.equal(
+    context.__decide({ ...current, incomingRevision: 41 }).reason,
+    'SELECTION_REVISION_BELOW_ACCEPTED_FLOOR'
+  );
+  assert.equal(
+    context.__decide({ ...current, incomingIds: ['row-1'] }).reason,
+    'SELECTION_SAME_REVISION_DIGEST_MISMATCH'
+  );
+  assert.equal(
+    context.__decide({ ...current, incomingSessionId: 'session-old' }).reason,
+    'SELECTION_SESSION_LINEAGE_MISMATCH'
+  );
+  assert.equal(
+    context.__decide({ ...current, incomingRevision: 43, incomingIds: ['row-3'] }).suppress,
+    false
+  );
+});
+
+test('mutation and preview adoption both use the same shared selection authority fence', () => {
+  const mutationBody = sliceBetween(
+    'const applySelectionPayloadSummaryToWizard =',
+    'const togglePreviewRowSelection ='
+  );
+  const previewBody = sliceBetween(
+    'function applyPayWorkbenchPreviewToState',
+    'function mergePayWorkbenchCandidatePreviewIntoState'
+  );
+
+  assert.match(mutationBody, /bankingPaySelectionAuthorityDecisionV1/);
+  assert.match(mutationBody, /if \(authorityDecision\.suppress\)/);
+  assert.match(mutationBody, /acceptedMembershipProvided: existingServerSelectionProvided/);
+  assert.match(previewBody, /bankingPaySelectionAuthorityDecisionV1/);
+  assert.match(previewBody, /suppressIncomingSelectionMembership = authorityDecision\.suppress/);
+  assert.match(previewBody, /row\.selected = selected/);
+});
+
 test('successful selection changes store the returned server progress revision', () => {
   const body = sliceBetween(
     'const applySelectionPayloadSummaryToWizard =',
