@@ -1,7 +1,7 @@
 // =====  Base URL +  helpers =====
 
 // ===== Base URL + helpers =====
-// ===== Base URL + helpers ===== 
+// ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
   asset_version: '20260813-banking-fast-route-modal-r1',
