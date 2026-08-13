@@ -37,7 +37,11 @@ test('selection authority accepts only the newest shared database revision', () 
     incomingMembershipProvided: true,
     acceptedMembershipProvided: true,
     incomingIds: ['row-2', 'row-1'],
-    acceptedIds: ['row-1', 'row-2']
+    acceptedIds: ['row-1', 'row-2'],
+    incomingModeProvided: true,
+    acceptedModeProvided: true,
+    incomingMode: 'IMPLICIT_ALL',
+    acceptedMode: 'IMPLICIT_ALL'
   };
   assert.equal(context.__decide(current).suppress, false);
   assert.equal(
@@ -51,6 +55,14 @@ test('selection authority accepts only the newest shared database revision', () 
   assert.equal(
     context.__decide({ ...current, incomingSessionId: 'session-old' }).reason,
     'SELECTION_SESSION_LINEAGE_MISMATCH'
+  );
+  assert.equal(
+    context.__decide({ ...current, incomingMode: 'EXPLICIT_SUBSET' }).reason,
+    'SELECTION_SAME_REVISION_MODE_MISMATCH'
+  );
+  assert.equal(
+    context.__decide({ ...current, incomingMode: 'EXPLICIT_INCLUDE' }).reason,
+    'SELECTION_SAME_REVISION_MODE_MISMATCH'
   );
   assert.equal(
     context.__decide({ ...current, incomingRevision: 43, incomingIds: ['row-3'] }).suppress,
@@ -71,8 +83,13 @@ test('mutation and preview adoption both use the same shared selection authority
   assert.match(mutationBody, /bankingPaySelectionAuthorityDecisionV1/);
   assert.match(mutationBody, /if \(authorityDecision\.suppress\)/);
   assert.match(mutationBody, /acceptedMembershipProvided: existingServerSelectionProvided/);
+  assert.match(mutationBody, /incomingMode: payloadMode/);
+  assert.match(mutationBody, /acceptedMode: existingAuthoritativeSelectionMode/);
   assert.match(previewBody, /bankingPaySelectionAuthorityDecisionV1/);
   assert.match(previewBody, /suppressIncomingSelectionMembership = authorityDecision\.suppress/);
+  assert.match(previewBody, /incomingMode: inferredIncomingAuthoritativeSelectionMode/);
+  assert.match(previewBody, /acceptedMode: existingAuthoritativeSelectionMode/);
+  assert.match(previewBody, /authoritative_selected_preview_row_mode = acceptedAuthoritativeSelectionMode/);
   assert.match(previewBody, /row\.selected = selected/);
 });
 

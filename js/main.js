@@ -92100,10 +92100,22 @@ function bankingPaySelectionAuthorityDecisionV1(options = {}) {
       .map((value) => String(value == null ? '' : value).trim())
       .filter(Boolean)
   )).sort().join('|');
+  const normaliseMode = (value, ids) => {
+    const mode = String(value == null ? '' : value).trim().toUpperCase();
+    if (mode === 'IMPLICIT_ALL' || mode === 'EXPLICIT_SUBSET' || mode === 'EXPLICIT_NONE') {
+      return mode;
+    }
+    if (mode === 'EXPLICIT_INCLUDE') {
+      return digestIds(ids) ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE';
+    }
+    return '';
+  };
   const incomingSessionId = String(options.incomingSessionId || '').trim();
   const acceptedSessionId = String(options.acceptedSessionId || '').trim();
   const incomingRevision = normaliseRevision(options.incomingRevision);
   const acceptedRevision = normaliseRevision(options.acceptedRevision);
+  const incomingMode = normaliseMode(options.incomingMode, options.incomingIds);
+  const acceptedMode = normaliseMode(options.acceptedMode, options.acceptedIds);
   const wrongSession = !!(
     incomingSessionId && acceptedSessionId && incomingSessionId !== acceptedSessionId
   );
@@ -92117,16 +92129,29 @@ function bankingPaySelectionAuthorityDecisionV1(options = {}) {
     incomingRevision === acceptedRevision &&
     digestIds(options.incomingIds) !== digestIds(options.acceptedIds)
   );
-  const suppress = wrongSession || staleRevision || sameRevisionDigestMismatch;
+  const sameRevisionModeMismatch = !!(
+    options.incomingModeProvided === true &&
+    options.acceptedModeProvided === true &&
+    acceptedRevision !== null &&
+    incomingRevision === acceptedRevision &&
+    incomingMode &&
+    acceptedMode &&
+    incomingMode !== acceptedMode
+  );
+  const suppress = wrongSession || staleRevision || sameRevisionDigestMismatch || sameRevisionModeMismatch;
   return {
     suppress,
     reason: wrongSession
       ? 'SELECTION_SESSION_LINEAGE_MISMATCH'
-      : (sameRevisionDigestMismatch
-          ? 'SELECTION_SAME_REVISION_DIGEST_MISMATCH'
-          : (staleRevision ? 'SELECTION_REVISION_BELOW_ACCEPTED_FLOOR' : '')),
+      : (sameRevisionModeMismatch
+          ? 'SELECTION_SAME_REVISION_MODE_MISMATCH'
+          : (sameRevisionDigestMismatch
+              ? 'SELECTION_SAME_REVISION_DIGEST_MISMATCH'
+              : (staleRevision ? 'SELECTION_REVISION_BELOW_ACCEPTED_FLOOR' : ''))),
     incomingRevision,
-    acceptedRevision
+    acceptedRevision,
+    incomingMode,
+    acceptedMode
   };
 }
 
@@ -96228,6 +96253,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         st.pay?.draftWizard?.workbench?.server_selected_preview_row_ids_provided === true ||
         decisions.server_selected_preview_row_ids_provided === true
       );
+      const existingAuthoritativeSelectionMode = String(
+        st.pay?.draftWizard?.workbench?.authoritative_selected_preview_row_mode ||
+        decisions.authoritative_selected_preview_row_mode ||
+        ''
+      ).trim().toUpperCase();
       const authorityDecision = bankingPaySelectionAuthorityDecisionV1({
         incomingSessionId,
         acceptedSessionId: activeSessionId,
@@ -96236,7 +96266,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         incomingMembershipProvided: selectionMembershipSnapshotProvided,
         acceptedMembershipProvided: existingServerSelectionProvided,
         incomingIds: selectedIds,
-        acceptedIds: existingServerSelectedIds
+        acceptedIds: existingServerSelectedIds,
+        incomingModeProvided: !!payloadMode,
+        acceptedModeProvided: !!existingAuthoritativeSelectionMode,
+        incomingMode: payloadMode,
+        acceptedMode: existingAuthoritativeSelectionMode
       });
       if (authorityDecision.suppress) {
         st.pay.draftWizard.selection_authority_last_suppressed = {
@@ -127132,6 +127166,40 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     explicitSelectedPreviewRowIdsFieldPresent ||
     serverSelectedPreviewRowIdsFieldPresent
   );
+  const rawIncomingSelectionMode = trimStr(
+    responseObj.selected_preview_row_mode ||
+    responseObj.selectedPreviewRowMode ||
+    responseObj.selection_intent_mode ||
+    responseObj.selectionIntentMode ||
+    responseObj.session?.selected_preview_row_mode ||
+    responseObj.session?.selectedPreviewRowMode ||
+    responseObj.session?.selection_intent_mode ||
+    responseObj.session?.selectionIntentMode ||
+    previewObj.selected_preview_row_mode ||
+    previewObj.selectedPreviewRowMode ||
+    previewObj.selection_intent_mode ||
+    previewObj.selectionIntentMode ||
+    ''
+  ).toUpperCase();
+  const incomingAuthoritativeSelectionMode = rawIncomingSelectionMode === 'EXPLICIT_INCLUDE'
+    ? (serverSelectedPreviewRowIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE')
+    : rawIncomingSelectionMode;
+  const incomingAuthoritativeSelectionModeProvided = !!(
+    ['IMPLICIT_ALL', 'EXPLICIT_SUBSET', 'EXPLICIT_NONE'].includes(incomingAuthoritativeSelectionMode) ||
+    serverSelectedPreviewRowIdsProvided
+  );
+  const inferredIncomingAuthoritativeSelectionMode = incomingAuthoritativeSelectionModeProvided
+    ? (['IMPLICIT_ALL', 'EXPLICIT_SUBSET', 'EXPLICIT_NONE'].includes(incomingAuthoritativeSelectionMode)
+        ? incomingAuthoritativeSelectionMode
+        : (serverSelectedPreviewRowIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE'))
+    : '';
+  const existingAuthoritativeSelectionMode = trimStr(
+    workbenchBeforeNormalization.authoritative_selected_preview_row_mode ||
+    workbenchBeforeNormalization.authoritativeSelectedPreviewRowMode ||
+    decisionsBeforeNormalization.authoritative_selected_preview_row_mode ||
+    decisionsBeforeNormalization.authoritativeSelectedPreviewRowMode ||
+    ''
+  ).toUpperCase();
   const sameSelectionSession = !!(sessionId && previousSessionId && sessionId === previousSessionId);
   const authorityDecision = bankingPaySelectionAuthorityDecisionV1({
     incomingSessionId: sessionId,
@@ -127141,14 +127209,20 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     incomingMembershipProvided: responseCarriesSelectionMembership,
     acceptedMembershipProvided: existingAuthoritativeServerSelectionProvided,
     incomingIds: serverSelectedPreviewRowIds,
-    acceptedIds: existingAuthoritativeServerSelectedPreviewRowIds
+    acceptedIds: existingAuthoritativeServerSelectedPreviewRowIds,
+    incomingModeProvided: incomingAuthoritativeSelectionModeProvided,
+    acceptedModeProvided: ['IMPLICIT_ALL', 'EXPLICIT_SUBSET', 'EXPLICIT_NONE'].includes(existingAuthoritativeSelectionMode),
+    incomingMode: inferredIncomingAuthoritativeSelectionMode,
+    acceptedMode: existingAuthoritativeSelectionMode
   });
   const suppressIncomingSelectionMembership = authorityDecision.suppress;
   if (suppressIncomingSelectionMembership) {
     wiz.selection_authority_last_suppressed = {
       reason: authorityDecision.reason,
       incoming_progress_counter_version: authorityDecision.incomingRevision,
-      accepted_progress_counter_floor: authorityDecision.acceptedRevision
+      accepted_progress_counter_floor: authorityDecision.acceptedRevision,
+      incoming_selection_mode: authorityDecision.incomingMode || null,
+      accepted_selection_mode: authorityDecision.acceptedMode || null
     };
     wiz.selection_authority_suppressed_count = Math.max(0, Number(wiz.selection_authority_suppressed_count || 0)) + 1;
     const authoritativeSelectedCount = existingAuthoritativeServerSelectedPreviewRowIds.length;
@@ -127552,6 +127626,10 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       localSelectionMode
     );
   }
+  const acceptedAuthoritativeSelectionMode = suppressIncomingSelectionMembership
+    ? existingAuthoritativeSelectionMode
+    : (inferredIncomingAuthoritativeSelectionMode ||
+        (!sameSelectionSession ? selectionState.selected_preview_row_mode : existingAuthoritativeSelectionMode));
   if (suppressIncomingSelectionMembership) {
     const selectedIdSet = new Set(effectiveServerSelectedPreviewRowIds);
     for (const row of previewRowUniverse) {
@@ -127884,6 +127962,10 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.decisions.selectedPreviewRowIds = cloneJson(selectionState.selected_preview_row_ids) || [];
   wiz.decisions.selected_preview_row_mode = selectionState.selected_preview_row_mode;
   wiz.decisions.selectedPreviewRowMode = selectionState.selected_preview_row_mode;
+  if (['IMPLICIT_ALL', 'EXPLICIT_SUBSET', 'EXPLICIT_NONE'].includes(acceptedAuthoritativeSelectionMode)) {
+    wiz.decisions.authoritative_selected_preview_row_mode = acceptedAuthoritativeSelectionMode;
+    wiz.decisions.authoritativeSelectedPreviewRowMode = acceptedAuthoritativeSelectionMode;
+  }
   wiz.selected_preview_row_ids = cloneJson(selectionState.selected_preview_row_ids) || [];
   wiz.selectedPreviewRowIds = cloneJson(selectionState.selected_preview_row_ids) || [];
   wiz.selected_preview_row_mode = selectionState.selected_preview_row_mode;
@@ -127964,6 +128046,10 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.selectedPreviewRowIds = cloneJson(selectionState.selected_preview_row_ids) || [];
   wiz.workbench.selected_preview_row_mode = selectionState.selected_preview_row_mode;
   wiz.workbench.selectedPreviewRowMode = selectionState.selected_preview_row_mode;
+  if (['IMPLICIT_ALL', 'EXPLICIT_SUBSET', 'EXPLICIT_NONE'].includes(acceptedAuthoritativeSelectionMode)) {
+    wiz.workbench.authoritative_selected_preview_row_mode = acceptedAuthoritativeSelectionMode;
+    wiz.workbench.authoritativeSelectedPreviewRowMode = acceptedAuthoritativeSelectionMode;
+  }
   wiz.workbench.create_draft_refresh_pending = hasPendingWorkbenchRefresh;
   wiz.workbench.preview_reopen_required = hasPendingWorkbenchRefresh;
   wiz.workbench.__post_mutation_preview_refresh_failed = false;
