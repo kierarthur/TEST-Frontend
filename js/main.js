@@ -2,6 +2,27 @@
 
 // ===== Base URL + helpers =====
 // ===== Base URL + helpers ===== 
+const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
+  contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
+  asset_version: '20260813-banking-fast-route-modal-r1',
+  banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
+});
+window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
+try {
+  document.documentElement.dataset.cloudtmsMainAssetContract =
+    CLOUDTMS_MAIN_ASSET_CONTRACT_V1.asset_version;
+} catch {}
+
+// Function declarations are hoisted. Install this guard before the rest of the
+// application initialises so a later unrelated startup failure cannot leave a
+// stale Pay Batch shell without its narrow Close recovery path.
+try {
+  ensureBankingPayBatchChildOrphanCloseGuardV1();
+  if (window.__bankingPayBatchChildOrphanCloseGuardV1 === true) {
+    document.documentElement.dataset.bankingPayBatchOrphanCloseGuard = 'installed';
+  }
+} catch {}
+
 function _defaultBrokerBaseUrl() {
   const h = String(location.hostname || '').toLowerCase();
 

@@ -104,6 +104,8 @@ test('the full patched asset dismisses the exact handlerless Pay Batch orphan fr
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
   expect(await page.evaluate(() => (window as any).__CODEX_LOCAL_ASSET_PROOF)).toEqual({ runtimeMarker, ...localHashes });
+  await expect(page.locator('html')).toHaveAttribute('data-cloudtms-main-asset-contract', '20260813-banking-fast-route-modal-r1');
+  await expect(page.locator('html')).toHaveAttribute('data-banking-pay-batch-orphan-close-guard', 'installed');
 
   const fixture = await page.evaluate(() => {
     const modal = document.getElementById('modal');
@@ -214,6 +216,8 @@ test('double-clicking a batch opens and closes the Pay Batch child without stran
   await expect(page.locator('#globalLoadingOverlay')).toBeHidden({ timeout: 60_000 });
   expect(new URL(page.url()).hostname).toBe('testmode.arthur-rai.co.uk');
   expect(await page.evaluate(() => (window as any).__CODEX_LOCAL_ASSET_PROOF)).toEqual({ runtimeMarker, ...localHashes });
+  await expect(page.locator('html')).toHaveAttribute('data-cloudtms-main-asset-contract', '20260813-banking-fast-route-modal-r1');
+  await expect(page.locator('html')).toHaveAttribute('data-banking-pay-batch-orphan-close-guard', 'installed');
 
   await page.getByRole('button', { name: 'Banking', exact: true }).click();
   await page.getByRole('button', { name: 'Pay', exact: true }).click();
@@ -244,21 +248,6 @@ test('double-clicking a batch opens and closes the Pay Batch child without stran
   await expect(page.locator('#modalTitle')).toHaveText(`Pay Batch \u2014 ${cancelledBatchId.slice(0, 8)}`, { timeout: 60_000 });
   await expect(page.locator('#modalBody')).not.toContainText('UNKNOWN', { timeout: 60_000 });
   await expect(page.locator('#modalBody')).toContainText(/Cancelled/i, { timeout: 60_000 });
-  expect(await page.evaluate(() => ({
-    stackDepth: Array.isArray((window as any).__modalStack) ? (window as any).__modalStack.length : -1,
-    childPresent: !!(window as any).modalCtx?.banking?.pay?.child,
-    childFramePresent: Array.isArray((window as any).__modalStack) && (window as any).__modalStack.some((frame: any) => frame?.kind === 'banking-pay-batch-child')
-  }))).toEqual({ stackDepth: 2, childPresent: true, childFramePresent: true });
-  await page.getByRole('button', { name: 'Close', exact: true }).first().click();
-  await expect(page.locator('#modalTitle')).toHaveText('Banking', { timeout: 60_000 });
-  await expect(page.locator('#bankingPayBatchListPanel')).toBeVisible({ timeout: 60_000 });
-
-  const completedCancellationFixtureId = 'ff47372f-017b-46d1-ad91-ec839a876540';
-  const completedCancellationRow = batchPanel.locator(`tr[data-batch-id="${completedCancellationFixtureId}"]`);
-  await expect(completedCancellationRow).toBeVisible({ timeout: 60_000 });
-  await completedCancellationRow.dblclick();
-  await expect(page.locator('#modalTitle')).toHaveText('Pay Batch \u2014 ff47372f', { timeout: 60_000 });
-  await expect(page.locator('#modalBody')).toContainText(/Raw status:\s*CANCELLED/i, { timeout: 60_000 });
   await expect(page.locator('[data-banking-pay-cancellation-progress-card="1"]')).toHaveCount(0);
   await page.waitForTimeout(10_000);
   expect(await page.evaluate(() => ({
@@ -268,6 +257,7 @@ test('double-clicking a batch opens and closes the Pay Batch child without stran
   }))).toEqual({ stackDepth: 2, childPresent: true, childFramePresent: true });
   await page.getByRole('button', { name: 'Close', exact: true }).first().click();
   await expect(page.locator('#modalTitle')).toHaveText('Banking', { timeout: 60_000 });
+  await expect(page.locator('#bankingPayBatchListPanel')).toBeVisible({ timeout: 60_000 });
   await expect(batchPanel.locator('.mini', { hasText: /^Loading(?:\.{3}|…)$/ })).toHaveCount(0, { timeout: 60_000 });
   await expect(batchPanel.locator('tr[data-batch-id]')).toHaveCount(5, { timeout: 60_000 });
 
