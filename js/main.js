@@ -71218,6 +71218,31 @@ function dismissOrphanedBankingPayBatchChildV1(options = {}) {
   }
 }
 
+function ensureBankingPayBatchChildOrphanCloseGuardV1() {
+  try {
+    if (window.__bankingPayBatchChildOrphanCloseGuardV1 === true) return;
+    window.__bankingPayBatchChildOrphanCloseGuardV1 = true;
+    document.addEventListener('click', (event) => {
+      const closeButton = event?.target?.closest?.('#btnCloseModal');
+      if (!closeButton) return;
+      const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+      if (stack.length > 0) return;
+      let dismissed = false;
+      try {
+        dismissed = dismissOrphanedBankingPayBatchChildV1({
+          source: 'delegated-orphan-header-close',
+          stackSnapshot: stack
+        }) === true;
+      } catch {}
+      if (!dismissed) return;
+      try { event.preventDefault(); } catch {}
+      try { event.stopImmediatePropagation(); } catch {}
+    }, true);
+  } catch {}
+}
+
+ensureBankingPayBatchChildOrphanCloseGuardV1();
+
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml

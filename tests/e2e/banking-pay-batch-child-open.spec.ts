@@ -27,7 +27,7 @@ test('an orphaned Pay Batch child with a stale header owner is dismissed without
       </div>
     </div>
   `);
-  await page.addScriptTag({ content: `window.dismissOrphanedBankingPayBatchChildV1 = (${helperSource});` });
+  await page.addScriptTag({ content: helperSource });
   const result = await page.evaluate(() => {
     const unrelatedParent = { kind: 'banking', _token: 'f:unrelated-parent-frame' };
     (window as any).__modalStack = [unrelatedParent];
@@ -57,6 +57,99 @@ test('an orphaned Pay Batch child with a stale header owner is dismissed without
     parentKind: 'banking'
   });
 });
+});
+
+test('the full patched asset dismisses the exact handlerless Pay Batch orphan from the shared Close button', async ({ page }) => {
+  test.setTimeout(90_000);
+
+  const localIndex = readFileSync(resolve(__dirname, '../../index.html'), 'utf8');
+  const localMain = readFileSync(resolve(__dirname, '../../js/main.js'), 'utf8');
+  const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
+  const localHashes = { index: sha256(localIndex), main: sha256(localMain) };
+  const runtimeMarker = `banking-pay-handlerless-orphan:${localHashes.main.slice(0, 16)}`;
+  let interceptedIndex = 0;
+  let interceptedMain = 0;
+  const mutations: string[] = [];
+  const productionRequests: string[] = [];
+
+  page.on('request', (request) => {
+    const url = request.url();
+    if (url.startsWith('https://cloudtms.kier-88a.workers.dev/')) productionRequests.push(url);
+    if (request.method() !== 'GET' && /\/api\/banking\/pay\//.test(url)) mutations.push(`${request.method()} ${new URL(url).pathname}`);
+  });
+
+  await page.route('https://testmode.arthur-rai.co.uk/**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      interceptedIndex += 1;
+      await route.fulfill({
+        body: localIndex.replace('</head>', `<script>window.__CODEX_LOCAL_ASSET_PROOF=${JSON.stringify({ runtimeMarker, ...localHashes })};</script></head>`),
+        contentType: 'text/html; charset=utf-8',
+        headers: { 'cache-control': 'no-store', 'x-codex-local-asset': runtimeMarker }
+      });
+      return;
+    }
+    if (url.pathname === '/js/main.js') {
+      interceptedMain += 1;
+      await route.fulfill({
+        body: localMain,
+        contentType: 'application/javascript; charset=utf-8',
+        headers: { 'cache-control': 'no-store', 'x-codex-local-asset': runtimeMarker }
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
+  expect(await page.evaluate(() => (window as any).__CODEX_LOCAL_ASSET_PROOF)).toEqual({ runtimeMarker, ...localHashes });
+
+  const fixture = await page.evaluate(() => {
+    const modal = document.getElementById('modal');
+    const back = document.getElementById('modalBack');
+    const title = document.getElementById('modalTitle');
+    const body = document.getElementById('modalBody');
+    const closeButton = document.getElementById('btnCloseModal') as HTMLButtonElement | null;
+    (window as any).__modalStack = [];
+    (window as any).__getModalFrame = () => null;
+    (window as any).modalCtx = { entity: 'banking', banking: { pay: { child: null } } };
+    if (modal) modal.classList.add('banking-modal', 'banking-pay-batch-child-modal');
+    if (back) back.style.display = 'flex';
+    if (title) title.textContent = 'Pay Batch — f2570d9b';
+    if (body) body.innerHTML = '<div id="handlerlessPayBatchOrphan">Cancellation complete</div>';
+    if (closeButton) {
+      closeButton.dataset.ownerToken = 'f:stale-handlerless-owner';
+      closeButton.onclick = null;
+    }
+    return {
+      title: title?.textContent || '',
+      backdropDisplay: back?.style.display || '',
+      closeHandlerPresent: typeof closeButton?.onclick === 'function',
+      modalClassPresent: modal?.classList.contains('banking-pay-batch-child-modal') === true
+    };
+  });
+  expect(fixture).toEqual({
+    title: 'Pay Batch — f2570d9b',
+    backdropDisplay: 'flex',
+    closeHandlerPresent: false,
+    modalClassPresent: true
+  });
+
+  await page.locator('#btnCloseModal').click();
+  await expect(page.locator('#modalBack')).toBeHidden();
+  expect(await page.evaluate(() => ({
+    title: document.getElementById('modalTitle')?.textContent || '',
+    bodyText: document.getElementById('modalBody')?.textContent || '',
+    ownerToken: (document.getElementById('btnCloseModal') as HTMLElement | null)?.dataset?.ownerToken || '',
+    modalClassPresent: document.getElementById('modal')?.classList.contains('banking-pay-batch-child-modal') === true,
+    stackDepth: Array.isArray((window as any).__modalStack) ? (window as any).__modalStack.length : -1
+  }))).toEqual({ title: '', bodyText: '', ownerToken: '', modalClassPresent: false, stackDepth: 0 });
+
+  expect(interceptedIndex).toBeGreaterThan(0);
+  expect(interceptedMain).toBeGreaterThan(0);
+  expect(mutations).toEqual([]);
+  expect(productionRequests).toEqual([]);
 });
 
 test('double-clicking a batch opens and closes the Pay Batch child without stranding Banking', async ({ page }) => {
@@ -184,15 +277,19 @@ test('double-clicking a batch opens and closes the Pay Batch child without stran
     const child = (window as any).modalCtx?.banking?.pay?.child || null;
     (window as any).__modalStack = [];
     (window as any).__getModalFrame = () => null;
+    const closeButton = document.getElementById('btnCloseModal') as HTMLButtonElement | null;
+    if (closeButton) closeButton.onclick = null;
     return {
       childPresent: !!child,
       childOpenToken: String(child?.openToken || ''),
-      modalClassPresent: document.getElementById('modal')?.classList.contains('banking-pay-batch-child-modal') === true
+      modalClassPresent: document.getElementById('modal')?.classList.contains('banking-pay-batch-child-modal') === true,
+      closeHandlerPresent: typeof closeButton?.onclick === 'function'
     };
   });
   expect(orphanFixture.childPresent).toBe(true);
   expect(orphanFixture.childOpenToken).not.toBe('');
   expect(orphanFixture.modalClassPresent).toBe(true);
+  expect(orphanFixture.closeHandlerPresent).toBe(false);
   await page.getByRole('button', { name: 'Close', exact: true }).first().click();
   await expect(page.locator('#modalBack')).toBeHidden();
   expect(await page.evaluate(() => ({
