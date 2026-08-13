@@ -295,6 +295,10 @@ const GRID_COLUMN_META_DEFAULTS = {
     created_at:              { selectable: true },
     updated_at:              { selectable: true },
 
+    // Office Candidate projection columns use the same grid preferences as
+    // every other Timesheet Summary column.
+    candidate_submission:    { selectable: true },
+
     // NEW: Issues badges column from v_timesheets_summary
     issue_codes:             { selectable: true }
   },
@@ -847,9 +851,11 @@ function getVisibleColumnsForSection(section, rows) {
     // - if user explicitly set visible true/false, respect it
     // - otherwise hide (prevents "hundreds of columns" explosion)
     const hasExplicitVisible = Object.prototype.hasOwnProperty.call(p, 'visible');
+    const isTimesheetOfficeDefault = section === 'timesheets'
+      && ['candidate_submission', 'issue_codes'].includes(k);
     const visible = hasExplicitVisible
       ? (p.visible !== false)
-      : (defaults.indexOf(k) >= 0);
+      : (defaults.indexOf(k) >= 0 || isTimesheetOfficeDefault);
 
     const order = (typeof p.order === 'number')
       ? p.order
@@ -864,6 +870,25 @@ function getVisibleColumnsForSection(section, rows) {
   const filtered = entries.filter((e) => e.selectable && e.visible);
   filtered.sort((a, b) => a.order - b.order);
 
+  if (section === 'timesheets') {
+    const keys = filtered.map(entry => entry.key);
+    const placeDefault = (key, afterKey) => {
+      const pref = colPrefs[key] || {};
+      if (typeof pref.order === 'number') return;
+      const current = keys.indexOf(key);
+      if (current < 0) return;
+      keys.splice(current, 1);
+      const after = keys.indexOf(afterKey);
+      keys.splice(after >= 0 ? after + 1 : keys.length, 0, key);
+    };
+    const processingKey = keys.includes('processing_status_display')
+      ? 'processing_status_display'
+      : 'processing_status';
+    placeDefault('candidate_submission', processingKey);
+    placeDefault('issue_codes', 'candidate_submission');
+    return keys;
+  }
+
   return filtered.map((e) => e.key);
 }
 
@@ -872,9 +897,28 @@ function applyUserGridPrefs(section, tables, cols) {
   const prefsRoot = root[section] || {};
   const colPrefs = prefsRoot.columns || {};
   const MIN_W = 80, MAX_W = 600;
+  const resolvedWidths = new Map();
 
   const headTable = (tables && tables.head) ? tables.head : tables;
   const bodyTable = (tables && tables.body) ? tables.body : tables;
+
+  let widthGroup = null;
+  if (headTable && Array.isArray(cols)) {
+    widthGroup = headTable.querySelector(':scope > colgroup[data-grid-width-owner="1"]');
+    if (!widthGroup) {
+      widthGroup = document.createElement('colgroup');
+      widthGroup.dataset.gridWidthOwner = '1';
+      const selectorCol = document.createElement('col');
+      selectorCol.style.width = '40px';
+      widthGroup.appendChild(selectorCol);
+      cols.forEach((key) => {
+        const col = document.createElement('col');
+        col.dataset.colKey = String(key);
+        widthGroup.appendChild(col);
+      });
+      headTable.insertBefore(widthGroup, headTable.firstChild);
+    }
+  }
 
   const widthOf = (k) => {
     let w = colPrefs[k]?.width;
@@ -885,6 +929,12 @@ function applyUserGridPrefs(section, tables, cols) {
   };
 
   const setColWidthPx = (colKey, pxOrNull) => {
+    if (widthGroup) {
+      const col = widthGroup.querySelector(
+        `col[data-col-key="${CSS.escape(colKey)}"]`
+      );
+      if (col) col.style.width = (pxOrNull == null ? '' : `${pxOrNull}px`);
+    }
     if (headTable) {
       const th = headTable.querySelector(
         `thead th[data-col-key="${CSS.escape(colKey)}"]`
@@ -938,9 +988,23 @@ function applyUserGridPrefs(section, tables, cols) {
 
     // Now apply the width (either from prefs or measured)
     if (w != null) {
+      resolvedWidths.set(k, w);
       setColWidthPx(k, w);
     }
   });
+
+  // A fixed-layout table with width:100% compresses an enlarged column back
+  // into the viewport, so the handle can appear to do nothing and adjacent
+  // headers can stop tracking their persisted positions. Own the table's
+  // pixel width from the resolved column widths instead. The summary host is
+  // already horizontally scrollable and min-width:100% keeps short grids tidy.
+  if (headTable && resolvedWidths.size) {
+    const selectorWidth = 40;
+    const resolvedTableWidth = selectorWidth + Array.from(resolvedWidths.values())
+      .reduce((sum, width) => sum + Number(width || 0), 0);
+    headTable.style.width = `${Math.max(selectorWidth, Math.round(resolvedTableWidth))}px`;
+    headTable.style.minWidth = '100%';
+  }
 }
 
 function wireGridColumnResizing(section, tables) {
@@ -970,6 +1034,11 @@ function wireGridColumnResizing(section, tables) {
     let w = Math.max(MIN_W, Math.min(MAX_W, drag.startW + dx));
     drag.th.style.width = `${w}px`;
     drag.cells.forEach(td => { td.style.width = `${w}px`; });
+    if (drag.col) drag.col.style.width = `${w}px`;
+    if (headTable && Number.isFinite(drag.startTableW)) {
+      headTable.style.width = `${Math.max(drag.startTableW + (w - drag.startW), MIN_W)}px`;
+      headTable.style.minWidth = '100%';
+    }
   };
 
   const onUp = () => {
@@ -996,6 +1065,9 @@ function wireGridColumnResizing(section, tables) {
       ev.preventDefault();
       ev.stopPropagation();
       const key = th.dataset.colKey;
+      const col = headTable.querySelector(
+        `:scope > colgroup[data-grid-width-owner="1"] col[data-col-key="${CSS.escape(key)}"]`
+      );
       const cells = bodyTable
         ? Array.from(bodyTable.querySelectorAll(`tbody td[data-col-key="${CSS.escape(key)}"]`))
         : [];
@@ -1003,6 +1075,8 @@ function wireGridColumnResizing(section, tables) {
         th,
         startX: ev.clientX || 0,
         startW: Math.round(th.getBoundingClientRect().width || MIN_W),
+        startTableW: Math.round(headTable.getBoundingClientRect().width || 0),
+        col,
         cells
       };
       document.addEventListener('mousemove', onMove);
@@ -1015,6 +1089,10 @@ function wireGridColumnResizing(section, tables) {
       ev.stopPropagation();
       const key = th.dataset.colKey;
       th.style.width = '';
+      const col = headTable.querySelector(
+        `:scope > colgroup[data-grid-width-owner="1"] col[data-col-key="${CSS.escape(key)}"]`
+      );
+      if (col) col.style.width = '';
       if (bodyTable) {
         bodyTable
           .querySelectorAll(`tbody td[data-col-key="${CSS.escape(key)}"]`)
@@ -312720,17 +312798,6 @@ const getSelectionUiState = () => {
   // Determine columns (using server prefs)
   const cols = getVisibleColumnsForSection(currentSection, effectiveRows);
 
-  // ── Keep the approved Candidate status immediately after Processing Status,
-  //    with genuine Issues immediately after it. ─────────────────────────────
-  if (currentSection === 'timesheets') {
-    for (const synthetic of ['candidate_submission', 'issue_codes']) {
-      const existing = cols.indexOf(synthetic);
-      if (existing >= 0) cols.splice(existing, 1);
-    }
-    const processingIndex = cols.findIndex(key => key === 'processing_status_display' || key === 'processing_status');
-    const candidateIndex = processingIndex >= 0 ? processingIndex + 1 : 0;
-    cols.splice(candidateIndex, 0, 'candidate_submission', 'issue_codes');
-  }
   if (currentSection === 'invoices') {
     const existingAttachmentIndex = cols.indexOf('attachment_state');
     if (existingAttachmentIndex >= 0) cols.splice(existingAttachmentIndex, 1);
@@ -312867,7 +312934,7 @@ const getSelectionUiState = () => {
   cols.forEach(c=>{
     const th = document.createElement('th');
     th.dataset.colKey = String(c);
-    th.style.cursor = c === 'candidate_submission' ? 'default' : 'pointer';
+    th.style.cursor = 'pointer';
 
     let label = getFriendlyHeaderLabel(currentSection, c);
     if (currentSection === 'timesheets' && c === 'issue_codes') {
@@ -312886,9 +312953,7 @@ const getSelectionUiState = () => {
     }
     // Only show sort arrow for backend-supported keys when required
     const isSortable =
-      c === 'candidate_submission'
-        ? false
-        : currentSection === 'invoices'
+      currentSection === 'invoices'
         ? INVOICE_SORT_ALLOWED.has(String(c))
         : (
             currentSection === 'candidates'
@@ -312905,14 +312970,13 @@ const getSelectionUiState = () => {
     res.style.cssText = 'position:absolute;right:0;top:0;width:6px;height:100%;cursor:col-resize;user-select:none;';
     th.appendChild(res);
 
-    th.draggable = c !== 'candidate_submission';
+    th.draggable = true;
 
     th.addEventListener('click', async (ev) => {
       if (ev.target && ev.target.closest && ev.target.closest('.col-resizer')) return;
 
       const colKey = th.dataset.colKey;
       if (!colKey) return;
-      if (currentSection === 'timesheets' && colKey === 'candidate_submission') return;
       // sections with backend-constrained sortable keys must only allow supported sorts
       if (currentSection === 'invoices' && !INVOICE_SORT_ALLOWED.has(colKey)) return;
       if (currentSection === 'candidates' && !CANDIDATE_SORT_ALLOWED.has(colKey)) return;
@@ -370286,7 +370350,12 @@ async function listTimesheetsSummary(filters = {}) {
     margin:                    'margin_ex_vat'
   };
 
-  const orderBy = sortMap[sortKeyRaw] || 'week_ending_date';
+  // Candidate Submission is a bounded Office projection rather than a native
+  // summary-view column. Use a stable server order while the complete filtered
+  // result is projected and sorted below.
+  const orderBy = sortKeyRaw === 'candidate_submission'
+    ? 'week_ending_date'
+    : (sortMap[sortKeyRaw] || 'week_ending_date');
   qs.set('order_by', orderBy);
   qs.set('order_dir', sortDir);
 
@@ -370301,7 +370370,48 @@ async function listTimesheetsSummary(filters = {}) {
   let json;
   try { json = text ? JSON.parse(text) : {}; } catch { json = {}; }
 
-  const rows  = Array.isArray(json.items) ? json.items : (Array.isArray(json.rows) ? json.rows : []);
+  let rows  = Array.isArray(json.items) ? json.items : (Array.isArray(json.rows) ? json.rows : []);
+
+  if (sortKeyRaw === 'candidate_submission') {
+    const candidateSortTotal = Number(json.total ?? json.count ?? json.count_all ?? rows.length);
+    const totalForSort = Number.isFinite(candidateSortTotal) ? Math.max(0, candidateSortTotal) : rows.length;
+    if (!window.CloudTMSCandidateOfficeBridge?.sortSummaryRowsByCandidateStatus) {
+      throw new Error('Candidate Submission sorting is temporarily unavailable.');
+    }
+    const fullPageSize = 200;
+    const pageCount = Math.max(1, Math.ceil(totalForSort / fullPageSize));
+    const collected = [];
+    for (let start = 1; start <= pageCount; start += 4) {
+      const pageNumbers = Array.from({ length: Math.min(4, pageCount - start + 1) }, (_, index) => start + index);
+      const pageRows = await Promise.all(pageNumbers.map(async pageNumber => {
+        const allQuery = new URLSearchParams(qs);
+        allQuery.set('page', String(pageNumber));
+        allQuery.set('page_size', String(fullPageSize));
+        allQuery.set('include_totals', 'false');
+        allQuery.set('include_count', 'false');
+        allQuery.set('order_by', 'week_ending_date');
+        allQuery.set('order_dir', 'desc');
+        const pageResponse = await authFetch(API(`/api/timesheets/summary?${allQuery.toString()}`));
+        const pageText = await pageResponse.text();
+        if (!pageResponse.ok) throw new Error(pageText || `Failed to fetch Candidate Submission sort page (${pageResponse.status})`);
+        let pagePayload = {};
+        try { pagePayload = pageText ? JSON.parse(pageText) : {}; } catch {}
+        return Array.isArray(pagePayload.items) ? pagePayload.items : (Array.isArray(pagePayload.rows) ? pagePayload.rows : []);
+      }));
+      pageRows.forEach(group => collected.push(...group));
+    }
+    const uniqueRows = [];
+    const seenRows = new Set();
+    for (const row of collected) {
+      const stableId = String(row?.timesheet_id || row?.contract_week_id || row?.id || '');
+      if (!stableId || seenRows.has(stableId)) continue;
+      seenRows.add(stableId);
+      uniqueRows.push(row);
+    }
+    const sortedRows = await window.CloudTMSCandidateOfficeBridge.sortSummaryRowsByCandidateStatus(uniqueRows, sortDir);
+    const startIndex = (page - 1) * pageSize;
+    rows = sortedRows.slice(startIndex, startIndex + pageSize);
+  }
 
   // ✅ total: tolerate multiple server keys, but never use visible page rows as the all-filtered count fallback.
   // The all-filtered count must remain server-authoritative. If the backend omits it, keep st.total null.

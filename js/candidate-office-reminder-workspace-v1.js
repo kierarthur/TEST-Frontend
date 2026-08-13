@@ -45,6 +45,7 @@
       sending: false,
       error: null,
       result: null,
+      activeBatch: null,
       controller: null,
       searchTimer: null
     };
@@ -224,18 +225,104 @@
         trigger
       });
       if (!confirmation?.confirmed) return;
-      const result = await window.CloudTMSCandidateOfficeApi.executeManagerReminderSelection({
+      state.activeBatch = Object.freeze({
         selection,
         catalogueRevision: state.catalogueRevision,
         preview,
         batchId,
         idempotencyKey: batchId
       });
+      const result = await executeOrRecoverReminderBatch(state);
       if (!isLive(state)) return;
       state.result = result;
+      state.activeBatch = null;
     } catch (error) {
       if (!isLive(state)) return;
-      state.error = window.CloudTMSCandidateOfficeContract.normalizeCandidateOfficeError(error);
+      const normalized = window.CloudTMSCandidateOfficeContract.normalizeCandidateOfficeError(error);
+      state.error = error?.reminderBatchOutcomeUncertain === true
+        ? Object.freeze({
+            ...normalized,
+            stale: true,
+            message: 'CloudTMS could not confirm the reminder result. Refresh current state to recover this same batch safely; do not start another batch.'
+          })
+        : normalized;
+      if (error?.reminderBatchOutcomeUncertain !== true) state.activeBatch = null;
+    } finally {
+      if (isLive(state)) {
+        state.sending = false;
+        renderWorkspace(state);
+      }
+    }
+  }
+
+  const isUncertainBatchError = error => {
+    const status = Number(error?.status || error?.payload?.status || 0);
+    const code = String(error?.code || '').toUpperCase();
+    return !status || status >= 500 || ['CANDIDATE_OFFICE_NETWORK_ERROR', 'CANDIDATE_OFFICE_TRANSPORT_UNAVAILABLE'].includes(code);
+  };
+  const isBatchNotFound = error => Number(error?.status || 0) === 404
+    || String(error?.code || '').toUpperCase() === 'CANDIDATE_REMINDER_BATCH_NOT_FOUND';
+
+  async function executeExactReminderBatch(activeBatch) {
+    return window.CloudTMSCandidateOfficeApi.executeManagerReminderSelection(activeBatch);
+  }
+
+  async function recoverReminderBatch(activeBatch) {
+    try {
+      return await window.CloudTMSCandidateOfficeApi.fetchManagerReminderBatch({ batchId: activeBatch.batchId });
+    } catch (statusError) {
+      if (!isBatchNotFound(statusError)) {
+        if (isUncertainBatchError(statusError)) {
+          throw Object.assign(statusError, { reminderBatchOutcomeUncertain: true });
+        }
+        throw statusError;
+      }
+    }
+
+    // No durable result exists: retry the exact frozen request and key. This is
+    // safe whether the first request never reached the server or lost its reply.
+    try {
+      return await executeExactReminderBatch(activeBatch);
+    } catch (retryError) {
+      if (!isUncertainBatchError(retryError)) throw retryError;
+      try {
+        return await window.CloudTMSCandidateOfficeApi.fetchManagerReminderBatch({ batchId: activeBatch.batchId });
+      } catch (finalError) {
+        throw Object.assign(finalError, { reminderBatchOutcomeUncertain: true });
+      }
+    }
+  }
+
+  async function executeOrRecoverReminderBatch(state) {
+    const activeBatch = state.activeBatch;
+    if (!activeBatch) throw new Error('The manager reminder batch is unavailable.');
+    try {
+      return await executeExactReminderBatch(activeBatch);
+    } catch (error) {
+      if (!isUncertainBatchError(error)) throw error;
+      return recoverReminderBatch(activeBatch);
+    }
+  }
+
+  async function refreshCurrentState(state) {
+    if (!state.activeBatch) {
+      await loadPage(state, 1, { resetRevision: true });
+      return;
+    }
+    if (state.sending) return;
+    state.sending = true;
+    state.error = null;
+    renderWorkspace(state);
+    try {
+      state.result = await recoverReminderBatch(state.activeBatch);
+      state.activeBatch = null;
+    } catch (error) {
+      const normalized = window.CloudTMSCandidateOfficeContract.normalizeCandidateOfficeError(error);
+      state.error = Object.freeze({
+        ...normalized,
+        stale: true,
+        message: 'CloudTMS still cannot confirm the reminder result. Keep this window open and use Refresh current state again; the same batch identity is being preserved.'
+      });
     } finally {
       if (isLive(state)) {
         state.sending = false;
@@ -250,7 +337,7 @@
     root.querySelector('[data-reminder-close]')?.addEventListener('click', closeWorkspace);
     root.querySelector('[data-reminder-cancel]')?.addEventListener('click', closeWorkspace);
     root.querySelector('[data-reminder-send]')?.addEventListener('click', () => sendReminders(state));
-    root.querySelector('[data-reminder-refresh]')?.addEventListener('click', () => loadPage(state, 1, { resetRevision: true }));
+    root.querySelector('[data-reminder-refresh]')?.addEventListener('click', () => refreshCurrentState(state));
     root.querySelector('[data-reminder-select-all]')?.addEventListener('change', event => {
       const keys = state.matchingSelectionKeys;
       if (state.selectionMode === 'ALL_ELIGIBLE') {
@@ -328,7 +415,9 @@
       selectedCount,
       matchingSelectedCount,
       isSelected,
-      formatDateTime
+      formatDateTime,
+      renderResult,
+      recoverReminderBatch
     }),
     openCandidateManagerReminderWorkspace
   });

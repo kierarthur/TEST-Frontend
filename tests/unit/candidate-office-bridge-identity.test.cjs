@@ -155,6 +155,40 @@ test('simultaneous batch slots with one row key retain independent exact signatu
   }).current_identity.row_signature, 'new');
 });
 
+test('Candidate Submission sorting isolates duplicate row keys by exact identity', async () => {
+  const calls = [];
+  const h = harness({
+    buildIdentity: row => row,
+    fetchOfficeCandidateProjections: async ({ surface, identities }) => {
+      calls.push(identities.map(row => row.expected_row_signature));
+      return {
+        surface,
+        results: identities.map(row => ({
+          ok: true,
+          correlation_key: row.row_key,
+          projection: { ...projectionFor(row), status_label: row.expected_row_signature === 'old' ? 'Manager Approved' : 'Awaiting Candidate Submission' }
+        }))
+      };
+    }
+  });
+  h.window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary = projection => ({ status: { label: projection.status_label } });
+  const rows = [
+    {
+      id: 'old-row', row_key: 'row-1', timesheet_id: '00000000-0000-4000-8000-000000000001',
+      contract_week_id: '00000000-0000-4000-8000-000000000010', expected_row_signature: 'old', candidate_name: 'Alpha'
+    },
+    {
+      id: 'new-row', row_key: 'row-1', timesheet_id: '00000000-0000-4000-8000-000000000002',
+      contract_week_id: '00000000-0000-4000-8000-000000000010', expected_row_signature: 'new', candidate_name: 'Beta'
+    }
+  ];
+
+  const sorted = await h.window.CloudTMSCandidateOfficeBridge.sortSummaryRowsByCandidateStatus(rows, 'asc');
+
+  assert.equal(JSON.stringify(calls), JSON.stringify([['old'], ['new']]), 'duplicate correlation keys must never share a projection request');
+  assert.deepEqual(Array.from(sorted, row => row.id), ['new-row', 'old-row']);
+});
+
 test('a late old single-row response cannot overwrite or repaint the newer exact identity', async () => {
   const pending = new Map();
   const h = harness({

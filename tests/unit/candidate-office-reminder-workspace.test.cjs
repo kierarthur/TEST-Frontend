@@ -159,3 +159,76 @@ test('eligibility page contract validates pagination, exact identity and frozen 
     catalogue_revision: 'not-a-sha'
   }), /catalogue_revision is invalid/i);
 });
+
+test('lost response recovery reads a durable partial result without creating a new batch', async () => {
+  const window = load(
+    'candidate-office-contract-v1.js',
+    'candidate-office-reminder-workspace-v1.js'
+  );
+  let executeCalls = 0;
+  window.CloudTMSCandidateOfficeApi = {
+    fetchManagerReminderBatch: async ({ batchId }) => ({
+      ok: true,
+      contract_version: 'OFFICE_CANDIDATE_REMINDER_BATCH_RESULT_V1',
+      batch_id: batchId,
+      status: 'PARTIAL',
+      success_count: 2,
+      failure_count: 1,
+      skipped_count: 1,
+      items: []
+    }),
+    executeManagerReminderSelection: async () => { executeCalls += 1; }
+  };
+  const activeBatch = { batchId: '00000000-0000-4000-8000-000000000001' };
+  const result = await window.CloudTMSCandidateOfficeReminderWorkspace.recoverReminderBatch(activeBatch);
+  assert.equal(result.status, 'PARTIAL');
+  assert.equal(executeCalls, 0);
+});
+
+test('PARTIAL and FAILED are rendered as structured durable results with exact counts', () => {
+  const window = load('candidate-office-reminder-workspace-v1.js');
+  const render = window.CloudTMSCandidateOfficeReminderWorkspace.renderResult;
+  const partial = render({ result: { status: 'PARTIAL', success_count: 2, skipped_count: 1, failure_count: 1 } });
+  assert.match(partial, /Some reminders could not be sent/);
+  assert.match(partial, /<strong>2<\/strong> sent/);
+  assert.match(partial, /<strong>1<\/strong> no longer eligible/);
+  assert.match(partial, /<strong>1<\/strong> failed/);
+  assert.doesNotMatch(partial, /candidate-reminder-workspace__error/);
+
+  const failed = render({ result: { status: 'FAILED', success_count: 0, skipped_count: 0, failure_count: 3 } });
+  assert.match(failed, /Manager reminders were not sent/);
+  assert.match(failed, /<strong>0<\/strong> sent/);
+  assert.match(failed, /<strong>0<\/strong> no longer eligible/);
+  assert.match(failed, /<strong>3<\/strong> failed/);
+  assert.doesNotMatch(failed, /candidate-reminder-workspace__error/);
+});
+
+test('missing receipt recovery retries the exact frozen batch identity once', async () => {
+  const window = load(
+    'candidate-office-contract-v1.js',
+    'candidate-office-reminder-workspace-v1.js'
+  );
+  const seen = [];
+  window.CloudTMSCandidateOfficeApi = {
+    fetchManagerReminderBatch: async () => {
+      const error = new Error('not found');
+      error.status = 404;
+      error.code = 'CANDIDATE_REMINDER_BATCH_NOT_FOUND';
+      throw error;
+    },
+    executeManagerReminderSelection: async request => {
+      seen.push(request);
+      return { status: 'FAILED', success_count: 0, failure_count: 3, skipped_count: 0 };
+    }
+  };
+  const activeBatch = Object.freeze({
+    batchId: '00000000-0000-4000-8000-000000000001',
+    idempotencyKey: '00000000-0000-4000-8000-000000000001',
+    selection: Object.freeze({ mode: 'EXPLICIT' })
+  });
+  const result = await window.CloudTMSCandidateOfficeReminderWorkspace.recoverReminderBatch(activeBatch);
+  assert.equal(result.status, 'FAILED');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0], activeBatch);
+  assert.equal(seen[0].batchId, seen[0].idempotencyKey);
+});

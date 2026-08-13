@@ -172,7 +172,11 @@
       selection_fingerprint: preview.selection_fingerprint
     } });
   }
-  async function fetchManagerReminderBatch({ batchId, signal }) { return request(`/api/candidate-app/manager-reminder-batches/${encodeURIComponent(batchId)}`, { signal }); }
+  async function fetchManagerReminderBatch({ batchId, signal }) {
+    return contract().normalizeManagerReminderBatchResult(
+      await request(`/api/candidate-app/manager-reminder-batches/${encodeURIComponent(batchId)}`, { signal })
+    );
+  }
   async function fetchCandidateDocument({ path, signal }) {
     if (!String(path || '').startsWith('/api/candidate-app/')) throw new Error('The Candidate document path is invalid.');
     return request(path, { method: 'GET', signal, responseType: 'blob' });

@@ -26,6 +26,22 @@
     SUBMITTED: ['Submitted', 'info'], INVOICED: ['Invoiced', 'warning'], AVAILABLE: ['Available', 'neutral'],
     DRAFT: ['Draft', 'neutral']
   });
+  const APPROVED_CANDIDATE_SUBMISSION_STATUS = Object.freeze({
+    AWAITING_CANDIDATE_SUBMISSION: ['Awaiting Candidate Submission', 'neutral'],
+    CANDIDATE_SUBMITTED: ['Candidate Submitted', 'info'],
+    AWAITING_MANAGER_APPROVAL: ['Awaiting Manager Approval', 'warning'],
+    MANAGER_APPROVED: ['Manager Approved', 'success'],
+    QR_AWAITING_SIGNED_RETURN: ['QR Awaiting Signed Return', 'warning'],
+    QR_PACK_PREPARING: ['QR Pack Preparing', 'info'],
+    FINALISING_SUBMISSION: ['Finalising Submission', 'info'],
+    FINALISATION_NEEDS_ATTENTION: ['Finalisation Needs Attention', 'danger'],
+    QR_PACK_NEEDS_ATTENTION: ['QR Pack Needs Attention', 'danger'],
+    REFUSED_BY_CLIENT: ['Refused by Client', 'danger'],
+    REJECTED_BY_AGENCY: ['Rejected by Agency', 'danger'],
+    CANDIDATE_SUBMISSION_CANCELLED: ['Candidate Submission Cancelled', 'neutral'],
+    CANDIDATE_SUBMISSION_COMPLETE: ['Candidate Submission Complete', 'success'],
+    STATUS_UNAVAILABLE: ['Status unavailable', 'neutral']
+  });
   const PAPER = Object.freeze({
     PREPARING: ['QR Status — Preparing', 'info'], BACKOFF: ['QR Pack preparation waiting to retry', 'warning'],
     READY: ['QR Pack ready', 'success'], RETURN_RECEIVED: ['Signed QR Pack received', 'success'],
@@ -66,13 +82,57 @@
     const read = type => parts.find(part => part.type === type)?.value || '';
     return `${read('day')}/${read('month')}/${read('year')} ${read('hour')}:${read('minute')}:${read('second')}`;
   };
-  const statusView = projection => {
+  const sourceStatusView = projection => {
     const server = projection.candidate_status || {};
     const code = String(server.code || '').toUpperCase();
     const known = STATUS[code];
     if (!known) return Object.freeze({ code: 'UNAVAILABLE', label: 'Candidate status unavailable', tone: 'neutral', unavailable: true });
     return Object.freeze({ code, label: known[0], tone: tone(known[1]), unavailable: false });
   };
+  const approvedStatusView = code => {
+    const normalized = String(code || 'STATUS_UNAVAILABLE').toUpperCase();
+    const selected = APPROVED_CANDIDATE_SUBMISSION_STATUS[normalized]
+      || APPROVED_CANDIDATE_SUBMISSION_STATUS.STATUS_UNAVAILABLE;
+    return Object.freeze({
+      code: APPROVED_CANDIDATE_SUBMISSION_STATUS[normalized] ? normalized : 'STATUS_UNAVAILABLE',
+      label: selected[0],
+      tone: selected[1],
+      unavailable: !APPROVED_CANDIDATE_SUBMISSION_STATUS[normalized] || normalized === 'STATUS_UNAVAILABLE'
+    });
+  };
+  function presentApprovedCandidateSubmissionStatus(projection) {
+    const source = sourceStatusView(projection);
+    const sourceCode = String(source?.code || '').toUpperCase();
+    const workflowState = String(projection.workflow?.state || '').toUpperCase();
+    const routeFamily = String(projection.current_identity?.route_family || '').toUpperCase();
+    const paperState = String(projection.paper_pack?.state || 'NOT_APPLICABLE').toUpperCase();
+    const enabledActionCodes = new Set((projection.available_actions || [])
+      .filter(action => action?.enabled === true)
+      .map(action => String(action.code || '').toUpperCase()));
+
+    // One closed precedence catalogue owns every Office Candidate surface. The
+    // furthest confirmed QR lifecycle state wins, so mutually exclusive stages
+    // can never be displayed together.
+    if (source.unavailable) return approvedStatusView('STATUS_UNAVAILABLE');
+    if (sourceCode === 'REJECTED') return approvedStatusView('REJECTED_BY_AGENCY');
+    if (sourceCode === 'REFUSED' || workflowState === 'REFUSED') return approvedStatusView('REFUSED_BY_CLIENT');
+    if (['CANCELLED', 'SUPERSEDED', 'EXPIRED'].includes(sourceCode)) return approvedStatusView('CANDIDATE_SUBMISSION_CANCELLED');
+    if (['FINALISED', 'AUTHORISED', 'INVOICED_NOT_PAID', 'PAID'].includes(sourceCode)) return approvedStatusView('CANDIDATE_SUBMISSION_COMPLETE');
+    if (enabledActionCodes.has('RETRY_FINALISATION')) return approvedStatusView('FINALISATION_NEEDS_ATTENTION');
+    if (['FAILED_RETRYABLE', 'FAILED_TERMINAL', 'RETIRED', 'STALE'].includes(paperState)) return approvedStatusView('QR_PACK_NEEDS_ATTENTION');
+    if (paperState === 'RETURN_RECEIVED' || ['RECEIVED', 'MANAGER_APPROVED_PENDING_FINAL_DOCUMENT', 'READY_TO_FINALISE'].includes(sourceCode)) return approvedStatusView('FINALISING_SUBMISSION');
+    if (paperState === 'READY' && (sourceCode === 'AWAITING_PAPER_RETURN' || workflowState === 'AWAITING_PAPER_RETURN')) return approvedStatusView('QR_AWAITING_SIGNED_RETURN');
+    if (['PREPARING', 'BACKOFF'].includes(paperState)) return approvedStatusView('QR_PACK_PREPARING');
+    if (['CREATED', 'WORKER_DRAFT'].includes(sourceCode)) return approvedStatusView('AWAITING_CANDIDATE_SUBMISSION');
+    if (['WORKER_SUBMITTED', 'WORKER_SUBMITTED_PENDING_REVIEW_DOCUMENT', 'READY_FOR_MANAGER_APPROVAL'].includes(sourceCode)) return approvedStatusView('CANDIDATE_SUBMITTED');
+    if (sourceCode === 'AWAITING_MANAGER_APPROVAL') return approvedStatusView('AWAITING_MANAGER_APPROVAL');
+    if (sourceCode === 'MANAGER_APPROVED' || projection.manager_approval?.state === 'APPROVED') return approvedStatusView('MANAGER_APPROVED');
+    if (workflowState === 'FINALISED' && projection.workflow?.historical === true) return approvedStatusView('CANDIDATE_SUBMISSION_COMPLETE');
+    if (['CANCELLED', 'SUPERSEDED', 'EXPIRED'].includes(workflowState) && projection.workflow?.historical === true) return approvedStatusView('CANDIDATE_SUBMISSION_CANCELLED');
+    if (!projection.workflow && ['QR', 'ELECTRONIC'].includes(routeFamily)) return approvedStatusView('AWAITING_CANDIDATE_SUBMISSION');
+    if (projection.workflow || ['QR', 'ELECTRONIC'].includes(routeFamily)) return approvedStatusView('STATUS_UNAVAILABLE');
+    return null;
+  }
   const actionView = action => Object.freeze({
     ...action,
     label: OFFICE_ACTION_LABELS[String(action?.code || '').toUpperCase()] || action.label,
@@ -141,7 +201,8 @@
     })));
   }
   function presentCandidateOfficeDetail(projection, { surface = 'SIMPLE_TIMESHEET' } = {}) {
-    const status = statusView(projection);
+    const sourceStatus = sourceStatusView(projection);
+    const status = presentApprovedCandidateSubmissionStatus(projection);
     const phoneWorkflow = String(projection.manager_approval?.method || '').toUpperCase() === 'PHONE';
     const actions = projection.available_actions
       .filter(action => !OFFICE_FRONTEND_FORBIDDEN_ACTIONS.has(String(action?.code || '').toUpperCase()))
@@ -169,6 +230,7 @@
       .map(actionView);
     return Object.freeze({
       surface, identity: projection.current_identity, status,
+      source_status_code: sourceStatus.code,
       workflow: projection.workflow,
       manager: presentCandidateManagerApproval(projection.manager_approval, actions),
       paper: presentCandidatePaperPack(projection.paper_pack, actions),
@@ -185,55 +247,7 @@
   }
   function presentCandidateOfficeSummary(projection) {
     const detail = presentCandidateOfficeDetail(projection, { surface: 'TIMESHEET_SUMMARY' });
-    const status = code => {
-      const catalogue = {
-        AWAITING_CANDIDATE_SUBMISSION: ['Awaiting Candidate Submission', 'neutral'],
-        CANDIDATE_SUBMITTED: ['Candidate Submitted', 'info'],
-        AWAITING_MANAGER_APPROVAL: ['Awaiting Manager Approval', 'warning'],
-        MANAGER_APPROVED: ['Manager Approved', 'success'],
-        QR_AWAITING_SIGNED_RETURN: ['QR Awaiting Signed Return', 'warning'],
-        QR_PACK_PREPARING: ['QR Pack Preparing', 'info'],
-        FINALISING_SUBMISSION: ['Finalising Submission', 'info'],
-        FINALISATION_NEEDS_ATTENTION: ['Finalisation Needs Attention', 'danger'],
-        QR_PACK_NEEDS_ATTENTION: ['QR Pack Needs Attention', 'danger'],
-        REFUSED_BY_CLIENT: ['Refused by Client', 'danger'],
-        REJECTED_BY_AGENCY: ['Rejected by Agency', 'danger'],
-        CANDIDATE_SUBMISSION_CANCELLED: ['Candidate Submission Cancelled', 'neutral'],
-        CANDIDATE_SUBMISSION_COMPLETE: ['Candidate Submission Complete', 'success'],
-        STATUS_UNAVAILABLE: ['Status unavailable', 'neutral']
-      };
-      const selected = catalogue[code] || catalogue.STATUS_UNAVAILABLE;
-      return Object.freeze({ code, label: selected[0], tone: selected[1], unavailable: code === 'STATUS_UNAVAILABLE' });
-    };
-    const sourceCode = String(detail.status?.code || '').toUpperCase();
-    const workflowState = String(projection.workflow?.state || '').toUpperCase();
-    const routeFamily = String(projection.current_identity?.route_family || '').toUpperCase();
-    const paperState = String(projection.paper_pack?.state || 'NOT_APPLICABLE').toUpperCase();
-    const enabledActionCodes = new Set((projection.available_actions || [])
-      .filter(action => action?.enabled === true)
-      .map(action => String(action.code || '').toUpperCase()));
-    let summaryStatus = null;
-
-    if (detail.status?.unavailable) summaryStatus = status('STATUS_UNAVAILABLE');
-    else if (sourceCode === 'REJECTED') summaryStatus = status('REJECTED_BY_AGENCY');
-    else if (sourceCode === 'REFUSED' || workflowState === 'REFUSED') summaryStatus = status('REFUSED_BY_CLIENT');
-    else if (enabledActionCodes.has('RETRY_FINALISATION')) summaryStatus = status('FINALISATION_NEEDS_ATTENTION');
-    else if (['FAILED_RETRYABLE', 'FAILED_TERMINAL', 'RETIRED', 'STALE'].includes(paperState)) summaryStatus = status('QR_PACK_NEEDS_ATTENTION');
-    else if (['PREPARING', 'BACKOFF'].includes(paperState)) summaryStatus = status('QR_PACK_PREPARING');
-    else if (paperState === 'READY' && (sourceCode === 'AWAITING_PAPER_RETURN' || workflowState === 'AWAITING_PAPER_RETURN')) summaryStatus = status('QR_AWAITING_SIGNED_RETURN');
-    else if (paperState === 'RETURN_RECEIVED' || ['RECEIVED', 'MANAGER_APPROVED_PENDING_FINAL_DOCUMENT', 'READY_TO_FINALISE'].includes(sourceCode)) summaryStatus = status('FINALISING_SUBMISSION');
-    else if (['CREATED', 'WORKER_DRAFT'].includes(sourceCode)) summaryStatus = status('AWAITING_CANDIDATE_SUBMISSION');
-    else if (['WORKER_SUBMITTED', 'WORKER_SUBMITTED_PENDING_REVIEW_DOCUMENT', 'READY_FOR_MANAGER_APPROVAL'].includes(sourceCode)) summaryStatus = status('CANDIDATE_SUBMITTED');
-    else if (sourceCode === 'AWAITING_MANAGER_APPROVAL') summaryStatus = status('AWAITING_MANAGER_APPROVAL');
-    else if (sourceCode === 'MANAGER_APPROVED' || detail.manager?.state === 'APPROVED') summaryStatus = status('MANAGER_APPROVED');
-    else if (['CANCELLED', 'SUPERSEDED', 'EXPIRED'].includes(sourceCode)) summaryStatus = status('CANDIDATE_SUBMISSION_CANCELLED');
-    else if (['FINALISED', 'AUTHORISED', 'INVOICED_NOT_PAID', 'PAID'].includes(sourceCode)) summaryStatus = status('CANDIDATE_SUBMISSION_COMPLETE');
-    else if (workflowState === 'FINALISED' && projection.workflow?.historical === true) summaryStatus = status('CANDIDATE_SUBMISSION_COMPLETE');
-    else if (['CANCELLED', 'SUPERSEDED', 'EXPIRED'].includes(workflowState) && projection.workflow?.historical === true) summaryStatus = status('CANDIDATE_SUBMISSION_CANCELLED');
-    else if (!projection.workflow && ['QR', 'ELECTRONIC'].includes(routeFamily)) summaryStatus = status('AWAITING_CANDIDATE_SUBMISSION');
-    else if (projection.workflow || ['QR', 'ELECTRONIC'].includes(routeFamily)) summaryStatus = status('STATUS_UNAVAILABLE');
-
-    return Object.freeze({ identity: detail.identity, status: summaryStatus, manager: detail.manager, primary_action: detail.primary_action, diagnostics: detail.diagnostics, projection });
+    return Object.freeze({ identity: detail.identity, status: detail.status, source_status_code: detail.source_status_code, manager: detail.manager, primary_action: detail.primary_action, diagnostics: detail.diagnostics, projection });
   }
-  Object.assign(window, { CloudTMSCandidateOfficePresenter: Object.freeze({ STATUS, PAPER, OFFICE_FRONTEND_FORBIDDEN_ACTIONS, formatDateTime, managerStatusLabel, presentCandidateOfficeSummary, presentCandidateOfficeDetail, presentCandidateManagerApproval, presentCandidatePaperPack, presentCandidateRejections }) });
+  Object.assign(window, { CloudTMSCandidateOfficePresenter: Object.freeze({ STATUS, APPROVED_CANDIDATE_SUBMISSION_STATUS, PAPER, OFFICE_FRONTEND_FORBIDDEN_ACTIONS, formatDateTime, managerStatusLabel, presentApprovedCandidateSubmissionStatus, presentCandidateOfficeSummary, presentCandidateOfficeDetail, presentCandidateManagerApproval, presentCandidatePaperPack, presentCandidateRejections }) });
 })();

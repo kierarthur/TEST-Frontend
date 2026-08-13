@@ -437,6 +437,7 @@
   function normalizeManagerReminderBatchResult(raw) {
     const src = object(raw, 'manager reminder batch result');
     version(src.contract_version, VERSIONS.reminderResult);
+    if (src.ok !== true) fail('CANDIDATE_OFFICE_CONTRACT_INVALID', 'Manager reminder batch result is not durable.');
     const status = text(src.status, 'status', { max: 32 }).toUpperCase();
     if (!['COMPLETED', 'PARTIAL', 'FAILED'].includes(status)) fail('CANDIDATE_OFFICE_CONTRACT_INVALID', 'Manager reminder batch status is invalid.');
     return freeze({

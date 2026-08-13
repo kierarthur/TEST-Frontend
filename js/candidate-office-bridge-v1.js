@@ -143,13 +143,7 @@
       byExactKey.set(exactKey, row);
     });
     const identities = Array.from(byExactKey.values());
-    const chunks = [];
-    for (const row of identities) {
-      let chunk = chunks.find(candidate => candidate.rows.length < 100 && !candidate.rowKeys.has(row.row_key));
-      if (!chunk) { chunk = { rows: [], rowKeys: new Set() }; chunks.push(chunk); }
-      chunk.rows.push(row);
-      chunk.rowKeys.add(row.row_key);
-    }
+    const chunks = partitionProjectionIdentities(identities);
     for (const group of chunks) {
       const chunk = group.rows;
       const rowsByCorrelation = new Map(chunk.map(row => [row.row_key, row]));
@@ -235,6 +229,61 @@
     holder.innerHTML = slotHtml('TIMESHEET_SUMMARY', row);
     cell.appendChild(holder.firstElementChild);
     hydrateSlots(cell);
+  }
+  function partitionProjectionIdentities(identities) {
+    const chunks = [];
+    for (const row of identities) {
+      let chunk = chunks.find(candidate => candidate.rows.length < 100 && !candidate.rowKeys.has(row.row_key));
+      if (!chunk) { chunk = { rows: [], rowKeys: new Set() }; chunks.push(chunk); }
+      chunk.rows.push(row);
+      chunk.rowKeys.add(row.row_key);
+    }
+    return chunks;
+  }
+  async function sortSummaryRowsByCandidateStatus(rows, direction = 'asc') {
+    if (!canSurface('TIMESHEET_SUMMARY')) {
+      throw Object.assign(new Error('Candidate Submission sorting is unavailable for this Office session.'), { code: 'CANDIDATE_OFFICE_PERMISSION_DENIED' });
+    }
+    const requestedRows = Array.isArray(rows) ? rows : [];
+    const pendingRowsByExactKey = new Map();
+    for (const row of requestedRows) {
+      const identity = window.CloudTMSCandidateOfficeApi.buildIdentity(row);
+      if (!findProjection('TIMESHEET_SUMMARY', identity.row_key, identity)) {
+        pendingRowsByExactKey.set(cacheKeyFor('TIMESHEET_SUMMARY', identity), identity);
+      }
+    }
+    const chunks = partitionProjectionIdentities(Array.from(pendingRowsByExactKey.values()));
+    for (const group of chunks) {
+      const chunk = group.rows;
+      const batch = await window.CloudTMSCandidateOfficeApi.fetchOfficeCandidateProjections({
+        surface: 'TIMESHEET_SUMMARY',
+        identities: chunk
+      });
+      const byRowKey = new Map(chunk.map(identity => [identity.row_key, identity]));
+      for (const item of batch.results) {
+        const identity = byRowKey.get(item.correlation_key);
+        if (!identity || item.ok !== true || !item.projection) {
+          throw Object.assign(new Error('CloudTMS could not safely sort every Candidate Submission status.'), { code: item?.error?.code || 'CANDIDATE_OFFICE_PROJECTION_FAILED' });
+        }
+        cache.set(cacheKeyFor('TIMESHEET_SUMMARY', identity), { projection: item.projection, observedAt: Date.now() });
+      }
+    }
+    const collator = new Intl.Collator('en-GB', { sensitivity: 'base', numeric: true });
+    const descending = String(direction || '').toLowerCase() === 'desc';
+    return requestedRows.map((row, index) => {
+      const identity = window.CloudTMSCandidateOfficeApi.buildIdentity(row);
+      const projection = findProjection('TIMESHEET_SUMMARY', identity.row_key, identity);
+      const view = projection ? window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(projection) : null;
+      return { row, index, label: String(view?.status?.label || '') };
+    }).sort((left, right) => {
+      if (!left.label && right.label) return 1;
+      if (left.label && !right.label) return -1;
+      const compared = collator.compare(left.label, right.label);
+      if (compared) return descending ? -compared : compared;
+      const candidateCompared = collator.compare(String(left.row?.candidate_name || ''), String(right.row?.candidate_name || ''));
+      if (candidateCompared) return candidateCompared;
+      return left.index - right.index;
+    }).map(item => item.row);
   }
   function selectedSummaryRows(rows) {
     const snapshot = typeof window.getSelectionSnapshot === 'function' ? window.getSelectionSnapshot('timesheets') : { included_ids: [] };
@@ -469,5 +518,5 @@
     });
     document.documentElement.removeAttribute('data-candidate-office-contract');
   }
-  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, mountSummaryBadge, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
+  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
 })();

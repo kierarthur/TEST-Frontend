@@ -97,6 +97,63 @@ test('unknown server status fails closed instead of inventing a lifecycle label'
   assert.doesNotMatch(html, /candidate-office-badge--success/);
 });
 
+test('all four Office surfaces render the complete raw-state matrix through the same approved catalogue', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const cases = [
+    [projection('CREATED', 'Candidate submission created', 'neutral'), 'Awaiting Candidate Submission'],
+    [projection('WORKER_DRAFT', 'Candidate draft in progress', 'neutral'), 'Awaiting Candidate Submission'],
+    [projection('WORKER_SUBMITTED', 'Candidate submission received', 'info'), 'Candidate Submitted'],
+    [projection('WORKER_SUBMITTED_PENDING_REVIEW_DOCUMENT', 'Preparing review documents', 'info'), 'Candidate Submitted'],
+    [projection('READY_FOR_MANAGER_APPROVAL', 'Ready for manager approval', 'info'), 'Candidate Submitted'],
+    [projection('AWAITING_MANAGER_APPROVAL', 'Awaiting Manager Approval', 'warning'), 'Awaiting Manager Approval'],
+    [projection('MANAGER_APPROVED', 'Manager Approved', 'success'), 'Manager Approved'],
+    [projection('AWAITING_PAPER_RETURN', 'QR Pack issued — awaiting signed return', 'warning', { paper_pack: { state: 'READY' } }), 'QR Awaiting Signed Return'],
+    [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'PREPARING' } }), 'QR Pack Preparing'],
+    [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'BACKOFF' } }), 'QR Pack Preparing'],
+    [projection('RECEIVED', 'Signed return received', 'warning', { paper_pack: { state: 'RETURN_RECEIVED' } }), 'Finalising Submission'],
+    [projection('MANAGER_APPROVED_PENDING_FINAL_DOCUMENT', 'Manager approved — preparing final document', 'success'), 'Finalising Submission'],
+    [projection('READY_TO_FINALISE', 'Ready to finalise', 'success'), 'Finalising Submission'],
+    [projection('MANAGER_APPROVED', 'Manager Approved', 'success', { available_actions: [{ code: 'RETRY_FINALISATION', enabled: true }] }), 'Finalisation Needs Attention'],
+    [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'FAILED_RETRYABLE' } }), 'QR Pack Needs Attention'],
+    [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'FAILED_TERMINAL' } }), 'QR Pack Needs Attention'],
+    [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'RETIRED' } }), 'QR Pack Needs Attention'],
+    [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'STALE' } }), 'QR Pack Needs Attention'],
+    [projection('REFUSED', 'wrong', 'danger'), 'Refused by Client'],
+    [projection('REJECTED', 'Rejected — resubmission required', 'danger'), 'Rejected by Agency'],
+    [projection('CANCELLED', 'Cancelled', 'neutral'), 'Candidate Submission Cancelled'],
+    [projection('SUPERSEDED', 'Superseded', 'neutral'), 'Candidate Submission Cancelled'],
+    [projection('EXPIRED', 'Expired', 'neutral'), 'Candidate Submission Cancelled'],
+    [projection('FINALISED', 'Candidate submission finalised', 'success'), 'Candidate Submission Complete'],
+    [projection('AUTHORISED', 'Authorised', 'success'), 'Candidate Submission Complete'],
+    [projection('INVOICED_NOT_PAID', 'Invoiced (Not paid)', 'warning'), 'Candidate Submission Complete'],
+    [projection('PAID', 'Paid', 'success'), 'Candidate Submission Complete'],
+    [projection('FUTURE_UNKNOWN_STATE', 'raw unknown label', 'danger'), 'Status unavailable']
+  ];
+  const surfaces = ['TIMESHEET_SUMMARY', 'SIMPLE_TIMESHEET', 'BULK_PROCESS', 'BULK_AUTHORISE'];
+  const forbidden = [
+    'Candidate submission created', 'Candidate draft in progress', 'Candidate submission received',
+    'Preparing review documents', 'Ready for manager approval', 'Manager approved — preparing final document',
+    'Ready to finalise', 'QR Pack issued — awaiting signed return', 'Signed return received',
+    'Candidate submission finalised', 'Rejected — resubmission required', 'Pending authorisation', 'Unprocessed'
+  ];
+
+  for (const [input, expected] of cases) {
+    for (const surface of surfaces) {
+      const view = surface === 'TIMESHEET_SUMMARY'
+        ? window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input)
+        : window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(input, { surface });
+      const variant = surface === 'SIMPLE_TIMESHEET' ? 'stage' : 'compact';
+      const html = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, { surface, variant });
+      assert.match(html, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `${surface} must show ${expected}`);
+      for (const raw of forbidden) assert.equal(html.includes(raw), false, `${surface} leaked raw status: ${raw}`);
+    }
+  }
+});
+
 test('Summary integration queues bounded projection batches and never fetches detail per row', () => {
   const bridge = fs.readFileSync(path.join(root, 'js', 'candidate-office-bridge-v1.js'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
@@ -105,9 +162,18 @@ test('Summary integration queues bounded projection batches and never fetches de
   assert.doesNotMatch(main, /CloudTMSCandidateOfficeBridge\.mountSummaryBadge\(wrap, rowObj\)/);
   assert.equal((main.match(/CloudTMSCandidateOfficeBridge\.mountSummaryBadge\(td, (?:row|r)\)/g) || []).length, 3,
     'full render, patched rows and newly inserted rows must all mount the dedicated Candidate Submission cell');
-  assert.match(main, /cols\.splice\(candidateIndex, 0, 'candidate_submission', 'issue_codes'\)/);
+  assert.match(main, /candidate_submission:\s*\{ selectable: true \}/);
+  assert.match(main, /placeDefault\('candidate_submission', processingKey\)/);
+  assert.match(main, /typeof pref\.order === 'number'/);
+  assert.doesNotMatch(main, /cols\.splice\(candidateIndex, 0, 'candidate_submission', 'issue_codes'\)/);
   assert.match(main, /label = 'Candidate Submission'/);
-  assert.match(main, /c === 'candidate_submission'\s*\? false/);
+  assert.doesNotMatch(main, /c === 'candidate_submission'\s*\? false/);
+  assert.doesNotMatch(main, /th\.draggable = c !== 'candidate_submission'/);
+  assert.doesNotMatch(main, /colKey === 'candidate_submission'\) return/);
+  assert.match(main, /sortKeyRaw === 'candidate_submission'\s*\? 'week_ending_date'/);
+  assert.match(main, /sortSummaryRowsByCandidateStatus\(uniqueRows, sortDir\)/);
+  assert.match(bridge, /async function sortSummaryRowsByCandidateStatus/);
+  assert.match(bridge, /partitionProjectionIdentities\(Array\.from\(pendingRowsByExactKey\.values\(\)\)\)/);
   assert.match(bridge, /if \(surface === 'SIMPLE_TIMESHEET'\) loadSlot\(slot\);\s*else queueBatchSlot\(slot\)/);
   assert.match(bridge, /let chunk = chunks\.find\(candidate => candidate\.rows\.length < 100 && !candidate\.rowKeys\.has\(row\.row_key\)\)/);
   assert.match(bridge, /chunk = \{ rows: \[\], rowKeys: new Set\(\) \}; chunks\.push\(chunk\)/);
@@ -116,6 +182,53 @@ test('Summary integration queues bounded projection batches and never fetches de
   assert.match(bridge, /row\.expected_row_signature && String\(current\.row_signature \|\| ''\) !== String\(row\.expected_row_signature\)/);
   assert.match(bridge, /if \(projectionMatchesRow\(cached, row\)\)/);
   assert.match(bridge, /cache\.delete\(cacheKey\)/);
+});
+
+test('every Office surface uses one approved status presenter and one winning QR lifecycle badge', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const input = projection('AWAITING_PAPER_RETURN', 'raw paper label', 'danger', {
+    paper_pack: { state: 'RETURN_RECEIVED', page_count: 4 },
+    manager_approval: { method: 'EMAIL', state: 'APPROVED' }
+  });
+  const detail = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(input);
+  const summary = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input);
+  assert.equal(detail.status.label, 'Finalising Submission');
+  assert.equal(summary.status.label, 'Finalising Submission');
+  const stage = window.CloudTMSCandidateOfficeSurface.renderCandidateStageFragment(detail);
+  assert.equal((stage.match(/data-candidate-status-code=/g) || []).length, 1);
+  assert.match(stage, /Finalising Submission/);
+  assert.doesNotMatch(stage, /QR Pack ready|QR Awaiting Signed Return|Manager Approved/);
+});
+
+test('terminal Candidate truth outranks retained QR lifecycle facts on every Office surface', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const surfaces = ['TIMESHEET_SUMMARY', 'SIMPLE_TIMESHEET', 'BULK_PROCESS', 'BULK_AUTHORISE'];
+  for (const code of ['FINALISED', 'AUTHORISED', 'INVOICED_NOT_PAID', 'PAID']) {
+    const input = projection(code, 'raw terminal label', 'danger', {
+      paper_pack: { state: 'RETURN_RECEIVED', page_count: 4 },
+      manager_approval: { method: 'EMAIL', state: 'APPROVED' }
+    });
+    for (const surface of surfaces) {
+      const view = surface === 'TIMESHEET_SUMMARY'
+        ? window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input)
+        : window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(input, { surface });
+      assert.equal(view.status.label, 'Candidate Submission Complete', `${surface} must prefer ${code}`);
+      const html = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, {
+        surface,
+        variant: surface === 'SIMPLE_TIMESHEET' ? 'stage' : 'compact'
+      });
+      assert.match(html, /Candidate Submission Complete/);
+      assert.doesNotMatch(html, /Finalising Submission|QR Awaiting Signed Return|QR Pack Preparing/);
+    }
+  }
 });
 
 test('Summary uses the settled existing warning style for authoritative unexpected hours', () => {

@@ -314,7 +314,8 @@ test('Office presentation uses QR wording and hides ineligible buttons', () => {
   });
 
   assert.match(html, /QR Pack/);
-  assert.match(html, /QR Status — Preparing/);
+  assert.doesNotMatch(html, /QR Status — Preparing/);
+  assert.equal((html.match(/data-candidate-status-code=/g) || []).length, 1);
   assert.doesNotMatch(html, />PAPER|>Paper|paper pack|paper documents/i);
   assert.doesNotMatch(html, /<button/i);
 });

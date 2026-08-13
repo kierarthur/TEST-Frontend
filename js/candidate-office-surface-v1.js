@@ -23,13 +23,7 @@
   }
   function renderCandidateStageFragment(view) {
     if (!view?.status) return '';
-    const badges = [`<span class="${statusClass(view.status.tone)}" data-candidate-status-code="${escape(view.status.code)}">${escape(view.status.label)}</span>`];
-    if (view.manager) {
-      const managerTone = view.manager.state === 'APPROVED' ? 'success' : view.manager.state === 'REFUSED' ? 'danger' : 'warning';
-      badges.push(`<span class="${statusClass(managerTone)}">${escape(view.manager.status_label || 'Awaiting Manager Approval')}</span>`);
-    }
-    if (view.paper) badges.push(`<span class="${statusClass(view.paper.tone)}">${escape(view.paper.label)}</span>`);
-    return `<span class="candidate-office-overview-badges">${badges.join('')}</span>`;
+    return `<span class="candidate-office-overview-badges"><span class="${statusClass(view.status.tone)}" data-candidate-status-code="${escape(view.status.code)}">${escape(view.status.label)}</span></span>`;
   }
   function renderCandidateOverviewFragment(view) {
     if (!view) return '';
@@ -52,7 +46,7 @@
   function renderCandidateIssuesFragment(view) {
     if (!view) return '';
     const issues = [];
-    if (['REJECTED', 'REFUSED'].includes(String(view.status?.code || '').toUpperCase())) {
+    if (['REJECTED_BY_AGENCY', 'REFUSED_BY_CLIENT', 'REJECTED', 'REFUSED'].includes(String(view.status?.code || '').toUpperCase())) {
       issues.push(`<li><span class="${statusClass(view.status.tone)}">${escape(view.status.label)}</span></li>`);
     }
     for (const diagnostic of view.diagnostics || []) {
@@ -84,11 +78,11 @@
   }
   function renderCandidateOfficeCard(view, { surface = 'SIMPLE_TIMESHEET' } = {}) {
     if (!view) return `<section class="candidate-office-card candidate-office-card--loading" aria-busy="true"><div class="candidate-office-skeleton"></div><span>Loading Candidate status…</span></section>`;
-    if (view.status?.unavailable) return `<section class="candidate-office-card candidate-office-card--unavailable"><div><strong>Candidate status unavailable</strong><p>CloudTMS could not safely read the Candidate state.</p></div></section>`;
+    if (view.status?.unavailable) return `<section class="candidate-office-card candidate-office-card--unavailable"><div><strong>Status unavailable</strong><p>CloudTMS could not safely read the Candidate state.</p></div></section>`;
     const managerActions = renderActions(view.manager?.actions, surface);
-    const manager = view.manager ? `<section class="candidate-office-section candidate-office-manager"><div class="candidate-office-section__heading"><h4>${escape(view.manager.title)}</h4><span class="${statusClass(view.manager.state === 'APPROVED' ? 'success' : view.manager.state === 'REFUSED' ? 'danger' : 'warning')}">${escape(view.manager.status_label || 'Awaiting Manager Approval')}</span></div>${renderFields(view.manager.fields)}${managerActions}</section>` : '';
+    const manager = view.manager ? `<section class="candidate-office-section candidate-office-manager"><div class="candidate-office-section__heading"><h4>${escape(view.manager.title)}</h4></div>${renderFields(view.manager.fields)}${managerActions}</section>` : '';
     const paperActions = renderActions(view.paper?.actions, surface);
-    const paper = view.paper ? `<section class="candidate-office-section candidate-office-paper"><div class="candidate-office-section__heading"><h4>QR Pack</h4><span class="${statusClass(view.paper.tone)}">${escape(view.paper.label)}</span></div>${view.paper.explanation ? `<div class="candidate-office-inline-note">${escape(view.paper.explanation)}</div>` : ''}${renderFields(view.paper.fields)}${paperActions}</section>` : '';
+    const paper = view.paper ? `<section class="candidate-office-section candidate-office-paper"><div class="candidate-office-section__heading"><h4>QR Pack</h4></div>${view.paper.explanation ? `<div class="candidate-office-inline-note">${escape(view.paper.explanation)}</div>` : ''}${renderFields(view.paper.fields)}${paperActions}</section>` : '';
     const rejections = view.rejections.length ? `<section class="candidate-office-section candidate-office-rejections"><h4>Submission history</h4>${view.rejections.map(item => `<div class="candidate-office-history-row"><div><strong>${escape(item.label)}</strong>${item.replacement_state ? `<span>Replacement: ${escape(item.replacement_state)}</span>` : item.historical ? '<span>Historical — already replaced or no longer actionable</span>' : ''}</div>${item.action ? renderActions([item.action], surface) : ''}</div>`).join('')}</section>` : '';
     const diagnostics = view.diagnostics.length ? `<div class="candidate-office-diagnostics">${view.diagnostics.map(item => `<span class="${statusClass(item.tone)}" title="Presentation only; no calculation effect">${escape(item.label)}</span>`).join('')}</div>` : '';
     const managerCodes = new Set((view.manager?.actions || []).map(action => action.code));

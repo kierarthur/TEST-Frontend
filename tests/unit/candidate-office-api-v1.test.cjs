@@ -123,3 +123,35 @@ test('required mutation idempotency key is enforced before transport', async () 
   );
   assert.equal(calls, 0);
 });
+
+test('durable PARTIAL reminder result is returned as structured batch truth', async () => {
+  const api = load(async () => ({
+    ok: true,
+    status: 202,
+    text: async () => JSON.stringify({
+      ok: true,
+      contract_version: 'OFFICE_CANDIDATE_REMINDER_BATCH_RESULT_V1',
+      batch_id: UUID_A,
+      status: 'PARTIAL',
+      success_count: 2,
+      failure_count: 1,
+      skipped_count: 1,
+      items: []
+    })
+  }));
+  const result = await api.executeManagerReminderSelection({
+    selection: { mode: 'EXPLICIT', included_row_keys: ['row-a'], excluded_row_keys: [] },
+    catalogueRevision: 'a'.repeat(64),
+    preview: {
+      selected_rows: [{ row_key: 'row-a', timesheet_id: UUID_A, contract_week_id: null }],
+      preview_context_hash: 'b'.repeat(64),
+      selection_fingerprint: 'c'.repeat(64)
+    },
+    batchId: UUID_A,
+    idempotencyKey: UUID_A
+  });
+  assert.equal(result.status, 'PARTIAL');
+  assert.equal(result.success_count, 2);
+  assert.equal(result.failure_count, 1);
+  assert.equal(result.skipped_count, 1);
+});
