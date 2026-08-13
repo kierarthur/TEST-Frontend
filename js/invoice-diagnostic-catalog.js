@@ -14,6 +14,7 @@
     MANUAL_TIMESHEET_SOURCE_MISSING: ['Signed timesheet missing', 'CloudTMS cannot find the signed manual timesheet required for this invoice. Attach or restore the signed timesheet, then refresh this list.', 'red', 'DOCUMENT'],
     ASSET_NOT_REGISTERED: ['Timesheet file not ready', 'The timesheet file has not finished being prepared. Try again shortly. If it remains unavailable, open the timesheet and regenerate or reattach it.', 'red', 'DOCUMENT'],
     MISSING_RECIPIENT: ['No email recipient', 'No invoice email address is available for this client. Add the correct recipient before choosing “Issue and email.”', 'amber', 'DELIVERY', 'Cannot be emailed'],
+    EXPENSE_EMAIL_MISSING: ['Expense Email missing', 'The effective Expense Invoice Email is missing for this expense work. The affected expense invoice cannot be sent until it is provided. This information does not change invoice calculations or any unrelated ready work.', 'blue', 'INFORMATION'],
     HR_VALIDATION_BLOCKED: ['Validation failed', 'This timesheet has not passed HealthRoster validation. Open Timesheets or Import Review, resolve the validation issue, then refresh this list.', 'red', 'ACTION'],
     NOT_READY_FOR_INVOICE: ['Timesheet not ready', 'This timesheet has not finished the processing or validation needed for invoicing. Open it in Timesheets, complete the outstanding step, then refresh this list.', 'red', 'ACTION'],
     SEGMENT_ALREADY_LOCKED: ['Already locked', 'This item is already reserved by another active operation.', 'amber', 'ACTION'],

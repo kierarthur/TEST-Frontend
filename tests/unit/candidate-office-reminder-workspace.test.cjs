@@ -1,0 +1,161 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const vm = require('node:vm');
+
+const root = path.join(__dirname, '..', '..');
+const source = name => fs.readFileSync(path.join(root, 'js', name), 'utf8');
+
+function load(...names) {
+  const context = vm.createContext({
+    window: {}, console, Date, Intl, Object, Set, String, URLSearchParams, AbortController,
+    crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }
+  });
+  names.forEach(name => new vm.Script(source(name), { filename: name }).runInContext(context));
+  return context.window;
+}
+
+test('Tools places the approved manager reminder workspace immediately after Bulk Process', () => {
+  const main = source('main.js');
+  const blockStart = main.indexOf("addBtn('Bulk Process'");
+  const reminder = main.indexOf("addBtn('Send Manager Reminders'", blockStart);
+  const bulkAuthorise = main.indexOf("addBtn('Bulk Authorise'", reminder);
+  assert.ok(blockStart > -1 && reminder > blockStart && bulkAuthorise > reminder);
+  assert.match(main.slice(reminder, bulkAuthorise), /send_manager_reminder_batch/);
+  assert.match(main.slice(reminder, bulkAuthorise), /openCandidateManagerReminderWorkspace/);
+});
+
+test('reminder workspace contains only the agreed catalogue fields, paging and actions', () => {
+  const workspace = source('candidate-office-reminder-workspace-v1.js');
+  assert.match(workspace, />Candidate name\s*</);
+  assert.match(workspace, />Last request or reminder sent\s*</);
+  assert.match(workspace, /Search by Candidate surname/);
+  assert.match(workspace, /data-reminder-sort="CANDIDATE_SURNAME"/);
+  assert.match(workspace, /data-reminder-sort="LAST_MANAGER_EMAIL"/);
+  assert.match(workspace, />Previous</);
+  assert.match(workspace, />Next</);
+  assert.match(workspace, /Page \$\{state\.page\} of \$\{state\.pageCount\}/);
+  assert.match(workspace, />Cancel</);
+  assert.match(workspace, />\$\{state\.sending \? 'Sending reminders…' : 'Send Reminders'\}</);
+  assert.match(workspace, />Refresh current state</);
+  assert.match(workspace, /openCandidateReminderBatchModal/);
+  assert.match(workspace, /if \(!confirmation\?\.confirmed\) return/);
+  assert.doesNotMatch(workspace, /Cancel Manager Approval Request|PHONE_APPROVE|PHONE_REFUSE|signature/i);
+});
+
+test('preview freezes the exact server-selected rows and execute reuses them for durable replay', () => {
+  const window = load('candidate-office-contract-v1.js');
+  const selectedRow = {
+    row_key: 'row-1',
+    timesheet_id: '00000000-0000-4000-8000-000000000321',
+    contract_week_id: null,
+    expected_row_signature: 'row-signature'
+  };
+  const preview = window.CloudTMSCandidateOfficeContract.normalizeManagerReminderBatchPreview({
+    ok: true,
+    contract_version: 'OFFICE_CANDIDATE_REMINDER_BATCH_PREVIEW_V1',
+    preview_context_hash: 'a'.repeat(64),
+    selection_fingerprint: 'b'.repeat(64),
+    selected_count: 1,
+    selected_rows: [selectedRow]
+  });
+  assert.equal(preview.selected_rows.length, 1);
+  assert.equal(preview.selected_rows[0].timesheet_id, selectedRow.timesheet_id);
+  assert.throws(() => window.CloudTMSCandidateOfficeContract.normalizeManagerReminderBatchPreview({
+    ...preview, selected_count: 2
+  }), /selection is inconsistent/i);
+  assert.match(source('candidate-office-api-v1.js'), /selected_rows:\s*preview\.selected_rows/);
+});
+
+test('select all is a genuine all-pages selection with exclusions', () => {
+  const window = load('candidate-office-reminder-workspace-v1.js');
+  const api = window.CloudTMSCandidateOfficeReminderWorkspace;
+  const state = {
+    catalogueTotalItems: 73,
+    matchingSelectionKeys: ['row-1', 'row-7', 'row-42'],
+    selectionMode: 'ALL_ELIGIBLE',
+    included: new Set(),
+    excluded: new Set(['row-7', 'row-42'])
+  };
+  assert.equal(api.selectedCount(state), 71);
+  assert.equal(api.isSelected(state, 'row-1'), true);
+  assert.equal(api.isSelected(state, 'row-7'), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(api.selectionBody(state))), {
+    mode: 'ALL_ELIGIBLE', included_row_keys: [], excluded_row_keys: ['row-42', 'row-7']
+  });
+});
+
+test('filter selections remain durable when the surname result set changes', () => {
+  const window = load('candidate-office-reminder-workspace-v1.js');
+  const api = window.CloudTMSCandidateOfficeReminderWorkspace;
+  const state = {
+    catalogueTotalItems: 53,
+    matchingSelectionKeys: ['baines', 'barker'],
+    selectionMode: 'EXPLICIT',
+    included: new Set(['baines', 'smith']),
+    excluded: new Set()
+  };
+  assert.equal(api.selectedCount(state), 2);
+  assert.equal(api.matchingSelectedCount(state), 1);
+  state.matchingSelectionKeys = ['smith'];
+  assert.equal(api.selectedCount(state), 2);
+  assert.equal(api.matchingSelectedCount(state), 1);
+  assert.equal(api.isSelected(state, 'baines'), true);
+});
+
+test('manager request timing uses the existing UK 24-hour date-time format', () => {
+  const window = load('candidate-office-reminder-workspace-v1.js');
+  assert.match(
+    window.CloudTMSCandidateOfficeReminderWorkspace.formatDateTime('2026-08-13T17:04:09Z'),
+    /^13\/08\/2026 18:04:09$/
+  );
+});
+
+test('API selection contract forbids ambiguous or empty explicit selections', () => {
+  const window = load('candidate-office-contract-v1.js', 'candidate-office-api-v1.js');
+  const normalize = window.CloudTMSCandidateOfficeApi.normalizeManagerReminderSelection;
+  assert.deepEqual(JSON.parse(JSON.stringify(normalize({
+    mode: 'EXPLICIT', included_row_keys: ['row-2', 'row-1', 'row-2'], excluded_row_keys: []
+  }))), { mode: 'EXPLICIT', included_row_keys: ['row-2', 'row-1'], excluded_row_keys: [] });
+  assert.throws(() => normalize({ mode: 'EXPLICIT', included_row_keys: [], excluded_row_keys: [] }), /inconsistent/i);
+  assert.throws(() => normalize({ mode: 'ALL_ELIGIBLE', included_row_keys: ['row-1'], excluded_row_keys: [] }), /inconsistent/i);
+});
+
+test('eligibility page contract validates pagination, exact identity and frozen catalogue revision', () => {
+  const window = load('candidate-office-contract-v1.js');
+  const result = window.CloudTMSCandidateOfficeContract.normalizeManagerReminderEligibilityPage({
+    ok: true,
+    contract_version: 'OFFICE_CANDIDATE_REMINDER_ELIGIBILITY_PAGE_V1',
+    catalogue_revision: 'a'.repeat(64),
+    page: 2,
+    page_size: 25,
+    page_count: 3,
+    total_items: 53,
+    catalogue_total_items: 53,
+    surname_query: '',
+    sort_by: 'CANDIDATE_SURNAME',
+    sort_direction: 'ASC',
+    matching_selection_keys: Array.from({ length: 53 }, (_, index) => `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`),
+    items: [{
+      selection_key: '00000000-0000-4000-8000-000000000026',
+      candidate_name: 'Candidate Twenty Six',
+      candidate_surname: 'Six',
+      last_manager_email_at_utc: '2026-08-13T09:00:00Z',
+      identity: {
+        row_key: 'row-26',
+        timesheet_id: '00000000-0000-4000-8000-000000000026',
+        contract_week_id: null,
+        expected_row_signature: 'sig-26'
+      }
+    }]
+  });
+  assert.equal(result.page, 2);
+  assert.equal(result.items[0].candidate_name, 'Candidate Twenty Six');
+  assert.equal(result.items[0].candidate_surname, 'Six');
+  assert.equal(result.items[0].identity.row_key, 'row-26');
+  assert.throws(() => window.CloudTMSCandidateOfficeContract.normalizeManagerReminderEligibilityPage({
+    ...result,
+    catalogue_revision: 'not-a-sha'
+  }), /catalogue_revision is invalid/i);
+});

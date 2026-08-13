@@ -464,6 +464,7 @@ function saveSession(sess){
   if (persist) sessionStorage.removeItem('cloudtms.session');
   scheduleRefresh();
   renderUserChip();
+  window.dispatchEvent(new CustomEvent('cloudtms:office-session-ready'));
 }
 // FRONTEND — loadUserGridPrefs
 async function loadUserGridPrefs(section) {
@@ -6098,6 +6099,10 @@ function clearSession() {
   try { sessionStorage.removeItem('cloudtms.session'); } catch {}
 
   SESSION = null;
+
+  try {
+    window.dispatchEvent(new CustomEvent('cloudtms:office-session-cleared'));
+  } catch {}
 
   // ✅ mirror globals so stale code can’t keep using an old window.SESSION/user
   try {
@@ -113672,6 +113677,12 @@ function summaryUpdateRowDom(section, id, patchedRow) {
     if (isTimesheetPaymentRow && paymentState.showProcessingOverlay) {
       wrap.appendChild(buildProcessingOverlay());
     }
+    if (isTimesheetPaymentRow && rowObj?.has_deviation_marker === true) {
+      const unexpectedHours = document.createElement('span');
+      unexpectedHours.className = 'pill pill-warn';
+      unexpectedHours.textContent = 'Unexpected hours - needs checking';
+      wrap.appendChild(unexpectedHours);
+    }
 
     const hasPaymentDisplay = !!(
       isTimesheetPaymentRow && (
@@ -113739,6 +113750,14 @@ function summaryUpdateRowDom(section, id, patchedRow) {
       const codes = Array.isArray(v) ? v.filter(Boolean) : [];
       if (!hasTs) td.textContent = '';
       else td.appendChild(renderIssueBadges(codes, row));
+      return td;
+    }
+
+    if (section === 'timesheets' && colKey === 'candidate_submission') {
+      td.classList.add('candidate-office-summary-cell');
+      if (row.timesheet_id && typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge?.mountSummaryBadge) {
+        window.CloudTMSCandidateOfficeBridge.mountSummaryBadge(td, row);
+      }
       return td;
     }
 
@@ -114346,6 +114365,12 @@ function summaryInsertRowDom(section, patchedRow) {
     if (isTimesheetPaymentRow && paymentState.showProcessingOverlay) {
       wrap.appendChild(buildProcessingOverlay());
     }
+    if (isTimesheetPaymentRow && rowObj?.has_deviation_marker === true) {
+      const unexpectedHours = document.createElement('span');
+      unexpectedHours.className = 'pill pill-warn';
+      unexpectedHours.textContent = 'Unexpected hours - needs checking';
+      wrap.appendChild(unexpectedHours);
+    }
 
     const hasPaymentDisplay = !!(
       isTimesheetPaymentRow && (
@@ -114412,6 +114437,14 @@ function summaryInsertRowDom(section, patchedRow) {
       const codes = Array.isArray(v) ? v.filter(Boolean) : [];
       if (!hasTs) td.textContent = '';
       else td.appendChild(renderIssueBadges(codes, row));
+      return td;
+    }
+
+    if (section === 'timesheets' && colKey === 'candidate_submission') {
+      td.classList.add('candidate-office-summary-cell');
+      if (row.timesheet_id && typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge?.mountSummaryBadge) {
+        window.CloudTMSCandidateOfficeBridge.mountSummaryBadge(td, row);
+      }
       return td;
     }
 
@@ -161527,6 +161560,37 @@ function renderTools(){
         }
       });
 
+      const btnManagerReminders = addBtn('Send Manager Reminders', async () => {
+        try {
+          if (typeof window.openCandidateManagerReminderWorkspace !== 'function') {
+            await showInfo({
+              title: 'Send Manager Reminders',
+              message: 'The manager reminder workspace is not available for this Office session.',
+              confirm_label: 'OK',
+              hide_cancel: true,
+              confirm_class: 'btn btn-primary'
+            });
+            return;
+          }
+          await window.openCandidateManagerReminderWorkspace();
+        } catch (e) {
+          console.error('[TOOLS][TIMESHEETS][MANAGER_REMINDERS] failed', e);
+          await showError('Send Manager Reminders', e, 'Failed to open manager reminders');
+        }
+      });
+      const syncManagerReminderButton = () => {
+        const capabilities = window.CloudTMSCandidateOfficeBridge?.capabilities;
+        const allowed = capabilities?.authority_applies === true
+          && capabilities?.surfaces?.timesheet_summary === true
+          && capabilities?.permissions?.send_manager_reminder_batch === true;
+        btnManagerReminders.hidden = !allowed;
+        btnManagerReminders.disabled = !allowed;
+      };
+      syncManagerReminderButton();
+      if (btnManagerReminders.hidden) {
+        window.addEventListener('cloudtms:candidate-office-ready', syncManagerReminderButton, { once: true });
+      }
+
       addBtn('Bulk Authorise', async () => {
         try {
           if (typeof openBulkAuthoriseWorkbench !== 'function') {
@@ -178834,6 +178898,9 @@ function renderBulkAuthoriseLists(state) {
     const evidenceChips = deriveEvidenceChips(row);
     const showDeviation = row?.has_deviation_marker === true;
     const deviationReason = String(row?.deviation_marker_reason || '').trim();
+    const candidateOfficeBadgeHtml = (typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge && typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function')
+      ? window.CloudTMSCandidateOfficeBridge.slotHtml('BULK_AUTHORISE', row, { compact: true })
+      : '';
 
     return `
       <div
@@ -178876,6 +178943,7 @@ function renderBulkAuthoriseLists(state) {
               <span>${enc(typeText)}</span>
               <span>${enc(statusText)}</span>
             </div>
+            ${candidateOfficeBadgeHtml}
             ${evidenceChips.length
               ? `<div class="mini" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:1px;">${evidenceChips.map((chip) => `<span class="bulk-timesheet-evidence-badge${chip.kind === 'TIMESHEET' ? ' bulk-timesheet-evidence-badge--timesheet' : ''}" data-evidence-kind="${enc(chip.kind)}" title="${enc(chip.label)} evidence attached" style="display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,0.16);border-radius:999px;padding:1px 6px;font-size:9px;font-weight:700;letter-spacing:.02em;background:rgba(255,255,255,0.045);color:rgba(255,255,255,0.9);line-height:1.45;">${enc(chip.label)}</span>`).join('')}</div>`
               : ''}
@@ -212053,6 +212121,9 @@ function renderBulkProcessLists(state) {
     const statusText = isProcessed ? 'Processed' : 'Unprocessed';
     const statusPillClass = `pill${isProcessed ? ' pill-ok' : ''} bulk-process-lifecycle-badge bulk-process-lifecycle-badge--${sectionKey}`;
     const badgesHtml = renderEvidenceBadges(row);
+    const candidateOfficeBadgeHtml = typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge && typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function'
+      ? window.CloudTMSCandidateOfficeBridge.slotHtml('BULK_PROCESS', row, { compact: true })
+      : '';
 
     return `
       <button
@@ -212079,6 +212150,7 @@ function renderBulkProcessLists(state) {
         <div class="mini" style="margin-top:1px;display:flex;gap:4px;flex-wrap:wrap;opacity:.92;line-height:1.1;font-size:10px;">
           <span>${enc(dateText)}</span>
           <span class="${enc(statusPillClass)}" data-bulk-process-lifecycle="${enc(statusText)}" style="font-size:9px;padding:1px 6px;">${enc(statusText)}</span>
+          ${candidateOfficeBadgeHtml}
         </div>
         ${badgesHtml ? `<div class="mini" style="margin-top:2px;display:flex;gap:3px;flex-wrap:wrap;">${badgesHtml}</div>` : ''}
       </button>
@@ -212904,6 +212976,15 @@ function renderBulkProcessSelectedSummaryStrip(state) {
   ].map((v) => trimStr(v)).find(Boolean) || '';
 
   const bandText = trimStr(contextDetails.band || ctxRow.band || row.band || row.candidate_band || '');
+  const isBulkAuthoriseSummary = !!(
+    st.bulk_authorise_mode === true ||
+    (typeof window !== 'undefined' && window.modalCtx?.bulkAuthoriseState === st) ||
+    String((typeof window !== 'undefined' && typeof window.__getModalFrame === 'function' ? window.__getModalFrame()?.kind : '') || '').trim() === 'bulk-authorise-workbench'
+  );
+  const candidateOfficeSurface = isBulkAuthoriseSummary ? 'BULK_AUTHORISE' : 'BULK_PROCESS';
+  const candidateOfficeBadgeHtml = typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge && typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function'
+    ? window.CloudTMSCandidateOfficeBridge.slotHtml(candidateOfficeSurface, displayRow, { compact: true })
+    : '';
 
   return htmlWrap(`
     <div class="card" style="padding:6px 8px;">
@@ -212919,6 +213000,7 @@ function renderBulkProcessSelectedSummaryStrip(state) {
         <span><strong>State:</strong> ${enc(stateText)}</span>
         <span><strong>Job Title:</strong> ${enc(jobTitleText || 'None available')}</span>
         ${bandText ? `<span><strong>Band:</strong> ${enc(bandText)}</span>` : ''}
+        ${candidateOfficeBadgeHtml}
       </div>
     </div>
   `);
@@ -251554,7 +251636,6 @@ function renderBulkAuthoriseRightPane(state) {
         </div>
       </div>
     `;
-
   return htmlWrap(`
     <div id="bulkAuthoriseRightPaneRoot" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
       ${selectedSummaryHtml}
@@ -257342,6 +257423,17 @@ function renderBulkAuthoriseActionRow(state) {
   `;
 
   const actions = [];
+  const candidateOfficeBulkAuthoriseRouteAllowed = (routeAction) => {
+    const policy = (typeof window !== 'undefined') ? window.CloudTMSCandidateOfficeUiPolicy : null;
+    if (!policy || typeof policy.isButtonApproved !== 'function') return true;
+    const capability = window.CloudTMSCandidateOfficeBridge?.capabilities;
+    return !!(
+      capability?.authority_applies === true &&
+      capability?.permissions?.change_route === true &&
+      capability?.surfaces?.bulk_authorise === true &&
+      policy.isButtonApproved('BULK_AUTHORISE', `ROUTE:${routeAction}`) === true
+    );
+  };
   const isImportAuthoritativeAction = !!(
     editability.isImportAuthoritative === true ||
     String(activeRow.route_family || '').trim().toUpperCase() === 'IMPORT_AUTHORITATIVE' ||
@@ -257419,22 +257511,25 @@ function renderBulkAuthoriseActionRow(state) {
       actions.push(buildBtn('bulkAuthActionRowAddAdditionalBtn', addAdditionalLabel, !busy));
     }
     pushExpensesAction();
-    if (!editability.isAuthorised && editability.canSwitchToManual) {
+    if (!editability.isAuthorised && editability.canSwitchToManual && (
+      candidateOfficeBulkAuthoriseRouteAllowed('SWITCH_TO_MANUAL') ||
+      candidateOfficeBulkAuthoriseRouteAllowed('SWITCH_DAILY_TO_MANUAL')
+    )) {
       actions.push(buildBtn('bulkAuthActionRowSwitchManualBtn', 'Convert to Manual', !busy, 'data-bulk-authorise-route-action="switch-manual"'));
     }
-    if (!editability.isAuthorised && editability.canRevertToElectronic) {
+    if (!editability.isAuthorised && editability.canRevertToElectronic && candidateOfficeBulkAuthoriseRouteAllowed('LEGACY_REVERT_ELECTRONIC')) {
       actions.push(buildBtn('bulkAuthActionRowRevertElectronicBtn', 'Revert to electronic', !busy, 'data-bulk-authorise-route-action="revert-electronic"'));
     }
     if (!editability.isAuthorised && editability.canSwitchPlannedWeekToElectronic) {
       actions.push(buildBtn('bulkAuthActionRowSwitchElectronicPlannedBtn', 'Switch week back to electronic', !busy, 'data-bulk-authorise-route-action="switch-electronic-planned"'));
     }
-    if (!editability.isAuthorised && editability.canAllowQrAgain) {
+    if (!editability.isAuthorised && editability.canAllowQrAgain && candidateOfficeBulkAuthoriseRouteAllowed('ALLOW_QR_AGAIN')) {
       actions.push(buildBtn('bulkAuthActionRowAllowQrAgainBtn', 'Allow QR again', !busy, 'data-bulk-authorise-route-action="allow-qr-again"'));
     }
-    if (!editability.isAuthorised && editability.canAllowElectronicAgain) {
+    if (!editability.isAuthorised && editability.canAllowElectronicAgain && candidateOfficeBulkAuthoriseRouteAllowed('ALLOW_ELECTRONIC_AGAIN')) {
       actions.push(buildBtn('bulkAuthActionRowAllowElectronicAgainBtn', 'Allow electronic again', !busy, 'data-bulk-authorise-route-action="allow-electronic-again"'));
     }
-    if (!editability.isAuthorised && editability.canConvertQrToManualOnly) {
+    if (!editability.isAuthorised && editability.canConvertQrToManualOnly && candidateOfficeBulkAuthoriseRouteAllowed('CONVERT_QR_TO_MANUAL')) {
       actions.push(buildBtn('bulkAuthActionRowQrConvertManualBtn', 'Convert QR to manual-only', !busy, 'data-bulk-authorise-route-action="qr-convert-manual-only"'));
     }
   }
@@ -257458,6 +257553,12 @@ function renderBulkAuthoriseActionRow(state) {
       saveDisableReason: saveDisabledReason || null
     });
   }
+
+  const candidateOfficeBulkAuthoriseActions = (typeof window !== 'undefined'
+    && window.CloudTMSCandidateOfficeBridge
+    && typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function')
+    ? window.CloudTMSCandidateOfficeBridge.slotHtml('BULK_AUTHORISE', activeRowBase, { variant: 'actions', compact: false })
+    : '';
 
   return htmlWrap(`
     <div class="card" id="bulkAuthoriseActionRowRoot" style="padding:6px 8px;"
@@ -257491,7 +257592,7 @@ function renderBulkAuthoriseActionRow(state) {
       <div class="row">
         <label>Actions</label>
         <div class="controls" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          ${actions.join('') || '<span class="mini">No actions available for this row.</span>'}
+          ${actions.join('')}${candidateOfficeBulkAuthoriseActions}${!actions.length && !candidateOfficeBulkAuthoriseActions ? '<span class="mini">No actions available for this row.</span>' : ''}
         </div>
       </div>
     </div>
@@ -287201,6 +287302,17 @@ function renderBulkProcessActionRow(state) {
   const canAllowElectronicAgain = !!editability.canAllowElectronicAgain;
   const canConvertQrToManualOnly = !!editability.canConvertQrToManualOnly;
   const canAddAdditionalManual = !!editability.canAddAdditionalManual;
+  const candidateOfficeBulkProcessRouteAllowed = (routeAction) => {
+    const policy = (typeof window !== 'undefined') ? window.CloudTMSCandidateOfficeUiPolicy : null;
+    if (!policy || typeof policy.isButtonApproved !== 'function') return true;
+    const capability = window.CloudTMSCandidateOfficeBridge?.capabilities;
+    return !!(
+      capability?.authority_applies === true &&
+      capability?.permissions?.change_route === true &&
+      capability?.surfaces?.bulk_process === true &&
+      policy.isButtonApproved('BULK_PROCESS', `ROUTE:${routeAction}`) === true
+    );
+  };
   const isDirty = (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty;
   const busy = !!(
     st.loading ||
@@ -287350,6 +287462,11 @@ function renderBulkProcessActionRow(state) {
     }
     return attrs.join(' ');
   };
+  const candidateOfficeBulkProcessActions = (typeof window !== 'undefined'
+    && window.CloudTMSCandidateOfficeBridge
+    && typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function')
+    ? window.CloudTMSCandidateOfficeBridge.slotHtml('BULK_PROCESS', activeRow, { variant: 'actions', compact: false })
+    : '';
 
   return htmlWrap(`
     <div class="card" id="bulkProcessActionRowRoot" style="padding:6px 8px;">
@@ -287435,24 +287552,29 @@ function renderBulkProcessActionRow(state) {
             ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessAddAdditionalManualBtn" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Add Additional Manual Timesheet')}</button>`
             : ''}
 
-          ${canSwitchToManual
-            ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessActionRowSwitchManualBtn" data-ts-action="switch-manual" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Convert to Manual so you can enter hours on behalf of candidate')}</button>`
+          ${canSwitchToManual && (
+              candidateOfficeBulkProcessRouteAllowed('SWITCH_TO_MANUAL') ||
+              candidateOfficeBulkProcessRouteAllowed('SWITCH_DAILY_TO_MANUAL')
+            )
+            ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessActionRowSwitchManualBtn" data-ts-action="switch-manual" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Convert to Manual')}</button>`
             : ''}
           ${canSwitchPlannedWeekToElectronic
             ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessActionRowSwitchElecPlannedBtn" data-ts-action="switch-electronic-planned" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Switch week back to electronic')}</button>`
             : ''}
-          ${canRevertToElectronic
+          ${canRevertToElectronic && candidateOfficeBulkProcessRouteAllowed('LEGACY_REVERT_ELECTRONIC')
             ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessActionRowRevertElectronicBtn" data-ts-action="revert-electronic" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Revert to electronic')}</button>`
             : ''}
-          ${canAllowQrAgain
-            ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessActionRowAllowQrAgainBtn" data-ts-action="allow-qr-again" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Allow Candidate to submit QR Timesheet hours again')}</button>`
+          ${canAllowQrAgain && candidateOfficeBulkProcessRouteAllowed('ALLOW_QR_AGAIN')
+            ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessActionRowAllowQrAgainBtn" data-ts-action="allow-qr-again" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Enable QR submission')}</button>`
             : ''}
-          ${canAllowElectronicAgain
-            ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessActionRowAllowElectronicAgainBtn" data-ts-action="allow-electronic-again" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Allow electronic again')}</button>`
+          ${canAllowElectronicAgain && candidateOfficeBulkProcessRouteAllowed('ALLOW_ELECTRONIC_AGAIN')
+            ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessActionRowAllowElectronicAgainBtn" data-ts-action="allow-electronic-again" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Enable Electronic Submission')}</button>`
             : ''}
-          ${canConvertQrToManualOnly
-            ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessActionRowQrConvertManualBtn" data-ts-action="qr-convert-manual-only" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Convert to Manual so you can enter hours on behalf of candidate')}</button>`
+          ${canConvertQrToManualOnly && candidateOfficeBulkProcessRouteAllowed('CONVERT_QR_TO_MANUAL')
+            ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessActionRowQrConvertManualBtn" data-ts-action="qr-convert-manual-only" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Convert to Manual')}</button>`
             : ''}
+
+          ${candidateOfficeBulkProcessActions}
 
           ${statusBits.length
             ? `<span class="mini" style="opacity:.72;font-size:11px;">${enc(statusBits.join(' • '))}</span>`
@@ -308642,6 +308764,23 @@ function renderTimesheetIssuesTab(ctx) {
     ? `<ul class="mini">${issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>`
     : `<span class="mini">OK</span>`;
 
+  const candidateIssuesTimesheetId =
+    ts.timesheet_id || details.current_timesheet_id || row.timesheet_id || row.current_timesheet_id || null;
+  const candidateIssuesIdentityRow = candidateIssuesTimesheetId ? {
+    ...row,
+    timesheet_id: candidateIssuesTimesheetId,
+    current_timesheet_id: candidateIssuesTimesheetId,
+    contract_week_id: details.contract_week_id || details.contract_week?.id || row.contract_week_id || null,
+    expected_row_signature:
+      row.backend_row_signature || row.mutation_row_signature || row.row_signature ||
+      details.backend_row_signature || details.mutation_row_signature || details.row_signature || null
+  } : null;
+  const candidateIssuesHtml = (
+    candidateIssuesIdentityRow &&
+    typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge &&
+    typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function'
+  ) ? window.CloudTMSCandidateOfficeBridge.slotHtml('SIMPLE_TIMESHEET', candidateIssuesIdentityRow, { variant: 'issues' }) : '';
+
   const archivedAtUtc = normStr(row?.archived_at_utc || details?.archived_at_utc || ts?.archived_at_utc || details?.action_flags?.archived_at_utc || '');
   const archivedDisplay = normStr(row?.archived_by_display || details?.archived_by_display || details?.action_flags?.archived_by_display || '');
   const isArchived = !!(archivedAtUtc || boolish(row?.is_archived) || boolish(details?.is_archived) || boolish(ts?.is_archived));
@@ -308683,6 +308822,14 @@ function renderTimesheetIssuesTab(ctx) {
           </div>
         </div>
       </div>
+      ${candidateIssuesHtml ? `
+        <div class="card" style="margin-top:10px;">
+          <div class="row">
+            <label>Candidate</label>
+            <div class="controls">${candidateIssuesHtml}</div>
+          </div>
+        </div>
+      ` : ''}
     </div>
   `;
 }
@@ -310046,6 +310193,12 @@ function renderSummary(rows){
     }
     if (isTimesheetPaymentRow && paymentState.showProcessingOverlay) {
       wrap.appendChild(buildProcessingOverlay());
+    }
+    if (isTimesheetPaymentRow && rowObj?.has_deviation_marker === true) {
+      const unexpectedHours = document.createElement('span');
+      unexpectedHours.className = 'pill pill-warn';
+      unexpectedHours.textContent = 'Unexpected hours - needs checking';
+      wrap.appendChild(unexpectedHours);
     }
 
     const hasPaymentDisplay = !!(
@@ -312546,12 +312699,16 @@ const getSelectionUiState = () => {
   // Determine columns (using server prefs)
   const cols = getVisibleColumnsForSection(currentSection, effectiveRows);
 
-  // ── Force Issues column into timesheets view ───────────────────────────────
+  // ── Keep the approved Candidate status immediately after Processing Status,
+  //    with genuine Issues immediately after it. ─────────────────────────────
   if (currentSection === 'timesheets') {
-    if (!cols.includes('issue_codes')) {
-      // Put Issues near the left so it’s visible by default
-      cols.unshift('issue_codes');
+    for (const synthetic of ['candidate_submission', 'issue_codes']) {
+      const existing = cols.indexOf(synthetic);
+      if (existing >= 0) cols.splice(existing, 1);
     }
+    const processingIndex = cols.findIndex(key => key === 'processing_status_display' || key === 'processing_status');
+    const candidateIndex = processingIndex >= 0 ? processingIndex + 1 : 0;
+    cols.splice(candidateIndex, 0, 'candidate_submission', 'issue_codes');
   }
   if (currentSection === 'invoices') {
     const existingAttachmentIndex = cols.indexOf('attachment_state');
@@ -312689,11 +312846,14 @@ const getSelectionUiState = () => {
   cols.forEach(c=>{
     const th = document.createElement('th');
     th.dataset.colKey = String(c);
-    th.style.cursor = 'pointer';
+    th.style.cursor = c === 'candidate_submission' ? 'default' : 'pointer';
 
     let label = getFriendlyHeaderLabel(currentSection, c);
     if (currentSection === 'timesheets' && c === 'issue_codes') {
       label = 'Issues';
+    }
+    if (currentSection === 'timesheets' && c === 'candidate_submission') {
+      label = 'Candidate Submission';
     }
     if (currentSection === 'invoices' && c === 'attachment_state') {
       label = 'Attachment';
@@ -312705,7 +312865,9 @@ const getSelectionUiState = () => {
     }
     // Only show sort arrow for backend-supported keys when required
     const isSortable =
-      currentSection === 'invoices'
+      c === 'candidate_submission'
+        ? false
+        : currentSection === 'invoices'
         ? INVOICE_SORT_ALLOWED.has(String(c))
         : (
             currentSection === 'candidates'
@@ -312722,13 +312884,14 @@ const getSelectionUiState = () => {
     res.style.cssText = 'position:absolute;right:0;top:0;width:6px;height:100%;cursor:col-resize;user-select:none;';
     th.appendChild(res);
 
-    th.draggable = true;
+    th.draggable = c !== 'candidate_submission';
 
     th.addEventListener('click', async (ev) => {
       if (ev.target && ev.target.closest && ev.target.closest('.col-resizer')) return;
 
       const colKey = th.dataset.colKey;
       if (!colKey) return;
+      if (currentSection === 'timesheets' && colKey === 'candidate_submission') return;
       // sections with backend-constrained sortable keys must only allow supported sorts
       if (currentSection === 'invoices' && !INVOICE_SORT_ALLOWED.has(colKey)) return;
       if (currentSection === 'candidates' && !CANDIDATE_SORT_ALLOWED.has(colKey)) return;
@@ -312914,6 +313077,12 @@ const getSelectionUiState = () => {
         } else {
           // Timesheet exists – use shared helper (green OK or red/amber badges) plus cached pay icon.
           td.appendChild(renderIssueBadges(codes, r));
+        }
+
+      } else if (currentSection === 'timesheets' && c === 'candidate_submission') {
+        td.classList.add('candidate-office-summary-cell');
+        if (r.timesheet_id && typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge?.mountSummaryBadge) {
+          window.CloudTMSCandidateOfficeBridge.mountSummaryBadge(td, r);
         }
 
       } else if (currentSection === 'timesheets' && c === 'candidate_name') {
@@ -319089,6 +319258,18 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
       }
     } catch {}
 
+    // Candidate Office confirmation dialogs are deliberately view-owned utility
+    // frames. Their explicit dialog buttons remain usable without putting the
+    // parent timesheet into Edit mode; any initially disabled choice stays disabled.
+    try {
+      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+      const candidateDialogAction = String(el.getAttribute('data-candidate-dialog-action') || '').trim();
+      if (ro && String(top?.kind || '').startsWith('candidate-office-') && candidateDialogAction) {
+        el.disabled = el.dataset.initiallyDisabled === '1';
+        return;
+      }
+    } catch {}
+
     // Keep Timesheet action buttons enabled in VIEW only if they are "safe view actions".
     // Do NOT keep weekly schedule edit buttons enabled (reset / add/remove shift lines).
     try {
@@ -319161,6 +319342,13 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
 
       if (isTimesheetFrame && hasEvidenceAction) {
         el.disabled = false;
+        return;
+      }
+
+      const candidateOfficeAction = String(el.getAttribute('data-candidate-office-action') || '').trim();
+      const candidateOfficeEvidenceAction = String(el.getAttribute('data-candidate-office-evidence-action') || '').trim();
+      if (isTimesheetFrame && ro && (candidateOfficeAction || candidateOfficeEvidenceAction)) {
+        el.disabled = el.dataset.candidateOfficeServerEnabled !== '1';
         return;
       }
 
@@ -319580,7 +319768,9 @@ const frame = {
   onSave,
   onReturn,
   hasId: !!hasId,
-  entity: (ctxForFrame && ctxForFrame.entity) || null,
+  entity: (opts && typeof opts.frameEntity === 'string' && String(opts.frameEntity).trim())
+    ? String(opts.frameEntity).trim()
+    : ((ctxForFrame && ctxForFrame.entity) || null),
   _showSave: (opts && Object.prototype.hasOwnProperty.call(opts, 'showSave')) ? !!opts.showSave : null,
   _showApply: (opts && Object.prototype.hasOwnProperty.call(opts, 'showApply')) ? !!opts.showApply : null,
   _primaryLabel: (opts && Object.prototype.hasOwnProperty.call(opts, 'primaryLabel')) ? opts.primaryLabel : null,
@@ -320609,6 +320799,21 @@ async setTab(k) {
     mode: this.mode,
     hasMounted: this._hasMountedOnce
   });
+
+  // A user can choose a Timesheet tab while fast-open secondary reads are still
+  // completing. Those background reads must not immediately replace the chosen
+  // tab with their older preferred tab. The short-lived intent is scoped to this
+  // modal frame and is replaced whenever the user deliberately selects another.
+  if (this.entity === 'timesheets' && (this.__timesheetHydrationTabIntent || window.modalCtx?.__timesheetHydrationTabIntent)) {
+    const intent = this.__timesheetHydrationTabIntent || window.modalCtx?.__timesheetHydrationTabIntent;
+    if (Number(intent.expires_at || 0) <= Date.now()) {
+      delete this.__timesheetHydrationTabIntent;
+      try { delete window.modalCtx.__timesheetHydrationTabIntent; } catch {}
+    } else if (String(intent.key || '') && String(intent.key) !== String(k || '')) {
+      GE();
+      return;
+    }
+  }
 
   const prevDirty = this.isDirty;
   this._suppressDirty = true;
@@ -324530,11 +324735,20 @@ let _pushedRight = false;
     b.tabIndex = (!isDisabled && isActive) ? 0 : -1;
   }
 
-  b.onclick = () => {
+  b.onclick = async () => {
     if (top.mode === 'saving') return;
 
     // ✅ Click-block disabled tabs (non-responsive on click)
     if (isDisabled) return;
+
+    if (top.entity === 'timesheets') {
+      const tabIntent = {
+        key: String(t.key || ''),
+        expires_at: Date.now() + 5000
+      };
+      top.__timesheetHydrationTabIntent = tabIntent;
+      window.modalCtx.__timesheetHydrationTabIntent = tabIntent;
+    }
 
     tabsEl.querySelectorAll('button').forEach(x => {
       x.classList.remove('active');
@@ -324548,7 +324762,37 @@ let _pushedRight = false;
       b.setAttribute('aria-selected', 'true');
       b.tabIndex = 0;
     }
-    top.setTab(t.key);
+    try {
+      await Promise.resolve(top.setTab(t.key));
+
+      // A late fast-open refresh can race a deliberate Timesheet tab click.
+      // Honour the user's tab choice once more after that in-flight refresh has
+      // settled, then make the selected styling reflect the tab that actually
+      // rendered. This prevents (for example) Evidence looking selected while
+      // stale Overview content remains on screen.
+      if (
+        top.entity === 'timesheets' &&
+        currentFrame() === top &&
+        String(top.currentTabKey || '') !== String(t.key || '')
+      ) {
+        await Promise.resolve(top.setTab(t.key));
+      }
+    } catch (err) {
+      console.warn('[MODAL][TAB] setTab failed', err);
+    }
+
+    if (currentFrame() !== top) return;
+    tabsEl.querySelectorAll('button').forEach(x => {
+      const xKey = String(x.getAttribute('data-testid') || '').replace(/^timesheet-tab-/, '');
+      const active = top.entity === 'timesheets'
+        ? xKey === String(top.currentTabKey || '')
+        : x === b;
+      x.classList.toggle('active', active);
+      if (recordOwned) {
+        x.setAttribute('aria-selected', active ? 'true' : 'false');
+        x.tabIndex = active ? 0 : -1;
+      }
+    });
   };
 
   if (recordOwned) b.onkeydown = (ev) => {
@@ -328103,7 +328347,8 @@ if (!isChild && top.entity === 'contracts') {
   top.kind === 'candidate-picker'    ||
   top.kind === 'client-picker'       ||
   top.kind === 'template-field-picker' ||
-  top.kind === 'qr-decision';
+  top.kind === 'qr-decision' ||
+  String(top.kind || '').startsWith('candidate-office-');
     // ✅ NEW: PAYE Entry modal discard must NOT close the modal.
     // Instead: confirm → restore snapshot → switch to view → clear dirty → rerender → return.
     if (isChildNow &&
@@ -354163,6 +354408,13 @@ function renderTimesheetOverviewTab(ctx) {
     ? details.action_flags
     : {};
 
+  const candidateOfficeProjectionUiReady = !!(
+    typeof window !== 'undefined' &&
+    window.CloudTMSCandidateOfficeBridge?.capabilities?.authority_applies === true &&
+    window.CloudTMSCandidateOfficeBridge?.capabilities?.permissions?.view_candidate_state === true &&
+    window.CloudTMSCandidateOfficeBridge?.capabilities?.surfaces?.simple_timesheet === true
+  );
+
   const baseSummary = (window.modalCtx && window.modalCtx.data && typeof window.modalCtx.data === 'object')
     ? window.modalCtx.data
     : {};
@@ -355304,11 +355556,11 @@ function renderTimesheetOverviewTab(ctx) {
       : false;
 
   // QR-friendly stage badges
-  if (isQr && qrStatus) {
+  if (isQr && qrStatus && !candidateOfficeProjectionUiReady) {
     if (qrIsCancelled) {
-      addStage('QR Cancelled', 'pill-warn', 'The QR route is cancelled. Issue a new QR timesheet if you want to continue via QR.');
+      addStage('QR Pack cancelled', 'pill-warn', 'The previous QR Pack is no longer valid. Enable QR submission again only where the server permits it.');
     } else if (qrIsExpired) {
-      addStage('QR Expired', 'pill-warn', 'The QR route is expired. You must issue a new QR timesheet.');
+      addStage('QR Pack expired', 'pill-warn', 'The previous QR Pack is no longer valid. Enable QR submission again only where the server permits it.');
     } else if (qrNotYetSentToCandidate && qrStatus === 'PENDING') {
       if (!hasHours) {
         addStage(
@@ -355320,7 +355572,7 @@ function renderTimesheetOverviewTab(ctx) {
         addStage(
           'QR Timesheet ready to send',
           'pill-info',
-          'Hours are recorded, but no valid QR timesheet has been sent for the current hours. Use “Send New QR Timesheet…” to issue the printable QR PDF and email it to the candidate.'
+          'Hours are recorded, but no current QR Pack has been issued. CloudTMS will prepare it through the normal Candidate QR Pack lifecycle.'
         );
       }
     } else if (qrWaitingForSignatureUpload && qrStatus === 'PENDING') {
@@ -355334,7 +355586,7 @@ function renderTimesheetOverviewTab(ctx) {
         addStage(
           'QR Timesheet ready to send',
           'pill-info',
-          'Hours have changed since the last QR was sent, so the previous QR is no longer valid for the current hours. Use “Send New QR Timesheet…” to issue a new QR PDF.'
+          'Hours have changed since the last QR Pack was issued, so the previous pack is no longer valid for the current hours. The server-owned replacement flow must create the next generation.'
         );
       }
     } else if (qrSignedReceived && hasScan && hasSignedPdf) {
@@ -355348,7 +355600,7 @@ function renderTimesheetOverviewTab(ctx) {
         addStage(
           'QR Signed upload received – Does not match current hours',
           'pill-warn',
-          'A signed QR timesheet exists, but it does not match the current hours. If hours were changed after signing, send a new QR timesheet and have it re-signed.'
+          'A signed QR Timesheet exists, but it does not match the current hours. Use the server-owned replacement flow where eligible so the new QR Timesheet can be signed.'
         );
       }
     }
@@ -355360,7 +355612,7 @@ function renderTimesheetOverviewTab(ctx) {
       'pill-warn',
       lifecycleAuthorisedForActionGating
         ? 'Candidate submission is disabled for this authorised timesheet. Unauthorise the timesheet before re-enabling electronic or QR submission.'
-        : 'Candidate submission is disabled for this timesheet. To involve the candidate again, use “Allow electronic again” / “Allow Candidate to submit QR Timesheet hours again” (if available), or “Revert to electronic” where applicable.'
+        : 'Candidate submission is disabled for this timesheet. Where the backend confirms eligibility, use “Enable Electronic Submission” or “Enable QR submission”.'
     );
   }
 
@@ -355414,8 +355666,8 @@ function renderTimesheetOverviewTab(ctx) {
 
   const routeTitle = (() => {
     if (isQr && qrStatus) {
-      if (qrIsCancelled) return 'QR route is cancelled. You will need to issue a new QR if you want to continue the QR process.';
-      if (qrIsExpired)   return 'QR route is expired. You must issue a new QR timesheet.';
+      if (qrIsCancelled) return 'The QR Pack is cancelled. Enable QR submission again only where the server permits it.';
+      if (qrIsExpired)   return 'The QR Pack is expired. Enable QR submission again only where the server permits it.';
       if (qrNotYetSentToCandidate && !hasHours) return 'QR route is enabled but no hours have been entered yet.';
       if (qrNotYetSentToCandidate && hasHours)  return 'QR route is ready to send for the current hours.';
       if (qrWaitingForSignatureUpload) return 'QR timesheet issued. Awaiting signed upload.';
@@ -355435,7 +355687,7 @@ function renderTimesheetOverviewTab(ctx) {
         : (
             isManualOnly
               ? 'Manual (candidate submission disabled). Admin will manage hours and evidence manually. To involve the candidate again you must explicitly re-enable submission.'
-              : 'Manual (admin-managed). Admin can adjust hours/schedule internally; to return to candidate evidence use “Revert to electronic” or re-enable submission where appropriate.'
+              : 'Manual (admin-managed). Admin can adjust hours/schedule internally; use an eligible server-owned submission action to involve the candidate again.'
           );
     }
 
@@ -355559,12 +355811,10 @@ function renderTimesheetOverviewTab(ctx) {
 
     if (paymentActionButtonsHtml) btns.push(paymentActionButtonsHtml);
 
-    const canRestorePending = !!actionFlags.can_restore_qr_pending;
-    const canRestoreSigned  = !!actionFlags.can_restore_qr_signed;
-    const canRevertToElec   = !!actionFlags.can_revert_to_electronic;
-
     const canAllowQrAgain   = !!actionFlags.can_allow_qr_again;
     const canAllowElecAgain = !!actionFlags.can_allow_electronic_again;
+    const candidateOfficeRouteUiReady = candidateOfficeProjectionUiReady &&
+      window.CloudTMSCandidateOfficeBridge.capabilities.permissions.change_route === true;
 
     const weekId =
       details.contract_week_id ||
@@ -355623,11 +355873,11 @@ function renderTimesheetOverviewTab(ctx) {
     // timesheet is authorised, archived, or its permission surface is not trusted.
     if (!isAdjustment && !sourceTimesheetActionsBlocked) {
 
-      if (!importAuthoritative && (isWeeklyElectronicWithTs || isPlannedWeeklyElectronic || isDailyElectronicWithTs)) {
+      if (!importAuthoritative && (isPlannedWeeklyElectronic || (candidateOfficeRouteUiReady && (isWeeklyElectronicWithTs || isDailyElectronicWithTs)))) {
         const title = 'Switch this timesheet into admin-managed Manual mode so you can adjust hours/schedule internally.';
         btns.push(`
           <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="switch-manual" title="${enc(title)}">
-            Convert to Manual so you can enter hours on behalf of candidate
+            Convert to Manual
           </button>
         `);
       }
@@ -355641,117 +355891,30 @@ function renderTimesheetOverviewTab(ctx) {
         `);
       }
 
-      if (isDaily && tsId && subMode === 'ELECTRONIC' && !locked) {
-        const title = 'Generate and email a daily QR timesheet for printing/signature, then upload the signed copy.';
-        btns.push(`
-          <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="send-daily-qr" title="${enc(title)}">
-            Send daily QR timesheet
-          </button>
-        `);
-      }
-
-      // QR send / resend (only when QR is actually enabled: qr_status=PENDING on CURRENT row)
-      // ✅ This prevents calling /qr-resend when backend has qr_status=NULL (manual-only).
-      if (tsId && !locked && !isManualOnly && isQr && qrStatus === 'PENDING') {
-        if (qrNotYetSentToCandidate) {
-          if (hasHours) {
-            const title = 'Issue a new printable QR PDF for the current hours and email it to the candidate.';
-            btns.push(`
-              <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="qr-resend" title="${enc(title)}">
-                Send New QR Timesheet…
-              </button>
-            `);
-          }
-        }
-
-        if (qrWaitingForSignatureUpload) {
-          if (qrCanResendSameHours) {
-            const title = 'Resend the previously-issued QR PDF for the same hours (no changes). This does not issue a new token.';
-            btns.push(`
-              <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="qr-resend" title="${enc(title)}">
-                Resend QR Timesheet…
-              </button>
-            `);
-          } else if (hasHours) {
-            const title = 'Hours have changed since the last QR was sent. Issue a new QR PDF for the current hours and email it to the candidate.';
-            btns.push(`
-              <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="qr-resend" title="${enc(title)}">
-                Send New QR Timesheet…
-              </button>
-            `);
-          }
-        }
-      }
-
-      if (tsId && !locked && !isManualOnly && isQr && qrStatus === 'PENDING' && qrWaitingForSignatureUpload) {
-        const title = 'Reject the submitted QR hours and reset the QR route so the candidate must re-submit their hours again (email will be queued to the candidate if configured).';
-        btns.push(`
-          <button type="button" class="pill pill-warn" style="${badgeBtnStyle}" data-ts-action="qr-refuse" title="${enc(title)}">
-            Refuse hours & request resubmission
-          </button>
-        `);
-      }
-
-      if (tsId && !locked && !isManualOnly && isQr && qrStatus === 'USED' && qrSignedReceived) {
-        const title = 'Revoke the signed QR evidence and request the candidate resubmit hours/signatures again (use when signed evidence is incorrect or hours changed).';
-        btns.push(`
-          <button type="button" class="pill pill-warn" style="${badgeBtnStyle}" data-ts-action="qr-reissue-request" title="${enc(title)}">
-            Revoke signed QR & request resubmission
-          </button>
-        `);
-      }
-
       // Convert QR route → manual-only
-      if (tsId && !locked && isQr && qrStatus) {
+      if (candidateOfficeRouteUiReady && tsId && !locked && isQr && qrStatus) {
         const title = 'Convert to Manual (candidate submission disabled). Admin will manage hours and evidence manually from this point.';
         btns.push(`
           <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="qr-convert-manual-only" title="${enc(title)}">
-            Convert to Manual so you can enter hours on behalf of candidate
+            Convert to Manual
           </button>
         `);
       }
 
-      if (tsId && !locked && canRestorePending) {
-        const title = 'Restore the most recently revoked pending QR version as current (you may need to resend the QR PDF afterwards).';
-        btns.push(`
-          <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="qr-restore-pending" title="${enc(title)}">
-            Restore revoked QR (pending)
-          </button>
-        `);
-      }
-
-      if (tsId && !locked && canRestoreSigned) {
-        const title = 'Restore the most recently revoked signed QR version as current (only valid if it matches current hours).';
-        btns.push(`
-          <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="qr-restore-signed" title="${enc(title)}">
-            Restore revoked QR (signed)
-          </button>
-        `);
-      }
-
-      if (!importAuthoritative && tsId && !locked && isManualOnly && canAllowQrAgain) {
-        const title = 'Create a new current QR-enabled state so the candidate can submit QR hours again.';
+      if (candidateOfficeRouteUiReady && !importAuthoritative && tsId && !locked && isManualOnly && canAllowQrAgain && !canAllowElecAgain) {
+        const title = 'Make this timesheet eligible for QR submission again. A QR Pack is created later by the normal Candidate workflow when the server has the required current submission facts.';
         btns.push(`
           <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="allow-qr-again" title="${enc(title)}">
-            Allow Candidate to submit QR Timesheet hours again
+            Enable QR submission
           </button>
         `);
       }
 
-      if (!importAuthoritative && tsId && !locked && isManualOnly && canAllowElecAgain) {
-        const title = 'Create a new current ELECTRONIC version. The candidate must re-submit hours and signatures in the app.';
+      if (candidateOfficeRouteUiReady && !importAuthoritative && tsId && !locked && isManualOnly && canAllowElecAgain) {
+        const title = 'Make this Manual timesheet eligible for Electronic submission again. This is available only where the backend confirms Electronic eligibility.';
         btns.push(`
           <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="allow-electronic-again" title="${enc(title)}">
-            Allow electronic again
-          </button>
-        `);
-      }
-
-      if (!importAuthoritative && tsId && !locked && canRevertToElec) {
-        const title = 'Return to the previously submitted ELECTRONIC version without asking the candidate to resubmit. Recheck the hours afterwards.';
-        btns.push(`
-          <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="revert-electronic" title="${enc(title)}">
-            Revert to electronic
+            Enable Electronic Submission
           </button>
         `);
       }
@@ -355762,7 +355925,7 @@ function renderTimesheetOverviewTab(ctx) {
 
     const safeBtns = btns.filter(html => !FOOTER_ONLY_ACTION_RE.test(String(html || '')));
 
-    if (!safeBtns.length) return `<span class="mini">No actions available.</span>`;
+    if (!safeBtns.length) return candidateOfficeProjectionUiReady ? '' : `<span class="mini">No actions available.</span>`;
     return `<div style="display:flex;flex-wrap:wrap;gap:8px;">${safeBtns.join('')}</div>`;
   })();
 
@@ -355853,12 +356016,35 @@ function renderTimesheetOverviewTab(ctx) {
 
   const deletePolicyBadgeHtmlForDisplay = openingDetailsPending ? '' : deletePolicyBadgeHtml;
 
-  const routeActionsRowHtml = (suppressActionButtons || openingDetailsPending)
+  const candidateOfficeIdentityRow = tsId ? {
+    ...baseSummary,
+    ...row,
+    timesheet_id: tsId,
+    current_timesheet_id: tsId,
+    contract_week_id: details.contract_week_id || cw.id || row.contract_week_id || null,
+    expected_row_signature:
+      row.backend_row_signature || row.mutation_row_signature || row.row_signature ||
+      details.backend_row_signature || details.mutation_row_signature || details.row_signature ||
+      baseSummary.backend_row_signature || baseSummary.mutation_row_signature || baseSummary.row_signature || null
+  } : null;
+  const candidateOfficeSlot = (variant) => (
+    candidateOfficeIdentityRow &&
+    typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge &&
+    typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function'
+  ) ? window.CloudTMSCandidateOfficeBridge.slotHtml('SIMPLE_TIMESHEET', candidateOfficeIdentityRow, { variant }) : '';
+  const candidateStageHtml = candidateOfficeSlot('stage');
+  const candidateOverviewHtml = candidateOfficeSlot('overview');
+  const candidateActionsHtml = candidateOfficeSlot('actions');
+
+  const routeActionsRowHtml = (suppressActionButtons || openingDetailsPending || (!actionsHtml && !candidateActionsHtml))
     ? ''
     : `
       <div class="row" data-view-only="true">
         <label>Actions</label>
-        <div class="controls">${actionsHtml}</div>
+        <div class="controls" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          ${actionsHtml}
+          ${candidateActionsHtml}
+        </div>
       </div>
     `;
 
@@ -355868,6 +356054,7 @@ function renderTimesheetOverviewTab(ctx) {
         <label>Stage</label>
         <div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">
           ${stageBadgesForDisplay.join('')}
+          ${candidateStageHtml}
         </div>
       </div>
 
@@ -355879,6 +356066,13 @@ function renderTimesheetOverviewTab(ctx) {
           <span class="pill ${scopePillClass}" style="font-weight:600;">${enc(scopeLabel)}</span>
         </div>
       </div>
+
+      ${candidateOverviewHtml ? `
+        <div class="row" data-view-only="true">
+          <label>Candidate</label>
+          <div class="controls" style="width:100%;">${candidateOverviewHtml}</div>
+        </div>
+      ` : ''}
 
       ${routeActionsRowHtml}
     </div>
@@ -358521,11 +358715,27 @@ function refreshTimesheetModalTabsChrome(openToken) {
 
     if (key === fr.currentTabKey) b.classList.add('active');
 
-    b.onclick = () => {
+    b.onclick = async () => {
       if (fr.mode === 'saving' || disabled) return;
+
+      const tabIntent = { key, expires_at: Date.now() + 5000 };
+      fr.__timesheetHydrationTabIntent = tabIntent;
+      window.modalCtx.__timesheetHydrationTabIntent = tabIntent;
+
       tabsEl.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
       b.classList.add('active');
-      try { fr.setTab(key); } catch {}
+      try {
+        await Promise.resolve(fr.setTab(key));
+        if (getActiveTimesheetFrame() === fr && String(fr.currentTabKey || '') !== key) {
+          await Promise.resolve(fr.setTab(key));
+        }
+      } catch {}
+
+      if (getActiveTimesheetFrame() !== fr) return;
+      tabsEl.querySelectorAll('button').forEach((x) => {
+        const xKey = String(x.dataset.testid || '').replace(/^timesheet-tab-/, '');
+        x.classList.toggle('active', xKey === String(fr.currentTabKey || ''));
+      });
     };
 
     tabsEl.appendChild(b);
@@ -366304,6 +366514,18 @@ function renderTimesheetEvidenceTab(ctx) {
 
   const ts = details.timesheet || {};
   const tsId = row.timesheet_id || ts.timesheet_id || '';
+  const candidateEvidenceIdentity = tsId ? {
+    ...row,
+    timesheet_id: tsId,
+    contract_week_id: details.contract_week_id || row.contract_week_id || null,
+    expected_row_signature:
+      row.backend_row_signature || row.mutation_row_signature || row.row_signature ||
+      details.backend_row_signature || details.mutation_row_signature || details.row_signature || null
+  } : null;
+  const candidateEvidenceHtml = (
+    candidateEvidenceIdentity && typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge &&
+    typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function'
+  ) ? window.CloudTMSCandidateOfficeBridge.slotHtml('SIMPLE_TIMESHEET', candidateEvidenceIdentity, { variant: 'evidence' }) : '';
 
   const evList = Array.isArray(state.evidence) ? state.evidence : [];
   const boolish = (v) => {
@@ -366763,6 +366985,8 @@ function renderTimesheetEvidenceTab(ctx) {
           To use a different timesheet image, delete this file or return it to the queue first, then add the new file.
         </div>
       ` : ''}
+
+      ${candidateEvidenceHtml}
 
       <div class="card" style="flex:1; overflow:hidden;">
         <div class="row">
