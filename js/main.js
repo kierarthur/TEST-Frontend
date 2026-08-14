@@ -370329,6 +370329,11 @@ async function listTimesheetsSummary(filters = {}) {
   // Power filter passthrough (optional)
   if (f.hr_issue) qs.set('hr_issue', f.hr_issue);
 
+  // The compact Candidate grid projection is composed by the normal backend
+  // into this same Summary response. It therefore paints with the other
+  // columns and does not start a second browser request after table render.
+  qs.set('include_candidate_projection', 'true');
+
   const sortState = st.sort || { key: null, dir: 'asc' };
   const sortKeyRaw = String(sortState.key || '').toLowerCase();
   const sortDir    = (sortState.dir === 'desc') ? 'desc' : 'asc';

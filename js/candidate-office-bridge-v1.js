@@ -223,8 +223,71 @@
     }
     return window.CloudTMSCandidateOfficeSurface.renderCandidateOfficeSlot({ surface, row, variant });
   }
+  function embeddedSummaryResult(row) {
+    if (row?.candidate_office_projection_loaded !== true) return null;
+    const identity = window.CloudTMSCandidateOfficeApi.buildIdentity(row);
+    const rawProjection = row?.candidate_office_projection;
+    if (rawProjection && typeof rawProjection === 'object') {
+      try {
+        const projection = window.CloudTMSCandidateOfficeContract.normalizeOfficeCandidateProjection(
+          rawProjection,{ surface: 'TIMESHEET_SUMMARY', rowIdentity: identity }
+        );
+        if (!projectionMatchesRow(projection, identity)) {
+          throw Object.assign(new Error('The embedded Candidate projection did not match this row.'), {
+            code: 'CANDIDATE_OFFICE_PROJECTION_IDENTITY_INVALID'
+          });
+        }
+        cache.set(cacheKeyFor('TIMESHEET_SUMMARY', identity), { projection, observedAt: Date.now() });
+        return { identity, projection, error: null };
+      } catch (error) {
+        return {
+          identity,projection: null,
+          error: window.CloudTMSCandidateOfficeContract.normalizeCandidateOfficeError(error)
+        };
+      }
+    }
+    return {
+      identity,projection: null,
+      error: window.CloudTMSCandidateOfficeContract.normalizeCandidateOfficeError(
+        row?.candidate_office_projection_error || { code: 'CANDIDATE_OFFICE_PROJECTION_FAILED' }
+      )
+    };
+  }
   function mountSummaryBadge(cell, row) {
-    if (!canSurface('TIMESHEET_SUMMARY') || !row?.timesheet_id) return;
+    if (!row?.timesheet_id) return;
+    const embedded = embeddedSummaryResult(row);
+    if (embedded) {
+      const slot = document.createElement('div');
+      slot.className = 'candidate-office-slot';
+      slot.dataset.candidateOfficeSlot = '1';
+      slot.dataset.candidateOfficeHydrated = '1';
+      slot.dataset.candidateOfficeVariant = 'compact';
+      slot.dataset.candidateOfficeSurface = 'TIMESHEET_SUMMARY';
+      slot.dataset.rowKey = embedded.identity.row_key;
+      slot.dataset.timesheetId = embedded.identity.timesheet_id || '';
+      slot.dataset.contractWeekId = embedded.identity.contract_week_id || '';
+      slot.dataset.rowSignature = embedded.identity.expected_row_signature || '';
+      slot.setAttribute('aria-live', 'polite');
+      if (embedded.error) {
+        slot.innerHTML = window.CloudTMSCandidateOfficeSurface.renderCandidateUnavailable(
+          embedded.error,{ variant: 'compact' }
+        );
+      } else {
+        const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(
+          embedded.projection
+        );
+        slot.innerHTML = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(
+          view,{ surface: 'TIMESHEET_SUMMARY', variant: 'compact' }
+        );
+      }
+      cell.appendChild(slot);
+      queueMicrotask(() => window.dispatchEvent(new CustomEvent(
+        'cloudtms:candidate-office-projection',
+        { detail: { surface: 'TIMESHEET_SUMMARY', row_key: embedded.identity.row_key, ok: !embedded.error } }
+      )));
+      return;
+    }
+    if (!canSurface('TIMESHEET_SUMMARY')) return;
     const holder = document.createElement('span');
     holder.innerHTML = slotHtml('TIMESHEET_SUMMARY', row);
     cell.appendChild(holder.firstElementChild);
@@ -248,6 +311,7 @@
     const pendingRowsByExactKey = new Map();
     for (const row of requestedRows) {
       const identity = window.CloudTMSCandidateOfficeApi.buildIdentity(row);
+      embeddedSummaryResult(row);
       if (!findProjection('TIMESHEET_SUMMARY', identity.row_key, identity)) {
         pendingRowsByExactKey.set(cacheKeyFor('TIMESHEET_SUMMARY', identity), identity);
       }
@@ -518,5 +582,5 @@
     });
     document.documentElement.removeAttribute('data-candidate-office-contract');
   }
-  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
+  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, embeddedSummaryResult, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
 })();

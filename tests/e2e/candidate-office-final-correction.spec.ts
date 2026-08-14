@@ -60,7 +60,9 @@ const projectionFor = (identity: any, statusCode = statusForIdentity(identity), 
     route_family: 'ELECTRONIC'
   },
   candidate_status: { code: statusCode, label: `raw ${statusCode}`, tone: 'danger' },
-  workflow: statusCode === 'AWAITING_PAPER_RETURN' ? { state: 'AWAITING_PAPER_RETURN' } : null,
+  workflow: statusCode === 'FINALISED'
+    ? { state: 'FINALISED', historical: true }
+    : (statusCode === 'AWAITING_PAPER_RETURN' ? { state: 'AWAITING_PAPER_RETURN' } : null),
   manager_approval: null,
   paper_pack: { state: paperState, retryable: paperState === 'FAILED_RETRYABLE' },
   rejections: [],
@@ -125,6 +127,9 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
     sheet_scope: { visible: true, order: 8 }
   } } } };
   const gridPatches: any[] = [];
+  let projectionCalls = 0;
+  let summaryCalls = 0;
+  let summaryCallsWithCandidateProjection = 0;
   let executeCalls = 0;
   let statusCalls = 0;
   let eventualReminderStatus: 'PARTIAL' | 'FAILED' | null = null;
@@ -149,16 +154,34 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
       return respond(route, gridPrefs);
     }
     if (path === '/api/timesheets/summary') {
+      summaryCalls += 1;
+      if (url.searchParams.get('include_candidate_projection') === 'true') {
+        summaryCallsWithCandidateProjection += 1;
+      }
       const pageNumber = Math.max(1, Number(url.searchParams.get('page') || 1));
       const pageSize = Math.max(1, Number(url.searchParams.get('page_size') || 50));
       const start = (pageNumber - 1) * pageSize;
       return respond(route, {
-        ok: true, items: summaryRows.slice(start, start + pageSize).map(({ __status, ...row }) => row),
+        ok: true, items: summaryRows.slice(start, start + pageSize).map(({ __status, ...row }) => {
+          const identity = {
+            row_key: row.row_key,
+            timesheet_id: row.timesheet_id,
+            contract_week_id: null,
+            expected_row_signature: row.backend_row_signature
+          };
+          return {
+            ...row,
+            candidate_office_projection_loaded: true,
+            candidate_office_projection: projectionFor(identity, __status),
+            candidate_office_projection_error: null
+          };
+        }),
         total: summaryRows.length, count: summaryRows.length, has_more: start + pageSize < summaryRows.length,
         total_pay_ex_vat: 615, total_charge_ex_vat: 915, total_margin_ex_vat: 300
       });
     }
     if (path === '/api/candidate-app/timesheets/office-projections') {
+      projectionCalls += 1;
       const body = request.postDataJSON();
       return respond(route, {
         ok: true,
@@ -234,7 +257,10 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
   return {
     gridPatches,
     resolveReminderWith: (status: 'PARTIAL' | 'FAILED') => { eventualReminderStatus = status; },
-    metrics: () => ({ executeCalls, statusCalls, executeBodies: structuredClone(executeBodies) })
+    metrics: () => ({
+      executeCalls,statusCalls,projectionCalls,summaryCalls,summaryCallsWithCandidateProjection,
+      executeBodies: structuredClone(executeBodies)
+    })
   };
 }
 
@@ -264,6 +290,7 @@ test('Timesheet Summary Candidate Submission column reorders, resizes, persists 
   await expect(candidate).toBeVisible();
   await expect(candidate).toHaveAttribute('draggable', 'true');
   await expect(grid.locator('td[data-col-key="candidate_submission"]')).toHaveCount(summaryRows.length);
+  await expect(grid).not.toContainText('Loading Candidate status');
   // Width defaults are persisted asynchronously on first render. Let that
   // initial work settle so every subsequent PATCH belongs to this interaction.
   await page.waitForTimeout(750);
@@ -313,6 +340,8 @@ test('Timesheet Summary Candidate Submission column reorders, resizes, persists 
   await candidate.click();
   await expect(candidate).toContainText('▼');
   expect(await grid.locator('td[data-col-key="candidate_submission"] .candidate-office-summary-status').allTextContents()).toEqual([...statusLabels].reverse());
+  expect(mocks.metrics().projectionCalls).toBe(0);
+  expect(mocks.metrics().summaryCallsWithCandidateProjection).toBe(mocks.metrics().summaryCalls);
   expect(assets['/index.html']).toBeGreaterThan(0);
   expect(assets['/js/main.js']).toBeGreaterThan(0);
 });
@@ -336,7 +365,9 @@ for (const viewport of [{ label: 'desktop', width: 1440, height: 960 }, { label:
       const surface = (window as any).CloudTMSCandidateOfficeSurface;
       const created = presenter.presentCandidateOfficeDetail(make('CREATED', 'NOT_APPLICABLE'), { surface: 'SIMPLE_TIMESHEET' });
       const received = presenter.presentCandidateOfficeDetail(make('AWAITING_PAPER_RETURN', 'RETURN_RECEIVED'), { surface: 'SIMPLE_TIMESHEET' });
-      const complete = presenter.presentCandidateOfficeDetail(make('PAID', 'RETURN_RECEIVED'), { surface: 'SIMPLE_TIMESHEET' });
+      const completeProjection = make('PAID', 'RETURN_RECEIVED');
+      completeProjection.workflow = { state: 'FINALISED', historical: true };
+      const complete = presenter.presentCandidateOfficeDetail(completeProjection, { surface: 'SIMPLE_TIMESHEET' });
       const rejected = presenter.presentCandidateOfficeDetail(make('REJECTED', 'NOT_APPLICABLE'), { surface: 'SIMPLE_TIMESHEET' });
       (window as any).showModal('Timesheet — Candidate submission', [
         { key: 'overview', label: 'Overview' }, { key: 'issues', label: 'Issues' }
@@ -365,6 +396,67 @@ for (const viewport of [{ label: 'desktop', width: 1440, height: 960 }, { label:
     expect(await page.evaluate(() => !!(window as any).__nativeDialogUsed)).toBe(false);
   });
 }
+
+test('Manual non-QR, HealthRoster and NHSP authoritative rows never display a Candidate lifecycle on any Office surface', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  const result = await page.evaluate(() => {
+    const presenter = (window as any).CloudTMSCandidateOfficePresenter;
+    const surface = (window as any).CloudTMSCandidateOfficeSurface;
+    const make = (name: string, routeFamily: string, code: string, availableActions: any[] = []) => ({
+      ok: true,
+      contract_version: 'OFFICE_CANDIDATE_TIMESHEET_V1',
+      office_contract_version: 'CLOUDTMS_OFFICE_CANDIDATE_API_V1',
+      current_identity: { row_key: name, route_family: routeFamily },
+      candidate_status: { code, label: `raw ${code}`, tone: 'success' },
+      workflow: null,
+      manager_approval: null,
+      paper_pack: { state: 'NOT_APPLICABLE' },
+      rejections: [],
+      primary_action: null,
+      available_actions: availableActions,
+      diagnostics: [],
+      refresh_hints: { refetch: 'CURRENT_ROW' },
+      observed_at_utc: '2026-08-14T08:00:00Z'
+    });
+    const inputs = [
+      make('manual', 'MANUAL_NON_QR', 'PAID', [{ code: 'ALLOW_ELECTRONIC_AGAIN', label: 'Enable Electronic Submission', group: 'ROUTE', enabled: true, prominent: false }]),
+      make('manual-adjustment', 'MANUAL_NON_QR', 'INVOICED_NOT_PAID'),
+      make('healthroster', 'IMPORT_AUTHORITATIVE', 'AUTHORISED'),
+      make('healthroster-adjustment', 'IMPORT_AUTHORITATIVE', 'PAID'),
+      make('nhsp', 'IMPORT_AUTHORITATIVE', 'INVOICED_NOT_PAID'),
+      make('nhsp-adjustment', 'IMPORT_AUTHORITATIVE', 'FINALISED')
+    ];
+    const surfaces = ['TIMESHEET_SUMMARY', 'SIMPLE_TIMESHEET', 'BULK_PROCESS', 'BULK_AUTHORISE'];
+    const rendered: any[] = [];
+    for (const projection of inputs) {
+      for (const surfaceName of surfaces) {
+        const view = surfaceName === 'TIMESHEET_SUMMARY'
+          ? presenter.presentCandidateOfficeSummary(projection)
+          : presenter.presentCandidateOfficeDetail(projection, { surface: surfaceName });
+        rendered.push({
+          row: projection.current_identity.row_key,
+          surface: surfaceName,
+          status: view.status,
+          html: surface.renderCandidateFragment(view, { surface: surfaceName, variant: surfaceName === 'SIMPLE_TIMESHEET' ? 'stage' : 'compact' }),
+          actionCodes: view.actions?.map((action: any) => action.code) || []
+        });
+      }
+    }
+    return rendered;
+  });
+
+  expect(result).toHaveLength(24);
+  for (const row of result) {
+    expect(row.status, `${row.row} / ${row.surface}`).toBeNull();
+    expect(row.html, `${row.row} / ${row.surface}`).not.toMatch(/Candidate Submission|Status unavailable/);
+  }
+  const manualDetail = result.find(row => row.row === 'manual' && row.surface === 'SIMPLE_TIMESHEET');
+  expect(manualDetail.actionCodes).toContain('ALLOW_ELECTRONIC_AGAIN');
+});
 
 for (const scenario of [
   { name: 'PARTIAL result', result: 'PARTIAL' as const, heading: 'Some reminders could not be sent', counts: ['2 sent', '1 no longer eligible', '1 failed'] },

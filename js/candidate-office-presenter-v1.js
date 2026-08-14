@@ -100,12 +100,20 @@
       unavailable: !APPROVED_CANDIDATE_SUBMISSION_STATUS[normalized] || normalized === 'STATUS_UNAVAILABLE'
     });
   };
+  const candidateSubmissionApplies = projection => ['ELECTRONIC', 'QR'].includes(
+    String(projection?.current_identity?.route_family || '').toUpperCase()
+  );
   function presentApprovedCandidateSubmissionStatus(projection) {
+    // Candidate lifecycle presentation is route-owned, not finance-owned. A
+    // terminal financial status on Manual (non-QR), HealthRoster, NHSP or any
+    // other import-authoritative row must never manufacture Candidate truth.
+    if (!candidateSubmissionApplies(projection)) return null;
     const source = sourceStatusView(projection);
     const sourceCode = String(source?.code || '').toUpperCase();
     const workflowState = String(projection.workflow?.state || '').toUpperCase();
     const routeFamily = String(projection.current_identity?.route_family || '').toUpperCase();
     const paperState = String(projection.paper_pack?.state || 'NOT_APPLICABLE').toUpperCase();
+    const lifecycleCode = workflowState || sourceCode;
     const enabledActionCodes = new Set((projection.available_actions || [])
       .filter(action => action?.enabled === true)
       .map(action => String(action.code || '').toUpperCase()));
@@ -113,22 +121,24 @@
     // One closed precedence catalogue owns every Office Candidate surface. The
     // furthest confirmed QR lifecycle state wins, so mutually exclusive stages
     // can never be displayed together.
-    if (source.unavailable) return approvedStatusView('STATUS_UNAVAILABLE');
-    if (sourceCode === 'REJECTED') return approvedStatusView('REJECTED_BY_AGENCY');
-    if (sourceCode === 'REFUSED' || workflowState === 'REFUSED') return approvedStatusView('REFUSED_BY_CLIENT');
-    if (['CANCELLED', 'SUPERSEDED', 'EXPIRED'].includes(sourceCode)) return approvedStatusView('CANDIDATE_SUBMISSION_CANCELLED');
-    if (['FINALISED', 'AUTHORISED', 'INVOICED_NOT_PAID', 'PAID'].includes(sourceCode)) return approvedStatusView('CANDIDATE_SUBMISSION_COMPLETE');
+    if (source.unavailable && !workflowState) return approvedStatusView('STATUS_UNAVAILABLE');
+    if (lifecycleCode === 'REJECTED') return approvedStatusView('REJECTED_BY_AGENCY');
+    if (lifecycleCode === 'REFUSED') return approvedStatusView('REFUSED_BY_CLIENT');
+    if (['CANCELLED', 'SUPERSEDED', 'EXPIRED'].includes(lifecycleCode)) return approvedStatusView('CANDIDATE_SUBMISSION_CANCELLED');
+    if (workflowState === 'FINALISED') return approvedStatusView('CANDIDATE_SUBMISSION_COMPLETE');
+    // Authorised/invoiced/paid is Office financial truth, not proof that the
+    // Candidate used or completed the Candidate submission workflow. Historic
+    // pre-app records with no durable workflow therefore remain blank.
+    if (!workflowState && ['FINALISED', 'AUTHORISED', 'INVOICED_NOT_PAID', 'PAID'].includes(sourceCode)) return null;
     if (enabledActionCodes.has('RETRY_FINALISATION')) return approvedStatusView('FINALISATION_NEEDS_ATTENTION');
     if (['FAILED_RETRYABLE', 'FAILED_TERMINAL', 'RETIRED', 'STALE'].includes(paperState)) return approvedStatusView('QR_PACK_NEEDS_ATTENTION');
-    if (paperState === 'RETURN_RECEIVED' || ['RECEIVED', 'MANAGER_APPROVED_PENDING_FINAL_DOCUMENT', 'READY_TO_FINALISE'].includes(sourceCode)) return approvedStatusView('FINALISING_SUBMISSION');
-    if (paperState === 'READY' && (sourceCode === 'AWAITING_PAPER_RETURN' || workflowState === 'AWAITING_PAPER_RETURN')) return approvedStatusView('QR_AWAITING_SIGNED_RETURN');
+    if (paperState === 'RETURN_RECEIVED' || ['RECEIVED', 'MANAGER_APPROVED_PENDING_FINAL_DOCUMENT', 'READY_TO_FINALISE'].includes(lifecycleCode)) return approvedStatusView('FINALISING_SUBMISSION');
+    if (paperState === 'READY' && lifecycleCode === 'AWAITING_PAPER_RETURN') return approvedStatusView('QR_AWAITING_SIGNED_RETURN');
     if (['PREPARING', 'BACKOFF'].includes(paperState)) return approvedStatusView('QR_PACK_PREPARING');
-    if (['CREATED', 'WORKER_DRAFT'].includes(sourceCode)) return approvedStatusView('AWAITING_CANDIDATE_SUBMISSION');
-    if (['WORKER_SUBMITTED', 'WORKER_SUBMITTED_PENDING_REVIEW_DOCUMENT', 'READY_FOR_MANAGER_APPROVAL'].includes(sourceCode)) return approvedStatusView('CANDIDATE_SUBMITTED');
-    if (sourceCode === 'AWAITING_MANAGER_APPROVAL') return approvedStatusView('AWAITING_MANAGER_APPROVAL');
-    if (sourceCode === 'MANAGER_APPROVED' || projection.manager_approval?.state === 'APPROVED') return approvedStatusView('MANAGER_APPROVED');
-    if (workflowState === 'FINALISED' && projection.workflow?.historical === true) return approvedStatusView('CANDIDATE_SUBMISSION_COMPLETE');
-    if (['CANCELLED', 'SUPERSEDED', 'EXPIRED'].includes(workflowState) && projection.workflow?.historical === true) return approvedStatusView('CANDIDATE_SUBMISSION_CANCELLED');
+    if (['CREATED', 'WORKER_DRAFT'].includes(lifecycleCode)) return approvedStatusView('AWAITING_CANDIDATE_SUBMISSION');
+    if (['WORKER_SUBMITTED', 'WORKER_SUBMITTED_PENDING_REVIEW_DOCUMENT', 'READY_FOR_MANAGER_APPROVAL'].includes(lifecycleCode)) return approvedStatusView('CANDIDATE_SUBMITTED');
+    if (lifecycleCode === 'AWAITING_MANAGER_APPROVAL') return approvedStatusView('AWAITING_MANAGER_APPROVAL');
+    if (lifecycleCode === 'MANAGER_APPROVED' || projection.manager_approval?.state === 'APPROVED') return approvedStatusView('MANAGER_APPROVED');
     if (!projection.workflow && ['QR', 'ELECTRONIC'].includes(routeFamily)) return approvedStatusView('AWAITING_CANDIDATE_SUBMISSION');
     if (projection.workflow || ['QR', 'ELECTRONIC'].includes(routeFamily)) return approvedStatusView('STATUS_UNAVAILABLE');
     return null;
@@ -249,5 +259,5 @@
     const detail = presentCandidateOfficeDetail(projection, { surface: 'TIMESHEET_SUMMARY' });
     return Object.freeze({ identity: detail.identity, status: detail.status, source_status_code: detail.source_status_code, manager: detail.manager, primary_action: detail.primary_action, diagnostics: detail.diagnostics, projection });
   }
-  Object.assign(window, { CloudTMSCandidateOfficePresenter: Object.freeze({ STATUS, APPROVED_CANDIDATE_SUBMISSION_STATUS, PAPER, OFFICE_FRONTEND_FORBIDDEN_ACTIONS, formatDateTime, managerStatusLabel, presentApprovedCandidateSubmissionStatus, presentCandidateOfficeSummary, presentCandidateOfficeDetail, presentCandidateManagerApproval, presentCandidatePaperPack, presentCandidateRejections }) });
+  Object.assign(window, { CloudTMSCandidateOfficePresenter: Object.freeze({ STATUS, APPROVED_CANDIDATE_SUBMISSION_STATUS, PAPER, OFFICE_FRONTEND_FORBIDDEN_ACTIONS, formatDateTime, managerStatusLabel, candidateSubmissionApplies, presentApprovedCandidateSubmissionStatus, presentCandidateOfficeSummary, presentCandidateOfficeDetail, presentCandidateManagerApproval, presentCandidatePaperPack, presentCandidateRejections }) });
 })();

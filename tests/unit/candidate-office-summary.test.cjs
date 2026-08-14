@@ -51,7 +51,7 @@ test('Summary renders only the complete user-approved Candidate Submission catal
     [projection('REFUSED', 'wrong', 'success'), 'Refused by Client'],
     [projection('REJECTED', 'wrong', 'success'), 'Rejected by Agency'],
     [projection('CANCELLED', 'wrong', 'success'), 'Candidate Submission Cancelled'],
-    [projection('FINALISED', 'wrong', 'danger'), 'Candidate Submission Complete'],
+    [projection('FINALISED', 'wrong', 'danger', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
     [projection('FUTURE_UNKNOWN_STATE', 'wrong', 'success'), 'Status unavailable']
   ];
   const rendered = cases.map(([input, expected]) => {
@@ -67,18 +67,39 @@ test('Summary renders only the complete user-approved Candidate Submission catal
   assert.doesNotMatch(rendered, /Candidate Refused by Manager|Manager refused/);
 });
 
-test('Summary leaves non-Candidate manual records blank', () => {
+test('all Office surfaces leave Manual non-QR and import-authoritative records blank even after financial completion', () => {
   const window = load(
     'candidate-office-ui-policy-v1.js',
     'candidate-office-presenter-v1.js',
     'candidate-office-surface-v1.js'
   );
-  const input = projection('PENDING_AUTH', 'Pending authorisation', 'warning', {
-    current_identity: { row_key: 'row-1', route_family: 'MANUAL_NON_QR' }
-  });
-  const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input);
-  assert.equal(view.status, null);
-  assert.equal(window.CloudTMSCandidateOfficeSurface.renderCandidateCompactBadges(view), '');
+  const routes = [
+    ['Manual', 'MANUAL_NON_QR', 'PAID'],
+    ['Manual adjustment', 'MANUAL_NON_QR', 'INVOICED_NOT_PAID'],
+    ['HealthRoster import-authoritative', 'IMPORT_AUTHORITATIVE', 'AUTHORISED'],
+    ['HealthRoster adjustment', 'IMPORT_AUTHORITATIVE', 'INVOICED_NOT_PAID'],
+    ['NHSP import-authoritative', 'IMPORT_AUTHORITATIVE', 'PAID'],
+    ['NHSP adjustment', 'IMPORT_AUTHORITATIVE', 'FINALISED']
+  ];
+  const surfaces = ['TIMESHEET_SUMMARY', 'SIMPLE_TIMESHEET', 'BULK_PROCESS', 'BULK_AUTHORISE'];
+
+  for (const [name, routeFamily, code] of routes) {
+    const input = projection(code, 'raw financial terminal label', 'success', {
+      current_identity: { row_key: `row-${name}`, route_family: routeFamily }
+    });
+    assert.equal(window.CloudTMSCandidateOfficePresenter.candidateSubmissionApplies(input), false, name);
+    for (const surface of surfaces) {
+      const view = surface === 'TIMESHEET_SUMMARY'
+        ? window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input)
+        : window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(input, { surface });
+      assert.equal(view.status, null, `${name} must be blank in ${surface}`);
+      const html = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, {
+        surface,
+        variant: surface === 'SIMPLE_TIMESHEET' ? 'stage' : 'compact'
+      });
+      assert.doesNotMatch(html, /Candidate Submission|Status unavailable/, `${name} must not invent Candidate truth in ${surface}`);
+    }
+  }
 });
 
 test('unknown server status fails closed instead of inventing a lifecycle label', () => {
@@ -95,6 +116,27 @@ test('unknown server status fails closed instead of inventing a lifecycle label'
   assert.match(html, /Status unavailable/);
   assert.doesNotMatch(html, /Server supplied text/);
   assert.doesNotMatch(html, /candidate-office-badge--success/);
+});
+
+test('financial completion never manufactures Candidate completion without a durable Candidate workflow', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  for (const code of ['FINALISED', 'AUTHORISED', 'INVOICED_NOT_PAID', 'PAID']) {
+    const legacy = projection(code, code, 'success');
+    const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(legacy);
+    assert.equal(view.status, null, `${code} without a Candidate workflow is not Candidate completion proof`);
+  }
+  const current = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(
+    projection('UNPROCESSED', 'Unprocessed', 'neutral')
+  );
+  assert.equal(current.status.label, 'Awaiting Candidate Submission');
+  const completed = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(
+    projection('PAID', 'Paid', 'success', { workflow: { state: 'FINALISED', historical: true } })
+  );
+  assert.equal(completed.status.label, 'Candidate Submission Complete');
 });
 
 test('all four Office surfaces render the complete raw-state matrix through the same approved catalogue', () => {
@@ -127,10 +169,10 @@ test('all four Office surfaces render the complete raw-state matrix through the 
     [projection('CANCELLED', 'Cancelled', 'neutral'), 'Candidate Submission Cancelled'],
     [projection('SUPERSEDED', 'Superseded', 'neutral'), 'Candidate Submission Cancelled'],
     [projection('EXPIRED', 'Expired', 'neutral'), 'Candidate Submission Cancelled'],
-    [projection('FINALISED', 'Candidate submission finalised', 'success'), 'Candidate Submission Complete'],
-    [projection('AUTHORISED', 'Authorised', 'success'), 'Candidate Submission Complete'],
-    [projection('INVOICED_NOT_PAID', 'Invoiced (Not paid)', 'warning'), 'Candidate Submission Complete'],
-    [projection('PAID', 'Paid', 'success'), 'Candidate Submission Complete'],
+    [projection('FINALISED', 'Candidate submission finalised', 'success', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
+    [projection('AUTHORISED', 'Authorised', 'success', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
+    [projection('INVOICED_NOT_PAID', 'Invoiced (Not paid)', 'warning', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
+    [projection('PAID', 'Paid', 'success', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
     [projection('FUTURE_UNKNOWN_STATE', 'raw unknown label', 'danger'), 'Status unavailable']
   ];
   const surfaces = ['TIMESHEET_SUMMARY', 'SIMPLE_TIMESHEET', 'BULK_PROCESS', 'BULK_AUTHORISE'];
@@ -154,7 +196,7 @@ test('all four Office surfaces render the complete raw-state matrix through the 
   }
 });
 
-test('Summary integration queues bounded projection batches and never fetches detail per row', () => {
+test('Summary integration renders embedded projections immediately and keeps a bounded exact fallback', () => {
   const bridge = fs.readFileSync(path.join(root, 'js', 'candidate-office-bridge-v1.js'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
 
@@ -172,6 +214,12 @@ test('Summary integration queues bounded projection batches and never fetches de
   assert.doesNotMatch(main, /colKey === 'candidate_submission'\) return/);
   assert.match(main, /sortKeyRaw === 'candidate_submission'\s*\? 'week_ending_date'/);
   assert.match(main, /sortSummaryRowsByCandidateStatus\(uniqueRows, sortDir\)/);
+  assert.match(main, /qs\.set\('include_candidate_projection', 'true'\)/);
+  assert.match(bridge, /function embeddedSummaryResult\(row\)/);
+  assert.match(bridge, /row\?\.candidate_office_projection_loaded !== true/);
+  assert.match(bridge, /normalizeOfficeCandidateProjection\(\s*rawProjection,\{ surface: 'TIMESHEET_SUMMARY', rowIdentity: identity \}/);
+  assert.match(bridge, /const embedded = embeddedSummaryResult\(row\);/);
+  assert.match(bridge, /embeddedSummaryResult\(row\);\s*if \(!findProjection/);
   assert.match(bridge, /async function sortSummaryRowsByCandidateStatus/);
   assert.match(bridge, /partitionProjectionIdentities\(Array\.from\(pendingRowsByExactKey\.values\(\)\)\)/);
   assert.match(bridge, /if \(surface === 'SIMPLE_TIMESHEET'\) loadSlot\(slot\);\s*else queueBatchSlot\(slot\)/);
@@ -214,7 +262,8 @@ test('terminal Candidate truth outranks retained QR lifecycle facts on every Off
   for (const code of ['FINALISED', 'AUTHORISED', 'INVOICED_NOT_PAID', 'PAID']) {
     const input = projection(code, 'raw terminal label', 'danger', {
       paper_pack: { state: 'RETURN_RECEIVED', page_count: 4 },
-      manager_approval: { method: 'EMAIL', state: 'APPROVED' }
+      manager_approval: { method: 'EMAIL', state: 'APPROVED' },
+      workflow: { state: 'FINALISED', historical: true }
     });
     for (const surface of surfaces) {
       const view = surface === 'TIMESHEET_SUMMARY'
