@@ -8,6 +8,7 @@ test.use({ serviceWorkers: 'block' });
 const root = resolve(__dirname, '../..');
 const testOrigin = 'https://testmode.arthur-rai.co.uk';
 const testBackend = 'https://test-cloudtms-backend.kier-88a.workers.dev';
+const useDeployedAssets = process.env.CANDIDATE_OFFICE_USE_DEPLOYED_ASSETS === '1';
 const localAssets = [
   'index.html',
   'js/main.js',
@@ -85,6 +86,16 @@ const capabilities = {
 
 async function installPatchedAssets(page: Page) {
   const counts: Record<string, number> = {};
+  if (useDeployedAssets) {
+    await page.addInitScript(() => { (window as any).__CANDIDATE_OFFICE_DEPLOYED_PROOF = true; });
+    await page.route(`${testOrigin}/**`, async route => {
+      const url = new URL(route.request().url());
+      const key = url.pathname === '/' ? '/index.html' : url.pathname;
+      if (sourceByPath.has(key)) counts[key] = (counts[key] || 0) + 1;
+      await route.continue();
+    });
+    return counts;
+  }
   await page.route(`${testOrigin}/**`, async route => {
     const url = new URL(route.request().url());
     const key = url.pathname === '/' ? '/index.html' : url.pathname;
@@ -224,7 +235,12 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
 async function openPatchedTest(page: Page) {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
-  expect(await page.evaluate(() => (window as any).__CANDIDATE_OFFICE_LOCAL_PROOF)).toBe(mainSha256);
+  if (useDeployedAssets) {
+    expect(await page.evaluate(() => (window as any).__CANDIDATE_OFFICE_DEPLOYED_PROOF)).toBe(true);
+    expect(await page.evaluate(() => (window as any).__CANDIDATE_OFFICE_LOCAL_PROOF)).toBeUndefined();
+  } else {
+    expect(await page.evaluate(() => (window as any).__CANDIDATE_OFFICE_LOCAL_PROOF)).toBe(mainSha256);
+  }
   expect(new URL(page.url()).origin).toBe(testOrigin);
   expect(await page.evaluate(() => (window as any).BROKER_BASE_URL)).toBe(testBackend);
 }
