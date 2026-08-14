@@ -189,6 +189,32 @@ test('Candidate Submission sorting isolates duplicate row keys by exact identity
   assert.deepEqual(Array.from(sorted, row => row.id), ['new-row', 'old-row']);
 });
 
+test('every Office surface renders no Candidate slot and performs no identity work for a server-marked non-applicable row', () => {
+  let identityBuilds = 0;
+  const h = harness({
+    buildIdentity: row => {
+      identityBuilds += 1;
+      return row;
+    }
+  });
+  const manual = {
+    row_key: 'manual-row',
+    timesheet_id: '00000000-0000-4000-8000-000000000111',
+    candidate_office_projection_not_applicable: true
+  };
+  for (const surface of ['TIMESHEET_SUMMARY', 'SIMPLE_TIMESHEET', 'BULK_PROCESS', 'BULK_AUTHORISE']) {
+    assert.equal(h.window.CloudTMSCandidateOfficeBridge.slotHtml(surface, manual), '', surface);
+  }
+  assert.equal(identityBuilds, 0, 'the marker is checked before identity construction or projection work');
+
+  assert.equal(h.window.CloudTMSCandidateOfficeBridge.slotHtml('SIMPLE_TIMESHEET', {
+    row_key: 'nested-manual-row',
+    timesheet_id: '00000000-0000-4000-8000-000000000112',
+    timesheet: { candidate_office_projection_not_applicable: true }
+  }), '');
+  assert.equal(identityBuilds, 0, 'nested detail markers are also authoritative');
+});
+
 test('a late old single-row response cannot overwrite or repaint the newer exact identity', async () => {
   const pending = new Map();
   const h = harness({

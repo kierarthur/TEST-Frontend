@@ -512,7 +512,7 @@ test('QR and Electronic enable controls require Manual-only state plus server el
 
 test('planned-week Manual and Electronic route controls remain on their existing contract-week authority', () => {
   const source = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
-  assert.match(source, /isPlannedWeeklyElectronic \|\| \(candidateOfficeRouteUiReady && \(isWeeklyElectronicWithTs \|\| isDailyElectronicWithTs\)\)/);
+  assert.match(source, /isPlannedWeeklyElectronic \|\| \(candidateOfficeRouteUiReady && canSwitchToManual && \(isWeeklyElectronicWithTs \|\| isDailyElectronicWithTs\)\)/);
   assert.match(source, /data-ts-action="switch-electronic-planned"/);
   assert.match(source, />\s*Switch week back to electronic\s*</);
 });
@@ -522,16 +522,39 @@ test('materialised Candidate route controls cannot fall back to legacy owners wh
   assert.match(source, /const candidateOfficeProjectionUiReady = !!\(/);
   assert.match(source, /const candidateOfficeRouteUiReady = candidateOfficeProjectionUiReady &&/);
   assert.match(source, /capabilities\.permissions\.change_route === true/);
-  assert.match(source, /candidateOfficeRouteUiReady && tsId && !locked && isQr && qrStatus/);
+  assert.match(source, /candidateOfficeRouteUiReady && tsId && !locked && canConvertQrToManualOnly/);
   assert.match(source, /candidateOfficeRouteUiReady && !importAuthoritative && tsId && !locked && isManualOnly && canAllowQrAgain/);
   assert.match(source, /candidateOfficeRouteUiReady && !importAuthoritative && tsId && !locked && isManualOnly && canAllowElecAgain/);
 });
 
-test('canonical Candidate projection replaces legacy QR lifecycle badges when available', () => {
+test('canonical Candidate projection is the only QR lifecycle presentation and action authority', () => {
   const source = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
-  assert.match(source, /if \(isQr && qrStatus && !candidateOfficeProjectionUiReady\)/);
+  assert.doesNotMatch(source, /QR Timesheet Hours received|QR Completed –|QR signed upload has been received|Awaiting signed QR timesheet/);
+  assert.doesNotMatch(source, /qrAwaitingSignatureUpload|reason: 'QR_UNSIGNED'/);
+  assert.match(source, /Historic QR[\s\S]{0,120}columns are neither presentation authority nor Office action authority/);
   assert.match(source, /permissions\?\.view_candidate_state === true/);
   assert.match(source, /surfaces\?\.simple_timesheet === true/);
+});
+
+test('Simple Timesheet route wording uses canonical route identity rather than legacy QR artefacts', () => {
+  const source = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
+  const start = source.indexOf('const canonicalManualNonQrRoute =');
+  const end = source.indexOf('const additionalSeqForOverview', start);
+  assert.ok(start > -1 && end > start, 'canonical route block missing');
+  const block = source.slice(start, end);
+  assert.match(block, /includes\('MANUAL_NON_QR'\)/);
+  assert.match(block, /const canonicalQrRoute = !canonicalManualNonQrRoute/);
+  assert.doesNotMatch(block, /qr_status|qr_token|qr_generated_at|qr_scanned_at/);
+  assert.match(source, /if \(canonicalQrRoute\) return 'QR'/);
+  assert.match(source, /Candidate Submission shows the current QR Pack lifecycle/);
+});
+
+test('Timesheet Processing Status uses Processed and never presents legacy QR progress', () => {
+  const source = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
+  assert.match(source, /\['PROCESSED',\s+'Processed'\]/);
+  assert.match(source, /PENDING_AUTH:\s*'Processed'/);
+  assert.match(source, /return \{ key: 'PROCESSED', label: 'Processed' \}/);
+  assert.doesNotMatch(source, /QR Timesheet Hours received|QR Completed –|Awaiting signed QR timesheet/);
 });
 
 test('Simple Timesheet integrates Candidate state into existing modal rows', () => {

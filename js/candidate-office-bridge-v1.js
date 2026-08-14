@@ -24,6 +24,11 @@
     .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
   const rowFromSlot = slot => ({ row_key: slot.dataset.rowKey, timesheet_id: slot.dataset.timesheetId || null, contract_week_id: slot.dataset.contractWeekId || null, expected_row_signature: slot.dataset.rowSignature || null });
   const canSurface = surface => !!(capabilities?.authority_applies && capabilities?.permissions?.view_candidate_state && capabilities?.surfaces?.[String(surface).toLowerCase()]);
+  function candidateProjectionNotApplicable(row) {
+    if (!row || typeof row !== 'object') return false;
+    return [row, row.row, row.data_row, row.effective, row.timesheet, row.contract_week]
+      .some(source => source && typeof source === 'object' && source.candidate_office_projection_not_applicable === true);
+  }
   const toast = (message, tone = 'ok') => { if (typeof window.__toast === 'function') window.__toast(message, tone); else console[tone === 'fail' ? 'error' : 'info'](message); };
   function clampExpandedCandidateModal(slot) {
     const modal = slot?.closest?.('#modal');
@@ -212,6 +217,7 @@
   }
   function slotHtml(surface, row, { compact = surface === 'TIMESHEET_SUMMARY', variant = compact ? 'compact' : 'detail' } = {}) {
     if (!canSurface(surface)) return '';
+    if (candidateProjectionNotApplicable(row)) return '';
     const identity = window.CloudTMSCandidateOfficeApi.buildIdentity(row);
     const existing = findProjection(surface, identity.row_key, identity);
     if (existing) {
@@ -226,7 +232,7 @@
   function embeddedSummaryResult(row) {
     if (row?.candidate_office_projection_loaded !== true) return null;
     const identity = window.CloudTMSCandidateOfficeApi.buildIdentity(row);
-    if (row?.candidate_office_projection_not_applicable === true) {
+    if (candidateProjectionNotApplicable(row)) {
       return { identity,projection: null,error: null,notApplicable: true };
     }
     const rawProjection = row?.candidate_office_projection;
@@ -587,5 +593,5 @@
     });
     document.documentElement.removeAttribute('data-candidate-office-contract');
   }
-  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, embeddedSummaryResult, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
+  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, embeddedSummaryResult, candidateProjectionNotApplicable, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
 })();

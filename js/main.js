@@ -142241,7 +142241,7 @@ async function openSearchModal(opts = {}) {
           <option value="">Any</option>
           <option value="UNPROCESSED">Unprocessed</option>
           <option value="PROCESSING_DELAYED">Processing Delayed</option>
-          <option value="AWAITING_AUTHORISATION">Awaiting Authorisation</option>
+          <option value="PROCESSED">Processed</option>
           <option value="AUTHORISED_FOR_INVOICING">Authorised for Invoicing</option>
           <option value="INVOICED">Invoiced</option>
           <option value="ARCHIVED">Archived</option>
@@ -142261,7 +142261,6 @@ async function openSearchModal(opts = {}) {
           <option value="REFS_MISSING">Refs missing</option>
           <option value="AWAITING_VALIDATION">Awaiting validation</option>
           <option value="VALIDATION_FAILED">Validation failed</option>
-          <option value="QR_AWAITING_SIGNATURE">QR awaiting signature</option>
           <option value="PAIRED_NEEDS_INVOICING">Paired needs invoicing</option>
           <option value="OVERPAID">Overpaid</option>
         </select>`),
@@ -163021,14 +163020,15 @@ function renderTools(){
       ['ALL',                    'All'],
       ['UNPROCESSED',            'Unprocessed'],
       ['PROCESSING_DELAYED',     'Processing Delayed'],
-      ['AWAITING_AUTHORISATION', 'Awaiting Authorisation'],
+      ['PROCESSED',              'Processed'],
       ['AUTHORISED_FOR_INVOICING','Authorised for Invoicing'],
       ['INVOICED',               'Invoiced'],
       ['ARCHIVED',               'Archived']
     ];
 
     const allowedStages = new Set(stageOpts.map(x => x[0]));
-    const curStage = String((filters.tools_stage || 'ALL')).toUpperCase();
+    const configuredStage = String((filters.tools_stage || 'ALL')).toUpperCase();
+    const curStage = configuredStage === 'AWAITING_AUTHORISATION' ? 'PROCESSED' : configuredStage;
     const curStageSafe = allowedStages.has(curStage) ? curStage : 'ALL';
 
     stageOpts.forEach(([v, label]) => {
@@ -167382,7 +167382,7 @@ function formatDisplayValue(key, val){
     const up = normEnum(s);
     const map = {
       READY_FOR_INVOICE: 'Ready to Invoice',
-      PENDING_AUTH: 'Awaiting Authorisation',
+      PENDING_AUTH: 'Processed',
       UNASSIGNED: 'Unassigned',
       RATE_MISSING: 'Rate Missing'
     };
@@ -269519,7 +269519,7 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
       booking_id: pickSignature(response.booking_id, lifecycle.booking_id, affected.booking_id, fallback.booking_id),
       processing_status: 'PENDING_AUTH',
       summary_stage: pickSignature(response.summary_stage, lifecycle.summary_stage, affected.summary_stage, 'PENDING_AUTH'),
-      tools_stage: pickSignature(response.tools_stage, lifecycle.tools_stage, affected.tools_stage, 'AWAITING_AUTHORISATION'),
+      tools_stage: pickSignature(response.tools_stage, lifecycle.tools_stage, affected.tools_stage, 'PROCESSED'),
       authorised: false,
       is_authorised: false,
       authorised_at_utc: null,
@@ -307606,28 +307606,6 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
 
     const normCodes = (arr) => (Array.isArray(arr) ? arr.map(x => String(x || '').trim()).filter(Boolean) : []);
     const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
-    try {
-      const dts = window.modalCtx?.timesheetDetails?.timesheet || {};
-      const qrStatusU = String(dts.qr_status ?? row.qr_status ?? '').trim().toUpperCase();
-      const qrToken = (dts.qr_token != null ? String(dts.qr_token).trim() : '');
-      const qrGen = dts.qr_generated_at || null;
-      const qrLastSentHash = (dts.qr_last_sent_hash != null ? String(dts.qr_last_sent_hash).trim() : '');
-      const qrScannedAt = dts.qr_scanned_at || null;
-      const hasIssuedProof = ((qrToken && qrGen) ? true : false) || (!!qrLastSentHash);
-      const qrAwaitingSignatureUpload = (qrStatusU === 'PENDING' && hasIssuedProof && !qrScannedAt);
-      const codes = uniq([
-        ...normCodes(row?.issue_codes),
-        ...normCodes(window.modalCtx?.timesheetDetails?.row?.issue_codes),
-        ...normCodes(window.modalCtx?.timesheetDetails?.issue_codes)
-      ]);
-      if (qrAwaitingSignatureUpload || codes.includes('Awaiting signed QR timesheet')) {
-        toastWarn('Cannot authorise until the signed QR timesheet is received.');
-        GE();
-        return { ok: false, blocked: true, reason: 'QR_UNSIGNED' };
-      }
-    } catch (e) {
-      if (LOGM) L('[TS][AUTH] unsigned-QR block check failed (non-fatal)', e);
-    }
 
     try {
       const codes = uniq([
@@ -308211,7 +308189,6 @@ async function contractWeekAuthorise(week_id, expectedTimesheetId /* optional */
   };
   const mc = window.modalCtx || {};
   const row = mc.data || {};
-  const dts = mc.timesheetDetails?.timesheet || {};
   const expected = trimStr(expectedTimesheetId) || trimStr(window.modalCtx?.timesheetMeta?.expected_timesheet_id);
 
   if (!expected) throw new Error('contractWeekAuthorise: expected_timesheet_id is required');
@@ -308244,25 +308221,6 @@ async function contractWeekAuthorise(week_id, expectedTimesheetId /* optional */
   window.__timesheetLifecycleMutationInFlight.add(mutationKey);
 
   try {
-    try {
-      const qrStatusU = String(dts.qr_status ?? row.qr_status ?? '').trim().toUpperCase();
-      const qrToken = (dts.qr_token != null ? String(dts.qr_token).trim() : '');
-      const qrGen = dts.qr_generated_at || null;
-      const qrLastSentHash = (dts.qr_last_sent_hash != null ? String(dts.qr_last_sent_hash).trim() : '');
-      const qrScannedAt = dts.qr_scanned_at || null;
-      const hasIssuedProof = ((qrToken && qrGen) ? true : false) || (!!qrLastSentHash);
-      const qrAwaitingSignatureUpload = (qrStatusU === 'PENDING' && hasIssuedProof && !qrScannedAt);
-      const codes = uniq([
-        ...normCodes(row?.issue_codes),
-        ...normCodes(mc.timesheetDetails?.row?.issue_codes),
-        ...normCodes(mc.timesheetDetails?.issue_codes)
-      ]);
-      if (qrAwaitingSignatureUpload || codes.includes('Awaiting signed QR timesheet')) {
-        toastWarn('Cannot authorise until the signed QR timesheet is received.');
-        return { ok: false, blocked: true, reason: 'QR_UNSIGNED' };
-      }
-    } catch {}
-
     try {
       const codes = uniq([
         ...normCodes(row?.issue_codes),
@@ -308542,10 +308500,6 @@ function renderTimesheetIssuesTab(ctx) {
   }
   if (hasCode('Validation failed')) {
     addIssue('Validation failed (HealthRoster): this timesheet is blocked until corrected or overridden.');
-  }
-
-  if (hasCode('Awaiting signed QR timesheet')) {
-    addIssue('Awaiting signed QR timesheet: cannot be authorised until the signed QR copy is received, and invoicing is blocked.');
   }
 
   if (hasCode('Rate')) {
@@ -308867,6 +308821,10 @@ function renderTimesheetIssuesTab(ctx) {
     ts.timesheet_id || details.current_timesheet_id || row.timesheet_id || row.current_timesheet_id || null;
   const candidateIssuesIdentityRow = candidateIssuesTimesheetId ? {
     ...row,
+    candidate_office_projection_not_applicable:
+      details.candidate_office_projection_not_applicable === true ||
+      ts.candidate_office_projection_not_applicable === true ||
+      row.candidate_office_projection_not_applicable === true,
     timesheet_id: candidateIssuesTimesheetId,
     current_timesheet_id: candidateIssuesTimesheetId,
     contract_week_id: details.contract_week_id || details.contract_week?.id || row.contract_week_id || null,
@@ -311180,7 +311138,6 @@ const applyToolsUiState = () => {
   ['REFS_MISSING',          'Refs missing'],
   ['AWAITING_VALIDATION',   'Awaiting validation'],
   ['VALIDATION_FAILED',     'Validation failed'],
-  ['QR_AWAITING_SIGNATURE', 'QR awaiting signature'],
   ['PAIRED_NEEDS_INVOICING','Paired needs invoicing'],
   ['OVERPAID',              'Overpaid']
 ];
@@ -318417,28 +318374,6 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     requiresAuth = false;
   }
 
-  let qrUnsigned = false;
-  try {
-    const qrStatus = upper(ts.qr_status ?? data.qr_status ?? '');
-    const qrToken = (ts.qr_token != null ? String(ts.qr_token).trim() : (data.qr_token != null ? String(data.qr_token).trim() : ''));
-    const qrGen = (ts.qr_generated_at ?? data.qr_generated_at ?? null);
-    const qrLastSentHash = (ts.qr_last_sent_hash != null ? String(ts.qr_last_sent_hash).trim() : (data.qr_last_sent_hash != null ? String(data.qr_last_sent_hash).trim() : ''));
-    const qrScannedAt = (ts.qr_scanned_at ?? data.qr_scanned_at ?? null);
-
-    const hasIssuedProof = (((qrToken && qrGen) ? true : false) || (!!qrLastSentHash));
-    const byTruthModel = (qrStatus === 'PENDING' && hasIssuedProof && !qrScannedAt);
-
-    let byIssueCode = false;
-    try {
-      const codes = Array.isArray(data.issue_codes) ? data.issue_codes : [];
-      byIssueCode = codes.map(x => String(x || '').trim()).includes('Awaiting signed QR timesheet');
-    } catch {}
-
-    qrUnsigned = (byTruthModel || byIssueCode);
-  } catch {
-    qrUnsigned = false;
-  }
-
   const routeTypeForFooter = pickFirstUpper(
     data.route_type,
     meta.routeType,
@@ -318569,9 +318504,6 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     !locked &&
     requiresAuth &&
     !isAuthorised;
-
-  const localCanAuthorise = localCanAuthoriseBase && !qrUnsigned;
-  const localShowAuthoriseDisabled = localCanAuthoriseBase && qrUnsigned;
 
   const localCanUnauthorise =
     (frameMode === 'view') &&
@@ -318914,14 +318846,8 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     backendCanAuthorise === true &&
     localCanAuthoriseBase
   );
-  const canonicalCanAuthorise = canonicalCanAuthoriseBase && !qrUnsigned;
-  const canonicalShowAuthoriseDisabled = !!(
-    lifecycleAuthorityComplete &&
-    !isArchived &&
-    backendCanAuthorise === true &&
-    localCanAuthoriseBase &&
-    qrUnsigned
-  );
+  const canonicalCanAuthorise = canonicalCanAuthoriseBase;
+  const canonicalShowAuthoriseDisabled = false;
   const canonicalCanUnauthorise = !!(
     lifecycleAuthorityComplete &&
     !isArchived &&
@@ -330181,7 +330107,7 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
       return { summary: 'UNPROCESSED', tools: 'UNPROCESSED' };
     }
     if (statusUpper === 'PENDING_AUTH' || statusUpper === 'AWAITING_AUTH' || statusUpper === 'AWAITING_AUTHORISATION') {
-      return { summary: 'AWAITING_AUTHORISATION', tools: 'AWAITING_AUTHORISATION' };
+      return { summary: 'PENDING_AUTH', tools: 'PROCESSED' };
     }
     if (statusUpper === 'READY_FOR_INVOICE' || statusUpper === 'READY_TO_INVOICE') {
       return { summary: 'READY_FOR_INVOICE', tools: 'AUTHORISED_FOR_INVOICING' };
@@ -331202,6 +331128,7 @@ function refreshSimpleTimesheetOverviewLifecycleBadgesIfVisible(options = {}) {
     if (!unauthorised && !authorised) return false;
 
     const lifecycleTexts = new Set([
+      'processed',
       'authorised for payment',
       'authorized for payment',
       'authorised for invoicing',
@@ -331243,7 +331170,7 @@ function refreshSimpleTimesheetOverviewLifecycleBadgesIfVisible(options = {}) {
     let changed = false;
     const targetPill = ensureLifecyclePill();
     if (unauthorised) {
-      changed = setPill(targetPill, 'Awaiting Authorisation', 'pill pill-warn', 'This timesheet requires authorisation before it can proceed.') || changed;
+      changed = setPill(targetPill, 'Processed', 'pill pill-warn', 'Processing is complete. This timesheet is awaiting Office Authorise.') || changed;
       for (const pill of pills()) {
         if (pill !== targetPill && readyToPayTexts.has(normaliseText(pill.textContent).toLowerCase())) {
           pill.remove();
@@ -352199,7 +352126,7 @@ function computeTimesheetProcessingState(details, row) {
 
   // Priority order (must be mutually exclusive)
   if (requiresAuth && !authorised) {
-    return { key: 'AWAITING_AUTHORISATION', label: 'Awaiting Authorisation' };
+    return { key: 'PROCESSED', label: 'Processed' };
   }
 
   if (authorised && invoiced && paid) {
@@ -354823,6 +354750,17 @@ function renderTimesheetOverviewTab(ctx) {
     ''
   ).toUpperCase();
 
+  const canonicalManualNonQrRoute = [
+    routeFamilyForOverview,
+    routeSubfamilyForOverview,
+    underlyingFamilyForOverview
+  ].includes('MANUAL_NON_QR');
+  const canonicalQrRoute = !canonicalManualNonQrRoute && [
+    routeFamilyForOverview,
+    routeSubfamilyForOverview,
+    underlyingFamilyForOverview
+  ].includes('QR');
+
   const additionalSeqForOverview = Number(
     details.additional_seq ??
     details.contract_week_additional_seq ??
@@ -355547,7 +355485,7 @@ function renderTimesheetOverviewTab(ctx) {
   }
 
   if (authInfo.showAwaitingBadge) {
-    addStage('Awaiting Authorisation', 'pill-warn', 'This timesheet requires authorisation before it can proceed.');
+    addStage('Processed', 'pill-warn', 'Processing is complete. This timesheet is awaiting Office Authorise.');
   }
 
   if (payOnHold) {
@@ -355574,122 +355512,9 @@ function renderTimesheetOverviewTab(ctx) {
     addStage(payLineHoldBadge.label, payLineHoldBadge.cls, payLineHoldBadge.title);
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // QR detection + hash-aware truth model
-  // ─────────────────────────────────────────────────────────────
-  // IMPORTANT: do not let SUMMARY-row qr_status drive modal actions (can be stale after rotation).
-  const qrStatusAny = String(details.qr_status || ts.qr_status || '').toUpperCase();
-  const qrTokenAny  = (details.qr_token ?? ts.qr_token ?? null);
-  const qrGenAny    = (details.qr_generated_at ?? ts.qr_generated_at ?? null);
-  const qrScanAny   = (details.qr_scanned_at ?? ts.qr_scanned_at ?? null);
-  const qrLastSentHashAny = (ts.qr_last_sent_hash ?? details?.timesheet?.qr_last_sent_hash ?? null);
-
-  const hasAnyQrToken = !!(qrTokenAny && String(qrTokenAny).trim());
-  const hasAnyQrGen   = !!qrGenAny;
-  const hasAnyQrScan  = !!qrScanAny;
-  const hasAnyLastSentHash = !!(qrLastSentHashAny && String(qrLastSentHashAny).trim());
-
-  // ✅ FIX: do NOT rely on ts.is_qr (not a real DB column). Prefer view row.is_qr, then backend hints, then QR fields/hashes.
-  const isQr =
-    !!row?.is_qr ||
-    !!details?.is_qr ||
-    !!actionFlags?.is_qr ||
-    !!qrStatusAny ||
-    hasAnyQrToken ||
-    hasAnyQrGen ||
-    hasAnyQrScan ||
-    hasAnyLastSentHash;
-
-  const qrStatus = isQr ? qrStatusAny : '';
-  const hasQrToken = isQr ? hasAnyQrToken : false;
-  const hasQrGen   = isQr ? hasAnyQrGen   : false;
-  const hasQrScan  = isQr ? hasAnyQrScan  : false;
-  const hasQrLastSentHash = isQr ? hasAnyLastSentHash : false;
-
-  const qrIsCancelled = (qrStatus === 'CANCELLED');
-  const qrIsExpired   = (qrStatus === 'EXPIRED');
-
-  // ✅ “issued/awaiting signature” is true if (token+gen) OR last_sent_hash exists.
-  const hasIssuedProof = (hasQrToken && hasQrGen) || hasQrLastSentHash;
-
-  const qrNotYetSentToCandidate =
-    (qrStatus === 'PENDING') && !hasIssuedProof && !hasQrScan;
-
-  const qrWaitingForSignatureUpload =
-    (qrStatus === 'PENDING') && hasIssuedProof && !hasQrScan;
-
-  const qrSignedReceived =
-    (qrStatus === 'USED') || hasQrScan;
-
-  const signedPdfKey =
-    details.manual_pdf_r2_key ||
-    ts.manual_pdf_r2_key ||
-    null;
-
-  const hasSignedPdf = !!(signedPdfKey && String(signedPdfKey).trim());
-  const hasScan      = !!hasQrScan;
-
-  // Prefer backend boolean; if missing, fallback so UI updates immediately after /qr-resend.
-  const qrCanResendSameHours =
-    (typeof actionFlags.qr_can_resend_same_hours === 'boolean')
-      ? actionFlags.qr_can_resend_same_hours
-      : (qrWaitingForSignatureUpload && hasQrLastSentHash);
-
-  const qrSignedMatchesHours =
-    (typeof actionFlags.qr_completed_matches_hours === 'boolean')
-      ? actionFlags.qr_completed_matches_hours
-      : false;
-
-  // QR-friendly stage badges
-  if (isQr && qrStatus && !candidateOfficeProjectionUiReady) {
-    if (qrIsCancelled) {
-      addStage('QR Pack cancelled', 'pill-warn', 'The previous QR Pack is no longer valid. Enable QR submission again only where the server permits it.');
-    } else if (qrIsExpired) {
-      addStage('QR Pack expired', 'pill-warn', 'The previous QR Pack is no longer valid. Enable QR submission again only where the server permits it.');
-    } else if (qrNotYetSentToCandidate && qrStatus === 'PENDING') {
-      if (!hasHours) {
-        addStage(
-          'QR Timesheet not yet issued – Awaiting Hours from Candidate',
-          'pill-info',
-          'No hours are recorded for this QR timesheet yet. The candidate must enter hours in the app before a QR timesheet can be issued.'
-        );
-      } else {
-        addStage(
-          'QR Timesheet ready to send',
-          'pill-info',
-          'Hours are recorded, but no current QR Pack has been issued. CloudTMS will prepare it through the normal Candidate QR Pack lifecycle.'
-        );
-      }
-    } else if (qrWaitingForSignatureUpload && qrStatus === 'PENDING') {
-      if (qrCanResendSameHours) {
-        addStage(
-          'QR Timesheet Hours received – Awaiting signature',
-          'pill-warn',
-          'Hours are recorded and a QR timesheet has been issued. The candidate/manager must sign and upload the signed copy.'
-        );
-      } else if (hasHours) {
-        addStage(
-          'QR Timesheet ready to send',
-          'pill-info',
-          'Hours have changed since the last QR Pack was issued, so the previous pack is no longer valid for the current hours. The server-owned replacement flow must create the next generation.'
-        );
-      }
-    } else if (qrSignedReceived && hasScan && hasSignedPdf) {
-      if (qrSignedMatchesHours) {
-        addStage(
-          'QR Completed – Signed timesheet matches current hours',
-          'pill-ok',
-          'A signed QR timesheet has been received and it matches the hours currently recorded in the system.'
-        );
-      } else {
-        addStage(
-          'QR Signed upload received – Does not match current hours',
-          'pill-warn',
-          'A signed QR Timesheet exists, but it does not match the current hours. Use the server-owned replacement flow where eligible so the new QR Timesheet can be signed.'
-        );
-      }
-    }
-  }
+  // Candidate submission lifecycle—including every QR Pack stage—is owned
+  // exclusively by the canonical Candidate Office projection. Historic QR
+  // columns are neither presentation authority nor Office action authority.
 
   if (isManualOnly) {
     addStage(
@@ -355726,7 +355551,7 @@ function renderTimesheetOverviewTab(ctx) {
   // Route label (stable; never show action text here)
   // ─────────────────────────────────────────────────────────────
   const routeLabel = (() => {
-    if (isQr && qrStatus) return 'QR';
+    if (canonicalQrRoute) return 'QR';
 
     if (sheetScope === 'WEEKLY') {
       if (manualAdditionalForOverview) return 'Manual';
@@ -355750,14 +355575,8 @@ function renderTimesheetOverviewTab(ctx) {
   })();
 
   const routeTitle = (() => {
-    if (isQr && qrStatus) {
-      if (qrIsCancelled) return 'The QR Pack is cancelled. Enable QR submission again only where the server permits it.';
-      if (qrIsExpired)   return 'The QR Pack is expired. Enable QR submission again only where the server permits it.';
-      if (qrNotYetSentToCandidate && !hasHours) return 'QR route is enabled but no hours have been entered yet.';
-      if (qrNotYetSentToCandidate && hasHours)  return 'QR route is ready to send for the current hours.';
-      if (qrWaitingForSignatureUpload) return 'QR timesheet issued. Awaiting signed upload.';
-      if (qrSignedReceived) return 'QR signed upload has been received.';
-      return 'QR timesheet route.';
+    if (routeLabel === 'QR') {
+      return 'This timesheet is on the QR-only route. Candidate Submission shows the current QR Pack lifecycle.';
     }
 
     if (routeLabel === 'Electronic') {
@@ -355898,6 +355717,8 @@ function renderTimesheetOverviewTab(ctx) {
 
     const canAllowQrAgain   = !!actionFlags.can_allow_qr_again;
     const canAllowElecAgain = !!actionFlags.can_allow_electronic_again;
+    const canSwitchToManual = !!actionFlags.can_switch_to_manual;
+    const canConvertQrToManualOnly = !!actionFlags.can_convert_qr_to_manual_only;
     const candidateOfficeRouteUiReady = candidateOfficeProjectionUiReady &&
       window.CloudTMSCandidateOfficeBridge.capabilities.permissions.change_route === true;
 
@@ -355958,7 +355779,7 @@ function renderTimesheetOverviewTab(ctx) {
     // timesheet is authorised, archived, or its permission surface is not trusted.
     if (!isAdjustment && !sourceTimesheetActionsBlocked) {
 
-      if (!importAuthoritative && (isPlannedWeeklyElectronic || (candidateOfficeRouteUiReady && (isWeeklyElectronicWithTs || isDailyElectronicWithTs)))) {
+      if (!importAuthoritative && (isPlannedWeeklyElectronic || (candidateOfficeRouteUiReady && canSwitchToManual && (isWeeklyElectronicWithTs || isDailyElectronicWithTs)))) {
         const title = 'Switch this timesheet into admin-managed Manual mode so you can adjust hours/schedule internally.';
         btns.push(`
           <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="switch-manual" title="${enc(title)}">
@@ -355976,8 +355797,9 @@ function renderTimesheetOverviewTab(ctx) {
         `);
       }
 
-      // Convert QR route → manual-only
-      if (candidateOfficeRouteUiReady && tsId && !locked && isQr && qrStatus) {
+      // A live Candidate QR workflow may be converted only when the canonical
+      // Office action contract expressly permits the manual-only transition.
+      if (candidateOfficeRouteUiReady && tsId && !locked && canConvertQrToManualOnly) {
         const title = 'Convert to Manual (candidate submission disabled). Admin will manage hours and evidence manually from this point.';
         btns.push(`
           <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="qr-convert-manual-only" title="${enc(title)}">
@@ -356104,6 +355926,13 @@ function renderTimesheetOverviewTab(ctx) {
   const candidateOfficeIdentityRow = tsId ? {
     ...baseSummary,
     ...row,
+    candidate_office_projection_not_applicable:
+      details.candidate_office_projection_not_applicable === true ||
+      details.effective?.candidate_office_projection_not_applicable === true ||
+      details.timesheet?.candidate_office_projection_not_applicable === true ||
+      details.contract_week?.candidate_office_projection_not_applicable === true ||
+      row.candidate_office_projection_not_applicable === true ||
+      baseSummary.candidate_office_projection_not_applicable === true,
     timesheet_id: tsId,
     current_timesheet_id: tsId,
     contract_week_id: details.contract_week_id || cw.id || row.contract_week_id || null,
@@ -365554,6 +365383,7 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
       if (!unauthorised && !authorised) return false;
 
       const lifecycleTexts = new Set([
+        'processed',
         'authorised for payment',
         'authorized for payment',
         'authorised for invoicing',
@@ -365597,9 +365427,9 @@ async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
       if (unauthorised) {
         changed = setPill(
           targetPill,
-          'Awaiting Authorisation',
+          'Processed',
           'pill pill-warn',
-          'This timesheet requires authorisation before it can proceed.'
+          'Processing is complete. This timesheet is awaiting Office Authorise.'
         ) || changed;
         for (const pill of pills()) {
           if (pill !== targetPill && readyToPayTexts.has(normaliseText(pill.textContent).toLowerCase())) {
@@ -366601,6 +366431,10 @@ function renderTimesheetEvidenceTab(ctx) {
   const tsId = row.timesheet_id || ts.timesheet_id || '';
   const candidateEvidenceIdentity = tsId ? {
     ...row,
+    candidate_office_projection_not_applicable:
+      details.candidate_office_projection_not_applicable === true ||
+      details.timesheet?.candidate_office_projection_not_applicable === true ||
+      row.candidate_office_projection_not_applicable === true,
     timesheet_id: tsId,
     contract_week_id: details.contract_week_id || row.contract_week_id || null,
     expected_row_signature:
@@ -370267,15 +370101,16 @@ async function listTimesheetsSummary(filters = {}) {
     const allowedStages = new Set([
       'ALL',
       'UNPROCESSED',
+      'PROCESSED',
       'PROCESSING_DELAYED',
-      'AWAITING_AUTHORISATION',
       'AUTHORISED_FOR_INVOICING',
       'INVOICED',
       'ARCHIVED'
     ]);
 
     if (Object.prototype.hasOwnProperty.call(f, 'tools_stage')) {
-      const ts = String(f.tools_stage || '').trim().toUpperCase();
+      const configuredStage = String(f.tools_stage || '').trim().toUpperCase();
+      const ts = configuredStage === 'AWAITING_AUTHORISATION' ? 'PROCESSED' : configuredStage;
       if (!ts || !allowedStages.has(ts)) {
         f.tools_stage = 'ALL';
       } else {
@@ -373001,7 +372836,7 @@ async function refreshTimesheetLifecycleAffectedRows(input = {}, options = {}) {
       src.canUnauthorise,
       src.can_unauthorize
     );
-    if (canAuthoriseValue === null && authorisedValue === false && processingUpper && !isLocked && !isInvoiceLocked && !isPaid && !qrUnsignedBlocked) {
+    if (canAuthoriseValue === null && authorisedValue === false && processingUpper && !isLocked && !isInvoiceLocked && !isPaid) {
       canAuthoriseValue = ['PENDING_AUTH', 'READY_FOR_AUTHORISATION', 'READY_FOR_AUTHORIZATION', 'READY_FOR_HR', 'PENDING_AUTHORISATION', 'PENDING_AUTHORIZATION'].includes(processingUpper);
     }
     if (canUnauthoriseValue === null && authorisedValue === true && !isLocked && !isInvoiceLocked && !isPaid) {

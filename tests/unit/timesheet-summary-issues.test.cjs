@@ -18,7 +18,6 @@ const canonicalOptions = [
   ['REFS_MISSING', 'Refs missing'],
   ['AWAITING_VALIDATION', 'Awaiting validation'],
   ['VALIDATION_FAILED', 'Validation failed'],
-  ['QR_AWAITING_SIGNATURE', 'QR awaiting signature'],
   ['PAIRED_NEEDS_INVOICING', 'Paired needs invoicing'],
   ['OVERPAID', 'Overpaid']
 ];
@@ -29,7 +28,7 @@ test('both timesheet Issues menus expose only canonical working issue filters', 
   }
   for (const removed of [
     'TIMESHEET_EVIDENCE', 'REFERENCE_MISSING', 'REFS_PDF_INVALID',
-    'QR_NOT_ISSUED', 'AWAITING_HR_VALIDATION'
+    'QR_NOT_ISSUED', 'QR_AWAITING_SIGNATURE', 'AWAITING_HR_VALIDATION'
   ]) {
     assert.doesNotMatch(main, new RegExp(`<option value=\"${removed}\"|\\['${removed}',`));
   }

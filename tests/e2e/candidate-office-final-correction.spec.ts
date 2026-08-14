@@ -401,8 +401,30 @@ for (const viewport of [{ label: 'desktop', width: 1440, height: 960 }, { label:
 test('Manual non-QR, HealthRoster and NHSP authoritative rows never display a Candidate lifecycle on any Office surface', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await installPatchedAssets(page);
-  await installOfficeMocks(page);
+  const mocks = await installOfficeMocks(page);
   await openPatchedTest(page);
+
+  const bridgeTransport = await page.evaluate(() => {
+    const bridge = (window as any).CloudTMSCandidateOfficeBridge;
+    const manual = {
+      row_key: 'real-shaped-daily-manual',
+      timesheet_id: '00000000-0000-4000-8000-000000000990',
+      contract_id: null,
+      contract_week_id: null,
+      route_type: 'DAILY_MANUAL',
+      route_family: 'MANUAL_NON_QR',
+      candidate_office_projection_not_applicable: true
+    };
+    return ['TIMESHEET_SUMMARY', 'SIMPLE_TIMESHEET', 'BULK_PROCESS', 'BULK_AUTHORISE']
+      .map(surface => ({ surface, html: bridge.slotHtml(surface, manual, { compact: surface !== 'SIMPLE_TIMESHEET' }) }));
+  });
+  expect(bridgeTransport).toEqual([
+    { surface: 'TIMESHEET_SUMMARY', html: '' },
+    { surface: 'SIMPLE_TIMESHEET', html: '' },
+    { surface: 'BULK_PROCESS', html: '' },
+    { surface: 'BULK_AUTHORISE', html: '' }
+  ]);
+  expect(mocks.metrics().projectionCalls).toBe(0);
 
   const result = await page.evaluate(() => {
     const presenter = (window as any).CloudTMSCandidateOfficePresenter;
@@ -457,6 +479,160 @@ test('Manual non-QR, HealthRoster and NHSP authoritative rows never display a Ca
   }
   const manualDetail = result.find(row => row.row === 'manual' && row.surface === 'SIMPLE_TIMESHEET');
   expect(manualDetail.actionCodes).toContain('ALLOW_ELECTRONIC_AGAIN');
+  expect(mocks.metrics().projectionCalls).toBe(0);
+});
+
+test('Simple Timesheet route labels and Authorise eligibility follow only canonical route and processing authority', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  const result = await page.evaluate(() => {
+    const makeCtx = (name: string, routeFamily: string, routeType: string, processingStatus: string, canAuthorise: boolean, notApplicable = false) => {
+      const timesheetId = name === 'qr-awaiting' ? '00000000-0000-4000-8000-000000000981'
+        : (name === 'qr-complete' ? '00000000-0000-4000-8000-000000000982'
+          : (name === 'manual' ? '00000000-0000-4000-8000-000000000983' : '00000000-0000-4000-8000-000000000984'));
+      const signature = `trusted-${name}`;
+      const actionFlags = {
+        can_authorise: canAuthorise,
+        can_unauthorise: false,
+        can_unprocess: false,
+        unprocess_action_visible: false,
+        can_save: routeFamily === 'MANUAL_NON_QR',
+        can_edit: routeFamily === 'MANUAL_NON_QR',
+        is_archived: false,
+        has_retained_financial_history: false,
+        read_only: false,
+        refresh_required: false,
+        requires_affected_row_refresh: false,
+        lifecycle_authority_complete: true,
+        permission_state_patch_complete: true,
+        priority_badges_patch_complete: true
+      };
+      const row: any = {
+        row_key: `timesheet:${timesheetId}`,
+        id: timesheetId,
+        timesheet_id: timesheetId,
+        current_timesheet_id: timesheetId,
+        expected_timesheet_id: timesheetId,
+        backend_row_signature: signature,
+        row_signature: signature,
+        expected_row_signature: signature,
+        route_family: routeFamily,
+        route_subfamily: routeFamily,
+        underlying_channel_family: routeFamily,
+        route_type: routeType,
+        processing_status: processingStatus,
+        summary_stage: processingStatus,
+        tools_stage: processingStatus === 'PENDING_AUTH' ? 'PROCESSED' : 'UNPROCESSED',
+        processing_status_display: processingStatus === 'PENDING_AUTH' ? 'Processed' : 'Unprocessed',
+        sheet_scope: 'DAILY',
+        submission_mode: routeFamily === 'MANUAL_NON_QR' ? 'MANUAL' : 'ELECTRONIC',
+        authorised: false,
+        is_authorised: false,
+        is_archived: false,
+        has_retained_financial_history: false,
+        can_unprocess: false,
+        unprocess_action_visible: false,
+        read_only: false,
+        locked: false,
+        lifecycle_authority_complete: true,
+        permission_state_patch_complete: true,
+        priority_badges_patch_complete: true,
+        lifecycle_state_trusted: true,
+        candidate_office_projection_not_applicable: notApplicable,
+        action_flags: actionFlags
+      };
+      return {
+        entity: 'timesheets',
+        mode: 'view',
+        data: { ...row },
+        timesheetMeta: { expected_timesheet_id: timesheetId, current_timesheet_id: timesheetId, backend_row_signature: signature },
+        timesheetDetails: {
+          ...row,
+          row: { ...row },
+          effective: { route_family: routeFamily, route_subfamily: routeFamily, underlying_channel_family: routeFamily, route_type: routeType },
+          timesheet: { ...row },
+          tsfin: { processing_status: processingStatus, authorised_at_utc: null, locked_by_invoice_id: null },
+          action_flags: actionFlags,
+          lifecycle_authority_complete: true,
+          permission_state_patch_complete: true,
+          priority_badges_patch_complete: true,
+          refresh_required: false,
+          requires_affected_row_refresh: false
+        },
+        __timesheetLifecycleTrusted: { trusted: true, timesheet_id: timesheetId, signature, backend_row_signature: signature },
+        __timesheetLifecyclePermissionStateComplete: true,
+        __timesheetLifecyclePriorityBadgesComplete: true,
+        __timesheetLifecycleCriticalStateIncomplete: false
+      };
+    };
+    const contexts = {
+      qrAwaiting: makeCtx('qr-awaiting', 'QR', 'DAILY_QR', 'UNPROCESSED', false),
+      qrComplete: makeCtx('qr-complete', 'QR', 'DAILY_QR', 'PENDING_AUTH', true),
+      manual: makeCtx('manual', 'MANUAL_NON_QR', 'DAILY_MANUAL', 'PENDING_AUTH', true, true),
+      electronic: makeCtx('electronic', 'ELECTRONIC', 'DAILY_ELECTRONIC', 'PENDING_AUTH', true)
+    };
+    const readOverview = (ctx: any) => {
+      const host = document.createElement('div');
+      host.innerHTML = (window as any).renderTimesheetOverviewTab(ctx);
+      const rowText = (label: string) => {
+        const labelNode = Array.from(host.querySelectorAll('label')).find(node => String(node.textContent || '').trim() === label);
+        return String((labelNode?.closest('.row') || labelNode?.parentElement)?.textContent || '').replace(/\s+/g, ' ').trim();
+      };
+      return { route: rowText('Route'), stage: rowText('Stage') };
+    };
+    const overview = Object.fromEntries(Object.entries(contexts).map(([key, ctx]) => [key, readOverview(ctx)]));
+    (window as any).__candidateRouteContexts = contexts;
+    return { overview };
+  });
+
+  expect(result.overview.qrAwaiting.route).toContain('QR');
+  expect(result.overview.qrComplete.route).toContain('QR');
+  expect(result.overview.manual.route).toContain('Manual');
+  expect(result.overview.manual.route).not.toContain('QR');
+  expect(result.overview.electronic.route).toContain('Electronic');
+  expect(result.overview.qrComplete.stage).toContain('Processed');
+
+  const openFixture = async (key: 'qrAwaiting' | 'qrComplete' | 'manual' | 'electronic') => {
+    const close = page.locator('#btnCloseModal');
+    if (await close.isVisible().catch(() => false)) {
+      await close.click();
+      await expect(page.locator('#modal')).toBeHidden();
+    }
+    await page.evaluate((fixtureKey) => {
+      const contexts = (window as any).__candidateRouteContexts;
+      (window as any).modalCtx = contexts[fixtureKey];
+      (window as any).showModal('Timesheet — canonical authority', [{ key: 'overview', label: 'Overview' }], () => (window as any).renderTimesheetOverviewTab((window as any).modalCtx), null, true, undefined, { kind: 'timesheets' });
+    }, key);
+    await expect(page.locator('#modal')).toBeVisible();
+  };
+
+  await openFixture('qrAwaiting');
+  await expect(page.locator('#btnTsAuthorise')).toBeHidden();
+  await openFixture('manual');
+  await expect(page.locator('#btnTsAuthorise')).toBeVisible();
+  await expect(page.locator('#btnTsAuthorise')).toBeEnabled();
+  await openFixture('electronic');
+  await expect(page.locator('#btnTsAuthorise')).toBeVisible();
+  await expect(page.locator('#btnTsAuthorise')).toBeEnabled();
+  await openFixture('qrComplete');
+
+  const modal = page.locator('#modal');
+  await expect(modal).toBeVisible();
+  await expect(modal.getByText('Processed', { exact: true })).toBeVisible();
+  await expect(modal.getByText('QR', { exact: true })).toBeVisible();
+  await expect(page.locator('#btnTsAuthorise')).toBeVisible();
+  await expect(page.locator('#btnTsAuthorise')).toBeEnabled();
+  const bounds = await modal.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: innerWidth, height: innerHeight };
+  });
+  expect(bounds.left).toBeGreaterThanOrEqual(0);
+  expect(bounds.top).toBeGreaterThanOrEqual(0);
+  expect(bounds.right).toBeLessThanOrEqual(bounds.width + 1);
+  expect(bounds.bottom).toBeLessThanOrEqual(bounds.height + 1);
 });
 
 for (const scenario of [
