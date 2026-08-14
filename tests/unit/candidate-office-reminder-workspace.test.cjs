@@ -185,6 +185,77 @@ test('lost response recovery reads a durable partial result without creating a n
   assert.equal(executeCalls, 0);
 });
 
+for (const status of [403, 429]) {
+  test(`a ${status} status-read failure preserves the unresolved batch`, async () => {
+    const window = load(
+      'candidate-office-contract-v1.js',
+      'candidate-office-reminder-workspace-v1.js'
+    );
+    let executeCalls = 0;
+    window.CloudTMSCandidateOfficeApi = {
+      fetchManagerReminderBatch: async () => {
+        const error = new Error(`status lookup failed with ${status}`);
+        error.status = status;
+        error.code = status === 403 ? 'OFFICE_PERMISSION_REQUIRED' : 'RATE_LIMITED';
+        throw error;
+      },
+      executeManagerReminderSelection: async () => { executeCalls += 1; }
+    };
+    const activeBatch = Object.freeze({
+      batchId: '00000000-0000-4000-8000-000000000001',
+      idempotencyKey: '00000000-0000-4000-8000-000000000001',
+      selection: Object.freeze({ mode: 'EXPLICIT' }),
+      exactRetryConsumed: false
+    });
+    await assert.rejects(
+      window.CloudTMSCandidateOfficeReminderWorkspace.recoverReminderBatch(activeBatch),
+      error => error.status === status && error.reminderBatchOutcomeUncertain === true
+    );
+    assert.equal(executeCalls, 0);
+  });
+}
+
+test('a later authoritative 404 after an ambiguous status failure uses the one exact retry', async () => {
+  const window = load(
+    'candidate-office-contract-v1.js',
+    'candidate-office-reminder-workspace-v1.js'
+  );
+  let statusCalls = 0;
+  const seen = [];
+  window.CloudTMSCandidateOfficeApi = {
+    fetchManagerReminderBatch: async () => {
+      statusCalls += 1;
+      const error = new Error(statusCalls === 1 ? 'rate limited' : 'not found');
+      error.status = statusCalls === 1 ? 429 : 404;
+      error.code = statusCalls === 1 ? 'RATE_LIMITED' : 'CANDIDATE_REMINDER_BATCH_NOT_FOUND';
+      throw error;
+    },
+    executeManagerReminderSelection: async request => {
+      seen.push(request);
+      return { status: 'PARTIAL', success_count: 1, failure_count: 1, skipped_count: 0 };
+    }
+  };
+  const activeBatch = Object.freeze({
+    batchId: '00000000-0000-4000-8000-000000000001',
+    idempotencyKey: '00000000-0000-4000-8000-000000000001',
+    selection: Object.freeze({ mode: 'EXPLICIT' }),
+    exactRetryConsumed: false
+  });
+  await assert.rejects(
+    window.CloudTMSCandidateOfficeReminderWorkspace.recoverReminderBatch(activeBatch),
+    error => error.status === 429 && error.reminderBatchOutcomeUncertain === true
+  );
+  let updatedBatch = null;
+  const result = await window.CloudTMSCandidateOfficeReminderWorkspace.recoverReminderBatch(activeBatch, {
+    onBatchUpdate: batch => { updatedBatch = batch; }
+  });
+  assert.equal(result.status, 'PARTIAL');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].batchId, activeBatch.batchId);
+  assert.equal(seen[0].idempotencyKey, activeBatch.idempotencyKey);
+  assert.equal(updatedBatch.exactRetryConsumed, true);
+});
+
 test('PARTIAL and FAILED are rendered as structured durable results with exact counts', () => {
   const window = load('candidate-office-reminder-workspace-v1.js');
   const render = window.CloudTMSCandidateOfficeReminderWorkspace.renderResult;

@@ -398,10 +398,11 @@
       return await window.CloudTMSCandidateOfficeApi.fetchManagerReminderBatch({ batchId: frozenBatch.batchId });
     } catch (statusError) {
       if (!isBatchNotFound(statusError)) {
-        if (isUncertainBatchError(statusError)) {
-          throw Object.assign(statusError, { reminderBatchOutcomeUncertain: true });
-        }
-        throw statusError;
+        // Once execution may already have reached the server, every status-read
+        // failure other than the exact authoritative not-found result leaves the
+        // batch outcome unresolved. A 4xx such as 403 or 429 describes the
+        // lookup request; it does not prove that the original batch was absent.
+        throw Object.assign(statusError, { reminderBatchOutcomeUncertain: true });
       }
     }
 

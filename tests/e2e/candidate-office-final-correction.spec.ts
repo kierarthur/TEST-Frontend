@@ -110,7 +110,7 @@ async function installPatchedAssets(page: Page) {
   return counts;
 }
 
-type ReminderResultMode = 'PARTIAL' | 'FAILED' | 'LOST_PARTIAL' | 'CONTINUED_UNCERTAIN' | 'RETRY_THEN_UNCERTAIN';
+type ReminderResultMode = 'PARTIAL' | 'FAILED' | 'LOST_PARTIAL' | 'CONTINUED_UNCERTAIN' | 'RETRY_THEN_UNCERTAIN' | 'STATUS_403_THEN_PARTIAL' | 'STATUS_429_THEN_PARTIAL';
 
 async function installOfficeMocks(page: Page, options: { reminderResult?: ReminderResultMode } = {}) {
   let gridPrefs: any = { grid: { timesheets: { columns: {
@@ -196,7 +196,7 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
     if (path === '/api/candidate-app/manager-reminder-batches' && request.method() === 'POST') {
       executeCalls += 1;
       executeBodies.push(request.postDataJSON());
-      if (['LOST_PARTIAL', 'CONTINUED_UNCERTAIN', 'RETRY_THEN_UNCERTAIN'].includes(String(options.reminderResult || ''))) return route.abort('failed');
+      if (['LOST_PARTIAL', 'CONTINUED_UNCERTAIN', 'RETRY_THEN_UNCERTAIN', 'STATUS_403_THEN_PARTIAL', 'STATUS_429_THEN_PARTIAL'].includes(String(options.reminderResult || ''))) return route.abort('failed');
       const failed = options.reminderResult === 'FAILED';
       const body = request.postDataJSON();
       return respond(route, {
@@ -215,6 +215,12 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
           return respond(route, { ok: false, code: 'CANDIDATE_REMINDER_BATCH_NOT_FOUND', error: 'The reminder batch was not found.' }, 404);
         }
         return respond(route, { ok: false, code: 'CANDIDATE_OFFICE_UNAVAILABLE', error: 'Temporarily unavailable.' }, 503);
+      }
+      if (!eventualReminderStatus && options.reminderResult === 'STATUS_403_THEN_PARTIAL' && statusCalls === 1) {
+        return respond(route, { ok: false, code: 'OFFICE_PERMISSION_REQUIRED', error: 'Status is temporarily unavailable.' }, 403);
+      }
+      if (!eventualReminderStatus && options.reminderResult === 'STATUS_429_THEN_PARTIAL' && statusCalls === 1) {
+        return respond(route, { ok: false, code: 'RATE_LIMITED', error: 'Status is temporarily rate limited.' }, 429);
       }
       const failed = eventualReminderStatus === 'FAILED';
       return respond(route, {
@@ -496,3 +502,37 @@ test('one exact reminder retry is consumed once and every later refresh is statu
   expect(mocks.metrics().executeCalls).toBe(2);
   expect(await page.evaluate(() => !!(window as any).__nativeDialogUsed)).toBe(false);
 });
+
+for (const scenario of [
+  { status: 403, mode: 'STATUS_403_THEN_PARTIAL' as const, viewport: { width: 1440, height: 960 }, layout: 'desktop' },
+  { status: 429, mode: 'STATUS_429_THEN_PARTIAL' as const, viewport: { width: 768, height: 900 }, layout: 'narrow' }
+]) {
+  test(`a ${scenario.status} status lookup on ${scenario.layout} retains the exact batch until durable recovery`, async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize(scenario.viewport);
+    await installPatchedAssets(page);
+    const mocks = await installOfficeMocks(page, { reminderResult: scenario.mode });
+    await openPatchedTest(page);
+    const workspace = await startReminderBatch(page);
+    await expectRecoveryOnly(workspace);
+    await expect(page.locator('#btnCloseModal')).toBeDisabled();
+    await expect(page.locator('#btnCloseModal')).toBeHidden();
+    const retained = await page.evaluate(() => sessionStorage.getItem('cloudtms.candidateOffice.managerReminderRecovery.v1'));
+    expect(retained).not.toBeNull();
+    expect(mocks.metrics().executeCalls).toBe(1);
+    expect(mocks.metrics().statusCalls).toBe(1);
+    const recoveryLayout = await workspace.evaluate(element => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth
+    }));
+    expect(recoveryLayout.scrollWidth).toBeLessThanOrEqual(recoveryLayout.clientWidth + 2);
+
+    await workspace.getByRole('button', { name: 'Refresh current state', exact: true }).click();
+    await expect(workspace.getByRole('heading', { name: 'Some reminders could not be sent', exact: true })).toBeVisible();
+    await expect(page.locator('#btnCloseModal')).toBeEnabled();
+    expect(mocks.metrics().executeCalls).toBe(1);
+    expect(mocks.metrics().statusCalls).toBe(2);
+    expect(await page.evaluate(() => sessionStorage.getItem('cloudtms.candidateOffice.managerReminderRecovery.v1'))).toBeNull();
+    expect(await page.evaluate(() => !!(window as any).__nativeDialogUsed)).toBe(false);
+  });
+}
