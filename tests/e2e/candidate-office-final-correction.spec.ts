@@ -99,7 +99,9 @@ async function installPatchedAssets(page: Page) {
   return counts;
 }
 
-async function installOfficeMocks(page: Page, options: { reminderResult?: 'PARTIAL' | 'FAILED' | 'LOST_PARTIAL' } = {}) {
+type ReminderResultMode = 'PARTIAL' | 'FAILED' | 'LOST_PARTIAL' | 'CONTINUED_UNCERTAIN' | 'RETRY_THEN_UNCERTAIN';
+
+async function installOfficeMocks(page: Page, options: { reminderResult?: ReminderResultMode } = {}) {
   let gridPrefs: any = { grid: { timesheets: { columns: {
     id: { visible: true, order: 0 },
     week_ending_date: { visible: true, order: 1 },
@@ -114,6 +116,8 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: 'PARTI
   const gridPatches: any[] = [];
   let executeCalls = 0;
   let statusCalls = 0;
+  let eventualReminderStatus: 'PARTIAL' | 'FAILED' | null = null;
+  const executeBodies: any[] = [];
   const reminderRows = [
     { key: uuid(101), name: 'Alice Smith', surname: 'Smith', sent: '2026-08-13T08:00:00Z' },
     { key: uuid(102), name: 'Ben Baines', surname: 'Baines', sent: '2026-08-12T09:00:00Z' },
@@ -180,7 +184,8 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: 'PARTI
     }
     if (path === '/api/candidate-app/manager-reminder-batches' && request.method() === 'POST') {
       executeCalls += 1;
-      if (options.reminderResult === 'LOST_PARTIAL') return route.abort('failed');
+      executeBodies.push(request.postDataJSON());
+      if (['LOST_PARTIAL', 'CONTINUED_UNCERTAIN', 'RETRY_THEN_UNCERTAIN'].includes(String(options.reminderResult || ''))) return route.abort('failed');
       const failed = options.reminderResult === 'FAILED';
       const body = request.postDataJSON();
       return respond(route, {
@@ -191,11 +196,29 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: 'PARTI
     if (/^\/api\/candidate-app\/manager-reminder-batches\/[0-9a-f-]+$/i.test(path) && request.method() === 'GET') {
       statusCalls += 1;
       const batchId = path.split('/').pop();
-      return respond(route, { ok: true, contract_version: 'OFFICE_CANDIDATE_REMINDER_BATCH_RESULT_V1', batch_id: batchId, status: 'PARTIAL', success_count: 2, skipped_count: 1, failure_count: 1, items: [] });
+      if (!eventualReminderStatus && options.reminderResult === 'CONTINUED_UNCERTAIN') {
+        return respond(route, { ok: false, code: 'CANDIDATE_OFFICE_UNAVAILABLE', error: 'Temporarily unavailable.' }, 503);
+      }
+      if (!eventualReminderStatus && options.reminderResult === 'RETRY_THEN_UNCERTAIN') {
+        if (statusCalls === 1 || statusCalls > 2) {
+          return respond(route, { ok: false, code: 'CANDIDATE_REMINDER_BATCH_NOT_FOUND', error: 'The reminder batch was not found.' }, 404);
+        }
+        return respond(route, { ok: false, code: 'CANDIDATE_OFFICE_UNAVAILABLE', error: 'Temporarily unavailable.' }, 503);
+      }
+      const failed = eventualReminderStatus === 'FAILED';
+      return respond(route, {
+        ok: true, contract_version: 'OFFICE_CANDIDATE_REMINDER_BATCH_RESULT_V1', batch_id: batchId,
+        status: failed ? 'FAILED' : 'PARTIAL', success_count: failed ? 0 : 2,
+        skipped_count: failed ? 0 : 1, failure_count: failed ? 3 : 1, items: []
+      });
     }
     return route.continue();
   });
-  return { gridPatches, metrics: () => ({ executeCalls, statusCalls }) };
+  return {
+    gridPatches,
+    resolveReminderWith: (status: 'PARTIAL' | 'FAILED') => { eventualReminderStatus = status; },
+    metrics: () => ({ executeCalls, statusCalls, executeBodies: structuredClone(executeBodies) })
+  };
 }
 
 async function openPatchedTest(page: Page) {
@@ -354,3 +377,103 @@ for (const scenario of [
     expect(await page.evaluate(() => !!(window as any).__nativeDialogUsed)).toBe(false);
   });
 }
+
+async function startReminderBatch(page: Page) {
+  await page.evaluate(() => { void (window as any).openCandidateManagerReminderWorkspace(); return true; });
+  const workspace = page.locator('#candidateManagerReminderWorkspace');
+  await expect(workspace).toBeVisible();
+  await workspace.getByLabel('Select Alice Smith').check();
+  await workspace.getByRole('button', { name: 'Send Reminders', exact: true }).click();
+  const confirmation = page.locator('[data-candidate-office-dialog="reminder-batch"]');
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Send Manager Reminders', exact: true }).click();
+  return workspace;
+}
+
+async function expectRecoveryOnly(workspace: ReturnType<Page['locator']>) {
+  await expect(workspace.getByRole('heading', { name: 'Reminder result pending', exact: true })).toBeVisible();
+  await expect(workspace.getByRole('button', { name: 'Refresh current state', exact: true })).toBeVisible();
+  await expect(workspace.locator('[data-reminder-recovery-only]')).toBeVisible();
+  await expect(workspace.locator('[data-reminder-send], [data-reminder-cancel], [data-reminder-search], [data-reminder-select-all], [data-reminder-sort], [data-reminder-page]')).toHaveCount(0);
+}
+
+test('continued reminder uncertainty locks the workspace and survives forced dismissal with the same operation', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await installPatchedAssets(page);
+  const mocks = await installOfficeMocks(page, { reminderResult: 'CONTINUED_UNCERTAIN' });
+  await openPatchedTest(page);
+  let workspace = await startReminderBatch(page);
+  await expectRecoveryOnly(workspace);
+  if (process.env.CANDIDATE_OFFICE_VISUAL_DIR) {
+    await page.screenshot({ path: resolve(process.env.CANDIDATE_OFFICE_VISUAL_DIR, 'reminder-recovery-desktop.png'), fullPage: true });
+  }
+  await expect(page.locator('#btnCloseModal')).toBeDisabled();
+  await expect(page.locator('#btnCloseModal')).toBeHidden();
+  await page.keyboard.press('Escape');
+  await expect(workspace).toBeVisible();
+  expect(mocks.metrics().executeCalls).toBe(1);
+  expect(mocks.metrics().statusCalls).toBe(1);
+
+  await workspace.getByRole('button', { name: 'Refresh current state', exact: true }).click();
+  await expectRecoveryOnly(workspace);
+  expect(mocks.metrics().executeCalls).toBe(1);
+  expect(mocks.metrics().statusCalls).toBe(2);
+
+  // Simulate a framework-level dismissal that bypasses the disabled close
+  // control. Reopening must still restore the exact retained operation.
+  await page.evaluate(() => {
+    const close = document.getElementById('btnCloseModal') as HTMLButtonElement | null;
+    if (close) { close.disabled = false; close.click(); }
+  });
+  await expect(workspace).toBeHidden();
+  await page.evaluate(() => { void (window as any).openCandidateManagerReminderWorkspace(); return true; });
+  workspace = page.locator('#candidateManagerReminderWorkspace');
+  await expectRecoveryOnly(workspace);
+  expect(mocks.metrics().executeCalls).toBe(1);
+
+  mocks.resolveReminderWith('PARTIAL');
+  await workspace.getByRole('button', { name: 'Refresh current state', exact: true }).click();
+  await expect(workspace.getByRole('heading', { name: 'Some reminders could not be sent', exact: true })).toBeVisible();
+  await expect(page.locator('#btnCloseModal')).toBeEnabled();
+  expect(mocks.metrics().executeCalls).toBe(1);
+  expect(await page.evaluate(() => sessionStorage.getItem('cloudtms.candidateOffice.managerReminderRecovery.v1'))).toBeNull();
+});
+
+test('one exact reminder retry is consumed once and every later refresh is status-only', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 412, height: 915 });
+  await installPatchedAssets(page);
+  const mocks = await installOfficeMocks(page, { reminderResult: 'RETRY_THEN_UNCERTAIN' });
+  await openPatchedTest(page);
+  const workspace = await startReminderBatch(page);
+  await expectRecoveryOnly(workspace);
+  if (process.env.CANDIDATE_OFFICE_VISUAL_DIR) {
+    await page.screenshot({ path: resolve(process.env.CANDIDATE_OFFICE_VISUAL_DIR, 'reminder-recovery-narrow.png'), fullPage: true });
+  }
+
+  const afterRetry = mocks.metrics();
+  expect(afterRetry.executeCalls).toBe(2);
+  expect(afterRetry.statusCalls).toBe(2);
+  expect(afterRetry.executeBodies).toHaveLength(2);
+  expect(afterRetry.executeBodies[1]).toEqual(afterRetry.executeBodies[0]);
+  expect(afterRetry.executeBodies[0].batch_id).toBe(afterRetry.executeBodies[0].idempotency_key);
+
+  for (let index = 0; index < 3; index += 1) {
+    await workspace.getByRole('button', { name: 'Refresh current state', exact: true }).click();
+    await expectRecoveryOnly(workspace);
+  }
+  const afterRefreshes = mocks.metrics();
+  expect(afterRefreshes.executeCalls).toBe(2);
+  expect(afterRefreshes.statusCalls).toBe(5);
+  await expect(page.locator('#btnCloseModal')).toBeDisabled();
+  await expect(page.locator('#btnCloseModal')).toBeHidden();
+
+  mocks.resolveReminderWith('FAILED');
+  await workspace.getByRole('button', { name: 'Refresh current state', exact: true }).click();
+  await expect(workspace.getByRole('heading', { name: 'Manager reminders were not sent', exact: true })).toBeVisible();
+  await expect(workspace.getByText('3 failed', { exact: false })).toBeVisible();
+  await expect(page.locator('#btnCloseModal')).toBeEnabled();
+  expect(mocks.metrics().executeCalls).toBe(2);
+  expect(await page.evaluate(() => !!(window as any).__nativeDialogUsed)).toBe(false);
+});

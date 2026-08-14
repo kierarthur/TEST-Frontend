@@ -23,7 +23,7 @@ test('loads the current main frontend asset through an explicit cache version', 
   assert.match(html, /invoice-batch-modal\.js\?v=20260803-invoice-reference-policy-r2/);
   assert.doesNotMatch(html, /invoice-batch-modal\.(?:js|css)\?v=20260728-invoice-v8-presentation-r[123]["']/);
   assert.match(html, /invoice-async-ui\.js\?v=20260730-invoice-refs-ward-r13/);
-  assert.match(html, /candidate-office-reminder-workspace-v1\.js\?v=20260813-r2/);
+  assert.match(html, /candidate-office-reminder-workspace-v1\.js\?v=20260814-r1/);
   assert.doesNotMatch(
     html,
     /invoice-batch-modal\.js\?v=20260728-invoice-async-v8(?:-correction-r5)?["']/

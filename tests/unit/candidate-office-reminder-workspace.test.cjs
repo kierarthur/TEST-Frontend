@@ -226,9 +226,69 @@ test('missing receipt recovery retries the exact frozen batch identity once', as
     idempotencyKey: '00000000-0000-4000-8000-000000000001',
     selection: Object.freeze({ mode: 'EXPLICIT' })
   });
-  const result = await window.CloudTMSCandidateOfficeReminderWorkspace.recoverReminderBatch(activeBatch);
+  let updatedBatch = null;
+  const result = await window.CloudTMSCandidateOfficeReminderWorkspace.recoverReminderBatch(activeBatch, {
+    onBatchUpdate: batch => { updatedBatch = batch; }
+  });
   assert.equal(result.status, 'FAILED');
   assert.equal(seen.length, 1);
-  assert.equal(seen[0], activeBatch);
   assert.equal(seen[0].batchId, seen[0].idempotencyKey);
+  assert.equal(seen[0].batchId, activeBatch.batchId);
+  assert.equal(seen[0].exactRetryConsumed, true);
+  assert.equal(updatedBatch, seen[0]);
+});
+
+test('a consumed exact retry makes every later 404 recovery status-only', async () => {
+  const window = load(
+    'candidate-office-contract-v1.js',
+    'candidate-office-reminder-workspace-v1.js'
+  );
+  let executeCalls = 0;
+  window.CloudTMSCandidateOfficeApi = {
+    fetchManagerReminderBatch: async () => {
+      const error = new Error('not found');
+      error.status = 404;
+      error.code = 'CANDIDATE_REMINDER_BATCH_NOT_FOUND';
+      throw error;
+    },
+    executeManagerReminderSelection: async () => { executeCalls += 1; }
+  };
+  const activeBatch = Object.freeze({
+    batchId: '00000000-0000-4000-8000-000000000001',
+    idempotencyKey: '00000000-0000-4000-8000-000000000001',
+    selection: Object.freeze({ mode: 'EXPLICIT' }),
+    exactRetryConsumed: true
+  });
+  await assert.rejects(
+    window.CloudTMSCandidateOfficeReminderWorkspace.recoverReminderBatch(activeBatch),
+    error => error.reminderBatchOutcomeUncertain === true
+  );
+  assert.equal(executeCalls, 0);
+});
+
+test('continued uncertainty renders a recovery-only workspace with no ordinary actions', () => {
+  const window = load('candidate-office-reminder-workspace-v1.js');
+  const html = window.CloudTMSCandidateOfficeReminderWorkspace.renderRecovery({
+    sending: false,
+    error: { message: 'The durable result is not available yet.' },
+    activeBatch: {
+      exactRetryConsumed: true,
+      preview: { selected_count: 3 }
+    }
+  });
+  assert.match(html, /Reminder result pending/);
+  assert.match(html, /Refresh current state/);
+  assert.match(html, /exact original reminder batch/);
+  assert.doesNotMatch(html, /data-reminder-send|data-reminder-cancel|data-reminder-search|data-reminder-select-all|data-reminder-sort|data-reminder-page/);
+});
+
+test('the send function hard-guards a retained operation before generating a new UUID', () => {
+  const workspace = source('candidate-office-reminder-workspace-v1.js');
+  const start = workspace.indexOf('async function sendReminders(state)');
+  const end = workspace.indexOf('const isUncertainBatchError', start);
+  const body = workspace.slice(start, end);
+  const retainedGuard = body.indexOf('state.activeBatch || restoredUnresolvedBatch()');
+  const returnFromGuard = body.indexOf('return;', retainedGuard);
+  const uuid = body.indexOf('crypto.randomUUID()');
+  assert.ok(retainedGuard > -1 && returnFromGuard > retainedGuard && uuid > returnFromGuard);
 });

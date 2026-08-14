@@ -4,6 +4,14 @@
   const ROOT_ID = 'candidateManagerReminderWorkspace';
   const MODAL_KIND = 'candidate-manager-reminder-workspace';
   const PAGE_SIZE = 25;
+  const RECOVERY_STORAGE_KEY = 'cloudtms.candidateOffice.managerReminderRecovery.v1';
+  const RECOVERY_PHASE = Object.freeze({
+    EXECUTING: 'EXECUTING',
+    STATUS_PROBE: 'STATUS_PROBE',
+    EXACT_RETRY_IN_PROGRESS: 'EXACT_RETRY_IN_PROGRESS',
+    UNCERTAIN_STATUS_ONLY: 'UNCERTAIN_STATUS_ONLY'
+  });
+  let unresolvedBatch = null;
   const enc = value => String(value == null ? '' : value)
     .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
@@ -24,6 +32,80 @@
       && capabilities?.surfaces?.timesheet_summary === true
       && capabilities?.permissions?.send_manager_reminder_batch === true;
   };
+  const currentOfficeUserId = () => String(
+    window.__USER_ID || window.__auth?.user?.id || window.SESSION?.user?.id || ''
+  ).trim().toLowerCase();
+  const isUuid = value => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+  const freezeBatch = batch => Object.freeze({
+    selection: Object.freeze({
+      mode: String(batch?.selection?.mode || ''),
+      included_row_keys: Object.freeze([...(batch?.selection?.included_row_keys || [])]),
+      excluded_row_keys: Object.freeze([...(batch?.selection?.excluded_row_keys || [])])
+    }),
+    catalogueRevision: String(batch?.catalogueRevision || ''),
+    preview: Object.freeze({
+      ...batch.preview,
+      selected_rows: Object.freeze([...(batch?.preview?.selected_rows || [])].map(row => Object.freeze({ ...row })))
+    }),
+    batchId: String(batch.batchId || ''),
+    idempotencyKey: String(batch.idempotencyKey || ''),
+    ownerUserId: String(batch.ownerUserId || currentOfficeUserId()),
+    phase: String(batch.phase || RECOVERY_PHASE.EXECUTING),
+    exactRetryConsumed: batch.exactRetryConsumed === true
+  });
+  const validStoredBatch = batch => {
+    const owner = currentOfficeUserId();
+    return !!owner
+      && String(batch?.ownerUserId || '').toLowerCase() === owner
+      && isUuid(batch?.batchId)
+      && batch.batchId === batch.idempotencyKey
+      && ['EXPLICIT', 'ALL_ELIGIBLE'].includes(String(batch?.selection?.mode || ''))
+      && Array.isArray(batch?.preview?.selected_rows)
+      && Number(batch?.preview?.selected_count || 0) > 0;
+  };
+  function persistUnresolvedBatch(batch) {
+    unresolvedBatch = batch || null;
+    try {
+      if (batch) window.sessionStorage?.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(batch));
+      else window.sessionStorage?.removeItem(RECOVERY_STORAGE_KEY);
+    } catch {}
+  }
+  function restoredUnresolvedBatch() {
+    if (validStoredBatch(unresolvedBatch)) return unresolvedBatch;
+    try {
+      const parsed = JSON.parse(window.sessionStorage?.getItem(RECOVERY_STORAGE_KEY) || 'null');
+      if (validStoredBatch(parsed)) {
+        unresolvedBatch = freezeBatch(parsed);
+        return unresolvedBatch;
+      }
+    } catch {}
+    persistUnresolvedBatch(null);
+    return null;
+  }
+  function setActiveBatch(state, batch) {
+    const frozen = freezeBatch(batch);
+    state.activeBatch = frozen;
+    persistUnresolvedBatch(frozen);
+    syncModalDismissalLock(state);
+    return frozen;
+  }
+  function clearActiveBatch(state) {
+    state.activeBatch = null;
+    persistUnresolvedBatch(null);
+    syncModalDismissalLock(state);
+  }
+  function syncModalDismissalLock(state) {
+    if (!isLive(state)) return;
+    const close = document.getElementById('btnCloseModal');
+    if (!close) return;
+    const locked = !!state.activeBatch && !state.result;
+    close.disabled = locked;
+    close.hidden = locked;
+    close.setAttribute('aria-disabled', locked ? 'true' : 'false');
+    close.title = locked
+      ? 'CloudTMS is retaining this reminder batch until its durable result is known.'
+      : '';
+  }
 
   function createState() {
     return {
@@ -86,12 +168,36 @@
       </div>`;
   }
 
+  function renderRecovery(state) {
+    const checking = state.sending === true;
+    return `
+      <section class="candidate-reminder-result candidate-reminder-result--warn" data-reminder-recovery-only aria-live="polite">
+        <h3>Reminder result pending</h3>
+        <p>CloudTMS is retaining the exact original reminder batch while it checks the durable result. No new reminder batch can be started from this workspace.</p>
+        <div class="candidate-reminder-result__counts">
+          <span><strong>${Number(state.activeBatch?.preview?.selected_count || 0)}</strong> selected</span>
+          <span><strong>1</strong> retained batch</span>
+          <span><strong>Protected</strong> recovery state</span>
+        </div>
+        ${state.error ? `<p role="alert">${enc(state.error.message)}</p>` : '<p>CloudTMS is checking this batch without changing its identity or selection.</p>'}
+      </section>
+      <div class="candidate-reminder-workspace__actions">
+        <button type="button" class="btn primary" data-reminder-refresh ${checking ? 'disabled' : ''}>${checking ? 'Checking current state…' : 'Refresh current state'}</button>
+      </div>`;
+  }
+
   function renderWorkspace(state, { focusSearch = false } = {}) {
     const root = document.getElementById(ROOT_ID);
     if (!root) return;
     if (state.result) {
       root.innerHTML = renderResult(state);
       bindWorkspace(state);
+      return;
+    }
+    if (state.activeBatch) {
+      root.innerHTML = renderRecovery(state);
+      bindWorkspace(state);
+      syncModalDismissalLock(state);
       return;
     }
     const count = selectedCount(state);
@@ -158,6 +264,12 @@
   }
 
   async function loadPage(state, requestedPage, { resetRevision = false, focusSearch = false } = {}) {
+    if (state.activeBatch || restoredUnresolvedBatch()) {
+      if (!state.activeBatch) state.activeBatch = restoredUnresolvedBatch();
+      state.loading = false;
+      renderWorkspace(state);
+      return;
+    }
     state.controller?.abort();
     state.controller = new AbortController();
     state.loading = true;
@@ -206,6 +318,16 @@
   }
 
   async function sendReminders(state) {
+    const retained = state.activeBatch || restoredUnresolvedBatch();
+    if (retained) {
+      state.activeBatch = retained;
+      state.error = Object.freeze({
+        stale: true,
+        message: 'CloudTMS is retaining the original reminder batch. Refresh current state to recover its durable result.'
+      });
+      renderWorkspace(state);
+      return;
+    }
     const count = selectedCount(state);
     if (!count || state.sending) return;
     const trigger = document.querySelector(`#${ROOT_ID} [data-reminder-send]`);
@@ -225,17 +347,20 @@
         trigger
       });
       if (!confirmation?.confirmed) return;
-      state.activeBatch = Object.freeze({
+      setActiveBatch(state, {
         selection,
         catalogueRevision: state.catalogueRevision,
         preview,
         batchId,
-        idempotencyKey: batchId
+        idempotencyKey: batchId,
+        ownerUserId: currentOfficeUserId(),
+        phase: RECOVERY_PHASE.EXECUTING,
+        exactRetryConsumed: false
       });
       const result = await executeOrRecoverReminderBatch(state);
       if (!isLive(state)) return;
       state.result = result;
-      state.activeBatch = null;
+      clearActiveBatch(state);
     } catch (error) {
       if (!isLive(state)) return;
       const normalized = window.CloudTMSCandidateOfficeContract.normalizeCandidateOfficeError(error);
@@ -246,7 +371,7 @@
             message: 'CloudTMS could not confirm the reminder result. Refresh current state to recover this same batch safely; do not start another batch.'
           })
         : normalized;
-      if (error?.reminderBatchOutcomeUncertain !== true) state.activeBatch = null;
+      if (error?.reminderBatchOutcomeUncertain !== true) clearActiveBatch(state);
     } finally {
       if (isLive(state)) {
         state.sending = false;
@@ -267,9 +392,10 @@
     return window.CloudTMSCandidateOfficeApi.executeManagerReminderSelection(activeBatch);
   }
 
-  async function recoverReminderBatch(activeBatch) {
+  async function recoverReminderBatch(activeBatch, { onBatchUpdate = () => {} } = {}) {
+    let frozenBatch = activeBatch;
     try {
-      return await window.CloudTMSCandidateOfficeApi.fetchManagerReminderBatch({ batchId: activeBatch.batchId });
+      return await window.CloudTMSCandidateOfficeApi.fetchManagerReminderBatch({ batchId: frozenBatch.batchId });
     } catch (statusError) {
       if (!isBatchNotFound(statusError)) {
         if (isUncertainBatchError(statusError)) {
@@ -279,14 +405,29 @@
       }
     }
 
+    if (frozenBatch.exactRetryConsumed === true) {
+      const error = Object.assign(new Error('CloudTMS has not yet published the durable reminder result.'), {
+        status: 404,
+        code: 'CANDIDATE_REMINDER_BATCH_NOT_FOUND',
+        reminderBatchOutcomeUncertain: true
+      });
+      throw error;
+    }
+
     // No durable result exists: retry the exact frozen request and key. This is
     // safe whether the first request never reached the server or lost its reply.
+    frozenBatch = freezeBatch({
+      ...frozenBatch,
+      phase: RECOVERY_PHASE.EXACT_RETRY_IN_PROGRESS,
+      exactRetryConsumed: true
+    });
+    onBatchUpdate(frozenBatch);
     try {
-      return await executeExactReminderBatch(activeBatch);
+      return await executeExactReminderBatch(frozenBatch);
     } catch (retryError) {
       if (!isUncertainBatchError(retryError)) throw retryError;
       try {
-        return await window.CloudTMSCandidateOfficeApi.fetchManagerReminderBatch({ batchId: activeBatch.batchId });
+        return await window.CloudTMSCandidateOfficeApi.fetchManagerReminderBatch({ batchId: frozenBatch.batchId });
       } catch (finalError) {
         throw Object.assign(finalError, { reminderBatchOutcomeUncertain: true });
       }
@@ -300,7 +441,10 @@
       return await executeExactReminderBatch(activeBatch);
     } catch (error) {
       if (!isUncertainBatchError(error)) throw error;
-      return recoverReminderBatch(activeBatch);
+      setActiveBatch(state, { ...activeBatch, phase: RECOVERY_PHASE.STATUS_PROBE });
+      return recoverReminderBatch(state.activeBatch, {
+        onBatchUpdate: batch => setActiveBatch(state, batch)
+      });
     }
   }
 
@@ -314,14 +458,20 @@
     state.error = null;
     renderWorkspace(state);
     try {
-      state.result = await recoverReminderBatch(state.activeBatch);
-      state.activeBatch = null;
+      state.result = await recoverReminderBatch(state.activeBatch, {
+        onBatchUpdate: batch => setActiveBatch(state, batch)
+      });
+      clearActiveBatch(state);
     } catch (error) {
+      setActiveBatch(state, {
+        ...state.activeBatch,
+        phase: RECOVERY_PHASE.UNCERTAIN_STATUS_ONLY
+      });
       const normalized = window.CloudTMSCandidateOfficeContract.normalizeCandidateOfficeError(error);
       state.error = Object.freeze({
         ...normalized,
         stale: true,
-        message: 'CloudTMS still cannot confirm the reminder result. Keep this window open and use Refresh current state again; the same batch identity is being preserved.'
+        message: 'CloudTMS still cannot confirm the reminder result. Use Refresh current state again; the exact original batch identity and selection are being preserved.'
       });
     } finally {
       if (isLive(state)) {
@@ -385,6 +535,14 @@
     if (typeof window.showModal !== 'function') throw new Error('The CloudTMS modal service is unavailable.');
     const state = createState();
     state.instance = crypto.randomUUID();
+    state.activeBatch = restoredUnresolvedBatch();
+    state.loading = !state.activeBatch;
+    if (state.activeBatch) {
+      state.error = Object.freeze({
+        stale: true,
+        message: 'CloudTMS is retaining an unresolved reminder batch from this Office session. Refresh current state to recover its durable result.'
+      });
+    }
     window.showModal(
       'Send Manager Reminders',
       [{ key: 'main', label: 'Eligible Timesheets' }],
@@ -405,8 +563,14 @@
       }
     );
     renderWorkspace(state);
-    await loadPage(state, 1, { resetRevision: true });
+    syncModalDismissalLock(state);
+    if (!state.activeBatch) await loadPage(state, 1, { resetRevision: true });
   }
+
+  window.addEventListener?.('cloudtms:office-session-cleared', () => persistUnresolvedBatch(null));
+  window.addEventListener?.('cloudtms:office-session-ready', () => {
+    if (unresolvedBatch && !validStoredBatch(unresolvedBatch)) persistUnresolvedBatch(null);
+  });
 
   Object.assign(window, {
     CloudTMSCandidateOfficeReminderWorkspace: Object.freeze({
@@ -417,7 +581,9 @@
       isSelected,
       formatDateTime,
       renderResult,
-      recoverReminderBatch
+      renderRecovery,
+      recoverReminderBatch,
+      restoredUnresolvedBatch
     }),
     openCandidateManagerReminderWorkspace
   });
