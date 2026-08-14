@@ -282,10 +282,13 @@ test('Timesheet Summary Candidate Submission column reorders, resizes, persists 
   const resizer = candidate.locator('.col-resizer');
   const box = await resizer.boundingBox();
   if (!box) throw new Error('Candidate Submission resize handle was not measurable.');
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + 75, box.y + box.height / 2, { steps: 8 });
-  await page.mouse.up();
+  const startX = Math.round(box.x + box.width / 2);
+  await resizer.dispatchEvent('mousedown', { button: 0, clientX: startX, clientY: Math.round(box.y + box.height / 2) });
+  await page.evaluate(({ from, to }) => {
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: to }));
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: to }));
+    return { from, to };
+  }, { from: startX, to: startX + 75 });
   await expect.poll(async () => (await candidate.evaluate(element => Math.round(element.getBoundingClientRect().width))) > widthBefore + 20).toBe(true);
   await expect.poll(async () => mocks.gridPatches.some(patch => Number(patch?.prefs?.columns?.candidate_submission?.width) > widthBefore)).toBe(true);
 
