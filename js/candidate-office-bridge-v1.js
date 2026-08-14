@@ -226,6 +226,9 @@
   function embeddedSummaryResult(row) {
     if (row?.candidate_office_projection_loaded !== true) return null;
     const identity = window.CloudTMSCandidateOfficeApi.buildIdentity(row);
+    if (row?.candidate_office_projection_not_applicable === true) {
+      return { identity,projection: null,error: null,notApplicable: true };
+    }
     const rawProjection = row?.candidate_office_projection;
     if (rawProjection && typeof rawProjection === 'object') {
       try {
@@ -257,6 +260,7 @@
     if (!row?.timesheet_id) return;
     const embedded = embeddedSummaryResult(row);
     if (embedded) {
+      if (embedded.notApplicable) return;
       const slot = document.createElement('div');
       slot.className = 'candidate-office-slot';
       slot.dataset.candidateOfficeSlot = '1';
@@ -311,7 +315,8 @@
     const pendingRowsByExactKey = new Map();
     for (const row of requestedRows) {
       const identity = window.CloudTMSCandidateOfficeApi.buildIdentity(row);
-      embeddedSummaryResult(row);
+      const embedded = embeddedSummaryResult(row);
+      if (embedded?.notApplicable) continue;
       if (!findProjection('TIMESHEET_SUMMARY', identity.row_key, identity)) {
         pendingRowsByExactKey.set(cacheKeyFor('TIMESHEET_SUMMARY', identity), identity);
       }

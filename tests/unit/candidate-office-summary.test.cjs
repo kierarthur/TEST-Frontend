@@ -219,7 +219,10 @@ test('Summary integration renders embedded projections immediately and keeps a b
   assert.match(bridge, /row\?\.candidate_office_projection_loaded !== true/);
   assert.match(bridge, /normalizeOfficeCandidateProjection\(\s*rawProjection,\{ surface: 'TIMESHEET_SUMMARY', rowIdentity: identity \}/);
   assert.match(bridge, /const embedded = embeddedSummaryResult\(row\);/);
-  assert.match(bridge, /embeddedSummaryResult\(row\);\s*if \(!findProjection/);
+  assert.match(bridge, /candidate_office_projection_not_applicable === true/);
+  assert.match(bridge, /if \(embedded\.notApplicable\) return/);
+  assert.match(bridge, /if \(embedded\?\.notApplicable\) continue/);
+  assert.match(bridge, /if \(!findProjection\('TIMESHEET_SUMMARY', identity\.row_key, identity\)\)/);
   assert.match(bridge, /async function sortSummaryRowsByCandidateStatus/);
   assert.match(bridge, /partitionProjectionIdentities\(Array\.from\(pendingRowsByExactKey\.values\(\)\)\)/);
   assert.match(bridge, /if \(surface === 'SIMPLE_TIMESHEET'\) loadSlot\(slot\);\s*else queueBatchSlot\(slot\)/);

@@ -25,7 +25,7 @@ test('loads the current main frontend asset through an explicit cache version', 
   assert.match(html, /invoice-async-ui\.js\?v=20260730-invoice-refs-ward-r13/);
   assert.match(html, /candidate-office-reminder-workspace-v1\.js\?v=20260814-r2/);
   assert.match(html, /candidate-office-presenter-v1\.js\?v=20260814-r4/);
-  assert.match(html, /candidate-office-bridge-v1\.js\?v=20260814-r4/);
+  assert.match(html, /candidate-office-bridge-v1\.js\?v=20260814-r5/);
   assert.doesNotMatch(
     html,
     /invoice-batch-modal\.js\?v=20260728-invoice-async-v8(?:-correction-r5)?["']/

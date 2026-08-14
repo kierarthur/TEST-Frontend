@@ -172,6 +172,7 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
           return {
             ...row,
             candidate_office_projection_loaded: true,
+            candidate_office_projection_not_applicable: false,
             candidate_office_projection: projectionFor(identity, __status),
             candidate_office_projection_error: null
           };
