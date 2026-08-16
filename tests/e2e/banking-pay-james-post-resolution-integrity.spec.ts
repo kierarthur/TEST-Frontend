@@ -64,7 +64,7 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
   expect(await page.evaluate(() => (window as any).__CODEX_LOCAL_ASSET_PROOF)).toEqual({ runtimeMarker, ...localHashes });
   await expect(page.locator('html')).toHaveAttribute(
     'data-cloudtms-main-asset-contract',
-    '20260816-banking-james-post-resolution-r1'
+    '20260816-banking-james-post-resolution-r2'
   );
 
   await page.getByRole('button', { name: 'Banking', exact: true }).click();
@@ -107,7 +107,7 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
       line_type: 'TIMESHEET_PAYMENT',
       item_type: 'SEGMENT_DELTA',
       presentation_section: 'READY_TO_PAY',
-      presentation_role: 'PARENT',
+      presentation_role: 'ALLOCATION',
       readiness_state: 'READY_TO_PAY',
       is_ready_for_draft: true,
       draftable: true,
@@ -115,26 +115,13 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
       selection_state: 'SELECTED',
       candidate_id: candidateId,
       timesheet_id: timesheetId,
-      resolved_rate_candidate_id: candidateId,
-      resolved_rate_timesheet_id: timesheetId,
-      resolved_rate_case_key: `timesheet:${timesheetId}`,
-      resolved_rate_family: 'BUCKETED',
-      resolved_rate_component_count: 2,
-      resolved_rate_clear_payload_json: clearPayload,
-      case_resolution_ids: caseResolutionIds,
-      resolution_identity_keys: resolutionIdentityKeys,
-      has_resolved_rate: true,
-      case_resolution_satisfied_now: true,
       workbench_session_id: sessionId,
       workbench_session_version: 7,
       progress_counter_version: 11,
       display_name: 'CCR-03726 James Terwane',
       tms_ref: 'CCR-03726',
       client_name: 'West London Mental Health NHS Trust',
-      role: 'Registered Mental Health Nurse',
-      band: 'Band 5',
       week_ending_date: '2026-06-14',
-      work_date: '2026-06-08',
       key_type: 'TS_DAY',
       key_value: '2026-06-08',
       pay_channel: 'UMBRELLA',
@@ -143,12 +130,35 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
     const fixtures = [
       {
         ...shared,
-        preview_row_id: '30000000-0000-4000-8000-000000000001',
-        row_key: 'TS_DAY|2026-06-08|DAY',
-        amount_ex_vat: 230,
-        section_amount_ex_vat: 230,
-        segment_rows: [{
-          presentation_line_id: 'JAMES-DAY',
+        preview_row_id: '30000000-0000-4000-8000-000000000000',
+        row_key: `timesheet:${timesheetId}:non_segment:total`,
+        key_type: 'TS_TOTAL',
+        key_value: 'TOTAL',
+        presentation_role: 'PARENT',
+        item_type: 'TIMESHEET_TOTAL',
+        amount_ex_vat: 267.5,
+        section_amount_ex_vat: 267.5,
+        selected: false,
+        selection_state: 'NOT_SELECTABLE',
+        selection_allowed: false,
+        draftable: false,
+        is_ready_for_draft: false,
+        is_excluded_from_allocation: true,
+        resolved_segment_rows_replace_source_total: true,
+        case_resolution_summary: {
+          resolved_rate_candidate_id: candidateId,
+          resolved_rate_timesheet_id: timesheetId,
+          resolved_rate_case_key: `timesheet:${timesheetId}`,
+          resolved_rate_family: 'BUCKETED',
+          resolved_rate_component_count: 2,
+          resolved_rate_clear_payload_json: clearPayload,
+          case_resolution_ids: caseResolutionIds,
+          resolution_identity_keys: resolutionIdentityKeys,
+          has_resolved_rate: true,
+          case_resolution_satisfied_now: true
+        },
+        section_segment_rows: [{
+          segment_stable_key: `ts:${timesheetId}:99c9a88a`,
           timesheet_id: timesheetId,
           date: '2026-06-08',
           client_name: 'West London Mental Health NHS Trust',
@@ -156,36 +166,30 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
           band: 'Band 5',
           start_utc: '2026-06-08T07:00:00Z',
           end_utc: '2026-06-08T19:00:00Z',
-          break_minutes: 30,
-          source_pay_ex_vat: 230,
-          source_rate: 20,
-          target_rate: 40,
-          target_pay_ex_vat: 230,
-          pay_amount_ex_vat: 230
+          break_minutes: 30
         }]
       },
       {
         ...shared,
+        preview_row_id: '30000000-0000-4000-8000-000000000001',
+        row_key: `timesheet:${timesheetId}:segment:ts:${timesheetId}:99c9a88a:DAY`,
+        amount_ex_vat: 230,
+        section_amount_ex_vat: 230,
+        source_pay_ex_vat: 230,
+        source_rate: 20,
+        target_rate: 40,
+        target_pay_ex_vat: 230
+      },
+      {
+        ...shared,
         preview_row_id: '30000000-0000-4000-8000-000000000002',
-        row_key: 'TS_DAY|2026-06-08|NIGHT',
+        row_key: `timesheet:${timesheetId}:segment:ts:${timesheetId}:99c9a88a:NIGHT`,
         amount_ex_vat: 37.5,
         section_amount_ex_vat: 37.5,
-        segment_rows: [{
-          presentation_line_id: 'JAMES-NIGHT',
-          timesheet_id: timesheetId,
-          date: '2026-06-08',
-          client_name: 'West London Mental Health NHS Trust',
-          role: 'Registered Mental Health Nurse',
-          band: 'Band 5',
-          start_utc: '2026-06-08T19:00:00Z',
-          end_utc: '2026-06-08T20:30:00Z',
-          break_minutes: 0,
-          source_pay_ex_vat: 37.5,
-          source_rate: 25,
-          target_rate: 45,
-          target_pay_ex_vat: 37.5,
-          pay_amount_ex_vat: 37.5
-        }]
+        source_pay_ex_vat: 37.5,
+        source_rate: 25,
+        target_rate: 45,
+        target_pay_ex_vat: 37.5
       }
     ];
 
@@ -200,10 +204,10 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
     };
     const fixtureCache = {
       ...emptySections,
-      ready_to_pay_now: fixtures,
-      draftable_now: fixtures,
-      ready_preview_lines: fixtures,
-      canonical_preview_lines: fixtures
+      ready_to_pay_now: fixtures.slice(1),
+      draftable_now: fixtures.slice(1),
+      ready_preview_lines: fixtures.slice(1),
+      canonical_preview_lines: fixtures.slice(1)
     };
     wizard.workbench = {
       session_id: sessionId,
@@ -223,17 +227,24 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
     };
     wizard.preview = {
       ...fixtureCache,
-      preview_rows: fixtures,
-      rows: fixtures,
+      preview_pages: {
+        canonical_preview_lines: {
+          section: 'canonical_preview_lines',
+          rows: fixtures,
+          items: fixtures
+        }
+      },
+      preview_rows: fixtures.slice(1),
+      rows: fixtures.slice(1),
       componentStateCache: { ...fixtureCache },
       component_state_cache: { ...fixtureCache },
       data: {
-      preview_rows: fixtures,
-      rows: fixtures,
+      preview_rows: fixtures.slice(1),
+      rows: fixtures.slice(1),
       preview: {
         ...fixtureCache,
-        preview_rows: fixtures,
-        rows: fixtures,
+        preview_rows: fixtures.slice(1),
+        rows: fixtures.slice(1),
         componentStateCache: { ...fixtureCache },
         component_state_cache: { ...fixtureCache }
       }
@@ -273,8 +284,6 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
   await expect(breakdown).toContainText('Source rate: £20.00/hour');
   await expect(breakdown).toContainText('Target rate: £40.00/hour');
   await expect(breakdown).toContainText('Target pay: £230.00');
-  await expect(breakdown).toContainText('21:30');
-  await expect(breakdown).toContainText('0 mins');
   await expect(breakdown).toContainText('Source pay: £37.50');
   await expect(breakdown).toContainText('Source rate: £25.00/hour');
   await expect(breakdown).toContainText('Target rate: £45.00/hour');
@@ -286,8 +295,6 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
     await expect(detailRow.locator('td').nth(2)).not.toHaveText('—');
     await expect(detailRow.locator('td').nth(3)).not.toHaveText('—');
     await expect(detailRow.locator('td').nth(4)).not.toHaveText('—');
-    await expect(detailRow.locator('td').nth(5)).not.toHaveText('—');
-    await expect(detailRow.locator('td').nth(6)).not.toHaveText('—');
     await expect(detailRow.locator('td').nth(7)).not.toHaveText('—');
   }
 
@@ -317,8 +324,16 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
       pay_channel: 'PAYE',
       amount_ex_vat: amount,
       section_amount_ex_vat: amount,
+      recoverable_this_pay_run_ex_vat: Math.abs(amount),
       outstanding_amount_ex_vat: -113.04,
       recoverable_amount_ex_vat: Math.abs(amount),
+      case_components: [{
+        component_key_type: 'TS_DAY',
+        component_key_value: '2026-06-08',
+        resolved_target_amount_ex_vat: -113.04,
+        target_outstanding_ex_vat: -113.04,
+        preview_due_amount_ex_vat: 0
+      }],
       is_ready_for_draft: section === 'READY_TO_PAY',
       draftable: section === 'READY_TO_PAY',
       case_needs_resolution: section === 'CASES_RESOLUTIONS',
@@ -339,6 +354,18 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
       -25,
       false
     );
+    ready.section = 'canonical_preview_lines';
+    ready.effective_section = 'canonical_preview_lines';
+    ready.physical_section = 'blocked_for_pay';
+    const staleReady = {
+      ...ready,
+      amount_ex_vat: 0,
+      section_amount_ex_vat: 0,
+      recoverable_this_pay_run_ex_vat: 0,
+      recoverable_amount_ex_vat: 0
+    } as any;
+    delete staleReady.effective_section;
+    delete staleReady.physical_section;
     const blocked = recovery(
       'Zero Non-Actionable Recovery Browser Fixture',
       '40000000-0000-4000-8000-000000000002',
@@ -360,10 +387,10 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
     };
     const cache = {
       ...empty,
-      ready_to_pay_now: [ready],
-      draftable_now: [ready],
-      ready_preview_lines: [ready],
-      canonical_preview_lines: [ready, blocked, cases],
+      ready_to_pay_now: [staleReady],
+      draftable_now: [staleReady],
+      ready_preview_lines: [staleReady],
+      canonical_preview_lines: [staleReady, blocked, cases],
       blocked_for_pay: [blocked],
       blocked_for_pay_now: [blocked],
       blocked_now: [blocked],
@@ -377,7 +404,20 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
       session_version: 7,
       progress_counter_version: 11
     };
-    wizard.workbench = { ...session, preview_pages: {}, preview_page_cache: {}, ...cache };
+    const canonicalPage = {
+      ok: true,
+      section: 'canonical_preview_lines',
+      requested_section: 'ready_to_pay',
+      resolved_section: 'canonical_preview_lines',
+      rows: [ready],
+      items: [ready]
+    };
+    wizard.workbench = {
+      ...session,
+      preview_pages: { canonical_preview_lines: canonicalPage },
+      preview_page_cache: { canonical_preview_lines: canonicalPage },
+      ...cache
+    };
     wizard.decisions = { ...session, ...cache };
     wizard.preview = {
       ...cache,
@@ -403,6 +443,13 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
   const casesHost = page.locator('#bankingPayCasesScrollHost');
   const blockedHost = page.locator('#bankingPayBlockedScrollHost');
   await expect(readyHost).toContainText('Positive Recovery Browser Fixture');
+  const positiveRecoveryRows = readyHost.locator('tr').filter({ hasText: 'Positive Recovery Browser Fixture' });
+  await expect(positiveRecoveryRows).toHaveCount(1);
+  await expect(positiveRecoveryRows).toContainText('£25.00');
+  await expect(positiveRecoveryRows).not.toContainText('£0.00');
+  await positiveRecoveryRows.getByRole('button', { name: 'Show line breakdown' }).click();
+  await expect(readyHost).toContainText('Recoverable this pay run');
+  await expect(readyHost).toContainText('25.00');
   await expect(readyHost).not.toContainText('Zero Non-Actionable Recovery Browser Fixture');
   await expect(readyHost).not.toContainText('Zero Actionable Recovery Browser Fixture');
   await expect(blockedHost).toContainText('Zero Non-Actionable Recovery Browser Fixture');

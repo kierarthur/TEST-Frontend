@@ -57,7 +57,8 @@ test('Ready grouped timesheets expose one exact cancel action and fail closed on
   assert.match(source, /const resolvedRateGroupClearIdentity =/);
   assert.match(source, /resolved_rate_clear_payload_json/);
   assert.match(render, /resolvedRateClearIdentities\.length !== 1/);
-  assert.match(render, /payableGroupLines\.some\(\(line\) => resolvedRateGroupClearIdentity\(line\)/);
+  assert.match(render, /resolvedRateActionLines\.some\(\(line\) => resolvedRateGroupClearIdentity\(line\)/);
+  assert.match(render, /const resolvedRateActionCarrier = resolvedRateActionLines\[0\] \|\| null/);
   assert.match(render, /BANKING_PAY_RESOLVED_RATE_GROUP_IDENTITY_CONFLICT/);
   assert.match(render, /data-action="banking:pay:clearCaseResolution"/);
   assert.match(render, />Cancel Resolved Rate<\/button>/);
@@ -75,8 +76,56 @@ test('expanded Ready timesheet breakdown renders canonical segment details rathe
   assert.match(breakdown, /segment\?\.start_utc/);
   assert.match(breakdown, /segment\?\.end_utc/);
   assert.match(breakdown, /segment\?\.break_start/);
+  assert.match(breakdown, /findExactOperationalContext/);
+  assert.match(breakdown, /contextSegment\?\.role/);
+  assert.match(breakdown, /contextSegment\?\.band/);
   assert.match(breakdown, /getLineSectionAmount\(line\)/);
   assert.match(breakdown, /Source pay:/);
   assert.match(breakdown, /Source rate:/);
   assert.match(breakdown, /Target rate:/);
+});
+
+test('authoritative row-backed page copies outrank stale duplicate component-cache copies', () => {
+  const rendering = sliceBetween(
+    'const collectUnionRows =',
+    'const hasOwnValue ='
+  );
+
+  assert.match(rendering, /const rowAuthorityScore =/);
+  assert.match(rendering, /effective_section/);
+  assert.match(rendering, /physical_section/);
+  assert.match(rendering, /score > existing\.score/);
+  assert.match(source, /evictAuthoritativeRowsFromOtherSections/);
+});
+
+test('recovery presentation allocates the certified row recovery when legacy components still report zero', () => {
+  const presentation = sliceBetween(
+    'const getOverpaymentRecoveryPresentation =',
+    'const getManualDebtRecoveryPresentation ='
+  );
+
+  assert.match(presentation, /selection_recovery_headroom_v1/);
+  assert.match(presentation, /recoverable_this_pay_run_ex_vat/);
+  assert.match(presentation, /useCertifiedRowRecoveryAllocation/);
+  assert.match(presentation, /component\.outstanding \?\? component\.original/);
+  assert.match(presentation, /Math\.min\(rawRecoverable, remainingRowRecovery\)/);
+});
+
+test('non-draftable READY parent context is merged back beside allocation children', () => {
+  const adoption = sliceBetween(
+    'const isReadyToPayDisplayContextRow =',
+    'const derivePayeesForWorkbench ='
+  );
+
+  assert.match(adoption, /presentationSection !== 'READY_TO_PAY'/);
+  assert.match(adoption, /presentationRole !== 'PARENT'/);
+  assert.match(adoption, /lineType !== 'TIMESHEET_PAYMENT'/);
+  assert.match(adoption, /const contextRows = asArray\(rowUniverse\)\.filter\(isReadyToPayDisplayContextRow\)/);
+  assert.match(adoption, /return withDisplayContext\(filtered\)/);
+  assert.match(source, /const isCanonicalReadyDisplayRow = \(row\) => isReadyToPayPreviewRow\(row\) \|\| isReadyToPayDisplayContextRow\(row\)/);
+  assert.match(source, /const previewStatePageRows = collectRowsFromPageCaches\(wiz\.preview/);
+  assert.match(source, /preview\.state\.page\.cache\.preview\.rows/);
+  assert.match(source, /const isReadyTimesheetDisplayContextLine =/);
+  assert.match(source, /!isReadyTimesheetDisplayContextLine\(line\)/);
+  assert.match(source, /asBool\(line\?\.is_excluded_from_allocation\) && !isReadyTimesheetDisplayContextLine\(line\)/);
 });

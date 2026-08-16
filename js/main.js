@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260816-banking-james-post-resolution-r1',
+  asset_version: '20260816-banking-james-post-resolution-r2',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -32782,6 +32782,43 @@ async function bankingPayPreview(pay_date) {
     ensureRowBackedPreviewSectionState();
     const previewData = isPlainObject(wiz.preview.data) ? wiz.preview.data : null;
     const previewDataPreview = previewData && isPlainObject(previewData.preview) ? previewData.preview : null;
+    const rowIdForSectionAuthority = (rowLike) => trimStr(
+      rowLike?.preview_row_id || rowLike?.previewRowId || rowLike?.row_id || rowLike?.rowId || rowLike?.id || ''
+    );
+    const authoritativeRowIds = new Set(safeRows.map(rowIdForSectionAuthority).filter(Boolean));
+    const sectionArrayKeys = {
+      canonical_preview_lines: [
+        'canonical_preview_lines', 'canonicalPreviewLines', 'preview_rows', 'previewRows',
+        'ready_preview_lines', 'readyPreviewLines', 'ready_to_pay_now', 'readyToPayNow',
+        'draftable_now', 'draftableNow'
+      ],
+      blocked_for_pay: [
+        'blocked_for_pay', 'blockedForPay', 'blocked_for_pay_now', 'blockedForPayNow',
+        'blocked_now', 'blockedNow', 'blocked_preview_lines', 'blockedPreviewLines'
+      ],
+      cases_resolutions: [
+        'case_resolution_states', 'caseResolutionStates', 'cases_resolutions', 'casesResolutions'
+      ]
+    };
+    const evictAuthoritativeRowsFromOtherSections = (target) => {
+      if (!isPlainObject(target) || authoritativeRowIds.size <= 0) return;
+      for (const [targetSection, keys] of Object.entries(sectionArrayKeys)) {
+        if (targetSection === normalisedSection) continue;
+        for (const key of keys) {
+          if (!Array.isArray(target[key])) continue;
+          target[key] = target[key].filter((row) => !authoritativeRowIds.has(rowIdForSectionAuthority(row)));
+        }
+      }
+    };
+    for (const target of [
+      wiz.workbench,
+      wiz.preview,
+      wiz.preview.componentStateCache,
+      wiz.decisions,
+      previewData,
+      previewDataPreview,
+      previewDataPreview?.componentStateCache
+    ]) evictAuthoritativeRowsFromOtherSections(target);
     if (normalisedSection === 'canonical_preview_lines') {
       wiz.workbench.canonical_preview_lines = safeRows;
       wiz.workbench.preview_rows = safeRows;
@@ -53009,6 +53046,11 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     const caseSummary = isPlainObject(line?.case_resolution_summary)
       ? line.case_resolution_summary
       : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const recoveryHeadroom = isPlainObject(line?.selection_recovery_headroom_v1)
+      ? line.selection_recovery_headroom_v1
+      : (isPlainObject(nested?.selection_recovery_headroom_v1)
+          ? nested.selection_recovery_headroom_v1
+          : {});
     const toMagnitude = (...values) => {
       const value = firstFinitePreviewNumber(...values);
       return value === null ? null : Math.abs(Math.round(value * 100) / 100);
@@ -53051,10 +53093,28 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       };
     }).filter((component) => component.original !== null || component.outstanding !== null);
 
-    const rowRecoverable = toMagnitude(getLineRowLevelAmount(line), getLineSectionAmount(line), 0) ?? 0;
+    const rowRecoverable = toMagnitude(
+      line?.recoverable_this_pay_run_ex_vat,
+      line?.recoverableThisPayRunExVat,
+      nested?.recoverable_this_pay_run_ex_vat,
+      nested?.recoverableThisPayRunExVat,
+      recoveryHeadroom?.recoverable_amount_ex_vat,
+      recoveryHeadroom?.recoverableAmountExVat,
+      getLineRowLevelAmount(line),
+      getLineSectionAmount(line),
+      0
+    ) ?? 0;
+    const rawComponentRecoverableTotal = Math.round(rawComponents.reduce(
+      (total, component) => total + Math.max(0, component.recoverable_this_run ?? 0),
+      0
+    ) * 100) / 100;
+    const useCertifiedRowRecoveryAllocation = rowRecoverable > 0
+      && Math.round(rawComponentRecoverableTotal * 100) !== Math.round(rowRecoverable * 100);
     let remainingRowRecovery = rowRecoverable;
     const components = rawComponents.map((component) => {
-      const rawRecoverable = Math.max(0, component.recoverable_this_run ?? 0);
+      const rawRecoverable = useCertifiedRowRecoveryAllocation
+        ? Math.max(0, component.outstanding ?? component.original ?? 0)
+        : Math.max(0, component.recoverable_this_run ?? 0);
       const allocatedRecoverable = Math.round(Math.min(rawRecoverable, remainingRowRecovery) * 100) / 100;
       remainingRowRecovery = Math.round(Math.max(remainingRowRecovery - allocatedRecoverable, 0) * 100) / 100;
       return {
@@ -53830,9 +53890,92 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     return `READY_TO_PAY|${candidateId}|${timesheetId}`;
   };
 
+  const isReadyTimesheetDisplayContextLine = (line) => {
+    if (!isPlainObject(line)) return false;
+    const nested = getNestedLinePayload(line);
+    const section = upperTrim(
+      line?.presentation_section || line?.presentationSection ||
+      nested?.presentation_section || nested?.presentationSection || ''
+    );
+    const role = upperTrim(
+      line?.presentation_role || line?.presentationRole ||
+      nested?.presentation_role || nested?.presentationRole || ''
+    );
+    const lineType = upperTrim(
+      line?.line_type || line?.lineType || nested?.line_type || nested?.lineType || ''
+    );
+    if (section !== 'READY_TO_PAY' || role !== 'PARENT' || lineType !== 'TIMESHEET_PAYMENT') return false;
+    return !!(
+      asBool(line?.is_excluded_from_allocation ?? nested?.is_excluded_from_allocation) ||
+      (line?.selection_allowed ?? nested?.selection_allowed) === false ||
+      (line?.draftable ?? nested?.draftable) === false ||
+      (line?.is_ready_for_draft ?? nested?.is_ready_for_draft) === false
+    );
+  };
+
   const buildReadyTimesheetBreakdownEntries = (groupLines) => {
     const entries = [];
     const seen = new Set();
+    const contextSegments = [];
+
+    for (const contextLine of asArray(groupLines)) {
+      if (!isPlainObject(contextLine)) continue;
+      for (const contextSegment of getLineSectionSegmentRows(contextLine)) {
+        if (!isPlainObject(contextSegment)) continue;
+        const nestedContextSegment = getNestedLinePayload(contextSegment);
+        const identity = trimStr(
+          contextSegment?.presentation_line_id ||
+          contextSegment?.segment_id ||
+          contextSegment?.segment_key ||
+          contextSegment?.segment_stable_key ||
+          nestedContextSegment?.presentation_line_id ||
+          nestedContextSegment?.segment_id ||
+          nestedContextSegment?.segment_key ||
+          nestedContextSegment?.segment_stable_key ||
+          ''
+        );
+        contextSegments.push({ line: contextLine, segment: contextSegment, identity });
+      }
+    }
+
+    const findExactOperationalContext = (line, segment) => {
+      if (!contextSegments.length) return null;
+      const nestedLine = getNestedLinePayload(line);
+      const nestedSegment = getNestedLinePayload(segment);
+      const lineIdentityText = [
+        line?.row_key, line?.rowKey, line?.source_ref, line?.sourceRef,
+        line?.segment_id, line?.segment_key, line?.segment_stable_key,
+        nestedLine?.row_key, nestedLine?.source_ref, nestedLine?.segment_id,
+        nestedLine?.segment_key, nestedLine?.segment_stable_key,
+        segment?.presentation_line_id, segment?.segment_id, segment?.segment_key,
+        segment?.segment_stable_key, nestedSegment?.presentation_line_id,
+        nestedSegment?.segment_id, nestedSegment?.segment_key,
+        nestedSegment?.segment_stable_key
+      ].map((value) => trimStr(value)).filter(Boolean);
+      const identityMatches = contextSegments.filter((candidate) => (
+        candidate.identity && lineIdentityText.some((value) => value === candidate.identity || value.includes(candidate.identity))
+      ));
+      if (identityMatches.length === 1) return identityMatches[0];
+      if (identityMatches.length > 1) return null;
+
+      const workDate = trimStr(
+        segment?.date || segment?.work_date || segment?.linked_shift_date ||
+        nestedSegment?.date || nestedSegment?.work_date ||
+        (getLineKeyType(line) === 'TS_DAY' ? getLineKeyValue(line) : '') || ''
+      );
+      if (workDate) {
+        const dateMatches = contextSegments.filter((candidate) => {
+          const nestedCandidate = getNestedLinePayload(candidate.segment);
+          const candidateDate = trimStr(
+            candidate.segment?.date || candidate.segment?.work_date || candidate.segment?.linked_shift_date ||
+            nestedCandidate?.date || nestedCandidate?.work_date || ''
+          );
+          return candidateDate === workDate;
+        });
+        if (dateMatches.length === 1) return dateMatches[0];
+      }
+      return contextSegments.length === 1 ? contextSegments[0] : null;
+    };
 
     for (const line of asArray(groupLines)) {
       if (!isPlainObject(line) || isSyntheticTimesheetResidualLine(line)) continue;
@@ -53875,6 +54018,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
 
       operationalRows.forEach((segment, index) => {
         const nestedSegment = getNestedLinePayload(segment);
+        const operationalContext = findExactOperationalContext(line, segment);
         const segmentIdentity = trimStr(
           segment?.presentation_line_id ||
           segment?.segment_id ||
@@ -53893,6 +54037,8 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
           entry_type: 'SEGMENT',
           line,
           segment,
+          context_line: operationalContext?.line || null,
+          context_segment: operationalContext?.segment || null,
           segment_index: index,
           segment_count: operationalRows.length,
           preview_row_id: previewRowId,
@@ -53979,6 +54125,10 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
             ${entries.map((entry) => {
               const line = entry.line;
               const segment = entry.segment;
+              const contextLine = isPlainObject(entry.context_line) ? entry.context_line : {};
+              const contextSegment = isPlainObject(entry.context_segment) ? entry.context_segment : {};
+              const nestedContextLine = getNestedLinePayload(contextLine);
+              const nestedContextSegment = getNestedLinePayload(contextSegment);
               const previewRowId = trimStr(entry.preview_row_id);
               const selected = previewRowId ? selectedPreviewRowSet.has(previewRowId) : false;
 
@@ -54028,18 +54178,23 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                 segment?.linked_shift_date ||
                 nestedSegment?.date ||
                 nestedSegment?.work_date ||
+                contextSegment?.date ||
+                contextSegment?.work_date ||
+                contextSegment?.linked_shift_date ||
+                nestedContextSegment?.date ||
+                nestedContextSegment?.work_date ||
                 (correctionCarrier ? canonicalWorkDate : '') ||
                 ''
               );
-              const clientName = trimStr(segment?.client_name || segment?.trust_name || nestedSegment?.client_name || line?.client_name || line?.trust_name || '') || '—';
-              const role = trimStr(segment?.role || segment?.job_title || nestedSegment?.role || nestedSegment?.job_title || line?.role || line?.job_title || '') || '—';
-              const band = trimStr(segment?.band || segment?.band_name || nestedSegment?.band || line?.band || '') || '—';
+              const clientName = trimStr(segment?.client_name || segment?.trust_name || nestedSegment?.client_name || contextSegment?.client_name || contextSegment?.trust_name || nestedContextSegment?.client_name || line?.client_name || line?.trust_name || contextLine?.client_name || contextLine?.trust_name || nestedContextLine?.client_name || '') || '—';
+              const role = trimStr(segment?.role || segment?.job_title || nestedSegment?.role || nestedSegment?.job_title || contextSegment?.role || contextSegment?.job_title || nestedContextSegment?.role || nestedContextSegment?.job_title || line?.role || line?.job_title || contextLine?.role || contextLine?.job_title || nestedContextLine?.role || nestedContextLine?.job_title || '') || '—';
+              const band = trimStr(segment?.band || segment?.band_name || nestedSegment?.band || contextSegment?.band || contextSegment?.band_name || nestedContextSegment?.band || line?.band || contextLine?.band || contextLine?.band_name || nestedContextLine?.band || '') || '—';
               const startVal = formatLondonTimeFromUtc(
-                segment?.start_utc || segment?.worked_start_iso || nestedSegment?.start_utc || nestedSegment?.worked_start_iso
-              ) || trimStr(segment?.start || segment?.start_time || nestedSegment?.start || nestedSegment?.start_time || '') || '—';
+                segment?.start_utc || segment?.worked_start_iso || nestedSegment?.start_utc || nestedSegment?.worked_start_iso || contextSegment?.start_utc || contextSegment?.worked_start_iso || nestedContextSegment?.start_utc || nestedContextSegment?.worked_start_iso
+              ) || trimStr(segment?.start || segment?.start_time || nestedSegment?.start || nestedSegment?.start_time || contextSegment?.start || contextSegment?.start_time || nestedContextSegment?.start || nestedContextSegment?.start_time || '') || '—';
               const finishVal = formatLondonTimeFromUtc(
-                segment?.end_utc || segment?.finish_utc || segment?.worked_end_iso || nestedSegment?.end_utc || nestedSegment?.finish_utc || nestedSegment?.worked_end_iso
-              ) || trimStr(segment?.finish || segment?.finish_time || nestedSegment?.finish || nestedSegment?.finish_time || '') || '—';
+                segment?.end_utc || segment?.finish_utc || segment?.worked_end_iso || nestedSegment?.end_utc || nestedSegment?.finish_utc || nestedSegment?.worked_end_iso || contextSegment?.end_utc || contextSegment?.finish_utc || contextSegment?.worked_end_iso || nestedContextSegment?.end_utc || nestedContextSegment?.finish_utc || nestedContextSegment?.worked_end_iso
+              ) || trimStr(segment?.finish || segment?.finish_time || nestedSegment?.finish || nestedSegment?.finish_time || contextSegment?.finish || contextSegment?.finish_time || nestedContextSegment?.finish || nestedContextSegment?.finish_time || '') || '—';
               const amount = segment?.pay_amount_ex_vat ?? segment?.amount_ex_vat ?? segment?.pay_amount ?? nestedSegment?.pay_amount_ex_vat ?? nestedSegment?.amount_ex_vat ?? getLineSectionAmount(line);
               const sourcePay = finiteMoney(segment?.source_pay_ex_vat, nestedSegment?.source_pay_ex_vat, line?.source_pay_ex_vat);
               const sourceRate = finiteMoney(segment?.source_rate, nestedSegment?.source_rate, line?.source_rate);
@@ -54058,17 +54213,19 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                     : `<span class="mini" style="opacity:.7;">Included above</span>`)
                 : `£${enc(fmtMoney(amount))}`;
               const snoozeInfo = getSnoozeInfo(segment);
-              const breakStart = formatLondonTimeFromUtc(segment?.break_start_utc || nestedSegment?.break_start_utc)
-                || trimStr(segment?.break_start || nestedSegment?.break_start || '');
-              const breakEnd = formatLondonTimeFromUtc(segment?.break_end_utc || nestedSegment?.break_end_utc)
-                || trimStr(segment?.break_end || nestedSegment?.break_end || '');
-              const breakMinsRaw = segment?.break_mins ?? segment?.break_minutes ?? nestedSegment?.break_mins ?? nestedSegment?.break_minutes;
+              const breakStart = formatLondonTimeFromUtc(segment?.break_start_utc || nestedSegment?.break_start_utc || contextSegment?.break_start_utc || nestedContextSegment?.break_start_utc)
+                || trimStr(segment?.break_start || nestedSegment?.break_start || contextSegment?.break_start || nestedContextSegment?.break_start || '');
+              const breakEnd = formatLondonTimeFromUtc(segment?.break_end_utc || nestedSegment?.break_end_utc || contextSegment?.break_end_utc || nestedContextSegment?.break_end_utc)
+                || trimStr(segment?.break_end || nestedSegment?.break_end || contextSegment?.break_end || nestedContextSegment?.break_end || '');
+              const breakMinsRaw = segment?.break_mins ?? segment?.break_minutes ?? nestedSegment?.break_mins ?? nestedSegment?.break_minutes ?? contextSegment?.break_mins ?? contextSegment?.break_minutes ?? nestedContextSegment?.break_mins ?? nestedContextSegment?.break_minutes;
               const breakMinsNum = (breakMinsRaw === null || breakMinsRaw === undefined || breakMinsRaw === '')
                 ? NaN
                 : Number(breakMinsRaw);
               const breakWindows = Array.isArray(segment?.breaks)
                 ? segment.breaks.filter((br) => br && typeof br === 'object')
-                : [];
+                : (Array.isArray(contextSegment?.breaks)
+                    ? contextSegment.breaks.filter((br) => br && typeof br === 'object')
+                    : []);
               const breakLabel = (breakStart || breakEnd)
                 ? `${breakStart || '—'} - ${breakEnd || '—'}`
                 : (Number.isFinite(breakMinsNum) && breakMinsNum >= 0
@@ -54179,9 +54336,14 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       }
 
       const groupLines = item.lines;
-      const payableGroupLines = groupLines.filter((line) => !isSyntheticTimesheetResidualLine(line, groupLines));
+      const payableGroupLines = groupLines.filter((line) => (
+        !isSyntheticTimesheetResidualLine(line, groupLines) &&
+        !isReadyTimesheetDisplayContextLine(line)
+      ));
       if (!payableGroupLines.length) return '';
-      const representative = payableGroupLines.find((line) => !!resolvedRateCancelActionHtml(line, 'READY_TO_PAY')) || payableGroupLines[0];
+      const resolvedRateActionLines = groupLines.filter((line) => !!resolvedRateCancelActionHtml(line, 'READY_TO_PAY'));
+      const resolvedRateActionCarrier = resolvedRateActionLines[0] || null;
+      const representative = resolvedRateActionCarrier || payableGroupLines[0];
       const candidateId = getLineCandidateId(representative);
       const timesheetId = getLineTimesheetId(representative);
       const selectableGroupLines = payableGroupLines.filter((line) => isPreviewRowSelectionAllowed(line));
@@ -54197,7 +54359,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         const rowId = getPreviewRowId(line);
         return sum + (rowId && selectedPreviewRowSet.has(rowId) ? toNum(getLineSectionAmount(line), 0) : 0);
       }, 0) * 100) / 100;
-      const breakdownEntries = buildReadyTimesheetBreakdownEntries(payableGroupLines);
+      const breakdownEntries = buildReadyTimesheetBreakdownEntries(groupLines);
       const breakdownCount = breakdownEntries.length;
       const isBreakdownOpen = openReadyTimesheetBreakdownKeys.has(item.key);
       const nested = getNestedLinePayload(representative);
@@ -54207,16 +54369,15 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const weekOrDate = ymdToUk(trimStr(representative?.week_ending_date || nested?.week_ending_date || '')) || ymdToUk(trimStr(representative?.linked_shift_date || nested?.linked_shift_date || '')) || '—';
       const payChannels = uniqTrimmed(payableGroupLines.map((line) => upperTrim(line?.pay_channel || getNestedLinePayload(line)?.pay_channel || '')));
       const payChannel = payChannels.length > 1 ? 'MIXED' : (payChannels[0] || '—');
-      const resolvedRateActionLines = payableGroupLines.filter((line) => !!resolvedRateCancelActionHtml(line, 'READY_TO_PAY'));
       const resolvedRateClearIdentities = uniqTrimmed(
-        payableGroupLines.map((line) => resolvedRateGroupClearIdentity(line))
+        resolvedRateActionLines.map((line) => resolvedRateGroupClearIdentity(line))
       );
       const resolvedRateGroupIdentityConflict = resolvedRateActionLines.length > 0
         && (resolvedRateClearIdentities.length !== 1
-          || payableGroupLines.some((line) => resolvedRateGroupClearIdentity(line) !== resolvedRateClearIdentities[0]));
+          || resolvedRateActionLines.some((line) => resolvedRateGroupClearIdentity(line) !== resolvedRateClearIdentities[0]));
       const cancelResolvedRateHtml = resolvedRateGroupIdentityConflict
         ? '<span class="mini" data-resolution-action-error="BANKING_PAY_RESOLVED_RATE_GROUP_IDENTITY_CONFLICT" style="color:#c62828;font-weight:700;">Refresh required before cancelling this resolved rate.</span>'
-        : resolvedRateCancelActionHtml(representative, 'READY_TO_PAY');
+        : resolvedRateCancelActionHtml(resolvedRateActionCarrier, 'READY_TO_PAY');
       const wholeActionHtml = (() => {
         const info = getSnoozeInfo(representative);
         const lineLabel = `TIMESHEET PAYMENT — ${displayName}`;
@@ -54243,7 +54404,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         `;
       })();
     const groupAnchor = makeScrollAnchor('ready-timesheet', `${candidateId}:${timesheetId}`);
-      const amountHtml = `<span style="display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap;">${resolvedRateBadgeHtml(representative, 'READY_TO_PAY')}<span>${enc(formatCompactPayAmount(fullAmount))}</span>${selectionState === 'PARTIAL' ? `<span class="mini" style="color:#c62828;font-weight:700;">(${enc(formatCompactPayAmount(selectedAmount))} selected)</span>` : ''}</span>`;
+      const amountHtml = `<span style="display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap;">${resolvedRateBadgeHtml(resolvedRateActionCarrier || representative, 'READY_TO_PAY')}<span>${enc(formatCompactPayAmount(fullAmount))}</span>${selectionState === 'PARTIAL' ? `<span class="mini" style="color:#c62828;font-weight:700;">(${enc(formatCompactPayAmount(selectedAmount))} selected)</span>` : ''}</span>`;
 
 
       return `
@@ -54305,7 +54466,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         </tr>
         ${isBreakdownOpen ? `
           <tr data-timesheet-group-key="${enc(item.key)}">
-            <td colspan="9" style="padding-top:0;">${renderReadyTimesheetBreakdown(item.key, payableGroupLines, candidateId, timesheetId)}</td>
+            <td colspan="9" style="padding-top:0;">${renderReadyTimesheetBreakdown(item.key, groupLines, candidateId, timesheetId)}</td>
           </tr>
         ` : ''}
       `;
@@ -54714,10 +54875,45 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 
   const collectUnionRows = (sources, filterFn = null) => {
     const out = [];
-    const seen = new Set();
+    const authorityByKey = new Map();
+    const rowAuthorityScore = (line, sourceName) => {
+      const nested = getNestedLinePayload(line);
+      const source = trimStr(sourceName).toLowerCase();
+      let score = 0;
+      if (trimStr(line?.effective_section || line?.effectiveSection || nested?.effective_section || nested?.effectiveSection)) score += 100;
+      if (trimStr(line?.physical_section || line?.physicalSection || nested?.physical_section || nested?.physicalSection)) score += 50;
+      if (/page\.cache|preview_page|previewpage/.test(source)) score += 20;
+      if (trimStr(line?.presentation_section || line?.presentationSection || nested?.presentation_section || nested?.presentationSection)) score += 5;
+      return score;
+    };
     for (const source of asArray(sources)) {
       if (!isPlainObject(source)) continue;
-      pushUniquePreviewRows(out, seen, source.rows, source.name || '', filterFn);
+      const sourceName = source.name || '';
+      for (const line of normalisePreviewRowArray(source.rows)) {
+        if (isActiveDraftReservedRenderedRow(line)) continue;
+        if (filterFn && !filterFn(line, sourceName)) continue;
+        const rowId = getPreviewRowId(line);
+        const dedupeKey = rowId || [
+          trimStr(sourceName),
+          trimStr(line?.candidate_id),
+          trimStr(line?.line_type),
+          trimStr(line?.timesheet_id || line?.linked_timesheet_id),
+          trimStr(line?.finance_case_id || line?.case_key),
+          trimStr(line?.source_ref),
+          trimStr(line?.presentation_section),
+          trimStr(getLineSectionAmount(line))
+        ].join('|');
+        if (!dedupeKey) continue;
+        const score = rowAuthorityScore(line, sourceName);
+        const existing = authorityByKey.get(dedupeKey);
+        if (!existing) {
+          authorityByKey.set(dedupeKey, { index: out.length, score });
+          out.push(line);
+        } else if (score > existing.score) {
+          out[existing.index] = line;
+          existing.score = score;
+        }
+      }
     }
     return out;
   };
@@ -54731,12 +54927,14 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     ? previewDataPreview.componentStateCache
     : ((previewDataPreview.component_state_cache && typeof previewDataPreview.component_state_cache === 'object') ? previewDataPreview.component_state_cache : null);
   const previewReadyPageRows = collectRowsFromPageCaches(wiz.workbench, ['ready_to_pay', 'ready_preview_lines']);
+  const previewStateReadyPageRows = collectRowsFromPageCaches(wiz.preview, ['ready_to_pay', 'ready_preview_lines']);
   const previewDataReadyPageRows = collectRowsFromPageCaches(previewDataRoot, ['ready_to_pay', 'ready_preview_lines']);
   const previewBlockedPageRows = collectRowsFromPageCaches(wiz.workbench, ['blocked_for_pay', 'blocked_items', 'blocked_preview_lines', 'blocked_now']);
   const previewDataBlockedPageRows = collectRowsFromPageCaches(previewDataRoot, ['blocked_for_pay', 'blocked_items', 'blocked_preview_lines', 'blocked_now']);
   const previewCasePageRows = collectRowsFromPageCaches(wiz.workbench, ['cases_resolutions', 'case_resolution_states', 'case_resolutions']);
   const previewDataCasePageRows = collectRowsFromPageCaches(previewDataRoot, ['cases_resolutions', 'case_resolution_states', 'case_resolutions']);
   const previewPageRows = collectRowsFromPageCaches(wiz.workbench, ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows']);
+  const previewStatePageRows = collectRowsFromPageCaches(wiz.preview, ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows']);
   const previewDataPageRows = collectRowsFromPageCaches(previewDataRoot, ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows']);
 
   const isHiddenDisplayRow = (line) => {
@@ -54759,6 +54957,10 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     const readinessState = upperTrim(line?.readiness_state || line?.readinessState || '');
     const lineType = upperTrim(line?.line_type || line?.lineType || '');
     const snoozeInfo = getSnoozeInfo(line);
+    const explicitReadyPresentation = section === 'READY_TO_PAY'
+      || readinessState === 'READY_TO_PAY'
+      || readinessState === 'READY'
+      || readinessState === 'DRAFTABLE';
     return !!(
       section === 'BLOCKED_FOR_PAY' ||
       readinessState === 'BLOCKED_FOR_PAY' ||
@@ -54766,9 +54968,11 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       lineType === 'DO_NOT_PAY' ||
       asBool(line?.do_not_pay) ||
       asBool(line?.case_is_blocked) ||
-      asBool(line?.is_excluded_from_allocation) ||
-      line?.is_ready_for_draft === false ||
-      line?.isReadyForDraft === false ||
+      (asBool(line?.is_excluded_from_allocation) && !isReadyTimesheetDisplayContextLine(line)) ||
+      (!explicitReadyPresentation && (
+        line?.is_ready_for_draft === false ||
+        line?.isReadyForDraft === false
+      )) ||
       snoozeInfo.isIndefinite ||
       snoozeInfo.isDated
     );
@@ -54836,8 +55040,10 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       { name: 'wiz.workbench.ready_preview_lines', rows: wiz.workbench.ready_preview_lines },
       { name: 'wiz.workbench.canonical_preview_lines', rows: wiz.workbench.canonical_preview_lines },
       { name: 'page.cache.ready_to_pay', rows: previewReadyPageRows },
+      { name: 'preview.state.page.cache.ready_to_pay', rows: previewStateReadyPageRows },
       { name: 'preview.data.page.cache.ready_to_pay', rows: previewDataReadyPageRows },
       { name: 'page.cache.preview.rows', rows: previewPageRows },
+      { name: 'preview.state.page.cache.preview.rows', rows: previewStatePageRows },
       { name: 'preview.data.page.cache.preview.rows', rows: previewDataPageRows },
       { name: 'pv.canonical_preview_lines', rows: pv?.canonical_preview_lines },
       { name: 'pv.preview_rows', rows: pv?.preview_rows },
@@ -54848,6 +55054,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       { name: 'wiz.preview.data.preview.canonical_preview_lines', rows: previewDataPreview.canonical_preview_lines },
       { name: 'wiz.workbench.canonical_preview_lines', rows: wiz.workbench.canonical_preview_lines },
       { name: 'page.cache.canonical_preview_lines', rows: previewPageRows },
+      { name: 'preview.state.page.cache.canonical_preview_lines', rows: previewStatePageRows },
       { name: 'preview.data.page.cache.canonical_preview_lines', rows: previewDataPageRows },
       { name: 'pv.preview_rows', rows: pv?.preview_rows },
       { name: 'pv.rows', rows: pv?.rows }
@@ -54963,8 +55170,10 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 
   const resolveReadyPreviewRows = () => collectUnionRows([
     { name: 'page.cache.ready_to_pay', rows: previewReadyPageRows },
+    { name: 'preview.state.page.cache.ready_to_pay', rows: previewStateReadyPageRows },
     { name: 'preview.data.page.cache.ready_to_pay', rows: previewDataReadyPageRows },
     { name: 'page.cache.preview.rows', rows: previewPageRows },
+    { name: 'preview.state.page.cache.preview.rows', rows: previewStatePageRows },
     { name: 'preview.data.page.cache.preview.rows', rows: previewDataPageRows },
     ...rowSources.canonical,
     ...rowSources.ready
@@ -125478,6 +125687,38 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     if (presentationSection) return presentationSection === 'READY_TO_PAY';
     return section === 'canonical_preview_lines' && readinessState === 'READY_TO_PAY';
   };
+  const isReadyToPayDisplayContextRow = (row) => {
+    if (!isPlainObject(row) || isPostDraftUnavailablePreviewRow(row)) return false;
+    const rowJson = isPlainObject(row.row_json)
+      ? row.row_json
+      : (isPlainObject(row.rowJson) ? row.rowJson : {});
+    const presentationSection = trimStr(firstDefinedValue(
+      row.presentation_section,
+      row.presentationSection,
+      rowJson.presentation_section,
+      rowJson.presentationSection
+    ) || '').toUpperCase();
+    const presentationRole = trimStr(firstDefinedValue(
+      row.presentation_role,
+      row.presentationRole,
+      rowJson.presentation_role,
+      rowJson.presentationRole
+    ) || '').toUpperCase();
+    const lineType = trimStr(firstDefinedValue(
+      row.line_type,
+      row.lineType,
+      rowJson.line_type,
+      rowJson.lineType
+    ) || '').toUpperCase();
+    if (presentationSection !== 'READY_TO_PAY' || presentationRole !== 'PARENT' || lineType !== 'TIMESHEET_PAYMENT') return false;
+    if (isTruthyFlag(firstDefinedValue(row.internal_only, row.internalOnly, rowJson.internal_only, rowJson.internalOnly))) return false;
+    if (isTruthyFlag(firstDefinedValue(row.blocked, rowJson.blocked, row.case_is_blocked, row.caseIsBlocked, rowJson.case_is_blocked, rowJson.caseIsBlocked))) return false;
+    if (isTruthyFlag(firstDefinedValue(row.do_not_pay, row.doNotPay, rowJson.do_not_pay, rowJson.doNotPay))) return false;
+    if (isTruthyFlag(firstDefinedValue(row.excluded, row.is_excluded_from_allocation, row.isExcludedFromAllocation, rowJson.excluded, rowJson.is_excluded_from_allocation, rowJson.isExcludedFromAllocation))) return false;
+    const candidateId = trimStr(firstDefinedValue(row.candidate_id, row.candidateId, rowJson.candidate_id, rowJson.candidateId) || '');
+    const timesheetId = trimStr(firstDefinedValue(row.timesheet_id, row.timesheetId, row.linked_timesheet_id, row.linkedTimesheetId, rowJson.timesheet_id, rowJson.timesheetId, rowJson.linked_timesheet_id, rowJson.linkedTimesheetId) || '');
+    return !!candidateId && !!timesheetId && !!rowIdFromPreviewRow(row);
+  };
   const isDraftableWorkbenchReadyRow = (row) => {
     if (!isPlainObject(row)) return false;
     if (isPostDraftUnavailablePreviewRow(row)) return false;
@@ -125611,15 +125852,27 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
         );
       }
     }
+    const contextRows = asArray(rowUniverse).filter(isReadyToPayDisplayContextRow);
+    const withDisplayContext = (rows) => {
+      const output = [];
+      const seen = new Set();
+      for (const row of [...asArray(rows), ...contextRows]) {
+        const rowId = rowIdFromPreviewRow(row);
+        if (!rowId || seen.has(rowId)) continue;
+        seen.add(rowId);
+        output.push(row);
+      }
+      return output;
+    };
     for (const directSource of directSources) {
       const filtered = asArray(directSource).filter(isReadyToPayPreviewRow);
-      if (filtered.length > 0) return filtered;
+      if (filtered.length > 0) return withDisplayContext(filtered);
     }
-    const rowUniverseRows = asArray(rowUniverse).filter(isReadyToPayPreviewRow);
-    if (rowUniverseRows.length > 0) return rowUniverseRows;
+    const rowUniverseRows = asArray(rowUniverse).filter((row) => isReadyToPayPreviewRow(row) || isReadyToPayDisplayContextRow(row));
+    if (rowUniverseRows.length > 0) return withDisplayContext(rowUniverseRows);
     for (const cacheSource of cacheSources) {
       const filtered = asArray(cacheSource).filter(isReadyToPayPreviewRow);
-      if (filtered.length > 0) return filtered;
+      if (filtered.length > 0) return withDisplayContext(filtered);
     }
     return [];
   };
@@ -127546,7 +127799,8 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
         responseComponentStateCache.safeCaseStates
       );
   const stablePreviewRows = collectPreviewRowObjects(previewObj, responseObj);
-  const stableReadyPreviewRows = stablePreviewRows.filter(isReadyToPayPreviewRow);
+  const isCanonicalReadyDisplayRow = (row) => isReadyToPayPreviewRow(row) || isReadyToPayDisplayContextRow(row);
+  const stableReadyPreviewRows = stablePreviewRows.filter(isCanonicalReadyDisplayRow);
   const firstNonEmptyFilteredArray = (predicate, ...values) => {
     for (const value of values) {
       const filtered = asArray(value).filter(predicate);
@@ -127559,7 +127813,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const canonicalPreviewLines = directSectionAuthority.canonical_preview_lines
     ? cloneJson(directSectionRows.canonical_preview_lines) || []
     : firstNonEmptyFilteredArray(
-        isReadyToPayPreviewRow,
+        isCanonicalReadyDisplayRow,
         pageReadyRows,
         stableReadyPreviewRows,
         previewComponentStateCache.canonical_preview_lines,
@@ -127570,7 +127824,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const previewRows = directSectionAuthority.canonical_preview_lines
     ? cloneJson(canonicalPreviewLines) || []
     : firstNonEmptyFilteredArray(
-        isReadyToPayPreviewRow,
+        isCanonicalReadyDisplayRow,
         previewObj.preview_rows,
         previewObj.previewRows,
         responseObj.preview_rows,
