@@ -124,6 +124,13 @@ test('single-candidate resolution success adopts the candidate refresh without w
     source,
     /settled:\s*true,\s*ready:\s*true,\s*required_preview_sections_loaded:\s*true,\s*session_id:\s*sessionIdText/
   );
+  assert.match(source, /while \(candidatePreviewPageCount < 100\)/);
+  assert.match(source, /atomic_candidate_refresh_complete:\s*true/);
+  assert.equal(
+    (source.match(/mergePayWorkbenchCandidatePreviewIntoState\(candidatePreview\)/g) || []).length,
+    1,
+    'the fully paged candidate authority must be merged once'
+  );
 });
 
 test('overpayment presentation uses resolved target-channel amounts after a pay-method change', () => {

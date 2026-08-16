@@ -38,7 +38,7 @@ test('opens timesheet breakdowns without flashing the Ready list back to the top
   expect(new URL(page.url()).hostname).toBe('testmode.arthur-rai.co.uk');
   expect(new URL(interceptedMainUrl).pathname).toBe('/js/main.js');
 
-  await page.getByRole('button', { name: 'Banking' }).click();
+  await page.getByRole('button', { name: 'Banking', exact: true }).click();
   await page.getByRole('button', { name: 'Pay', exact: true }).click();
 
   const readyHost = page.locator('#bankingPayReadyScrollHost');
@@ -244,7 +244,7 @@ test('shows canonical correction date and correction-specific actions in a Ready
   expect(new URL(page.url()).hostname).toBe('testmode.arthur-rai.co.uk');
   expect(new URL(interceptedMainUrl).pathname).toBe('/js/main.js');
 
-  await page.getByRole('button', { name: 'Banking' }).click();
+  await page.getByRole('button', { name: 'Banking', exact: true }).click();
   await page.getByRole('button', { name: 'Pay', exact: true }).click();
 
   const readyHost = page.locator('#bankingPayReadyScrollHost');

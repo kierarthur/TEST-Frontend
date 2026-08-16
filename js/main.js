@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260813-banking-fast-route-modal-r1',
+  asset_version: '20260816-banking-james-post-resolution-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -52291,7 +52291,13 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     const nested = getNestedLinePayload(line);
     const summary = isPlainObject(line?.case_resolution_summary)
       ? line.case_resolution_summary
-      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+      : (isPlainObject(line?.case_resolution_summary_json)
+          ? line.case_resolution_summary_json
+          : (isPlainObject(nested?.case_resolution_summary)
+              ? nested.case_resolution_summary
+              : (isPlainObject(nested?.case_resolution_summary_json)
+                  ? nested.case_resolution_summary_json
+                  : {})));
     const renderSection = upperTrim(renderContextSection);
     const section = renderSection || getLinePresentationSection(line);
     if (section !== 'READY_TO_PAY') return '';
@@ -52595,6 +52601,53 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
         ${breakdownBody}
       </details>
     `;
+  };
+
+  const resolvedRateGroupClearIdentity = (line) => {
+    if (!isPlainObject(line)) return '';
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(line?.case_resolution_summary_json)
+          ? line.case_resolution_summary_json
+          : (isPlainObject(nested?.case_resolution_summary)
+              ? nested.case_resolution_summary
+              : (isPlainObject(nested?.case_resolution_summary_json)
+                  ? nested.case_resolution_summary_json
+                  : {})));
+    const payload = isPlainObject(line?.resolved_rate_clear_payload_json)
+      ? line.resolved_rate_clear_payload_json
+      : (isPlainObject(nested?.resolved_rate_clear_payload_json)
+          ? nested.resolved_rate_clear_payload_json
+          : (isPlainObject(summary?.resolved_rate_clear_payload_json)
+              ? summary.resolved_rate_clear_payload_json
+              : {}));
+    const normalized = {
+      candidate_id: trimStr(
+        payload.candidate_id || line?.resolved_rate_candidate_id || nested?.resolved_rate_candidate_id || summary?.resolved_rate_candidate_id || line?.candidate_id || nested?.candidate_id || ''
+      ).toLowerCase(),
+      timesheet_id: trimStr(
+        payload.timesheet_id || line?.resolved_rate_timesheet_id || nested?.resolved_rate_timesheet_id || summary?.resolved_rate_timesheet_id || line?.timesheet_id || nested?.timesheet_id || ''
+      ).toLowerCase(),
+      case_key: trimStr(
+        payload.case_key || line?.resolved_rate_case_key || nested?.resolved_rate_case_key || summary?.resolved_rate_case_key || ''
+      ),
+      resolution_family: upperTrim(
+        payload.resolution_family || line?.resolved_rate_family || nested?.resolved_rate_family || summary?.resolved_rate_family || ''
+      ),
+      case_resolution_id: trimStr(
+        payload.case_resolution_id || line?.case_resolution_id || nested?.case_resolution_id || summary?.case_resolution_id || ''
+      ).toLowerCase(),
+      case_resolution_ids: uniqTrimmed(asArray(
+        payload.case_resolution_ids || line?.case_resolution_ids || nested?.case_resolution_ids || summary?.case_resolution_ids
+      )).map((value) => value.toLowerCase()).sort(),
+      resolution_identity_keys: uniqTrimmed(asArray(
+        payload.resolution_identity_keys || line?.resolution_identity_keys || nested?.resolution_identity_keys || summary?.resolution_identity_keys
+      )).sort()
+    };
+    if (!normalized.candidate_id || !normalized.timesheet_id || !normalized.case_key
+        || normalized.resolution_family !== 'BUCKETED') return '';
+    return JSON.stringify(normalized);
   };
 
   const getLineSourceBasisJson = (obj) => {
@@ -53357,7 +53410,13 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     const nested = getNestedLinePayload(line);
     const summary = isPlainObject(line?.case_resolution_summary)
       ? line.case_resolution_summary
-      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+      : (isPlainObject(line?.case_resolution_summary_json)
+          ? line.case_resolution_summary_json
+          : (isPlainObject(nested?.case_resolution_summary)
+              ? nested.case_resolution_summary
+              : (isPlainObject(nested?.case_resolution_summary_json)
+                  ? nested.case_resolution_summary_json
+                  : {})));
     const unresolvedAmount = firstFinitePreviewNumber(
       summary?.unresolved_taxable_amount_ex_vat,
       summary?.unresolvedTaxableAmountExVat,
@@ -53850,6 +53909,33 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     const entries = buildReadyTimesheetBreakdownEntries(groupLines);
     if (!entries.length) return '';
 
+    const formatLondonTimeFromUtc = (value) => {
+      const raw = trimStr(value || '');
+      if (!raw) return '';
+      const parsed = new Date(raw);
+      if (!Number.isFinite(parsed.getTime())) return '';
+      try {
+        return new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Europe/London',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+          hourCycle: 'h23'
+        }).format(parsed);
+      } catch {
+        return '';
+      }
+    };
+
+    const finiteMoney = (...values) => {
+      for (const value of values) {
+        if (value === null || value === undefined || value === '') continue;
+        const number = Number(value);
+        if (Number.isFinite(number)) return number;
+      }
+      return null;
+    };
+
     const componentLabelFromLine = (line) => {
       const keyType = getLineKeyType(line);
       const keyValue = trimStr(getLineKeyValue(line));
@@ -53948,9 +54034,17 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
               const clientName = trimStr(segment?.client_name || segment?.trust_name || nestedSegment?.client_name || line?.client_name || line?.trust_name || '') || '—';
               const role = trimStr(segment?.role || segment?.job_title || nestedSegment?.role || nestedSegment?.job_title || line?.role || line?.job_title || '') || '—';
               const band = trimStr(segment?.band || segment?.band_name || nestedSegment?.band || line?.band || '') || '—';
-              const startVal = trimStr(segment?.start || segment?.start_time || nestedSegment?.start || nestedSegment?.start_time || '') || '—';
-              const finishVal = trimStr(segment?.finish || segment?.finish_time || nestedSegment?.finish || nestedSegment?.finish_time || '') || '—';
+              const startVal = formatLondonTimeFromUtc(
+                segment?.start_utc || segment?.worked_start_iso || nestedSegment?.start_utc || nestedSegment?.worked_start_iso
+              ) || trimStr(segment?.start || segment?.start_time || nestedSegment?.start || nestedSegment?.start_time || '') || '—';
+              const finishVal = formatLondonTimeFromUtc(
+                segment?.end_utc || segment?.finish_utc || segment?.worked_end_iso || nestedSegment?.end_utc || nestedSegment?.finish_utc || nestedSegment?.worked_end_iso
+              ) || trimStr(segment?.finish || segment?.finish_time || nestedSegment?.finish || nestedSegment?.finish_time || '') || '—';
               const amount = segment?.pay_amount_ex_vat ?? segment?.amount_ex_vat ?? segment?.pay_amount ?? nestedSegment?.pay_amount_ex_vat ?? nestedSegment?.amount_ex_vat ?? getLineSectionAmount(line);
+              const sourcePay = finiteMoney(segment?.source_pay_ex_vat, nestedSegment?.source_pay_ex_vat, line?.source_pay_ex_vat);
+              const sourceRate = finiteMoney(segment?.source_rate, nestedSegment?.source_rate, line?.source_rate);
+              const targetRate = finiteMoney(segment?.target_rate, nestedSegment?.target_rate, line?.target_rate);
+              const targetPay = finiteMoney(segment?.target_pay_ex_vat, nestedSegment?.target_pay_ex_vat, line?.target_pay_ex_vat, amount);
               const clampAmounts = getPayOutstandingClampAmounts(line);
               const segmentIndex = Number.isFinite(Number(entry.segment_index)) ? Number(entry.segment_index) : 0;
               const segmentCount = Number.isFinite(Number(entry.segment_count)) ? Math.max(1, Number(entry.segment_count)) : Math.max(1, Number(entry.preview_row_span) || 1);
@@ -53964,20 +54058,27 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                     : `<span class="mini" style="opacity:.7;">Included above</span>`)
                 : `£${enc(fmtMoney(amount))}`;
               const snoozeInfo = getSnoozeInfo(segment);
-              const breakStart = trimStr(segment?.break_start || nestedSegment?.break_start || '');
-              const breakEnd = trimStr(segment?.break_end || nestedSegment?.break_end || '');
-              const breakMinsNum = Number(segment?.break_mins ?? segment?.break_minutes ?? nestedSegment?.break_mins ?? nestedSegment?.break_minutes);
+              const breakStart = formatLondonTimeFromUtc(segment?.break_start_utc || nestedSegment?.break_start_utc)
+                || trimStr(segment?.break_start || nestedSegment?.break_start || '');
+              const breakEnd = formatLondonTimeFromUtc(segment?.break_end_utc || nestedSegment?.break_end_utc)
+                || trimStr(segment?.break_end || nestedSegment?.break_end || '');
+              const breakMinsRaw = segment?.break_mins ?? segment?.break_minutes ?? nestedSegment?.break_mins ?? nestedSegment?.break_minutes;
+              const breakMinsNum = (breakMinsRaw === null || breakMinsRaw === undefined || breakMinsRaw === '')
+                ? NaN
+                : Number(breakMinsRaw);
               const breakWindows = Array.isArray(segment?.breaks)
                 ? segment.breaks.filter((br) => br && typeof br === 'object')
                 : [];
               const breakLabel = (breakStart || breakEnd)
                 ? `${breakStart || '—'} - ${breakEnd || '—'}`
-                : (Number.isFinite(breakMinsNum) && breakMinsNum > 0
+                : (Number.isFinite(breakMinsNum) && breakMinsNum >= 0
                     ? `${String(Math.round(breakMinsNum))} mins`
                     : (breakWindows.length
                         ? breakWindows.map((br) => {
-                            const brStart = trimStr(br?.start || br?.break_start || '');
-                            const brEnd = trimStr(br?.end || br?.break_end || '');
+                            const brStart = formatLondonTimeFromUtc(br?.start_utc || br?.break_start_utc)
+                              || trimStr(br?.start || br?.break_start || '');
+                            const brEnd = formatLondonTimeFromUtc(br?.end_utc || br?.break_end_utc)
+                              || trimStr(br?.end || br?.break_end || '');
                             const brMins = Number(br?.break_mins ?? br?.break_minutes ?? br?.minutes ?? br?.duration_minutes ?? br?.duration_mins ?? br?.mins);
                             if (brStart || brEnd) return `${brStart || '—'} - ${brEnd || '—'}`;
                             if (Number.isFinite(brMins) && brMins > 0) return `${String(Math.round(brMins))} mins`;
@@ -54037,6 +54138,10 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                   <td class="mini" style="white-space:nowrap;"${correctionCarrier ? ` title="This correction can represent several source and replacement records, so no single break applies."` : ''}>${enc(breakLabel)}</td>
                   <td class="mono" style="text-align:right;white-space:nowrap;">
                     <div>${payableAmountHtml}</div>
+                    ${sourcePay !== null ? `<div class="mini" data-rate-field="source-pay" style="opacity:.8;">Source pay: £${enc(fmtMoney(sourcePay))}</div>` : ''}
+                    ${sourceRate !== null ? `<div class="mini" data-rate-field="source-rate" style="opacity:.8;">Source rate: £${enc(fmtMoney(sourceRate))}/hour</div>` : ''}
+                    ${targetRate !== null ? `<div class="mini" data-rate-field="target-rate" style="opacity:.8;">Target rate: £${enc(fmtMoney(targetRate))}/hour</div>` : ''}
+                    ${targetPay !== null ? `<div class="mini" data-rate-field="target-pay" style="opacity:.8;">Target pay: £${enc(fmtMoney(targetPay))}</div>` : ''}
                     ${correctionCarrier ? `<div class="mini" style="opacity:.72;">Correction</div>` : ''}
                   </td>
                   <td class="mini" style="white-space:nowrap;">${enc(snoozeState)}</td>
@@ -54102,7 +54207,16 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const weekOrDate = ymdToUk(trimStr(representative?.week_ending_date || nested?.week_ending_date || '')) || ymdToUk(trimStr(representative?.linked_shift_date || nested?.linked_shift_date || '')) || '—';
       const payChannels = uniqTrimmed(payableGroupLines.map((line) => upperTrim(line?.pay_channel || getNestedLinePayload(line)?.pay_channel || '')));
       const payChannel = payChannels.length > 1 ? 'MIXED' : (payChannels[0] || '—');
-      const cancelResolvedRateHtml = resolvedRateCancelActionHtml(representative, 'READY_TO_PAY');
+      const resolvedRateActionLines = payableGroupLines.filter((line) => !!resolvedRateCancelActionHtml(line, 'READY_TO_PAY'));
+      const resolvedRateClearIdentities = uniqTrimmed(
+        payableGroupLines.map((line) => resolvedRateGroupClearIdentity(line))
+      );
+      const resolvedRateGroupIdentityConflict = resolvedRateActionLines.length > 0
+        && (resolvedRateClearIdentities.length !== 1
+          || payableGroupLines.some((line) => resolvedRateGroupClearIdentity(line) !== resolvedRateClearIdentities[0]));
+      const cancelResolvedRateHtml = resolvedRateGroupIdentityConflict
+        ? '<span class="mini" data-resolution-action-error="BANKING_PAY_RESOLVED_RATE_GROUP_IDENTITY_CONFLICT" style="color:#c62828;font-weight:700;">Refresh required before cancelling this resolved rate.</span>'
+        : resolvedRateCancelActionHtml(representative, 'READY_TO_PAY');
       const wholeActionHtml = (() => {
         const info = getSnoozeInfo(representative);
         const lineLabel = `TIMESHEET PAYMENT — ${displayName}`;
@@ -128907,7 +129021,13 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
       hidden: []
     };
     for (const row of candidateScopedRows) {
-      const section = normalizeCandidateMergeSection(row?.section || row?.resolved_section || row?.presentation_section || row?.row_json?.section || row?.row_json?.presentation_section || 'canonical_preview_lines');
+      const section = normalizeCandidateMergeSection(
+        row?.effective_section || row?.effectiveSection
+        || row?.row_json?.effective_section || row?.row_json?.effectiveSection
+        || row?.section || row?.resolved_section || row?.presentation_section
+        || row?.row_json?.section || row?.row_json?.presentation_section
+        || 'canonical_preview_lines'
+      );
       const target = buckets[section] ? section : 'canonical_preview_lines';
       buckets[target].push(cloneRowWithCandidateId(row, responseCandidateId));
     }
@@ -128980,7 +129100,7 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     const out = cloneJson(pageMap) || {};
     for (const [key, pageValue] of Object.entries(out)) {
       if (!isPlainObject(pageValue)) continue;
-      const section = normalizeCandidateMergeSection(pageValue.resolved_section || pageValue.requested_section || pageValue.section || key);
+      const section = normalizeCandidateMergeSection(pageValue.effective_section || pageValue.resolved_section || pageValue.requested_section || pageValue.section || key);
       const incoming = section === 'blocked_for_pay'
         ? candidateRowsBySection.blocked_for_pay
         : (section === 'cases_resolutions' ? candidateRowsBySection.cases_resolutions : candidateRowsBySection.canonical_preview_lines);
@@ -129118,6 +129238,7 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   if (updatedSummary) nextPreview.summary = cloneJson(updatedSummary) || updatedSummary;
   if (responseCandidateId) {
     if (Array.isArray(responseObj.case_resolution_states) || candidateRowPayloadProvided) nextPreview.case_resolution_states = mergeRowsForKey('case_resolution_states', ['cases_resolutions']);
+    if (Array.isArray(responseObj.cases_resolutions) || candidateRowPayloadProvided) nextPreview.cases_resolutions = mergeRowsForKey('cases_resolutions', ['cases_resolutions']);
     if (Array.isArray(responseObj.blocked_case_states)) nextPreview.blocked_case_states = mergeRowsForKey('blocked_case_states', ['blocked_for_pay']);
     if (Array.isArray(responseObj.safe_case_states)) nextPreview.safe_case_states = mergeRowsForKey('safe_case_states', ['cases_resolutions']);
     if (Array.isArray(responseObj.canonical_preview_lines) || candidateRowPayloadProvided) nextPreview.canonical_preview_lines = mergeRowsForKey('canonical_preview_lines', ['canonical_preview_lines']);
@@ -130764,7 +130885,137 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
         };
       }
 
-      const candidatePreview = await bankingPayWorkbenchSessionGetCandidate(sessionIdText, candidateIdText);
+      // Candidate publication is paged across all effective sections.  A
+      // single-page merge can leave the just-resolved Cases/Resolutions rows
+      // visible beside their new Ready-to-Pay rows until the modal is closed.
+      // Read the complete candidate authority first, validate every page
+      // against the same session/candidate/version, then merge once.
+      const candidatePreviewRows = [];
+      const candidatePreviewRowIds = new Set();
+      let candidatePreview = null;
+      let candidatePreviewFirstPage = null;
+      let candidatePreviewCursor = null;
+      let candidatePreviewPageCount = 0;
+      let candidatePreviewVersion = null;
+      while (candidatePreviewPageCount < 100) {
+        const beforeCandidatePageGuard = evaluateStalenessGuard('before_candidate_preview_page_fetch', {
+          progress: cloneJson(progress),
+          page_count: candidatePreviewPageCount,
+          cursor: cloneJson(candidatePreviewCursor)
+        });
+        if (beforeCandidatePageGuard.aborted) {
+          return buildAbortResult(beforeCandidatePageGuard, { candidatePreview: candidatePreviewFirstPage });
+        }
+
+        const candidatePageOptions = { limit: 100, background: true, silent: true };
+        if (candidatePreviewCursor != null) {
+          candidatePageOptions.cursor = typeof candidatePreviewCursor === 'string'
+            ? candidatePreviewCursor
+            : JSON.stringify(candidatePreviewCursor);
+        }
+        const candidatePage = await bankingPayWorkbenchSessionGetCandidate(
+          sessionIdText,
+          candidateIdText,
+          candidatePageOptions
+        );
+
+        const afterCandidatePageGuard = evaluateStalenessGuard('after_candidate_preview_page_fetch', {
+          progress: cloneJson(progress),
+          candidate_preview: cloneJson(candidatePage),
+          page_count: candidatePreviewPageCount
+        });
+        if (afterCandidatePageGuard.aborted) {
+          return buildAbortResult(afterCandidatePageGuard, { candidatePreview: candidatePage });
+        }
+
+        const returnedSessionId = trimStr(candidatePage?.session_id || candidatePage?.sessionId || '');
+        const returnedCandidateId = trimStr(candidatePage?.candidate_id || candidatePage?.candidateId || '');
+        const returnedVersion = readSessionVersion(candidatePage);
+        if (returnedSessionId !== sessionIdText || returnedCandidateId !== candidateIdText) {
+          const scopeError = new Error('The candidate preview changed scope while it was being refreshed. Refresh Banking Pay and try again.');
+          scopeError.code = 'BANKING_PAY_CANDIDATE_ATOMIC_REFRESH_SCOPE_MISMATCH';
+          throw scopeError;
+        }
+        if (returnedVersion == null
+            || (candidatePreviewVersion != null && returnedVersion !== candidatePreviewVersion)
+            || (minimumSessionVersion != null && returnedVersion < minimumSessionVersion)) {
+          const versionError = new Error('The candidate preview version changed while it was being refreshed. Refresh Banking Pay and try again.');
+          versionError.code = 'BANKING_PAY_CANDIDATE_ATOMIC_REFRESH_VERSION_MISMATCH';
+          throw versionError;
+        }
+        candidatePreviewVersion = returnedVersion;
+        if (candidatePage?.pending_refresh === true
+            || candidatePage?.candidate_refresh_pending === true
+            || candidatePage?.refreshing === true) {
+          const pendingError = new Error('The candidate preview is still refreshing.');
+          pendingError.code = 'BANKING_PAY_CANDIDATE_ATOMIC_REFRESH_NOT_SETTLED';
+          throw pendingError;
+        }
+
+        const candidatePageRows = Array.isArray(candidatePage?.rows)
+          ? candidatePage.rows
+          : (Array.isArray(candidatePage?.preview_rows) ? candidatePage.preview_rows : []);
+        for (const row of candidatePageRows) {
+          const rowId = trimStr(
+            row?.preview_row_id || row?.previewRowId || row?.row_id || row?.rowId || row?.id || ''
+          );
+          if (!rowId || candidatePreviewRowIds.has(rowId)) {
+            const duplicateError = new Error('The candidate preview paging identity was incomplete or duplicated. Refresh Banking Pay and try again.');
+            duplicateError.code = 'BANKING_PAY_CANDIDATE_ATOMIC_REFRESH_ROW_IDENTITY_INVALID';
+            throw duplicateError;
+          }
+          candidatePreviewRowIds.add(rowId);
+          candidatePreviewRows.push(cloneJson(row) || row);
+          if (candidatePreviewRows.length > 10000) {
+            const boundedError = new Error('The candidate preview exceeded the safe refresh limit.');
+            boundedError.code = 'BANKING_PAY_CANDIDATE_ATOMIC_REFRESH_LIMIT_EXCEEDED';
+            throw boundedError;
+          }
+        }
+
+        if (!candidatePreviewFirstPage) candidatePreviewFirstPage = cloneJson(candidatePage) || candidatePage;
+        candidatePreview = cloneJson(candidatePage) || candidatePage;
+        candidatePreviewPageCount += 1;
+        const nextCursor = candidatePage?.next_cursor ?? candidatePage?.nextCursor ?? null;
+        const hasMore = candidatePage?.has_more === true
+          || candidatePage?.hasMore === true
+          || (nextCursor != null && trimStr(
+            typeof nextCursor === 'string' ? nextCursor : JSON.stringify(nextCursor)
+          ) !== '');
+        if (!hasMore) break;
+        if (nextCursor == null) {
+          const cursorError = new Error('The candidate preview paging cursor was not returned. Refresh Banking Pay and try again.');
+          cursorError.code = 'BANKING_PAY_CANDIDATE_ATOMIC_REFRESH_CURSOR_MISSING';
+          throw cursorError;
+        }
+        candidatePreviewCursor = nextCursor;
+      }
+      if (candidatePreviewPageCount >= 100 && (
+        candidatePreview?.has_more === true
+        || candidatePreview?.hasMore === true
+        || candidatePreview?.next_cursor != null
+        || candidatePreview?.nextCursor != null
+      )) {
+        const pageLimitError = new Error('The candidate preview exceeded the safe paging limit.');
+        pageLimitError.code = 'BANKING_PAY_CANDIDATE_ATOMIC_REFRESH_PAGE_LIMIT_EXCEEDED';
+        throw pageLimitError;
+      }
+      candidatePreview = {
+        ...(candidatePreviewFirstPage || {}),
+        ...(candidatePreview || {}),
+        ok: true,
+        session_id: sessionIdText,
+        candidate_id: candidateIdText,
+        session_version: candidatePreviewVersion,
+        rows: cloneJson(candidatePreviewRows) || [],
+        preview_rows: cloneJson(candidatePreviewRows) || [],
+        items: cloneJson(candidatePreviewRows) || [],
+        returned_count: candidatePreviewRows.length,
+        next_cursor: null,
+        has_more: false,
+        atomic_candidate_refresh_complete: true,
+        atomic_candidate_refresh_page_count: candidatePreviewPageCount
+      };
 
       if (updateState) {
         const beforeCandidatePreviewMergeGuard = evaluateStalenessGuard('before_candidate_preview_merge', {
