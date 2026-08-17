@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-resolution-adoption-r4',
+  asset_version: '20260817-banking-james-resolution-adoption-r5',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -130190,6 +130190,7 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   }
   wiz.preview.componentStateCache = {
     case_resolution_states: cloneJson(caseResolutionStates) || [],
+    cases_resolutions: cloneJson(caseResolutionStates) || [],
     blocked_case_states: cloneJson(blockedCaseStates) || [],
     safe_case_states: cloneJson(safeCaseStates) || [],
     reusable_component_resolutions: (isPlainObject(nextPreview.reusable_component_resolutions) ? cloneJson(nextPreview.reusable_component_resolutions) : {}) || {},
@@ -130205,6 +130206,7 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   };
 
   wiz.decisions.case_resolution_states = cloneJson(caseResolutionStates) || [];
+  wiz.decisions.cases_resolutions = cloneJson(caseResolutionStates) || [];
   wiz.decisions.blocked_case_states = cloneJson(blockedCaseStates) || [];
   wiz.decisions.safe_case_states = cloneJson(safeCaseStates) || [];
   wiz.decisions.reusable_component_resolutions = (isPlainObject(nextPreview.reusable_component_resolutions) ? cloneJson(nextPreview.reusable_component_resolutions) : {}) || {};
@@ -130264,6 +130266,7 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   wiz.workbench.create_draft_refresh_pending = hasPendingWorkbenchRefresh;
   wiz.workbench.pay_context_dirty = hasPendingWorkbenchRefresh;
   wiz.workbench.case_resolution_states = cloneJson(caseResolutionStates) || [];
+  wiz.workbench.cases_resolutions = cloneJson(caseResolutionStates) || [];
   wiz.workbench.canonical_preview_lines = cloneJson(canonicalPreviewLines) || [];
   wiz.workbench.payees = cloneJson(payees) || [];
   wiz.workbench.summary = isPlainObject(nextPreview.summary) ? (cloneJson(nextPreview.summary) || {}) : {};
