@@ -4,6 +4,12 @@
 
 These instructions apply to Codex work on CloudTMS. They are mandatory unless the user explicitly overrides a specific instruction in the current task.
 
+## Banking Pay Bible
+
+Before investigating, planning, editing, testing, publishing, installing, or deploying any Banking Pay, Workbench, Draft, payment, recovery, pay-channel resolution, settlement, cancellation, or remittance change, read `BANKING_PAY_BIBLE.md` in full.
+
+Treat that document as the mandatory cross-system behavioural rulebook. A Banking Pay change must preserve every applicable rule in it, add or update an executable regression test for any rule it affects, and update the Bible's change record when verified behaviour or an explicitly approved policy decision changes. Never silently weaken an existing rule to make a new test pass.
+
 CloudTMS currently uses a frontend-primary Codex environment:
 
 * Primary writable repository: `/workspace/TEST-Frontend`

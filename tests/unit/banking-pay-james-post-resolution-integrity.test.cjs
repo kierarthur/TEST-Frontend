@@ -80,6 +80,21 @@ test('Ready grouped timesheets expose one exact cancel action and fail closed on
   assert.match(render, /BANKING_PAY_RESOLVED_RATE_GROUP_IDENTITY_CONFLICT/);
   assert.match(render, /data-action="banking:pay:clearCaseResolution"/);
   assert.match(render, />Cancel Resolved Rate<\/button>/);
+  assert.doesNotMatch(render, /Cancel Resolved Pay Channel/);
+  assert.doesNotMatch(render, /Cancel Resolved Gross Total/);
+});
+
+test('finance cancellation does not alter the BUCKETED resolved-rate owner', () => {
+  const finance = sliceBetween(
+    'const FINANCE_CLEAR_RESOLUTION_FAMILIES =',
+    'const displayBlockedReasonText ='
+  );
+
+  assert.match(finance, /new Set\(\['TAXABLE_CHANNEL_RESTRUCTURE', 'NON_BUCKET'\]\)/);
+  assert.match(finance, /if \(!FINANCE_CLEAR_RESOLUTION_FAMILIES\.has\(resolutionFamily\)\) return null/);
+  assert.doesNotMatch(finance, /FINANCE_CLEAR_RESOLUTION_FAMILIES[^\n]*BUCKETED/);
+  assert.match(source, /data-action="banking:pay:clearCaseResolution"/);
+  assert.match(source, />Cancel Resolved Rate<\/button>/);
 });
 
 test('expanded Ready timesheet breakdown renders canonical segment details rather than parent placeholders', () => {

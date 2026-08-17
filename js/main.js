@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-resolution-adoption-r13',
+  asset_version: '20260817-banking-finance-resolution-cancel-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -52160,19 +52160,112 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
 
 
 
+  const FINANCE_CLEAR_RESOLUTION_FAMILIES = new Set(['TAXABLE_CHANNEL_RESTRUCTURE', 'NON_BUCKET']);
+  const isFinanceClearUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimStr(value || ''));
+
+  const normalizeFinanceResolutionAction = (rawAction, line) => {
+    if (!isPlainObject(rawAction)) return null;
+    const actionName = upperTrim(rawAction.action || rawAction.action_name || '');
+    const enabled = rawAction.enabled === true;
+    const candidateId = trimStr(rawAction.candidate_id || rawAction.candidateId || '');
+    const financeCaseId = trimStr(rawAction.finance_case_id || rawAction.financeCaseId || '');
+    const caseKey = trimStr(rawAction.case_key || rawAction.caseKey || '');
+    const resolutionFamily = upperTrim(rawAction.resolution_family || rawAction.resolutionFamily || '');
+    const linkedTimesheetId = trimStr(rawAction.linked_timesheet_id || rawAction.linkedTimesheetId || '');
+    const timesheetId = trimStr(rawAction.timesheet_id || rawAction.timesheetId || '');
+    const nested = getNestedLinePayload(line);
+    const summary = isPlainObject(line?.case_resolution_summary)
+      ? line.case_resolution_summary
+      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
+    const lineCandidateId = trimStr(line?.candidate_id || nested?.candidate_id || summary?.candidate_id || '');
+    const lineFinanceCaseId = trimStr(line?.finance_case_id || nested?.finance_case_id || summary?.finance_case_id || '');
+
+    if (actionName !== 'CLEAR_CASE_RESOLUTION' || !enabled) return null;
+    if (!isFinanceClearUuid(candidateId) || !isFinanceClearUuid(financeCaseId)) return null;
+    if (caseKey !== `finance:${financeCaseId}`) return null;
+    if (!FINANCE_CLEAR_RESOLUTION_FAMILIES.has(resolutionFamily)) return null;
+    if (lineCandidateId && lineCandidateId !== candidateId) return null;
+    if (lineFinanceCaseId && lineFinanceCaseId !== financeCaseId) return null;
+
+    if (resolutionFamily === 'TAXABLE_CHANNEL_RESTRUCTURE' && (linkedTimesheetId || timesheetId)) return null;
+    if (resolutionFamily === 'NON_BUCKET') {
+      if (linkedTimesheetId && !isFinanceClearUuid(linkedTimesheetId)) return null;
+      if (timesheetId && !isFinanceClearUuid(timesheetId)) return null;
+      if (linkedTimesheetId && timesheetId && linkedTimesheetId !== timesheetId) return null;
+    }
+
+    const canonicalLinkedTimesheetId = resolutionFamily === 'NON_BUCKET'
+      ? (linkedTimesheetId || timesheetId || '')
+      : '';
+    const fallbackLabel = resolutionFamily === 'TAXABLE_CHANNEL_RESTRUCTURE'
+      ? 'Cancel Resolved Pay Channel'
+      : 'Cancel Resolved Gross Total';
+    return {
+      action: 'CLEAR_CASE_RESOLUTION',
+      enabled: true,
+      candidate_id: candidateId,
+      finance_case_id: financeCaseId,
+      case_key: caseKey,
+      resolution_family: resolutionFamily,
+      ...(canonicalLinkedTimesheetId ? { linked_timesheet_id: canonicalLinkedTimesheetId } : {}),
+      label: trimStr(rawAction.label || '') || fallbackLabel
+    };
+  };
+
   const getFinanceResolutionAction = (line) => {
     if (!line || typeof line !== 'object') return null;
     const nested = getNestedLinePayload(line);
     const summary = isPlainObject(line?.case_resolution_summary)
       ? line.case_resolution_summary
       : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
-    const directAction = line.clear_resolution_action || line.clearResolutionAction || line.cancel_resolution_action || line.cancelResolveAction || line.resolution_clear_action;
-    if (isPlainObject(directAction)) return directAction;
-    const nestedAction = nested?.clear_resolution_action || nested?.clearResolutionAction || nested?.cancel_resolution_action || nested?.cancelResolveAction || nested?.resolution_clear_action;
-    if (isPlainObject(nestedAction)) return nestedAction;
-    const summaryAction = summary.clear_resolution_action || summary.clearResolutionAction || summary.cancel_resolution_action || summary.cancelResolveAction || summary.resolution_clear_action;
-    if (isPlainObject(summaryAction)) return summaryAction;
-    return null;
+    const canonicalCandidates = [
+      line.clear_case_resolution_action,
+      isPlainObject(line.case_resolution_actions) ? line.case_resolution_actions.clear : null,
+      nested?.clear_case_resolution_action,
+      isPlainObject(nested?.case_resolution_actions) ? nested.case_resolution_actions.clear : null,
+      summary?.clear_case_resolution_action,
+      isPlainObject(summary?.case_resolution_actions) ? summary.case_resolution_actions.clear : null
+    ].filter(isPlainObject);
+    const legacyCandidates = [
+      line.clear_resolution_action,
+      line.clearResolutionAction,
+      line.cancel_resolution_action,
+      line.cancelResolveAction,
+      line.resolution_clear_action,
+      nested?.clear_resolution_action,
+      nested?.clearResolutionAction,
+      nested?.cancel_resolution_action,
+      nested?.cancelResolveAction,
+      nested?.resolution_clear_action,
+      summary?.clear_resolution_action,
+      summary?.clearResolutionAction,
+      summary?.cancel_resolution_action,
+      summary?.cancelResolveAction,
+      summary?.resolution_clear_action
+    ].filter(isPlainObject);
+    const selectedCandidates = canonicalCandidates.length ? canonicalCandidates : legacyCandidates;
+    if (!selectedCandidates.length) return null;
+
+    const normalizedCandidates = selectedCandidates.map((candidate) => normalizeFinanceResolutionAction(candidate, line));
+    if (normalizedCandidates.some((candidate) => !candidate)) {
+      console.warn('[Banking Pay] Rejected an incomplete or unsupported finance cancellation action.');
+      return null;
+    }
+    const normalizedSignature = stableStringify(normalizedCandidates[0]);
+    if (normalizedCandidates.some((candidate) => stableStringify(candidate) !== normalizedSignature)) {
+      console.warn('[Banking Pay] Rejected conflicting canonical finance cancellation actions.');
+      return null;
+    }
+
+    if (canonicalCandidates.length && legacyCandidates.length) {
+      const normalizedLegacy = legacyCandidates.map((candidate) => normalizeFinanceResolutionAction(candidate, line));
+      if (normalizedLegacy.some((candidate) => !candidate || stableStringify(candidate) !== normalizedSignature)) {
+        console.warn('[Banking Pay] Rejected conflicting canonical and legacy finance cancellation actions.');
+        return null;
+      }
+    }
+
+    return normalizedCandidates[0];
   };
 
   const getFinanceResolutionState = (line) => {
@@ -52241,80 +52334,21 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
   const isResolvedFinanceLine = (line, renderContextSection = '') => {
     if (!line || typeof line !== 'object') return false;
     if (isAutomaticCorrectionCarrierLine(line)) return false;
-    const section = upperTrim(renderContextSection) || getLinePresentationSection(line);
-    if (section !== 'READY_TO_PAY') return false;
-    const family = getFinanceResolutionFamily(line);
-    if (!family || family === 'BUCKETED') return false;
-    const financeCaseId = getFinanceResolutionCaseId(line);
-    if (!financeCaseId) return false;
-    const action = getFinanceResolutionAction(line) || {};
-    const state = getFinanceResolutionState(line);
-    const nested = getNestedLinePayload(line);
-    const summary = isPlainObject(line?.case_resolution_summary)
-      ? line.case_resolution_summary
-      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
-    const badge = upperTrim(
-      line.resolution_badge ||
-      line.resolutionBadge ||
-      line.presentation_badge ||
-      line.presentationBadge ||
-      nested?.resolution_badge ||
-      nested?.presentation_badge ||
-      summary?.resolution_badge ||
-      action.badge ||
-      ''
-    );
-    return state === 'RESOLVED'
-      || badge === 'RESOLVED'
-      || asBool(action.resolved)
-      || asBool(line.is_resolved)
-      || asBool(line.isResolved)
-      || asBool(nested?.is_resolved)
-      || asBool(summary?.is_resolved);
+    return !!getFinanceResolutionAction(line);
   };
 
   const financeCancelResolveActionHtml = (line, renderContextSection = '') => {
     if (!isResolvedFinanceLine(line, renderContextSection)) return '';
-    const nested = getNestedLinePayload(line);
-    const summary = isPlainObject(line?.case_resolution_summary)
-      ? line.case_resolution_summary
-      : (isPlainObject(nested?.case_resolution_summary) ? nested.case_resolution_summary : {});
-    const action = getFinanceResolutionAction(line) || {};
-    const financeCaseId = getFinanceResolutionCaseId(line);
-    const candidateId = trimStr(
-      action.candidate_id ||
-      action.candidateId ||
-      line?.candidate_id ||
-      nested?.candidate_id ||
-      summary?.candidate_id ||
-      getLineCandidateId(line) ||
-      ''
-    );
-    const linkedTimesheetId = trimStr(
-      action.linked_timesheet_id ||
-      action.linkedTimesheetId ||
-      action.timesheet_id ||
-      action.timesheetId ||
-      line?.linked_timesheet_id ||
-      line?.timesheet_id ||
-      nested?.linked_timesheet_id ||
-      nested?.timesheet_id ||
-      summary?.linked_timesheet_id ||
-      summary?.timesheet_id ||
-      ''
-    );
-    const caseKey = trimStr(
-      action.case_key ||
-      action.caseKey ||
-      line?.case_key ||
-      line?.caseKey ||
-      nested?.case_key ||
-      summary?.case_key ||
-      (financeCaseId ? `advance:${financeCaseId}` : '')
-    );
-    const family = getFinanceResolutionFamily(line) || 'TAXABLE_CHANNEL_RESTRUCTURE';
-    if (!candidateId || !caseKey || !financeCaseId) return '';
-    const confirmationText = 'Cancel this resolved finance Case Resolution? Existing Draft items remain frozen and may need to be cancelled and regenerated.';
+    const action = getFinanceResolutionAction(line);
+    if (!action) return '';
+    const candidateId = action.candidate_id;
+    const financeCaseId = action.finance_case_id;
+    const caseKey = action.case_key;
+    const family = action.resolution_family;
+    const linkedTimesheetId = trimStr(action.linked_timesheet_id || '');
+    const label = action.label;
+    const decisionLabel = family === 'TAXABLE_CHANNEL_RESTRUCTURE' ? 'pay-channel' : 'gross-total';
+    const confirmationText = `Cancel the resolved ${decisionLabel} decision for this financial recovery? CloudTMS will remove the current live saved resolution and recalculate the candidate’s Banking Pay position. Existing frozen Draft payment items will not be changed.`;
     return `
       <button
         type="button"
@@ -52323,11 +52357,11 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
         data-candidate-id="${enc(candidateId)}"
         data-case-key="${enc(caseKey)}"
         data-finance-case-id="${enc(financeCaseId)}"
-        ${linkedTimesheetId ? `data-timesheet-id="${enc(linkedTimesheetId)}" data-linked-timesheet-id="${enc(linkedTimesheetId)}"` : ''}
+        ${linkedTimesheetId ? `data-linked-timesheet-id="${enc(linkedTimesheetId)}"` : ''}
         data-resolution-family="${enc(family)}"
         data-confirm-message="${enc(confirmationText)}"
         ${getCandidateActionDisabledAttrs(candidateId, 'Cancel the resolved finance case')}
-      >Cancel Resolve</button>
+      >${enc(label)}</button>
     `;
   };
 
@@ -99682,22 +99716,37 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       const linkedTimesheetId = String(ds('linkedTimesheetId') || dget('data-linked-timesheet-id') || ds('timesheetId') || dget('data-timesheet-id') || '').trim();
       const resolutionFamily = String(ds('resolutionFamily') || dget('data-resolution-family') || '').trim().toUpperCase();
 
-      if (!candidateId) {
-        toast('Candidate id is required.');
+      if (!isFinanceClearUuid(candidateId) || !isFinanceClearUuid(financeCaseId)) {
+        toast('The resolved financial case identity is invalid. Refresh Banking Pay and try again.');
         return;
       }
-      if (!caseKey) {
-        toast('Case key is required.');
+      if (caseKey !== `finance:${financeCaseId}`) {
+        toast('The resolved financial case identity changed. Refresh Banking Pay and try again.');
+        return;
+      }
+      if (!FINANCE_CLEAR_RESOLUTION_FAMILIES.has(resolutionFamily)) {
+        toast('This resolved financial case does not have a supported cancellation owner.');
+        return;
+      }
+      if (resolutionFamily === 'TAXABLE_CHANNEL_RESTRUCTURE' && linkedTimesheetId) {
+        toast('The resolved pay-channel owner is invalid. Refresh Banking Pay and try again.');
+        return;
+      }
+      if (linkedTimesheetId && !isFinanceClearUuid(linkedTimesheetId)) {
+        toast('The resolved gross-total owner is invalid. Refresh Banking Pay and try again.');
         return;
       }
 
       const confirmationMessage = String(ds('confirmMessage') || dget('data-confirm-message') || '').trim();
       if (confirmationMessage) {
+        const confirmationLabel = resolutionFamily === 'TAXABLE_CHANNEL_RESTRUCTURE'
+          ? 'Cancel Resolved Pay Channel'
+          : 'Cancel Resolved Gross Total';
         const confirmed = await confirmBankingPayAction({
-          title: 'Cancel resolved rate?',
+          title: `${confirmationLabel}?`,
           message: confirmationMessage,
-          confirmLabel: 'Cancel Resolved Rate',
-          cancelLabel: 'Keep resolved rate',
+          confirmLabel: confirmationLabel,
+          cancelLabel: 'Keep resolved decision',
           kind: 'banking-pay-clear-case-resolution-confirm'
         });
         if (!confirmed) return;
@@ -99710,9 +99759,9 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
             operation: 'CLEAR',
             candidate_id: candidateId,
             case_key: caseKey,
-            ...(financeCaseId ? { finance_case_id: financeCaseId } : {}),
-            ...(linkedTimesheetId ? { linked_timesheet_id: linkedTimesheetId, timesheet_id: linkedTimesheetId } : {}),
-            ...(resolutionFamily ? { resolution_family: resolutionFamily } : {}),
+            finance_case_id: financeCaseId,
+            ...(linkedTimesheetId ? { linked_timesheet_id: linkedTimesheetId } : {}),
+            resolution_family: resolutionFamily,
             ...(getCurrentWorkbenchSessionVersion() != null ? { expected_session_version: getCurrentWorkbenchSessionVersion() } : {}),
             ...(getCurrentWorkbenchProgressCounterVersion() != null ? { expected_progress_counter_version: getCurrentWorkbenchProgressCounterVersion() } : {})
           })
