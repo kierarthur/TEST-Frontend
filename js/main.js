@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-modal-performance-r1',
+  asset_version: '20260817-banking-james-recovery-section-refresh-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -16176,6 +16176,86 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
     return;
   }
 
+  const refreshTaxableRestructureWorkbenchAfterSave = async (result = {}) => {
+    if (!isTaxableChannelRestructure) return { ok: true, skipped: true };
+
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const refreshSignal = isPlainObject(result?.refresh_signal) ? result.refresh_signal : {};
+    const candidateId = trimStr(
+      refreshSignal.candidate_id ||
+      result?.candidate_id ||
+      result?.after?.candidate_id ||
+      result?.case?.candidate_id ||
+      src.candidate_id ||
+      src.candidateId ||
+      ''
+    );
+    const sessionId = trimStr(
+      st?.pay?.draftWizard?.workbench?.session_id ||
+      st?.pay?.draftWizard?.decisions?.session_id ||
+      st?.pay?.draftWizard?.preview?.data?.session_id ||
+      ''
+    );
+
+    if (!uuidRe.test(candidateId) || !uuidRe.test(sessionId)) {
+      throw new Error('The finance restructure was saved, but its Banking Pay candidate session could not be identified.');
+    }
+    if (typeof bankingPayWorkbenchSessionRefresh !== 'function' || typeof pollPayWorkbenchCandidateUntilSettled !== 'function') {
+      throw new Error('The finance restructure was saved, but Banking Pay refresh is unavailable.');
+    }
+
+    await bankingPayWorkbenchSessionRefresh(sessionId, {
+      reason: 'TAXABLE_CHANNEL_RESTRUCTURE_APPLIED'
+    });
+    const settled = await pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, {
+      updateState: true,
+      expectedSessionId: sessionId,
+      requirePreviewSectionsAfterReady: true,
+      forceFullSessionRefresh: true,
+      fullSessionRefreshAfterSettled: true,
+      affectedCandidateIds: [candidateId],
+      candidateIds: [candidateId],
+      source: 'openBankingFinanceCaseRestructureModal.taxableChannelRestructureSaved'
+    });
+
+    if (
+      settled?.aborted === true ||
+      settled?.stale === true ||
+      settled?.failed === true ||
+      settled?.timed_out === true ||
+      settled?.settled !== true ||
+      settled?.ready !== true ||
+      settled?.required_preview_sections_loaded !== true
+    ) {
+      throw new Error('The finance restructure was saved, but the latest Banking Pay preview has not settled.');
+    }
+
+    try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
+    if (typeof bankingRerender === 'function') await bankingRerender('pay');
+    return { ok: true, session_id: sessionId, candidate_id: candidateId, settled };
+  };
+
+  const scheduleTaxableRestructureWorkbenchRefresh = (result = {}) => {
+    if (!isTaxableChannelRestructure) return;
+    setTimeout(() => {
+      Promise.resolve(refreshTaxableRestructureWorkbenchAfterSave(result)).catch(async () => {
+        try {
+          const decisions = st?.pay?.draftWizard?.decisions;
+          if (decisions && typeof decisions === 'object') {
+            decisions.pay_context_dirty = true;
+            decisions.dirty_reason = 'TAXABLE_CHANNEL_RESTRUCTURE_APPLIED';
+          }
+        } catch {}
+        try { if (typeof bankingRerender === 'function') await bankingRerender('pay'); } catch {}
+        try {
+          if (typeof window.__toast === 'function') {
+            window.__toast('The finance restructure was saved. Banking Pay is refreshing the latest preview.');
+          }
+        } catch {}
+      });
+    }, 0);
+  };
+
   const caseTypeRaw = upperTrim(src.case_type || '');
   if (!isPaymentIssueMode) {
     if (isTaxableChannelRestructure) {
@@ -17675,6 +17755,8 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
       try {
         await refreshLoansSnoozes();
       } catch {}
+
+      scheduleTaxableRestructureWorkbenchRefresh(result);
 
       try {
         if (typeof window.__toast === 'function') {

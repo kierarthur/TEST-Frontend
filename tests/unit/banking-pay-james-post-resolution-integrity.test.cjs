@@ -111,6 +111,22 @@ test('recovery presentation allocates the certified row recovery when legacy com
   assert.match(presentation, /Math\.min\(rawRecoverable, remainingRowRecovery\)/);
 });
 
+test('taxable restructure refreshes and atomically adopts the affected Workbench candidate', () => {
+  const restructure = sliceBetween(
+    'async function openBankingFinanceCaseRestructureModal(seed = {}) {',
+    'async function runBulkTimesheetSelectionChunks(action, items, options = {}) {'
+  );
+
+  assert.match(restructure, /refreshTaxableRestructureWorkbenchAfterSave/);
+  assert.match(restructure, /bankingPayWorkbenchSessionRefresh\(sessionId,\s*\{[\s\S]*TAXABLE_CHANNEL_RESTRUCTURE_APPLIED/);
+  assert.match(restructure, /pollPayWorkbenchCandidateUntilSettled\(sessionId, candidateId/);
+  assert.match(restructure, /requirePreviewSectionsAfterReady:\s*true/);
+  assert.match(restructure, /forceFullSessionRefresh:\s*true/);
+  assert.match(restructure, /scheduleTaxableRestructureWorkbenchRefresh\(result\)/);
+  assert.match(restructure, /setTimeout\(\(\) => \{[\s\S]*refreshTaxableRestructureWorkbenchAfterSave/);
+  assert.match(restructure, /dirty_reason = 'TAXABLE_CHANNEL_RESTRUCTURE_APPLIED'/);
+});
+
 test('non-draftable READY parent context is merged back beside allocation children', () => {
   const adoption = sliceBetween(
     'const isReadyToPayDisplayContextRow =',
