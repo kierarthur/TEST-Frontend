@@ -441,8 +441,9 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
       eduardoPresent: true
     });
     let state = await getKierRecoveryPresentation(page);
-    expect(state.blocked[0]).toContain('No recovery can be made this pay run from the total outstanding amount of 1126.60.');
-    expect(state.blocked[0]).toContain('0.00');
+    expect(state.blocked[0]).toContain('No recovery can be made because there are no available funds to deduct from this pay run.');
+    expect(state.blocked[0]).toContain('1126.60');
+    expect(state.blocked[0]).toContain('Insufficient funds');
 
     await setKierTimesheetSelected(page, true);
     await expect.poll(async () => {
@@ -574,7 +575,7 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
       eduardoPresent: true
     });
     state = await getKierRecoveryPresentation(page);
-    expect(state.blocked[0]).toContain('No recovery can be made this pay run from the total outstanding amount of 1126.60.');
+    expect(state.blocked[0]).toContain('No recovery can be made because there are no available funds to deduct from this pay run.');
     expect(state.blocked[0]).not.toContain('221.73');
     expect(state.blocked[0]).not.toContain('904.87');
   } finally {
@@ -608,7 +609,7 @@ test('Kier recovery moves atomically between Ready and Blocked as its £1 headro
   } else {
     expect(reopenedState.ready).toHaveLength(0);
     expect(reopenedState.blocked).toHaveLength(1);
-    expect(reopenedState.blocked[0]).toContain('No recovery can be made this pay run from the total outstanding amount of 1126.60.');
+    expect(reopenedState.blocked[0]).toContain('No recovery can be made because there are no available funds to deduct from this pay run.');
   }
   expect(reopenedState.jamesPresent).toBe(true);
   expect(reopenedState.eduardoPresent).toBe(true);

@@ -177,18 +177,19 @@ test('shows each zero-headroom recovery once in Blocked and preserves its consti
   await expect(recoveryRow).toBeVisible();
   await expect(recoveryRow).toContainText('OVERPAYMENT RECOVERY');
   await expect(recoveryRow).toContainText('No available funds to recover this yet.');
-  await expect(recoveryRow).toContainText('0.00');
-  await expect(recoveryRow).toContainText('No recovery can be made this pay run from the total outstanding amount of 56.25.');
-  await expect(recoveryRow).toContainText('Blocked for pay');
+  await expect(recoveryRow).toContainText('56.25');
+  await expect(recoveryRow).toContainText('No recovery can be made because there are no available funds to deduct from this pay run.');
+  await expect(recoveryRow).toContainText('Insufficient funds');
+  await expect(recoveryRow).not.toContainText('Blocked for pay');
   await expect(recoveryRow).not.toContainText('Ready to pay');
   await expect(recoveryRow).not.toContainText('Timesheet pay — 06/07/2026');
   await expect(bankingModal.getByText(/^Blocked amount -?\d+\.\d{2}$/, { exact: true })).toBeVisible();
 
   const olderRecoveryRow = recoveryRows.filter({ hasText: '14/06/2026' });
   await expect(olderRecoveryRow).toHaveCount(1);
-  await expect(olderRecoveryRow).toContainText('0.00');
-  await expect(olderRecoveryRow).toContainText('No recovery can be made this pay run from the total outstanding amount of 15.84.');
-  await expect(olderRecoveryRow).toContainText('Blocked for pay');
+  await expect(olderRecoveryRow).toContainText('15.84');
+  await expect(olderRecoveryRow).toContainText('No recovery can be made because there are no available funds to deduct from this pay run.');
+  await expect(olderRecoveryRow).toContainText('Insufficient funds');
 
   const detailRow = recoveryRow.locator('xpath=following-sibling::tr[1]');
   const breakdown = detailRow.locator('details[data-overpayment-recovery-breakdown]');

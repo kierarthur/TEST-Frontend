@@ -69,7 +69,7 @@ const eduardoRecoveryRow = {
   ]
 };
 
-test('shows zero recoverable now and explains the full outstanding recovery separately', () => {
+test('shows the outstanding amount due and explains zero headroom in Blocked for Pay', () => {
   const helpers = installHarness();
   const presentation = helpers.getOverpaymentRecoveryPresentation(eduardoRecoveryRow);
 
@@ -78,8 +78,13 @@ test('shows zero recoverable now and explains the full outstanding recovery sepa
   assert.equal(presentation.no_available_funds, true);
   assert.equal(helpers.getPreviewLineDisplayAmount(eduardoRecoveryRow), 0);
   assert.match(helpers.renderPreviewLineTypeHtml(eduardoRecoveryRow), /No available funds to recover this yet\./);
-  assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), />0\.00</);
-  assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), /No recovery can be made this pay run from the total outstanding amount of 15\.84\./);
+  const blockedAmountHtml = helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow, 'BLOCKED_FOR_PAY');
+  assert.match(blockedAmountHtml, />15\.84</);
+  assert.doesNotMatch(blockedAmountHtml, />0\.00</);
+  assert.match(blockedAmountHtml, /No recovery can be made because there are no available funds to deduct from this pay run\./);
+  assert.match(mainSource, /insufficientRecoveryFunds \? 'Insufficient funds'/);
+  assert.match(mainSource, /compactReady \|\| insufficientRecoveryFunds \? ''/);
+  assert.match(mainSource, /!insufficientRecoveryFunds && blockedUi\.detailTexts\.length/);
 });
 
 test('shows the source amount and conversion direction for a pay-channel case resolution', () => {

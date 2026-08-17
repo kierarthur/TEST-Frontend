@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-resolution-adoption-r6',
+  asset_version: '20260817-banking-james-resolution-adoption-r7',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -53678,6 +53678,13 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
         : getLineSectionAmount(line);
       return `${resolvedRateBadgeHtml(line, renderContextSection)}<div>${enc(fmtMoney(displayAmount))}</div>`;
     }
+    if (recovery.no_available_funds && upperTrim(renderContextSection) === 'BLOCKED_FOR_PAY') {
+      return `
+        ${resolvedRateBadgeHtml(line, renderContextSection)}
+        <div>${enc(fmtMoney(recovery.outstanding_total))}</div>
+        <div class="mini" style="margin-top:3px;opacity:.8;white-space:normal;">No recovery can be made because there are no available funds to deduct from this pay run.</div>
+      `;
+    }
     const recoverableThisRun = Math.abs(recovery.recoverable_this_run);
     const recoverySummary = recoverableThisRun > 0
       ? `${fmtMoney(recoverableThisRun)} will be recovered from the total outstanding amount of ${fmtMoney(recovery.outstanding_total)}.`
@@ -54780,6 +54787,10 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const caseRecoveryRoute = upperTrim(renderContextSection || section) === 'CASES_RESOLUTIONS'
         ? getCaseResolutionPayRoutePresentation(line)
         : null;
+      const blockedRecoveryPresentation = section === 'BLOCKED_FOR_PAY'
+        ? getOverpaymentRecoveryPresentation(line)
+        : null;
+      const insufficientRecoveryFunds = blockedRecoveryPresentation?.no_available_funds === true;
       const blockedUi = getPreviewLineBlockedUi(line);
       const actionHtml = previewActionHtml(line);
       const caseActionHtml = (section === 'CASES_RESOLUTIONS' && isPlainObject(line?.__case_entry))
@@ -54795,7 +54806,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         compactReady ? { expandedBodyOnly: true } : {}
       );
       const info = getSnoozeInfo(line);
-      const stateLabel = stateLabelOverride || (
+      const stateLabel = insufficientRecoveryFunds ? 'Insufficient funds' : (stateLabelOverride || (
         section === 'BLOCKED_FOR_PAY'
           ? 'Blocked for pay'
           : (section === 'CASES_RESOLUTIONS'
@@ -54803,7 +54814,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
               : (info.isDated
                   ? `Snoozed until ${ymdToUk(info.snoozeUntil) || info.snoozeUntil}`
                   : (asBool(line?.is_ready_for_draft) ? 'Ready to pay' : 'Review required')))
-      );
+      ));
       const statePillClass = section === 'BLOCKED_FOR_PAY'
         ? 'pill-bad'
         : (section === 'CASES_RESOLUTIONS' ? 'pill-warn' : ((info.isDated || upperTrim(line?.line_type || '') === 'BLOCKED_TIMESHEET' || upperTrim(line?.line_type || '') === 'DO_NOT_PAY' || asBool(line?.is_excluded_from_allocation) || (line?.is_ready_for_draft === false) || asBool(line?.case_is_blocked)) ? 'pill-bad' : 'pill-ok'));
@@ -54882,8 +54893,8 @@ const renderReadyTimesheetGroupedRows = (lines) => {
           <td>
             <div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;gap:4px;'}">
               <span class="pill ${enc(statePillClass || (isBlockedLike ? 'pill-bad' : 'pill-ok'))}">${enc(stateLabel)}</span>
-              ${blockedUi.detailTexts.length ? `<div class="mini" style="opacity:.85;">${blockedUi.detailTexts.map((txt) => enc(txt)).join('<br/>')}</div>` : ''}
-              ${compactReady ? '' : `<div class="mini" style="opacity:.85;">${caseRecoveryRoute ? enc(caseRecoveryRoute.direction_label) : `${enc(payChannel || '—')}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}`}</div>`}
+              ${!insufficientRecoveryFunds && blockedUi.detailTexts.length ? `<div class="mini" style="opacity:.85;">${blockedUi.detailTexts.map((txt) => enc(txt)).join('<br/>')}</div>` : ''}
+              ${compactReady || insufficientRecoveryFunds ? '' : `<div class="mini" style="opacity:.85;">${caseRecoveryRoute ? enc(caseRecoveryRoute.direction_label) : `${enc(payChannel || '—')}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}`}</div>`}
             </div>
           </td>
           <td style="white-space:nowrap;vertical-align:middle;">${combinedActionHtml ? `<div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;align-items:flex-start;'}gap:6px;">${combinedActionHtml}</div>` : `<span class="mini" style="opacity:.7;">—</span>`}</td>
