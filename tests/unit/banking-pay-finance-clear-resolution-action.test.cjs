@@ -26,7 +26,6 @@ const actionApi = vm.runInNewContext(`(() => {
   const upperTrim = (value) => trimStr(value).toUpperCase();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const getNestedLinePayload = (line) => isPlainObject(line?.line_json) ? line.line_json : {};
-  const stableStringify = (value) => JSON.stringify(value, Object.keys(value || {}).sort());
   const console = { warn() {} };
   ${actionSource}
   return { normalizeFinanceResolutionAction, getFinanceResolutionAction };
@@ -54,6 +53,11 @@ test('canonical taxable clear action is accepted without a timesheet owner', () 
     JSON.parse(JSON.stringify(actionApi.getFinanceResolutionAction(line))),
     taxableAction()
   );
+});
+
+test('finance action comparison is self-contained in the live Banking Pay scope', () => {
+  assert.match(actionSource, /financeClearResolutionActionSignature/);
+  assert.doesNotMatch(actionSource, /\bstableStringify\b/);
 });
 
 test('canonical NON_BUCKET owner keeps only its exact optional linked timesheet', () => {

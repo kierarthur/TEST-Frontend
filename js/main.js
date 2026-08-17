@@ -52162,6 +52162,16 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
 
   const FINANCE_CLEAR_RESOLUTION_FAMILIES = new Set(['TAXABLE_CHANNEL_RESTRUCTURE', 'NON_BUCKET']);
   const isFinanceClearUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimStr(value || ''));
+  const financeClearResolutionActionSignature = (action) => JSON.stringify([
+    trimStr(action?.action || ''),
+    action?.enabled === true,
+    trimStr(action?.candidate_id || ''),
+    trimStr(action?.finance_case_id || ''),
+    trimStr(action?.case_key || ''),
+    upperTrim(action?.resolution_family || ''),
+    trimStr(action?.linked_timesheet_id || ''),
+    trimStr(action?.label || '')
+  ]);
 
   const normalizeFinanceResolutionAction = (rawAction, line) => {
     if (!isPlainObject(rawAction)) return null;
@@ -52251,15 +52261,15 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       console.warn('[Banking Pay] Rejected an incomplete or unsupported finance cancellation action.');
       return null;
     }
-    const normalizedSignature = stableStringify(normalizedCandidates[0]);
-    if (normalizedCandidates.some((candidate) => stableStringify(candidate) !== normalizedSignature)) {
+    const normalizedSignature = financeClearResolutionActionSignature(normalizedCandidates[0]);
+    if (normalizedCandidates.some((candidate) => financeClearResolutionActionSignature(candidate) !== normalizedSignature)) {
       console.warn('[Banking Pay] Rejected conflicting canonical finance cancellation actions.');
       return null;
     }
 
     if (canonicalCandidates.length && legacyCandidates.length) {
       const normalizedLegacy = legacyCandidates.map((candidate) => normalizeFinanceResolutionAction(candidate, line));
-      if (normalizedLegacy.some((candidate) => !candidate || stableStringify(candidate) !== normalizedSignature)) {
+      if (normalizedLegacy.some((candidate) => !candidate || financeClearResolutionActionSignature(candidate) !== normalizedSignature)) {
         console.warn('[Banking Pay] Rejected conflicting canonical and legacy finance cancellation actions.');
         return null;
       }
