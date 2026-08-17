@@ -136,8 +136,8 @@ function makeFixture() {
     safe_case_states: []
   }, allCases);
   const preview = assignPageAliases(assignCaseAliases({
-    paye_candidates: [{ candidate_id: JAMES_ID }, { candidate_id: OTHER_ID }],
-    non_paye_payees: [],
+    paye_candidates: [assignCaseAliases({ candidate_id: OTHER_ID }, [unrelatedCase])],
+    non_paye_payees: [assignCaseAliases({ candidate_id: JAMES_ID }, jamesCases)],
     canonical_preview_lines: structuredClone(allReady),
     preview_rows: structuredClone(allReady),
     ready_preview_lines: structuredClone(allReady),
@@ -347,6 +347,13 @@ function assertState(state, expected) {
     ['wiz.decisions', wiz.decisions],
     ['wiz.workbench', wiz.workbench]
   ]) assertCaseAliases(owner, expected.cases, 1, label);
+
+  const jamesCandidate = [...preview.paye_candidates, ...preview.non_paye_payees]
+    .find((candidate) => candidate.candidate_id === JAMES_ID);
+  const otherCandidate = [...preview.paye_candidates, ...preview.non_paye_payees]
+    .find((candidate) => candidate.candidate_id === OTHER_ID);
+  assertCaseAliases(jamesCandidate, expected.cases, 0, 'James candidate bucket');
+  assertCaseAliases(otherCandidate, 0, 1, 'unrelated candidate bucket');
 
   const expectedPages = {
     canonical_preview_lines: { james: expected.ready, other: 1 },

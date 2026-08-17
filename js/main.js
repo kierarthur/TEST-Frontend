@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-resolution-adoption-r12',
+  asset_version: '20260817-banking-james-resolution-adoption-r13',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -129868,6 +129868,12 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
       out.preview_rows = allRows;
       out.rows = allRows;
       out.itemisation = allRows;
+      // Candidate buckets are also consumed directly by the Cases renderer.
+      // A terminal candidate response therefore owns the nested case aliases
+      // even when the refreshed candidate has no remaining cases.  Leaving
+      // the prior arrays on this shell makes resolved rows and stale Cases
+      // appear together until Banking Pay is closed and reopened.
+      assignCaseResolutionAliases(out, candidateRowsBySection.cases_resolutions);
     } else {
       if (Array.isArray(out.preview_rows)) out.preview_rows = capRows(out.preview_rows);
       if (Array.isArray(out.rows)) out.rows = capRows(out.rows);
