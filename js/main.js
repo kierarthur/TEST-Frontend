@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-resolution-adoption-r3',
+  asset_version: '20260817-banking-james-resolution-adoption-r4',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -129946,7 +129946,7 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   if (responseCandidateId) {
     for (const key of [
       'paye_candidates', 'non_paye_payees', 'canonical_preview_lines', 'preview_rows', 'ready_preview_lines',
-      'case_resolution_states', 'blocked_case_states', 'safe_case_states', 'payees', 'itemisation',
+      'case_resolution_states', 'cases_resolutions', 'blocked_case_states', 'safe_case_states', 'payees', 'itemisation',
       'blocked_items', 'do_not_pay_items', 'snoozed_items', 'baseline_component_rows', 'draftable_now',
       'blocked_now', 'ready_to_pay_now', 'blocked_for_pay_now', 'hidden_indefinite_snoozes',
       'blocked_preview_lines', 'hidden_preview_lines'

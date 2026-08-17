@@ -41,6 +41,7 @@ test('candidate merge treats the complete response as authoritative across all s
   assert.match(merge, /candidateRowPayloadProvided/);
   assert.match(merge, /mergeRowsForCandidate\(nextPreview\[key\], incoming, responseCandidateId\)/);
   assert.match(merge, /case_resolution_states = mergeRowsForKey\('case_resolution_states', \['cases_resolutions'\]\)/);
+  assert.match(merge, /'case_resolution_states', 'cases_resolutions', 'blocked_case_states'/);
   assert.match(merge, /canonical_preview_lines = mergeRowsForKey\('canonical_preview_lines', \['canonical_preview_lines'\]\)/);
   assert.match(merge, /blocked_for_pay_now = mergeRowsForKey\('blocked_for_pay_now', \['blocked_for_pay'\]\)/);
 });
