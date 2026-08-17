@@ -131,6 +131,23 @@ test('taxable restructure refreshes and atomically adopts the affected Workbench
   assert.match(restructure, /dirty_reason = 'TAXABLE_CHANNEL_RESTRUCTURE_APPLIED'/);
 });
 
+test('linked suggested-rate saves atomically adopt one complete candidate instead of a broad session snapshot', () => {
+  const suggestedRates = sliceBetween(
+    'async function openBankingPaySuggestedRatesReviewModal(seed = {}) {',
+    'async function injectDefaultEmailSignature(input = {}) {'
+  );
+
+  assert.match(suggestedRates, /const linkedScopeSpansCandidates = mutationMeta\.resolveAllLinked === true && affectedCandidateIds\.length > 1/);
+  assert.match(suggestedRates, /shouldForceFullSessionRefreshAfterMutation\(queued, linkedScopeSpansCandidates\)/);
+  assert.match(suggestedRates, /pollPayWorkbenchCandidateUntilSettled\(sessionId, refreshCandidateId/);
+  assert.match(suggestedRates, /requirePreviewSectionsAfterReady:\s*true/);
+  assert.match(suggestedRates, /affectedCandidateIds,/);
+  assert.doesNotMatch(
+    suggestedRates,
+    /shouldForceFullSessionRefreshAfterMutation\(queued, mutationMeta\.resolveAllLinked === true\)/
+  );
+});
+
 test('non-draftable READY parent context is merged back beside allocation children', () => {
   const adoption = sliceBetween(
     'const isReadyToPayDisplayContextRow =',

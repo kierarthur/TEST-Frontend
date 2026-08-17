@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-recovery-section-refresh-r2',
+  asset_version: '20260817-banking-james-resolution-adoption-r3',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -106880,7 +106880,13 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       };
       markCandidatesPendingLocal(affectedCandidateIds, jobMeta);
 
-      const forceFullSessionRefresh = shouldForceFullSessionRefreshAfterMutation(queued, mutationMeta.resolveAllLinked === true);
+      // Linked timesheets remain inside one candidate authority.  Keep that
+      // candidate-scoped so the complete paged candidate response is merged
+      // atomically across Ready, Cases/Resolutions and Blocked.  A broad
+      // session refresh is still honoured when the backend explicitly asks
+      // for one, or if a future action really spans more than one candidate.
+      const linkedScopeSpansCandidates = mutationMeta.resolveAllLinked === true && affectedCandidateIds.length > 1;
+      const forceFullSessionRefresh = shouldForceFullSessionRefreshAfterMutation(queued, linkedScopeSpansCandidates);
       const returnedSessionVersionRaw = trimStr(
         queued?.session_version ??
         queued?.sessionVersion ??
