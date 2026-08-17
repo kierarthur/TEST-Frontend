@@ -50,7 +50,7 @@ function installHarness() {
     fmtMoney: (value) => Number(value || 0).toFixed(2),
     resolvedRateBadgeHtml: () => ''
   };
-  vm.runInNewContext(`${helperSource}\nthis.__overpaymentHelpers = { getOverpaymentRecoveryPresentation, getManualDebtRecoveryPresentation, buildOverpaymentRecoveryDisplayLines, buildOverpaymentRecoverySectionDisplayState, getPreviewLineDisplayAmount, getCaseResolutionDisplayAmount, renderPreviewLineTypeHtml, renderPreviewLineAmountHtml };`, context, {
+  vm.runInNewContext(`${helperSource}\nthis.__overpaymentHelpers = { getOverpaymentRecoveryPresentation, getManualDebtRecoveryPresentation, buildOverpaymentRecoveryDisplayLines, buildOverpaymentRecoverySectionDisplayState, getPreviewLineDisplayAmount, getCaseResolutionDisplayAmount, getCaseResolutionPayRoutePresentation, renderPreviewLineTypeHtml, renderPreviewLineAmountHtml };`, context, {
     filename: 'banking-pay-overpayment-presentation-helpers.js'
   });
   return context.__overpaymentHelpers;
@@ -80,6 +80,57 @@ test('shows zero recoverable now and explains the full outstanding recovery sepa
   assert.match(helpers.renderPreviewLineTypeHtml(eduardoRecoveryRow), /No available funds to recover this yet\./);
   assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), />0\.00</);
   assert.match(helpers.renderPreviewLineAmountHtml(eduardoRecoveryRow), /No recovery can be made this pay run from the total outstanding amount of 15\.84\./);
+});
+
+test('shows the source amount and conversion direction for a pay-channel case resolution', () => {
+  const helpers = installHarness();
+  const unresolvedRecovery = {
+    line_type: 'OVERPAYMENT_RECOVERY',
+    presentation_section: 'CASES_RESOLUTIONS',
+    pay_channel: 'UMBRELLA',
+    amount_ex_vat: '0.00',
+    nominal_due_amount_ex_vat: '25.00',
+    case_components: [{
+      source_pay_method: 'PAYE',
+      current_target_pay_method: 'UMBRELLA',
+      source_amount: '25.00',
+      remaining_source_amount: '25.00',
+      preview_due_amount_ex_vat: '0.00'
+    }]
+  };
+
+  const route = helpers.getCaseResolutionPayRoutePresentation(unresolvedRecovery);
+  assert.equal(route.source_pay_method, 'PAYE');
+  assert.equal(route.target_pay_method, 'UMBRELLA');
+  assert.equal(route.direction_label, 'PAYE > UMBR');
+  assert.equal(route.nominal_amount, 25);
+  assert.match(helpers.renderPreviewLineAmountHtml(unresolvedRecovery, 'CASES_RESOLUTIONS'), /<strong>PAYE<\/strong> £25\.00/);
+  assert.match(helpers.renderPreviewLineAmountHtml(unresolvedRecovery, 'CASES_RESOLUTIONS'), /currently determined as PAYE and needs resolution to convert it to Umbrella\./);
+  assert.match(helpers.renderPreviewLineAmountHtml(unresolvedRecovery), />0\.00</);
+});
+
+test('supports the reverse Umbrella to PAYE direction for non-recovery payment cases', () => {
+  const helpers = installHarness();
+  const unresolvedLoan = {
+    line_type: 'LOAN_REPAYMENT',
+    presentation_section: 'CASES_RESOLUTIONS',
+    amount_ex_vat: '0.00',
+    nominal_due_amount_ex_vat: '40.00',
+    case_components: [{
+      source_pay_method: 'UMBRELLA',
+      current_target_pay_method: 'PAYE'
+    }]
+  };
+
+  const route = helpers.getCaseResolutionPayRoutePresentation(unresolvedLoan);
+  assert.equal(route.direction_label, 'UMBR > PAYE');
+  assert.match(helpers.renderPreviewLineAmountHtml(unresolvedLoan, 'CASES_RESOLUTIONS'), /<strong>UMBRELLA<\/strong> £40\.00/);
+  assert.match(helpers.renderPreviewLineAmountHtml(unresolvedLoan, 'CASES_RESOLUTIONS'), /currently determined as Umbrella and needs resolution to convert it to PAYE\./);
+});
+
+test('uses the source-to-target direction beneath Resolution required for both case row renderers', () => {
+  const directionBindings = mainSource.match(/caseRecoveryRoute \? enc\(caseRecoveryRoute\.direction_label\)/g) || [];
+  assert.equal(directionBindings.length, 2);
 });
 
 test('shows the unresolved correction amount in Cases / Resolutions without treating it as allocatable pay', () => {

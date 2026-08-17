@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-recovery-section-refresh-r1',
+  asset_version: '20260817-banking-james-recovery-section-refresh-r2',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -53577,6 +53577,69 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     return ordinaryAmount ?? 0;
   };
 
+  const getCaseResolutionPayRoutePresentation = (line) => {
+    const nested = getNestedLinePayload(line);
+    const componentSources = [
+      ...asArray(line?.case_components),
+      ...asArray(line?.caseComponents),
+      ...asArray(nested?.case_components),
+      ...asArray(nested?.caseComponents)
+    ].filter((component) => isPlainObject(component));
+    const normaliseMethod = (value) => {
+      const method = upperTrim(value);
+      return method === 'PAYE' || method === 'UMBRELLA' ? method : '';
+    };
+    const sourceMethods = uniqTrimmed(componentSources.map((component) => normaliseMethod(
+      component?.source_pay_method ||
+      component?.sourcePayMethod ||
+      component?.source_method ||
+      component?.sourceMethod ||
+      ''
+    ))).filter(Boolean);
+    const targetMethods = uniqTrimmed(componentSources.map((component) => normaliseMethod(
+      component?.current_target_pay_method ||
+      component?.currentTargetPayMethod ||
+      component?.target_pay_method ||
+      component?.targetPayMethod ||
+      component?.saved_target_pay_method ||
+      component?.savedTargetPayMethod ||
+      ''
+    ))).filter(Boolean);
+    const sourcePayMethod = sourceMethods.length === 1
+      ? sourceMethods[0]
+      : normaliseMethod(
+          line?.source_pay_method ||
+          line?.sourcePayMethod ||
+          nested?.source_pay_method ||
+          nested?.sourcePayMethod ||
+          ''
+        );
+    const targetPayMethod = targetMethods.length === 1
+      ? targetMethods[0]
+      : normaliseMethod(
+          line?.target_pay_method ||
+          line?.targetPayMethod ||
+          nested?.target_pay_method ||
+          nested?.targetPayMethod ||
+          line?.pay_channel ||
+          line?.payChannel ||
+          nested?.pay_channel ||
+          nested?.payChannel ||
+          ''
+        );
+    const nominalAmount = Math.round(Math.abs(toNum(getCaseResolutionDisplayAmount(line), 0)) * 100) / 100;
+
+    if (!sourcePayMethod || !targetPayMethod || sourcePayMethod === targetPayMethod || nominalAmount <= 0) return null;
+    return {
+      source_pay_method: sourcePayMethod,
+      target_pay_method: targetPayMethod,
+      source_label: sourcePayMethod === 'UMBRELLA' ? 'Umbrella' : 'PAYE',
+      target_label: targetPayMethod === 'UMBRELLA' ? 'Umbrella' : 'PAYE',
+      direction_label: `${sourcePayMethod === 'UMBRELLA' ? 'UMBR' : 'PAYE'} > ${targetPayMethod === 'UMBRELLA' ? 'UMBR' : 'PAYE'}`,
+      nominal_amount: nominalAmount
+    };
+  };
+
   const renderPreviewLineTypeHtml = (line) => {
     const label = trimStr(line?.line_type || 'Preview line').replace(/_/g, ' ');
     const recovery = getOverpaymentRecoveryPresentation(line);
@@ -53589,6 +53652,16 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
   };
 
   const renderPreviewLineAmountHtml = (line, renderContextSection = '') => {
+    const caseRecoveryRoute = upperTrim(renderContextSection) === 'CASES_RESOLUTIONS'
+      ? getCaseResolutionPayRoutePresentation(line)
+      : null;
+    if (caseRecoveryRoute) {
+      return `
+        ${resolvedRateBadgeHtml(line, renderContextSection)}
+        <div><strong>${enc(caseRecoveryRoute.source_pay_method)}</strong> ${enc(`£${fmtMoney(caseRecoveryRoute.nominal_amount)}`)}</div>
+        <div class="mini" style="margin-top:3px;opacity:.8;white-space:normal;">${enc(`This amount is currently determined as ${caseRecoveryRoute.source_label} and needs resolution to convert it to ${caseRecoveryRoute.target_label}.`)}</div>
+      `;
+    }
     const manualDebtRecovery = getManualDebtRecoveryPresentation(line);
     if (manualDebtRecovery?.no_available_funds) {
       return `
@@ -54060,7 +54133,14 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     };
 
     for (const line of asArray(groupLines)) {
-      if (!isPlainObject(line) || isSyntheticTimesheetResidualLine(line)) continue;
+      // READY parent rows carry authoritative operational context used to
+      // enrich the selectable allocation children above.  They are not a
+      // second payable component and must not be emitted as duplicate rows.
+      if (
+        !isPlainObject(line) ||
+        isSyntheticTimesheetResidualLine(line) ||
+        isReadyTimesheetDisplayContextLine(line)
+      ) continue;
 
       const previewRowId = getPreviewRowId(line);
       const keyType = getLineKeyType(line);
@@ -54565,6 +54645,9 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const payChannel = upperTrim(line?.pay_channel || '');
       const payeTreatment = upperTrim(line?.paye_treatment || '');
       const section = getLinePresentationSection(line);
+      const caseRecoveryRoute = upperTrim(renderContextSection || section) === 'CASES_RESOLUTIONS'
+        ? getCaseResolutionPayRoutePresentation(line)
+        : null;
       const compactReady = upperTrim(renderContextSection || section) === 'READY_TO_PAY';
       const blockedUi = getPreviewLineBlockedUi(line);
       const wholeActionHtml = (() => {
@@ -54672,7 +54755,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
               <span class="pill ${enc(statePillClass)}">${enc(stateLabel)}</span>
               ${blockedUi.detailTexts.length ? `<div class="mini" style="opacity:.85;">${blockedUi.detailTexts.map((txt) => enc(txt)).join('<br/>')}</div>` : ''}
               ${advisory ? `<div class="mini" style="opacity:.85;">${enc(advisory)}</div>` : ''}
-              ${compactReady ? '' : `<div class="mini" style="opacity:.85;">${enc(payChannel || '—')}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}</div>`}
+              ${compactReady ? '' : `<div class="mini" style="opacity:.85;">${caseRecoveryRoute ? enc(caseRecoveryRoute.direction_label) : `${enc(payChannel || '—')}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}`}</div>`}
             </div>
           </td>
           <td style="white-space:nowrap;vertical-align:middle;">${combinedActionHtml ? `<div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;align-items:flex-start;'}gap:6px;">${combinedActionHtml}</div>` : `<span class="mini" style="opacity:.7;">—</span>`}</td>
@@ -54694,6 +54777,9 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const payChannel = upperTrim(line?.pay_channel || '');
       const payeTreatment = upperTrim(line?.paye_treatment || '');
       const section = getLinePresentationSection(line);
+      const caseRecoveryRoute = upperTrim(renderContextSection || section) === 'CASES_RESOLUTIONS'
+        ? getCaseResolutionPayRoutePresentation(line)
+        : null;
       const blockedUi = getPreviewLineBlockedUi(line);
       const actionHtml = previewActionHtml(line);
       const caseActionHtml = (section === 'CASES_RESOLUTIONS' && isPlainObject(line?.__case_entry))
@@ -54797,7 +54883,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             <div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;gap:4px;'}">
               <span class="pill ${enc(statePillClass || (isBlockedLike ? 'pill-bad' : 'pill-ok'))}">${enc(stateLabel)}</span>
               ${blockedUi.detailTexts.length ? `<div class="mini" style="opacity:.85;">${blockedUi.detailTexts.map((txt) => enc(txt)).join('<br/>')}</div>` : ''}
-              ${compactReady ? '' : `<div class="mini" style="opacity:.85;">${enc(payChannel || '—')}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}</div>`}
+              ${compactReady ? '' : `<div class="mini" style="opacity:.85;">${caseRecoveryRoute ? enc(caseRecoveryRoute.direction_label) : `${enc(payChannel || '—')}${payeTreatment ? ` • ${enc(payeTreatment)}` : ''}`}</div>`}
             </div>
           </td>
           <td style="white-space:nowrap;vertical-align:middle;">${combinedActionHtml ? `<div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;align-items:flex-start;'}gap:6px;">${combinedActionHtml}</div>` : `<span class="mini" style="opacity:.7;">—</span>`}</td>

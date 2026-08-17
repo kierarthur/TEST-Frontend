@@ -83,6 +83,10 @@ test('expanded Ready timesheet breakdown renders canonical segment details rathe
   assert.match(breakdown, /Source pay:/);
   assert.match(breakdown, /Source rate:/);
   assert.match(breakdown, /Target rate:/);
+  assert.match(
+    breakdown,
+    /isSyntheticTimesheetResidualLine\(line\)[\s\S]*isReadyTimesheetDisplayContextLine\(line\)[\s\S]*continue;/
+  );
 });
 
 test('authoritative row-backed page copies outrank stale duplicate component-cache copies', () => {
