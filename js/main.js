@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-cancel-postcommit-r1',
+  asset_version: '20260817-banking-james-modal-performance-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -50,8 +50,8 @@ window.__LOG_RATES  = true;   // logs for rate staging + rates table + rates tab
 window.__LOG_PAYTAB = true;   // logs for payment tab + umbrella prefill
 window.__LOG_CONTRACTS = true;
 
-window.__LOG_MODAL  = true;   // logs from modal framework (showModal)
-const __LOG_API = true;   // turns on authFetch + rates/hospitals/client POST/PATCH logging
+window.__LOG_MODAL  = false;  // opt-in diagnostics for the modal framework (showModal)
+const __LOG_API = false;      // opt-in authFetch + rates/hospitals/client POST/PATCH diagnostics
 
 // Default friendly labels (fallbacks if user hasn't set custom labels for a section)
 
