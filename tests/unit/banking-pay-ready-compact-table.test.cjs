@@ -57,6 +57,8 @@ test('Ready to Pay rows are compact and expose breakdowns with a small plus or m
 
   assert.match(groupedBody, /data-action="banking:pay:toggleTimesheetBreakdown"/);
   assert.match(groupedBody, /\$\{isBreakdownOpen \? '−' : '\+'\}/);
+  assert.match(groupedBody, /data-banking-ready-breakdown-detail=/);
+  assert.match(groupedBody, /data-banking-ready-breakdown-template="true"/);
   assert.doesNotMatch(groupedBody, />Show timesheet breakdown/);
   assert.doesNotMatch(groupedBody, /breakdown row\(s\)/);
   assert.match(groupedBody, /renderPayChannelBadge\(payChannel\)/);
@@ -65,13 +67,36 @@ test('Ready to Pay rows are compact and expose breakdowns with a small plus or m
   assert.match(parentBody, /const compactReady =/);
   assert.match(parentBody, /renderTimesheetSegmentRows\(line, compactReady \? \{ expandedBodyOnly: true \} : \{\}\)/);
   assert.match(parentBody, /data-breakdown-key=/);
+  assert.match(parentBody, /data-banking-ready-breakdown-detail=/);
+  assert.match(parentBody, /data-banking-ready-breakdown-template="true"/);
+  assert.match(parentBody, /readyBreakdownOpen \? '' : ' hidden'/);
   assert.match(parentBody, /colspan="\$\{compactReady \? '9' : '8'\}"/);
   assert.match(parentBody, /stickyReadySelectBodyCellStyle/);
 
   assert.match(simpleBody, /const compactReady =/);
   assert.match(simpleBody, /renderPayChannelBadge\(payChannel\)/);
   assert.match(simpleBody, /renderCompactReadyAmountHtml\(line\)/);
+  assert.match(simpleBody, /data-banking-ready-breakdown-detail=/);
   assert.match(simpleBody, /stickyReadySelectBodyCellStyle/);
+});
+
+test('Ready breakdown disclosure updates its existing row without rebuilding the Banking modal', () => {
+  const handlerBody = sliceBetween(
+    "if (a === 'banking:pay:toggleTimesheetBreakdown')",
+    "if (a === 'banking:pay:toggleAllReadyPreviewRows')"
+  );
+
+  assert.match(handlerBody, /const isOpening = !openKeys\.has\(groupKey\)/);
+  assert.match(handlerBody, /parentRow\?\.nextElementSibling/);
+  assert.match(handlerBody, /detailRow\.hidden = !isOpening/);
+  assert.match(handlerBody, /detailTemplate\.replaceWith\(detailTemplate\.content\.cloneNode\(true\)\)/);
+  assert.match(handlerBody, /el\.setAttribute\('aria-expanded', isOpening \? 'true' : 'false'\)/);
+  assert.match(handlerBody, /if \(detailRow && detailKey === groupKey\)/);
+  assert.match(handlerBody, /await safeRerender\(null\)/);
+  assert.ok(
+    handlerBody.indexOf('if (detailRow && detailKey === groupKey)') < handlerBody.indexOf('await safeRerender(null)'),
+    'full rerender must be fallback-only after the exact in-place row proof'
+  );
 });
 
 test('Ready selection response adopts the server-owned complete selected ID set', () => {

@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-resolution-adoption-r7',
+  asset_version: '20260817-banking-james-resolution-adoption-r12',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -54633,9 +54633,11 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             </div>
           </td>
         </tr>
-        ${isBreakdownOpen ? `
-          <tr data-timesheet-group-key="${enc(item.key)}">
-            <td colspan="9" style="padding-top:0;">${renderReadyTimesheetBreakdown(item.key, groupLines, candidateId, timesheetId)}</td>
+        ${breakdownCount ? `
+          <tr data-timesheet-group-key="${enc(item.key)}" data-banking-ready-breakdown-detail="${enc(item.key)}"${isBreakdownOpen ? '' : ' hidden'}>
+            <td colspan="9" style="padding-top:0;">${isBreakdownOpen
+              ? renderReadyTimesheetBreakdown(item.key, groupLines, candidateId, timesheetId)
+              : `<template data-banking-ready-breakdown-template="true">${renderReadyTimesheetBreakdown(item.key, groupLines, candidateId, timesheetId)}</template>`}</td>
           </tr>
         ` : ''}
       `;
@@ -54767,9 +54769,11 @@ const renderReadyTimesheetGroupedRows = (lines) => {
           </td>
           <td style="white-space:nowrap;vertical-align:middle;">${combinedActionHtml ? `<div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;align-items:flex-start;'}gap:6px;">${combinedActionHtml}</div>` : `<span class="mini" style="opacity:.7;">—</span>`}</td>
         </tr>
-        ${detailRowHtml && (!compactReady || readyBreakdownOpen) ? `
-          <tr>
-            <td colspan="${compactReady ? '9' : '8'}" style="padding-top:0;">${detailRowHtml}</td>
+        ${detailRowHtml ? `
+          <tr${compactReady ? ` data-banking-ready-breakdown-detail="${enc(readyBreakdownKey)}"${readyBreakdownOpen ? '' : ' hidden'}` : ''}>
+            <td colspan="${compactReady ? '9' : '8'}" style="padding-top:0;">${compactReady && !readyBreakdownOpen
+              ? `<template data-banking-ready-breakdown-template="true">${detailRowHtml}</template>`
+              : detailRowHtml}</td>
           </tr>
         ` : ''}
       `;
@@ -54899,9 +54903,11 @@ const renderReadyTimesheetGroupedRows = (lines) => {
           </td>
           <td style="white-space:nowrap;vertical-align:middle;">${combinedActionHtml ? `<div style="display:flex;${compactReady ? 'align-items:center;white-space:nowrap;' : 'flex-direction:column;align-items:flex-start;'}gap:6px;">${combinedActionHtml}</div>` : `<span class="mini" style="opacity:.7;">—</span>`}</td>
         </tr>
-        ${detailRowHtml && (!compactReady || readyBreakdownOpen) ? `
-          <tr>
-            <td colspan="${compactReady ? '9' : '8'}" style="padding-top:0;">${detailRowHtml}</td>
+        ${detailRowHtml ? `
+          <tr${compactReady ? ` data-banking-ready-breakdown-detail="${enc(readyBreakdownKey)}"${readyBreakdownOpen ? '' : ' hidden'}` : ''}>
+            <td colspan="${compactReady ? '9' : '8'}" style="padding-top:0;">${compactReady && !readyBreakdownOpen
+              ? `<template data-banking-ready-breakdown-template="true">${detailRowHtml}</template>`
+              : detailRowHtml}</td>
           </tr>
         ` : ''}
       `;
@@ -99245,9 +99251,31 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (!groupKey) return;
       const uiState = ensurePayWorkbenchUiState();
       const openKeys = new Set(normalizePreviewRowIdArray(uiState.ready_timesheet_breakdown_open_keys));
-      if (openKeys.has(groupKey)) openKeys.delete(groupKey);
-      else openKeys.add(groupKey);
+      const isOpening = !openKeys.has(groupKey);
+      if (isOpening) openKeys.add(groupKey);
+      else openKeys.delete(groupKey);
       uiState.ready_timesheet_breakdown_open_keys = Array.from(openKeys);
+      const parentRow = el && typeof el.closest === 'function' ? el.closest('tr') : null;
+      const detailRow = parentRow?.nextElementSibling || null;
+      const detailKey = String(detailRow?.dataset?.bankingReadyBreakdownDetail || '').trim();
+      if (detailRow && detailKey === groupKey) {
+        const detailTemplate = isOpening
+          ? detailRow.querySelector('template[data-banking-ready-breakdown-template="true"]')
+          : null;
+        if (detailTemplate) {
+          if (!detailTemplate.content || typeof detailTemplate.content.cloneNode !== 'function') {
+            await safeRerender(null);
+            return;
+          }
+          detailTemplate.replaceWith(detailTemplate.content.cloneNode(true));
+        }
+        detailRow.hidden = !isOpening;
+        el.textContent = isOpening ? '−' : '+';
+        el.setAttribute('aria-expanded', isOpening ? 'true' : 'false');
+        el.setAttribute('aria-label', isOpening ? 'Hide line breakdown' : 'Show line breakdown');
+        el.setAttribute('title', isOpening ? 'Hide line breakdown' : 'Show line breakdown');
+        return;
+      }
       await safeRerender(null);
       return;
     }
@@ -106763,6 +106791,43 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     return payload;
   };
 
+  const candidatePreviewMatchesTimesheetSection = (candidatePreview, expectedTimesheetIds, expectedSection) => {
+    const expectedIds = normalizeUuidList(expectedTimesheetIds).map((value) => value.toLowerCase());
+    const targetSection = upperTrim(expectedSection || '');
+    if (!expectedIds.length || !['CANONICAL_PREVIEW_LINES', 'CASES_RESOLUTIONS'].includes(targetSection)) return false;
+    const rows = Array.isArray(candidatePreview?.rows)
+      ? candidatePreview.rows
+      : (Array.isArray(candidatePreview?.preview_rows) ? candidatePreview.preview_rows : []);
+    return expectedIds.every((expectedId) => {
+      const timesheetRows = rows.filter((row) => {
+        if (upperTrim(row?.line_type || row?.lineType || row?.row_json?.line_type || '') !== 'TIMESHEET_PAYMENT') return false;
+        const rowTimesheetId = trimStr(
+          row?.linked_timesheet_id || row?.linkedTimesheetId || row?.timesheet_id || row?.timesheetId ||
+          row?.row_json?.linked_timesheet_id || row?.row_json?.timesheet_id || ''
+        ).toLowerCase();
+        return rowTimesheetId === expectedId;
+      });
+      if (!timesheetRows.length) return false;
+      const sections = timesheetRows.map((row) => upperTrim(
+        row?.effective_section || row?.effectiveSection || row?.presentation_section || row?.presentationSection ||
+        row?.section || row?.row_json?.effective_section || row?.row_json?.presentation_section || row?.row_json?.section || ''
+      ));
+      return sections.includes(targetSection) && sections.every((section) => section === targetSection);
+    });
+  };
+
+  const bankingParentFrameAtOpen = (() => {
+    try {
+      const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+      const top = stack.length ? stack[stack.length - 1] : null;
+      return top && String(top.kind || '') === 'banking' && String(top.entity || '') === 'banking'
+        ? top
+        : null;
+    } catch {
+      return null;
+    }
+  })();
+
   return await new Promise((resolve) => {
     let settled = false;
 
@@ -106815,17 +106880,40 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       if (opts.applied === true || opts.clean === true) markSuggestedRatesReviewAppliedClean();
       try {
         if (typeof closeCurrentModalFrameSafely === 'function') {
-          closeCurrentModalFrameSafely({ expectedKind: 'banking-pay-suggested-rates-review' });
-          return;
+          return closeCurrentModalFrameSafely({ expectedKind: 'banking-pay-suggested-rates-review' }) === true;
         }
       } catch {}
       try {
         const btn = document.getElementById('btnCloseModal');
-        if (btn) btn.click();
+        if (btn) {
+          btn.click();
+          return true;
+        }
       } catch {}
+      return false;
+    };
+    const repaintBankingParentAfterSuggestedRatesClose = async () => {
+      const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+      const top = stack.length ? stack[stack.length - 1] : null;
+      if (!bankingParentFrameAtOpen || top !== bankingParentFrameAtOpen) return false;
+      if (String(top.kind || '') !== 'banking' || String(top.entity || '') !== 'banking') return false;
+      try {
+        if (top._ctxRef && typeof top._ctxRef === 'object') {
+          window.modalCtx = top._ctxRef;
+          try { if (typeof modalCtx !== 'undefined') modalCtx = window.modalCtx; } catch {}
+        }
+      } catch {}
+      if (typeof bankingRerender === 'function') {
+        return (await bankingRerender('pay')) === true;
+      }
+      if (typeof top.setTab === 'function') {
+        await top.setTab('pay');
+        return true;
+      }
+      return false;
     };
 
-    const finishSuggestedRatesApplySuccess = ({ queued, settledResult, affectedCandidateIds, adoptionError = null } = {}) => {
+    const finishSuggestedRatesApplySuccess = async ({ queued, settledResult, affectedCandidateIds, adoptionError = null } = {}) => {
       state.accepted = true;
       state.busy = false;
       state.mutationInFlight = false;
@@ -106833,6 +106921,19 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
       state.clearIntentInFlight = false;
       state.error = '';
       markSuggestedRatesReviewAppliedClean();
+      const childClosed = closeChild({ applied: true, clean: true });
+      let finalAdoptionError = adoptionError;
+      if (!finalAdoptionError) {
+        try {
+          const parentRepainted = childClosed && await repaintBankingParentAfterSuggestedRatesClose();
+          if (!parentRepainted) {
+            throw new Error('The updated Banking Pay state settled, but the parent modal could not be repainted.');
+          }
+        } catch (repaintError) {
+          finalAdoptionError = repaintError;
+          notifySuggestedRatesAppliedButRefreshing('The payment decision was saved. Banking Pay is still refreshing the latest preview.');
+        }
+      }
       finish({
         ok: true,
         accepted: true,
@@ -106847,10 +106948,9 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         finance_case_id: ctx.finance_case_id || null,
         queued_result: deep(queued),
         settled: deep(settledResult),
-        preview_refresh_pending: !!adoptionError,
-        adoption_error: adoptionError ? { message: trimStr(adoptionError.message || adoptionError) || 'Preview adoption is still refreshing.' } : null
+        preview_refresh_pending: !!finalAdoptionError,
+        adoption_error: finalAdoptionError ? { message: trimStr(finalAdoptionError.message || finalAdoptionError) || 'Preview adoption is still refreshing.' } : null
       });
-      closeChild({ applied: true, clean: true });
     };
 
     const applyMutationAndRefresh = async (runner, mutationMeta = {}) => {
@@ -106929,6 +107029,11 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
           fullSessionRefreshAfterSettled: forceFullSessionRefresh,
           affectedCandidateIds,
           candidateIds: affectedCandidateIds,
+          validateSettledCandidatePreview: (candidatePreview) => candidatePreviewMatchesTimesheetSection(
+            candidatePreview,
+            mutationMeta.expectedTimesheetIds,
+            mutationMeta.expectedPresentationSection
+          ),
           onProgress: async (progress) => {
             const pendingIds = collectCandidateIdsFromPayload(progress, []);
             if (pendingIds.length) markCandidatesPendingLocal(pendingIds, jobMeta);
@@ -106953,17 +107058,12 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         try {
           if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth();
         } catch {}
-        try {
-          if (typeof bankingRerender === 'function') {
-            await bankingRerender(null);
-          }
-        } catch {}
       } catch (pollError) {
         adoptionError = pollError;
         notifySuggestedRatesAppliedButRefreshing('The payment decision was saved. Banking Pay is still refreshing the latest preview.');
       }
 
-      finishSuggestedRatesApplySuccess({ queued, settledResult, affectedCandidateIds, adoptionError });
+      await finishSuggestedRatesApplySuccess({ queued, settledResult, affectedCandidateIds, adoptionError });
     };
 
     const onReturn = async () => {
@@ -107089,7 +107189,11 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
                 expected_progress_counter_version: authoritativeScope.progress_counter_version
               });
               return validateAppliedScopeResult(result, applyLinked);
-            }, { resolveAllLinked: applyLinked });
+            }, {
+              resolveAllLinked: applyLinked,
+              expectedTimesheetIds: authoritativeScope.targeted_timesheet_ids,
+              expectedPresentationSection: 'canonical_preview_lines'
+            });
           });
         }
 
@@ -107141,7 +107245,11 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
               state.clearIntentInFlight = false;
               return;
             }
-            await applyMutationAndRefresh(() => Promise.resolve(cancelResult.result), { resolveAllLinked: true });
+            await applyMutationAndRefresh(() => Promise.resolve(cancelResult.result), {
+              resolveAllLinked: true,
+              expectedTimesheetIds: cancelResult.discovery?.clearable_timesheet_ids || cancelResult.discovery?.clearableTimesheetIds || [],
+              expectedPresentationSection: 'cases_resolutions'
+            });
           });
         }
 
@@ -107199,6 +107307,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         showSave: false,
         showApply: false,
         onDismiss: () => {
+          if (state.accepted === true) return;
           finish({
             ok: true,
             accepted: false,
@@ -129550,6 +129659,8 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   const getRowCandidateId = (row) => {
     if (!isPlainObject(row)) return '';
     const rowJson = isPlainObject(row.row_json) ? row.row_json : (isPlainObject(row.rowJson) ? row.rowJson : {});
+    const caseEntry = isPlainObject(row.__case_entry) ? row.__case_entry : {};
+    const caseEntryCandidate = isPlainObject(caseEntry.candidate) ? caseEntry.candidate : {};
     return trimStr(
       row.candidate_id ||
       row.candidateId ||
@@ -129562,6 +129673,10 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
       row.preview_contract?.candidate_id ||
       row.previewContract?.candidate_id ||
       row.preview_contract?.candidateId ||
+      caseEntry.candidate_id ||
+      caseEntry.candidateId ||
+      caseEntryCandidate.candidate_id ||
+      caseEntryCandidate.candidateId ||
       ''
     );
   };
@@ -131801,6 +131916,21 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
         atomic_candidate_refresh_complete: true,
         atomic_candidate_refresh_page_count: candidatePreviewPageCount
       };
+
+      if (typeof options.validateSettledCandidatePreview === 'function') {
+        let terminalCandidatePreviewAccepted = false;
+        try {
+          terminalCandidatePreviewAccepted = (await options.validateSettledCandidatePreview(
+            candidatePreview,
+            progress
+          )) === true;
+        } catch {}
+        if (!terminalCandidatePreviewAccepted) {
+          const validationSleepGuard = await guardedSleep(fastPollMs);
+          if (validationSleepGuard.aborted) return buildAbortResult(validationSleepGuard, { candidatePreview });
+          continue;
+        }
+      }
 
       if (updateState) {
         const beforeCandidatePreviewMergeGuard = evaluateStalenessGuard('before_candidate_preview_merge', {

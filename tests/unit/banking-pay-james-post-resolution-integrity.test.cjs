@@ -28,6 +28,9 @@ test('settled candidate adoption reads every page and merges once atomically', (
   assert.match(poll, /BANKING_PAY_CANDIDATE_ATOMIC_REFRESH_ROW_IDENTITY_INVALID/);
   assert.match(poll, /candidatePreviewRows\.length > 10000/);
   assert.match(poll, /atomic_candidate_refresh_complete: true/);
+  assert.match(poll, /typeof options\.validateSettledCandidatePreview === 'function'/);
+  assert.match(poll, /terminalCandidatePreviewAccepted/);
+  assert.match(poll, /await guardedSleep\(fastPollMs\)/);
   assert.match(poll, /mergePayWorkbenchCandidatePreviewIntoState\(candidatePreview\)/);
   assert.equal((poll.match(/mergePayWorkbenchCandidatePreviewIntoState\(candidatePreview\)/g) || []).length, 1);
 });
@@ -40,6 +43,8 @@ test('candidate merge treats the complete response as authoritative across all s
 
   assert.match(merge, /candidateRowPayloadProvided/);
   assert.match(merge, /mergeRowsForCandidate\(nextPreview\[key\], incoming, responseCandidateId\)/);
+  assert.match(merge, /const caseEntry = isPlainObject\(row\.__case_entry\)/);
+  assert.match(merge, /caseEntryCandidate\.candidate_id/);
   for (const key of ['case_resolution_states', 'caseResolutionStates', 'cases_resolutions', 'casesResolutions']) {
     assert.match(merge, new RegExp(`'${key}'`));
   }
@@ -155,10 +160,38 @@ test('linked suggested-rate saves atomically adopt one complete candidate instea
   assert.match(suggestedRates, /pollPayWorkbenchCandidateUntilSettled\(sessionId, refreshCandidateId/);
   assert.match(suggestedRates, /requirePreviewSectionsAfterReady:\s*true/);
   assert.match(suggestedRates, /affectedCandidateIds,/);
+  assert.match(suggestedRates, /const candidatePreviewMatchesTimesheetSection =/);
+  assert.match(suggestedRates, /validateSettledCandidatePreview:/);
+  assert.match(suggestedRates, /expectedTimesheetIds: authoritativeScope\.targeted_timesheet_ids/);
+  assert.match(suggestedRates, /expectedPresentationSection: 'canonical_preview_lines'/);
+  assert.match(suggestedRates, /expectedTimesheetIds: cancelResult\.discovery\?\.clearable_timesheet_ids/);
+  assert.match(suggestedRates, /expectedPresentationSection: 'cases_resolutions'/);
   assert.doesNotMatch(
     suggestedRates,
     /shouldForceFullSessionRefreshAfterMutation\(queued, mutationMeta\.resolveAllLinked === true\)/
   );
+});
+
+test('linked suggested-rate success closes the child before repainting the Banking parent exactly once', () => {
+  const suggestedRates = sliceBetween(
+    'async function openBankingPaySuggestedRatesReviewModal(seed = {}) {',
+    'async function injectDefaultEmailSignature(input = {}) {'
+  );
+
+  assert.match(suggestedRates, /const bankingParentFrameAtOpen =/);
+  assert.match(suggestedRates, /const repaintBankingParentAfterSuggestedRatesClose = async \(\) =>/);
+  assert.match(suggestedRates, /top !== bankingParentFrameAtOpen/);
+  assert.match(suggestedRates, /await bankingRerender\('pay'\)/);
+  assert.match(
+    suggestedRates,
+    /const childClosed = closeChild\(\{ applied: true, clean: true \}\);[\s\S]*childClosed && await repaintBankingParentAfterSuggestedRatesClose\(\)/
+  );
+  assert.doesNotMatch(
+    suggestedRates,
+    /recomputePayWizardLiveTruth\(\);[\s\S]{0,180}await bankingRerender\(null\)/
+  );
+  assert.match(suggestedRates, /await finishSuggestedRatesApplySuccess\(\{ queued, settledResult, affectedCandidateIds, adoptionError \}\)/);
+  assert.match(suggestedRates, /onDismiss: \(\) => \{\s*if \(state\.accepted === true\) return;/);
 });
 
 test('non-draftable READY parent context is merged back beside allocation children', () => {

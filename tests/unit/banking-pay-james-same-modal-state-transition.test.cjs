@@ -95,10 +95,21 @@ function assignPageAliases(target, pageMap) {
 }
 
 function makeFixture() {
+  const makeNestedCaseRow = (candidateId, id, amount) => {
+    const row = makeRow(candidateId, id, 'CASES_RESOLUTIONS', amount);
+    delete row.candidate_id;
+    delete row.row_json.candidate_id;
+    row.__case_entry = {
+      candidate: {
+        candidate_id: candidateId
+      }
+    };
+    return row;
+  };
   const jamesCases = [
-    makeRow(JAMES_ID, 'james-case-26750', 'CASES_RESOLUTIONS', 267.50),
-    makeRow(JAMES_ID, 'james-case-22000', 'CASES_RESOLUTIONS', 220.00),
-    makeRow(JAMES_ID, 'james-case-20000', 'CASES_RESOLUTIONS', 200.00)
+    makeNestedCaseRow(JAMES_ID, 'james-case-26750', 267.50),
+    makeNestedCaseRow(JAMES_ID, 'james-case-22000', 220.00),
+    makeNestedCaseRow(JAMES_ID, 'james-case-20000', 200.00)
   ];
   const jamesBlocked = [
     makeRow(JAMES_ID, 'james-recovery-26750', 'BLOCKED_FOR_PAY', 0),
@@ -106,7 +117,7 @@ function makeFixture() {
     makeRow(JAMES_ID, 'james-recovery-22000', 'BLOCKED_FOR_PAY', 0),
     makeRow(JAMES_ID, 'james-recovery-2500', 'BLOCKED_FOR_PAY', 0)
   ];
-  const unrelatedCase = makeRow(OTHER_ID, 'other-case', 'CASES_RESOLUTIONS', 10);
+  const unrelatedCase = makeNestedCaseRow(OTHER_ID, 'other-case', 10);
   const unrelatedBlocked = makeRow(OTHER_ID, 'other-blocked', 'BLOCKED_FOR_PAY', 11);
   const unrelatedReady = makeRow(OTHER_ID, 'other-ready', 'READY_TO_PAY', 12);
   const allCases = [...jamesCases, unrelatedCase];
@@ -285,8 +296,12 @@ function createMerge() {
   return context.mergeForTest;
 }
 
+function rowCandidateId(row) {
+  return row?.candidate_id || row?.row_json?.candidate_id || row?.__case_entry?.candidate?.candidate_id || '';
+}
+
 function rowsForCandidate(rows, candidateId) {
-  return Array.isArray(rows) ? rows.filter((row) => row?.candidate_id === candidateId) : [];
+  return Array.isArray(rows) ? rows.filter((row) => rowCandidateId(row) === candidateId) : [];
 }
 
 function assertCaseAliases(owner, jamesCount, otherCount, label) {
