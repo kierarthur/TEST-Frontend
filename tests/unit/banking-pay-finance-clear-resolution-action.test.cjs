@@ -118,6 +118,10 @@ test('renderer and dispatcher preserve the finance owner boundary', () => {
     "if (a === 'banking:pay:componentClearResolution') {",
     "if (a === 'banking:pay:toggleExcludeTimesheet') {"
   );
+  const delegatedHandler = sliceBetween(
+    'function attachBankingModalDelegatedHandlers() {',
+    "const getTopFrame = () => {"
+  );
 
   assert.match(render, /getFinanceResolutionAction\(line\)/);
   assert.match(render, /Cancel the resolved \$\{decisionLabel\} decision/);
@@ -125,6 +129,8 @@ test('renderer and dispatcher preserve the finance owner boundary', () => {
   assert.doesNotMatch(render, /advance:/);
   assert.doesNotMatch(render, /\|\|\s*'BUCKETED'/);
   assert.match(dispatch, /FINANCE_CLEAR_RESOLUTION_FAMILIES\.has\(resolutionFamily\)/);
+  assert.match(delegatedHandler, /const FINANCE_CLEAR_RESOLUTION_FAMILIES = new Set\(\['TAXABLE_CHANNEL_RESTRUCTURE', 'NON_BUCKET'\]\)/);
+  assert.match(delegatedHandler, /const isFinanceClearUuid = \(value\) =>/);
   assert.match(dispatch, /caseKey !== `finance:\$\{financeCaseId\}`/);
   assert.match(dispatch, /resolutionFamily === 'TAXABLE_CHANNEL_RESTRUCTURE' && linkedTimesheetId/);
   assert.match(dispatch, /bankingPayWorkbenchSessionClearCaseResolution/);

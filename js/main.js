@@ -92839,6 +92839,8 @@ function bankingPaySelectionAuthorityDecisionV1(options = {}) {
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
+  const FINANCE_CLEAR_RESOLUTION_FAMILIES = new Set(['TAXABLE_CHANNEL_RESTRUCTURE', 'NON_BUCKET']);
+  const isFinanceClearUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 
   const getTopFrame = () => {
     try { return (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null; } catch { return null; }
