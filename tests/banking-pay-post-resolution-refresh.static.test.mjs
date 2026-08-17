@@ -23,8 +23,10 @@ test('post-resolution adoption exhausts every candidate page before one merge', 
 test('authoritative empty Cases is preserved in the complete replacement payload', () => {
   assert.match(poll, /rows:\s*cloneJson\(candidatePreviewRows\) \|\| \[\]/);
   assert.match(poll, /atomic_candidate_refresh_complete:\s*true/);
-  assert.match(source, /case_resolution_states = mergeRowsForKey\('case_resolution_states', \['cases_resolutions'\]\)/);
-  assert.match(source, /cases_resolutions = mergeRowsForKey\('cases_resolutions', \['cases_resolutions'\]\)/);
+  assert.match(source, /const CASE_SECTION_ALIAS_KEYS = \[[\s\S]*'case_resolution_states'[\s\S]*'caseResolutionStates'[\s\S]*'cases_resolutions'[\s\S]*'casesResolutions'/);
+  assert.match(source, /assignCaseResolutionAliases\(nextPreview, authoritativeCaseResolutionRows\)/);
+  assert.match(source, /assignCaseResolutionAliases\(nextEnvelope, nextPreview\.case_resolution_states\)/);
+  assert.match(source, /attachPreviewPageCacheAliases\(wiz\.workbench, canonicalCandidatePageMap\)/);
 });
 
 test('candidate merge prefers backend effective section and treats physical section as diagnostic', () => {

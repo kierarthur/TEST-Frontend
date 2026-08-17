@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-james-resolution-adoption-r5',
+  asset_version: '20260817-banking-james-resolution-adoption-r6',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -129601,6 +129601,30 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     for (const value of values) if (Array.isArray(value)) return value;
     return null;
   };
+  const CASE_SECTION_ALIAS_KEYS = [
+    'case_resolution_states',
+    'caseResolutionStates',
+    'cases_resolutions',
+    'casesResolutions'
+  ];
+  const PREVIEW_PAGE_CACHE_ALIAS_KEYS = [
+    'preview_pages',
+    'previewPages',
+    'preview_page_cache',
+    'previewPageCache',
+    'page_cache',
+    'pageCache',
+    'pages'
+  ];
+  const assignCaseResolutionAliases = (target, rows) => {
+    if (!isPlainObject(target)) return;
+    const safeRows = Array.isArray(rows) ? rows : [];
+    for (const key of CASE_SECTION_ALIAS_KEYS) target[key] = cloneJson(safeRows) || [];
+  };
+  const attachPreviewPageCacheAliases = (target, pageMap) => {
+    if (!isPlainObject(target) || !isPlainObject(pageMap)) return;
+    for (const key of PREVIEW_PAGE_CACHE_ALIAS_KEYS) target[key] = pageMap;
+  };
   const readCandidateScopedRows = () => {
     const directRows = firstArrayOrNull(
       responseObj.preview_rows,
@@ -129632,14 +129656,19 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     pushRows(responseObj.blocked_items);
     pushRows(responseObj.do_not_pay_items);
     pushRows(responseObj.case_resolution_states);
+    pushRows(responseObj.caseResolutionStates);
     pushRows(responseObj.safe_case_states);
     pushRows(responseObj.cases_resolutions);
+    pushRows(responseObj.casesResolutions);
     pushRows(responseObj.hidden_preview_lines);
     pushRows(responseObj.hidden_indefinite_snoozes);
     pushRows(responsePreview?.canonical_preview_lines);
     pushRows(responsePreview?.ready_preview_lines);
     pushRows(responsePreview?.blocked_preview_lines);
     pushRows(responsePreview?.case_resolution_states);
+    pushRows(responsePreview?.caseResolutionStates);
+    pushRows(responsePreview?.cases_resolutions);
+    pushRows(responsePreview?.casesResolutions);
     return capRows(filterActiveDraftReservedCandidateRows(combined));
   };
   const candidateRowPayloadProvided = !!(
@@ -129739,6 +129768,18 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   const mergeCandidateRowsIntoPageMap = (pageMap) => {
     if (!responseCandidateId || !candidateRowPayloadProvided || !isPlainObject(pageMap)) return isPlainObject(pageMap) ? (cloneJson(pageMap) || {}) : {};
     const out = cloneJson(pageMap) || {};
+    const priorCandidateKeysBySection = new Map();
+    for (const [key, pageValue] of Object.entries(out)) {
+      if (!isPlainObject(pageValue)) continue;
+      const section = normalizeCandidateMergeSection(pageValue.effective_section || pageValue.resolved_section || pageValue.requested_section || pageValue.section || key);
+      if (!priorCandidateKeysBySection.has(section)) priorCandidateKeysBySection.set(section, new Set());
+      const candidateKeys = priorCandidateKeysBySection.get(section);
+      const currentRows = Array.isArray(pageValue.rows) ? pageValue.rows : (Array.isArray(pageValue.items) ? pageValue.items : []);
+      for (const row of currentRows) {
+        if (getRowCandidateId(row) !== responseCandidateId) continue;
+        candidateKeys.add(getRowStableKey(row, candidateKeys.size));
+      }
+    }
     for (const [key, pageValue] of Object.entries(out)) {
       if (!isPlainObject(pageValue)) continue;
       const section = normalizeCandidateMergeSection(pageValue.effective_section || pageValue.resolved_section || pageValue.requested_section || pageValue.section || key);
@@ -129747,13 +129788,54 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
         : (section === 'cases_resolutions' ? candidateRowsBySection.cases_resolutions : candidateRowsBySection.canonical_preview_lines);
       const currentRows = Array.isArray(pageValue.rows) ? pageValue.rows : (Array.isArray(pageValue.items) ? pageValue.items : []);
       const mergedRows = mergeRowsForCandidate(currentRows, incoming, responseCandidateId);
+      const priorCandidateCount = priorCandidateKeysBySection.get(section)?.size || 0;
+      const incomingCandidateCount = mergeRowsForCandidate([], incoming, responseCandidateId).length;
+      const sectionCandidateDelta = incomingCandidateCount - priorCandidateCount;
       pageValue.rows = mergedRows;
       pageValue.items = mergedRows;
       pageValue.returned_count = mergedRows.length;
-      pageValue.rows_count = Math.max(Number(pageValue.rows_count || pageValue.row_count || 0) || 0, mergedRows.length);
+      pageValue.returnedCount = mergedRows.length;
+      const totalCountKeys = [
+        'rows_count', 'rowsCount', 'row_count', 'rowCount',
+        'known_count', 'knownCount', 'total_count', 'totalCount',
+        'total_count_estimate', 'totalCountEstimate'
+      ];
+      let totalCountPresent = false;
+      for (const totalKey of totalCountKeys) {
+        if (!Object.prototype.hasOwnProperty.call(pageValue, totalKey)) continue;
+        totalCountPresent = true;
+        const currentCount = Number(pageValue[totalKey]);
+        if (Number.isFinite(currentCount)) pageValue[totalKey] = Math.max(0, Math.trunc(currentCount) + sectionCandidateDelta);
+        else delete pageValue[totalKey];
+      }
+      const pageHasMore = pageValue.has_more === true || pageValue.hasMore === true;
+      const pageHasNextCursor = !!trimStr(pageValue.next_cursor || pageValue.nextCursor || '');
+      if (!totalCountPresent && !pageHasMore && !pageHasNextCursor) {
+        pageValue.rows_count = mergedRows.length;
+        pageValue.rowsCount = mergedRows.length;
+      }
       pageValue.section = section;
       pageValue.resolved_section = section;
       out[key] = pageValue;
+    }
+    return out;
+  };
+  const collectCanonicalCandidatePageMap = () => {
+    const out = {};
+    const seenSections = new Set();
+    for (const root of [currentEnvelope, currentPreview, wiz.workbench, wiz.preview]) {
+      if (!isPlainObject(root)) continue;
+      for (const cacheKey of PREVIEW_PAGE_CACHE_ALIAS_KEYS) {
+        const pageMap = root[cacheKey];
+        if (!isPlainObject(pageMap)) continue;
+        for (const [pageKey, pageValue] of Object.entries(pageMap)) {
+          if (!isPlainObject(pageValue)) continue;
+          const section = normalizeCandidateMergeSection(pageValue.effective_section || pageValue.resolved_section || pageValue.requested_section || pageValue.section || pageKey);
+          if (seenSections.has(section)) continue;
+          seenSections.add(section);
+          out[section] = cloneJson(pageValue) || {};
+        }
+      }
     }
     return out;
   };
@@ -129878,8 +129960,33 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
 
   if (updatedSummary) nextPreview.summary = cloneJson(updatedSummary) || updatedSummary;
   if (responseCandidateId) {
-    if (Array.isArray(responseObj.case_resolution_states) || candidateRowPayloadProvided) nextPreview.case_resolution_states = mergeRowsForKey('case_resolution_states', ['cases_resolutions']);
-    if (Array.isArray(responseObj.cases_resolutions) || candidateRowPayloadProvided) nextPreview.cases_resolutions = mergeRowsForKey('cases_resolutions', ['cases_resolutions']);
+    const currentCaseResolutionRows = firstArrayOrNull(
+      nextPreview.case_resolution_states,
+      nextPreview.cases_resolutions,
+      nextPreview.caseResolutionStates,
+      nextPreview.casesResolutions
+    ) || [];
+    const explicitCandidateCaseResolutionRows = firstArrayOrNull(
+      responseObj.case_resolution_states,
+      responseObj.caseResolutionStates,
+      responseObj.cases_resolutions,
+      responseObj.casesResolutions,
+      responsePreview?.case_resolution_states,
+      responsePreview?.caseResolutionStates,
+      responsePreview?.cases_resolutions,
+      responsePreview?.casesResolutions,
+      responseObj.candidate_preview?.case_resolution_states,
+      responseObj.candidate_preview?.caseResolutionStates,
+      responseObj.candidate_preview?.cases_resolutions,
+      responseObj.candidate_preview?.casesResolutions
+    );
+    const incomingCaseResolutionRows = Array.isArray(explicitCandidateCaseResolutionRows)
+      ? capRows(filterActiveDraftReservedCandidateRows(explicitCandidateCaseResolutionRows))
+      : (candidateRowPayloadProvided || candidateHasExplicitRemoval ? candidateRowsBySection.cases_resolutions : null);
+    const authoritativeCaseResolutionRows = Array.isArray(incomingCaseResolutionRows)
+      ? mergeRowsForCandidate(currentCaseResolutionRows, incomingCaseResolutionRows, responseCandidateId)
+      : capRows(currentCaseResolutionRows);
+    assignCaseResolutionAliases(nextPreview, authoritativeCaseResolutionRows);
     if (Array.isArray(responseObj.blocked_case_states)) nextPreview.blocked_case_states = mergeRowsForKey('blocked_case_states', ['blocked_for_pay']);
     if (Array.isArray(responseObj.safe_case_states)) nextPreview.safe_case_states = mergeRowsForKey('safe_case_states', ['cases_resolutions']);
     if (Array.isArray(responseObj.canonical_preview_lines) || candidateRowPayloadProvided) nextPreview.canonical_preview_lines = mergeRowsForKey('canonical_preview_lines', ['canonical_preview_lines']);
@@ -129899,7 +130006,17 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     if (Array.isArray(responseObj.hidden_preview_lines) || candidateRowsBySection.hidden.length > 0) nextPreview.hidden_preview_lines = mergeRowsForKey('hidden_preview_lines', ['hidden']);
     if (Array.isArray(nextPreview.canonical_preview_lines)) nextPreview.preview_rows = cloneJson(nextPreview.canonical_preview_lines) || [];
   } else {
-    if (Array.isArray(responseObj.case_resolution_states)) nextPreview.case_resolution_states = cloneJson(responseObj.case_resolution_states) || [];
+    const completeCaseResolutionRows = firstArrayOrNull(
+      responseObj.case_resolution_states,
+      responseObj.caseResolutionStates,
+      responseObj.cases_resolutions,
+      responseObj.casesResolutions,
+      responsePreview?.case_resolution_states,
+      responsePreview?.caseResolutionStates,
+      responsePreview?.cases_resolutions,
+      responsePreview?.casesResolutions
+    );
+    if (Array.isArray(completeCaseResolutionRows)) assignCaseResolutionAliases(nextPreview, completeCaseResolutionRows);
     if (Array.isArray(responseObj.blocked_case_states)) nextPreview.blocked_case_states = cloneJson(responseObj.blocked_case_states) || [];
     if (Array.isArray(responseObj.safe_case_states)) nextPreview.safe_case_states = cloneJson(responseObj.safe_case_states) || [];
     if (Array.isArray(responseObj.canonical_preview_lines)) nextPreview.canonical_preview_lines = capRows(responseObj.canonical_preview_lines);
@@ -129925,8 +130042,11 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   if (isPlainObject(responseObj.paye_guardrails)) nextPreview.paye_guardrails = cloneJson(responseObj.paye_guardrails) || {};
   if (isPlainObject(responseObj.reusable_component_resolutions)) nextPreview.reusable_component_resolutions = cloneJson(responseObj.reusable_component_resolutions) || {};
   if (isPlainObject(responseObj.stale_component_resolutions)) nextPreview.stale_component_resolutions = cloneJson(responseObj.stale_component_resolutions) || {};
-  for (const pageCacheKey of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
-    if (isPlainObject(nextPreview[pageCacheKey])) nextPreview[pageCacheKey] = mergeCandidateRowsIntoPageMap(nextPreview[pageCacheKey]);
+  const canonicalCandidatePageMap = responseCandidateId && candidateRowPayloadProvided
+    ? mergeCandidateRowsIntoPageMap(collectCanonicalCandidatePageMap())
+    : null;
+  if (isPlainObject(canonicalCandidatePageMap) && Object.keys(canonicalCandidatePageMap).length > 0) {
+    attachPreviewPageCacheAliases(nextPreview, canonicalCandidatePageMap);
   }
 
   const nextEnvelope = {
@@ -129944,18 +130064,17 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   };
 
   if (responseCandidateId) {
+    assignCaseResolutionAliases(nextEnvelope, nextPreview.case_resolution_states);
     for (const key of [
       'paye_candidates', 'non_paye_payees', 'canonical_preview_lines', 'preview_rows', 'ready_preview_lines',
-      'case_resolution_states', 'cases_resolutions', 'blocked_case_states', 'safe_case_states', 'payees', 'itemisation',
+      'case_resolution_states', 'caseResolutionStates', 'cases_resolutions', 'casesResolutions', 'blocked_case_states', 'safe_case_states', 'payees', 'itemisation',
       'blocked_items', 'do_not_pay_items', 'snoozed_items', 'baseline_component_rows', 'draftable_now',
       'blocked_now', 'ready_to_pay_now', 'blocked_for_pay_now', 'hidden_indefinite_snoozes',
       'blocked_preview_lines', 'hidden_preview_lines'
     ]) {
       if (Array.isArray(nextPreview[key])) nextEnvelope[key] = nextPreview[key];
     }
-    for (const key of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
-      if (isPlainObject(nextPreview[key])) nextEnvelope[key] = nextPreview[key];
-    }
+    if (isPlainObject(canonicalCandidatePageMap) && Object.keys(canonicalCandidatePageMap).length > 0) attachPreviewPageCacheAliases(nextEnvelope, canonicalCandidatePageMap);
   }
 
   const nextEnvelopeSession = {
@@ -130178,19 +130297,11 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     );
   })();
 
-  wiz.preview.data = nextEnvelope;
-  wiz.preview.loading = hasPendingWorkbenchRefresh;
-  wiz.preview.error = '';
-  wiz.preview.failure = null;
-  if (isPlainObject(nextEnvelope.readiness)) {
-    wiz.preview.readiness = cloneJson(nextEnvelope.readiness) || nextEnvelope.readiness;
-  }
-  if (isPlainObject(nextPreview.summary)) {
-    wiz.preview.summary = cloneJson(nextPreview.summary) || nextPreview.summary;
-  }
-  wiz.preview.componentStateCache = {
-    case_resolution_states: cloneJson(caseResolutionStates) || [],
-    cases_resolutions: cloneJson(caseResolutionStates) || [],
+  const componentStateCacheSource = isPlainObject(nextPreview.componentStateCache)
+    ? nextPreview.componentStateCache
+    : (isPlainObject(nextPreview.component_state_cache) ? nextPreview.component_state_cache : {});
+  const normalizedCandidateComponentStateCache = {
+    ...(cloneJson(componentStateCacheSource) || {}),
     blocked_case_states: cloneJson(blockedCaseStates) || [],
     safe_case_states: cloneJson(safeCaseStates) || [],
     reusable_component_resolutions: (isPlainObject(nextPreview.reusable_component_resolutions) ? cloneJson(nextPreview.reusable_component_resolutions) : {}) || {},
@@ -130204,9 +130315,29 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     blocked_preview_lines: cloneJson(asArray(nextPreview.blocked_preview_lines)) || [],
     hidden_preview_lines: cloneJson(asArray(nextPreview.hidden_preview_lines)) || []
   };
+  assignCaseResolutionAliases(normalizedCandidateComponentStateCache, caseResolutionStates);
+  nextPreview.componentStateCache = normalizedCandidateComponentStateCache;
+  nextPreview.component_state_cache = normalizedCandidateComponentStateCache;
+  nextEnvelope.componentStateCache = normalizedCandidateComponentStateCache;
+  nextEnvelope.component_state_cache = normalizedCandidateComponentStateCache;
+  wiz.preview.componentStateCache = normalizedCandidateComponentStateCache;
+  wiz.preview.component_state_cache = normalizedCandidateComponentStateCache;
+  if (isPlainObject(canonicalCandidatePageMap) && Object.keys(canonicalCandidatePageMap).length > 0) {
+    attachPreviewPageCacheAliases(wiz.preview, canonicalCandidatePageMap);
+    attachPreviewPageCacheAliases(wiz.workbench, canonicalCandidatePageMap);
+  }
 
-  wiz.decisions.case_resolution_states = cloneJson(caseResolutionStates) || [];
-  wiz.decisions.cases_resolutions = cloneJson(caseResolutionStates) || [];
+  wiz.preview.data = nextEnvelope;
+  wiz.preview.loading = hasPendingWorkbenchRefresh;
+  wiz.preview.error = '';
+  wiz.preview.failure = null;
+  if (isPlainObject(nextEnvelope.readiness)) {
+    wiz.preview.readiness = cloneJson(nextEnvelope.readiness) || nextEnvelope.readiness;
+  }
+  if (isPlainObject(nextPreview.summary)) {
+    wiz.preview.summary = cloneJson(nextPreview.summary) || nextPreview.summary;
+  }
+  assignCaseResolutionAliases(wiz.decisions, caseResolutionStates);
   wiz.decisions.blocked_case_states = cloneJson(blockedCaseStates) || [];
   wiz.decisions.safe_case_states = cloneJson(safeCaseStates) || [];
   wiz.decisions.reusable_component_resolutions = (isPlainObject(nextPreview.reusable_component_resolutions) ? cloneJson(nextPreview.reusable_component_resolutions) : {}) || {};
@@ -130265,8 +130396,7 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   wiz.workbench.shadow_compare_failed = postActionShadowCompareFailed;
   wiz.workbench.create_draft_refresh_pending = hasPendingWorkbenchRefresh;
   wiz.workbench.pay_context_dirty = hasPendingWorkbenchRefresh;
-  wiz.workbench.case_resolution_states = cloneJson(caseResolutionStates) || [];
-  wiz.workbench.cases_resolutions = cloneJson(caseResolutionStates) || [];
+  assignCaseResolutionAliases(wiz.workbench, caseResolutionStates);
   wiz.workbench.canonical_preview_lines = cloneJson(canonicalPreviewLines) || [];
   wiz.workbench.payees = cloneJson(payees) || [];
   wiz.workbench.summary = isPlainObject(nextPreview.summary) ? (cloneJson(nextPreview.summary) || {}) : {};

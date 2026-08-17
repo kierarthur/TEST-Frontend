@@ -40,11 +40,20 @@ test('candidate merge treats the complete response as authoritative across all s
 
   assert.match(merge, /candidateRowPayloadProvided/);
   assert.match(merge, /mergeRowsForCandidate\(nextPreview\[key\], incoming, responseCandidateId\)/);
-  assert.match(merge, /case_resolution_states = mergeRowsForKey\('case_resolution_states', \['cases_resolutions'\]\)/);
-  assert.match(merge, /'case_resolution_states', 'cases_resolutions', 'blocked_case_states'/);
-  assert.match(merge, /componentStateCache = \{[\s\S]*case_resolution_states: cloneJson\(caseResolutionStates\) \|\| \[\],[\s\S]*cases_resolutions: cloneJson\(caseResolutionStates\) \|\| \[\]/);
-  assert.match(merge, /wiz\.decisions\.case_resolution_states = cloneJson\(caseResolutionStates\) \|\| \[\];[\s\S]*wiz\.decisions\.cases_resolutions = cloneJson\(caseResolutionStates\) \|\| \[\]/);
-  assert.match(merge, /wiz\.workbench\.case_resolution_states = cloneJson\(caseResolutionStates\) \|\| \[\];[\s\S]*wiz\.workbench\.cases_resolutions = cloneJson\(caseResolutionStates\) \|\| \[\]/);
+  for (const key of ['case_resolution_states', 'caseResolutionStates', 'cases_resolutions', 'casesResolutions']) {
+    assert.match(merge, new RegExp(`'${key}'`));
+  }
+  assert.match(merge, /assignCaseResolutionAliases\(nextPreview, authoritativeCaseResolutionRows\)/);
+  assert.match(merge, /assignCaseResolutionAliases\(nextEnvelope, nextPreview\.case_resolution_states\)/);
+  assert.match(merge, /nextPreview\.componentStateCache = normalizedCandidateComponentStateCache/);
+  assert.match(merge, /nextPreview\.component_state_cache = normalizedCandidateComponentStateCache/);
+  assert.match(merge, /wiz\.preview\.componentStateCache = normalizedCandidateComponentStateCache/);
+  assert.match(merge, /wiz\.preview\.component_state_cache = normalizedCandidateComponentStateCache/);
+  assert.match(merge, /assignCaseResolutionAliases\(wiz\.decisions, caseResolutionStates\)/);
+  assert.match(merge, /assignCaseResolutionAliases\(wiz\.workbench, caseResolutionStates\)/);
+  assert.match(merge, /attachPreviewPageCacheAliases\(wiz\.preview, canonicalCandidatePageMap\)/);
+  assert.match(merge, /attachPreviewPageCacheAliases\(wiz\.workbench, canonicalCandidatePageMap\)/);
+  assert.doesNotMatch(merge, /rows_count = Math\.max\(Number\(pageValue\.rows_count/);
   assert.match(merge, /canonical_preview_lines = mergeRowsForKey\('canonical_preview_lines', \['canonical_preview_lines'\]\)/);
   assert.match(merge, /blocked_for_pay_now = mergeRowsForKey\('blocked_for_pay_now', \['blocked_for_pay'\]\)/);
 });
