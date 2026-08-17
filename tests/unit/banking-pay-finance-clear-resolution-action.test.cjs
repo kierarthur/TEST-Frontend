@@ -125,4 +125,3 @@ test('renderer and dispatcher preserve the finance owner boundary', () => {
   assert.match(dispatch, /resolutionFamily === 'TAXABLE_CHANNEL_RESTRUCTURE' && linkedTimesheetId/);
   assert.match(dispatch, /bankingPayWorkbenchSessionClearCaseResolution/);
 });
-
