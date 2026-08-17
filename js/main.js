@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260816-banking-james-post-resolution-r2',
+  asset_version: '20260817-banking-james-cancel-postcommit-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -99390,7 +99390,15 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         });
 
         if (!modalResult?.accepted) return;
-        clearAccepted = true;
+        clearAccepted = modalResult?.mutation_accepted === true || modalResult?.accepted === true;
+        try {
+          if (el) {
+            el.disabled = true;
+            el.setAttribute('data-disabled', '1');
+            el.setAttribute('aria-disabled', 'true');
+            el.setAttribute('aria-busy', 'true');
+          }
+        } catch {}
 
         if (getCurrentWorkbenchSessionId() !== workbenchSessionId) {
           throw new Error('The Banking Pay workbench session changed after the resolved rate was cancelled. Refresh Banking Pay to read the current session.');
@@ -99402,6 +99410,12 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         const queueResult = (modalResult?.result && typeof modalResult.result === 'object' && !Array.isArray(modalResult.result))
           ? modalResult.result
           : {};
+        const returnedSessionId = String(
+          queueResult.session_id ?? queueResult.sessionId ?? queueResult.workbench_session_id ?? queueResult.workbenchSessionId ?? ''
+        ).trim().toLowerCase();
+        if (returnedSessionId && returnedSessionId !== workbenchSessionId.toLowerCase()) {
+          throw new Error('The resolved rate was cancelled, but the returned Banking Pay session did not match the current session. Refresh Banking Pay to read the latest state.');
+        }
         markCandidatePendingLocal(candidateId, queueResult);
         await safeRerender(null);
 
@@ -104313,6 +104327,180 @@ function isTimesheetSaveSignatureDiagEnabled() {
   }
 }
 
+function normaliseResolvedRateClearRefreshScopeV1(clearResult, requestContext = {}) {
+  const VERIFICATION_FAILURE_CODE = 'BANKING_PAY_RESOLVED_RATE_CLEAR_SCOPE_UNVERIFIED_AFTER_COMMIT';
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const response = isPlainObject(clearResult) ? clearResult : {};
+  const expected = isPlainObject(requestContext) ? requestContext : {};
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const canonicalUuid = (value) => {
+    const text = String(value == null ? '' : value).trim().toLowerCase();
+    return uuidRe.test(text) ? text : '';
+  };
+  const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+  const issues = [];
+
+  const firstValue = (object, aliases) => {
+    for (const alias of aliases) {
+      if (!hasOwn(object, alias) || object[alias] == null || String(object[alias]).trim() === '') continue;
+      return { provided: true, alias, value: object[alias] };
+    }
+    return { provided: false, alias: '', value: null };
+  };
+  const readIdentity = (object, aliases, label) => {
+    const picked = firstValue(object, aliases);
+    if (!picked.provided) {
+      issues.push(`${label}_MISSING`);
+      return '';
+    }
+    const value = canonicalUuid(picked.value);
+    if (!value) issues.push(`${label}_INVALID`);
+    return value;
+  };
+  const readUuidSet = (object, aliases, label) => {
+    let picked = { provided: false, alias: '', value: null };
+    for (const alias of aliases) {
+      if (!hasOwn(object, alias) || object[alias] == null) continue;
+      picked = { provided: true, alias, value: object[alias] };
+      break;
+    }
+    if (!picked.provided) return { provided: false, alias: '', values: [], raw: [] };
+    if (!Array.isArray(picked.value) || picked.value.length > 500) {
+      issues.push(`${label}_INVALID_ARRAY`);
+      return { provided: true, alias: picked.alias, values: [], raw: [] };
+    }
+    const values = [];
+    let invalid = false;
+    for (const item of picked.value) {
+      const value = canonicalUuid(item);
+      if (!value) {
+        invalid = true;
+        continue;
+      }
+      values.push(value);
+    }
+    if (invalid) issues.push(`${label}_INVALID_UUID`);
+    const canonical = Array.from(new Set(values)).sort();
+    return {
+      provided: true,
+      alias: picked.alias,
+      values: canonical,
+      raw: picked.value.map((item) => String(item == null ? '' : item).trim().slice(0, 80))
+    };
+  };
+  const readExpectedUuidSet = (aliases, label) => readUuidSet(expected, aliases, label);
+  const readCountEvidence = (aliases, expectedCount, label) => {
+    const returned = {};
+    for (const alias of aliases) {
+      if (!hasOwn(response, alias) || response[alias] == null || String(response[alias]).trim() === '') continue;
+      const text = String(response[alias]).trim();
+      const value = /^[0-9]{1,18}$/.test(text) ? Number(text) : null;
+      returned[alias] = value;
+      if (!Number.isSafeInteger(value) || value < 0) {
+        issues.push(`${label}_INVALID`);
+      } else if (value !== expectedCount) {
+        issues.push(`${label}_MISMATCH`);
+      }
+    }
+    return returned;
+  };
+
+  const responseSessionId = readIdentity(response, ['session_id', 'sessionId', 'workbench_session_id', 'workbenchSessionId'], 'RETURNED_SESSION_ID');
+  const responseCandidateId = readIdentity(response, ['candidate_id', 'candidateId'], 'RETURNED_CANDIDATE_ID');
+  const responseAnchorId = readIdentity(response, ['anchor_timesheet_id', 'anchorTimesheetId', 'linked_timesheet_id', 'linkedTimesheetId'], 'RETURNED_ANCHOR_TIMESHEET_ID');
+  const expectedSessionId = readIdentity(expected, ['session_id', 'sessionId', 'workbench_session_id', 'workbenchSessionId'], 'EXPECTED_SESSION_ID');
+  const expectedCandidateId = readIdentity(expected, ['candidate_id', 'candidateId'], 'EXPECTED_CANDIDATE_ID');
+  const expectedAnchorId = readIdentity(expected, ['anchor_timesheet_id', 'anchorTimesheetId', 'linked_timesheet_id', 'linkedTimesheetId', 'timesheet_id', 'timesheetId'], 'EXPECTED_ANCHOR_TIMESHEET_ID');
+
+  if (responseSessionId && expectedSessionId && responseSessionId !== expectedSessionId) issues.push('RETURNED_SESSION_ID_MISMATCH');
+  if (responseCandidateId && expectedCandidateId && responseCandidateId !== expectedCandidateId) issues.push('RETURNED_CANDIDATE_ID_MISMATCH');
+  if (responseAnchorId && expectedAnchorId && responseAnchorId !== expectedAnchorId) issues.push('RETURNED_ANCHOR_TIMESHEET_ID_MISMATCH');
+
+  const linked = readUuidSet(response, [
+    'linked_timesheet_ids', 'linkedTimesheetIds',
+    'clearable_linked_timesheet_ids', 'clearableLinkedTimesheetIds',
+    'eligible_linked_timesheet_ids', 'eligibleLinkedTimesheetIds'
+  ], 'RETURNED_LINKED_TIMESHEET_IDS');
+  const complete = readUuidSet(response, [
+    'affected_timesheet_ids', 'affectedTimesheetIds',
+    'targeted_timesheet_ids', 'targetedTimesheetIds',
+    'refresh_target_timesheet_ids', 'refreshTargetTimesheetIds',
+    'clearable_timesheet_ids', 'clearableTimesheetIds'
+  ], 'RETURNED_AFFECTED_TIMESHEET_IDS');
+  const expectedComplete = readExpectedUuidSet([
+    'expected_affected_timesheet_ids', 'expectedAffectedTimesheetIds',
+    'clearable_timesheet_ids', 'clearableTimesheetIds',
+    'targeted_timesheet_ids', 'targetedTimesheetIds'
+  ], 'EXPECTED_AFFECTED_TIMESHEET_IDS');
+
+  const canonicalAffectedTimesheetIds = complete.provided
+    ? complete.values
+    : Array.from(new Set([responseAnchorId, ...linked.values].filter(Boolean))).sort();
+  const anchorForLinkedDiagnostics = responseAnchorId || expectedAnchorId;
+  const canonicalLinkedTimesheetIds = linked.values
+    .filter((timesheetId) => timesheetId !== anchorForLinkedDiagnostics)
+    .sort();
+
+  if (!canonicalAffectedTimesheetIds.includes(expectedAnchorId)) issues.push('AFFECTED_SET_ANCHOR_MISSING');
+  if (expectedComplete.provided) {
+    const expectedSet = new Set(expectedComplete.values);
+    const actualSet = new Set(canonicalAffectedTimesheetIds);
+    if (canonicalAffectedTimesheetIds.some((timesheetId) => !expectedSet.has(timesheetId))) {
+      issues.push('AFFECTED_SET_UNEXPECTED_TARGET');
+    }
+    if (expectedComplete.values.some((timesheetId) => !actualSet.has(timesheetId))) {
+      issues.push('AFFECTED_SET_EXPECTED_TARGET_MISSING');
+    }
+  }
+
+  const returnedCountFields = {
+    ...readCountEvidence([
+      'eligible_linked_timesheet_count', 'eligibleLinkedTimesheetCount',
+      'clearable_linked_timesheet_count', 'clearableLinkedTimesheetCount',
+      'eligible_linked_count', 'eligibleLinkedCount',
+      'linked_timesheet_count', 'linkedTimesheetCount'
+    ], canonicalLinkedTimesheetIds.length, 'LINKED_TIMESHEET_COUNT'),
+    ...readCountEvidence([
+      'total_affected_timesheet_count', 'totalAffectedTimesheetCount',
+      'total_affected_count', 'totalAffectedCount',
+      'affected_timesheet_count', 'affectedTimesheetCount'
+    ], canonicalAffectedTimesheetIds.length, 'AFFECTED_TIMESHEET_COUNT')
+  };
+
+  const sessionVersionText = String(
+    response.session_version ?? response.sessionVersion ?? response.version ?? ''
+  ).trim();
+  const sessionVersion = /^[0-9]{1,18}$/.test(sessionVersionText) && Number.isSafeInteger(Number(sessionVersionText)) && Number(sessionVersionText) >= 1
+    ? Number(sessionVersionText)
+    : null;
+  if (sessionVersion == null) issues.push('RETURNED_SESSION_VERSION_INVALID');
+
+  const uniqueIssues = Array.from(new Set(issues));
+  const scopeVerified = uniqueIssues.length === 0;
+  return {
+    mutationAccepted: response.ok === true,
+    scopeVerified,
+    sessionId: responseSessionId,
+    sessionVersion,
+    candidateId: responseCandidateId,
+    anchorTimesheetId: responseAnchorId,
+    canonicalAffectedTimesheetIds,
+    canonicalLinkedTimesheetIds,
+    verificationCode: scopeVerified
+      ? 'BANKING_PAY_RESOLVED_RATE_CLEAR_SCOPE_VERIFIED'
+      : VERIFICATION_FAILURE_CODE,
+    verificationDetail: {
+      issues: uniqueIssues,
+      complete_set_source: complete.alias || 'anchor_plus_linked_fallback',
+      linked_set_source: linked.alias || null,
+      expected_set_source: expectedComplete.alias || null,
+      raw_linked_timesheet_ids: linked.raw,
+      raw_affected_timesheet_ids: complete.raw,
+      returned_count_fields: returnedCountFields
+    }
+  };
+}
+
 async function openBankingPayCancelResolvedRatesModal(seed = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -104516,39 +104704,64 @@ async function openBankingPayCancelResolvedRatesModal(seed = {}) {
     throw new Error('The resolved rate could not be cancelled. Refresh Banking Pay and try again.');
   }
 
-  const actualAnchorId = readUuid(result.anchor_timesheet_id ?? result.anchorTimesheetId);
-  const actualLinkedIds = readUuidArray(
-    result.linked_timesheet_ids ?? result.clearable_linked_timesheet_ids ?? result.eligible_linked_timesheet_ids
-  ).filter((timesheetId) => timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase());
-  const actualTargetIds = readUuidArray(
-    result.targeted_timesheet_ids ?? result.clearable_timesheet_ids ?? result.affected_timesheet_ids
-  );
-  const actualEligibleLinkedCount = Number(
-    result.eligible_linked_timesheet_count ?? result.clearable_linked_timesheet_count ?? actualLinkedIds.length
-  );
-  const actualTotalAffectedCount = Number(
-    result.total_affected_timesheet_count ?? actualTargetIds.length
-  );
-  const actualLinkedSet = new Set(actualLinkedIds.map((timesheetId) => timesheetId.toLowerCase()));
-  const actualTargetsMatch = actualTargetIds.length === 1 + actualLinkedIds.length &&
-    actualTargetIds.some((timesheetId) => timesheetId.toLowerCase() === anchorTimesheetId.toLowerCase()) &&
-    actualTargetIds
-      .filter((timesheetId) => timesheetId.toLowerCase() !== anchorTimesheetId.toLowerCase())
-      .every((timesheetId) => actualLinkedSet.has(timesheetId.toLowerCase()));
+  let scopeVerification = null;
+  try {
+    scopeVerification = normaliseResolvedRateClearRefreshScopeV1(result, {
+      session_id: sessionId,
+      candidate_id: candidateId,
+      anchor_timesheet_id: anchorTimesheetId,
+      expected_affected_timesheet_ids: clearableIds
+    });
+  } catch (verificationError) {
+    scopeVerification = {
+      mutationAccepted: true,
+      scopeVerified: false,
+      sessionId,
+      sessionVersion: readPositiveInteger(result.session_version ?? result.sessionVersion ?? result.version),
+      candidateId,
+      anchorTimesheetId,
+      canonicalAffectedTimesheetIds: [],
+      canonicalLinkedTimesheetIds: [],
+      verificationCode: 'BANKING_PAY_RESOLVED_RATE_CLEAR_SCOPE_UNVERIFIED_AFTER_COMMIT',
+      verificationDetail: {
+        issues: ['SCOPE_NORMALISER_ERROR'],
+        message: trimStr(verificationError?.message || verificationError || 'Scope normalisation failed.')
+      }
+    };
+  }
 
-  if (
-    !actualAnchorId || actualAnchorId.toLowerCase() !== anchorTimesheetId.toLowerCase() ||
-    actualLinkedIds.some((timesheetId) => timesheetId.toLowerCase() === anchorTimesheetId.toLowerCase()) ||
-    !Number.isSafeInteger(actualEligibleLinkedCount) || actualEligibleLinkedCount !== actualLinkedIds.length ||
-    !Number.isSafeInteger(actualTotalAffectedCount) || actualTotalAffectedCount !== 1 + actualEligibleLinkedCount ||
-    !actualTargetsMatch
-  ) {
-    throw new Error('The resolved rate was cancelled, but the returned refresh scope did not reconcile. Refresh Banking Pay before continuing.');
+  if (scopeVerification.scopeVerified !== true) {
+    try {
+      if (typeof console !== 'undefined' && console && typeof console.warn === 'function') {
+        console.warn('Banking Pay resolved-rate clear requires canonical refresh after commit.', {
+          code: scopeVerification.verificationCode,
+          session_id: scopeVerification.sessionId || sessionId,
+          candidate_id: scopeVerification.candidateId || candidateId,
+          anchor_timesheet_id: scopeVerification.anchorTimesheetId || anchorTimesheetId,
+          returned_session_version: scopeVerification.sessionVersion,
+          canonical_affected_timesheet_ids: scopeVerification.canonicalAffectedTimesheetIds,
+          canonical_linked_timesheet_ids: scopeVerification.canonicalLinkedTimesheetIds,
+          raw_linked_timesheet_ids: scopeVerification.verificationDetail?.raw_linked_timesheet_ids || [],
+          raw_affected_timesheet_ids: scopeVerification.verificationDetail?.raw_affected_timesheet_ids || [],
+          returned_count_fields: scopeVerification.verificationDetail?.returned_count_fields || {},
+          mutation_accepted: true,
+          requires_canonical_refresh: true
+        });
+      }
+    } catch {}
   }
 
   return {
     ok: true,
     accepted: true,
+    mutation_accepted: true,
+    refresh_scope_verified: scopeVerification.scopeVerified === true,
+    requires_canonical_refresh: scopeVerification.scopeVerified !== true,
+    session_id: scopeVerification.sessionId || sessionId,
+    session_version: scopeVerification.sessionVersion,
+    candidate_id: scopeVerification.candidateId || candidateId,
+    verification_code: scopeVerification.verificationCode,
+    diagnostic: scopeVerification,
     declined: false,
     discovery,
     result

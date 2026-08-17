@@ -133,6 +133,23 @@ test('single-candidate resolution success adopts the candidate refresh without w
   );
 });
 
+test('accepted resolved-rate clear always reaches canonical session polling without replaying the POST', () => {
+  assert.match(
+    source,
+    /clearAccepted = modalResult\?\.mutation_accepted === true \|\| modalResult\?\.accepted === true;[\s\S]{0,2600}pollPayWorkbenchCandidateUntilSettled\(workbenchSessionId, '', \{/
+  );
+  assert.match(source, /expectedSessionId:\s*workbenchSessionId/);
+  assert.match(source, /minimumSessionVersion,/);
+  assert.match(source, /requirePreviewSectionsAfterReady:\s*true/);
+  assert.match(source, /returnedSessionId && returnedSessionId !== workbenchSessionId\.toLowerCase\(\)/);
+  assert.equal(
+    (source.slice(source.indexOf("if (a === 'banking:pay:clearCaseResolution')"), source.indexOf("if (a === 'banking:pay:componentClearResolution')"))
+      .match(/bankingPayWorkbenchSessionClearCaseResolution\(workbenchSessionId/g) || []).length,
+    1,
+    'the delegated clear branch must send one mutation request and use polling for adoption'
+  );
+});
+
 test('overpayment presentation uses resolved target-channel amounts after a pay-method change', () => {
   assert.match(
     source,
