@@ -208,3 +208,22 @@ test('primary settle path finalises refresh ownership after exact candidate and 
   assert.match(poll, /expectedSessionVersion:\s*candidatePreviewVersion/);
   assert.match(poll, /settledSectionPages\.all_required_sections_loaded !== true/);
 });
+
+test('candidate publication waits for READY progress and bypasses the missing-status session fallback', () => {
+  const poll = sliceBetween(
+    'async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, options = {}) {',
+    'async function bankingPayWorkbenchSessionOpen(payload = {}) {'
+  );
+
+  assert.match(
+    poll,
+    /if \(progressLooksReady\(progress\) && !normalized\.isAnyWatchedPending && minimumCandidateVersionReached\)/,
+    'candidate authority must not be fetched while session progress still reports active refresh work'
+  );
+  assert.match(
+    poll,
+    /const requiresSessionLevelFallback = !candidateScopedPoll && \([\s\S]*progressRequiresFullRefresh \|\| !normalized\.targetCandidateStatus[\s\S]*\);/,
+    'omitted candidate-status rows must not divert a known candidate away from exact candidate authority'
+  );
+  assert.match(poll, /if \(forceFullSessionRefresh \|\| requiresSessionLevelFallback\)/);
+});

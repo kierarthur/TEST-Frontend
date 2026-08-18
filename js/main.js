@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260818-banking-finance-terminal-refresh-owner-r1',
+  asset_version: '20260818-banking-finance-terminal-refresh-owner-r2',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -132364,7 +132364,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     // Do not mistake the pre-action READY fragment for the post-action result:
     // the targeted candidate is settled only after the session version moves
     // to the version required by the mutation.
-    if (!normalized.isAnyWatchedPending && minimumCandidateVersionReached) {
+    if (progressLooksReady(progress) && !normalized.isAnyWatchedPending && minimumCandidateVersionReached) {
       const beforeSettledWriteGuard = evaluateStalenessGuard('before_settled_state_write', {
         progress: cloneJson(progress)
       });
@@ -132388,7 +132388,14 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
         progress.refresh_scope === 'FULL_SESSION'
       );
 
-      if (forceFullSessionRefresh || progressRequiresFullRefresh || !normalized.targetCandidateStatus) {
+      // The bounded progress route deliberately omits candidate-status arrays.
+      // A known candidate must still publish from its exact paged authority;
+      // otherwise the full-session fallback can leave the already-open modal
+      // rendering its pre-action page cache until it is closed and reopened.
+      const requiresSessionLevelFallback = !candidateScopedPoll && (
+        progressRequiresFullRefresh || !normalized.targetCandidateStatus
+      );
+      if (forceFullSessionRefresh || requiresSessionLevelFallback) {
         const fullSession = await fetchApplyAndRenderFullSession(progress, forceFullSessionRefresh ? 'FORCED_AFTER_SETTLED' : (!normalized.targetCandidateStatus ? 'MISSING_TARGET_STATUS' : 'PROGRESS_REQUESTED'));
         if (fullSession && fullSession.aborted === true) return fullSession;
 

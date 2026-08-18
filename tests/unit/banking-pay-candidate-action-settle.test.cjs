@@ -47,7 +47,7 @@ test('candidate action waits for a newer workbench version before adopting the r
   assert.match(refreshSource, /expectedSessionId: sessionId/);
   assert.match(pollSource, /const minimumCandidateVersionReached = minimumSessionVersion == null/);
   assert.match(pollSource, /progressSessionVersion >= minimumSessionVersion/);
-  assert.match(pollSource, /if \(!normalized\.isAnyWatchedPending && minimumCandidateVersionReached\)/);
+  assert.match(pollSource, /if \(progressLooksReady\(progress\) && !normalized\.isAnyWatchedPending && minimumCandidateVersionReached\)/);
 });
 
 test('accepted bank details surface partial provider-setup failure in the friendly UI modal', () => {
