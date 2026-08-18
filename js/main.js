@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260818-banking-finance-terminal-refresh-owner-r2',
+  asset_version: '20260818-banking-cancel-stale-modal-recovery-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -7390,10 +7390,10 @@ async function openBankingReauthModal(opts = {}) {
             frame.isDirty = false;
             frame._snapshot = null;
           }
-          // Verification completed successfully. Close the exact child frame
-          // directly; clicking the shared Close button invokes the generic
-          // dirty/discard ceremony and can show an irrelevant native prompt.
-          if (typeof closeModal === 'function') closeModal();
+          // The child is clean, so use its bound shared-close path. That path
+          // removes this exact frame and restores/rebinds the parent controls;
+          // direct generic closure bypasses that ownership handoff.
+          closeTop();
         }
       } catch {}
       restoreParentModalCtx();
@@ -23362,6 +23362,40 @@ function resetBankingPayStage3Selection(correctionState) {
   return state.stage3Selection;
 }
 
+function isBankingPayStage3SelectionSnapshotStaleError(error) {
+  const json = error?.json && typeof error.json === 'object' ? error.json : {};
+  const values = [
+    error?.code,
+    error?.message,
+    error?.body,
+    json.code,
+    json.error,
+    json.message,
+    json.error_code,
+    json.errorCode
+  ];
+  return values.some((value) => /(?:PAYMENT_CORRECTION_)?SELECTION_SNAPSHOT_STALE/i.test(String(value == null ? '' : value)));
+}
+
+async function recoverBankingPayStage3SelectionSnapshot(error) {
+  if (!isBankingPayStage3SelectionSnapshotStaleError(error)) return false;
+
+  const { correctionState } = getBankingPayStage3Context();
+  const refreshedMessage = 'Current Payment Status changed before cancellation could begin. CloudTMS refreshed the authoritative list and cleared the old selection. Review and select the payment again.';
+  resetBankingPayStage3Selection(correctionState);
+
+  try {
+    await loadBankingPayStage3StatusPage({ resetHistory: true });
+    correctionState.planError = refreshedMessage;
+  } catch (refreshError) {
+    correctionState.planError = `${refreshedMessage} The automatic refresh did not complete; use Refresh before selecting anything.`;
+  }
+
+  try { toast(correctionState.planError); } catch {}
+  try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+  return true;
+}
+
 function bankingPayCandidateAwaitingPayeNetAmount(batchPayload, candidateRow) {
   const root = batchPayload && typeof batchPayload === 'object' && !Array.isArray(batchPayload) ? batchPayload : {};
   const batch = root.batch && typeof root.batch === 'object' && !Array.isArray(root.batch) ? root.batch : {};
@@ -25162,7 +25196,13 @@ function installBankingPayStage3Handlers() {
   if (typeof document === 'undefined' || window.__bankingPayStage3HandlersInstalled === true) return;
   window.__bankingPayStage3HandlersInstalled = true;
   const rerender = async () => { if (typeof bankingRerender === 'function') await bankingRerender(null); };
-  const fail = async (error) => { const { correctionState } = getBankingPayStage3Context(); correctionState.planError = String(error?.message || error || 'Current Payment Status could not be updated.'); try { toast(correctionState.planError); } catch {} await rerender(); };
+  const fail = async (error) => {
+    if (await recoverBankingPayStage3SelectionSnapshot(error)) return;
+    const { correctionState } = getBankingPayStage3Context();
+    correctionState.planError = String(error?.message || error || 'Current Payment Status could not be updated.');
+    try { toast(correctionState.planError); } catch {}
+    await rerender();
+  };
   document.addEventListener('click', async (event) => {
     const element = event.target?.closest?.('[data-banking-pay-stage3-action]');
     if (!element) return;

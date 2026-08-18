@@ -317,7 +317,7 @@ test('an orphaned Pay Batch child cannot receive late refreshes and its shared C
   assert.match(refreshBody, /childHasOwnerFrame\(child\) \? child : null/);
 });
 
-test('successful Banking reauthentication closes the verified child without invoking the discard button', () => {
+test('successful Banking reauthentication closes the verified child through its owner-bound close path', () => {
   const start = main.indexOf('    const finishVerified = (token) => {');
   const end = main.indexOf('    const onDismiss =', start);
   assert.ok(start >= 0);
@@ -326,10 +326,9 @@ test('successful Banking reauthentication closes the verified child without invo
 
   assert.match(body, /frame\.isDirty = false/);
   assert.match(body, /frame\._snapshot = null/);
-  assert.match(body, /typeof closeModal === 'function'\) closeModal\(\)/);
+  assert.match(body, /closeTop\(\)/);
   assert.match(body, /restoreParentModalCtx\(\)/);
-  assert.doesNotMatch(body, /btnCloseModal/);
-  assert.doesNotMatch(body, /\.click\(\)/);
+  assert.doesNotMatch(body, /closeModal\(\)/);
 });
 
 test('cancellation completion is owned by the open batch watcher, not the progress child timer', () => {

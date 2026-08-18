@@ -21,9 +21,9 @@ function stage3Context() {
     globalThis: { crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' } },
     crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' },
     Set, Map, Array, Object, String, Number, Math, Date, Error, AbortController,
-    bankingPayPaymentStatusPage: async () => ({}), bankingRerender: async () => {}
+    bankingPayPaymentStatusPage: async () => ({}), bankingRerender: async () => {}, toast: () => {}
   };
-  vm.runInNewContext(`${code}\nthis.api = { canonical: bankingPayStage3CanonicalStatusAction, ensure: ensureBankingPayStage3SelectionState, normalise: normaliseBankingPayStage3StatusRow, apply: applyBankingPayStage3StatusPage, load: loadBankingPayStage3StatusPage, selectedActions: bankingPayStage3SelectedActions, build: buildBankingPayStage3Selection }; this.setStatusPage = (value) => { bankingPayPaymentStatusPage = value; };`, context);
+  vm.runInNewContext(`${code}\nthis.api = { canonical: bankingPayStage3CanonicalStatusAction, ensure: ensureBankingPayStage3SelectionState, reset: resetBankingPayStage3Selection, stale: isBankingPayStage3SelectionSnapshotStaleError, recoverStale: recoverBankingPayStage3SelectionSnapshot, normalise: normaliseBankingPayStage3StatusRow, apply: applyBankingPayStage3StatusPage, load: loadBankingPayStage3StatusPage, selectedActions: bankingPayStage3SelectedActions, build: buildBankingPayStage3Selection, getCorrection: () => window.modalCtx.banking.pay.child.correction }; this.setStatusPage = (value) => { bankingPayPaymentStatusPage = value; };`, context);
   context.api.setStatusPage = context.setStatusPage;
   return context.api;
 }
@@ -152,6 +152,56 @@ test('exactly 10,000 rows complete in 100 sequential pages without a false overf
   assert.equal(result.next_cursor_json, null);
 });
 
+test('a stale correction snapshot refreshes authority and clears the obsolete selection without retrying', async () => {
+  const api = stage3Context();
+  const state = api.getCorrection();
+  state.stage3SnapshotToken = 'stale-filtered-snapshot';
+  state.stage3ExplicitSnapshotToken = 'stale-explicit-snapshot';
+  const selection = api.ensure(state);
+  selection.explicitCandidateTokens.add('candidate-stale');
+  selection.tokenActions.set('candidate-stale', ['CANCEL_PAYMENT']);
+  let statusCalls = 0;
+  api.setStatusPage(async () => {
+    statusCalls += 1;
+    return {
+      snapshot_token: 'fresh-filtered-snapshot',
+      explicit_snapshot_token: 'fresh-explicit-snapshot',
+      sort_key: 'STATUS',
+      sort_direction: 'ASC',
+      page_size: 25,
+      rows: [{ candidate_token: 'candidate-stale', available_actions: ['CANCEL_PAYMENT'] }]
+    };
+  });
+
+  const recovered = await api.recoverStale({
+    status: 400,
+    message: 'CloudTMS could not complete this Banking action.',
+    json: { error: 'PAYMENT_CORRECTION_SELECTION_SNAPSHOT_STALE' }
+  });
+  const refreshedSelection = api.ensure(state);
+
+  assert.equal(recovered, true);
+  assert.equal(statusCalls, 1);
+  assert.equal(refreshedSelection.explicitCandidateTokens.size, 0);
+  assert.equal(refreshedSelection.tokenActions.size, 0);
+  assert.equal(state.stage3SnapshotToken, 'fresh-filtered-snapshot');
+  assert.equal(state.stage3ExplicitSnapshotToken, 'fresh-explicit-snapshot');
+  assert.match(state.planError, /refreshed the authoritative list and cleared the old selection/i);
+});
+
+test('an unrelated correction failure is not treated as stale and does not refresh or clear selection', async () => {
+  const api = stage3Context();
+  const state = api.getCorrection();
+  const selection = api.ensure(state);
+  selection.explicitCandidateTokens.add('candidate-kept');
+  let statusCalls = 0;
+  api.setStatusPage(async () => { statusCalls += 1; return {}; });
+
+  assert.equal(await api.recoverStale({ status: 400, json: { error: 'OTHER_FAILURE' } }), false);
+  assert.equal(statusCalls, 0);
+  assert.equal(api.ensure(state).explicitCandidateTokens.has('candidate-kept'), true);
+});
+
 test('progress modal obeys server-safe action and polling contracts', () => {
   const modal = slice('function renderBankingPayCancellationProgressModal', 'function buildBankingPayCancellationActiveProjection');
   assert.match(modal, /const enc = typeof escapeHtml === 'function'/);
@@ -196,14 +246,14 @@ test('nested payment verification keeps its delegated handlers attached', () => 
   assert.doesNotMatch(afterAttach.slice(0, 500), /rerender\(\)/);
 });
 
-test('successful payment verification closes its clean child without the dirty-form discard prompt', () => {
+test('successful payment verification closes its clean child through the owner-bound parent restore path', () => {
   const reauth = slice('async function openBankingReauthModal', 'async function openPayBatchPasswordConfirmModal');
   assert.match(reauth, /const finishVerified = \(token\) =>/);
   assert.match(reauth, /done = true;\s*detachDelegated\(\);/);
   assert.match(reauth, /frame\.isDirty = false;/);
   assert.match(reauth, /frame\._snapshot = null;/);
-  assert.match(reauth, /if \(typeof closeModal === 'function'\) closeModal\(\);/);
-  assert.doesNotMatch(reauth, /finishVerified[\s\S]{0,900}?document\.getElementById\('btnCloseModal'\)/);
+  assert.match(reauth, /frame\.isDirty = false;[\s\S]*frame\._snapshot = null;[\s\S]*closeTop\(\);/);
+  assert.doesNotMatch(reauth, /finishVerified[\s\S]{0,900}?closeModal\(\)/);
   assert.match(reauth, /if \(directToken && j\?\.tfa_required === false\) \{\s*finishVerified\(directToken\);/);
   assert.match(reauth, /const tok2 = String\(j\?\.reauth_token \|\| ''\)\.trim\(\);[\s\S]*?finishVerified\(tok2\);/);
   assert.doesNotMatch(reauth, /finish\(directToken\);\s*closeTop\(\)/);
