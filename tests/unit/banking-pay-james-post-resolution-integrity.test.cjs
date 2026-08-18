@@ -159,6 +159,8 @@ test('taxable restructure refreshes and atomically adopts the affected Workbench
   assert.match(restructure, /pollPayWorkbenchCandidateUntilSettled\(sessionId, candidateId/);
   assert.match(restructure, /requirePreviewSectionsAfterReady:\s*true/);
   assert.match(restructure, /minimumSessionVersion/);
+  assert.doesNotMatch(restructure, /preRefreshSessionVersionRaw\s*\+\s*1/);
+  assert.match(restructure, /exact RESOLVED postcondition/);
   assert.match(restructure, /candidateScopedAuthorityComplete:\s*true/);
   assert.match(restructure, /validateSettledCandidatePreview:/);
   assert.match(restructure, /transition:\s*'RESOLVED'/);

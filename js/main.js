@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260818-banking-finance-cancel-restore-adoption-r1',
+  asset_version: '20260818-banking-finance-cancel-restore-adoption-r2',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -16386,19 +16386,23 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
       refreshResult?.session?.session_version ??
       NaN
     );
+    // A taxable finance restore advances the candidate refresh generation and
+    // progress counter, but it does not necessarily advance the session
+    // version.  Keep the accepted session as a non-regression floor and let
+    // the exact RESOLVED postcondition below distinguish the successor graph
+    // from the pre-action Cases graph.
     const minimumSessionVersion = Number.isSafeInteger(refreshSessionVersionRaw) && refreshSessionVersionRaw >= 1
       ? refreshSessionVersionRaw
       : (Number.isSafeInteger(preRefreshSessionVersionRaw) && preRefreshSessionVersionRaw >= 1
-          ? preRefreshSessionVersionRaw + 1
+          ? preRefreshSessionVersionRaw
           : null);
-    if (!Number.isSafeInteger(minimumSessionVersion) || minimumSessionVersion < 1) {
-      throw new Error('The finance restructure was saved, but its updated Banking Pay session version was not returned.');
-    }
     const financeCaseKey = trimStr(src.case_key || result?.case_key || result?.after?.case_key || `finance:${financeCaseId}`);
     const settled = await pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, {
       updateState: true,
       expectedSessionId: sessionId,
-      minimumSessionVersion,
+      ...(Number.isSafeInteger(minimumSessionVersion) && minimumSessionVersion >= 1
+        ? { minimumSessionVersion }
+        : {}),
       requirePreviewSectionsAfterReady: true,
       candidateScopedAuthorityComplete: true,
       affectedCandidateIds: [candidateId],

@@ -64,7 +64,7 @@ test('renders exact DAY and NIGHT authority with one whole-timesheet Cancel Reso
   expect(await page.evaluate(() => (window as any).__CODEX_LOCAL_ASSET_PROOF)).toEqual({ runtimeMarker, ...localHashes });
   await expect(page.locator('html')).toHaveAttribute(
     'data-cloudtms-main-asset-contract',
-    '20260818-banking-finance-cancel-restore-adoption-r1'
+    '20260818-banking-finance-cancel-restore-adoption-r2'
   );
 
   await page.getByRole('button', { name: 'Banking', exact: true }).click();
