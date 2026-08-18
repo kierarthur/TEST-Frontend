@@ -18,6 +18,10 @@ const mergeSource = sliceBetween(
   'function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = null) {',
   'async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, options = {}) {'
 );
+const adoptedSectionHelpersSource = sliceBetween(
+  'function normaliseBankingPayAdoptedPreviewSectionV1(value) {',
+  'async function openBankingFinanceCaseRestructureModal(seed = {}) {'
+);
 
 const JAMES_ID = '6e8493ae-c207-497e-8d83-0b518753f590';
 const OTHER_ID = '11111111-1111-4111-8111-111111111111';
@@ -289,11 +293,21 @@ function createMerge() {
     }
   };
   vm.runInNewContext(
-    `${mergeSource}\nglobalThis.mergeForTest = mergePayWorkbenchCandidatePreviewIntoState;`,
+    `${adoptedSectionHelpersSource}\n${mergeSource}\nglobalThis.mergeForTest = mergePayWorkbenchCandidatePreviewIntoState;`,
     context,
     { filename: 'banking-pay-james-same-modal-state-transition.js' }
   );
   return context.mergeForTest;
+}
+
+function createFinanceTransitionValidator() {
+  const context = { Array, String, Object, JSON };
+  vm.runInNewContext(
+    `${adoptedSectionHelpersSource}\nglobalThis.validateForTest = bankingPayCandidatePreviewMatchesFinanceCaseTransitionV1;`,
+    context,
+    { filename: 'banking-pay-finance-transition-validator.js' }
+  );
+  return context.validateForTest;
 }
 
 function rowCandidateId(row) {
@@ -401,4 +415,73 @@ test('candidate adoption atomically cycles James through resolved and unresolved
   assert.equal(Number(positive.toFixed(2)), 790.63);
   assert.equal(Number(recoveries.toFixed(2)), -755.00);
   assert.equal(Number((positive + recoveries).toFixed(2)), 35.63);
+});
+
+test('validated effective section overrides stale presentation aliases in both finance transition directions', () => {
+  const merge = createMerge();
+  const { state, unrelatedReady } = makeFixture();
+
+  const readyResponse = makeReadyResponse(unrelatedReady);
+  for (const row of readyResponse.preview_rows) {
+    row.presentation_section = 'CASES_RESOLUTIONS';
+    row.section = 'cases_resolutions';
+    row.resolved_section = 'cases_resolutions';
+    row.row_json.presentation_section = 'CASES_RESOLUTIONS';
+    row.row_json.section = 'cases_resolutions';
+  }
+  merge(readyResponse, state);
+  assertState(state, { ready: 7, cases: 0, blocked: 0 });
+  for (const row of rowsForCandidate(state.pay.draftWizard.preview.data.preview.canonical_preview_lines, JAMES_ID)) {
+    assert.equal(row.effective_section, 'canonical_preview_lines');
+    assert.equal(row.presentation_section, 'READY_TO_PAY');
+    assert.equal(row.section, 'canonical_preview_lines');
+  }
+
+  const unresolvedResponse = makeUnresolvedResponse();
+  for (const row of unresolvedResponse.preview_rows.filter((entry) => entry.effective_section === 'CASES_RESOLUTIONS')) {
+    row.presentation_section = 'READY_TO_PAY';
+    row.section = 'canonical_preview_lines';
+    row.resolved_section = 'canonical_preview_lines';
+    row.row_json.presentation_section = 'READY_TO_PAY';
+    row.row_json.section = 'canonical_preview_lines';
+  }
+  merge(unresolvedResponse, state);
+  assertState(state, { ready: 0, cases: 3, blocked: 4 });
+});
+
+test('finance transition gate accepts only the exact terminal clear or restore postcondition', () => {
+  const validate = createFinanceTransitionValidator();
+  const financeCaseId = '22222222-2222-4222-8222-222222222222';
+  const caseKey = `finance:${financeCaseId}`;
+  const exact = {
+    candidate_id: JAMES_ID,
+    finance_case_id: financeCaseId,
+    case_key: caseKey
+  };
+  const resolvedAction = {
+    action: 'CLEAR_CASE_RESOLUTION',
+    enabled: true,
+    candidate_id: JAMES_ID,
+    finance_case_id: financeCaseId,
+    case_key: caseKey,
+    resolution_family: 'TAXABLE_CHANNEL_RESTRUCTURE'
+  };
+  const resolvedRow = makeRow(JAMES_ID, 'finance-ready', 'READY_TO_PAY', -220, {
+    finance_case_id: financeCaseId,
+    case_key: caseKey,
+    clear_case_resolution_action: resolvedAction
+  });
+  const clearedRow = makeRow(JAMES_ID, 'finance-case', 'CASES_RESOLUTIONS', 220, {
+    finance_case_id: financeCaseId,
+    case_key: caseKey,
+    selected: false,
+    draftable: false,
+    is_ready_for_draft: false
+  });
+
+  assert.equal(validate({ rows: [resolvedRow] }, { ...exact, transition: 'RESOLVED' }), true);
+  assert.equal(validate({ rows: [clearedRow] }, { ...exact, transition: 'CLEARED' }), true);
+  assert.equal(validate({ rows: [resolvedRow, clearedRow] }, { ...exact, transition: 'RESOLVED' }), false);
+  assert.equal(validate({ rows: [resolvedRow, clearedRow] }, { ...exact, transition: 'CLEARED' }), false);
+  assert.equal(validate({ rows: [] }, { ...exact, transition: 'CLEARED' }), false);
 });

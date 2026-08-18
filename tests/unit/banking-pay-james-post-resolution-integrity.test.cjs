@@ -158,7 +158,11 @@ test('taxable restructure refreshes and atomically adopts the affected Workbench
   assert.match(restructure, /bankingPayWorkbenchSessionRefresh\(sessionId,\s*\{[\s\S]*TAXABLE_CHANNEL_RESTRUCTURE_APPLIED/);
   assert.match(restructure, /pollPayWorkbenchCandidateUntilSettled\(sessionId, candidateId/);
   assert.match(restructure, /requirePreviewSectionsAfterReady:\s*true/);
-  assert.match(restructure, /forceFullSessionRefresh:\s*true/);
+  assert.match(restructure, /minimumSessionVersion/);
+  assert.match(restructure, /candidateScopedAuthorityComplete:\s*true/);
+  assert.match(restructure, /validateSettledCandidatePreview:/);
+  assert.match(restructure, /transition:\s*'RESOLVED'/);
+  assert.doesNotMatch(restructure, /forceFullSessionRefresh:\s*true/);
   assert.match(restructure, /scheduleTaxableRestructureWorkbenchRefresh\(result\)/);
   assert.match(restructure, /setTimeout\(\(\) => \{[\s\S]*refreshTaxableRestructureWorkbenchAfterSave/);
   assert.match(restructure, /dirty_reason = 'TAXABLE_CHANNEL_RESTRUCTURE_APPLIED'/);

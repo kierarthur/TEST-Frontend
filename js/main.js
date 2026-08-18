@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260817-banking-finance-resolution-cancel-r1',
+  asset_version: '20260818-banking-finance-cancel-restore-adoption-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -16129,6 +16129,172 @@ async function openBankingManualDebtAdjustmentModal(seed = {}) {
   );
 }
 
+function normaliseBankingPayAdoptedPreviewSectionV1(value) {
+  const source = String(value == null ? '' : value).trim();
+  if (!source) return '';
+  const raw = source
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .toLowerCase()
+    .replace(/^_+|_+$/g, '');
+  const compact = raw.replace(/_/g, '');
+  if ([
+    'ready', 'ready_to_pay', 'ready_to_pay_now', 'ready_preview', 'ready_preview_line',
+    'ready_preview_lines', 'canonical', 'canonical_preview', 'canonical_preview_line',
+    'canonical_preview_lines', 'draftable', 'draftable_now', 'preview_row', 'preview_rows',
+    'itemisation', 'itemization'
+  ].includes(raw) || ['readytopay', 'readytopaynow', 'readypreview', 'readypreviewline', 'readypreviewlines', 'canonicalpreview', 'canonicalpreviewline', 'canonicalpreviewlines', 'draftablenow', 'previewrow', 'previewrows'].includes(compact)) {
+    return 'canonical_preview_lines';
+  }
+  if ([
+    'case_resolution', 'case_resolutions', 'case_resolution_state', 'case_resolution_states',
+    'cases', 'cases_resolutions', 'resolutions', 'safe_case_state', 'safe_case_states'
+  ].includes(raw) || ['caseresolution', 'caseresolutions', 'caseresolutionstate', 'caseresolutionstates', 'casesresolutions', 'safecasestate', 'safecasestates'].includes(compact)) {
+    return 'cases_resolutions';
+  }
+  if ([
+    'blocked', 'blocked_for_pay', 'blocked_for_pay_now', 'blocked_now', 'blocked_item',
+    'blocked_items', 'blocked_preview_line', 'blocked_preview_lines', 'do_not_pay', 'do_not_pay_items'
+  ].includes(raw) || ['blockedforpay', 'blockedforpaynow', 'blockednow', 'blockeditem', 'blockeditems', 'blockedpreviewline', 'blockedpreviewlines', 'donotpay', 'donotpayitems'].includes(compact)) {
+    return 'blocked_for_pay';
+  }
+  if ([
+    'hidden', 'internal', 'internal_only', 'hidden_preview_line', 'hidden_preview_lines',
+    'hidden_indefinite_snooze', 'hidden_indefinite_snoozes', 'snoozed', 'snoozed_items'
+  ].includes(raw) || ['internalonly', 'hiddenpreviewline', 'hiddenpreviewlines', 'hiddenindefinitesnooze', 'hiddenindefinitesnoozes', 'snoozeditems'].includes(compact)) {
+    return 'hidden';
+  }
+  return '';
+}
+
+function getBankingPayAdoptedPreviewRowSectionV1(rowLike) {
+  const row = rowLike && typeof rowLike === 'object' && !Array.isArray(rowLike) ? rowLike : {};
+  const rowJson = row.row_json && typeof row.row_json === 'object' && !Array.isArray(row.row_json)
+    ? row.row_json
+    : (row.rowJson && typeof row.rowJson === 'object' && !Array.isArray(row.rowJson) ? row.rowJson : {});
+  const candidates = [
+    row.effective_section,
+    row.effectiveSection,
+    rowJson.effective_section,
+    rowJson.effectiveSection,
+    row.presentation_section,
+    row.presentationSection,
+    rowJson.presentation_section,
+    rowJson.presentationSection,
+    row.resolved_section,
+    row.resolvedSection,
+    rowJson.resolved_section,
+    rowJson.resolvedSection,
+    row.section,
+    rowJson.section
+  ];
+  for (const candidate of candidates) {
+    const section = normaliseBankingPayAdoptedPreviewSectionV1(candidate);
+    if (section) return section;
+  }
+  return '';
+}
+
+function normaliseBankingPayAdoptedCandidatePreviewRowV1(rowLike) {
+  if (!rowLike || typeof rowLike !== 'object' || Array.isArray(rowLike)) return rowLike;
+  let row = null;
+  try { row = JSON.parse(JSON.stringify(rowLike)); } catch { row = { ...rowLike }; }
+  const section = getBankingPayAdoptedPreviewRowSectionV1(row);
+  if (!section) return row;
+  const presentationSection = section === 'canonical_preview_lines'
+    ? 'READY_TO_PAY'
+    : (section === 'cases_resolutions'
+        ? 'CASES_RESOLUTIONS'
+        : (section === 'blocked_for_pay' ? 'BLOCKED_FOR_PAY' : 'HIDDEN'));
+  const applySection = (target) => {
+    if (!target || typeof target !== 'object' || Array.isArray(target)) return;
+    target.effective_section = section;
+    target.presentation_section = presentationSection;
+    target.resolved_section = section;
+    target.section = section;
+  };
+  applySection(row);
+  applySection(row.row_json);
+  applySection(row.rowJson);
+  return row;
+}
+
+function bankingPayCandidatePreviewMatchesFinanceCaseTransitionV1(candidatePreview, expected = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const upperTrim = (value) => trimStr(value).toUpperCase();
+  const rows = Array.isArray(candidatePreview?.rows)
+    ? candidatePreview.rows
+    : (Array.isArray(candidatePreview?.preview_rows) ? candidatePreview.preview_rows : []);
+  const candidateId = trimStr(expected.candidate_id || expected.candidateId || '');
+  const financeCaseId = trimStr(expected.finance_case_id || expected.financeCaseId || '');
+  const caseKey = trimStr(expected.case_key || expected.caseKey || (financeCaseId ? `finance:${financeCaseId}` : ''));
+  const transition = upperTrim(expected.transition || '');
+  if (!candidateId || !financeCaseId || !caseKey || !['CLEARED', 'RESOLVED'].includes(transition)) return false;
+
+  const exactRows = rows.filter((rowLike) => {
+    const row = rowLike && typeof rowLike === 'object' && !Array.isArray(rowLike) ? rowLike : {};
+    const rowJson = row.row_json && typeof row.row_json === 'object' && !Array.isArray(row.row_json)
+      ? row.row_json
+      : (row.rowJson && typeof row.rowJson === 'object' && !Array.isArray(row.rowJson) ? row.rowJson : {});
+    const action = row.clear_case_resolution_action && typeof row.clear_case_resolution_action === 'object'
+      ? row.clear_case_resolution_action
+      : (row.case_resolution_actions?.clear && typeof row.case_resolution_actions.clear === 'object'
+          ? row.case_resolution_actions.clear
+          : (rowJson.clear_case_resolution_action && typeof rowJson.clear_case_resolution_action === 'object'
+              ? rowJson.clear_case_resolution_action
+              : (rowJson.case_resolution_actions?.clear && typeof rowJson.case_resolution_actions.clear === 'object'
+                  ? rowJson.case_resolution_actions.clear
+                  : {})));
+    const rowCandidateId = trimStr(row.candidate_id || row.candidateId || rowJson.candidate_id || rowJson.candidateId || action.candidate_id || action.candidateId || '');
+    const rowFinanceCaseId = trimStr(
+      row.finance_case_id || row.financeCaseId || rowJson.finance_case_id || rowJson.financeCaseId ||
+      row.case?.finance_case_id || row.__case_entry?.finance_case_id || row.__case_entry?.case?.finance_case_id ||
+      action.finance_case_id || action.financeCaseId || ''
+    );
+    const rowCaseKey = trimStr(row.case_key || row.caseKey || rowJson.case_key || rowJson.caseKey || row.case?.case_key || row.__case_entry?.case_key || row.__case_entry?.case?.case_key || action.case_key || action.caseKey || '');
+    return rowCandidateId === candidateId && (rowFinanceCaseId === financeCaseId || rowCaseKey === caseKey);
+  });
+  if (!exactRows.length) return false;
+
+  const facts = exactRows.map((row) => {
+    const rowJson = row.row_json && typeof row.row_json === 'object' && !Array.isArray(row.row_json)
+      ? row.row_json
+      : (row.rowJson && typeof row.rowJson === 'object' && !Array.isArray(row.rowJson) ? row.rowJson : {});
+    const action = row.clear_case_resolution_action && typeof row.clear_case_resolution_action === 'object'
+      ? row.clear_case_resolution_action
+      : (row.case_resolution_actions?.clear && typeof row.case_resolution_actions.clear === 'object'
+          ? row.case_resolution_actions.clear
+          : (rowJson.clear_case_resolution_action && typeof rowJson.clear_case_resolution_action === 'object'
+              ? rowJson.clear_case_resolution_action
+              : (rowJson.case_resolution_actions?.clear && typeof rowJson.case_resolution_actions.clear === 'object'
+                  ? rowJson.case_resolution_actions.clear
+                  : null)));
+    return {
+      section: getBankingPayAdoptedPreviewRowSectionV1(row),
+      selected: row.selected === true || rowJson.selected === true,
+      draftable: row.draftable === true || row.is_draftable === true || rowJson.draftable === true || rowJson.is_draftable === true,
+      action
+    };
+  });
+
+  if (transition === 'CLEARED') {
+    return facts.some((fact) => fact.section === 'cases_resolutions' && !fact.selected && !fact.draftable)
+      && facts.every((fact) => fact.section !== 'canonical_preview_lines' && upperTrim(fact.action?.resolution_family || '') !== 'TAXABLE_CHANNEL_RESTRUCTURE');
+  }
+
+  return facts.every((fact) => fact.section !== 'cases_resolutions')
+    && facts.some((fact) => {
+      const action = fact.action && typeof fact.action === 'object' ? fact.action : {};
+      return ['canonical_preview_lines', 'blocked_for_pay'].includes(fact.section)
+        && upperTrim(action.action || '') === 'CLEAR_CASE_RESOLUTION'
+        && action.enabled === true
+        && trimStr(action.candidate_id || action.candidateId || '') === candidateId
+        && trimStr(action.finance_case_id || action.financeCaseId || '') === financeCaseId
+        && trimStr(action.case_key || action.caseKey || '') === caseKey
+        && upperTrim(action.resolution_family || action.resolutionFamily || '') === 'TAXABLE_CHANNEL_RESTRUCTURE';
+    });
+}
+
 async function openBankingFinanceCaseRestructureModal(seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -16204,18 +16370,49 @@ async function openBankingFinanceCaseRestructureModal(seed = {}) {
       throw new Error('The finance restructure was saved, but Banking Pay refresh is unavailable.');
     }
 
-    await bankingPayWorkbenchSessionRefresh(sessionId, {
+    const preRefreshSessionVersionRaw = Number(
+      st?.pay?.draftWizard?.workbench?.session_version ??
+      st?.pay?.draftWizard?.decisions?.session_version ??
+      st?.pay?.draftWizard?.preview?.data?.session_version ??
+      NaN
+    );
+    const refreshResult = await bankingPayWorkbenchSessionRefresh(sessionId, {
       reason: 'TAXABLE_CHANNEL_RESTRUCTURE_APPLIED'
     });
+    const refreshSessionVersionRaw = Number(
+      refreshResult?.session_version ??
+      refreshResult?.sessionVersion ??
+      refreshResult?.version ??
+      refreshResult?.session?.session_version ??
+      NaN
+    );
+    const minimumSessionVersion = Number.isSafeInteger(refreshSessionVersionRaw) && refreshSessionVersionRaw >= 1
+      ? refreshSessionVersionRaw
+      : (Number.isSafeInteger(preRefreshSessionVersionRaw) && preRefreshSessionVersionRaw >= 1
+          ? preRefreshSessionVersionRaw + 1
+          : null);
+    if (!Number.isSafeInteger(minimumSessionVersion) || minimumSessionVersion < 1) {
+      throw new Error('The finance restructure was saved, but its updated Banking Pay session version was not returned.');
+    }
+    const financeCaseKey = trimStr(src.case_key || result?.case_key || result?.after?.case_key || `finance:${financeCaseId}`);
     const settled = await pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, {
       updateState: true,
       expectedSessionId: sessionId,
+      minimumSessionVersion,
       requirePreviewSectionsAfterReady: true,
-      forceFullSessionRefresh: true,
-      fullSessionRefreshAfterSettled: true,
+      candidateScopedAuthorityComplete: true,
       affectedCandidateIds: [candidateId],
       candidateIds: [candidateId],
-      source: 'openBankingFinanceCaseRestructureModal.taxableChannelRestructureSaved'
+      source: 'openBankingFinanceCaseRestructureModal.taxableChannelRestructureSaved',
+      validateSettledCandidatePreview: (candidatePreview) => bankingPayCandidatePreviewMatchesFinanceCaseTransitionV1(
+        candidatePreview,
+        {
+          transition: 'RESOLVED',
+          candidate_id: candidateId,
+          finance_case_id: financeCaseId,
+          case_key: financeCaseKey
+        }
+      )
     });
 
     if (
@@ -51978,6 +52175,13 @@ const collectPreviewRowIds = (previewLike) => {
   };
 
   const getLinePresentationSection = (obj) => {
+    const section = (typeof getBankingPayAdoptedPreviewRowSectionV1 === 'function')
+      ? getBankingPayAdoptedPreviewRowSectionV1(obj)
+      : '';
+    if (section === 'canonical_preview_lines') return 'READY_TO_PAY';
+    if (section === 'cases_resolutions') return 'CASES_RESOLUTIONS';
+    if (section === 'blocked_for_pay') return 'BLOCKED_FOR_PAY';
+    if (section === 'hidden') return 'HIDDEN';
     const nested = getNestedLinePayload(obj);
     return upperTrim(obj?.presentation_section || obj?.presentationSection || nested?.presentation_section || nested?.presentationSection || '');
   };
@@ -55168,7 +55372,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
 
   const isHiddenDisplayRow = (line) => {
     const presentationRole = upperTrim(line?.presentation_role || line?.presentationRole || '');
-    const presentationSection = upperTrim(line?.presentation_section || line?.presentationSection || '');
+    const presentationSection = getLinePresentationSection(line);
     const readinessState = upperTrim(line?.readiness_state || line?.readinessState || '');
     return !!(
       presentationRole === 'HIDDEN' ||
@@ -55182,10 +55386,11 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   };
 
   const isBlockedDisplayRow = (line) => {
-    const section = upperTrim(line?.presentation_section || line?.presentationSection || '');
+    const section = getLinePresentationSection(line);
     const readinessState = upperTrim(line?.readiness_state || line?.readinessState || '');
     const lineType = upperTrim(line?.line_type || line?.lineType || '');
     const snoozeInfo = getSnoozeInfo(line);
+    if (section) return section === 'BLOCKED_FOR_PAY';
     const explicitReadyPresentation = section === 'READY_TO_PAY'
       || readinessState === 'READY_TO_PAY'
       || readinessState === 'READY'
@@ -55208,7 +55413,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   };
 
   const isCaseDisplayRow = (line, sourceName = '') => {
-    const section = upperTrim(line?.presentation_section || line?.presentationSection || '');
+    const section = getLinePresentationSection(line);
     const readinessState = upperTrim(line?.readiness_state || line?.readinessState || '');
     const source = trimStr(sourceName).toLowerCase();
     if (section) return section === 'CASES_RESOLUTIONS';
@@ -55226,8 +55431,9 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     if (!isPlainObject(line)) return false;
     if (isHiddenDisplayRow(line) || isBlockedDisplayRow(line) || isCaseDisplayRow(line, sourceName)) return false;
     const source = trimStr(sourceName).toLowerCase();
-    const section = upperTrim(line?.presentation_section || line?.presentationSection || '');
+    const section = getLinePresentationSection(line);
     const readinessState = upperTrim(line?.readiness_state || line?.readinessState || '');
+    if (section) return section === 'READY_TO_PAY';
     const explicitReadySource = /ready_to_pay_now|draftable_now|ready_preview_lines|ready_to_pay/.test(source);
     if (explicitReadySource) return true;
     if (section) return section === 'READY_TO_PAY';
@@ -94310,7 +94516,7 @@ function attachBankingModalDelegatedHandlers() {
       };
     };
 
-    const runWorkbenchCandidateMutation = async ({ candidateId, mutate }) => {
+    const runWorkbenchCandidateMutation = async ({ candidateId, mutate, pollOptions = null }) => {
       const sessionId = getCurrentWorkbenchSessionId();
       const candidateIdText = String(candidateId || '').trim();
 
@@ -94332,7 +94538,23 @@ function attachBankingModalDelegatedHandlers() {
         throw new Error('Candidate recompute polling is not available.');
       }
 
-      const settledResult = await pollPayWorkbenchCandidateUntilSettled(sessionId, candidateIdText, { updateState: true });
+      const queueSessionVersionRaw = Number(
+        queueResult?.session_version ??
+        queueResult?.sessionVersion ??
+        queueResult?.version ??
+        queueResult?.session?.session_version ??
+        NaN
+      );
+      const extraPollOptions = pollOptions && typeof pollOptions === 'object' && !Array.isArray(pollOptions)
+        ? pollOptions
+        : {};
+      const settledResult = await pollPayWorkbenchCandidateUntilSettled(sessionId, candidateIdText, {
+        updateState: true,
+        ...(Number.isSafeInteger(queueSessionVersionRaw) && queueSessionVersionRaw >= 1
+          ? { minimumSessionVersion: queueSessionVersionRaw }
+          : {}),
+        ...extraPollOptions
+      });
       await safeRerender(null);
       return { queueResult, settledResult };
     };
@@ -99776,7 +99998,22 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
             resolution_family: resolutionFamily,
             ...(getCurrentWorkbenchSessionVersion() != null ? { expected_session_version: getCurrentWorkbenchSessionVersion() } : {}),
             ...(getCurrentWorkbenchProgressCounterVersion() != null ? { expected_progress_counter_version: getCurrentWorkbenchProgressCounterVersion() } : {})
-          })
+          }),
+          pollOptions: {
+            expectedSessionId: getCurrentWorkbenchSessionId(),
+            requirePreviewSectionsAfterReady: true,
+            candidateScopedAuthorityComplete: true,
+            source: 'banking:pay:componentClearResolution.financeCaseCleared',
+            validateSettledCandidatePreview: (candidatePreview) => bankingPayCandidatePreviewMatchesFinanceCaseTransitionV1(
+              candidatePreview,
+              {
+                transition: 'CLEARED',
+                candidate_id: candidateId,
+                finance_case_id: financeCaseId,
+                case_key: caseKey
+              }
+            )
+          }
         });
       } catch (e) {
         toast(String(e?.message || e || 'Unable to clear case resolution.'));
@@ -129430,6 +129667,10 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
             : (isPlainObject(rowJson.previewContract) ? rowJson.previewContract : {}));
       const sections = [
         sectionHint,
+        row.effective_section,
+        row.effectiveSection,
+        rowJson.effective_section,
+        rowJson.effectiveSection,
         row.presentation_section,
         row.presentationSection,
         rowJson.presentation_section,
@@ -129744,7 +129985,12 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   const getRowStableKey = (row, index = 0) => {
     if (!isPlainObject(row)) return `row:${index}`;
     const rowJson = isPlainObject(row.row_json) ? row.row_json : (isPlainObject(row.rowJson) ? row.rowJson : {});
-    const section = normalizeCandidateMergeSection(row.section || row.resolved_section || row.presentation_section || rowJson.section || rowJson.presentation_section || 'canonical_preview_lines');
+    const section = normalizeCandidateMergeSection(
+      row.effective_section || row.effectiveSection || rowJson.effective_section || rowJson.effectiveSection ||
+      row.presentation_section || row.presentationSection || rowJson.presentation_section || rowJson.presentationSection ||
+      row.resolved_section || row.resolvedSection || rowJson.resolved_section || rowJson.resolvedSection ||
+      row.section || rowJson.section || 'canonical_preview_lines'
+    );
     const direct = trimStr(
       row.preview_row_id || row.previewRowId || row.row_id || row.rowId || row.line_id || row.lineId || row.id ||
       row.row_key || row.rowKey || row.key || rowJson.preview_row_id || rowJson.row_id || rowJson.row_key || rowJson.key || ''
@@ -129869,7 +130115,10 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
     Array.isArray(responseObj.candidate_preview?.rows) ||
     Array.isArray(responseObj.candidate_preview?.items)
   );
-  const candidateScopedRows = readCandidateScopedRows();
+  const candidateScopedRows = readCandidateScopedRows()
+    .map((row) => (typeof normaliseBankingPayAdoptedCandidatePreviewRowV1 === 'function'
+      ? normaliseBankingPayAdoptedCandidatePreviewRowV1(row)
+      : row));
   const candidateRowsBySection = (() => {
     const buckets = {
       canonical_preview_lines: [],
@@ -132023,7 +132272,9 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       }
 
       let settledFullSession = null;
-      if (!candidatePreviewHasSessionSummary(candidatePreview)) {
+      const candidateScopedAuthorityComplete = options.candidateScopedAuthorityComplete === true
+        && candidatePreview?.atomic_candidate_refresh_complete === true;
+      if (!candidateScopedAuthorityComplete && !candidatePreviewHasSessionSummary(candidatePreview)) {
         settledFullSession = await fetchApplyAndRenderFullSession(progress, 'SETTLED_CANDIDATE_SESSION_SUMMARY_REFRESH');
         if (settledFullSession && settledFullSession.aborted === true) return settledFullSession;
       }
