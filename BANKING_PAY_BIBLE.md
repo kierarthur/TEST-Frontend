@@ -430,3 +430,15 @@ These identities are observations, not pinned baselines. Every later task must u
 - Added the finance cancellation regression matrix and prohibited frontend ownership inference.
 
 Future entries must include the date, approved rule change or clarification, affected owners, executable regression evidence, deployed/installed authority where applicable, and explicit Policy X assessment.
+
+### 18 August 2026 — active-batch frozen linked-timesheet exclusion
+
+- TEST batch `4f87739e-6e6f-48db-acad-5702bb2e198a` proved an older valid frozen `OVERPAYMENT_RECOVERY` shape whose direct `pay_batch_items.timesheet_id` was null while the exact timesheet identity was retained at both `frozen_source_basis_json.linked_timesheet_id` and `frozen_component_snapshot_json.source_basis_json.linked_timesheet_id`.
+- The existing batch-mutation overlay and active-batch preview readers recognised a direct item timesheet ID and the older top-level frozen `timesheet_id`, but not these sealed linked-timesheet paths. This allowed one already-reserved `TS_DAY` allocation component for £25.00 ex VAT to be reselected and shown in Ready to Pay after a live source refresh.
+- The verified correction extends only the existing exact frozen-timesheet identity resolution in `pay_workbench_patch_preview_after_batch_mutation`, `pay_workbench_session_get_candidate_preview`, `pay_workbench_session_get_preview_page`, and the independent `pay_workbench_prepare_draft_scope_seed` fail-closed guard. It does not add a live finance identity fallback or a new economic-key derivation rule.
+- Staged definitions compiled in rollback, canonical definition hashes matched the catalogue, and a James-specific rollback runtime proof returned zero target rows from both readers, one exact Draft-guard match, one exact overlay patch, and unchanged batch/item/reservation state. Focused source tests passed 93/93 before installation.
+- Installed TEST verification showed the target row selected count `0`, NOT_SELECTABLE count `1`, both public-reader target counts `0`, no active Workbench jobs, and an open session at version `51`. The signed-in TEST browser then showed no James £25.00 Ready row and no James Cases / Resolutions row.
+- Financial invariants remained: scheduled/not-submitted batch; eight active frozen items; £35.63 ex VAT / £42.76 inc VAT net; four recoveries totalling £-755.00 ex VAT / £-906.00 inc VAT; four COMMITTED reservations totalling £755.00; zero RELEASED reservations.
+- This evidence proves the Workbench exclusion and Draft fail-closed boundary for the observed artifact. It does not by itself prove future-payment cancellation, settlement, provider submission, remittance, or every historical frozen payload shape.
+- Policy X assessment: compliant. Post-Draft exclusion uses only frozen batch artifacts; the pre-Draft certified source builder, payment economics, reservations, provider state, settlement, and remittance owners were unchanged.
+
