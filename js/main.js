@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260818-banking-finance-cancel-restore-adoption-r3',
+  asset_version: '20260818-banking-finance-terminal-refresh-owner-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -130855,6 +130855,300 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
 }
 
 
+function finalisePayWorkbenchCandidateRefreshOwnershipV1(sessionId, candidateIds, options = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const readPositiveInteger = (value) => {
+    const text = trimStr(value);
+    if (!/^[0-9]{1,18}$/.test(text)) return null;
+    const number = Number(text);
+    return Number.isSafeInteger(number) && number >= 1 ? number : null;
+  };
+  const result = {
+    applied: false,
+    reason: 'NOT_APPLIED',
+    cleared_candidate_count: 0,
+    removed_id_references: 0,
+    removed_refresh_rows: 0,
+    cleared_row_markers: 0,
+    remaining_target_refresh_markers: 0
+  };
+  const sessionIdText = trimStr(sessionId);
+  const targetIds = new Set(
+    (Array.isArray(candidateIds) ? candidateIds : [candidateIds])
+      .map((value) => trimStr(value))
+      .filter((value) => uuidRe.test(value))
+  );
+  if (!uuidRe.test(sessionIdText) || targetIds.size <= 0) {
+    return { ...result, reason: 'INVALID_SCOPE' };
+  }
+
+  let state = isPlainObject(options.state) ? options.state : null;
+  if (!state) {
+    try {
+      if (typeof bankingGetState === 'function') state = bankingGetState();
+    } catch {}
+  }
+  if (!state) {
+    try {
+      if (isPlainObject(window?.modalCtx?.banking)) state = window.modalCtx.banking;
+    } catch {}
+  }
+  const wizard = state?.pay?.draftWizard;
+  if (!isPlainObject(wizard)) return { ...result, reason: 'WORKBENCH_STATE_UNAVAILABLE' };
+  const currentSessionId = trimStr(
+    wizard.workbench?.session_id ||
+    wizard.preview?.data?.session_id ||
+    wizard.preview?.data?.session?.session_id ||
+    wizard.decisions?.session_id ||
+    ''
+  );
+  if (currentSessionId !== sessionIdText) return { ...result, reason: 'STALE_SESSION' };
+
+  const expectedSessionVersion = readPositiveInteger(
+    options.expectedSessionVersion ?? options.expected_session_version
+  );
+  const versionOwners = [
+    wizard.workbench,
+    wizard.decisions,
+    wizard.preview?.data,
+    wizard.preview?.data?.session
+  ].filter(isPlainObject);
+  const currentVersions = versionOwners
+    .map((owner) => readPositiveInteger(owner.session_version ?? owner.sessionVersion ?? owner.version))
+    .filter((value) => value != null);
+  if (expectedSessionVersion != null && (
+    currentVersions.length <= 0 ||
+    currentVersions.some((value) => value !== expectedSessionVersion)
+  )) {
+    return { ...result, reason: 'STALE_SESSION_VERSION' };
+  }
+
+  const candidateIdFromObject = (value) => {
+    if (!isPlainObject(value)) return '';
+    const candidates = [
+      value.candidate_id,
+      value.candidateId,
+      value.candidate_uuid,
+      value.candidateUuid,
+      value.workbench_candidate_id,
+      value.workbenchCandidateId,
+      value.subject_candidate_id,
+      value.subjectCandidateId,
+      value.refresh_candidate_id,
+      value.refreshCandidateId,
+      value.entity_candidate_id,
+      value.entityCandidateId,
+      value.candidate?.candidate_id,
+      value.candidate?.candidateId,
+      value.payee?.candidate_id,
+      value.payee?.candidateId,
+      value.paye_candidate?.candidate_id,
+      value.paye_candidate?.candidateId,
+      value.non_paye_payee?.candidate_id,
+      value.non_paye_payee?.candidateId,
+      value.preview_contract?.candidate_id,
+      value.preview_contract?.candidateId,
+      value.previewContract?.candidate_id,
+      value.previewContract?.candidateId,
+      value.row_json?.candidate_id,
+      value.row_json?.candidateId,
+      value.rowJson?.candidate_id,
+      value.rowJson?.candidateId,
+      value.row_json?.candidate?.candidate_id,
+      value.row_json?.candidate?.candidateId,
+      value.rowJson?.candidate?.candidate_id,
+      value.rowJson?.candidate?.candidateId,
+      value.payload?.candidate_id,
+      value.payload?.candidateId,
+      value.job_payload?.candidate_id,
+      value.job_payload?.candidateId,
+      value.jobPayload?.candidate_id,
+      value.jobPayload?.candidateId
+    ];
+    for (const candidate of candidates) {
+      const candidateId = trimStr(candidate);
+      if (uuidRe.test(candidateId)) return candidateId;
+    }
+    return '';
+  };
+  const idArrayKeys = [
+    'pending_candidate_ids', 'pendingCandidateIds',
+    'dirty_candidate_ids', 'dirtyCandidateIds',
+    'failed_candidate_ids', 'failedCandidateIds',
+    'refreshing_candidate_ids', 'refreshingCandidateIds',
+    '__heartbeat_refreshing_candidate_ids', '__heartbeatRefreshingCandidateIds',
+    '__candidate_refresh_stale_ids', 'candidate_refresh_stale_ids'
+  ];
+  const refreshRowArrayKeys = [
+    'pending_candidate_rows', 'pendingCandidateRows',
+    'failed_candidate_rows', 'failedCandidateRows',
+    'pending_candidate_jobs', 'pendingCandidateJobs',
+    'active_jobs', 'activeJobs',
+    'candidate_jobs', 'candidateJobs',
+    'candidate_sample_rows', 'candidateSampleRows',
+    'candidate_status_rows', 'candidateStatusRows',
+    'candidate_statuses', 'candidateStatuses'
+  ];
+  const rowMarkerKeys = [
+    'refreshing', 'pending_refresh', 'pendingRefresh',
+    'candidate_refresh_pending', 'candidateRefreshPending',
+    '__heartbeat_refreshing', '__heartbeatRefreshing',
+    '__candidate_refreshing', '__candidateRefreshing'
+  ];
+  const refreshRoots = [
+    wizard.workbench,
+    wizard.workbench?.progress,
+    wizard.workbench?.progress_counts,
+    wizard.decisions,
+    wizard.decisions?.progress,
+    wizard.decisions?.progress_counts,
+    wizard.preview?.data,
+    wizard.preview?.data?.progress,
+    wizard.preview?.data?.session,
+    wizard.preview?.data?.session?.progress,
+    wizard.preview?.data?.preview,
+    wizard.preview?.data?.preview?.progress
+  ].filter(isPlainObject);
+  const uniqueRefreshRoots = Array.from(new Set(refreshRoots));
+  for (const root of uniqueRefreshRoots) {
+    for (const key of idArrayKeys) {
+      if (!Array.isArray(root[key])) continue;
+      const beforeLength = root[key].length;
+      root[key] = root[key].filter((value) => {
+        const candidateId = isPlainObject(value) ? candidateIdFromObject(value) : trimStr(value);
+        return !targetIds.has(candidateId);
+      });
+      result.removed_id_references += beforeLength - root[key].length;
+    }
+    for (const key of refreshRowArrayKeys) {
+      if (!Array.isArray(root[key])) continue;
+      const beforeLength = root[key].length;
+      root[key] = root[key].filter((row) => !targetIds.has(candidateIdFromObject(row)));
+      result.removed_refresh_rows += beforeLength - root[key].length;
+    }
+    const staleIds = Array.isArray(root.__candidate_refresh_stale_ids)
+      ? root.__candidate_refresh_stale_ids
+      : (Array.isArray(root.candidate_refresh_stale_ids) ? root.candidate_refresh_stale_ids : []);
+    if (staleIds.length <= 0) {
+      try { delete root.__candidate_refresh_stale_message; } catch {}
+      try { delete root.candidate_refresh_stale_message; } catch {}
+    }
+  }
+
+  const rowArrayKeys = [
+    'canonical_preview_lines', 'canonicalPreviewLines',
+    'ready_preview_lines', 'readyPreviewLines',
+    'preview_rows', 'previewRows',
+    'rows', 'items', 'data', 'itemisation', 'itemization',
+    'draftable_now', 'draftableNow',
+    'ready_to_pay_now', 'readyToPayNow',
+    'case_resolution_states', 'caseResolutionStates',
+    'cases_resolutions', 'casesResolutions',
+    'blocked_for_pay_now', 'blockedForPayNow',
+    'blocked_preview_lines', 'blockedPreviewLines',
+    'blocked_now', 'blockedNow',
+    'blocked_for_pay', 'blockedForPay'
+  ];
+  const pageMapKeys = [
+    'preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache',
+    'page_cache', 'pageCache', 'pages'
+  ];
+  const nestedObjectKeys = ['candidate', 'payee', 'paye_candidate', 'non_paye_payee'];
+  const markerScanSeen = new WeakSet();
+  const clearMarkersOnRow = (row) => {
+    if (!isPlainObject(row) || !targetIds.has(candidateIdFromObject(row))) return false;
+    let changed = false;
+    for (const key of rowMarkerKeys) {
+      if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
+      try { delete row[key]; } catch { row[key] = false; }
+      result.cleared_row_markers += 1;
+      changed = true;
+    }
+    return changed;
+  };
+  const clearMarkersInArray = (rows, depth = 0) => {
+    if (!Array.isArray(rows) || depth > 5) return;
+    for (const row of rows) {
+      if (!isPlainObject(row)) continue;
+      clearMarkersOnRow(row);
+      clearMarkersInTarget(row, depth + 1);
+    }
+  };
+  const clearMarkersInPageMap = (pageMap, depth = 0) => {
+    if (!isPlainObject(pageMap) || depth > 5) return;
+    for (const page of Object.values(pageMap)) {
+      if (Array.isArray(page)) clearMarkersInArray(page, depth + 1);
+      else clearMarkersInTarget(page, depth + 1);
+    }
+  };
+  function clearMarkersInTarget(target, depth = 0) {
+    if (!isPlainObject(target) || depth > 5 || markerScanSeen.has(target)) return;
+    markerScanSeen.add(target);
+    for (const key of rowArrayKeys) clearMarkersInArray(target[key], depth + 1);
+    for (const key of pageMapKeys) clearMarkersInPageMap(target[key], depth + 1);
+    for (const key of nestedObjectKeys) {
+      if (isPlainObject(target[key])) {
+        clearMarkersOnRow(target[key]);
+        clearMarkersInTarget(target[key], depth + 1);
+      }
+    }
+    const componentCache = isPlainObject(target.componentStateCache)
+      ? target.componentStateCache
+      : (isPlainObject(target.component_state_cache) ? target.component_state_cache : null);
+    if (componentCache && componentCache !== target) clearMarkersInTarget(componentCache, depth + 1);
+    const previewObject = isPlainObject(target.preview) ? target.preview : null;
+    if (previewObject && previewObject !== target) clearMarkersInTarget(previewObject, depth + 1);
+    const sessionObject = isPlainObject(target.session) ? target.session : null;
+    if (sessionObject && sessionObject !== target) clearMarkersInTarget(sessionObject, depth + 1);
+  }
+  for (const root of [
+    wizard.workbench,
+    wizard.decisions,
+    wizard.preview?.data,
+    wizard.preview?.data?.session,
+    wizard.preview?.data?.preview,
+    wizard.preview?.componentStateCache,
+    wizard.preview?.component_state_cache
+  ]) clearMarkersInTarget(root, 0);
+
+  const remainingSeen = new WeakSet();
+  const countRemainingMarkers = (value, depth = 0) => {
+    if (value == null || depth > 7) return 0;
+    if (Array.isArray(value)) {
+      return value.reduce((sum, item) => sum + countRemainingMarkers(item, depth + 1), 0);
+    }
+    if (!isPlainObject(value) || remainingSeen.has(value)) return 0;
+    remainingSeen.add(value);
+    let count = 0;
+    for (const key of idArrayKeys) {
+      if (!Array.isArray(value[key])) continue;
+      count += value[key].filter((entry) => {
+        const candidateId = isPlainObject(entry) ? candidateIdFromObject(entry) : trimStr(entry);
+        return targetIds.has(candidateId);
+      }).length;
+    }
+    for (const key of refreshRowArrayKeys) {
+      if (!Array.isArray(value[key])) continue;
+      count += value[key].filter((row) => targetIds.has(candidateIdFromObject(row))).length;
+    }
+    if (targetIds.has(candidateIdFromObject(value))) {
+      count += rowMarkerKeys.filter((key) => value[key] === true || value[key] === 'true' || value[key] === 1 || value[key] === '1').length;
+    }
+    for (const key of [...rowArrayKeys, ...pageMapKeys, 'workbench', 'decisions', 'componentStateCache', 'component_state_cache', 'preview', 'session', 'progress', 'progress_counts']) {
+      count += countRemainingMarkers(value[key], depth + 1);
+    }
+    return count;
+  };
+  result.remaining_target_refresh_markers = countRemainingMarkers(wizard, 0);
+  result.cleared_candidate_count = targetIds.size;
+  result.applied = result.remaining_target_refresh_markers === 0;
+  result.reason = result.applied ? 'TERMINAL_CANDIDATE_OWNER_ACCEPTED' : 'TARGET_REFRESH_MARKERS_REMAIN';
+  return result;
+}
+
+
 
 
 
@@ -132286,6 +132580,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
         }
       }
 
+      let terminalRefreshOwnership = null;
       if (updateState) {
         const beforeCandidatePreviewMergeGuard = evaluateStalenessGuard('before_candidate_preview_merge', {
           progress: cloneJson(progress),
@@ -132297,6 +132592,25 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
 
         mergePayWorkbenchCandidatePreviewIntoState(candidatePreview);
         writeProgressIntoState(normalized);
+
+        const beforeTerminalOwnershipGuard = evaluateStalenessGuard('before_terminal_candidate_refresh_ownership', {
+          progress: cloneJson(progress),
+          candidate_preview: cloneJson(candidatePreview)
+        });
+        if (beforeTerminalOwnershipGuard.aborted) {
+          return buildAbortResult(beforeTerminalOwnershipGuard, { candidatePreview });
+        }
+        terminalRefreshOwnership = finalisePayWorkbenchCandidateRefreshOwnershipV1(
+          sessionIdText,
+          [candidateIdText],
+          { expectedSessionVersion: candidatePreviewVersion }
+        );
+        if (!terminalRefreshOwnership?.applied) {
+          const ownershipError = new Error('The refreshed candidate could not be published from one terminal progress owner. Refresh Banking Pay and try again.');
+          ownershipError.code = 'BANKING_PAY_TERMINAL_REFRESH_OWNER_MISMATCH';
+          ownershipError.refresh_ownership = cloneJson(terminalRefreshOwnership);
+          throw ownershipError;
+        }
 
         const beforeSettledRerenderGuard = evaluateStalenessGuard('before_settled_rerender', {
           progress: cloneJson(progress),
@@ -132336,6 +132650,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
         progress,
         candidate_preview: candidatePreview,
         section_pages: cloneJson(settledSectionPages),
+        terminal_refresh_ownership: cloneJson(terminalRefreshOwnership),
         full_session: cloneJson(settledFullSession),
         full_session_refresh_applied: !!settledFullSession
       };
