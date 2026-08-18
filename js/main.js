@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260818-banking-finance-cancel-restore-adoption-r2',
+  asset_version: '20260818-banking-finance-cancel-restore-adoption-r3',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -131198,8 +131198,13 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     const code = trimStr(progressObj.code || progressObj.error_code || obj.code || obj.error_code || '').toUpperCase();
     return failureCandidateRefreshStates.has(phase) || ['REVIEW_ERRORS'].includes(phase) || ['OBSOLETE_SESSION', 'STALE_SESSION', 'REBASE_REQUIRED', 'WORKBENCH_SESSION_NOT_FOUND', 'PROJECTION_BLOCKED'].includes(code);
   };
-  const fetchFirstSessionPageIfAvailable = async (progressLike) => {
+  const fetchFirstSessionPageIfAvailable = async (progressLike, fetchOptions = {}) => {
     if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return null;
+    const applySectionState = updateState && fetchOptions.updateState !== false;
+    const deferRender = fetchOptions.deferRender === true;
+    const expectedPageSessionVersion = readPositiveInteger(
+      fetchOptions.expectedSessionVersion ?? fetchOptions.expected_session_version
+    );
     const progressSessionVersion = readSessionVersion(progressLike);
     if (minimumSessionVersion != null && (progressSessionVersion == null || progressSessionVersion < minimumSessionVersion)) return null;
     if (!progressHasRowsAvailable(progressLike) && !progressLooksReady(progressLike)) return null;
@@ -131242,7 +131247,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       };
     };
     const ensureSectionState = () => {
-      if (!updateState) return null;
+      if (!applySectionState) return null;
       const st = getWorkbenchState();
       if (!st || typeof st !== 'object') return null;
       st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
@@ -131425,13 +131430,21 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
         });
         continue;
       }
+      if (expectedPageSessionVersion != null && pageSessionVersion !== expectedPageSessionVersion) {
+        errors.push({
+          section,
+          code: 'PREVIEW_PAGE_VERSION_MISMATCH',
+          message: `Preview section ${section} is for session version ${pageSessionVersion}; exact version ${expectedPageSessionVersion} is required.`
+        });
+        continue;
+      }
       const resolvedSection = normalisePreviewPageSectionName(normalisedPage.resolved_section || normalisedPage.section || section);
       const rows = pageRows(normalisedPage);
       sectionPages[resolvedSection] = normalisedPage;
       loadedSections[resolvedSection] = true;
       emptySections[resolvedSection] = rows.length === 0;
       combinedRows.push(...rows);
-      if (updateState && normalisedPage.ok !== false) {
+      if (applySectionState && normalisedPage.ok !== false) {
         writeSectionPageToState(normalisedPage);
         if (typeof applyPayWorkbenchPreviewToState === 'function') {
           try { applyPayWorkbenchPreviewToState(buildSyntheticSectionPayload(normalisedPage)); } catch {}
@@ -131459,7 +131472,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       progress_session_version: progressSessionVersion
     };
 
-    if (updateState && (Object.keys(loadedSections).length > 0 || combinedRows.length > 0)) {
+    if (applySectionState && !deferRender && (Object.keys(loadedSections).length > 0 || combinedRows.length > 0)) {
       try {
         if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth();
       } catch {}
@@ -132091,6 +132104,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
           } catch {}
         }
 
+        markProgressPollStopped();
         return {
           ok: true,
           session_id: sessionIdText,
@@ -132252,6 +132266,26 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
         }
       }
 
+      // A complete candidate replacement owns the affected candidate rows,
+      // while the section pages own the current global pagination revision.
+      // Read all three current section pages at the same accepted revision
+      // before publishing either graph.  Otherwise the rows can be correct
+      // while the modal remains in a false "refreshing" state because its
+      // first-page cache still advertises the preceding session version.
+      let settledSectionPages = null;
+      if (requirePreviewSectionsAfterReady) {
+        settledSectionPages = await fetchFirstSessionPageIfAvailable(progress, {
+          expectedSessionVersion: candidatePreviewVersion,
+          updateState: true,
+          deferRender: true
+        }).catch(() => null);
+        if (!settledSectionPages || settledSectionPages.all_required_sections_loaded !== true) {
+          const sectionSleepGuard = await guardedSleep(fastPollMs);
+          if (sectionSleepGuard.aborted) return buildAbortResult(sectionSleepGuard, { candidatePreview });
+          continue;
+        }
+      }
+
       if (updateState) {
         const beforeCandidatePreviewMergeGuard = evaluateStalenessGuard('before_candidate_preview_merge', {
           progress: cloneJson(progress),
@@ -132272,6 +132306,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
           return buildAbortResult(beforeSettledRerenderGuard, { candidatePreview });
         }
 
+        markProgressPollStopped();
         await rerenderQuietly();
       }
 
@@ -132289,6 +132324,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
         } catch {}
       }
 
+      markProgressPollStopped();
       return {
         ok: true,
         settled: true,
@@ -132299,6 +132335,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
         watched_candidate_ids: [...watchCandidateIds],
         progress,
         candidate_preview: candidatePreview,
+        section_pages: cloneJson(settledSectionPages),
         full_session: cloneJson(settledFullSession),
         full_session_refresh_applied: !!settledFullSession
       };

@@ -170,6 +170,22 @@ test('taxable restructure refreshes and atomically adopts the affected Workbench
   assert.match(restructure, /dirty_reason = 'TAXABLE_CHANNEL_RESTRUCTURE_APPLIED'/);
 });
 
+test('candidate adoption advances all current section pages before publishing the settled modal', () => {
+  const poll = sliceBetween(
+    'async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, options = {}) {',
+    'async function bankingPayWorkbenchSessionOpen(payload = {}) {'
+  );
+
+  assert.match(poll, /fetchFirstSessionPageIfAvailable = async \(progressLike, fetchOptions = \{\}\)/);
+  assert.match(poll, /expectedPageSessionVersion/);
+  assert.match(poll, /code: 'PREVIEW_PAGE_VERSION_MISMATCH'/);
+  assert.match(poll, /expectedSessionVersion: candidatePreviewVersion/);
+  assert.match(poll, /deferRender: true/);
+  assert.match(poll, /settledSectionPages\.all_required_sections_loaded !== true/);
+  assert.match(poll, /markProgressPollStopped\(\);[\s\S]*await rerenderQuietly\(\)/);
+  assert.match(poll, /section_pages: cloneJson\(settledSectionPages\)/);
+});
+
 test('linked suggested-rate saves atomically adopt one complete candidate instead of a broad session snapshot', () => {
   const suggestedRates = sliceBetween(
     'async function openBankingPaySuggestedRatesReviewModal(seed = {}) {',
