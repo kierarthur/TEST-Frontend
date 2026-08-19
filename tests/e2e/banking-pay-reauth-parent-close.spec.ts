@@ -69,7 +69,7 @@ test('successful payment verification restores a closable Pay Batch parent', asy
   await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
   expect(new URL(page.url()).hostname).toBe('testmode.arthur-rai.co.uk');
   expect(await page.evaluate(() => (window as any).__CODEX_LOCAL_ASSET_PROOF)).toEqual({ runtimeMarker, ...localHashes });
-  await expect(page.locator('html')).toHaveAttribute('data-cloudtms-main-asset-contract', '20260818-banking-cancel-stale-modal-recovery-r1');
+  await expect(page.locator('html')).toHaveAttribute('data-cloudtms-main-asset-contract', '20260819-banking-cancel-lifecycle-trace-r1');
 
   const parentBefore = await page.evaluate(() => {
     (window as any).modalCtx = {

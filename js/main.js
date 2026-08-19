@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260818-banking-cancel-stale-modal-recovery-r1',
+  asset_version: '20260819-banking-cancel-lifecycle-trace-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -7098,6 +7098,16 @@ async function openBankingReauthModal(opts = {}) {
       ? 'You won’t be logged out. This verifies the same-week PAYE override before draft creation.'
       : 'You won’t be logged out. This just verifies you before scheduling.');
   const kind = String(opts.kind || 'import-summary-banking-reauth').trim() || 'import-summary-banking-reauth';
+  try {
+    if (typeof recordBankingPayLifecycleTrace === 'function') {
+      recordBankingPayLifecycleTrace('reauth-modal-open-start', {
+        source: 'openBankingReauthModal',
+        phase: purpose,
+        reason: kind,
+        existing_parent_limit: Number(window.modalCtx?.banking?.pay?.list?.limit)
+      });
+    }
+  } catch {}
   const parentModalCtx = (() => {
     try { return window.modalCtx && typeof window.modalCtx === 'object' ? window.modalCtx : null; }
     catch { return null; }
@@ -7377,6 +7387,16 @@ async function openBankingReauthModal(opts = {}) {
     const finishVerified = (token) => {
       const verifiedToken = String(token || '').trim();
       if (done || !verifiedToken) return;
+      try {
+        if (typeof recordBankingPayLifecycleTrace === 'function') {
+          recordBankingPayLifecycleTrace('reauth-modal-verified', {
+            source: 'openBankingReauthModal.finishVerified',
+            phase: purpose,
+            reason: kind,
+            existing_parent_limit: Number(parentModalCtx?.banking?.pay?.list?.limit)
+          });
+        }
+      } catch {}
 
       // Successful verification is not an abandoned edit. Mark this exact
       // child clean, then use the shared close path so its parent Banking
@@ -7401,6 +7421,16 @@ async function openBankingReauthModal(opts = {}) {
     };
 
     const onDismiss = () => {
+      try {
+        if (typeof recordBankingPayLifecycleTrace === 'function') {
+          recordBankingPayLifecycleTrace('reauth-modal-dismissed', {
+            source: 'openBankingReauthModal.onDismiss',
+            phase: purpose,
+            reason: kind,
+            existing_parent_limit: Number(parentModalCtx?.banking?.pay?.list?.limit)
+          });
+        }
+      } catch {}
       detachDelegated();
       restoreParentModalCtx();
       finish(null);
@@ -7428,6 +7458,16 @@ async function openBankingReauthModal(opts = {}) {
         onDismiss
       }
     );
+    try {
+      if (typeof recordBankingPayLifecycleTrace === 'function') {
+        recordBankingPayLifecycleTrace('reauth-modal-opened', {
+          source: 'openBankingReauthModal.showModal',
+          phase: purpose,
+          reason: kind,
+          existing_parent_limit: Number(parentModalCtx?.banking?.pay?.list?.limit)
+        });
+      }
+    } catch {}
 
     let wireAttempts = 0;
     const wire = () => {
@@ -7512,6 +7552,16 @@ async function openBankingReauthModal(opts = {}) {
           } catch {}
 
           if (id === 'bankingReauthCancel') {
+            try {
+              if (typeof recordBankingPayLifecycleTrace === 'function') {
+                recordBankingPayLifecycleTrace('reauth-modal-cancelled', {
+                  source: 'openBankingReauthModal.cancel',
+                  phase: purpose,
+                  reason: kind,
+                  existing_parent_limit: Number(parentModalCtx?.banking?.pay?.list?.limit)
+                });
+              }
+            } catch {}
             ev.preventDefault();
             ev.stopPropagation();
             finish(null);
@@ -7682,6 +7732,15 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
   const defaultReason = String(opts.defaultReason || '').trim();
   const authFailedTitle = String(opts.auth_failed_title || 'Authentication failed').trim() || 'Authentication failed';
   const authFailedMessage = String(opts.auth_failed_message || '').trim();
+  try {
+    if (typeof recordBankingPayLifecycleTrace === 'function') {
+      recordBankingPayLifecycleTrace('cancel-confirm-modal-open-start', {
+        source: 'openPayBatchPasswordConfirmModal',
+        reason: kind,
+        existing_parent_limit: Number(window.modalCtx?.banking?.pay?.list?.limit)
+      });
+    }
+  } catch {}
 
   const closeTop = () => {
     try {
@@ -7855,6 +7914,15 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
     };
 
     const onDismiss = () => {
+      try {
+        if (typeof recordBankingPayLifecycleTrace === 'function') {
+          recordBankingPayLifecycleTrace('cancel-confirm-modal-dismissed', {
+            source: 'openPayBatchPasswordConfirmModal.onDismiss',
+            reason: kind,
+            existing_parent_limit: Number(prevWindowModalCtx?.banking?.pay?.list?.limit)
+          });
+        }
+      } catch {}
       cleanup();
       finish(null);
     };
@@ -8000,6 +8068,15 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
         return;
       }
 
+      try {
+        if (typeof recordBankingPayLifecycleTrace === 'function') {
+          recordBankingPayLifecycleTrace('cancel-confirm-modal-submitted', {
+            source: 'openPayBatchPasswordConfirmModal.submit',
+            reason: kind,
+            existing_parent_limit: Number(prevWindowModalCtx?.banking?.pay?.list?.limit)
+          });
+        }
+      } catch {}
       finish({ password: pw, reason });
       closeTop();
     };
@@ -8021,6 +8098,15 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
         onDismiss
       }
     );
+    try {
+      if (typeof recordBankingPayLifecycleTrace === 'function') {
+        recordBankingPayLifecycleTrace('cancel-confirm-modal-opened', {
+          source: 'openPayBatchPasswordConfirmModal.showModal',
+          reason: kind,
+          existing_parent_limit: Number(prevWindowModalCtx?.banking?.pay?.list?.limit)
+        });
+      }
+    } catch {}
 
     const wire = () => {
       const body = document.getElementById('modalBody');
@@ -21606,6 +21692,121 @@ async function bankingUpdateSettingsDefaults(patchObj) {
   }
 }
 
+const BANKING_PAY_LIFECYCLE_TRACE_CONTRACT = 'BANKING_PAY_LIFECYCLE_TRACE_R1';
+const BANKING_PAY_LIFECYCLE_TRACE_MAX_EVENTS = 200;
+
+function bankingPayLifecycleTraceEnabled() {
+  try {
+    const hostname = String(window.location?.hostname || '').trim().toLowerCase();
+    return hostname === 'testmode.arthur-rai.co.uk' || hostname.endsWith('.testmode.arthur-rai.co.uk');
+  } catch {
+    return false;
+  }
+}
+
+function bankingPayLifecycleModalSnapshot() {
+  try {
+    const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+    const top = stack.length ? stack[stack.length - 1] : null;
+    const parent = stack.length > 1 ? stack[stack.length - 2] : null;
+    return {
+      modal_stack_depth: stack.length,
+      modal_frame_kind: String(top?.kind || '').trim().slice(0, 96),
+      modal_owner_kind: String(parent?.kind || top?.ownerKind || top?.owner_kind || '').trim().slice(0, 96),
+      modal_context_entity: String(window.modalCtx?.entity || '').trim().slice(0, 64)
+    };
+  } catch {
+    return {
+      modal_stack_depth: 0,
+      modal_frame_kind: '',
+      modal_owner_kind: '',
+      modal_context_entity: ''
+    };
+  }
+}
+
+function recordBankingPayLifecycleTrace(eventName, detail = {}) {
+  if (!bankingPayLifecycleTraceEnabled()) return null;
+  try {
+    const source = detail && typeof detail === 'object' && !Array.isArray(detail) ? detail : {};
+    const trace = (window.__bankingPayLifecycleTrace && typeof window.__bankingPayLifecycleTrace === 'object')
+      ? window.__bankingPayLifecycleTrace
+      : { contract_version: BANKING_PAY_LIFECYCLE_TRACE_CONTRACT, max_events: BANKING_PAY_LIFECYCLE_TRACE_MAX_EVENTS, sequence: 0, events: [] };
+    trace.contract_version = BANKING_PAY_LIFECYCLE_TRACE_CONTRACT;
+    trace.max_events = BANKING_PAY_LIFECYCLE_TRACE_MAX_EVENTS;
+    trace.sequence = Math.max(0, Math.trunc(Number(trace.sequence || 0))) + 1;
+    trace.events = Array.isArray(trace.events) ? trace.events : [];
+
+    const entry = {
+      sequence: trace.sequence,
+      elapsed_ms: (() => { try { return Math.max(0, Math.round(performance.now())); } catch { return 0; } })(),
+      event: String(eventName || 'unknown').trim().slice(0, 96),
+      ...bankingPayLifecycleModalSnapshot()
+    };
+    const stringKeys = ['source', 'phase', 'action', 'result', 'reason'];
+    const numberKeys = [
+      'requested_parent_limit', 'existing_parent_limit', 'normalised_parent_limit', 'adopted_parent_limit',
+      'parent_limit_after', 'child_requested_limit', 'child_effective_limit', 'list_load_sequence',
+      'response_item_count', 'response_total_count', 'response_limit', 'response_offset'
+    ];
+    const booleanKeys = ['stale_response', 'financial_complete', 'visible'];
+    for (const key of stringKeys) {
+      if (source[key] !== null && source[key] !== undefined) entry[key] = String(source[key]).trim().slice(0, 160);
+    }
+    for (const key of numberKeys) {
+      const value = Number(source[key]);
+      if (Number.isFinite(value)) entry[key] = Math.trunc(value);
+    }
+    for (const key of booleanKeys) {
+      if (typeof source[key] === 'boolean') entry[key] = source[key];
+    }
+
+    trace.events.push(entry);
+    if (trace.events.length > BANKING_PAY_LIFECYCLE_TRACE_MAX_EVENTS) {
+      trace.events.splice(0, trace.events.length - BANKING_PAY_LIFECYCLE_TRACE_MAX_EVENTS);
+    }
+    window.__bankingPayLifecycleTrace = trace;
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+function readBankingPayLifecycleTrace() {
+  try {
+    const trace = window.__bankingPayLifecycleTrace;
+    return trace && typeof trace === 'object'
+      ? JSON.parse(JSON.stringify(trace))
+      : { contract_version: BANKING_PAY_LIFECYCLE_TRACE_CONTRACT, max_events: BANKING_PAY_LIFECYCLE_TRACE_MAX_EVENTS, sequence: 0, events: [] };
+  } catch {
+    return { contract_version: BANKING_PAY_LIFECYCLE_TRACE_CONTRACT, max_events: BANKING_PAY_LIFECYCLE_TRACE_MAX_EVENTS, sequence: 0, events: [] };
+  }
+}
+
+function clearBankingPayLifecycleTrace() {
+  if (!bankingPayLifecycleTraceEnabled()) return false;
+  try {
+    window.__bankingPayLifecycleTrace = {
+      contract_version: BANKING_PAY_LIFECYCLE_TRACE_CONTRACT,
+      max_events: BANKING_PAY_LIFECYCLE_TRACE_MAX_EVENTS,
+      sequence: 0,
+      events: []
+    };
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+try {
+  if (bankingPayLifecycleTraceEnabled()) {
+    Object.assign(window, {
+      readBankingPayLifecycleTrace,
+      clearBankingPayLifecycleTrace
+    });
+  }
+} catch {}
+
 async function bankingPayBatchesList({ status = null, limit = null, offset = null, reportError = true, throwOnError = false, context = {}, userInitiated = false, user_initiated = false, silent = false } = {}) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const contextOptions = (context && typeof context === 'object' && !Array.isArray(context)) ? context : {};
@@ -21630,6 +21831,9 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
 
   const st = mc.banking;
   const pay = st.pay;
+  const traceSource = String(contextOptions.source || 'bankingPayBatchesList.direct').trim() || 'bankingPayBatchesList.direct';
+  const traceExistingParentLimit = Number(pay.list.limit);
+  const traceRequestedParentLimit = (limit === null || limit === undefined || String(limit).trim() === '') ? Number.NaN : Number(limit);
 
   const gate = (typeof bankingIsActionBlocked === 'function')
     ? bankingIsActionBlocked('LIST_BATCHES')
@@ -21671,6 +21875,14 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
 
   const listLoadSequence = Math.max(0, Number(pay.list.__loadSequence || 0) || 0) + 1;
   pay.list.__loadSequence = listLoadSequence;
+  recordBankingPayLifecycleTrace('parent-list-request', {
+    source: traceSource,
+    requested_parent_limit: traceRequestedParentLimit,
+    existing_parent_limit: traceExistingParentLimit,
+    normalised_parent_limit: lim,
+    list_load_sequence: listLoadSequence,
+    response_offset: off
+  });
 
   const qs = new URLSearchParams();
   qs.set('limit', String(lim));
@@ -21829,6 +22041,18 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
     // Only the newest parent-list request may replace the visible page. A
     // child-close refresh can overlap another list refresh and return later.
     if (Number(pay.list.__loadSequence || 0) !== listLoadSequence) {
+      recordBankingPayLifecycleTrace('parent-list-response-stale', {
+        source: traceSource,
+        requested_parent_limit: traceRequestedParentLimit,
+        existing_parent_limit: traceExistingParentLimit,
+        normalised_parent_limit: lim,
+        list_load_sequence: listLoadSequence,
+        response_item_count: items.length,
+        response_total_count: totalCount,
+        response_limit: lim,
+        response_offset: off,
+        stale_response: true
+      });
       return deep({
         ok: true,
         stale: true,
@@ -21851,6 +22075,20 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
     pay.list.statusFilter = statusNorm;
     pay.list.total_count = totalCount;
     pay.list.total = totalCount;
+    recordBankingPayLifecycleTrace('parent-list-response-adopted', {
+      source: traceSource,
+      requested_parent_limit: traceRequestedParentLimit,
+      existing_parent_limit: traceExistingParentLimit,
+      normalised_parent_limit: lim,
+      adopted_parent_limit: pay.list.limit,
+      parent_limit_after: pay.list.limit,
+      list_load_sequence: listLoadSequence,
+      response_item_count: items.length,
+      response_total_count: totalCount,
+      response_limit: lim,
+      response_offset: off,
+      stale_response: false
+    });
 
     const suppliedAlertSummary = (obj.banking_alert_summary && typeof obj.banking_alert_summary === 'object' && !Array.isArray(obj.banking_alert_summary)) ? obj.banking_alert_summary : {};
     const bankingAlerts = Array.isArray(obj.banking_alerts) ? obj.banking_alerts.slice(0, 25) : [];
@@ -21915,6 +22153,15 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
 
   } catch (e) {
     if (Number(pay.list.__loadSequence || 0) !== listLoadSequence) return null;
+    recordBankingPayLifecycleTrace('parent-list-error', {
+      source: traceSource,
+      requested_parent_limit: traceRequestedParentLimit,
+      existing_parent_limit: traceExistingParentLimit,
+      normalised_parent_limit: lim,
+      parent_limit_after: Number(pay.list.limit),
+      list_load_sequence: listLoadSequence,
+      reason: String(e?.error_code || e?.json?.error_code || e?.json?.code || 'PAY_BATCH_GET_FAILED')
+    });
     const friendlyError = makeFriendlyListError(e, 'PAY_BATCH_GET_FAILED');
     try { pay.list.error = String(friendlyError.json?.user_message || friendlyError.json?.message || friendlyError.message || 'Unable to load payment batches. Please refresh and try again.').trim(); } catch {}
     await reportFriendlyListError(friendlyError);
@@ -23296,6 +23543,7 @@ async function bankingPayPaymentStatusPage(payBatchId, options = {}) {
   const requestedLimit = Number(source.limit || source.page_size || source.pageSize || 25);
   const allowedLimits = new Set([25, 50, 75, 100]);
   const limit = allowedLimits.has(requestedLimit) ? requestedLimit : 25;
+  const parentLimitAtRequest = Number(window.modalCtx?.banking?.pay?.list?.limit);
   const sortKey = String(source.sort_key || source.sortKey || 'STATUS').trim().toUpperCase();
   const sortDirection = String(source.sort_direction || source.sortDirection || 'ASC').trim().toUpperCase();
   if (!['STATUS', 'CANDIDATE', 'AMOUNT'].includes(sortKey)) throw new Error('Unsupported Current Payment Status sort.');
@@ -23306,11 +23554,25 @@ async function bankingPayPaymentStatusPage(payBatchId, options = {}) {
   params.set('sort_direction', sortDirection);
   if (source.filter && typeof source.filter === 'object') params.set('filter', JSON.stringify(source.filter));
   if (source.cursor && typeof source.cursor === 'object') params.set('cursor', JSON.stringify(source.cursor));
+  recordBankingPayLifecycleTrace('child-payment-status-request', {
+    source: String(source.trace_source || source.traceSource || source.source || 'bankingPayPaymentStatusPage').trim(),
+    child_requested_limit: requestedLimit,
+    child_effective_limit: limit,
+    existing_parent_limit: parentLimitAtRequest
+  });
   const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/payment-status?${params.toString()}`), { signal: source.signal });
   const text = await response.text().catch(() => '');
   let payload = null;
   try { payload = text ? JSON.parse(text) : null; } catch {}
   if (!response.ok) throw Object.assign(new Error(String(payload?.message || payload?.error || 'Current Payment Status could not be loaded.')), { status: response.status, json: payload });
+  recordBankingPayLifecycleTrace('child-payment-status-response', {
+    source: String(source.trace_source || source.traceSource || source.source || 'bankingPayPaymentStatusPage').trim(),
+    child_requested_limit: requestedLimit,
+    child_effective_limit: limit,
+    parent_limit_after: Number(window.modalCtx?.banking?.pay?.list?.limit),
+    response_item_count: Array.isArray(payload?.rows) ? payload.rows.length : (Array.isArray(payload?.items) ? payload.items.length : 0),
+    response_total_count: Number(payload?.total_count ?? payload?.total ?? payload?.count)
+  });
   return payload && typeof payload === 'object' ? payload : {};
 }
 
@@ -23758,12 +24020,22 @@ function setBankingPayCancellationStartError(error) {
 
 function closeBankingPayCancellationProgressModal() {
   const state = bankingPayCancellationProgressState;
+  recordBankingPayLifecycleTrace('cancellation-progress-close-start', {
+    source: 'closeBankingPayCancellationProgressModal',
+    visible: state.visible === true,
+    existing_parent_limit: Number(window.modalCtx?.banking?.pay?.list?.limit)
+  });
   state.visible = false;
   if (state.timer) clearTimeout(state.timer);
   state.timer = null;
   try { state.abortController?.abort(); } catch {}
   state.abortController = null;
   try { document.getElementById('bankingPayCancellationProgressModal')?.remove(); } catch {}
+  recordBankingPayLifecycleTrace('cancellation-progress-close-complete', {
+    source: 'closeBankingPayCancellationProgressModal',
+    visible: false,
+    parent_limit_after: Number(window.modalCtx?.banking?.pay?.list?.limit)
+  });
 }
 
 function bankingPayCancellationProgressIsFinanciallyTerminal(status) {
@@ -24193,6 +24465,11 @@ function applyBankingPayCancellationActiveProjection(paymentStatus, payBatchId) 
 async function refreshBankingPayCancellationFinancialViews() {
   const state = bankingPayCancellationProgressState;
   if (state.financialRefreshDone || !state.payBatchId) return;
+  recordBankingPayLifecycleTrace('cancellation-financial-refresh-start', {
+    source: 'refreshBankingPayCancellationFinancialViews',
+    existing_parent_limit: Number(window.modalCtx?.banking?.pay?.list?.limit),
+    financial_complete: state.status?.financial_complete === true
+  });
   state.financialRefreshDone = false;
   const batchSummary = await bankingPayBatchGet(state.payBatchId, { detail_mode: 'BOOTSTRAP_ONLY', silent: true, reportError: false, throwOnError: true });
   const paymentStatus = await loadCompleteBankingPayCancellationProjectionStatus(state.payBatchId);
@@ -24212,13 +24489,27 @@ async function refreshBankingPayCancellationFinancialViews() {
     });
   }
   if (typeof bankingRerender === 'function') await bankingRerender(null);
-  await bankingPayBatchesList({ silent: true, background: true, preservePage: true });
+  recordBankingPayLifecycleTrace('cancellation-financial-refresh-parent-list', {
+    source: 'refreshBankingPayCancellationFinancialViews.parentList',
+    existing_parent_limit: Number(window.modalCtx?.banking?.pay?.list?.limit)
+  });
+  await bankingPayBatchesList({
+    silent: true,
+    background: true,
+    preservePage: true,
+    context: { source: 'refreshBankingPayCancellationFinancialViews.parentList' }
+  });
   window.dispatchEvent(new CustomEvent('banking-pay-cancellation-financial-complete', { detail: {
     pay_batch_id: state.payBatchId,
     correction_request_id: state.correctionRequestId,
     batch_summary: batchSummary,
     active_projection: projection
   } }));
+  recordBankingPayLifecycleTrace('cancellation-financial-refresh-complete', {
+    source: 'refreshBankingPayCancellationFinancialViews',
+    parent_limit_after: Number(window.modalCtx?.banking?.pay?.list?.limit),
+    financial_complete: true
+  });
   state.financialRefreshDone = true;
 }
 
@@ -24237,8 +24528,20 @@ async function syncBankingPayCancellationFromBatchSignal(payBatchId, signal = {}
     || changedAreas.includes('correction_progress')
     || changedAreas.includes('payment_status')
     || changedAreas.includes('overview');
+  recordBankingPayLifecycleTrace('cancellation-signal-sync-evaluated', {
+    source: String(opts.source || 'syncBankingPayCancellationFromBatchSignal').trim(),
+    reason: relevant ? 'RELEVANT_CHANGE' : 'NO_RELEVANT_CHANGE',
+    existing_parent_limit: Number(window.modalCtx?.banking?.pay?.list?.limit),
+    visible: state.visible === true
+  });
   if (!relevant) return { refreshed: false, reason: 'NO_RELEVANT_CHANGE' };
-  if (state.sharedRefreshPromise && typeof state.sharedRefreshPromise.then === 'function') return state.sharedRefreshPromise;
+  if (state.sharedRefreshPromise && typeof state.sharedRefreshPromise.then === 'function') {
+    recordBankingPayLifecycleTrace('cancellation-signal-sync-reused', {
+      source: String(opts.source || 'syncBankingPayCancellationFromBatchSignal').trim(),
+      existing_parent_limit: Number(window.modalCtx?.banking?.pay?.list?.limit)
+    });
+    return state.sharedRefreshPromise;
+  }
 
   const refreshPromise = (async () => {
     let correctionRequestId = String(state.payBatchId === id ? state.correctionRequestId : '').trim();
@@ -24248,7 +24551,8 @@ async function syncBankingPayCancellationFromBatchSignal(payBatchId, signal = {}
         sort_key: 'STATUS',
         sort_direction: 'ASC',
         filter: {},
-        signal: opts.signal
+        signal: opts.signal,
+        trace_source: 'syncBankingPayCancellationFromBatchSignal.lookup'
       });
       correctionRequestId = String(
         current?.latest_correction_request?.id
@@ -24298,6 +24602,12 @@ async function syncBankingPayCancellationFromBatchSignal(payBatchId, signal = {}
       }
     }
     if (state.visible) renderBankingPayCancellationProgressModal();
+    recordBankingPayLifecycleTrace('cancellation-signal-sync-complete', {
+      source: String(opts.source || 'syncBankingPayCancellationFromBatchSignal').trim(),
+      parent_limit_after: Number(window.modalCtx?.banking?.pay?.list?.limit),
+      financial_complete: nextStatus?.financial_complete === true,
+      visible: state.visible === true
+    });
     return {
       refreshed: true,
       pay_batch_id: id,
@@ -24305,6 +24615,12 @@ async function syncBankingPayCancellationFromBatchSignal(payBatchId, signal = {}
       financial_complete: nextStatus?.financial_complete === true
     };
   })().catch((error) => {
+    recordBankingPayLifecycleTrace('cancellation-signal-sync-error', {
+      source: String(opts.source || 'syncBankingPayCancellationFromBatchSignal').trim(),
+      reason: String(error?.name || error?.json?.error_code || error?.json?.code || 'STATUS_REFRESH_FAILED'),
+      parent_limit_after: Number(window.modalCtx?.banking?.pay?.list?.limit),
+      visible: state.visible === true
+    });
     if (state.visible && error?.name !== 'AbortError') {
       state.error = String(error?.message || error || 'Status is temporarily unavailable. CloudTMS will try again.');
       renderBankingPayCancellationProgressModal();
@@ -24343,6 +24659,11 @@ function statusPollDelay(status, fallback = null) {
 
 async function openBankingPayCancellationProgressModal({ correctionRequestId = '', payBatchId = '', draftReauthToken = '' } = {}) {
   const state = bankingPayCancellationProgressState;
+  recordBankingPayLifecycleTrace('cancellation-progress-open-start', {
+    source: 'openBankingPayCancellationProgressModal',
+    existing_parent_limit: Number(window.modalCtx?.banking?.pay?.list?.limit),
+    visible: state.visible === true
+  });
   const nextCorrectionRequestId = String(correctionRequestId || state.correctionRequestId || '').trim();
   if (nextCorrectionRequestId && nextCorrectionRequestId !== state.correctionRequestId) {
     state.financialRefreshDone = false;
@@ -24363,10 +24684,24 @@ async function openBankingPayCancellationProgressModal({ correctionRequestId = '
     state.payBatchId = String(state.status?.pay_batch_id || state.payBatchId || '').trim();
     await maybeStartPendingDraftBankingPayCancellation();
     if (state.status?.financial_complete === true || bankingPayCancellationProgressIsFinanciallyTerminal(state.status?.request_status || state.status?.status)) await refreshBankingPayCancellationFinancialViews();
-  } catch (error) { if (error?.name !== 'AbortError') state.error = String(error?.message || error || 'Payment cancellation status is temporarily unavailable.'); }
+  } catch (error) {
+    if (error?.name !== 'AbortError') state.error = String(error?.message || error || 'Payment cancellation status is temporarily unavailable.');
+    recordBankingPayLifecycleTrace('cancellation-progress-open-error', {
+      source: 'openBankingPayCancellationProgressModal',
+      reason: String(error?.name || error?.json?.error_code || error?.json?.code || 'STATUS_UNAVAILABLE'),
+      parent_limit_after: Number(window.modalCtx?.banking?.pay?.list?.limit),
+      visible: state.visible === true
+    });
+  }
   finally { state.abortController = null; }
   renderBankingPayCancellationProgressModal();
   scheduleBankingPayCancellationProgressPoll();
+  recordBankingPayLifecycleTrace('cancellation-progress-open-complete', {
+    source: 'openBankingPayCancellationProgressModal',
+    parent_limit_after: Number(window.modalCtx?.banking?.pay?.list?.limit),
+    financial_complete: state.status?.financial_complete === true,
+    visible: state.visible === true
+  });
   return true;
 }
 
@@ -24374,13 +24709,28 @@ async function openLatestBankingPayCancellationProgress(payBatchOrId) {
   const batch = payBatchOrId && typeof payBatchOrId === 'object' ? payBatchOrId : null;
   const payBatchId = String(batch?.id || batch?.pay_batch_id || payBatchOrId || bankingPayCancellationProgressState.payBatchId || '').trim();
   let correctionRequestId = String(batch?.latest_correction_request_id || batch?.latestCorrectionRequestId || batch?.latest_correction_request?.id || batch?.latestCorrectionRequest?.id || bankingPayCancellationProgressState.correctionRequestId || '').trim();
+  recordBankingPayLifecycleTrace('latest-cancellation-progress-open-start', {
+    source: 'openLatestBankingPayCancellationProgress',
+    existing_parent_limit: Number(window.modalCtx?.banking?.pay?.list?.limit),
+    reason: correctionRequestId ? 'REQUEST_ALREADY_AVAILABLE' : 'CHILD_STATUS_LOOKUP_REQUIRED'
+  });
   if (!correctionRequestId && payBatchId) {
     try {
-      const current = await bankingPayPaymentStatusPage(payBatchId, { limit: 1, sort_key: 'STATUS', sort_direction: 'ASC' });
+      const current = await bankingPayPaymentStatusPage(payBatchId, {
+        limit: 1,
+        sort_key: 'STATUS',
+        sort_direction: 'ASC',
+        trace_source: 'openLatestBankingPayCancellationProgress.lookup'
+      });
       correctionRequestId = String(current?.latest_correction_request?.id || current?.latest_correction_request_id || '').trim();
     } catch {}
   }
   if (!correctionRequestId) throw new Error('No payment cancellation progress is available for this batch.');
+  recordBankingPayLifecycleTrace('latest-cancellation-progress-open-resolved', {
+    source: 'openLatestBankingPayCancellationProgress',
+    parent_limit_after: Number(window.modalCtx?.banking?.pay?.list?.limit),
+    result: 'REQUEST_RESOLVED'
+  });
   return openBankingPayCancellationProgressModal({ correctionRequestId, payBatchId });
 }
 
@@ -72212,6 +72562,11 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const pay = st.pay;
 
   const id = String(rawBatchId || '').trim();
+  recordBankingPayLifecycleTrace('batch-child-open-start', {
+    source: 'openBankingPayBatchChildModal',
+    phase: requestedActiveTabKey || 'overview',
+    existing_parent_limit: Number(pay.list?.limit)
+  });
   if (!id) {
     try { if (typeof window.__toast === 'function') window.__toast('pay_batch_id is required'); } catch {}
     return;
@@ -72279,6 +72634,11 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   );
 
   if (duplicateGuardMatchesCurrentChild) {
+    recordBankingPayLifecycleTrace('batch-child-open-reused', {
+      source: 'openBankingPayBatchChildModal.duplicateGuard',
+      phase: requestedActiveTabKey || String(existingChild?.ui?.activeTabKey || 'overview'),
+      existing_parent_limit: Number(pay.list?.limit)
+    });
     try {
       existingChild.ui = (existingChild.ui && typeof existingChild.ui === 'object') ? existingChild.ui : {};
       if (hasRequestedActiveTabKey) {
@@ -79522,6 +79882,11 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
 
 const refreshBankingPayParentBatchListLightBestEffort = async (context = {}) => {
   const ctx = (context && typeof context === 'object' && !Array.isArray(context)) ? context : {};
+  const traceSource = String(ctx.source || 'openBankingPayBatchChildModal').trim() || 'openBankingPayBatchChildModal';
+  recordBankingPayLifecycleTrace('parent-light-refresh-start', {
+    source: traceSource,
+    existing_parent_limit: Number(st?.pay?.list?.limit)
+  });
   try {
     if (typeof refreshBankingPayParentBatchListLight === 'function') {
       await refreshBankingPayParentBatchListLight({
@@ -79531,12 +79896,27 @@ const refreshBankingPayParentBatchListLightBestEffort = async (context = {}) => 
         silent: true,
         preservePage: true
       });
+      recordBankingPayLifecycleTrace('parent-light-refresh-primary-complete', {
+        source: traceSource,
+        parent_limit_after: Number(st?.pay?.list?.limit)
+      });
       return true;
     }
-  } catch {}
+  } catch (error) {
+    recordBankingPayLifecycleTrace('parent-light-refresh-primary-error', {
+      source: traceSource,
+      reason: String(error?.name || error?.json?.error_code || error?.json?.code || 'PRIMARY_REFRESH_FAILED'),
+      parent_limit_after: Number(st?.pay?.list?.limit)
+    });
+  }
   try {
     if (typeof bankingPayBatchesList === 'function') {
       const listState = st && st.pay && st.pay.list && typeof st.pay.list === 'object' ? st.pay.list : {};
+      recordBankingPayLifecycleTrace('parent-light-refresh-fallback-request', {
+        source: traceSource,
+        requested_parent_limit: Number(listState.limit ?? listState.pageSize),
+        existing_parent_limit: Number(st?.pay?.list?.limit)
+      });
       await bankingPayBatchesList({
         status: listState.statusFilter ?? listState.status ?? null,
         limit: listState.limit ?? listState.pageSize ?? null,
@@ -79559,9 +79939,23 @@ const refreshBankingPayParentBatchListLightBestEffort = async (context = {}) => 
           pay_batch_id: id
         }
       });
+      recordBankingPayLifecycleTrace('parent-light-refresh-fallback-complete', {
+        source: traceSource,
+        parent_limit_after: Number(st?.pay?.list?.limit)
+      });
       return true;
     }
-  } catch {}
+  } catch (error) {
+    recordBankingPayLifecycleTrace('parent-light-refresh-fallback-error', {
+      source: traceSource,
+      reason: String(error?.name || error?.json?.error_code || error?.json?.code || 'FALLBACK_REFRESH_FAILED'),
+      parent_limit_after: Number(st?.pay?.list?.limit)
+    });
+  }
+  recordBankingPayLifecycleTrace('parent-light-refresh-unavailable', {
+    source: traceSource,
+    parent_limit_after: Number(st?.pay?.list?.limit)
+  });
   return false;
 };
 
@@ -81056,6 +81450,11 @@ const retryUnsentPaymentsPipeline = async () => {
   };
   const onDismiss = () => {
     if (child.__dismissed === true) return;
+    recordBankingPayLifecycleTrace('batch-child-dismiss-start', {
+      source: 'openBankingPayBatchChildModal.onDismiss',
+      phase: String(child.ui?.activeTabKey || 'overview'),
+      existing_parent_limit: Number(st?.pay?.list?.limit)
+    });
     child.__dismissed = true;
     const dismissedOpenToken = String(child.openToken || '');
     try { stopAutoPoll(); } catch {}
@@ -81099,6 +81498,11 @@ const retryUnsentPaymentsPipeline = async () => {
       }
     } catch {}
     try { child.openToken = `closed:${dismissedOpenToken || id}:${Date.now()}`; } catch {}
+    recordBankingPayLifecycleTrace('batch-child-dismiss-complete', {
+      source: 'openBankingPayBatchChildModal.onDismiss',
+      phase: String(child.ui?.activeTabKey || 'overview'),
+      parent_limit_after: Number(st?.pay?.list?.limit)
+    });
   };
   child.__dismissOwnedChild = onDismiss;
 
@@ -81184,6 +81588,14 @@ const retryUnsentPaymentsPipeline = async () => {
         ev.preventDefault();
         ev.stopPropagation();
 
+        if (act === 'modal:close' || act === 'banking:pay:child:close') {
+          recordBankingPayLifecycleTrace('batch-child-close-requested', {
+            source: 'openBankingPayBatchChildModal.delegatedHandler',
+            action: act,
+            existing_parent_limit: Number(st?.pay?.list?.limit),
+            phase: String(child.ui?.activeTabKey || 'overview')
+          });
+        }
         if (act === 'modal:close' || act === 'banking:pay:child:close') {
           closeTop();
           return;
@@ -83282,6 +83694,11 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
   }
 
   child.__modalShown = true;
+  recordBankingPayLifecycleTrace('batch-child-opened', {
+    source: 'openBankingPayBatchChildModal.showModal',
+    phase: String(child.ui?.activeTabKey || requestedActiveTabKey || 'overview'),
+    parent_limit_after: Number(st?.pay?.list?.limit)
+  });
 
   try { ensureFirstPageForActiveTab(child.ui?.activeTabKey || 'overview'); } catch {}
 
@@ -93476,6 +93893,13 @@ function attachBankingModalDelegatedHandlers() {
       const requestedOffset = Number(listState.offset || 0);
       const safeOffset = Number.isFinite(requestedOffset) ? Math.max(0, Math.trunc(requestedOffset)) : 0;
 
+      recordBankingPayLifecycleTrace('parent-limit-writer', {
+        source: 'attachBankingModalDelegatedHandlers.refreshBankingPayAll',
+        requested_parent_limit: requestedLimit,
+        existing_parent_limit: Number(st.pay?.list?.limit),
+        adopted_parent_limit: safeLimit,
+        action: 'FULL_REFRESH_NORMALISE'
+      });
       try {
         if (st.pay && st.pay.list && typeof st.pay.list === 'object') {
           st.pay.list.limit = safeLimit;
@@ -101267,6 +101691,13 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       const n = Number(v);
       const existingLimit = Number(st.pay?.list?.limit || 5);
       const lim = Number.isFinite(n) ? Math.max(1, Math.min(200, Math.trunc(n))) : (Number.isFinite(existingLimit) ? Math.max(1, Math.min(200, Math.trunc(existingLimit))) : 5);
+      recordBankingPayLifecycleTrace('parent-limit-writer', {
+        source: 'attachBankingModalDelegatedHandlers.setPageSize',
+        requested_parent_limit: n,
+        existing_parent_limit: existingLimit,
+        adopted_parent_limit: lim,
+        action: a
+      });
       try { st.pay.list.limit = lim; st.pay.list.offset = 0; } catch {}
       if (typeof bankingPayBatchesList === 'function') {
         await bankingPayBatchesList({
@@ -101280,7 +101711,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           include_alerts: false,
           includeAlerts: false,
           include_correction_summary: false,
-          includeCorrectionSummary: false
+          includeCorrectionSummary: false,
+          context: { source: 'attachBankingModalDelegatedHandlers.setPageSize' }
         });
       } else {
         await safeRerender(null);
@@ -101306,6 +101738,13 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       }
 
       try {
+        recordBankingPayLifecycleTrace('parent-limit-writer', {
+          source: 'attachBankingModalDelegatedHandlers.listNavigation',
+          requested_parent_limit: limRaw,
+          existing_parent_limit: Number(st.pay?.list?.limit),
+          adopted_parent_limit: lim2,
+          action: a
+        });
         st.pay.list.limit = lim2;
         st.pay.list.offset = off2;
       } catch {}
@@ -101322,7 +101761,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           include_alerts: false,
           includeAlerts: false,
           include_correction_summary: false,
-          includeCorrectionSummary: false
+          includeCorrectionSummary: false,
+          context: { source: `attachBankingModalDelegatedHandlers.${a}` }
         });
       } else {
         await safeRerender(null);
@@ -101358,6 +101798,11 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
      if (a === 'banking:pay:cancel' || a === 'banking:pay:deleteDraft') {
       const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
       if (!id) return;
+      recordBankingPayLifecycleTrace('delegated-cancellation-start', {
+        source: 'attachBankingModalDelegatedHandlers',
+        action: a,
+        existing_parent_limit: Number(st.pay?.list?.limit)
+      });
 
       const g = safeGate('CANCEL');
       if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
@@ -101396,6 +101841,11 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
             replacementSessionVersion,
             replacement_session_version
           } = {}) => {
+            recordBankingPayLifecycleTrace('delegated-cancellation-success-callback', {
+              source: 'attachBankingModalDelegatedHandlers.onSuccess',
+              action: a,
+              existing_parent_limit: Number(st.pay?.list?.limit)
+            });
             const responseObj = (responsePayload && typeof responsePayload === 'object' && !Array.isArray(responsePayload)) ? responsePayload : {};
             const postCancelRefreshObj = (postCancelRefresh && typeof postCancelRefresh === 'object' && !Array.isArray(postCancelRefresh)) ? postCancelRefresh : {};
             const postCancelResetObj = (postCancelResetOptions && typeof postCancelResetOptions === 'object' && !Array.isArray(postCancelResetOptions)) ? postCancelResetOptions : {};
@@ -101462,13 +101912,21 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
                 const cancelListOffsetRaw = Number(cancelListState?.offset || 0);
                 const cancelListOffset = Number.isFinite(cancelListOffsetRaw) ? Math.max(0, Math.trunc(cancelListOffsetRaw)) : 0;
                 if (cancelListState) {
+                  recordBankingPayLifecycleTrace('parent-limit-writer', {
+                    source: 'attachBankingModalDelegatedHandlers.cancelSuccess',
+                    requested_parent_limit: cancelListLimitRaw,
+                    existing_parent_limit: Number(cancelListState.limit),
+                    adopted_parent_limit: cancelListLimit,
+                    action: a
+                  });
                   cancelListState.limit = cancelListLimit;
                   cancelListState.offset = cancelListOffset;
                 }
                 await bankingPayBatchesList({
                   status: cancelListState ? cancelListState.statusFilter : null,
                   limit: cancelListLimit,
-                  offset: cancelListOffset
+                  offset: cancelListOffset,
+                  context: { source: 'attachBankingModalDelegatedHandlers.cancelSuccess' }
                 });
               }
             } catch {}
@@ -101510,6 +101968,12 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           }
         });
       } catch (e) {
+        recordBankingPayLifecycleTrace('delegated-cancellation-error', {
+          source: 'attachBankingModalDelegatedHandlers',
+          action: a,
+          reason: String(e?.name || e?.json?.error_code || e?.json?.code || 'CANCELLATION_FAILED'),
+          parent_limit_after: Number(st.pay?.list?.limit)
+        });
         try {
           if (typeof bankingHandleApiError === 'function') {
             bankingHandleApiError(e, { action: 'CANCEL', scope: null, batchId: id, errorPath: ['pay', 'list', 'error'] });
@@ -140939,7 +141403,6 @@ async function openBanking() {
       onDismiss
     }
   );
-
   try {
     const modal = document.getElementById('modal');
     if (modal && modal.classList) modal.classList.add(MODAL_CLASS);
