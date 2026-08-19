@@ -311,6 +311,8 @@ Fast cancellation is a post-Draft workflow and must remain separate from live Wo
 - Cancellation must use frozen Draft/execution artifacts.
 - It must not refresh live rates, current finance facts, or current recovery headroom to reinterpret the payment.
 - Obsolete/superseded job liveness, idempotency, provider state, and cancellation ownership must be fenced by their existing contracts.
+- A terminal `BLOCKED`, `FAILED_FINAL`, or `FAILED_RETRYABLE` result from an older cancellation attempt remains immutable audit history, but must not permanently suppress a fresh whole-Draft cancellation when the current exact Draft diagnostic independently re-proves every frozen-item, provider, settlement, instruction-scope, carry-forward, and current-batch fence.
+- That retry creates a new bounded cancellation request; it must not reopen, rewrite, or erase the terminal historical request. Scheduled or executed non-Draft cancellations retain their historical-work fences.
 - No Workbench presentation fix may alter this path unless explicitly authorised.
 
 ## 16. Mandatory regression matrix
@@ -352,6 +354,15 @@ Minimum presentation/performance matrix:
 3. Expand/collapse does not fetch/rebuild the whole modal.
 4. Repeated expand/collapse, selection, resolve, and cancel do not make the modal non-responsive.
 5. The test proves the patched frontend asset or installed database definition was actually exercised.
+
+Minimum Draft-cancellation retry matrix:
+
+1. A current safe `DRAFT` with no prior correction outcome exposes `DRAFT_CANCEL`.
+2. The same current safe `DRAFT` still exposes `DRAFT_CANCEL` when its latest historical attempt is terminal `BLOCKED`, `FAILED_FINAL`, or `FAILED_RETRYABLE`.
+3. The historical request/work item remains unchanged and visible as audit evidence.
+4. Provider submission, paid/settled evidence, incomplete instruction scope, ambiguous provider outcome, manual carry-forward, or carry-forward freshness failure still withholds cancellation.
+5. Scheduled and executed non-Draft cancellation keeps the established historical-work fences.
+6. Reader and immutable selection preparation classify the safe Draft retry identically before a new request is allowed.
 
 ## 17. Evidence standards
 
@@ -406,6 +417,7 @@ These identities are observations, not pinned baselines. Every later task must u
 - James physical rate authority and independent component resolution.
 - Typed failure and fail-closed physical baseline/reservation handling.
 - One-effective-section server readers.
+- A terminal historical cancellation attempt cannot poison a currently safe whole-Draft retry; all current provider, settlement, frozen-scope, carry-forward, and completeness fences remain mandatory.
 - Zero-headroom blocked presentation wording.
 - Detailed timesheet breakdown and source/target deduplication.
 - Existing resolved-rate cancellation for the already-supported timesheet family.
@@ -441,4 +453,14 @@ Future entries must include the date, approved rule change or clarification, aff
 - Financial invariants remained: scheduled/not-submitted batch; eight active frozen items; £35.63 ex VAT / £42.76 inc VAT net; four recoveries totalling £-755.00 ex VAT / £-906.00 inc VAT; four COMMITTED reservations totalling £755.00; zero RELEASED reservations.
 - This evidence proves the Workbench exclusion and Draft fail-closed boundary for the observed artifact. It does not by itself prove future-payment cancellation, settlement, provider submission, remittance, or every historical frozen payload shape.
 - Policy X assessment: compliant. Post-Draft exclusion uses only frozen batch artifacts; the pre-Draft certified source builder, payment economics, reservations, provider state, settlement, and remittance owners were unchanged.
+
+### 19 August 2026 — terminal historical Draft-cancellation retry recovery
+
+- A failed legacy cancellation attempt remained terminal `BLOCKED` after its reviewed communications count changed, while the batch itself remained a current `DRAFT`, `NOT_SUBMITTED`, with no provider submission or money-movement evidence. The status reader incorrectly gave the historical work label precedence over the current exact cancellation diagnostic, permanently hiding `DRAFT_CANCEL`.
+- The verified correction changes only `pay_batch_payment_status_page_v1` and the matching status-filter precedence in `pay_payment_correction_selection_prepare_chunk_v1`. For a `DRAFT` only, the current exact diagnostic now governs a fresh retry; scheduled and executed non-Draft cancellations retain all historical-work fences.
+- The installed TEST reader now returns `ACTIVE`, `DRAFT_CANCEL`, `pre_provider_cancel_eligible=true`, no stale blocker, and no stale failure reason for the observed £72.76 Draft. The old correction request and work item remain terminal `BLOCKED` audit evidence.
+- Before and after installation, the Draft remained `NOT_SUBMITTED` with seven active frozen items totalling £72.76 and three committed reservations totalling £730.00. No batch, item, reservation, communication, provider, settlement, or financial row was changed by installation or verification.
+- Exact staged Git blobs compiled in a rollback-only TEST transaction. The complete Banking Pay source suite passed 717 tests with zero failures and 17 intentional skips before installation. Installed owner, security-definer configuration, search path, timeouts, ACLs, and canonical hashes matched the catalogue authority.
+- This evidence proves safe retry visibility and reader/preparation parity. It does not by itself prove the subsequent user-authorised cancellation lifecycle, Workbench rebuild, or same-modal closure; those remain to be exercised end to end.
+- Policy X assessment: compliant. The change does not recalculate or reinterpret any frozen amount and does not alter provider, execution, reservation, settlement, remittance, email, or Workbench economics.
 
