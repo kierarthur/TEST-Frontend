@@ -4,6 +4,7 @@
   <meta charset="utf-8"/>
   <title>CloudTMS</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="preload" as="image" href="./assets/branding/cloudtms-office-logo-black.png"/>
   <link rel="stylesheet" href="./css/import-review-v1.css?v=20260802-validation-policy-r4"/>
   <link rel="stylesheet" href="./css/timesheet-nhsp-lines.css"/>
   <link rel="stylesheet" href="./css/invoice-batch-modal.css?v=20260729-invoice-v8-flat-table-r5"/>
@@ -103,16 +104,25 @@ body{
       backdrop-filter:saturate(150%) blur(10px);
     }
     .brand{
-      display:flex;align-items:center;gap:10px;
+      position:relative;
+      flex:0 0 102px;
+      width:102px;
+      height:37px;
       margin-right:8px;
-      font-weight:700;
-      font-size:14px;
-      letter-spacing:.02em;
+      overflow:hidden;
+      isolation:isolate;
     }
-    .brand .row-dot{
-      width:10px;height:10px;border-radius:50%;
-      background:var(--brand);
-      box-shadow:0 0 12px var(--brand);
+    .brand img{
+      position:absolute;
+      width:145px;
+      max-width:none;
+      height:auto;
+      left:-21.5px;
+      top:-34.5px;
+      display:block;
+      mix-blend-mode:screen;
+      pointer-events:none;
+      user-select:none;
     }
 
     .nav{
@@ -2208,7 +2218,18 @@ body{
       background:radial-gradient(800px 400px at 20% 0%,rgba(79,70,229,.2),transparent),rgba(2,6,23,.8);
       z-index:100;
     }
+    #loginOverlay::before{
+      content:"";
+      position:absolute;
+      inset:clamp(20px,4vw,56px);
+      background:url("./assets/branding/cloudtms-office-logo-black.png") center / min(92vw,1040px) auto no-repeat;
+      opacity:.34;
+      mix-blend-mode:screen;
+      pointer-events:none;
+    }
     .auth-card{
+      position:relative;
+      z-index:1;
       width:min(520px,92vw);
       padding:16px;
       border-radius:16px;
@@ -2216,6 +2237,17 @@ body{
       background:linear-gradient(180deg,#0e1428,#0b1221);
       box-shadow:var(--shadow);
       color:#fff;
+    }
+    @media (max-width:640px){
+      .topbar{ padding-left:10px; padding-right:10px; }
+      .brand{ flex-basis:84px; width:84px; height:30px; margin-right:2px; }
+      .brand img{ width:120px; left:-17.8px; top:-28.6px; }
+      #loginOverlay::before{
+        inset:12px;
+        background-size:min(122vw,720px) auto;
+        background-position:center 10%;
+        opacity:.32;
+      }
     }
     .auth-h{
       display:flex;
@@ -2765,7 +2797,9 @@ body{
 
 <body>
   <div class="topbar">
-    <div class="brand"><span class="row-dot"></span> CloudTMS</div>
+    <div class="brand" role="img" aria-label="CloudTMS" title="CloudTMS">
+      <img src="./assets/branding/cloudtms-office-logo-black.png" alt="" aria-hidden="true"/>
+    </div>
     <div class="nav" id="nav"></div>
     <div class="userbox">
       <span class="chip" id="userChip">Signed out</span>
