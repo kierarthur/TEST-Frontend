@@ -27,7 +27,11 @@ test('Office CloudTMS branding uses the exact supplied artwork at responsive hea
   });
   assert.match(html, /rel="preload" as="image" href="\.\/assets\/branding\/cloudtms-office-logo-black\.png"/);
   assert.match(html, /<div class="brand" role="img" aria-label="CloudTMS" title="CloudTMS">\s*<img src="\.\/assets\/branding\/cloudtms-office-logo-black\.png"/);
-  assert.match(html, /#loginOverlay::before\{[\s\S]*cloudtms-office-logo-black\.png[\s\S]*opacity:\.34/);
+  assert.match(html, /<div class="auth-login-logo" role="img" aria-label="CloudTMS">\s*<img src="\.\/assets\/branding\/cloudtms-office-logo-black\.png"/);
+  assert.match(html, /\.auth-login-stack\{[\s\S]*width:min\(520px,92vw\)[\s\S]*gap:18px/);
+  assert.match(html, /\.auth-login-logo\{[\s\S]*width:min\(360px,76vw\)[\s\S]*aspect-ratio:102 \/ 37/);
+  assert.match(html, /\.auth-login-logo img\{[\s\S]*width:142\.16%[\s\S]*top:-93\.25%/);
+  assert.doesNotMatch(html, /#loginOverlay::before/);
   assert.match(html, /@media \(max-width:640px\)\{[\s\S]*\.brand\{ flex-basis:84px; width:84px; height:30px/);
   assert.doesNotMatch(html, /<span class="row-dot"><\/span>\s*CloudTMS/);
 });

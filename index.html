@@ -2218,14 +2218,31 @@ body{
       background:radial-gradient(800px 400px at 20% 0%,rgba(79,70,229,.2),transparent),rgba(2,6,23,.8);
       z-index:100;
     }
-    #loginOverlay::before{
-      content:"";
+    .auth-login-stack{
+      position:relative;
+      z-index:1;
+      width:min(520px,92vw);
+      display:grid;
+      justify-items:center;
+      gap:18px;
+    }
+    .auth-login-logo{
+      position:relative;
+      width:min(360px,76vw);
+      aspect-ratio:102 / 37;
+      overflow:hidden;
+    }
+    .auth-login-logo img{
       position:absolute;
-      inset:clamp(20px,4vw,56px);
-      background:url("./assets/branding/cloudtms-office-logo-black.png") center / min(92vw,1040px) auto no-repeat;
-      opacity:.34;
+      display:block;
+      width:142.16%;
+      max-width:none;
+      height:auto;
+      left:-21.08%;
+      top:-93.25%;
       mix-blend-mode:screen;
       pointer-events:none;
+      user-select:none;
     }
     .auth-card{
       position:relative;
@@ -2238,16 +2255,13 @@ body{
       box-shadow:var(--shadow);
       color:#fff;
     }
+    .auth-login-stack .auth-card{ width:100%; }
     @media (max-width:640px){
       .topbar{ padding-left:10px; padding-right:10px; }
       .brand{ flex-basis:84px; width:84px; height:30px; margin-right:2px; }
       .brand img{ width:120px; left:-17.8px; top:-28.6px; }
-      #loginOverlay::before{
-        inset:12px;
-        background-size:min(122vw,720px) auto;
-        background-position:center 10%;
-        opacity:.32;
-      }
+      .auth-login-stack{ gap:14px; }
+      .auth-login-logo{ width:min(300px,76vw); }
     }
     .auth-h{
       display:flex;
@@ -2863,29 +2877,34 @@ body{
 </div>
   <!-- ===== Auth overlays ===== -->
   <div class="auth-overlay" id="loginOverlay" aria-hidden="true">
-    <div class="auth-card">
-      <div class="auth-h"><div class="ttl">Sign in</div></div>
-      <form class="auth-f" id="loginForm" data-testid="login-form">
-        <div id="loginError" class="error" style="display:none"></div>
-        <div class="row">
-          <label>Email</label>
-          <input id="loginEmail" data-testid="login-email" type="email" autocomplete="username" required />
-        </div>
-        <div class="row">
-          <label>Password</label>
-          <div class="split">
-            <input id="loginPassword" data-testid="login-password" type="password" autocomplete="current-password" required />
-            <span class="eye" id="toggleLoginPw">show</span>
+    <div class="auth-login-stack">
+      <div class="auth-login-logo" role="img" aria-label="CloudTMS">
+        <img src="./assets/branding/cloudtms-office-logo-black.png" alt="" aria-hidden="true"/>
+      </div>
+      <div class="auth-card">
+        <div class="auth-h"><div class="ttl">Sign in</div></div>
+        <form class="auth-f" id="loginForm" data-testid="login-form">
+          <div id="loginError" class="error" style="display:none"></div>
+          <div class="row">
+            <label>Email</label>
+            <input id="loginEmail" data-testid="login-email" type="email" autocomplete="username" required />
           </div>
-        </div>
-        <div class="row">
-          <label><input type="checkbox" id="rememberMe" checked/> Keep me signed in</label>
-        </div>
-        <div class="actions">
-          <span class="link" id="linkForgot">Forgot password?</span>
-          <button type="submit" class="primary" data-testid="login-submit">Sign in</button>
-        </div>
-      </form>
+          <div class="row">
+            <label>Password</label>
+            <div class="split">
+              <input id="loginPassword" data-testid="login-password" type="password" autocomplete="current-password" required />
+              <span class="eye" id="toggleLoginPw">show</span>
+            </div>
+          </div>
+          <div class="row">
+            <label><input type="checkbox" id="rememberMe" checked/> Keep me signed in</label>
+          </div>
+          <div class="actions">
+            <span class="link" id="linkForgot">Forgot password?</span>
+            <button type="submit" class="primary" data-testid="login-submit">Sign in</button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 

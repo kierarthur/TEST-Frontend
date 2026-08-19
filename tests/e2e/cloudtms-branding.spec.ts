@@ -31,6 +31,8 @@ async function openPatchedLogin(page, context) {
   await expect(page.locator('#loginOverlay')).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('.brand')).toBeVisible();
   await expect(page.locator('.brand img')).toHaveJSProperty('naturalWidth', 1448);
+  await expect(page.locator('.auth-login-logo')).toBeVisible();
+  await expect(page.locator('.auth-login-logo img')).toHaveJSProperty('naturalWidth', 1448);
   expect(intercepted.get('/index.html')).toBeGreaterThan(0);
   expect(intercepted.get('/assets/branding/cloudtms-office-logo-black.png')).toBeGreaterThan(0);
   expect(intercepted.has('/assets/branding/my-tms-app-logo-black.png')).toBe(false);
@@ -48,12 +50,15 @@ test('Office CloudTMS branding is proportioned for desktop header and login', as
   expect(brand.height).toBeGreaterThanOrEqual(36);
   expect(brand.height).toBeLessThanOrEqual(38);
 
-  const watermark = await page.locator('#loginOverlay').evaluate(element => ({
-    backgroundImage: getComputedStyle(element, '::before').backgroundImage,
-    opacity: getComputedStyle(element, '::before').opacity
-  }));
-  expect(watermark.backgroundImage).toContain('cloudtms-office-logo-black.png');
-  expect(watermark.opacity).toBe('0.34');
+  const loginLogo = await page.locator('.auth-login-logo').boundingBox();
+  const loginCard = await page.locator('#loginOverlay .auth-card').boundingBox();
+  expect(loginLogo).not.toBeNull();
+  expect(loginCard).not.toBeNull();
+  expect(loginLogo.width).toBeGreaterThanOrEqual(359);
+  expect(loginLogo.width).toBeLessThanOrEqual(361);
+  expect(loginLogo.y + loginLogo.height).toBeLessThan(loginCard.y);
+  expect(loginCard.y - (loginLogo.y + loginLogo.height)).toBeGreaterThanOrEqual(17);
+  expect(Math.abs((loginLogo.x + loginLogo.width / 2) - 720)).toBeLessThanOrEqual(1);
   await expect(page.locator('#loginForm')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('cloudtms-branding-desktop.png'), fullPage: true });
   await context.close();
@@ -71,10 +76,15 @@ test('Office CloudTMS branding remains proportioned at a narrow app viewport', a
   expect(brand.height).toBeGreaterThanOrEqual(29);
   expect(brand.height).toBeLessThanOrEqual(31);
 
-  const watermarkOpacity = await page.locator('#loginOverlay').evaluate(
-    element => getComputedStyle(element, '::before').opacity
-  );
-  expect(watermarkOpacity).toBe('0.32');
+  const loginLogo = await page.locator('.auth-login-logo').boundingBox();
+  const loginCard = await page.locator('#loginOverlay .auth-card').boundingBox();
+  expect(loginLogo).not.toBeNull();
+  expect(loginCard).not.toBeNull();
+  expect(loginLogo.width).toBeGreaterThanOrEqual(295);
+  expect(loginLogo.width).toBeLessThanOrEqual(297);
+  expect(loginLogo.y + loginLogo.height).toBeLessThan(loginCard.y);
+  expect(loginCard.y - (loginLogo.y + loginLogo.height)).toBeGreaterThanOrEqual(13);
+  expect(Math.abs((loginLogo.x + loginLogo.width / 2) - 195)).toBeLessThanOrEqual(1);
   await expect(page.locator('#loginForm')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('cloudtms-branding-narrow.png'), fullPage: true });
   await context.close();
