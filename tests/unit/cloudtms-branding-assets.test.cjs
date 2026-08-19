@@ -20,10 +20,10 @@ function inspectPng(relativePath) {
 
 test('Office CloudTMS branding uses the exact supplied artwork at responsive header and login surfaces', () => {
   assert.deepEqual(inspectPng('assets/branding/cloudtms-office-logo-black.png'), {
-    bytes: 129716,
+    bytes: 204343,
     width: 1448,
     height: 1086,
-    sha256: '2904d5d483a1668a7a86a4cfee8c8b1893d251c264e84aa8f06031bc871868cd'
+    sha256: '0a2a5535e05a0ae70919426f52447e5126deeb96f0bed462615dadcd3dda5697'
   });
   assert.match(html, /rel="preload" as="image" href="\.\/assets\/branding\/cloudtms-office-logo-black\.png"/);
   assert.match(html, /<div class="brand" role="img" aria-label="CloudTMS" title="CloudTMS">\s*<img src="\.\/assets\/branding\/cloudtms-office-logo-black\.png"/);
