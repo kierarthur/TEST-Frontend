@@ -418,6 +418,8 @@ These identities are observations, not pinned baselines. Every later task must u
 - Typed failure and fail-closed physical baseline/reservation handling.
 - One-effective-section server readers.
 - A terminal historical cancellation attempt cannot poison a currently safe whole-Draft retry; all current provider, settlement, frozen-scope, carry-forward, and completeness fences remain mandatory.
+- Active post-Draft batches exclude an exact frozen timesheet/component identity even when an older valid `OVERPAYMENT_RECOVERY` artifact stores the timesheet only as `frozen_source_basis_json.linked_timesheet_id` or `frozen_component_snapshot_json.source_basis_json.linked_timesheet_id`; the Draft seed must independently reject the same overlap.
+- A current pre-Draft `OVERPAYMENT_RECOVERY` preview may expose only the positive residual not owned by active Draft reservations. A fully reserved recovery is absent from the Workbench; a genuine positive partial residual may remain exactly once only when the canonical versioned residual contract matches the current active reservation aggregate. Missing, malformed, stale, candidate-mismatched, or arithmetically inconsistent contract evidence fails closed.
 - Zero-headroom blocked presentation wording.
 - Detailed timesheet breakdown and source/target deduplication.
 - Existing resolved-rate cancellation for the already-supported timesheet family.
@@ -443,6 +445,15 @@ These identities are observations, not pinned baselines. Every later task must u
 
 Future entries must include the date, approved rule change or clarification, affected owners, executable regression evidence, deployed/installed authority where applicable, and explicit Policy X assessment.
 
+### 18 August 2026 — finance cancel/restore adoption clarification
+
+- A successful financial clear or restore RPC is not same-modal completion. Completion requires the still-open modal to show the exact postcondition, remove every stale opposite-section alias, expose the correct canonical action, and render `data-progress-active="false"` without closing or reopening.
+- Candidate-scoped successor rows and all first pages that own Ready, Cases / Resolutions, and Blocked placement must belong to one accepted session revision before a terminal render. A mixture of a current candidate graph and prior-revision section-page caches is not publishable UI state.
+- The restore path may legitimately keep the same Workbench session version while advancing the progress/generation authority. Tests must prove a current exact owner and exact row/action postcondition; they must not invent a mandatory `session_version + 1` rule.
+- The modal must publish one terminal render only after the candidate graph, section pages, progress authority, and refresh-state aliases agree. Clearing only polling flags, or obtaining correct rows only after modal reopen, is insufficient.
+- Frontend commit `a204ffdaa3930a90797da22f8a6cb81f4a690a47` synchronized accepted candidate and section-page revisions but did not close the strict same-modal restore condition in live TEST: the restored owner and fresh-open modal were correct, while the original modal failed to reach the combined restored-and-terminal condition within 120 seconds. Treat this commit as diagnostic progress, not final closure.
+- Policy X assessment: no payment economics, recovery headroom, frozen Draft artifacts, provider execution, settlement, or remittance authority changed.
+
 ### 18 August 2026 — active-batch frozen linked-timesheet exclusion
 
 - TEST batch `4f87739e-6e6f-48db-acad-5702bb2e198a` proved an older valid frozen `OVERPAYMENT_RECOVERY` shape whose direct `pay_batch_items.timesheet_id` was null while the exact timesheet identity was retained at both `frozen_source_basis_json.linked_timesheet_id` and `frozen_component_snapshot_json.source_basis_json.linked_timesheet_id`.
@@ -463,4 +474,14 @@ Future entries must include the date, approved rule change or clarification, aff
 - Exact staged Git blobs compiled in a rollback-only TEST transaction. The complete Banking Pay source suite passed 717 tests with zero failures and 17 intentional skips before installation. Installed owner, security-definer configuration, search path, timeouts, ACLs, and canonical hashes matched the catalogue authority.
 - This evidence proves safe retry visibility and reader/preparation parity. It does not by itself prove the subsequent user-authorised cancellation lifecycle, Workbench rebuild, or same-modal closure; those remain to be exercised end to end.
 - Policy X assessment: compliant. The change does not recalculate or reinterpret any frozen amount and does not alter provider, execution, reservation, settlement, remittance, email, or Workbench economics.
+
+### 20 August 2026 — active-reservation partial recovery residual
+
+- The active-batch exclusion remains strict for fully reserved `OVERPAYMENT_RECOVERY` rows, but exact physical overlap alone must not suppress a genuine unreserved balance. The canonical pre-Draft publisher now freezes a versioned residual contract containing source outstanding ex VAT, current active reserved ex VAT, and residual outstanding ex VAT.
+- Both Workbench readers validate that contract against one current set-wise active-reservation aggregate. They may publish only a strictly positive, current residual and retain the established strict frozen-sibling fence. Missing, malformed, stale, candidate-mismatched, or arithmetically inconsistent evidence is suppressed rather than inferred.
+- TEST catalogue hashes were pinned as follows: residual validator `4317bb7fbf6fd222fc26133fa08c931b2a9d23f0cc60ff71522ff930f59d344a`; canonical publisher `9216d9e6c3c73514149dc20e93b75648c42ffd6850b0eaff2fbe4764e713c0b5`; candidate reader `7e669a4dd7d00e332207161460444ced8d71045c1549ef837e8e8b19d25aab2b`; page reader `99309bf519fa791b05249f74fc0c3de2079006f9eed64fd3dbf3e6ca25486b48`.
+- Bounded TEST proof found 13 current Ready recovery contracts and 13 valid residual validations, with zero malformed or invalid rows. The two public readers returned identical 63-row identities before frontend filter/adoption, cursor paging remained stable, and the combined eight-call plan executed in 876.27 ms without shared or temporary reads/writes.
+- The seven-item active James Draft reconciled to £948.76 positive inc VAT, £-876.00 recovery inc VAT, and £72.76 net bank amount. Its three active reservations totalled £730.00 ex VAT and were absent from Workbench presentation; the separate unreserved £25.00 control remained exactly once under resolution authority.
+- A normal TEST browser refresh completed without a Banking Pay failure and showed 60 Ready lines. No fully reserved James recovery from the active Draft was shown. The unrelated authenticated capability probes continued to return 401 and did not fail a Banking Pay request.
+- Policy X assessment: compliant. The new contract is frozen by the canonical pre-Draft publisher and validated only against active reservation ownership. No post-Draft live finance-component fallback, new economic-key ladder, recovery/VAT/ERNI/headroom calculation, Draft artifact, provider, settlement, remittance, or cancellation authority changed.
 
