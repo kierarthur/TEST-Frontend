@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260821-banking-selection-result-refresh-r1',
+  asset_version: '20260821-banking-selection-result-refresh-r2',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -128810,6 +128810,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     // copies of every preview row while preserving all existing readers.
     attachPageMapAliases(wiz.workbench);
     attachPageMapAliases(targetEnvelope);
+    attachPageMapAliases(wiz.preview);
     if (wiz.preview && isPlainObject(wiz.preview.data)) attachPageMapAliases(wiz.preview.data);
   };
   const responseMutationContext = trimStr(responseObj.post_mutation_context || responseObj.mutation_context || responseObj.action || '').toUpperCase();

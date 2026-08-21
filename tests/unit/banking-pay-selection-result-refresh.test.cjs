@@ -204,6 +204,85 @@ test('the same atomic owner performs the exact Blocked-to-Ready reverse transiti
   assert.equal(state.pay.draftWizard.workbench.canonical_preview_lines.filter((row) => row.preview_row_id === 'recovery-1').length, 1);
 });
 
+test('merged Ready and Blocked pages replace the render-consumed preview wrapper cache', () => {
+  const aliasOwnerSource = sliceBetween(
+    'const applyMergedPreviewPagesToState = (targetEnvelope = null) => {',
+    '  const responseMutationContext ='
+  );
+  const staleRecovery = {
+    preview_row_id: 'recovery-stale',
+    effective_section: 'READY_TO_PAY'
+  };
+  const readyRow = {
+    preview_row_id: 'positive-current',
+    effective_section: 'READY_TO_PAY'
+  };
+  const blockedRecovery = {
+    preview_row_id: 'recovery-stale',
+    effective_section: 'BLOCKED_FOR_PAY'
+  };
+  const wiz = {
+    workbench: {},
+    preview: {
+      data: {},
+      preview_pages: {
+        canonical_preview_lines: {
+          section: 'canonical_preview_lines',
+          rows: [staleRecovery],
+          items: [staleRecovery]
+        }
+      }
+    }
+  };
+  const targetEnvelope = {};
+  const mergedPreviewPages = {
+    canonical_preview_lines: {
+      section: 'canonical_preview_lines',
+      rows: [readyRow],
+      items: [readyRow]
+    },
+    blocked_for_pay: {
+      section: 'blocked_for_pay',
+      rows: [blockedRecovery],
+      items: [blockedRecovery]
+    }
+  };
+  const context = vm.createContext({
+    wiz,
+    targetEnvelope,
+    mergedPreviewPages,
+    cloneJson: structuredClone,
+    isPlainObject: (value) => !!value && typeof value === 'object' && !Array.isArray(value)
+  });
+  vm.runInContext(`${aliasOwnerSource}\napplyMergedPreviewPagesToState(targetEnvelope);`, context);
+
+  const installedPageMap = wiz.workbench.preview_pages;
+  for (const root of [wiz.workbench, wiz.preview, wiz.preview.data, targetEnvelope]) {
+    for (const alias of [
+      'preview_pages',
+      'previewPages',
+      'preview_page_cache',
+      'previewPageCache',
+      'page_cache',
+      'pageCache'
+    ]) {
+      assert.equal(root[alias], installedPageMap, `${alias} must share the accepted page graph`);
+    }
+  }
+  assert.deepEqual(
+    installedPageMap.canonical_preview_lines.rows.map((row) => row.preview_row_id),
+    ['positive-current']
+  );
+  assert.deepEqual(
+    installedPageMap.blocked_for_pay.rows.map((row) => row.preview_row_id),
+    ['recovery-stale']
+  );
+  assert.equal(
+    wiz.preview.preview_pages.canonical_preview_lines.rows.some((row) => row.preview_row_id === 'recovery-stale'),
+    false
+  );
+});
+
 test('a cross-section duplicate fails closed before any state adoption', () => {
   const state = makeState();
   const before = structuredClone(state);
