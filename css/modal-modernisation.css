@@ -18,6 +18,22 @@
   --ctms-modal-shadow: 0 28px 90px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(135, 160, 196, 0.08);
 }
 
+/* Banking Pay: allow wheel, trackpad and touch scrolling to move naturally
+   from an inner result table to the outer modal at either boundary. */
+#modal.ctms-modern-modal.banking-modal .modal-b > #modalBody {
+  overscroll-behavior-y: auto !important;
+}
+
+#modal.ctms-modern-modal.banking-modal #bankingPayReadyScrollHost,
+#modal.ctms-modern-modal.banking-modal #bankingPayCasesScrollHost,
+#modal.ctms-modern-modal.banking-modal #bankingPayBlockedScrollHost,
+#modal.ctms-modern-modal.banking-modal .banking-pay-batch-table-scroll {
+  overscroll-behavior-y: auto !important;
+  touch-action: pan-x pan-y;
+  scrollbar-color: rgba(105, 137, 181, 0.8) rgba(8, 18, 34, 0.6);
+  scrollbar-width: thin;
+}
+
 #modalBack.ctms-modern-backdrop {
   padding: 20px;
   background:
@@ -470,11 +486,62 @@
 }
 
 #modal.ctms-modern-modal input[type="radio"] {
-  inline-size: 16px;
-  block-size: 16px;
-  flex: 0 0 auto;
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  position: relative;
+  display: inline-grid;
+  place-content: center;
+  inline-size: 18px;
+  block-size: 18px;
+  min-inline-size: 18px;
+  flex: 0 0 18px;
   margin: 0;
-  accent-color: var(--ctms-modal-accent);
+  border: 1px solid #5d6d88;
+  border-radius: 50%;
+  cursor: pointer;
+  background: linear-gradient(180deg, #111d31, #091221);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 1px 2px rgba(0,0,0,.24);
+  transition: border-color .14s ease, background .14s ease, box-shadow .14s ease, transform .1s ease;
+}
+
+#modal.ctms-modern-modal input[type="radio"]::before {
+  content: "";
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0;
+  transform: scale(.45);
+  transition: opacity .12s ease, transform .12s ease;
+}
+
+#modal.ctms-modern-modal input[type="radio"]:hover:not(:disabled) {
+  border-color: #8b84ff;
+  background: #162541;
+  box-shadow: 0 0 0 3px rgba(112,104,248,.1), inset 0 1px 0 rgba(255,255,255,.05);
+}
+
+#modal.ctms-modern-modal input[type="radio"]:checked {
+  border-color: #8a83ff;
+  background: linear-gradient(135deg, #756cf8 0%, #5c53e7 58%, #37b8dc 145%);
+  box-shadow: 0 0 0 1px rgba(139,132,255,.18), 0 4px 10px rgba(74,64,206,.3), inset 0 1px 0 rgba(255,255,255,.2);
+}
+
+#modal.ctms-modern-modal input[type="radio"]:checked::before {
+  opacity: 1;
+  transform: scale(1);
+}
+
+#modal.ctms-modern-modal input[type="radio"]:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px #07101f, 0 0 0 5px rgba(64,199,232,.9), 0 5px 12px rgba(0,0,0,.3);
+}
+
+#modal.ctms-modern-modal input[type="radio"]:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+  filter: saturate(.55);
 }
 
 #modal.ctms-modern-modal .card,
@@ -789,7 +856,18 @@
   }
 
   #modal.ctms-modern-modal .modal-h .ttl {
+    flex: 1 1 0;
+    min-width: 0;
     font-size: 17px;
+    overflow-wrap: anywhere;
+  }
+
+  #modal.ctms-modern-modal .modal-h .spacer {
+    display: none;
+  }
+
+  #modal.ctms-modern-modal .modal-h button {
+    flex: 0 0 auto;
   }
 
   #modal.ctms-modern-modal #modalTabs {
@@ -920,11 +998,1839 @@
   }
 }
 
+/* Approved utility modal families ------------------------------------------------ */
+#modal.ctms-modern-modal.ctms-utility-modal {
+  width: min(1160px, calc(100vw - 48px));
+}
+
+#modal.ctms-modern-modal.ctms-utility-modal #modalBody,
+#modal.ctms-modern-modal.ctms-utility-modal #modalBody * {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+#modal.ctms-modern-modal.ctms-utility-modal .ctms-tab-intro {
+  margin-bottom: 18px;
+  padding: 15px 17px;
+  border: 1px solid rgba(99, 118, 246, 0.26);
+  border-radius: 15px;
+  background:
+    linear-gradient(120deg, rgba(99, 118, 246, 0.13), rgba(56, 189, 248, 0.055) 72%),
+    rgba(13, 26, 45, 0.72);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.14);
+}
+
+#modal.ctms-modern-modal.ctms-utility-modal .ctms-tab-intro h2 {
+  font-size: 19px;
+}
+
+#modal.ctms-modern-modal.ctms-utility-modal .ctms-tab-intro p {
+  margin-top: 4px;
+}
+
+#modal.ctms-modern-modal.ctms-utility-modal .row > button:only-child {
+  width: auto;
+  justify-self: start;
+}
+
+#modal.ctms-modern-modal.ctms-utility-modal table.grid tbody tr {
+  cursor: pointer;
+  transition: background-color 130ms ease, box-shadow 130ms ease, transform 130ms ease;
+}
+
+#modal.ctms-modern-modal.ctms-utility-modal table.grid tbody tr:hover {
+  background: rgba(56, 189, 248, 0.065);
+}
+
+#modal.ctms-modern-modal.ctms-utility-modal table.grid tbody tr.active,
+#modal.ctms-modern-modal.ctms-utility-modal table.grid tbody tr.selected,
+#modal.ctms-modern-modal.ctms-utility-modal table.grid tbody tr[aria-selected="true"] {
+  background: linear-gradient(90deg, rgba(99, 118, 246, 0.24), rgba(56, 189, 248, 0.1));
+  box-shadow: inset 3px 0 0 var(--ctms-modal-accent-bright);
+}
+
+/* Settings */
+#modal.ctms-modal-settings .ctms-settings-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+}
+
+#modal.ctms-modal-settings .ctms-settings-form > .row {
+  align-content: start;
+  min-width: 0;
+  margin: 0 !important;
+  padding: 12px;
+  border: 1px solid rgba(92, 119, 157, 0.19);
+  border-radius: 12px;
+  background: rgba(10, 23, 40, 0.66);
+}
+
+#modal.ctms-modal-settings .ctms-settings-form > .row[style*="grid-column:1/-1"],
+#modal.ctms-modal-settings .ctms-settings-form > .row[style*="grid-column: 1 / -1"],
+#modal.ctms-modal-settings .ctms-settings-form > .card,
+#modal.ctms-modal-settings .ctms-settings-form > [id*="finance" i] {
+  grid-column: 1 / -1 !important;
+}
+
+#modal.ctms-modal-settings .ctms-settings-form textarea {
+  min-height: 104px;
+}
+
+#modal.ctms-modal-settings .ctms-settings-form .card {
+  border-color: rgba(99, 118, 246, 0.24);
+  border-radius: 14px;
+  background: linear-gradient(150deg, rgba(16, 31, 53, 0.96), rgba(9, 21, 38, 0.96));
+}
+
+#modal.ctms-modal-settings .ctms-settings-form table,
+#modal.ctms-modal-settings .ctms-settings-form [style*="grid-template-columns"] {
+  max-width: 100%;
+}
+
+/* User management */
+#modal.ctms-modal-user-management #userMgmtRoot > .mini:first-child {
+  margin: 0;
+  padding: 0 2px 4px;
+  color: var(--ctms-modal-sub);
+  font-size: 13px;
+}
+
+#modal.ctms-modal-user-management #userMgmtBody > .card {
+  margin: 0;
+  padding: 14px;
+  border-color: rgba(93, 123, 165, 0.26);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(16, 31, 53, 0.92), rgba(9, 21, 38, 0.94));
+}
+
+#modal.ctms-modal-user-management #userMgmtBody > .card:first-child {
+  border-color: rgba(99, 118, 246, 0.3);
+  background: linear-gradient(130deg, rgba(99, 118, 246, 0.1), rgba(11, 25, 43, 0.96) 48%);
+}
+
+#modal.ctms-modal-user-management #userMgmtBody table {
+  overflow: hidden;
+  border: 1px solid rgba(93, 123, 165, 0.22);
+  border-radius: 12px;
+}
+
+/* Candidate and client pickers */
+#modal.ctms-modal-candidate-picker .ctms-picker-shell,
+#modal.ctms-modal-client-picker .ctms-picker-shell {
+  display: grid;
+  gap: 12px;
+}
+
+#modal.ctms-modal-candidate-picker .ctms-picker-shell > .row,
+#modal.ctms-modal-client-picker .ctms-picker-shell > .row {
+  margin: 0;
+}
+
+#modal.ctms-modal-candidate-picker .ctms-picker-shell > .row:has(#pickerSearch),
+#modal.ctms-modal-client-picker .ctms-picker-shell > .row:has(#pickerSearch) {
+  padding: 14px;
+  border: 1px solid rgba(99, 118, 246, 0.28);
+  border-radius: 14px;
+  background: linear-gradient(120deg, rgba(99, 118, 246, 0.1), rgba(9, 22, 39, 0.92) 45%);
+}
+
+#modal.ctms-modal-candidate-picker .ctms-picker-results,
+#modal.ctms-modal-client-picker .ctms-picker-results {
+  overflow: hidden;
+  border: 1px solid rgba(93, 123, 165, 0.3);
+  border-radius: 14px;
+  background: rgba(7, 17, 31, 0.76);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.16);
+}
+
+#modal.ctms-modal-candidate-picker .ctms-picker-results table,
+#modal.ctms-modal-client-picker .ctms-picker-results table {
+  width: 100%;
+}
+
+#modal.ctms-modal-candidate-picker .ctms-picker-results td,
+#modal.ctms-modal-client-picker .ctms-picker-results td {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+/* Job title editor */
+#modal.ctms-modal-job-titles {
+  width: min(1020px, calc(100vw - 48px));
+}
+
+#modal.ctms-modal-job-titles .ctms-job-titles-root {
+  display: grid !important;
+  grid-template-columns: minmax(300px, 0.95fr) minmax(380px, 1.25fr) !important;
+  gap: 16px !important;
+}
+
+#modal.ctms-modal-job-titles .ctms-job-tree-panel,
+#modal.ctms-modal-job-titles .ctms-job-editor-panel {
+  padding: 15px !important;
+  border: 1px solid rgba(93, 123, 165, 0.28) !important;
+  border-radius: 14px !important;
+  background: linear-gradient(150deg, rgba(16, 31, 53, 0.94), rgba(9, 21, 38, 0.94));
+}
+
+#modal.ctms-modal-job-titles #jt_tree {
+  margin-top: 10px;
+  padding: 7px !important;
+  border-color: rgba(93, 123, 165, 0.24) !important;
+  background: rgba(6, 15, 28, 0.68);
+}
+
+#modal.ctms-modal-job-titles .jt-node {
+  margin: 3px 0;
+  min-height: 42px;
+  padding-top: 7px !important;
+  padding-bottom: 7px !important;
+}
+
+#modal.ctms-modal-job-titles .jt-node:hover {
+  background: rgba(56, 189, 248, 0.07);
+}
+
+#modal.ctms-modal-job-titles .jt-node-active {
+  background: linear-gradient(90deg, rgba(99, 118, 246, 0.24), rgba(56, 189, 248, 0.08)) !important;
+  box-shadow: inset 3px 0 0 var(--ctms-modal-accent-bright);
+}
+
+#modal.ctms-modal-job-titles button[data-act="add-child"] {
+  max-width: 170px;
+  white-space: normal;
+}
+
+/* Address finder */
+#modal.ctms-modal-address {
+  width: min(980px, calc(100vw - 48px));
+}
+
+#modal.ctms-modal-address .ctms-address-form {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#modal.ctms-modal-address .ctms-address-form .ctms-section-grid {
+  align-items: end;
+}
+
+#modal.ctms-modal-address #btnAddrLookup {
+  display: inline-flex !important;
+  flex: 0 0 auto !important;
+  width: auto !important;
+  max-width: 220px;
+  min-width: 156px;
+  justify-self: start;
+  border-color: rgba(130, 144, 255, 0.78);
+  background: linear-gradient(135deg, #5668ed, #4053d5);
+  box-shadow: 0 9px 24px rgba(48, 58, 175, 0.25);
+}
+
+#modal.ctms-modal-address #btnAddrLookup:hover {
+  border-color: #a8b2ff;
+  background: linear-gradient(135deg, #6979f7, #4e61e4);
+}
+
+#modal.ctms-modal-address .row:has(> #btnAddrLookup) {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-start;
+  grid-column: 1 / -1;
+  padding-top: 2px;
+}
+
+#modal.ctms-modal-address #addrLookupResults {
+  min-height: 72px;
+  max-height: 220px !important;
+  border-color: rgba(93, 123, 165, 0.28) !important;
+  border-radius: 11px !important;
+  background: rgba(6, 15, 28, 0.7);
+}
+
+#modal.ctms-modal-address .addr-row:hover {
+  background: rgba(56, 189, 248, 0.08);
+}
+
+/* Rate preset picker */
+#modal.ctms-modal-rate-presets .ctms-rate-preset-shell {
+  display: grid;
+  gap: 12px;
+}
+
+#modal.ctms-modal-rate-presets .ctms-rate-preset-shell > .row:first-child {
+  margin: 0;
+  padding: 14px;
+  border: 1px solid rgba(99, 118, 246, 0.28);
+  border-radius: 14px;
+  background: linear-gradient(120deg, rgba(99, 118, 246, 0.1), rgba(9, 22, 39, 0.92) 48%);
+}
+
+#modal.ctms-modal-rate-presets #rp_table {
+  table-layout: fixed;
+}
+
+#modal.ctms-modal-rate-presets #rp_table th,
+#modal.ctms-modal-rate-presets #rp_table td {
+  overflow-wrap: anywhere;
+}
+
+#modal.ctms-modal-rate-presets #rp_table td {
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+
+/* Outbox detail */
+#modal.ctms-modal-outbox-details .ctms-outbox-detail-root {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+#modal.ctms-modal-outbox-details .ctms-outbox-card {
+  min-width: 0;
+  margin: 0 !important;
+  padding: 15px !important;
+  overflow: hidden;
+  border-color: rgba(93, 123, 165, 0.27);
+  border-radius: 14px;
+  background: linear-gradient(150deg, rgba(16, 31, 53, 0.94), rgba(9, 21, 38, 0.94));
+}
+
+#modal.ctms-modal-outbox-details .ctms-outbox-hero,
+#modal.ctms-modal-outbox-details .ctms-outbox-detail-root > .card:nth-last-child(-n+6) {
+  grid-column: 1 / -1;
+}
+
+#modal.ctms-modal-outbox-details .ctms-outbox-hero {
+  border-color: rgba(99, 118, 246, 0.32);
+  background: linear-gradient(125deg, rgba(99, 118, 246, 0.12), rgba(9, 22, 39, 0.95) 48%);
+}
+
+#modal.ctms-modal-outbox-details .ctms-outbox-card table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+#modal.ctms-modal-outbox-details .ctms-outbox-card th {
+  width: 31%;
+  color: var(--ctms-modal-sub);
+}
+
+#modal.ctms-modal-outbox-details .ctms-outbox-card td,
+#modal.ctms-modal-outbox-details .ctms-outbox-card pre,
+#modal.ctms-modal-outbox-details .ctms-outbox-card .mono {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Audit detail */
+#modal.ctms-modal-audit-event {
+  width: min(980px, calc(100vw - 48px));
+}
+
+#modal.ctms-modal-audit-event .ctms-audit-form {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#modal.ctms-modal-audit-event .ctms-audit-form .ctms-section-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#modal.ctms-modal-audit-event .ctms-audit-form .ctms-section[data-ctms-section="audit-change"] .row {
+  grid-column: 1 / -1;
+}
+
+#modal.ctms-modal-audit-event .ctms-audit-form textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+#modal.ctms-modal-audit-event .ctms-audit-form .ctms-section[data-ctms-section="audit-change"] textarea {
+  min-height: 132px;
+  color: #d8e5f5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  #modal.ctms-modern-modal.ctms-utility-modal,
+  #modal.ctms-modal-job-titles,
+  #modal.ctms-modal-address,
+  #modal.ctms-modal-audit-event {
+    width: calc(100vw - 12px);
+    max-width: calc(100vw - 12px);
+  }
+
+  #modal.ctms-modal-settings .ctms-settings-form,
+  #modal.ctms-modal-job-titles .ctms-job-titles-root,
+  #modal.ctms-modal-outbox-details .ctms-outbox-detail-root,
+  #modal.ctms-modal-audit-event .ctms-audit-form .ctms-section-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  #modal.ctms-modal-settings .ctms-settings-form > *,
+  #modal.ctms-modal-outbox-details .ctms-outbox-detail-root > * {
+    grid-column: 1 !important;
+  }
+
+  #modal.ctms-modal-job-titles .ctms-job-tree-panel,
+  #modal.ctms-modal-job-titles .ctms-job-editor-panel {
+    padding: 12px !important;
+  }
+
+  #modal.ctms-modal-candidate-picker .ctms-picker-results,
+  #modal.ctms-modal-client-picker .ctms-picker-results,
+  #modal.ctms-modal-rate-presets #rp_table,
+  #modal.ctms-modal-user-management #userMgmtBody table {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  #modal.ctms-modal-candidate-picker .ctms-picker-results thead,
+  #modal.ctms-modal-client-picker .ctms-picker-results thead,
+  #modal.ctms-modal-rate-presets #rp_table thead,
+  #modal.ctms-modal-user-management #userMgmtBody table thead {
+    display: none;
+  }
+
+  #modal.ctms-modal-candidate-picker .ctms-picker-results tbody,
+  #modal.ctms-modal-client-picker .ctms-picker-results tbody,
+  #modal.ctms-modal-rate-presets #rp_table tbody,
+  #modal.ctms-modal-user-management #userMgmtBody table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  #modal.ctms-modal-candidate-picker .ctms-picker-results tr,
+  #modal.ctms-modal-client-picker .ctms-picker-results tr,
+  #modal.ctms-modal-rate-presets #rp_table tr,
+  #modal.ctms-modal-user-management #userMgmtBody table tr {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0;
+    padding: 9px 12px;
+    overflow: hidden;
+    border: 1px solid rgba(93, 123, 165, 0.28);
+    border-radius: 13px;
+    background: rgba(13, 27, 47, 0.9);
+  }
+
+  #modal.ctms-modal-candidate-picker .ctms-picker-results td,
+  #modal.ctms-modal-client-picker .ctms-picker-results td,
+  #modal.ctms-modal-rate-presets #rp_table td,
+  #modal.ctms-modal-user-management #userMgmtBody table td {
+    display: grid !important;
+    grid-template-columns: minmax(92px, 32%) minmax(0, 1fr) !important;
+    gap: 12px;
+    align-items: start;
+    width: 100% !important;
+    min-height: 0;
+    padding: 9px 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid rgba(93, 123, 165, 0.18) !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  #modal.ctms-modal-candidate-picker .ctms-picker-results td:last-child,
+  #modal.ctms-modal-client-picker .ctms-picker-results td:last-child,
+  #modal.ctms-modal-rate-presets #rp_table td:last-child,
+  #modal.ctms-modal-user-management #userMgmtBody table td:last-child {
+    border-bottom: 0 !important;
+  }
+
+  #modal.ctms-modal-candidate-picker .ctms-picker-results td::before,
+  #modal.ctms-modal-client-picker .ctms-picker-results td::before,
+  #modal.ctms-modal-rate-presets #rp_table td::before,
+  #modal.ctms-modal-user-management #userMgmtBody table td::before {
+    color: #91a5bf;
+    font-size: 10px;
+    font-weight: 760;
+    letter-spacing: 0.075em;
+    text-transform: uppercase;
+  }
+
+  #modal.ctms-modal-candidate-picker .ctms-picker-results td:nth-child(1)::before { content: "Surname"; }
+  #modal.ctms-modal-candidate-picker .ctms-picker-results td:nth-child(2)::before { content: "First name"; }
+  #modal.ctms-modal-candidate-picker .ctms-picker-results td:nth-child(3)::before { content: "Role"; }
+  #modal.ctms-modal-candidate-picker .ctms-picker-results td:nth-child(4)::before { content: "Email"; }
+  #modal.ctms-modal-client-picker .ctms-picker-results td:nth-child(1)::before { content: "Client"; }
+  #modal.ctms-modal-client-picker .ctms-picker-results td:nth-child(2)::before { content: "Email"; }
+  #modal.ctms-modal-rate-presets #rp_table td::before { content: attr(data-ctms-label); }
+  #modal.ctms-modal-rate-presets #rp_table td:first-child { display: none !important; }
+  #modal.ctms-modal-user-management #userMgmtBody table td:nth-child(1)::before { content: "Email"; }
+  #modal.ctms-modal-user-management #userMgmtBody table td:nth-child(2)::before { content: "Display name"; }
+  #modal.ctms-modal-user-management #userMgmtBody table td:nth-child(3)::before { content: "Role"; }
+  #modal.ctms-modal-user-management #userMgmtBody table td:nth-child(4)::before { content: "Active"; }
+  #modal.ctms-modal-user-management #userMgmtBody table td:nth-child(5)::before { content: "Last login"; }
+  #modal.ctms-modal-user-management #userMgmtBody table td:nth-child(6)::before { content: "Actions"; }
+}
+
+@media (max-width: 520px) {
+  #modal.ctms-modern-modal.ctms-utility-modal,
+  #modal.ctms-modal-job-titles,
+  #modal.ctms-modal-address,
+  #modal.ctms-modal-audit-event {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  #modal.ctms-modern-modal.ctms-utility-modal #modalBody {
+    padding: 11px;
+  }
+
+  #modal.ctms-modern-modal.ctms-utility-modal .ctms-tab-intro {
+    margin-bottom: 12px;
+    padding: 13px;
+    border-radius: 13px;
+  }
+
+  #modal.ctms-modern-modal.ctms-utility-modal .ctms-tab-intro h2 {
+    font-size: 17px;
+  }
+
+  #modal.ctms-modal-settings .ctms-settings-form > .row,
+  #modal.ctms-modal-user-management #userMgmtBody > .card,
+  #modal.ctms-modal-job-titles .ctms-job-tree-panel,
+  #modal.ctms-modal-job-titles .ctms-job-editor-panel,
+  #modal.ctms-modal-outbox-details .ctms-outbox-card {
+    padding: 12px !important;
+  }
+
+  #modal.ctms-modal-settings .ctms-settings-form,
+  #modal.ctms-modal-settings .ctms-settings-form > *,
+  #modal.ctms-modal-settings .ctms-settings-form .controls,
+  #modal.ctms-modal-settings .ctms-settings-form [style*="min-width"] {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  #modal.ctms-modal-user-management #userMgmtBody > .card:first-child {
+    align-items: stretch !important;
+  }
+
+  #modal.ctms-modal-user-management #userMgmtBody > .card:first-child input,
+  #modal.ctms-modal-user-management #userMgmtBody > .card:first-child select {
+    width: 100% !important;
+    max-width: none !important;
+  }
+
+  #modal.ctms-modal-job-titles .ctms-job-titles-root {
+    gap: 12px !important;
+  }
+
+  #modal.ctms-modal-job-titles .jt-node > div {
+    align-items: flex-start !important;
+    flex-wrap: wrap;
+  }
+
+  #modal.ctms-modal-job-titles .jt-node .jt-label {
+    overflow-wrap: anywhere;
+  }
+
+  #modal.ctms-modal-job-titles button[data-act="add-child"] {
+    max-width: 145px;
+  }
+
+  #modal.ctms-modal-address #btnAddrLookup {
+    width: 100% !important;
+    max-width: none;
+    justify-self: stretch;
+  }
+
+  #modal.ctms-modal-rate-presets .ctms-rate-preset-shell > .row:first-child .controls {
+    align-items: stretch !important;
+  }
+
+  #modal.ctms-modal-rate-presets #rp_search {
+    width: 100% !important;
+    min-width: 0 !important;
+    margin-left: 0 !important;
+  }
+
+  #modal.ctms-modal-outbox-details .ctms-outbox-card table,
+  #modal.ctms-modal-outbox-details .ctms-outbox-card tbody,
+  #modal.ctms-modal-outbox-details .ctms-outbox-card tr {
+    display: block;
+    width: 100% !important;
+  }
+
+  #modal.ctms-modal-outbox-details .ctms-outbox-card tr {
+    padding: 7px 0;
+    border-bottom: 1px solid rgba(93, 123, 165, 0.18);
+  }
+
+  #modal.ctms-modal-outbox-details .ctms-outbox-card tr:last-child {
+    border-bottom: 0;
+  }
+
+  #modal.ctms-modal-outbox-details .ctms-outbox-card th,
+  #modal.ctms-modal-outbox-details .ctms-outbox-card td {
+    display: block;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-wrap: anywhere;
+  }
+
+  #modal.ctms-modal-outbox-details .ctms-outbox-card th {
+    padding-bottom: 3px;
+    border-bottom: 0;
+    white-space: normal !important;
+    word-break: normal !important;
+  }
+
+  #modal.ctms-modal-outbox-details .ctms-outbox-card td {
+    padding-top: 3px;
+  }
+}
+
+/* Timesheet and invoice workflows ------------------------------------------- */
+#modal.ctms-modal-timesheet,
+#modal.ctms-modal-invoice {
+  width: min(1280px, calc(100vw - 40px));
+}
+
+#modal.ctms-modal-timesheet .ctms-workflow-card,
+#modal.ctms-modal-invoice .ctms-invoice-root > .p-2 {
+  border: 1px solid rgba(93, 123, 165, 0.24);
+  border-radius: 15px;
+  background: linear-gradient(150deg, rgba(16, 31, 53, 0.94), rgba(9, 21, 38, 0.95));
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.13);
+}
+
+#modal.ctms-modal-timesheet .ctms-timesheet-tab > .card {
+  margin-top: 12px !important;
+  padding: 15px;
+}
+
+#modal.ctms-modal-timesheet .ctms-timesheet-tab > .card:first-child {
+  margin-top: 0 !important;
+}
+
+#modal.ctms-modal-timesheet .ts-weekly-schedule-wrap,
+#modal.ctms-modal-timesheet .ctms-timesheet-extras,
+#modal.ctms-modal-invoice .ctms-invoice-table {
+  border: 1px solid rgba(93, 123, 165, 0.25);
+  border-radius: 12px;
+  background: rgba(6, 15, 28, 0.62);
+}
+
+#modal.ctms-modal-timesheet .ctms-timesheet-schedule input[data-weekly-field],
+#modal.ctms-modal-bulk-process .ctms-timesheet-schedule input[data-weekly-field],
+#modal.ctms-modal-bulk-authorise .ctms-timesheet-schedule input[data-weekly-field] {
+  min-height: 34px;
+  padding: 6px 7px;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.015em;
+}
+
+#modal.ctms-modal-timesheet .ctms-timesheet-schedule input[data-weekly-field="start"],
+#modal.ctms-modal-timesheet .ctms-timesheet-schedule input[data-weekly-field="end"],
+#modal.ctms-modal-timesheet .ctms-timesheet-schedule input[data-weekly-field="break_start"],
+#modal.ctms-modal-timesheet .ctms-timesheet-schedule input[data-weekly-field="break_end"],
+#modal.ctms-modal-bulk-process .ctms-timesheet-schedule input[data-weekly-field="start"],
+#modal.ctms-modal-bulk-process .ctms-timesheet-schedule input[data-weekly-field="end"],
+#modal.ctms-modal-bulk-process .ctms-timesheet-schedule input[data-weekly-field="break_start"],
+#modal.ctms-modal-bulk-process .ctms-timesheet-schedule input[data-weekly-field="break_end"],
+#modal.ctms-modal-bulk-authorise .ctms-timesheet-schedule input[data-weekly-field="start"],
+#modal.ctms-modal-bulk-authorise .ctms-timesheet-schedule input[data-weekly-field="end"],
+#modal.ctms-modal-bulk-authorise .ctms-timesheet-schedule input[data-weekly-field="break_start"],
+#modal.ctms-modal-bulk-authorise .ctms-timesheet-schedule input[data-weekly-field="break_end"] {
+  min-width: 7ch !important;
+}
+
+#modal.ctms-modal-invoice .ctms-invoice-subtabs {
+  display: inline-flex !important;
+  width: auto;
+  max-width: 100%;
+  gap: 4px !important;
+  margin: 0 0 15px !important;
+  padding: 4px;
+  overflow-x: auto;
+  border: 1px solid rgba(93, 123, 165, 0.26);
+  border-radius: 12px;
+  background: rgba(8, 18, 32, 0.88);
+}
+
+#modal.ctms-modal-invoice .ctms-invoice-subtabs button {
+  min-height: 34px;
+  border-color: transparent;
+  background: transparent;
+  white-space: nowrap;
+}
+
+#modal.ctms-modal-invoice .ctms-invoice-subtabs button.btn-primary {
+  border-color: rgba(130, 144, 255, 0.48);
+  background: linear-gradient(135deg, rgba(99, 118, 246, 0.78), rgba(64, 83, 213, 0.88));
+}
+
+#modal.ctms-modal-invoice .ctms-invoice-root > .p-2 {
+  padding: 17px !important;
+}
+
+#modal.ctms-modal-invoice .ctms-invoice-table {
+  overflow: hidden;
+}
+
+#modal.ctms-modal-invoice .ctms-invoice-table td {
+  padding: 11px 13px;
+}
+
+#modal.ctms-modal-settings .ctms-settings-finance-windows {
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Bulk Process and Bulk Authorise ------------------------------------------- */
+#modal.ctms-modal-bulk-process,
+#modal.ctms-modal-bulk-authorise {
+  width: calc(100vw - 12px) !important;
+  max-width: calc(100vw - 12px) !important;
+  max-height: calc(100dvh - 12px) !important;
+  border-radius: 16px;
+}
+
+#modal.ctms-modal-bulk-process .modal-h,
+#modal.ctms-modal-bulk-authorise .modal-h {
+  min-height: 50px;
+  padding: 9px 14px;
+}
+
+#modal.ctms-modal-bulk-process #modalTabs,
+#modal.ctms-modal-bulk-authorise #modalTabs {
+  min-height: 43px;
+  padding: 5px 12px;
+}
+
+#modal.ctms-modal-bulk-process #modalBody,
+#modal.ctms-modal-bulk-authorise #modalBody {
+  padding: 10px;
+}
+
+#modal.ctms-modal-bulk-process .ctms-bulk-workbench,
+#modal.ctms-modal-bulk-authorise .ctms-bulk-workbench {
+  font-size: 11px !important;
+  line-height: 1.28 !important;
+}
+
+#modal.ctms-modal-bulk-process .ctms-bulk-card,
+#modal.ctms-modal-bulk-authorise .ctms-bulk-card {
+  border-color: rgba(93, 123, 165, 0.27) !important;
+  border-radius: 11px !important;
+  background: linear-gradient(150deg, rgba(16, 31, 53, 0.92), rgba(9, 21, 38, 0.94)) !important;
+  box-shadow: 0 9px 22px rgba(0, 0, 0, 0.11);
+}
+
+#modal.ctms-modal-bulk-process .ctms-bulk-workbench .btn,
+#modal.ctms-modal-bulk-process .ctms-bulk-workbench button,
+#modal.ctms-modal-bulk-authorise .ctms-bulk-workbench .btn,
+#modal.ctms-modal-bulk-authorise .ctms-bulk-workbench button {
+  min-height: 31px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+#modal.ctms-modal-bulk-process .ctms-bulk-workbench input:not([type="checkbox"]):not([type="radio"]),
+#modal.ctms-modal-bulk-process .ctms-bulk-workbench select,
+#modal.ctms-modal-bulk-authorise .ctms-bulk-workbench input:not([type="checkbox"]):not([type="radio"]),
+#modal.ctms-modal-bulk-authorise .ctms-bulk-workbench select {
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 8px !important;
+  font-size: 11px;
+}
+
+#modal.ctms-modal-bulk-process #bulkProcessTopControlsCard,
+#modal.ctms-modal-bulk-authorise #bulkAuthoriseTopControlsCard {
+  border-color: rgba(99, 118, 246, 0.31) !important;
+  background: linear-gradient(120deg, rgba(99, 118, 246, 0.11), rgba(9, 22, 39, 0.94) 48%) !important;
+}
+
+#modal.ctms-modal-bulk-process .ts-weekly-schedule-wrap,
+#modal.ctms-modal-bulk-authorise .ts-weekly-schedule-wrap {
+  overflow-x: auto !important;
+}
+
+#modal.ctms-modal-bulk-process .ctms-bulk-schedule,
+#modal.ctms-modal-bulk-authorise .ctms-bulk-schedule {
+  min-width: 820px !important;
+  table-layout: fixed !important;
+}
+
+#modal.ctms-modal-bulk-process .ctms-bulk-schedule input[data-weekly-field],
+#modal.ctms-modal-bulk-authorise .ctms-bulk-schedule input[data-weekly-field] {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+
+#modal.ctms-modal-bulk-process .ctms-bulk-schedule input[data-weekly-field="start"],
+#modal.ctms-modal-bulk-process .ctms-bulk-schedule input[data-weekly-field="end"],
+#modal.ctms-modal-bulk-process .ctms-bulk-schedule input[data-weekly-field="break_start"],
+#modal.ctms-modal-bulk-process .ctms-bulk-schedule input[data-weekly-field="break_end"],
+#modal.ctms-modal-bulk-authorise .ctms-bulk-schedule input[data-weekly-field="start"],
+#modal.ctms-modal-bulk-authorise .ctms-bulk-schedule input[data-weekly-field="end"],
+#modal.ctms-modal-bulk-authorise .ctms-bulk-schedule input[data-weekly-field="break_start"],
+#modal.ctms-modal-bulk-authorise .ctms-bulk-schedule input[data-weekly-field="break_end"] {
+  min-width: 7ch !important;
+}
+
+#modal.ctms-modal-timesheet .sched-paid-hours.ctms-paid-hours-value,
+#modal.ctms-modal-bulk-process .sched-paid-hours.ctms-paid-hours-value,
+#modal.ctms-modal-bulk-authorise .sched-paid-hours.ctms-paid-hours-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  min-height: 27px;
+  padding: 4px 7px;
+  border: 1px solid rgba(112, 132, 172, 0.42);
+  border-radius: 7px;
+  background: rgba(17, 34, 58, 0.94);
+  color: #edf5ff !important;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  opacity: 1 !important;
+}
+
+#modal.ctms-modal-bulk-process #bulkProcessLeftPane,
+#modal.ctms-modal-bulk-process #bulkProcessUnprocessedList,
+#modal.ctms-modal-bulk-process #bulkProcessProcessedList,
+#modal.ctms-modal-bulk-authorise #bulkAuthoriseLeftPane,
+#modal.ctms-modal-bulk-authorise [data-bulk-authorise-section-scroll] {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(112, 126, 238, 0.88) rgba(5, 13, 26, 0.7);
+  scrollbar-gutter: stable;
+}
+
+#modal.ctms-modal-bulk-process #bulkProcessLeftPane::-webkit-scrollbar,
+#modal.ctms-modal-bulk-process #bulkProcessUnprocessedList::-webkit-scrollbar,
+#modal.ctms-modal-bulk-process #bulkProcessProcessedList::-webkit-scrollbar,
+#modal.ctms-modal-bulk-authorise #bulkAuthoriseLeftPane::-webkit-scrollbar,
+#modal.ctms-modal-bulk-authorise [data-bulk-authorise-section-scroll]::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+#modal.ctms-modal-bulk-process #bulkProcessLeftPane::-webkit-scrollbar-track,
+#modal.ctms-modal-bulk-process #bulkProcessUnprocessedList::-webkit-scrollbar-track,
+#modal.ctms-modal-bulk-process #bulkProcessProcessedList::-webkit-scrollbar-track,
+#modal.ctms-modal-bulk-authorise #bulkAuthoriseLeftPane::-webkit-scrollbar-track,
+#modal.ctms-modal-bulk-authorise [data-bulk-authorise-section-scroll]::-webkit-scrollbar-track {
+  border: 1px solid rgba(78, 97, 126, 0.2);
+  border-radius: 999px;
+  background: rgba(5, 13, 26, 0.68);
+}
+
+#modal.ctms-modal-bulk-process #bulkProcessLeftPane::-webkit-scrollbar-thumb,
+#modal.ctms-modal-bulk-process #bulkProcessUnprocessedList::-webkit-scrollbar-thumb,
+#modal.ctms-modal-bulk-process #bulkProcessProcessedList::-webkit-scrollbar-thumb,
+#modal.ctms-modal-bulk-authorise #bulkAuthoriseLeftPane::-webkit-scrollbar-thumb,
+#modal.ctms-modal-bulk-authorise [data-bulk-authorise-section-scroll]::-webkit-scrollbar-thumb {
+  min-height: 42px;
+  border: 2px solid rgba(5, 13, 26, 0.82);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(112, 126, 238, 0.96), rgba(58, 82, 177, 0.96));
+}
+
+#modal.ctms-modal-bulk-process #bulkProcessLeftPane::-webkit-scrollbar-thumb:hover,
+#modal.ctms-modal-bulk-process #bulkProcessUnprocessedList::-webkit-scrollbar-thumb:hover,
+#modal.ctms-modal-bulk-process #bulkProcessProcessedList::-webkit-scrollbar-thumb:hover,
+#modal.ctms-modal-bulk-authorise #bulkAuthoriseLeftPane::-webkit-scrollbar-thumb:hover,
+#modal.ctms-modal-bulk-authorise [data-bulk-authorise-section-scroll]::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(135, 147, 255, 1), rgba(76, 99, 205, 1));
+}
+
+#modal.ctms-modal-bulk-process [id^="bulkProcessPreviewZoom"],
+#modal.ctms-modal-bulk-process [id^="bulkProcessPreviewRotate"],
+#modal.ctms-modal-bulk-authorise [id^="bulkProcessPreviewZoom"],
+#modal.ctms-modal-bulk-authorise [id^="bulkProcessPreviewRotate"] {
+  min-width: 40px !important;
+  min-height: 36px !important;
+}
+
+#modal.ctms-modal-bulk-authorise [id^="bulkAuthoriseClassificationBtn"] {
+  min-width: 42px !important;
+}
+
+#modal.ctms-modal-timesheet .ctms-timesheet-evidence-table:has(td[colspan]) thead {
+  display: none;
+}
+
+#modal.ctms-modal-timesheet .ctms-timesheet-evidence-table:has(td[colspan]),
+#modal.ctms-modal-timesheet .ctms-timesheet-evidence-table:has(td[colspan]) tbody,
+#modal.ctms-modal-timesheet .ctms-timesheet-evidence-table:has(td[colspan]) tr,
+#modal.ctms-modal-timesheet .ctms-timesheet-evidence-table:has(td[colspan]) td {
+  display: block;
+  width: 100%;
+}
+
+#modal.ctms-modal-timesheet .ctms-timesheet-evidence-table:has(td[colspan]) td {
+  box-sizing: border-box;
+  padding: 14px;
+  text-align: left;
+}
+
+@media (max-width: 900px) {
+  #modal.ctms-modal-timesheet,
+  #modal.ctms-modal-invoice {
+    width: calc(100vw - 12px);
+    max-width: calc(100vw - 12px);
+  }
+
+  #modal.ctms-modal-timesheet .ts-weekly-schedule-wrap {
+    max-height: none !important;
+    overflow: visible !important;
+    border: 0;
+    background: transparent;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-schedule,
+  #modal.ctms-modal-timesheet .ctms-timesheet-schedule tbody,
+  #modal.ctms-modal-timesheet .ctms-timesheet-extras,
+  #modal.ctms-modal-timesheet .ctms-timesheet-extras tbody,
+  #modal.ctms-modal-bulk-process .ctms-bulk-schedule,
+  #modal.ctms-modal-bulk-process .ctms-bulk-schedule tbody,
+  #modal.ctms-modal-bulk-authorise .ctms-bulk-schedule,
+  #modal.ctms-modal-bulk-authorise .ctms-bulk-schedule tbody {
+    display: grid !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    gap: 10px;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-schedule thead,
+  #modal.ctms-modal-timesheet .ctms-timesheet-schedule colgroup,
+  #modal.ctms-modal-timesheet .ctms-timesheet-extras thead,
+  #modal.ctms-modal-timesheet .ctms-timesheet-extras colgroup,
+  #modal.ctms-modal-bulk-process .ctms-bulk-schedule thead,
+  #modal.ctms-modal-bulk-process .ctms-bulk-schedule colgroup,
+  #modal.ctms-modal-bulk-authorise .ctms-bulk-schedule thead,
+  #modal.ctms-modal-bulk-authorise .ctms-bulk-schedule colgroup {
+    display: none !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-schedule tr,
+  #modal.ctms-modal-timesheet .ctms-timesheet-extras tr,
+  #modal.ctms-modal-bulk-process .ctms-bulk-schedule tr,
+  #modal.ctms-modal-bulk-authorise .ctms-bulk-schedule tr {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+    padding: 13px;
+    border: 1px solid rgba(93, 123, 165, 0.28);
+    border-radius: 13px;
+    background: rgba(13, 27, 47, 0.9);
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-schedule td,
+  #modal.ctms-modal-timesheet .ctms-timesheet-extras td,
+  #modal.ctms-modal-bulk-process .ctms-bulk-schedule td,
+  #modal.ctms-modal-bulk-authorise .ctms-bulk-schedule td {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    align-self: start !important;
+    width: 100% !important;
+    padding: 0 !important;
+    border: 0 !important;
+    white-space: normal !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-schedule td::before,
+  #modal.ctms-modal-timesheet .ctms-timesheet-extras td::before,
+  #modal.ctms-modal-bulk-process .ctms-bulk-schedule td::before,
+  #modal.ctms-modal-bulk-authorise .ctms-bulk-schedule td::before {
+    content: attr(data-ctms-label);
+    color: #91a5bf;
+    font-size: 9px;
+    font-weight: 760;
+    letter-spacing: 0.075em;
+    text-transform: uppercase;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-schedule input[data-weekly-field],
+  #modal.ctms-modal-bulk-process .ctms-bulk-schedule input[data-weekly-field],
+  #modal.ctms-modal-bulk-authorise .ctms-bulk-schedule input[data-weekly-field] {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    font-size: 14px;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-schedule td:last-child,
+  #modal.ctms-modal-bulk-process .ctms-bulk-schedule td:last-child,
+  #modal.ctms-modal-bulk-authorise .ctms-bulk-schedule td:last-child {
+    grid-column: 1 / -1;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessWorkbenchGrid,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseWorkbenchGrid {
+    grid-template-columns: minmax(220px, 32%) 6px minmax(0, 1fr) !important;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessWorkbenchContent,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseWorkbenchContent {
+    grid-template-columns: minmax(0, 1fr) !important;
+    overflow: auto;
+  }
+
+  #modal.ctms-modal-settings .ctms-settings-finance-windows {
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    scrollbar-gutter: stable;
+  }
+
+  #modal.ctms-modal-settings .ctms-settings-finance-windows > div[style*="grid-template-columns"] {
+    width: 1050px;
+    min-width: 1050px;
+  }
+}
+
+@media (max-width: 620px) {
+  #modal.ctms-modal-timesheet,
+  #modal.ctms-modal-invoice {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100dvh - 24px) !important;
+  }
+
+  #modal.ctms-modal-bulk-process,
+  #modal.ctms-modal-bulk-authorise {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+  }
+
+  #modal.ctms-modal-timesheet #modalBody,
+  #modal.ctms-modal-invoice #modalBody,
+  #modal.ctms-modal-bulk-process #modalBody,
+  #modal.ctms-modal-bulk-authorise #modalBody {
+    padding: 10px;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-subtabs {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(max-content, 1fr));
+    width: 100%;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-root > .p-2 {
+    padding: 13px !important;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-table,
+  #modal.ctms-modal-invoice .ctms-invoice-table tbody {
+    display: table !important;
+    width: 100% !important;
+    table-layout: fixed !important;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-table tr {
+    display: table-row !important;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-table td {
+    display: table-cell !important;
+    min-width: 0 !important;
+    overflow-wrap: normal !important;
+    word-break: normal !important;
+    white-space: normal !important;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-table td:first-child {
+    width: 43% !important;
+    color: var(--ctms-modal-sub);
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-history-table,
+  #modal.ctms-modal-invoice .ctms-invoice-history-table tbody,
+  #modal.ctms-modal-invoice .ctms-invoice-evidence-table,
+  #modal.ctms-modal-invoice .ctms-invoice-evidence-table tbody {
+    display: grid !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    gap: 10px;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-history-table thead,
+  #modal.ctms-modal-invoice .ctms-invoice-evidence-table thead {
+    display: none !important;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-history-table tr,
+  #modal.ctms-modal-invoice .ctms-invoice-evidence-table tr {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0;
+    min-width: 0;
+    padding: 10px 12px;
+    overflow: hidden;
+    border: 1px solid rgba(93, 123, 165, 0.26);
+    border-radius: 12px;
+    background: rgba(13, 27, 47, 0.9);
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-history-table td,
+  #modal.ctms-modal-invoice .ctms-invoice-evidence-table td {
+    display: grid !important;
+    grid-template-columns: minmax(88px, 31%) minmax(0, 1fr) !important;
+    gap: 10px;
+    width: 100% !important;
+    min-width: 0 !important;
+    padding: 8px 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid rgba(93, 123, 165, 0.16) !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-history-table td:last-child,
+  #modal.ctms-modal-invoice .ctms-invoice-evidence-table td:last-child {
+    border-bottom: 0 !important;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-history-table td::before,
+  #modal.ctms-modal-invoice .ctms-invoice-evidence-table td::before {
+    content: attr(data-ctms-label);
+    color: #91a5bf;
+    font-size: 9px;
+    font-weight: 760;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-evidence-table td:last-child {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    align-items: center;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-evidence-table td:last-child::before {
+    grid-column: 1 / -1;
+  }
+
+  #modal.ctms-modal-invoice .ctms-invoice-evidence-table .invoice-evidence-action {
+    width: 100%;
+    min-width: 0;
+    margin: 0 !important;
+    padding-inline: 4px;
+    white-space: nowrap;
+    text-align: center;
+  }
+
+  #modal.ctms-modal-invoice .table-responsive,
+  #modal.ctms-modal-invoice .scrollable-evidence {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden !important;
+  }
+
+  #modal.ctms-modal-timesheet .ts-evidence-tab > .mini:last-child {
+    display: none !important;
+  }
+
+  #modal.ctms-modal-timesheet .ts-evidence-tab .scrollable-evidence {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table,
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table tbody {
+    display: grid !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    gap: 10px;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table thead {
+    display: none !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table tr {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0;
+    min-width: 0;
+    padding: 10px 12px;
+    overflow: hidden;
+    border: 1px solid rgba(93, 123, 165, 0.26);
+    border-radius: 12px;
+    background: rgba(13, 27, 47, 0.9);
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table td {
+    display: grid !important;
+    grid-template-columns: minmax(88px, 31%) minmax(0, 1fr) !important;
+    gap: 10px;
+    width: 100% !important;
+    min-width: 0 !important;
+    padding: 8px 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid rgba(93, 123, 165, 0.16) !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table td:last-child {
+    border-bottom: 0 !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table td::before {
+    content: attr(data-ctms-label);
+    color: #91a5bf;
+    font-size: 9px;
+    font-weight: 760;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table tr:has(td[colspan]) {
+    display: block !important;
+    padding: 14px;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table td[colspan] {
+    display: block !important;
+    padding: 0 !important;
+    border: 0 !important;
+    font-size: 0 !important;
+    text-align: left;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table td[colspan]::before {
+    display: none !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table td[colspan]::after {
+    content: "No evidence uploaded yet.";
+    color: var(--ctms-modal-sub);
+    font-size: 12px;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table:not(.ctms-timesheet-finance-table-wide) {
+    display: table !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table:not(.ctms-timesheet-finance-table-wide) thead {
+    display: table-header-group !important;
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    clip: auto !important;
+    white-space: normal !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table:not(.ctms-timesheet-finance-table-wide) tbody {
+    display: table-row-group !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table:not(.ctms-timesheet-finance-table-wide) tr {
+    display: table-row !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table:not(.ctms-timesheet-finance-table-wide) th,
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table:not(.ctms-timesheet-finance-table-wide) td {
+    display: table-cell !important;
+    width: auto !important;
+    min-width: 0 !important;
+    padding: 9px 6px !important;
+    font-size: 10px;
+    line-height: 1.35;
+    white-space: normal !important;
+    overflow-wrap: normal !important;
+    word-break: normal !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table:not(.ctms-timesheet-finance-table-wide) th:first-child,
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table:not(.ctms-timesheet-finance-table-wide) td:first-child {
+    width: 36% !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table:not(.ctms-timesheet-finance-table-wide) td::before {
+    display: none !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table-wide,
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table-wide tbody {
+    display: grid !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    gap: 10px;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table-wide thead {
+    display: none !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table-wide tr {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0;
+    padding: 10px 12px;
+    border: 1px solid rgba(93, 123, 165, 0.26);
+    border-radius: 12px;
+    background: rgba(13, 27, 47, 0.9);
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table-wide td {
+    display: grid !important;
+    grid-template-columns: minmax(94px, 38%) minmax(0, 1fr) !important;
+    gap: 10px;
+    width: 100% !important;
+    min-width: 0 !important;
+    padding: 7px 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid rgba(93, 123, 165, 0.16) !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table-wide td:last-child {
+    border-bottom: 0 !important;
+  }
+
+  #modal.ctms-modal-timesheet .ctms-timesheet-finance-table-wide td::before {
+    content: attr(data-ctms-label);
+    color: #91a5bf;
+    font-size: 9px;
+    font-weight: 760;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessWorkbenchGrid,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseWorkbenchGrid,
+  #modal.ctms-modal-bulk-process #bulkProcessWorkbenchContent,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseWorkbenchContent {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessWorkbenchDivider,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseWorkbenchDivider {
+    display: none !important;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessLeftPane,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseLeftPane,
+  #modal.ctms-modal-bulk-process #bulkProcessMainPreviewPane,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseMiddlePane,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseMainPreviewPane,
+  #modal.ctms-modal-bulk-process #bulkProcessRightPane,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseRightPane {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessLeftPane,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseLeftPane {
+    max-height: 58dvh !important;
+    overflow: auto !important;
+  }
+
+  #modal.ctms-modal-bulk-process.bulk-process-workbench:has([data-candidate-office-slot="1"]) #bulkProcessLeftPane,
+  #modal.ctms-modal-bulk-process #bulkProcessLeftPane {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessListsRoot {
+    display: grid !important;
+    grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr) !important;
+    flex: 0 0 auto !important;
+    height: 500px !important;
+    min-height: 500px !important;
+    overflow: hidden !important;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessListsRoot > div[style*="flex:1 1 0"] {
+    flex: none !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessUnprocessedList,
+  #modal.ctms-modal-bulk-process #bulkProcessProcessedList {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+  }
+
+  #modal.ctms-modal-bulk-process [id^="bulkProcessPreviewZoom"],
+  #modal.ctms-modal-bulk-process [id^="bulkProcessPreviewRotate"],
+  #modal.ctms-modal-bulk-authorise [id^="bulkProcessPreviewZoom"],
+  #modal.ctms-modal-bulk-authorise [id^="bulkProcessPreviewRotate"] {
+    min-width: 40px !important;
+    min-height: 38px !important;
+  }
+
+  #modal.ctms-modal-bulk-authorise [id^="bulkAuthoriseClassificationBtn"] {
+    min-width: 42px !important;
+  }
+
+  #modal.ctms-modal-bulk-process .ctms-bulk-schedule tr,
+  #modal.ctms-modal-bulk-authorise .ctms-bulk-schedule tr {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 11px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   #modal.ctms-modern-modal *,
   #modal.ctms-modern-modal *::before,
   #modal.ctms-modern-modal *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Full modal audit: universal shared-shell treatment for every showModal family. */
+#modal.ctms-modern-modal.ctms-family-confirmation {
+  width: min(760px, calc(100vw - 48px));
+}
+
+#modal.ctms-modern-modal.ctms-family-picker,
+#modal.ctms-modern-modal.ctms-family-form {
+  width: min(980px, calc(100vw - 48px));
+}
+
+#modal.ctms-modern-modal.ctms-family-selection,
+#modal.ctms-modern-modal.ctms-family-import-tool {
+  width: min(1120px, calc(100vw - 48px));
+}
+
+#modal.ctms-modern-modal.ctms-family-mailshot,
+#modal.ctms-modern-modal.ctms-family-document,
+#modal.ctms-modern-modal.ctms-family-data {
+  width: min(1280px, calc(100vw - 48px));
+}
+
+#modal.ctms-modern-modal.ctms-family-finance,
+#modal.ctms-modern-modal.ctms-family-invoice-batch {
+  width: min(1540px, calc(100vw - 48px));
+}
+
+#modal.ctms-modern-modal .ctms-universal-modal-body > .tabc > .card,
+#modal.ctms-modern-modal .ctms-universal-modal-body > .card,
+#modal.ctms-modern-modal .ctms-universal-modal-body fieldset {
+  border-color: var(--ctms-modal-line-soft);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(16, 31, 53, 0.94), rgba(10, 21, 39, 0.96));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.11);
+}
+
+#modal.ctms-modern-modal .ctms-universal-table-host {
+  min-width: 0;
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(112, 126, 238, 0.88) rgba(5, 13, 26, 0.7);
+}
+
+#modal.ctms-modern-modal .ctms-universal-table-host::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+#modal.ctms-modern-modal .ctms-universal-table-host::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(5, 13, 26, 0.7);
+}
+
+#modal.ctms-modern-modal .ctms-universal-table-host::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(5, 13, 26, 0.7);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(120, 132, 246, 0.96), rgba(55, 184, 238, 0.86));
+}
+
+#modal.ctms-modern-modal table.ctms-universal-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--ctms-modal-text);
+  font-variant-numeric: tabular-nums;
+}
+
+#modal.ctms-modern-modal table.ctms-universal-table thead th {
+  padding: 11px 12px;
+  border-bottom: 1px solid rgba(103, 126, 165, 0.38);
+  background: #101f35;
+  color: #b9c7da;
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0.055em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+#modal.ctms-modern-modal table.ctms-universal-table tbody td {
+  padding: 11px 12px;
+  border-bottom: 1px solid rgba(93, 119, 156, 0.24);
+  color: #edf3fb;
+  vertical-align: middle;
+}
+
+#modal.ctms-modern-modal table.ctms-universal-table tbody tr:nth-child(even) td {
+  background: rgba(13, 26, 45, 0.56);
+}
+
+#modal.ctms-modern-modal table.ctms-universal-table tbody tr:hover td {
+  background: rgba(60, 79, 146, 0.18);
+}
+
+#modal.ctms-modern-modal .ctms-action-primary {
+  border-color: rgba(120, 132, 246, 0.78) !important;
+  background: linear-gradient(135deg, #6575f6, #5546e8) !important;
+  color: #fff !important;
+  box-shadow: 0 8px 22px rgba(69, 61, 204, 0.22) !important;
+}
+
+#modal.ctms-modern-modal .ctms-action-primary:hover {
+  border-color: #9aa6ff !important;
+  background: linear-gradient(135deg, #7484ff, #6555f2) !important;
+}
+
+#modal.ctms-modern-modal .ctms-action-danger {
+  border-color: rgba(239, 90, 99, 0.58) !important;
+  background: rgba(112, 25, 34, 0.78) !important;
+  color: #ffe8ea !important;
+}
+
+#modal.ctms-modern-modal.ctms-family-document iframe,
+#modal.ctms-modern-modal.ctms-family-document img,
+#modal.ctms-modern-modal.ctms-family-document canvas,
+#modal.ctms-modern-modal.ctms-family-document embed {
+  max-width: 100%;
+}
+
+#modal.ctms-modern-modal.ctms-family-mailshot .ctms-universal-modal-body [class*="step"],
+#modal.ctms-modern-modal.ctms-family-mailshot .ctms-universal-modal-body [class*="wizard"] {
+  min-width: 0;
+}
+
+#modal.ctms-modern-modal #settingsFinanceWindows {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(112, 126, 238, 0.88) rgba(5, 13, 26, 0.7);
+}
+
+#modal.ctms-modern-modal #settingsFinanceWindows > div[style*="grid-template-columns"] {
+  grid-template-columns:
+    minmax(108px, 0.9fr)
+    repeat(2, minmax(128px, 1fr))
+    repeat(3, minmax(78px, 0.72fr))
+    repeat(2, minmax(112px, 0.92fr)) !important;
+  min-width: 880px;
+}
+
+#modal.ctms-modern-modal #settingsFinanceWindows::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+#modal.ctms-modern-modal #settingsFinanceWindows::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(5, 13, 26, 0.7);
+}
+
+#modal.ctms-modern-modal #settingsFinanceWindows::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(5, 13, 26, 0.7);
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(120, 132, 246, 0.96), rgba(55, 184, 238, 0.86));
+}
+
+#modal.ctms-modern-modal.ctms-kind-search-load #modalBody > .form {
+  grid-template-columns: minmax(0, 1fr) !important;
+  width: min(100%, 920px);
+  margin-inline: auto;
+}
+
+#modal.ctms-modern-modal.ctms-kind-search-load #modalBody > .form > .row,
+#modal.ctms-modern-modal.ctms-kind-search-load #presetTable {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+}
+
+#modal.ctms-modern-modal.ctms-kind-search-load #presetTable.ctms-no-row-actions th:last-child,
+#modal.ctms-modern-modal.ctms-kind-search-load #presetTable.ctms-no-row-actions td:last-child {
+  display: none;
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-case-audit #bankingFinanceCaseAuditModal {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-case-audit #bankingFinanceCaseAuditModal > * {
+  grid-column: 1 / -1 !important;
+  min-width: 0;
+}
+
+#modal.ctms-modern-modal.ctms-kind-document-template-picker #documentTemplatePickerTBody td:first-child .mini {
+  display: none !important;
+}
+
+@media (max-width: 700px) {
+  #modal.ctms-modern-modal[class*="ctms-family-"] {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal #modalBody {
+    padding: 12px;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal .tabc,
+  #modal.ctms-modern-modal.ctms-generic-modal .form,
+  #modal.ctms-modern-modal.ctms-generic-modal .card,
+  #modal.ctms-modern-modal.ctms-generic-modal fieldset {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal .form {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal .row,
+  #modal.ctms-modern-modal.ctms-generic-modal .controls,
+  #modal.ctms-modern-modal.ctms-generic-modal .actions,
+  #modal.ctms-modern-modal.ctms-generic-modal .split {
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal [style*="grid-template-columns"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal .grid-2,
+  #modal.ctms-modern-modal.ctms-generic-modal .grid-3,
+  #modal.ctms-modern-modal.ctms-generic-modal .grid-4,
+  #modal.ctms-modern-modal.ctms-generic-modal .grid-5 {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+  #modal.ctms-modern-modal.ctms-generic-modal select,
+  #modal.ctms-modern-modal.ctms-generic-modal textarea {
+    max-width: 100%;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal .ctms-universal-table-host:has(.ctms-universal-card-table) {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: visible;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table,
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody {
+    display: grid;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    gap: 10px;
+    border: 0;
+    background: transparent;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table thead,
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table colgroup {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden;
+    border: 1px solid rgba(95, 124, 164, 0.34);
+    border-radius: 13px;
+    background: linear-gradient(180deg, rgba(17, 33, 56, 0.98), rgba(10, 22, 40, 0.98));
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.15);
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td {
+    display: grid;
+    grid-column: 1 / -1 !important;
+    grid-template-columns: minmax(92px, 0.42fr) minmax(0, 1fr);
+    gap: 10px;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    padding: 9px 11px;
+    border-bottom: 1px solid rgba(88, 115, 153, 0.18);
+    background: transparent;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: anywhere;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td[colspan] {
+    display: block !important;
+    grid-column: 1 / -1;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    text-align: left !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: break-word;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td[colspan]::before {
+    content: none !important;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td > * {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  #modal.ctms-modern-modal.ctms-kind-timesheets-resolve #ts-resolve-wrapper,
+  #modal.ctms-modern-modal.ctms-kind-timesheets-resolve #ts-resolve-wrapper > div,
+  #modal.ctms-modern-modal.ctms-kind-timesheets-resolve #ts-resolve-wrapper .row,
+  #modal.ctms-modern-modal.ctms-kind-timesheets-resolve #ts-resolve-wrapper .controls,
+  #modal.ctms-modern-modal.ctms-kind-timesheets-resolve #ts-resolve-wrapper .ctms-universal-table-host {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  #modal.ctms-modern-modal.ctms-kind-timesheets-resolve #ts-resolve-wrapper .row {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  #modal.ctms-modern-modal.ctms-kind-timesheets-resolve #ts-resolve-wrapper table {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td:not([data-ctms-label=""])::before {
+    content: attr(data-ctms-label);
+    color: #9fb0c7;
+    font-size: 10px;
+    font-weight: 760;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td[data-ctms-label=""] {
+    display: block;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table button {
+    width: fit-content;
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-key-value-table,
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-key-value-table tbody {
+    display: grid !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    gap: 8px;
+    border: 0;
+    background: transparent;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-key-value-table tbody tr {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) minmax(64px, auto) !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden;
+    border: 1px solid rgba(95, 124, 164, 0.34);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(17, 33, 56, 0.98), rgba(10, 22, 40, 0.98));
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-key-value-table tbody th,
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-key-value-table tbody td {
+    display: block !important;
+    grid-column: auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    padding: 10px 12px !important;
+    border: 0 !important;
+    background: transparent !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-key-value-table tbody th {
+    color: #a9b9cf;
+    font-size: 10px;
+    line-height: 1.35;
+    letter-spacing: .045em;
+    text-transform: uppercase;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-key-value-table tbody td {
+    align-self: stretch;
+    border-left: 1px solid rgba(88, 115, 153, 0.2) !important;
+    color: #f4f7fb;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  #modal.ctms-modern-modal.ctms-kind-document-template-picker #documentTemplatePickerTBody td:first-child .mini,
+  #modal.ctms-modern-modal.ctms-kind-banking-finance-snooze #bankingFinanceSnoozeForm > .card > .mini[style*="margin-bottom:10px"],
+  #modal.ctms-modern-modal.ctms-kind-banking-finance-snooze #bankingFinanceSnoozeForm .controls > .mini[style*="margin-top:6px"] {
+    display: none !important;
+  }
+
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-wide-table {
+    min-width: 760px;
+  }
+
+  #modal.ctms-modern-modal #settingsFinanceWindows > div[style*="grid-template-columns"] {
+    grid-template-columns: 108px 150px 150px 95px 110px 95px 140px 140px !important;
+    min-width: 1020px;
   }
 }

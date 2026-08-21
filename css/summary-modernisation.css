@@ -324,6 +324,13 @@ body.ctms-summary-proposal .pager .mini{color:var(--sheet-sub)}
   body.ctms-summary-proposal .toolbar .title::after{display:none}
   body.ctms-summary-proposal #content>.ctms-summary-controls{flex-wrap:nowrap!important;overflow-x:auto;scrollbar-width:none}
   body.ctms-summary-proposal #content>.ctms-summary-controls::before{display:none}
+  body.ctms-summary-proposal #content>.ctms-summary-controls>*{flex:0 0 auto!important}
+  body.ctms-summary-proposal #content>.ctms-summary-controls>button{
+    max-width:250px;min-height:36px!important;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="invoices"] #content>.ctms-summary-controls>button[title="Filter invoice statuses"]{
+    width:138px;max-width:138px
+  }
   body.ctms-summary-proposal .summary-body{padding:8px;overflow-y:auto;overflow-x:hidden}
   body.ctms-summary-proposal .grid{display:block;min-width:0!important;width:100%!important;max-width:100%!important}
   body.ctms-summary-proposal .grid thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}

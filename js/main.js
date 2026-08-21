@@ -166031,8 +166031,10 @@ function wireCreateManualDailyTimesheetModal(state) {
   };
 
   const ensureDateUk = (ymd) => {
-    if (!trimStr(ymd) || typeof formatIsoToUkDate !== 'function') return '';
-    try { return String(formatIsoToUkDate(ymd) || '').trim(); } catch { return ''; }
+    const iso = toIsoYmd(ymd);
+    if (!iso) return '';
+    const [yyyy, mm, dd] = iso.split('-');
+    return `${dd}/${mm}/${yyyy}`;
   };
   const parseDateInputToIso = (value) => {
     const raw = trimStr(value);
@@ -166506,8 +166508,9 @@ async function openCreateManualDailyTimesheetModal(seed = {}) {
     validation: {}
   };
 
-  if (initial.worked_date_ymd && typeof formatIsoToUkDate === 'function') {
-    try { initial.date_uk = String(formatIsoToUkDate(initial.worked_date_ymd) || '').trim(); } catch {}
+  if (initial.worked_date_ymd) {
+    const [yyyy, mm, dd] = initial.worked_date_ymd.split('-');
+    initial.date_uk = `${dd}/${mm}/${yyyy}`;
   }
 
   let controller = null;

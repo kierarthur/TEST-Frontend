@@ -20,8 +20,25 @@
     buttons.forEach((button) => {
       if (/^create new record$/i.test(text(button)) && addLabels[key]) button.textContent = addLabels[key];
       if (/^search(?:\.\.\.|…)$/i.test(text(button))) button.textContent = 'Advanced search';
-      button.classList.toggle('ctms-primary-tool', /^(add |create manual daily timesheet|timesheet imports)/i.test(text(button)));
+      button.classList.toggle('ctms-primary-tool', /^(add |create manual daily timesheet)/i.test(text(button)));
     });
+    if (key === 'timesheets') {
+      const byLabel = (label) => buttons.find((button) => text(button).toLowerCase() === label.toLowerCase()) || null;
+      const imports = byLabel('Timesheet Imports');
+      const orderedActions = [
+        byLabel('Bulk Process'),
+        byLabel('Bulk Authorise'),
+        byLabel('Create manual daily timesheet'),
+        byLabel('Send Manager Reminders')
+      ].filter(Boolean);
+      let insertionPoint = imports;
+      if (insertionPoint) {
+        orderedActions.forEach((button) => {
+          insertionPoint.insertAdjacentElement('afterend', button);
+          insertionPoint = button;
+        });
+      }
+    }
     const note = tools.querySelector('.note');
     if (note) (note.closest('.group') || note).remove();
   }
