@@ -8,6 +8,7 @@ test.use({ serviceWorkers: 'block' });
 const root = resolve(__dirname, '../..');
 const testOrigin = 'https://testmode.arthur-rai.co.uk';
 const testBackend = 'https://test-cloudtms-backend.kier-88a.workers.dev';
+const useDeployedAssets = process.env.MYTMS_E2E_USE_DEPLOYED_ASSETS === '1';
 const localAssets = ['index.html', 'js/main.js', 'js/mytms-office-v1.js'];
 const sourceByPath = new Map(localAssets.map((file) => [
   `/${file === 'index.html' ? 'index.html' : file}`,
@@ -16,6 +17,18 @@ const sourceByPath = new Map(localAssets.map((file) => [
 const hashes = Object.fromEntries(Array.from(sourceByPath.entries()).map(([path, source]) => [
   path, createHash('sha256').update(source).digest('hex')
 ]));
+const normalizedHashes = Object.fromEntries(Array.from(sourceByPath.entries()).map(([path, source]) => [
+  path, createHash('sha256').update(source.replace(/\r\n/g, '\n')).digest('hex')
+]));
+
+async function proveDeployedAssets(page: Page) {
+  for (const [path, expectedHash] of Object.entries(normalizedHashes)) {
+    const response = await page.request.get(`${testOrigin}${path}?mytms-app-ready=${Date.now()}`);
+    expect(response.ok()).toBe(true);
+    const source = (await response.text()).replace(/\r\n/g, '\n');
+    expect(createHash('sha256').update(source).digest('hex')).toBe(expectedHash);
+  }
+}
 
 async function installLocalAssets(page: Page) {
   const counts: Record<string, number> = {};
@@ -98,17 +111,21 @@ for (const viewport of [
 ]) {
   test(`MyTMS App Settings is separate, disabled-first and sanitizer-pinned on ${viewport.label}`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    const assets = await installLocalAssets(page);
+    const assets = useDeployedAssets ? null : await installLocalAssets(page);
     const observed = await installReadOnlyApi(page);
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
 
     expect(new URL(page.url()).origin).toBe(testOrigin);
     expect(await page.evaluate(() => (window as any).BROKER_BASE_URL)).toBe(testBackend);
-    expect(await page.evaluate(() => (window as any).__MYTMS_OFFICE_LOCAL_PROOF)).toEqual(hashes);
-    expect(assets['/index.html']).toBeGreaterThan(0);
-    expect(assets['/js/main.js']).toBeGreaterThan(0);
-    expect(assets['/js/mytms-office-v1.js']).toBeGreaterThan(0);
+    if (useDeployedAssets) {
+      await proveDeployedAssets(page);
+    } else {
+      expect(await page.evaluate(() => (window as any).__MYTMS_OFFICE_LOCAL_PROOF)).toEqual(hashes);
+      expect(assets?.['/index.html']).toBeGreaterThan(0);
+      expect(assets?.['/js/main.js']).toBeGreaterThan(0);
+      expect(assets?.['/js/mytms-office-v1.js']).toBeGreaterThan(0);
+    }
 
     await page.locator('[data-section-key="settings"]').click();
     const menu = page.locator('#__settingsMenu');
