@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260821-banking-selection-result-refresh-r2',
+  asset_version: '20260821-mytms-office-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -6821,6 +6821,12 @@ function renderTopNav(){
                          padding:8px 10px;border-radius:8px;cursor:pointer;margin:4px 0;">
             🌐 Global settings
           </button>
+          <button type="button" class="menu-item" data-k="mytms-app"
+                  style="display:flex;gap:8px;align-items:center;width:100%;
+                         background:#0b1427;border:1px solid var(--line);color:#fff;
+                         padding:8px 10px;border-radius:8px;cursor:pointer;margin:4px 0;">
+            📱 MyTMS App Settings
+          </button>
           <button type="button" class="menu-item" data-k="rates"
                   style="display:flex;gap:8px;align-items:center;width:100%;
                          background:#0b1427;border:1px solid var(--line);color:#fff;
@@ -6884,11 +6890,19 @@ function renderTopNav(){
           const k = it.getAttribute('data-k');
           closeSettingsMenu();
 
-               if (k === 'global') {
+          if (k === 'global') {
             // ✅ Open global settings modal WITHOUT switching the summary section
             if (!confirmDiscardChangesIfDirty()) return;
             try { openSettings(); } catch (err) { alert('Could not open settings'); }
             return;
+
+          } else if (k === 'mytms-app') {
+            if (!confirmDiscardChangesIfDirty()) return;
+            if (!window.CloudTMSMyTmsOffice?.openSettings) {
+              alert('MyTMS App Settings are not available.');
+              return;
+            }
+            window.CloudTMSMyTmsOffice.openSettings();
 
           } else if (k === 'rates') {
             if (!confirmDiscardChangesIfDirty()) return;
@@ -114443,6 +114457,17 @@ async function upsertContract(payload, id /* optional */) {
     }
   } catch (e) {
     if (LOGC) console.warn('[CONTRACTS][UPSERT] weekly import auto-refresh failed', e);
+  }
+
+  // MyTMS is an explicitly separate post-commit action. A decline, eligibility
+  // failure, unavailable dependency or delivery uncertainty can never change
+  // the already-successful contract result.
+  if (method === 'POST' && data) {
+    try {
+      await window.CloudTMSMyTmsOffice?.offerAfterContractSuccess?.(data);
+    } catch (e) {
+      if (LOGC) console.warn('[CONTRACTS][UPSERT] MyTMS post-success offer failed (non-fatal)', e);
+    }
   }
 
   return data;
@@ -276821,6 +276846,12 @@ async function openCandidate(row) {
       L('[renderCandidateTab] tab=', k, 'rowKeys=', Object.keys(r||{}), 'sample=', { first: r?.first_name, last: r?.last_name, id: r?.id });
 
       const html = renderCandidateTab(k, r);
+
+      if (k === 'main' && full?.id) {
+        Promise.resolve().then(() => Promise.resolve().then(() => {
+          try { window.CloudTMSMyTmsOffice?.mountCandidateAction?.(full); } catch {}
+        }));
+      }
 
       if (k === 'pay') {
         Promise.resolve().then(() => Promise.resolve().then(() => {
