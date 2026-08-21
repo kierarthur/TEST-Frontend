@@ -4,7 +4,7 @@
 // ===== Base URL + helpers =====
 const CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = Object.freeze({
   contract_version: 'CLOUDTMS_MAIN_ASSET_V1',
-  asset_version: '20260819-banking-cancel-lifecycle-trace-r1',
+  asset_version: '20260821-banking-selection-result-refresh-r1',
   banking_pay_batch_orphan_close_guard: 'BANKING_PAY_BATCH_CHILD_ORPHAN_DISMISS_V1'
 });
 window.__CLOUDTMS_MAIN_ASSET_CONTRACT_V1 = CLOUDTMS_MAIN_ASSET_CONTRACT_V1;
@@ -93503,6 +93503,243 @@ function bankingPaySelectionAuthorityDecisionV1(options = {}) {
   };
 }
 
+function adoptSelectionMutationReadyBlockedPagesV1(options = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const readPositiveInteger = (value) => {
+    const text = trimStr(value);
+    if (!/^[0-9]{1,18}$/.test(text)) return null;
+    const parsed = Number(text);
+    return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : null;
+  };
+  const readNonNegativeInteger = (value) => {
+    const text = trimStr(value);
+    if (!/^[0-9]{1,18}$/.test(text)) return null;
+    const parsed = Number(text);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+  };
+  const normalizeSection = (value) => {
+    const raw = trimStr(value).toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (raw === 'preview_rows' || raw === 'ready_to_pay' || raw === 'ready_preview_lines') return 'canonical_preview_lines';
+    if (raw === 'blocked_items' || raw === 'blocked_preview_lines' || raw === 'blocked_now') return 'blocked_for_pay';
+    if (raw === 'case_resolution_states' || raw === 'case_resolutions') return 'cases_resolutions';
+    return raw;
+  };
+  const rowId = (row) => trimStr(
+    row?.preview_row_id || row?.previewRowId || row?.row_id || row?.rowId ||
+    row?.line_id || row?.lineId || row?.id || ''
+  );
+  const result = (adopted, reason, extra = {}) => ({
+    adopted: adopted === true,
+    reason: trimStr(reason),
+    ...extra
+  });
+
+  const bankingState = options.bankingState;
+  const accepted = options.acceptedAuthority;
+  const readyResult = options.readyResult;
+  const blockedResult = options.blockedResult;
+  if (!bankingState || typeof bankingState !== 'object' || !bankingState.pay || typeof bankingState.pay !== 'object') {
+    return result(false, 'SELECTION_PAIR_STATE_UNAVAILABLE');
+  }
+  if (!accepted || typeof accepted !== 'object') return result(false, 'SELECTION_PAIR_AUTHORITY_UNAVAILABLE');
+
+  const acceptedSessionId = trimStr(accepted.session_id || accepted.sessionId);
+  const acceptedSessionVersion = readPositiveInteger(accepted.session_version ?? accepted.sessionVersion);
+  const acceptedProgressVersion = readNonNegativeInteger(accepted.progress_counter_version ?? accepted.progressCounterVersion);
+  const acceptedEpoch = readPositiveInteger(accepted.selection_epoch ?? accepted.selectionEpoch);
+  if (!acceptedSessionId || acceptedSessionVersion === null || acceptedProgressVersion === null || acceptedEpoch === null) {
+    return result(false, 'SELECTION_PAIR_AUTHORITY_INVALID');
+  }
+
+  const liveWizard = bankingState.pay.draftWizard;
+  if (!liveWizard || typeof liveWizard !== 'object') return result(false, 'SELECTION_PAIR_WIZARD_UNAVAILABLE');
+  const activeSessionId = trimStr(
+    liveWizard.workbench?.session_id || liveWizard.workbench?.sessionId ||
+    liveWizard.decisions?.session_id || liveWizard.decisions?.sessionId || ''
+  );
+  const activeSessionVersion = readPositiveInteger(
+    liveWizard.workbench?.session_version ?? liveWizard.workbench?.sessionVersion ??
+    liveWizard.decisions?.session_version ?? liveWizard.decisions?.sessionVersion
+  );
+  const activeProgressVersion = readNonNegativeInteger(
+    liveWizard.selection_progress_counter_floor ?? liveWizard.selectionProgressCounterFloor ??
+    liveWizard.workbench?.progress_counter_version ?? liveWizard.workbench?.progressCounterVersion
+  );
+  const currentEpoch = readPositiveInteger(liveWizard.selection_authority_epoch);
+  const intent = (liveWizard.selection_authority_last_intent && typeof liveWizard.selection_authority_last_intent === 'object')
+    ? liveWizard.selection_authority_last_intent
+    : null;
+  if (
+    activeSessionId !== acceptedSessionId ||
+    activeSessionVersion !== acceptedSessionVersion ||
+    activeProgressVersion !== acceptedProgressVersion ||
+    currentEpoch !== acceptedEpoch ||
+    readPositiveInteger(intent?.epoch) !== acceptedEpoch ||
+    trimStr(intent?.session_id) !== acceptedSessionId ||
+    readPositiveInteger(intent?.session_version) !== acceptedSessionVersion ||
+    readNonNegativeInteger(intent?.progress_counter_version) !== acceptedProgressVersion ||
+    trimStr(intent?.paired_ready_blocked_status).toUpperCase() !== 'PENDING'
+  ) {
+    return result(false, 'SELECTION_PAIR_AUTHORITY_SUPERSEDED');
+  }
+
+  const validatePage = (pageResult, expectedSection) => {
+    const context = (pageResult && typeof pageResult === 'object') ? pageResult : {};
+    const page = (context.page && typeof context.page === 'object' && !Array.isArray(context.page)) ? context.page : null;
+    if (!page || page.ok === false || page.ready === false) return { ok: false, reason: 'SELECTION_PAIR_PAGE_UNAVAILABLE' };
+    const requestedSection = normalizeSection(page.requested_section || page.requestedSection || context.section || '');
+    const resolvedSection = normalizeSection(page.resolved_section || page.resolvedSection || page.section || '');
+    const pageSessionId = trimStr(page.session_id || page.sessionId);
+    const pageSessionVersion = readPositiveInteger(page.session_version ?? page.sessionVersion);
+    const pageProgressVersion = readNonNegativeInteger(
+      page.progress_counter_version ?? page.progressCounterVersion ??
+      page.progress?.progress_counter_version ?? page.progress?.progressCounterVersion
+    );
+    if (requestedSection !== expectedSection || resolvedSection !== expectedSection) {
+      return { ok: false, reason: 'SELECTION_PAIR_SECTION_MISMATCH' };
+    }
+    if (
+      pageSessionId !== acceptedSessionId ||
+      pageSessionVersion !== acceptedSessionVersion ||
+      pageProgressVersion !== acceptedProgressVersion
+    ) {
+      return { ok: false, reason: 'SELECTION_PAIR_REVISION_MISMATCH' };
+    }
+    const rows = Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
+    const ids = rows.map(rowId);
+    if (ids.some((id) => !id) || new Set(ids).size !== ids.length) {
+      return { ok: false, reason: 'SELECTION_PAIR_ROW_IDENTITY_INVALID' };
+    }
+    return { ok: true, page, rows, ids, pageStatePatch: context.pageStatePatch || null, scrollRestore: context.scrollRestore || null };
+  };
+
+  const ready = validatePage(readyResult, 'canonical_preview_lines');
+  if (!ready.ok) return result(false, ready.reason);
+  const blocked = validatePage(blockedResult, 'blocked_for_pay');
+  if (!blocked.ok) return result(false, blocked.reason);
+  const readyIdSet = new Set(ready.ids);
+  if (blocked.ids.some((id) => readyIdSet.has(id))) {
+    return result(false, 'SELECTION_PAIR_CROSS_SECTION_DUPLICATE');
+  }
+
+  const cloneGraph = typeof options.cloneGraph === 'function'
+    ? options.cloneGraph
+    : createBankingPayGraphCloneV1();
+  const successorWizard = cloneGraph(liveWizard);
+  const successorState = {
+    ...bankingState,
+    pay: {
+      ...bankingState.pay,
+      draftWizard: successorWizard
+    }
+  };
+  const normalizePage = (page, section, rows) => ({
+    ...page,
+    ok: true,
+    ready: page.ready !== false,
+    session_id: acceptedSessionId,
+    session_version: acceptedSessionVersion,
+    progress_counter_version: acceptedProgressVersion,
+    requested_section: section,
+    resolved_section: section,
+    section,
+    rows,
+    items: rows
+  });
+  const readyPage = normalizePage(ready.page, 'canonical_preview_lines', ready.rows);
+  const blockedPage = normalizePage(blocked.page, 'blocked_for_pay', blocked.rows);
+  const pageMap = {
+    canonical_preview_lines: readyPage,
+    blocked_for_pay: blockedPage
+  };
+  const combinedPayload = {
+    ok: true,
+    ready: true,
+    progress_state: 'READY',
+    session_id: acceptedSessionId,
+    session_version: acceptedSessionVersion,
+    session_signature: trimStr(
+      liveWizard.workbench?.session_signature || liveWizard.workbench?.sessionSignature ||
+      liveWizard.decisions?.session_signature || liveWizard.decisions?.sessionSignature || ''
+    ) || null,
+    snapshot_run_id: trimStr(liveWizard.workbench?.snapshot_run_id || liveWizard.workbench?.snapshotRunId || '') || null,
+    pay_date: trimStr(liveWizard.pay_date || bankingState.pay.pay_date || bankingState.pay.selectedPayDate || '') || null,
+    week_ending_cutoff_date: trimStr(
+      liveWizard.week_ending_cutoff_date || bankingState.pay.week_ending_cutoff_date ||
+      liveWizard.workbench?.week_ending_cutoff_date || liveWizard.decisions?.week_ending_cutoff_date || ''
+    ) || null,
+    progress_counter_version: acceptedProgressVersion,
+    canonical_preview_lines: ready.rows,
+    blocked_for_pay: blocked.rows,
+    preview_pages: pageMap,
+    previewPageCache: pageMap,
+    preview: {
+      canonical_preview_lines: ready.rows,
+      blocked_for_pay: blocked.rows,
+      preview_pages: pageMap,
+      previewPageCache: pageMap
+    }
+  };
+
+  const applyPreview = typeof options.applyPreview === 'function'
+    ? options.applyPreview
+    : applyPayWorkbenchPreviewToState;
+  const applied = applyPreview(combinedPayload, successorState);
+  if (!applied) return result(false, 'SELECTION_PAIR_ADOPTION_REJECTED');
+
+  const successorUi = (() => {
+    successorWizard.ui_state = (successorWizard.ui_state && typeof successorWizard.ui_state === 'object' && !Array.isArray(successorWizard.ui_state))
+      ? successorWizard.ui_state
+      : {};
+    successorWizard.ui_state.preview_page_state = (
+      successorWizard.ui_state.preview_page_state &&
+      typeof successorWizard.ui_state.preview_page_state === 'object' &&
+      !Array.isArray(successorWizard.ui_state.preview_page_state)
+    ) ? successorWizard.ui_state.preview_page_state : {};
+    successorWizard.ui_state.previewPageState = successorWizard.ui_state.preview_page_state;
+    return successorWizard.ui_state.preview_page_state;
+  })();
+  for (const [section, pageContext] of [
+    ['canonical_preview_lines', ready],
+    ['blocked_for_pay', blocked]
+  ]) {
+    if (!pageContext.pageStatePatch || typeof pageContext.pageStatePatch !== 'object') continue;
+    const existing = (successorUi[section] && typeof successorUi[section] === 'object' && !Array.isArray(successorUi[section]))
+      ? successorUi[section]
+      : {};
+    successorUi[section] = { ...existing, ...cloneGraph(pageContext.pageStatePatch), loading: false, error: '' };
+  }
+  successorWizard.selection_authority_last_intent = {
+    ...successorWizard.selection_authority_last_intent,
+    epoch: acceptedEpoch,
+    session_id: acceptedSessionId,
+    session_version: acceptedSessionVersion,
+    progress_counter_version: acceptedProgressVersion,
+    paired_ready_blocked_status: 'ADOPTED',
+    completed_at_ms: Date.now()
+  };
+
+  const currentWizard = bankingState.pay.draftWizard;
+  if (
+    currentWizard !== liveWizard ||
+    readPositiveInteger(currentWizard?.selection_authority_epoch) !== acceptedEpoch ||
+    readPositiveInteger(currentWizard?.selection_authority_last_intent?.epoch) !== acceptedEpoch
+  ) {
+    return result(false, 'SELECTION_PAIR_COMMIT_SUPERSEDED');
+  }
+  bankingState.pay.draftWizard = successorWizard;
+  for (const key of ['pay_date', 'selectedPayDate', 'week_ending_cutoff_date']) {
+    if (Object.prototype.hasOwnProperty.call(successorState.pay, key)) bankingState.pay[key] = successorState.pay[key];
+  }
+  return result(true, '', {
+    session_id: acceptedSessionId,
+    session_version: acceptedSessionVersion,
+    progress_counter_version: acceptedProgressVersion,
+    selection_epoch: acceptedEpoch,
+    scrollRestores: [ready.scrollRestore, blocked.scrollRestore].filter(Boolean)
+  });
+}
+
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -93653,21 +93890,45 @@ function attachBankingModalDelegatedHandlers() {
     setPreviewSelectionControlsBusy(true);
 
     const executeMutation = async () => {
-      await mutation();
+      let outcome = null;
+      let failure = null;
       try {
-        const selectionState = getState();
-        const wizard = selectionState?.pay?.draftWizard;
-        if (wizard && typeof wizard === 'object' && mutationEpoch !== null) {
-          wizard.selection_authority_last_completed = {
-            epoch: mutationEpoch,
-            completed_at_ms: Date.now(),
-            progress_counter_version: Number(
-              wizard.selection_progress_counter_floor ?? wizard.selectionProgressCounterFloor
-            )
-          };
-        }
-      } catch {}
-      return true;
+        outcome = await mutation({ selectionEpoch: mutationEpoch });
+        return outcome;
+      } catch (error) {
+        failure = error;
+        throw error;
+      } finally {
+        try {
+          const selectionState = getState();
+          const wizard = selectionState?.pay?.draftWizard;
+          if (wizard && typeof wizard === 'object' && mutationEpoch !== null) {
+            const exactIntent = Number(wizard.selection_authority_last_intent?.epoch) === Number(mutationEpoch)
+              ? wizard.selection_authority_last_intent
+              : null;
+            let completionPairStatus = String(exactIntent?.paired_ready_blocked_status || '').trim().toUpperCase();
+            if (failure && exactIntent) {
+              wizard.selection_authority_last_intent = {
+                ...exactIntent,
+                paired_ready_blocked_status: 'FAILED',
+                completed_at_ms: Date.now()
+              };
+              completionPairStatus = 'FAILED';
+            }
+            wizard.selection_authority_last_completed = {
+              epoch: mutationEpoch,
+              completed_at_ms: Date.now(),
+              progress_counter_version: Number(
+                outcome?.progress_counter_version ??
+                outcome?.progressCounterVersion ??
+                wizard.selection_progress_counter_floor ??
+                wizard.selectionProgressCounterFloor
+              ),
+              paired_ready_blocked_status: completionPairStatus || (failure ? 'FAILED' : null)
+            };
+          }
+        } catch {}
+      }
     };
     const queuedMutation = previewSelectionMutationTail.then(executeMutation, executeMutation);
     previewSelectionMutationTail = queuedMutation.catch(() => false);
@@ -97567,8 +97828,21 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       try { visit(st.pay?.draftWizard || {}); } catch {}
     };
 
-    const applySelectionPayloadSummaryToWizard = (payload) => {
-      if (!payload || typeof payload !== 'object') return;
+    const applySelectionPayloadSummaryToWizard = (payload, { selectionEpoch = null } = {}) => {
+      const suppliedEpoch = Number(selectionEpoch);
+      const selectionResult = (accepted, authorityApplied, reason, extra = {}) => ({
+        accepted: accepted === true,
+        authorityApplied: authorityApplied === true,
+        reason: String(reason || '').trim(),
+        selection_epoch: Number.isSafeInteger(suppliedEpoch) && suppliedEpoch >= 1 ? suppliedEpoch : null,
+        ...extra
+      });
+      if (!payload || typeof payload !== 'object') {
+        return selectionResult(false, false, 'SELECTION_RESPONSE_INVALID');
+      }
+      if (!Number.isSafeInteger(suppliedEpoch) || suppliedEpoch < 1) {
+        return selectionResult(false, false, 'SELECTION_EPOCH_INVALID');
+      }
       const serverSelectedIdsProvided = Object.prototype.hasOwnProperty.call(payload, 'server_selected_preview_row_ids_provided')
         ? payload.server_selected_preview_row_ids_provided === true
         : (Object.prototype.hasOwnProperty.call(payload, 'selected_preview_row_ids_provided')
@@ -97612,7 +97886,22 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       const incomingSessionId = String(
         payload.session_id || payload.sessionId || payload.workbench_session_id || payload.workbenchSessionId || ''
       ).trim();
+      const incomingSessionVersion = Number(payload.session_version ?? payload.sessionVersion);
       const activeSessionId = getActivePayWorkbenchSessionIdForSelection();
+      const activeSessionVersion = Number(
+        st.pay?.draftWizard?.workbench?.session_version ??
+        st.pay?.draftWizard?.workbench?.sessionVersion ??
+        decisions.session_version ??
+        decisions.sessionVersion
+      );
+      if (
+        !incomingSessionId ||
+        !Number.isSafeInteger(incomingSessionVersion) || incomingSessionVersion < 1 ||
+        !Number.isSafeInteger(progressCounterVersion) || progressCounterVersion < 0 ||
+        (Number.isSafeInteger(activeSessionVersion) && activeSessionVersion >= 1 && incomingSessionVersion < activeSessionVersion)
+      ) {
+        return selectionResult(false, false, 'SELECTION_AUTHORITY_TUPLE_INVALID');
+      }
       const selectionFloor = Number(
         st.pay?.draftWizard?.selection_progress_counter_floor ??
         st.pay?.draftWizard?.selectionProgressCounterFloor
@@ -97655,10 +97944,26 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           0,
           Number(st.pay.draftWizard.selection_authority_suppressed_count || 0)
         ) + 1;
-        return;
+        return selectionResult(false, false, authorityDecision.reason || 'SELECTION_AUTHORITY_SUPPRESSED');
       }
       try {
         st.pay.draftWizard.workbench = (st.pay.draftWizard.workbench && typeof st.pay.draftWizard.workbench === 'object') ? st.pay.draftWizard.workbench : {};
+        st.pay.draftWizard.workbench.session_id = incomingSessionId;
+        st.pay.draftWizard.workbench.sessionId = incomingSessionId;
+        st.pay.draftWizard.workbench.session_version = incomingSessionVersion;
+        st.pay.draftWizard.workbench.sessionVersion = incomingSessionVersion;
+        decisions.session_id = incomingSessionId;
+        decisions.sessionId = incomingSessionId;
+        decisions.session_version = incomingSessionVersion;
+        decisions.sessionVersion = incomingSessionVersion;
+        if (st.pay.draftWizard.preview?.data && typeof st.pay.draftWizard.preview.data === 'object') {
+          st.pay.draftWizard.preview.data.session_id = incomingSessionId;
+          st.pay.draftWizard.preview.data.session_version = incomingSessionVersion;
+          if (st.pay.draftWizard.preview.data.session && typeof st.pay.draftWizard.preview.data.session === 'object') {
+            st.pay.draftWizard.preview.data.session.session_id = incomingSessionId;
+            st.pay.draftWizard.preview.data.session.session_version = incomingSessionVersion;
+          }
+        }
         const authoritativeProgressNodes = [
           st.pay.draftWizard.workbench.progress,
           decisions.progress,
@@ -97670,8 +97975,6 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           if (Number.isFinite(selectedCount)) {
             const boundedSelectedCount = Math.max(0, Math.trunc(selectedCount));
             node.selected_row_count = boundedSelectedCount;
-            node.selected_eligible_ready_row_count = boundedSelectedCount;
-            node.selected_rows_available = boundedSelectedCount > 0;
           }
           if (readyForDraftProvided) {
             node.ready_for_draft = readyForDraft;
@@ -97687,7 +97990,6 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         };
         if (Number.isFinite(selectedCount)) {
           st.pay.draftWizard.workbench.selected_row_count = Math.max(0, Math.trunc(selectedCount));
-          st.pay.draftWizard.workbench.selected_eligible_ready_row_count = Math.max(0, Math.trunc(selectedCount));
         }
         st.pay.draftWizard.workbench.server_selected_preview_row_ids = selectedIds;
         st.pay.draftWizard.workbench.server_selected_preview_row_ids_provided = serverSelectedIdsProvided;
@@ -97701,6 +98003,8 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           Number.isSafeInteger(progressCounterVersion) && progressCounterVersion >= 0
         ) {
           st.pay.draftWizard.selection_mutation_authority = {
+            session_id: incomingSessionId,
+            session_version: incomingSessionVersion,
             selected_preview_row_mode: payloadMode,
             selected_row_count: Math.trunc(selectedCount),
             progress_counter_version: progressCounterVersion
@@ -97777,16 +98081,107 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         for (const progressNode of authoritativeProgressNodes) {
           adoptSelectionSummaryIntoProgressNode(progressNode);
         }
-      } catch {}
+        const currentEpoch = Number(st.pay.draftWizard.selection_authority_epoch);
+        const launchingIntentEpoch = Number(st.pay.draftWizard.selection_authority_last_intent?.epoch);
+        const supersededByNewerEpoch = currentEpoch !== suppliedEpoch || launchingIntentEpoch !== suppliedEpoch;
+        if (!supersededByNewerEpoch) {
+          st.pay.draftWizard.selection_authority_last_intent = {
+            ...st.pay.draftWizard.selection_authority_last_intent,
+            epoch: suppliedEpoch,
+            session_id: incomingSessionId,
+            session_version: incomingSessionVersion,
+            progress_counter_version: progressCounterVersion,
+            paired_ready_blocked_status: 'PENDING'
+          };
+        }
+        return selectionResult(!supersededByNewerEpoch, true, supersededByNewerEpoch ? 'SELECTION_EPOCH_SUPERSEDED' : '', {
+          supersededByNewerEpoch,
+          session_id: incomingSessionId,
+          session_version: incomingSessionVersion,
+          progress_counter_version: progressCounterVersion
+        });
+      } catch (error) {
+        return selectionResult(false, false, 'SELECTION_AUTHORITY_APPLY_FAILED', {
+          error: String(error?.message || error || '').trim()
+        });
+      }
     };
 
-    const reloadCanonicalPreviewAfterSelectionMutation = async ({ includeBlocked = false } = {}) => {
-      if (typeof loadPayWorkbenchPreviewPageForSection !== 'function') return;
-      await loadPayWorkbenchPreviewPageForSection('canonical_preview_lines', 'reload');
-      if (includeBlocked) await loadPayWorkbenchPreviewPageForSection('blocked_for_pay', 'reload');
+    const markSelectionReadyBlockedPairStatus = (authority, status) => {
+      const target = authority && typeof authority === 'object' ? authority : {};
+      const selectionEpoch = Number(target.selection_epoch ?? target.selectionEpoch);
+      const sessionId = String(target.session_id || target.sessionId || '').trim();
+      const sessionVersion = Number(target.session_version ?? target.sessionVersion);
+      const progressCounterVersion = Number(target.progress_counter_version ?? target.progressCounterVersion);
+      const nextStatus = String(status || '').trim().toUpperCase();
+      const currentState = getState();
+      const wizard = currentState?.pay?.draftWizard;
+      const intent = wizard?.selection_authority_last_intent;
+      if (
+        !wizard || !intent ||
+        Number(wizard.selection_authority_epoch) !== selectionEpoch ||
+        Number(intent.epoch) !== selectionEpoch ||
+        String(intent.session_id || '').trim() !== sessionId ||
+        Number(intent.session_version) !== sessionVersion ||
+        Number(intent.progress_counter_version) !== progressCounterVersion ||
+        !['PENDING', 'ADOPTED', 'FAILED'].includes(nextStatus)
+      ) return false;
+      wizard.selection_authority_last_intent = {
+        ...intent,
+        paired_ready_blocked_status: nextStatus,
+        ...(nextStatus === 'PENDING' ? {} : { completed_at_ms: Date.now() })
+      };
+      return true;
     };
 
-    const togglePreviewRowSelection = async (previewRowId, checked) => {
+    const reloadCanonicalPreviewAfterSelectionMutation = async ({ acceptedAuthority = null } = {}) => {
+      if (!acceptedAuthority || acceptedAuthority.accepted !== true) {
+        throw new Error('Selection result did not provide accepted Ready/Blocked authority.');
+      }
+      if (typeof loadPayWorkbenchPreviewPageForSection !== 'function') {
+        markSelectionReadyBlockedPairStatus(acceptedAuthority, 'FAILED');
+        throw new Error('Payment preview page loader is unavailable.');
+      }
+      try {
+        const [readyResult, blockedResult] = await Promise.all([
+          loadPayWorkbenchPreviewPageForSection('canonical_preview_lines', 'reload', {
+            deferAdoption: true,
+            acceptedAuthority
+          }),
+          loadPayWorkbenchPreviewPageForSection('blocked_for_pay', 'reload', {
+            deferAdoption: true,
+            acceptedAuthority
+          })
+        ]);
+        const currentState = getState();
+        const adoption = adoptSelectionMutationReadyBlockedPagesV1({
+          bankingState: currentState,
+          acceptedAuthority,
+          readyResult,
+          blockedResult
+        });
+        if (!adoption || adoption.adopted !== true) {
+          const reason = String(adoption?.reason || 'SELECTION_PAIR_ADOPTION_FAILED').trim();
+          const error = new Error(`Payment selection refresh could not be reconciled (${reason}).`);
+          error.code = reason;
+          throw error;
+        }
+        for (const restore of Array.isArray(adoption.scrollRestores) ? adoption.scrollRestores : []) {
+          try {
+            setTimeout(() => {
+              const host = document.getElementById(String(restore?.scrollHostId || '').trim());
+              if (host) host.scrollTop = Number(restore?.scrollTop || 0);
+            }, 0);
+          } catch {}
+        }
+        return adoption;
+      } catch (error) {
+        markSelectionReadyBlockedPairStatus(acceptedAuthority, 'FAILED');
+        throw error;
+      }
+    };
+
+    const togglePreviewRowSelection = async (previewRowId, checked, { selectionEpoch = null } = {}) => {
       const rowId = String(previewRowId || '').trim();
       if (!rowId) return ensurePayWizardDecisionState();
       const allPreviewRowIds = getRenderedPreviewRowIds();
@@ -97795,27 +98190,30 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       if (allPreviewRowIds.length <= 0 || !validPreviewRowIdSet.has(rowId)) return decisions;
       const wantChecked = (typeof checked === 'boolean') ? checked : true;
       updatePreviewRowSelectionInLoadedState([rowId], wantChecked);
+      let serverAuthorityApplied = false;
       try {
         const sessionId = getActivePayWorkbenchSessionIdForSelection();
         if (sessionId && typeof bankingPayWorkbenchSessionSetSelectedRows === 'function') {
           const result = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, wantChecked
             ? { section: 'canonical_preview_lines', select_preview_row_ids: [rowId] }
             : { section: 'canonical_preview_lines', deselect_preview_row_ids: [rowId] });
-          applySelectionPayloadSummaryToWizard(result);
-          // A single positive-row change can promote or block same-candidate
-          // recovery rows. Refresh both projections so one recovery identity
-          // never remains rendered in the wrong section.
-          await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true });
+          const acceptedAuthority = applySelectionPayloadSummaryToWizard(result, { selectionEpoch });
+          serverAuthorityApplied = acceptedAuthority?.authorityApplied === true;
+          if (acceptedAuthority?.supersededByNewerEpoch === true) return decisions;
+          if (acceptedAuthority?.accepted !== true) {
+            markSelectionReadyBlockedPairStatus({ ...acceptedAuthority, selection_epoch: selectionEpoch }, 'FAILED');
+            throw new Error(`Payment selection response was not current (${acceptedAuthority?.reason || 'SELECTION_AUTHORITY_REJECTED'}).`);
+          }
+          return await reloadCanonicalPreviewAfterSelectionMutation({ acceptedAuthority });
         }
       } catch (error) {
-        updatePreviewRowSelectionInLoadedState([rowId], !wantChecked);
-        try { await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true }); } catch {}
+        if (!serverAuthorityApplied) updatePreviewRowSelectionInLoadedState([rowId], !wantChecked);
         throw error;
       }
       return decisions;
     };
 
-    const setPreviewRowsSelection = async (previewRowIds, checked) => {
+    const setPreviewRowsSelection = async (previewRowIds, checked, { selectionEpoch = null } = {}) => {
       const requestedIds = normalizePreviewRowIdArray(previewRowIds);
       const allPreviewRowIds = getRenderedPreviewRowIds();
       const validPreviewRowIdSet = new Set(allPreviewRowIds);
@@ -97824,45 +98222,60 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       if (!targetIds.length || !allPreviewRowIds.length) return decisions;
       const wantChecked = checked === true;
       updatePreviewRowSelectionInLoadedState(targetIds, wantChecked);
+      let serverAuthorityApplied = false;
       try {
         const sessionId = getActivePayWorkbenchSessionIdForSelection();
         if (sessionId && typeof bankingPayWorkbenchSessionSetSelectedRows === 'function') {
+          let finalAcceptedAuthority = null;
           for (let offset = 0; offset < targetIds.length; offset += 100) {
             const chunkIds = targetIds.slice(offset, offset + 100);
             if (!chunkIds.length) continue;
             const result = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, wantChecked
               ? { section: 'canonical_preview_lines', select_preview_row_ids: chunkIds }
               : { section: 'canonical_preview_lines', deselect_preview_row_ids: chunkIds });
-            applySelectionPayloadSummaryToWizard(result);
+            const acceptedAuthority = applySelectionPayloadSummaryToWizard(result, { selectionEpoch });
+            serverAuthorityApplied = serverAuthorityApplied || acceptedAuthority?.authorityApplied === true;
+            if (acceptedAuthority?.supersededByNewerEpoch === true) return decisions;
+            if (acceptedAuthority?.accepted !== true) {
+              markSelectionReadyBlockedPairStatus({ ...acceptedAuthority, selection_epoch: selectionEpoch }, 'FAILED');
+              throw new Error(`Payment group selection response was not current (${acceptedAuthority?.reason || 'SELECTION_AUTHORITY_REJECTED'}).`);
+            }
+            finalAcceptedAuthority = acceptedAuthority;
           }
-          await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true });
+          if (!finalAcceptedAuthority) throw new Error('Payment group selection returned no final authority.');
+          return await reloadCanonicalPreviewAfterSelectionMutation({ acceptedAuthority: finalAcceptedAuthority });
         }
       } catch (error) {
-        updatePreviewRowSelectionInLoadedState(targetIds, !wantChecked);
-        try { await loadPayWorkbenchPreviewPageForSection('canonical_preview_lines', 'reload'); } catch {}
+        if (!serverAuthorityApplied) updatePreviewRowSelectionInLoadedState(targetIds, !wantChecked);
         throw error;
       }
       return decisions;
     };
 
-    const setPreviewRowsGlobalSelection = async (checked) => {
+    const setPreviewRowsGlobalSelection = async (checked, { selectionEpoch = null } = {}) => {
       const wantChecked = checked === true;
       const decisions = ensurePayWizardDecisionState();
       const visibleIds = getVisibleRenderedPreviewRowIds();
       updatePreviewRowSelectionInLoadedState(visibleIds, wantChecked);
       const sessionId = getActivePayWorkbenchSessionIdForSelection();
+      let serverAuthorityApplied = false;
       try {
         if (sessionId && typeof bankingPayWorkbenchSessionSetSelectedRows === 'function') {
           const result = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, {
             section: 'canonical_preview_lines',
             selection_action: wantChecked ? 'SELECT_ALL_SECTION' : 'CLEAR_SECTION'
           });
-          applySelectionPayloadSummaryToWizard(result);
-          await reloadCanonicalPreviewAfterSelectionMutation({ includeBlocked: true });
+          const acceptedAuthority = applySelectionPayloadSummaryToWizard(result, { selectionEpoch });
+          serverAuthorityApplied = acceptedAuthority?.authorityApplied === true;
+          if (acceptedAuthority?.supersededByNewerEpoch === true) return decisions;
+          if (acceptedAuthority?.accepted !== true) {
+            markSelectionReadyBlockedPairStatus({ ...acceptedAuthority, selection_epoch: selectionEpoch }, 'FAILED');
+            throw new Error(`Payment all-pages selection response was not current (${acceptedAuthority?.reason || 'SELECTION_AUTHORITY_REJECTED'}).`);
+          }
+          return await reloadCanonicalPreviewAfterSelectionMutation({ acceptedAuthority });
         }
       } catch (error) {
-        updatePreviewRowSelectionInLoadedState(visibleIds, !wantChecked);
-        try { await loadPayWorkbenchPreviewPageForSection('canonical_preview_lines', 'reload'); } catch {}
+        if (!serverAuthorityApplied) updatePreviewRowSelectionInLoadedState(visibleIds, !wantChecked);
         throw error;
       }
       return decisions;
@@ -97892,16 +98305,26 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       return {};
     };
 
-    const loadPayWorkbenchPreviewPageForSection = async (sectionKey, direction) => {
+    const loadPayWorkbenchPreviewPageForSection = async (sectionKey, direction, options = {}) => {
       const section = normalisePayPreviewPageUiSection(sectionKey);
       if (!['canonical_preview_lines', 'cases_resolutions', 'blocked_for_pay'].includes(section)) return;
       const sessionId = getActivePayWorkbenchSessionIdForSelection();
       if (!sessionId || typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return;
-      const uiState = ensurePayWorkbenchUiState();
-      uiState.preview_page_state = (uiState.preview_page_state && typeof uiState.preview_page_state === 'object' && !Array.isArray(uiState.preview_page_state)) ? uiState.preview_page_state : {};
-      uiState.previewPageState = uiState.preview_page_state;
-      const pageState = (uiState.preview_page_state[section] && typeof uiState.preview_page_state[section] === 'object' && !Array.isArray(uiState.preview_page_state[section])) ? uiState.preview_page_state[section] : {};
-      uiState.preview_page_state[section] = pageState;
+      const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+      const deferAdoption = opts.deferAdoption === true || opts.defer_adoption === true;
+      const acceptedAuthority = (opts.acceptedAuthority && typeof opts.acceptedAuthority === 'object') ? opts.acceptedAuthority : {};
+      const uiState = deferAdoption
+        ? ((st.pay?.draftWizard?.ui_state && typeof st.pay.draftWizard.ui_state === 'object' && !Array.isArray(st.pay.draftWizard.ui_state)) ? st.pay.draftWizard.ui_state : {})
+        : ensurePayWorkbenchUiState();
+      if (!deferAdoption) {
+        uiState.preview_page_state = (uiState.preview_page_state && typeof uiState.preview_page_state === 'object' && !Array.isArray(uiState.preview_page_state)) ? uiState.preview_page_state : {};
+        uiState.previewPageState = uiState.preview_page_state;
+      }
+      const previewPageState = (uiState.preview_page_state && typeof uiState.preview_page_state === 'object' && !Array.isArray(uiState.preview_page_state))
+        ? uiState.preview_page_state
+        : {};
+      const pageState = (previewPageState[section] && typeof previewPageState[section] === 'object' && !Array.isArray(previewPageState[section])) ? previewPageState[section] : {};
+      if (!deferAdoption) previewPageState[section] = pageState;
       const cache = getPreviewPageCacheForUi();
       const currentPage = Math.max(1, Number(pageState.current_page || pageState.currentPage || 1) || 1);
       const currentCachedPage = (cache[section] && typeof cache[section] === 'object' && !Array.isArray(cache[section])) ? cache[section] : {};
@@ -97912,7 +98335,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       const reloadCurrentPage = dir === 'reload' || dir === 'current' || dir === 'refresh';
       const targetPage = reloadCurrentPage ? currentPage : (dir === 'prev' ? currentPage - 1 : currentPage + 1);
       if (targetPage < 1 || targetPage > totalPages) return;
-      const cursorStack = Array.isArray(pageState.cursor_stack) ? pageState.cursor_stack : (Array.isArray(pageState.cursorStack) ? pageState.cursorStack : []);
+      const cursorStack = Array.isArray(pageState.cursor_stack) ? [...pageState.cursor_stack] : (Array.isArray(pageState.cursorStack) ? [...pageState.cursorStack] : []);
       let targetCursor = null;
       if (reloadCurrentPage) {
         targetCursor = targetPage > 1 ? (cursorStack[targetPage - 1] || null) : null;
@@ -97926,9 +98349,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       const scrollHostId = section === 'canonical_preview_lines' ? 'bankingPayReadyScrollHost' : (section === 'cases_resolutions' ? 'bankingPayCasesScrollHost' : 'bankingPayBlockedScrollHost');
       let scrollTop = 0;
       try { scrollTop = document.getElementById(scrollHostId)?.scrollTop || 0; } catch {}
-      pageState.loading = true;
-      pageState.error = '';
-      await safeRerender(null);
+      if (!deferAdoption) {
+        pageState.loading = true;
+        pageState.error = '';
+        await safeRerender(null);
+      }
       try {
         const page = await bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, {
           limit,
@@ -97940,24 +98365,48 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           forceCurrent: true,
           bypass_cache: true,
           bypassCache: true,
+          store_cursor: !deferAdoption,
+          storeCursor: !deferAdoption,
+          expected_session_version: acceptedAuthority.session_version ?? acceptedAuthority.sessionVersion ?? undefined,
+          expected_progress_counter_version: acceptedAuthority.progress_counter_version ?? acceptedAuthority.progressCounterVersion ?? undefined,
           source: 'banking:pay:previewPage'
         });
         const rows = getPreviewPageRowsFromPayload(page);
         const appliedPage = {
           ...(page && typeof page === 'object' ? page : {}),
-          section,
-          requested_section: section,
-          resolved_section: section,
+          section: normalisePayPreviewPageUiSection(page?.resolved_section || page?.resolvedSection || page?.section || section),
+          requested_section: normalisePayPreviewPageUiSection(page?.requested_section || page?.requestedSection || section),
+          resolved_section: normalisePayPreviewPageUiSection(page?.resolved_section || page?.resolvedSection || page?.section || section),
           rows,
           items: rows,
           current_page: targetPage,
           page_number: targetPage,
           limit
         };
+        const pageStatePatch = {
+          current_page: targetPage,
+          currentPage: targetPage,
+          limit,
+          cursor_stack: cursorStack,
+          cursorStack,
+          next_cursor: appliedPage.next_cursor ?? appliedPage.nextCursor ?? null,
+          nextCursor: appliedPage.nextCursor ?? appliedPage.next_cursor ?? null,
+          has_more: appliedPage.has_more === true || appliedPage.hasMore === true,
+          loading: false,
+          error: ''
+        };
+        if (deferAdoption) {
+          return {
+            section,
+            page: appliedPage,
+            pageStatePatch,
+            scrollRestore: { scrollHostId, scrollTop }
+          };
+        }
         if (typeof applyPayWorkbenchPreviewToState === 'function') {
           applyPayWorkbenchPreviewToState({
             ok: true,
-            session_id: sessionId,
+            session_id: appliedPage.session_id || appliedPage.sessionId || sessionId,
             session_version: appliedPage.session_version ?? appliedPage.sessionVersion ?? null,
             session_signature: appliedPage.session_signature ?? appliedPage.sessionSignature ?? null,
             progress_counter_version: appliedPage.progress_counter_version ?? appliedPage.progressCounterVersion ?? null,
@@ -97969,22 +98418,18 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
             preview: { preview_pages: { [section]: appliedPage }, previewPageCache: { [section]: appliedPage } }
           });
         }
-        pageState.current_page = targetPage;
-        pageState.currentPage = targetPage;
-        pageState.limit = limit;
-        pageState.cursor_stack = cursorStack;
-        pageState.cursorStack = cursorStack;
-        pageState.next_cursor = appliedPage.next_cursor ?? appliedPage.nextCursor ?? null;
-        pageState.nextCursor = pageState.next_cursor;
-        pageState.has_more = appliedPage.has_more === true || appliedPage.hasMore === true;
-        pageState.loading = false;
-        pageState.error = '';
+        Object.assign(pageState, pageStatePatch);
+        return { section, page: appliedPage, pageStatePatch, scrollRestore: { scrollHostId, scrollTop } };
       } catch (error) {
-        pageState.loading = false;
-        pageState.error = String(error?.message || error || 'Page could not be loaded.');
+        if (!deferAdoption) {
+          pageState.loading = false;
+          pageState.error = String(error?.message || error || 'Page could not be loaded.');
+        }
         throw error;
       } finally {
-        try { setTimeout(() => { const host = document.getElementById(scrollHostId); if (host) host.scrollTop = scrollTop; }, 0); } catch {}
+        if (!deferAdoption) {
+          try { setTimeout(() => { const host = document.getElementById(scrollHostId); if (host) host.scrollTop = scrollTop; }, 0); } catch {}
+        }
       }
     };
 
@@ -99974,9 +100419,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       const previewRowIds = parsePreviewRowIdsAttribute(ds('previewRowIds') || dget('data-preview-row-ids'));
       if (!previewRowIds.length) return;
       const selectAllChildren = !!(el && el.checked === true);
-      await runPreviewSelectionMutation(async () => {
-        await setPreviewRowsSelection(previewRowIds, selectAllChildren);
+      await runPreviewSelectionMutation(async ({ selectionEpoch }) => {
+        const outcome = await setPreviewRowsSelection(previewRowIds, selectAllChildren, { selectionEpoch });
         await safeRerender(null);
+        return outcome;
       });
       return;
     }
@@ -100019,9 +100465,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     if (a === 'banking:pay:toggleAllReadyPreviewRows') {
       if (kind !== 'change') return;
       const checked = !!(el && el.checked === true);
-      await runPreviewSelectionMutation(async () => {
-        await setPreviewRowsGlobalSelection(checked);
+      await runPreviewSelectionMutation(async ({ selectionEpoch }) => {
+        const outcome = await setPreviewRowsGlobalSelection(checked, { selectionEpoch });
         await safeRerender(null);
+        return outcome;
       });
       return;
     }
@@ -100079,9 +100526,9 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (kind !== 'change') return;
       const previewRowId = String(ds('previewRowId') || dget('data-preview-row-id') || '').trim();
       const checked = !!(el && el.checked === true);
-      await runPreviewSelectionMutation(async () => {
+      await runPreviewSelectionMutation(async ({ selectionEpoch }) => {
         try {
-          await togglePreviewRowSelection(previewRowId, checked);
+          return await togglePreviewRowSelection(previewRowId, checked, { selectionEpoch });
         } finally {
           await safeRerender(null);
         }
@@ -100091,18 +100538,20 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     if (a === 'banking:pay:selectAllPreviewRows') {
       if (kind !== 'click') return;
-      await runPreviewSelectionMutation(async () => {
-        await setPreviewRowsGlobalSelection(true);
+      await runPreviewSelectionMutation(async ({ selectionEpoch }) => {
+        const outcome = await setPreviewRowsGlobalSelection(true, { selectionEpoch });
         await safeRerender(null);
+        return outcome;
       });
       return;
     }
 
     if (a === 'banking:pay:clearAllPreviewRows') {
       if (kind !== 'click') return;
-      await runPreviewSelectionMutation(async () => {
-        await setPreviewRowsGlobalSelection(false);
+      await runPreviewSelectionMutation(async ({ selectionEpoch }) => {
+        const outcome = await setPreviewRowsGlobalSelection(false, { selectionEpoch });
         await safeRerender(null);
+        return outcome;
       });
       return;
     }
@@ -379528,6 +379977,29 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
   });
   const previousMaterialisationRevision = String(previousSnapshot?.materialisationRevision || '').trim();
   const materialisationRevisionAdvanced = hasWorkbenchMaterialisationRevisionAdvanced(previousMaterialisationRevision, nextMaterialisationRevision);
+
+  const selectionIntent = (current.wizard?.selection_authority_last_intent && typeof current.wizard.selection_authority_last_intent === 'object')
+    ? current.wizard.selection_authority_last_intent
+    : null;
+  const selectionPairStatus = String(selectionIntent?.paired_ready_blocked_status || '').trim().toUpperCase();
+  const selectionIntentEpoch = Number(selectionIntent?.epoch);
+  const currentSelectionEpoch = Number(current.wizard?.selection_authority_epoch);
+  const selectionIntentSessionVersion = Number(selectionIntent?.session_version);
+  const selectionIntentProgressVersion = Number(selectionIntent?.progress_counter_version);
+  const exactSelectionPairRevision = !!(
+    selectionIntent &&
+    Number.isSafeInteger(selectionIntentEpoch) && selectionIntentEpoch >= 1 &&
+    selectionIntentEpoch === currentSelectionEpoch &&
+    String(selectionIntent.session_id || '').trim() === current.sessionId &&
+    Number.isSafeInteger(selectionIntentSessionVersion) &&
+    selectionIntentSessionVersion === nextSessionVersion &&
+    Number.isSafeInteger(selectionIntentProgressVersion) &&
+    selectionIntentProgressVersion === nextProgressCounterVersion &&
+    (selectionPairStatus === 'PENDING' || selectionPairStatus === 'ADOPTED')
+  );
+  if (exactSelectionPairRevision) {
+    return applyProgressMetadataToState(watchContext, progressResult, { allowedSessionId: current.sessionId });
+  }
 
   const previousPendingCandidateIds = normaliseWorkbenchUuidArray(previousSnapshot?.pendingCandidateIds || []);
   const statusRows = getCandidateStatusRowsFromProgress(progressResult);

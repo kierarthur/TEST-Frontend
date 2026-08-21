@@ -206,16 +206,14 @@ test('the exact mutation snapshot is applied once and refreshed row contracts ar
   assert.ok(end > start);
   const body = main.slice(start, end);
 
-  assert.match(body, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*?await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);/);
-  assert.doesNotMatch(body, /reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\);/);
+  assert.match(body, /const acceptedAuthority = applySelectionPayloadSummaryToWizard\(result, \{ selectionEpoch \}\);[\s\S]*?reloadCanonicalPreviewAfterSelectionMutation\(\{ acceptedAuthority \}\)/);
+  assert.doesNotMatch(body, /reloadCanonicalPreviewAfterSelectionMutation\([\s\S]{0,200}applySelectionPayloadSummaryToWizard\(result/);
   assert.match(
     main,
     /selectionMembershipSnapshotProvided[\s\S]*writePreviewSelectionState\(decisions, selectedIds, authoritativeMode\);[\s\S]*updatePreviewRowSelectionInLoadedState\(getRenderedPreviewRowIds\(\), false\);\s*updatePreviewRowSelectionInLoadedState\(selectedIds, true\);/
   );
-  assert.match(
-    main,
-    /if \(includeBlocked\) await loadPayWorkbenchPreviewPageForSection\('blocked_for_pay', 'reload'\);/
-  );
+  assert.match(main, /await Promise\.all\(\[[\s\S]*loadPayWorkbenchPreviewPageForSection\('canonical_preview_lines', 'reload', \{[\s\S]*loadPayWorkbenchPreviewPageForSection\('blocked_for_pay', 'reload', \{/);
+  assert.equal((main.match(/adoptSelectionMutationReadyBlockedPagesV1\(\{/g) || []).length, 1);
 });
 
 test('modal global listener cleanup retains the existing drag cleanup chain', () => {

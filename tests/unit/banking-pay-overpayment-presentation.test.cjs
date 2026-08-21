@@ -278,7 +278,7 @@ test('groups one multi-component recovery into one visible parent while preservi
   const presentation = helpers.getOverpaymentRecoveryPresentation(displayRows[0]);
   assert.equal(presentation.outstanding_total, 56.25);
   assert.equal(presentation.recoverable_this_run, 1.25);
-  assert.match(mainSource, /if \(a === 'banking:pay:toggleTimesheetPreviewGroup'\)[\s\S]*setPreviewRowsSelection\(previewRowIds, selectAllChildren\)/);
+  assert.match(mainSource, /if \(a === 'banking:pay:toggleTimesheetPreviewGroup'\)[\s\S]*setPreviewRowsSelection\(previewRowIds, selectAllChildren, \{ selectionEpoch \}\)/);
 });
 
 test('caps a grouped recovery breakdown to the row-level pre-draft headroom', () => {

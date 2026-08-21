@@ -152,7 +152,7 @@ test('selection requests use the highest adopted progress revision across overla
   assert.equal(payload.expected_progress_counter_version, 4491);
 });
 
-test('successful selection changes immediately adopt authoritative draft readiness', () => {
+test('successful selection changes adopt mutation-owned Draft readiness without inventing the distinct eligible count', () => {
   const body = sliceBetween(
     'const applySelectionPayloadSummaryToWizard =',
     'const togglePreviewRowSelection ='
@@ -169,7 +169,8 @@ test('successful selection changes immediately adopt authoritative draft readine
   assert.match(body, /decisions\.progress/);
   assert.match(body, /preview\?\.data\?\.progress/);
   assert.match(body, /preview\?\.data\?\.preview\?\.progress/);
-  assert.match(body, /node\.selected_eligible_ready_row_count = boundedSelectedCount/);
+  assert.doesNotMatch(body, /node\.selected_eligible_ready_row_count = boundedSelectedCount/);
+  assert.doesNotMatch(body, /node\.selected_rows_available = boundedSelectedCount > 0/);
   assert.match(body, /node\.ready_for_draft = readyForDraft/);
   assert.match(body, /node\.draft_blocker_codes = \[\.\.\.draftBlockerCodes\]/);
   assert.match(body, /node\.progress_counter_version = progressCounterVersion/);
@@ -426,17 +427,17 @@ test('optimistic selection traversal is cycle-safe and bounded', () => {
   assert.equal(row.row_json.selected, false);
 });
 
-test('a rejected optimistic selection reloads ready and blocked pages and always repaints', () => {
+test('a rejected optimistic selection restores only uncommitted local control state and always repaints', () => {
   const toggleBody = sliceBetween(
     'const togglePreviewRowSelection =',
     'const setPreviewRowsSelection ='
   );
-  assert.match(toggleBody, /updatePreviewRowSelectionInLoadedState\(\[rowId\], !wantChecked\)/);
-  assert.match(toggleBody, /reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\)/);
+  assert.match(toggleBody, /if \(!serverAuthorityApplied\) updatePreviewRowSelectionInLoadedState\(\[rowId\], !wantChecked\)/);
+  assert.doesNotMatch(toggleBody, /catch \(error\) \{[\s\S]*reloadCanonicalPreviewAfterSelectionMutation/);
 
   assert.match(
     mainSource,
-    /try \{\s*await togglePreviewRowSelection\(previewRowId, checked\);\s*\} finally \{\s*await safeRerender\(null\);\s*\}/
+    /try \{\s*return await togglePreviewRowSelection\(previewRowId, checked, \{ selectionEpoch \}\);\s*\} finally \{\s*await safeRerender\(null\);\s*\}/
   );
 });
 
@@ -458,12 +459,14 @@ test('a successful selection reloads ready and blocked pages without replaying a
     'const togglePreviewRowSelection ='
   );
 
-  assert.match(helperBody, /loadPayWorkbenchPreviewPageForSection\('canonical_preview_lines', 'reload'\)/);
-  assert.match(toggleBody, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\)/);
-  assert.match(groupedBody, /applySelectionPayloadSummaryToWizard\(result\);[\s\S]*await reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\)/);
-  assert.doesNotMatch(toggleBody, /reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\)/);
-  assert.doesNotMatch(groupedBody, /latestSelectionResult/);
-  assert.doesNotMatch(globalBody, /reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\);\s*applySelectionPayloadSummaryToWizard\(result\)/);
+  assert.match(helperBody, /await Promise\.all\(\[/);
+  assert.match(helperBody, /loadPayWorkbenchPreviewPageForSection\('canonical_preview_lines', 'reload', \{/);
+  assert.match(helperBody, /loadPayWorkbenchPreviewPageForSection\('blocked_for_pay', 'reload', \{/);
+  assert.match(toggleBody, /applySelectionPayloadSummaryToWizard\(result, \{ selectionEpoch \}\);[\s\S]*reloadCanonicalPreviewAfterSelectionMutation\(\{ acceptedAuthority \}\)/);
+  assert.match(groupedBody, /finalAcceptedAuthority = acceptedAuthority;[\s\S]*reloadCanonicalPreviewAfterSelectionMutation\(\{ acceptedAuthority: finalAcceptedAuthority \}\)/);
+  assert.doesNotMatch(toggleBody, /reloadCanonicalPreviewAfterSelectionMutation\([\s\S]{0,200}applySelectionPayloadSummaryToWizard\(result/);
+  assert.doesNotMatch(groupedBody, /reloadCanonicalPreviewAfterSelectionMutation\([\s\S]{0,200}applySelectionPayloadSummaryToWizard\(result/);
+  assert.doesNotMatch(globalBody, /reloadCanonicalPreviewAfterSelectionMutation\([\s\S]{0,200}applySelectionPayloadSummaryToWizard\(result/);
 });
 
 test('Create Draft requires review when the authoritative selected set changed', () => {

@@ -134,9 +134,9 @@ test('Ready header selection delegates to the server-owned all-pages selection a
   );
 
   assert.match(selectionBody, /selection_action: wantChecked \? 'SELECT_ALL_SECTION' : 'CLEAR_SECTION'/);
-  assert.match(selectionBody, /reloadCanonicalPreviewAfterSelectionMutation\(\{ includeBlocked: true \}\)/);
+  assert.match(selectionBody, /reloadCanonicalPreviewAfterSelectionMutation\(\{ acceptedAuthority \}\)/);
   assert.match(handlerBody, /if \(kind !== 'change'\) return/);
-  assert.match(handlerBody, /await setPreviewRowsGlobalSelection\(checked\)/);
+  assert.match(handlerBody, /await setPreviewRowsGlobalSelection\(checked, \{ selectionEpoch \}\)/);
 });
 
 test('Ready table keeps its checkbox column fixed during horizontal scrolling', () => {
