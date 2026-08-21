@@ -490,7 +490,9 @@
         if (!containsControl) node.remove();
         return;
       }
-      if (!containsControl || node.matches('button')) node.textContent = replacement;
+      if ((!containsControl || node.matches('button')) && node.textContent !== replacement) {
+        node.textContent = replacement;
+      }
     });
 
     const embeddedCopy = [
@@ -508,9 +510,10 @@
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     textNodes.forEach((node) => {
-      let value = node.nodeValue || '';
+      const original = node.nodeValue || '';
+      let value = original;
       embeddedCopy.forEach(([current, replacement]) => { value = value.split(current).join(replacement); });
-      node.nodeValue = value;
+      if (value !== original) node.nodeValue = value;
     });
 
     copyRoot.querySelectorAll('.banking-pay-active-operation-summary .mono').forEach((node) => node.remove());
@@ -522,7 +525,9 @@
     if (title) {
       const value = safeText(title.textContent).replace(/\s+/g, ' ');
       const replacement = replacementFor(titleCopyRules, value);
-      if (replacement !== undefined && replacement !== null) title.textContent = replacement;
+      if (replacement !== undefined && replacement !== null && title.textContent !== replacement) {
+        title.textContent = replacement;
+      }
     }
 
     copyRoot.querySelectorAll('.mini:empty,.hint:empty,p:empty,span:empty').forEach((node) => {
