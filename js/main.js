@@ -100533,13 +100533,23 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           && typeof window !== 'undefined'
           && typeof window.matchMedia === 'function'
           && window.matchMedia('(max-width: 700px)').matches
-          && typeof detailRow.scrollIntoView === 'function'
         ) {
           const schedule = typeof window.requestAnimationFrame === 'function'
             ? window.requestAnimationFrame.bind(window)
             : (callback) => window.setTimeout(callback, 0);
           schedule(() => schedule(() => {
-            detailRow.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+            const scrollOwner = detailRow.closest('#modalBody');
+            if (!(scrollOwner instanceof HTMLElement)) return;
+            const ownerRect = scrollOwner.getBoundingClientRect();
+            const detailRect = detailRow.getBoundingClientRect();
+            const targetTop = Math.max(0, scrollOwner.scrollTop + detailRect.top - ownerRect.top - 8);
+            if (typeof scrollOwner.scrollTo === 'function') {
+              scrollOwner.scrollTo({ top: targetTop, behavior: 'smooth' });
+            } else {
+              scrollOwner.scrollTop = targetTop;
+            }
+            const modalShell = scrollOwner.closest('#modal');
+            if (modalShell instanceof HTMLElement && modalShell.scrollTop !== 0) modalShell.scrollTop = 0;
           }));
         }
         return;
@@ -142084,7 +142094,10 @@ async function openBanking() {
   );
   try {
     const modal = document.getElementById('modal');
-    if (modal && modal.classList) modal.classList.add(MODAL_CLASS);
+    if (modal && modal.classList) {
+      modal.classList.add(MODAL_CLASS);
+      modal.scrollTop = 0;
+    }
   } catch {}
 
   // Attach delegated handlers ONCE for this banking modal instance and store detach hook

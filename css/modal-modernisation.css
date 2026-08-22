@@ -2776,6 +2776,16 @@
   display: none;
 }
 
+/* Banking owns scrolling in #modalBody. Keep the shell itself non-scrollable so
+   targeted reveals cannot move the persistent header or expose a false footer. */
+#modal.banking-modal.ctms-modern-modal {
+  overflow: clip;
+}
+
+#modal.banking-modal.ctms-modern-modal #modalActions {
+  display: none !important;
+}
+
 @media (max-width: 700px) {
   #modal.ctms-modern-modal[class*="ctms-family-"] {
     width: calc(100vw - 24px);

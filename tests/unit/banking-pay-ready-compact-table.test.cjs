@@ -96,7 +96,10 @@ test('Ready breakdown disclosure updates its existing row without rebuilding the
   assert.match(handlerBody, /detailTemplate\.replaceWith\(detailTemplate\.content\.cloneNode\(true\)\)/);
   assert.match(handlerBody, /el\.setAttribute\('aria-expanded', isOpening \? 'true' : 'false'\)/);
   assert.match(handlerBody, /window\.matchMedia\('\(max-width: 700px\)'\)\.matches/);
-  assert.match(handlerBody, /detailRow\.scrollIntoView\(\{ behavior: 'smooth', block: 'start', inline: 'nearest' \}\)/);
+  assert.match(handlerBody, /const scrollOwner = detailRow\.closest\('#modalBody'\)/);
+  assert.match(handlerBody, /scrollOwner\.scrollTo\(\{ top: targetTop, behavior: 'smooth' \}\)/);
+  assert.match(handlerBody, /modalShell\.scrollTop = 0/);
+  assert.doesNotMatch(handlerBody, /detailRow\.scrollIntoView/);
   assert.match(handlerBody, /if \(detailRow && detailKey === groupKey\)/);
   assert.match(handlerBody, /await safeRerender\(null\)/);
   assert.ok(
@@ -110,6 +113,14 @@ test('mobile card presentation respects the real collapsed breakdown state', () 
     modalCss,
     /table\.ctms-universal-card-table > tbody > tr\[hidden\] \{\s*display: none !important;\s*\}/
   );
+});
+
+test('Banking keeps its header and Close action fixed while its body owns scrolling', () => {
+  assert.match(modalCss, /#modal\.banking-modal\.ctms-modern-modal \{\s*overflow: clip;\s*\}/);
+  assert.match(modalCss, /#modal\.banking-modal\.ctms-modern-modal #modalActions \{\s*display: none !important;\s*\}/);
+  const openBody = sliceBetween('async function openBanking()', 'async function openImportsModal');
+  assert.match(openBody, /modal\.classList\.add\(MODAL_CLASS\)/);
+  assert.match(openBody, /modal\.scrollTop = 0/);
 });
 
 test('mobile Ready breakdown styles do not leak from the parent card table and expose every child field', () => {
