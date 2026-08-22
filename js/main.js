@@ -93880,6 +93880,42 @@ function attachBankingModalDelegatedHandlers() {
           control.removeAttribute('aria-busy');
         }
       }
+      const createDraftControl = typeof root.querySelector === 'function'
+        ? root.querySelector('[data-action="banking:pay:createDraft"]')
+        : null;
+      if (!createDraftControl) return;
+      const ownershipKey = '__bankingSelectionCreateDraftBusyState';
+      if (busy) {
+        if (!createDraftControl[ownershipKey]) {
+          createDraftControl[ownershipKey] = {
+            textContent: String(createDraftControl.textContent || ''),
+            disabled: createDraftControl.disabled === true,
+            disabledClass: createDraftControl.classList?.contains('disabled') === true,
+            dataDisabled: createDraftControl.getAttribute('data-disabled'),
+            ariaDisabled: createDraftControl.getAttribute('aria-disabled'),
+            title: createDraftControl.getAttribute('title')
+          };
+        }
+        createDraftControl.textContent = 'Updating selection…';
+        createDraftControl.disabled = true;
+        createDraftControl.classList?.add('disabled');
+        createDraftControl.setAttribute('data-disabled', '1');
+        createDraftControl.setAttribute('aria-disabled', 'true');
+        createDraftControl.setAttribute('aria-busy', 'true');
+        createDraftControl.setAttribute('title', 'CloudTMS is validating the selected rows and refreshing Ready to Pay and Blocked for Pay.');
+      } else if (createDraftControl[ownershipKey]) {
+        const prior = createDraftControl[ownershipKey];
+        createDraftControl.textContent = prior.textContent;
+        createDraftControl.disabled = prior.disabled;
+        if (prior.disabledClass) createDraftControl.classList?.add('disabled');
+        else createDraftControl.classList?.remove('disabled');
+        for (const [name, value] of [['data-disabled', prior.dataDisabled], ['aria-disabled', prior.ariaDisabled], ['title', prior.title]]) {
+          if (value === null) createDraftControl.removeAttribute(name);
+          else createDraftControl.setAttribute(name, value);
+        }
+        createDraftControl.removeAttribute('aria-busy');
+        delete createDraftControl[ownershipKey];
+      }
     } catch {}
   };
 

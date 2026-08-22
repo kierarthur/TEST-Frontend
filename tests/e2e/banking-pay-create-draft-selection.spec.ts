@@ -454,6 +454,64 @@ test('a certified promoted Kier recovery renders as one selectable Ready row', a
   await expect(duplicatedBlockedRecovery).toHaveCount(0);
 });
 
+test('selection settlement visibly gates Create Draft until the accepted Ready and Blocked pair is installed', async ({ page }) => {
+  test.setTimeout(180_000);
+
+  const getInterceptedMainUrl = await installLocalMain(page);
+  const createButton = await openBankingPay(page);
+  expect(new URL(getInterceptedMainUrl()).pathname).toBe('/js/main.js');
+  const localProof = getInterceptedMainUrl.getProof();
+  expect(localProof.interceptedIndex).toBeGreaterThan(0);
+  expect(localProof.interceptedMain).toBeGreaterThan(0);
+  expect(await page.evaluate(() => (window as any).__CODEX_LOCAL_ASSET_PROOF)).toEqual({
+    runtimeMarker: localProof.runtimeMarker,
+    ...localProof.localHashes
+  });
+
+  await waitForBankingSelectionIdle(page);
+  const selectable = page.locator(
+    '#bankingPayReadyScrollHost input[type="checkbox"][data-action="banking:pay:togglePreviewRow"]:not(:disabled), ' +
+    '#bankingPayReadyScrollHost input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"]:not(:disabled)'
+  ).first();
+  await expect(selectable).toBeVisible({ timeout: 60_000 });
+  const identity = await selectable.evaluate((element) => {
+    const action = element.getAttribute('data-action') || '';
+    return {
+      action,
+      value: action === 'banking:pay:togglePreviewRow'
+        ? (element.getAttribute('data-preview-row-id') || '')
+        : (element.getAttribute('data-preview-row-ids') || '')
+    };
+  });
+  expect(identity.value).toBeTruthy();
+  const originalChecked = await selectable.isChecked();
+
+  try {
+    const mutationResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.hostname === testBackendHost &&
+        /\/api\/banking\/pay\/workbench\/session\/[^/]+\/selected-rows$/.test(url.pathname);
+    }, { timeout: 60_000 });
+    await selectable.click();
+    await expect(createButton).toHaveText('Updating selection…', { timeout: 2_000 });
+    await expect(createButton).toBeDisabled();
+    await expect(createButton).toHaveAttribute('aria-busy', 'true');
+    expect((await mutationResponse).status()).toBe(200);
+    await waitForBankingSelectionIdle(page);
+    await expect(createButton).not.toHaveText('Updating selection…', { timeout: 60_000 });
+    await expect(createButton).not.toHaveAttribute('aria-busy', 'true');
+  } finally {
+    const current = await locateSelectionCheckboxByIdentity(page, identity);
+    if (current && (await current.isChecked()) !== originalChecked) {
+      await current.click();
+      await waitForBankingSelectionIdle(page);
+    }
+    const restored = await locateSelectionCheckboxByIdentity(page, identity);
+    expect(restored).not.toBeNull();
+    expect(await restored!.isChecked()).toBe(originalChecked);
+  }
+});
+
 test('one accepted selection settles through one concurrent Ready/Blocked pair and keeps the modal coherent', async ({ page }) => {
   test.setTimeout(180_000);
 

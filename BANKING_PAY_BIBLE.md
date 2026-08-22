@@ -293,6 +293,7 @@ The Banking Pay modal must remain responsive during refresh, resolve, cancel, se
 - Candidate-scoped actions must update only the affected candidate plus any explicitly server-declared linked scope.
 - Do not rebuild unrelated candidates merely to resolve or cancel one candidate's case.
 - Network completion is not UI completion: the open modal must visibly adopt the returned authoritative revision.
+- A selection checkbox may update optimistically, but the Draft action must immediately show a disabled selection-update state until the accepted server result and its authoritative Ready/Blocked adoption settle. It must never remain labelled as though no selection exists, and it must never become Draft-enabled from optimistic client state.
 - Tests must observe responsiveness and request count as well as final content.
 
 ## 14. Draft creation
@@ -301,6 +302,7 @@ The Banking Pay modal must remain responsive during refresh, resolve, cancel, se
 - A recovery cannot enter a Draft beyond its current selected positive headroom.
 - Rows in Cases / Resolutions or Blocked for Pay are not Draft inputs.
 - Draft creation must fail closed on stale selection, stale fingerprint, stale session, missing authority, or unresolved required case.
+- Draft-action visibility and enablement must come from the accepted server-owned Workbench selection authority. A pending selection mutation may only disable that action temporarily; it must not erase or overwrite the settled action state published by the authoritative rerender.
 - Once created, the Draft and all downstream operations use frozen artifacts under Policy X.
 - A successful pre-Draft screen does not prove Draft execution, future payment execution, fast cancellation, settlement, or remittance; each lifecycle stage requires its own evidence.
 
@@ -354,6 +356,7 @@ Minimum presentation/performance matrix:
 3. Expand/collapse does not fetch/rebuild the whole modal.
 4. Repeated expand/collapse, selection, resolve, and cancel do not make the modal non-responsive.
 5. The test proves the patched frontend asset or installed database definition was actually exercised.
+6. During a real selection request, the Draft action immediately displays a disabled in-progress state, remains fail-closed while the request is unsettled, then adopts the exact authoritative `Select rows` or `Create drafts` result without modal reopen.
 
 Minimum Draft-cancellation retry matrix:
 
@@ -411,6 +414,7 @@ These identities are observations, not pinned baselines. Every later task must u
 - Canonical cancellation of resolved overpayment/restructure and other non-timesheet financial resolution families.
 - End-to-end James Draft creation followed by future execution and fast cancellation, unless newer evidence closes it.
 - Performance proof for repeated row expansion under the current deployed asset.
+- Whole-database Supabase privilege hardening remains separately scoped. TEST currently uses a Worker/service-role data path plus a pre-request MFA gate; later approved hardening must remove direct browser-role object authority in staged TEST phases, preserve the exact Worker and MFA contracts, measure route latency, and never copy a TEST-only authentication exception to LIVE.
 
 ### Working contracts that must be preserved
 
@@ -423,6 +427,7 @@ These identities are observations, not pinned baselines. Every later task must u
 - Zero-headroom blocked presentation wording.
 - Detailed timesheet breakdown and source/target deduplication.
 - Existing resolved-rate cancellation for the already-supported timesheet family.
+- Database security work must preserve the Worker/service-role path, fail closed rather than fall back to browser-role database access, avoid permissive RLS policies for Worker-only tables, and use exact object/signature manifests plus post-repeatable verification so later migrations cannot silently regrant browser authority.
 
 ## 20. Change record
 
@@ -507,4 +512,18 @@ Future entries must include the date, approved rule change or clarification, aff
 - Patched-asset Playwright on the normal TEST origin and backend proved the current James last-positive-headroom lifecycle without modal reopen: promoted recovery in Ready, last positive unticked, zero recovery rows in every Ready cache root, recovery present only in Blocked, no cross-section duplicate, and the original selection restored. Mutation settlement was 1,766 ms and 1,558 ms.
 - Bounded TEST database verification after restoration found the current open session READY at version `51`; James had zero selected rows and zero selected recoveries. No Draft, payment, reservation, provider, settlement, remittance, cancellation, or database definition was created or changed by this frontend correction.
 - Policy X assessment: compliant. The patch adopts server-owned pre-Draft presentation authority only; it does not recalculate recovery headroom or alter frozen post-Draft artifacts, financial identity, VAT, ERNI, amounts, provider state, settlement, remittance, or cancellation behaviour.
+
+### 22 August 2026 — fail-closed Draft action during selection settlement
+
+- Exact deployed TEST diagnostics reproduced a transient mismatch: the checkbox and selected-count display changed optimistically while the Draft action retained the prior `Select rows` state until the accepted selection response and concurrent Ready/Blocked adoption completed. Database authority for the observed open session already reported two selected, Draft-eligible rows and `ready_for_draft=true`; no eligibility, amount, recovery-headroom, or Draft-authority defect was found.
+- The narrow frontend correction extends only the existing selection-controls busy owner. A real selection request immediately presents `Updating selection…`, native-disabled plus ARIA-disabled/busy, and remains fail-closed. When the authoritative renderer replaces the action, that renderer wins; when no replacement occurs, only the exact prior element state is restored.
+- Focused unit/cache checks passed 11/11, the complete Banking Pay unit suite passed 242/242, and patched-asset Playwright on the normal TEST origin/backend proved both immediate disabled busy state and authoritative settlement while restoring the exact original two-row TEST selection. No Draft was created.
+- Policy X assessment: compliant. This changes transient action presentation only. It does not infer Draft eligibility, calculate any amount/headroom, add a frontend economic authority, or alter frozen Draft, provider, settlement, remittance, cancellation, database, or backend behaviour.
+
+### 22 August 2026 — read-only Supabase security boundary audit
+
+- A whole-TEST-database read-only Advisor/catalogue audit confirmed that the supported CloudTMS data path is Worker/service-role based and that a database-wide MFA pre-request hook is only a compensating control, not a substitute for object-level RLS and privileges.
+- The approved future target is staged least privilege: Worker-only application tables stay fail-closed to browser roles with RLS enabled and no permissive policies; application views use invoker rights; internal RPCs and sequences are unavailable to browser roles; default privileges prevent silent regrant; and the exact Worker and MFA contracts are preserved and latency-tested.
+- Security installation remains separately scoped and unapproved. It must be rehearsed and verified in TEST by bounded object/signature manifests and post-repeatable migration gates before any LIVE migration. TEST-only authentication exceptions must never be copied to LIVE.
+- No database, Auth, API, RLS, privilege, function, view, extension, index, connection, Banking Pay, or financial object was changed by the audit. Policy X was not touched.
 

@@ -381,6 +381,61 @@ test('every selection entry point passes the exact queued epoch and renders only
   );
 });
 
+test('selection settlement immediately gates Create Draft and restores its prior UI only when no rerender replaced it', () => {
+  const busyOwnerSource = sliceBetween(
+    'const setPreviewSelectionControlsBusy =',
+    'let previewSelectionMutationTail ='
+  );
+  const makeClassList = (initial = []) => {
+    const values = new Set(initial);
+    return {
+      add(value) { values.add(value); },
+      remove(value) { values.delete(value); },
+      contains(value) { return values.has(value); }
+    };
+  };
+  const attributes = new Map([
+    ['data-disabled', '0'],
+    ['aria-disabled', 'false'],
+    ['title', 'Create draft batches from the selected current Ready to Pay rows']
+  ]);
+  const createDraftControl = {
+    textContent: 'Create drafts',
+    disabled: false,
+    classList: makeClassList(['btn', 'btn-primary']),
+    getAttribute(name) { return attributes.has(name) ? attributes.get(name) : null; },
+    setAttribute(name, value) { attributes.set(name, String(value)); },
+    removeAttribute(name) { attributes.delete(name); }
+  };
+  const targetEl = {
+    querySelectorAll() { return []; },
+    querySelector(selector) {
+      return selector === '[data-action="banking:pay:createDraft"]' ? createDraftControl : null;
+    }
+  };
+  const context = vm.createContext({ targetEl });
+  vm.runInContext(`${busyOwnerSource}\nglobalThis.__setBusy = setPreviewSelectionControlsBusy;`, context);
+
+  context.__setBusy(true);
+  assert.equal(createDraftControl.textContent, 'Updating selection…');
+  assert.equal(createDraftControl.disabled, true);
+  assert.equal(createDraftControl.classList.contains('disabled'), true);
+  assert.equal(attributes.get('data-disabled'), '1');
+  assert.equal(attributes.get('aria-disabled'), 'true');
+  assert.equal(attributes.get('aria-busy'), 'true');
+  assert.match(attributes.get('title'), /validating the selected rows/i);
+
+  context.__setBusy(false);
+  assert.equal(createDraftControl.textContent, 'Create drafts');
+  assert.equal(createDraftControl.disabled, false);
+  assert.equal(createDraftControl.classList.contains('disabled'), false);
+  assert.equal(attributes.get('data-disabled'), '0');
+  assert.equal(attributes.get('aria-disabled'), 'false');
+  assert.equal(attributes.has('aria-busy'), false);
+  assert.equal(attributes.get('title'), 'Create draft batches from the selected current Ready to Pay rows');
+  assert.equal(createDraftControl.__bankingSelectionCreateDraftBusyState, undefined);
+});
+
 test('the watcher suppresses only the exact pending or adopted selection revision', () => {
   const watcherBody = sliceBetween(
     'const refreshWorkbenchVisiblePageAfterProgress =',
