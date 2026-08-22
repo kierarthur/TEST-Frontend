@@ -2044,6 +2044,7 @@
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && state.home.zeroShifts && document.querySelector('[data-ir-zero-backdrop]')) {
       event.preventDefault();
+      event.stopImmediatePropagation();
       if (!state.home.zeroShifts.busy) {
         state.home.zeroShifts = null;
         showScreen('Imports', renderHome, 'imports-v1');

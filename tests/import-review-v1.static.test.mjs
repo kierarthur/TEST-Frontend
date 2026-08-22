@@ -374,6 +374,7 @@ test('Daily Validation is vendor-neutral until the Worker reports the detected f
   assert.match(source, /return 'HealthRoster import'/);
   assert.doesNotMatch(source, /'HealthRoster daily validation'/);
   assert.match(html, /daily-roster-compat=20260822-r1/);
+  assert.match(html, /import-review-v1\.js[^"']*daily-zero-dialog=20260822-r1/);
 });
 
 test('no-shifts declaration uses a client-scoped bounded Daily review modal', () => {
@@ -383,6 +384,7 @@ test('no-shifts declaration uses a client-scoped bounded Daily review modal', ()
   assert.match(source, /data-ir-zero-end/);
   assert.match(source, /inclusiveDays > 366/);
   assert.match(source, /api\/imports\/daily-validation\/zero-shifts/);
+  assert.match(source, /event\.stopImmediatePropagation\(\)/);
   assert.match(source, /Nothing is applied until the review is approved/);
   assert.match(source, /parser\.includes\('ZERO_DECLARATION'\)/);
   assert.match(css, /\.irv1-dialog-backdrop/);
