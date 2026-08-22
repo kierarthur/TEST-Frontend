@@ -2843,6 +2843,10 @@
     box-shadow: 0 8px 22px rgba(0, 0, 0, 0.15);
   }
 
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody tr[hidden] {
+    display: none !important;
+  }
+
   #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td {
     display: grid;
     grid-column: 1 / -1 !important;

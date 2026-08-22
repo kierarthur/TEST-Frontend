@@ -8,6 +8,10 @@ const source = fs.readFileSync(
   path.resolve(__dirname, '../../js/main.js'),
   'utf8'
 );
+const modalCss = fs.readFileSync(
+  path.resolve(__dirname, '../../css/modal-modernisation.css'),
+  'utf8'
+);
 
 function sliceBetween(startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -96,6 +100,13 @@ test('Ready breakdown disclosure updates its existing row without rebuilding the
   assert.ok(
     handlerBody.indexOf('if (detailRow && detailKey === groupKey)') < handlerBody.indexOf('await safeRerender(null)'),
     'full rerender must be fallback-only after the exact in-place row proof'
+  );
+});
+
+test('mobile card presentation respects the real collapsed breakdown state', () => {
+  assert.match(
+    modalCss,
+    /table\.ctms-universal-card-table tbody tr\[hidden\] \{\s*display: none !important;\s*\}/
   );
 });
 
