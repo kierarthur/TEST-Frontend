@@ -2753,6 +2753,25 @@
   display: none !important;
 }
 
+#modal.banking-modal .banking-ready-select-all-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+#modal.banking-modal .banking-ready-select-all-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 @media (max-width: 700px) {
   #modal.ctms-modern-modal[class*="ctms-family-"] {
     width: calc(100vw - 24px);
@@ -2810,7 +2829,7 @@
   }
 
   #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table,
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody {
     display: grid;
     width: 100% !important;
     min-width: 0 !important;
@@ -2820,8 +2839,8 @@
     background: transparent;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table thead,
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table colgroup {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > thead,
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > colgroup {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -2830,7 +2849,7 @@
     white-space: nowrap;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody tr {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr {
     display: grid;
     grid-template-columns: minmax(0, 1fr) !important;
     width: 100% !important;
@@ -2843,11 +2862,11 @@
     box-shadow: 0 8px 22px rgba(0, 0, 0, 0.15);
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody tr[hidden] {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr[hidden] {
     display: none !important;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td {
     display: grid;
     grid-column: 1 / -1 !important;
     grid-template-columns: minmax(92px, 0.42fr) minmax(0, 1fr);
@@ -2863,7 +2882,7 @@
     overflow-wrap: anywhere;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td[colspan] {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td[colspan] {
     display: block !important;
     grid-column: 1 / -1;
     width: auto !important;
@@ -2875,11 +2894,11 @@
     overflow-wrap: break-word;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td[colspan]::before {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td[colspan]::before {
     content: none !important;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td > * {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td > * {
     min-width: 0 !important;
     max-width: 100% !important;
   }
@@ -2904,7 +2923,7 @@
     max-width: 100% !important;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td:not([data-ctms-label=""])::before {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td:not([data-ctms-label=""])::before {
     content: attr(data-ctms-label);
     color: #9fb0c7;
     font-size: 10px;
@@ -2913,7 +2932,7 @@
     text-transform: uppercase;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table tbody td[data-ctms-label=""] {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td[data-ctms-label=""] {
     display: block;
   }
 
@@ -2922,6 +2941,221 @@
     max-width: 100%;
     white-space: normal;
   }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > thead {
+    position: static;
+    display: block !important;
+    width: 100% !important;
+    height: auto;
+    margin: 0 0 10px;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > thead > tr {
+    display: block !important;
+    width: 100% !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > thead > tr > th {
+    display: none !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > thead > tr > th:first-child {
+    display: block !important;
+    box-sizing: border-box;
+    width: 100% !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+  }
+
+  #modal.banking-modal .banking-ready-select-all-control {
+    box-sizing: border-box;
+    display: flex;
+    width: 100%;
+    min-height: 48px;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid rgba(101, 132, 176, 0.42);
+    border-radius: 12px;
+    background: rgba(18, 37, 63, 0.94);
+    color: #f4f7fb;
+    font-size: 13px;
+    font-weight: 760;
+  }
+
+  #modal.banking-modal .banking-ready-select-all-control input[type="checkbox"] {
+    inline-size: 24px !important;
+    block-size: 24px !important;
+    min-inline-size: 24px;
+    flex-basis: 24px;
+  }
+
+  #modal.banking-modal .banking-ready-select-all-text {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 0;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > tbody > tr:not([data-banking-ready-breakdown-detail]) {
+    grid-template-columns: 46px minmax(0, 1fr) !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > tbody > tr:not([data-banking-ready-breakdown-detail]) > td:first-child {
+    display: flex !important;
+    grid-column: 1 !important;
+    grid-row: 1;
+    align-items: center;
+    justify-content: center;
+    min-height: 52px;
+    padding: 8px !important;
+    border-right: 1px solid rgba(88, 115, 153, 0.22);
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > tbody > tr:not([data-banking-ready-breakdown-detail]) > td:first-child::before {
+    content: none !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > tbody > tr:not([data-banking-ready-breakdown-detail]) > td:first-child input[type="checkbox"] {
+    width: 24px !important;
+    height: 24px !important;
+    min-width: 24px;
+    inline-size: 24px !important;
+    block-size: 24px !important;
+    min-inline-size: 24px;
+    flex-basis: 24px;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > tbody > tr:not([data-banking-ready-breakdown-detail]) > td:nth-child(2) {
+    grid-column: 2 !important;
+    grid-row: 1;
+    align-content: center;
+    min-height: 52px;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > tbody > tr:not([data-banking-ready-breakdown-detail]) > td:nth-child(n+3) {
+    grid-column: 1 / -1 !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table > tbody > tr[data-banking-ready-breakdown-detail] {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table > tbody > tr[data-banking-ready-breakdown-detail] > td {
+    padding: 0 !important;
+    border: 0 !important;
+  }
+
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] > td > div {
+    margin-top: 0 !important;
+    overflow: visible !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table,
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody {
+    display: grid !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    gap: 10px;
+    border: 0;
+    background: transparent;
+  }
+
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > thead,
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > colgroup {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden;
+    border: 1px solid rgba(95, 124, 164, 0.34);
+    border-radius: 12px;
+    background: rgba(12, 28, 49, 0.96);
+  }
+
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr > td {
+    display: grid !important;
+    grid-column: 1 / -1 !important;
+    grid-template-columns: minmax(92px, 0.42fr) minmax(0, 1fr) !important;
+    gap: 10px;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    padding: 8px 10px !important;
+    border: 0 !important;
+    border-bottom: 1px solid rgba(88, 115, 153, 0.18) !important;
+    background: transparent !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    text-align: left !important;
+  }
+
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr > td:last-child {
+    border-bottom: 0 !important;
+  }
+
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr > td::before {
+    color: #9fb0c7;
+    font-size: 10px;
+    font-weight: 760;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(1)::before,
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[colspan="7"]) > td:nth-child(1)::before { content: "Tick"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(2)::before { content: "Date"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(3)::before { content: "Client"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(4)::before { content: "Role"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(5)::before { content: "Band"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(6)::before { content: "Start"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(7)::before { content: "Finish"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(8)::before { content: "Break"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(9)::before { content: "Amount"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(10)::before { content: "Snooze state"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[rowspan]) > td:nth-child(11)::before { content: "Action"; }
+
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:not(:has(> td[rowspan])):not(:has(> td[colspan="7"])) > td:nth-child(1)::before { content: "Date"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:not(:has(> td[rowspan])):not(:has(> td[colspan="7"])) > td:nth-child(2)::before { content: "Client"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:not(:has(> td[rowspan])):not(:has(> td[colspan="7"])) > td:nth-child(3)::before { content: "Role"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:not(:has(> td[rowspan])):not(:has(> td[colspan="7"])) > td:nth-child(4)::before { content: "Band"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:not(:has(> td[rowspan])):not(:has(> td[colspan="7"])) > td:nth-child(5)::before { content: "Start"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:not(:has(> td[rowspan])):not(:has(> td[colspan="7"])) > td:nth-child(6)::before { content: "Finish"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:not(:has(> td[rowspan])):not(:has(> td[colspan="7"])) > td:nth-child(7)::before { content: "Break"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:not(:has(> td[rowspan])):not(:has(> td[colspan="7"])) > td:nth-child(8)::before { content: "Amount"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:not(:has(> td[rowspan])):not(:has(> td[colspan="7"])) > td:nth-child(9)::before { content: "Snooze state"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:not(:has(> td[rowspan])):not(:has(> td[colspan="7"])) > td:nth-child(10)::before { content: "Action"; }
+
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[colspan="7"]) > td:nth-child(2)::before { content: "Expense details"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[colspan="7"]) > td:nth-child(3)::before { content: "Amount"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[colspan="7"]) > td:nth-child(4)::before { content: "Snooze state"; }
+  #modal.banking-modal tr[data-banking-ready-breakdown-detail] table.ctms-universal-wide-table > tbody > tr:has(> td[colspan="7"]) > td:nth-child(5)::before { content: "Action"; }
 
   #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-key-value-table,
   #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-key-value-table tbody {

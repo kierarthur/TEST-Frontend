@@ -106,7 +106,40 @@ test('Ready breakdown disclosure updates its existing row without rebuilding the
 test('mobile card presentation respects the real collapsed breakdown state', () => {
   assert.match(
     modalCss,
-    /table\.ctms-universal-card-table tbody tr\[hidden\] \{\s*display: none !important;\s*\}/
+    /table\.ctms-universal-card-table > tbody > tr\[hidden\] \{\s*display: none !important;\s*\}/
+  );
+});
+
+test('mobile Ready breakdown styles do not leak from the parent card table and expose every child field', () => {
+  assert.doesNotMatch(
+    modalCss,
+    /table\.ctms-universal-card-table tbody (?:tr|td)/
+  );
+  assert.match(
+    modalCss,
+    /tr\[data-banking-ready-breakdown-detail\] table\.ctms-universal-wide-table > tbody > tr > td/
+  );
+  for (const label of ['Tick', 'Date', 'Client', 'Role', 'Band', 'Start', 'Finish', 'Break', 'Amount', 'Snooze state', 'Action']) {
+    assert.match(modalCss, new RegExp(`content: "${label}"`));
+  }
+});
+
+test('mobile Ready selection keeps each line tick beside its line type and exposes the all-pages control', () => {
+  assert.match(source, /<label class="banking-ready-select-all-control">/);
+  assert.match(source, /banking-ready-select-all-text/);
+  assert.match(source, /Tick all Ready to Pay lines/);
+  assert.match(source, /Untick all Ready to Pay lines/);
+  assert.match(
+    modalCss,
+    /table\.ctms-universal-card-table:has\(> thead \[data-action="banking:pay:toggleAllReadyPreviewRows"\]\) > thead/
+  );
+  assert.match(
+    modalCss,
+    /> tbody > tr:not\(\[data-banking-ready-breakdown-detail\]\) > td:first-child \{[\s\S]*?grid-column: 1 !important;[\s\S]*?min-height: 52px;/
+  );
+  assert.match(
+    modalCss,
+    /> tbody > tr:not\(\[data-banking-ready-breakdown-detail\]\) > td:nth-child\(2\) \{[\s\S]*?grid-column: 2 !important;/
   );
 });
 

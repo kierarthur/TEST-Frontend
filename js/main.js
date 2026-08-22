@@ -49633,16 +49633,19 @@ function renderPayNewBatchWizard() {
       <thead>
         <tr>
           <th style="width:44px;min-width:44px;text-align:center;white-space:nowrap;${stickyReadySelectHeaderCellStyle}">
-            <input
-              type="checkbox"
-              data-action="banking:pay:toggleAllReadyPreviewRows"
-              data-ready-select-all-state="${partiallySelected ? 'PARTIAL' : (allSelected ? 'ALL' : 'NONE')}"
-              aria-label="${allSelected ? 'Untick all eligible Ready to Pay lines across every page' : 'Tick all eligible Ready to Pay lines across every page'}"
-              aria-checked="${partiallySelected ? 'mixed' : (allSelected ? 'true' : 'false')}"
-              title="${allSelected ? 'Untick all Ready to Pay lines across every page' : 'Tick all Ready to Pay lines across every page'}"
-              ${allSelected ? 'checked' : ''}
-              ${hasReadyRows ? '' : 'disabled aria-disabled="true"'}
-            />
+            <label class="banking-ready-select-all-control">
+              <input
+                type="checkbox"
+                data-action="banking:pay:toggleAllReadyPreviewRows"
+                data-ready-select-all-state="${partiallySelected ? 'PARTIAL' : (allSelected ? 'ALL' : 'NONE')}"
+                aria-label="${allSelected ? 'Untick all eligible Ready to Pay lines across every page' : 'Tick all eligible Ready to Pay lines across every page'}"
+                aria-checked="${partiallySelected ? 'mixed' : (allSelected ? 'true' : 'false')}"
+                title="${allSelected ? 'Untick all Ready to Pay lines across every page' : 'Tick all Ready to Pay lines across every page'}"
+                ${allSelected ? 'checked' : ''}
+                ${hasReadyRows ? '' : 'disabled aria-disabled="true"'}
+              />
+              <span class="banking-ready-select-all-text">${allSelected ? 'Untick all Ready to Pay lines' : 'Tick all Ready to Pay lines'}</span>
+            </label>
           </th>
           <th style="white-space:nowrap;${stickyPreviewHeaderCellStyle}">Line type</th>
           <th style="white-space:nowrap;${stickyPreviewHeaderCellStyle}">Candidate</th>
