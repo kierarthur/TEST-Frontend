@@ -24,7 +24,8 @@ test('loads the current main frontend asset through an explicit cache version', 
   assert.match(html, /candidate-office-presenter-v1\.js\?v=20260814-r4/);
   assert.match(html, /candidate-office-bridge-v1\.js\?v=20260814-r6/);
   assert.match(html, /modal-modernisation\.css\?v=20260822-r10/);
-  assert.match(html, /summary-modernisation\.css\?v=20260822-r4/);
+  assert.match(html, /summary-modernisation\.css\?v=20260822-r5/);
+  assert.match(html, /summary-modernisation\.js\?v=20260822-r2/);
   assert.match(html, /modal-modernisation\.js\?v=20260822-r3/);
   assert.doesNotMatch(
     html,

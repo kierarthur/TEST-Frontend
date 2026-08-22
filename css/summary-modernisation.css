@@ -430,3 +430,124 @@ body.ctms-summary-proposal .pager .mini{color:var(--sheet-sub)}
   #modal.ctms-imports-modern-modal .irv1-drop.ctms-mobile-file-picker strong{font-size:13px;color:#fff}
   #modal.ctms-imports-modern-modal .irv1-drop.ctms-mobile-file-picker span{font-size:10px;color:#e0ddff}
 }
+
+/* Outbox has ten data columns, so it needs its card presentation on wide phones
+   and portrait tablets as well as on narrow phones. Desktop remains a data grid. */
+@media(max-width:900px){
+  body.ctms-summary-proposal .topbar{gap:8px}
+  body.ctms-summary-proposal .nav{min-width:0;overflow-x:auto;overscroll-behavior-x:contain}
+  body.ctms-summary-proposal .userbox{
+    display:flex!important;flex:0 0 auto;margin-left:0;position:relative;z-index:2
+  }
+  body.ctms-summary-proposal .userbox .chip{display:none!important}
+  body.ctms-summary-proposal .userbox #btnLogout{
+    min-height:38px;padding:0 12px;border-radius:11px;white-space:nowrap;font-size:11px;font-weight:720
+  }
+
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] #content>.ctms-outbox-controls{
+    display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr));align-items:end!important;
+    gap:9px!important;overflow:visible!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-controls::before{display:none!important}
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-controls>div:empty{display:none!important}
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-field{
+    display:flex!important;min-width:0;flex-direction:column;gap:4px
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-field--search{grid-column:span 2}
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-field input,
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-field select{
+    box-sizing:border-box;width:100%!important;min-width:0!important;max-width:100%!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-apply,
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-clear-selection{
+    box-sizing:border-box;width:100%;min-width:0;min-height:36px!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-selected{
+    align-self:center;justify-self:center;white-space:nowrap
+  }
+
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body{
+    padding:9px;overflow-x:hidden!important;touch-action:pan-y
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid{
+    display:block!important;width:100%!important;min-width:0!important;max-width:100%!important;table-layout:auto!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid colgroup{display:none!important}
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid thead{
+    position:static!important;display:block!important;width:auto!important;height:auto!important;margin:0 0 9px!important;
+    overflow:visible!important;clip:auto!important;white-space:normal!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid thead tr{display:block!important}
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid thead th{display:none!important}
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid thead th:first-child{
+    box-sizing:border-box;display:flex!important;width:100%!important;min-width:0!important;max-width:none!important;height:auto!important;
+    align-items:center;gap:11px;padding:11px 13px!important;border:1px solid var(--sheet-line)!important;border-radius:12px;
+    background:#13223a!important;color:#eef3fa!important;box-shadow:none!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid thead th:first-child::after{
+    content:"Select all visible messages";font-size:11px;font-weight:780;letter-spacing:.05em;text-transform:uppercase
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid tbody{
+    display:grid!important;width:100%;gap:10px
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid tbody tr[data-outbox-key]{
+    box-sizing:border-box;display:grid!important;grid-template-columns:42px minmax(0,1fr);width:100%;min-width:0;
+    padding:10px 12px;border:1px solid var(--sheet-line);border-radius:14px;
+    background:linear-gradient(180deg,#0f1c31,#0a1426)!important;box-shadow:0 8px 20px rgba(0,0,0,.16)
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid tbody tr:not([data-outbox-key]){
+    display:block!important;padding:14px;border:1px solid var(--sheet-line);border-radius:12px;background:#0d192c!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid tbody tr:not([data-outbox-key]) td{
+    display:block!important;width:100%!important;min-width:0!important;padding:0!important;border:0!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid tbody tr[data-outbox-key]>td{
+    box-sizing:border-box;display:grid!important;grid-template-columns:minmax(104px,.7fr) minmax(0,1.3fr);gap:10px;
+    width:auto!important;min-width:0!important;max-width:none!important;padding:8px 2px!important;border:0!important;
+    border-top:1px solid rgba(74,98,135,.3)!important;white-space:normal!important;overflow-wrap:anywhere!important;
+    word-break:normal!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid tbody tr[data-outbox-key]>td:first-child{
+    grid-row:1 / span 20;display:flex!important;width:34px!important;min-width:34px!important;align-items:flex-start;justify-content:center;
+    padding:7px 4px 0 0!important;border:0!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid tbody tr[data-outbox-key]>td:nth-child(2){
+    padding-top:2px!important;border-top:0!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid td:not(:first-child)::before{
+    content:attr(data-label);align-self:start;color:#8fa0b7;font-size:9px;font-weight:780;letter-spacing:.07em;text-transform:uppercase
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid td div{
+    min-width:0!important;max-width:100%!important;white-space:normal!important;overflow:visible!important;
+    text-overflow:clip!important;overflow-wrap:anywhere!important;word-break:normal!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid td .pill,
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid td .ctms-state-badge{
+    justify-self:start;width:max-content;max-width:100%;white-space:nowrap!important;word-break:normal!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid td.ctms-mobile-open-cell{
+    display:flex!important;grid-column:2;justify-content:flex-end;align-items:center;padding:10px 0 1px!important;
+    border-top:1px solid rgba(74,98,135,.3)!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid td.ctms-mobile-open-cell::before{display:none}
+}
+
+@media(max-width:620px){
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] #content>.ctms-outbox-controls{
+    grid-template-columns:repeat(2,minmax(0,1fr))
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-field--search,
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .ctms-outbox-clear-selection{grid-column:1/-1}
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid tbody tr[data-outbox-key]>td{
+    grid-template-columns:minmax(88px,.65fr) minmax(0,1.35fr);gap:8px
+  }
+}
+
+@media(min-width:901px){
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body{
+    overflow-x:auto!important
+  }
+  body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid{
+    width:1600px!important;min-width:1600px!important;max-width:none!important;table-layout:fixed!important
+  }
+}

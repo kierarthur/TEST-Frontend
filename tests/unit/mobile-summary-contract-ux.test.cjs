@@ -20,6 +20,22 @@ test('mobile summary sheets retain a usable scrollable records viewport', () => 
   assert.doesNotMatch(summaryCss, /body\.ctms-summary-proposal \.grid\{display:block/);
 });
 
+test('Outbox uses readable cards through wide-phone and portrait-tablet widths', () => {
+  assert.match(summaryJs, /key === 'outbox' \? '\(max-width:900px\)' : '\(max-width:620px\)'/);
+  assert.match(summaryJs, /bar\.classList\.add\('ctms-outbox-controls'\)/);
+  assert.match(summaryJs, /outboxClearSelection\.dataset\.ctmsVisualSyncWired/);
+  assert.match(summaryCss, /@media\(max-width:900px\)[\s\S]*?data-summary-proposal-section="outbox"[\s\S]*?tbody tr\[data-outbox-key\]/);
+  assert.match(summaryCss, /content:"Select all visible messages"/);
+  assert.match(summaryCss, /data-summary-proposal-section="outbox"[\s\S]*?word-break:normal!important/);
+  assert.match(summaryCss, /@media\(min-width:901px\)[\s\S]*?width:1600px!important;min-width:1600px!important/);
+});
+
+test('mobile summary navigation keeps Logout outside the scrolling navigation', () => {
+  assert.match(summaryCss, /@media\(max-width:900px\)[\s\S]*?\.userbox\{[\s\S]*?display:flex!important/);
+  assert.match(summaryCss, /\.userbox \.chip\{display:none!important\}/);
+  assert.match(summaryCss, /\.userbox #btnLogout\{/);
+});
+
 test('dirty create modals use the CloudTMS confirmation UI', () => {
   assert.match(main, /kind: 'create-record-discard-confirm'/);
   assert.match(main, /title: 'Discard new record\?'/);

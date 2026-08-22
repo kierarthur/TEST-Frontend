@@ -72,15 +72,39 @@
         Array.from(bar.querySelectorAll('button')).forEach((button) => {
           if (/^columns$/i.test(text(button))) button.classList.add('ctms-duplicate-columns');
         });
+        if (key === 'outbox') {
+          bar.classList.add('ctms-outbox-controls');
+
+          const pageSizeControl = bar.querySelector('#outboxPageSize');
+          const pageSizeLabel = Array.from(bar.querySelectorAll(':scope > .mini')).find((node) => /^rows per page$/i.test(text(node)));
+          if (pageSizeControl && pageSizeLabel && !pageSizeControl.closest('.ctms-outbox-field--page-size')) {
+            const field = document.createElement('div');
+            field.className = 'ctms-outbox-field ctms-outbox-field--page-size';
+            bar.insertBefore(field, pageSizeLabel);
+            field.appendChild(pageSizeLabel);
+            field.appendChild(pageSizeControl);
+          }
+
+          const markField = (id, className) => {
+            const control = bar.querySelector(`#${id}`);
+            const field = control?.parentElement;
+            if (field && field !== bar) field.classList.add('ctms-outbox-field', className);
+          };
+          markField('outboxSearchText', 'ctms-outbox-field--search');
+          markField('outboxFilterChannel', 'ctms-outbox-field--channel');
+          markField('outboxFilterStatus', 'ctms-outbox-field--status');
+          markField('outboxFilterQueueState', 'ctms-outbox-field--queue');
+          markField('outboxSortKey', 'ctms-outbox-field--sort');
+          markField('outboxSortDir', 'ctms-outbox-field--direction');
+          bar.querySelector('#outboxApplyFiltersBtn')?.classList.add('ctms-outbox-apply');
+          bar.querySelector('#outboxSelectedCount')?.parentElement?.classList.add('ctms-outbox-selected');
+          bar.querySelector('#outboxClearSelectionBtn')?.classList.add('ctms-outbox-clear-selection');
+        }
       });
     }
 
     document.querySelectorAll('.summary-body .grid').forEach((table) => {
-      if (key === 'outbox' && !matchMedia('(max-width:620px)').matches) {
-        table.style.setProperty('width','100%','important');
-        table.style.setProperty('min-width','0px','important');
-        table.querySelectorAll('col').forEach((column) => column.style.setProperty('min-width','0px','important'));
-      }
+      const compactSummary = matchMedia(key === 'outbox' ? '(max-width:900px)' : '(max-width:620px)').matches;
       const headers = Array.from(table.querySelectorAll('thead th')).map((th) => text(th).replace(/[▲▼]$/,'').trim());
       table.querySelectorAll('tbody tr').forEach((row) => {
         if (!row.hasAttribute('tabindex')) row.tabIndex = 0;
@@ -99,7 +123,8 @@
             cell.appendChild(badge);
           }
         });
-        if (matchMedia('(max-width:620px)').matches && !row.querySelector('.ctms-mobile-open-cell')) {
+        const canAddMobileOpen = key === 'outbox' ? row.hasAttribute('data-outbox-key') : true;
+        if (compactSummary && canAddMobileOpen && !row.querySelector('.ctms-mobile-open-cell')) {
           const actionCell = document.createElement('td');
           actionCell.className = 'ctms-mobile-open-cell';
           actionCell.dataset.label = '';
@@ -176,6 +201,15 @@
         row.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true,view:global}));
       }
     });
+    const outboxClearSelection = body.dataset.summarySection === 'outbox'
+      ? document.getElementById('outboxClearSelectionBtn')
+      : null;
+    if (outboxClearSelection && outboxClearSelection.dataset.ctmsVisualSyncWired !== 'true') {
+      outboxClearSelection.dataset.ctmsVisualSyncWired = 'true';
+      outboxClearSelection.addEventListener('click',() => {
+        requestAnimationFrame(() => rows().forEach(syncChecked));
+      });
+    }
   }
 
   function simplifyImports(){
