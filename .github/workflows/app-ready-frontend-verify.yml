@@ -1,0 +1,51 @@
+name: App-Ready frontend verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: app-ready-frontend-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify Office and UI seams
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Check application syntax
+        run: |
+          node --check js/main.js
+          node --check js/mytms-office-v1.js
+
+      - name: Verify App-Ready Office, modal, summary and asset policies
+        run: |
+          node --test \
+            tests/unit/mytms-office-v1.test.cjs \
+            tests/unit/candidate-office-*.test.cjs \
+            tests/unit/modal-modernisation-policy.test.cjs \
+            tests/unit/mobile-summary-contract-ux.test.cjs \
+            tests/unit/timesheet-summary-issues.test.cjs \
+            tests/unit/timesheet-processing-status-badges.test.cjs \
+            tests/unit/summary-money-format.test.cjs \
+            tests/unit/main-asset-cache-version.test.cjs \
+            tests/unit/cloudtms-branding-assets.test.cjs
