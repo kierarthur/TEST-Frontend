@@ -300899,6 +300899,46 @@ function renderTemplateFieldPickerModal() {
 }
 
 
+async function invoiceModalUiConfirm({
+  title = 'Confirm',
+  message = 'Are you sure?',
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  confirmClass = 'btn btn-primary',
+  kind = 'invoice-modal-ui-confirm'
+} = {}) {
+  const result = await openUiConfirmModal({
+    title,
+    message,
+    confirm_label: confirmLabel,
+    cancel_label: cancelLabel,
+    confirm_class: confirmClass,
+    kind,
+    suppress_parent_persist: true
+  });
+  return result?.confirmed === true;
+}
+
+async function invoiceModalUiNotice(message, {
+  title = 'Invoice',
+  kind = 'invoice-modal-ui-notice'
+} = {}) {
+  const text = String(message || '').trim() || 'The invoice action could not be completed.';
+  try {
+    await openUiConfirmModal({
+      title,
+      message: text,
+      confirm_label: 'OK',
+      hide_cancel: true,
+      kind,
+      suppress_parent_persist: true
+    });
+  } catch (error) {
+    console.error('[INV][UI][NOTICE_FAILED]', error);
+    try { window.__toast?.(text); } catch {}
+  }
+}
+
 async function handleInvoiceDelete(modalCtx) {
   const mc = modalCtx || {};
 
@@ -300931,7 +300971,7 @@ async function handleInvoiceDelete(modalCtx) {
   }
 
   const invoiceId = String(invoice?.id || '').trim();
-  if (!invoiceId) { alert('Invoice id missing'); return; }
+  if (!invoiceId) { await invoiceModalUiNotice('Invoice id missing.'); return; }
 
   const status = String(invoice?.status || '').toUpperCase();
 
@@ -300944,17 +300984,23 @@ async function handleInvoiceDelete(modalCtx) {
     (items.length === 0);
 
   if (!can) {
-    alert('Delete is only available for empty, unissued (DRAFT/ON_HOLD), unpaid invoices.');
+    await invoiceModalUiNotice('Delete is only available for empty, unissued (DRAFT/ON_HOLD), unpaid invoices.');
     return;
   }
 
-  const ok = window.confirm('Delete this invoice? This cannot be undone.');
+  const ok = await invoiceModalUiConfirm({
+    title: 'Delete invoice?',
+    message: 'Delete this invoice? This cannot be undone.',
+    confirmLabel: 'Delete',
+    confirmClass: 'btn btn-danger',
+    kind: 'invoice-delete-confirm'
+  });
   if (!ok) return;
 
   const res = await authFetch(API(`/api/invoices/${encodeURIComponent(invoiceId)}`), { method: 'DELETE' });
   if (!res.ok) {
     const t = await res.text().catch(()=> '');
-    alert(t || `Delete failed (${res.status})`);
+    await invoiceModalUiNotice(t || `Delete failed (${res.status})`, { title: 'Delete invoice failed' });
     return;
   }
 
@@ -301051,7 +301097,7 @@ async function handleInvoiceRenderPdf(modalCtx) {
   const invoiceId =
     String(mc?.invoiceId || mc?.dataLoaded?.invoice?.id || mc?.dataLoaded?.invoice_row?.id || mc?.data?.id || '').trim();
 
-  if (!invoiceId) { alert('Invoice id missing'); return; }
+  if (!invoiceId) { await invoiceModalUiNotice('Invoice id missing.'); return; }
 
   const safeJson = async (res) => { try { return await res.clone().json(); } catch { return null; } };
 
@@ -301145,7 +301191,7 @@ async function handleInvoiceRenderPdf(modalCtx) {
       const msg = firstState.renderError
         ? `Invoice PDF generation has been queued after immediate generation failed: ${firstState.renderError}. Please try again shortly.`
         : 'Invoice PDF generation has been queued and is not ready yet. Please try again shortly.';
-      alert(msg);
+      await invoiceModalUiNotice(msg, { title: 'Invoice PDF unavailable' });
       return;
     } else {
       const fallbackKey = extractPdfKeyFromRenderResponse(firstState.raw);
@@ -301155,12 +301201,12 @@ async function handleInvoiceRenderPdf(modalCtx) {
         const msg = firstState.renderError
           ? `Invoice PDF generation failed: ${firstState.renderError}`
           : 'Invoice PDF generation has started but is not ready yet. Please try again shortly.';
-        alert(msg);
+        await invoiceModalUiNotice(msg, { title: 'Invoice PDF unavailable' });
         return;
       }
     }
   } catch (e) {
-    alert(String(e?.message || e || 'Failed to render invoice PDF'));
+    await invoiceModalUiNotice(String(e?.message || e || 'Failed to render invoice PDF'), { title: 'Invoice PDF failed' });
     return;
   }
 
@@ -301169,7 +301215,7 @@ async function handleInvoiceRenderPdf(modalCtx) {
     signedUrl = String(signed?.url || '').trim();
     pdfKey = String(signed?.key || pdfKey || '').trim().replace(/^\/+/, '');
   } catch (e) {
-    alert(String(e?.message || e || 'Failed to presign invoice PDF download'));
+    await invoiceModalUiNotice(String(e?.message || e || 'Failed to presign invoice PDF download'), { title: 'Invoice PDF failed' });
     return;
   }
 
@@ -301236,7 +301282,7 @@ async function handleInvoiceEmail(modalCtx) {
   const mc = modalCtx || {};
   const inv = mc.invoiceDetail?.invoice || mc.data || null;
   const invoiceId = String(inv?.id || '').trim();
-  if (!invoiceId) { alert('Invoice id missing'); return; }
+  if (!invoiceId) { await invoiceModalUiNotice('Invoice id missing.'); return; }
 
   const safeJson = async (res) => { try { return await res.json(); } catch { return null; } };
 
@@ -301258,7 +301304,9 @@ async function handleInvoiceEmail(modalCtx) {
 
     if (st === 'ON_HOLD') {
       const reason = j?.on_hold_reason ? String(j.on_hold_reason) : 'Invoice placed ON_HOLD';
-      alert(`Invoice moved to ON_HOLD and was not emailed.\n\nReason: ${reason}`);
+      await invoiceModalUiNotice(`Invoice moved to ON_HOLD and was not emailed.\n\nReason: ${reason}`, {
+        title: 'Invoice not emailed'
+      });
       // refresh invoice detail so UI reflects server state
       try {
         const r2 = await authFetch(API(`/api/invoices/${encodeURIComponent(invoiceId)}`));
@@ -301284,11 +301332,12 @@ async function handleInvoiceEmail(modalCtx) {
       const mailId = j?.mail_id ? String(j.mail_id) : '';
       const to = j?.to ? String(j.to) : '';
       window.__toast && window.__toast('Queued email.');
-      alert(
+      await invoiceModalUiNotice(
         `Queued invoice email.\n\n` +
         (to ? `To: ${to}\n` : '') +
         (mailId ? `Outbox ID: ${mailId}\n\n` : '\n') +
-        `You can review outbox status in Audit → mail_outbox.`
+        `You can review outbox status in Audit → mail_outbox.`,
+        { title: 'Invoice email queued' }
       );
 
       // optional: if audit is open, refresh it
@@ -301305,7 +301354,7 @@ async function handleInvoiceEmail(modalCtx) {
     // Fallback (should not happen, but safe)
     window.__toast && window.__toast('Email request complete.');
   } catch (e) {
-    alert(String(e?.message || e || 'Failed to queue invoice email'));
+    await invoiceModalUiNotice(String(e?.message || e || 'Failed to queue invoice email'), { title: 'Invoice email failed' });
   }
 }
 
@@ -301678,7 +301727,7 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
       console.log('[INV][TOAST]', msg);
     } catch {}
   };
-  // ✅ NEW: Styled modal prompt (not window.confirm)
+  // Styled modal prompt for post-issue email delivery.
   // Returns true if user clicks "Yes, send now", otherwise false.
   const promptSendInvoiceEmailNow = async ({ toEmail } = {}) => {
     const to = (typeof toEmail === 'string' && toEmail.trim()) ? toEmail.trim() : '';
@@ -302289,15 +302338,30 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
     if (confirmation?.confirmed !== true) return;
   }
   if (wantHold !== null && wantHold !== curIsHold) {
-    const ok = window.confirm(wantHold ? 'Put this invoice ON HOLD?' : 'Remove ON HOLD from this invoice?');
+    const ok = await invoiceModalUiConfirm({
+      title: wantHold ? 'Put invoice on hold?' : 'Remove invoice hold?',
+      message: wantHold ? 'Put this invoice ON HOLD?' : 'Remove ON HOLD from this invoice?',
+      confirmLabel: wantHold ? 'Put on hold' : 'Remove hold',
+      kind: 'invoice-hold-save-confirm'
+    });
     if (!ok) return;
   }
   if (wantIssued !== null && wantIssued !== curIsIssued) {
-    const ok = window.confirm(wantIssued ? 'Issue this invoice now?' : 'Unissue this invoice? (This will invalidate the PDF)');
+    const ok = await invoiceModalUiConfirm({
+      title: wantIssued ? 'Issue invoice?' : 'Unissue invoice?',
+      message: wantIssued ? 'Issue this invoice now?' : 'Unissue this invoice? This will invalidate the PDF.',
+      confirmLabel: wantIssued ? 'Issue invoice' : 'Unissue invoice',
+      kind: 'invoice-issued-save-confirm'
+    });
     if (!ok) return;
   }
   if (wantPaid !== null && wantPaid !== curIsPaid) {
-    const ok = window.confirm(wantPaid ? 'Mark this invoice as PAID?' : 'Mark this invoice as UNPAID?');
+    const ok = await invoiceModalUiConfirm({
+      title: wantPaid ? 'Mark invoice paid?' : 'Mark invoice unpaid?',
+      message: wantPaid ? 'Mark this invoice as PAID?' : 'Mark this invoice as UNPAID?',
+      confirmLabel: wantPaid ? 'Mark paid' : 'Mark unpaid',
+      kind: 'invoice-paid-save-confirm'
+    });
     if (!ok) return;
   }
 
@@ -302348,7 +302412,7 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
 
     // 2) ISSUE / UNISSUE
     if (wantIssued !== null && wantIssued !== curIsIssued) {
-      if (!asyncInvoiceUiEnabled || wantIssued !== true) {
+      if (wantIssued === true && !asyncInvoiceUiEnabled) {
         throw new Error('Invoice processing is temporarily unavailable while the new invoice system is being updated.');
       }
       if (wantIssued) {
@@ -303222,12 +303286,19 @@ function attachInvoiceModalDelegatedHandlers(modalCtx, rootEl, deps) {
 
           // ✅ Hard-block issuing when (effective) ON_HOLD
           if (desired === true && effHold === true) {
-            alert('Unhold invoice first.');
+            await invoiceModalUiNotice('Unhold invoice first.');
             return;
           }
 
           // ✅ Confirm issue/unissue
-          const ok = window.confirm(desired ? 'Are you sure you want to issue this invoice?' : 'Are you sure you want to unissue this invoice?');
+          const ok = await invoiceModalUiConfirm({
+            title: desired ? 'Stage invoice issue?' : 'Stage invoice unissue?',
+            message: desired
+              ? 'Stage this invoice to be issued when you press Save?'
+              : 'Stage this invoice to be unissued when you press Save?',
+            confirmLabel: desired ? 'Stage issue' : 'Stage unissue',
+            kind: 'invoice-issued-stage-confirm'
+          });
           if (!ok) return;
 
           setStaged('issued', desired);
@@ -303243,7 +303314,14 @@ function attachInvoiceModalDelegatedHandlers(modalCtx, rootEl, deps) {
           const desired = !effPaid;
 
           // ✅ Confirm paid/unpaid
-          const ok = window.confirm(desired ? 'Are you sure you want to mark this invoice as paid?' : 'Are you sure you want to mark this invoice as unpaid?');
+          const ok = await invoiceModalUiConfirm({
+            title: desired ? 'Stage invoice as paid?' : 'Stage invoice as unpaid?',
+            message: desired
+              ? 'Stage this invoice to be marked paid when you press Save?'
+              : 'Stage this invoice to be marked unpaid when you press Save?',
+            confirmLabel: desired ? 'Stage paid' : 'Stage unpaid',
+            kind: 'invoice-paid-stage-confirm'
+          });
           if (!ok) return;
 
           setStaged('paid', desired);
@@ -303259,7 +303337,14 @@ function attachInvoiceModalDelegatedHandlers(modalCtx, rootEl, deps) {
           const desired = !effHold;
 
           // ✅ Confirm hold/unhold
-          const ok = window.confirm(desired ? 'Are you sure you want to put this invoice on hold?' : 'Are you sure you want to remove the hold from this invoice?');
+          const ok = await invoiceModalUiConfirm({
+            title: desired ? 'Stage invoice hold?' : 'Stage hold removal?',
+            message: desired
+              ? 'Stage this invoice to be put on hold when you press Save?'
+              : 'Stage this invoice to have its hold removed when you press Save?',
+            confirmLabel: desired ? 'Stage hold' : 'Stage remove hold',
+            kind: 'invoice-hold-stage-confirm'
+          });
           if (!ok) return;
 
           setStaged('on_hold', desired);
@@ -304185,7 +304270,7 @@ async function openInvoiceAddAdjustmentModal(modalCtx, { rerender }) {
 
   if (btnAdd && !btnAdd.__invWired) {
     btnAdd.__invWired = true;
-    btnAdd.onclick = (e) => {
+    btnAdd.onclick = async (e) => {
       e.preventDefault();
 
       // If selection is disabled (must unpay/unissue first), do nothing.
@@ -304196,11 +304281,11 @@ async function openInvoiceAddAdjustmentModal(modalCtx, { rerender }) {
       const amt = Number(amtRaw);
 
       if (!desc) {
-        alert('Adjustment description is required.');
+        await invoiceModalUiNotice('Adjustment description is required.');
         return;
       }
       if (!Number.isFinite(amt)) {
-        alert('Adjustment amount must be a valid number.');
+        await invoiceModalUiNotice('Adjustment amount must be a valid number.');
         return;
       }
 
@@ -305770,7 +305855,7 @@ function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
       } catch (err) {
         const msg = String(err?.message || err || 'Failed to open evidence');
         if (window.__toast) window.__toast(msg);
-        else alert(msg);
+        else await invoiceModalUiNotice(msg, { title: 'Invoice evidence failed' });
       }
     };
   } catch {}
@@ -317208,14 +317293,18 @@ async function openInvoiceBatchIssueModal() {
 
       const ids = Array.from(state.selectedInvoiceIds).map(String).filter(Boolean);
       if (!ids.length) {
-        alert('Select at least one invoice.');
+        await invoiceModalUiNotice('Select at least one invoice.', { title: 'Batch issue' });
         return;
       }
 
-      const ok = window.confirm(
-        `Issue ${ids.length} invoice(s) now?\n\n` +
-        `This will attempt to issue invoices and queue client emails (mail_outbox).`
-      );
+      const ok = await invoiceModalUiConfirm({
+        title: 'Issue selected invoices?',
+        message:
+          `Issue ${ids.length} invoice(s) now?\n\n` +
+          `This will attempt to issue invoices and queue client emails (mail_outbox).`,
+        confirmLabel: 'Issue invoices',
+        kind: 'invoice-batch-issue-confirm'
+      });
       if (!ok) return;
 
       state.busy = true;
@@ -318106,14 +318195,18 @@ async function openInvoiceBatchGenerateModal() {
 
       const rowsPayload = buildRowsPayload();
       if (!rowsPayload.length) {
-        alert('Select at least one eligible timesheet.');
+        await invoiceModalUiNotice('Select at least one eligible timesheet.', { title: 'Batch generate' });
         return;
       }
 
-      const ok = window.confirm(
-        `Generate draft invoices for ${selectedCount} timesheet(s)?\n\n` +
-        `This will enqueue BY_WEEK jobs and generate invoices immediately.`
-      );
+      const ok = await invoiceModalUiConfirm({
+        title: 'Generate draft invoices?',
+        message:
+          `Generate draft invoices for ${selectedCount} timesheet(s)?\n\n` +
+          `This will enqueue BY_WEEK jobs and generate invoices immediately.`,
+        confirmLabel: 'Generate invoices',
+        kind: 'invoice-batch-generate-confirm'
+      });
       if (!ok) return;
 
       state.busy = true;

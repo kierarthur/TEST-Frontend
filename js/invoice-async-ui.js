@@ -58,6 +58,23 @@
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[character]);
 
+  async function invoiceAsyncUiNotice(message, title = 'Invoice') {
+    const text = clean(message) || 'The invoice action could not be completed.';
+    const openConfirm = window.openUiConfirmModal;
+    if (typeof openConfirm === 'function') {
+      await openConfirm({
+        title,
+        message: text,
+        confirm_label: 'OK',
+        hide_cancel: true,
+        kind: 'invoice-async-ui-notice',
+        suppress_parent_persist: true
+      });
+      return;
+    }
+    try { window.__toast?.(text); } catch {}
+  }
+
   function invoiceAsyncIdentity() {
     const userId = clean(window.__USER_ID || window.__auth?.user?.id || window.SESSION?.user?.id).toLowerCase();
     const environment = clean(window.location?.host || 'unknown').toLowerCase();
@@ -1351,7 +1368,7 @@
       || modalCtx?.data?.id
     ).toLowerCase();
     if (!UUID_RE.test(invoiceId)) {
-      window.alert?.('Invoice id missing');
+      await invoiceAsyncUiNotice('Invoice id missing.');
       return null;
     }
     modalCtx.invoiceAsync = asObject(modalCtx.invoiceAsync);
@@ -1645,7 +1662,7 @@
   async function handleInvoiceEmailAsync(modalCtx, options = {}) {
     const invoiceId = clean(modalCtx?.invoiceId || modalCtx?.invoiceDetail?.invoice?.id || modalCtx?.data?.id).toLowerCase();
     if (!UUID_RE.test(invoiceId)) {
-      window.alert?.('Invoice id missing');
+      await invoiceAsyncUiNotice('Invoice id missing.');
       return null;
     }
     modalCtx.invoiceAsync = asObject(modalCtx.invoiceAsync);
