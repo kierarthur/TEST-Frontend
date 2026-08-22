@@ -296483,6 +296483,13 @@ const stage = (e) => {
             const wirePickerLauncherInput = (inputEl, hiddenName, launchFn, clearFn, openerName) => {
               if (!inputEl || inputEl.__wiredTyping) return;
               inputEl.__wiredTyping = true;
+              let autoLaunchTimer = 0;
+              let composing = false;
+
+              const cancelAutoLaunch = () => {
+                if (autoLaunchTimer) clearTimeout(autoLaunchTimer);
+                autoLaunchTimer = 0;
+              };
 
               const currentChosenLabel = () => {
                 try {
@@ -296504,16 +296511,40 @@ const stage = (e) => {
                   clearFn();
                   inputEl.value = typed;
                 }
+
+                cancelAutoLaunch();
+                if (!composing && typed.length >= 3 && (!hasChosenId || typed !== chosen)) {
+                  autoLaunchTimer = setTimeout(async () => {
+                    autoLaunchTimer = 0;
+                    const latest = String(inputEl.value || '').trim();
+                    const linkedId = String(window.modalCtx?.formState?.main?.[hiddenName] || window.modalCtx?.data?.[hiddenName] || '').trim();
+                    const frame = window.__getModalFrame?.();
+                    if (!inputEl.isConnected || latest.length < 3 || linkedId || frame?.entity !== 'contracts') return;
+                    await launchFn(latest);
+                  }, 350);
+                }
+              });
+
+              inputEl.addEventListener('compositionstart', () => {
+                composing = true;
+                cancelAutoLaunch();
+              });
+
+              inputEl.addEventListener('compositionend', () => {
+                composing = false;
+                inputEl.dispatchEvent(new Event('input', { bubbles: true }));
               });
 
               inputEl.addEventListener('keydown', async (e) => {
                 if (e.key === 'Enter' || e.key === 'ArrowDown') {
                   e.preventDefault();
+                  cancelAutoLaunch();
                   await launchFn(String(inputEl.value || '').trim());
                 }
               });
 
               inputEl.addEventListener('dblclick', async () => {
+                cancelAutoLaunch();
                 await launchFn(String(inputEl.value || '').trim());
               });
 
@@ -328235,6 +328266,9 @@ const wantsConfirmDiscardClose =
 };
 
 top._updateButtons = ()=> {
+  // Every frame shares one modal header/footer. A background parent must never
+  // repaint those controls while a picker or confirmation child owns them.
+  if (currentFrame() !== top) return;
   try {
     if (isPrimaryRecordFrame(top)) {
       const resolvedTitle = resolveRecordModalTitle(top);
@@ -328355,6 +328389,9 @@ top._updateButtons = ()=> {
     btnEdit.style.display = 'none';
     btnSave.style.display = '';
     btnSave.disabled = !!top._saving || !top._pickerHasSelection;
+    btnClose.textContent = 'Close';
+    btnClose.setAttribute('aria-label', 'Close');
+    btnClose.setAttribute('title', 'Close');
 
     if (relatedBtn) {
       relatedBtn.style.display = 'none';
@@ -331442,7 +331479,22 @@ if (!isChild && top.entity === 'contracts') {
     document.onmousemove=null; document.onmouseup=null; byId('modal')?.classList.remove('dragging');
 
     if (!isChildNow && !top.noParentGate && top.mode==='create' && top.isDirty && top.kind!=='rates-presets') {
-      let ok=false; try{ top._confirmingDiscard=true; btnClose.disabled=true; ok=window.confirm('You have unsaved changes. Discard them and close?'); } finally { top._confirmingDiscard=false; btnClose.disabled=false; }
+      let ok=false;
+      try {
+        top._confirmingDiscard=true;
+        const result = await openUiConfirmModal({
+          title: 'Discard new record?',
+          message: 'You have unsaved changes. Discard them and close?',
+          confirm_label: 'Discard',
+          cancel_label: 'Keep editing',
+          confirm_class: 'btn btn-warn',
+          cancel_class: 'btn btn-outline',
+          kind: 'create-record-discard-confirm'
+        });
+        ok=!!(result && result.confirmed);
+      } finally {
+        top._confirmingDiscard=false;
+      }
       if (!ok) { top._closing=false; return; }
     }
 
@@ -332121,7 +332173,9 @@ bindSave(btnSave, top);
       const p = parentFrame();
       if (p && (p.mode === 'edit' || p.mode === 'create')) {
         p.isDirty = true;
-        p._updateButtons && p._updateButtons();
+        // The picker owns the shared modal chrome while it is open. Updating the
+        // parent here would overwrite the picker title and Close button.
+        fr._updateButtons && fr._updateButtons();
       }
       // Do NOT mark the picker dirty – that avoids “Discard changes?” prompts
       // when closing the picker.

@@ -1316,8 +1316,8 @@
     } else if (kind === 'advanced-search' && form && form.dataset.ctmsEnhanced !== '1') {
       form.dataset.ctmsEnhanced = '1';
       enhanceAdvancedSearch(body, form);
-    } else if (entity === 'contracts' && tab === 'main' && body.querySelector('#contractForm')?.dataset.ctmsEnhanced !== '1') {
-      const contractForm = body.querySelector('#contractForm');
+    } else if (entity === 'contracts' && tab === 'main' && form?.id === 'contractForm' && form.dataset.ctmsEnhanced !== '1') {
+      const contractForm = form;
       contractForm.dataset.ctmsEnhanced = '1';
       enhanceContractMain(body, contractForm);
     } else if (

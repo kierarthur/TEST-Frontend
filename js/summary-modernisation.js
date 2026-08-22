@@ -47,6 +47,7 @@
     const key = currentSectionKey();
     const active = targetSections.has(key);
     document.body.classList.toggle('ctms-summary-proposal', active);
+    document.documentElement.classList.toggle('ctms-summary-proposal', active);
     if (!active) {
       delete document.body.dataset.summaryProposalSection;
       return;
