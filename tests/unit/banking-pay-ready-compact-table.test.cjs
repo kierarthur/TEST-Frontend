@@ -95,6 +95,8 @@ test('Ready breakdown disclosure updates its existing row without rebuilding the
   assert.match(handlerBody, /detailRow\.hidden = !isOpening/);
   assert.match(handlerBody, /detailTemplate\.replaceWith\(detailTemplate\.content\.cloneNode\(true\)\)/);
   assert.match(handlerBody, /el\.setAttribute\('aria-expanded', isOpening \? 'true' : 'false'\)/);
+  assert.match(handlerBody, /window\.matchMedia\('\(max-width: 700px\)'\)\.matches/);
+  assert.match(handlerBody, /detailRow\.scrollIntoView\(\{ behavior: 'smooth', block: 'start', inline: 'nearest' \}\)/);
   assert.match(handlerBody, /if \(detailRow && detailKey === groupKey\)/);
   assert.match(handlerBody, /await safeRerender\(null\)/);
   assert.ok(
@@ -140,6 +142,16 @@ test('mobile Ready selection keeps each line tick beside its line type and expos
   assert.match(
     modalCss,
     /> tbody > tr:not\(\[data-banking-ready-breakdown-detail\]\) > td:nth-child\(2\) \{[\s\S]*?grid-column: 2 !important;/
+  );
+  assert.match(source, /const renderReadyMobileRowSummary =/);
+  assert.match(source, /class="banking-ready-mobile-row-summary"/);
+  assert.match(
+    modalCss,
+    /toggleTimesheetBreakdown"\]\[aria-expanded="false"\]\) > td:nth-child\(n\+3\) \{\s*display: none !important;/
+  );
+  assert.match(
+    modalCss,
+    /toggleTimesheetBreakdown"\]\[aria-expanded="false"\]\) \.banking-ready-mobile-row-summary \{[\s\S]*?display: grid;/
   );
 });
 

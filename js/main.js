@@ -55140,6 +55140,17 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     `;
   };
 
+  const renderReadyMobileRowSummary = ({ tmsRef = '', displayName = '', client = '', weekOrDate = '', amount = '' } = {}) => {
+    const identity = [trimStr(tmsRef), trimStr(displayName)].filter(Boolean).join(' ') || 'Ready to Pay line';
+    return `
+      <span class="banking-ready-mobile-row-summary">
+        <strong>${enc(identity)}</strong>
+        <span>${enc(trimStr(client) || '—')}</span>
+        <span>${enc(trimStr(weekOrDate) || '—')} · ${enc(trimStr(amount) || '—')}</span>
+      </span>
+    `;
+  };
+
 const renderReadyTimesheetGroupedRows = (lines) => {
     const orderedItems = [];
     const groupByKey = new Map();
@@ -55270,6 +55281,13 @@ const renderReadyTimesheetGroupedRows = (lines) => {
                 >${isBreakdownOpen ? '−' : '+'}</button>
               ` : ''}
             </span>
+            ${renderReadyMobileRowSummary({
+              tmsRef,
+              displayName,
+              client,
+              weekOrDate,
+              amount: formatCompactPayAmount(fullAmount)
+            })}
           </td>
           <td style="white-space:nowrap;vertical-align:middle;">
             <div style="display:flex;gap:6px;align-items:center;white-space:nowrap;">
@@ -55400,7 +55418,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             ` : `<span class="mini" style="opacity:.7;">—</span>`}
           </td>
           <td class="mini" style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">
-            ${compactReady ? `<span style="display:inline-flex;gap:6px;align-items:center;white-space:nowrap;"><span>${renderPreviewLineTypeHtml(line)}</span>${readyBreakdownKey ? `<button type="button" class="btn btn-xs btn-outline" style="width:24px;height:24px;min-width:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:16px;line-height:1;font-weight:800;" data-action="banking:pay:toggleTimesheetBreakdown" data-breakdown-key="${enc(readyBreakdownKey)}" aria-label="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" title="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" aria-expanded="${readyBreakdownOpen ? 'true' : 'false'}">${readyBreakdownOpen ? '−' : '+'}</button>` : ''}</span>` : renderPreviewLineTypeHtml(line)}
+            ${compactReady ? `<span style="display:inline-flex;gap:6px;align-items:center;white-space:nowrap;"><span>${renderPreviewLineTypeHtml(line)}</span>${readyBreakdownKey ? `<button type="button" class="btn btn-xs btn-outline" style="width:24px;height:24px;min-width:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:16px;line-height:1;font-weight:800;" data-action="banking:pay:toggleTimesheetBreakdown" data-breakdown-key="${enc(readyBreakdownKey)}" aria-label="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" title="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" aria-expanded="${readyBreakdownOpen ? 'true' : 'false'}">${readyBreakdownOpen ? '−' : '+'}</button>` : ''}</span>${readyBreakdownKey ? renderReadyMobileRowSummary({ tmsRef, displayName, client, weekOrDate, amount: formatCompactPayAmount(getLineSectionAmount(line)) }) : ''}` : renderPreviewLineTypeHtml(line)}
           </td>
           <td style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">
             <div style="display:flex;gap:${compactReady ? '6' : '8'}px;align-items:center;${compactReady ? 'white-space:nowrap;' : 'flex-wrap:wrap;'}">
@@ -55444,6 +55462,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       const client = trimStr(line?.client_name) || '—';
       const displayName = trimStr(line?.display_name) || '—';
       const tmsRef = trimStr(line?.tms_ref);
+      const weekOrDate = ymdToUk(trimStr(line?.week_ending_date)) || ymdToUk(trimStr(line?.linked_shift_date)) || '—';
       const payChannel = upperTrim(line?.pay_channel || '');
       const payeTreatment = upperTrim(line?.paye_treatment || '');
       const section = getLinePresentationSection(line);
@@ -55536,7 +55555,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             ` : `<span class="mini" style="opacity:.7;">—</span>`)}
           </td>
           <td class="mini" style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">
-            ${compactReady ? `<span style="display:inline-flex;gap:6px;align-items:center;white-space:nowrap;"><span>${renderPreviewLineTypeHtml(line)}</span>${readyBreakdownKey ? `<button type="button" class="btn btn-xs btn-outline" style="width:24px;height:24px;min-width:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:16px;line-height:1;font-weight:800;" data-action="banking:pay:toggleTimesheetBreakdown" data-breakdown-key="${enc(readyBreakdownKey)}" aria-label="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" title="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" aria-expanded="${readyBreakdownOpen ? 'true' : 'false'}">${readyBreakdownOpen ? '−' : '+'}</button>` : ''}</span>` : renderPreviewLineTypeHtml(line)}
+            ${compactReady ? `<span style="display:inline-flex;gap:6px;align-items:center;white-space:nowrap;"><span>${renderPreviewLineTypeHtml(line)}</span>${readyBreakdownKey ? `<button type="button" class="btn btn-xs btn-outline" style="width:24px;height:24px;min-width:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:16px;line-height:1;font-weight:800;" data-action="banking:pay:toggleTimesheetBreakdown" data-breakdown-key="${enc(readyBreakdownKey)}" aria-label="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" title="${enc(readyBreakdownOpen ? 'Hide line breakdown' : 'Show line breakdown')}" aria-expanded="${readyBreakdownOpen ? 'true' : 'false'}">${readyBreakdownOpen ? '−' : '+'}</button>` : ''}</span>${readyBreakdownKey ? renderReadyMobileRowSummary({ tmsRef, displayName, client, weekOrDate, amount: formatCompactPayAmount(getLineSectionAmount(line)) }) : ''}` : renderPreviewLineTypeHtml(line)}
           </td>
           <td style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">
             <div style="display:flex;gap:${compactReady ? '6' : '8'}px;align-items:center;${compactReady ? 'white-space:nowrap;' : 'flex-wrap:wrap;'}">
@@ -55548,7 +55567,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             </div>
           </td>
           <td class="mini" style="${compactReady ? 'white-space:nowrap;vertical-align:middle;' : ''}">${enc(client)}</td>
-          <td class="mini" style="white-space:nowrap;vertical-align:middle;">${enc(ymdToUk(trimStr(line?.week_ending_date)) || ymdToUk(trimStr(line?.linked_shift_date)) || '—')}</td>
+          <td class="mini" style="white-space:nowrap;vertical-align:middle;">${enc(weekOrDate)}</td>
           ${compactReady ? `<td style="white-space:nowrap;vertical-align:middle;">${renderPayChannelBadge(payChannel)}</td>` : ''}
           <td class="mono" style="text-align:right;white-space:nowrap;">
             ${compactReady ? renderCompactReadyAmountHtml(line) : renderPreviewLineAmountHtml(line, renderContextSection)}
@@ -100509,6 +100528,20 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         el.setAttribute('aria-expanded', isOpening ? 'true' : 'false');
         el.setAttribute('aria-label', isOpening ? 'Hide line breakdown' : 'Show line breakdown');
         el.setAttribute('title', isOpening ? 'Hide line breakdown' : 'Show line breakdown');
+        if (
+          isOpening
+          && typeof window !== 'undefined'
+          && typeof window.matchMedia === 'function'
+          && window.matchMedia('(max-width: 700px)').matches
+          && typeof detailRow.scrollIntoView === 'function'
+        ) {
+          const schedule = typeof window.requestAnimationFrame === 'function'
+            ? window.requestAnimationFrame.bind(window)
+            : (callback) => window.setTimeout(callback, 0);
+          schedule(() => schedule(() => {
+            detailRow.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+          }));
+        }
         return;
       }
       await safeRerender(null);

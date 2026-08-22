@@ -2772,6 +2772,10 @@
   border: 0;
 }
 
+#modal.banking-modal .banking-ready-mobile-row-summary {
+  display: none;
+}
+
 @media (max-width: 700px) {
   #modal.ctms-modern-modal[class*="ctms-family-"] {
     width: calc(100vw - 24px);
@@ -3044,6 +3048,28 @@
 
   #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > tbody > tr:not([data-banking-ready-breakdown-detail]) > td:nth-child(n+3) {
     grid-column: 1 / -1 !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > tbody > tr:not([data-banking-ready-breakdown-detail]):has(> td:nth-child(2) [data-action="banking:pay:toggleTimesheetBreakdown"][aria-expanded="false"]) > td:nth-child(n+3) {
+    display: none !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table:has(> thead [data-action="banking:pay:toggleAllReadyPreviewRows"]) > tbody > tr:not([data-banking-ready-breakdown-detail]):has(> td:nth-child(2) [data-action="banking:pay:toggleTimesheetBreakdown"][aria-expanded="false"]) .banking-ready-mobile-row-summary {
+    display: grid;
+    grid-column: 1 / -1;
+    gap: 3px;
+    margin-top: 8px;
+    color: #aebbd0;
+    font-size: 11px;
+    font-weight: 560;
+    line-height: 1.35;
+    white-space: normal;
+  }
+
+  #modal.banking-modal .banking-ready-mobile-row-summary strong {
+    color: #f4f7fb;
+    font-size: 12px;
+    font-weight: 720;
   }
 
   #modal.banking-modal table.ctms-universal-card-table > tbody > tr[data-banking-ready-breakdown-detail] {
