@@ -565,6 +565,86 @@
   flex: 1 1 auto;
 }
 
+#modal.ctms-modern-modal .ctms-contract-picker-field {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#modal.ctms-modern-modal .ctms-contract-picker-field > input {
+  width: 100%;
+}
+
+#modal.ctms-modern-modal .ctms-contract-suggestions {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: min(320px, 42vh);
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid rgba(96, 165, 250, .5);
+  border-radius: 12px;
+  background: #091529;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .48), 0 0 0 1px rgba(99, 102, 241, .12);
+  scrollbar-width: thin;
+  scrollbar-color: #536889 #08111f;
+}
+
+#modal.ctms-modern-modal .ctms-contract-suggestions[hidden] {
+  display: none !important;
+}
+
+#modal.ctms-modern-modal .ctms-contract-suggestion,
+#modal.ctms-modern-modal .ctms-contract-suggestion-status {
+  width: 100%;
+  min-height: 46px;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #edf5ff;
+  text-align: left;
+}
+
+#modal.ctms-modern-modal .ctms-contract-suggestion {
+  display: grid;
+  gap: 3px;
+  cursor: pointer;
+}
+
+#modal.ctms-modern-modal .ctms-contract-suggestion + .ctms-contract-suggestion {
+  margin-top: 3px;
+}
+
+#modal.ctms-modern-modal .ctms-contract-suggestion:hover,
+#modal.ctms-modern-modal .ctms-contract-suggestion.is-active,
+#modal.ctms-modern-modal .ctms-contract-suggestion[aria-selected="true"] {
+  background: linear-gradient(135deg, rgba(79, 70, 229, .36), rgba(14, 165, 233, .2));
+  box-shadow: inset 3px 0 0 #42c8e8;
+}
+
+#modal.ctms-modern-modal .ctms-contract-suggestion-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+#modal.ctms-modern-modal .ctms-contract-suggestion-meta,
+#modal.ctms-modern-modal .ctms-contract-suggestion-status {
+  color: #9fb0c5;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+#modal.ctms-modern-modal .ctms-contract-suggestion-status {
+  display: flex;
+  align-items: center;
+  cursor: default;
+}
+
 #modal.ctms-modern-modal .ctms-money-field {
   position: relative;
   min-width: 0;
@@ -981,6 +1061,14 @@
     flex: 1 1 auto;
   }
 
+  #modal.ctms-modern-modal .ctms-contract-picker-field {
+    flex-basis: 100%;
+  }
+
+  #modal.ctms-modern-modal .ctms-contract-suggestions {
+    max-height: min(260px, 38dvh);
+  }
+
   #modal.ctms-modern-modal #ratesCards .grid-5 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1113,6 +1201,17 @@
   overflow: hidden;
   border: 1px solid rgba(93, 123, 165, 0.22);
   border-radius: 12px;
+}
+
+#modal.ctms-modal-user-management #userMgmtRoot,
+#modal.ctms-modal-user-management #userMgmtBody,
+#modal.ctms-modal-user-management #userMgmtBody > .card,
+#modal.ctms-modal-user-management #userMgmtBody .form,
+#modal.ctms-modal-user-management #userMgmtBody .row {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* Candidate and client pickers */
@@ -1521,6 +1620,29 @@
     max-width: none !important;
   }
 
+  #modal.ctms-modal-user-management #userMgmtBody .form {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  #modal.ctms-modal-user-management #userMgmtBody .form > .row {
+    grid-column: 1 !important;
+  }
+
+  #modal.ctms-modal-user-management #userMgmtBody .form label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  #modal.ctms-modal-user-management #userMgmtBody .form input,
+  #modal.ctms-modal-user-management #userMgmtBody .form select,
+  #modal.ctms-modal-user-management #userMgmtBody .form textarea {
+    box-sizing: border-box;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
   #modal.ctms-modal-job-titles .ctms-job-titles-root {
     gap: 12px !important;
   }
@@ -1861,6 +1983,37 @@
 
 #modal.ctms-modal-bulk-authorise [id^="bulkAuthoriseClassificationBtn"] {
   min-width: 42px !important;
+}
+
+@media (min-width: 901px) and (max-width: 1240px) {
+  #modal.ctms-modal-bulk-process #bulkProcessWorkbenchRoot,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseWorkbenchRoot,
+  #modal.ctms-modal-bulk-process #bulkProcessWorkbenchGrid,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseWorkbenchGrid,
+  #modal.ctms-modal-bulk-process #bulkProcessWorkbenchContent,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseWorkbenchContent,
+  #modal.ctms-modal-bulk-process #bulkProcessMainPreviewPane,
+  #modal.ctms-modal-bulk-process #bulkProcessRightPane,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseMiddlePane,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseRightPane {
+    box-sizing: border-box;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessWorkbenchGrid,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseWorkbenchGrid {
+    grid-template-columns: minmax(220px, 26%) 6px minmax(0, 1fr) !important;
+    width: 100% !important;
+  }
+
+  #modal.ctms-modal-bulk-process #bulkProcessWorkbenchContent,
+  #modal.ctms-modal-bulk-authorise #bulkAuthoriseWorkbenchContent {
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100% !important;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
 }
 
 #modal.ctms-modal-timesheet .ctms-timesheet-evidence-table:has(td[colspan]) thead {
@@ -2832,5 +2985,114 @@
   #modal.ctms-modern-modal #settingsFinanceWindows > div[style*="grid-template-columns"] {
     grid-template-columns: 108px 150px 150px 95px 110px 95px 140px 140px !important;
     min-width: 1020px;
+  }
+}
+
+@media (max-width: 900px) {
+  #modal.timesheet-imports-workbench #modalBody,
+  #modal.timesheet-imports-workbench #tsImportsWorkbenchRoot,
+  #modal.timesheet-imports-workbench #tsImportsWorkbenchGrid,
+  #modal.timesheet-imports-workbench #tsImportsQueuePane,
+  #modal.timesheet-imports-workbench #tsImportsViewerPane {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  #modal.timesheet-imports-workbench #modalBody {
+    overflow-x: hidden !important;
+  }
+
+  #modal.timesheet-imports-workbench #tsImportsWorkbenchGrid {
+    grid-template-columns: minmax(0, .9fr) 8px minmax(0, 1.1fr) !important;
+    gap: 10px !important;
+  }
+
+  #modal.timesheet-imports-workbench #tsImportsWorkbenchDivider {
+    width: 8px !important;
+  }
+
+  #modal.timesheet-imports-workbench #tsImportsDropZone {
+    display: none;
+  }
+
+  #modal.timesheet-imports-workbench .ctms-universal-table-host {
+    box-sizing: border-box;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 620px) {
+  #modal.banking-modal .banking-modal-content [style*="min-width:320px"],
+  #modal.banking-modal .banking-modal-content [style*="min-width:220px"],
+  #modal.banking-modal .banking-modal-content [style*="min-width:180px"] {
+    box-sizing: border-box;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  #modal.banking-modal .banking-modal-content input[style*="min-width:220px"] {
+    flex: 1 1 180px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table thead:has([data-action="banking:finance:sortCases"]),
+  #modal.banking-modal table.ctms-universal-card-table thead:has([data-action="banking:finance:sortTimesheetSnoozes"]) {
+    position: static;
+    display: block !important;
+    width: 100% !important;
+    height: auto;
+    margin-bottom: 10px;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table thead:has([data-action="banking:finance:sortCases"]) tr,
+  #modal.banking-modal table.ctms-universal-card-table thead:has([data-action="banking:finance:sortTimesheetSnoozes"]) tr {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100% !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table thead:has([data-action="banking:finance:sortCases"]) th,
+  #modal.banking-modal table.ctms-universal-card-table thead:has([data-action="banking:finance:sortTimesheetSnoozes"]) th {
+    display: none !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table thead th:has([data-action="banking:finance:sortCases"]),
+  #modal.banking-modal table.ctms-universal-card-table thead th:has([data-action="banking:finance:sortTimesheetSnoozes"]) {
+    display: block !important;
+    flex: 1 1 130px;
+    width: auto !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+  }
+
+  #modal.banking-modal table.ctms-universal-card-table thead [data-action="banking:finance:sortCases"],
+  #modal.banking-modal table.ctms-universal-card-table thead [data-action="banking:finance:sortTimesheetSnoozes"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    white-space: normal;
+  }
+
+  #modal.timesheet-imports-workbench #tsImportsWorkbenchGrid {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 12px !important;
+  }
+
+  #modal.timesheet-imports-workbench #tsImportsWorkbenchDivider {
+    display: none !important;
   }
 }

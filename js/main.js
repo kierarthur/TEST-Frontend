@@ -115680,6 +115680,172 @@ function summaryInsertRowIfMissing(section, patchedRow) {
 }
 
 
+const TIMESHEET_PROCESSING_STATUS_BADGE_TONES = Object.freeze({
+  UNPROCESSED: 'unprocessed',
+  RECEIVED: 'unprocessed',
+  SUBMITTED: 'unprocessed',
+  DRAFT: 'unprocessed',
+  NEW: 'unprocessed',
+  OPEN: 'unprocessed',
+  PROCESSED: 'processed',
+  PENDING_AUTH: 'processed',
+  AWAITING_AUTH: 'processed',
+  AWAITING_AUTHORISATION: 'processed',
+  AWAITING_AUTHORIZATION: 'processed',
+  AUTHORISED_FOR_INVOICING: 'authorised',
+  AUTHORIZED_FOR_INVOICING: 'authorised',
+  READY_FOR_INVOICE: 'authorised',
+  READY_TO_INVOICE: 'authorised',
+  AUTHORISED: 'authorised',
+  AUTHORIZED: 'authorised',
+  INVOICED: 'invoiced',
+  PARTIALLY_INVOICED: 'invoiced',
+  PROCESSING_DELAYED: 'delayed',
+  READY_FOR_HR: 'delayed',
+  AWAITING_MANUAL_SIGNATURE: 'delayed',
+  AWAITING_SIGNED_QR: 'delayed',
+  PENDING_REVIEW: 'delayed',
+  PROCESSING: 'delayed',
+  NEEDS_ATTENTION: 'attention',
+  UNASSIGNED: 'attention',
+  CLIENT_UNRESOLVED: 'attention',
+  RATE_MISSING: 'attention',
+  PAY_CHANNEL_MISSING: 'attention',
+  VALIDATION_FAILED: 'attention',
+  FAILED: 'attention',
+  ERROR: 'attention',
+  BLOCKED: 'attention',
+  ARCHIVED: 'archived'
+});
+
+const TIMESHEET_PROCESSING_STATUS_FRIENDLY_LABELS = Object.freeze({
+  UNPROCESSED: 'Unprocessed',
+  RECEIVED: 'Unprocessed',
+  SUBMITTED: 'Unprocessed',
+  DRAFT: 'Unprocessed',
+  NEW: 'Unprocessed',
+  OPEN: 'Unprocessed',
+  PROCESSED: 'Processed',
+  PENDING_AUTH: 'Processed',
+  AWAITING_AUTH: 'Processed',
+  AWAITING_AUTHORISATION: 'Processed',
+  AWAITING_AUTHORIZATION: 'Processed',
+  AUTHORISED_FOR_INVOICING: 'Authorised for Invoicing',
+  AUTHORIZED_FOR_INVOICING: 'Authorised for Invoicing',
+  READY_FOR_INVOICE: 'Authorised for Invoicing',
+  READY_TO_INVOICE: 'Authorised for Invoicing',
+  AUTHORISED: 'Authorised for Invoicing',
+  AUTHORIZED: 'Authorised for Invoicing',
+  INVOICED: 'Invoiced',
+  PARTIALLY_INVOICED: 'Partially Invoiced',
+  PROCESSING_DELAYED: 'Processing Delayed',
+  READY_FOR_HR: 'Processing Delayed',
+  AWAITING_MANUAL_SIGNATURE: 'Processing Delayed',
+  AWAITING_SIGNED_QR: 'Processing Delayed',
+  PENDING_REVIEW: 'Processing Delayed',
+  PROCESSING: 'Processing Delayed',
+  NEEDS_ATTENTION: 'Needs Attention',
+  UNASSIGNED: 'Candidate Required',
+  CLIENT_UNRESOLVED: 'Client Required',
+  RATE_MISSING: 'Rate Required',
+  PAY_CHANNEL_MISSING: 'Pay Channel Required',
+  VALIDATION_FAILED: 'Validation Failed',
+  FAILED: 'Failed',
+  ERROR: 'Error',
+  BLOCKED: 'Blocked',
+  ARCHIVED: 'Archived'
+});
+
+function normaliseTimesheetProcessingStatusToken(value) {
+  return String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function timesheetProcessingStatusBadgeTone(row, displayText) {
+  const signals = [
+    row?.tools_stage,
+    displayText,
+    row?.processing_status_display,
+    row?.processing_status,
+    row?.summary_stage,
+    row?.status
+  ];
+
+  for (const signal of signals) {
+    const token = normaliseTimesheetProcessingStatusToken(signal);
+    if (token && TIMESHEET_PROCESSING_STATUS_BADGE_TONES[token]) {
+      return TIMESHEET_PROCESSING_STATUS_BADGE_TONES[token];
+    }
+  }
+  return 'neutral';
+}
+
+function friendlyTimesheetProcessingStatusLabel(row, displayText) {
+  const existing = String(row?.processing_status_display ?? displayText ?? '').trim();
+  const looksLikeRawToken = !!existing && (
+    existing.includes('_') || (/[A-Z]/.test(existing) && existing === existing.toUpperCase())
+  );
+  if (existing && !looksLikeRawToken) return existing;
+
+  const signals = [
+    existing,
+    displayText,
+    row?.processing_status,
+    row?.tools_stage,
+    row?.summary_stage
+  ];
+  for (const signal of signals) {
+    const token = normaliseTimesheetProcessingStatusToken(signal);
+    if (token && TIMESHEET_PROCESSING_STATUS_FRIENDLY_LABELS[token]) {
+      return TIMESHEET_PROCESSING_STATUS_FRIENDLY_LABELS[token];
+    }
+  }
+
+  const fallbackToken = signals.map(normaliseTimesheetProcessingStatusToken).find(Boolean);
+  if (!fallbackToken) return 'Unknown';
+  return fallbackToken
+    .toLowerCase()
+    .split('_')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function buildTimesheetProcessingStatusBadge(row, displayText) {
+  const badge = document.createElement('span');
+  const tone = timesheetProcessingStatusBadgeTone(row, displayText);
+  badge.className = `ctms-processing-status-badge ctms-processing-status-${tone}`;
+  badge.textContent = friendlyTimesheetProcessingStatusLabel(row, displayText);
+  return badge;
+}
+
+function paintTimesheetProcessingStatusCell(td, row, displayText) {
+  const text = String(displayText ?? '').trim();
+  const badge = buildTimesheetProcessingStatusBadge(row, text);
+  const invoicePaid = row && (
+    row.invoice_is_paid === true || String(row.invoice_is_paid).toLowerCase() === 'true'
+  );
+  const stageNow = String(row?.tools_stage || '').trim().toUpperCase();
+
+  td.textContent = '';
+  if (invoicePaid && stageNow === 'INVOICED' && text) {
+    const wrap = document.createElement('div');
+    wrap.className = 'cell-right-icon';
+    const coin = document.createElement('span');
+    coin.className = 'coin-badge';
+    coin.textContent = '£';
+    wrap.appendChild(badge);
+    wrap.appendChild(coin);
+    td.appendChild(wrap);
+  } else {
+    td.appendChild(badge);
+  }
+}
+
+
 
 function summaryUpdateRowDom(section, id, patchedRow) {
   section = String(section || '').trim();
@@ -116015,28 +116181,7 @@ function summaryUpdateRowDom(section, id, patchedRow) {
     if (section === 'timesheets' && (colKey === 'processing_status' || colKey === 'processing_status_display')) {
       const txtBase = String(row?.processing_status_display || '').trim();
       const txt = txtBase || String((typeof formatDisplayValue === 'function' ? formatDisplayValue(colKey, v) : (v ?? '')) ?? '');
-
-      const invoicePaid = (row && (row.invoice_is_paid === true || String(row.invoice_is_paid).toLowerCase() === 'true'));
-      const stageNow = String(row?.tools_stage || '').trim().toUpperCase();
-
-      if (invoicePaid && stageNow === 'INVOICED' && txt) {
-        const wrap = document.createElement('div');
-        wrap.className = 'cell-right-icon';
-
-        const main = document.createElement('span');
-        main.className = 'cell-main';
-        main.textContent = txt;
-
-        const coin = document.createElement('span');
-        coin.className = 'coin-badge';
-        coin.textContent = '£';
-
-        wrap.appendChild(main);
-        wrap.appendChild(coin);
-        td.appendChild(wrap);
-      } else {
-        td.textContent = txt;
-      }
+      paintTimesheetProcessingStatusCell(td, row, txt);
       return td;
     }
 
@@ -116702,28 +116847,7 @@ function summaryInsertRowDom(section, patchedRow) {
     if (section === 'timesheets' && (colKey === 'processing_status' || colKey === 'processing_status_display')) {
       const txtBase = String(row?.processing_status_display || '').trim();
       const txt = txtBase || String((typeof formatDisplayValue === 'function' ? formatDisplayValue(colKey, v) : (v ?? '')) ?? '');
-
-      const invoicePaid = (row && (row.invoice_is_paid === true || String(row.invoice_is_paid).toLowerCase() === 'true'));
-      const stageNow = String(row?.tools_stage || '').trim().toUpperCase();
-
-      if (invoicePaid && stageNow === 'INVOICED' && txt) {
-        const wrap = document.createElement('div');
-        wrap.className = 'cell-right-icon';
-
-        const main = document.createElement('span');
-        main.className = 'cell-main';
-        main.textContent = txt;
-
-        const coin = document.createElement('span');
-        coin.className = 'coin-badge';
-        coin.textContent = '£';
-
-        wrap.appendChild(main);
-        wrap.appendChild(coin);
-        td.appendChild(wrap);
-      } else {
-        td.textContent = txt;
-      }
+      paintTimesheetProcessingStatusCell(td, row, txt);
       return td;
     }
 
@@ -139831,7 +139955,11 @@ function renderContractMainTab(ctx) {
         <label>Candidate</label>
         <div class="controls">
           <div class="split">
-            <input class="input" type="text" id="candidate_name_display" value="${_candLabel}" placeholder="Type 3+ letters to search…" />
+            <div class="ctms-contract-picker-field">
+              <input class="input" type="text" id="candidate_name_display" value="${_candLabel}" placeholder="Type 3+ letters to search…"
+                     role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="candidateInlineSuggestions" autocomplete="off" />
+              <div class="ctms-contract-suggestions" id="candidateInlineSuggestions" role="listbox" aria-label="Candidate search results" hidden></div>
+            </div>
             <span>
               <button type="button" class="btn mini" id="btnPickCandidate">Pick…</button>
               <button type="button" class="btn mini" id="btnClearCandidate">Clear</button>
@@ -139845,7 +139973,11 @@ function renderContractMainTab(ctx) {
         <label>Client</label>
         <div class="controls">
           <div class="split">
-            <input class="input" type="text" id="client_name_display" value="${_clientLabel}" placeholder="Type 3+ letters to search…" />
+            <div class="ctms-contract-picker-field">
+              <input class="input" type="text" id="client_name_display" value="${_clientLabel}" placeholder="Type 3+ letters to search…"
+                     role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="clientInlineSuggestions" autocomplete="off" />
+              <div class="ctms-contract-suggestions" id="clientInlineSuggestions" role="listbox" aria-label="Client search results" hidden></div>
+            </div>
             <span>
               <button type="button" class="btn mini" id="btnPickClient">Pick…</button>
               <button type="button" class="btn mini" id="btnClearClient">Clear</button>
@@ -296308,6 +296440,8 @@ const stage = (e) => {
               setContractFormValue('client_id', clientId);
               const lab = document.getElementById('clientPickLabel');
               if (lab) lab.textContent = `Chosen: ${clientLabel}`;
+              const input = document.getElementById('client_name_display');
+              if (input) input.value = clientLabel;
 
               try {
                 const fs2 = (window.modalCtx.formState ||= { __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null), main:{}, pay:{} });
@@ -296516,15 +296650,31 @@ const stage = (e) => {
               });
             };
 
-            const wirePickerLauncherInput = (inputEl, hiddenName, launchFn, clearFn, openerName) => {
+            const wireInlineContractPicker = (inputEl, {
+              hiddenName,
+              suggestionsId,
+              entityName,
+              endpoint,
+              clearFn,
+              getLabel,
+              getMeta,
+              selectRow
+            } = {}) => {
               if (!inputEl || inputEl.__wiredTyping) return;
-              inputEl.__wiredTyping = true;
-              let autoLaunchTimer = 0;
-              let composing = false;
+              const suggestions = document.getElementById(suggestionsId);
+              if (!suggestions) return;
 
-              const cancelAutoLaunch = () => {
-                if (autoLaunchTimer) clearTimeout(autoLaunchTimer);
-                autoLaunchTimer = 0;
+              inputEl.__wiredTyping = true;
+              let searchTimer = 0;
+              let composing = false;
+              let requestSeq = 0;
+              let resultRows = [];
+              let activeIndex = -1;
+              let lastQuery = '';
+
+              const cancelSearch = () => {
+                if (searchTimer) clearTimeout(searchTimer);
+                searchTimer = 0;
               };
 
               const currentChosenLabel = () => {
@@ -296538,32 +296688,138 @@ const stage = (e) => {
                 }
               };
 
+              const setExpanded = (expanded) => {
+                suggestions.hidden = !expanded;
+                inputEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+                if (!expanded) inputEl.removeAttribute('aria-activedescendant');
+              };
+
+              const closeSuggestions = () => {
+                activeIndex = -1;
+                setExpanded(false);
+              };
+
+              const setStatus = (message) => {
+                resultRows = [];
+                activeIndex = -1;
+                suggestions.innerHTML = `<div class="ctms-contract-suggestion-status" role="status">${escapeHtml(message)}</div>`;
+                setExpanded(true);
+              };
+
+              const setActiveIndex = (nextIndex) => {
+                if (!resultRows.length) return;
+                activeIndex = Math.max(0, Math.min(resultRows.length - 1, Number(nextIndex) || 0));
+                const options = Array.from(suggestions.querySelectorAll('.ctms-contract-suggestion'));
+                options.forEach((option, index) => {
+                  const active = index === activeIndex;
+                  option.classList.toggle('is-active', active);
+                  option.setAttribute('aria-selected', active ? 'true' : 'false');
+                  if (active) {
+                    inputEl.setAttribute('aria-activedescendant', option.id);
+                    option.scrollIntoView({ block: 'nearest' });
+                  }
+                });
+              };
+
+              const chooseResult = async (index) => {
+                const row = resultRows[index];
+                if (!row) return;
+                requestSeq += 1;
+                cancelSearch();
+                closeSuggestions();
+                const label = String(getLabel(row) || '').trim();
+                if (label) inputEl.value = label;
+                await selectRow(row, label);
+              };
+
+              const renderResults = (rows) => {
+                resultRows = Array.isArray(rows) ? rows.slice(0, 10) : [];
+                activeIndex = -1;
+
+                if (!resultRows.length) {
+                  setStatus(`No ${entityName}s found. Try another name or use Pick…`);
+                  return;
+                }
+
+                suggestions.innerHTML = resultRows.map((row, index) => {
+                  const label = String(getLabel(row) || '').trim();
+                  const meta = String(getMeta(row) || '').trim();
+                  const optionId = `${suggestionsId}-option-${index}`;
+                  return `<button type="button" class="ctms-contract-suggestion" id="${optionId}" role="option" aria-selected="false" data-result-index="${index}" tabindex="-1">`
+                    + `<span class="ctms-contract-suggestion-name">${escapeHtml(label)}</span>`
+                    + (meta ? `<span class="ctms-contract-suggestion-meta">${escapeHtml(meta)}</span>` : '')
+                    + '</button>';
+                }).join('');
+
+                setExpanded(true);
+                setActiveIndex(0);
+              };
+
+              suggestions.addEventListener('pointerdown', (event) => {
+                if (event.target.closest('.ctms-contract-suggestion')) event.preventDefault();
+              });
+
+              suggestions.addEventListener('click', async (event) => {
+                const option = event.target.closest('.ctms-contract-suggestion');
+                if (!option) return;
+                const index = Number(option.dataset.resultIndex);
+                if (Number.isInteger(index)) await chooseResult(index);
+              });
+
+              const runSearch = async (query, seq) => {
+                const latest = String(inputEl.value || '').trim();
+                const linkedId = String(window.modalCtx?.formState?.main?.[hiddenName] || window.modalCtx?.data?.[hiddenName] || '').trim();
+                if (!inputEl.isConnected || latest !== query || latest.length < 3 || linkedId || !document.getElementById('contractForm')?.contains(inputEl)) return;
+
+                const params = new URLSearchParams();
+                params.set('format', 'picker');
+                params.set('q', query);
+                params.set('page', '1');
+                params.set('page_size', '10');
+
+                try {
+                  const response = await authFetch(API(`${endpoint}?${params.toString()}`));
+                  if (!response || !response.ok) throw new Error(`${entityName} search failed`);
+                  const payload = await response.json();
+                  if (seq !== requestSeq || String(inputEl.value || '').trim() !== query) return;
+                  lastQuery = query;
+                  renderResults(Array.isArray(payload?.rows) ? payload.rows : []);
+                } catch (error) {
+                  if (seq !== requestSeq) return;
+                  if (LOGC) console.warn(`[CONTRACTS] inline ${entityName} search failed`, error);
+                  setStatus(`Search unavailable. Use Pick… to find a ${entityName}.`);
+                }
+              };
+
               inputEl.addEventListener('input', () => {
                 const typed = String(inputEl.value || '').trim();
                 const chosen = currentChosenLabel();
-                const hasChosenId = String(window.modalCtx?.formState?.main?.[hiddenName] || window.modalCtx?.data?.[hiddenName] || '').trim();
+                let hasChosenId = String(window.modalCtx?.formState?.main?.[hiddenName] || window.modalCtx?.data?.[hiddenName] || '').trim();
                 if (hasChosenId && typed !== chosen) {
-                  if (LOGC) console.log('[CONTRACTS] clearing stale linked selection due to manual typing', { openerName, typed, chosen, hiddenName });
+                  if (LOGC) console.log('[CONTRACTS] clearing stale linked selection due to manual typing', { entityName, typed, chosen, hiddenName });
                   clearFn();
                   inputEl.value = typed;
+                  hasChosenId = '';
                 }
 
-                cancelAutoLaunch();
+                cancelSearch();
+                const seq = ++requestSeq;
                 if (!composing && typed.length >= 3 && (!hasChosenId || typed !== chosen)) {
-                  autoLaunchTimer = setTimeout(async () => {
-                    autoLaunchTimer = 0;
-                    const latest = String(inputEl.value || '').trim();
-                    const linkedId = String(window.modalCtx?.formState?.main?.[hiddenName] || window.modalCtx?.data?.[hiddenName] || '').trim();
-                    const frame = window.__getModalFrame?.();
-                    if (!inputEl.isConnected || latest.length < 3 || linkedId || frame?.entity !== 'contracts') return;
-                    await launchFn(latest);
-                  }, 350);
+                  setStatus(`Searching ${entityName}s…`);
+                  searchTimer = setTimeout(() => {
+                    searchTimer = 0;
+                    runSearch(typed, seq);
+                  }, 275);
+                } else {
+                  closeSuggestions();
                 }
               });
 
               inputEl.addEventListener('compositionstart', () => {
                 composing = true;
-                cancelAutoLaunch();
+                cancelSearch();
+                requestSeq += 1;
+                closeSuggestions();
               });
 
               inputEl.addEventListener('compositionend', () => {
@@ -296571,29 +296827,68 @@ const stage = (e) => {
                 inputEl.dispatchEvent(new Event('input', { bubbles: true }));
               });
 
-              inputEl.addEventListener('keydown', async (e) => {
-                if (e.key === 'Enter' || e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  cancelAutoLaunch();
-                  await launchFn(String(inputEl.value || '').trim());
+              inputEl.addEventListener('keydown', async (event) => {
+                if (event.key === 'ArrowDown' && resultRows.length && !suggestions.hidden) {
+                  event.preventDefault();
+                  setActiveIndex(activeIndex + 1);
+                } else if (event.key === 'ArrowUp' && resultRows.length && !suggestions.hidden) {
+                  event.preventDefault();
+                  setActiveIndex(activeIndex - 1);
+                } else if (event.key === 'Enter' && resultRows.length && !suggestions.hidden) {
+                  event.preventDefault();
+                  await chooseResult(activeIndex >= 0 ? activeIndex : 0);
+                } else if (event.key === 'Escape' && !suggestions.hidden) {
+                  event.preventDefault();
+                  closeSuggestions();
                 }
               });
 
-              inputEl.addEventListener('dblclick', async () => {
-                cancelAutoLaunch();
-                await launchFn(String(inputEl.value || '').trim());
+              inputEl.addEventListener('focus', () => {
+                const typed = String(inputEl.value || '').trim();
+                if (resultRows.length && typed === lastQuery) setExpanded(true);
               });
 
-              if (LOGC) console.log('[CONTRACTS] live picker launcher installed for', openerName);
+              inputEl.addEventListener('blur', () => {
+                setTimeout(() => {
+                  if (!suggestions.contains(document.activeElement)) closeSuggestions();
+                }, 120);
+              });
+
+              inputEl.__closeInlineSuggestions = closeSuggestions;
+              if (LOGC) console.log('[CONTRACTS] inline autocomplete installed for', entityName);
             };
 
-            wirePickerLauncherInput(candInput, 'candidate_id', launchCandidatePicker, clearContractCandidateSelection, 'candidate');
-            wirePickerLauncherInput(cliInput, 'client_id', launchClientPicker, clearContractClientSelection, 'client');
+            wireInlineContractPicker(candInput, {
+              hiddenName: 'candidate_id',
+              suggestionsId: 'candidateInlineSuggestions',
+              entityName: 'candidate',
+              endpoint: '/api/search/candidates',
+              clearFn: clearContractCandidateSelection,
+              getLabel: (row) => formatCandidateLabel(row),
+              getMeta: (row) => [String(row?.roles_display || '').trim(), String(row?.email || '').trim()].filter(Boolean).join(' • '),
+              selectRow: async (row, label) => {
+                applyContractCandidateSelection({ id: row?.id || row?.candidate_id, label, candidate: null });
+              }
+            });
+
+            wireInlineContractPicker(cliInput, {
+              hiddenName: 'client_id',
+              suggestionsId: 'clientInlineSuggestions',
+              entityName: 'client',
+              endpoint: '/api/search/clients',
+              clearFn: clearContractClientSelection,
+              getLabel: (row) => String(row?.name || row?.client_name || '').trim(),
+              getMeta: (row) => String(row?.primary_invoice_email || '').trim(),
+              selectRow: async (row, label) => {
+                await applyContractClientSelection({ id: row?.id || row?.client_id, label });
+              }
+            });
 
             if (btnPC && !btnPC.__wired) {
               btnPC.__wired = true;
               btnPC.addEventListener('click', async () => {
                 if (LOGC) console.log('[CONTRACTS] Pick Candidate clicked');
+                candInput?.__closeInlineSuggestions?.();
                 await launchCandidatePicker(String(candInput?.value || '').trim());
               });
 
@@ -296604,6 +296899,7 @@ const stage = (e) => {
               btnPL.__wired = true;
               btnPL.addEventListener('click', async () => {
                 if (LOGC) console.log('[CONTRACTS] Pick Client clicked');
+                cliInput?.__closeInlineSuggestions?.();
                 await launchClientPicker(String(cliInput?.value || '').trim());
               });
               if (LOGC) console.log('[CONTRACTS] wired btnPickClient');
@@ -296613,6 +296909,7 @@ const stage = (e) => {
               btnCC.__wired = true;
               btnCC.addEventListener('click', () => {
                 if (LOGC) console.log('[CONTRACTS] Clear Candidate clicked');
+                candInput?.__closeInlineSuggestions?.();
                 clearContractCandidateSelection();
               });
               if (LOGC) console.log('[CONTRACTS] wired btnClearCandidate');
@@ -296622,6 +296919,7 @@ const stage = (e) => {
               btnCL.__wired = true;
               btnCL.addEventListener('click', () => {
                 if (LOGC) console.log('[CONTRACTS] Clear Client clicked');
+                cliInput?.__closeInlineSuggestions?.();
                 clearContractClientSelection();
               });
               if (LOGC) console.log('[CONTRACTS] wired btnClearClient');
@@ -316125,30 +316423,7 @@ const getSelectionUiState = () => {
         // ✅ Processing Status is the canonical display label from the view (never TSFIN raw status)
         const txtBase = String(r?.processing_status_display || '').trim();
         const txt = txtBase || String(formatDisplayValue(c, v) ?? '');
-
-        // Invoice-paid coin (distinct from candidate-paid coin)
-        const invoicePaid = (r && (r.invoice_is_paid === true || String(r.invoice_is_paid).toLowerCase() === 'true'));
-        const stageNow = String(r?.tools_stage || '').trim().toUpperCase();
-
-        // Show coin only when invoice is actually paid AND row is in the INVOICED stage bucket
-        if (invoicePaid && stageNow === 'INVOICED' && txt) {
-          const wrap = document.createElement('div');
-          wrap.className = 'cell-right-icon';
-
-          const main = document.createElement('span');
-          main.className = 'cell-main';
-          main.textContent = txt;
-
-          const coin = document.createElement('span');
-          coin.className = 'coin-badge';
-          coin.textContent = '£';
-
-          wrap.appendChild(main);
-          wrap.appendChild(coin);
-          td.appendChild(wrap);
-        } else {
-          td.textContent = txt;
-        }
+        paintTimesheetProcessingStatusCell(td, r, txt);
 
       } else if (currentSection === 'invoices' && c === 'attachment_state') {
         paintInvoiceAttachmentIndicator(td, r);

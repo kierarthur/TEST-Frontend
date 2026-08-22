@@ -639,6 +639,13 @@
     'ctms-modal-bulk-authorise'
   ];
 
+  const utilityBodyFamilyClasses = utilityFamilyClasses.map((className) =>
+    `${className.replace(/^ctms-modal-/, 'ctms-')}-body`
+  );
+  const workflowBodyFamilyClasses = workflowFamilyClasses.map((className) =>
+    `${className.replace(/^ctms-modal-/, 'ctms-')}-body`
+  );
+
   const utilityFamilyFor = (body, entity, kind) => {
     if (kind === 'import-summary-user-management') return 'user-management';
     if (kind === 'candidate-picker' || body.querySelector('[data-picker-kind="candidate"]')) return 'candidate-picker';
@@ -672,8 +679,8 @@
       if (compact === 'no.ofunits' || compact === 'units') return 'Units';
       return text;
     };
-    const headerLabels = Array.from(table.querySelectorAll('thead th')).map((cell) => normaliseHeader(cell.textContent));
-    table.querySelectorAll('tbody tr').forEach((row) => {
+    const headerLabels = Array.from(table.querySelectorAll(':scope > thead > tr:last-child > th')).map((cell) => normaliseHeader(cell.textContent));
+    table.querySelectorAll(':scope > tbody > tr').forEach((row) => {
       const rowCells = Array.from(row.children);
       const effectiveLabels = headerLabels.length === rowCells.length
         ? headerLabels.map((label, index) => label || (index === rowCells.length - 1 ? 'Actions' : ''))
@@ -728,12 +735,12 @@
 
     body.querySelectorAll('table').forEach((table) => {
       if (!(table instanceof HTMLTableElement)) return;
-      const headerCells = Array.from(table.querySelectorAll('thead tr:last-child th'));
+      const headerCells = Array.from(table.querySelectorAll(':scope > thead > tr:last-child > th'));
       const labels = headerCells.map((cell) => safeText(cell.textContent)
         .replace(/Drag to resize\..*$/i, '')
         .replace(/[▲▼]\s*$/g, '')
         .trim());
-      const bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+      const bodyRows = Array.from(table.querySelectorAll(':scope > tbody > tr'));
       const keyValueTable = labels.length === 0 && bodyRows.length > 0 && bodyRows.every((row) => (
         row.children.length === 2 && row.firstElementChild?.tagName === 'TH'
       ));
@@ -1049,8 +1056,13 @@
 
   const hideUserFacingInternalIds = (copyRoot) => {
     if (!copyRoot) return;
+    const isSharedModalStructure = (node) => node instanceof HTMLElement && (
+      node.id === 'modal' ||
+      node.id === 'modalBody' ||
+      node.matches('.modal,.modal-b,.ctms-universal-modal-body,.ctms-utility-modal-body,.ctms-workflow-modal-body')
+    );
     const hide = (node) => {
-      if (!(node instanceof HTMLElement)) return;
+      if (!(node instanceof HTMLElement) || isSharedModalStructure(node)) return;
       node.hidden = true;
       node.setAttribute('aria-hidden', 'true');
       node.dataset.ctmsInternalIdHidden = '1';
@@ -1256,6 +1268,24 @@
     const kind = safeText(frame?.kind || '').toLowerCase();
     const utilityFamily = utilityFamilyFor(body, entity, kind);
     const workflowFamily = workflowFamilyFor(body, entity, kind);
+
+    // The modal body is a shared shell. A previous modal must never leave it
+    // hidden or carrying a specialised family class into the next modal.
+    if (body.dataset.ctmsInternalIdHidden === '1') {
+      body.hidden = false;
+      body.removeAttribute('aria-hidden');
+      delete body.dataset.ctmsInternalIdHidden;
+    }
+    const activeUtilityBodyClass = utilityFamily ? `ctms-${utilityFamily}-body` : '';
+    const activeWorkflowBodyClass = workflowFamily ? `ctms-${workflowFamily}-body` : '';
+    utilityBodyFamilyClasses.forEach((className) => {
+      body.classList.toggle(className, className === activeUtilityBodyClass);
+    });
+    workflowBodyFamilyClasses.forEach((className) => {
+      body.classList.toggle(className, className === activeWorkflowBodyClass);
+    });
+    body.classList.toggle('ctms-utility-modal-body', !!utilityFamily);
+    body.classList.toggle('ctms-workflow-modal-body', !!workflowFamily);
     cleanVisibleCopy(body, modal);
     const title = safeText(modal.querySelector('#modalTitle')?.textContent || 'Modal');
     const universalFamily = universalFamilyFor(kind, title, body);
