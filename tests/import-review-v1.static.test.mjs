@@ -365,6 +365,43 @@ test('HealthRoster eligibility is always reloaded without browser cache and inva
   assert.match(main, /dispatchEvent\(new CustomEvent\('cloudtms:client-saved'/);
 });
 
+test('Daily Validation is vendor-neutral until the Worker reports the detected format', () => {
+  assert.match(source, /'Daily Validation'/);
+  assert.match(source, /'Choose a Daily Client'/);
+  assert.match(source, /'Drop the daily roster file here'/);
+  assert.match(source, /'No shifts in roster yet'/);
+  assert.match(source, /inputFormat === 'NHSP'.*'NHSP import'/s);
+  assert.match(source, /return 'HealthRoster import'/);
+  assert.doesNotMatch(source, /'HealthRoster daily validation'/);
+  assert.match(html, /daily-roster-compat=20260822-r1/);
+});
+
+test('no-shifts declaration uses a client-scoped bounded Daily review modal', () => {
+  assert.match(source, /role="dialog" aria-modal="true"/);
+  assert.match(source, /data-ir-zero-client/);
+  assert.match(source, /data-ir-zero-start/);
+  assert.match(source, /data-ir-zero-end/);
+  assert.match(source, /inclusiveDays > 366/);
+  assert.match(source, /api\/imports\/daily-validation\/zero-shifts/);
+  assert.match(source, /Nothing is applied until the review is approved/);
+  assert.match(source, /parser\.includes\('ZERO_DECLARATION'\)/);
+  assert.match(css, /\.irv1-dialog-backdrop/);
+  assert.match(css, /\.irv1-dialog-date-grid/);
+});
+
+test('break-entry preference is shown only for roster-validation timesheets and remains non-economic', () => {
+  assert.match(main, /timesheet_break_entry_mode/);
+  assert.match(main, /Break start and finish times/);
+  assert.match(main, /Break length in minutes/);
+  assert.match(main, /if \(mode !== 'HEALTHROSTER' \|\| behaviour === 'CREATE'\) return ''/);
+  assert.match(main, /display:\$\{\(showHr && !isHrCreate\) \? '' : 'none'\}/);
+  assert.match(main, /A dormant stored[\s\S]*value is deliberately preserved/);
+  const changedStart = main.indexOf('const settingsChanged =');
+  const changedEnd = main.indexOf('const contractSettingsTouched', changedStart);
+  assert.ok(changedStart > 0 && changedEnd > changedStart);
+  assert.doesNotMatch(main.slice(changedStart, changedEnd), /timesheet_break_entry_mode/);
+});
+
 test('styles provide professional tiles, nested expandables, paging and responsive layouts', () => {
   for (const selector of ['.irv1-tiles', '.irv1-tile', '.irv1-group', '.irv1-pager', '.irv1-email-group', '.irv1-confirm-table', '.irv1-confirm-pager', '.irv1-confirm-candidate']) {
     assert.ok(css.includes(selector), `${selector} must be styled`);

@@ -20,7 +20,10 @@
   const state = {
     contract: null,
     contractError: '',
-    home: { reviews: [], clients: [], busy: '', error: '', statusClass: 'ACTIVE', pageSize: 25, page: 1, cursorStack: [null], nextCursor: null },
+    home: {
+      reviews: [], clients: [], busy: '', error: '', statusClass: 'ACTIVE', pageSize: 25,
+      page: 1, cursorStack: [null], nextCursor: null, selectedClients: {}, zeroShifts: null
+    },
     coverage: null,
     review: null,
     saveTimer: null,
@@ -362,22 +365,51 @@
     state.home.clients = [];
   }
 
-  function clientOptions() {
+  function clientOptions(selectedId = '') {
     return state.home.clients.map((client) => {
       const id = String(client.client_id || client.id || '');
       const name = client.client_name || client.name || id;
-      return `<option value="${esc(id)}">${esc(name)}</option>`;
+      return `<option value="${esc(id)}" ${String(selectedId) === id ? 'selected' : ''}>${esc(name)}</option>`;
     }).join('');
   }
 
-  function importTile(kind, icon, title, description, needsClient) {
+  function importTile(kind, icon, title, description, needsClient, options = {}) {
+    const selectedClient = String(state.home.selectedClients?.[kind] || '');
+    const clientPrompt = options.clientPrompt || 'Choose a Roster Client';
+    const dropPrompt = options.dropPrompt || 'Drop the file here';
     return `<article class="irv1-tile" tabindex="0" data-ir-drop="${esc(kind)}" aria-label="${esc(title)} file upload">
       <div class="irv1-tile-icon" aria-hidden="true">${esc(icon)}</div>
       <div><h4>${esc(title)}</h4><p>${esc(description)}</p></div>
-      ${needsClient ? `<label class="mini">Client<select class="input irv1-client-select" data-ir-client="${esc(kind)}"><option value="">Choose a HealthRoster client</option>${clientOptions()}</select></label>` : ''}
-      <div class="irv1-drop"><strong>Drop the file here</strong><span>or click to browse (.xls, .xlsx or .csv)</span></div>
+      ${needsClient ? `<label class="mini">Client<select class="input irv1-client-select" data-ir-client="${esc(kind)}"><option value="">${esc(clientPrompt)}</option>${clientOptions(selectedClient)}</select></label>` : ''}
+      <div class="irv1-drop"><strong>${esc(dropPrompt)}</strong><span>or click to browse (.xls, .xlsx or .csv)</span></div>
+      ${options.secondaryAction ? `<button type="button" class="irv1-btn irv1-secondary-action" data-ir-action="${esc(options.secondaryAction.action)}">${esc(options.secondaryAction.label)}</button>` : ''}
       <input class="irv1-file" type="file" accept=".xls,.xlsx,.csv" data-ir-file="${esc(kind)}" />
     </article>`;
+  }
+
+  function zeroShiftsDialogHtml() {
+    const dialog = state.home.zeroShifts;
+    if (!dialog) return '';
+    return `<div class="irv1-dialog-backdrop" data-ir-zero-backdrop>
+      <section class="irv1-dialog" role="dialog" aria-modal="true" aria-labelledby="irv1ZeroTitle" aria-describedby="irv1ZeroHelp">
+        <div class="irv1-dialog-head"><div><span class="irv1-dialog-kicker">Daily Validation</span><h3 id="irv1ZeroTitle">No shifts in roster yet</h3></div><button type="button" class="irv1-dialog-close" data-ir-action="zero-shifts-cancel" aria-label="Close">×</button></div>
+        <p id="irv1ZeroHelp">Choose the Daily Client and exact period with no roster shifts. CloudTMS will open a normal validation review and treat any existing Daily timesheets in that period as missing from the roster. Nothing is applied until the review is approved.</p>
+        ${dialog.error ? `<div class="irv1-alert error" role="alert">${esc(dialog.error)}</div>` : ''}
+        <div class="irv1-dialog-fields">
+          <label>Daily Client<select class="input" data-ir-zero-client ${dialog.busy ? 'disabled' : ''}><option value="">Choose a Daily Client</option>${clientOptions(dialog.clientId)}</select></label>
+          <div class="irv1-dialog-date-grid"><label>Start date<input class="input" type="date" data-ir-zero-start value="${esc(dialog.startDate || '')}" ${dialog.busy ? 'disabled' : ''}/></label><label>End date<input class="input" type="date" data-ir-zero-end value="${esc(dialog.endDate || '')}" ${dialog.busy ? 'disabled' : ''}/></label></div>
+        </div>
+        <div class="mini">The period may be up to 366 days, including both the start and end date.</div>
+        <div class="irv1-review-actions"><button type="button" class="irv1-btn" data-ir-action="zero-shifts-cancel" ${dialog.busy ? 'disabled' : ''}>Cancel</button><button type="button" class="irv1-btn primary" data-ir-action="zero-shifts-submit" ${dialog.busy ? 'disabled' : ''}>${dialog.busy ? 'Creating review…' : 'Create Daily Validation review'}</button></div>
+      </section>
+    </div>`;
+  }
+
+  function focusZeroShiftsDialog() {
+    global.requestAnimationFrame(() => {
+      const target = document.querySelector('[data-ir-zero-client]');
+      try { target?.focus({ preventScroll: true }); } catch { try { target?.focus(); } catch {} }
+    });
   }
 
   function renderHome() {
@@ -396,11 +428,12 @@
       <section class="irv1-intro"><div><h3>Import and review timesheets</h3><p>Upload a source file, confirm exactly what it covers, then resolve only the items that need attention. You can close this window and continue later.</p></div><span class="irv1-contract">✓ Approved contract ${esc(CONTRACT.ui)}</span></section>
       ${busy}${error}
       <section class="irv1-tiles">
-        ${importTile('NHSP', 'N', 'NHSP weekly', 'Import an NHSP weekly export and review the server-classified changes.', false)}
-        ${importTile('HR_WEEKLY', 'W', 'HealthRoster weekly', 'Create or validate weekly records for the selected HealthRoster client.', true)}
-        ${importTile('HR_DAILY', 'D', 'HealthRoster daily validation', 'Compare daily HealthRoster evidence with existing daily timesheets.', true)}
+        ${importTile('NHSP', 'N', 'NHSP Weekly', 'Import a dedicated NHSP Weekly export and review the server-classified changes.', false)}
+        ${importTile('HR_WEEKLY', 'W', 'Weekly Roster Import', 'Create or validate weekly records for the selected Roster Client.', true, { clientPrompt: 'Choose a Weekly Roster Client' })}
+        ${importTile('HR_DAILY', 'D', 'Daily Validation', 'Compare a supported daily roster file with existing Daily timesheets.', true, { clientPrompt: 'Choose a Daily Client', dropPrompt: 'Drop the daily roster file here', secondaryAction: { action: 'zero-shifts-open', label: 'No shifts in roster yet' } })}
       </section>
       <section class="irv1-history"><div class="irv1-history-head"><div><strong>${state.home.statusClass === 'ACTIVE' ? 'Continue an import' : 'Import review history'}</strong><div class="mini">Saved reviews resume with their selections and review position. Completed and abandoned reviews reopen read-only.</div></div><div class="irv1-toolbar-group"><label>Status <select class="input" data-ir-home-status>${['ACTIVE','ALL','COMPLETED','ABANDONED','SUPERSEDED'].map((value) => `<option value="${value}" ${state.home.statusClass === value ? 'selected' : ''}>${value.toLowerCase().replace('_',' ')}</option>`).join('')}</select></label><label>Rows <select class="input" data-ir-home-page-size>${PAGE_SIZES.map((size) => `<option value="${size}" ${state.home.pageSize === size ? 'selected' : ''}>${size}</option>`).join('')}</select></label><button type="button" class="irv1-btn" data-ir-action="reload-home">Refresh</button></div></div><div class="irv1-history-list">${rows}</div><div class="irv1-pager irv1-history-pager"><button class="irv1-btn" data-ir-action="home-page" data-page="${state.home.page - 1}" ${state.home.page > 1 ? '' : 'disabled="disabled" aria-disabled="true"'}>Previous</button><span>Page ${state.home.page}</span><button class="irv1-btn" data-ir-action="home-page" data-page="${state.home.page + 1}" ${state.home.nextCursor ? '' : 'disabled="disabled" aria-disabled="true"'}>Next</button></div></section>
+      ${zeroShiftsDialogHtml()}
     </div>`;
   }
 
@@ -423,7 +456,10 @@
     let clientId = null;
     if (kind !== 'NHSP') {
       clientId = String(document.querySelector(`[data-ir-client="${kind}"]`)?.value || '').trim();
-      if (!clientId) throw new Error('Choose the HealthRoster client before uploading the file.');
+      if (!clientId) throw new Error(kind === 'HR_DAILY'
+        ? 'Choose the Daily Client before uploading the file.'
+        : 'Choose the Weekly Roster Client before uploading the file.');
+      state.home.selectedClients[kind] = clientId;
     }
     state.home.busy = `Uploading ${file.name}…`;
     state.home.error = '';
@@ -447,6 +483,47 @@
       state.home.busy = '';
       state.home.error = error.message || 'The file could not be staged.';
       showScreen('Imports', renderHome, 'imports-v1');
+    }
+  }
+
+  async function submitZeroShiftsDeclaration() {
+    const dialog = state.home.zeroShifts;
+    if (!dialog || dialog.busy) return;
+    const clientId = String(document.querySelector('[data-ir-zero-client]')?.value || '').trim();
+    const startDate = String(document.querySelector('[data-ir-zero-start]')?.value || '').trim();
+    const endDate = String(document.querySelector('[data-ir-zero-end]')?.value || '').trim();
+    Object.assign(dialog, { clientId, startDate, endDate, error: '' });
+    if (!clientId) dialog.error = 'Choose a Daily Client.';
+    else if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) dialog.error = 'Choose both the start date and end date.';
+    else {
+      const startMs = Date.parse(`${startDate}T00:00:00Z`);
+      const endMs = Date.parse(`${endDate}T00:00:00Z`);
+      const inclusiveDays = Math.floor((endMs - startMs) / 86400000) + 1;
+      if (!Number.isFinite(inclusiveDays) || inclusiveDays < 1) dialog.error = 'The end date must be on or after the start date.';
+      else if (inclusiveDays > 366) dialog.error = 'Choose a period of no more than 366 days.';
+    }
+    if (dialog.error) {
+      showScreen('Imports', renderHome, 'imports-v1');
+      focusZeroShiftsDialog();
+      return;
+    }
+    state.home.selectedClients.HR_DAILY = clientId;
+    dialog.busy = true;
+    showScreen('Imports', renderHome, 'imports-v1');
+    try {
+      const created = await request('/api/imports/daily-validation/zero-shifts', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId, coverage_start_date: startDate, coverage_end_date: endDate })
+      });
+      const importId = created?.import_id || created?.id;
+      if (!importId) throw new Error('The Daily Validation review did not return an import ID.');
+      state.home.zeroShifts = null;
+      await openReview(importId);
+    } catch (error) {
+      dialog.busy = false;
+      dialog.error = error.message || 'The Daily Validation review could not be created.';
+      showScreen('Imports', renderHome, 'imports-v1');
+      focusZeroShiftsDialog();
     }
   }
 
@@ -533,6 +610,17 @@
     };
   }
 
+  function dailyInputFormatLabel(source) {
+    const route = String(source?.source_route || source?.source_system || '').toUpperCase();
+    if (route !== 'HR_DAILY' && route !== 'HEALTHROSTER_DAILY') return '';
+    const summary = source?.parse_summary || source?.parse_summary_json || {};
+    const parser = String(source?.parser_version || '').toUpperCase();
+    const inputFormat = String(summary?.input_format || '').toUpperCase();
+    if (summary?.declared_zero_shifts === true || inputFormat === 'ZERO_SHIFTS' || parser.includes('ZERO_SHIFTS') || parser.includes('ZERO_DECLARATION')) return 'No shifts declared';
+    if (inputFormat === 'NHSP' || parser.includes('NHSP_ADAPTER')) return 'NHSP import';
+    return 'HealthRoster import';
+  }
+
   async function openCoverage(importId) {
     const scope = await fetchScope(importId, 1, 25);
     if (scope.review_already_created) return openReview(importId);
@@ -605,7 +693,7 @@
     const coverageChosen = !!c.mode;
     const overlapChosen = overlaps.length === 0 || (c.overlapChoice === 'SUPERSEDE' && replaceAllowed);
     return `<div class="irv1-shell" id="irv1Coverage" data-coverage-mode="${esc(c.mode || '')}" data-authority-mode="${esc(copy.authority)}" data-overlap-choice="${esc(c.overlapChoice || '')}">
-      <section class="irv1-intro"><div><h3>${esc(c.scope.filename || 'Staged import')}</h3><p>${esc(formatDate(c.scope.coverage_start_date))} to ${esc(formatDate(c.scope.coverage_end_date))} · ${Number(c.scope.staged_row_count || 0)} parsed rows. Coverage becomes immutable when the review is created.</p></div><span class="irv1-contract">${esc(c.scope.source_route || '')}</span></section>
+      <section class="irv1-intro"><div><h3>${esc(c.scope.filename || 'Staged import')}</h3><p>${esc(formatDate(c.scope.coverage_start_date))} to ${esc(formatDate(c.scope.coverage_end_date))} · ${Number(c.scope.staged_row_count || 0)} parsed rows. Coverage becomes immutable when the review is created.</p></div><span class="irv1-contract">${esc(dailyInputFormatLabel(c.scope) || c.scope.source_route || '')}</span></section>
       ${error}
       <div class="irv1-scope-summary">${clients || '<span class="irv1-chip">Client mapping will be reviewed</span>'}</div>
       ${overlapHtml}
@@ -1496,8 +1584,9 @@
       : '';
     const evidence = header.evidence || {};
     const conflictActions = review.conflictBuffer ? '<div class="irv1-alert"><strong>Your local choices are buffered.</strong><div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="conflict-save">Save buffered choices against refreshed rows</button><button class="irv1-btn" data-ir-action="conflict-discard">Discard buffered choices</button></div></div>' : '';
+    const inputFormatLabel = dailyInputFormatLabel({ ...header.import, parser_version: evidence.parser_version || header.import.parser_version });
     return `<div class="irv1-shell" id="irv1Review">
-      <section class="irv1-review-head"><div><h3 class="irv1-title">${esc(header.import.filename || 'Import review')}</h3><div class="irv1-review-meta"><span class="irv1-chip">${esc(header.import.source_route || header.import.source_system || '')}</span><span class="irv1-chip">${esc(formatDate(header.import.coverage_start_date))} – ${esc(formatDate(header.import.coverage_end_date))}</span><span class="irv1-status">${esc(displayStatus)}</span><span class="irv1-chip">Follow-up: ${esc(followUp)}</span></div><div class="mini irv1-evidence">Server evidence: source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12) || 'unavailable')} · parser ${esc(evidence.parser_version || 'unavailable')} · preview ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="home">${readOnly ? 'Close' : 'Save & close'}</button>${reviewCan(review, 'REFRESH') ? '<button class="irv1-btn" data-ir-action="refresh">Recheck</button>' : ''}${reviewCan(review, 'ABANDON') ? '<button class="irv1-btn danger" data-ir-action="abandon">Abandon import</button>' : ''}${statusActions}<button class="irv1-btn primary" data-ir-action="apply-preview" ${reviewCan(review, 'APPLY') ? 'aria-disabled="false" title="Review and apply the currently selected ready candidate/client units"' : 'disabled="disabled" aria-disabled="true" title="No selected candidate/client unit is currently ready"'}>Review and apply</button></div></section>
+      <section class="irv1-review-head"><div><h3 class="irv1-title">${esc(header.import.filename || 'Import review')}</h3><div class="irv1-review-meta"><span class="irv1-chip">${esc(inputFormatLabel || header.import.source_route || header.import.source_system || '')}</span><span class="irv1-chip">${esc(formatDate(header.import.coverage_start_date))} – ${esc(formatDate(header.import.coverage_end_date))}</span><span class="irv1-status">${esc(displayStatus)}</span><span class="irv1-chip">Follow-up: ${esc(followUp)}</span></div><div class="mini irv1-evidence">Server evidence: source ${esc(String(evidence.source_file_sha256 || '').slice(0, 12) || 'unavailable')} · parser ${esc(evidence.parser_version || 'unavailable')} · preview ${esc(evidence.preview_generation || '—')}</div></div><div class="irv1-review-actions"><button class="irv1-btn" data-ir-action="home">${readOnly ? 'Close' : 'Save & close'}</button>${reviewCan(review, 'REFRESH') ? '<button class="irv1-btn" data-ir-action="refresh">Recheck</button>' : ''}${reviewCan(review, 'ABANDON') ? '<button class="irv1-btn danger" data-ir-action="abandon">Abandon import</button>' : ''}${statusActions}<button class="irv1-btn primary" data-ir-action="apply-preview" ${reviewCan(review, 'APPLY') ? 'aria-disabled="false" title="Review and apply the currently selected ready candidate/client units"' : 'disabled="disabled" aria-disabled="true" title="No selected candidate/client unit is currently ready"'}>Review and apply</button></div></section>
       ${review.error ? `<div class="irv1-alert error">${esc(review.error)}</div>` : ''}
       ${header.state.follow_up_error_message ? `<div class="irv1-alert error">${esc(header.state.follow_up_error_message)}</div>` : ''}
       ${header.state.partial_application === true ? `<div class="irv1-alert"><strong>${Number(header.state.applied_outcome_count || 0)} action(s) have already been completed.</strong><div class="mini">Completed work is locked. Resolve or reselect the remaining pending and deferred actions, then use Review and apply again.</div></div>` : ''}
@@ -1864,6 +1953,21 @@
         return showScreen('Imports', renderHome, 'imports-v1');
       }
       if (action === 'continue') return openReview(button.getAttribute('data-import-id'));
+      if (action === 'zero-shifts-open') {
+        const clientId = String(document.querySelector('[data-ir-client="HR_DAILY"]')?.value || state.home.selectedClients.HR_DAILY || '').trim();
+        state.home.selectedClients.HR_DAILY = clientId;
+        state.home.zeroShifts = { clientId, startDate: '', endDate: '', busy: false, error: '' };
+        showScreen('Imports', renderHome, 'imports-v1');
+        focusZeroShiftsDialog();
+        return;
+      }
+      if (action === 'zero-shifts-cancel') {
+        state.home.zeroShifts = null;
+        showScreen('Imports', renderHome, 'imports-v1');
+        global.requestAnimationFrame(() => document.querySelector('[data-ir-action="zero-shifts-open"]')?.focus());
+        return;
+      }
+      if (action === 'zero-shifts-submit') return submitZeroShiftsDeclaration();
       if (action === 'coverage-page') return loadCoveragePage(Number(button.getAttribute('data-page')));
       if (action === 'coverage-create') return createReviewFromCoverage();
       if (action === 'overlap-resume') return openReview(state.coverage?.selectedOverlapId);
@@ -1938,8 +2042,17 @@
   }, true);
 
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.home.zeroShifts && document.querySelector('[data-ir-zero-backdrop]')) {
+      event.preventDefault();
+      if (!state.home.zeroShifts.busy) {
+        state.home.zeroShifts = null;
+        showScreen('Imports', renderHome, 'imports-v1');
+        global.requestAnimationFrame(() => document.querySelector('[data-ir-action="zero-shifts-open"]')?.focus());
+      }
+      return;
+    }
     const tile = event.target.closest?.('[data-ir-drop]');
-    if (tile && (event.key === 'Enter' || event.key === ' ')) {
+    if (tile && !event.target.closest?.('select,input,button') && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault();
       tile.querySelector('[data-ir-file]')?.click();
     }
@@ -1994,6 +2107,11 @@
 
   document.addEventListener('change', (event) => {
     const target = event.target;
+    if (target.matches('[data-ir-client]')) {
+      const kind = String(target.getAttribute('data-ir-client') || '');
+      if (kind) state.home.selectedClients[kind] = String(target.value || '');
+      return;
+    }
     if (target.matches('[data-ir-file]')) {
       const kind = target.closest('[data-ir-drop]')?.getAttribute('data-ir-drop');
       const file = target.files?.[0];

@@ -3626,6 +3626,11 @@ function normalizeClientSettingsForSave(raw) {
     out.default_submission_mode = mode;
   }
 
+  if (fromUi || ('timesheet_break_entry_mode' in src)) {
+    const mode = String(src.timesheet_break_entry_mode || '').trim().toUpperCase();
+    out.timesheet_break_entry_mode = mode === 'DURATION_MINUTES' ? 'DURATION_MINUTES' : 'START_END_TIMES';
+  }
+
   return { cleaned: out, invalid };
 }
 
@@ -125999,8 +126004,9 @@ function openContractSettingsModal() {
     return false;
   })();
 
-  // ✅ Final viewOnly: either parent is view-only OR real timesheets exist (existing rule)
-  const viewOnly = !!(parentViewOnly || (contractId && hasRealTimesheets));
+  // Existing timesheets continue to lock the established route settings. The
+  // break-entry preference is deliberately independent and may still change.
+  const viewOnly = !!parentViewOnly;
 
   const fs = (window.modalCtx.formState ||= {
     __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null),
@@ -126144,6 +126150,10 @@ function openContractSettingsModal() {
       const raw = getMainRaw(k);
       out[k] = (raw === null || raw === undefined) ? null : triUpperOrNull(raw);
     }
+    const breakModeRaw = getMainRaw('timesheet_break_entry_mode');
+    out.timesheet_break_entry_mode = (breakModeRaw === null || breakModeRaw === undefined)
+      ? null
+      : triUpperOrNull(breakModeRaw);
 
     return out;
   };
@@ -126170,6 +126180,13 @@ function openContractSettingsModal() {
         const v = stashObj[k];
         changed = setMainTriUpper(k, (v === null ? null : String(v))) || changed;
       }
+    }
+    if (Object.prototype.hasOwnProperty.call(stashObj, 'timesheet_break_entry_mode')) {
+      const value = stashObj.timesheet_break_entry_mode;
+      changed = setMainTriUpper(
+        'timesheet_break_entry_mode',
+        value === null ? null : String(value)
+      ) || changed;
     }
 
     return changed;
@@ -126243,6 +126260,9 @@ function openContractSettingsModal() {
     // NEW: default submission mode (nullable, “inherit” option)
     const dsm = csMode('default_submission_mode');
     changed = setMainTriUpper('default_submission_mode', dsm ? dsm : null) || changed;
+
+    // A null raw value inherits the Daily Client choice. A dormant stored
+    // value is deliberately preserved when override is switched off and on.
 
     // Canonicalise route flags exactly as per existing contract settings rules
     const isNhsp = !!boolish(fs.main.is_nhsp);
@@ -126338,6 +126358,9 @@ function openContractSettingsModal() {
       eff.default_submission_mode =
         (triUpperOrNull(getMainRaw('default_submission_mode')) ?? null);
 
+      eff.timesheet_break_entry_mode =
+        triUpperOrNull(getMainRaw('timesheet_break_entry_mode')) || csUpper('timesheet_break_entry_mode') || 'START_END_TIMES';
+
     } else {
       // inherited from client settings snapshot
       eff.require_reference_to_pay     = csBool('pay_reference_required', false);
@@ -126364,6 +126387,8 @@ function openContractSettingsModal() {
 
       eff.default_submission_mode =
         (csUpper('default_submission_mode') || null);
+      eff.timesheet_break_entry_mode =
+        csUpper('timesheet_break_entry_mode') || 'START_END_TIMES';
     }
 
     const weeklyMode =
@@ -126381,6 +126406,7 @@ function openContractSettingsModal() {
       weeklyMode,
       hrMode,
       isHrCreate: (weeklyMode === 'HEALTHROSTER' && hrMode === 'NO_TS'),
+      breakModeOverride: triUpperOrNull(getMainRaw('timesheet_break_entry_mode')),
       eff
     };
   };
@@ -126388,20 +126414,24 @@ function openContractSettingsModal() {
   // --- Render HTML (self-contained; does not rely on renderContractSettingsModal) ---
   const renderHtml = () => {
     const st = computeEffective();
-    const { hasSnapshot, overrideOn, weeklyMode, hrMode, isHrCreate, eff } = st;
+    const { hasSnapshot, overrideOn, weeklyMode, hrMode, isHrCreate, breakModeOverride, eff } = st;
 
     // ✅ Critical gating:
     // - viewOnly => everything disabled
     // - override OFF (in edit mode) => only override checkbox enabled, everything else disabled
     const disabledAll = viewOnly ? 'disabled' : '';
-    const disabledIfInherit = (!overrideOn || viewOnly) ? 'disabled' : '';
+    const disabledRoute = (viewOnly || hasRealTimesheets) ? 'disabled' : '';
+    const disabledIfInherit = (!overrideOn || viewOnly || hasRealTimesheets) ? 'disabled' : '';
+    const breakModeDisabled = (!overrideOn || viewOnly) ? 'disabled' : '';
 
     const hint = viewOnly
       ? `View-only. You cannot change contract settings here.`
       : (!hasSnapshot
           ? `Client settings snapshot is not available. Pick a client (or reopen the contract) to enable seeding when overriding.`
           : (overrideOn
-              ? `Override is ON. Changes here are staged and applied when you Save the contract.`
+              ? (hasRealTimesheets
+                  ? `Existing timesheets lock the established route settings. The break-entry choice remains editable because it affects only how future breaks are entered.`
+                  : `Override is ON. Changes here are staged and applied when you Save the contract.`)
               : `Override is OFF. Only the override checkbox is editable. Tick “Override client settings” to stage contract-specific values.`));
 
     const radioPill = (name, value, text, checked, disabledAttr) => `
@@ -126472,7 +126502,7 @@ function openContractSettingsModal() {
           <div class="controls" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
               <label class="inline chk-tight" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;">
-                <input type="checkbox" name="overrideclientsettings" ${overrideOn ? 'checked' : ''} ${disabledAll}/>
+                <input type="checkbox" name="overrideclientsettings" ${overrideOn ? 'checked' : ''} ${disabledRoute}/>
                 <span>Override client settings for this contract</span>
               </label>
               <span class="mini" style="opacity:0.8;">(Staged only until you Save the contract)</span>
@@ -126481,21 +126511,21 @@ function openContractSettingsModal() {
         </div>
 
         <div class="row" style="margin-top:12px;">
-          <label style="white-space:normal">Weekly timesheet source</label>
+          <label style="white-space:normal">Timesheet workflow</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
             <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-              ${radioPill('weekly_mode', 'NONE', 'None (manual)', weeklyMode === 'NONE', disabledIfInherit)}
-              ${radioPill('weekly_mode', 'NHSP', 'NHSP', weeklyMode === 'NHSP', disabledIfInherit)}
-              ${radioPill('weekly_mode', 'HEALTHROSTER', 'HealthRoster', weeklyMode === 'HEALTHROSTER', disabledIfInherit)}
+              ${radioPill('weekly_mode', 'NONE', 'Manual timesheets', weeklyMode === 'NONE', disabledIfInherit)}
+              ${radioPill('weekly_mode', 'NHSP', 'Dedicated NHSP Weekly', weeklyMode === 'NHSP', disabledIfInherit)}
+              ${radioPill('weekly_mode', 'HEALTHROSTER', 'Roster workflows', weeklyMode === 'HEALTHROSTER', disabledIfInherit)}
             </div>
 
             <div id="contractWeeklyMsg" class="mini" style="opacity:0.9;line-height:1.25;white-space:normal;overflow-wrap:break-word;">
               ${
                 weeklyMode === 'NONE'
-                  ? 'Weekly timesheets are managed manually (no external weekly import source). Candidates will submit timesheets electronically or using a QR Timesheet.'
+                  ? 'Workers submit timesheets without a roster-validation import.'
                   : weeklyMode === 'NHSP'
-                  ? 'NHSP weekly imports will be used for this contract. Candidates will not submit any timesheets.'
-                  : 'HealthRoster weekly imports will be used for this contract.'
+                  ? 'The dedicated NHSP Weekly import creates timesheets; workers do not submit them.'
+                  : 'Choose whether roster imports validate worker timesheets or are authoritative for weekly timesheets.'
               }
             </div>
           </div>
@@ -126503,25 +126533,37 @@ function openContractSettingsModal() {
 
         <div id="contractHrModeWrap" style="display:${showHr ? '' : 'none'};">
           <div class="row" style="margin-top:12px;">
-            <label style="white-space:normal">Weekly HealthRoster behaviour</label>
+            <label style="white-space:normal">Roster workflow</label>
             <div class="controls" style="display:flex;flex-direction:column;gap:12px;min-width:0;">
               ${radioChoice(
                 'hr_timesheet_mode',
                 'REQUIRE_TS',
-                'Worker will provide timesheets; the agency will also import healthroster data to verify workers hours',
-                'Import will validate that HealthRoster hours match the worker’s weekly timesheet. Mismatches fail validation and healthroster or timesheet will need amending before it can be paid.',
+                'Roster validation timesheets',
+                'Workers submit timesheets. Weekly Roster imports and Daily Validation can compare roster data with them; the file format is chosen at import time.',
                 hrMode === 'REQUIRE_TS',
                 disabledIfInherit
               )}
               ${radioChoice(
                 'hr_timesheet_mode',
                 'NO_TS',
-                'Worker will not provide timesheets; imports create them if a contract exists',
-                'Import will create/update weekly timesheets from HealthRoster hours when a contract exists. Healthroster hours will not require any seperate checks.',
+                'Import-authoritative roster',
+                'Workers do not submit timesheets. Weekly Roster imports create or update them when a contract exists.',
                 hrMode === 'NO_TS',
                 disabledIfInherit
               )}
             </div>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:12px;display:${(showHr && !isHrCreate) ? '' : 'none'};">
+          <label style="white-space:normal">How workers enter breaks</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:7px;min-width:0;">
+            <select name="timesheet_break_entry_mode" ${breakModeDisabled}>
+              <option value="" ${breakModeOverride == null ? 'selected' : ''}>Inherit from Daily Client (${eff.timesheet_break_entry_mode === 'DURATION_MINUTES' ? 'length in minutes' : 'start and finish times'})</option>
+              <option value="START_END_TIMES" ${breakModeOverride === 'START_END_TIMES' ? 'selected' : ''}>Break start and finish times</option>
+              <option value="DURATION_MINUTES" ${breakModeOverride === 'DURATION_MINUTES' ? 'selected' : ''}>Break length in minutes</option>
+            </select>
+            <div class="mini" style="opacity:.86;line-height:1.3;">Available only for roster-validation timesheets. It is not used for manual timesheets, Dedicated NHSP Weekly, or import-authoritative roster workflows.</div>
           </div>
         </div>
 
@@ -126608,7 +126650,7 @@ function openContractSettingsModal() {
               </div>
 
               <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px;">
-                ${checkChoice('hr_attach_to_invoice', 'Attach HealthRoster to invoice', !!eff.hr_attach_to_invoice, disabledIfInherit)}
+                ${checkChoice('hr_attach_to_invoice', 'Attach roster file to invoice', !!eff.hr_attach_to_invoice, disabledIfInherit)}
                 <div id="contractTsAttachRow" style="display:${showHrTsAttach ? '' : 'none'};">
                   ${checkChoice('ts_attach_to_invoice', 'Attach timesheets to invoice', !!eff.ts_attach_to_invoice, disabledIfInherit)}
                 </div>
@@ -126677,6 +126719,15 @@ function openContractSettingsModal() {
     if (!overrideOnNow) {
       if (!initial && changed) setContractDirtyIfChanged(true);
       return !!changed;
+    }
+
+    const breakModeSelect = root.querySelector('select[name="timesheet_break_entry_mode"]');
+    if (breakModeSelect) {
+      const breakMode = String(breakModeSelect.value || '').trim().toUpperCase();
+      changed = setMainTriUpper(
+        'timesheet_break_entry_mode',
+        breakMode === 'START_END_TIMES' || breakMode === 'DURATION_MINUTES' ? breakMode : null
+      ) || changed;
     }
 
     // Read UI selection (enabled only when overrideOnNow)
@@ -139441,20 +139492,20 @@ function renderContractSettingsModal(ctx) {
     <form id="contractSettingsForm" class="tabc form">
 
       <div class="row" style="margin:0;">
-        <label style="white-space:normal">Weekly timesheet source</label>
+        <label style="white-space:normal">Timesheet workflow</label>
         <div class="controls" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
           <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-            ${radioPill('weekly_mode', 'NONE', 'None (manual)', weeklyMode === 'NONE')}
-            ${radioPill('weekly_mode', 'NHSP', 'NHSP', weeklyMode === 'NHSP')}
-            ${radioPill('weekly_mode', 'HEALTHROSTER', 'HealthRoster', weeklyMode === 'HEALTHROSTER')}
+            ${radioPill('weekly_mode', 'NONE', 'Manual timesheets', weeklyMode === 'NONE')}
+            ${radioPill('weekly_mode', 'NHSP', 'Dedicated NHSP Weekly', weeklyMode === 'NHSP')}
+            ${radioPill('weekly_mode', 'HEALTHROSTER', 'Roster workflows', weeklyMode === 'HEALTHROSTER')}
           </div>
           <div id="contractWeeklyMsg" class="mini" style="opacity:0.9;line-height:1.25;white-space:normal;overflow-wrap:break-word;">
             ${
               weeklyMode === 'NONE'
-                ? 'Weekly timesheets are managed manually (no external weekly import source). Candidates will submit timesheets electronically or using a QR Timesheet.'
+                ? 'Workers submit timesheets without a roster-validation import.'
                 : weeklyMode === 'NHSP'
-                ? 'NHSP weekly imports will be used for this contract. Candidates will not submit any timesheets.'
-                : 'HealthRoster weekly imports will be used for this contract.'
+                ? 'The dedicated NHSP Weekly import creates timesheets; workers do not submit them.'
+                : 'Choose whether roster imports validate worker timesheets or are authoritative for weekly timesheets.'
             }
           </div>
         </div>
@@ -139462,20 +139513,20 @@ function renderContractSettingsModal(ctx) {
 
       <div id="contractHrModeWrap" style="display:${showHr ? '' : 'none'};">
         <div class="row" style="margin-top:12px;">
-          <label style="white-space:normal">Weekly HealthRoster behaviour</label>
+          <label style="white-space:normal">Roster workflow</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:12px;min-width:0;">
             ${radioChoice(
               'hr_timesheet_mode',
               'REQUIRE_TS',
-              'Worker will provide timesheets; the agency will also import healthroster data to verify workers hours',
-              'Import will validate that HealthRoster hours match the worker’s weekly timesheet. Mismatches fail validation and healthroster or timesheet will need amending before it can be paid.',
+              'Roster validation timesheets',
+              'Workers submit timesheets. Weekly Roster imports and Daily Validation can compare roster data with them; the file format is chosen at import time.',
               hrMode === 'REQUIRE_TS'
             )}
             ${radioChoice(
               'hr_timesheet_mode',
               'NO_TS',
-              'Worker will not provide timesheets; imports create them if a contract exists',
-              'Import will create/update weekly timesheets from HealthRoster hours when a contract exists. Healthroster hours will not require any seperate checks.',
+              'Import-authoritative roster',
+              'Workers do not submit timesheets. Weekly Roster imports create or update them when a contract exists.',
               hrMode === 'NO_TS'
             )}
           </div>
@@ -139525,7 +139576,7 @@ function renderContractSettingsModal(ctx) {
             </div>
 
             <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px;">
-              ${checkChoice('hr_attach_to_invoice', 'Attach HealthRoster to invoice', !!d.hr_attach_to_invoice)}
+              ${checkChoice('hr_attach_to_invoice', 'Attach roster file to invoice', !!d.hr_attach_to_invoice)}
               <div id="contractTsAttachRow" style="display:${showHrTsAttach ? '' : 'none'};">
                 ${checkChoice('ts_attach_to_invoice', 'Attach timesheets to invoice', !!d.ts_attach_to_invoice)}
               </div>
@@ -139717,10 +139768,10 @@ function renderContractMainTab(ctx) {
   const hideDSM = isNhsp || (isHr && noTs);
 
   const routeLabel =
-    isNhsp ? 'NHSP' :
-    (isHr && noTs) ? 'HealthRoster (no timesheets)' :
-    (isHr) ? 'HealthRoster (timesheets required)' :
-    'Manual';
+    isNhsp ? 'Dedicated NHSP Weekly' :
+    (isHr && noTs) ? 'Import-authoritative roster' :
+    (isHr) ? 'Roster validation timesheets' :
+    'Manual timesheets';
 
   // Derive labels from picker cache if missing but ids exist (and store into formState for persistence)
   let derivedCand = '';
@@ -280554,7 +280605,8 @@ window.modalCtx = {
         Object.prototype.hasOwnProperty.call(baseline, 'manual_invoices_alt_email_address') ||
         Object.prototype.hasOwnProperty.call(baseline, 'auto_invoice_default') ||
         Object.prototype.hasOwnProperty.call(baseline, 'invoice_consolidation_mode') ||
-        Object.prototype.hasOwnProperty.call(baseline, 'reference_number_required_to_issue_invoice');
+        Object.prototype.hasOwnProperty.call(baseline, 'reference_number_required_to_issue_invoice') ||
+        Object.prototype.hasOwnProperty.call(baseline, 'timesheet_break_entry_mode');
 
       const shouldValidateSettings = hasFormMounted || hasFullBaseline || hasClientSettingsKeys;
 
@@ -295405,6 +295457,13 @@ let self_bill             = boolTriFromFS('self_bill');
 // ✅ FIX: define attachment flags BEFORE they’re referenced in settingsChanged
 let hr_attach_to_invoice  = boolTriFromFS('hr_attach_to_invoice');
 let ts_attach_to_invoice  = boolTriFromFS('ts_attach_to_invoice');
+const breakEntryModeRaw = (fs && fs.main && Object.prototype.hasOwnProperty.call(fs.main, 'timesheet_break_entry_mode'))
+  ? fs.main.timesheet_break_entry_mode
+  : (base.timesheet_break_entry_mode ?? null);
+const breakEntryModeUpper = String(breakEntryModeRaw || '').trim().toUpperCase();
+let timesheet_break_entry_mode = ['START_END_TIMES', 'DURATION_MINUTES'].includes(breakEntryModeUpper)
+  ? breakEntryModeUpper
+  : null;
 
 // NEW: canonicalise route flags only if any route override is present (avoids clobbering NULL legacy overrides)
 const anyRouteSet = [is_nhsp, autoprocess_hr, no_timesheet_required].some(v => v === true || v === false);
@@ -295684,6 +295743,7 @@ const data = {
   // attachments (nullable)
   hr_attach_to_invoice,
   ts_attach_to_invoice,
+  timesheet_break_entry_mode,
 
   // refs/auto-invoice (nullable)
   auto_invoice,
@@ -296130,7 +296190,8 @@ const stage = (e) => {
     'reference_number_required_to_issue_invoice',
     'send_manual_invoices_to_different_email',
     'manual_invoices_alt_email_address',
-    'default_submission_mode'
+    'default_submission_mode',
+    'timesheet_break_entry_mode'
   ]);
 
   // ✅ NEW: any form input here is NON-calendar (calendar staging uses separate functions)
@@ -296618,10 +296679,10 @@ const stage = (e) => {
                         const isHr   = !!main.autoprocess_hr;
                         const noTs   = !!main.no_timesheet_required;
                         const routeLabel =
-                          isNhsp ? 'NHSP' :
-                          (isHr && noTs) ? 'HealthRoster (no timesheets)' :
-                          (isHr) ? 'HealthRoster (timesheets required)' :
-                          'Manual';
+                          isNhsp ? 'Dedicated NHSP Weekly' :
+                          (isHr && noTs) ? 'Import-authoritative roster' :
+                          (isHr) ? 'Roster validation timesheets' :
+                          'Manual timesheets';
                         routeLbl.innerHTML = `<strong>${routeLabel}</strong>`;
                       }
                     } catch {}
@@ -299325,6 +299386,11 @@ function canonicalizeClientSettings(input) {
 
   // ✅ Preserve + canonicalise "Auto-invoice by default" across all mode branches
   const autoInvDefault = toBool(cs.auto_invoice_default, false);
+
+  const breakEntryMode = up(cs.timesheet_break_entry_mode) === 'DURATION_MINUTES'
+    ? 'DURATION_MINUTES'
+    : 'START_END_TIMES';
+  cs.timesheet_break_entry_mode = breakEntryMode;
 
   // ✅ NEW: Client invoicing consolidation mode (DB-backed)
   // Allowed: NONE | BY_WEEK | ANY_WEEK  (UI may send "ALL" -> ANY_WEEK)
@@ -344136,6 +344202,8 @@ async function renderClientSettingsUI(settingsObj){
 
     weekly_mode: initial.weekly_mode || '',
     hr_weekly_behaviour: initial.hr_weekly_behaviour || '',
+    timesheet_break_entry_mode:
+      up(initial.timesheet_break_entry_mode) === 'DURATION_MINUTES' ? 'DURATION_MINUTES' : 'START_END_TIMES',
 
     invoice_consolidation_mode: up(initial.invoice_consolidation_mode || 'NONE'),
     reference_number_required_to_issue_invoice: toBool(initial.reference_number_required_to_issue_invoice, false)
@@ -344304,7 +344372,7 @@ async function renderClientSettingsUI(settingsObj){
           <div class="controls" style="display:flex;flex-direction:column;gap:6px;min-width:0;">
             <input class="input" name="ts_queries_email" value="${String(clientTsQueriesEmail || '')}" placeholder="name@trust.nhs.uk" />
             <div class="mini" style="opacity:0.85;line-height:1.25;white-space:normal;overflow-wrap:break-word;">
-              Used when emailing Temporary Staffing about weekly HealthRoster validation mismatches.
+              Used when emailing Temporary Staffing about weekly roster-validation mismatches.
             </div>
           </div>
         </div>
@@ -344313,20 +344381,20 @@ async function renderClientSettingsUI(settingsObj){
 
     return `
       <div class="row" style="margin-top:12px;">
-        <label style="white-space:normal">Weekly HealthRoster behaviour</label>
+        <label style="white-space:normal">Roster workflow</label>
         <div class="controls" style="display:flex;flex-direction:column;gap:12px;min-width:0;">
           ${radioChoice(
             'hr_weekly_behaviour',
             'VERIFY',
-            'Worker will provide timesheets; the agency will also import healthroster data to verify workers hours',
-            'Import will validate that HealthRoster hours match the worker’s weekly timesheet. Mismatches fail validation and healthroster or timesheet will need amending before it can be paid.',
+            'Roster validation timesheets',
+            'Workers submit timesheets. Weekly Roster imports and Daily Validation can compare roster data with them; the file format is chosen at import time.',
             isVerify
           )}
           ${radioChoice(
             'hr_weekly_behaviour',
             'CREATE',
-            'Worker will not provide timesheets; imports create them if a contract exists',
-            'Import will create/update weekly timesheets from HealthRoster hours when a contract exists. Healthroster hours will not require any seperate checks.',
+            'Import-authoritative roster',
+            'Workers do not submit timesheets. Weekly Roster imports create or update them when a contract exists.',
             !isVerify
           )}
         </div>
@@ -344339,25 +344407,44 @@ async function renderClientSettingsUI(settingsObj){
     const mode = String(st.weekly_mode || 'NONE').toUpperCase();
     const msg =
       (mode === 'NONE')
-        ? 'Weekly timesheets are managed manually (no external weekly import source). Candidates will submit timesheets electronically or using a QR Timesheet.'
+        ? 'Workers submit timesheets without a roster-validation import.'
       : (mode === 'NHSP')
-        ? 'NHSP weekly imports will be used for this client. Candidates will not submit any timesheets.'
-      : 'HealthRoster weekly imports will be used for this client.';
+        ? 'The dedicated NHSP Weekly import creates timesheets; workers do not submit them.'
+      : 'Choose whether roster imports validate worker timesheets or are authoritative for weekly timesheets.';
 
     return `
       <div class="row" style="margin:0;">
-        <label style="white-space:normal">Weekly timesheet source</label>
+        <label style="white-space:normal">Timesheet workflow</label>
         <div class="controls" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
           <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-            ${radioPill('weekly_mode', 'NONE', 'None (manual)', mode === 'NONE')}
-            ${radioPill('weekly_mode', 'NHSP', 'NHSP', mode === 'NHSP')}
-            ${radioPill('weekly_mode', 'HEALTHROSTER', 'HealthRoster', mode === 'HEALTHROSTER')}
+            ${radioPill('weekly_mode', 'NONE', 'Manual timesheets', mode === 'NONE')}
+            ${radioPill('weekly_mode', 'NHSP', 'Dedicated NHSP Weekly', mode === 'NHSP')}
+            ${radioPill('weekly_mode', 'HEALTHROSTER', 'Roster workflows', mode === 'HEALTHROSTER')}
           </div>
           <div class="mini" style="opacity:0.9;line-height:1.25;white-space:normal;overflow-wrap:break-word;">${msg}</div>
         </div>
       </div>
       ${hrBehaviourHTML(st)}
     `;
+  };
+
+  const breakEntryPanelHTML = (st) => {
+    const mode = String(st.weekly_mode || 'NONE').toUpperCase();
+    const behaviour = String(st.hr_weekly_behaviour || 'VERIFY').toUpperCase();
+    if (mode !== 'HEALTHROSTER' || behaviour === 'CREATE') return '';
+    const breakMode = up(st.timesheet_break_entry_mode) === 'DURATION_MINUTES'
+      ? 'DURATION_MINUTES'
+      : 'START_END_TIMES';
+    return `<div class="row" style="margin:0;">
+      <label style="white-space:normal">How workers enter breaks</label>
+      <div class="controls" style="display:flex;flex-direction:column;gap:7px;min-width:0;">
+        <select name="timesheet_break_entry_mode">
+          <option value="START_END_TIMES" ${breakMode === 'START_END_TIMES' ? 'selected' : ''}>Break start and finish times</option>
+          <option value="DURATION_MINUTES" ${breakMode === 'DURATION_MINUTES' ? 'selected' : ''}>Break length in minutes</option>
+        </select>
+        <div class="mini" style="opacity:.86;line-height:1.3;">Available only for roster-validation timesheets. It is not used for manual timesheets, Dedicated NHSP Weekly, or import-authoritative roster workflows.</div>
+      </div>
+    </div>`;
   };
 
   const flagsPanelHTML = (st) => {
@@ -344449,7 +344536,7 @@ async function renderClientSettingsUI(settingsObj){
           </div>
 
           <div style="display:grid;grid-template-columns:1fr;gap:8px;">
-            ${checkChoice('hr_attach_to_invoice', 'Attach HealthRoster to invoice', !!st.hr_attach_to_invoice)}
+            ${checkChoice('hr_attach_to_invoice', 'Attach roster file to invoice', !!st.hr_attach_to_invoice)}
             ${isCreate ? '' : checkChoice('ts_attach_to_invoice', 'Attach timesheets to invoice', !!st.ts_attach_to_invoice)}
           </div>
         </div>
@@ -344498,6 +344585,7 @@ async function renderClientSettingsUI(settingsObj){
         <div style="min-width:0;overflow-wrap:break-word;display:flex;flex-direction:column;gap:14px;">
           <div id="csInvModePanel">${invoicingModePanelHTML(s)}</div>
           <div id="csWeeklyPanel">${weeklyPanelHTML(s)}</div>
+          <div id="csBreakEntryPanel">${breakEntryPanelHTML(s)}</div>
           <div id="csFlagsPanel">${flagsPanelHTML(s)}</div>
         </div>
       </div>
@@ -344534,6 +344622,7 @@ async function renderClientSettingsUI(settingsObj){
     const st = ctx.clientSettingsState || {};
     const invModeEl = root.querySelector('#csInvModePanel');
     const weeklyEl = root.querySelector('#csWeeklyPanel');
+    const breakEntryEl = root.querySelector('#csBreakEntryPanel');
     const flagsEl  = root.querySelector('#csFlagsPanel');
 
     if (!which || which === 'both' || which === 'inv' || which === 'all') {
@@ -344541,6 +344630,7 @@ async function renderClientSettingsUI(settingsObj){
     }
     if (!which || which === 'both' || which === 'weekly' || which === 'all') {
       if (weeklyEl) weeklyEl.innerHTML = weeklyPanelHTML(st);
+      if (breakEntryEl) breakEntryEl.innerHTML = breakEntryPanelHTML(st);
     }
     if (!which || which === 'both' || which === 'flags' || which === 'all') {
       if (flagsEl)  flagsEl.innerHTML  = flagsPanelHTML(st);
@@ -344612,6 +344702,13 @@ async function renderClientSettingsUI(settingsObj){
 
     const hb = getRadio('hr_weekly_behaviour');
     if (hb) next.hr_weekly_behaviour = hb;
+
+    const breakModeEl = root.querySelector('select[name="timesheet_break_entry_mode"]');
+    if (breakModeEl) {
+      next.timesheet_break_entry_mode = up(breakModeEl.value) === 'DURATION_MINUTES'
+        ? 'DURATION_MINUTES'
+        : 'START_END_TIMES';
+    }
 
     const icm = getRadio('invoice_consolidation_mode');
     if (icm) next.invoice_consolidation_mode = icm;
