@@ -150,5 +150,10 @@ test('source wiring keeps MyTMS Office separate, server-authored and post-commit
   assert.match(source, /openUiConfirmModal/);
   assert.match(source, /data-mytms-activation-readonly="1"/);
   assert.match(source, /mytmsActivationReadonly === '1'[\s\S]*element\.disabled = true/);
+  assert.match(source, /Manager approval by email/);
+  assert.match(source, /\/api\/mytms\/manager-email-settings/);
+  assert.match(source, /Platform-owned/);
+  assert.doesNotMatch(source, /output\.test_recipient_allowlist/);
+  assert.doesNotMatch(source, /keys = \[[\s\S]*?'android_store_url'/);
   assert.doesNotMatch(source, /kier@arthur-rai\.co\.uk/i);
 });

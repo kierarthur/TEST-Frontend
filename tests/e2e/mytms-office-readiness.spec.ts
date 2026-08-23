@@ -79,8 +79,33 @@ const settings = {
   logo_asset_key: null
 };
 
+const managerKinds = ['INITIAL', 'REMINDER', 'RENEWAL', 'WITHDRAWAL', 'CANCELLATION'];
+const managerTemplateType = Object.fromEntries(managerKinds.map((kind) => [kind, {
+  subject: `${kind} manager subject`, body_text: `${kind} manager body.`,
+  body_html: `<p>${kind} manager body.</p>`,
+  button_text: ['INITIAL', 'REMINDER', 'RENEWAL'].includes(kind) ? 'Review and approve' : null,
+  include_link: ['INITIAL', 'REMINDER', 'RENEWAL'].includes(kind)
+}]));
+const managerSettings = {
+  ok: true,
+  agency_templates: {
+    schema_version: 'CANDIDATE_MANAGER_EMAIL_TEMPLATES_V1',
+    TIMESHEET: structuredClone(managerTemplateType),
+    EXPENSE_CLAIM: structuredClone(managerTemplateType)
+  },
+  agency_template_version: 1,
+  agency_template_sanitizer_policy_version: 'MANAGER_EMAIL_SAFE_HTML_V1',
+  agency_template_semantic_sha256_hex: 'a'.repeat(64),
+  agency_template_updated_at_utc: '2026-08-23T01:00:00Z',
+  manager_origin: {
+    public_origin: 'https://testmode.arthur-rai.co.uk', state: 'TEST_READY',
+    settings_version: 8, semantic_sha256_hex: 'b'.repeat(64),
+    verified_at_utc: '2026-08-23T01:00:00Z', ownership: 'PLATFORM'
+  }
+};
+
 async function installReadOnlyApi(page: Page) {
-  const observed = { settingsReads: 0, previews: 0, writes: 0 };
+  const observed = { settingsReads: 0, managerReads: 0, previews: 0, managerPreviews: 0, writes: 0 };
   await page.route(`${testBackend}/api/mytms/**`, async (route: Route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -97,6 +122,17 @@ async function installReadOnlyApi(page: Page) {
         ok: true,
         sanitizer_policy_version: settings.sanitizer_policy_version,
         sanitized_html: '<p>Hello Candidate</p>'
+      });
+    }
+    if (path === '/api/mytms/manager-email-settings' && request.method() === 'GET') {
+      observed.managerReads += 1;
+      return reply(managerSettings);
+    }
+    if (path === '/api/mytms/manager-email-settings/preview' && request.method() === 'POST') {
+      observed.managerPreviews += 1;
+      return reply({
+        ok: true, preview_html: '<p>Safe manager preview.</p><p>Review and approve</p>',
+        sanitizer_policy_version: 'MANAGER_EMAIL_SAFE_HTML_V1'
       });
     }
     observed.writes += 1;
@@ -136,7 +172,15 @@ for (const viewport of [
     const modal = page.locator('#modal');
     await expect(modal).toBeVisible();
     await expect(modal.getByText('MyTMS App Settings', { exact: true })).toBeVisible();
-    await expect(modal.getByText('Version 1.', { exact: false })).toBeVisible();
+    await expect(modal.getByText('Agency invitation policy', { exact: true })).toBeVisible();
+    await expect(modal.getByLabel('Android store URL')).toBeDisabled();
+    await expect(modal.getByLabel('TEST recipient allowlist')).toBeDisabled();
+    await expect(modal.getByLabel('Invitation expiry (seconds)')).toHaveAttribute('min', '86400');
+    await expect(modal.getByLabel('Invitation expiry (seconds)')).toHaveAttribute('max', '604800');
+    await expect(modal.getByLabel('Minimum resend interval (seconds)')).toHaveAttribute('min', '900');
+    await expect(modal.getByLabel('Minimum resend interval (seconds)')).toHaveAttribute('max', '86400');
+    await expect(modal.getByLabel('Maximum resends (0–5; total sends 1–6)')).toHaveAttribute('min', '0');
+    await expect(modal.getByLabel('Maximum resends (0–5; total sends 1–6)')).toHaveAttribute('max', '5');
 
     await modal.getByRole('button', { name: 'Activation state', exact: true }).click();
     await expect(modal.locator('[data-mytms-setting][type="checkbox"]')).toHaveCount(6);
@@ -153,8 +197,22 @@ for (const viewport of [
     await expect(preview).toHaveAttribute('sandbox', '');
     await expect(preview).toHaveAttribute('srcdoc', '<p>Hello Candidate</p>');
 
+    await modal.getByRole('button', { name: 'Manager approval by email', exact: true }).click();
+    await expect(modal.getByRole('heading', { name: 'Manager approval by email', exact: true })).toBeVisible();
+    await expect(modal.getByLabel('Secure manager review address')).toBeDisabled();
+    await expect(modal.getByLabel('Secure manager review address')).toHaveValue('https://testmode.arthur-rai.co.uk');
+    await expect(modal.getByLabel('Button text')).toHaveValue('Review and approve');
+    await modal.getByRole('button', { name: 'Preview sanitized email', exact: true }).click();
+    const managerPreview = modal.locator('[data-manager-preview-frame]');
+    await expect(managerPreview).toBeVisible();
+    await expect(managerPreview).toHaveAttribute('sandbox', '');
+    await modal.getByLabel('Message').selectOption('WITHDRAWAL');
+    await expect(modal.getByLabel('Button text')).toBeDisabled();
+
     expect(observed.settingsReads).toBe(1);
+    expect(observed.managerReads).toBe(1);
     expect(observed.previews).toBe(1);
+    expect(observed.managerPreviews).toBe(1);
     expect(observed.writes).toBe(0);
     const bounds = await modal.evaluate((element) => {
       const rect = element.getBoundingClientRect();
