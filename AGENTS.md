@@ -53,9 +53,31 @@ Worker: codex-cloudtms-backend
 R2 bucket: test-cloudtms-preview
 KV namespace: cloudtms-codex-sessions
 KV namespace id: 6f3888a777f844959e35f4b2fb0dce9b
-Supabase: TEST project only
+Database: Miget TEST through `codex-cloudtms-miget-gateway` only
 Crons: disabled
 ```
+
+Normal TEST and the isolated patch Worker must not route database traffic to the legacy Supabase TEST project. The logical environment names `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` may remain for compatibility, but their TEST values must target the Miget gateway and matching PostgREST JWT.
+
+For every Miget CloudTMS/MyTMS PostgREST app, append `options=-c%20pg_show_plans.is_enabled%3Doff` to `PGRST_DB_URI`, preserving all other URI components and credentials. Miget currently preloads `pg_show_plans`; leaving it enabled caused repeated `not enough memory to append new query plans` warnings and multi-second complex-RPC latency. Redeploy and prove a new PostgREST session has the collector disabled, the warning flood is absent, and an exact real RPC passes a timing benchmark. After any resource resize, independently verify the live limits plus PostgreSQL memory settings instead of trusting the control-plane allocation alone.
+
+## Permanent Miget auditor connector
+
+The current TEST database authorities are Miget, not the former Supabase projects. They share pooled resource `migetuq4` / `01a02ef7-1977-79bd-ad56-7e86927d5f81` in project `01a02ef7-18d1-7a96-9ea2-63df1bf06adc`, while remaining separate PostgreSQL services with separate credentials:
+
+* Agency TEST PostgreSQL: `cloudtms-codex-poc-pg17` / `01a02f5a-2bee-7db2-910d-a7e71f11ba0a`; PostgREST: `cloudtms-codex-poc-postgrest-kwtyn` / `01a02ff2-4d37-77f8-b440-a20655129ee1`.
+* MyTMS control PostgreSQL: `mytms-control-plane-pg17` / `01a03045-5d5a-7892-b555-704ba6edc733`; PostgREST: `mytms-control-plane-postgrest-mwzkq` / `01a0306a-90cd-7bbf-80bc-8fa77c5486f1`.
+
+For a new ChatGPT web audit, select the connected **CloudTMS Miget Operations** custom connector. It is a permanent remote Cloudflare Worker/MCP service named `codex-cloudtms-miget-gateway`; it does not require Wrangler or any process on this PC to remain running. Never ask the user to paste its credential into a chat.
+
+Choose exactly one database target for each call:
+
+* `agency_test` for the CloudTMS agency TEST database.
+* `mytms_test` for the MyTMS control database.
+
+Use only the connector's fixed read-only tools: `miget_verify_codex_parity_route`, `miget_list_infrastructure`, `miget_inspect_postgres`, `miget_db_catalog_summary`, `miget_db_release_ledger`, `miget_db_security_audit`, `miget_db_performance_summary`, `miget_db_list_rpcs`, and `miget_db_get_rpc_definition`. Do not supply free-form SQL. The release-ledger tool branches safely: `agency_test` reads the private CloudTMS migration/repeatable ledgers, while `mytms_test` reads `public.schema_migrations` and `public.schema_repeatables`.
+
+An auditor must prove the selected PostgreSQL target, catalogue/RLS/grants/function security, installed migration and repeatable ledgers, runtime performance and the exact `pg_get_functiondef` result for relevant RPCs. Do not direct a current audit to either former Supabase project.
 
 ## Secrets and sensitive data
 
@@ -124,13 +146,13 @@ Do not proceed with the write until the user explicitly approves it in the curre
 
 ## TEST-only diagnostic RPC
 
-The TEST Supabase project has a diagnostic RPC:
+The Miget TEST clone has a provider-neutral diagnostic RPC:
 
 ```text
 public.codex_debug_select_sql(p_sql text, p_limit integer default 100)
 ```
 
-Codex may use this RPC only for TEST-only read-only diagnostics through Supabase REST:
+Codex may use this RPC only for TEST-only read-only diagnostics through the Miget compatibility gateway/PostgREST:
 
 ```text
 /rest/v1/rpc/codex_debug_select_sql
@@ -246,7 +268,7 @@ Use:
 R2 bucket: test-cloudtms-preview
 KV binding: SESSIONS
 KV namespace id: 6f3888a777f844959e35f4b2fb0dce9b
-Supabase URL: TEST Supabase only
+Logical Supabase URL: Miget TEST gateway only
 Crons: disabled
 ```
 
