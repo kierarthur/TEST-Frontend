@@ -9,7 +9,7 @@ const root = resolve(__dirname, '../..');
 const testOrigin = 'https://testmode.arthur-rai.co.uk';
 const testBackend = 'https://test-cloudtms-backend.kier-88a.workers.dev';
 const useDeployedAssets = process.env.MYTMS_E2E_USE_DEPLOYED_ASSETS === '1';
-const localAssets = ['index.html', 'js/main.js', 'js/mytms-office-v1.js'];
+const localAssets = ['index.html', 'js/main.js', 'js/mytms-office-v1.js', 'css/modal-modernisation.css'];
 const sourceByPath = new Map(localAssets.map((file) => [
   `/${file === 'index.html' ? 'index.html' : file}`,
   readFileSync(resolve(root, file), 'utf8')
@@ -43,7 +43,11 @@ async function installLocalAssets(page: Page) {
       : source;
     await route.fulfill({
       body,
-      contentType: key.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/javascript; charset=utf-8',
+      contentType: key.endsWith('.html')
+        ? 'text/html; charset=utf-8'
+        : key.endsWith('.css')
+          ? 'text/css; charset=utf-8'
+          : 'application/javascript; charset=utf-8',
       headers: { 'cache-control': 'no-store', 'x-codex-local-asset': 'mytms-office-readiness' }
     });
   });
@@ -161,6 +165,7 @@ for (const viewport of [
       expect(assets?.['/index.html']).toBeGreaterThan(0);
       expect(assets?.['/js/main.js']).toBeGreaterThan(0);
       expect(assets?.['/js/mytms-office-v1.js']).toBeGreaterThan(0);
+      expect(assets?.['/css/modal-modernisation.css']).toBeGreaterThan(0);
     }
 
     await page.locator('[data-section-key="settings"]').click();
@@ -223,3 +228,88 @@ for (const viewport of [
     expect(bounds.right).toBeLessThanOrEqual(bounds.width + 1);
   });
 }
+
+test('Candidate MyTMS status is compact, human-readable and truthful', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const assets = await installLocalAssets(page);
+  const candidateId = '10000000-0000-4000-8000-000000000001';
+  let statusReads = 0;
+  let invitationPosts = 0;
+
+  await page.route(`${testBackend}/api/mytms/candidates/${candidateId}/**`, async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'GET' && path.endsWith('/status')) {
+      statusReads += 1;
+      return route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({
+          ok: true,
+          agency_display_name: 'CloudTMS TEST',
+          candidate_id: candidateId,
+          candidate_display_name: 'Test Candidate',
+          candidate_email: 'candidate@example.test',
+          state: statusReads === 1 ? 'NOT_INVITED' : 'PENDING',
+          delivery_state: statusReads === 1 ? null : 'OUTBOX_ACCEPTED',
+          settings_version: 3,
+          action: statusReads === 1
+            ? { code: 'INVITE_TO_MYTMS', label: 'Invite to MyTMS', enabled: true, disabled_reason_code: null }
+            : { code: 'RESEND_INVITATION', label: 'Resend App Invitation', enabled: true, disabled_reason_code: null }
+        })
+      });
+    }
+    if (request.method() === 'POST' && path.endsWith('/invitations')) {
+      invitationPosts += 1;
+      return route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ ok: true, status: 'OUTBOX_ACCEPTED', invitation_generation: 1 })
+      });
+    }
+    return route.abort();
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
+  await page.evaluate((id) => {
+    const modal = document.getElementById('modal');
+    const backdrop = document.getElementById('modalBack');
+    const body = document.getElementById('modalBody');
+    if (!modal || !backdrop || !body) throw new Error('modal shell unavailable');
+    backdrop.style.display = 'flex';
+    backdrop.setAttribute('aria-hidden', 'false');
+    modal.classList.add('ctms-modern-modal', 'record-modal');
+    body.innerHTML = '<div class="ctms-tab-intro"><div><h2>Candidate profile</h2></div></div><div class="form ctms-proposal-form" id="tab-main"></div>';
+    (window as any).modalCtx = { entity: 'candidates', data: { id } };
+    return (window as any).CloudTMSMyTmsOffice.mountCandidateAction({ id });
+  }, candidateId);
+
+  const host = page.locator('[data-mytms-candidate-host]');
+  await expect(host).toBeVisible();
+  await expect(host.getByText('Candidate app access', { exact: true })).toBeVisible();
+  await expect(host.getByText('Not invited', { exact: true })).toBeVisible();
+  await expect(host.getByRole('button', { name: 'Send invitation', exact: true })).toBeVisible();
+  await expect(host).not.toContainText('NOT_INVITED');
+  const layout = await host.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const parent = element.parentElement?.getBoundingClientRect();
+    return { width: rect.width, height: rect.height, parentWidth: parent?.width || 0 };
+  });
+  expect(layout.width).toBeGreaterThan(layout.parentWidth * 0.9);
+  expect(layout.height).toBeLessThan(190);
+
+  await host.getByRole('button', { name: 'Send invitation', exact: true }).click();
+  const confirmModal = page.locator('#modal[data-uicf-kind="mytms-candidate-invitation-confirm"]');
+  await expect(confirmModal).toBeVisible();
+  await expect(confirmModal).toContainText('Test Candidate');
+  await expect(confirmModal).toContainText('candidate@example.test');
+  await confirmModal.getByRole('button', { name: 'Send invitation', exact: true }).click();
+
+  const resultModal = page.locator('#modal[data-uicf-kind="mytms-invitation-result"]');
+  await expect(resultModal).toBeVisible();
+  await expect(resultModal.locator('#modalTitle')).toHaveText('Invitation queued');
+  await expect(resultModal).toContainText('Test Candidate’s email invitation has been queued for sending.');
+  await expect(resultModal).not.toContainText('OUTBOX_ACCEPTED');
+  const resultWidth = await resultModal.evaluate((element) => element.getBoundingClientRect().width);
+  expect(resultWidth).toBeLessThanOrEqual(650);
+  expect(invitationPosts).toBe(1);
+  expect(assets['/css/modal-modernisation.css']).toBeGreaterThan(0);
+});

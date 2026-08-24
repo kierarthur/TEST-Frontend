@@ -537,21 +537,168 @@
     })[upper(actionCode)] || null;
   }
 
+  function actionPresentation(actionCode) {
+    return ({
+      INVITE_TO_MYTMS: 'Send invitation',
+      RESEND_INVITATION: 'Resend invitation',
+      SEND_ACCESS_REMINDER: 'Send access reminder',
+      ENABLE_MEMBERSHIP: 'Enable MyTMS access'
+    })[upper(actionCode)] || 'MyTMS action';
+  }
+
+  function candidateStatusPresentation(status = {}) {
+    const state = upper(status.state);
+    const delivery = upper(status.delivery_state);
+    const reason = upper(status.reason_code || status.action?.disabled_reason_code);
+
+    if (state === 'ACTIVE') return {
+      label: 'MyTMS active', tone: 'success',
+      copy: 'The Candidate’s MyTMS access is active.'
+    };
+    if (state === 'DISABLED') return {
+      label: 'Access disabled', tone: 'warning',
+      copy: 'The Candidate’s MyTMS access is currently disabled.'
+    };
+    if (state === 'REVOKED') return {
+      label: 'Access revoked', tone: 'danger',
+      copy: 'The Candidate’s MyTMS access has been revoked.'
+    };
+    if (state === 'NOT_INVITED') return {
+      label: 'Not invited', tone: 'neutral',
+      copy: 'This Candidate has not yet been invited to MyTMS.'
+    };
+    if (state === 'PENDING' && delivery === 'RESERVED') return {
+      label: 'Preparing invitation', tone: 'info',
+      copy: 'The Candidate’s invitation is being prepared.'
+    };
+    if (state === 'PENDING' && delivery === 'OUTBOX_ACCEPTED') return {
+      label: 'Invitation queued', tone: 'info',
+      copy: 'The invitation is queued for sending. Email-provider acceptance has not yet been confirmed.'
+    };
+    if (state === 'PENDING' && delivery === 'PROVIDER_ACCEPTED') return {
+      label: 'Invitation sent', tone: 'success',
+      copy: 'The email provider has accepted the invitation. Registration has not yet been completed.'
+    };
+    if (state === 'PENDING' && delivery === 'DELIVERY_UNCERTAIN') return {
+      label: 'Delivery needs checking', tone: 'warning',
+      copy: 'CloudTMS cannot currently confirm whether the email provider accepted the invitation.'
+    };
+    if (state === 'PENDING') return {
+      label: 'Registration pending', tone: 'info',
+      copy: 'The Candidate has not completed MyTMS registration yet.'
+    };
+    if (state === 'INELIGIBLE' && reason === 'CANDIDATE_INACTIVE') return {
+      label: 'Candidate inactive', tone: 'warning',
+      copy: 'Activate the Candidate record before sending a MyTMS invitation.'
+    };
+    if (state === 'INELIGIBLE' && reason === 'CANDIDATE_EMAIL_INVALID') return {
+      label: 'Valid email required', tone: 'warning',
+      copy: 'Add a valid email address before sending a MyTMS invitation.'
+    };
+    if (state === 'INELIGIBLE' && reason === 'CANDIDATE_NOT_FOUND') return {
+      label: 'Status unavailable', tone: 'danger',
+      copy: 'The Candidate record could not be matched to MyTMS.'
+    };
+    if (state === 'INELIGIBLE') return {
+      label: 'Not eligible', tone: 'warning',
+      copy: 'This Candidate is not currently eligible for MyTMS.'
+    };
+    return {
+      label: 'Status unavailable', tone: 'neutral',
+      copy: 'MyTMS status could not be confirmed.'
+    };
+  }
+
+  function disabledReasonPresentation(status = {}) {
+    const reason = upper(status.action?.disabled_reason_code || status.reason_code);
+    return ({
+      MYTMS_INVITATION_DELIVERY_DISABLED: 'Email invitations are currently unavailable.',
+      NO_ACTION_AVAILABLE: 'No MyTMS action is currently available.',
+      CANDIDATE_INACTIVE: 'Activate the Candidate record before sending an invitation.',
+      CANDIDATE_EMAIL_INVALID: 'Add a valid email address before sending an invitation.',
+      CANDIDATE_NOT_ELIGIBLE: 'This Candidate is not currently eligible for MyTMS.',
+      CANDIDATE_NOT_FOUND: 'The Candidate record could not be matched to MyTMS.'
+    })[reason] || '';
+  }
+
+  function invitationResultPresentation(result = {}, status = {}) {
+    const code = upper(result.status);
+    const reason = upper(result.reason_code);
+    const actionCode = upper(status.action?.code);
+    const candidateName = text(status.candidate_display_name) || 'The Candidate';
+    const isAccessReminder = actionCode === 'SEND_ACCESS_REMINDER';
+    const item = isAccessReminder ? 'MyTMS access reminder' : 'email invitation';
+    if (code === 'OUTBOX_ACCEPTED') return {
+      title: isAccessReminder ? 'Access reminder queued' : 'Invitation queued', tone: 'info',
+      message: `${candidateName}’s ${item} has been queued for sending.`
+    };
+    if (code === 'PROVIDER_ACCEPTED') return {
+      title: 'MyTMS action accepted', tone: 'success',
+      message: `${candidateName} has been sent ${isAccessReminder ? 'a MyTMS access reminder' : 'an email invitation'}.`
+    };
+    if (code === 'DELIVERY_UNCERTAIN') return {
+      title: 'Delivery needs checking', tone: 'warning',
+      message: `CloudTMS cannot currently confirm whether ${candidateName}’s invitation was accepted by the email provider. Check the MyTMS status before trying again.`
+    };
+    if (code === 'ALREADY_CURRENT') return {
+      title: isAccessReminder ? 'Access reminder already pending' : 'Invitation already pending', tone: 'info',
+      message: `${candidateName} already has a current ${item}. No additional email was created.`
+    };
+    if (code === 'THROTTLED' && reason === 'RESEND_LIMIT') return {
+      title: 'Resend limit reached', tone: 'warning',
+      message: `The maximum number of invitation emails has been reached for ${candidateName}.`
+    };
+    if (code === 'THROTTLED') {
+      const seconds = Math.max(0, Number(result.retry_after_seconds) || 0);
+      const minutes = seconds > 0 ? Math.max(1, Math.ceil(seconds / 60)) : 0;
+      return {
+        title: 'Please wait before resending', tone: 'warning',
+        message: minutes > 0
+          ? `The invitation cannot be resent yet. Try again in approximately ${minutes} minute${minutes === 1 ? '' : 's'}.`
+          : 'The invitation cannot be resent yet. Check the MyTMS status before trying again.'
+      };
+    }
+    if (code === 'DISABLED') return {
+      title: 'Invitations unavailable', tone: 'warning',
+      message: 'MyTMS email invitations are currently unavailable.'
+    };
+    if (code === 'NOT_ELIGIBLE' && reason === 'RECIPIENT_NOT_ALLOWLISTED') return {
+      title: 'Recipient not permitted in TEST', tone: 'warning',
+      message: 'This email address is not on the TEST recipient allowlist. No email was created.'
+    };
+    if (code === 'NOT_ELIGIBLE') return {
+      title: 'Invitation unavailable', tone: 'warning',
+      message: `${candidateName} is not currently eligible for a MyTMS invitation.`
+    };
+    if (code === 'CONFLICT') return {
+      title: 'MyTMS account needs review', tone: 'danger',
+      message: 'The Candidate details do not match the existing MyTMS account. No email was sent.'
+    };
+    return {
+      title: 'MyTMS action could not be confirmed', tone: 'warning',
+      message: 'CloudTMS could not confirm the outcome. Check the MyTMS status before trying again.'
+    };
+  }
+
   async function confirmAndSend(status, contextLabel = '') {
     const intent = actionIntent(status?.action?.code);
     if (!intent || status?.action?.enabled !== true) return { sent: false, reason: 'DISABLED' };
+    const actionLabel = actionPresentation(status?.action?.code);
+    const current = candidateStatusPresentation(status);
     const confirmation = await global.openUiConfirmModal({
-      title: status.action.label,
-      message: [
-        contextLabel,
-        `Agency: ${text(status.agency_display_name)}`,
-        `Candidate: ${text(status.candidate_display_name)}`,
-        `Email: ${text(status.candidate_email)}`,
-        `Action: ${text(status.action.label)}`,
-        `Current delivery state: ${text(status.delivery_state) || 'Not yet invited'}`,
-        'This TEST action is idempotent. A retry checks the recorded generation and will not create a broad mail action.'
-      ].filter(Boolean).join('\n'),
-      confirm_label: status.action.label,
+      title: actionLabel,
+      message_html: `
+        <div class="mytms-confirm-copy">
+          ${contextLabel ? `<p>${escapeHtml(contextLabel)}</p>` : ''}
+          <dl class="mytms-confirm-facts">
+            <div><dt>Candidate</dt><dd>${escapeHtml(text(status.candidate_display_name) || '—')}</dd></div>
+            <div><dt>Email</dt><dd>${escapeHtml(text(status.candidate_email) || '—')}</dd></div>
+            <div><dt>Agency</dt><dd>${escapeHtml(text(status.agency_display_name) || '—')}</dd></div>
+            <div><dt>Current status</dt><dd>${escapeHtml(current.label)}</dd></div>
+          </dl>
+          <p class="mytms-confirm-note">Only this Candidate will be contacted. Repeating the action will not create a duplicate current invitation.</p>
+        </div>`,
+      confirm_label: actionLabel,
       cancel_label: 'Not now',
       kind: 'mytms-candidate-invitation-confirm'
     });
@@ -567,33 +714,45 @@
         })
       }
     );
-    const uncertain = upper(result.status) === 'DELIVERY_UNCERTAIN';
+    const presented = invitationResultPresentation(result, status);
     await global.openUiConfirmModal({
-      title: uncertain ? 'Delivery status uncertain' : 'MyTMS action accepted',
-      message: uncertain
-        ? 'The contract or Candidate record is unchanged. Check MyTMS status before retrying.'
-        : `The server recorded ${text(result.status) || 'the action'} for this Candidate.`,
-      confirm_label: 'OK', hide_cancel: true,
-      kind: uncertain ? 'mytms-delivery-uncertain' : 'mytms-delivery-accepted'
+      title: presented.title,
+      message_html: `
+        <div class="mytms-result mytms-result--${escapeHtml(presented.tone)}" role="status">
+          <span class="mytms-result__icon" aria-hidden="true">${presented.tone === 'success' ? '✓' : presented.tone === 'danger' ? '!' : 'i'}</span>
+          <p>${escapeHtml(presented.message)}</p>
+        </div>`,
+      confirm_label: 'Close', hide_cancel: true,
+      kind: 'mytms-invitation-result'
     });
     return { sent: true, result };
   }
 
   function renderCandidateStatus(host, status) {
     const action = status.action || {};
+    const presented = candidateStatusPresentation(status);
+    const actionLabel = actionPresentation(action.code);
+    const disabledReason = disabledReasonPresentation(status);
+    const showAction = !!actionIntent(action.code);
     host.innerHTML = `
-      <div class="card" data-mytms-candidate-card style="margin-top:12px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div data-mytms-candidate-card>
+        <div class="ctms-section-head mytms-candidate-section__head">
           <div>
-            <div style="font-weight:700;">MyTMS</div>
-            <div class="mini">${escapeHtml(status.state || 'Unavailable')}${status.delivery_state ? ` · ${escapeHtml(status.delivery_state)}` : ''}</div>
+            <span class="ctms-section-eyebrow">MyTMS</span>
+            <h3 class="ctms-section-title">Candidate app access</h3>
           </div>
-          ${action.code && action.code !== 'NONE' ? `
-            <button type="button" class="btn" data-mytms-candidate-action
-                    ${action.enabled === true ? '' : 'disabled'}
-                    title="${escapeHtml(action.disabled_reason_code || '')}">${escapeHtml(action.label || 'MyTMS')}</button>` : ''}
+          <span class="mytms-status-badge mytms-status-badge--${escapeHtml(presented.tone)}">${escapeHtml(presented.label)}</span>
         </div>
-        ${action.enabled === true ? '' : `<div class="mini" style="margin-top:6px;">${escapeHtml(action.disabled_reason_code || status.reason_code || 'No action available')}</div>`}
+        <div class="mytms-candidate-section__body">
+          <div class="mytms-candidate-section__copy">
+            <p>${escapeHtml(presented.copy)}</p>
+            ${action.enabled === true || !disabledReason ? '' : `<p class="mytms-candidate-section__reason">${escapeHtml(disabledReason)}</p>`}
+          </div>
+          ${showAction ? `
+            <button type="button" class="btn mytms-candidate-section__action" data-mytms-candidate-action
+                    ${action.enabled === true ? '' : 'disabled'}
+                    ${disabledReason ? `title="${escapeHtml(disabledReason)}"` : ''}>${escapeHtml(actionLabel)}</button>` : ''}
+        </div>
       </div>`;
     const button = host.querySelector('[data-mytms-candidate-action]');
     if (button && action.enabled === true) {
@@ -619,7 +778,13 @@
     if (!host) {
       host = global.document.createElement('div');
       host.dataset.mytmsCandidateHost = '1';
-      host.innerHTML = '<div class="card mini" style="margin-top:12px;">Loading MyTMS status…</div>';
+      host.className = 'ctms-section ctms-section-wide mytms-candidate-section';
+      host.innerHTML = `
+        <div class="ctms-section-head mytms-candidate-section__head">
+          <div><span class="ctms-section-eyebrow">MyTMS</span><h3 class="ctms-section-title">Candidate app access</h3></div>
+          <span class="mytms-status-badge mytms-status-badge--neutral">Checking status</span>
+        </div>
+        <div class="mytms-candidate-section__body"><p>Checking current MyTMS access…</p></div>`;
       main.appendChild(host);
     }
     try {
@@ -628,7 +793,12 @@
       renderCandidateStatus(host, status);
     } catch (error) {
       if (host.isConnected) {
-        host.innerHTML = `<div class="card mini" style="margin-top:12px;">MyTMS status unavailable (${escapeHtml(text(error.message))}).</div>`;
+        host.innerHTML = `
+          <div class="ctms-section-head mytms-candidate-section__head">
+            <div><span class="ctms-section-eyebrow">MyTMS</span><h3 class="ctms-section-title">Candidate app access</h3></div>
+            <span class="mytms-status-badge mytms-status-badge--warning">Status unavailable</span>
+          </div>
+          <div class="mytms-candidate-section__body"><p>MyTMS status is temporarily unavailable. Close and reopen this Candidate to try again.</p></div>`;
       }
     }
   }

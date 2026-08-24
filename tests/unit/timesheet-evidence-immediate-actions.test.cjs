@@ -47,3 +47,80 @@ test('repainted controls keep one owner and queued sensitive actions reuse exist
   assert.match(evidenceBlock, /if \(btn\.hasAttribute\('data-evidence-remove'\) && !btn\.__tsEvRemoveWired\)/);
   assert.match(evidenceBlock, /if \(replayButton\.isConnected\) replayButton\.click\(\)/);
 });
+
+test('the ordinary evidence viewer opens its loading shell before awaiting the signed preview URL', () => {
+  const viewerStart = mainSource.indexOf('async function openTimesheetEvidenceViewerExisting(evidenceItem)');
+  const viewerEnd = mainSource.indexOf('async function openTimesheetPaymentSnoozeModal', viewerStart);
+  assert.ok(viewerStart >= 0 && viewerEnd > viewerStart, 'ordinary Evidence viewer must exist');
+
+  const viewerBlock = mainSource.slice(viewerStart, viewerEnd);
+  const startPresign = viewerBlock.indexOf('signedUrlPromise = presignDownload(storageKey)');
+  const showViewer = viewerBlock.lastIndexOf('showModal(');
+  const awaitPresign = viewerBlock.indexOf('signedUrl = await signedUrlPromise');
+
+  assert.ok(startPresign >= 0, 'the signed URL request must start without blocking the viewer shell');
+  assert.ok(showViewer > startPresign, 'the viewer must be constructed after starting the request');
+  assert.ok(awaitPresign > showViewer, 'the signed URL must only be awaited after the child modal is visible');
+  assert.match(viewerBlock, /Preparing preview…/);
+  assert.match(viewerBlock, /iframe\.src = signedUrl/);
+});
+
+test('returning from a child restores the parent anchor before its asynchronous render', () => {
+  const syncStart = mainSource.indexOf('const syncParentChromeAfterChildReturn = (fr) => {');
+  const syncEnd = mainSource.indexOf('const resumeParentAfterChildReturn = (closing) => {', syncStart);
+  assert.ok(syncStart >= 0 && syncEnd > syncStart, 'parent return synchronisation must exist');
+
+  const syncBlock = mainSource.slice(syncStart, syncEnd);
+  const restoreAnchor = syncBlock.indexOf("const anchor = getSavedModalAnchor(fr.kind)");
+  const renderParent = syncBlock.indexOf('renderTop()');
+
+  assert.ok(restoreAnchor >= 0, 'the returned parent must recover its per-kind anchor');
+  assert.ok(renderParent > restoreAnchor, 'the parent anchor must be restored before renderTop can await tab content');
+});
+
+test('an awaited parent Evidence refresh cannot overwrite a child modal', () => {
+  const setTabStart = mainSource.indexOf('async setTab(k) {');
+  const setTabEnd = mainSource.indexOf('function setFrameMode', setTabStart);
+  assert.ok(setTabStart >= 0 && setTabEnd > setTabStart, 'modal setTab implementation must exist');
+
+  const setTabBlock = mainSource.slice(setTabStart, setTabEnd);
+  assert.match(setTabBlock, /const stillOwnsModalSurface = \(\) => currentFrame\(\) === this/);
+  assert.match(setTabBlock, /if \(abortIfModalSurfaceOwnershipChanged\(\)\) return/);
+
+  const evidenceRefresh = setTabBlock.indexOf('await refreshTimesheetEvidenceIntoModalState(tsId)');
+  const ownershipCheck = setTabBlock.indexOf('if (!stillOwnsModalSurface())', evidenceRefresh);
+  const evidenceRepaint = setTabBlock.indexOf("evidenceBody.innerHTML = this.renderTab('evidence', evidenceMerged)", evidenceRefresh);
+
+  assert.ok(evidenceRefresh >= 0, 'Evidence source-of-truth refresh must exist');
+  assert.ok(ownershipCheck > evidenceRefresh, 'modal ownership must be checked after the awaited refresh');
+  assert.ok(evidenceRepaint > ownershipCheck, 'the parent repaint must occur only after ownership is confirmed');
+});
+
+test('Timesheet child frames cannot be mistaken for the primary Timesheet lifecycle owner', () => {
+  const activeFrameStart = mainSource.indexOf('function getActiveTimesheetFrame()');
+  const activeFrameEnd = mainSource.indexOf('async function rerenderActiveTimesheetTabAfterSecondary', activeFrameStart);
+  assert.ok(activeFrameStart >= 0 && activeFrameEnd > activeFrameStart, 'active Timesheet frame helper must exist');
+  const activeFrameBlock = mainSource.slice(activeFrameStart, activeFrameEnd);
+  assert.match(activeFrameBlock, /fr\.entity === 'timesheets' && fr\.kind === 'timesheets'/);
+
+  const rerenderStart = mainSource.indexOf('async function safeRerenderTimesheetModal(');
+  const rerenderEnd = mainSource.indexOf('// New Phase 3 helper functions', rerenderStart);
+  assert.ok(rerenderStart >= 0 && rerenderEnd > rerenderStart, 'safe Timesheet rerender helper must exist');
+  const rerenderBlock = mainSource.slice(rerenderStart, rerenderEnd);
+  assert.match(rerenderBlock, /fr\.entity !== 'timesheets' \|\| fr\.kind !== 'timesheets'/);
+  assert.match(rerenderBlock, /currentFr\.kind === 'timesheets'/);
+});
+
+test('read-only Evidence children do not inherit the primary Timesheet lifecycle', () => {
+  const viewerStart = mainSource.indexOf('async function openTimesheetEvidenceViewerExisting(evidenceItem)');
+  const viewerEnd = mainSource.indexOf('async function openTimesheetPaymentSnoozeModal', viewerStart);
+  assert.ok(viewerStart >= 0 && viewerEnd > viewerStart, 'Evidence viewer family must exist');
+
+  const viewerBlock = mainSource.slice(viewerStart, viewerEnd);
+  const viewerFrames = viewerBlock.match(/kind:\s*'timesheet-evidence-viewer'/g) || [];
+  const isolatedViewerFrames = viewerBlock.match(/kind:\s*'timesheet-evidence-viewer',[\s\S]{0,120}?frameEntity:\s*'timesheet-evidence'/g) || [];
+
+  assert.equal(viewerFrames.length, 3, 'all three Evidence viewer variants must remain present');
+  assert.equal(isolatedViewerFrames.length, viewerFrames.length, 'every Evidence viewer must use its own lifecycle entity');
+  assert.match(mainSource, /kind:\s*'timesheet-evidence-signatures',[\s\S]{0,120}?frameEntity:\s*'timesheet-evidence'/);
+});

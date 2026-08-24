@@ -91,9 +91,9 @@ test('contract success decline performs status read only and never queues email'
   assert.equal(result.sent, false);
   assert.equal(runtime.requests.length, 1);
   assert.equal(runtime.requests[0].init.method, undefined);
-  assert.match(runtime.confirmationCalls[0].message, /contract was saved successfully/i);
-  assert.match(runtime.confirmationCalls[0].message, /Agency: CloudTMS TEST/);
-  assert.match(runtime.confirmationCalls[0].message, /Candidate: Test Candidate/);
+  assert.match(runtime.confirmationCalls[0].message_html, /contract was saved successfully/i);
+  assert.match(runtime.confirmationCalls[0].message_html, /CloudTMS TEST/);
+  assert.match(runtime.confirmationCalls[0].message_html, /Test Candidate/);
 });
 
 test('accepted post-contract offer invokes the same exact Candidate invitation route once', async () => {
@@ -119,6 +119,55 @@ test('accepted post-contract offer invokes the same exact Candidate invitation r
   assert.equal(body.intent, 'INVITE');
   assert.equal(body.expected_settings_version, 3);
   assert.match(body.idempotency_key, /^[0-9a-f-]{36}$/i);
+  assert.equal(runtime.confirmationCalls[1].title, 'Invitation queued');
+  assert.match(runtime.confirmationCalls[1].message_html, /Test Candidate’s email invitation has been queued for sending\./);
+  assert.doesNotMatch(runtime.confirmationCalls[1].message_html, /OUTBOX_ACCEPTED/);
+  assert.equal(runtime.confirmationCalls[1].confirm_label, 'Close');
+});
+
+test('provider-confirmed invitation uses the approved Candidate-specific sent wording', async () => {
+  const runtime = loadModule({
+    responses: [
+      { status: 200, body: statusBody },
+      { status: 200, body: { ok: true, status: 'PROVIDER_ACCEPTED', invitation_generation: 1 } }
+    ],
+    confirmations: [
+      { confirmed: true, via: 'confirm' },
+      { confirmed: true, via: 'confirm' }
+    ]
+  });
+  await runtime.api.offerAfterContractSuccess({
+    contract: { candidate_id: statusBody.candidate_id }
+  });
+  assert.equal(runtime.confirmationCalls[1].title, 'MyTMS action accepted');
+  assert.match(runtime.confirmationCalls[1].message_html, /Test Candidate has been sent an email invitation\./);
+});
+
+test('non-success invitation results never claim that an email was sent', async () => {
+  const cases = [
+    ['DELIVERY_UNCERTAIN', null, 'Delivery needs checking'],
+    ['ALREADY_CURRENT', null, 'Invitation already pending'],
+    ['THROTTLED', 'RESEND_LIMIT', 'Resend limit reached'],
+    ['DISABLED', null, 'Invitations unavailable'],
+    ['NOT_ELIGIBLE', 'RECIPIENT_NOT_ALLOWLISTED', 'Recipient not permitted in TEST'],
+    ['CONFLICT', 'CANDIDATE_ACCOUNT_CONFLICT', 'MyTMS account needs review']
+  ];
+  for (const [status, reason_code, expectedTitle] of cases) {
+    const runtime = loadModule({
+      responses: [
+        { status: 200, body: statusBody },
+        { status: 200, body: { ok: true, status, reason_code } }
+      ],
+      confirmations: [
+        { confirmed: true, via: 'confirm' },
+        { confirmed: true, via: 'confirm' }
+      ]
+    });
+    await runtime.api.offerAfterContractSuccess({ contract: { candidate_id: statusBody.candidate_id } });
+    assert.equal(runtime.confirmationCalls[1].title, expectedTitle);
+    assert.doesNotMatch(runtime.confirmationCalls[1].message_html, /has been sent an email invitation/i);
+    assert.doesNotMatch(runtime.confirmationCalls[1].message_html, /OUTBOX_ACCEPTED|DELIVERY_UNCERTAIN|ALREADY_CURRENT|THROTTLED|NOT_ELIGIBLE|CONFLICT/);
+  }
 });
 
 test('non-eligible contract success never prompts or mutates', async () => {
@@ -151,6 +200,10 @@ test('source wiring keeps MyTMS Office separate, server-authored and post-commit
   assert.match(source, /data-mytms-activation-readonly="1"/);
   assert.match(source, /mytmsActivationReadonly === '1'[\s\S]*element\.disabled = true/);
   assert.match(source, /Manager approval by email/);
+  assert.match(source, /Invitation queued/);
+  assert.match(source, /The email provider has accepted the invitation/);
+  assert.match(source, /data-mytms-candidate-host/);
+  assert.match(source, /ctms-section ctms-section-wide mytms-candidate-section/);
   assert.match(source, /\/api\/mytms\/manager-email-settings/);
   assert.match(source, /Platform-owned/);
   assert.doesNotMatch(source, /output\.test_recipient_allowlist/);

@@ -153136,7 +153136,11 @@ function patchTimesheetHydrationState(openToken, patch = {}) {
 function getActiveTimesheetFrame() {
   try {
     const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-    return (fr && fr.entity === 'timesheets') ? fr : null;
+    // Evidence, snooze and upload child windows inherit the Timesheets entity,
+    // but they do not own the primary Timesheet tab lifecycle. Treating one of
+    // those children as the active Timesheet lets a late parent refresh replace
+    // the child's shared modal body.
+    return (fr && fr.entity === 'timesheets' && fr.kind === 'timesheets') ? fr : null;
   } catch {
     return null;
   }
@@ -324214,6 +324218,18 @@ async setTab(k) {
   this._suppressDirty = true;
   this.__bulkProcessSetTabRebaseTransition = false;
 
+  // Every frame shares the same modalBody element. A tab render can await
+  // server data while a child modal opens; once that happens this parent must
+  // not write to or wire the child's DOM when its older work completes.
+  const stillOwnsModalSurface = () => currentFrame() === this;
+  const abortIfModalSurfaceOwnershipChanged = () => {
+    if (stillOwnsModalSurface()) return false;
+    this._suppressDirty = false;
+    this.isDirty = prevDirty;
+    GE();
+    return true;
+  };
+
 
   const timesheetTabLifecycleGuard = (() => {
     if (this.entity !== 'timesheets') return null;
@@ -324575,6 +324591,8 @@ async setTab(k) {
     }
   }
 
+  if (abortIfModalSurfaceOwnershipChanged()) return;
+
   if (
     timesheetTabLifecycleGuard &&
     typeof timesheetTabLifecycleGuard.isLatestTabRequest === 'function' &&
@@ -324600,6 +324618,8 @@ async setTab(k) {
       console.warn('[MODAL][setTab] onReturn failed', e);
     }
   }
+
+  if (abortIfModalSurfaceOwnershipChanged()) return;
 
 // ✅ Invoices: ensure invoice modal delegated handlers survive DOM replacement
 if (this.entity === 'invoices' && this.kind === 'invoice-modal') {
@@ -326950,7 +326970,12 @@ if (this.entity === 'timesheets' && k === 'evidence') {
         try {
           await refreshTimesheetEvidenceIntoModalState(tsId);
 
-          if (evidenceRefreshGuard && !evidenceRefreshGuard.isCurrent()) {
+          if (!stillOwnsModalSurface()) {
+            if (LOGM) console.warn('[TS][EVIDENCE] skip parent repaint because a child owns the modal surface', {
+              tsId,
+              tab: k
+            });
+          } else if (evidenceRefreshGuard && !evidenceRefreshGuard.isCurrent()) {
             if (LOGM) console.warn('[TS][EVIDENCE] skip stale evidence repaint after lifecycle/tab change', {
               tsId,
               tab: k
@@ -326974,6 +326999,8 @@ if (this.entity === 'timesheets' && k === 'evidence') {
           this.__tsEvidenceRefreshInFlight = false;
         }
       }
+
+      if (abortIfModalSurfaceOwnershipChanged()) return;
 
       if (!root) return;
 
@@ -332083,6 +332110,23 @@ if (!isChild && top.entity === 'contracts') {
     try {
       if (fr._ctxRef) window.modalCtx = fr._ctxRef;
     } catch {}
+
+    // The parent and child share one DOM shell. Restore the parent's saved
+    // anchor before its async tab render starts; otherwise the shorter parent
+    // is briefly shown at the taller child's position and visibly jumps later.
+    try {
+      const modal = byId('modal');
+      const anchor = getSavedModalAnchor(fr.kind);
+      if (modal && anchor) {
+        modal.style.position = 'fixed';
+        modal.style.left = `${Math.round(Number(anchor.left))}px`;
+        modal.style.top = `${Math.round(Number(anchor.top))}px`;
+        modal.style.right = 'auto';
+        modal.style.bottom = 'auto';
+        modal.style.transform = 'none';
+      }
+    } catch {}
+
     try { renderTop(); } catch {}
   };
 const resumeParentAfterChildReturn = (closing) => {
@@ -354374,7 +354418,12 @@ async function openTimesheetEvidenceViewerSignatures(ev) {
     async () => ({ ok: true }),
     false,
     undefined,
-    { kind: 'timesheet-evidence-signatures', noParentGate: true, forceEdit: true }
+    {
+      kind: 'timesheet-evidence-signatures',
+      frameEntity: 'timesheet-evidence',
+      noParentGate: true,
+      forceEdit: true
+    }
   );
 
   GE();
@@ -356253,7 +356302,12 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       async () => ({ ok: true }),
       false,
       undefined,
-      { kind: 'timesheet-evidence-viewer', noParentGate: true, forceEdit: true }
+      {
+        kind: 'timesheet-evidence-viewer',
+        frameEntity: 'timesheet-evidence',
+        noParentGate: true,
+        forceEdit: true
+      }
     );
 
     // Wire download (best-effort)
@@ -356401,7 +356455,12 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       async () => ({ ok: true }),
       false,
       undefined,
-      { kind: 'timesheet-evidence-viewer', noParentGate: true, forceEdit: true }
+      {
+        kind: 'timesheet-evidence-viewer',
+        frameEntity: 'timesheet-evidence',
+        noParentGate: true,
+        forceEdit: true
+      }
     );
 
     GE();
@@ -356460,8 +356519,11 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
     isSystemGeneratedTimesheetPdf
   });
 
-  // ✅ FIX: signedUrl must be a STRING URL. getTimesheetPdfUrl returns an object { url, ... }.
+  // signedUrl must be a STRING URL. Resolve ordinary file URLs after the
+  // viewer shell is visible so the first View click always has an immediate
+  // response, even when the presign request is slow.
   let signedUrl = null;
+  let signedUrlPromise = null;
 
   if (isSystemGeneratedTimesheetPdf) {
     try {
@@ -356481,11 +356543,13 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       throw err;
     }
   } else {
-    signedUrl = await presignDownload(storageKey);
+    signedUrlPromise = presignDownload(storageKey);
   }
 
   const instanceId = `ts-ev-view-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const iframeId    = `${instanceId}-iframe`;
+  const previewStatusId = `${instanceId}-preview-status`;
+  const downloadLinkId = `${instanceId}-download`;
   const deleteBtnId = `${instanceId}-delete`;
   const selId       = `${instanceId}-type`;
   const otherId     = `${instanceId}-other`;
@@ -356566,11 +356630,11 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
           <label>Download</label>
           <div class="controls">
             <a class="pill"
-               href="${signedUrl}"
-               target="_blank"
-               rel="noopener noreferrer"
-               style="display:inline-block;border:1px solid var(--line);background:transparent;color:inherit;padding:6px 10px;border-radius:999px;text-decoration:none;">
-              Open / Download
+               id="${downloadLinkId}"
+               role="button"
+               aria-disabled="true"
+               style="display:inline-block;border:1px solid var(--line);background:transparent;color:inherit;padding:6px 10px;border-radius:999px;text-decoration:none;opacity:.7;pointer-events:none;">
+              Preparing preview…
             </a>
           </div>
         </div>
@@ -356580,10 +356644,17 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
         <div class="row">
           <label>Preview</label>
           <div class="controls">
+            <div
+              id="${previewStatusId}"
+              class="mini"
+              role="status"
+              aria-live="polite"
+              style="width:100%;height:520px;border:1px solid var(--line);border-radius:8px;background:#000;display:grid;place-items:center;padding:18px;text-align:center;"
+            >Preparing preview…</div>
             <iframe
               id="${iframeId}"
-              src="${signedUrl}"
-              style="width:100%;height:520px;border:1px solid var(--line);border-radius:8px;background:#000;"
+              title="Evidence preview"
+              style="display:none;width:100%;height:520px;border:1px solid var(--line);border-radius:8px;background:#000;"
             ></iframe>
 
              ${(canDelete || canReturnToQueue) ? `
@@ -356750,11 +356821,21 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
     undefined,
     {
       kind: 'timesheet-evidence-viewer',
+      frameEntity: 'timesheet-evidence',
       noParentGate: true,
       forceEdit: true,
       onDismiss
     }
   );
+
+  const viewerFrameToken = (() => {
+    try {
+      const st = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+      return st.length ? String(st[st.length - 1]?._token || '') : '';
+    } catch {
+      return '';
+    }
+  })();
 
   try { requestAnimationFrame(() => __hideTsDelete()); } catch {}
   try {
@@ -356900,6 +356981,54 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
     }
   } catch (e) {
     L('viewer wiring failed (non-fatal)', e);
+  }
+
+  try {
+    signedUrl = await signedUrlPromise;
+
+    const liveViewer = (() => {
+      try {
+        const st = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+        const top = st.length ? st[st.length - 1] : null;
+        return !!(top && String(top._token || '') === viewerFrameToken);
+      } catch {
+        return false;
+      }
+    })();
+
+    if (liveViewer) {
+      const link = document.getElementById(downloadLinkId);
+      const iframe = document.getElementById(iframeId);
+      const status = document.getElementById(previewStatusId);
+
+      if (link) {
+        link.href = signedUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.removeAttribute('aria-disabled');
+        link.style.opacity = '';
+        link.style.pointerEvents = '';
+        link.textContent = 'Open / Download';
+      }
+
+      if (iframe) {
+        iframe.addEventListener('load', () => {
+          if (status?.isConnected) status.style.display = 'none';
+        }, { once: true });
+        iframe.style.display = 'block';
+        iframe.src = signedUrl;
+      }
+
+      if (status) status.textContent = 'Loading preview…';
+    }
+  } catch (err) {
+    const status = document.getElementById(previewStatusId);
+    if (status) {
+      status.textContent = 'The preview could not be loaded. Close this window and try again.';
+      status.setAttribute('data-tone', 'err');
+    }
+    GE();
+    throw err;
   }
 
   GE();
@@ -362176,7 +362305,7 @@ async function safeRerenderTimesheetModal(openToken, preferredTab, opts = {}) {
 
   let fr = null;
   try { fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null; } catch { fr = null; }
-  if (!fr || fr.entity !== 'timesheets') return false;
+  if (!fr || fr.entity !== 'timesheets' || fr.kind !== 'timesheets') return false;
 
   if (!isActiveTimesheetModalToken(openToken)) return false;
 
@@ -362184,7 +362313,12 @@ async function safeRerenderTimesheetModal(openToken, preferredTab, opts = {}) {
     if (!isActiveTimesheetModalToken(openToken)) return false;
     try {
       const currentFr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      return !!(currentFr && currentFr === fr && currentFr.entity === 'timesheets');
+      return !!(
+        currentFr &&
+        currentFr === fr &&
+        currentFr.entity === 'timesheets' &&
+        currentFr.kind === 'timesheets'
+      );
     } catch {
       return false;
     }
@@ -362220,7 +362354,7 @@ async function safeRerenderTimesheetModal(openToken, preferredTab, opts = {}) {
   } finally {
     try {
       const cleanupFrame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      if (cleanupFrame === fr && fr && fr.entity === 'timesheets' && String(fr.__timesheetSuppressDirtyToken || '') === String(openToken || '')) {
+      if (cleanupFrame === fr && fr && fr.entity === 'timesheets' && fr.kind === 'timesheets' && String(fr.__timesheetSuppressDirtyToken || '') === String(openToken || '')) {
         fr._suppressDirty = false;
         delete fr.__timesheetSuppressDirtyToken;
       }
@@ -378492,9 +378626,76 @@ async function deletePlannedContractWeek(contractWeekId) {
 
 
 
+function renderSummarySectionLoadState(sectionKey, options = {}) {
+  const key = String(sectionKey || '').trim().toLowerCase();
+  const section = sections.find((item) => String(item && item.key || '').trim().toLowerCase() === key) || null;
+  const label = String(section && section.label || key || 'Summary').trim();
+  const isError = options && options.error === true;
+  const titleEl = byId('title');
+  const contentEl = byId('content');
+
+  if (titleEl) titleEl.textContent = label;
+  if (!contentEl) return false;
+
+  const heading = isError
+    ? `${label} could not be loaded`
+    : `Loading ${label.toLowerCase()}…`;
+  const message = isError
+    ? (
+        key === 'outbox'
+          ? 'Outbox is temporarily unavailable. Try again in a moment.'
+          : `${label} is temporarily unavailable. Try again in a moment.`
+      )
+    : `Preparing the ${label.toLowerCase()} summary.`;
+
+  contentEl.innerHTML = '';
+
+  const state = document.createElement('section');
+  state.className = `ctms-summary-system-state${isError ? ' is-error' : ' is-loading'}`;
+  state.dataset.summarySection = key;
+  state.setAttribute('role', isError ? 'alert' : 'status');
+  state.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+
+  const icon = document.createElement('div');
+  icon.className = 'ctms-summary-system-state__icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = isError ? '!' : '•';
+  state.appendChild(icon);
+
+  const copy = document.createElement('div');
+  copy.className = 'ctms-summary-system-state__copy';
+
+  const headingEl = document.createElement('h3');
+  headingEl.textContent = heading;
+  copy.appendChild(headingEl);
+
+  const messageEl = document.createElement('p');
+  messageEl.textContent = message;
+  copy.appendChild(messageEl);
+  state.appendChild(copy);
+
+  if (isError) {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn-primary ctms-summary-system-state__retry';
+    retry.textContent = 'Try again';
+    retry.addEventListener('click', () => {
+      if (String(currentSection || '').trim().toLowerCase() !== key) return;
+      void renderAll();
+    });
+    state.appendChild(retry);
+  }
+
+  contentEl.appendChild(state);
+  return true;
+}
+
+
 // ===== Boot =====
 async function renderAll(){
   const sectionKey = String(currentSection || '').trim().toLowerCase();
+  window.__summarySectionRenderGeneration = Math.max(1, Number(window.__summarySectionRenderGeneration || 0) + 1);
+  const renderGeneration = window.__summarySectionRenderGeneration;
 
   // seed defaults for first login / first visit to section
   window.__listState = window.__listState || {};
@@ -378523,6 +378724,21 @@ async function renderAll(){
 
   renderTopNav();
 
+  const summarySections = new Set([
+    'candidates',
+    'clients',
+    'contracts',
+    'timesheets',
+    'invoices',
+    'umbrellas',
+    'outbox',
+    'audit'
+  ]);
+
+  if (summarySections.has(sectionKey)) {
+    renderSummarySectionLoadState(sectionKey, { error: false });
+  }
+
   const summaryManagedToolsSections = new Set([
     'candidates',
     'clients',
@@ -378536,9 +378752,32 @@ async function renderAll(){
     renderTools();
   }
 
-  const data = await loadSection();
+  let data;
+  try {
+    data = await loadSection();
+  } catch (error) {
+    const stillOwnsSummary = !!(
+      String(currentSection || '').trim().toLowerCase() === sectionKey &&
+      Number(window.__summarySectionRenderGeneration || 0) === renderGeneration
+    );
 
-  if (String(currentSection || '').trim().toLowerCase() !== sectionKey) {
+    if (stillOwnsSummary && summarySections.has(sectionKey)) {
+      renderSummarySectionLoadState(sectionKey, { error: true });
+    }
+
+    try {
+      console.error(`[SUMMARY][${sectionKey || 'unknown'}] load failed`, {
+        name: String(error && error.name || 'Error'),
+        status: Number(error && error.status || 0) || null
+      });
+    } catch {}
+    return;
+  }
+
+  if (
+    String(currentSection || '').trim().toLowerCase() !== sectionKey ||
+    Number(window.__summarySectionRenderGeneration || 0) !== renderGeneration
+  ) {
     return;
   }
 
