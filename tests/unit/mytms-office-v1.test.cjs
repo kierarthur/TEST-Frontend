@@ -64,7 +64,7 @@ function loadModule({ responses, confirmations }) {
 
 const statusBody = {
   ok: true,
-  agency_display_name: 'CloudTMS TEST',
+  agency_display_name: 'Arthur Rai Medical Services Limited',
   candidate_id: '10000000-0000-4000-8000-000000000001',
   candidate_display_name: 'Test Candidate',
   candidate_email: 'candidate@example.test',
@@ -92,8 +92,10 @@ test('contract success decline performs status read only and never queues email'
   assert.equal(runtime.requests.length, 1);
   assert.equal(runtime.requests[0].init.method, undefined);
   assert.match(runtime.confirmationCalls[0].message_html, /contract was saved successfully/i);
-  assert.match(runtime.confirmationCalls[0].message_html, /CloudTMS TEST/);
   assert.match(runtime.confirmationCalls[0].message_html, /Test Candidate/);
+  assert.match(runtime.confirmationCalls[0].message_html, /candidate@example\.test/);
+  assert.doesNotMatch(runtime.confirmationCalls[0].message_html, /<dt>Agency<\/dt>/);
+  assert.doesNotMatch(runtime.confirmationCalls[0].message_html, /Arthur Rai Medical Services Limited/);
 });
 
 test('accepted post-contract offer invokes the same exact Candidate invitation route once', async () => {
