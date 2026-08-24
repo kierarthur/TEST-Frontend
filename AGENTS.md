@@ -77,6 +77,8 @@ Choose exactly one database target for each call:
 
 Use only the connector's fixed read-only tools: `miget_verify_codex_parity_route`, `miget_list_infrastructure`, `miget_inspect_postgres`, `miget_db_catalog_summary`, `miget_db_release_ledger`, `miget_db_security_audit`, `miget_db_performance_summary`, `miget_db_list_rpcs`, and `miget_db_get_rpc_definition`. Do not supply free-form SQL. The release-ledger tool branches safely: `agency_test` reads the private CloudTMS migration/repeatable ledgers, while `mytms_test` reads `public.schema_migrations` and `public.schema_repeatables`.
 
+An independent ChatGPT audit must first read the applicable `AGENTS.md` files from all three named repositories; ordinary ChatGPT web must not assume GitHub access loads them automatically. Before substantive audit work, the same task that will issue the verdict must then see all nine named tools, pass `miget_verify_codex_parity_route`, and inspect both fixed targets. If discovery or a just-discovered call fails, retry discovery/parity at most three times in that task, reselecting/reconnecting when available. After three failures, stop early with the exact tool/error evidence and ask the user for a fresh audit chat; do not continue the audit, score an application/database defect, or replace the missing fresh calls with sealed historical evidence.
+
 An auditor must prove the selected PostgreSQL target, catalogue/RLS/grants/function security, installed migration and repeatable ledgers, runtime performance and the exact `pg_get_functiondef` result for relevant RPCs. Do not direct a current audit to either former Supabase project.
 
 ## Secrets and sensitive data
