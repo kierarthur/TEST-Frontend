@@ -297806,12 +297806,30 @@ async function fetchAndRenderCandidateCalendar(candidateId, opts) {
         state.filterContractId = String(cid || '');
         await fetchAndRenderCandidateCalendar(candidateId, { from: state.win.from, to: state.win.to, view: state.view, _reuseLast: true });
       },
-      onDblClick: (cid) => {
-        // Open contract modal (id-only row is fine)
+      onDblClick: async (cid) => {
+        const contractId = String(cid || '').trim();
+        if (!contractId) return;
+
+        const loading = (typeof beginGlobalLoading === 'function')
+          ? beginGlobalLoading('Opening contract…')
+          : null;
         try {
-          if (typeof openContract === 'function') openContract({ id: String(cid) });
+          const fresh = (typeof getContract === 'function')
+            ? await getContract(contractId)
+            : null;
+          if (!fresh) throw new Error('Contract details could not be loaded.');
+          if (typeof openContract === 'function') openContract(fresh);
         } catch (e) {
-          console.warn('[CAL][candidate] openContract failed', e);
+          console.warn('[CAL][candidate] contract hydration failed', e);
+          const message = e?.message || 'Contract details could not be loaded.';
+          try {
+            if (typeof showModalHint === 'function') showModalHint(message, 'warn');
+            else alert(message);
+          } catch {}
+        } finally {
+          try {
+            if (loading != null && typeof endGlobalLoading === 'function') endGlobalLoading();
+          } catch {}
         }
       },
       onClear: async () => {

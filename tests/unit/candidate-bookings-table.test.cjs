@@ -33,3 +33,11 @@ test('Candidate Bookings keeps the calendar independently visible below the boun
   assert.match(css, /\.candidate-calendar-scroll\s*\{[\s\S]*?height:\s*min\(46vh, 520px\)/);
   assert.match(css, /@media \(max-width: 520px\)[\s\S]*?\.candidate-contract-row\s*\{[\s\S]*?display:\s*grid/);
 });
+
+test('Candidate Bookings hydrates a fresh contract before either Open action launches the modal', () => {
+  assert.match(main, /onDblClick:\s*async\s*\(cid\)\s*=>/);
+  assert.match(main, /const fresh = \(typeof getContract === 'function'\)[\s\S]*?await getContract\(contractId\)/);
+  assert.match(main, /if \(!fresh\) throw new Error\('Contract details could not be loaded\.'\)/);
+  assert.match(main, /openContract\(fresh\)/);
+  assert.doesNotMatch(main, /openContract\(\{ id: String\(cid\) \}\)/);
+});
