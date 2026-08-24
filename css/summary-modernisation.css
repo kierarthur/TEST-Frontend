@@ -140,7 +140,10 @@ body.ctms-summary-proposal #content>.ctms-summary-controls input{
 }
 body.ctms-summary-proposal #content>.ctms-summary-controls .ctms-duplicate-columns{display:none!important}
 
-body.ctms-summary-proposal .summary-body{background:linear-gradient(180deg,rgba(5,11,23,.75),rgba(7,13,26,.95));scrollbar-color:#42536f #08101f}
+body.ctms-summary-proposal .summary-body{
+  background:linear-gradient(180deg,rgba(5,11,23,.75),rgba(7,13,26,.95));scrollbar-color:#42536f #08101f;
+  -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;touch-action:pan-x pan-y
+}
 body.ctms-summary-proposal .grid{min-width:920px;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
 body.ctms-summary-proposal .grid th,
 body.ctms-summary-proposal .grid td{padding:12px 13px;border-bottom:1px solid var(--sheet-line-soft);font-size:12px;line-height:1.35}
@@ -374,7 +377,7 @@ body.ctms-summary-proposal .pager .mini{color:var(--sheet-sub)}
   body.ctms-summary-proposal .toolbar input[type="text"]{order:3;width:100%;min-width:0;min-height:37px}
   body.ctms-summary-proposal .summary-body{
     flex:0 0 auto;height:clamp(420px,60dvh,640px);min-height:420px;overflow-y:auto;overflow-x:auto;
-    overscroll-behavior-y:contain;touch-action:pan-y
+    overscroll-behavior-x:contain;overscroll-behavior-y:contain;touch-action:pan-x pan-y
   }
 }
 
@@ -409,7 +412,7 @@ body.ctms-summary-proposal .pager .mini{color:var(--sheet-sub)}
   }
   body.ctms-summary-proposal .summary-body{
     flex:0 0 auto;height:clamp(400px,66dvh,640px);min-height:400px;padding:8px;overflow-y:auto;overflow-x:hidden;
-    overscroll-behavior-y:contain;touch-action:pan-y
+    overscroll-behavior-x:contain;overscroll-behavior-y:contain;touch-action:pan-x pan-y
   }
   body.ctms-summary-proposal .summary-body .grid{display:block;min-width:0!important;width:100%!important;max-width:100%!important}
   body.ctms-summary-proposal .summary-body .grid thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
@@ -494,7 +497,7 @@ body.ctms-summary-proposal .pager .mini{color:var(--sheet-sub)}
   }
 
   body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body{
-    padding:9px;overflow-x:hidden!important;touch-action:pan-y
+    padding:9px;overflow-x:hidden!important;touch-action:pan-x pan-y
   }
   body.ctms-summary-proposal[data-summary-proposal-section="outbox"] .summary-body .grid{
     display:block!important;width:100%!important;min-width:0!important;max-width:100%!important;table-layout:auto!important

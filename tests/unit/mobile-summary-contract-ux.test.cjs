@@ -15,7 +15,10 @@ test('mobile summary sheets retain a usable scrollable records viewport', () => 
   assert.match(summaryCss, /@media\(max-width:900px\)[\s\S]*?height:auto;min-height:calc\(100dvh - 58px\)[\s\S]*?grid-template-rows:auto auto/);
   assert.match(summaryCss, /height:clamp\(400px,66dvh,640px\);min-height:400px/);
   assert.match(summaryCss, /grid-template-rows:auto auto/);
-  assert.match(summaryCss, /touch-action:pan-y/);
+  assert.match(summaryCss, /-webkit-overflow-scrolling:touch/);
+  assert.match(summaryCss, /overscroll-behavior-x:contain/);
+  assert.match(summaryCss, /touch-action:pan-x pan-y/);
+  assert.doesNotMatch(summaryCss, /touch-action:pan-y(?:[;}])/);
   assert.match(summaryCss, /body\.ctms-summary-proposal \.summary-body \.grid\{display:block/);
   assert.doesNotMatch(summaryCss, /body\.ctms-summary-proposal \.grid\{display:block/);
 });

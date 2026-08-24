@@ -1183,6 +1183,257 @@
   background: rgba(200, 49, 70, .22);
 }
 
+/* Candidate → Bookings: keep contracts compact so the calendar remains visible. */
+#modal.ctms-modern-modal .candidate-bookings-layout {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(95, 124, 164, 0.38);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(16, 31, 53, 0.98), rgba(10, 22, 40, 0.98));
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.16), 0 1px 0 rgba(255, 255, 255, 0.025) inset;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-heading,
+#modal.ctms-modern-modal .candidate-contracts-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 16px;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-heading {
+  border-bottom: 1px solid rgba(95, 124, 164, 0.24);
+}
+
+#modal.ctms-modern-modal .candidate-contracts-heading h3 {
+  margin: 0;
+  color: #f7f9fd;
+  font-size: 16px;
+  font-weight: 760;
+  letter-spacing: -0.01em;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-heading p,
+#modal.ctms-modern-modal .candidate-contracts-footer span,
+#modal.ctms-modern-modal .candidate-contracts-sort-help {
+  margin: 2px 0 0;
+  color: #9fb0c7;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-sort-help {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 5px 9px;
+  border: 1px solid rgba(112, 137, 174, 0.28);
+  border-radius: 999px;
+  background: rgba(7, 17, 31, 0.48);
+}
+
+#modal.ctms-modern-modal .candidate-contracts-scroll {
+  max-height: 350px;
+  overflow: auto;
+  outline: none;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(112, 126, 238, 0.88) rgba(5, 13, 26, 0.7);
+}
+
+#modal.ctms-modern-modal .candidate-contracts-scroll:focus-visible {
+  box-shadow: 0 0 0 2px rgba(130, 144, 255, 0.7) inset;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-scroll::-webkit-scrollbar-track {
+  border-left: 1px solid rgba(85, 112, 151, 0.18);
+  background: rgba(5, 13, 26, 0.78);
+}
+
+#modal.ctms-modern-modal .candidate-contracts-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(5, 13, 26, 0.78);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #7180ee, #5265ca);
+}
+
+#modal.ctms-modern-modal .candidate-contracts-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #8794ff, #6476e7);
+}
+
+#modal.ctms-modern-modal .candidate-contracts-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: #eef3fb;
+  font-size: 12px;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-table th {
+  height: 46px;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid rgba(94, 121, 158, 0.16);
+  border-bottom: 1px solid rgba(105, 137, 181, 0.4);
+  background: #13243a;
+  text-align: left;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-table th:nth-child(1) { width: 22%; }
+#modal.ctms-modern-modal .candidate-contracts-table th:nth-child(2) { width: 18%; }
+#modal.ctms-modern-modal .candidate-contracts-table th:nth-child(3) { width: 10%; }
+#modal.ctms-modern-modal .candidate-contracts-table th:nth-child(4),
+#modal.ctms-modern-modal .candidate-contracts-table th:nth-child(5) { width: 13%; }
+#modal.ctms-modern-modal .candidate-contracts-table th:nth-child(6) { width: 24%; }
+
+#modal.ctms-modern-modal .candidate-contract-sort {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 46px !important;
+  padding: 9px 12px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #bfcee1 !important;
+  font-size: 11px !important;
+  font-weight: 780 !important;
+  letter-spacing: 0.035em !important;
+  text-transform: uppercase;
+  box-shadow: none !important;
+}
+
+#modal.ctms-modern-modal .candidate-contract-sort:hover,
+#modal.ctms-modern-modal .candidate-contract-sort.is-active {
+  color: #ffffff !important;
+  background: rgba(99, 118, 246, 0.14) !important;
+}
+
+#modal.ctms-modern-modal .candidate-contract-sort:focus-visible {
+  outline: 2px solid #8290ff;
+  outline-offset: -3px;
+}
+
+#modal.ctms-modern-modal .candidate-contract-sort-indicator {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: #91a4bf;
+  background: rgba(6, 16, 30, 0.52);
+  font-size: 13px;
+}
+
+#modal.ctms-modern-modal .candidate-contract-sort.is-active .candidate-contract-sort-indicator {
+  color: #ffffff;
+  background: #5467dd;
+}
+
+#modal.ctms-modern-modal .candidate-contract-actions-heading {
+  padding: 0 12px !important;
+  color: #bfcee1;
+  font-size: 11px;
+  font-weight: 780;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-table td {
+  height: 55px;
+  padding: 9px 12px;
+  overflow: hidden;
+  border: 0;
+  border-right: 1px solid rgba(82, 110, 148, 0.12);
+  border-bottom: 1px solid rgba(82, 110, 148, 0.22);
+  color: #e5edf8;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+#modal.ctms-modern-modal .candidate-contract-row {
+  background: rgba(7, 17, 31, 0.5);
+  transition: background 130ms ease, box-shadow 130ms ease;
+}
+
+#modal.ctms-modern-modal .candidate-contract-row:nth-child(even) {
+  background: rgba(15, 31, 52, 0.54);
+}
+
+#modal.ctms-modern-modal .candidate-contract-row:hover,
+#modal.ctms-modern-modal .candidate-contract-row:focus-visible {
+  outline: none;
+  background: rgba(42, 63, 98, 0.72);
+  box-shadow: 3px 0 0 #6d80f2 inset;
+}
+
+#modal.ctms-modern-modal .candidate-contract-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+#modal.ctms-modern-modal .candidate-contract-row-actions button {
+  min-height: 32px !important;
+  padding: 6px 9px !important;
+  white-space: nowrap;
+}
+
+#modal.ctms-modern-modal .candidate-contract-row-actions [data-act="open"] {
+  border-color: rgba(130, 144, 255, 0.6) !important;
+  background: rgba(81, 99, 210, 0.2) !important;
+}
+
+#modal.ctms-modern-modal .candidate-contract-empty td {
+  height: 84px;
+  color: #9fb0c7;
+  text-align: center;
+}
+
+#modal.ctms-modern-modal .candidate-contracts-footer {
+  min-height: 56px;
+  padding-block: 9px;
+  border-top: 1px solid rgba(95, 124, 164, 0.22);
+  background: rgba(8, 18, 34, 0.62);
+}
+
+#modal.ctms-modern-modal .candidate-calendar-scroll {
+  box-sizing: border-box;
+  height: min(46vh, 520px);
+  min-height: 320px;
+  overflow: auto;
+  padding: 7px;
+  border: 1px solid rgba(95, 124, 164, 0.34);
+  border-radius: 16px;
+  background: rgba(8, 18, 34, 0.56);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(112, 126, 238, 0.84) rgba(5, 13, 26, 0.7);
+}
+
 @media (max-width: 900px) {
   #modalBack.ctms-modern-backdrop {
     align-items: stretch;
@@ -1285,6 +1536,13 @@
     max-width: none;
     order: 5;
   }
+
+  #modal.ctms-modern-modal .candidate-contracts-table th:nth-child(1) { width: 21%; }
+  #modal.ctms-modern-modal .candidate-contracts-table th:nth-child(2) { width: 17%; }
+  #modal.ctms-modern-modal .candidate-contracts-table th:nth-child(3) { width: 9%; }
+  #modal.ctms-modern-modal .candidate-contracts-table th:nth-child(4),
+  #modal.ctms-modern-modal .candidate-contracts-table th:nth-child(5) { width: 14%; }
+  #modal.ctms-modern-modal .candidate-contracts-table th:nth-child(6) { width: 25%; }
 }
 
 @media (max-width: 520px) {
@@ -1337,6 +1595,155 @@
 
   #modal.ctms-modern-modal #ratesCards .grid-5 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #modal.ctms-modern-modal .candidate-contracts-heading,
+  #modal.ctms-modern-modal .candidate-contracts-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  #modal.ctms-modern-modal .candidate-contracts-sort-help {
+    align-self: stretch;
+    text-align: center;
+  }
+
+  #modal.ctms-modern-modal .candidate-contracts-scroll {
+    max-height: min(52dvh, 460px);
+    scrollbar-gutter: auto;
+  }
+
+  #modal.ctms-modern-modal .candidate-contracts-table,
+  #modal.ctms-modern-modal .candidate-contracts-table thead,
+  #modal.ctms-modern-modal .candidate-contracts-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  #modal.ctms-modern-modal .candidate-contracts-table thead {
+    overflow-x: auto;
+    border-bottom: 1px solid rgba(105, 137, 181, 0.4);
+    background: #13243a;
+  }
+
+  #modal.ctms-modern-modal .candidate-contracts-table thead tr {
+    display: flex;
+    width: max-content;
+    min-width: 100%;
+    padding: 7px;
+    gap: 6px;
+  }
+
+  #modal.ctms-modern-modal .candidate-contracts-table th,
+  #modal.ctms-modern-modal .candidate-contracts-table th:nth-child(n) {
+    flex: 0 0 auto;
+    width: auto;
+    height: auto;
+    overflow: hidden;
+    border: 1px solid rgba(104, 133, 172, 0.28);
+    border-radius: 8px;
+    background: rgba(7, 17, 31, 0.56);
+  }
+
+  #modal.ctms-modern-modal .candidate-contracts-table .candidate-contract-actions-heading {
+    display: none;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-sort {
+    min-height: 34px !important;
+    padding: 6px 9px !important;
+    gap: 8px;
+    font-size: 10px !important;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-sort-indicator {
+    width: 18px;
+    height: 18px;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0;
+    margin: 9px;
+    overflow: hidden;
+    border: 1px solid rgba(95, 124, 164, 0.34);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(17, 33, 56, 0.98), rgba(10, 22, 40, 0.98));
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-row td {
+    display: grid;
+    grid-template-columns: minmax(92px, 0.38fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    width: auto;
+    height: auto;
+    min-height: 42px;
+    padding: 8px 10px;
+    border-right: 0;
+    white-space: normal;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-row td:nth-child(1),
+  #modal.ctms-modern-modal .candidate-contract-row td:nth-child(2),
+  #modal.ctms-modern-modal .candidate-contract-row td:nth-child(6) {
+    grid-column: 1 / -1;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-row td:nth-child(3),
+  #modal.ctms-modern-modal .candidate-contract-row td:nth-child(4),
+  #modal.ctms-modern-modal .candidate-contract-row td:nth-child(5) {
+    grid-template-columns: minmax(62px, 0.34fr) minmax(0, 1fr);
+    gap: 8px;
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-row td::before {
+    content: attr(data-label);
+    color: #9fb0c7;
+    font-size: 10px;
+    font-weight: 760;
+    letter-spacing: 0.05em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-row-actions {
+    justify-content: stretch;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-row-actions::before {
+    grid-column: 1 / -1;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-row-actions button {
+    width: 100%;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-empty {
+    display: block;
+    margin: 9px;
+  }
+
+  #modal.ctms-modern-modal .candidate-contract-empty td {
+    display: block;
+    height: auto;
+    padding: 24px 12px;
+  }
+
+  #modal.ctms-modern-modal .candidate-contracts-footer button {
+    align-self: stretch;
+  }
+
+  #modal.ctms-modern-modal .candidate-calendar-scroll {
+    height: min(48dvh, 430px);
+    min-height: 300px;
   }
 
   #modal.ctms-modern-modal .sched-grid .grid-3 {

@@ -297698,10 +297698,10 @@ async function renderCandidateCalendarTab(candidateId) {
 
   // Build inner scaffold: contracts list + scroll box + grid mount + legend
   host.innerHTML = `
-    <div class="tabc" style="display:flex;flex-direction:column;gap:8px;height:calc(72vh);max-height:calc(72vh)">
-      <div id="__candCalContracts" style="flex:0 0 auto;border:1px solid var(--line,#e5e5e5);border-radius:8px;padding:8px;"></div>
+    <div class="tabc candidate-bookings-layout">
+      <div id="__candCalContracts" class="candidate-contracts-panel"></div>
 
-      <div id="__candCalScroll" style="flex:1;min-height:0;overflow:auto;border:1px solid var(--line,#e5e5e5);border-radius:8px;padding:4px;">
+      <div id="__candCalScroll" class="candidate-calendar-scroll">
         <div id="__candCal"></div>
       </div>
 
@@ -297893,30 +297893,195 @@ async function fetchAndRenderCandidateCalendar(candidateId, opts) {
 
 
 
-function renderCandidateContractList(container, contractMap, handlers) {
-  container.innerHTML = '';
-  const title = document.createElement('div'); title.className='hint'; title.textContent='Contracts in view:'; container.appendChild(title);
+function renderCandidateContractList(container, contractMap, handlers = {}) {
+  if (!container) return;
 
-  const list = document.createElement('div'); list.className='list';
-  contractMap.forEach((v, cid) => {
-    const row = document.createElement('div'); row.className='row item'; row.tabIndex = 0;
-    row.innerHTML = `
-      <span class="txt">${(v.client_name || 'Client')} • ${(v.role||'Role')}${v.band?` • ${v.band}`:''} • ${v.from} → ${v.to}</span>
-      <span class="act"><button data-act="filter">Show only</button> <button data-act="open">Open</button></span>`;
-    row.querySelector('[data-act="filter"]')?.addEventListener('click', () => handlers.onClick && handlers.onClick(cid));
-    row.querySelector('[data-act="open"]')?.addEventListener('click', () => handlers.onDblClick && handlers.onDblClick(cid));
-    row.addEventListener('dblclick', () => handlers.onDblClick && handlers.onDblClick(cid));
-    list.appendChild(row);
+  container.classList.add('candidate-contracts-panel');
+  const previousSort = container.__candidateContractSort;
+  const sortState = (previousSort && typeof previousSort === 'object')
+    ? previousSort
+    : { key: '', direction: 'asc' };
+  container.__candidateContractSort = sortState;
+
+  const rows = Array.from(contractMap instanceof Map ? contractMap.entries() : []).map(([cid, value], index) => ({
+    cid: String(cid || ''),
+    value: value || {},
+    index
+  }));
+  const columns = [
+    { key: 'client', label: 'Client', value: (row) => row.value.client_name || '' },
+    { key: 'jobTitle', label: 'Job Title', value: (row) => row.value.role || '' },
+    { key: 'band', label: 'Band', value: (row) => row.value.band || '' },
+    { key: 'startDate', label: 'Start date', type: 'date', value: (row) => row.value.from || '' },
+    { key: 'endDate', label: 'End Date', type: 'date', value: (row) => row.value.to || '' }
+  ];
+
+  const normaliseText = (value) => String(value == null ? '' : value).trim();
+  const dateSortValue = (value) => {
+    const text = normaliseText(value);
+    const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return Number(`${iso[1]}${iso[2]}${iso[3]}`);
+    const uk = text.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    if (uk) return Number(`${uk[3]}${uk[2]}${uk[1]}`);
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const displayDate = (value) => {
+    const text = normaliseText(value);
+    if (!text) return '—';
+    try {
+      if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(text) || text);
+    } catch {}
+    const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return iso ? `${iso[3]}/${iso[2]}/${iso[1]}` : text;
+  };
+
+  container.innerHTML = `
+    <div class="candidate-contracts-heading">
+      <div>
+        <h3>Contracts</h3>
+        <p>${rows.length} ${rows.length === 1 ? 'booking' : 'bookings'} in this calendar window</p>
+      </div>
+      <span class="candidate-contracts-sort-help">Select a heading to sort</span>
+    </div>
+    <div class="candidate-contracts-scroll" tabindex="0" aria-label="Candidate bookings">
+      <table class="candidate-contracts-table">
+        <thead><tr>
+          ${columns.map((column) => `
+            <th scope="col" data-column="${column.key}" aria-sort="none">
+              <button type="button" class="candidate-contract-sort" data-sort="${column.key}" aria-label="Sort by ${column.label}">
+                <span>${column.label}</span><span class="candidate-contract-sort-indicator" aria-hidden="true">↕</span>
+              </button>
+            </th>`).join('')}
+          <th scope="col" class="candidate-contract-actions-heading"><span>Actions</span></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="candidate-contracts-footer">
+      <span>Double-click a row to open its contract.</span>
+      <button type="button" id="candClearFilter">Clear filter</button>
+    </div>`;
+
+  const tbody = container.querySelector('.candidate-contracts-table tbody');
+  const sortButtons = Array.from(container.querySelectorAll('[data-sort]'));
+
+  const renderRows = () => {
+    const activeColumn = columns.find((column) => column.key === sortState.key) || null;
+    const direction = sortState.direction === 'desc' ? -1 : 1;
+    const ordered = rows.slice();
+    if (activeColumn) {
+      ordered.sort((left, right) => {
+        const leftRaw = activeColumn.value(left);
+        const rightRaw = activeColumn.value(right);
+        const leftBlank = normaliseText(leftRaw) === '';
+        const rightBlank = normaliseText(rightRaw) === '';
+        if (leftBlank !== rightBlank) return leftBlank ? 1 : -1;
+
+        let comparison = 0;
+        if (activeColumn.type === 'date') {
+          const leftDate = dateSortValue(leftRaw);
+          const rightDate = dateSortValue(rightRaw);
+          if (leftDate == null && rightDate != null) return 1;
+          if (leftDate != null && rightDate == null) return -1;
+          comparison = (leftDate || 0) - (rightDate || 0);
+        } else {
+          comparison = normaliseText(leftRaw).localeCompare(normaliseText(rightRaw), 'en-GB', {
+            sensitivity: 'base',
+            numeric: true
+          });
+        }
+        return comparison === 0 ? left.index - right.index : comparison * direction;
+      });
+    }
+
+    tbody.innerHTML = '';
+    if (!ordered.length) {
+      const emptyRow = document.createElement('tr');
+      emptyRow.className = 'candidate-contract-empty';
+      const emptyCell = document.createElement('td');
+      emptyCell.colSpan = 6;
+      emptyCell.textContent = 'No contracts in this calendar window.';
+      emptyRow.appendChild(emptyCell);
+      tbody.appendChild(emptyRow);
+      return;
+    }
+
+    ordered.forEach((rowData) => {
+      const row = document.createElement('tr');
+      row.className = 'candidate-contract-row';
+      row.tabIndex = 0;
+      row.dataset.contractId = rowData.cid;
+      row.title = 'Double-click to open this contract';
+
+      const values = [
+        normaliseText(rowData.value.client_name) || '—',
+        normaliseText(rowData.value.role) || '—',
+        normaliseText(rowData.value.band) || '—',
+        displayDate(rowData.value.from),
+        displayDate(rowData.value.to)
+      ];
+      columns.forEach((column, index) => {
+        const cell = document.createElement('td');
+        cell.dataset.label = column.label;
+        cell.textContent = values[index];
+        row.appendChild(cell);
+      });
+
+      const actionCell = document.createElement('td');
+      actionCell.className = 'candidate-contract-row-actions';
+      actionCell.dataset.label = 'Actions';
+      actionCell.innerHTML = '<button type="button" data-act="filter">Show only</button><button type="button" data-act="open">Open</button>';
+      actionCell.querySelector('[data-act="filter"]')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (typeof handlers.onClick === 'function') handlers.onClick(rowData.cid);
+      });
+      actionCell.querySelector('[data-act="open"]')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (typeof handlers.onDblClick === 'function') handlers.onDblClick(rowData.cid);
+      });
+      row.appendChild(actionCell);
+      row.addEventListener('dblclick', () => {
+        if (typeof handlers.onDblClick === 'function') handlers.onDblClick(rowData.cid);
+      });
+      tbody.appendChild(row);
+    });
+  };
+
+  const updateSortControls = () => {
+    sortButtons.forEach((button) => {
+      const key = button.dataset.sort || '';
+      const column = columns.find((item) => item.key === key);
+      const active = key === sortState.key;
+      const th = button.closest('th');
+      const indicator = button.querySelector('.candidate-contract-sort-indicator');
+      if (th) th.setAttribute('aria-sort', active ? (sortState.direction === 'desc' ? 'descending' : 'ascending') : 'none');
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-label', active
+        ? `Sort by ${column?.label || key} ${sortState.direction === 'asc' ? 'descending' : 'ascending'}`
+        : `Sort by ${column?.label || key} ascending`);
+      if (indicator) indicator.textContent = active ? (sortState.direction === 'desc' ? '↓' : '↑') : '↕';
+    });
+  };
+
+  sortButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.dataset.sort || '';
+      if (sortState.key === key) sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+      else {
+        sortState.key = key;
+        sortState.direction = 'asc';
+      }
+      updateSortControls();
+      renderRows();
+    });
   });
-  container.appendChild(list);
 
-  if (!contractMap.size) {
-    const none = document.createElement('div'); none.className='hint'; none.textContent='No contracts in this window.'; container.appendChild(none);
-  }
-
-  const clear = document.createElement('div'); clear.className='actions';
-  clear.innerHTML = `<button id="candClearFilter">Clear filter</button>`; container.appendChild(clear);
-  clear.querySelector('#candClearFilter')?.addEventListener('click', () => handlers.onClear && handlers.onClear());
+  container.querySelector('#candClearFilter')?.addEventListener('click', () => {
+    if (typeof handlers.onClear === 'function') handlers.onClear();
+  });
+  updateSortControls();
+  renderRows();
 }
 
 
