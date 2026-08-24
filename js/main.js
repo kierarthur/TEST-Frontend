@@ -326765,6 +326765,172 @@ if (this.entity === 'timesheets' && k === 'evidence') {
       const mc  = window.modalCtx || {};
       const tsId = mc.data?.timesheet_id || mc.data?.id || null;
 
+      // View must be interactive as soon as the cached Evidence HTML is visible.
+      // The evidence refresh below is deliberately awaited, so wiring the rendered
+      // buttons after it leaves a visible-but-dead interval when returning from the
+      // child viewer. Delegate from the persistent modal body before that await;
+      // replacing its innerHTML during refresh then keeps the same live handler.
+      const openEvidenceFromViewButton = async (btn, ev) => {
+        ev?.preventDefault?.();
+
+        const id =
+          btn?.getAttribute?.('data-evidence-view') ||
+          btn?.getAttribute?.('data-evidence-manage') ||
+          '';
+        if (!id || this.__tsEvidenceViewOpening) return;
+
+        this.__tsEvidenceViewOpening = true;
+        const previousLabel = btn.textContent;
+        const wasDisabled = !!btn.disabled;
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        btn.textContent = 'Opening…';
+
+        try {
+          const list = Array.isArray(window.modalCtx?.timesheetState?.evidence)
+            ? window.modalCtx.timesheetState.evidence
+            : [];
+          let item = list.find(x => x && String(x.id) === String(id)) || null;
+
+          const idNowForRefresh =
+            window.modalCtx?.data?.timesheet_id ||
+            window.modalCtx?.data?.id ||
+            tsId ||
+            null;
+
+          if (!item && idNowForRefresh && typeof refreshTimesheetEvidenceIntoModalState === 'function') {
+            try {
+              await refreshTimesheetEvidenceIntoModalState(idNowForRefresh);
+              const refreshedList = Array.isArray(window.modalCtx?.timesheetState?.evidence)
+                ? window.modalCtx.timesheetState.evidence
+                : [];
+              item = refreshedList.find(x => x && String(x.id) === String(id)) || null;
+            } catch {}
+          }
+
+          if (!item) {
+            alert('Evidence item not found.');
+            return;
+          }
+
+          const previewMode = String(item.preview_mode || item.preview_kind || '').trim().toUpperCase();
+          if (previewMode === 'SIGNATURES') {
+            if (typeof openTimesheetEvidenceViewerSignatures !== 'function') {
+              alert('Signatures viewer missing (openTimesheetEvidenceViewerSignatures).');
+              return;
+            }
+            await openTimesheetEvidenceViewerSignatures(item);
+            return;
+          }
+
+          // IMPORT_TABLE and ordinary PDF/image evidence use the same unified viewer.
+          if (typeof openTimesheetEvidenceViewerExisting !== 'function') {
+            alert('Evidence viewer missing (openTimesheetEvidenceViewerExisting).');
+            return;
+          }
+          await openTimesheetEvidenceViewerExisting(item);
+        } catch (err) {
+          if (LOGM) console.warn('[TS][EVIDENCE] view failed', err);
+          alert(err?.message || 'Failed to open evidence viewer.');
+        } finally {
+          this.__tsEvidenceViewOpening = false;
+          if (btn?.isConnected) {
+            btn.disabled = wasDisabled;
+            btn.removeAttribute('aria-busy');
+            btn.textContent = previousLabel;
+          }
+        }
+      };
+
+      const openFilePicker = () => new Promise((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.pdf,image/*';
+        input.style.position = 'fixed';
+        input.style.left = '-9999px';
+        document.body.appendChild(input);
+        input.addEventListener('change', () => {
+          const file = (input.files && input.files[0]) ? input.files[0] : null;
+          try { input.remove(); } catch {}
+          resolve(file);
+        }, { once: true });
+        input.click();
+      });
+
+      const queueEvidenceActionUntilReady = (btn, attributeName, id, ev) => {
+        ev?.preventDefault?.();
+        ev?.stopImmediatePropagation?.();
+        if (!id || this.__tsPendingEvidenceAction) return;
+        this.__tsPendingEvidenceAction = {
+          attributeName,
+          id: String(id),
+          button: btn,
+          previousLabel: btn.textContent,
+          wasDisabled: !!btn.disabled
+        };
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        btn.textContent = 'Preparing…';
+      };
+
+      if (root.__tsEvidenceViewDelegate) {
+        root.removeEventListener('click', root.__tsEvidenceViewDelegate);
+      }
+      root.__tsEvidenceViewDelegate = (ev) => {
+        const btn = ev?.target?.closest?.(
+          'button[data-evidence-view],button[data-evidence-manage],button[data-evidence-add],button[data-evidence-return],button[data-evidence-remove]'
+        );
+        if (!btn || !root.contains(btn)) return;
+
+        if (btn.hasAttribute('data-evidence-view') || btn.hasAttribute('data-evidence-manage')) {
+          void openEvidenceFromViewButton(btn, ev);
+          return;
+        }
+
+        if (btn.hasAttribute('data-evidence-add')) {
+          // Once the post-refresh direct handler exists it owns the click. Before
+          // that point, open the native picker inside the original user gesture.
+          if (btn.__tsEvAddWired || this.__tsEvidenceAddOpening) return;
+          ev.preventDefault();
+          this.__tsEvidenceAddOpening = true;
+          void openFilePicker()
+            .then(async (file) => {
+              if (!file) return;
+              if (typeof openTimesheetEvidenceUploadDialog !== 'function') {
+                alert('Evidence upload is not available.');
+                return;
+              }
+              await openTimesheetEvidenceUploadDialog(file);
+            })
+            .catch((err) => {
+              if (LOGM) console.warn('[TS][EVIDENCE] add failed', err);
+              alert(err?.message || 'Failed to add evidence.');
+            })
+            .finally(() => { this.__tsEvidenceAddOpening = false; });
+          return;
+        }
+
+        if (btn.hasAttribute('data-evidence-return') && !btn.__tsEvReturnWired) {
+          queueEvidenceActionUntilReady(
+            btn,
+            'data-evidence-return',
+            btn.getAttribute('data-evidence-return') || '',
+            ev
+          );
+          return;
+        }
+
+        if (btn.hasAttribute('data-evidence-remove') && !btn.__tsEvRemoveWired) {
+          queueEvidenceActionUntilReady(
+            btn,
+            'data-evidence-remove',
+            btn.getAttribute('data-evidence-remove') || '',
+            ev
+          );
+        }
+      };
+      root.addEventListener('click', root.__tsEvidenceViewDelegate);
+
       // 1) Refresh evidence on tab open (source of truth)
       //    Re-render the tab after refresh so the table reflects the latest state.
       //    If a newer lifecycle mutation or tab render wins while this awaits, do not repaint stale evidence.
@@ -326876,122 +327042,10 @@ if (this.entity === 'timesheets' && k === 'evidence') {
         if (LOGM) LT('drop-anywhere wired on evidence tab root');
       }
 
-     // 3) Wire View buttons
-const viewBtns = root.querySelectorAll('button[data-evidence-view]');
-if (LOGM) LT('wiring evidence view buttons', { count: viewBtns.length });
-
-viewBtns.forEach(btn => {
-  if (btn.__tsEvViewWired) return;
-  btn.__tsEvViewWired = true;
-
-  btn.addEventListener('click', async (ev) => {
-    ev.preventDefault();
-
-    const id = btn.getAttribute('data-evidence-view') || '';
-    if (!id) return;
-
-    // Find evidence item from modal state
-    const list = Array.isArray(window.modalCtx?.timesheetState?.evidence)
-      ? window.modalCtx.timesheetState.evidence
-      : [];
-
-    let item = list.find(x => x && String(x.id) === String(id)) || null;
-
-    // If not found, attempt a refresh once (best-effort)
-    const idNowForRefresh =
-      window.modalCtx?.data?.timesheet_id ||
-      window.modalCtx?.data?.id ||
-      tsId ||
-      null;
-
-    if (!item && idNowForRefresh && typeof refreshTimesheetEvidenceIntoModalState === 'function') {
-      try {
-        await refreshTimesheetEvidenceIntoModalState(idNowForRefresh);
-        const list2 = Array.isArray(window.modalCtx?.timesheetState?.evidence)
-          ? window.modalCtx.timesheetState.evidence
-          : [];
-        item = list2.find(x => x && String(x.id) === String(id)) || null;
-      } catch {}
-    }
-
-    if (!item) {
-      alert('Evidence item not found.');
-      return;
-    }
-
-  // ✅ NEW: branch by preview_mode
-const pm = String(item.preview_mode || item.preview_kind || '').trim().toUpperCase();
-
-try {
-  if (pm === 'IMPORT_TABLE') {
-    // ✅ Route IMPORT_TABLE to the unified viewer (it now handles NHSP pretty + generic fallback)
-    if (typeof openTimesheetEvidenceViewerExisting !== 'function') {
-      alert('Evidence viewer missing (openTimesheetEvidenceViewerExisting).');
-      return;
-    }
-    await openTimesheetEvidenceViewerExisting(item);
-    return;
-  }
-
-  if (pm === 'SIGNATURES') {
-    if (typeof openTimesheetEvidenceViewerSignatures !== 'function') {
-      alert('Signatures viewer missing (openTimesheetEvidenceViewerSignatures).');
-      return;
-    }
-    await openTimesheetEvidenceViewerSignatures(item);
-    return;
-  }
-
-  // Default: PDF/manual/system evidence
-  if (typeof openTimesheetEvidenceViewerExisting !== 'function') {
-    alert('Evidence viewer missing (openTimesheetEvidenceViewerExisting).');
-    return;
-  }
-  await openTimesheetEvidenceViewerExisting(item);
-} catch (err) {
-  if (LOGM) console.warn('[TS][EVIDENCE] view failed', err);
-  alert(err?.message || 'Failed to open evidence viewer.');
-}
-
-  });
-});
-
-      const openFilePicker = () => new Promise((resolve) => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.pdf,image/*';
-        input.style.position = 'fixed';
-        input.style.left = '-9999px';
-        document.body.appendChild(input);
-        input.addEventListener('change', () => {
-          const file = (input.files && input.files[0]) ? input.files[0] : null;
-          try { input.remove(); } catch {}
-          resolve(file);
-        }, { once: true });
-        input.click();
-      });
-
-      root.querySelectorAll('button[data-evidence-manage]').forEach((btn) => {
-        if (btn.__tsEvManageWired) return;
-        btn.__tsEvManageWired = true;
-        btn.addEventListener('click', async (ev) => {
-          ev.preventDefault();
-          const id = btn.getAttribute('data-evidence-manage') || '';
-          if (!id) return;
-          const list = Array.isArray(window.modalCtx?.timesheetState?.evidence) ? window.modalCtx.timesheetState.evidence : [];
-          const item = list.find((x) => x && String(x.id) === String(id)) || null;
-          if (!item) return alert('Evidence item not found.');
-          const pm = String(item.preview_mode || item.preview_kind || '').trim().toUpperCase();
-          if (pm === 'SIGNATURES' && typeof openTimesheetEvidenceViewerSignatures === 'function') {
-            await openTimesheetEvidenceViewerSignatures(item);
-            return;
-          }
-          if (typeof openTimesheetEvidenceViewerExisting !== 'function') {
-            alert('Evidence viewer is not available.');
-            return;
-          }
-          await openTimesheetEvidenceViewerExisting(item);
-        });
+      // 3) View is delegated above before the awaited refresh so every rendered
+      //    View button is live immediately, including buttons created by repaint.
+      if (LOGM) LT('evidence view delegation active', {
+        count: root.querySelectorAll('button[data-evidence-view]').length
       });
 
       root.querySelectorAll('button[data-evidence-add]').forEach((btn) => {
@@ -327184,6 +327238,26 @@ try {
           }
         });
       });
+
+      const pendingEvidenceAction = this.__tsPendingEvidenceAction;
+      if (pendingEvidenceAction) {
+        delete this.__tsPendingEvidenceAction;
+        const pendingStillCurrent = !timesheetTabLifecycleGuard || timesheetTabLifecycleGuard.isStillCurrent({ tab_key: 'evidence' });
+        const replayButton = pendingStillCurrent
+          ? Array.from(root.querySelectorAll(`button[${pendingEvidenceAction.attributeName}]`))
+              .find((candidate) => String(candidate.getAttribute(pendingEvidenceAction.attributeName) || '') === pendingEvidenceAction.id)
+          : null;
+
+        if (replayButton) {
+          requestAnimationFrame(() => {
+            if (replayButton.isConnected) replayButton.click();
+          });
+        } else if (pendingEvidenceAction.button?.isConnected) {
+          pendingEvidenceAction.button.disabled = pendingEvidenceAction.wasDisabled;
+          pendingEvidenceAction.button.removeAttribute('aria-busy');
+          pendingEvidenceAction.button.textContent = pendingEvidenceAction.previousLabel;
+        }
+      }
 
 
     } catch (err) {
