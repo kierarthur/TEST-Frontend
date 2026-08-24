@@ -542,7 +542,10 @@
       INVITE_TO_MYTMS: 'Send invitation',
       RESEND_INVITATION: 'Resend invitation',
       SEND_ACCESS_REMINDER: 'Send access reminder',
-      ENABLE_MEMBERSHIP: 'Enable MyTMS access'
+      ENABLE_MEMBERSHIP: 'Enable MyTMS access',
+      CANCEL_INVITATION: 'Cancel invitation',
+      CANCEL_PENDING_MEMBERSHIP: 'Cancel pending membership',
+      REVOKE_MEMBERSHIP: 'Revoke MyTMS access'
     })[upper(actionCode)] || 'MyTMS action';
   }
 
@@ -609,10 +612,11 @@
     };
   }
 
-  function disabledReasonPresentation(status = {}) {
-    const reason = upper(status.action?.disabled_reason_code || status.reason_code);
+  function disabledReasonPresentation(status = {}, action = status.action || {}) {
+    const reason = upper(action.disabled_reason_code || status.reason_code);
     return ({
       MYTMS_INVITATION_DELIVERY_DISABLED: 'Email invitations are currently unavailable.',
+      MYTMS_MEMBERSHIP_ADMIN_DISABLED: 'Membership changes are currently unavailable.',
       NO_ACTION_AVAILABLE: 'No MyTMS action is currently available.',
       CANDIDATE_INACTIVE: 'Activate the Candidate record before sending an invitation.',
       CANDIDATE_EMAIL_INVALID: 'Add a valid email address before sending an invitation.',
@@ -680,11 +684,28 @@
     };
   }
 
-  async function confirmAndSend(status, contextLabel = '') {
-    const intent = actionIntent(status?.action?.code);
-    if (!intent || status?.action?.enabled !== true) return { sent: false, reason: 'DISABLED' };
-    const actionLabel = actionPresentation(status?.action?.code);
+  async function confirmAndSend(status, selectedActionOrContext = status?.action || {}, contextLabel = '') {
+    const selectedAction = typeof selectedActionOrContext === 'string'
+      ? status?.action || {} : selectedActionOrContext;
+    if (typeof selectedActionOrContext === 'string') contextLabel = selectedActionOrContext;
+    const actionCode = upper(selectedAction?.code);
+    const intent = actionIntent(actionCode);
+    const membershipAction = ['CANCEL_INVITATION','CANCEL_PENDING_MEMBERSHIP','REVOKE_MEMBERSHIP']
+      .includes(actionCode);
+    if ((!intent && !membershipAction) || selectedAction?.enabled !== true) {
+      return { sent: false, reason: 'DISABLED' };
+    }
+    if (membershipAction && (!text(status.membership_id)
+        || !Number.isSafeInteger(Number(status.membership_generation)))) {
+      throw new Error('MYTMS_MEMBERSHIP_STATUS_INVALID');
+    }
+    const actionLabel = actionPresentation(selectedAction?.code);
     const current = candidateStatusPresentation(status);
+    const consequence = ({
+      CANCEL_INVITATION: 'The current invitation link will stop working. An email already queued or delivered cannot be recalled, but its link will be unusable.',
+      CANCEL_PENDING_MEMBERSHIP: 'The pending agency membership will be cancelled and the Candidate will not be able to join from an earlier link.',
+      REVOKE_MEMBERSHIP: 'The Candidate will immediately lose access to this agency. Their global MyTMS account and access to any other agency will remain unchanged.'
+    })[actionCode] || 'Only this Candidate will be contacted. Repeating the action will not create a duplicate current invitation.';
     const confirmation = await global.openUiConfirmModal({
       title: actionLabel,
       message_html: `
@@ -696,25 +717,40 @@
             <div><dt>Agency</dt><dd>${escapeHtml(text(status.agency_display_name) || '—')}</dd></div>
             <div><dt>Current status</dt><dd>${escapeHtml(current.label)}</dd></div>
           </dl>
-          <p class="mytms-confirm-note">Only this Candidate will be contacted. Repeating the action will not create a duplicate current invitation.</p>
+          <p class="mytms-confirm-note">${escapeHtml(consequence)}</p>
         </div>`,
       confirm_label: actionLabel,
       cancel_label: 'Not now',
       kind: 'mytms-candidate-invitation-confirm'
     });
     if (!confirmation?.confirmed) return { sent: false, reason: 'DECLINED' };
-    const result = await api(
-      `/api/mytms/candidates/${encodeURIComponent(status.candidate_id)}/invitations`,
-      {
+    const result = membershipAction
+      ? await api(`/api/mytms/memberships/${encodeURIComponent(status.membership_id)}/state`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          candidate_id: status.candidate_id,
+          transition: 'REVOKE',
+          expected_generation: Number(status.membership_generation),
+          reason: actionCode,
+          idempotency_key: uuid()
+        })
+      })
+      : await api(`/api/mytms/candidates/${encodeURIComponent(status.candidate_id)}/invitations`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           intent,
           expected_settings_version: Number(status.settings_version),
           idempotency_key: uuid()
         })
-      }
-    );
-    const presented = invitationResultPresentation(result, status);
+      });
+    const candidateName = text(status.candidate_display_name) || 'The Candidate';
+    const presented = membershipAction ? {
+      title: actionCode === 'REVOKE_MEMBERSHIP' ? 'MyTMS access revoked' : 'MyTMS invitation cancelled',
+      tone: 'success',
+      message: actionCode === 'REVOKE_MEMBERSHIP'
+        ? `${candidateName} can no longer access this agency in MyTMS.`
+        : `${candidateName}’s pending invitation and agency membership have been cancelled.`
+    } : invitationResultPresentation(result, { ...status, action: selectedAction });
     await global.openUiConfirmModal({
       title: presented.title,
       message_html: `
@@ -725,15 +761,15 @@
       confirm_label: 'Close', hide_cancel: true,
       kind: 'mytms-invitation-result'
     });
-    return { sent: true, result };
+    return { sent: !membershipAction, changed: membershipAction, result };
   }
 
   function renderCandidateStatus(host, status) {
-    const action = status.action || {};
+    const actions = Array.isArray(status.actions) && status.actions.length
+      ? status.actions : status.action?.code && upper(status.action.code) !== 'NONE'
+        ? [status.action] : [];
     const presented = candidateStatusPresentation(status);
-    const actionLabel = actionPresentation(action.code);
-    const disabledReason = disabledReasonPresentation(status);
-    const showAction = !!actionIntent(action.code);
+    const anyActionEnabled = actions.some((action) => action.enabled === true);
     host.innerHTML = `
       <div data-mytms-candidate-card>
         <div class="ctms-section-head mytms-candidate-section__head">
@@ -746,20 +782,25 @@
         <div class="mytms-candidate-section__body">
           <div class="mytms-candidate-section__copy">
             <p>${escapeHtml(presented.copy)}</p>
-            ${action.enabled === true || !disabledReason ? '' : `<p class="mytms-candidate-section__reason">${escapeHtml(disabledReason)}</p>`}
+            ${anyActionEnabled || !actions.length ? '' : `<p class="mytms-candidate-section__reason">${escapeHtml(disabledReasonPresentation(status, actions[0]))}</p>`}
           </div>
-          ${showAction ? `
-            <button type="button" class="btn mytms-candidate-section__action" data-mytms-candidate-action
+          ${actions.length ? `<div class="mytms-candidate-section__actions">${actions.map((action, index) => {
+            const membershipAction = ['CANCEL_INVITATION','CANCEL_PENDING_MEMBERSHIP','REVOKE_MEMBERSHIP']
+              .includes(upper(action.code));
+            const disabledReason = disabledReasonPresentation(status, action);
+            return `<button type="button" class="btn mytms-candidate-section__action${membershipAction ? ' mytms-candidate-section__action--danger' : ''}" data-mytms-candidate-action="${index}"
                     ${action.enabled === true ? '' : 'disabled'}
-                    ${disabledReason ? `title="${escapeHtml(disabledReason)}"` : ''}>${escapeHtml(actionLabel)}</button>` : ''}
+                    ${disabledReason ? `title="${escapeHtml(disabledReason)}"` : ''}>${escapeHtml(actionPresentation(action.code))}</button>`;
+          }).join('')}</div>` : ''}
         </div>
       </div>`;
-    const button = host.querySelector('[data-mytms-candidate-action]');
-    if (button && action.enabled === true) {
+    host.querySelectorAll('[data-mytms-candidate-action]').forEach((button) => {
+      const action = actions[Number(button.dataset.mytmsCandidateAction)];
+      if (!action || action.enabled !== true) return;
       button.addEventListener('click', async () => {
         button.disabled = true;
         try {
-          await confirmAndSend(status);
+          await confirmAndSend(status, action);
           const refreshed = await candidateStatus(status.candidate_id);
           renderCandidateStatus(host, refreshed);
         } catch (error) {
@@ -767,7 +808,7 @@
           button.disabled = false;
         }
       });
-    }
+    });
   }
 
   async function mountCandidateAction(candidate) {

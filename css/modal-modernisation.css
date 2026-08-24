@@ -967,6 +967,27 @@
   white-space: nowrap;
 }
 
+#modal.ctms-modern-modal .mytms-candidate-section__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+#modal.ctms-modern-modal .mytms-candidate-section__action--danger {
+  border-color: rgba(239, 68, 68, 0.72);
+  background: rgba(127, 29, 29, 0.3);
+  color: #fecaca;
+}
+
+#modal.ctms-modern-modal .mytms-candidate-section__action--danger:hover,
+#modal.ctms-modern-modal .mytms-candidate-section__action--danger:focus-visible {
+  border-color: #f87171;
+  background: rgba(153, 27, 27, 0.46);
+  color: #fff;
+}
+
 .mytms-status-badge {
   display: inline-flex;
   align-items: center;
@@ -3554,6 +3575,12 @@
 
   #modal.ctms-modern-modal .mytms-candidate-section__action {
     width: 100%;
+  }
+
+  #modal.ctms-modern-modal .mytms-candidate-section__actions {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .mytms-confirm-facts {

@@ -196,6 +196,14 @@ test('source wiring keeps MyTMS Office separate, server-authored and post-commit
   assert.doesNotMatch(mainSource, /renderSettingsTab\([^)]*mytms/i);
   assert.match(htmlSource, /js\/main\.js[\s\S]*js\/mytms-office-v1\.js/);
   assert.match(source, /\/api\/mytms\/candidates\/\$\{encodeURIComponent\(status\.candidate_id\)\}\/invitations/);
+  assert.match(source, /\/api\/mytms\/memberships\/\$\{encodeURIComponent\(status\.membership_id\)\}\/state/);
+  assert.match(source, /CANCEL_INVITATION[\s\S]*CANCEL_PENDING_MEMBERSHIP[\s\S]*REVOKE_MEMBERSHIP/);
+  assert.match(source, /Array\.isArray\(status\.actions\)/);
+  assert.match(source, /Resend invitation/);
+  assert.match(source, /data-mytms-candidate-action="\$\{index\}"/);
+  assert.match(source, /The current invitation link will stop working/);
+  assert.match(source, /global MyTMS account and access to any other agency will remain unchanged/);
+  assert.doesNotMatch(source, /global_account_id\s*:/);
   assert.match(source, /openUiConfirmModal/);
   assert.match(source, /data-mytms-activation-readonly="1"/);
   assert.match(source, /mytmsActivationReadonly === '1'[\s\S]*element\.disabled = true/);
