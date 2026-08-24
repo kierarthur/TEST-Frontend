@@ -714,7 +714,6 @@
           <dl class="mytms-confirm-facts">
             <div><dt>Candidate</dt><dd>${escapeHtml(text(status.candidate_display_name) || '—')}</dd></div>
             <div><dt>Email</dt><dd>${escapeHtml(text(status.candidate_email) || '—')}</dd></div>
-            <div><dt>Agency</dt><dd>${escapeHtml(text(status.agency_display_name) || '—')}</dd></div>
             <div><dt>Current status</dt><dd>${escapeHtml(current.label)}</dd></div>
           </dl>
           <p class="mytms-confirm-note">${escapeHtml(consequence)}</p>

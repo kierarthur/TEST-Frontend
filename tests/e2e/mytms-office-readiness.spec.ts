@@ -244,7 +244,7 @@ test('Candidate MyTMS status is compact, human-readable and truthful', async ({ 
       return route.fulfill({
         status: 200, contentType: 'application/json', body: JSON.stringify({
           ok: true,
-          agency_display_name: 'CloudTMS TEST',
+          agency_display_name: 'Arthur Rai Medical Services Limited',
           candidate_id: candidateId,
           candidate_display_name: 'Test Candidate',
           candidate_email: 'candidate@example.test',
@@ -301,6 +301,9 @@ test('Candidate MyTMS status is compact, human-readable and truthful', async ({ 
   await expect(confirmModal).toBeVisible();
   await expect(confirmModal).toContainText('Test Candidate');
   await expect(confirmModal).toContainText('candidate@example.test');
+  await expect(confirmModal.locator('dt', { hasText: /^Agency$/ })).toHaveCount(0);
+  await expect(confirmModal).not.toContainText('Arthur Rai Medical Services Limited');
+  await expect(confirmModal).not.toContainText('CloudTMS TEST');
   await confirmModal.getByRole('button', { name: 'Send invitation', exact: true }).click();
 
   const resultModal = page.locator('#modal[data-uicf-kind="mytms-invitation-result"]');
