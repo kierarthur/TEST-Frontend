@@ -63,10 +63,11 @@ For every Miget CloudTMS/MyTMS PostgREST app, append `options=-c%20pg_show_plans
 
 ## Permanent Miget auditor connector
 
-The current TEST database authorities are Miget, not the former Supabase projects. They share pooled resource `migetuq4` / `01a02ef7-1977-79bd-ad56-7e86927d5f81` in project `01a02ef7-18d1-7a96-9ea2-63df1bf06adc`, while remaining separate PostgreSQL services with separate credentials:
+The current database authorities listed below are Miget, not the former Supabase projects. They share pooled resource `migetuq4` / `01a02ef7-1977-79bd-ad56-7e86927d5f81` in project `01a02ef7-18d1-7a96-9ea2-63df1bf06adc`, while remaining separate PostgreSQL services with separate credentials:
 
 * Agency TEST PostgreSQL: `cloudtms-codex-poc-pg17` / `01a02f5a-2bee-7db2-910d-a7e71f11ba0a`; PostgREST: `cloudtms-codex-poc-postgrest-kwtyn` / `01a02ff2-4d37-77f8-b440-a20655129ee1`.
 * MyTMS control PostgreSQL: `mytms-control-plane-pg17` / `01a03045-5d5a-7892-b555-704ba6edc733`; PostgREST: `mytms-control-plane-postgrest-mwzkq` / `01a0306a-90cd-7bbf-80bc-8fa77c5486f1`.
+* Agency LIVE PostgreSQL: `cloudtms-live-pg17` / `01a03205-8273-7159-952e-47029c786995`; PostgREST: `cloudtms-live-postgrest-hurqd` / `01a032ef-3726-771b-85d2-1c6f836745e4`. This identity is for a user-authorised read-only LIVE audit only, never routine TEST work or mutation.
 
 For a new ChatGPT web audit, select the connected **CloudTMS Miget Operations** custom connector. It is a permanent remote Cloudflare Worker/MCP service named `codex-cloudtms-miget-gateway`; it does not require Wrangler or any process on this PC to remain running. Never ask the user to paste its credential into a chat.
 
@@ -74,10 +75,11 @@ Choose exactly one database target for each call:
 
 * `agency_test` for the CloudTMS agency TEST database.
 * `mytms_test` for the MyTMS control database.
+* `agency_live` only when the user explicitly authorises a LIVE read-only audit.
 
 Use only the connector's fixed read-only tools: `miget_verify_codex_parity_route`, `miget_list_infrastructure`, `miget_inspect_postgres`, `miget_db_catalog_summary`, `miget_db_release_ledger`, `miget_db_security_audit`, `miget_db_performance_summary`, `miget_db_list_rpcs`, and `miget_db_get_rpc_definition`. Do not supply free-form SQL. The release-ledger tool branches safely: `agency_test` reads the private CloudTMS migration/repeatable ledgers, while `mytms_test` reads `public.schema_migrations` and `public.schema_repeatables`.
 
-An independent ChatGPT audit must first read the applicable `AGENTS.md` files from all three named repositories; ordinary ChatGPT web must not assume GitHub access loads them automatically. Before substantive audit work, the same task that will issue the verdict must then see all nine named tools, pass `miget_verify_codex_parity_route`, and inspect both fixed targets. If discovery or a just-discovered call fails, retry discovery/parity at most three times in that task, reselecting/reconnecting when available. After three failures, stop early with the exact tool/error evidence and ask the user for a fresh audit chat; do not continue the audit, score an application/database defect, or replace the missing fresh calls with sealed historical evidence.
+An independent ChatGPT audit must first read the applicable `AGENTS.md` files from all three named repositories; ordinary ChatGPT web must not assume GitHub access loads them automatically. Before substantive audit work, the same task that will issue the verdict must then see all nine named tools, pass `miget_verify_codex_parity_route`, and inspect every database target placed in scope. If discovery or a just-discovered call fails, retry discovery/parity at most three times in that task, reselecting/reconnecting when available. After three failures, stop early with the exact tool/error evidence and ask the user for a fresh audit chat; do not continue the audit, score an application/database defect, or replace the missing fresh calls with sealed historical evidence.
 
 An auditor must prove the selected PostgreSQL target, catalogue/RLS/grants/function security, installed migration and repeatable ledgers, runtime performance and the exact `pg_get_functiondef` result for relevant RPCs. Do not direct a current audit to either former Supabase project.
 
