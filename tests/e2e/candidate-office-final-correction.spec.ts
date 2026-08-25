@@ -635,6 +635,148 @@ test('Simple Timesheet route labels and Authorise eligibility follow only canoni
   expect(bounds.bottom).toBeLessThanOrEqual(bounds.height + 1);
 });
 
+test('Office expense values are read-only for QR and Electronic routes while eligible expense evidence remains available', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  const viewports = [
+    { name: 'desktop', width: 1440, height: 960 },
+    { name: 'ipad', width: 820, height: 1180 },
+    { name: 'large-phone', width: 412, height: 915 },
+    { name: 'phone', width: 390, height: 844 }
+  ];
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+
+    for (const mode of ['ELECTRONIC', 'QR', 'MANUAL'] as const) {
+      const policy = await page.evaluate((submissionMode) => {
+        (window as any).discardAllModalsAndState?.();
+        const timesheetId = `00000000-0000-4000-8000-${submissionMode === 'MANUAL' ? '000000000991' : (submissionMode === 'QR' ? '000000000992' : '000000000993')}`;
+        const routeFamily = submissionMode === 'MANUAL' ? 'MANUAL_NON_QR' : submissionMode;
+        const routeType = `WEEKLY_${submissionMode}`;
+        const timesheet = {
+          id: timesheetId,
+          timesheet_id: timesheetId,
+          submission_mode: submissionMode,
+          route_family: routeFamily,
+          route_type: routeType,
+          processing_status: 'UNPROCESSED',
+          qr_status: submissionMode === 'QR' ? 'USED' : null
+        };
+        const tsfin = {
+          id: `financial-${submissionMode.toLowerCase()}`,
+          timesheet_id: timesheetId,
+          processing_status: 'UNPROCESSED',
+          mileage_units: 2,
+          mileage_pay_rate: 0.55,
+          mileage_charge_rate: 0.65,
+          travel_pay_ex_vat: 12.34,
+          travel_charge_ex_vat: 15.67,
+          accommodation_pay_ex_vat: 0,
+          accommodation_charge_ex_vat: 0,
+          other_pay_ex_vat: 0,
+          other_charge_ex_vat: 0
+        };
+        const row = {
+          ...timesheet,
+          current_timesheet_id: timesheetId,
+          sheet_scope: 'HOURS',
+          lifecycle_authority_complete: true,
+          permission_state_patch_complete: true,
+          priority_badges_patch_complete: true,
+          read_only: false,
+          locked: false,
+          authorised: false,
+          is_authorised: false
+        };
+        const policy = (window as any).classifyTimesheetEditDomains({ row, timesheet, tsfin });
+        const ctx: any = {
+          entity: 'timesheets',
+          mode: 'view',
+          data: { ...row },
+          row: { ...row },
+          timesheetEditDomains: policy,
+          editDomains: policy,
+          timesheetDetails: {
+            ...row,
+            row: { ...row },
+            timesheet,
+            tsfin,
+            effective: { route_family: routeFamily, route_type: routeType },
+            lifecycle_authority_complete: true,
+            permission_state_patch_complete: true,
+            priority_badges_patch_complete: true
+          },
+          timesheetState: { expensesDraft: null }
+        };
+        (window as any).modalCtx = ctx;
+        (window as any).showModal(
+          `Office ${submissionMode} timesheet expenses`,
+          [{ key: 'expenses', label: 'Expenses' }],
+          () => (window as any).renderTimesheetExpensesTab((window as any).modalCtx),
+          null,
+          true,
+          undefined,
+          { kind: 'timesheet-office-expense-policy' }
+        );
+        return {
+          canEditExpenses: policy.canEditExpenses,
+          canManageExpenseEvidence: policy.canManageExpenseEvidence,
+          expenseStorageTarget: policy.expenseStorageTarget,
+          expenseEvidenceStorageTarget: policy.expenseEvidenceStorageTarget,
+          expensesDisabledReason: policy.expensesDisabledReason
+        };
+      }, mode);
+
+      const modal = page.locator('#modal');
+      const travelPay = page.getByTestId('timesheet-expense-travel-pay');
+      await expect(modal).toBeVisible();
+      await page.evaluate(() => {
+        const frame = (window as any).__getModalFrame?.();
+        if (!frame) throw new Error('Timesheet modal frame is unavailable');
+        frame.entity = 'timesheets';
+        frame.mode = 'edit';
+        frame.setTab('expenses');
+        frame._updateButtons?.();
+      });
+      await expect(travelPay).toBeVisible();
+
+      if (mode === 'MANUAL') {
+        expect(policy.canEditExpenses).toBe(true);
+        expect(policy.canManageExpenseEvidence).toBe(true);
+        await expect(travelPay).toBeEnabled();
+        await expect(modal.getByText(/Edit expenses and mileage/i)).toBeVisible();
+      } else {
+        expect(policy.canEditExpenses).toBe(false);
+        expect(policy.canManageExpenseEvidence).toBe(true);
+        expect(policy.expenseStorageTarget).toBe('TSFIN');
+        expect(policy.expenseEvidenceStorageTarget).toBe('TIMESHEET_EVIDENCE');
+        expect(policy.expensesDisabledReason).toMatch(/managed through MyTMS/i);
+        await expect(travelPay).toBeDisabled();
+        await expect(modal.getByText('Review expenses and mileage.', { exact: true })).toBeVisible();
+        await expect(modal.getByText(/expense values are managed through MyTMS/i)).toBeVisible();
+        await expect(modal.getByText(/expense evidence can still be added or removed in the Evidence tab/i)).toBeVisible();
+      }
+
+      const bounds = await modal.evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: innerWidth, height: innerHeight };
+      });
+      expect(bounds.left).toBeGreaterThanOrEqual(-1);
+      expect(bounds.top).toBeGreaterThanOrEqual(-1);
+      expect(bounds.right).toBeLessThanOrEqual(bounds.width + 1);
+      expect(bounds.bottom).toBeLessThanOrEqual(bounds.height + 1);
+
+      if (mode === 'ELECTRONIC') {
+        await page.screenshot({ path: testInfo.outputPath(`office-expenses-${viewport.name}.png`), fullPage: false });
+      }
+    }
+  }
+});
+
 for (const scenario of [
   { name: 'PARTIAL result', result: 'PARTIAL' as const, heading: 'Some reminders could not be sent', counts: ['2 sent', '1 no longer eligible', '1 failed'] },
   { name: 'FAILED result', result: 'FAILED' as const, heading: 'Manager reminders were not sent', counts: ['0 sent', '0 no longer eligible', '3 failed'] },

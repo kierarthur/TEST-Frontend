@@ -134987,6 +134987,9 @@ function classifyTimesheetEditDomains(ctxInput) {
   let expensesDisabledReason = null;
   if (protectedOriginal) {
     expensesDisabledReason = 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.';
+  } else if (isQrRoute || isElectronicRoute) {
+    expensesDisabledReason = 'This QR or Electronic timesheet\'s expense values are managed through MyTMS. Switch it to Manual before amending them in CloudTMS.';
+    reasonCodes.push('EXPENSES_QR_OR_ELECTRONIC');
   } else if (isAuthorised) {
     expensesDisabledReason = 'This timesheet is authorised. Unauthorise it before changing expenses.';
   } else if (isInvoiceLocked || isSegmentInvoiceLocked) {
@@ -135062,7 +135065,25 @@ function classifyTimesheetEditDomains(ctxInput) {
     !isCancelled &&
     !isReviewOnly
   );
-  const canAttachExpenseEvidence = !!(canEditExpenses && expenseEvidenceStorageTarget);
+  let expenseEvidenceDisabledReason = null;
+  if (!isParentTimesheetContext) {
+    expenseEvidenceDisabledReason = 'Expense evidence must be managed from the parent timesheet.';
+  } else if (isAuthorised) {
+    expenseEvidenceDisabledReason = 'This timesheet is authorised. Unauthorise it before changing expense evidence.';
+  } else if (isPaid) {
+    expenseEvidenceDisabledReason = 'This timesheet is paid, so expense evidence is read-only.';
+  } else if (isInvoiceLocked || isSegmentInvoiceLocked) {
+    expenseEvidenceDisabledReason = 'This timesheet is invoiced, so expense evidence is read-only.';
+  } else if (isCancelled) {
+    expenseEvidenceDisabledReason = 'This timesheet is cancelled, so expense evidence is read-only.';
+  } else if (isReviewOnly) {
+    expenseEvidenceDisabledReason = 'Expense evidence is read-only for this row.';
+  } else if (protectedOriginal) {
+    expenseEvidenceDisabledReason = 'Expense evidence is read-only for this source row.';
+  } else if (!expenseEvidenceStorageTarget) {
+    expenseEvidenceDisabledReason = expensesDisabledReason || 'Expense evidence cannot be managed because this row does not have a supported evidence target.';
+  }
+  const canAttachExpenseEvidence = !!(!expenseEvidenceDisabledReason && expenseEvidenceStorageTarget);
 
   return {
     canEditHoursSchedule,
@@ -135089,9 +135110,9 @@ function classifyTimesheetEditDomains(ctxInput) {
     timesheetEvidenceReadOnly: !canAttachTimesheetEvidence,
     timesheetEvidenceDisabledReason,
     canAttachExpenseEvidence,
-    canManageExpenseEvidence: !!(canEditExpenses && expenseEvidenceStorageTarget),
+    canManageExpenseEvidence: canAttachExpenseEvidence,
     expenseEvidenceReadOnly: !canAttachExpenseEvidence,
-    expenseEvidenceDisabledReason: canAttachExpenseEvidence ? null : expensesDisabledReason,
+    expenseEvidenceDisabledReason,
     canAddAdditionalManual,
     addAdditionalManualReason: canAddAdditionalManual ? null : (isSegmentOnlyContext ? 'Create additional manual at parent timesheet level.' : 'Additional manual timesheet is not available for this row.'),
     isParentTimesheetContext,
@@ -176225,7 +176246,11 @@ function renderTimesheetExpensesTab(ctx) {
 
   const noteVal = String(draft.note ?? '').trim();
   const enforcementHint = (isBulkProcessModal ? '' : (
-    isContractWeekDraftTarget
+    readOnly
+      ? (editPolicy?.canManageExpenseEvidence === true
+          ? `Supporting expense evidence can still be added or removed in the Evidence tab.`
+          : '')
+      : isContractWeekDraftTarget
       ? `Expenses will be saved as a draft until this week is processed. Evidence enforcement uses staged evidence for this unprocessed week.`
       : `Note: Evidence enforcement happens on Save. If required evidence is missing, Save will fail with an “Evidence required” message and you should upload receipts in the Evidence tab.`
   ));
@@ -176236,7 +176261,7 @@ function renderTimesheetExpensesTab(ctx) {
         <div class="row" style="grid-column:1/-1">
           <label>Expenses</label>
           <div class="controls">
-            <span class="mini">${isContractWeekDraftTarget ? 'Expenses will be saved as a draft until this week is processed.' : 'Edit expenses and mileage. Charges with £0.00 will not appear on invoices.'}</span>
+            <span class="mini">${readOnly ? 'Review expenses and mileage.' : (isContractWeekDraftTarget ? 'Expenses will be saved as a draft until this week is processed.' : 'Edit expenses and mileage. Charges with £0.00 will not appear on invoices.')}</span>
             ${readOnlyHint}
           </div>
         </div>
