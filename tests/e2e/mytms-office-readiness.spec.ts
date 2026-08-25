@@ -108,8 +108,16 @@ const managerSettings = {
   }
 };
 
+const homeAnnouncement = {
+  ok: true,
+  version: 3,
+  announcement_text: 'Christmas timesheets must be uploaded by 21 December.',
+  semantic_sha256_hex: 'c'.repeat(64),
+  updated_at_utc: '2026-08-25T12:00:00Z'
+};
+
 async function installReadOnlyApi(page: Page) {
-  const observed = { settingsReads: 0, managerReads: 0, previews: 0, managerPreviews: 0, writes: 0 };
+  const observed = { settingsReads: 0, managerReads: 0, homeReads: 0, previews: 0, managerPreviews: 0, homePreviews: 0, writes: 0 };
   await page.route(`${testBackend}/api/mytms/**`, async (route: Route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -138,6 +146,14 @@ async function installReadOnlyApi(page: Page) {
         ok: true, preview_html: '<p>Safe manager preview.</p><p>Review and approve</p>',
         sanitizer_policy_version: 'MANAGER_EMAIL_SAFE_HTML_V1'
       });
+    }
+    if (path === '/api/mytms/home-announcement' && request.method() === 'GET') {
+      observed.homeReads += 1;
+      return reply(homeAnnouncement);
+    }
+    if (path === '/api/mytms/home-announcement/preview' && request.method() === 'POST') {
+      observed.homePreviews += 1;
+      return reply({ ok: true, announcement_text: homeAnnouncement.announcement_text });
     }
     observed.writes += 1;
     return reply({ ok: false, error_code: 'READ_ONLY_BROWSER_PROOF' }, 409);
@@ -214,10 +230,19 @@ for (const viewport of [
     await modal.getByLabel('Message').selectOption('WITHDRAWAL');
     await expect(modal.getByLabel('Button text')).toBeDisabled();
 
+    await modal.getByRole('button', { name: 'Candidate Home', exact: true }).click();
+    await expect(modal.getByRole('heading', { name: 'Candidate Home announcement', exact: true })).toBeVisible();
+    await expect(modal.getByLabel('Announcement')).toHaveValue(homeAnnouncement.announcement_text);
+    await expect(modal.getByText(`${homeAnnouncement.announcement_text.length}/600 characters`, { exact: false })).toBeVisible();
+    await modal.getByRole('button', { name: 'Preview on Candidate Home', exact: true }).click();
+    await expect(modal.locator('[data-mytms-home-preview-text]')).toHaveText(homeAnnouncement.announcement_text);
+
     expect(observed.settingsReads).toBe(1);
     expect(observed.managerReads).toBe(1);
+    expect(observed.homeReads).toBe(1);
     expect(observed.previews).toBe(1);
     expect(observed.managerPreviews).toBe(1);
+    expect(observed.homePreviews).toBe(1);
     expect(observed.writes).toBe(0);
     const bounds = await modal.evaluate((element) => {
       const rect = element.getBoundingClientRect();

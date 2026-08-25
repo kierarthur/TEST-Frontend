@@ -5,6 +5,8 @@
     settings: null,
     managerSettings: null,
     managerSettingsError: null,
+    homeAnnouncement: null,
+    homeAnnouncementError: null,
     managerSubmissionType: 'TIMESHEET',
     managerMailKind: 'INITIAL',
     activeSettingsTab: 'general',
@@ -62,6 +64,11 @@
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ kind, template })
   });
+  const homeAnnouncementGet = () => api('/api/mytms/home-announcement');
+  const homeAnnouncementPreview = (announcementText) => api('/api/mytms/home-announcement/preview', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ announcement_text: String(announcementText ?? '') })
+  });
   const candidateStatus = (candidateId) => api(
     `/api/mytms/candidates/${encodeURIComponent(text(candidateId))}/status`
   );
@@ -108,6 +115,21 @@
     state.managerSettings.agency_template_semantic_sha256_hex = result.semantic_sha256_hex;
     state.managerSettings.agency_template_updated_at_utc = result.updated_at_utc;
     global.showModalHint?.(`Manager email templates version ${result.version} saved.`, 'ok');
+    return { ok: true };
+  }
+
+  async function homeAnnouncementSave() {
+    if (!state.homeAnnouncement) return { ok: false };
+    const result = await api('/api/mytms/home-announcement', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expected_version: Number(state.homeAnnouncement.version),
+        idempotency_key: uuid(),
+        announcement_text: String(state.homeAnnouncement.announcement_text ?? '')
+      })
+    });
+    state.homeAnnouncement = { ...result };
+    global.showModalHint?.(`Home announcement version ${result.version} saved.`, 'ok');
     return { ok: true };
   }
 
@@ -201,6 +223,7 @@
     if (tabKey === 'invitation') return editorPanel('invitation');
     if (tabKey === 'reminder') return editorPanel('reminder');
     if (tabKey === 'manager-email') return managerEmailPanel();
+    if (tabKey === 'home') return homeAnnouncementPanel();
     return `
       <div class="card">
         <h3 style="margin-top:0;">Agency invitation policy</h3>
@@ -265,6 +288,32 @@
       <iframe data-manager-preview-frame title="Manager email sanitized preview" sandbox="" style="display:none;width:100%;height:260px;border:1px solid var(--line);background:#fff;"></iframe>
       <hr style="border:0;border-top:1px solid var(--line);margin:18px 0;" />
       ${readOnlySetting('Secure manager review address', origin.public_origin || 'Not configured', `Platform-owned · ${origin.state || 'UNCONFIGURED'} · settings version ${origin.settings_version || '—'}`)}
+    </div>`;
+  }
+
+  function homeAnnouncementPanel() {
+    if (!state.homeAnnouncement) {
+      return `<div class="card"><h3 style="margin-top:0;">Candidate Home announcement</h3>
+        <p>${escapeHtml(state.homeAnnouncementError || 'The Home announcement could not be loaded.')}</p>
+        <p class="mini">Other MyTMS settings remain available; no placeholder message has been substituted.</p></div>`;
+    }
+    const value = String(state.homeAnnouncement.announcement_text ?? '');
+    return `<div class="card" data-mytms-home-panel>
+      <h3 style="margin-top:0;">Candidate Home announcement</h3>
+      <p class="mini">Show a short agency message on the Candidate Home screen. Leave it blank when no announcement is needed.</p>
+      <div class="row"><label for="mytms-home-announcement">Announcement</label><div class="controls">
+        <textarea class="input" id="mytms-home-announcement" data-mytms-home-announcement rows="5" maxlength="600" placeholder="For example: Christmas timesheets must be uploaded by 21 December.">${escapeHtml(value)}</textarea>
+        <div class="mini"><span data-mytms-home-count>${value.length}</span>/600 characters · plain text only</div>
+      </div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;">
+        <button type="button" class="btn" data-mytms-home-preview>Preview on Candidate Home</button>
+        <button type="button" class="btn" data-mytms-home-reset>Clear announcement</button>
+        <span class="mini">Agency version ${escapeHtml(state.homeAnnouncement.version)}</span>
+      </div>
+      <div class="card" data-mytms-home-preview-output style="display:none;">
+        <div class="mini" style="margin-bottom:6px;">Candidate Home preview</div>
+        <div data-mytms-home-preview-text style="white-space:pre-wrap;"></div>
+      </div>
     </div>`;
   }
 
@@ -353,6 +402,33 @@
     state.managerSettings.agency_template_semantic_sha256_hex = result.semantic_sha256_hex;
     replaceManagerPanel();
     global.showModalHint?.('Manager email templates reset to the approved defaults.', 'ok');
+  }
+
+  function replaceHomeAnnouncementPanel() {
+    const panel = global.document.querySelector('[data-mytms-home-panel]');
+    if (!panel) return;
+    panel.outerHTML = homeAnnouncementPanel();
+    Promise.resolve().then(wireSettings);
+  }
+
+  async function resetHomeAnnouncement() {
+    if (!state.homeAnnouncement) return;
+    const confirmation = await global.openUiConfirmModal?.({
+      title: 'Clear the Candidate Home announcement?',
+      message: 'The announcement will no longer appear on Candidate Home. This does not affect Rota, Timesheets or notifications.',
+      confirm_label: 'Clear announcement', cancel_label: 'Keep announcement',
+      kind: 'mytms-home-announcement-reset'
+    });
+    if (confirmation !== true && confirmation?.confirmed !== true && confirmation?.ok !== true) return;
+    const result = await api('/api/mytms/home-announcement/reset', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expected_version: Number(state.homeAnnouncement.version), idempotency_key: uuid()
+      })
+    });
+    state.homeAnnouncement = { ...result };
+    replaceHomeAnnouncementPanel();
+    global.showModalHint?.('Candidate Home announcement cleared.', 'ok');
   }
 
   function wireSettings() {
@@ -467,20 +543,60 @@
         finally { managerReset.disabled = false; }
       });
     }
+    const homeInput = global.document.querySelector('[data-mytms-home-announcement]');
+    if (homeInput && !homeInput.__myTmsWired) {
+      homeInput.__myTmsWired = true;
+      homeInput.addEventListener('input', () => {
+        if (!state.homeAnnouncement) return;
+        state.homeAnnouncement.announcement_text = String(homeInput.value ?? '');
+        const count = global.document.querySelector('[data-mytms-home-count]');
+        if (count) count.textContent = String(state.homeAnnouncement.announcement_text.length);
+        try { global.dispatchEvent(new Event('modal-dirty')); } catch {}
+      });
+    }
+    const homePreview = global.document.querySelector('[data-mytms-home-preview]');
+    if (homePreview && !homePreview.__myTmsWired) {
+      homePreview.__myTmsWired = true;
+      homePreview.addEventListener('click', async () => {
+        homePreview.disabled = true;
+        try {
+          const result = await homeAnnouncementPreview(state.homeAnnouncement?.announcement_text);
+          const output = global.document.querySelector('[data-mytms-home-preview-output]');
+          const previewText = global.document.querySelector('[data-mytms-home-preview-text]');
+          if (previewText) previewText.textContent = result.announcement_text
+            || 'No announcement will be shown.';
+          if (output) output.style.display = '';
+        } catch { global.showModalHint?.('The announcement could not be previewed. Check the wording and try again.', 'err'); }
+        finally { homePreview.disabled = false; }
+      });
+    }
+    const homeReset = global.document.querySelector('[data-mytms-home-reset]');
+    if (homeReset && !homeReset.__myTmsWired) {
+      homeReset.__myTmsWired = true;
+      homeReset.addEventListener('click', async () => {
+        homeReset.disabled = true;
+        try { await resetHomeAnnouncement(); }
+        catch { global.showModalHint?.('The announcement could not be cleared. Reload the settings and try again.', 'err'); }
+        finally { homeReset.disabled = false; }
+      });
+    }
   }
 
   async function openSettings() {
     if (typeof global.confirmDiscardChangesIfDirty === 'function'
         && !global.confirmDiscardChangesIfDirty()) return;
     try {
-      const [settingsResult, managerResult] = await Promise.allSettled([
-        settingsGet(), managerSettingsGet()
+      const [settingsResult, managerResult, homeResult] = await Promise.allSettled([
+        settingsGet(), managerSettingsGet(), homeAnnouncementGet()
       ]);
       if (settingsResult.status !== 'fulfilled') throw settingsResult.reason;
       state.settings = settingsResult.value;
       state.managerSettings = managerResult.status === 'fulfilled' ? managerResult.value : null;
       state.managerSettingsError = managerResult.status === 'rejected'
         ? `Manager email settings could not be loaded (${text(managerResult.reason?.message)}).` : null;
+      state.homeAnnouncement = homeResult.status === 'fulfilled' ? homeResult.value : null;
+      state.homeAnnouncementError = homeResult.status === 'rejected'
+        ? 'The Candidate Home announcement could not be loaded.' : null;
     } catch (error) {
       await global.openUiConfirmModal?.({
         title: 'MyTMS App Settings unavailable',
@@ -497,6 +613,7 @@
         { key: 'invitation', label: 'Invitation email' },
         { key: 'reminder', label: 'Access reminder' },
         { key: 'manager-email', label: 'Manager approval by email' },
+        { key: 'home', label: 'Candidate Home' },
         { key: 'activation', label: 'Activation state' }
       ],
       (tabKey) => {
@@ -506,8 +623,9 @@
       },
       async () => {
         try {
-          return state.activeSettingsTab === 'manager-email'
-            ? await managerTemplatesSave() : await settingsSave();
+          if (state.activeSettingsTab === 'manager-email') return await managerTemplatesSave();
+          if (state.activeSettingsTab === 'home') return await homeAnnouncementSave();
+          return await settingsSave();
         }
         catch (error) {
           global.showModalHint?.(`MyTMS settings were not saved: ${text(error.message)}`, 'err');
@@ -523,6 +641,7 @@
         onDismiss: () => {
           state.openToken = null; state.previewByKind = Object.create(null);
           state.managerSettings = null; state.managerSettingsError = null;
+          state.homeAnnouncement = null; state.homeAnnouncementError = null;
         }
       }
     );

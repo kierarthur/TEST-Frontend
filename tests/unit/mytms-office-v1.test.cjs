@@ -210,6 +210,10 @@ test('source wiring keeps MyTMS Office separate, server-authored and post-commit
   assert.match(source, /data-mytms-activation-readonly="1"/);
   assert.match(source, /mytmsActivationReadonly === '1'[\s\S]*element\.disabled = true/);
   assert.match(source, /Manager approval by email/);
+  assert.match(source, /Candidate Home announcement/);
+  assert.match(source, /\/api\/mytms\/home-announcement/);
+  assert.match(source, /expected_version: Number\(state\.homeAnnouncement\.version\)/);
+  assert.match(source, /Preview on Candidate Home/);
   assert.match(source, /Invitation queued/);
   assert.match(source, /The email provider has accepted the invitation/);
   assert.match(source, /data-mytms-candidate-host/);
