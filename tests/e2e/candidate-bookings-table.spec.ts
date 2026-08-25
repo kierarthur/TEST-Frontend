@@ -161,7 +161,19 @@ test('Kier Arthur bookings are bounded and every heading sorts both directions',
 
   await expect(page.getByRole('button', { name: 'Show only' }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open', exact: true }).first()).toBeVisible();
-  await expect(holder).toContainText('Planned');
+  for (const status of [
+    'Planned',
+    'Needs Attention',
+    'Awaiting Authorisation',
+    'Authorised',
+    'Invoiced',
+    'Paid',
+    'On Hold'
+  ]) {
+    await expect(holder.locator('.legend .chip').filter({ hasText: status })).toBeVisible();
+  }
+  await expect(holder.locator('.legend')).not.toContainText('Processed (not ready)');
+  await expect(holder.locator('.legend')).not.toContainText('Ready');
   mkdirSync(artifactDir, { recursive: true });
   await page.locator('#modal').screenshot({ path: resolve(artifactDir, 'candidate-bookings-desktop.png') });
   expect(proof.counts.index).toBeGreaterThan(0);

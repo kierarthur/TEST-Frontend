@@ -41,3 +41,24 @@ test('Candidate Bookings hydrates a fresh contract before either Open action lau
   assert.match(main, /openContract\(fresh\)/);
   assert.doesNotMatch(main, /openContract\(\{ id: String\(cid\) \}\)/);
 });
+
+test('Candidate calendar presents the approved simplified status vocabulary', () => {
+  for (const label of [
+    'Planned',
+    'Needs Attention',
+    'Awaiting Authorisation',
+    'Authorised',
+    'Invoiced',
+    'Paid',
+    'On Hold'
+  ]) {
+    assert.match(main, new RegExp(`>${label}<`));
+  }
+
+  assert.match(main, /function normalizeCalendarState\(state\)/);
+  assert.match(main, /if \(s === 'READY' \|\| s === 'AUTHORIZED'\) return 'AUTHORISED'/);
+  assert.match(main, /if \(s === 'PROCESSED_NOT_READY' \|\| s === 'PROCESSED'\) return 'NEEDS_ATTENTION'/);
+  assert.doesNotMatch(main, />Processed \(not ready\)</);
+  assert.doesNotMatch(main, />Ready</);
+  assert.doesNotMatch(main, />Pay \+ invoice on hold</);
+});

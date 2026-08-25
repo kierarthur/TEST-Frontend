@@ -282465,24 +282465,29 @@ function computeWeekEnding(ymdStr, weekEndingWeekday /* 0=Sun..6=Sat */) {
 }
 
 // ---------- Colors / states ----------
-function colorForState(state) {
+function normalizeCalendarState(state) {
   const s = String(state || 'EMPTY').toUpperCase();
 
+  // Backwards-compatible aliases while the matching TEST database repeatable
+  // rolls out.  The UI presents one small, user-facing lifecycle vocabulary.
+  if (s === 'PROCESSED_NOT_READY' || s === 'PROCESSED') return 'NEEDS_ATTENTION';
+  if (s === 'READY' || s === 'AUTHORIZED') return 'AUTHORISED';
+  if (s === 'INVOICE_ON_HOLD' || s === 'PAY_ON_HOLD' || s === 'PAY_AND_INVOICE_ON_HOLD') return 'ON_HOLD';
+  if (s === 'SUBMITTED') return 'AWAITING_AUTHORISATION';
+
+  return s;
+}
+
+function colorForState(state) {
+  const s = normalizeCalendarState(state);
+
   if (s === 'PLANNED')                return 'cal-planned';
-  if (s === 'PROCESSED_NOT_READY')    return 'cal-processed';
-  if (s === 'READY')                  return 'cal-ready';
-
-  if (s === 'INVOICED')               return 'cal-invoiced';
-  if (s === 'INVOICE_ON_HOLD')        return 'cal-invoice-hold';
-
-  if (s === 'PAY_ON_HOLD')            return 'cal-pay-hold';
-  if (s === 'PAY_AND_INVOICE_ON_HOLD')return 'cal-pay-invoice-hold';
-
-  if (s === 'PAID')                   return 'cal-paid';
-
-  // legacy (optional)
-  if (s === 'SUBMITTED')              return 'cal-submitted';
+  if (s === 'NEEDS_ATTENTION')        return 'cal-needs-attention';
+  if (s === 'AWAITING_AUTHORISATION') return 'cal-awaiting-authorisation';
   if (s === 'AUTHORISED')             return 'cal-authorised';
+  if (s === 'INVOICED')               return 'cal-invoiced';
+  if (s === 'PAID')                   return 'cal-paid';
+  if (s === 'ON_HOLD')                return 'cal-on-hold';
 
   return ''; // EMPTY -> white
 }
@@ -286213,19 +286218,14 @@ function applyStagedContractCalendarOverlay(contractId, itemsByDate /* Map<date,
   const ensureArr = (k) => { const a = overlay.get(k) || []; overlay.set(k, a); return a; };
 
   const strong = (x) => {
-    const s = String(x?.state || 'EMPTY').toUpperCase();
+    const s = normalizeCalendarState(x?.state);
     return [
-      'PROCESSED_NOT_READY',
-      'READY',
-      'PAY_ON_HOLD',
-      'INVOICE_ON_HOLD',
-      'PAY_AND_INVOICE_ON_HOLD',
+      'NEEDS_ATTENTION',
+      'AWAITING_AUTHORISATION',
+      'AUTHORISED',
       'INVOICED',
       'PAID',
-
-      // legacy safety
-      'SUBMITTED',
-      'AUTHORISED'
+      'ON_HOLD'
     ].includes(s);
   };
 
@@ -286347,31 +286347,24 @@ async function stageAddMissingWeeks(contractId, bounds) {
 function topState(arr) {
   if (!arr?.length) return 'EMPTY';
 
-  // Highest wins
+  // Highest wins.  Actionable exceptions deliberately outrank completed
+  // states when more than one timesheet occupies the same calendar day.
   const order = [
     'EMPTY',
     'PLANNED',
-
-    // legacy workflow states (kept for safety)
-    'SUBMITTED',
     'AUTHORISED',
-
-    // new pipeline states
-    'PROCESSED_NOT_READY',
-    'READY',
-
     'INVOICED',
-    'INVOICE_ON_HOLD',
-    'PAY_ON_HOLD',
-    'PAY_AND_INVOICE_ON_HOLD',
-    'PAID'
+    'PAID',
+    'AWAITING_AUTHORISATION',
+    'NEEDS_ATTENTION',
+    'ON_HOLD'
   ];
 
   const prio = Object.fromEntries(order.map((s, i) => [s, i]));
 
   let best = 'EMPTY';
   for (const it of arr) {
-    const st = String(it?.state || 'EMPTY').toUpperCase();
+    const st = normalizeCalendarState(it?.state);
 
     // If a totally unknown state appears, keep it low (above EMPTY only if planned exists elsewhere)
     const p = (prio[st] != null) ? prio[st] : 0;
@@ -286763,18 +286756,14 @@ function renderCalendarLegend(container) {
   container.innerHTML = `
     <div class="legend">
       <span class="chip cal-planned">Planned</span>
-      <span class="chip cal-processed">Processed (not ready)</span>
-      <span class="chip cal-ready">Ready</span>
+      <span class="chip cal-needs-attention">Needs Attention</span>
+      <span class="chip cal-awaiting-authorisation">Awaiting Authorisation</span>
+      <span class="chip cal-authorised">Authorised</span>
       <span class="chip cal-invoiced">Invoiced</span>
-      <span class="chip cal-invoice-hold">Invoice on hold</span>
-      <span class="chip cal-pay-hold">Pay on hold</span>
-      <span class="chip cal-pay-invoice-hold">Pay + invoice on hold</span>
       <span class="chip cal-paid">Paid</span>
+      <span class="chip cal-on-hold">On Hold</span>
 
       <span class="chip">Not booked</span>
-
-      <span class="chip cal-flag-payline">Pay line held</span>
-      <span class="chip cal-flag-invoiceline">Invoice line delayed</span>
       <span class="chip occupied-other">Other contract (occupied)</span>
     </div>`;
 }
@@ -293964,15 +293953,16 @@ function renderDayGrid(hostEl, opts) {
 
   // NEW: human-readable state labels for hover tooltips
   const prettyStateLabel = (st) => {
-    const s = String(st || '').toUpperCase();
+    const s = normalizeCalendarState(st);
     if (!s || s === 'EMPTY') return 'Not booked';
-    if (s === 'PLANNED') return 'Booked';
-    if (s === 'PROCESSED') return 'Processed';
-    if (s === 'READY') return 'Ready';
-    if (s === 'AUTHORISED' || s === 'AUTHORIZED') return 'Authorised';
+    if (s === 'PLANNED') return 'Planned';
+    if (s === 'NEEDS_ATTENTION') return 'Needs Attention';
+    if (s === 'AWAITING_AUTHORISATION') return 'Awaiting Authorisation';
+    if (s === 'AUTHORISED') return 'Authorised';
     if (s === 'INVOICED') return 'Invoiced';
     if (s === 'PAID') return 'Paid';
-    return s; // fallback
+    if (s === 'ON_HOLD') return 'On Hold';
+    return s;
   };
 
   for (const { y, m } of months) {
