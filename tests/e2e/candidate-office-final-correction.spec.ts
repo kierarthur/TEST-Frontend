@@ -759,6 +759,8 @@ test('Office expense values are read-only for QR and Electronic routes while eli
         await expect(modal.getByText('Review expenses and mileage.', { exact: true })).toBeVisible();
         await expect(modal.getByText(/expense values are managed through MyTMS/i)).toBeVisible();
         await expect(modal.getByText(/expense evidence can still be added or removed in the Evidence tab/i)).toBeVisible();
+        const evidenceHtml = await page.evaluate(() => (window as any).renderTimesheetEvidenceTab((window as any).modalCtx));
+        expect(evidenceHtml).toContain('data-evidence-add="1"');
       }
 
       const bounds = await modal.evaluate(element => {
