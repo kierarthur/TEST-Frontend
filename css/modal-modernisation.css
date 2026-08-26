@@ -4073,3 +4073,90 @@
     display: none !important;
   }
 }
+/* Printed-timesheet policy cards and read-only provenance */
+.ctms-policy-card {
+  border: 1px solid color-mix(in srgb, var(--line, #28415f) 82%, #62a8ff 18%);
+  border-radius: 16px;
+  padding: 16px;
+  background:
+    radial-gradient(circle at 100% 0, rgba(72, 109, 255, .12), transparent 42%),
+    rgba(13, 30, 52, .72);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .14);
+}
+
+.ctms-policy-card__heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(114, 149, 190, .24);
+}
+
+.ctms-policy-card__eyebrow {
+  color: #9aa9ff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.ctms-policy-card h3 { margin: 4px 0 4px; font-size: 17px; }
+.ctms-policy-card p,
+.ctms-policy-card__note { margin: 0; color: #aebbd0; line-height: 1.45; }
+.ctms-policy-card__note { margin-top: 13px; font-size: 12px; }
+
+.ctms-policy-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid rgba(148, 163, 184, .45);
+  border-radius: 999px;
+  color: #c9d3e2;
+  background: rgba(82, 96, 119, .18);
+  font-size: 12px;
+  font-weight: 800;
+}
+.ctms-policy-badge.is-enabled { color: #8ff0ca; border-color: rgba(38, 184, 132, .58); background: rgba(12, 105, 78, .24); }
+.ctms-policy-badge.is-disabled { color: #c6cfdd; }
+
+.ctms-policy-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.ctms-policy-options > label,
+.ctms-policy-toggle-row {
+  min-height: 68px;
+  padding: 12px;
+  border: 1px solid rgba(114, 149, 190, .28);
+  border-radius: 12px;
+  background: rgba(4, 16, 33, .38);
+}
+.ctms-policy-options > label:has(input:checked) { border-color: #6572ff; background: rgba(74, 77, 198, .2); box-shadow: 0 0 0 1px rgba(101, 114, 255, .22); }
+.ctms-policy-options > label:focus-within,
+.ctms-policy-toggle-row:focus-within {
+  border-color: #65b8ff;
+  box-shadow: 0 0 0 3px rgba(72, 166, 255, .18);
+}
+.ctms-policy-toggle-row { margin-top: 14px; min-height: 0; }
+
+.ctms-readonly-setting {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid rgba(114, 149, 190, .34);
+  border-radius: 10px;
+  background: rgba(5, 17, 34, .52);
+}
+.ctms-readonly-setting__value { font-weight: 800; color: #f3f7ff; }
+.ctms-readonly-setting__source { color: #9eb0c8; font-size: 12px; }
+
+@media (max-width: 760px) {
+  .ctms-policy-card { padding: 14px; border-radius: 14px; }
+  .ctms-policy-card__heading { align-items: flex-start; }
+  .ctms-policy-options { grid-template-columns: 1fr; }
+  .ctms-policy-options > label { min-height: 58px; }
+  .ctms-readonly-setting { align-items: flex-start; flex-direction: column; gap: 4px; }
+}

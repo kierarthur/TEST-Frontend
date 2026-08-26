@@ -3643,7 +3643,8 @@ function normalizeClientSettingsForSave(raw) {
     'self_bill_no_invoices_sent',
     'daily_calc_of_invoices',
     'no_timesheet_required',
-    'group_nightsat_sunbh'
+    'group_nightsat_sunbh',
+    'candidate_paper_submission_enabled'
   ];
 
 
@@ -114360,13 +114361,62 @@ async function getContract(contract_id) {
   return j || null;
 }
 
+function printedTimesheetPolicyRequestKey(scope, id) {
+  const uuid = (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  return `${scope}:${id}:${uuid}`;
+}
+
+async function updateContractPrintedTimesheetPolicy(contractId, override, expectedUpdatedAt) {
+  const res = await authFetch(API(`/api/contracts/${_enc(contractId)}/printed-timesheet-policy`), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: _json({
+      override,
+      expected_contract_updated_at: expectedUpdatedAt,
+      request_key: printedTimesheetPolicyRequestKey('contract-printed-timesheet', contractId)
+    })
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload?.message || 'The printed-timesheet policy could not be saved. Reload and try again.');
+  return payload?.contract || payload;
+}
+
+async function updateClientPrintedTimesheetPolicy(clientId, enabled, expectedUpdatedAt) {
+  const res = await authFetch(API(`/api/clients/${_enc(clientId)}/printed-timesheet-policy`), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: _json({
+      enabled: !!enabled,
+      expected_settings_updated_at: expectedUpdatedAt,
+      request_key: printedTimesheetPolicyRequestKey('client-printed-timesheet', clientId)
+    })
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload?.message || 'The printed-timesheet setting could not be saved. Reload and try again.');
+  return payload?.client_settings || payload;
+}
+
 async function upsertContract(payload, id /* optional */) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
   const patch = { ...payload };
+  const contractSnapshot = (window.modalCtx && window.modalCtx.data) || {};
+  const paperPolicyRequest = (id && Object.prototype.hasOwnProperty.call(patch, 'candidate_paper_submission_enabled_override'))
+    ? {
+        override: patch.candidate_paper_submission_enabled_override == null
+          ? null
+          : !!patch.candidate_paper_submission_enabled_override,
+        previous: contractSnapshot.candidate_paper_submission_enabled_override == null
+          ? null
+          : !!contractSnapshot.candidate_paper_submission_enabled_override
+      }
+    : null;
+  if (id) delete patch.candidate_paper_submission_enabled_override;
 
   // Ensure required window fields are present for PUT without re-clobber.
   if (id && patch.__userChangedDates !== true) {
-    const snap = (window.modalCtx && window.modalCtx.data) || {};
+    const snap = contractSnapshot;
     if (!patch.start_date && snap.start_date) patch.start_date = snap.start_date;
     if (!patch.end_date   && snap.end_date)   patch.end_date   = snap.end_date;
 
@@ -114569,7 +114619,21 @@ async function upsertContract(payload, id /* optional */) {
     throw new Error(msg);
   }
 
-  const data = parsed?.data || null;
+  let data = parsed?.data || null;
+
+  if (id && paperPolicyRequest && paperPolicyRequest.override !== paperPolicyRequest.previous) {
+    const savedContract = (data && (data.contract || data)) || {};
+    const expectedUpdatedAt = savedContract.updated_at || contractSnapshot.updated_at;
+    if (!expectedUpdatedAt) throw new Error('The current Contract version is unavailable. Reload and try again.');
+    const policyContract = await updateContractPrintedTimesheetPolicy(id, paperPolicyRequest.override, expectedUpdatedAt);
+    const mergedContract = { ...savedContract, ...policyContract };
+    data = data && data.contract
+      ? { ...data, contract: mergedContract }
+      : mergedContract;
+    try {
+      window.modalCtx.data = { ...(window.modalCtx.data || {}), ...mergedContract };
+    } catch {}
+  }
 
   if (LOGC) {
     console.log('[CONTRACTS][UPSERT] success', { method, id, status: res.status });
@@ -126409,7 +126473,7 @@ function openContractSettingsModal() {
         (triString(getMainRaw('manual_invoices_alt_email_address')) ?? '');
 
       eff.default_submission_mode =
-        (triUpperOrNull(getMainRaw('default_submission_mode')) ?? null);
+        (triUpperOrNull(getMainRaw('default_submission_mode')) || csUpper('default_submission_mode') || 'ELECTRONIC');
 
       eff.timesheet_break_entry_mode =
         triUpperOrNull(getMainRaw('timesheet_break_entry_mode')) || csUpper('timesheet_break_entry_mode') || 'START_END_TIMES';
@@ -126439,7 +126503,7 @@ function openContractSettingsModal() {
         csStr('manual_invoices_alt_email_address');
 
       eff.default_submission_mode =
-        (csUpper('default_submission_mode') || null);
+        (csUpper('default_submission_mode') || 'ELECTRONIC');
       eff.timesheet_break_entry_mode =
         csUpper('timesheet_break_entry_mode') || 'START_END_TIMES';
     }
@@ -126449,6 +126513,9 @@ function openContractSettingsModal() {
 
     const hrMode =
       (eff.autoprocess_hr && eff.no_timesheet_required) ? 'NO_TS' : 'REQUIRE_TS';
+
+    const paperOverride = triBool(getMainRaw('candidate_paper_submission_enabled_override'));
+    const clientPaperEnabled = csBool('candidate_paper_submission_enabled', false);
 
     return {
       cs,
@@ -126460,6 +126527,9 @@ function openContractSettingsModal() {
       hrMode,
       isHrCreate: (weeklyMode === 'HEALTHROSTER' && hrMode === 'NO_TS'),
       breakModeOverride: triUpperOrNull(getMainRaw('timesheet_break_entry_mode')),
+      paperOverride,
+      clientPaperEnabled,
+      effectivePaperEnabled: paperOverride === null ? clientPaperEnabled : paperOverride,
       eff
     };
   };
@@ -126467,7 +126537,10 @@ function openContractSettingsModal() {
   // --- Render HTML (self-contained; does not rely on renderContractSettingsModal) ---
   const renderHtml = () => {
     const st = computeEffective();
-    const { hasSnapshot, overrideOn, weeklyMode, hrMode, isHrCreate, breakModeOverride, eff } = st;
+    const {
+      hasSnapshot, overrideOn, weeklyMode, hrMode, isHrCreate, breakModeOverride,
+      paperOverride, clientPaperEnabled, effectivePaperEnabled, eff
+    } = st;
 
     // ✅ Critical gating:
     // - viewOnly => everything disabled
@@ -126490,7 +126563,8 @@ function openContractSettingsModal() {
     const radioPill = (name, value, text, checked, disabledAttr) => `
       <label class="inline chk-tight"
         style="display:inline-flex;align-items:center;gap:6px;margin-right:10px;white-space:nowrap;opacity:${disabledAttr ? '0.7' : '1'};">
-        <input type="radio" name="${name}" value="${value}" ${checked ? 'checked' : ''} ${disabledAttr}/>
+        <input type="radio" name="${name}" value="${value}" ${checked ? 'checked' : ''} ${disabledAttr}
+          data-ctms-intentional-lock="${disabledAttr ? '1' : '0'}"/>
         <span style="white-space:nowrap;">${text}</span>
       </label>
     `;
@@ -126506,7 +126580,8 @@ function openContractSettingsModal() {
         margin:0;
         opacity:${disabledAttr ? '0.7' : '1'};
       ">
-        <input type="radio" name="${name}" value="${value}" ${checked ? 'checked' : ''} ${disabledAttr} style="margin-top:2px;" />
+        <input type="radio" name="${name}" value="${value}" ${checked ? 'checked' : ''} ${disabledAttr}
+          data-ctms-intentional-lock="${disabledAttr ? '1' : '0'}" style="margin-top:2px;" />
         <div style="min-width:0;">
           <div style="line-height:1.2;white-space:normal;word-break:normal;overflow-wrap:break-word;">${title}</div>
           ${desc ? `<div class="mini" style="opacity:0.9;line-height:1.25;white-space:normal;word-break:normal;overflow-wrap:break-word;">${desc}</div>` : ``}
@@ -126524,7 +126599,8 @@ function openContractSettingsModal() {
         margin:0;
         opacity:${disabledAttr ? '0.7' : '1'};
       ">
-        <input type="checkbox" name="${name}" ${checked ? 'checked' : ''} ${disabledAttr} style="margin-top:2px;" />
+        <input type="checkbox" name="${name}" ${checked ? 'checked' : ''} ${disabledAttr}
+          data-ctms-intentional-lock="${disabledAttr ? '1' : '0'}" style="margin-top:2px;" />
         <div style="line-height:1.2;white-space:normal;word-break:normal;overflow-wrap:break-word;min-width:0;">${title}</div>
       </label>
     `;
@@ -126555,19 +126631,36 @@ function openContractSettingsModal() {
           <div class="controls" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
               <label class="inline chk-tight" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;">
-                <input type="checkbox" name="overrideclientsettings" ${overrideOn ? 'checked' : ''} ${disabledRoute}/>
+                <input type="checkbox" name="overrideclientsettings" ${overrideOn ? 'checked' : ''} ${disabledRoute}
+                  data-ctms-intentional-lock="${disabledRoute ? '1' : '0'}"/>
                 <span>Override client settings for this contract</span>
               </label>
-              <span class="mini" style="opacity:0.8;">(Staged only until you Save the contract)</span>
             </div>
           </div>
         </div>
+
+        <section class="ctms-policy-card ctms-policy-card--paper" aria-labelledby="contractPrintedTimesheetsHeading">
+          <div class="ctms-policy-card__heading">
+            <div>
+              <div class="ctms-policy-card__eyebrow">Candidate submission</div>
+              <h3 id="contractPrintedTimesheetsHeading">Printed timesheets</h3>
+              <p>Choose whether eligible candidates can use the secure printed-timesheet route for this contract.</p>
+            </div>
+            <span class="ctms-policy-badge ${effectivePaperEnabled ? 'is-enabled' : 'is-disabled'}">${effectivePaperEnabled ? 'Allowed' : 'Not allowed'}</span>
+          </div>
+          <div class="ctms-policy-options" role="radiogroup" aria-label="Printed timesheet policy">
+            ${radioChoice('candidate_paper_submission_policy', 'INHERIT', 'Use Client setting', `Currently ${clientPaperEnabled ? 'allowed' : 'not allowed'} by the Client setting.`, paperOverride === null, disabledAll)}
+            ${radioChoice('candidate_paper_submission_policy', 'ALLOW', 'Allow for this Contract', 'Eligible candidates may choose a secure printed timesheet.', paperOverride === true, disabledAll)}
+            ${radioChoice('candidate_paper_submission_policy', 'BLOCK', 'Do not allow for this Contract', 'The Client setting is ignored for this contract.', paperOverride === false, disabledAll)}
+          </div>
+          <div class="ctms-policy-card__note">Independent of “Override client settings”. Availability also requires the central printed-timesheet feature. Daily and import-authoritative timesheets remain ineligible.</div>
+        </section>
 
         <div class="row" style="margin-top:12px;">
           <label style="white-space:normal">Timesheet workflow</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
             <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-              ${radioPill('weekly_mode', 'NONE', 'Manual timesheets', weeklyMode === 'NONE', disabledIfInherit)}
+              ${radioPill('weekly_mode', 'NONE', 'Standard weekly timesheets', weeklyMode === 'NONE', disabledIfInherit)}
               ${radioPill('weekly_mode', 'NHSP', 'Dedicated NHSP Weekly', weeklyMode === 'NHSP', disabledIfInherit)}
               ${radioPill('weekly_mode', 'HEALTHROSTER', 'Roster workflows', weeklyMode === 'HEALTHROSTER', disabledIfInherit)}
             </div>
@@ -126575,7 +126668,7 @@ function openContractSettingsModal() {
             <div id="contractWeeklyMsg" class="mini" style="opacity:0.9;line-height:1.25;white-space:normal;overflow-wrap:break-word;">
               ${
                 weeklyMode === 'NONE'
-                  ? 'Workers submit timesheets without a roster-validation import.'
+                  ? 'Workers submit timesheets without a roster import.'
                   : weeklyMode === 'NHSP'
                   ? 'The dedicated NHSP Weekly import creates timesheets; workers do not submit them.'
                   : 'Choose whether roster imports validate worker timesheets or are authoritative for weekly timesheets.'
@@ -126611,7 +126704,8 @@ function openContractSettingsModal() {
         <div class="row" style="margin-top:12px;display:${(showHr && !isHrCreate) ? '' : 'none'};">
           <label style="white-space:normal">How workers enter breaks</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:7px;min-width:0;">
-            <select name="timesheet_break_entry_mode" ${breakModeDisabled}>
+            <select name="timesheet_break_entry_mode" ${breakModeDisabled}
+              data-ctms-intentional-lock="${breakModeDisabled ? '1' : '0'}">
               <option value="" ${breakModeOverride == null ? 'selected' : ''}>Inherit from Daily Client (${eff.timesheet_break_entry_mode === 'DURATION_MINUTES' ? 'length in minutes' : 'start and finish times'})</option>
               <option value="START_END_TIMES" ${breakModeOverride === 'START_END_TIMES' ? 'selected' : ''}>Break start and finish times</option>
               <option value="DURATION_MINUTES" ${breakModeOverride === 'DURATION_MINUTES' ? 'selected' : ''}>Break length in minutes</option>
@@ -126627,8 +126721,8 @@ function openContractSettingsModal() {
             <!-- default submission mode (nullable / inherit) -->
             <div id="contractDefaultSubmissionModeRow" style="margin-bottom:6px; display:${(showNhsp || isHrCreate) ? 'none' : ''};">
               <div class="mini" style="opacity:0.85;margin-bottom:6px;">Default submission mode</div>
-              <select name="default_submission_mode" class="form-select form-select-sm" ${disabledIfInherit}>
-                <option value="" ${dsmVal === '' ? 'selected' : ''}>Inherit (client default)</option>
+              <select name="default_submission_mode" class="form-select form-select-sm" ${disabledIfInherit}
+                data-ctms-intentional-lock="${disabledIfInherit ? '1' : '0'}">
                 <option value="ELECTRONIC" ${dsmVal === 'ELECTRONIC' ? 'selected' : ''}>Electronic</option>
                 <option value="MANUAL" ${dsmVal === 'MANUAL' ? 'selected' : ''}>Manual</option>
               </select>
@@ -126660,6 +126754,7 @@ function openContractSettingsModal() {
                   value="${escapeHtml(altEmailVal)}"
                   placeholder="e.g. accounts@client.nhs.uk"
                   ${(!manualEmailEnabled || disabledIfInherit) ? 'disabled' : ''}
+                  data-ctms-intentional-lock="${(!manualEmailEnabled || disabledIfInherit) ? '1' : '0'}"
                 />
               </div>
             </div>
@@ -126729,10 +126824,20 @@ function openContractSettingsModal() {
     // ✅ If view-only, never stage changes.
     if (viewOnly) return false;
 
+    let changed = false;
+
+    // Printed-timesheet permission has its own inheritance boundary. It remains
+    // editable even when the broad Client-settings override is off.
+    const paperPolicy = String(
+      root.querySelector('input[type="radio"][name="candidate_paper_submission_policy"]:checked')?.value || 'INHERIT'
+    ).toUpperCase();
+    changed = setMainTriBool(
+      'candidate_paper_submission_enabled_override',
+      paperPolicy === 'ALLOW' ? true : (paperPolicy === 'BLOCK' ? false : null)
+    ) || changed;
+
     const beforeOverride = !!boolish(getMainRaw('overrideclientsettings'));
     const overrideChecked = !!root.querySelector('input[type="checkbox"][name="overrideclientsettings"]')?.checked;
-
-    let changed = false;
 
     // Toggle override: OFF → ON seeds from snapshot (unless stash restore), ON → OFF clears to NULL (stash saved)
     if (overrideChecked !== beforeOverride) {
@@ -126889,24 +126994,45 @@ function openContractSettingsModal() {
     if (!root || root.__wired) return;
     root.__wired = true;
 
-    const rerenderSelf = () => {
+    const rerenderSelf = async () => {
       try {
         const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
         if (fr && fr.kind === 'contract_settings') {
           fr._suppressDirty = true;
-          fr.setTab(fr.currentTabKey || 'settings');
+          await fr.setTab(fr.currentTabKey || 'settings');
           fr._suppressDirty = false;
           fr._updateButtons && fr._updateButtons();
+          wire();
         }
       } catch {}
     };
 
-    const onAnyChange = () => {
+    const onAnyChange = (event) => {
       // ✅ View-only means nothing in the form should stage.
       if (viewOnly) return;
 
       const did = applyFromDOM(root, { initial: false });
-      if (did) rerenderSelf();
+      const changedPrintedPolicy = event?.target?.matches?.(
+        'input[name="candidate_paper_submission_policy"]'
+      );
+      if (changedPrintedPolicy) {
+        // This policy is independent of the broad override. Update its small
+        // status surface in place so the parent form-state capture cannot
+        // replace the freshly staged tri-state value during a child rerender.
+        const selected = String(
+          root.querySelector('input[name="candidate_paper_submission_policy"]:checked')?.value || 'INHERIT'
+        ).toUpperCase();
+        const clientAllowed = computeEffective().clientPaperEnabled;
+        const effectiveAllowed = selected === 'ALLOW' || (selected === 'INHERIT' && clientAllowed);
+        const badge = root.querySelector('.ctms-policy-badge');
+        if (badge) {
+          badge.textContent = effectiveAllowed ? 'Allowed' : 'Not allowed';
+          badge.classList.toggle('is-enabled', effectiveAllowed);
+          badge.classList.toggle('is-disabled', !effectiveAllowed);
+        }
+        return;
+      }
+      if (did) void rerenderSelf();
     };
 
     root.addEventListener('change', onAnyChange, true);
@@ -139569,14 +139695,14 @@ function renderContractSettingsModal(ctx) {
         <label style="white-space:normal">Timesheet workflow</label>
         <div class="controls" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
           <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-            ${radioPill('weekly_mode', 'NONE', 'Manual timesheets', weeklyMode === 'NONE')}
+            ${radioPill('weekly_mode', 'NONE', 'Standard weekly timesheets', weeklyMode === 'NONE')}
             ${radioPill('weekly_mode', 'NHSP', 'Dedicated NHSP Weekly', weeklyMode === 'NHSP')}
             ${radioPill('weekly_mode', 'HEALTHROSTER', 'Roster workflows', weeklyMode === 'HEALTHROSTER')}
           </div>
           <div id="contractWeeklyMsg" class="mini" style="opacity:0.9;line-height:1.25;white-space:normal;overflow-wrap:break-word;">
             ${
               weeklyMode === 'NONE'
-                ? 'Workers submit timesheets without a roster-validation import.'
+                ? 'Workers submit timesheets without a roster import.'
                 : weeklyMode === 'NHSP'
                 ? 'The dedicated NHSP Weekly import creates timesheets; workers do not submit them.'
                 : 'Choose whether roster imports validate worker timesheets or are authoritative for weekly timesheets.'
@@ -139845,7 +139971,7 @@ function renderContractMainTab(ctx) {
     isNhsp ? 'Dedicated NHSP Weekly' :
     (isHr && noTs) ? 'Import-authoritative roster' :
     (isHr) ? 'Roster validation timesheets' :
-    'Manual timesheets';
+    'Standard weekly timesheets';
 
   // Derive labels from picker cache if missing but ids exist (and store into formState for persistence)
   let derivedCand = '';
@@ -140211,14 +140337,23 @@ function renderContractMainTab(ctx) {
         ${
           hideDSM
             ? `<div class="row"><label>Default submission mode</label><div class="controls"><div class="mini">Hidden for <strong>${routeLabel}</strong> route.</div></div></div>`
-            : `<div class="row"><label>Default submission mode</label>
-                <div class="controls">
-                  <select name="default_submission_mode">
-                    <option value="ELECTRONIC" ${String(d.default_submission_mode||'ELECTRONIC').toUpperCase()==='ELECTRONIC'?'selected':''}>Electronic</option>
-                    <option value="MANUAL" ${String(d.default_submission_mode||'ELECTRONIC').toUpperCase()==='MANUAL'?'selected':''}>Manual</option>
-                  </select>
-                </div>
-              </div>`
+            : (() => {
+                const overrideOn = !!triVal('overrideclientsettings');
+                const clientMode = String(window.modalCtx?.client_settings_snapshot?.default_submission_mode || 'ELECTRONIC').toUpperCase();
+                const effectiveMode = overrideOn
+                  ? String(triVal('default_submission_mode') || clientMode || 'ELECTRONIC').toUpperCase()
+                  : clientMode;
+                const safeMode = effectiveMode === 'MANUAL' ? 'MANUAL' : 'ELECTRONIC';
+                return `<div class="row"><label>Default submission mode</label>
+                  <div class="controls">
+                    <input type="hidden" name="default_submission_mode" value="${safeMode}">
+                    <div class="ctms-readonly-setting" id="contractDefaultSubmissionReadout" role="status">
+                      <span class="ctms-readonly-setting__value">${safeMode === 'MANUAL' ? 'Manual' : 'Electronic'}</span>
+                      <span class="ctms-readonly-setting__source">${overrideOn ? 'Contract override' : 'Client default'}</span>
+                    </div>
+                  </div>
+                </div>`;
+              })()
         }
       </div>
 
@@ -280688,11 +280823,13 @@ window.modalCtx = {
         Object.prototype.hasOwnProperty.call(baseline, 'auto_invoice_default') ||
         Object.prototype.hasOwnProperty.call(baseline, 'invoice_consolidation_mode') ||
         Object.prototype.hasOwnProperty.call(baseline, 'reference_number_required_to_issue_invoice') ||
-        Object.prototype.hasOwnProperty.call(baseline, 'timesheet_break_entry_mode');
+        Object.prototype.hasOwnProperty.call(baseline, 'timesheet_break_entry_mode') ||
+        Object.prototype.hasOwnProperty.call(baseline, 'candidate_paper_submission_enabled');
 
       const shouldValidateSettings = hasFormMounted || hasFullBaseline || hasClientSettingsKeys;
 
       let pendingSettings = null;
+      let pendingPrintedPolicy = null;
 
       // ✅ NEW: capture client-level ts_queries_email from settings tab if present (HealthRoster VERIFY)
       // Do NOT overwrite unless the field is present in the mounted form.
@@ -280767,7 +280904,8 @@ window.modalCtx = {
               'hr_attach_to_invoice',
               'ts_attach_to_invoice',
               'send_manual_invoices_to_different_email',
-              'reference_number_required_to_issue_invoice'
+              'reference_number_required_to_issue_invoice',
+              'candidate_paper_submission_enabled'
             ];
             csMerged.__from_ui = true;
             for (const key of BOOL_KEYS) {
@@ -280791,6 +280929,7 @@ window.modalCtx = {
 
         const keepInvConsol = (csMerged.invoice_consolidation_mode != null) ? String(csMerged.invoice_consolidation_mode) : '';
         const keepRefToIssue = !!csMerged.reference_number_required_to_issue_invoice;
+        const keepPrintedTimesheets = !!csMerged.candidate_paper_submission_enabled;
 
         try {
           csMerged = canonicalizeClientSettings(csMerged);
@@ -280804,6 +280943,7 @@ window.modalCtx = {
           csMerged.invoice_consolidation_mode = String(keepInvConsol).trim();
         }
         csMerged.reference_number_required_to_issue_invoice = !!keepRefToIssue;
+        csMerged.candidate_paper_submission_enabled = keepPrintedTimesheets;
 
         if (csMerged.send_manual_invoices_to_different_email) {
           const em = String(csMerged.manual_invoices_alt_email_address || '').trim();
@@ -280848,6 +280988,19 @@ window.modalCtx = {
         csClean.invoice_consolidation_mode = String(csMerged.invoice_consolidation_mode || '').trim() || 'NONE';
         csClean.reference_number_required_to_issue_invoice = !!csMerged.reference_number_required_to_issue_invoice;
 
+        const existingClientId = window.modalCtx?.data?.id || full?.id || null;
+        if (existingClientId) {
+          const baselinePrinted = !!window.modalCtx?.clientSettingsBaseline?.candidate_paper_submission_enabled;
+          const nextPrinted = !!csClean.candidate_paper_submission_enabled;
+          if (baselinePrinted !== nextPrinted) {
+            pendingPrintedPolicy = {
+              enabled: nextPrinted,
+              expected_updated_at: window.modalCtx?.clientSettingsBaseline?.updated_at || null
+            };
+          }
+          delete csClean.candidate_paper_submission_enabled;
+        }
+
         if (APILOG) console.log('[OPEN_CLIENT] client_settings (merged→canon→clean)', { csMerged, csClean, csInvalid, hasFormMounted, hasFullBaseline });
         if (csInvalid) { alert('Times must be HH:MM (24-hour).'); return { ok:false }; }
 
@@ -280869,6 +281022,31 @@ window.modalCtx = {
 
       const savedClient = clientResp && typeof clientResp === 'object' ? clientResp : { id: clientId, ...payload };
       window.modalCtx.data = { ...(window.modalCtx.data || {}), ...savedClient, id: clientId };
+
+      // Existing Client printed-timesheet policy is deliberately isolated from
+      // the broad Client/settings save and protected by an exact version check.
+      if (pendingPrintedPolicy) {
+        try {
+          if (!pendingPrintedPolicy.expected_updated_at) throw new Error('The current Client settings version is unavailable. Reload and try again.');
+          const savedSettings = await updateClientPrintedTimesheetPolicy(
+            clientId,
+            pendingPrintedPolicy.enabled,
+            pendingPrintedPolicy.expected_updated_at
+          );
+          window.modalCtx.clientSettingsBaseline = {
+            ...(window.modalCtx.clientSettingsBaseline || {}),
+            ...savedSettings
+          };
+          window.modalCtx.clientSettingsState = {
+            ...(window.modalCtx.clientSettingsState || {}),
+            candidate_paper_submission_enabled: pendingPrintedPolicy.enabled,
+            updated_at: savedSettings?.updated_at || window.modalCtx.clientSettingsState?.updated_at
+          };
+        } catch (err) {
+          alert(`Failed to save the Client printed-timesheet setting: ${String(err?.message || err)}`);
+          return { ok:false };
+        }
+      }
 
 
       // 4) Save Client settings (after client exists)
@@ -295798,6 +295976,7 @@ const data = {
 
   // ✅ UPDATED: nullable (inherit) supported
   default_submission_mode,
+  candidate_paper_submission_enabled_override: boolTriFromFS('candidate_paper_submission_enabled_override'),
 
   week_ending_weekday_snapshot,
 
@@ -296754,7 +296933,7 @@ const stage = (e) => {
                           isNhsp ? 'Dedicated NHSP Weekly' :
                           (isHr && noTs) ? 'Import-authoritative roster' :
                           (isHr) ? 'Roster validation timesheets' :
-                          'Manual timesheets';
+                          'Standard weekly timesheets';
                         routeLbl.innerHTML = `<strong>${routeLabel}</strong>`;
                       }
                     } catch {}
@@ -296771,8 +296950,12 @@ const stage = (e) => {
                     }
                     if (!Object.prototype.hasOwnProperty.call(main, 'default_submission_mode')) {
                       const mode = String(cs.default_submission_mode || 'ELECTRONIC').toUpperCase();
-                      const sel = document.querySelector('select[name="default_submission_mode"]');
-                      if (sel) sel.value = mode;
+                      const field = document.querySelector('input[name="default_submission_mode"]');
+                      if (field) field.value = mode;
+                      const readout = document.querySelector('#contractDefaultSubmissionReadout');
+                      if (readout) {
+                        readout.innerHTML = `<span class="ctms-readonly-setting__value">${mode === 'MANUAL' ? 'Manual' : 'Electronic'}</span><span class="ctms-readonly-setting__source">Client default</span>`;
+                      }
                       main.default_submission_mode = mode;
                     }
 
@@ -322831,6 +323014,14 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
     return;
   }
 
+  // Child settings panels can have their own inheritance and authority gates.
+  // Their freshly rendered locks must survive the parent modal entering Edit.
+  if (el.getAttribute('data-ctms-intentional-lock') === '1') {
+    el.setAttribute('disabled', 'true');
+    if (el.tagName !== 'BUTTON') el.setAttribute('readonly', 'true');
+    return;
+  }
+
  
   if (timesheetDomainLockContext) {
     if (!timesheetDomainLockContext.lockHours && el.hasAttribute && el.hasAttribute('data-protected-hours-locked')) {
@@ -344558,6 +344749,7 @@ async function renderClientSettingsUI(settingsObj){
         : '0',
 
     default_submission_mode: String(initial.default_submission_mode || 'ELECTRONIC').toUpperCase(),
+    candidate_paper_submission_enabled: toBool(initial.candidate_paper_submission_enabled, false),
 
     auto_invoice_default: (typeof initial.auto_invoice_default === 'boolean') ? initial.auto_invoice_default : false,
 
@@ -344776,7 +344968,7 @@ async function renderClientSettingsUI(settingsObj){
     const mode = String(st.weekly_mode || 'NONE').toUpperCase();
     const msg =
       (mode === 'NONE')
-        ? 'Workers submit timesheets without a roster-validation import.'
+        ? 'Workers submit timesheets without a roster import.'
       : (mode === 'NHSP')
         ? 'The dedicated NHSP Weekly import creates timesheets; workers do not submit them.'
       : 'Choose whether roster imports validate worker timesheets or are authoritative for weekly timesheets.';
@@ -344786,7 +344978,7 @@ async function renderClientSettingsUI(settingsObj){
         <label style="white-space:normal">Timesheet workflow</label>
         <div class="controls" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
           <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-            ${radioPill('weekly_mode', 'NONE', 'Manual timesheets', mode === 'NONE')}
+            ${radioPill('weekly_mode', 'NONE', 'Standard weekly timesheets', mode === 'NONE')}
             ${radioPill('weekly_mode', 'NHSP', 'Dedicated NHSP Weekly', mode === 'NHSP')}
             ${radioPill('weekly_mode', 'HEALTHROSTER', 'Roster workflows', mode === 'HEALTHROSTER')}
           </div>
@@ -344915,14 +345107,14 @@ async function renderClientSettingsUI(settingsObj){
 
   div.innerHTML = `
     <div id="clientSettingsForm" style="display:block;">
-      <div style="
+      <div class="ctms-settings-grid" style="
         display:grid;
         grid-template-columns: minmax(520px, 1.15fr) minmax(420px, 0.85fr);
         gap: 18px;
         align-items:start;
         width:100%;
       ">
-        <div style="min-width:0;overflow-wrap:break-word;">
+        <div class="ctms-settings-panel" style="min-width:0;overflow-wrap:break-word;">
           <div class="row">
             <label>Timezone</label>
             <div class="controls"><input class="input" name="timezone_id" value="${String(s.timezone_id||'')}" /></div>
@@ -344951,8 +345143,26 @@ async function renderClientSettingsUI(settingsObj){
           ${weekEndingAndDefaultRow()}
         </div>
 
-        <div style="min-width:0;overflow-wrap:break-word;display:flex;flex-direction:column;gap:14px;">
+        <div class="ctms-settings-panel" style="min-width:0;overflow-wrap:break-word;display:flex;flex-direction:column;gap:14px;">
           <div id="csInvModePanel">${invoicingModePanelHTML(s)}</div>
+          <section class="ctms-policy-card ctms-policy-card--paper" aria-labelledby="clientPrintedTimesheetsHeading">
+            <div class="ctms-policy-card__heading">
+              <div>
+                <div class="ctms-policy-card__eyebrow">Candidate submission</div>
+                <h3 id="clientPrintedTimesheetsHeading">Printed timesheets</h3>
+                <p>Allow eligible candidates to choose a secure printed timesheet.</p>
+              </div>
+              <span class="ctms-policy-badge ${s.candidate_paper_submission_enabled ? 'is-enabled' : 'is-disabled'}">${s.candidate_paper_submission_enabled ? 'Allowed' : 'Not allowed'}</span>
+            </div>
+            <div class="ctms-policy-toggle-row">
+              ${checkChoiceWithDesc(
+                'candidate_paper_submission_enabled',
+                'Allow candidates to use printed timesheets',
+                'Only eligible weekly routes are affected, and the central printed-timesheet feature must also be available. Daily and import-authoritative timesheets remain unavailable.',
+                !!s.candidate_paper_submission_enabled
+              )}
+            </div>
+          </section>
           <div id="csWeeklyPanel">${weeklyPanelHTML(s)}</div>
           <div id="csBreakEntryPanel">${breakEntryPanelHTML(s)}</div>
           <div id="csFlagsPanel">${flagsPanelHTML(s)}</div>
@@ -345092,7 +345302,8 @@ async function renderClientSettingsUI(settingsObj){
       'hr_attach_to_invoice',
       'ts_attach_to_invoice',
       'send_manual_invoices_to_different_email',
-      'reference_number_required_to_issue_invoice'
+      'reference_number_required_to_issue_invoice',
+      'candidate_paper_submission_enabled'
     ];
     cbKeys.forEach(k=>{
       const v = getCheckbox(k);
@@ -345144,6 +345355,8 @@ async function renderClientSettingsUI(settingsObj){
 
     const invModePrev = up(prev.invoice_consolidation_mode || 'NONE');
     const invModeNext = up(next.invoice_consolidation_mode || 'NONE');
+    const paperPrev = !!prev.candidate_paper_submission_enabled;
+    const paperNext = !!next.candidate_paper_submission_enabled;
 
     ctx.clientSettingsState = next;
     lastValid = { ...next };
@@ -345160,6 +345373,15 @@ async function renderClientSettingsUI(settingsObj){
 
     if (invModePrev !== invModeNext) {
       paintRightPanels('inv');
+    }
+
+    if (paperPrev !== paperNext) {
+      const badge = root.querySelector('.ctms-policy-card--paper .ctms-policy-badge');
+      if (badge) {
+        badge.classList.toggle('is-enabled', paperNext);
+        badge.classList.toggle('is-disabled', !paperNext);
+        badge.textContent = paperNext ? 'Allowed' : 'Not allowed';
+      }
     }
 
     if (gatePrev !== gateNext) {
