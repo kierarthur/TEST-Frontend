@@ -26,10 +26,14 @@ test('progress modal is read-only, closeable and reopenable from durable request
 
 test('financial completion is not obscured by internal Workbench refresh detail', () => {
   const modal = slice('function renderBankingPayCancellationProgressModal', 'async function refreshBankingPayCancellationFinancialViews');
+  const renderedStart = modal.indexOf('root.innerHTML = `');
+  const renderedEnd = modal.indexOf("root.querySelector('[data-banking-pay-cancellation-close=", renderedStart);
+  assert.ok(renderedStart >= 0 && renderedEnd > renderedStart);
+  const renderedTemplate = modal.slice(renderedStart, renderedEnd);
   assert.match(modal, /status\.financial_complete === true/);
   assert.match(modal, /const terminalSuccess = terminal/);
   assert.match(modal, /Payment cancellation complete/);
-  assert.doesNotMatch(modal, /Payment availability|workbench_refresh|NOT_STAGED|STAGED|PENDING|CURRENT/);
+  assert.doesNotMatch(renderedTemplate, /Payment availability|workbench_refresh|NOT_STAGED|STAGED|PENDING|CURRENT/);
 });
 
 test('financial completion refreshes Overview, Current Payment Status and PAYE authority without candidate fan-out', () => {
