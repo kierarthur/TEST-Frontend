@@ -81,6 +81,18 @@ for (const viewport of [
     await page.getByRole('button', { name: 'Manage authorisers' }).click();
     await expect(page.getByRole('heading', { name: 'Approved timesheet authorisers — Berkshire Healthcare' })).toBeVisible();
     await expect(page.locator('.ma-metric strong')).toHaveText(['2', '2', '4']);
+    const clientOverflow = await page.evaluate(() => {
+      const body = document.getElementById('modalBody');
+      const manager = document.querySelector<HTMLElement>('.ma-modal');
+      return {
+        viewport: document.documentElement.scrollWidth - window.innerWidth,
+        body: body ? body.scrollWidth - body.clientWidth : 1,
+        manager: manager ? manager.scrollWidth - manager.clientWidth : 1
+      };
+    });
+    expect(clientOverflow.viewport).toBeLessThanOrEqual(1);
+    expect(clientOverflow.body).toBeLessThanOrEqual(1);
+    expect(clientOverflow.manager).toBeLessThanOrEqual(1);
     await page.screenshot({ path: testInfo.outputPath(`manager-authorisers-${viewport.name}.png`), fullPage: true });
 
     await page.getByLabel('Add email address').fill('Payroll@Berkshire.NHS.UK');
@@ -164,6 +176,18 @@ for (const viewport of [
     await expect(page.getByRole('heading', { name: 'Approved timesheet authorisers — Berkshire Healthcare · RMN temporary staffing' })).toBeVisible();
     await page.getByLabel('Use only this Contract’s approved authorisers').check();
     await expect(page.getByText('Client rules excluded')).toBeVisible();
+    const contractOverflow = await page.evaluate(() => {
+      const body = document.getElementById('modalBody');
+      const manager = document.querySelector<HTMLElement>('.ma-modal');
+      return {
+        viewport: document.documentElement.scrollWidth - window.innerWidth,
+        body: body ? body.scrollWidth - body.clientWidth : 1,
+        manager: manager ? manager.scrollWidth - manager.clientWidth : 1
+      };
+    });
+    expect(contractOverflow.viewport).toBeLessThanOrEqual(1);
+    expect(contractOverflow.body).toBeLessThanOrEqual(1);
+    expect(contractOverflow.manager).toBeLessThanOrEqual(1);
     await page.screenshot({ path: testInfo.outputPath(`contract-manager-authorisers-${viewport.name}.png`), fullPage: true });
     await page.getByRole('button', { name: 'Save authorisers' }).click();
     await expect.poll(() => writes.length).toBe(1);

@@ -27,7 +27,7 @@ test('Client and Contract controls use the approved positive wording and inline 
 });
 
 test('responsive assets are loaded and retain touch-friendly narrow layouts', () => {
-  assert.match(html, /css\/manager-authorisers\.css\?v=20260826-r1/);
+  assert.match(html, /css\/manager-authorisers\.css\?v=20260826-r2/);
   assert.match(html, /js\/manager-authorisers\.js\?v=20260826-r1/);
   assert.match(css, /@media\(max-width:760px\)/);
   assert.match(css, /min-height:44px/);
