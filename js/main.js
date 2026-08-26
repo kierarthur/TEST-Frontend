@@ -3320,11 +3320,45 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
 }
 
 
+const OFFICE_AUTH_REFRESH_INVALID_CODES = new Set([
+  'REFRESH_COOKIE_MISSING',
+  'REFRESH_TOKEN_INVALID',
+  'REFRESH_CLAIMS_INVALID',
+  'REFRESH_EXPIRED',
+  'REFRESH_SESSION_MISSING',
+  'REFRESH_USER_DISABLED',
+  'REFRESH_SESSION_VERSION_CHANGED'
+]);
+const OFFICE_AUTH_REFRESH_RETRY_DELAYS_MS = Object.freeze([5_000, 15_000, 30_000, 60_000]);
+let officeAuthRefreshRetryAttempt = 0;
+
+function getOfficeAuthRefreshFailureDisposition(status, payload) {
+  const code = String(payload?.code || payload?.error_code || '').trim().toUpperCase();
+  if (Number(status) === 401 && OFFICE_AUTH_REFRESH_INVALID_CODES.has(code)) {
+    return { kind: 'invalid', code };
+  }
+  return { kind: 'transient', code };
+}
+
+function scheduleOfficeAuthRefreshRetry() {
+  clearTimeout(refreshTimer);
+  if (!SESSION?.accessToken) return;
+  const index = Math.min(officeAuthRefreshRetryAttempt, OFFICE_AUTH_REFRESH_RETRY_DELAYS_MS.length - 1);
+  const delay = OFFICE_AUTH_REFRESH_RETRY_DELAYS_MS[index];
+  officeAuthRefreshRetryAttempt = Math.min(officeAuthRefreshRetryAttempt + 1, OFFICE_AUTH_REFRESH_RETRY_DELAYS_MS.length - 1);
+  refreshTimer = setTimeout(() => {
+    refreshToken().catch(() => {});
+  }, delay);
+}
+
 function scheduleRefresh(){
   clearTimeout(refreshTimer);
+  officeAuthRefreshRetryAttempt = 0;
   if (!SESSION?.exp) return;
   const ms = Math.max(15_000, (SESSION.exp*1000) - Date.now() - 60_000);
-  refreshTimer = setTimeout(refreshToken, ms);
+  refreshTimer = setTimeout(() => {
+    refreshToken().catch(() => {});
+  }, ms);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -5259,8 +5293,18 @@ async function authFetch(input, init = {}) {
         if (!SESSION?.accessToken) return res;
       }
 
-      const ok = await refreshToken();
-      if (!ok) throw new Error('Unauthorised');
+      const refreshResult = await refreshToken();
+      if (refreshResult !== true) {
+        const err = new Error(
+          refreshResult === false
+            ? 'Unauthorised'
+            : 'CloudTMS could not renew the session because the connection is temporarily unavailable. Please try again.'
+        );
+        err.code = refreshResult === false
+          ? 'AUTH_REFRESH_SESSION_INVALID'
+          : 'AUTH_REFRESH_TEMPORARILY_UNAVAILABLE';
+        throw err;
+      }
       if (SESSION?.accessToken) headers.set('Authorization', `Bearer ${SESSION.accessToken}`);
 
       if (APILOG) console.log('[authFetch] retrying after 401', { request_key: requestKey || null, route_class: bankingPayRequestClass?.routeClass || null });
@@ -5275,16 +5319,9 @@ async function authFetch(input, init = {}) {
 
       if (res.status === 401) {
         if (modalSafe401) return res;
-        try { clearSession(); } catch {}
-        try { if (typeof openLogin === 'function') openLogin('Your session has expired. Please sign in again.'); } catch {}
-        try {
-          const err = (typeof byId === 'function') ? byId('loginError') : null;
-          if (err) {
-            err.textContent = 'Your session has expired. Please sign in again.';
-            err.style.display = 'block';
-          }
-        } catch {}
-        throw new Error('Unauthorised');
+        const err = new Error('This request remains unauthorised after the session was renewed.');
+        err.code = 'AUTH_REQUEST_UNAUTHORISED_AFTER_REFRESH';
+        throw err;
       }
     }
 
@@ -6172,6 +6209,7 @@ function clearSession() {
   // stop refresh timers
   try { clearTimeout(refreshTimer); } catch {}
   refreshTimer = 0;
+  officeAuthRefreshRetryAttempt = 0;
 
   // stop idle timers
   try { if (typeof IdleManager === 'object' && typeof IdleManager.stop === 'function') IdleManager.stop(); } catch {}
@@ -6261,6 +6299,17 @@ async function refreshToken() {
       } catch {}
     };
 
+    const markRefreshTemporarilyUnavailable = (status = 0, code = '') => {
+      scheduleOfficeAuthRefreshRetry();
+      try {
+        console.warn('[AUTH][REFRESH] temporarily unavailable; the existing session has been preserved', {
+          status: Number(status) || 0,
+          code: String(code || 'TRANSIENT_REFRESH_FAILURE')
+        });
+      } catch {}
+      return null;
+    };
+
     try {
       // ✅ Do not attempt refresh if we are not in an authenticated state.
       try {
@@ -6275,20 +6324,24 @@ async function refreshToken() {
         body: JSON.stringify({})
       });
 
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        forceLoggedOutUi('Your session has expired. Please sign in again.');
-        return false;
+        const disposition = getOfficeAuthRefreshFailureDisposition(res.status, data);
+        if (disposition.kind === 'invalid') {
+          officeAuthRefreshRetryAttempt = 0;
+          forceLoggedOutUi('Your session has expired. Please sign in again.');
+          return false;
+        }
+        return markRefreshTemporarilyUnavailable(res.status, disposition.code || `HTTP_${res.status}`);
       }
 
-      const data = await res.json().catch(() => ({}));
       const token = data.access_token || data.token || data.accessToken;
       const rawTtl = data.expires_in || data.token_ttl_sec || data.ttl || 3600;
       const ttl = Math.max(60, Number(rawTtl) || 3600);
       const skew = 30;
 
       if (!token) {
-        forceLoggedOutUi('Your session has expired. Please sign in again.');
-        return false;
+        return markRefreshTemporarilyUnavailable(res.status, 'REFRESH_RESPONSE_TOKEN_MISSING');
       }
 
       // Preserve existing user; hydrate if missing id or missing signature html
@@ -6386,10 +6439,10 @@ async function refreshToken() {
         }
       } catch {}
 
+      officeAuthRefreshRetryAttempt = 0;
       return true;
     } catch {
-      forceLoggedOutUi('Your session has expired. Please sign in again.');
-      return false;
+      return markRefreshTemporarilyUnavailable(0, 'REFRESH_NETWORK_ERROR');
     }
   })();
 
