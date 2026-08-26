@@ -65,6 +65,25 @@ test('the ordinary evidence viewer opens its loading shell before awaiting the s
   assert.match(viewerBlock, /iframe\.src = signedUrl/);
 });
 
+test('the Evidence table wraps long labels and provides responsive cell semantics', () => {
+  assert.match(mainSource, /class="ts-evidence-table ctms-timesheet-evidence-table"/);
+  for (const label of ['Filename', 'Type', 'Source', 'Pages', 'Date uploaded', 'Time', 'Uploaded by', 'Actions']) {
+    assert.match(mainSource, new RegExp(`data-ctms-label="${label}"`));
+  }
+  assert.match(mainSource, /class="ctms-evidence-actions"/);
+});
+
+test('electronic signature evidence uses friendly labels without destructive image filtering', () => {
+  const signatureStart = mainSource.indexOf('async function openTimesheetEvidenceViewerSignatures(ev)');
+  const signatureEnd = mainSource.indexOf('async function openTimesheetEvidenceViewerExisting(evidenceItem)', signatureStart);
+  assert.ok(signatureStart >= 0 && signatureEnd > signatureStart, 'signature viewer must exist');
+  const signatureBlock = mainSource.slice(signatureStart, signatureEnd);
+  assert.match(signatureBlock, /Candidate signature/);
+  assert.match(signatureBlock, /Manager signature/);
+  assert.match(signatureBlock, /ctms-evidence-signature-sheet/);
+  assert.doesNotMatch(signatureBlock, /filter:brightness\(0\)/);
+});
+
 test('returning from a child restores the parent anchor before its asynchronous render', () => {
   const syncStart = mainSource.indexOf('const syncParentChromeAfterChildReturn = (fr) => {');
   const syncEnd = mainSource.indexOf('const resumeParentAfterChildReturn = (closing) => {', syncStart);

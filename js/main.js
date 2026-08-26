@@ -354628,13 +354628,13 @@ async function openTimesheetEvidenceViewerSignatures(ev) {
           <label>Signatures</label>
           <div class="controls" style="display:flex; gap:12px; flex-wrap:wrap;">
             <div style="flex:1; min-width:240px;">
-              <div class="mini" style="opacity:.85; margin-bottom:6px;">Nurse signature</div>
+              <div class="mini" style="opacity:.85; margin-bottom:6px;">Candidate signature</div>
           ${nurseUrl
   ? `
-    <div style="background:#fff; padding:10px; border:1px solid var(--line); border-radius:8px; display:inline-block;">
+    <div class="ctms-evidence-signature-sheet">
       <img
         src="${nurseUrl}"
-        style="display:block; max-width:100%; max-height:260px; background:transparent; filter:brightness(0) contrast(1.35);"
+        alt="Candidate signature"
       />
     </div>
   `
@@ -354643,13 +354643,13 @@ async function openTimesheetEvidenceViewerSignatures(ev) {
             </div>
 
             <div style="flex:1; min-width:240px;">
-              <div class="mini" style="opacity:.85; margin-bottom:6px;">Authoriser signature</div>
+              <div class="mini" style="opacity:.85; margin-bottom:6px;">Manager signature</div>
             ${authUrl
   ? `
-    <div style="background:#fff; padding:10px; border:1px solid var(--line); border-radius:8px; display:inline-block;">
+    <div class="ctms-evidence-signature-sheet">
       <img
         src="${authUrl}"
-        style="display:block; max-width:100%; max-height:260px; background:transparent; filter:brightness(0) contrast(1.35);"
+        alt="Manager signature"
       />
     </div>
   `
@@ -355720,21 +355720,23 @@ function renderTimesheetEvidenceTab(ctx) {
               data-timesheet-document-state="${escapeHtml(timesheetDocumentState)}"
               data-document-operation-id="${escapeHtml(documentOperationId)}"
               class="${system ? 'system-evidence' : ''}">
-            <td>${fileName}</td>
-            <td>${type}</td>
-            <td>
+            <td data-ctms-label="Filename">${fileName}</td>
+            <td data-ctms-label="Type">${type}</td>
+            <td data-ctms-label="Source">
               <span class="pill">${src}</span>
             </td>
-            <td>${pageCount}</td>
-            <td>${uploadedDate}</td>
-            <td>${uploadedTime}</td>
-            <td>${uploadedBy}</td>
-            <td style="text-align:right; white-space:nowrap;">
-              ${viewBtn}
-              ${manageBtn}
-              ${returnBtn}
-              ${dlBtn}
-              ${delBtn}
+            <td data-ctms-label="Pages">${pageCount}</td>
+            <td data-ctms-label="Date uploaded">${uploadedDate}</td>
+            <td data-ctms-label="Time">${uploadedTime}</td>
+            <td data-ctms-label="Uploaded by">${uploadedBy}</td>
+            <td data-ctms-label="Actions" style="text-align:right;">
+              <div class="ctms-evidence-actions">
+                ${viewBtn}
+                ${manageBtn}
+                ${returnBtn}
+                ${dlBtn}
+                ${delBtn}
+              </div>
               ${asyncProcessingHtml ? `<div style="white-space:normal;text-align:left;">${asyncProcessingHtml}</div>` : ''}
             </td>
           </tr>
@@ -355750,7 +355752,7 @@ function renderTimesheetEvidenceTab(ctx) {
 
   const tableHtml = `
     <div class="scrollable-evidence" style="max-height:380px; overflow-y:auto;">
-      <table class="ts-evidence-table" style="width:100%; border-collapse:collapse;">
+      <table class="ts-evidence-table ctms-timesheet-evidence-table" style="width:100%; border-collapse:collapse;">
         <thead>
           <tr>
             <th style="text-align:left;">Filename</th>
@@ -356681,16 +356683,16 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
             <label>Signatures</label>
             <div class="controls" style="display:flex; gap:12px; flex-wrap:wrap;">
               <div style="flex:1; min-width:240px;">
-                <div class="mini" style="opacity:.85; margin-bottom:6px;">Nurse</div>
+                <div class="mini" style="opacity:.85; margin-bottom:6px;">Candidate signature</div>
                 ${nurseUrl
-                  ? `<img src="${nurseUrl}" style="max-width:100%; max-height:260px; border:1px solid var(--line); border-radius:8px; background:#fff;" />`
+                  ? `<div class="ctms-evidence-signature-sheet"><img src="${nurseUrl}" alt="Candidate signature" /></div>`
                   : `<div class="mini" style="opacity:.85;">Not available</div>`}
               </div>
 
               <div style="flex:1; min-width:240px;">
-                <div class="mini" style="opacity:.85; margin-bottom:6px;">Authoriser</div>
+                <div class="mini" style="opacity:.85; margin-bottom:6px;">Manager signature</div>
                 ${authUrl
-                  ? `<img src="${authUrl}" style="max-width:100%; max-height:260px; border:1px solid var(--line); border-radius:8px; background:#fff;" />`
+                  ? `<div class="ctms-evidence-signature-sheet"><img src="${authUrl}" alt="Manager signature" /></div>`
                   : `<div class="mini" style="opacity:.85;">Not available</div>`}
               </div>
             </div>

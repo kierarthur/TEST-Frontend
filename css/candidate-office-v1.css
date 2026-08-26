@@ -18,7 +18,7 @@
 #modal:has([data-candidate-office-slot="1"]) .scrollable-evidence { max-width:100%; overflow:auto !important; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table { min-width:980px; table-layout:fixed; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th,
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td { padding:8px 12px; vertical-align:top; white-space:nowrap; }
+#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td { padding:8px 12px; vertical-align:top; white-space:normal; overflow-wrap:anywhere; word-break:normal; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:first-child,
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:first-child { padding-left:14px; width:150px; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:nth-child(2),
@@ -35,6 +35,11 @@
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:nth-child(7) { width:110px; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:last-child,
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:last-child { width:260px; padding-right:14px; white-space:normal; }
+.ctms-timesheet-evidence-table td { min-width:0; overflow-wrap:anywhere; }
+.ctms-timesheet-evidence-table .ctms-evidence-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; min-width:0; }
+.ctms-timesheet-evidence-table .ctms-evidence-actions .btn { margin:0 !important; max-width:100%; white-space:normal; }
+.ctms-evidence-signature-sheet { display:flex; align-items:center; justify-content:center; width:100%; min-height:150px; padding:12px; border:0; border-radius:8px; background:#fff; overflow:hidden; }
+.ctms-evidence-signature-sheet img { display:block; width:100%; max-width:100%; height:auto; max-height:240px; object-fit:contain; border:0 !important; background:transparent !important; filter:none !important; }
 .candidate-office-slot { min-width: 0; }
 .candidate-office-card {
   color: var(--candidate-office-text);
