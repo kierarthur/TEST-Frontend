@@ -127,6 +127,12 @@ test('View and Edit Contract actions are separated and use branded confirmation'
   assert.match(buttonState, /top\.mode === 'edit'/);
 });
 
+test('Discarding Contract edits uses the branded confirmation instead of a native dialog', () => {
+  assert.doesNotMatch(main, /window\.confirm\('Discard changes and return to view\?'\)/);
+  assert.match(main, /kind: 'edit-record-discard-confirm'/);
+  assert.match(main, /cancel_label: 'Keep editing'/);
+});
+
 test('Calendar Save includes remove-all staging and never uses a native overlap warning', () => {
   const source = section('async function commitContractCalendarStageIfPending', 'function wireContractCalendarSaveControls');
   assert.match(source, /st\.add\.size[\s\S]*!!st\.removeAll/);

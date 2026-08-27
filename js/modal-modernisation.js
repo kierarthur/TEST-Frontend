@@ -652,7 +652,12 @@
     if (kind === 'client-picker' || body.querySelector('[data-picker-kind="client"]')) return 'client-picker';
     if (kind === 'job-titles' || body.querySelector('#jobTitlesSettingsRoot')) return 'job-titles';
     if (kind === 'address-lookup' || body.querySelector('#addrLookupRoot')) return 'address';
-    if (kind === 'rate-presets-picker' || body.querySelector('#ratePresetPicker')) return 'rate-presets';
+    if (
+      kind === 'rate-presets-picker' ||
+      kind === 'rates-presets' ||
+      kind === 'rate-preset' ||
+      body.querySelector('#ratePresetPicker, #ratePresetManager, #rp_form')
+    ) return 'rate-presets';
     if (kind === 'import-summary-outbox-detail' || body.querySelector('#outboxDetailRoot')) return 'outbox-details';
     if (kind === 'import-summary-audit-item') return 'audit-event';
     if (entity === 'settings') return 'settings';
@@ -894,14 +899,31 @@
     }
 
     if (family === 'rate-presets') {
-      intro(body, 'rate-presets', 'Choose a rate preset', 'Filter the available presets, select one, then choose Apply.');
-      const root = body.querySelector('#ratePresetPicker');
+      const picker = body.querySelector('#ratePresetPicker');
+      const manager = body.querySelector('#ratePresetManager');
+      const editor = body.querySelector('#rp_form');
+      const heading = picker ? 'Choose a rate preset' : (manager ? 'Manage rate presets' : 'Rate preset details');
+      const copy = picker
+        ? 'Filter the available presets, select one, then choose Apply.'
+        : '';
+      intro(body, `rate-presets-${picker ? 'picker' : (manager ? 'manager' : 'editor')}`, heading, copy);
+      const root = picker || manager || editor;
       if (!root) return;
-      root.classList.add('ctms-rate-preset-shell');
-      const labels = ['', 'Preset', 'Scope', 'Dates', 'Charge', 'PAYE', 'Umbrella', 'Mileage'];
+      root.classList.add(
+        'ctms-rate-preset-shell',
+        picker ? 'ctms-rate-preset-picker' : (manager ? 'ctms-rate-preset-manager' : 'ctms-rate-preset-editor')
+      );
+      const labels = ['', 'Preset', 'Scope', 'Charge', 'PAYE', 'Umbrella', 'Mileage'];
       root.querySelectorAll('#rp_table tbody tr').forEach((row) => {
         Array.from(row.children).forEach((cell, index) => {
           const label = labels[index] || '';
+          if (cell.dataset.ctmsLabel !== label) cell.dataset.ctmsLabel = label;
+        });
+      });
+      const managerLabels = ['Name', 'Scope', 'Client', 'Role', 'Band', 'Last edited', 'Actions'];
+      root.querySelectorAll('#ratesPresetsTable tbody tr').forEach((row) => {
+        Array.from(row.children).forEach((cell, index) => {
+          const label = managerLabels[index] || '';
           if (cell.dataset.ctmsLabel !== label) cell.dataset.ctmsLabel = label;
         });
       });

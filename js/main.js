@@ -111934,6 +111934,11 @@ function computeRatePresetMargins(state){
 function openRatePresetPicker(applyCb, opts = {}) {
   const LOG = (typeof window.__LOG_RATES === 'boolean') ? window.__LOG_RATES : true;
   const L   = (...a)=> { if (LOG) console.log('[PRESETS]', ...a); };
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (value) => String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
   const {
     client_id = null,
@@ -111945,6 +111950,9 @@ function openRatePresetPicker(applyCb, opts = {}) {
   let pickerSelectedIndex = -1;
   let pickerSelectedId = null;
   let applyInFlight = false; // debounce guard
+  let pickerLoadError = '';
+  let pickerRequestSequence = 0;
+  let pickerSearchTimer = null;
 
   const content = () => `
     <div class="tabc" id="ratePresetPicker">
@@ -111959,9 +111967,6 @@ function openRatePresetPicker(applyCb, opts = {}) {
           <input type="text" id="rp_search" class="input" placeholder="Search…" style="margin-left:auto;min-width:200px"/>
         </div>
       </div>
-      <div class="hint" style="margin:6px 0 10px">
-        Double-click a row to apply. Single-click selects; click <em>Apply</em> to use the selected preset.
-      </div>
       <div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">
         <table class="grid" id="rp_table">
           <thead>
@@ -111969,7 +111974,6 @@ function openRatePresetPicker(applyCb, opts = {}) {
               <th style="width:36px"></th>
               <th>Name / Role / Band</th>
               <th>Scope</th>
-              <th>Dates</th>
               <th>Charge (D/N/Sa/Su/BH)</th>
               <th>PAYE</th>
               <th>Umbrella</th>
@@ -112024,12 +112028,16 @@ function openRatePresetPicker(applyCb, opts = {}) {
       const scopeVal = () =>
         (radios.find(r => r.checked)?.value || (client_id ? 'CLIENT' : 'GLOBAL'));
 
-      const pill = (v) => (v == null || v === '' ? '-' : String(v));
+      const money = (v) => {
+        if (v == null || v === '') return '—';
+        const n = Number(v);
+        return Number.isFinite(n) ? n.toFixed(2) : String(v);
+      };
 
       const rateRow = (p) => [
-        `D:${pill(p.charge_day)} N:${pill(p.charge_night)} Sa:${pill(p.charge_sat)} Su:${pill(p.charge_sun)} BH:${pill(p.charge_bh)}`,
-        `D:${pill(p.umb_day)   } N:${pill(p.umb_night)   } Sa:${pill(p.umb_sat)   } Su:${pill(p.umb_sun)   } BH:${pill(p.umb_bh)   }`,
-        `D:${pill(p.paye_day)  } N:${pill(p.paye_night)  } Sa:${pill(p.paye_sat)  } Su:${pill(p.paye_sun)  } BH:${pill(p.paye_bh)  }`
+        `D: ${money(p.charge_day)} · N: ${money(p.charge_night)} · Sa: ${money(p.charge_sat)} · Su: ${money(p.charge_sun)} · BH: ${money(p.charge_bh)}`,
+        `D: ${money(p.umb_day)} · N: ${money(p.umb_night)} · Sa: ${money(p.umb_sat)} · Su: ${money(p.umb_sun)} · BH: ${money(p.umb_bh)}`,
+        `D: ${money(p.paye_day)} · N: ${money(p.paye_night)} · Sa: ${money(p.paye_sat)} · Su: ${money(p.paye_sun)} · BH: ${money(p.paye_bh)}`
       ];
 
       const updateApplyState = () => {
@@ -112063,36 +112071,39 @@ function openRatePresetPicker(applyCb, opts = {}) {
           const isActive = (i === activeIndex);
           const cls = isActive ? ' class="active selected"' : '';
 
-          const mileagePay = pill(r.mileage_pay_rate);
-          const mileageCharge = pill(r.mileage_charge_rate);
+          const mileagePay = money(r.mileage_pay_rate);
+          const mileageCharge = money(r.mileage_charge_rate);
           const mileageTxt =
-            (mileagePay === '-' && mileageCharge === '-') ? '-' : `Pay ${mileagePay} / Charge ${mileageCharge}`;
+            (mileagePay === '—' && mileageCharge === '—') ? '—' : `Pay ${mileagePay} · Charge ${mileageCharge}`;
 
           return `
             <tr data-i="${i}"${cls}>
               <td></td>
-              <td>${name}</td>
-              <td>${scope}</td>
-              <td>${r.from_date || '-'} → ${r.to_date || '-'}</td>
-              <td>${chg}</td>
-              <td>${paye}</td>
-              <td>${umb}</td>
-              <td>${mileageTxt}</td>
+              <td>${enc(name)}</td>
+              <td>${enc(scope === 'CLIENT' ? 'Client' : 'Global')}</td>
+              <td>${enc(chg)}</td>
+              <td>${enc(paye)}</td>
+              <td>${enc(umb)}</td>
+              <td>${enc(mileageTxt)}</td>
             </tr>`;
         }).join('');
 
-        tbody.innerHTML =
-          body || '<tr><td colspan="8" class="mini" style="text-align:center">No presets found</td></tr>';
+        tbody.innerHTML = pickerLoadError
+          ? `<tr class="ctms-rate-preset-message"><td colspan="7"><div class="ctms-rate-preset-empty ctms-rate-preset-error"><strong>Rate presets could not be loaded</strong><span>Check the connection, then try again.</span><button type="button" class="btn btn-outline" data-rp-retry="1">Try again</button></div></td></tr>`
+          : (body || '<tr class="ctms-rate-preset-message"><td colspan="7"><div class="ctms-rate-preset-empty"><strong>No matching presets</strong><span>Change the scope or search, or create a preset from Settings.</span></div></td></tr>');
 
         updateApplyState();
       };
 
       const fetchRows = async () => {
+        const requestSequence = ++pickerRequestSequence;
         const scope = scopeVal();
         const qRaw = (search?.value || '').trim();
         const q = qRaw.toLowerCase();
         const cid = client_id ? String(client_id) : null;
 
+        let nextRows = [];
+        let nextLoadError = '';
         try {
           let rows = [];
 
@@ -112136,15 +112147,19 @@ function openRatePresetPicker(applyCb, opts = {}) {
           });
 
           // If you have sortPresetsForView, keep using it; otherwise rows as-is
-          pickerRows = (typeof sortPresetsForView === 'function')
+          nextRows = (typeof sortPresetsForView === 'function')
             ? sortPresetsForView(scope, rows)
             : rows;
-
-          L('fetchRows: got presets', { scope, q: qRaw, count: pickerRows.length });
+          L('fetchRows: got presets', { scope, q: qRaw, count: nextRows.length });
         } catch (e) {
           console.error('[PRESETS] fetchRows error', e);
-          pickerRows = [];
+          nextRows = [];
+          nextLoadError = 'load_failed';
         }
+
+        if (requestSequence !== pickerRequestSequence) return;
+        pickerRows = nextRows;
+        pickerLoadError = nextLoadError;
 
         // reset selection
         pickerSelectedIndex = -1;
@@ -112154,6 +112169,10 @@ function openRatePresetPicker(applyCb, opts = {}) {
 
       // Single-click: just select the row; don't repaint tbody
       tbody.addEventListener('click', (e) => {
+        if (e.target.closest('[data-rp-retry]')) {
+          fetchRows();
+          return;
+        }
         const tr = e.target.closest('tr[data-i]');
         if (!tr) return;
         const idx = +tr.getAttribute('data-i');
@@ -112192,32 +112211,16 @@ function openRatePresetPicker(applyCb, opts = {}) {
         e.stopPropagation();
       });
 
-      search?.addEventListener('input', fetchRows);
+      search?.addEventListener('input', () => {
+        clearTimeout(pickerSearchTimer);
+        pickerSearchTimer = setTimeout(fetchRows, 180);
+      });
       radios.forEach(r => r.addEventListener('change', fetchRows));
 
       await fetchRows();
-
-      try {
-        const fr = window.__getModalFrame?.();
-        if (fr && fr.kind === 'rate-presets-picker' && typeof setFrameMode === 'function') {
-          setFrameMode(fr, 'view');
-          fr._updateButtons && fr._updateButtons();
-        }
-      } catch {}
     },
-    { kind: 'rate-presets-picker', noParentGate: false }
+    { kind: 'rate-presets-picker', noParentGate: false, runAfterMount: true }
   );
-
-  setTimeout(() => {
-    const fr = window.__getModalFrame?.();
-    if (!fr || fr.kind !== 'rate-presets-picker') return;
-
-    if (typeof fr.onReturn === 'function' && !fr.__init__) {
-      fr.__init__ = true;
-      fr.onReturn(fr);
-    }
-    fr._onSave = onApply;
-  }, 0);
 }
 
 
@@ -112227,6 +112230,11 @@ function openRatePresetPicker(applyCb, opts = {}) {
 
 
 function openPresetRatesManager(){
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (value) => String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   // Shared state for the manager; child modals can request refresh via this handle
   window.__ratesPresets__ = window.__ratesPresets__ || {};
   const S = window.__ratesPresets__;
@@ -112236,7 +112244,15 @@ function openPresetRatesManager(){
   S.client_label = S.client_label || '';
   S.q         = S.q || '';
 
-  const renderTable = (rows) => {
+  const renderTable = (rows, loadError = '') => {
+    if (loadError) {
+      return `
+        <div class="ctms-rate-preset-empty ctms-rate-preset-error" role="alert">
+          <strong>Rate presets could not be loaded</strong>
+          <span>Check the connection, then try again.</span>
+          <button type="button" class="btn btn-outline" id="rp_retry">Try again</button>
+        </div>`;
+    }
     const hasRows = Array.isArray(rows) && rows.length;
     if (!hasRows) {
       if (S.scope === 'CLIENT') {
@@ -112250,7 +112266,17 @@ function openPresetRatesManager(){
 
     const fmtWhen = (iso) => {
       if (!iso) return '';
-      try { return (new Date(iso)).toLocaleString(); } catch { return iso; }
+      try {
+        return new Intl.DateTimeFormat('en-GB', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hourCycle: 'h23'
+        }).format(new Date(iso));
+      } catch { return iso; }
     };
     return `
       <table class="grid" id="ratesPresetsTable">
@@ -112267,18 +112293,18 @@ function openPresetRatesManager(){
         </thead>
         <tbody>
           ${rows.map(r => `
-            <tr data-id="${r.id}">
-              <td>${r.name || ''}</td>
-              <td>${(String(r.scope || (r.client_id ? 'CLIENT' : 'GLOBAL')).toUpperCase())}</td>
-              <td>${(r.client && r.client.name) ? r.client.name : (r.client_name || '')}</td>
-              <td>${r.role || ''}</td>
-              <td>${r.band ?? ''}</td>
-              <td class="mini">${fmtWhen(r.updated_at)}</td>
+            <tr data-id="${enc(r.id)}">
+              <td>${enc(r.name || '')}</td>
+              <td>${enc(String(r.scope || (r.client_id ? 'CLIENT' : 'GLOBAL')).toUpperCase() === 'CLIENT' ? 'Client' : 'Global')}</td>
+              <td>${enc((r.client && r.client.name) ? r.client.name : (r.client_name || ''))}</td>
+              <td>${enc(r.role || '')}</td>
+              <td>${enc(r.band ?? '')}</td>
+              <td class="mini">${enc(fmtWhen(r.updated_at))}</td>
               <td class="mini">
                 <button
                   type="button"
                   class="icon bin"
-                  data-del="${r.id}"
+                  data-del="${enc(r.id)}"
                   title="Delete"
                 >🗑</button>
               </td>
@@ -112289,17 +112315,17 @@ function openPresetRatesManager(){
     `;
   };
 
-  const buildBody = (rows=[]) => {
+  const buildBody = (rows = [], loadError = '') => {
     const scopeAll    = S.scope === 'ALL'    ? 'checked' : '';
     const scopeGlobal = S.scope === 'GLOBAL' ? 'checked' : '';
     const scopeClient = S.scope === 'CLIENT' ? 'checked' : '';
 
     const clientBadgeInner = S.client_label
-      ? `<span class="pill">${S.client_label}</span>`
+      ? `<span class="pill">${enc(S.client_label)}</span>`
       : `<span class="mini">No client selected</span>`;
 
     return `
-      <div class="tabc">
+      <div class="tabc" id="ratePresetManager">
         <div class="row">
           <label>Scope</label>
           <div class="controls">
@@ -112323,11 +112349,11 @@ function openPresetRatesManager(){
         <div class="row">
           <label>Search</label>
           <div class="controls">
-            <input class="input" type="text" id="rp_q" value="${S.q || ''}" placeholder="Filter by name, role, band…"/>
+            <input class="input" type="text" id="rp_q" value="${enc(S.q || '')}" placeholder="Filter by name, role, band…"/>
           </div>
         </div>
 
-        <div id="rp_table_wrap">${renderTable(rows)}</div>
+        <div id="rp_table_wrap">${renderTable(rows, loadError)}</div>
       </div>
     `;
   };
@@ -112369,9 +112395,16 @@ function openPresetRatesManager(){
     async () => true, // no save in parent
     false,
     async () => {
-      const rows = await fetchRows();
+      let rows = [];
+      let loadError = '';
+      try {
+        rows = await fetchRows();
+      } catch (error) {
+        console.error('[PRESETS] manager load failed', error);
+        loadError = 'load_failed';
+      }
       const mb = document.getElementById('modalBody');
-      if (mb) mb.innerHTML = buildBody(rows);
+      if (mb) mb.innerHTML = buildBody(rows, loadError);
 
       // Make sure header Delete stays hidden for this manager
       const delBtn = document.getElementById('btnDelete');
@@ -112409,34 +112442,60 @@ function openPresetRatesManager(){
 
       // Expose refresh to child modal
       S.refresh = async () => {
-        const newRows = await fetchRows();
+        let newRows = [];
+        let refreshError = '';
+        try {
+          newRows = await fetchRows();
+        } catch (error) {
+          console.error('[PRESETS] manager refresh failed', error);
+          refreshError = 'load_failed';
+        }
         const host = document.getElementById('rp_table_wrap');
         if (!host) return; // parent closed or not mounted
-        host.innerHTML = renderTable(newRows);
+        host.innerHTML = renderTable(newRows, refreshError);
         S.selectedId = null;
         wireTable();
+        wireRetry();
       };
+
+      function wireRetry(){
+        const retry = document.getElementById('rp_retry');
+        if (retry) retry.onclick = () => S.refresh();
+      }
 
       function wireTable(){
         const tbl = document.getElementById('ratesPresetsTable');
         if (!tbl) return;
 
-        tbl.addEventListener('click', (e) => {
+        tbl.addEventListener('click', async (e) => {
           const delEl = e.target.closest('button[data-del]');
           if (delEl) {
+            e.stopPropagation();
             const id = delEl.getAttribute('data-del');
             if (!id) return;
-            if (!confirm('Delete this preset?')) return;
-            (async () => {
-              try {
-                await deleteRatePreset(id);
-                if (S.selectedId === id) S.selectedId = null;
-                await S.refresh();
-              } catch (err) {
-                alert(err?.message || 'Delete failed');
-              }
-            })();
-            e.stopPropagation();
+            const result = await openUiConfirmModal({
+              title: 'Delete rate preset?',
+              message_html: '<div style="font-size:14px;font-weight:700;margin-bottom:6px;">Delete this rate preset?</div><div class="mini">This action cannot be undone.</div>',
+              confirm_label: 'Delete preset',
+              cancel_label: 'Keep preset',
+              confirm_class: 'btn btn-danger',
+              cancel_class: 'btn btn-outline',
+              kind: 'rate-preset-delete-confirm'
+            });
+            if (!result?.confirmed) return;
+            try {
+              await deleteRatePreset(id);
+              if (S.selectedId === id) S.selectedId = null;
+              await S.refresh();
+            } catch (err) {
+              await openUiConfirmModal({
+                title: 'Preset was not deleted',
+                message_html: `<div class="mini">${enc(err?.message || 'Delete failed')}</div>`,
+                confirm_label: 'Close',
+                hide_cancel: true,
+                kind: 'rate-preset-delete-failed'
+              });
+            }
             return;
           }
 
@@ -112469,7 +112528,7 @@ function openPresetRatesManager(){
             S.client_id = id;
             S.client_label = label;
             const badge = document.getElementById('rp_cli_badge');
-            if (badge) badge.innerHTML = `<span class="pill">${label}</span>`;
+            if (badge) badge.innerHTML = `<span class="pill">${enc(label)}</span>`;
             S.refresh();
           });
         };
@@ -112494,23 +112553,20 @@ function openPresetRatesManager(){
       }
 
       wireTable();
+      wireRetry();
       wireFilters();
     },
-    { kind:'rates-presets' }
+    { kind:'rates-presets', runAfterMount: true }
   );
-
-  // Kick the manager’s onReturn so it replaces the “Loading…” stub
-  setTimeout(() => {
-    const fr = window.__getModalFrame?.();
-    if (fr && fr.kind === 'rates-presets' && typeof fr.onReturn === 'function' && !fr.__init__) {
-      fr.__init__ = true;
-      fr.onReturn();
-    }
-  }, 0);
 }
 
 
 async function openRatePresetModal({ id, mode } = {}) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (value) => String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   const isCreate = !id;
   let initialMode = mode || (isCreate ? 'edit' : 'view');
   initialMode = String(initialMode || '').toLowerCase();
@@ -112609,7 +112665,11 @@ async function openRatePresetModal({ id, mode } = {}) {
         st.payMode = 'PAYE';
       }
 
-      const put = (k, v) => { if (v === 0 || (v != null && v !== '')) st[k] = String(v); };
+      const put = (k, v) => {
+        if (!(v === 0 || (v != null && v !== ''))) return;
+        const n = Number(v);
+        st[k] = Number.isFinite(n) ? n.toFixed(2) : String(v);
+      };
       const R = row || {};
 
       put('paye_day', R.paye_day);
@@ -112646,7 +112706,13 @@ async function openRatePresetModal({ id, mode } = {}) {
         });
       }
     } catch (e) {
-      alert(e?.message || 'Failed to load preset');
+      await openUiConfirmModal({
+        title: 'Rate preset could not be opened',
+        message_html: `<div class="mini">${enc(e?.message || 'Failed to load preset')}</div>`,
+        confirm_label: 'Close',
+        hide_cancel: true,
+        kind: 'rate-preset-load-failed'
+      });
       return;
     }
   }
@@ -112775,6 +112841,8 @@ async function openRatePresetModal({ id, mode } = {}) {
     return result;
   }
 
+  const presetField = (value) => enc(value == null ? '' : String(value));
+
   const renderGrid = () => {
     const tempState = {
       enable_paye: ['PAYE', 'BOTH'].includes(st.payMode),
@@ -112799,15 +112867,15 @@ async function openRatePresetModal({ id, mode } = {}) {
 
       return `
         <div class="grid-5 rp-rate-row" data-bucket="${key}">
-          <div class="split"><span class="lbl">${lab}</span></div>
+          <div class="split"><span class="lbl">${presetField(lab)}</span></div>
           <div class="rp-col-paye">
-            <input class="input" name="paye_${key}" placeholder="PAYE" value="${st[`paye_${key}`] || ''}"/>
+            <input class="input" name="paye_${key}" placeholder="PAYE" value="${presetField(st[`paye_${key}`])}"/>
           </div>
           <div class="rp-col-umb">
-            <input class="input" name="umb_${key}" placeholder="Umbrella" value="${st[`umb_${key}`] || ''}"/>
+            <input class="input" name="umb_${key}" placeholder="Umbrella" value="${presetField(st[`umb_${key}`])}"/>
           </div>
           <div class="rp-col-charge">
-            <input class="input" name="charge_${key}" placeholder="Charge" value="${st[`charge_${key}`] || ''}"/>
+            <input class="input" name="charge_${key}" placeholder="Charge" value="${presetField(st[`charge_${key}`])}"/>
           </div>
           <div class="mini" data-role="margin">${mTxt || ''}</div>
         </div>`;
@@ -112837,8 +112905,8 @@ async function openRatePresetModal({ id, mode } = {}) {
   };
 
   const renderSchedule = () => {
-    const timeInput = (name, val) => `<input class="input rp-time" name="${name}" value="${val || ''}" placeholder="HH:MM" />`;
-    const breakInput = (name, val) => `<input class="input rp-break" type="number" min="0" step="1" name="${name}" value="${val || ''}" placeholder="0" />`;
+    const timeInput = (name, val) => `<input class="input rp-time" name="${name}" value="${presetField(val)}" placeholder="HH:MM" />`;
+    const breakInput = (name, val) => `<input class="input rp-break" type="number" min="0" step="1" name="${name}" value="${presetField(val)}" placeholder="0" />`;
     const row = (key, label) => `
       <div class="rp-day" data-day="${key}" style="margin-bottom:10px">
         <div class="grid-3">
@@ -112867,11 +112935,11 @@ async function openRatePresetModal({ id, mode } = {}) {
       <div class="row"><label>Bucket labels</label>
         <div class="controls small">
           <div class="grid-5" id="rp_labels_grid">
-            <div><span class="mini">Standard</span><input class="input" name="bucket_day"   value="${st.bucket_day}"/></div>
-            <div><span class="mini">OT1</span>     <input class="input" name="bucket_night" value="${st.bucket_night}"/></div>
-            <div><span class="mini">OT2</span>     <input class="input" name="bucket_sat"   value="${st.bucket_sat}"/></div>
-            <div><span class="mini">OT3</span>     <input class="input" name="bucket_sun"   value="${st.bucket_sun}"/></div>
-            <div><span class="mini">OT4</span>     <input class="input" name="bucket_bh"    value="${st.bucket_bh}"/></div>
+            <div><span class="mini">Standard</span><input class="input" name="bucket_day"   value="${presetField(st.bucket_day)}"/></div>
+            <div><span class="mini">OT1</span>     <input class="input" name="bucket_night" value="${presetField(st.bucket_night)}"/></div>
+            <div><span class="mini">OT2</span>     <input class="input" name="bucket_sat"   value="${presetField(st.bucket_sat)}"/></div>
+            <div><span class="mini">OT3</span>     <input class="input" name="bucket_sun"   value="${presetField(st.bucket_sun)}"/></div>
+            <div><span class="mini">OT4</span>     <input class="input" name="bucket_bh"    value="${presetField(st.bucket_bh)}"/></div>
           </div>
           <div style="margin-top:8px">
             <span class="mini">Pay mode</span>
@@ -112889,7 +112957,7 @@ async function openRatePresetModal({ id, mode } = {}) {
     <div class="group">
       <div class="row">
         <label>Name</label>
-        <div class="controls"><input class="input" name="name" value="${st.name}"/></div>
+        <div class="controls"><input class="input" name="name" value="${presetField(st.name)}"/></div>
       </div>
 
       <div class="row">
@@ -112909,15 +112977,15 @@ async function openRatePresetModal({ id, mode } = {}) {
           <div class="split">
             <button type="button" class="btn mini" id="rp_pick_cli_btn">Pick…</button>
             <button type="button" class="btn mini" id="rp_clear_cli_btn">Clear</button>
-            <span class="mini" id="rp_cli_lbl">${st.client_label ? `Chosen: ${st.client_label}` : 'No client chosen'}</span>
+            <span class="mini" id="rp_cli_lbl">${st.client_label ? presetField(st.client_label) : 'No client selected'}</span>
           </div>
         </div>
       </div>
 
       <div class="grid-3">
-        <div class="row"><label>Role</label><div class="controls"><input class="input" name="role" value="${st.role}"/></div></div>
-        <div class="row"><label>Band</label><div class="controls"><input class="input" name="band" value="${st.band}"/></div></div>
-        <div class="row"><label>Display site</label><div class="controls"><input class="input" name="display_site" value="${st.display_site}"/></div></div>
+        <div class="row"><label>Role</label><div class="controls"><input class="input" name="role" value="${presetField(st.role)}"/></div></div>
+        <div class="row"><label>Band</label><div class="controls"><input class="input" name="band" value="${presetField(st.band)}"/></div></div>
+        <div class="row"><label>Display site</label><div class="controls"><input class="input" name="display_site" value="${presetField(st.display_site)}"/></div></div>
       </div>
     </div>`;
 
@@ -112926,8 +112994,8 @@ async function openRatePresetModal({ id, mode } = {}) {
       <div class="row"><label>Mileage</label>
         <div class="controls">
           <div class="grid-3">
-            <div class="split"><span class="mini">Pay</span>   <input class="input" name="mileage_pay_rate"    value="${st.mileage_pay_rate || ''}" placeholder="0.00"/></div>
-            <div class="split"><span class="mini">Charge</span><input class="input" name="mileage_charge_rate" value="${st.mileage_charge_rate || ''}" placeholder="0.00"/></div>
+            <div class="split"><span class="mini">Pay</span>   <input class="input" name="mileage_pay_rate"    value="${presetField(st.mileage_pay_rate)}" placeholder="0.00"/></div>
+            <div class="split"><span class="mini">Charge</span><input class="input" name="mileage_charge_rate" value="${presetField(st.mileage_charge_rate)}" placeholder="0.00"/></div>
           </div>
         </div>
       </div>
@@ -113053,6 +113121,7 @@ async function openRatePresetModal({ id, mode } = {}) {
     if (mileage_charge != null) payload.mileage_charge_rate = mileage_charge;
 
     const use_schedule = !!document.getElementById('rp_use_schedule')?.checked;
+    payload.std_schedule_json = null;
     if (use_schedule) {
       const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
       const S = {};
@@ -113116,7 +113185,7 @@ async function openRatePresetModal({ id, mode } = {}) {
               const pay = Math.max(0, ch - 0.10);
               const payEl = root.querySelector('[name="mileage_pay_rate"]');
               const chEl = root.querySelector('[name="mileage_charge_rate"]');
-              if (chEl && !chEl.value) { chEl.value = String(ch); st.mileage_charge_rate = String(ch); }
+              if (chEl && !chEl.value) { chEl.value = ch.toFixed(2); st.mileage_charge_rate = chEl.value; }
               if (payEl && !payEl.value) { payEl.value = pay.toFixed(2); st.mileage_pay_rate = payEl.value; }
             }
           } catch {}
@@ -113241,7 +113310,7 @@ async function openRatePresetModal({ id, mode } = {}) {
           if (!isInit && prevScope === 'CLIENT') {
             st.client_id = null;
             st.client_label = '';
-            if (cliLbl) cliLbl.textContent = 'No client chosen';
+            if (cliLbl) cliLbl.textContent = 'No client selected';
           }
         }
         updatePresetSaveState();
@@ -113257,7 +113326,7 @@ async function openRatePresetModal({ id, mode } = {}) {
           openClientPicker(({ id, label }) => {
             st.client_id = id;
             st.client_label = label || '';
-            if (cliLbl) cliLbl.textContent = label ? `Chosen: ${label}` : 'No client chosen';
+            if (cliLbl) cliLbl.textContent = label || 'No client selected';
             ensureMileagePrefill();
             updatePresetSaveState();
           }, { allowBackdropModal: true });
@@ -113268,7 +113337,7 @@ async function openRatePresetModal({ id, mode } = {}) {
         btnClr.onclick = () => {
           st.client_id = null;
           st.client_label = '';
-          if (cliLbl) cliLbl.textContent = 'No client chosen';
+          if (cliLbl) cliLbl.textContent = 'No client selected';
           updatePresetSaveState();
         };
       }
@@ -113347,12 +113416,7 @@ async function openRatePresetModal({ id, mode } = {}) {
         let v = (el.value || '').trim();
         if (!v) return;
         if (v.startsWith('.')) v = '0' + v;
-        let numVal;
-        if (v.includes('.')) {
-          numVal = Number(v);
-        } else {
-          numVal = Number(v) / 100;
-        }
+        const numVal = Number(v);
         if (!Number.isFinite(numVal)) return;
         el.value = numVal.toFixed(2);
       };
@@ -113493,17 +113557,10 @@ async function openRatePresetModal({ id, mode } = {}) {
     {
       kind: 'rate-preset',
       noParentGate: true,
-      forceEdit: initialMode === 'edit'
+      forceEdit: initialMode === 'edit',
+      runAfterMount: true
     }
   );
-
-  setTimeout(() => {
-    const fr = window.__getModalFrame?.();
-    if (fr && fr.kind === 'rate-preset' && typeof fr.onReturn === 'function' && !fr.__init__) {
-      fr.__init__ = true;
-      fr.onReturn();
-    }
-  }, 0);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // Rates Presets — API wrappers
@@ -113516,7 +113573,11 @@ async function listRatePresets({ scope, client_id, q } = {}) {
   if (q) qs.set('q', String(q));
   const url = API(`/api/rates/presets${qs.toString() ? `?${qs.toString()}` : ''}`);
   const r = await authFetch(url);
-  const j = await r.json().catch(()=>({ rows: [] }));
+  if (!r.ok) {
+    const message = await r.text().catch(() => 'Rate presets could not be loaded');
+    throw new Error(message || 'Rate presets could not be loaded');
+  }
+  const j = await r.json().catch(() => ({ rows: [] }));
   // Return array of full rows (endpoint returns extended shape)
   const rows =
     (Array.isArray(j) ? j :
@@ -324173,6 +324234,7 @@ const frame = {
   kind:         opts.kind || null,
   stayOpenOnSave: !!opts.stayOpenOnSave,
   _runOnRender: !!opts.runOnRender,
+  _runAfterMount: !!opts.runAfterMount,
   _terminalBulkProcessHandoff: !!isTerminalBulkProcessHandoffModal,
   _suppressParentPersist: !!suppressParentPersistForModal,
   _suppressParentResume: !!suppressParentResumeForModal,
@@ -329346,6 +329408,18 @@ _tabPromise.then(async () => {
   if (!topNow || topNow !== top) { GE(); return; }
   if (top._renderToken !== _renderToken) { GE(); return; }
 
+  // Opt-in utility modal hook: asynchronous loaders must run after setTab has
+  // completed, otherwise the shared mount cycle can replace their live DOM.
+  // Existing modal timing remains unchanged unless runAfterMount is requested.
+  if (top._runAfterMount && typeof top.onReturn === 'function') {
+    try {
+      await Promise.resolve(top.onReturn());
+    } catch (e) {
+      console.warn('[MODAL][renderTop] post-mount onReturn failed', e);
+    }
+    if (currentFrame() !== top || top._renderToken !== _renderToken) { GE(); return; }
+  }
+
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
   if (modalNode) {
     const parentIsContracts =
@@ -333075,7 +333149,25 @@ if (ownsPrimaryRecordWorkflow && top.entity === 'contracts') {
 }
 
   else {
-        let ok=false; try{ top._confirmingDiscard=true; btnClose.disabled=true; ok=window.confirm('Discard changes and return to view?'); } finally { top._confirmingDiscard=false; btnClose.disabled=false; }
+        let ok = false;
+        try {
+          top._confirmingDiscard = true;
+          const result = await openUiConfirmModal({
+            title: 'Discard changes?',
+            message_html: `
+              <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Discard changes and return to view?</div>
+              <div class="mini" style="white-space:pre-wrap;">Your unsaved edits will be lost.</div>
+            `,
+            confirm_label: 'Discard',
+            cancel_label: 'Keep editing',
+            confirm_class: 'btn btn-warn',
+            cancel_class: 'btn btn-outline',
+            kind: 'edit-record-discard-confirm'
+          });
+          ok = !!(result && result.confirmed);
+        } finally {
+          top._confirmingDiscard = false;
+        }
         if (!ok) return;
      if (top._snapshot && window.modalCtx) {
   window.modalCtx.data                = deep(top._snapshot.data);
