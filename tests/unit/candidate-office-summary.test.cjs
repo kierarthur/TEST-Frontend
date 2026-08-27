@@ -52,12 +52,13 @@ test('Summary renders only the complete user-approved Candidate Submission catal
     [projection('REJECTED', 'wrong', 'success'), 'Rejected by Agency'],
     [projection('CANCELLED', 'wrong', 'success'), 'Candidate Submission Cancelled'],
     [projection('FINALISED', 'wrong', 'danger', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
-    [projection('FUTURE_UNKNOWN_STATE', 'wrong', 'success'), 'Status unavailable']
+    [projection('FUTURE_UNKNOWN_STATE', 'wrong', 'success'), '']
   ];
   const rendered = cases.map(([input, expected]) => {
     const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input);
     const html = window.CloudTMSCandidateOfficeSurface.renderCandidateSummaryCell(view);
-    assert.match(html, new RegExp(`>${expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<`));
+    if (expected) assert.match(html, new RegExp(`>${expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<`));
+    else assert.equal(html, '');
     assert.doesNotMatch(html, /<button/i);
     return html;
   }).join('');
@@ -102,7 +103,7 @@ test('all Office surfaces leave Manual non-QR and import-authoritative records b
   }
 });
 
-test('unknown server status fails closed instead of inventing a lifecycle label', () => {
+test('unknown server status fails closed as a blank Summary cell instead of showing technical text', () => {
   const window = load(
     'candidate-office-ui-policy-v1.js',
     'candidate-office-presenter-v1.js',
@@ -113,7 +114,7 @@ test('unknown server status fails closed instead of inventing a lifecycle label'
   );
   const html = window.CloudTMSCandidateOfficeSurface.renderCandidateSummaryCell(view);
 
-  assert.match(html, /Status unavailable/);
+  assert.equal(html, '');
   assert.doesNotMatch(html, /Server supplied text/);
   assert.doesNotMatch(html, /candidate-office-badge--success/);
 });
@@ -173,7 +174,7 @@ test('all four Office surfaces render the complete raw-state matrix through the 
     [projection('AUTHORISED', 'Authorised', 'success', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
     [projection('INVOICED_NOT_PAID', 'Invoiced (Not paid)', 'warning', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
     [projection('PAID', 'Paid', 'success', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
-    [projection('FUTURE_UNKNOWN_STATE', 'raw unknown label', 'danger'), 'Status unavailable']
+    [projection('FUTURE_UNKNOWN_STATE', 'raw unknown label', 'danger'), '']
   ];
   const surfaces = ['TIMESHEET_SUMMARY', 'SIMPLE_TIMESHEET', 'BULK_PROCESS', 'BULK_AUTHORISE'];
   const forbidden = [
@@ -190,7 +191,8 @@ test('all four Office surfaces render the complete raw-state matrix through the 
         : window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(input, { surface });
       const variant = surface === 'SIMPLE_TIMESHEET' ? 'stage' : 'compact';
       const html = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, { surface, variant });
-      assert.match(html, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `${surface} must show ${expected}`);
+      if (expected) assert.match(html, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `${surface} must show ${expected}`);
+      else if (surface === 'TIMESHEET_SUMMARY' || surface === 'BULK_PROCESS' || surface === 'BULK_AUTHORISE') assert.equal(html, '');
       for (const raw of forbidden) assert.equal(html.includes(raw), false, `${surface} leaked raw status: ${raw}`);
     }
   }
@@ -290,4 +292,22 @@ test('Summary uses the settled existing warning style for authoritative unexpect
   assert.match(main, /unexpectedHours\.textContent = 'Unexpected hours - needs checking'/);
   assert.equal((main.match(/unexpectedHours\.textContent = 'Unexpected hours - needs checking'/g) || []).length, 3,
     'full render, patched rows and newly inserted rows must agree');
+});
+
+test('Summary Candidate refresh reuses one cursor heartbeat and patches only bounded loaded rows', () => {
+  const main = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
+  const start = main.indexOf('function ensureTimesheetSummaryTargetedRefreshManager()');
+  const end = main.indexOf('\nfunction renderSummary(rows)', start);
+  const manager = main.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.match(manager, /return \{ cursor: active\.cursor \}/);
+  assert.match(manager, /const loadedRows = active\.rows\.slice\(0,200\)/);
+  assert.match(manager, /\/api\/timesheets\/candidate-summary-patches/);
+  assert.match(manager, /if \(!requested\.length\)[\s\S]*active\.cursor = nextCursor/);
+  assert.doesNotMatch(manager, /\/api\/timesheets\/summary/);
+  assert.doesNotMatch(manager, /timesheet_summary_lightweight_totals_v1/);
+  const heartbeatStart = main.indexOf('const candidateSummaryWatch = window.__timesheetSummaryTargetedRefresh');
+  const heartbeat = main.slice(heartbeatStart, heartbeatStart + 850);
+  assert.match(heartbeat, /__candidate_timesheet_summary_cursor = Number\(candidateSummaryWatch\.cursor\)/);
+  assert.doesNotMatch(heartbeat, /timesheet_id|contract_week_id|identities/);
 });

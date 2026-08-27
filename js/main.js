@@ -314015,6 +314015,241 @@ function renderOutboxTable(content, rows) {
 
 
 
+function ensureTimesheetSummaryTargetedRefreshManager() {
+  if (window.__timesheetSummaryTargetedRefresh?.version === 1) {
+    return window.__timesheetSummaryTargetedRefresh;
+  }
+
+  const targetedFields = Object.freeze([
+    'route_type','route_display','route_family','sheet_scope',
+    'submission_mode','submission_mode_snapshot',
+    'processing_status','processing_status_display',
+    'total_hours','total_pay_ex_vat','margin_ex_vat',
+    'current_identity','backend_row_signature','row_signature','expected_row_signature',
+    'candidate_office_projection_loaded','candidate_office_projection_not_applicable',
+    'candidate_office_projection','candidate_office_projection_error'
+  ]);
+  const sortableFields = new Set([
+    'route_type','sheet_scope','submission_mode','processing_status','processing_status_display',
+    'total_hours','total_pay_ex_vat','margin_ex_vat','candidate_submission'
+  ]);
+  const normaliseText = (value) => String(value == null ? '' : value).trim();
+  const cursorValue = (value) => {
+    const numeric = Number(value);
+    return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : null;
+  };
+  const rowKey = (row) => {
+    const timesheetId = normaliseText(row?.timesheet_id);
+    if (timesheetId) return `timesheet:${timesheetId}`;
+    const contractWeekId = normaliseText(row?.contract_week_id);
+    return contractWeekId ? `contract_week:${contractWeekId}` : '';
+  };
+  const matchesChange = (row, change) => {
+    const timesheetId = normaliseText(row?.timesheet_id);
+    const contractWeekId = normaliseText(row?.contract_week_id);
+    const kind = normaliseText(change?.identity_kind).toUpperCase();
+    const identityId = normaliseText(change?.identity_id);
+    return !!(
+      (contractWeekId && contractWeekId === normaliseText(change?.contract_week_id)) ||
+      (contractWeekId && kind === 'CONTRACT_WEEK' && contractWeekId === identityId) ||
+      (timesheetId && timesheetId === normaliseText(change?.timesheet_id)) ||
+      (timesheetId && timesheetId === normaliseText(change?.current_timesheet_id)) ||
+      (timesheetId && kind === 'TIMESHEET' && timesheetId === identityId)
+    );
+  };
+  const candidateLabel = (row) => {
+    try {
+      if (row?.candidate_office_projection_not_applicable === true) return '';
+      const presenter = window.CloudTMSCandidateOfficePresenter;
+      const projection = row?.candidate_office_projection;
+      return projection && presenter?.presentCandidateOfficeSummary
+        ? normaliseText(presenter.presentCandidateOfficeSummary(projection)?.status?.label)
+        : '';
+    } catch { return ''; }
+  };
+  const sortValue = (row,key) => {
+    if (key === 'candidate_submission') return candidateLabel(row);
+    if (['total_hours','total_pay_ex_vat','margin_ex_vat'].includes(key)) {
+      const numeric = Number(row?.[key]);
+      return Number.isFinite(numeric) ? numeric : Number.NEGATIVE_INFINITY;
+    }
+    if (key === 'processing_status') return normaliseText(row?.processing_status_display || row?.processing_status);
+    return normaliseText(row?.[key]);
+  };
+  const matchesTargetedFilters = (row) => {
+    const filters = window.__listState?.timesheets?.filters;
+    if (!filters || typeof filters !== 'object') return true;
+    const pairs = [
+      ['route_type','route_type'],['sheet_scope','sheet_scope'],['submission_mode','submission_mode'],
+      ['processing_status','processing_status'],['processing_status_display','processing_status_display']
+    ];
+    for (const [filterKey,rowField] of pairs) {
+      const expected = normaliseText(filters[filterKey]);
+      if (!expected || expected.toUpperCase() === 'ALL') continue;
+      const actual = normaliseText(row?.[rowField]);
+      if (actual.toUpperCase() !== expected.toUpperCase()) return false;
+    }
+    return true;
+  };
+
+  const manager = {
+    version: 1,
+    active: null,
+    register(context) {
+      const cursor = cursorValue(context?.cursor);
+      if (!context || !Array.isArray(context.rows) || !context.body || !context.tbody || cursor === null) {
+        this.active = null;
+        return false;
+      }
+      this.active = { ...context,cursor,inFlight: false };
+      return true;
+    },
+    getHeartbeatWatch() {
+      const active = this.active;
+      if (!active || active.inFlight || currentSection !== 'timesheets') return null;
+      if (!active.body?.isConnected || !active.tbody?.isConnected || active.isCurrent?.() !== true) return null;
+      return { cursor: active.cursor };
+    },
+    async consumeHeartbeat(payload) {
+      const active = this.active;
+      if (!active || currentSection !== 'timesheets' || active.inFlight) return false;
+      if (!active.body?.isConnected || !active.tbody?.isConnected || active.isCurrent?.() !== true) return false;
+      const signal = payload?.candidate_timesheet_summary && typeof payload.candidate_timesheet_summary === 'object'
+        ? payload.candidate_timesheet_summary
+        : {
+            cursor: payload?.candidate_timesheet_summary_cursor,
+            changed_identities: payload?.candidate_timesheet_summary_changed_identities,
+            overflow: payload?.candidate_timesheet_summary_overflow
+          };
+      const nextCursor = cursorValue(signal?.cursor);
+      if (nextCursor === null || nextCursor <= active.cursor) return false;
+      const changes = Array.isArray(signal?.changed_identities) ? signal.changed_identities : [];
+      const overflow = signal?.overflow === true;
+      const loadedRows = active.rows.slice(0,200);
+      const requested = [];
+      for (const row of loadedRows) {
+        const matched = overflow ? [] : changes.filter((change) => matchesChange(row,change));
+        if (!overflow && !matched.length) continue;
+        const key = rowKey(row);
+        if (!key) continue;
+        const currentTimesheetId = normaliseText(matched.find((change) => normaliseText(change?.current_timesheet_id))?.current_timesheet_id);
+        requested.push({
+          row,
+          row_key: key,
+          timesheet_id: normaliseText(row?.timesheet_id) || null,
+          current_timesheet_id: currentTimesheetId || normaliseText(row?.timesheet_id) || null,
+          contract_week_id: normaliseText(row?.contract_week_id) || null
+        });
+      }
+      if (!requested.length) {
+        active.cursor = nextCursor;
+        if (window.__listState?.timesheets) window.__listState.timesheets.candidate_timesheet_summary_cursor = nextCursor;
+        return false;
+      }
+
+      active.inFlight = true;
+      const generation = active.commitId;
+      try {
+        const response = await authFetch(API('/api/timesheets/candidate-summary-patches'), {
+          method: 'POST',headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            identities: requested.map(({ row,row_key,timesheet_id,current_timesheet_id,contract_week_id }) => ({
+              row_key,timesheet_id,current_timesheet_id,contract_week_id
+            }))
+          })
+        });
+        const text = await response.text();
+        let result = null;
+        try { result = text ? JSON.parse(text) : null; } catch { result = null; }
+        if (!response.ok || !result || !Array.isArray(result.patches)) return false;
+        if (this.active !== active || active.commitId !== generation || active.isCurrent?.() !== true) return false;
+        const byCorrelation = new Map(result.patches.map((item) => [normaliseText(item?.correlation_key),item]));
+
+        await new Promise((resolve) => requestAnimationFrame(() => {
+          if (this.active !== active || active.commitId !== generation || active.isCurrent?.() !== true) {
+            resolve();
+            return;
+          }
+          for (const request of requested) {
+            const item = byCorrelation.get(request.row_key);
+            const tr = active.rowElements.get(request.row_key);
+            if (!tr) continue;
+            if (!item?.found || !item.patch) {
+              tr.remove();
+              const index = active.rows.indexOf(request.row);
+              if (index >= 0) active.rows.splice(index,1);
+              continue;
+            }
+            const patch = item.patch;
+            for (const field of targetedFields) request.row[field] = patch[field];
+            request.row.id = patch.timesheet_id || patch.contract_week_id || request.row.id;
+            request.row.timesheet_id = patch.timesheet_id || null;
+            request.row.contract_week_id = patch.contract_week_id || null;
+            tr.dataset.id = normaliseText(request.row.id);
+            tr.dataset.timesheetId = normaliseText(request.row.timesheet_id);
+            tr.dataset.contractWeekId = normaliseText(request.row.contract_week_id);
+            const nextRowKey = rowKey(request.row);
+            if (nextRowKey && nextRowKey !== request.row_key) {
+              active.rowElements.delete(request.row_key);
+              active.rowElements.set(nextRowKey,tr);
+              tr.dataset.candidateRefreshKey = nextRowKey;
+            }
+
+            for (const cell of tr.querySelectorAll('td[data-col-key]')) {
+              const key = normaliseText(cell.dataset.colKey);
+              if (key === 'candidate_submission') {
+                cell.replaceChildren();
+                window.CloudTMSCandidateOfficeBridge?.mountSummaryBadge?.(cell,request.row);
+              } else if (key === 'processing_status' || key === 'processing_status_display') {
+                cell.replaceChildren();
+                const label = normaliseText(request.row.processing_status_display || request.row.processing_status);
+                paintTimesheetProcessingStatusCell(cell,request.row,label);
+              } else if (['route_type','route_display','route_family','sheet_scope','submission_mode','total_hours'].includes(key)) {
+                cell.textContent = String(formatDisplayValue(key,request.row[key]) ?? '');
+              } else if (['total_pay_ex_vat','margin_ex_vat'].includes(key)) {
+                cell.textContent = formatSummaryMoneyValue(request.row[key]);
+              }
+            }
+            if (!matchesTargetedFilters(request.row)) {
+              tr.remove();
+              const index = active.rows.indexOf(request.row);
+              if (index >= 0) active.rows.splice(index,1);
+            }
+          }
+
+          const sort = window.__listState?.timesheets?.sort || {};
+          const sortKey = normaliseText(sort.key);
+          if (sortKey && sortableFields.has(sortKey)) {
+            const collator = new Intl.Collator('en-GB',{ sensitivity: 'base',numeric: true });
+            const direction = sort.dir === 'desc' ? -1 : 1;
+            active.rows.sort((left,right) => {
+              const a = sortValue(left,sortKey);
+              const b = sortValue(right,sortKey);
+              const compared = typeof a === 'number' && typeof b === 'number'
+                ? (a-b)
+                : collator.compare(String(a),String(b));
+              return compared * direction;
+            });
+            for (const row of active.rows) {
+              const element = Array.from(active.rowElements.values()).find((candidate) => candidate.__cloudtmsSummaryRow === row);
+              if (element?.isConnected) active.tbody.appendChild(element);
+            }
+          }
+          resolve();
+        }));
+
+        if (this.active !== active || active.commitId !== generation || active.isCurrent?.() !== true) return false;
+        active.cursor = nextCursor;
+        if (window.__listState?.timesheets) window.__listState.timesheets.candidate_timesheet_summary_cursor = nextCursor;
+        return true;
+      } catch { return false; }
+      finally { if (this.active === active) active.inFlight = false; }
+    }
+  };
+  window.__timesheetSummaryTargetedRefresh = manager;
+  return manager;
+}
+
 function renderSummary(rows){
   currentRows = rows;
   currentSelection = null;
@@ -317027,6 +317262,15 @@ const getSelectionUiState = () => {
     const tr = document.createElement('tr');
     tr.dataset.id = (r && r.id) ? String(r.id) : '';
     tr.dataset.section = currentSection;
+    if (currentSection === 'timesheets') {
+      tr.dataset.timesheetId = String(r?.timesheet_id || '');
+      tr.dataset.contractWeekId = String(r?.contract_week_id || '');
+      tr.dataset.candidateRefreshKey = String(
+        r?.timesheet_id ? `timesheet:${r.timesheet_id}`
+          : (r?.contract_week_id ? `contract_week:${r.contract_week_id}` : '')
+      );
+      tr.__cloudtmsSummaryRow = r;
+    }
 
     // ─────────────────────────────────────────────────────────────
     // ✅ UPDATED summary styling rules (Timesheets / Invoices)
@@ -317216,6 +317460,25 @@ const getSelectionUiState = () => {
 
     tb.appendChild(tr);
   });
+
+  if (currentSection === 'timesheets') {
+    const refreshManager = ensureTimesheetSummaryTargetedRefreshManager();
+    const rowElements = new Map();
+    for (const rowElement of tb.querySelectorAll('tr[data-candidate-refresh-key]')) {
+      const key = String(rowElement.dataset.candidateRefreshKey || '').trim();
+      if (key) rowElements.set(key,rowElement);
+    }
+    refreshManager.register({
+      rows: effectiveRows,
+      body: bodyWrap,
+      tbody: tb,
+      rowElements,
+      commitId: summaryRenderCommitId,
+      datasetKey: fp,
+      cursor: st.candidate_timesheet_summary_cursor,
+      isCurrent: () => !!getLiveSummaryRenderCommit()
+    });
+  }
 
   // ── Apply pending focus (from operations like pay-method change, change rates) ──
   try {
@@ -374957,6 +375220,11 @@ async function listTimesheetsSummary(filters = {}) {
   let json;
   try { json = text ? JSON.parse(text) : {}; } catch { json = {}; }
 
+  const candidateSummaryCursor = Number(json?.candidate_timesheet_summary_cursor);
+  if (Number.isSafeInteger(candidateSummaryCursor) && candidateSummaryCursor >= 0) {
+    st.candidate_timesheet_summary_cursor = candidateSummaryCursor;
+  }
+
   let rows  = Array.isArray(json.items) ? json.items : (Array.isArray(json.rows) ? json.rows : []);
 
   if (sortKeyRaw === 'candidate_submission') {
@@ -382541,6 +382809,14 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
                 }];
               }
             }
+            try {
+              const candidateSummaryWatch = window.__timesheetSummaryTargetedRefresh?.getHeartbeatWatch?.();
+              if (candidateSummaryWatch && Number.isSafeInteger(Number(candidateSummaryWatch.cursor))) {
+                payload.last_seen = isHeartbeatPlainObject(payload.last_seen) ? payload.last_seen : {};
+                payload.last_seen.__candidate_timesheet_summary_watch = true;
+                payload.last_seen.__candidate_timesheet_summary_cursor = Number(candidateSummaryWatch.cursor);
+              }
+            } catch {}
             const forceDetailRefresh = isExplicitBankingAlertDetailRefreshReason(reason) || (payloadHash && bankingDetailHashField('_bankingAlertSummaryDetailForceRefreshHash') === payloadHash);
             const detailRefreshPending = !!payloadHash && (isBankingAlertDetailPendingForHash(payloadHash) || forceDetailRefresh === true);
             const lastDetailRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
@@ -382788,10 +383064,14 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
 
           let bankingAlertStateChanged = applyBankingAlertSummaryFromPing();
           let bankingPayBatchStateChanged = false;
+          let candidateSummaryStateChanged = false;
           try {
             if (typeof consumeBankingPayBatchHeartbeatSignals === 'function') {
               bankingPayBatchStateChanged = await consumeBankingPayBatchHeartbeatSignals(json.watched_batch_signals);
             }
+          } catch {}
+          try {
+            candidateSummaryStateChanged = await window.__timesheetSummaryTargetedRefresh?.consumeHeartbeat?.(json) === true;
           } catch {}
           try {
             const lastDirectAlertFetchAtMs = Number(hb._lastBankingAlertDirectFetchAtMs || 0) || 0;
@@ -382895,7 +383175,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
             pruneWorkbenchSessionSeqs('');
           }
 
-          if ((!genericChanged || !genericChanged.length) && !bankingAlertStateChanged && !workbenchStateChanged && !bankingPayBatchStateChanged) {
+          if ((!genericChanged || !genericChanged.length) && !bankingAlertStateChanged && !workbenchStateChanged && !bankingPayBatchStateChanged && !candidateSummaryStateChanged) {
             if (hb._pendingPingReason) {
               const pendingReason = hb._pendingPingReason;
               hb._pendingPingReason = '';

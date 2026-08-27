@@ -4,7 +4,7 @@
   const statusClass = tone => `candidate-office-badge candidate-office-badge--${['success', 'danger', 'warning', 'info'].includes(tone) ? tone : 'neutral'}`;
   function renderCandidateSummaryCell(view) {
     if (!view || !view.status) return '';
-    if (view.status.unavailable) return `<span class="candidate-office-badge candidate-office-badge--neutral candidate-office-summary-status">Status unavailable</span>`;
+    if (view.status.unavailable) return '';
     return `<span class="${statusClass(view.status.tone)} candidate-office-summary-status" data-candidate-status-code="${escape(view.status.code)}">${escape(view.status.label)}</span>`;
   }
   const renderCandidateCompactBadges = renderCandidateSummaryCell;
@@ -94,7 +94,7 @@
   }
   function renderCandidateUnavailable(error, { variant = 'detail' } = {}) {
     const message = escape(error?.message || 'Refresh the current state.');
-    if (variant !== 'detail') return `<span class="candidate-office-inline-unavailable">Candidate status unavailable — ${message}</span>`;
+    if (variant !== 'detail') return '';
     return `<section class="candidate-office-card candidate-office-card--unavailable"><div><strong>Candidate status unavailable</strong><p>${message}</p></div></section>`;
   }
   function renderCandidateOfficeSlot({ surface, row, variant = surface === 'TIMESHEET_SUMMARY' ? 'compact' : 'detail' }) {
