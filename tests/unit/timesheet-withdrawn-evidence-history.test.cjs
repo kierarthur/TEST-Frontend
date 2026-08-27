@@ -38,6 +38,7 @@ test('withdrawn files expose only view and download actions with phone-safe wrap
 
 test('refresh stores history separately and hardens every item as read-only', () => {
   assert.match(refresh, /Array\.isArray\(json\.withdrawn_submissions\)/);
+  assert.doesNotMatch(refresh, /!usePlannedWeekEndpoint[^\n]*Array\.isArray\(json\.withdrawn_submissions\)/);
   assert.match(refresh, /out\.withdrawn_history = true/);
   assert.match(refresh, /out\.can_delete = false/);
   assert.match(refresh, /out\.can_reclassify = false/);

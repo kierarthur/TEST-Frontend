@@ -372973,7 +372973,7 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
           : (json && typeof json === 'object' && Array.isArray(json.items))
             ? json.items
             : [];
-    const withdrawnList = (!usePlannedWeekEndpoint && json && typeof json === 'object' && !Array.isArray(json) && Array.isArray(json.withdrawn_submissions))
+    const withdrawnList = (json && typeof json === 'object' && !Array.isArray(json) && Array.isArray(json.withdrawn_submissions))
       ? json.withdrawn_submissions
       : [];
 
