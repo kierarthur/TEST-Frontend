@@ -354822,6 +354822,16 @@ async function openTimesheetEvidenceViewerSignatures(ev) {
 
   const bodyHtml = `
     <div class="tabc">
+      <svg aria-hidden="true" focusable="false" width="0" height="0" style="position:absolute;overflow:hidden;">
+        <filter id="ctms-signature-ink-filter" color-interpolation-filters="sRGB">
+          <feColorMatrix type="matrix" values="
+            0 0 0 0 0.0902
+            0 0 0 0 0.2471
+            0 0 0 0 0.4588
+            -0.2126 -0.7152 -0.0722 1 0
+          "/>
+        </filter>
+      </svg>
       <div class="card">
         <div class="row">
           <label>Authorised at server</label>
@@ -354854,10 +354864,11 @@ async function openTimesheetEvidenceViewerSignatures(ev) {
           ${nurseUrl
   ? `
     <div class="ctms-evidence-signature-sheet">
-      <img
-        src="${nurseUrl}"
-        alt="Candidate signature"
-      />
+       <img
+         src="${nurseUrl}"
+         alt="Candidate signature"
+         class="ctms-evidence-signature-ink"
+       />
     </div>
   `
   : `<div class="mini" style="opacity:.85;">Not available</div>`}
@@ -354869,10 +354880,11 @@ async function openTimesheetEvidenceViewerSignatures(ev) {
             ${authUrl
   ? `
     <div class="ctms-evidence-signature-sheet">
-      <img
-        src="${authUrl}"
-        alt="Manager signature"
-      />
+       <img
+         src="${authUrl}"
+         alt="Manager signature"
+         class="ctms-evidence-signature-ink"
+       />
     </div>
   `
   : `<div class="mini" style="opacity:.85;">Not available</div>`}
@@ -357169,6 +357181,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
     </div>
   `;
 
+  let previewObjectUrl = null;
   let __tsDelPrev = null;
   const __hideTsDelete = () => {
     try {
@@ -357181,6 +357194,10 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   __hideTsDelete();
 
   const onDismiss = () => {
+    if (previewObjectUrl) {
+      try { URL.revokeObjectURL(previewObjectUrl); } catch {}
+      previewObjectUrl = null;
+    }
     try {
       const b = document.getElementById('btnTsDeleteTimesheet');
       if (b) b.style.display = (__tsDelPrev != null ? __tsDelPrev : '');
@@ -357302,6 +357319,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       onDismiss
     }
   );
+
 
   const viewerFrameToken = (() => {
     try {
@@ -357461,6 +357479,16 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   try {
     signedUrl = await signedUrlPromise;
 
+    const previewResponse = await fetch(signedUrl, {
+      method: 'GET',
+      credentials: 'omit',
+      cache: 'no-store'
+    });
+    if (!previewResponse.ok) throw new Error('EVIDENCE_PREVIEW_DOWNLOAD_FAILED');
+    const previewBlob = await previewResponse.blob();
+    if (!previewBlob.size) throw new Error('EVIDENCE_PREVIEW_EMPTY');
+    previewObjectUrl = URL.createObjectURL(previewBlob);
+
     const liveViewer = (() => {
       try {
         const st = Array.isArray(window.__modalStack) ? window.__modalStack : [];
@@ -357487,14 +357515,11 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       }
 
       if (iframe) {
-        iframe.addEventListener('load', () => {
-          if (status?.isConnected) status.style.display = 'none';
-        }, { once: true });
         iframe.style.display = 'block';
-        iframe.src = signedUrl;
+        iframe.src = previewObjectUrl;
       }
 
-      if (status) status.textContent = 'Loading preview…';
+      if (status) status.style.display = 'none';
     }
   } catch (err) {
     const status = document.getElementById(previewStatusId);

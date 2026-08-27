@@ -62,7 +62,9 @@ test('the ordinary evidence viewer opens its loading shell before awaiting the s
   assert.ok(showViewer > startPresign, 'the viewer must be constructed after starting the request');
   assert.ok(awaitPresign > showViewer, 'the signed URL must only be awaited after the child modal is visible');
   assert.match(viewerBlock, /Preparing preview…/);
-  assert.match(viewerBlock, /iframe\.src = signedUrl/);
+  assert.match(viewerBlock, /previewObjectUrl = URL\.createObjectURL\(previewBlob\)/);
+  assert.match(viewerBlock, /iframe\.src = previewObjectUrl/);
+  assert.match(viewerBlock, /URL\.revokeObjectURL\(previewObjectUrl\)/);
 });
 
 test('the Evidence table wraps long labels and provides responsive cell semantics', () => {
@@ -82,6 +84,17 @@ test('electronic signature evidence uses friendly labels without destructive ima
   assert.match(signatureBlock, /Manager signature/);
   assert.match(signatureBlock, /ctms-evidence-signature-sheet/);
   assert.doesNotMatch(signatureBlock, /filter:brightness\(0\)/);
+});
+
+test('electronic signature evidence does not add a white signature box', () => {
+  const candidateCss = fs.readFileSync(path.resolve(__dirname, '../../css/candidate-office-v1.css'), 'utf8');
+  assert.match(candidateCss, /\.ctms-evidence-signature-sheet\s*\{[^}]*background:transparent/);
+  assert.match(candidateCss, /\.ctms-evidence-signature-sheet\s*\{[^}]*border:0/);
+  assert.doesNotMatch(candidateCss, /\.ctms-evidence-signature-sheet\s*\{[^}]*background:#fff/);
+  assert.match(mainSource, /id="ctms-signature-ink-filter"/);
+  assert.match(mainSource, /0 0 0 0 0\.0902[\s\S]*0 0 0 0 0\.2471[\s\S]*0 0 0 0 0\.4588/);
+  assert.match(mainSource, /class="ctms-evidence-signature-ink"/);
+  assert.match(candidateCss, /img\.ctms-evidence-signature-ink\s*\{[^}]*filter:url\(#ctms-signature-ink-filter\)/);
 });
 
 test('returning from a child restores the parent anchor before its asynchronous render', () => {

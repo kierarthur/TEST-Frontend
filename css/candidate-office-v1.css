@@ -38,8 +38,9 @@
 .ctms-timesheet-evidence-table td { min-width:0; overflow-wrap:anywhere; }
 .ctms-timesheet-evidence-table .ctms-evidence-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; min-width:0; }
 .ctms-timesheet-evidence-table .ctms-evidence-actions .btn { margin:0 !important; max-width:100%; white-space:normal; }
-.ctms-evidence-signature-sheet { display:flex; align-items:center; justify-content:center; width:100%; min-height:150px; padding:12px; border:0; border-radius:8px; background:#fff; overflow:hidden; }
-.ctms-evidence-signature-sheet img { display:block; width:100%; max-width:100%; height:auto; max-height:240px; object-fit:contain; border:0 !important; background:transparent !important; filter:none !important; }
+.ctms-evidence-signature-sheet { display:flex; align-items:center; justify-content:center; width:100%; min-height:150px; padding:0; border:0; border-radius:0; background:transparent; overflow:hidden; }
+.ctms-evidence-signature-sheet img { display:block; width:100%; max-width:100%; height:auto; max-height:240px; object-fit:contain; border:0 !important; background:transparent !important; }
+.ctms-evidence-signature-sheet img.ctms-evidence-signature-ink { filter:url(#ctms-signature-ink-filter); }
 .candidate-office-slot { min-width: 0; }
 .candidate-office-card {
   color: var(--candidate-office-text);
