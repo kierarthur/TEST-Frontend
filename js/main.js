@@ -156303,7 +156303,12 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   const normDate = (seg) => String(seg?.date || seg?.date_ymd || seg?.work_date || '').trim();
 
   const normHHMM = (seg, keyHH, keyIso) => {
-    const s = String(seg?.[keyHH] || '').trim();
+    const s = String(
+      seg?.[keyHH] ||
+      seg?.[`${keyHH}_time`] ||
+      seg?.[`${keyHH}_local`] ||
+      ''
+    ).trim();
     if (s) return s;
     const iso = seg?.[keyIso] || null;
     return iso ? asLondonHHMM(iso) : '';
@@ -309343,7 +309348,12 @@ function renderTimesheetLinesTab(ctx) {
     };
 
     const normHHMM = (seg, keyHH, keyIso) => {
-      const s = String(seg?.[keyHH] || '').trim();
+      const s = String(
+        seg?.[keyHH] ||
+        seg?.[`${keyHH}_time`] ||
+        seg?.[`${keyHH}_local`] ||
+        ''
+      ).trim();
       if (s) return s;
       const iso = seg?.[keyIso] || null;
       return iso ? asLondonHHMM(iso) : '';
@@ -363915,7 +363925,12 @@ function renderWeeklyManualScheduleEditor(opts) {
     };
 
     const normHHMM = (seg, keyHH, keyIso) => {
-      const s = String(seg?.[keyHH] || '').trim();
+      const s = String(
+        seg?.[keyHH] ||
+        seg?.[`${keyHH}_time`] ||
+        seg?.[`${keyHH}_local`] ||
+        ''
+      ).trim();
       if (s) return s;
       const iso = seg?.[keyIso] || null;
       return iso ? asLondonHHMM(iso) : '';
