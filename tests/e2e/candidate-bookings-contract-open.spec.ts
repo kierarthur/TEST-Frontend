@@ -101,6 +101,7 @@ async function openBookingContract(page: Page, trigger: 'button' | 'row') {
   await expect(page.locator('#modalTitle')).toHaveText('View Contract', { timeout: 30_000 });
   await waitForLoading(page);
   await expect(page.locator('#contractForm')).toBeVisible();
+  await expect(page.locator('#btnEditModal')).toBeVisible();
   for (const selector of [
     '#contractForm input[name="candidate_id"]',
     '#contractForm input[name="client_id"]',

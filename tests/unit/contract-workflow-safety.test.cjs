@@ -31,6 +31,14 @@ test('Returning from a Contract child restores the parent tab titles', () => {
   assert.match(main, /btn\.textContent = tab\.label \|\| tab\.title \|\| tab\.key \|\| '';/);
 });
 
+test('Candidate Bookings opens Contract as an independently editable record modal', () => {
+  const openContract = section('function openContract(row, openOptions = {})', 'function formatCandidateLabel');
+  assert.match(openContract, /noParentGate: !!isSuccessorCreate \|\| openOptions\?\.noParentGate === true/);
+
+  const bookings = section('async function fetchAndRenderCandidateCalendar', 'function renderCandidateContractList');
+  assert.match(bookings, /openContract\(fresh, \{ noParentGate: true \}\)/);
+});
+
 test('Contract lifecycle protects very-high fields after start but locks rates only after worked timesheets exist', () => {
   const locks = section('function getContractLifecycleLocks', 'function markContractParentDirty');
   assert.match(locks, /veryHighLocked: hasProtectedHistory \|\| startedByDate/);

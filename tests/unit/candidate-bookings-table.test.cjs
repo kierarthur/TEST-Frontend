@@ -38,7 +38,7 @@ test('Candidate Bookings hydrates a fresh contract before either Open action lau
   assert.match(main, /onDblClick:\s*async\s*\(cid\)\s*=>/);
   assert.match(main, /const fresh = \(typeof getContract === 'function'\)[\s\S]*?await getContract\(contractId\)/);
   assert.match(main, /if \(!fresh\) throw new Error\('Contract details could not be loaded\.'\)/);
-  assert.match(main, /openContract\(fresh\)/);
+  assert.match(main, /openContract\(fresh, \{ noParentGate: true \}\)/);
   assert.doesNotMatch(main, /openContract\(\{ id: String\(cid\) \}\)/);
 });
 

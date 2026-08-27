@@ -295136,7 +295136,7 @@ async function callCheckContractWindowOverlap(candidate_id, start_date_iso, end_
   }
 }
 
-function openContract(row) {
+function openContract(row, openOptions = {}) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
 
   // ✅ Robust: support either shape:
@@ -297779,7 +297779,7 @@ if (chooseBtn && !chooseBtn.__wired) {
     {
       kind: 'contracts',
       extraButtons,
-      noParentGate: !!isSuccessorCreate,
+      noParentGate: !!isSuccessorCreate || openOptions?.noParentGate === true,
       stayOpenOnSave: !!isSuccessorCreate,
       _trace: (LOGC && {
         tag: 'contracts-open',
@@ -298226,7 +298226,7 @@ async function fetchAndRenderCandidateCalendar(candidateId, opts) {
             ? await getContract(contractId)
             : null;
           if (!fresh) throw new Error('Contract details could not be loaded.');
-          if (typeof openContract === 'function') openContract(fresh);
+          if (typeof openContract === 'function') openContract(fresh, { noParentGate: true });
         } catch (e) {
           console.warn('[CAL][candidate] contract hydration failed', e);
           const message = e?.message || 'Contract details could not be loaded.';
