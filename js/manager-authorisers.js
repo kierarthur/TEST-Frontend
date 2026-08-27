@@ -36,9 +36,26 @@
     const path=ctx.kind==='CLIENT'?`/api/clients/${encodeURIComponent(ctx.id)}/manager-authorisers`:`/api/contracts/${encodeURIComponent(ctx.id)}/manager-authorisers`;
     const data=await request(path); cache.set(key,data); return data;
   }
+  function withStagedContractPolicy(data,ctx){
+    if(ctx.kind!=='CONTRACT')return data;
+    const modal=window.modalCtx||{};
+    const staged=String(modal.entity||'')==='contracts'&&String(modal.data?.id||'')===String(ctx.id)
+      ? modal.__stagedManagerAuthoriserPolicy
+      : null;
+    if(!staged?.policy)return data;
+    const policy=staged.policy;
+    const contractCount=(policy.approved_emails?.length||0)+(policy.approved_domains?.length||0);
+    const clientCount=Number(data.client_approved_count||0);
+    const contractOnly=String(policy.mode||'INHERIT').toUpperCase()==='CONTRACT_ONLY';
+    return {...data,contract_policy:policy,contract_approved_count:contractCount,effective_approved_count:contractOnly?contractCount:clientCount+contractCount,effective_policy:{...(data.effective_policy||{}),approved_emails:contractOnly?[...(policy.approved_emails||[])]:[...(data.client_policy?.approved_emails||[]),...(policy.approved_emails||[])],approved_domains:contractOnly?[...(policy.approved_domains||[])]:[...(data.client_policy?.approved_domains||[]),...(policy.approved_domains||[])],source_mode:policy.mode}};
+  }
   function summaryHtml(data,ctx){
+    data=withStagedContractPolicy(data,ctx);
     const s=summaryCopy(data,ctx); const preview=[...s.counts.emails,...s.counts.domains.map((d)=>`@${normalDomain(d)}`)];
-    return `<div class="ma-summary__top"><div><h3>Timesheet authorisers</h3><p><strong>${esc(s.status)}</strong><br>${esc(s.detail)}</p></div><button type="button" class="btn btn-primary" data-ma-manage="${esc(ctx.kind)}" data-ma-id="${esc(ctx.id)}">Manage authorisers</button></div><div class="ma-chips">${preview.slice(0,3).map((x)=>`<span class="ma-chip">${esc(x)}</span>`).join('')}${preview.length>3?`<span class="ma-chip">+${preview.length-3} more</span>`:''}</div>`;
+    const frame=window.__getModalFrame?.();
+    const canManage=ctx.kind==='CLIENT'||(frame?.kind==='contracts'&&frame?.mode==='edit');
+    const staged=ctx.kind==='CONTRACT'&&!!window.modalCtx?.__stagedManagerAuthoriserPolicy;
+    return `<div class="ma-summary__top"><div><h3>Timesheet authorisers${staged?' <span class="ma-chip">Prepared</span>':''}</h3><p><strong>${esc(s.status)}</strong><br>${esc(s.detail)}</p></div>${canManage?`<button type="button" class="btn btn-primary" data-ma-manage="${esc(ctx.kind)}" data-ma-id="${esc(ctx.id)}">Manage authorisers</button>`:''}</div><div class="ma-chips">${preview.slice(0,3).map((x)=>`<span class="ma-chip">${esc(x)}</span>`).join('')}${preview.length>3?`<span class="ma-chip">+${preview.length-3} more</span>`:''}</div>${ctx.kind==='CONTRACT'&&!canManage?'<p class="mini">Click Edit to change Contract authorisers.</p>':''}`;
   }
   async function inject(root,ctx,location){
     if(!root||root.querySelector(`.ma-summary[data-ma-location="${location}"]`))return;
@@ -54,7 +71,6 @@
     const ctx=contextFromDom(); if(!ctx)return;
     const clientRoot=document.getElementById('clientSettingsForm'); if(ctx.kind==='CLIENT'&&clientRoot)await inject(clientRoot,ctx,'client-settings');
     const contractRoot=document.getElementById('contractForm'); if(ctx.kind==='CONTRACT'&&contractRoot)await inject(contractRoot,ctx,'contract-main');
-    const contractSettings=document.getElementById('contractSettingsForm'); if(ctx.kind==='CONTRACT'&&contractSettings)await inject(contractSettings,ctx,'contract-settings');
   }
   function makeState(data,ctx){
     if(ctx.kind==='CLIENT')return {emails:[...(data.policy?.approved_emails||[])],domains:[...(data.policy?.approved_domains||[])],restricted:data.policy?.allow_free_business_email!==true,contractOnly:false,mode:'CLIENT',version:data.settings_updated_at,dirty:false,error:''};
@@ -90,7 +106,10 @@
     return `<section class="ma-section"><div class="ma-section__heading"><div><h3>${esc(title)}</h3><p>${type==='domain'?'Candidates type only the part before the selected @domain.':'Candidates can choose any exact approved address.'}</p></div></div><div class="ma-entry-list">${items.length?items.map((value,index)=>`<div class="ma-entry"><input class="input" aria-label="${esc(title)} ${index+1}" data-ma-entry="${type}" data-ma-index="${index}" value="${esc(type==='domain'?`@${normalDomain(value)}`:normalEmail(value))}"><button type="button" class="btn btn-outline" data-ma-remove="${type}" data-ma-index="${index}" aria-label="Remove ${esc(value)}">Remove</button></div>`).join(''):`<div class="ma-empty">No ${type==='domain'?'domains':'email addresses'} added yet.</div>`}</div><div class="ma-add"><input class="input" data-ma-new="${type}" placeholder="${type==='domain'?'@berkshire.nhs.uk':'manager@organisation.nhs.uk'}" aria-label="${esc(addLabel)}"><button type="button" class="btn btn-outline" data-ma-add="${type}">${esc(addLabel)}</button></div></section>`;
   }
   async function openManager(ctx){
-    const data=await load(ctx,true); const state=makeState(data,ctx); const rootId=`ma_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const parentContractCtx=ctx.kind==='CONTRACT'?window.modalCtx:null;
+    const parentFrame=ctx.kind==='CONTRACT'?window.__getModalFrame?.():null;
+    if(ctx.kind==='CONTRACT'&&(!parentFrame||parentFrame.kind!=='contracts'||parentFrame.mode!=='edit')){window.__toast?.('Click Edit before changing Contract authorisers');return;}
+    const loaded=await load(ctx,true); const data=withStagedContractPolicy(loaded,ctx); const state=makeState(data,ctx); const rootId=`ma_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     let frame=null; let root=null; let allowClose=false;
     const currentRoot=()=>document.getElementById(rootId);
     const render=()=>{const liveRoot=currentRoot();if(liveRoot){root=liveRoot;renderManager(liveRoot,state,data,ctx);}};
@@ -112,12 +131,13 @@
       if(button.dataset.maAdd){const type=button.dataset.maAdd;const input=root.querySelector(`[data-ma-new="${type}"]`);const value=type==='email'?normalEmail(input?.value):normalDomain(input?.value);if(!value)return;if((type==='email'&&!emailRe.test(value))||(type==='domain'&&!domainRe.test(value))){state.error=type==='email'?'Enter a valid business email address.':'Enter a valid domain, such as @berkshire.nhs.uk.';render();return;}const list=state[type==='email'?'emails':'domains'];if(list.map(type==='email'?normalEmail:normalDomain).includes(value)){state.error=type==='email'?'This address is already approved.':'This domain is already approved.';render();return;}const inherited=type==='email'?state.clientEmails:state.clientDomains;if(ctx.kind==='CONTRACT'&&!state.contractOnly&&inherited.includes(value)){state.error=type==='email'?'This address is already approved in Client settings.':'This domain is already approved in Client settings.';render();return;}list.push(value);state.dirty=true;state.error='';syncDirty();render();return;}
       if(button.dataset.maRemove){const type=button.dataset.maRemove;const index=Number(button.dataset.maIndex);const list=state[type==='email'?'emails':'domains'];const value=list[index];if(typeof openUiConfirmModal!=='function'){state.error='Confirmation is temporarily unavailable. Nothing was removed.';render();return;}const answer=await openUiConfirmModal({title:'Remove approved authoriser?',message:`Remove ${type==='domain'?'@':''}${normalDomain(value)} from the approved list?`,confirm_label:'Remove',confirm_class:'btn btn-warn',kind:'manager-authorisers-remove'});if(answer?.confirmed){list.splice(index,1);state.dirty=true;state.error='';render();}return;}
       if(button.dataset.maAction==='cancel'){await confirmClose();return;}
-      if(button.dataset.maAction==='save'){state.error=validate(state,ctx);if(state.error){render();return;}button.disabled=true;try{const policy=ctx.kind==='CLIENT'?{approved_emails:state.emails,approved_domains:state.domains,allow_free_business_email:!state.restricted}:{mode:state.contractOnly?'CONTRACT_ONLY':(state.emails.length||state.domains.length?'EXTEND':'INHERIT'),approved_emails:state.emails,approved_domains:state.domains};const payload=ctx.kind==='CLIENT'?{expected_settings_updated_at:state.version,policy,request_key:`manager-authorisers:${crypto.randomUUID()}`}:{expected_contract_updated_at:state.version,policy,request_key:`manager-authorisers:${crypto.randomUUID()}`};const path=ctx.kind==='CLIENT'?`/api/clients/${encodeURIComponent(ctx.id)}/manager-authorisers`:`/api/contracts/${encodeURIComponent(ctx.id)}/manager-authorisers`;const saved=await request(path,'PUT',payload);cache.set(keyOf(ctx),saved);state.dirty=false;syncDirty();allowClose=true;document.getElementById('btnCloseModal')?.click();setTimeout(()=>refreshParent(ctx),0);window.__toast?.('Timesheet authorisers saved');}catch(error){state.error=error.message||'The authoriser settings were not changed.';render();}}
+      if(button.dataset.maAction==='save'){state.error=validate(state,ctx);if(state.error){render();return;}button.disabled=true;try{const policy=ctx.kind==='CLIENT'?{approved_emails:state.emails,approved_domains:state.domains,allow_free_business_email:!state.restricted}:{mode:state.contractOnly?'CONTRACT_ONLY':(state.emails.length||state.domains.length?'EXTEND':'INHERIT'),approved_emails:state.emails,approved_domains:state.domains};if(ctx.kind==='CONTRACT'){parentContractCtx.__stagedManagerAuthoriserPolicy={policy,expected_contract_updated_at:state.version,request_key:`manager-authorisers:${crypto.randomUUID()}`};parentContractCtx.__nonCalendarDirty=true;parentContractCtx.__calendarOnly=false;if(parentFrame){parentFrame.isDirty=true;parentFrame._updateButtons?.();}state.dirty=false;syncDirty();allowClose=true;document.getElementById('btnCloseModal')?.click();setTimeout(()=>refreshParent(ctx),0);window.__toast?.('Authoriser changes prepared. Save the Contract to apply.');return;}const payload={expected_settings_updated_at:state.version,policy,request_key:`manager-authorisers:${crypto.randomUUID()}`};const path=`/api/clients/${encodeURIComponent(ctx.id)}/manager-authorisers`;const saved=await request(path,'PUT',payload);cache.set(keyOf(ctx),saved);state.dirty=false;syncDirty();allowClose=true;document.getElementById('btnCloseModal')?.click();setTimeout(()=>refreshParent(ctx),0);window.__toast?.('Timesheet authorisers saved');}catch(error){state.error=error.message||'The authoriser settings were not changed.';render();}}
     };
     document.addEventListener('input',onInput,true);document.addEventListener('change',onChange,true);document.addEventListener('click',onClick,true);
   }
   document.addEventListener('click',(event)=>{const manage=event.target?.closest?.('[data-ma-manage]');if(manage){const ctx=contextFromDom();if(ctx)void openManager(ctx).catch((error)=>window.__toast?.(error.message));return;}if(event.target?.closest?.('[data-ma-retry]')){const ctx=contextFromDom();if(ctx){cache.delete(keyOf(ctx));refreshParent(ctx);}}},true);
   const observer=new MutationObserver(()=>void scan()); observer.observe(document.documentElement,{childList:true,subtree:true});
   window.openManagerAuthorisers=openManager;
+  window.__invalidateManagerAuthorisers=(kind,id)=>{cache.delete(`${String(kind||'').toUpperCase()}:${String(id||'')}`);};
   void scan();
 })();

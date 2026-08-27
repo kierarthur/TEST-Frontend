@@ -29,7 +29,8 @@ test('contract Calendar uses the modal body as its vertical scroll owner', () =>
   assert.match(renderer, /<div class="tabc contract-calendar-shell">/);
   assert.match(renderer, /id="__calScroll"[^>]*overflow-x:auto;overflow-y:hidden/);
   assert.doesNotMatch(renderer, /height:calc\(72vh\);max-height:calc\(72vh\)/);
-  assert.match(renderer, /class="record-inline-actions" style="margin-top:8px"/);
+  assert.match(renderer, /const actionsHtml = '';/);
+  assert.doesNotMatch(renderer, /btnCalAddMissing|btnCalRemoveAll/);
 });
 
 test('Candidate create bookings explain the save-first state', () => {
