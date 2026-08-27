@@ -23,7 +23,13 @@ test('Contract settings are a child draft and only Apply dirties the parent', ()
   assert.match(source, /Object\.assign\(parentMainDraft, clonePlain\(localMainDraft\)\)/);
   assert.match(source, /primaryLabel: 'Apply'/);
   assert.match(source, /dirtyClosePolicy: 'confirm-discard-close'/);
-  assert.match(source, /disabledPaperPolicy = \(viewOnly \|\| lifecycleLocks\.veryHighLocked\)/);
+  assert.match(source, /disabledPaperPolicy = viewOnly/);
+  assert.match(source, /class="ctms-switch/);
+  assert.match(source, /overrideOn \? `/);
+  assert.match(source, /Reset to Client settings/);
+  assert.match(source, /clearOverrideValuesToNull/);
+  assert.match(source, /seedFromClientSettingsSnapshot/);
+  assert.match(source, /localOverrideStash/);
   assert.doesNotMatch(source, /Staged only until/);
 });
 
@@ -64,7 +70,7 @@ test('Contract lifecycle protects very-high fields after start but locks rates o
   assert.match(additionalRatesTab, /<fieldset class="ctms-contract-protected-fields" \$\{ratesLocked \? 'disabled data-ctms-intentional-lock="1"' : ''\}/);
 });
 
-test('Modify actions stage week changes and use branded confirmation', () => {
+test('View and Edit Contract actions are separated and use branded confirmation', () => {
   const source = section('async function runContractModifyAction', 'function renderContractMainTab');
   assert.match(source, /stageAddMissingWeeks/);
   assert.match(source, /removeAllUnsubmittedWeeks/);
@@ -73,10 +79,18 @@ test('Modify actions stage week changes and use branded confirmation', () => {
   assert.doesNotMatch(source, /window\.confirm|\bconfirm\(/);
 
   const mainTab = section('function renderContractMainTab', 'function renderContractRatesTab');
-  assert.match(mainTab, /Unassign all eligible weeks/);
-  assert.match(mainTab, /Add missing weeks/);
-  assert.match(mainTab, /Extend to new contract/);
-  assert.match(mainTab, /Duplicate contract/);
+  assert.doesNotMatch(mainTab, /ctms-contract-modify-card/);
+
+  const footer = section('// Contract workflow controls live in the shared footer', '(function dragWire()');
+  assert.match(footer, /contractFooterModify/);
+  assert.match(footer, /Extend to new contract/);
+  assert.match(footer, /Duplicate contract/);
+  assert.match(footer, /btnContractAddMissingWeeks/);
+  assert.match(footer, /btnContractUnassignAll/);
+
+  const buttonState = section('const isExistingContractFrame', "if (top.entity !== 'timesheets')");
+  assert.match(buttonState, /top\.mode === 'view'/);
+  assert.match(buttonState, /top\.mode === 'edit'/);
 });
 
 test('Calendar Save includes remove-all staging and never uses a native overlap warning', () => {
@@ -87,11 +101,12 @@ test('Calendar Save includes remove-all staging and never uses a native overlap 
   assert.doesNotMatch(source, /Proceed anyway and save with overlapping windows\?`\)/);
 });
 
-test('Extend and manager-authoriser children stage into the parent Contract', () => {
+test('Extend commits from its independent child while manager authorisers stage into the parent', () => {
   const extend = section('function openContractCloneAndExtend', 'async function openUiConfirmModal');
-  assert.match(extend, /__stagedCloneExtendPlan/);
-  assert.match(extend, /expected_source_updated_at/);
-  assert.match(extend, /Extension prepared\. Save the Contract to create it\./);
+  assert.match(extend, /performStagedContractExtension/);
+  assert.match(extend, /Successor Contract created/);
+  assert.match(extend, /getContract\(sourceId\)/);
+  assert.doesNotMatch(extend, /__stagedCloneExtendPlan/);
   assert.match(extend, /showWorkflowIssue/);
   assert.doesNotMatch(extend.slice(0, extend.indexOf('return { ok:true, saved:null }')), /window\.prompt|window\.confirm/);
 
@@ -117,6 +132,8 @@ test('Duplicate Contract Studio supports polished responsive candidate assignmen
   assert.match(source, /data-duplicate-sort="first_name"/);
   assert.match(source, /data-duplicate-sort="primary_job_title"/);
   assert.match(source, /data-duplicate-sort="city"/);
+  assert.match(source, /const wireLiveRoot = \(\) =>/);
+  assert.match(source, /forceEdit:true, runOnRender:true/);
   assert.match(source, /Create contracts/);
   assert.match(css, /\.ctms-contract-duplicate-grid/);
   assert.match(css, /@media \(max-width: 1024px\)/);

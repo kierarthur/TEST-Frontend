@@ -70,8 +70,8 @@ async function openApp(page: Page) {
   expect(await page.evaluate(() => (window as any).__CONTRACT_WORKFLOW_LOCAL_PROOF)).toBe(marker);
 }
 
-async function openMockContract(page: Page, overrides: Record<string, unknown> = {}) {
-  await page.evaluate((contractOverrides) => {
+async function openMockContract(page: Page, overrides: Record<string, unknown> = {}, openMode: 'view' | 'edit' = 'view') {
+  await page.evaluate(({ contractOverrides, requestedMode }) => {
     const contract = {
       id: 'a0000000-0000-4000-8000-000000000001',
       updated_at: '2026-08-27T08:00:00.000Z',
@@ -103,13 +103,13 @@ async function openMockContract(page: Page, overrides: Record<string, unknown> =
     };
     (window as any).modalCtx = {
       entity: 'contracts',
-      mode: 'edit',
+      mode: requestedMode,
       data: contract,
       formState: { __forId: contract.id, main: {}, pay: {} },
       client_settings_snapshot: {
         default_submission_mode: 'ELECTRONIC',
         candidate_paper_submission_enabled: true,
-        timesheet_break_entry_mode: 'BREAK_MINUTES',
+        timesheet_break_entry_mode: 'DURATION_MINUTES',
         is_nhsp: false,
         autoprocess_hr: false,
         no_timesheet_required: false,
@@ -119,7 +119,7 @@ async function openMockContract(page: Page, overrides: Record<string, unknown> =
       client_settings_snapshot_client_id: contract.client_id
     };
     (window as any).showModal(
-      'Edit Contract',
+      requestedMode === 'edit' ? 'Edit Contract' : 'View Contract',
       [
         { key: 'main', label: 'Main', title: 'Main' },
         { key: 'rates', label: 'Rates', title: 'Rates' },
@@ -134,15 +134,21 @@ async function openMockContract(page: Page, overrides: Record<string, unknown> =
       async () => true,
       true,
       null,
-      { kind: 'contracts', frameEntity: 'contracts', forceEdit: true, primaryLabel: 'Save' }
+      {
+        kind: 'contracts',
+        frameEntity: 'contracts',
+        forceEdit: requestedMode === 'edit',
+        forceView: requestedMode === 'view',
+        primaryLabel: 'Save'
+      }
     );
-  }, overrides);
-  await expect(page.locator('#modalTitle')).toHaveText('Edit Contract');
-  await expect(page.locator('.ctms-contract-modify-card')).toBeVisible();
+  }, { contractOverrides: overrides, requestedMode: openMode });
+  await expect(page.locator('#modalTitle')).toContainText(openMode === 'edit' ? 'Edit Contract' : 'View Contract');
 }
 
 async function assertProtectedContractControls(page: Page) {
-  await expect(page.locator('.ctms-contract-lock-banner')).toContainText('Core contract details are protected');
+  await expect(page.locator('#contractModalTitleLock')).toBeVisible();
+  await expect(page.locator('.ctms-contract-main .ctms-contract-lock-banner')).toHaveCount(0);
   await expect(page.locator('#candidate_name_display')).not.toBeEditable();
   await expect(page.locator('#client_name_display')).not.toBeEditable();
   await expect(page.locator('#btnPickCandidate')).toBeDisabled();
@@ -161,17 +167,18 @@ async function assertProtectedContractControls(page: Page) {
   await expect(page.locator('input[name="is_ad_hoc"]')).toBeEnabled();
 
   await page.getByRole('button', { name: 'Contract settings', exact: true }).click();
-  await expect(page.locator('#modalTitle')).toHaveText('Contract settings');
+  await expect(page.locator('#modalTitle')).toContainText('Contract settings');
+  await expect(page.locator('#contractModalTitleLock')).toBeVisible();
   await expect(page.locator('input[name="overrideclientsettings"]')).toBeDisabled();
   const workflowModes = page.locator('input[name="weekly_mode"]');
   await expect(workflowModes).toHaveCount(3);
   expect(await workflowModes.evaluateAll((items) => items.every((item) => (item as HTMLInputElement).disabled))).toBe(true);
   const paperPolicies = page.locator('input[name="candidate_paper_submission_policy"]');
   await expect(paperPolicies).toHaveCount(3);
-  expect(await paperPolicies.evaluateAll((items) => items.every((item) => (item as HTMLInputElement).disabled))).toBe(true);
-  await expect(page.locator('select[name="timesheet_break_entry_mode"]')).toBeEnabled();
+  expect(await paperPolicies.evaluateAll((items) => items.every((item) => !(item as HTMLInputElement).disabled))).toBe(true);
+  await expect(page.locator('select[name="timesheet_break_entry_mode"]')).toBeDisabled();
   await page.locator('#btnCloseModal').click();
-  await expect(page.locator('#modalTitle')).toHaveText('Edit Contract');
+  await expect(page.locator('#modalTitle')).toContainText('Edit Contract');
   await expect(page.locator('#modalTabs')).toContainText('Rates');
   await expect(page.locator('#modalTabs')).toContainText('Additional Rates');
 
@@ -215,11 +222,14 @@ async function assertViewportFit(page: Page, viewportWidth: number) {
 
 async function saveShot(page: Page, name: string) {
   mkdirSync(artifactDir, { recursive: true });
-  // Contract tab renders may schedule the branded busy overlay on the next
-  // task. Give that transition one short settle window, then require it to be
-  // fully gone before recording visual proof.
-  await page.waitForTimeout(400);
-  await expect(page.locator('#globalLoadingOverlay')).toBeHidden({ timeout: 10_000 });
+  // Contract tab renders may schedule the branded busy overlay on a later
+  // task. Require two separated hidden observations so a late data refresh
+  // cannot be captured between them.
+  const overlay = page.locator('#globalLoadingOverlay');
+  await page.waitForTimeout(900);
+  await expect(overlay).toBeHidden({ timeout: 10_000 });
+  await page.waitForTimeout(500);
+  await expect(overlay).toBeHidden({ timeout: 10_000 });
   await page.locator('#modal').screenshot({ path: resolve(artifactDir, `${name}.png`) });
 }
 
@@ -229,22 +239,39 @@ for (const device of devices) {
     await page.setViewportSize({ width: device.width, height: device.height });
     const counts = await installLocalAssets(page);
     await openApp(page);
-    await openMockContract(page);
+    await openMockContract(page, {}, 'view');
 
     await expect(page.locator('.ctms-readonly-setting__value')).toHaveText('Electronic');
     await expect(page.locator('.ctms-readonly-setting__source')).toHaveText('Client default');
     await assertViewportFit(page, device.width);
     await saveShot(page, `01-contract-main-${device.label}`);
 
-    await page.locator('#contractModifyMenu > summary').click();
-    await expect(page.locator('.ctms-contract-modify-menu__panel')).toBeVisible();
+    await page.locator('#contractFooterModify > summary').click();
+    const modifyPanel = page.locator('.ctms-contract-footer-menu__panel');
+    await expect(modifyPanel).toBeVisible();
+    const modifyPanelBox = await modifyPanel.boundingBox();
+    expect(modifyPanelBox?.x ?? -1).toBeGreaterThanOrEqual(0);
+    expect((modifyPanelBox?.x ?? device.width) + (modifyPanelBox?.width ?? 1)).toBeLessThanOrEqual(device.width + 1);
     await saveShot(page, `02-contract-modify-${device.label}`);
-    await page.locator('#contractModifyMenu > summary').click();
+    await page.locator('#contractFooterModify > summary').click();
+
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+    await expect(page.locator('#modalTitle')).toContainText('Edit Contract');
+    await expect(page.locator('#contractFooterModify')).toBeHidden();
+    await expect(page.locator('#btnContractAddMissingWeeks')).toBeVisible();
+    await expect(page.locator('#btnContractUnassignAll')).toBeVisible();
 
     await page.getByRole('button', { name: 'Contract settings', exact: true }).click();
-    await expect(page.locator('#modalTitle')).toHaveText('Contract settings');
+    await expect(page.locator('#modalTitle')).toContainText('Contract settings');
     await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeDisabled();
+    const overrideSwitch = page.locator('input.ctms-switch-control[name="overrideclientsettings"]');
+    await expect(overrideSwitch).toBeVisible();
+    const overrideSwitchBox = await overrideSwitch.boundingBox();
+    expect(overrideSwitchBox?.width ?? 0).toBeGreaterThanOrEqual(40);
+    expect(overrideSwitchBox?.height ?? 0).toBeGreaterThanOrEqual(24);
     await page.locator('input[name="overrideclientsettings"]').check();
+    await expect(page.locator('.ctms-contract-override-panel')).toBeVisible();
+    await expect(page.locator('#btnResetContractOverrides')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeEnabled();
     await expect(page.locator('#btnCloseModal')).toHaveText('Discard');
     await assertViewportFit(page, device.width);
@@ -253,19 +280,30 @@ for (const device of devices) {
     await page.locator('#btnCloseModal').click();
     await expect(page.getByTestId('modal-title').getByText('Discard changes?', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Discard', exact: true }).click();
-    await expect(page.locator('#modalTitle')).toHaveText('Edit Contract');
+    await expect(page.locator('#modalTitle')).toContainText('Edit Contract');
+    await expect(page.locator('#btnCloseModal')).toHaveText('Close');
 
-    await page.evaluate(() => (window as any).openContractCloneAndExtend('a0000000-0000-4000-8000-000000000001'));
-    await expect(page.locator('#modalTitle')).toHaveText('Extend to new contract');
-    await expect(page.getByRole('heading', { name: 'Finish and extend' })).toBeVisible();
+    // A clean Edit closes back to the parent record's View state. The second
+    // Close dismisses that View modal entirely.
+    await page.locator('#btnCloseModal').click();
+    await expect(page.locator('#modalTitle')).toContainText('View Contract');
+    await page.locator('#btnCloseModal').click();
+    await expect(page.locator('#modalBack')).toBeHidden();
+    await openMockContract(page, {}, 'view');
+
+    await page.locator('#contractFooterModify > summary').click();
+    await page.getByRole('menuitem', { name: 'Extend to new contract', exact: true }).click();
+    await expect(page.locator('#modalTitle')).toContainText('Extend to new contract');
+    await expect(page.getByRole('heading', { name: 'Extend to new Contract' })).toBeVisible();
     await assertViewportFit(page, device.width);
     await saveShot(page, `04-contract-extend-${device.label}`);
     await page.locator('#btnCloseModal').click();
-    await expect(page.locator('#modalTitle')).toHaveText('Edit Contract');
+    await expect(page.locator('#modalTitle')).toContainText('View Contract');
 
-    await page.evaluate(() => (window as any).openContractDuplicateStudio('a0000000-0000-4000-8000-000000000001'));
-    await expect(page.locator('#modalTitle')).toHaveText('Duplicate Contract');
-    await page.getByLabel('Search candidate name').fill('ra');
+    await page.locator('#contractFooterModify > summary').click();
+    await page.getByRole('menuitem', { name: 'Duplicate contract', exact: true }).click();
+    await expect(page.locator('#modalTitle')).toContainText('Duplicate Contract');
+    await page.getByLabel('Search candidate name').fill('beg');
     await expect(page.getByRole('checkbox', { name: 'Assign Begum, Amira' })).toBeVisible({ timeout: 10_000 });
     await page.locator('[data-duplicate-count]').fill('3');
     await page.locator('[data-duplicate-count]').blur();
@@ -301,9 +339,10 @@ for (const device of [devices[0], devices[3]]) {
       timesheets_count: 3,
       has_real_timesheets: true,
       has_timesheets: true
-    });
+    }, 'edit');
 
-    await expect(page.locator('.ctms-contract-lock-banner')).toContainText('Core contract details are protected');
+    await expect(page.locator('#contractModalTitleLock')).toBeVisible();
+    await expect(page.locator('.ctms-contract-main .ctms-contract-lock-banner')).toHaveCount(0);
     await saveShot(page, `06-contract-protected-main-${device.label}`);
     await assertProtectedContractControls(page);
     await assertViewportFit(page, device.width);

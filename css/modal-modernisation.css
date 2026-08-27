@@ -843,8 +843,8 @@
 
 #modal.ctms-modern-modal #contractSettingsForm {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 15px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
   padding: 0;
   align-items: start;
 }
@@ -854,7 +854,8 @@
 }
 
 #modal.ctms-modern-modal #contractSettingsForm > .row,
-#modal.ctms-modern-modal #contractSettingsForm > div {
+#modal.ctms-modern-modal #contractSettingsForm > div,
+#modal.ctms-modern-modal #contractSettingsForm > section {
   min-width: 0;
   margin: 0 !important;
   padding: 16px !important;
@@ -863,10 +864,7 @@
   background: linear-gradient(180deg, rgba(16, 31, 53, 0.95), rgba(11, 22, 41, 0.96)) !important;
 }
 
-#modal.ctms-modern-modal #contractSettingsForm > .row:last-child {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-}
+#modal.ctms-modern-modal #contractSettingsForm > .alert { grid-column: 1 / -1; }
 
 #modal.ctms-modern-modal .sched-grid {
   display: grid;
@@ -4153,6 +4151,175 @@
 .ctms-readonly-setting__value { font-weight: 800; color: #f3f7ff; }
 .ctms-readonly-setting__source { color: #9eb0c8; font-size: 12px; }
 
+/* Contract Settings: inherited controls and independent Contract choices */
+#modal.ctms-modern-modal .ctms-contract-settings-card {
+  display: grid;
+  gap: 16px;
+  padding: 18px !important;
+  border: 1px solid rgba(104, 139, 181, .34) !important;
+  border-radius: 17px !important;
+  background:
+    radial-gradient(circle at 100% 0, rgba(71, 104, 255, .1), transparent 36%),
+    linear-gradient(155deg, rgba(17, 37, 63, .97), rgba(8, 22, 41, .95)) !important;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, .17);
+}
+#modal.ctms-modern-modal .ctms-contract-settings-card__heading,
+#modal.ctms-modern-modal .ctms-contract-override-panel__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+#modal.ctms-modern-modal .ctms-contract-settings-card__heading h3,
+#modal.ctms-modern-modal .ctms-contract-override-panel__heading h3 {
+  margin: 4px 0 4px;
+  color: #f4f7ff;
+  font-size: 18px;
+}
+#modal.ctms-modern-modal .ctms-contract-settings-card__heading p {
+  margin: 0;
+  color: #aebbd0;
+  line-height: 1.45;
+}
+#modal.ctms-modern-modal .ctms-settings-lock-chip,
+#modal.ctms-modern-modal .ctms-contract-title-lock {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(229, 173, 71, .38);
+  border-radius: 10px;
+  color: #ffd77f;
+  background: rgba(104, 69, 18, .34);
+  box-shadow: inset 0 0 0 1px rgba(255, 211, 121, .05);
+  font-size: 14px;
+  line-height: 1;
+}
+#modal.ctms-modern-modal .ctms-contract-title-lock {
+  margin-left: 10px;
+  vertical-align: middle;
+}
+#modal.ctms-modern-modal .ctms-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 66px;
+  padding: 12px 14px;
+  border: 1px solid rgba(114, 149, 190, .3);
+  border-radius: 13px;
+  background: rgba(5, 17, 34, .46);
+  cursor: pointer;
+}
+#modal.ctms-modern-modal .ctms-switch-row > span:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+#modal.ctms-modern-modal .ctms-switch-row strong { color: #f3f7ff; }
+#modal.ctms-modern-modal .ctms-switch-row small { color: #9fb0c8; line-height: 1.35; }
+#modal.ctms-modern-modal .ctms-switch-control {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 28px;
+  margin: 0;
+  border: 1px solid rgba(127, 154, 189, .52);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 14px 50%, #aebbd0 0 9px, transparent 9.5px),
+    #0a1728;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .025);
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+#modal.ctms-modern-modal .ctms-switch-control:checked {
+  border-color: rgba(99, 107, 255, .85);
+  background:
+    radial-gradient(circle at 34px 50%, #fff 0 9px, transparent 9.5px),
+    linear-gradient(135deg, #4850c9, #5759ef);
+  box-shadow: 0 0 0 3px rgba(82, 91, 255, .14);
+}
+#modal.ctms-modern-modal .ctms-switch-control:focus-visible {
+  outline: 2px solid #65b8ff;
+  outline-offset: 3px;
+}
+#modal.ctms-modern-modal .ctms-switch-control:disabled { opacity: .52; cursor: not-allowed; }
+#modal.ctms-modern-modal .ctms-contract-override-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(101, 114, 255, .34);
+  border-radius: 15px;
+  background: linear-gradient(155deg, rgba(47, 52, 151, .16), rgba(4, 16, 33, .42));
+}
+#modal.ctms-modern-modal .ctms-contract-override-panel > .row,
+#modal.ctms-modern-modal .ctms-contract-query-email {
+  margin: 0 !important;
+  padding: 14px !important;
+  border: 1px solid rgba(114, 149, 190, .25) !important;
+  border-radius: 13px !important;
+  background: rgba(5, 17, 34, .4) !important;
+}
+#modal.ctms-modern-modal .ctms-contract-override-panel > .row {
+  display: grid;
+  grid-template-columns: minmax(160px, .38fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+#modal.ctms-modern-modal .ctms-contract-query-email { display: grid; gap: 12px; }
+#modal.ctms-modern-modal .ctms-field-stack { display: grid; gap: 7px; }
+#modal.ctms-modern-modal .ctms-field-stack > span { color: #cbd6e6; font-size: 12px; font-weight: 800; }
+
+/* Stable footer actions for Contract view/edit mode */
+#modal.ctms-modern-modal .ctms-contract-footer-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+#modal.ctms-modern-modal .ctms-contract-footer-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  list-style: none;
+  cursor: pointer;
+}
+#modal.ctms-modern-modal .ctms-contract-footer-menu > summary::-webkit-details-marker { display: none; }
+#modal.ctms-modern-modal .ctms-contract-footer-menu__panel {
+  position: absolute;
+  z-index: 80;
+  right: 0;
+  bottom: calc(100% + 9px);
+  width: min(260px, calc(100vw - 32px));
+  padding: 7px;
+  border: 1px solid rgba(101, 184, 255, .42);
+  border-radius: 13px;
+  background: rgba(7, 20, 38, .99);
+  box-shadow: 0 22px 50px rgba(0, 0, 0, .55);
+  backdrop-filter: blur(16px);
+}
+#modal.ctms-modern-modal .ctms-contract-footer-menu__panel button {
+  display: block;
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 9px;
+  color: #edf4ff;
+  background: transparent;
+  text-align: left;
+  font-weight: 800;
+  cursor: pointer;
+}
+#modal.ctms-modern-modal .ctms-contract-footer-menu__panel button:hover,
+#modal.ctms-modern-modal .ctms-contract-footer-menu__panel button:focus-visible {
+  outline: none;
+  background: rgba(73, 106, 255, .2);
+  box-shadow: inset 0 0 0 1px rgba(101, 184, 255, .25);
+}
+
 /* Contract lifecycle and Modify workflow */
 #modal.ctms-modern-modal .ctms-contract-lock-banner {
   display: flex;
@@ -4398,4 +4565,11 @@
   #modal.ctms-modern-modal .ctms-contract-extend-studio { padding: 10px; }
   #modal.ctms-modern-modal .ctms-contract-extend-hero,
   #modal.ctms-modern-modal .ctms-contract-extend-card { padding: 15px; border-radius: 14px; }
+  #modal.ctms-modern-modal .ctms-contract-settings-card { gap: 13px; padding: 14px !important; border-radius: 14px !important; }
+  #modal.ctms-modern-modal .ctms-contract-settings-card__heading,
+  #modal.ctms-modern-modal .ctms-contract-override-panel__heading { align-items: stretch; flex-direction: column; gap: 10px; }
+  #modal.ctms-modern-modal .ctms-contract-override-panel { gap: 11px; padding: 12px; }
+  #modal.ctms-modern-modal .ctms-contract-override-panel > .row { grid-template-columns: minmax(0, 1fr); gap: 9px; padding: 12px !important; }
+  #modal.ctms-modern-modal .ctms-switch-row { gap: 12px; padding: 11px 12px; }
+  #modal.ctms-modern-modal .ctms-contract-footer-menu__panel { right: 0; left: auto; }
 }

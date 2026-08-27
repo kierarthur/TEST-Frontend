@@ -126330,6 +126330,7 @@ function openContractSettingsModal() {
     for (const k of BOOL_FIELDS) changed = setMainTriBool(k, null) || changed;
     for (const k of STR_FIELDS)  changed = setMainTriString(k, null) || changed;
     for (const k of ENUM_FIELDS) changed = setMainTriUpper(k, null) || changed;
+    changed = setMainTriUpper('timesheet_break_entry_mode', null) || changed;
     return changed;
   };
 
@@ -126394,8 +126395,11 @@ function openContractSettingsModal() {
     const dsm = csMode('default_submission_mode');
     changed = setMainTriUpper('default_submission_mode', dsm ? dsm : null) || changed;
 
-    // A null raw value inherits the Daily Client choice. A dormant stored
-    // value is deliberately preserved when override is switched off and on.
+    const breakMode = csMode('timesheet_break_entry_mode');
+    changed = setMainTriUpper(
+      'timesheet_break_entry_mode',
+      breakMode === 'DURATION_MINUTES' ? 'DURATION_MINUTES' : 'START_END_TIMES'
+    ) || changed;
 
     // Canonicalise route flags exactly as per existing contract settings rules
     const isNhsp = !!boolish(localMainDraft.is_nhsp);
@@ -126561,23 +126565,17 @@ function openContractSettingsModal() {
     // ✅ Critical gating:
     // - viewOnly => everything disabled
     // - override OFF (in edit mode) => only override checkbox enabled, everything else disabled
-    const disabledAll = viewOnly ? 'disabled' : '';
-    const disabledRoute = (viewOnly || lifecycleLocks.veryHighLocked) ? 'disabled' : '';
-    const disabledPaperPolicy = (viewOnly || lifecycleLocks.veryHighLocked) ? 'disabled' : '';
-    const disabledIfInherit = (!overrideOn || viewOnly) ? 'disabled' : '';
-    const disabledWorkflow = (!overrideOn || viewOnly || lifecycleLocks.veryHighLocked) ? 'disabled' : '';
-    const disabledFinancialAuthority = (!overrideOn || viewOnly || lifecycleLocks.veryHighLocked) ? 'disabled' : '';
-    const breakModeDisabled = (!overrideOn || viewOnly) ? 'disabled' : '';
+    const overrideProtected = !!lifecycleLocks.hasProtectedHistory;
+    const disabledRoute = (viewOnly || overrideProtected) ? 'disabled' : '';
+    const disabledPaperPolicy = viewOnly ? 'disabled' : '';
+    const disabledIfInherit = (!overrideOn || viewOnly || overrideProtected) ? 'disabled' : '';
+    const disabledWorkflow = (!overrideOn || viewOnly || overrideProtected) ? 'disabled' : '';
+    const disabledFinancialAuthority = (!overrideOn || viewOnly || overrideProtected) ? 'disabled' : '';
+    const breakModeDisabled = (!overrideOn || viewOnly || overrideProtected) ? 'disabled' : '';
 
-    const hint = viewOnly
-      ? `View-only. You cannot change contract settings here.`
-      : (!hasSnapshot
-          ? `Client settings snapshot is not available. Pick a client (or reopen the contract) to enable seeding when overriding.`
-          : (overrideOn
-              ? (lifecycleLocks.veryHighLocked
-                  ? `${lifecycleLocks.reason || 'This contract has started.'} Workflow and financial-authority settings are protected; safe future settings remain editable.`
-                  : `Override is ON. Changes here are staged and applied when you Save the contract.`)
-              : `Override is OFF. Only the override checkbox is editable. Tick “Override client settings” to stage contract-specific values.`));
+    const hint = (!hasSnapshot && !overrideOn)
+      ? `Client settings are not available yet. Reopen the Contract after its Client details have loaded.`
+      : '';
 
     const radioPill = (name, value, text, checked, disabledAttr) => `
       <label class="inline chk-tight"
@@ -126635,47 +126633,38 @@ function openContractSettingsModal() {
     // manual invoices alt email input enable
     const manualEmailEnabled = !!eff.send_manual_invoices_to_different_email;
     const altEmailVal = String(eff.manual_invoices_alt_email_address || '');
+    const queryEmailEnabled = !!boolish(getMainRaw('send_ts_queries_to_different_email'));
+    const queryEmailVal = String(getMainRaw('ts_queries_alt_email_address') || '');
 
     return `
-      <form id="contractSettingsForm" class="tabc form">
+      <form id="contractSettingsForm" class="tabc form ctms-contract-settings-form">
+        ${hint ? `<div class="alert alert-warning py-2 px-2 small">${escapeHtml(hint)}</div>` : ''}
 
-        ${hint ? `
-          <div class="alert alert-warning py-2 px-2 small" style="margin-bottom:12px;">
-            ${escapeHtml(hint)}
-          </div>
-        ` : ''}
-
-        <div class="row" style="margin:0;">
-          <label style="white-space:normal">Override client settings</label>
-          <div class="controls" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-              <label class="inline chk-tight" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;">
-                <input type="checkbox" name="overrideclientsettings" ${overrideOn ? 'checked' : ''} ${disabledRoute}
-                  data-ctms-intentional-lock="${disabledRoute ? '1' : '0'}"/>
-                <span>Override client settings for this contract</span>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <section class="ctms-policy-card ctms-policy-card--paper" aria-labelledby="contractPrintedTimesheetsHeading">
-          <div class="ctms-policy-card__heading">
+        <section class="ctms-contract-settings-card ctms-contract-settings-card--client" aria-labelledby="contractClientSettingsHeading">
+          <div class="ctms-contract-settings-card__heading">
             <div>
-              <div class="ctms-policy-card__eyebrow">Candidate submission</div>
-              <h3 id="contractPrintedTimesheetsHeading">Printed timesheets</h3>
-              <p>Choose whether eligible candidates can use the secure printed-timesheet route for this contract.</p>
+              <div class="ctms-policy-card__eyebrow">Inherited configuration</div>
+              <h3 id="contractClientSettingsHeading">Client settings</h3>
+              <p>${overrideOn ? 'This Contract uses the settings shown below.' : 'This Contract uses the current Client settings.'}</p>
             </div>
-            <span class="ctms-policy-badge ${effectivePaperEnabled ? 'is-enabled' : 'is-disabled'}">${effectivePaperEnabled ? 'Allowed' : 'Not allowed'}</span>
+            ${overrideProtected ? '<span class="ctms-settings-lock-chip" title="Contract overrides are protected" aria-label="Contract overrides are protected">🔒</span>' : ''}
           </div>
-          <div class="ctms-policy-options" role="radiogroup" aria-label="Printed timesheet policy">
-            ${radioChoice('candidate_paper_submission_policy', 'INHERIT', 'Use Client setting', `Currently ${clientPaperEnabled ? 'allowed' : 'not allowed'} by the Client setting.`, paperOverride === null, disabledPaperPolicy)}
-            ${radioChoice('candidate_paper_submission_policy', 'ALLOW', 'Allow for this Contract', 'Eligible candidates may choose a secure printed timesheet.', paperOverride === true, disabledPaperPolicy)}
-            ${radioChoice('candidate_paper_submission_policy', 'BLOCK', 'Do not allow for this Contract', 'The Client setting is ignored for this contract.', paperOverride === false, disabledPaperPolicy)}
-          </div>
-          <div class="ctms-policy-card__note">Independent of “Override client settings”. Availability also requires the central printed-timesheet feature. Daily and import-authoritative timesheets remain ineligible.</div>
-        </section>
+          <label class="ctms-switch-row">
+            <span>
+              <strong>Override Client settings</strong>
+              <small>Use Contract-specific workflow and invoice settings.</small>
+            </span>
+            <input class="ctms-switch-control" type="checkbox" name="overrideclientsettings" ${overrideOn ? 'checked' : ''} ${disabledRoute}
+              data-ctms-intentional-lock="${disabledRoute ? '1' : '0'}" role="switch" aria-checked="${overrideOn ? 'true' : 'false'}"/>
+          </label>
 
-        <div class="row" style="margin-top:12px;">
+          ${overrideOn ? `<div class="ctms-contract-override-panel">
+            <div class="ctms-contract-override-panel__heading">
+              <div><div class="ctms-policy-card__eyebrow">Contract overrides</div><h3>Contract-specific values</h3></div>
+              <button type="button" class="btn btn-outline btn-sm" id="btnResetContractOverrides" ${viewOnly || overrideProtected ? 'disabled' : ''}>Reset to Client settings</button>
+            </div>
+
+        <div class="row">
           <label style="white-space:normal">Timesheet workflow</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
             <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
@@ -126720,7 +126709,7 @@ function openContractSettingsModal() {
           </div>
         </div>
 
-        <div class="row" style="margin-top:12px;display:${(showHr && !isHrCreate) ? '' : 'none'};">
+        <div class="row" style="display:${(showHr && !isHrCreate) ? '' : 'none'};">
           <label style="white-space:normal">How workers enter breaks</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:7px;min-width:0;">
             <select name="timesheet_break_entry_mode" ${breakModeDisabled}
@@ -126733,7 +126722,7 @@ function openContractSettingsModal() {
           </div>
         </div>
 
-        <div class="row" style="margin-top:12px;">
+        <div class="row">
           <label style="white-space:normal">References & flags</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:12px;min-width:0;">
 
@@ -126830,7 +126819,44 @@ function openContractSettingsModal() {
 
           </div>
         </div>
+          </div>` : ''}
+        </section>
 
+        <section class="ctms-contract-settings-card" aria-labelledby="contractSpecificSettingsHeading">
+          <div class="ctms-contract-settings-card__heading">
+            <div>
+              <div class="ctms-policy-card__eyebrow">This Contract</div>
+              <h3 id="contractSpecificSettingsHeading">Contract-specific settings</h3>
+              <p>Independent of “Override client settings”.</p>
+            </div>
+          </div>
+
+          <section class="ctms-policy-card ctms-policy-card--paper" aria-labelledby="contractPrintedTimesheetsHeading">
+            <div class="ctms-policy-card__heading">
+              <div>
+                <div class="ctms-policy-card__eyebrow">Candidate submission</div>
+                <h3 id="contractPrintedTimesheetsHeading">Printed timesheets</h3>
+                <p>Choose whether eligible candidates can use the secure printed-timesheet route for this Contract.</p>
+              </div>
+              <span class="ctms-policy-badge ${effectivePaperEnabled ? 'is-enabled' : 'is-disabled'}">${effectivePaperEnabled ? 'Allowed' : 'Not allowed'}</span>
+            </div>
+            <div class="ctms-policy-options" role="radiogroup" aria-label="Printed timesheet policy">
+              ${radioChoice('candidate_paper_submission_policy', 'INHERIT', 'Use Client setting', `Currently ${clientPaperEnabled ? 'allowed' : 'not allowed'} by the Client setting.`, paperOverride === null, disabledPaperPolicy)}
+              ${radioChoice('candidate_paper_submission_policy', 'ALLOW', 'Allow for this Contract', 'Eligible candidates may choose a secure printed timesheet.', paperOverride === true, disabledPaperPolicy)}
+              ${radioChoice('candidate_paper_submission_policy', 'BLOCK', 'Do not allow for this Contract', 'The Client setting is ignored for this Contract.', paperOverride === false, disabledPaperPolicy)}
+            </div>
+            <p class="mini">Only eligible weekly routes are affected, and the central printed-timesheet feature must also be available.</p>
+          </section>
+
+          <div class="ctms-contract-query-email">
+            <label class="ctms-switch-row">
+              <span><strong>Timesheet query email</strong><small>Send this Contract’s timesheet queries to a different address.</small></span>
+              <input class="ctms-switch-control" type="checkbox" name="send_ts_queries_to_different_email" ${queryEmailEnabled ? 'checked' : ''} ${viewOnly ? 'disabled' : ''}
+                data-ctms-intentional-lock="${viewOnly ? '1' : '0'}" role="switch" aria-checked="${queryEmailEnabled ? 'true' : 'false'}"/>
+            </label>
+            ${queryEmailEnabled ? `<label class="ctms-field-stack"><span>Contract query email</span><input type="email" name="ts_queries_alt_email_address" value="${escapeHtml(queryEmailVal)}" placeholder="name@trust.nhs.uk" ${viewOnly ? 'disabled' : ''}/></label>` : ''}
+          </div>
+        </section>
       </form>
     `;
   };
@@ -126854,6 +126880,14 @@ function openContractSettingsModal() {
       'candidate_paper_submission_enabled_override',
       paperPolicy === 'ALLOW' ? true : (paperPolicy === 'BLOCK' ? false : null)
     ) || changed;
+
+    // Contract-specific query routing is deliberately outside the broad
+    // Client-settings override and therefore stages independently.
+    const queryEmailChecked = !!root.querySelector('input[name="send_ts_queries_to_different_email"]')?.checked;
+    changed = setMainTriBool('send_ts_queries_to_different_email', queryEmailChecked) || changed;
+    const queryEmailInput = root.querySelector('input[name="ts_queries_alt_email_address"]');
+    const queryEmail = String(queryEmailInput?.value || '').trim().toLowerCase();
+    changed = setMainTriString('ts_queries_alt_email_address', queryEmailChecked ? queryEmail : null) || changed;
 
     const beforeOverride = !!boolish(getMainRaw('overrideclientsettings'));
     const overrideChecked = !!root.querySelector('input[type="checkbox"][name="overrideclientsettings"]')?.checked;
@@ -127057,6 +127091,28 @@ function openContractSettingsModal() {
     root.addEventListener('change', onAnyChange, true);
     root.addEventListener('input',  onAnyChange, true);
 
+    root.querySelector('#btnResetContractOverrides')?.addEventListener('click', async () => {
+      if (viewOnly || lifecycleLocks.hasProtectedHistory) return;
+      const confirmed = await openUiConfirmModal({
+        title: 'Reset Contract overrides?',
+        message: 'Replace the Contract override values with the current Client settings?',
+        confirm_label: 'Reset settings',
+        cancel_label: 'Keep changes',
+        confirm_class: 'btn btn-warn',
+        kind: 'contract-reset-client-settings'
+      });
+      if (!confirmed?.confirmed) return;
+      const clientSettings = getClientSettingsSnapshot();
+      if (!clientSettings) {
+        window.__toast?.('Client settings are not ready. Reopen this Contract and try again.');
+        return;
+      }
+      localOverrideStash = null;
+      const changed = seedFromClientSettingsSnapshot(clientSettings);
+      if (changed) setContractDirtyIfChanged(true);
+      await rerenderSelf();
+    });
+
     // Initial canonicalise WITHOUT dirty
     try { applyFromDOM(root, { initial: true }); } catch {}
   };
@@ -127073,12 +127129,6 @@ function openContractSettingsModal() {
       // Contract draft. Persistence still happens only from the parent Save.
       const root = document.getElementById('contractSettingsForm');
       applyFromDOM(root, { initial: false });
-
-      // If override is OFF at Apply time, forget the old override values (per brief)
-      try {
-        const overrideOn = !!boolish(getMainRaw('overrideclientsettings'));
-        if (!overrideOn) localOverrideStash = null;
-      } catch {}
 
       try {
         for (const key of Object.keys(parentMainDraft)) delete parentMainDraft[key];
@@ -140050,8 +140100,16 @@ async function runContractModifyAction(action) {
   const contract = window.modalCtx?.data || {};
   const contractId = String(contract.id || '').trim();
   if (!contractId) return;
-  if (!frame || frame.kind !== 'contracts' || frame.mode !== 'edit') {
-    showModalHint?.('Click Edit before changing this contract.', 'warn');
+  if (!frame || frame.kind !== 'contracts') return;
+
+  const editAction = action === 'add-missing' || action === 'unassign-all';
+  const viewAction = action === 'extend' || action === 'duplicate';
+  if (editAction && frame.mode !== 'edit') {
+    showModalHint?.('Click Edit before preparing week changes.', 'warn');
+    return;
+  }
+  if (viewAction && frame.mode !== 'view') {
+    showModalHint?.('Save or Discard the current Contract changes before opening this workflow.', 'warn');
     return;
   }
 
@@ -140061,6 +140119,14 @@ async function runContractModifyAction(action) {
   closeMenu();
 
   if (action === 'add-missing') {
+    const answer = await openUiConfirmModal({
+      title: 'Add missing weeks?',
+      message: 'Prepare every missing unprocessed week within the current Contract dates and weekly schedule? Nothing is applied until you Save the Contract.',
+      confirm_label: 'Add missing weeks',
+      cancel_label: 'Keep calendar unchanged',
+      kind: 'contract-add-missing-weeks'
+    });
+    if (!answer?.confirmed) return;
     const result = await stageAddMissingWeeks(contractId, {
       from: window.modalCtx?.formState?.main?.start_date || contract.start_date,
       to: window.modalCtx?.formState?.main?.end_date || contract.end_date
@@ -140107,7 +140173,7 @@ async function runContractModifyAction(action) {
     return;
   }
 
-  if (action === 'extend' || action === 'duplicate') {
+  if (viewAction) {
     if (!contractModifyIsParentClean()) {
       showModalHint?.('Save or Discard the current Contract changes before opening this workflow.', 'warn');
       return;
@@ -140423,15 +140489,6 @@ function renderContractMainTab(ctx) {
       <input type="hidden" name="client_id"    value="${clientVal}">
       <input type="hidden" name="week_ending_weekday_snapshot" value="${String(d.week_ending_weekday_snapshot ?? '')}">
 
-      ${lifecycle.veryHighLocked ? `
-        <div class="ctms-contract-lock-banner" role="status">
-          <span class="ctms-contract-lock-banner__icon" aria-hidden="true">🔒</span>
-          <div>
-            <strong>Core contract details are protected</strong>
-            <div class="mini">${escapeHtml(lifecycle.reason)} Dates and other safe future settings can still be updated.</div>
-          </div>
-        </div>` : ''}
-
       <div class="row">
         <label>Candidate</label>
         <div class="controls">
@@ -140542,24 +140599,6 @@ function renderContractMainTab(ctx) {
       </div>
 
       ${schedGrid}
-
-      ${d.id ? `
-        <section class="ctms-contract-modify-card" aria-labelledby="contractModifyHeading">
-          <div class="ctms-contract-modify-card__copy">
-            <span class="ctms-eyebrow">CONTRACT</span>
-            <h3 id="contractModifyHeading">Modify contract</h3>
-            <p>Prepare week changes, extend this placement, or create matching vacancies. Nothing staged here is applied until the appropriate Save action.</p>
-          </div>
-          <details class="ctms-contract-modify-menu" id="contractModifyMenu">
-            <summary class="btn btn-outline">Modify</summary>
-            <div class="ctms-contract-modify-menu__panel" role="menu" aria-label="Modify contract">
-              <button type="button" role="menuitem" onclick="runContractModifyAction('unassign-all')">Unassign all eligible weeks<span>Protected work remains unchanged</span></button>
-              <button type="button" role="menuitem" onclick="runContractModifyAction('add-missing')">Add missing weeks<span>Uses the current contract dates and schedule</span></button>
-              <button type="button" role="menuitem" onclick="runContractModifyAction('extend')">Extend to new contract<span>Finish this contract and create its successor</span></button>
-              <button type="button" role="menuitem" onclick="runContractModifyAction('duplicate')">Duplicate contract<span>Create one or more matching vacancies</span></button>
-            </div>
-          </details>
-        </section>` : ''}
     </form>`;
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141384,8 +141423,8 @@ function openContractCloneAndExtend(contract_id) {
       <div class="tabc ctms-contract-extend-studio" id="cloneExtendForm">
         <div class="ctms-contract-extend-hero">
           <span class="ctms-policy-card__eyebrow">CONTRACT WORKFLOW</span>
-          <h2>Finish and extend</h2>
-          <p>Prepare a successor Contract while safely protecting worked weeks on this Contract. The workflow runs only when the parent Contract is saved.</p>
+          <h2>Extend to new Contract</h2>
+          <p>Finish this Contract and create its successor while protecting every worked week.</p>
         </div>
         <div class="ctms-contract-extend-card">
         <div class="row"><label>New start</label>
@@ -141680,21 +141719,27 @@ function openContractCloneAndExtend(contract_id) {
         new_candidate_id: (!assignExisting && !leaveUnassigned) ? newCandidateId : null
       };
 
-      // Stage in the parent Contract. Nothing is persisted from this child
-      // workflow; the parent Save is the single user commit point.
-      parentContractCtx.__stagedCloneExtendPlan = {
+      const plan = {
         ...basePayload,
         expected_source_updated_at: old.updated_at || null,
         request_key: `contract-extend:${crypto.randomUUID()}`
       };
-      parentContractCtx.__nonCalendarDirty = true;
-      parentContractCtx.__calendarOnly = false;
+      const result = await performStagedContractExtension({
+        contractId: sourceId,
+        plan,
+        expectedUpdatedAt: old.updated_at || null
+      });
+      const successorId = result?.successor?.id || result?.successor_contract_id || null;
+      if (successorId) window.__pendingFocus = { section:'contracts', id:successorId };
+      try {
+        const freshSource = await getContract(sourceId);
+        if (freshSource?.id && parentContractCtx) parentContractCtx.data = freshSource;
+      } catch {}
       if (parentContractFrame) {
-        parentContractFrame.isDirty = true;
-        parentContractFrame._updateButtons?.();
+        parentContractFrame.isDirty = false;
       }
-      window.__toast?.('Extension prepared. Save the Contract to create it.');
-      return { ok:true, saved:null };
+      window.__toast?.('Successor Contract created');
+      return { ok:true, saved:result || null };
 
     },
     false,
@@ -141839,10 +141884,10 @@ async function performStagedContractExtension({ contractId, plan, expectedUpdate
     }
 
     const friendly = String(result?.message || result?.error_message || result?.detail || '').trim();
-    throw new Error(friendly || 'The Contract was saved, but its prepared extension could not be created. Reopen the Contract and review its dates.');
+    throw new Error(friendly || 'The successor Contract could not be created. Review the dates and try again.');
   }
 
-  throw new Error('The Contract was saved, but the successor workflow could not be completed safely. Reopen the Contract and try again.');
+  throw new Error('The successor workflow could not be completed safely. Reopen the Contract and try again.');
 }
 
 
@@ -295898,7 +295943,8 @@ try {
   ts_queries_alt_email_address = null;
 }
 if (send_ts_queries_to_different_email && !ts_queries_alt_email_address) {
-  alert('Contract timesheet query email is required when the contract override is enabled.');
+  showModalHint?.('Enter the Contract timesheet query email before saving.', 'warn');
+  try { window.__toast?.('Enter the Contract timesheet query email before saving.'); } catch {}
   window.modalCtx._saveInFlight = false;
   console.groupEnd?.();
   return false;
@@ -295915,6 +295961,29 @@ try {
   if (manual_invoices_alt_email_address === '') manual_invoices_alt_email_address = (send_manual_invoices_to_different_email === true) ? '' : null;
 } catch {
   manual_invoices_alt_email_address = null;
+}
+
+// Turning the broad Client-settings override off is a durable return to
+// inheritance. Persist NULL for every governed field; the database trigger
+// mirrors this rule so stale legacy values cannot silently reappear later.
+if (overrideclientsettings !== true) {
+  is_nhsp = null;
+  autoprocess_hr = null;
+  requires_hr = null;
+  no_timesheet_required = null;
+  daily_calc_of_invoices = null;
+  group_nightsat_sunbh = null;
+  self_bill = null;
+  hr_attach_to_invoice = null;
+  ts_attach_to_invoice = null;
+  timesheet_break_entry_mode = null;
+  auto_invoice = null;
+  require_reference_to_pay = null;
+  require_reference_to_invoice = null;
+  reference_number_required_to_issue_invoice = null;
+  send_manual_invoices_to_different_email = null;
+  manual_invoices_alt_email_address = null;
+  default_submission_mode = null;
 }
 
 
@@ -296353,21 +296422,6 @@ if (persistedId && stagedAuthorisers?.policy) {
   }
   delete window.modalCtx.__stagedManagerAuthoriserPolicy;
   try { window.__invalidateManagerAuthorisers?.('CONTRACT', persistedId); } catch {}
-}
-const stagedExtension = window.modalCtx?.__stagedCloneExtendPlan || null;
-if (persistedId && stagedExtension) {
-  const extensionPayload = await performStagedContractExtension({
-    contractId: persistedId,
-    plan: stagedExtension,
-    // The parent Save has just advanced the source Contract version. Extend
-    // from that exact saved version, never from the version that was open
-    // before the user's staged parent changes were committed.
-    expectedUpdatedAt: persistedContract?.updated_at || stagedExtension.expected_source_updated_at
-  });
-  delete window.modalCtx.__stagedCloneExtendPlan;
-  const successorId = extensionPayload?.successor?.id || extensionPayload?.successor_contract_id || null;
-  if (successorId) window.__pendingFocus = { section:'contracts', id:successorId };
-  window.__toast?.('Successor Contract created');
 }
 if (LOGC) console.log('[CONTRACTS] upsertContract result', {
   isCreate, persistedId, rawHasSaved: !!saved
@@ -298077,7 +298131,9 @@ async function fetchAndRenderContractCalendar(contractId, opts) {
             });
 
           } catch (e) {
-            alert(e?.message || e);
+            const message = e?.message || 'The calendar change could not be prepared.';
+            if (typeof showModalHint === 'function') showModalHint(message, 'warn');
+            else try { window.__toast?.(message); } catch {}
           }
         }
       });
@@ -325030,6 +325086,13 @@ for (const k2 of OPT_KEYS) {
     const root = byId('modalBody'); if (!root) { L('_attachDirtyTracker(skip: no modalBody)'); return; }
     const onDirty = (ev) => {
       if (ev && !ev.isTrusted) return;
+
+      // Parent and child frames reuse the same modalBody node. A background
+      // frame's listener can therefore observe a trusted input dispatched by
+      // the child unless ownership is checked explicitly. Only the visible
+      // frame may interpret the event; the visible child can still mark its
+      // parent through the deliberate dirtyParentOnly path below.
+      if (currentFrame() !== this) return;
       this._userInteracted = true;
 
      // Allow presets picker to mark the *parent* dirty (only ignore truly load-only frames)
@@ -325051,7 +325114,13 @@ if (this._loadOnly === true) return;
 
       const isChild = (stack().length > 1);
       if (isChild) {
-        if (this.noParentGate) {
+        // Contract Settings is an isolated staging child: its controls may be
+        // edited without making the parent Contract dirty. Only the child's
+        // explicit Apply callback is allowed to copy the draft into the parent
+        // and mark the parent dirty. Treat it like a locally-owned child for
+        // dirty tracking while preserving its normal parent edit-mode gate.
+        const ownsLocalDraft = this.kind === 'contract_settings';
+        if (this.noParentGate || ownsLocalDraft) {
           if (this.mode === 'edit' || this.mode === 'create') {
             this.isDirty = true;
             this._updateButtons && this._updateButtons();
@@ -329498,6 +329567,45 @@ btnTsArchive.style.display     = 'none';
 btnTsUnarchive.style.display   = 'none';
 btnTsDelete.style.display      = 'none';
 
+// Contract workflow controls live in the shared footer so their position is
+// stable across Main, Rates, Additional Rates and Calendar.
+let contractModifyMenu = byId('contractFooterModify');
+if (!contractModifyMenu) {
+  contractModifyMenu = document.createElement('details');
+  contractModifyMenu.id = 'contractFooterModify';
+  contractModifyMenu.className = 'ctms-contract-footer-menu';
+  contractModifyMenu.innerHTML = `
+    <summary class="btn btn-outline btn-sm">Modify</summary>
+    <div class="ctms-contract-footer-menu__panel" role="menu" aria-label="Modify Contract">
+      <button type="button" role="menuitem" data-contract-action="extend">Extend to new contract</button>
+      <button type="button" role="menuitem" data-contract-action="duplicate">Duplicate contract</button>
+    </div>`;
+  if (bar) bar.insertBefore(contractModifyMenu, btnEdit);
+  contractModifyMenu.addEventListener('click', (event) => {
+    const actionButton = event.target.closest('[data-contract-action]');
+    if (!actionButton) return;
+    contractModifyMenu.removeAttribute('open');
+    void runContractModifyAction(String(actionButton.dataset.contractAction || ''));
+  });
+}
+const btnContractAddMissing = ensureFooterBtn(
+  'btnContractAddMissingWeeks',
+  'Add missing weeks',
+  'btn btn-outline btn-sm',
+  contractModifyMenu
+);
+const btnContractUnassignAll = ensureFooterBtn(
+  'btnContractUnassignAll',
+  'Unassign all',
+  'btn btn-outline btn-sm',
+  contractModifyMenu
+);
+contractModifyMenu.style.display = 'none';
+btnContractAddMissing.style.display = 'none';
+btnContractUnassignAll.style.display = 'none';
+btnContractAddMissing.onclick = () => void runContractModifyAction('add-missing');
+btnContractUnassignAll.onclick = () => void runContractModifyAction('unassign-all');
+
 
   (function dragWire() {
     if (!header || !modalNode) return;
@@ -329704,6 +329812,30 @@ top._updateButtons = ()=> {
     }
   } catch {}
   try {
+    const title = byId('modalTitle');
+    let lock = byId('contractModalTitleLock');
+    const contractOwner = top.kind === 'contract_settings' ? parent : top;
+    const contractData = contractOwner?._ctxRef?.data || (top.entity === 'contracts' ? window.modalCtx?.data : null);
+    const showContractLock = !!(
+      (top.entity === 'contracts' || top.kind === 'contract_settings') &&
+      getContractLifecycleLocks(contractData).veryHighLocked
+    );
+    if (showContractLock && title) {
+      if (!lock) {
+        lock = document.createElement('span');
+        lock.id = 'contractModalTitleLock';
+        lock.className = 'ctms-contract-title-lock';
+        lock.textContent = '🔒';
+        lock.setAttribute('aria-label', 'Protected Contract');
+        lock.setAttribute('title', 'Protected Contract');
+        title.appendChild(lock);
+      }
+      lock.style.display = '';
+    } else if (lock) {
+      lock.style.display = 'none';
+    }
+  } catch {}
+  try {
     const h = document.getElementById('modalHint');
     if (h) {
       h.textContent = '';
@@ -329714,6 +329846,14 @@ top._updateButtons = ()=> {
 
   const parentEditable = top.noParentGate ? true : (parent ? (parent.mode==='edit' || parent.mode==='create') : true);
   const relatedBtn = byId('btnRelated');
+
+  const isExistingContractFrame = !!(!isChild && top.kind === 'contracts' && top.entity === 'contracts' && top.hasId);
+  contractModifyMenu.style.display = isExistingContractFrame && top.mode === 'view' ? '' : 'none';
+  if (top.mode !== 'view') contractModifyMenu.removeAttribute('open');
+  btnContractAddMissing.style.display = isExistingContractFrame && top.mode === 'edit' ? '' : 'none';
+  btnContractUnassignAll.style.display = isExistingContractFrame && top.mode === 'edit' ? '' : 'none';
+  btnContractAddMissing.disabled = !!top._saving;
+  btnContractUnassignAll.disabled = !!top._saving;
 
   if (top.entity !== 'timesheets') {
     clearLifecycleButtonArtifacts(btnSave, { restoreTitle: false });
@@ -354736,8 +354876,12 @@ function openContractDuplicateStudio(contractId) {
     return { ok:true, saved:result };
   };
 
-  showModal('Duplicate Contract', [{ key:'duplicate', title:'Assign candidates' }], () => `<div id="${rootId}" class="tabc ctms-contract-duplicate-studio">${bodyHtml()}</div>`, save, true, null, { kind:'contract-duplicate-studio', noParentGate:true, forceEdit:true, primaryLabel:'Create contracts', dirtyClosePolicy:'confirm-discard-close' });
-  setTimeout(() => { const root = document.getElementById(rootId); if (root) wire(root); }, 0);
+  const wireLiveRoot = () => {
+    const root = document.getElementById(rootId);
+    if (root) wire(root);
+  };
+  showModal('Duplicate Contract', [{ key:'duplicate', title:'Assign candidates' }], () => `<div id="${rootId}" class="tabc ctms-contract-duplicate-studio">${bodyHtml()}</div>`, save, true, wireLiveRoot, { kind:'contract-duplicate-studio', noParentGate:true, forceEdit:true, runOnRender:true, primaryLabel:'Create contracts', dirtyClosePolicy:'confirm-discard-close' });
+  setTimeout(wireLiveRoot, 0);
 }
 
 async function duplicateContract(contractId, { count, assignments = [], expected_source_updated_at = null, request_key = null } = {}) {
