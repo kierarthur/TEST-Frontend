@@ -56,6 +56,12 @@ test('Contract lifecycle protects very-high fields after start but locks rates o
   assert.match(mainTab, /ctms-readonly-setting/);
   assert.match(mainTab, /Contract override/);
   assert.match(mainTab, /Client default/);
+
+  const ratesTab = section('function renderContractRatesTab', 'async function openMyEmailSignatureModal');
+  assert.match(ratesTab, /<fieldset class="ctms-contract-protected-fields" \$\{ratesLocked \? 'disabled data-ctms-intentional-lock="1"' : ''\}/);
+
+  const additionalRatesTab = section('function renderContractAdditionalRatesTab', 'function closeModal');
+  assert.match(additionalRatesTab, /<fieldset class="ctms-contract-protected-fields" \$\{ratesLocked \? 'disabled data-ctms-intentional-lock="1"' : ''\}/);
 });
 
 test('Modify actions stage week changes and use branded confirmation', () => {

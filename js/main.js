@@ -140659,6 +140659,8 @@ function renderContractRatesTab(ctx) {
           <span class="ctms-contract-lock-banner__icon" aria-hidden="true">&#128274;</span>
           <div><strong>Rates are protected</strong><div class="mini">Worked timesheets already use these rates. You can continue editing other safe Contract details.</div></div>
         </div>` : ''}
+      <fieldset class="ctms-contract-protected-fields" ${ratesLocked ? 'disabled data-ctms-intentional-lock="1"' : ''}
+        style="border:0;padding:0;margin:0;min-width:0;">
       <div class="row" style="display:flex;justify-content:space-between;align-items:center">
         <label class="section">Rates</label>
         <div class="record-inline-actions">
@@ -140720,6 +140722,7 @@ function renderContractRatesTab(ctx) {
           <tr data-b="bh"><td>${labelOf('bh')}</td><td class="py">${payRate.bh != null ? fmt(payRate.bh) : ''}</td><td class="ch">${chgRate.bh != null ? fmt(chgRate.bh) : ''}</td><td class="mg">${marginRate.bh != null ? fmt(marginRate.bh) : ''}</td></tr>
         </tbody>
       </table>
+      </fieldset>
     </div>`;
 
   setTimeout(() => {
@@ -346402,6 +346405,8 @@ function renderContractAdditionalRatesTab(ctx) {
           <span class="ctms-contract-lock-banner__icon" aria-hidden="true">&#128274;</span>
           <div><strong>Additional rates are protected</strong><div class="mini">Worked timesheets already use these rates. Other safe Contract details remain editable.</div></div>
         </div>` : ''}
+      <fieldset class="ctms-contract-protected-fields" ${ratesLocked ? 'disabled data-ctms-intentional-lock="1"' : ''}
+        style="border:0;padding:0;margin:0;min-width:0;">
       <div class="row">
         <label class="section">Additional Rates</label>
         <div class="controls">
@@ -346414,6 +346419,7 @@ function renderContractAdditionalRatesTab(ctx) {
       <div class="group">
         ${rowsHtml.join('')}
       </div>
+      </fieldset>
     </div>
   `;
 
