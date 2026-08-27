@@ -257875,7 +257875,9 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     });
 
     window.__tsEvidenceDownload = async (evidenceId) => {
-      const evidenceList = Array.isArray(window.modalCtx?.timesheetState?.evidence) ? window.modalCtx.timesheetState.evidence : [];
+      const evidenceList = typeof getTimesheetEvidenceItemsFromModalContext === 'function'
+        ? getTimesheetEvidenceItemsFromModalContext(window.modalCtx)
+        : (Array.isArray(window.modalCtx?.timesheetState?.evidence) ? window.modalCtx.timesheetState.evidence : []);
       const item = evidenceList.find((entry) => entry && String(entry.id || '') === String(evidenceId || '')) || null;
       if (!item) {
         window.__toast && window.__toast('Evidence item not found');
@@ -257906,7 +257908,9 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
         ev.preventDefault();
         const evidenceId = btn.getAttribute('data-evidence-view') || '';
         if (!evidenceId) return;
-        const evidenceList = Array.isArray(window.modalCtx?.timesheetState?.evidence) ? window.modalCtx.timesheetState.evidence : [];
+        const evidenceList = typeof getTimesheetEvidenceItemsFromModalContext === 'function'
+          ? getTimesheetEvidenceItemsFromModalContext(window.modalCtx)
+          : (Array.isArray(window.modalCtx?.timesheetState?.evidence) ? window.modalCtx.timesheetState.evidence : []);
         const item = evidenceList.find((entry) => entry && String(entry.id || '') === String(evidenceId)) || null;
         if (!item) return;
         if (typeof openTimesheetEvidenceViewerExisting === 'function') {
@@ -327259,9 +327263,9 @@ if (this.entity === 'timesheets' && k === 'evidence') {
         btn.textContent = 'Opening…';
 
         try {
-          const list = Array.isArray(window.modalCtx?.timesheetState?.evidence)
-            ? window.modalCtx.timesheetState.evidence
-            : [];
+          const list = typeof getTimesheetEvidenceItemsFromModalContext === 'function'
+            ? getTimesheetEvidenceItemsFromModalContext(window.modalCtx)
+            : (Array.isArray(window.modalCtx?.timesheetState?.evidence) ? window.modalCtx.timesheetState.evidence : []);
           let item = list.find(x => x && String(x.id) === String(id)) || null;
 
           const idNowForRefresh =
@@ -327273,9 +327277,9 @@ if (this.entity === 'timesheets' && k === 'evidence') {
           if (!item && idNowForRefresh && typeof refreshTimesheetEvidenceIntoModalState === 'function') {
             try {
               await refreshTimesheetEvidenceIntoModalState(idNowForRefresh);
-              const refreshedList = Array.isArray(window.modalCtx?.timesheetState?.evidence)
-                ? window.modalCtx.timesheetState.evidence
-                : [];
+              const refreshedList = typeof getTimesheetEvidenceItemsFromModalContext === 'function'
+                ? getTimesheetEvidenceItemsFromModalContext(window.modalCtx)
+                : (Array.isArray(window.modalCtx?.timesheetState?.evidence) ? window.modalCtx.timesheetState.evidence : []);
               item = refreshedList.find(x => x && String(x.id) === String(id)) || null;
             } catch {}
           }
@@ -370583,6 +370587,20 @@ function renderTimesheetRelatedTab(ctx) {
   `;
 }
 
+function getTimesheetEvidenceItemsFromModalContext(modalContext) {
+  const mc = (modalContext && typeof modalContext === 'object') ? modalContext : {};
+  const state = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
+  const details = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
+  const current = Array.isArray(state.evidence)
+    ? state.evidence
+    : (Array.isArray(details.evidence) ? details.evidence : []);
+  const withdrawn = Array.isArray(state.withdrawn_submissions)
+    ? state.withdrawn_submissions
+    : (Array.isArray(details.withdrawn_submissions) ? details.withdrawn_submissions : []);
+  const historical = withdrawn.flatMap((submission) => Array.isArray(submission?.evidence) ? submission.evidence : []);
+  return [...current, ...historical];
+}
+
 function renderTimesheetEvidenceTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE]');
   const { row, details, state } = normaliseTimesheetCtx(ctx);
@@ -370607,7 +370625,34 @@ function renderTimesheetEvidenceTab(ctx) {
     typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function'
   ) ? window.CloudTMSCandidateOfficeBridge.slotHtml('SIMPLE_TIMESHEET', candidateEvidenceIdentity, { variant: 'evidence' }) : '';
 
-  const evList = Array.isArray(state.evidence) ? state.evidence : [];
+  const firstEvidenceArray = (...values) => {
+    const arrays = values.filter(Array.isArray);
+    return arrays.find((list) => list.length > 0) || arrays[0] || [];
+  };
+  const modalCtxEvidence = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object')
+    ? window.modalCtx
+    : {};
+  const evList = firstEvidenceArray(
+    state.evidence,
+    details.evidence,
+    row.evidence,
+    state.contractWeekStagedEvidence,
+    state.contract_week_staged_evidence,
+    state.stagedEvidence,
+    state.staged_evidence,
+    details.contractWeekStagedEvidence,
+    details.contract_week_staged_evidence,
+    details.stagedEvidence,
+    details.staged_evidence,
+    modalCtxEvidence?.timesheetState?.evidence,
+    modalCtxEvidence?.timesheetState?.contractWeekStagedEvidence,
+    modalCtxEvidence?.timesheetDetails?.evidence,
+    modalCtxEvidence?.timesheetDetails?.contract_week_staged_evidence,
+    modalCtxEvidence?.contractWeekStagedEvidence
+  );
+  const withdrawnSubmissions = Array.isArray(state.withdrawn_submissions)
+    ? state.withdrawn_submissions
+    : (Array.isArray(details.withdrawn_submissions) ? details.withdrawn_submissions : []);
   const boolish = (v) => {
     if (v === true) return true;
     if (v === false) return false;
@@ -370648,9 +370693,21 @@ function renderTimesheetEvidenceTab(ctx) {
     state?.evidence_meta?.route_evidence_editable === true
   );
   const policy = (typeof classifyTimesheetEditDomains === 'function')
-    ? classifyTimesheetEditDomains({ row, details, timesheet: ts, tsfin: details?.tsfin, state, ctx })
+    ? classifyTimesheetEditDomains({
+        row,
+        details,
+        timesheet: ts,
+        tsfin: details?.tsfin,
+        contract_week: details?.contract_week,
+        contract_week_id: row.contract_week_id || details.contract_week_id || details?.contract_week?.id || null,
+        state,
+        ctx
+      })
     : null;
-  const policyAllowsEvidence = policy ? (policy.canManageExpenseEvidence === true) : null;
+  const expenseEvidenceStorageTarget = policy ? String(policy.expenseEvidenceStorageTarget || '').trim().toUpperCase() : '';
+  const policyAllowsEvidence = policy
+    ? (policy.canManageExpenseEvidence === true && (expenseEvidenceStorageTarget === 'TIMESHEET_EVIDENCE' || expenseEvidenceStorageTarget === 'CONTRACT_WEEK_STAGED_EVIDENCE'))
+    : null;
   const canManageEvidence = policy
     ? !!(
         policyAllowsEvidence &&
@@ -370992,21 +371049,23 @@ function renderTimesheetEvidenceTab(ctx) {
               data-timesheet-document-state="${escapeHtml(timesheetDocumentState)}"
               data-document-operation-id="${escapeHtml(documentOperationId)}"
               class="${system ? 'system-evidence' : ''}">
-            <td>${fileName}</td>
-            <td>${type}</td>
-            <td>
+            <td data-ctms-label="Filename">${fileName}</td>
+            <td data-ctms-label="Type">${type}</td>
+            <td data-ctms-label="Source">
               <span class="pill">${src}</span>
             </td>
-            <td>${pageCount}</td>
-            <td>${uploadedDate}</td>
-            <td>${uploadedTime}</td>
-            <td>${uploadedBy}</td>
-            <td style="text-align:right; white-space:nowrap;">
-              ${viewBtn}
-              ${manageBtn}
-              ${returnBtn}
-              ${dlBtn}
-              ${delBtn}
+            <td data-ctms-label="Pages">${pageCount}</td>
+            <td data-ctms-label="Date uploaded">${uploadedDate}</td>
+            <td data-ctms-label="Time">${uploadedTime}</td>
+            <td data-ctms-label="Uploaded by">${uploadedBy}</td>
+            <td data-ctms-label="Actions" style="text-align:right;">
+              <div class="ctms-evidence-actions">
+                ${viewBtn}
+                ${manageBtn}
+                ${returnBtn}
+                ${dlBtn}
+                ${delBtn}
+              </div>
               ${asyncProcessingHtml ? `<div style="white-space:normal;text-align:left;">${asyncProcessingHtml}</div>` : ''}
             </td>
           </tr>
@@ -371022,7 +371081,7 @@ function renderTimesheetEvidenceTab(ctx) {
 
   const tableHtml = `
     <div class="scrollable-evidence" style="max-height:380px; overflow-y:auto;">
-      <table class="ts-evidence-table" style="width:100%; border-collapse:collapse;">
+      <table class="ts-evidence-table ctms-timesheet-evidence-table" style="width:100%; border-collapse:collapse;">
         <thead>
           <tr>
             <th style="text-align:left;">Filename</th>
@@ -371040,9 +371099,68 @@ function renderTimesheetEvidenceTab(ctx) {
     </div>
   `;
 
+  const withdrawnHistoryHtml = withdrawnSubmissions.length ? `
+    <section class="card" data-withdrawn-submission-history="1" style="margin-top:14px;border:1px solid rgba(240,82,98,.34);background:linear-gradient(180deg,rgba(82,30,41,.18),rgba(9,23,42,.82));">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+        <div style="min-width:0;">
+          <div style="font-size:1.02rem;font-weight:800;">Withdrawn submission history</div>
+          <div class="mini" style="margin-top:4px;opacity:.9;max-width:760px;line-height:1.45;">
+            Previous submissions are retained for audit only. They cannot be edited, restored, authorised or used for invoicing.
+          </div>
+        </div>
+        <span class="pill" style="border-color:rgba(240,82,98,.55);color:#ffb8c0;background:rgba(103,30,44,.38);">Read-only history</span>
+      </div>
+      <div style="display:grid;gap:12px;">
+        ${withdrawnSubmissions.map((submission) => {
+          const submissionEvidence = Array.isArray(submission?.evidence) ? submission.evidence : [];
+          const version = Number.isFinite(Number(submission?.version)) ? Number(submission.version) : null;
+          const withdrawnAt = submission?.withdrawn_at || null;
+          const title = version == null ? 'Withdrawn submission' : `Withdrawn submission · Version ${version}`;
+          const byCandidate = String(submission?.withdrawn_by || '').trim().toUpperCase() === 'CANDIDATE';
+          const reasonLabel = byCandidate ? 'Withdrawn by the Candidate' : 'Withdrawn submission';
+          return `
+            <article data-withdrawn-submission-version="${escapeHtml(version == null ? '' : String(version))}" style="padding:14px;border-radius:14px;border:1px solid rgba(255,255,255,.13);background:rgba(5,18,34,.76);min-width:0;">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+                <div style="min-width:0;">
+                  <div style="font-weight:800;overflow-wrap:anywhere;">${escapeHtml(title)}</div>
+                  <div class="mini" style="margin-top:3px;opacity:.86;">${escapeHtml(reasonLabel)}${withdrawnAt ? ` · ${escapeHtml(formatEvidenceDate(withdrawnAt))} at ${escapeHtml(formatEvidenceTime(withdrawnAt))}` : ''}</div>
+                </div>
+                <span class="pill" style="border-color:rgba(240,82,98,.55);color:#ffb8c0;background:rgba(103,30,44,.38);">Withdrawn</span>
+              </div>
+              <div style="display:grid;gap:8px;min-width:0;">
+                ${submissionEvidence.length ? submissionEvidence.map((item) => {
+                  const evidenceId = String(item?.id || '');
+                  const canDownload = hasDownloadableKey(item);
+                  return `
+                    <div data-withdrawn-evidence-id="${escapeHtml(evidenceId)}" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 12px;border-radius:11px;border:1px solid rgba(255,255,255,.11);background:rgba(15,36,62,.62);min-width:0;">
+                      <div style="min-width:0;flex:1 1 240px;">
+                        <div style="font-weight:700;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(filenameLabel(item))}</div>
+                        <div class="mini" style="margin-top:2px;opacity:.8;overflow-wrap:anywhere;">${escapeHtml(typeLabel(item))}${getUploadedDt(item) ? ` · ${escapeHtml(formatEvidenceDate(getUploadedDt(item)))}` : ''}</div>
+                      </div>
+                      <div style="display:flex;gap:7px;flex-wrap:wrap;flex:0 0 auto;">
+                        <button type="button" class="btn mini subtle" style="background:transparent;border:1px solid rgba(255,255,255,.18);min-height:44px;" data-evidence-view="${escapeHtml(evidenceId)}">View</button>
+                        ${canDownload ? `<button type="button" class="btn mini subtle" style="background:transparent;border:1px solid rgba(255,255,255,.18);min-height:44px;" onclick="window.__tsEvidenceDownload && window.__tsEvidenceDownload('${escapeHtml(evidenceId)}')">Download</button>` : ''}
+                      </div>
+                    </div>
+                  `;
+                }).join('') : `<div class="mini" style="opacity:.82;">No retained files are recorded for this withdrawn submission.</div>`}
+              </div>
+            </article>
+          `;
+        }).join('')}
+      </div>
+    </section>
+  ` : '';
+
   const policyEvidenceReason = policy ? String(policy.expenseEvidenceDisabledReason || policy.expensesDisabledReason || '') : '';
+  const plannedEvidenceGuidance = expenseEvidenceStorageTarget === 'CONTRACT_WEEK_STAGED_EVIDENCE'
+    ? 'Evidence can be uploaded for this unprocessed week because expenses are being saved as a draft.'
+    : '';
+  const protectedEvidenceGuidance = policy?.requiresAdditionalManualForExpenses
+    ? 'Evidence cannot be uploaded directly for this source row. Use Add Additional Manual if expenses need to be claimed.'
+    : '';
   const lockBanner = policy
-    ? (policy.canManageExpenseEvidence ? '' : (policyEvidenceReason || 'Evidence is read-only for this route/context.'))
+    ? (canManageEvidence ? plannedEvidenceGuidance : (protectedEvidenceGuidance || policyEvidenceReason || 'Evidence cannot be uploaded for this row because it does not have a supported expenses draft target.'))
     : (importAuthoritative
         ? 'Import source evidence is review-only. Use an additional manual timesheet for expenses or extra supporting items.'
         : (authorised
@@ -371077,8 +371195,10 @@ function renderTimesheetEvidenceTab(ctx) {
         </div>
       </div>
 
+      ${withdrawnHistoryHtml}
+
       <div class="mini" style="margin-top:10px; opacity:.85; text-align:center;">
-        ${canManageEvidence ? 'Drag a PDF or image anywhere inside this tab to upload new evidence.' : 'Evidence is read-only for this route/context.'}
+        ${canManageEvidence ? 'Drag a PDF or image anywhere inside this tab to upload new evidence.' : escapeHtml(protectedEvidenceGuidance || policyEvidenceReason || 'Evidence cannot be uploaded for this row because it does not have a supported expenses draft target.')}
       </div>
 
     </div>
@@ -372435,6 +372555,9 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
           : (json && typeof json === 'object' && Array.isArray(json.items))
             ? json.items
             : [];
+    const withdrawnList = (!usePlannedWeekEndpoint && json && typeof json === 'object' && !Array.isArray(json) && Array.isArray(json.withdrawn_submissions))
+      ? json.withdrawn_submissions
+      : [];
 
     if (currentIdFromApi && String(currentIdFromApi) !== String(targetTimesheetId)) {
       try {
@@ -372494,6 +372617,41 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
 
       return out;
     });
+    const normalisedWithdrawn = withdrawnList.map((submission) => ({
+      ...(submission || {}),
+      read_only: true,
+      evidence: (Array.isArray(submission?.evidence) ? submission.evidence : []).map((item) => {
+        const out = { ...(item || {}) };
+        const evidenceFileKey = String(
+          out.storage_key ||
+          out.file_key ||
+          out.download_storage_key ||
+          out.r2_key ||
+          out.storageKey ||
+          out.fileKey ||
+          out.downloadStorageKey ||
+          out.r2Key ||
+          ''
+        ).trim();
+        if (evidenceFileKey) {
+          if (!out.storage_key) out.storage_key = evidenceFileKey;
+          if (!out.file_key) out.file_key = evidenceFileKey;
+          if (!out.download_storage_key) out.download_storage_key = evidenceFileKey;
+        }
+        out.system = true;
+        out.protected = true;
+        out.withdrawn_history = true;
+        out.is_view_only = true;
+        out.can_delete = false;
+        out.can_reclassify = false;
+        out.can_return_to_queue = false;
+        if (!out.source_badge) out.source_badge = 'Withdrawn';
+        if (!out.uploaded_at_utc && out.created_at) out.uploaded_at_utc = out.created_at;
+        if (!out.display_name && out.filename) out.display_name = out.filename;
+        if (!out.filename && out.display_name) out.filename = out.display_name;
+        return out;
+      })
+    }));
 
     const persistEvidenceState = () => {
       window.modalCtx = window.modalCtx || {};
@@ -372545,6 +372703,13 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
       targetState.evidence = cloned;
       targetDetails.evidence = cloned;
       targetData.evidence = cloned;
+      const withdrawnCloned = normalisedWithdrawn.map((submission) => ({
+        ...(submission || {}),
+        evidence: (Array.isArray(submission?.evidence) ? submission.evidence : []).map((item) => ({ ...(item || {}) }))
+      }));
+      targetState.withdrawn_submissions = withdrawnCloned;
+      targetDetails.withdrawn_submissions = withdrawnCloned;
+      targetData.withdrawn_submissions = withdrawnCloned;
       if (preserveDirtyExpenses) {
         targetState.expensesDraft = cloneTimesheetFastOpenValue(preserveDirtyExpenses.expensesDraft || {});
         targetState.expensesBaseline = cloneTimesheetFastOpenValue(preserveDirtyExpenses.expensesBaseline || {});
@@ -372614,13 +372779,16 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
     try {
       window.__tsEvidenceDownload = async (evidenceId) => {
         const mc2 = window.modalCtx || {};
-        const evs =
-          mc2?.timesheetState?.evidence ||
-          mc2?.timesheetState?.contractWeekStagedEvidence ||
-          mc2?.timesheetDetails?.evidence ||
-          mc2?.timesheetDetails?.contract_week_staged_evidence ||
-          mc2?.contractWeekStagedEvidence ||
-          [];
+        const evs = typeof getTimesheetEvidenceItemsFromModalContext === 'function'
+          ? getTimesheetEvidenceItemsFromModalContext(mc2)
+          : (
+              mc2?.timesheetState?.evidence ||
+              mc2?.timesheetState?.contractWeekStagedEvidence ||
+              mc2?.timesheetDetails?.evidence ||
+              mc2?.timesheetDetails?.contract_week_staged_evidence ||
+              mc2?.contractWeekStagedEvidence ||
+              []
+            );
         const ev = (Array.isArray(evs) ? evs : []).find(x => String(x?.id || '') === String(evidenceId || ''));
         if (!ev) {
           window.__toast && window.__toast('Evidence item not found');
