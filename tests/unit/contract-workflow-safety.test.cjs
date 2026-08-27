@@ -83,6 +83,20 @@ test('Contract placement uses its picker fields as the single selection display'
   assert.doesNotMatch(render, /Chosen:/);
 });
 
+test('Contract saves preserve joined display names when narrow mutation responses omit them', () => {
+  const merge = section('function mergeContractAuthoritativeIntoModal', 'function openContractSettingsModal');
+  assert.match(merge, /sameIdentity\('candidate_id'\)/);
+  assert.match(merge, /candidate_display/);
+  assert.match(merge, /sameIdentity\('client_id'\)/);
+  assert.match(merge, /client_name/);
+
+  const saveFlow = section('function openContract(row, openOptions = {})', 'function formatCandidateLabel');
+  assert.match(saveFlow, /const freshResult = await getContract\(data\.id\)/);
+  assert.match(saveFlow, /const fresh = freshResult\?\.contract \|\| freshResult \|\| null/);
+  assert.match(saveFlow, /mergeContractAuthoritativeIntoModal\(window\.modalCtx\.data, fresh\)/);
+  assert.match(saveFlow, /window\.modalCtx\.data = mergeContractAuthoritativeIntoModal\(/);
+});
+
 test('Contract lifecycle protects very-high fields after start but locks rates only after worked timesheets exist', () => {
   const locks = section('function getContractLifecycleLocks', 'function markContractParentDirty');
   assert.match(locks, /veryHighLocked: hasProtectedHistory \|\| startedByDate/);
@@ -105,6 +119,10 @@ test('Contract lifecycle protects very-high fields after start but locks rates o
 });
 
 test('View and Edit Contract actions are separated and use branded confirmation', () => {
+  const dirty = section('function markContractParentDirty', 'function contractModifyIsParentClean');
+  assert.match(dirty, /reverse\(\)\.find\(item => item\?\.kind === 'contracts'\)/);
+  assert.match(dirty, /frame\.isDirty = true/);
+
   const source = section('async function runContractModifyAction', 'function renderContractMainTab');
   assert.match(source, /stageAddMissingWeeks/);
   assert.match(source, /removeAllUnsubmittedWeeks/);
@@ -125,6 +143,19 @@ test('View and Edit Contract actions are separated and use branded confirmation'
   const buttonState = section('const isExistingContractFrame', "if (top.entity !== 'timesheets')");
   assert.match(buttonState, /top\.mode === 'view'/);
   assert.match(buttonState, /top\.mode === 'edit'/);
+});
+
+test('Deferred Contract wiring cannot erase a newly staged dirty state', () => {
+  const safeRestores = main.match(/if \(prevDirty === true\) fr\.isDirty = true/g) || [];
+  assert.equal(safeRestores.length, 2);
+  assert.doesNotMatch(main, /fr\.isDirty = prevDirty/);
+});
+
+test('Extend refresh unwraps and safely merges the authoritative source Contract', () => {
+  assert.match(main, /const freshSourceResult = await getContract\(sourceId\)/);
+  assert.match(main, /const freshSource = freshSourceResult\?\.contract \|\| freshSourceResult \|\| null/);
+  assert.match(main, /parentContractCtx\.data = mergeContractAuthoritativeIntoModal\(parentContractCtx\.data, freshSource\)/);
+  assert.doesNotMatch(main, /parentContractCtx\.data = freshSource;/);
 });
 
 test('Discarding Contract edits uses the branded confirmation instead of a native dialog', () => {

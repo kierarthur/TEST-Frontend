@@ -98,7 +98,8 @@ async function openBookingContract(page: Page, trigger: 'button' | 'row') {
   else await row.dblclick();
 
   expect((await responsePromise).status()).toBe(200);
-  await expect(page.locator('#modalTitle')).toHaveText('View Contract', { timeout: 30_000 });
+  await expect(page.locator('#modalTitle')).toContainText('View Contract', { timeout: 30_000 });
+  await expect(page.locator('#modalTitle .ctms-contract-title-lock')).toBeVisible();
   await waitForLoading(page);
   await expect(page.locator('#contractForm')).toBeVisible();
   await expect(page.locator('#btnEditModal')).toBeVisible();

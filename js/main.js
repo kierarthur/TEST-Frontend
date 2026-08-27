@@ -126150,6 +126150,39 @@ function mergeContractStateIntoRow(row, formState) {
   return base;
 }
 
+function mergeContractAuthoritativeIntoModal(currentLike, incomingLike) {
+  const current = (currentLike?.contract && typeof currentLike.contract === 'object')
+    ? currentLike.contract
+    : ((currentLike && typeof currentLike === 'object') ? currentLike : {});
+  const incoming = (incomingLike?.contract && typeof incomingLike.contract === 'object')
+    ? incomingLike.contract
+    : ((incomingLike && typeof incomingLike === 'object') ? incomingLike : {});
+  const merged = { ...current, ...incoming };
+  const clean = (value) => String(value == null ? '' : value).trim();
+  const sameIdentity = (key) => {
+    const before = clean(current[key]);
+    const after = clean(incoming[key] ?? merged[key]);
+    return !!before && !!after && before === after;
+  };
+  const preserve = (keys) => {
+    for (const key of keys) {
+      if (!clean(merged[key]) && clean(current[key])) merged[key] = current[key];
+    }
+  };
+
+  // Contract mutation responses are deliberately narrow and may omit joined
+  // display labels. Preserve labels only when the authoritative identity is
+  // unchanged, so a real reassignment can never inherit the previous names.
+  if (sameIdentity('candidate_id')) {
+    preserve(['candidate_display', 'candidate_display_name', 'candidate_name']);
+  }
+  if (sameIdentity('client_id')) {
+    preserve(['client_name', 'client_display_name']);
+  }
+
+  return merged;
+}
+
 function openContractSettingsModal() {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
 
@@ -140139,7 +140172,11 @@ function markContractParentDirty({ calendar = false } = {}) {
     if (calendar) window.modalCtx.__calendarDirty = true;
     else window.modalCtx.__nonCalendarDirty = true;
     window.modalCtx.__calendarOnly = !!(calendar && !window.modalCtx.__nonCalendarDirty);
-    const frame = window.__getModalFrame?.();
+    // A branded confirmation is itself a child modal. Its promise can resolve
+    // while that child is still the current frame, so locate the owning
+    // Contract frame explicitly instead of assuming the stack top is parent.
+    const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+    const frame = [...stack].reverse().find(item => item?.kind === 'contracts') || window.__getModalFrame?.();
     if (frame && frame.kind === 'contracts') {
       frame.isDirty = true;
       frame._updateButtons?.();
@@ -141801,8 +141838,11 @@ function openContractCloneAndExtend(contract_id) {
       const successorId = result?.successor?.id || result?.successor_contract_id || null;
       if (successorId) window.__pendingFocus = { section:'contracts', id:successorId };
       try {
-        const freshSource = await getContract(sourceId);
-        if (freshSource?.id && parentContractCtx) parentContractCtx.data = freshSource;
+        const freshSourceResult = await getContract(sourceId);
+        const freshSource = freshSourceResult?.contract || freshSourceResult || null;
+        if (freshSource?.id && parentContractCtx) {
+          parentContractCtx.data = mergeContractAuthoritativeIntoModal(parentContractCtx.data, freshSource);
+        }
       } catch {}
       if (parentContractFrame) {
         parentContractFrame.isDirty = false;
@@ -296438,9 +296478,10 @@ if (LOGC) {
   // Do NOT normalize on the FE — backend now owns window shrink/extend.
   // Instead, pull the fresh contract (authoritative window) and bind it.
   try {
-    const fresh = await getContract(data.id);
+    const freshResult = await getContract(data.id);
+    const fresh = freshResult?.contract || freshResult || null;
     if (fresh && fresh.id) {
-      window.modalCtx.data = fresh;
+      window.modalCtx.data = mergeContractAuthoritativeIntoModal(window.modalCtx.data, fresh);
 
       // Update formState (so subsequent PUTs never push stale dates)
       const fs = (window.modalCtx.formState ||= { __forId: (data.id||null), main:{}, pay:{} });
@@ -296528,7 +296569,10 @@ if (LOGC) console.log('[CONTRACTS] upsertContract result', {
   isCreate, persistedId, rawHasSaved: !!saved
 });
 
-window.modalCtx.data = saved?.contract || saved || window.modalCtx.data;
+window.modalCtx.data = mergeContractAuthoritativeIntoModal(
+  window.modalCtx.data,
+  saved?.contract || saved || {}
+);
 if (LOGC) console.log('[CONTRACTS] modalCtx.data snapshot', {
   id: window.modalCtx.data?.id || null,
   start_date: window.modalCtx.data?.start_date || null,
@@ -297894,7 +297938,9 @@ if (chooseBtn && !chooseBtn.__wired) {
 
         if (fr) {
           fr._suppressDirty = false;
-          fr.isDirty = prevDirty;
+          // Wiring is deferred. Never overwrite a real user/calendar change
+          // that happened after this render captured a clean frame.
+          if (prevDirty === true) fr.isDirty = true;
           fr._updateButtons && fr._updateButtons();
         }
       }, 0);
@@ -297910,7 +297956,9 @@ if (chooseBtn && !chooseBtn.__wired) {
             wire();
             if (fr) {
               fr._suppressDirty = false;
-              fr.isDirty = prevDirty;
+              // Preserve a dirty frame, but do not restore a stale `false`
+              // over changes staged while this callback was waiting.
+              if (prevDirty === true) fr.isDirty = true;
               fr._updateButtons && fr._updateButtons();
             }
           }, 0);
@@ -333817,7 +333865,11 @@ async function saveForFrame(fr) {
         const idx = Array.isArray(currentRows)
           ? currentRows.findIndex(x => String(x.id) === String(id))
           : -1;
-        if (idx >= 0) currentRows[idx] = savedContract;
+        if (idx >= 0) {
+          currentRows[idx] = String(fr.entity || '').toLowerCase() === 'contracts'
+            ? mergeContractAuthoritativeIntoModal(currentRows[idx], savedContract)
+            : savedContract;
+        }
         (window.__lastSavedAtById ||= {})[String(id)] = Date.now();
       }
     } catch (e) {
@@ -333825,7 +333877,9 @@ async function saveForFrame(fr) {
     }
 
     if (saved && window.modalCtx) {
-      window.modalCtx.data = { ...(window.modalCtx.data || {}), ...(saved.contract || saved) };
+      window.modalCtx.data = String(fr.entity || '').toLowerCase() === 'contracts'
+        ? mergeContractAuthoritativeIntoModal(window.modalCtx.data, saved.contract || saved)
+        : { ...(window.modalCtx.data || {}), ...(saved.contract || saved) };
       fr.hasId = !!window.modalCtx.data?.id;
 
       // ✅ FIX: after create→saved, rebind formState identity so staged state continues to apply
