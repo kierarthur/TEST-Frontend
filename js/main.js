@@ -149472,7 +149472,33 @@ const renderTab = (key, mergedRow) => {
 
       return renderTimesheetEvidenceTab(ctxForTab);
     }
-    case 'issues':   return renderTimesheetIssuesTab(ctxForTab);
+    case 'issues': {
+      const hydration = (window.modalCtx && window.modalCtx.timesheetHydration && typeof window.modalCtx.timesheetHydration === 'object')
+        ? window.modalCtx.timesheetHydration
+        : {};
+      const realIssuesTsId = String(
+        window.modalCtx?.data?.current_timesheet_id ||
+        window.modalCtx?.data?.timesheet_id ||
+        window.modalCtx?.timesheetDetails?.current_timesheet_id ||
+        window.modalCtx?.timesheetDetails?.timesheet?.current_timesheet_id ||
+        window.modalCtx?.timesheetDetails?.timesheet?.timesheet_id ||
+        ''
+      ).trim();
+      const historyLoadedForCurrent = !!(
+        hydration.evidenceLoaded === true &&
+        String(hydration.evidenceTimesheetId || '').trim() === realIssuesTsId
+      );
+      const historyLoadingForCurrent = !!(
+        hydration.evidenceLoading === true &&
+        String(hydration.evidenceRequestTimesheetId || hydration.evidenceTimesheetId || '').trim() === realIssuesTsId
+      );
+      if (realIssuesTsId && !historyLoadedForCurrent && !historyLoadingForCurrent) {
+        Promise.resolve()
+          .then(() => ensureTimesheetEvidenceLoaded(openToken, { timesheetId: realIssuesTsId }))
+          .catch(() => {});
+      }
+      return renderTimesheetIssuesTab(ctxForTab);
+    }
     case 'finance':  return renderTimesheetFinanceTab(ctxForTab);
     case 'audit':    return renderTimesheetAuditTab(ctxForTab);
 
@@ -153410,6 +153436,12 @@ async function fetchTimesheetEvidenceForFastOpen(timesheetId) {
 
   return {
     evidence: normaliseTimesheetEvidenceListFromPayload(parsed),
+    withdrawn_submissions: (
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Array.isArray(parsed.withdrawn_submissions)
+    ) ? parsed.withdrawn_submissions.map((submission) => ({
+      ...(submission || {}),
+      evidence: (Array.isArray(submission?.evidence) ? submission.evidence : []).map((item) => ({ ...(item || {}) }))
+    })) : [],
     current_timesheet_id: movedId || id
   };
 }
@@ -153442,8 +153474,8 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
   const rerenderEvidenceTabIfActive = async () => {
     if (!isActiveTimesheetModalToken(openToken)) return false;
     const fr = getActiveTimesheetFrame();
-    if (fr && fr.currentTabKey === 'evidence') {
-      await rerenderActiveTimesheetTabAfterSecondary(openToken, 'evidence');
+    if (fr && (fr.currentTabKey === 'evidence' || fr.currentTabKey === 'issues')) {
+      await rerenderActiveTimesheetTabAfterSecondary(openToken, fr.currentTabKey);
       return isActiveTimesheetModalToken(openToken);
     }
     return true;
@@ -153578,13 +153610,19 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
     });
     const hydratedState = {
       ...mc.timesheetState,
-      evidence: incomingEvidence
+      evidence: incomingEvidence,
+      withdrawn_submissions: Array.isArray(payload.withdrawn_submissions)
+        ? cloneTimesheetFastOpenValue(payload.withdrawn_submissions)
+        : []
     };
     mc.timesheetState = mergeTimesheetHydratedStatePreservingUserEdits(existingStateSnapshot, hydratedState, { modalCtx: mc });
     const evidenceForDetails = Array.isArray(mc.timesheetState?.evidence)
       ? cloneTimesheetFastOpenValue(mc.timesheetState.evidence)
       : incomingEvidence;
     mc.timesheetDetails.evidence = Array.isArray(evidenceForDetails) ? evidenceForDetails : [];
+    mc.timesheetDetails.withdrawn_submissions = Array.isArray(mc.timesheetState?.withdrawn_submissions)
+      ? cloneTimesheetFastOpenValue(mc.timesheetState.withdrawn_submissions)
+      : [];
     window.modalCtx = mc;
 
     const patched = patchEvidenceHydrationForThisRequest({
@@ -312668,6 +312706,34 @@ function renderTimesheetIssuesTab(ctx) {
     ? `<ul class="mini">${issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>`
     : `<span class="mini">OK</span>`;
 
+  const withdrawnSubmissions = Array.isArray(details?.withdrawn_submissions)
+    ? details.withdrawn_submissions
+    : (Array.isArray(window.modalCtx?.timesheetState?.withdrawn_submissions)
+        ? window.modalCtx.timesheetState.withdrawn_submissions
+        : []);
+  const cancellationHistoryHtml = withdrawnSubmissions.length ? `
+    <div class="card" style="margin-top:10px;border-color:rgba(239,68,68,0.55);">
+      <div class="row">
+        <label>Cancelled submission history</label>
+        <div class="controls">
+          <ul class="mini" style="margin:0;">
+            ${withdrawnSubmissions.map((submission) => {
+              const scope = String(submission?.withdrawal_scope || '').trim().toUpperCase();
+              const subject = scope === 'CLAIM'
+                ? 'this claim'
+                : scope === 'EXPENSES'
+                  ? 'this expense claim'
+                  : 'this timesheet';
+              const actor = String(submission?.withdrawn_by_display || 'The Candidate').trim();
+              const reason = String(submission?.withdrawn_reason || '').trim();
+              const when = fmtPayTimestamp(submission?.withdrawn_at || '');
+              return `<li><strong>${esc(actor)}</strong> cancelled ${esc(subject)}${when ? ` on ${esc(when)}` : ''}.${reason ? ` <strong>Reason:</strong> ${esc(reason)}` : ''}</li>`;
+            }).join('')}
+          </ul>
+        </div>
+      </div>
+    </div>` : '';
+
   const candidateIssuesTimesheetId =
     ts.timesheet_id || details.current_timesheet_id || row.timesheet_id || row.current_timesheet_id || null;
   const candidateIssuesIdentityRow = candidateIssuesTimesheetId ? {
@@ -312730,6 +312796,7 @@ function renderTimesheetIssuesTab(ctx) {
           </div>
         </div>
       </div>
+      ${cancellationHistoryHtml}
       ${candidateIssuesHtml ? `
         <div class="card" style="margin-top:10px;">
           <div class="row">

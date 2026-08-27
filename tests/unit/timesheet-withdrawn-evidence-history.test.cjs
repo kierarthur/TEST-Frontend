@@ -53,3 +53,22 @@ test('viewer and downloader resolve both current and withdrawn evidence without 
   assert.match(source, /getTimesheetEvidenceItemsFromModalContext\(window\.modalCtx\)/);
   assert.match(source, /getTimesheetEvidenceItemsFromModalContext\(mc2\)/);
 });
+
+test('opening Issues hydrates cancellation history and rerenders the active tab', () => {
+  assert.match(source, /case 'issues':[\s\S]*ensureTimesheetEvidenceLoaded\(openToken, \{ timesheetId: realIssuesTsId \}\)/);
+  assert.match(source, /fr\.currentTabKey === 'evidence' \|\| fr\.currentTabKey === 'issues'/);
+  assert.match(source, /fetchTimesheetEvidenceForFastOpen[\s\S]*withdrawn_submissions:/);
+  assert.match(source, /mc\.timesheetDetails\.withdrawn_submissions = Array\.isArray/);
+});
+
+test('Issues presents the cancelling person, affected scope and mandatory reason', () => {
+  const issuesStart = source.indexOf('function renderTimesheetIssuesTab(ctx)');
+  const issuesEnd = source.indexOf('function buildOutboxFiltersFromUi', issuesStart);
+  assert.ok(issuesStart >= 0 && issuesEnd > issuesStart, 'Timesheet Issues renderer must exist');
+  const issues = source.slice(issuesStart, issuesEnd);
+  assert.match(issues, /Cancelled submission history/);
+  assert.match(issues, /withdrawn_by_display/);
+  assert.match(issues, /withdrawal_scope/);
+  assert.match(issues, /cancelled \$\{esc\(subject\)\}/);
+  assert.match(issues, /<strong>Reason:<\/strong>/);
+});
