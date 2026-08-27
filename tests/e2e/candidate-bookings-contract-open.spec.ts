@@ -102,6 +102,9 @@ async function openBookingContract(page: Page, trigger: 'button' | 'row') {
   await waitForLoading(page);
   await expect(page.locator('#contractForm')).toBeVisible();
   await expect(page.locator('#btnEditModal')).toBeVisible();
+  await page.locator('#btnEditModal').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__getModalFrame?.()?.mode)).toBe('edit');
+  await expect(page.locator('#contractForm input[name="display_site"]')).toBeEnabled();
   for (const selector of [
     '#contractForm input[name="candidate_id"]',
     '#contractForm input[name="client_id"]',

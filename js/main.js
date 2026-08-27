@@ -332086,7 +332086,12 @@ if (!isChild && top.entity === 'contracts') {
 
     // Block Edit for search & normal child-apply modals. PAYE editing is also
     // available on the integrated batch worksheet, not only its legacy entry modal.
-    if (!isRatePreset && !isPayeEntry && !isPayeBatchWorksheet && (isChildNow || top.kind === 'advanced-search')) return;
+    if (
+      !isRatePreset &&
+      !isPayeEntry &&
+      !isPayeBatchWorksheet &&
+      ((isChildNow && !top.noParentGate) || top.kind === 'advanced-search')
+    ) return;
 
   if (top.mode === 'view') {
   if (top.entity === 'timesheets' && typeof hydrateTimesheetEditStateFromDetails === 'function') {

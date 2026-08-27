@@ -37,6 +37,10 @@ test('Candidate Bookings opens Contract as an independently editable record moda
 
   const bookings = section('async function fetchAndRenderCandidateCalendar', 'function renderCandidateContractList');
   assert.match(bookings, /openContract\(fresh, \{ noParentGate: true \}\)/);
+
+  const editHandler = section('btnEdit.onclick = async ()=>', 'const restoreFrameSnapshot');
+  assert.match(editHandler, /isChildNow && !top\.noParentGate/);
+  assert.doesNotMatch(editHandler, /\(isChildNow \|\| top\.kind === 'advanced-search'\)/);
 });
 
 test('Contract lifecycle protects very-high fields after start but locks rates only after worked timesheets exist', () => {
