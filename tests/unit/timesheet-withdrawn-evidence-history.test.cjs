@@ -4,7 +4,10 @@ const path = require('node:path');
 const test = require('node:test');
 
 const source = fs.readFileSync(path.resolve(__dirname, '../../js/main.js'), 'utf8');
-const renderStart = source.indexOf('function renderTimesheetEvidenceTab(ctx)');
+// main.js contains a compatibility-era renderer earlier in the bundle. The
+// final declaration is the one JavaScript actually installs, so assertions
+// must be anchored to that effective implementation.
+const renderStart = source.lastIndexOf('function renderTimesheetEvidenceTab(ctx)');
 const renderEnd = source.indexOf('async function openTimesheetEvidenceUploadDialog', renderStart);
 const refreshStart = source.indexOf('async function refreshTimesheetEvidenceIntoModalState');
 const refreshEnd = source.indexOf('async function', refreshStart + 30);
