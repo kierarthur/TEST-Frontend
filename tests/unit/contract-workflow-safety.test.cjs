@@ -47,6 +47,16 @@ test('Candidate Bookings opens Contract as an independently editable record moda
   const editHandler = section('btnEdit.onclick = async ()=>', 'const restoreFrameSnapshot');
   assert.match(editHandler, /isChildNow && !top\.noParentGate/);
   assert.doesNotMatch(editHandler, /\(isChildNow \|\| top\.kind === 'advanced-search'\)/);
+
+  const buttonState = section('const parentEditable = top.noParentGate', "if (top.entity !== 'timesheets')");
+  assert.match(buttonState, /const ownsPrimaryRecordWorkflow =/);
+  assert.match(buttonState, /top\.noParentGate === true && isPrimaryRecordFrame\(top\)/);
+  assert.match(buttonState, /ownsPrimaryRecordWorkflow && top\.kind === 'contracts'/);
+
+  const relatedStart = main.indexOf('// Related button (unchanged)');
+  assert.notEqual(relatedStart, -1);
+  const relatedState = main.slice(relatedStart, relatedStart + 6_000);
+  assert.match(relatedState, /ownsPrimaryRecordWorkflow &&[\s\S]*top\.hasId/);
 });
 
 test('Contract lifecycle protects very-high fields after start but locks rates only after worked timesheets exist', () => {

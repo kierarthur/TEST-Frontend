@@ -329847,7 +329847,15 @@ top._updateButtons = ()=> {
   const parentEditable = top.noParentGate ? true : (parent ? (parent.mode==='edit' || parent.mode==='create') : true);
   const relatedBtn = byId('btnRelated');
 
-  const isExistingContractFrame = !!(!isChild && top.kind === 'contracts' && top.entity === 'contracts' && top.hasId);
+  // A Contract opened from Candidate > Bookings intentionally remains on the
+  // modal stack so Close can return to the Candidate. `noParentGate` marks it
+  // as an independently owned record workflow, not a picker/settings child.
+  const ownsPrimaryRecordWorkflow = !!(
+    !isChild || (top.noParentGate === true && isPrimaryRecordFrame(top))
+  );
+  const isExistingContractFrame = !!(
+    ownsPrimaryRecordWorkflow && top.kind === 'contracts' && top.entity === 'contracts' && top.hasId
+  );
   contractModifyMenu.style.display = isExistingContractFrame && top.mode === 'view' ? '' : 'none';
   if (top.mode !== 'view') contractModifyMenu.removeAttribute('open');
   btnContractAddMissing.style.display = isExistingContractFrame && top.mode === 'edit' ? '' : 'none';
@@ -332141,7 +332149,7 @@ Operation ID: ${operationId}` : ''}`);
         null;
 
       const showRelated =
-        !isChild &&
+        ownsPrimaryRecordWorkflow &&
         top.hasId &&
         !!relatedEntity;
 
@@ -332400,7 +332408,7 @@ if (!isChild && (top.entity === 'candidates' || top.entity === 'clients')) {
 } else
 
 // 🔹 Top-level Edit Contract → wire global Delete button
-if (!isChild && top.entity === 'contracts') {
+if (ownsPrimaryRecordWorkflow && top.entity === 'contracts') {
   const canDelete = !!(window.modalCtx?.data && window.modalCtx.data.can_delete);
   const showDelete = (top.mode === 'edit' && top.hasId && canDelete);
 
