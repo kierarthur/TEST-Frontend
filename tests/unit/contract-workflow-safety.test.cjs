@@ -19,8 +19,10 @@ const section = (startMarker, endMarker) => {
 test('Contract settings are a child draft and only Apply dirties the parent', () => {
   const source = section('function openContractSettingsModal()', 'function computePayWorkbenchSessionSignature');
   assert.match(source, /const localMainDraft = clonePlain\(parentMainDraft/);
-  assert.match(source, /for \(const key of Object\.keys\(parentMainDraft\)\) delete parentMainDraft\[key\]/);
-  assert.match(source, /Object\.assign\(parentMainDraft, clonePlain\(localMainDraft\)\)/);
+  assert.match(source, /const parentCtx = \(parentContractFrame\?\._ctxRef/);
+  assert.match(source, /const liveParentMainDraft =/);
+  assert.match(source, /Object\.assign\(liveParentMainDraft, clonePlain\(localMainDraft\)\)/);
+  assert.doesNotMatch(source, /Object\.assign\(parentMainDraft, clonePlain\(localMainDraft\)\)/);
   assert.match(source, /primaryLabel: 'Apply'/);
   assert.match(source, /dirtyClosePolicy: 'confirm-discard-close'/);
   assert.match(source, /disabledPaperPolicy = viewOnly/);
@@ -57,6 +59,21 @@ test('Candidate Bookings opens Contract as an independently editable record moda
   assert.notEqual(relatedStart, -1);
   const relatedState = main.slice(relatedStart, relatedStart + 6_000);
   assert.match(relatedState, /ownsPrimaryRecordWorkflow &&[\s\S]*top\.hasId/);
+
+  const saveFlow = section('async function saveForFrame(fr)', 'const onSaveClick = async');
+  assert.match(saveFlow, /const ownsPrimaryRecordWorkflow =/);
+  assert.match(saveFlow, /fr\.noParentGate === true && isPrimaryRecordFrame\(fr\)/);
+  assert.match(saveFlow, /if \(isChildNow && !ownsPrimaryRecordWorkflow\)/);
+});
+
+test('Inherited Contract settings are omitted from unrelated safe updates', () => {
+  const saveFlow = section('function openContract(row, openOptions = {})', 'function formatCandidateLabel');
+  assert.match(saveFlow, /overrideClientSettingsWasExplicitlyDisabled/);
+  assert.match(saveFlow, /Only an explicit ON -> OFF transition persists the NULL reset/);
+  assert.match(saveFlow, /overrideclientsettings !== true && !overrideClientSettingsWasExplicitlyDisabled/);
+  assert.match(saveFlow, /'self_bill'/);
+  assert.match(saveFlow, /'auto_invoice'/);
+  assert.match(saveFlow, /delete data\[field\]/);
 });
 
 test('Contract lifecycle protects very-high fields after start but locks rates only after worked timesheets exist', () => {

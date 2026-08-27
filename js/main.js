@@ -127131,13 +127131,23 @@ function openContractSettingsModal() {
       applyFromDOM(root, { initial: false });
 
       try {
-        for (const key of Object.keys(parentMainDraft)) delete parentMainDraft[key];
-        Object.assign(parentMainDraft, clonePlain(localMainDraft));
-        if (localOverrideStash) window.modalCtx[STASH_KEY] = clonePlain(localOverrideStash);
-        else delete window.modalCtx[STASH_KEY];
-        window.modalCtx.__contractSettingsDirty = true;
-        window.modalCtx.__nonCalendarDirty = true;
-        window.modalCtx.__calendarOnly = false;
+        // persistCurrentTabState() runs immediately before this callback and may
+        // replace formState.main. Resolve the parent's live draft now instead of
+        // writing through the stale reference captured when the child opened.
+        const parentCtx = (parentContractFrame?._ctxRef && typeof parentContractFrame._ctxRef === 'object')
+          ? parentContractFrame._ctxRef
+          : window.modalCtx;
+        parentCtx.formState ||= { __forId: (contractId || null), main: {}, pay: {} };
+        const liveParentMainDraft = (parentCtx.formState.main && typeof parentCtx.formState.main === 'object')
+          ? parentCtx.formState.main
+          : (parentCtx.formState.main = {});
+        for (const key of Object.keys(liveParentMainDraft)) delete liveParentMainDraft[key];
+        Object.assign(liveParentMainDraft, clonePlain(localMainDraft));
+        if (localOverrideStash) parentCtx[STASH_KEY] = clonePlain(localOverrideStash);
+        else delete parentCtx[STASH_KEY];
+        parentCtx.__contractSettingsDirty = true;
+        parentCtx.__nonCalendarDirty = true;
+        parentCtx.__calendarOnly = false;
         if (parentContractFrame) {
           parentContractFrame.isDirty = true;
           parentContractFrame._updateButtons && parentContractFrame._updateButtons();
@@ -295914,6 +295924,11 @@ let require_reference_to_invoice = boolTriFromFS('require_reference_to_invoice')
 
   // ✅ NEW: overrideclientsettings (boolean)
         const overrideclientsettings = boolFromFS('overrideclientsettings', !!base.overrideclientsettings);
+        const overrideClientSettingsWasEnabled = (
+          base.overrideclientsettings === true ||
+          ['on', 'true', '1'].includes(String(base.overrideclientsettings ?? '').trim().toLowerCase())
+        );
+        const overrideClientSettingsWasExplicitlyDisabled = overrideClientSettingsWasEnabled && overrideclientsettings !== true;
           // ✅ CRITICAL: when overrideclientsettings is FALSE, contract.default_submission_mode must behave as INHERIT.
         // So force it to NULL in the payload logic (and later we also ensure it is not sent on PUT).
         if (overrideclientsettings !== true) {
@@ -296205,6 +296220,33 @@ const data = {
   mileage_charge_rate: mileage_charge_rate,
   mileage_pay_rate:    mileage_pay_rate
 };
+
+// If this Contract already inherits Client settings, an unrelated safe edit
+// must not reinterpret old false values as a request to clear protected
+// overrides. Only an explicit ON -> OFF transition persists the NULL reset.
+// This keeps independent settings such as Printed timesheets editable on a
+// protected Contract while retaining the agreed durable reset semantics.
+if (!isCreate && overrideclientsettings !== true && !overrideClientSettingsWasExplicitlyDisabled) {
+  [
+    'default_submission_mode',
+    'is_nhsp',
+    'autoprocess_hr',
+    'requires_hr',
+    'no_timesheet_required',
+    'daily_calc_of_invoices',
+    'group_nightsat_sunbh',
+    'self_bill',
+    'hr_attach_to_invoice',
+    'ts_attach_to_invoice',
+    'timesheet_break_entry_mode',
+    'auto_invoice',
+    'require_reference_to_pay',
+    'require_reference_to_invoice',
+    'reference_number_required_to_issue_invoice',
+    'send_manual_invoices_to_different_email',
+    'manual_invoices_alt_email_address'
+  ].forEach((field) => { delete data[field]; });
+}
 
 
 if (LOGC) {
@@ -333462,6 +333504,9 @@ async function saveForFrame(fr) {
   });
 
   const isChildNow = (window.__modalStack?.length > 1);
+  const ownsPrimaryRecordWorkflow = !!(
+    !isChildNow || (fr.noParentGate === true && isPrimaryRecordFrame(fr))
+  );
   const isTimesheetFrame = (fr.entity === 'timesheets');
   const isTopLevelStandaloneTemplateEditor = !isChildNow && isTemplateEditorKind(fr.kind);
 
@@ -333519,7 +333564,7 @@ async function saveForFrame(fr) {
 
   if (shouldNoop) {
     L('saveForFrame GUARD (global): no-op (no changes and apply not allowed)');
-    if (isChildNow) {
+    if (isChildNow && !ownsPrimaryRecordWorkflow) {
       sanitizeModalGeometry();
 
       const closing = window.__modalStack.pop();
@@ -333627,7 +333672,7 @@ async function saveForFrame(fr) {
     return;
   }
 
-  if (isChildNow) {
+  if (isChildNow && !ownsPrimaryRecordWorkflow) {
     // If this child should remain open after save (successor contract),
     // flip it in-place to view mode and keep it on screen.
     if (fr.stayOpenOnSave) {
