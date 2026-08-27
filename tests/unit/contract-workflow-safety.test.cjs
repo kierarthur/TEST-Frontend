@@ -76,6 +76,13 @@ test('Inherited Contract settings are omitted from unrelated safe updates', () =
   assert.match(saveFlow, /delete data\[field\]/);
 });
 
+test('Contract placement uses its picker fields as the single selection display', () => {
+  const render = section('function renderContractMainTab(ctx)', 'function renderContractRatesTab(ctx)');
+  assert.doesNotMatch(render, /candidatePickLabel/);
+  assert.doesNotMatch(render, /clientPickLabel/);
+  assert.doesNotMatch(render, /Chosen:/);
+});
+
 test('Contract lifecycle protects very-high fields after start but locks rates only after worked timesheets exist', () => {
   const locks = section('function getContractLifecycleLocks', 'function markContractParentDirty');
   assert.match(locks, /veryHighLocked: hasProtectedHistory \|\| startedByDate/);

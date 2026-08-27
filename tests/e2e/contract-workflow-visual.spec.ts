@@ -170,6 +170,22 @@ async function assertProtectedContractControls(page: Page) {
   await expect(page.locator('#modalTitle')).toContainText('Contract settings');
   await expect(page.locator('#contractModalTitleLock')).toBeVisible();
   await expect(page.locator('input[name="overrideclientsettings"]')).toBeDisabled();
+  const lockedSwitchThumb = await page.locator('input[name="overrideclientsettings"]').evaluate((element) => {
+    const style = window.getComputedStyle(element, '::after');
+    const checkboxGlyph = window.getComputedStyle(element, '::before');
+    return {
+      content: style.content,
+      width: style.width,
+      height: style.height,
+      background: style.backgroundColor,
+      checkboxGlyphDisplay: checkboxGlyph.display
+    };
+  });
+  expect(lockedSwitchThumb.content).not.toBe('none');
+  expect(lockedSwitchThumb.width).toBe('18px');
+  expect(lockedSwitchThumb.height).toBe('18px');
+  expect(lockedSwitchThumb.background).not.toBe('rgba(0, 0, 0, 0)');
+  expect(lockedSwitchThumb.checkboxGlyphDisplay).toBe('none');
   const workflowModes = page.locator('input[name="weekly_mode"]');
   await expect(workflowModes).toHaveCount(3);
   expect(await workflowModes.evaluateAll((items) => items.every((item) => (item as HTMLInputElement).disabled))).toBe(true);
@@ -260,6 +276,7 @@ for (const device of devices) {
     await expect(page.locator('#contractFooterModify')).toBeHidden();
     await expect(page.locator('#btnContractAddMissingWeeks')).toBeVisible();
     await expect(page.locator('#btnContractUnassignAll')).toBeVisible();
+    await expect(page.getByText(/^Chosen:/)).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Contract settings', exact: true }).click();
     await expect(page.locator('#modalTitle')).toContainText('Contract settings');
@@ -269,6 +286,7 @@ for (const device of devices) {
     const overrideSwitchBox = await overrideSwitch.boundingBox();
     expect(overrideSwitchBox?.width ?? 0).toBeGreaterThanOrEqual(40);
     expect(overrideSwitchBox?.height ?? 0).toBeGreaterThanOrEqual(24);
+    await saveShot(page, `03-contract-settings-off-${device.label}`);
     await page.locator('input[name="overrideclientsettings"]').check();
     await expect(page.locator('.ctms-contract-override-panel')).toBeVisible();
     await expect(page.locator('#btnResetContractOverrides')).toBeVisible();

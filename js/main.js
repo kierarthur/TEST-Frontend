@@ -140513,7 +140513,6 @@ function renderContractMainTab(ctx) {
               <button type="button" class="btn mini" id="btnClearCandidate" ${veryHighDisabled}>Clear</button>
             </span>
           </div>
-          <div class="mini" id="candidatePickLabel">${_candLabel ? `Chosen: ${_candLabel}` : ''}</div>
         </div>
       </div>
 
@@ -140531,7 +140530,6 @@ function renderContractMainTab(ctx) {
               <button type="button" class="btn mini" id="btnClearClient" ${veryHighDisabled}>Clear</button>
             </span>
           </div>
-          <div class="mini" id="clientPickLabel">${_clientLabel ? `Chosen: ${_clientLabel}` : ''}</div>
         </div>
       </div>
 
@@ -296973,9 +296971,6 @@ const stage = (e) => {
               } catch {}
 
               try {
-                const labEl = document.getElementById('candidatePickLabel');
-                if (labEl) labEl.textContent = initialLabel ? `Chosen: ${initialLabel}` : '';
-
                 const inp = document.getElementById('candidate_name_display');
                 if (inp) inp.value = initialLabel || '';
               } catch {}
@@ -297005,9 +297000,6 @@ const stage = (e) => {
 
                     window.modalCtx.data = window.modalCtx.data || {};
                     window.modalCtx.data.candidate_display = finalLabel;
-
-                    const labEl = document.getElementById('candidatePickLabel');
-                    if (labEl) labEl.textContent = finalLabel ? `Chosen: ${finalLabel}` : '';
 
                     const inp = document.getElementById('candidate_name_display');
                     if (inp) inp.value = finalLabel || '';
@@ -297059,8 +297051,6 @@ const stage = (e) => {
               if (!clientId) return;
 
               setContractFormValue('client_id', clientId);
-              const lab = document.getElementById('clientPickLabel');
-              if (lab) lab.textContent = `Chosen: ${clientLabel}`;
               const input = document.getElementById('client_name_display');
               if (input) input.value = clientLabel;
 
