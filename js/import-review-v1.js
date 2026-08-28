@@ -2234,9 +2234,9 @@
     const card = document.createElement('section');
     card.id = 'irv1ClientPolicy';
     card.className = 'irv1-settings-card';
-    root.appendChild(card);
+    (root.querySelector('[data-record-panel="timesheets"]') || root).appendChild(card);
     if (!clientId) {
-      card.innerHTML = '<h3 class="irv1-title">Import correction dates</h3><p class="mini">Create the client first. A new client inherits the global defaults automatically; eligible clients can then override them here.</p>';
+      card.hidden = true;
       return;
     }
     card.innerHTML = '<div class="irv1-save-state">Loading import policy…</div>';
@@ -2245,7 +2245,7 @@
       const policy = response.import_financial_policy || {};
       global.modalCtx.__importFinancialPolicy = policy;
       if (!policy.eligible) {
-        card.innerHTML = '<h3 class="irv1-title">Import correction dates</h3><p class="mini">Not available for this client. These controls are shown only when the client is import-authoritative.</p>';
+        card.hidden = true;
         return;
       }
       const complete = policy.reversal_complete_financials_date || {};

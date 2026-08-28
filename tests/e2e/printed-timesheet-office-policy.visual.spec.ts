@@ -52,6 +52,13 @@ async function installLocalAssets(page: Page) {
         headers: { 'cache-control': 'no-store', 'x-codex-local-asset': marker }
       });
     }
+    if (['/js/record-modal-layout.js', '/css/record-modal-layout.css', '/js/modal-modernisation.js', '/js/import-review-v1.js'].includes(url.pathname)) {
+      return route.fulfill({
+        body: readFileSync(resolve(root, url.pathname.slice(1))),
+        contentType: url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8',
+        headers: { 'cache-control': 'no-store', 'x-codex-local-asset': marker }
+      });
+    }
     return route.continue();
   });
   return counts;
@@ -106,6 +113,7 @@ for (const device of devices) {
         entity: 'clients',
         mode: 'edit',
         data: { id: '73000000-0000-4000-8000-000000000002', name: 'Berkshire Healthcare' },
+        formState: { main: {} },
         clientSettingsState: { ...settings },
         clientSettingsBaseline: { ...settings }
       };
@@ -121,13 +129,13 @@ for (const device of devices) {
       await (window as any).renderClientSettingsUI(settings);
     });
 
-    await expect(page.getByRole('heading', { name: 'Printed timesheets' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Printed QR Timesheets' })).toBeVisible();
     await expect(page.locator('.ctms-policy-badge')).toHaveText('Not allowed');
-    await expect(page.getByText('central printed-timesheet feature')).toBeVisible();
+    await expect(page.getByText('central printed-timesheet feature')).toHaveCount(0);
     const submissionOptions = await page.locator('select[name="default_submission_mode"] option').allTextContents();
-    expect(submissionOptions.map((value) => value.trim())).toEqual(['ELECTRONIC', 'MANUAL']);
+    expect(submissionOptions.map((value) => value.trim())).toEqual(['Electronic', 'Manual']);
 
-    await page.getByLabel('Allow candidates to use printed timesheets').check();
+    await page.getByLabel('Allow candidates to use Printed QR Timesheets').check();
     await expect(page.locator('.ctms-policy-badge')).toHaveText('Allowed');
     expect(await page.evaluate(() => (window as any).modalCtx.clientSettingsState.candidate_paper_submission_enabled)).toBe(true);
     await assertModalFits(page, device.width);
@@ -178,7 +186,7 @@ for (const device of devices) {
     });
 
     await expect(page.locator('#modalTitle')).toHaveText('Contract settings');
-    await expect(page.getByRole('heading', { name: 'Printed timesheets' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Printed QR Timesheets' })).toBeVisible();
     await expect(page.locator('.ctms-policy-badge')).toHaveText('Allowed');
     await expect(page.locator('input[name="candidate_paper_submission_policy"][value="INHERIT"]')).toBeChecked();
     const printedPolicyRadios = page.locator('input[name="candidate_paper_submission_policy"]');

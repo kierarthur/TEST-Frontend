@@ -18,6 +18,8 @@ const section = (startMarker, endMarker) => {
 test('Office contract settings expose a separate tri-state printed-timesheet policy', () => {
   const source = section('function openContractSettingsModal()', 'function computePayWorkbenchSessionSignature');
   assert.match(source, /candidate_paper_submission_policy/);
+  assert.match(source, /<h3 id="contractPrintedTimesheetsHeading">Printed QR Timesheets<\/h3>/);
+  assert.match(source, /aria-label="Printed QR Timesheet policy"/);
   assert.match(source, /Use Client setting/);
   assert.match(source, /Allow for this Contract/);
   assert.match(source, /Do not allow for this Contract/);
@@ -60,7 +62,8 @@ test('existing Client and Contract printed-timesheet changes use narrow exact en
 test('Client settings use the same polished policy card and preserve workflow restrictions', () => {
   const source = section('async function renderClientSettingsUI(settingsObj)', 'async function upsertClient(payload, id)');
   assert.match(source, /clientPrintedTimesheetsHeading/);
-  assert.match(source, /Allow candidates to use printed timesheets/);
+  assert.match(source, /<h3 id="clientPrintedTimesheetsHeading">Printed QR Timesheets<\/h3>/);
+  assert.match(source, /Allow candidates to use Printed QR Timesheets/);
   assert.match(source, /central printed-timesheet feature/);
   assert.match(source, /Daily and import-authoritative timesheets remain unavailable/);
   assert.match(source, /candidate_paper_submission_enabled/);

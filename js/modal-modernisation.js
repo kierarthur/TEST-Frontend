@@ -267,7 +267,7 @@
   };
 
   const unclaimedVisibleChildren = (form) => Array.from(form.children).filter((child) => {
-    if (child.classList.contains('ctms-section')) return false;
+    if (child.classList.contains('ctms-section') || child.classList.contains('record-system-references')) return false;
     if (child.id === 'searchHeaderRow') return false;
     if (child.matches('input[type="hidden"]')) return false;
     return true;
@@ -410,11 +410,6 @@
       selectors: ['[name="email"]','[name="phone"]','[name="opt_in_email"]']
     });
     section(form, {
-      key: 'work', title: 'Work & compliance', eyebrow: 'Candidate', wide: true,
-      copy: '',
-      selectors: ['[name="pay_method"]','[name="ni_number"]','[name="band"]','[name="prof_reg_number"]','[name="key_norm"]','#cand-alias-empty','#tms_ref_display']
-    });
-    section(form, {
       key: 'address', title: 'Address & notes', eyebrow: 'Candidate', wide: true,
       copy: '',
       selectors: ['[name="address_line1"]','[name="notes"]']
@@ -432,7 +427,7 @@
     section(form, {
       key: 'bank', title: 'Payment destination', eyebrow: 'Candidate payment', wide: true,
       copy: 'PAYE bank details can be edited. Umbrella bank details come from the selected umbrella.',
-      selectors: ['[name="account_holder"]','[name="bank_name"]','[name="sort_code"]','[name="account_number"]','#umbRow']
+      selectors: ['[name="pay_method"]','[name="account_holder"]','[name="bank_name"]','[name="sort_code"]','[name="account_number"]','#umbRow']
     });
     section(form, {
       key: 'remittance', title: 'Remittance preferences', eyebrow: 'Candidate payment',
@@ -476,6 +471,23 @@
     });
     spanForSelector(form, '[name="contact_forename"]');
     spanForSelector(form, '[name="notes"]');
+    finishRemaining(form);
+  };
+
+  const enhanceCandidateWork = (body, form) => {
+    intro(body, 'candidate-work', 'Work & compliance', '');
+    form.classList.add('ctms-proposal-form');
+    section(form, { key:'professional', title:'Professional details', eyebrow:'Candidate', wide:true,
+      selectors:['[name="band"]','[name="prof_reg_number"]','[name="ni_number"]'] });
+    spanForSelector(form, '[name="band"]');
+    form.querySelector('[name="band"]')?.setAttribute('aria-label', 'Band');
+    const references = section(form, { key:'references', title:'References & matching', eyebrow:'Candidate', wide:true,
+      selectors:['#tms_ref_display','[name="key_norm"]','#cand-alias-empty'] });
+    if (references) {
+      const details=document.createElement('details'); details.className='record-system-references';
+      const summary=document.createElement('summary'); summary.textContent='System references & matching';
+      references.wrap.before(details); details.append(summary, references.wrap);
+    }
     finishRemaining(form);
   };
 
@@ -573,7 +585,7 @@
 
   const enhanceClientSettings = (body, settings) => {
     intro(body, 'client-settings', 'Client settings', '');
-    if (settings.dataset.ctmsEnhanced === '1') return;
+    if (settings.dataset.ctmsEnhanced === '1' || settings.classList.contains('record-client-settings')) return;
     settings.dataset.ctmsEnhanced = '1';
     const grid = settings.firstElementChild;
     if (!grid) return;
@@ -1359,6 +1371,9 @@
     } else if (entity === 'candidates' && tab === 'pay' && form && form.dataset.ctmsEnhanced !== '1') {
       form.dataset.ctmsEnhanced = '1';
       enhanceCandidatePay(body, form);
+    } else if (entity === 'candidates' && tab === 'work' && form && form.dataset.ctmsEnhanced !== '1') {
+      form.dataset.ctmsEnhanced = '1';
+      enhanceCandidateWork(body, form);
     } else if (entity === 'clients' && tab === 'main' && form && form.dataset.ctmsEnhanced !== '1') {
       form.dataset.ctmsEnhanced = '1';
       enhanceClientMain(body, form);

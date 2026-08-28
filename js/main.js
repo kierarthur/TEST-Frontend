@@ -1788,7 +1788,7 @@ function markFieldError(root, fieldName, message) {
 // === Candidate main tab validation =======================================
 
 function validateCandidateMain(payload) {
-  const root = document.querySelector('#tab-main');
+  const root = document.querySelector('#tab-main, #tab-pay');
   if (!root) return true;
 
   clearFieldErrors(root);
@@ -1878,7 +1878,7 @@ function validateCandidateMain(payload) {
 // === Client main tab validation ==========================================
 
 function validateClientMain(payload) {
-  const root = document.querySelector('#tab-main');
+  const root = document.querySelector('#tab-main, #clientSettingsForm');
   if (!root) return true;
 
   clearFieldErrors(root);
@@ -126929,14 +126929,14 @@ function openContractSettingsModal() {
             <div class="ctms-policy-card__heading">
               <div>
                 <div class="ctms-policy-card__eyebrow">Candidate submission</div>
-                <h3 id="contractPrintedTimesheetsHeading">Printed timesheets</h3>
-                <p>Choose whether eligible candidates can use the secure printed-timesheet route for this Contract.</p>
+                <h3 id="contractPrintedTimesheetsHeading">Printed QR Timesheets</h3>
+                <p>Choose whether eligible candidates can use the secure printed QR timesheet route for this Contract.</p>
               </div>
               <span class="ctms-policy-badge ${effectivePaperEnabled ? 'is-enabled' : 'is-disabled'}">${effectivePaperEnabled ? 'Allowed' : 'Not allowed'}</span>
             </div>
-            <div class="ctms-policy-options" role="radiogroup" aria-label="Printed timesheet policy">
+            <div class="ctms-policy-options" role="radiogroup" aria-label="Printed QR Timesheet policy">
               ${radioChoice('candidate_paper_submission_policy', 'INHERIT', 'Use Client setting', `Currently ${clientPaperEnabled ? 'allowed' : 'not allowed'} by the Client setting.`, paperOverride === null, disabledPaperPolicy)}
-              ${radioChoice('candidate_paper_submission_policy', 'ALLOW', 'Allow for this Contract', 'Eligible candidates may choose a secure printed timesheet.', paperOverride === true, disabledPaperPolicy)}
+              ${radioChoice('candidate_paper_submission_policy', 'ALLOW', 'Allow for this Contract', 'Eligible candidates may choose a secure printed QR timesheet.', paperOverride === true, disabledPaperPolicy)}
               ${radioChoice('candidate_paper_submission_policy', 'BLOCK', 'Do not allow for this Contract', 'The Client setting is ignored for this Contract.', paperOverride === false, disabledPaperPolicy)}
             </div>
             <p class="mini">Only eligible weekly routes are affected, and the central printed-timesheet feature must also be available.</p>
@@ -277689,6 +277689,7 @@ async function openCandidate(row) {
     full?.id ? 'View Candidate' : 'Create Candidate',
     [
       { key:'main',     label:'Main Details' },
+      { key:'work',     label:'Work & compliance' },
       { key:'rates',    label:'Care Packages' },
       { key:'pay',      label:'Payment details' },
       { key:'bookings', label:'Bookings' },
@@ -277706,7 +277707,10 @@ async function openCandidate(row) {
     (k, r) => {
       L('[renderCandidateTab] tab=', k, 'rowKeys=', Object.keys(r||{}), 'sample=', { first: r?.first_name, last: r?.last_name, id: r?.id });
 
-      const html = renderCandidateTab(k, r);
+      const rawHtml = renderCandidateTab(k === 'work' ? 'main' : k, r);
+      const html = window.CloudTMSRecordLayout
+        ? window.CloudTMSRecordLayout.candidate(k, rawHtml, k === 'pay' ? renderCandidateTab('main', r) : '')
+        : rawHtml;
 
       if (k === 'main' && full?.id) {
         Promise.resolve().then(() => Promise.resolve().then(() => {
@@ -278175,7 +278179,7 @@ if (routeChangeResult) {
 // - keep key_norm as-is (including null when user cleared it)
 // - do NOT allow first/last/display_name to be cleared (convert "" → keep existing / drop from payload)
 for (const k of Object.keys(payload)) {
-  if (k === 'key_norm') continue;
+  if (k === 'key_norm' || ['address_line1','address_line2','address_line3','town_city','county','postcode','country','notes'].includes(k)) continue;
 
   // Prevent clearing required identity fields
   if (k === 'first_name' || k === 'last_name' || k === 'display_name') {
@@ -280934,6 +280938,8 @@ async function openClient(row) {
     }
   } else {
     L('no seedId — create mode');
+    settingsSeed = { ...window.CloudTMSRecordLayout?.newClientSettings(), ...(settingsSeed || {}) };
+    full = { vat_chargeable: true, payment_terms_days: 30, ...(full || {}) };
   }
 
   // Ensure flag is present even in create mode / fallback mode
@@ -281168,13 +281174,15 @@ window.modalCtx = {
         W('[E-HISTORY] history tab mount guard error', e);
       }
 
-      return renderClientTab(k, r);
+      const rawHtml = renderClientTab(k, r);
+      return k === 'main' && window.CloudTMSRecordLayout ? window.CloudTMSRecordLayout.clientMain(rawHtml) : rawHtml;
     },
     async ()=> {
       L('[onSave] begin', { dataId: window.modalCtx?.data?.id, forId: window.modalCtx?.formState?.__forId });
       const isNew = !window.modalCtx?.data?.id;
 
       // Collect "main" form
+      window.CloudTMSRecordLayout?.captureBilling(window.modalCtx);
       const fs = window.modalCtx.formState || { __forId: null, main:{} };
       const hasId = !!window.modalCtx.data?.id;
       const same = hasId ? (fs.__forId === window.modalCtx.data.id)
@@ -281313,6 +281321,13 @@ window.modalCtx = {
         const keepInvConsol = (csMerged.invoice_consolidation_mode != null) ? String(csMerged.invoice_consolidation_mode) : '';
         const keepRefToIssue = !!csMerged.reference_number_required_to_issue_invoice;
         const keepPrintedTimesheets = !!csMerged.candidate_paper_submission_enabled;
+
+        const shiftKeys = ['day_start','day_end','night_start','night_end','sat_start','sat_end','sun_start','sun_end','bh_start','bh_end'];
+        const enteredShiftCount = shiftKeys.filter(k => String(csMerged[k] ?? '').trim() !== '').length;
+        if (enteredShiftCount > 0 && enteredShiftCount < shiftKeys.length) {
+          await openUiConfirmModal({ title: 'Complete the shift pattern', message: 'Enter start and end times for every shift, or switch off Use custom shift times to use the global pattern.', confirm_label: 'OK', hide_cancel: true });
+          return { ok:false };
+        }
 
         try {
           csMerged = canonicalizeClientSettings(csMerged);
@@ -282236,7 +282251,7 @@ function renderClientTab(key, row = {}){
       ${input('primary_invoice_email','Primary invoice email', row.primary_invoice_email,'email')}
       ${input('ap_phone','A/P phone', row.ap_phone)}
       ${select('vat_chargeable','VAT chargeable', vatChoice, ['Yes','No'])}
-      ${input('payment_terms_days','Payment terms (days)', row.payment_terms_days || 30, 'number')}
+      ${input('payment_terms_days','Payment terms (days)', row.payment_terms_days ?? 30, 'number')}
 
       <div class="row" style="grid-column:1/-1">
         <label>Notes</label>
@@ -322260,7 +322275,9 @@ function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
   };
 
   const syncRecordControlValidity = (fr, control) => {
-    if (!fr || fr.currentTabKey !== 'main' || !(control instanceof HTMLElement)) return;
+    if (!fr || !(control instanceof HTMLElement)) return;
+    const validationTabs = fr.entity === 'candidates' ? ['main', 'work', 'pay'] : ['main', 'settings'];
+    if (!validationTabs.includes(fr.currentTabKey)) return;
     if (fr.entity !== 'candidates' && fr.entity !== 'clients') return;
     const name = String(control.getAttribute('name') || '').trim();
     if (!name) return;
@@ -323748,6 +323765,7 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
 
   // Buttons: in ro mode, keep specific IDs + any timesheet action buttons enabled
   if (el.type === 'button' || el.tagName === 'BUTTON') {
+    if (el.matches('[data-record-tab]')) { el.disabled = false; return; }
     const allow = new Set([
       'btnCloseModal',
       'btnDelete',
@@ -324616,12 +324634,12 @@ persistCurrentTabState() {
     });
     return out;
   };
-  if (this.currentTabKey === 'main') {
+  if (this.currentTabKey === 'main' || (this.entity === 'candidates' && this.currentTabKey === 'work')) {
   const sel = byId('tab-main') ? '#tab-main' : (byId('contractForm') ? '#contractForm' : null);
   if (sel) {
     const c = collectForm(sel);
 
-    const merged = { ...stripEmpty(c) };
+    const merged = { ...(this.entity === 'candidates' ? c : stripEmpty(c)) };
 
     // ✅ Preserve GCK (key_norm) even when user clears it ('')
     if (Object.prototype.hasOwnProperty.call(c, 'key_norm')) {
@@ -324685,6 +324703,17 @@ persistCurrentTabState() {
 
 
   // NEW: capture Care Packages tab (candidates/rates) into main form state
+  if (this.entity === 'candidates' && this.currentTabKey === 'pay' && byId('tab-pay')) {
+    const c = collectForm('#tab-pay');
+    for (const key of ['remittance_overrides_enabled','remittance_receive_enabled','remittances_detailed_breakdown','remittance_receive_when_umbrella_paid']) {
+      if (Object.prototype.hasOwnProperty.call(c, key)) c[key] = c[key] === 'on';
+    }
+    if (Object.prototype.hasOwnProperty.call(c, 'pay_method')) {
+      fs.main = { ...(fs.main || {}), pay_method: c.pay_method };
+      delete c.pay_method;
+    }
+    fs.pay = { ...(fs.pay || {}), ...c, __forMethod: window.modalCtx?.payMethodState || window.modalCtx?.data?.pay_method || null };
+  }
   if (this.entity === 'candidates' && this.currentTabKey === 'rates' && byId('tab-rates')) {
     const c = collectForm('#tab-rates');
     // GCK (key_norm) and any future Care Packages fields are treated
@@ -325126,7 +325155,7 @@ mergedRowForTab(k) {
   const base = canonicalBase;
 
   // Default merge (drops empty strings via stripEmpty)
-  const out = { ...base, ...stripEmpty(stagedMainForMerge) };
+  const out = { ...base, ...(this.entity === 'candidates' ? stagedMainForMerge : stripEmpty(stagedMainForMerge)) };
   // ✅ Preserve intentional clears for specific fields (blank string should win over base)
   try {
     if (this.entity === 'candidates') {
@@ -325817,9 +325846,9 @@ if (this.entity === 'imports' && this.kind === 'imports' && k === 'main') {
   }
 
   // ───────────────────── Candidates: Main tab wiring (NI / DOB / aliases / job titles) ─────────────────────
-  if (this.entity === 'candidates' && k === 'main') {
+  if (this.entity === 'candidates' && (k === 'main' || k === 'work' || k === 'pay')) {
     try {
-      const container = document.getElementById('tab-main');
+      const container = document.getElementById(k === 'pay' ? 'tab-pay' : 'tab-main');
       if (container && typeof bindCandidateMainFormEvents === 'function') {
         // Ensure we have a candidateMainModel (openCandidate now seeds this)
         if (!window.modalCtx.candidateMainModel || typeof window.modalCtx.candidateMainModel !== 'object') {
@@ -345585,9 +345614,9 @@ async function renderClientSettingsUI(settingsObj){
   const up = (v) => String(v || '').trim().toUpperCase();
 
   // ✅ NEW: client-level temp staffing email (stored on clients.ts_queries_email)
-  const clientTsQueriesEmail = (() => {
+  let clientTsQueriesEmail = (() => {
     try {
-      const v = ctx?.data?.ts_queries_email;
+      const v = ctx?.formState?.main?.ts_queries_email ?? ctx?.data?.ts_queries_email;
       return (v == null) ? '' : String(v).trim();
     } catch { return ''; }
   })();
@@ -345676,7 +345705,7 @@ async function renderClientSettingsUI(settingsObj){
   const weekEndingAndDefaultRow = () => {
     const mode = String(s.weekly_mode || 'NONE').toUpperCase();
     const beh  = String(s.hr_weekly_behaviour || 'VERIFY').toUpperCase();
-    const hideDSM = (mode === 'NHSP') || (mode === 'HEALTHROSTER' && beh === 'CREATE');
+    const hideDSM = false; // Keep the existing draft control mounted; layout hides it when inapplicable.
 
     const opts = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
       .map((lab,idx)=>`<option value="${idx}" ${String(idx)===String(s.week_ending_weekday)?'selected':''}>${lab}</option>`).join('');
@@ -345697,8 +345726,8 @@ async function renderClientSettingsUI(settingsObj){
                 <div style="display:flex;flex-direction:column;gap:4px;width:220px;min-width:220px;">
                   <span class="mini" style="opacity:0.9">Default submission</span>
                   <select name="default_submission_mode">
-                    <option value="ELECTRONIC" ${String(s.default_submission_mode||'').toUpperCase()==='ELECTRONIC'?'selected':''}>ELECTRONIC</option>
-                    <option value="MANUAL"     ${String(s.default_submission_mode||'').toUpperCase()==='MANUAL'?'selected':''}>MANUAL</option>
+                    <option value="ELECTRONIC" ${String(s.default_submission_mode||'').toUpperCase()==='ELECTRONIC'?'selected':''}>Electronic</option>
+                    <option value="MANUAL"     ${String(s.default_submission_mode||'').toUpperCase()==='MANUAL'?'selected':''}>Manual</option>
                   </select>
                 </div>
               `
@@ -345797,7 +345826,7 @@ async function renderClientSettingsUI(settingsObj){
         <div class="row" style="margin-top:12px;">
           <label style="white-space:normal">Temporary Staffing Email Address</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:6px;min-width:0;">
-            <input class="input" name="ts_queries_email" value="${String(clientTsQueriesEmail || '')}" placeholder="name@trust.nhs.uk" />
+            <input class="input" name="ts_queries_email" value="${escapeHtml(clientTsQueriesEmail)}" placeholder="name@trust.nhs.uk" />
             <div class="mini" style="opacity:0.85;line-height:1.25;white-space:normal;overflow-wrap:break-word;">
               Used when emailing Temporary Staffing about weekly roster-validation mismatches.
             </div>
@@ -346015,15 +346044,15 @@ async function renderClientSettingsUI(settingsObj){
             <div class="ctms-policy-card__heading">
               <div>
                 <div class="ctms-policy-card__eyebrow">Candidate submission</div>
-                <h3 id="clientPrintedTimesheetsHeading">Printed timesheets</h3>
-                <p>Allow eligible candidates to choose a secure printed timesheet.</p>
+                <h3 id="clientPrintedTimesheetsHeading">Printed QR Timesheets</h3>
+                <p>Allow eligible candidates to choose a secure printed QR timesheet.</p>
               </div>
               <span class="ctms-policy-badge ${s.candidate_paper_submission_enabled ? 'is-enabled' : 'is-disabled'}">${s.candidate_paper_submission_enabled ? 'Allowed' : 'Not allowed'}</span>
             </div>
             <div class="ctms-policy-toggle-row">
               ${checkChoiceWithDesc(
                 'candidate_paper_submission_enabled',
-                'Allow candidates to use printed timesheets',
+                'Allow candidates to use Printed QR Timesheets',
                 'Only eligible weekly routes are affected, and the central printed-timesheet feature must also be available. Daily and import-authoritative timesheets remain unavailable.',
                 !!s.candidate_paper_submission_enabled
               )}
@@ -346094,6 +346123,9 @@ async function renderClientSettingsUI(settingsObj){
   if (Object.prototype.hasOwnProperty.call(vals, 'ts_queries_email')) {
     try {
       const v = String(vals.ts_queries_email ?? '').trim();
+      clientTsQueriesEmail = v;
+      ctx.formState ||= { main:{} };
+      ctx.formState.main = { ...ctx.formState.main, ts_queries_email: v };
       ctx.data = ctx.data || {};
       ctx.data.ts_queries_email = v;
     } catch {}
@@ -346110,26 +346142,8 @@ async function renderClientSettingsUI(settingsObj){
       }
     });
 
-    const blankTimeKeys = TIME_KEYS.filter(k => String(next[k] ?? '').trim() === '');
-    const hasSomeBlank = (blankTimeKeys.length > 0 && blankTimeKeys.length < TIME_KEYS.length);
-
-    if (!soft && hasSomeBlank) {
-      TIME_KEYS.forEach(k => {
-        next[k] = String(lastValid[k] ?? '');
-        const el = root.querySelector(`input[name="${k}"]`);
-        if (el) el.value = String(lastValid[k] ?? '');
-      });
-
-      alert(
-        'Shift times must be either:\n' +
-        '• all filled, or\n' +
-        '• all blank (to inherit global).\n\n' +
-        'Use “Clear shift times and default to global shift times” to blank them all.'
-      );
-
-      ctx.clientSettingsState = { ...lastValid };
-      return;
-    }
+    // A partial shift pattern is a valid in-progress draft. The existing parent
+    // Save validator still requires every pair or all blank (global inheritance).
 
     const w = Number(vals.week_ending_weekday);
     next.week_ending_weekday = Number.isInteger(w)
@@ -346224,6 +346238,9 @@ async function renderClientSettingsUI(settingsObj){
     const paperPrev = !!prev.candidate_paper_submission_enabled;
     const paperNext = !!next.candidate_paper_submission_enabled;
 
+    next = window.CloudTMSRecordLayout?.defaultConsolidation(
+      prev, next, !ctx.data?.id, !!ctx.recordLayout?.consolidationCustomised
+    ) || next;
     ctx.clientSettingsState = next;
     lastValid = { ...next };
 
@@ -346255,6 +346272,8 @@ async function renderClientSettingsUI(settingsObj){
     } else if (manualFlagPrev !== manualFlagNext) {
       paintRightPanels('flags');
     }
+    if (next.invoice_consolidation_mode !== invModeNext) paintRightPanels('inv');
+    window.CloudTMSRecordLayout?.refreshClient(root, ctx);
   };
 
   const syncSoft = ()=> applyFromDOM(true);
@@ -346293,6 +346312,8 @@ if (btnClear && !btnClear.__wired) {
   });
 
   root.__wired = true;
+  window.CloudTMSRecordLayout?.mountClient(root, ctx,
+    renderClientTab('main', { ...ctx.data, ...ctx.formState?.main }), () => applyFromDOM(true));
 }
 
 async function upsertClient(payload, id){
@@ -347390,6 +347411,7 @@ function _setFormReadOnly(root, ro) {
       return;
     }
     const isDisplayOnly = el.id === 'tms_ref_display' || el.id === 'cli_ref_display';
+    if (el.matches('[data-record-tab]')) { el.disabled = false; return; }
     if (el.type === 'button') {
       // Buttons are generally disabled only when parent is view/child not editable
       if (ro && !isDisplayOnly) el.disabled = true;
@@ -349089,7 +349111,7 @@ function bindCandidateMainFormEvents(container, model) {
     const canEdit =
       !!fr &&
       fr.entity === 'candidates' &&
-      fr.currentTabKey === 'main' &&
+      ['main', 'work'].includes(fr.currentTabKey) &&
       (fr.mode === 'edit' || fr.mode === 'create');
 
     if (!items.length) {
@@ -349210,7 +349232,7 @@ function bindCandidateMainFormEvents(container, model) {
       const canEdit =
         !!fr &&
         fr.entity === 'candidates' &&
-        fr.currentTabKey === 'main' &&
+        ['main', 'work'].includes(fr.currentTabKey) &&
         (fr.mode === 'edit' || fr.mode === 'create');
 
       if (!canEdit) return; // no menu in view mode

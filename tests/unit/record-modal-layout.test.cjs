@@ -1,0 +1,60 @@
+const test=require('node:test'),assert=require('node:assert/strict');
+const layout=require('../../js/record-modal-layout.js');
+const fs=require('node:fs'),path=require('node:path');
+const main=fs.readFileSync(path.join(__dirname,'../../js/main.js'),'utf8');
+const source=fs.readFileSync(path.join(__dirname,'../../js/record-modal-layout.js'),'utf8');
+const css=fs.readFileSync(path.join(__dirname,'../../css/record-modal-layout.css'),'utf8');
+test('new-client defaults are explicit and isolated per record',()=>{
+ const a=layout.newClientSettings(),b=layout.newClientSettings();a.daily_calc_of_invoices=false;
+ assert.equal(b.daily_calc_of_invoices,true);assert.equal(b.candidate_paper_submission_enabled,true);
+ assert.equal(b.invoice_consolidation_mode,'NONE');assert.equal(b.week_ending_weekday,0);
+ for(const key of layout.timeNames)assert.equal(b[key],'');
+ for(const key of ['pay_reference_required','invoice_reference_required','reference_number_required_to_issue_invoice','auto_invoice_default'])assert.equal(b[key],false);
+});
+
+test('layout retains original controls and introduces no transport or business-rule implementation',()=>{
+ assert.match(source,/form\.prepend\(method\)/);
+ assert.match(source,/shiftBody\.append\(n\)/);
+ assert.match(source,/data-client-billing/);
+ assert.doesNotMatch(source,/\b(?:fetch|authFetch|showModal)\s*\(/);
+ assert.match(source,/\.ma-summary/);
+ assert.match(source,/append\(summary\)/);
+});
+
+test('moved candidate fields retain tab persistence, primary-role controls and validation',()=>{
+ assert.match(main,/this\.entity === 'candidates' && this\.currentTabKey === 'pay' && byId\('tab-pay'\)/);
+ assert.match(main,/fs\.pay = \{ \.\.\.\(fs\.pay \|\| \{\}\), \.\.\.c, __forMethod:/);
+ assert.match(main,/\['main', 'work'\]\.includes\(fr\.currentTabKey\)/);
+ assert.match(main,/validationTabs = fr\.entity === 'candidates' \? \['main', 'work', 'pay'\]/);
+ assert.match(main,/'address_line1','address_line2','address_line3','town_city','county','postcode','country','notes'\]\.includes\(k\)/);
+});
+
+test('client billing and shift drafts are saved through existing parent save guards',()=>{
+ assert.match(main,/CloudTMSRecordLayout\?\.captureBilling\(window\.modalCtx\)/);
+ assert.match(main,/payment_terms_days \?\? 30/);
+ assert.match(main,/enteredShiftCount > 0 && enteredShiftCount < shiftKeys\.length/);
+ assert.match(main,/title: 'Complete the shift pattern'/);
+ assert.match(source,/ui\.shiftDraft=inputs\.map\(el=>el\.value\)/);
+ assert.match(source,/ui\.clientTab=key/);
+ assert.match(source,/data-ctms-intentional-lock/);
+ assert.match(source,/!\['edit','create'\]\.includes\(frame\.mode\)/);
+});
+
+test('switches have distinct visible thumbs and phone time-entry pairs retain usable width',()=>{
+ assert.match(css,/record-switch::after[\s\S]*width:20px/);
+ assert.match(css,/background:#17283e !important/);
+ assert.match(css,/background:#5b51dc !important/);
+ assert.match(css,/grid-template-columns:repeat\(2,minmax\(125px,1fr\)\)/);
+ assert.match(source,/ArrowLeft','ArrowRight','Home','End/);
+});
+test('special new workflows propose All; existing records and custom choices never reset',()=>{
+ const plain=layout.newClientSettings();
+ for(const patch of [{weekly_mode:'NHSP'},{weekly_mode:'HEALTHROSTER',hr_weekly_behaviour:'CREATE'},{self_bill_no_invoices_sent:true}]){
+  const special={...plain,...patch,invoice_consolidation_mode:'BY_WEEK'};
+  assert.equal(layout.defaultConsolidation(plain,special,true,false).invoice_consolidation_mode,'ANY_WEEK');
+  assert.equal(layout.defaultConsolidation(plain,special,false,false).invoice_consolidation_mode,'BY_WEEK');
+  assert.equal(layout.defaultConsolidation(plain,special,true,true).invoice_consolidation_mode,'BY_WEEK');
+  assert.equal(layout.defaultConsolidation(special,plain,true,false).invoice_consolidation_mode,'NONE');
+ }
+ assert.equal(layout.specialConsolidation({...plain,weekly_mode:'HEALTHROSTER',hr_weekly_behaviour:'VERIFY'}),false);
+});
