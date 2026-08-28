@@ -346324,6 +346324,11 @@ async function upsertClient(payload, id){
   const CLEAN_NULLABLE_KEYS = new Set([
     'ts_queries_email',
 
+    // Billing controls may be intentionally cleared in Client settings.
+    'invoice_address',
+    'primary_invoice_email',
+    'ap_phone',
+
     // ✅ NEW: client site details + site contact fields must be clearable
     'client_address',
     'contact_title',

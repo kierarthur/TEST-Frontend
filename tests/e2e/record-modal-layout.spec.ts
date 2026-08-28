@@ -118,6 +118,7 @@ test('existing billing, zero terms, custom shifts and roster drafts survive tab 
   await expect(field(page, 'daily_calc_of_invoices')).not.toBeChecked();
   await expect(page.getByRole('radio', { name: 'By week (per client)', exact: true })).toBeChecked();
   await field(page, 'invoice_address').fill('');
+  await field(page, 'ap_phone').fill('');
   await field(page, 'primary_invoice_email').fill('invoices@example.invalid');
   await tab(page, 'Main').click();
   await tab(page, 'Client settings').click();
@@ -127,7 +128,8 @@ test('existing billing, zero terms, custom shifts and roster drafts survive tab 
   await expect(page.locator('#modalTitle')).toHaveText('View Client');
   const data = await result(page);
   expect(data.client.primary_invoice_email).toBe('invoices@example.invalid');
-  expect(data.client.invoice_address).toBe('');
+  expect(data.client.invoice_address).toBeNull();
+  expect(data.client.ap_phone).toBeNull();
   expect(data.client.payment_terms_days).toBe(0);
   expect(data.client.ts_queries_email).toBe('changed@example.invalid');
   expect(data.settings.invoice_consolidation_mode).toBe('BY_WEEK');
@@ -148,7 +150,7 @@ test('a partial shift draft is preserved but cannot be saved', async ({ page }) 
   await tab(page, 'Shift times').click();
   await expect(field(page, 'day_start')).toHaveValue('08:00');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.getByText('Complete the shift pattern', { exact: true })).toBeVisible();
+  await expect(page.locator('#modalTitle')).toHaveText('Complete the shift pattern');
   expect((await result(page)).writes).toEqual([]);
 });
 
@@ -168,7 +170,7 @@ test('moved Candidate work and payment fields and intentional address clears sur
   await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
   const data = await result(page);
   expect(data.candidate.address_line2).toBe('');
-  expect(data.candidate.band).toBe('7');
+  expect(data.candidate.band).toBe(7);
   expect(data.candidate.bank_name).toBe('Updated example bank');
   expect(data.candidate.pay_method).toBe('PAYE');
 });

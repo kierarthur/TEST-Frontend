@@ -58,3 +58,20 @@ test('special new workflows propose All; existing records and custom choices nev
  }
  assert.equal(layout.specialConsolidation({...plain,weekly_mode:'HEALTHROSTER',hr_weekly_behaviour:'VERIFY'}),false);
 });
+
+test('client billing clears use the existing null contract without touching omitted values',async()=>{
+ const vm=require('node:vm'),writes=[];
+ const fn=main.match(/async function upsertClient\(payload, id\)\{[\s\S]*?\n\}/)?.[0];
+ assert.ok(fn);
+ const context={API:url=>url,authFetch:async(url,init)=>{
+  const body=JSON.parse(init.body);writes.push(body);
+  return {ok:true,status:200,json:async()=>({client:{id:'example',...body}})};
+ }};
+ vm.createContext(context);vm.runInContext(`${fn};this.save=upsertClient`,context);
+ await context.save({invoice_address:'',primary_invoice_email:'',ap_phone:'',payment_terms_days:0,vat_chargeable:false},'example');
+ assert.deepEqual(writes[0],{invoice_address:null,primary_invoice_email:null,ap_phone:null,payment_terms_days:0,vat_chargeable:false});
+ await context.save({client_settings:{daily_calc_of_invoices:false}},'example');
+ assert.deepEqual(writes[1],{client_settings:{daily_calc_of_invoices:false}});
+ await context.save({invoice_address:'New address',primary_invoice_email:'billing@example.invalid',ap_phone:'020 7000 0000'},'example');
+ assert.deepEqual(writes[2],{invoice_address:'New address',primary_invoice_email:'billing@example.invalid',ap_phone:'020 7000 0000'});
+});
