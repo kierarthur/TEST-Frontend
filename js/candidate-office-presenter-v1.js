@@ -103,6 +103,22 @@
   const candidateSubmissionApplies = projection => ['ELECTRONIC', 'QR'].includes(
     String(projection?.current_identity?.route_family || '').toUpperCase()
   );
+  const isReceivedDailySubmission = projection => {
+    const workflow = projection.workflow;
+    const manager = projection.manager_approval;
+    // A current Daily PHONE receipt is written only after the signed document
+    // is attached. RECEIVED on PAPER still means a return awaiting processing.
+    // This is Candidate completion, not Office financial authorisation.
+    return String(projection.current_identity?.route_family || '').toUpperCase() === 'ELECTRONIC'
+      && String(workflow?.workflow_kind || '').toUpperCase() === 'DAILY'
+      && String(workflow?.state || '').toUpperCase() === 'RECEIVED'
+      && String(workflow?.route || '').toUpperCase() === 'PHONE'
+      && workflow?.is_current_action_workflow === true
+      && workflow?.historical === false
+      && String(manager?.method || '').toUpperCase() === 'PHONE'
+      && String(manager?.state || '').toUpperCase() === 'APPROVED'
+      && String(projection.paper_pack?.state || '').toUpperCase() === 'NOT_APPLICABLE';
+  };
   function presentApprovedCandidateSubmissionStatus(projection) {
     // Candidate lifecycle presentation is route-owned, not finance-owned. A
     // terminal financial status on Manual (non-QR), HealthRoster, NHSP or any
@@ -126,6 +142,7 @@
     if (lifecycleCode === 'REFUSED') return approvedStatusView('REFUSED_BY_CLIENT');
     if (['CANCELLED', 'SUPERSEDED', 'EXPIRED'].includes(lifecycleCode)) return approvedStatusView('CANDIDATE_SUBMISSION_CANCELLED');
     if (workflowState === 'FINALISED') return approvedStatusView('CANDIDATE_SUBMISSION_COMPLETE');
+    if (isReceivedDailySubmission(projection)) return approvedStatusView('CANDIDATE_SUBMISSION_COMPLETE');
     // Authorised/invoiced/paid is Office financial truth, not proof that the
     // Candidate used or completed the Candidate submission workflow. Historic
     // pre-app records with no durable workflow therefore remain blank.
@@ -214,8 +231,10 @@
     const sourceStatus = sourceStatusView(projection);
     const status = presentApprovedCandidateSubmissionStatus(projection);
     const phoneWorkflow = String(projection.manager_approval?.method || '').toUpperCase() === 'PHONE';
+    const receivedDaily = isReceivedDailySubmission(projection);
     const actions = projection.available_actions
       .filter(action => !OFFICE_FRONTEND_FORBIDDEN_ACTIONS.has(String(action?.code || '').toUpperCase()))
+      .filter(action => !(receivedDaily && String(action?.code || '').toUpperCase() === 'RETRY_FINALISATION'))
       .filter(action => !(phoneWorkflow && ['SEND_MANAGER_REMINDER', 'RENEW_MANAGER_REQUEST', 'CANCEL_MANAGER_REQUEST'].includes(String(action?.code || '').toUpperCase())))
       .map(actionView);
     const resendSupported = projection.available_actions.some(action => String(action?.code || '').toUpperCase() === 'RESEND_QR_PACK');
@@ -248,6 +267,7 @@
       diagnostics: Object.freeze(projection.diagnostics.map(item => Object.freeze({ ...item, label: item.code === 'EXPENSE_EMAIL_MISSING' ? 'Expense Email missing' : item.message, tone: item.severity === 'INFO' ? 'info' : item.severity === 'ERROR' ? 'danger' : 'warning' }))),
       evidence_actions: Object.freeze(evidenceActions),
       primary_action: projection.primary_action && !OFFICE_FRONTEND_FORBIDDEN_ACTIONS.has(String(projection.primary_action.code || '').toUpperCase())
+        && !(receivedDaily && String(projection.primary_action.code || '').toUpperCase() === 'RETRY_FINALISATION')
         ? actionView(projection.primary_action)
         : null,
       actions: Object.freeze(actions),
