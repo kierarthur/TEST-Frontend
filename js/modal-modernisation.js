@@ -1365,13 +1365,16 @@
     }
 
     const form = body.querySelector('#tab-main, #tab-pay, #searchForm, #contractForm');
-    if (entity === 'candidates' && tab === 'main' && form && form.dataset.ctmsEnhanced !== '1') {
+    // Async Umbrella mounting can leave the frame on its previous tab after the
+    // next form is visible. Layout follows that form, never the stale frame.
+    const candidateTab = form?.dataset.recordCandidateTab || (form?.id === 'tab-pay' ? 'pay' : tab);
+    if (entity === 'candidates' && candidateTab === 'main' && form && form.dataset.ctmsEnhanced !== '1') {
       form.dataset.ctmsEnhanced = '1';
       enhanceCandidateMain(body, form);
-    } else if (entity === 'candidates' && tab === 'pay' && form && form.dataset.ctmsEnhanced !== '1') {
+    } else if (entity === 'candidates' && candidateTab === 'pay' && form && form.dataset.ctmsEnhanced !== '1') {
       form.dataset.ctmsEnhanced = '1';
       enhanceCandidatePay(body, form);
-    } else if (entity === 'candidates' && tab === 'work' && form && form.dataset.ctmsEnhanced !== '1') {
+    } else if (entity === 'candidates' && candidateTab === 'work' && form && form.dataset.ctmsEnhanced !== '1') {
       form.dataset.ctmsEnhanced = '1';
       enhanceCandidateWork(body, form);
     } else if (entity === 'clients' && tab === 'main' && form && form.dataset.ctmsEnhanced !== '1') {

@@ -26,7 +26,8 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   assert.match(html, /modal-modernisation\.css\?v=20260827-r17/);
   assert.match(html, /summary-modernisation\.css\?v=20260824-r7/);
   assert.match(html, /summary-modernisation\.js\?v=20260822-r2/);
-  assert.match(html, /modal-modernisation\.js\?v=20260828-record-r1/);
+  assert.match(html, /modal-modernisation\.js\?v=20260828-record-r2/);
+  assert.match(html, /record-modal-layout\.js\?v=20260828-r2/);
   assert.match(html, /mytms-office-v1\.js\?v=20260824-candidate-status-r4/);
   assert.match(html, /modal-summary-final=20260824-r2/);
   assert.match(html, /contract-workflow=20260828-r1/);

@@ -21,6 +21,13 @@ test('layout retains original controls and introduces no transport or business-r
  assert.match(source,/append\(summary\)/);
 });
 
+test('Candidate enhancement follows rendered form identity during asynchronous tab mounting',()=>{
+ const enhancer=fs.readFileSync(path.join(__dirname,'../../js/modal-modernisation.js'),'utf8');
+ assert.match(source,/form\.dataset\.recordCandidateTab = tab/);
+ assert.match(enhancer,/form\?\.dataset\.recordCandidateTab \|\| \(form\?\.id === 'tab-pay' \? 'pay' : tab\)/);
+ for(const tab of ['main','work','pay']) assert.ok(enhancer.includes(`entity === 'candidates' && candidateTab === '${tab}'`));
+});
+
 test('moved candidate fields retain tab persistence, primary-role controls and validation',()=>{
  assert.match(main,/this\.entity === 'candidates' && this\.currentTabKey === 'pay' && byId\('tab-pay'\)/);
  assert.match(main,/fs\.pay = \{ \.\.\.\(fs\.pay \|\| \{\}\), \.\.\.c, __forMethod:/);

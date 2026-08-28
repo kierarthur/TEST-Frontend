@@ -42,6 +42,8 @@ test('all seven redesigned sections fit and read-only navigation remains availab
   await open(page, 'Existing candidate');
   for (const name of ['Main Details', 'Work & compliance', 'Payment details']) {
     await tab(page, name).click();
+    const heading = name === 'Main Details' ? 'Candidate profile' : name === 'Payment details' ? 'Payment details' : name;
+    await expect(page.locator('#modalBody h2')).toHaveText(heading);
     await screenshotAndFit(page, info, `Candidate - ${name}`);
   }
   await open(page, 'Existing client');
@@ -57,6 +59,29 @@ test('all seven redesigned sections fit and read-only navigation remains availab
       for (const width of widths) expect(width).toBeGreaterThanOrEqual(125);
     }
   }
+  expect((await result(page)).writes).toEqual([]);
+});
+
+test('delayed Umbrella details cannot use the previous Candidate tab layout', async ({ page }, info) => {
+  await open(page, 'Existing umbrella candidate');
+  for (const previous of ['Work & compliance', 'Main Details']) {
+    await tab(page, previous).click();
+    await tab(page, 'Payment details').click();
+    await expect(field(page, 'bank_name')).toHaveValue('Fixture bank');
+    await expect(page.locator('#modalBody h2')).toHaveText('Payment details');
+    await expect(page.locator('#tab-pay .ctms-section-title')).toHaveText([
+      'Payment destination', 'Remittance preferences', 'Candidate finance'
+    ]);
+    await expect(field(page, 'pay_method')).toHaveValue('UMBRELLA');
+    await expect(field(page, 'bank_name')).toBeDisabled();
+    await screenshotAndFit(page, info, `Umbrella payment from ${previous}`);
+  }
+  await tab(page, 'Work & compliance').click();
+  await expect(page.locator('#modalBody h2')).toHaveText('Work & compliance');
+  await expect(field(page, 'band')).toHaveValue('6');
+  await tab(page, 'Main Details').click();
+  await expect(page.locator('#modalBody h2')).toHaveText('Candidate profile');
+  await expect(field(page, 'address_line1')).toHaveValue('14 Example Street');
   expect((await result(page)).writes).toEqual([]);
 });
 

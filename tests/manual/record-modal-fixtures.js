@@ -35,6 +35,11 @@
     if(pathname===`/api/clients/${clientId}`)return response({client,client_settings:settings,has_e_history:false});
     if(pathname===`/api/candidates/${candidateId}`)return response({candidate,job_titles:candidate.job_titles.map((j,i)=>typeof j==='string'?{job_title_id:j,is_primary:i===0}:j),hr_aliases:[],has_e_history:false});
     if(pathname==='/api/job-titles')return response({items:jobTitles});
+    if(pathname==='/api/umbrellas/70000000-0000-4000-8000-000000000020') {
+      // Exercise real async pay-tab mounting before its frame finishes changing tab.
+      await new Promise(resolve=>setTimeout(resolve,250));
+      return response({umbrella:{id:'70000000-0000-4000-8000-000000000020',name:'Example Umbrella',account_holder:'Example Umbrella',bank_name:'Fixture bank',sort_code:'12-34-56',account_number:'12345678'}});
+    }
     if(pathname.includes('printed-timesheet')) return response({ok:true,candidate_paper_submission_enabled:settings.candidate_paper_submission_enabled});
     if(pathname.includes('/settings'))return response({settings:{},client_settings:settings});
     return response({ok:true,rows:[],items:[],clients:[],candidates:[],roles:[],job_titles:[],total:0});
@@ -46,6 +51,7 @@
     for(const id of ['loginOverlay','tfaOverlay']){const el=document.getElementById(id);if(el)el.style.display='none';}
     const nav=document.createElement('div');nav.id='fixture-launchers';nav.style.cssText='position:relative;z-index:2;display:flex;flex-wrap:wrap;gap:12px;padding:24px;background:#0c172a';
     const actions=[['New candidate',()=>openCandidate({})],['Existing candidate',()=>openCandidate({id:candidateId})],['New client',()=>openClient({})],['Existing client',()=>openClient({id:clientId})]];
+    actions.push(['Existing umbrella candidate',()=>{candidate.pay_method='UMBRELLA';candidate.umbrella_id='70000000-0000-4000-8000-000000000020';return openCandidate({id:candidateId});}]);
     for(const[label,action]of actions){const b=document.createElement('button');b.className='btn';b.textContent=label;b.onclick=async()=>{try{await action();}catch(error){output.textContent=JSON.stringify({fixtureError:String(error),stack:error.stack});}};nav.append(b);}
     document.body.prepend(nav);document.body.append(output);report();
   };

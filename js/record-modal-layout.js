@@ -27,6 +27,7 @@
     if (!['main','work','pay'].includes(tab)) return raw;
     const t = parse(raw), form = t.content.querySelector('#tab-main, #tab-pay');
     if (!form) return raw;
+    form.dataset.recordCandidateTab = tab;
     if (tab === 'pay') {
       const main = parse(mainRaw).content.querySelector('#tab-main');
       const method = main && rowFor(main, '[name="pay_method"]');
