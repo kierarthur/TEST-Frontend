@@ -281418,21 +281418,15 @@ window.modalCtx = {
       // A later broad update deliberately cannot set the Printed QR policy.
       if (!idForUpdate && pendingSettings) payload.client_settings = pendingSettings;
 
-      const clientResp  = await upsertClient(payload, idForUpdate).catch(err => { E('upsertClient failed', err); return null; });
-      const clientId    = idForUpdate || (clientResp && clientResp.id);
-      if (APILOG) console.log('[OPEN_CLIENT] upsertClient ← response', { ok: !!clientResp, clientId });
-      if (!clientId) { alert('Failed to save client'); return { ok:false }; }
-
-      const savedClient = clientResp && typeof clientResp === 'object' ? clientResp : { id: clientId, ...payload };
-      window.modalCtx.data = { ...(window.modalCtx.data || {}), ...savedClient, id: clientId };
-
       // Existing Client printed-timesheet policy is deliberately isolated from
       // the broad Client/settings save and protected by an exact version check.
+      // Check the version the user actually edited before any other write can
+      // advance it. Never rebase a conflicting policy change with a fresh GET.
       if (pendingPrintedPolicy) {
         try {
           if (!pendingPrintedPolicy.expected_updated_at) throw new Error('The current Client settings version is unavailable. Reload and try again.');
           const savedSettings = await updateClientPrintedTimesheetPolicy(
-            clientId,
+            idForUpdate,
             pendingPrintedPolicy.enabled,
             pendingPrintedPolicy.expected_updated_at
           );
@@ -281446,22 +281440,36 @@ window.modalCtx = {
             updated_at: savedSettings?.updated_at || window.modalCtx.clientSettingsState?.updated_at
           };
         } catch (err) {
-          alert(`Failed to save the Client printed-timesheet setting: ${String(err?.message || err)}`);
+          await openUiConfirmModal({ title: 'Client settings not saved', message: 'The Printed QR Timesheet setting could not be saved. The settings may have changed since you opened this Client. Your changes are still here; close and reopen the Client before trying again.', confirm_label: 'OK', hide_cancel: true });
           return { ok:false };
         }
       }
 
+      let clientWrite;
+      try {
+        clientWrite = await upsertClientWithSettings(payload, idForUpdate);
+        if (!clientWrite?.client?.id) throw new Error('Client save was not confirmed');
+      } catch (err) {
+        E('upsertClient failed', err);
+        await openUiConfirmModal({ title: 'Client not saved', message: 'The Client could not be saved. Your changes are still here. Please try again.', confirm_label: 'OK', hide_cancel: true });
+        return { ok:false };
+      }
+      const clientResp = clientWrite.client;
+      const clientId = clientResp.id;
+      window.modalCtx.data = { ...(window.modalCtx.data || {}), ...clientResp, id: clientId };
+      if (!idForUpdate) rememberClientSettingsWrite(window.modalCtx, clientWrite.client_settings);
 
       // 4) Save existing Client settings; new records saved them atomically above.
       try {
         if (idForUpdate && pendingSettings && Object.keys(pendingSettings).length) {
           if (APILOG) console.log('[OPEN_CLIENT] upsertClient (settings) → PUT /api/clients/:id', { clientId, pendingSettings });
-          const upd = await upsertClient({ client_settings: pendingSettings }, clientId);
-          if (!upd) throw new Error('Settings update failed');
-          if (upd && typeof upd === 'object') window.modalCtx.data = { ...window.modalCtx.data, ...upd, id: clientId };
+          const upd = await upsertClientWithSettings({ client_settings: pendingSettings }, clientId);
+          if (!upd?.client) throw new Error('Settings update failed');
+          window.modalCtx.data = { ...window.modalCtx.data, ...upd.client, id: clientId };
+          rememberClientSettingsWrite(window.modalCtx, upd.client_settings);
         }
       } catch (err) {
-        alert(`Failed to save Client settings: ${String(err?.message || err)}`);
+        await openUiConfirmModal({ title: 'Client settings not saved', message: 'The Client settings could not be saved. Your changes are still here. Please try again.', confirm_label: 'OK', hide_cancel: true });
         return { ok:false };
       }
 
@@ -346367,6 +346375,18 @@ if (btnClear && !btnClear.__wired) {
 }
 
 async function upsertClient(payload, id){
+  return (await upsertClientWithSettings(payload, id)).client;
+}
+
+function rememberClientSettingsWrite(ctx, settings){
+  // Only adopt the representation of our own successful write. A read-back
+  // could silently adopt a concurrent editor's version and defeat the guard.
+  const saved = settings && typeof settings === 'object' ? settings : {};
+  ctx.clientSettingsBaseline = { ...(ctx.clientSettingsBaseline || {}), ...saved, updated_at: saved.updated_at || null };
+  ctx.clientSettingsState = { ...(ctx.clientSettingsState || {}), ...saved, updated_at: saved.updated_at || null };
+}
+
+async function upsertClientWithSettings(payload, id){
   if ('cli_ref' in payload) delete payload.cli_ref;
 
   // ✅ Allow explicit clearing for specific client fields:
@@ -346437,7 +346457,7 @@ async function upsertClient(payload, id){
     if (Array.isArray(data)) obj = data[0] || null;
     else if (data && data.client) obj = data.client;
     else if (data && typeof data === 'object') obj = data;
-    if (obj) return obj;
+    if (obj) return { client: obj, client_settings: data?.client_settings || null };
   } catch (_) {}
 
   let clientId = id || null;
@@ -346457,7 +346477,7 @@ async function upsertClient(payload, id){
         const obj = (dd && dd.client) ? dd.client : dd;
         if (obj && typeof obj === 'object') {
           if (APILOG) console.log('[upsertClient] GET backfill', obj);
-          return obj;
+          return { client: obj, client_settings: null };
         }
       }
     } catch (_) {}
@@ -346465,7 +346485,7 @@ async function upsertClient(payload, id){
 
   const fallback = clientId ? { id: clientId, ...clean } : (id ? { id, ...clean } : { ...clean });
   if (APILOG) console.log('[upsertClient] fallback', fallback);
-  return fallback;
+  return { client: fallback, client_settings: null };
 }
 
 

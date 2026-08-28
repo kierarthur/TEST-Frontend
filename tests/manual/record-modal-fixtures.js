@@ -4,6 +4,10 @@
   let client={id:clientId,name:'Northshire Community Health',primary_invoice_email:'accounts@example.invalid',invoice_address:'Finance department\n12 Station Road',ap_phone:'020 7000 0000',vat_chargeable:true,payment_terms_days:0,client_address:'12 Station Road',contact_forename:'Sam',contact_surname:'Taylor',ts_queries_email:'staffing@example.invalid',notes:'Existing client notes'};
   let settings={timezone_id:'Europe/London',day_start:'07:00',day_end:'19:00',night_start:'19:00',night_end:'07:00',sat_start:'00:00',sat_end:'00:00',sun_start:'00:00',sun_end:'00:00',bh_start:'00:00',bh_end:'00:00',week_ending_weekday:0,default_submission_mode:'ELECTRONIC',weekly_mode:'HEALTHROSTER',hr_weekly_behaviour:'VERIFY',requires_hr:true,autoprocess_hr:true,no_timesheet_required:false,invoice_consolidation_mode:'BY_WEEK',candidate_paper_submission_enabled:false,daily_calc_of_invoices:false};
   let candidate={id:candidateId,title:'Ms',first_name:'Alex',last_name:'Morgan',display_name:'Alex Morgan',email:'alex@example.invalid',phone:'07700000000',pay_method:'PAYE',address_line1:'14 Example Street',address_line2:'Flat 2',address_line3:'',town_city:'Reading',county:'Berkshire',postcode:'RG1 1AA',country:'UK',band:'6',ni_number:'AB123456C',date_of_birth:'1990-03-15',gender:'Female',prof_reg_number:'AB123',notes:'Existing notes',key_norm:'',opt_in_email:true,opt_in_sms:true,opt_in_whatsapp:true,roles:[],job_titles:[],account_holder:'Alex Morgan',bank_name:'Example bank',sort_code:'12-34-56',account_number:'12345678',remittance_overrides_enabled:false};
+  let settingsVersion=1;
+  let simulateConflict=location.search.includes('conflict-test');
+  const nextSettingsVersion=()=>new Date(Date.UTC(2026,7,28,12,0,settingsVersion++)).toISOString();
+  settings.updated_at=nextSettingsVersion();
   const writes=[],umbrellaReads=[];
   // Empty financial scope: exercise the unchanged confirmation/commit client
   // contract without any live Candidate, bank, Timesheet or provider operation.
@@ -40,6 +44,12 @@
     const body=init.body?JSON.parse(init.body):{};
     if(!['GET','HEAD'].includes(method)) {
       writes.push({path:pathname,method,body});
+      if(pathname===`/api/clients/${clientId}/printed-timesheet-policy`) {
+        if(simulateConflict){simulateConflict=false;settings={...settings,updated_at:nextSettingsVersion()};}
+        if (body.expected_settings_updated_at!==settings.updated_at) {report();return response({error:'Client settings changed. Reload and try again.',error_code:'CLIENT_SETTINGS_CONFLICT'},409);}
+        settings={...settings,candidate_paper_submission_enabled:body.enabled,updated_at:nextSettingsVersion()};
+        report();return response({ok:true,client_settings:settings});
+      }
       if(pathname===`/api/candidates/${candidateId}/pay-method-change`) {
         const proof=routeProof(body.new_method,body.destination_patch);
         candidate={...candidate,pay_method:body.new_method,
@@ -64,6 +74,7 @@
           // Writes use the existing canonical flags, not the UI's mode aliases.
           settings.weekly_mode=settings.is_nhsp?'NHSP':settings.requires_hr?'HEALTHROSTER':'NONE';
           settings.hr_weekly_behaviour=settings.requires_hr&&settings.no_timesheet_required?'CREATE':'VERIFY';
+          settings.updated_at=nextSettingsVersion();
         } else if (method !== 'POST') client={...client,...clientFields,id:clientId};
         report();return response({ok:true,client,client_settings:settings,id:clientId});
       }

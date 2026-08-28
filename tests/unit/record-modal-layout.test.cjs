@@ -68,7 +68,8 @@ test('special new workflows propose All; existing records and custom choices nev
 
 test('client billing clears use the existing null contract without touching omitted values',async()=>{
  const vm=require('node:vm'),writes=[];
- const fn=main.match(/async function upsertClient\(payload, id\)\{[\s\S]*?\n\}/)?.[0];
+ const fn=main.match(/async function upsertClient\(payload, id\)\{[\s\S]*?\n\}/)?.[0]
+   + '\n' + main.match(/async function upsertClientWithSettings\(payload, id\)\{[\s\S]*?\n\}/)?.[0];
  assert.ok(fn);
  const context={API:url=>url,authFetch:async(url,init)=>{
   const body=JSON.parse(init.body);writes.push(body);

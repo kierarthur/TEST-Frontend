@@ -46,6 +46,7 @@ jobs:
             tests/unit/candidate-pay-method-*.test.cjs \
             tests/unit/modal-modernisation-policy.test.cjs \
             tests/unit/record-modal-layout.test.cjs \
+            tests/unit/client-settings-save-version.test.cjs \
             tests/unit/mobile-summary-contract-ux.test.cjs \
             tests/unit/timesheet-summary-issues.test.cjs \
             tests/unit/timesheet-processing-status-badges.test.cjs \

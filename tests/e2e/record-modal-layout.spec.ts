@@ -364,6 +364,41 @@ test('new Client saves its Printed QR choice with initial settings and retains i
   }
 });
 
+test('repeated Client Printed QR saves retain their own latest version without reopening', async ({ page }) => {
+  await open(page, 'Existing client');
+  for (const enabled of [true, false, true]) {
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+    await tab(page, 'Client settings').click();
+    await field(page, 'candidate_paper_submission_enabled').setChecked(enabled);
+    await tab(page, 'Main').click();
+    await tab(page, 'Client settings').click();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.locator('#modalTitle')).toHaveText('View Client');
+    await expect(field(page, 'candidate_paper_submission_enabled')).toBeChecked({ checked: enabled });
+    expect((await result(page)).settings.candidate_paper_submission_enabled).toBe(enabled);
+  }
+  const data = await result(page);
+  expect(data.writes.filter((w: any) => w.method === 'PATCH')).toHaveLength(3);
+});
+
+test('a stale Client policy leaves the draft open and stops later writes with a branded warning', async ({ page }) => {
+  await page.goto('/?conflict-test');
+  await page.getByRole('button', { name: 'Existing client', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Client settings').click();
+  await field(page, 'candidate_paper_submission_enabled').check();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toHaveText('Client settings not saved');
+  await page.getByRole('button', { name: 'OK', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toHaveText('Edit Client');
+  await expect(field(page, 'candidate_paper_submission_enabled')).toBeChecked();
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+  const data = await result(page);
+  expect(data.settings.candidate_paper_submission_enabled).toBe(false);
+  expect(data.writes).toHaveLength(1);
+  expect(data.writes[0].method).toBe('PATCH');
+});
+
 test('existing billing, zero terms, custom shifts and roster drafts survive tab changes and save', async ({ page }) => {
   await open(page, 'Existing client');
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
