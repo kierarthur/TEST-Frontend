@@ -51,12 +51,20 @@
           refresh_accepted:true,durable_queue_retained:true,refresh_completed:true,refresh_pending:false,refreshing:false});
       }
       if(/^\/api\/clients(?:\/[^/]+)?$/.test(pathname)) {
+        const { client_settings: initialSettings, ...clientFields } = body;
+        if (method === 'POST') {
+          client = { ...clientFields, id: clientId };
+          settings = { candidate_paper_submission_enabled: false };
+        }
         if(body.client_settings) {
-          settings={...settings,...body.client_settings};
+          const settingsPatch = { ...initialSettings };
+          // The real broad update route cannot alter the dedicated Printed QR policy.
+          if (method !== 'POST') delete settingsPatch.candidate_paper_submission_enabled;
+          settings={...settings,...settingsPatch};
           // Writes use the existing canonical flags, not the UI's mode aliases.
           settings.weekly_mode=settings.is_nhsp?'NHSP':settings.requires_hr?'HEALTHROSTER':'NONE';
           settings.hr_weekly_behaviour=settings.requires_hr&&settings.no_timesheet_required?'CREATE':'VERIFY';
-        } else client={...(method==='POST'?{}:client),...body,id:clientId};
+        } else if (method !== 'POST') client={...client,...clientFields,id:clientId};
         report();return response({ok:true,client,client_settings:settings,id:clientId});
       }
       if(/^\/api\/candidates(?:\/[^/]+)?$/.test(pathname)) {candidate={...(method==='POST'?{}:candidate),...body,id:candidateId};report();return response({ok:true,candidate,id:candidateId});}

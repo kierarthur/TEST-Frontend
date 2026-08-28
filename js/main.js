@@ -281414,6 +281414,9 @@ window.modalCtx = {
       if (APILOG) console.log('[OPEN_CLIENT] upsertClient → request', { idForUpdate, payload });
 
       delete payload.client_settings;
+      // Creation already supports an atomic Client + initial settings payload.
+      // A later broad update deliberately cannot set the Printed QR policy.
+      if (!idForUpdate && pendingSettings) payload.client_settings = pendingSettings;
 
       const clientResp  = await upsertClient(payload, idForUpdate).catch(err => { E('upsertClient failed', err); return null; });
       const clientId    = idForUpdate || (clientResp && clientResp.id);
@@ -281449,9 +281452,9 @@ window.modalCtx = {
       }
 
 
-      // 4) Save Client settings (after client exists)
+      // 4) Save existing Client settings; new records saved them atomically above.
       try {
-        if (pendingSettings && Object.keys(pendingSettings).length) {
+        if (idForUpdate && pendingSettings && Object.keys(pendingSettings).length) {
           if (APILOG) console.log('[OPEN_CLIENT] upsertClient (settings) → PUT /api/clients/:id', { clientId, pendingSettings });
           const upd = await upsertClient({ client_settings: pendingSettings }, clientId);
           if (!upd) throw new Error('Settings update failed');

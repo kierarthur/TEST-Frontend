@@ -340,6 +340,30 @@ test('new-client defaults, workflow relevance and explicit consolidation choice'
   expect(data.settings.daily_calc_of_invoices).toBe(true);
 });
 
+test('new Client saves its Printed QR choice with initial settings and retains it after reopening', async ({ page }) => {
+  for (const enabled of [true, false]) {
+    await open(page, 'New client');
+    await field(page, 'name').fill('Initial settings round-trip');
+    await tab(page, 'Client settings').click();
+    await expect(field(page, 'candidate_paper_submission_enabled')).toBeChecked();
+    if (!enabled) await field(page, 'candidate_paper_submission_enabled').uncheck();
+    await tab(page, 'Shift times').click();
+    await tab(page, 'Invoicing').click();
+    await tab(page, 'Main').click();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.locator('#modalTitle')).toHaveText('View Client');
+    const data = await result(page);
+    const creates = data.writes.filter((w: any) => w.method === 'POST' && w.path === '/api/clients');
+    expect(creates).toHaveLength(1);
+    expect(creates[0].body.client_settings.candidate_paper_submission_enabled).toBe(enabled);
+    expect(data.writes.filter((w: any) => w.method === 'PUT')).toEqual([]);
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.getByRole('button', { name: 'Existing client', exact: true }).click();
+    await tab(page, 'Client settings').click();
+    await expect(field(page, 'candidate_paper_submission_enabled')).toBeChecked({ checked: enabled });
+  }
+});
+
 test('existing billing, zero terms, custom shifts and roster drafts survive tab changes and save', async ({ page }) => {
   await open(page, 'Existing client');
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
