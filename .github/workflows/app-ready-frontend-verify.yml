@@ -43,6 +43,7 @@ jobs:
           node --test \
             tests/unit/mytms-office-v1.test.cjs \
             tests/unit/candidate-office-*.test.cjs \
+            tests/unit/candidate-pay-method-*.test.cjs \
             tests/unit/modal-modernisation-policy.test.cjs \
             tests/unit/record-modal-layout.test.cjs \
             tests/unit/mobile-summary-contract-ux.test.cjs \

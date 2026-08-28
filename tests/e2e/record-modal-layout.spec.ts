@@ -23,7 +23,9 @@ async function screenshotAndFit(page: Page, info: TestInfo, name: string) {
   expect(metrics.bottom).toBeLessThanOrEqual(metrics.height + 2);
   expect(metrics.overflow).toBeLessThanOrEqual(2);
   await expect(page.getByRole('button', { name: 'Close', exact: true })).toBeVisible();
-  await info.attach(name, { body: await page.screenshot(), contentType: 'image/png' });
+  const screenshotPath = info.outputPath(`${name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.png`);
+  await page.screenshot({ path: screenshotPath });
+  await info.attach(name, { path: screenshotPath, contentType: 'image/png' });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -82,6 +84,212 @@ test('delayed Umbrella details cannot use the previous Candidate tab layout', as
   await tab(page, 'Main Details').click();
   await expect(page.locator('#modalBody h2')).toHaveText('Candidate profile');
   await expect(field(page, 'address_line1')).toHaveValue('14 Example Street');
+  expect((await result(page)).writes).toEqual([]);
+});
+
+test('switching PAYE to Umbrella wires selection immediately and clears bank fields on return', async ({ page }) => {
+  await open(page, 'Existing candidate');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  await field(page, 'pay_method').selectOption('UMBRELLA');
+  await expect(field(page, 'bank_name')).toHaveValue('');
+  await expect(page.locator('#umbList option[value="Example Umbrella"]')).toHaveCount(1);
+  await page.getByRole('combobox', { name: 'Umbrella company', exact: true }).fill('Example Umbrella');
+  await expect(field(page, 'bank_name')).toHaveValue('Fixture bank');
+  await page.getByRole('combobox', { name: 'Umbrella company', exact: true }).press('Tab');
+  await expect(field(page, 'bank_name')).toHaveValue('Fixture bank');
+  await expect(field(page, 'sort_code')).toHaveValue('20-30-40');
+  await expect(field(page, 'account_number')).toHaveValue('11223344');
+  await expect(field(page, 'bank_name')).toBeDisabled();
+  await tab(page, 'Work & compliance').click();
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'bank_name')).toHaveValue('Fixture bank');
+  await field(page, 'pay_method').selectOption('PAYE');
+  for (const name of ['account_holder', 'bank_name', 'sort_code', 'account_number']) {
+    await expect(field(page, name)).toHaveValue('');
+    await expect(field(page, name)).toBeEnabled();
+  }
+  await expect(page.locator('#umbrella_id')).toHaveValue('');
+  expect((await result(page)).writes).toEqual([]);
+});
+
+test('PAYE and Umbrella changes use confirmation, save the exact destination and reopen correctly', async ({ page }, info) => {
+  await open(page, 'Existing candidate');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  await field(page, 'pay_method').selectOption('UMBRELLA');
+  const company = page.getByRole('combobox', { name: 'Umbrella company', exact: true });
+  await company.fill('Second Umbrella');
+  await company.press('Tab');
+  await expect(field(page, 'bank_name')).toHaveValue('Second fixture bank');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Confirm change', exact: true })).toBeVisible();
+  expect((await result(page)).writes).toEqual([]);
+  await page.getByRole('button', { name: 'Confirm change', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'pay_method')).toHaveValue('UMBRELLA');
+  await expect(field(page, 'bank_name')).toHaveValue('Second fixture bank');
+  await screenshotAndFit(page, info, 'Saved Umbrella destination');
+  let data = await result(page);
+  const firstChange = data.writes.find((w: any) => w.path.endsWith('/pay-method-change'));
+  expect(firstChange.body.destination_patch).toEqual({ umbrella_id: '70000000-0000-4000-8000-000000000021' });
+  expect(data.candidate.bank_name).toBeNull();
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByRole('button', { name: 'Existing candidate', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  await field(page, 'pay_method').selectOption('PAYE');
+  for (const name of ['account_holder', 'bank_name', 'sort_code', 'account_number']) {
+    await expect(field(page, name)).toHaveValue('');
+    await expect(field(page, name)).toBeEnabled();
+  }
+  await field(page, 'account_holder').fill('Alex Morgan');
+  await field(page, 'bank_name').fill('Personal fixture bank');
+  await field(page, 'sort_code').fill('112233');
+  await field(page, 'account_number').fill('22334455');
+  await tab(page, 'Main Details').click();
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'bank_name')).toHaveValue('Personal fixture bank');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm change', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'bank_name')).toHaveValue('Personal fixture bank');
+  await expect(field(page, 'account_number')).toHaveValue('22334455');
+  await expect(field(page, 'sort_code')).toHaveValue('11-22-33');
+  await screenshotAndFit(page, info, 'Saved PAYE destination');
+  data = await result(page);
+  const changes = data.writes.filter((w: any) => w.path.endsWith('/pay-method-change'));
+  expect(changes).toHaveLength(2);
+  expect(changes[1].body.destination_patch).toEqual({
+    account_holder: 'Alex Morgan', bank_name: 'Personal fixture bank',
+    sort_code: '11-22-33', account_number: '22334455'
+  });
+  expect(data.candidate.umbrella_id).toBeNull();
+  for (const write of data.writes.filter((w: any) => w.method === 'PATCH' && w.path.endsWith(data.candidate.id))) {
+    for (const key of ['pay_method', 'umbrella_id', 'bank_name', 'account_holder', 'sort_code', 'account_number']) {
+      expect(write.body).not.toHaveProperty(key);
+    }
+  }
+});
+
+test('discard restores the saved Umbrella destination and no bank changes are committed', async ({ page }) => {
+  await open(page, 'Existing umbrella candidate');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'bank_name')).toHaveValue('Fixture bank');
+  await field(page, 'pay_method').selectOption('PAYE');
+  await field(page, 'bank_name').fill('Unsaved personal bank');
+  await tab(page, 'Main Details').click();
+  await page.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toContainText('Discard');
+  await page.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByRole('button', { name: 'Existing candidate', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'pay_method')).toHaveValue('UMBRELLA');
+  await expect(field(page, 'bank_name')).toHaveValue('Fixture bank');
+  expect((await result(page)).writes).toEqual([]);
+});
+
+test('blank PAYE bank details stay blank through tab changes, confirmation and reopen', async ({ page }) => {
+  await open(page, 'Existing umbrella candidate');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'bank_name')).toHaveValue('Fixture bank');
+  await field(page, 'pay_method').selectOption('PAYE');
+  await tab(page, 'Work & compliance').click();
+  await tab(page, 'Payment details').click();
+  for (const key of ['account_holder', 'bank_name', 'sort_code', 'account_number']) {
+    await expect(field(page, key)).toHaveValue('');
+  }
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm change', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await tab(page, 'Payment details').click();
+  const data = await result(page);
+  for (const key of ['account_holder', 'bank_name', 'sort_code', 'account_number']) {
+    await expect(field(page, key)).toHaveValue('');
+    expect(data.candidate[key]).toBeNull();
+  }
+  expect(data.candidate.umbrella_id).toBeNull();
+});
+
+test('clearing an existing Umbrella selection cannot silently save the previous company', async ({ page }) => {
+  await open(page, 'Existing umbrella candidate');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'bank_name')).toHaveValue('Fixture bank');
+  await page.getByRole('combobox', { name: 'Umbrella company', exact: true }).fill('');
+  await page.getByRole('combobox', { name: 'Umbrella company', exact: true }).press('Tab');
+  await expect(field(page, 'bank_name')).toHaveValue('');
+  await tab(page, 'Main Details').click();
+  await field(page, 'notes').fill('A separate edit must not restore the cleared umbrella');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toHaveText('Select an umbrella company');
+  expect((await result(page)).writes).toEqual([]);
+});
+
+test('late Umbrella responses cannot overwrite PAYE or a newer company selection', async ({ page }) => {
+  await page.goto('/?slow-umbrella');
+  await page.getByRole('button', { name: 'Existing candidate', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  const company = page.getByRole('combobox', { name: 'Umbrella company', exact: true });
+  await field(page, 'pay_method').selectOption('UMBRELLA');
+  await company.fill('Example Umbrella');
+  await company.press('Tab');
+  await expect.poll(async () => (await result(page)).umbrellaReads.length).toBe(1);
+  await field(page, 'pay_method').selectOption('PAYE');
+  await field(page, 'bank_name').fill('Personal bank survives late reply');
+  await expect.poll(async () => (await result(page)).umbrellaReads.every((r: any) => r.completed)).toBe(true);
+  await expect(field(page, 'bank_name')).toHaveValue('Personal bank survives late reply');
+  await expect(page.locator('#umbrella_id')).toHaveValue('');
+  await tab(page, 'Main Details').click();
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'bank_name')).toHaveValue('Personal bank survives late reply');
+  await field(page, 'pay_method').selectOption('UMBRELLA');
+  await company.fill('Example Umbrella');
+  await company.press('Tab');
+  await expect.poll(async () => (await result(page)).umbrellaReads.length).toBe(2);
+  await company.fill('Second Umbrella');
+  await company.press('Tab');
+  await expect(field(page, 'bank_name')).toHaveValue('Second fixture bank');
+  await expect.poll(async () => (await result(page)).umbrellaReads.every((r: any) => r.completed)).toBe(true);
+  await expect(field(page, 'bank_name')).toHaveValue('Second fixture bank');
+  await expect(field(page, 'account_number')).toHaveValue('87654321');
+  await expect(page.locator('#umbrella_id')).toHaveValue('70000000-0000-4000-8000-000000000021');
+  expect((await result(page)).writes).toEqual([]);
+});
+
+test('an Umbrella destination still loads after leaving and returning while its read is pending', async ({ page }) => {
+  await page.goto('/?slow-umbrella');
+  await page.getByRole('button', { name: 'Existing candidate', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  await field(page, 'pay_method').selectOption('UMBRELLA');
+  await expect(page.locator('#umbList option[value="Example Umbrella"]')).toHaveCount(1);
+  await page.getByRole('combobox', { name: 'Umbrella company', exact: true }).fill('Example Umbrella');
+  await expect.poll(async () => (await result(page)).umbrellaReads.length).toBeGreaterThan(0);
+  await tab(page, 'Main Details').click();
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'bank_name')).toHaveValue('Fixture bank');
+  await expect(field(page, 'account_number')).toHaveValue('11223344');
+  expect((await result(page)).writes).toEqual([]);
+});
+
+test('a different Umbrella can be selected while the saved destination is still loading', async ({ page }) => {
+  await page.goto('/?slow-umbrella');
+  await page.getByRole('button', { name: 'Existing umbrella candidate', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  await expect(page.locator('#umbList option[value="Second Umbrella"]')).toHaveCount(1);
+  await page.getByRole('combobox', { name: 'Umbrella company', exact: true }).fill('Second Umbrella');
+  await expect(field(page, 'bank_name')).toHaveValue('Second fixture bank');
+  await expect.poll(async () => (await result(page)).umbrellaReads.every((r: any) => r.completed)).toBe(true);
+  await expect(field(page, 'account_number')).toHaveValue('87654321');
   expect((await result(page)).writes).toEqual([]);
 });
 

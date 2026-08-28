@@ -4,7 +4,28 @@
   let client={id:clientId,name:'Northshire Community Health',primary_invoice_email:'accounts@example.invalid',invoice_address:'Finance department\n12 Station Road',ap_phone:'020 7000 0000',vat_chargeable:true,payment_terms_days:0,client_address:'12 Station Road',contact_forename:'Sam',contact_surname:'Taylor',ts_queries_email:'staffing@example.invalid',notes:'Existing client notes'};
   let settings={timezone_id:'Europe/London',day_start:'07:00',day_end:'19:00',night_start:'19:00',night_end:'07:00',sat_start:'00:00',sat_end:'00:00',sun_start:'00:00',sun_end:'00:00',bh_start:'00:00',bh_end:'00:00',week_ending_weekday:0,default_submission_mode:'ELECTRONIC',weekly_mode:'HEALTHROSTER',hr_weekly_behaviour:'VERIFY',requires_hr:true,autoprocess_hr:true,no_timesheet_required:false,invoice_consolidation_mode:'BY_WEEK',candidate_paper_submission_enabled:false,daily_calc_of_invoices:false};
   let candidate={id:candidateId,title:'Ms',first_name:'Alex',last_name:'Morgan',display_name:'Alex Morgan',email:'alex@example.invalid',phone:'07700000000',pay_method:'PAYE',address_line1:'14 Example Street',address_line2:'Flat 2',address_line3:'',town_city:'Reading',county:'Berkshire',postcode:'RG1 1AA',country:'UK',band:'6',ni_number:'AB123456C',date_of_birth:'1990-03-15',gender:'Female',prof_reg_number:'AB123',notes:'Existing notes',key_norm:'',opt_in_email:true,opt_in_sms:true,opt_in_whatsapp:true,roles:[],job_titles:[],account_holder:'Alex Morgan',bank_name:'Example bank',sort_code:'12-34-56',account_number:'12345678',remittance_overrides_enabled:false};
-  const writes=[];
+  const writes=[],umbrellaReads=[];
+  // Empty financial scope: exercise the unchanged confirmation/commit client
+  // contract without any live Candidate, bank, Timesheet or provider operation.
+  const routeProof=(newMethod,destinationPatch)=>({
+    ok:true,candidate_id:candidateId,original_method:candidate.pay_method,
+    expected_old_method:candidate.pay_method,new_method:newMethod,destination_patch:destinationPatch,
+    coverage_basis:'CANONICAL_TIMESHEETS_WITH_RETAINED_FINANCE_AUTHORITY',
+    coverage_complete:true,exact_scope:true,exact_target_scope:true,exact_set_equality:true,
+    represented_timesheet_ids:[],authorised_timesheet_ids:[],active_advance_timesheet_ids:[],
+    retained_finance_timesheet_ids:[],targeted_timesheet_ids:[],canonical_qualifying_timesheet_ids:[],
+    expected_targeted_timesheet_ids:[],persisted_targeted_timesheet_ids:[],
+    missing_targeted_timesheet_ids:[],extra_targeted_timesheet_ids:[],replaced_source_session_ids:[],
+    authoritative_sessions:[],target_details:[],blockers:[],can_apply:true,
+    authoritative_session_count:0,preview_row_count:0,represented_timesheet_count:0,
+    authorised_timesheet_count:0,active_advance_timesheet_count:0,retained_finance_timesheet_count:0,
+    targeted_timesheet_count:0,potential_case_resolution_timesheet_count:0,
+    targeted_scope_is_empty:true,effective_duplicate_count:0,invalid_target_count:0,source_target_mismatch_count:0,
+    preview_source_change_seq:1,source_change_seq:2,contracts_changed:0,contract_weeks_changed:0,
+    timesheets_changed:0,rates_changed:0,tsfin_repricing_rows:0,
+    prospective_only:true,source_records_mutated:false,policy_x_authority_scope:'PRE_DRAFT_LIVE_TRUTH',
+    policy_x_dirtying_only:true,economic_truth_mutation_allowed:false
+  });
   const jobTitles=[
     {id:'70000000-0000-4000-8000-000000000010',label:'Registered Nurse',is_role:true,active:true,requires_prof_reg:true,prof_reg_type:'NMC'},
     {id:'70000000-0000-4000-8000-000000000011',label:'Community Nurse',is_role:true,active:true,requires_prof_reg:true,prof_reg_type:'NMC'}
@@ -12,13 +33,23 @@
   candidate.job_titles=jobTitles.map((j,i)=>({job_title_id:j.id,is_primary:i===0}));
   candidate.prof_reg_type='NMC';
   const output=document.createElement('pre');output.id='fixture-results';output.style.cssText='white-space:pre-wrap;color:#dce5f7;padding:20px';
-  const report=()=>{output.textContent=JSON.stringify({writes,client,settings,candidate},null,2);};
+  const report=()=>{output.textContent=JSON.stringify({writes,umbrellaReads,client,settings,candidate},null,2);};
   const response=(json,status=200)=>Promise.resolve(new Response(JSON.stringify(json),{status,headers:{'Content-Type':'application/json'}}));
   const fixtureFetch=async(url,init={})=>{
     const pathname=new URL(String(url),location.origin).pathname,method=(init.method||'GET').toUpperCase();
     const body=init.body?JSON.parse(init.body):{};
     if(!['GET','HEAD'].includes(method)) {
       writes.push({path:pathname,method,body});
+      if(pathname===`/api/candidates/${candidateId}/pay-method-change`) {
+        const proof=routeProof(body.new_method,body.destination_patch);
+        candidate={...candidate,pay_method:body.new_method,
+          account_holder:null,bank_name:null,sort_code:null,account_number:null,umbrella_id:null,
+          ...body.destination_patch};
+        report();return response({...proof,candidate,operation_id:body.operation_id,
+          current_method:body.new_method,operation_committed:true,operation_superseded_by_later_change:false,
+          job_id:'70000000-0000-4000-8000-000000000030',job_status:'SUCCEEDED',
+          refresh_accepted:true,durable_queue_retained:true,refresh_completed:true,refresh_pending:false,refreshing:false});
+      }
       if(/^\/api\/clients(?:\/[^/]+)?$/.test(pathname)) {
         if(body.client_settings) {
           settings={...settings,...body.client_settings};
@@ -35,10 +66,23 @@
     if(pathname===`/api/clients/${clientId}`)return response({client,client_settings:settings,has_e_history:false});
     if(pathname===`/api/candidates/${candidateId}`)return response({candidate,job_titles:candidate.job_titles.map((j,i)=>typeof j==='string'?{job_title_id:j,is_primary:i===0}:j),hr_aliases:[],has_e_history:false});
     if(pathname==='/api/job-titles')return response({items:jobTitles});
+    if(pathname===`/api/candidates/${candidateId}/pay-method-change-preview`) {
+      const params=new URL(String(url),location.origin).searchParams,newMethod=params.get('new_method');
+      return response(routeProof(newMethod,newMethod==='UMBRELLA'?{umbrella_id:params.get('umbrella_id')}:{}));
+    }
+    if(pathname==='/api/search/umbrellas')return response({items:[
+      {id:'70000000-0000-4000-8000-000000000020',name:'Example Umbrella'},
+      {id:'70000000-0000-4000-8000-000000000021',name:'Second Umbrella'}
+    ]});
+    if(pathname==='/api/umbrellas/70000000-0000-4000-8000-000000000021') {
+      return response({umbrella:{id:'70000000-0000-4000-8000-000000000021',name:'Second Umbrella',bank_name:'Second fixture bank',sort_code:'65-43-21',account_number:'87654321'}});
+    }
     if(pathname==='/api/umbrellas/70000000-0000-4000-8000-000000000020') {
       // Exercise real async pay-tab mounting before its frame finishes changing tab.
-      await new Promise(resolve=>setTimeout(resolve,250));
-      return response({umbrella:{id:'70000000-0000-4000-8000-000000000020',name:'Example Umbrella',account_holder:'Example Umbrella',bank_name:'Fixture bank',sort_code:'12-34-56',account_number:'12345678'}});
+      const read={completed:false};umbrellaReads.push(read);report();
+      await new Promise(resolve=>setTimeout(resolve,location.search.includes('slow-umbrella')?1200:250));
+      read.completed=true;report();
+      return response({umbrella:{id:'70000000-0000-4000-8000-000000000020',name:'Example Umbrella',account_holder:'Example Umbrella',bank_name:'Fixture bank',sort_code:'20-30-40',account_number:'11223344'}});
     }
     if(pathname.includes('printed-timesheet')) return response({ok:true,candidate_paper_submission_enabled:settings.candidate_paper_submission_enabled});
     if(pathname.includes('/settings'))return response({settings:{},client_settings:settings});

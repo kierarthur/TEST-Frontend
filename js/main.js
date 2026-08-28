@@ -277936,7 +277936,9 @@ async function openCandidate(row) {
             W('[onSave] umbrella selection resolution failed', error);
           }
         }
-        if ((!payload.umbrella_id || payload.umbrella_id === '') && full?.umbrella_id) {
+        const umbrellaSelectionWasEdited = [statePay, pay].some(source =>
+          Object.prototype.hasOwnProperty.call(source, 'umbrella_id'));
+        if ((!payload.umbrella_id || payload.umbrella_id === '') && full?.umbrella_id && !umbrellaSelectionWasEdited) {
           payload.umbrella_id = full.umbrella_id;
         }
         if (!payload.account_holder) {
@@ -282372,6 +282374,23 @@ async function mountCandidatePayTab() {
   const sortCode  = document.querySelector('#tab-pay input[name="sort_code"]');
   const accNum    = document.querySelector('#tab-pay input[name="account_number"]');
 
+  // A method change can now happen inside this tab. Old async work must not
+  // write into a newer method, selection, tab mount or Candidate modal.
+  const payForm = document.getElementById('tab-pay');
+  const payContext = window.modalCtx;
+  if (!payForm) return;
+  const mountToken = {};
+  payForm.__candidatePayMount = mountToken;
+  const ownsPayForm = () => payForm.isConnected
+    && document.getElementById('tab-pay') === payForm
+    && payForm.__candidatePayMount === mountToken
+    && window.modalCtx === payContext;
+  const isCurrentPayMount = () => ownsPayForm()
+    && String(window.modalCtx?.payMethodState || persistedMethod || 'PAYE').toUpperCase() === payMethod;
+  let umbrellaPrefillSeq = 0;
+  let umbrellaSelectionSeq = 0;
+  let umbrellaListSeq = 0;
+
   // ✅ Remittance override controls (candidate pay tab)
   const remOverridesCk = document.querySelector('#tab-pay input[name="remittance_overrides_enabled"]');
   const remReceiveCk   = document.querySelector('#tab-pay input[name="remittance_receive_enabled"]');
@@ -282602,7 +282621,18 @@ async function mountCandidatePayTab() {
     });
   }
 
+  const pendingUmbrellaReads = new Map();
   async function fetchUmbrellaById(id) {
+    // Native datalist selection can emit both input and change before the
+    // destination arrives. Share only that in-flight read, never stale data.
+    if (pendingUmbrellaReads.has(id)) return pendingUmbrellaReads.get(id);
+    const pending = readUmbrellaById(id);
+    pendingUmbrellaReads.set(id, pending);
+    try { return await pending; }
+    finally { if (pendingUmbrellaReads.get(id) === pending) pendingUmbrellaReads.delete(id); }
+  }
+
+  async function readUmbrellaById(id) {
     try {
       const res = await authFetch(API(`/api/umbrellas/${encodeURIComponent(id)}`));
       if (!res || !res.ok) return null;
@@ -282660,14 +282690,20 @@ async function mountCandidatePayTab() {
   }
 
   async function fetchAndPrefill(id) {
-    if (!id) return;
+    if (!id || !isCurrentPayMount() || payMethod !== 'UMBRELLA') return false;
+    const seq = ++umbrellaPrefillSeq;
+    const requestedName = String(nameInput?.value || '').trim();
     const umb = await fetchUmbrellaById(id);
+    if (!isCurrentPayMount() || seq !== umbrellaPrefillSeq
+      || String(nameInput?.value || '').trim() !== requestedName) return false;
     if (umb) {
       if (idHidden) idHidden.value = umb.id || idHidden.value || '';
       prefillUmbrellaBankFields(umb);
+      return true;
     } else if (LOG) {
       console.warn('[PAYTAB] fetchAndPrefill: umbrella not found', id);
     }
+    return false;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -282685,6 +282721,8 @@ async function mountCandidatePayTab() {
   };
 
   async function loadUmbrellaList(term) {
+    if (!isCurrentPayMount() || payMethod !== 'UMBRELLA') return;
+    const seq = ++umbrellaListSeq;
     const t = String(term || '').trim();
     _umbLastTerm = t;
 
@@ -282710,6 +282748,7 @@ async function mountCandidatePayTab() {
 
     if (LOG) console.log('[PAYTAB] umbrellas search loaded', { term: t, count: umbrellas.length });
 
+    if (!isCurrentPayMount() || seq !== umbrellaListSeq) return;
     if (listEl) {
       listEl.innerHTML = (umbrellas || []).map(u => {
         const val = buildUmbOptionValue(u);
@@ -282752,7 +282791,11 @@ async function mountCandidatePayTab() {
   }
 
   async function syncUmbrellaSelection() {
+    if (!isCurrentPayMount() || payMethod !== 'UMBRELLA') return null;
+    const seq = ++umbrellaSelectionSeq;
     const val = (nameInput && nameInput.value) ? nameInput.value.trim() : '';
+    const selectionIsCurrent = () => isCurrentPayMount()
+      && seq === umbrellaSelectionSeq && String(nameInput?.value || '').trim() === val;
 
     if (!val) {
       if (idHidden) idHidden.value = '';
@@ -282782,6 +282825,7 @@ async function mountCandidatePayTab() {
     let hitOpt = allOpts.find(o => String(o.value || '').trim().toLowerCase() === val.toLowerCase());
     if (!hitOpt) {
       await loadUmbrellaList(val);
+      if (!selectionIsCurrent()) return null;
       allOpts = Array.from((listEl && listEl.options) ? listEl.options : []);
       hitOpt = allOpts.find(o => String(o.value || '').trim().toLowerCase() === val.toLowerCase());
     }
@@ -282790,13 +282834,20 @@ async function mountCandidatePayTab() {
     if (id) {
       if (LOG) console.log('[PAYTAB] selected umbrella', { label: val, id });
 
+      // Do not show the previous company's destination while this one loads.
+      for (const input of [accHolder, bankName, sortCode, accNum]) {
+        if (input) input.value = '';
+      }
+      for (const key of ['account_holder', 'bank_name', 'sort_code', 'account_number']) {
+        stagedPay[key] = '';
+      }
       if (idHidden) idHidden.value = id;
       stagedPay.umbrella_name = val;
       stagedPay.umbrella_id   = id;
       stagedPay.__forMethod   = payMethod || 'UMBRELLA';
 
-      await fetchAndPrefill(id);
-      return { id, name: val };
+      const filled = await fetchAndPrefill(id);
+      return filled && isCurrentPayMount() && seq === umbrellaSelectionSeq ? { id, name: val } : null;
     }
 
     // Not an exact match yet (user still typing): keep typed text, but clear any previous selection + bank
@@ -282836,10 +282887,9 @@ async function mountCandidatePayTab() {
   }
 
   function hasStagedForCurrentMethod() {
-    if (!hasAnyStagedPay()) return false;
     const m = stagedPay.__forMethod || null;
-    if (!m) return true;           // legacy/untagged – treat as for current method
-    return m === payMethod;
+    if (m) return m === payMethod; // an explicitly blank draft must stay blank
+    return hasAnyStagedPay();     // legacy/untagged values
   }
 
   const isFlipFromPersisted =
@@ -282871,6 +282921,7 @@ async function mountCandidatePayTab() {
   // Pay-method change handler (fires while this tab is open)
   // ─────────────────────────────────────────────────────────────
   const onPmChanged = () => {
+    if (!ownsPayForm()) return;
     const pm = (window.modalCtx?.payMethodState || window.modalCtx?.data?.pay_method || 'PAYE').toUpperCase();
     const nowHasStaged = hasStagedForCurrentMethod();
     if (LOG) console.log('[PAYTAB] pay-method-changed', {
@@ -282880,38 +282931,13 @@ async function mountCandidatePayTab() {
       stagedForMethod: stagedPay.__forMethod || null
     });
 
-    // On a real flip, we DO want a clean slate for the new method
+    // Rebuild the new method's handlers in place without recreating the modal
+    // or committing a route change.
     clearBankAndUmbrella();
-
-    if (pm === 'UMBRELLA') {
-      if (umbRow) umbRow.style.display = '';
-      setBankDisabled(true);
-
-      // Prime suggestions (top 50) when switching into umbrella mode
-      try {
-        if (nameInput && !nameInput.value) scheduleUmbrellaSearch('', true);
-        else scheduleUmbrellaSearch(String(nameInput?.value || '').trim(), true);
-      } catch {}
-
-      // Only auto-restore original umbrella if this was originally UMBRELLA and there is no staged state
-      if (!nowHasStaged && persistedMethod === 'UMBRELLA' && currentUmbId) {
-        if (LOG) console.log('[PAYTAB] pay-method-changed → restore original umbrella from DB');
-        fetchAndPrefill(currentUmbId);
-      }
-    } else {
-      if (umbRow) umbRow.style.display = 'none';
-      setBankDisabled(!isEdit);
-
-      // Only auto-restore original PAYE if this was originally PAYE and there is no staged state
-      if (!nowHasStaged && persistedMethod === 'PAYE') {
-        if (LOG) console.log('[PAYTAB] pay-method-changed → restore original PAYE from candidate');
-        fillFromCandidate();
-      }
-    }
-
-    // remittance toggles are independent of pay method
-    stageRemittanceFromDom();
-    applyRemittanceEnableState();
+    stagedPay.__forMethod = pm;
+    mountCandidatePayTab().catch(error => {
+      if (LOG) console.warn('[PAYTAB] method change mount failed', error);
+    });
   };
 
   try {
@@ -282956,6 +282982,13 @@ async function mountCandidatePayTab() {
       if (accNum)    accNum.value    = stagedPay.account_number || '';
       if (nameInput) nameInput.value = stagedPay.umbrella_name  || '';
       if (idHidden)  idHidden.value  = stagedPay.umbrella_id    || '';
+      // The user may have left this tab while its selected company's bank
+      // details were loading. That old mount cannot paint this one: resume
+      // the read for the selected ID instead of keeping an empty destination.
+      if (stagedPay.umbrella_id && ![accHolder, bankName, sortCode, accNum].some(input => input?.value)) {
+        await fetchAndPrefill(stagedPay.umbrella_id);
+        if (!isCurrentPayMount()) return;
+      }
     } else {
       // No UMBRELLA-staged state → we can safely clear and rebuild from DB/blank
       clearBankAndUmbrella();
@@ -282963,6 +282996,7 @@ async function mountCandidatePayTab() {
       if (atOriginalUMBRELLA && currentUmbId) {
         if (LOG) console.log('[PAYTAB] initial/original UMBRELLA: prefill from candidate umbrella_id');
         await fetchAndPrefill(currentUmbId);
+        if (!isCurrentPayMount()) return;
       } else if (flipFromPAYEtoUMBRELLA) {
         if (LOG) console.log('[PAYTAB] PAYE→UMBRELLA flip: start blank');
       } else {
@@ -282975,11 +283009,17 @@ async function mountCandidatePayTab() {
       nameInput.disabled = !isEdit;
 
       nameInput.oninput = () => {
+        if (!isCurrentPayMount()) return;
+        ++umbrellaPrefillSeq;
+        ++umbrellaSelectionSeq;
         const term = String(nameInput.value || '').trim();
 
-        // Keep staged umbrella_name current, but clear any previous selected id if user is editing the text
+        // A datalist selection emits input before blur/change. Resolve its exact
+        // displayed option immediately; partial typing is still only a search.
         const hadId = !!(idHidden && String(idHidden.value || '').trim());
-        if (hadId && term !== String(stagedPay.umbrella_name || '').trim()) {
+        const exactOption = Array.from(listEl?.options || []).some(option =>
+          String(option.value || '').trim().toLowerCase() === term.toLowerCase());
+        if (exactOption || (hadId && term !== String(stagedPay.umbrella_name || '').trim())) {
           // User is changing away from an existing selection: clear selection + bank fields
           syncUmbrellaSelection().catch(() => {});
         } else {
