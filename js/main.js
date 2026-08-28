@@ -282468,7 +282468,13 @@ async function mountCandidatePayTab() {
   };
 
   function setBankDisabled(disabled) {
-    [accHolder, bankName, sortCode, accNum].forEach(el => { if (el) el.disabled = !!disabled; });
+    [accHolder, bankName, sortCode, accNum].forEach(el => {
+      if (!el) return;
+      // Preserve the destination lock when the modal reapplies Edit after a tab mount.
+      el.setAttribute('data-ctms-intentional-lock', payMethod === 'UMBRELLA' ? '1' : '0');
+      el.disabled = !!disabled;
+      el.readOnly = !!disabled;
+    });
     const umbInput = document.getElementById('umbrella_name');
     // Umbrella name should still be editable when we’re editing the candidate
     if (umbInput) umbInput.disabled = !isEdit;
@@ -282523,6 +282529,7 @@ async function mountCandidatePayTab() {
     // Dependent options: disable when overrides off (but keep values intact)
     [remReceiveCk, remDetailedCk, remUmbCopyCk].forEach(el => {
       if (!el) return;
+      el.setAttribute('data-ctms-intentional-lock', overridesOn ? '0' : '1');
       el.disabled = depDisabled;
       setLabelDisabledVisual(el, depDisabled);
     });

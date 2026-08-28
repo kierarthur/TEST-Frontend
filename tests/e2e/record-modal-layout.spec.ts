@@ -104,6 +104,15 @@ test('switching PAYE to Umbrella wires selection immediately and clears bank fie
   await tab(page, 'Work & compliance').click();
   await tab(page, 'Payment details').click();
   await expect(field(page, 'bank_name')).toHaveValue('Fixture bank');
+  for (const name of ['account_holder', 'bank_name', 'sort_code', 'account_number']) {
+    await expect(field(page, name)).toBeDisabled();
+  }
+  for (const name of ['remittance_receive_enabled', 'remittances_detailed_breakdown', 'remittance_receive_when_umbrella_paid']) {
+    await expect(field(page, name)).toBeDisabled();
+  }
+  await field(page, 'remittance_overrides_enabled').check();
+  await expect(field(page, 'remittance_receive_enabled')).toBeEnabled();
+  await field(page, 'remittance_overrides_enabled').uncheck();
   await field(page, 'pay_method').selectOption('PAYE');
   for (const name of ['account_holder', 'bank_name', 'sort_code', 'account_number']) {
     await expect(field(page, name)).toHaveValue('');
