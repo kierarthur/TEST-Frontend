@@ -170476,6 +170476,137 @@ async function listClientsBasic(){
   return list.map(x => ({ id: x.id, name: x.name })).filter(x => x.id && x.name);
 }
 
+// Candidate care-package selectors must not inherit the general dropdown's
+// first-page limit. Keep this reader local to the override workflow.
+async function readCandidateRatePages(path, params = {}, pageSize = 200) {
+  const result = [], seen = new Set();
+  for (let offset = 0; ; offset += pageSize) {
+    const query = new URLSearchParams({ ...params, limit: String(pageSize), offset: String(offset) });
+    const response = await authFetch(API(`${path}?${query}`));
+    if (!response?.ok) throw new Error('Care-package choices could not be loaded.');
+    const payload = await response.json();
+    const rows = Array.isArray(payload) ? payload : payload?.items;
+    if (!Array.isArray(rows)) throw new Error('Care-package choices could not be loaded.');
+    let added = 0;
+    for (const row of rows) {
+      if (!row?.id || seen.has(String(row.id))) continue;
+      seen.add(String(row.id)); result.push(row); added++;
+    }
+    if (rows.length < pageSize) return result;
+    // Do not loop forever or present a silently truncated list if pagination
+    // stops advancing (for example, an upstream service ignores offset).
+    if (!added) throw new Error('Care-package choices could not be loaded.');
+  }
+}
+
+async function listCandidateRateClients() {
+  const clients = await readCandidateRatePages('/api/clients');
+  return clients.map(row => ({ id: String(row.id), name: String(row.name || '') }))
+    .filter(row => row.name).sort((a, b) => a.name.localeCompare(b.name, 'en-GB', { sensitivity: 'base' }));
+}
+
+async function loadCandidateRateClientChoices() {
+  const [clients, rates] = await Promise.all([
+    listCandidateRateClients(),
+    readCandidateRatePages('/api/rates/client-defaults', {}, 500)
+  ]);
+  // Defined windows establish membership, including historical windows.
+  // The existing enabled/date/role/band checks still govern applying a rate.
+  const eligibleIds = new Set(rates.map(row => String(row.client_id || '')));
+  return { clients, eligible: clients.filter(row => eligibleIds.has(row.id)) };
+}
+
+function wireCandidateRateClientSearch(input, results, selection, { editable, load, onChange }) {
+  let choices = [], loading = true, failed = false, active = -1, matches = [], loadSeq = 0;
+  const close = () => {
+    results.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+  };
+  const render = () => {
+    if (!editable || !input.isConnected || document.activeElement !== input) return;
+    const query = input.value.trim().toLocaleLowerCase('en-GB');
+    matches = choices.filter(row => row.name.toLocaleLowerCase('en-GB').includes(query));
+    active = -1;
+    input.removeAttribute('aria-activedescendant');
+    results.innerHTML = '';
+    if (loading || failed || !matches.length) {
+      const status = document.createElement('div');
+      status.className = 'ctms-contract-suggestion-status'; status.setAttribute('role', 'status');
+      status.textContent = loading ? 'Loading clients…' : failed ? 'Clients could not be loaded.' : 'No matching clients with care package rates.';
+      results.append(status);
+      if (failed) {
+        const retry = document.createElement('button');
+        retry.type = 'button'; retry.className = 'btn'; retry.textContent = 'Try again';
+        retry.onclick = () => { input.focus(); void reload(); };
+        results.append(retry);
+      }
+    } else {
+      matches.forEach((row, index) => {
+        const option = document.createElement('button');
+        option.type = 'button'; option.tabIndex = -1; option.className = 'ctms-contract-suggestion';
+        option.id = `${results.id}-option-${index}`;
+        option.setAttribute('role', 'option'); option.setAttribute('aria-selected', 'false');
+        option.textContent = row.name;
+        option.onclick = () => choose(index);
+        results.append(option);
+      });
+    }
+    results.hidden = false; input.setAttribute('aria-expanded', 'true');
+  };
+  const choose = index => {
+    const row = matches[index];
+    if (!row || loading || failed) return;
+    input.value = row.name; selection.value = row.id;
+    input.focus(); close(); onChange();
+  };
+  const reload = async () => {
+    const seq = ++loadSeq;
+    loading = true; failed = false; choices = []; render();
+    try {
+      const data = await load();
+      if (seq !== loadSeq || !input.isConnected) return;
+      choices = data.eligible;
+      const selected = data.clients.find(row => row.id === selection.value);
+      if (selected) input.value = selected.name;
+    } catch {
+      if (seq !== loadSeq || !input.isConnected) return;
+      failed = true;
+    }
+    loading = false; render();
+  };
+  input.addEventListener('focus', render);
+  input.addEventListener('input', () => {
+    if (!editable) return;
+    if (selection.value) { selection.value = ''; onChange(); }
+    render();
+  });
+  input.addEventListener('keydown', event => {
+    if (event.isComposing || results.hidden) return;
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && matches.length && !loading && !failed) {
+      event.preventDefault();
+      active = Math.max(0, Math.min(matches.length - 1, active + (event.key === 'ArrowDown' ? 1 : -1)));
+      results.querySelectorAll('[role="option"]').forEach((option, index) => {
+        option.setAttribute('aria-selected', String(index === active));
+        if (index === active) {
+          input.setAttribute('aria-activedescendant', option.id);
+          option.scrollIntoView({ block: 'nearest' });
+        }
+      });
+    }
+    if (event.key === 'Enter' && active >= 0) { event.preventDefault(); choose(active); }
+    if (event.key === 'Tab') close();
+  });
+  results.addEventListener('pointerdown', event => {
+    if (event.pointerType === 'mouse') event.preventDefault();
+  });
+  input.addEventListener('blur', () => setTimeout(() => {
+    if (document.activeElement !== input && !results.contains(document.activeElement)) close();
+  }, 150));
+  void reload();
+}
+
 // ===== UK date helpers & lightweight picker =====
 
 function formatIsoToUk(iso){ // 'YYYY-MM-DD' -> 'DD/MM/YYYY'
@@ -278656,7 +278787,7 @@ async function renderCandidateRatesTable() {
   // Resolve client names
   let clientsById = {};
   try {
-    const clients = await listClientsBasic();
+    const clients = await listCandidateRateClients();
     clientsById = Object.fromEntries((clients || []).map(c => [c.id, c.name]));
   } catch (e) { console.error('[RATES][TABLE] load clients failed', e); }
 
@@ -280174,10 +280305,6 @@ async function openCandidateRateModal(candidate_id, existing) {
   const parentEditable= parentFrame && (parentFrame.mode === 'edit' || parentFrame.mode === 'create');
   L('parent frame', { editable: !!parentEditable, mode: parentFrame?.mode });
 
-  // ===== load clients =====
-  const clients = await listClientsBasic().catch(e=>{ L('listClientsBasic failed', e); return []; });
-  L('clients loaded', clients?.length || 0);
-  const clientOptions = (clients||[]).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   const initialClientId = existing?.client_id || '';
 
   const defaultRateType = existing?.rate_type
@@ -280194,11 +280321,14 @@ async function openCandidateRateModal(candidate_id, existing) {
   const formHtml = html(`
     <div class="form" id="candRateForm">
       <div class="row">
-        <label>Client (required)</label>
-        <select name="client_id" id="cr_client_id" ${parentEditable ? '' : 'disabled'}>
-          <option value="">Select client…</option>
-          ${clientOptions}
-        </select>
+        <label for="cr_client_search">Client (required)</label>
+        <input type="hidden" name="client_id" id="cr_client_id" />
+        <div class="ctms-contract-picker-field candidate-rate-client-picker">
+          <input type="text" id="cr_client_search" placeholder="Search clients with care package rates…"
+                 role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cr_client_results"
+                 autocomplete="off" ${parentEditable ? '' : 'disabled'} />
+          <div id="cr_client_results" class="ctms-contract-suggestions" role="listbox" aria-label="Eligible clients" hidden></div>
+        </div>
       </div>
 
       <div class="row">
@@ -280370,7 +280500,7 @@ async function openCandidateRateModal(candidate_id, existing) {
 
   async function resolveCoveringWindow(client_id, role, band, active_on){
     try {
-      const list = await listClientRates(client_id, { active_on, only_enabled: true });
+      const list = await readCandidateRatePages('/api/rates/client-defaults', { client_id, active_on, only_enabled: 'true' }, 500);
       const wins  = (Array.isArray(list) ? list.filter(w => !w.disabled_at_utc && w.role === role) : []);
       const filtered = wins;
       let win = filtered.find(w => (w.band ?? null) === (band ?? null));
@@ -280382,14 +280512,16 @@ async function openCandidateRateModal(candidate_id, existing) {
     } catch(e){ L('resolveCoveringWindow err', e); return null; }
   }
 
-  let lastApplyState = null;
+  let lastApplyState = false, validationSequence = 0, overrideForm = null;
+  const isCurrentOverride = () => overrideForm && byId('candRateForm') === overrideForm;
   function setApplyEnabled(enabled, reasonSummary){
+    if (!isCurrentOverride()) return;
     // DO NOT directly toggle #btnSave here – leave that to the modal framework
     // via _applyDesired and _updateButtons. We only broadcast the state.
     if (LOG_APPLY && lastApplyState !== enabled) {
       console.log('[RATES][APPLY] state →', enabled ? 'ENABLED' : 'DISABLED', reasonSummary || '');
-      lastApplyState = enabled;
     }
+    lastApplyState = enabled;
     try {
       window.dispatchEvent(new CustomEvent('modal-apply-enabled', { detail:{ enabled } }));
     } catch {}
@@ -280397,6 +280529,10 @@ async function openCandidateRateModal(candidate_id, existing) {
 
   // ===== driver: recompute state (validations + overlap + preview) =====
   async function recomputeOverrideState(){
+    const sequence = ++validationSequence;
+    if (!isCurrentOverride()) return false;
+    const stillCurrent = () => sequence === validationSequence && isCurrentOverride();
+    setApplyEnabled(false, 'checking');
     const clientId = byId('cr_client_id')?.value || '';
     const role     = byId('cr_role')?.value || '';
     const bandSel  = byId('cr_band')?.value ?? '';
@@ -280427,10 +280563,11 @@ async function openCandidateRateModal(candidate_id, existing) {
         const sp = byId(`cr_m_${b}`); if (sp) sp.textContent = '—';
       });
       setApplyEnabled(false, 'not_ready');
-      return;
+      return false;
     }
 
     const win = await resolveCoveringWindow(clientId, role, band, isoFrom);
+    if (!stillCurrent()) return false;
     if (!win) {
       buckets.forEach(b => {
         const inp = inputEl(b);
@@ -280441,7 +280578,7 @@ async function openCandidateRateModal(candidate_id, existing) {
       });
       showInlineError(`No active client default for <b>${escapeHtml(role)}</b>${band?` / <b>${escapeHtml(band)}</b>`:''} on <b>${formatIsoToUk(isoFrom)}</b>.`);
       setApplyEnabled(false, 'no_cover');
-      return;
+      return false;
     }
 
     buckets.forEach(b => {
@@ -280450,7 +280587,7 @@ async function openCandidateRateModal(candidate_id, existing) {
       if (hasCharge) {
         if (slotPh(b)) slotPh(b).style.display = 'none';
         if (slotIn(b)) slotIn(b).style.display = '';
-        if (inp) inp.disabled = false;
+        if (inp) inp.disabled = !parentEditable;
       } else {
         if (slotIn(b)) slotIn(b).style.display = 'none';
         if (slotPh(b)) slotPh(b).style.display = '';
@@ -280459,6 +280596,7 @@ async function openCandidateRateModal(candidate_id, existing) {
     });
 
     const mult = await _erniMultiplier(isoFrom, isoTo);
+    if (!stillCurrent()) return false;
 
     const invalid = [];
     buckets.forEach(b => {
@@ -280525,6 +280663,7 @@ async function openCandidateRateModal(candidate_id, existing) {
       `);
 
       setTimeout(()=> {
+        if (!stillCurrent()) return;
         const inTo = byId('cr_date_to');
         const fixThis = byId('cr_fix_this');
         if (fixThis && cutThis) fixThis.onclick = ()=> { inTo.value = formatIsoToUk(cutThis); recomputeOverrideState(); };
@@ -280557,6 +280696,7 @@ async function openCandidateRateModal(candidate_id, existing) {
 
     if (LOG_APPLY) console.log('[RATES][APPLY] canApply?', canApply, { clientId, role, band, isoFrom, isoTo, rateType });
     setApplyEnabled(canApply, canApply ? 'ok' : 'violations');
+    return canApply;
   }
 
   showModal(
@@ -280564,8 +280704,7 @@ async function openCandidateRateModal(candidate_id, existing) {
     [{ key:'form', label:'Form' }],
     () => formHtml,
     async () => {
-      await recomputeOverrideState();
-      if (lastApplyState === false) { L('Apply blocked by recompute'); return false; }
+      if (!parentEditable || await recomputeOverrideState() !== true) { L('Apply blocked by recompute'); return false; }
 
       const raw = collectForm('#candRateForm');
       LG('Apply collected form', raw);
@@ -280628,6 +280767,7 @@ async function openCandidateRateModal(candidate_id, existing) {
   );
 
   // ===== prefill & wire =====
+  overrideForm = byId('candRateForm');
   const selClient = byId('cr_client_id');
   const selRateT  = byId('cr_rate_type');
   const selRole   = byId('cr_role');
@@ -280651,67 +280791,67 @@ async function openCandidateRateModal(candidate_id, existing) {
 
   attachUkDatePicker(inFrom); attachUkDatePicker(inTo);
 
+  let rolesSequence = 0, bandsByRole = new Map();
+  function populateBands(role) {
+    const bands = [...(bandsByRole.get(role) || [])].sort((a, b) => a.localeCompare(b, 'en-GB', { numeric: true }));
+    selBand.replaceChildren();
+    if (!bands.length) selBand.add(new Option('', ''));
+    for (const band of bands) selBand.add(new Option(band || '(none)', band));
+    selBand.disabled = !parentEditable || !bands.length;
+    if (bands.includes(currentBand)) selBand.value = currentBand;
+    currentBand = selBand.value || '';
+  }
+
   async function refreshClientRoles(clientId) {
+    const sequence = ++rolesSequence;
+    ++validationSequence;
+    bandsByRole = new Map();
     selRole.innerHTML = `<option value="">Select role…</option>`; selRole.disabled = true;
     selBand.innerHTML = `<option value=""></option>`;             selBand.disabled  = true;
-
-    if (!clientId) { setApplyEnabled(false, 'no_client'); return; }
+    await recomputeOverrideState();
+    if (!clientId || !isCurrentOverride() || sequence !== rolesSequence) return;
 
     const active_on = parseUkDateToIso(inFrom.value || '') || null;
-    const list  = await listClientRates(clientId, { active_on, only_enabled: true }).catch(_=>[]);
+    let list;
+    try {
+      list = await readCandidateRatePages('/api/rates/client-defaults', {
+        client_id: clientId, only_enabled: 'true', ...(active_on ? { active_on } : {})
+      }, 500);
+    } catch {
+      if (isCurrentOverride() && sequence === rolesSequence) {
+        showInlineError('Care package rates could not be loaded. Select the client again to retry.');
+        setApplyEnabled(false, 'rates_unavailable');
+      }
+      return;
+    }
+    if (!isCurrentOverride() || sequence !== rolesSequence || selClient.value !== clientId) return;
     const wins  = (Array.isArray(list) ? list.filter(w => !w.disabled_at_utc) : []);
-    const roles = new Set(); const bandsByRole = {};
+    const roles = new Set();
     wins.forEach(w => {
       if (!w.role) return;
       roles.add(w.role);
-      (bandsByRole[w.role] ||= new Set()).add(w.band==null ? '' : String(w.band));
+      if (!bandsByRole.has(w.role)) bandsByRole.set(w.role, new Set());
+      bandsByRole.get(w.role).add(w.band==null ? '' : String(w.band));
     });
 
     const allowed = [...roles].sort((a,b)=> a.localeCompare(b));
-    selRole.innerHTML = `<option value="">Select role…</option>` + allowed.map(code => `<option value="${code}">${code}</option>`).join('');
+    selRole.replaceChildren(new Option('Select role…', ''));
+    for (const code of allowed) selRole.add(new Option(code, code));
     selRole.disabled = !parentEditable;
 
     // Choose a role in this order:
     // 1) currentRole if still valid
-    // 2) existing.role if still valid
-    // 3) blank
+    // 2) blank (never restore a previous client's role after switching).
     let chosenRole = '';
     if (currentRole && allowed.includes(currentRole)) {
       chosenRole = currentRole;
-    } else if (existing?.role && allowed.includes(existing.role)) {
-      chosenRole = existing.role;
     }
 
     if (chosenRole) {
       selRole.value = chosenRole;
       currentRole = chosenRole;
 
-      const bandSet = [...(bandsByRole[chosenRole] || new Set())];
-      const hasNull = bandSet.includes('');
-      selBand.innerHTML =
-        (hasNull ? `<option value="">(none)</option>` : '') +
-        bandSet
-          .filter(b=>b!=='')
-          .sort((a,b)=> String(a).localeCompare(String(b)))
-          .map(b => `<option value="${b}">${b}</option>`).join('');
-      selBand.disabled = !parentEditable;
-
-      // Pick band: prefer currentBand if still valid; else existing.band
-      let desiredBand = '';
-      if (currentBand && bandSet.includes(currentBand)) {
-        desiredBand = currentBand;
-      } else if (existing && existing.band != null) {
-        const asStr = String(existing.band);
-        if (bandSet.includes(asStr)) desiredBand = asStr;
-      }
-
-      if (desiredBand && bandSet.includes(desiredBand)) {
-        selBand.value = desiredBand;
-        currentBand = desiredBand;
-      } else {
-        // leave at (none)
-        currentBand = '';
-      }
+      populateBands(chosenRole);
     } else {
       selBand.innerHTML = `<option value=""></option>`;
       selBand.disabled  = true;
@@ -280730,6 +280870,10 @@ async function openCandidateRateModal(candidate_id, existing) {
       await refreshClientRoles(selClient.value);
     }
   });
+  wireCandidateRateClientSearch(byId('cr_client_search'), byId('cr_client_results'), selClient, {
+    editable: parentEditable, load: loadCandidateRateClientChoices,
+    onChange: () => selClient.dispatchEvent(new Event('change', { bubbles: true }))
+  });
   selRateT .addEventListener('change',        () => {
     L('[EVENT] rate_type change');
     if (parentEditable) recomputeOverrideState();
@@ -280745,6 +280889,8 @@ async function openCandidateRateModal(candidate_id, existing) {
     L('[EVENT] role change');
     if (!parentEditable) return;
     currentRole = selRole.value || '';
+    currentBand = '';
+    populateBands(currentRole);
     // changing role recalculates margins
     await recomputeOverrideState();
   });
@@ -280754,6 +280900,7 @@ async function openCandidateRateModal(candidate_id, existing) {
     currentBand = selBand.value || '';
     recomputeOverrideState();
   });
+  inTo.addEventListener('change', () => { if (parentEditable) recomputeOverrideState(); });
   ['pay_day','pay_night','pay_sat','pay_sun','pay_bh'].forEach(n=>{
     const el = document.querySelector(`#candRateForm input[name="${n}"]`);
     if (el) el.addEventListener('input', () => {

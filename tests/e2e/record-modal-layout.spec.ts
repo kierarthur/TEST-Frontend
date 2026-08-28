@@ -40,6 +40,126 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+async function openRatePicker(page: Page, mode = 'all') {
+  await page.goto('/?rate-clients=' + mode);
+  await page.getByRole('button', { name: 'Existing candidate', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Care Packages').click();
+  await page.getByRole('button', { name: 'Add rate override', exact: true }).click();
+  await expect(page.locator('#cr_client_search')).toBeVisible();
+}
+async function chooseRateClient(page: Page, name: string, info: TestInfo) {
+  await page.locator('#cr_client_search').fill(name);
+  const option=page.getByRole('option', { name, exact: true });
+  await expect(option).toBeVisible();
+  if(info.project.name==='desktop') await option.click(); else await option.tap();
+}
+async function ratePickerVisual(page: Page, info: TestInfo, name: string) {
+  const geometry=await page.locator('#modal').evaluate(el=>{
+    const r=el.getBoundingClientRect(),b=document.getElementById('modalBody')!;
+    return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,w:innerWidth,h:innerHeight,overflow:b.scrollWidth-b.clientWidth};
+  });
+  expect(geometry.x).toBeGreaterThanOrEqual(-2);expect(geometry.y).toBeGreaterThanOrEqual(-2);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.w+2);expect(geometry.bottom).toBeLessThanOrEqual(geometry.h+2);
+  expect(geometry.overflow).toBeLessThanOrEqual(2);
+  await page.screenshot({path:info.outputPath(name+'.png')});
+}
+
+test('rate client picker searches every page and excludes clients without rates',async({page},info)=>{
+  await openRatePicker(page);
+  const search=page.locator('#cr_client_search'),list=page.getByRole('listbox',{name:'Eligible clients'});
+  await search.click();
+  await expect(list.getByRole('option')).toHaveText(['Northshire Community Health','Riverside Historic Care','Zedland Integrated Care Partnership']);
+  await ratePickerVisual(page,info,'eligible-clients');
+  await search.fill('Client 205');
+  await expect(list.getByRole('option')).toHaveCount(0);
+  await expect(list).toContainText('No matching clients with care package rates.');
+  await search.fill('zEdLaNd');
+  await expect(list.getByRole('option')).toHaveText(['Zedland Integrated Care Partnership']);
+  await search.press('ArrowDown');await search.press('Enter');
+  await expect(search).toHaveValue('Zedland Integrated Care Partnership');
+  await expect(list).toBeHidden();
+  await expect(page.locator('#cr_client_id')).toHaveValue('72000000-0000-4000-8000-000000000001');
+  const reads=(await result(page)).pickerReads;
+  expect(reads.some((r:any)=>r.path==='/api/clients'&&r.offset===200)).toBe(true);
+  expect(reads.some((r:any)=>r.path.endsWith('client-defaults')&&r.offset===500&&!r.client)).toBe(true);
+  expect((await result(page)).writes).toEqual([]);
+});
+
+test('rate client selection stages correct role band and amounts then survives parent Save',async({page},info)=>{
+  await openRatePicker(page);
+  await chooseRateClient(page,'Zedland Integrated Care Partnership',info);
+  await expect(page.locator('#cr_role')).toBeEnabled();
+  await page.locator('#cr_role').selectOption('Community Nurse');
+  await expect(page.locator('#cr_band')).toHaveValue('7');
+  await page.locator('#cr_date_from').fill('01/09/2026');await page.locator('#cr_date_from').press('Tab');
+  await expect(page.locator('#pay_day')).toBeEnabled();
+  await page.locator('#pay_day').fill('90');await page.locator('#pay_day').press('Tab');
+  await expect(page.getByRole('button',{name:'Apply',exact:true})).toBeDisabled();
+  await page.locator('#pay_day').fill('30');await page.locator('#pay_day').press('Tab');
+  await expect(page.locator('#cr_m_day')).toHaveText('30.00');
+  await page.locator('#modalTitle').click();
+  await ratePickerVisual(page,info,'selected-client-rate');
+  await page.getByRole('button',{name:'Apply',exact:true}).click();
+  await expect(page.locator('#modalTitle')).toHaveText('Edit Candidate');
+  await expect(page.locator('#modalBody')).toContainText('Zedland Integrated Care Partnership');
+  expect((await result(page)).writes).toEqual([]);
+  await tab(page,'Main Details').click();await tab(page,'Care Packages').click();
+  const row=page.getByRole('row').filter({hasText:'Zedland Integrated Care Partnership'});
+  await row.dblclick();
+  await expect(page.locator('#cr_client_search')).toHaveValue('Zedland Integrated Care Partnership');
+  await expect(page.locator('#cr_role')).toHaveValue('Community Nurse');
+  await expect(page.locator('#cr_band')).toHaveValue('7');
+  await expect(page.locator('#pay_day')).toHaveValue('30.00');
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  const saved=(await result(page)).candidateRates;
+  expect(saved).toHaveLength(1);
+  expect(saved[0]).toMatchObject({client_id:'72000000-0000-4000-8000-000000000001',role:'Community Nurse',band:'7',rate_type:'PAYE',date_from:'2026-09-01',pay_day:30});
+  await tab(page,'Care Packages').click();
+  await expect(page.locator('#modalBody')).toContainText('Zedland Integrated Care Partnership');
+  await expect(page.getByRole('button',{name:'Add rate override',exact:true})).toBeDisabled();
+  await page.getByRole('row').filter({hasText:'Zedland Integrated Care Partnership'}).dblclick();
+  await expect(page.locator('#cr_client_search')).toHaveCount(0);
+  await page.getByRole('button',{name:'Edit',exact:true}).click();
+  await page.getByRole('row').filter({hasText:'Zedland Integrated Care Partnership'}).dblclick();
+  await expect(page.locator('#cr_client_search')).toHaveValue('Zedland Integrated Care Partnership');
+  await expect(page.locator('#cr_role')).toHaveValue('Community Nurse');
+  await expect(page.locator('#cr_band')).toHaveValue('7');
+  await expect(page.locator('#pay_day')).toHaveValue('30.00');
+});
+
+test('rate client change ignores slow previous results and clears hidden selection while typing',async({page},info)=>{
+  await openRatePicker(page,'slow');
+  await chooseRateClient(page,'Northshire Community Health',info);
+  await expect.poll(async()=>(await result(page)).pickerReads.some((r:any)=>r.client==='70000000-0000-4000-8000-000000000001'&&!r.completed)).toBe(true);
+  await chooseRateClient(page,'Zedland Integrated Care Partnership',info);
+  await expect(page.locator('#cr_role option')).toHaveText(['Select role…','Community Nurse']);
+  await expect.poll(async()=>(await result(page)).pickerReads.filter((r:any)=>r.client==='70000000-0000-4000-8000-000000000001').every((r:any)=>r.completed)).toBe(true);
+  await expect(page.locator('#cr_role option')).toHaveText(['Select role…','Community Nurse']);
+  await page.locator('#cr_role').selectOption('Community Nurse');
+  await page.locator('#cr_client_search').fill('No match');
+  await expect(page.locator('#cr_client_id')).toHaveValue('');
+  await expect(page.locator('#cr_role')).toBeDisabled();
+  await expect(page.locator('#cr_band')).toBeDisabled();
+  await expect(page.getByRole('button',{name:'Apply',exact:true})).toBeDisabled();
+  expect((await result(page)).writes).toEqual([]);
+});
+
+test('rate client page failure is visible and Retry loads the complete eligible list',async({page},info)=>{
+  await openRatePicker(page,'retry');
+  await page.locator('#cr_client_search').click();
+  await expect(page.getByRole('listbox')).toContainText('Clients could not be loaded.');
+  await expect(page.getByRole('listbox').getByRole('option')).toHaveCount(0);
+  await page.getByRole('button',{name:'Try again',exact:true}).click();
+  await expect(page.getByRole('listbox').getByRole('option')).toHaveCount(3);
+  await chooseRateClient(page,'Riverside Historic Care',info);
+  await expect(page.locator('#cr_role option')).toHaveText(['Select role…']);
+  await expect(page.getByRole('button',{name:'Apply',exact:true})).toBeDisabled();
+  expect((await result(page)).writes).toEqual([]);
+});
+
 for (const state of ['zero', 'populated']) {
   test(`Candidate finance ${state} is readable and the report returns to the same tab`, async ({ page }, info) => {
     await page.goto('/?finance=' + state);

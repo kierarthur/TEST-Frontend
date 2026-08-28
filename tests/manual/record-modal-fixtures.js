@@ -9,6 +9,22 @@
   const nextSettingsVersion=()=>new Date(Date.UTC(2026,7,28,12,0,settingsVersion++)).toISOString();
   settings.updated_at=nextSettingsVersion();
   const writes=[],umbrellaReads=[];
+  const pickerMode=new URLSearchParams(location.search).get('rate-clients');
+  const pickerClients=Array.from({length:205},(_,i)=>({id:`71000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`,name:`Client ${String(i+1).padStart(3,'0')}`}));
+  pickerClients.push(client,
+    {id:'72000000-0000-4000-8000-000000000001',name:'Zedland Integrated Care Partnership'},
+    {id:'72000000-0000-4000-8000-000000000002',name:'Riverside Historic Care'});
+  pickerClients.sort((a,b)=>a.name.localeCompare(b.name));
+  const pickerRates=Array.from({length:500},(_,i)=>({
+    id:`73000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`,client_id:clientId,role:'Registered Nurse',band:'6',
+    date_from:'2026-01-01',date_to:'2026-12-31',charge_day:60,charge_night:65,charge_sat:70,charge_sun:75,charge_bh:80
+  }));
+  pickerRates.push(
+    {...pickerRates[0],id:'74000000-0000-4000-8000-000000000001',client_id:pickerClients.find(c=>c.name.startsWith('Zedland')).id,role:'Community Nurse',band:'7'},
+    {...pickerRates[0],id:'74000000-0000-4000-8000-000000000002',client_id:pickerClients.find(c=>c.name.startsWith('Riverside')).id,disabled_at_utc:'2025-12-31T00:00:00Z',date_from:'2025-01-01',date_to:'2025-12-31'}
+  );
+  const pickerReads=[],candidateRates=[];
+  let pickerFailed=false;
   const financeMode=new URLSearchParams(location.search).get('finance');
   let financeReads=0;
   const financeSummary={
@@ -48,13 +64,16 @@
   candidate.job_titles=jobTitles.map((j,i)=>({job_title_id:j.id,is_primary:i===0}));
   candidate.prof_reg_type='NMC';
   const output=document.createElement('pre');output.id='fixture-results';output.style.cssText='white-space:pre-wrap;color:#dce5f7;padding:20px';
-  const report=()=>{output.textContent=JSON.stringify({writes,umbrellaReads,client,settings,candidate},null,2);};
+  const report=()=>{output.textContent=JSON.stringify({writes,umbrellaReads,pickerReads,candidateRates,client,settings,candidate},null,2);};
   const response=(json,status=200)=>Promise.resolve(new Response(JSON.stringify(json),{status,headers:{'Content-Type':'application/json'}}));
   const fixtureFetch=async(url,init={})=>{
     const pathname=new URL(String(url),location.origin).pathname,method=(init.method||'GET').toUpperCase();
     const body=init.body?JSON.parse(init.body):{};
     if(!['GET','HEAD'].includes(method)) {
       writes.push({path:pathname,method,body});
+      if(pickerMode && pathname==='/api/rates/candidate-overrides' && method==='POST') {
+        const row={...body,id:'75000000-0000-4000-8000-000000000001'};candidateRates.push(row);report();return response(row);
+      }
       if(pathname===`/api/clients/${clientId}/printed-timesheet-policy`) {
         if(simulateConflict){simulateConflict=false;settings={...settings,updated_at:nextSettingsVersion()};}
         if (body.expected_settings_updated_at!==settings.updated_at) {report();return response({error:'Client settings changed. Reload and try again.',error_code:'CLIENT_SETTINGS_CONFLICT'},409);}
@@ -98,6 +117,22 @@
       if(financeMode==='loading') await new Promise(resolve=>setTimeout(resolve,2500));
       if(financeMode==='error' || (financeMode==='retry' && financeReads===1)) return response({error:'Fixture unavailable'},503);
       return response({summary:financeMode==='populated'?financeSummary:{},finance_cases:[],timesheet_snoozes:[]});
+    }
+    if(pickerMode && pathname==='/api/rates/candidate-overrides') return response({items:candidateRates});
+    if(pickerMode && (pathname==='/api/clients' || pathname==='/api/rates/client-defaults')) {
+      const params=new URL(String(url),location.origin).searchParams;
+      const offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||(pathname==='/api/clients'?50:100));
+      const selected=params.get('client_id'),active=params.get('active_on');
+      const read={path:pathname,offset,limit,client:selected,completed:false};pickerReads.push(read);report();
+      if(pickerMode==='retry' && pathname.endsWith('client-defaults') && offset===500 && !pickerFailed) {
+        pickerFailed=true;read.completed=true;report();return response({error:'Fixture rate page unavailable'},503);
+      }
+      if(pickerMode==='slow' && selected===clientId) await new Promise(resolve=>setTimeout(resolve,1400));
+      let rows=pathname==='/api/clients'?pickerClients:pickerRates;
+      if(selected) rows=rows.filter(row=>row.client_id===selected);
+      if(params.get('only_enabled')==='true') rows=rows.filter(row=>!row.disabled_at_utc);
+      if(active) rows=rows.filter(row=>row.date_from<=active&&(!row.date_to||row.date_to>=active));
+      read.completed=true;report();return response({items:rows.slice(offset,offset+limit)});
     }
     if(pathname===`/api/clients/${clientId}`)return response({client,client_settings:settings,has_e_history:false});
     if(pathname===`/api/candidates/${candidateId}`)return response({candidate,job_titles:candidate.job_titles.map((j,i)=>typeof j==='string'?{job_title_id:j,is_primary:i===0}:j),hr_aliases:[],has_e_history:false});

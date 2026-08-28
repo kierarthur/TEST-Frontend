@@ -36,6 +36,10 @@
 .record-system-references > summary { cursor:pointer; font-weight:650; color:#b7c6dc; padding:4px; }
 .record-system-references > .ctms-section { margin-top:12px; }
 .candidate-finance-row { min-width:0; }
+.candidate-rate-client-picker { position:relative; min-width:0; width:100%; }
+#modal.ctms-modern-modal .candidate-rate-client-picker .ctms-contract-suggestions { position:static; margin-top:8px; max-height:min(260px,32vh); overscroll-behavior-y:auto; touch-action:pan-y; scrollbar-gutter:stable; }
+#modal.ctms-modern-modal .candidate-rate-client-picker .ctms-contract-suggestion { white-space:normal; overflow-wrap:anywhere; line-height:1.4; min-height:46px; }
+#modal.ctms-modern-modal .candidate-rate-client-picker input { width:100%; }
 #modal #candidateAdvancesSummary { display:block; width:100%; min-width:0; }
 #modal .candidate-finance-section .ctms-section-eyebrow { display:none; }
 #modal .candidate-finance-section .ctms-section-head { margin-bottom:0; }
