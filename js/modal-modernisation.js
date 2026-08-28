@@ -434,11 +434,13 @@
       copy: '',
       selectors: ['[name="remittance_overrides_enabled"]']
     });
-    section(form, {
-      key: 'finance', title: 'Candidate finance', eyebrow: 'Read-only summary',
+    const finance = section(form, {
+      key: 'finance', title: 'Candidate finance', eyebrow: 'Candidate payment',
       copy: '',
       selectors: ['#candidateAdvancesSummary']
     });
+    if (finance) finance.wrap.classList.add('candidate-finance-section');
+    spanForSelector(form, '#candidateAdvancesSummary');
     spanForSelector(form, '#umbRow');
     unclaimedVisibleChildren(form).forEach((node) => {
       if (/PAYE bank fields are editable/i.test(safeText(node.textContent))) node.remove();

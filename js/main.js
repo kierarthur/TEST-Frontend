@@ -274563,9 +274563,8 @@ function renderCandidateTab(key, row = {}) {
           </div>
         </div>
 
-        <div class="row">
-          <label>Candidate finance</label>
-          <div class="controls" id="candidateAdvancesSummary">
+        <div class="row candidate-finance-row">
+          <div class="controls" id="candidateAdvancesSummary" aria-label="Candidate finance summary">
             <span class="mini">No candidate finance summary loaded yet.</span>
           </div>
         </div>
@@ -277068,25 +277067,31 @@ function renderAdvancesSummary(summary) {
   const manualDebtAdjustmentsOutstandingTotal = fmtMoney(src.manual_debt_adjustments_outstanding_total ?? 0);
   const manualCreditAdjustmentsTotal = fmtMoney(src.manual_credit_adjustments_total ?? 0);
 
+  const balanceRow = (label, count, amount, basis = 'Outstanding') => `
+    <div class="candidate-finance-balance">
+      <dt><span>${label}</span><span class="candidate-finance-count">${count} ${count === 1 ? 'item' : 'items'}</span></dt>
+      <dd><strong>£${amount}</strong><span>${basis}</span></dd>
+    </div>`;
+  const caseCount = (label, count) => `
+    <div class="candidate-finance-indicator">
+      <dt>${label}</dt><dd>${count}</dd>
+    </div>`;
+
   return `
-    <div class="mini" style="display:flex;flex-direction:column;gap:8px;">
-      <div style="display:flex;gap:12px;flex-wrap:wrap;">
-        <span>Payment Advances: <strong>${paymentAdvancesCount}</strong> <span style="opacity:.8;">(£${paymentAdvancesOutstandingTotal} outstanding)</span></span>
-        <span>Overpayments: <strong>${overpaymentsCount}</strong> <span style="opacity:.8;">(£${overpaymentsOutstandingTotal} outstanding)</span></span>
-        <span>Underpayments: <strong>${underpaymentsCount}</strong> <span style="opacity:.8;">(£${underpaymentsOutstandingTotal} outstanding)</span></span>
-      </div>
-
-      <div style="display:flex;gap:12px;flex-wrap:wrap;">
-        <span>Manual Debt Adjustments: <strong>${manualDebtAdjustmentsCount}</strong> <span style="opacity:.8;">(£${manualDebtAdjustmentsOutstandingTotal} outstanding)</span></span>
-        <span>Manual Credit Adjustments: <strong>${manualCreditAdjustmentsCount}</strong> <span style="opacity:.8;">(£${manualCreditAdjustmentsTotal} total)</span></span>
-      </div>
-
-      <div style="display:flex;gap:12px;flex-wrap:wrap;">
-        <span>Mixed cases: <strong>${mixedFinanceCasesCount}</strong></span>
-        <span>Unresolved taxable: <strong>${unresolvedFinanceCasesCount}</strong></span>
-        <span>Stale: <strong>${staleFinanceCasesCount}</strong></span>
-        <span>Snoozed / Deferred items: <strong>${snoozedDeferredCount}</strong></span>
-      </div>
+    <div class="candidate-finance-summary">
+      <dl class="candidate-finance-balances">
+        ${balanceRow('Payment advances', paymentAdvancesCount, paymentAdvancesOutstandingTotal)}
+        ${balanceRow('Overpayments', overpaymentsCount, overpaymentsOutstandingTotal)}
+        ${balanceRow('Underpayments', underpaymentsCount, underpaymentsOutstandingTotal)}
+        ${balanceRow('Manual debt adjustments', manualDebtAdjustmentsCount, manualDebtAdjustmentsOutstandingTotal)}
+        ${balanceRow('Manual credit adjustments', manualCreditAdjustmentsCount, manualCreditAdjustmentsTotal, 'Total')}
+      </dl>
+      <dl class="candidate-finance-indicators">
+        ${caseCount('Mixed cases', mixedFinanceCasesCount)}
+        ${caseCount('Unresolved taxable', unresolvedFinanceCasesCount)}
+        ${caseCount('Stale', staleFinanceCasesCount)}
+        ${caseCount('Snoozed / Deferred items', snoozedDeferredCount)}
+      </dl>
     </div>
   `;
 }
@@ -277108,17 +277113,13 @@ function updateCandidateAdvancesUI(candidateId) {
   const genEl = document.getElementById('candidateGeneralAdvances');
 
   const launchBlockHtml = `
-    <div id="candidateFinanceReportLaunch" style="margin-top:8px;">
-      <div class="mini" style="opacity:.8;margin-bottom:8px;">
-        View the full read-only Candidate Finance Report for Payment Advances, Overpayments, Underpayments,
-        Manual Adjustments, and Snoozed / Deferred items, including mixed-case, unresolved taxable, and stale-state detail.
-      </div>
+    <div id="candidateFinanceReportLaunch" class="candidate-finance-footer">
       <button
         type="button"
-        class="btn mini"
+        class="btn candidate-finance-report-button"
         id="candidateFinanceReportLaunchBtn"
         data-view-action="candidate-finance-report"
-      >Open Candidate Finance Report</button>
+      >Open Candidate Finance Report <span aria-hidden="true">→</span></button>
     </div>
   `;
 

@@ -9,6 +9,17 @@
   const nextSettingsVersion=()=>new Date(Date.UTC(2026,7,28,12,0,settingsVersion++)).toISOString();
   settings.updated_at=nextSettingsVersion();
   const writes=[],umbrellaReads=[];
+  const financeMode=new URLSearchParams(location.search).get('finance');
+  let financeReads=0;
+  const financeSummary={
+    payment_advances_count:3, payment_advances_outstanding_total:1250.5,
+    overpayments_count:2, overpayments_outstanding_total:45,
+    underpayments_count:1, underpayments_outstanding_total:9.99,
+    manual_debt_adjustments_count:4, manual_debt_adjustments_outstanding_total:1234567.89,
+    manual_credit_adjustments_count:5, manual_credit_adjustments_total:30,
+    mixed_finance_cases_count:2, unresolved_finance_cases_count:3, stale_finance_cases_count:4,
+    snoozed_finance_cases_count:2, active_timesheet_snoozes_count:5
+  };
   // Empty financial scope: exercise the unchanged confirmation/commit client
   // contract without any live Candidate, bank, Timesheet or provider operation.
   const routeProof=(newMethod,destinationPatch)=>({
@@ -82,6 +93,12 @@
       report();return response({ok:true});
     }
     if(pathname.endsWith('/delete-eligibility'))return response({can_delete:false,reason:'Local fixture'});
+    if(pathname===`/api/candidates/${candidateId}/advances/report`) {
+      financeReads++;
+      if(financeMode==='loading') await new Promise(resolve=>setTimeout(resolve,2500));
+      if(financeMode==='error' || (financeMode==='retry' && financeReads===1)) return response({error:'Fixture unavailable'},503);
+      return response({summary:financeMode==='populated'?financeSummary:{},finance_cases:[],timesheet_snoozes:[]});
+    }
     if(pathname===`/api/clients/${clientId}`)return response({client,client_settings:settings,has_e_history:false});
     if(pathname===`/api/candidates/${candidateId}`)return response({candidate,job_titles:candidate.job_titles.map((j,i)=>typeof j==='string'?{job_title_id:j,is_primary:i===0}:j),hr_aliases:[],has_e_history:false});
     if(pathname==='/api/job-titles')return response({items:jobTitles});

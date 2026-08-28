@@ -35,5 +35,33 @@
 .record-system-references { grid-column:1/-1; border:1px solid #2b405a; border-radius:14px; padding:16px; }
 .record-system-references > summary { cursor:pointer; font-weight:650; color:#b7c6dc; padding:4px; }
 .record-system-references > .ctms-section { margin-top:12px; }
+.candidate-finance-row { min-width:0; }
+#modal #candidateAdvancesSummary { display:block; width:100%; min-width:0; }
+#modal .candidate-finance-section .ctms-section-eyebrow { display:none; }
+#modal .candidate-finance-section .ctms-section-head { margin-bottom:0; }
+.candidate-finance-summary dl { margin:0; }
+.candidate-finance-balance { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:14px; padding:13px 0; border-bottom:1px solid #25364e; }
+.candidate-finance-balance:last-child { border-bottom:0; }
+.candidate-finance-balance dt { display:flex; align-items:flex-start; flex-direction:column; gap:5px; min-width:0; color:#e3ecf8; font-size:13px; font-weight:600; line-height:1.4; }
+.candidate-finance-count { font-size:11px; color:#a5b6cc; font-weight:500; }
+.candidate-finance-balance dd { display:flex; flex-direction:column; align-items:flex-end; gap:3px; margin:0; }
+.candidate-finance-balance dd strong { color:#f2f5ff; font-size:16px; font-weight:700; line-height:1.3; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.candidate-finance-balance dd > span { font-size:10px; color:#9cacc3; line-height:1.4; }
+.candidate-finance-summary .candidate-finance-indicators { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:8px; }
+.candidate-finance-indicator { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 12px; border:1px solid #2b3e59; border-radius:10px; background:#0a1728; }
+.candidate-finance-indicator dt { color:#afbed3; font-size:11px; line-height:1.4; }
+.candidate-finance-indicator dd { margin:0; color:#c9c7ff; font-size:16px; font-weight:700; font-variant-numeric:tabular-nums; }
+.candidate-finance-footer { display:flex; justify-content:flex-end; border-top:1px solid #2a3c54; margin-top:16px; padding-top:14px; }
+#modal.ctms-modern-modal #candidateFinanceReportLaunchBtn { display:inline-flex; align-items:center; justify-content:space-between; gap:14px; white-space:normal; text-align:left; min-height:44px !important; padding:10px 14px; border:1px solid #555a96 !important; border-radius:10px !important; background:linear-gradient(135deg,#252956,#15243b) !important; color:#eeedff; }
+#modal.ctms-modern-modal #candidateFinanceReportLaunchBtn:hover { border-color:#9294e5 !important; background:#2c315e !important; }
+#modal.ctms-modern-modal #candidateFinanceReportLaunchBtn:focus-visible { outline:2px solid #aaa9ff; outline-offset:3px; }
+#modal .candidate-finance-report-button > span { font-size:18px; color:#a7a7ff; }
+@media(max-width:420px) {
+  .candidate-finance-balance { gap:10px; }
+  .candidate-finance-balance dt { font-size:12px; }
+  .candidate-finance-balance dd strong { font-size:15px; }
+  .candidate-finance-indicator { padding:10px; gap:8px; }
+  #modal .candidate-finance-report-button { width:100%; }
+}
 @media(min-width:900px) { .record-settings-panel[data-record-panel="invoicing"] { grid-template-columns:1fr 1fr; } }
 @media(max-width:600px) { .record-settings-card { padding:16px; } .record-settings-tabs button { flex:1; padding:10px 8px; } .record-shift-grid > .row { grid-template-columns:1fr; gap:8px; } .record-settings-card .controls > div { max-width:100%; } }

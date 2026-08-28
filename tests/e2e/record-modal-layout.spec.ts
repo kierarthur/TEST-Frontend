@@ -40,6 +40,70 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+for (const state of ['zero', 'populated']) {
+  test(`Candidate finance ${state} is readable and the report returns to the same tab`, async ({ page }, info) => {
+    await page.goto('/?finance=' + state);
+    await page.getByRole('button', { name: 'Existing candidate', exact: true }).click();
+    await tab(page, 'Payment details').click();
+    const finance = page.locator('.candidate-finance-section');
+    await expect(finance.locator('h3')).toHaveText('Candidate finance');
+    await expect(finance.locator('.candidate-finance-balance')).toHaveCount(5);
+    await expect(finance.locator('.candidate-finance-indicator')).toHaveCount(4);
+    const amounts = state === 'zero'
+      ? ['£0.00', '£0.00', '£0.00', '£0.00', '£0.00']
+      : ['£1250.50', '£45.00', '£9.99', '£1234567.89', '£30.00'];
+    await expect(finance.locator('.candidate-finance-balance dd strong')).toHaveText(amounts);
+    await expect(finance.locator('.candidate-finance-count')).toHaveText(
+      state === 'zero' ? Array(5).fill('0 items') : ['3 items', '2 items', '1 item', '4 items', '5 items']);
+    await expect(finance.locator('.candidate-finance-indicator dd')).toHaveText(
+      state === 'zero' ? ['0', '0', '0', '0'] : ['2', '3', '4', '7']);
+    await expect(finance).not.toContainText('Read-only summary');
+    const geometry = await finance.locator('.candidate-finance-balance').evaluateAll(rows => rows.map(row => {
+      const label=row.querySelector('dt')!.getBoundingClientRect();
+      const amount=row.querySelector('dd')!.getBoundingClientRect();
+      return {gap:amount.left-label.right,overflow:row.scrollWidth-row.clientWidth};
+    }));
+    for (const row of geometry) { expect(row.gap).toBeGreaterThanOrEqual(8); expect(row.overflow).toBeLessThanOrEqual(1); }
+    expect(await page.locator('#candidateFinanceReportLaunchBtn').evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    await finance.scrollIntoViewIfNeeded();
+    await screenshotAndFit(page, info, 'Candidate finance - ' + state);
+    await page.locator('#candidateFinanceReportLaunchBtn').click();
+    await expect(page.locator('#modalTitle')).toHaveText('Candidate Finance Report');
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(tab(page, 'Payment details')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.candidate-finance-balance dd strong')).toHaveText(amounts);
+    await tab(page, 'Main Details').click();
+    await tab(page, 'Payment details').click();
+    await expect(page.locator('.candidate-finance-balance dd strong')).toHaveText(amounts);
+    expect((await result(page)).writes).toEqual([]);
+  });
+}
+
+test('Candidate finance unavailable data never looks like a zero balance and Retry recovers', async ({ page }, info) => {
+  await page.goto('/?finance=retry');
+  await page.getByRole('button', { name: 'Existing candidate', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  const finance = page.locator('.candidate-finance-section');
+  await expect(finance.getByRole('alert')).toContainText('could not be loaded');
+  await expect(finance.locator('.candidate-finance-balance')).toHaveCount(0);
+  await finance.scrollIntoViewIfNeeded();
+  await screenshotAndFit(page, info, 'Candidate finance - unavailable');
+  await page.locator('#candidateFinanceReportRetryBtn').click();
+  await expect(finance.locator('.candidate-finance-balance')).toHaveCount(5);
+  await expect(finance.getByRole('alert')).toHaveCount(0);
+  expect((await result(page)).writes).toEqual([]);
+});
+
+test('Candidate finance loading does not flash zero amounts', async ({ page }) => {
+  await page.goto('/?finance=loading');
+  await page.getByRole('button', { name: 'Existing candidate', exact: true }).click();
+  await tab(page, 'Payment details').click();
+  const finance = page.locator('.candidate-finance-section');
+  await expect(finance.getByRole('status')).toContainText('Loading current candidate finance data');
+  await expect(finance.locator('.candidate-finance-balance')).toHaveCount(0);
+  await expect(finance.locator('.candidate-finance-balance')).toHaveCount(5);
+});
+
 test('all seven redesigned sections fit and read-only navigation remains available', async ({ page }, info) => {
   await open(page, 'Existing candidate');
   for (const name of ['Main Details', 'Work & compliance', 'Payment details']) {
