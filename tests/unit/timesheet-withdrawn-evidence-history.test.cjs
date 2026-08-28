@@ -73,3 +73,24 @@ test('Issues presents the cancelling person, affected scope and mandatory reason
   assert.match(issues, /cancelled \$\{esc\(subject\)\}/);
   assert.match(issues, /<strong>Reason:<\/strong>/);
 });
+
+test('Issues presents manager refusal history and the exact manager reason', () => {
+  const issuesStart = source.indexOf('function renderTimesheetIssuesTab(ctx)');
+  const issuesEnd = source.indexOf('function buildOutboxFiltersFromUi', issuesStart);
+  const issues = source.slice(issuesStart, issuesEnd);
+  assert.match(issues, /Manager refusal history/);
+  assert.match(issues, /manager_refusals/);
+  assert.match(issues, /refusal_reason/);
+  assert.match(issues, /refused_at_utc/);
+  assert.match(issues, /manager_email/);
+  assert.match(issues, /refused \$\{candidate/);
+});
+
+test('evidence hydration retains manager refusal history separately from evidence files', () => {
+  assert.match(source, /fetchTimesheetEvidenceForFastOpen[\s\S]*manager_refusals:/);
+  assert.match(source, /mc\.timesheetDetails\.manager_refusals = Array\.isArray/);
+  assert.match(refresh, /Array\.isArray\(json\.manager_refusals\)/);
+  assert.match(refresh, /targetState\.manager_refusals = managerRefusalsCloned/);
+  assert.match(refresh, /targetDetails\.manager_refusals = managerRefusalsCloned/);
+  assert.match(refresh, /targetData\.manager_refusals = managerRefusalsCloned/);
+});

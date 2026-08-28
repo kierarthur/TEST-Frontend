@@ -153762,6 +153762,9 @@ async function fetchTimesheetEvidenceForFastOpen(timesheetId) {
       ...(submission || {}),
       evidence: (Array.isArray(submission?.evidence) ? submission.evidence : []).map((item) => ({ ...(item || {}) }))
     })) : [],
+    manager_refusals: (
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Array.isArray(parsed.manager_refusals)
+    ) ? parsed.manager_refusals.map((refusal) => ({ ...(refusal || {}) })) : [],
     current_timesheet_id: movedId || id
   };
 }
@@ -153933,6 +153936,9 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
       evidence: incomingEvidence,
       withdrawn_submissions: Array.isArray(payload.withdrawn_submissions)
         ? cloneTimesheetFastOpenValue(payload.withdrawn_submissions)
+        : [],
+      manager_refusals: Array.isArray(payload.manager_refusals)
+        ? cloneTimesheetFastOpenValue(payload.manager_refusals)
         : []
     };
     mc.timesheetState = mergeTimesheetHydratedStatePreservingUserEdits(existingStateSnapshot, hydratedState, { modalCtx: mc });
@@ -153942,6 +153948,9 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
     mc.timesheetDetails.evidence = Array.isArray(evidenceForDetails) ? evidenceForDetails : [];
     mc.timesheetDetails.withdrawn_submissions = Array.isArray(mc.timesheetState?.withdrawn_submissions)
       ? cloneTimesheetFastOpenValue(mc.timesheetState.withdrawn_submissions)
+      : [];
+    mc.timesheetDetails.manager_refusals = Array.isArray(mc.timesheetState?.manager_refusals)
+      ? cloneTimesheetFastOpenValue(mc.timesheetState.manager_refusals)
       : [];
     window.modalCtx = mc;
 
@@ -313021,6 +313030,11 @@ function renderTimesheetIssuesTab(ctx) {
     : (Array.isArray(window.modalCtx?.timesheetState?.withdrawn_submissions)
         ? window.modalCtx.timesheetState.withdrawn_submissions
         : []);
+  const managerRefusals = Array.isArray(details?.manager_refusals)
+    ? details.manager_refusals
+    : (Array.isArray(window.modalCtx?.timesheetState?.manager_refusals)
+        ? window.modalCtx.timesheetState.manager_refusals
+        : []);
   const cancellationHistoryHtml = withdrawnSubmissions.length ? `
     <div class="card" style="margin-top:10px;border-color:rgba(239,68,68,0.55);">
       <div class="row">
@@ -313038,6 +313052,28 @@ function renderTimesheetIssuesTab(ctx) {
               const reason = String(submission?.withdrawn_reason || '').trim();
               const when = fmtPayTimestamp(submission?.withdrawn_at || '');
               return `<li><strong>${esc(actor)}</strong> cancelled ${esc(subject)}${when ? ` on ${esc(when)}` : ''}.${reason ? ` <strong>Reason:</strong> ${esc(reason)}` : ''}</li>`;
+            }).join('')}
+          </ul>
+        </div>
+      </div>
+    </div>` : '';
+  const managerRefusalHistoryHtml = managerRefusals.length ? `
+    <div class="card" style="margin-top:10px;border-color:rgba(239,68,68,0.55);">
+      <div class="row">
+        <label>Manager refusal history</label>
+        <div class="controls">
+          <ul class="mini" style="margin:0;">
+            ${managerRefusals.map((refusal) => {
+              const managerName = String(refusal?.manager_name || '').trim();
+              const managerPosition = String(refusal?.manager_position || '').trim();
+              const managerEmail = String(refusal?.manager_email || '').trim();
+              const managerIdentity = managerName
+                ? `${managerName}${managerPosition ? ` — ${managerPosition}` : ''}`
+                : (managerEmail || 'The manager');
+              const candidate = String(refusal?.candidate_display_name || '').trim();
+              const reason = String(refusal?.refusal_reason || '').trim();
+              const when = fmtPayTimestamp(refusal?.refused_at_utc || '');
+              return `<li><strong>${esc(managerIdentity)}</strong> refused ${candidate ? `${esc(candidate)}'s ` : 'the '}submission${when ? ` on ${esc(when)}` : ''}.${reason ? ` <strong>Reason:</strong> ${esc(reason)}` : ''}</li>`;
             }).join('')}
           </ul>
         </div>
@@ -313107,6 +313143,7 @@ function renderTimesheetIssuesTab(ctx) {
         </div>
       </div>
       ${cancellationHistoryHtml}
+      ${managerRefusalHistoryHtml}
       ${candidateIssuesHtml ? `
         <div class="card" style="margin-top:10px;">
           <div class="row">
@@ -373572,6 +373609,9 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
     const withdrawnList = (json && typeof json === 'object' && !Array.isArray(json) && Array.isArray(json.withdrawn_submissions))
       ? json.withdrawn_submissions
       : [];
+    const managerRefusalList = (json && typeof json === 'object' && !Array.isArray(json) && Array.isArray(json.manager_refusals))
+      ? json.manager_refusals
+      : [];
 
     if (currentIdFromApi && String(currentIdFromApi) !== String(targetTimesheetId)) {
       try {
@@ -373666,6 +373706,10 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
         return out;
       })
     }));
+    const normalisedManagerRefusals = managerRefusalList.map((refusal) => ({
+      ...(refusal || {}),
+      read_only: true
+    }));
 
     const persistEvidenceState = () => {
       window.modalCtx = window.modalCtx || {};
@@ -373724,6 +373768,10 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
       targetState.withdrawn_submissions = withdrawnCloned;
       targetDetails.withdrawn_submissions = withdrawnCloned;
       targetData.withdrawn_submissions = withdrawnCloned;
+      const managerRefusalsCloned = normalisedManagerRefusals.map((refusal) => ({ ...(refusal || {}) }));
+      targetState.manager_refusals = managerRefusalsCloned;
+      targetDetails.manager_refusals = managerRefusalsCloned;
+      targetData.manager_refusals = managerRefusalsCloned;
       if (preserveDirtyExpenses) {
         targetState.expensesDraft = cloneTimesheetFastOpenValue(preserveDirtyExpenses.expensesDraft || {});
         targetState.expensesBaseline = cloneTimesheetFastOpenValue(preserveDirtyExpenses.expensesBaseline || {});
