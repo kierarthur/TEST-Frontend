@@ -64,6 +64,8 @@ test('main.js delegates v2 actions while retaining every legacy Banking Pay hand
     'banking:pay:openFiltersModal'
   ]) assert.ok(main.includes(action), `legacy action retained: ${action}`);
   const html = htmlSource();
+  assert.match(html, /banking-pay-modal-v2\.css\?v=20260829-r2/);
+  assert.match(html, /banking-pay-modal-v2-integration\.js\?v=20260829-r2/);
   const integrationIndex = html.indexOf('./js/banking-pay-modal-v2-integration.js');
   const mainIndex = html.indexOf('./js/main.js');
   assert.ok(integrationIndex >= 0 && mainIndex > integrationIndex, 'the capability-gated integration must load before main.js');

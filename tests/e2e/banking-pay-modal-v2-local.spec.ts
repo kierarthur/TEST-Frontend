@@ -81,6 +81,7 @@ const scripts = [
 test('contained v2 shell renders one-line candidate rows and opens the complete Ready-only Candidate Banking surface', async ({ page }) => {
   await page.setContent('<!doctype html><html><head></head><body></body></html>');
   await page.addStyleTag({ path: path.join(root, 'css', 'banking-pay-modal-v2.css') });
+  await page.addStyleTag({ path: path.join(root, 'css', 'modal-modernisation.css') });
   await page.addScriptTag({ path: path.join(root, 'tests', 'fixtures', 'banking-pay-v2-detail-page.cjs') });
   for (const file of scripts) await page.addScriptTag({ path: path.join(root, 'js', file) });
 
@@ -134,7 +135,11 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
       create_button: { disabled: false, label: 'Create drafts', title: 'Create Draft payments',
         ready_label: 'Create drafts', ready_title: 'Create Draft payments', paye_guard_allows_create: true }
     });
-    document.body.innerHTML = html;
+    const modal = document.createElement('div');
+    modal.id = 'modal';
+    modal.className = 'ctms-modern-modal';
+    modal.innerHTML = html;
+    document.body.replaceChildren(modal);
     await integration.afterRender({
       document,
       state,

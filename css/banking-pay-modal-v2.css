@@ -24,6 +24,7 @@
 .banking-pay-v2-table th, .banking-pay-v2-table td { height:40px; box-sizing:border-box; padding:7px 12px; white-space:nowrap; border-bottom:1px solid var(--ctms-modal-line-soft, rgba(111,139,178,.2)); text-align:left; }
 .banking-pay-v2-table th { height:44px; font-size:13px; }
 .banking-pay-v2-table [data-bpv2-sort] { color:inherit; font:inherit; font-weight:600; background:none; border:0; padding:2px 0; cursor:pointer; }
+#modal.ctms-modern-modal .banking-pay-v2-table [data-bpv2-sort] { min-height:0; padding:2px 0; border:0; border-radius:0; background:none; }
 .banking-pay-v2-table [aria-sort="ascending"] button::after { content:" ↑"; }
 .banking-pay-v2-table [aria-sort="descending"] button::after { content:" ↓"; }
 .banking-pay-v2-table .bpv2-global { display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; }
@@ -34,6 +35,7 @@
 .banking-pay-v2-table .bpv2-payment { text-align:right; font-variant-numeric:tabular-nums; }
 .banking-pay-v2-table [data-bpv2-amount] { display:inline-block; min-width:100px; }
 .banking-pay-v2-table .bpv2-timesheets { margin-left:12px; min-width:76px; padding:3px 7px; line-height:20px; vertical-align:middle; white-space:nowrap; }
+#modal.ctms-modern-modal .banking-pay-v2-table .bpv2-timesheets { min-height:28px; padding:3px 7px; border-radius:7px; }
 .banking-pay-v2-table tr[data-banking-pay-v2-candidate-row]:hover { background:var(--ctms-modal-panel-raised, #101f35); }
 .banking-pay-v2-table .bpv2-pagination { display:flex; align-items:center; justify-content:flex-end; gap:12px; padding:12px 0; }
 .banking-pay-v2-table button:disabled, .banking-pay-v2-table input:disabled { opacity:.45; cursor:default; }
