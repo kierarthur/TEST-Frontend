@@ -66,9 +66,15 @@
 .banking-pay-v2-table button:disabled,.banking-pay-v2-table input:disabled{opacity:.45;cursor:default}
 .banking-pay-v2-shell :focus-visible,.banking-pay-v2-child-host :focus-visible{outline:2px solid var(--ctms-modal-cyan,#38bdf8);outline-offset:2px}
 .banking-pay-v2-shell [hidden]{display:none!important}
-.banking-pay-v2-child-host{position:fixed;inset:0;z-index:2147482000;display:grid;place-items:center;padding:24px;background:rgba(1,8,20,.72);backdrop-filter:blur(2px)}
+.banking-pay-v2-child-host{position:fixed;inset:0;z-index:2147482000;display:grid;place-items:center;padding:24px;background:rgba(1,8,20,.72);backdrop-filter:blur(2px);color:var(--ctms-modal-text,#f8fafc);font:400 14px/1.45 "Segoe UI Variable Text","Segoe UI",Inter,system-ui,sans-serif}
 .banking-pay-v2-child-host[hidden]{display:none!important}
 .banking-pay-v2-child-host>.banking-pay-v2-candidate,.banking-pay-v2-child-host>.banking-pay-v2-issue-detail{display:flex;flex-direction:column;width:min(1220px,calc(100vw - 48px));max-height:calc(100vh - 48px);overflow:hidden;padding:18px;border:1px solid var(--ctms-modal-line,#2b405d);border-radius:13px;background:var(--ctms-modal-bg,#071627);box-shadow:0 24px 80px rgba(0,0,0,.55);color:var(--ctms-modal-text,#f8fafc)}
+.banking-pay-v2-child-host .btn,.banking-pay-v2-child-host button:not(.uk-cal-day){appearance:none;min-height:38px;padding:8px 13px;border:1px solid #415978;border-radius:10px;background:#13243a;color:var(--ctms-modal-text,#f8fafc);font:680 13px/1.15 "Segoe UI Variable Text","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:0;box-shadow:0 1px 0 rgba(255,255,255,.035) inset;cursor:pointer;transition:background 140ms ease,border-color 140ms ease,transform 140ms ease,box-shadow 140ms ease}
+.banking-pay-v2-child-host .btn:hover,.banking-pay-v2-child-host button:not(.uk-cal-day):hover{border-color:#60799d;background:#192d49}
+.banking-pay-v2-child-host .btn:active,.banking-pay-v2-child-host button:not(.uk-cal-day):active{transform:translateY(1px)}
+.banking-pay-v2-child-host .btn.btn-primary{border-color:#6878ef;background:linear-gradient(180deg,#6678f5,#4b5bd8);color:#fff;box-shadow:0 7px 20px rgba(57,70,186,.28),0 1px 0 rgba(255,255,255,.14) inset}
+.banking-pay-v2-child-host .btn.btn-primary:hover{border-color:#8b98ff;background:linear-gradient(180deg,#7888ff,#5666e4)}
+.banking-pay-v2-child-host button:disabled,.banking-pay-v2-child-host button.disabled,.banking-pay-v2-child-host button[aria-disabled="true"]{opacity:.43;filter:saturate(.65);cursor:default}
 .banking-pay-v2-candidate .bpv2-child-heading,.banking-pay-v2-issue-detail>header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding-bottom:14px;border-bottom:1px solid var(--ctms-modal-line,#2b405d)}
 .banking-pay-v2-candidate h2,.banking-pay-v2-issue-detail h2{margin:0 0 5px;font-size:20px;color:var(--ctms-modal-text,#f8fafc)}
 .banking-pay-v2-candidate [data-bpv2-candidate-name]{color:var(--ctms-modal-sub,#aebed2)}

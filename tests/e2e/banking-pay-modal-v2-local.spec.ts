@@ -233,7 +233,22 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   await expect(candidate.locator('tbody > tr').first()).toBeVisible();
   await expect(candidate).not.toContainText('Blocked for Pay');
   await expect(candidate).not.toContainText('Action Required');
-  await expect(candidate.getByRole('button', { name: 'Export CSV', exact: true })).toBeVisible();
+  const candidateExport = candidate.getByRole('button', { name: 'Export CSV', exact: true });
+  await expect(candidateExport).toBeVisible();
+  expect(await candidateExport.evaluate(node => {
+    const style = getComputedStyle(node);
+    return {
+      background: style.backgroundColor,
+      border: style.borderTopColor,
+      color: style.color,
+      font: style.fontFamily
+    };
+  })).toEqual({
+    background: 'rgb(19, 36, 58)',
+    border: 'rgb(65, 89, 120)',
+    color: 'rgb(248, 250, 252)',
+    font: expect.stringContaining('Segoe UI')
+  });
 
   const refreshedInPlace = await page.evaluate(() =>
     (window as any).CloudTMSBankingPayModalV2Integration.refreshOpenSurface());
