@@ -286,7 +286,11 @@
       else if(key==='actions')controller.openIssues('actions');else if(key==='blocked')controller.openIssues('blocked');
     });
     return {shell,callbacks,setController:value=>{controller=value;},async refreshOpenSurface(){
-      if(!controller||controller.snapshot()?.ui?.surface==='main')return false;
+      if(!controller)return false;
+      // An opening child still reports the accepted main surface until its
+      // bounded read adopts. Keep that in-flight navigation mounted so a
+      // background legacy rerender cannot win the race and discard it.
+      if(controller.snapshot()?.ui?.surface==='main')return controller.isBusy();
       const result=await controller.refreshCurrentAuthority();return result?.state!=='CLOSED';
     },close(){controller?.close();for(const presenter of Object.values(presenters))
       (presenter?.value||presenter)?.destroy?.();}};

@@ -100,15 +100,19 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
     const requests: string[] = [];
     const authFetch = async (url: string) => {
       requests.push(String(url));
-      const payload = String(url).includes('/progress')
+      const requestUrl = String(url);
+      if (requestUrl.includes('/candidate/') && requestUrl.includes('/ready?')) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      const payload = requestUrl.includes('/progress')
         ? { progress: {
             session_id: snapshot.summary.session_id,
             session_version: snapshot.summary.session_version,
             progress_counter_version: snapshot.summary.progress_counter_version
           } }
-        : String(url).includes('/candidate/') && String(url).includes('/ready?')
+        : requestUrl.includes('/candidate/') && requestUrl.includes('/ready?')
         ? snapshot.page
-        : String(url).includes('/candidates?')
+        : requestUrl.includes('/candidates?')
           ? snapshot.summary
           : { ok: false, code: 'BANKING_PAY_V2_INVALID_INPUT' };
       return new Response(JSON.stringify(payload), {
@@ -204,6 +208,9 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   expect(candidatePreflight).toBeNull();
 
   await candidateRow.locator('.bpv2-candidate').dblclick();
+  const preservedWhileOpening = await page.evaluate(() =>
+    (window as any).CloudTMSBankingPayModalV2Integration.refreshOpenSurface());
+  expect(preservedWhileOpening).toBe(true);
   const candidate = page.locator('.banking-pay-v2-candidate');
   await expect(candidate).toBeVisible();
   await expect(candidate.getByRole('heading', { name: 'Candidate Banking' })).toBeVisible();
