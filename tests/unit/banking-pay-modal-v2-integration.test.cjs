@@ -81,3 +81,19 @@ test('application seam creates only secure UUID request identities and fails clo
   assert.match(requestIdSource,/BANKING_PAY_V2_SECURE_REQUEST_ID_UNAVAILABLE/);
   assert.doesNotMatch(requestIdSource,/Math\.random|Date\.now/);
 });
+
+test('retained actions always remount v2 and navigation is not dropped by an older read',()=>{
+  const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
+  const legacyStart=source.indexOf('async function runLegacy');
+  const legacyEnd=source.indexOf('function ensureMain',legacyStart);
+  const legacySource=source.slice(legacyStart,legacyEnd);
+  assert.match(legacySource,/finally\{await context\.rerender\('pay'\);\}/);
+  assert.doesNotMatch(legacySource,/if\s*\(\s*shell\.isConnected\s*\)/);
+
+  const navigationStart=source.indexOf("shell.addEventListener('click'");
+  const navigationEnd=source.indexOf('return {shell,callbacks',navigationStart);
+  const navigationSource=source.slice(navigationStart,navigationEnd);
+  assert.doesNotMatch(navigationSource,/controller\?\.isBusy\(\)/);
+  assert.match(navigationSource,/controller\.openIssues\('actions'\)/);
+  assert.match(navigationSource,/controller\.openIssues\('blocked'\)/);
+});

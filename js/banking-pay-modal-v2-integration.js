@@ -130,7 +130,12 @@
     async function runLegacy(value){
       controller?.close();setBusy(true);
       try{await context.invokeLegacy(value);}
-      finally{if(shell.isConnected)await context.rerender('pay');}
+      // A retained action is allowed to repaint the Pay tab itself. That
+      // replaces this shell before the delegated promise settles, so testing
+      // shell.isConnected here could strand the user in the legacy layout.
+      // Re-run the normal Pay renderer unconditionally; it is already
+      // modal-scoped and returns false when Banking is no longer open.
+      finally{await context.rerender('pay');}
     }
     function ensureMain(){
       if(presenters.main)return presenters.main;
@@ -228,7 +233,7 @@
       onStatus:value=>setBusy(value.busy),onFailure:value=>showError(value.code),
       openTimesheets:context.openTimesheets,newRequestId:context.newRequestId,allowedLegacyActions:[]};
     shell.addEventListener('click',event=>{
-      const button=event.target?.closest?.('[data-bpv2-nav]');if(!button||!shell.contains(button)||controller?.isBusy())return;
+      const button=event.target?.closest?.('[data-bpv2-nav]');if(!button||!shell.contains(button))return;
       event.stopPropagation();const key=button.dataset.bpv2Nav;if(key==='main')controller.closeIssues();
       else if(key==='actions')controller.openIssues('actions');else if(key==='blocked')controller.openIssues('blocked');
     });
