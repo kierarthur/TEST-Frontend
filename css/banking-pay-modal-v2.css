@@ -95,6 +95,7 @@
 .banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(5){width:105px}
 .banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(6){width:150px}
 .banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(7){width:230px}
+.banking-pay-v2-child-host .banking-ready-mobile-row-summary{display:none}
 .bpv2-child-payment .bpv2-payment-meta{display:block;margin-top:3px;color:var(--ctms-modal-sub,#aebed2);font-size:11px}
 .bpv2-child-amount{font-variant-numeric:tabular-nums;font-weight:700;text-align:left!important}
 .bpv2-child-controls>div{display:flex!important;flex-direction:row!important;align-items:center!important;gap:6px!important;white-space:normal!important;flex-wrap:wrap}

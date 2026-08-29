@@ -233,6 +233,7 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   await expect(candidate.locator('tbody > tr').first()).toBeVisible();
   await expect(candidate).not.toContainText('Blocked for Pay');
   await expect(candidate).not.toContainText('Action Required');
+  await expect(candidate.locator('.banking-ready-mobile-row-summary')).toBeHidden();
   const candidateExport = candidate.getByRole('button', { name: 'Export CSV', exact: true });
   await expect(candidateExport).toBeVisible();
   expect(await candidateExport.evaluate(node => {

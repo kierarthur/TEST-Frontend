@@ -30,7 +30,7 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   assert.match(html, /record-modal-layout\.css\?v=20260829-rate-picker-r1/);
   assert.match(html, /candidate-rate-client-picker=20260829-r1/);
   assert.match(html, /banking-modal-v2=20260829-r4/);
-  assert.match(html, /banking-pay-modal-v2\.css\?v=20260829-r8/);
+  assert.match(html, /banking-pay-modal-v2\.css\?v=20260829-r9/);
   assert.match(html, /banking-pay-modal-v2-mutation\.js\?v=20260829-r3/);
   assert.match(html, /banking-pay-modal-v2-settlement\.js\?v=20260829-r3/);
   assert.match(html, /banking-pay-modal-v2\.js\?v=20260829-r4/);
