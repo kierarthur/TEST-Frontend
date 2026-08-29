@@ -160,7 +160,7 @@
     }
     const api={
       snapshot:queue.snapshot,isBusy:queue.isBusy,mayUseLegacyFallback:queue.mayUseLegacyFallback,
-      refreshAfterFailure:queue.refreshAfterFailure,
+      refreshAfterFailure:queue.refreshAfterFailure,refreshCurrentAuthority:queue.refreshAfterFailure,
       sort(value){exact(value,['sort_key','sort_direction']);requireValue(table.SORTS.includes(value.sort_key)&&['ASC','DESC'].includes(value.sort_direction));
         return summaryRead({...value,cursor:null});},
       mainPage(direction){

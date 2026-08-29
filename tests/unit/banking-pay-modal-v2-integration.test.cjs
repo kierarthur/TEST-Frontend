@@ -109,3 +109,18 @@ test('a moving revision renews authority instead of falling back to the legacy t
   assert.match(staleBranch,/Banking Pay changed while this screen was loading/);
   assert.doesNotMatch(staleBranch,/available=false|context\.rerender/);
 });
+
+test('background Pay rerenders refresh an open v2 child in place',()=>{
+  const integrationSource=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
+  const controllerSource=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2.js'),'utf8');
+  const mainSource=fs.readFileSync(path.join(root,'js','main.js'),'utf8');
+  assert.match(controllerSource,/refreshCurrentAuthority:queue\.refreshAfterFailure/);
+  assert.match(integrationSource,/async refreshOpenSurface\(\)/);
+  assert.match(integrationSource,/controller\.snapshot\(\)\?\.ui\?\.surface==='main'/);
+  assert.match(integrationSource,/controller\.refreshCurrentAuthority\(\)/);
+  assert.match(integrationSource,/surfaceName==='candidate'/);
+  assert.match(integrationSource,/surfaceName==='actions'\|\|surfaceName==='actionDetail'/);
+  assert.match(integrationSource,/surfaceName==='blocked'\|\|surfaceName==='blockedDetail'/);
+  assert.match(mainSource,/CloudTMSBankingPayModalV2Integration\.refreshOpenSurface\(\)/);
+  assert.match(mainSource,/if \(refreshedOpenSurface\)[\s\S]{0,260}return true;/);
+});

@@ -20961,6 +20961,19 @@ async function bankingRerender(tabKey = null) {
     const currentContextSignature = computeWizardContextSignature();
     const hasContextChanged = !!(decisions && typeof decisions === 'object' && decisions.context_signature !== currentContextSignature);
     const isPayDirty = !!(decisions && typeof decisions === 'object' && decisions.pay_context_dirty === true);
+    if (currentTabKey === 'pay' && nextTabKey === 'pay' && !hasContextChanged
+      && typeof window.CloudTMSBankingPayModalV2Integration?.refreshOpenSurface === 'function') {
+      try {
+        const refreshedOpenSurface = await window.CloudTMSBankingPayModalV2Integration.refreshOpenSurface();
+        if (refreshedOpenSurface) {
+          if (decisions && typeof decisions === 'object') {
+            decisions.pay_context_dirty = false;
+            decisions.dirty_reason = '';
+          }
+          return true;
+        }
+      } catch {}
+    }
     const previewRefreshToken = trimStr(stLocal?.pay?.draftWizard?.workbench?.__preview_refresh_request_token || '');
     const suppressPayPreviewRefresh = !!previewRefreshToken;
     let shouldRefreshNow = false;

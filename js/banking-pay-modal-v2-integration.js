@@ -239,12 +239,35 @@
       const args={session_id:previous.summary.session_id,expected_session_version:version,expected_progress_counter_version:counter,
         scope_hash:previous.summary.scope_hash,pay_channel_scope:shell.dataset.payChannelScope,sort_key:previous.summary.sort_key,
         sort_direction:previous.summary.sort_direction,limit:100};
-      const summary=await transport.readPage('summary',args);let ready=null;
-      if(previous.ui?.surface==='candidate'&&previous.ready?.candidate_id){ready=await transport.readPage('ready',{session_id:args.session_id,
-        expected_session_version:version,expected_progress_counter_version:counter,scope_hash:args.scope_hash,pay_channel_scope:args.pay_channel_scope,
-        candidate_id:previous.ready.candidate_id,cursor:null,limit:100});}
-      return {summary,ready,actions:null,actionDetail:null,blocked:null,blockedDetail:null,
-        ui:{...previous.ui,surface:ready?'candidate':'main',ready_cursor:null,issue_cursor:null,detail_cursor:null}};
+      const surfaceName=previous.ui?.surface||'main';
+      const common={session_id:args.session_id,expected_session_version:version,expected_progress_counter_version:counter,
+        scope_hash:args.scope_hash,pay_channel_scope:args.pay_channel_scope};
+      let ready=null,actions=null,actionDetail=null,blocked=null,blockedDetail=null;
+      const summaryPromise=transport.readPage('summary',args);
+      if(surfaceName==='candidate'&&previous.ready?.candidate_id){
+        ready=await transport.readPage('ready',{...common,candidate_id:previous.ready.candidate_id,cursor:null,limit:100});
+        if(ready.candidate===null)ready=null;
+      }else if(surfaceName==='actions'||surfaceName==='actionDetail'){
+        const page=previous.actions;
+        if(page)actions=await transport.readPage('actions',{...common,search:page.search,sort_key:page.sort_key,
+          sort_direction:page.sort_direction,cursor:null,limit:100,view:page.view});
+        if(surfaceName==='actionDetail'&&actions&&previous.actionDetail?.task_key
+          &&actions.rows.some(row=>row.identity===previous.actionDetail.task_key)){
+          actionDetail=await transport.readPage('actionDetail',{...common,identity:previous.actionDetail.task_key,cursor:null,limit:100});
+        }
+      }else if(surfaceName==='blocked'||surfaceName==='blockedDetail'){
+        const page=previous.blocked;
+        if(page)blocked=await transport.readPage('blocked',{...common,search:page.search,sort_key:page.sort_key,
+          sort_direction:page.sort_direction,cursor:null,limit:100});
+        if(surfaceName==='blockedDetail'&&blocked&&previous.blockedDetail?.blocker_key
+          &&blocked.rows.some(row=>row.identity===previous.blockedDetail.blocker_key)){
+          blockedDetail=await transport.readPage('blockedDetail',{...common,identity:previous.blockedDetail.blocker_key,cursor:null,limit:100});
+        }
+      }
+      const summary=await summaryPromise;
+      const retainedSurface=ready?'candidate':actionDetail?'actionDetail':actions?'actions':blockedDetail?'blockedDetail':blocked?'blocked':'main';
+      return {summary,ready,actions,actionDetail,blocked,blockedDetail,
+        ui:{...previous.ui,surface:retainedSurface,ready_cursor:null,issue_cursor:null,detail_cursor:null}};
     }
     const callbacks={payChannelScope:shell.dataset.payChannelScope,readPage:transport.readPage,
       performMutation:(intent,authority,request)=>intent.kind==='candidate'?transport.mutateCandidate(request)
@@ -262,7 +285,10 @@
       event.stopPropagation();const key=button.dataset.bpv2Nav;if(key==='main')controller.closeIssues();
       else if(key==='actions')controller.openIssues('actions');else if(key==='blocked')controller.openIssues('blocked');
     });
-    return {shell,callbacks,setController:value=>{controller=value;},close(){controller?.close();for(const presenter of Object.values(presenters))
+    return {shell,callbacks,setController:value=>{controller=value;},async refreshOpenSurface(){
+      if(!controller||controller.snapshot()?.ui?.surface==='main')return false;
+      const result=await controller.refreshCurrentAuthority();return result?.state!=='CLOSED';
+    },close(){controller?.close();for(const presenter of Object.values(presenters))
       (presenter?.value||presenter)?.destroy?.();}};
   }
   async function mount(shell,context,state){
@@ -297,6 +323,7 @@
     if(await checkCapability(context,state)){await context.rerender('pay');return true;}return false;
   }
   function reset(){mounted?.close();mounted=null;}
-  const api=Object.freeze({renderShell,afterRender,reset,stateSlot,readSessionFromShell,applyLegacyAuthority});
+  async function refreshOpenSurface(){return Boolean(await mounted?.refreshOpenSurface?.());}
+  const api=Object.freeze({renderShell,afterRender,refreshOpenSurface,reset,stateSlot,readSessionFromShell,applyLegacyAuthority});
   if(local)module.exports=api;else root.CloudTMSBankingPayModalV2Integration=api;
 })(typeof window==='object'?window:this);

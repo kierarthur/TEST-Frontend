@@ -100,7 +100,13 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
     const requests: string[] = [];
     const authFetch = async (url: string) => {
       requests.push(String(url));
-      const payload = String(url).includes('/candidate/') && String(url).includes('/ready?')
+      const payload = String(url).includes('/progress')
+        ? { progress: {
+            session_id: snapshot.summary.session_id,
+            session_version: snapshot.summary.session_version,
+            progress_counter_version: snapshot.summary.progress_counter_version
+          } }
+        : String(url).includes('/candidate/') && String(url).includes('/ready?')
         ? snapshot.page
         : String(url).includes('/candidates?')
           ? snapshot.summary
@@ -205,6 +211,14 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   await expect(candidate).not.toContainText('Blocked for Pay');
   await expect(candidate).not.toContainText('Action Required');
   await expect(candidate.getByRole('button', { name: 'Export Ready to Pay CSV' })).toBeVisible();
+
+  const refreshedInPlace = await page.evaluate(() =>
+    (window as any).CloudTMSBankingPayModalV2Integration.refreshOpenSurface());
+  expect(refreshedInPlace).toBe(true);
+  await expect(candidate).toBeVisible();
+  await expect(candidate.getByRole('heading', { name: 'Candidate Banking' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__bankingPayV2Harness.requests
+    .filter((value: string) => value.includes('/progress')).length)).toBe(1);
 
   await candidate.getByRole('button', { name: 'Back to Banking Pay' }).click();
   await expect(table).toBeVisible();
