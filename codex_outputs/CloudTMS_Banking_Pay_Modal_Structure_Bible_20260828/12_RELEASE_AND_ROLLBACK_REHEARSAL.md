@@ -125,4 +125,34 @@ Outstanding release gates remain: capability-on Worker proof, frontend Pages ass
 
 The separate Worker activation is now complete at backend commit `d1b0cdd1c518a0e326158eafef0fd9418611b685`. Cloudflare build `bf28c149-4361-4134-94e9-3c014e57ba05` succeeded and deployment `753aefaf-4706-4960-b39e-da2c8f784be9` serves version `f599188d-a507-4688-a813-e340c343ac0f` at100%. A signed-in normal TEST application request returned HTTP200 and exact capability `{available:true, contract_version:1}`. The complete backend suite remained977/977.
 
-This is not product acceptance. At this stage the deployed frontend is still the previous asset and continues to show the legacy screen. Outstanding gates are now frontend publication plus the complete real modal, action, Draft-preflight and performance evidence above.
+This was not product acceptance. The following final stage closes those outstanding gates.
+
+## Final TEST release and rollback evidence — 29 August 2026
+
+### Database and Worker
+
+- Final backend source: `7ab30d78cc18f83ff3e03313ff96935de02a77a7`.
+- Managed TEST UPGRADE: `33240331818`; source authority job `99068461262`; APPLY job `99068497804`.
+- Fresh Miget ledger: 202 migrations / 471 repeatables.
+- Final Banking refresh repair: `29082026_0801_banking_pay_version_one_refresh_v1.sql`; installed closure SHA-256 `d558a3cb45f6b19b47611b936f7394be088706a16e4a82f87e2ae9040fc606f7`.
+- Canonical database contract SHA-256: `fbc73de7dd84319cdb33b8da9198b0d6e32425e3bac3460c0295ad64fea7d190`.
+- Cloudflare deployment `06e41e26-6fe5-4a27-8b84-e5bd7ace01e4`; version `89c9c7b7-daea-4989-8166-22971c1c6940` at 100%.
+- Backend suite: 989/989. Clean PostgreSQL 17 NEW replay and exact contract comparison: PASS.
+
+The first real deployed open exposed an existing replay defect: a historical `DEAD` candidate-source build was inserted with an identity that violated `bpay_wb_jobs_build_identity_chk`. The exact v1 refresh owner was corrected and verified; no broad drain, guard bypass, Draft, provider or payment action was used. A real refresh then returned HTTP 200 in 383–963 ms.
+
+### Frontend
+
+- Final application source: `4c3634877c0c43d14834d34525f4cacd328ae3b2`.
+- Pages deployment workflow `33242668890`: SUCCESS.
+- App-Ready workflow `33242669243`: SUCCESS, including `Verify Office and UI seams` and the full `Candidate and Client browser regression` job.
+- Local current-source Banking suite: 801/801.
+- Local Chromium v2 suite: 4/4 including authentication setup; three substantive modal scenarios all pass.
+- Targeted structure, wording and overpayment checks: 21/21.
+- Create Draft compatibility set: 91/91.
+
+### Rollback proof
+
+The v2 interface is additive and capability-gated. Capability-off returns the complete unchanged legacy screen before any v2 mutation is submitted. It is prohibited after dispatch or while a mutation result is uncertain. Database additions can remain dormant; rollback does not require destructive SQL. The capability-off release, capability-on release, unauthenticated negative and signed-in positive were all exercised before frontend publication.
+
+No LIVE resource, real Draft creation, provider submission, settlement, remittance or payment execution occurred.

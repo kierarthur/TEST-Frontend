@@ -174,4 +174,29 @@ The previously observed timeout during a parallel Node run was synthetic fixture
 
 The final 252-file backend audit was deliberately repeated with `--test-concurrency=1` because the rollback-contained database fixtures share fixed synthetic identities. It produced 2,261 passing assertions and 28 intentional skips. The same source also passes the normal 977-test backend suite, 798 frontend Banking tests and three Chromium scenarios. No timeout or database setting was increased.
 
-This is strong correctness and local boundedness evidence, but it is not the professional-scale verdict. Activation still requires separate real measurements for installed Miget database execution, Worker request latency and visible signed-in TEST modal response. The local worst observed synthetic sorted summary remains approximately1.449 seconds and therefore remains a target for real measurement rather than being hidden by retry or timeout changes.
+This was strong correctness and local boundedness evidence, but it was not yet the professional-scale verdict. The final deployed measurements follow.
+
+## Final deployed TEST acceptance — 29 August 2026
+
+These measurements use the real signed-in normal TEST frontend, the deployed normal TEST Worker and the current Miget agency TEST database. They are separated from the earlier local component measurements.
+
+| User-visible or network stage | Observed time |
+| --- | ---: |
+| Modal shell | 1.30–1.45 s |
+| Candidate table useful render | 2.17–2.32 s |
+| Capability | 129–153 ms |
+| Session open | 304–422 ms |
+| Progress | 213–221 ms |
+| Candidate summary | 387–453 ms |
+| Candidate Ready detail | 335–473 ms |
+| Action Required | 551–628 ms |
+| Blocked for Pay | 418–433 ms |
+| Candidate sort | 568–750 ms |
+| Deductions sort | 515–555 ms |
+| Ready-to-pay amount sort | 539–598 ms |
+
+Acceptance result: **PASS**. The first useful candidate table is materially faster than the recorded legacy baseline of approximately 3.58–6.27 seconds. Reads are bounded, server-sorted before pagination and do not make one request per candidate. The 100-row and 105-payment local scale fixtures pass without N+1 requests or a raised timeout. Current hosted TEST contains only one Ready candidate, so the scale conclusion combines deployed route timing with executable 100-row fixtures rather than pretending the hosted dataset itself contains 100 candidates.
+
+One earlier repeated-read timeout was traced to the old eligibility expression being evaluated repeatedly inside the final join. The certified predicate was not changed: its completed ID set is now materialised once. Repeated fixtures subsequently complete in approximately 0.44–0.62 seconds. No application timeout, database timeout or persistent planner setting was increased.
+
+No Banking request failed during the final timing capture. Four initial authentication/capability `401` probes belonged to the normal page bootstrap and were not failed Banking Pay reads.

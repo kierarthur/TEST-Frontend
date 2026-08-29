@@ -77,4 +77,10 @@ Use only:
 
 ### What this pack does not authorise
 
-It does not authorise implementation, TEST data mutation, database release, deployment, feature activation, payment execution or any LIVE access.
+It did not itself authorise implementation, TEST data mutation, database release, deployment, feature activation, payment execution or any LIVE access.
+
+## Final TEST implementation status — 29 August 2026
+
+The user subsequently authorised implementation, TEST release and deployed browser verification. That later authority supersedes the planning-only restriction for the exact Banking Pay TEST work recorded in files `20`–`23`; it does not authorise LIVE, payment-provider, settlement, remittance or a real Draft creation test.
+
+The contained v2 implementation is now deployed to normal TEST. The canonical contract in files `01`–`18` remains unchanged. The final application, database, Worker, browser, performance and restoration evidence is recorded in files `10`, `12`, `13`, `16`, `19`, `20`, `21` and `23`. `MANIFEST_SHA256.txt` is regenerated only after those working records pass the final pack audit.

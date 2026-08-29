@@ -104,4 +104,33 @@ The final external ZIP hash is intentionally reported outside the archive so the
 
 ## Working-pack status during implementation
 
-The seal above describes the originally delivered planning archive, not the current amended working directory. Implementation evidence, step records and partial ledger progress have since been added. The working manifest is regenerated and verified after amendments. A new final archive must be rebuilt and independently rechecked before final handoff; the original archive hash must not be presented as a checksum for these later files. No implementation phase or whole-feature acceptance is implied by document inventory validation.
+The seal above describes the originally delivered planning archive, not the current amended working directory. Implementation evidence and step records were subsequently added. The original archive hash must not be presented as a checksum for these later files.
+
+## Final working-pack validation — 29 August 2026
+
+The final seal validates the amended working pack rather than relying on the original planning ZIP checksum. Required closing checks are:
+
+- 136 unique functionality requirements, all with final status and evidence;
+- 89 unique approved messages, all with final status and evidence;
+- 45 unique visible/compatibility action rows, all with final status and evidence;
+- every recorded deviation closed, rejected or explicitly retained by design—none awaiting user decision;
+- no absolute path, credential, cookie, token, database URL or secret value in the pack;
+- every manifest path present exactly once with matching byte count and SHA-256;
+- no unmanifested content except the manifest itself;
+- current implementation, release, performance, real-browser, restoration and Create Draft evidence present.
+
+Machine-checked result before the documentation seal:
+
+| Check | Result |
+| --- | ---: |
+| Manifested content files | 30 |
+| Missing/unexpected/duplicate/unsafe paths | 0 |
+| Hash or byte-count mismatches | 0 |
+| Functionality rows / unique IDs / final | 136 / 136 / 136 |
+| Message rows / unique IDs / final | 89 / 89 / 89 |
+| Action rows / unique composite keys / final | 45 / 45 / 45 |
+| Deviation rows / closed | 22 / 22 |
+| Evidence rows / unique IDs | 98 / 98 |
+| Credential/private-key/credential-URL markers | 0 |
+
+The manifest is regenerated once more after this result is inserted, then the archive is built and reopened for an identical entry/hash/size comparison. The external archive SHA-256 is reported outside the archive to avoid a self-referential checksum. The application commit remains separately identifiable so documentation-only changes cannot be confused with the deployed application asset.

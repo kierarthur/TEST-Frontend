@@ -138,3 +138,40 @@ The adapter must call both original read-only owners and retain their blockers b
 ## 10. Verdict for this step
 
 The selected-payment contract is demonstrably compatible at the tested frontend, Worker and locked database boundaries. The original financial/Draft owners remain unchanged. Full application integration and release acceptance remain open; capability remains disabled.
+
+## 11. Final integrated verdict — 29 August 2026
+
+This section supersedes the open-gate wording in sections 8–10 without deleting the historical evidence trail.
+
+### Contract result
+
+- The v2 shell is connected to the actual existing `banking:pay:createDraft` button exactly once.
+- The existing synchronous busy state, permissions, PAYE conflicting-Draft check, password/2FA handling, complete physical Ready/Blocked reread, selection review, preflight, Worker request, operation polling and error cleanup remain owned by the original code.
+- Candidate summaries, displayed candidate totals and child pages are never used as the Draft manifest.
+- The v2 adoption bridge clears stale physical-page compatibility markers so the old Draft handler must reread the complete current physical authority.
+- Candidate, individual, grouped and all-page selection all settle through the shared accepted revision before Create Draft can be enabled.
+- The original server `draft_safe` authority and original whole-session counters are both required; neither Ready-row existence nor a visible-page count can widen readiness.
+
+### Final executable proof
+
+The final current-source Create Draft compatibility run passes **91/91**. It includes:
+
+- one, some and 105 selected payments;
+- selected and unticked deductions and recovery promotion/demotion;
+- PAYE, Umbrella and current filters;
+- stale revision, wrong session, wrong section and missing continuation;
+- same count with different selected identities;
+- selection change during preparation and uncertain/failed reconciliation;
+- candidate-wide, individual, grouped and full-scope selection;
+- exact old/new request-projection comparison;
+- unchanged locked database selection review with no batch or batch item created.
+
+The broader final evidence also includes frontend Banking 801/801, backend 989/989 and local Chromium 4/4.
+
+### Real TEST boundary
+
+The real signed-in modal currently has two unresolved historical refresh failures. Create Draft is therefore disabled with the existing visible explanation. That is a successful fail-closed proof. A real Draft was deliberately not created because it would be a financial lifecycle action, not a UI compatibility test.
+
+### Final status
+
+**PASS — original Create Draft contract retained.** The redesign changes presentation and selection control only. It does not reduce, replace or reinterpret the Draft contract.

@@ -183,4 +183,21 @@ The signed-in normal TEST frontend was observed without creating a Draft or exec
 - Frontend Banking Pay source/unit/static suite: 298 tests passed, zero failed, zero skipped.
 - Backend Banking Pay source suite: 752 tests discovered; 734 passed, 17 were intentionally skipped and one failed at the untouched refreshed head.
 - The pre-existing backend failure is `banking-pay-legacy-monolith-authority-reassert.test.cjs`. Its expected replay list includes an unrelated Candidate weekly-manager repeatable whose current source does not match the test's monolith-detection predicate. No Banking Pay v2 source existed when this baseline was taken.
-- That baseline failure is recorded, not hidden and not attributed to this redesign. The implementation must not add another unexplained failure, and the exact test must be re-run after the new contained authority is added.
+- That baseline failure was recorded, not hidden and not attributed to this redesign. It was subsequently closed by restoring the exact current replay authority; no expected contract was weakened.
+
+## Final deployed evidence addendum — 29 August 2026
+
+The earlier sections are the pre-implementation baseline and remain deliberately preserved. The final current TEST observations are:
+
+- Main Ready presentation is exactly `Include | Candidate | Deductions | Ready to pay`, one physical non-wrapping line per candidate and 100 candidates per page.
+- Candidate, Deductions and Ready to pay are the only sortable headers; sorting is server-owned over the complete filtered result before pagination.
+- There is no main search, row expansion, View button or action column.
+- The selected-only Timesheets shortcut updated the existing Timesheets Summary with exactly one selected Timesheet in the exercised fixture. When the candidate was unselected, the shortcut became disabled and no unticked Timesheet was included.
+- Candidate Banking opened from the main row and retained the complete Ready-only existing line controls and breakdown. Action Required, Updating and Blocked remained separate owners.
+- Action Required displayed the approved plain-language payment-method change: `Payment was originally PAYE. Candidate is now paid through an umbrella company.` The old `PAYE > UMBR` shorthand and old sentence were absent. The reverse wording is implemented and tested.
+- Blocked for Pay displayed only genuine current blockers. All four observed rows used `Insufficient funds to deduct`; no recovery-headroom jargon or indefinite snooze appeared. Indefinite snoozes remain in Snoozes only.
+- Real candidate CLEAR changed the candidate and headline from £450.00 / one included candidate to £0.00 / zero included candidates, disabled the selected-only Timesheets shortcut and kept Deductions truthful. SELECT restored the exact starting authority. The final readback was ALL selected, £450.00, one included candidate, Deductions `—`, Timesheets enabled.
+- The live table row and each of its four cells measured 40 px high with 5 px vertical cell padding after the compact-row fix.
+- Two historical unresolved `DEAD` refresh failures remain visible and keep Create Draft fail-closed. They were not drained or hidden. This is correct current-data behaviour, not a v2 empty state.
+
+No real Create Draft was clicked. Its safety proof is the unchanged handler/Worker/database owner, the compatibility suites and the real disabled/fail-closed state described in `23_CREATE_DRAFT_COMPATIBILITY_CONTRACT.md`.

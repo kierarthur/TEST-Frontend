@@ -623,4 +623,35 @@ Actual main mounting/progress/compatibility-alias and original Draft-button inte
 - Focused Worker capability/boundary tests pass130/130. The complete normal backend suite passes977/977. No database source, financial owner, Policy X rule, Draft route, timeout, deployment configuration or unrelated Candidate/Daily/Office path changed.
 - Commit `d1b0cdd1c518a0e326158eafef0fd9418611b685` was published separately. Cloudflare Git build `bf28c149-4361-4134-94e9-3c014e57ba05` succeeded from exact branch `test` with the configured `npx wrangler deploy --env test`. Deployment `753aefaf-4706-4960-b39e-da2c8f784be9` serves version `f599188d-a507-4688-a813-e340c343ac0f` at100%.
 - The first raw cross-origin probe correctly returned401 because it did not carry the CloudTMS application bearer header; it is authentication proof, not a Banking failure. The ignored Playwright credentials were loaded without output and the existing login setup refreshed the saved session. A second probe using the exact authenticated application header returned HTTP200 with `banking_pay_workbench_v2.available=true`, `contract_version=1` in420.4ms. No token, cookie or response payload beyond this capability fact was printed.
-- At this point the currently deployed old frontend still renders the legacy modal because it contains no v2 module. This is intentional staged compatibility. EVIDENCE-0089 approves the capability deployment only. Frontend publication, exact deployed asset proof, real modal paths, screenshots, safe mutation restoration and professional speed/scale acceptance remain open.
+- At this point the currently deployed old frontend still rendered the legacy modal because it contained no v2 module. This was intentional staged compatibility. The following steps close the remaining gates.
+
+## STEP-061 — real deployed session-open repair
+
+- **Failing evidence:** the first real deployed v2 session open replayed a historical `DEAD` candidate-source build with an identity rejected by `bpay_wb_jobs_build_identity_chk`.
+- **Contained correction:** replaced only the exact version-one Banking refresh closure needed to preserve the existing job identity contract. No broad queue drain, guard bypass or financial owner changed.
+- **Proof:** clean PostgreSQL 17 NEW replay, exact installed contract, mandatory release verifier, 989/989 backend tests, managed TEST UPGRADE `33240331818`, deployed Worker version `89c9c7b7-daea-4989-8166-22971c1c6940` and real HTTP 200 refresh in 383–963 ms.
+- **Result:** PASS.
+
+## STEP-062 — final main-table visual contract
+
+- Main table is exactly four columns and one physical row per candidate. The checkbox remains in Include; Timesheets is a compact selected-only shortcut inside the candidate content rather than a fifth column. Deductions is `Yes` only for a currently selected payment with a deduction, otherwise `—`.
+- CSS and DOM measurement prove 40 px row/cell height, 5 px vertical padding and no wrapping. The 100-row Chromium fixture proves exactly four cells per row, one line and bounded horizontal overflow.
+- **Result:** PASS.
+
+## STEP-063 — real selection, modal and issue-surface acceptance
+
+- Real candidate CLEAR/SELECT updated candidate tri-state, headline, included-candidate count, amount, Deductions and Timesheets availability from one accepted revision. The final SELECT restored the exact pre-test state.
+- Candidate Banking remained Ready-only and retained existing controls. The selected-only Timesheets action placed exactly the selected Timesheet in the existing Timesheets Summary. Action Required and Blocked opened as separate bounded surfaces. Blocked contained no indefinite snooze.
+- **Result:** PASS with exact TEST restoration; no Draft/provider/payment action.
+
+## STEP-064 — Create Draft compatibility closure
+
+- Existing frontend action name, handler, complete physical reread, preflight, Worker route and database Draft owners remain unchanged. V2 updates only the accepted compatibility authority and never supplies candidate summaries as Draft rows.
+- Current-source compatibility tests cover one, some and 105 selected payments; promoted deductions; PAYE/Umbrella and all existing filters; stale revision/session; same-count different-selection changes; concurrent authority change; individual, candidate, grouped and all-page selection; and fail-closed adoption.
+- 91/91 final checks pass. Real TEST shows Create Draft disabled because two unresolved historical refresh failures remain visible. No real Draft was clicked.
+- **Result:** PASS.
+
+## STEP-065 — release, performance and documentation seal
+
+- Backend/database/Worker, frontend Pages, App-Ready, real signed-in browser, performance and restoration gates pass. Pages workflow `33242668890` and App-Ready workflow `33242669243` both completed successfully; the latter includes the complete Candidate/Client browser regression. The working-pack validator passes 30 manifested files, 136 functionality rows, 89 message rows, 45 action rows, 22 closed deviations and 98 unique evidence rows with no hash/size/path or sensitive-marker failure.
+- The final documentation-only commit is kept distinct from application commit `4c3634877c0c43d14834d34525f4cacd328ae3b2` to avoid confusing pack edits with deployed product source.
