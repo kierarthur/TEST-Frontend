@@ -139,6 +139,7 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
     modal.id = 'modal';
     modal.className = 'banking-modal ctms-modern-modal ctms-generic-modal';
     modal.innerHTML = html;
+    modal.querySelector('.banking-pay-v2-table table')?.classList.add('ctms-universal-table', 'ctms-universal-card-table');
     document.body.replaceChildren(modal);
     await integration.afterRender({
       document,
