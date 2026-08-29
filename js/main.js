@@ -21068,6 +21068,56 @@ async function bankingRerender(tabKey = null) {
       }
     } catch {}
 
+    if (nextTabKey === 'pay' && window.CloudTMSBankingPayModalV2Integration) {
+      await window.CloudTMSBankingPayModalV2Integration.afterRender({
+        document,
+        state: stLocal,
+        API,
+        authFetch,
+        rerender: bankingRerender,
+        invokeLegacy: async ({ action, element, event_kind = 'click' }) => {
+          let delegated = window.modalCtx?.__bankingDelegated;
+          if (!delegated || typeof delegated.dispatch !== 'function') {
+            if (typeof attachBankingModalDelegatedHandlers === 'function') attachBankingModalDelegatedHandlers();
+            delegated = window.modalCtx?.__bankingDelegated;
+          }
+          if (!delegated || typeof delegated.dispatch !== 'function') throw new Error('BANKING_PAY_V2_LEGACY_ACTION_UNAVAILABLE');
+          const target = element || document.getElementById('bankingPayNewBatchWizard');
+          const event = {
+            target,
+            detail: 1,
+            preventDefault() {},
+            stopPropagation() {},
+            stopImmediatePropagation() {}
+          };
+          return delegated.dispatch(action, target, event, event_kind);
+        },
+        openTimesheets: (timesheetIds) => navigateBankingPayBatchTimesheetsSummary('', {
+          sourceAction: 'banking:pay:viewRowTimesheets',
+          timesheet_ids: timesheetIds,
+          timesheetIds,
+          row_scope: true,
+          rowScope: true
+        }),
+        newRequestId: () => {
+          try {
+            if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID();
+            if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+              const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+              bytes[6] = (bytes[6] & 0x0f) | 0x40;
+              bytes[8] = (bytes[8] & 0x3f) | 0x80;
+              const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+              return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+            }
+          } catch {}
+          throw new Error('BANKING_PAY_V2_SECURE_REQUEST_ID_UNAVAILABLE');
+        },
+        formatIsoToUk: typeof formatIsoToUk === 'function' ? formatIsoToUk : ((value) => String(value || '')),
+        railEnv: String(stLocal?.caps?.defaultRail?.env || ''),
+        railProvider: String(stLocal?.caps?.defaultRail?.provider || '')
+      });
+    }
+
     return true;
   } catch {
     try {
@@ -58066,6 +58116,16 @@ const renderReadyTimesheetGroupedRows = (lines) => {
   const payeOverrideRequired = !!(payeGuardrails && payeGuardrails.override_required === true);
   const createDraftBusyState = !!(cdBusy || wiz.draftSubmissionState?.active === true || pvLoading || effectivePvLoading || activeDraftCreateOperationForRender);
   const payeGuardAllowsCreate = !(payeCreateBlocked && !hasReadyUmbrella);
+  const createDraftReadyTitle = payeCreateBlocked && hasReadyUmbrella
+    ? 'PAYE draft creation is blocked, but umbrella-ready items can still continue.'
+    : (payeOverrideRequired && hasReadyPaye
+      ? 'Same-week PAYE override will require password, 2FA, and explicit continue confirmation.'
+      : 'Create draft batches from the selected current Ready to Pay rows');
+  const createDraftReadyLabel = payeCreateBlocked && hasReadyUmbrella && !hasReadyPaye
+    ? 'Create umbrella draft'
+    : (payeCreateBlocked && hasReadyUmbrella && hasReadyPaye
+      ? 'Create available drafts'
+      : (payeOverrideRequired && hasReadyPaye ? 'Create drafts (override required)' : 'Create drafts'));
   const authoritativeGateAllowsCreate = !!(
     authoritativeRenderState.contractPresent &&
     authoritativeRenderState.sessionReady &&
@@ -58124,10 +58184,8 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     if (authoritativeRenderState.hasOutstandingWork || !authoritativeRenderState.sessionReady) return 'Preparing / candidates refreshing. Draft creation re-enables when all candidate, line, and job work is complete.';
     if (!currentFirstCanonicalPageApplied) return currentFirstCanonicalPageLoading ? 'The current canonical preview page is still loading for this session/version.' : 'Loading the first Ready to Pay preview page.';
     if (!authoritativeRenderState.readyForDraft || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) return 'Select at least one current eligible Ready to Pay row.';
-    if (payeCreateBlocked && hasReadyUmbrella) return 'PAYE draft creation is blocked, but umbrella-ready items can still continue.';
     if (payeCreateBlocked && !hasReadyUmbrella) return 'A PAYE draft already exists. Cancel or delete it first.';
-    if (payeOverrideRequired && hasReadyPaye) return 'Same-week PAYE override will require password, 2FA, and explicit continue confirmation.';
-    return 'Create draft batches from the selected current Ready to Pay rows';
+    return createDraftReadyTitle;
   })();
   const createDraftLabel = (() => {
     if (cdBusy) return 'Creating…';
@@ -58136,10 +58194,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     if (hasPendingCandidates) return 'Preparing…';
     if (authoritativeRenderState.sessionReady !== true) return 'Preparing…';
     if (authoritativeRenderState.readyForDraft !== true || authoritativeSelectedCurrentEligibleReadyRowCount <= 0) return 'Select rows';
-    if (payeCreateBlocked && hasReadyUmbrella && !hasReadyPaye) return 'Create umbrella draft';
-    if (payeCreateBlocked && hasReadyUmbrella && hasReadyPaye) return 'Create available drafts';
-    if (payeOverrideRequired && hasReadyPaye) return 'Create drafts (override required)';
-    return 'Create drafts';
+    return createDraftReadyLabel;
   })();
   const authoritativeWorkbenchBannerHtml = (() => {
     if (authoritativeRenderState.sessionObsolete || authoritativeRenderState.replacementRequired) {
@@ -58666,6 +58721,53 @@ const renderReadyTimesheetGroupedRows = (lines) => {
     renderReadyTimesheetGroupedRows(readyPreviewLinesForDisplay.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
     renderSimplePreviewRows(readyNonTimesheetDisplayLines, null, 'READY_TO_PAY')
   ].filter(Boolean).join('') || `<tr><td colspan="9" class="mini" style="opacity:.85;">${enc(readyEmptyMessage())}</td></tr>`;
+
+  // Banking Pay v2 is an additive presentation/controller over the existing
+  // Workbench. Until all three capability owners agree, the complete legacy
+  // surface below remains the rendered fallback.
+  try {
+    const bankingPayV2Shell = window.CloudTMSBankingPayModalV2Integration?.renderShell({
+      enabled: wiz.workbench_v2?.available === true,
+      session_id: authoritativeRenderState.progressSessionId || authoritativeRenderState.localSessionId || '',
+      session_version: Number(authoritativeRenderState.progressSessionVersion || authoritativeRenderState.localSessionVersion),
+      progress_counter_version: Number(
+        authoritativeProgress.progress_counter_version ??
+        authoritativeProgress.progressCounterVersion ??
+        wiz.workbench.progress_counter_version ??
+        wiz.workbench.progressCounterVersion
+      ),
+      pay_channel_scope: draftScope,
+      prelude_html: `
+        ${pvFriendly ? `<div class="error"><div style="font-weight:700;margin-bottom:4px;">${enc(pvFriendlyTitle)}</div><div style="white-space:pre-wrap;">${enc(pvFriendlyMessage)}</div></div>` : (pvErr ? `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>` : '')}
+        ${cdFriendly ? `<div class="error"><div style="font-weight:700;margin-bottom:4px;">${enc(cdFriendlyTitle)}</div><div style="white-space:pre-wrap;">${enc(cdFriendlyMessage)}</div></div>` : (cdErr ? `<div class="error" style="white-space:pre-wrap;">${enc(cdErr)}</div>` : '')}
+        ${activeDraftCreateStatusBannerHtml}
+        ${guardrailsBannerHtml}
+        ${readinessBannerHtml}
+        ${authoritativeWorkbenchBannerHtml}
+        ${hasFailedCandidates ? `
+          <div class="card" style="margin-top:10px;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span class="pill pill-bad">${enc(String(failedCandidateIds.length))} sampled candidate(s) failed</span>
+              <span class="mini" style="opacity:.85;">${enc('Failed candidates block draft creation until they are successfully refreshed or resolved.')}</span>
+            </div>
+          </div>
+        ` : ''}
+      `,
+      filter_summary: filterSummary,
+      has_active_filters: hasActivePayFilters,
+      clear_filters_title: clearFiltersTitle,
+      create_button: {
+        disabled: createBtnDisabled,
+        label: createDraftLabel,
+        title: createDraftTitle,
+        ready_label: createDraftReadyLabel,
+        ready_title: createDraftReadyTitle,
+        paye_guard_allows_create: payeGuardAllowsCreate
+      },
+      progress_html: previewProgressHtml
+    });
+    if (bankingPayV2Shell) return bankingPayV2Shell;
+  } catch {}
 
   return `
     <div class="card banking-pay-create-card" id="bankingPayNewBatchWizard">
@@ -105280,6 +105382,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     if (mc) {
       mc.__bankingDelegated = {
         targetEl,
+        dispatch,
         onClick,
         onChange,
         onInput,

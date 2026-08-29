@@ -1,0 +1,83 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const test=require('node:test');
+
+const root=path.resolve(__dirname,'../..');
+const integration=require(path.join(root,'js','banking-pay-modal-v2-integration.js'));
+const SESSION='00000000-0000-4000-8000-000000000001';
+
+function model(overrides={}){
+  return {enabled:true,session_id:SESSION,session_version:7,progress_counter_version:19,pay_channel_scope:'ALL',
+    prelude_html:'<div class="warn">Preserved warning</div>',filter_summary:'Scope: All payment routes',has_active_filters:true,
+    clear_filters_title:'Clear filters',create_button:{disabled:true,label:'Select rows',title:'Select at least one payment',
+      ready_label:'Create drafts (override required)',ready_title:'Same-week PAYE override will require password, 2FA, and explicit continue confirmation.',
+      paye_guard_allows_create:true},
+    progress_html:'<div data-progress>Current progress</div>',...overrides};
+}
+
+test('the contained shell cannot render before capability agreement',()=>{
+  assert.equal(integration.renderShell(model({enabled:false})),null);
+  assert.equal(integration.renderShell(model({session_version:-1})),null);
+});
+
+test('the contained shell retains the original Draft, filter and export actions',()=>{
+  const html=integration.renderShell(model());
+  assert.match(html,/data-bpv2-shell="1"/);
+  assert.match(html,/data-action="banking:pay:createDraft"/);
+  assert.match(html,/data-action="banking:pay:openFiltersModal"/);
+  assert.match(html,/data-action="banking:pay:clearFilters"/);
+  assert.match(html,/data-action="banking:pay:exportReadyToPayCsv"/);
+  assert.match(html,/Action Required/);
+  assert.match(html,/Blocked for Pay/);
+  assert.match(html,/Preserved warning/);
+  assert.doesNotMatch(html,/candidate-search|View (?:breakdown|details)/i);
+  assert.match(html,/data-bpv2-ready-label="Create drafts \(override required\)"/);
+  assert.match(html,/data-bpv2-paye-guard-allows-create="1"/);
+});
+
+test('the contained shell carries the existing PAYE Draft guard without widening it',()=>{
+  const html=integration.renderShell(model({create_button:{disabled:true,label:'Select rows',title:'A PAYE draft already exists. Cancel or delete it first.',
+    ready_label:'Create drafts',ready_title:'Create draft batches from the selected current Ready to Pay rows',paye_guard_allows_create:false}}));
+  assert.match(html,/data-bpv2-paye-guard-allows-create="0"/);
+  assert.match(html,/title="A PAYE draft already exists\. Cancel or delete it first\."/);
+});
+
+test('v2 adoption updates compatibility authority but forces unchanged Create Draft to reread physical rows',()=>{
+  const state={pay:{draftWizard:{workbench:{required_preview_sections_loaded:{canonical_preview_lines:true,blocked_for_pay:true}},
+    decisions:{required_preview_sections_loaded:{canonical_preview_lines:true}}}}};
+  const review={session_id:SESSION,session_version:8,progress_counter_version:20,
+    selected_preview_row_ids:[],selected_set_complete:false,captured_from_rendered_workbench:true};
+  const next={summary:{session_id:SESSION,session_version:8,progress_counter_version:20,
+    global:{selected_ready_count:13}}};
+  integration.applyLegacyAuthority(state,next,review);
+  const wizard=state.pay.draftWizard;
+  assert.deepEqual(wizard.workbench.selection_review_snapshot,review);
+  assert.equal(wizard.workbench.selection_review_snapshot.selected_set_complete,false);
+  assert.deepEqual(wizard.workbench.required_preview_sections_loaded,{});
+  assert.deepEqual(wizard.workbench.requiredPreviewSectionsLoaded,{});
+  assert.equal(wizard.workbench.session_id,SESSION);
+  assert.equal(wizard.workbench.progress_counter_version,20);
+  assert.equal(wizard.selection_mutation_authority.selected_eligible_ready_row_count,13);
+});
+
+test('source keeps uncertain settlement read-only and never replaces Create Draft',()=>{
+  const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
+  assert.match(source,/readBack:\(\{previous\}\)=>currentGraph\(previous\)/);
+  assert.match(source,/required_preview_sections_loaded=\{\}/);
+  assert.doesNotMatch(source,/mutateCandidate\([^)]*\).*mutateCandidate\(/s);
+  assert.doesNotMatch(source,/runLegacy\(\{action:'banking:pay:createDraft'/);
+});
+
+test('application seam creates only secure UUID request identities and fails closed when unavailable',()=>{
+  const source=fs.readFileSync(path.join(root,'js','main.js'),'utf8');
+  const start=source.indexOf('newRequestId: () => {',source.indexOf('CloudTMSBankingPayModalV2Integration'));
+  const end=source.indexOf('formatIsoToUk:',start);
+  assert.notEqual(start,-1);
+  assert.notEqual(end,-1);
+  const requestIdSource=source.slice(start,end);
+  assert.match(requestIdSource,/crypto\.randomUUID/);
+  assert.match(requestIdSource,/crypto\.getRandomValues/);
+  assert.match(requestIdSource,/BANKING_PAY_V2_SECURE_REQUEST_ID_UNAVAILABLE/);
+  assert.doesNotMatch(requestIdSource,/Math\.random|Date\.now/);
+});
