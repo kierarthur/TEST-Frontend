@@ -81,7 +81,9 @@
     let lastFailure=null;
     const queue=[];
     const readers=new Set();
-    function status(state,intent){onStatus({state,intent_id:intent?.request_id||null,busy:!!active||queue.length>0||needsRefresh||navigation!==null});}
+    function status(state,intent){onStatus({state,intent_id:intent?.request_id||null,
+      busy:!!active||queue.length>0||needsRefresh||navigation!==null,
+      read_only_navigation:navigation!==null&&!active&&queue.length===0&&!needsRefresh});}
     function invalidateReaders(){readerEpoch++;navigation=null;for(const reader of readers)reader.abort();readers.clear();}
     function notifyFailure(error,intent){
       lastFailure={code:typeof error?.code==='string'?error.code:'BANKING_PAY_V2_UPDATE_FAILED',

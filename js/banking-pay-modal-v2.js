@@ -14,6 +14,11 @@
   const mutation=local?require('./banking-pay-modal-v2-mutation.js'):root.CloudTMSBankingPayMutationV2;
   const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const TOKEN=/^[A-Za-z0-9_-]{1,4096}$/;
+  // Candidate detail keeps the certified row payload intact. A 25-row child
+  // page stays below the Workbench's bounded response ceiling for the real
+  // high-detail recovery candidate while retaining every row through the
+  // existing server cursor. The 100-row main candidate list is unchanged.
+  const CANDIDATE_READY_PAGE_LIMIT=mutation.CANDIDATE_READY_PAGE_LIMIT;
   const fields=['session_id','session_version','progress_counter_version','scope_hash'];
   const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
   function fail(code='BANKING_PAY_V2_INVALID_INPUT'){const error=new Error(code);error.code=code;throw error;}
@@ -38,7 +43,7 @@
     return page;
   }
   function readyPage(page,authority,candidateId,summary,cursor){
-    mutation.validateReadyReplacement(page,authority,{ready:{candidate_id:candidateId}},{cursor,limit:100});
+    mutation.validateReadyReplacement(page,authority,{ready:{candidate_id:candidateId}},{cursor,limit:CANDIDATE_READY_PAGE_LIMIT});
     if(page.candidate!==null){
       const visible=summary.rows.find(row=>row.candidate_id===candidateId);
       if(visible)requireValue(table.sameCandidateContent(visible,page.candidate),
@@ -125,7 +130,7 @@
     function candidateRead(candidateId,cursor=null){
       requireValue(UUID.test(candidateId)&&(cursor===null||TOKEN.test(cursor)));
       return queue.navigate(async(authority,signal,previous)=>{
-        const page=await request('ready',authority,{candidate_id:candidateId,cursor,limit:100},signal);
+        const page=await request('ready',authority,{candidate_id:candidateId,cursor,limit:CANDIDATE_READY_PAGE_LIMIT},signal);
         readyPage(page,authority,candidateId,previous.summary,cursor);
         return {...previous,ready:page,actions:null,actionDetail:null,blocked:null,blockedDetail:null,
           ui:{...previous.ui,surface:'candidate',candidate_id:candidateId,ready_cursor:cursor,action_return:null}};
@@ -376,6 +381,6 @@
       }
     });
   }
-  const api=Object.freeze({createController,openController,createTransport});
+  const api=Object.freeze({CANDIDATE_READY_PAGE_LIMIT,createController,openController,createTransport});
   if(local)module.exports=api;else root.CloudTMSBankingPayModalV2=api;
 })(typeof window==='object'?window:this);

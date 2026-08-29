@@ -15,6 +15,7 @@
   const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
   const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const exactInt=value=>Number.isSafeInteger(Number(value))&&Number(value)>=0?Number(value):null;
+  const shouldLockControls=value=>value?.busy===true&&value?.read_only_navigation!==true;
   let mounted=null;
   function stateSlot(state){
     if(!object(state))return null;
@@ -149,6 +150,10 @@
   }
   function createRuntime(shell,context,state){
     const document=shell.ownerDocument,surface=shell.querySelector('[data-bpv2-surface]'),childHost=shell.querySelector('[data-bpv2-child-host]'),status=shell.querySelector('[role="status"]');
+    // A child is a separate viewport modal, not part of the Banking modal's
+    // scrolling layout. Portalling it prevents child focus/size changes from
+    // moving the accepted parent surface.
+    document.body.appendChild(childHost);
     const transport=controllerModule.createTransport({API:context.API,authFetch:context.authFetch});
     const mutation=mutationModule;let controller=null,currentSurface=null,currentChild=null,returnFocus=null;
     const presenters={main:null,candidate:null,actions:null,blocked:null,detail:null};
@@ -304,7 +309,7 @@
         :mutation.reconcileCandidateSelection(previous,result,candidateRequest||rowRequest||groupRequest,args=>transport.readPage('summary',args)),
       readBack:({previous})=>currentGraph(previous),prepareAdoption:(next,previous,{draftReview})=>{
         const commit=stage(next);return ()=>{commit();applyLegacyAuthority(state,next,draftReview);};},
-      onStatus:value=>setBusy(value.busy),onFailure:value=>showError(value.code),
+      onStatus:value=>setBusy(shouldLockControls(value)),onFailure:value=>showError(value.code),
       openTimesheets:context.openTimesheets,newRequestId:context.newRequestId,allowedLegacyActions:[]};
     shell.addEventListener('click',event=>{
       const button=event.target?.closest?.('[data-bpv2-nav]');if(!button||!shell.contains(button))return;
@@ -325,7 +330,7 @@
       // background legacy rerender cannot win the race and discard it.
       if(controller.snapshot()?.ui?.surface==='main')return controller.isBusy();
       const result=await controller.refreshCurrentAuthority();return result?.state!=='CLOSED';
-    },close(){controller?.close();document.body?.classList?.remove('bpv2-child-open');for(const presenter of Object.values(presenters))
+    },close(){controller?.close();document.body?.classList?.remove('bpv2-child-open');childHost.remove();for(const presenter of Object.values(presenters))
       (presenter?.value||presenter)?.destroy?.();}};
   }
   async function mount(shell,context,state){
@@ -361,6 +366,6 @@
   }
   function reset(){mounted?.close();mounted=null;}
   async function refreshOpenSurface(){return Boolean(await mounted?.refreshOpenSurface?.());}
-  const api=Object.freeze({renderShell,afterRender,refreshOpenSurface,reset,stateSlot,readSessionFromShell,applyLegacyAuthority});
+  const api=Object.freeze({renderShell,afterRender,refreshOpenSurface,reset,stateSlot,readSessionFromShell,applyLegacyAuthority,shouldLockControls});
   if(local)module.exports=api;else root.CloudTMSBankingPayModalV2Integration=api;
 })(typeof window==='object'?window:this);

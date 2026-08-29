@@ -27,7 +27,7 @@ test('queued individual selections capture exact IDs and bind the latest accepte
  assert.equal((await first).state,'ADOPTED');assert.equal((await second).state,'ADOPTED');
  assert.equal(calls.length,2);assert.deepEqual(calls[1].preview_row_ids,[fixture.id(21)]);
  assert.equal(calls[0].expected_progress_counter_version,3);assert.equal(calls[1].expected_progress_counter_version,4);
- assert.equal(calls[1].expected_view_digest,'4'.repeat(64));assert.deepEqual(calls[1].open_ready,{cursor:'current_ready_anchor',limit:100});
+ assert.equal(calls[1].expected_view_digest,'4'.repeat(64));assert.deepEqual(calls[1].open_ready,{cursor:'current_ready_anchor',limit:25});
  assert.equal(reconciled[0],calls[0]);assert.equal(reconciled[1],calls[1]);s.controller.close();
 });
 test('queued complete-group selection binds server group identity and never loaded row IDs',async()=>{
@@ -44,7 +44,7 @@ test('queued complete-group selection binds server group identity and never load
  await s.controller.openCandidate(fixture.id(1));
  assert.equal((await s.controller.groupIntent({candidate_id:fixture.id(1),group_kind:'TIMESHEET',group_key:key,selected:true})).state,'ADOPTED');
  assert.equal(calls.length,1);assert.equal(calls[0].group_key,key);assert.equal(calls[0].group_kind,'TIMESHEET');
- assert.equal(Object.hasOwn(calls[0],'preview_row_ids'),false);assert.deepEqual(calls[0].open_ready,{cursor:'current_ready_anchor',limit:100});
+ assert.equal(Object.hasOwn(calls[0],'preview_row_ids'),false);assert.deepEqual(calls[0].open_ready,{cursor:'current_ready_anchor',limit:25});
  assert.equal(reconciled[0],calls[0]);s.controller.close();
 });
 function readyRow(n,candidateId=fixture.id(1),selected=n===20){return {identity:fixture.id(n),candidate_id:candidateId,
@@ -118,6 +118,7 @@ test('Candidate Banking open is one scoped Ready read; close preserves the same 
   await s.controller.openCandidate(fixture.id(1));
   assert.equal(s.reads.length,1);assert.equal(s.reads[0].kind,'ready');
   assert.equal(s.reads[0].args.candidate_id,fixture.id(1));assert.equal(s.controller.snapshot().ready.candidate_id,fixture.id(1));
+  assert.equal(s.reads[0].args.limit,25);
   await s.controller.closeCandidate();assert.equal(s.reads.length,1);
   assert.equal(s.controller.snapshot().summary,before);assert.equal(s.controller.snapshot().ready,null);
 });

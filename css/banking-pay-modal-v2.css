@@ -11,7 +11,7 @@
 .banking-id-inner-tabs button[aria-current="page"]{border-bottom-color:var(--ctms-modal-cyan,#59b8ff);color:var(--ctms-modal-text,#f8fafc)}
 .banking-payment-batches-sheet{min-width:0;color:var(--ctms-modal-text,#f8fafc)}
 .banking-pay-v2-shell{min-width:0;color:var(--ctms-modal-text,#f8fafc)}
-.banking-pay-v2-shell *{box-sizing:border-box}
+.banking-pay-v2-shell *,.banking-pay-v2-child-host *{box-sizing:border-box}
 .banking-pay-v2-shell-inner{display:grid;gap:12px;min-width:0}
 .banking-pay-v2-shell-header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}
 .banking-pay-v2-shell-header h2{margin:0 0 8px;font-size:20px;line-height:1.2;color:var(--ctms-modal-text,#f8fafc)}
@@ -64,7 +64,7 @@
 .banking-pay-v2-table tr[data-banking-pay-v2-candidate-row]:hover,.banking-pay-v2-issues tbody tr:hover{background:var(--ctms-modal-panel-raised,#101f35)}
 .banking-pay-v2-table .bpv2-pagination{display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:10px 0 0}
 .banking-pay-v2-table button:disabled,.banking-pay-v2-table input:disabled{opacity:.45;cursor:default}
-.banking-pay-v2-shell :focus-visible{outline:2px solid var(--ctms-modal-cyan,#38bdf8);outline-offset:2px}
+.banking-pay-v2-shell :focus-visible,.banking-pay-v2-child-host :focus-visible{outline:2px solid var(--ctms-modal-cyan,#38bdf8);outline-offset:2px}
 .banking-pay-v2-shell [hidden]{display:none!important}
 .banking-pay-v2-child-host{position:fixed;inset:0;z-index:2147482000;display:grid;place-items:center;padding:24px;background:rgba(1,8,20,.72);backdrop-filter:blur(2px)}
 .banking-pay-v2-child-host[hidden]{display:none!important}

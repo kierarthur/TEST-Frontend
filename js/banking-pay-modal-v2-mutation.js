@@ -6,6 +6,7 @@
  const table=typeof module==='object'&&module.exports?require('./banking-pay-modal-v2-table.js'):root.CloudTMSBankingPayTableV2;
  const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  const TOKEN=/^[A-Za-z0-9_-]{1,4096}$/;
+ const CANDIDATE_READY_PAGE_LIMIT=25;
  const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
  const count=v=>Number.isSafeInteger(v)&&v>=0;
  const text=v=>typeof v==='string'&&v.length>0;
@@ -137,7 +138,7 @@
    const page=previous.ready;
    requireValue(object(page)&&page.candidate_id===intent.candidate_id&&sameAuthority(page,s)
     &&text(page.page_anchor)&&TOKEN.test(page.page_anchor));
-   request.open_ready=Object.freeze({cursor:page.page_anchor,limit:100});
+   request.open_ready=Object.freeze({cursor:page.page_anchor,limit:CANDIDATE_READY_PAGE_LIMIT});
   }
   return Object.freeze(request);
  }
@@ -252,7 +253,7 @@
    &&sameJson(summary.rail,result.rail)&&summary.sort_key===old.sort_key&&summary.sort_direction===old.sort_direction);
   return {...previous,summary,...selectionDetailPages(previous,result,null)};
  }
- const api=Object.freeze({validateRetention,validateMovements,validateRowSelectionProof,validateGroupSelectionProof,validateReadyReplacement,selectionDetailPages,candidateSelectionRequest,rowSelectionRequest,groupSelectionRequest,
+ const api=Object.freeze({CANDIDATE_READY_PAGE_LIMIT,validateRetention,validateMovements,validateRowSelectionProof,validateGroupSelectionProof,validateReadyReplacement,selectionDetailPages,candidateSelectionRequest,rowSelectionRequest,groupSelectionRequest,
   retainedCandidateSummary,reconcileCandidateSelection,validateGlobalSelectionProof,globalSelectionRequest,reconcileGlobalSelection});
  if(typeof module==='object'&&module.exports)module.exports=api;else root.CloudTMSBankingPayMutationV2=api;
 })(typeof globalThis==='object'?globalThis:this);

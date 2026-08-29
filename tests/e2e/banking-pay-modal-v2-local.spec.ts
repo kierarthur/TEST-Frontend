@@ -213,12 +213,22 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   });
   expect(candidatePreflight).toBeNull();
 
+  const parentBefore = await page.locator('#modal').evaluate(node => {
+    const rect = node.getBoundingClientRect();
+    return { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
+  });
   await candidateRow.locator('.bpv2-candidate').dblclick();
+  await expect(candidateRow.locator('[data-bpv2-control="candidate"]')).toBeEnabled();
   const preservedWhileOpening = await page.evaluate(() =>
     (window as any).CloudTMSBankingPayModalV2Integration.refreshOpenSurface());
   expect(preservedWhileOpening).toBe(true);
   const candidate = page.locator('.banking-pay-v2-candidate');
   await expect(candidate).toBeVisible();
+  await expect(page.locator('body > .banking-pay-v2-child-host')).toBeVisible();
+  expect(await page.locator('#modal').evaluate(node => {
+    const rect = node.getBoundingClientRect();
+    return { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
+  })).toEqual(parentBefore);
   await expect(candidate.getByRole('heading', { name: 'Candidate Banking' })).toBeVisible();
   await expect(candidate.locator('tbody > tr').first()).toBeVisible();
   await expect(candidate).not.toContainText('Blocked for Pay');
@@ -236,6 +246,11 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   await candidate.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(table).toBeVisible();
   await expect(table.locator('tbody > tr')).toHaveCount(1);
+  await expect(candidateRow.locator('[data-bpv2-control="candidate"]')).toBeEnabled();
+  expect(await page.locator('#modal').evaluate(node => {
+    const rect = node.getBoundingClientRect();
+    return { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
+  })).toEqual(parentBefore);
 });
 
 test('100 candidate rows remain single-line and render as one bounded page', async ({ page }) => {

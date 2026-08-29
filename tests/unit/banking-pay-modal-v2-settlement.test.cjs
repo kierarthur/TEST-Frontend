@@ -192,6 +192,17 @@ test('accepted navigation becomes the snapshot used by the next mutation',async(
   await env.controller.enqueue(intent(1));assert.equal(previousAtMutation,sorted);
 });
 
+test('navigation status is explicitly read-only so presentation does not disable parent selection',async()=>{
+  const pending=deferred();const env=setup();
+  const read=env.controller.navigate(()=>pending.promise);
+  assert.equal(env.states.at(-1).state,'READING');
+  assert.equal(env.states.at(-1).busy,true);
+  assert.equal(env.states.at(-1).read_only_navigation,true);
+  pending.resolve(snapshot());
+  assert.equal((await read).state,'ADOPTED');
+  assert.ok(env.states.filter(value=>value.busy).every(value=>value.read_only_navigation===true));
+});
+
 test('later requested navigation wins when older same-revision results arrive last',async()=>{
   const first=deferred(),second=deferred();const env=setup();let firstSignal;
   const oldRead=env.controller.navigate((_,signal)=>{firstSignal=signal;return first.promise;});

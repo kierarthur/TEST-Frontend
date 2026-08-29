@@ -69,6 +69,20 @@ test('source keeps uncertain settlement read-only and never replaces Create Draf
   assert.doesNotMatch(source,/runLegacy\(\{action:'banking:pay:createDraft'/);
 });
 
+test('read-only detail navigation never dims or locks accepted parent controls',()=>{
+  assert.equal(integration.shouldLockControls({state:'READING',busy:true,read_only_navigation:true}),false);
+  assert.equal(integration.shouldLockControls({state:'ADOPTED',busy:true,read_only_navigation:true}),false);
+  assert.equal(integration.shouldLockControls({state:'RECONCILING',busy:true,read_only_navigation:false}),true);
+  assert.equal(integration.shouldLockControls({state:'FAILED_VISIBLE',busy:true,read_only_navigation:false}),true);
+});
+
+test('detail host is portalled outside the parent Banking scroll layout and removed on teardown',()=>{
+  const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
+  assert.match(source,/document\.body\.appendChild\(childHost\)/);
+  assert.match(source,/childHost\.remove\(\)/);
+  assert.match(source,/onStatus:value=>setBusy\(shouldLockControls\(value\)\)/);
+});
+
 test('application seam creates only secure UUID request identities and fails closed when unavailable',()=>{
   const source=fs.readFileSync(path.join(root,'js','main.js'),'utf8');
   const start=source.indexOf('newRequestId: () => {',source.indexOf('CloudTMSBankingPayModalV2Integration'));
