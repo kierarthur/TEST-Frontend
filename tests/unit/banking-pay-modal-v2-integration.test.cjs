@@ -97,3 +97,15 @@ test('retained actions always remount v2 and navigation is not dropped by an old
   assert.match(navigationSource,/controller\.openIssues\('actions'\)/);
   assert.match(navigationSource,/controller\.openIssues\('blocked'\)/);
 });
+
+test('a moving revision renews authority instead of falling back to the legacy table',()=>{
+  const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
+  assert.match(source,/const staleMountCodes=new Set\(\['BANKING_PAY_V2_STALE_REVISION','BANKING_PAY_V2_STALE_VIEW','BANKING_PAY_V2_SCOPE_MISMATCH'\]\)/);
+  assert.match(source,/async function renewMountAuthority\(shell,context,state\)/);
+  assert.match(source,/for\(let attempt=0;attempt<4;attempt\+=1\)/);
+  const staleBranchStart=source.indexOf('if(staleMountCodes.has(errorCode(error)))');
+  const ordinaryFailureStart=source.indexOf('\n    {\n      runtime.shell',staleBranchStart+1);
+  const staleBranch=source.slice(staleBranchStart,ordinaryFailureStart);
+  assert.match(staleBranch,/Banking Pay changed while this screen was loading/);
+  assert.doesNotMatch(staleBranch,/available=false|context\.rerender/);
+});

@@ -71,6 +71,31 @@
     }
     return object(current)?current:null;
   }
+  const staleMountCodes=new Set(['BANKING_PAY_V2_STALE_REVISION','BANKING_PAY_V2_STALE_VIEW','BANKING_PAY_V2_SCOPE_MISMATCH']);
+  function errorCode(error){return String(error?.code||error?.message||'').trim().toUpperCase();}
+  async function renewMountAuthority(shell,context,state){
+    const current=readSessionFromShell(shell);
+    const response=await context.authFetch(context.API(`/api/banking/pay/workbench/session/${encodeURIComponent(current.session_id)}/progress`),
+      {method:'GET',cache:'no-store'});
+    const raw=await response.json();if(!response.ok)return null;const progress=progressPayload(raw);
+    const session={session_id:String(progress?.session_id||current.session_id),session_version:exactInt(progress?.session_version),
+      progress_counter_version:exactInt(progress?.progress_counter_version)};
+    if(session.session_id!==current.session_id||session.session_version===null||session.progress_counter_version===null)return null;
+    const wizard=state?.pay?.draftWizard;if(!object(wizard))return null;
+    wizard.workbench=object(wizard.workbench)?wizard.workbench:{};wizard.decisions=object(wizard.decisions)?wizard.decisions:{};
+    for(const target of [wizard.workbench,wizard.decisions]){
+      target.session_id=session.session_id;target.session_version=session.session_version;
+      target.progress_counter_version=session.progress_counter_version;target.progress=progress;
+    }
+    if(object(wizard.selection_mutation_authority)){
+      wizard.selection_mutation_authority.session_id=session.session_id;
+      wizard.selection_mutation_authority.session_version=session.session_version;
+      wizard.selection_mutation_authority.progress_counter_version=session.progress_counter_version;
+    }
+    shell.dataset.sessionVersion=String(session.session_version);
+    shell.dataset.progressCounterVersion=String(session.progress_counter_version);
+    return session;
+  }
   function selectedContext(page,adapters={}){
     const rows=Array.isArray(page?.rows)?page.rows:[];
     const selected=new Set(rows.filter(row=>row.selected===true).map(row=>row.preview_row_id||row.identity).filter(Boolean));
@@ -243,9 +268,20 @@
   async function mount(shell,context,state){
     if(mounted?.shell===shell)return;
     mounted?.close();const runtime=createRuntime(shell,context,state);mounted=runtime;
-    try{const controller=await controllerModule.openController({...runtime.callbacks,session:readSessionFromShell(shell)});
-      if(mounted!==runtime){controller.close();return;}runtime.setController(controller);}
-    catch(error){runtime.shell.querySelector('[role="status"]').textContent='The new Banking Pay view could not be loaded. The existing view will be restored.';
+    let error=null;
+    for(let attempt=0;attempt<4;attempt+=1){
+      try{const controller=await controllerModule.openController({...runtime.callbacks,session:readSessionFromShell(shell)});
+        if(mounted!==runtime){controller.close();return;}runtime.setController(controller);return;}
+      catch(value){error=value;if(!staleMountCodes.has(errorCode(value))||attempt===3)break;
+        try{if(!await renewMountAuthority(shell,context,state))break;}catch{break;}}
+    }
+    if(staleMountCodes.has(errorCode(error))){
+      const slot=stateSlot(state);if(slot)slot.error=errorCode(error);
+      runtime.shell.querySelector('[role="status"]').textContent='Banking Pay changed while this screen was loading. Select Refresh to load the current details.';
+      return;
+    }
+    {
+      runtime.shell.querySelector('[role="status"]').textContent='The new Banking Pay view could not be loaded. The existing view will be restored.';
       const slot=stateSlot(state);if(slot){slot.available=false;slot.error=String(error?.code||error?.message||'BANKING_PAY_V2_UNAVAILABLE');}
       runtime.close();if(mounted===runtime)mounted=null;await context.rerender('pay');}
   }
