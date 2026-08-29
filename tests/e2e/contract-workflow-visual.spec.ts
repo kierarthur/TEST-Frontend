@@ -367,3 +367,45 @@ for (const device of [devices[0], devices[3]]) {
     await saveShot(page, `07-contract-protected-additional-rates-${device.label}`);
   });
 }
+
+for (const device of [devices[0], devices[3]]) {
+  test(`Contract deletion uses the branded confirmation on ${device.label}`, async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: device.width, height: device.height });
+    await installLocalAssets(page);
+
+    let deleteRequests = 0;
+    let nativeDialogOpened = false;
+    page.on('dialog', async (dialog) => {
+      nativeDialogOpened = true;
+      await dialog.dismiss();
+    });
+    await page.route('**/api/contracts/a0000000-0000-4000-8000-000000000001', async (route) => {
+      if (route.request().method() !== 'DELETE') return route.continue();
+      deleteRequests += 1;
+      return route.fulfill({ status: 200, json: { ok: true } });
+    });
+
+    await openApp(page);
+    await openMockContract(page, { can_delete: true }, 'edit');
+
+    await page.getByRole('button', { name: 'Delete Contract', exact: true }).click();
+    await expect(page.getByTestId('modal-title').getByText('Delete Contract?', { exact: true })).toBeVisible();
+    await expect(page.getByText('Permanently delete this Contract? This cannot be undone.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Delete Contract', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Keep Contract', exact: true })).toBeVisible();
+    await assertViewportFit(page, device.width);
+    await saveShot(page, `08-contract-delete-confirm-${device.label}`);
+
+    await page.getByRole('button', { name: 'Keep Contract', exact: true }).click();
+    await expect(page.locator('#modalTitle')).toContainText('Edit Contract');
+    expect(deleteRequests).toBe(0);
+
+    await page.getByRole('button', { name: 'Delete Contract', exact: true }).click();
+    await expect(page.getByTestId('modal-title').getByText('Delete Contract?', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Delete Contract', exact: true }).click();
+    await expect.poll(() => deleteRequests).toBe(1);
+    await expect(page.locator('#modalBack')).toBeHidden();
+    expect(nativeDialogOpened).toBe(false);
+  });
+}

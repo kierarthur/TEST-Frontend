@@ -295963,8 +295963,16 @@ if (m.__seeded !== true) {
           return;
         }
 
-        const ok = window.confirm('Do you want to permanently delete this contract?');
-        if (!ok) return;
+        const confirmation = await openUiConfirmModal({
+          title: 'Delete Contract?',
+          message: 'Permanently delete this Contract? This cannot be undone.',
+          confirm_label: 'Delete Contract',
+          cancel_label: 'Keep Contract',
+          confirm_class: 'btn btn-danger',
+          cancel_class: 'btn btn-outline',
+          kind: 'contract-delete-confirm'
+        });
+        if (!(confirmation && confirmation.confirmed === true)) return;
 
         try {
           if (LOGC) console.log('[CONTRACTS] deleteContract', { id });
@@ -332969,8 +332977,16 @@ if (ownsPrimaryRecordWorkflow && top.entity === 'contracts') {
       const id = window.modalCtx?.data?.id;
       if (!id) return;
 
-      const ok = window.confirm('Do you want to permanently delete this contract?');
-      if (!ok) return;
+      const confirmation = await openUiConfirmModal({
+        title: 'Delete Contract?',
+        message: 'Permanently delete this Contract? This cannot be undone.',
+        confirm_label: 'Delete Contract',
+        cancel_label: 'Keep Contract',
+        confirm_class: 'btn btn-danger',
+        cancel_class: 'btn btn-outline',
+        kind: 'contract-delete-confirm'
+      });
+      if (!(confirmation && confirmation.confirmed === true)) return;
 
       try {
         if (typeof deleteContract === 'function') {
