@@ -16,7 +16,7 @@ function slice(startMarker, endMarker) {
 }
 
 test('Banking uses a dedicated responsive modal shell and removes it on dismiss', () => {
-  const open = slice('async function openBanking()', 'function buildTimesheetSummaryFilterSpec');
+  const open = slice("async function openBanking(startTabKey = 'pay')", 'function buildTimesheetSummaryFilterSpec');
   assert.match(open, /const MODAL_CLASS = 'banking-modal'/);
   assert.match(open, /classList\.add\(MODAL_CLASS\)/);
   assert.match(open, /classList\.remove\(MODAL_CLASS\)/);

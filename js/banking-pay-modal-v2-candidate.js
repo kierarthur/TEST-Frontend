@@ -113,10 +113,10 @@
       control.setAttribute('aria-label',control.checked?'Untick all eligible payments in this group':'Tick all eligible payments in this group');
       const amountCell=control.closest('tr')?.children?.[6];
       if(amountCell?.ownerDocument){
-        const wrapper=amountCell.ownerDocument.createElement('span');wrapper.className='bpv2-group-amount';
+        const wrapper=amountCell.ownerDocument.createElement('span');wrapper.className='bpv2-ready-group-amount';
         const total=amountCell.ownerDocument.createElement('span');total.textContent=table.formatAmount(fact.selection_group_display_amount);wrapper.append(total);
         if(fact.selection_group_state==='SOME'){
-          const selected=amountCell.ownerDocument.createElement('span');selected.className='mini bpv2-group-selected-amount';
+          const selected=amountCell.ownerDocument.createElement('span');selected.className='mini bpv2-ready-group-selected';
           selected.textContent=`(${table.formatAmount(fact.selection_group_selected_display_amount)} selected)`;wrapper.append(selected);
         }
         amountCell.replaceChildren(wrapper);
@@ -128,18 +128,92 @@
       }
     }
   }
+  const deductionTypes=new Set(['OVERPAYMENT_RECOVERY','MANUAL_DEBT_RECOVERY','DEDUCTION','LOAN_DEDUCTION']);
+  function isSelectedDeduction(row){
+    const type=String(row?.line_type||row?.payload?.line_type||'').trim().toUpperCase();
+    return row?.selected===true&&(deductionTypes.has(type)||type.includes('DEDUCTION')||type.includes('RECOVERY'));
+  }
+  function shapeNestedBreakdown(root){
+    const tables=[];
+    if(root?.querySelectorAll)tables.push(...root.querySelectorAll('table.grid'));
+    for(const tableElement of tables){
+      const headers=Array.from(tableElement.querySelectorAll(':scope>thead>tr>th'));
+      if(headers.length!==11)continue;
+      headers[0].textContent='Include';
+      for(const index of [10,9,2])headers[index].remove();
+      for(const row of tableElement.querySelectorAll(':scope>tbody>tr')){
+        const cells=Array.from(row.children);
+        if(cells.length>=10){
+          const hasInclude=!!cells[0]?.querySelector?.('input[type="checkbox"]');
+          const clientIndex=hasInclude?2:1;
+          const amountIndex=hasInclude?8:7;
+          const snoozeIndex=hasInclude?9:8;
+          const actionIndex=hasInclude?10:9;
+          const amountCell=cells[amountIndex],snoozeCell=cells[snoozeIndex],actionCell=cells[actionIndex];
+          if(amountCell){
+            const controls=amountCell.ownerDocument.createElement('div');controls.className='bpv2-segment-controls';
+            if(snoozeCell&&String(snoozeCell.textContent||'').trim()&&!/^not snoozed$/i.test(String(snoozeCell.textContent||'').trim())){
+              const state=amountCell.ownerDocument.createElement('span');state.className='bpv2-segment-state';state.textContent=String(snoozeCell.textContent||'').trim();controls.append(state);
+            }
+            while(actionCell?.firstChild)controls.append(actionCell.firstChild);
+            if(controls.childNodes.length)amountCell.append(controls);
+          }
+          actionCell?.remove();snoozeCell?.remove();cells[clientIndex]?.remove();
+        }else if(cells.length>=4){
+          const amountCell=cells[cells.length-3],snoozeCell=cells[cells.length-2],actionCell=cells[cells.length-1];
+          if(amountCell){
+            const controls=amountCell.ownerDocument.createElement('div');controls.className='bpv2-segment-controls';
+            while(actionCell?.firstChild)controls.append(actionCell.firstChild);
+            if(controls.childNodes.length)amountCell.append(controls);
+          }
+          actionCell?.remove();snoozeCell?.remove();
+          const description=cells.find(cell=>Number(cell.colSpan)>1);if(description)description.colSpan=6;
+        }
+      }
+    }
+  }
+  function shapeCandidateRows(container,current){
+    const rows=current.page.rows;
+    for(const row of container.querySelectorAll('tr[data-timesheet-group-key],tr[data-preview-row-id]')){
+      if(row.hasAttribute('data-banking-ready-breakdown-detail'))continue;
+      const cells=Array.from(row.children);if(cells.length!==9)continue;
+      const [include,payment,candidate,client,week,method,amount,state,controls]=cells;
+      const groupKey=row.getAttribute('data-timesheet-group-key');
+      const previewId=row.getAttribute('data-preview-row-id');
+      const related=groupKey?rows.filter(item=>item.selection_group_key===groupKey)
+        :rows.filter(item=>item.preview_row_id===previewId||item.identity===previewId);
+      const weekText=String(week.textContent||'').trim();
+      if(weekText&&weekText!=='—'){
+        const meta=payment.ownerDocument.createElement('span');meta.className='bpv2-payment-meta';meta.textContent=weekText;payment.append(meta);
+      }
+      for(const shortcut of candidate.querySelectorAll('[data-action="banking:pay:openTimesheets"]'))controls.prepend(shortcut);
+      const deductions=payment.ownerDocument.createElement('td');deductions.className='bpv2-child-deductions';
+      deductions.textContent=related.some(isSelectedDeduction)?'Yes':'—';
+      row.insertBefore(deductions,amount);
+      candidate.remove();week.remove();state.remove();
+      include.classList.add('bpv2-child-include');payment.classList.add('bpv2-child-payment');
+      client.classList.add('bpv2-child-client');method.classList.add('bpv2-child-method');amount.classList.add('bpv2-child-amount');controls.classList.add('bpv2-child-controls');
+    }
+    for(const detail of container.querySelectorAll('tr[data-banking-ready-breakdown-detail]')){
+      const cell=detail.firstElementChild;if(cell)cell.colSpan=7;
+      shapeNestedBreakdown(detail);
+      for(const template of detail.querySelectorAll('template[data-banking-ready-breakdown-template="true"]'))shapeNestedBreakdown(template.content);
+    }
+  }
   function create({document,onIntent,onLegacyAction,onClose,onFailure}){
     for(const callback of [onIntent,onLegacyAction,onClose,onFailure])if(typeof callback!=='function')throw new TypeError('Candidate Banking adapters required');
     const element=document.createElement('section');element.className='banking-pay-v2-candidate';
     element.setAttribute('aria-label','Candidate Banking');
     element.innerHTML=`<header class="bpv2-child-heading"><div><h2>Candidate Banking</h2><div data-bpv2-candidate-name></div></div>
-      <button type="button" class="btn btn-outline" data-bpv2-child="close">Back to Banking Pay</button></header>
-      <div class="bpv2-child-toolbar"><strong data-bpv2-candidate-amount></strong>
-        <div><button type="button" class="btn btn-outline" data-bpv2-child="export-all">Export Ready to Pay CSV</button></div></div>
+      <button type="button" class="btn btn-outline" data-bpv2-child="close">Close</button></header>
+      <div class="bpv2-child-summary">
+        <label class="bpv2-child-select-all"><input type="checkbox" data-bpv2-child="include" aria-label="Include all eligible payments for this candidate"><strong data-bpv2-selection-label>All payments included</strong></label>
+        <div class="bpv2-child-totals"><span data-bpv2-candidate-amount></span><span data-bpv2-selected-count></span></div>
+        <button type="button" class="btn btn-outline" data-bpv2-child="export-all">Export CSV</button>
+      </div>
       <p class="bpv2-child-status" role="status" aria-live="polite" hidden></p>
       <div class="bpv2-child-scroll"><table class="banking-ready-preview-table"><thead><tr>
-        <th><label><input type="checkbox" data-bpv2-child="include" aria-label="Include all eligible payments for this candidate"> Include</label></th>
-        <th>Line type</th><th>Candidate</th><th>Client</th><th>Week / Date</th><th>Channel</th><th>Amount</th><th>State</th><th>Action</th>
+        <th>Include</th><th>Payment</th><th>Client</th><th>Pay method</th><th>Deductions</th><th>Amount</th><th>Controls</th>
       </tr></thead><tbody></tbody></table><p data-bpv2-candidate-empty hidden>No payments are currently ready to pay for this candidate.</p></div>
       <footer class="bpv2-child-pagination"><span data-bpv2-child-count></span>
         <button type="button" class="btn btn-outline" data-bpv2-child="previous">Previous</button>
@@ -221,7 +295,7 @@
         if(destroyed)throw new Error('Candidate Banking is closed');
         const current=validate(value);
         const markup=rowMarkup(current,openKeys); // validate/render before touching the accepted DOM
-        const staged=document.createElement('tbody');staged.innerHTML=markup;bindCompleteGroupControls(staged,current);syncChecks(staged);
+        const staged=document.createElement('tbody');staged.innerHTML=markup;bindCompleteGroupControls(staged,current);shapeCandidateRows(staged,current);syncChecks(staged);
         return ()=>{
           if(destroyed)return;
           const top=scroll.scrollTop,left=scroll.scrollLeft;
@@ -233,6 +307,9 @@
           element.querySelector('[data-bpv2-candidate-amount]').textContent=candidate?`Ready to pay ${table.formatAmount(candidate.selected_display_amount)}`:'No payments ready to include';
           include.checked=candidate?.selection_state==='ALL';include.indeterminate=candidate?.selection_state==='SOME';
           include.disabled=!candidate;include.setAttribute('aria-checked',include.indeterminate?'mixed':String(include.checked));
+          element.querySelector('[data-bpv2-selection-label]').textContent=!candidate?'No payments available'
+            :candidate.selection_state==='ALL'?'All payments included':candidate.selection_state==='NONE'?'No payments included':'Some payments included';
+          element.querySelector('[data-bpv2-selected-count]').textContent=candidate?`${candidate.selected_ready_count} of ${candidate.selectable_ready_count} payment segments selected`:'';
           syncChecks(element);
           element.querySelector('[data-bpv2-candidate-empty]').hidden=value.page.rows.length!==0;
           element.querySelector('[data-bpv2-child-count]').textContent=`${value.page.total_count} Ready payments`;
@@ -252,6 +329,6 @@
       destroy(){destroyed=true;accepted=null;busyOwned.clear();openKeys.clear();element.removeEventListener('click',event);element.removeEventListener('change',event);element.remove();}
     });
   }
-  const api=Object.freeze({validate,rowMarkup,bindCompleteGroupControls,create});
+  const api=Object.freeze({validate,rowMarkup,bindCompleteGroupControls,shapeCandidateRows,shapeNestedBreakdown,create});
   if(local)module.exports=api;else root.CloudTMSBankingPayCandidateV2=api;
 })(typeof window==='object'?window:this);

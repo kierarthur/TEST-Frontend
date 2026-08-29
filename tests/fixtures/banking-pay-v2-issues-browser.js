@@ -9,7 +9,7 @@
     Object.assign(summary.global,{action_required_count:4,updating_count:2,blocked_count:3});
     const common={ok:true,contract:summary.contract,contract_version:1,session_id:summary.session_id,
       session_version:summary.session_version,progress_counter_version:summary.progress_counter_version,scope_hash:summary.scope_hash,
-      search:'',sort_key:api.definitions[kind].columns[0][0],sort_direction:'ASC',next_cursor:null,has_more:false,
+      search:'',sort_key:api.definitions[kind].columns[0][2]||api.definitions[kind].columns[0][0],sort_direction:'ASC',next_cursor:null,has_more:false,
       page_number:1,has_previous:false,previous_cursor:null};
     const rows=kind==='actions'?[
       {identity:'fixture_method',title:copy.message('MSG-044'),affected_candidate_count:1,affected_payment_count:2,affected_payment_count_complete:true},
@@ -30,13 +30,13 @@
   const record=value=>{commands.push(value);result.textContent='Recorded one component intent; no service was called.';};
   function close(){view?.destroy();view=null;result.textContent='Back to Banking Pay recorded.';}
   function open(kind){close();current=data(kind);view=api.create({document,kind,onIntent:record,onOpenDetail:record,
-    onOpenUpdating:record,onClose:close,onFailure:record});host.append(view.element);view.prepare(current.page,current.summary)();}
+    onOpenUpdating:record,onViewTimesheets:record,onClose:close,onFailure:record});host.append(view.element);view.prepare(current.page,current.summary)();}
   const check=(condition,message)=>{if(!condition)throw new Error(message);};
   function run(){
     try{
       for(const kind of ['actions','blocked']){
         open(kind);const root=view.element;
-        check(root.querySelectorAll('thead th').length===3,'Issue column count changed');
+        check(root.querySelectorAll('thead th').length===(kind==='actions'?4:3),'Issue column count changed');
         check(!root.querySelector('input[type="checkbox"]'),'Issue list acquired a payment checkbox');
         const first=root.querySelector('[data-bpv2-open]');commands.length=0;first.click();
         check(commands.length===1&&commands[0].key===current.page.rows[0].identity,'Exact detail key lost or duplicated');
@@ -67,12 +67,13 @@
         if(kind==='actions'){
           commands.length=0;updating.click();check(commands.length===1,'Updating navigation not singular');
           const active=structuredClone(current);
-          Object.assign(active.page,{view:'UPDATING',rows:active.page.updating,total_count:2,scope_count:2});
+          Object.assign(active.page,{view:'UPDATING',rows:active.page.updating,total_count:2,scope_count:2,
+            sort_key:'TITLE',sort_direction:'ASC',search:'',page_number:1,has_previous:false,previous_cursor:null});
           view.prepare(active.page,active.summary,{returnToActions:true})();
           check(root.getAttribute('aria-label')==='Updating'&&root.querySelector('h2').textContent==='Updating','Updating not separately labelled');
           check(root.querySelector('form').hidden&&updating.hidden,'Updating gained search or recursive Updating control');
           check([...root.querySelectorAll('[data-bpv2-issue-sort]')].every(button=>button.disabled),'Updating acquired sorting controls');
-          check(root.querySelector('[data-bpv2-issue-command="close"]').textContent==='Back to Action Required','Updating return location unclear');
+          check(root.getAttribute('aria-label')==='Updating','Updating return location unclear');
           check(root.querySelectorAll('tbody tr').length===2,'Updating tasks disappeared');
           commands.length=0;root.querySelector('[data-bpv2-open]').click();check(commands.length===1&&commands[0].key==='updating_1','Updating exact detail lost');
           view.prepare(current.page,current.summary)();

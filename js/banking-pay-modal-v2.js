@@ -48,10 +48,11 @@
   }
   function issueQuery(kind,value={}){
     requireValue(Object.hasOwn(issues.definitions,kind));exact(value,['search','sort_key','sort_direction','cursor',...(kind==='actions'?['view']:[])]);
-    const result={search:value.search??'',sort_key:value.sort_key??issues.definitions[kind].columns[0][0],
+    const updating=kind==='actions'&&value.view==='UPDATING';
+    const result={search:value.search??'',sort_key:value.sort_key??(updating?'TITLE':issues.definitions[kind].columns[0][2]),
       sort_direction:value.sort_direction??'ASC',cursor:value.cursor??null,limit:100};
     requireValue(typeof result.search==='string'&&result.search.length<=200&&!/[\u0000-\u001f\u007f]/u.test(result.search)
-      &&issues.definitions[kind].columns.some(([key])=>key===result.sort_key)
+      &&issues.definitions[kind].columns.some(([, ,sortKey])=>sortKey===result.sort_key)
       &&['ASC','DESC'].includes(result.sort_direction)&&(result.cursor===null||TOKEN.test(result.cursor)));
     result.search=result.search.trim();
     if(kind==='actions'){

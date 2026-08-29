@@ -5,6 +5,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const mainSource = fs.readFileSync(path.resolve(__dirname, '../../js/main.js'), 'utf8');
+const v2Css = fs.readFileSync(path.resolve(__dirname, '../../css/banking-pay-modal-v2.css'), 'utf8');
 
 const helperStart = mainSource.indexOf('const getRelatedTimesheetIds =');
 const helperEnd = mainSource.indexOf('const getExpenseBreakdownRowIdentity =', helperStart);
@@ -61,7 +62,9 @@ test('renders a compact row shortcut only when an explicit timesheet is present'
 
   assert.match(html, /data-action="banking:pay:viewRowTimesheets"/);
   assert.match(html, /data-timesheet-ids=/);
-  assert.match(html, /width:26px;height:26px/);
+  assert.match(html, /class="btn btn-xs btn-outline bpv2-timesheet-icon banking-timesheet-shortcut"/);
+  assert.match(html, /<svg[^>]*viewBox="0 0 24 24"/);
+  assert.match(v2Css, /\.bpv2-timesheet-icon[^\{]*\{[^}]*width:28px!important;[^}]*height:28px!important;/);
   assert.equal(helpers.renderRowTimesheetShortcut({ candidate_id: timesheetId }, 'Candidate only'), '');
 });
 

@@ -324,7 +324,7 @@ The simplification ends at Draft creation. The following existing functions are 
 
 ## 6. Exact visible pre-Draft action manifest
 
-The current main renderer exposes 29 Banking Pay action names. This list is a practical deletion guard: implementation review should account for each name before the old layout is removed.
+The current main renderer exposes 30 Banking Pay action names. This list is a practical deletion guard: implementation review must account for each name before the old layout is removed. The earlier 29-action heading was a counting error; the table itself contains 30 distinct names.
 
 | Current action | Future home | Treatment |
 | --- | --- | --- |
@@ -354,7 +354,7 @@ The current main renderer exposes 29 Banking Pay action names. This list is a pr
 | banking:pay:togglePreviewRow | Candidate Banking payment row | Move. |
 | banking:pay:toggleTimesheetBreakdown | Candidate Banking only | Move; expressly prohibited in main table. |
 | banking:pay:toggleTimesheetPreviewGroup | Candidate Banking group | Move. |
-| banking:pay:toggleWorkbenchSection | Replaced by separate permanent modal buttons | Remove shell only. The contents/actions of each section remain available. |
+| banking:pay:toggleWorkbenchSection | Retained through the proper underline-tab strip for Ready to Pay, Action Required and Blocked for Pay | Presentation changes only. The section-switching action, contents and all child actions remain available. |
 | banking:pay:unsnoozeAllExpenses | Candidate Banking breakdown | Move. |
 | banking:pay:viewDraftCreateStatus | Main Draft status | Retain. |
 | banking:pay:viewRowTimesheets | Candidate Banking, Action Required and Blocked | Move/reuse exact-ID navigation. |

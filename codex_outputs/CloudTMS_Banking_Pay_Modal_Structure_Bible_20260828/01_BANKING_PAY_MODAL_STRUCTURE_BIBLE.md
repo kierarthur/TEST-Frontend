@@ -22,6 +22,17 @@ The implementation must:
 
 There are **no unresolved product choices** in this plan. Empirical checks immediately before and during implementation are proof gates, not opportunities to reinterpret the design.
 
+### 1.1 Post-review visual refinement
+
+The first deployed TEST presentation exposed layout problems without changing the accepted economic or Workbench contract. The subsequently agreed presentation refinement is controlled by:
+
+- `04_SETTLED_DECISION_REGISTER.md`, as amended;
+- `24_VISUAL_PRESENTATION_POLICY_AND_CODE_TRACE.md`.
+
+Those documents control the global Banking destination menu, outer Banking tabs, proper Ready/Action/Blocked underline tabs, separate child-modal containment, Payment Batches separation, ID History nesting, compact Timesheets icon, compact status panels, amount alignment, group-level payment-method wording and arbitrary multi-rate presentation.
+
+They are targeted presentation amendments only. They do not reopen the database, selection, recovery, Create Draft, post-Draft or Policy X decisions in this plan. Until the new executable and real TEST evidence closes document 24, the accurate status is `IN_PROGRESS`; earlier visual screenshots are not acceptance evidence for the refined presentation.
+
 ---
 
 ## 2. Binding specification bundle
@@ -36,10 +47,9 @@ Those original IDs must remain unchanged in implementation traceability. Do not 
 
 One bookkeeping correction is now binding:
 
-- The audit heading says the main renderer exposes 29 actions.
-- Its table actually contains **30** distinct action names.
-- The current 28 August remote frontend still exposes the same 30 names.
-- Therefore the deletion guard is **30 visible actions**, plus the separately rendered compatibility/nested handlers described by the audit.
+- The original audit heading incorrectly said 29 actions; the canonical audit has now been corrected to **30**.
+- Its table and the current source both contain the same **30** distinct action names.
+- Therefore the deletion guard is **30 core visible actions**, plus 15 separately rendered compatibility/nested handlers: **45 unique action names in total**.
 - This correction changes no functionality; it prevents one action being lost because of a wrong count.
 
 If this plan and an earlier planning response differ, this plan and the canonical audit above win.

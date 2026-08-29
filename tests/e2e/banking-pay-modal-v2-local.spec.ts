@@ -223,7 +223,7 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   await expect(candidate.locator('tbody > tr').first()).toBeVisible();
   await expect(candidate).not.toContainText('Blocked for Pay');
   await expect(candidate).not.toContainText('Action Required');
-  await expect(candidate.getByRole('button', { name: 'Export Ready to Pay CSV' })).toBeVisible();
+  await expect(candidate.getByRole('button', { name: 'Export CSV', exact: true })).toBeVisible();
 
   const refreshedInPlace = await page.evaluate(() =>
     (window as any).CloudTMSBankingPayModalV2Integration.refreshOpenSurface());
@@ -233,7 +233,7 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   await expect.poll(() => page.evaluate(() => (window as any).__bankingPayV2Harness.requests
     .filter((value: string) => value.includes('/progress')).length)).toBe(1);
 
-  await candidate.getByRole('button', { name: 'Back to Banking Pay' }).click();
+  await candidate.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(table).toBeVisible();
   await expect(table.locator('tbody > tr')).toHaveCount(1);
 });

@@ -6699,6 +6699,31 @@ function renderTopNav(){
   };
   const onEscInv = (e) => { if (e.key === 'Escape') closeInvoicesMenu(); };
 
+  // Banking opens a compact destination menu so users can go straight to the
+  // required sheet without first loading Banking Pay. Banking alerts retain
+  // their separate disclosure trigger and are not consumed by this menu.
+  const closeBankingMenu = () => {
+    const menu = document.getElementById('__bankingMenu');
+    if (menu) menu.remove();
+    const button = document.querySelector('button.__bankingBtn');
+    if (button) button.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', onAnyDocClickBanking, true);
+    document.removeEventListener('keydown', onEscBanking, true);
+  };
+  const onAnyDocClickBanking = (event) => {
+    const menu = document.getElementById('__bankingMenu');
+    const anchor = document.querySelector('button.__bankingBtn');
+    if (!menu) return;
+    if (menu.contains(event.target) || anchor?.contains(event.target)) return;
+    closeBankingMenu();
+  };
+  const onEscBanking = (event) => {
+    if (event.key !== 'Escape') return;
+    const anchor = document.querySelector('button.__bankingBtn');
+    closeBankingMenu();
+    try { anchor?.focus(); } catch {}
+  };
+
   // Build buttons
   sections.forEach(s => {
     // ─────────────────────────────────────────────────────────────
@@ -6813,25 +6838,67 @@ function renderTopNav(){
 
     if (s.key === 'banking') {
       b.setAttribute('aria-label', 'Banking');
-      // BANKING: modal-only (like Imports/Settings) — do NOT switch summary section
-      b.onclick = () => {
+      b.classList.add('__bankingBtn');
+      b.setAttribute('aria-haspopup', 'menu');
+      b.setAttribute('aria-expanded', 'false');
+      // BANKING: modal-only (like Imports/Settings) — do NOT switch summary section.
+      b.onclick = (event) => {
+        event.preventDefault();
         if (!confirmDiscardChangesIfDirty()) return;
 
-        // Close any open modal stack first (keeps nav/modal state deterministic)
-        if ((window.__modalStack?.length || 0) > 0 || modalCtx?.entity) {
-          try { discardAllModalsAndState(); } catch {}
+        if (document.getElementById('__bankingMenu')) {
+          closeBankingMenu();
+          return;
         }
 
-        try {
-          if (typeof openBanking !== 'function') {
-            alert('Banking modal not yet implemented.');
-            return;
+        try { closeSettingsMenu(); } catch {}
+        try { closeInvoicesMenu(); } catch {}
+
+        const menu = document.createElement('div');
+        menu.id = '__bankingMenu';
+        menu.className = 'banking-launch-menu';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', 'Banking destinations');
+        menu.innerHTML = `
+          <button type="button" role="menuitem" data-banking-destination="pay">Banking Pay</button>
+          <button type="button" role="menuitem" data-banking-destination="payment_batches">Payment Batches</button>
+          <button type="button" role="menuitem" data-banking-destination="loans_snoozes">Loans and Snoozes</button>
+          <button type="button" role="menuitem" data-banking-destination="id">Invoice Discounting</button>
+        `;
+        document.body.appendChild(menu);
+        const rect = b.getBoundingClientRect();
+        menu.style.left = `${Math.round(window.scrollX + rect.left)}px`;
+        menu.style.top = `${Math.round(window.scrollY + rect.bottom + 6)}px`;
+        b.setAttribute('aria-expanded', 'true');
+
+        menu.addEventListener('click', async (menuEvent) => {
+          const item = menuEvent.target.closest('[data-banking-destination]');
+          if (!item) return;
+          const destination = String(item.getAttribute('data-banking-destination') || 'pay').trim() || 'pay';
+          closeBankingMenu();
+
+          // Close any open modal stack first (keeps nav/modal state deterministic).
+          if ((window.__modalStack?.length || 0) > 0 || modalCtx?.entity) {
+            try { discardAllModalsAndState(); } catch {}
           }
-          openBanking();
-        } catch (e) {
-          console.error('[NAV][BANKING] openBanking failed', e);
-          alert(e?.message || 'Failed to open Banking.');
-        }
+
+          try {
+            if (typeof openBanking !== 'function') {
+              alert('Banking modal not yet implemented.');
+              return;
+            }
+            await openBanking(destination);
+          } catch (e) {
+            console.error('[NAV][BANKING] openBanking failed', e);
+            alert(e?.message || 'Failed to open Banking.');
+          }
+        });
+
+        setTimeout(() => {
+          document.addEventListener('click', onAnyDocClickBanking, true);
+          document.addEventListener('keydown', onEscBanking, true);
+          try { menu.querySelector('[role="menuitem"]')?.focus(); } catch {}
+        }, 0);
       };
 
     } else if (s.key === 'imports') {
@@ -44896,7 +44963,56 @@ async function bankingOutboxList({
     try { target.loading = false; } catch {}
   }
 }
-function renderBankingTab(key, row) {
+function handoffSuccessfulBankingPayDraftToBatch({ state, wizard, operationId, batchIds } = {}) {
+  const ids = Array.isArray(batchIds)
+    ? Array.from(new Set(batchIds.map((value) => String(value || '').trim()).filter(Boolean)))
+    : [];
+  if (!state || !wizard || !ids.length) return;
+  const currentState = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  const frame = (typeof window !== 'undefined' && typeof window.__getModalFrame === 'function')
+    ? window.__getModalFrame()
+    : null;
+  if (currentState !== state || !frame || String(frame.entity || '') !== 'banking' || typeof frame.setTab !== 'function') return;
+  wizard.workbench = (wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
+  wizard.workbench.__draft_create_success_handoff_keys = (
+    wizard.workbench.__draft_create_success_handoff_keys
+    && typeof wizard.workbench.__draft_create_success_handoff_keys === 'object'
+  ) ? wizard.workbench.__draft_create_success_handoff_keys : {};
+  const key = `${String(operationId || 'unknown-operation')}:${ids.join(',')}`;
+  if (wizard.workbench.__draft_create_success_handoff_keys[key] === true) return;
+  wizard.workbench.__draft_create_success_handoff_keys[key] = true;
+
+  Promise.resolve().then(async () => {
+    const latestState = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+    const latestFrame = (typeof window !== 'undefined' && typeof window.__getModalFrame === 'function')
+      ? window.__getModalFrame()
+      : null;
+    if (latestState !== state || latestFrame !== frame || String(frame.entity || '') !== 'banking') return;
+    state.ui = (state.ui && typeof state.ui === 'object') ? state.ui : {};
+    state.ui.activeTabKey = 'payment_batches';
+    try { frame._suppressDirty = true; } catch {}
+    try {
+      await frame.setTab('payment_batches');
+    } finally {
+      try { frame._suppressDirty = false; } catch {}
+    }
+    try { frame._updateButtons && frame._updateButtons(); } catch {}
+    if (typeof openBankingPayBatchChildModal === 'function') {
+      await openBankingPayBatchChildModal(ids[0], {
+        activeTabKey: 'overview',
+        source: 'banking_pay_draft_create_success_handoff'
+      });
+    }
+  }).catch((error) => {
+    try {
+      wizard.workbench.__draft_create_success_handoff_last_error = String(error?.message || error || '');
+      if (typeof window !== 'undefined' && typeof window.__toast === 'function') {
+        window.__toast('The Draft was created. Open Payment Batches to view it.');
+      }
+    } catch {}
+  });
+}
+function renderBankingTab(key, row, renderOptions = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -44906,10 +45022,11 @@ function renderBankingTab(key, row) {
   const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
 
   const safeKey = String(key || '').trim() || 'pay';
+  const embedded = renderOptions && renderOptions.embedded === true;
 
   // Keep active tab key in state (safe; helps rerender)
   try {
-    if (st && st.ui && typeof st.ui === 'object') st.ui.activeTabKey = safeKey;
+    if (!embedded && st && st.ui && typeof st.ui === 'object') st.ui.activeTabKey = safeKey;
   } catch {}
 
   if (!st) {
@@ -45182,6 +45299,11 @@ function renderBankingTab(key, row) {
       `;
     }
 
+    if (safeKey === 'payment_batches') {
+      const batches = (typeof renderPayBatchListPanel === 'function') ? renderPayBatchListPanel() : '';
+      return `<section class="banking-payment-batches-sheet" aria-label="Payment Batches">${batches || '<div class="mini">No Payment Batches are available.</div>'}</section>`;
+    }
+
     if (safeKey === 'loans_snoozes') {
       const out = callIfFn('renderBankingLoansSnoozesTab');
       if (typeof out === 'string' && out.trim()) return out;
@@ -45198,8 +45320,18 @@ function renderBankingTab(key, row) {
     }
 
     if (safeKey === 'id') {
-      const out = callIfFn('renderBankingIdTab');
-      if (typeof out === 'string' && out.trim()) return out;
+      st.id = (st.id && typeof st.id === 'object') ? st.id : {};
+      const view = st.id.activeView === 'history' ? 'history' : 'discounting';
+      const out = view === 'history'
+        ? renderBankingTab('id_history', row, { embedded:true })
+        : callIfFn('renderBankingIdTab');
+      if (typeof out === 'string' && out.trim()) return `<section class="banking-id-sheet">
+        <nav class="banking-id-inner-tabs" aria-label="Invoice Discounting views">
+          <button type="button" data-action="banking:id:setView" data-view="discounting" aria-current="${view === 'discounting' ? 'page' : 'false'}">Invoice Discounting</button>
+          <button type="button" data-action="banking:id:setView" data-view="history" aria-current="${view === 'history' ? 'page' : 'false'}">ID History</button>
+        </nav>
+        <div class="banking-id-inner-surface">${out}</div>
+      </section>`;
       return `
         <div class="card">
           <div class="row">
@@ -45761,9 +45893,11 @@ function renderBankingTab(key, row) {
     `;
   })();
 
+  if (embedded) return tabContent;
+  const visibleHeaderChips = safeKey === 'pay' && isHealthy ? '' : headerChips;
   return `
     <div class="tabc banking-modal-content">
-      ${headerChips}
+      ${visibleHeaderChips}
       ${bannersHtml}
       ${tabContent}
     </div>
@@ -47201,7 +47335,6 @@ function renderBankingPayTab(scopePreset) {
   const statusBannerHtml = explicitStatePills.length > 0 || createDraftBlocked
     ? `<div class="card" style="margin-bottom:10px;"><div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${explicitStatePills.map(([label, title]) => `<span class="pill pill-info" title="${enc(title)}">${enc(label)}</span>`).join('')}${selectionMutationPending ? `<span class="pill pill-info" title="CloudTMS is saving the new Ready to Pay selection.">Updating selection…</span>` : (createDraftBlocked ? `<span class="pill pill-warn" title="${enc(uniqueCreateDraftBlockers.join(', '))}">Create Draft disabled: selected rows need refresh</span>` : '')}</div></div>`
     : '';
-  const payListHtml = (typeof renderPayBatchListPanel === 'function') ? renderPayBatchListPanel() : '';
   const wizardHtml = (typeof renderPayNewBatchWizard === 'function') ? renderPayNewBatchWizard() : '';
 
   const title =
@@ -47218,24 +47351,7 @@ function renderBankingPayTab(scopePreset) {
 
   return `
     <div id="bankingPayTabRoot">
-      <div class="card" style="margin-bottom:10px;">
-        <div class="row">
-          <label>${enc(title)}</label>
-          <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <span class="mini" style="opacity:.85;">${enc(subtitle)}</span>
-            <span class="pill pill-info" title="Scope preset for this tab">${enc(preset)}</span>
-            <span class="pill" title="Create Draft channel scope">Draft scope: ${enc(draftScopeLabel)}</span>
-
-            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:refreshAll" title="Refresh pay workbench, status and batch list">Refresh</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearAllDecisions" title="Clear persisted decisions, exclusions and selections, keep the current Banking context, and reload live truth">Clear all Decisions</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      ${statusBannerHtml}
       ${wizardHtml}
-      ${payListHtml}
     </div>
   `;
 }
@@ -51075,7 +51191,12 @@ const collectPreviewRowIds = (previewLike) => {
       try { wiz.workbench.__draft_create_preview_refresh_last_error = String(error?.message || error || ''); } catch {}
       return null;
     }));
-    Promise.allSettled(refreshTasks).finally(finishRefresh);
+    Promise.allSettled(refreshTasks).finally(() => {
+      finishRefresh();
+      if (isActiveDraftCreateComplete(operationLike)) {
+        handoffSuccessfulBankingPayDraftToBatch({ state: st, wizard: wiz, operationId, batchIds });
+      }
+    });
   };
   const refreshBatchListAfterDraftCreateComplete = (operationLike) => {
     if (!isActiveDraftCreateComplete(operationLike)) return;
@@ -54592,14 +54713,13 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     return `
       <button
         type="button"
-        class="btn btn-xs btn-outline"
+        class="btn btn-xs btn-outline bpv2-timesheet-icon banking-timesheet-shortcut"
         data-action="banking:pay:viewRowTimesheets"
         data-timesheet-ids="${enc(JSON.stringify(timesheetIds))}"
         data-candidate-name="${enc(trimStr(candidateName))}"
         aria-label="${enc(label)}"
         title="${enc(`${label} in the Timesheets summary without closing this modal`)}"
-        style="width:26px;height:26px;min-width:26px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:12px;line-height:1;opacity:.82;"
-      >🗒️</button>
+      ><svg aria-hidden="true" viewBox="0 0 24 24" focusable="false"><path d="M7 3v3M17 3v3M4.5 8.5h15M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm2 7h3m2 0h3m-8 4h3m2 0h3"/></svg></button>
     `;
   };
 
@@ -55057,8 +55177,96 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       return trimStr(line?.component_label || line?.label || line?.description || '') || 'Expense';
     };
 
+    const normalisePayMethod = (value) => {
+      const method = upperTrim(value);
+      return method === 'PAYE' || method === 'UMBRELLA' ? method : '';
+    };
+    const friendlyRateLabel = (component, fallbackIndex) => {
+      const sourceBasis = isPlainObject(component?.source_basis_json) ? component.source_basis_json : {};
+      const rawLabel = trimStr(
+        component?.bucket_label || component?.rate_type_label || component?.rate_label ||
+        component?.component_label || component?.display_label || component?.label ||
+        component?.bucket_code || sourceBasis?.bucket_label || sourceBasis?.bucket_code ||
+        component?.component_key_value || ''
+      );
+      const key = upperTrim(rawLabel).replace(/[\s-]+/g, '_');
+      const known = { DAY:'Day', NIGHT:'Night', SAT:'Saturday', SATURDAY:'Saturday', SUN:'Sunday',
+        SUNDAY:'Sunday', BH:'Bank holiday', BANK_HOLIDAY:'Bank holiday' };
+      if (known[key]) return known[key];
+      if (rawLabel) return /^[A-Z0-9_]+$/.test(rawLabel)
+        ? rawLabel.toLowerCase().replace(/_/g,' ').replace(/\b\w/g,(letter)=>letter.toUpperCase())
+        : rawLabel;
+      return `Rate ${fallbackIndex + 1}`;
+    };
+    const buildResolvedRateSummary = () => {
+      let carrier = null;
+      let sourceMethod = '';
+      let targetMethod = '';
+      for (const line of asArray(groupLines).filter(isPlainObject)) {
+        if (isAutomaticCorrectionCarrierLine(line) || !resolvedRateBadgeHtml(line, 'READY_TO_PAY')) continue;
+        const nested = getNestedLinePayload(line);
+        const components = getLineCaseComponents(line);
+        const route = getCaseResolutionPayRoutePresentation(line);
+        const componentSourceMethods = uniqTrimmed(components.map((component) => normalisePayMethod(component?.source_pay_method || component?.sourcePayMethod))).filter(Boolean);
+        const componentTargetMethods = uniqTrimmed(components.map((component) => normalisePayMethod(
+          component?.current_target_pay_method || component?.currentTargetPayMethod || component?.target_pay_method || component?.targetPayMethod
+        ))).filter(Boolean);
+        const original = route?.source_pay_method || (componentSourceMethods.length === 1 ? componentSourceMethods[0] : '') || normalisePayMethod(
+          line?.source_pay_method || line?.sourcePayMethod || nested?.source_pay_method || nested?.sourcePayMethod
+        );
+        const current = route?.target_pay_method || (componentTargetMethods.length === 1 ? componentTargetMethods[0] : '') || normalisePayMethod(
+          line?.target_pay_method || line?.targetPayMethod || line?.pay_channel || nested?.target_pay_method || nested?.targetPayMethod || nested?.pay_channel
+        );
+        if (!original || !current || original === current) continue;
+        carrier = line;sourceMethod = original;targetMethod = current;break;
+      }
+      if (!carrier) return '';
+
+      const sourceLabel = sourceMethod === 'UMBRELLA' ? 'Umbrella' : 'PAYE';
+      const targetLabel = targetMethod === 'UMBRELLA' ? 'Umbrella' : 'PAYE';
+      const direction = sourceMethod === 'PAYE'
+        ? 'Payment was originally PAYE. Candidate is now paid through an umbrella company.'
+        : 'Payment was originally through an umbrella company. Candidate is now PAYE.';
+      const seen = new Set();
+      const rateRows = [];
+      for (const line of asArray(groupLines).filter(isPlainObject)) {
+        const components = getLineCaseComponents(line);
+        const sourceRows = components.length ? components : [line];
+        sourceRows.forEach((component,index) => {
+          const nested = getNestedLinePayload(component);
+          const originalRate = finiteMoney(component?.source_rate,nested?.source_rate);
+          const newRate = finiteMoney(component?.final_target_rate,component?.saved_target_rate,component?.target_rate,nested?.final_target_rate,nested?.saved_target_rate,nested?.target_rate);
+          const originalAmount = finiteMoney(component?.source_pay_amount,component?.source_pay_ex_vat,component?.source_amount,nested?.source_pay_amount,nested?.source_pay_ex_vat,nested?.source_amount);
+          const newAmount = finiteMoney(component?.target_pay_amount,component?.target_pay_ex_vat,component?.final_target_pay_ex_vat,nested?.target_pay_amount,nested?.target_pay_ex_vat,nested?.final_target_pay_ex_vat);
+          if ([originalRate,newRate,originalAmount,newAmount].every((value)=>value===null)) return;
+          const exactIdentity = trimStr(component?.finance_component_id || component?.source_basis_fingerprint || component?.source_family_key || '')
+            || [upperTrim(component?.component_key_type),trimStr(component?.component_key_value),upperTrim(component?.classification),upperTrim(component?.bucket_code),String(index)].join('|');
+          const signature = JSON.stringify([exactIdentity,originalRate,newRate,originalAmount,newAmount]);
+          if (seen.has(signature)) return;seen.add(signature);
+          rateRows.push({ label:friendlyRateLabel(component,rateRows.length),originalRate,newRate,originalAmount,newAmount });
+        });
+      }
+      const rows = rateRows.map((row)=>`<tr>
+        <td>${enc(row.label)}</td>
+        <td class="mono">${row.originalRate===null?'—':`£${enc(fmtMoney(row.originalRate))}/hour`}</td>
+        <td class="mono">${row.newRate===null?'—':`£${enc(fmtMoney(row.newRate))}/hour`}</td>
+        <td class="mono">${row.originalAmount===null?'—':`£${enc(fmtMoney(row.originalAmount))}`}</td>
+        <td class="mono">${row.newAmount===null?'—':`£${enc(fmtMoney(row.newAmount))}`}</td>
+      </tr>`).join('');
+      return `<section class="bpv2-resolved-rate-summary">
+        <div class="bpv2-resolution-heading"><span class="bpv2-resolution-badge">Payment method changed</span><strong>${enc(direction)}</strong></div>
+        ${rows?`<div class="bpv2-resolution-rate-scroll"><table class="grid bpv2-resolution-rate-table"><thead><tr>
+          <th>Rate</th><th>Original ${enc(sourceLabel)} rate</th><th>New ${enc(targetLabel)} rate</th>
+          <th>Original ${enc(sourceLabel)} amount</th><th>New ${enc(targetLabel)} amount</th>
+        </tr></thead><tbody>${rows}</tbody></table></div>`:''}
+      </section>`;
+    };
+
+    const resolvedRateSummaryHtml = buildResolvedRateSummary();
+
     return `
       <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
+        ${resolvedRateSummaryHtml}
         <table class="grid" style="min-width:1180px;table-layout:auto;">
           <thead>
             <tr>
@@ -55150,10 +55358,6 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                 segment?.end_utc || segment?.finish_utc || segment?.worked_end_iso || nestedSegment?.end_utc || nestedSegment?.finish_utc || nestedSegment?.worked_end_iso || contextSegment?.end_utc || contextSegment?.finish_utc || contextSegment?.worked_end_iso || nestedContextSegment?.end_utc || nestedContextSegment?.finish_utc || nestedContextSegment?.worked_end_iso
               ) || trimStr(segment?.finish || segment?.finish_time || nestedSegment?.finish || nestedSegment?.finish_time || contextSegment?.finish || contextSegment?.finish_time || nestedContextSegment?.finish || nestedContextSegment?.finish_time || '') || '—';
               const amount = segment?.pay_amount_ex_vat ?? segment?.amount_ex_vat ?? segment?.pay_amount ?? nestedSegment?.pay_amount_ex_vat ?? nestedSegment?.amount_ex_vat ?? getLineSectionAmount(line);
-              const sourcePay = finiteMoney(segment?.source_pay_ex_vat, nestedSegment?.source_pay_ex_vat, line?.source_pay_ex_vat);
-              const sourceRate = finiteMoney(segment?.source_rate, nestedSegment?.source_rate, line?.source_rate);
-              const targetRate = finiteMoney(segment?.target_rate, nestedSegment?.target_rate, line?.target_rate);
-              const targetPay = finiteMoney(segment?.target_pay_ex_vat, nestedSegment?.target_pay_ex_vat, line?.target_pay_ex_vat, amount);
               const clampAmounts = getPayOutstandingClampAmounts(line);
               const segmentIndex = Number.isFinite(Number(entry.segment_index)) ? Number(entry.segment_index) : 0;
               const segmentCount = Number.isFinite(Number(entry.segment_count)) ? Math.max(1, Number(entry.segment_count)) : Math.max(1, Number(entry.preview_row_span) || 1);
@@ -55249,10 +55453,6 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
                   <td class="mini" style="white-space:nowrap;"${correctionCarrier ? ` title="This correction can represent several source and replacement records, so no single break applies."` : ''}>${enc(breakLabel)}</td>
                   <td class="mono" style="text-align:right;white-space:nowrap;">
                     <div>${payableAmountHtml}</div>
-                    ${sourcePay !== null ? `<div class="mini" data-rate-field="source-pay" style="opacity:.8;">Source pay: £${enc(fmtMoney(sourcePay))}</div>` : ''}
-                    ${sourceRate !== null ? `<div class="mini" data-rate-field="source-rate" style="opacity:.8;">Source rate: £${enc(fmtMoney(sourceRate))}/hour</div>` : ''}
-                    ${targetRate !== null ? `<div class="mini" data-rate-field="target-rate" style="opacity:.8;">Target rate: £${enc(fmtMoney(targetRate))}/hour</div>` : ''}
-                    ${targetPay !== null ? `<div class="mini" data-rate-field="target-pay" style="opacity:.8;">Target pay: £${enc(fmtMoney(targetPay))}</div>` : ''}
                     ${correctionCarrier ? `<div class="mini" style="opacity:.72;">Correction</div>` : ''}
                   </td>
                   <td class="mini" style="white-space:nowrap;">${enc(snoozeState)}</td>
@@ -55369,7 +55569,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
         `;
       })();
     const groupAnchor = makeScrollAnchor('ready-timesheet', `${candidateId}:${timesheetId}`);
-      const amountHtml = `<span style="display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap;">${resolvedRateBadgeHtml(resolvedRateActionCarrier || representative, 'READY_TO_PAY')}<span>${enc(formatCompactPayAmount(fullAmount))}</span>${selectionState === 'PARTIAL' ? `<span class="mini" style="color:#c62828;font-weight:700;">(${enc(formatCompactPayAmount(selectedAmount))} selected)</span>` : ''}</span>`;
+      const amountHtml = `<span class="bpv2-ready-group-amount">${resolvedRateBadgeHtml(resolvedRateActionCarrier || representative, 'READY_TO_PAY')}<span>${enc(formatCompactPayAmount(fullAmount))}</span>${selectionState === 'PARTIAL' ? `<span class="mini bpv2-ready-group-selected">${enc(formatCompactPayAmount(selectedAmount))} selected</span>` : ''}</span>`;
 
 
       return `
@@ -58355,6 +58555,13 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       if (!Number.isFinite(n)) return '—';
       return n.toFixed(decimals);
     };
+    const routePresentation = getCaseResolutionPayRoutePresentation(entry);
+    const originalMethodLabel = trimStr(routePresentation?.source_label || '');
+    const suggestedMethodLabel = trimStr(routePresentation?.target_label || '');
+    const originalRateHeading = originalMethodLabel ? `Original ${originalMethodLabel} rate` : 'Original rate';
+    const suggestedRateHeading = suggestedMethodLabel ? `Suggested ${suggestedMethodLabel} rate` : 'Suggested rate';
+    const originalAmountHeading = originalMethodLabel ? `Original ${originalMethodLabel} amount` : 'Original amount';
+    const suggestedAmountHeading = suggestedMethodLabel ? `Suggested ${suggestedMethodLabel} amount` : 'Suggested amount';
 
     const rows = comps.map((component) => {
       const fixedNoAction = component.is_fixed_reimbursement || component.is_fixed_no_action_taxable_row || upperTrim(component.resolution_state || '') === 'FIXED' || upperTrim(component.resolution_state || '') === 'NOT_REQUIRED';
@@ -58401,12 +58608,12 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             <tr>
               <th>Bucket</th>
               <th style="width:120px; text-align:right;">Units</th>
-              <th style="width:140px; text-align:right;">Current / source rate</th>
-              <th style="width:140px; text-align:right;">Suggested / target rate</th>
-              <th style="width:140px; text-align:right;">Current / source pay</th>
-              <th style="width:140px; text-align:right;">Target pay</th>
-              <th style="width:140px; text-align:right;">Current / source charge</th>
-              <th style="width:140px; text-align:right;">Target margin</th>
+              <th style="width:140px; text-align:right;">${enc(originalRateHeading)}</th>
+              <th style="width:140px; text-align:right;">${enc(suggestedRateHeading)}</th>
+              <th style="width:140px; text-align:right;">${enc(originalAmountHeading)}</th>
+              <th style="width:140px; text-align:right;">${enc(suggestedAmountHeading)}</th>
+              <th style="width:140px; text-align:right;">Original charge</th>
+              <th style="width:140px; text-align:right;">Suggested margin</th>
               <th style="width:240px;">Needs action</th>
             </tr>
           </thead>
@@ -58463,7 +58670,7 @@ const renderReadyTimesheetGroupedRows = (lines) => {
             data-finance-case-id="${enc(trimStr(entry.finance_case_id || ''))}"
             data-timesheet-id="${enc(trimStr(entry.linked_timesheet_id || ''))}"
             ${getCandidateActionDisabledAttrs(entry.candidate_id, 'Review the suggested rates for this case')}
-          >${enc(trimStr(entry.resolution_action_label || 'Suggested Rate'))}</button>
+          >Review suggested rates</button>
         `);
       }
     }
@@ -63133,7 +63340,12 @@ function renderPayBatchListPanel() {
       try { wiz.workbench.__draft_create_preview_refresh_last_error = String(error?.message || error || ''); } catch {}
       return null;
     }));
-    Promise.allSettled(refreshTasks).finally(finishRefresh);
+    Promise.allSettled(refreshTasks).finally(() => {
+      finishRefresh();
+      if (isActiveDraftCreateComplete(operationLike)) {
+        handoffSuccessfulBankingPayDraftToBatch({ state: st, wizard: wiz, operationId, batchIds });
+      }
+    });
   };
   const refreshBatchListAfterDraftCreateComplete = (operationLike) => {
     if (!isActiveDraftCreateComplete(operationLike)) return;
@@ -70160,6 +70372,17 @@ function renderBankingPayFiltersModal(state = {}, helpers = {}) {
             <div>Draft scope: <strong>${enc(draftScopeLabel)}</strong></div>
             <div>Candidate: <strong>${enc(candidateDisplay)}</strong></div>
             <div>Client: <strong>${enc(clientDisplay)}</strong></div>
+          </div>
+        </div>
+
+        <div class="card" style="padding:10px;background:rgba(255,255,255,.02);border-radius:10px;">
+          <div style="font-weight:700;margin-bottom:6px;">Banking Pay controls</div>
+          <div class="mini" style="opacity:.82;margin-bottom:10px;">
+            Refresh the current payment information, or clear saved decisions and return eligible payments to their default selection.
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:refreshAll">Refresh Banking Pay</button>
+            <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearAllDecisions">Clear all decisions</button>
           </div>
         </div>
       </div>
@@ -102157,6 +102380,18 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (!row) { toast('Finance case not found.'); return; }
       if (typeof openBankingFinanceCaseAuditModal !== 'function') { toast('Audit modal is not available.'); return; }
       await openBankingFinanceCaseAuditModal(deep(row));
+      return;
+    }
+
+    if (a === 'banking:id:setView') {
+      const view = String(ds('view') || dget('data-view') || '').trim().toLowerCase() === 'history'
+        ? 'history'
+        : 'discounting';
+      try {
+        st.id = (st.id && typeof st.id === 'object') ? st.id : {};
+        st.id.activeView = view;
+      } catch {}
+      await safeRerender(null);
       return;
     }
 
@@ -142475,10 +142710,12 @@ async function showImportFlowConfirm(message, opts = {}) {
   return !!(result && result.confirmed === true);
 }
 
-async function openBanking() {
+async function openBanking(startTabKey = 'pay') {
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const MODAL_CLASS = 'banking-modal';
+  const allowedStartTabs = new Set(['pay','payment_batches','loans_snoozes','id']);
+  const requestedStartTab = allowedStartTabs.has(trimStr(startTabKey)) ? trimStr(startTabKey) : 'pay';
 
   // Unique token for this modal open (used to prevent late async writes after close)
   const openToken = `banking:${Date.now()}:${Math.random().toString(36).slice(2)}`;
@@ -142497,7 +142734,7 @@ async function openBanking() {
       raw: null
     },
     ui: {
-      activeTabKey: 'pay',
+      activeTabKey: requestedStartTab,
       globalError: '',
       globalToastQueue: [],
       busy: {
@@ -142703,12 +142940,12 @@ async function openBanking() {
     return renderSkeleton(key);
   };
 
-  // ✅ Main Banking modal simplified: only Pay workbench + Loans / Snoozes + ID tabs.
+  // One Banking lifecycle with four policy-owned destinations.
   const tabs = [
-    { key: 'pay',            label: 'Pay' },
+    { key: 'pay',            label: 'Banking Pay' },
+    { key: 'payment_batches',label: 'Payment Batches' },
     { key: 'loans_snoozes', label: 'Loans / Snoozes' },
-    { key: 'id',             label: 'Invoice Discounting (ID)' },
-    { key: 'id_history',     label: 'ID History' }
+    { key: 'id',             label: 'Invoice Discounting' }
   ];
 
   const onDismiss = () => {
@@ -142799,6 +143036,17 @@ async function openBanking() {
       modal.scrollTop = 0;
     }
   } catch {}
+  if (requestedStartTab !== 'pay') {
+    try {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (frame && frame.entity === 'banking' && typeof frame.setTab === 'function') {
+        frame._suppressDirty = true;
+        await frame.setTab(requestedStartTab);
+        frame._suppressDirty = false;
+        frame._updateButtons && frame._updateButtons();
+      }
+    } catch {}
+  }
 
   // Attach delegated handlers ONCE for this banking modal instance and store detach hook
   try {

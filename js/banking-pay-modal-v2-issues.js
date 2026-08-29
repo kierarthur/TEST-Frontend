@@ -9,9 +9,14 @@
   const copy=local?require('./banking-pay-modal-v2-copy.js'):root.CloudTMSBankingPayCopyV2;
   const definitions=Object.freeze({
     actions:Object.freeze({title:copy.message('MSG-001'),noun:'tasks',empty:'MSG-003',
-      columns:Object.freeze([['TITLE','Action Required'],['CANDIDATES','Candidates'],['PAYMENTS','Payments']])}),
+      columns:Object.freeze([
+        ['CANDIDATE','Candidate','CANDIDATES'],
+        ['PAYMENT','Payment','PAYMENTS'],
+        ['ATTENTION','What needs attention','TITLE'],
+        ['AMOUNT','Amount','AMOUNT']
+      ])}),
     blocked:Object.freeze({title:'Blocked for Pay',noun:'payments',empty:'MSG-015',
-      columns:Object.freeze([['CANDIDATE','Candidate'],['REASON','Reason'],['AMOUNT','Amount']])})
+      columns:Object.freeze([['CANDIDATE','Candidate','CANDIDATE'],['REASON','Reason','REASON'],['AMOUNT','Amount','AMOUNT']])})
   });
   const fields=['session_id','session_version','progress_counter_version','scope_hash'];
   const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
@@ -23,11 +28,21 @@
   const validPaymentCount=row=>typeof row.affected_payment_count_complete==='boolean'
     &&(row.affected_payment_count_complete?count(row.affected_payment_count):row.affected_payment_count===null);
   const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[char]);
+  const displayDate=value=>/^\d{4}-\d{2}-\d{2}$/.test(String(value||''))
+    ?`${value.slice(8,10)}/${value.slice(5,7)}/${value.slice(0,4)}`:'';
   function validateRow(row,kind){
     requireValue(object(row)&&token(row.identity)&&row.indefinite_snooze!==true&&row.updating!==true);
     if(kind==='actions'){
       requireValue(text(row.title)&&count(row.affected_candidate_count)&&row.affected_candidate_count>0
         &&validPaymentCount(row)&&['ACTION_REQUIRED','UPDATING'].includes(row.issue_state));
+      if(row.candidate_name!==undefined&&row.candidate_name!==null)requireValue(row.affected_candidate_count===1&&text(row.candidate_name));
+      if(row.candidate_reference!==undefined&&row.candidate_reference!==null)requireValue(row.affected_candidate_count===1&&typeof row.candidate_reference==='string');
+      if(row.payment_label!==undefined&&row.payment_label!==null)requireValue(row.affected_payment_count_complete&&row.affected_payment_count===1&&text(row.payment_label));
+      if(row.payment_date!==undefined&&row.payment_date!==null)requireValue(row.affected_payment_count_complete&&row.affected_payment_count===1&&/^\d{4}-\d{2}-\d{2}$/.test(row.payment_date));
+      if(row.affected_display_amount!==undefined&&row.affected_display_amount!==null){
+        requireValue(row.affected_payment_count_complete&&row.affected_payment_count===1);table.formatAmount(row.affected_display_amount);
+      }
+      if(row.linked_timesheet_id!==undefined&&row.linked_timesheet_id!==null)requireValue(row.affected_payment_count_complete&&row.affected_payment_count===1&&uuid(row.linked_timesheet_id));
     }else{
       requireValue(text(row.candidate_name)&&typeof row.candidate_reference==='string'&&text(row.reason)
         &&uuid(row.candidate_id));
@@ -45,7 +60,7 @@
       &&page.total_count>=page.rows.length&&(page.rows.length>0||page.total_count===0)
       &&typeof page.has_more==='boolean'&&(page.has_more?token(page.next_cursor)&&page.rows.length>0:page.next_cursor===null)
       &&typeof page.search==='string'&&page.search.length<=200&&!/[\u0000-\u001f\u007f]/u.test(page.search)
-      &&definitions[kind].columns.some(([key])=>key===page.sort_key)&&['ASC','DESC'].includes(page.sort_direction));
+      &&definitions[kind].columns.some(([, ,sortKey])=>sortKey===page.sort_key)&&['ASC','DESC'].includes(page.sort_direction));
     requireValue(Number.isInteger(limit)&&limit>=1&&limit<=100&&count(page.page_number)
       &&typeof page.has_previous==='boolean'&&page.has_previous===(page.page_number>1)
       &&(page.page_number>2?token(page.previous_cursor):page.previous_cursor===null)
@@ -103,21 +118,39 @@
   function rowMarkup(row,kind){
     requireValue(Object.hasOwn(definitions,kind));validateRow(row,kind);
     const key=escape(row.identity);
-    if(kind==='actions')return `<tr data-bpv2-issue-row="${key}"><td class="bpv2-issue-title"><button type="button" data-bpv2-open="${key}" title="${escape(row.title)}">${escape(row.title)}</button></td>
-      <td class="bpv2-issue-number">${row.affected_candidate_count}</td><td class="bpv2-issue-number"${row.affected_payment_count_complete?'':' title="Payment count not yet confirmed." aria-label="Payment count not yet confirmed."'}>${row.affected_payment_count_complete?row.affected_payment_count:'—'}</td></tr>`;
+    if(kind==='actions'){
+      const candidate=row.affected_candidate_count===1&&text(row.candidate_name)
+        ?escape(row.candidate_name)
+        :`${row.affected_candidate_count} ${row.affected_candidate_count===1?'candidate':'candidates'}`;
+      const candidateReference=row.affected_candidate_count===1&&typeof row.candidate_reference==='string'&&row.candidate_reference.trim()
+        ?`<span>${escape(row.candidate_reference)}</span>`:'';
+      const paymentDate=displayDate(row.payment_date);
+      const payment=row.affected_payment_count_complete
+        ?(row.affected_payment_count===1&&text(row.payment_label)
+          ?`${escape(row.payment_label)}${paymentDate?` <span>${paymentDate}</span>`:''}`
+          :`${row.affected_payment_count} ${row.affected_payment_count===1?'payment':'payments'}`)
+        :'Payment count being checked';
+      const amount=row.affected_display_amount===undefined||row.affected_display_amount===null
+        ?'—':table.formatAmount(row.affected_display_amount);
+      const timesheet=uuid(row.linked_timesheet_id)?`<button type="button" class="bpv2-timesheet-icon banking-timesheet-shortcut" data-bpv2-issue-timesheet="${escape(row.linked_timesheet_id)}" title="Open this Timesheet" aria-label="Open this Timesheet"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm3 8h3v3H8v-3Z"/></svg></button>`:'';
+      return `<tr data-bpv2-issue-row="${key}"><td class="bpv2-issue-name"><button type="button" data-bpv2-open="${key}" title="${candidate}">${candidate}</button>${candidateReference}</td>
+        <td class="bpv2-issue-payment"${row.affected_payment_count_complete?'':' title="Payment count not yet confirmed."'}>${payment}</td>
+        <td class="bpv2-issue-reason" title="${escape(row.title)}">${escape(row.title)}</td><td class="bpv2-issue-number"><span>${amount}</span>${timesheet}</td></tr>`;
+    }
     return `<tr data-bpv2-issue-row="${key}"><td class="bpv2-issue-name"><button type="button" data-bpv2-open="${key}" title="${escape(row.candidate_name)}">${escape(row.candidate_name)}</button><span>${escape(row.candidate_reference)}</span></td>
       <td class="bpv2-issue-reason" title="${escape(row.reason)}">${escape(row.reason)}</td><td class="bpv2-issue-number">${row.affected_display_amount===null?'—':table.formatAmount(row.affected_display_amount)}</td></tr>`;
   }
-  function create({document,kind,onIntent,onOpenDetail,onOpenUpdating,onClose,onFailure}){
+  function create({document,kind,onIntent,onOpenDetail,onOpenUpdating,onViewTimesheets,onClose,onFailure}){
     requireValue(Object.hasOwn(definitions,kind));
-    for(const callback of [onIntent,onOpenDetail,onOpenUpdating,onClose,onFailure])if(typeof callback!=='function')throw new TypeError('Issue-list adapters required');
+    for(const callback of [onIntent,onOpenDetail,onOpenUpdating,onViewTimesheets,onClose,onFailure])if(typeof callback!=='function')throw new TypeError('Issue-list adapters required');
     const definition=definitions[kind];const element=document.createElement('section');
     element.className=`banking-pay-v2-issues bpv2-${kind}`;element.setAttribute('aria-label',definition.title);
-    element.innerHTML=`<header><h2>${definition.title}</h2><button type="button" class="btn btn-outline" data-bpv2-issue-command="close">Back to Banking Pay</button></header>
-      <div class="bpv2-issue-toolbar"><form role="search"><label>Search ${definition.title}<input type="search" maxlength="200" autocomplete="off" data-bpv2-issue-search></label><button type="submit" class="btn btn-outline">Search</button></form>
+    element.innerHTML=`<h2 class="bpv2-visually-hidden">${definition.title}</h2>
+      <p class="bpv2-issue-intro">${kind==='actions'?'Payments that need a decision before they can be included.':'Payments that cannot currently be included in a Draft. Indefinite snoozes remain in Loans / Snoozes.'}</p>
+      <div class="bpv2-issue-toolbar"><form role="search"><label><span class="bpv2-visually-hidden">Search ${definition.title}</span><input type="search" maxlength="200" autocomplete="off" data-bpv2-issue-search placeholder="Search ${definition.title}"></label><button type="submit" class="btn btn-outline">Search</button></form>
         <button type="button" class="btn btn-outline" data-bpv2-issue-command="updating" hidden></button></div>
       <p role="status" class="bpv2-issue-status" aria-live="polite" hidden></p>
-      <div class="bpv2-issue-scroll"><table><thead><tr>${definition.columns.map(([key,label])=>`<th scope="col" data-bpv2-issue-header="${key}"><button type="button" data-bpv2-issue-sort="${key}">${label}</button></th>`).join('')}</tr></thead><tbody></tbody></table></div>
+      <div class="bpv2-issue-scroll"><table><thead><tr>${definition.columns.map(([key,label,sortKey])=>`<th scope="col" data-bpv2-issue-header="${sortKey||key}">${sortKey?`<button type="button" data-bpv2-issue-sort="${sortKey}">${label}</button>`:`<span>${label}</span>`}</th>`).join('')}</tr></thead><tbody></tbody></table></div>
       <p data-bpv2-issue-empty hidden></p><footer><span data-bpv2-issue-count></span><button type="button" class="btn btn-outline" data-bpv2-issue-command="previous">Previous</button><button type="button" class="btn btn-outline" data-bpv2-issue-command="next">Next</button></footer>`;
     const body=element.querySelector('tbody'),search=element.querySelector('input'),status=element.querySelector('[role="status"]');
     const scroll=element.querySelector('.bpv2-issue-scroll');let accepted=null,busy=false,closed=false,hasPrevious=false;
@@ -143,15 +176,22 @@
       if(closed||busy||control.disabled||!accepted||event.detail>1)return;
       if(command==='updating'){invoke(onOpenUpdating,{authority:authority()});return;}
       if(command){invoke(onIntent,{kind,command,...(kind==='actions'?{view:accepted.view}:{}),authority:authority()});return;}
+      if(control.dataset.bpv2IssueTimesheet){invoke(onViewTimesheets,[control.dataset.bpv2IssueTimesheet]);return;}
       if(control.dataset.bpv2Open){invoke(onOpenDetail,{kind,key:control.dataset.bpv2Open,authority:authority()});return;}
       const sort=control.dataset.bpv2IssueSort;
       if(sort)invoke(onIntent,{kind,command:'sort',sort_key:sort,sort_direction:accepted.sort_key===sort&&accepted.sort_direction==='ASC'?'DESC':'ASC',authority:authority()});
+    }
+    function doubleClick(event){
+      if(event.target?.closest?.('button,input,label,a,select,textarea,[contenteditable="true"]'))return;
+      if(closed||busy||!accepted)return;
+      const row=event.target?.closest?.('[data-bpv2-issue-row]');const key=row?.dataset?.bpv2IssueRow;
+      if(key){event.preventDefault();event.stopPropagation();invoke(onOpenDetail,{kind,key,authority:authority()});}
     }
     function submit(event){event.preventDefault();event.stopPropagation();if(closed||busy||!accepted||accepted.view==='UPDATING')return;
       const value=search.value.trim();if(value.length>200||/[\u0000-\u001f\u007f]/u.test(value)){report({code:'BANKING_PAY_V2_INVALID_INPUT'});return;}
       invoke(onIntent,{kind,command:'search',search:value,authority:authority()});
     }
-    element.addEventListener('click',event);element.querySelector('form').addEventListener('submit',submit);
+    element.addEventListener('click',event);element.addEventListener('dblclick',doubleClick);element.querySelector('form').addEventListener('submit',submit);
     return Object.freeze({element,
       prepare(page,summary,{previousAvailable=page.has_previous,filtered=false,returnToActions=false}={}){
         if(closed)throw new Error('Banking issue list is closed');validate(page,summary,kind);
@@ -163,7 +203,7 @@
           element.querySelector('h2').textContent=isUpdating?'Updating':definition.title;
           element.setAttribute('aria-label',isUpdating?'Updating':definition.title);
           element.querySelector('form').hidden=isUpdating;
-          element.querySelector('[data-bpv2-issue-command="close"]').textContent=isUpdating&&returnToActions?'Back to Action Required':'Back to Banking Pay';
+          const closeControl=element.querySelector('[data-bpv2-issue-command="close"]');if(closeControl)closeControl.textContent=isUpdating&&returnToActions?'Back to Action Required':'Back to Banking Pay';
           if(kind==='actions')element.querySelector('[data-bpv2-issue-sort="TITLE"]').textContent=isUpdating?'Updating':'Action Required';
           search.value=page.search;
           for(const th of element.querySelectorAll('[data-bpv2-issue-header]'))th.setAttribute('aria-sort',th.dataset.bpv2IssueHeader===page.sort_key?(page.sort_direction==='ASC'?'ascending':'descending'):'none');
@@ -179,7 +219,7 @@
       setBusy(value){if(!closed){busy=Boolean(value);controls();}},
       showFailure(message){if(!closed){status.textContent=String(message);status.hidden=false;}},
       capturePosition:()=>({top:scroll.scrollTop,left:scroll.scrollLeft}),
-      destroy(){closed=true;accepted=null;element.removeEventListener('click',event);element.querySelector('form').removeEventListener('submit',submit);element.remove();}
+      destroy(){closed=true;accepted=null;element.removeEventListener('click',event);element.removeEventListener('dblclick',doubleClick);element.querySelector('form').removeEventListener('submit',submit);element.remove();}
     });
   }
   const api=Object.freeze({definitions,validate,validateDetail,rowMarkup,create});

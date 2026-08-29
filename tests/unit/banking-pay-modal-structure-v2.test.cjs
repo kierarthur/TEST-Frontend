@@ -56,6 +56,14 @@ test('the v2 surface has dedicated Candidate Banking, Action Required and Blocke
   assert.doesNotMatch(combined, /Insufficient recovery headroom/i);
 });
 
+test('Candidate Banking separates the full and selected group amounts without changing their authority', () => {
+  const candidate = source('banking-pay-modal-v2-candidate.js');
+  const css = fs.readFileSync(path.join(root, 'css', 'banking-pay-modal-v2.css'), 'utf8');
+  assert.match(candidate, /wrapper\.className='bpv2-ready-group-amount'/);
+  assert.match(candidate, /selected\.className='mini bpv2-ready-group-selected'/);
+  assert.match(css, /\.bpv2-ready-group-selected\{grid-column:1 \/ -1/);
+});
+
 test('main.js delegates v2 actions while retaining every legacy Banking Pay handler', () => {
   const main = mainSource();
   assert.ok(main.includes('CloudTMSBankingPayModalV2'), 'main asset must delegate to the contained v2 controller');
@@ -68,11 +76,42 @@ test('main.js delegates v2 actions while retaining every legacy Banking Pay hand
     'banking:pay:openFiltersModal'
   ]) assert.ok(main.includes(action), `legacy action retained: ${action}`);
   const html = htmlSource();
-  assert.match(html, /banking-pay-modal-v2\.css\?v=20260829-r5/);
-  assert.match(html, /banking-pay-modal-v2-integration\.js\?v=20260829-r2/);
+  assert.match(html, /banking-pay-modal-v2\.css\?v=20260829-r6/);
+  assert.match(html, /banking-pay-modal-v2-integration\.js\?v=20260829-r3/);
   const integrationIndex = html.indexOf('./js/banking-pay-modal-v2-integration.js');
   const mainIndex = html.indexOf('./js/main.js');
   assert.ok(integrationIndex >= 0 && mainIndex > integrationIndex, 'the capability-gated integration must load before main.js');
   assert.ok(main.includes('CloudTMSBankingPayModalV2Integration.afterRender'));
   assert.ok(main.includes('dispatch,'), 'the unchanged delegated handler is exposed to the contained integration');
+});
+
+test('Banking navigation and confirmed Draft success follow the settled four-sheet and exact-batch handoff policy', () => {
+  const main = mainSource();
+  const menuStart = main.indexOf("menu.id = '__bankingMenu'");
+  const menuEnd = main.indexOf('document.body.appendChild(menu)', menuStart);
+  assert.ok(menuStart >= 0 && menuEnd > menuStart, 'the discreet Banking destination menu must exist');
+  const menu = main.slice(menuStart, menuEnd);
+  for (const destination of ['Banking Pay', 'Payment Batches', 'Loans and Snoozes', 'Invoice Discounting']) {
+    assert.match(menu, new RegExp(`>${destination}<`));
+  }
+  assert.doesNotMatch(menu, />ID History</);
+
+  const tabsStart = main.indexOf('const tabs = [', main.indexOf('async function openBanking'));
+  const tabsEnd = main.indexOf('];', tabsStart);
+  assert.ok(tabsStart >= 0 && tabsEnd > tabsStart, 'the outer Banking tab list must exist');
+  const tabs = main.slice(tabsStart, tabsEnd);
+  assert.match(tabs, /label: 'Banking Pay'[\s\S]*label: 'Payment Batches'[\s\S]*label: 'Loans \/ Snoozes'[\s\S]*label: 'Invoice Discounting'/);
+  assert.doesNotMatch(tabs, /label: 'ID History'/);
+
+  const handoffStart = main.indexOf('function handoffSuccessfulBankingPayDraftToBatch');
+  const handoffEnd = main.indexOf('function renderBankingTab', handoffStart);
+  assert.ok(handoffStart >= 0 && handoffEnd > handoffStart, 'the confirmed-success presentation handoff must exist');
+  const handoff = main.slice(handoffStart, handoffEnd);
+  assert.match(handoff, /__draft_create_success_handoff_keys/);
+  assert.match(handoff, /frame\.setTab\('payment_batches'\)/);
+  assert.match(handoff, /openBankingPayBatchChildModal\(ids\[0\]/);
+  assert.match(handoff, /if \(!state \|\| !wizard \|\| !ids\.length\) return/);
+  assert.match(handoff, /finally \{\s*try \{ frame\._suppressDirty = false/);
+  assert.match(main, /\['pay_batch_id', 'payBatchId', 'primary_pay_batch_id', 'primaryPayBatchId'\]/,
+    'the server-designated primary batch remains first in the exact ordered result');
 });

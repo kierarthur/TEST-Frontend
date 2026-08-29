@@ -5,11 +5,11 @@ const {fixture}=require('../fixtures/banking-pay-v2-issue-detail-page.cjs');
 const row=()=>({identity:'bank_issue',issue_state:'ACTION_REQUIRED',title:'Candidate bank details are missing.',affected_candidate_count:1,
  affected_payment_count:0,affected_payment_count_complete:true});
 test('zero confirmed payments is not hidden or changed to one payment',()=>{
- assert.match(api.rowMarkup(row(),'actions'),/>0<\/td>/);
+ assert.match(api.rowMarkup(row(),'actions'),/>0 payments<\/td>/);
 });
 test('an unconfirmed payment count uses a dash and an exact explanation, never zero',()=>{
  const html=api.rowMarkup({...row(),affected_payment_count:null,affected_payment_count_complete:false},'actions');
- assert.match(html,/>—<\/td>/);assert.match(html,/Payment count not yet confirmed\./);assert.doesNotMatch(html,/>0<\/td>/);
+ assert.match(html,/>Payment count being checked<\/td>/);assert.match(html,/Payment count not yet confirmed\./);assert.doesNotMatch(html,/>0 payments<\/td>/);
 });
 for(const [label,changes] of Object.entries({missingCompleteness:{affected_payment_count_complete:undefined},
  unknownPretendsZero:{affected_payment_count:0,affected_payment_count_complete:false},

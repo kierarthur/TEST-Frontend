@@ -67,7 +67,7 @@
     for(const callback of [onPage,onClose,onLegacyAction,onFailure])if(typeof callback!=='function')throw new TypeError('Issue detail adapters required');
     const element=document.createElement('section');element.className='banking-pay-v2-issue-detail';
     element.innerHTML=`<header><div><h2>${kind==='actions'?'Action Required':'Blocked for Pay'}</h2><p class="mini" data-bpv2-detail-summary></p></div>
-      <button type="button" class="btn btn-outline" data-bpv2-detail-command="close">Back</button></header>
+      <button type="button" class="btn btn-outline" data-bpv2-detail-command="close">Close</button></header>
       <p role="status" class="bpv2-detail-status" aria-live="polite" hidden></p>
       <div class="bpv2-detail-scroll"><div data-bpv2-source-rows></div><table class="grid banking-ready-preview-table"><thead><tr>
         <th>Include</th><th>Line type</th><th>Candidate</th><th>Client</th><th>Week / Date</th><th>Channel</th><th>Amount</th><th>State</th><th>Action</th>

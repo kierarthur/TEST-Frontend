@@ -16,8 +16,9 @@ test('four cells, one physical row, selected-only deductions and disabled Timesh
   assert.equal((html.match(/<tr\b/g)||[]).length,1);
   assert.equal((html.match(/<td\b/g)||[]).length,4);
   assert.match(html,/>£0\.00<\/span>/); assert.match(html,/data-bpv2-deductions>—<\/td>/);
-  assert.match(html,/aria-checked="false"/); assert.match(html,/>Timesheets<\/button>/);
-  assert.match(html,/candidate&#39;s selected payments\./); assert.match(html,/ disabled>Timesheets/);
+  assert.match(html,/aria-checked="false"/); assert.match(html,/class="bpv2-timesheet-icon banking-timesheet-shortcut"/);
+  assert.match(html,/aria-label="Open selected Timesheets for Fixture candidate 001"/);
+  assert.match(html,/candidate&#39;s selected payments\./); assert.match(html,/ disabled><svg/);
   assert.doesNotMatch(html,/<details|View breakdown|expand|aria-expanded/i);
 });
 test('half tick and selected deduction use authoritative fields only',()=>{

@@ -8,7 +8,7 @@ function value(kind){
   const summary=fixture.snapshot().summary;
   Object.assign(summary.global,{action_required_count:101,blocked_count:101,updating_count:2});
   const page={...Object.fromEntries(['session_id','session_version','progress_counter_version','scope_hash'].map(key=>[key,summary[key]])),
-    ok:true,contract:summary.contract,contract_version:1,search:'',sort_key:api.definitions[kind].columns[0][0],sort_direction:'ASC',
+    ok:true,contract:summary.contract,contract_version:1,search:'',sort_key:api.definitions[kind].columns[0][2],sort_direction:'ASC',
     total_count:101,scope_count:101,has_more:true,next_cursor:'next_page',page_number:1,has_previous:false,previous_cursor:null,updating_count:2,rows:[kind==='actions'
       ?{identity:'exact_case_key',issue_state:'ACTION_REQUIRED',title:'Rate decision required',affected_candidate_count:1,affected_payment_count:150,affected_payment_count_complete:true}
       :{identity:'exact_blocker_key',candidate_id:fixture.id(1),candidate_name:'Synthetic candidate',candidate_reference:'TEST',
@@ -22,7 +22,7 @@ function value(kind){
 for(const kind of ['actions','blocked']){
   test(`${kind} accepts a bounded page while preserving complete counts`,()=>{
     const {page,summary}=value(kind);assert.equal(api.validate(page,summary,kind),page);
-    const html=api.rowMarkup(page.rows[0],kind);assert.equal((html.match(/<td/g)||[]).length,3);
+    const html=api.rowMarkup(page.rows[0],kind);assert.equal((html.match(/<td/g)||[]).length,kind==='actions'?4:3);
     assert.doesNotMatch(html,/checkbox|togglePreviewRow|toggleTimesheetBreakdown/);
   });
   for(const [label,change] of Object.entries({
@@ -49,7 +49,25 @@ for(const kind of ['actions','blocked'])test(kind+' final page must retain its e
  v.page.rows.push({...v.page.rows[0],identity:'extra'});assert.throws(()=>api.validate(v.page,v.summary,kind,'previous_boundary'),/INVALID_RESPONSE/);
 });
 test('task counts are not inferred from loaded affected payments',()=>{
-  const {page}=value('actions');assert.match(api.rowMarkup(page.rows[0],'actions'),/>150<\/td>/);
+  const {page}=value('actions');assert.match(api.rowMarkup(page.rows[0],'actions'),/>150 payments<\/td>/);
+});
+test('a single action payment may show exact server-owned presentation without changing task aggregation',()=>{
+  const {page}=value('actions');Object.assign(page.rows[0],{
+    affected_candidate_count:1,affected_payment_count:1,candidate_name:'James Terwane',candidate_reference:'CCR-03726',
+    payment_label:'Timesheet payment',payment_date:'2026-06-14',affected_display_amount:'200.00',linked_timesheet_id:fixture.id(30)
+  });
+  const html=api.rowMarkup(page.rows[0],'actions');
+  assert.match(html,/James Terwane/);assert.match(html,/CCR-03726/);assert.match(html,/Timesheet payment/);
+  assert.match(html,/14\/06\/2026/);assert.match(html,/£200\.00/);assert.match(html,/Open this Timesheet/);
+});
+for(const [label,change] of Object.entries({
+  candidateOnMulti:r=>Object.assign(r,{candidate_name:'Invented',affected_candidate_count:2}),
+  paymentOnMulti:r=>Object.assign(r,{payment_label:'Invented',affected_payment_count:2}),
+  amountOnMulti:r=>Object.assign(r,{affected_display_amount:'30.00',affected_payment_count:2}),
+  badDate:r=>Object.assign(r,{payment_label:'Payment',affected_payment_count:1,payment_date:'14/06/2026'}),
+  badTimesheet:r=>Object.assign(r,{payment_label:'Payment',affected_payment_count:1,linked_timesheet_id:'not-a-uuid'})
+}))test('action presentation rejects contradictory '+label,()=>{
+  const v=value('actions');change(v.page.rows[0]);assert.throws(()=>api.validate(v.page,v.summary,'actions'),/INVALID_RESPONSE/);
 });
 test('list text is escaped and absent affected amount is not invented as zero',()=>{
   const {page}=value('blocked');page.rows[0].candidate_name='<img onerror="bad()">';page.rows[0].reason='<script>bad()</script>';

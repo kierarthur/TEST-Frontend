@@ -127,8 +127,8 @@
     return `<tr data-banking-pay-v2-candidate-row="${escape(row.candidate_id)}">
       <td class="bpv2-include"><input type="checkbox" data-bpv2-control="candidate" aria-label="Include ${escape(row.candidate_name)}" aria-checked="${aria}"${selected === 'ALL' ? ' checked' : ''}></td>
       <td class="bpv2-candidate"><span data-bpv2-name>${escape(row.candidate_name)}</span><span class="bpv2-reference" data-bpv2-reference>${escape(row.candidate_reference)}</span></td>
-      <td class="bpv2-deductions" data-bpv2-deductions>${copy.message(row.selected_deduction_exists ? 'MSG-018' : 'MSG-019')}</td>
-      <td class="bpv2-payment"><span data-bpv2-amount>${formatAmount(row.selected_display_amount)}</span><button type="button" class="btn btn-xs btn-outline bpv2-timesheets" data-bpv2-control="timesheets" aria-label="Timesheets for ${escape(row.candidate_name)}" title="${escape(row.selected_timesheet_count ? 'Timesheets' : NO_TIMESHEETS)}"${row.selected_timesheet_count ? '' : ' disabled'}>Timesheets</button></td>
+      <td class="bpv2-deductions" data-bpv2-deductions>${row.selected_deduction_exists?copy.message('MSG-018'):'—'}</td>
+      <td class="bpv2-payment"><span data-bpv2-amount>${formatAmount(row.selected_display_amount)}</span><button type="button" class="bpv2-timesheet-icon banking-timesheet-shortcut" data-bpv2-control="timesheets" aria-label="Open selected Timesheets for ${escape(row.candidate_name)}" title="${escape(row.selected_timesheet_count ? 'Open selected Timesheets' : NO_TIMESHEETS)}"${row.selected_timesheet_count ? '' : ' disabled'}><svg aria-hidden="true" viewBox="0 0 24 24" focusable="false"><path d="M7 3v3M17 3v3M4.5 8.5h15M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm2 7h3m2 0h3m-8 4h3m2 0h3"/></svg></button></td>
     </tr>`;
   }
   const TABLE = `<section class="banking-pay-v2-table" aria-label="Ready to pay">
@@ -208,7 +208,7 @@
           node = rowTemplate.content.firstElementChild;
         }
         return { row, node, amount:formatAmount(row.selected_display_amount),
-          deduction:copy.message(row.selected_deduction_exists ? 'MSG-018' : 'MSG-019') };
+          deduction:row.selected_deduction_exists?copy.message('MSG-018'):'—' };
       });
       const headline = `${copy.message('MSG-006')} ${formatAmount(next.global.selected_ready_display_amount)}`;
       const included = copy.message('MSG-008',{number:next.global.selected_candidate_count});
@@ -238,8 +238,8 @@
         node.querySelector('[data-bpv2-deductions]').textContent = deduction;
         node.querySelector('[data-bpv2-amount]').textContent = amount;
         const timesheets = node.querySelector('[data-bpv2-control="timesheets"]');
-        timesheets.title = row.selected_timesheet_count ? 'Timesheets' : NO_TIMESHEETS;
-        timesheets.setAttribute('aria-label', `Timesheets for ${row.candidate_name}`);
+        timesheets.title = row.selected_timesheet_count ? 'Open selected Timesheets' : NO_TIMESHEETS;
+        timesheets.setAttribute('aria-label', `Open selected Timesheets for ${row.candidate_name}`);
       }
       checkbox(globalInput, accepted.global.selection_state, busy);
       globalInput.setAttribute('aria-label', globalLabel);

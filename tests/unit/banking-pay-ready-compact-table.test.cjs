@@ -118,7 +118,7 @@ test('mobile card presentation respects the real collapsed breakdown state', () 
 test('Banking keeps its header and Close action fixed while its body owns scrolling', () => {
   assert.match(modalCss, /#modal\.banking-modal\.ctms-modern-modal \{\s*overflow: clip;\s*\}/);
   assert.match(modalCss, /#modal\.banking-modal\.ctms-modern-modal #modalActions \{\s*display: none !important;\s*\}/);
-  const openBody = sliceBetween('async function openBanking()', 'async function openImportsModal');
+  const openBody = sliceBetween("async function openBanking(startTabKey = 'pay')", 'async function openImportsModal');
   assert.match(openBody, /modal\.classList\.add\(MODAL_CLASS\)/);
   assert.match(openBody, /modal\.scrollTop = 0/);
 });

@@ -167,7 +167,7 @@ test('candidate settle compares completed progress with the pre-adoption snapsho
 });
 
 test('Banking modal dismissal releases the paged workbench graph', () => {
-  const start = main.indexOf('async function openBanking()');
+  const start = main.indexOf("async function openBanking(startTabKey = 'pay')");
   const end = main.indexOf('\nasync function ', start + 1);
   const body = main.slice(start, end);
   assert.match(body, /for \(const key of Object\.keys\(wizard\)\) delete wizard\[key\]/);

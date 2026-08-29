@@ -113,9 +113,13 @@ test('expanded Ready timesheet breakdown renders canonical segment details rathe
   assert.match(breakdown, /contextSegment\?\.role/);
   assert.match(breakdown, /contextSegment\?\.band/);
   assert.match(breakdown, /getLineSectionAmount\(line\)/);
-  assert.match(breakdown, /Source pay:/);
-  assert.match(breakdown, /Source rate:/);
-  assert.match(breakdown, /Target rate:/);
+  assert.match(breakdown, /const buildResolvedRateSummary =/);
+  assert.match(breakdown, /Original \$\{enc\(sourceLabel\)\} rate/);
+  assert.match(breakdown, /New \$\{enc\(targetLabel\)\} rate/);
+  assert.match(breakdown, /Original \$\{enc\(sourceLabel\)\} amount/);
+  assert.match(breakdown, /New \$\{enc\(targetLabel\)\} amount/);
+  assert.doesNotMatch(breakdown, /Source pay:/);
+  assert.doesNotMatch(breakdown, /Target pay:/);
   assert.match(
     breakdown,
     /isSyntheticTimesheetResidualLine\(line\)[\s\S]*isReadyTimesheetDisplayContextLine\(line\)[\s\S]*continue;/

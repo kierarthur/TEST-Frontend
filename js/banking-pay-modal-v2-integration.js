@@ -28,11 +28,19 @@
     const create=model.create_button;
     if(!object(create)||typeof create.label!=='string'||typeof create.title!=='string'||typeof create.ready_label!=='string'
       ||typeof create.ready_title!=='string'||typeof create.disabled!=='boolean'||typeof create.paye_guard_allows_create!=='boolean')return null;
-    return `<div class="card banking-pay-create-card banking-pay-v2-shell" id="bankingPayNewBatchWizard"
+    const scopeBadges=model.pay_channel_scope==='ALL'
+      ? '<span class="bpv2-scope-badge bpv2-scope-badge--paye">PAYE</span><span class="bpv2-scope-badge bpv2-scope-badge--umbrella">Umbrella</span>'
+      : model.pay_channel_scope==='PAYE'
+        ? '<span class="bpv2-scope-badge bpv2-scope-badge--paye">PAYE</span>'
+        : '<span class="bpv2-scope-badge bpv2-scope-badge--umbrella">Umbrella</span>';
+    const summaryParts=String(model.filter_summary||'').split('•').map(value=>value.trim()).filter(Boolean);
+    const conciseScope=summaryParts.filter((value,index)=>index>0&&!/^(both\s+)?paye\s*\+\s*umbrella$/i.test(value)).join('<span aria-hidden="true">·</span>');
+    return `<section class="banking-pay-v2-shell" id="bankingPayNewBatchWizard"
       data-bpv2-shell="1" data-session-id="${esc(model.session_id)}" data-session-version="${exactInt(model.session_version)}"
       data-progress-counter-version="${exactInt(model.progress_counter_version)}" data-pay-channel-scope="${esc(model.pay_channel_scope)}">
       <div class="banking-pay-v2-shell-inner">
-        <header class="banking-pay-v2-shell-header"><div><h2>Banking Pay</h2><p>Choose the candidates to include in the next Draft payment.</p></div>
+        <header class="banking-pay-v2-shell-header"><div><h2>Banking Pay</h2>
+          <div class="banking-pay-scope-summary" aria-label="Current Banking Pay filters">${scopeBadges}${conciseScope||'<span>All candidates</span><span aria-hidden="true">·</span><span>All clients</span>'}</div></div>
           <div class="banking-pay-v2-shell-actions">
             <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:openFiltersModal" title="Open Banking Pay filters">Filters</button>
             <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:exportReadyToPayCsv" title="Export all current Ready to Pay payments">Export CSV</button>
@@ -42,20 +50,19 @@
               data-bpv2-ready-label="${esc(create.ready_label)}" data-bpv2-ready-title="${esc(create.ready_title)}"
               data-bpv2-paye-guard-allows-create="${create.paye_guard_allows_create?'1':'0'}"
               title="${esc(create.title)}">${esc(create.label)}</button>
-            <button type="button" class="btn btn-sm btn-outline${model.has_active_filters?'':' disabled'}" data-action="banking:pay:clearFilters"
-              ${model.has_active_filters?'':'aria-disabled="true"'} title="${esc(model.clear_filters_title||'Clear Banking Pay filters')}">Clear filters</button>
+            ${model.has_active_filters?`<button type="button" class="btn btn-sm btn-outline bpv2-clear-filters" data-action="banking:pay:clearFilters"
+              title="${esc(model.clear_filters_title||'Clear Banking Pay filters')}">Clear filters</button>`:''}
           </div></header>
-        ${String(model.prelude_html||'')}
-        <div class="mini banking-pay-scope-summary">${esc(model.filter_summary||'')}</div>
-        ${String(model.progress_html||'')}
+        <div class="bpv2-notice-stack" data-bpv2-notice-stack>${String(model.prelude_html||'')}${String(model.progress_html||'')}</div>
         <nav class="banking-pay-v2-section-nav" aria-label="Banking Pay lists">
-          <button type="button" class="btn btn-outline" data-bpv2-nav="main" aria-current="page">Ready to Pay</button>
-          <button type="button" class="btn btn-outline" data-bpv2-nav="actions">Action Required <span data-bpv2-action-count>0</span></button>
-          <button type="button" class="btn btn-outline" data-bpv2-nav="blocked">Blocked for Pay <span data-bpv2-blocked-count>0</span></button>
+          <button type="button" data-bpv2-nav="main" aria-current="page">Ready to Pay</button>
+          <button type="button" data-bpv2-nav="actions">Action Required <span data-bpv2-action-count>0</span></button>
+          <button type="button" data-bpv2-nav="blocked">Blocked for Pay <span data-bpv2-blocked-count>0</span></button>
         </nav>
         <p class="bpv2-shell-status" role="status" aria-live="polite">Loading Ready to Pay…</p>
         <div class="banking-pay-v2-surface" data-bpv2-surface></div>
-      </div></div>`;
+        <div class="banking-pay-v2-child-host" data-bpv2-child-host role="dialog" aria-modal="true" aria-label="Banking Pay detail" hidden></div>
+      </div></section>`;
   }
   function readSessionFromShell(shell){
     const session={session_id:String(shell.dataset.sessionId||''),session_version:exactInt(shell.dataset.sessionVersion),
@@ -141,9 +148,9 @@
     finally{slot.checking=false;}
   }
   function createRuntime(shell,context,state){
-    const document=shell.ownerDocument,surface=shell.querySelector('[data-bpv2-surface]'),status=shell.querySelector('[role="status"]');
+    const document=shell.ownerDocument,surface=shell.querySelector('[data-bpv2-surface]'),childHost=shell.querySelector('[data-bpv2-child-host]'),status=shell.querySelector('[role="status"]');
     const transport=controllerModule.createTransport({API:context.API,authFetch:context.authFetch});
-    const mutation=mutationModule;let controller=null,currentSurface=null;
+    const mutation=mutationModule;let controller=null,currentSurface=null,currentChild=null,returnFocus=null;
     const presenters={main:null,candidate:null,actions:null,blocked:null,detail:null};
     const detailAdapters={formatIsoToUk:context.formatIsoToUk,railEnv:context.railEnv,railProvider:context.railProvider};
     function showError(value){status.textContent=String(value||'Banking Pay could not be updated. Refresh and try again.');status.hidden=false;
@@ -167,7 +174,7 @@
       presenters.main=tableModule.createCandidateTable({document,
         onCandidateIntent:value=>controller.candidateIntent({candidate_id:value.candidate_id,action:value.action}),
         onGlobalIntent:value=>controller.globalIntent({action:value.action}),onTimesheets:value=>controller.viewSelectedTimesheets(value.candidate_id),
-        onOpenCandidate:value=>controller.openCandidate(value.candidate_id),onSort:value=>controller.sort(value),
+        onOpenCandidate:value=>{returnFocus=document.activeElement;return controller.openCandidate(value.candidate_id);},onSort:value=>controller.sort(value),
         onPage:value=>controller.mainPage(value.direction),onError:error=>showError(error?.message)});return presenters.main;
     }
     function ensureCandidate(){
@@ -192,7 +199,8 @@
           const page=controller.snapshot()[kind];return controller.openIssues(kind,{search:value.search??page.search,
             sort_key:value.sort_key??page.sort_key,sort_direction:value.sort_direction??page.sort_direction,cursor:null,...(kind==='actions'?{view:page.view}:{})});
         }
-      },onOpenDetail:value=>controller.openIssueDetail(kind,value.key),onOpenUpdating:()=>controller.openUpdating(),
+      },onOpenDetail:value=>{returnFocus=document.activeElement;return controller.openIssueDetail(kind,value.key);},onOpenUpdating:()=>controller.openUpdating(),
+        onViewTimesheets:ids=>context.openTimesheets(ids),
         onClose:()=>kind==='actions'&&controller.snapshot().actions?.view==='UPDATING'?controller.closeUpdating():controller.closeIssues(),
         onFailure:value=>showError(value.code)});return presenters[kind];
     }
@@ -206,16 +214,34 @@
       presenters.detail={kind,value};return value;
     }
     function stage(next){
-      const name=next.ui?.surface||'main';let presenter,commit;
+      const name=next.ui?.surface||'main';let presenter,commit,parentPresenter,parentCommit;
       if(name==='main'){presenter=ensureMain();commit=presenter.prepare(next.summary);}
-      else if(name==='candidate'){presenter=ensureCandidate();commit=presenter.prepare({summary:next.summary,candidate:next.ready?.candidate,
-        page:next.ready,context:selectedContext(next.ready,context)},{previousAvailable:next.ready?.has_previous===true});}
+      else if(name==='candidate'){
+        parentPresenter=ensureMain();parentCommit=parentPresenter.prepare(next.summary);
+        presenter=ensureCandidate();commit=presenter.prepare({summary:next.summary,candidate:next.ready?.candidate,
+          page:next.ready,context:selectedContext(next.ready,context)},{previousAvailable:next.ready?.has_previous===true});
+      }
       else if(name==='actions'||name==='blocked'){presenter=ensureIssues(name);commit=presenter.prepare(next[name],next.summary,
         {previousAvailable:next[name]?.has_previous===true,returnToActions:name==='actions'&&next[name]?.view==='UPDATING'});}
       else if(name==='actionDetail'||name==='blockedDetail'){
-        const kind=name==='actionDetail'?'actions':'blocked';presenter=ensureDetail(kind);commit=presenter.prepare(next[name],next.summary);
+        const kind=name==='actionDetail'?'actions':'blocked';
+        parentPresenter=ensureIssues(kind);parentCommit=parentPresenter.prepare(next[kind],next.summary,
+          {previousAvailable:next[kind]?.has_previous===true,returnToActions:kind==='actions'&&next[kind]?.view==='UPDATING'});
+        presenter=ensureDetail(kind);commit=presenter.prepare(next[name],next.summary);
       }else throw new Error('BANKING_PAY_V2_INVALID_RESPONSE');
-      return ()=>{if(currentSurface!==presenter.element){surface.replaceChildren(presenter.element);currentSurface=presenter.element;}commit();
+      return ()=>{
+        const isChild=['candidate','actionDetail','blockedDetail'].includes(name);
+        const visibleParent=isChild?parentPresenter:presenter;
+        if(currentSurface!==visibleParent.element){surface.replaceChildren(visibleParent.element);currentSurface=visibleParent.element;}
+        parentCommit?.();
+        if(isChild){
+          if(currentChild!==presenter.element){childHost.replaceChildren(presenter.element);currentChild=presenter.element;}
+          commit();childHost.hidden=false;document.body?.classList?.add('bpv2-child-open');
+          childHost.querySelector('[data-bpv2-child="close"],[data-bpv2-detail-command="close"]')?.focus?.({preventScroll:true});
+        }else{
+          commit();childHost.hidden=true;childHost.replaceChildren();currentChild=null;document.body?.classList?.remove('bpv2-child-open');
+          if(returnFocus?.isConnected){returnFocus.focus?.({preventScroll:true});returnFocus=null;}
+        }
         const actionCount=shell.querySelector('[data-bpv2-action-count]'),blockedCount=shell.querySelector('[data-bpv2-blocked-count]');
         actionCount.textContent=String(next.summary.global.action_required_count);blockedCount.textContent=String(next.summary.global.blocked_count);
         shell.querySelectorAll('[data-bpv2-nav]').forEach(button=>button.setAttribute('aria-current',button.dataset.bpv2Nav===(name==='main'||name==='candidate'?'main':name.startsWith('action')?'actions':'blocked')?'page':'false'));
@@ -285,6 +311,13 @@
       event.stopPropagation();const key=button.dataset.bpv2Nav;if(key==='main')controller.closeIssues();
       else if(key==='actions')controller.openIssues('actions');else if(key==='blocked')controller.openIssues('blocked');
     });
+    childHost.addEventListener('keydown',event=>{
+      if(event.key!=='Escape'||childHost.hidden||!controller)return;
+      event.preventDefault();event.stopPropagation();const name=controller.snapshot()?.ui?.surface;
+      if(name==='candidate')controller.closeCandidate();
+      else if(name==='actionDetail')controller.closeIssueDetail('actions');
+      else if(name==='blockedDetail')controller.closeIssueDetail('blocked');
+    });
     return {shell,callbacks,setController:value=>{controller=value;},async refreshOpenSurface(){
       if(!controller)return false;
       // An opening child still reports the accepted main surface until its
@@ -292,7 +325,7 @@
       // background legacy rerender cannot win the race and discard it.
       if(controller.snapshot()?.ui?.surface==='main')return controller.isBusy();
       const result=await controller.refreshCurrentAuthority();return result?.state!=='CLOSED';
-    },close(){controller?.close();for(const presenter of Object.values(presenters))
+    },close(){controller?.close();document.body?.classList?.remove('bpv2-child-open');for(const presenter of Object.values(presenters))
       (presenter?.value||presenter)?.destroy?.();}};
   }
   async function mount(shell,context,state){

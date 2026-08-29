@@ -134,3 +134,43 @@ Machine-checked result before the documentation seal:
 | Credential/private-key/credential-URL markers | 0 |
 
 The manifest is regenerated once more after this result is inserted, then the archive is built and reopened for an identical entry/hash/size comparison. The external archive SHA-256 is reported outside the archive to avoid a self-referential checksum. The application commit remains separately identifiable so documentation-only changes cannot be confused with the deployed application asset.
+
+## Visual-policy amendment validation — 29 August 2026
+
+The later user-directed visual refinement is a working amendment and does not reuse the earlier seal as proof. `24_VISUAL_PRESENTATION_POLICY_AND_CODE_TRACE.md` is intentionally `IN_PROGRESS` until the user approves the written policy and the implementation/browser gates pass.
+
+| Check | Result |
+| --- | ---: |
+| Unique visual-policy rows | 61 / 61 |
+| Visual-policy rows with all five required fields | 61 / 61 |
+| Explicit frontend source references / invalid locations | 121 / 0 |
+| Explicit backend authority references / invalid locations | 3 / 0 |
+| Functionality rows / unique IDs | 136 / 136 |
+| Message rows / unique IDs | 89 / 89 |
+| Action rows / unique action names | 45 / 45 |
+| Outdated button-layout controlling statements | 0 |
+| Patch whitespace errors | 0 |
+
+The current repository heads were re-fetched before this check and remained frontend `f7dd6326a123dbe046c09a3bf24df80d5eea2d18` and backend `9a5e4bbd952cb9e8c1e349f95dcbbf20ceabb4f7`. These are audit observations, not implementation pins.
+
+The working manifest and archive must not be regenerated until the user has accepted the written policy. After acceptance, the deterministic fixtures and screenshots must be produced from the accepted policy alone; after implementation, the complete source/test/real-browser evidence must be added before the working pack can be sealed again.
+
+## Accepted visual-policy implementation validation — 29 August 2026
+
+The user accepted the deterministic visual policy and authorised implementation. Local implementation evidence now passes, but the pack is not resealed because the final exact-head release and deployed acceptance are deliberately still open.
+
+| Check | Result |
+| --- | ---: |
+| Banking-specific frontend tests | 838 / 838 |
+| Deterministic renderer generation | PASS |
+| Approved presentation oracle | PASS |
+| Local Chromium scenarios | 4 / 4 |
+| Backend normal tests | 1,005 / 1,005 |
+| Database source integrity | 202 migrations / 479 repeatables |
+| Broader frontend JavaScript tests | 1,370 / 1,371 |
+| Broader failure attributable to Banking change | 0 |
+| Patch whitespace errors | 0 |
+| Protected TEST release | OPEN |
+| Real deployed browser/screenshots/performance | OPEN |
+
+The lone broader frontend failure is a proved current-remote baseline mismatch in an Import Review comment assertion. It is recorded rather than masked. The latest observed shared backend protected APPLY failed an unrelated Daily verifier; therefore no Banking release is constructed from that head. The final validation must be repeated against the exact sealed green backend/frontend heads, then the manifest and archive may be regenerated only after deployed real-browser evidence is inserted.

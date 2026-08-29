@@ -22,11 +22,18 @@ test('Ready timesheet details use server segment fields and Europe/London time a
   assert.match(render, /segment\?\.breaks/);
 });
 
-test('source and target pay/rate labels are independent server-owned values', () => {
-  assert.match(render, /data-rate-field="source-pay"[\s\S]*Source pay:/);
-  assert.match(render, /data-rate-field="source-rate"[\s\S]*Source rate:/);
-  assert.match(render, /data-rate-field="target-rate"[\s\S]*Target rate:/);
-  assert.match(render, /data-rate-field="target-pay"[\s\S]*Target pay:/);
+test('resolved payment-method rates are shown once per group with direction-aware original and new labels', () => {
+  assert.match(render, /const buildResolvedRateSummary =/);
+  assert.match(render, /Payment was originally PAYE\. Candidate is now paid through an umbrella company\./);
+  assert.match(render, /Payment was originally through an umbrella company\. Candidate is now PAYE\./);
+  assert.match(render, /Original \$\{enc\(sourceLabel\)\} rate/);
+  assert.match(render, /New \$\{enc\(targetLabel\)\} rate/);
+  assert.match(render, /Original \$\{enc\(sourceLabel\)\} amount/);
+  assert.match(render, /New \$\{enc\(targetLabel\)\} amount/);
+  assert.match(render, /const seen = new Set\(\)/);
+  assert.match(render, /finance_component_id/);
+  assert.doesNotMatch(render, /Source pay:/);
+  assert.doesNotMatch(render, /Target pay:/);
   assert.doesNotMatch(render, /sourceUnits\s*\*\s*sourceRate/i);
 });
 
