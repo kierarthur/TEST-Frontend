@@ -295162,7 +295162,7 @@ function renderContractCalendarTab(ctx) {
       <div id="${holderId}" class="tabc">
         <div class="info-row" style="margin:0 0 8px 0;font-size:13px;">
           <strong>Candidate:</strong>
-          <span class="unassigned" style="color:var(--danger,#c0392b);margin-left:6px;">&lt;Unassigned&gt;</span>
+          <span class="unassigned" style="margin-left:6px;">Not yet assigned to a candidate</span>
         </div>
         <div class="hint">Pick a candidate to view and stage calendar dates.</div>
         ${actionsHtml}
@@ -295225,7 +295225,7 @@ function renderContractCalendarTab(ctx) {
           ${actionsHtml}
         </div>`;
 
-      // Render the candidate label (supports <Unassigned>)
+      // Render the candidate label, including contracts not yet assigned.
       try {
         const nameEl = el.querySelector('#__calCandidateName');
         if (nameEl) {
@@ -295235,8 +295235,7 @@ function renderContractCalendarTab(ctx) {
           if (label) {
             nameEl.textContent = label;
           } else {
-            nameEl.textContent = '<Unassigned>';
-            nameEl.style.color = 'var(--danger,#c0392b)';
+            nameEl.textContent = 'Not yet assigned to a candidate';
           }
         }
       } catch {}
@@ -323020,6 +323019,9 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const meta  = (mc && mc.timesheetMeta && typeof mc.timesheetMeta === 'object') ? mc.timesheetMeta : {};
   const data  = (mc && mc.data && typeof mc.data === 'object') ? mc.data : {};
   const dp    = (mc && mc.timesheetDeletePreview && typeof mc.timesheetDeletePreview === 'object') ? mc.timesheetDeletePreview : null;
+  const related = (mc && mc.timesheetRelated && typeof mc.timesheetRelated === 'object') ? mc.timesheetRelated : {};
+  const relatedCandidate = (related.candidate && typeof related.candidate === 'object') ? related.candidate : {};
+  const relatedContract = (related.contract && typeof related.contract === 'object') ? related.contract : {};
 
   const boolish = (v) => {
     if (v === true) return true;
@@ -323639,6 +323641,23 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     'planned_contract_week_authority_complete',
     'plannedContractWeekAuthorityComplete'
   );
+
+  const assignedCandidateId = String(
+    data.candidate_id ||
+    meta.candidateId ||
+    meta.candidate_id ||
+    det.candidate_id ||
+    det.effective?.candidate_id ||
+    det.related?.candidate?.id ||
+    det.related?.candidate?.candidate_id ||
+    relatedCandidate.id ||
+    relatedCandidate.candidate_id ||
+    relatedContract.candidate_id ||
+    ts.candidate_id ||
+    cw.candidate_id ||
+    ''
+  ).trim();
+  const hasAssignedCandidate = !!assignedCandidateId;
   const plannedAuthorityContractWeekId = readLifecycleText(
     'planned_contract_week_authority_contract_week_id',
     'plannedContractWeekAuthorityContractWeekId'
@@ -323664,13 +323683,15 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const lifecycleAuthoritySatisfied = isPlannedWeek
     ? plannedContractWeekAuthorityComplete
     : lifecycleAuthorityComplete;
-  const editReadOnly = isArchived || canonicalReadOnly === true || !lifecycleAuthoritySatisfied;
+  const editReadOnly = isArchived || canonicalReadOnly === true || !lifecycleAuthoritySatisfied || !hasAssignedCandidate;
   const lifecycleActionsBlocked = isArchived || !lifecycleAuthoritySatisfied;
-  const readOnlyReason = !lifecycleAuthoritySatisfied
-    ? 'LIFECYCLE_AUTHORITY_INCOMPLETE'
-    : (isArchived
-      ? 'ARCHIVED'
-      : (backendReadOnlyReason || backendReadOnlyMode || (canonicalReadOnly === true ? 'BACKEND_READ_ONLY' : '')));
+  const readOnlyReason = !hasAssignedCandidate
+    ? 'CANDIDATE_NOT_ASSIGNED'
+    : (!lifecycleAuthoritySatisfied
+      ? 'LIFECYCLE_AUTHORITY_INCOMPLETE'
+      : (isArchived
+        ? 'ARCHIVED'
+        : (backendReadOnlyReason || backendReadOnlyMode || (canonicalReadOnly === true ? 'BACKEND_READ_ONLY' : ''))));
   const readOnly = editReadOnly;
 
   const backendCanAuthorise = readLifecycleFalseWins('can_authorise', 'canAuthorise');
@@ -323729,7 +323750,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     localCanProcess
   );
   const canonicalCanDelete = !!(
-    lifecycleAuthorityComplete &&
+    lifecycleAuthoritySatisfied &&
     !isArchived &&
     backendCanDelete === true &&
     localCanDelete
@@ -323810,6 +323831,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     readOnly,
     read_only: readOnly,
     editReadOnly,
+    hasAssignedCandidate,
     lifecycleActionsBlocked,
     lifecycleAuthorityComplete,
     lifecycle_authority_complete: lifecycleAuthorityComplete,
@@ -360139,7 +360161,20 @@ function renderTimesheetOverviewTab(ctx) {
     (row.occupant_key_norm && enc(row.occupant_key_norm)) ||
     (rCand.first_name || rCand.last_name
       ? enc([rCand.first_name, rCand.last_name].filter(Boolean).join(' '))
-      : 'Unknown candidate');
+      : 'Not yet assigned to a candidate');
+
+  const assignedCandidateId = String(
+    rCand.id ||
+    rCand.candidate_id ||
+    rCtr.candidate_id ||
+    details.candidate_id ||
+    ts.candidate_id ||
+    cw.candidate_id ||
+    baseSummary.candidate_id ||
+    row.candidate_id ||
+    ''
+  ).trim();
+  const hasAssignedCandidate = !!assignedCandidateId;
 
   const clientName =
     (rCli.name && enc(rCli.name)) ||
@@ -361319,7 +361354,7 @@ function renderTimesheetOverviewTab(ctx) {
     const isDaily  = (sheetScope === 'DAILY');
 
     // ✅ NEW: Add additional manual timesheet (always available weekly/daily, not blocked by importAuthoritative)
-    if (isWeekly && weekId) {
+    if (hasAssignedCandidate && isWeekly && weekId) {
       const title = 'Create an additional manual adjustment timesheet for this week (use for expenses or corrections without altering the original sheet).';
       btns.push(`
         <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="add-additional-manual" title="${enc(title)}">
@@ -361327,7 +361362,7 @@ function renderTimesheetOverviewTab(ctx) {
         </button>
       `);
     }
-    if (isDaily && tsId) {
+    if (hasAssignedCandidate && isDaily && tsId) {
       const title = 'Create an additional manual daily timesheet for this shift (use for expenses or corrections without altering the original sheet).';
       btns.push(`
         <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="add-additional-manual" title="${enc(title)}">
@@ -361364,7 +361399,7 @@ function renderTimesheetOverviewTab(ctx) {
 
     // ✅ Adjustment and lifecycle safety: never mutate the source route while the
     // timesheet is authorised, archived, or its permission surface is not trusted.
-    if (!isAdjustment && !sourceTimesheetActionsBlocked) {
+    if (hasAssignedCandidate && !isAdjustment && !sourceTimesheetActionsBlocked) {
 
       if (!importAuthoritative && (isPlannedWeeklyElectronic || (candidateOfficeRouteUiReady && canSwitchToManual && (isWeeklyElectronicWithTs || isDailyElectronicWithTs)))) {
         const title = 'Switch this timesheet into admin-managed Manual mode so you can adjust hours/schedule internally.';
