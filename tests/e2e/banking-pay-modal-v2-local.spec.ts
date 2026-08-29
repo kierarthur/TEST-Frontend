@@ -137,7 +137,7 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
     });
     const modal = document.createElement('div');
     modal.id = 'modal';
-    modal.className = 'ctms-modern-modal';
+    modal.className = 'banking-modal ctms-modern-modal ctms-generic-modal';
     modal.innerHTML = html;
     document.body.replaceChildren(modal);
     await integration.afterRender({
