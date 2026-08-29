@@ -54411,12 +54411,16 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     const nominalAmount = Math.round(Math.abs(toNum(getCaseResolutionDisplayAmount(line), 0)) * 100) / 100;
 
     if (!sourcePayMethod || !targetPayMethod || sourcePayMethod === targetPayMethod || nominalAmount <= 0) return null;
+    const directionDescription = sourcePayMethod === 'PAYE'
+      ? 'Payment was originally PAYE. Candidate is now paid through an umbrella company.'
+      : 'Payment was originally through an umbrella company. Candidate is now PAYE.';
     return {
       source_pay_method: sourcePayMethod,
       target_pay_method: targetPayMethod,
       source_label: sourcePayMethod === 'UMBRELLA' ? 'Umbrella' : 'PAYE',
       target_label: targetPayMethod === 'UMBRELLA' ? 'Umbrella' : 'PAYE',
-      direction_label: `${sourcePayMethod === 'UMBRELLA' ? 'UMBR' : 'PAYE'} > ${targetPayMethod === 'UMBRELLA' ? 'UMBR' : 'PAYE'}`,
+      direction_label: directionDescription,
+      action_description: `${directionDescription} Choose how this payment should be handled.`,
       nominal_amount: nominalAmount
     };
   };
@@ -54440,7 +54444,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
       return `
         ${resolvedRateBadgeHtml(line, renderContextSection)}
         <div><strong>${enc(caseRecoveryRoute.source_pay_method)}</strong> ${enc(`£${fmtMoney(caseRecoveryRoute.nominal_amount)}`)}</div>
-        <div class="mini" style="margin-top:3px;opacity:.8;white-space:normal;">${enc(`This amount is currently determined as ${caseRecoveryRoute.source_label} and needs resolution to convert it to ${caseRecoveryRoute.target_label}.`)}</div>
+        <div class="mini" style="margin-top:3px;opacity:.8;white-space:normal;">${enc(caseRecoveryRoute.action_description)}</div>
       `;
     }
     const manualDebtRecovery = getManualDebtRecoveryPresentation(line);

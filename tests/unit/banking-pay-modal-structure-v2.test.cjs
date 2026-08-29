@@ -49,6 +49,10 @@ test('the v2 surface has dedicated Candidate Banking, Action Required and Blocke
   const copy = fs.readFileSync(path.join(root, 'js', 'banking-pay-modal-v2-copy.js'), 'utf8');
   assert.match(copy, /Payment was originally PAYE\. Candidate is now paid through an umbrella company\./);
   assert.match(copy, /Payment was originally through an umbrella company\. Candidate is now PAYE\./);
+  const legacyDetails = source('banking-pay-modal-v2-details-legacy.js');
+  assert.match(legacyDetails, /Payment was originally PAYE\. Candidate is now paid through an umbrella company\./);
+  assert.match(legacyDetails, /Payment was originally through an umbrella company\. Candidate is now PAYE\./);
+  assert.doesNotMatch(legacyDetails, /currently determined as .* needs resolution to convert/i);
   assert.doesNotMatch(combined, /Insufficient recovery headroom/i);
 });
 

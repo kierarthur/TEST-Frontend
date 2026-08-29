@@ -107,10 +107,11 @@ test('shows the source amount and conversion direction for a pay-channel case re
   const route = helpers.getCaseResolutionPayRoutePresentation(unresolvedRecovery);
   assert.equal(route.source_pay_method, 'PAYE');
   assert.equal(route.target_pay_method, 'UMBRELLA');
-  assert.equal(route.direction_label, 'PAYE > UMBR');
+  assert.equal(route.direction_label, 'Payment was originally PAYE. Candidate is now paid through an umbrella company.');
+  assert.equal(route.action_description, 'Payment was originally PAYE. Candidate is now paid through an umbrella company. Choose how this payment should be handled.');
   assert.equal(route.nominal_amount, 25);
   assert.match(helpers.renderPreviewLineAmountHtml(unresolvedRecovery, 'CASES_RESOLUTIONS'), /<strong>PAYE<\/strong> £25\.00/);
-  assert.match(helpers.renderPreviewLineAmountHtml(unresolvedRecovery, 'CASES_RESOLUTIONS'), /currently determined as PAYE and needs resolution to convert it to Umbrella\./);
+  assert.match(helpers.renderPreviewLineAmountHtml(unresolvedRecovery, 'CASES_RESOLUTIONS'), /Payment was originally PAYE\. Candidate is now paid through an umbrella company\. Choose how this payment should be handled\./);
   assert.match(helpers.renderPreviewLineAmountHtml(unresolvedRecovery), />0\.00</);
 });
 
@@ -128,9 +129,10 @@ test('supports the reverse Umbrella to PAYE direction for non-recovery payment c
   };
 
   const route = helpers.getCaseResolutionPayRoutePresentation(unresolvedLoan);
-  assert.equal(route.direction_label, 'UMBR > PAYE');
+  assert.equal(route.direction_label, 'Payment was originally through an umbrella company. Candidate is now PAYE.');
+  assert.equal(route.action_description, 'Payment was originally through an umbrella company. Candidate is now PAYE. Choose how this payment should be handled.');
   assert.match(helpers.renderPreviewLineAmountHtml(unresolvedLoan, 'CASES_RESOLUTIONS'), /<strong>UMBRELLA<\/strong> £40\.00/);
-  assert.match(helpers.renderPreviewLineAmountHtml(unresolvedLoan, 'CASES_RESOLUTIONS'), /currently determined as Umbrella and needs resolution to convert it to PAYE\./);
+  assert.match(helpers.renderPreviewLineAmountHtml(unresolvedLoan, 'CASES_RESOLUTIONS'), /Payment was originally through an umbrella company\. Candidate is now PAYE\. Choose how this payment should be handled\./);
 });
 
 test('uses the source-to-target direction beneath Resolution required for both case row renderers', () => {
