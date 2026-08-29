@@ -323717,7 +323717,20 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const backendCanProcess = (isPlannedWeek && plannedContractWeekAuthorityComplete)
     ? plannedBackendCanProcess
     : readLifecycleFalseWins('can_process', 'canProcess');
-  const backendCanDelete = readLifecycleFalseWins('can_delete', 'canDelete');
+  // A canonically signed planned contract week has no physical Timesheet and
+  // therefore no Timesheet financial history. Its protected delete endpoint
+  // independently refuses the request if a Timesheet has since materialised.
+  // Do not apply this allowance to a physical Timesheet: those continue to
+  // require the fresh server delete preview and explicit can_delete authority.
+  const plannedBackendCanDelete = !!(
+    isPlannedWeek &&
+    plannedContractWeekAuthorityComplete &&
+    !hasTs &&
+    !!contractWeekId
+  );
+  const backendCanDelete = (isPlannedWeek && plannedContractWeekAuthorityComplete)
+    ? plannedBackendCanDelete
+    : readLifecycleFalseWins('can_delete', 'canDelete');
   const backendCanArchive = readLifecycleFalseWins('can_archive', 'canArchive');
   const backendCanUnarchive = readLifecycleFalseWins('can_unarchive', 'canUnarchive');
 

@@ -33,6 +33,8 @@ test('unassigned timesheets are read-only but retain guarded deletion', () => {
   assert.match(deleteExpression[1], /lifecycleAuthoritySatisfied/);
   assert.match(deleteExpression[1], /backendCanDelete === true/);
   assert.doesNotMatch(deleteExpression[1], /hasAssignedCandidate/);
+  assert.match(source, /const plannedBackendCanDelete = !!\([\s\S]*!hasTs[\s\S]*!!contractWeekId/);
+  assert.match(source, /isPlannedWeek && plannedContractWeekAuthorityComplete[\s\S]*plannedBackendCanDelete/);
 });
 
 test('unassigned overview removes candidate-dependent actions and uses friendly wording', () => {

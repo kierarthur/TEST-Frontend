@@ -80,6 +80,16 @@ test('footer allows planned Process only with the separate planned authority', (
   assert.match(source, /const localCanUnprocess[\s\S]*hasTs/);
 });
 
+test('footer allows planned Delete only for the signed row that still has no Timesheet', () => {
+  const source = section(
+    'function getCanonicalTimesheetFooterState',
+    'function setFormReadOnly'
+  );
+  assert.match(source, /const plannedBackendCanDelete = !!\([\s\S]*isPlannedWeek[\s\S]*plannedContractWeekAuthorityComplete[\s\S]*!hasTs[\s\S]*!!contractWeekId/);
+  assert.match(source, /isPlannedWeek && plannedContractWeekAuthorityComplete[\s\S]*plannedBackendCanDelete[\s\S]*readLifecycleFalseWins\('can_delete'/);
+  assert.match(source, /const canonicalCanDelete = !!\([\s\S]*lifecycleAuthoritySatisfied[\s\S]*backendCanDelete === true[\s\S]*localCanDelete/);
+});
+
 test('planned Process carries the contract-week signature into the atomic create', () => {
   const marker = "if (isWeeklyPlannedManualX) {";
   const start = main.indexOf(marker, main.indexOf('// ── Process Timesheet ──'));
