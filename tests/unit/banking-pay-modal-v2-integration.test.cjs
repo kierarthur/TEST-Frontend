@@ -21,6 +21,28 @@ test('the contained shell cannot render before capability agreement',()=>{
   assert.equal(integration.renderShell(model({session_version:-1})),null);
 });
 
+test('the pre-session presentation is one v2-shaped loading surface and never the retired Banking views',()=>{
+  assert.equal(integration.renderBootstrapShell({enabled:false,pay_channel_scope:'ALL'}),null);
+  const html=integration.renderBootstrapShell({enabled:true,pay_channel_scope:'ALL'});
+  assert.match(html,/data-bpv2-bootstrap="1"/);
+  assert.match(html,/Loading Banking Pay/);
+  assert.match(html,/Loading Ready to Pay/);
+  assert.match(html,/Ready to Pay/);
+  assert.match(html,/Action Required/);
+  assert.match(html,/Blocked for Pay/);
+  assert.doesNotMatch(html,/Create payment batch|Cases \/ Resolutions|Name check|Funding required|Not connected/);
+  assert.doesNotMatch(html,/data-bpv2-shell="1"/);
+});
+
+test('the pre-session presentation exposes a contained retry state without enabling financial actions',()=>{
+  const html=integration.renderBootstrapShell({enabled:true,pay_channel_scope:'PAYE',error_message:'transport detail',retry_action:'banking:pay:refreshAll'});
+  assert.match(html,/Banking Pay could not refresh/);
+  assert.match(html,/data-action="banking:pay:refreshAll"/);
+  assert.match(html,/Create drafts<\/button>/);
+  assert.doesNotMatch(html,/transport detail/);
+  assert.equal((html.match(/disabled/g)||[]).length>=6,true);
+});
+
 test('the contained shell retains the original Draft, filter and export actions',()=>{
   const html=integration.renderShell(model());
   assert.match(html,/data-bpv2-shell="1"/);
@@ -130,11 +152,18 @@ test('background Pay rerenders refresh an open v2 child in place',()=>{
   const mainSource=fs.readFileSync(path.join(root,'js','main.js'),'utf8');
   assert.match(controllerSource,/refreshCurrentAuthority:queue\.refreshAfterFailure/);
   assert.match(integrationSource,/async refreshOpenSurface\(\)/);
-  assert.match(integrationSource,/controller\.snapshot\(\)\?\.ui\?\.surface==='main'\)return controller\.isBusy\(\)/);
+  assert.match(integrationSource,/controller\.snapshot\(\)\?\.ui\?\.surface==='main'&&controller\.isBusy\(\)\)return true/);
   assert.match(integrationSource,/controller\.refreshCurrentAuthority\(\)/);
   assert.match(integrationSource,/surfaceName==='candidate'/);
   assert.match(integrationSource,/surfaceName==='actions'\|\|surfaceName==='actionDetail'/);
   assert.match(integrationSource,/surfaceName==='blocked'\|\|surfaceName==='blockedDetail'/);
   assert.match(mainSource,/CloudTMSBankingPayModalV2Integration\.refreshOpenSurface\(\)/);
   assert.match(mainSource,/if \(refreshedOpenSurface\)[\s\S]{0,260}return true;/);
+});
+
+test('capability discovery keeps the bootstrap mounted until the existing Workbench session can render v2',()=>{
+  const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
+  assert.match(source,/const bootstrap=.*data-bpv2-bootstrap/);
+  assert.match(source,/if\(slot\.available===true\)\{if\(!bootstrap\)await context\.rerender\('pay'\);return true;\}/);
+  assert.match(source,/if\(bootstrap\)await context\.rerender\('pay'\);return false/);
 });

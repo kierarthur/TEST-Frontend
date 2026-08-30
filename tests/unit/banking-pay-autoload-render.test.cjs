@@ -27,3 +27,17 @@ test('Banking Pay autoload renders the loading state once and lets each authorit
   assert.doesNotMatch(autoload, /Promise\.resolve\(listPromise\)\.then\(async/);
   assert.doesNotMatch(autoload, /Promise\.resolve\(previewPromise\)\.then\(async/);
 });
+
+test('Banking Pay opens on one stable v2 loading presentation and does not publish a final wrapper repaint', () => {
+  const renderBanking = sliceBetween('function renderBankingTab(key, row, renderOptions = {}) {', 'function bankingIdRunPrint(selectedRun)');
+  assert.match(renderBanking, /renderBootstrapShell\(\{/);
+  assert.match(renderBanking, /if \(notReady\) \{[\s\S]*safeKey === 'pay'[\s\S]*return bootstrap/);
+  assert.match(renderBanking, /payBootstrapVisible/);
+
+  const openBanking = sliceBetween('async function openBanking(startTabKey = \'pay\') {', 'async function openOutboxDetailModal');
+  assert.match(openBanking, /CloudTMSBankingPayModalV2Integration\.refreshOpenSurface\(\)/);
+  const afterAutoload = openBanking.slice(openBanking.indexOf('await maybeAutoloadPayWorkbench();'));
+  const beforeCatch = afterAutoload.slice(0, afterAutoload.indexOf('} catch (e)'));
+  assert.doesNotMatch(beforeCatch, /await safeRerender\(\)/);
+  assert.doesNotMatch(openBanking, /Final rerender in case list\/preview/);
+});

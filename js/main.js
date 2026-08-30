@@ -45192,6 +45192,24 @@ function renderBankingTab(key, row, renderOptions = {}) {
 
   const notReady = busy || !capsRaw || !settingsObj || !settingsRaw;
 
+  const renderPayBootstrap = (retryAction = 'banking:retry-boot') => {
+    try {
+      const wizard = st?.pay?.draftWizard;
+      const slot = (wizard?.workbench_v2 && typeof wizard.workbench_v2 === 'object') ? wizard.workbench_v2 : {};
+      const enabled = slot.checked !== true || slot.available === true;
+      return window.CloudTMSBankingPayModalV2Integration?.renderBootstrapShell({
+        enabled,
+        pay_channel_scope: ['ALL', 'PAYE', 'UMBRELLA'].includes(String(st?.pay?.scopePreset || '').trim().toUpperCase())
+          ? String(st.pay.scopePreset).trim().toUpperCase()
+          : 'ALL',
+        error_message: String(st?.ui?.globalError || '').trim(),
+        retry_action: retryAction
+      }) || '';
+    } catch {
+      return '';
+    }
+  };
+
   // ✅ Ensure ID state scaffolding exists for render-only usage (handlers will also seed this)
   try { st.id = (st.id && typeof st.id === 'object') ? st.id : {}; } catch {}
   try { st.id.preview = (st.id.preview && typeof st.id.preview === 'object') ? st.id.preview : { data: null, loading: false, error: '' }; } catch {}
@@ -45231,7 +45249,13 @@ function renderBankingTab(key, row, renderOptions = {}) {
   } catch {}
 
   const tabContent = (() => {
-    if (notReady) return skeletonHtml;
+    if (notReady) {
+      if (safeKey === 'pay') {
+        const bootstrap = renderPayBootstrap('banking:retry-boot');
+        if (bootstrap) return bootstrap;
+      }
+      return skeletonHtml;
+    }
 
     const callIfFn = (fnName, ...args) => {
       try {
@@ -45894,7 +45918,8 @@ function renderBankingTab(key, row, renderOptions = {}) {
   })();
 
   if (embedded) return tabContent;
-  const visibleHeaderChips = safeKey === 'pay' && isHealthy ? '' : headerChips;
+  const payBootstrapVisible = safeKey === 'pay' && /data-bpv2-bootstrap="1"/.test(tabContent);
+  const visibleHeaderChips = safeKey === 'pay' && (isHealthy || payBootstrapVisible) ? '' : headerChips;
   return `
     <div class="tabc banking-modal-content">
       ${visibleHeaderChips}
@@ -58991,6 +59016,19 @@ const renderReadyTimesheetGroupedRows = (lines) => {
       progress_html: previewProgressHtml
     });
     if (bankingPayV2Shell) return bankingPayV2Shell;
+
+    // While capability or the existing Workbench session is still being
+    // established, keep one stable v2-shaped loading surface on screen. The
+    // legacy Workbench continues to build the same server authority in the
+    // background and remains the controlled fallback only after an explicit
+    // capability failure.
+    const bankingPayV2Bootstrap = window.CloudTMSBankingPayModalV2Integration?.renderBootstrapShell({
+      enabled: wiz.workbench_v2?.checked !== true || wiz.workbench_v2?.available === true,
+      pay_channel_scope: draftScope,
+      error_message: trimStr(pvErr || cdErr || ''),
+      retry_action: 'banking:pay:refreshAll'
+    });
+    if (bankingPayV2Bootstrap) return bankingPayV2Bootstrap;
   } catch {}
 
   return `
@@ -143084,6 +143122,10 @@ async function openBanking(startTabKey = 'pay') {
           ? window.modalCtx.banking
           : null;
         const k = String(bankingState?.ui?.activeTabKey || 'pay').trim() || 'pay';
+        if (k === 'pay' && typeof window.CloudTMSBankingPayModalV2Integration?.refreshOpenSurface === 'function') {
+          const refreshedOpenSurface = await window.CloudTMSBankingPayModalV2Integration.refreshOpenSurface();
+          if (refreshedOpenSurface) return;
+        }
         fr._suppressDirty = true;
         await fr.setTab(k);
         fr._suppressDirty = false;
@@ -143684,9 +143726,6 @@ function buildTimesheetSummaryFilterSpec(input = {}) {
 
         // ✅ Auto-load: batches list + preview (once per modal open)
         await maybeAutoloadPayWorkbench();
-
-        // Final rerender in case list/preview updated state without re-rendering
-        await safeRerender();
 
       } catch (e) {
         if (!stillActive()) return;

@@ -27,6 +27,15 @@
 .bpv2-notice-stack>.error{border:1px solid rgba(248,113,113,.6)!important;background:rgba(127,29,29,.28)!important;color:#fecaca!important}
 .bpv2-notice-stack [data-banking-active-draft-create-status="true"]{border-color:rgba(129,140,248,.55)!important;background:rgba(49,46,129,.28)!important}
 .bpv2-notice-stack .mini{white-space:normal}
+.bpv2-bootstrap-notice{display:flex;align-items:center;gap:10px;min-height:50px;padding:10px 12px;border:1px solid rgba(56,189,248,.38);border-radius:8px;background:rgba(8,47,73,.3);color:#bae6fd}
+.bpv2-bootstrap-notice>div{display:grid;gap:2px;min-width:0}
+.bpv2-bootstrap-notice strong{color:var(--ctms-modal-text,#f8fafc)}
+.bpv2-bootstrap-notice span{color:var(--ctms-modal-sub,#aebed2);font-size:12px}
+.bpv2-bootstrap-notice .btn{margin-left:auto;flex:0 0 auto}
+.bpv2-bootstrap-notice--error{border-color:rgba(248,113,113,.6);background:rgba(127,29,29,.28);color:#fecaca}
+.bpv2-bootstrap-spinner{display:block!important;width:16px;height:16px;flex:0 0 16px;border:2px solid rgba(186,230,253,.28);border-top-color:#7dd3fc;border-radius:50%;animation:bpv2-bootstrap-spin .8s linear infinite}
+.banking-pay-v2-bootstrap .banking-pay-v2-surface{min-height:88px;border:1px solid var(--ctms-modal-line-soft,rgba(111,139,178,.2));border-radius:9px;background:rgba(8,25,45,.28)}
+@keyframes bpv2-bootstrap-spin{to{transform:rotate(360deg)}}
 .banking-pay-v2-section-nav{display:flex;align-items:flex-end;gap:22px;border-bottom:1px solid var(--ctms-modal-line,#2b405d);min-height:42px}
 .banking-pay-v2-section-nav button{appearance:none;display:inline-flex;align-items:center;gap:6px;min-height:42px;margin:0;padding:0 1px;border:0;border-bottom:3px solid transparent;border-radius:0;background:transparent;color:var(--ctms-modal-sub,#aebed2);font:inherit;font-size:13px;cursor:pointer}
 .banking-pay-v2-section-nav button:hover{color:var(--ctms-modal-text,#f8fafc)}

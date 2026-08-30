@@ -17,6 +17,13 @@
   const exactInt=value=>Number.isSafeInteger(Number(value))&&Number(value)>=0?Number(value):null;
   const shouldLockControls=value=>value?.busy===true&&value?.read_only_navigation!==true;
   let mounted=null;
+  function scopeBadges(scope){
+    return scope==='ALL'
+      ? '<span class="bpv2-scope-badge bpv2-scope-badge--paye">PAYE</span><span class="bpv2-scope-badge bpv2-scope-badge--umbrella">Umbrella</span>'
+      : scope==='PAYE'
+        ? '<span class="bpv2-scope-badge bpv2-scope-badge--paye">PAYE</span>'
+        : '<span class="bpv2-scope-badge bpv2-scope-badge--umbrella">Umbrella</span>';
+  }
   function stateSlot(state){
     if(!object(state))return null;
     state.pay=object(state.pay)?state.pay:{};state.pay.draftWizard=object(state.pay.draftWizard)?state.pay.draftWizard:{};
@@ -29,11 +36,7 @@
     const create=model.create_button;
     if(!object(create)||typeof create.label!=='string'||typeof create.title!=='string'||typeof create.ready_label!=='string'
       ||typeof create.ready_title!=='string'||typeof create.disabled!=='boolean'||typeof create.paye_guard_allows_create!=='boolean')return null;
-    const scopeBadges=model.pay_channel_scope==='ALL'
-      ? '<span class="bpv2-scope-badge bpv2-scope-badge--paye">PAYE</span><span class="bpv2-scope-badge bpv2-scope-badge--umbrella">Umbrella</span>'
-      : model.pay_channel_scope==='PAYE'
-        ? '<span class="bpv2-scope-badge bpv2-scope-badge--paye">PAYE</span>'
-        : '<span class="bpv2-scope-badge bpv2-scope-badge--umbrella">Umbrella</span>';
+    const badges=scopeBadges(model.pay_channel_scope);
     const summaryParts=String(model.filter_summary||'').split('•').map(value=>value.trim()).filter(Boolean);
     const conciseScope=summaryParts.filter((value,index)=>index>0&&!/^(both\s+)?paye\s*\+\s*umbrella$/i.test(value)).join('<span aria-hidden="true">·</span>');
     return `<section class="banking-pay-v2-shell" id="bankingPayNewBatchWizard"
@@ -41,7 +44,7 @@
       data-progress-counter-version="${exactInt(model.progress_counter_version)}" data-pay-channel-scope="${esc(model.pay_channel_scope)}">
       <div class="banking-pay-v2-shell-inner">
         <header class="banking-pay-v2-shell-header"><div><h2>Banking Pay</h2>
-          <div class="banking-pay-scope-summary" aria-label="Current Banking Pay filters">${scopeBadges}${conciseScope||'<span>All candidates</span><span aria-hidden="true">·</span><span>All clients</span>'}</div></div>
+          <div class="banking-pay-scope-summary" aria-label="Current Banking Pay filters">${badges}${conciseScope||'<span>All candidates</span><span aria-hidden="true">·</span><span>All clients</span>'}</div></div>
           <div class="banking-pay-v2-shell-actions">
             <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:openFiltersModal" title="Open Banking Pay filters">Filters</button>
             <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:exportReadyToPayCsv" title="Export all current Ready to Pay payments">Export CSV</button>
@@ -63,6 +66,33 @@
         <p class="bpv2-shell-status" role="status" aria-live="polite">Loading Ready to Pay…</p>
         <div class="banking-pay-v2-surface" data-bpv2-surface></div>
         <div class="banking-pay-v2-child-host" data-bpv2-child-host role="dialog" aria-modal="true" aria-label="Banking Pay detail" hidden></div>
+      </div></section>`;
+  }
+  function renderBootstrapShell(model={}){
+    if(model.enabled!==true)return null;
+    const scope=['ALL','PAYE','UMBRELLA'].includes(model.pay_channel_scope)?model.pay_channel_scope:'ALL';
+    const message=String(model.error_message||'').trim();
+    const retryAction=String(model.retry_action||'').trim();
+    const notice=message
+      ? `<div class="bpv2-bootstrap-notice bpv2-bootstrap-notice--error" role="alert"><div><strong>Banking Pay could not refresh</strong><span>CloudTMS could not load the latest payment information. No Draft has been created.</span></div>${retryAction?`<button type="button" class="btn btn-sm btn-outline" data-action="${esc(retryAction)}">Try again</button>`:''}</div>`
+      : '<div class="bpv2-bootstrap-notice" role="status" aria-live="polite"><span class="bpv2-bootstrap-spinner" aria-hidden="true"></span><div><strong>Loading Banking Pay</strong><span>Checking the latest payment information…</span></div></div>';
+    return `<section class="banking-pay-v2-shell banking-pay-v2-bootstrap" id="bankingPayNewBatchWizard" data-bpv2-bootstrap="1" aria-busy="${message?'false':'true'}">
+      <div class="banking-pay-v2-shell-inner">
+        <header class="banking-pay-v2-shell-header"><div><h2>Banking Pay</h2>
+          <div class="banking-pay-scope-summary" aria-label="Current Banking Pay filters">${scopeBadges(scope)}<span>All candidates</span><span aria-hidden="true">·</span><span>All clients</span></div></div>
+          <div class="banking-pay-v2-shell-actions" aria-label="Banking Pay actions are available after loading">
+            <button type="button" class="btn btn-sm btn-outline" disabled aria-disabled="true">Filters</button>
+            <button type="button" class="btn btn-sm btn-outline" disabled aria-disabled="true">Export CSV</button>
+            <button type="button" class="btn btn-sm btn-primary disabled" disabled aria-disabled="true">Create drafts</button>
+          </div></header>
+        <div class="bpv2-notice-stack">${notice}</div>
+        <nav class="banking-pay-v2-section-nav" aria-label="Banking Pay lists">
+          <button type="button" aria-current="page" disabled>Ready to Pay</button>
+          <button type="button" disabled>Action Required</button>
+          <button type="button" disabled>Blocked for Pay</button>
+        </nav>
+        <p class="bpv2-shell-status" role="status" aria-live="polite">${message?'Banking Pay is waiting to be refreshed.':'Loading Ready to Pay…'}</p>
+        <div class="banking-pay-v2-surface" aria-hidden="true"></div>
       </div></section>`;
   }
   function readSessionFromShell(shell){
@@ -328,7 +358,7 @@
       // An opening child still reports the accepted main surface until its
       // bounded read adopts. Keep that in-flight navigation mounted so a
       // background legacy rerender cannot win the race and discard it.
-      if(controller.snapshot()?.ui?.surface==='main')return controller.isBusy();
+      if(controller.snapshot()?.ui?.surface==='main'&&controller.isBusy())return true;
       const result=await controller.refreshCurrentAuthority();return result?.state!=='CLOSED';
     },close(){controller?.close();document.body?.classList?.remove('bpv2-child-open');childHost.remove();for(const presenter of Object.values(presenters))
       (presenter?.value||presenter)?.destroy?.();}};
@@ -358,14 +388,16 @@
       ||typeof context.invokeLegacy!=='function'||typeof context.openTimesheets!=='function'||typeof context.newRequestId!=='function')return false;
     const state=context.state,slot=stateSlot(state);if(!slot)return false;
     const shell=context.document?.querySelector?.('[data-bpv2-shell="1"]')||root.document?.querySelector?.('[data-bpv2-shell="1"]');
+    const bootstrap=context.document?.querySelector?.('[data-bpv2-bootstrap="1"]')||root.document?.querySelector?.('[data-bpv2-bootstrap="1"]');
     if(shell){await mount(shell,context,state);return true;}
     if(mounted){mounted.close();mounted=null;}
-    if(slot.available===true){await context.rerender('pay');return true;}
+    if(slot.available===true){if(!bootstrap)await context.rerender('pay');return true;}
     if(slot.checked===true)return false;
-    if(await checkCapability(context,state)){await context.rerender('pay');return true;}return false;
+    if(await checkCapability(context,state)){if(!bootstrap)await context.rerender('pay');return true;}
+    if(bootstrap)await context.rerender('pay');return false;
   }
   function reset(){mounted?.close();mounted=null;}
   async function refreshOpenSurface(){return Boolean(await mounted?.refreshOpenSurface?.());}
-  const api=Object.freeze({renderShell,afterRender,refreshOpenSurface,reset,stateSlot,readSessionFromShell,applyLegacyAuthority,shouldLockControls});
+  const api=Object.freeze({renderShell,renderBootstrapShell,afterRender,refreshOpenSurface,reset,stateSlot,readSessionFromShell,applyLegacyAuthority,shouldLockControls});
   if(local)module.exports=api;else root.CloudTMSBankingPayModalV2Integration=api;
 })(typeof window==='object'?window:this);
