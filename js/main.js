@@ -45920,10 +45920,15 @@ function renderBankingTab(key, row, renderOptions = {}) {
   if (embedded) return tabContent;
   const payBootstrapVisible = safeKey === 'pay' && /data-bpv2-bootstrap="1"/.test(tabContent);
   const visibleHeaderChips = safeKey === 'pay' && (isHealthy || payBootstrapVisible) ? '' : headerChips;
+  // Banking Pay owns its own bounded loading, warning and failure presentation.
+  // The shared Banking banners belong to the other Banking sheets; publishing
+  // them beside the v2 Pay surface briefly resurrects the retired Name check /
+  // Funding required screen while capabilities are still being established.
+  const visibleBannersHtml = safeKey === 'pay' ? '' : bannersHtml;
   return `
     <div class="tabc banking-modal-content">
       ${visibleHeaderChips}
-      ${bannersHtml}
+      ${visibleBannersHtml}
       ${tabContent}
     </div>
   `;

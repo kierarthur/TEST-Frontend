@@ -33,6 +33,9 @@ test('Banking Pay opens on one stable v2 loading presentation and does not publi
   assert.match(renderBanking, /renderBootstrapShell\(\{/);
   assert.match(renderBanking, /if \(notReady\) \{[\s\S]*safeKey === 'pay'[\s\S]*return bootstrap/);
   assert.match(renderBanking, /payBootstrapVisible/);
+  assert.match(renderBanking, /const visibleBannersHtml = safeKey === 'pay' \? '' : bannersHtml/);
+  assert.match(renderBanking, /\$\{visibleBannersHtml\}[\s\S]*\$\{tabContent\}/);
+  assert.doesNotMatch(renderBanking, /\$\{bannersHtml\}[\s\S]*\$\{tabContent\}/);
 
   const openBanking = sliceBetween('async function openBanking(startTabKey = \'pay\') {', 'async function openOutboxDetailModal');
   assert.match(openBanking, /CloudTMSBankingPayModalV2Integration\.refreshOpenSurface\(\)/);
