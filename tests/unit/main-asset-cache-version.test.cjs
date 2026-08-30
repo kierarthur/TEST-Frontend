@@ -23,7 +23,7 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   assert.match(html, /candidate-office-reminder-workspace-v1\.js\?v=20260814-r2/);
   assert.match(html, /candidate-office-presenter-v1\.js\?v=20260828-daily-receipt/);
   assert.match(html, /candidate-office-bridge-v1\.js\?v=20260814-r6/);
-  assert.match(html, /modal-modernisation\.css\?v=20260830-r18/);
+  assert.match(html, /modal-modernisation\.css\?v=20260830-r19/);
   assert.match(html, /summary-modernisation\.css\?v=20260824-r7/);
   assert.match(html, /summary-modernisation\.js\?v=20260822-r2/);
   assert.match(html, /modal-modernisation\.js\?v=20260828-record-r3/);
@@ -37,7 +37,7 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   assert.match(html, /banking-pay-modal-v2-integration\.js\?v=20260830-r2/);
   assert.match(html, /candidate-finance-summary=20260828-r1/);
   assert.match(html, /record-modal-layout\.js\?v=20260828-r2/);
-  assert.match(html, /mytms-office-v1\.js\?v=20260824-candidate-status-r4/);
+  assert.match(html, /mytms-office-v1\.js\?v=20260830-directory-r1/);
   assert.match(html, /modal-summary-final=20260824-r2/);
   assert.match(html, /contract-workflow=20260828-r1/);
   assert.match(html, /rate-presets=20260827-r1/);

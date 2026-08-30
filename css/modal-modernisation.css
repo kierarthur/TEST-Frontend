@@ -1053,6 +1053,170 @@
   box-shadow: none !important;
 }
 
+#modal[data-uicf-kind="mytms-app-settings"] .mytms-directory {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+}
+
+#modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-intro,
+#modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-section {
+  margin: 0;
+  border: 1px solid rgba(124, 153, 211, .22);
+  background: linear-gradient(145deg, rgba(20, 43, 74, .96), rgba(12, 29, 52, .98));
+  box-shadow: 0 18px 44px rgba(0, 8, 25, .18);
+}
+
+#modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+#modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-intro h3,
+#modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-section h3 {
+  margin: 3px 0 5px;
+  color: #fff;
+}
+
+#modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-intro p,
+#modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-section__head p {
+  margin: 0;
+  color: rgba(224, 234, 250, .76);
+}
+
+.mytms-directory-card__eyebrow {
+  display: block;
+  color: #8db1ff;
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.mytms-directory-version {
+  flex: 0 0 auto;
+  padding: 7px 11px;
+  border: 1px solid rgba(141, 177, 255, .35);
+  border-radius: 999px;
+  background: rgba(74, 111, 201, .13);
+  color: #cbdcff;
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+#modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-section__head,
+.mytms-directory-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.mytms-directory-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.mytms-directory-card {
+  padding: 16px;
+  border: 1px solid rgba(151, 178, 226, .22);
+  border-radius: 14px;
+  background: rgba(4, 18, 36, .58);
+}
+
+.mytms-directory-card__head strong {
+  display: block;
+  margin-top: 3px;
+  color: #f6f9ff;
+  overflow-wrap: anywhere;
+}
+
+.mytms-directory-card__actions {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mytms-directory-remove {
+  border-color: rgba(244, 96, 119, .45) !important;
+  color: #ffb4c0 !important;
+}
+
+.mytms-directory-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.mytms-directory-field {
+  min-width: 0;
+}
+
+.mytms-directory-field--wide {
+  grid-column: 1 / -1;
+}
+
+.mytms-directory-field label {
+  display: block;
+  margin-bottom: 6px;
+  color: #dce8ff;
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.mytms-directory-field textarea {
+  resize: vertical;
+  min-height: 76px;
+}
+
+.mytms-directory-empty {
+  padding: 26px 18px;
+  border: 1px dashed rgba(141, 177, 255, .34);
+  border-radius: 14px;
+  color: rgba(224, 234, 250, .76);
+  text-align: center;
+  background: rgba(4, 18, 36, .35);
+}
+
+.mytms-directory-note {
+  margin: 0;
+  padding: 0 5px;
+  color: rgba(224, 234, 250, .65);
+  font-size: .78rem;
+}
+
+@media (max-width: 700px) {
+  #modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-intro,
+  #modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-section__head,
+  .mytms-directory-card__head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  #modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-section__head .btn,
+  .mytms-directory-card__actions {
+    width: 100%;
+  }
+
+  .mytms-directory-card__actions > .btn {
+    min-height: 44px;
+    flex: 1 1 64px;
+  }
+
+  .mytms-directory-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mytms-directory-field--wide {
+    grid-column: auto;
+  }
+}
+
 #modal[data-uicf-kind^="mytms-"] #modalBody .card > .row {
   display: block;
   padding: 0;

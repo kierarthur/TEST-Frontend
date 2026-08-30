@@ -116,8 +116,29 @@ const homeAnnouncement = {
   updated_at_utc: '2026-08-25T12:00:00Z'
 };
 
-async function installReadOnlyApi(page: Page) {
-  const observed = { settingsReads: 0, managerReads: 0, homeReads: 0, previews: 0, managerPreviews: 0, homePreviews: 0, writes: 0 };
+const dailyInformation = {
+  ok: true,
+  version: 4,
+  hospital_addresses: [{
+    hospital_name: 'North General Hospital',
+    address: '1 Health Street\nLondon\nN1 1AA',
+    telephone: '020 7123 4567',
+    map_query: 'North General Hospital, N1 1AA'
+  }],
+  accommodation_contacts: [{
+    hospital_name: 'North General Hospital',
+    office_name: 'Staff accommodation office',
+    address: 'Residences Building, 2 Health Street',
+    telephone: '020 7987 6543',
+    email: 'housing@example.invalid',
+    working_hours: 'Monday to Friday\n09:00–17:00'
+  }],
+  semantic_sha256_hex: 'd'.repeat(64),
+  updated_at_utc: '2026-08-30T03:00:00Z'
+};
+
+async function installReadOnlyApi(page: Page, options: { directoryWrite?: boolean } = {}) {
+  const observed = { settingsReads: 0, managerReads: 0, homeReads: 0, directoryReads: 0, directoryWrites: 0, lastDirectoryWrite: null as null | Record<string, unknown>, previews: 0, managerPreviews: 0, homePreviews: 0, writes: 0 };
   await page.route(`${testBackend}/api/mytms/**`, async (route: Route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -150,6 +171,22 @@ async function installReadOnlyApi(page: Page) {
     if (path === '/api/mytms/home-announcement' && request.method() === 'GET') {
       observed.homeReads += 1;
       return reply(homeAnnouncement);
+    }
+    if (path === '/api/mytms/daily-information' && request.method() === 'GET') {
+      observed.directoryReads += 1;
+      return reply(dailyInformation);
+    }
+    if (path === '/api/mytms/daily-information' && request.method() === 'PUT'
+        && options.directoryWrite) {
+      observed.directoryWrites += 1;
+      observed.lastDirectoryWrite = request.postDataJSON();
+      return reply({
+        ...dailyInformation,
+        ...observed.lastDirectoryWrite,
+        version: dailyInformation.version + 1,
+        semantic_sha256_hex: 'e'.repeat(64),
+        idempotent_replay: false
+      });
     }
     if (path === '/api/mytms/home-announcement/preview' && request.method() === 'POST') {
       observed.homePreviews += 1;
@@ -237,9 +274,19 @@ for (const viewport of [
     await modal.getByRole('button', { name: 'Preview on Candidate Home', exact: true }).click();
     await expect(modal.locator('[data-mytms-home-preview-text]')).toHaveText(homeAnnouncement.announcement_text);
 
+    await modal.getByRole('button', { name: 'Places & contacts', exact: true }).click();
+    await expect(modal.getByRole('heading', { name: 'Hospital addresses and accommodation contacts', exact: true })).toBeVisible();
+    await expect(modal.getByLabel('Hospital name').first()).toHaveValue('North General Hospital');
+    await expect(modal.getByLabel('Address').first()).toHaveValue('1 Health Street\nLondon\nN1 1AA');
+    await expect(modal.getByLabel('Accommodation office')).toHaveValue('Staff accommodation office');
+    await expect(modal.getByLabel('Email')).toHaveValue('housing@example.invalid');
+    await expect(modal.getByRole('button', { name: 'Add hospital', exact: true })).toBeVisible();
+    await expect(modal.getByRole('button', { name: 'Add accommodation office', exact: true })).toBeVisible();
+
     expect(observed.settingsReads).toBe(1);
     expect(observed.managerReads).toBe(1);
     expect(observed.homeReads).toBe(1);
+    expect(observed.directoryReads).toBe(1);
     expect(observed.previews).toBe(1);
     expect(observed.managerPreviews).toBe(1);
     expect(observed.homePreviews).toBe(1);
@@ -253,6 +300,48 @@ for (const viewport of [
     expect(bounds.right).toBeLessThanOrEqual(bounds.width + 1);
   });
 }
+
+test('Places and contacts saves only its structured versioned payload', async ({ page }) => {
+  await page.setViewportSize({ width: 412, height: 915 });
+  await installLocalAssets(page);
+  const observed = await installReadOnlyApi(page, { directoryWrite: true });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
+  await page.locator('[data-section-key="settings"]').click();
+  const menu = page.locator('#__settingsMenu');
+  await menu.getByRole('button', { name: /MyTMS App Settings/ }).click();
+  const modal = page.locator('#modal');
+  await modal.getByRole('button', { name: 'Places & contacts', exact: true }).click();
+  await modal.getByLabel('Telephone').first().fill('020 7000 1111');
+  await modal.getByRole('button', { name: 'Add accommodation office', exact: true }).click();
+  await modal.getByLabel('Hospital name').last().fill('South Community Hospital');
+  await modal.getByLabel('Accommodation office').last().fill('Residences team');
+  await modal.getByLabel('Working hours').last().fill('Every day\n08:00–20:00');
+  await modal.getByRole('button', { name: 'Save', exact: true }).click();
+
+  await expect.poll(() => observed.directoryWrites).toBe(1);
+  expect(observed.lastDirectoryWrite).toMatchObject({
+    expected_version: 4,
+    hospital_addresses: [{
+      hospital_name: 'North General Hospital', telephone: '020 7000 1111'
+    }]
+  });
+  const body = observed.lastDirectoryWrite as {
+    idempotency_key?: string;
+    accommodation_contacts?: Array<Record<string, string>>;
+  };
+  expect(body.idempotency_key).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(body.accommodation_contacts).toHaveLength(2);
+  expect(body.accommodation_contacts?.[1]).toMatchObject({
+    hospital_name: 'South Community Hospital',
+    office_name: 'Residences team',
+    working_hours: 'Every day\n08:00–20:00'
+  });
+  expect(Object.keys(observed.lastDirectoryWrite || {}).sort()).toEqual([
+    'accommodation_contacts', 'expected_version', 'hospital_addresses', 'idempotency_key'
+  ]);
+  await expect(modal.getByText('Version 5', { exact: true })).toBeVisible();
+});
 
 test('Candidate MyTMS status is compact, human-readable and truthful', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });

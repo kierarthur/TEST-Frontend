@@ -7,6 +7,8 @@
     managerSettingsError: null,
     homeAnnouncement: null,
     homeAnnouncementError: null,
+    dailyInformation: null,
+    dailyInformationError: null,
     managerSubmissionType: 'TIMESHEET',
     managerMailKind: 'INITIAL',
     activeSettingsTab: 'general',
@@ -69,6 +71,7 @@
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ announcement_text: String(announcementText ?? '') })
   });
+  const dailyInformationGet = () => api('/api/mytms/daily-information');
   const candidateStatus = (candidateId) => api(
     `/api/mytms/candidates/${encodeURIComponent(text(candidateId))}/status`
   );
@@ -130,6 +133,51 @@
     });
     state.homeAnnouncement = { ...result };
     global.showModalHint?.(`Home announcement version ${result.version} saved.`, 'ok');
+    return { ok: true };
+  }
+
+  function directoryValidation() {
+    if (!state.dailyInformation) return 'The places and contacts directory is unavailable.';
+    const hospitalNames = new Set();
+    for (const entry of state.dailyInformation.hospital_addresses || []) {
+      if (!text(entry.hospital_name) || !text(entry.address)) {
+        return 'Every hospital needs a hospital name and address.';
+      }
+      const key = text(entry.hospital_name).toLowerCase();
+      if (hospitalNames.has(key)) return 'Each hospital name can appear only once.';
+      hospitalNames.add(key);
+    }
+    const accommodationNames = new Set();
+    for (const entry of state.dailyInformation.accommodation_contacts || []) {
+      if (!text(entry.hospital_name) || !text(entry.office_name)) {
+        return 'Every accommodation contact needs a hospital and office name.';
+      }
+      const key = `${text(entry.hospital_name).toLowerCase()}\n${text(entry.office_name).toLowerCase()}`;
+      if (accommodationNames.has(key)) {
+        return 'Each accommodation office can appear only once for a hospital.';
+      }
+      accommodationNames.add(key);
+    }
+    return '';
+  }
+
+  async function dailyInformationSave() {
+    const validation = directoryValidation();
+    if (validation) {
+      global.showModalHint?.(validation, 'err');
+      return { ok: false };
+    }
+    const result = await api('/api/mytms/daily-information', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expected_version: Number(state.dailyInformation.version),
+        idempotency_key: uuid(),
+        hospital_addresses: state.dailyInformation.hospital_addresses,
+        accommodation_contacts: state.dailyInformation.accommodation_contacts
+      })
+    });
+    state.dailyInformation = { ...result };
+    global.showModalHint?.(`Places and contacts version ${result.version} saved.`, 'ok');
     return { ok: true };
   }
 
@@ -224,6 +272,7 @@
     if (tabKey === 'reminder') return editorPanel('reminder');
     if (tabKey === 'manager-email') return managerEmailPanel();
     if (tabKey === 'home') return homeAnnouncementPanel();
+    if (tabKey === 'daily-information') return dailyInformationPanel();
     return `
       <div class="card">
         <h3 style="margin-top:0;">Agency invitation policy</h3>
@@ -314,6 +363,60 @@
         <div class="mini" style="margin-bottom:6px;">Candidate Home preview</div>
         <div data-mytms-home-preview-text style="white-space:pre-wrap;"></div>
       </div>
+    </div>`;
+  }
+
+  function directoryInput(kind, index, key, label, value, options = {}) {
+    const id = `mytms-directory-${kind}-${index}-${key}`;
+    const input = options.multiline
+      ? `<textarea class="input" id="${escapeHtml(id)}" rows="${options.rows || 3}" maxlength="${options.maxlength}" data-mytms-directory-kind="${escapeHtml(kind)}" data-mytms-directory-index="${index}" data-mytms-directory-field="${escapeHtml(key)}" placeholder="${escapeHtml(options.placeholder || '')}">${escapeHtml(value || '')}</textarea>`
+      : `<input class="input" id="${escapeHtml(id)}" maxlength="${options.maxlength}" data-mytms-directory-kind="${escapeHtml(kind)}" data-mytms-directory-index="${index}" data-mytms-directory-field="${escapeHtml(key)}" value="${escapeHtml(value || '')}" placeholder="${escapeHtml(options.placeholder || '')}" />`;
+    return `<div class="mytms-directory-field${options.wide ? ' mytms-directory-field--wide' : ''}">
+      <label for="${escapeHtml(id)}">${escapeHtml(label)}${options.required ? ' *' : ''}</label>${input}</div>`;
+  }
+
+  function directoryCard(kind, entry, index, total) {
+    const hospital = kind === 'hospital_addresses';
+    return `<article class="mytms-directory-card" data-mytms-directory-card="${escapeHtml(kind)}-${index}">
+      <div class="mytms-directory-card__head">
+        <div><span class="mytms-directory-card__eyebrow">${hospital ? 'Hospital' : 'Accommodation office'} ${index + 1}</span>
+          <strong>${escapeHtml(text(entry.hospital_name) || (hospital ? 'New hospital' : 'New accommodation contact'))}</strong></div>
+        <div class="mytms-directory-card__actions" aria-label="Reorder or remove this entry">
+          <button type="button" class="btn mini" data-mytms-directory-action="up" data-kind="${kind}" data-index="${index}" ${index === 0 ? 'disabled' : ''} aria-label="Move up">↑</button>
+          <button type="button" class="btn mini" data-mytms-directory-action="down" data-kind="${kind}" data-index="${index}" ${index === total - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
+          <button type="button" class="btn mini mytms-directory-remove" data-mytms-directory-action="remove" data-kind="${kind}" data-index="${index}">Remove</button>
+        </div>
+      </div>
+      <div class="mytms-directory-grid">
+        ${directoryInput(kind, index, 'hospital_name', 'Hospital name', entry.hospital_name, { required: true, maxlength: 160 })}
+        ${hospital ? '' : directoryInput(kind, index, 'office_name', 'Accommodation office', entry.office_name, { required: true, maxlength: 160 })}
+        ${directoryInput(kind, index, 'address', 'Address', entry.address, { required: hospital, maxlength: 600, multiline: true, wide: true, placeholder: 'Include the postcode' })}
+        ${directoryInput(kind, index, 'telephone', 'Telephone', entry.telephone, { maxlength: 40, placeholder: 'For example 020 7123 4567' })}
+        ${hospital
+          ? directoryInput(kind, index, 'map_query', 'Map search', entry.map_query, { maxlength: 600, multiline: true, wide: true, placeholder: 'Optional: a precise building or entrance for Maps' })
+          : `${directoryInput(kind, index, 'email', 'Email', entry.email, { maxlength: 254 })}${directoryInput(kind, index, 'working_hours', 'Working hours', entry.working_hours, { maxlength: 240, multiline: true, wide: true, placeholder: 'For example Monday to Friday, 09:00–17:00' })}`}
+      </div>
+    </article>`;
+  }
+
+  function dailyInformationPanel() {
+    if (!state.dailyInformation) return `<div class="card"><h3>Hospital addresses and accommodation contacts</h3>
+      <p>${escapeHtml(state.dailyInformationError || 'Places and contacts could not be loaded.')}</p>
+      <p class="mini">No placeholder information has been substituted.</p></div>`;
+    const hospitals = state.dailyInformation.hospital_addresses || [];
+    const accommodation = state.dailyInformation.accommodation_contacts || [];
+    return `<div class="mytms-directory" data-mytms-directory-panel>
+      <div class="card mytms-directory-intro"><div><span class="mytms-directory-card__eyebrow">Candidate DAILY</span>
+        <h3>Hospital addresses and accommodation contacts</h3>
+        <p>Maintain the practical information Candidates see in MyTMS. Telephone numbers open the phone app and addresses open the Candidate’s maps app.</p></div>
+        <span class="mytms-directory-version">Version ${escapeHtml(state.dailyInformation.version)}</span></div>
+      <section class="card mytms-directory-section"><div class="mytms-directory-section__head"><div><h3>Hospital addresses</h3><p>${hospitals.length ? `${hospitals.length} hospital${hospitals.length === 1 ? '' : 's'}` : 'No hospitals added yet'}</p></div>
+        <button type="button" class="btn btn-primary" data-mytms-directory-add="hospital_addresses">Add hospital</button></div>
+        <div class="mytms-directory-list">${hospitals.length ? hospitals.map((entry, index) => directoryCard('hospital_addresses', entry, index, hospitals.length)).join('') : '<div class="mytms-directory-empty">Add the first hospital to give Candidates clear directions and contact details.</div>'}</div></section>
+      <section class="card mytms-directory-section"><div class="mytms-directory-section__head"><div><h3>Accommodation contacts</h3><p>${accommodation.length ? `${accommodation.length} office${accommodation.length === 1 ? '' : 's'}` : 'No accommodation offices added yet'}</p></div>
+        <button type="button" class="btn btn-primary" data-mytms-directory-add="accommodation_contacts">Add accommodation office</button></div>
+        <div class="mytms-directory-list">${accommodation.length ? accommodation.map((entry, index) => directoryCard('accommodation_contacts', entry, index, accommodation.length)).join('') : '<div class="mytms-directory-empty">Add an accommodation office when Candidates need local housing support.</div>'}</div></section>
+      <p class="mytms-directory-note">Changes affect only these two Candidate information screens. They do not alter Rota, Timesheets, emergencies or manager approval.</p>
     </div>`;
   }
 
@@ -580,14 +683,64 @@
         finally { homeReset.disabled = false; }
       });
     }
+    global.document.querySelectorAll('[data-mytms-directory-field]').forEach((element) => {
+      if (element.__myTmsWired) return;
+      element.__myTmsWired = true;
+      element.addEventListener('input', () => {
+        const list = state.dailyInformation?.[element.dataset.mytmsDirectoryKind];
+        const entry = list?.[Number(element.dataset.mytmsDirectoryIndex)];
+        if (!entry) return;
+        entry[element.dataset.mytmsDirectoryField] = String(element.value || '');
+        try { global.dispatchEvent(new Event('modal-dirty')); } catch {}
+      });
+    });
+    global.document.querySelectorAll('[data-mytms-directory-add]').forEach((button) => {
+      if (button.__myTmsWired) return;
+      button.__myTmsWired = true;
+      button.addEventListener('click', () => {
+        const kind = button.dataset.mytmsDirectoryAdd;
+        const list = state.dailyInformation?.[kind];
+        if (!Array.isArray(list)) return;
+        list.push(kind === 'hospital_addresses'
+          ? { hospital_name: '', address: '', telephone: '', map_query: '' }
+          : { hospital_name: '', office_name: '', address: '', telephone: '', email: '', working_hours: '' });
+        replaceDirectoryPanel();
+        try { global.dispatchEvent(new Event('modal-dirty')); } catch {}
+      });
+    });
+    global.document.querySelectorAll('[data-mytms-directory-action]').forEach((button) => {
+      if (button.__myTmsWired) return;
+      button.__myTmsWired = true;
+      button.addEventListener('click', () => {
+        const list = state.dailyInformation?.[button.dataset.kind];
+        const index = Number(button.dataset.index);
+        if (!Array.isArray(list) || !list[index]) return;
+        if (button.dataset.mytmsDirectoryAction === 'remove') list.splice(index, 1);
+        if (button.dataset.mytmsDirectoryAction === 'up' && index > 0) {
+          [list[index - 1], list[index]] = [list[index], list[index - 1]];
+        }
+        if (button.dataset.mytmsDirectoryAction === 'down' && index < list.length - 1) {
+          [list[index + 1], list[index]] = [list[index], list[index + 1]];
+        }
+        replaceDirectoryPanel();
+        try { global.dispatchEvent(new Event('modal-dirty')); } catch {}
+      });
+    });
+  }
+
+  function replaceDirectoryPanel() {
+    const panel = global.document.querySelector('[data-mytms-directory-panel]');
+    if (!panel) return;
+    panel.outerHTML = dailyInformationPanel();
+    Promise.resolve().then(wireSettings);
   }
 
   async function openSettings() {
     if (typeof global.confirmDiscardChangesIfDirty === 'function'
         && !global.confirmDiscardChangesIfDirty()) return;
     try {
-      const [settingsResult, managerResult, homeResult] = await Promise.allSettled([
-        settingsGet(), managerSettingsGet(), homeAnnouncementGet()
+      const [settingsResult, managerResult, homeResult, dailyInformationResult] = await Promise.allSettled([
+        settingsGet(), managerSettingsGet(), homeAnnouncementGet(), dailyInformationGet()
       ]);
       if (settingsResult.status !== 'fulfilled') throw settingsResult.reason;
       state.settings = settingsResult.value;
@@ -597,6 +750,10 @@
       state.homeAnnouncement = homeResult.status === 'fulfilled' ? homeResult.value : null;
       state.homeAnnouncementError = homeResult.status === 'rejected'
         ? 'The Candidate Home announcement could not be loaded.' : null;
+      state.dailyInformation = dailyInformationResult.status === 'fulfilled'
+        ? dailyInformationResult.value : null;
+      state.dailyInformationError = dailyInformationResult.status === 'rejected'
+        ? 'Hospital addresses and accommodation contacts could not be loaded.' : null;
     } catch (error) {
       await global.openUiConfirmModal?.({
         title: 'MyTMS App Settings unavailable',
@@ -614,6 +771,7 @@
         { key: 'reminder', label: 'Access reminder' },
         { key: 'manager-email', label: 'Manager approval by email' },
         { key: 'home', label: 'Candidate Home' },
+        { key: 'daily-information', label: 'Places & contacts' },
         { key: 'activation', label: 'Activation state' }
       ],
       (tabKey) => {
@@ -625,6 +783,7 @@
         try {
           if (state.activeSettingsTab === 'manager-email') return await managerTemplatesSave();
           if (state.activeSettingsTab === 'home') return await homeAnnouncementSave();
+          if (state.activeSettingsTab === 'daily-information') return await dailyInformationSave();
           return await settingsSave();
         }
         catch (error) {
@@ -642,6 +801,7 @@
           state.openToken = null; state.previewByKind = Object.create(null);
           state.managerSettings = null; state.managerSettingsError = null;
           state.homeAnnouncement = null; state.homeAnnouncementError = null;
+          state.dailyInformation = null; state.dailyInformationError = null;
         }
       }
     );
