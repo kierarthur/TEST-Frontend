@@ -48408,8 +48408,18 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
       ''
     ).trim();
 
+  const suppliedSubjectLabel = String(src.subject_label || src.subjectLabel || '').trim();
+  const suppliedSubjectParts = String(suppliedSubjectLabel || '')
+    .split(/\s+(?:—|–|\|)\s+/)
+    .map((part) => String(part || '').trim())
+    .filter(Boolean);
+  const suppliedSubjectDateIndex = suppliedSubjectParts.findIndex((part) => /^\d{2}\/\d{2}\/\d{4}$/.test(part));
+  const candidateFromSubject = (
+    targetType === 'TIMESHEET_SEGMENT' &&
+    suppliedSubjectDateIndex > 0
+  ) ? suppliedSubjectParts[suppliedSubjectDateIndex - 1] : '';
   const candidateLabel =
-    String(src.candidate_display_name || src.candidate_name || src.display_name || '—').trim() || '—';
+    String(src.candidate_display_name || src.candidate_name || src.display_name || candidateFromSubject || '—').trim() || '—';
 
   const clientLabel =
     String(src.client_name || src.trust_name || '').trim();
@@ -48432,7 +48442,6 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
   const expenseAmount = Number(src.amount_ex_vat ?? src.pay_amount_ex_vat ?? src.preview_amount_ex_vat ?? null);
   const expenseSourceBasisFingerprint = String(src.expense_source_basis_fingerprint || src.source_basis_fingerprint || identity.source_basis_fingerprint || (expenseSourceMatch ? expenseSourceMatch[3] : '') || '').trim().toLowerCase();
 
-  const suppliedSubjectLabel = String(src.subject_label || src.subjectLabel || '').trim();
   const tidySuppliedSubjectLabel = (labelRaw) => {
     const parts = String(labelRaw || '')
       .split(/\s+(?:—|–|\|)\s+/)
@@ -48441,6 +48450,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
     if (targetType === 'TIMESHEET_SEGMENT') {
       while (parts.length && /^(?:specific\s+)?(?:timesheet\s+)?segment(?:\s+payment)?$/i.test(parts[0])) parts.shift();
       while (parts.length && /^(?:timesheet|shift)\s+payment$/i.test(parts[0])) parts.shift();
+      if (candidateLabel !== '—' && String(parts[0] || '').localeCompare(candidateLabel, undefined, { sensitivity: 'accent' }) === 0) parts.shift();
     } else if (targetType === 'WHOLE_TIMESHEET') {
       while (parts.length && /^(?:whole\s+)?timesheet(?:\s+payment)?$/i.test(parts[0])) parts.shift();
     }
@@ -48936,7 +48946,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
     const items = [];
     if (state.target_type === 'TIMESHEET_SEGMENT') {
       if (segmentRoleLabel) items.push(`Role ${segmentRoleLabel}`);
-      if (segmentBandLabel) items.push(`Band ${segmentBandLabel}`);
+      if (segmentBandLabel) items.push(/^band(?:\s|$)/i.test(segmentBandLabel) ? segmentBandLabel : `Band ${segmentBandLabel}`);
     } else if (state.target_type === 'TIMESHEET_EXPENSE') {
       if (state.expense_amount_ex_vat != null) items.push(`Amount £${Number(state.expense_amount_ex_vat).toFixed(2)}`);
     }

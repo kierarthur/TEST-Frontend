@@ -95,15 +95,16 @@ test('keeps the mobile Snooze editor concise, saveable and free of native discar
 
   const seed = {
     candidate_id: '11111111-1111-4111-8111-111111111111',
-    candidate_display_name: 'Baljit Rai-Baptiste',
     client_name: 'Arthur Rai Medical Services',
+    role: 'CPN',
+    band: 'Band 6',
     timesheet_id: '22222222-2222-4222-8222-222222222222',
     booking_id: '44444444-4444-4444-8444-444444444444',
     segment_id: '33333333-3333-4333-8333-333333333333',
     segment_stable_key: '2026-07-03|09:00|17:00',
     snooze_kind: 'DO_NOT_PAY',
     snooze_scope_kind: 'SEGMENT',
-    subject_label: 'Segment — Timesheet payment — 03/07/2026 — 09:00-17:00'
+    subject_label: 'Segment — Baljit Rai-Baptiste — 03/07/2026 — 09:00-17:00'
   };
 
   await page.evaluate(async (modalSeed) => {
@@ -116,6 +117,8 @@ test('keeps the mobile Snooze editor concise, saveable and free of native discar
   await expect(modal).toContainText('Shift payment');
   await expect(modal).toContainText('03/07/2026 • 09:00-17:00');
   await expect(modal).toContainText('Baljit Rai-Baptiste • Arthur Rai Medical Services');
+  await expect(modal).toContainText('Role CPN • Band 6');
+  await expect(modal).not.toContainText('Band Band 6');
   await expect(modal).not.toContainText('Specific segment');
   await expect(modal).not.toContainText('Segment payment');
   await expect(modal).not.toContainText(seed.timesheet_id);
