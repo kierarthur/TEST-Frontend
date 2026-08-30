@@ -397,7 +397,13 @@
     if(bootstrap)await context.rerender('pay');return false;
   }
   function reset(){mounted?.close();mounted=null;}
-  async function refreshOpenSurface(){return Boolean(await mounted?.refreshOpenSurface?.());}
+  async function refreshOpenSurface(){
+    // A closed Banking modal can leave its controller alive until the owning
+    // modal dismissal callback runs. It must never answer for a later modal or
+    // suppress that modal's first authoritative render.
+    if(mounted&&!mounted.shell?.isConnected){mounted.close();mounted=null;return false;}
+    return Boolean(await mounted?.refreshOpenSurface?.());
+  }
   const api=Object.freeze({renderShell,renderBootstrapShell,afterRender,refreshOpenSurface,reset,stateSlot,readSessionFromShell,applyLegacyAuthority,shouldLockControls});
   if(local)module.exports=api;else root.CloudTMSBankingPayModalV2Integration=api;
 })(typeof window==='object'?window:this);

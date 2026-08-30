@@ -38,6 +38,7 @@ test('Banking Pay opens on one stable v2 loading presentation and does not publi
   assert.doesNotMatch(renderBanking, /\$\{bannersHtml\}[\s\S]*\$\{tabContent\}/);
 
   const openBanking = sliceBetween('async function openBanking(startTabKey = \'pay\') {', 'async function openOutboxDetailModal');
+  assert.match(openBanking, /CloudTMSBankingPayModalV2Integration\?\.reset\?\.\(\)/);
   assert.match(openBanking, /CloudTMSBankingPayModalV2Integration\.refreshOpenSurface\(\)/);
   const afterAutoload = openBanking.slice(openBanking.indexOf('await maybeAutoloadPayWorkbench();'));
   const beforeCatch = afterAutoload.slice(0, afterAutoload.indexOf('} catch (e)'));

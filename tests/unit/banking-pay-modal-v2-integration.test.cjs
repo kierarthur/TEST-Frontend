@@ -161,6 +161,11 @@ test('background Pay rerenders refresh an open v2 child in place',()=>{
   assert.match(mainSource,/if \(refreshedOpenSurface\)[\s\S]{0,260}return true;/);
 });
 
+test('a disconnected modal controller cannot suppress a later Banking Pay reopen',()=>{
+  const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
+  assert.match(source,/if\(mounted&&!mounted\.shell\?\.isConnected\)\{mounted\.close\(\);mounted=null;return false;\}/);
+});
+
 test('capability discovery keeps the bootstrap mounted until the existing Workbench session can render v2',()=>{
   const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
   assert.match(source,/const bootstrap=.*data-bpv2-bootstrap/);

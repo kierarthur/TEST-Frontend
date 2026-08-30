@@ -143001,6 +143001,11 @@ async function openBanking(startTabKey = 'pay') {
       if (!ctx || String(ctx.entity || '') !== 'banking') return;
       if (String(ctx.openToken || '') !== String(openToken)) return;
 
+      // The contained v2 controller belongs to this exact Banking modal.
+      // Teardown on dismissal prevents a disconnected first instance from
+      // answering refresh requests for a later reopen.
+      try { window.CloudTMSBankingPayModalV2Integration?.reset?.(); } catch {}
+
       // Prefer the stored hook on banking state
       const st = (ctx.banking && typeof ctx.banking === 'object') ? ctx.banking : null;
       const det = st && typeof st._detach === 'function' ? st._detach : null;
