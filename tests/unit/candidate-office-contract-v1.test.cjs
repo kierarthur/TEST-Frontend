@@ -273,3 +273,24 @@ test('single projection rejects stale or moved identity before presentation', ()
     error => error.code === 'CANDIDATE_TIMESHEET_MOVED'
   );
 });
+
+test('route preview keeps the server action separate from its boolean permission gate', () => {
+  const api = contract();
+  const preview = {
+    ok: true,
+    action: 'REISSUE_QR',
+    permitted_action: true,
+    expected_timesheet_id: UUID_A,
+    expected_row_signature: 'current-row-signature',
+    context_sha256: 'a'.repeat(64)
+  };
+
+  const normalized = api.normalizeCandidateRoutePreview(preview);
+  assert.equal(normalized.permitted_action, 'REISSUE_QR');
+  assert.equal(normalized.expected_timesheet_id, UUID_A);
+
+  assert.throws(
+    () => api.normalizeCandidateRoutePreview({ ...preview, permitted_action: false }),
+    error => error.code === 'CANDIDATE_ACTION_NOT_ELIGIBLE'
+  );
+});

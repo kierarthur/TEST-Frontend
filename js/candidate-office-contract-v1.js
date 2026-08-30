@@ -325,7 +325,15 @@
     const src = object(raw, 'route preview');
     const expectedTimesheetId = optionalUuid(src.expected_timesheet_id || src.current_timesheet_id, 'expected_timesheet_id');
     if (!expectedTimesheetId) fail('CANDIDATE_OFFICE_CONTRACT_INVALID', 'Route preview is missing the current timesheet identity.');
-    const action = text(src.permitted_action || src.action, 'permitted_action', { max: 64 }).toUpperCase();
+    const permission = src.permitted_action;
+    if (typeof permission === 'boolean' && permission !== true) {
+      fail('CANDIDATE_ACTION_NOT_ELIGIBLE', 'This route change is not currently available.');
+    }
+    const action = text(
+      typeof permission === 'string' ? permission : src.action,
+      'permitted_action',
+      { max: 64 }
+    ).toUpperCase();
     const context = optionalSha(src.context_sha256 || src.expected_context_sha256, 'context_sha256');
     if (!context) fail('CANDIDATE_OFFICE_CONTRACT_INVALID', 'Route preview is missing its context hash.');
     const rowSignature = text(src.expected_row_signature || src.row_signature, 'expected_row_signature', { max: 256 });
