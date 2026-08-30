@@ -3631,7 +3631,79 @@
   display: none !important;
 }
 
+/* Banking's main sheet owns its own actions, but Snooze editors use the shared
+   modal save authority. Keep that footer visible and outside the scrolling body. */
+#modal.banking-modal.ctms-modern-modal.ctms-kind-banking-finance-snooze #modalActions,
+#modal.banking-modal.ctms-modern-modal.ctms-kind-banking-finance-snooze-expense-set #modalActions {
+  display: flex !important;
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze,
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze-expense-set {
+  width: min(720px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze #bankingFinanceSnoozeForm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze .banking-snooze-target-card {
+  display: grid;
+  gap: 9px;
+  padding: 14px;
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze .banking-snooze-target-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze .banking-snooze-target-subject {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze .banking-snooze-target-owner {
+  color: #a9b9cf;
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze .banking-snooze-status-grid {
+  display: grid;
+  grid-template-columns: minmax(145px, .7fr) minmax(0, 1.3fr);
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(95, 124, 164, .28);
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze .banking-snooze-status-grid > div {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze .banking-snooze-status-label {
+  color: #9fb0c5;
+  font-weight: 700;
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-finance-snooze .banking-snooze-movement {
+  color: #d8e2f0;
+  line-height: 1.45;
+}
+
 @media (max-width: 700px) {
+  #modal.ctms-modern-modal.ctms-kind-banking-finance-snooze .banking-snooze-status-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   #modal.ctms-modern-modal[class*="ctms-family-"] {
     width: calc(100vw - 24px);
     max-width: calc(100vw - 24px);

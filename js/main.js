@@ -48226,7 +48226,8 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
         showSave: false,
         showApply: true,
         primaryLabel: setState.mode === 'CLEAR' ? 'Unsnooze All Expenses' : 'Apply Snooze to All Expenses',
-        runOnRender: true
+        runOnRender: true,
+        dirtyClosePolicy: 'confirm-discard-close'
       }
     );
     return;
@@ -48422,7 +48423,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
   const targetTypeLabel = (() => {
     if (targetType === 'TIMESHEET_EXPENSE') return 'Timesheet expense';
     if (targetType === 'FINANCE_CASE') return 'Finance case';
-    if (targetType === 'TIMESHEET_SEGMENT') return 'Specific segment';
+    if (targetType === 'TIMESHEET_SEGMENT') return 'Shift payment';
     return 'Whole timesheet';
   })();
 
@@ -48431,13 +48432,29 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
   const expenseAmount = Number(src.amount_ex_vat ?? src.pay_amount_ex_vat ?? src.preview_amount_ex_vat ?? null);
   const expenseSourceBasisFingerprint = String(src.expense_source_basis_fingerprint || src.source_basis_fingerprint || identity.source_basis_fingerprint || (expenseSourceMatch ? expenseSourceMatch[3] : '') || '').trim().toLowerCase();
 
+  const suppliedSubjectLabel = String(src.subject_label || src.subjectLabel || '').trim();
+  const tidySuppliedSubjectLabel = (labelRaw) => {
+    const parts = String(labelRaw || '')
+      .split(/\s+(?:—|–|\|)\s+/)
+      .map((part) => String(part || '').trim())
+      .filter(Boolean);
+    if (targetType === 'TIMESHEET_SEGMENT') {
+      while (parts.length && /^(?:specific\s+)?(?:timesheet\s+)?segment(?:\s+payment)?$/i.test(parts[0])) parts.shift();
+      while (parts.length && /^(?:timesheet|shift)\s+payment$/i.test(parts[0])) parts.shift();
+    } else if (targetType === 'WHOLE_TIMESHEET') {
+      while (parts.length && /^(?:whole\s+)?timesheet(?:\s+payment)?$/i.test(parts[0])) parts.shift();
+    }
+    return parts.join(' • ');
+  };
   const subjectLabel = (() => {
+    const supplied = tidySuppliedSubjectLabel(suppliedSubjectLabel);
+    if (supplied) return supplied;
     if (targetType === 'TIMESHEET_EXPENSE') return `${expenseLabel} expense`;
     if (targetType === 'TIMESHEET_SEGMENT') {
-      const parts = ['Segment payment'];
+      const parts = [];
       if (segmentDateLabel) parts.push(toUk(segmentDateLabel) || segmentDateLabel);
-      if (segmentStartLabel || segmentFinishLabel) parts.push(`${segmentStartLabel || '—'}-${segmentFinishLabel || '—'}`);
-      return parts.join(' • ');
+      if (segmentStartLabel || segmentFinishLabel) parts.push(`${segmentStartLabel || '—'}–${segmentFinishLabel || '—'}`);
+      return parts.join(' • ') || 'Selected shift';
     }
     if (targetType === 'WHOLE_TIMESHEET') {
       const ref = String(src.reference_number || src.ref_num || '').trim();
@@ -48664,6 +48681,12 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
       const untilEl = document.getElementById('bankingFinanceSnoozeUntilDate');
       const noteEl = document.getElementById('bankingFinanceSnoozeNote');
       const clearBtnEl = document.getElementById('bankingFinanceSnoozeClearBtn');
+      const markEditorDirty = () => {
+        try {
+          fr.isDirty = true;
+          fr._updateButtons && fr._updateButtons();
+        } catch {}
+      };
 
       const syncModeState = () => {
         state.snooze_mode = state.indefinite ? 'INDEFINITE' : 'DATED';
@@ -48804,6 +48827,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
           }
           syncDateUi({ writeDateValue: true });
           await rerenderChild();
+          markEditorDirty();
         });
       }
 
@@ -48813,11 +48837,13 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
             untilEl.addEventListener('input', async () => {
           syncDateStateFromValue(untilEl.value, { normaliseDisplay: false });
           syncDateUi({ writeDateValue: false });
+          markEditorDirty();
         });
 
         untilEl.addEventListener('change', async () => {
           syncDateStateFromValue(untilEl.value, { normaliseDisplay: true });
           syncDateUi({ writeDateValue: true });
+          markEditorDirty();
         });
 
         untilEl.addEventListener('blur', async () => {
@@ -48826,12 +48852,16 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
           }
           syncDateStateFromValue(untilEl.value, { normaliseDisplay: true });
           syncDateUi({ writeDateValue: true });
+          markEditorDirty();
         });
       }
 
       if (noteEl && !noteEl.__wired) {
         noteEl.__wired = true;
-        noteEl.addEventListener('input', () => { state.note = String(noteEl.value || '').trim(); });
+        noteEl.addEventListener('input', () => {
+          state.note = String(noteEl.value || '').trim();
+          markEditorDirty();
+        });
       }
 
       if (clearBtnEl && !clearBtnEl.__wired) {
@@ -48904,25 +48934,11 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
 
   const renderIdentityMeta = () => {
     const items = [];
-    if (state.target_type === 'WHOLE_TIMESHEET') {
-      if (state.timesheet_id) items.push(`Timesheet ${state.timesheet_id}`);
-      if (state.booking_id) items.push(`Booking ${state.booking_id}`);
-    } else if (state.target_type === 'TIMESHEET_SEGMENT') {
-      if (state.timesheet_id) items.push(`Timesheet ${state.timesheet_id}`);
-      if (state.booking_id) items.push(`Booking ${state.booking_id}`);
-      if (state.segment_id) items.push(`Segment ${state.segment_id}`);
-      if (state.segment_stable_key) items.push(`Stable key ${state.segment_stable_key}`);
+    if (state.target_type === 'TIMESHEET_SEGMENT') {
       if (segmentRoleLabel) items.push(`Role ${segmentRoleLabel}`);
       if (segmentBandLabel) items.push(`Band ${segmentBandLabel}`);
     } else if (state.target_type === 'TIMESHEET_EXPENSE') {
-      if (state.timesheet_id) items.push(`Timesheet ${state.timesheet_id}`);
-      if (state.booking_id) items.push(`Booking ${state.booking_id}`);
-      if (state.expense_label) items.push(`Expense ${state.expense_label}`);
       if (state.expense_amount_ex_vat != null) items.push(`Amount £${Number(state.expense_amount_ex_vat).toFixed(2)}`);
-      if (state.source_ref) items.push(`Exact ref ${state.source_ref}`);
-    } else {
-      if (state.finance_case_id) items.push(`Case ${state.finance_case_id}`);
-      if (state.source_ref) items.push(`Ref ${state.source_ref}`);
     }
     if (!items.length) return '';
     return `
@@ -48948,8 +48964,12 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
       : 'No active snooze';
 
     const movementLabel = state.indefinite
-      ? 'After Apply, this item will drop out of the live pay workbench and remain in Loans / Snoozes only.'
-      : 'After Apply, this item will remain visible and move into Blocked for Pay.';
+      ? 'After saving, this payment will be listed in Loans / Snoozes until it is manually unsnoozed.'
+      : `After saving, this payment will be listed under Blocked for Pay${state.snooze_until_date ? ` until ${toUk(state.snooze_until_date) || state.snooze_until_date}` : ' until the chosen date'}.`;
+    const visibleOwnerLabels = [
+      state.candidate_label && state.candidate_label !== '—' ? state.candidate_label : '',
+      state.client_label
+    ].filter(Boolean);
 
     return `
       <div class="form" id="bankingFinanceSnoozeForm">
@@ -48961,35 +48981,21 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
 
         ${renderConflictMeta()}
 
-        <div class="card" style="padding:10px;">
-          <div class="mini" style="opacity:.9;margin-bottom:10px;">
-            Use <strong>Apply Snooze</strong> in the modal footer to save.
+        <div class="card banking-snooze-target-card">
+          <div class="banking-snooze-target-heading">
+            <span class="pill banking-snooze-target-kind">${enc(state.target_type_label)}</span>
+            <strong class="banking-snooze-target-subject">${enc(state.subject_label)}</strong>
           </div>
-
-          <div class="row">
-            <label>Snooze target</label>
-            <div class="controls" style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;">
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                <span class="pill">${enc(state.target_type_label)}</span>
-                <span class="pill">${enc(state.subject_label)}</span>
-                <span>${enc(state.candidate_label)}</span>
-                ${state.client_label ? `<span class="mini" style="opacity:.8;">${enc(state.client_label)}</span>` : ''}
-              </div>
-              ${renderIdentityMeta()}
-            </div>
-          </div>
-
-          <div class="row">
-            <label>Current snooze</label>
-            <div class="controls" style="display:flex;align-items:flex-start;">
+          ${visibleOwnerLabels.length ? `<div class="mini banking-snooze-target-owner">${enc(visibleOwnerLabels.join(' • '))}</div>` : ''}
+          ${renderIdentityMeta()}
+          <div class="banking-snooze-status-grid">
+            <div>
+              <span class="mini banking-snooze-status-label">Current snooze</span>
               <span class="pill ${enc(state.active_snooze ? 'pill-warn' : 'pill')}">${enc(currentStateLabel)}</span>
             </div>
-          </div>
-
-          <div class="row">
-            <label>Post-save movement</label>
-            <div class="controls">
-              <div class="mini" style="opacity:.9;">${enc(movementLabel)}</div>
+            <div>
+              <span class="mini banking-snooze-status-label">What happens after saving</span>
+              <span class="mini banking-snooze-movement">${enc(movementLabel)}</span>
             </div>
           </div>
         </div>
@@ -49240,7 +49246,7 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
   };
 
   showModal(
-    state.snooze_id ? 'Amend Snooze' : 'Snooze Item',
+    state.snooze_id ? 'Amend snooze' : 'Snooze payment',
     [{ key: 'main', label: 'Snooze' }],
     () => renderMain(),
     onSave,
@@ -49253,7 +49259,8 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
       showSave: false,
       showApply: true,
       primaryLabel: 'Apply Snooze',
-      runOnRender: true
+      runOnRender: true,
+      dirtyClosePolicy: 'confirm-discard-close'
     }
   );
 }
@@ -52980,6 +52987,7 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     const bookingId = getIdentityValue(obj, 'booking_id') || getIdentityValue(parentObj, 'booking_id');
     const segmentStableKey = getIdentityValue(obj, 'segment_stable_key') || getIdentityValue(parentObj, 'segment_stable_key');
     const nested = getNestedLinePayload(obj);
+    const parentNested = getNestedLinePayload(parentObj);
     const identity = getIdentityObject(obj);
     const sourceRefLower = trimStr(sourceRef).toLowerCase();
     const exactExpenseMatch = sourceRefLower.match(/^timesheet-expense:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):(expenses|travel|accommodation|other|mileage):([0-9a-f]{32})$/i);
@@ -53010,9 +53018,29 @@ const buildSnoozeDataAttrs = ({ obj, parentObj = null, candidateId, snoozeKind, 
     const scopeKind = identityType === 'TIMESHEET_EXPENSE'
       ? 'TIMESHEET_EXPENSE'
       : (segmentId || segmentStableKey ? 'SEGMENT' : (timesheetId ? 'TIMESHEET' : 'FINANCE_CASE'));
+    const candidateDisplayName = trimStr(
+      obj?.candidate_display_name || nested?.candidate_display_name || obj?.candidate_name || nested?.candidate_name ||
+      parentObj?.candidate_display_name || parentNested?.candidate_display_name || parentObj?.candidate_name || parentNested?.candidate_name || ''
+    );
+    const clientName = trimStr(
+      obj?.client_name || nested?.client_name || obj?.trust_name || nested?.trust_name ||
+      parentObj?.client_name || parentNested?.client_name || parentObj?.trust_name || parentNested?.trust_name || ''
+    );
+    const segmentDate = trimStr(obj?.date || nested?.date || obj?.work_date || nested?.work_date || parentObj?.date || parentNested?.date || '');
+    const segmentRole = trimStr(obj?.role || nested?.role || parentObj?.role || parentNested?.role || '');
+    const segmentBand = trimStr(obj?.band || nested?.band || parentObj?.band || parentNested?.band || '');
+    const segmentStart = trimStr(obj?.start || nested?.start || obj?.start_time || nested?.start_time || parentObj?.start || parentNested?.start || '');
+    const segmentFinish = trimStr(obj?.finish || nested?.finish || obj?.finish_time || nested?.finish_time || parentObj?.finish || parentNested?.finish || '');
 
     return [
       `data-candidate-id="${enc(candidateId)}"`,
+      `data-candidate-display-name="${enc(candidateDisplayName)}"`,
+      `data-client-name="${enc(clientName)}"`,
+      `data-segment-date="${enc(segmentDate)}"`,
+      `data-segment-role="${enc(segmentRole)}"`,
+      `data-segment-band="${enc(segmentBand)}"`,
+      `data-segment-start="${enc(segmentStart)}"`,
+      `data-segment-finish="${enc(segmentFinish)}"`,
       `data-snooze-kind="${enc(trimStr(snoozeKind))}"`,
       `data-source-ref="${enc(sourceRefLower || sourceRef)}"`,
       `data-timesheet-id="${enc(timesheetId)}"`,
@@ -100469,6 +100497,13 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     const mapPreviewLineToSnoozeSeed = () => {
       const candidateId = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+      const candidateDisplayName = String(ds('candidateDisplayName') || dget('data-candidate-display-name') || '').trim();
+      const clientName = String(ds('clientName') || dget('data-client-name') || '').trim();
+      const segmentDate = String(ds('segmentDate') || dget('data-segment-date') || '').trim();
+      const segmentRole = String(ds('segmentRole') || dget('data-segment-role') || '').trim();
+      const segmentBand = String(ds('segmentBand') || dget('data-segment-band') || '').trim();
+      const segmentStart = String(ds('segmentStart') || dget('data-segment-start') || '').trim();
+      const segmentFinish = String(ds('segmentFinish') || dget('data-segment-finish') || '').trim();
       const snoozeKind = String(ds('snoozeKind') || dget('data-snooze-kind') || '').trim().toUpperCase();
       const sourceRef = String(ds('sourceRef') || dget('data-source-ref') || '').trim().toLowerCase();
       const timesheetId = String(ds('timesheetId') || dget('data-timesheet-id') || '').trim();
@@ -100510,6 +100545,13 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
       const seed = {
         candidate_id: candidateId,
+        candidate_display_name: candidateDisplayName,
+        client_name: clientName,
+        date: segmentDate,
+        role: segmentRole,
+        band: segmentBand,
+        start: segmentStart,
+        finish: segmentFinish,
         snooze_id: snoozeId,
         snooze_until_date: snoozeUntilDate,
         snooze_state: snoozeState || null,
@@ -330676,7 +330718,11 @@ const wantsConfirmDiscardClose =
   : wantsDiscardToView
     ? (top.isDirty ? 'Discard' : 'Close')
   : wantsConfirmDiscardClose
-    ? ((top.kind === 'contract_settings' && top.isDirty) ? 'Discard' : 'Close')
+    ? (((
+        top.kind === 'contract_settings' ||
+        top.kind === 'banking-finance-snooze' ||
+        top.kind === 'banking-finance-snooze-expense-set'
+      ) && top.isDirty) ? 'Discard' : 'Close')
     : (top.isDirty ? 'Discard' : 'Close');
 
 

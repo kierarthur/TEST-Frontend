@@ -4,6 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const mainSource = fs.readFileSync(path.resolve(__dirname, '../../js/main.js'), 'utf8');
+const modalCssSource = fs.readFileSync(path.resolve(__dirname, '../../css/modal-modernisation.css'), 'utf8');
 
 function sliceBetween(start, end) {
   const from = mainSource.indexOf(start);
@@ -151,4 +152,43 @@ test('snooze cancellation uses the friendly UI confirmation and no native browse
   assert.match(source, /kind: 'banking-finance-snooze-message'/);
   assert.doesNotMatch(source, /\balert\(/);
   assert.doesNotMatch(source, /window\.confirm\(/);
+});
+
+test('snooze editor retains its existing save authority with a visible footer and branded dirty close', () => {
+  const source = sliceBetween(
+    'async function openBankingFinanceSnoozeModal(seed = {}) {',
+    'async function openBankingFinanceCaseAuditModal(seed = {}) {'
+  );
+
+  assert.match(source, /primaryLabel: 'Apply Snooze'/);
+  assert.match(source, /dirtyClosePolicy: 'confirm-discard-close'/);
+  assert.match(source, /apiPostJson\('\/api\/banking\/pay\/snooze\/validate'/);
+  assert.match(source, /apiPostJson\('\/api\/banking\/pay\/snooze\/upsert', payload\)/);
+  assert.match(source, /candidate_id: state\.candidate_id/);
+  assert.match(source, /timesheet_id: state\.target_type === 'FINANCE_CASE'/);
+  assert.match(source, /segment_id: state\.target_type === 'TIMESHEET_SEGMENT'/);
+  assert.match(source, /segment_stable_key: state\.target_type === 'TIMESHEET_SEGMENT'/);
+  assert.match(source, /workbench_session_id/);
+  assert.match(modalCssSource, /ctms-kind-banking-finance-snooze #modalActions[\s\S]*?display: flex !important/);
+});
+
+test('snooze editor presents one human-readable shift target without exposing technical identities', () => {
+  const source = sliceBetween(
+    'async function openBankingFinanceSnoozeModal(seed = {}) {',
+    'async function openBankingFinanceCaseAuditModal(seed = {}) {'
+  );
+  const identityPresenter = source.slice(
+    source.indexOf('const renderIdentityMeta = () => {'),
+    source.indexOf('const renderConflictMeta = () => {')
+  );
+
+  assert.match(source, /return 'Shift payment'/);
+  assert.match(source, /const suppliedSubjectLabel = String\(src\.subject_label/);
+  assert.match(source, /banking-snooze-target-subject/);
+  assert.match(source, /What happens after saving/);
+  assert.doesNotMatch(source, /return 'Specific segment'/);
+  assert.doesNotMatch(identityPresenter, /state\.timesheet_id/);
+  assert.doesNotMatch(identityPresenter, /state\.booking_id/);
+  assert.doesNotMatch(identityPresenter, /state\.segment_id/);
+  assert.doesNotMatch(identityPresenter, /state\.segment_stable_key/);
 });
