@@ -135,6 +135,17 @@ test('retained actions always remount v2 and navigation is not dropped by an old
   assert.match(navigationSource,/controller\.openIssues\('blocked'\)/);
 });
 
+test('the stable shell retains Action Required and Blocked detail opening if a child presenter is repainted',()=>{
+  const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
+  assert.match(source,/function openIssueFromStableShell\(event\)/);
+  assert.match(source,/closest\?\.\('\[data-bpv2-issue-kind\]'\)/);
+  assert.match(source,/closest\?\.\('\[data-bpv2-open\]'\)/);
+  assert.match(source,/closest\?\.\('\[data-bpv2-issue-row\]'\)/);
+  assert.match(source,/shell\.addEventListener\('click',openIssueFromStableShell\)/);
+  assert.match(source,/shell\.addEventListener\('dblclick',openIssueFromStableShell\)/);
+  assert.match(source,/controller\.openIssueDetail\(kind,key\)/);
+});
+
 test('a moving revision renews authority instead of falling back to the legacy table',()=>{
   const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8').replace(/\r\n/g,'\n');
   assert.match(source,/const staleMountCodes=new Set\(\['BANKING_PAY_V2_STALE_REVISION','BANKING_PAY_V2_STALE_VIEW','BANKING_PAY_V2_SCOPE_MISMATCH'\]\)/);

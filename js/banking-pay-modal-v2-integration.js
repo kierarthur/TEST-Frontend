@@ -361,11 +361,32 @@
         const commit=stage(next);return ()=>{commit();applyLegacyAuthority(state,next,draftReview);};},
       onStatus:value=>setBusy(shouldLockControls(value)),onFailure:value=>showError(value.code),
       openTimesheets:context.openTimesheets,newRequestId:context.newRequestId,allowedLegacyActions:[]};
+    function openIssueFromStableShell(event){
+      const issue=event.target?.closest?.('[data-bpv2-issue-kind]');
+      if(!issue||!shell.contains(issue)||!controller)return false;
+      const kind=issue.dataset.bpv2IssueKind;
+      if(!['actions','blocked'].includes(kind)||controller.snapshot()?.ui?.surface!==kind)return false;
+      let key='';
+      if(event.type==='click')key=event.target?.closest?.('[data-bpv2-open]')?.dataset?.bpv2Open||'';
+      else{
+        if(event.target?.closest?.('button,input,label,a,select,textarea,[contenteditable="true"]'))return false;
+        key=event.target?.closest?.('[data-bpv2-issue-row]')?.dataset?.bpv2IssueRow||'';
+      }
+      if(!key)return false;
+      event.preventDefault();event.stopPropagation();returnFocus=document.activeElement;
+      Promise.resolve(controller.openIssueDetail(kind,key)).catch(error=>showError(error));return true;
+    }
     shell.addEventListener('click',event=>{
       const button=event.target?.closest?.('[data-bpv2-nav]');if(!button||!shell.contains(button))return;
       event.stopPropagation();const key=button.dataset.bpv2Nav;if(key==='main')controller.closeIssues();
       else if(key==='actions')controller.openIssues('actions');else if(key==='blocked')controller.openIssues('blocked');
     });
+    // The issue presenter owns ordinary clicks. This shell-level fallback is
+    // deliberately reached only if a browser or an older refresh path has
+    // replaced its row DOM and lost that element's listener. Presenter-owned
+    // events stop propagation, so a healthy row can never open twice.
+    shell.addEventListener('click',openIssueFromStableShell);
+    shell.addEventListener('dblclick',openIssueFromStableShell);
     childHost.addEventListener('keydown',event=>{
       if(event.key!=='Escape'||childHost.hidden||!controller)return;
       event.preventDefault();event.stopPropagation();const name=controller.snapshot()?.ui?.surface;

@@ -20,6 +20,13 @@
   const caseActions=new Set([...Object.values(caseResolutionAction),'banking:pay:toggleExcludeTimesheet']);
   const componentActions=new Set(['banking:pay:componentUseSuggested','banking:pay:componentManualRate',
     'banking:pay:componentManualAmount','banking:pay:componentClearResolution']);
+  const text=value=>String(value??'').trim();
+  const upper=value=>text(value).toUpperCase();
+  const firstText=(...values)=>values.map(text).find(Boolean)||'';
+  const date=value=>/^\d{4}-\d{2}-\d{2}$/.test(text(value))
+    ?`${text(value).slice(8,10)}/${text(value).slice(5,7)}/${text(value).slice(0,4)}`:'';
+  const friendlyType=value=>text(value||'Payment').replace(/_/g,' ').toLowerCase().replace(/(^|\s)\S/g,letter=>letter.toUpperCase());
+  const payMethod=value=>['PAYE','UMBRELLA'].includes(upper(value))?upper(value):'';
   function exactActions(meta,allowed){
     if(!Array.isArray(meta?.actions))fail();
     const actions=meta.actions.map(value=>String(value||''));
@@ -116,6 +123,94 @@
     const resolutionRows=prepared.map(item=>item.resolutionHtml).filter(Boolean).join('');
     return {tableRows,sourceRows,resolutionRows};
   }
+  function routeDirection(data){
+    const nested=object(data?.payload)?data.payload:{};
+    const components=[...(Array.isArray(data?.case_components)?data.case_components:[]),
+      ...(Array.isArray(nested?.case_components)?nested.case_components:[])].filter(object);
+    const sources=[...new Set(components.map(component=>payMethod(firstText(component.source_pay_method,component.sourcePayMethod,
+      component.source_method,component.sourceMethod))).filter(Boolean))];
+    const targets=[...new Set(components.map(component=>payMethod(firstText(component.current_target_pay_method,component.currentTargetPayMethod,
+      component.target_pay_method,component.targetPayMethod,component.saved_target_pay_method,component.savedTargetPayMethod))).filter(Boolean))];
+    const source=sources.length===1?sources[0]:payMethod(firstText(data?.source_pay_method,data?.sourcePayMethod,nested?.source_pay_method,nested?.sourcePayMethod));
+    const target=targets.length===1?targets[0]:payMethod(firstText(data?.target_pay_method,data?.targetPayMethod,nested?.target_pay_method,
+      nested?.targetPayMethod,data?.pay_channel,data?.payChannel,nested?.pay_channel,nested?.payChannel));
+    return source&&target&&source!==target?{source,target}:null;
+  }
+  function attentionCopy(row,kind,legacyCells){
+    const data=payload(row),meta=row.task_meta||{},lineType=upper(data.line_type);
+    const reason=upper(firstText(data.presentation_reason,data.blocked_reason,meta.reason));
+    if(kind==='blocked'&&['OVERPAYMENT_RECOVERY','MANUAL_DEBT_RECOVERY'].includes(lineType)
+      &&(reason.includes('HEADROOM')||reason.includes('AVAILABLE_FUNDS')||reason.includes('INSUFFICIENT'))){
+      return {title:'Insufficient funds to deduct',body:'No recovery can be taken from the currently selected payments.'};
+    }
+    const resolutionFamily=upper(firstText(meta.resolution_family,data.resolution_family));
+    if(kind==='actions'&&resolutionFamily==='TAXABLE_CHANNEL_RESTRUCTURE'){
+      const direction=routeDirection(data);
+      const body=direction?.source==='PAYE'
+        ?'Payment was originally PAYE. Candidate is now paid through an umbrella company.'
+        :direction?.source==='UMBRELLA'
+          ?'Payment was originally through an umbrella company. Candidate is now PAYE.'
+          :'The candidate’s payment method has changed. Review how this payment should be handled.';
+      return {title:'Payment method changed',body};
+    }
+    if(kind==='actions'&&['BUCKETED','NON_BUCKET'].includes(resolutionFamily)){
+      return {title:'Rate decision required',body:'Review the suggested rates or enter the rate that should be used.'};
+    }
+    const state=legacyCells[6];
+    const title=firstText(meta.title,state?.querySelector?.('.pill')?.textContent,kind==='actions'?'Action required':'Payment blocked');
+    const body=firstText(legacyCells[5]?.querySelector?.('.mini')?.textContent,legacyCells[1]?.querySelector?.('.mini')?.textContent,
+      data.presentation_message,data.blocked_reason_text,data.reason);
+    return {title,body};
+  }
+  function appendInteractiveUnits(fromCells,target){
+    const seen=new Set();
+    for(const control of fromCells.flatMap(cell=>Array.from(cell.querySelectorAll('button,input,select,textarea,a[href]')))){
+      const unit=control.closest('label')||control;
+      if(seen.has(unit)||unit.closest('.bpv2-detail-actions'))continue;
+      seen.add(unit);target.append(unit);
+    }
+  }
+  function compactRows(document,tbody,page,kind){
+    const rowsById=new Map(page.rows.filter(row=>row.preview_row_id).map(row=>[String(row.preview_row_id),row]));
+    for(const tr of Array.from(tbody.children)){
+      const legacyCells=Array.from(tr.children).filter(cell=>cell.tagName==='TD');
+      if(legacyCells.length===1){legacyCells[0].colSpan=5;continue;}
+      if(legacyCells.length!==8)continue;
+      const row=rowsById.get(String(tr.dataset.previewRowId||''));if(!row)fail();
+      const data=payload(row),copy=attentionCopy(row,kind,legacyCells);
+      const candidate=document.createElement('td');candidate.className='bpv2-detail-candidate';
+      const candidateName=firstText(data.candidate_name,data.display_name,'Candidate');
+      const candidateRef=firstText(data.candidate_reference,data.tms_ref);
+      candidate.innerHTML=`<strong>${esc(candidateName)}</strong>${candidateRef?`<span>${esc(candidateRef)}</span>`:''}`;
+      const payment=document.createElement('td');payment.className='bpv2-detail-payment';
+      const client=firstText(data.client_name,data.client_display_name);
+      const paymentDate=date(firstText(data.timesheet_week_ending,data.week_ending_date,data.week_ending,data.payment_date,
+        data.segment_date,data.linked_shift_date,data.shift_date));
+      const route=payMethod(firstText(data.pay_channel,data.payChannel));
+      payment.innerHTML=`<strong>${esc(friendlyType(data.line_type))}</strong>${client?`<span>${esc(client)}</span>`:''}`
+        +((paymentDate||route)?`<span>${paymentDate?esc(paymentDate):''}${paymentDate&&route?' · ':''}${route?`<span class="bpv2-route-badge bpv2-route-badge--${route.toLowerCase()}">${route==='UMBRELLA'?'Umbrella':'PAYE'}</span>`:''}</span>`:'');
+      const why=document.createElement('td');why.className='bpv2-detail-why';
+      why.innerHTML=`<strong>${esc(copy.title)}</strong>${copy.body?`<span>${esc(copy.body)}</span>`:''}`;
+      const amount=document.createElement('td');amount.className='bpv2-detail-amount';
+      while(legacyCells[5].firstChild)amount.append(legacyCells[5].firstChild);
+      // The retained renderer includes explanatory mini-copy beside some
+      // legacy amounts. In the five-column detail that explanation belongs
+      // solely in the dedicated reason column; retaining it here repeats the
+      // same sentence and makes the amount unreadable. Keep the authoritative
+      // value/badges, remove only duplicate presentation text, and apply the
+      // normal currency symbol without recalculating the server scalar.
+      for(const duplicate of amount.querySelectorAll('.mini'))duplicate.remove();
+      for(const routeLabel of amount.querySelectorAll(':scope > div > strong'))routeLabel.remove();
+      const valueNode=Array.from(amount.querySelectorAll(':scope > div')).find(node=>/^-?[\d,]+(?:\.\d{1,2})?$/.test(text(node.textContent)));
+      if(valueNode&&!text(valueNode.textContent).includes('£')){
+        const value=text(valueNode.textContent);valueNode.textContent=value.startsWith('-')?`-£${value.slice(1)}`:`£${value}`;
+      }
+      const actions=document.createElement('td');actions.className='bpv2-detail-actions-cell';
+      const actionWrap=document.createElement('div');actionWrap.className='bpv2-detail-actions';actions.append(actionWrap);
+      appendInteractiveUnits(legacyCells,actionWrap);
+      tr.replaceChildren(candidate,payment,why,amount,actions);
+    }
+  }
   function create({document,kind,adapters,onPage,onClose,onLegacyAction,onFailure}){
     if(!['actions','blocked'].includes(kind))throw new TypeError('Unknown issue detail kind');
     for(const callback of [onPage,onClose,onLegacyAction,onFailure])if(typeof callback!=='function')throw new TypeError('Issue detail adapters required');
@@ -124,7 +219,7 @@
       <button type="button" class="btn btn-outline" data-bpv2-detail-command="close">Close</button></header>
       <p role="status" class="bpv2-detail-status" aria-live="polite" hidden></p>
       <div class="bpv2-detail-scroll"><div data-bpv2-source-rows></div><div data-bpv2-resolution-rows></div><table class="grid banking-ready-preview-table"><thead><tr>
-        <th>Include</th><th>Line type</th><th>Candidate</th><th>Client</th><th>Week / Date</th><th>Channel</th><th>Amount</th><th>State</th><th>Action</th>
+        <th>Candidate</th><th>Payment</th><th>${kind==='actions'?'What needs attention':'Why it is blocked'}</th><th>Amount</th><th>Actions</th>
       </tr></thead><tbody></tbody></table></div>
       <footer><span data-bpv2-detail-count></span><button type="button" class="btn btn-outline" data-bpv2-detail-command="previous">Previous</button>
       <button type="button" class="btn btn-outline" data-bpv2-detail-command="next">Next</button></footer>`;
@@ -162,7 +257,7 @@
     return Object.freeze({element,
       prepare(page,summary){
         if(destroyed)throw new Error('BANKING_PAY_V2_CLOSED');const markup=render(page,summary,kind,adapters,openKeys);
-        const staged=document.createElement('tbody');staged.innerHTML=markup.tableRows;
+        const staged=document.createElement('tbody');staged.innerHTML=markup.tableRows;compactRows(document,staged,page,kind);
         const stagedSources=document.createElement('div');stagedSources.innerHTML=markup.sourceRows;
         const stagedResolutions=document.createElement('div');stagedResolutions.innerHTML=markup.resolutionRows;
         return ()=>{if(destroyed)return;const top=scroll.scrollTop,left=scroll.scrollLeft;accepted=page;
@@ -177,6 +272,6 @@
       destroy(){destroyed=true;accepted=null;openKeys.clear();element.removeEventListener('click',event);element.remove();}
     });
   }
-  const api=Object.freeze({payload,context,render,create});
+  const api=Object.freeze({payload,context,render,compactRows,create});
   if(local)module.exports=api;else root.CloudTMSBankingPayIssueDetailV2=api;
 })(typeof window==='object'?window:this);

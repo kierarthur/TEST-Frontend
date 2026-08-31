@@ -145,6 +145,7 @@
     for(const callback of [onIntent,onOpenDetail,onOpenUpdating,onViewTimesheets,onClose,onFailure])if(typeof callback!=='function')throw new TypeError('Issue-list adapters required');
     const definition=definitions[kind];const element=document.createElement('section');
     element.className=`banking-pay-v2-issues bpv2-${kind}`;element.setAttribute('aria-label',definition.title);
+    element.dataset.bpv2IssueKind=kind;
     element.innerHTML=`<h2 class="bpv2-visually-hidden">${definition.title}</h2>
       <p class="bpv2-issue-intro">${kind==='actions'?'Payments that need a decision before they can be included.':'Payments that cannot currently be included in a Draft. Indefinite snoozes remain in Loans / Snoozes.'}</p>
       <div class="bpv2-issue-toolbar"><form role="search"><label><span class="bpv2-visually-hidden">Search ${definition.title}</span><input type="search" maxlength="200" autocomplete="off" data-bpv2-issue-search placeholder="Search ${definition.title}"></label><button type="submit" class="btn btn-outline">Search</button></form>

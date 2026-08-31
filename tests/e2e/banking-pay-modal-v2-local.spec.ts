@@ -502,6 +502,7 @@ test('Action Required detail renders and dispatches the exact existing resolutio
           tms_ref: 'CCR-03726',
           client_name: 'West London Mental Health NHS Trust',
           line_type: 'TIMESHEET_PAYMENT',
+          week_ending_date: '2026-06-14',
           presentation_section: 'CASES_RESOLUTIONS',
           effective_section: 'cases_resolutions',
           pay_channel: 'PAYE',
@@ -521,14 +522,63 @@ test('Action Required detail renders and dispatches the exact existing resolutio
   await expect(review).toBeVisible();
   await expect(page.getByRole('button', { name: 'Exclude case' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Snooze whole timesheet' })).toBeVisible();
-  const badge = page.locator('.banking-pay-v2-issue-detail .pill.pill-warn').first();
-  await expect(badge).toHaveText('Resolution required');
-  const badgeStyle = await badge.evaluate(element => {
-    const style = getComputedStyle(element);
-    return { height: element.getBoundingClientRect().height, whiteSpace: style.whiteSpace };
-  });
-  expect(badgeStyle.height).toBeLessThanOrEqual(28);
-  expect(badgeStyle.whiteSpace).toBe('nowrap');
+  await expect(page.locator('.banking-pay-v2-issue-detail th')).toHaveText([
+    'Candidate', 'Payment', 'What needs attention', 'Amount', 'Actions'
+  ]);
+  const paymentRow = page.locator('.banking-pay-v2-issue-detail tbody > tr[data-preview-row-id]').first();
+  await expect(paymentRow.locator(':scope > td')).toHaveCount(5);
+  await expect(paymentRow.locator('.bpv2-detail-candidate')).toContainText('James Terwane');
+  await expect(paymentRow.locator('.bpv2-detail-payment')).toContainText('West London Mental Health NHS Trust');
+  await expect(paymentRow.locator('.bpv2-detail-payment')).toContainText('14/06/2026');
+  await expect(paymentRow.locator('.bpv2-route-badge')).toHaveText('PAYE');
+  await expect(paymentRow.locator('.bpv2-detail-why')).toContainText('Rate decision required');
+  await expect(paymentRow.locator('.bpv2-detail-why')).toContainText('Review the suggested rates');
+  await expect(paymentRow.locator('.bpv2-detail-amount')).toHaveText('£200.00');
+  await expect(paymentRow.locator('.pill.pill-warn')).toHaveCount(0);
   await review.click();
   await expect(page.locator('#result')).toHaveText('banking:pay:openBucketedResolution');
+});
+
+test('Blocked for Pay detail uses the agreed five-column copy and preserves Timesheet and Snooze actions', async ({ page }) => {
+  await page.setContent('<!doctype html><html><head></head><body><main id="host"></main><p id="result"></p></body></html>');
+  await page.addStyleTag({ path: path.join(root, 'css', 'banking-pay-modal-v2.css') });
+  for (const file of ['banking-pay-modal-v2-copy.js','banking-pay-modal-v2-table.js','banking-pay-modal-v2-issues.js',
+    'banking-pay-modal-v2-details-legacy.js','banking-pay-modal-v2-issue-detail.js']) {
+    await page.addScriptTag({ path: path.join(root, 'js', file) });
+  }
+  const summary = hundredCandidatePage(); summary.global.blocked_count = 1;
+  await page.evaluate(({ summary, ids }) => {
+    const detail = (window as any).CloudTMSBankingPayIssueDetailV2.create({document,kind:'blocked',
+      adapters:{formatIsoToUk:(value:string)=>value,railEnv:'TEST',railProvider:'CSV'},onPage:()=>{},onClose:()=>{},
+      onLegacyAction:({action}:{action:string})=>{document.querySelector('#result')!.textContent=action;},
+      onFailure:({code}:{code:string})=>{document.querySelector('#result')!.textContent=code;}});
+    document.querySelector('#host')!.append(detail.element);
+    detail.prepare({ok:true,contract:summary.contract,contract_version:1,session_id:summary.session_id,
+      session_version:summary.session_version,progress_counter_version:summary.progress_counter_version,scope_hash:summary.scope_hash,
+      blocker_key:'blocked-recovery',total_count:1,has_more:false,next_cursor:null,page_number:1,has_previous:false,previous_cursor:null,
+      affected_candidate_count:1,affected_payment_count:1,affected_payment_count_complete:true,rows:[{
+        identity:'blocked-recovery-member',candidate_id:ids.candidate,preview_row_id:ids.preview,source_kind:'PREVIEW_ROW',context_only:false,
+        task_meta:{task_family:'PASSIVE_PAYMENT',state:'BLOCKED'},payload:{candidate_id:ids.candidate,preview_row_id:ids.preview,
+          display_name:'Kier Arthur',tms_ref:'CCR-00835',client_name:'Berkshire Healthcare NHS Foundation Trust',
+          line_type:'OVERPAYMENT_RECOVERY',timesheet_id:ids.timesheet,week_ending_date:'2026-06-07',pay_channel:'PAYE',
+          presentation_section:'BLOCKED_FOR_PAY',effective_section:'blocked_for_pay',presentation_reason:'NO_PAY_HEADROOM',
+          amount_ex_vat:'0.00',section_amount_ex_vat:'0.00',nominal_due_amount_ex_vat:'130.43',
+          recoverable_this_pay_run_ex_vat:'0.00'}}]},summary)();
+  }, {summary,ids:{candidate:id(11),preview:id(12),timesheet:id(13)}});
+  await expect(page.locator('.banking-pay-v2-issue-detail th')).toHaveText([
+    'Candidate','Payment','Why it is blocked','Amount','Actions'
+  ]);
+  const row=page.locator('tbody > tr[data-preview-row-id]').first();
+  await expect(row.locator(':scope > td')).toHaveCount(5);
+  await expect(row.locator('.bpv2-detail-candidate')).toContainText('Kier Arthur');
+  await expect(row.locator('.bpv2-detail-payment')).toContainText('Overpayment Recovery');
+  await expect(row.locator('.bpv2-detail-payment')).toContainText('7 June 2026'.replace('7 June 2026','07/06/2026'));
+  await expect(row.locator('.bpv2-detail-why')).toHaveText(/Insufficient funds to deduct.*No recovery can be taken from the currently selected payments\./);
+  await expect(row.locator('.bpv2-detail-amount')).toHaveText('£130.43');
+  await expect(row.locator('.bpv2-detail-amount')).not.toContainText('No recovery can be made');
+  await expect(row.locator('.pill.pill-bad')).toHaveCount(0);
+  await row.getByRole('button',{name:/Show the timesheet related to this row/}).click();
+  await expect(page.locator('#result')).toHaveText('banking:pay:viewRowTimesheets');
+  await row.getByRole('button',{name:'Snooze'}).click();
+  await expect(page.locator('#result')).toHaveText('banking:pay:openSnooze');
 });

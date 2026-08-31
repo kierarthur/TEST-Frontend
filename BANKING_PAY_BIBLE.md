@@ -172,12 +172,14 @@ Blocked for Pay contains rows that cannot currently proceed to the selected Draf
 For an overpayment recovery blocked only by insufficient selected positive funds:
 
 - line type: `OVERPAYMENT RECOVERY`;
-- supporting label: `No available funds to recover this yet.`;
+- payment context shows the exact current client, human week/date and pay-method badge;
 - Amount shows the nominal/outstanding amount due for recovery, not a misleading `£0.00` recoverable value;
-- explanatory text: `No recovery can be made because there are no available funds to deduct from this pay run.`;
-- State: `Insufficient funds`;
+- heading: `Insufficient funds to deduct`;
+- explanatory text: `No recovery can be taken from the currently selected payments.`;
 - do not show a generic `This case is currently blocked and needs review...` message;
 - do not show meaningless channel text such as `UMBRELLA • NONE` beneath the state.
+
+The Blocked detail table uses exactly five presentation columns: `Candidate`, `Payment`, `Why it is blocked`, `Amount`, and `Actions`. Candidate contains the human name and CloudTMS reference. Payment contains the line type plus current client/date/pay-method context. Why it is blocked contains the plain-English heading and explanation above. Amount is left-aligned, currency-formatted and remains database-owned; it must not repeat the explanation already shown in Why it is blocked. Actions retains every existing applicable Timesheets, Snooze, resolution/cancellation and breakdown control; the presentation may move a control into this column but must not remove, replace or reinterpret it. An expanded breakdown remains inside the same bounded table and spans the five presentation columns.
 
 Blocked-for-insufficient-funds is not a resolution case. When sufficient selected positive headroom later exists, the canonical revalidator may promote a full or partial recovery to Ready to Pay.
 
@@ -198,6 +200,10 @@ For a pay-channel resolution case, presentation must state the real source and t
 - `UMBR>PAYE`
 
 The Amount area must show the relevant channel-owned amount and explain that the current amount is determined under the source channel but requires resolution to the target channel. Do not present `£0.00` as though no financial amount exists when the case actually concerns a non-zero outstanding/restructured amount.
+
+The Action Required detail table uses exactly five presentation columns: `Candidate`, `Payment`, `What needs attention`, `Amount`, and `Actions`. It retains every existing applicable resolution, alternative-rate/amount, matching-timesheet scope, Timesheets, Snooze, exclusion, cancellation, restore and breakdown control. Row double-click and the visible candidate control both open the same fixed top-layer detail authority; interactive child controls must not accidentally trigger a second open. The compact table is a presentation over the existing server payload and retained action handlers, never a second action or financial owner.
+
+For an actionable finance case, the displayed amount must come from the existing authoritative unresolved/nominal case scalar when the current-pay-run recoverable scalar is zero. A zero recoverable scalar means that nothing can presently be deducted; it does not mean that the outstanding decision or recovery is worth zero. The browser must not select, calculate, sum or substitute this amount. An ordinary zero with no non-zero unresolved case amount is shown as unavailable rather than as a misleading payable `£0.00`.
 
 ## 10. Rate resolution
 
@@ -438,6 +444,18 @@ These identities are observations, not pinned baselines. Every later task must u
 - The Banking Pay worker must run this bounded invalid-dirty-apply repair before ordinary Workbench claims and must stop visibly if complete convergence cannot be proved. It must not conceal the problem by showing stale data as current, enabling Create Draft from uncertain authority, rewriting the failed instruction, changing a Timesheet version or relaxing eligibility.
 
 ## 20. Change record
+
+### 31 August 2026 — truthful Action Required amounts and five-column issue details
+
+- Real read-only TEST evidence proved that the Action Required `Payment method changed` row displayed as `£0.00` was not a zero-value payment or case. It was an existing £25.00 overpayment-recovery decision for a PAYE-to-Umbrella change. The current-pay-run recoverable scalar was correctly zero because no amount could presently be deducted, while the existing nominal/unresolved case scalar remained £25.00. The defect was confined to choosing the wrong existing scalar for the Action Required summary.
+- The server-owned Action Required page projection now preserves every non-zero current presentation unchanged. For an affected finance case whose current-pay-run presentation rounds to zero, it presents the existing authoritative unresolved/nominal case amount. Where neither authority contains a non-zero amount, the presentation is unavailable rather than a misleading payable `£0.00`. The browser does not calculate, sum, infer or replace an amount, and the change does not make any recovery selectable or Draft-eligible.
+- Action Required detail uses exactly `Candidate`, `Payment`, `What needs attention`, `Amount`, and `Actions`. Blocked for Pay detail uses exactly `Candidate`, `Payment`, `Why it is blocked`, `Amount`, and `Actions`. Both are fixed top-layer child surfaces. The retained legacy row/action authority still constructs the rows; compaction moves every real interactive control into Actions, removes only the legacy explanation duplicated by the dedicated reason column, currency-formats the unchanged server value, and keeps every expandable breakdown inside the bounded five-column table.
+- The approved insufficient-funds presentation is `Insufficient funds to deduct` followed by `No recovery can be taken from the currently selected payments.` The Payment cell retains the overpayment-recovery label, exact client, human week/date and PAYE/Umbrella badge. The Amount cell retains the outstanding/nominal recovery amount. Timesheets, Snooze and every other applicable existing control remain wired to their established handlers.
+- Both an issue row double-click and its visible candidate control open the same current child authority. A stable delegated shell fallback protects this behaviour while the healthy presenter prevents propagation and duplicate opening. Interactive row descendants do not become accidental row opens.
+- Local executable evidence passed the complete frontend unit suite 1,298/1,298, the focused Chromium Banking suite 6/6, the complete backend suite 1,103/1,103, a clean PostgreSQL 17 NEW-database replay, the rollback-contained first-use verifier and exact generated-contract comparison. The contract delta was one existing Action Required page-reader definition hash only.
+- Backend TEST commit `5eb6e3614be1c175d06c6b1ad85cafead82c25bd` was installed by protected managed Miget TEST UPGRADE run `33446917486`. The release applied exactly the new presentation repeatable `31082026_2230_banking_pay_action_required_amount_presentation_v1.sql`, closure SHA-256 `5a43dd7a351834567bf298937519b7788d4055a7758729fe351c615207f97028`, and completed the exact installed contract, security and first-use certification. The canonical contract SHA-256 is `154bed788e77d5729a18043e5c41b6901520268a2ec390605124d987d3fd038c`; only the existing Action Required page reader changed.
+- Published frontend, deployed-asset parity and signed-in real-browser acceptance remain separate mandatory gates and must be appended here before the release is described as complete.
+- Policy X assessment: compliant. This is a server-owned display-projection and presentation correction. It changes no payment economics, eligibility, selection, recovery/headroom, rates, VAT, ERNI, PAYE/Umbrella treatment, Timesheet validity, Draft input, frozen post-Draft artefacts, provider execution, payment, settlement, remittance or cancellation authority.
 
 ### 31 August 2026 — Candidate Banking client and pay-method column containment
 
