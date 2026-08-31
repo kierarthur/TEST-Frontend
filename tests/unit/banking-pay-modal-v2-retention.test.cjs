@@ -12,7 +12,7 @@ test('individual row dispatch binds exact rendered IDs and the current complete 
   request_id:fixture.id(9000),pay_channel_scope:'ALL'};
  const result=mutation.rowSelectionRequest(old,click);
  assert.deepEqual(result,{...Object.fromEntries(Object.entries(request()).filter(([key])=>key!=='action')),
-  preview_row_ids:[fixture.id(500)],selected:false,open_ready:{cursor:'ready_position',limit:25}});
+  preview_row_ids:[fixture.id(500)],selected:false,open_ready:{cursor:'ready_position',limit:10}});
  click.preview_row_ids[0]=fixture.id(501);assert.deepEqual(result.preview_row_ids,[fixture.id(500)]);
  assert.ok(Object.isFrozen(result.preview_row_ids));
  assert.throws(()=>mutation.rowSelectionRequest(old,click),/INVALID_RESPONSE/);
@@ -52,7 +52,7 @@ test('candidate request copies only current dispatch authority and the already-o
  assert.equal(next.expected_progress_counter_version,8);assert.equal(next.expected_view_digest,'8'.repeat(64));
  old.ui.surface='candidate';old.ready={candidate_id:fixture.id(1),page_anchor:'ready_position',
   session_id:old.summary.session_id,session_version:2,progress_counter_version:8,scope_hash:old.summary.scope_hash};
- assert.deepEqual(mutation.candidateSelectionRequest(old,click).open_ready,{cursor:'ready_position',limit:25});
+ assert.deepEqual(mutation.candidateSelectionRequest(old,click).open_ready,{cursor:'ready_position',limit:10});
  old.ready.progress_counter_version=7;
  assert.throws(()=>mutation.candidateSelectionRequest(old,click),/INVALID_RESPONSE/);
 });

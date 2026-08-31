@@ -84,7 +84,7 @@
 .banking-pay-v2-child-host .btn.btn-primary{border-color:#6878ef;background:linear-gradient(180deg,#6678f5,#4b5bd8);color:#fff;box-shadow:0 7px 20px rgba(57,70,186,.28),0 1px 0 rgba(255,255,255,.14) inset}
 .banking-pay-v2-child-host .btn.btn-primary:hover{border-color:#8b98ff;background:linear-gradient(180deg,#7888ff,#5666e4)}
 .banking-pay-v2-child-host button:disabled,.banking-pay-v2-child-host button.disabled,.banking-pay-v2-child-host button[aria-disabled="true"]{opacity:.43;filter:saturate(.65);cursor:default}
-.banking-pay-v2-candidate .bpv2-child-heading,.banking-pay-v2-issue-detail>header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding-bottom:14px;border-bottom:1px solid var(--ctms-modal-line,#2b405d)}
+.banking-pay-v2-candidate .bpv2-child-heading,.banking-pay-v2-issue-detail>header{display:flex;flex:0 0 auto;align-items:flex-start;justify-content:space-between;gap:16px;padding-bottom:14px;border-bottom:1px solid var(--ctms-modal-line,#2b405d);background:var(--ctms-modal-bg,#071627)}
 .banking-pay-v2-candidate h2,.banking-pay-v2-issue-detail h2{margin:0 0 5px;font-size:20px;color:var(--ctms-modal-text,#f8fafc)}
 .banking-pay-v2-candidate [data-bpv2-candidate-name]{color:var(--ctms-modal-sub,#aebed2)}
 .banking-pay-v2-candidate .bpv2-child-summary{display:grid;grid-template-columns:minmax(220px,1fr) minmax(280px,auto) auto;align-items:center;gap:16px;padding:14px 0}
@@ -92,7 +92,7 @@
 .bpv2-child-totals{display:flex;align-items:baseline;gap:12px;white-space:nowrap}
 .bpv2-child-totals [data-bpv2-candidate-amount]{font-size:18px;font-weight:800}
 .bpv2-child-totals [data-bpv2-selected-count]{color:var(--ctms-modal-sub,#aebed2);font-size:12px}
-.banking-pay-v2-candidate .bpv2-child-scroll,.banking-pay-v2-issue-detail .bpv2-detail-scroll{min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain;border:1px solid var(--ctms-modal-line,#2b405d);border-radius:9px}
+.banking-pay-v2-candidate .bpv2-child-scroll,.banking-pay-v2-issue-detail .bpv2-detail-scroll{flex:1 1 auto;min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain;border:1px solid var(--ctms-modal-line,#2b405d);border-radius:9px}
 .banking-pay-v2-candidate table{width:100%;border-collapse:collapse}
 .banking-pay-v2-candidate .banking-ready-preview-table{min-width:1020px;table-layout:fixed}
 .banking-pay-v2-candidate .banking-ready-preview-table>thead{position:sticky;top:0;z-index:3;background:var(--ctms-modal-panel-raised,#101f35)}
@@ -169,8 +169,9 @@
   .banking-pay-v2-section-nav{gap:15px;overflow-x:auto}
   .banking-pay-v2-section-nav button{white-space:nowrap}
   .banking-pay-v2-table .bpv2-payment-col{width:225px}
-  .banking-pay-v2-child-host{padding:10px}
-  .banking-pay-v2-child-host>.banking-pay-v2-candidate,.banking-pay-v2-child-host>.banking-pay-v2-issue-detail{width:calc(100vw - 20px);max-height:calc(100vh - 20px);padding:13px}
+  .banking-pay-v2-child-host{place-items:start center;padding:max(10px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left))}
+  .banking-pay-v2-child-host>.banking-pay-v2-candidate,.banking-pay-v2-child-host>.banking-pay-v2-issue-detail{width:calc(100vw - 20px);max-height:calc(100dvh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom));padding:13px}
+  .banking-pay-v2-candidate .bpv2-child-heading,.banking-pay-v2-issue-detail>header{position:sticky;top:0;z-index:8}
   .banking-pay-v2-candidate .bpv2-child-summary{grid-template-columns:1fr;gap:10px}
   .bpv2-child-totals{flex-wrap:wrap}
 }

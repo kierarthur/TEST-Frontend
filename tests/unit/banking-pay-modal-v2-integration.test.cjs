@@ -155,10 +155,21 @@ test('background Pay rerenders refresh an open v2 child in place',()=>{
   assert.match(integrationSource,/controller\.snapshot\(\)\?\.ui\?\.surface==='main'&&controller\.isBusy\(\)\)return true/);
   assert.match(integrationSource,/controller\.refreshCurrentAuthority\(\)/);
   assert.match(integrationSource,/surfaceName==='candidate'/);
+  assert.match(integrationSource,/const CANDIDATE_READY_PAGE_LIMIT=controllerModule\.CANDIDATE_READY_PAGE_LIMIT/);
+  const candidateRefresh=integrationSource.slice(integrationSource.indexOf("if(surfaceName==='candidate'"),
+    integrationSource.indexOf("}else if(surfaceName==='actions'"));
+  assert.match(candidateRefresh,/limit:CANDIDATE_READY_PAGE_LIMIT/);
+  assert.doesNotMatch(candidateRefresh,/limit:100/);
   assert.match(integrationSource,/surfaceName==='actions'\|\|surfaceName==='actionDetail'/);
   assert.match(integrationSource,/surfaceName==='blocked'\|\|surfaceName==='blockedDetail'/);
   assert.match(mainSource,/CloudTMSBankingPayModalV2Integration\.refreshOpenSurface\(\)/);
   assert.match(mainSource,/if \(refreshedOpenSurface\)[\s\S]{0,260}return true;/);
+});
+
+test('oversized Candidate Banking responses never expose an internal error code',()=>{
+  const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
+  assert.match(source,/Candidate Banking could not refresh after that selection\. The selection was not changed\. Refresh Banking Pay and try again\./);
+  assert.doesNotMatch(source,/status\.textContent=String\(value/);
 });
 
 test('a disconnected modal controller cannot suppress a later Banking Pay reopen',()=>{

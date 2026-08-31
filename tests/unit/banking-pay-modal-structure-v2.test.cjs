@@ -76,13 +76,24 @@ test('main.js delegates v2 actions while retaining every legacy Banking Pay hand
     'banking:pay:openFiltersModal'
   ]) assert.ok(main.includes(action), `legacy action retained: ${action}`);
   const html = htmlSource();
-  assert.match(html, /banking-pay-modal-v2\.css\?v=20260830-r1/);
-  assert.match(html, /banking-pay-modal-v2-integration\.js\?v=20260830-r2/);
+  assert.match(html, /banking-pay-modal-v2\.css\?v=20260831-r1/);
+  assert.match(html, /banking-pay-modal-v2-integration\.js\?v=20260831-r1/);
   const integrationIndex = html.indexOf('./js/banking-pay-modal-v2-integration.js');
   const mainIndex = html.indexOf('./js/main.js');
   assert.ok(integrationIndex >= 0 && mainIndex > integrationIndex, 'the capability-gated integration must load before main.js');
   assert.ok(main.includes('CloudTMSBankingPayModalV2Integration.afterRender'));
   assert.ok(main.includes('dispatch,'), 'the unchanged delegated handler is exposed to the contained integration');
+});
+
+test('Candidate Banking keeps one reachable mobile Close control while only the table scrolls',()=>{
+  const candidate=source('banking-pay-modal-v2-candidate.js');
+  const css=fs.readFileSync(path.join(root,'css','banking-pay-modal-v2.css'),'utf8');
+  assert.equal((candidate.match(/data-bpv2-child="close"/g)||[]).length,1);
+  assert.match(css,/\.banking-pay-v2-child-host\{[^}]*position:fixed/);
+  assert.match(css,/\.bpv2-child-scroll[^}]*\{flex:1 1 auto;[^}]*overflow:auto/);
+  assert.match(css,/@media\(max-width:780px\)[\s\S]*?\.banking-pay-v2-child-host\{place-items:start center/);
+  assert.match(css,/max-height:calc\(100dvh/);
+  assert.match(css,/\.bpv2-child-heading[^}]*\{position:sticky;top:0;z-index:8\}/);
 });
 
 test('Banking navigation and confirmed Draft success follow the settled four-sheet and exact-batch handoff policy', () => {

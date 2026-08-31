@@ -11,6 +11,7 @@
   const issuesModule=local?require('./banking-pay-modal-v2-issues.js'):root.CloudTMSBankingPayIssuesV2;
   const issueDetailModule=local?require('./banking-pay-modal-v2-issue-detail.js'):root.CloudTMSBankingPayIssueDetailV2;
   const mutationModule=local?require('./banking-pay-modal-v2-mutation.js'):root.CloudTMSBankingPayMutationV2;
+  const CANDIDATE_READY_PAGE_LIMIT=controllerModule.CANDIDATE_READY_PAGE_LIMIT;
   const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
   const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -188,7 +189,13 @@
     const mutation=mutationModule;let controller=null,currentSurface=null,currentChild=null,returnFocus=null;
     const presenters={main:null,candidate:null,actions:null,blocked:null,detail:null};
     const detailAdapters={formatIsoToUk:context.formatIsoToUk,railEnv:context.railEnv,railProvider:context.railProvider};
-    function showError(value){status.textContent=String(value||'Banking Pay could not be updated. Refresh and try again.');status.hidden=false;
+    function failureMessage(value){
+      const code=typeof value==='string'?value:(value?.code||value?.message);
+      if(code==='BANKING_PAY_V2_READY_TOO_LARGE'||code==='BANKING_PAY_V2_SELECTION_TOO_LARGE')
+        return 'Candidate Banking could not refresh after that selection. The selection was not changed. Refresh Banking Pay and try again.';
+      return String(value||'Banking Pay could not be updated. Refresh Banking Pay and try again.');
+    }
+    function showError(value){status.textContent=failureMessage(value);status.hidden=false;
       for(const presenter of Object.values(presenters))presenter?.showFailure?.(status.textContent);}
     function setBusy(value){for(const presenter of Object.values(presenters))presenter?.setBusy?.(value);
       const create=shell.querySelector('[data-action="banking:pay:createDraft"]');if(create){create.disabled=Boolean(value)||create.dataset.bpv2DraftAllowed!=='1';
@@ -306,7 +313,7 @@
       let ready=null,actions=null,actionDetail=null,blocked=null,blockedDetail=null;
       const summaryPromise=transport.readPage('summary',args);
       if(surfaceName==='candidate'&&previous.ready?.candidate_id){
-        ready=await transport.readPage('ready',{...common,candidate_id:previous.ready.candidate_id,cursor:null,limit:100});
+        ready=await transport.readPage('ready',{...common,candidate_id:previous.ready.candidate_id,cursor:null,limit:CANDIDATE_READY_PAGE_LIMIT});
         if(ready.candidate===null)ready=null;
       }else if(surfaceName==='actions'||surfaceName==='actionDetail'){
         const page=previous.actions;

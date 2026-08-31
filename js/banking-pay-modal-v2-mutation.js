@@ -6,7 +6,10 @@
  const table=typeof module==='object'&&module.exports?require('./banking-pay-modal-v2-table.js'):root.CloudTMSBankingPayTableV2;
  const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  const TOKEN=/^[A-Za-z0-9_-]{1,4096}$/;
- const CANDIDATE_READY_PAGE_LIMIT=25;
+ // Candidate Banking rows carry the complete existing row controls and
+ // breakdown authority. Keep enough response-size headroom for the
+ // post-selection page returned by the server as well as the ordinary read.
+ const CANDIDATE_READY_PAGE_LIMIT=10;
  const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
  const count=v=>Number.isSafeInteger(v)&&v>=0;
  const text=v=>typeof v==='string'&&v.length>0;
