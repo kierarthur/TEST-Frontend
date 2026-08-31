@@ -16,6 +16,13 @@ This document records business and safety invariants. It is not permission to mu
 
 If code, a test, a handover, or an existing screen conflicts with this Bible, do not guess which is right. Stop the affected change, identify the precise conflict, preserve the existing economic authority, and obtain an explicit policy decision if the conflict cannot be resolved from current authoritative evidence.
 
+### Canonical storage and publication
+
+- The single controlling working document is `BANKING_PAY_BIBLE.md` at the root of the `kierarthur/TEST-Frontend` repository.
+- Its published GitHub location is `https://github.com/kierarthur/TEST-Frontend/blob/main/BANKING_PAY_BIBLE.md`. The current `main` branch copy is the online authority; a local checkout is current only when its exact file bytes match that branch.
+- Historical handovers, downloaded plans, attachments, generated archives and the earlier `CloudTMS_Banking_Pay_Modal_Structure_Bible_20260828` pack are evidence only. They do not become a second rulebook and must not override a later rule or change record in this file.
+- `TEST-Frontend/AGENTS.md` requires every future Banking Pay, Workbench, Draft, payment, recovery, settlement, cancellation and remittance task to read this file in full and to update its change record when verified behaviour or an approved policy changes.
+
 ## 2. Change-control protocol
 
 Every Banking Pay change must follow this order:
@@ -459,6 +466,7 @@ These identities are observations, not pinned baselines. Every later task must u
 - Frontend TEST commit `aff6a028b4b543881b3caff146bc6701f00aa6b2` published the correction and one coherent `20260831-r11` Banking asset boundary. Pages run `33450229639` and App-Ready run `33450230704` both succeeded; App-Ready included the real Candidate/Client modal-handler browser regression. Focused unit proof passed 16/16, the complete applicable source suite passed 1,405/1,405, and the focused Chromium Banking suite passed 6/6. Two separately recorded dormant non-Banking static assertions remain outside this change and were not weakened.
 - Direct deployed-asset verification proved exactly one `20260831-r11` issue-detail script. Signed-in real TEST acceptance opened all four current Action Required rows by double-click, opened the same child through the visible Candidate control, and proved every row retained Timesheets, Snooze, its applicable resolution action and `Exclude case`. The payment-method row displayed the authoritative unresolved amount `£25.00`; no internal code was shown.
 - The same signed-in acceptance opened the current insufficient-funds Blocked row by double-click and by the visible Candidate control. Its detail had exactly `Candidate`, `Payment`, `Why it is blocked`, `Amount`, and `Actions`; displayed `Insufficient funds to deduct` and `No recovery can be taken from the currently selected payments.`; retained the outstanding amount, Timesheets and Snooze; and exposed no internal code. Opening and closing either child left the parent modal's position, dimensions and scroll state unchanged. There were no page errors, failed Banking requests, Draft creations, selection changes, Snooze saves, provider actions, payments, settlements or remittances during acceptance.
+- Documentation closure commit `bf0625fbae8b15811899dbc65b290025d050cbc5` published this verified evidence through Pages run `33451300869`. App-Ready run `33451301870` completed successfully on attempt 2 with all 104 broader Candidate/Client browser checks and the Banking/UI seam checks passing. Attempt 1 contained one isolated desktop rate-client-picker timing miss while the same scenario passed on phone and iPad; the exact desktop test then passed locally and the complete unchanged rerun passed. No Banking rule, test or unrelated application behaviour was weakened to obtain the green gate.
 - Policy X assessment: compliant. This is a server-owned display-projection and presentation correction. It changes no payment economics, eligibility, selection, recovery/headroom, rates, VAT, ERNI, PAYE/Umbrella treatment, Timesheet validity, Draft input, frozen post-Draft artefacts, provider execution, payment, settlement, remittance or cancellation authority.
 
 ### 31 August 2026 — Candidate Banking client and pay-method column containment
