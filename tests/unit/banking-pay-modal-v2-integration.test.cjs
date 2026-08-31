@@ -56,6 +56,7 @@ test('the contained shell retains the original Draft, filter and export actions'
   assert.doesNotMatch(html,/candidate-search|View (?:breakdown|details)/i);
   assert.match(html,/data-bpv2-ready-label="Create drafts \(override required\)"/);
   assert.match(html,/data-bpv2-paye-guard-allows-create="1"/);
+  assert.match(html,/data-bpv2-runtime-status/);
 });
 
 test('the contained shell carries the existing PAYE Draft guard without widening it',()=>{
@@ -140,9 +141,10 @@ test('a moving revision renews authority instead of falling back to the legacy t
   assert.match(source,/async function renewMountAuthority\(shell,context,state\)/);
   assert.match(source,/for\(let attempt=0;attempt<4;attempt\+=1\)/);
   const staleBranchStart=source.indexOf('if(staleMountCodes.has(errorCode(error)))');
-  const ordinaryFailureStart=source.indexOf('\n    {\n      runtime.shell',staleBranchStart+1);
+  const ordinaryFailureStart=source.indexOf('\n    {\n      runtime.showError(error);',staleBranchStart+1);
   const staleBranch=source.slice(staleBranchStart,ordinaryFailureStart);
-  assert.match(staleBranch,/Banking Pay changed while this screen was loading/);
+  assert.match(staleBranch,/runtime\.showError\('BANKING_PAY_V2_STALE_REVISION'\)/);
+  assert.match(source,/Banking Pay changed while this screen was loading/);
   assert.doesNotMatch(staleBranch,/available=false|context\.rerender/);
 });
 
@@ -171,6 +173,15 @@ test('oversized Candidate Banking responses never expose an internal error code'
   assert.match(source,/Candidate Banking could not complete that selection safely\. The current selection has been reloaded from the server\. Review it before trying again\./);
   assert.doesNotMatch(source,/The selection was not changed/);
   assert.doesNotMatch(source,/status\.textContent=String\(value/);
+});
+
+test('Candidate Banking display failures use one contained alert and preserve the accepted list',()=>{
+  const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
+  assert.match(source,/querySelector\('\[data-bpv2-runtime-status\]'\)/);
+  assert.match(source,/Candidate Banking could not be shown\. The current Banking Pay list is unchanged; try opening the candidate again\./);
+  assert.match(source,/status\.setAttribute\('role','alert'\)/);
+  assert.match(source,/bpv2-shell-status--error/);
+  assert.doesNotMatch(source,/status\.textContent\s*=\s*(?:value|error|code)/);
 });
 
 test('a disconnected modal controller cannot suppress a later Banking Pay reopen',()=>{

@@ -95,6 +95,10 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
       previous_cursor: null,
       page_anchor: 'fixture_ready_anchor'
     });
+    for (const row of snapshot.page.rows.filter((item: any) => item.presentation_group_kind === 'TIMESHEET')) {
+      Object.assign(row, { presentation_role: 'PARENT', selection_allowed: false,
+        is_ready_for_draft: false, draftable: false, status: 'SUPPORTING_CONTEXT' });
+    }
     const state = { pay: { draftWizard: { workbench_v2: { available: true, checked: true } } } };
     const openedTimesheets: unknown[] = [];
     const legacyActions: unknown[] = [];
@@ -205,6 +209,10 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
       previous_cursor: null,
       page_anchor: 'fixture_ready_anchor'
     });
+    for (const row of snapshot.page.rows.filter((item: any) => item.presentation_group_kind === 'TIMESHEET')) {
+      Object.assign(row, { presentation_role: 'PARENT', selection_allowed: false,
+        is_ready_for_draft: false, draftable: false, status: 'SUPPORTING_CONTEXT' });
+    }
     const presenter = (window as any).CloudTMSBankingPayCandidateV2.create({
       document,
       onIntent: () => undefined,

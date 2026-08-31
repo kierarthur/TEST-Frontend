@@ -40,6 +40,37 @@ test('Candidate Banking renders certified Timesheet groups when line type is nes
   assert.ok(html.includes('Timesheet Payment'));
   assert.ok(html.includes('banking:pay:toggleTimesheetBreakdown'));
 });
+test('Candidate Banking renders a certified outer Timesheet representative without changing server authority',()=>{
+  const value=fixture.snapshot();
+  const representative=value.page.rows.find(row=>row.presentation_group_kind==='TIMESHEET');
+  Object.assign(representative,{presentation_role:'PARENT',selection_allowed:false,is_ready_for_draft:false,
+    draftable:false,status:'SUPPORTING_CONTEXT'});
+  const before={presentation_role:representative.presentation_role,selection_allowed:representative.selection_allowed,
+    is_ready_for_draft:representative.is_ready_for_draft,draftable:representative.draftable,status:representative.status};
+  assert.equal(api.validate(value).page,value.page);
+  const display=api.outerTimesheetRenderRows([representative])[0];
+  assert.notEqual(display,representative);
+  assert.equal(display.presentation_role,'GROUP_REPRESENTATIVE');
+  assert.equal(display.selection_allowed,true);
+  const html=api.rowMarkup(value,new Set());
+  assert.ok(html.includes('Timesheet Payment'));
+  assert.ok(html.includes('banking:pay:toggleTimesheetPreviewGroup'));
+  assert.ok(html.includes('banking:pay:toggleTimesheetBreakdown'));
+  assert.deepEqual({presentation_role:representative.presentation_role,selection_allowed:representative.selection_allowed,
+    is_ready_for_draft:representative.is_ready_for_draft,draftable:representative.draftable,status:representative.status},before,
+  'the display bridge must not rewrite the accepted server row used by selection and Draft authority');
+});
+test('an outer Timesheet representative with no selectable group remains visible but has no selection control',()=>{
+  const value=fixture.snapshot();
+  const representative=value.page.rows.find(row=>row.presentation_group_kind==='TIMESHEET');
+  Object.assign(representative,{presentation_role:'PARENT',selection_allowed:false,is_ready_for_draft:false,draftable:false,
+    selection_group_kind:null,selection_group_key:null,selection_group_member_count:0,selection_group_selected_count:0,
+    selection_group_state:null,selection_group_display_amount:null,selection_group_selected_display_amount:null});
+  const html=api.rowMarkup(value,new Set());
+  assert.ok(html.includes('Timesheet Payment'));
+  assert.ok(html.includes('banking:pay:toggleTimesheetBreakdown'));
+  assert.ok(!html.includes('banking:pay:toggleTimesheetPreviewGroup'));
+});
 test('Candidate Banking binds grouped ticks to complete server group facts and removes loaded row IDs',()=>{
   const value=fixture.snapshot();const key=`READY_TO_PAY|${fixture.id(1)}|${fixture.id(201)}`;
   value.page.rows.slice(0,1).forEach(row=>Object.assign(row,{selection_group_member_count:107,

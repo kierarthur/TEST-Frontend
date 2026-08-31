@@ -43,6 +43,7 @@
 .banking-pay-v2-section-nav span{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:rgba(148,163,184,.2);font-size:11px;line-height:1}
 .banking-pay-v2-surface{min-width:0}
 .bpv2-shell-status{margin:0;padding:9px 11px;border:1px solid rgba(56,189,248,.38);border-radius:8px;background:rgba(8,47,73,.3);color:#bae6fd}
+.bpv2-shell-status--error{border-color:rgba(248,113,113,.6);background:rgba(127,29,29,.28);color:#fecaca}
 .bpv2-shell-status[hidden]{display:none}
 .bpv2-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 .banking-pay-v2-table{min-width:0;color:var(--ctms-modal-text,#f8fafc)}

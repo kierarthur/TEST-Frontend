@@ -89,10 +89,30 @@
     if(context.hiddenPreviewLines.length!==0)invalid();
     return {summary,candidate,page,context};
   }
+  function outerTimesheetRenderRows(rows){
+    return rows.map(row=>{
+      if(row.presentation_group_kind!=='TIMESHEET')return row;
+      // The bounded outer reader returns one certified PARENT representative
+      // for each complete Timesheet group. The retained legacy renderer used
+      // PARENT + non-draftable to identify supporting context rows and would
+      // therefore hide every valid representative. Adapt a shallow display
+      // copy only: the original server row remains the sole selection, amount
+      // and Draft authority used by validation and every emitted intent.
+      const display={...row,presentation_role:'GROUP_REPRESENTATIVE'};
+      if(row.selection_group_kind!==null){
+        display.selection_allowed=true;
+        display.is_ready_for_draft=true;
+        display.draftable=true;
+        display.selection_state=row.selected?'SELECTED':'UNSELECTED';
+        display.status='READY';
+      }
+      return display;
+    });
+  }
   function rowMarkup(value,openKeys){
     validate(value);
     const renderers=details.create({...value.context,openReadyTimesheetBreakdownKeys:openKeys});
-    const timesheets=value.page.rows.filter(isTimesheetPaymentRow);
+    const timesheets=outerTimesheetRenderRows(value.page.rows.filter(isTimesheetPaymentRow));
     const other=value.page.rows.filter(row=>!isTimesheetPaymentRow(row));
     const markup=renderers.renderReadyTimesheetGroupedRows(timesheets)
       +renderers.renderSimplePreviewRows(renderers.buildOverpaymentRecoveryDisplayLines(other),null,'READY_TO_PAY');
@@ -399,6 +419,6 @@
       destroy(){destroyed=true;accepted=null;busyOwned.clear();openKeys.clear();detailStates.clear();element.removeEventListener('click',event);element.removeEventListener('change',event);element.remove();}
     });
   }
-  const api=Object.freeze({validate,rowMarkup,bindCompleteGroupControls,shapeCandidateRows,shapeNestedBreakdown,isTimesheetPaymentRow,create});
+  const api=Object.freeze({validate,outerTimesheetRenderRows,rowMarkup,bindCompleteGroupControls,shapeCandidateRows,shapeNestedBreakdown,isTimesheetPaymentRow,create});
   if(local)module.exports=api;else root.CloudTMSBankingPayCandidateV2=api;
 })(typeof window==='object'?window:this);

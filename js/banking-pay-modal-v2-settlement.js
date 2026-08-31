@@ -26,6 +26,12 @@
         ||(result.progress_counter_version>=old.progress_counter_version&&result.scope_hash===old.scope_hash));
   }
   function fail(code){const error=new Error(code);error.code=code;throw error;}
+  function adoptionFailure(error,phase){
+    const code=typeof error?.code==='string'&&error.code?error.code
+      :typeof error?.message==='string'&&error.message?error.message:'BANKING_PAY_V2_INVALID_ADOPTION';
+    const failure=new Error(code);failure.code=code;failure.banking_pay_adoption_phase=phase;
+    return failure;
+  }
   function paymentIdentity(row){
     const direct=row.preview_row_id,nested=row.payload?.preview_row_id;
     if(direct!==undefined&&nested!==undefined&&direct!==nested)fail('BANKING_PAY_V2_INVALID_RESPONSE');
@@ -107,11 +113,17 @@
       status('VALIDATED',intent);
       // Prepare all open views/legacy aliases without publishing. A synchronous
       // commit is the sole financial display boundary; it must not await reads.
-      const commit=prepareAdoption(next,previous);
-      if(typeof commit!=='function'||commit.constructor?.name==='AsyncFunction')fail('BANKING_PAY_V2_INVALID_ADOPTION');
+      let commit;
+      try{
+        commit=prepareAdoption(next,previous);
+        if(typeof commit!=='function'||commit.constructor?.name==='AsyncFunction')fail('BANKING_PAY_V2_INVALID_ADOPTION');
+      }catch(error){throw adoptionFailure(error,'PREPARE');}
       if(closed)return false;
-      const committed=commit();
-      if(committed&&typeof committed.then==='function')fail('BANKING_PAY_V2_ASYNC_ADOPTION');
+      let committed;
+      try{
+        committed=commit();
+        if(committed&&typeof committed.then==='function')fail('BANKING_PAY_V2_ASYNC_ADOPTION');
+      }catch(error){throw adoptionFailure(error,'COMMIT');}
       accepted=next;
       needsRefresh=false;
       lastFailure=null;
@@ -251,7 +263,6 @@
         const captured=readerEpoch;
         const reader=new AbortController();readers.add(reader);navigation=captured;
         const previous=accepted;const authority=context(previous);
-        let adoptionStarted=false;
         try{
           status('READING',null);
           const next=await readGraph(authority,reader.signal,previous);
@@ -260,13 +271,17 @@
           // Navigation cannot quietly adopt a new financial version. Refresh
           // or mutation settlement must reconcile that version across views.
           if(!object(next)||!object(next.summary)||!sameContext(context(next),authority))fail('BANKING_PAY_V2_STALE_REVISION');
-          adoptionStarted=true;
           if(!adopt(next,previous,null,authority))return {state:'CLOSED'};
           return {state:'ADOPTED',snapshot:accepted};
         }catch(error){
           if(closed)return {state:'CLOSED'};
           if(reader.signal.aborted||captured!==readerEpoch)return {state:'SUPERSEDED'};
-          if(adoptionStarted||error?.code==='BANKING_PAY_V2_STALE_REVISION'||STALE_REJECTIONS.has(error?.code))needsRefresh=true;
+          // Preparing a read-only view cannot change financial authority. If
+          // its presentation rejects a valid response, preserve the accepted
+          // parent and permit a retry. Only a stale authority or a commit that
+          // may have partly published requires a fail-closed read-back.
+          if(error?.banking_pay_adoption_phase==='COMMIT'||error?.code==='BANKING_PAY_V2_STALE_REVISION'
+            ||STALE_REJECTIONS.has(error?.code))needsRefresh=true;
           notifyFailure(error,null);return {state:'FAILED_VISIBLE'};
         }finally{
           readers.delete(reader);

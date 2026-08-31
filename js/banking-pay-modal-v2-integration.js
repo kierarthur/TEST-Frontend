@@ -64,7 +64,7 @@
           <button type="button" data-bpv2-nav="actions">Action Required <span data-bpv2-action-count>0</span></button>
           <button type="button" data-bpv2-nav="blocked">Blocked for Pay <span data-bpv2-blocked-count>0</span></button>
         </nav>
-        <p class="bpv2-shell-status" role="status" aria-live="polite">Loading Ready to Pay…</p>
+        <p class="bpv2-shell-status" data-bpv2-runtime-status role="status" aria-live="polite">Loading Ready to Pay…</p>
         <div class="banking-pay-v2-surface" data-bpv2-surface></div>
         <div class="banking-pay-v2-child-host" data-bpv2-child-host role="dialog" aria-modal="true" aria-label="Banking Pay detail" hidden></div>
       </div></section>`;
@@ -180,7 +180,13 @@
     finally{slot.checking=false;}
   }
   function createRuntime(shell,context,state){
-    const document=shell.ownerDocument,surface=shell.querySelector('[data-bpv2-surface]'),childHost=shell.querySelector('[data-bpv2-child-host]'),status=shell.querySelector('[role="status"]');
+    const document=shell.ownerDocument,surface=shell.querySelector('[data-bpv2-surface]'),childHost=shell.querySelector('[data-bpv2-child-host]');
+    let status=shell.querySelector('[data-bpv2-runtime-status]');
+    if(!status){
+      status=document.createElement('p');status.className='bpv2-shell-status';status.dataset.bpv2RuntimeStatus='';
+      status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.hidden=true;
+      surface.parentNode.insertBefore(status,surface);
+    }
     // A child is a separate viewport modal, not part of the Banking modal's
     // scrolling layout. Portalling it prevents child focus/size changes from
     // moving the accepted parent surface.
@@ -191,11 +197,16 @@
     const detailAdapters={formatIsoToUk:context.formatIsoToUk,railEnv:context.railEnv,railProvider:context.railProvider};
     function failureMessage(value){
       const code=typeof value==='string'?value:(value?.code||value?.message);
+      if(code==='BANKING_PAY_V2_STALE_REVISION'||code==='BANKING_PAY_V2_STALE_VIEW'||code==='BANKING_PAY_V2_SCOPE_MISMATCH')
+        return 'Banking Pay changed while this screen was loading. The current payment list is unchanged; open the candidate again.';
       if(code==='BANKING_PAY_V2_READY_TOO_LARGE'||code==='BANKING_PAY_V2_SELECTION_TOO_LARGE')
         return 'Candidate Banking could not complete that selection safely. The current selection has been reloaded from the server. Review it before trying again.';
-      return String(value||'Banking Pay could not be updated. Refresh Banking Pay and try again.');
+      if(code==='BANKING_PAY_V2_INVALID_RESPONSE'||code==='BANKING_PAY_V2_INVALID_ADOPTION')
+        return 'Candidate Banking could not be shown. The current Banking Pay list is unchanged; try opening the candidate again.';
+      return 'Banking Pay could not complete that action. The current payment list is unchanged; refresh Banking Pay and try again.';
     }
-    function showError(value){status.textContent=failureMessage(value);status.hidden=false;
+    function showError(value){status.textContent=failureMessage(value);status.hidden=false;status.setAttribute('role','alert');
+      status.classList.add('bpv2-shell-status--error');
       for(const presenter of Object.values(presenters))presenter?.showFailure?.(status.textContent);}
     function setBusy(value){for(const presenter of Object.values(presenters))presenter?.setBusy?.(value);
       const create=shell.querySelector('[data-action="banking:pay:createDraft"]');if(create){create.disabled=Boolean(value)||create.dataset.bpv2DraftAllowed!=='1';
@@ -299,7 +310,7 @@
           :draft.work_queued?'Preparing / candidates refreshing. Draft creation re-enables when all candidate refresh work is complete.'
           :(create.dataset.bpv2PayeGuardAllowsCreate==='0'?create.dataset.bpv2CreateTitle:'Checking for recent Banking Pay changes. Existing rows remain available while this finishes.');
         create.dataset.bpv2CreateLabel=createLabel;create.dataset.bpv2CreateTitle=createTitle;create.textContent=createLabel;create.title=createTitle;
-        status.hidden=true;status.textContent='';};
+        status.hidden=true;status.textContent='';status.setAttribute('role','status');status.classList.remove('bpv2-shell-status--error');};
     }
     async function currentGraph(previous){
       const response=await context.authFetch(context.API(`/api/banking/pay/workbench/session/${encodeURIComponent(previous.summary.session_id)}/progress`),{method:'GET',cache:'no-store'});
@@ -362,7 +373,7 @@
       else if(name==='actionDetail')controller.closeIssueDetail('actions');
       else if(name==='blockedDetail')controller.closeIssueDetail('blocked');
     });
-    return {shell,callbacks,setController:value=>{controller=value;},async refreshOpenSurface(){
+    return {shell,callbacks,showError,setController:value=>{controller=value;},async refreshOpenSurface(){
       if(!controller)return false;
       // An opening child still reports the accepted main surface until its
       // bounded read adopts. Keep that in-flight navigation mounted so a
@@ -384,11 +395,11 @@
     }
     if(staleMountCodes.has(errorCode(error))){
       const slot=stateSlot(state);if(slot)slot.error=errorCode(error);
-      runtime.shell.querySelector('[role="status"]').textContent='Banking Pay changed while this screen was loading. Select Refresh to load the current details.';
+      runtime.showError('BANKING_PAY_V2_STALE_REVISION');
       return;
     }
     {
-      runtime.shell.querySelector('[role="status"]').textContent='The new Banking Pay view could not be loaded. The existing view will be restored.';
+      runtime.showError(error);
       const slot=stateSlot(state);if(slot){slot.available=false;slot.error=String(error?.code||error?.message||'BANKING_PAY_V2_UNAVAILABLE');}
       runtime.close();if(mounted===runtime)mounted=null;await context.rerender('pay');}
   }

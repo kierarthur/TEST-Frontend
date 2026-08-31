@@ -254,7 +254,21 @@ test('navigation rejects an invalid child without partial publication',async()=>
   const env=setup();const next=snapshot();
   next.ready={...next.summary,candidate_id:fixture.id(1),rows:[{identity:'bad',candidate_id:fixture.id(2),effective_section:'canonical_preview_lines'}]};
   assert.equal((await env.controller.navigate(async()=>next)).state,'FAILED_VISIBLE');
-  assert.equal(env.commits.length,0);assert.equal(env.controller.snapshot(),env.initial);assert.equal(env.controller.isBusy(),true);
+  assert.equal(env.commits.length,0);assert.equal(env.controller.snapshot(),env.initial);assert.equal(env.controller.isBusy(),false);
+  assert.equal((await env.controller.navigate(async()=>snapshot())).state,'ADOPTED');
+});
+
+test('read-only preparation failure preserves the accepted parent and can be retried without a refresh lock',async()=>{
+  let rejectPrepare=true;
+  const env=setup({prepareAdoption:next=>{
+    if(rejectPrepare){rejectPrepare=false;throw Object.assign(new Error('display rejected'),{code:'BANKING_PAY_V2_INVALID_RESPONSE'});}
+    return ()=>env.commits.push(next);
+  }});
+  assert.equal((await env.controller.navigate(async()=>snapshot())).state,'FAILED_VISIBLE');
+  assert.equal(env.controller.snapshot(),env.initial);assert.equal(env.commits.length,0);
+  assert.equal(env.controller.isBusy(),false);assert.equal(env.controller.lastFailure().read_back_required,false);
+  assert.equal((await env.controller.navigate(async()=>snapshot())).state,'ADOPTED');
+  assert.equal(env.commits.length,1);assert.equal(env.controller.isBusy(),false);
 });
 
 test('failed navigation preserves old data and exposes a retryable page failure',async()=>{

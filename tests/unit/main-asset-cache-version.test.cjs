@@ -30,18 +30,24 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   assert.match(html, /record-modal-layout\.css\?v=20260829-rate-picker-r1/);
   assert.match(html, /candidate-rate-client-picker=20260829-r1/);
   assert.match(html, /banking-modal-v2=20260830-r5/);
-  assert.match(html, /banking-pay-modal-v2\.css\?v=20260831-r4/);
-  assert.match(html, /banking-pay-modal-v2-issue-detail\.js\?v=20260831-r4/);
-  assert.match(html, /banking-pay-modal-v2-mutation\.js\?v=20260831-r4/);
-  assert.match(html, /banking-pay-modal-v2-settlement\.js\?v=20260831-r2/);
-  assert.match(html, /banking-pay-modal-v2-candidate\.js\?v=20260831-r4/);
-  assert.match(html, /banking-pay-modal-v2\.js\?v=20260831-r4/);
-  assert.match(html, /banking-pay-modal-v2-integration\.js\?v=20260831-r4/);
-  const bankingPayReleaseMarker = '20260831-r4';
+  assert.match(html, /banking-pay-modal-v2\.css\?v=20260831-r5/);
+  assert.match(html, /banking-pay-modal-v2-issue-detail\.js\?v=20260831-r5/);
+  assert.match(html, /banking-pay-modal-v2-mutation\.js\?v=20260831-r5/);
+  assert.match(html, /banking-pay-modal-v2-settlement\.js\?v=20260831-r5/);
+  assert.match(html, /banking-pay-modal-v2-candidate\.js\?v=20260831-r5/);
+  assert.match(html, /banking-pay-modal-v2\.js\?v=20260831-r5/);
+  assert.match(html, /banking-pay-modal-v2-integration\.js\?v=20260831-r5/);
+  const bankingPayReleaseMarker = '20260831-r5';
   for (const asset of [
     'css/banking-pay-modal-v2.css',
+    'js/banking-pay-modal-v2-copy.js',
+    'js/banking-pay-modal-v2-details-legacy.js',
+    'js/banking-pay-modal-v2-table.js',
+    'js/banking-pay-modal-v2-draft-review.js',
+    'js/banking-pay-modal-v2-issues.js',
     'js/banking-pay-modal-v2-issue-detail.js',
     'js/banking-pay-modal-v2-mutation.js',
+    'js/banking-pay-modal-v2-settlement.js',
     'js/banking-pay-modal-v2-candidate.js',
     'js/banking-pay-modal-v2.js',
     'js/banking-pay-modal-v2-integration.js'
