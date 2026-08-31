@@ -89,6 +89,9 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
     const fixture = (window as any).BankingDetailFixture;
     const integration = (window as any).CloudTMSBankingPayModalV2Integration;
     const snapshot = fixture.snapshot();
+    for (const row of snapshot.context.readyPreviewLines) {
+      row.client_name = 'Berkshire Healthcare NHS Foundation Trust';
+    }
     Object.assign(snapshot.page, {
       page_number: 1,
       has_previous: false,
@@ -267,6 +270,67 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   })).toEqual(parentBefore);
   await expect(candidate.getByRole('heading', { name: 'Candidate Banking' })).toBeVisible();
   await expect(candidate.locator('tbody > tr').first()).toBeVisible();
+  const clientCell = candidate.locator('.bpv2-child-client').first();
+  const clientName = clientCell.locator('.bpv2-client-name');
+  const payMethodCell = candidate.locator('.bpv2-child-method').first();
+  const payMethodBadge = payMethodCell.locator('.pill').first();
+  await expect(clientName).toHaveText('Berkshire Healthcare NHS Foundation Trust');
+  await expect(payMethodBadge).toHaveText('PAYE');
+  const columnContainment = await page.evaluate(() => {
+    const client = document.querySelector('.banking-pay-v2-candidate .bpv2-child-client');
+    const name = client?.querySelector('.bpv2-client-name');
+    const method = document.querySelector('.banking-pay-v2-candidate .bpv2-child-method');
+    const badge = method?.querySelector('.pill');
+    if (!(client instanceof HTMLElement) || !(name instanceof HTMLElement)
+      || !(method instanceof HTMLElement) || !(badge instanceof HTMLElement)) return null;
+    const clientBox = client.getBoundingClientRect();
+    const nameBox = name.getBoundingClientRect();
+    const methodBox = method.getBoundingClientRect();
+    const badgeBox = badge.getBoundingClientRect();
+    const nameStyle = getComputedStyle(name);
+    return {
+      clientRight: clientBox.right,
+      nameRight: nameBox.right,
+      methodLeft: methodBox.left,
+      methodRight: methodBox.right,
+      badgeLeft: badgeBox.left,
+      badgeRight: badgeBox.right,
+      nameWhiteSpace: nameStyle.whiteSpace,
+      nameLineClamp: nameStyle.webkitLineClamp
+    };
+  });
+  expect(columnContainment).not.toBeNull();
+  expect(columnContainment!.nameWhiteSpace).toBe('normal');
+  expect(columnContainment!.nameLineClamp).toBe('2');
+  expect(columnContainment!.nameRight).toBeLessThanOrEqual(columnContainment!.clientRight + 0.5);
+  expect(columnContainment!.clientRight).toBeLessThanOrEqual(columnContainment!.methodLeft + 0.5);
+  expect(columnContainment!.badgeLeft).toBeGreaterThanOrEqual(columnContainment!.methodLeft - 0.5);
+  expect(columnContainment!.badgeRight).toBeLessThanOrEqual(columnContainment!.methodRight + 0.5);
+  const desktopViewport = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(candidate.getByRole('button', { name: 'Close', exact: true })).toBeVisible();
+  const narrowContainment = await candidate.evaluate(element => {
+    const scroll = element.querySelector('.bpv2-child-scroll');
+    const table = element.querySelector('.banking-ready-preview-table');
+    const client = element.querySelector('.bpv2-child-client');
+    const method = element.querySelector('.bpv2-child-method');
+    if (!(scroll instanceof HTMLElement) || !(table instanceof HTMLElement)
+      || !(client instanceof HTMLElement) || !(method instanceof HTMLElement)) return null;
+    scroll.scrollLeft = client.offsetLeft;
+    const clientBox = client.getBoundingClientRect();
+    const methodBox = method.getBoundingClientRect();
+    return {
+      hasBoundedHorizontalScroll: scroll.scrollWidth > scroll.clientWidth,
+      tableWidth: table.getBoundingClientRect().width,
+      clientRight: clientBox.right,
+      methodLeft: methodBox.left
+    };
+  });
+  expect(narrowContainment).not.toBeNull();
+  expect(narrowContainment!.hasBoundedHorizontalScroll).toBe(true);
+  expect(narrowContainment!.tableWidth).toBeGreaterThanOrEqual(1134);
+  expect(narrowContainment!.clientRight).toBeLessThanOrEqual(narrowContainment!.methodLeft + 0.5);
+  if (desktopViewport) await page.setViewportSize(desktopViewport);
   await expect(candidate).not.toContainText('Blocked for Pay');
   await expect(candidate).not.toContainText('Action Required');
   await expect(candidate.locator('.banking-ready-mobile-row-summary')).toBeHidden();

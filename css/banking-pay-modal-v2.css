@@ -95,18 +95,23 @@
 .bpv2-child-totals [data-bpv2-selected-count]{color:var(--ctms-modal-sub,#aebed2);font-size:12px}
 .banking-pay-v2-candidate .bpv2-child-scroll,.banking-pay-v2-issue-detail .bpv2-detail-scroll{flex:1 1 auto;min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain;border:1px solid var(--ctms-modal-line,#2b405d);border-radius:9px}
 .banking-pay-v2-candidate table{width:100%;border-collapse:collapse}
-.banking-pay-v2-candidate .banking-ready-preview-table{min-width:1020px;table-layout:fixed}
+.banking-pay-v2-candidate .banking-ready-preview-table{min-width:1134px;table-layout:fixed}
 .banking-pay-v2-candidate .banking-ready-preview-table>thead{position:sticky;top:0;z-index:3;background:var(--ctms-modal-panel-raised,#101f35)}
 .banking-pay-v2-candidate th,.banking-pay-v2-candidate td{padding:9px 10px;border-bottom:1px solid var(--ctms-modal-line-soft,rgba(111,139,178,.2));text-align:left;color:var(--ctms-modal-text,#f8fafc)}
-.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(1){width:78px}
-.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(2){width:215px}
-.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(3){width:200px}
-.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(4){width:116px}
-.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(5){width:105px}
-.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(6){width:150px}
-.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(7){width:230px}
+.banking-pay-v2-candidate .banking-ready-preview-table>thead th{white-space:nowrap}
+.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(1){width:72px}
+.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(2){width:205px}
+.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(3){width:300px}
+.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(4){width:112px}
+.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(5){width:100px}
+.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(6){width:125px}
+.banking-pay-v2-candidate .banking-ready-preview-table>thead th:nth-child(7){width:220px}
 .banking-pay-v2-child-host .banking-ready-mobile-row-summary{display:none}
 .bpv2-child-payment .bpv2-payment-meta{display:block;margin-top:3px;color:var(--ctms-modal-sub,#aebed2);font-size:11px}
+.bpv2-child-client{overflow:hidden;white-space:normal!important;vertical-align:middle}
+.bpv2-client-name{display:-webkit-box;max-width:100%;overflow:hidden;white-space:normal;overflow-wrap:anywhere;word-break:normal;line-height:1.25;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.bpv2-child-method{overflow:hidden;white-space:nowrap!important;vertical-align:middle}
+.bpv2-child-method .pill{max-width:100%}
 .bpv2-child-amount{font-variant-numeric:tabular-nums;font-weight:700;text-align:left!important}
 .bpv2-child-controls>div{display:flex!important;flex-direction:row!important;align-items:center!important;gap:6px!important;white-space:normal!important;flex-wrap:wrap}
 .bpv2-ready-group-amount{display:inline-grid;grid-template-columns:auto 1fr;align-items:center;justify-items:start;gap:2px 6px;white-space:nowrap;font-variant-numeric:tabular-nums}

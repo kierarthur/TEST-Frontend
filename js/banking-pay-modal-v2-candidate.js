@@ -222,6 +222,9 @@
       if(weekText&&weekText!=='—'){
         const meta=payment.ownerDocument.createElement('span');meta.className='bpv2-payment-meta';meta.textContent=weekText;payment.append(meta);
       }
+      const clientText=String(client.textContent||'').trim();
+      const clientName=client.ownerDocument.createElement('span');clientName.className='bpv2-client-name';
+      clientName.textContent=clientText||'—';clientName.title=clientText||'—';client.replaceChildren(clientName);
       for(const shortcut of candidate.querySelectorAll('[data-action="banking:pay:openTimesheets"]'))controls.prepend(shortcut);
       const deductions=payment.ownerDocument.createElement('td');deductions.className='bpv2-child-deductions';
       deductions.textContent=related.some(isSelectedDeduction)?'Yes':'—';

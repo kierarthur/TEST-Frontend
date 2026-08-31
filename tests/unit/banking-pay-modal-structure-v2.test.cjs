@@ -64,6 +64,17 @@ test('Candidate Banking separates the full and selected group amounts without ch
   assert.match(css, /\.bpv2-ready-group-selected\{grid-column:1 \/ -1/);
 });
 
+test('Candidate Banking contains long client names and protects the pay-method column', () => {
+  const candidate = source('banking-pay-modal-v2-candidate.js');
+  const css = fs.readFileSync(path.join(root, 'css', 'banking-pay-modal-v2.css'), 'utf8');
+  assert.match(candidate, /clientName\.className='bpv2-client-name'/);
+  assert.match(candidate, /clientName\.title=clientText\|\|'—'/);
+  assert.match(css, /\.banking-pay-v2-candidate \.banking-ready-preview-table\{min-width:1134px;table-layout:fixed\}/);
+  assert.match(css, /\.bpv2-child-client\{overflow:hidden;white-space:normal!important/);
+  assert.match(css, /\.bpv2-client-name\{[^}]*-webkit-line-clamp:2/);
+  assert.match(css, /\.bpv2-child-method\{overflow:hidden;white-space:nowrap!important/);
+});
+
 test('main.js delegates v2 actions while retaining every legacy Banking Pay handler', () => {
   const main = mainSource();
   assert.ok(main.includes('CloudTMSBankingPayModalV2'), 'main asset must delegate to the contained v2 controller');
@@ -76,9 +87,9 @@ test('main.js delegates v2 actions while retaining every legacy Banking Pay hand
     'banking:pay:openFiltersModal'
   ]) assert.ok(main.includes(action), `legacy action retained: ${action}`);
   const html = htmlSource();
-  assert.match(html, /banking-pay-modal-v2\.css\?v=20260831-r7/);
-  assert.match(html, /banking-pay-modal-v2-integration\.js\?v=20260831-r7/);
-  assert.match(html, /banking-pay-modal-v2-settlement\.js\?v=20260831-r7/);
+  assert.match(html, /banking-pay-modal-v2\.css\?v=20260831-r8/);
+  assert.match(html, /banking-pay-modal-v2-integration\.js\?v=20260831-r8/);
+  assert.match(html, /banking-pay-modal-v2-settlement\.js\?v=20260831-r8/);
   const integrationIndex = html.indexOf('./js/banking-pay-modal-v2-integration.js');
   const mainIndex = html.indexOf('./js/main.js');
   assert.ok(integrationIndex >= 0 && mainIndex > integrationIndex, 'the capability-gated integration must load before main.js');
