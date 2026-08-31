@@ -50,13 +50,14 @@ test('queued complete-group selection binds server group identity and never load
 function readyRow(n,candidateId=fixture.id(1),selected=n===20){return {identity:fixture.id(n),candidate_id:candidateId,
   effective_section:'canonical_preview_lines',selected,selection_group_kind:null,selection_group_key:null,
   selection_group_member_count:0,selection_group_selected_count:0,selection_group_state:null,
-  selection_group_display_amount:null,selection_group_selected_display_amount:null};}
+  selection_group_display_amount:null,selection_group_selected_display_amount:null,
+  presentation_group_kind:'ROW',presentation_group_key:fixture.id(n),presentation_group_row_count:1};}
 function ready(summary,candidateId=fixture.id(1)){
   return {ok:true,contract:summary.contract,contract_version:1,session_id:summary.session_id,
     session_version:summary.session_version,progress_counter_version:summary.progress_counter_version,scope_hash:summary.scope_hash,
     candidate_id:candidateId,candidate:summary.rows.find(row=>row.candidate_id===candidateId),
     rows:[20,21].map(n=>readyRow(n,candidateId)),
-    total_count:2,has_more:false,next_cursor:null,page_number:1,has_previous:false,previous_cursor:null,page_anchor:'current_ready_anchor'};
+    total_count:2,ready_row_count:2,has_more:false,next_cursor:null,page_number:1,has_previous:false,previous_cursor:null,page_anchor:'current_ready_anchor'};
 }
 function setup(overrides={}){
   const reads=[],writes=[],commits=[],failures=[],opened=[],statuses=[];
@@ -121,6 +122,22 @@ test('Candidate Banking open is one scoped Ready read; close preserves the same 
   assert.equal(s.reads[0].args.limit,10);
   await s.controller.closeCandidate();assert.equal(s.reads.length,1);
   assert.equal(s.controller.snapshot().summary,before);assert.equal(s.controller.snapshot().ready,null);
+});
+test('expanded payment-group pages are bounded reads and never replace the accepted Candidate page',async()=>{
+  const calls=[];const groupKey=fixture.id(20);
+  const s=setup({readPage:async(kind,args)=>{
+    calls.push({kind,args});
+    if(kind==='ready')return ready(fixture.page(),args.candidate_id);
+    if(kind==='readyGroup')return {ok:true,contract:'BANKING_PAY_MODAL_STRUCTURE_V2',contract_version:1,
+      session_id:fixture.id(1000),session_version:2,progress_counter_version:3,scope_hash:'a'.repeat(64),
+      candidate_id:fixture.id(1),group_kind:'ROW',group_key:groupKey,rows:[readyRow(20)],total_count:1,
+      page_offset:0,has_more:false,next_cursor:null};
+  }});
+  await s.controller.openCandidate(fixture.id(1));const accepted=s.controller.snapshot().ready;
+  const result=await s.controller.candidateGroupPage({candidate_id:fixture.id(1),group_kind:'ROW',group_key:groupKey,cursor:null});
+  assert.equal(result.state,'CURRENT');assert.equal(result.value.rows.length,1);assert.equal(calls.length,2);
+  assert.equal(calls[1].kind,'readyGroup');assert.equal(calls[1].args.limit,10);
+  assert.equal(s.controller.snapshot().ready,accepted,'read-only expansion cannot replace Candidate authority');
 });
 test('a Ready response for a different candidate cannot publish',async()=>{
   const s=setup({readPage:async()=>ready(fixture.page(),fixture.id(2))});

@@ -14,6 +14,11 @@
     'selected_timesheet_scope_token'];
   const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
   const count=value=>Number.isSafeInteger(value)&&value>=0;
+  function validPresentationGroup(row){
+    return ['TIMESHEET','OVERPAYMENT','ROW'].includes(row.presentation_group_kind)
+      &&typeof row.presentation_group_key==='string'&&row.presentation_group_key.length>=1&&row.presentation_group_key.length<=512
+      &&!/[\u0000-\u001f\u007f]/u.test(row.presentation_group_key);
+  }
   function validGroup(row){
     const keys=['selection_group_kind','selection_group_key','selection_group_member_count','selection_group_selected_count','selection_group_state',
       'selection_group_display_amount','selection_group_selected_display_amount'];
@@ -51,16 +56,18 @@
     candidate=page.candidate;
     if(candidate!==null){
       table.validateRow(candidate);
-      if(candidate.candidate_id!==page.candidate_id||candidate.selectable_ready_count>page.total_count
+      if(candidate.candidate_id!==page.candidate_id||candidate.selectable_ready_count>page.ready_row_count
         ||candidate.selectable_ready_count>summary.global.selectable_ready_count
         ||candidate.selected_ready_count>summary.global.selected_ready_count)invalid();
     }
     const visible=summary.rows.find(row=>row.candidate_id===page.candidate_id);
     if(visible&&!table.sameCandidateContent(visible,candidate))invalid();
-    if(!Array.isArray(page.rows)||page.rows.length>100||!Number.isSafeInteger(page.total_count)||page.total_count<page.rows.length
+    if(!Array.isArray(page.rows)||page.rows.length>10||!Number.isSafeInteger(page.total_count)||page.total_count<page.rows.length
+      ||!Number.isSafeInteger(page.ready_row_count)||page.ready_row_count<page.total_count
       ||typeof page.has_more!=='boolean'||(page.has_more?typeof page.next_cursor!=='string'||!page.next_cursor:page.next_cursor!==null)
       ||page.rows.some(row=>!object(row)||!row.identity||row.candidate_id!==page.candidate_id
-        ||row.effective_section!=='canonical_preview_lines'||typeof row.selected!=='boolean'||!validGroup(row))
+        ||row.effective_section!=='canonical_preview_lines'||typeof row.selected!=='boolean'||!validGroup(row)
+        ||!validPresentationGroup(row)||!count(row.presentation_group_row_count)||row.presentation_group_row_count<1)
       ||new Set(page.rows.map(row=>row.identity)).size!==page.rows.length
       ||(page.rows.length===0&&page.total_count!==0)||(candidate===null&&page.total_count!==0))invalid();
     if(!object(context)||!(context.selectedPreviewRowSet instanceof Set))invalid();
@@ -221,7 +228,7 @@
     const body=element.querySelector('tbody');const scroll=element.querySelector('.bpv2-child-scroll');
     const status=element.querySelector('[role="status"]');const include=element.querySelector('[data-bpv2-child="include"]');
     let accepted=null,busy=false,destroyed=false,hasPrevious=false;
-    const openKeys=new Set();const checkedState=new WeakMap();const busyOwned=new Set();
+    const openKeys=new Set();const detailStates=new Map();const checkedState=new WeakMap();const busyOwned=new Set();
     function syncChecks(container){
       for(const control of container.querySelectorAll('input[type="checkbox"]')){
         const mixed=control.getAttribute('aria-checked')==='mixed';
@@ -247,28 +254,81 @@
       onFailure({code:typeof error?.code==='string'?error.code:'BANKING_PAY_V2_UPDATE_FAILED'});
     }
     function invoke(callback,value){try{Promise.resolve(callback(value)).catch(report);}catch(error){report(error);}}
-    function expand(control){
+    function detailRowFor(control){
       const key=control.getAttribute('data-breakdown-key')||control.getAttribute('data-timesheet-group-key');
       const row=control.closest('tr')?.nextElementSibling;
       if(!key||row?.getAttribute('data-banking-ready-breakdown-detail')!==key)throw new Error('Missing exact breakdown');
+      const representative=accepted?.page.rows.find(item=>item.presentation_group_key===key||item.selection_group_key===key);
+      if(!representative)throw new Error('Missing exact group authority');
+      return {key,row,representative,id:`${representative.presentation_group_kind}|${representative.presentation_group_key}`};
+    }
+    function renderDetail(control,state){
+      const {key,row}=detailRowFor(control);const page=state.pages[state.index];
+      const detailRows=page.rows.map(item=>object(item.payload)?{...item.payload,...item}:item);
+      const renderers=details.create({...accepted.context,
+        selectedPreviewRowSet:new Set(detailRows.filter(item=>item.selected===true).map(item=>item.preview_row_id||item.identity).filter(Boolean)),
+        readyPreviewLines:detailRows,canonicalPreviewLines:detailRows,blockedPreviewLines:[],hiddenPreviewLines:[],
+        openReadyTimesheetBreakdownKeys:new Set([key])});
+      const timesheets=page.rows.filter(item=>String(item.line_type||'').trim().toUpperCase()==='TIMESHEET_PAYMENT');
+      const other=page.rows.filter(item=>String(item.line_type||'').trim().toUpperCase()!=='TIMESHEET_PAYMENT');
+      const staged=document.createElement('tbody');staged.innerHTML=renderers.renderReadyTimesheetGroupedRows(timesheets)
+        +renderers.renderSimplePreviewRows(renderers.buildOverpaymentRecoveryDisplayLines(other),null,'READY_TO_PAY');
+      const source=Array.from(staged.querySelectorAll('tr[data-banking-ready-breakdown-detail]'))
+        .find(item=>item.getAttribute('data-banking-ready-breakdown-detail')===key);
+      const target=row.firstElementChild;
+      if(!source?.firstElementChild||!target)throw new Error('Missing exact group detail');
+      const template=source.querySelector('template[data-banking-ready-breakdown-template="true"]');
+      if(template)template.replaceWith(template.content.cloneNode(true));
+      target.replaceChildren(...Array.from(source.firstElementChild.childNodes));
+      const from=page.page_offset+1,to=page.page_offset+page.rows.length;
+      const paging=document.createElement('div');paging.className='bpv2-group-detail-pagination';
+      paging.innerHTML=`<span data-bpv2-group-detail-count>Showing ${from}–${to} of ${page.total_count} payment segments</span>
+        <button type="button" class="btn btn-outline" data-bpv2-detail="previous" ${state.index===0?'disabled':''}>Previous</button>
+        <button type="button" class="btn btn-outline" data-bpv2-detail="next" ${page.has_more||state.index<state.pages.length-1?'':'disabled'}>Next</button>`;
+      target.append(paging);shapeNestedBreakdown(target);syncChecks(target);
+      row.hidden=false;control.textContent='−';control.setAttribute('aria-expanded','true');
+      control.setAttribute('aria-label','Hide line breakdown');control.setAttribute('title','Hide line breakdown');
+    }
+    async function loadDetail(control,cursor=null,replaceIndex=null){
+      const {row,representative,id}=detailRowFor(control);const target=row.firstElementChild;
+      target.innerHTML='<div class="bpv2-group-detail-loading" role="status">Loading payment details…</div>';row.hidden=false;
+      const result=await onIntent({kind:'detail',candidate_id:accepted.page.candidate_id,
+        group_kind:representative.presentation_group_kind,group_key:representative.presentation_group_key,cursor});
+      if(result?.state!=='CURRENT'||!result.value)throw new Error('Payment details changed while loading');
+      const page=result.value;const state=detailStates.get(id)||{pages:[],index:0};
+      if(replaceIndex===null){state.pages=[page];state.index=0;}else{state.pages[replaceIndex]=page;state.index=replaceIndex;}
+      detailStates.set(id,state);openKeys.add(row.getAttribute('data-banking-ready-breakdown-detail'));renderDetail(control,state);
+    }
+    async function expand(control){
+      const {key,row,id}=detailRowFor(control);
       const opening=!openKeys.has(key);
       if(opening){
-        const template=row.querySelector('template[data-banking-ready-breakdown-template="true"]');
-        if(template)template.replaceWith(template.content.cloneNode(true));
-        openKeys.add(key);syncChecks(row);
-      }else openKeys.delete(key);
-      row.hidden=!opening;control.textContent=opening?'−':'+';
+        const state=detailStates.get(id);if(state)renderDetail(control,state);else await loadDetail(control);
+      }else{openKeys.delete(key);row.hidden=true;}
+      control.textContent=opening?'−':'+';
       control.setAttribute('aria-expanded',String(opening));
       control.setAttribute('aria-label',opening?'Hide line breakdown':'Show line breakdown');
       control.setAttribute('title',opening?'Hide line breakdown':'Show line breakdown');
     }
+    async function pageDetail(control,direction){
+      const breakdown=control.closest('tr[data-banking-ready-breakdown-detail]');
+      const key=breakdown?.getAttribute('data-banking-ready-breakdown-detail');
+      const toggle=breakdown?.previousElementSibling?.querySelector('[data-action="banking:pay:toggleTimesheetBreakdown"]');
+      if(!key||!toggle)throw new Error('Missing payment detail page');
+      const {id}=detailRowFor(toggle),state=detailStates.get(id);if(!state)throw new Error('Missing payment detail state');
+      if(direction==='previous'){if(state.index===0)return;state.index--;renderDetail(toggle,state);return;}
+      if(state.index<state.pages.length-1){state.index++;renderDetail(toggle,state);return;}
+      const current=state.pages[state.index];if(!current.has_more||!current.next_cursor)return;
+      await loadDetail(toggle,current.next_cursor,state.index+1);
+    }
     function event(event){
-      const control=event.target?.closest?.('[data-bpv2-child],[data-action]');
+      const control=event.target?.closest?.('[data-bpv2-child],[data-bpv2-detail],[data-action]');
       if(!control||!element.contains(control))return;
       event.stopPropagation();
       if(event.type==='click'&&control.type==='checkbox')return; // use the single change event
       if(event.type==='change'&&control.type!=='checkbox')return;
       if(control.dataset.bpv2Child==='close'){invoke(onClose);return;}
+      if(control.dataset.bpv2Detail){invoke(()=>pageDetail(control,control.dataset.bpv2Detail));return;}
       const desired=control.type==='checkbox'?control.checked:undefined;
       if(control.type==='checkbox')restoreCheck(control); // server confirmation owns the tick
       if(destroyed||busy||control.disabled||!accepted)return;
@@ -279,7 +339,7 @@
           authority:Object.fromEntries(fields.map(key=>[key,accepted.page[key]]))});return;
       }
       if(control.dataset.action==='banking:pay:toggleTimesheetBreakdown'){
-        try{expand(control);}catch(error){report(error);}return;
+        invoke(expand,control);return;
       }
       if(control.dataset.action==='banking:pay:toggleTimesheetPreviewGroup'){
         invoke(onIntent,{kind:'group',candidate_id:accepted.page.candidate_id,
@@ -299,6 +359,7 @@
         return ()=>{
           if(destroyed)return;
           const top=scroll.scrollTop,left=scroll.scrollLeft;
+          if(accepted&&fields.some(key=>accepted.page[key]!==current.page[key])){openKeys.clear();detailStates.clear();}
           const focused=element.contains(document.activeElement)?document.activeElement:null;
           const focusAction=focused?.dataset.action,focusRow=focused?.getAttribute('data-preview-row-id');
           busyOwned.clear();body.replaceChildren(...Array.from(staged.childNodes));accepted=current;hasPrevious=previousAvailable;
@@ -312,7 +373,7 @@
           element.querySelector('[data-bpv2-selected-count]').textContent=candidate?`${candidate.selected_ready_count} of ${candidate.selectable_ready_count} payment segments selected`:'';
           syncChecks(element);
           element.querySelector('[data-bpv2-candidate-empty]').hidden=value.page.rows.length!==0;
-          element.querySelector('[data-bpv2-child-count]').textContent=`${value.page.total_count} Ready payments`;
+          element.querySelector('[data-bpv2-child-count]').textContent=`${value.page.total_count} Ready payment groups`;
           element.querySelector('[data-bpv2-child="previous"]').disabled=!hasPrevious;
           element.querySelector('[data-bpv2-child="next"]').disabled=!value.page.has_more;
           element.querySelector('[data-bpv2-child="export-all"]').disabled=value.page.total_count===0;
@@ -326,7 +387,7 @@
       setBusy(value){if(!destroyed){busy=Boolean(value);applyBusy();}},
       showFailure(message){if(!destroyed){status.textContent=String(message);status.hidden=false;}},
       capturePosition:()=>({top:scroll.scrollTop,left:scroll.scrollLeft,open_keys:[...openKeys]}),
-      destroy(){destroyed=true;accepted=null;busyOwned.clear();openKeys.clear();element.removeEventListener('click',event);element.removeEventListener('change',event);element.remove();}
+      destroy(){destroyed=true;accepted=null;busyOwned.clear();openKeys.clear();detailStates.clear();element.removeEventListener('click',event);element.removeEventListener('change',event);element.remove();}
     });
   }
   const api=Object.freeze({validate,rowMarkup,bindCompleteGroupControls,shapeCandidateRows,shapeNestedBreakdown,create});

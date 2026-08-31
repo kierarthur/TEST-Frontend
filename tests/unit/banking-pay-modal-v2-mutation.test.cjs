@@ -37,7 +37,7 @@ test('an already-open Ready view requires its complete current replacement; no o
  assert.throws(()=>load().selectionDetailPages(previous,p,open),/INVALID_RESPONSE/);
  p.ready_page={ok:true,contract:'BANKING_PAY_MODAL_STRUCTURE_V2',contract_version:1,...Object.fromEntries(
   ['session_id','session_version','progress_counter_version','scope_hash'].map(k=>[k,p[k]])),candidate_id:fixture.id(1),rows:[],candidate:null,
-  total_count:0,has_more:false,next_cursor:null,page_number:0,has_previous:false,previous_cursor:null,page_anchor:null};
+  total_count:0,ready_row_count:0,has_more:false,next_cursor:null,page_number:0,has_previous:false,previous_cursor:null,page_anchor:null};
  assert.equal(load().selectionDetailPages(previous,p,open).ready,p.ready_page);
  p.ready_page.progress_counter_version=3;
  assert.throws(()=>load().selectionDetailPages(previous,p,open),/INVALID_RESPONSE/);
@@ -45,4 +45,19 @@ test('an already-open Ready view requires its complete current replacement; no o
 test('candidate selection cannot silently close an open Action or Blocked workflow',()=>{
  for(const surface of ['actions','actionDetail','blocked','blockedDetail'])
   assert.throws(()=>load().selectionDetailPages({ui:{surface}},envelope(),null),/INVALID_RESPONSE/);
+});
+test('payment-group detail proves exact 10/10/8 chunks without a large-group failure',()=>{
+ const authority={session_id:fixture.id(1000),session_version:2,progress_counter_version:3,scope_hash:'a'.repeat(64)};
+ const key='READY_TO_PAY|candidate|timesheet';
+ const request={candidate_id:fixture.id(1),group_kind:'TIMESHEET',group_key:key,cursor:null,limit:10};
+ const make=(offset,length,more)=>({...authority,ok:true,contract:'BANKING_PAY_MODAL_STRUCTURE_V2',contract_version:1,
+  candidate_id:fixture.id(1),group_kind:'TIMESHEET',group_key:key,total_count:28,page_offset:offset,has_more:more,
+  next_cursor:more?'next_'+offset:null,rows:Array.from({length},(_,index)=>({identity:fixture.id(4000+offset+index),candidate_id:fixture.id(1),
+   effective_section:'canonical_preview_lines',selected:true,presentation_group_kind:'TIMESHEET',presentation_group_key:key,
+   selection_group_kind:'TIMESHEET',selection_group_key:key,selection_group_member_count:28,selection_group_selected_count:28,
+   selection_group_state:'ALL',selection_group_display_amount:'280.00',selection_group_selected_display_amount:'280.00'}))});
+ assert.equal(load().validateReadyGroupDetail(make(0,10,true),authority,request).page_offset,0);
+ assert.equal(load().validateReadyGroupDetail(make(10,10,true),authority,{...request,cursor:'next_0'}).page_offset,10);
+ assert.equal(load().validateReadyGroupDetail(make(20,8,false),authority,{...request,cursor:'next_10'}).page_offset,20);
+ assert.throws(()=>load().validateReadyGroupDetail(make(20,8,true),authority,{...request,cursor:'next_10'}),/INVALID_RESPONSE/);
 });

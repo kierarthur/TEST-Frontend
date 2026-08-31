@@ -113,6 +113,9 @@
 .banking-pay-v2-candidate tr[data-banking-ready-breakdown-detail]>td{padding:0 10px 10px!important;background:rgba(5,20,37,.55)}
 .banking-pay-v2-candidate tr[data-banking-ready-breakdown-detail] table{min-width:860px!important;border-radius:8px}
 .banking-pay-v2-candidate tr[data-banking-ready-breakdown-detail] table th,.banking-pay-v2-candidate tr[data-banking-ready-breakdown-detail] table td{padding:8px 9px}
+.bpv2-group-detail-loading{padding:18px;color:var(--ctms-modal-sub,#aebed2)}
+.bpv2-group-detail-pagination{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 0 0;color:var(--ctms-modal-sub,#aebed2)}
+.bpv2-group-detail-pagination>span{margin-right:auto}
 .bpv2-segment-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px;font-family:inherit;font-weight:400}
 .bpv2-segment-state{color:var(--ctms-modal-sub,#aebed2);font-size:11px}
 .bpv2-resolved-rate-summary{display:grid;gap:9px;padding:10px 11px;border-bottom:1px solid var(--ctms-modal-line,#2b405d);background:rgba(146,104,0,.1);color:var(--ctms-modal-text,#f8fafc)}
@@ -159,9 +162,17 @@
 .banking-pay-v2-issue-detail table{width:100%;min-width:1120px;border-collapse:collapse}
 .banking-pay-v2-issue-detail th,.banking-pay-v2-issue-detail td{padding:9px 10px;border-bottom:1px solid var(--ctms-modal-line-soft,rgba(111,139,178,.2));text-align:left;color:var(--ctms-modal-text,#f8fafc)}
 .banking-pay-v2-issue-detail thead{position:sticky;top:0;z-index:2;background:var(--ctms-modal-panel-raised,#101f35)}
+.banking-pay-v2-issue-detail th{text-transform:none!important;letter-spacing:0!important;font-size:12px}
+.banking-pay-v2-issue-detail th:nth-child(8){width:170px}
+.banking-pay-v2-issue-detail .pill.pill-warn{display:inline-flex;align-items:center;width:max-content;max-width:100%;padding:3px 8px;border:1px solid #9b7600;border-radius:999px;background:rgba(155,118,0,.23);color:#ffd34d;font-size:11px;font-weight:800;line-height:1.25;white-space:nowrap}
+.banking-pay-v2-issue-detail td:last-child>div{align-items:stretch!important;min-width:178px}
+.banking-pay-v2-issue-detail td:last-child .btn{width:100%;justify-content:center;white-space:normal}
 .banking-pay-v2-issue-detail .bpv2-source-detail{margin:10px}
 .banking-pay-v2-issue-detail .bpv2-source-detail>div{display:flex;align-items:baseline;gap:10px}
 .banking-pay-v2-issue-detail .bpv2-source-detail p{margin:8px 0}
+.bpv2-resolution-panel{margin:0 0 12px;padding:12px;border:1px solid var(--ctms-modal-line,#2b405d);border-radius:9px;background:var(--ctms-modal-panel-raised,#101f35);color:var(--ctms-modal-text,#f8fafc)}
+.bpv2-resolution-panel-heading{display:flex;align-items:center;gap:9px;margin-bottom:10px;min-width:0}
+.bpv2-resolution-panel-heading strong{font-size:12px;white-space:normal}
 .banking-pay-v2-shell button:disabled,.banking-pay-v2-shell input:disabled{opacity:.45;cursor:default}
 @media(max-width:780px){
   .banking-pay-v2-shell-header{align-items:stretch;flex-direction:column}

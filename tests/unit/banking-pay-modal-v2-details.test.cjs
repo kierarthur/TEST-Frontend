@@ -45,7 +45,7 @@ function legacy(context) {
 }
 test('complete Ready detail HTML and action attributes match for selected/mixed/empty and updating states', () => {
   const api = require(generatedPath);
-  const rows=fixture.readyPage().rows;
+  const rows=fixture.readyRows();
   for(const selected of [[],[rows[0].preview_row_id],rows.map(row=>row.preview_row_id)]) {
     for(const open of [[],[`READY_TO_PAY|${fixture.id(1)}|${fixture.id(201)}`]]) {
       for(const state of [{},{pending:true},{failed:true}]) {
@@ -62,7 +62,7 @@ test('complete Ready detail HTML and action attributes match for selected/mixed/
 });
 
 test('Ready grouping retains exact row selection and expense/whole-timesheet controls', () => {
-  const rows=fixture.readyPage().rows;
+  const rows=fixture.readyRows();
   const actual=require(generatedPath).create(fixture.context({ready:rows}));
   const html=actual.renderReadyTimesheetGroupedRows(rows.filter(row=>row.line_type==='TIMESHEET_PAYMENT'));
   for(const name of ['toggleTimesheetPreviewGroup','toggleTimesheetBreakdown','togglePreviewRow','viewRowTimesheets','openSnooze','snoozeAllExpenses']) {

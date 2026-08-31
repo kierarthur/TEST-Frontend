@@ -23,6 +23,8 @@ test('summary transport preserves existing filters and exact one-request initial
 });
 for(const [kind,path,params] of [
   ['ready',`candidate/${fixture.id(1)}/ready`,{candidate_id:fixture.id(1),cursor:null,limit:100}],
+  ['readyGroup',`candidate/${fixture.id(1)}/ready-group`,{candidate_id:fixture.id(1),group_kind:'TIMESHEET',
+    group_key:`READY_TO_PAY|${fixture.id(1)}|${fixture.id(201)}`,cursor:null,limit:10}],
   ['timesheets',`candidate/${fixture.id(1)}/selected-ready-timesheets`,{candidate_id:fixture.id(1),scope_token:'only_selected'}],
   ['actions','action-required',{search:'A & B',sort_key:'TITLE',sort_direction:'ASC',cursor:null,limit:100}],
   ['actions','action-required',{view:'UPDATING',search:'',sort_key:'TITLE',sort_direction:'ASC',cursor:null,limit:100}],
@@ -35,11 +37,14 @@ for(const [kind,path,params] of [
     const url=new URL(calls[0].url);assert.equal(url.pathname,`/api/banking/pay/workbench/v2/session/${context.session_id}/${path}`);
     assert.equal(url.searchParams.has('candidate_id'),false);assert.equal(url.searchParams.has('identity'),false);
     assert.equal(url.searchParams.has('cursor'),false);assert.equal(calls[0].options.signal,abort.signal);
+    if(kind==='readyGroup'){assert.equal(url.searchParams.get('group_kind'),'TIMESHEET');assert.equal(url.searchParams.get('group_key'),params.group_key);}
     if(params.search)assert.equal(url.searchParams.get('search'),params.search);
   });
 }
 for(const bad of [
   ['summary',{search:'new main search'}],['ready',{candidate_id:'../other'}],['actionDetail',{identity:'../other'}],
+  ['readyGroup',{candidate_id:fixture.id(1),group_kind:'TIMESHEET',group_key:'bad\nkey',cursor:null,limit:10}],
+  ['readyGroup',{candidate_id:fixture.id(1),group_kind:'INVENTED',group_key:'valid',cursor:null,limit:10}],
   ['summary',{sort_key:'GROSS'}],['summary',{scope_hash:null,cursor:'stale'}],['summary',{pay_channel_scope:'anything'}],
   ['actions',{view:'UPDATING',search:'no new search'}],['actions',{view:'UPDATING',sort_key:'PAYMENTS'}],
   ['actions',{view:'UPDATING',sort_direction:'DESC'}],['actions',{view:'invented'}],['blocked',{view:'UPDATING'}],

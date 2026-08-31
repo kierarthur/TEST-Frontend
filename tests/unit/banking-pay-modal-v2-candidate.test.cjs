@@ -13,7 +13,10 @@ test('Candidate Banking accepts only one exact revision and Ready candidate scop
     value=>value.page.rows[0].selected='true',value=>value.page.rows.push({...value.page.rows[0]}),
     value=>value.context.selectedPreviewRowSet.clear(),value=>value.context.hiddenPreviewLines=[fixture.payment()],
     value=>value.context.canonicalPreviewLines.push(fixture.payment(999,{candidate_id:fixture.id(2)})),
-    value=>value.candidate=null,value=>value.page.rows=Array.from({length:101},()=>fixture.payment())
+    value=>value.candidate=null,value=>value.page.rows=Array.from({length:11},(_,index)=>fixture.payment(5000+index,{
+      presentation_group_kind:'ROW',presentation_group_key:fixture.id(5000+index),presentation_group_row_count:1,
+      selection_group_kind:null,selection_group_key:null,selection_group_member_count:0,selection_group_selected_count:0,
+      selection_group_state:null,selection_group_display_amount:null,selection_group_selected_display_amount:null}))
   ]){const value=fixture.snapshot();change(value);assert.throws(()=>api.validate(value),/INVALID_RESPONSE/);}
 });
 
@@ -29,10 +32,10 @@ test('Candidate Banking renders existing details without an application/global g
 });
 test('Candidate Banking binds grouped ticks to complete server group facts and removes loaded row IDs',()=>{
   const value=fixture.snapshot();const key=`READY_TO_PAY|${fixture.id(1)}|${fixture.id(201)}`;
-  value.page.rows.slice(0,3).forEach(row=>Object.assign(row,{selection_group_member_count:107,
+  value.page.rows.slice(0,1).forEach(row=>Object.assign(row,{selection_group_member_count:107,
     selection_group_selected_count:50,selection_group_state:'SOME',selection_group_display_amount:'1070.00',
     selection_group_selected_display_amount:'500.00'}));
-  value.context=fixture.context({ready:value.page.rows});
+  value.context=fixture.context({ready:fixture.readyRows()});
   const attrs=new Map([['data-preview-row-ids','["loaded-only"]']]);
   const made=[];const ownerDocument={createElement:tag=>{const node={tag,className:'',textContent:'',children:[],append(child){this.children.push(child);}};made.push(node);return node;}};
   const amountCell={ownerDocument,replaceChildren(...children){this.children=children;}};
@@ -57,7 +60,7 @@ for(const [name,change] of Object.entries({missing:r=>delete r.selection_group_k
   assert.throws(()=>api.validate(value),/INVALID_RESPONSE/);});
 
 test('Ready child may truthfully become empty after its last payment moves section',()=>{
-  const value=fixture.snapshot();value.candidate=null;value.page.candidate=null;value.page.rows=[];value.page.total_count=0;
+  const value=fixture.snapshot();value.candidate=null;value.page.candidate=null;value.page.rows=[];value.page.total_count=0;value.page.ready_row_count=0;
   value.summary.rows=[];value.summary.total_count=0;
   value.summary.page_number=0;value.summary.page_anchor=null;
   Object.assign(value.summary.global,{candidate_count:0,selected_candidate_count:0,selectable_ready_count:0,
@@ -103,7 +106,7 @@ test('fresh Ready navigation metadata may renew while every retained candidate f
   assert.throws(()=>api.validate(value),/INVALID_RESPONSE/,'same-response aliases still match exactly');
 });
 
-test('closed child details are lazy templates and expanding affects only that child',()=>{
+test('closed child groups render lazy placeholders; fetched detail owns the expanded contents',()=>{
   const value=fixture.snapshot();const key=`READY_TO_PAY|${fixture.id(1)}|${fixture.id(201)}`;
   const closed=api.rowMarkup(value,new Set());const opened=api.rowMarkup(value,new Set([key]));
   assert.ok(closed.includes('<template data-banking-ready-breakdown-template="true">'));

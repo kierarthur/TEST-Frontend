@@ -65,14 +65,15 @@
    &&count(value.progress_counter_version)&&value.progress_counter_version>request.expected_progress_counter_version);
   return value;
  }
- function validateReadyReplacement(page,result,previous,request){
+function validateReadyReplacement(page,result,previous,request){
   requireValue(object(request)&&Number.isInteger(request.limit)&&request.limit>=1&&request.limit<=100
    &&(request.cursor===null||text(request.cursor)&&TOKEN.test(request.cursor)));
   requireValue(object(page)&&page.ok===true&&page.contract===table.CONTRACT&&page.contract_version===1
    &&['session_id','session_version','progress_counter_version','scope_hash'].every(k=>page[k]===result[k])
    &&text(page.candidate_id)&&UUID.test(page.candidate_id)
    &&(!previous.ready||page.candidate_id===previous.ready.candidate_id)
-   &&Array.isArray(page.rows)&&page.rows.length<=request.limit&&count(page.total_count)&&count(page.page_number)
+   &&Array.isArray(page.rows)&&page.rows.length<=request.limit&&count(page.total_count)&&count(page.ready_row_count)
+   &&page.ready_row_count>=page.total_count&&count(page.page_number)
    &&typeof page.has_more==='boolean'&&typeof page.has_previous==='boolean'
    &&page.has_previous===(page.page_number>1)
    &&(page.page_number>2?text(page.previous_cursor)&&TOKEN.test(page.previous_cursor):page.previous_cursor===null)
@@ -81,7 +82,7 @@
    &&!page.has_more&&!page.has_previous&&page.page_anchor===null);
   else{
    table.validateRow(page.candidate);
-   requireValue(page.candidate.candidate_id===page.candidate_id&&page.candidate.selectable_ready_count<=page.total_count
+   requireValue(page.candidate.candidate_id===page.candidate_id&&page.candidate.selectable_ready_count<=page.ready_row_count
     &&page.page_number>=1&&page.page_number<=Math.ceil(page.total_count/request.limit)
     &&(request.cursor!==null||page.page_number===1)
     &&page.rows.length===Math.min(request.limit,page.total_count-(page.page_number-1)*request.limit)
@@ -90,7 +91,33 @@
   }
   requireValue(new Set(page.rows.map(row=>row?.identity)).size===page.rows.length
    &&page.rows.every(row=>object(row)&&text(row.identity)&&row.candidate_id===page.candidate_id
-    &&row.effective_section==='canonical_preview_lines'&&typeof row.selected==='boolean'&&validReadyGroup(row)));
+    &&row.effective_section==='canonical_preview_lines'&&typeof row.selected==='boolean'&&validReadyGroup(row)
+    &&validPresentationGroup(row)&&count(row.presentation_group_row_count)&&row.presentation_group_row_count>=1));
+  requireValue(new TextEncoder().encode(JSON.stringify(page)).byteLength<=512*1024);
+  return page;
+}
+ function validPresentationGroup(row){
+  return ['TIMESHEET','OVERPAYMENT','ROW'].includes(row.presentation_group_kind)
+   &&text(row.presentation_group_key)&&row.presentation_group_key.length<=512
+   &&!/[\u0000-\u001f\u007f]/u.test(row.presentation_group_key);
+ }
+ function validateReadyGroupDetail(page,result,request){
+  requireValue(object(request)&&['TIMESHEET','OVERPAYMENT','ROW'].includes(request.group_kind)
+   &&text(request.group_key)&&request.group_key.length<=512
+   &&(request.cursor===null||text(request.cursor)&&TOKEN.test(request.cursor))
+   &&Number.isInteger(request.limit)&&request.limit>=1&&request.limit<=25);
+  requireValue(object(page)&&page.ok===true&&page.contract===table.CONTRACT&&page.contract_version===1
+   &&['session_id','session_version','progress_counter_version','scope_hash'].every(key=>page[key]===result[key])
+   &&page.candidate_id===request.candidate_id&&page.group_kind===request.group_kind&&page.group_key===request.group_key
+   &&Array.isArray(page.rows)&&page.rows.length>=1&&page.rows.length<=request.limit&&count(page.total_count)&&page.total_count>=page.rows.length
+   &&count(page.page_offset)&&page.page_offset<page.total_count
+   &&page.rows.length===Math.min(request.limit,page.total_count-page.page_offset)
+   &&typeof page.has_more==='boolean'&&page.has_more===(page.page_offset+page.rows.length<page.total_count)
+   &&(page.has_more?text(page.next_cursor)&&TOKEN.test(page.next_cursor):page.next_cursor===null)
+   &&new Set(page.rows.map(row=>row?.identity)).size===page.rows.length
+   &&page.rows.every(row=>object(row)&&text(row.identity)&&row.candidate_id===request.candidate_id
+    &&row.effective_section==='canonical_preview_lines'&&typeof row.selected==='boolean'&&validReadyGroup(row)
+    &&validPresentationGroup(row)&&row.presentation_group_kind===request.group_kind&&row.presentation_group_key===request.group_key));
   requireValue(new TextEncoder().encode(JSON.stringify(page)).byteLength<=512*1024);
   return page;
  }
@@ -256,7 +283,7 @@
    &&sameJson(summary.rail,result.rail)&&summary.sort_key===old.sort_key&&summary.sort_direction===old.sort_direction);
   return {...previous,summary,...selectionDetailPages(previous,result,null)};
  }
- const api=Object.freeze({CANDIDATE_READY_PAGE_LIMIT,validateRetention,validateMovements,validateRowSelectionProof,validateGroupSelectionProof,validateReadyReplacement,selectionDetailPages,candidateSelectionRequest,rowSelectionRequest,groupSelectionRequest,
+ const api=Object.freeze({CANDIDATE_READY_PAGE_LIMIT,validateRetention,validateMovements,validateRowSelectionProof,validateGroupSelectionProof,validateReadyReplacement,validateReadyGroupDetail,selectionDetailPages,candidateSelectionRequest,rowSelectionRequest,groupSelectionRequest,
   retainedCandidateSummary,reconcileCandidateSelection,validateGlobalSelectionProof,globalSelectionRequest,reconcileGlobalSelection});
  if(typeof module==='object'&&module.exports)module.exports=api;else root.CloudTMSBankingPayMutationV2=api;
 })(typeof globalThis==='object'?globalThis:this);

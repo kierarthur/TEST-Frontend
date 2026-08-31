@@ -1794,8 +1794,8 @@
     },
     {
       "name": "banking:pay:previewPage",
-      "owner": "Candidate Banking, Action Required and Blocked internal paging",
-      "treatment": "Retain the concept; new endpoints own their own stable cursors."
+      "owner": "Candidate Banking outer group paging, Candidate Banking inner group paging, Action Required and Blocked internal paging",
+      "treatment": "Retain the concept; new endpoints own their own stable cursors. Candidate outer pages contain 10 complete payment groups whenever 10 remain. An expanded group uses its own bounded 10-line cursor and never changes the outer page size."
     },
     {
       "name": "banking:pay:refreshDraftCreateStatus",

@@ -15,7 +15,15 @@
   function open(){
     if(child)return;
     child=window.CloudTMSBankingPayCandidateV2.create({document,onClose:close,
-      onIntent:value=>{commands.push(value);result.textContent=`Intent recorded; display unchanged until accepted: ${value.kind}`;},
+      onIntent:async value=>{commands.push(value);result.textContent=`Intent recorded; display unchanged until accepted: ${value.kind}`;
+        if(value.kind!=='detail')return undefined;
+        const rows=fixture.readyRows().filter(row=>row.presentation_group_kind===value.group_kind
+          &&row.presentation_group_key===value.group_key);
+        return {state:'CURRENT',value:{ok:true,contract:current.page.contract,contract_version:1,
+          session_id:current.page.session_id,session_version:current.page.session_version,
+          progress_counter_version:current.page.progress_counter_version,scope_hash:current.page.scope_hash,
+          candidate_id:value.candidate_id,group_kind:value.group_kind,group_key:value.group_key,
+          rows,total_count:rows.length,page_offset:0,has_more:false,next_cursor:null}};},
       onLegacyAction:value=>{commands.push({action:value.action,selected:value.selected,kind:value.event_kind,attributes:{...value.element.dataset}});
         result.textContent=`Existing action recorded once: ${value.action}. No server operation was called.`;},
       onFailure:value=>{result.textContent=`Visible component failure: ${value.code}`;}});
@@ -30,7 +38,7 @@
     result.textContent='Fixed accepted fixture: £416.00. Main row retained; current candidate details updated.';
   }
   const check=(condition,message)=>{if(!condition)throw new Error(message);};
-  function runChecks(){
+  async function runChecks(){
     try{
       close();current=fixture.snapshot();main.publish(current.summary);open();commands.length=0;
       const view=child.element;const header=view.querySelector('[data-bpv2-child="include"]');
@@ -42,9 +50,10 @@
       check(group.indeterminate&&group.checked===false,'Selection changed before server response');
       check(originalMainRow.outerHTML===mainBefore,'Child intent changed main amount prematurely');
       const expand=view.querySelector('[data-action="banking:pay:toggleTimesheetBreakdown"]');expand.click();
+      await new Promise(resolve=>setTimeout(resolve,0));
       check(expand.getAttribute('aria-expanded')==='true','Breakdown did not expand');
       check(!view.querySelector('template[data-banking-ready-breakdown-template]'),'Template did not materialise');
-      check(commands.length===1,'Local expansion called a server action');
+      check(commands.length===2&&commands[1].kind==='detail','Expansion did not make exactly one bounded detail read');
       const checkbox=view.querySelector('[data-action="banking:pay:togglePreviewRow"]');checkbox.focus();
       const rowId=checkbox.dataset.previewRowId;apply();
       check(view.querySelector('[data-bpv2-child="include"]').checked,'Accepted candidate selection did not update');
@@ -72,7 +81,7 @@
       for(let i=0;i<20;i++){open();close();}open();commands.length=0;
       child.element.querySelector('[data-action="banking:pay:toggleTimesheetPreviewGroup"]').click();
       check(commands.length===1,'Duplicate handlers after reopen cycles');
-      result.textContent='PASS — 13 component groups: candidate/group half tick; exact one intent; non-optimistic display; local expansion; accepted update; focus; main node retained; invalid-page rejection; busy controls; off-page candidate header; close restoration; 20 reopen cycles; one handler.';
+      result.textContent='PASS — 13 component groups: candidate/group half tick; exact one intent; non-optimistic display; bounded expansion read; accepted update; focus; main node retained; invalid-page rejection; busy controls; off-page candidate header; close restoration; 20 reopen cycles; one handler.';
     }catch(error){result.textContent=`FAIL — ${error.message}`;}
   }
   document.getElementById('open').addEventListener('click',open);

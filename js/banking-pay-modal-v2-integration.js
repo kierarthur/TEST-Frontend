@@ -226,6 +226,8 @@
         if(value.kind==='next'||value.kind==='previous'){
           const page=controller.snapshot().ready;const cursor=value.kind==='next'?page.next_cursor:page.previous_cursor;return controller.candidatePage(cursor);
         }
+        if(value.kind==='detail')return controller.candidateGroupPage({candidate_id:value.candidate_id,
+          group_kind:value.group_kind,group_key:value.group_key,cursor:value.cursor});
         if(value.kind==='group')return controller.groupIntent({candidate_id:value.candidate_id,group_kind:value.group_kind,group_key:value.group_key,selected:value.selected});
         if(value.kind==='export-all')return runLegacy({action:'banking:pay:exportReadyToPayCsv',element:value.element,event_kind:'click'});
       },onLegacyAction:runLegacy,onClose:()=>controller.closeCandidate(),onFailure:value=>showError(value.code)});return presenters.candidate;

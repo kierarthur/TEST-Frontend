@@ -12,6 +12,24 @@
   const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
   const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   function fail(){const error=new Error('BANKING_PAY_V2_INVALID_RESPONSE');error.code=error.message;throw error;}
+  const caseResolutionAction=Object.freeze({
+    BUCKETED:'banking:pay:openBucketedResolution',
+    NON_BUCKET:'banking:pay:openNonBucketResolution',
+    TAXABLE_CHANNEL_RESTRUCTURE:'banking:pay:openTaxableFinanceCaseRestructure'
+  });
+  const caseActions=new Set([...Object.values(caseResolutionAction),'banking:pay:toggleExcludeTimesheet']);
+  const componentActions=new Set(['banking:pay:componentUseSuggested','banking:pay:componentManualRate',
+    'banking:pay:componentManualAmount','banking:pay:componentClearResolution']);
+  function exactActions(meta,allowed){
+    if(!Array.isArray(meta?.actions))fail();
+    const actions=meta.actions.map(value=>String(value||''));
+    if(actions.some(action=>!action||!allowed.has(action))||new Set(actions).size!==actions.length)fail();
+    return actions;
+  }
+  function renderedActions(html){return [...String(html||'').matchAll(/data-action="([^"]+)"/g)].map(match=>match[1]);}
+  function sameActions(actual,expected){
+    return actual.length===expected.length&&actual.every((action,index)=>action===expected[index]);
+  }
   function payload(row){
     if(!object(row)||!object(row.payload)||!object(row.task_meta))fail();
     return {...row.payload,...(object(row.bank_row)?row.bank_row:{}),candidate_id:row.candidate_id,
@@ -50,17 +68,53 @@
       <p>${esc(title)}</p>${action?`<button type="button" class="btn btn-outline" data-action="${esc(action)}">Refresh Banking Pay</button>`:''}
     </article>`;
   }
+  function financeTask(row,data,renderer){
+    const meta=row.task_meta,family=String(meta.family||'').toUpperCase();
+    if(family==='FINANCE_CASE'){
+      const expected=exactActions(meta,caseActions);
+      const resolutionFamily=String(meta.resolution_family||data.resolution_family||'').toUpperCase();
+      const expectedResolution=caseResolutionAction[resolutionFamily];
+      if(!expectedResolution||!expected.includes(expectedResolution))fail();
+      const entry={...data,candidate_id:String(row.candidate_id||data.candidate_id||''),
+        case_key:String(meta.case_key||data.case_key||''),finance_case_id:String(meta.finance_case_id||data.finance_case_id||''),
+        linked_timesheet_id:String(meta.linked_timesheet_id||data.linked_timesheet_id||data.timesheet_id||''),
+        resolution_family:resolutionFamily,
+        excluded_from_run:data.excluded_from_run===true||data.exclude_from_run===true};
+      if(!entry.candidate_id||(!entry.case_key&&!entry.finance_case_id))fail();
+      const actionHtml=renderer.renderCaseActionButtons(entry);
+      if(!sameActions(renderedActions(actionHtml),expected))fail();
+      return {data:{...data,__case_entry:entry},resolutionHtml:''};
+    }
+    if(family==='FINANCE_COMPONENT'){
+      const expected=exactActions(meta,componentActions),component=meta.component;
+      if(!object(component)||!expected.length)fail();
+      const entry={...data,candidate_id:String(row.candidate_id||data.candidate_id||''),
+        case_key:String(meta.case_key||data.case_key||''),finance_case_id:String(meta.finance_case_id||data.finance_case_id||''),
+        linked_timesheet_id:String(meta.linked_timesheet_id||data.linked_timesheet_id||data.timesheet_id||''),
+        resolution_family:String(meta.resolution_family||data.resolution_family||'').toUpperCase(),components:[component]};
+      if(!entry.candidate_id||(!entry.case_key&&!entry.finance_case_id))fail();
+      const componentHtml=renderer.renderComponentRows(entry);
+      if(!sameActions(renderedActions(componentHtml),expected))fail();
+      return {data,resolutionHtml:`<section class="bpv2-resolution-panel" data-bpv2-detail-member="${esc(row.identity)}">
+        <div class="bpv2-resolution-panel-heading"><span class="bpv2-resolution-badge">Rate decision required</span>
+          <strong>Choose how this rate should be handled.</strong></div>${componentHtml}</section>`};
+    }
+    return {data,resolutionHtml:''};
+  }
   function render(page,summary,kind,adapters,openKeys){
     issues.validateDetail(page,summary,kind,page[kind==='actions'?'task_key':'blocker_key'],undefined,100);
     const renderer=details.create(context(page,adapters,openKeys));
-    const paymentRows=page.rows.filter(row=>row.source_kind!=='SOURCE_PROGRESS').map(payload);
+    const prepared=page.rows.filter(row=>row.source_kind!=='SOURCE_PROGRESS')
+      .map(row=>financeTask(row,payload(row),renderer));
+    const paymentRows=prepared.map(item=>item.data);
     const timesheets=paymentRows.filter(row=>String(row.line_type||'').toUpperCase()==='TIMESHEET_PAYMENT');
     const other=paymentRows.filter(row=>String(row.line_type||'').toUpperCase()!=='TIMESHEET_PAYMENT');
     const section=kind==='actions'?'CASES_RESOLUTIONS':'BLOCKED_FOR_PAY';
     const tableRows=renderer.renderTimesheetParentRows(timesheets,section)
       +renderer.renderSimplePreviewRows(renderer.buildOverpaymentRecoveryDisplayLines(other),kind==='actions'?'Action required':'Blocked for pay',section);
     const sourceRows=page.rows.filter(row=>row.source_kind==='SOURCE_PROGRESS').map(sourceCard).join('');
-    return {tableRows,sourceRows};
+    const resolutionRows=prepared.map(item=>item.resolutionHtml).filter(Boolean).join('');
+    return {tableRows,sourceRows,resolutionRows};
   }
   function create({document,kind,adapters,onPage,onClose,onLegacyAction,onFailure}){
     if(!['actions','blocked'].includes(kind))throw new TypeError('Unknown issue detail kind');
@@ -69,12 +123,13 @@
     element.innerHTML=`<header><div><h2>${kind==='actions'?'Action Required':'Blocked for Pay'}</h2><p class="mini" data-bpv2-detail-summary></p></div>
       <button type="button" class="btn btn-outline" data-bpv2-detail-command="close">Close</button></header>
       <p role="status" class="bpv2-detail-status" aria-live="polite" hidden></p>
-      <div class="bpv2-detail-scroll"><div data-bpv2-source-rows></div><table class="grid banking-ready-preview-table"><thead><tr>
+      <div class="bpv2-detail-scroll"><div data-bpv2-source-rows></div><div data-bpv2-resolution-rows></div><table class="grid banking-ready-preview-table"><thead><tr>
         <th>Include</th><th>Line type</th><th>Candidate</th><th>Client</th><th>Week / Date</th><th>Channel</th><th>Amount</th><th>State</th><th>Action</th>
       </tr></thead><tbody></tbody></table></div>
       <footer><span data-bpv2-detail-count></span><button type="button" class="btn btn-outline" data-bpv2-detail-command="previous">Previous</button>
       <button type="button" class="btn btn-outline" data-bpv2-detail-command="next">Next</button></footer>`;
     const body=element.querySelector('tbody'),sources=element.querySelector('[data-bpv2-source-rows]');
+    const resolutions=element.querySelector('[data-bpv2-resolution-rows]');
     const status=element.querySelector('[role="status"]'),scroll=element.querySelector('.bpv2-detail-scroll');
     const openKeys=new Set();let accepted=null,busy=false,destroyed=false;
     function controls(){for(const control of element.querySelectorAll('button,input')){
@@ -109,8 +164,10 @@
         if(destroyed)throw new Error('BANKING_PAY_V2_CLOSED');const markup=render(page,summary,kind,adapters,openKeys);
         const staged=document.createElement('tbody');staged.innerHTML=markup.tableRows;
         const stagedSources=document.createElement('div');stagedSources.innerHTML=markup.sourceRows;
+        const stagedResolutions=document.createElement('div');stagedResolutions.innerHTML=markup.resolutionRows;
         return ()=>{if(destroyed)return;const top=scroll.scrollTop,left=scroll.scrollLeft;accepted=page;
           body.replaceChildren(...Array.from(staged.childNodes));sources.replaceChildren(...Array.from(stagedSources.childNodes));
+          resolutions.replaceChildren(...Array.from(stagedResolutions.childNodes));
           element.querySelector('[data-bpv2-detail-summary]').textContent=`${page.affected_candidate_count} candidate${page.affected_candidate_count===1?'':'s'} affected`;
           element.querySelector('[data-bpv2-detail-count]').textContent=`${page.total_count} item${page.total_count===1?'':'s'}`;
           status.hidden=true;status.textContent='';controls();scroll.scrollTop=top;scroll.scrollLeft=left;};

@@ -52,23 +52,29 @@
       getBankingPayAdoptedPreviewRowSectionV1:line=>line.effective_section||'',
       enc:value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[char])};
   }
-  function readyPage() {
-    const rows=[payment(),payment(1002,{amount_ex_vat:'187.50',section_amount_ex_vat:'187.50',date:'2026-08-28',work_date:'2026-08-28',key_value:'2026-08-28',
+  function readyRows() {
+    const rawRows=[payment(),payment(1002,{amount_ex_vat:'187.50',section_amount_ex_vat:'187.50',date:'2026-08-28',work_date:'2026-08-28',key_value:'2026-08-28',
       selected:false,units:7.5,segment_id:id(502),segment_stable_key:'synthetic-segment-2'}),expense(),recovery()];
     const groupKey=`READY_TO_PAY|${id(1)}|${id(201)}`;
-    for(const row of rows.slice(0,3))Object.assign(row,{selection_group_kind:'TIMESHEET',selection_group_key:groupKey,
+    for(const row of rawRows.slice(0,3))Object.assign(row,{selection_group_kind:'TIMESHEET',selection_group_key:groupKey,
       selection_group_member_count:3,selection_group_selected_count:2,selection_group_state:'SOME',
-      selection_group_display_amount:'431.00',selection_group_selected_display_amount:'243.50'});
-    Object.assign(rows[3],{selection_group_kind:null,selection_group_key:null,selection_group_member_count:0,
+      selection_group_display_amount:'431.00',selection_group_selected_display_amount:'243.50',
+      presentation_group_kind:'TIMESHEET',presentation_group_key:groupKey,presentation_group_row_count:3});
+    Object.assign(rawRows[3],{selection_group_kind:null,selection_group_key:null,selection_group_member_count:0,
       selection_group_selected_count:0,selection_group_state:null,selection_group_display_amount:null,
-      selection_group_selected_display_amount:null});
+      selection_group_selected_display_amount:null,presentation_group_kind:'ROW',presentation_group_key:rawRows[3].identity,
+      presentation_group_row_count:1});
+    return rawRows;
+  }
+  function readyPage(rawRows=readyRows()) {
+    const rows=[rawRows[0],rawRows[3]];
     return {ok:true,contract:'BANKING_PAY_MODAL_STRUCTURE_V2',contract_version:1,session_id:id(1000),candidate_id:id(1),
       session_version:2,progress_counter_version:3,scope_hash:'a'.repeat(64),
       rows,
-      total_count:4,has_more:false,next_cursor:null};
+      total_count:2,ready_row_count:4,has_more:false,next_cursor:null};
   }
   function snapshot() {
-    const page=readyPage();
+    const rawRows=readyRows();const page=readyPage(rawRows);
     const candidate={candidate_id:id(1),candidate_name:'Synthetic candidate — detail verification',candidate_reference:'TEST-001',
       candidate_sort_name:'synthetic candidate',candidate_sort_reference:'test-001',child_revision:'2:3:fixture',facts_digest:'b'.repeat(64),
       selectable_ready_count:4,selected_ready_count:3,selection_state:'SOME',selected_display_amount:'228.50',
@@ -82,9 +88,9 @@
         action_required_count:0,updating_count:0,blocked_count:0,draft:{can_create_draft:true,blocker_codes:[],
           session_ready:true,read_only:false,work_queued:false,display_ready:true,draft_safe:true,draft_block_reason_code:null,
           session_selected_row_count:3,session_selected_eligible_ready_row_count:3}}};
-    return {summary,candidate,page,context:context({ready:page.rows})};
+    return {summary,candidate,page,context:context({ready:rawRows})};
   }
-  const api=Object.freeze({id,payment,expense,recovery,component,caseEntry,context,readyPage,snapshot});
+  const api=Object.freeze({id,payment,expense,recovery,component,caseEntry,context,readyRows,readyPage,snapshot});
   if(typeof module==='object'&&module.exports)module.exports=api;
   else root.BankingDetailFixture=api;
 })(typeof window==='object'?window:this);

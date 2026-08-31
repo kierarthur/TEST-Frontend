@@ -102,15 +102,30 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
     const authFetch = async (url: string) => {
       requests.push(String(url));
       const requestUrl = String(url);
-      if (requestUrl.includes('/candidate/') && requestUrl.includes('/ready?')) {
+      if (requestUrl.includes('/candidate/') && (requestUrl.includes('/ready?') || requestUrl.includes('/ready-group?'))) {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
+      const readyGroup = (() => {
+        if (!requestUrl.includes('/ready-group?')) return null;
+        const url = new URL(requestUrl, 'https://fixture.invalid');
+        const groupKind = String(url.searchParams.get('group_kind') || '');
+        const groupKey = String(url.searchParams.get('group_key') || '');
+        const rows = fixture.readyRows().filter((row: any) => row.presentation_group_kind === groupKind
+          && row.presentation_group_key === groupKey);
+        return { ok: true, contract: snapshot.page.contract, contract_version: 1,
+          session_id: snapshot.page.session_id, session_version: snapshot.page.session_version,
+          progress_counter_version: snapshot.page.progress_counter_version, scope_hash: snapshot.page.scope_hash,
+          candidate_id: snapshot.page.candidate_id, group_kind: groupKind, group_key: groupKey,
+          rows, total_count: rows.length, page_offset: 0, has_more: false, next_cursor: null };
+      })();
       const payload = requestUrl.includes('/progress')
         ? { progress: {
             session_id: snapshot.summary.session_id,
             session_version: snapshot.summary.session_version,
             progress_counter_version: snapshot.summary.progress_counter_version
           } }
+        : readyGroup
+        ? readyGroup
         : requestUrl.includes('/candidate/') && requestUrl.includes('/ready?')
         ? snapshot.page
         : requestUrl.includes('/candidates?')
@@ -234,6 +249,12 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   await expect(candidate).not.toContainText('Blocked for Pay');
   await expect(candidate).not.toContainText('Action Required');
   await expect(candidate.locator('.banking-ready-mobile-row-summary')).toBeHidden();
+  const paymentGroup = candidate.locator('[data-action="banking:pay:toggleTimesheetBreakdown"]').first();
+  await paymentGroup.click();
+  await expect(paymentGroup).toHaveAttribute('aria-expanded', 'true');
+  await expect(candidate.locator('[data-bpv2-group-detail-count]')).toHaveText('Showing 1–3 of 3 payment segments');
+  await expect.poll(() => page.evaluate(() => (window as any).__bankingPayV2Harness.requests
+    .filter((value: string) => value.includes('/ready-group?')).length)).toBe(1);
   const candidateExport = candidate.getByRole('button', { name: 'Export CSV', exact: true });
   await expect(candidateExport).toBeVisible();
   expect(await candidateExport.evaluate(node => {
@@ -322,4 +343,99 @@ test('Action Required, Updating and Blocked components retain compact Chromium i
   await expect(page.locator('#result')).toContainText('PASS — both issue-list components');
   await expect(page.locator('#result')).toContainText('separate Updating');
   await expect(page.locator('.banking-pay-v2-issues')).toHaveCount(1);
+});
+
+test('Action Required detail renders and dispatches the exact existing resolution controls', async ({ page }) => {
+  await page.setContent('<!doctype html><html><head></head><body><main id="host"></main><p id="result"></p></body></html>');
+  await page.addStyleTag({ path: path.join(root, 'css', 'banking-pay-modal-v2.css') });
+  await page.addScriptTag({ path: path.join(root, 'js', 'banking-pay-modal-v2-copy.js') });
+  await page.addScriptTag({ path: path.join(root, 'js', 'banking-pay-modal-v2-table.js') });
+  await page.addScriptTag({ path: path.join(root, 'js', 'banking-pay-modal-v2-issues.js') });
+  await page.addScriptTag({ path: path.join(root, 'js', 'banking-pay-modal-v2-details-legacy.js') });
+  await page.addScriptTag({ path: path.join(root, 'js', 'banking-pay-modal-v2-issue-detail.js') });
+  const summary = hundredCandidatePage();
+  summary.global.action_required_count = 1;
+  await page.evaluate(({ summary, ids }) => {
+    const detail = (window as any).CloudTMSBankingPayIssueDetailV2.create({
+      document,
+      kind: 'actions',
+      adapters: { formatIsoToUk: (value: string) => value, railEnv: 'TEST', railProvider: 'CSV' },
+      onPage: () => {},
+      onClose: () => {},
+      onLegacyAction: ({ action }: { action: string }) => {
+        document.querySelector('#result')!.textContent = action;
+      },
+      onFailure: ({ code }: { code: string }) => {
+        document.querySelector('#result')!.textContent = code;
+      }
+    });
+    document.querySelector('#host')!.append(detail.element);
+    const response = {
+      ok: true,
+      contract: summary.contract,
+      contract_version: 1,
+      session_id: summary.session_id,
+      session_version: summary.session_version,
+      progress_counter_version: summary.progress_counter_version,
+      scope_hash: summary.scope_hash,
+      task_key: 'rate-decision',
+      total_count: 1,
+      has_more: false,
+      next_cursor: null,
+      page_number: 1,
+      has_previous: false,
+      previous_cursor: null,
+      affected_candidate_count: 1,
+      affected_payment_count: 1,
+      affected_payment_count_complete: true,
+      rows: [{
+        identity: 'rate-decision-member',
+        candidate_id: ids.candidate,
+        preview_row_id: ids.preview,
+        source_kind: 'PREVIEW_ROW',
+        context_only: false,
+        task_meta: {
+          family: 'FINANCE_CASE',
+          actions: ['banking:pay:openBucketedResolution', 'banking:pay:toggleExcludeTimesheet'],
+          case_key: `finance:${ids.financeCase}`,
+          finance_case_id: ids.financeCase,
+          resolution_family: 'BUCKETED',
+          linked_timesheet_id: ids.timesheet
+        },
+        payload: {
+          candidate_id: ids.candidate,
+          preview_row_id: ids.preview,
+          display_name: 'James Terwane',
+          tms_ref: 'CCR-03726',
+          client_name: 'West London Mental Health NHS Trust',
+          line_type: 'TIMESHEET_PAYMENT',
+          presentation_section: 'CASES_RESOLUTIONS',
+          effective_section: 'cases_resolutions',
+          pay_channel: 'PAYE',
+          section_amount_ex_vat: '200.00',
+          excluded_from_run: false,
+          case_needs_resolution: true,
+          case_resolution_satisfied_now: false,
+          has_actionable_suggested_resolution: true,
+          resolution_action_requires_actionable_components: false
+        }
+      }]
+    };
+    detail.prepare(response, summary)();
+  }, { summary, ids: { candidate: id(1), preview: id(2), financeCase: id(3), timesheet: id(4) } });
+
+  const review = page.getByRole('button', { name: 'Review suggested rates' });
+  await expect(review).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Exclude case' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Snooze whole timesheet' })).toBeVisible();
+  const badge = page.locator('.banking-pay-v2-issue-detail .pill.pill-warn').first();
+  await expect(badge).toHaveText('Resolution required');
+  const badgeStyle = await badge.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { height: element.getBoundingClientRect().height, whiteSpace: style.whiteSpace };
+  });
+  expect(badgeStyle.height).toBeLessThanOrEqual(28);
+  expect(badgeStyle.whiteSpace).toBe('nowrap');
+  await review.click();
+  await expect(page.locator('#result')).toHaveText('banking:pay:openBucketedResolution');
 });

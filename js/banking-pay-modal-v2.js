@@ -14,10 +14,8 @@
   const mutation=local?require('./banking-pay-modal-v2-mutation.js'):root.CloudTMSBankingPayMutationV2;
   const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const TOKEN=/^[A-Za-z0-9_-]{1,4096}$/;
-  // Candidate detail keeps the certified row payload intact. A 25-row child
-  // page stays below the Workbench's bounded response ceiling for the real
-  // high-detail recovery candidate while retaining every row through the
-  // existing server cursor. The 100-row main candidate list is unchanged.
+  // Candidate Banking pages ten complete payment groups. Expanded group lines
+  // are fetched independently in ten-row bounded chunks.
   const CANDIDATE_READY_PAGE_LIMIT=mutation.CANDIDATE_READY_PAGE_LIMIT;
   const fields=['session_id','session_version','progress_counter_version','scope_hash'];
   const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
@@ -136,6 +134,20 @@
           ui:{...previous.ui,surface:'candidate',candidate_id:candidateId,ready_cursor:cursor,action_return:null}};
       });
     }
+    function candidateGroupRead(candidateId,groupKind,groupKey,cursor=null){
+      requireValue(UUID.test(candidateId)&&['TIMESHEET','OVERPAYMENT','ROW'].includes(groupKind)
+        &&typeof groupKey==='string'&&groupKey.length>=1&&groupKey.length<=512&&!/[\u0000-\u001f\u007f]/u.test(groupKey)
+        &&(cursor===null||TOKEN.test(cursor)));
+      const accepted=queue.snapshot(),representative=accepted.ready?.rows?.find(row=>row.candidate_id===candidateId
+        &&row.presentation_group_kind===groupKind&&row.presentation_group_key===groupKey);
+      requireValue(accepted.ui?.surface==='candidate'&&representative,'BANKING_PAY_V2_ITEM_NOT_CURRENT');
+      return queue.read(async(authority,signal)=>{
+        const requestArgs={candidate_id:candidateId,group_kind:groupKind,group_key:groupKey,cursor,limit:10};
+        const page=await request('readyGroup',authority,requestArgs,signal);
+        mutation.validateReadyGroupDetail(page,authority,requestArgs);
+        return page;
+      });
+    }
     function enqueue(value){
       const request_id=newRequestId();requireValue(UUID.test(request_id));
       return queue.enqueue({...value,request_id,pay_channel_scope:payChannelScope});
@@ -177,6 +189,8 @@
       },
       openCandidate:candidateRead,
       candidatePage(cursor){const page=queue.snapshot().ready;requireValue(page);return candidateRead(page.candidate_id,cursor);},
+      candidateGroupPage(value){exact(value,['candidate_id','group_kind','group_key','cursor']);
+        return candidateGroupRead(value.candidate_id,value.group_kind,value.group_key,value.cursor);},
       closeCandidate(){return queue.dismissViews(['ready'],{surface:'main',candidate_id:null,ready_cursor:null});},
       openIssues(kind,value={}){
         const query=issueQuery(kind,value);
@@ -280,6 +294,7 @@
     const error=(code,outcome)=>Object.assign(new Error(code),{code,outcome});
     function validateArgs(kind,args){
       const keys={summary:['sort_key','sort_direction','cursor','limit'],ready:['candidate_id','cursor','limit'],
+        readyGroup:['candidate_id','group_kind','group_key','cursor','limit'],
         actions:['search','sort_key','sort_direction','cursor','limit','view'],blocked:['search','sort_key','sort_direction','cursor','limit'],
         actionDetail:['identity','cursor','limit'],blockedDetail:['identity','cursor','limit'],
         timesheets:['candidate_id','scope_token'],selection:['candidate_id','action','request_id','expected_view_digest','open_ready'],
@@ -318,6 +333,9 @@
         requireValue((args.open_ready.cursor===null||typeof args.open_ready.cursor==='string'&&TOKEN.test(args.open_ready.cursor))
           &&Number.isInteger(args.open_ready.limit)&&args.open_ready.limit>=1&&args.open_ready.limit<=100);
       }
+      if(kind==='readyGroup')requireValue(['TIMESHEET','OVERPAYMENT','ROW'].includes(args.group_kind)
+        &&typeof args.group_key==='string'&&args.group_key.length>=1&&args.group_key.length<=512
+        &&!/[\u0000-\u001f\u007f]/u.test(args.group_key)&&args.limit<=25);
     }
     async function send(path,options,mutation){
       let response,payload;
@@ -335,7 +353,7 @@
     return Object.freeze({
       async readPage(kind,args,signal){
         requireValue(!['selection','globalSelection','rowSelection','groupSelection'].includes(kind));validateArgs(kind,args);
-        const suffix={summary:'candidates',ready:`candidate/${args.candidate_id}/ready`,
+        const suffix={summary:'candidates',ready:`candidate/${args.candidate_id}/ready`,readyGroup:`candidate/${args.candidate_id}/ready-group`,
           timesheets:`candidate/${args.candidate_id}/selected-ready-timesheets`,actions:'action-required',blocked:'blocked',
           actionDetail:`action-required/${args.identity}`,blockedDetail:`blocked/${args.identity}`}[kind];
         const query=new URLSearchParams();

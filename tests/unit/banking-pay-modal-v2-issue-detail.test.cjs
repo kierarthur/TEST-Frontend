@@ -38,3 +38,62 @@ test('source-progress detail keeps the existing refresh action and no payment id
   assert.match(rendered.sourceRows,/data-action="banking:pay:refreshAll"/);
   assert.equal(rendered.tableRows,'');
 });
+
+test('action detail joins the exact server-owned case actions back onto the preserved controls',()=>{
+  const value=fixture('actions',1,1);value.summary.global.action_required_count=1;
+  const row=value.page.rows[0];
+  row.task_meta={family:'FINANCE_CASE',actions:[
+    'banking:pay:openBucketedResolution','banking:pay:toggleExcludeTimesheet'
+  ],case_key:'finance:00000000-0000-4000-8000-000000000088',
+  finance_case_id:'00000000-0000-4000-8000-000000000088',resolution_family:'BUCKETED',
+  linked_timesheet_id:'00000000-0000-4000-8000-000000000089'};
+  Object.assign(row.payload,{candidate_id:row.candidate_id,preview_row_id:row.preview_row_id,
+    display_name:'Candidate needing a rate decision',tms_ref:'TEST-003',client_name:'Test client',
+    line_type:'TIMESHEET_PAYMENT',presentation_section:'CASES_RESOLUTIONS',effective_section:'cases_resolutions',
+    pay_channel:'PAYE',section_amount_ex_vat:'200.00',excluded_from_run:false,
+    case_needs_resolution:true,case_resolution_satisfied_now:false,
+    has_actionable_suggested_resolution:true,resolution_action_requires_actionable_components:false});
+  const rendered=api.render(value.page,value.summary,'actions',
+    {formatIsoToUk:v=>v,railEnv:'TEST',railProvider:'CSV'},new Set());
+  const actions=[...rendered.tableRows.matchAll(/data-action="([^"]+)"/g)].map(match=>match[1]);
+  assert.ok(actions.includes('banking:pay:openBucketedResolution'));
+  assert.ok(actions.includes('banking:pay:toggleExcludeTimesheet'));
+  assert.ok(actions.includes('banking:pay:openSnooze'));
+  assert.match(rendered.tableRows,/>Review suggested rates<\/button>/);
+  assert.match(rendered.tableRows,/>Exclude case<\/button>/);
+});
+
+test('component action detail exposes every exact component control without inventing another action',()=>{
+  const value=fixture('actions',1,1);value.summary.global.action_required_count=1;
+  const row=value.page.rows[0];
+  const component={finance_component_id:'00000000-0000-4000-8000-000000000090',key:'DAY',
+    label:'Day rate',needs_action:true,show_suggested_rate:true,suggested_available:true,
+    show_manual_rate_control:true,show_manual_amount_control:false,has_operator_choice:false,
+    source_units:8,source_rate:19,target_rate:20,source_pay_amount:152,target_pay_amount:160};
+  row.task_meta={family:'FINANCE_COMPONENT',actions:[
+    'banking:pay:componentUseSuggested','banking:pay:componentManualRate'
+  ],case_key:'finance:00000000-0000-4000-8000-000000000091',
+  finance_case_id:'00000000-0000-4000-8000-000000000091',resolution_family:'BUCKETED',
+  linked_timesheet_id:'00000000-0000-4000-8000-000000000092',component};
+  Object.assign(row.payload,{candidate_id:row.candidate_id,preview_row_id:row.preview_row_id,
+    display_name:'Candidate needing a component decision',line_type:'TIMESHEET_PAYMENT',
+    presentation_section:'CASES_RESOLUTIONS',effective_section:'cases_resolutions'});
+  const rendered=api.render(value.page,value.summary,'actions',
+    {formatIsoToUk:v=>v,railEnv:'TEST',railProvider:'CSV'},new Set());
+  const actions=[...rendered.resolutionRows.matchAll(/data-action="([^"]+)"/g)].map(match=>match[1]);
+  assert.deepEqual(actions,['banking:pay:componentUseSuggested','banking:pay:componentManualRate']);
+  assert.match(rendered.resolutionRows,/Accept suggestion/);
+  assert.match(rendered.resolutionRows,/Manual rate/);
+});
+
+test('action detail rejects mismatched task actions instead of guessing a resolution control',()=>{
+  const value=fixture('actions',1,1);value.summary.global.action_required_count=1;
+  const row=value.page.rows[0];
+  row.task_meta={family:'FINANCE_CASE',actions:['banking:pay:openNonBucketResolution'],
+    case_key:'finance:00000000-0000-4000-8000-000000000093',
+    finance_case_id:'00000000-0000-4000-8000-000000000093',resolution_family:'BUCKETED'};
+  Object.assign(row.payload,{candidate_id:row.candidate_id,line_type:'TIMESHEET_PAYMENT',
+    presentation_section:'CASES_RESOLUTIONS',effective_section:'cases_resolutions'});
+  assert.throws(()=>api.render(value.page,value.summary,'actions',
+    {formatIsoToUk:v=>v,railEnv:'TEST',railProvider:'CSV'},new Set()),/INVALID_RESPONSE/);
+});
