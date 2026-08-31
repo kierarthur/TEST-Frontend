@@ -61,6 +61,25 @@ test('typed rejection keeps the previous authority without pretending a write oc
   assert.equal(env.controller.snapshot(),env.initial);assert.equal(env.commits.length,0);
   assert.equal(env.controller.mayUseLegacyFallback(),false);
 });
+for(const sizeCode of ['BANKING_PAY_V2_SELECTION_TOO_LARGE','BANKING_PAY_V2_READY_TOO_LARGE'])
+test('bounded response rejection '+sizeCode+' proves current authority before another intent',async()=>{
+  let reads=0;const env=setup({perform:async()=>({ok:false,outcome:'REJECTED',code:sizeCode}),
+    readBack:async()=>{reads++;return snapshot(4);}});
+  assert.equal((await env.controller.enqueue(intent(1))).state,'REJECTED_TYPED');
+  assert.equal(reads,1);assert.equal(env.commits.length,1);
+  assert.equal(env.controller.snapshot().summary.progress_counter_version,4);
+  assert.equal(env.controller.isBusy(),false);
+});
+test('accepted mutation whose open Ready response is too large reloads current authority without repeating the mutation',async()=>{
+  let mutations=0,reconciles=0,reads=0;
+  const env=setup({perform:async(command,context)=>{mutations++;return receipt(command,context);},
+    reconcile:async()=>{reconciles++;throw Object.assign(new Error('bounded'),{code:'BANKING_PAY_V2_READY_TOO_LARGE'});},
+    readBack:async()=>{reads++;return snapshot(4);}});
+  assert.equal((await env.controller.enqueue(intent(1))).state,'ADOPTED');
+  assert.equal(mutations,1);assert.equal(reconciles,1);assert.equal(reads,1);
+  assert.equal(env.commits.length,1);assert.equal(env.failures.length,0);
+  assert.ok(env.states.some(row=>row.state==='TRANSPORT_UNCERTAIN'));
+});
 for(const staleCode of ['BANKING_PAY_V2_STALE_REVISION','BANKING_PAY_V2_STALE_VIEW'])
 test('stale rejection '+staleCode+' reloads current authority before a queued intent may dispatch',async()=>{
   const contexts=[];let calls=0,reads=0;

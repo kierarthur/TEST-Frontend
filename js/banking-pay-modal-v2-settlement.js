@@ -10,6 +10,7 @@
   const STALE_REJECTIONS=new Set(['BANKING_PAY_V2_STALE_REVISION','BANKING_PAY_V2_STALE_VIEW','BANKING_PAY_V2_SCOPE_MISMATCH','STALE_SESSION',
     'WORKBENCH_STALE_SELECTION','WORKBENCH_SESSION_VERSION_MISMATCH','WORKBENCH_PROGRESS_COUNTER_VERSION_MISMATCH',
     'WORKBENCH_SESSION_PROGRESS_CHANGED','OBSOLETE_SESSION']);
+  const BOUNDED_RESPONSE_REJECTIONS=new Set(['BANKING_PAY_V2_SELECTION_TOO_LARGE','BANKING_PAY_V2_READY_TOO_LARGE']);
   const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
   function context(snapshot){const p=snapshot.summary;return {session_id:p.session_id,session_version:p.session_version,
     progress_counter_version:p.progress_counter_version,scope_hash:p.scope_hash};}
@@ -143,9 +144,10 @@
         if(closed){state='CLOSED';return;}
         if(currentEpoch!==epoch){state='SUPERSEDED';return;}
         if(rejected){
-          if(STALE_REJECTIONS.has(rejected.code)){
+          if(STALE_REJECTIONS.has(rejected.code)||BOUNDED_RESPONSE_REJECTIONS.has(rejected.code)){
             needsRefresh=true;status('RECONCILING',intent);
-            const current=await readBack({intent,previous,reason:'STALE_REJECTION'});
+            const current=await readBack({intent,previous,reason:STALE_REJECTIONS.has(rejected.code)
+              ?'STALE_REJECTION':'BOUNDED_RESPONSE_REJECTION'});
             if(closed){state='CLOSED';return;}
             adopt(current,previous,intent);
           }
@@ -159,7 +161,15 @@
           status('SERVER_ACCEPTED',intent);status('RECONCILING',intent);
           // The adapter returns one complete same-revision graph. Open Ready
           // and Blocked pages must reconcile together; closed views invalidate.
-          next=await reconcile({intent,result,previous});
+          try{next=await reconcile({intent,result,previous});}
+          catch(error){
+            // The mutation receipt is already authoritative. A bounded Ready
+            // response can still fail while rebuilding the open child view;
+            // reload current authority once and never repeat the mutation.
+            if(!BOUNDED_RESPONSE_REJECTIONS.has(error?.code))throw error;
+            needsRefresh=true;status('TRANSPORT_UNCERTAIN',intent);
+            next=await readBack({intent,previous,reason:'POST_ACCEPTED_BOUNDED_RESPONSE'});
+          }
         }
         if(closed){state='CLOSED';return;}
         if(currentEpoch!==epoch){state='SUPERSEDED';return;}

@@ -192,7 +192,7 @@
     function failureMessage(value){
       const code=typeof value==='string'?value:(value?.code||value?.message);
       if(code==='BANKING_PAY_V2_READY_TOO_LARGE'||code==='BANKING_PAY_V2_SELECTION_TOO_LARGE')
-        return 'Candidate Banking could not refresh after that selection. The selection was not changed. Refresh Banking Pay and try again.';
+        return 'Candidate Banking could not complete that selection safely. The current selection has been reloaded from the server. Review it before trying again.';
       return String(value||'Banking Pay could not be updated. Refresh Banking Pay and try again.');
     }
     function showError(value){status.textContent=failureMessage(value);status.hidden=false;

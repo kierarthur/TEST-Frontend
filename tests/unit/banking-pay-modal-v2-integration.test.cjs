@@ -168,7 +168,8 @@ test('background Pay rerenders refresh an open v2 child in place',()=>{
 
 test('oversized Candidate Banking responses never expose an internal error code',()=>{
   const source=fs.readFileSync(path.join(root,'js','banking-pay-modal-v2-integration.js'),'utf8');
-  assert.match(source,/Candidate Banking could not refresh after that selection\. The selection was not changed\. Refresh Banking Pay and try again\./);
+  assert.match(source,/Candidate Banking could not complete that selection safely\. The current selection has been reloaded from the server\. Review it before trying again\./);
+  assert.doesNotMatch(source,/The selection was not changed/);
   assert.doesNotMatch(source,/status\.textContent=String\(value/);
 });
 
