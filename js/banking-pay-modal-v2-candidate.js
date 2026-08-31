@@ -309,9 +309,12 @@
       const template=source.querySelector('template[data-banking-ready-breakdown-template="true"]');
       if(template)template.replaceWith(template.content.cloneNode(true));
       target.replaceChildren(...Array.from(source.firstElementChild.childNodes));
-      const from=page.page_offset+1,to=page.page_offset+page.rows.length;
+      const renderedSegmentCount=target.querySelectorAll('table.grid > tbody > tr[data-timesheet-group-key]').length;
+      if(renderedSegmentCount<1)throw new Error('Missing rendered payment segments');
+      const segmentLabel=`${renderedSegmentCount} payment segment${renderedSegmentCount===1?'':'s'}`;
+      const pageLabel=page.has_more||state.index>0||state.pages.length>1?`${segmentLabel} on this page`:segmentLabel;
       const paging=document.createElement('div');paging.className='bpv2-group-detail-pagination';
-      paging.innerHTML=`<span data-bpv2-group-detail-count>Showing ${from}–${to} of ${page.total_count} payment segments</span>
+      paging.innerHTML=`<span data-bpv2-group-detail-count>${pageLabel}</span>
         <button type="button" class="btn btn-outline" data-bpv2-detail="previous" ${state.index===0?'disabled':''}>Previous</button>
         <button type="button" class="btn btn-outline" data-bpv2-detail="next" ${page.has_more||state.index<state.pages.length-1?'':'disabled'}>Next</button>`;
       target.append(paging);shapeNestedBreakdown(target);syncChecks(target);

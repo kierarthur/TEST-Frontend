@@ -124,6 +124,10 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
         const groupKey = String(url.searchParams.get('group_key') || '');
         const rows = fixture.readyRows().filter((row: any) => row.presentation_group_kind === groupKind
           && row.presentation_group_key === groupKey);
+        if (rows.length >= 3) Object.assign(rows[0], {
+          presentation_role: 'PARENT', selection_allowed: false,
+          is_ready_for_draft: false, draftable: false, status: 'SUPPORTING_CONTEXT'
+        });
         return { ok: true, contract: snapshot.page.contract, contract_version: 1,
           session_id: snapshot.page.session_id, session_version: snapshot.page.session_version,
           progress_counter_version: snapshot.page.progress_counter_version, scope_hash: snapshot.page.scope_hash,
@@ -276,7 +280,8 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   await expect.poll(() => page.evaluate(() => (window as any).__bankingPayV2Harness.requests
     .filter((value: string) => value.includes('/ready-group?')).length)).toBe(1);
   await candidate.getByRole('button', { name: 'Try again' }).click();
-  await expect(candidate.locator('[data-bpv2-group-detail-count]')).toHaveText('Showing 1–3 of 3 payment segments');
+  await expect(candidate.locator('[data-bpv2-group-detail-count]')).toHaveText('2 payment segments');
+  await expect(candidate.locator('[data-banking-ready-breakdown-detail]:not([hidden]) table.grid > tbody > tr[data-timesheet-group-key]')).toHaveCount(2);
   await expect.poll(() => page.evaluate(() => (window as any).__bankingPayV2Harness.requests
     .filter((value: string) => value.includes('/ready-group?')).length)).toBe(2);
   const candidateExport = candidate.getByRole('button', { name: 'Export CSV', exact: true });
