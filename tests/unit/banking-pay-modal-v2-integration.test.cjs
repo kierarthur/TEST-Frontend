@@ -165,7 +165,8 @@ test('background Pay rerenders refresh an open v2 child in place',()=>{
   const mainSource=fs.readFileSync(path.join(root,'js','main.js'),'utf8');
   assert.match(controllerSource,/refreshCurrentAuthority:queue\.refreshAfterFailure/);
   assert.match(integrationSource,/async refreshOpenSurface\(\)/);
-  assert.match(integrationSource,/controller\.snapshot\(\)\?\.ui\?\.surface==='main'&&controller\.isBusy\(\)\)return true/);
+  assert.match(integrationSource,/if\(controller\.isBusy\(\)\)return true/);
+  assert.doesNotMatch(integrationSource,/surface==='main'&&controller\.isBusy\(\)/);
   assert.match(integrationSource,/controller\.refreshCurrentAuthority\(\)/);
   assert.match(integrationSource,/surfaceName==='candidate'/);
   assert.match(integrationSource,/const CANDIDATE_READY_PAGE_LIMIT=controllerModule\.CANDIDATE_READY_PAGE_LIMIT/);
