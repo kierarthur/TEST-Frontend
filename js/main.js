@@ -792,11 +792,16 @@ function getVisibleBulkAuthoriseRows(state) {
 
   const visibleProcessedEligibleRows = visibleRows.filter((row) => trimStr(row?.bulk_authorise_section || '') === 'processed_eligible');
   const visibleAuthorisedEligibleRows = visibleRows.filter((row) => trimStr(row?.bulk_authorise_section || '') === 'authorised_eligible');
+  const visibleReviewRequiredRows = visibleRows.filter((row) => (
+    trimStr(row?.bulk_authorise_section || '') === 'processed_review_required' ||
+    upper(row?.bulk_authorise_block_code || '') === 'DUPLICATE_EXPENSE_REVIEW_REQUIRED'
+  ));
 
   return {
     visible_rows: visibleRows,
     visible_processed_eligible_rows: visibleProcessedEligibleRows,
     visible_authorised_eligible_rows: visibleAuthorisedEligibleRows,
+    visible_review_required_rows: visibleReviewRequiredRows,
     visible_unauthorised_rows: visibleProcessedEligibleRows.slice(),
     candidate_option_rows: candidateOptionRows,
     client_option_rows: clientOptionRows
@@ -116790,7 +116795,15 @@ function summaryUpdateRowDom(section, id, patchedRow) {
 
     businessIssues.forEach((code) => {
       const span = document.createElement('span');
-      const label = String(code || '').trim() || 'Issue';
+      const rawLabel = String(code || '').trim() || 'Issue';
+      const duplicateExpenseLabels = {
+        DUPLICATE_EXPENSE_REVIEW: 'Possible duplicate expenses',
+        DUPLICATE_EXPENSE_MILEAGE: 'Possible duplicate mileage',
+        DUPLICATE_EXPENSE_TRAVEL: 'Possible duplicate travel',
+        DUPLICATE_EXPENSE_ACCOMMODATION: 'Possible duplicate accommodation',
+        DUPLICATE_EXPENSE_OTHER: 'Possible duplicate other expenses'
+      };
+      const label = duplicateExpenseLabels[rawLabel.toUpperCase()] || rawLabel;
 
       let cls = 'pill pill-bad';
       const up = label.toUpperCase();
@@ -116798,7 +116811,8 @@ function summaryUpdateRowDom(section, id, patchedRow) {
         up === 'ON HOLD' ||
         up === 'VALIDATION' ||
         up === 'AUTHORISATION' ||
-        up === 'AWAITING SIGNED QR TIMESHEET'
+        up === 'AWAITING SIGNED QR TIMESHEET' ||
+        up.startsWith('POSSIBLE DUPLICATE')
       ) {
         cls = 'pill pill-warn';
       }
@@ -117457,7 +117471,15 @@ function summaryInsertRowDom(section, patchedRow) {
 
     businessIssues.forEach((code) => {
       const span = document.createElement('span');
-      const label = String(code || '').trim() || 'Issue';
+      const rawLabel = String(code || '').trim() || 'Issue';
+      const duplicateExpenseLabels = {
+        DUPLICATE_EXPENSE_REVIEW: 'Possible duplicate expenses',
+        DUPLICATE_EXPENSE_MILEAGE: 'Possible duplicate mileage',
+        DUPLICATE_EXPENSE_TRAVEL: 'Possible duplicate travel',
+        DUPLICATE_EXPENSE_ACCOMMODATION: 'Possible duplicate accommodation',
+        DUPLICATE_EXPENSE_OTHER: 'Possible duplicate other expenses'
+      };
+      const label = duplicateExpenseLabels[rawLabel.toUpperCase()] || rawLabel;
 
       let cls = 'pill pill-bad';
       const up = label.toUpperCase();
@@ -117465,7 +117487,8 @@ function summaryInsertRowDom(section, patchedRow) {
         up === 'ON HOLD' ||
         up === 'VALIDATION' ||
         up === 'AUTHORISATION' ||
-        up === 'AWAITING SIGNED QR TIMESHEET'
+        up === 'AWAITING SIGNED QR TIMESHEET' ||
+        up.startsWith('POSSIBLE DUPLICATE')
       ) {
         cls = 'pill pill-warn';
       }
@@ -259194,6 +259217,23 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     const selectedRows = selectionKeys.map((key) => processedByKey.get(key)).filter((row) => row && typeof row === 'object');
     const items = selectedRows.map(buildItem);
     const isMultiRowAction = items.length > 1;
+    const reviewRequiredRows = Array.isArray(visibleModel.visible_review_required_rows)
+      ? visibleModel.visible_review_required_rows
+      : [];
+    if (!isActionRow && reviewRequiredRows.length && typeof openUiConfirmModal === 'function') {
+      const duplicateCount = reviewRequiredRows.length;
+      const confirmation = await openUiConfirmModal({
+        title: 'Confirm bulk authorisation',
+        message: `${items.length} eligible timesheet${items.length === 1 ? '' : 's'} will be authorised. ${duplicateCount} claim${duplicateCount === 1 ? '' : 's'} with possible duplicate expenses ${duplicateCount === 1 ? 'is' : 'are'} not included and must be reviewed individually.`,
+        confirm_label: 'Authorise eligible timesheets',
+        cancel_label: 'Cancel',
+        confirm_class: 'btn btn-primary'
+      });
+      if (!(confirmation && confirmation.confirmed === true)) {
+        GE();
+        return { ok: false, cancelled: true, reason: 'BULK_AUTHORISE_CANCELLED' };
+      }
+    }
     st.__bulk_authorise_mutation_seq = (Number(st.__bulk_authorise_mutation_seq || 0) || 0) + 1;
     const mutationSeq = Number(st.__bulk_authorise_mutation_seq || 0) || 0;
     if (isMultiRowAction) st.__bulk_authorise_suppress_context_hydration = true;
@@ -312567,25 +312607,67 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
     });
 
     let json;
-    try {
-      json = await apiPostJson(urlPath, payload);
-    } catch (err) {
-      if (String(err?.json?.error_code || err?.json?.error || '').toUpperCase() === 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') {
-        const preview = err?.json?.pair_lifecycle || {};
+    let authoriseError = null;
+    let confirmedDuplicateExpenseReview = false;
+    let confirmedPairLifecycle = false;
+    while (!json) {
+      try {
+        json = await apiPostJson(urlPath, {
+          ...payload,
+          duplicate_expense_confirmation: confirmedDuplicateExpenseReview || undefined,
+          confirm_pair_lifecycle: confirmedPairLifecycle || undefined
+        });
+      } catch (err) {
+        const authoriseErrorCode = String(err?.json?.error_code || err?.json?.error || '').toUpperCase();
+        if (authoriseErrorCode === 'DUPLICATE_EXPENSE_REVIEW_REQUIRED' && !confirmedDuplicateExpenseReview) {
+        const categoryLabels = {
+          MILEAGE: 'Mileage',
+          TRAVEL: 'Travel',
+          ACCOMMODATION: 'Accommodation',
+          OTHER: 'Other expenses'
+        };
+        const categories = Array.isArray(err?.json?.categories)
+          ? err.json.categories.map((value) => categoryLabels[String(value || '').trim().toUpperCase()] || String(value || '').trim()).filter(Boolean)
+          : [];
+        const categoryText = categories.length ? categories.join(', ') : 'One or more expense categories';
         GE();
         const confirmation = await openUiConfirmModal({
-          title: 'Authorise linked correction pair',
-          message: `This timesheet is one half of a linked correction pair. Both timesheets will be authorised together (${Number(preview.affected_timesheet_count || 2)} timesheets affected). Continue?`,
-          confirm_label: 'Authorise pair', cancel_label: 'Cancel', confirm_class: 'btn btn-primary'
+          title: 'Review possible duplicate expenses',
+          message: `${categoryText} may already have been submitted for this Candidate, Client and week ending. Check the existing claim before authorising this one. Do you want to confirm that you have reviewed it and continue?`,
+          confirm_label: 'Proceed with authorisation',
+          cancel_label: 'Cancel',
+          confirm_class: 'btn btn-primary'
         });
         if (!(confirmation && confirmation.confirmed === true)) {
           GE();
-          return { ok: false, cancelled: true };
+          return { ok: false, cancelled: true, reason: 'DUPLICATE_EXPENSE_REVIEW_CANCELLED' };
         }
-        GC('authoriseTimesheet.confirmedPair');
-        json = await apiPostJson(urlPath, { ...payload, confirm_pair_lifecycle: true });
+          confirmedDuplicateExpenseReview = true;
+          GC('authoriseTimesheet.confirmedDuplicateExpenseReview');
+          continue;
+        }
+        if (authoriseErrorCode === 'CORRECTION_PAIR_CONFIRMATION_REQUIRED' && !confirmedPairLifecycle) {
+          const preview = err?.json?.pair_lifecycle || {};
+          GE();
+          const confirmation = await openUiConfirmModal({
+            title: 'Authorise linked correction pair',
+            message: `This timesheet is one half of a linked correction pair. Both timesheets will be authorised together (${Number(preview.affected_timesheet_count || 2)} timesheets affected). Continue?`,
+            confirm_label: 'Authorise pair', cancel_label: 'Cancel', confirm_class: 'btn btn-primary'
+          });
+          if (!(confirmation && confirmation.confirmed === true)) {
+            GE();
+            return { ok: false, cancelled: true };
+          }
+          confirmedPairLifecycle = true;
+          GC('authoriseTimesheet.confirmedPair');
+          continue;
+        }
+        authoriseError = err;
+        break;
       }
-      if (!json) {
+    }
+    if (!json) {
+      const err = authoriseError;
       try {
         if (typeof tsHandleLifecycleReconcileModal === 'function') {
           const reconciled = await tsHandleLifecycleReconcileModal(err, {
@@ -312617,7 +312699,6 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       } catch {}
       GE();
       throw err;
-      }
     }
 
     logTimesheetSaveSignatureDiag('authoriseTimesheet.responseBeforeAdoption', () => ({
@@ -313430,6 +313511,16 @@ function renderTimesheetIssuesTab(ctx) {
   }
   if (hasCode('Duplicate contracts')) {
     addIssue('Multiple contracts cover the same period for this client.');
+  }
+  if (hasCode('DUPLICATE_EXPENSE_REVIEW')) {
+    const duplicateCategoryLabels = {
+      DUPLICATE_EXPENSE_MILEAGE: 'Mileage',
+      DUPLICATE_EXPENSE_TRAVEL: 'Travel',
+      DUPLICATE_EXPENSE_ACCOMMODATION: 'Accommodation',
+      DUPLICATE_EXPENSE_OTHER: 'Other expenses'
+    };
+    const duplicateCategories = codes.map((code) => duplicateCategoryLabels[code]).filter(Boolean);
+    addIssue(`Possible duplicate expenses${duplicateCategories.length ? ` (${duplicateCategories.join(', ')})` : ''}: another claim for this Candidate, Client and week ending contains the same expense category. Review both claims before authorising.`);
   }
 
   // If DB surfaced "Refs - Timesheet PDF invalid", explain it
@@ -315470,7 +315561,15 @@ function renderSummary(rows){
 
     businessIssues.forEach((code) => {
       const span = document.createElement('span');
-      const label = String(code || '').trim() || 'Issue';
+      const rawLabel = String(code || '').trim() || 'Issue';
+      const duplicateExpenseLabels = {
+        DUPLICATE_EXPENSE_REVIEW: 'Possible duplicate expenses',
+        DUPLICATE_EXPENSE_MILEAGE: 'Possible duplicate mileage',
+        DUPLICATE_EXPENSE_TRAVEL: 'Possible duplicate travel',
+        DUPLICATE_EXPENSE_ACCOMMODATION: 'Possible duplicate accommodation',
+        DUPLICATE_EXPENSE_OTHER: 'Possible duplicate other expenses'
+      };
+      const label = duplicateExpenseLabels[rawLabel.toUpperCase()] || rawLabel;
 
       let cls = 'pill pill-bad';
       const up = label.toUpperCase();
@@ -315478,7 +315577,8 @@ function renderSummary(rows){
         up === 'ON HOLD' ||
         up === 'VALIDATION' ||
         up === 'AUTHORISATION' ||
-        up === 'AWAITING SIGNED QR TIMESHEET'
+        up === 'AWAITING SIGNED QR TIMESHEET' ||
+        up.startsWith('POSSIBLE DUPLICATE')
       ) {
         cls = 'pill pill-warn';
       }
