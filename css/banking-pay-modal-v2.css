@@ -115,6 +115,8 @@
 .banking-pay-v2-candidate tr[data-banking-ready-breakdown-detail] table{min-width:860px!important;border-radius:8px}
 .banking-pay-v2-candidate tr[data-banking-ready-breakdown-detail] table th,.banking-pay-v2-candidate tr[data-banking-ready-breakdown-detail] table td{padding:8px 9px}
 .bpv2-group-detail-loading{padding:18px;color:var(--ctms-modal-sub,#aebed2)}
+.bpv2-group-detail-error{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;border:1px solid rgba(251,191,36,.48);border-radius:8px;background:rgba(120,75,8,.2);color:var(--ctms-modal-text,#f8fafc)}
+.bpv2-group-detail-error>div{display:flex;flex-direction:column;gap:3px;min-width:0}.bpv2-group-detail-error span{color:var(--ctms-modal-sub,#aebed2)}
 .bpv2-group-detail-pagination{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 0 0;color:var(--ctms-modal-sub,#aebed2)}
 .bpv2-group-detail-pagination>span{margin-right:auto}
 .bpv2-segment-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px;font-family:inherit;font-weight:400}
@@ -184,6 +186,7 @@
   .banking-pay-v2-child-host{place-items:start center;padding:max(10px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left))}
   .banking-pay-v2-child-host>.banking-pay-v2-candidate,.banking-pay-v2-child-host>.banking-pay-v2-issue-detail{width:calc(100vw - 20px);max-height:calc(100dvh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom));padding:13px}
   .banking-pay-v2-candidate .bpv2-child-heading,.banking-pay-v2-issue-detail>header{position:sticky;top:0;z-index:8}
+  .bpv2-group-detail-error{align-items:stretch;flex-direction:column}.bpv2-group-detail-error .btn{align-self:flex-start}
   .banking-pay-v2-candidate .bpv2-child-summary{grid-template-columns:1fr;gap:10px}
   .bpv2-child-totals{flex-wrap:wrap}
 }

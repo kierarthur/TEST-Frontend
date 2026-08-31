@@ -319,14 +319,22 @@
       control.setAttribute('aria-label','Hide line breakdown');control.setAttribute('title','Hide line breakdown');
     }
     async function loadDetail(control,cursor=null,replaceIndex=null){
-      const {row,representative,id}=detailRowFor(control);const target=row.firstElementChild;
+      const {key,row,representative,id}=detailRowFor(control);const target=row.firstElementChild;
       target.innerHTML='<div class="bpv2-group-detail-loading" role="status">Loading payment details…</div>';row.hidden=false;
-      const result=await onIntent({kind:'detail',candidate_id:accepted.page.candidate_id,
-        group_kind:representative.presentation_group_kind,group_key:representative.presentation_group_key,cursor});
-      if(result?.state!=='CURRENT'||!result.value)throw new Error('Payment details changed while loading');
-      const page=result.value;const state=detailStates.get(id)||{pages:[],index:0};
-      if(replaceIndex===null){state.pages=[page];state.index=0;}else{state.pages[replaceIndex]=page;state.index=replaceIndex;}
-      detailStates.set(id,state);openKeys.add(row.getAttribute('data-banking-ready-breakdown-detail'));renderDetail(control,state);
+      try{
+        const result=await onIntent({kind:'detail',candidate_id:accepted.page.candidate_id,
+          group_kind:representative.presentation_group_kind,group_key:representative.presentation_group_key,cursor});
+        if(result?.state!=='CURRENT'||!result.value)throw new Error('Payment details changed while loading');
+        const page=result.value;const state=detailStates.get(id)||{pages:[],index:0};
+        if(replaceIndex===null){state.pages=[page];state.index=0;}else{state.pages[replaceIndex]=page;state.index=replaceIndex;}
+        detailStates.set(id,state);openKeys.add(key);renderDetail(control,state);return true;
+      }catch(error){
+        openKeys.add(key);control.textContent='−';control.setAttribute('aria-expanded','true');
+        control.setAttribute('aria-label','Hide line breakdown');control.setAttribute('title','Hide line breakdown');
+        target.innerHTML=`<div class="bpv2-group-detail-error" role="alert"><div><strong>Payment details could not be loaded.</strong>
+          <span>The current payment list is unchanged.</span></div><button type="button" class="btn btn-outline" data-bpv2-detail="retry">Try again</button></div>`;
+        onFailure({code:typeof error?.code==='string'?error.code:'BANKING_PAY_V2_DETAIL_LOAD_FAILED'});return false;
+      }
     }
     async function expand(control){
       const {key,row,id}=detailRowFor(control);
@@ -350,6 +358,12 @@
       const current=state.pages[state.index];if(!current.has_more||!current.next_cursor)return;
       await loadDetail(toggle,current.next_cursor,state.index+1);
     }
+    async function retryDetail(control){
+      const breakdown=control.closest('tr[data-banking-ready-breakdown-detail]');
+      const toggle=breakdown?.previousElementSibling?.querySelector('[data-action="banking:pay:toggleTimesheetBreakdown"]');
+      if(!toggle)throw new Error('Missing payment detail retry');
+      await loadDetail(toggle);
+    }
     function event(event){
       const control=event.target?.closest?.('[data-bpv2-child],[data-bpv2-detail],[data-action]');
       if(!control||!element.contains(control))return;
@@ -357,6 +371,7 @@
       if(event.type==='click'&&control.type==='checkbox')return; // use the single change event
       if(event.type==='change'&&control.type!=='checkbox')return;
       if(control.dataset.bpv2Child==='close'){invoke(onClose);return;}
+      if(control.dataset.bpv2Detail==='retry'){invoke(()=>retryDetail(control));return;}
       if(control.dataset.bpv2Detail){invoke(()=>pageDetail(control,control.dataset.bpv2Detail));return;}
       const desired=control.type==='checkbox'?control.checked:undefined;
       if(control.type==='checkbox')restoreCheck(control); // server confirmation owns the tick

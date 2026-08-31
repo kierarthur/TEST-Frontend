@@ -103,11 +103,19 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
     const openedTimesheets: unknown[] = [];
     const legacyActions: unknown[] = [];
     const requests: string[] = [];
+    let detailFailuresRemaining = 0;
     const authFetch = async (url: string) => {
       requests.push(String(url));
       const requestUrl = String(url);
       if (requestUrl.includes('/candidate/') && (requestUrl.includes('/ready?') || requestUrl.includes('/ready-group?'))) {
         await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      if (requestUrl.includes('/ready-group?') && detailFailuresRemaining > 0) {
+        detailFailuresRemaining -= 1;
+        return new Response(JSON.stringify({ ok: false, code: 'BANKING_PAY_V2_INVALID_RESPONSE' }), {
+          status: 502,
+          headers: { 'content-type': 'application/json' }
+        });
       }
       const readyGroup = (() => {
         if (!requestUrl.includes('/ready-group?')) return null;
@@ -173,7 +181,8 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
       railEnv: 'TEST',
       railProvider: 'TEST_PROVIDER'
     });
-    (window as any).__bankingPayV2Harness = { openedTimesheets, legacyActions, requests };
+    (window as any).__bankingPayV2Harness = { openedTimesheets, legacyActions, requests,
+      failNextDetail: () => { detailFailuresRemaining += 1; } };
   });
 
   const table = page.locator('.banking-pay-v2-table');
@@ -258,11 +267,18 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   await expect(candidate).not.toContainText('Action Required');
   await expect(candidate.locator('.banking-ready-mobile-row-summary')).toBeHidden();
   const paymentGroup = candidate.locator('[data-action="banking:pay:toggleTimesheetBreakdown"]').first();
+  await page.evaluate(() => (window as any).__bankingPayV2Harness.failNextDetail());
   await paymentGroup.click();
   await expect(paymentGroup).toHaveAttribute('aria-expanded', 'true');
-  await expect(candidate.locator('[data-bpv2-group-detail-count]')).toHaveText('Showing 1–3 of 3 payment segments');
+  await expect(candidate.getByRole('alert')).toContainText('Payment details could not be loaded.');
+  await expect(candidate.getByRole('alert')).toContainText('The current payment list is unchanged.');
+  await expect(candidate.locator('.bpv2-group-detail-loading')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (window as any).__bankingPayV2Harness.requests
     .filter((value: string) => value.includes('/ready-group?')).length)).toBe(1);
+  await candidate.getByRole('button', { name: 'Try again' }).click();
+  await expect(candidate.locator('[data-bpv2-group-detail-count]')).toHaveText('Showing 1–3 of 3 payment segments');
+  await expect.poll(() => page.evaluate(() => (window as any).__bankingPayV2Harness.requests
+    .filter((value: string) => value.includes('/ready-group?')).length)).toBe(2);
   const candidateExport = candidate.getByRole('button', { name: 'Export CSV', exact: true });
   await expect(candidateExport).toBeVisible();
   expect(await candidateExport.evaluate(node => {
