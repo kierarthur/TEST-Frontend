@@ -50,15 +50,35 @@ test('action detail joins the exact server-owned case actions back onto the pres
   Object.assign(row.payload,{candidate_id:row.candidate_id,preview_row_id:row.preview_row_id,
     display_name:'Candidate needing a rate decision',tms_ref:'TEST-003',client_name:'Test client',
     line_type:'TIMESHEET_PAYMENT',presentation_section:'CASES_RESOLUTIONS',effective_section:'cases_resolutions',
-    pay_channel:'PAYE',section_amount_ex_vat:'200.00',excluded_from_run:false,
-    case_needs_resolution:true,case_resolution_satisfied_now:false,
-    has_actionable_suggested_resolution:true,resolution_action_requires_actionable_components:false});
+    pay_channel:'PAYE',section_amount_ex_vat:'200.00',excluded_from_run:false});
   const rendered=api.render(value.page,value.summary,'actions',
     {formatIsoToUk:v=>v,railEnv:'TEST',railProvider:'CSV'},new Set());
   const actions=[...rendered.tableRows.matchAll(/data-action="([^"]+)"/g)].map(match=>match[1]);
   assert.ok(actions.includes('banking:pay:openBucketedResolution'));
   assert.ok(actions.includes('banking:pay:toggleExcludeTimesheet'));
   assert.ok(actions.includes('banking:pay:openSnooze'));
+  assert.match(rendered.tableRows,/>Review suggested rates<\/button>/);
+  assert.match(rendered.tableRows,/>Exclude case<\/button>/);
+});
+
+test('action detail uses the exact action contract when the bounded payload omits legacy presentation flags',()=>{
+  const value=fixture('actions',1,1);value.summary.global.action_required_count=1;
+  const row=value.page.rows[0];
+  row.task_meta={family:'FINANCE_CASE',actions:[
+    'banking:pay:openBucketedResolution','banking:pay:toggleExcludeTimesheet'
+  ],case_key:'finance:00000000-0000-4000-8000-000000000188',
+  finance_case_id:'00000000-0000-4000-8000-000000000188',resolution_family:'BUCKETED',
+  linked_timesheet_id:'00000000-0000-4000-8000-000000000189'};
+  Object.assign(row.payload,{candidate_id:row.candidate_id,preview_row_id:row.preview_row_id,
+    display_name:'Real shape without legacy flags',line_type:'TIMESHEET_PAYMENT',
+    presentation_section:'CASES_RESOLUTIONS',effective_section:'cases_resolutions'});
+  for(const key of ['case_needs_resolution','case_resolution_satisfied_now',
+    'has_actionable_suggested_resolution','resolution_action_requires_actionable_components'])delete row.payload[key];
+  const rendered=api.render(value.page,value.summary,'actions',
+    {formatIsoToUk:v=>v,railEnv:'TEST',railProvider:'CSV'},new Set());
+  const actions=[...rendered.tableRows.matchAll(/data-action="([^"]+)"/g)].map(match=>match[1]);
+  assert.ok(actions.includes('banking:pay:openBucketedResolution'));
+  assert.ok(actions.includes('banking:pay:toggleExcludeTimesheet'));
   assert.match(rendered.tableRows,/>Review suggested rates<\/button>/);
   assert.match(rendered.tableRows,/>Exclude case<\/button>/);
 });

@@ -86,6 +86,12 @@
         case_key:String(meta.case_key||data.case_key||''),finance_case_id:String(meta.finance_case_id||data.finance_case_id||''),
         linked_timesheet_id:String(meta.linked_timesheet_id||data.linked_timesheet_id||data.timesheet_id||''),
         resolution_family:resolutionFamily,
+        // The bounded detail contract publishes the exact executable actions;
+        // it intentionally need not repeat legacy presentation-only booleans.
+        // Bridge that authoritative action contract into the retained renderer
+        // without inferring a financial family or adding another action owner.
+        case_needs_resolution:true,case_resolution_satisfied_now:false,
+        has_actionable_suggested_resolution:true,resolution_action_requires_actionable_components:false,
         excluded_from_run:data.excluded_from_run===true||data.exclude_from_run===true};
       if(!entry.candidate_id||(!entry.case_key&&!entry.finance_case_id))fail();
       const actionHtml=renderer.renderCaseActionButtons(entry);
