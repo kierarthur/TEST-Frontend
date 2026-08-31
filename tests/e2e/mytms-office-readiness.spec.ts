@@ -137,8 +137,19 @@ const dailyInformation = {
   updated_at_utc: '2026-08-30T03:00:00Z'
 };
 
+const agencyLogo = {
+  ok: true,
+  agency_name: 'Arthur Rai Medical Services',
+  has_logo: true,
+  logo_asset_key: `candidate-app/branding/${'8'.repeat(64)}.png`,
+  preview_data_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  media_type: 'image/png',
+  size_bytes: 68,
+  sha256_hex: '8'.repeat(64)
+};
+
 async function installReadOnlyApi(page: Page, options: { directoryWrite?: boolean } = {}) {
-  const observed = { settingsReads: 0, managerReads: 0, homeReads: 0, directoryReads: 0, directoryWrites: 0, lastDirectoryWrite: null as null | Record<string, unknown>, previews: 0, managerPreviews: 0, homePreviews: 0, writes: 0 };
+  const observed = { settingsReads: 0, managerReads: 0, homeReads: 0, directoryReads: 0, logoReads: 0, directoryWrites: 0, lastDirectoryWrite: null as null | Record<string, unknown>, previews: 0, managerPreviews: 0, homePreviews: 0, writes: 0 };
   await page.route(`${testBackend}/api/mytms/**`, async (route: Route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -175,6 +186,10 @@ async function installReadOnlyApi(page: Page, options: { directoryWrite?: boolea
     if (path === '/api/mytms/daily-information' && request.method() === 'GET') {
       observed.directoryReads += 1;
       return reply(dailyInformation);
+    }
+    if (path === '/api/mytms/agency-logo' && request.method() === 'GET') {
+      observed.logoReads += 1;
+      return reply(agencyLogo);
     }
     if (path === '/api/mytms/daily-information' && request.method() === 'PUT'
         && options.directoryWrite) {
@@ -231,6 +246,11 @@ for (const viewport of [
     await expect(modal).toBeVisible();
     await expect(modal.getByText('MyTMS App Settings', { exact: true })).toBeVisible();
     await expect(modal.getByText('Agency invitation policy', { exact: true })).toBeVisible();
+    await expect(modal.getByRole('heading', { name: 'Agency logo', exact: true })).toBeVisible();
+    await expect(modal.locator('.mytms-agency-logo-preview img')).toHaveAttribute('src', agencyLogo.preview_data_url);
+    await expect(modal.getByRole('button', { name: 'Choose new logo', exact: true })).toBeVisible();
+    await expect(modal.getByRole('button', { name: 'Upload new logo', exact: true })).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: 'Delete logo', exact: true })).toBeVisible();
     await expect(modal.getByLabel('Android store URL')).toBeDisabled();
     await expect(modal.getByLabel('TEST recipient allowlist')).toBeDisabled();
     await expect(modal.getByLabel('Invitation expiry (seconds)')).toHaveAttribute('min', '86400');

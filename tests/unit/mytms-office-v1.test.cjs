@@ -215,6 +215,11 @@ test('source wiring keeps MyTMS Office separate, server-authored and post-commit
   assert.match(source, /expected_version: Number\(state\.homeAnnouncement\.version\)/);
   assert.match(source, /Preview on Candidate Home/);
   assert.match(source, /\/api\/mytms\/daily-information/);
+  assert.match(source, /\/api\/mytms\/agency-logo/);
+  assert.match(source, /data-mytms-agency-logo-input/);
+  assert.match(source, /Upload new logo/);
+  assert.match(source, /Delete the agency logo\?/);
+  assert.match(source, /output\.toDataURL\('image\/png'\)/);
   assert.match(source, /expected_version: Number\(state\.dailyInformation\.version\)/);
   assert.match(source, /Places & contacts/);
   assert.match(source, /Hospital name/);

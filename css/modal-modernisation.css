@@ -1059,6 +1059,106 @@
   width: 100%;
 }
 
+#modal[data-uicf-kind="mytms-app-settings"] .mytms-agency-logo-card {
+  padding: clamp(16px, 2.2vw, 24px) !important;
+  border: 1px solid rgba(124, 153, 211, .24) !important;
+  border-radius: 18px !important;
+  background: linear-gradient(145deg, rgba(20, 43, 74, .96), rgba(12, 29, 52, .98)) !important;
+  box-shadow: 0 18px 44px rgba(0, 8, 25, .18) !important;
+  overflow: hidden;
+}
+
+.mytms-agency-logo-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.mytms-agency-logo-card__head h3 {
+  margin: 0 0 5px;
+}
+
+.mytms-agency-logo-card__head p {
+  margin: 0;
+  max-width: 64ch;
+}
+
+.mytms-agency-logo-card__body {
+  display: grid;
+  grid-template-columns: minmax(148px, 190px) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(18px, 3vw, 30px);
+}
+
+.mytms-agency-logo-preview {
+  width: min(100%, 190px);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  border: 1px solid rgba(104, 137, 186, 0.42);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 50% 46%, rgba(92, 102, 245, 0.17), transparent 64%),
+    rgba(7, 19, 38, 0.74);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 14px 34px rgba(0,0,0,0.2);
+}
+
+.mytms-agency-logo-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.mytms-agency-logo-preview--empty {
+  border-style: dashed;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mytms-agency-logo-card__controls {
+  min-width: 0;
+}
+
+.mytms-agency-logo-card__controls > strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+
+.mytms-agency-logo-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 14px 0 10px;
+}
+
+@media (max-width: 640px) {
+  .mytms-agency-logo-card__head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mytms-agency-logo-card__body {
+    grid-template-columns: 1fr;
+  }
+
+  .mytms-agency-logo-preview {
+    width: min(54vw, 180px);
+    justify-self: center;
+  }
+
+  .mytms-agency-logo-actions > .btn {
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
 #modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-intro,
 #modal[data-uicf-kind="mytms-app-settings"] .mytms-directory-section {
   margin: 0;

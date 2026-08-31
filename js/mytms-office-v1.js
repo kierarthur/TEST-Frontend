@@ -9,6 +9,9 @@
     homeAnnouncementError: null,
     dailyInformation: null,
     dailyInformationError: null,
+    agencyLogo: null,
+    agencyLogoError: null,
+    selectedAgencyLogo: null,
     managerSubmissionType: 'TIMESHEET',
     managerMailKind: 'INITIAL',
     activeSettingsTab: 'general',
@@ -72,9 +75,112 @@
     body: JSON.stringify({ announcement_text: String(announcementText ?? '') })
   });
   const dailyInformationGet = () => api('/api/mytms/daily-information');
+  const agencyLogoGet = () => api('/api/mytms/agency-logo');
   const candidateStatus = (candidateId) => api(
     `/api/mytms/candidates/${encodeURIComponent(text(candidateId))}/status`
   );
+
+  function prepareAgencyLogo(file) {
+    return new Promise((resolve, reject) => {
+      if (!file || !/^image\/(?:png|jpeg)$/.test(String(file.type || '').toLowerCase())
+          || Number(file.size) < 1 || Number(file.size) > 10 * 1024 * 1024) {
+        reject(new Error('Choose a PNG or JPEG image smaller than 10 MB.'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('The selected image could not be read.'));
+      reader.onload = () => {
+        const image = new Image();
+        image.onerror = () => reject(new Error('The selected image could not be opened.'));
+        image.onload = () => {
+          const width = Number(image.naturalWidth || image.width);
+          const height = Number(image.naturalHeight || image.height);
+          if (!width || !height || width > 8192 || height > 8192) {
+            reject(new Error('Choose an image no larger than 8192 pixels on either side.'));
+            return;
+          }
+          const source = document.createElement('canvas');
+          source.width = width; source.height = height;
+          const sourceContext = source.getContext('2d', { willReadFrequently: true });
+          if (!sourceContext) { reject(new Error('Image preparation is unavailable.')); return; }
+          sourceContext.drawImage(image, 0, 0);
+          const pixels = sourceContext.getImageData(0, 0, width, height).data;
+          let left = width; let top = height; let right = -1; let bottom = -1;
+          for (let y = 0; y < height; y += 1) {
+            for (let x = 0; x < width; x += 1) {
+              if (pixels[((y * width) + x) * 4 + 3] < 8) continue;
+              left = Math.min(left, x); right = Math.max(right, x);
+              top = Math.min(top, y); bottom = Math.max(bottom, y);
+            }
+          }
+          if (right < left || bottom < top) {
+            reject(new Error('The selected image is empty.'));
+            return;
+          }
+          const cropWidth = right - left + 1;
+          const cropHeight = bottom - top + 1;
+          const output = document.createElement('canvas');
+          output.width = 384; output.height = 384;
+          const outputContext = output.getContext('2d');
+          if (!outputContext) { reject(new Error('Image preparation is unavailable.')); return; }
+          const scale = Math.min(368 / cropWidth, 368 / cropHeight);
+          const drawWidth = cropWidth * scale;
+          const drawHeight = cropHeight * scale;
+          outputContext.imageSmoothingEnabled = true;
+          outputContext.imageSmoothingQuality = 'high';
+          outputContext.clearRect(0, 0, 384, 384);
+          outputContext.drawImage(
+            source, left, top, cropWidth, cropHeight,
+            (384 - drawWidth) / 2, (384 - drawHeight) / 2, drawWidth, drawHeight
+          );
+          resolve({
+            data_url: output.toDataURL('image/png'),
+            original_name: String(file.name || 'agency-logo.png')
+          });
+        };
+        image.src = String(reader.result || '');
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadAgencyLogo() {
+    if (!state.selectedAgencyLogo || !state.agencyLogo) return;
+    const result = await api('/api/mytms/agency-logo', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expected_logo_asset_key: state.agencyLogo.logo_asset_key,
+        data_url: state.selectedAgencyLogo.data_url,
+        idempotency_key: uuid()
+      })
+    });
+    state.agencyLogo = result;
+    state.selectedAgencyLogo = null;
+    replaceAgencyLogoCard();
+    global.showModalHint?.('Agency logo updated.', 'ok');
+  }
+
+  async function deleteAgencyLogo() {
+    if (!state.agencyLogo?.logo_asset_key) return;
+    const confirmation = await global.openUiConfirmModal?.({
+      title: 'Delete the agency logo?',
+      message: 'The logo will stop appearing in MyTMS. Existing official documents will keep their original branding.',
+      confirm_label: 'Delete logo', cancel_label: 'Keep logo',
+      kind: 'mytms-agency-logo-delete'
+    });
+    if (confirmation !== true && confirmation?.confirmed !== true && confirmation?.ok !== true) return;
+    const result = await api('/api/mytms/agency-logo', {
+      method: 'DELETE', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expected_logo_asset_key: state.agencyLogo.logo_asset_key,
+        idempotency_key: uuid()
+      })
+    });
+    state.agencyLogo = result;
+    state.selectedAgencyLogo = null;
+    replaceAgencyLogoCard();
+    global.showModalHint?.('Agency logo deleted.', 'ok');
+  }
 
   function settingsPayload(source) {
     const keys = [
@@ -264,6 +370,48 @@
       </div>`;
   }
 
+  function agencyLogoCard() {
+    const logo = state.agencyLogo;
+    const selected = state.selectedAgencyLogo;
+    if (!logo) {
+      return `<div class="card mytms-agency-logo-card" data-mytms-agency-logo-card>
+        <h3>Agency logo</h3>
+        <p>${escapeHtml(state.agencyLogoError || 'The agency logo could not be loaded.')}</p>
+      </div>`;
+    }
+    const preview = selected?.data_url || logo.preview_data_url || '';
+    const helper = selected
+      ? `Ready to upload: ${escapeHtml(selected.original_name)}`
+      : logo.has_logo ? 'This is the logo currently shown in MyTMS.'
+        : 'No logo is currently shown in MyTMS.';
+    return `<div class="card mytms-agency-logo-card" data-mytms-agency-logo-card>
+      <div class="mytms-agency-logo-card__head">
+        <div>
+          <h3>Agency logo</h3>
+          <p class="mini">Shown on Candidate Home without moving the page content. New images are cropped and reduced to a fast-loading app size before upload.</p>
+        </div>
+        ${logo.has_logo ? '<span class="mytms-status-badge mytms-status-badge--success">Current logo</span>' : ''}
+      </div>
+      <div class="mytms-agency-logo-card__body">
+        <div class="mytms-agency-logo-preview ${preview ? '' : 'mytms-agency-logo-preview--empty'}">
+          ${preview ? `<img src="${escapeHtml(preview)}" alt="Agency logo preview" />`
+            : '<span>No logo</span>'}
+        </div>
+        <div class="mytms-agency-logo-card__controls">
+          <strong>${selected ? 'New logo preview' : 'Current logo'}</strong>
+          <p class="mini" data-mytms-agency-logo-status>${helper}</p>
+          <input type="file" accept="image/png,image/jpeg" data-mytms-agency-logo-input hidden />
+          <div class="mytms-agency-logo-actions">
+            <button type="button" class="btn" data-mytms-agency-logo-choose>${logo.has_logo ? 'Choose new logo' : 'Choose logo'}</button>
+            ${selected ? '<button type="button" class="btn primary" data-mytms-agency-logo-upload>Upload new logo</button>' : ''}
+            ${logo.has_logo ? '<button type="button" class="btn danger" data-mytms-agency-logo-delete>Delete logo</button>' : ''}
+          </div>
+          ${selected ? '<button type="button" class="btn mini" data-mytms-agency-logo-cancel>Cancel new logo</button>' : ''}
+        </div>
+      </div>
+    </div>`;
+  }
+
   function renderSettingsTab(tabKey) {
     state.activeSettingsTab = tabKey;
     if (!state.settings) return '<div class="card">MyTMS settings are unavailable.</div>';
@@ -274,6 +422,7 @@
     if (tabKey === 'home') return homeAnnouncementPanel();
     if (tabKey === 'daily-information') return dailyInformationPanel();
     return `
+      ${agencyLogoCard()}
       <div class="card">
         <h3 style="margin-top:0;">Agency invitation policy</h3>
         <p class="mini">Agency-editable within platform safety limits. Manager approval links always use their separate seven-day policy.</p>
@@ -291,7 +440,6 @@
         ${readOnlySetting('Support URL', state.settings.support_url)}
         ${readOnlySetting('Android store URL', state.settings.android_store_url)}
         ${readOnlySetting('iOS store URL', state.settings.ios_store_url)}
-        ${readOnlySetting('Logo asset key', state.settings.logo_asset_key)}
       </div>`;
   }
 
@@ -514,6 +662,13 @@
     Promise.resolve().then(wireSettings);
   }
 
+  function replaceAgencyLogoCard() {
+    const card = global.document.querySelector('[data-mytms-agency-logo-card]');
+    if (!card) return;
+    card.outerHTML = agencyLogoCard();
+    Promise.resolve().then(wireSettings);
+  }
+
   async function resetHomeAnnouncement() {
     if (!state.homeAnnouncement) return;
     const confirmation = await global.openUiConfirmModal?.({
@@ -553,6 +708,53 @@
         setSetting(element.dataset.mytmsSetting, element.type === 'checkbox' ? element.checked : element.value);
       });
     });
+    const logoInput = global.document.querySelector('[data-mytms-agency-logo-input]');
+    const logoChoose = global.document.querySelector('[data-mytms-agency-logo-choose]');
+    const logoUpload = global.document.querySelector('[data-mytms-agency-logo-upload]');
+    const logoDelete = global.document.querySelector('[data-mytms-agency-logo-delete]');
+    const logoCancel = global.document.querySelector('[data-mytms-agency-logo-cancel]');
+    if (logoChoose && !logoChoose.__myTmsWired) {
+      logoChoose.__myTmsWired = true;
+      logoChoose.addEventListener('click', () => logoInput?.click());
+    }
+    if (logoInput && !logoInput.__myTmsWired) {
+      logoInput.__myTmsWired = true;
+      logoInput.addEventListener('change', async () => {
+        const file = logoInput.files?.[0];
+        if (!file) return;
+        try {
+          state.selectedAgencyLogo = await prepareAgencyLogo(file);
+          replaceAgencyLogoCard();
+        } catch (error) {
+          global.showModalHint?.(`The logo was not selected: ${text(error.message)}`, 'err');
+        }
+      });
+    }
+    if (logoUpload && !logoUpload.__myTmsWired) {
+      logoUpload.__myTmsWired = true;
+      logoUpload.addEventListener('click', async () => {
+        try { await uploadAgencyLogo(); }
+        catch (error) {
+          global.showModalHint?.(`The agency logo was not uploaded: ${text(error.message)}`, 'err');
+        }
+      });
+    }
+    if (logoDelete && !logoDelete.__myTmsWired) {
+      logoDelete.__myTmsWired = true;
+      logoDelete.addEventListener('click', async () => {
+        try { await deleteAgencyLogo(); }
+        catch (error) {
+          global.showModalHint?.(`The agency logo was not deleted: ${text(error.message)}`, 'err');
+        }
+      });
+    }
+    if (logoCancel && !logoCancel.__myTmsWired) {
+      logoCancel.__myTmsWired = true;
+      logoCancel.addEventListener('click', () => {
+        state.selectedAgencyLogo = null;
+        replaceAgencyLogoCard();
+      });
+    }
     const allowlist = global.document.querySelector('[data-mytms-allowlist]');
     if (allowlist && !allowlist.__myTmsWired) {
       allowlist.__myTmsWired = true;
@@ -739,8 +941,8 @@
     if (typeof global.confirmDiscardChangesIfDirty === 'function'
         && !global.confirmDiscardChangesIfDirty()) return;
     try {
-      const [settingsResult, managerResult, homeResult, dailyInformationResult] = await Promise.allSettled([
-        settingsGet(), managerSettingsGet(), homeAnnouncementGet(), dailyInformationGet()
+      const [settingsResult, managerResult, homeResult, dailyInformationResult, agencyLogoResult] = await Promise.allSettled([
+        settingsGet(), managerSettingsGet(), homeAnnouncementGet(), dailyInformationGet(), agencyLogoGet()
       ]);
       if (settingsResult.status !== 'fulfilled') throw settingsResult.reason;
       state.settings = settingsResult.value;
@@ -754,6 +956,10 @@
         ? dailyInformationResult.value : null;
       state.dailyInformationError = dailyInformationResult.status === 'rejected'
         ? 'Hospital addresses and accommodation contacts could not be loaded.' : null;
+      state.agencyLogo = agencyLogoResult.status === 'fulfilled' ? agencyLogoResult.value : null;
+      state.agencyLogoError = agencyLogoResult.status === 'rejected'
+        ? 'The agency logo could not be loaded.' : null;
+      state.selectedAgencyLogo = null;
     } catch (error) {
       await global.openUiConfirmModal?.({
         title: 'MyTMS App Settings unavailable',
@@ -802,6 +1008,8 @@
           state.managerSettings = null; state.managerSettingsError = null;
           state.homeAnnouncement = null; state.homeAnnouncementError = null;
           state.dailyInformation = null; state.dailyInformationError = null;
+          state.agencyLogo = null; state.agencyLogoError = null;
+          state.selectedAgencyLogo = null;
         }
       }
     );
