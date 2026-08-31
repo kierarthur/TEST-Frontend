@@ -30,6 +30,16 @@ test('Candidate Banking renders existing details without an application/global g
   assert.doesNotMatch(source,/fetch\s*\(|bankingGetState\s*\(|renderPayNewBatchWizard\s*\(|JSON\.parse\(JSON\.stringify/);
   assert.match(source,/table\.formatAmount\(candidate\.selected_display_amount\)/);
 });
+test('Candidate Banking renders certified Timesheet groups when line type is nested in the real row payload',()=>{
+  const value=fixture.snapshot();
+  for(const row of value.page.rows.filter(item=>item.presentation_group_kind==='TIMESHEET')){
+    row.row_json={...(row.row_json||{}),line_type:row.line_type};delete row.line_type;
+    assert.equal(api.isTimesheetPaymentRow(row),true);
+  }
+  const html=api.rowMarkup(value,new Set());
+  assert.ok(html.includes('Timesheet Payment'));
+  assert.ok(html.includes('banking:pay:toggleTimesheetBreakdown'));
+});
 test('Candidate Banking binds grouped ticks to complete server group facts and removes loaded row IDs',()=>{
   const value=fixture.snapshot();const key=`READY_TO_PAY|${fixture.id(1)}|${fixture.id(201)}`;
   value.page.rows.slice(0,1).forEach(row=>Object.assign(row,{selection_group_member_count:107,

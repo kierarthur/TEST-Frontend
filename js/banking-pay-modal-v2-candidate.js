@@ -19,6 +19,13 @@
       &&typeof row.presentation_group_key==='string'&&row.presentation_group_key.length>=1&&row.presentation_group_key.length<=512
       &&!/[\u0000-\u001f\u007f]/u.test(row.presentation_group_key);
   }
+  function readyLineType(row){
+    const rowJson=object(row?.row_json)?row.row_json:object(row?.rowJson)?row.rowJson:{};
+    return String(row?.line_type||row?.lineType||rowJson.line_type||rowJson.lineType||'').trim().toUpperCase();
+  }
+  function isTimesheetPaymentRow(row){
+    return row?.presentation_group_kind==='TIMESHEET'||readyLineType(row)==='TIMESHEET_PAYMENT';
+  }
   function validGroup(row){
     const keys=['selection_group_kind','selection_group_key','selection_group_member_count','selection_group_selected_count','selection_group_state',
       'selection_group_display_amount','selection_group_selected_display_amount'];
@@ -85,10 +92,12 @@
   function rowMarkup(value,openKeys){
     validate(value);
     const renderers=details.create({...value.context,openReadyTimesheetBreakdownKeys:openKeys});
-    const timesheets=value.page.rows.filter(row=>String(row.line_type||'').trim().toUpperCase()==='TIMESHEET_PAYMENT');
-    const other=value.page.rows.filter(row=>String(row.line_type||'').trim().toUpperCase()!=='TIMESHEET_PAYMENT');
-    return renderers.renderReadyTimesheetGroupedRows(timesheets)
+    const timesheets=value.page.rows.filter(isTimesheetPaymentRow);
+    const other=value.page.rows.filter(row=>!isTimesheetPaymentRow(row));
+    const markup=renderers.renderReadyTimesheetGroupedRows(timesheets)
       +renderers.renderSimplePreviewRows(renderers.buildOverpaymentRecoveryDisplayLines(other),null,'READY_TO_PAY');
+    if(value.page.rows.length&&markup.trim()==='')invalid();
+    return markup;
   }
   function bindCompleteGroupControls(container,current){
     const byIdentity=new Map(current.page.rows.map(row=>[row.identity,row]));
@@ -269,8 +278,8 @@
         selectedPreviewRowSet:new Set(detailRows.filter(item=>item.selected===true).map(item=>item.preview_row_id||item.identity).filter(Boolean)),
         readyPreviewLines:detailRows,canonicalPreviewLines:detailRows,blockedPreviewLines:[],hiddenPreviewLines:[],
         openReadyTimesheetBreakdownKeys:new Set([key])});
-      const timesheets=page.rows.filter(item=>String(item.line_type||'').trim().toUpperCase()==='TIMESHEET_PAYMENT');
-      const other=page.rows.filter(item=>String(item.line_type||'').trim().toUpperCase()!=='TIMESHEET_PAYMENT');
+      const timesheets=page.rows.filter(isTimesheetPaymentRow);
+      const other=page.rows.filter(item=>!isTimesheetPaymentRow(item));
       const staged=document.createElement('tbody');staged.innerHTML=renderers.renderReadyTimesheetGroupedRows(timesheets)
         +renderers.renderSimplePreviewRows(renderers.buildOverpaymentRecoveryDisplayLines(other),null,'READY_TO_PAY');
       const source=Array.from(staged.querySelectorAll('tr[data-banking-ready-breakdown-detail]'))
@@ -390,6 +399,6 @@
       destroy(){destroyed=true;accepted=null;busyOwned.clear();openKeys.clear();detailStates.clear();element.removeEventListener('click',event);element.removeEventListener('change',event);element.remove();}
     });
   }
-  const api=Object.freeze({validate,rowMarkup,bindCompleteGroupControls,shapeCandidateRows,shapeNestedBreakdown,create});
+  const api=Object.freeze({validate,rowMarkup,bindCompleteGroupControls,shapeCandidateRows,shapeNestedBreakdown,isTimesheetPaymentRow,create});
   if(local)module.exports=api;else root.CloudTMSBankingPayCandidateV2=api;
 })(typeof window==='object'?window:this);
