@@ -100,6 +100,14 @@
       // and Draft authority used by validation and every emitted intent.
       const display={...row,presentation_role:'GROUP_REPRESENTATIVE'};
       if(row.selection_group_kind!==null){
+        // A certified outer group can be represented by its retained
+        // display-only PARENT row. That row is excluded from allocation so it
+        // can never become Draft input itself, but the checkbox targets the
+        // separately certified server group. Clear the exclusion only on this
+        // temporary display copy so the legacy renderer emits the control;
+        // bindCompleteGroupControls replaces the representative row id with
+        // the exact group kind/key before the staged DOM is adopted.
+        display.is_excluded_from_allocation=false;
         display.selection_allowed=true;
         display.is_ready_for_draft=true;
         display.draftable=true;

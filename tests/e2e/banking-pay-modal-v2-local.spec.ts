@@ -100,7 +100,8 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
     });
     for (const row of snapshot.page.rows.filter((item: any) => item.presentation_group_kind === 'TIMESHEET')) {
       Object.assign(row, { presentation_role: 'PARENT', selection_allowed: false,
-        is_ready_for_draft: false, draftable: false, status: 'SUPPORTING_CONTEXT' });
+        is_ready_for_draft: false, draftable: false, is_excluded_from_allocation: true,
+        status: 'SUPPORTING_CONTEXT' });
     }
     const state = { pay: { draftWizard: { workbench_v2: { available: true, checked: true } } } };
     const openedTimesheets: unknown[] = [];
@@ -270,6 +271,15 @@ test('contained v2 shell renders one-line candidate rows and opens the complete 
   })).toEqual(parentBefore);
   await expect(candidate.getByRole('heading', { name: 'Candidate Banking' })).toBeVisible();
   await expect(candidate.locator('tbody > tr').first()).toBeVisible();
+  const certifiedTimesheetGroup = candidate.locator(
+    'input[type="checkbox"][data-action="banking:pay:toggleTimesheetPreviewGroup"]'
+  );
+  await expect(certifiedTimesheetGroup).toHaveCount(1);
+  await expect(certifiedTimesheetGroup).toHaveAttribute('data-selection-group-kind', 'TIMESHEET');
+  await expect(certifiedTimesheetGroup).not.toHaveAttribute('data-preview-row-ids', /.+/);
+  await expect(certifiedTimesheetGroup).toBeEnabled();
+  await expect(certifiedTimesheetGroup).toHaveAttribute('aria-checked', 'mixed');
+  expect(await certifiedTimesheetGroup.evaluate((node: HTMLInputElement) => node.indeterminate)).toBe(true);
   const clientCell = candidate.locator('.bpv2-child-client').first();
   const clientName = clientCell.locator('.bpv2-client-name');
   const payMethodCell = candidate.locator('.bpv2-child-method').first();

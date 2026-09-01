@@ -44,20 +44,23 @@ test('Candidate Banking renders a certified outer Timesheet representative witho
   const value=fixture.snapshot();
   const representative=value.page.rows.find(row=>row.presentation_group_kind==='TIMESHEET');
   Object.assign(representative,{presentation_role:'PARENT',selection_allowed:false,is_ready_for_draft:false,
-    draftable:false,status:'SUPPORTING_CONTEXT'});
+    draftable:false,is_excluded_from_allocation:true,status:'SUPPORTING_CONTEXT'});
   const before={presentation_role:representative.presentation_role,selection_allowed:representative.selection_allowed,
-    is_ready_for_draft:representative.is_ready_for_draft,draftable:representative.draftable,status:representative.status};
+    is_ready_for_draft:representative.is_ready_for_draft,draftable:representative.draftable,
+    is_excluded_from_allocation:representative.is_excluded_from_allocation,status:representative.status};
   assert.equal(api.validate(value).page,value.page);
   const display=api.outerTimesheetRenderRows([representative])[0];
   assert.notEqual(display,representative);
   assert.equal(display.presentation_role,'GROUP_REPRESENTATIVE');
   assert.equal(display.selection_allowed,true);
+  assert.equal(display.is_excluded_from_allocation,false);
   const html=api.rowMarkup(value,new Set());
   assert.ok(html.includes('Timesheet Payment'));
   assert.ok(html.includes('banking:pay:toggleTimesheetPreviewGroup'));
   assert.ok(html.includes('banking:pay:toggleTimesheetBreakdown'));
   assert.deepEqual({presentation_role:representative.presentation_role,selection_allowed:representative.selection_allowed,
-    is_ready_for_draft:representative.is_ready_for_draft,draftable:representative.draftable,status:representative.status},before,
+    is_ready_for_draft:representative.is_ready_for_draft,draftable:representative.draftable,
+    is_excluded_from_allocation:representative.is_excluded_from_allocation,status:representative.status},before,
   'the display bridge must not rewrite the accepted server row used by selection and Draft authority');
 });
 test('an outer Timesheet representative with no selectable group remains visible but has no selection control',()=>{
