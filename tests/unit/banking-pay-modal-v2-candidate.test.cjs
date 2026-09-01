@@ -95,6 +95,39 @@ test('Candidate Banking binds grouped ticks to complete server group facts and r
   assert.match(source,/toggleTimesheetPreviewGroup[\s\S]*invoke\(onIntent,\{kind:'group'/);
   assert.doesNotMatch(source,/toggleTimesheetPreviewGroup[\s\S]{0,300}invoke\(onLegacyAction/);
 });
+test('Candidate Banking rebinds a retained overpayment row control to its complete certified group',()=>{
+  const value=fixture.snapshot();const recovery=value.page.rows.find(row=>row.presentation_group_kind==='ROW');
+  const key=`finance:${fixture.id(901)}:overpayment_recovery`;
+  Object.assign(recovery,{line_type:'OVERPAYMENT_RECOVERY',presentation_group_kind:'OVERPAYMENT',presentation_group_key:key,
+    presentation_group_row_count:1,selection_group_kind:'OVERPAYMENT',selection_group_key:key,
+    selection_group_member_count:1,selection_group_selected_count:1,selection_group_state:'ALL',
+    selection_group_display_amount:'-15.00',selection_group_selected_display_amount:'-15.00'});
+  const attrs=new Map();
+  const amountCell={ownerDocument:{createElement:()=>({className:'',textContent:'',children:[],append(child){this.children.push(child);}})},
+    replaceChildren(...children){this.children=children;}};
+  const tr={children:Array.from({length:7},(_,index)=>index===6?amountCell:{}),
+    getAttribute:name=>name==='data-preview-row-id'?recovery.preview_row_id:null,querySelector:()=>null};
+  const control={dataset:{action:'banking:pay:togglePreviewRow'},checked:false,indeterminate:false,
+    setAttribute:(name,item)=>attrs.set(name,String(item)),removeAttribute:name=>attrs.delete(name),closest:()=>tr};
+  api.bindCompleteGroupControls({querySelectorAll:()=>[control]},value);
+  assert.equal(control.dataset.action,'banking:pay:toggleTimesheetPreviewGroup');
+  assert.equal(control.dataset.selectionGroupKind,'OVERPAYMENT');assert.equal(control.dataset.selectionGroupKey,key);
+  assert.equal(control.checked,true);assert.equal(control.indeterminate,false);assert.equal(attrs.get('aria-checked'),'true');
+  assert.equal(amountCell.children[0].children[0].textContent,'-£15.00');
+});
+test('Candidate Banking leaves a certified standalone Ready row on its individual control',()=>{
+  const value=fixture.snapshot();const standalone=value.page.rows.find(row=>row.presentation_group_kind==='ROW');
+  const tr={getAttribute:name=>name==='data-preview-row-id'?standalone.preview_row_id:null};
+  const control={dataset:{action:'banking:pay:togglePreviewRow'},checked:true,indeterminate:false,closest:()=>tr};
+  api.bindCompleteGroupControls({querySelectorAll:()=>[control]},value);
+  assert.equal(control.dataset.action,'banking:pay:togglePreviewRow');
+});
+test('Candidate Banking resolves retained breakdown row IDs only through the accepted exact row before using its canonical group',()=>{
+  const source=fs.readFileSync(path.resolve(__dirname,'../../js/banking-pay-modal-v2-candidate.js'),'utf8');
+  assert.match(source,/identity&&\(item\.identity===identity\|\|item\.preview_row_id===identity\)/);
+  assert.match(source,/group_kind:representative\.presentation_group_kind,group_key:representative\.presentation_group_key/);
+  assert.match(source,/representative\.presentation_group_kind==='TIMESHEET'[\s\S]*'payment line'/);
+});
 for(const [name,change] of Object.entries({missing:r=>delete r.selection_group_key,partialNull:r=>r.selection_group_member_count=1,
  inconsistent:r=>Object.assign(r,{selection_group_member_count:3,selection_group_selected_count:1,selection_group_state:'ALL'})}))
  test('Candidate Banking rejects incomplete group fact '+name,()=>{const value=fixture.snapshot();change(value.page.rows[0]);

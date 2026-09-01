@@ -129,8 +129,16 @@
     if(value.page.rows.length&&markup.trim()==='')invalid();
     return markup;
   }
+  function formatDetailAmount(value){
+    const formatted=table.formatAmount(value);
+    return formatted.startsWith('£-')?`-£${formatted.slice(2)}`:formatted;
+  }
   function bindCompleteGroupControls(container,current){
-    const byIdentity=new Map(current.page.rows.map(row=>[row.identity,row]));
+    const byIdentity=new Map();
+    for(const row of current.page.rows){
+      byIdentity.set(row.identity,row);
+      byIdentity.set(row.preview_row_id,row);
+    }
     const facts=new Map();
     for(const row of current.page.rows){
       if(row.selection_group_kind===null)continue;
@@ -141,16 +149,21 @@
         ||prior.selection_group_state!==row.selection_group_state))invalid();
       facts.set(id,row);
     }
-    for(const control of container.querySelectorAll('[data-action="banking:pay:toggleTimesheetPreviewGroup"]')){
-      let kind,key;
+    for(const control of container.querySelectorAll('[data-action="banking:pay:toggleTimesheetPreviewGroup"],input[type="checkbox"][data-action="banking:pay:togglePreviewRow"]')){
+      let kind,key,row=null;
       if(control.dataset.timesheetGroupKey){kind='TIMESHEET';key=control.dataset.timesheetGroupKey;}
       else{
         const identity=control.closest('tr')?.getAttribute('data-preview-row-id');
-        const row=identity?byIdentity.get(identity):null;
+        row=identity?byIdentity.get(identity):null;
         kind=row?.selection_group_kind;key=row?.selection_group_key;
       }
       const fact=kind&&key?facts.get(`${kind}|${key}`):null;
-      if(!fact)invalid();
+      // A true ROW remains an individually selectable current payment. Every
+      // certified TIMESHEET/OVERPAYMENT representative is rebound to the
+      // complete server group so a retained legacy row ID cannot narrow the
+      // user's whole-group tick to one loaded member.
+      if(!fact){if(row?.presentation_group_kind==='ROW'&&row.selection_group_kind===null)continue;invalid();}
+      control.dataset.action='banking:pay:toggleTimesheetPreviewGroup';
       control.dataset.selectionGroupKind=kind;control.dataset.selectionGroupKey=key;
       control.dataset.groupSelectionState=fact.selection_group_state==='SOME'?'PARTIAL':fact.selection_group_state;
       control.removeAttribute('data-preview-row-ids');
@@ -160,17 +173,17 @@
       const amountCell=control.closest('tr')?.children?.[6];
       if(amountCell?.ownerDocument){
         const wrapper=amountCell.ownerDocument.createElement('span');wrapper.className='bpv2-ready-group-amount';
-        const total=amountCell.ownerDocument.createElement('span');total.textContent=table.formatAmount(fact.selection_group_display_amount);wrapper.append(total);
+        const total=amountCell.ownerDocument.createElement('span');total.textContent=formatDetailAmount(fact.selection_group_display_amount);wrapper.append(total);
         if(fact.selection_group_state==='SOME'){
           const selected=amountCell.ownerDocument.createElement('span');selected.className='mini bpv2-ready-group-selected';
-          selected.textContent=`(${table.formatAmount(fact.selection_group_selected_display_amount)} selected)`;wrapper.append(selected);
+          selected.textContent=`(${formatDetailAmount(fact.selection_group_selected_display_amount)} selected)`;wrapper.append(selected);
         }
         amountCell.replaceChildren(wrapper);
       }
       const mobileAmount=control.closest('tr')?.querySelector?.('.banking-ready-mobile-row-summary > span:last-child');
       if(mobileAmount){
         const prefix=String(mobileAmount.textContent||'').split(' · ')[0]||'—';
-        mobileAmount.textContent=`${prefix} · ${table.formatAmount(fact.selection_group_display_amount)}`;
+        mobileAmount.textContent=`${prefix} · ${formatDetailAmount(fact.selection_group_display_amount)}`;
       }
     }
   }
@@ -300,12 +313,14 @@
       const key=control.getAttribute('data-breakdown-key')||control.getAttribute('data-timesheet-group-key');
       const row=control.closest('tr')?.nextElementSibling;
       if(!key||row?.getAttribute('data-banking-ready-breakdown-detail')!==key)throw new Error('Missing exact breakdown');
+      const identity=control.closest('tr')?.getAttribute('data-preview-row-id');
       const representative=accepted?.page.rows.find(item=>item.presentation_group_key===key||item.selection_group_key===key);
-      if(!representative)throw new Error('Missing exact group authority');
-      return {key,row,representative,id:`${representative.presentation_group_kind}|${representative.presentation_group_key}`};
+      const exactRepresentative=representative||accepted?.page.rows.find(item=>identity&&(item.identity===identity||item.preview_row_id===identity));
+      if(!exactRepresentative)throw new Error('Missing exact group authority');
+      return {key,row,representative:exactRepresentative,id:`${exactRepresentative.presentation_group_kind}|${exactRepresentative.presentation_group_key}`};
     }
     function renderDetail(control,state){
-      const {key,row}=detailRowFor(control);const page=state.pages[state.index];
+      const {key,row,representative}=detailRowFor(control);const page=state.pages[state.index];
       const detailRows=page.rows.map(item=>object(item.payload)?{...item.payload,...item}:item);
       const renderers=details.create({...accepted.context,
         selectedPreviewRowSet:new Set(detailRows.filter(item=>item.selected===true).map(item=>item.preview_row_id||item.identity).filter(Boolean)),
@@ -322,10 +337,14 @@
       const template=source.querySelector('template[data-banking-ready-breakdown-template="true"]');
       if(template)template.replaceWith(template.content.cloneNode(true));
       target.replaceChildren(...Array.from(source.firstElementChild.childNodes));
-      const renderedSegmentCount=target.querySelectorAll('table.grid > tbody > tr[data-timesheet-group-key]').length;
-      if(renderedSegmentCount<1)throw new Error('Missing rendered payment segments');
-      const segmentLabel=`${renderedSegmentCount} payment segment${renderedSegmentCount===1?'':'s'}`;
-      const pageLabel=page.has_more||state.index>0||state.pages.length>1?`${segmentLabel} on this page`:segmentLabel;
+      const timesheetGroup=representative.presentation_group_kind==='TIMESHEET';
+      const renderedPaymentCount=timesheetGroup
+        ? target.querySelectorAll('table.grid > tbody > tr[data-timesheet-group-key]').length
+        : page.rows.length;
+      if(renderedPaymentCount<1||!target.childNodes.length)throw new Error('Missing rendered payment details');
+      const itemName=timesheetGroup?'payment segment':'payment line';
+      const itemLabel=`${renderedPaymentCount} ${itemName}${renderedPaymentCount===1?'':'s'}`;
+      const pageLabel=page.has_more||state.index>0||state.pages.length>1?`${itemLabel} on this page`:itemLabel;
       const paging=document.createElement('div');paging.className='bpv2-group-detail-pagination';
       paging.innerHTML=`<span data-bpv2-group-detail-count>${pageLabel}</span>
         <button type="button" class="btn btn-outline" data-bpv2-detail="previous" ${state.index===0?'disabled':''}>Previous</button>
