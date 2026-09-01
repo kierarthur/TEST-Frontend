@@ -31,10 +31,12 @@
       'selection_group_display_amount','selection_group_selected_display_amount'];
     if(!keys.every(key=>Object.hasOwn(row,key))||!count(row.selection_group_member_count)||!count(row.selection_group_selected_count)
       ||row.selection_group_selected_count>row.selection_group_member_count)return false;
-    if(row.selection_group_kind===null)return row.selection_group_key===null&&row.selection_group_member_count===0
+    if(row.selection_group_kind===null)return row.presentation_group_kind==='ROW'
+      &&row.selection_group_key===null&&row.selection_group_member_count===0
       &&row.selection_group_selected_count===0&&row.selection_group_state===null
       &&row.selection_group_display_amount===null&&row.selection_group_selected_display_amount===null;
-    return ['TIMESHEET','OVERPAYMENT'].includes(row.selection_group_kind)&&typeof row.selection_group_key==='string'
+    return ['TIMESHEET','OVERPAYMENT'].includes(row.selection_group_kind)
+      &&row.presentation_group_kind===row.selection_group_kind&&typeof row.selection_group_key==='string'
       &&row.selection_group_key.length>=1&&row.selection_group_key.length<=512&&!/[\u0000-\u001f\u007f]/u.test(row.selection_group_key)
       &&row.selection_group_member_count>=1&&/^-?(?:0|[1-9]\d{0,15})\.\d{2}$/.test(row.selection_group_display_amount)
       &&/^-?(?:0|[1-9]\d{0,15})\.\d{2}$/.test(row.selection_group_selected_display_amount)
