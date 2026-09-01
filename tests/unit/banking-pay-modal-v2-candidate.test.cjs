@@ -187,3 +187,15 @@ test('closed child groups render lazy placeholders; fetched detail owns the expa
   assert.ok(opened.includes('aria-expanded="true"'));
   assert.ok(!opened.includes('<template data-banking-ready-breakdown-template="true">'));
 });
+
+test('Candidate Banking stages every refreshed checkbox before one visible table replacement',()=>{
+  const source=fs.readFileSync(path.resolve(__dirname,'../../js/banking-pay-modal-v2-candidate.js'),'utf8');
+  const start=source.indexOf('prepare(value,{previousAvailable=false}={}');
+  const end=source.indexOf('setBusy(value)',start);
+  const prepareSource=source.slice(start,end);
+  assert.ok(start>=0&&end>start);
+  assert.match(prepareSource,/const staged=document\.createElement\('tbody'\);staged\.innerHTML=markup;bindCompleteGroupControls\(staged,current\);shapeCandidateRows\(staged,current\);syncChecks\(staged\);/);
+  assert.equal((prepareSource.match(/body\.replaceChildren/g)||[]).length,1);
+  assert.match(prepareSource,/body\.replaceChildren\(\.\.\.Array\.from\(staged\.childNodes\)\);accepted=current/);
+  assert.doesNotMatch(prepareSource,/body\.innerHTML|await\s/);
+});

@@ -331,6 +331,8 @@ The Banking Pay modal must remain responsive during refresh, resolve, cancel, se
 - Candidate-scoped actions must update only the affected candidate plus any explicitly server-declared linked scope.
 - Do not rebuild unrelated candidates merely to resolve or cancel one candidate's case.
 - Network completion is not UI completion: the open modal must visibly adopt the returned authoritative revision.
+- An automatic refresh of open Candidate Banking must retain the current server-provided outer payment-group page anchor. It may move to the nearest valid page only when the accepted current membership genuinely removes that page; a progress-counter change alone must never reset the user to page one.
+- A refreshed Candidate Banking page, including every authoritative checkbox state, row, amount, deduction, recovery and paging control, must be prepared away from the visible table and adopted in one terminal replacement. Unchanged checkboxes must not visibly tick, untick or flicker during refresh. Genuine server-owned changes caused by selection, headroom or recovery revalidation must still appear together in that same accepted replacement.
 - A selection checkbox may update optimistically, but the Draft action must immediately show a disabled selection-update state until the accepted server result and its authoritative Ready/Blocked adoption settle. It must never remain labelled as though no selection exists, and it must never become Draft-enabled from optimistic client state.
 - Tests must observe responsiveness and request count as well as final content.
 

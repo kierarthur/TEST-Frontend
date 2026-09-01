@@ -172,8 +172,12 @@ test('background Pay rerenders refresh an open v2 child in place',()=>{
   assert.match(integrationSource,/const CANDIDATE_READY_PAGE_LIMIT=controllerModule\.CANDIDATE_READY_PAGE_LIMIT/);
   const candidateRefresh=integrationSource.slice(integrationSource.indexOf("if(surfaceName==='candidate'"),
     integrationSource.indexOf("}else if(surfaceName==='actions'"));
+  assert.match(candidateRefresh,/readyCursor=previous\.ready\.page_anchor/);
+  assert.match(candidateRefresh,/cursor:readyCursor/);
+  assert.doesNotMatch(candidateRefresh,/cursor:null/);
   assert.match(candidateRefresh,/limit:CANDIDATE_READY_PAGE_LIMIT/);
   assert.doesNotMatch(candidateRefresh,/limit:100/);
+  assert.match(integrationSource,/ready_cursor:ready\?readyCursor:null/);
   assert.match(integrationSource,/surfaceName==='actions'\|\|surfaceName==='actionDetail'/);
   assert.match(integrationSource,/surfaceName==='blocked'\|\|surfaceName==='blockedDetail'/);
   assert.match(mainSource,/CloudTMSBankingPayModalV2Integration\.refreshOpenSurface\(\)/);

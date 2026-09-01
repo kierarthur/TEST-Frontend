@@ -323,10 +323,11 @@
       const surfaceName=previous.ui?.surface||'main';
       const common={session_id:args.session_id,expected_session_version:version,expected_progress_counter_version:counter,
         scope_hash:args.scope_hash,pay_channel_scope:args.pay_channel_scope};
-      let ready=null,actions=null,actionDetail=null,blocked=null,blockedDetail=null;
+      let ready=null,readyCursor=null,actions=null,actionDetail=null,blocked=null,blockedDetail=null;
       const summaryPromise=transport.readPage('summary',args);
       if(surfaceName==='candidate'&&previous.ready?.candidate_id){
-        ready=await transport.readPage('ready',{...common,candidate_id:previous.ready.candidate_id,cursor:null,limit:CANDIDATE_READY_PAGE_LIMIT});
+        readyCursor=previous.ready.page_anchor;
+        ready=await transport.readPage('ready',{...common,candidate_id:previous.ready.candidate_id,cursor:readyCursor,limit:CANDIDATE_READY_PAGE_LIMIT});
         if(ready.candidate===null)ready=null;
       }else if(surfaceName==='actions'||surfaceName==='actionDetail'){
         const page=previous.actions;
@@ -348,7 +349,7 @@
       const summary=await summaryPromise;
       const retainedSurface=ready?'candidate':actionDetail?'actionDetail':actions?'actions':blockedDetail?'blockedDetail':blocked?'blocked':'main';
       return {summary,ready,actions,actionDetail,blocked,blockedDetail,
-        ui:{...previous.ui,surface:retainedSurface,ready_cursor:null,issue_cursor:null,detail_cursor:null}};
+        ui:{...previous.ui,surface:retainedSurface,ready_cursor:ready?readyCursor:null,issue_cursor:null,detail_cursor:null}};
     }
     const callbacks={payChannelScope:shell.dataset.payChannelScope,readPage:transport.readPage,
       performMutation:(intent,authority,request)=>intent.kind==='candidate'?transport.mutateCandidate(request)
