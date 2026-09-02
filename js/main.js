@@ -70792,6 +70792,7 @@ async function openBankingPayFiltersModal(seed = {}) {
       forceEdit: true,
       showSave: false,
       showApply: true,
+      primaryLabel: 'Apply filters',
       runOnRender: true
     }
   );

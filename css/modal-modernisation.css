@@ -3895,8 +3895,10 @@
   display: none !important;
 }
 
-/* Banking's main sheet owns its own actions, but Snooze editors use the shared
-   modal save authority. Keep that footer visible and outside the scrolling body. */
+/* Banking's main sheet owns its own actions, but the Pay filters and Snooze
+   children use the shared modal save authority. Keep that footer visible and
+   outside the scrolling body. */
+#modal.banking-modal.ctms-modern-modal.ctms-kind-banking-pay-filters #modalActions,
 #modal.banking-modal.ctms-modern-modal.ctms-kind-banking-finance-snooze #modalActions,
 #modal.banking-modal.ctms-modern-modal.ctms-kind-banking-finance-snooze-expense-set #modalActions {
   display: flex !important;
