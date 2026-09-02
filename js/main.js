@@ -127104,6 +127104,10 @@ function openContractSettingsModal() {
 
     const paperOverride = triBool(getMainRaw('candidate_paper_submission_enabled_override'));
     const clientPaperEnabled = csBool('candidate_paper_submission_enabled', false);
+    const expenseSeparationOverride = triBool(getMainRaw('candidate_expenses_require_separate_timesheet_override'));
+    const clientExpenseSeparation = csBool('candidate_expenses_require_separate_timesheet', false);
+    const contractExpenseEmailOverride = triString(getMainRaw('candidate_expense_invoice_email_override'));
+    const clientExpenseEmail = csStr('candidate_expense_invoice_email');
 
     return {
       cs,
@@ -127118,6 +127122,14 @@ function openContractSettingsModal() {
       paperOverride,
       clientPaperEnabled,
       effectivePaperEnabled: paperOverride === null ? clientPaperEnabled : paperOverride,
+      expenseSeparationOverride,
+      clientExpenseSeparation,
+      effectiveExpenseSeparation: expenseSeparationOverride === null
+        ? clientExpenseSeparation
+        : expenseSeparationOverride,
+      contractExpenseEmailOverride,
+      clientExpenseEmail,
+      effectiveExpenseEmail: contractExpenseEmailOverride || clientExpenseEmail,
       eff
     };
   };
@@ -127127,7 +127139,9 @@ function openContractSettingsModal() {
     const st = computeEffective();
     const {
       hasSnapshot, overrideOn, weeklyMode, hrMode, isHrCreate, breakModeOverride,
-      paperOverride, clientPaperEnabled, effectivePaperEnabled, eff
+      paperOverride, clientPaperEnabled, effectivePaperEnabled,
+      expenseSeparationOverride, clientExpenseSeparation, effectiveExpenseSeparation,
+      contractExpenseEmailOverride, clientExpenseEmail, effectiveExpenseEmail, eff
     } = st;
 
     // ✅ Critical gating:
@@ -127140,6 +127154,8 @@ function openContractSettingsModal() {
     const disabledWorkflow = (!overrideOn || viewOnly || overrideProtected) ? 'disabled' : '';
     const disabledFinancialAuthority = (!overrideOn || viewOnly || overrideProtected) ? 'disabled' : '';
     const breakModeDisabled = (!overrideOn || viewOnly || overrideProtected) ? 'disabled' : '';
+    const importAuthoritative = weeklyMode === 'NHSP' || isHrCreate;
+    const disabledExpensePolicy = (viewOnly || importAuthoritative) ? 'disabled' : '';
 
     const hint = (!hasSnapshot && !overrideOn)
       ? `Client settings are not available yet. Reopen the Contract after its Client details have loaded.`
@@ -127399,6 +127415,35 @@ function openContractSettingsModal() {
             </div>
           </div>
 
+          <section class="ctms-policy-card" aria-labelledby="contractExpenseSeparationHeading">
+            <div class="ctms-policy-card__heading">
+              <div>
+                <div class="ctms-policy-card__eyebrow">Candidate expenses</div>
+                <h3 id="contractExpenseSeparationHeading">Expense Timesheet and invoice</h3>
+                <p>${importAuthoritative
+                  ? 'Imported hours are view-only, so Candidate expenses must use a separate Timesheet.'
+                  : 'Choose whether expenses share this Timesheet or use a separate expense-only Timesheet.'}</p>
+              </div>
+              <span class="ctms-policy-badge ${importAuthoritative || effectiveExpenseSeparation ? 'is-enabled' : 'is-disabled'}">${importAuthoritative || effectiveExpenseSeparation ? 'Separate' : 'Combined'}</span>
+            </div>
+            ${importAuthoritative ? `
+              <div class="mini" style="line-height:1.35;">Separation is required by the import-authoritative workflow and cannot be overridden.</div>
+            ` : `
+              <div class="ctms-policy-options" role="radiogroup" aria-label="Candidate expense Timesheet policy">
+                ${radioChoice('candidate_expense_separation_policy', 'INHERIT', 'Use Client setting', `Currently ${clientExpenseSeparation ? 'separate' : 'combined'} at Client level.`, expenseSeparationOverride === null, disabledExpensePolicy)}
+                ${radioChoice('candidate_expense_separation_policy', 'SEPARATE', 'Require a separate expense Timesheet', 'Hours and expenses remain linked in the app but are stored, authorised and invoiced separately.', expenseSeparationOverride === true, disabledExpensePolicy)}
+                ${radioChoice('candidate_expense_separation_policy', 'COMBINED', 'Allow one combined Timesheet', 'Use the hours Timesheet for expenses when it is still editable.', expenseSeparationOverride === false, disabledExpensePolicy)}
+              </div>
+            `}
+            <label class="ctms-field-stack" style="margin-top:12px;">
+              <span>Contract Expense Invoice Email override</span>
+              <input type="email" name="candidate_expense_invoice_email_override" value="${escapeHtml(contractExpenseEmailOverride || '')}" placeholder="${escapeHtml(clientExpenseEmail || 'Use Client Expense Invoice Email')}" ${viewOnly ? 'disabled' : ''}/>
+              <small>${effectiveExpenseEmail
+                ? `Effective expense invoice address: ${escapeHtml(effectiveExpenseEmail)}`
+                : 'No effective Expense Invoice Email is configured. A separate expense invoice will be blocked safely until one is added.'}</small>
+            </label>
+          </section>
+
           <section class="ctms-policy-card ctms-policy-card--paper" aria-labelledby="contractPrintedTimesheetsHeading">
             <div class="ctms-policy-card__heading">
               <div>
@@ -127448,6 +127493,28 @@ function openContractSettingsModal() {
       'candidate_paper_submission_enabled_override',
       paperPolicy === 'ALLOW' ? true : (paperPolicy === 'BLOCK' ? false : null)
     ) || changed;
+
+    // Candidate expense separation is an independent Contract policy. Import-
+    // authoritative workflows are forced separate by the server, so no radio
+    // is rendered and an existing override is left untouched in that state.
+    const expensePolicyInput = root.querySelector(
+      'input[type="radio"][name="candidate_expense_separation_policy"]:checked'
+    );
+    if (expensePolicyInput) {
+      const expensePolicy = String(expensePolicyInput.value || 'INHERIT').toUpperCase();
+      changed = setMainTriBool(
+        'candidate_expenses_require_separate_timesheet_override',
+        expensePolicy === 'SEPARATE' ? true : (expensePolicy === 'COMBINED' ? false : null)
+      ) || changed;
+    }
+    const expenseEmailInput = root.querySelector('input[name="candidate_expense_invoice_email_override"]');
+    if (expenseEmailInput) {
+      const expenseEmail = String(expenseEmailInput.value || '').trim().toLowerCase();
+      changed = setMainTriString(
+        'candidate_expense_invoice_email_override',
+        expenseEmail || null
+      ) || changed;
+    }
 
     // Contract-specific query routing is deliberately outside the broad
     // Client-settings override and therefore stages independently.
@@ -281725,6 +281792,8 @@ window.modalCtx = {
     const keepAutoInv     = !!cs0.auto_invoice_default;
     const keepManualFlag  = !!cs0.send_manual_invoices_to_different_email;
     const keepManualEmail = String(cs0.manual_invoices_alt_email_address || '').trim();
+    const keepCandidateExpenseSeparation = !!cs0.candidate_expenses_require_separate_timesheet;
+    const keepCandidateExpenseEmail = String(cs0.candidate_expense_invoice_email || '').trim();
 
     // ✅ preserve these fields even if canonicalize strips unknown keys
     const keepInvConsol =
@@ -281743,6 +281812,8 @@ window.modalCtx = {
     window.modalCtx.clientSettingsState.auto_invoice_default = keepAutoInv;
     window.modalCtx.clientSettingsState.send_manual_invoices_to_different_email = keepManualFlag;
     window.modalCtx.clientSettingsState.manual_invoices_alt_email_address = keepManualFlag ? keepManualEmail : '';
+    window.modalCtx.clientSettingsState.candidate_expenses_require_separate_timesheet = keepCandidateExpenseSeparation;
+    window.modalCtx.clientSettingsState.candidate_expense_invoice_email = keepCandidateExpenseEmail;
 
     // ✅ restore new fields after canonicalize
     if (keepInvConsol != null && String(keepInvConsol).trim() !== '') {
@@ -281871,6 +281942,8 @@ window.modalCtx = {
       const hasClientSettingsKeys =
         Object.prototype.hasOwnProperty.call(baseline, 'send_manual_invoices_to_different_email') ||
         Object.prototype.hasOwnProperty.call(baseline, 'manual_invoices_alt_email_address') ||
+        Object.prototype.hasOwnProperty.call(baseline, 'candidate_expenses_require_separate_timesheet') ||
+        Object.prototype.hasOwnProperty.call(baseline, 'candidate_expense_invoice_email') ||
         Object.prototype.hasOwnProperty.call(baseline, 'auto_invoice_default') ||
         Object.prototype.hasOwnProperty.call(baseline, 'invoice_consolidation_mode') ||
         Object.prototype.hasOwnProperty.call(baseline, 'reference_number_required_to_issue_invoice') ||
@@ -281955,6 +282028,7 @@ window.modalCtx = {
               'hr_attach_to_invoice',
               'ts_attach_to_invoice',
               'send_manual_invoices_to_different_email',
+              'candidate_expenses_require_separate_timesheet',
               'reference_number_required_to_issue_invoice',
               'candidate_paper_submission_enabled'
             ];
@@ -281971,11 +282045,16 @@ window.modalCtx = {
             if (!csMerged.send_manual_invoices_to_different_email) {
               csMerged.manual_invoices_alt_email_address = '';
             }
+            if (Object.prototype.hasOwnProperty.call(liveSettings, 'candidate_expense_invoice_email')) {
+              csMerged.candidate_expense_invoice_email = String(liveSettings.candidate_expense_invoice_email || '').trim();
+            }
           }
         }
 
         const keepManualFlag  = !!csMerged.send_manual_invoices_to_different_email;
         const keepManualEmail = String(csMerged.manual_invoices_alt_email_address || '').trim();
+        const keepCandidateExpenseSeparation = !!csMerged.candidate_expenses_require_separate_timesheet;
+        const keepCandidateExpenseEmail = String(csMerged.candidate_expense_invoice_email || '').trim();
         const keepAutoInv     = !!csMerged.auto_invoice_default;
 
         const keepInvConsol = (csMerged.invoice_consolidation_mode != null) ? String(csMerged.invoice_consolidation_mode) : '';
@@ -281996,6 +282075,8 @@ window.modalCtx = {
         csMerged.auto_invoice_default = keepAutoInv;
         csMerged.send_manual_invoices_to_different_email = keepManualFlag;
         csMerged.manual_invoices_alt_email_address = keepManualFlag ? keepManualEmail : '';
+        csMerged.candidate_expenses_require_separate_timesheet = keepCandidateExpenseSeparation;
+        csMerged.candidate_expense_invoice_email = keepCandidateExpenseEmail;
 
         if (keepInvConsol != null && String(keepInvConsol).trim() !== '') {
           csMerged.invoice_consolidation_mode = String(keepInvConsol).trim();
@@ -282012,6 +282093,10 @@ window.modalCtx = {
           csMerged.manual_invoices_alt_email_address = em;
         } else {
           csMerged.manual_invoices_alt_email_address = '';
+        }
+        if (csMerged.candidate_expenses_require_separate_timesheet && !csMerged.candidate_expense_invoice_email) {
+          alert('Enter the Expense Invoice Email before requiring separate Candidate expense Timesheets.');
+          return { ok:false };
         }
 
         const toHHMM = (v) => {
@@ -282040,6 +282125,10 @@ window.modalCtx = {
           csClean.send_manual_invoices_to_different_email
             ? (String(csMerged.manual_invoices_alt_email_address || '').trim() || null)
             : null;
+        csClean.candidate_expenses_require_separate_timesheet =
+          !!csMerged.candidate_expenses_require_separate_timesheet;
+        csClean.candidate_expense_invoice_email =
+          String(csMerged.candidate_expense_invoice_email || '').trim() || null;
 
         csClean.auto_invoice_default = !!csMerged.auto_invoice_default;
 
@@ -296784,6 +296873,18 @@ let require_reference_to_invoice = boolTriFromFS('require_reference_to_invoice')
 // ✅ NEW: additional contract-level settings
 let reference_number_required_to_issue_invoice = boolTriFromFS('reference_number_required_to_issue_invoice');
 let send_manual_invoices_to_different_email    = boolTriFromFS('send_manual_invoices_to_different_email');
+const candidate_expenses_require_separate_timesheet_override =
+  boolTriFromFS('candidate_expenses_require_separate_timesheet_override');
+let candidate_expense_invoice_email_override = null;
+try {
+  const rawExpenseEmail =
+    (fs && fs.main && Object.prototype.hasOwnProperty.call(fs.main, 'candidate_expense_invoice_email_override'))
+      ? fs.main.candidate_expense_invoice_email_override
+      : (base.candidate_expense_invoice_email_override ?? null);
+  candidate_expense_invoice_email_override = String(rawExpenseEmail || '').trim().toLowerCase() || null;
+} catch {
+  candidate_expense_invoice_email_override = null;
+}
 
 // Timesheet-query routing is an independent contract override. It is not gated
 // by invoice routing or by overrideclientsettings.
@@ -296882,6 +296983,8 @@ const settingsChanged =
   (normTri(base.reference_number_required_to_issue_invoice) !== normTri(reference_number_required_to_issue_invoice)) ||
   (normTri(base.send_manual_invoices_to_different_email) !== normTri(send_manual_invoices_to_different_email)) ||
   (String((base.manual_invoices_alt_email_address ?? '')).trim() !== String((manual_invoices_alt_email_address ?? '')).trim()) ||
+  (normTri(base.candidate_expenses_require_separate_timesheet_override) !== normTri(candidate_expenses_require_separate_timesheet_override)) ||
+  (String((base.candidate_expense_invoice_email_override ?? '')).trim().toLowerCase() !== String((candidate_expense_invoice_email_override ?? '')).trim().toLowerCase()) ||
   (!!base.send_ts_queries_to_different_email !== !!send_ts_queries_to_different_email) ||
   (String((base.ts_queries_alt_email_address ?? '')).trim().toLowerCase() !== String((ts_queries_alt_email_address ?? '')).trim().toLowerCase()) ||
    (String((base.default_submission_mode ?? '')).trim().toUpperCase() !== String((default_submission_mode ?? '')).trim().toUpperCase());
@@ -297025,6 +297128,8 @@ const data = {
   // ✅ UPDATED: nullable (inherit) supported
   default_submission_mode,
   candidate_paper_submission_enabled_override: boolTriFromFS('candidate_paper_submission_enabled_override'),
+  candidate_expenses_require_separate_timesheet_override,
+  candidate_expense_invoice_email_override,
 
   week_ending_weekday_snapshot,
 
@@ -346487,6 +346592,11 @@ async function renderClientSettingsUI(settingsObj){
     manual_invoices_alt_email_address:
       String(initial.manual_invoices_alt_email_address || '').trim(),
 
+    candidate_expenses_require_separate_timesheet:
+      toBool(initial.candidate_expenses_require_separate_timesheet, false),
+    candidate_expense_invoice_email:
+      String(initial.candidate_expense_invoice_email || '').trim(),
+
     weekly_mode: initial.weekly_mode || '',
     hr_weekly_behaviour: initial.hr_weekly_behaviour || '',
     timesheet_break_entry_mode:
@@ -346500,6 +346610,8 @@ async function renderClientSettingsUI(settingsObj){
   const keepAutoInvSeed   = !!seed.auto_invoice_default;
   const keepManualFlagSeed= !!seed.send_manual_invoices_to_different_email;
   const keepManualEmailSeed = String(seed.manual_invoices_alt_email_address || '').trim();
+  const keepCandidateExpenseSeparationSeed = !!seed.candidate_expenses_require_separate_timesheet;
+  const keepCandidateExpenseEmailSeed = String(seed.candidate_expense_invoice_email || '').trim();
 
   const keepInvConsolSeed = up(seed.invoice_consolidation_mode || 'NONE');
   const keepRefToIssueSeed = !!seed.reference_number_required_to_issue_invoice;
@@ -346509,6 +346621,8 @@ async function renderClientSettingsUI(settingsObj){
   s.auto_invoice_default = keepAutoInvSeed;
   s.send_manual_invoices_to_different_email = keepManualFlagSeed;
   s.manual_invoices_alt_email_address = keepManualFlagSeed ? keepManualEmailSeed : '';
+  s.candidate_expenses_require_separate_timesheet = keepCandidateExpenseSeparationSeed;
+  s.candidate_expense_invoice_email = keepCandidateExpenseEmailSeed;
 
   s.invoice_consolidation_mode = keepInvConsolSeed;
   s.reference_number_required_to_issue_invoice = keepRefToIssueSeed;
@@ -346624,6 +346738,24 @@ async function renderClientSettingsUI(settingsObj){
         ${desc ? `<div class="mini" style="opacity:0.9;line-height:1.25;white-space:normal;overflow-wrap:break-word;">${desc}</div>` : ``}
       </div>
     </label>
+  `;
+
+  const candidateExpenseDeliveryBlock = (st) => `
+    <div style="display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border, #d8dee9);border-radius:10px;">
+      ${checkChoiceWithDesc(
+        'candidate_expenses_require_separate_timesheet',
+        'Keep Candidate expenses on a separate Timesheet',
+        'Import-authoritative Timesheets always use a separate expense Timesheet. For other Timesheets this is the Client default and can be overridden on the Contract.',
+        !!st.candidate_expenses_require_separate_timesheet
+      )}
+      <div style="display:flex;flex-direction:column;gap:6px;margin-left:26px;">
+        <span class="mini" style="opacity:0.9">Expense Invoice Email</span>
+        <input class="input" type="email" name="candidate_expense_invoice_email" value="${escapeHtml(String(st.candidate_expense_invoice_email || ''))}" placeholder="expenses@client.nhs.uk" />
+        <div class="mini" style="opacity:0.85;line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+          Receives separate expense invoices. This address is also used for import-authoritative expense claims and is not suppressed by self-bill hours.
+        </div>
+      </div>
+    </div>
   `;
 
   const invoicingModePanelHTML = (st) => {
@@ -346769,6 +346901,7 @@ async function renderClientSettingsUI(settingsObj){
         <div class="row" style="margin:0;">
           <label style="white-space:normal">References & flags</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:12px;min-width:0;">
+            ${candidateExpenseDeliveryBlock(st)}
             <div class="mini" style="opacity:0.9;line-height:1.25;white-space:normal;overflow-wrap:break-word;">
               NHSP mode controls references, invoicing behaviour and attachments automatically.
             </div>
@@ -346787,6 +346920,7 @@ async function renderClientSettingsUI(settingsObj){
         <div class="row" style="margin:0;">
           <label style="white-space:normal">References & flags</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:12px;min-width:0;">
+            ${candidateExpenseDeliveryBlock(st)}
             <div style="display:grid;grid-template-columns:1fr;gap:8px;">
               ${refToIssueBlock}
               ${checkChoice('pay_reference_required', 'Ref No. required to PAY', !!st.pay_reference_required)}
@@ -346813,6 +346947,7 @@ async function renderClientSettingsUI(settingsObj){
       <div class="row" style="margin:0;">
         <label style="white-space:normal">References & flags</label>
         <div class="controls" style="display:flex;flex-direction:column;gap:12px;min-width:0;">
+          ${candidateExpenseDeliveryBlock(st)}
           <div style="display:grid;grid-template-columns:1fr;gap:8px;">
             ${refToIssueBlock}
             ${checkChoice('self_bill_no_invoices_sent', 'Self-bill (no invoices sent)', !!st.self_bill_no_invoices_sent)}
@@ -347013,6 +347148,7 @@ async function renderClientSettingsUI(settingsObj){
       'hr_attach_to_invoice',
       'ts_attach_to_invoice',
       'send_manual_invoices_to_different_email',
+      'candidate_expenses_require_separate_timesheet',
       'reference_number_required_to_issue_invoice',
       'candidate_paper_submission_enabled'
     ];
@@ -347025,6 +347161,7 @@ async function renderClientSettingsUI(settingsObj){
     if (!next.send_manual_invoices_to_different_email) {
       next.manual_invoices_alt_email_address = '';
     }
+    next.candidate_expense_invoice_email = String(next.candidate_expense_invoice_email || '').trim();
 
     const keepAutoInv =
       (typeof next.auto_invoice_default === 'boolean')
@@ -347038,6 +347175,11 @@ async function renderClientSettingsUI(settingsObj){
 
     const keepManualEmail =
       String(next.manual_invoices_alt_email_address || '').trim();
+    const keepCandidateExpenseSeparation =
+      (typeof next.candidate_expenses_require_separate_timesheet === 'boolean')
+        ? next.candidate_expenses_require_separate_timesheet
+        : !!prev.candidate_expenses_require_separate_timesheet;
+    const keepCandidateExpenseEmail = String(next.candidate_expense_invoice_email || '').trim();
 
     const keepInvConsol = up(next.invoice_consolidation_mode || prev.invoice_consolidation_mode || 'NONE');
     const keepRefToIssue =
@@ -347052,6 +347194,8 @@ async function renderClientSettingsUI(settingsObj){
     next.auto_invoice_default = keepAutoInv;
     next.send_manual_invoices_to_different_email = keepManualFlag;
     next.manual_invoices_alt_email_address = keepManualFlag ? keepManualEmail : '';
+    next.candidate_expenses_require_separate_timesheet = keepCandidateExpenseSeparation;
+    next.candidate_expense_invoice_email = keepCandidateExpenseEmail;
 
     next.invoice_consolidation_mode = keepInvConsol;
     next.reference_number_required_to_issue_invoice = !!keepRefToIssue;
