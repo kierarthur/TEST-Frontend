@@ -30,7 +30,7 @@ test('Banking Pay filter save fails closed unless the new session context is ado
   assert.match(body, /The previous payment preview remains unchanged; please try again\./);
 });
 
-test('Banking Pay filters expose one clearly labelled shared Apply action', () => {
+test('Banking Pay filters and their pickers expose clearly labelled shared Apply actions', () => {
   const body = filterModalBody();
 
   assert.match(body, /kind: 'banking-pay-filters'/);
@@ -40,6 +40,14 @@ test('Banking Pay filters expose one clearly labelled shared Apply action', () =
   assert.match(
     modalCss,
     /ctms-kind-banking-pay-filters #modalActions,[\s\S]*?display: flex !important;/
+  );
+  assert.match(
+    modalCss,
+    /ctms-kind-candidate-picker #modalActions,[\s\S]*?display: flex !important;/
+  );
+  assert.match(
+    modalCss,
+    /ctms-kind-client-picker #modalActions,[\s\S]*?display: flex !important;/
   );
   assert.match(
     modalCss,
