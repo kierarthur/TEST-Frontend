@@ -290,6 +290,11 @@ for (const device of devices) {
     await page.locator('input[name="overrideclientsettings"]').check();
     await expect(page.locator('.ctms-contract-override-panel')).toBeVisible();
     await expect(page.locator('#btnResetContractOverrides')).toBeVisible();
+    const overriddenBreakMode = page.locator('select[name="timesheet_break_entry_mode"]');
+    await expect(overriddenBreakMode).toBeVisible();
+    await expect(overriddenBreakMode).toBeEnabled();
+    await expect(overriddenBreakMode).toHaveValue('DURATION_MINUTES');
+    await expect(page.getByText('Used for worker-entered Weekly Timesheets. It is not used where imported hours are authoritative.', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeEnabled();
     await expect(page.locator('#btnCloseModal')).toHaveText('Discard');
     await assertViewportFit(page, device.width);

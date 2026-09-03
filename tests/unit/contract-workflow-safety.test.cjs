@@ -35,6 +35,19 @@ test('Contract settings are a child draft and only Apply dirties the parent', ()
   assert.doesNotMatch(source, /Staged only until/);
 });
 
+test('Break-entry mode is available only where workers enter Weekly hours', () => {
+  const contractSettings = section('function openContractSettingsModal()', 'function computePayWorkbenchSessionSignature');
+  assert.match(contractSettings, /showWorkerEnteredBreakMode = showManual \|\| \(showHr && !isHrCreate\)/);
+  assert.match(contractSettings, /display:\$\{showWorkerEnteredBreakMode \? '' : 'none'\}/);
+  assert.match(contractSettings, /Used for worker-entered Weekly Timesheets\. It is not used where imported hours are authoritative\./);
+
+  const clientSettings = section('async function renderClientSettingsUI(settingsObj)', 'async function upsertClient(payload, id)');
+  assert.match(clientSettings, /workerEntersWeeklyHours = mode === 'NONE' \|\| \(mode === 'HEALTHROSTER' && behaviour !== 'CREATE'\)/);
+  assert.match(clientSettings, /if \(!workerEntersWeeklyHours\) return ''/);
+  assert.match(clientSettings, /select name="timesheet_break_entry_mode"/);
+  assert.match(clientSettings, /Used for worker-entered Weekly Timesheets\. It is not used where imported hours are authoritative\./);
+});
+
 test('Returning from a Contract child restores the parent tab titles', () => {
   assert.match(main, /btn\.textContent = tab\.label \|\| tab\.title \|\| tab\.key \|\| '';/);
 });

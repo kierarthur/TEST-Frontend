@@ -127210,6 +127210,7 @@ function openContractSettingsModal() {
     const showManual = (weeklyMode === 'NONE');
     const showHr     = (weeklyMode === 'HEALTHROSTER');
     const showHrTsAttach = showHr && !isHrCreate;
+    const showWorkerEnteredBreakMode = showManual || (showHr && !isHrCreate);
 
     // default_submission_mode: allow “inherit” (NULL) option
     const dsmVal = eff.default_submission_mode ? String(eff.default_submission_mode).toUpperCase() : '';
@@ -127293,7 +127294,7 @@ function openContractSettingsModal() {
           </div>
         </div>
 
-        <div class="row" style="display:${(showHr && !isHrCreate) ? '' : 'none'};">
+        <div class="row" style="display:${showWorkerEnteredBreakMode ? '' : 'none'};">
           <label style="white-space:normal">How workers enter breaks</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:7px;min-width:0;">
             <select name="timesheet_break_entry_mode" ${breakModeDisabled}
@@ -127302,7 +127303,7 @@ function openContractSettingsModal() {
               <option value="START_END_TIMES" ${breakModeOverride === 'START_END_TIMES' ? 'selected' : ''}>Break start and finish times</option>
               <option value="DURATION_MINUTES" ${breakModeOverride === 'DURATION_MINUTES' ? 'selected' : ''}>Break length in minutes</option>
             </select>
-            <div class="mini" style="opacity:.86;line-height:1.3;">Available only for roster-validation timesheets. It is not used for manual timesheets, Dedicated NHSP Weekly, or import-authoritative roster workflows.</div>
+            <div class="mini" style="opacity:.86;line-height:1.3;">Used for worker-entered Weekly Timesheets. It is not used where imported hours are authoritative.</div>
           </div>
         </div>
 
@@ -346850,7 +346851,8 @@ async function renderClientSettingsUI(settingsObj){
   const breakEntryPanelHTML = (st) => {
     const mode = String(st.weekly_mode || 'NONE').toUpperCase();
     const behaviour = String(st.hr_weekly_behaviour || 'VERIFY').toUpperCase();
-    if (mode !== 'HEALTHROSTER' || behaviour === 'CREATE') return '';
+    const workerEntersWeeklyHours = mode === 'NONE' || (mode === 'HEALTHROSTER' && behaviour !== 'CREATE');
+    if (!workerEntersWeeklyHours) return '';
     const breakMode = up(st.timesheet_break_entry_mode) === 'DURATION_MINUTES'
       ? 'DURATION_MINUTES'
       : 'START_END_TIMES';
@@ -346861,7 +346863,7 @@ async function renderClientSettingsUI(settingsObj){
           <option value="START_END_TIMES" ${breakMode === 'START_END_TIMES' ? 'selected' : ''}>Break start and finish times</option>
           <option value="DURATION_MINUTES" ${breakMode === 'DURATION_MINUTES' ? 'selected' : ''}>Break length in minutes</option>
         </select>
-        <div class="mini" style="opacity:.86;line-height:1.3;">Available only for roster-validation timesheets. It is not used for manual timesheets, Dedicated NHSP Weekly, or import-authoritative roster workflows.</div>
+        <div class="mini" style="opacity:.86;line-height:1.3;">Used for worker-entered Weekly Timesheets. It is not used where imported hours are authoritative.</div>
       </div>
     </div>`;
   };
