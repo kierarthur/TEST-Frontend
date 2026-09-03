@@ -2200,63 +2200,6 @@
     }, true);
   }
 
-  function settingsValue(source, key) {
-    const value = source && Object.prototype.hasOwnProperty.call(source, key) ? String(source[key] || '').toUpperCase() : '';
-    return value === 'PAID_DATE' || value === 'NOW' ? value : null;
-  }
-
-  async function injectGlobalPolicy(root) {
-    if (!root || root.querySelector('#irv1GlobalPolicy')) return;
-    const card = document.createElement('section');
-    card.id = 'irv1GlobalPolicy';
-    card.className = 'irv1-settings-card';
-    card.innerHTML = '<div class="irv1-save-state">Loading the stored import policy…</div>';
-    root.appendChild(card);
-    try {
-      const result = await request('/api/settings/defaults');
-      const source = result?.settings || result?.settings_defaults || result || {};
-      const complete = settingsValue(source, 'reversal_complete_financials_date');
-      const replacement = settingsValue(source, 'reversal_replacement_financials_date');
-      if (!complete || !replacement || !source.updated_at) {
-        card.innerHTML = '<div class="irv1-alert error"><strong>Import policy unavailable.</strong><br/>The stored global values or their concurrency version are missing. Nothing has been defaulted and saving is disabled.</div>';
-        return;
-      }
-      global.modalCtx.data = Object.assign(global.modalCtx.data || {}, source);
-      card.innerHTML = `<h3 class="irv1-title">Import-authoritative correction dates</h3><p class="mini">New clients inherit these global defaults. These settings affect only import-authoritative correction/replacement shifts; ordinary timesheets and Banking Pay financial authority are unchanged.</p><div class="irv1-settings-grid"><label>Completed reversal uses<select class="input" data-ir-global-policy="reversal_complete_financials_date"><option value="PAID_DATE" ${complete === 'PAID_DATE' ? 'selected' : ''}>Original paid date</option><option value="NOW" ${complete === 'NOW' ? 'selected' : ''}>Current date (now)</option></select></label><label>Replacement shift uses<select class="input" data-ir-global-policy="reversal_replacement_financials_date"><option value="PAID_DATE" ${replacement === 'PAID_DATE' ? 'selected' : ''}>Original paid date</option><option value="NOW" ${replacement === 'NOW' ? 'selected' : ''}>Current date (now)</option></select></label></div><div class="irv1-review-actions"><span class="irv1-save-state" data-ir-global-policy-status></span><button type="button" class="irv1-btn" data-ir-settings-save="global">Save import policy</button></div>`;
-    } catch (error) {
-      card.innerHTML = `<div class="irv1-alert error"><strong>Import policy unavailable.</strong><br/>${esc(error.message || 'The stored global settings could not be loaded.')} Nothing has been defaulted and saving is disabled.</div>`;
-    }
-  }
-
-  async function loadClientPolicy(root) {
-    if (!root || root.querySelector('#irv1ClientPolicy')) return;
-    const clientId = global.modalCtx?.data?.id;
-    const card = document.createElement('section');
-    card.id = 'irv1ClientPolicy';
-    card.className = 'irv1-settings-card';
-    (root.querySelector('[data-record-panel="timesheets"]') || root).appendChild(card);
-    if (!clientId) {
-      card.hidden = true;
-      return;
-    }
-    card.innerHTML = '<div class="irv1-save-state">Loading import policy…</div>';
-    try {
-      const response = await request(`/api/clients/${encodeURIComponent(clientId)}`);
-      const policy = response.import_financial_policy || {};
-      global.modalCtx.__importFinancialPolicy = policy;
-      if (!policy.eligible) {
-        card.hidden = true;
-        return;
-      }
-      const complete = policy.reversal_complete_financials_date || {};
-      const replacement = policy.reversal_replacement_financials_date || {};
-      const option = (value, current, label) => `<option value="${value}" ${current === value ? 'selected' : ''}>${label}</option>`;
-      card.innerHTML = `<h3 class="irv1-title">Import-authoritative correction dates</h3><p class="mini">Choose a client override or inherit the global default. A blank override is stored as inheritance, not as NOW.</p><div class="irv1-settings-grid"><label>Completed reversal uses<select class="input" data-ir-client-policy="reversal_complete_financials_date">${option('', complete.override == null ? '' : complete.override, `Inherit global (${complete.effective === 'PAID_DATE' ? 'Original paid date' : 'Current date'})`)}${option('PAID_DATE', complete.override, 'Original paid date')}${option('NOW', complete.override, 'Current date (now)')}</select></label><label>Replacement shift uses<select class="input" data-ir-client-policy="reversal_replacement_financials_date">${option('', replacement.override == null ? '' : replacement.override, `Inherit global (${replacement.effective === 'PAID_DATE' ? 'Original paid date' : 'Current date'})`)}${option('PAID_DATE', replacement.override, 'Original paid date')}${option('NOW', replacement.override, 'Current date (now)')}</select></label></div><div class="irv1-review-actions"><span class="irv1-save-state" data-ir-client-policy-status></span><button type="button" class="irv1-btn" data-ir-settings-save="client">Save import policy</button></div>`;
-    } catch (error) {
-      card.innerHTML = `<div class="irv1-alert error">${esc(error.message || 'The client policy could not be loaded.')}</div>`;
-    }
-  }
-
   function injectContractQueryEmail(root) {
     if (!root || root.querySelector('#irv1ContractQueryEmail')) return;
     const ctx = global.modalCtx || {};
@@ -2272,54 +2215,6 @@
     card.innerHTML = `<h3 class="irv1-title">Timesheet query email</h3><p class="mini">This override is independent of invoice routing. If several contracts resolve to the same email address, the recipient receives one combined message with a separate, tidy contract section.</p><label style="display:grid;grid-template-columns:20px 1fr;align-items:center"><input type="checkbox" data-ir-contract-query-enabled ${enabled ? 'checked' : ''} ${editable ? '' : 'disabled="disabled" aria-disabled="true"'}/><span>Send this contract’s missing shifts, wrong hours and reference queries to a different address</span></label><label style="margin-top:10px">Contract query email<input type="email" class="input" data-ir-contract-query-address value="${esc(address)}" ${enabled && editable ? '' : 'disabled="disabled" aria-disabled="true"'} placeholder="name@trust.nhs.uk"/></label>`;
     root.appendChild(card);
   }
-
-  async function saveGlobalPolicy(button) {
-    const root = button.closest('#irv1GlobalPolicy');
-    const status = root.querySelector('[data-ir-global-policy-status]');
-    const source = global.modalCtx?.data || {};
-    status.textContent = 'Saving…';
-    const result = await request('/api/settings/defaults', {
-      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
-        reversal_complete_financials_date: root.querySelector('[data-ir-global-policy="reversal_complete_financials_date"]').value,
-        reversal_replacement_financials_date: root.querySelector('[data-ir-global-policy="reversal_replacement_financials_date"]').value,
-        expected_updated_at: source.updated_at,
-        request_key: `global-import-policy:${makeUuid()}`
-      })
-    });
-    Object.assign(source, result.stored || {}, { updated_at: result.updated_at });
-    status.textContent = 'Saved'; status.classList.add('is-ok');
-  }
-
-  async function saveClientPolicy(button) {
-    const root = button.closest('#irv1ClientPolicy');
-    const status = root.querySelector('[data-ir-client-policy-status]');
-    const policy = global.modalCtx?.__importFinancialPolicy || {};
-    const clientId = global.modalCtx?.data?.id;
-    status.textContent = 'Saving…';
-    const result = await request(`/api/clients/${encodeURIComponent(clientId)}`, {
-      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
-        reversal_complete_financials_date: root.querySelector('[data-ir-client-policy="reversal_complete_financials_date"]').value || null,
-        reversal_replacement_financials_date: root.querySelector('[data-ir-client-policy="reversal_replacement_financials_date"]').value || null,
-        expected_client_rev: policy.client_rev,
-        expected_settings_updated_at: policy.client_settings_updated_at,
-        request_key: `client-import-policy:${makeUuid()}`
-      })
-    });
-    policy.client_rev = result.client_rev;
-    policy.client_settings_updated_at = result.settings_updated_at;
-    status.textContent = 'Saved'; status.classList.add('is-ok');
-  }
-
-  document.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-ir-settings-save]');
-    if (!button) return;
-    event.preventDefault();
-    const task = button.getAttribute('data-ir-settings-save') === 'global' ? saveGlobalPolicy(button) : saveClientPolicy(button);
-    task.catch((error) => {
-      const status = button.parentElement?.querySelector('.irv1-save-state');
-      if (status) { status.textContent = error.message || 'Not saved'; status.classList.add('is-error'); }
-    });
-  }, true);
 
   document.addEventListener('change', (event) => {
     if (event.target.matches('[data-ir-contract-query-enabled],[data-ir-contract-query-address]')) {
@@ -2353,10 +2248,6 @@
   }, true);
 
   const observer = new MutationObserver(() => {
-    const settingsRoot = document.getElementById('settingsForm');
-    if (settingsRoot) void injectGlobalPolicy(settingsRoot);
-    const clientRoot = document.getElementById('clientSettingsForm');
-    if (clientRoot) void loadClientPolicy(clientRoot);
     const contractRoot = document.getElementById('contractSettingsForm');
     if (contractRoot) injectContractQueryEmail(contractRoot);
   });

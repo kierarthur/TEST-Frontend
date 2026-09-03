@@ -16,6 +16,12 @@ test('the isolated import-review asset is loaded after the legacy application as
   assert.match(html, /css\/import-review-v1\.css/);
 });
 
+test('settings modals expose only user-owned Bank Holiday controls', () => {
+  assert.match(main, /Additional Bank Holiday dates \(JSON\)/);
+  assert.doesNotMatch(main, /Bank Holidays source|BH feed URL|name=['"]bh_source|name=['"]bh_feed_url/);
+  assert.doesNotMatch(source, /Import-authoritative correction dates|irv1GlobalPolicy|irv1ClientPolicy|data-ir-settings-save/);
+});
+
 test('the frontend fails closed on the full approved DB and Worker contract', () => {
   for (const marker of [
     'IMPORT_REVIEW_DB_V1', 'IMPORT_REVIEW_APPLY_V1', 'IMPORT_APPLY_OPERATION_V2',
@@ -347,9 +353,9 @@ test('saved selections refresh server editability before repainting the review',
   assert.match(source, /if \(freshHeader\?\.state\) \{\s*review\.header = freshHeader;/);
 });
 
-test('global, eligible-client and independent contract query settings are wired', () => {
-  assert.match(source, /data-ir-global-policy/);
-  assert.match(source, /data-ir-client-policy/);
+test('hidden financial correction policy is not client-owned while contract query settings remain wired', () => {
+  assert.doesNotMatch(source, /data-ir-global-policy/);
+  assert.doesNotMatch(source, /data-ir-client-policy/);
   assert.match(source, /data-ir-contract-query-enabled/);
   assert.match(main, /send_ts_queries_to_different_email/);
   assert.match(main, /ts_queries_alt_email_address/);

@@ -351490,12 +351490,10 @@ function renderSettingsTab(key, s = {}) {
         ${input('sun_start','Sunday starts',    s.sun_start || '00:00')}
         ${input('sun_end','Sunday ends',        s.sun_end   || '00:00')}
 
-        ${select('bh_source','Bank Holidays source', s.bh_source || 'MANUAL', ['MANUAL','FEED'])}
         <div class="row" style="grid-column:1/-1">
-          <label>Bank Holidays list (JSON dates)</label>
+          <label>Additional Bank Holiday dates (JSON)</label>
           <textarea name="bh_list">${JSON.stringify(s.bh_list || [], null, 2)}</textarea>
         </div>
-        ${input('bh_feed_url','BH feed URL', s.bh_feed_url || '')}
 
         ${financeCard}
       </div>
