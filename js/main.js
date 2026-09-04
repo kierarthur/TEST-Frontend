@@ -346758,10 +346758,14 @@ async function renderClientSettingsUI(settingsObj){
     </label>
   `;
 
-  const candidateExpenseDeliveryBlock = (st) => {
+  const candidateExpenseWorkflowIsImportAuthoritative = (st) => {
     const mode = String(st.weekly_mode || 'NONE').toUpperCase();
     const behaviour = String(st.hr_weekly_behaviour || 'VERIFY').toUpperCase();
-    const importAuthoritative = mode === 'NHSP' || (mode === 'HEALTHROSTER' && behaviour === 'CREATE');
+    return mode === 'NHSP' || (mode === 'HEALTHROSTER' && behaviour === 'CREATE');
+  };
+
+  const candidateExpenseDeliveryBlock = (st) => {
+    const importAuthoritative = candidateExpenseWorkflowIsImportAuthoritative(st);
     return `
       <div style="display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border, #d8dee9);border-radius:10px;">
         ${checkChoiceWithDesc(
@@ -347061,6 +347065,7 @@ async function renderClientSettingsUI(settingsObj){
   const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
 
   let lastValid = { ...s };
+  let candidateExpenseSeparationDraft = keepCandidateExpenseSeparationSeed;
 
   if (root.__wired) {
     root.removeEventListener('input',  root.__syncSoft, true);
@@ -347205,6 +347210,11 @@ async function renderClientSettingsUI(settingsObj){
         ? next.candidate_expenses_require_separate_timesheet
         : !!prev.candidate_expenses_require_separate_timesheet;
     const keepCandidateExpenseEmail = String(next.candidate_expense_invoice_email || '').trim();
+    const candidateExpenseWasImportAuthoritative = candidateExpenseWorkflowIsImportAuthoritative(prev);
+    const candidateExpenseWillBeImportAuthoritative = candidateExpenseWorkflowIsImportAuthoritative(next);
+    if (!candidateExpenseWasImportAuthoritative) {
+      candidateExpenseSeparationDraft = keepCandidateExpenseSeparation;
+    }
 
     const keepInvConsol = up(next.invoice_consolidation_mode || prev.invoice_consolidation_mode || 'NONE');
     const keepRefToIssue =
@@ -347219,11 +347229,9 @@ async function renderClientSettingsUI(settingsObj){
     next.auto_invoice_default = keepAutoInv;
     next.send_manual_invoices_to_different_email = keepManualFlag;
     next.manual_invoices_alt_email_address = keepManualFlag ? keepManualEmail : '';
-    next.candidate_expenses_require_separate_timesheet =
-      next.weekly_mode === 'NHSP' ||
-      (next.weekly_mode === 'HEALTHROSTER' && next.hr_weekly_behaviour === 'CREATE')
-        ? true
-        : keepCandidateExpenseSeparation;
+    next.candidate_expenses_require_separate_timesheet = candidateExpenseWillBeImportAuthoritative
+      ? true
+      : candidateExpenseSeparationDraft;
     next.candidate_expense_invoice_email = keepCandidateExpenseEmail;
 
     next.invoice_consolidation_mode = keepInvConsol;
