@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const main = fs.readFileSync(path.join(__dirname, '..', '..', 'js', 'main.js'), 'utf8');
 
@@ -21,6 +22,18 @@ test('Client settings expose and preserve the independent Candidate expense poli
   assert.match(source, /const candidateExpenseDeliveryBlock = \(st\) =>/);
   assert.match(source, /Import-authoritative Timesheets always use a separate expense Timesheet/);
   assert.match(source, /is not suppressed by self-bill hours/);
+  assert.match(source, /importAuthoritative \|\| !!st\.candidate_expenses_require_separate_timesheet/);
+  assert.match(source, /importAuthoritative\s*\n\s*\)\}/);
+});
+
+test('Client settings force separate Candidate expenses only for import-authoritative workflows', () => {
+  const source = section('function canonicalizeClientSettings(input)', 'async function openSettings');
+  const canonicalizeClientSettings = vm.runInNewContext(`${source}; canonicalizeClientSettings`);
+
+  assert.equal(canonicalizeClientSettings({ weekly_mode: 'NHSP', candidate_expenses_require_separate_timesheet: false }).candidate_expenses_require_separate_timesheet, true);
+  assert.equal(canonicalizeClientSettings({ weekly_mode: 'HEALTHROSTER', hr_weekly_behaviour: 'CREATE', candidate_expenses_require_separate_timesheet: false }).candidate_expenses_require_separate_timesheet, true);
+  assert.equal(canonicalizeClientSettings({ weekly_mode: 'HEALTHROSTER', hr_weekly_behaviour: 'VERIFY', candidate_expenses_require_separate_timesheet: false }).candidate_expenses_require_separate_timesheet, false);
+  assert.equal(canonicalizeClientSettings({ weekly_mode: 'NONE', candidate_expenses_require_separate_timesheet: false }).candidate_expenses_require_separate_timesheet, false);
 });
 
 test('Contract settings make the Contract override authoritative over the Client default', () => {

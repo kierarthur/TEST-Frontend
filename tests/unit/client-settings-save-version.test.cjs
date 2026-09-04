@@ -60,3 +60,14 @@ test('policy version is checked before other writes; actual save errors use bran
   assert.doesNotMatch(source,/alert\(`Failed to save (?:the Client printed-timesheet setting|Client settings)/);
   assert.doesNotMatch(source,/const clientId\s*=\s*idForUpdate \|\|/);
 });
+test('Client settings save presents safe backend validation and hides infrastructure detail',()=>{
+  const readable=vm.runInNewContext(`${extract('clientSettingsSaveErrorMessage')}\nclientSettingsSaveErrorMessage`);
+  assert.equal(
+    readable(new Error(JSON.stringify({error:'Import-authoritative workflows require a separate Candidate expense Timesheet.'}))),
+    'Import-authoritative workflows require a separate Candidate expense Timesheet.'
+  );
+  assert.equal(
+    readable(new Error(JSON.stringify({error:'Client settings update failed: internal database detail'}))),
+    'The Client settings could not be saved. Your changes are still here. Please try again.'
+  );
+});

@@ -506,6 +506,9 @@ test('new-client defaults, workflow relevance and explicit consolidation choice'
   await expect(field(page, 'default_submission_mode')).toBeHidden();
   await expect(field(page, 'candidate_paper_submission_enabled')).toBeHidden();
   await tab(page, 'Invoicing').click();
+  await expect(field(page, 'candidate_expenses_require_separate_timesheet')).toBeChecked();
+  await expect(field(page, 'candidate_expenses_require_separate_timesheet')).toBeDisabled();
+  await field(page, 'candidate_expense_invoice_email').fill('expenses@example.test');
   const all = page.getByRole('radio', { name: 'All weeks (for client)', exact: true });
   await expect(all).toBeChecked();
   await expect(all).toBeDisabled();
@@ -519,9 +522,29 @@ test('new-client defaults, workflow relevance and explicit consolidation choice'
   const settingsWrite = data.writes.find((w: any) => w.body.client_settings)?.body.client_settings;
   expect(settingsWrite.is_nhsp).toBe(true);
   expect(settingsWrite.requires_hr).toBe(false);
+  expect(settingsWrite.candidate_expenses_require_separate_timesheet).toBe(true);
+  expect(settingsWrite.candidate_expense_invoice_email).toBe('expenses@example.test');
   expect(settingsWrite).not.toHaveProperty('weekly_mode');
   expect(data.settings.invoice_consolidation_mode).toBe('BY_WEEK');
   expect(data.settings.daily_calc_of_invoices).toBe(true);
+});
+
+test('existing Dedicated NHSP Client repairs a legacy false expense-separation flag before save', async ({ page }) => {
+  await page.goto('/?legacy-nhsp');
+  await page.getByRole('button', { name: 'Existing client', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await tab(page, 'Client settings').click();
+  await expect(page.getByRole('radio', { name: 'Dedicated NHSP Weekly', exact: true })).toBeChecked();
+  await tab(page, 'Invoicing').click();
+  await expect(field(page, 'candidate_expenses_require_separate_timesheet')).toBeChecked();
+  await expect(field(page, 'candidate_expenses_require_separate_timesheet')).toBeDisabled();
+  await field(page, 'candidate_expense_invoice_email').fill('updated-expenses@example.invalid');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toHaveText('View Client');
+  const data = await result(page);
+  const settingsWrite = data.writes.find((w: any) => w.body.client_settings)?.body.client_settings;
+  expect(settingsWrite.candidate_expenses_require_separate_timesheet).toBe(true);
+  expect(settingsWrite.candidate_expense_invoice_email).toBe('updated-expenses@example.invalid');
 });
 
 test('new Client saves its Printed QR choice with initial settings and retains it after reopening', async ({ page }) => {

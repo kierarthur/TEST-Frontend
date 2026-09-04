@@ -281813,7 +281813,14 @@ window.modalCtx = {
     window.modalCtx.clientSettingsState.auto_invoice_default = keepAutoInv;
     window.modalCtx.clientSettingsState.send_manual_invoices_to_different_email = keepManualFlag;
     window.modalCtx.clientSettingsState.manual_invoices_alt_email_address = keepManualFlag ? keepManualEmail : '';
-    window.modalCtx.clientSettingsState.candidate_expenses_require_separate_timesheet = keepCandidateExpenseSeparation;
+    window.modalCtx.clientSettingsState.candidate_expenses_require_separate_timesheet =
+      window.modalCtx.clientSettingsState.weekly_mode === 'NHSP' ||
+      (
+        window.modalCtx.clientSettingsState.weekly_mode === 'HEALTHROSTER' &&
+        window.modalCtx.clientSettingsState.hr_weekly_behaviour === 'CREATE'
+      )
+        ? true
+        : keepCandidateExpenseSeparation;
     window.modalCtx.clientSettingsState.candidate_expense_invoice_email = keepCandidateExpenseEmail;
 
     // ✅ restore new fields after canonicalize
@@ -282076,7 +282083,11 @@ window.modalCtx = {
         csMerged.auto_invoice_default = keepAutoInv;
         csMerged.send_manual_invoices_to_different_email = keepManualFlag;
         csMerged.manual_invoices_alt_email_address = keepManualFlag ? keepManualEmail : '';
-        csMerged.candidate_expenses_require_separate_timesheet = keepCandidateExpenseSeparation;
+        csMerged.candidate_expenses_require_separate_timesheet =
+          csMerged.weekly_mode === 'NHSP' ||
+          (csMerged.weekly_mode === 'HEALTHROSTER' && csMerged.hr_weekly_behaviour === 'CREATE')
+            ? true
+            : keepCandidateExpenseSeparation;
         csMerged.candidate_expense_invoice_email = keepCandidateExpenseEmail;
 
         if (keepInvConsol != null && String(keepInvConsol).trim() !== '') {
@@ -282088,7 +282099,7 @@ window.modalCtx = {
         if (csMerged.send_manual_invoices_to_different_email) {
           const em = String(csMerged.manual_invoices_alt_email_address || '').trim();
           if (!em) {
-            alert('Manual invoices alternate email address is required when "Send manual invoices to different email" is enabled.');
+            await openUiConfirmModal({ title: 'Email required', message: 'Enter the alternate invoice email address.', confirm_label: 'OK', hide_cancel: true });
             return { ok:false };
           }
           csMerged.manual_invoices_alt_email_address = em;
@@ -282096,7 +282107,7 @@ window.modalCtx = {
           csMerged.manual_invoices_alt_email_address = '';
         }
         if (csMerged.candidate_expenses_require_separate_timesheet && !csMerged.candidate_expense_invoice_email) {
-          alert('Enter the Expense Invoice Email before requiring separate Candidate expense Timesheets.');
+          await openUiConfirmModal({ title: 'Email required', message: 'Enter the expense invoice email address.', confirm_label: 'OK', hide_cancel: true });
           return { ok:false };
         }
 
@@ -282217,7 +282228,7 @@ window.modalCtx = {
           rememberClientSettingsWrite(window.modalCtx, upd.client_settings);
         }
       } catch (err) {
-        await openUiConfirmModal({ title: 'Client settings not saved', message: 'The Client settings could not be saved. Your changes are still here. Please try again.', confirm_label: 'OK', hide_cancel: true });
+        await openUiConfirmModal({ title: 'Client settings not saved', message: clientSettingsSaveErrorMessage(err), confirm_label: 'OK', hide_cancel: true });
         return { ok:false };
       }
 
@@ -301099,6 +301110,7 @@ function canonicalizeClientSettings(input) {
 
     cs.weekly_mode = 'NHSP';
     cs.hr_weekly_behaviour = ''; // irrelevant in NHSP
+    cs.candidate_expenses_require_separate_timesheet = true;
 
     // ✅ keep (client-level)
     cs.auto_invoice_default = autoInvDefault;
@@ -301162,6 +301174,7 @@ function canonicalizeClientSettings(input) {
 
     cs.weekly_mode = 'HEALTHROSTER';
     cs.hr_weekly_behaviour = 'CREATE';
+    cs.candidate_expenses_require_separate_timesheet = true;
 
     // ✅ keep (client-level)
     cs.auto_invoice_default = autoInvDefault;
@@ -346622,7 +346635,11 @@ async function renderClientSettingsUI(settingsObj){
   s.auto_invoice_default = keepAutoInvSeed;
   s.send_manual_invoices_to_different_email = keepManualFlagSeed;
   s.manual_invoices_alt_email_address = keepManualFlagSeed ? keepManualEmailSeed : '';
-  s.candidate_expenses_require_separate_timesheet = keepCandidateExpenseSeparationSeed;
+  s.candidate_expenses_require_separate_timesheet =
+    s.weekly_mode === 'NHSP' ||
+    (s.weekly_mode === 'HEALTHROSTER' && s.hr_weekly_behaviour === 'CREATE')
+      ? true
+      : keepCandidateExpenseSeparationSeed;
   s.candidate_expense_invoice_email = keepCandidateExpenseEmailSeed;
 
   s.invoice_consolidation_mode = keepInvConsolSeed;
@@ -346723,7 +346740,7 @@ async function renderClientSettingsUI(settingsObj){
     </label>
   `;
 
-  const checkChoiceWithDesc = (name, title, desc, checked) => `
+  const checkChoiceWithDesc = (name, title, desc, checked, disabled = false) => `
     <label style="
       display:grid;
       grid-template-columns: 18px 1fr;
@@ -346733,7 +346750,7 @@ async function renderClientSettingsUI(settingsObj){
       cursor:pointer;
       margin:0;
     ">
-      <input type="checkbox" name="${name}" ${checked ? 'checked' : ''} style="margin-top:2px;" />
+      <input type="checkbox" name="${name}" ${checked ? 'checked' : ''} ${disabled ? 'disabled aria-disabled="true"' : ''} style="margin-top:2px;" />
       <div style="min-width:0;">
         <div style="line-height:1.2;white-space:normal;word-break:normal;overflow-wrap:break-word;min-width:0;">${title}</div>
         ${desc ? `<div class="mini" style="opacity:0.9;line-height:1.25;white-space:normal;overflow-wrap:break-word;">${desc}</div>` : ``}
@@ -346741,23 +346758,29 @@ async function renderClientSettingsUI(settingsObj){
     </label>
   `;
 
-  const candidateExpenseDeliveryBlock = (st) => `
-    <div style="display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border, #d8dee9);border-radius:10px;">
-      ${checkChoiceWithDesc(
-        'candidate_expenses_require_separate_timesheet',
-        'Keep Candidate expenses on a separate Timesheet',
-        'Import-authoritative Timesheets always use a separate expense Timesheet. For other Timesheets this is the Client default and can be overridden on the Contract.',
-        !!st.candidate_expenses_require_separate_timesheet
-      )}
-      <div style="display:flex;flex-direction:column;gap:6px;margin-left:26px;">
-        <span class="mini" style="opacity:0.9">Expense Invoice Email</span>
-        <input class="input" type="email" name="candidate_expense_invoice_email" value="${escapeHtml(String(st.candidate_expense_invoice_email || ''))}" placeholder="expenses@client.nhs.uk" />
-        <div class="mini" style="opacity:0.85;line-height:1.25;white-space:normal;overflow-wrap:break-word;">
-          Receives separate expense invoices. This address is also used for import-authoritative expense claims and is not suppressed by self-bill hours.
+  const candidateExpenseDeliveryBlock = (st) => {
+    const mode = String(st.weekly_mode || 'NONE').toUpperCase();
+    const behaviour = String(st.hr_weekly_behaviour || 'VERIFY').toUpperCase();
+    const importAuthoritative = mode === 'NHSP' || (mode === 'HEALTHROSTER' && behaviour === 'CREATE');
+    return `
+      <div style="display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border, #d8dee9);border-radius:10px;">
+        ${checkChoiceWithDesc(
+          'candidate_expenses_require_separate_timesheet',
+          'Keep Candidate expenses on a separate Timesheet',
+          'Import-authoritative Timesheets always use a separate expense Timesheet. For other Timesheets this is the Client default and can be overridden on the Contract.',
+          importAuthoritative || !!st.candidate_expenses_require_separate_timesheet,
+          importAuthoritative
+        )}
+        <div style="display:flex;flex-direction:column;gap:6px;margin-left:26px;">
+          <span class="mini" style="opacity:0.9">Expense Invoice Email</span>
+          <input class="input" type="email" name="candidate_expense_invoice_email" value="${escapeHtml(String(st.candidate_expense_invoice_email || ''))}" placeholder="expenses@client.nhs.uk" />
+          <div class="mini" style="opacity:0.85;line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+            Receives separate expense invoices. This address is also used for import-authoritative expense claims and is not suppressed by self-bill hours.
+          </div>
         </div>
       </div>
-    </div>
-  `;
+    `;
+  };
 
   const invoicingModePanelHTML = (st) => {
     const m = up(st.invoice_consolidation_mode || 'NONE');
@@ -347196,7 +347219,11 @@ async function renderClientSettingsUI(settingsObj){
     next.auto_invoice_default = keepAutoInv;
     next.send_manual_invoices_to_different_email = keepManualFlag;
     next.manual_invoices_alt_email_address = keepManualFlag ? keepManualEmail : '';
-    next.candidate_expenses_require_separate_timesheet = keepCandidateExpenseSeparation;
+    next.candidate_expenses_require_separate_timesheet =
+      next.weekly_mode === 'NHSP' ||
+      (next.weekly_mode === 'HEALTHROSTER' && next.hr_weekly_behaviour === 'CREATE')
+        ? true
+        : keepCandidateExpenseSeparation;
     next.candidate_expense_invoice_email = keepCandidateExpenseEmail;
 
     next.invoice_consolidation_mode = keepInvConsol;
@@ -347303,6 +347330,21 @@ function rememberClientSettingsWrite(ctx, settings){
   const saved = settings && typeof settings === 'object' ? settings : {};
   ctx.clientSettingsBaseline = { ...(ctx.clientSettingsBaseline || {}), ...saved, updated_at: saved.updated_at || null };
   ctx.clientSettingsState = { ...(ctx.clientSettingsState || {}), ...saved, updated_at: saved.updated_at || null };
+}
+
+function clientSettingsSaveErrorMessage(error){
+  const fallback = 'The Client settings could not be saved. Your changes are still here. Please try again.';
+  const raw = String(error?.message || error || '').trim();
+  if (!raw) return fallback;
+  let message = raw;
+  try {
+    const parsed = JSON.parse(raw);
+    message = String(parsed?.error || parsed?.message || '').trim();
+  } catch {}
+  if (!message || message.length > 240 || /^(?:Client settings (?:update|insert)|Update) failed:/i.test(message) || /[<{]["']?(?:code|details|message)/i.test(message)) {
+    return fallback;
+  }
+  return message;
 }
 
 async function upsertClientWithSettings(payload, id){
