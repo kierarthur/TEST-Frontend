@@ -121222,7 +121222,10 @@ async function primeSummaryMembership(section, fingerprint, options = {}) {
       );
 
       cache[cacheKey] = {
-        dataset_key: normalizeFingerprint(json?.dataset_key || cacheKey) || cacheKey,
+        // This response belongs to the exact filters submitted under cacheKey.
+        // The backend may normalise equivalent filter defaults differently, so
+        // its display fingerprint must not make a valid browser cache entry stale.
+        dataset_key: cacheKey,
         row_ids: [],
         ids: [],
         total_count: null,
@@ -121260,7 +121263,7 @@ async function primeSummaryMembership(section, fingerprint, options = {}) {
         : normalizedResponseIds.rowIds.length;
 
     const totalCount = toFiniteNonNegative(totalCountRaw, normalizedResponseIds.rowIds.length);
-    const nextDatasetKey = normalizeFingerprint(json?.dataset_key || cacheKey) || cacheKey;
+    const nextDatasetKey = cacheKey;
     const responseTs = Date.now();
 
     cache[cacheKey] = {

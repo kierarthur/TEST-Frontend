@@ -61,6 +61,8 @@ test('continuous sheets retain keyboard, sort and heartbeat reconciliation contr
   );
   assert.match(source, /const membershipTotalRaw = membershipTotalValue == null[\s\S]*\? Number\.NaN/);
   assert.match(source, /resolverSelectedCount !== 0 \|\| resolverSelectedCountSource === 'authoritative'/);
+  assert.match(source, /The backend may normalise equivalent filter defaults differently/);
+  assert.match(source, /const nextDatasetKey = cacheKey/);
 });
 
 test('related summary views fetch once and expose bounded virtual pages', () => {
