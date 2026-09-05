@@ -319371,6 +319371,17 @@ const getSelectionUiState = () => {
         !activeElInsideSummary
       );
 
+    const shouldRestoreFocusedGrid = !!(
+      !requestedPendingRowId &&
+      typeAheadState.has_focus === true &&
+      !activeElInsideModal &&
+      (
+        !activeEl ||
+        activeEl === document.body ||
+        !activeElIsConnected
+      )
+    );
+
     if (typeof attachSummaryTypeAheadNavigation === 'function') {
       attachSummaryTypeAheadNavigation(currentSection, bodyWrap, effectiveRows, {
         datasetKey: fp,
@@ -319427,7 +319438,7 @@ const getSelectionUiState = () => {
         .catch((landingErr) => {
           console.error('Failed to finalize summary type-ahead landing', landingErr);
         });
-    } else if (shouldAutoFocusStartupGrid) {
+    } else if (shouldRestoreFocusedGrid || shouldAutoFocusStartupGrid) {
       Promise.resolve()
         .then(() => {
           if (!getLiveSummaryRenderCommit()) return;

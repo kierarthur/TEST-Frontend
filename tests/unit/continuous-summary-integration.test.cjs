@@ -63,6 +63,8 @@ test('continuous sheets retain keyboard, sort and heartbeat reconciliation contr
   assert.match(source, /resolverSelectedCount !== 0 \|\| resolverSelectedCountSource === 'authoritative'/);
   assert.match(source, /The backend may normalise equivalent filter defaults differently/);
   assert.match(source, /const nextDatasetKey = cacheKey/);
+  assert.match(source, /const shouldRestoreFocusedGrid =/);
+  assert.match(source, /shouldRestoreFocusedGrid \|\| shouldAutoFocusStartupGrid/);
 });
 
 test('related summary views fetch once and expose bounded virtual pages', () => {
