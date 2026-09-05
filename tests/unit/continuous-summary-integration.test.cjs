@@ -37,6 +37,14 @@ test('Outbox Select All uses query-wide membership and bounded delete batches', 
 
 test('continuous sheets retain keyboard, sort and heartbeat reconciliation contracts', () => {
   assert.match(source, /\['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'\]/);
+  assert.match(source, /hostEl\.__summaryTypeAheadController = state\.controller/);
+  assert.match(source, /liveSummaryHost\?\.isConnected[\s\S]*liveSummaryHost\.__summaryTypeAheadController/);
+  assert.equal((source.match(/keyboardFocusLeaseActive = Number\((?:liveState|state)\.focus_restore_until \|\| 0\) > Date\.now\(\)/g) || []).length, 2);
+  assert.match(source, /outgoingSummaryHost\.dataset\.summaryReplacing = 'true'/);
+  assert.match(source, /liveState\.focus_restore_until = Date\.now\(\) \+ 5000/);
+  assert.match(source, /typeAheadState\.has_focus === true \|\| keyboardFocusLeaseActive/);
+  assert.match(source, /resetSummaryTypeAheadState\(sec, 'grid-replaced',[\s\S]*preserveFocus: true/);
+  assert.match(source, /resetSummaryTypeAheadUiState\('grid-replaced',[\s\S]*preserveFocus: true/);
   assert.match(source, /const renderedActiveId = String\(/);
   assert.match(source, /landedState\.active_row_id = String\(result\.rowId \|\| ''\)\.trim\(\)/);
   const activeUiSource = source.slice(

@@ -240,3 +240,32 @@ test('normal-phone summary cards expose every field without horizontal clipping'
     }
   });
 });
+
+test('keyboard landing follows the live grid when a background refresh replaces its host', async ({ browser }) => {
+  test.setTimeout(120_000);
+  await withDevice(browser, { width: 820, height: 1180 }, async (page) => {
+    await installLocalAssets(page);
+    await openApplication(page);
+
+    let body = await openSection(page, 'contracts');
+    const rows = body.locator('tbody tr:not(.ctms-continuous-spacer)');
+    expect(await rows.count()).toBeGreaterThan(1);
+    const firstId = String(await rows.first().getAttribute('data-id') || '');
+    expect(firstId).not.toBe('');
+    await rows.first().click({ position: { x: 60, y: 12 } });
+    await body.focus();
+
+    await page.evaluate(() => {
+      const controller = (window as any).CloudTMSSummaryContinuousGrid?.getController?.('contracts');
+      (window as any).__SUMMARY_TOUCH_REFRESH = controller?.refreshVisible?.() || Promise.resolve();
+    });
+    await page.keyboard.press('ArrowDown');
+    await page.evaluate(() => (window as any).__SUMMARY_TOUCH_REFRESH);
+
+    body = page.locator('.summary-body[data-summary-section="contracts"]');
+    await expect.poll(async () => String(
+      await body.locator('tbody tr.active-summary-row').getAttribute('data-id') || ''
+    ), { timeout: 30_000 }).not.toBe(firstId);
+    await expect(body).toBeFocused();
+  });
+});

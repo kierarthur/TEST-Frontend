@@ -164728,6 +164728,7 @@ function resetSummaryTypeAheadState(section, reason, options = {}) {
     sort_key: prev.sort_key == null ? null : String(prev.sort_key),
     sort_dir: String(prev.sort_dir || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
     has_focus: false,
+    focus_restore_until: Number(prev.focus_restore_until || 0),
     rows: Array.isArray(prev.rows) ? prev.rows.slice() : [],
     controller: (prev.controller && typeof prev.controller === 'object') ? prev.controller : null,
     reason: String(reason || 'reset')
@@ -164992,6 +164993,7 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
         sort_key: null,
         sort_dir: 'asc',
         has_focus: false,
+        focus_restore_until: 0,
         rows: [],
         controller: null,
         reason: 'init'
@@ -165096,6 +165098,7 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
     getActiveRowId,
     setActiveRow
   };
+  hostEl.__summaryTypeAheadController = state.controller;
 
   window.__summaryTypeAheadState[sec] = state;
 
@@ -165134,6 +165137,17 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
     const liveState = (window.__summaryTypeAheadState && window.__summaryTypeAheadState[sec] && typeof window.__summaryTypeAheadState[sec] === 'object')
       ? window.__summaryTypeAheadState[sec]
       : state;
+
+    const keyboardFocusLeaseActive = Number(liveState.focus_restore_until || 0) > Date.now();
+    if (!hostEl.isConnected || hostEl.dataset.summaryReplacing === 'true' || keyboardFocusLeaseActive) {
+      resetSummaryTypeAheadState(sec, 'grid-replaced', {
+        preserveActiveRow: true,
+        preserveFocus: true,
+        preserveRows: true,
+        preserveController: true
+      });
+      return;
+    }
 
     const nowTs = Date.now();
     const hasPendingJump =
@@ -165197,6 +165211,7 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
       : state;
 
     liveState.has_focus = true;
+    liveState.focus_restore_until = Date.now() + 5000;
     liveState.rows = normalizeRows(rows);
     liveState.controller = {
       section: sec,
@@ -165239,7 +165254,14 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
         label: isLongJump ? 'Moving to records…' : 'Loading the next records…'
       });
 
-      const latestController = window.__summaryTypeAheadState?.[sec]?.controller;
+      const liveSummaryHost = Array.from(rootDocument.querySelectorAll('.summary-body[data-summary-section]'))
+        .find((candidate) => String(candidate?.dataset?.summarySection || '').trim() === sec) || null;
+      const liveHostController = liveSummaryHost?.isConnected
+        ? liveSummaryHost.__summaryTypeAheadController
+        : null;
+      const latestController = (liveHostController && typeof liveHostController.setActiveRow === 'function')
+        ? liveHostController
+        : window.__summaryTypeAheadState?.[sec]?.controller;
       if (result?.rowId && latestController?.setActiveRow) {
         await latestController.setActiveRow(result.rowId, {
           focusGrid: true,
@@ -316063,6 +316085,7 @@ function renderSummary(rows){
       sort_key: effectiveSort.key,
       sort_dir: effectiveSort.dir,
       has_focus: false,
+      focus_restore_until: 0,
       rows: Array.isArray(currentRows) ? currentRows.slice() : [],
       ...prev
     };
@@ -316335,6 +316358,8 @@ const applyToolsUiState = () => {
   const memKey = `summary:${currentSection}`;
   const prevScrollY = window.__scrollMemory[memKey] ?? 0;
 
+  const outgoingSummaryHost = content.querySelector('.summary-body[data-summary-section]');
+  if (outgoingSummaryHost) outgoingSummaryHost.dataset.summaryReplacing = 'true';
   content.innerHTML = '';
   if (currentSection === 'settings') return renderSettingsPanel(content);
   if (currentSection === 'outbox')   return renderOutboxTable(content, rows);
@@ -317836,6 +317861,14 @@ const getSelectionUiState = () => {
 
   bodyWrap.addEventListener('blur', () => {
     const state = ensureSummaryTypeAheadState();
+    const keyboardFocusLeaseActive = Number(state.focus_restore_until || 0) > Date.now();
+    if (!bodyWrap.isConnected || bodyWrap.dataset.summaryReplacing === 'true' || keyboardFocusLeaseActive) {
+      resetSummaryTypeAheadUiState('grid-replaced', {
+        preserveActiveRow: true,
+        preserveFocus: true
+      });
+      return;
+    }
     const hasPendingJump =
       !!String(state.pending_row_id || '').trim() ||
       (Number.isFinite(Number(state.pending_page)) && Number(state.pending_page) >= 1);
@@ -319407,9 +319440,10 @@ const getSelectionUiState = () => {
         !activeElInsideSummary
       );
 
+    const keyboardFocusLeaseActive = Number(typeAheadState.focus_restore_until || 0) > Date.now();
     const shouldRestoreFocusedGrid = !!(
       !requestedPendingRowId &&
-      typeAheadState.has_focus === true &&
+      (typeAheadState.has_focus === true || keyboardFocusLeaseActive) &&
       !activeElInsideModal &&
       (
         !activeEl ||
