@@ -75,3 +75,36 @@ test('Outbox identities remain channel-qualified', () => {
   );
   assert.equal(grid.rowIdentity({ outbox_id: 'abc' }, 'outbox'), '');
 });
+
+test('a changed total from a background page is rendered back into the live grid', async () => {
+  grid.reset('umbrellas');
+  const renders = [];
+  const host = {
+    dataset: {},
+    isConnected: true,
+    scrollTop: 0,
+    setAttribute() {},
+    addEventListener() {},
+    removeEventListener() {},
+    querySelectorAll() { return []; }
+  };
+  const controller = grid.configure({
+    section: 'umbrellas',
+    datasetKey: 'umbrellas:count-change',
+    pageSize: 50,
+    total: 332,
+    initialPage: 1,
+    fetchPage: async (page, pageSize) => ({
+      rows: Array.from({ length: pageSize }, (_, index) => ({ id: `${page}-${index}` })),
+      total: page === 1 ? 332 : 331
+    }),
+    onRender: (view) => renders.push(view.total)
+  });
+
+  await controller.load(1);
+  grid.mount('umbrellas', host);
+  await settle();
+
+  assert.equal(controller.getView().total, 331);
+  assert.ok(renders.includes(331), 'the mounted grid must reconcile an updated background total');
+});

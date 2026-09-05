@@ -314637,7 +314637,7 @@ function renderOutboxTable(content, rows) {
 
   const continuousLabel = document.createElement('span');
   continuousLabel.className = 'mini';
-  continuousLabel.textContent = 'Continuous view · loads ahead as you scroll';
+  continuousLabel.textContent = 'Continuous view';
   topControls.appendChild(continuousLabel);
 
   const mkField = (labelText, controlEl) => {
@@ -316287,7 +316287,7 @@ const applyToolsUiState = () => {
   if (continuousView) {
     const continuousLabel = document.createElement('span');
     continuousLabel.className = 'mini';
-    continuousLabel.textContent = 'Continuous view · loads ahead as you scroll';
+    continuousLabel.textContent = 'Continuous view';
     topControls.appendChild(continuousLabel);
   } else {
     const sizeLabel = document.createElement('span'); sizeLabel.className = 'mini'; sizeLabel.textContent = 'Page size:';

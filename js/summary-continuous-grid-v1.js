@@ -223,11 +223,13 @@
         if (generation !== state.generation) return;
         const before = getView(state.section);
         const wasVisible = before && before.loadedPages.includes(page);
+        const beforeTotal = before ? before.total : null;
         try {
           await ensurePage(state, page);
           const after = getView(state.section);
           const nowVisible = after && after.loadedPages.includes(page);
-          if (!wasVisible && nowVisible) requestRender(state);
+          const totalChanged = !!after && after.total !== beforeTotal;
+          if ((!wasVisible && nowVisible) || totalChanged) requestRender(state);
         } catch {
           requestRender(state);
           return;
