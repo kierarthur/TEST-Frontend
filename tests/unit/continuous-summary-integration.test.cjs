@@ -15,7 +15,7 @@ test('all approved summaries use continuous loading while Banking Pay remains pa
   assert.match(source, /continuousGrid\.applySpacers\(currentSection, tb, cols\.length \+ 1\)/);
   assert.match(source, /continuousGrid\.applySpacers\('outbox', tb, outboxColumnDefs\.length\)/);
   assert.doesNotMatch(source, /CloudTMSCandidateOfficeBridge\.sortSummaryRowsByCandidateStatus\(uniqueRows/);
-  assert.match(html, /summary-continuous-grid-v1\.js\?v=20260905-r7/);
+  assert.match(html, /summary-continuous-grid-v1\.js\?v=20260905-r8/);
   assert.match(html, /summary-modernisation\.css\?v=20260905-continuous-grid-r4/);
   const loadSectionSource = source.slice(
     source.indexOf('async function loadSection()'),

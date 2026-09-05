@@ -9,6 +9,7 @@ const testBackend = 'https://test-cloudtms-backend.kier-88a.workers.dev';
 const storageState = process.env.E2E_STORAGE_STATE_PATH || 'tests/e2e/.auth/user.json';
 const localIndex = readFileSync(resolve(root, 'index.html'), 'utf8');
 const localMain = readFileSync(resolve(root, 'js/main.js'), 'utf8');
+const localContinuousGrid = readFileSync(resolve(root, 'js/summary-continuous-grid-v1.js'), 'utf8');
 const localSummaryJs = readFileSync(resolve(root, 'js/summary-modernisation.js'), 'utf8');
 const localSummaryCss = readFileSync(resolve(root, 'css/summary-modernisation.css'), 'utf8');
 const localModalCss = readFileSync(resolve(root, 'css/modal-modernisation.css'), 'utf8');
@@ -33,7 +34,7 @@ const outboxRows = [
 
 async function installLocalAssets(page: Page) {
   const marker = `summary-touch:${cssHash.slice(0, 16)}`;
-  const counts = { index: 0, main: 0, summaryJs: 0, summaryCss: 0, modalCss: 0 };
+  const counts = { index: 0, main: 0, continuousGrid: 0, summaryJs: 0, summaryCss: 0, modalCss: 0 };
   await page.route(`${testBackend}/api/outbox**`, async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/outbox') {
@@ -62,6 +63,11 @@ async function installLocalAssets(page: Page) {
     if (url.pathname === '/js/main.js') {
       counts.main += 1;
       await route.fulfill({ body: localMain, contentType: 'application/javascript; charset=utf-8', headers: { 'cache-control': 'no-store' } });
+      return;
+    }
+    if (url.pathname === '/js/summary-continuous-grid-v1.js') {
+      counts.continuousGrid += 1;
+      await route.fulfill({ body: localContinuousGrid, contentType: 'application/javascript; charset=utf-8', headers: { 'cache-control': 'no-store' } });
       return;
     }
     if (url.pathname === '/js/summary-modernisation.js') {
@@ -195,6 +201,7 @@ test('large-phone and portrait-iPad summaries accept finger swipes in both direc
       await page.locator('#content').screenshot({ path: resolve(artifactDir, `summary-touch-${viewport.width}.png`) });
       expect(proof.counts.index).toBeGreaterThan(0);
       expect(proof.counts.main).toBeGreaterThan(0);
+      expect(proof.counts.continuousGrid).toBeGreaterThan(0);
       expect(proof.counts.summaryJs).toBeGreaterThan(0);
       expect(proof.counts.summaryCss).toBeGreaterThan(0);
     });

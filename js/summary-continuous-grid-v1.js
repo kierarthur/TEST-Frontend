@@ -65,6 +65,7 @@
       onTargetPage: config.onTargetPage,
       rowHeight: DEFAULT_ROW_HEIGHT,
       scrollTop: 0,
+      scrollLeft: 0,
       desiredIndex: null,
       mountedHost: null,
       mountedCleanup: null,
@@ -417,6 +418,7 @@
       if (ignoreScroll) return;
       state.scrollGestureActive = true;
       state.scrollTop = Math.max(0, Number(host.scrollTop || 0));
+      state.scrollLeft = Math.max(0, Number(host.scrollLeft || 0));
       scheduleGestureFinish(180);
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
@@ -456,7 +458,9 @@
       : state.desiredIndex * state.rowHeight;
     state.desiredIndex = null;
     try { host.scrollTop = Math.max(0, restoreTop); } catch {}
+    try { host.scrollLeft = Math.max(0, Number(state.scrollLeft || 0)); } catch {}
     state.scrollTop = Math.max(0, Number(host.scrollTop || restoreTop || 0));
+    state.scrollLeft = Math.max(0, Number(host.scrollLeft || state.scrollLeft || 0));
     Promise.resolve().then(() => { ignoreScroll = false; });
 
     state.mountedCleanup = () => {

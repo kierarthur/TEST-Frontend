@@ -83,6 +83,7 @@ test('a changed total from a background page is rendered back into the live grid
     dataset: {},
     isConnected: true,
     scrollTop: 0,
+    scrollLeft: 0,
     setAttribute() {},
     addEventListener() {},
     removeEventListener() {},
@@ -156,6 +157,7 @@ test('an active touch or scrollbar drag defers repaint until pointer release', a
     dataset: {},
     isConnected: true,
     scrollTop: 0,
+    scrollLeft: 0,
     ownerDocument: { defaultView: eventRoot },
     setAttribute() {},
     addEventListener(type, listener) { hostListeners.set(type, listener); },
@@ -183,6 +185,7 @@ test('an active touch or scrollbar drag defers repaint until pointer release', a
 
   hostListeners.get('pointerdown')({ pointerType: 'mouse' });
   host.scrollTop = 2400;
+  host.scrollLeft = 420;
   hostListeners.get('scroll')();
   await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -190,6 +193,15 @@ test('an active touch or scrollbar drag defers repaint until pointer release', a
   rootListeners.get('pointerup')({ pointerType: 'mouse' });
   await settle();
   assert.ok(renders.length >= 1, 'the deferred virtual-window repaint must run after release outside the track');
+
+  const replacementHost = {
+    ...host,
+    dataset: {},
+    scrollTop: 0,
+    scrollLeft: 0
+  };
+  grid.mount('clients', replacementHost);
+  assert.equal(replacementHost.scrollLeft, 420, 'a deferred repaint must preserve the horizontal touch or drag position');
 });
 
 test('adjacent keyboard movement inside one loaded block does not rebuild the grid', async () => {

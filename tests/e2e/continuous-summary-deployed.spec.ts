@@ -397,7 +397,11 @@ test('every deployed summary preserves search, sorting, scrolling, keyboard, sel
   const readiness401s = httpErrors.filter((entry) => allowedReadiness401.test(entry));
   const unexpectedHttpErrors = httpErrors.filter((entry) => !allowedReadiness401.test(entry));
   const resource401Errors = consoleErrors.filter((entry) => /^Failed to load resource: the server responded with a status of 401/.test(entry));
-  const unexpectedConsoleErrors = consoleErrors.filter((entry) => !/^Failed to load resource: the server responded with a status of 401/.test(entry));
+  const allowedSandboxBlock = /^Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed and the 'allow-scripts' permission is not set\.$/;
+  const unexpectedConsoleErrors = consoleErrors.filter((entry) => (
+    !/^Failed to load resource: the server responded with a status of 401/.test(entry)
+    && !allowedSandboxBlock.test(entry)
+  ));
   expect(unexpectedHttpErrors).toEqual([]);
   expect(unexpectedConsoleErrors).toEqual([]);
   expect(resource401Errors.length).toBeLessThanOrEqual(readiness401s.length);
