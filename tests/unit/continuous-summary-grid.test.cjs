@@ -67,4 +67,3 @@ test('Outbox identities remain channel-qualified', () => {
   );
   assert.equal(grid.rowIdentity({ outbox_id: 'abc' }, 'outbox'), '');
 });
-
