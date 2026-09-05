@@ -164234,15 +164234,15 @@ function resolveSelectionForBulkAction(section) {
               ? membership.row_ids.map((v) => String(v == null ? '' : v).trim()).filter(Boolean)
               : []);
 
-        const membershipTotalRaw = Number(
-          membership && (
-            membership.total_count ??
-            membership.total ??
-            membership.count ??
-            membership.row_count ??
-            membershipIds.length
-          )
+        const membershipTotalValue = membership && (
+          membership.total_count ??
+          membership.total ??
+          membership.count ??
+          membership.row_count
         );
+        const membershipTotalRaw = membershipTotalValue == null
+          ? Number.NaN
+          : Number(membershipTotalValue);
 
         const membershipHasFiniteTotal = Number.isFinite(membershipTotalRaw) && membershipTotalRaw >= 0;
         const membershipHasCompleteCache = !!(
@@ -164335,15 +164335,15 @@ function resolveSelectionForBulkAction(section) {
             ? membership.row_ids.map((v) => String(v == null ? '' : v).trim()).filter(Boolean)
             : []);
 
-      const membershipTotalRaw = Number(
-        membership && (
-          membership.total_count ??
-          membership.total ??
-          membership.count ??
-          membership.row_count ??
-          membershipIds.length
-        )
+      const membershipTotalValue = membership && (
+        membership.total_count ??
+        membership.total ??
+        membership.count ??
+        membership.row_count
       );
+      const membershipTotalRaw = membershipTotalValue == null
+        ? Number.NaN
+        : Number(membershipTotalValue);
 
       const membershipDatasetKey = String(
         bestMembership.dataset_key || membership && membership.dataset_key || dsKey
@@ -317342,12 +317342,17 @@ const getSelectionUiState = () => {
       resolverSelectedCountPaintable
     });
 
+    const resolverCountIsPaintable = !!(
+      resolverSelectedCount !== 0 || resolverSelectedCountSource === 'authoritative'
+    );
+
     const resolverAllFilteredPaintable = !!(
       resolverSelection &&
       resolverSelectionMode === 'all_filtered' &&
       resolverSameDataset === true &&
       resolverSelectedCountPaintable === true &&
-      resolverSelectedCount !== null
+      resolverSelectedCount !== null &&
+      resolverCountIsPaintable
     );
 
     if (resolverAllFilteredPaintable) {

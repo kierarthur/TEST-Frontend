@@ -54,6 +54,13 @@ test('continuous sheets retain keyboard, sort and heartbeat reconciliation contr
   assert.match(source, /normaliseText\(row\?\.display_route_label \|\| row\?\.route_display\)/);
   assert.match(source, /header visibly checked while its authoritative count is resolving/);
   assert.match(source, /hdrCbEl\.checked = resolvedSelectionState\.selectionActive;[\s\S]*hdrCbEl\.indeterminate = false/);
+  assert.equal(
+    (source.match(/const membershipTotalRaw = membershipTotalValue == null/g) || []).length,
+    2,
+    'both the membership ranker and state reader must preserve an unknown total as unknown'
+  );
+  assert.match(source, /const membershipTotalRaw = membershipTotalValue == null[\s\S]*\? Number\.NaN/);
+  assert.match(source, /resolverSelectedCount !== 0 \|\| resolverSelectedCountSource === 'authoritative'/);
 });
 
 test('related summary views fetch once and expose bounded virtual pages', () => {
