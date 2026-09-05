@@ -2816,6 +2816,8 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
         ? true
         : (hasFilters || hasSort);
 
+    let relatedListPromise = null;
+
     const fetchRelatedPage = async (section, page, pageSize, rel, options = {}) => {
       const suppressListStateMutation = !!(options && options.suppressListStateMutation);
 
@@ -2838,7 +2840,14 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
       const srcId     = String(rel.source_id || '').trim();
       const relType   = String(rel.relation_type || '').trim();
 
-      const list = await fetchRelated(srcEntity, srcId, relType);
+      if (!relatedListPromise) {
+        relatedListPromise = Promise.resolve(fetchRelated(srcEntity, srcId, relType))
+          .catch((error) => {
+            relatedListPromise = null;
+            throw error;
+          });
+      }
+      const list = await relatedListPromise;
 
       const items = Array.isArray(list?.items) ? list.items : (Array.isArray(list) ? list : []);
       const totalFromApi = (list && typeof list === 'object' && typeof list.total === 'number') ? list.total : null;
@@ -2908,17 +2917,17 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
         return ordered;
       }
 
-      stSec.total = totalFromApi;
+      const total = (typeof totalFromApi === 'number') ? totalFromApi : items.length;
+      stSec.total = total;
 
-      const ps = (pageSize === 'ALL') ? items.length : Number(pageSize || 50);
+      const ps = (pageSize === 'ALL') ? Math.max(1, items.length) : Number(pageSize || 50);
       const pg = Math.max(1, Number(page || 1));
+      const start = (pg - 1) * ps;
+      const pageItems = pageSize === 'ALL' ? items : items.slice(start, start + ps);
 
-      stSec.hasMore =
-        (typeof totalFromApi === 'number')
-          ? ((pg * ps) < totalFromApi)
-          : (Array.isArray(items) && items.length === ps);
+      stSec.hasMore = (start + pageItems.length) < total;
 
-      return items;
+      return pageItems;
     };
 
     const fetchOutboxPage = async (page, pageSize, options = {}) => {
@@ -3220,7 +3229,8 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
       const continuousView = await controller.load(st.page);
       const rows = Array.isArray(continuousView?.rows) ? continuousView.rows : [];
       const page = Number(continuousView?.targetPage || st.page || 1);
-      const total = Number(continuousView?.total);
+      const continuousTotalRaw = continuousView?.total;
+      const total = continuousTotalRaw == null ? null : Number(continuousTotalRaw);
 
       st.page = Math.max(1, page);
       st.pageSize = continuousPageSize;
@@ -164731,6 +164741,191 @@ function resetSummaryTypeAheadState(section, reason, options = {}) {
 }
 
 
+async function runContinuousSummaryJump(controller, index, options = {}) {
+  if (!controller || typeof controller.jumpToIndex !== 'function') return null;
+  const opts = options && typeof options === 'object' ? options : {};
+  const force = opts.force === true;
+  const view = controller.getView?.() || null;
+  const pageSize = Math.max(1, Number(view?.pageSize || 50));
+  const targetPage = Math.floor(Math.max(0, Number(index || 0)) / pageSize) + 1;
+  const cachedPages = Array.isArray(view?.cachedPages) ? view.cachedPages.map(Number) : [];
+  const showOverlay = opts.overlay === true || !cachedPages.includes(targetPage);
+  let loadingToken = null;
+  if (showOverlay && typeof beginGlobalLoading === 'function') {
+    loadingToken = beginGlobalLoading(opts.label || 'Moving to records…');
+  }
+  try {
+    return await controller.jumpToIndex(index, { force });
+  } finally {
+    if (loadingToken && typeof endGlobalLoading === 'function') endGlobalLoading();
+  }
+}
+
+const CONTINUOUS_SUMMARY_DEFAULT_SORTS = Object.freeze({
+  candidates: Object.freeze({ key: 'last_name', dir: 'asc' }),
+  clients: Object.freeze({ key: 'name', dir: 'asc' }),
+  umbrellas: Object.freeze({ key: 'name', dir: 'asc' }),
+  contracts: Object.freeze({ key: 'candidate_display', dir: 'asc' }),
+  timesheets: Object.freeze({ key: 'candidate_name', dir: 'asc' }),
+  invoices: Object.freeze({ key: 'issued_at_utc', dir: 'desc' }),
+  outbox: Object.freeze({ key: 'created_at_utc', dir: 'desc' })
+});
+
+const CONTINUOUS_SUMMARY_TEXT_SORT_KEYS = new Set([
+  'first_name', 'last_name', 'display_name', 'candidate_display', 'candidate_name',
+  'client_name', 'name', 'email', 'primary_invoice_email', 'phone', 'ap_phone',
+  'postcode', 'town_city', 'invoice_address', 'tms_ref', '__tms_ref', 'cli_ref',
+  'job_titles_display', 'primary_job_title', 'role', 'band', 'pay_method',
+  'pay_method_snapshot', 'umbrella_name', 'bank_name', 'sort_code', 'account_number',
+  'display_site', 'ward_hint', 'default_submission_mode', 'submission_mode',
+  'route_display', 'route_type', 'sheet_scope', 'hospital', 'hospital_norm',
+  'tools_stage', 'processing_status', 'processing_status_display', 'candidate_submission',
+  'invoice_no', 'status', 'channel', 'queue_state', 'recipient', 'to_address', 'subject'
+]);
+
+function getContinuousSummaryJumpSort(section, sortValue) {
+  const sec = String(section || '').trim().toLowerCase();
+  const raw = (sortValue && typeof sortValue === 'object') ? sortValue : {};
+  const fallback = CONTINUOUS_SUMMARY_DEFAULT_SORTS[sec] || { key: '', dir: 'asc' };
+  const key = String(raw.key || fallback.key || '').trim();
+  const dir = String(raw.dir || fallback.dir || 'asc').trim().toLowerCase() === 'desc' ? 'desc' : 'asc';
+  return { key, dir };
+}
+
+function mountContinuousSummaryAlphabetRail(section, scrollHost, continuousView, sortValue) {
+  const sec = String(section || '').trim().toLowerCase();
+  const host = scrollHost && scrollHost.nodeType === 1 ? scrollHost : null;
+  const view = (continuousView && typeof continuousView === 'object') ? continuousView : null;
+  const total = view?.total == null ? null : Number(view.total);
+  const sort = getContinuousSummaryJumpSort(sec, sortValue);
+  if (!host || !Number.isFinite(total) || total <= 0 || !CONTINUOUS_SUMMARY_TEXT_SORT_KEYS.has(sort.key)) return null;
+
+  const parent = host.parentNode;
+  if (!parent) return null;
+  const frame = document.createElement('div');
+  frame.className = 'ctms-continuous-frame';
+  parent.insertBefore(frame, host);
+  frame.appendChild(host);
+
+  const rail = document.createElement('nav');
+  rail.className = 'ctms-continuous-alpha-rail';
+  rail.setAttribute('aria-label', `Jump by ${sort.key.replaceAll('_', ' ')}`);
+  rail.dataset.sortDirection = sort.dir;
+
+  const bubble = document.createElement('output');
+  bubble.className = 'ctms-continuous-alpha-bubble';
+  bubble.setAttribute('aria-live', 'polite');
+  frame.appendChild(bubble);
+
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  if (sort.dir === 'desc') letters.reverse();
+  letters.forEach((letter) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ctms-continuous-alpha-letter';
+    button.dataset.letter = letter;
+    button.textContent = letter;
+    button.setAttribute('aria-label', `Jump to ${letter}`);
+    rail.appendChild(button);
+  });
+  frame.appendChild(rail);
+
+  let busy = false;
+  let sliding = false;
+  let pendingLetter = '';
+  let suppressClickUntil = 0;
+
+  const showPendingLetter = (letter) => {
+    pendingLetter = String(letter || '').trim().toUpperCase();
+    rail.querySelectorAll('.ctms-continuous-alpha-letter.is-pending').forEach((button) => button.classList.remove('is-pending'));
+    const targetButton = Array.from(rail.querySelectorAll('.ctms-continuous-alpha-letter'))
+      .find((button) => String(button.dataset.letter || '') === pendingLetter) || null;
+    if (targetButton) targetButton.classList.add('is-pending');
+    bubble.value = pendingLetter;
+    bubble.textContent = pendingLetter;
+    bubble.classList.toggle('is-visible', !!pendingLetter);
+  };
+
+  const letterAtPoint = (clientX, clientY) => {
+    const element = document.elementFromPoint(Number(clientX), Number(clientY));
+    const button = element && typeof element.closest === 'function'
+      ? element.closest('.ctms-continuous-alpha-letter')
+      : null;
+    return button && rail.contains(button) ? String(button.dataset.letter || '') : '';
+  };
+
+  const jumpToLetter = async (letter) => {
+    const cleanLetter = String(letter || '').trim().toUpperCase();
+    if (!cleanLetter || busy) return;
+    busy = true;
+    rail.setAttribute('aria-busy', 'true');
+    const lookupLoading = (typeof beginGlobalLoading === 'function')
+      ? beginGlobalLoading(`Finding ${cleanLetter}…`)
+      : null;
+    try {
+      const target = await resolveSummaryTypeAheadTarget(sec, cleanLetter, sort.key, sort.dir);
+      if (!target || !target.row_id) {
+        if (typeof window.__toast === 'function') window.__toast(`No ${cleanLetter} records in this view.`, 'info');
+        return;
+      }
+      await jumpSummaryToRow(sec, {
+        ...target,
+        prefix: cleanLetter,
+        preserve_buffer: false
+      });
+    } catch (error) {
+      console.error('Continuous summary alphabet jump failed', error);
+      if (typeof window.__toast === 'function') window.__toast('CloudTMS could not jump to those records.', 'error');
+    } finally {
+      if (lookupLoading && typeof endGlobalLoading === 'function') endGlobalLoading();
+      busy = false;
+      rail.removeAttribute('aria-busy');
+      showPendingLetter('');
+    }
+  };
+
+  rail.addEventListener('click', (event) => {
+    if (Date.now() < suppressClickUntil) return;
+    const button = event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('.ctms-continuous-alpha-letter')
+      : null;
+    if (!button || !rail.contains(button)) return;
+    void jumpToLetter(button.dataset.letter);
+  });
+
+  rail.addEventListener('pointerdown', (event) => {
+    if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+    const letter = letterAtPoint(event.clientX, event.clientY);
+    if (!letter) return;
+    event.preventDefault();
+    sliding = true;
+    try { rail.setPointerCapture(event.pointerId); } catch {}
+    showPendingLetter(letter);
+  });
+  rail.addEventListener('pointermove', (event) => {
+    if (!sliding) return;
+    event.preventDefault();
+    const letter = letterAtPoint(event.clientX, event.clientY);
+    if (letter) showPendingLetter(letter);
+  });
+  const finishSlide = (event) => {
+    if (!sliding) return;
+    event.preventDefault();
+    sliding = false;
+    suppressClickUntil = Date.now() + 500;
+    try { rail.releasePointerCapture(event.pointerId); } catch {}
+    const letter = pendingLetter;
+    if (letter) void jumpToLetter(letter);
+  };
+  rail.addEventListener('pointerup', finishSlide);
+  rail.addEventListener('pointercancel', () => {
+    sliding = false;
+    showPendingLetter('');
+  });
+
+  return rail;
+}
+
 function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = {}) {
   const sec = String(section || '').trim();
   if (!sec || !summaryHost) return null;
@@ -164984,19 +165179,27 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
     if (continuousController && navigationKeys.has(ev.key)) {
       ev.preventDefault();
       const activeId = getActiveRowId() || rowIdOf(state.rows[0]);
-      let result = null;
-      if (ev.key === 'Home') result = await continuousController.jumpToIndex(0);
-      else if (ev.key === 'End') {
-        const total = Number(continuousController.getView()?.total || 0);
-        result = await continuousController.jumpToIndex(Math.max(0, total - 1));
-      } else {
-        const pageStep = Number(continuousController.getView()?.pageSize || 50);
-        const delta = ev.key === 'ArrowUp' ? -1
+      const view = continuousController.getView?.() || null;
+      const currentIndex = continuousController.getRowIndex?.(activeId);
+      const fallbackIndex = Math.max(0, Number(view?.startIndex || 0));
+      const baseIndex = currentIndex != null && Number.isFinite(Number(currentIndex))
+        ? Number(currentIndex)
+        : fallbackIndex;
+      const pageStep = Number(view?.pageSize || 50);
+      const total = Math.max(0, Number(view?.total || 0));
+      const isLongJump = ['PageUp', 'PageDown', 'Home', 'End'].includes(ev.key);
+      const targetIndex = ev.key === 'Home' ? 0
+        : ev.key === 'End' ? Math.max(0, total - 1)
+        : baseIndex + (ev.key === 'ArrowUp' ? -1
           : ev.key === 'ArrowDown' ? 1
           : ev.key === 'PageUp' ? -pageStep
-          : pageStep;
-        result = await continuousController.moveFrom(activeId, delta);
-      }
+          : pageStep);
+      let result = null;
+      result = await runContinuousSummaryJump(continuousController, targetIndex, {
+        force: isLongJump,
+        overlay: isLongJump,
+        label: isLongJump ? 'Moving to records…' : 'Loading the next records…'
+      });
 
       const latestController = window.__summaryTypeAheadState?.[sec]?.controller;
       if (result?.rowId && latestController?.setActiveRow) {
@@ -165564,7 +165767,11 @@ const preserveBuffer = tgt.preserve_buffer !== false;
 
   if (continuousController && Number.isFinite(ordinalIndex) && ordinalIndex >= 0) {
     try { currentSection = sec; } catch {}
-    await continuousController.jumpToIndex(ordinalIndex);
+    await runContinuousSummaryJump(continuousController, ordinalIndex, {
+      force: true,
+      overlay: true,
+      label: 'Moving to matching records…'
+    });
     await waitForRenderTick();
     if (!isLatestRequest()) return null;
   }
@@ -314994,17 +315201,12 @@ function renderOutboxTable(content, rows) {
   if (pageSize === 'CONTINUOUS') {
     const start = Number(continuousView?.startIndex || 0) + (normalizedRows.length ? 1 : 0);
     const end = Number(continuousView?.endIndex || 0);
-    const total = Number(continuousView?.total);
+    const continuousTotalRaw = continuousView?.total;
+    const total = continuousTotalRaw == null ? null : Number(continuousTotalRaw);
     info.textContent = Number.isFinite(total)
       ? `Showing ${start}–${end} of ${total} · loading ahead as you scroll`
       : `Showing ${start}–${end} · loading ahead as you scroll`;
     pager.classList.add('ctms-continuous-status');
-    if (continuousView?.loading) {
-      const activity = document.createElement('span');
-      activity.className = 'ctms-continuous-status__activity';
-      activity.textContent = 'LOADING AHEAD';
-      pager.appendChild(activity);
-    }
   } else if (pageSize === 'ALL') {
     info.textContent = `Showing all ${normalizedRows.length} rows.`;
   } else if (totalKnown) {
@@ -315050,6 +315252,9 @@ function renderOutboxTable(content, rows) {
 
   const scrollHost = bodyWrap;
   if (scrollHost) {
+    if (continuousView && typeof mountContinuousSummaryAlphabetRail === 'function') {
+      mountContinuousSummaryAlphabetRail('outbox', scrollHost, continuousView, st.sort);
+    }
     if (continuousView && continuousGrid && typeof continuousGrid.mount === 'function') {
       continuousGrid.mount('outbox', scrollHost);
     } else {
@@ -318949,17 +319154,12 @@ const getSelectionUiState = () => {
   if (continuousView) {
     const start = Number(continuousView.startIndex || 0) + (effectiveRows.length ? 1 : 0);
     const end = Number(continuousView.endIndex || 0);
-    const total = Number(continuousView.total);
+    const continuousTotalRaw = continuousView.total;
+    const total = continuousTotalRaw == null ? null : Number(continuousTotalRaw);
     info.textContent = Number.isFinite(total)
       ? `Showing ${start}–${end} of ${total} · loading ahead as you scroll`
       : `Showing ${start}–${end} · loading ahead as you scroll`;
     pager.classList.add('ctms-continuous-status');
-    if (continuousView.loading) {
-      const activity = document.createElement('span');
-      activity.className = 'ctms-continuous-status__activity';
-      activity.textContent = 'LOADING AHEAD';
-      pager.appendChild(activity);
-    }
   } else if (pageSize === 'ALL') info.textContent = `Showing all ${effectiveRows.length} ${currentSection}.`;
   else if (totalKnown) {
     const ps = Number(pageSize);
@@ -319079,6 +319279,9 @@ const getSelectionUiState = () => {
   // Restore scroll memory on inner summary-body (data rows only)
   try {
     const scrollHost = content.querySelector('.summary-body');
+    if (scrollHost && continuousView && typeof mountContinuousSummaryAlphabetRail === 'function') {
+      mountContinuousSummaryAlphabetRail(currentSection, scrollHost, continuousView, sortState);
+    }
     if (scrollHost && continuousView && continuousGrid && typeof continuousGrid.mount === 'function') {
       continuousGrid.mount(currentSection, scrollHost);
     } else if (scrollHost) {

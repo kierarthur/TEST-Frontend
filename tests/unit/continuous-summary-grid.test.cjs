@@ -52,6 +52,14 @@ test('continuous summary grid renders a bounded window and prefetches three page
   assert.equal(landing.page, 9);
   assert.equal(landing.rowId, 'client-420');
 
+  const pageNineLoadsBeforeRefresh = fetched.filter((page) => page === 9).length;
+  await controller.jumpToIndex(420, { force: true });
+  assert.equal(
+    fetched.filter((page) => page === 9).length,
+    pageNineLoadsBeforeRefresh + 1,
+    'an explicit keyboard jump must refresh its destination block'
+  );
+
   await settle();
   const deepView = controller.getView();
   assert.ok(deepView.rows.length <= 150, 'DOM window must stay within three 50-row pages');
