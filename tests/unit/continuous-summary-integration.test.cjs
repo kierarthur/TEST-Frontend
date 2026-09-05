@@ -16,6 +16,14 @@ test('all approved summaries use continuous loading while Banking Pay remains pa
   assert.match(source, /continuousGrid\.applySpacers\('outbox', tb, outboxColumnDefs\.length\)/);
   assert.doesNotMatch(source, /CloudTMSCandidateOfficeBridge\.sortSummaryRowsByCandidateStatus\(uniqueRows/);
   assert.match(html, /summary-continuous-grid-v1\.js\?v=20260905-r5/);
+  const loadSectionSource = source.slice(
+    source.indexOf('async function loadSection()'),
+    source.indexOf('function renderSummary(')
+  );
+  assert.ok(
+    loadSectionSource.indexOf("sectionKey === 'umbrellas'") < loadSectionSource.indexOf('const datasetKey ='),
+    'the default Umbrellas filter must be applied before the continuous-grid dataset is configured'
+  );
 });
 
 test('Outbox Select All uses query-wide membership and bounded delete batches', () => {

@@ -2511,6 +2511,17 @@ async function loadSection() {
       }
     }
 
+    if (!inRelatedMode && sectionKey === 'umbrellas' && !st._umbrellasFilterInitDone) {
+      const currentFilters = (st.filters && typeof st.filters === 'object')
+        ? { ...st.filters }
+        : {};
+      if (!Object.prototype.hasOwnProperty.call(currentFilters, 'enabled')) {
+        currentFilters.enabled = true;
+      }
+      st.filters = currentFilters;
+      st._umbrellasFilterInitDone = true;
+    }
+
     if (!inRelatedMode && sectionKey === 'invoices') {
       if (!st.filters || typeof st.filters !== 'object') st.filters = {};
       const cur = st.filters.status;
@@ -315643,17 +315654,6 @@ function renderSummary(rows){
 
   const page     = Number(st.page || 1);
   const pageSize = st.pageSize; // 50 | 100 | 200 | 'ALL'
-
-  // ✅ Umbrellas: default filter to enabled=true (show only enabled by default)
-  // Only apply once per section-session so user toggles aren't overwritten.
-  if (currentSection === 'umbrellas') {
-    if (!st._umbrellasFilterInitDone) {
-      const cur = (st.filters && typeof st.filters === 'object') ? { ...(st.filters || {}) } : {};
-      if (!Object.prototype.hasOwnProperty.call(cur, 'enabled')) cur.enabled = true;
-      st.filters = cur;
-      st._umbrellasFilterInitDone = true;
-    }
-  }
 
     // ── selection state (per section) — dataset-scoped shared helpers
   const getActiveSelection = () => ensureSelection(currentSection);
