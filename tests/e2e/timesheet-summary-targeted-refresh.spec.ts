@@ -49,6 +49,7 @@ test('Candidate badge is immediate and heartbeat patches only the agreed Summary
       return { ok: true, text: async () => JSON.stringify(window.__patchResponse) };
     };
     const formatDisplayValue = (_key, value) => value == null ? '' : value;
+    const formatTimesheetSummaryRoute = row => row.display_route_label || row.route_display || formatDisplayValue('route_type', row.route_type);
     const formatSummaryMoneyValue = value => Number(value).toFixed(2);
     const paintTimesheetProcessingStatusCell = (cell, _row, label) => { cell.textContent = label; };
     window.CloudTMSCandidateOfficeBridge = {
