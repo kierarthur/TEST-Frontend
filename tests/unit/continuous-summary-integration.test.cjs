@@ -52,6 +52,8 @@ test('continuous sheets retain keyboard, sort and heartbeat reconciliation contr
   assert.match(source, /outboxHeaderSortKeys/);
   assert.match(source, /rowObj\.display_route_label \|\| rowObj\.route_display/);
   assert.match(source, /normaliseText\(row\?\.display_route_label \|\| row\?\.route_display\)/);
+  assert.match(source, /header visibly checked while its authoritative count is resolving/);
+  assert.match(source, /hdrCbEl\.checked = resolvedSelectionState\.selectionActive;[\s\S]*hdrCbEl\.indeterminate = false/);
 });
 
 test('related summary views fetch once and expose bounded virtual pages', () => {

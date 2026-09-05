@@ -317856,8 +317856,11 @@ const getSelectionUiState = () => {
 
     if (resolvedSelectionState.mode === 'all_filtered' && resolvedSelectionState.sameDataset) {
       if (resolvedSelectionState.selectedCountPaintable !== true) {
-        hdrCbEl.checked = false;
-        hdrCbEl.indeterminate = resolvedSelectionState.selectionActive;
+        // The user has already selected the complete filtered dataset. Keep the
+        // header visibly checked while its authoritative count is resolving;
+        // indeterminate is reserved for a real excluded subset.
+        hdrCbEl.checked = resolvedSelectionState.selectionActive;
+        hdrCbEl.indeterminate = false;
         __mailshotDiagLog('[MAILSHOT][renderSummary][computeHeaderState:applied]', {
           resolvedSelectionState: describeSelectionUiStateForLog(resolvedSelectionState),
           headerChecked: hdrCbEl.checked,

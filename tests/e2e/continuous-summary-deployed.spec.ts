@@ -479,6 +479,110 @@ test('scroll prefetch stays silent while sort, End, Home and query-wide selectio
   expect(await overlayEventCount(page)).toBe(0);
 });
 
+test('Timesheet Route sorting follows the displayed labels across continuous pages', async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  type RouteBatch = { direction: 'asc' | 'desc'; page: number; pageSize: number; total: number; itemCount: number; labels: string[] };
+  const routeBatches = new Map<string, RouteBatch>();
+
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (!url.pathname.endsWith('/api/timesheets/summary')) return;
+    if (url.searchParams.get('order_by') !== 'route_type') return;
+    const direction = url.searchParams.get('order_dir') === 'desc' ? 'desc' : 'asc';
+    const pageNumber = Number(url.searchParams.get('page') || 1);
+    const pageSize = Number(url.searchParams.get('page_size') || 0);
+    void response.json().then((payload) => {
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      routeBatches.set(`${direction}:${pageNumber}`, {
+        direction,
+        page: pageNumber,
+        pageSize,
+        total: Number(payload?.total ?? payload?.count ?? 0),
+        itemCount: items.length,
+        labels: items.map((row: any) => String(
+          row?.display_route_label || row?.route_display || row?.route_type || ''
+        ).trim())
+      });
+    }).catch(() => {});
+  });
+
+  await openApplication(page);
+  let body = await openSection(page, 'timesheets');
+  const routeHeader = body.locator('thead th[data-col-key="route_type"]');
+  await expect(routeHeader).toBeVisible();
+
+  const clickRouteUntil = async (direction: 'asc' | 'desc') => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = await page.evaluate(() => ({
+        key: String((window as any).__listState?.timesheets?.sort?.key || ''),
+        dir: String((window as any).__listState?.timesheets?.sort?.dir || 'asc')
+      }));
+      if (current.key === 'route_type' && current.dir === direction) return;
+      body = page.locator('.summary-body[data-summary-section="timesheets"]');
+      await body.locator('thead th[data-col-key="route_type"]').click({ position: { x: 12, y: 12 } });
+      await expect(page.locator('#globalLoadingOverlay')).toBeHidden({ timeout: 60_000 });
+      await expect.poll(() => page.evaluate(() => ({
+        key: String((window as any).__listState?.timesheets?.sort?.key || ''),
+        dir: String((window as any).__listState?.timesheets?.sort?.dir || 'asc')
+      })), { timeout: 60_000 }).toEqual({ key: 'route_type', dir: direction });
+    }
+    throw new Error(`Could not activate Route ${direction} sorting`);
+  };
+
+  const waitForBatches = async (direction: 'asc' | 'desc') => {
+    await expect.poll(() => routeBatches.has(`${direction}:1`), { timeout: 60_000 }).toBe(true);
+    const first = routeBatches.get(`${direction}:1`)!;
+    if (first.total > 50) {
+      await expect.poll(() => routeBatches.has(`${direction}:2`), { timeout: 60_000 }).toBe(true);
+    }
+    return Array.from(routeBatches.values())
+      .filter((batch) => batch.direction === direction)
+      .sort((left, right) => left.page - right.page);
+  };
+
+  const assertDisplayedOrder = (batches: RouteBatch[], direction: 'asc' | 'desc') => {
+    const collator = new Intl.Collator('en-GB', { sensitivity: 'base', numeric: true });
+    expect(batches.length).toBeGreaterThan(0);
+    expect(batches.every((batch) => batch.pageSize === 50 && batch.itemCount <= 50)).toBe(true);
+    const labels = batches.flatMap((batch) => batch.labels);
+    expect(labels.length).toBeGreaterThan(0);
+    for (let index = 1; index < labels.length; index += 1) {
+      const compared = collator.compare(labels[index - 1], labels[index]);
+      if (direction === 'asc') expect(compared).toBeLessThanOrEqual(0);
+      else expect(compared).toBeGreaterThanOrEqual(0);
+    }
+    const electronicExpenseIndex = labels.indexOf('Electronic Expense');
+    const weeklyNhspIndex = labels.indexOf('Weekly NHSP Adjustment');
+    if (electronicExpenseIndex >= 0 && weeklyNhspIndex >= 0) {
+      if (direction === 'asc') expect(electronicExpenseIndex).toBeLessThan(weeklyNhspIndex);
+      else expect(electronicExpenseIndex).toBeGreaterThan(weeklyNhspIndex);
+    }
+  };
+
+  let startedAt = Date.now();
+  await clickRouteUntil('asc');
+  const ascending = await waitForBatches('asc');
+  const ascendingMs = Date.now() - startedAt;
+  assertDisplayedOrder(ascending, 'asc');
+
+  startedAt = Date.now();
+  await clickRouteUntil('desc');
+  const descending = await waitForBatches('desc');
+  const descendingMs = Date.now() - startedAt;
+  assertDisplayedOrder(descending, 'desc');
+
+  await testInfo.attach('timesheet-route-sort-timing.json', {
+    body: Buffer.from(JSON.stringify({
+      ascending_ms: ascendingMs,
+      descending_ms: descendingMs,
+      total: ascending[0]?.total || 0,
+      pages_verified: Math.max(ascending.length, descending.length),
+      maximum_items_per_response: Math.max(...ascending.concat(descending).map((batch) => batch.itemCount))
+    }, null, 2)),
+    contentType: 'application/json'
+  });
+});
+
 test('desktop scrollbar drag keeps its scroll host when the pointer leaves the track', async ({ page }) => {
   test.setTimeout(120_000);
   await openApplication(page);
