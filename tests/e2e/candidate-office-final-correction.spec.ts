@@ -718,6 +718,59 @@ test('Simple Timesheet route labels and Authorise eligibility follow only canoni
   expect(bounds.bottom).toBeLessThanOrEqual(bounds.height + 1);
 });
 
+test('Manual QR and import-authoritative expense carriers show their real Candidate status without a false processing delay', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  const result = await page.evaluate(() => {
+    const presenter = (window as any).CloudTMSCandidateOfficePresenter;
+    const surface = (window as any).CloudTMSCandidateOfficeSurface;
+    const make = (identity: any, workflow: any, paperPack: any, code: string) => ({
+      ok: true,
+      contract_version: 'OFFICE_CANDIDATE_TIMESHEET_V1',
+      office_contract_version: 'CLOUDTMS_OFFICE_CANDIDATE_API_V1',
+      current_identity: identity,
+      candidate_status: { code, label: `raw ${code}`, tone: 'danger' },
+      workflow,
+      manager_approval: null,
+      retained_manager_approval: null,
+      paper_pack: paperPack,
+      rejections: [], primary_action: null, available_actions: [], diagnostics: [],
+      refresh_hints: {}, observed_at_utc: '2026-09-05T08:00:00Z'
+    });
+    const printed = make(
+      { row_key: 'printed', route_family: 'QR', record_role: 'COMBINED_ALLOWED' },
+      { state: 'AWAITING_PAPER_RETURN', route: 'PAPER', historical: false, is_current_action_workflow: true },
+      { state: 'FAILED_TERMINAL', reason_code: 'CANDIDATE_PAPER_OUTBOX_CONFLICT' },
+      'AWAITING_PAPER_RETURN'
+    );
+    const expense = make(
+      { row_key: 'expense', route_family: 'IMPORT_AUTHORITATIVE', record_role: 'EXPENSE_ONLY' },
+      { state: 'FINALISED', route: 'PHONE', historical: true, is_current_action_workflow: false },
+      { state: 'NOT_APPLICABLE' },
+      'AUTHORISED'
+    );
+    const processingBadge = (buildTimesheetProcessingStatusBadge as any)({
+      processing_status: 'AWAITING_MANUAL_SIGNATURE',
+      processing_status_display: 'Processed',
+      summary_stage: 'PROCESSED',
+      tools_stage: 'PROCESSED'
+    }, 'Processed').outerHTML;
+    return {
+      printed: surface.renderCandidateSummaryCell(presenter.presentCandidateOfficeSummary(printed)),
+      expense: surface.renderCandidateSummaryCell(presenter.presentCandidateOfficeSummary(expense)),
+      processingBadge
+    };
+  });
+
+  expect(result.printed).toContain('QR Pack Needs Attention');
+  expect(result.expense).toContain('Candidate Submission Complete');
+  expect(result.processingBadge).toContain('Processed');
+  expect(result.processingBadge).not.toContain('Processing Delayed');
+});
+
 test('Office expense values are read-only for QR and Electronic routes while eligible expense evidence remains available', async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   await installPatchedAssets(page);

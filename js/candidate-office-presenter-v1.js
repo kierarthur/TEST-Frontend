@@ -105,10 +105,16 @@
     const recordRole = String(projection?.current_identity?.record_role || '').toUpperCase();
     const workflowRoute = String(projection?.workflow?.route || '').toUpperCase();
     const workflowState = String(projection?.workflow?.state || '').toUpperCase();
+    const historicalWorkflow = projection?.workflow?.historical === true
+      && projection?.workflow?.is_current_action_workflow !== true;
     // Imported hours have no Candidate submission lifecycle and remain blank.
     // A separate expense-only carrier or active/retained printed submission
     // can own a real Candidate workflow even when the stored Timesheet route
     // is manual or belongs to an import-authoritative week.
+    // Superseded/cancelled historical attempts belong in audit history, not in
+    // the current Candidate Submission cell. A finalised workflow remains the
+    // durable completion proof for its exact Timesheet or expense carrier.
+    if (historicalWorkflow && workflowState !== 'FINALISED') return false;
     return ['ELECTRONIC', 'QR'].includes(routeFamily)
       || (!!workflowState && (recordRole === 'EXPENSE_ONLY' || workflowRoute === 'PAPER'));
   };

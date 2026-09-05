@@ -21,7 +21,7 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   assert.doesNotMatch(html, /invoice-batch-modal\.(?:js|css)\?v=20260728-invoice-v8-presentation-r[123]["']/);
   assert.match(html, /invoice-async-ui\.js\?v=20260730-invoice-refs-ward-r13&invoice-ui-notices=20260822-r1/);
   assert.match(html, /candidate-office-reminder-workspace-v1\.js\?v=20260814-r2/);
-  assert.match(html, /candidate-office-presenter-v1\.js\?v=20260828-daily-receipt/);
+  assert.match(html, /candidate-office-presenter-v1\.js\?v=20260905-current-workflow/);
   assert.match(html, /candidate-office-bridge-v1\.js\?v=20260814-r6/);
   assert.match(html, /modal-modernisation\.css\?v=20260902-r2/);
   assert.match(html, /summary-modernisation\.css\?v=20260824-r7/);

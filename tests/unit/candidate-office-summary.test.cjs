@@ -143,6 +143,28 @@ test('an import-authoritative hours anchor remains blank without a Candidate wor
   assert.equal(window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input).status, null);
 });
 
+test('a superseded historical Candidate attempt stays in audit history instead of becoming the current status', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const input = projection('PENDING_AUTH', 'Pending authorisation', 'warning', {
+    current_identity: {
+      row_key: 'manual-with-old-paper-attempt',
+      route_family: 'QR',
+      record_role: 'HOURS_ONLY'
+    },
+    workflow: {
+      state: 'SUPERSEDED', route: 'PAPER', historical: true,
+      is_current_action_workflow: false
+    }
+  });
+
+  assert.equal(window.CloudTMSCandidateOfficePresenter.candidateSubmissionApplies(input), false);
+  assert.equal(window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input).status, null);
+});
+
 test('a manual row presents its real printed Candidate workflow', () => {
   const window = load(
     'candidate-office-ui-policy-v1.js',
