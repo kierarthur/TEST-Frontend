@@ -92,3 +92,29 @@ test('a fresh eligible delete preview overrides an older summary permission hint
     /const canonicalCanDelete = !!\([\s\S]*lifecycleAuthoritySatisfied[\s\S]*!isArchived[\s\S]*backendCanDelete === true[\s\S]*localCanDelete/
   );
 });
+
+test('submitted Candidate Timesheets keep Delete visible but route it to rejection first', () => {
+  const footer = section(
+    'function getCanonicalTimesheetFooterState(mc, frameMode)',
+    '// ✅ Canonical timesheet refresh helper'
+  );
+  const handler = section(
+    '// ── Delete Timesheet ──',
+    '// OK-only info modal (utility child)'
+  );
+  assert.match(footer, /const dpCandidateRejectionRequired = dp\?\.candidate_submission_rejection_required === true/);
+  assert.match(footer, /\(dpEligible === true \|\| dpCandidateRejectionRequired\)/);
+  assert.match(handler, /title: 'Reject before deleting'/);
+  assert.match(handler, /confirmLabel: 'Reject Candidate Submission'/);
+  assert.match(handler, /actionCode: 'REJECT_CANDIDATE_SUBMISSION'/);
+  assert.match(handler, /Rejecting the Candidate Submission will also reject the linked pending expense claim at the same time/);
+});
+
+test('the ordinary rejection form warns when a linked expense will be rejected too', () => {
+  const modal = fs.readFileSync(path.resolve(__dirname, '../../js/candidate-office-modal-v1.js'), 'utf8');
+  const bridge = fs.readFileSync(path.resolve(__dirname, '../../js/candidate-office-bridge-v1.js'), 'utf8');
+  assert.match(modal, /linked_pending_expense_claim_count/);
+  assert.match(modal, /It will be rejected at the same time/);
+  assert.match(bridge, /async function runVisibleAction/);
+  assert.match(bridge, /runVisibleAction/);
+});

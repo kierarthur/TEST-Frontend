@@ -477,6 +477,22 @@
     }
     return null;
   }
+  async function runVisibleAction({ surface = 'SIMPLE_TIMESHEET', actionCode, trigger } = {}) {
+    const code = String(actionCode || '').trim().toUpperCase();
+    if (!controller || !code) return false;
+    const slot = visibleDetailSlot(surface);
+    if (!slot) return false;
+    await loadSlot(slot, { force: true });
+    const context = contextForSlot(slot, trigger || slot);
+    const actions = [
+      ...(context.projection?.available_actions || []),
+      ...(context.projection?.rejections || []).map(item => item.recovery_action).filter(Boolean)
+    ];
+    const action = actions.find(item => String(item?.code || '').trim().toUpperCase() === code);
+    if (!action?.enabled) return false;
+    await controller.runTypedAction({ ...context, action, trigger: trigger || context.trigger });
+    return true;
+  }
   async function onLegacyRouteClick(event) {
     if (!capabilities?.permissions?.change_route) return;
     const button = event.target.closest('[data-ts-action="switch-manual"], [data-ts-action="qr-convert-manual-only"], [data-ts-action="allow-qr-again"], [data-ts-action="allow-electronic-again"], [data-bulk-authorise-route-action="switch-manual"], [data-bulk-authorise-route-action="qr-convert-manual-only"]');
@@ -597,5 +613,5 @@
     });
     document.documentElement.removeAttribute('data-candidate-office-contract');
   }
-  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, embeddedSummaryResult, candidateProjectionNotApplicable, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
+  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, embeddedSummaryResult, candidateProjectionNotApplicable, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, runVisibleAction, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
 })();

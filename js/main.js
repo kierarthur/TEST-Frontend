@@ -324238,12 +324238,13 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
 
   const dpKind = upper((dp && dp.kind) ? dp.kind : '');
   const dpEligible = (dp && typeof dp.eligible === 'boolean') ? dp.eligible : false;
+  const dpCandidateRejectionRequired = dp?.candidate_submission_rejection_required === true;
 
   const canDeleteBase =
     ((frameMode === 'edit' || frameMode === 'view') && !locked && (hasTs || isPlannedWeek));
 
   const safeRealTimesheetDeletePreview = !!(
-    dpEligible === true &&
+    (dpEligible === true || dpCandidateRejectionRequired) &&
     (
       manualAdditionalForFooter
         ? dpKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE'
@@ -333222,6 +333223,47 @@ if (btnTsProcess) {
             }
 
             if (dpEligibleX !== true) {
+              if (freshDpX?.candidate_submission_rejection_required === true) {
+                const stage = String(freshDpX?.candidate_submission_stage || '').toUpperCase();
+                const linkedExpenseCount = Number(freshDpX?.linked_pending_expense_claim_count || 0);
+                const statusMessage = stage === 'MANAGER_APPROVED'
+                  ? 'This Timesheet has already been approved by the manager. It cannot be deleted until the Candidate Submission is rejected.'
+                  : 'This Timesheet has already been submitted by the candidate. It cannot be deleted until the Candidate Submission is rejected.';
+                const expenseMessage = linkedExpenseCount > 0
+                  ? (linkedExpenseCount === 1
+                      ? 'Rejecting the Candidate Submission will also reject the linked pending expense claim at the same time.'
+                      : `Rejecting the Candidate Submission will also reject the ${linkedExpenseCount} linked pending expense claims at the same time.`)
+                  : '';
+                let rejectRequested = false;
+                if (typeof showConfirmDialog === 'function') {
+                  const choice = await showConfirmDialog({
+                    title: 'Reject before deleting',
+                    message: [statusMessage, expenseMessage, 'Would you like to reject the Candidate Submission now?'].filter(Boolean).join('\n\n'),
+                    confirmLabel: 'Reject Candidate Submission',
+                    cancelLabel: 'Go Back',
+                    danger: true
+                  });
+                  rejectRequested = choice === true || choice?.confirmed === true;
+                } else {
+                  rejectRequested = window.confirm([statusMessage, expenseMessage, 'Would you like to reject the Candidate Submission now?'].filter(Boolean).join('\n\n'));
+                }
+                if (rejectRequested) {
+                  try {
+                    const bridge = window.CloudTMSCandidateOfficeBridge;
+                    const started = await bridge?.runVisibleAction?.({
+                      surface: 'SIMPLE_TIMESHEET',
+                      actionCode: 'REJECT_CANDIDATE_SUBMISSION',
+                      trigger: btnTsDelete
+                    });
+                    if (started !== true) {
+                      alert('The rejection action is not available for the latest Timesheet state. Refresh the Timesheet and try again.');
+                    }
+                  } catch (rejectError) {
+                    alert(rejectError?.message || 'The Candidate Submission could not be opened for rejection. Refresh the Timesheet and try again.');
+                  }
+                }
+                return;
+              }
               alert('Delete is not available for this timesheet (it may be locked by an invoice or otherwise not eligible).');
               return;
             }
@@ -378453,7 +378495,9 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
     }
     if (decision !== 'PERMANENT_DELETE' || preview?.eligible !== true) {
       const error = new Error(blockerMessage(preview));
-      error.code = 'DELETE_BLOCKED';
+      error.code = preview?.candidate_submission_rejection_required === true
+        ? 'CANDIDATE_SUBMISSION_REJECTION_REQUIRED'
+        : 'DELETE_BLOCKED';
       error.preview = preview;
       throw error;
     }

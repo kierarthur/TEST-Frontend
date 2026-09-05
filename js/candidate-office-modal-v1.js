@@ -255,7 +255,13 @@
   }
   function openCandidateRejectionModal({ preview, context = {}, trigger }) {
     const neutral = [context.candidateName, context.clientName, context.weekEnding].filter(Boolean).map(item => `<span>${escape(item)}</span>`).join('');
-    return openDialog({ kind: 'rejection', size: 'form', tone: 'danger', title: 'Reject Candidate Submission', bodyHtml: `${neutral ? `<div class="candidate-office-neutral-context">${neutral}</div>` : ''}${paragraphs('This will reject the evidence submitted and require the candidate to resubmit.\nAre you sure you wish to continue?')}`, formHtml: reasonForm({ generic: true }), trigger,
+    const linkedExpenseCount = Number(preview?.linked_pending_expense_claim_count || 0);
+    const linkedExpenseWarning = Number.isInteger(linkedExpenseCount) && linkedExpenseCount > 0
+      ? (linkedExpenseCount === 1
+          ? 'This Timesheet also has a linked pending expense claim. It will be rejected at the same time.'
+          : `This Timesheet also has ${linkedExpenseCount} linked pending expense claims. They will be rejected at the same time.`)
+      : '';
+    return openDialog({ kind: 'rejection', size: 'form', tone: 'danger', title: 'Reject Candidate Submission', bodyHtml: `${neutral ? `<div class="candidate-office-neutral-context">${neutral}</div>` : ''}${paragraphs(['This will reject the evidence submitted and require the candidate to resubmit.', linkedExpenseWarning, 'Are you sure you wish to continue?'].filter(Boolean).join('\n'))}`, formHtml: reasonForm({ generic: true }), trigger,
       buttons: [{ label: 'Go Back', value: 'back', className: 'btn-outline' }, { label: 'Reject Candidate Submission', value: 'confirm', className: 'btn-warn' }],
       collect: root => ({ reason: root.querySelector('#candidateOfficeReason')?.value.trim() || '' }),
       validate: values => { if (!values.reason) throw new Error('A reason is required.'); }, defaultFocusSelector: '[data-candidate-dialog-action="back"]' });
