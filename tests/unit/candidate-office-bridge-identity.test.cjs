@@ -245,3 +245,29 @@ test('a late old single-row response cannot overwrite or repaint the newer exact
     'new'
   );
 });
+
+test('same-user authority renewal does not strand an in-flight Candidate Summary cell', async () => {
+  let resolveBatch;
+  const h = harness({
+    fetchOfficeCandidateProjections: ({ surface, identities }) => new Promise(resolve => {
+      resolveBatch = () => resolve({
+        surface,
+        results: identities.map(row => ({ ok: true, correlation_key: row.row_key, projection: projectionFor(row) }))
+      });
+    })
+  });
+  const slot = slotFor('renewing');
+  h.slots.push(slot);
+
+  const hydration = h.window.CloudTMSCandidateOfficeBridge.hydrateBatch('TIMESHEET_SUMMARY', [slot]);
+  h.window.CloudTMSCandidateOfficeBridge.initialize({
+    contract_version: 'CLOUDTMS_OFFICE_CANDIDATE_API_V1',
+    authority_applies: true,
+    permissions: { view_candidate_state: true },
+    surfaces: { simple_timesheet: true, timesheet_summary: true }
+  }, { preserveCurrent: true });
+  resolveBatch();
+  await hydration;
+
+  assert.equal(slot.innerHTML, 'renewing');
+});

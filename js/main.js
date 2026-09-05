@@ -482,6 +482,15 @@ function readPositiveIntegerOrMarkInvalid(input, opts = {}) {
 
 // ===== Session handling =====
 function saveSession(sess){
+  const previousPrincipalId = String(
+    SESSION?.user?.id || SESSION?.user?.user_id || SESSION?.user?.sub || ''
+  ).trim();
+  const nextPrincipalId = String(
+    sess?.user?.id || sess?.user?.user_id || sess?.user?.sub || ''
+  ).trim();
+  const samePrincipal = !!(
+    previousPrincipalId && nextPrincipalId && previousPrincipalId === nextPrincipalId
+  );
   SESSION = sess;
   const persist = document.getElementById('rememberMe')?.checked ?? true;
   const store = persist ? localStorage : sessionStorage;
@@ -489,7 +498,9 @@ function saveSession(sess){
   if (persist) sessionStorage.removeItem('cloudtms.session');
   scheduleRefresh();
   renderUserChip();
-  window.dispatchEvent(new CustomEvent('cloudtms:office-session-ready'));
+  window.dispatchEvent(new CustomEvent('cloudtms:office-session-ready', {
+    detail: { same_principal: samePrincipal }
+  }));
 }
 // FRONTEND — loadUserGridPrefs
 async function loadUserGridPrefs(section) {
@@ -116974,6 +116985,11 @@ function summaryUpdateRowDom(section, id, patchedRow) {
       return td;
     }
 
+    if (section === 'timesheets' && colKey === 'route_type') {
+      td.textContent = formatTimesheetSummaryRoute(row);
+      return td;
+    }
+
     if (section === 'invoices' && colKey === 'attachment_state') {
       return paintInvoiceAttachmentIndicator(td, row);
     }
@@ -117647,6 +117663,11 @@ function summaryInsertRowDom(section, patchedRow) {
       const txtBase = String(row?.processing_status_display || '').trim();
       const txt = txtBase || String((typeof formatDisplayValue === 'function' ? formatDisplayValue(colKey, v) : (v ?? '')) ?? '');
       paintTimesheetProcessingStatusCell(td, row, txt);
+      return td;
+    }
+
+    if (section === 'timesheets' && colKey === 'route_type') {
+      td.textContent = formatTimesheetSummaryRoute(row);
       return td;
     }
 
@@ -171982,6 +172003,21 @@ if (typeof window !== 'undefined') {
   });
 }
 // SUMMARY_MONEY_FORMAT_END
+
+const APPROVED_EXPENSE_ROUTE_LABELS = new Set([
+  'Electronic Expense',
+  'Manual Expense',
+  'QR Expense',
+  'Expense'
+]);
+
+function formatTimesheetSummaryRoute(row) {
+  if (row?.is_expense_only === true) {
+    const label = String(row?.display_route_label || '').trim();
+    return APPROVED_EXPENSE_ROUTE_LABELS.has(label) ? label : 'Expense';
+  }
+  return String(formatDisplayValue('route_type', row?.route_type) ?? '');
+}
 
 function formatDisplayValue(key, val){
   if (val === null || val === undefined || val === '') return '—';
@@ -315534,9 +315570,9 @@ function ensureTimesheetSummaryTargetedRefreshManager() {
                 cell.replaceChildren();
                 const label = normaliseText(request.row.processing_status_display || request.row.processing_status);
                 paintTimesheetProcessingStatusCell(cell,request.row,label);
-              } else if (key === 'route_type' && request.row.is_expense_only === true) {
-                cell.textContent = normaliseText(request.row.display_route_label || 'Expense');
-              } else if (['route_type','route_display','route_family','sheet_scope','submission_mode','total_hours'].includes(key)) {
+              } else if (key === 'route_type') {
+                cell.textContent = formatTimesheetSummaryRoute(request.row);
+              } else if (['route_display','route_family','sheet_scope','submission_mode','total_hours'].includes(key)) {
                 cell.textContent = String(formatDisplayValue(key,request.row[key]) ?? '');
               } else if (['total_pay_ex_vat','margin_ex_vat'].includes(key)) {
                 cell.textContent = formatSummaryMoneyValue(request.row[key]);
@@ -318769,8 +318805,8 @@ const getSelectionUiState = () => {
         const txt = txtBase || String(formatDisplayValue(c, v) ?? '');
         paintTimesheetProcessingStatusCell(td, r, txt);
 
-      } else if (currentSection === 'timesheets' && c === 'route_type' && r.is_expense_only === true) {
-        td.textContent = String(r.display_route_label || 'Expense');
+      } else if (currentSection === 'timesheets' && c === 'route_type') {
+        td.textContent = formatTimesheetSummaryRoute(r);
 
       } else if (currentSection === 'invoices' && c === 'attachment_state') {
         paintInvoiceAttachmentIndicator(td, r);

@@ -88,3 +88,52 @@ test('logout invalidates an in-flight capabilities response before it can initia
   assert.equal(h.initialized.length, 0);
   assert.equal(h.deactivated, 1);
 });
+
+test('same-user session renewal keeps verified Candidate values visible while authority is refreshed', async () => {
+  const h = harness();
+  const bootstrap = h.window.CloudTMSCandidateOfficeBootstrap.bootstrapCandidateOffice;
+  const initial = bootstrap();
+  h.requests[0].resolve(capabilities('initial'));
+  assert.equal((await initial).active, true);
+
+  const renewed = h.listeners.get('cloudtms:office-session-ready')({ detail: { same_principal: true } });
+  assert.equal(h.deactivated, 0, 'a routine renewal must not blank the current Candidate cells');
+  h.requests[1].resolve(capabilities('renewed'));
+  assert.equal((await renewed).active, true);
+  assert.equal(h.deactivated, 0);
+  assert.deepEqual(h.initialized.map(item => item.contract_version), ['contract-initial', 'contract-renewed']);
+});
+
+test('a different-user session clears the previous Candidate values before loading new authority', async () => {
+  const h = harness();
+  const bootstrap = h.window.CloudTMSCandidateOfficeBootstrap.bootstrapCandidateOffice;
+  const initial = bootstrap();
+  h.requests[0].resolve(capabilities('initial'));
+  await initial;
+
+  const replacement = h.listeners.get('cloudtms:office-session-ready')({ detail: { same_principal: false } });
+  assert.equal(h.deactivated, 1);
+  h.requests[1].resolve(capabilities('replacement'));
+  assert.equal((await replacement).active, true);
+  assert.deepEqual(h.initialized.map(item => item.contract_version), ['contract-initial', 'contract-replacement']);
+});
+
+test('same-user authority refresh still clears Candidate values if permission has been removed', async () => {
+  const h = harness();
+  const bootstrap = h.window.CloudTMSCandidateOfficeBootstrap.bootstrapCandidateOffice;
+  const initial = bootstrap();
+  h.requests[0].resolve(capabilities('initial'));
+  await initial;
+
+  const renewed = h.listeners.get('cloudtms:office-session-ready')({ detail: { same_principal: true } });
+  assert.equal(h.deactivated, 0);
+  h.requests[1].resolve({
+    authority_applies: false,
+    permissions: { view_candidate_state: false },
+    contract_version: 'contract-revoked'
+  });
+  const result = await renewed;
+  assert.equal(result.active, false);
+  assert.equal(result.reason, 'AUTHORITY_DOES_NOT_APPLY');
+  assert.equal(h.deactivated, 1);
+});

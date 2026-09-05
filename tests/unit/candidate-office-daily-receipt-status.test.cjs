@@ -93,5 +93,5 @@ test('a received PAPER return without a retry continues to show finalising, not 
 });
 
 test('the changed presenter has a new cache identity in the deployed entry page', () => {
-  assert.match(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), /candidate-office-presenter-v1\.js\?v=20260905-current-workflow/);
+  assert.match(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), /candidate-office-presenter-v1\.js\?v=20260905-summary-trust-r1/);
 });

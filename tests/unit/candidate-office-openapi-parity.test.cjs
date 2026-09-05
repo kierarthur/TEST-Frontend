@@ -92,13 +92,16 @@ test('Candidate bridge loads only after the existing application and workbench s
   assert.ok(bootstrapIndex > bridgeIndex);
 });
 
-test('Candidate Office state is reset at every authentication transition', () => {
+test('Candidate Office state survives same-user renewal but is reset for changed or cleared authority', () => {
   const main = fs.readFileSync(path.join(frontend, 'js', 'main.js'), 'utf8');
   const bridge = fs.readFileSync(path.join(frontend, 'js', 'candidate-office-bridge-v1.js'), 'utf8');
   const bootstrap = fs.readFileSync(path.join(frontend, 'js', 'candidate-office-bootstrap-v1.js'), 'utf8');
 
   assert.match(main, /cloudtms:office-session-ready/);
   assert.match(main, /cloudtms:office-session-cleared/);
+  assert.match(main, /same_principal: samePrincipal/);
+  assert.match(bootstrap, /preserveCurrent: event\?\.detail\?\.same_principal === true/);
+  assert.match(bootstrap, /if \(!preserveCurrent\) window\.CloudTMSCandidateOfficeBridge\?\.deactivate\?\.\(\)/);
   assert.match(bootstrap, /CloudTMSCandidateOfficeBridge\?\.deactivate\?\.\(\)/);
   assert.match(bootstrap, /addEventListener\('cloudtms:office-session-cleared'/);
   assert.match(bridge, /requestedGeneration !== authorityGeneration \|\| !canSurface\(surface\)/);

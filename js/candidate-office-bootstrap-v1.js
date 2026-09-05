@@ -2,10 +2,10 @@
   'use strict';
   let promise = null;
   let bootstrapGeneration = 0;
-  async function bootstrapCandidateOffice({ force = false } = {}) {
+  async function bootstrapCandidateOffice({ force = false, preserveCurrent = false } = {}) {
     if (force) {
       promise = null;
-      window.CloudTMSCandidateOfficeBridge?.deactivate?.();
+      if (!preserveCurrent) window.CloudTMSCandidateOfficeBridge?.deactivate?.();
     }
     if (promise) return promise;
     const requestedGeneration = ++bootstrapGeneration;
@@ -15,8 +15,11 @@
         if (requestedGeneration !== bootstrapGeneration) {
           return Object.freeze({ active: false, stale: true, reason: 'SESSION_GENERATION_REPLACED' });
         }
-        if (!capabilities.authority_applies || !capabilities.permissions.view_candidate_state) return Object.freeze({ active: false, reason: 'AUTHORITY_DOES_NOT_APPLY', capabilities });
-        window.CloudTMSCandidateOfficeBridge.initialize(capabilities);
+        if (!capabilities.authority_applies || !capabilities.permissions.view_candidate_state) {
+          window.CloudTMSCandidateOfficeBridge?.deactivate?.();
+          return Object.freeze({ active: false, reason: 'AUTHORITY_DOES_NOT_APPLY', capabilities });
+        }
+        window.CloudTMSCandidateOfficeBridge.initialize(capabilities, { preserveCurrent });
         document.documentElement.dataset.candidateOfficeContract = capabilities.contract_version;
         delete document.documentElement.dataset.candidateOfficeUnavailable;
         return Object.freeze({ active: true, capabilities });
@@ -35,7 +38,10 @@
     return promise;
   }
   Object.assign(window, { CloudTMSCandidateOfficeBootstrap: Object.freeze({ bootstrapCandidateOffice }) });
-  window.addEventListener('cloudtms:office-session-ready', () => bootstrapCandidateOffice({ force: true }));
+  window.addEventListener('cloudtms:office-session-ready', event => bootstrapCandidateOffice({
+    force: true,
+    preserveCurrent: event?.detail?.same_principal === true
+  }));
   window.addEventListener('cloudtms:office-session-cleared', () => {
     bootstrapGeneration += 1;
     promise = null;

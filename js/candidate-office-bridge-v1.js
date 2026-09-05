@@ -562,10 +562,14 @@
     if (action.invocation.method !== sourceAction.invocation?.method || action.invocation.path !== sourceAction.invocation?.path || canonicalJson(action.invocation.fixed_body) !== canonicalJson(sourceAction.invocation?.fixed_body || {})) return false;
     return { projection, action };
   }
-  function initialize(capabilityContract) {
-    authorityGeneration += 1;
+  function initialize(capabilityContract, options = {}) {
+    const keepCurrentGeneration = initialized && options?.preserveCurrent === true;
+    if (!keepCurrentGeneration) authorityGeneration += 1;
     capabilities = capabilityContract;
     if (initialized) {
+      document.querySelectorAll('[data-candidate-office-slot="1"]').forEach(slot => {
+        if (!canSurface(slot.dataset.candidateOfficeSurface)) slot.remove();
+      });
       hydrateSlots();
       window.dispatchEvent(new CustomEvent('cloudtms:candidate-office-ready', { detail: { contract_version: capabilities.contract_version } }));
       return;

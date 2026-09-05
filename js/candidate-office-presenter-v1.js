@@ -117,6 +117,7 @@
     // the current Candidate Submission cell. A finalised workflow remains the
     // durable completion proof for its exact Timesheet or expense carrier.
     if (historicalWorkflow && workflowState !== 'FINALISED') return false;
+    if (workflowKind === 'CONTRACT_EXPENSE' && recordRole !== 'EXPENSE_ONLY') return false;
     return ['ELECTRONIC', 'QR'].includes(routeFamily)
       || (!!workflowState && (
         recordRole === 'EXPENSE_ONLY' ||
@@ -376,7 +377,8 @@
   }
   function presentCandidateOfficeSummary(projection) {
     const detail = presentCandidateOfficeDetail(projection, { surface: 'TIMESHEET_SUMMARY' });
-    return Object.freeze({ identity: detail.identity, status: detail.status, statuses: detail.statuses, source_status_code: detail.source_status_code, manager: detail.manager, retained_manager: detail.retained_manager, primary_action: detail.primary_action, diagnostics: detail.diagnostics, projection });
+    const statuses = Object.freeze(detail.status ? [detail.status] : []);
+    return Object.freeze({ identity: detail.identity, status: detail.status, statuses, source_status_code: detail.source_status_code, manager: detail.manager, retained_manager: detail.retained_manager, primary_action: detail.primary_action, diagnostics: detail.diagnostics, projection });
   }
   Object.assign(window, { CloudTMSCandidateOfficePresenter: Object.freeze({ STATUS, APPROVED_CANDIDATE_SUBMISSION_STATUS, PAPER, OFFICE_FRONTEND_FORBIDDEN_ACTIONS, formatDateTime, managerStatusLabel, candidateSubmissionApplies, presentApprovedCandidateSubmissionStatus, presentCandidateOfficeSummary, presentCandidateOfficeDetail, presentCandidateManagerApproval, presentRetainedManagerApproval, presentCandidatePaperPack, presentCandidateRejections }) });
 })();

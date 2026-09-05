@@ -9,9 +9,9 @@
     `<span class="${statusClass(status.tone)}${summary ? ' candidate-office-summary-status' : ''}" data-candidate-status-code="${escape(status.code)}">${escape(status.label)}</span>`
   )).join('');
   function renderCandidateSummaryCell(view) {
-    if (!view || !statusViews(view).length) return '';
-    if (statusViews(view).every(status => status.unavailable)) return '';
-    return `<span class="candidate-office-summary-statuses">${renderStatusBadges(view, { summary: true })}</span>`;
+    const status = view?.status || null;
+    if (!status || status.unavailable) return '';
+    return `<span class="candidate-office-summary-statuses"><span class="${statusClass(status.tone)} candidate-office-summary-status" data-candidate-status-code="${escape(status.code)}">${escape(status.label)}</span></span>`;
   }
   const renderCandidateCompactBadges = renderCandidateSummaryCell;
   const renderFields = fields => `<dl class="candidate-office-facts">${(fields || []).map(([label, value]) => `<div><dt>${escape(label)}</dt><dd>${escape(value)}</dd></div>`).join('')}</dl>`;

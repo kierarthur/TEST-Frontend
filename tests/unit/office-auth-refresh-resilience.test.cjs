@@ -79,6 +79,15 @@ test('the existing two-hour idle policy remains unchanged', () => {
   assert.match(source, /p\?\.idle_logout_seconds \?\? 7200/);
 });
 
+test('session renewal identifies the same signed-in person without exposing token values', () => {
+  const saveSessionSource = section('function saveSession(sess)', '// FRONTEND — loadUserGridPrefs');
+  assert.match(saveSessionSource, /previousPrincipalId/);
+  assert.match(saveSessionSource, /nextPrincipalId/);
+  assert.match(saveSessionSource, /previousPrincipalId === nextPrincipalId/);
+  assert.match(saveSessionSource, /same_principal: samePrincipal/);
+  assert.doesNotMatch(saveSessionSource, /same_principal:\s*SESSION\?\.accessToken/);
+});
+
 test('the deployed HTML requests the new refresh-resilience asset', () => {
   assert.match(indexHtml, /office-auth-refresh=20260826-r1/);
 });

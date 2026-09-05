@@ -51,7 +51,7 @@ test('Summary renders only the complete user-approved Candidate Submission catal
     [projection('REFUSED', 'wrong', 'success'), 'Refused by Client'],
     [projection('REJECTED', 'wrong', 'success'), 'Rejected by Agency'],
     [projection('CANCELLED', 'wrong', 'success'), 'Candidate Submission Cancelled'],
-    [projection('FINALISED', 'wrong', 'danger', { workflow: { state: 'FINALISED', historical: true } }), 'Timesheet hours — Candidate Submission Complete'],
+    [projection('FINALISED', 'wrong', 'danger', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
     [projection('FUTURE_UNKNOWN_STATE', 'wrong', 'success'), '']
   ];
   const rendered = cases.map(([input, expected]) => {
@@ -143,7 +143,7 @@ test('an import-authoritative hours anchor remains blank without a Candidate wor
   assert.equal(window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input).status, null);
 });
 
-test('an import-authoritative hours anchor presents its active separate expense workflow', () => {
+test('an import-authoritative hours anchor never presents a separate expense workflow', () => {
   const window = load(
     'candidate-office-ui-policy-v1.js',
     'candidate-office-presenter-v1.js',
@@ -164,10 +164,47 @@ test('an import-authoritative hours anchor presents its active separate expense 
     }
   });
 
-  assert.equal(window.CloudTMSCandidateOfficePresenter.candidateSubmissionApplies(input), true);
+  assert.equal(window.CloudTMSCandidateOfficePresenter.candidateSubmissionApplies(input), false);
   const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input);
-  assert.equal(view.status.label, 'Candidate Submitted');
-  assert.match(window.CloudTMSCandidateOfficeSurface.renderCandidateSummaryCell(view), /Candidate Submitted/);
+  assert.equal(view.status, null);
+  assert.equal(window.CloudTMSCandidateOfficeSurface.renderCandidateSummaryCell(view), '');
+});
+
+test('Summary shows one unscoped Candidate status even when detail retains earlier approval facts', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const input = projection('WORKER_SUBMITTED', 'wrong', 'danger', {
+    current_identity: {
+      row_key: 'expense-carrier-with-earlier-approval',
+      route_family: 'IMPORT_AUTHORITATIVE',
+      record_role: 'EXPENSE_ONLY'
+    },
+    workflow: {
+      workflow_kind: 'CONTRACT_EXPENSE',
+      state: 'READY_FOR_MANAGER_APPROVAL',
+      route: 'ELECTRONIC',
+      historical: false,
+      is_current_action_workflow: true
+    },
+    retained_manager_approval: {
+      workflow_kind: 'CONTRACT_HOURS',
+      scope: 'HOURS',
+      approved_at_utc: '2026-09-04T09:00:00Z'
+    }
+  });
+
+  const detail = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(input);
+  assert.equal(detail.statuses.length, 2, 'detail retains the separately labelled audit facts');
+
+  const summary = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input);
+  const html = window.CloudTMSCandidateOfficeSurface.renderCandidateSummaryCell(summary);
+  assert.equal(summary.statuses.length, 1);
+  assert.equal((html.match(/data-candidate-status-code=/g) || []).length, 1);
+  assert.match(html, />Candidate Submitted</);
+  assert.doesNotMatch(html, /Timesheet hours|Timesheet and expenses|Expense claim/);
 });
 
 test('a superseded historical Candidate attempt stays in audit history instead of becoming the current status', () => {
@@ -431,6 +468,11 @@ test('Overview shows only the current Submission Status and its approval facts',
   );
   const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(projection(
     'MANAGER_APPROVED', 'wrong', 'danger', {
+      current_identity: {
+        row_key: 'approved-expense-carrier',
+        route_family: 'ELECTRONIC',
+        record_role: 'EXPENSE_ONLY'
+      },
       workflow: { workflow_id: 'workflow-1', workflow_kind: 'CONTRACT_EXPENSE', state: 'MANAGER_APPROVED', route: 'EMAIL' },
       manager_approval: {
         state: 'APPROVED', method: 'EMAIL', approved_at_utc: '2026-09-05T10:15:00Z',
