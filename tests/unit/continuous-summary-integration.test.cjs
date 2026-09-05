@@ -50,6 +50,8 @@ test('continuous sheets retain keyboard, sort and heartbeat reconciliation contr
   assert.match(source, /runContinuousSummaryJump\(continuousController, ordinalIndex/);
   assert.match(source, /window\.CloudTMSSummaryContinuousGrid\?\.invalidate\?\.\(s, \{ refresh: false \}\)/);
   assert.match(source, /outboxHeaderSortKeys/);
+  assert.match(source, /rowObj\.display_route_label \|\| rowObj\.route_display/);
+  assert.match(source, /normaliseText\(row\?\.display_route_label \|\| row\?\.route_display\)/);
 });
 
 test('related summary views fetch once and expose bounded virtual pages', () => {

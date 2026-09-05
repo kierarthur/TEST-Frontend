@@ -165440,7 +165440,12 @@ async function resolveSummaryTypeAheadTarget(section, prefix, sortKey, sortDir) 
 
     let rawValue;
 
-    if (activeSortKey === 'job_titles_display') {
+    if (sec === 'timesheets' && (activeSortKey === 'route_type' || activeSortKey === 'route_display')) {
+      rawValue = rowObj.display_route_label || rowObj.route_display || '';
+      if (!rawValue && rowObj.route_type && typeof formatDisplayValue === 'function') {
+        try { rawValue = formatDisplayValue('route_type', rowObj.route_type); } catch {}
+      }
+    } else if (activeSortKey === 'job_titles_display') {
       rawValue = deriveSecondaryJobTitlesSearchValue(rowObj);
     } else {
       rawValue = Object.prototype.hasOwnProperty.call(rowObj, activeSortKey)
@@ -315359,6 +315364,11 @@ function ensureTimesheetSummaryTargetedRefreshManager() {
   };
   const sortValue = (row,key) => {
     if (key === 'candidate_submission') return candidateLabel(row);
+    if (key === 'route_type' || key === 'route_display') {
+      const displayed = normaliseText(row?.display_route_label || row?.route_display);
+      if (displayed) return displayed;
+      try { return normaliseText(formatDisplayValue('route_type',row?.route_type)); } catch { return normaliseText(row?.route_type); }
+    }
     if (['total_hours','total_pay_ex_vat','margin_ex_vat'].includes(key)) {
       const numeric = Number(row?.[key]);
       return Number.isFinite(numeric) ? numeric : Number.NEGATIVE_INFINITY;
