@@ -294,13 +294,19 @@
     const upper = state.total == null ? Number.MAX_SAFE_INTEGER : Math.max(0, state.total - 1);
     const index = Math.max(0, Math.min(upper, Math.trunc(Number(rawIndex) || 0)));
     const page = Math.floor(index / state.pageSize) + 1;
+    const previousTargetPage = state.targetPage;
     state.targetPage = clampPage(state, page);
     state.desiredIndex = index;
     state.scrollTop = index * state.rowHeight;
     if (typeof state.onTargetPage === 'function') state.onTargetPage(state.targetPage);
     const rows = await ensurePage(state, state.targetPage, { force: options.force === true });
     const row = rows[index % state.pageSize] || rows[0] || null;
-    if (typeof state.onRender === 'function') state.onRender(getView(state.section));
+    if (
+      typeof state.onRender === 'function' &&
+      (options.force === true || state.targetPage !== previousTargetPage)
+    ) {
+      state.onRender(getView(state.section));
+    }
     scheduleWindow(state);
     return {
       index,

@@ -191,3 +191,30 @@ test('an active touch or scrollbar drag defers repaint until pointer release', a
   await settle();
   assert.ok(renders.length >= 1, 'the deferred virtual-window repaint must run after release outside the track');
 });
+
+test('adjacent keyboard movement inside one loaded block does not rebuild the grid', async () => {
+  grid.reset('contracts');
+  const rows = Array.from({ length: 120 }, (_, index) => ({ id: `contract-${index}` }));
+  const renders = [];
+  const controller = grid.configure({
+    section: 'contracts',
+    datasetKey: 'contracts:keyboard',
+    pageSize: 50,
+    total: rows.length,
+    initialPage: 1,
+    fetchPage: async (page, pageSize) => {
+      const start = (page - 1) * pageSize;
+      return { rows: rows.slice(start, start + pageSize), total: rows.length };
+    },
+    onRender: (view) => renders.push(view.targetPage)
+  });
+
+  await controller.load(1);
+  renders.length = 0;
+  const adjacent = await controller.jumpToIndex(1);
+  assert.equal(adjacent.rowId, 'contract-1');
+  assert.deepEqual(renders, [], 'moving within the current block must preserve the focused DOM grid');
+
+  await controller.jumpToIndex(51);
+  assert.deepEqual(renders, [2], 'crossing into another block must still repaint the virtual window');
+});
