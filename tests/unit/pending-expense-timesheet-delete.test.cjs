@@ -77,3 +77,18 @@ test('a direct fallback delete also warns about pending expense cancellation', (
   assert.match(deletion, /pendingExpenseClaimCount === 1/);
   assert.match(deletion, /await confirmAction\(deletionSummary\(preview\)\)/);
 });
+
+test('a fresh eligible delete preview overrides an older summary permission hint', () => {
+  const footer = section(
+    'function getCanonicalTimesheetFooterState(mc, frameMode)',
+    '// ✅ Canonical timesheet refresh helper'
+  );
+  assert.match(
+    footer,
+    /const backendCanDelete = \(isPlannedWeek && plannedContractWeekAuthorityComplete\)[\s\S]*safeRealTimesheetDeletePreview[\s\S]*\? true[\s\S]*readLifecycleFalseWins\('can_delete', 'canDelete'\)/
+  );
+  assert.match(
+    footer,
+    /const canonicalCanDelete = !!\([\s\S]*lifecycleAuthoritySatisfied[\s\S]*!isArchived[\s\S]*backendCanDelete === true[\s\S]*localCanDelete/
+  );
+});

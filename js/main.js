@@ -324570,7 +324570,9 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   );
   const backendCanDelete = (isPlannedWeek && plannedContractWeekAuthorityComplete)
     ? plannedBackendCanDelete
-    : readLifecycleFalseWins('can_delete', 'canDelete');
+    : (safeRealTimesheetDeletePreview
+        ? true
+        : readLifecycleFalseWins('can_delete', 'canDelete'));
   const backendCanArchive = readLifecycleFalseWins('can_archive', 'canArchive');
   const backendCanUnarchive = readLifecycleFalseWins('can_unarchive', 'canUnarchive');
 
