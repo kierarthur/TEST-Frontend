@@ -308,7 +308,7 @@ test('all four Office surfaces render the complete raw-state matrix through the 
   }
 });
 
-test('Summary integration renders embedded projections immediately and keeps a bounded exact fallback', () => {
+test('Summary integration renders embedded projections immediately and delegates bounded sorting to the Worker', () => {
   const bridge = fs.readFileSync(path.join(root, 'js', 'candidate-office-bridge-v1.js'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
 
@@ -324,8 +324,9 @@ test('Summary integration renders embedded projections immediately and keeps a b
   assert.doesNotMatch(main, /c === 'candidate_submission'\s*\? false/);
   assert.doesNotMatch(main, /th\.draggable = c !== 'candidate_submission'/);
   assert.doesNotMatch(main, /colKey === 'candidate_submission'\) return/);
-  assert.match(main, /sortKeyRaw === 'candidate_submission'\s*\? 'week_ending_date'/);
-  assert.match(main, /sortSummaryRowsByCandidateStatus\(uniqueRows, sortDir\)/);
+  assert.match(main, /sortKeyRaw === 'candidate_submission'\s*\? 'candidate_submission'/);
+  assert.doesNotMatch(main, /sortSummaryRowsByCandidateStatus\(uniqueRows, sortDir\)/);
+  assert.doesNotMatch(main, /const pageCount = Math\.max\(1, Math\.ceil\(totalForSort/);
   assert.match(main, /qs\.set\('include_candidate_projection', 'true'\)/);
   assert.match(bridge, /function embeddedSummaryResult\(row\)/);
   assert.match(bridge, /row\?\.candidate_office_projection_loaded !== true/);

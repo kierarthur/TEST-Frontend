@@ -2370,6 +2370,17 @@ async function loadSection() {
       sort: { key: null, dir: 'asc' }
     });
 
+    const continuousSummary = window.CloudTMSSummaryContinuousGrid || null;
+    const isContinuousSummary = !!(
+      continuousSummary &&
+      typeof continuousSummary.isEnabled === 'function' &&
+      continuousSummary.isEnabled(sectionKey)
+    );
+    if (isContinuousSummary) {
+      st.pageSize = Number(continuousSummary.DEFAULT_PAGE_SIZE || 50);
+      st.page = Math.max(1, Number(st.page || 1));
+    }
+
     if (!st.sort || typeof st.sort !== 'object') {
       st.sort = { key: null, dir: 'asc' };
     }
@@ -2479,7 +2490,8 @@ async function loadSection() {
       'umbrellas',
       'contracts',
       'timesheets',
-      'invoices'
+      'invoices',
+      'outbox'
     ]);
 
     const related = (st.filters && typeof st.filters === 'object' && st.filters.related && typeof st.filters.related === 'object')
@@ -3172,6 +3184,66 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
         } catch {}
       })();
     };
+
+    if (isContinuousSummary) {
+      const continuousPageSize = Number(continuousSummary.DEFAULT_PAGE_SIZE || 50);
+      st.pageSize = continuousPageSize;
+
+      const controller = continuousSummary.configure({
+        section: sectionKey,
+        datasetKey,
+        sortKey: normalizedSort.key || '',
+        sortDir: normalizedSort.dir,
+        pageSize: continuousPageSize,
+        initialPage: st.page,
+        total: st.total,
+        fetchPage: (requestedPage, requestedPageSize) => fetchOne(
+          sectionKey,
+          requestedPage,
+          requestedPageSize,
+          { suppressListStateMutation: true }
+        ),
+        getTotal: () => window.__listState?.[sectionKey]?.total,
+        onTargetPage: (targetPage) => {
+          const liveState = window.__listState?.[sectionKey];
+          if (liveState) liveState.page = Math.max(1, Number(targetPage || 1));
+        },
+        onRender: (view) => {
+          if (!view || String(currentSection || '').trim().toLowerCase() !== sectionKey) return;
+          let liveDatasetKey = '';
+          try { liveDatasetKey = String(getSummaryFingerprint(sectionKey) || '').trim(); } catch {}
+          if (liveDatasetKey !== datasetKey) return;
+          renderSummary(Array.isArray(view.rows) ? view.rows : []);
+        }
+      });
+
+      const continuousView = await controller.load(st.page);
+      const rows = Array.isArray(continuousView?.rows) ? continuousView.rows : [];
+      const page = Number(continuousView?.targetPage || st.page || 1);
+      const total = Number(continuousView?.total);
+
+      st.page = Math.max(1, page);
+      st.pageSize = continuousPageSize;
+      if (Number.isFinite(total) && total >= 0) st.total = total;
+      st.hasMore = Number.isFinite(Number(st.total))
+        ? ((st.page * continuousPageSize) < Number(st.total))
+        : rows.length >= continuousPageSize;
+      st.__lastSelectionDatasetKey = datasetKey;
+      st.__lastSelectionViewKey = viewKey;
+      st.__allRowsCache = null;
+
+      const selAfterContinuousList = syncSelectionMembershipState();
+      window.__summaryLoadState = window.__summaryLoadState || {};
+      if (window.__summaryLoadState[sectionKey]) {
+        window.__summaryLoadState[sectionKey] = {
+          ...window.__summaryLoadState[sectionKey],
+          membership_status: getSelectionMembershipLoadStatus(selAfterContinuousList)
+        };
+      }
+
+      queueMembershipPrime();
+      return rows;
+    }
 
     if (st.pageSize === 'ALL') {
       const allRowsCacheKey = JSON.stringify({
@@ -116126,7 +116198,8 @@ async function summaryRemoveRowIfNowExcluded(section, id, ctx) {
       umbrellas: {},
       contracts: {},
       timesheets: {},
-      invoices: {}
+      invoices: {},
+      outbox: {}
     };
 
     const secCache = (window.__summaryCache[section] ||= {});
@@ -117191,7 +117264,8 @@ function summaryInsertRowDom(section, patchedRow) {
       umbrellas: {},
       contracts: {},
       timesheets: {},
-      invoices: {}
+      invoices: {},
+      outbox: {}
     };
 
     const secCache = (window.__summaryCache[section] ||= {});
@@ -120654,7 +120728,7 @@ function getSummaryFingerprint(section){
 async function primeSummaryMembership(section, fingerprint, options = {}) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
 
-  const allowedSections = new Set(['candidates', 'clients', 'umbrellas', 'contracts', 'timesheets', 'invoices']);
+  const allowedSections = new Set(['candidates', 'clients', 'umbrellas', 'contracts', 'timesheets', 'invoices', 'outbox']);
   const secKey = String(section || '').trim().toLowerCase();
   if (!allowedSections.has(secKey)) return;
 
@@ -120664,7 +120738,8 @@ async function primeSummaryMembership(section, fingerprint, options = {}) {
     umbrellas: {},
     contracts: {},
     timesheets: {},
-    invoices: {}
+    invoices: {},
+    outbox: {}
   };
 
   const TTL_MS = 60_000;
@@ -121246,7 +121321,7 @@ async function primeSummaryMembership(section, fingerprint, options = {}) {
 
 
 function getSummaryMembership(section, fingerprint) {
-  const allowedSections = new Set(['candidates', 'clients', 'umbrellas', 'contracts', 'timesheets', 'invoices']);
+  const allowedSections = new Set(['candidates', 'clients', 'umbrellas', 'contracts', 'timesheets', 'invoices', 'outbox']);
   const secKey = String(section == null ? '' : section).trim().toLowerCase();
 
   window.__summaryCache = window.__summaryCache || {
@@ -121255,7 +121330,8 @@ function getSummaryMembership(section, fingerprint) {
     umbrellas: {},
     contracts: {},
     timesheets: {},
-    invoices: {}
+    invoices: {},
+    outbox: {}
   };
 
   const TTL_MS = 60_000;
@@ -164666,6 +164742,12 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
   window.__summaryTypeAheadState = window.__summaryTypeAheadState || {};
 
   const normalizeRows = (value) => Array.isArray(value) ? value.slice() : [];
+  const rowIdOf = (rowObj) => {
+    if (typeof options.getRowId === 'function') {
+      return String(options.getRowId(rowObj) || '').trim();
+    }
+    return String(rowObj && (rowObj.id ?? rowObj.invoice_id ?? rowObj.timesheet_id ?? rowObj.contract_week_id ?? '') || '').trim();
+  };
 
   const state = (window.__summaryTypeAheadState[sec] && typeof window.__summaryTypeAheadState[sec] === 'object')
     ? window.__summaryTypeAheadState[sec]
@@ -164750,7 +164832,7 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
       rowEl.classList.add('selected');
       try {
         if (Array.isArray(currentRows)) {
-          currentSelection = currentRows.find((rowObj) => String(rowObj && rowObj.id || '').trim() === cleanId) || null;
+          currentSelection = currentRows.find((rowObj) => rowIdOf(rowObj) === cleanId) || null;
         }
       } catch {}
     }
@@ -164896,7 +164978,49 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
     const sortKey = liveState.sort_key == null ? null : String(liveState.sort_key);
     const sortDir = String(liveState.sort_dir || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc';
 
-    if (!sortKey) return;
+    const continuousController = window.CloudTMSSummaryContinuousGrid?.getController?.(sec) || null;
+    const navigationKeys = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End']);
+
+    if (continuousController && navigationKeys.has(ev.key)) {
+      ev.preventDefault();
+      const activeId = getActiveRowId() || rowIdOf(state.rows[0]);
+      let result = null;
+      if (ev.key === 'Home') result = await continuousController.jumpToIndex(0);
+      else if (ev.key === 'End') {
+        const total = Number(continuousController.getView()?.total || 0);
+        result = await continuousController.jumpToIndex(Math.max(0, total - 1));
+      } else {
+        const pageStep = Number(continuousController.getView()?.pageSize || 50);
+        const delta = ev.key === 'ArrowUp' ? -1
+          : ev.key === 'ArrowDown' ? 1
+          : ev.key === 'PageUp' ? -pageStep
+          : pageStep;
+        result = await continuousController.moveFrom(activeId, delta);
+      }
+
+      const latestController = window.__summaryTypeAheadState?.[sec]?.controller;
+      if (result?.rowId && latestController?.setActiveRow) {
+        await latestController.setActiveRow(result.rowId, {
+          focusGrid: true,
+          scrollIntoView: true,
+          syncSelected: true
+        });
+      }
+      return;
+    }
+
+    if (continuousController && ev.key === 'Enter') {
+      const activeId = getActiveRowId();
+      const activeRow = state.rows.find((rowObj) => rowIdOf(rowObj) === activeId) || null;
+      if (!activeRow) return;
+      ev.preventDefault();
+      if (sec === 'outbox' && typeof openOutboxDetailModal === 'function') {
+        await openOutboxDetailModal({ outbox_id: activeRow.outbox_id || activeRow.id, channel: activeRow.channel });
+      } else if (typeof openDetails === 'function' && confirmDiscardChangesIfDirty()) {
+        openDetails(activeRow);
+      }
+      return;
+    }
 
     if (ev.key === 'Escape') {
       ev.preventDefault();
@@ -165161,17 +165285,21 @@ async function resolveSummaryTypeAheadTarget(section, prefix, sortKey, sortDir) 
   const buildLocalTarget = (rowsToSearch) => {
     const normalizedPrefix = normalizeSearchText(rawPrefix);
     const liveRows = Array.isArray(rowsToSearch) ? rowsToSearch : [];
+    const continuousView = window.CloudTMSSummaryContinuousGrid?.getView?.(sec) || null;
+    const baseOrdinal = Number(continuousView?.startIndex || 0);
     for (let index = 0; index < liveRows.length; index += 1) {
       const rowObj = liveRows[index];
-      const rowId = String(
-        rowObj && (
+      const rowId = sec === 'outbox'
+        ? window.CloudTMSSummaryContinuousGrid?.rowIdentity?.(rowObj, sec) || ''
+        : String(
+          rowObj && (
           rowObj.id ??
           rowObj.invoice_id ??
           rowObj.timesheet_id ??
           rowObj.contract_week_id ??
           ''
-        ) || ''
-      ).trim();
+          ) || ''
+        ).trim();
       if (!rowId) continue;
 
       const comparableValue = getComparableValue(rowObj);
@@ -165181,8 +165309,8 @@ async function resolveSummaryTypeAheadTarget(section, prefix, sortKey, sortDir) 
 
       return buildTargetPayload(
         rowId,
-        index,
-        1,
+        baseOrdinal + index,
+        Math.floor((baseOrdinal + index) / Math.max(1, Number(pageSizeNumber || 50))) + 1,
         comparableValue,
         datasetKey
       );
@@ -165431,8 +165559,18 @@ const preserveBuffer = tgt.preserve_buffer !== false;
   const liveHostBeforeLoad = getLiveHost();
   const rowOnLiveHostBeforeLoad = findRowOnHost(liveHostBeforeLoad, rowId);
   const sameSectionVisible = String(currentSection || '').trim() === sec;
+  const continuousController = window.CloudTMSSummaryContinuousGrid?.getController?.(sec) || null;
+  const ordinalIndex = Number(tgt.ordinal_index ?? tgt.ordinal ?? tgt.row_ordinal);
+
+  if (continuousController && Number.isFinite(ordinalIndex) && ordinalIndex >= 0) {
+    try { currentSection = sec; } catch {}
+    await continuousController.jumpToIndex(ordinalIndex);
+    await waitForRenderTick();
+    if (!isLatestRequest()) return null;
+  }
 
   const needsPageJump =
+    !continuousController &&
     st.pageSize !== 'ALL' &&
     (
       !sameSectionVisible ||
@@ -165951,6 +166089,15 @@ function renderTools(){
 
   const btnRefresh = addBtn('Refresh', async () => {
     try {
+      try { window.CloudTMSSummaryContinuousGrid?.invalidate?.(sectionKey, { refresh: false }); } catch {}
+      try {
+        const cache = window.__summaryCache?.[sectionKey];
+        if (cache && typeof cache === 'object') {
+          Object.values(cache).forEach((entry) => {
+            if (entry && typeof entry === 'object') entry.stale = true;
+          });
+        }
+      } catch {}
       const data = await loadSection();
       renderSummary(data);
 
@@ -166562,7 +166709,6 @@ function renderTools(){
 
   if (isOutbox) {
     window.__listState = window.__listState || {};
-    window.__selection = window.__selection || {};
 
     const canonicalOutboxSort = { key: 'created_at_utc', dir: 'desc' };
     const normalizeOutboxSort = (sortValue) => {
@@ -166585,42 +166731,7 @@ function renderTools(){
     });
     stOutbox.sort = normalizeOutboxSort(stOutbox.sort);
 
-    const normalizeStringSet = (value) => {
-      const out = new Set();
-      if (value instanceof Set) {
-        Array.from(value)
-          .map(v => String(v == null ? '' : v).trim())
-          .filter(Boolean)
-          .forEach(v => out.add(v));
-        return out;
-      }
-      if (Array.isArray(value)) {
-        value
-          .map(v => String(v == null ? '' : v).trim())
-          .filter(Boolean)
-          .forEach(v => out.add(v));
-        return out;
-      }
-      return out;
-    };
-
-    const selOutbox = (window.__selection[sectionKey] ||= {
-      fingerprint: '',
-      ids: new Set(),
-      keys: new Set(),
-      row_refs: {},
-      row_refs_by_id: {}
-    });
-
-    selOutbox.ids = normalizeStringSet(selOutbox.ids);
-    selOutbox.keys = normalizeStringSet(selOutbox.keys);
-
-    if (!selOutbox.row_refs || typeof selOutbox.row_refs !== 'object' || Array.isArray(selOutbox.row_refs)) {
-      selOutbox.row_refs = {};
-    }
-    if (!selOutbox.row_refs_by_id || typeof selOutbox.row_refs_by_id !== 'object' || Array.isArray(selOutbox.row_refs_by_id)) {
-      selOutbox.row_refs_by_id = {};
-    }
+    ensureSelection(sectionKey);
 
     const allowedOutboxChannels = ['EMAIL', 'WHATSAPP', 'SMS', 'VOICE'];
     const allowedOutboxChannelSet = new Set(allowedOutboxChannels);
@@ -166663,144 +166774,41 @@ function renderTools(){
       };
     };
 
-    const rememberOutboxRowRef = (rowLike) => {
-      const ref = normalizeOutboxRowRef(rowLike);
-      if (!ref) return null;
-
-      selOutbox.row_refs[ref.key] = {
-        key: ref.key,
-        id: ref.id,
-        outbox_id: ref.outbox_id,
-        channel: ref.channel
-      };
-
-      const existingKeys = Array.isArray(selOutbox.row_refs_by_id[ref.id])
-        ? selOutbox.row_refs_by_id[ref.id]
-            .map(v => String(v == null ? '' : v).trim())
-            .filter(Boolean)
-        : [];
-
-      if (!existingKeys.includes(ref.key)) existingKeys.push(ref.key);
-      selOutbox.row_refs_by_id[ref.id] = existingKeys;
-
-      return ref;
-    };
-
     const removeOutboxSelectionRef = (rowLike) => {
       const ref = normalizeOutboxRowRef(rowLike);
       if (!ref) return;
+      const selection = ensureSelection(sectionKey);
+      selection.included_ids.delete(ref.key);
+      selection.excluded_ids.delete(ref.key);
+      selection.ids = new Set(Array.from(selection.included_ids));
+    };
 
-      try { selOutbox.keys.delete(ref.key); } catch {}
-      try { selOutbox.ids.delete(ref.id); } catch {}
+    const resolveSelectedOutboxRefsSnapshot = async () => {
+      const snapshot = getSelectionSnapshot(sectionKey);
+      let keys = Array.isArray(snapshot.included_ids) ? snapshot.included_ids.slice() : [];
 
-      try {
-        if (selOutbox.row_refs && typeof selOutbox.row_refs === 'object') {
-          delete selOutbox.row_refs[ref.key];
+      if (String(snapshot.mode || 'explicit').trim().toLowerCase() === 'all_filtered') {
+        let membership = getSummaryMembership(sectionKey, snapshot.dataset_key);
+        if (!membership || membership.stale !== false) {
+          await primeSummaryMembership(sectionKey, snapshot.dataset_key, { explicitFullMembership: true });
+          membership = getSummaryMembership(sectionKey, snapshot.dataset_key);
         }
-      } catch {}
-
-      try {
-        if (selOutbox.row_refs_by_id && typeof selOutbox.row_refs_by_id === 'object') {
-          const nextKeys = (Array.isArray(selOutbox.row_refs_by_id[ref.id]) ? selOutbox.row_refs_by_id[ref.id] : [])
-            .map(v => String(v == null ? '' : v).trim())
-            .filter(Boolean)
-            .filter(v => v !== ref.key);
-
-          if (nextKeys.length) selOutbox.row_refs_by_id[ref.id] = nextKeys;
-          else delete selOutbox.row_refs_by_id[ref.id];
+        if (!membership || membership.stale !== false) {
+          throw new Error('Outbox selection membership is not ready. Please try again.');
         }
-      } catch {}
+        const excluded = new Set((snapshot.excluded_ids || []).map(v => String(v || '').trim()).filter(Boolean));
+        keys = (Array.isArray(membership.row_ids) ? membership.row_ids : membership.ids || [])
+          .map(v => String(v || '').trim())
+          .filter(key => key && !excluded.has(key));
+      }
+
+      const refs = Array.from(new Set(keys))
+        .map(parseOutboxSelectionKey)
+        .filter(Boolean);
+      return { refs, unresolvedIds: [] };
     };
 
-    const getSelectedOutboxRefsSnapshot = () => {
-      const refs = [];
-      const seenKeys = new Set();
-      const resolvedLegacyIds = new Set();
-      const unresolvedLegacyIds = [];
-
-      const pushRef = (rowLike) => {
-        const ref = normalizeOutboxRowRef(rowLike);
-        if (!ref) return;
-        if (seenKeys.has(ref.key)) return;
-        seenKeys.add(ref.key);
-        refs.push({
-          key: ref.key,
-          channel: ref.channel,
-          id: ref.id,
-          outbox_id: ref.outbox_id
-        });
-        resolvedLegacyIds.add(ref.id);
-      };
-
-      try {
-        selOutbox.keys.forEach((rawKey) => {
-          const key = String(rawKey == null ? '' : rawKey).trim();
-          if (!key) return;
-          const storedRef = (selOutbox.row_refs && typeof selOutbox.row_refs === 'object')
-            ? selOutbox.row_refs[key]
-            : null;
-          if (storedRef) {
-            pushRef(storedRef);
-            return;
-          }
-          const parsedRef = parseOutboxSelectionKey(key);
-          if (parsedRef) pushRef(parsedRef);
-        });
-      } catch {}
-
-      try {
-        selOutbox.ids.forEach((rawId) => {
-          const id = normalizeOutboxId(rawId);
-          if (!id) return;
-
-          const linkedKeys = Array.isArray(selOutbox.row_refs_by_id[id])
-            ? selOutbox.row_refs_by_id[id]
-                .map(v => String(v == null ? '' : v).trim())
-                .filter(Boolean)
-            : [];
-
-          if (linkedKeys.length) {
-            linkedKeys.forEach((key) => {
-              const storedRef = (selOutbox.row_refs && typeof selOutbox.row_refs === 'object')
-                ? selOutbox.row_refs[key]
-                : null;
-              if (storedRef) {
-                pushRef(storedRef);
-                return;
-              }
-              const parsedRef = parseOutboxSelectionKey(key);
-              if (parsedRef) pushRef(parsedRef);
-            });
-            return;
-          }
-
-          if (!resolvedLegacyIds.has(id)) {
-            unresolvedLegacyIds.push(id);
-          }
-        });
-      } catch {}
-
-      return {
-        refs,
-        unresolvedIds: Array.from(new Set(
-          unresolvedLegacyIds
-            .map(v => normalizeOutboxId(v))
-            .filter(Boolean)
-            .filter(v => !resolvedLegacyIds.has(v))
-        ))
-      };
-    };
-
-    const getSelectedOutboxCount = () => {
-      const snapshot = getSelectedOutboxRefsSnapshot();
-      return snapshot.refs.length + snapshot.unresolvedIds.length;
-    };
-
-    try {
-      (Array.isArray(currentRows) ? currentRows : []).forEach((row) => {
-        rememberOutboxRowRef(row);
-      });
-    } catch {}
+    const getSelectedOutboxCount = () => getSelectedCount(sectionKey);
 
     const addOpBtn = (txt, cb) => {
       const b = addBtn(txt, cb);
@@ -166827,11 +166835,16 @@ function renderTools(){
         } catch {}
 
         try {
-          const sel = window.__selection && window.__selection[sectionKey];
-          if (sel && sel.ids && typeof sel.ids.clear === 'function') sel.ids.clear();
-          if (sel && sel.keys && typeof sel.keys.clear === 'function') sel.keys.clear();
-          if (sel && sel.row_refs && typeof sel.row_refs === 'object') sel.row_refs = {};
-          if (sel && sel.row_refs_by_id && typeof sel.row_refs_by_id === 'object') sel.row_refs_by_id = {};
+          const sel = ensureSelection(sectionKey);
+          sel.mode = 'explicit';
+          sel.included_ids.clear();
+          sel.excluded_ids.clear();
+          sel.ids = new Set();
+          sel.membership_total = null;
+          sel.membership_status = 'none';
+          sel.membership_source = 'none';
+          sel.membership_authoritative = false;
+          sel.membership_fallback_total = null;
         } catch {}
 
         const data = await loadSection();
@@ -166864,7 +166877,7 @@ function renderTools(){
 
     const btnDeleteSelected = addOpBtn('Delete selected', async () => {
       try {
-        const selectionSnapshot = getSelectedOutboxRefsSnapshot();
+        const selectionSnapshot = await resolveSelectedOutboxRefsSnapshot();
         const selectedCount = selectionSnapshot.refs.length + selectionSnapshot.unresolvedIds.length;
 
         if (!selectedCount) return;
@@ -166887,31 +166900,7 @@ function renderTools(){
           pushDeleteItem(ref);
         });
 
-        const unresolvedSkipped = [];
-        for (const unresolvedIdRaw of selectionSnapshot.unresolvedIds) {
-          const unresolvedId = normalizeOutboxId(unresolvedIdRaw);
-          if (!unresolvedId) continue;
-
-          let resolvedRef = null;
-
-          for (const channel of allowedOutboxChannels) {
-            try {
-              const res = await apiGetOutboxItem(channel, unresolvedId);
-              const item = (res && res.item && typeof res.item === 'object') ? res.item : null;
-              const normalizedRef = normalizeOutboxRowRef(item || { channel, outbox_id: unresolvedId });
-              if (!normalizedRef) continue;
-              rememberOutboxRowRef(normalizedRef);
-              resolvedRef = normalizedRef;
-              break;
-            } catch {}
-          }
-
-          if (resolvedRef) {
-            pushDeleteItem(resolvedRef);
-          } else {
-            unresolvedSkipped.push(unresolvedId);
-          }
-        }
+        const unresolvedSkipped = selectionSnapshot.unresolvedIds.slice();
 
         if (!uniqueItems.length) {
           await showInfo({
@@ -166940,7 +166929,23 @@ function renderTools(){
 
         if (!confirmed) return;
 
-        const deleteRes = await apiDeleteOutboxMany(uniqueItems);
+        const deleteRes = {
+          results: [],
+          deleted: 0,
+          blocked_already_sent: 0,
+          blocked_invalid_status: 0,
+          not_found: 0,
+          other_blocked: 0
+        };
+        const deleteChunkSize = 100;
+        for (let offset = 0; offset < uniqueItems.length; offset += deleteChunkSize) {
+          const chunkResult = await apiDeleteOutboxMany(uniqueItems.slice(offset, offset + deleteChunkSize));
+          if (Array.isArray(chunkResult?.results)) deleteRes.results.push(...chunkResult.results);
+          ['deleted', 'blocked_already_sent', 'blocked_invalid_status', 'not_found', 'other_blocked'].forEach((key) => {
+            const value = Number(chunkResult && chunkResult[key]);
+            if (Number.isFinite(value)) deleteRes[key] += value;
+          });
+        }
 
         const resultRows = Array.isArray(deleteRes && deleteRes.results) ? deleteRes.results : [];
         resultRows.forEach((rowResult) => {
@@ -166975,6 +166980,11 @@ function renderTools(){
           confirm_class: 'btn btn-primary'
         });
 
+        try { window.CloudTMSSummaryContinuousGrid?.invalidate?.('outbox', { refresh: false }); } catch {}
+        try {
+          const membership = getSummaryMembership(sectionKey, getSummaryFingerprint(sectionKey));
+          if (membership) membership.stale = true;
+        } catch {}
         const data = await loadSection();
         renderSummary(data);
         try { renderTools(); } catch {}
@@ -166989,8 +166999,11 @@ function renderTools(){
     const refreshOutboxButtons = () => {
       try {
         const count = getSelectedOutboxCount();
-        btnDeleteSelected.disabled = (count === 0);
-        btnDeleteSelected.textContent = (count > 0) ? `Delete selected (${count})` : 'Delete selected';
+        const selection = ensureSelection(sectionKey);
+        const allFiltered = String(selection.mode || 'explicit').trim().toLowerCase() === 'all_filtered';
+        const hasSelection = allFiltered || Number(count || 0) > 0;
+        btnDeleteSelected.disabled = !hasSelection;
+        btnDeleteSelected.textContent = Number(count) > 0 ? `Delete selected (${count})` : 'Delete selected';
 
         const hasFilters = !!(stOutbox.filters && typeof stOutbox.filters === 'object' && Object.keys(stOutbox.filters).length > 0);
         btnClearFilters.disabled = !hasFilters;
@@ -213814,6 +213827,8 @@ function bindBulkProcessPreviewPane(state) {
       bindImagePreviewLoadGuards(existingImg, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
       return;
     }
+
+    if (!sortKey) return;
 
     stage.innerHTML = `
       <div
@@ -314100,6 +314115,10 @@ function buildOutboxFiltersFromUi() {
 }
 
 function renderOutboxTable(content, rows) {
+  const continuousGrid = window.CloudTMSSummaryContinuousGrid || null;
+  const continuousView = continuousGrid && typeof continuousGrid.getView === 'function'
+    ? continuousGrid.getView('outbox')
+    : null;
   const normalizeOutboxChannel = (value) => String(value == null ? '' : value).trim().toUpperCase();
   const normalizeOutboxId = (value) => String(value == null ? '' : value).trim();
   const makeOutboxSelectionKey = (channel, id) => {
@@ -314202,55 +314221,11 @@ function renderOutboxTable(content, rows) {
   });
   st.sort = normalizeOutboxSort(st.sort);
 
-  window.__selection = window.__selection || {};
-  const normalizeStringSet = (value) => {
-    const out = new Set();
-    if (value instanceof Set) {
-      Array.from(value)
-        .map(v => String(v == null ? '' : v).trim())
-        .filter(Boolean)
-        .forEach(v => out.add(v));
-      return out;
-    }
-    if (Array.isArray(value)) {
-      value
-        .map(v => String(v == null ? '' : v).trim())
-        .filter(Boolean)
-        .forEach(v => out.add(v));
-      return out;
-    }
-    return out;
-  };
-
-  const sel = (window.__selection.outbox ||= {
-    fingerprint: '',
-    ids: new Set(),
-    keys: new Set(),
-    row_refs: {},
-    row_refs_by_id: {}
-  });
-
-  sel.ids = normalizeStringSet(sel.ids);
-  sel.keys = normalizeStringSet(sel.keys);
-  if (!sel.row_refs || typeof sel.row_refs !== 'object' || Array.isArray(sel.row_refs)) {
-    sel.row_refs = {};
-  }
-  if (!sel.row_refs_by_id || typeof sel.row_refs_by_id !== 'object' || Array.isArray(sel.row_refs_by_id)) {
-    sel.row_refs_by_id = {};
-  }
-
   const getFp = () => (typeof getSummaryFingerprint === 'function')
     ? getSummaryFingerprint('outbox')
     : JSON.stringify({ section: 'outbox', filters: st.filters || {}, sort: st.sort || canonicalOutboxSort });
 
   const fp = getFp();
-  if (sel.fingerprint !== fp) {
-    sel.fingerprint = fp;
-    sel.ids.clear();
-    sel.keys.clear();
-    sel.row_refs = {};
-    sel.row_refs_by_id = {};
-  }
 
   const normalizeOutboxRowRef = (rowLike) => {
     const raw = (rowLike && typeof rowLike === 'object') ? rowLike : {};
@@ -314266,177 +314241,59 @@ function renderOutboxTable(content, rows) {
     };
   };
 
-  const rememberOutboxRowRef = (rowLike) => {
-    const ref = normalizeOutboxRowRef(rowLike);
-    if (!ref) return null;
+  window.__selection = window.__selection || {};
+  const legacyOutboxSelection = window.__selection.outbox;
+  const legacyKeys = legacyOutboxSelection?.keys instanceof Set
+    ? Array.from(legacyOutboxSelection.keys)
+    : (Array.isArray(legacyOutboxSelection?.keys) ? legacyOutboxSelection.keys.slice() : []);
+  const initialSelection = ensureSelection('outbox');
+  initialSelection.dataset_key = String(fp || '').trim();
+  initialSelection.fingerprint = String(fp || '').trim();
 
-    sel.row_refs[ref.key] = {
-      key: ref.key,
-      channel: ref.channel,
-      id: ref.id,
-      outbox_id: ref.outbox_id
-    };
-
-    const existingKeys = Array.isArray(sel.row_refs_by_id[ref.id])
-      ? sel.row_refs_by_id[ref.id]
-          .map(v => String(v == null ? '' : v).trim())
-          .filter(Boolean)
-      : [];
-
-    if (!existingKeys.includes(ref.key)) existingKeys.push(ref.key);
-    sel.row_refs_by_id[ref.id] = existingKeys;
-
-    return ref;
-  };
+  if (String(initialSelection.mode || 'explicit') === 'explicit' && legacyKeys.length) {
+    legacyKeys
+      .map((value) => parseOutboxSelectionKey(value)?.key || '')
+      .filter(Boolean)
+      .forEach((key) => initialSelection.included_ids.add(key));
+    initialSelection.ids = new Set(Array.from(initialSelection.included_ids));
+  }
 
   const removeOutboxSelectionRef = (rowLike) => {
     const ref = normalizeOutboxRowRef(rowLike);
     if (!ref) return;
-
-    try {
-      sel.keys.delete(ref.key);
-    } catch {}
-
-    try {
-      if (sel.row_refs && typeof sel.row_refs === 'object') {
-        delete sel.row_refs[ref.key];
-      }
-    } catch {}
-
-    try {
-      if (sel.row_refs_by_id && typeof sel.row_refs_by_id === 'object') {
-        const nextKeys = (Array.isArray(sel.row_refs_by_id[ref.id]) ? sel.row_refs_by_id[ref.id] : [])
-          .map(v => String(v == null ? '' : v).trim())
-          .filter(Boolean)
-          .filter(v => v !== ref.key);
-
-        if (nextKeys.length) {
-          sel.row_refs_by_id[ref.id] = nextKeys;
-        } else {
-          delete sel.row_refs_by_id[ref.id];
-        }
-
-        const stillSelectedForId = nextKeys.some((key) => sel.keys.has(key));
-        if (!stillSelectedForId) {
-          sel.ids.delete(ref.id);
-        }
-      } else {
-        sel.ids.delete(ref.id);
-      }
-    } catch {}
+    const selection = ensureSelection('outbox');
+    selection.included_ids.delete(ref.key);
+    selection.excluded_ids.delete(ref.key);
+    selection.ids = new Set(Array.from(selection.included_ids));
   };
 
   const setRowSelected = (rowLike, on) => {
-    const ref = rememberOutboxRowRef(rowLike);
+    const ref = normalizeOutboxRowRef(rowLike);
     if (!ref) return;
-
-    if (on) {
-      sel.ids.add(ref.id);
-      sel.keys.add(ref.key);
-      return;
+    const selection = ensureSelection('outbox');
+    const allFiltered = String(selection.mode || 'explicit').trim().toLowerCase() === 'all_filtered';
+    if (allFiltered) {
+      if (on) selection.excluded_ids.delete(ref.key);
+      else selection.excluded_ids.add(ref.key);
+    } else {
+      if (on) selection.included_ids.add(ref.key);
+      else selection.included_ids.delete(ref.key);
+      selection.excluded_ids.clear();
     }
-
-    removeOutboxSelectionRef(ref);
+    selection.ids = new Set(Array.from(selection.included_ids));
   };
 
-  const getSelectedSnapshot = () => {
-    const refs = [];
-    const seenKeys = new Set();
-    const resolvedIds = new Set();
-    const unresolvedIds = [];
-
-    const pushRef = (rowLike) => {
-      const ref = normalizeOutboxRowRef(rowLike);
-      if (!ref) return;
-      if (seenKeys.has(ref.key)) return;
-      seenKeys.add(ref.key);
-      refs.push({
-        key: ref.key,
-        channel: ref.channel,
-        id: ref.id,
-        outbox_id: ref.outbox_id
-      });
-      resolvedIds.add(ref.id);
-    };
-
-    sel.keys.forEach((rawKey) => {
-      const key = String(rawKey == null ? '' : rawKey).trim();
-      if (!key) return;
-
-      const storedRef = (sel.row_refs && typeof sel.row_refs === 'object')
-        ? sel.row_refs[key]
-        : null;
-
-      if (storedRef) {
-        pushRef(storedRef);
-        return;
-      }
-
-      const parsedRef = parseOutboxSelectionKey(key);
-      if (parsedRef) {
-        pushRef(parsedRef);
-      }
-    });
-
-    sel.ids.forEach((rawId) => {
-      const id = normalizeOutboxId(rawId);
-      if (!id) return;
-
-      const linkedKeys = Array.isArray(sel.row_refs_by_id[id])
-        ? sel.row_refs_by_id[id]
-            .map(v => String(v == null ? '' : v).trim())
-            .filter(Boolean)
-        : [];
-
-      if (linkedKeys.length) {
-        linkedKeys.forEach((linkedKey) => {
-          const storedRef = (sel.row_refs && typeof sel.row_refs === 'object')
-            ? sel.row_refs[linkedKey]
-            : null;
-
-          if (storedRef) {
-            pushRef(storedRef);
-            return;
-          }
-
-          const parsedRef = parseOutboxSelectionKey(linkedKey);
-          if (parsedRef) {
-            pushRef(parsedRef);
-          }
-        });
-        return;
-      }
-
-      if (!resolvedIds.has(id)) {
-        unresolvedIds.push(id);
-      }
-    });
-
-    return {
-      refs,
-      unresolvedIds: Array.from(new Set(
-        unresolvedIds
-          .map(v => normalizeOutboxId(v))
-          .filter(Boolean)
-          .filter(v => !resolvedIds.has(v))
-      ))
-    };
-  };
-
-  const getSelectedCount = () => {
-    const snapshot = getSelectedSnapshot();
-    return snapshot.refs.length + snapshot.unresolvedIds.length;
-  };
+  const getOutboxSelectedCount = () => getSelectedCount('outbox');
 
   const isRowSelected = (rowLike) => {
     const ref = normalizeOutboxRowRef(rowLike);
     if (!ref) return false;
-    return sel.keys.has(ref.key) || sel.ids.has(ref.id);
+    const selection = ensureSelection('outbox');
+    const allFiltered = String(selection.mode || 'explicit').trim().toLowerCase() === 'all_filtered';
+    return allFiltered
+      ? !selection.excluded_ids.has(ref.key)
+      : selection.included_ids.has(ref.key);
   };
-
-  normalizedRows.forEach((row) => {
-    rememberOutboxRowRef(row);
-  });
 
   const fmtDt = (v) => {
     try {
@@ -314557,6 +314414,7 @@ function renderOutboxTable(content, rows) {
   };
 
   const rerenderWithFreshData = async () => {
+    try { continuousGrid?.invalidate?.('outbox', { refresh: false }); } catch {}
     const data = await loadSection();
     renderSummary(data);
   };
@@ -314570,28 +314428,10 @@ function renderOutboxTable(content, rows) {
   const topControls = document.createElement('div');
   topControls.style.cssText = 'display:flex;align-items:end;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line);flex-wrap:wrap;';
 
-  const sizeLabel = document.createElement('span');
-  sizeLabel.className = 'mini';
-  sizeLabel.textContent = 'Page size:';
-  topControls.appendChild(sizeLabel);
-
-  const sizeSel = document.createElement('select');
-  sizeSel.id = 'outboxPageSize';
-  sizeSel.classList.add('dark-control');
-  ['50', '100', '200', 'ALL'].forEach((optVal) => {
-    const opt = document.createElement('option');
-    opt.value = optVal;
-    opt.textContent = (optVal === 'ALL') ? 'All' : `First ${optVal}`;
-    if (String(st.pageSize) === optVal) opt.selected = true;
-    sizeSel.appendChild(opt);
-  });
-  sizeSel.addEventListener('change', async () => {
-    const val = String(sizeSel.value || '50');
-    st.pageSize = (val === 'ALL') ? 'ALL' : Number(val);
-    st.page = 1;
-    await rerenderWithFreshData();
-  });
-  topControls.appendChild(sizeSel);
+  const continuousLabel = document.createElement('span');
+  continuousLabel.className = 'mini';
+  continuousLabel.textContent = 'Continuous view · loads ahead as you scroll';
+  topControls.appendChild(continuousLabel);
 
   const mkField = (labelText, controlEl) => {
     const wrap = document.createElement('div');
@@ -314721,7 +314561,8 @@ function renderOutboxTable(content, rows) {
   const selectedInfo = document.createElement('div');
   selectedInfo.className = 'mini';
   selectedInfo.style.opacity = '.8';
-  selectedInfo.innerHTML = `Selected: <strong id="outboxSelectedCount">${getSelectedCount()}</strong>`;
+  const initialSelectedCount = getOutboxSelectedCount();
+  selectedInfo.innerHTML = `Selected: <strong id="outboxSelectedCount">${initialSelectedCount == null ? '…' : initialSelectedCount}</strong>`;
   topControls.appendChild(selectedInfo);
 
   const clearSelBtn = document.createElement('button');
@@ -314799,11 +314640,31 @@ function renderOutboxTable(content, rows) {
   thSel.innerHTML = `<input type="checkbox" id="outboxSelectAll" />`;
   trh.appendChild(thSel);
 
+  const outboxHeaderSortKeys = {
+    channel: 'channel',
+    status: 'status',
+    created: 'created_at_utc',
+    scheduled: 'scheduled_for_utc',
+    ready: 'effective_ready_at_utc'
+  };
   ['channel','recipient','content','status','queue','created','scheduled','ready','actions'].forEach((key) => {
     const col = outboxColumnMap[key];
     const th = document.createElement('th');
-    th.textContent = col.label;
+    const sortKey = outboxHeaderSortKeys[key] || '';
+    const activeSort = !!sortKey && String(st.sort?.key || '') === sortKey;
+    th.textContent = `${col.label}${activeSort ? (st.sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}`;
     th.style.cssText = `${outboxColumnWidthCss(key)}white-space:nowrap;`;
+    if (sortKey) {
+      th.dataset.sortKey = sortKey;
+      th.style.cursor = 'pointer';
+      th.title = `Sort by ${col.label}`;
+      th.addEventListener('click', async () => {
+        const nextDir = activeSort && st.sort.dir === 'asc' ? 'desc' : 'asc';
+        st.sort = { key: sortKey, dir: nextDir };
+        st.page = 1;
+        await rerenderWithFreshData();
+      });
+    }
     trh.appendChild(th);
   });
 
@@ -314816,6 +314677,7 @@ function renderOutboxTable(content, rows) {
       tr.dataset.outboxId = String(r.id || '');
       tr.dataset.channel = String(r.channel || '').toUpperCase();
       tr.dataset.outboxKey = String(r.outbox_key || '');
+      tr.dataset.id = String(r.outbox_key || '');
 
       tr.innerHTML = `
         <td style="${outboxColumnWidthCss('select', { lock: true })}">
@@ -314853,6 +314715,10 @@ function renderOutboxTable(content, rows) {
     tb.appendChild(tr);
   }
 
+  if (continuousGrid && typeof continuousGrid.applySpacers === 'function') {
+    continuousGrid.applySpacers('outbox', tb, outboxColumnDefs.length);
+  }
+
   const getRowByBtn = (btn) => {
     const key = String(btn.getAttribute('data-outbox-key') || '').trim();
     if (!key) return null;
@@ -314864,17 +314730,25 @@ function renderOutboxTable(content, rows) {
 
   const updateSelectionUi = () => {
     const visibleSelected = normalizedRows.filter((row) => isRowSelected(row)).length;
+    const selectedCount = getOutboxSelectedCount();
+    const selection = ensureSelection('outbox');
+    const allFiltered = String(selection.mode || 'explicit').trim().toLowerCase() === 'all_filtered';
+    const excludedCount = selection.excluded_ids instanceof Set ? selection.excluded_ids.size : 0;
+    const explicitCount = selection.included_ids instanceof Set ? selection.included_ids.size : 0;
 
     if (selectAll) {
-      selectAll.checked = (normalizedRows.length > 0 && visibleSelected === normalizedRows.length);
-      selectAll.indeterminate = (visibleSelected > 0 && visibleSelected < normalizedRows.length);
+      selectAll.checked = !!(allFiltered && excludedCount === 0 && Number(st.total || normalizedRows.length) > 0);
+      selectAll.indeterminate = allFiltered
+        ? excludedCount > 0
+        : (visibleSelected > 0 || explicitCount > 0);
     }
 
-    if (selectedCountEl) selectedCountEl.textContent = String(getSelectedCount());
+    if (selectedCountEl) selectedCountEl.textContent = selectedCount == null ? '…' : String(selectedCount);
 
     if (clearSelBtn) {
-      clearSelBtn.disabled = (getSelectedCount() === 0);
-      clearSelBtn.style.opacity = (getSelectedCount() === 0) ? '0.6' : '';
+      const hasSelection = allFiltered || explicitCount > 0;
+      clearSelBtn.disabled = !hasSelection;
+      clearSelBtn.style.opacity = hasSelection ? '' : '0.6';
     }
 
     updateToolButtons();
@@ -314893,8 +314767,16 @@ function renderOutboxTable(content, rows) {
   };
 
   clearSelBtn.onclick = () => {
-    sel.ids.clear();
-    sel.keys.clear();
+    const selection = ensureSelection('outbox');
+    selection.mode = 'explicit';
+    selection.included_ids.clear();
+    selection.excluded_ids.clear();
+    selection.ids = new Set();
+    selection.membership_total = null;
+    selection.membership_status = 'none';
+    selection.membership_source = 'none';
+    selection.membership_authoritative = false;
+    selection.membership_fallback_total = null;
     currentSelection = null;
     updateSelectionUi();
     bodyWrap.querySelectorAll('.outbox-row-select').forEach((cb) => {
@@ -314906,11 +314788,23 @@ function renderOutboxTable(content, rows) {
     selectAll.onclick = (ev) => {
       ev.stopPropagation();
       const wantOn = !!selectAll.checked;
-      normalizedRows.forEach((row) => setRowSelected(row, wantOn));
+      const selection = ensureSelection('outbox');
+      selection.mode = wantOn ? 'all_filtered' : 'explicit';
+      selection.included_ids.clear();
+      selection.excluded_ids.clear();
+      selection.ids = new Set();
+      selection.membership_total = null;
+      selection.membership_status = wantOn ? 'pending' : 'none';
+      selection.membership_source = wantOn ? 'summary_membership' : 'none';
+      selection.membership_authoritative = false;
+      selection.membership_fallback_total = Number.isFinite(Number(st.total)) ? Number(st.total) : null;
       bodyWrap.querySelectorAll('.outbox-row-select').forEach((cb) => {
         cb.checked = wantOn;
       });
       updateSelectionUi();
+      if (wantOn && typeof primeSummaryMembership === 'function') {
+        void primeSummaryMembership('outbox', fp, { explicitFullMembership: true }).then(updateSelectionUi);
+      }
     };
   }
 
@@ -315028,7 +314922,7 @@ function renderOutboxTable(content, rows) {
   info.className = 'mini';
 
   const pageNum = Number(st.page || 1);
-  const pageSize = st.pageSize === 'ALL' ? 'ALL' : Number(st.pageSize || 50);
+  const pageSize = continuousView ? 'CONTINUOUS' : (st.pageSize === 'ALL' ? 'ALL' : Number(st.pageSize || 50));
   const totalKnown = (typeof st.total === 'number');
   const hasMore = !!st.hasMore;
 
@@ -315044,7 +314938,7 @@ function renderOutboxTable(content, rows) {
   };
 
   let maxPageToShow;
-  if (totalKnown && pageSize !== 'ALL') {
+  if (totalKnown && pageSize !== 'ALL' && pageSize !== 'CONTINUOUS') {
     maxPageToShow = Math.max(1, Math.ceil(st.total / Number(pageSize)));
   } else if (pageSize === 'ALL') {
     maxPageToShow = 1;
@@ -315052,7 +314946,7 @@ function renderOutboxTable(content, rows) {
     maxPageToShow = hasMore ? (pageNum + 1) : pageNum;
   }
 
-  if (pageSize !== 'ALL') {
+  if (pageSize !== 'ALL' && pageSize !== 'CONTINUOUS') {
     const prevBtn = mkBtn('Prev', pageNum <= 1, async () => {
       st.page = Math.max(1, pageNum - 1);
       await rerenderWithFreshData();
@@ -315097,7 +314991,21 @@ function renderOutboxTable(content, rows) {
     pager.appendChild(nextBtn);
   }
 
-  if (pageSize === 'ALL') {
+  if (pageSize === 'CONTINUOUS') {
+    const start = Number(continuousView?.startIndex || 0) + (normalizedRows.length ? 1 : 0);
+    const end = Number(continuousView?.endIndex || 0);
+    const total = Number(continuousView?.total);
+    info.textContent = Number.isFinite(total)
+      ? `Showing ${start}–${end} of ${total} · loading ahead as you scroll`
+      : `Showing ${start}–${end} · loading ahead as you scroll`;
+    pager.classList.add('ctms-continuous-status');
+    if (continuousView?.loading) {
+      const activity = document.createElement('span');
+      activity.className = 'ctms-continuous-status__activity';
+      activity.textContent = 'LOADING AHEAD';
+      pager.appendChild(activity);
+    }
+  } else if (pageSize === 'ALL') {
     info.textContent = `Showing all ${normalizedRows.length} rows.`;
   } else if (totalKnown) {
     const start = ((pageNum - 1) * pageSize) + 1;
@@ -315142,15 +315050,27 @@ function renderOutboxTable(content, rows) {
 
   const scrollHost = bodyWrap;
   if (scrollHost) {
-    scrollHost.__activeMemKey = memKey;
-    scrollHost.scrollTop = prevScrollY;
-    if (!scrollHost.__scrollMemHooked) {
-      scrollHost.addEventListener('scroll', () => {
-        const k = scrollHost.__activeMemKey || memKey;
-        window.__scrollMemory[k] = scrollHost.scrollTop || 0;
-      });
-      scrollHost.__scrollMemHooked = true;
+    if (continuousView && continuousGrid && typeof continuousGrid.mount === 'function') {
+      continuousGrid.mount('outbox', scrollHost);
+    } else {
+      scrollHost.__activeMemKey = memKey;
+      scrollHost.scrollTop = prevScrollY;
+      if (!scrollHost.__scrollMemHooked) {
+        scrollHost.addEventListener('scroll', () => {
+          const k = scrollHost.__activeMemKey || memKey;
+          window.__scrollMemory[k] = scrollHost.scrollTop || 0;
+        });
+        scrollHost.__scrollMemHooked = true;
+      }
     }
+  }
+
+  if (typeof attachSummaryTypeAheadNavigation === 'function') {
+    attachSummaryTypeAheadNavigation('outbox', bodyWrap, normalizedRows, {
+      datasetKey: fp,
+      sort: st.sort,
+      getRowId: (row) => String(row?.outbox_key || '')
+    });
   }
 
   updateSelectionUi();
@@ -315294,6 +315214,27 @@ function ensureTimesheetSummaryTargetedRefreshManager() {
       if (!requested.length) {
         active.cursor = nextCursor;
         if (window.__listState?.timesheets) window.__listState.timesheets.candidate_timesheet_summary_cursor = nextCursor;
+        return false;
+      }
+
+      const activeSortKey = normaliseText(window.__listState?.timesheets?.sort?.key);
+      const activeFilters = window.__listState?.timesheets?.filters;
+      const hasOrderSensitiveFilter = !!(
+        activeFilters &&
+        typeof activeFilters === 'object' &&
+        ['route_type', 'sheet_scope', 'submission_mode', 'processing_status', 'processing_status_display']
+          .some((key) => normaliseText(activeFilters[key]))
+      );
+      if (
+        window.CloudTMSSummaryContinuousGrid?.getController?.('timesheets') &&
+        (sortableFields.has(activeSortKey) || hasOrderSensitiveFilter)
+      ) {
+        window.CloudTMSSummaryContinuousGrid.invalidate('timesheets', { refresh: false });
+        window.__updatesAvailable = window.__updatesAvailable || {};
+        window.__updatesAvailable.timesheets = true;
+        active.cursor = nextCursor;
+        if (window.__listState?.timesheets) window.__listState.timesheets.candidate_timesheet_summary_cursor = nextCursor;
+        try { renderTools(); } catch {}
         return false;
       }
 
@@ -315449,6 +315390,10 @@ function renderSummary(rows){
     st.sort = { key: null, dir: 'asc' };
   }
   const sortState = st.sort;
+  const continuousGrid = window.CloudTMSSummaryContinuousGrid || null;
+  const continuousView = continuousGrid && typeof continuousGrid.getView === 'function'
+    ? continuousGrid.getView(currentSection)
+    : null;
 
   const CANDIDATE_SORT_ALLOWED = new Set([
     'tms_ref',
@@ -316134,24 +316079,30 @@ const applyToolsUiState = () => {
   const topControls = document.createElement('div');
   topControls.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line);flex-wrap:wrap';
 
-  // Page size
-  const sizeLabel = document.createElement('span'); sizeLabel.className = 'mini'; sizeLabel.textContent = 'Page size:';
-  const sizeSel = document.createElement('select'); sizeSel.id = 'summaryPageSize';
-  sizeSel.classList.add('dark-control');
-  ['50','100','200','ALL'].forEach(optVal => {
-    const opt = document.createElement('option');
-    opt.value = optVal; opt.textContent = (optVal === 'ALL') ? 'All' : `First ${optVal}`;
-    if (String(pageSize) === optVal) opt.selected = true;
-    sizeSel.appendChild(opt);
-  });
-  sizeSel.addEventListener('change', async () => {
-    const val = sizeSel.value;
-    window.__listState[currentSection].pageSize = (val === 'ALL') ? 'ALL' : Number(val);
-    window.__listState[currentSection].page = 1;
-    await reloadSummaryAfterGridStateChange('page-size-changed');
-  });
-  topControls.appendChild(sizeLabel);
-  topControls.appendChild(sizeSel);
+  if (continuousView) {
+    const continuousLabel = document.createElement('span');
+    continuousLabel.className = 'mini';
+    continuousLabel.textContent = 'Continuous view · loads ahead as you scroll';
+    topControls.appendChild(continuousLabel);
+  } else {
+    const sizeLabel = document.createElement('span'); sizeLabel.className = 'mini'; sizeLabel.textContent = 'Page size:';
+    const sizeSel = document.createElement('select'); sizeSel.id = 'summaryPageSize';
+    sizeSel.classList.add('dark-control');
+    ['50','100','200','ALL'].forEach(optVal => {
+      const opt = document.createElement('option');
+      opt.value = optVal; opt.textContent = (optVal === 'ALL') ? 'All' : `First ${optVal}`;
+      if (String(pageSize) === optVal) opt.selected = true;
+      sizeSel.appendChild(opt);
+    });
+    sizeSel.addEventListener('change', async () => {
+      const val = sizeSel.value;
+      window.__listState[currentSection].pageSize = (val === 'ALL') ? 'ALL' : Number(val);
+      window.__listState[currentSection].page = 1;
+      await reloadSummaryAfterGridStateChange('page-size-changed');
+    });
+    topControls.appendChild(sizeLabel);
+    topControls.appendChild(sizeSel);
+  }
 
   // ✅ Umbrellas: checkbox to include disabled (i.e., remove enabled filter)
   if (currentSection === 'umbrellas') {
@@ -318870,6 +318821,10 @@ const getSelectionUiState = () => {
     }, 0);
   });
 
+  if (continuousView && continuousGrid && typeof continuousGrid.applySpacers === 'function') {
+    continuousGrid.applySpacers(currentSection, tb, cols.length + 1);
+  }
+
   // ── Apply widths + wire resize/reorder + header context menu ────────────────
   applyUserGridPrefs(currentSection, tbl, cols);
   wireGridColumnResizing(currentSection, tbl);
@@ -318947,11 +318902,12 @@ const getSelectionUiState = () => {
   const totalKnown = (typeof st.total === 'number');
   const current = page;
   let maxPageToShow;
-  if (totalKnown && pageSize !== 'ALL') maxPageToShow = Math.max(1, Math.ceil(st.total / Number(pageSize)));
+  if (continuousView) maxPageToShow = 1;
+  else if (totalKnown && pageSize !== 'ALL') maxPageToShow = Math.max(1, Math.ceil(st.total / Number(pageSize)));
   else if (pageSize === 'ALL') maxPageToShow = 1;
   else maxPageToShow = hasMore ? (current + 1) : current;
 
-  if (pageSize !== 'ALL') {
+  if (!continuousView && pageSize !== 'ALL') {
     const prevBtn = mkBtn('Prev', current <= 1, async () => {
       window.__listState[currentSection].page = Math.max(1, current - 1);
       const data = await loadSection();
@@ -318990,7 +318946,21 @@ const getSelectionUiState = () => {
     pager.appendChild(nextBtn);
   }
 
-  if (pageSize === 'ALL') info.textContent = `Showing all ${effectiveRows.length} ${currentSection}.`;
+  if (continuousView) {
+    const start = Number(continuousView.startIndex || 0) + (effectiveRows.length ? 1 : 0);
+    const end = Number(continuousView.endIndex || 0);
+    const total = Number(continuousView.total);
+    info.textContent = Number.isFinite(total)
+      ? `Showing ${start}–${end} of ${total} · loading ahead as you scroll`
+      : `Showing ${start}–${end} · loading ahead as you scroll`;
+    pager.classList.add('ctms-continuous-status');
+    if (continuousView.loading) {
+      const activity = document.createElement('span');
+      activity.className = 'ctms-continuous-status__activity';
+      activity.textContent = 'LOADING AHEAD';
+      pager.appendChild(activity);
+    }
+  } else if (pageSize === 'ALL') info.textContent = `Showing all ${effectiveRows.length} ${currentSection}.`;
   else if (totalKnown) {
     const ps = Number(pageSize);
     const start = (current-1)*ps + 1;
@@ -319109,7 +319079,9 @@ const getSelectionUiState = () => {
   // Restore scroll memory on inner summary-body (data rows only)
   try {
     const scrollHost = content.querySelector('.summary-body');
-    if (scrollHost) {
+    if (scrollHost && continuousView && continuousGrid && typeof continuousGrid.mount === 'function') {
+      continuousGrid.mount(currentSection, scrollHost);
+    } else if (scrollHost) {
       scrollHost.__activeMemKey = memKey;
       scrollHost.scrollTop = prevScrollY;
       if (!scrollHost.__scrollMemHooked) {
@@ -376762,11 +376734,10 @@ async function listTimesheetsSummary(filters = {}) {
     margin:                    'margin_ex_vat'
   };
 
-  // Candidate Submission is a bounded Office projection rather than a native
-  // summary-view column. Use a stable server order while the complete filtered
-  // result is projected and sorted below.
+  // Candidate Submission is resolved by the Worker in bounded server pages;
+  // the browser receives only the requested continuous-grid batch.
   const orderBy = sortKeyRaw === 'candidate_submission'
-    ? 'week_ending_date'
+    ? 'candidate_submission'
     : (sortMap[sortKeyRaw] || 'week_ending_date');
   qs.set('order_by', orderBy);
   qs.set('order_dir', sortDir);
@@ -376788,47 +376759,6 @@ async function listTimesheetsSummary(filters = {}) {
   }
 
   let rows  = Array.isArray(json.items) ? json.items : (Array.isArray(json.rows) ? json.rows : []);
-
-  if (sortKeyRaw === 'candidate_submission') {
-    const candidateSortTotal = Number(json.total ?? json.count ?? json.count_all ?? rows.length);
-    const totalForSort = Number.isFinite(candidateSortTotal) ? Math.max(0, candidateSortTotal) : rows.length;
-    if (!window.CloudTMSCandidateOfficeBridge?.sortSummaryRowsByCandidateStatus) {
-      throw new Error('Candidate Submission sorting is temporarily unavailable.');
-    }
-    const fullPageSize = 200;
-    const pageCount = Math.max(1, Math.ceil(totalForSort / fullPageSize));
-    const collected = [];
-    for (let start = 1; start <= pageCount; start += 4) {
-      const pageNumbers = Array.from({ length: Math.min(4, pageCount - start + 1) }, (_, index) => start + index);
-      const pageRows = await Promise.all(pageNumbers.map(async pageNumber => {
-        const allQuery = new URLSearchParams(qs);
-        allQuery.set('page', String(pageNumber));
-        allQuery.set('page_size', String(fullPageSize));
-        allQuery.set('include_totals', 'false');
-        allQuery.set('include_count', 'false');
-        allQuery.set('order_by', 'week_ending_date');
-        allQuery.set('order_dir', 'desc');
-        const pageResponse = await authFetch(API(`/api/timesheets/summary?${allQuery.toString()}`));
-        const pageText = await pageResponse.text();
-        if (!pageResponse.ok) throw new Error(pageText || `Failed to fetch Candidate Submission sort page (${pageResponse.status})`);
-        let pagePayload = {};
-        try { pagePayload = pageText ? JSON.parse(pageText) : {}; } catch {}
-        return Array.isArray(pagePayload.items) ? pagePayload.items : (Array.isArray(pagePayload.rows) ? pagePayload.rows : []);
-      }));
-      pageRows.forEach(group => collected.push(...group));
-    }
-    const uniqueRows = [];
-    const seenRows = new Set();
-    for (const row of collected) {
-      const stableId = String(row?.timesheet_id || row?.contract_week_id || row?.id || '');
-      if (!stableId || seenRows.has(stableId)) continue;
-      seenRows.add(stableId);
-      uniqueRows.push(row);
-    }
-    const sortedRows = await window.CloudTMSCandidateOfficeBridge.sortSummaryRowsByCandidateStatus(uniqueRows, sortDir);
-    const startIndex = (page - 1) * pageSize;
-    rows = sortedRows.slice(startIndex, startIndex + pageSize);
-  }
 
   // ✅ total: tolerate multiple server keys, but never use visible page rows as the all-filtered count fallback.
   // The all-filtered count must remain server-authoritative. If the backend omits it, keep st.total null.
@@ -381989,6 +381919,7 @@ async function bootstrapApp(){
           timesheets: 'timesheets',
           invoices: 'invoices',
           umbrellas: 'umbrellas',
+          outbox: 'outbox',
           imports: 'imports'
         };
 
@@ -384752,6 +384683,15 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
             const s = entityToSection[String(ent || '').toLowerCase()];
             if (!s) continue;
             window.__updatesAvailable[s] = true;
+            try { window.CloudTMSSummaryContinuousGrid?.invalidate?.(s, { refresh: false }); } catch {}
+            try {
+              const cache = window.__summaryCache?.[s];
+              if (cache && typeof cache === 'object') {
+                Object.values(cache).forEach((entry) => {
+                  if (entry && typeof entry === 'object') entry.stale = true;
+                });
+              }
+            } catch {}
             if (s === currentSection) touchedCurrent = true;
           }
 
@@ -384824,6 +384764,7 @@ const refreshWorkbenchVisiblePageAfterProgress = async (watchContext, progressRe
 // not add another polling loop.
 window.invoiceAsyncRefreshVisibleSection = async function invoiceAsyncRefreshVisibleSection() {
   if (currentSection !== 'invoices') return false;
+  try { window.CloudTMSSummaryContinuousGrid?.invalidate?.('invoices', { refresh: false }); } catch {}
   const data = await loadSection();
   renderSummary(data);
   try { renderTools(); } catch {}
