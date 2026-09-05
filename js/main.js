@@ -315204,8 +315204,8 @@ function renderOutboxTable(content, rows) {
     const continuousTotalRaw = continuousView?.total;
     const total = continuousTotalRaw == null ? null : Number(continuousTotalRaw);
     info.textContent = Number.isFinite(total)
-      ? `Showing ${start}–${end} of ${total} · loading ahead as you scroll`
-      : `Showing ${start}–${end} · loading ahead as you scroll`;
+      ? `Showing ${start}–${end} of ${total}`
+      : `Showing ${start}–${end}`;
     pager.classList.add('ctms-continuous-status');
   } else if (pageSize === 'ALL') {
     info.textContent = `Showing all ${normalizedRows.length} rows.`;
@@ -319157,8 +319157,8 @@ const getSelectionUiState = () => {
     const continuousTotalRaw = continuousView.total;
     const total = continuousTotalRaw == null ? null : Number(continuousTotalRaw);
     info.textContent = Number.isFinite(total)
-      ? `Showing ${start}–${end} of ${total} · loading ahead as you scroll`
-      : `Showing ${start}–${end} · loading ahead as you scroll`;
+      ? `Showing ${start}–${end} of ${total}`
+      : `Showing ${start}–${end}`;
     pager.classList.add('ctms-continuous-status');
   } else if (pageSize === 'ALL') info.textContent = `Showing all ${effectiveRows.length} ${currentSection}.`;
   else if (totalKnown) {
