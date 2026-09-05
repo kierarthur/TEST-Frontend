@@ -100,9 +100,18 @@
       unavailable: !APPROVED_CANDIDATE_SUBMISSION_STATUS[normalized] || normalized === 'STATUS_UNAVAILABLE'
     });
   };
-  const candidateSubmissionApplies = projection => ['ELECTRONIC', 'QR'].includes(
-    String(projection?.current_identity?.route_family || '').toUpperCase()
-  );
+  const candidateSubmissionApplies = projection => {
+    const routeFamily = String(projection?.current_identity?.route_family || '').toUpperCase();
+    const recordRole = String(projection?.current_identity?.record_role || '').toUpperCase();
+    const workflowRoute = String(projection?.workflow?.route || '').toUpperCase();
+    const workflowState = String(projection?.workflow?.state || '').toUpperCase();
+    // Imported hours have no Candidate submission lifecycle and remain blank.
+    // A separate expense-only carrier or active/retained printed submission
+    // can own a real Candidate workflow even when the stored Timesheet route
+    // is manual or belongs to an import-authoritative week.
+    return ['ELECTRONIC', 'QR'].includes(routeFamily)
+      || (!!workflowState && (recordRole === 'EXPENSE_ONLY' || workflowRoute === 'PAPER'));
+  };
   const isReceivedDailySubmission = projection => {
     const workflow = projection.workflow;
     const manager = projection.manager_approval;

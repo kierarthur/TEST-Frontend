@@ -103,6 +103,67 @@ test('all Office surfaces leave Manual non-QR and import-authoritative records b
   }
 });
 
+test('an import-authoritative expense-only carrier presents its own durable Candidate workflow', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const input = projection('AUTHORISED', 'Authorised', 'success', {
+    current_identity: {
+      row_key: 'expense-carrier',
+      route_family: 'IMPORT_AUTHORITATIVE',
+      record_role: 'EXPENSE_ONLY'
+    },
+    workflow: { state: 'FINALISED', historical: true }
+  });
+
+  assert.equal(window.CloudTMSCandidateOfficePresenter.candidateSubmissionApplies(input), true);
+  const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input);
+  assert.equal(view.status.label, 'Candidate Submission Complete');
+  const html = window.CloudTMSCandidateOfficeSurface.renderCandidateSummaryCell(view);
+  assert.match(html, /Candidate Submission Complete/);
+});
+
+test('an import-authoritative hours anchor remains blank without a Candidate workflow', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const input = projection('AUTHORISED', 'Authorised', 'success', {
+    current_identity: {
+      row_key: 'imported-hours-anchor',
+      route_family: 'IMPORT_AUTHORITATIVE',
+      record_role: 'HOURS_ANCHOR'
+    }
+  });
+
+  assert.equal(window.CloudTMSCandidateOfficePresenter.candidateSubmissionApplies(input), false);
+  assert.equal(window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input).status, null);
+});
+
+test('a manual row presents its real printed Candidate workflow', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const input = projection('AWAITING_PAPER_RETURN', 'Awaiting paper return', 'warning', {
+    current_identity: {
+      row_key: 'manual-paper-row',
+      route_family: 'MANUAL_NON_QR',
+      record_role: 'HOURS_ONLY'
+    },
+    workflow: { state: 'AWAITING_PAPER_RETURN', route: 'PAPER', historical: false },
+    paper_pack: { state: 'FAILED_TERMINAL' }
+  });
+
+  assert.equal(window.CloudTMSCandidateOfficePresenter.candidateSubmissionApplies(input), true);
+  const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input);
+  assert.equal(view.status.label, 'QR Pack Needs Attention');
+});
+
 test('unknown server status fails closed as a blank Summary cell instead of showing technical text', () => {
   const window = load(
     'candidate-office-ui-policy-v1.js',

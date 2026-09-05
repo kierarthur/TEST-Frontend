@@ -331615,7 +331615,7 @@ const lifecycleReadOnlyBlocked = footerState.lifecycleActionsBlocked === true ||
 const lifecycleBlocked = lifecycleBusy || lifecycleCriticalBlocked || lifecycleReadOnlyBlocked;
 const lifecycleBlockedReason = lifecycleBusy
   ? (String(lifecycleBusyState?.reason || 'Timesheet lifecycle update in progress'))
-  : (lifecycleReadOnlyBlocked
+  : (isArchivedNow
       ? 'Archived timesheets must be Unarchived before lifecycle actions.'
       : String(mcNow.__timesheetLifecycleCriticalStateReason || 'Waiting for trusted lifecycle state'));
 
@@ -360937,8 +360937,10 @@ function renderTimesheetOverviewTab(ctx) {
       (
         stageRaw === 'UNPROCESSED' ||
         stageRaw === 'UNASSIGNED' ||
-        summaryStageRaw === 'UNPROCESSED' ||
-        toolsStageRaw === 'UNPROCESSED'
+        (!stageRaw && (
+          summaryStageRaw === 'UNPROCESSED' ||
+          toolsStageRaw === 'UNPROCESSED'
+        ))
       )
     );
 
