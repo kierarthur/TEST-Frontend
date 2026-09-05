@@ -105,7 +105,11 @@ test('submitted Candidate Timesheets keep Delete visible but route it to rejecti
   assert.match(footer, /const dpCandidateRejectionRequired = dp\?\.candidate_submission_rejection_required === true/);
   assert.match(footer, /\(dpEligible === true \|\| dpCandidateRejectionRequired\)/);
   assert.match(handler, /title: 'Reject before deleting'/);
-  assert.match(handler, /confirmLabel: 'Reject Candidate Submission'/);
+  assert.match(handler, /const choice = await openUiConfirmModal\(\{/);
+  assert.match(handler, /confirm_label: 'Reject Candidate Submission'/);
+  assert.match(handler, /cancel_label: 'Go Back'/);
+  assert.match(handler, /kind: 'timesheet-delete-requires-candidate-rejection'/);
+  assert.doesNotMatch(handler, /showConfirmDialog/);
   assert.match(handler, /actionCode: 'REJECT_CANDIDATE_SUBMISSION'/);
   assert.match(handler, /Rejecting the Candidate Submission will also reject the linked pending expense claim at the same time/);
 });

@@ -333234,19 +333234,16 @@ if (btnTsProcess) {
                       ? 'Rejecting the Candidate Submission will also reject the linked pending expense claim at the same time.'
                       : `Rejecting the Candidate Submission will also reject the ${linkedExpenseCount} linked pending expense claims at the same time.`)
                   : '';
-                let rejectRequested = false;
-                if (typeof showConfirmDialog === 'function') {
-                  const choice = await showConfirmDialog({
-                    title: 'Reject before deleting',
-                    message: [statusMessage, expenseMessage, 'Would you like to reject the Candidate Submission now?'].filter(Boolean).join('\n\n'),
-                    confirmLabel: 'Reject Candidate Submission',
-                    cancelLabel: 'Go Back',
-                    danger: true
-                  });
-                  rejectRequested = choice === true || choice?.confirmed === true;
-                } else {
-                  rejectRequested = window.confirm([statusMessage, expenseMessage, 'Would you like to reject the Candidate Submission now?'].filter(Boolean).join('\n\n'));
-                }
+                const choice = await openUiConfirmModal({
+                  title: 'Reject before deleting',
+                  message: [statusMessage, expenseMessage, 'Would you like to reject the Candidate Submission now?'].filter(Boolean).join('\n\n'),
+                  confirm_label: 'Reject Candidate Submission',
+                  cancel_label: 'Go Back',
+                  confirm_class: 'btn btn-warn',
+                  cancel_class: 'btn btn-outline',
+                  kind: 'timesheet-delete-requires-candidate-rejection'
+                });
+                const rejectRequested = choice?.confirmed === true;
                 if (rejectRequested) {
                   try {
                     const bridge = window.CloudTMSCandidateOfficeBridge;
