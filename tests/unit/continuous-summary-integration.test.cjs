@@ -15,8 +15,8 @@ test('all approved summaries use continuous loading while Banking Pay remains pa
   assert.match(source, /continuousGrid\.applySpacers\(currentSection, tb, cols\.length \+ 1\)/);
   assert.match(source, /continuousGrid\.applySpacers\('outbox', tb, outboxColumnDefs\.length\)/);
   assert.doesNotMatch(source, /CloudTMSCandidateOfficeBridge\.sortSummaryRowsByCandidateStatus\(uniqueRows/);
-  assert.match(html, /summary-continuous-grid-v1\.js\?v=20260905-r5/);
-  assert.match(html, /summary-modernisation\.css\?v=20260905-continuous-grid-r3/);
+  assert.match(html, /summary-continuous-grid-v1\.js\?v=20260905-r6/);
+  assert.match(html, /summary-modernisation\.css\?v=20260905-continuous-grid-r4/);
   const loadSectionSource = source.slice(
     source.indexOf('async function loadSection()'),
     source.indexOf('function renderSummary(')
@@ -39,6 +39,14 @@ test('continuous sheets retain keyboard, sort and heartbeat reconciliation contr
   assert.match(source, /\['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'\]/);
   assert.match(source, /const renderedActiveId = String\(/);
   assert.match(source, /landedState\.active_row_id = String\(result\.rowId \|\| ''\)\.trim\(\)/);
+  const activeUiSource = source.slice(
+    source.indexOf('const syncSummaryActiveRowUi ='),
+    source.indexOf('const setSummaryActiveRow =')
+  );
+  assert.ok(
+    activeUiSource.indexOf('bodyWrap.focus') < activeUiSource.indexOf("targetRow.classList.add('active-summary-row')"),
+    'focus must transfer before the active-row repaint so a following key cannot land on a detached grid'
+  );
   assert.match(source, /runContinuousSummaryJump\(continuousController, ordinalIndex/);
   assert.match(source, /window\.CloudTMSSummaryContinuousGrid\?\.invalidate\?\.\(s, \{ refresh: false \}\)/);
   assert.match(source, /outboxHeaderSortKeys/);
@@ -64,6 +72,9 @@ test('explicit long keyboard jumps refresh their destination under the loading o
   assert.match(css, /\.ctms-continuous-alpha-rail/);
   assert.match(css, /#content \.ctms-continuous-alpha-rail \.ctms-continuous-alpha-letter/);
   assert.match(css, /min-height:0!important/);
+  assert.match(css, /input\.row-select/);
+  assert.match(css, /min-height:18px!important/);
+  assert.match(css, /max-width:1024px.*hover:none.*pointer:coarse/);
   assert.match(css, /@media\(max-width:620px\)/);
   assert.match(source, /force: isLongJump/);
   assert.match(source, /label: 'Moving to matching records…'/);

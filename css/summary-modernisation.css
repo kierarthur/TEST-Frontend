@@ -256,6 +256,11 @@ body.ctms-summary-proposal input[type="checkbox"]:focus-visible{
   outline:0;box-shadow:0 0 0 3px #07101f,0 0 0 5px rgba(64,199,232,.9),0 5px 12px rgba(0,0,0,.3)
 }
 body.ctms-summary-proposal input[type="checkbox"]:disabled{cursor:not-allowed;opacity:.45;filter:saturate(.55)}
+body.ctms-summary-proposal #content .summary-body .grid tbody input.row-select,
+body.ctms-summary-proposal #content .summary-body .grid tbody input.outbox-row-select{
+  box-sizing:border-box!important;flex:0 0 18px!important;width:18px!important;min-width:18px!important;max-width:18px!important;
+  height:18px!important;min-height:18px!important;max-height:18px!important;padding:0!important;border-radius:5px!important
+}
 
 body.ctms-summary-proposal #content>.pager,
 body.ctms-summary-proposal #content>.ctms-summary-footer{
@@ -504,6 +509,37 @@ body.ctms-summary-proposal .pager .mini{color:var(--sheet-sub)}
   }
   #modal.ctms-imports-modern-modal .irv1-drop.ctms-mobile-file-picker strong{font-size:13px;color:#fff}
   #modal.ctms-imports-modern-modal .irv1-drop.ctms-mobile-file-picker span{font-size:10px;color:#e0ddff}
+}
+
+/* Foldable phones can expose a tablet-width CSS viewport while remaining a
+   coarse touch device. Keep the alphabet rail available without enabling it
+   on ordinary desktop pointer/hover environments. */
+@media(min-width:621px) and (max-width:1024px) and (hover:none) and (pointer:coarse){
+  body.ctms-summary-proposal .ctms-continuous-frame{
+    position:relative;display:flex;flex:0 0 auto;flex-direction:column;width:100%;min-width:0;min-height:0
+  }
+  body.ctms-summary-proposal .ctms-continuous-alpha-rail{
+    position:absolute;z-index:12;right:3px;top:7px;bottom:7px;display:flex;flex-direction:column;align-items:center;
+    justify-content:stretch;width:24px;padding:3px 1px;border:1px solid rgba(91,111,143,.5);border-radius:12px;
+    background:rgba(7,16,31,.9);box-shadow:0 8px 24px rgba(0,0,0,.3);backdrop-filter:blur(7px);
+    touch-action:none;user-select:none
+  }
+  body.ctms-summary-proposal #content .ctms-continuous-alpha-rail .ctms-continuous-alpha-letter{
+    box-sizing:border-box;display:flex;flex:1 1 0;align-items:center;justify-content:center;width:22px;min-width:22px;
+    height:auto;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;
+    background:transparent!important;color:#93c5fd!important;font-size:9px;font-weight:820;line-height:1;letter-spacing:0;
+    box-shadow:none!important;touch-action:none
+  }
+  body.ctms-summary-proposal .ctms-continuous-alpha-letter:focus-visible,
+  body.ctms-summary-proposal .ctms-continuous-alpha-letter.is-pending{
+    outline:0;background:#675df3!important;color:#fff!important;border-radius:5px!important
+  }
+  body.ctms-summary-proposal .ctms-continuous-alpha-bubble.is-visible{
+    position:absolute;z-index:13;right:38px;top:50%;display:flex;align-items:center;justify-content:center;
+    width:54px;height:54px;transform:translateY(-50%);border:1px solid rgba(143,137,255,.78);border-radius:16px;
+    background:rgba(18,29,51,.96);box-shadow:0 12px 30px rgba(0,0,0,.38);color:#fff;font-size:25px;font-weight:820
+  }
+  body.ctms-summary-proposal .ctms-continuous-frame>.summary-body{padding-right:31px!important}
 }
 
 /* Outbox has ten data columns, so it needs its card presentation on wide phones

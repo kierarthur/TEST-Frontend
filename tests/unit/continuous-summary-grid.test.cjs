@@ -141,3 +141,53 @@ test('a changed total from mounted reconfiguration is rendered immediately', asy
   assert.equal(controller.getView().total, 331);
   assert.ok(renders.includes(331), 'mounted reconfiguration must repaint the newer total');
 });
+
+test('an active touch or scrollbar drag defers repaint until pointer release', async () => {
+  grid.reset('clients');
+  const rows = Array.from({ length: 300 }, (_, index) => ({ id: `client-${index}` }));
+  const renders = [];
+  const hostListeners = new Map();
+  const rootListeners = new Map();
+  const eventRoot = {
+    addEventListener(type, listener) { rootListeners.set(type, listener); },
+    removeEventListener(type) { rootListeners.delete(type); }
+  };
+  const host = {
+    dataset: {},
+    isConnected: true,
+    scrollTop: 0,
+    ownerDocument: { defaultView: eventRoot },
+    setAttribute() {},
+    addEventListener(type, listener) { hostListeners.set(type, listener); },
+    removeEventListener(type) { hostListeners.delete(type); },
+    querySelectorAll() { return []; }
+  };
+  const controller = grid.configure({
+    section: 'clients',
+    datasetKey: 'clients:gesture',
+    pageSize: 50,
+    total: rows.length,
+    initialPage: 1,
+    fetchPage: async (page, pageSize) => {
+      const start = (page - 1) * pageSize;
+      return { rows: rows.slice(start, start + pageSize), total: rows.length };
+    },
+    onRender: (view) => renders.push(view.targetPage)
+  });
+
+  await controller.load(1);
+  await settle();
+  grid.mount('clients', host);
+  await settle();
+  renders.length = 0;
+
+  hostListeners.get('pointerdown')({ pointerType: 'mouse' });
+  host.scrollTop = 2400;
+  hostListeners.get('scroll')();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  assert.deepEqual(renders, [], 'the mounted scroll container must not be replaced during a drag');
+  rootListeners.get('pointerup')({ pointerType: 'mouse' });
+  await settle();
+  assert.ok(renders.length >= 1, 'the deferred virtual-window repaint must run after release outside the track');
+});

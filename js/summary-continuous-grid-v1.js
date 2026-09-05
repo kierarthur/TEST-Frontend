@@ -68,6 +68,8 @@
       desiredIndex: null,
       mountedHost: null,
       mountedCleanup: null,
+      scrollGestureActive: false,
+      renderDeferred: false,
       renderQueued: false,
       loadQueued: false,
       loadingPages: new Set(),
@@ -99,6 +101,10 @@
   }
 
   function requestRender(state) {
+    if (state && state.scrollGestureActive) {
+      state.renderDeferred = true;
+      return;
+    }
     if (!state || state.renderQueued || !state.mountedHost || typeof state.onRender !== 'function') return;
     state.renderQueued = true;
     Promise.resolve().then(() => {
@@ -376,10 +382,36 @@
     if (view && view.total != null) host.setAttribute('aria-rowcount', String(view.total));
 
     let timer = null;
+    let gestureTimer = null;
+    let pointerDown = false;
     let ignoreScroll = true;
+    const eventRoot = host.ownerDocument?.defaultView || (typeof window !== 'undefined' ? window : null);
+    const finishScrollGesture = () => {
+      if (pointerDown) return;
+      state.scrollGestureActive = false;
+      if (state.renderDeferred) {
+        state.renderDeferred = false;
+        requestRender(state);
+      }
+    };
+    const scheduleGestureFinish = (delay = 180) => {
+      if (gestureTimer) clearTimeout(gestureTimer);
+      gestureTimer = setTimeout(finishScrollGesture, Math.max(0, Number(delay) || 0));
+    };
+    const onPointerDown = () => {
+      pointerDown = true;
+      state.scrollGestureActive = true;
+      if (gestureTimer) clearTimeout(gestureTimer);
+    };
+    const onPointerUp = (event) => {
+      pointerDown = false;
+      scheduleGestureFinish(String(event?.pointerType || '').toLowerCase() === 'touch' ? 180 : 0);
+    };
     const onScroll = () => {
       if (ignoreScroll) return;
+      state.scrollGestureActive = true;
       state.scrollTop = Math.max(0, Number(host.scrollTop || 0));
+      scheduleGestureFinish(180);
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         if (!host.isConnected) return;
@@ -392,7 +424,10 @@
         requestRender(state);
       }, 70);
     };
+    host.addEventListener('pointerdown', onPointerDown, { passive: true });
     host.addEventListener('scroll', onScroll, { passive: true });
+    try { eventRoot?.addEventListener?.('pointerup', onPointerUp, true); } catch {}
+    try { eventRoot?.addEventListener?.('pointercancel', onPointerUp, true); } catch {}
 
     const dataRows = Array.from(host.querySelectorAll('tbody tr:not(.ctms-continuous-spacer)'))
       .filter((row) => row.hasAttribute('data-id') || row.hasAttribute('data-outbox-key'));
@@ -420,7 +455,13 @@
 
     state.mountedCleanup = () => {
       if (timer) clearTimeout(timer);
+      if (gestureTimer) clearTimeout(gestureTimer);
+      pointerDown = false;
+      state.scrollGestureActive = false;
       try { host.removeEventListener('scroll', onScroll); } catch {}
+      try { host.removeEventListener('pointerdown', onPointerDown); } catch {}
+      try { eventRoot?.removeEventListener?.('pointerup', onPointerUp, true); } catch {}
+      try { eventRoot?.removeEventListener?.('pointercancel', onPointerUp, true); } catch {}
       if (state.mountedHost === host) state.mountedHost = null;
     };
     return controllerFor(state);

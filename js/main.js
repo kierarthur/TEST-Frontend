@@ -317723,6 +317723,16 @@ const getSelectionUiState = () => {
     const targetRowId = String(targetRow.dataset.id || '').trim();
     state.active_row_id = targetRowId;
     state.pending_row_id = '';
+
+    if (options && options.focusGrid === true) {
+      try {
+        bodyWrap.focus({ preventScroll: true });
+      } catch {
+        try { bodyWrap.focus(); } catch {}
+      }
+      state.has_focus = true;
+    }
+
     targetRow.classList.add('active-summary-row');
 
     if (!(options && options.syncSelected === false)) {
@@ -317735,15 +317745,6 @@ const getSelectionUiState = () => {
       try {
         targetRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
       } catch {}
-    }
-
-    if (options && options.focusGrid === true) {
-      try {
-        bodyWrap.focus({ preventScroll: true });
-      } catch {
-        try { bodyWrap.focus(); } catch {}
-      }
-      state.has_focus = true;
     }
 
     return targetRow;

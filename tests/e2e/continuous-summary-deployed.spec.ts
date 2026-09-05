@@ -149,9 +149,12 @@ async function firstSearchTerm(body: ReturnType<Page['locator']>, section: Secti
   }, keys[section]);
 }
 
-async function newPhoneContext(browser: Browser): Promise<BrowserContext> {
+async function newPhoneContext(
+  browser: Browser,
+  viewport: { width: number; height: number } = { width: 390, height: 844 }
+): Promise<BrowserContext> {
   return browser.newContext({
-    viewport: { width: 390, height: 844 },
+    viewport,
     isMobile: true,
     hasTouch: true,
     deviceScaleFactor: 1,
@@ -240,21 +243,34 @@ test('all seven deployed Office summaries are bounded continuous grids', async (
 
 test('every deployed summary preserves search, sorting, scrolling, keyboard, selection and read-only opening', async ({ page }) => {
   test.setTimeout(900_000);
+  const requestedSections = String(process.env.CONTINUOUS_SUMMARY_SECTIONS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value): value is SectionKey => sections.includes(value as SectionKey));
+  const matrixSections = requestedSections.length ? requestedSections : sections;
   let pageErrorCount = 0;
-  let consoleErrorCount = 0;
+  const consoleErrors: string[] = [];
   const badResponses: string[] = [];
+  const httpErrors: string[] = [];
   page.on('pageerror', () => { pageErrorCount += 1; });
-  page.on('console', (message) => { if (message.type() === 'error') consoleErrorCount += 1; });
+  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
   page.on('response', (response) => {
     const url = new URL(response.url());
+    if (response.status() >= 400) {
+      httpErrors.push(`${response.status()} ${url.hostname}${url.pathname}`);
+    }
     if (url.hostname.endsWith('workers.dev') && response.status() >= 500) {
       badResponses.push(`${response.status()} ${url.pathname}`);
     }
   });
 
   await openApplication(page);
+  pageErrorCount = 0;
+  consoleErrors.length = 0;
+  httpErrors.length = 0;
+  badResponses.length = 0;
 
-  for (const section of sections) {
+  for (const section of matrixSections) {
     await test.step(section, async () => {
       let body = await openSection(page, section);
       const total = await waitForSummaryTotal(page, section);
@@ -377,7 +393,7 @@ test('every deployed summary preserves search, sorting, scrolling, keyboard, sel
   }
 
   expect(pageErrorCount).toBe(0);
-  expect(consoleErrorCount).toBe(0);
+  expect({ consoleErrors, httpErrors }).toEqual({ consoleErrors: [], httpErrors: [] });
   expect(badResponses).toEqual([]);
 });
 
@@ -456,6 +472,36 @@ test('scroll prefetch stays silent while sort, End, Home and query-wide selectio
   expect(await overlayEventCount(page)).toBe(0);
 });
 
+test('desktop scrollbar drag keeps its scroll host when the pointer leaves the track', async ({ page }) => {
+  test.setTimeout(120_000);
+  await openApplication(page);
+  const body = await openSection(page, 'candidates');
+  await expect.poll(() => body.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(200);
+  const bounds = await body.boundingBox();
+  expect(bounds).not.toBeNull();
+  await body.evaluate((element) => {
+    element.scrollTop = 0;
+    (window as any).__scrollbarDragHost = element;
+  });
+
+  const trackX = bounds!.x + bounds!.width - 3;
+  const thumbY = bounds!.y + 28;
+  await page.mouse.move(trackX, thumbY);
+  await page.mouse.down();
+  await page.mouse.move(trackX - 90, thumbY + 160, { steps: 10 });
+  await page.waitForTimeout(220);
+
+  expect(await page.evaluate(() => (window as any).__scrollbarDragHost === document.querySelector('.summary-body[data-summary-section="candidates"]'))).toBe(true);
+  const firstScrollTop = await body.evaluate((element) => element.scrollTop);
+  expect(firstScrollTop).toBeGreaterThan(0);
+
+  await page.mouse.move(trackX - 90, thumbY + 270, { steps: 8 });
+  const secondScrollTop = await body.evaluate((element) => element.scrollTop);
+  expect(secondScrollTop).toBeGreaterThan(firstScrollTop);
+  await page.mouse.up();
+  await expect(page.locator('#globalLoadingOverlay')).toBeHidden();
+});
+
 test('phone uses a compact A-Z edge rail while desktop-only jump UI remains absent', async ({ browser }) => {
   test.setTimeout(120_000);
   const context = await newPhoneContext(browser);
@@ -521,6 +567,86 @@ test('phone uses a compact A-Z edge rail while desktop-only jump UI remains abse
     await openSection(page, 'invoices');
     await expect(page.locator('.ctms-continuous-alpha-rail')).toHaveCount(0);
     expect(await page.evaluate(() => (window as any).CloudTMSSummaryContinuousGrid.isEnabled('banking'))).toBe(false);
+  } finally {
+    await context.close();
+  }
+
+  const unfoldedContext = await newPhoneContext(browser, { width: 768, height: 900 });
+  const unfoldedPage = await unfoldedContext.newPage();
+  try {
+    await openApplication(unfoldedPage);
+    await openSection(unfoldedPage, 'candidates');
+    const unfoldedRail = unfoldedPage.locator('.ctms-continuous-alpha-rail');
+    await expect(unfoldedRail).toBeVisible();
+    await expect(unfoldedRail.locator('.ctms-continuous-alpha-letter')).toHaveCount(26);
+    const bounds = await unfoldedRail.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThan(728);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(768);
+    await unfoldedRail.locator('[data-letter="K"]').click();
+    await expect(unfoldedPage.locator('#globalLoadingOverlay')).toBeHidden({ timeout: 60_000 });
+    mkdirSync(artifactDir, { recursive: true });
+    await unfoldedPage.locator('#content').screenshot({ path: resolve(artifactDir, 'candidates-fold-unfolded.png') });
+  } finally {
+    await unfoldedContext.close();
+  }
+});
+
+test('phone selection controls stay visually stable through a rapid flick', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const context = await newPhoneContext(browser);
+  const page = await context.newPage();
+  try {
+    await openApplication(page);
+    await openSection(page, 'candidates');
+    await page.evaluate(() => {
+      const samples: any[] = [];
+      const started = performance.now();
+      const sample = () => {
+        const body = document.querySelector('.summary-body[data-summary-section="candidates"]');
+        const checks = Array.from(body?.querySelectorAll('tbody input.row-select') || []);
+        const first = checks[0] as HTMLElement | undefined;
+        const style = first ? getComputedStyle(first) : null;
+        samples.push({
+          bodyCount: document.querySelectorAll('.summary-body[data-summary-section="candidates"]').length,
+          rowCount: body?.querySelectorAll('tbody tr[data-id]').length || 0,
+          checkCount: checks.length,
+          opacity: style?.opacity || '',
+          width: style?.width || '',
+          height: style?.height || '',
+          minHeight: style?.minHeight || '',
+          borderRadius: style?.borderRadius || '',
+          visibility: style?.visibility || '',
+          scrollTop: (body as HTMLElement | null)?.scrollTop || 0
+        });
+        if (performance.now() - started < 2400) requestAnimationFrame(sample);
+        else (window as any).__phoneFlickSamples = samples;
+      };
+      requestAnimationFrame(sample);
+    });
+    const session = await context.newCDPSession(page);
+    const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', y?: number) => session.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: type === 'touchEnd' ? [] : [{ x: 45, y: Number(y), radiusX: 8, radiusY: 8, force: 0.8 }]
+    });
+    await touch('touchStart', 690);
+    for (const y of [620, 540, 455, 365, 270, 175]) {
+      await touch('touchMove', y);
+      await page.waitForTimeout(16);
+    }
+    await touch('touchEnd');
+    await page.waitForTimeout(2600);
+    const samples = await page.evaluate(() => (window as any).__phoneFlickSamples || []);
+    expect(samples.length).toBeGreaterThan(30);
+    expect(Math.max(...samples.map((sample: any) => Number(sample.scrollTop || 0)))).toBeGreaterThan(0);
+    expect(Array.from(new Set(samples.map((sample: any) => sample.bodyCount)))).toEqual([1]);
+    expect(samples.every((sample: any) => sample.rowCount >= 50 && sample.checkCount === sample.rowCount)).toBe(true);
+    expect(Array.from(new Set(samples.map((sample: any) => sample.width)))).toEqual(['18px']);
+    expect(Array.from(new Set(samples.map((sample: any) => sample.height)))).toEqual(['18px']);
+    expect(Array.from(new Set(samples.map((sample: any) => sample.minHeight)))).toEqual(['18px']);
+    expect(Array.from(new Set(samples.map((sample: any) => sample.borderRadius)))).toEqual(['5px']);
+    expect(Array.from(new Set(samples.map((sample: any) => sample.opacity)))).toEqual(['1']);
+    expect(Array.from(new Set(samples.map((sample: any) => sample.visibility)))).toEqual(['visible']);
   } finally {
     await context.close();
   }
