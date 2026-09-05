@@ -255,7 +255,10 @@
       state.getTotal = config.getTotal;
       state.onRender = config.onRender;
       state.onTargetPage = config.onTargetPage;
-      if (config.total != null) state.total = config.total;
+      if (config.total != null && state.total !== config.total) {
+        state.total = config.total;
+        requestRender(state);
+      }
       state.targetPage = clampPage(state, config.initialPage || state.targetPage);
     }
     return controllerFor(state);

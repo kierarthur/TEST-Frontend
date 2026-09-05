@@ -108,3 +108,36 @@ test('a changed total from a background page is rendered back into the live grid
   assert.equal(controller.getView().total, 331);
   assert.ok(renders.includes(331), 'the mounted grid must reconcile an updated background total');
 });
+
+test('a changed total from mounted reconfiguration is rendered immediately', async () => {
+  grid.reset('umbrellas');
+  const renders = [];
+  let latestTotal = 332;
+  const host = {
+    dataset: {},
+    isConnected: true,
+    scrollTop: 0,
+    setAttribute() {},
+    addEventListener() {},
+    removeEventListener() {},
+    querySelectorAll() { return []; }
+  };
+  const shared = {
+    section: 'umbrellas',
+    datasetKey: 'umbrellas:reconfigure-count',
+    pageSize: 50,
+    initialPage: 1,
+    fetchPage: async () => ({ rows: [{ id: 'umbrella-1' }], total: latestTotal }),
+    onRender: (view) => renders.push(view.total)
+  };
+  const controller = grid.configure({ ...shared, total: 332 });
+  await controller.load(1);
+  grid.mount('umbrellas', host);
+
+  latestTotal = 331;
+  grid.configure({ ...shared, total: 331 });
+  await settle();
+
+  assert.equal(controller.getView().total, 331);
+  assert.ok(renders.includes(331), 'mounted reconfiguration must repaint the newer total');
+});

@@ -15,7 +15,7 @@ test('all approved summaries use continuous loading while Banking Pay remains pa
   assert.match(source, /continuousGrid\.applySpacers\(currentSection, tb, cols\.length \+ 1\)/);
   assert.match(source, /continuousGrid\.applySpacers\('outbox', tb, outboxColumnDefs\.length\)/);
   assert.doesNotMatch(source, /CloudTMSCandidateOfficeBridge\.sortSummaryRowsByCandidateStatus\(uniqueRows/);
-  assert.match(html, /summary-continuous-grid-v1\.js\?v=20260905-r4/);
+  assert.match(html, /summary-continuous-grid-v1\.js\?v=20260905-r5/);
 });
 
 test('Outbox Select All uses query-wide membership and bounded delete batches', () => {
