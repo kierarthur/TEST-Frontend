@@ -16,6 +16,7 @@ test('all approved summaries use continuous loading while Banking Pay remains pa
   assert.match(source, /continuousGrid\.applySpacers\('outbox', tb, outboxColumnDefs\.length\)/);
   assert.doesNotMatch(source, /CloudTMSCandidateOfficeBridge\.sortSummaryRowsByCandidateStatus\(uniqueRows/);
   assert.match(html, /summary-continuous-grid-v1\.js\?v=20260905-r5/);
+  assert.match(html, /summary-modernisation\.css\?v=20260905-continuous-grid-r3/);
   const loadSectionSource = source.slice(
     source.indexOf('async function loadSection()'),
     source.indexOf('function renderSummary(')
@@ -59,6 +60,8 @@ test('explicit long keyboard jumps refresh their destination under the loading o
   assert.match(source, /mountContinuousSummaryAlphabetRail\('outbox'/);
   assert.match(source, /mountContinuousSummaryAlphabetRail\(currentSection/);
   assert.match(css, /\.ctms-continuous-alpha-rail/);
+  assert.match(css, /#content \.ctms-continuous-alpha-rail \.ctms-continuous-alpha-letter/);
+  assert.match(css, /min-height:0!important/);
   assert.match(css, /@media\(max-width:620px\)/);
   assert.match(source, /force: isLongJump/);
   assert.match(source, /label: 'Moving to matching records…'/);

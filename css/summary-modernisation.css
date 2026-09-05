@@ -445,19 +445,20 @@ body.ctms-summary-proposal .pager .mini{color:var(--sheet-sub)}
     position:relative;display:flex;flex:0 0 auto;flex-direction:column;width:100%;min-width:0;min-height:0
   }
   body.ctms-summary-proposal .ctms-continuous-alpha-rail{
-    position:absolute;z-index:12;right:3px;top:50%;display:flex;flex-direction:column;align-items:center;
-    justify-content:center;transform:translateY(-50%);width:22px;max-height:calc(100% - 14px);padding:3px 1px;
+    position:absolute;z-index:12;right:3px;top:7px;bottom:7px;display:flex;flex-direction:column;align-items:center;
+    justify-content:stretch;width:24px;padding:3px 1px;
     border:1px solid rgba(91,111,143,.5);border-radius:12px;background:rgba(7,16,31,.9);
     box-shadow:0 8px 24px rgba(0,0,0,.3);backdrop-filter:blur(7px);touch-action:none;user-select:none
   }
-  body.ctms-summary-proposal .ctms-continuous-alpha-letter{
-    box-sizing:border-box;display:flex;align-items:center;justify-content:center;width:20px;min-width:20px;
-    height:13px;min-height:13px;padding:0;border:0;border-radius:6px;background:transparent;color:#93c5fd;
-    font-size:8px;font-weight:820;line-height:1;letter-spacing:0;touch-action:none
+  body.ctms-summary-proposal #content .ctms-continuous-alpha-rail .ctms-continuous-alpha-letter{
+    box-sizing:border-box;display:flex;flex:1 1 0;align-items:center;justify-content:center;width:22px;min-width:22px;
+    height:auto;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;
+    background:transparent!important;color:#93c5fd!important;font-size:9px;font-weight:820;line-height:1;letter-spacing:0;
+    box-shadow:none!important;touch-action:none
   }
   body.ctms-summary-proposal .ctms-continuous-alpha-letter:focus-visible,
   body.ctms-summary-proposal .ctms-continuous-alpha-letter.is-pending{
-    outline:0;background:#675df3;color:#fff
+    outline:0;background:#675df3!important;color:#fff!important;border-radius:5px!important
   }
   body.ctms-summary-proposal .ctms-continuous-alpha-bubble.is-visible{
     position:absolute;z-index:13;right:38px;top:50%;display:flex;align-items:center;justify-content:center;
