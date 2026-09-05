@@ -133,6 +133,7 @@
       .then(async () => {
         const raw = await state.fetchPage(page, state.pageSize);
         if (generation !== state.generation) return [];
+        const previousTotal = state.total;
         const rows = Array.isArray(raw)
           ? raw
           : (Array.isArray(raw && raw.rows) ? raw.rows : []);
@@ -143,6 +144,7 @@
         else if (rows.length < state.pageSize) state.total = ((page - 1) * state.pageSize) + rows.length;
         state.pages.set(page, rows.slice());
         evictDistantPages(state);
+        if (state.total !== previousTotal) requestRender(state);
         return rows;
       })
       .catch((error) => {
