@@ -143,6 +143,33 @@ test('an import-authoritative hours anchor remains blank without a Candidate wor
   assert.equal(window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input).status, null);
 });
 
+test('an import-authoritative hours anchor presents its active separate expense workflow', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const input = projection('AUTHORISED', 'Authorised', 'success', {
+    current_identity: {
+      row_key: 'imported-hours-anchor-with-expense-claim',
+      route_family: 'IMPORT_AUTHORITATIVE',
+      record_role: 'IMPORT_HOURS'
+    },
+    workflow: {
+      workflow_kind: 'CONTRACT_EXPENSE',
+      state: 'READY_FOR_MANAGER_APPROVAL',
+      route: 'ELECTRONIC',
+      historical: false,
+      is_current_action_workflow: true
+    }
+  });
+
+  assert.equal(window.CloudTMSCandidateOfficePresenter.candidateSubmissionApplies(input), true);
+  const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input);
+  assert.equal(view.status.label, 'Candidate Submitted');
+  assert.match(window.CloudTMSCandidateOfficeSurface.renderCandidateSummaryCell(view), /Candidate Submitted/);
+});
+
 test('a superseded historical Candidate attempt stays in audit history instead of becoming the current status', () => {
   const window = load(
     'candidate-office-ui-policy-v1.js',

@@ -105,6 +105,7 @@
     const recordRole = String(projection?.current_identity?.record_role || '').toUpperCase();
     const workflowRoute = String(projection?.workflow?.route || '').toUpperCase();
     const workflowState = String(projection?.workflow?.state || '').toUpperCase();
+    const workflowKind = String(projection?.workflow?.workflow_kind || '').toUpperCase();
     const historicalWorkflow = projection?.workflow?.historical === true
       && projection?.workflow?.is_current_action_workflow !== true;
     // Imported hours have no Candidate submission lifecycle and remain blank.
@@ -116,7 +117,11 @@
     // durable completion proof for its exact Timesheet or expense carrier.
     if (historicalWorkflow && workflowState !== 'FINALISED') return false;
     return ['ELECTRONIC', 'QR'].includes(routeFamily)
-      || (!!workflowState && (recordRole === 'EXPENSE_ONLY' || workflowRoute === 'PAPER'));
+      || (!!workflowState && (
+        recordRole === 'EXPENSE_ONLY' ||
+        workflowRoute === 'PAPER' ||
+        workflowKind === 'CONTRACT_EXPENSE'
+      ));
   };
   const isReceivedDailySubmission = projection => {
     const workflow = projection.workflow;
