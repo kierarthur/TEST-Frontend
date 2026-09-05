@@ -36,6 +36,7 @@
     FINALISING_SUBMISSION: ['Finalising Submission', 'info'],
     FINALISATION_NEEDS_ATTENTION: ['Finalisation Needs Attention', 'danger'],
     QR_PACK_NEEDS_ATTENTION: ['QR Pack Needs Attention', 'danger'],
+    QR_PACK_OUT_OF_DATE: ['QR Pack Out of Date', 'warning'],
     REFUSED_BY_CLIENT: ['Refused by Client', 'danger'],
     REJECTED_BY_AGENCY: ['Rejected by Agency', 'danger'],
     CANDIDATE_SUBMISSION_CANCELLED: ['Candidate Submission Cancelled', 'neutral'],
@@ -168,7 +169,8 @@
     // pre-app records with no durable workflow therefore remain blank.
     if (!workflowState && ['FINALISED', 'AUTHORISED', 'INVOICED_NOT_PAID', 'PAID'].includes(sourceCode)) return null;
     if (enabledActionCodes.has('RETRY_FINALISATION')) return approvedStatusView('FINALISATION_NEEDS_ATTENTION');
-    if (['FAILED_RETRYABLE', 'FAILED_TERMINAL', 'RETIRED', 'STALE'].includes(paperState)) return approvedStatusView('QR_PACK_NEEDS_ATTENTION');
+    if (paperState === 'STALE') return approvedStatusView('QR_PACK_OUT_OF_DATE');
+    if (['FAILED_RETRYABLE', 'FAILED_TERMINAL', 'RETIRED'].includes(paperState)) return approvedStatusView('QR_PACK_NEEDS_ATTENTION');
     if (paperState === 'RETURN_RECEIVED' || ['RECEIVED', 'MANAGER_APPROVED_PENDING_FINAL_DOCUMENT', 'READY_TO_FINALISE'].includes(lifecycleCode)) return approvedStatusView('FINALISING_SUBMISSION');
     if (paperState === 'READY' && lifecycleCode === 'AWAITING_PAPER_RETURN') return approvedStatusView('QR_AWAITING_SIGNED_RETURN');
     if (['PREPARING', 'BACKOFF'].includes(paperState)) return approvedStatusView('QR_PACK_PREPARING');
@@ -205,6 +207,41 @@
       label: `${submissionScopeLabel(workflowKind, scope)} — ${status.label}`
     });
   };
+  const approvalRouteLabel = value => {
+    const route = String(value || '').trim().toUpperCase();
+    if (route === 'PHONE') return 'Phone';
+    if (route === 'EMAIL') return 'Email';
+    if (route === 'PAPER') return 'QR';
+    return route ? route.charAt(0) + route.slice(1).toLowerCase() : 'Not chosen yet';
+  };
+  function presentCurrentSubmission(projection, status) {
+    if (!status || !projection?.workflow) return null;
+    const workflow = projection.workflow;
+    const manager = projection.manager_approval || {};
+    const state = String(workflow.state || '').trim().toUpperCase();
+    const managerState = String(manager.state || '').trim().toUpperCase();
+    const approved = managerState === 'APPROVED' || [
+      'MANAGER_APPROVED', 'MANAGER_APPROVED_PENDING_FINAL_DOCUMENT',
+      'READY_TO_FINALISE', 'FINALISED'
+    ].includes(state);
+    const fields = [
+      ['Submission', submissionScopeLabel(workflow.workflow_kind, null)],
+      ['Status', status.label.replace(/^.*? — /, '')],
+      ['Approved', approved
+        ? (manager.approved_at_utc ? `Yes — ${formatDateTime(manager.approved_at_utc)}` : 'Yes')
+        : 'Not approved yet'],
+      ['Approval route', approvalRouteLabel(manager.method || workflow.route)]
+    ];
+    if (manager.manager_name) fields.push(['Approver name', manager.manager_name]);
+    if (manager.manager_position) fields.push(['Approver job title', manager.manager_position]);
+    if (manager.manager_email) fields.push(['Approver email', manager.manager_email]);
+    return Object.freeze({
+      scope_label: submissionScopeLabel(workflow.workflow_kind, null),
+      status,
+      approved,
+      fields: Object.freeze(fields.map(Object.freeze))
+    });
+  }
   function presentRetainedManagerApproval(retained) {
     if (!retained) return null;
     const scopeLabel = submissionScopeLabel(retained.workflow_kind, retained.scope);
@@ -216,7 +253,10 @@
         ['Submission', scopeLabel],
         ['Status', 'Manager Approved'],
         ['Approved', formatDateTime(retained.approved_at_utc)],
-        ['Approval method', String(retained.method || '').toUpperCase() === 'PHONE' ? 'Pass phone' : 'Email']
+        ['Approval method', approvalRouteLabel(retained.method || retained.route)],
+        ...(retained.manager_name ? [['Approver name', retained.manager_name]] : []),
+        ...(retained.manager_position ? [['Approver job title', retained.manager_position]] : []),
+        ...(retained.manager_email ? [['Approver email', retained.manager_email]] : [])
       ].map(Object.freeze))
     });
   }
@@ -280,8 +320,8 @@
     const sourceStatus = sourceStatusView(projection);
     const status = presentApprovedCandidateSubmissionStatus(projection);
     const retainedManager = presentRetainedManagerApproval(projection.retained_manager_approval);
-    const activeDisplayStatus = retainedManager && status
-      ? scopedStatusView(status, projection.workflow?.workflow_kind, null)
+    const activeDisplayStatus = status && projection.workflow
+      ? scopedStatusView(status, projection.workflow.workflow_kind, null)
       : status;
     const statuses = Object.freeze([
       ...(retainedManager?.status ? [retainedManager.status] : []),
@@ -318,6 +358,7 @@
       surface, identity: projection.current_identity, status, statuses,
       source_status_code: sourceStatus.code,
       workflow: projection.workflow,
+      current_submission: presentCurrentSubmission(projection, activeDisplayStatus),
       manager: presentCandidateManagerApproval(projection.manager_approval, actions),
       retained_manager: retainedManager,
       paper: presentCandidatePaperPack(projection.paper_pack, actions),

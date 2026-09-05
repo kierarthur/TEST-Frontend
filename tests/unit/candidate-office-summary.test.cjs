@@ -51,7 +51,7 @@ test('Summary renders only the complete user-approved Candidate Submission catal
     [projection('REFUSED', 'wrong', 'success'), 'Refused by Client'],
     [projection('REJECTED', 'wrong', 'success'), 'Rejected by Agency'],
     [projection('CANCELLED', 'wrong', 'success'), 'Candidate Submission Cancelled'],
-    [projection('FINALISED', 'wrong', 'danger', { workflow: { state: 'FINALISED', historical: true } }), 'Candidate Submission Complete'],
+    [projection('FINALISED', 'wrong', 'danger', { workflow: { state: 'FINALISED', historical: true } }), 'Timesheet hours — Candidate Submission Complete'],
     [projection('FUTURE_UNKNOWN_STATE', 'wrong', 'success'), '']
   ];
   const rendered = cases.map(([input, expected]) => {
@@ -274,7 +274,7 @@ test('all four Office surfaces render the complete raw-state matrix through the 
     [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'FAILED_RETRYABLE' } }), 'QR Pack Needs Attention'],
     [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'FAILED_TERMINAL' } }), 'QR Pack Needs Attention'],
     [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'RETIRED' } }), 'QR Pack Needs Attention'],
-    [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'STALE' } }), 'QR Pack Needs Attention'],
+    [projection('AWAITING_PAPER_RETURN', 'wrong', 'warning', { paper_pack: { state: 'STALE' } }), 'QR Pack Out of Date'],
     [projection('REFUSED', 'wrong', 'danger'), 'Refused by Client'],
     [projection('REJECTED', 'Rejected — resubmission required', 'danger'), 'Rejected by Agency'],
     [projection('CANCELLED', 'Cancelled', 'neutral'), 'Candidate Submission Cancelled'],
@@ -420,4 +420,48 @@ test('Summary Candidate refresh reuses one cursor heartbeat and patches only bou
   const heartbeat = main.slice(heartbeatStart, heartbeatStart + 850);
   assert.match(heartbeat, /__candidate_timesheet_summary_cursor = Number\(candidateSummaryWatch\.cursor\)/);
   assert.doesNotMatch(heartbeat, /timesheet_id|contract_week_id|identities/);
+});
+
+test('Overview shows only the current Submission Status and its approval facts', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(projection(
+    'MANAGER_APPROVED', 'wrong', 'danger', {
+      workflow: { workflow_id: 'workflow-1', workflow_kind: 'CONTRACT_EXPENSE', state: 'MANAGER_APPROVED', route: 'EMAIL' },
+      manager_approval: {
+        state: 'APPROVED', method: 'EMAIL', approved_at_utc: '2026-09-05T10:15:00Z',
+        manager_name: 'Approving Manager', manager_position: 'Ward Manager', manager_email: 'manager@example.test'
+      },
+      retained_manager_approval: {
+        workflow_kind: 'CONTRACT_HOURS', approved_at_utc: '2026-09-04T09:00:00Z', manager_name: 'Earlier Manager'
+      },
+      rejections: [{ state: 'REFUSED', historical: true }]
+    }
+  ));
+  const overview = window.CloudTMSCandidateOfficeSurface.renderCandidateOverviewFragment(view);
+  assert.match(overview, /Submission Status/);
+  assert.match(overview, /Approved<\/dt><dd>Yes/);
+  assert.match(overview, /Approval route<\/dt><dd>Email/);
+  assert.match(overview, /Approver name<\/dt><dd>Approving Manager/);
+  assert.match(overview, /Approver job title<\/dt><dd>Ward Manager/);
+  assert.match(overview, /Approver email<\/dt><dd>manager@example\.test/);
+  assert.doesNotMatch(overview, /Submission history|Earlier approved submission|Earlier Manager/);
+
+  const detail = window.CloudTMSCandidateOfficeSurface.renderCandidateOfficeCard(view);
+  assert.match(detail, /Submission history|Earlier approved submission/);
+});
+
+test('Current Evidence marks approval and keeps older or withdrawn evidence separate', () => {
+  const main = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
+  const start = main.lastIndexOf('function renderTimesheetEvidenceTab(ctx)');
+  const end = main.indexOf('\nasync function openTimesheetEvidenceUploadDialog', start);
+  const evidence = main.slice(start, end);
+  assert.match(evidence, /<label>Current Evidence<\/label>/);
+  assert.match(evidence, /Not approved yet/);
+  assert.match(evidence, /data-ctms-label="Approval"/);
+  assert.match(evidence, /Withdrawn submission history/);
+  assert.match(evidence, /Previous submissions are retained for audit only/);
 });

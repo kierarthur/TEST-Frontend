@@ -167289,6 +167289,7 @@ function renderTools(){
       if ('processing_status' in curFilters) delete curFilters.processing_status;
       if ('client_invoiced' in curFilters) delete curFilters.client_invoiced;
       if ('needs_attention' in curFilters) delete curFilters.needs_attention;
+      if ('related' in curFilters) delete curFilters.related;
 
       window.__listState['timesheets'].filters = curFilters;
       window.__listState['timesheets'].page = 1;
@@ -315164,6 +315165,7 @@ function ensureTimesheetSummaryTargetedRefreshManager() {
 
   const targetedFields = Object.freeze([
     'route_type','route_display','route_family','sheet_scope',
+    'is_expense_only','expense_route_kind','display_route_label',
     'submission_mode','submission_mode_snapshot',
     'processing_status','processing_status_display',
     'total_hours','total_pay_ex_vat','margin_ex_vat',
@@ -315228,6 +315230,12 @@ function ensureTimesheetSummaryTargetedRefreshManager() {
     for (const [filterKey,rowField] of pairs) {
       const expected = normaliseText(filters[filterKey]);
       if (!expected || expected.toUpperCase() === 'ALL') continue;
+      if (filterKey === 'route_type' && ['EXPENSE', 'MANUAL_EXPENSE', 'ELECTRONIC_EXPENSE', 'QR_EXPENSE'].includes(expected.toUpperCase())) {
+        if (row?.is_expense_only !== true) return false;
+        const kind = normaliseText(row?.expense_route_kind).toUpperCase();
+        if (expected.toUpperCase() !== 'EXPENSE' && kind !== expected.toUpperCase().replace('_EXPENSE', '')) return false;
+        continue;
+      }
       const actual = normaliseText(row?.[rowField]);
       if (actual.toUpperCase() !== expected.toUpperCase()) return false;
     }
@@ -315346,6 +315354,8 @@ function ensureTimesheetSummaryTargetedRefreshManager() {
                 cell.replaceChildren();
                 const label = normaliseText(request.row.processing_status_display || request.row.processing_status);
                 paintTimesheetProcessingStatusCell(cell,request.row,label);
+              } else if (key === 'route_type' && request.row.is_expense_only === true) {
+                cell.textContent = normaliseText(request.row.display_route_label || 'Expense');
               } else if (['route_type','route_display','route_family','sheet_scope','submission_mode','total_hours'].includes(key)) {
                 cell.textContent = String(formatDisplayValue(key,request.row[key]) ?? '');
               } else if (['total_pay_ex_vat','margin_ex_vat'].includes(key)) {
@@ -316602,7 +316612,11 @@ const applyToolsUiState = () => {
       ['MANUAL',      'Manual'],
       ['NHSP',        'NHSP'],
       ['HEALTHROSTER','Healthroster'],
-      ['QR',          'QR timesheets']
+      ['QR',          'QR timesheets'],
+      ['EXPENSE',            'All expenses'],
+      ['MANUAL_EXPENSE',     'Manual Expense'],
+      ['ELECTRONIC_EXPENSE', 'Electronic Expense'],
+      ['QR_EXPENSE',         'QR Expense']
     ];
     const routeCur = (stFilters.route_type || 'ALL').toUpperCase();
     routeOpts.forEach(([v, label]) => {
@@ -318566,6 +318580,9 @@ const getSelectionUiState = () => {
         const txtBase = String(r?.processing_status_display || '').trim();
         const txt = txtBase || String(formatDisplayValue(c, v) ?? '');
         paintTimesheetProcessingStatusCell(td, r, txt);
+
+      } else if (currentSection === 'timesheets' && c === 'route_type' && r.is_expense_only === true) {
+        td.textContent = String(r.display_route_label || 'Expense');
 
       } else if (currentSection === 'invoices' && c === 'attachment_state') {
         paintInvoiceAttachmentIndicator(td, r);
@@ -357948,6 +357965,44 @@ function renderTimesheetEvidenceTab(ctx) {
     return 'Attached';
   };
 
+  const approvalLabel = (ev) => {
+    const meta = (ev?.meta_json && typeof ev.meta_json === 'object') ? ev.meta_json : {};
+    if (
+      boolish(ev?.approved) || boolish(ev?.is_approved) ||
+      boolish(meta.approved) || boolish(meta.is_approved) ||
+      ev?.approved_at_utc || ev?.authorised_at_utc ||
+      meta.approved_at_utc || meta.authorised_at_utc
+    ) return 'Approved';
+
+    const projection = details?.candidate_office_projection || row?.candidate_office_projection || {};
+    const workflow = projection?.workflow || {};
+    const approval = projection?.manager_approval || {};
+    const currentWorkflowId = String(workflow.workflow_id || workflow.id || '').trim();
+    const evidenceWorkflowId = String(
+      ev?.candidate_workflow_id || meta.candidate_workflow_id || ''
+    ).trim();
+    const currentGeneration = Number(workflow.generation);
+    const evidenceGeneration = Number(
+      ev?.candidate_workflow_generation ?? meta.candidate_workflow_generation
+    );
+    const exactWorkflow = !!(
+      currentWorkflowId && evidenceWorkflowId && currentWorkflowId === evidenceWorkflowId &&
+      (!Number.isFinite(currentGeneration) || !Number.isFinite(evidenceGeneration) || currentGeneration === evidenceGeneration)
+    );
+    if (exactWorkflow && upper(approval.state) === 'APPROVED') return 'Approved';
+    if (upper(ev?.kind || ev?.staged_kind) === 'AUTHORISATION') return 'Approved';
+    return 'Not approved yet';
+  };
+
+  const evidenceIsHistorical = (ev) => {
+    const meta = (ev?.meta_json && typeof ev.meta_json === 'object') ? ev.meta_json : {};
+    const stateText = upper(ev?.state || ev?.status || meta.state || meta.status);
+    return ev?.is_current === false || boolish(ev?.historical) || boolish(meta.historical) ||
+      !!ev?.archived_at_utc || !!ev?.withdrawn_at_utc || !!ev?.superseded_at_utc ||
+      !!ev?.superseded_by_id || ['HISTORICAL', 'WITHDRAWN', 'SUPERSEDED', 'RETIRED'].includes(stateText);
+  };
+  const currentEvidenceList = evList.filter((ev) => !evidenceIsHistorical(ev));
+
   const pageCountLabel = (ev) => {
     const direct =
       (ev?.page_count != null && Number.isFinite(Number(ev.page_count)))
@@ -357976,8 +358031,8 @@ function renderTimesheetEvidenceTab(ctx) {
     return !!((k1 || k2) && (k1 || k2).replace(/^\/+/, '').trim());
   };
 
-  const rowsHtml = evList.length
-    ? evList.map(ev => {
+  const rowsHtml = currentEvidenceList.length
+    ? currentEvidenceList.map(ev => {
         const id = (ev && ev.id != null) ? String(ev.id) : '';
         const system = !!ev?.system;
         const protectedEvidence = isProtectedEvidence(ev);
@@ -357993,6 +358048,7 @@ function renderTimesheetEvidenceTab(ctx) {
         const type = escapeHtml(typeLabel(ev));
         const uploadedBy = escapeHtml(uploadedByLabel(ev));
         const src = escapeHtml(sourceLabel(ev));
+        const approval = approvalLabel(ev);
         const pageCount = escapeHtml(pageCountLabel(ev));
 
         const kindU = String(ev?.kind || '').trim().toUpperCase();
@@ -358088,6 +358144,7 @@ function renderTimesheetEvidenceTab(ctx) {
             <td data-ctms-label="Source">
               <span class="pill">${src}</span>
             </td>
+            <td data-ctms-label="Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
             <td data-ctms-label="Pages">${pageCount}</td>
             <td data-ctms-label="Date uploaded">${uploadedDate}</td>
             <td data-ctms-label="Time">${uploadedTime}</td>
@@ -358107,7 +358164,7 @@ function renderTimesheetEvidenceTab(ctx) {
       }).join('')
     : `
       <tr>
-        <td colspan="8" class="mini" style="opacity:.85;">
+        <td colspan="9" class="mini" style="opacity:.85;">
           No evidence uploaded yet. Drag a file anywhere inside this tab to upload.
         </td>
       </tr>
@@ -358121,6 +358178,7 @@ function renderTimesheetEvidenceTab(ctx) {
             <th style="text-align:left;">Filename</th>
             <th style="text-align:left;">Type</th>
             <th style="text-align:left;">Source</th>
+            <th style="text-align:left;">Approval</th>
             <th style="text-align:left;">Pages</th>
             <th style="text-align:left;">Date Uploaded</th>
             <th style="text-align:left;">Time</th>
@@ -358147,7 +358205,7 @@ function renderTimesheetEvidenceTab(ctx) {
         : (authorised
             ? 'Payment values are locked because this timesheet is authorised. Evidence files can still be managed if the row is not invoice/document locked.'
             : (lockReason ? `Evidence changes are locked: ${escapeHtml(lockReason)}` : '')));
-  const hasTimesheetEvidence = evList.some((ev) => String(ev?.kind || ev?.staged_kind || '').trim().toUpperCase() === 'TIMESHEET');
+  const hasTimesheetEvidence = currentEvidenceList.some((ev) => String(ev?.kind || ev?.staged_kind || '').trim().toUpperCase() === 'TIMESHEET');
 
   return `
     <div class="tabc ts-evidence-tab"
@@ -358167,7 +358225,7 @@ function renderTimesheetEvidenceTab(ctx) {
 
       <div class="card" style="flex:1; overflow:hidden;">
         <div class="row">
-          <label>Evidence</label>
+          <label>Current Evidence</label>
           <div class="controls" style="width:100%;">
             ${tableHtml}
           </div>
@@ -361103,6 +361161,19 @@ function renderTimesheetOverviewTab(ctx) {
   })();
 
   const routeDisplayForDisplay = (() => {
+    const expenseOnly = boolish(
+      details.is_expense_only ??
+      baseSummary.is_expense_only ??
+      row.is_expense_only
+    );
+    if (expenseOnly) {
+      return String(
+        details.display_route_label ||
+        baseSummary.display_route_label ||
+        row.display_route_label ||
+        'Expense'
+      ).trim();
+    }
     if (!isPlannedWeeklyRow) {
       return String(
         details.route_display ||
@@ -372791,6 +372862,34 @@ function renderTimesheetEvidenceTab(ctx) {
     return (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on');
   };
   const upper = (v) => String(v == null ? '' : v).trim().toUpperCase();
+  const approvalLabel = (ev) => {
+    const meta = (ev?.meta_json && typeof ev.meta_json === 'object') ? ev.meta_json : {};
+    if (
+      boolish(ev?.approved) || boolish(ev?.is_approved) ||
+      boolish(meta.approved) || boolish(meta.is_approved) ||
+      ev?.approved_at_utc || ev?.authorised_at_utc ||
+      meta.approved_at_utc || meta.authorised_at_utc
+    ) return 'Approved';
+
+    const projection = details?.candidate_office_projection || row?.candidate_office_projection || {};
+    const workflow = projection?.workflow || {};
+    const approval = projection?.manager_approval || {};
+    const currentWorkflowId = String(workflow.workflow_id || workflow.id || '').trim();
+    const evidenceWorkflowId = String(
+      ev?.candidate_workflow_id || meta.candidate_workflow_id || ''
+    ).trim();
+    const currentGeneration = Number(workflow.generation);
+    const evidenceGeneration = Number(
+      ev?.candidate_workflow_generation ?? meta.candidate_workflow_generation
+    );
+    const exactWorkflow = !!(
+      currentWorkflowId && evidenceWorkflowId && currentWorkflowId === evidenceWorkflowId &&
+      (!Number.isFinite(currentGeneration) || !Number.isFinite(evidenceGeneration) || currentGeneration === evidenceGeneration)
+    );
+    if (exactWorkflow && upper(approval.state) === 'APPROVED') return 'Approved';
+    if (upper(ev?.kind || ev?.staged_kind) === 'AUTHORISATION') return 'Approved';
+    return 'Not approved yet';
+  };
   const routeType = upper(row.route_type || details.route_type || state.route_type || ts.route_type || details?.timesheet?.route_type || '');
   const basis = upper(details?.tsfin?.basis || row.basis || state.basis || details?.timesheet?.basis || '');
   const routeFamily = upper(row.route_family || details.route_family || state.route_family || details?.timesheet?.route_family || '');
@@ -373089,6 +373188,7 @@ function renderTimesheetEvidenceTab(ctx) {
         const type = escapeHtml(typeLabel(ev));
         const uploadedBy = escapeHtml(uploadedByLabel(ev));
         const src = escapeHtml(sourceLabel(ev));
+        const approval = approvalLabel(ev);
         const pageCount = escapeHtml(pageCountLabel(ev));
 
         const kindU = String(ev?.kind || '').trim().toUpperCase();
@@ -373184,6 +373284,7 @@ function renderTimesheetEvidenceTab(ctx) {
             <td data-ctms-label="Source">
               <span class="pill">${src}</span>
             </td>
+            <td data-ctms-label="Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
             <td data-ctms-label="Pages">${pageCount}</td>
             <td data-ctms-label="Date uploaded">${uploadedDate}</td>
             <td data-ctms-label="Time">${uploadedTime}</td>
@@ -373203,7 +373304,7 @@ function renderTimesheetEvidenceTab(ctx) {
       }).join('')
     : `
       <tr>
-        <td colspan="8" class="mini" style="opacity:.85;">
+        <td colspan="9" class="mini" style="opacity:.85;">
           No evidence uploaded yet. Drag a file anywhere inside this tab to upload.
         </td>
       </tr>
@@ -373217,6 +373318,7 @@ function renderTimesheetEvidenceTab(ctx) {
             <th style="text-align:left;">Filename</th>
             <th style="text-align:left;">Type</th>
             <th style="text-align:left;">Source</th>
+            <th style="text-align:left;">Approval</th>
             <th style="text-align:left;">Pages</th>
             <th style="text-align:left;">Date Uploaded</th>
             <th style="text-align:left;">Time</th>
@@ -373318,7 +373420,7 @@ function renderTimesheetEvidenceTab(ctx) {
 
       <div class="card" style="flex:1; overflow:hidden;">
         <div class="row">
-          <label>Evidence</label>
+          <label>Current Evidence</label>
           <div class="controls" style="width:100%;">
             ${tableHtml}
           </div>

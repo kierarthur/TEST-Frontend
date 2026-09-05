@@ -34,17 +34,11 @@
   function renderCandidateOverviewFragment(view) {
     if (!view) return '';
     const sections = [];
-    if (view.manager) {
-      sections.push(`<div class="candidate-office-overview-group"><strong>Manager approval</strong>${renderFields(view.manager.fields)}</div>`);
-    }
-    if (view.retained_manager) {
-      sections.push(`<div class="candidate-office-overview-group"><strong>Earlier approved submission</strong>${renderFields(view.retained_manager.fields)}</div>`);
+    if (view.current_submission) {
+      sections.push(`<div class="candidate-office-overview-group"><strong>Submission Status</strong>${renderFields(view.current_submission.fields)}</div>`);
     }
     if (view.paper) {
       sections.push(`<div class="candidate-office-overview-group"><strong>QR Pack</strong>${renderFields(view.paper.fields)}</div>`);
-    }
-    if (view.rejections?.length) {
-      sections.push(`<div class="candidate-office-overview-group"><strong>Submission history</strong>${view.rejections.map(item => `<div class="candidate-office-history-row"><span>${escape(item.label)}</span>${item.replacement_state ? `<span>Replacement: ${escape(item.replacement_state)}</span>` : item.historical ? '<span>Historical — already replaced or no longer actionable</span>' : ''}</div>`).join('')}</div>`);
     }
     return sections.length ? `<div class="candidate-office-overview-details">${sections.join('')}</div>` : '';
   }
@@ -88,6 +82,7 @@
   function renderCandidateOfficeCard(view, { surface = 'SIMPLE_TIMESHEET' } = {}) {
     if (!view) return `<section class="candidate-office-card candidate-office-card--loading" aria-busy="true"><div class="candidate-office-skeleton"></div><span>Loading Candidate status…</span></section>`;
     if (view.status?.unavailable) return `<section class="candidate-office-card candidate-office-card--unavailable"><div><strong>Status unavailable</strong><p>CloudTMS could not safely read the Candidate state.</p></div></section>`;
+    const currentSubmission = view.current_submission ? `<section class="candidate-office-section candidate-office-current-submission"><div class="candidate-office-section__heading"><h4>Submission Status</h4></div>${renderFields(view.current_submission.fields)}</section>` : '';
     const managerActions = renderActions(view.manager?.actions, surface);
     const manager = view.manager ? `<section class="candidate-office-section candidate-office-manager"><div class="candidate-office-section__heading"><h4>${escape(view.manager.title)}</h4></div>${renderFields(view.manager.fields)}${managerActions}</section>` : '';
     const paperActions = renderActions(view.paper?.actions, surface);
@@ -99,7 +94,7 @@
     const historyCodes = new Set(view.rejections.map(item => item.action?.code).filter(Boolean));
     const remaining = view.actions.filter(action => !managerCodes.has(action.code) && !paperCodes.has(action.code) && !historyCodes.has(action.code));
     const remainingButtons = renderActions(remaining, surface);
-    return `<section class="candidate-office-card" data-candidate-office-card="${escape(surface)}"><header class="candidate-office-card__header"><div><span class="candidate-office-card__eyebrow">Candidate submission</span><h3>Candidate status</h3></div><span class="candidate-office-overview-badges">${renderStatusBadges(view)}</span></header>${diagnostics}${manager}${view.retained_manager ? `<section class="candidate-office-section candidate-office-manager"><div class="candidate-office-section__heading"><h4>Earlier approved submission</h4></div>${renderFields(view.retained_manager.fields)}</section>` : ''}${paper}${rejections}${remainingButtons ? `<section class="candidate-office-section candidate-office-action-hub"><h4>Candidate actions</h4>${remainingButtons}</section>` : ''}<footer class="candidate-office-card__footer">State observed ${escape(view.observed_at)}</footer></section>`;
+    return `<section class="candidate-office-card" data-candidate-office-card="${escape(surface)}"><header class="candidate-office-card__header"><div><span class="candidate-office-card__eyebrow">Candidate submission</span><h3>Candidate status</h3></div><span class="candidate-office-overview-badges">${renderStatusBadges(view)}</span></header>${diagnostics}${currentSubmission}${manager}${view.retained_manager ? `<section class="candidate-office-section candidate-office-manager"><div class="candidate-office-section__heading"><h4>Earlier approved submission</h4></div>${renderFields(view.retained_manager.fields)}</section>` : ''}${paper}${rejections}${remainingButtons ? `<section class="candidate-office-section candidate-office-action-hub"><h4>Candidate actions</h4>${remainingButtons}</section>` : ''}<footer class="candidate-office-card__footer">State observed ${escape(view.observed_at)}</footer></section>`;
   }
   function renderCandidateUnavailable(error, { variant = 'detail' } = {}) {
     const message = escape(error?.message || 'Refresh the current state.');
