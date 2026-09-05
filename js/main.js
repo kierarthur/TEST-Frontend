@@ -165189,7 +165189,10 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
 
     if (continuousController && navigationKeys.has(ev.key)) {
       ev.preventDefault();
-      const activeId = getActiveRowId() || rowIdOf(state.rows[0]);
+      const renderedActiveId = String(
+        hostEl.querySelector('tbody tr.active-summary-row[data-id]')?.getAttribute('data-id') || ''
+      ).trim();
+      const activeId = renderedActiveId || getActiveRowId() || rowIdOf(state.rows[0]);
       const view = continuousController.getView?.() || null;
       const currentIndex = continuousController.getRowIndex?.(activeId);
       const fallbackIndex = Math.max(0, Number(view?.startIndex || 0));
@@ -165219,6 +165222,13 @@ function attachSummaryTypeAheadNavigation(section, summaryHost, rows, options = 
           scrollIntoView: true,
           syncSelected: true
         });
+        const landedState = window.__summaryTypeAheadState?.[sec];
+        if (landedState && typeof landedState === 'object') {
+          landedState.active_row_id = String(result.rowId || '').trim();
+          landedState.pending_row_id = '';
+          landedState.pending_page = null;
+          landedState.has_focus = true;
+        }
       }
       return;
     }

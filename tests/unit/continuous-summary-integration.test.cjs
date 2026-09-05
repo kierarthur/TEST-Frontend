@@ -37,6 +37,8 @@ test('Outbox Select All uses query-wide membership and bounded delete batches', 
 
 test('continuous sheets retain keyboard, sort and heartbeat reconciliation contracts', () => {
   assert.match(source, /\['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'\]/);
+  assert.match(source, /const renderedActiveId = String\(/);
+  assert.match(source, /landedState\.active_row_id = String\(result\.rowId \|\| ''\)\.trim\(\)/);
   assert.match(source, /runContinuousSummaryJump\(continuousController, ordinalIndex/);
   assert.match(source, /window\.CloudTMSSummaryContinuousGrid\?\.invalidate\?\.\(s, \{ refresh: false \}\)/);
   assert.match(source, /outboxHeaderSortKeys/);
