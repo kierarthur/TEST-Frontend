@@ -333304,11 +333304,23 @@ if (btnTsProcess) {
             '';
 
           const isAdditionalOnlyDelete = !!(!isPlannedOnly && dpKindX === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE');
+          const pendingExpenseClaimCount = Number(freshDpX?.pending_expense_claim_count || 0);
+          const hasPendingExpenseClaim = Number.isInteger(pendingExpenseClaimCount) && pendingExpenseClaimCount > 0;
+          const pendingExpenseWarningHtml = hasPendingExpenseClaim
+            ? `<div role="alert" style="margin:0 0 12px;padding:12px 14px;border:1px solid #b45309;border-radius:10px;background:#fff7ed;color:#7c2d12;line-height:1.45;">
+                 <div style="font-weight:800;margin-bottom:4px;">Pending expense claim</div>
+                 <div>${pendingExpenseClaimCount === 1
+                   ? 'There is a pending expense claim which has not yet been approved by a manager. If you delete the Timesheet the pending expense claim will be cancelled. Do you want to continue?'
+                   : `There are ${enc2(pendingExpenseClaimCount)} pending expense claims which have not yet been approved by a manager. If you delete the Timesheet the pending expense claims will be cancelled. Do you want to continue?`}</div>
+               </div>`
+            : '';
 
           const title =
             isPlannedOnly
               ? 'Delete planned week?'
-              : (isAdditionalOnlyDelete ? 'Delete additional manual adjustment?' : 'Delete timesheet(s)?');
+              : (hasPendingExpenseClaim
+                ? 'Delete Timesheet and cancel pending expense?'
+                : (isAdditionalOnlyDelete ? 'Delete additional manual adjustment?' : 'Delete timesheet(s)?'));
 
           const messageHtml =
             isPlannedOnly
@@ -333349,12 +333361,14 @@ if (btnTsProcess) {
                 `);
 
           const extraHtml =
-            isPlannedOnly ? '' : buildDeleteTableHtml(dpItems);
+            isPlannedOnly ? '' : `${pendingExpenseWarningHtml}${buildDeleteTableHtml(dpItems)}`;
 
           const confirmLabel =
             isPlannedOnly
               ? 'Delete planned week'
-              : (isAdditionalOnlyDelete ? 'Delete additional adjustment' : 'Delete timesheet(s)');
+              : (hasPendingExpenseClaim
+                ? 'Delete Timesheet and cancel expense'
+                : (isAdditionalOnlyDelete ? 'Delete additional adjustment' : 'Delete timesheet(s)'));
 
           const confirmRes = await openUiConfirmModal({
             title,
@@ -333436,6 +333450,7 @@ if (btnTsProcess) {
                 expected_timesheet_id: tsIdX,
                 expected_contract_week_id: expectedDeleteContractWeekId,
                 expected_delete_kind: dpKindX || null,
+                expected_pending_expense_context_sha256: freshDpX?.expected_pending_expense_context_sha256 || freshDpX?.context_sha256 || null,
                 contractWeekId: expectedDeleteContractWeekId,
                 expectedContractWeekId: expectedDeleteContractWeekId,
                 expectedDeleteKind: dpKindX || null
@@ -378250,6 +378265,7 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
   const trim = (value) => String(value == null ? '' : value).trim();
   const upper = (value) => trim(value).toUpperCase();
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const sha256Re = /^[0-9a-f]{64}$/i;
   const idArray = (value) => Array.from(new Set(
     (Array.isArray(value) ? value : []).map((item) => trim(item)).filter((item) => uuidRe.test(item))
   )).sort();
@@ -378316,13 +378332,21 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
       return `• ${role}${date ? ` — ${date}` : ''}${Number.isFinite(hours) ? ` — ${hours} hours` : ''}`;
     });
     const countText = `${idArray(preview?.timesheet_ids).length} Timesheet row(s)`;
+    const pendingExpenseClaimCount = Number(preview?.pending_expense_claim_count || 0);
+    const pendingExpenseWarning = Number.isInteger(pendingExpenseClaimCount) && pendingExpenseClaimCount > 0
+      ? (pendingExpenseClaimCount === 1
+          ? 'There is a pending expense claim which has not yet been approved by a manager. If you delete the Timesheet the pending expense claim will be cancelled.'
+          : `There are ${pendingExpenseClaimCount} pending expense claims which have not yet been approved by a manager. If you delete the Timesheet the pending expense claims will be cancelled.`)
+      : '';
     return [
+      pendingExpenseWarning,
+      pendingExpenseWarning ? '' : null,
       'This action permanently deletes the financially clean removal unit.',
       '',
       rows.length ? rows.join('\n') : `• ${countText}`,
       '',
       'This cannot be undone. Continue?'
-    ].join('\n');
+    ].filter((line) => line !== null).join('\n');
   };
   const reconcileAuthoritativeState = async () => {
     try { if (typeof renderAll === 'function') await renderAll(); } catch {}
@@ -378379,6 +378403,12 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
     const kind = upper(preview?.kind || preview?.delete_kind);
     const currentId = trim(preview?.current_timesheet_id || preview?.expected_timesheet_id || requestedId);
     const rowSignature = trim(preview?.current_row_signature || preview?.expected_row_signature);
+    const pendingExpenseContextSha256 = trim(
+      preview?.expected_pending_expense_context_sha256 || preview?.context_sha256
+    ).toLowerCase();
+    const confirmedPendingExpenseContextSha256 = trim(
+      options.expected_pending_expense_context_sha256 || options.expectedPendingExpenseContextSha256
+    ).toLowerCase();
 
     if (decision === 'ARCHIVE_REQUIRED') {
       return await archiveInstead(currentId, kind);
@@ -378389,11 +378419,20 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
       error.preview = preview;
       throw error;
     }
-    if (!['STANDARD_DELETE', 'WEEKLY_CHAIN_DELETE_PARENT', 'WEEKLY_MANUAL_ADJUSTMENT_DELETE'].includes(kind)) {
+    if (!['STANDARD_DELETE', 'DAILY_ABANDONED_RECEIPT_DELETE', 'WEEKLY_CHAIN_DELETE_PARENT', 'WEEKLY_MANUAL_ADJUSTMENT_DELETE'].includes(kind)) {
       throw new Error('The delete preview returned an unsupported removal kind.');
     }
     if (!uuidRe.test(currentId) || !rowSignature) {
       throw new Error('The delete preview did not return the required current Timesheet identity and row signature.');
+    }
+    if (!sha256Re.test(pendingExpenseContextSha256)) {
+      throw new Error('The delete preview did not return the required pending-expense safety check.');
+    }
+    if (callerAlreadyConfirmed && confirmedPendingExpenseContextSha256 !== pendingExpenseContextSha256) {
+      const error = new Error('The pending expense claim changed after the warning was shown. Refresh and review the Timesheet before trying again.');
+      error.code = 'DELETE_TARGET_SET_CHANGED';
+      error.refresh_required = true;
+      throw error;
     }
 
     if (!callerAlreadyConfirmed) {
@@ -378416,6 +378455,7 @@ async function deleteTimesheetPermanent(timesheetId, opts = {}) {
       expected_nhsp_shift_ids: idArray(preview.nhsp_shift_ids),
       expected_preserved_source_timesheet_ids: idArray(preview.preserved_source_timesheet_ids),
       expected_preserved_source_contract_week_ids: idArray(preview.preserved_source_contract_week_ids),
+      expected_pending_expense_context_sha256: pendingExpenseContextSha256,
       reason: 'USER_CONFIRMED_PERMANENT_DELETE'
     };
 
