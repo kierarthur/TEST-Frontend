@@ -86,6 +86,7 @@
 .candidate-office-badge--warning { color:#ffe7b6; background:rgba(189,126,14,.20); border-color:rgba(246,189,82,.48); }
 .candidate-office-badge--info { color:#d5e4ff; background:rgba(62,112,203,.20); border-color:rgba(117,167,255,.48); }
 .candidate-office-badge--neutral { color:#d9e2ef; background:rgba(141,160,188,.13); border-color:rgba(174,190,214,.3); }
+.candidate-office-summary-statuses { display:grid; gap:4px; width:100%; max-width:100%; }
 .candidate-office-summary-status { display:-webkit-box; box-sizing:border-box; width:100%; max-width:100%; padding-left:6px; padding-right:6px; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; text-overflow:ellipsis; font-size:10.5px; }
 th[data-col-key="candidate_submission"], td[data-col-key="candidate_submission"] { width:166px; min-width:158px; max-width:186px; }
 td[data-col-key="candidate_submission"] { padding-left:6px; padding-right:6px; vertical-align:middle; }

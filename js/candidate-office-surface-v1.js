@@ -2,10 +2,16 @@
   'use strict';
   const escape = value => String(value == null ? '' : value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
   const statusClass = tone => `candidate-office-badge candidate-office-badge--${['success', 'danger', 'warning', 'info'].includes(tone) ? tone : 'neutral'}`;
+  const statusViews = view => Array.isArray(view?.statuses) && view.statuses.length
+    ? view.statuses
+    : (view?.status ? [view.status] : []);
+  const renderStatusBadges = (view, { summary = false } = {}) => statusViews(view).map(status => (
+    `<span class="${statusClass(status.tone)}${summary ? ' candidate-office-summary-status' : ''}" data-candidate-status-code="${escape(status.code)}">${escape(status.label)}</span>`
+  )).join('');
   function renderCandidateSummaryCell(view) {
-    if (!view || !view.status) return '';
-    if (view.status.unavailable) return '';
-    return `<span class="${statusClass(view.status.tone)} candidate-office-summary-status" data-candidate-status-code="${escape(view.status.code)}">${escape(view.status.label)}</span>`;
+    if (!view || !statusViews(view).length) return '';
+    if (statusViews(view).every(status => status.unavailable)) return '';
+    return `<span class="candidate-office-summary-statuses">${renderStatusBadges(view, { summary: true })}</span>`;
   }
   const renderCandidateCompactBadges = renderCandidateSummaryCell;
   const renderFields = fields => `<dl class="candidate-office-facts">${(fields || []).map(([label, value]) => `<div><dt>${escape(label)}</dt><dd>${escape(value)}</dd></div>`).join('')}</dl>`;
@@ -22,14 +28,17 @@
     return buttons ? `<section class="candidate-office-section candidate-office-action-hub"><h4>Candidate actions</h4>${buttons}</section>` : '';
   }
   function renderCandidateStageFragment(view) {
-    if (!view?.status) return '';
-    return `<span class="candidate-office-overview-badges"><span class="${statusClass(view.status.tone)}" data-candidate-status-code="${escape(view.status.code)}">${escape(view.status.label)}</span></span>`;
+    if (!statusViews(view).length) return '';
+    return `<span class="candidate-office-overview-badges">${renderStatusBadges(view)}</span>`;
   }
   function renderCandidateOverviewFragment(view) {
     if (!view) return '';
     const sections = [];
     if (view.manager) {
       sections.push(`<div class="candidate-office-overview-group"><strong>Manager approval</strong>${renderFields(view.manager.fields)}</div>`);
+    }
+    if (view.retained_manager) {
+      sections.push(`<div class="candidate-office-overview-group"><strong>Earlier approved submission</strong>${renderFields(view.retained_manager.fields)}</div>`);
     }
     if (view.paper) {
       sections.push(`<div class="candidate-office-overview-group"><strong>QR Pack</strong>${renderFields(view.paper.fields)}</div>`);
@@ -90,7 +99,7 @@
     const historyCodes = new Set(view.rejections.map(item => item.action?.code).filter(Boolean));
     const remaining = view.actions.filter(action => !managerCodes.has(action.code) && !paperCodes.has(action.code) && !historyCodes.has(action.code));
     const remainingButtons = renderActions(remaining, surface);
-    return `<section class="candidate-office-card" data-candidate-office-card="${escape(surface)}"><header class="candidate-office-card__header"><div><span class="candidate-office-card__eyebrow">Candidate submission</span><h3>Candidate status</h3></div><span class="${statusClass(view.status.tone)}" data-candidate-status-code="${escape(view.status.code)}">${escape(view.status.label)}</span></header>${diagnostics}${manager}${paper}${rejections}${remainingButtons ? `<section class="candidate-office-section candidate-office-action-hub"><h4>Candidate actions</h4>${remainingButtons}</section>` : ''}<footer class="candidate-office-card__footer">State observed ${escape(view.observed_at)}</footer></section>`;
+    return `<section class="candidate-office-card" data-candidate-office-card="${escape(surface)}"><header class="candidate-office-card__header"><div><span class="candidate-office-card__eyebrow">Candidate submission</span><h3>Candidate status</h3></div><span class="candidate-office-overview-badges">${renderStatusBadges(view)}</span></header>${diagnostics}${manager}${view.retained_manager ? `<section class="candidate-office-section candidate-office-manager"><div class="candidate-office-section__heading"><h4>Earlier approved submission</h4></div>${renderFields(view.retained_manager.fields)}</section>` : ''}${paper}${rejections}${remainingButtons ? `<section class="candidate-office-section candidate-office-action-hub"><h4>Candidate actions</h4>${remainingButtons}</section>` : ''}<footer class="candidate-office-card__footer">State observed ${escape(view.observed_at)}</footer></section>`;
   }
   function renderCandidateUnavailable(error, { variant = 'detail' } = {}) {
     const message = escape(error?.message || 'Refresh the current state.');

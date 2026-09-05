@@ -262,6 +262,44 @@
         resends_remaining: optionalInteger(manager.resends_remaining, 'manager_approval.resends_remaining', 0)
       });
     }
+    const retainedManager = src.retained_manager_approval == null
+      ? null
+      : object(src.retained_manager_approval, 'retained_manager_approval');
+    let normalizedRetainedManager = null;
+    if (retainedManager) {
+      const workflowId = optionalUuid(retainedManager.workflow_id, 'retained_manager_approval.workflow_id');
+      const workflowGeneration = integer(retainedManager.workflow_generation, 'retained_manager_approval.workflow_generation', 1);
+      const currentGeneration = integer(retainedManager.current_generation, 'retained_manager_approval.current_generation', workflowGeneration);
+      const workflowKind = text(retainedManager.workflow_kind, 'retained_manager_approval.workflow_kind', { max: 32 }).toUpperCase();
+      const scope = text(retainedManager.scope, 'retained_manager_approval.scope', { max: 16 }).toUpperCase();
+      const route = text(retainedManager.route, 'retained_manager_approval.route', { max: 16 }).toUpperCase();
+      const method = text(retainedManager.method, 'retained_manager_approval.method', { max: 16 }).toUpperCase();
+      if (!workflowId
+          || !['CONTRACT_HOURS', 'CONTRACT_EXPENSE', 'CONTRACT_COMBINED', 'DAILY'].includes(workflowKind)
+          || !['HOURS', 'EXPENSE', 'COMBINED'].includes(scope)
+          || !['ELECTRONIC', 'PHONE', 'EMAIL', 'PAPER'].includes(route)
+          || !['PHONE', 'EMAIL'].includes(method)) {
+        fail('CANDIDATE_OFFICE_CONTRACT_INVALID', 'Retained manager approval is invalid.');
+      }
+      const activeWorkflowId = src.workflow?.workflow_id == null
+        ? null
+        : optionalUuid(src.workflow.workflow_id, 'workflow.workflow_id');
+      if (activeWorkflowId && activeWorkflowId === workflowId) {
+        fail('CANDIDATE_OFFICE_CONTRACT_INVALID', 'Retained manager approval duplicates the active workflow.');
+      }
+      normalizedRetainedManager = freeze({
+        ...retainedManager,
+        workflow_id: workflowId,
+        workflow_generation: workflowGeneration,
+        current_generation: currentGeneration,
+        workflow_kind: workflowKind,
+        scope,
+        route,
+        state: text(retainedManager.state, 'retained_manager_approval.state', { max: 64 }).toUpperCase(),
+        method,
+        approved_at_utc: text(retainedManager.approved_at_utc, 'retained_manager_approval.approved_at_utc', { max: 64 })
+      });
+    }
     return freeze({
       ...src,
       current_identity: freeze({ ...currentIdentity, timesheet_id: currentTimesheetId, contract_week_id: currentContractWeekId }),
@@ -273,6 +311,7 @@
       }),
       workflow: src.workflow == null ? null : freeze({ ...object(src.workflow, 'workflow') }),
       manager_approval: normalizedManager,
+      retained_manager_approval: normalizedRetainedManager,
       paper_pack: freeze({ ...paper, state: paperState }),
       rejections: freeze(rejections),
       primary_action: primaryAction,

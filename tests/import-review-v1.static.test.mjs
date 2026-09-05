@@ -397,13 +397,13 @@ test('no-shifts declaration uses a client-scoped bounded Daily review modal', ()
   assert.match(css, /\.irv1-dialog-date-grid/);
 });
 
-test('break-entry preference is shown only for roster-validation timesheets and remains non-economic', () => {
+test('break-entry preference is shown for worker-entered weekly timesheets and remains non-economic', () => {
   assert.match(main, /timesheet_break_entry_mode/);
   assert.match(main, /Break start and finish times/);
   assert.match(main, /Break length in minutes/);
-  assert.match(main, /if \(mode !== 'HEALTHROSTER' \|\| behaviour === 'CREATE'\) return ''/);
-  assert.match(main, /display:\$\{\(showHr && !isHrCreate\) \? '' : 'none'\}/);
-  assert.match(main, /A dormant stored[\s\S]*value is deliberately preserved/);
+  assert.match(main, /const showWorkerEnteredBreakMode = showManual \|\| \(showHr && !isHrCreate\)/);
+  assert.match(main, /display:\$\{showWorkerEnteredBreakMode \? '' : 'none'\}/);
+  assert.match(main, /Used for worker-entered Weekly Timesheets\. It is not used where imported hours are authoritative\./);
   const changedStart = main.indexOf('const settingsChanged =');
   const changedEnd = main.indexOf('const contractSettingsTouched', changedStart);
   assert.ok(changedStart > 0 && changedEnd > changedStart);

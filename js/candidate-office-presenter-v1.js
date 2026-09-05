@@ -180,6 +180,35 @@
     if (normalized === 'REFUSED') return 'Refused by Client';
     return 'Awaiting Manager Approval';
   }
+  const submissionScopeLabel = (workflowKind, scope) => {
+    const kind = String(workflowKind || '').toUpperCase();
+    const normalizedScope = String(scope || '').toUpperCase();
+    if (kind === 'CONTRACT_EXPENSE' || normalizedScope === 'EXPENSE') return 'Expense claim';
+    if (kind === 'CONTRACT_COMBINED' || normalizedScope === 'COMBINED') return 'Timesheet and expenses';
+    return 'Timesheet hours';
+  };
+  const scopedStatusView = (status, workflowKind, scope) => {
+    if (!status) return null;
+    return Object.freeze({
+      ...status,
+      label: `${submissionScopeLabel(workflowKind, scope)} — ${status.label}`
+    });
+  };
+  function presentRetainedManagerApproval(retained) {
+    if (!retained) return null;
+    const scopeLabel = submissionScopeLabel(retained.workflow_kind, retained.scope);
+    return Object.freeze({
+      ...retained,
+      scope_label: scopeLabel,
+      status: scopedStatusView(approvedStatusView('MANAGER_APPROVED'), retained.workflow_kind, retained.scope),
+      fields: Object.freeze([
+        ['Submission', scopeLabel],
+        ['Status', 'Manager Approved'],
+        ['Approved', formatDateTime(retained.approved_at_utc)],
+        ['Approval method', String(retained.method || '').toUpperCase() === 'PHONE' ? 'Pass phone' : 'Email']
+      ].map(Object.freeze))
+    });
+  }
   function presentCandidateManagerApproval(manager, actions = []) {
     if (!manager) return null;
     const method = String(manager.method || '').toUpperCase();
@@ -239,6 +268,14 @@
   function presentCandidateOfficeDetail(projection, { surface = 'SIMPLE_TIMESHEET' } = {}) {
     const sourceStatus = sourceStatusView(projection);
     const status = presentApprovedCandidateSubmissionStatus(projection);
+    const retainedManager = presentRetainedManagerApproval(projection.retained_manager_approval);
+    const activeDisplayStatus = retainedManager && status
+      ? scopedStatusView(status, projection.workflow?.workflow_kind, null)
+      : status;
+    const statuses = Object.freeze([
+      ...(retainedManager?.status ? [retainedManager.status] : []),
+      ...(activeDisplayStatus ? [activeDisplayStatus] : [])
+    ]);
     const phoneWorkflow = String(projection.manager_approval?.method || '').toUpperCase() === 'PHONE';
     const receivedDaily = isReceivedDailySubmission(projection);
     const actions = projection.available_actions
@@ -267,10 +304,11 @@
       .filter(action => window.CloudTMSCandidateOfficeUiPolicy?.ownerOf(action.code) === 'OFFICE_EVIDENCE')
       .map(actionView);
     return Object.freeze({
-      surface, identity: projection.current_identity, status,
+      surface, identity: projection.current_identity, status, statuses,
       source_status_code: sourceStatus.code,
       workflow: projection.workflow,
       manager: presentCandidateManagerApproval(projection.manager_approval, actions),
+      retained_manager: retainedManager,
       paper: presentCandidatePaperPack(projection.paper_pack, actions),
       rejections: presentCandidateRejections(projection.rejections),
       diagnostics: Object.freeze(projection.diagnostics.map(item => Object.freeze({ ...item, label: item.code === 'EXPENSE_EMAIL_MISSING' ? 'Expense Email missing' : item.message, tone: item.severity === 'INFO' ? 'info' : item.severity === 'ERROR' ? 'danger' : 'warning' }))),
@@ -286,7 +324,7 @@
   }
   function presentCandidateOfficeSummary(projection) {
     const detail = presentCandidateOfficeDetail(projection, { surface: 'TIMESHEET_SUMMARY' });
-    return Object.freeze({ identity: detail.identity, status: detail.status, source_status_code: detail.source_status_code, manager: detail.manager, primary_action: detail.primary_action, diagnostics: detail.diagnostics, projection });
+    return Object.freeze({ identity: detail.identity, status: detail.status, statuses: detail.statuses, source_status_code: detail.source_status_code, manager: detail.manager, retained_manager: detail.retained_manager, primary_action: detail.primary_action, diagnostics: detail.diagnostics, projection });
   }
-  Object.assign(window, { CloudTMSCandidateOfficePresenter: Object.freeze({ STATUS, APPROVED_CANDIDATE_SUBMISSION_STATUS, PAPER, OFFICE_FRONTEND_FORBIDDEN_ACTIONS, formatDateTime, managerStatusLabel, candidateSubmissionApplies, presentApprovedCandidateSubmissionStatus, presentCandidateOfficeSummary, presentCandidateOfficeDetail, presentCandidateManagerApproval, presentCandidatePaperPack, presentCandidateRejections }) });
+  Object.assign(window, { CloudTMSCandidateOfficePresenter: Object.freeze({ STATUS, APPROVED_CANDIDATE_SUBMISSION_STATUS, PAPER, OFFICE_FRONTEND_FORBIDDEN_ACTIONS, formatDateTime, managerStatusLabel, candidateSubmissionApplies, presentApprovedCandidateSubmissionStatus, presentCandidateOfficeSummary, presentCandidateOfficeDetail, presentCandidateManagerApproval, presentRetainedManagerApproval, presentCandidatePaperPack, presentCandidateRejections }) });
 })();

@@ -50,7 +50,8 @@ test('simple correction-pair confirmation is not covered by the global loading o
   assert.match(main, /GE\(\);\s*const confirmation = await openUiConfirmModal\(\{\s*title: 'Unauthorise linked correction pair'/s);
   assert.match(main, /GC\('unauthoriseTimesheet\.confirmedPair'\);\s*json = await apiPostJson\(urlPath, \{ \.\.\.payload, confirm_pair_lifecycle: true \}\)/s);
   assert.match(main, /GE\(\);\s*const confirmation = await openUiConfirmModal\(\{\s*title: 'Authorise linked correction pair'/s);
-  assert.match(main, /GC\('authoriseTimesheet\.confirmedPair'\);\s*json = await apiPostJson\(urlPath, \{ \.\.\.payload, confirm_pair_lifecycle: true \}\)/s);
+  assert.match(main, /confirmedPairLifecycle = true;\s*GC\('authoriseTimesheet\.confirmedPair'\);\s*continue;/s);
+  assert.match(main, /confirm_pair_lifecycle: confirmedPairLifecycle \|\| undefined/);
 });
 
 test('successful pair lifecycle responses use their signed affected rows instead of the uncertain-outcome reconciler', () => {

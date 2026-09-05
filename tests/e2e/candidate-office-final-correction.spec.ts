@@ -398,6 +398,89 @@ for (const viewport of [{ label: 'desktop', width: 1440, height: 960 }, { label:
   });
 }
 
+test('approved hours and a later pending expense claim remain separate on every Office surface', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  const result = await page.evaluate(() => {
+    const projection = {
+      ok: true,
+      contract_version: 'OFFICE_CANDIDATE_TIMESHEET_V1',
+      office_contract_version: 'CLOUDTMS_OFFICE_CANDIDATE_API_V1',
+      current_identity: {
+        row_key: 'approved-hours-pending-expense',
+        timesheet_id: '00000000-0000-4000-8000-000000000941',
+        contract_week_id: '00000000-0000-4000-8000-000000000942',
+        row_signature: 'approved-hours-pending-expense-signature',
+        route_family: 'ELECTRONIC',
+        record_role: 'HOURS_ONLY',
+        moved: false,
+        stale_signature: false
+      },
+      candidate_status: { code: 'PENDING_AUTH', label: 'Pending authorisation', tone: 'warning' },
+      workflow: {
+        workflow_id: '00000000-0000-4000-8000-000000000943',
+        generation: 2,
+        state: 'READY_FOR_MANAGER_APPROVAL',
+        workflow_kind: 'CONTRACT_EXPENSE',
+        route: 'PHONE',
+        approval_method: null,
+        is_current_action_workflow: true,
+        historical: false
+      },
+      manager_approval: null,
+      retained_manager_approval: {
+        workflow_id: '00000000-0000-4000-8000-000000000944',
+        workflow_generation: 2,
+        current_generation: 3,
+        workflow_kind: 'CONTRACT_HOURS',
+        scope: 'HOURS',
+        route: 'PHONE',
+        state: 'FINALISED',
+        method: 'PHONE',
+        approved_at_utc: '2026-08-27T17:40:00Z'
+      },
+      paper_pack: { state: 'NOT_APPLICABLE', retryable: false },
+      rejections: [],
+      primary_action: null,
+      available_actions: [],
+      diagnostics: [],
+      refresh_hints: { summary: true },
+      observed_at_utc: '2026-09-05T08:00:00Z'
+    };
+    const normalized = (window as any).CloudTMSCandidateOfficeContract.normalizeOfficeCandidateProjection(projection);
+    const presenter = (window as any).CloudTMSCandidateOfficePresenter;
+    const surface = (window as any).CloudTMSCandidateOfficeSurface;
+    const detail = presenter.presentCandidateOfficeDetail(normalized, { surface: 'SIMPLE_TIMESHEET' });
+    const summary = presenter.presentCandidateOfficeSummary(normalized);
+    return {
+      activeStatus: detail.status?.label,
+      statuses: detail.statuses.map((status: any) => status.label),
+      retainedFields: detail.retained_manager?.fields,
+      summaryHtml: surface.renderCandidateSummaryCell(summary),
+      stageHtml: surface.renderCandidateStageFragment(detail),
+      overviewHtml: surface.renderCandidateOverviewFragment(detail),
+      cardHtml: surface.renderCandidateOfficeCard(detail, { surface: 'SIMPLE_TIMESHEET' })
+    };
+  });
+
+  expect(result.activeStatus).toBe('Candidate Submitted');
+  expect(result.statuses).toEqual([
+    'Timesheet hours — Manager Approved',
+    'Expense claim — Candidate Submitted'
+  ]);
+  expect(result.retainedFields).toContainEqual(['Status', 'Manager Approved']);
+  for (const html of [result.summaryHtml, result.stageHtml, result.cardHtml]) {
+    expect(html).toContain('Timesheet hours — Manager Approved');
+    expect(html).toContain('Expense claim — Candidate Submitted');
+  }
+  expect(result.overviewHtml).toContain('Earlier approved submission');
+  expect(result.overviewHtml).toContain('Pass phone');
+  expect(result.summaryHtml.match(/data-candidate-status-code/g)).toHaveLength(2);
+});
+
 test('Manual non-QR, HealthRoster and NHSP authoritative rows never display a Candidate lifecycle on any Office surface', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await installPatchedAssets(page);
