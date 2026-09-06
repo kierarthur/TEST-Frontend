@@ -226,7 +226,6 @@
       'READY_TO_FINALISE', 'FINALISED'
     ].includes(state);
     const fields = [
-      ['Submission', submissionScopeLabel(workflow.workflow_kind, null)],
       ['Status', status.label.replace(/^.*? — /, '')],
       ['Approved', approved
         ? (manager.approved_at_utc ? `Yes — ${formatDateTime(manager.approved_at_utc)}` : 'Yes')
@@ -321,13 +320,8 @@
     const sourceStatus = sourceStatusView(projection);
     const status = presentApprovedCandidateSubmissionStatus(projection);
     const retainedManager = presentRetainedManagerApproval(projection.retained_manager_approval);
-    const activeDisplayStatus = status && projection.workflow
-      ? scopedStatusView(status, projection.workflow.workflow_kind, null)
-      : status;
-    const statuses = Object.freeze([
-      ...(retainedManager?.status ? [retainedManager.status] : []),
-      ...(activeDisplayStatus ? [activeDisplayStatus] : [])
-    ]);
+    const activeDisplayStatus = status;
+    const statuses = Object.freeze(activeDisplayStatus ? [activeDisplayStatus] : []);
     const phoneWorkflow = String(projection.manager_approval?.method || '').toUpperCase() === 'PHONE';
     const receivedDaily = isReceivedDailySubmission(projection);
     const actions = projection.available_actions

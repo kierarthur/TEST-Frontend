@@ -39,3 +39,8 @@ test('a worked NHSP adjustment keeps its worked-timesheet label', () => {
     route_type: 'WEEKLY_NHSP_ADJUSTMENT'
   }), 'Weekly NHSP Adjustment');
 });
+
+test('Timesheet detail gives an expense-only record its expense label, not adjustment wording', () => {
+  assert.match(main, /if \(expenseOnlyForOverview\) return routeDisplayForDisplay \|\| 'Expense'/);
+  assert.match(main, /expenseOnlyForOverview \? "Expense – Can't delete yet" : "Manual adjustment – Can't delete yet"/);
+});

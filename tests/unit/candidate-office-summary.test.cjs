@@ -197,7 +197,8 @@ test('Summary shows one unscoped Candidate status even when detail retains earli
   });
 
   const detail = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(input);
-  assert.equal(detail.statuses.length, 2, 'detail retains the separately labelled audit facts');
+  assert.equal(detail.statuses.length, 1, 'the current status is shown once; earlier approval stays in the history section');
+  assert.ok(detail.retained_manager, 'detail retains the earlier approval as separate history');
 
   const summary = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(input);
   const html = window.CloudTMSCandidateOfficeSurface.renderCandidateSummaryCell(summary);
@@ -491,10 +492,23 @@ test('Overview shows only the current Submission Status and its approval facts',
   assert.match(overview, /Approver name<\/dt><dd>Approving Manager/);
   assert.match(overview, /Approver job title<\/dt><dd>Ward Manager/);
   assert.match(overview, /Approver email<\/dt><dd>manager@example\.test/);
+  assert.doesNotMatch(overview, /Expense claim|Timesheet hours|Timesheet and expenses/);
+  assert.equal((overview.match(/Candidate Submission Complete/g) || []).length, 0);
+  assert.equal(view.statuses.length, 1);
+  assert.equal(view.statuses[0].label, 'Manager Approved');
   assert.doesNotMatch(overview, /Submission history|Earlier approved submission|Earlier Manager/);
 
   const detail = window.CloudTMSCandidateOfficeSurface.renderCandidateOfficeCard(view);
   assert.match(detail, /Submission history|Earlier approved submission/);
+});
+
+test('Simple Timesheet shows Candidate status once, inside Submission Status', () => {
+  const main = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
+  const start = main.indexOf('const routeHtml = `', main.indexOf('function renderTimesheetOverviewTab'));
+  const end = main.indexOf('\n  GE();', start);
+  const route = main.slice(start, end);
+  assert.match(route, /candidateOverviewHtml/);
+  assert.doesNotMatch(route, /candidateStageHtml/);
 });
 
 test('Current Evidence marks approval and keeps older or withdrawn evidence separate', () => {

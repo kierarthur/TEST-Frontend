@@ -361393,6 +361393,11 @@ function renderTimesheetOverviewTab(ctx) {
       row.routeType ||
       ''
     ).toUpperCase();
+  const expenseOnlyForOverview = boolish(
+    details.is_expense_only ??
+    baseSummary.is_expense_only ??
+    row.is_expense_only
+  );
 
   const noTimesheetRequired =
     (details && Object.prototype.hasOwnProperty.call(details, 'no_timesheet_required'))
@@ -361505,12 +361510,7 @@ function renderTimesheetOverviewTab(ctx) {
   })();
 
   const routeDisplayForDisplay = (() => {
-    const expenseOnly = boolish(
-      details.is_expense_only ??
-      baseSummary.is_expense_only ??
-      row.is_expense_only
-    );
-    if (expenseOnly) {
+    if (expenseOnlyForOverview) {
       return String(
         details.display_route_label ||
         baseSummary.display_route_label ||
@@ -362251,6 +362251,7 @@ function renderTimesheetOverviewTab(ctx) {
   // Route label (stable; never show action text here)
   // ─────────────────────────────────────────────────────────────
   const routeLabel = (() => {
+    if (expenseOnlyForOverview) return routeDisplayForDisplay || 'Expense';
     if (canonicalQrRoute) return 'QR';
 
     if (sheetScope === 'WEEKLY') {
@@ -362552,14 +362553,18 @@ function renderTimesheetOverviewTab(ctx) {
 
   const deletePolicyBadgeHtml = (() => {
     if (manualAdditionalForOverview && dpKind === 'WEEKLY_CHAIN_DELETE_PARENT') {
-      const t = 'Delete preview is unsafe for this manual additional adjustment because it is returning a parent-chain delete. Refresh the delete preview before deleting.';
-      return `<span class="pill pill-bad" style="font-weight:600;" title="${enc(t)}">${enc('Manual adjustment – delete preview unsafe')}</span>`;
+      const t = expenseOnlyForOverview
+        ? 'Delete preview is unsafe for this expense because it is returning a parent-chain delete. Refresh the delete preview before deleting.'
+        : 'Delete preview is unsafe for this manual additional adjustment because it is returning a parent-chain delete. Refresh the delete preview before deleting.';
+      return `<span class="pill pill-bad" style="font-weight:600;" title="${enc(t)}">${enc(expenseOnlyForOverview ? 'Expense – delete preview unsafe' : 'Manual adjustment – delete preview unsafe')}</span>`;
     }
 
     if (manualAdditionalForOverview && dpKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') {
       if (dpEligible) {
-        const t = 'This manual additional adjustment can be deleted without deleting the source/parent timesheet.';
-        return `<span class="pill pill-ok" style="font-weight:600;" title="${enc(t)}">${enc('Manual adjustment – Can Delete')}</span>`;
+        const t = expenseOnlyForOverview
+          ? 'This expense can be deleted without deleting the source timesheet.'
+          : 'This manual additional adjustment can be deleted without deleting the source/parent timesheet.';
+        return `<span class="pill pill-ok" style="font-weight:600;" title="${enc(t)}">${enc(expenseOnlyForOverview ? 'Expense – Can Delete' : 'Manual adjustment – Can Delete')}</span>`;
       }
 
       const reasons =
@@ -362572,9 +362577,11 @@ function renderTimesheetOverviewTab(ctx) {
 
       const t = reasons
         ? `Can't delete yet. ${reasons}`
-        : "Can't delete yet. This manual additional adjustment is locked, invoiced, paid, or otherwise not eligible.";
+        : (expenseOnlyForOverview
+            ? "Can't delete yet. This expense is locked, invoiced, paid, or otherwise not eligible."
+            : "Can't delete yet. This manual additional adjustment is locked, invoiced, paid, or otherwise not eligible.");
 
-      return `<span class="pill pill-bad" style="font-weight:600;" title="${enc(t)}">${enc("Manual adjustment – Can't delete yet")}</span>`;
+      return `<span class="pill pill-bad" style="font-weight:600;" title="${enc(t)}">${enc(expenseOnlyForOverview ? "Expense – Can't delete yet" : "Manual adjustment – Can't delete yet")}</span>`;
     }
 
     if (dpKind === 'IMPORT_CHILD_ADJUSTMENT') {
@@ -362668,7 +362675,6 @@ function renderTimesheetOverviewTab(ctx) {
         <label>Stage</label>
         <div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">
           ${stageBadgesForDisplay.join('')}
-          ${candidateStageHtml}
         </div>
       </div>
 
