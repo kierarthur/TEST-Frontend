@@ -180,6 +180,36 @@ test('Bulk Authorise row-key transition is atomic and preserves checkbox selecti
   assert.equal(state.evidence_pane_state.active_queue_id, 'q1');
 });
 
+test('Bulk Authorise keeps review-only rows visible and outside both bulk selections', () => {
+  const api = loadModule();
+  const reviewRow = row(TS1, {
+    bulk_authorise_section: 'processed_review_required',
+    bulk_authorise_block_code: 'DUPLICATE_EXPENSE_REVIEW_REQUIRED',
+    can_bulk_authorise: false,
+    can_bulk_unauthorise: false
+  });
+  const state = {
+    dataset: { rows: [reviewRow], counts: {} },
+    selected_row_keys_by_section: { processed_eligible: [], authorised_eligible: [] },
+    active_row: reviewRow,
+    active_row_key: TS1
+  };
+  const result = api.reconcileBulkAuthorise(state, {
+    outcome: 'CURRENT',
+    changed: true,
+    eligible_for_surface: true,
+    previous_row_key: TS1,
+    row_key: TS1,
+    target_section: 'processed_review_required',
+    row: reviewRow
+  }, reviewRow);
+  assert.equal(result.eligible, true);
+  assert.equal(state.dataset.rows.length, 1);
+  assert.equal(state.dataset.rows[0].bulk_authorise_section, 'processed_review_required');
+  assert.deepEqual(state.selected_row_keys_by_section.processed_eligible, []);
+  assert.deepEqual(state.selected_row_keys_by_section.authorised_eligible, []);
+});
+
 for (const surface of ['bulk_process', 'bulk_authorise']) {
   test(`${surface} removes deleted row and returns one successor`, () => {
     const api = loadModule();
