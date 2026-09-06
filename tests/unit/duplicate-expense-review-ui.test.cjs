@@ -21,8 +21,15 @@ test('bulk authorisation explains that possible duplicates are excluded', () => 
   assert.doesNotMatch(main, /bulk[\s\S]{0,200}duplicate_expense_confirmation: true/i);
 });
 
+test('bulk authorisation visibly separates claims that must be reviewed individually', () => {
+  assert.match(main, /renderSection\('processed_review_required', 'Review Individually', reviewRequiredRows\)/);
+  assert.match(main, /Possible duplicate expenses — open and review this claim individually\./);
+  assert.match(main, /isReviewRequired \? 'Review required'/);
+  assert.match(main, /for \(const sectionKey of \['processed_eligible', 'authorised_eligible', 'processed_review_required'\]\)/);
+});
+
 test('Office summary and Issues surfaces use friendly duplicate-expense wording', () => {
   assert.match(main, /DUPLICATE_EXPENSE_REVIEW: 'Possible duplicate expenses'/);
   assert.match(main, /another claim for this Candidate, Client and week ending contains the same expense category/);
-  assert.match(index, /duplicate-expense-review=20260831-r1/);
+  assert.match(index, /duplicate-expense-review=20260831-r2/);
 });

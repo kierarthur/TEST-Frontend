@@ -183506,12 +183506,14 @@ function renderBulkAuthoriseLists(state) {
     : {
         visible_rows: [],
         visible_processed_eligible_rows: [],
-        visible_authorised_eligible_rows: []
+        visible_authorised_eligible_rows: [],
+        visible_review_required_rows: []
       };
 
   const visibleRows = Array.isArray(visibleModel.visible_rows) ? visibleModel.visible_rows : [];
   const processedRows = Array.isArray(visibleModel.visible_processed_eligible_rows) ? visibleModel.visible_processed_eligible_rows : [];
   const authorisedRows = Array.isArray(visibleModel.visible_authorised_eligible_rows) ? visibleModel.visible_authorised_eligible_rows : [];
+  const reviewRequiredRows = Array.isArray(visibleModel.visible_review_required_rows) ? visibleModel.visible_review_required_rows : [];
   const activeRowKey = String(st.active_row_key || '').trim();
   const selectionMap = (st.selected_row_keys_by_section && typeof st.selected_row_keys_by_section === 'object')
     ? st.selected_row_keys_by_section
@@ -183578,6 +183580,7 @@ function renderBulkAuthoriseLists(state) {
 
   const deriveStatusLabel = (row) => {
     if (String(row?.bulk_authorise_section || '').trim() === 'authorised_eligible') return 'Authorised';
+    if (String(row?.bulk_authorise_section || '').trim() === 'processed_review_required') return 'Review individually';
     return String(
       row?.processing_status_display ||
       row?.summary_stage ||
@@ -183660,8 +183663,9 @@ function renderBulkAuthoriseLists(state) {
   const renderRow = (row, sectionName) => {
     const rowKey = String(row?.row_key || '').trim();
     const isActive = rowKey && rowKey === activeRowKey;
+    const isReviewRequired = sectionName === 'processed_review_required';
     const sectionSelectedSet = sectionName === 'processed_eligible' ? processedSelectedSet : authorisedSelectedSet;
-    const isSelected = sectionSelectedSet.has(rowKey);
+    const isSelected = !isReviewRequired && sectionSelectedSet.has(rowKey);
 
     const candidateText = String(
       row?.candidate_name ||
@@ -183704,14 +183708,16 @@ function renderBulkAuthoriseLists(state) {
       >
         <div style="display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:start;">
           <div style="padding-top:1px;">
-            <input
-              type="checkbox"
-              data-bulk-authorise-row-checkbox="1"
-              data-row-key="${enc(rowKey)}"
-              data-section="${enc(sectionName)}"
-              ${isSelected ? 'checked' : ''}
-              aria-label="Select ${enc(candidateText)}"
-            />
+            ${isReviewRequired
+              ? '<span aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:999px;background:rgba(245,158,11,.18);color:#fbbf24;font-size:11px;font-weight:800;">!</span>'
+              : `<input
+                  type="checkbox"
+                  data-bulk-authorise-row-checkbox="1"
+                  data-row-key="${enc(rowKey)}"
+                  data-section="${enc(sectionName)}"
+                  ${isSelected ? 'checked' : ''}
+                  aria-label="Select ${enc(candidateText)}"
+                />`}
           </div>
 
           <div style="min-width:0;display:flex;flex-direction:column;gap:3px;">
@@ -183728,13 +183734,14 @@ function renderBulkAuthoriseLists(state) {
               <span>${enc(statusText)}</span>
             </div>
             ${candidateOfficeBadgeHtml}
+            ${isReviewRequired ? '<div class="mini" style="color:#fbbf24;font-weight:650;line-height:1.35;">Possible duplicate expenses — open and review this claim individually.</div>' : ''}
             ${evidenceChips.length
               ? `<div class="mini" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:1px;">${evidenceChips.map((chip) => `<span class="bulk-timesheet-evidence-badge${chip.kind === 'TIMESHEET' ? ' bulk-timesheet-evidence-badge--timesheet' : ''}" data-evidence-kind="${enc(chip.kind)}" title="${enc(chip.label)} evidence attached" style="display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,0.16);border-radius:999px;padding:1px 6px;font-size:9px;font-weight:700;letter-spacing:.02em;background:rgba(255,255,255,0.045);color:rgba(255,255,255,0.9);line-height:1.45;">${enc(chip.label)}</span>`).join('')}</div>`
               : ''}
           </div>
 
           <div style="display:flex;align-items:flex-start;justify-content:flex-end;">
-            <span class="pill${sectionName === 'authorised_eligible' ? ' pill-ok' : ''}" style="font-size:10px;padding:2px 7px;">${enc(sectionName === 'processed_eligible' ? 'Processed' : 'Authorised')}</span>
+            <span class="pill${sectionName === 'authorised_eligible' ? ' pill-ok' : ''}" style="font-size:10px;padding:2px 7px;${isReviewRequired ? 'border-color:rgba(245,158,11,.55);color:#fbbf24;background:rgba(245,158,11,.10);' : ''}">${enc(isReviewRequired ? 'Review required' : (sectionName === 'processed_eligible' ? 'Processed' : 'Authorised'))}</span>
           </div>
         </div>
       </div>
@@ -183743,6 +183750,7 @@ function renderBulkAuthoriseLists(state) {
 
   const renderSection = (sectionName, title, rowsInSection) => {
     const rowsArray = Array.isArray(rowsInSection) ? rowsInSection : [];
+    const isReviewSection = sectionName === 'processed_review_required';
     const sectionSelectedSet = sectionName === 'processed_eligible' ? processedSelectedSet : authorisedSelectedSet;
     const visibleKeys = rowsArray.map((row) => String(row?.row_key || '').trim()).filter(Boolean);
     const selectedCount = visibleKeys.filter((key) => sectionSelectedSet.has(key)).length;
@@ -183753,14 +183761,16 @@ function renderBulkAuthoriseLists(state) {
       <div class="card" data-bulk-authorise-section-card="${enc(sectionName)}" style="padding:8px 8px 6px 8px;display:flex;flex-direction:column;min-height:0;overflow:hidden;">
         <div class="row" style="gap:8px;align-items:center;">
           <label style="display:flex;gap:8px;align-items:center;min-width:0;">
-            <input
-              type="checkbox"
-              data-bulk-authorise-section-checkbox="1"
-              data-section="${enc(sectionName)}"
-              ${sectionChecked ? 'checked' : ''}
-              ${sectionIndeterminate ? 'data-indeterminate="1"' : ''}
-              aria-label="Select ${enc(title)}"
-            />
+            ${isReviewSection
+              ? '<span aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:999px;background:rgba(245,158,11,.18);color:#fbbf24;font-size:11px;font-weight:800;">!</span>'
+              : `<input
+                  type="checkbox"
+                  data-bulk-authorise-section-checkbox="1"
+                  data-section="${enc(sectionName)}"
+                  ${sectionChecked ? 'checked' : ''}
+                  ${sectionIndeterminate ? 'data-indeterminate="1"' : ''}
+                  aria-label="Select ${enc(title)}"
+                />`}
             <span>${enc(title)}</span>
           </label>
           <div class="controls">
@@ -183775,7 +183785,7 @@ function renderBulkAuthoriseLists(state) {
   };
 
   return htmlWrap(`
-    <div id="bulkAuthoriseListsRoot" style="display:grid;grid-template-rows:${(processedSelectedCount > 0 || authorisedSelectedCount > 0) ? 'auto ' : ''}minmax(0,1fr) minmax(0,1fr);gap:8px;min-width:0;min-height:0;flex:1 1 auto;overflow:hidden;">
+    <div id="bulkAuthoriseListsRoot" style="display:grid;grid-template-rows:${(processedSelectedCount > 0 || authorisedSelectedCount > 0) ? 'auto ' : ''}minmax(0,1fr) minmax(0,1fr) ${reviewRequiredRows.length ? 'minmax(112px,auto)' : 'auto'};gap:8px;min-width:0;min-height:0;flex:1 1 auto;overflow:hidden;">
       ${(processedSelectedCount > 0 || authorisedSelectedCount > 0)
         ? `
           <div class="card" style="padding:8px;">
@@ -183791,6 +183801,7 @@ function renderBulkAuthoriseLists(state) {
         : ''}
       ${renderSection('processed_eligible', 'Processed Eligible', processedRows)}
       ${renderSection('authorised_eligible', 'Authorised Eligible', authorisedRows)}
+      ${reviewRequiredRows.length ? renderSection('processed_review_required', 'Review Individually', reviewRequiredRows) : ''}
     </div>
   `);
 }
@@ -183929,7 +183940,7 @@ function bindBulkAuthoriseLists(state) {
   if (root.dataset.boundBulkAuthoriseLists === '1') return;
   root.dataset.boundBulkAuthoriseLists = '1';
 
-  for (const sectionKey of ['processed_eligible', 'authorised_eligible']) {
+  for (const sectionKey of ['processed_eligible', 'authorised_eligible', 'processed_review_required']) {
     const scroller = root.querySelector(`[data-bulk-authorise-section-scroll="${sectionKey}"]`);
     if (!scroller) continue;
     scroller.addEventListener('scroll', () => {
@@ -188371,6 +188382,7 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
       const listsRootEl = document.getElementById('bulkAuthoriseListsRoot');
       const processedListEl = document.querySelector('[data-bulk-authorise-section-scroll="processed_eligible"]');
       const authorisedListEl = document.querySelector('[data-bulk-authorise-section-scroll="authorised_eligible"]');
+      const reviewRequiredListEl = document.querySelector('[data-bulk-authorise-section-scroll="processed_review_required"]');
       const toolbarFocusSnapshot = captureBulkAuthoriseToolbarFocus();
 
       const scrollSnapshot = {
@@ -188379,7 +188391,8 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
         right_pane: Number(rightPaneEl?.scrollTop || st?.__bulk_authorise_scroll?.right_pane || 0),
         lists_root: Number(listsRootEl?.scrollTop || st?.__bulk_authorise_scroll?.lists_root || 0),
         processed_eligible: Number(processedListEl?.scrollTop || st?.__bulk_authorise_scroll?.processed_eligible || 0),
-        authorised_eligible: Number(authorisedListEl?.scrollTop || st?.__bulk_authorise_scroll?.authorised_eligible || 0)
+        authorised_eligible: Number(authorisedListEl?.scrollTop || st?.__bulk_authorise_scroll?.authorised_eligible || 0),
+        processed_review_required: Number(reviewRequiredListEl?.scrollTop || st?.__bulk_authorise_scroll?.processed_review_required || 0)
       };
 
       if (st) {
@@ -188389,7 +188402,8 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
           right_pane: Number(scrollSnapshot.right_pane || 0),
           lists_root: Number(scrollSnapshot.lists_root || 0),
           processed_eligible: Number(scrollSnapshot.processed_eligible || 0),
-          authorised_eligible: Number(scrollSnapshot.authorised_eligible || 0)
+          authorised_eligible: Number(scrollSnapshot.authorised_eligible || 0),
+          processed_review_required: Number(scrollSnapshot.processed_review_required || 0)
         };
       }
 
@@ -188400,12 +188414,14 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
         const nextListsRootEl = document.getElementById('bulkAuthoriseListsRoot');
         const nextProcessedListEl = document.querySelector('[data-bulk-authorise-section-scroll="processed_eligible"]');
         const nextAuthorisedListEl = document.querySelector('[data-bulk-authorise-section-scroll="authorised_eligible"]');
+        const nextReviewRequiredListEl = document.querySelector('[data-bulk-authorise-section-scroll="processed_review_required"]');
         if (nextLeftPaneEl) nextLeftPaneEl.scrollTop = Number(scrollSnapshot.left_pane || 0);
         if (nextMiddlePaneEl) nextMiddlePaneEl.scrollTop = Number(scrollSnapshot.middle_pane || 0);
         if (nextRightPaneEl) nextRightPaneEl.scrollTop = Number(scrollSnapshot.right_pane || 0);
         if (nextListsRootEl) nextListsRootEl.scrollTop = Number(scrollSnapshot.lists_root || 0);
         if (nextProcessedListEl) nextProcessedListEl.scrollTop = Number(scrollSnapshot.processed_eligible || 0);
         if (nextAuthorisedListEl) nextAuthorisedListEl.scrollTop = Number(scrollSnapshot.authorised_eligible || 0);
+        if (nextReviewRequiredListEl) nextReviewRequiredListEl.scrollTop = Number(scrollSnapshot.processed_review_required || 0);
       };
       const restoreTransientUiState = () => {
         restoreScroll();
@@ -254870,6 +254886,7 @@ function renderBulkAuthoriseShell(state) {
         visible_rows: [],
         visible_processed_eligible_rows: [],
         visible_authorised_eligible_rows: [],
+        visible_review_required_rows: [],
         visible_unauthorised_rows: [],
         candidate_option_rows: [],
         client_option_rows: []
@@ -254877,6 +254894,7 @@ function renderBulkAuthoriseShell(state) {
   const visibleRows = Array.isArray(visibleModel.visible_rows) ? visibleModel.visible_rows : [];
   const processedRows = Array.isArray(visibleModel.visible_processed_eligible_rows) ? visibleModel.visible_processed_eligible_rows : [];
   const authorisedRows = Array.isArray(visibleModel.visible_authorised_eligible_rows) ? visibleModel.visible_authorised_eligible_rows : [];
+  const reviewRequiredRows = Array.isArray(visibleModel.visible_review_required_rows) ? visibleModel.visible_review_required_rows : [];
 
   const classificationRaw = String(st.classification == null ? '' : st.classification).trim().toUpperCase();
   const classification = (classificationRaw === 'TIMESHEETS' || classificationRaw === 'NHSP' || classificationRaw === 'HR' || classificationRaw === 'HEALTHROSTER')
@@ -255017,6 +255035,7 @@ function renderBulkAuthoriseShell(state) {
           <span class="pill" style="padding:3px 8px;">Visible ${enc(String(visibleRows.length))}</span>
           <span class="pill" style="padding:3px 8px;">Processed ${enc(String(processedRows.length))}</span>
           <span class="pill" style="padding:3px 8px;">Authorised ${enc(String(authorisedRows.length))}</span>
+          ${reviewRequiredRows.length ? `<span class="pill" style="padding:3px 8px;border-color:rgba(245,158,11,.55);color:#fbbf24;background:rgba(245,158,11,.10);">Review ${enc(String(reviewRequiredRows.length))}</span>` : ''}
         </div>
       </div>
     </div>
@@ -255067,7 +255086,7 @@ function renderBulkAuthoriseShell(state) {
           </div>
         </div>
         <div class="mini" style="margin-top:8px;">
-          Processed Eligible: ${enc(String(processedRows.length))} · Authorised Eligible: ${enc(String(authorisedRows.length))}
+          Processed Eligible: ${enc(String(processedRows.length))} · Authorised Eligible: ${enc(String(authorisedRows.length))} · Review Individually: ${enc(String(reviewRequiredRows.length))}
         </div>
       </div>
     `;
