@@ -484,6 +484,23 @@
     }
     return null;
   }
+  async function runExpenseCategoryAction({ context, expenseComponentId, trigger } = {}) {
+    if (!controller || !context?.projection) return { ok: false, unavailable: true };
+    const found = expenseCategoryView(context.projection, context.surface, String(expenseComponentId || '').trim());
+    const action = found?.category?.rejection_action;
+    if (!action?.enabled || action.code !== 'REJECT_EXPENSE_CATEGORY') {
+      toast('Refresh the current expense details before continuing.', 'fail');
+      return { ok: false, unavailable: true };
+    }
+    return await controller.runTypedAction({
+      ...context,
+      trigger: trigger || context.trigger,
+      action,
+      expenseComponentId: found.category.expense_component_id,
+      expenseCategory: found.category,
+      expenseConfirmation: found.category.rejection_confirmation
+    });
+  }
   async function onClick(event) {
     const refresh = event.target.closest('[data-candidate-office-refresh]');
     if (refresh) { const slot = refresh.closest('[data-candidate-office-slot]'); if (slot) await loadSlot(slot, { force: true }); return; }
@@ -554,6 +571,27 @@
       }
       return;
     }
+    const expenseEvidenceButton = event.target.closest('[data-candidate-office-expense-evidence]');
+    if (expenseEvidenceButton && !expenseEvidenceButton.disabled) {
+      const slot = expenseEvidenceButton.closest('[data-candidate-office-slot]');
+      if (!slot) return;
+      event.preventDefault(); event.stopPropagation();
+      const context = contextForSlot(slot, expenseEvidenceButton);
+      const expenseComponentId = String(expenseEvidenceButton.dataset.expenseComponentId || '').trim();
+      const found = context.projection ? expenseCategoryView(context.projection, context.surface, expenseComponentId) : null;
+      if (!found?.category || typeof window.openTimesheetExpenseEvidenceViewer !== 'function') {
+        toast('Refresh the current expense evidence before continuing.', 'fail');
+        return;
+      }
+      await window.openTimesheetExpenseEvidenceViewer({
+        category: found.category,
+        categoryKey: expenseEvidenceButton.dataset.candidateOfficeExpenseEvidence,
+        context,
+        expenseComponentId,
+        trigger: expenseEvidenceButton
+      });
+      return;
+    }
     const expenseButton = event.target.closest('[data-candidate-office-expense-action]');
     if (expenseButton && !expenseButton.disabled) {
       const slot = expenseButton.closest('[data-candidate-office-slot]');
@@ -561,19 +599,7 @@
       event.preventDefault(); event.stopPropagation();
       const context = contextForSlot(slot, expenseButton);
       const expenseComponentId = String(expenseButton.dataset.expenseComponentId || '').trim();
-      const found = context.projection ? expenseCategoryView(context.projection, context.surface, expenseComponentId) : null;
-      const action = found?.category?.rejection_action;
-      if (!action?.enabled || action.code !== expenseButton.dataset.candidateOfficeExpenseAction) {
-        toast('Refresh the current expense details before continuing.', 'fail');
-        return;
-      }
-      await controller.runTypedAction({
-        ...context,
-        action,
-        expenseComponentId,
-        expenseCategory: found.category,
-        expenseConfirmation: found.category.rejection_confirmation
-      });
+      await runExpenseCategoryAction({ context, expenseComponentId, trigger: expenseButton });
       return;
     }
     const button = event.target.closest('[data-candidate-office-action]');
@@ -736,6 +762,12 @@
     return refreshResult;
   }
   async function reconcileExpenseCategory(result, context) {
+    if (context?.expenseEvidenceViewer === true) {
+      try {
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        window.closeCurrentModalFrameSafely?.({ expectedKind: 'timesheet-evidence-viewer' });
+      } catch {}
+    }
     invalidate(context);
     const affectedRefresh = await refreshAffectedRows(result, context);
     const rowVanished = removedExpenseTimesheet(result, context, affectedRefresh);
@@ -894,5 +926,5 @@
   }
   window.addEventListener?.('pageshow', event => { if (event.persisted === true) void refreshAfterHistoryNavigation(); });
   window.addEventListener?.('popstate', () => { void refreshAfterHistoryNavigation(); });
-  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, embeddedSummaryResult, candidateProjectionNotApplicable, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, runVisibleAction, refreshAfterHistoryNavigation, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
+  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, embeddedSummaryResult, candidateProjectionNotApplicable, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, runVisibleAction, runExpenseCategoryAction, refreshAfterHistoryNavigation, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
 })();

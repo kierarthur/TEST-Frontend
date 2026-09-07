@@ -67,9 +67,9 @@ test('the ordinary evidence viewer opens its loading shell before awaiting the s
   assert.match(viewerBlock, /URL\.revokeObjectURL\(previewObjectUrl\)/);
 });
 
-test('the Evidence table wraps long labels and provides responsive cell semantics', () => {
+test('the compact Evidence table uses consolidated responsive cell semantics', () => {
   assert.match(mainSource, /class="ts-evidence-table ctms-timesheet-evidence-table"/);
-  for (const label of ['Filename', 'Type', 'Source', 'Pages', 'Date uploaded', 'Time', 'Uploaded by', 'Actions']) {
+  for (const label of ['Evidence', 'Source', 'Manager Approval', 'Uploaded', 'Actions']) {
     assert.match(mainSource, new RegExp(`data-ctms-label="${label}"`));
   }
   assert.match(mainSource, /class="ctms-evidence-actions"/);

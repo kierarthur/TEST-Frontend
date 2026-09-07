@@ -26,7 +26,7 @@ test('withdrawn submissions are presented in a separate audit-only section', () 
 
 test('withdrawn files expose only view and download actions with phone-safe wrapping', () => {
   const historyStart = render.indexOf('const withdrawnHistoryHtml');
-  const historyEnd = render.indexOf('const policyEvidenceReason', historyStart);
+  const historyEnd = render.indexOf('\n  return `', historyStart);
   assert.ok(historyStart >= 0 && historyEnd > historyStart, 'withdrawn history renderer must exist');
   const history = render.slice(historyStart, historyEnd);
   assert.match(history, /data-evidence-view=/);

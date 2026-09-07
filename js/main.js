@@ -177893,7 +177893,7 @@ function renderTimesheetExpensesTab(ctx) {
       <div class="card ctms-expense-card">
         <div class="ctms-expense-heading"><strong>Expenses</strong><span>Total pay <strong data-exp-out="total_pay">£${fmt2(totalPay)}</strong> · Charge <strong data-exp-out="total_charge">£${fmt2(totalChg)}</strong></span></div>
         <div class="ctms-expense-grid" data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
-          <div class="ctms-expense-grid__head" aria-hidden="true"><span>Expense</span><span>Units</span><span>Pay</span><span>Charge</span><span>Manager status</span><span>Action</span></div>
+          <div class="ctms-expense-grid__head" aria-hidden="true"><span>Expense</span><span>Units</span><span>Pay</span><span>Charge</span><span>Manager status</span><span>Actions</span></div>
           <div class="ctms-expense-grid__row" data-expense-category="MILEAGE">
             <strong>Mileage</strong>
             <div>
@@ -325386,7 +325386,8 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
       const candidateOfficeAction = String(el.getAttribute('data-candidate-office-action') || '').trim();
       const candidateOfficeEvidenceAction = String(el.getAttribute('data-candidate-office-evidence-action') || '').trim();
       const candidateOfficeExpenseAction = String(el.getAttribute('data-candidate-office-expense-action') || '').trim();
-      if (isTimesheetFrame && ro && (candidateOfficeAction || candidateOfficeEvidenceAction || candidateOfficeExpenseAction)) {
+      const candidateOfficeExpenseEvidence = String(el.getAttribute('data-candidate-office-expense-evidence') || '').trim();
+      if (isTimesheetFrame && ro && (candidateOfficeAction || candidateOfficeEvidenceAction || candidateOfficeExpenseAction || candidateOfficeExpenseEvidence)) {
         el.disabled = el.dataset.candidateOfficeServerEnabled !== '1';
         return;
       }
@@ -358989,11 +358990,25 @@ function computeTimesheetProcessingState(details, row) {
 async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE][VIEWER]');
   GC('openTimesheetEvidenceViewerExisting');
+  const viewerOptions = (arguments[1] && typeof arguments[1] === 'object') ? arguments[1] : {};
 
   if (!evidenceItem || typeof evidenceItem !== 'object') {
     GE();
     throw new Error('Evidence item is required.');
   }
+
+  const expenseEvidenceItems = Array.isArray(viewerOptions?.evidenceItems)
+    ? viewerOptions.evidenceItems.filter(item => item && typeof item === 'object')
+    : [];
+  const expenseEvidenceIndex = Math.max(0, Math.min(
+    Number.isFinite(Number(viewerOptions?.evidenceIndex)) ? Number(viewerOptions.evidenceIndex) : 0,
+    Math.max(0, expenseEvidenceItems.length - 1)
+  ));
+  const expenseCategory = viewerOptions?.expenseCategory && typeof viewerOptions.expenseCategory === 'object'
+    ? viewerOptions.expenseCategory
+    : null;
+  const expenseCategoryKey = String(viewerOptions?.expenseCategoryKey || expenseCategory?.category || evidenceItem.kind || '').trim().toUpperCase();
+  const isExpenseCategoryViewer = !!(expenseCategory && expenseCategoryKey && expenseEvidenceItems.length);
 
    const mc = window.modalCtx || {};
   const tsId =
@@ -359085,13 +359100,13 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 
   const isViewOnly = !!evidenceItem.is_view_only;
 
-  const canDelete = !isViewOnly && (
+  const canDelete = !isExpenseCategoryViewer && !isViewOnly && (
     (typeof evidenceItem.can_delete === 'boolean')
       ? evidenceItem.can_delete
       : !isSystem
   );
 
-  const canReturnToQueue = !isViewOnly && (
+  const canReturnToQueue = !isExpenseCategoryViewer && !isViewOnly && (
     (typeof evidenceItem.can_return_to_queue === 'boolean')
       ? evidenceItem.can_return_to_queue
       : false
@@ -359099,7 +359114,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 
   const canonicalKinds = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
 
-  const canEditType = !isViewOnly && (
+  const canEditType = !isExpenseCategoryViewer && !isViewOnly && (
     (typeof evidenceItem.can_reclassify === 'boolean')
       ? evidenceItem.can_reclassify
       : (!isSystem && canonicalKinds.includes(String(evidenceItem.kind || '').trim().toUpperCase()))
@@ -359808,10 +359823,21 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   const previewStatusId = `${instanceId}-preview-status`;
   const downloadLinkId = `${instanceId}-download`;
   const deleteBtnId = `${instanceId}-delete`;
+  const previousBtnId = `${instanceId}-previous`;
+  const nextBtnId = `${instanceId}-next`;
+  const zoomOutBtnId = `${instanceId}-zoom-out`;
+  const zoomInBtnId = `${instanceId}-zoom-in`;
+  const zoomLabelId = `${instanceId}-zoom-label`;
+  const previewViewportId = `${instanceId}-preview-viewport`;
+  const previewCanvasId = `${instanceId}-preview-canvas`;
+  const rejectExpenseBtnId = `${instanceId}-reject-expense`;
   const selId       = `${instanceId}-type`;
   const otherId     = `${instanceId}-other`;
   const contextIdForTitle = tsIdNow() || weekIdNow() || tsId || contractWeekId || '';
-  const title = `Evidence ${String(contextIdForTitle).slice(0, 8)}…`;
+  const expenseCategoryLabel = String(expenseCategory?.label || expenseCategoryKey || 'Expense').trim();
+  const title = isExpenseCategoryViewer
+    ? `${expenseCategoryLabel} evidence`
+    : `Evidence ${String(contextIdForTitle).slice(0, 8)}…`;
 
   const kindTrim = String(kind || '').trim();
   const kindUpper = kindTrim.toUpperCase();
@@ -359840,7 +359866,20 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 
   const initialSelect = kindToUi(kindUpper);
 
-  const typeControlHtml = canEditType ? `
+  const typeControlHtml = isExpenseCategoryViewer ? `
+    <div class="row">
+      <label>Expense</label>
+      <div class="controls"><strong>${escapeHtml(expenseCategoryLabel)}</strong></div>
+    </div>
+    <div class="row">
+      <label>Manager Approval</label>
+      <div class="controls"><span class="candidate-office-badge candidate-office-badge--${['success', 'danger', 'warning', 'info'].includes(String(expenseCategory?.status?.tone || '').toLowerCase()) ? String(expenseCategory.status.tone).toLowerCase() : 'neutral'}">${escapeHtml(expenseCategory?.status?.label || 'Not approved yet')}</span></div>
+    </div>
+    <div class="row">
+      <label>File</label>
+      <div class="controls"><span class="mini">${escapeHtml(String(expenseEvidenceIndex + 1))} of ${escapeHtml(String(expenseEvidenceItems.length))}</span></div>
+    </div>
+  ` : canEditType ? `
     <div class="row">
       <label>Evidence Type</label>
       <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -359886,9 +359925,8 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
         <div class="row">
           <label>Download</label>
           <div class="controls">
-            <a class="pill"
-               id="${downloadLinkId}"
-               role="button"
+             <a class="pill"
+                id="${downloadLinkId}"
                aria-disabled="true"
                style="display:inline-block;border:1px solid var(--line);background:transparent;color:inherit;padding:6px 10px;border-radius:999px;text-decoration:none;opacity:.7;pointer-events:none;">
               Preparing preview…
@@ -359897,24 +359935,36 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
         </div>
       </div>
 
-      <div class="card" style="margin-top:10px;">
+      <div class="card ctms-expense-evidence-viewer" style="margin-top:10px;">
         <div class="row">
           <label>Preview</label>
           <div class="controls">
-            <div
-              id="${previewStatusId}"
-              class="mini"
-              role="status"
-              aria-live="polite"
-              style="width:100%;height:520px;border:1px solid var(--line);border-radius:8px;background:#000;display:grid;place-items:center;padding:18px;text-align:center;"
-            >Preparing preview…</div>
-            <iframe
-              id="${iframeId}"
-              title="Evidence preview"
-              style="display:none;width:100%;height:520px;border:1px solid var(--line);border-radius:8px;background:#000;"
-            ></iframe>
+            ${isExpenseCategoryViewer ? `
+              <div class="ctms-expense-evidence-toolbar">
+                <div class="ctms-expense-evidence-navigation" aria-label="Evidence file navigation">
+                  <button type="button" id="${previousBtnId}" class="btn btn-outline" ${expenseEvidenceIndex <= 0 ? 'disabled' : ''}>Previous</button>
+                  <span>${escapeHtml(String(expenseEvidenceIndex + 1))} of ${escapeHtml(String(expenseEvidenceItems.length))}</span>
+                  <button type="button" id="${nextBtnId}" class="btn btn-outline" ${expenseEvidenceIndex >= expenseEvidenceItems.length - 1 ? 'disabled' : ''}>Next</button>
+                </div>
+                <div class="ctms-expense-evidence-zoom" aria-label="Evidence zoom controls">
+                  <button type="button" id="${zoomOutBtnId}" class="btn btn-outline" aria-label="Zoom out">−</button>
+                  <span id="${zoomLabelId}">100%</span>
+                  <button type="button" id="${zoomInBtnId}" class="btn btn-outline" aria-label="Zoom in">+</button>
+                </div>
+              </div>
+            ` : ''}
+            <div id="${previewViewportId}" class="ctms-expense-evidence-preview${isExpenseCategoryViewer ? ' ctms-expense-evidence-preview--scoped' : ''}">
+              <div id="${previewCanvasId}" class="ctms-expense-evidence-preview__canvas">
+                <div id="${previewStatusId}" class="mini ctms-expense-evidence-preview__status" role="status" aria-live="polite">Preparing preview…</div>
+                <iframe id="${iframeId}" title="Evidence preview" class="ctms-expense-evidence-preview__frame"></iframe>
+              </div>
+            </div>
 
-             ${(canDelete || canReturnToQueue) ? `
+             ${isExpenseCategoryViewer ? `
+              <div class="ctms-expense-evidence-actions">
+                <button type="button" id="${rejectExpenseBtnId}" class="btn btn-warn candidate-office-expense-reject">Reject ${escapeHtml(expenseCategoryLabel)}</button>
+              </div>
+            ` : (canDelete || canReturnToQueue) ? `
               <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 ${canReturnToQueue ? `
                   <button type="button"
@@ -359976,7 +360026,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
     try {
       const st = (window.__modalStack && Array.isArray(window.__modalStack)) ? window.__modalStack : null;
       const fr = (st && st.length) ? st[st.length - 1] : null;
-      if (fr && fr.entity === 'timesheets') fr.currentTabKey = 'evidence';
+      if (fr && fr.entity === 'timesheets') fr.currentTabKey = isExpenseCategoryViewer ? 'expenses' : 'evidence';
     } catch {}
   };
 
@@ -360086,6 +360136,8 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       frameEntity: 'timesheet-evidence',
       noParentGate: true,
       forceEdit: true,
+      showSave: !isExpenseCategoryViewer,
+      showApply: false,
       onDismiss
     }
   );
@@ -360108,6 +360160,117 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       }
       return window.confirm(String(opts?.message || opts?.body || 'Are you sure?'));
     };
+
+    if (isExpenseCategoryViewer) {
+      let zoomPercent = 100;
+      const reopenAt = async (nextIndex) => {
+        const boundedIndex = Math.max(0, Math.min(Number(nextIndex), expenseEvidenceItems.length - 1));
+        if (boundedIndex === expenseEvidenceIndex) return;
+        const nextItem = expenseEvidenceItems[boundedIndex];
+        const closed = typeof closeCurrentModalFrameSafely === 'function'
+          ? closeCurrentModalFrameSafely({ expectedKind: 'timesheet-evidence-viewer' })
+          : false;
+        if (!closed) return;
+        await Promise.resolve();
+        await openTimesheetEvidenceViewerExisting(nextItem, { ...viewerOptions, evidenceIndex: boundedIndex });
+      };
+      const hydrateExpenseViewer = () => {
+        const applyZoom = () => {
+          const frame = document.getElementById(iframeId);
+          const canvas = document.getElementById(previewCanvasId);
+          const label = document.getElementById(zoomLabelId);
+          const viewport = document.getElementById(previewViewportId);
+          const baseHeight = Number(viewport?.clientHeight || 520);
+          const scale = zoomPercent / 100;
+          if (canvas) {
+            canvas.style.width = `${Math.max(100, zoomPercent)}%`;
+            canvas.style.height = `${Math.round(baseHeight * Math.max(1, scale))}px`;
+          }
+          if (frame) {
+            frame.style.width = scale >= 1 ? `${100 / scale}%` : '100%';
+            frame.style.height = `${baseHeight}px`;
+            frame.style.transform = `scale(${scale})`;
+          }
+          if (label) label.textContent = `${zoomPercent}%`;
+        };
+
+        const previous = document.getElementById(previousBtnId);
+        if (previous && !previous.__candidateOfficeExpensePreviousWired) {
+          previous.__candidateOfficeExpensePreviousWired = true;
+          previous.addEventListener('click', () => { void reopenAt(expenseEvidenceIndex - 1); });
+        }
+        const next = document.getElementById(nextBtnId);
+        if (next && !next.__candidateOfficeExpenseNextWired) {
+          next.__candidateOfficeExpenseNextWired = true;
+          next.addEventListener('click', () => { void reopenAt(expenseEvidenceIndex + 1); });
+        }
+        const zoomOut = document.getElementById(zoomOutBtnId);
+        if (zoomOut && !zoomOut.__candidateOfficeExpenseZoomWired) {
+          zoomOut.__candidateOfficeExpenseZoomWired = true;
+          zoomOut.addEventListener('click', () => {
+            zoomPercent = Math.max(50, zoomPercent - 25);
+            applyZoom();
+          });
+        }
+        const zoomIn = document.getElementById(zoomInBtnId);
+        if (zoomIn && !zoomIn.__candidateOfficeExpenseZoomWired) {
+          zoomIn.__candidateOfficeExpenseZoomWired = true;
+          zoomIn.addEventListener('click', () => {
+            zoomPercent = Math.min(200, zoomPercent + 25);
+            applyZoom();
+          });
+        }
+
+        const rejectExpense = document.getElementById(rejectExpenseBtnId);
+        if (rejectExpense && !rejectExpense.__candidateOfficeExpenseRejectWired) {
+          rejectExpense.__candidateOfficeExpenseRejectWired = true;
+          rejectExpense.addEventListener('click', async () => {
+            if (rejectExpense.disabled) return;
+            rejectExpense.disabled = true;
+            try {
+              const bridge = window.CloudTMSCandidateOfficeBridge;
+              if (!bridge || typeof bridge.runExpenseCategoryAction !== 'function') {
+                throw new Error('The current expense action is unavailable. Refresh the Timesheet and try again.');
+              }
+              await bridge.runExpenseCategoryAction({
+                context: { ...(viewerOptions.expenseActionContext || {}), expenseEvidenceViewer: true },
+                expenseComponentId: viewerOptions.expenseComponentId || expenseCategory?.expense_component_id,
+                trigger: rejectExpense
+              });
+            } catch (error) {
+              try { window.__toast?.(String(error?.message || 'The expense could not be rejected.')); } catch {}
+            } finally {
+              if (rejectExpense.isConnected) rejectExpense.disabled = false;
+              requestAnimationFrame(hydrateExpenseViewer);
+            }
+          });
+        }
+
+        if (signedUrl) {
+          const link = document.getElementById(downloadLinkId);
+          if (link) {
+            link.href = signedUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.removeAttribute('aria-disabled');
+            link.style.opacity = '';
+            link.style.pointerEvents = '';
+            link.textContent = 'Download';
+          }
+        }
+        if (previewObjectUrl) {
+          const frame = document.getElementById(iframeId);
+          const status = document.getElementById(previewStatusId);
+          if (frame) {
+            frame.style.display = 'block';
+            frame.src = previewObjectUrl;
+          }
+          if (status) status.style.display = 'none';
+        }
+        applyZoom();
+      };
+      hydrateExpenseViewer();
+    }
 
     if (canDelete) {
       const delBtn = document.getElementById(deleteBtnId);
@@ -360281,7 +360444,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
         link.removeAttribute('aria-disabled');
         link.style.opacity = '';
         link.style.pointerEvents = '';
-        link.textContent = 'Open / Download';
+        link.textContent = 'Download';
       }
 
       if (iframe) {
@@ -373373,6 +373536,61 @@ function renderTimesheetRelatedTab(ctx) {
   `;
 }
 
+function getCurrentTimesheetEvidenceItemsFromModalContext(modalContext) {
+  const mc = (modalContext && typeof modalContext === 'object') ? modalContext : {};
+  const state = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
+  const details = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
+  const row = (mc.data && typeof mc.data === 'object') ? mc.data : {};
+  const arrays = [
+    state.evidence,
+    details.evidence,
+    row.evidence,
+    state.contractWeekStagedEvidence,
+    state.contract_week_staged_evidence,
+    state.stagedEvidence,
+    state.staged_evidence,
+    details.contractWeekStagedEvidence,
+    details.contract_week_staged_evidence,
+    details.stagedEvidence,
+    details.staged_evidence,
+    mc.contractWeekStagedEvidence
+  ].filter(Array.isArray);
+  const current = arrays.find(list => list.length > 0) || arrays[0] || [];
+  return current.filter(item => {
+    if (!item || typeof item !== 'object') return false;
+    if (item.withdrawn_at || item.withdrawn_at_utc || item.is_withdrawn === true || item.historical === true) return false;
+    return true;
+  });
+}
+
+async function openTimesheetExpenseEvidenceViewer(input = {}) {
+  const category = input?.category && typeof input.category === 'object' ? input.category : null;
+  const categoryKey = String(input?.categoryKey || category?.category || '').trim().toUpperCase();
+  const canonicalKinds = new Set(['MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER']);
+  if (!category || !canonicalKinds.has(categoryKey)) {
+    try { window.__toast?.('Refresh the current expense evidence before continuing.'); } catch {}
+    return { ok: false, unavailable: true };
+  }
+  const evidenceItems = getCurrentTimesheetEvidenceItemsFromModalContext(window.modalCtx)
+    .filter(item => String(item?.kind || item?.staged_kind || '').trim().toUpperCase() === categoryKey);
+  if (!evidenceItems.length) {
+    try { window.__toast?.(`No current ${String(category.label || categoryKey).toLowerCase()} evidence is available to view.`); } catch {}
+    return { ok: false, unavailable: true };
+  }
+  await openTimesheetEvidenceViewerExisting(evidenceItems[0], {
+    evidenceItems,
+    evidenceIndex: 0,
+    expenseCategory: category,
+    expenseCategoryKey: categoryKey,
+    expenseActionContext: input.context,
+    expenseComponentId: input.expenseComponentId,
+    trigger: input.trigger
+  });
+  return { ok: true, count: evidenceItems.length };
+}
+
+try { window.openTimesheetExpenseEvidenceViewer = openTimesheetExpenseEvidenceViewer; } catch {}
+
 function getTimesheetEvidenceItemsFromModalContext(modalContext) {
   const mc = (modalContext && typeof modalContext === 'object') ? modalContext : {};
   const state = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
@@ -373868,7 +374086,7 @@ function renderTimesheetEvidenceTab(ctx) {
             <td data-ctms-label="Source">
               <span class="pill">${src}</span>
             </td>
-            <td data-ctms-label="Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
+            <td data-ctms-label="Manager Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
             <td data-ctms-label="Uploaded"><strong class="ctms-evidence-uploaded">${uploadedDate}${uploadedTime === '—' ? '' : ` · ${uploadedTime}`}</strong><span class="ctms-evidence-meta">${uploadedBy}</span></td>
             <td data-ctms-label="Actions" style="text-align:right;">
               <div class="ctms-evidence-actions">
@@ -373896,7 +374114,7 @@ function renderTimesheetEvidenceTab(ctx) {
           <tr>
             <th style="text-align:left;">Evidence</th>
             <th style="text-align:left;">Source</th>
-            <th style="text-align:left;">Approval</th>
+            <th style="text-align:left;">Manager Approval</th>
             <th style="text-align:left;">Uploaded</th>
             <th style="text-align:right;">Actions</th>
           </tr>

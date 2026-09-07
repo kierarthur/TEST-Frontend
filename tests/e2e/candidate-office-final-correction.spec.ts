@@ -500,11 +500,11 @@ test('expense-category confirmation is accessible, compulsory and states all emp
   await expect(dialog).toContainText('All 3 supporting items');
   await expect(dialog).toContainText('Individual receipts or pages cannot be rejected');
   await expect(dialog).toContainText('Hours and other expense categories on this Timesheet will stay as they are');
-  await expect(dialog.getByRole('button', { name: 'Go Back', exact: true })).toBeFocused();
+  await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
   await dialog.getByRole('button', { name: 'Reject Accommodation expense', exact: true }).click();
   await expect(dialog.getByRole('alert')).toContainText('A reason for rejection is required');
   await captureCandidateOfficeVisual(page, '04-confirm-normal-category-consequence');
-  await dialog.getByRole('button', { name: 'Go Back', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__expenseCategoryDecision)).toMatchObject({ confirmed: false });
 
   await page.evaluate(() => {
@@ -539,6 +539,182 @@ test('expense-category confirmation is accessible, compulsory and states all emp
   await captureCandidateOfficeVisual(page, '05b-confirm-history-retained-empty-expense-timesheet');
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
+});
+
+test('Simple Timesheet expenses keep Manager status in its own column and open category-scoped evidence', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1180, height: 900 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await page.route(`${testBackend}/api/files/presign-download`, async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ url: 'data:text/html,%3Cdiv%20style%3D%22font-family%3Asans-serif%3Bpadding%3A30px%22%3EExpense%20evidence%3C%2Fdiv%3E' })
+    });
+  });
+  await openPatchedTest(page);
+
+  const category = {
+    expense_component_id: uuid(991),
+    category: 'TRAVEL',
+    label: 'Travel',
+    amount: '£15.00',
+    supporting_evidence_count: 2,
+    status: { code: 'MANAGER_APPROVED', label: 'Manager Approved', tone: 'success' },
+    rejection_action: { code: 'REJECT_EXPENSE_CATEGORY', enabled: true },
+    rejection_confirmation: { supporting_evidence_count: 2, empty_timesheet_consequence: 'NONE' }
+  };
+
+  await page.evaluate(({ category, timesheetId }) => {
+    const bridge = (window as any).CloudTMSCandidateOfficeBridge;
+    const surface = (window as any).CloudTMSCandidateOfficeSurface;
+    const view = {
+      identity: { row_key: timesheetId, timesheet_id: timesheetId, route_family: 'ELECTRONIC' },
+      expense_claims: [{ total: '£15.00', categories: [category] }]
+    };
+    (window as any).CloudTMSCandidateOfficeBridge = {
+      ...bridge,
+      capabilities: { ...bridge.capabilities, permissions: { ...bridge.capabilities.permissions, reject_submission: true } },
+      slotHtml: (_surface: string, _row: unknown, options: { variant?: string }) => `<div class="candidate-office-slot" data-candidate-office-slot="1" data-candidate-office-surface="SIMPLE_TIMESHEET" data-row-key="${timesheetId}" data-timesheet-id="${timesheetId}" data-candidate-office-hydrated="1">${surface.renderCandidateFragment(view, { surface: 'SIMPLE_TIMESHEET', variant: options.variant })}</div>`
+    };
+    const ctx = {
+      entity: 'timesheets',
+      mode: 'view',
+      candidateOfficeSurface: 'SIMPLE_TIMESHEET',
+      data: { id: timesheetId, timesheet_id: timesheetId, row_key: timesheetId, route_family: 'ELECTRONIC' },
+      row: { id: timesheetId, timesheet_id: timesheetId, row_key: timesheetId, route_family: 'ELECTRONIC' },
+      timesheetDetails: {
+        timesheet: { timesheet_id: timesheetId, route_family: 'ELECTRONIC' },
+        tsfin: { travel_pay: 15, travel_charge: 15, mileage_units: 0, mileage_pay: 0, mileage_charge: 0 },
+        route_family: 'ELECTRONIC'
+      },
+      timesheetState: { expensesDraft: { travel_pay: 15, travel_charge: 15, mileage_units: 0 } },
+      timesheetEditDomains: { canOpenExpenses: true, canEditExpenses: false, expenseStorageTarget: 'TSFIN' },
+      editDomains: { canOpenExpenses: true, canEditExpenses: false, expenseStorageTarget: 'TSFIN' }
+    };
+    (window as any).modalCtx = ctx;
+    (window as any).__openExpenseLayoutProof = () => {
+      (window as any).modalCtx = ctx;
+      (window as any).showModal('Timesheet expenses', [{ key: 'expenses', label: 'Expenses' }], () => (window as any).renderTimesheetExpensesTab(ctx), null, false, undefined, { kind: 'timesheets', frameEntity: 'timesheets', noParentGate: true, showSave: false, showApply: false });
+    };
+    (window as any).__openExpenseLayoutProof();
+  }, { category, timesheetId: uuid(990) });
+
+  const modal = page.locator('#modal');
+  const travelRow = modal.locator('[data-expense-category="TRAVEL"]');
+  await expect(travelRow).toBeVisible();
+  await expect(modal.locator('.ctms-expense-grid__head')).toContainText('Manager status');
+  await expect(modal.locator('.ctms-expense-grid__head')).toContainText('Actions');
+  await expect(travelRow.locator('.candidate-office-expense-manager')).toHaveText('Manager Approved');
+  await expect(travelRow.locator('.candidate-office-expense-row-action')).toContainText('View 2 files');
+  await expect(travelRow.locator('.candidate-office-expense-row-action')).toContainText('Reject Travel');
+  const desktopLayout = await travelRow.evaluate(row => {
+    const charge = row.children[3].getBoundingClientRect();
+    const status = row.querySelector('.candidate-office-expense-manager')!.getBoundingClientRect();
+    const actions = row.querySelector('.candidate-office-expense-row-action')!.getBoundingClientRect();
+    const evidence = row.querySelector('.candidate-office-expense-evidence')!.getBoundingClientRect();
+    const reject = row.querySelector('.candidate-office-expense-reject')!.getBoundingClientRect();
+    return {
+      statusAfterCharge: status.left >= charge.right - 1,
+      actionsAfterStatus: actions.left >= status.right - 1,
+      controlsShareLine: Math.abs(evidence.top - reject.top) <= 1,
+      overflow: row.scrollWidth - row.clientWidth
+    };
+  });
+  expect(desktopLayout).toEqual({ statusAfterCharge: true, actionsAfterStatus: true, controlsShareLine: true, overflow: 0 });
+  await captureCandidateOfficeVisual(page, '11-simple-timesheet-expenses-desktop');
+
+  await page.evaluate(() => (window as any).closeCurrentModalFrameSafely({ expectedKind: 'timesheets' }));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => (window as any).__openExpenseLayoutProof());
+  await expect(travelRow).toBeVisible();
+  const mobileBounds = await modal.evaluate(element => ({ overflow: element.scrollWidth - element.clientWidth, right: element.getBoundingClientRect().right, viewport: innerWidth }));
+  expect(mobileBounds.overflow).toBeLessThanOrEqual(1);
+  expect(mobileBounds.right).toBeLessThanOrEqual(mobileBounds.viewport + 1);
+  await expect(travelRow.locator('.candidate-office-expense-row-action')).toBeVisible();
+  await captureCandidateOfficeVisual(page, '13-simple-timesheet-expenses-mobile');
+  await page.evaluate(() => (window as any).closeCurrentModalFrameSafely({ expectedKind: 'timesheets' }));
+  await page.setViewportSize({ width: 1180, height: 900 });
+  await page.evaluate(() => (window as any).__openExpenseLayoutProof());
+  await expect(travelRow).toBeVisible();
+
+  await page.evaluate(({ category, timesheetId }) => {
+    const evidence = [
+      { id: 'travel-evidence-1', kind: 'TRAVEL', storage_key: 'evidence/travel-1.png', filename: 'travel-1.png', is_view_only: true },
+      { id: 'travel-evidence-2', kind: 'TRAVEL', storage_key: 'evidence/travel-2.png', filename: 'travel-2.png', is_view_only: true }
+    ];
+    const parentCtx: any = {
+      data: { timesheet_id: timesheetId },
+      timesheetDetails: { timesheet: { timesheet_id: timesheetId }, evidence },
+      timesheetState: { evidence, withdrawn_submissions: [{ evidence: [{ id: 'old-travel', kind: 'TRAVEL', storage_key: 'evidence/old.png', withdrawn_at: '2026-08-01T00:00:00Z' }] }] }
+    };
+    (window as any).modalCtx = parentCtx;
+    const frame = (window as any).__getModalFrame?.();
+    if (frame) frame._ctxRef = parentCtx;
+    const currentBridge = (window as any).CloudTMSCandidateOfficeBridge;
+    (window as any).CloudTMSCandidateOfficeBridge = {
+      ...currentBridge,
+      runExpenseCategoryAction: async ({ trigger }: any) => {
+        const decision = await (window as any).CloudTMSCandidateOfficeModals.openCandidateExpenseCategoryRejectionModal({
+          category,
+          confirmation: category.rejection_confirmation,
+          trigger
+        });
+        if (!decision.confirmed) return { ok: false, cancelled: true };
+        (window as any).__expenseViewerConfirmed = decision.inputs;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        (window as any).closeCurrentModalFrameSafely({ expectedKind: 'timesheet-evidence-viewer' });
+        return { ok: true, result: { owning_timesheet_deleted: false } };
+      }
+    };
+  }, { category, timesheetId: uuid(990) });
+
+  await expect(travelRow.getByRole('button', { name: 'View 2 supporting files for Travel' })).toBeVisible();
+  await page.evaluate(({ category, timesheetId }) => (window as any).openTimesheetExpenseEvidenceViewer({
+    category,
+    categoryKey: 'TRAVEL',
+    context: { surface: 'SIMPLE_TIMESHEET', identity: { row_key: timesheetId, timesheet_id: timesheetId }, projection: {} },
+    expenseComponentId: category.expense_component_id,
+    trigger: document.querySelector('[data-candidate-office-expense-evidence="TRAVEL"]')
+  }), { category, timesheetId: uuid(990) });
+  await expect(modal).toContainText('Travel evidence');
+  await expect(modal.getByText('Manager Approval', { exact: true })).toBeVisible();
+  await expect(modal.getByText('Manager Approved', { exact: true })).toBeVisible();
+  await expect(modal.getByText('1 of 2', { exact: true }).first()).toBeVisible();
+  await expect(modal.getByRole('link', { name: 'Download', exact: true })).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
+  await expect(modal.getByText('Open / Download', { exact: true })).toHaveCount(0);
+
+  await modal.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(modal.getByText('2 of 2', { exact: true }).first()).toBeVisible();
+  await modal.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await expect(modal.getByText('125%', { exact: true })).toBeVisible();
+  const zoomed = await modal.locator('.ctms-expense-evidence-preview').evaluate(element => ({
+    horizontalOverflow: element.scrollWidth > element.clientWidth,
+    scrollbarWidth: getComputedStyle(element).scrollbarWidth,
+    scrollbarColor: getComputedStyle(element).scrollbarColor
+  }));
+  expect(zoomed.horizontalOverflow).toBe(true);
+  expect(zoomed.scrollbarWidth).toBe('thin');
+  expect(zoomed.scrollbarColor).toContain('rgba');
+  await captureCandidateOfficeVisual(page, '12-expense-evidence-viewer-zoomed');
+
+  await modal.getByRole('button', { name: 'Reject Travel', exact: true }).click();
+  let confirmation = page.locator('[data-candidate-office-dialog="expense-category-rejection"]');
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(confirmation).toBeHidden();
+  await expect(modal).toContainText('Travel evidence');
+
+  const viewerReject = modal.getByRole('button', { name: 'Reject Travel', exact: true });
+  await expect(viewerReject).toBeEnabled();
+  await viewerReject.click();
+  confirmation = page.locator('[data-candidate-office-dialog="expense-category-rejection"]');
+  await confirmation.getByLabel('Reason for rejection').fill('Receipt image is unreadable.');
+  await confirmation.getByRole('button', { name: 'Reject Travel expense', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__expenseViewerConfirmed?.reason_note)).toBe('Receipt image is unreadable.');
+  await expect(modal.getByText('Travel evidence')).toHaveCount(0);
 });
 
 test('Bulk Authorise expense categories and totals rerender cleanly after one category is rejected', async ({ page }) => {

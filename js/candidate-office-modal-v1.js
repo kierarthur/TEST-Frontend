@@ -341,7 +341,7 @@
       formHtml: '<div class="candidate-office-field"><label for="candidateOfficeExpenseCategoryRejectionReason">Reason for rejection</label><textarea id="candidateOfficeExpenseCategoryRejectionReason" maxlength="1000" rows="4" required></textarea><div class="candidate-office-field__help">Required · maximum 1,000 characters</div></div>',
       trigger,
       buttons: [
-        { label: 'Go Back', value: 'back', className: 'btn-outline' },
+        { label: 'Cancel', value: 'back', className: 'btn-outline' },
         { label: `Reject ${label} expense`, value: 'confirm', className: 'btn-warn' }
       ],
       collect: root => ({ reason_note: root.querySelector('#candidateOfficeExpenseCategoryRejectionReason')?.value.trim() || '' }),

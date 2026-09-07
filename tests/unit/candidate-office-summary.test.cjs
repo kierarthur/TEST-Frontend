@@ -461,7 +461,7 @@ test('Summary Candidate refresh reuses one cursor heartbeat and patches only bou
   assert.doesNotMatch(heartbeat, /timesheet_id|contract_week_id|identities/);
 });
 
-test('Overview shows one compact Candidate submission row with no repeated agency or expense detail', () => {
+test('Overview shows Candidate submission as a heading and status badge only', () => {
   const window = load(
     'candidate-office-ui-policy-v1.js',
     'candidate-office-presenter-v1.js',
@@ -488,9 +488,7 @@ test('Overview shows one compact Candidate submission row with no repeated agenc
   const overview = window.CloudTMSCandidateOfficeSurface.renderCandidateOverviewFragment(view);
   assert.match(overview, /Candidate submission/);
   assert.match(overview, /Manager Approved/);
-  assert.match(overview, /Approved 05\/09\/2026 11:15:00/);
-  assert.match(overview, /Email/);
-  assert.match(overview, /Approving Manager · Ward Manager/);
+  assert.doesNotMatch(overview, /Approved 05\/09\/2026 11:15:00|Email|Approving Manager|Ward Manager/);
   assert.doesNotMatch(overview, /Submission Status|Approver email|manager@example\.test|Agency|Expense claim|Timesheet hours|Timesheet and expenses/);
   assert.equal(view.statuses.length, 1);
   assert.equal(view.statuses[0].label, 'Manager Approved');
@@ -528,7 +526,7 @@ test('Current Evidence marks approval and keeps older or withdrawn evidence sepa
   const evidence = main.slice(start, end);
   assert.match(evidence, /<label>Current Evidence<\/label>/);
   assert.match(evidence, /Not approved yet/);
-  assert.match(evidence, /data-ctms-label="Approval"/);
+  assert.match(evidence, /data-ctms-label="Manager Approval"/);
   assert.match(evidence, /data-ctms-label="Evidence"/);
   assert.match(evidence, /data-ctms-label="Uploaded"/);
   assert.doesNotMatch(evidence, /data-ctms-label="Filename"|data-ctms-label="Type"|data-ctms-label="Pages"|data-ctms-label="Date uploaded"|data-ctms-label="Time"|data-ctms-label="Uploaded by"/);
@@ -542,7 +540,7 @@ test('Expenses use the approved six-column grid without notes or explanatory cop
   const start = main.indexOf('function renderTimesheetExpensesTab(ctx)');
   const end = main.indexOf('\nfunction resolveTimesheetExpensesModalCtx', start);
   const expenses = main.slice(start, end);
-  assert.match(expenses, /<span>Expense<\/span><span>Units<\/span><span>Pay<\/span><span>Charge<\/span><span>Manager status<\/span><span>Action<\/span>/);
+  assert.match(expenses, /<span>Expense<\/span><span>Units<\/span><span>Pay<\/span><span>Charge<\/span><span>Manager status<\/span><span>Actions<\/span>/);
   for (const category of ['MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER']) {
     assert.match(expenses, new RegExp(`candidateOfficeExpenseSlot\\('${category}'\\)`));
   }
@@ -555,7 +553,7 @@ test('Timesheet view-mode restoration preserves server-enabled Candidate expense
   const end = main.indexOf('\nfunction ', start + 30);
   const block = main.slice(start, end);
   assert.match(block, /data-candidate-office-expense-action/);
-  assert.match(block, /candidateOfficeAction \|\| candidateOfficeEvidenceAction \|\| candidateOfficeExpenseAction/);
+  assert.match(block, /candidateOfficeAction \|\| candidateOfficeEvidenceAction \|\| candidateOfficeExpenseAction \|\| candidateOfficeExpenseEvidence/);
   assert.match(block, /candidateOfficeServerEnabled !== '1'/);
 });
 
@@ -706,7 +704,9 @@ test('expense-category status and compact rejection appear only for the matching
   });
   assert.match(expenses, />Reject Accommodation</);
   assert.match(expenses, /Awaiting Manager Approval/);
-  assert.match(expenses, /3 supporting files/);
+  assert.match(expenses, /View 3 files/);
+  assert.match(expenses, /data-candidate-office-expense-evidence="ACCOMMODATION"/);
+  assert.doesNotMatch(expenses, /<small>3 supporting files<\/small>/);
   assert.doesNotMatch(expenses, /Agency|Rejecting applies/);
   assert.match(expenses, /aria-label="Reject Accommodation expense"/);
   assert.doesNotMatch(expenses, /00000000-0000-4000-8000-000000000979(?=>|<)/);
