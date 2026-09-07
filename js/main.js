@@ -373571,8 +373571,28 @@ async function openTimesheetExpenseEvidenceViewer(input = {}) {
     try { window.__toast?.('Refresh the current expense evidence before continuing.'); } catch {}
     return { ok: false, unavailable: true };
   }
-  const evidenceItems = getCurrentTimesheetEvidenceItemsFromModalContext(window.modalCtx)
+  const currentCategoryEvidence = () => getCurrentTimesheetEvidenceItemsFromModalContext(window.modalCtx)
     .filter(item => String(item?.kind || item?.staged_kind || '').trim().toUpperCase() === categoryKey);
+  let evidenceItems = currentCategoryEvidence();
+  if (!evidenceItems.length) {
+    const timesheetId = String(
+      input?.context?.identity?.timesheet_id ||
+      input?.context?.projection?.current_identity?.timesheet_id ||
+      window.modalCtx?.data?.current_timesheet_id ||
+      window.modalCtx?.data?.timesheet_id ||
+      window.modalCtx?.timesheetDetails?.current_timesheet_id ||
+      window.modalCtx?.timesheetDetails?.timesheet?.timesheet_id ||
+      ''
+    ).trim();
+    if (timesheetId && typeof refreshTimesheetEvidenceIntoModalState === 'function') {
+      try {
+        await refreshTimesheetEvidenceIntoModalState(timesheetId);
+        evidenceItems = currentCategoryEvidence();
+      } catch (error) {
+        console.warn('[TS][EXPENSE][EVIDENCE] current evidence refresh failed', error);
+      }
+    }
+  }
   if (!evidenceItems.length) {
     try { window.__toast?.(`No current ${String(category.label || categoryKey).toLowerCase()} evidence is available to view.`); } catch {}
     return { ok: false, unavailable: true };

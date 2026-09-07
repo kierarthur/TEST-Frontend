@@ -565,6 +565,22 @@ test('Simple Timesheet expenses keep Manager status in its own column and open c
     rejection_action: { code: 'REJECT_EXPENSE_CATEGORY', enabled: true },
     rejection_confirmation: { supporting_evidence_count: 2, empty_timesheet_consequence: 'NONE' }
   };
+  const expenseProofTimesheetId = uuid(990);
+  const expenseEvidence = [
+    { id: 'travel-evidence-1', kind: 'TRAVEL', storage_key: 'evidence/travel-1.png', filename: 'travel-1.png', is_view_only: true },
+    { id: 'travel-evidence-2', kind: 'TRAVEL', storage_key: 'evidence/travel-2.png', filename: 'travel-2.png', is_view_only: true }
+  ];
+  await page.route(`${testBackend}/api/timesheets/${expenseProofTimesheetId}/evidence?meta=1`, async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        current_timesheet_id: expenseProofTimesheetId,
+        evidence: expenseEvidence,
+        withdrawn_submissions: [{ evidence: [{ id: 'old-travel', kind: 'TRAVEL', storage_key: 'evidence/old.png', withdrawn_at: '2026-08-01T00:00:00Z' }] }]
+      })
+    });
+  });
 
   await page.evaluate(({ category, timesheetId }) => {
     const bridge = (window as any).CloudTMSCandidateOfficeBridge;
@@ -599,7 +615,7 @@ test('Simple Timesheet expenses keep Manager status in its own column and open c
       (window as any).showModal('Timesheet expenses', [{ key: 'expenses', label: 'Expenses' }], () => (window as any).renderTimesheetExpensesTab(ctx), null, false, undefined, { kind: 'timesheets', frameEntity: 'timesheets', noParentGate: true, showSave: false, showApply: false });
     };
     (window as any).__openExpenseLayoutProof();
-  }, { category, timesheetId: uuid(990) });
+  }, { category, timesheetId: expenseProofTimesheetId });
 
   const modal = page.locator('#modal');
   const travelRow = modal.locator('[data-expense-category="TRAVEL"]');
@@ -640,14 +656,10 @@ test('Simple Timesheet expenses keep Manager status in its own column and open c
   await expect(travelRow).toBeVisible();
 
   await page.evaluate(({ category, timesheetId }) => {
-    const evidence = [
-      { id: 'travel-evidence-1', kind: 'TRAVEL', storage_key: 'evidence/travel-1.png', filename: 'travel-1.png', is_view_only: true },
-      { id: 'travel-evidence-2', kind: 'TRAVEL', storage_key: 'evidence/travel-2.png', filename: 'travel-2.png', is_view_only: true }
-    ];
     const parentCtx: any = {
       data: { timesheet_id: timesheetId },
-      timesheetDetails: { timesheet: { timesheet_id: timesheetId }, evidence },
-      timesheetState: { evidence, withdrawn_submissions: [{ evidence: [{ id: 'old-travel', kind: 'TRAVEL', storage_key: 'evidence/old.png', withdrawn_at: '2026-08-01T00:00:00Z' }] }] }
+      timesheetDetails: { timesheet: { timesheet_id: timesheetId } },
+      timesheetState: { evidence: [] }
     };
     (window as any).modalCtx = parentCtx;
     const frame = (window as any).__getModalFrame?.();
@@ -668,7 +680,7 @@ test('Simple Timesheet expenses keep Manager status in its own column and open c
         return { ok: true, result: { owning_timesheet_deleted: false } };
       }
     };
-  }, { category, timesheetId: uuid(990) });
+  }, { category, timesheetId: expenseProofTimesheetId });
 
   await expect(travelRow.getByRole('button', { name: 'View 2 supporting files for Travel' })).toBeVisible();
   await page.evaluate(({ category, timesheetId }) => (window as any).openTimesheetExpenseEvidenceViewer({
