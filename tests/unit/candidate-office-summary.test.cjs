@@ -461,7 +461,7 @@ test('Summary Candidate refresh reuses one cursor heartbeat and patches only bou
   assert.doesNotMatch(heartbeat, /timesheet_id|contract_week_id|identities/);
 });
 
-test('Overview shows only the current Submission Status and its approval facts', () => {
+test('Overview shows one compact Candidate submission row with no repeated agency or expense detail', () => {
   const window = load(
     'candidate-office-ui-policy-v1.js',
     'candidate-office-presenter-v1.js',
@@ -486,20 +486,30 @@ test('Overview shows only the current Submission Status and its approval facts',
     }
   ));
   const overview = window.CloudTMSCandidateOfficeSurface.renderCandidateOverviewFragment(view);
-  assert.match(overview, /Submission Status/);
-  assert.match(overview, /Approved<\/dt><dd>Yes/);
-  assert.match(overview, /Approval route<\/dt><dd>Email/);
-  assert.match(overview, /Approver name<\/dt><dd>Approving Manager/);
-  assert.match(overview, /Approver job title<\/dt><dd>Ward Manager/);
-  assert.match(overview, /Approver email<\/dt><dd>manager@example\.test/);
-  assert.doesNotMatch(overview, /Expense claim|Timesheet hours|Timesheet and expenses/);
-  assert.equal((overview.match(/Candidate Submission Complete/g) || []).length, 0);
+  assert.match(overview, /Candidate submission/);
+  assert.match(overview, /Manager Approved/);
+  assert.match(overview, /Approved 05\/09\/2026 11:15:00/);
+  assert.match(overview, /Email/);
+  assert.match(overview, /Approving Manager · Ward Manager/);
+  assert.doesNotMatch(overview, /Submission Status|Approver email|manager@example\.test|Agency|Expense claim|Timesheet hours|Timesheet and expenses/);
   assert.equal(view.statuses.length, 1);
   assert.equal(view.statuses[0].label, 'Manager Approved');
   assert.doesNotMatch(overview, /Submission history|Earlier approved submission|Earlier Manager/);
 
   const detail = window.CloudTMSCandidateOfficeSurface.renderCandidateOfficeCard(view);
   assert.match(detail, /Submission history|Earlier approved submission/);
+});
+
+test('Overview omits Candidate submission whenever the presenter says the route is ineligible', () => {
+  const window = load('candidate-office-surface-v1.js');
+  const html = window.CloudTMSCandidateOfficeSurface.renderCandidateOverviewFragment({
+    candidate_submission_applicable: false,
+    current_submission: {
+      status: { label: 'Candidate Submission Complete', tone: 'success' },
+      fields: [['Status', 'Candidate Submission Complete']]
+    }
+  });
+  assert.equal(html, '');
 });
 
 test('Simple Timesheet shows Candidate status once, inside Submission Status', () => {
@@ -519,8 +529,34 @@ test('Current Evidence marks approval and keeps older or withdrawn evidence sepa
   assert.match(evidence, /<label>Current Evidence<\/label>/);
   assert.match(evidence, /Not approved yet/);
   assert.match(evidence, /data-ctms-label="Approval"/);
+  assert.match(evidence, /data-ctms-label="Evidence"/);
+  assert.match(evidence, /data-ctms-label="Uploaded"/);
+  assert.doesNotMatch(evidence, /data-ctms-label="Filename"|data-ctms-label="Type"|data-ctms-label="Pages"|data-ctms-label="Date uploaded"|data-ctms-label="Time"|data-ctms-label="Uploaded by"/);
+  assert.doesNotMatch(evidence, /Review the files and approvals|controlled through MyTMS|To use a different timesheet image|Return the Timesheet to Office control/);
   assert.match(evidence, /Withdrawn submission history/);
   assert.match(evidence, /Previous submissions are retained for audit only/);
+});
+
+test('Expenses use the approved six-column grid without notes or explanatory copy', () => {
+  const main = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
+  const start = main.indexOf('function renderTimesheetExpensesTab(ctx)');
+  const end = main.indexOf('\nfunction resolveTimesheetExpensesModalCtx', start);
+  const expenses = main.slice(start, end);
+  assert.match(expenses, /<span>Expense<\/span><span>Units<\/span><span>Pay<\/span><span>Charge<\/span><span>Manager status<\/span><span>Action<\/span>/);
+  for (const category of ['MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER']) {
+    assert.match(expenses, new RegExp(`candidateOfficeExpenseSlot\\('${category}'\\)`));
+  }
+  assert.doesNotMatch(expenses, /Notes \(optional\)|data-exp-field="note"|controlled through MyTMS|Mileage rates are not set|Rejecting applies|requires evidence kind/);
+});
+
+test('Timesheet view-mode restoration preserves server-enabled Candidate expense actions', () => {
+  const main = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
+  const start = main.indexOf('function setFormReadOnly');
+  const end = main.indexOf('\nfunction ', start + 30);
+  const block = main.slice(start, end);
+  assert.match(block, /data-candidate-office-expense-action/);
+  assert.match(block, /candidateOfficeAction \|\| candidateOfficeEvidenceAction \|\| candidateOfficeExpenseAction/);
+  assert.match(block, /candidateOfficeServerEnabled !== '1'/);
 });
 
 test('Simple Timesheet shows only expense categories owned by that exact Timesheet row', () => {
@@ -596,13 +632,8 @@ test('Simple Timesheet shows only expense categories owned by that exact Timeshe
   const expenseView = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(expenseProjection, { surface: 'SIMPLE_TIMESHEET' });
   const html = window.CloudTMSCandidateOfficeSurface.renderCandidateOverviewFragment(expenseView);
   assert.equal(expenseView.expense_claims.length, 1);
-  assert.match(html, /Expenses on this Timesheet/);
-  assert.match(html, /Accommodation · £25\.00/);
-  assert.match(html, /Travel · £12\.50/);
-  assert.match(html, /Expense total £37\.50/);
-  assert.doesNotMatch(html, /£47\.50|Other · £10\.00/);
+  assert.doesNotMatch(html, /Expenses on this Timesheet|Accommodation|Travel|Expense total|£47\.50|Other/);
   assert.match(html, /Awaiting Manager Approval/);
-  assert.match(html, /Manager Approved/);
   assert.doesNotMatch(html, /00000000-|expense_component_id|workflow_id|WITHDRAW_EXPENSE|CANCEL_EXPENSE/);
 
   const summaryView = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(expenseProjection);
@@ -646,7 +677,7 @@ test('expense total includes only live categories explicitly included by the bac
   assert.doesNotMatch(html, /Expense total £30\.00/);
 });
 
-test('expense-category rejection appears only in the Expenses view with both Office permission and an eligible category action', () => {
+test('expense-category status and compact rejection appear only for the matching row with Office permission', () => {
   const window = load(
     'candidate-office-ui-policy-v1.js',
     'candidate-office-presenter-v1.js',
@@ -658,6 +689,7 @@ test('expense-category rejection appears only in the Expenses view with both Off
   const category = {
     expense_component_id: '00000000-0000-4000-8000-000000000979',
     label: 'Accommodation',
+    category: 'ACCOMMODATION',
     amount: '£25.00',
     supporting_evidence_count: 3,
     status: { code: 'MANAGER_APPROVAL_REQUIRED', label: 'Awaiting Manager Approval', tone: 'warning' },
@@ -669,23 +701,24 @@ test('expense-category rejection appears only in the Expenses view with both Off
     expense_claims: [{ total: '£25.00', categories: [category] }]
   };
 
-  const overview = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, {
-    surface: 'SIMPLE_TIMESHEET', variant: 'overview'
-  });
-  assert.match(overview, /Accommodation · £25\.00/);
-  assert.doesNotMatch(overview, /Reject Accommodation expense|data-candidate-office-expense-action/);
-
   const expenses = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, {
-    surface: 'SIMPLE_TIMESHEET', variant: 'expenses'
+    surface: 'SIMPLE_TIMESHEET', variant: 'expense-category:ACCOMMODATION'
   });
-  assert.match(expenses, /Reject Accommodation expense/);
-  assert.match(expenses, /Rejecting applies to this complete category and all its supporting items/);
-  assert.match(expenses, /aria-label="Reject complete Accommodation expense"/);
+  assert.match(expenses, />Reject Accommodation</);
+  assert.match(expenses, /Awaiting Manager Approval/);
+  assert.match(expenses, /3 supporting files/);
+  assert.doesNotMatch(expenses, /Agency|Rejecting applies/);
+  assert.match(expenses, /aria-label="Reject Accommodation expense"/);
   assert.doesNotMatch(expenses, /00000000-0000-4000-8000-000000000979(?=>|<)/);
+
+  const wrongCategory = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, {
+    surface: 'SIMPLE_TIMESHEET', variant: 'expense-category:TRAVEL'
+  });
+  assert.equal(wrongCategory, '');
 
   window.CloudTMSCandidateOfficeBridge.capabilities.permissions.reject_submission = false;
   const denied = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, {
-    surface: 'SIMPLE_TIMESHEET', variant: 'expenses'
+    surface: 'SIMPLE_TIMESHEET', variant: 'expense-category:ACCOMMODATION'
   });
   assert.doesNotMatch(denied, /Reject Accommodation expense|data-candidate-office-expense-action/);
 
@@ -693,6 +726,6 @@ test('expense-category rejection appears only in the Expenses view with both Off
   const manual = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment({
     identity: { route_family: 'MANUAL_NON_QR' },
     expense_claims: [{ total: '£25.00', categories: [category] }]
-  }, { surface: 'SIMPLE_TIMESHEET', variant: 'expenses' });
+  }, { surface: 'SIMPLE_TIMESHEET', variant: 'expense-category:ACCOMMODATION' });
   assert.doesNotMatch(manual, /Reject Accommodation expense|data-candidate-office-expense-action/);
 });

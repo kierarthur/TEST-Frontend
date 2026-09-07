@@ -1003,8 +1003,8 @@
       const content = {
         overview: ['Timesheet overview', 'Review the week, route and available actions.'],
         lines: ['Hours and shifts', 'Enter each shift and break clearly for the selected week.'],
-        expenses: ['Expenses', 'Review mileage and other claimable expenses.'],
-        evidence: ['Evidence', 'Review the files and approvals attached to this timesheet.'],
+        expenses: ['Expenses', ''],
+        evidence: ['Evidence', ''],
         issues: ['Issues', 'Review validation or processing issues for this timesheet.'],
         finance: ['Finance', 'Review calculated pay, charge and margin details.'],
         audit: ['Audit history', 'Review changes recorded for this timesheet.']

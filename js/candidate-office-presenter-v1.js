@@ -470,6 +470,7 @@
       .map(actionView);
     return Object.freeze({
       surface, identity: projection.current_identity, status, statuses,
+      candidate_submission_applicable: candidateSubmissionApplies(projection),
       source_status_code: sourceStatus.code,
       workflow: projection.workflow,
       current_submission: presentCurrentSubmission(projection, activeDisplayStatus),

@@ -177519,7 +177519,8 @@ function renderTimesheetExpensesTab(ctx) {
     contract_week_id: row.contract_week_id || details.contract_week_id || cw?.id || null,
     backend_row_signature: row.backend_row_signature || row.row_signature || details.backend_row_signature || details.row_signature || ts?.backend_row_signature || ts?.row_signature || tf?.backend_row_signature || tf?.row_signature || null
   };
-  let candidateOfficeExpenseSlot = '';
+  const candidateOfficeExpenseSlot = (category) => {
+    let slot = '';
   if (
     ['SIMPLE_TIMESHEET', 'BULK_AUTHORISE'].includes(candidateOfficeSurface)
     && candidateOfficeRow.timesheet_id
@@ -177528,15 +177529,17 @@ function renderTimesheetExpensesTab(ctx) {
     && typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function'
   ) {
     try {
-      candidateOfficeExpenseSlot = window.CloudTMSCandidateOfficeBridge.slotHtml(
+      slot = window.CloudTMSCandidateOfficeBridge.slotHtml(
         candidateOfficeSurface,
         candidateOfficeRow,
-        { variant: 'expenses' }
+        { variant: `expense-category:${String(category || '').trim().toUpperCase()}` }
       );
     } catch {
-      candidateOfficeExpenseSlot = '';
+      slot = '';
     }
   }
+    return slot;
+  };
   const suppliedEditPolicy = (
     (c.timesheetEditDomains && typeof c.timesheetEditDomains === 'object') ? c.timesheetEditDomains :
     (c.editDomains && typeof c.editDomains === 'object') ? c.editDomains :
@@ -177857,22 +177860,11 @@ function renderTimesheetExpensesTab(ctx) {
       routeTypeExpense === 'WEEKLY_HEALTHROSTER'
     )
   );
-  const defaultBlockedReason = trueSourceImportExpense
-    ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
-    : (!expenseStorageTarget
-        ? 'Expenses cannot be saved because this row does not yet have a supported expenses draft target.'
-        : (hardLockedExpense
-            ? 'Expenses cannot be edited because this row is locked, authorised, or invoiced.'
-            : 'Expenses cannot be edited directly for this row.'));
   let expensesTabDisabled = editPolicy
     ? editPolicy.expensesTabDisabled === true
     : !hasSupportedExpenseTarget;
   if (additionalManualExpenseSupported) expensesTabDisabled = false;
   if (trueSourceImportExpense) expensesTabDisabled = true;
-  const expensesTabDisabledReason = String(
-    (editPolicy && !additionalManualExpenseSupported && (editPolicy.expensesTabDisabledReason || editPolicy.expensesDisabledReason)) ||
-    defaultBlockedReason
-  );
   const enabled = editPolicy
     ? ((policyCanOpenExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
     : hasSupportedExpenseTarget;
@@ -177880,39 +177872,13 @@ function renderTimesheetExpensesTab(ctx) {
     ? (hasSupportedExpenseTarget && !hardLockedExpense && (policyCanEditExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
     : (hasSupportedExpenseTarget && !hardLockedExpense);
   const readOnly = !(canEditExpenseControls && (isEditMode || isBulkProcessModal));
-  const blockedReason = expensesTabDisabled ? expensesTabDisabledReason : (readOnly ? (editPolicy?.expensesDisabledReason || defaultBlockedReason) : '');
-
-  const needsMileageEvidence = mileageUnits > 0 || mileagePay > 0 || mileageChg > 0;
-  const needsTravelEvidence  = (travelPay > 0 || travelChg > 0);
-  const needsAccomEvidence   = (accomPay > 0 || accomChg > 0);
-  const needsOtherEvidence   = (otherPay > 0 || otherChg > 0);
-
-  const evidenceLines = [];
-  if (needsMileageEvidence) evidenceLines.push('• Mileage requires evidence kind MILEAGE (when units, pay, or charge is greater than zero).');
-  if (needsTravelEvidence)  evidenceLines.push('• Travel requires evidence kind TRAVEL (when pay or charge is greater than £0.00).');
-  if (needsAccomEvidence)   evidenceLines.push('• Accommodation requires evidence kind ACCOMMODATION (when pay or charge is greater than £0.00).');
-  if (needsOtherEvidence)   evidenceLines.push('• Other requires evidence kind OTHER (when pay or charge is greater than £0.00).');
-
-  const evidenceHint =
-    evidenceLines.length
-      ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">${evidenceLines.join('<br/>')}</div>`
-      : (isBulkProcessModal ? '' : `<div class="mini" style="margin-top:8px;color:rgba(255,255,255,0.7)">Tip: upload supporting evidence in the Evidence tab. Evidence is required only when you claim mileage, travel, accommodation, or other expenses.</div>`);
-
   if (expensesTabDisabled || !enabled) {
     return `
       <div class="tabc">
-        ${candidateOfficeExpenseSlot}
         <div class="card">
           <div class="row" style="grid-column:1/-1">
             <label>Expenses</label>
-            <div class="controls">
-              <span class="mini">${escapeHtml(blockedReason)}</span>
-              ${editPolicy?.requiresAdditionalManualForExpenses ? `
-                <div class="mini" style="margin-top:6px;opacity:.85">
-                  Tip: use <strong>Add additional manual timesheet</strong> where the original sheet cannot carry expenses directly.
-                </div>
-              ` : ''}
-            </div>
+            <div class="controls"><span class="mini">Unavailable</span></div>
           </div>
         </div>
       </div>
@@ -177922,53 +177888,15 @@ function renderTimesheetExpensesTab(ctx) {
   const ro = readOnly ? 'disabled' : '';
   const roStyle = readOnly ? 'style="opacity:0.7"' : '';
   const mileageUnitsDisabled = readOnly ? 'disabled' : '';
-  const mileageHint =
-    !mileageRatesOk
-      ? `<div class="mini" style="margin-top:6px;color:rgba(255,200,120,0.95)">Mileage rates are not set. You may clear mileage to zero, but a positive mileage claim requires rates before it can be saved.</div>`
-      : `<div class="mini" style="margin-top:6px;color:rgba(255,255,255,0.7)">Mileage pay £${fmt2(draft.mileage_pay_rate)} · Charge £${fmt2(draft.mileage_charge_rate)}</div>`;
-
-  const readOnlyHint = readOnly
-    ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">${escapeHtml(blockedReason || 'Expenses are read-only for this row.')}</div>`
-    : '';
-
-  const noteVal = String(draft.note ?? '').trim();
-  const enforcementHint = (isBulkProcessModal ? '' : (
-    readOnly
-      ? (editPolicy?.canManageExpenseEvidence === true
-          ? `Supporting expense evidence can still be added or removed in the Evidence tab.`
-          : '')
-      : isContractWeekDraftTarget
-      ? `Expenses will be saved as a draft until this week is processed. Evidence enforcement uses staged evidence for this unprocessed week.`
-      : `Note: Evidence enforcement happens on Save. If required evidence is missing, Save will fail with an “Evidence required” message and you should upload receipts in the Evidence tab.`
-  ));
-
   return `
     <div class="tabc" data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
-      ${candidateOfficeExpenseSlot}
-      <div class="card">
-        <div class="row" style="grid-column:1/-1">
-          <label>Expenses</label>
-          <div class="controls">
-            <span class="mini">${readOnly ? 'Review expenses and mileage.' : (isContractWeekDraftTarget ? 'Expenses will be saved as a draft until this week is processed.' : 'Edit expenses and mileage. Charges with £0.00 will not appear on invoices.')}</span>
-            ${readOnlyHint}
-          </div>
-        </div>
-
-        <div class="row" style="grid-column:1/-1;margin-top:10px">
-          <div style="overflow:auto;border:1px solid var(--line);border-radius:10px">
-            <table class="grid" style="min-width:720px;table-layout:auto">
-              <thead>
-                <tr data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
-                  <th style="width:220px">Expense Type</th>
-                  <th style="width:140px">Units</th>
-                  <th style="width:160px">Pay</th>
-                  <th style="width:160px">Charge</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><strong>Mileage</strong></td>
-                  <td>
+      <div class="card ctms-expense-card">
+        <div class="ctms-expense-heading"><strong>Expenses</strong><span>Total pay <strong data-exp-out="total_pay">£${fmt2(totalPay)}</strong> · Charge <strong data-exp-out="total_charge">£${fmt2(totalChg)}</strong></span></div>
+        <div class="ctms-expense-grid" data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
+          <div class="ctms-expense-grid__head" aria-hidden="true"><span>Expense</span><span>Units</span><span>Pay</span><span>Charge</span><span>Manager status</span><span>Action</span></div>
+          <div class="ctms-expense-grid__row" data-expense-category="MILEAGE">
+            <strong>Mileage</strong>
+            <div>
                     <input
                       class="input"
                       type="number"
@@ -177983,59 +177911,29 @@ function renderTimesheetExpensesTab(ctx) {
                       data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}"
                       placeholder="0"
                     />
-                  </td>
-                  <td><span class="mini" data-exp-out="mileage_pay">£${fmt2(mileagePay)}</span></td>
-                  <td><span class="mini" data-exp-out="mileage_charge">£${fmt2(mileageChg)}</span></td>
-                </tr>
-                <tr>
-                  <td colspan="4" style="padding-top:6px;padding-bottom:10px">
-                    ${mileageHint}
-                  </td>
-                </tr>
-
-                <tr>
-                  <td><strong>Travel</strong></td>
-                  <td><span class="mini" style="opacity:.7">—</span></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_travel_pay" data-testid="timesheet-expense-travel-pay" value="${fmt2(travelPay)}" ${ro} ${roStyle} data-exp-field="travel_pay" /></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_travel_charge" data-testid="timesheet-expense-travel-charge" value="${fmt2(travelChg)}" ${ro} ${roStyle} data-exp-field="travel_charge" /></td>
-                </tr>
-
-                <tr>
-                  <td><strong>Accommodation</strong></td>
-                  <td><span class="mini" style="opacity:.7">—</span></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_accom_pay" value="${fmt2(accomPay)}" ${ro} ${roStyle} data-exp-field="accommodation_pay" /></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_accom_charge" value="${fmt2(accomChg)}" ${ro} ${roStyle} data-exp-field="accommodation_charge" /></td>
-                </tr>
-
-                <tr>
-                  <td><strong>Other</strong></td>
-                  <td><span class="mini" style="opacity:.7">—</span></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_other_pay" value="${fmt2(otherPay)}" ${ro} ${roStyle} data-exp-field="other_pay" /></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_other_charge" value="${fmt2(otherChg)}" ${ro} ${roStyle} data-exp-field="other_charge" /></td>
-                </tr>
-
-                <tr>
-                  <td><strong>Total</strong></td>
-                  <td></td>
-                  <td><strong class="mini" data-exp-out="total_pay">£${fmt2(totalPay)}</strong></td>
-                  <td><strong class="mini" data-exp-out="total_charge">£${fmt2(totalChg)}</strong></td>
-                </tr>
-              </tbody>
-            </table>
+            </div>
+            <span class="ctms-expense-money" data-exp-out="mileage_pay">£${fmt2(mileagePay)}</span>
+            <span class="ctms-expense-money" data-exp-out="mileage_charge">£${fmt2(mileageChg)}</span>
+            ${candidateOfficeExpenseSlot('MILEAGE') || '<span aria-hidden="true">—</span><span aria-hidden="true">—</span>'}
           </div>
-        </div>
-
-        <div class="row" style="grid-column:1/-1;margin-top:10px">
-          <div class="mini" style="color:rgba(255,255,255,0.7)">Notes (optional). Notes do not affect totals or invoice maths.</div>
-        </div>
-
-        <div class="row" style="grid-column:1/-1;margin-top:6px">
-          <textarea class="input" style="width:100%;min-height:90px;resize:vertical" name="exp_note" placeholder="Add any notes about these expenses (optional)" data-exp-field="note" ${ro} ${roStyle}>${escapeHtml(noteVal)}</textarea>
-        </div>
-
-        <div class="row" style="grid-column:1/-1;margin-top:10px">
-          <div class="mini" style="color:rgba(255,255,255,0.7)">${enforcementHint}</div>
-          ${evidenceHint}
+          <div class="ctms-expense-grid__row" data-expense-category="TRAVEL">
+            <strong>Travel</strong><span aria-hidden="true">—</span>
+            <input class="input" type="number" step="0.01" name="exp_travel_pay" data-testid="timesheet-expense-travel-pay" value="${fmt2(travelPay)}" ${ro} ${roStyle} data-exp-field="travel_pay" />
+            <input class="input" type="number" step="0.01" name="exp_travel_charge" data-testid="timesheet-expense-travel-charge" value="${fmt2(travelChg)}" ${ro} ${roStyle} data-exp-field="travel_charge" />
+            ${candidateOfficeExpenseSlot('TRAVEL') || '<span aria-hidden="true">—</span><span aria-hidden="true">—</span>'}
+          </div>
+          <div class="ctms-expense-grid__row" data-expense-category="ACCOMMODATION">
+            <strong>Accommodation</strong><span aria-hidden="true">—</span>
+            <input class="input" type="number" step="0.01" name="exp_accom_pay" value="${fmt2(accomPay)}" ${ro} ${roStyle} data-exp-field="accommodation_pay" />
+            <input class="input" type="number" step="0.01" name="exp_accom_charge" value="${fmt2(accomChg)}" ${ro} ${roStyle} data-exp-field="accommodation_charge" />
+            ${candidateOfficeExpenseSlot('ACCOMMODATION') || '<span aria-hidden="true">—</span><span aria-hidden="true">—</span>'}
+          </div>
+          <div class="ctms-expense-grid__row" data-expense-category="OTHER">
+            <strong>Other</strong><span aria-hidden="true">—</span>
+            <input class="input" type="number" step="0.01" name="exp_other_pay" value="${fmt2(otherPay)}" ${ro} ${roStyle} data-exp-field="other_pay" />
+            <input class="input" type="number" step="0.01" name="exp_other_charge" value="${fmt2(otherChg)}" ${ro} ${roStyle} data-exp-field="other_charge" />
+            ${candidateOfficeExpenseSlot('OTHER') || '<span aria-hidden="true">—</span><span aria-hidden="true">—</span>'}
+          </div>
         </div>
       </div>
     </div>
@@ -325487,7 +325385,8 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
 
       const candidateOfficeAction = String(el.getAttribute('data-candidate-office-action') || '').trim();
       const candidateOfficeEvidenceAction = String(el.getAttribute('data-candidate-office-evidence-action') || '').trim();
-      if (isTimesheetFrame && ro && (candidateOfficeAction || candidateOfficeEvidenceAction)) {
+      const candidateOfficeExpenseAction = String(el.getAttribute('data-candidate-office-expense-action') || '').trim();
+      if (isTimesheetFrame && ro && (candidateOfficeAction || candidateOfficeEvidenceAction || candidateOfficeExpenseAction)) {
         el.disabled = el.dataset.candidateOfficeServerEnabled !== '1';
         return;
       }
@@ -358833,16 +358732,12 @@ function renderTimesheetEvidenceTab(ctx) {
               data-timesheet-document-state="${escapeHtml(timesheetDocumentState)}"
               data-document-operation-id="${escapeHtml(documentOperationId)}"
               class="${system ? 'system-evidence' : ''}">
-            <td data-ctms-label="Filename">${fileName}</td>
-            <td data-ctms-label="Type">${type}</td>
+            <td data-ctms-label="Evidence"><strong class="ctms-evidence-title">${fileName}</strong><span class="ctms-evidence-meta">${type} · Pages ${pageCount}</span></td>
             <td data-ctms-label="Source">
               <span class="pill">${src}</span>
             </td>
             <td data-ctms-label="Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
-            <td data-ctms-label="Pages">${pageCount}</td>
-            <td data-ctms-label="Date uploaded">${uploadedDate}</td>
-            <td data-ctms-label="Time">${uploadedTime}</td>
-            <td data-ctms-label="Uploaded by">${uploadedBy}</td>
+            <td data-ctms-label="Uploaded"><strong class="ctms-evidence-uploaded">${uploadedDate}${uploadedTime === '—' ? '' : ` · ${uploadedTime}`}</strong><span class="ctms-evidence-meta">${uploadedBy}</span></td>
             <td data-ctms-label="Actions" style="text-align:right;">
               <div class="ctms-evidence-actions">
                 ${viewBtn}
@@ -358858,9 +358753,7 @@ function renderTimesheetEvidenceTab(ctx) {
       }).join('')
     : `
       <tr>
-        <td colspan="9" class="mini" style="opacity:.85;">
-          No evidence uploaded yet. Drag a file anywhere inside this tab to upload.
-        </td>
+        <td colspan="5" class="mini" style="opacity:.85;">No evidence uploaded yet.</td>
       </tr>
     `;
 
@@ -358869,14 +358762,10 @@ function renderTimesheetEvidenceTab(ctx) {
       <table class="ts-evidence-table ctms-timesheet-evidence-table" style="width:100%; border-collapse:collapse;">
         <thead>
           <tr>
-            <th style="text-align:left;">Filename</th>
-            <th style="text-align:left;">Type</th>
+            <th style="text-align:left;">Evidence</th>
             <th style="text-align:left;">Source</th>
             <th style="text-align:left;">Approval</th>
-            <th style="text-align:left;">Pages</th>
-            <th style="text-align:left;">Date Uploaded</th>
-            <th style="text-align:left;">Time</th>
-            <th style="text-align:left;">Uploaded by</th>
+            <th style="text-align:left;">Uploaded</th>
             <th style="text-align:right;">Actions</th>
           </tr>
         </thead>
@@ -363037,12 +362926,7 @@ function renderTimesheetOverviewTab(ctx) {
         </div>
       </div>
 
-      ${candidateOverviewHtml ? `
-        <div class="row" data-view-only="true">
-          <label>Candidate</label>
-          <div class="controls" style="width:100%;">${candidateOverviewHtml}</div>
-        </div>
-      ` : ''}
+      ${candidateOverviewHtml ? `<div data-view-only="true">${candidateOverviewHtml}</div>` : ''}
 
       ${routeActionsRowHtml}
     </div>
@@ -373980,16 +373864,12 @@ function renderTimesheetEvidenceTab(ctx) {
               data-timesheet-document-state="${escapeHtml(timesheetDocumentState)}"
               data-document-operation-id="${escapeHtml(documentOperationId)}"
               class="${system ? 'system-evidence' : ''}">
-            <td data-ctms-label="Filename">${fileName}</td>
-            <td data-ctms-label="Type">${type}</td>
+            <td data-ctms-label="Evidence"><strong class="ctms-evidence-title">${fileName}</strong><span class="ctms-evidence-meta">${type} · Pages ${pageCount}</span></td>
             <td data-ctms-label="Source">
               <span class="pill">${src}</span>
             </td>
             <td data-ctms-label="Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
-            <td data-ctms-label="Pages">${pageCount}</td>
-            <td data-ctms-label="Date uploaded">${uploadedDate}</td>
-            <td data-ctms-label="Time">${uploadedTime}</td>
-            <td data-ctms-label="Uploaded by">${uploadedBy}</td>
+            <td data-ctms-label="Uploaded"><strong class="ctms-evidence-uploaded">${uploadedDate}${uploadedTime === '—' ? '' : ` · ${uploadedTime}`}</strong><span class="ctms-evidence-meta">${uploadedBy}</span></td>
             <td data-ctms-label="Actions" style="text-align:right;">
               <div class="ctms-evidence-actions">
                 ${viewBtn}
@@ -374005,9 +373885,7 @@ function renderTimesheetEvidenceTab(ctx) {
       }).join('')
     : `
       <tr>
-        <td colspan="9" class="mini" style="opacity:.85;">
-          No evidence uploaded yet. Drag a file anywhere inside this tab to upload.
-        </td>
+        <td colspan="5" class="mini" style="opacity:.85;">No evidence uploaded yet.</td>
       </tr>
     `;
 
@@ -374016,14 +373894,10 @@ function renderTimesheetEvidenceTab(ctx) {
       <table class="ts-evidence-table ctms-timesheet-evidence-table" style="width:100%; border-collapse:collapse;">
         <thead>
           <tr>
-            <th style="text-align:left;">Filename</th>
-            <th style="text-align:left;">Type</th>
+            <th style="text-align:left;">Evidence</th>
             <th style="text-align:left;">Source</th>
             <th style="text-align:left;">Approval</th>
-            <th style="text-align:left;">Pages</th>
-            <th style="text-align:left;">Date Uploaded</th>
-            <th style="text-align:left;">Time</th>
-            <th style="text-align:left;">Uploaded by</th>
+            <th style="text-align:left;">Uploaded</th>
             <th style="text-align:right;">Actions</th>
           </tr>
         </thead>
@@ -374085,37 +373959,15 @@ function renderTimesheetEvidenceTab(ctx) {
     </section>
   ` : '';
 
-  const policyEvidenceReason = policy ? String(policy.expenseEvidenceDisabledReason || policy.expensesDisabledReason || '') : '';
-  const plannedEvidenceGuidance = expenseEvidenceStorageTarget === 'CONTRACT_WEEK_STAGED_EVIDENCE'
-    ? 'Evidence can be uploaded for this unprocessed week because expenses are being saved as a draft.'
-    : '';
-  const protectedEvidenceGuidance = policy?.requiresAdditionalManualForExpenses
-    ? 'Evidence cannot be uploaded directly for this source row. Use Add Additional Manual if expenses need to be claimed.'
-    : '';
-  const lockBanner = policy
-    ? (canManageEvidence ? plannedEvidenceGuidance : (protectedEvidenceGuidance || policyEvidenceReason || 'Evidence cannot be uploaded for this row because it does not have a supported expenses draft target.'))
-    : (importAuthoritative
-        ? 'Import source evidence is review-only. Use an additional manual timesheet for expenses or extra supporting items.'
-        : (authorised
-            ? 'Payment values are locked because this timesheet is authorised. Evidence files can still be managed if the row is not invoice/document locked.'
-            : (lockReason ? `Evidence changes are locked: ${escapeHtml(lockReason)}` : '')));
-  const hasTimesheetEvidence = evList.some((ev) => String(ev?.kind || ev?.staged_kind || '').trim().toUpperCase() === 'TIMESHEET');
-
   return `
     <div class="tabc ts-evidence-tab"
          data-ts-drop-zone-root="evidence"
          style="height:100%; display:flex; flex-direction:column;">
-      <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:8px;">
-        <div class="mini" style="opacity:.9;">${lockBanner ? lockBanner : 'Evidence file actions do not unlock hours, rates, pay, charge, mileage, travel, accommodation, or other financial values.'}</div>
+      <div class="ctms-evidence-toolbar">
         ${canManageEvidence ? `
           <button type="button" class="btn btn-outline" data-evidence-add="1" data-evidence-upload="1">Add evidence</button>
         ` : ''}
       </div>
-      ${hasTimesheetEvidence ? `
-        <div class="mini" style="margin-bottom:8px;opacity:.92;">
-          To use a different timesheet image, delete this file or return it to the queue first, then add the new file.
-        </div>
-      ` : ''}
 
       ${candidateEvidenceHtml}
 
@@ -374129,11 +373981,6 @@ function renderTimesheetEvidenceTab(ctx) {
       </div>
 
       ${withdrawnHistoryHtml}
-
-      <div class="mini" style="margin-top:10px; opacity:.85; text-align:center;">
-        ${canManageEvidence ? 'Drag a PDF or image anywhere inside this tab to upload new evidence.' : escapeHtml(protectedEvidenceGuidance || policyEvidenceReason || 'Evidence cannot be uploaded for this row because it does not have a supported expenses draft target.')}
-      </div>
-
     </div>
   `;
 }

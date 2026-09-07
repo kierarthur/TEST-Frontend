@@ -899,9 +899,10 @@ test('approved hours stay clean while the pending expense appears only on its ow
     expect(html).toContain('Candidate Submitted');
     expect(html).not.toContain('Timesheet hours');
   }
-  expect(result.expense.overviewHtml).toContain('Expenses on this Timesheet');
-  expect(result.expense.overviewHtml).toContain('Accommodation · £25.00');
-  expect(result.expense.overviewHtml).toContain('Expense total £25.00');
+  expect(result.expense.overviewHtml).toContain('Candidate submission');
+  expect(result.expense.overviewHtml).toContain('Candidate Submitted');
+  expect(result.expense.overviewHtml).not.toContain('Expenses on this Timesheet');
+  expect(result.expense.overviewHtml).not.toContain('Accommodation · £25.00');
 });
 
 test('Manual non-QR, HealthRoster and NHSP authoritative rows never display a Candidate lifecycle on any Office surface', async ({ page }) => {
@@ -1417,7 +1418,7 @@ test('Office values and evidence are read-only for Candidate-controlled QR and E
         expect(policy.canEditExpenses).toBe(true);
         expect(policy.canManageExpenseEvidence).toBe(true);
         await expect(travelPay).toBeEnabled();
-        await expect(modal.getByText(/Edit expenses and mileage/i)).toBeVisible();
+        await expect(modal.locator('.ctms-expense-grid')).toBeVisible();
       } else {
         expect(policy.canEditExpenses).toBe(false);
         expect(policy.canManageExpenseEvidence).toBe(false);
@@ -1425,12 +1426,11 @@ test('Office values and evidence are read-only for Candidate-controlled QR and E
         expect(policy.expenseEvidenceStorageTarget).toBe('TIMESHEET_EVIDENCE');
         expect(policy.expensesDisabledReason).toMatch(/controlled through MyTMS/i);
         await expect(travelPay).toBeDisabled();
-        await expect(modal.getByText('Review expenses and mileage.', { exact: true })).toBeVisible();
-        await expect(modal.getByText(/controlled through MyTMS/i)).toBeVisible();
-        await expect(modal.getByText(/return the Timesheet to Office control/i)).toBeVisible();
+        await expect(modal.getByText(/controlled through MyTMS/i)).toHaveCount(0);
+        await expect(modal.getByText(/return the Timesheet to Office control/i)).toHaveCount(0);
         const evidenceHtml = await page.evaluate(() => (window as any).renderTimesheetEvidenceTab((window as any).modalCtx));
         expect(evidenceHtml).not.toContain('data-evidence-add="1"');
-        expect(evidenceHtml).toMatch(/return the Timesheet to Office control/i);
+        expect(evidenceHtml).not.toMatch(/return the Timesheet to Office control/i);
       }
 
       const bounds = await modal.evaluate(element => {

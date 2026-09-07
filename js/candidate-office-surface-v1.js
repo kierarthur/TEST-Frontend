@@ -15,6 +15,7 @@
   }
   const renderCandidateCompactBadges = renderCandidateSummaryCell;
   const renderFields = fields => `<dl class="candidate-office-facts">${(fields || []).map(([label, value]) => `<div><dt>${escape(label)}</dt><dd>${escape(value)}</dd></div>`).join('')}</dl>`;
+  const fieldValue = (fields, label) => (fields || []).find(([fieldLabel]) => fieldLabel === label)?.[1] || '';
   const canRenderExpenseCategoryRejection = (surface, category, view) => !!(
     ['ELECTRONIC', 'QR'].includes(String(view?.identity?.route_family || view?.projection?.current_identity?.route_family || '').toUpperCase())
     && ['SIMPLE_TIMESHEET', 'BULK_AUTHORISE'].includes(String(surface || '').toUpperCase())
@@ -36,6 +37,21 @@
       </article>`).join('')}</div>
     </div>`).join('')}</section>`;
   }
+  function renderExpenseCategoryRow(view, categoryName, { surface = 'SIMPLE_TIMESHEET' } = {}) {
+    const categoryKey = String(categoryName || '').trim().toUpperCase();
+    const categories = (Array.isArray(view?.expense_claims) ? view.expense_claims : [])
+      .flatMap(claim => Array.isArray(claim?.categories) ? claim.categories : []);
+    const category = categories.find(item => String(item?.category || '').toUpperCase() === categoryKey);
+    if (!category) return '';
+    const evidenceCount = Number(category.supporting_evidence_count || 0);
+    const reject = canRenderExpenseCategoryRejection(surface, category, view)
+      ? `<button type="button" class="btn btn-warn candidate-office-expense-reject" data-candidate-office-expense-action="REJECT_EXPENSE_CATEGORY" data-expense-component-id="${escape(category.expense_component_id)}" data-candidate-office-server-enabled="1" aria-label="Reject ${escape(category.label)} expense">Reject ${escape(category.label)}</button>`
+      : '<span aria-hidden="true">—</span>';
+    return `<div class="candidate-office-expense-row-status" data-expense-category-status="${escape(categoryKey)}">
+      <div class="candidate-office-expense-manager"><span class="${statusClass(category.status.tone)}" data-expense-status-code="${escape(category.status.code)}">${escape(category.status.label)}</span>${evidenceCount ? `<small>${escape(evidenceCount)} supporting ${evidenceCount === 1 ? 'file' : 'files'}</small>` : ''}</div>
+      <div class="candidate-office-expense-row-action">${reject}</div>
+    </div>`;
+  }
   const approvedActions = (actions, surface) => (Array.isArray(actions) ? actions : [])
     .filter(action => action?.enabled === true || action?.placeholder === true)
     .filter(action => window.CloudTMSCandidateOfficeUiPolicy?.isButtonApproved(surface, action?.code) === true);
@@ -55,11 +71,14 @@
   function renderCandidateOverviewFragment(view) {
     if (!view) return '';
     const sections = [];
-    if (view.current_submission) {
-      sections.push(`<div class="candidate-office-overview-group"><strong>Submission Status</strong>${renderFields(view.current_submission.fields)}</div>`);
-    }
-    if (Array.isArray(view.expense_claims) && view.expense_claims.length) {
-      sections.push(`<div class="candidate-office-overview-group candidate-office-overview-expenses">${renderExpenseClaims(view)}</div>`);
+    if (view.candidate_submission_applicable === true && view.current_submission) {
+      const fields = view.current_submission.fields || [];
+      const approved = String(fieldValue(fields, 'Approved')).replace(/^Yes\s*[—-]\s*/i, '').trim();
+      const route = fieldValue(fields, 'Approval route');
+      const approver = [fieldValue(fields, 'Approver name'), fieldValue(fields, 'Approver job title')].filter(Boolean).join(' · ');
+      const metadata = [approved ? `Approved ${approved}` : '', route, approver].filter(Boolean);
+      const statusLabel = String(view.current_submission.status?.label || fieldValue(fields, 'Status')).replace(/^Candidate submission\s+/i, '');
+      sections.push(`<div class="candidate-office-submission-summary"><strong>Candidate submission</strong><div class="candidate-office-submission-summary__details"><span class="${statusClass(view.current_submission.status?.tone)}">${escape(statusLabel)}</span>${metadata.map(value => `<span>${escape(value)}</span>`).join('')}</div></div>`);
     }
     if (view.paper) {
       sections.push(`<div class="candidate-office-overview-group"><strong>QR Pack</strong>${renderFields(view.paper.fields)}</div>`);
@@ -98,6 +117,7 @@
     if (variant === 'stage') return renderCandidateStageFragment(view);
     if (variant === 'overview') return renderCandidateOverviewFragment(view);
     if (variant === 'expenses') return renderExpenseClaims(view, { surface, showCategoryActions: true });
+    if (String(variant).startsWith('expense-category:')) return renderExpenseCategoryRow(view, String(variant).slice('expense-category:'.length), { surface });
     if (variant === 'actions') return renderCandidateActionsFragment(view, { surface });
     if (variant === 'issues') return renderCandidateIssuesFragment(view);
     if (variant === 'evidence') return renderCandidateEvidenceFragment(view);
