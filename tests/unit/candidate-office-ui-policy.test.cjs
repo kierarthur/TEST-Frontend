@@ -45,6 +45,7 @@ test('each Office surface exposes only its complete approved Candidate action bl
     'RETRY_PAPER_PREPARATION',
     'RESEND_QR_PACK',
     'ISSUE_REPLACEMENT_PAPER_PACK',
+    'REJECT_EXPENSE_CATEGORY',
     'ROUTE:SWITCH_TO_MANUAL',
     'ROUTE:SWITCH_DAILY_TO_MANUAL',
     'ROUTE:CONVERT_QR_TO_MANUAL',
@@ -65,7 +66,8 @@ test('each Office surface exposes only its complete approved Candidate action bl
     'ROUTE:ALLOW_QR_AGAIN'
   ]);
   assert.deepEqual(Array.from(policy.APPROVED_BUTTONS_BY_SURFACE.BULK_AUTHORISE), [
-    'REJECT_CANDIDATE_SUBMISSION'
+    'REJECT_CANDIDATE_SUBMISSION',
+    'REJECT_EXPENSE_CATEGORY'
   ]);
   for (const surface of ['TIMESHEET_SUMMARY', 'INVOICE_GENERATOR', 'INVOICE_ISSUER']) {
     assert.deepEqual(Array.from(policy.APPROVED_BUTTONS_BY_SURFACE[surface]), []);
@@ -74,6 +76,9 @@ test('each Office surface exposes only its complete approved Candidate action bl
 
   assert.equal(policy.assertOfficeButtonApproved('BULK_PROCESS', 'SEND_MANAGER_REMINDER'), true);
   assert.equal(policy.assertOfficeButtonApproved('BULK_AUTHORISE', 'REJECT_CANDIDATE_SUBMISSION'), true);
+  assert.equal(policy.assertOfficeButtonApproved('SIMPLE_TIMESHEET', 'REJECT_EXPENSE_CATEGORY'), true);
+  assert.equal(policy.assertOfficeButtonApproved('BULK_AUTHORISE', 'REJECT_EXPENSE_CATEGORY'), true);
+  assert.equal(policy.isButtonApproved('BULK_PROCESS', 'REJECT_EXPENSE_CATEGORY'), false);
   assert.equal(policy.isButtonApproved('BULK_PROCESS', 'ISSUE_REPLACEMENT_PAPER_PACK'), false);
   assert.equal(policy.isButtonApproved('BULK_PROCESS', 'RESEND_QR_PACK'), false);
   assert.equal(policy.isButtonApproved('BULK_AUTHORISE', 'ISSUE_REPLACEMENT_PAPER_PACK'), false);
@@ -322,7 +327,7 @@ test('Office presentation uses QR wording and hides ineligible buttons', () => {
   assert.doesNotMatch(html, /<button/i);
 });
 
-test('QR Pack failures use Office wording rather than raw backend PAPER reason codes', () => {
+test('QR Pack failures show the exact friendly reason and server-enabled next action without raw backend codes', () => {
   const window = loadBrowserModules(
     'candidate-office-ui-policy-v1.js',
     'candidate-office-presenter-v1.js',
@@ -332,13 +337,36 @@ test('QR Pack failures use Office wording rather than raw backend PAPER reason c
     state: 'FAILED_RETRYABLE',
     reason_code: 'CANDIDATE_PAPER_PACK_RENDER_FAILED',
     retryable: true
-  }, []);
+  }, [{ ...action('RETRY_PAPER_PREPARATION', 'PAPER'), enabled: true }]);
   const html = window.CloudTMSCandidateOfficeSurface.renderCandidateOfficeCard({
     status: { code: 'AWAITING_PAPER_RETURN', label: 'QR Pack issued — awaiting signed return', tone: 'warning' },
     manager: null, paper: qr, rejections: [], diagnostics: [], actions: [], observed_at: '13/08/2026 09:00:00'
   });
-  assert.match(html, /CloudTMS can retry this failed QR Pack preparation/);
+  assert.match(html, /<dt>Reason<\/dt><dd>CloudTMS could not create the QR Pack document\.<\/dd>/);
+  assert.match(html, /<dt>Next step<\/dt><dd>Use “Retry QR Pack Preparation” below\.<\/dd>/);
+  assert.match(html, /data-candidate-office-action="RETRY_PAPER_PREPARATION"/);
   assert.doesNotMatch(html, /CANDIDATE_PAPER|PAPER PACK RENDER FAILED/);
+});
+
+test('a terminal QR delivery conflict gives Office a specific reason and replacement-pack next step', () => {
+  const window = loadBrowserModules(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const qr = window.CloudTMSCandidateOfficePresenter.presentCandidatePaperPack({
+    state: 'FAILED_TERMINAL',
+    reason_code: 'CANDIDATE_PAPER_OUTBOX_CONFLICT',
+    retryable: false
+  }, [{ ...action('ISSUE_REPLACEMENT_PAPER_PACK', 'PAPER'), enabled: true }]);
+  const html = window.CloudTMSCandidateOfficeSurface.renderCandidateOfficeCard({
+    status: { code: 'QR_PACK_NEEDS_ATTENTION', label: 'QR Pack Needs Attention', tone: 'danger' },
+    manager: null, paper: qr, rejections: [], diagnostics: [], actions: [], observed_at: '13/08/2026 09:00:00'
+  });
+  assert.match(html, /<dt>Reason<\/dt><dd>CloudTMS found conflicting QR Pack delivery records, so it stopped before sending another copy\.<\/dd>/);
+  assert.match(html, /<dt>Next step<\/dt><dd>Use “Create Replacement QR Pack and Notify Worker” below\.<\/dd>/);
+  assert.match(html, /data-candidate-office-action="ISSUE_REPLACEMENT_PAPER_PACK"/);
+  assert.doesNotMatch(html, /CANDIDATE_PAPER_OUTBOX_CONFLICT/);
 });
 
 test('surface policy hides approved actions unless the current server action is enabled', () => {

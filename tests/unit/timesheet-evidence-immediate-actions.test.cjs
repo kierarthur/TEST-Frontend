@@ -86,6 +86,13 @@ test('electronic signature evidence uses friendly labels without destructive ima
   assert.doesNotMatch(signatureBlock, /filter:brightness\(0\)/);
 });
 
+test('weekly evidence summaries omit an empty schedule instead of showing Shifts: 0', () => {
+  const guardedShiftSummaries = mainSource.match(/if \(Array\.isArray\(sched\) && sched\.length > 0\) summaryLines\.push\(`Shifts: \$\{sched\.length\}`\);/g) || [];
+  assert.equal(guardedShiftSummaries.length, 2, 'both electronic evidence renderers must require at least one shift');
+  assert.doesNotMatch(mainSource, /if \(sched\) summaryLines\.push\(`Shifts: \$\{sched\.length\}`\);/);
+  assert.doesNotMatch(mainSource, /if \(Array\.isArray\(sched\)\) summaryLines\.push\(`Shifts: \$\{sched\.length\}`\);/);
+});
+
 test('electronic signature evidence does not add a white signature box', () => {
   const candidateCss = fs.readFileSync(path.resolve(__dirname, '../../css/candidate-office-v1.css'), 'utf8');
   assert.match(candidateCss, /\.ctms-evidence-signature-sheet\s*\{[^}]*background:transparent/);

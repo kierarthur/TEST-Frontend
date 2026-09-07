@@ -112,6 +112,10 @@ test('submitted Candidate Timesheets keep Delete visible but route it to rejecti
   assert.doesNotMatch(handler, /showConfirmDialog/);
   assert.match(handler, /actionCode: 'REJECT_CANDIDATE_SUBMISSION'/);
   assert.match(handler, /Rejecting the Candidate Submission will also reject the linked pending expense claim at the same time/);
+  assert.match(handler, /This rejects the complete Candidate Submission on this Timesheet/);
+  assert.match(handler, /including all affected expenses on this Timesheet/);
+  assert.match(handler, /Start a new claim/);
+  assert.match(handler, /new claim begins blank/);
 });
 
 test('the ordinary rejection form warns when a linked expense will be rejected too', () => {
@@ -119,6 +123,10 @@ test('the ordinary rejection form warns when a linked expense will be rejected t
   const bridge = fs.readFileSync(path.resolve(__dirname, '../../js/candidate-office-bridge-v1.js'), 'utf8');
   assert.match(modal, /linked_pending_expense_claim_count/);
   assert.match(modal, /It will be rejected at the same time/);
+  assert.match(modal, /complete Candidate Submission for the selected Timesheet/);
+  assert.match(modal, /including all affected expenses on that Timesheet/);
+  assert.match(modal, /Start a new claim/);
+  assert.match(modal, /new claim begins blank/);
   assert.match(bridge, /async function runVisibleAction/);
   assert.match(bridge, /runVisibleAction/);
 });

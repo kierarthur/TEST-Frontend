@@ -96,6 +96,21 @@ td[data-col-key="candidate_submission"] .candidate-office-slot { display:block; 
 .candidate-office-history-row + .candidate-office-history-row { margin-top:8px; }
 .candidate-office-history-row strong, .candidate-office-history-row span { display:block; }
 .candidate-office-history-row span { color:var(--candidate-office-muted); font-size:11px; margin-top:3px; }
+.candidate-office-overview-expenses { grid-column:1/-1; padding:0; background:transparent; border:0; }
+.candidate-office-overview-expenses .candidate-office-section { padding:10px 11px; border:1px solid var(--candidate-office-line); border-radius:9px; }
+.candidate-office-expense-claim { padding:11px; border:1px solid var(--candidate-office-line); border-radius:10px; background:rgba(255,255,255,.025); }
+.candidate-office-expense-claim + .candidate-office-expense-claim { margin-top:10px; }
+.candidate-office-expense-claim__header, .candidate-office-expense-category__header { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.candidate-office-expense-claim__header { margin-bottom:9px; }
+.candidate-office-expense-claim__header strong { font-size:12px; }
+.candidate-office-expense-categories { display:grid; gap:8px; }
+.candidate-office-expense-category { min-width:0; padding:10px; border-radius:9px; background:rgba(255,255,255,.035); }
+.candidate-office-expense-category__header { margin-bottom:8px; }
+.candidate-office-expense-category__header strong { white-space:nowrap; font-size:12px; }
+.candidate-office-expense-category .candidate-office-facts { margin-bottom:0; }
+.candidate-office-expense-category__actions { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:10px; padding-top:10px; border-top:1px solid var(--candidate-office-line); }
+.candidate-office-expense-category__actions > span { min-width:0; color:var(--candidate-office-muted); font-size:11px; line-height:1.4; }
+.candidate-office-expense-category__actions .btn { flex:0 0 auto; max-width:100%; white-space:normal; }
 .candidate-office-inline-note { color:var(--candidate-office-muted); font-size:11px; margin:-3px 0 9px; overflow-wrap:anywhere; }
 .candidate-office-empty { color:var(--candidate-office-muted); font-size:12px; }
 .candidate-office-card__footer { color:var(--candidate-office-muted); font-size:10px; padding:9px 18px; text-align:right; }
@@ -198,6 +213,8 @@ td[data-col-key="candidate_submission"] .candidate-office-slot { display:block; 
   .candidate-office-evidence-row { align-items:flex-start; flex-direction:column; }
   .candidate-office-evidence-row__actions { width:100%; }
   .candidate-office-evidence-row__actions .btn { flex:1; }
+  .candidate-office-expense-category__actions { align-items:stretch; flex-direction:column; }
+  .candidate-office-expense-category__actions .btn { width:100%; }
   .candidate-reminder-workspace__intro { flex-direction:column; gap:10px; }
   .candidate-reminder-workspace__selection { align-self:stretch; text-align:center; }
   .candidate-reminder-workspace__toolbar { grid-template-columns:1fr; gap:6px; }

@@ -14,6 +14,8 @@ function contract() {
 
 const UUID_A = '00000000-0000-4000-8000-000000000001';
 const UUID_B = '00000000-0000-4000-8000-000000000002';
+const UUID_C = '00000000-0000-4000-8000-000000000003';
+const UUID_D = '00000000-0000-4000-8000-000000000004';
 
 function action(code = 'SEND_MANAGER_REMINDER', overrides = {}) {
   return {
@@ -56,6 +58,314 @@ function projection(rowKey, timesheetId, availableActions = []) {
     observed_at_utc: '2026-08-13T08:00:00Z'
   };
 }
+
+function expenseClaim(overrides = {}) {
+  return {
+    workflow_id: UUID_B,
+    generation: 2,
+    document_generation: 2,
+    state: 'AWAITING_MANAGER_APPROVAL',
+    status_code: 'MANAGER_APPROVAL_REQUIRED',
+    manager_approval_state: 'PENDING',
+    agency_authorisation_state: 'NOT_AUTHORISED',
+    attention_code: null,
+    target_timesheet_id: UUID_A,
+    submitted_at_utc: '2026-09-06T08:00:00Z',
+    updated_at_utc: '2026-09-06T08:00:00Z',
+    protected: false,
+    can_withdraw: true,
+    totals: {
+      expenses_pay_ex_vat: 37.5,
+      expenses_description: 'Travel and accommodation',
+      mileage_units: 0,
+      mileage_pay_ex_vat: 0,
+      travel_pay_ex_vat: 12.5,
+      accommodation_pay_ex_vat: 25,
+      other_pay_ex_vat: 0
+    },
+    supporting_evidence_count: 4,
+    supporting_evidence_categories: ['TRAVEL', 'ACCOMMODATION'],
+    categories: [
+      {
+        expense_component_id: UUID_C,
+        component_generation: 1,
+        expense_category: 'ACCOMMODATION',
+        amount: 25,
+        included_in_total: true,
+        mileage_units: 0,
+        supporting_evidence_count: 3,
+        state: 'SUBMITTED',
+        status_code: 'MANAGER_APPROVAL_REQUIRED',
+        manager_approval_state: 'PENDING',
+        agency_authorisation_state: 'NOT_AUTHORISED',
+        owning_timesheet_id: UUID_A,
+        refusal: null,
+        protected: false,
+        available_action: null
+      }
+    ],
+    whole_claim_action: null,
+    begin_update_action: null,
+    update_state: 'NONE',
+    ...overrides
+  };
+}
+
+function attachExpenseCategoryRejection(input, routeFamily = 'ELECTRONIC', emptyTimesheetConsequence = 'NONE') {
+  const category = input.expense_claims[0].categories[0];
+  input.current_identity.route_family = routeFamily;
+  category.office_rejection_action = action('REJECT_EXPENSE_CATEGORY', {
+    label: 'Reject expense',
+    group: 'EXPENSE',
+    prominent: false,
+    requires_reason: true,
+    invocation: {
+      version: 1,
+      kind: 'HTTP',
+      method: 'POST',
+      path: `/api/candidate-app/workflows/${UUID_B}/actions/reject-expense-category`,
+      fixed_body: {
+        generation: 2,
+        expense_component_id: UUID_C,
+        component_generation: 1,
+        confirmation_sha256: 'a'.repeat(64)
+      },
+      required_user_inputs: [{ name: 'reason_note', type: 'string', required: true, max_length: 1000 }],
+      idempotency: 'REQUIRED'
+    }
+  });
+  category.office_rejection_confirmation = {
+    contract_version: 'OFFICE_EXPENSE_CATEGORY_REJECTION_CONFIRMATION_V1',
+    confirmation_sha256: 'a'.repeat(64),
+    expense_category: 'ACCOMMODATION',
+    amount: 25,
+    mileage_units: 0,
+    supporting_evidence_count: 3,
+    owning_timesheet_id: UUID_A,
+    empty_timesheet_consequence: emptyTimesheetConsequence,
+    will_delete_timesheet: emptyTimesheetConsequence === 'PERMANENT_REMOVE',
+    remaining_hours: emptyTimesheetConsequence === 'NONE' ? 7.5 : 0,
+    remaining_expense_total: emptyTimesheetConsequence === 'NONE' ? 12.5 : 0,
+    route_family: routeFamily
+  };
+  return input;
+}
+
+test('expense component facts are normalized by a closed Office catalogue without exposing Candidate actions', () => {
+  const api = contract();
+  const input = projection('expense-row', UUID_A, []);
+  input.expense_claims = [expenseClaim()];
+
+  const normalized = api.normalizeOfficeCandidateProjection(input, { surface: 'SIMPLE_TIMESHEET' });
+  assert.equal(normalized.expense_claims.length, 1);
+  assert.equal(normalized.expense_claims[0].categories[0].expense_category, 'ACCOMMODATION');
+  assert.equal(normalized.expense_claims[0].categories[0].included_in_total, true);
+  assert.equal(normalized.expense_claims[0].categories[0].status_code, 'MANAGER_APPROVAL_REQUIRED');
+  assert.equal(normalized.expense_claims[0].whole_claim_action, null);
+  assert.equal(normalized.expense_claims[0].begin_update_action, null);
+
+  const mixed = structuredClone(input);
+  mixed.expense_claims[0].status_code = 'MIXED';
+  mixed.expense_claims[0].manager_approval_state = 'MIXED';
+  mixed.expense_claims[0].agency_authorisation_state = 'MIXED';
+  assert.equal(
+    api.normalizeOfficeCandidateProjection(mixed, { surface: 'SIMPLE_TIMESHEET' }).expense_claims[0].status_code,
+    'MIXED'
+  );
+
+  const attention = structuredClone(input);
+  attention.expense_claims[0].attention_code = 'MULTIPLE_PENDING_EXPENSE_CLAIMS';
+  assert.equal(
+    api.normalizeOfficeCandidateProjection(attention, { surface: 'SIMPLE_TIMESHEET' }).expense_claims[0].attention_code,
+    'MULTIPLE_PENDING_EXPENSE_CLAIMS'
+  );
+
+  const unknown = structuredClone(input);
+  unknown.expense_claims[0].categories[0].status_code = 'MAYBE_APPROVED';
+  assert.throws(
+    () => api.normalizeOfficeCandidateProjection(unknown, { surface: 'SIMPLE_TIMESHEET' }),
+    error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID'
+  );
+
+  const missingTotalMembership = structuredClone(input);
+  delete missingTotalMembership.expense_claims[0].categories[0].included_in_total;
+  assert.throws(
+    () => api.normalizeOfficeCandidateProjection(missingTotalMembership, { surface: 'SIMPLE_TIMESHEET' }),
+    error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID'
+  );
+
+  const leakedCandidateAction = structuredClone(input);
+  leakedCandidateAction.expense_claims[0].whole_claim_action = action('WITHDRAW_EXPENSE');
+  assert.throws(
+    () => api.normalizeOfficeCandidateProjection(leakedCandidateAction, { surface: 'SIMPLE_TIMESHEET' }),
+    error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID'
+  );
+});
+
+test('expense category rejection authority is accepted only for Candidate Electronic or QR records', () => {
+  const api = contract();
+  for (const routeFamily of ['ELECTRONIC', 'QR']) {
+    const input = attachExpenseCategoryRejection(
+      Object.assign(projection(`expense-${routeFamily}`, UUID_A, []), { expense_claims: [expenseClaim()] }),
+      routeFamily
+    );
+    const category = api.normalizeOfficeCandidateProjection(input, { surface: 'SIMPLE_TIMESHEET' }).expense_claims[0].categories[0];
+    assert.equal(category.rejection_action.code, 'REJECT_EXPENSE_CATEGORY');
+    assert.equal(category.rejection_action.label, 'Reject expense');
+  }
+
+  for (const routeFamily of ['MANUAL_NON_QR', 'IMPORT_AUTHORITATIVE']) {
+    const input = attachExpenseCategoryRejection(
+      Object.assign(projection(`expense-${routeFamily}`, UUID_A, []), { expense_claims: [expenseClaim()] }),
+      routeFamily
+    );
+    assert.throws(
+      () => api.normalizeOfficeCandidateProjection(input, { surface: 'SIMPLE_TIMESHEET' }),
+      error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID',
+      routeFamily
+    );
+  }
+
+  const contradictory = attachExpenseCategoryRejection(
+    Object.assign(projection('expense-contradictory', UUID_A, []), { expense_claims: [expenseClaim()] }),
+    'ELECTRONIC',
+    'REMOVE_FROM_CURRENT_KEEP_HISTORY'
+  );
+  contradictory.expense_claims[0].categories[0].office_rejection_confirmation.will_delete_timesheet = true;
+  assert.throws(
+    () => api.normalizeOfficeCandidateProjection(contradictory, { surface: 'SIMPLE_TIMESHEET' }),
+    error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID'
+  );
+});
+
+test('expense category rejection V2 result preserves authoritative deletion and refresh identities', () => {
+  const api = contract();
+  const input = attachExpenseCategoryRejection(
+    Object.assign(projection('expense-result', UUID_A, []), { expense_claims: [expenseClaim()] })
+  );
+  const normalizedProjection = api.normalizeOfficeCandidateProjection(input, { surface: 'SIMPLE_TIMESHEET' });
+  const category = normalizedProjection.expense_claims[0].categories[0];
+  const result = {
+    ok: true,
+    contract_version: 'OFFICE_EXPENSE_CATEGORY_REJECTION_RESULT_V2',
+    operation_id: UUID_D,
+    action_code: 'REJECT_EXPENSE_CATEGORY',
+    workflow_id: UUID_B,
+    expense_component_id: UUID_C,
+    component_generation: 2,
+    state: 'OFFICE_REJECTED',
+    refusal: { kind: 'AGENCY_REJECTION', reason: 'Receipt is not allowable.', at_utc: '2026-09-06T09:00:00Z' },
+    previous_owning_timesheet_id: UUID_A,
+    empty_timesheet_consequence: 'NONE',
+    owning_timesheet_deleted: false,
+    deleted_timesheet_ids: [],
+    retained_timesheet_ids: [UUID_A],
+    affected_timesheet_ids: [UUID_A],
+    removed_from_current_timesheet_ids: [],
+    refresh_timesheet_ids: [UUID_A],
+    refresh_hints: { summary: true, simple_timesheet: true, bulk_process: true, bulk_authorise: true, refetch: 'AFFECTED_ROWS' },
+    idempotent_replay: false
+  };
+
+  const normalized = api.normalizeOfficeExpenseCategoryRejectionResult(result, {
+    action: category.rejection_action,
+    expenseCategory: category
+  });
+  assert.equal(normalized.component_generation, 2);
+  assert.deepEqual(Array.from(normalized.retained_timesheet_ids), [UUID_A]);
+  assert.equal(normalized.owning_timesheet_deleted, false);
+
+  const permanentInput = attachExpenseCategoryRejection(
+    Object.assign(projection('expense-result-permanent', UUID_A, []), { expense_claims: [expenseClaim()] }),
+    'ELECTRONIC',
+    'PERMANENT_REMOVE'
+  );
+  const permanentCategory = api.normalizeOfficeCandidateProjection(permanentInput, { surface: 'SIMPLE_TIMESHEET' }).expense_claims[0].categories[0];
+  const deleted = structuredClone(result);
+  deleted.empty_timesheet_consequence = 'PERMANENT_REMOVE';
+  deleted.owning_timesheet_deleted = true;
+  deleted.deleted_timesheet_ids = [UUID_A];
+  deleted.retained_timesheet_ids = [];
+  deleted.removed_from_current_timesheet_ids = [UUID_A];
+  assert.equal(api.normalizeOfficeExpenseCategoryRejectionResult(deleted, {
+    action: permanentCategory.rejection_action,
+    expenseCategory: permanentCategory
+  }).owning_timesheet_deleted, true);
+
+  const retainedHistoryInput = attachExpenseCategoryRejection(
+    Object.assign(projection('expense-result-history', UUID_A, []), { expense_claims: [expenseClaim()] }),
+    'ELECTRONIC',
+    'REMOVE_FROM_CURRENT_KEEP_HISTORY'
+  );
+  const retainedHistoryCategory = api.normalizeOfficeCandidateProjection(retainedHistoryInput, { surface: 'SIMPLE_TIMESHEET' }).expense_claims[0].categories[0];
+  const retainedHistory = structuredClone(result);
+  retainedHistory.empty_timesheet_consequence = 'REMOVE_FROM_CURRENT_KEEP_HISTORY';
+  retainedHistory.removed_from_current_timesheet_ids = [UUID_A];
+  const normalizedRetainedHistory = api.normalizeOfficeExpenseCategoryRejectionResult(retainedHistory, {
+    action: retainedHistoryCategory.rejection_action,
+    expenseCategory: retainedHistoryCategory
+  });
+  assert.equal(normalizedRetainedHistory.owning_timesheet_deleted, false);
+  assert.deepEqual(Array.from(normalizedRetainedHistory.removed_from_current_timesheet_ids), [UUID_A]);
+
+  const contradictoryResult = structuredClone(retainedHistory);
+  contradictoryResult.owning_timesheet_deleted = true;
+  assert.throws(
+    () => api.normalizeOfficeExpenseCategoryRejectionResult(contradictoryResult, {
+      action: retainedHistoryCategory.rejection_action,
+      expenseCategory: retainedHistoryCategory
+    }),
+    error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID'
+  );
+
+  const incompleteRefresh = structuredClone(result);
+  incompleteRefresh.refresh_hints.bulk_authorise = false;
+  assert.throws(
+    () => api.normalizeOfficeExpenseCategoryRejectionResult(incompleteRefresh, { action: category.rejection_action, expenseCategory: category }),
+    error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID'
+  );
+
+  const expandedRefresh = structuredClone(result);
+  expandedRefresh.refresh_hints.extra = true;
+  assert.throws(
+    () => api.normalizeOfficeExpenseCategoryRejectionResult(expandedRefresh, { action: category.rejection_action, expenseCategory: category }),
+    error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID'
+  );
+
+  const expandedRefusal = structuredClone(result);
+  expandedRefusal.refusal.refused_at_utc = expandedRefusal.refusal.at_utc;
+  assert.throws(
+    () => api.normalizeOfficeExpenseCategoryRejectionResult(expandedRefusal, { action: category.rejection_action, expenseCategory: category }),
+    error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID'
+  );
+
+  const managerRefusal = structuredClone(result);
+  managerRefusal.refusal.kind = 'MANAGER_REFUSAL';
+  assert.throws(
+    () => api.normalizeOfficeExpenseCategoryRejectionResult(managerRefusal, { action: category.rejection_action, expenseCategory: category }),
+    error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID'
+  );
+
+  const wrongWorkflow = structuredClone(result);
+  wrongWorkflow.workflow_id = UUID_D;
+  assert.throws(
+    () => api.normalizeOfficeExpenseCategoryRejectionResult(wrongWorkflow, { action: category.rejection_action, expenseCategory: category }),
+    error => error.code === 'CANDIDATE_OFFICE_CONTRACT_INVALID'
+  );
+});
+
+test('stale expense-category confirmation fails with refresh guidance and no retry ambiguity', () => {
+  const normalized = contract().normalizeCandidateOfficeError({
+    status: 409,
+    code: 'CANDIDATE_EXPENSE_CATEGORY_CONTEXT_CHANGED',
+    message: 'internal detail must not replace the friendly copy'
+  });
+  assert.equal(normalized.code, 'CANDIDATE_EXPENSE_CATEGORY_CONTEXT_CHANGED');
+  assert.equal(normalized.status, 409);
+  assert.equal(normalized.stale, true);
+  assert.equal(normalized.retryable, false);
+  assert.equal(normalized.message, 'This expense category has changed since it was loaded. Refresh and review the current details.');
+});
 
 test('primary action must exactly match one enabled prominent available action', () => {
   const api = contract();

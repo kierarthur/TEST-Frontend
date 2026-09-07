@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   const contract = () => window.CloudTMSCandidateOfficeContract;
+  const REQUEST_TIMEOUT_MS = 45000;
   const officeAuthFetch = () => {
     if (typeof authFetch === 'function') return authFetch;
     if (typeof window.authFetch === 'function') return window.authFetch;
@@ -16,27 +17,51 @@
     const fetcher = officeAuthFetch();
     const url = officeApiUrl(path);
     if (!fetcher || !url) throw Object.assign(new Error('CloudTMS Office request service is unavailable.'), { code: 'CANDIDATE_OFFICE_TRANSPORT_UNAVAILABLE' });
-    const init = { method, headers: { ...headers }, signal };
+    const controller = new AbortController();
+    let timedOut = false;
+    const forwardAbort = () => controller.abort(signal?.reason);
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener?.('abort', forwardAbort, { once: true });
+    const init = { method, headers: { ...headers }, signal: controller.signal };
     if (body !== undefined) {
       init.headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(body);
     }
-    let response;
-    try { response = await fetcher(url, init); }
-    catch (error) { throw Object.assign(error, { code: error.code || 'CANDIDATE_OFFICE_NETWORK_ERROR', requestBody: body }); }
-    if (responseType === 'blob' && response.ok) return response.blob();
-    const rawText = await response.text().catch(() => '');
-    let payload = {};
-    try { payload = rawText ? JSON.parse(rawText) : {}; } catch { payload = { message: rawText }; }
-    if (!response.ok || payload?.ok === false) {
-      const error = new Error(payload?.message || `Candidate Office request failed (${response.status}).`);
-      error.status = response.status;
-      error.payload = payload;
-      error.code = payload?.error_code || payload?.code || 'CANDIDATE_OFFICE_REQUEST_FAILED';
-      error.requestBody = body;
-      throw error;
+    let timeoutId = null;
+    const timeoutError = Object.assign(
+      new Error('CloudTMS did not receive a response in time. The current record will be checked before you try again.'),
+      { code: 'CANDIDATE_OFFICE_REQUEST_TIMEOUT', requestBody: body }
+    );
+    try {
+      const timeout = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          reject(timeoutError);
+          controller.abort();
+        }, REQUEST_TIMEOUT_MS);
+      });
+      const bounded = operation => Promise.race([operation, timeout]);
+      const response = await bounded(fetcher(url, init));
+      if (responseType === 'blob' && response.ok) return await bounded(response.blob());
+      const rawText = await bounded(response.text().catch(() => ''));
+      let payload = {};
+      try { payload = rawText ? JSON.parse(rawText) : {}; } catch { payload = { message: rawText }; }
+      if (!response.ok || payload?.ok === false) {
+        const error = new Error(payload?.message || `Candidate Office request failed (${response.status}).`);
+        error.status = response.status;
+        error.payload = payload;
+        error.code = payload?.error_code || payload?.code || 'CANDIDATE_OFFICE_REQUEST_FAILED';
+        error.requestBody = body;
+        throw error;
+      }
+      return payload;
+    } catch (error) {
+      if (timedOut) throw timeoutError;
+      throw Object.assign(error, { code: error.code || 'CANDIDATE_OFFICE_NETWORK_ERROR', requestBody: body });
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      signal?.removeEventListener?.('abort', forwardAbort);
     }
-    return payload;
   }
   const buildIdentity = row => contract().normalizeOfficeCandidateIdentity({
     row_key: row.row_key || row.id || row.timesheet_id || row.contract_week_id,

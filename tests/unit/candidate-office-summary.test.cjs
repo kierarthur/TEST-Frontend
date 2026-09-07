@@ -522,3 +522,177 @@ test('Current Evidence marks approval and keeps older or withdrawn evidence sepa
   assert.match(evidence, /Withdrawn submission history/);
   assert.match(evidence, /Previous submissions are retained for audit only/);
 });
+
+test('Simple Timesheet shows only expense categories owned by that exact Timesheet row', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const hoursTimesheetId = '00000000-0000-4000-8000-000000000951';
+  const expenseTimesheetId = '00000000-0000-4000-8000-000000000952';
+  const otherExpenseTimesheetId = '00000000-0000-4000-8000-000000000956';
+  const claim = {
+    workflow_id: '00000000-0000-4000-8000-000000000953',
+    status_code: 'MIXED',
+    update_state: 'NONE',
+    totals: { expenses_pay_ex_vat: 47.5 },
+    categories: [
+      {
+        expense_component_id: '00000000-0000-4000-8000-000000000954',
+        expense_category: 'ACCOMMODATION',
+        amount: 25,
+        included_in_total: true,
+        mileage_units: 0,
+        supporting_evidence_count: 3,
+        status_code: 'MANAGER_APPROVAL_REQUIRED',
+        manager_approval_state: 'PENDING',
+        agency_authorisation_state: 'NOT_AUTHORISED',
+        owning_timesheet_id: expenseTimesheetId,
+        refusal: null
+      },
+      {
+        expense_component_id: '00000000-0000-4000-8000-000000000955',
+        expense_category: 'TRAVEL',
+        amount: 12.5,
+        included_in_total: true,
+        mileage_units: 0,
+        supporting_evidence_count: 1,
+        status_code: 'MANAGER_APPROVED',
+        manager_approval_state: 'APPROVED',
+        agency_authorisation_state: 'NOT_AUTHORISED',
+        owning_timesheet_id: expenseTimesheetId,
+        refusal: null
+      },
+      {
+        expense_component_id: '00000000-0000-4000-8000-000000000957',
+        expense_category: 'OTHER',
+        amount: 10,
+        included_in_total: true,
+        mileage_units: 0,
+        supporting_evidence_count: 1,
+        status_code: 'MANAGER_APPROVED',
+        manager_approval_state: 'APPROVED',
+        agency_authorisation_state: 'NOT_AUTHORISED',
+        owning_timesheet_id: otherExpenseTimesheetId,
+        refusal: null
+      }
+    ]
+  };
+  const hoursProjection = projection('MANAGER_APPROVED', 'Manager Approved', 'success', {
+    current_identity: { row_key: 'hours-row', timesheet_id: hoursTimesheetId, route_family: 'ELECTRONIC', record_role: 'HOURS_ONLY' },
+    workflow: { state: 'MANAGER_APPROVED', workflow_kind: 'CONTRACT_HOURS', route: 'EMAIL' },
+    expense_claims: [claim]
+  });
+  const hoursView = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(hoursProjection, { surface: 'SIMPLE_TIMESHEET' });
+  assert.equal(hoursView.expense_claims.length, 0);
+  assert.doesNotMatch(window.CloudTMSCandidateOfficeSurface.renderCandidateOverviewFragment(hoursView), /Expenses on this Timesheet|Accommodation|Travel/);
+
+  const expenseProjection = projection('AWAITING_MANAGER_APPROVAL', 'Awaiting Manager Approval', 'warning', {
+    current_identity: { row_key: 'expense-row', timesheet_id: expenseTimesheetId, route_family: 'ELECTRONIC', record_role: 'EXPENSE_ONLY' },
+    workflow: { state: 'AWAITING_MANAGER_APPROVAL', workflow_kind: 'CONTRACT_EXPENSE', route: 'EMAIL' },
+    expense_claims: [claim]
+  });
+  const expenseView = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(expenseProjection, { surface: 'SIMPLE_TIMESHEET' });
+  const html = window.CloudTMSCandidateOfficeSurface.renderCandidateOverviewFragment(expenseView);
+  assert.equal(expenseView.expense_claims.length, 1);
+  assert.match(html, /Expenses on this Timesheet/);
+  assert.match(html, /Accommodation · £25\.00/);
+  assert.match(html, /Travel · £12\.50/);
+  assert.match(html, /Expense total £37\.50/);
+  assert.doesNotMatch(html, /£47\.50|Other · £10\.00/);
+  assert.match(html, /Awaiting Manager Approval/);
+  assert.match(html, /Manager Approved/);
+  assert.doesNotMatch(html, /00000000-|expense_component_id|workflow_id|WITHDRAW_EXPENSE|CANCEL_EXPENSE/);
+
+  const summaryView = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeSummary(expenseProjection);
+  assert.equal(Object.prototype.hasOwnProperty.call(summaryView, 'expense_claims'), false);
+  assert.doesNotMatch(window.CloudTMSCandidateOfficeSurface.renderCandidateSummaryCell(summaryView), /Accommodation|Travel|£37\.50/);
+});
+
+test('expense total includes only live categories explicitly included by the backend', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  const timesheetId = '00000000-0000-4000-8000-000000000961';
+  const claims = window.CloudTMSCandidateOfficePresenter.presentOfficeExpenseClaims({
+    current_identity: { timesheet_id: timesheetId },
+    expense_claims: [{
+      status_code: 'MIXED', update_state: 'NONE', totals: { expenses_pay_ex_vat: 30 },
+      categories: [
+        {
+          expense_category: 'OTHER', amount: 10, included_in_total: true, mileage_units: 0,
+          supporting_evidence_count: 1, status_code: 'MANAGER_APPROVED', manager_approval_state: 'APPROVED',
+          agency_authorisation_state: 'NOT_AUTHORISED', owning_timesheet_id: timesheetId, refusal: null
+        },
+        {
+          expense_category: 'TRAVEL', amount: 20, included_in_total: false, mileage_units: 0,
+          supporting_evidence_count: 2, status_code: 'CANCELLED', manager_approval_state: 'NOT_REQUESTED',
+          agency_authorisation_state: 'NOT_AUTHORISED', owning_timesheet_id: timesheetId, refusal: null
+        }
+      ]
+    }]
+  });
+
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0].total, '£10.00');
+  const html = window.CloudTMSCandidateOfficeSurface.renderExpenseClaims({ expense_claims: claims });
+  assert.match(html, /Expense total £10\.00/);
+  assert.match(html, /Other · £10\.00/);
+  assert.match(html, /Travel · £20\.00/);
+  assert.match(html, /Cancelled/);
+  assert.doesNotMatch(html, /Expense total £30\.00/);
+});
+
+test('expense-category rejection appears only in the Expenses view with both Office permission and an eligible category action', () => {
+  const window = load(
+    'candidate-office-ui-policy-v1.js',
+    'candidate-office-presenter-v1.js',
+    'candidate-office-surface-v1.js'
+  );
+  window.CloudTMSCandidateOfficeBridge = {
+    capabilities: { permissions: { reject_submission: true } }
+  };
+  const category = {
+    expense_component_id: '00000000-0000-4000-8000-000000000979',
+    label: 'Accommodation',
+    amount: '£25.00',
+    supporting_evidence_count: 3,
+    status: { code: 'MANAGER_APPROVAL_REQUIRED', label: 'Awaiting Manager Approval', tone: 'warning' },
+    fields: [['Manager', 'Awaiting Manager Approval'], ['Agency', 'Not yet authorised'], ['Supporting evidence', '3 files']],
+    rejection_action: { code: 'REJECT_EXPENSE_CATEGORY', enabled: true }
+  };
+  const view = {
+    identity: { route_family: 'ELECTRONIC' },
+    expense_claims: [{ total: '£25.00', categories: [category] }]
+  };
+
+  const overview = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, {
+    surface: 'SIMPLE_TIMESHEET', variant: 'overview'
+  });
+  assert.match(overview, /Accommodation · £25\.00/);
+  assert.doesNotMatch(overview, /Reject Accommodation expense|data-candidate-office-expense-action/);
+
+  const expenses = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, {
+    surface: 'SIMPLE_TIMESHEET', variant: 'expenses'
+  });
+  assert.match(expenses, /Reject Accommodation expense/);
+  assert.match(expenses, /Rejecting applies to this complete category and all its supporting items/);
+  assert.match(expenses, /aria-label="Reject complete Accommodation expense"/);
+  assert.doesNotMatch(expenses, /00000000-0000-4000-8000-000000000979(?=>|<)/);
+
+  window.CloudTMSCandidateOfficeBridge.capabilities.permissions.reject_submission = false;
+  const denied = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment(view, {
+    surface: 'SIMPLE_TIMESHEET', variant: 'expenses'
+  });
+  assert.doesNotMatch(denied, /Reject Accommodation expense|data-candidate-office-expense-action/);
+
+  window.CloudTMSCandidateOfficeBridge.capabilities.permissions.reject_submission = true;
+  const manual = window.CloudTMSCandidateOfficeSurface.renderCandidateFragment({
+    identity: { route_family: 'MANUAL_NON_QR' },
+    expense_claims: [{ total: '£25.00', categories: [category] }]
+  }, { surface: 'SIMPLE_TIMESHEET', variant: 'expenses' });
+  assert.doesNotMatch(manual, /Reject Accommodation expense|data-candidate-office-expense-action/);
+});

@@ -56,6 +56,22 @@
     RETIRED: 'This QR Pack and its code are no longer valid.',
     STALE: 'This QR Pack no longer matches the current timesheet.'
   });
+  const QR_ATTENTION_REASON_BY_CODE = Object.freeze({
+    CANDIDATE_PAPER_PACK_RENDER_FAILED: 'CloudTMS could not create the QR Pack document.',
+    CANDIDATE_PAPER_OUTBOX_CONFLICT: 'CloudTMS found conflicting QR Pack delivery records, so it stopped before sending another copy.'
+  });
+  const QR_ATTENTION_REASON_BY_STATE = Object.freeze({
+    FAILED_RETRYABLE: 'CloudTMS could not prepare this QR Pack.',
+    FAILED_TERMINAL: 'CloudTMS cannot safely continue this QR Pack automatically.',
+    RETIRED: 'This QR Pack was retired and its code is no longer valid.',
+    STALE: 'This QR Pack no longer matches the current Timesheet.'
+  });
+  const QR_NEXT_ACTION_BY_STATE = Object.freeze({
+    FAILED_RETRYABLE: 'RETRY_PAPER_PREPARATION',
+    FAILED_TERMINAL: 'ISSUE_REPLACEMENT_PAPER_PACK',
+    RETIRED: 'ISSUE_REPLACEMENT_PAPER_PACK',
+    STALE: 'ISSUE_REPLACEMENT_PAPER_PACK'
+  });
   const OFFICE_ACTION_LABELS = Object.freeze({
     SEND_MANAGER_REMINDER: 'Send Manager Reminder',
     RENEW_MANAGER_REQUEST: 'Request Manager Approval Again',
@@ -67,6 +83,39 @@
     RETRY_PAPER_PREPARATION: 'Retry QR Pack Preparation',
     RESEND_QR_PACK: 'Resend QR Pack',
     ISSUE_REPLACEMENT_PAPER_PACK: 'Create Replacement QR Pack and Notify Worker'
+  });
+  const EXPENSE_CATEGORY_LABELS = Object.freeze({
+    MILEAGE: 'Mileage',
+    TRAVEL: 'Travel',
+    ACCOMMODATION: 'Accommodation',
+    OTHER: 'Other'
+  });
+  const EXPENSE_STATUS = Object.freeze({
+    DRAFT: ['Draft', 'neutral'],
+    SUBMITTED: ['Submitted', 'info'],
+    MANAGER_APPROVAL_REQUIRED: ['Awaiting Manager Approval', 'warning'],
+    MANAGER_APPROVED: ['Manager Approved', 'success'],
+    AGENCY_AUTHORISED: ['Agency Authorised', 'success'],
+    INVOICED: ['Invoiced', 'success'],
+    PAID: ['Paid', 'success'],
+    MANAGER_REFUSED: ['Manager Refused', 'danger'],
+    AGENCY_REJECTED: ['Rejected by Agency', 'danger'],
+    WITHDRAWN: ['Withdrawn', 'neutral'],
+    CANCELLED: ['Cancelled', 'neutral'],
+    SUPERSEDED: ['Superseded', 'neutral'],
+    MIXED: ['See individual expense statuses', 'info']
+  });
+  const EXPENSE_MANAGER_STATUS = Object.freeze({
+    NOT_REQUESTED: 'Not requested',
+    PENDING: 'Awaiting Manager Approval',
+    APPROVED: 'Manager Approved',
+    REFUSED: 'Manager Refused'
+  });
+  const EXPENSE_AGENCY_STATUS = Object.freeze({
+    NOT_AUTHORISED: 'Not yet authorised',
+    AUTHORISED: 'Agency Authorised',
+    INVOICED: 'Invoiced',
+    PAID: 'Paid'
   });
   const tone = value => ['success', 'danger', 'warning', 'info', 'neutral'].includes(String(value || '').toLowerCase()) ? String(value).toLowerCase() : 'neutral';
   const OFFICE_FRONTEND_FORBIDDEN_ACTIONS = new Set([
@@ -83,6 +132,7 @@
     const read = type => parts.find(part => part.type === type)?.value || '';
     return `${read('day')}/${read('month')}/${read('year')} ${read('hour')}:${read('minute')}:${read('second')}`;
   };
+  const formatMoney = value => `£${Number(value || 0).toFixed(2)}`;
   const sourceStatusView = projection => {
     const server = projection.candidate_status || {};
     const code = String(server.code || '').toUpperCase();
@@ -296,14 +346,34 @@
     if (!paper || String(paper.state).toUpperCase() === 'NOT_APPLICABLE') return null;
     const state = String(paper.state || '').toUpperCase();
     const display = PAPER[state] || ['QR Pack status unavailable', 'neutral'];
+    const paperActions = actions.filter(action => action.group === 'PAPER').map(actionView);
+    const attentionReason = QR_ATTENTION_REASON_BY_STATE[state]
+      ? (QR_ATTENTION_REASON_BY_CODE[String(paper.reason_code || '').toUpperCase()] || QR_ATTENTION_REASON_BY_STATE[state])
+      : null;
+    const expectedActionCode = QR_NEXT_ACTION_BY_STATE[state] || null;
+    const enabledNextAction = expectedActionCode
+      ? paperActions.find(action => action.enabled === true && String(action.code || '').toUpperCase() === expectedActionCode)
+      : null;
+    const expectedActionLabel = expectedActionCode ? OFFICE_ACTION_LABELS[expectedActionCode] : null;
+    const nextStep = attentionReason && expectedActionLabel
+      ? (enabledNextAction
+          ? `Use “${enabledNextAction.label}” below.`
+          : `Refresh this Timesheet to check for the “${expectedActionLabel}” action.`)
+      : null;
     return Object.freeze({
-      ...paper, state, label: display[0], tone: display[1], explanation: QR_STATE_EXPLANATIONS[state] || null,
+      ...paper,
+      state,
+      label: display[0],
+      tone: display[1],
+      explanation: QR_STATE_EXPLANATIONS[state] || null,
+      attention_reason: attentionReason,
+      next_step: nextStep,
       fields: Object.freeze([
         ['QR generation', paper.delivery_generation ?? '—'], ['Pages', paper.page_count ?? '—'],
         ['Issued', formatDateTime(paper.issued_at_utc)], ['Returned', formatDateTime(paper.returned_at_utc)],
         ['Attempts', paper.attempt_count ?? 0], ['Next retry', formatDateTime(paper.next_retry_at_utc)]
       ].map(Object.freeze)),
-      actions: Object.freeze(actions.filter(action => action.group === 'PAPER').map(actionView))
+      actions: Object.freeze(paperActions)
     });
   }
   function presentCandidateRejections(rejections = []) {
@@ -315,6 +385,55 @@
         ? actionView(item.recovery_action)
         : null
     })));
+  }
+  function presentOfficeExpenseClaims(projection) {
+    const currentTimesheetId = String(projection?.current_identity?.timesheet_id || '').trim();
+    if (!currentTimesheetId) return Object.freeze([]);
+    const claims = Array.isArray(projection?.expense_claims) ? projection.expense_claims : [];
+    return Object.freeze(claims.map((claim) => {
+      const categories = (Array.isArray(claim.categories) ? claim.categories : [])
+        .filter(category => String(category?.owning_timesheet_id || '').trim() === currentTimesheetId)
+        .map(category => {
+          const status = EXPENSE_STATUS[String(category.status_code || '').toUpperCase()] || ['Status unavailable', 'neutral'];
+          const evidenceCount = Number(category.supporting_evidence_count || 0);
+          const fields = [
+            ['Manager', EXPENSE_MANAGER_STATUS[String(category.manager_approval_state || '').toUpperCase()] || 'Status unavailable'],
+            ['Agency', EXPENSE_AGENCY_STATUS[String(category.agency_authorisation_state || '').toUpperCase()] || 'Status unavailable'],
+            ['Supporting evidence', `${evidenceCount} ${evidenceCount === 1 ? 'file' : 'files'}`]
+          ];
+          if (String(category.expense_category || '').toUpperCase() === 'MILEAGE') fields.splice(1, 0, ['Mileage', `${Number(category.mileage_units || 0)} miles`]);
+          if (category.refusal) {
+            fields.push(['Reason', category.refusal.reason]);
+            fields.push(['Decision date', formatDateTime(category.refusal.at_utc)]);
+          }
+          return Object.freeze({
+            expense_component_id: String(category.expense_component_id || ''),
+            component_generation: Number(category.component_generation || 0),
+            category: String(category.expense_category || '').toUpperCase(),
+            label: EXPENSE_CATEGORY_LABELS[String(category.expense_category || '').toUpperCase()] || 'Expense',
+            amount: formatMoney(category.amount),
+            supporting_evidence_count: evidenceCount,
+            status: Object.freeze({ code: String(category.status_code || '').toUpperCase(), label: status[0], tone: status[1] }),
+            fields: Object.freeze(fields.map(Object.freeze)),
+            rejection_action: category.rejection_action ? actionView(category.rejection_action) : null,
+            rejection_confirmation: category.rejection_confirmation ? Object.freeze({ ...category.rejection_confirmation }) : null
+          });
+        });
+      if (!categories.length) return null;
+      const claimStatus = EXPENSE_STATUS[String(claim.status_code || '').toUpperCase()] || ['Status unavailable', 'neutral'];
+      const ownedTotal = (Array.isArray(claim.categories) ? claim.categories : [])
+        .filter(category => category?.included_in_total === true && String(category?.owning_timesheet_id || '').trim() === currentTimesheetId)
+        .reduce((sum, category) => sum + Number(category?.amount || 0), 0);
+      return Object.freeze({
+        workflow_id: String(claim.workflow_id || ''),
+        generation: Number(claim.generation || 0),
+        status: Object.freeze({ code: String(claim.status_code || '').toUpperCase(), label: claimStatus[0], tone: claimStatus[1] }),
+        total: formatMoney(ownedTotal),
+        updating: String(claim.update_state || '').toUpperCase() === 'UPDATING',
+        needs_attention: String(claim.attention_code || '').toUpperCase() === 'MULTIPLE_PENDING_EXPENSE_CLAIMS',
+        categories: Object.freeze(categories)
+      });
+    }).filter(Boolean));
   }
   function presentCandidateOfficeDetail(projection, { surface = 'SIMPLE_TIMESHEET' } = {}) {
     const sourceStatus = sourceStatusView(projection);
@@ -356,6 +475,9 @@
       current_submission: presentCurrentSubmission(projection, activeDisplayStatus),
       manager: presentCandidateManagerApproval(projection.manager_approval, actions),
       retained_manager: retainedManager,
+      expense_claims: ['SIMPLE_TIMESHEET', 'BULK_AUTHORISE'].includes(String(surface || '').toUpperCase())
+        ? presentOfficeExpenseClaims(projection)
+        : Object.freeze([]),
       paper: presentCandidatePaperPack(projection.paper_pack, actions),
       rejections: presentCandidateRejections(projection.rejections),
       diagnostics: Object.freeze(projection.diagnostics.map(item => Object.freeze({ ...item, label: item.code === 'EXPENSE_EMAIL_MISSING' ? 'Expense Email missing' : item.message, tone: item.severity === 'INFO' ? 'info' : item.severity === 'ERROR' ? 'danger' : 'warning' }))),
@@ -374,5 +496,5 @@
     const statuses = Object.freeze(detail.status ? [detail.status] : []);
     return Object.freeze({ identity: detail.identity, status: detail.status, statuses, source_status_code: detail.source_status_code, manager: detail.manager, retained_manager: detail.retained_manager, primary_action: detail.primary_action, diagnostics: detail.diagnostics, projection });
   }
-  Object.assign(window, { CloudTMSCandidateOfficePresenter: Object.freeze({ STATUS, APPROVED_CANDIDATE_SUBMISSION_STATUS, PAPER, OFFICE_FRONTEND_FORBIDDEN_ACTIONS, formatDateTime, managerStatusLabel, candidateSubmissionApplies, presentApprovedCandidateSubmissionStatus, presentCandidateOfficeSummary, presentCandidateOfficeDetail, presentCandidateManagerApproval, presentRetainedManagerApproval, presentCandidatePaperPack, presentCandidateRejections }) });
+  Object.assign(window, { CloudTMSCandidateOfficePresenter: Object.freeze({ STATUS, APPROVED_CANDIDATE_SUBMISSION_STATUS, PAPER, OFFICE_FRONTEND_FORBIDDEN_ACTIONS, formatDateTime, managerStatusLabel, candidateSubmissionApplies, presentApprovedCandidateSubmissionStatus, presentCandidateOfficeSummary, presentCandidateOfficeDetail, presentCandidateManagerApproval, presentRetainedManagerApproval, presentCandidatePaperPack, presentCandidateRejections, presentOfficeExpenseClaims }) });
 })();

@@ -10,6 +10,11 @@
   let initialized = false;
   let authorityGeneration = 0;
   let requestSerial = 0;
+  const interactionTriggers = new Map();
+  const navigationLocks = new Set();
+  const terminalActionStates = new Set(['IDLE', 'SUCCEEDED', 'STALE', 'CONFLICT', 'FAILED', 'CANCELLED']);
+  let navigationCloseWasDisabled = null;
+  let historyRefreshPromise = null;
   const key = (surface, rowKey) => `${surface}:${rowKey}`;
   const requestKey = (surface, row) => [
     surface,
@@ -30,6 +35,94 @@
       .some(source => source && typeof source === 'object' && source.candidate_office_projection_not_applicable === true);
   }
   const toast = (message, tone = 'ok') => { if (typeof window.__toast === 'function') window.__toast(message, tone); else console[tone === 'fail' ? 'error' : 'info'](message); };
+  function syncNavigationLockChrome() {
+    const locked = navigationLocks.size > 0;
+    document.documentElement.toggleAttribute('data-candidate-office-navigation-locked', locked);
+    const close = document.getElementById('btnCloseModal');
+    if (locked) {
+      if (close && navigationCloseWasDisabled == null) navigationCloseWasDisabled = close.disabled === true;
+      if (close) {
+        close.disabled = true;
+        close.setAttribute('aria-disabled', 'true');
+        close.setAttribute('title', 'CloudTMS is finishing this action.');
+      }
+      return;
+    }
+    if (close && navigationCloseWasDisabled != null) {
+      close.disabled = navigationCloseWasDisabled;
+      if (!navigationCloseWasDisabled) close.removeAttribute('aria-disabled');
+      close.removeAttribute('title');
+    }
+    navigationCloseWasDisabled = null;
+    try { window.__getModalFrame?.()?._updateButtons?.(); } catch {}
+  }
+  function onActionStateChange(operationKey, state, context) {
+    const busy = !terminalActionStates.has(String(state || '').toUpperCase());
+    const rowKey = context?.identity?.row_key || context?.projection?.current_identity?.row_key || '';
+    const surface = context?.surface || '';
+    const selector = rowKey
+      ? `[data-candidate-office-slot="1"][data-row-key="${CSS.escape(String(rowKey))}"]${surface ? `[data-candidate-office-surface="${CSS.escape(String(surface))}"]` : ''}`
+      : '';
+    if (selector) {
+      document.querySelectorAll(selector).forEach(slot => {
+        slot.setAttribute('aria-busy', String(busy));
+        slot.querySelectorAll('[data-candidate-office-action], [data-candidate-office-expense-action]').forEach(button => {
+          button.disabled = busy || button.dataset.candidateOfficeServerEnabled !== '1';
+          button.setAttribute('aria-disabled', String(button.disabled));
+        });
+      });
+    }
+    const trigger = context?.trigger instanceof HTMLElement ? context.trigger : null;
+    if (busy && trigger) {
+      if (!interactionTriggers.has(operationKey)) interactionTriggers.set(operationKey, { trigger, wasDisabled: trigger.disabled === true });
+      trigger.disabled = true;
+      trigger.setAttribute('aria-disabled', 'true');
+    } else if (!busy) {
+      const saved = interactionTriggers.get(operationKey);
+      if (saved?.trigger?.isConnected) {
+        saved.trigger.disabled = saved.wasDisabled;
+        if (!saved.wasDisabled) saved.trigger.removeAttribute('aria-disabled');
+      }
+      interactionTriggers.delete(operationKey);
+    }
+    if (String(state || '').toUpperCase() === 'APPLYING_RESULT') navigationLocks.add(operationKey);
+    else if (!busy) navigationLocks.delete(operationKey);
+    syncNavigationLockChrome();
+  }
+  function clearProjectionCachesForNavigation() {
+    authorityGeneration += 1;
+    cache.clear();
+    pending.clear();
+    latestRequests.clear();
+    batchQueues.clear();
+    for (const timer of batchTimers.values()) clearTimeout(timer);
+    batchTimers.clear();
+    document.querySelectorAll('[data-candidate-office-slot="1"]').forEach(slot => {
+      slot.dataset.candidateOfficeHydrated = '0';
+      slot.replaceChildren();
+    });
+  }
+  async function refreshAfterHistoryNavigation() {
+    if (!initialized || !capabilities) return false;
+    if (historyRefreshPromise) return historyRefreshPromise;
+    historyRefreshPromise = (async () => {
+      clearProjectionCachesForNavigation();
+      try { window.discardAllModalsAndState?.(); } catch {}
+      try { if (typeof window.renderAll === 'function') await window.renderAll(); } catch (error) { console.warn('[CANDIDATE-OFFICE] history refresh failed', error); }
+      hydrateSlots();
+      return true;
+    })().finally(() => { historyRefreshPromise = null; });
+    return historyRefreshPromise;
+  }
+  function blockNavigationWhileApplying(event) {
+    if (!navigationLocks.size) return;
+    const close = event.type === 'click' ? event.target?.closest?.('#btnCloseModal') : null;
+    const escape = event.type === 'keydown' && event.key === 'Escape';
+    if (!close && !escape) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    toast('CloudTMS is finishing this action. The current record will refresh when the result is known.', 'fail');
+  }
   function clampExpandedCandidateModal(slot) {
     const modal = slot?.closest?.('#modal');
     if (!modal || modal.getClientRects().length === 0) return;
@@ -383,6 +476,14 @@
     const projection = findProjection(surface, identity.row_key, identity);
     return { surface, identity, projection, trigger, dirtyGuard: surface === 'BULK_PROCESS' || surface === 'BULK_AUTHORISE' };
   }
+  function expenseCategoryView(projection, surface, expenseComponentId) {
+    const view = window.CloudTMSCandidateOfficePresenter.presentCandidateOfficeDetail(projection, { surface });
+    for (const claim of view.expense_claims || []) {
+      const category = (claim.categories || []).find(item => item.expense_component_id === expenseComponentId);
+      if (category) return { claim, category };
+    }
+    return null;
+  }
   async function onClick(event) {
     const refresh = event.target.closest('[data-candidate-office-refresh]');
     if (refresh) { const slot = refresh.closest('[data-candidate-office-slot]'); if (slot) await loadSlot(slot, { force: true }); return; }
@@ -451,6 +552,28 @@
       } finally {
         evidenceButton.disabled = false;
       }
+      return;
+    }
+    const expenseButton = event.target.closest('[data-candidate-office-expense-action]');
+    if (expenseButton && !expenseButton.disabled) {
+      const slot = expenseButton.closest('[data-candidate-office-slot]');
+      if (!slot) return;
+      event.preventDefault(); event.stopPropagation();
+      const context = contextForSlot(slot, expenseButton);
+      const expenseComponentId = String(expenseButton.dataset.expenseComponentId || '').trim();
+      const found = context.projection ? expenseCategoryView(context.projection, context.surface, expenseComponentId) : null;
+      const action = found?.category?.rejection_action;
+      if (!action?.enabled || action.code !== expenseButton.dataset.candidateOfficeExpenseAction) {
+        toast('Refresh the current expense details before continuing.', 'fail');
+        return;
+      }
+      await controller.runTypedAction({
+        ...context,
+        action,
+        expenseComponentId,
+        expenseCategory: found.category,
+        expenseConfirmation: found.category.rejection_confirmation
+      });
       return;
     }
     const button = event.target.closest('[data-candidate-office-action]');
@@ -536,15 +659,154 @@
     const slots = Array.from(document.querySelectorAll(`[data-candidate-office-slot="1"][data-row-key="${CSS.escape(rowKey || '')}"]`));
     await Promise.all(slots.map(slot => loadSlot(slot, { force: true })));
   }
+  function resolveBulkAuthoriseState() {
+    const direct = window.modalCtx?.bulkAuthoriseState;
+    if (direct && typeof direct === 'object') return direct;
+    const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      const state = stack[index]?._ctxRef?.bulkAuthoriseState;
+      if (state && typeof state === 'object') return state;
+    }
+    return null;
+  }
+  function resolveSimpleTimesheetContext() {
+    if (typeof window.modalCtx?.refreshTimesheetAfterFinanceChange === 'function') return window.modalCtx;
+    const stack = Array.isArray(window.__modalStack) ? window.__modalStack : [];
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      const context = stack[index]?._ctxRef;
+      if (typeof context?.refreshTimesheetAfterFinanceChange === 'function') return context;
+    }
+    return null;
+  }
+  const identityValue = (value, ...keys) => {
+    const source = value && typeof value === 'object' ? value : {};
+    for (const key of keys) {
+      const selected = String(source[key] || '').trim();
+      if (selected) return selected;
+    }
+    return '';
+  };
+  function removedExpenseTimesheet(result, context, affectedRefresh = null) {
+    if (result?.owning_timesheet_deleted === true) return true;
+    const wantedTimesheetId = identityValue(context?.identity || context?.projection?.current_identity, 'timesheet_id', 'current_timesheet_id');
+    const wantedRowKey = identityValue(context?.identity || context?.projection?.current_identity, 'row_key');
+    if (wantedTimesheetId && Array.isArray(result?.deleted_timesheet_ids) && result.deleted_timesheet_ids.some(id => String(id || '').trim() === wantedTimesheetId)) return true;
+    if (wantedTimesheetId && Array.isArray(result?.removed_from_current_timesheet_ids)
+        && result.removed_from_current_timesheet_ids.some(id => String(id || '').trim() === wantedTimesheetId)) return true;
+    const removed = [
+      ...(Array.isArray(result?.removed) ? result.removed : []),
+      ...(Array.isArray(affectedRefresh?.removed) ? affectedRefresh.removed : [])
+    ];
+    return removed.some((entry) => {
+      if (typeof entry === 'string') return entry === wantedTimesheetId || entry === wantedRowKey;
+      const removedTimesheetId = identityValue(entry, 'timesheet_id', 'current_timesheet_id', 'previous_timesheet_id');
+      const removedRowKey = identityValue(entry, 'row_key', 'previous_row_key');
+      return !!((wantedTimesheetId && removedTimesheetId === wantedTimesheetId) || (wantedRowKey && removedRowKey === wantedRowKey));
+    });
+  }
   async function refreshAffectedRows(result, context) {
     const sourceContext = context.surface === 'BULK_PROCESS' ? 'bulk_process' : context.surface === 'BULK_AUTHORISE' ? 'bulk_authorise' : 'timesheet_modal';
+    const state = context.surface === 'BULK_AUTHORISE' ? resolveBulkAuthoriseState() : null;
+    let refreshResult = null;
     if (typeof window.refreshTimesheetLifecycleAffectedRows === 'function') {
-      await window.refreshTimesheetLifecycleAffectedRows(result, { context: sourceContext, max_items: 100, apply: true, network: 'auto' });
+      try {
+        const returnedRows = Array.isArray(result?.affected_rows) ? result.affected_rows : [];
+        const refreshTimesheetIds = [...new Set([
+          ...(Array.isArray(result?.refresh_timesheet_ids) ? result.refresh_timesheet_ids : []),
+          ...(Array.isArray(result?.affected_timesheet_ids) ? result.affected_timesheet_ids : []),
+          ...(Array.isArray(result?.deleted_timesheet_ids) ? result.deleted_timesheet_ids : []),
+          ...(Array.isArray(result?.removed_from_current_timesheet_ids) ? result.removed_from_current_timesheet_ids : [])
+        ].map(id => String(id || '').trim()).filter(Boolean))];
+        const refreshInput = returnedRows.length
+          ? result
+          : { ...result, affected_rows: refreshTimesheetIds.map(timesheet_id => ({ timesheet_id, context: sourceContext })) };
+        refreshResult = await window.refreshTimesheetLifecycleAffectedRows(refreshInput, { context: sourceContext, state, max_items: 100, apply: true, network: 'auto' });
+      } catch (error) {
+        console.warn('[CANDIDATE-OFFICE] affected-row refresh failed after expense rejection', error);
+      }
     } else {
       const id = result?.current_timesheet_id || result?.timesheet_id || context.identity?.timesheet_id;
-      if (id && typeof window.refreshTimesheetsSummaryAfterRotation === 'function') await window.refreshTimesheetsSummaryAfterRotation(id, { allowRenderAll: true });
+      if (id && typeof window.refreshTimesheetsSummaryAfterRotation === 'function') {
+        try { await window.refreshTimesheetsSummaryAfterRotation(id, { allowRenderAll: true }); } catch {}
+      }
     }
-    await refetch(context);
+    try { await refetch(context); } catch (error) {
+      console.warn('[CANDIDATE-OFFICE] projection refresh failed after expense rejection', error);
+    }
+    return refreshResult;
+  }
+  async function reconcileExpenseCategory(result, context) {
+    invalidate(context);
+    const affectedRefresh = await refreshAffectedRows(result, context);
+    const rowVanished = removedExpenseTimesheet(result, context, affectedRefresh);
+    if (context.surface === 'SIMPLE_TIMESHEET') {
+      if (rowVanished) {
+        try { window.discardAllModalsAndState?.(); } catch {}
+        try { if (typeof window.renderAll === 'function') await window.renderAll(); } catch {}
+        return;
+      }
+      const simpleContext = resolveSimpleTimesheetContext();
+      if (simpleContext) {
+        try {
+          await simpleContext.refreshTimesheetAfterFinanceChange({
+            silent: true,
+            structural: true,
+            skipSummaryRefresh: true,
+            refreshMode: 'candidate-expense-category-rejection'
+          });
+          return;
+        } catch (error) {
+          console.warn('[CANDIDATE-OFFICE] Simple Timesheet refresh failed after expense rejection', error);
+        }
+      }
+      const frame = window.__getModalFrame?.();
+      if (frame && typeof frame.setTab === 'function') {
+        try { frame._suppressDirty = true; } catch {}
+        try { await frame.setTab(frame.currentTabKey || 'expenses'); } finally {
+          try { frame._suppressDirty = false; } catch {}
+        }
+      }
+      return;
+    }
+    if (context.surface === 'BULK_AUTHORISE') {
+      const state = resolveBulkAuthoriseState();
+      const rowKey = context.identity?.row_key || context.projection?.current_identity?.row_key || '';
+      if (state && typeof window.refreshBulkAuthoriseDatasetPreservingState === 'function') {
+        try {
+          await window.refreshBulkAuthoriseDatasetPreservingState(state, {
+            preferredRowKey: rowKey,
+            affectedRowKeys: [rowKey, ...(Array.isArray(result?.affected_rows) ? result.affected_rows : [])],
+            actionSource: 'reject-expense-category',
+            activeRowMayBeMutated: true,
+            forceFreshDataset: true,
+            forceContextRefresh: true,
+            preserveActiveContext: false,
+            suppressIntermediateLoadingRender: true,
+            deferFinalRerender: true,
+            result,
+            actionResult: result,
+            rowPatches: Array.isArray(result?.affected_rows) ? result.affected_rows : []
+          });
+        } catch (error) {
+          console.warn('[CANDIDATE-OFFICE] Bulk Authorise refresh failed after expense rejection', error);
+        }
+      }
+      const frame = window.__getModalFrame?.();
+      if (frame && typeof frame.__refreshCandidateOfficeExpenseCategory === 'function') {
+        await frame.__refreshCandidateOfficeExpenseCategory({ result, context, rowVanished });
+        return;
+      }
+      if (rowVanished && typeof window.closeCurrentModalFrameSafely === 'function') {
+        window.closeCurrentModalFrameSafely({ expectedKind: 'bulk-authorise-expenses' });
+        return;
+      }
+      if (frame && typeof frame.setTab === 'function') {
+        try { frame._suppressDirty = true; } catch {}
+        try { await frame.setTab(frame.currentTabKey || 'main'); } finally {
+          try { frame._suppressDirty = false; } catch {}
+        }
+      }
+    }
   }
   function dirtyGuard(context) {
     if (context.surface === 'BULK_AUTHORISE' && typeof window.hasBulkAuthoriseGenuineDirtyEdits === 'function') return !window.hasBulkAuthoriseGenuineDirtyEdits(window.modalCtx?.bulkAuthoriseState || {});
@@ -569,6 +831,13 @@
     updateSlots(surface, rowKey, projection);
     const sourceAction = context.action && typeof context.action === 'object' ? context.action : context.rejectionAction;
     if (!sourceAction?.code) return { projection };
+    if (sourceAction.code === 'REJECT_EXPENSE_CATEGORY') {
+      const found = expenseCategoryView(projection, surface, context.expenseComponentId || context.expenseCategory?.expense_component_id || '');
+      const action = found?.category?.rejection_action;
+      if (!action?.enabled) return false;
+      if (action.invocation.method !== sourceAction.invocation?.method || action.invocation.path !== sourceAction.invocation?.path || canonicalJson(action.invocation.fixed_body) !== canonicalJson(sourceAction.invocation?.fixed_body || {})) return false;
+      return { projection, action, expenseCategory: found.category, expenseConfirmation: found.category.rejection_confirmation };
+    }
     const candidates = [
       ...(projection.available_actions || []),
       ...(projection.rejections || []).map(item => item.recovery_action).filter(Boolean)
@@ -591,9 +860,11 @@
       return;
     }
     initialized = true;
-    controller = window.CloudTMSCandidateOfficeController.createCandidateOfficeActionController({ api: window.CloudTMSCandidateOfficeApi, modals: window.CloudTMSCandidateOfficeModals, runDirtyGuard: dirtyGuard, ensureFresh, invalidateProjection: invalidate, refetchProjection: refetch, refreshAffectedRows, applyRowPatch: async () => {}, showToast: toast, createIdempotencyKey: () => crypto.randomUUID() });
+    controller = window.CloudTMSCandidateOfficeController.createCandidateOfficeActionController({ api: window.CloudTMSCandidateOfficeApi, modals: window.CloudTMSCandidateOfficeModals, runDirtyGuard: dirtyGuard, ensureFresh, invalidateProjection: invalidate, refetchProjection: refetch, refreshAffectedRows, reconcileExpenseCategory, applyRowPatch: async () => {}, showToast: toast, onStateChange: onActionStateChange, createIdempotencyKey: () => crypto.randomUUID() });
     document.addEventListener('click', onClick, true);
     document.addEventListener('click', onLegacyRouteClick, true);
+    document.addEventListener('click', blockNavigationWhileApplying, true);
+    window.addEventListener?.('keydown', blockNavigationWhileApplying, true);
     new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(node => { if (node.nodeType === 1) hydrateSlots(node); }))).observe(document.body, { childList: true, subtree: true });
     hydrateSlots();
     window.dispatchEvent(new CustomEvent('cloudtms:candidate-office-ready', { detail: { contract_version: capabilities.contract_version } }));
@@ -607,11 +878,21 @@
     batchQueues.clear();
     for (const timer of batchTimers.values()) clearTimeout(timer);
     batchTimers.clear();
+    for (const saved of interactionTriggers.values()) {
+      if (!saved?.trigger?.isConnected) continue;
+      saved.trigger.disabled = saved.wasDisabled;
+      if (!saved.wasDisabled) saved.trigger.removeAttribute('aria-disabled');
+    }
+    interactionTriggers.clear();
+    navigationLocks.clear();
+    syncNavigationLockChrome();
     document.querySelectorAll('[data-candidate-office-slot="1"]').forEach(slot => {
       slot.dataset.candidateOfficeHydrated = '0';
       slot.replaceChildren();
     });
     document.documentElement.removeAttribute('data-candidate-office-contract');
   }
-  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, embeddedSummaryResult, candidateProjectionNotApplicable, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, runVisibleAction, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
+  window.addEventListener?.('pageshow', event => { if (event.persisted === true) void refreshAfterHistoryNavigation(); });
+  window.addEventListener?.('popstate', () => { void refreshAfterHistoryNavigation(); });
+  Object.assign(window, { CloudTMSCandidateOfficeBridge: Object.freeze({ initialize, deactivate, hydrateSlots, hydrateBatch, slotHtml, embeddedSummaryResult, candidateProjectionNotApplicable, mountSummaryBadge, sortSummaryRowsByCandidateStatus, createSummaryReminderButton, findProjection, loadSlot, invalidate, refetch, runVisibleAction, refreshAfterHistoryNavigation, get capabilities() { return capabilities; }, get controller() { return controller; } }) });
 })();

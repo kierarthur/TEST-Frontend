@@ -45,20 +45,22 @@ function realTimesheet(submissionMode, extra = {}) {
   });
 }
 
-test('planned Electronic and QR expense values are Office read-only while evidence remains manageable', () => {
+test('planned Electronic and QR values and evidence remain read-only until control is returned to Office', () => {
   for (const mode of ['ELECTRONIC', 'QR']) {
     const policy = plannedWeek(mode);
     assert.equal(policy.canOpenExpenses, true, `${mode} Expenses tab remains available`);
     assert.equal(policy.canEditExpenses, false, `${mode} expense values are read-only`);
     assert.equal(policy.expenseStorageTarget, 'CONTRACT_WEEK_DRAFT');
-    assert.equal(policy.canManageExpenseEvidence, true, `${mode} expense evidence remains independently manageable`);
-    assert.equal(policy.expenseEvidenceDisabledReason, null);
-    assert.match(policy.expensesDisabledReason, /managed through MyTMS/i);
+    assert.equal(policy.canManageExpenseEvidence, false, `${mode} expense evidence remains Candidate-controlled`);
+    assert.equal(policy.canAttachTimesheetEvidence, false, `${mode} Timesheet evidence remains Candidate-controlled`);
+    assert.match(policy.expenseEvidenceDisabledReason, /return the Timesheet to Office control/i);
+    assert.match(policy.timesheetEvidenceDisabledReason, /return the Timesheet to Office control/i);
+    assert.match(policy.expensesDisabledReason, /controlled through MyTMS/i);
     assert.ok(policy.reasonCodes.includes('EXPENSES_QR_OR_ELECTRONIC'));
   }
 });
 
-test('real Electronic and QR expense values are Office read-only while evidence remains manageable', () => {
+test('real Electronic and QR values and evidence remain read-only until rejection and return to Office control', () => {
   const electronic = realTimesheet('ELECTRONIC');
   const qr = realTimesheet('QR', { qr_status: 'USED' });
 
@@ -66,8 +68,10 @@ test('real Electronic and QR expense values are Office read-only while evidence 
     assert.equal(policy.canOpenExpenses, true);
     assert.equal(policy.canEditExpenses, false);
     assert.equal(policy.expenseStorageTarget, 'TSFIN');
-    assert.equal(policy.canManageExpenseEvidence, true);
+    assert.equal(policy.canManageExpenseEvidence, false);
+    assert.equal(policy.canAttachTimesheetEvidence, false);
     assert.equal(policy.expenseEvidenceStorageTarget, 'TIMESHEET_EVIDENCE');
+    assert.match(policy.expenseEvidenceDisabledReason, /return the Timesheet to Office control/i);
   }
 });
 
@@ -79,8 +83,26 @@ test('Manual expense values and eligible expense evidence remain editable', () =
     assert.equal(policy.isManualRoute, true);
     assert.equal(policy.canEditExpenses, true);
     assert.equal(policy.canManageExpenseEvidence, true);
+    assert.equal(policy.canAttachTimesheetEvidence, true);
     assert.equal(policy.expensesDisabledReason, null);
   }
+});
+
+test('an explicit return from Electronic to Manual restores draft editing and the server can offer Electronic again', () => {
+  const returnedToOffice = realTimesheet('MANUAL', {
+    electronic_converted_to_manual: true,
+    electronic_converted_to_manual_at: '2026-09-06T10:00:00Z'
+  });
+
+  assert.equal(returnedToOffice.isManualRoute, true);
+  assert.equal(returnedToOffice.isElectronicRoute, false);
+  assert.equal(returnedToOffice.canEditExpenses, true);
+  assert.equal(returnedToOffice.canManageExpenseEvidence, true);
+  assert.equal(returnedToOffice.canAttachTimesheetEvidence, true);
+
+  const bridgeSource = fs.readFileSync(path.resolve(__dirname, '../../js/candidate-office-bridge-v1.js'), 'utf8');
+  assert.match(bridgeSource, /legacyAction === 'allow-electronic-again'\) routeAction = 'ALLOW_ELECTRONIC_AGAIN'/);
+  assert.match(bridgeSource, /if \(!action\?\.enabled\) return false/);
 });
 
 test('lifecycle locks still make expense evidence read-only independently of route', () => {

@@ -18,10 +18,27 @@
       let settled = false;
       let busy = false;
       let pendingResult = null;
+      let closeInitiallyDisabled = false;
+      let closeStateCaptured = false;
       const modalBody = () => document.getElementById('modalBody');
       const root = () => document.getElementById(rootId);
       const onKeyDown = event => {
-        if (event.key !== 'Tab' || settled) return;
+        if (settled) return;
+        if (event.key === 'Escape') {
+          const current = root();
+          if (!current) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          if (busy) {
+            const status = current.querySelector('.candidate-office-dialog__status');
+            if (status) status.textContent = 'CloudTMS is finishing this action. This window will close when the current result is known.';
+            return;
+          }
+          pendingResult = { confirmed: false, value: 'cancel', via: 'escape' };
+          requestClose();
+          return;
+        }
+        if (event.key !== 'Tab') return;
         const current = root();
         const modal = document.getElementById('modal');
         if (!current || !modal || !modal.contains(document.activeElement)) return;
@@ -48,6 +65,21 @@
         if (!current) return;
         current.setAttribute('aria-busy', String(busy));
         current.querySelectorAll('button, input, select, textarea').forEach(el => { el.disabled = busy || el.dataset.initiallyDisabled === '1'; });
+        const close = document.getElementById('btnCloseModal');
+        if (close) {
+          if (busy) {
+            if (!closeStateCaptured) {
+              closeInitiallyDisabled = close.disabled === true;
+              closeStateCaptured = true;
+            }
+            close.disabled = true;
+            close.setAttribute('aria-disabled', 'true');
+          } else {
+            close.disabled = closeInitiallyDisabled;
+            if (!closeInitiallyDisabled) close.removeAttribute('aria-disabled');
+            closeStateCaptured = false;
+          }
+        }
         const status = current.querySelector('.candidate-office-dialog__status');
         if (status) status.textContent = message;
       };
@@ -69,6 +101,12 @@
         modalBody()?.removeEventListener('input', onBodyInput);
         modalBody()?.removeEventListener('change', onBodyInput);
         window.removeEventListener('keydown', onKeyDown, true);
+        const close = document.getElementById('btnCloseModal');
+        if (close && closeStateCaptured) {
+          close.disabled = closeInitiallyDisabled;
+          if (!closeInitiallyDisabled) close.removeAttribute('aria-disabled');
+          closeStateCaptured = false;
+        }
         if (trigger?.isConnected) requestAnimationFrame(() => trigger.focus({ preventScroll: true }));
       };
       const finish = result => {
@@ -113,6 +151,7 @@
             setError(actionError?.message || 'CloudTMS could not complete this action.');
             return;
           }
+          setBusy(false, '');
         }
         pendingResult = { confirmed: true, value, via: 'action', inputs: collected };
         requestClose();
@@ -120,13 +159,18 @@
       const renderTab = key => {
         if (key !== 'main') return '';
         const icon = options.tone === 'danger' ? '!' : options.tone === 'success' ? '✓' : 'i';
-        const buttons = (options.buttons || []).map((button, index) => `<button type="button" class="btn ${escape(button.className || (index === 0 ? 'btn-outline' : 'btn-primary'))}" data-candidate-dialog-action="${escape(button.value)}"${button.disabled ? ' disabled data-initially-disabled="1"' : ''}>${escape(button.label)}</button>`).join('');
+        const configuredButtons = Array.isArray(options.buttons) ? options.buttons : [];
+        const hasSafeExit = configuredButtons.some(button => ['cancel', 'back', 'close'].includes(String(button?.value || '').toLowerCase()));
+        const safeButtons = hasSafeExit
+          ? configuredButtons
+          : [{ label: 'Close', value: 'close', className: 'btn-outline' }, ...configuredButtons];
+        const buttons = safeButtons.map((button, index) => `<button type="button" class="btn ${escape(button.className || (index === 0 ? 'btn-outline' : 'btn-primary'))}" data-candidate-dialog-action="${escape(button.value)}"${button.disabled ? ' disabled data-initially-disabled="1"' : ''}>${escape(button.label)}</button>`).join('');
         return `
-          <div class="tabc" id="${escape(rootId)}" data-candidate-office-dialog="${escape(options.kind || 'action')}">
+          <div class="tabc" id="${escape(rootId)}" data-candidate-office-dialog="${escape(options.kind || 'action')}" role="document">
             <div class="card candidate-office-modal-panel candidate-office-tone--${escape(options.tone || 'warning')}">
               <div class="candidate-office-modal-heading">
                 <div class="candidate-office-dialog__icon" aria-hidden="true">${icon}</div>
-                <div>${options.eyebrow ? `<div class="candidate-office-dialog__eyebrow">${escape(options.eyebrow)}</div>` : ''}<div class="candidate-office-modal-heading__title">${escape(title)}</div></div>
+                <div>${options.eyebrow ? `<div class="candidate-office-dialog__eyebrow">${escape(options.eyebrow)}</div>` : ''}<div class="candidate-office-modal-heading__title" id="${escape(id)}_title">${escape(title)}</div></div>
               </div>
               <div class="candidate-office-dialog__body">${options.bodyHtml || paragraphs(options.body || '')}${options.formHtml || ''}<div class="candidate-office-dialog__error" role="alert" hidden></div><div class="candidate-office-dialog__status" aria-live="polite"></div></div>
               <div class="candidate-office-dialog__footer">${buttons}</div>
@@ -148,6 +192,12 @@
       options.onReady?.(root());
       requestAnimationFrame(() => {
         const current = root();
+        const modal = document.getElementById('modal');
+        if (modal) {
+          modal.setAttribute('role', 'dialog');
+          modal.setAttribute('aria-modal', 'true');
+          modal.setAttribute('aria-labelledby', `${id}_title`);
+        }
         const target = options.defaultFocusSelector ? current?.querySelector(options.defaultFocusSelector) : current?.querySelector('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])');
         target?.focus?.();
       });
@@ -261,10 +311,43 @@
           ? 'This Timesheet also has a linked pending expense claim. It will be rejected at the same time.'
           : `This Timesheet also has ${linkedExpenseCount} linked pending expense claims. They will be rejected at the same time.`)
       : '';
-    return openDialog({ kind: 'rejection', size: 'form', tone: 'danger', title: 'Reject Candidate Submission', bodyHtml: `${neutral ? `<div class="candidate-office-neutral-context">${neutral}</div>` : ''}${paragraphs(['This will reject the evidence submitted and require the candidate to resubmit.', linkedExpenseWarning, 'Are you sure you wish to continue?'].filter(Boolean).join('\n'))}`, formHtml: reasonForm({ generic: true }), trigger,
+    return openDialog({ kind: 'rejection', size: 'form', tone: 'danger', title: 'Reject Candidate Submission', bodyHtml: `${neutral ? `<div class="candidate-office-neutral-context">${neutral}</div>` : ''}${paragraphs(['This rejects the complete Candidate Submission for the selected Timesheet, including all affected expenses on that Timesheet.', linkedExpenseWarning, 'The candidate must choose “Start a new claim”. The new claim begins blank.', 'Are you sure you wish to continue?'].filter(Boolean).join('\n'))}`, formHtml: reasonForm({ generic: true }), trigger,
       buttons: [{ label: 'Go Back', value: 'back', className: 'btn-outline' }, { label: 'Reject Candidate Submission', value: 'confirm', className: 'btn-warn' }],
       collect: root => ({ reason: root.querySelector('#candidateOfficeReason')?.value.trim() || '' }),
       validate: values => { if (!values.reason) throw new Error('A reason is required.'); }, defaultFocusSelector: '[data-candidate-dialog-action="back"]' });
+  }
+  function openCandidateExpenseCategoryRejectionModal({ category, confirmation, trigger }) {
+    const label = String(category?.label || confirmation?.expense_category_label || 'Expense').trim() || 'Expense';
+    const amount = String(category?.amount || confirmation?.amount_display || '').trim();
+    const evidenceCount = Number(confirmation?.supporting_evidence_count ?? category?.supporting_evidence_count ?? 0);
+    const evidenceText = `${Number.isInteger(evidenceCount) && evidenceCount >= 0 ? evidenceCount : 0} ${evidenceCount === 1 ? 'supporting item' : 'supporting items'}`;
+    const emptyTimesheetConsequence = String(confirmation?.empty_timesheet_consequence || 'NONE').toUpperCase();
+    const deleteWarning = emptyTimesheetConsequence === 'PERMANENT_REMOVE'
+      ? 'This is the final category on its expense-only Timesheet. Rejecting it will permanently remove the now-empty Timesheet.'
+      : emptyTimesheetConsequence === 'REMOVE_FROM_CURRENT_KEEP_HISTORY'
+        ? 'This is the final category on its expense-only Timesheet. Rejecting it will remove the now-empty Timesheet from current records, while keeping a record of it in History.'
+        : 'Hours and other expense categories on this Timesheet will stay as they are.';
+    return openDialog({
+      kind: 'expense-category-rejection',
+      size: 'form',
+      tone: 'danger',
+      title: `Reject ${label} expense?`,
+      bodyHtml: `${paragraphs([
+        `You are rejecting the complete ${label} expense${amount ? ` of ${amount}` : ''}. All ${evidenceText} in this category will be rejected together.`,
+        'Individual receipts or pages cannot be rejected.',
+        deleteWarning,
+        'Are you sure you wish to continue?'
+      ].join('\n'))}`,
+      formHtml: '<div class="candidate-office-field"><label for="candidateOfficeExpenseCategoryRejectionReason">Reason for rejection</label><textarea id="candidateOfficeExpenseCategoryRejectionReason" maxlength="1000" rows="4" required></textarea><div class="candidate-office-field__help">Required · maximum 1,000 characters</div></div>',
+      trigger,
+      buttons: [
+        { label: 'Go Back', value: 'back', className: 'btn-outline' },
+        { label: `Reject ${label} expense`, value: 'confirm', className: 'btn-warn' }
+      ],
+      collect: root => ({ reason_note: root.querySelector('#candidateOfficeExpenseCategoryRejectionReason')?.value.trim() || '' }),
+      validate: values => { if (!values.reason_note) throw new Error('A reason for rejection is required.'); },
+      defaultFocusSelector: '[data-candidate-dialog-action="back"]'
+    });
   }
   function openCandidateReminderBatchModal({ preview, trigger }) {
     const counts = [['Selected', preview.selected_count ?? preview.items?.length ?? 0], ['Eligible', preview.eligible_count ?? 0], ['Ineligible', preview.ineligible_count ?? 0], ['Changed since selection', preview.changed_count ?? 0]];
@@ -279,5 +362,5 @@
     return openDialog({ kind: 'conflict', size: 'form', tone: 'danger', title: 'This timesheet has changed', body: error?.message || 'Refresh the current state, review it and confirm again.', trigger,
       buttons: [{ label: 'Close', value: 'close', className: 'btn-outline' }, { label: 'Refresh current state', value: 'refresh', className: 'btn-primary' }], defaultFocusSelector: '[data-candidate-dialog-action="close"]' });
   }
-  Object.assign(window, { CloudTMSCandidateOfficeModals: Object.freeze({ openDialog, openCandidateRouteWarningModal, openCandidateDecisionModal, openCandidateManagerActionModal, openCandidateTypedActionModal, openCandidateRejectionModal, openCandidateReminderBatchModal, openCandidateBatchResultModal, openCandidateConflictModal }) });
+  Object.assign(window, { CloudTMSCandidateOfficeModals: Object.freeze({ openDialog, openCandidateRouteWarningModal, openCandidateDecisionModal, openCandidateManagerActionModal, openCandidateTypedActionModal, openCandidateRejectionModal, openCandidateExpenseCategoryRejectionModal, openCandidateReminderBatchModal, openCandidateBatchResultModal, openCandidateConflictModal }) });
 })();

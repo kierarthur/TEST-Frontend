@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 test.use({ serviceWorkers: 'block' });
@@ -9,14 +9,19 @@ const root = resolve(__dirname, '../..');
 const testOrigin = 'https://testmode.arthur-rai.co.uk';
 const testBackend = 'https://test-cloudtms-backend.kier-88a.workers.dev';
 const useDeployedAssets = process.env.CANDIDATE_OFFICE_USE_DEPLOYED_ASSETS === '1';
+const visualDir = process.env.CANDIDATE_OFFICE_VISUAL_DIR || '';
 const localAssets = [
   'index.html',
+  'css/candidate-office-v1.css',
   'js/main.js',
   'js/candidate-office-contract-v1.js',
   'js/candidate-office-api-v1.js',
   'js/candidate-office-presenter-v1.js',
   'js/candidate-office-surface-v1.js',
+  'js/candidate-office-modal-v1.js',
+  'js/candidate-office-controller-v1.js',
   'js/candidate-office-bridge-v1.js',
+  'js/candidate-office-ui-policy-v1.js',
   'js/candidate-office-reminder-workspace-v1.js'
 ];
 const sourceByPath = new Map(localAssets.map(file => [`/${file === 'index.html' ? 'index.html' : file.replaceAll('\\', '/')}`, readFileSync(resolve(root, file), 'utf8')]));
@@ -107,7 +112,7 @@ async function installPatchedAssets(page: Page) {
     const body = key === '/index.html'
       ? source.replace('</head>', `<script>window.BROKER_BASE_URL=${JSON.stringify(testBackend)};window.__CANDIDATE_OFFICE_LOCAL_PROOF=${JSON.stringify(mainSha256)};</script></head>`)
       : source;
-    await route.fulfill({ body, contentType: key.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/javascript; charset=utf-8', headers: { 'cache-control': 'no-store', 'x-codex-local-asset': 'candidate-office-final-correction' } });
+    await route.fulfill({ body, contentType: key.endsWith('.html') ? 'text/html; charset=utf-8' : (key.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8'), headers: { 'cache-control': 'no-store', 'x-codex-local-asset': 'candidate-office-final-correction' } });
   });
   return counts;
 }
@@ -130,6 +135,7 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
   let projectionCalls = 0;
   let summaryCalls = 0;
   let summaryCallsWithCandidateProjection = 0;
+  const summaryOrders: Array<{ order_by: string; order_dir: string }> = [];
   let executeCalls = 0;
   let statusCalls = 0;
   let eventualReminderStatus: 'PARTIAL' | 'FAILED' | null = null;
@@ -145,6 +151,7 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
     const url = new URL(request.url());
     const path = url.pathname;
     if (path === '/api/candidate-app/office-capabilities') return respond(route, capabilities);
+    if (path === '/signatures/presign-get/batch') return respond(route, { links: [] });
     if (path === '/api/users/me/grid-prefs') {
       if (request.method() === 'PATCH') {
         const body = request.postDataJSON();
@@ -160,9 +167,28 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
       }
       const pageNumber = Math.max(1, Number(url.searchParams.get('page') || 1));
       const pageSize = Math.max(1, Number(url.searchParams.get('page_size') || 50));
+      const orderBy = String(url.searchParams.get('order_by') || 'week_ending_date');
+      const orderDir = String(url.searchParams.get('order_dir') || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc';
+      summaryOrders.push({ order_by: orderBy, order_dir: orderDir });
+      const candidateStatusLabel: Record<string, string> = {
+        CREATED: 'Awaiting Candidate Submission',
+        AWAITING_MANAGER_APPROVAL: 'Awaiting Manager Approval',
+        FINALISED: 'Candidate Submission Complete',
+        WORKER_SUBMITTED: 'Candidate Submitted',
+        MANAGER_APPROVED: 'Manager Approved',
+        REJECTED: 'Rejected by Agency'
+      };
+      const valueFor = (row: any) => orderBy === 'candidate_submission'
+        ? (candidateStatusLabel[row.__status] || '')
+        : String(row[orderBy] ?? '');
+      const orderedRows = [...summaryRows].sort((left, right) => {
+        const compared = valueFor(left).localeCompare(valueFor(right), 'en-GB', { numeric: true, sensitivity: 'base' });
+        const stable = compared || String(left.candidate_name).localeCompare(String(right.candidate_name), 'en-GB', { sensitivity: 'base' });
+        return orderDir === 'desc' ? -stable : stable;
+      });
       const start = (pageNumber - 1) * pageSize;
       return respond(route, {
-        ok: true, items: summaryRows.slice(start, start + pageSize).map(({ __status, ...row }) => {
+        ok: true, items: orderedRows.slice(start, start + pageSize).map(({ __status, ...row }) => {
           const identity = {
             row_key: row.row_key,
             timesheet_id: row.timesheet_id,
@@ -260,7 +286,7 @@ async function installOfficeMocks(page: Page, options: { reminderResult?: Remind
     resolveReminderWith: (status: 'PARTIAL' | 'FAILED') => { eventualReminderStatus = status; },
     metrics: () => ({
       executeCalls,statusCalls,projectionCalls,summaryCalls,summaryCallsWithCandidateProjection,
-      executeBodies: structuredClone(executeBodies)
+      executeBodies: structuredClone(executeBodies), summaryOrders: structuredClone(summaryOrders)
     })
   };
 }
@@ -277,6 +303,395 @@ async function openPatchedTest(page: Page) {
   expect(new URL(page.url()).origin).toBe(testOrigin);
   expect(await page.evaluate(() => (window as any).BROKER_BASE_URL)).toBe(testBackend);
 }
+
+async function captureCandidateOfficeVisual(page: Page, name: string) {
+  if (!visualDir) return;
+  mkdirSync(visualDir, { recursive: true });
+  await page.locator('#modal').screenshot({ path: resolve(visualDir, `${name}.png`) });
+}
+
+function expenseCategoryPresentation(overrides: any = {}) {
+  const componentId = overrides.componentId || uuid(971);
+  return {
+    surface: overrides.surface || 'SIMPLE_TIMESHEET',
+    identity: { row_key: 'expense-category-visual', timesheet_id: uuid(970), contract_week_id: null, route_family: 'ELECTRONIC' },
+    status: { code: 'AWAITING_MANAGER_APPROVAL', label: 'Awaiting Manager Approval', tone: 'warning' },
+    statuses: [{ code: 'AWAITING_MANAGER_APPROVAL', label: 'Awaiting Manager Approval', tone: 'warning' }],
+    expense_claims: [{
+      total: overrides.total || '£37.50',
+      updating: false,
+      needs_attention: false,
+      categories: overrides.categories || [{
+        expense_component_id: componentId,
+        label: 'Accommodation',
+        amount: '£25.00',
+        supporting_evidence_count: 3,
+        status: { code: 'MANAGER_APPROVAL_REQUIRED', label: 'Awaiting Manager Approval', tone: 'warning' },
+        fields: [['Manager', 'Awaiting Manager Approval'], ['Agency', 'Not yet authorised'], ['Supporting evidence', '3 files']],
+        rejection_action: { code: 'REJECT_EXPENSE_CATEGORY', enabled: true }
+      }, {
+        expense_component_id: uuid(972),
+        label: 'Travel',
+        amount: '£12.50',
+        supporting_evidence_count: 1,
+        status: { code: 'MANAGER_APPROVED', label: 'Manager Approved', tone: 'success' },
+        fields: [['Manager', 'Manager Approved'], ['Agency', 'Not yet authorised'], ['Supporting evidence', '1 file']],
+        rejection_action: { code: 'REJECT_EXPENSE_CATEGORY', enabled: true }
+      }]
+    }]
+  };
+}
+
+test('Office confirmation dialogs always have a safe exit and cannot be dismissed mid-action', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  await page.evaluate(() => {
+    const trigger = document.createElement('button');
+    trigger.id = 'candidateOfficeSafetyTrigger';
+    trigger.textContent = 'Open safety proof';
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    let releaseAction: (() => void) | null = null;
+    const actionGate = new Promise<void>(resolve => { releaseAction = resolve; });
+    (window as any).__releaseCandidateOfficeSafetyAction = () => releaseAction?.();
+    (window as any).__candidateOfficeSafetyResult = null;
+    void (window as any).CloudTMSCandidateOfficeModals.openDialog({
+      kind: 'safety-proof',
+      title: 'Apply expense change?',
+      body: 'CloudTMS will refresh this Timesheet when the result is known.',
+      trigger,
+      buttons: [
+        { label: 'Go Back', value: 'back', className: 'btn-outline' },
+        { label: 'Apply change', value: 'apply', className: 'btn-primary' }
+      ],
+      defaultFocusSelector: '[data-candidate-dialog-action="back"]',
+      busyMessage: 'Applying change…',
+      onAction: async () => { await actionGate; return { ok: true }; }
+    }).then((result: unknown) => { (window as any).__candidateOfficeSafetyResult = result; });
+  });
+
+  const dialog = page.locator('[data-candidate-office-dialog="safety-proof"]');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Go Back', exact: true })).toBeFocused();
+  await dialog.getByRole('button', { name: 'Apply change', exact: true }).click();
+  await expect(dialog).toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#btnCloseModal')).toBeDisabled();
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/finishing this action/i)).toBeVisible();
+
+  await page.evaluate(() => (window as any).__releaseCandidateOfficeSafetyAction());
+  await expect(dialog).toBeHidden();
+  await expect.poll(() => page.evaluate(() => (window as any).__candidateOfficeSafetyResult?.confirmed)).toBe(true);
+  await expect(page.locator('#candidateOfficeSafetyTrigger')).toBeFocused();
+
+  await page.evaluate(() => {
+    const trigger = document.getElementById('candidateOfficeSafetyTrigger');
+    (window as any).__officeConfirmEscapeResult = null;
+    void (window as any).openUiConfirmModal({
+      title: 'Delete Timesheet?',
+      message: 'No change has been made yet.',
+      confirm_label: 'Delete Timesheet',
+      cancel_label: 'Go Back',
+      kind: 'timesheet-delete-safety-proof'
+    }).then((result: unknown) => { (window as any).__officeConfirmEscapeResult = result; });
+    trigger?.setAttribute('data-proof-open', '1');
+  });
+  await expect(page.getByRole('button', { name: 'Go Back', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect.poll(() => page.evaluate(() => (window as any).__officeConfirmEscapeResult)).toMatchObject({ confirmed: false, via: 'cancel' });
+  await expect(page.locator('#candidateOfficeSafetyTrigger')).toBeFocused();
+});
+
+test('Reject Candidate Submission explains the complete selected Timesheet and blank restart', async ({ page }) => {
+  test.setTimeout(90_000);
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  await page.evaluate(() => {
+    (window as any).__candidateRejectionCopyResult = null;
+    void (window as any).CloudTMSCandidateOfficeModals.openCandidateRejectionModal({
+      preview: { linked_pending_expense_claim_count: 1 },
+      context: { candidateName: 'Test Candidate', clientName: 'Test Client', weekEnding: '23 August 2026' }
+    }).then((result: unknown) => { (window as any).__candidateRejectionCopyResult = result; });
+  });
+
+  const dialog = page.locator('[data-candidate-office-dialog="rejection"]');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('complete Candidate Submission for the selected Timesheet');
+  await expect(dialog).toContainText('including all affected expenses on that Timesheet');
+  await expect(dialog).toContainText('linked pending expense claim');
+  await expect(dialog).toContainText('It will be rejected at the same time');
+  await expect(dialog).toContainText('Start a new claim');
+  await expect(dialog).toContainText('The new claim begins blank');
+  await expect(dialog.getByRole('button', { name: 'Go Back', exact: true })).toBeFocused();
+  await dialog.getByRole('button', { name: 'Go Back', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__candidateRejectionCopyResult)).toMatchObject({ confirmed: false });
+});
+
+test('complete expense categories have tidy rejection controls only in approved Expenses views', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1180, height: 900 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+  const view = expenseCategoryPresentation();
+
+  await page.evaluate(input => {
+    const surface = (window as any).CloudTMSCandidateOfficeSurface;
+    (window as any).showModal('Expenses', [{ key: 'main', label: 'Expenses' }], () => `<div class="tabc" data-expense-category-visual="simple">${surface.renderCandidateFragment(input, { surface: 'SIMPLE_TIMESHEET', variant: 'expenses' })}</div>`, null, false, null, { kind: 'candidate-office-expense-category-simple-visual', noParentGate: true, showSave: false, showApply: false });
+  }, view);
+  const modal = page.locator('#modal');
+  await expect(modal.getByText('Accommodation · £25.00', { exact: true })).toBeVisible();
+  await expect(modal.getByText('Travel · £12.50', { exact: true })).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'Reject complete Accommodation expense' })).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'Reject complete Travel expense' })).toBeVisible();
+  await expect(modal).not.toContainText(/00000000-|expense_component_id|workflow_id/);
+  const layout = await modal.locator('.candidate-office-expenses').evaluate(element => ({
+    overflow: element.scrollWidth - element.clientWidth,
+    labels: Array.from(element.querySelectorAll('.candidate-office-expense-category__header strong')).map(label => getComputedStyle(label).whiteSpace)
+  }));
+  expect(layout.overflow).toBeLessThanOrEqual(1);
+  expect(layout.labels).toEqual(['nowrap', 'nowrap']);
+  await captureCandidateOfficeVisual(page, '01-simple-expenses-eligible-categories');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const narrow = await modal.locator('.candidate-office-expenses').evaluate(element => element.scrollWidth - element.clientWidth);
+  expect(narrow).toBeLessThanOrEqual(1);
+  await captureCandidateOfficeVisual(page, '02-simple-expenses-eligible-narrow');
+
+  await page.evaluate(input => {
+    const surface = (window as any).CloudTMSCandidateOfficeSurface;
+    const manual = structuredClone(input);
+    manual.identity.route_family = 'MANUAL_NON_QR';
+    (window as any).showModal('Expenses', [{ key: 'main', label: 'Expenses' }], () => `<div class="tabc" data-expense-category-visual="negative">${surface.renderCandidateFragment(manual, { surface: 'SIMPLE_TIMESHEET', variant: 'expenses' })}</div>`, null, false, null, { kind: 'candidate-office-expense-category-negative-visual', noParentGate: true, showSave: false, showApply: false });
+  }, view);
+  await expect(modal.getByRole('button', { name: /Reject complete .* expense/ })).toHaveCount(0);
+  await expect(modal).toContainText('Accommodation · £25.00');
+  await captureCandidateOfficeVisual(page, '03-manual-or-protected-no-category-action');
+});
+
+test('expense-category confirmation is accessible, compulsory and states all empty-Timesheet consequences', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 900, height: 760 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  await page.evaluate(() => {
+    (window as any).__expenseCategoryDecision = null;
+    void (window as any).CloudTMSCandidateOfficeModals.openCandidateExpenseCategoryRejectionModal({
+      category: { label: 'Accommodation', amount: '£25.00', supporting_evidence_count: 3 },
+      confirmation: { supporting_evidence_count: 3, empty_timesheet_consequence: 'NONE', will_delete_timesheet: false },
+      trigger: document.body
+    }).then((result: unknown) => { (window as any).__expenseCategoryDecision = result; });
+  });
+  let dialog = page.locator('[data-candidate-office-dialog="expense-category-rejection"]');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Reject Accommodation expense?');
+  await expect(dialog).toContainText('complete Accommodation expense of £25.00');
+  await expect(dialog).toContainText('All 3 supporting items');
+  await expect(dialog).toContainText('Individual receipts or pages cannot be rejected');
+  await expect(dialog).toContainText('Hours and other expense categories on this Timesheet will stay as they are');
+  await expect(dialog.getByRole('button', { name: 'Go Back', exact: true })).toBeFocused();
+  await dialog.getByRole('button', { name: 'Reject Accommodation expense', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('A reason for rejection is required');
+  await captureCandidateOfficeVisual(page, '04-confirm-normal-category-consequence');
+  await dialog.getByRole('button', { name: 'Go Back', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__expenseCategoryDecision)).toMatchObject({ confirmed: false });
+
+  await page.evaluate(() => {
+    void (window as any).CloudTMSCandidateOfficeModals.openCandidateExpenseCategoryRejectionModal({
+      category: { label: 'Travel', amount: '£12.50', supporting_evidence_count: 1 },
+      confirmation: { supporting_evidence_count: 1, empty_timesheet_consequence: 'PERMANENT_REMOVE', will_delete_timesheet: true },
+      trigger: document.body
+    });
+  });
+  dialog = page.locator('[data-candidate-office-dialog="expense-category-rejection"]');
+  await expect(dialog).toContainText('All 1 supporting item');
+  await expect(dialog).toContainText('final category on its expense-only Timesheet');
+  await expect(dialog).toContainText('will permanently remove the now-empty Timesheet');
+  await captureCandidateOfficeVisual(page, '05-confirm-delete-empty-expense-timesheet');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+
+  await page.evaluate(() => {
+    void (window as any).CloudTMSCandidateOfficeModals.openCandidateExpenseCategoryRejectionModal({
+      category: { label: 'Mileage', amount: '£9.00', supporting_evidence_count: 2 },
+      confirmation: {
+        supporting_evidence_count: 2,
+        empty_timesheet_consequence: 'REMOVE_FROM_CURRENT_KEEP_HISTORY',
+        will_delete_timesheet: false
+      },
+      trigger: document.body
+    });
+  });
+  dialog = page.locator('[data-candidate-office-dialog="expense-category-rejection"]');
+  await expect(dialog).toContainText('remove the now-empty Timesheet from current records');
+  await expect(dialog).toContainText('keeping a record of it in History');
+  await captureCandidateOfficeVisual(page, '05b-confirm-history-retained-empty-expense-timesheet');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+});
+
+test('Bulk Authorise expense categories and totals rerender cleanly after one category is rejected', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1100, height: 820 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+  const before = expenseCategoryPresentation({ surface: 'BULK_AUTHORISE' });
+
+  await page.evaluate(input => {
+    const surface = (window as any).CloudTMSCandidateOfficeSurface;
+    (window as any).showModal('Expenses', [{ key: 'main', label: 'Expenses' }], () => `<div class="tabc" data-expense-category-visual="bulk-before">${surface.renderCandidateFragment(input, { surface: 'BULK_AUTHORISE', variant: 'expenses' })}</div>`, null, false, null, { kind: 'candidate-office-expense-category-bulk-visual', noParentGate: true, showSave: false, showApply: false });
+  }, before);
+  const modal = page.locator('#modal');
+  await expect(modal).toContainText('Expense total £37.50');
+  await expect(modal.getByRole('button', { name: 'Reject complete Accommodation expense' })).toBeVisible();
+  await captureCandidateOfficeVisual(page, '06-bulk-authorise-before-category-rejection');
+
+  const after = expenseCategoryPresentation({
+    surface: 'BULK_AUTHORISE',
+    total: '£12.50',
+    categories: [before.expense_claims[0].categories[1]]
+  });
+  await page.evaluate(input => {
+    const surface = (window as any).CloudTMSCandidateOfficeSurface;
+    (window as any).showModal('Expenses', [{ key: 'main', label: 'Expenses' }], () => `<div class="tabc" data-expense-category-visual="bulk-after">${surface.renderCandidateFragment(input, { surface: 'BULK_AUTHORISE', variant: 'expenses' })}</div>`, null, false, null, { kind: 'candidate-office-expense-category-bulk-refreshed-visual', noParentGate: true, showSave: false, showApply: false });
+  }, after);
+  await expect(modal).toContainText('Expense total £12.50');
+  await expect(modal).toContainText('Travel · £12.50');
+  await expect(modal).not.toContainText('Accommodation · £25.00');
+  await captureCandidateOfficeVisual(page, '07-bulk-authorise-after-category-rejection');
+  await expect(page.locator('#globalLoadingOverlay')).toBeHidden({ timeout: 30_000 });
+  await expect(modal.locator('[aria-busy="true"]')).toHaveCount(0);
+  await captureCandidateOfficeVisual(page, '08-bulk-authorise-settled-after-category-rejection');
+});
+
+test('browser Back discards stale Office state and reloads canonical Timesheet truth', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await installPatchedAssets(page);
+  const mocks = await installOfficeMocks(page);
+  await openPatchedTest(page);
+  await page.locator('button[data-section-key="timesheets"]').click();
+  await expect(page.locator('.summary-body[data-summary-section="timesheets"]')).toBeVisible();
+  const callsBeforeBack = mocks.metrics().summaryCalls;
+
+  await page.evaluate(() => {
+    (window as any).showModal(
+      'Stale Timesheet proof',
+      [{ key: 'main', label: 'Timesheet' }],
+      () => '<div class="tabc" id="candidateOfficeStaleHistoryProof">This view must not survive browser Back.</div>',
+      null,
+      false,
+      null,
+      { kind: 'candidate-office-stale-history-proof', noParentGate: true, showSave: false, showApply: false }
+    );
+    history.pushState({ candidateOfficeProof: true }, '', `${location.pathname}${location.search}#candidate-office-stale-proof`);
+  });
+  await expect(page.locator('#candidateOfficeStaleHistoryProof')).toBeVisible();
+
+  await page.evaluate(() => history.back());
+  await expect(page.locator('#candidateOfficeStaleHistoryProof')).toBeHidden();
+  await expect.poll(() => mocks.metrics().summaryCalls).toBeGreaterThan(callsBeforeBack);
+  await expect(page.locator('.summary-body[data-summary-section="timesheets"]')).toBeVisible();
+  await expect(page.locator('td[data-col-key="candidate_submission"]')).toHaveCount(summaryRows.length);
+});
+
+test('Office detail keeps mixed expense facts on their owning Timesheet and keeps each category amount together', async ({ page }) => {
+  test.setTimeout(90_000);
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  const hoursTimesheetId = uuid(951);
+  const expenseTimesheetId = uuid(952);
+  const otherExpenseTimesheetId = uuid(956);
+  const claim = {
+    workflow_id: uuid(953), generation: 2, document_generation: 2,
+    state: 'AWAITING_MANAGER_APPROVAL', status_code: 'MIXED', manager_approval_state: 'MIXED', agency_authorisation_state: 'MIXED', attention_code: null,
+    target_timesheet_id: hoursTimesheetId, submitted_at_utc: '2026-09-06T08:00:00Z', updated_at_utc: '2026-09-06T09:00:00Z',
+    protected: false, can_withdraw: true,
+    totals: {
+      expenses_pay_ex_vat: 47.5, expenses_description: 'Mixed expenses', mileage_units: 0,
+      mileage_pay_ex_vat: 0, travel_pay_ex_vat: 12.5, accommodation_pay_ex_vat: 25, other_pay_ex_vat: 10
+    },
+    supporting_evidence_count: 5, supporting_evidence_categories: ['ACCOMMODATION', 'TRAVEL', 'OTHER'],
+    categories: [
+      {
+        expense_component_id: uuid(954), component_generation: 1, expense_category: 'ACCOMMODATION', amount: 25, included_in_total: true, mileage_units: 0,
+        supporting_evidence_count: 3, state: 'MANAGER_APPROVED', status_code: 'MANAGER_APPROVED', manager_approval_state: 'APPROVED',
+        agency_authorisation_state: 'NOT_AUTHORISED', owning_timesheet_id: expenseTimesheetId, refusal: null, protected: false, available_action: null
+      },
+      {
+        expense_component_id: uuid(955), component_generation: 1, expense_category: 'TRAVEL', amount: 12.5, included_in_total: true, mileage_units: 0,
+        supporting_evidence_count: 1, state: 'SUBMITTED', status_code: 'MANAGER_APPROVAL_REQUIRED', manager_approval_state: 'PENDING',
+        agency_authorisation_state: 'NOT_AUTHORISED', owning_timesheet_id: expenseTimesheetId, refusal: null, protected: false, available_action: null
+      },
+      {
+        expense_component_id: uuid(957), component_generation: 1, expense_category: 'OTHER', amount: 10, included_in_total: true, mileage_units: 0,
+        supporting_evidence_count: 1, state: 'MANAGER_APPROVED', status_code: 'MANAGER_APPROVED', manager_approval_state: 'APPROVED',
+        agency_authorisation_state: 'NOT_AUTHORISED', owning_timesheet_id: otherExpenseTimesheetId, refusal: null, protected: false, available_action: null
+      }
+    ],
+    whole_claim_action: null, begin_update_action: null, update_state: 'NONE'
+  };
+  const makeProjection = (timesheetId: string, rowKey: string) => ({
+    ...projectionFor({ row_key: rowKey, timesheet_id: timesheetId, contract_week_id: null, expected_row_signature: `${rowKey}-signature` }, 'AWAITING_MANAGER_APPROVAL'),
+    expense_claims: [claim]
+  });
+
+  await page.evaluate(({ hoursProjection, expenseProjection }) => {
+    const contract = (window as any).CloudTMSCandidateOfficeContract;
+    const presenter = (window as any).CloudTMSCandidateOfficePresenter;
+    const surface = (window as any).CloudTMSCandidateOfficeSurface;
+    const render = (raw: any) => surface.renderCandidateOfficeCard(
+      presenter.presentCandidateOfficeDetail(contract.normalizeOfficeCandidateProjection(raw, { surface: 'SIMPLE_TIMESHEET' }), { surface: 'SIMPLE_TIMESHEET' }),
+      { surface: 'SIMPLE_TIMESHEET' }
+    );
+    document.body.insertAdjacentHTML('beforeend', `<div id="officeExpenseOwnershipProof" style="display:grid;gap:16px;max-width:740px;padding:16px"><div id="hoursExpenseProof">${render(hoursProjection)}</div><div id="expenseExpenseProof">${render(expenseProjection)}</div></div>`);
+  }, {
+    hoursProjection: makeProjection(hoursTimesheetId, 'hours-row'),
+    expenseProjection: makeProjection(expenseTimesheetId, 'expense-row')
+  });
+
+  await expect(page.locator('#hoursExpenseProof')).not.toContainText('Expenses on this Timesheet');
+  const expense = page.locator('#expenseExpenseProof');
+  await expect(expense).toContainText('Expense total £37.50');
+  await expect(expense).toContainText('Accommodation · £25.00');
+  await expect(expense).toContainText('Travel · £12.50');
+  await expect(expense).toContainText('Manager Approved');
+  await expect(expense).toContainText('Awaiting Manager Approval');
+  await expect(expense).not.toContainText('Other · £10.00');
+  await expect(expense).not.toContainText(/00000000-|workflow_id|expense_component_id|WITHDRAW_EXPENSE|CANCEL_EXPENSE/);
+
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const layout = await expense.evaluate(element => ({
+      overflow: element.scrollWidth - element.clientWidth,
+      labels: Array.from(element.querySelectorAll('.candidate-office-expense-category__header strong')).map(label => ({
+        whiteSpace: getComputedStyle(label).whiteSpace,
+        height: label.getBoundingClientRect().height,
+        lineHeight: Number.parseFloat(getComputedStyle(label).lineHeight)
+      }))
+    }));
+    expect(layout.overflow).toBeLessThanOrEqual(1);
+    expect(layout.labels).toHaveLength(2);
+    for (const label of layout.labels) {
+      expect(label.whiteSpace).toBe('nowrap');
+      expect(label.height).toBeLessThanOrEqual(label.lineHeight * 1.25);
+    }
+  }
+});
 
 test('Timesheet Summary Candidate Submission column reorders, resizes, persists and sorts like its peers', async ({ page }) => {
   test.setTimeout(120_000);
@@ -333,6 +748,7 @@ test('Timesheet Summary Candidate Submission column reorders, resizes, persists 
 
   await candidate.click();
   await expect(candidate).toContainText('▲');
+  await expect.poll(() => mocks.metrics().summaryOrders.some(order => order.order_by === 'candidate_submission' && order.order_dir === 'asc')).toBe(true);
   const statusLabels = await grid.locator('td[data-col-key="candidate_submission"] .candidate-office-summary-status').allTextContents();
   expect(statusLabels).toEqual([
     'Awaiting Candidate Submission', 'Awaiting Manager Approval', 'Candidate Submission Complete',
@@ -340,6 +756,7 @@ test('Timesheet Summary Candidate Submission column reorders, resizes, persists 
   ]);
   await candidate.click();
   await expect(candidate).toContainText('▼');
+  await expect.poll(() => mocks.metrics().summaryOrders.some(order => order.order_by === 'candidate_submission' && order.order_dir === 'desc')).toBe(true);
   expect(await grid.locator('td[data-col-key="candidate_submission"] .candidate-office-summary-status').allTextContents()).toEqual([...statusLabels].reverse());
   expect(mocks.metrics().projectionCalls).toBe(0);
   expect(mocks.metrics().summaryCallsWithCandidateProjection).toBe(mocks.metrics().summaryCalls);
@@ -398,87 +815,93 @@ for (const viewport of [{ label: 'desktop', width: 1440, height: 960 }, { label:
   });
 }
 
-test('approved hours and a later pending expense claim remain separate on every Office surface', async ({ page }) => {
+test('approved hours stay clean while the pending expense appears only on its own Timesheet row', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await installPatchedAssets(page);
   await installOfficeMocks(page);
   await openPatchedTest(page);
 
-  const result = await page.evaluate(() => {
-    const projection = {
-      ok: true,
-      contract_version: 'OFFICE_CANDIDATE_TIMESHEET_V1',
-      office_contract_version: 'CLOUDTMS_OFFICE_CANDIDATE_API_V1',
-      current_identity: {
-        row_key: 'approved-hours-pending-expense',
-        timesheet_id: '00000000-0000-4000-8000-000000000941',
-        contract_week_id: '00000000-0000-4000-8000-000000000942',
-        row_signature: 'approved-hours-pending-expense-signature',
-        route_family: 'ELECTRONIC',
-        record_role: 'HOURS_ONLY',
-        moved: false,
-        stale_signature: false
-      },
-      candidate_status: { code: 'PENDING_AUTH', label: 'Pending authorisation', tone: 'warning' },
-      workflow: {
-        workflow_id: '00000000-0000-4000-8000-000000000943',
-        generation: 2,
-        state: 'READY_FOR_MANAGER_APPROVAL',
-        workflow_kind: 'CONTRACT_EXPENSE',
-        route: 'PHONE',
-        approval_method: null,
-        is_current_action_workflow: true,
-        historical: false
-      },
-      manager_approval: null,
-      retained_manager_approval: {
-        workflow_id: '00000000-0000-4000-8000-000000000944',
-        workflow_generation: 2,
-        current_generation: 3,
-        workflow_kind: 'CONTRACT_HOURS',
-        scope: 'HOURS',
-        route: 'PHONE',
-        state: 'FINALISED',
-        method: 'PHONE',
-        approved_at_utc: '2026-08-27T17:40:00Z'
-      },
-      paper_pack: { state: 'NOT_APPLICABLE', retryable: false },
-      rejections: [],
-      primary_action: null,
-      available_actions: [],
-      diagnostics: [],
-      refresh_hints: { summary: true },
-      observed_at_utc: '2026-09-05T08:00:00Z'
-    };
-    const normalized = (window as any).CloudTMSCandidateOfficeContract.normalizeOfficeCandidateProjection(projection);
+  const hoursTimesheetId = uuid(941);
+  const expenseTimesheetId = uuid(942);
+  const claim = {
+    workflow_id: uuid(943), generation: 2, document_generation: 2,
+    state: 'READY_FOR_MANAGER_APPROVAL', status_code: 'MANAGER_APPROVAL_REQUIRED',
+    manager_approval_state: 'PENDING', agency_authorisation_state: 'NOT_AUTHORISED', attention_code: null,
+    target_timesheet_id: hoursTimesheetId, submitted_at_utc: '2026-09-05T08:00:00Z', updated_at_utc: '2026-09-05T08:00:00Z',
+    protected: false, can_withdraw: true,
+    totals: {
+      expenses_pay_ex_vat: 25, expenses_description: 'Accommodation', mileage_units: 0,
+      mileage_pay_ex_vat: 0, travel_pay_ex_vat: 0, accommodation_pay_ex_vat: 25, other_pay_ex_vat: 0
+    },
+    supporting_evidence_count: 3, supporting_evidence_categories: ['ACCOMMODATION'],
+    categories: [{
+      expense_component_id: uuid(944), component_generation: 1, expense_category: 'ACCOMMODATION', amount: 25,
+      included_in_total: true, mileage_units: 0, supporting_evidence_count: 3, state: 'SUBMITTED',
+      status_code: 'MANAGER_APPROVAL_REQUIRED', manager_approval_state: 'PENDING', agency_authorisation_state: 'NOT_AUTHORISED',
+      owning_timesheet_id: expenseTimesheetId, refusal: null, protected: false, available_action: null
+    }],
+    whole_claim_action: null, begin_update_action: null, update_state: 'NONE'
+  };
+  const hoursBase = projectionFor({ row_key: 'approved-hours-row', timesheet_id: hoursTimesheetId, contract_week_id: null, expected_row_signature: 'approved-hours-signature' }, 'MANAGER_APPROVED');
+  const expenseBase = projectionFor({ row_key: 'pending-expense-row', timesheet_id: expenseTimesheetId, contract_week_id: null, expected_row_signature: 'pending-expense-signature' }, 'WORKER_SUBMITTED');
+  const hoursProjection = {
+    ...hoursBase,
+    current_identity: {
+      ...hoursBase.current_identity,
+      record_role: 'HOURS_ONLY'
+    },
+    workflow: { state: 'MANAGER_APPROVED', workflow_kind: 'CONTRACT_HOURS', route: 'EMAIL', historical: false },
+    expense_claims: [claim]
+  };
+  const expenseProjection = {
+    ...expenseBase,
+    current_identity: {
+      ...expenseBase.current_identity,
+      record_role: 'EXPENSE_ONLY'
+    },
+    workflow: { state: 'READY_FOR_MANAGER_APPROVAL', workflow_kind: 'CONTRACT_EXPENSE', route: 'PHONE', historical: false },
+    expense_claims: [claim]
+  };
+
+  const result = await page.evaluate(({ hoursProjection, expenseProjection }) => {
+    const contract = (window as any).CloudTMSCandidateOfficeContract;
     const presenter = (window as any).CloudTMSCandidateOfficePresenter;
     const surface = (window as any).CloudTMSCandidateOfficeSurface;
-    const detail = presenter.presentCandidateOfficeDetail(normalized, { surface: 'SIMPLE_TIMESHEET' });
-    const summary = presenter.presentCandidateOfficeSummary(normalized);
-    return {
-      activeStatus: detail.status?.label,
-      statuses: detail.statuses.map((status: any) => status.label),
-      retainedFields: detail.retained_manager?.fields,
-      summaryHtml: surface.renderCandidateSummaryCell(summary),
-      stageHtml: surface.renderCandidateStageFragment(detail),
-      overviewHtml: surface.renderCandidateOverviewFragment(detail),
-      cardHtml: surface.renderCandidateOfficeCard(detail, { surface: 'SIMPLE_TIMESHEET' })
+    const present = (raw: any) => {
+      const normalized = contract.normalizeOfficeCandidateProjection(raw, { surface: 'SIMPLE_TIMESHEET' });
+      const detail = presenter.presentCandidateOfficeDetail(normalized, { surface: 'SIMPLE_TIMESHEET' });
+      const summary = presenter.presentCandidateOfficeSummary(normalized);
+      return {
+        status: detail.status?.label,
+        summaryHtml: surface.renderCandidateSummaryCell(summary),
+        stageHtml: surface.renderCandidateStageFragment(detail),
+        overviewHtml: surface.renderCandidateOverviewFragment(detail),
+        cardHtml: surface.renderCandidateOfficeCard(detail, { surface: 'SIMPLE_TIMESHEET' })
+      };
     };
-  });
+    return {
+      hours: present(hoursProjection),
+      expense: present(expenseProjection)
+    };
+  }, { hoursProjection, expenseProjection });
 
-  expect(result.activeStatus).toBe('Candidate Submitted');
-  expect(result.statuses).toEqual([
-    'Timesheet hours — Manager Approved',
-    'Expense claim — Candidate Submitted'
-  ]);
-  expect(result.retainedFields).toContainEqual(['Status', 'Manager Approved']);
-  for (const html of [result.summaryHtml, result.stageHtml, result.cardHtml]) {
-    expect(html).toContain('Timesheet hours — Manager Approved');
-    expect(html).toContain('Expense claim — Candidate Submitted');
+  expect(result.hours.status).toBe('Manager Approved');
+  for (const html of [result.hours.summaryHtml, result.hours.stageHtml, result.hours.cardHtml]) {
+    expect(html).toContain('Manager Approved');
+    expect(html).not.toContain('Candidate Submitted');
+    expect(html).not.toContain('Expense claim');
   }
-  expect(result.overviewHtml).toContain('Earlier approved submission');
-  expect(result.overviewHtml).toContain('Pass phone');
-  expect(result.summaryHtml.match(/data-candidate-status-code/g)).toHaveLength(2);
+  expect(result.hours.overviewHtml).not.toContain('Expenses on this Timesheet');
+  expect(result.hours.overviewHtml).not.toContain('Accommodation');
+
+  expect(result.expense.status).toBe('Candidate Submitted');
+  for (const html of [result.expense.summaryHtml, result.expense.stageHtml, result.expense.cardHtml]) {
+    expect(html).toContain('Candidate Submitted');
+    expect(html).not.toContain('Timesheet hours');
+  }
+  expect(result.expense.overviewHtml).toContain('Expenses on this Timesheet');
+  expect(result.expense.overviewHtml).toContain('Accommodation · £25.00');
+  expect(result.expense.overviewHtml).toContain('Expense total £25.00');
 });
 
 test('Manual non-QR, HealthRoster and NHSP authoritative rows never display a Candidate lifecycle on any Office surface', async ({ page }) => {
@@ -718,7 +1141,7 @@ test('Simple Timesheet route labels and Authorise eligibility follow only canoni
   expect(bounds.bottom).toBeLessThanOrEqual(bounds.height + 1);
 });
 
-test('Manual QR and import-authoritative expense carriers show their real Candidate status without a false processing delay', async ({ page }) => {
+test('Manual QR, reversal and expense carriers use exact Office wording without malformed dates or a false processing delay', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await installPatchedAssets(page);
   await installOfficeMocks(page);
@@ -746,6 +1169,13 @@ test('Manual QR and import-authoritative expense carriers show their real Candid
       { state: 'FAILED_TERMINAL', reason_code: 'CANDIDATE_PAPER_OUTBOX_CONFLICT' },
       'AWAITING_PAPER_RETURN'
     );
+    printed.available_actions = [{
+      code: 'ISSUE_REPLACEMENT_PAPER_PACK',
+      label: 'raw replacement label',
+      group: 'PAPER',
+      enabled: true,
+      prominent: true
+    }];
     const expense = make(
       { row_key: 'expense', route_family: 'IMPORT_AUTHORITATIVE', record_role: 'EXPENSE_ONLY' },
       { state: 'FINALISED', route: 'PHONE', historical: true, is_current_action_workflow: false },
@@ -758,20 +1188,123 @@ test('Manual QR and import-authoritative expense carriers show their real Candid
       summary_stage: 'PROCESSED',
       tools_stage: 'PROCESSED'
     }, 'Processed').outerHTML;
+    const reversalList = (renderBulkAuthoriseLists as any)({
+      classification: 'TIMESHEETS',
+      filters: {},
+      selected_row_keys_by_section: {},
+      dataset: { rows: [{
+        row_key: '00000000-0000-4000-8000-000000000120',
+        timesheet_id: '00000000-0000-4000-8000-000000000120',
+        candidate_name: 'Reversal candidate',
+        client_name: 'Reversal client',
+        bulk_authorise_classification: 'TIMESHEETS',
+        bulk_authorise_section: 'processed_eligible',
+        route_family: 'IMPORT_AUTHORITATIVE',
+        period_type: 'WEEKLY',
+        correction_id: '00000000-0000-4000-8000-000000000121',
+        correction_kind: 'CHANGED_HOURS_REVERSAL',
+        adjustment_origin: 'IMPORT_CORRECTION',
+        correction_source_system: 'NHSP',
+        correction_display_label: 'NHSP Reversal',
+        total_hours: -8,
+        week_ending_date: '2026—2026-',
+        contract_week_ending_date: '2026-09-06'
+      }] }
+    });
     return {
       printed: surface.renderCandidateSummaryCell(presenter.presentCandidateOfficeSummary(printed)),
+      printedDetail: surface.renderCandidateOfficeCard(presenter.presentCandidateOfficeDetail(printed)),
       expense: surface.renderCandidateSummaryCell(presenter.presentCandidateOfficeSummary(expense)),
-      processingBadge
+      processingBadge,
+      reversalList
     };
   });
 
   expect(result.printed).toContain('QR Pack Needs Attention');
+  expect(result.printedDetail).toContain('Reason');
+  expect(result.printedDetail).toContain('CloudTMS found conflicting QR Pack delivery records, so it stopped before sending another copy.');
+  expect(result.printedDetail).toContain('Next step');
+  expect(result.printedDetail).toContain('Use “Create Replacement QR Pack and Notify Worker” below.');
+  expect(result.printedDetail).toContain('data-candidate-office-action="ISSUE_REPLACEMENT_PAPER_PACK"');
+  expect(result.printedDetail).not.toContain('CANDIDATE_PAPER_OUTBOX_CONFLICT');
   expect(result.expense).toContain('Candidate Submission Complete');
   expect(result.processingBadge).toContain('Processed');
   expect(result.processingBadge).not.toContain('Processing Delayed');
+  expect(result.reversalList).toContain('06-09-2026');
+  expect(result.reversalList).toContain('Timesheet Adjustment');
+  expect(result.reversalList).not.toContain('2026—2026-');
+  expect(result.reversalList).not.toContain('NHSP Reversal');
+
+  await page.evaluate(detailHtml => {
+    (window as any).showModal(
+      'QR Pack Needs Attention',
+      [{ key: 'main', label: 'Candidate Submission' }],
+      () => `<div class="tabc" data-qr-attention-visual="1">${detailHtml}</div>`,
+      null,
+      false,
+      null,
+      { kind: 'candidate-office-qr-attention-visual', noParentGate: true, showSave: false, showApply: false }
+    );
+  }, result.printedDetail);
+  const qrAttentionModal = page.locator('#modal');
+  await expect(qrAttentionModal.getByText('Reason', { exact: true })).toBeVisible();
+  await expect(qrAttentionModal).toContainText('CloudTMS found conflicting QR Pack delivery records, so it stopped before sending another copy.');
+  await expect(qrAttentionModal.getByText('Next step', { exact: true })).toBeVisible();
+  await expect(qrAttentionModal).toContainText('Use “Create Replacement QR Pack and Notify Worker” below.');
+  await expect(qrAttentionModal.getByRole('button', { name: 'Create Replacement QR Pack and Notify Worker', exact: true })).toBeVisible();
+  await expect(page.locator('#globalLoadingOverlay')).toBeHidden({ timeout: 30_000 });
+  await captureCandidateOfficeVisual(page, '09-qr-pack-needs-attention-reason-next-step');
 });
 
-test('Office expense values are read-only for QR and Electronic routes while eligible expense evidence remains available', async ({ page }, testInfo) => {
+test('weekly evidence with an empty schedule omits the misleading zero-shift count', async ({ page }) => {
+  await page.setViewportSize({ width: 980, height: 760 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  await page.evaluate(() => {
+    const timesheetId = '00000000-0000-4000-8000-000000000130';
+    (window as any).modalCtx = {
+      data: { timesheet_id: timesheetId },
+      timesheetDetails: {
+        timesheet: {
+          id: timesheetId,
+          timesheet_id: timesheetId,
+          sheet_scope: 'WEEKLY',
+          week_ending_date: '2026-09-06',
+          actual_schedule_json: []
+        }
+      }
+    };
+    (window as any).__zeroShiftEvidenceError = '';
+    void (window as any).openTimesheetEvidenceViewerSignatures({
+      created_at: '2026-09-06T09:00:00Z',
+      meta: {
+        booking_id: '00000000-0000-4000-8000-000000000131',
+        sheet_scope: 'WEEKLY',
+        week_ending_date: '2026-09-06',
+        actual_schedule_json: [],
+        auth_name: 'Test Manager',
+        auth_job_title: 'Ward Manager',
+        authorised_at_server: '2026-09-06T09:00:00Z'
+      }
+    }).catch((error: unknown) => { (window as any).__zeroShiftEvidenceError = String((error as Error)?.message || error); });
+  });
+
+  const modal = page.locator('#modal');
+  await expect(modal).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__zeroShiftEvidenceError)).toBe('');
+  await expect(modal.getByText('Shift details', { exact: true })).toBeVisible();
+  await expect(modal).toContainText('Week ending: 2026-09-06');
+  await expect(modal).not.toContainText('Shifts: 0');
+  await expect(modal).not.toContainText(/Shifts:/);
+  await expect(page.locator('#globalLoadingOverlay')).toBeHidden({ timeout: 30_000 });
+  await page.waitForTimeout(500);
+  await expect(page.locator('#globalLoadingOverlay')).toBeHidden({ timeout: 30_000 });
+  await captureCandidateOfficeVisual(page, '10-weekly-evidence-zero-shifts-omitted');
+});
+
+test('Office values and evidence are read-only for Candidate-controlled QR and Electronic routes', async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   await installPatchedAssets(page);
   await installOfficeMocks(page);
@@ -887,16 +1420,17 @@ test('Office expense values are read-only for QR and Electronic routes while eli
         await expect(modal.getByText(/Edit expenses and mileage/i)).toBeVisible();
       } else {
         expect(policy.canEditExpenses).toBe(false);
-        expect(policy.canManageExpenseEvidence).toBe(true);
+        expect(policy.canManageExpenseEvidence).toBe(false);
         expect(policy.expenseStorageTarget).toBe('TSFIN');
         expect(policy.expenseEvidenceStorageTarget).toBe('TIMESHEET_EVIDENCE');
-        expect(policy.expensesDisabledReason).toMatch(/managed through MyTMS/i);
+        expect(policy.expensesDisabledReason).toMatch(/controlled through MyTMS/i);
         await expect(travelPay).toBeDisabled();
         await expect(modal.getByText('Review expenses and mileage.', { exact: true })).toBeVisible();
-        await expect(modal.getByText(/expense values are managed through MyTMS/i)).toBeVisible();
-        await expect(modal.getByText(/expense evidence can still be added or removed in the Evidence tab/i)).toBeVisible();
+        await expect(modal.getByText(/controlled through MyTMS/i)).toBeVisible();
+        await expect(modal.getByText(/return the Timesheet to Office control/i)).toBeVisible();
         const evidenceHtml = await page.evaluate(() => (window as any).renderTimesheetEvidenceTab((window as any).modalCtx));
-        expect(evidenceHtml).toContain('data-evidence-add="1"');
+        expect(evidenceHtml).not.toContain('data-evidence-add="1"');
+        expect(evidenceHtml).toMatch(/return the Timesheet to Office control/i);
       }
 
       const bounds = await modal.evaluate(element => {

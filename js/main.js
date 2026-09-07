@@ -136021,13 +136021,15 @@ function classifyTimesheetEditDomains(ctxInput) {
   let expensesDisabledReason = null;
   if (protectedOriginal) {
     expensesDisabledReason = 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.';
-  } else if (isQrRoute || isElectronicRoute) {
-    expensesDisabledReason = 'This QR or Electronic timesheet\'s expense values are managed through MyTMS. Switch it to Manual before amending them in CloudTMS.';
-    reasonCodes.push('EXPENSES_QR_OR_ELECTRONIC');
+  } else if (isPaid) {
+    expensesDisabledReason = 'This Timesheet is paid, so its expenses are read-only.';
   } else if (isAuthorised) {
-    expensesDisabledReason = 'This timesheet is authorised. Unauthorise it before changing expenses.';
+    expensesDisabledReason = 'This Timesheet is agency authorised. Unauthorise it before changing expenses.';
   } else if (isInvoiceLocked || isSegmentInvoiceLocked) {
-    expensesDisabledReason = 'This timesheet is invoiced, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.';
+    expensesDisabledReason = 'This Timesheet is invoiced, so expenses cannot be amended on it. Create an additional manual adjustment Timesheet for the new expense or correction.';
+  } else if (isQrRoute || isElectronicRoute) {
+    expensesDisabledReason = 'This Candidate Timesheet is controlled through MyTMS. Return the Timesheet to Office control before changing its expense values.';
+    reasonCodes.push('EXPENSES_QR_OR_ELECTRONIC');
   } else if (isCancelled) {
     expensesDisabledReason = 'Expenses cannot be edited directly for this row.';
   } else if (isReviewOnly) {
@@ -136085,9 +136087,24 @@ function classifyTimesheetEditDomains(ctxInput) {
     ? backendAddAdditional === true
     : inferredAddAdditionalEligible;
 
-  const timesheetEvidenceDisabledReason = isAuthoritativeNoTimesheetRequiredRow
-    ? 'No timesheet image can be attached to this record.'
-    : (protectedOriginal ? 'Timesheet evidence is view-only for this source row.' : null);
+  let timesheetEvidenceDisabledReason = null;
+  if (isPaid) {
+    timesheetEvidenceDisabledReason = 'This Timesheet is paid, so its evidence is read-only.';
+  } else if (isInvoiceLocked || isSegmentInvoiceLocked) {
+    timesheetEvidenceDisabledReason = 'This Timesheet is invoiced, so its evidence is read-only.';
+  } else if (isAuthorised) {
+    timesheetEvidenceDisabledReason = 'This Timesheet is agency authorised. Unauthorise it before changing its evidence.';
+  } else if (isCancelled) {
+    timesheetEvidenceDisabledReason = 'This Timesheet is cancelled, so its evidence is read-only.';
+  } else if (isReviewOnly) {
+    timesheetEvidenceDisabledReason = 'Timesheet evidence is read-only for this row.';
+  } else if (isQrRoute || isElectronicRoute) {
+    timesheetEvidenceDisabledReason = 'This Candidate Timesheet is controlled through MyTMS. Return the Timesheet to Office control before changing its evidence.';
+  } else if (isAuthoritativeNoTimesheetRequiredRow) {
+    timesheetEvidenceDisabledReason = 'No Timesheet image can be attached to this record.';
+  } else if (protectedOriginal) {
+    timesheetEvidenceDisabledReason = 'Timesheet evidence is view-only for this source row.';
+  }
   const canAttachTimesheetEvidence = !!(
     !timesheetEvidenceDisabledReason &&
     isParentTimesheetContext &&
@@ -136102,16 +136119,18 @@ function classifyTimesheetEditDomains(ctxInput) {
   let expenseEvidenceDisabledReason = null;
   if (!isParentTimesheetContext) {
     expenseEvidenceDisabledReason = 'Expense evidence must be managed from the parent timesheet.';
-  } else if (isAuthorised) {
-    expenseEvidenceDisabledReason = 'This timesheet is authorised. Unauthorise it before changing expense evidence.';
   } else if (isPaid) {
-    expenseEvidenceDisabledReason = 'This timesheet is paid, so expense evidence is read-only.';
+    expenseEvidenceDisabledReason = 'This Timesheet is paid, so expense evidence is read-only.';
   } else if (isInvoiceLocked || isSegmentInvoiceLocked) {
-    expenseEvidenceDisabledReason = 'This timesheet is invoiced, so expense evidence is read-only.';
+    expenseEvidenceDisabledReason = 'This Timesheet is invoiced, so expense evidence is read-only.';
+  } else if (isAuthorised) {
+    expenseEvidenceDisabledReason = 'This Timesheet is agency authorised. Unauthorise it before changing expense evidence.';
   } else if (isCancelled) {
-    expenseEvidenceDisabledReason = 'This timesheet is cancelled, so expense evidence is read-only.';
+    expenseEvidenceDisabledReason = 'This Timesheet is cancelled, so expense evidence is read-only.';
   } else if (isReviewOnly) {
     expenseEvidenceDisabledReason = 'Expense evidence is read-only for this row.';
+  } else if (isQrRoute || isElectronicRoute) {
+    expenseEvidenceDisabledReason = 'This Candidate Timesheet is controlled through MyTMS. Return the Timesheet to Office control before changing expense evidence.';
   } else if (protectedOriginal) {
     expenseEvidenceDisabledReason = 'Expense evidence is read-only for this source row.';
   } else if (!expenseEvidenceStorageTarget) {
@@ -142740,6 +142759,7 @@ async function openUiConfirmModal(opts = {}) {
     let done = false;
     let ownerToken = null;
     let watchTimer = 0;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
     // ✅ Primary fix: do NOT resolve+cleanup before the modal is actually closed.
     // We stage the intended result, close the modal, then resolve from onDismiss.
@@ -142782,11 +142802,45 @@ async function openUiConfirmModal(opts = {}) {
       }
     };
 
+    const onKeyDown = (event) => {
+      if (done || !isThisModalLive()) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        pendingConfirmed = false;
+        pendingVia = 'cancel';
+        requestClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const modal = document.getElementById('modal');
+      if (!modal) return;
+      const focusable = Array.from(modal.querySelectorAll('button,input,select,textarea,a[href],[tabindex]:not([tabindex="-1"])'))
+        .filter((element) => !element.disabled && element.getAttribute('aria-disabled') !== 'true' && element.getClientRects().length > 0);
+      if (!focusable.length) {
+        event.preventDefault();
+        modal.setAttribute('tabindex', '-1');
+        modal.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
     const cleanup = () => {
       try {
         const body = document.getElementById('modalBody');
         if (body) body.removeEventListener('click', onBodyClick);
       } catch {}
+
+      try { document.removeEventListener('keydown', onKeyDown, true); } catch {}
 
       try { if (watchTimer) clearInterval(watchTimer); } catch {}
       watchTimer = 0;
@@ -142807,6 +142861,10 @@ async function openUiConfirmModal(opts = {}) {
           if (modal.dataset.uicfKind === String(kind)) delete modal.dataset.uicfKind;
           if (modal.dataset.uicfRootId === String(rootId)) delete modal.dataset.uicfRootId;
         }
+      } catch {}
+
+      try {
+        if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus({ preventScroll: true }));
       } catch {}
     };
 
@@ -142950,6 +143008,12 @@ async function openUiConfirmModal(opts = {}) {
       const body = document.getElementById('modalBody');
       if (body) body.addEventListener('click', onBodyClick);
     } catch {}
+    document.addEventListener('keydown', onKeyDown, true);
+    requestAnimationFrame(() => {
+      const current = document.getElementById(rootId);
+      const safe = showCancel ? current?.querySelector('[data-act="uicf-cancel"]') : current?.querySelector('[data-act="uicf-confirm"]');
+      try { safe?.focus({ preventScroll: true }); } catch { try { safe?.focus(); } catch {} }
+    });
 
     // Safety watcher:
     // If the modal frame disappears from the stack (e.g., hard reset on logout),
@@ -150372,7 +150436,8 @@ const renderTab = (key, mergedRow) => {
     expenseEvidenceStorageTarget: activeEditDomains?.expenseEvidenceStorageTarget || window.modalCtx?.expenseEvidenceStorageTarget || window.modalCtx?.expense_evidence_storage_target || null,
     expense_evidence_storage_target: activeEditDomains?.expenseEvidenceStorageTarget || window.modalCtx?.expenseEvidenceStorageTarget || window.modalCtx?.expense_evidence_storage_target || null,
     canManageExpenseEvidence: activeEditDomains?.canManageExpenseEvidence === true,
-    requiresAdditionalManualForExpenses: activeEditDomains?.requiresAdditionalManualForExpenses === true
+    requiresAdditionalManualForExpenses: activeEditDomains?.requiresAdditionalManualForExpenses === true,
+    candidateOfficeSurface: 'SIMPLE_TIMESHEET'
   };
 
   // NEW: audit fetch on tab open (best-effort, non-fatal)
@@ -150417,17 +150482,8 @@ const renderTab = (key, mergedRow) => {
     case 'overview': return renderTimesheetOverviewTab(ctxForTab);
     case 'lines':    return renderTimesheetLinesTab(ctxForTab);
 
-     case 'expenses': {
-      const expensesUi = deriveExpensesTabUiState(activeEditDomains || window.modalCtx?.timesheetEditDomains || null);
-      const enabled = !!expensesUi.enabled;
-
-      if (!enabled) {
-        const why = String(expensesUi.reason || window.modalCtx?.expenses_tab_reason || 'Expenses cannot be edited directly for this row.');
-        return `<div class="tabc"><div class="card"><div class="row"><label>Expenses</label><div class="controls"><span class="mini">${escapeHtml(why)}</span></div></div></div></div>`;
-      }
-
+    case 'expenses':
       return renderTimesheetExpensesTab(ctxForTab);
-    }
 
     case 'evidence': {
       const hydration = (window.modalCtx && window.modalCtx.timesheetHydration && typeof window.modalCtx.timesheetHydration === 'object')
@@ -172033,11 +172089,25 @@ const APPROVED_EXPENSE_ROUTE_LABELS = new Set([
   'Expense'
 ]);
 
+function isTimesheetAdjustmentReversal(row) {
+  const correctionId = String(row?.correction_id || '').trim();
+  const correctionKind = String(row?.correction_kind || '').trim().toUpperCase();
+  const correctionOrigin = String(row?.adjustment_origin || '').trim().toUpperCase();
+  const correctionSource = String(row?.correction_source_system || '').trim().toUpperCase();
+  return !!(
+    correctionId &&
+    correctionKind === 'CHANGED_HOURS_REVERSAL' &&
+    correctionOrigin === 'IMPORT_CORRECTION' &&
+    ['NHSP', 'HEALTHROSTER'].includes(correctionSource)
+  );
+}
+
 function formatTimesheetSummaryRoute(row) {
   if (row?.is_expense_only === true) {
     const label = String(row?.display_route_label || '').trim();
     return APPROVED_EXPENSE_ROUTE_LABELS.has(label) ? label : 'Expense';
   }
+  if (isTimesheetAdjustmentReversal(row)) return 'Timesheet Adjustment';
   return String(formatDisplayValue('route_type', row?.route_type) ?? '');
 }
 
@@ -177411,6 +177481,32 @@ function renderTimesheetExpensesTab(ctx) {
   const cw   = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : null;
 
   const originalCtx = (ctx && typeof ctx === 'object') ? ctx : {};
+  const candidateOfficeSurface = String(originalCtx.candidateOfficeSurface || '').trim().toUpperCase();
+  const candidateOfficeRow = {
+    ...row,
+    row_key: row.row_key || row.id || row.current_timesheet_id || row.timesheet_id || details.current_timesheet_id || ts?.timesheet_id || '',
+    timesheet_id: row.current_timesheet_id || row.timesheet_id || details.current_timesheet_id || ts?.timesheet_id || null,
+    contract_week_id: row.contract_week_id || details.contract_week_id || cw?.id || null,
+    backend_row_signature: row.backend_row_signature || row.row_signature || details.backend_row_signature || details.row_signature || ts?.backend_row_signature || ts?.row_signature || tf?.backend_row_signature || tf?.row_signature || null
+  };
+  let candidateOfficeExpenseSlot = '';
+  if (
+    ['SIMPLE_TIMESHEET', 'BULK_AUTHORISE'].includes(candidateOfficeSurface)
+    && candidateOfficeRow.timesheet_id
+    && typeof window !== 'undefined'
+    && window.CloudTMSCandidateOfficeBridge
+    && typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function'
+  ) {
+    try {
+      candidateOfficeExpenseSlot = window.CloudTMSCandidateOfficeBridge.slotHtml(
+        candidateOfficeSurface,
+        candidateOfficeRow,
+        { variant: 'expenses' }
+      );
+    } catch {
+      candidateOfficeExpenseSlot = '';
+    }
+  }
   const suppliedEditPolicy = (
     (c.timesheetEditDomains && typeof c.timesheetEditDomains === 'object') ? c.timesheetEditDomains :
     (c.editDomains && typeof c.editDomains === 'object') ? c.editDomains :
@@ -177775,6 +177871,7 @@ function renderTimesheetExpensesTab(ctx) {
   if (expensesTabDisabled || !enabled) {
     return `
       <div class="tabc">
+        ${candidateOfficeExpenseSlot}
         <div class="card">
           <div class="row" style="grid-column:1/-1">
             <label>Expenses</label>
@@ -177817,6 +177914,7 @@ function renderTimesheetExpensesTab(ctx) {
 
   return `
     <div class="tabc" data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
+      ${candidateOfficeExpenseSlot}
       <div class="card">
         <div class="row" style="grid-column:1/-1">
           <label>Expenses</label>
@@ -183532,35 +183630,38 @@ function renderBulkAuthoriseLists(state) {
   const authorisedSelectedCount = Array.from(authorisedSelectedSet).filter((key) => authorisedVisibleSet.has(key)).length;
 
   const formatDate = (row) => {
-    const raw = String(
-      row?.week_ending_date ||
-      row?.weekEndingDate ||
-      row?.week_ending ||
-      row?.weekEnding ||
-      row?.work_date ||
-      row?.workDate ||
-      row?.date ||
-      row?.contract_week_ending_date ||
-      row?.contractWeekEndingDate ||
-      ''
-    ).trim();
-    if (!raw) return '—';
-    const ymd = raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0] || '';
-    if (!ymd) return raw;
-    const [y, m, d] = ymd.split('-');
-    return `${d}-${m}-${y}`;
+    const candidates = [
+      row?.week_ending_date,
+      row?.weekEndingDate,
+      row?.week_ending,
+      row?.weekEnding,
+      row?.work_date,
+      row?.workDate,
+      row?.date,
+      row?.contract_week_ending_date,
+      row?.contractWeekEndingDate
+    ];
+    for (const value of candidates) {
+      const raw = String(value == null ? '' : value).trim();
+      if (!raw) continue;
+      const ymd = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:T|$)/);
+      if (ymd) return `${ymd[3]}-${ymd[2]}-${ymd[1]}`;
+      const uk = raw.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+      if (uk) return `${uk[1]}-${uk[2]}-${uk[3]}`;
+    }
+    return '—';
   };
 
   const deriveTypeLabel = (row) => {
+    if (row?.is_expense_only === true) return formatTimesheetSummaryRoute(row);
+    if (isTimesheetAdjustmentReversal(row)) return 'Timesheet Adjustment';
     const correctionId = String(row?.correction_id || '').trim();
     const correctionKind = String(row?.correction_kind || '').trim().toUpperCase();
     const correctionOrigin = String(row?.adjustment_origin || '').trim().toUpperCase();
     const correctionSource = String(row?.correction_source_system || '').trim().toUpperCase();
     const correctionLabel = String(row?.correction_display_label || '').trim();
     const validCorrectionLabel = (
-      (correctionSource === 'NHSP' && correctionKind === 'CHANGED_HOURS_REVERSAL' && correctionLabel === 'NHSP Reversal') ||
       (correctionSource === 'NHSP' && correctionKind === 'CHANGED_HOURS_REPLACEMENT' && correctionLabel === 'NHSP Corrected Hours') ||
-      (correctionSource === 'HEALTHROSTER' && correctionKind === 'CHANGED_HOURS_REVERSAL' && correctionLabel === 'HealthRoster Reversal') ||
       (correctionSource === 'HEALTHROSTER' && correctionKind === 'CHANGED_HOURS_REPLACEMENT' && correctionLabel === 'HealthRoster Corrected Hours')
     );
     if (correctionId && correctionOrigin === 'IMPORT_CORRECTION' && validCorrectionLabel) return correctionLabel;
@@ -262691,6 +262792,20 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     try { return JSON.stringify(value); } catch { return ''; }
   };
   const trimStr = (value) => String(value == null ? '' : value).trim();
+  const openedRowKey = trimStr(activeRow?.row_key || st.active_row_key || '');
+  const openedTimesheetId = trimStr(
+    activeRow?.current_timesheet_id ||
+    activeRow?.timesheet_id ||
+    activeDetails?.current_timesheet_id ||
+    activeDetails?.timesheet?.timesheet_id ||
+    ''
+  );
+  const openedContractWeekId = trimStr(
+    activeRow?.contract_week_id ||
+    activeDetails?.contract_week_id ||
+    activeDetails?.contract_week?.id ||
+    ''
+  );
   const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
   const normaliseExpensesDraft = (value) => {
     const src = (value && typeof value === 'object') ? value : {};
@@ -262779,6 +262894,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     contract_week_id: activeDetails?.contract_week_id || activeDetails?.contract_week?.id || activeRow?.contract_week_id || null,
     expenses_read_only: expensesReadOnly,
     expenses_force_open: !!hasProcessedExpenses,
+    candidateOfficeSurface: 'BULK_AUTHORISE',
     state: {
       ...(ctx?.state || {}),
       expenseStorageTarget,
@@ -262947,6 +263063,80 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       stayOpenOnSave: false
     }
   );
+
+  const expenseFrame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+  if (expenseFrame && String(expenseFrame.kind || '') === 'bulk-authorise-expenses') {
+    expenseFrame.__refreshCandidateOfficeExpenseCategory = async ({ rowVanished = false } = {}) => {
+      const currentFrame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (!currentFrame || currentFrame !== expenseFrame || String(currentFrame.kind || '') !== 'bulk-authorise-expenses') {
+        return { refreshed: false, closed: false };
+      }
+
+      const latestContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+      const latestCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : latestContext;
+      const latestRow = (st.active_row && typeof st.active_row === 'object')
+        ? st.active_row
+        : ((latestCtx.row && typeof latestCtx.row === 'object') ? latestCtx.row : null);
+      const latestDetails = (st.active_details && typeof st.active_details === 'object')
+        ? st.active_details
+        : ((latestCtx.details && typeof latestCtx.details === 'object') ? latestCtx.details : {});
+      const latestRowKey = trimStr(latestRow?.row_key || st.active_row_key || '');
+      const latestTimesheetId = trimStr(
+        latestRow?.current_timesheet_id || latestRow?.timesheet_id ||
+        latestDetails?.current_timesheet_id || latestDetails?.timesheet?.timesheet_id || ''
+      );
+      const latestContractWeekId = trimStr(
+        latestRow?.contract_week_id || latestDetails?.contract_week_id || latestDetails?.contract_week?.id || ''
+      );
+      const sameOwningRow = openedTimesheetId
+        ? latestTimesheetId === openedTimesheetId
+        : (openedRowKey
+            ? latestRowKey === openedRowKey
+            : !!(openedContractWeekId && latestContractWeekId === openedContractWeekId));
+
+      if (rowVanished === true || !latestRow || !sameOwningRow) {
+        currentFrame.isDirty = false;
+        try { currentFrame._updateButtons && currentFrame._updateButtons(); } catch {}
+        if (typeof window.closeCurrentModalFrameSafely === 'function') {
+          const closed = window.closeCurrentModalFrameSafely({ expectedKind: 'bulk-authorise-expenses' });
+          return { refreshed: false, closed: closed === true };
+        }
+        try {
+          const close = document.getElementById('btnCloseModal');
+          if (close && !close.disabled) close.click();
+        } catch {}
+        return { refreshed: false, closed: true };
+      }
+
+      const latestState = (latestCtx.state && typeof latestCtx.state === 'object') ? latestCtx.state : {};
+      Object.assign(childCtx, deep(latestCtx), {
+        row: deep((latestCtx.row && typeof latestCtx.row === 'object') ? latestCtx.row : latestRow),
+        details: deep((latestCtx.details && typeof latestCtx.details === 'object') ? latestCtx.details : latestDetails),
+        related: deep((latestCtx.related && typeof latestCtx.related === 'object') ? latestCtx.related : (latestContext.related || {})),
+        expenseStorageTarget,
+        expense_storage_target: expenseStorageTarget,
+        contract_week_id: latestContractWeekId || openedContractWeekId || null,
+        expenses_read_only: expensesReadOnly,
+        expenses_force_open: !!hasProcessedExpenses,
+        candidateOfficeSurface: 'BULK_AUTHORISE',
+        state: {
+          ...deep(latestState),
+          expenseStorageTarget,
+          expense_storage_target: expenseStorageTarget,
+          contract_week_id: latestContractWeekId || openedContractWeekId || null,
+          expensesReadOnly
+        }
+      });
+      try { currentFrame._suppressDirty = true; } catch {}
+      try {
+        await currentFrame.setTab(currentFrame.currentTabKey || 'main');
+      } finally {
+        try { currentFrame._suppressDirty = false; } catch {}
+      }
+      setTimeout(wire, 0);
+      return { refreshed: true, closed: false };
+    };
+  }
 
   const wire = () => {
     const root = document.getElementById(rootId);
@@ -333289,7 +333479,13 @@ if (btnTsProcess) {
                   : '';
                 const choice = await openUiConfirmModal({
                   title: 'Reject before deleting',
-                  message: [statusMessage, expenseMessage, 'Would you like to reject the Candidate Submission now?'].filter(Boolean).join('\n\n'),
+                  message: [
+                    statusMessage,
+                    expenseMessage,
+                    'This rejects the complete Candidate Submission on this Timesheet, including all affected expenses on this Timesheet.',
+                    'The candidate must choose “Start a new claim”. The new claim begins blank.',
+                    'Would you like to reject the Candidate Submission now?'
+                  ].filter(Boolean).join('\n\n'),
                   confirm_label: 'Reject Candidate Submission',
                   cancel_label: 'Go Back',
                   confirm_class: 'btn btn-warn',
@@ -357294,7 +357490,7 @@ async function openTimesheetEvidenceViewerSignatures(ev) {
     const sched = Array.isArray(ts?.actual_schedule_json) ? ts.actual_schedule_json :
                   Array.isArray(meta.actual_schedule_json) ? meta.actual_schedule_json :
                   null;
-    if (sched) summaryLines.push(`Shifts: ${sched.length}`);
+    if (Array.isArray(sched) && sched.length > 0) summaryLines.push(`Shifts: ${sched.length}`);
   }
 
   // Presign signature URLs (batch)
@@ -359432,7 +359628,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       const we = meta.week_ending_date ? String(meta.week_ending_date) : '';
       if (we) summaryLines.push(`Week ending: ${we}`);
       const sched = meta.actual_schedule_json;
-      if (Array.isArray(sched)) summaryLines.push(`Shifts: ${sched.length}`);
+      if (Array.isArray(sched) && sched.length > 0) summaryLines.push(`Shifts: ${sched.length}`);
     }
 
     const title = `Electronic evidence ${String(tsId).slice(0, 8)}…`;
@@ -365284,6 +365480,7 @@ function makeTimesheetFastOpenRenderTab(openToken, baseRowArg) {
       expense_evidence_storage_target: activeEditDomains?.expenseEvidenceStorageTarget || mc.expenseEvidenceStorageTarget || mc.expense_evidence_storage_target || null,
       canManageExpenseEvidence: activeEditDomains?.canManageExpenseEvidence === true,
       requiresAdditionalManualForExpenses: activeEditDomains?.requiresAdditionalManualForExpenses === true,
+      candidateOfficeSurface: 'SIMPLE_TIMESHEET',
       suppress_action_buttons: !detailsLoaded,
       suppress_timesheet_action_buttons: !detailsLoaded
     };

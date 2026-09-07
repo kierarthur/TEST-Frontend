@@ -16,6 +16,7 @@ function loadController() {
     },
     CloudTMSCandidateOfficeContract: {
       normalizeOfficeCandidateAction: action => action,
+      normalizeOfficeExpenseCategoryRejectionResult: result => result,
       normalizeCandidateOfficeError: error => ({
         code: error.code || 'CANDIDATE_OFFICE_UNKNOWN',
         message: error.message,
@@ -25,7 +26,8 @@ function loadController() {
     CloudTMSCandidateOfficeApi: {},
     CloudTMSCandidateOfficeModals: {
       openCandidateManagerActionModal: async () => ({ confirmed: true, inputs: {} }),
-      openCandidateTypedActionModal: async () => ({ confirmed: true, inputs: {} })
+      openCandidateTypedActionModal: async () => ({ confirmed: true, inputs: {} }),
+      openCandidateExpenseCategoryRejectionModal: async () => ({ confirmed: true, inputs: { reason_note: 'Incorrect expense.' } })
     },
     location: { origin: 'https://testmode.example' },
     open: () => null
@@ -52,9 +54,24 @@ function action(fixedBody = { generation: 1 }) {
   };
 }
 
+function expenseAction(componentId, fixedBody = { generation: 1 }) {
+  return {
+    ...action(fixedBody),
+    code: 'REJECT_EXPENSE_CATEGORY',
+    label: 'Reject expense',
+    invocation: {
+      ...action(fixedBody).invocation,
+      path: '/api/candidate-app/workflows/example/actions/reject-expense-category',
+      required_user_inputs: [{ name: 'reason_note', type: 'string', required: true, max_length: 1000 }]
+    },
+    componentId
+  };
+}
+
 test('an unknown transport result reuses the same operation key on exact retry', async () => {
   const module = loadController();
   const seen = [];
+  let reconciliations = 0;
   let attempt = 0;
   const controller = module.createCandidateOfficeActionController({
     api: {
@@ -67,12 +84,13 @@ test('an unknown transport result reuses the same operation key on exact retry',
     },
     createIdempotencyKey: () => 'operation-key-1',
     ensureFresh: async () => true,
-    refetchProjection: async () => {},
+    refetchProjection: async () => { reconciliations += 1; },
     showToast: () => {}
   });
   const context = { surface: 'SIMPLE_TIMESHEET', identity: { row_key: 'row-a' }, action: action() };
 
   assert.equal((await controller.runTypedAction(context)).ok, false);
+  assert.equal(reconciliations, 1);
   assert.equal((await controller.runTypedAction(context)).ok, true);
   assert.deepEqual(seen, ['operation-key-1', 'operation-key-1']);
 });
@@ -127,4 +145,69 @@ test('a duplicate click cannot start a second in-flight mutation', async () => {
   assert.equal(calls, 1);
   release();
   assert.equal((await first).ok, true);
+});
+
+test('expense-category rejection uses its dedicated decision modal and category-specific reconciliation', async () => {
+  const module = loadController();
+  const seen = [];
+  const reconciled = [];
+  const controller = module.createCandidateOfficeActionController({
+    api: {
+      invokeOfficeCandidateAction: async input => {
+        seen.push(input);
+        return { ok: true, owning_timesheet_deleted: false };
+      }
+    },
+    createIdempotencyKey: () => 'expense-operation-key',
+    ensureFresh: async context => ({
+      projection: context.projection,
+      action: context.action,
+      expenseCategory: context.expenseCategory,
+      expenseConfirmation: context.expenseConfirmation
+    }),
+    reconcileExpenseCategory: async (result, context) => reconciled.push({ result, context }),
+    showToast: () => {}
+  });
+  const componentId = '00000000-0000-4000-8000-000000000101';
+  const context = {
+    surface: 'SIMPLE_TIMESHEET',
+    identity: { row_key: 'row-a' },
+    projection: { current_identity: { row_key: 'row-a' } },
+    action: expenseAction(componentId, { generation: 2, expense_component_id: componentId, component_generation: 3, context_digest: 'a'.repeat(64) }),
+    expenseComponentId: componentId,
+    expenseCategory: { expense_component_id: componentId, label: 'Accommodation', amount: '£25.00' },
+    expenseConfirmation: { empty_timesheet_consequence: 'NONE', will_delete_timesheet: false, supporting_evidence_count: 3 }
+  };
+
+  const result = await controller.runTypedAction(context);
+  assert.equal(result.ok, true);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].userInputs.reason_note, 'Incorrect expense.');
+  assert.equal(seen[0].idempotencyKey, 'expense-operation-key');
+  assert.equal(reconciled.length, 1);
+  assert.equal(reconciled[0].context.expenseComponentId, componentId);
+});
+
+test('different expense categories do not share the duplicate-action lock', async () => {
+  const module = loadController();
+  const pending = [];
+  const controller = module.createCandidateOfficeActionController({
+    api: {
+      invokeOfficeCandidateAction: async input => new Promise(resolve => pending.push(() => resolve({ ok: true, body: input })))
+    },
+    createIdempotencyKey: (() => { let index = 0; return () => `expense-operation-${++index}`; })(),
+    ensureFresh: async context => ({ action: context.action, expenseCategory: context.expenseCategory, expenseConfirmation: context.expenseConfirmation }),
+    reconcileExpenseCategory: async () => {},
+    showToast: () => {}
+  });
+  const firstId = '00000000-0000-4000-8000-000000000111';
+  const secondId = '00000000-0000-4000-8000-000000000112';
+  const base = { surface: 'SIMPLE_TIMESHEET', identity: { row_key: 'row-a' }, expenseConfirmation: { empty_timesheet_consequence: 'NONE', will_delete_timesheet: false } };
+  const first = controller.runTypedAction({ ...base, expenseComponentId: firstId, expenseCategory: { expense_component_id: firstId, label: 'Travel' }, action: expenseAction(firstId) });
+  const second = controller.runTypedAction({ ...base, expenseComponentId: secondId, expenseCategory: { expense_component_id: secondId, label: 'Other' }, action: expenseAction(secondId) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(pending.length, 2);
+  pending.splice(0).forEach(release => release());
+  assert.equal((await first).ok, true);
+  assert.equal((await second).ok, true);
 });

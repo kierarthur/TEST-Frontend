@@ -14,12 +14,19 @@
     const normalizeError = error => window.CloudTMSCandidateOfficeContract.normalizeCandidateOfficeError(error);
     const active = new Map();
     const operationKeys = new Map();
-    const setState = (key, state) => { if (!STATES.includes(state)) throw new Error(`Invalid Candidate action state: ${state}`); active.set(key, { ...(active.get(key) || {}), state }); deps.onStateChange?.(key, state); };
+    const setState = (key, state, context = null) => {
+      if (!STATES.includes(state)) throw new Error(`Invalid Candidate action state: ${state}`);
+      const previous = active.get(key) || {};
+      const nextContext = context || previous.context || null;
+      active.set(key, { ...previous, state, context: nextContext });
+      deps.onStateChange?.(key, state, nextContext);
+    };
     const isBusy = key => !TERMINAL_STATES.has(active.get(key)?.state || 'IDLE');
     const keyOf = input => {
       const rowKey = input.identity?.row_key || input.projection?.current_identity?.row_key || 'row';
       const actionCode = input.action?.code || input.action || 'action';
-      return `${input.surface || 'OFFICE'}:${rowKey}:${String(actionCode).toUpperCase()}`;
+      const componentScope = input.expenseComponentId || input.expenseCategory?.expense_component_id || '';
+      return `${input.surface || 'OFFICE'}:${rowKey}:${String(actionCode).toUpperCase()}${componentScope ? `:${componentScope}` : ''}`;
     };
     const idempotency = () => (deps.createIdempotencyKey || (() => crypto.randomUUID()))();
     const operationFingerprint = value => {
@@ -61,7 +68,7 @@
       else await deps.refetchProjection?.(context);
     };
     const preflight = async (context, key) => {
-      setState(key, 'CHECKING_FRESHNESS');
+      setState(key, 'CHECKING_FRESHNESS', context);
       if (context.dirtyGuard) {
         const clean = await deps.runDirtyGuard?.(context);
         if (clean === false) throw Object.assign(new Error('Save or discard the current edits before performing this Candidate action.'), { code: 'CANDIDATE_OFFICE_DIRTY' });
@@ -70,12 +77,22 @@
       if (fresh === false) throw Object.assign(new Error('This timesheet has changed.'), { code: 'CANDIDATE_CONTEXT_STALE' });
       if (fresh?.projection) context.projection = fresh.projection;
       if (fresh?.action) context.action = fresh.action;
+      if (fresh?.expenseCategory) context.expenseCategory = fresh.expenseCategory;
+      if (fresh?.expenseConfirmation) context.expenseConfirmation = fresh.expenseConfirmation;
       setState(key, 'PREFLIGHTING');
     };
     const handleFailure = async (error, context, key) => {
       classifyOperationFailure(key, error);
       const normalized = normalizeError(error);
-      setState(key, normalized.code === 'CANDIDATE_IDEMPOTENCY_CONFLICT' ? 'CONFLICT' : normalized.stale ? 'STALE' : 'FAILED');
+      const uncertain = operationKeys.get(key)?.uncertain === true;
+      setState(key, normalized.code === 'CANDIDATE_IDEMPOTENCY_CONFLICT' ? 'CONFLICT' : normalized.stale ? 'STALE' : 'FAILED', context);
+      // A bounded transport failure may occur after the server accepted the
+      // idempotent action. Unlock navigation first, then make one bounded read
+      // of current server truth. The exact retry retains the same operation
+      // key, so this check never causes a blind second mutation.
+      if (uncertain) {
+        try { await deps.refetchProjection?.(context); } catch {}
+      }
       if (normalized.stale || normalized.code === 'CANDIDATE_PROVIDER_HANDOFF_IN_PROGRESS') {
         const choice = await modals.openCandidateConflictModal({ error: normalized, trigger: context.trigger });
         if (choice.value === 'refresh') await deps.refetchProjection?.(context);
@@ -187,9 +204,11 @@
         let inputs = {};
         setState(key, 'COLLECTING_REASON');
         const confirmedOfficeCodes = new Set(['SEND_MANAGER_REMINDER', 'RENEW_MANAGER_REQUEST', 'RETRY_FINALISATION', 'RETRY_PAPER_PREPARATION', 'ISSUE_REPLACEMENT_PAPER_PACK']);
-        const response = confirmedOfficeCodes.has(action.code)
-          ? await modals.openCandidateManagerActionModal({ action, projection: context.projection, trigger: context.trigger })
-          : await modals.openCandidateTypedActionModal({ action, projection: context.projection, trigger: context.trigger });
+        const response = action.code === 'REJECT_EXPENSE_CATEGORY'
+          ? await modals.openCandidateExpenseCategoryRejectionModal({ category: context.expenseCategory, confirmation: context.expenseConfirmation, trigger: context.trigger })
+          : confirmedOfficeCodes.has(action.code)
+            ? await modals.openCandidateManagerActionModal({ action, projection: context.projection, trigger: context.trigger })
+            : await modals.openCandidateTypedActionModal({ action, projection: context.projection, trigger: context.trigger });
         if (!response.confirmed) { setState(key, 'CANCELLED'); return { ok: false, cancelled: true }; }
         inputs = response.inputs || {};
         setState(key, 'APPLYING_RESULT');
@@ -197,16 +216,26 @@
           ? operationKeyFor(key, { code: action.code, path: action.invocation.path, fixed_body: action.invocation.fixed_body, user_inputs: inputs })
           : null;
         let result = await api.invokeOfficeCandidateAction({ action, userInputs: inputs, idempotencyKey: requestKey });
+        if (action.code === 'REJECT_EXPENSE_CATEGORY') {
+          result = window.CloudTMSCandidateOfficeContract.normalizeOfficeExpenseCategoryRejectionResult(result, {
+            action,
+            expenseCategory: context.expenseCategory
+          });
+        }
         if (result instanceof Blob) {
           const url = URL.createObjectURL(result);
           window.open(url, '_blank', 'noopener,noreferrer');
           setTimeout(() => URL.revokeObjectURL(url), 60000);
           result = { ok: true, downloaded: true };
         }
-        await reconcile(result, context);
+        if (action.code === 'REJECT_EXPENSE_CATEGORY' && typeof deps.reconcileExpenseCategory === 'function') {
+          await deps.reconcileExpenseCategory(result, context);
+        } else {
+          await reconcile(result, context);
+        }
         finishOperation(key);
         setState(key, 'SUCCEEDED');
-        deps.showToast?.(`${action.label} completed.`, 'ok');
+        deps.showToast?.(action.code === 'REJECT_EXPENSE_CATEGORY' ? `${context.expenseCategory?.label || 'Expense'} expense rejected.` : `${action.label} completed.`, 'ok');
         return { ok: true, result };
       } catch (error) { return handleFailure(error, context, key); }
     }
@@ -216,7 +245,7 @@
       try {
         window.CloudTMSCandidateOfficeUiPolicy.assertOfficeButtonApproved('TIMESHEET_SUMMARY', 'SEND_MANAGER_REMINDER_BATCH');
         if (!context.rows?.length) return { ok: false, cancelled: true };
-        setState(key, 'PREFLIGHTING');
+        setState(key, 'PREFLIGHTING', context);
         const preview = await api.previewManagerReminderBatch({ identities: context.rows });
         const response = await modals.openCandidateReminderBatchModal({ preview, trigger: context.trigger });
         if (!response.confirmed) { setState(key, 'CANCELLED'); return { ok: false, cancelled: true }; }

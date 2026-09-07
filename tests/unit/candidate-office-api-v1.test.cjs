@@ -27,10 +27,18 @@ function projection() {
   };
 }
 
-function load(authFetch, { windowApi = true, globalApi = false } = {}) {
+function load(authFetch, {
+  windowApi = true,
+  globalApi = false,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout
+} = {}) {
   const window = { authFetch };
   if (windowApi) window.API = value => `https://test.example${value}`;
-  const globals = { window, Object, Set, Map, String, Number, Array, JSON, Error, URL, URLSearchParams, encodeURIComponent };
+  const globals = {
+    window, Object, Set, Map, String, Number, Array, JSON, Error, URL, URLSearchParams,
+    encodeURIComponent, AbortController, setTimeout: setTimeoutFn, clearTimeout: clearTimeoutFn
+  };
   if (globalApi) globals.API = value => `https://test.example${value}`;
   const context = vm.createContext(globals);
   for (const file of ['candidate-office-contract-v1.js', 'candidate-office-api-v1.js']) {
@@ -122,6 +130,43 @@ test('required mutation idempotency key is enforced before transport', async () 
     error => error.code === 'CANDIDATE_IDEMPOTENCY_KEY_REQUIRED'
   );
   assert.equal(calls, 0);
+});
+
+test('a stalled Office request is bounded and aborts its transport', async () => {
+  let requestSignal;
+  const api = load(async (_url, init) => {
+    requestSignal = init.signal;
+    return new Promise(() => {});
+  }, {
+    setTimeoutFn: callback => { callback(); return 1; },
+    clearTimeoutFn: () => {}
+  });
+  await assert.rejects(
+    () => api.fetchOfficeCandidateCapabilities(),
+    error => error.code === 'CANDIDATE_OFFICE_REQUEST_TIMEOUT'
+      && /did not receive a response in time/i.test(error.message)
+  );
+  assert.equal(requestSignal.aborted, true);
+});
+
+test('a stalled Office response body is also bounded and aborted', async () => {
+  let requestSignal;
+  let expire;
+  const api = load(async (_url, init) => {
+    requestSignal = init.signal;
+    return { ok: true, status: 200, text: async () => new Promise(() => {}) };
+  }, {
+    setTimeoutFn: callback => { expire = callback; return 1; },
+    clearTimeoutFn: () => {}
+  });
+  const pending = api.fetchOfficeCandidateCapabilities();
+  await new Promise(resolve => setImmediate(resolve));
+  expire();
+  await assert.rejects(
+    () => pending,
+    error => error.code === 'CANDIDATE_OFFICE_REQUEST_TIMEOUT'
+  );
+  assert.equal(requestSignal.aborted, true);
 });
 
 test('durable PARTIAL reminder result is returned as structured batch truth', async () => {

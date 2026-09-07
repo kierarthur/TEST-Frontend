@@ -26,6 +26,7 @@ test('frontend fixed Office routes exist in the frozen OpenAPI', { skip: !openAp
     '/api/candidate-app/timesheets/{timesheetId}/reject-preview',
     '/api/candidate-app/timesheets/{timesheetId}/reject',
     '/api/candidate-app/workflows/{workflowId}/actions/{action}',
+    '/api/candidate-app/workflows/{workflowId}/actions/reject-expense-category',
     '/api/candidate-app/manager-reminder-batches/preview',
     '/api/candidate-app/manager-reminder-batches',
     '/api/candidate-app/manager-reminder-batches/{batchId}',
@@ -60,6 +61,81 @@ test('generic workflow invocation is constrained to the frozen Office action cat
   assert.ok(enumMatch, 'workflow action path must retain the exact closed action enum');
   expected.forEach(action => assert.match(enumMatch[0], new RegExp(`\\b${action}\\b`)));
   assert.doesNotMatch(enumMatch[0], /resubmit|mark-no-work/i);
+});
+
+test('expense-category rejection route, projected authority and V2 receipt stay exact', { skip: !openApi && 'backend OpenAPI checkout not available' }, () => {
+  const block = (header, indent) => {
+    const lines = openApi.split(/\r?\n/);
+    const prefix = ' '.repeat(indent);
+    const start = lines.findIndex(line => line === `${prefix}${header}:`);
+    assert.notEqual(start, -1, `${header} is missing from the Office OpenAPI`);
+    let end = start + 1;
+    while (end < lines.length && (!lines[end].trim() || lines[end].startsWith(`${prefix} `))) end += 1;
+    return lines.slice(start, end).join('\n');
+  };
+
+  const route = block('/api/candidate-app/workflows/{workflowId}/actions/reject-expense-category', 2);
+  assert.match(route, /operationId: rejectOfficeCandidateExpenseCategory/);
+  assert.match(route, /OfficeExpenseCategoryRejectionRequest/);
+  assert.match(route, /'200':[\s\S]*OfficeExpenseCategoryRejectionResultV2/);
+  assert.match(route, /'409':[\s\S]*CANDIDATE_EXPENSE_CATEGORY_CONTEXT_CHANGED/);
+
+  const request = block('OfficeExpenseCategoryRejectionRequest', 4);
+  assert.match(request, /additionalProperties: false/);
+  assert.match(request, /required: \[generation, expense_component_id, component_generation, confirmation_sha256, reason_note, idempotency_key\]/);
+  assert.match(request, /reason_note: \{type: string, minLength: 1, maxLength: 1000\}/);
+
+  const action = block('OfficeExpenseCategoryRejectionAction', 4);
+  assert.match(action, /code: \{const: REJECT_EXPENSE_CATEGORY\}/);
+  assert.match(action, /label: \{const: 'Reject expense'\}/);
+  assert.match(action, /group: \{const: EXPENSES\}/);
+  assert.match(action, /prominent: \{const: false\}/);
+  assert.match(action, /enabled: \{const: true\}/);
+  assert.match(action, /requires_confirmation: \{const: true\}/);
+  assert.match(action, /requires_reason: \{const: true\}/);
+  assert.match(action, /required: \[generation, expense_component_id, component_generation, confirmation_sha256\]/);
+  assert.match(action, /OfficeExpenseCategoryRejectionReasonInput/);
+  assert.match(action, /idempotency: \{const: REQUIRED\}/);
+
+  const confirmation = block('OfficeExpenseCategoryRejectionConfirmation', 4);
+  assert.match(confirmation, /contract_version: \{const: OFFICE_EXPENSE_CATEGORY_REJECTION_CONFIRMATION_V1\}/);
+  assert.match(confirmation, /required: \[contract_version, confirmation_sha256, expense_category, amount, mileage_units, supporting_evidence_count, owning_timesheet_id, empty_timesheet_consequence, will_delete_timesheet, remaining_hours, remaining_expense_total, route_family\]/);
+  assert.match(confirmation, /empty_timesheet_consequence: \{\$ref: '#\/components\/schemas\/OfficeEmptyTimesheetConsequence'\}/);
+  assert.match(confirmation, /route_family: \{type: string, enum: \[ELECTRONIC, QR\]\}/);
+
+  const consequence = block('OfficeEmptyTimesheetConsequence', 4);
+  assert.match(consequence, /enum: \[NONE, PERMANENT_REMOVE, REMOVE_FROM_CURRENT_KEEP_HISTORY\]/);
+
+  const category = block('OfficeExpenseCategory', 4);
+  assert.match(category, /office_rejection_action:[\s\S]*OfficeExpenseCategoryRejectionAction/);
+  assert.match(category, /office_rejection_confirmation:[\s\S]*OfficeExpenseCategoryRejectionConfirmation/);
+
+  const result = block('OfficeExpenseCategoryRejectionResultV2', 4);
+  assert.match(result, /additionalProperties: false/);
+  assert.match(result, /contract_version: \{const: OFFICE_EXPENSE_CATEGORY_REJECTION_RESULT_V2\}/);
+  assert.match(result, /action_code: \{const: REJECT_EXPENSE_CATEGORY\}/);
+  assert.match(result, /state: \{const: OFFICE_REJECTED\}/);
+  assert.match(result, /previous_owning_timesheet_id: \{\$ref: '#\/components\/schemas\/Uuid'\}/);
+  assert.match(result, /empty_timesheet_consequence: \{\$ref: '#\/components\/schemas\/OfficeEmptyTimesheetConsequence'\}/);
+  assert.match(result, /deleted_timesheet_ids: \{type: array, uniqueItems: true/);
+  assert.match(result, /retained_timesheet_ids: \{type: array, uniqueItems: true/);
+  assert.match(result, /affected_timesheet_ids: \{type: array, uniqueItems: true/);
+  assert.match(result, /removed_from_current_timesheet_ids: \{type: array, uniqueItems: true/);
+  assert.match(result, /refresh_timesheet_ids: \{type: array, uniqueItems: true/);
+  assert.match(result, /OfficeExpenseCategoryRejectionRefreshHints/);
+  assert.match(result, /idempotent_replay: \{type: boolean\}/);
+
+  const refusal = block('OfficeExpenseCategoryRejectionRefusal', 4);
+  assert.match(refusal, /required: \[kind, reason, at_utc\]/);
+  assert.match(refusal, /kind: \{const: AGENCY_REJECTION\}/);
+
+  const refresh = block('OfficeExpenseCategoryRejectionRefreshHints', 4);
+  assert.match(refresh, /required: \[summary, simple_timesheet, bulk_process, bulk_authorise, refetch\]/);
+  assert.match(refresh, /refetch: \{const: AFFECTED_ROWS\}/);
+
+  const projection = block('Projection', 4);
+  assert.match(projection, /expense_claims: \{type: array, items: \{\$ref: '#\/components\/schemas\/OfficeExpenseClaim'\}\}/);
+  assert.match(openApi, /^\s*- CANDIDATE_EXPENSE_CATEGORY_CONTEXT_CHANGED$/m);
 });
 
 test('frontend contract-version constants are exact OpenAPI constants', { skip: !openApi && 'backend OpenAPI checkout not available' }, () => {

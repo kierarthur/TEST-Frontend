@@ -15,6 +15,27 @@
   }
   const renderCandidateCompactBadges = renderCandidateSummaryCell;
   const renderFields = fields => `<dl class="candidate-office-facts">${(fields || []).map(([label, value]) => `<div><dt>${escape(label)}</dt><dd>${escape(value)}</dd></div>`).join('')}</dl>`;
+  const canRenderExpenseCategoryRejection = (surface, category, view) => !!(
+    ['ELECTRONIC', 'QR'].includes(String(view?.identity?.route_family || view?.projection?.current_identity?.route_family || '').toUpperCase())
+    && ['SIMPLE_TIMESHEET', 'BULK_AUTHORISE'].includes(String(surface || '').toUpperCase())
+    && category?.rejection_action?.enabled === true
+    && window.CloudTMSCandidateOfficeUiPolicy?.isButtonApproved(surface, 'REJECT_EXPENSE_CATEGORY') === true
+    && window.CloudTMSCandidateOfficeBridge?.capabilities?.permissions?.reject_submission === true
+  );
+  function renderExpenseClaims(view, { surface = 'SIMPLE_TIMESHEET', showCategoryActions = false } = {}) {
+    const claims = Array.isArray(view?.expense_claims) ? view.expense_claims : [];
+    if (!claims.length) return '';
+    return `<section class="candidate-office-section candidate-office-expenses"><div class="candidate-office-section__heading"><h4>Expenses on this Timesheet</h4></div>${claims.map(claim => `<div class="candidate-office-expense-claim">
+      <div class="candidate-office-expense-claim__header"><strong>Expense total ${escape(claim.total)}</strong>${claim.needs_attention ? `<span class="${statusClass('warning')}">Needs attention</span>` : (claim.updating ? `<span class="${statusClass('info')}">Updating</span>` : '')}</div>
+      ${claim.needs_attention ? '<p class="candidate-office-inline-note">More than one pending expense submission exists for this Timesheet. Review the record before continuing.</p>' : ''}
+      ${claim.updating ? '<p class="candidate-office-inline-note">This expense submission is being updated. The latest details will appear here when the update is complete.</p>' : ''}
+      <div class="candidate-office-expense-categories">${claim.categories.map(category => `<article class="candidate-office-expense-category">
+        <div class="candidate-office-expense-category__header"><strong>${escape(category.label)} · ${escape(category.amount)}</strong><span class="${statusClass(category.status.tone)}" data-expense-status-code="${escape(category.status.code)}">${escape(category.status.label)}</span></div>
+        ${renderFields(category.fields)}
+        ${showCategoryActions && canRenderExpenseCategoryRejection(surface, category, view) ? `<div class="candidate-office-expense-category__actions"><span>Rejecting applies to this complete category and all its supporting items.</span><button type="button" class="btn btn-warn" data-candidate-office-expense-action="REJECT_EXPENSE_CATEGORY" data-expense-component-id="${escape(category.expense_component_id)}" data-candidate-office-server-enabled="1" aria-label="Reject complete ${escape(category.label)} expense">Reject ${escape(category.label)} expense</button></div>` : ''}
+      </article>`).join('')}</div>
+    </div>`).join('')}</section>`;
+  }
   const approvedActions = (actions, surface) => (Array.isArray(actions) ? actions : [])
     .filter(action => action?.enabled === true || action?.placeholder === true)
     .filter(action => window.CloudTMSCandidateOfficeUiPolicy?.isButtonApproved(surface, action?.code) === true);
@@ -36,6 +57,9 @@
     const sections = [];
     if (view.current_submission) {
       sections.push(`<div class="candidate-office-overview-group"><strong>Submission Status</strong>${renderFields(view.current_submission.fields)}</div>`);
+    }
+    if (Array.isArray(view.expense_claims) && view.expense_claims.length) {
+      sections.push(`<div class="candidate-office-overview-group candidate-office-overview-expenses">${renderExpenseClaims(view)}</div>`);
     }
     if (view.paper) {
       sections.push(`<div class="candidate-office-overview-group"><strong>QR Pack</strong>${renderFields(view.paper.fields)}</div>`);
@@ -73,6 +97,7 @@
   function renderCandidateFragment(view, { surface = 'SIMPLE_TIMESHEET', variant = 'detail' } = {}) {
     if (variant === 'stage') return renderCandidateStageFragment(view);
     if (variant === 'overview') return renderCandidateOverviewFragment(view);
+    if (variant === 'expenses') return renderExpenseClaims(view, { surface, showCategoryActions: true });
     if (variant === 'actions') return renderCandidateActionsFragment(view, { surface });
     if (variant === 'issues') return renderCandidateIssuesFragment(view);
     if (variant === 'evidence') return renderCandidateEvidenceFragment(view);
@@ -86,7 +111,13 @@
     const managerActions = renderActions(view.manager?.actions, surface);
     const manager = view.manager ? `<section class="candidate-office-section candidate-office-manager"><div class="candidate-office-section__heading"><h4>${escape(view.manager.title)}</h4></div>${renderFields(view.manager.fields)}${managerActions}</section>` : '';
     const paperActions = renderActions(view.paper?.actions, surface);
-    const paper = view.paper ? `<section class="candidate-office-section candidate-office-paper"><div class="candidate-office-section__heading"><h4>QR Pack</h4></div>${view.paper.explanation ? `<div class="candidate-office-inline-note">${escape(view.paper.explanation)}</div>` : ''}${renderFields(view.paper.fields)}${paperActions}</section>` : '';
+    const paperAttention = view.paper?.attention_reason || view.paper?.next_step
+      ? renderFields([
+          ...(view.paper.attention_reason ? [['Reason', view.paper.attention_reason]] : []),
+          ...(view.paper.next_step ? [['Next step', view.paper.next_step]] : [])
+        ])
+      : (view.paper?.explanation ? `<div class="candidate-office-inline-note">${escape(view.paper.explanation)}</div>` : '');
+    const paper = view.paper ? `<section class="candidate-office-section candidate-office-paper"><div class="candidate-office-section__heading"><h4>QR Pack</h4></div>${paperAttention}${renderFields(view.paper.fields)}${paperActions}</section>` : '';
     const rejections = view.rejections.length ? `<section class="candidate-office-section candidate-office-rejections"><h4>Submission history</h4>${view.rejections.map(item => `<div class="candidate-office-history-row"><div><strong>${escape(item.label)}</strong>${item.replacement_state ? `<span>Replacement: ${escape(item.replacement_state)}</span>` : item.historical ? '<span>Historical — already replaced or no longer actionable</span>' : ''}</div>${item.action ? renderActions([item.action], surface) : ''}</div>`).join('')}</section>` : '';
     const diagnostics = view.diagnostics.length ? `<div class="candidate-office-diagnostics">${view.diagnostics.map(item => `<span class="${statusClass(item.tone)}" title="Presentation only; no calculation effect">${escape(item.label)}</span>`).join('')}</div>` : '';
     const managerCodes = new Set((view.manager?.actions || []).map(action => action.code));
@@ -94,7 +125,7 @@
     const historyCodes = new Set(view.rejections.map(item => item.action?.code).filter(Boolean));
     const remaining = view.actions.filter(action => !managerCodes.has(action.code) && !paperCodes.has(action.code) && !historyCodes.has(action.code));
     const remainingButtons = renderActions(remaining, surface);
-    return `<section class="candidate-office-card" data-candidate-office-card="${escape(surface)}"><header class="candidate-office-card__header"><div><span class="candidate-office-card__eyebrow">Candidate submission</span><h3>Candidate status</h3></div><span class="candidate-office-overview-badges">${renderStatusBadges(view)}</span></header>${diagnostics}${currentSubmission}${manager}${view.retained_manager ? `<section class="candidate-office-section candidate-office-manager"><div class="candidate-office-section__heading"><h4>Earlier approved submission</h4></div>${renderFields(view.retained_manager.fields)}</section>` : ''}${paper}${rejections}${remainingButtons ? `<section class="candidate-office-section candidate-office-action-hub"><h4>Candidate actions</h4>${remainingButtons}</section>` : ''}<footer class="candidate-office-card__footer">State observed ${escape(view.observed_at)}</footer></section>`;
+    return `<section class="candidate-office-card" data-candidate-office-card="${escape(surface)}"><header class="candidate-office-card__header"><div><span class="candidate-office-card__eyebrow">Candidate submission</span><h3>Candidate status</h3></div><span class="candidate-office-overview-badges">${renderStatusBadges(view)}</span></header>${diagnostics}${currentSubmission}${renderExpenseClaims(view)}${manager}${view.retained_manager ? `<section class="candidate-office-section candidate-office-manager"><div class="candidate-office-section__heading"><h4>Earlier approved submission</h4></div>${renderFields(view.retained_manager.fields)}</section>` : ''}${paper}${rejections}${remainingButtons ? `<section class="candidate-office-section candidate-office-action-hub"><h4>Candidate actions</h4>${remainingButtons}</section>` : ''}<footer class="candidate-office-card__footer">State observed ${escape(view.observed_at)}</footer></section>`;
   }
   function renderCandidateUnavailable(error, { variant = 'detail' } = {}) {
     const message = escape(error?.message || 'Refresh the current state.');
@@ -117,5 +148,5 @@
     root.addEventListener('click', listener);
     return () => root.removeEventListener('click', listener);
   }
-  Object.assign(window, { CloudTMSCandidateOfficeSurface: Object.freeze({ renderCandidateSummaryCell, renderCandidateCompactBadges, renderCandidateOfficeCard, renderCandidateActionHub, renderCandidateStageFragment, renderCandidateOverviewFragment, renderCandidateActionsFragment, renderCandidateIssuesFragment, renderCandidateEvidenceFragment, renderCandidateFragment, renderCandidateUnavailable, renderCandidateOfficeSlot, bindCandidateOfficeActions }) });
+  Object.assign(window, { CloudTMSCandidateOfficeSurface: Object.freeze({ renderCandidateSummaryCell, renderCandidateCompactBadges, renderCandidateOfficeCard, renderCandidateActionHub, renderCandidateStageFragment, renderCandidateOverviewFragment, renderCandidateActionsFragment, renderCandidateIssuesFragment, renderCandidateEvidenceFragment, renderExpenseClaims, renderCandidateFragment, renderCandidateUnavailable, renderCandidateOfficeSlot, bindCandidateOfficeActions }) });
 })();
