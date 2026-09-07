@@ -171434,7 +171434,8 @@ function wireCandidateRateClientSearch(input, results, selection, { editable, lo
     input.removeAttribute('aria-activedescendant');
   };
   const render = () => {
-    if (!editable || !input.isConnected || document.activeElement !== input) return;
+    if (!editable || !input.isConnected) return;
+    const shouldOpen = document.activeElement === input;
     const query = input.value.trim().toLocaleLowerCase('en-GB');
     matches = choices.filter(row => row.name.toLocaleLowerCase('en-GB').includes(query));
     active = -1;
@@ -171462,7 +171463,11 @@ function wireCandidateRateClientSearch(input, results, selection, { editable, lo
         results.append(option);
       });
     }
-    results.hidden = false; input.setAttribute('aria-expanded', 'true');
+    if (shouldOpen) {
+      results.hidden = false; input.setAttribute('aria-expanded', 'true');
+    } else {
+      close();
+    }
   };
   const choose = index => {
     const row = matches[index];

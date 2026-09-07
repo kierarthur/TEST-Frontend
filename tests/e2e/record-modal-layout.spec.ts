@@ -49,10 +49,22 @@ async function openRatePicker(page: Page, mode = 'all') {
   await expect(page.locator('#cr_client_search')).toBeVisible();
 }
 async function chooseRateClient(page: Page, name: string, info: TestInfo) {
-  await page.locator('#cr_client_search').fill(name);
-  const option=page.getByRole('option', { name, exact: true });
-  await expect(option).toBeVisible();
-  if(info.project.name==='desktop') await option.click(); else await option.tap();
+  const search=page.locator('#cr_client_search');
+  const list=page.locator('#cr_client_results');
+  await search.focus();
+  await expect(list).not.toContainText('Loading clients…',{timeout:30_000});
+  await search.fill(name);
+  const option=list.getByRole('option', { name, exact: true });
+  await expect(list.getByRole('option')).toHaveText([name]);
+  if(info.project.name==='desktop') {
+    await search.press('ArrowDown');
+    await search.press('Enter');
+  } else {
+    await option.tap();
+  }
+  await expect(search).toHaveValue(name);
+  await expect(page.locator('#cr_client_id')).not.toHaveValue('');
+  await expect(list).toBeHidden();
 }
 async function ratePickerVisual(page: Page, info: TestInfo, name: string) {
   const geometry=await page.locator('#modal').evaluate(el=>{
