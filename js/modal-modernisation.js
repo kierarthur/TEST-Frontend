@@ -314,7 +314,13 @@
   const decorateMoney = (root) => {
     root.querySelectorAll('input').forEach((input) => {
       if (!isMoneyInput(input)) return;
-      formatMoneyInput(input, false);
+      // Modal repaints can be triggered by the live margin preview while the
+      // user is still typing. Never normalise an already-decorated field (or
+      // the currently focused field) during that repaint: blur owns the 2dp
+      // commit so values such as "50" and "50.45" can be entered naturally.
+      if (input.dataset.ctmsMoney !== '1' && input !== document.activeElement) {
+        formatMoneyInput(input, false);
+      }
       if (input.dataset.ctmsMoney === '1') return;
       input.dataset.ctmsMoney = '1';
       const parent = input.parentElement;

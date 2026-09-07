@@ -2838,7 +2838,7 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
         ? true
         : (hasFilters || hasSort);
 
-    let relatedListPromise = null;
+    const relatedListPromises = new Map();
 
     const fetchRelatedPage = async (section, page, pageSize, rel, options = {}) => {
       const suppressListStateMutation = !!(options && options.suppressListStateMutation);
@@ -2862,14 +2862,21 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
       const srcId     = String(rel.source_id || '').trim();
       const relType   = String(rel.relation_type || '').trim();
 
-      if (!relatedListPromise) {
-        relatedListPromise = Promise.resolve(fetchRelated(srcEntity, srcId, relType))
-          .catch((error) => {
-            relatedListPromise = null;
-            throw error;
-          });
+      const requestedPageSize = pageSize === 'ALL'
+        ? 100
+        : Math.max(1, Math.min(100, Math.trunc(Number(pageSize || 50))));
+      const requestedPage = Math.max(1, Math.trunc(Number(page || 1)));
+      const requestedOffset = pageSize === 'ALL' ? 0 : (requestedPage - 1) * requestedPageSize;
+      const requestKey = `${srcEntity}:${srcId}:${relType}:${requestedPageSize}:${requestedOffset}`;
+
+      if (!relatedListPromises.has(requestKey)) {
+        const request = Promise.resolve(fetchRelated(srcEntity, srcId, relType, {
+          limit: requestedPageSize,
+          offset: requestedOffset
+        })).finally(() => relatedListPromises.delete(requestKey));
+        relatedListPromises.set(requestKey, request);
       }
-      const list = await relatedListPromise;
+      const list = await relatedListPromises.get(requestKey);
 
       const items = Array.isArray(list?.items) ? list.items : (Array.isArray(list) ? list : []);
       const totalFromApi = (list && typeof list === 'object' && typeof list.total === 'number') ? list.total : null;
@@ -2896,19 +2903,9 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
         const total = (typeof totalFromApi === 'number') ? totalFromApi : idsDedup.length;
         stSec.total = total;
 
-        const ps = (pageSize === 'ALL') ? idsDedup.length : Number(pageSize || 50);
-        const pg = Math.max(1, Number(page || 1));
+        stSec.hasMore = (requestedOffset + idsDedup.length) < total;
 
-        stSec.hasMore =
-          (typeof total === 'number')
-            ? ((pg * ps) < total)
-            : (idsDedup.length > ((pg - 1) * ps + ps));
-
-        let pageIds = idsDedup;
-        if (pageSize !== 'ALL') {
-          const start = (pg - 1) * ps;
-          pageIds = idsDedup.slice(start, start + ps);
-        }
+        const pageIds = idsDedup;
 
         if (!pageIds.length) return [];
 
@@ -2942,12 +2939,8 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
       const total = (typeof totalFromApi === 'number') ? totalFromApi : items.length;
       stSec.total = total;
 
-      const ps = (pageSize === 'ALL') ? Math.max(1, items.length) : Number(pageSize || 50);
-      const pg = Math.max(1, Number(page || 1));
-      const start = (pg - 1) * ps;
-      const pageItems = pageSize === 'ALL' ? items : items.slice(start, start + ps);
-
-      stSec.hasMore = (start + pageItems.length) < total;
+      const pageItems = items;
+      stSec.hasMore = (requestedOffset + pageItems.length) < total;
 
       return pageItems;
     };
@@ -166197,6 +166190,34 @@ function renderTools(){
     return b;
   };
 
+  const runOpeningToolAction = async (ev, label, action) => {
+    const candidateButton = ev?.currentTarget;
+    const button = String(candidateButton?.tagName || '').toUpperCase() === 'BUTTON' ? candidateButton : null;
+    if (button?.dataset?.openingToolAction === '1') return;
+
+    if (button) {
+      button.dataset.openingToolAction = '1';
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      button.textContent = `Opening ${label}…`;
+    }
+
+    try {
+      await new Promise((resolve) => {
+        try { window.requestAnimationFrame(() => resolve()); }
+        catch { setTimeout(resolve, 0); }
+      });
+      return await action();
+    } finally {
+      if (button?.isConnected) {
+        delete button.dataset.openingToolAction;
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+        button.textContent = label;
+      }
+    }
+  };
+
   const toIsoYmd = (value) => {
     const raw = String(value == null ? '' : value).trim();
     if (!raw) return '';
@@ -166351,19 +166372,21 @@ function renderTools(){
         }
       });
 
-      addBtn('Bulk Process', async () => {
+      addBtn('Bulk Process', async (ev) => {
         try {
-          if (typeof openBulkProcessWorkbench !== 'function') {
-            await showInfo({
-              title: 'Bulk Process',
-              message: 'The Bulk Process workbench is not available yet.',
-              confirm_label: 'OK',
-              hide_cancel: true,
-              confirm_class: 'btn btn-primary'
-            });
-            return;
-          }
-          await openBulkProcessWorkbench({});
+          await runOpeningToolAction(ev, 'Bulk Process', async () => {
+            if (typeof openBulkProcessWorkbench !== 'function') {
+              await showInfo({
+                title: 'Bulk Process',
+                message: 'The Bulk Process workbench is not available yet.',
+                confirm_label: 'OK',
+                hide_cancel: true,
+                confirm_class: 'btn btn-primary'
+              });
+              return;
+            }
+            await openBulkProcessWorkbench({});
+          });
         } catch (e) {
           console.error('[TOOLS][TIMESHEETS][BULK_PROCESS] failed', e);
           await showError('Bulk Process', e, 'Failed to open Bulk Process');
@@ -166401,19 +166424,21 @@ function renderTools(){
         window.addEventListener('cloudtms:candidate-office-ready', syncManagerReminderButton, { once: true });
       }
 
-      addBtn('Bulk Authorise', async () => {
+      addBtn('Bulk Authorise', async (ev) => {
         try {
-          if (typeof openBulkAuthoriseWorkbench !== 'function') {
-            await showInfo({
-              title: 'Bulk Authorise',
-              message: 'The Bulk Authorise workbench is not available yet.',
-              confirm_label: 'OK',
-              hide_cancel: true,
-              confirm_class: 'btn btn-primary'
-            });
-            return;
-          }
-          await openBulkAuthoriseWorkbench();
+          await runOpeningToolAction(ev, 'Bulk Authorise', async () => {
+            if (typeof openBulkAuthoriseWorkbench !== 'function') {
+              await showInfo({
+                title: 'Bulk Authorise',
+                message: 'The Bulk Authorise workbench is not available yet.',
+                confirm_label: 'OK',
+                hide_cancel: true,
+                confirm_class: 'btn btn-primary'
+              });
+              return;
+            }
+            await openBulkAuthoriseWorkbench();
+          });
         } catch (e) {
           console.error('[TOOLS][TIMESHEETS][BULK_AUTHORISE] failed', e);
           await showError('Bulk Authorise', e, 'Failed to open Bulk Authorise');
@@ -178276,17 +178301,10 @@ async function openBulkAuthoriseWorkbench() {
   };
   const trimStr = (value) => String(value == null ? '' : value).trim();
 
-  const defaultSortState = (() => {
-    if (typeof loadBulkAuthoriseSortPreference !== 'function') {
-      return {
-        version: 1,
-        dimension_order: ['period_type', 'week_or_date', 'timesheet_type', 'client_name', 'candidate_name']
-      };
-    }
-    return null;
-  })();
-
-  const initialSortState = defaultSortState || await loadBulkAuthoriseSortPreference();
+  const initialSortState = {
+    version: 1,
+    dimension_order: ['period_type', 'week_or_date', 'timesheet_type', 'client_name', 'candidate_name']
+  };
 
   const initialFilters = {
     q: '',
@@ -179603,6 +179621,23 @@ async function openBulkAuthoriseWorkbench() {
   );
 
   state.shell_open = true;
+
+  if (typeof loadBulkAuthoriseSortPreference === 'function') {
+    void Promise.resolve()
+      .then(() => loadBulkAuthoriseSortPreference())
+      .then((storedSortState) => {
+        if (!storedSortState || window.modalCtx?.bulkAuthoriseState !== state) return;
+        state.sort_state = deep(storedSortState);
+        if (!state.loading && typeof rerenderBulkAuthoriseWorkbench === 'function') {
+          void rerenderBulkAuthoriseWorkbench(state, '[TS][BULK-AUTH][OPEN][SORT-PREFERENCE]').catch((err) => {
+            L('saved sort preference render failed', err);
+          });
+        }
+      })
+      .catch((err) => {
+        L('saved sort preference load failed', err);
+      });
+  }
 
   try {
     if (window.__LOG_MODAL === true) console.log('[TS][BULK-AUTH][LIFECYCLE] open start');
@@ -273865,8 +273900,17 @@ async function listCandidateRates(candidate_id){
   return toList(r);
 }
 // =========================== fetchRelated (unchanged API) ===========================
-  async function fetchRelated(entity, id, type){
+  async function fetchRelated(entity, id, type, options = {}){
   const sp = new URLSearchParams();
+
+  const requestedLimit = Math.trunc(Number(options?.limit));
+  const requestedOffset = Math.trunc(Number(options?.offset));
+  if (Number.isFinite(requestedLimit) && requestedLimit > 0) {
+    sp.set('limit', String(Math.min(100, requestedLimit)));
+  }
+  if (Number.isFinite(requestedOffset) && requestedOffset >= 0) {
+    sp.set('offset', String(requestedOffset));
+  }
 
   // ✅ NEW: when showing related timesheets, forward the current stage filter (if present)
   try {
@@ -273897,7 +273941,24 @@ async function listCandidateRates(candidate_id){
     console.error('fetchRelated failed:', { status: res.status, url, server: text });
     throw new Error(`Request failed: ${res.status}`);
   }
-  return toList(res);
+  const payload = await res.json();
+  if (Array.isArray(payload)) return payload;
+
+  if (payload && typeof payload === 'object') {
+    const items = Array.isArray(payload.items)
+      ? payload.items
+      : (Array.isArray(payload.rows)
+          ? payload.rows
+          : (Array.isArray(payload.data) ? payload.data : []));
+    const totalValue = Number(payload.total ?? payload.total_count ?? payload.count);
+    return {
+      ...payload,
+      items,
+      total: Number.isFinite(totalValue) && totalValue >= 0 ? totalValue : items.length
+    };
+  }
+
+  return [];
 }
 
 
@@ -296319,6 +296380,83 @@ function renderContractCalendarTab(ctx) {
 }
 
 
+async function fetchAndRenderCandidateCalendarForContract(contractKey, candidateId, opts = {}) {
+  const key = `draft:${String(contractKey || 'new')}`;
+  const currentYear = (new Date()).getUTCFullYear();
+  const state = (window.__calState[key] ||= {
+    view: 'year',
+    win: computeYearWindow(currentYear),
+    scrollTop: 0,
+    scrollLeft: 0
+  });
+
+  if (opts.view) state.view = opts.view;
+  if (opts.from && opts.to) state.win = { from: opts.from, to: opts.to };
+  if (opts.__restoreScroll && typeof opts.__restoreScroll === 'object') {
+    state.scrollTop = Number(opts.__restoreScroll.top || 0);
+    state.scrollLeft = Number(opts.__restoreScroll.left || 0);
+  }
+
+  const holder = byId('contractCalendarHolder');
+  if (!holder) return;
+  const container = byId('__contractCal') || holder;
+  const candidateKey = String(candidateId || '').trim();
+
+  let items = [];
+  if (candidateKey && typeof getCandidateCalendarRange === 'function') {
+    const response = await getCandidateCalendarRange(candidateKey, state.win.from, state.win.to, 'day');
+    items = Array.isArray(response?.items) ? response.items : [];
+  }
+
+  container.innerHTML = '';
+  const gridHost = document.createElement('div');
+  gridHost.id = 'contractDayGrid';
+  container.appendChild(gridHost);
+
+  const renderNext = async (nextView, nextWin) => {
+    const scroll = byId('__calScroll') || holder;
+    await fetchAndRenderCandidateCalendarForContract(contractKey, candidateKey, {
+      view: nextView,
+      from: nextWin.from,
+      to: nextWin.to,
+      __restoreScroll: {
+        top: scroll?.scrollTop || 0,
+        left: scroll?.scrollLeft || 0
+      }
+    });
+  };
+
+  renderDayGrid(gridHost, {
+    from: state.win.from,
+    to: state.win.to,
+    itemsByDate: buildDateIndex(items),
+    view: state.view,
+    bucketKey: candidateKey ? `cand:${candidateKey}` : key,
+    isInteractive: false,
+    onNav: async (delta) => {
+      const nextWin = state.view === 'year'
+        ? computeYearWindow(ymdToDate(state.win.from).getUTCFullYear() + delta)
+        : stepMonth(state.win, delta);
+      await renderNext(state.view, nextWin);
+    },
+    onToggleView: async () => {
+      const nextView = state.view === 'year' ? 'month' : 'year';
+      const anchor = ymdToDate(state.win.from);
+      const nextWin = nextView === 'year'
+        ? computeYearWindow(anchor.getUTCFullYear())
+        : computeMonthWindow(anchor.getUTCFullYear(), anchor.getUTCMonth());
+      await renderNext(nextView, nextWin);
+    }
+  });
+
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const scroll = byId('__calScroll') || holder;
+    scroll.scrollTop = state.scrollTop || 0;
+    scroll.scrollLeft = state.scrollLeft || 0;
+  }));
+}
+
+
 function isConsecutiveDailyRun(dates) {
   if (!Array.isArray(dates) || dates.length < 2) return false;
   const arr = [...dates].sort();
@@ -298109,18 +298247,10 @@ if (currentTab === 'calendar' && window.modalCtx?.data?.id) {
     sb.scrollLeft = prevScrollLeft;
   };
 
-  if (typeof fetchAndRenderCandidateCalendarForContract === 'function' && candId) {
-    await fetchAndRenderCandidateCalendarForContract(contractId2, candId, {
-      from: win?.from, to: win?.to, view,
-      weekEnding: window.modalCtx?.data?.week_ending_weekday_snapshot ?? 0,
-      __restoreScroll: { top: prevScrollTop, left: prevScrollLeft }
-    });
-  } else {
-    await fetchAndRenderContractCalendar(contractId2, win ? {
-      from: win.from, to: win.to, view,
-      __restoreScroll: { top: prevScrollTop, left: prevScrollLeft }
-    } : undefined);
-  }
+  await fetchAndRenderContractCalendar(contractId2, win ? {
+    from: win.from, to: win.to, view,
+    __restoreScroll: { top: prevScrollTop, left: prevScrollLeft }
+  } : undefined);
 
   // ✅ Restore scroll AFTER layout settles (prevents snapping to top)
   requestAnimationFrame(() => requestAnimationFrame(applyScroll));
