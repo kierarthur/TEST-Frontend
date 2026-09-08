@@ -2838,7 +2838,7 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
         ? true
         : (hasFilters || hasSort);
 
-    let relatedListPromise = null;
+    const relatedListPromises = new Map();
 
     const fetchRelatedPage = async (section, page, pageSize, rel, options = {}) => {
       const suppressListStateMutation = !!(options && options.suppressListStateMutation);
@@ -2862,14 +2862,21 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
       const srcId     = String(rel.source_id || '').trim();
       const relType   = String(rel.relation_type || '').trim();
 
-      if (!relatedListPromise) {
-        relatedListPromise = Promise.resolve(fetchRelated(srcEntity, srcId, relType))
-          .catch((error) => {
-            relatedListPromise = null;
-            throw error;
-          });
+      const requestedPageSize = pageSize === 'ALL'
+        ? 100
+        : Math.max(1, Math.min(100, Math.trunc(Number(pageSize || 50))));
+      const requestedPage = Math.max(1, Math.trunc(Number(page || 1)));
+      const requestedOffset = pageSize === 'ALL' ? 0 : (requestedPage - 1) * requestedPageSize;
+      const requestKey = `${srcEntity}:${srcId}:${relType}:${requestedPageSize}:${requestedOffset}`;
+
+      if (!relatedListPromises.has(requestKey)) {
+        const request = Promise.resolve(fetchRelated(srcEntity, srcId, relType, {
+          limit: requestedPageSize,
+          offset: requestedOffset
+        })).finally(() => relatedListPromises.delete(requestKey));
+        relatedListPromises.set(requestKey, request);
       }
-      const list = await relatedListPromise;
+      const list = await relatedListPromises.get(requestKey);
 
       const items = Array.isArray(list?.items) ? list.items : (Array.isArray(list) ? list : []);
       const totalFromApi = (list && typeof list === 'object' && typeof list.total === 'number') ? list.total : null;
@@ -2896,19 +2903,9 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
         const total = (typeof totalFromApi === 'number') ? totalFromApi : idsDedup.length;
         stSec.total = total;
 
-        const ps = (pageSize === 'ALL') ? idsDedup.length : Number(pageSize || 50);
-        const pg = Math.max(1, Number(page || 1));
+        stSec.hasMore = (requestedOffset + idsDedup.length) < total;
 
-        stSec.hasMore =
-          (typeof total === 'number')
-            ? ((pg * ps) < total)
-            : (idsDedup.length > ((pg - 1) * ps + ps));
-
-        let pageIds = idsDedup;
-        if (pageSize !== 'ALL') {
-          const start = (pg - 1) * ps;
-          pageIds = idsDedup.slice(start, start + ps);
-        }
+        const pageIds = idsDedup;
 
         if (!pageIds.length) return [];
 
@@ -2942,12 +2939,8 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
       const total = (typeof totalFromApi === 'number') ? totalFromApi : items.length;
       stSec.total = total;
 
-      const ps = (pageSize === 'ALL') ? Math.max(1, items.length) : Number(pageSize || 50);
-      const pg = Math.max(1, Number(page || 1));
-      const start = (pg - 1) * ps;
-      const pageItems = pageSize === 'ALL' ? items : items.slice(start, start + ps);
-
-      stSec.hasMore = (start + pageItems.length) < total;
+      const pageItems = items;
+      stSec.hasMore = (requestedOffset + pageItems.length) < total;
 
       return pageItems;
     };
@@ -166197,6 +166190,34 @@ function renderTools(){
     return b;
   };
 
+  const runOpeningToolAction = async (ev, label, action) => {
+    const candidateButton = ev?.currentTarget;
+    const button = String(candidateButton?.tagName || '').toUpperCase() === 'BUTTON' ? candidateButton : null;
+    if (button?.dataset?.openingToolAction === '1') return;
+
+    if (button) {
+      button.dataset.openingToolAction = '1';
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      button.textContent = `Opening ${label}…`;
+    }
+
+    try {
+      await new Promise((resolve) => {
+        try { window.requestAnimationFrame(() => resolve()); }
+        catch { setTimeout(resolve, 0); }
+      });
+      return await action();
+    } finally {
+      if (button?.isConnected) {
+        delete button.dataset.openingToolAction;
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+        button.textContent = label;
+      }
+    }
+  };
+
   const toIsoYmd = (value) => {
     const raw = String(value == null ? '' : value).trim();
     if (!raw) return '';
@@ -166351,19 +166372,21 @@ function renderTools(){
         }
       });
 
-      addBtn('Bulk Process', async () => {
+      addBtn('Bulk Process', async (ev) => {
         try {
-          if (typeof openBulkProcessWorkbench !== 'function') {
-            await showInfo({
-              title: 'Bulk Process',
-              message: 'The Bulk Process workbench is not available yet.',
-              confirm_label: 'OK',
-              hide_cancel: true,
-              confirm_class: 'btn btn-primary'
-            });
-            return;
-          }
-          await openBulkProcessWorkbench({});
+          await runOpeningToolAction(ev, 'Bulk Process', async () => {
+            if (typeof openBulkProcessWorkbench !== 'function') {
+              await showInfo({
+                title: 'Bulk Process',
+                message: 'The Bulk Process workbench is not available yet.',
+                confirm_label: 'OK',
+                hide_cancel: true,
+                confirm_class: 'btn btn-primary'
+              });
+              return;
+            }
+            await openBulkProcessWorkbench({});
+          });
         } catch (e) {
           console.error('[TOOLS][TIMESHEETS][BULK_PROCESS] failed', e);
           await showError('Bulk Process', e, 'Failed to open Bulk Process');
@@ -166401,19 +166424,21 @@ function renderTools(){
         window.addEventListener('cloudtms:candidate-office-ready', syncManagerReminderButton, { once: true });
       }
 
-      addBtn('Bulk Authorise', async () => {
+      addBtn('Bulk Authorise', async (ev) => {
         try {
-          if (typeof openBulkAuthoriseWorkbench !== 'function') {
-            await showInfo({
-              title: 'Bulk Authorise',
-              message: 'The Bulk Authorise workbench is not available yet.',
-              confirm_label: 'OK',
-              hide_cancel: true,
-              confirm_class: 'btn btn-primary'
-            });
-            return;
-          }
-          await openBulkAuthoriseWorkbench();
+          await runOpeningToolAction(ev, 'Bulk Authorise', async () => {
+            if (typeof openBulkAuthoriseWorkbench !== 'function') {
+              await showInfo({
+                title: 'Bulk Authorise',
+                message: 'The Bulk Authorise workbench is not available yet.',
+                confirm_label: 'OK',
+                hide_cancel: true,
+                confirm_class: 'btn btn-primary'
+              });
+              return;
+            }
+            await openBulkAuthoriseWorkbench();
+          });
         } catch (e) {
           console.error('[TOOLS][TIMESHEETS][BULK_AUTHORISE] failed', e);
           await showError('Bulk Authorise', e, 'Failed to open Bulk Authorise');
@@ -177494,7 +177519,8 @@ function renderTimesheetExpensesTab(ctx) {
     contract_week_id: row.contract_week_id || details.contract_week_id || cw?.id || null,
     backend_row_signature: row.backend_row_signature || row.row_signature || details.backend_row_signature || details.row_signature || ts?.backend_row_signature || ts?.row_signature || tf?.backend_row_signature || tf?.row_signature || null
   };
-  let candidateOfficeExpenseSlot = '';
+  const candidateOfficeExpenseSlot = (category) => {
+    let slot = '';
   if (
     ['SIMPLE_TIMESHEET', 'BULK_AUTHORISE'].includes(candidateOfficeSurface)
     && candidateOfficeRow.timesheet_id
@@ -177503,15 +177529,17 @@ function renderTimesheetExpensesTab(ctx) {
     && typeof window.CloudTMSCandidateOfficeBridge.slotHtml === 'function'
   ) {
     try {
-      candidateOfficeExpenseSlot = window.CloudTMSCandidateOfficeBridge.slotHtml(
+      slot = window.CloudTMSCandidateOfficeBridge.slotHtml(
         candidateOfficeSurface,
         candidateOfficeRow,
-        { variant: 'expenses' }
+        { variant: `expense-category:${String(category || '').trim().toUpperCase()}` }
       );
     } catch {
-      candidateOfficeExpenseSlot = '';
+      slot = '';
     }
   }
+    return slot;
+  };
   const suppliedEditPolicy = (
     (c.timesheetEditDomains && typeof c.timesheetEditDomains === 'object') ? c.timesheetEditDomains :
     (c.editDomains && typeof c.editDomains === 'object') ? c.editDomains :
@@ -177832,22 +177860,11 @@ function renderTimesheetExpensesTab(ctx) {
       routeTypeExpense === 'WEEKLY_HEALTHROSTER'
     )
   );
-  const defaultBlockedReason = trueSourceImportExpense
-    ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
-    : (!expenseStorageTarget
-        ? 'Expenses cannot be saved because this row does not yet have a supported expenses draft target.'
-        : (hardLockedExpense
-            ? 'Expenses cannot be edited because this row is locked, authorised, or invoiced.'
-            : 'Expenses cannot be edited directly for this row.'));
   let expensesTabDisabled = editPolicy
     ? editPolicy.expensesTabDisabled === true
     : !hasSupportedExpenseTarget;
   if (additionalManualExpenseSupported) expensesTabDisabled = false;
   if (trueSourceImportExpense) expensesTabDisabled = true;
-  const expensesTabDisabledReason = String(
-    (editPolicy && !additionalManualExpenseSupported && (editPolicy.expensesTabDisabledReason || editPolicy.expensesDisabledReason)) ||
-    defaultBlockedReason
-  );
   const enabled = editPolicy
     ? ((policyCanOpenExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
     : hasSupportedExpenseTarget;
@@ -177855,39 +177872,13 @@ function renderTimesheetExpensesTab(ctx) {
     ? (hasSupportedExpenseTarget && !hardLockedExpense && (policyCanEditExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
     : (hasSupportedExpenseTarget && !hardLockedExpense);
   const readOnly = !(canEditExpenseControls && (isEditMode || isBulkProcessModal));
-  const blockedReason = expensesTabDisabled ? expensesTabDisabledReason : (readOnly ? (editPolicy?.expensesDisabledReason || defaultBlockedReason) : '');
-
-  const needsMileageEvidence = mileageUnits > 0 || mileagePay > 0 || mileageChg > 0;
-  const needsTravelEvidence  = (travelPay > 0 || travelChg > 0);
-  const needsAccomEvidence   = (accomPay > 0 || accomChg > 0);
-  const needsOtherEvidence   = (otherPay > 0 || otherChg > 0);
-
-  const evidenceLines = [];
-  if (needsMileageEvidence) evidenceLines.push('• Mileage requires evidence kind MILEAGE (when units, pay, or charge is greater than zero).');
-  if (needsTravelEvidence)  evidenceLines.push('• Travel requires evidence kind TRAVEL (when pay or charge is greater than £0.00).');
-  if (needsAccomEvidence)   evidenceLines.push('• Accommodation requires evidence kind ACCOMMODATION (when pay or charge is greater than £0.00).');
-  if (needsOtherEvidence)   evidenceLines.push('• Other requires evidence kind OTHER (when pay or charge is greater than £0.00).');
-
-  const evidenceHint =
-    evidenceLines.length
-      ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">${evidenceLines.join('<br/>')}</div>`
-      : (isBulkProcessModal ? '' : `<div class="mini" style="margin-top:8px;color:rgba(255,255,255,0.7)">Tip: upload supporting evidence in the Evidence tab. Evidence is required only when you claim mileage, travel, accommodation, or other expenses.</div>`);
-
   if (expensesTabDisabled || !enabled) {
     return `
       <div class="tabc">
-        ${candidateOfficeExpenseSlot}
         <div class="card">
           <div class="row" style="grid-column:1/-1">
             <label>Expenses</label>
-            <div class="controls">
-              <span class="mini">${escapeHtml(blockedReason)}</span>
-              ${editPolicy?.requiresAdditionalManualForExpenses ? `
-                <div class="mini" style="margin-top:6px;opacity:.85">
-                  Tip: use <strong>Add additional manual timesheet</strong> where the original sheet cannot carry expenses directly.
-                </div>
-              ` : ''}
-            </div>
+            <div class="controls"><span class="mini">Unavailable</span></div>
           </div>
         </div>
       </div>
@@ -177897,53 +177888,15 @@ function renderTimesheetExpensesTab(ctx) {
   const ro = readOnly ? 'disabled' : '';
   const roStyle = readOnly ? 'style="opacity:0.7"' : '';
   const mileageUnitsDisabled = readOnly ? 'disabled' : '';
-  const mileageHint =
-    !mileageRatesOk
-      ? `<div class="mini" style="margin-top:6px;color:rgba(255,200,120,0.95)">Mileage rates are not set. You may clear mileage to zero, but a positive mileage claim requires rates before it can be saved.</div>`
-      : `<div class="mini" style="margin-top:6px;color:rgba(255,255,255,0.7)">Mileage pay £${fmt2(draft.mileage_pay_rate)} · Charge £${fmt2(draft.mileage_charge_rate)}</div>`;
-
-  const readOnlyHint = readOnly
-    ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">${escapeHtml(blockedReason || 'Expenses are read-only for this row.')}</div>`
-    : '';
-
-  const noteVal = String(draft.note ?? '').trim();
-  const enforcementHint = (isBulkProcessModal ? '' : (
-    readOnly
-      ? (editPolicy?.canManageExpenseEvidence === true
-          ? `Supporting expense evidence can still be added or removed in the Evidence tab.`
-          : '')
-      : isContractWeekDraftTarget
-      ? `Expenses will be saved as a draft until this week is processed. Evidence enforcement uses staged evidence for this unprocessed week.`
-      : `Note: Evidence enforcement happens on Save. If required evidence is missing, Save will fail with an “Evidence required” message and you should upload receipts in the Evidence tab.`
-  ));
-
   return `
     <div class="tabc" data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
-      ${candidateOfficeExpenseSlot}
-      <div class="card">
-        <div class="row" style="grid-column:1/-1">
-          <label>Expenses</label>
-          <div class="controls">
-            <span class="mini">${readOnly ? 'Review expenses and mileage.' : (isContractWeekDraftTarget ? 'Expenses will be saved as a draft until this week is processed.' : 'Edit expenses and mileage. Charges with £0.00 will not appear on invoices.')}</span>
-            ${readOnlyHint}
-          </div>
-        </div>
-
-        <div class="row" style="grid-column:1/-1;margin-top:10px">
-          <div style="overflow:auto;border:1px solid var(--line);border-radius:10px">
-            <table class="grid" style="min-width:720px;table-layout:auto">
-              <thead>
-                <tr data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
-                  <th style="width:220px">Expense Type</th>
-                  <th style="width:140px">Units</th>
-                  <th style="width:160px">Pay</th>
-                  <th style="width:160px">Charge</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><strong>Mileage</strong></td>
-                  <td>
+      <div class="card ctms-expense-card">
+        <div class="ctms-expense-heading"><strong>Expenses</strong><span>Total pay <strong data-exp-out="total_pay">£${fmt2(totalPay)}</strong> · Charge <strong data-exp-out="total_charge">£${fmt2(totalChg)}</strong></span></div>
+        <div class="ctms-expense-grid" data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
+          <div class="ctms-expense-grid__head" aria-hidden="true"><span>Expense</span><span>Units</span><span>Pay</span><span>Charge</span><span>Manager status</span><span>Actions</span></div>
+          <div class="ctms-expense-grid__row" data-expense-category="MILEAGE">
+            <strong>Mileage</strong>
+            <div>
                     <input
                       class="input"
                       type="number"
@@ -177958,59 +177911,29 @@ function renderTimesheetExpensesTab(ctx) {
                       data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}"
                       placeholder="0"
                     />
-                  </td>
-                  <td><span class="mini" data-exp-out="mileage_pay">£${fmt2(mileagePay)}</span></td>
-                  <td><span class="mini" data-exp-out="mileage_charge">£${fmt2(mileageChg)}</span></td>
-                </tr>
-                <tr>
-                  <td colspan="4" style="padding-top:6px;padding-bottom:10px">
-                    ${mileageHint}
-                  </td>
-                </tr>
-
-                <tr>
-                  <td><strong>Travel</strong></td>
-                  <td><span class="mini" style="opacity:.7">—</span></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_travel_pay" data-testid="timesheet-expense-travel-pay" value="${fmt2(travelPay)}" ${ro} ${roStyle} data-exp-field="travel_pay" /></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_travel_charge" data-testid="timesheet-expense-travel-charge" value="${fmt2(travelChg)}" ${ro} ${roStyle} data-exp-field="travel_charge" /></td>
-                </tr>
-
-                <tr>
-                  <td><strong>Accommodation</strong></td>
-                  <td><span class="mini" style="opacity:.7">—</span></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_accom_pay" value="${fmt2(accomPay)}" ${ro} ${roStyle} data-exp-field="accommodation_pay" /></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_accom_charge" value="${fmt2(accomChg)}" ${ro} ${roStyle} data-exp-field="accommodation_charge" /></td>
-                </tr>
-
-                <tr>
-                  <td><strong>Other</strong></td>
-                  <td><span class="mini" style="opacity:.7">—</span></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_other_pay" value="${fmt2(otherPay)}" ${ro} ${roStyle} data-exp-field="other_pay" /></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_other_charge" value="${fmt2(otherChg)}" ${ro} ${roStyle} data-exp-field="other_charge" /></td>
-                </tr>
-
-                <tr>
-                  <td><strong>Total</strong></td>
-                  <td></td>
-                  <td><strong class="mini" data-exp-out="total_pay">£${fmt2(totalPay)}</strong></td>
-                  <td><strong class="mini" data-exp-out="total_charge">£${fmt2(totalChg)}</strong></td>
-                </tr>
-              </tbody>
-            </table>
+            </div>
+            <span class="ctms-expense-money" data-exp-out="mileage_pay">£${fmt2(mileagePay)}</span>
+            <span class="ctms-expense-money" data-exp-out="mileage_charge">£${fmt2(mileageChg)}</span>
+            ${candidateOfficeExpenseSlot('MILEAGE') || '<span aria-hidden="true">—</span><span aria-hidden="true">—</span>'}
           </div>
-        </div>
-
-        <div class="row" style="grid-column:1/-1;margin-top:10px">
-          <div class="mini" style="color:rgba(255,255,255,0.7)">Notes (optional). Notes do not affect totals or invoice maths.</div>
-        </div>
-
-        <div class="row" style="grid-column:1/-1;margin-top:6px">
-          <textarea class="input" style="width:100%;min-height:90px;resize:vertical" name="exp_note" placeholder="Add any notes about these expenses (optional)" data-exp-field="note" ${ro} ${roStyle}>${escapeHtml(noteVal)}</textarea>
-        </div>
-
-        <div class="row" style="grid-column:1/-1;margin-top:10px">
-          <div class="mini" style="color:rgba(255,255,255,0.7)">${enforcementHint}</div>
-          ${evidenceHint}
+          <div class="ctms-expense-grid__row" data-expense-category="TRAVEL">
+            <strong>Travel</strong><span aria-hidden="true">—</span>
+            <input class="input" type="number" step="0.01" name="exp_travel_pay" data-testid="timesheet-expense-travel-pay" value="${fmt2(travelPay)}" ${ro} ${roStyle} data-exp-field="travel_pay" />
+            <input class="input" type="number" step="0.01" name="exp_travel_charge" data-testid="timesheet-expense-travel-charge" value="${fmt2(travelChg)}" ${ro} ${roStyle} data-exp-field="travel_charge" />
+            ${candidateOfficeExpenseSlot('TRAVEL') || '<span aria-hidden="true">—</span><span aria-hidden="true">—</span>'}
+          </div>
+          <div class="ctms-expense-grid__row" data-expense-category="ACCOMMODATION">
+            <strong>Accommodation</strong><span aria-hidden="true">—</span>
+            <input class="input" type="number" step="0.01" name="exp_accom_pay" value="${fmt2(accomPay)}" ${ro} ${roStyle} data-exp-field="accommodation_pay" />
+            <input class="input" type="number" step="0.01" name="exp_accom_charge" value="${fmt2(accomChg)}" ${ro} ${roStyle} data-exp-field="accommodation_charge" />
+            ${candidateOfficeExpenseSlot('ACCOMMODATION') || '<span aria-hidden="true">—</span><span aria-hidden="true">—</span>'}
+          </div>
+          <div class="ctms-expense-grid__row" data-expense-category="OTHER">
+            <strong>Other</strong><span aria-hidden="true">—</span>
+            <input class="input" type="number" step="0.01" name="exp_other_pay" value="${fmt2(otherPay)}" ${ro} ${roStyle} data-exp-field="other_pay" />
+            <input class="input" type="number" step="0.01" name="exp_other_charge" value="${fmt2(otherChg)}" ${ro} ${roStyle} data-exp-field="other_charge" />
+            ${candidateOfficeExpenseSlot('OTHER') || '<span aria-hidden="true">—</span><span aria-hidden="true">—</span>'}
+          </div>
         </div>
       </div>
     </div>
@@ -178276,17 +178199,10 @@ async function openBulkAuthoriseWorkbench() {
   };
   const trimStr = (value) => String(value == null ? '' : value).trim();
 
-  const defaultSortState = (() => {
-    if (typeof loadBulkAuthoriseSortPreference !== 'function') {
-      return {
-        version: 1,
-        dimension_order: ['period_type', 'week_or_date', 'timesheet_type', 'client_name', 'candidate_name']
-      };
-    }
-    return null;
-  })();
-
-  const initialSortState = defaultSortState || await loadBulkAuthoriseSortPreference();
+  const initialSortState = {
+    version: 1,
+    dimension_order: ['period_type', 'week_or_date', 'timesheet_type', 'client_name', 'candidate_name']
+  };
 
   const initialFilters = {
     q: '',
@@ -179603,6 +179519,23 @@ async function openBulkAuthoriseWorkbench() {
   );
 
   state.shell_open = true;
+
+  if (typeof loadBulkAuthoriseSortPreference === 'function') {
+    void Promise.resolve()
+      .then(() => loadBulkAuthoriseSortPreference())
+      .then((storedSortState) => {
+        if (!storedSortState || window.modalCtx?.bulkAuthoriseState !== state) return;
+        state.sort_state = deep(storedSortState);
+        if (!state.loading && typeof rerenderBulkAuthoriseWorkbench === 'function') {
+          void rerenderBulkAuthoriseWorkbench(state, '[TS][BULK-AUTH][OPEN][SORT-PREFERENCE]').catch((err) => {
+            L('saved sort preference render failed', err);
+          });
+        }
+      })
+      .catch((err) => {
+        L('saved sort preference load failed', err);
+      });
+  }
 
   try {
     if (window.__LOG_MODAL === true) console.log('[TS][BULK-AUTH][LIFECYCLE] open start');
@@ -273865,8 +273798,17 @@ async function listCandidateRates(candidate_id){
   return toList(r);
 }
 // =========================== fetchRelated (unchanged API) ===========================
-  async function fetchRelated(entity, id, type){
+  async function fetchRelated(entity, id, type, options = {}){
   const sp = new URLSearchParams();
+
+  const requestedLimit = Math.trunc(Number(options?.limit));
+  const requestedOffset = Math.trunc(Number(options?.offset));
+  if (Number.isFinite(requestedLimit) && requestedLimit > 0) {
+    sp.set('limit', String(Math.min(100, requestedLimit)));
+  }
+  if (Number.isFinite(requestedOffset) && requestedOffset >= 0) {
+    sp.set('offset', String(requestedOffset));
+  }
 
   // ✅ NEW: when showing related timesheets, forward the current stage filter (if present)
   try {
@@ -273897,7 +273839,24 @@ async function listCandidateRates(candidate_id){
     console.error('fetchRelated failed:', { status: res.status, url, server: text });
     throw new Error(`Request failed: ${res.status}`);
   }
-  return toList(res);
+  const payload = await res.json();
+  if (Array.isArray(payload)) return payload;
+
+  if (payload && typeof payload === 'object') {
+    const items = Array.isArray(payload.items)
+      ? payload.items
+      : (Array.isArray(payload.rows)
+          ? payload.rows
+          : (Array.isArray(payload.data) ? payload.data : []));
+    const totalValue = Number(payload.total ?? payload.total_count ?? payload.count);
+    return {
+      ...payload,
+      items,
+      total: Number.isFinite(totalValue) && totalValue >= 0 ? totalValue : items.length
+    };
+  }
+
+  return [];
 }
 
 
@@ -296319,6 +296278,83 @@ function renderContractCalendarTab(ctx) {
 }
 
 
+async function fetchAndRenderCandidateCalendarForContract(contractKey, candidateId, opts = {}) {
+  const key = `draft:${String(contractKey || 'new')}`;
+  const currentYear = (new Date()).getUTCFullYear();
+  const state = (window.__calState[key] ||= {
+    view: 'year',
+    win: computeYearWindow(currentYear),
+    scrollTop: 0,
+    scrollLeft: 0
+  });
+
+  if (opts.view) state.view = opts.view;
+  if (opts.from && opts.to) state.win = { from: opts.from, to: opts.to };
+  if (opts.__restoreScroll && typeof opts.__restoreScroll === 'object') {
+    state.scrollTop = Number(opts.__restoreScroll.top || 0);
+    state.scrollLeft = Number(opts.__restoreScroll.left || 0);
+  }
+
+  const holder = byId('contractCalendarHolder');
+  if (!holder) return;
+  const container = byId('__contractCal') || holder;
+  const candidateKey = String(candidateId || '').trim();
+
+  let items = [];
+  if (candidateKey && typeof getCandidateCalendarRange === 'function') {
+    const response = await getCandidateCalendarRange(candidateKey, state.win.from, state.win.to, 'day');
+    items = Array.isArray(response?.items) ? response.items : [];
+  }
+
+  container.innerHTML = '';
+  const gridHost = document.createElement('div');
+  gridHost.id = 'contractDayGrid';
+  container.appendChild(gridHost);
+
+  const renderNext = async (nextView, nextWin) => {
+    const scroll = byId('__calScroll') || holder;
+    await fetchAndRenderCandidateCalendarForContract(contractKey, candidateKey, {
+      view: nextView,
+      from: nextWin.from,
+      to: nextWin.to,
+      __restoreScroll: {
+        top: scroll?.scrollTop || 0,
+        left: scroll?.scrollLeft || 0
+      }
+    });
+  };
+
+  renderDayGrid(gridHost, {
+    from: state.win.from,
+    to: state.win.to,
+    itemsByDate: buildDateIndex(items),
+    view: state.view,
+    bucketKey: candidateKey ? `cand:${candidateKey}` : key,
+    isInteractive: false,
+    onNav: async (delta) => {
+      const nextWin = state.view === 'year'
+        ? computeYearWindow(ymdToDate(state.win.from).getUTCFullYear() + delta)
+        : stepMonth(state.win, delta);
+      await renderNext(state.view, nextWin);
+    },
+    onToggleView: async () => {
+      const nextView = state.view === 'year' ? 'month' : 'year';
+      const anchor = ymdToDate(state.win.from);
+      const nextWin = nextView === 'year'
+        ? computeYearWindow(anchor.getUTCFullYear())
+        : computeMonthWindow(anchor.getUTCFullYear(), anchor.getUTCMonth());
+      await renderNext(nextView, nextWin);
+    }
+  });
+
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const scroll = byId('__calScroll') || holder;
+    scroll.scrollTop = state.scrollTop || 0;
+    scroll.scrollLeft = state.scrollLeft || 0;
+  }));
+}
+
+
 function isConsecutiveDailyRun(dates) {
   if (!Array.isArray(dates) || dates.length < 2) return false;
   const arr = [...dates].sort();
@@ -298109,18 +298145,10 @@ if (currentTab === 'calendar' && window.modalCtx?.data?.id) {
     sb.scrollLeft = prevScrollLeft;
   };
 
-  if (typeof fetchAndRenderCandidateCalendarForContract === 'function' && candId) {
-    await fetchAndRenderCandidateCalendarForContract(contractId2, candId, {
-      from: win?.from, to: win?.to, view,
-      weekEnding: window.modalCtx?.data?.week_ending_weekday_snapshot ?? 0,
-      __restoreScroll: { top: prevScrollTop, left: prevScrollLeft }
-    });
-  } else {
-    await fetchAndRenderContractCalendar(contractId2, win ? {
-      from: win.from, to: win.to, view,
-      __restoreScroll: { top: prevScrollTop, left: prevScrollLeft }
-    } : undefined);
-  }
+  await fetchAndRenderContractCalendar(contractId2, win ? {
+    from: win.from, to: win.to, view,
+    __restoreScroll: { top: prevScrollTop, left: prevScrollLeft }
+  } : undefined);
 
   // ✅ Restore scroll AFTER layout settles (prevents snapping to top)
   requestAnimationFrame(() => requestAnimationFrame(applyScroll));
@@ -325357,7 +325385,9 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
 
       const candidateOfficeAction = String(el.getAttribute('data-candidate-office-action') || '').trim();
       const candidateOfficeEvidenceAction = String(el.getAttribute('data-candidate-office-evidence-action') || '').trim();
-      if (isTimesheetFrame && ro && (candidateOfficeAction || candidateOfficeEvidenceAction)) {
+      const candidateOfficeExpenseAction = String(el.getAttribute('data-candidate-office-expense-action') || '').trim();
+      const candidateOfficeExpenseEvidence = String(el.getAttribute('data-candidate-office-expense-evidence') || '').trim();
+      if (isTimesheetFrame && ro && (candidateOfficeAction || candidateOfficeEvidenceAction || candidateOfficeExpenseAction || candidateOfficeExpenseEvidence)) {
         el.disabled = el.dataset.candidateOfficeServerEnabled !== '1';
         return;
       }
@@ -358703,16 +358733,12 @@ function renderTimesheetEvidenceTab(ctx) {
               data-timesheet-document-state="${escapeHtml(timesheetDocumentState)}"
               data-document-operation-id="${escapeHtml(documentOperationId)}"
               class="${system ? 'system-evidence' : ''}">
-            <td data-ctms-label="Filename">${fileName}</td>
-            <td data-ctms-label="Type">${type}</td>
+            <td data-ctms-label="Evidence"><strong class="ctms-evidence-title">${fileName}</strong><span class="ctms-evidence-meta">${type} · Pages ${pageCount}</span></td>
             <td data-ctms-label="Source">
               <span class="pill">${src}</span>
             </td>
             <td data-ctms-label="Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
-            <td data-ctms-label="Pages">${pageCount}</td>
-            <td data-ctms-label="Date uploaded">${uploadedDate}</td>
-            <td data-ctms-label="Time">${uploadedTime}</td>
-            <td data-ctms-label="Uploaded by">${uploadedBy}</td>
+            <td data-ctms-label="Uploaded"><strong class="ctms-evidence-uploaded">${uploadedDate}${uploadedTime === '—' ? '' : ` · ${uploadedTime}`}</strong><span class="ctms-evidence-meta">${uploadedBy}</span></td>
             <td data-ctms-label="Actions" style="text-align:right;">
               <div class="ctms-evidence-actions">
                 ${viewBtn}
@@ -358728,9 +358754,7 @@ function renderTimesheetEvidenceTab(ctx) {
       }).join('')
     : `
       <tr>
-        <td colspan="9" class="mini" style="opacity:.85;">
-          No evidence uploaded yet. Drag a file anywhere inside this tab to upload.
-        </td>
+        <td colspan="5" class="mini" style="opacity:.85;">No evidence uploaded yet.</td>
       </tr>
     `;
 
@@ -358739,14 +358763,10 @@ function renderTimesheetEvidenceTab(ctx) {
       <table class="ts-evidence-table ctms-timesheet-evidence-table" style="width:100%; border-collapse:collapse;">
         <thead>
           <tr>
-            <th style="text-align:left;">Filename</th>
-            <th style="text-align:left;">Type</th>
+            <th style="text-align:left;">Evidence</th>
             <th style="text-align:left;">Source</th>
             <th style="text-align:left;">Approval</th>
-            <th style="text-align:left;">Pages</th>
-            <th style="text-align:left;">Date Uploaded</th>
-            <th style="text-align:left;">Time</th>
-            <th style="text-align:left;">Uploaded by</th>
+            <th style="text-align:left;">Uploaded</th>
             <th style="text-align:right;">Actions</th>
           </tr>
         </thead>
@@ -358970,11 +358990,25 @@ function computeTimesheetProcessingState(details, row) {
 async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE][VIEWER]');
   GC('openTimesheetEvidenceViewerExisting');
+  const viewerOptions = (arguments[1] && typeof arguments[1] === 'object') ? arguments[1] : {};
 
   if (!evidenceItem || typeof evidenceItem !== 'object') {
     GE();
     throw new Error('Evidence item is required.');
   }
+
+  const expenseEvidenceItems = Array.isArray(viewerOptions?.evidenceItems)
+    ? viewerOptions.evidenceItems.filter(item => item && typeof item === 'object')
+    : [];
+  const expenseEvidenceIndex = Math.max(0, Math.min(
+    Number.isFinite(Number(viewerOptions?.evidenceIndex)) ? Number(viewerOptions.evidenceIndex) : 0,
+    Math.max(0, expenseEvidenceItems.length - 1)
+  ));
+  const expenseCategory = viewerOptions?.expenseCategory && typeof viewerOptions.expenseCategory === 'object'
+    ? viewerOptions.expenseCategory
+    : null;
+  const expenseCategoryKey = String(viewerOptions?.expenseCategoryKey || expenseCategory?.category || evidenceItem.kind || '').trim().toUpperCase();
+  const isExpenseCategoryViewer = !!(expenseCategory && expenseCategoryKey && expenseEvidenceItems.length);
 
    const mc = window.modalCtx || {};
   const tsId =
@@ -359066,13 +359100,13 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 
   const isViewOnly = !!evidenceItem.is_view_only;
 
-  const canDelete = !isViewOnly && (
+  const canDelete = !isExpenseCategoryViewer && !isViewOnly && (
     (typeof evidenceItem.can_delete === 'boolean')
       ? evidenceItem.can_delete
       : !isSystem
   );
 
-  const canReturnToQueue = !isViewOnly && (
+  const canReturnToQueue = !isExpenseCategoryViewer && !isViewOnly && (
     (typeof evidenceItem.can_return_to_queue === 'boolean')
       ? evidenceItem.can_return_to_queue
       : false
@@ -359080,7 +359114,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 
   const canonicalKinds = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
 
-  const canEditType = !isViewOnly && (
+  const canEditType = !isExpenseCategoryViewer && !isViewOnly && (
     (typeof evidenceItem.can_reclassify === 'boolean')
       ? evidenceItem.can_reclassify
       : (!isSystem && canonicalKinds.includes(String(evidenceItem.kind || '').trim().toUpperCase()))
@@ -359789,10 +359823,21 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   const previewStatusId = `${instanceId}-preview-status`;
   const downloadLinkId = `${instanceId}-download`;
   const deleteBtnId = `${instanceId}-delete`;
+  const previousBtnId = `${instanceId}-previous`;
+  const nextBtnId = `${instanceId}-next`;
+  const zoomOutBtnId = `${instanceId}-zoom-out`;
+  const zoomInBtnId = `${instanceId}-zoom-in`;
+  const zoomLabelId = `${instanceId}-zoom-label`;
+  const previewViewportId = `${instanceId}-preview-viewport`;
+  const previewCanvasId = `${instanceId}-preview-canvas`;
+  const rejectExpenseBtnId = `${instanceId}-reject-expense`;
   const selId       = `${instanceId}-type`;
   const otherId     = `${instanceId}-other`;
   const contextIdForTitle = tsIdNow() || weekIdNow() || tsId || contractWeekId || '';
-  const title = `Evidence ${String(contextIdForTitle).slice(0, 8)}…`;
+  const expenseCategoryLabel = String(expenseCategory?.label || expenseCategoryKey || 'Expense').trim();
+  const title = isExpenseCategoryViewer
+    ? `${expenseCategoryLabel} evidence`
+    : `Evidence ${String(contextIdForTitle).slice(0, 8)}…`;
 
   const kindTrim = String(kind || '').trim();
   const kindUpper = kindTrim.toUpperCase();
@@ -359821,7 +359866,20 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 
   const initialSelect = kindToUi(kindUpper);
 
-  const typeControlHtml = canEditType ? `
+  const typeControlHtml = isExpenseCategoryViewer ? `
+    <div class="row">
+      <label>Expense</label>
+      <div class="controls"><strong>${escapeHtml(expenseCategoryLabel)}</strong></div>
+    </div>
+    <div class="row">
+      <label>Manager Approval</label>
+      <div class="controls"><span class="candidate-office-badge candidate-office-badge--${['success', 'danger', 'warning', 'info'].includes(String(expenseCategory?.status?.tone || '').toLowerCase()) ? String(expenseCategory.status.tone).toLowerCase() : 'neutral'}">${escapeHtml(expenseCategory?.status?.label || 'Not approved yet')}</span></div>
+    </div>
+    <div class="row">
+      <label>File</label>
+      <div class="controls"><span class="mini">${escapeHtml(String(expenseEvidenceIndex + 1))} of ${escapeHtml(String(expenseEvidenceItems.length))}</span></div>
+    </div>
+  ` : canEditType ? `
     <div class="row">
       <label>Evidence Type</label>
       <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -359867,9 +359925,8 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
         <div class="row">
           <label>Download</label>
           <div class="controls">
-            <a class="pill"
-               id="${downloadLinkId}"
-               role="button"
+             <a class="pill"
+                id="${downloadLinkId}"
                aria-disabled="true"
                style="display:inline-block;border:1px solid var(--line);background:transparent;color:inherit;padding:6px 10px;border-radius:999px;text-decoration:none;opacity:.7;pointer-events:none;">
               Preparing preview…
@@ -359878,24 +359935,36 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
         </div>
       </div>
 
-      <div class="card" style="margin-top:10px;">
+      <div class="card ctms-expense-evidence-viewer" style="margin-top:10px;">
         <div class="row">
           <label>Preview</label>
           <div class="controls">
-            <div
-              id="${previewStatusId}"
-              class="mini"
-              role="status"
-              aria-live="polite"
-              style="width:100%;height:520px;border:1px solid var(--line);border-radius:8px;background:#000;display:grid;place-items:center;padding:18px;text-align:center;"
-            >Preparing preview…</div>
-            <iframe
-              id="${iframeId}"
-              title="Evidence preview"
-              style="display:none;width:100%;height:520px;border:1px solid var(--line);border-radius:8px;background:#000;"
-            ></iframe>
+            ${isExpenseCategoryViewer ? `
+              <div class="ctms-expense-evidence-toolbar">
+                <div class="ctms-expense-evidence-navigation" aria-label="Evidence file navigation">
+                  <button type="button" id="${previousBtnId}" class="btn btn-outline" ${expenseEvidenceIndex <= 0 ? 'disabled' : ''}>Previous</button>
+                  <span>${escapeHtml(String(expenseEvidenceIndex + 1))} of ${escapeHtml(String(expenseEvidenceItems.length))}</span>
+                  <button type="button" id="${nextBtnId}" class="btn btn-outline" ${expenseEvidenceIndex >= expenseEvidenceItems.length - 1 ? 'disabled' : ''}>Next</button>
+                </div>
+                <div class="ctms-expense-evidence-zoom" aria-label="Evidence zoom controls">
+                  <button type="button" id="${zoomOutBtnId}" class="btn btn-outline" aria-label="Zoom out">−</button>
+                  <span id="${zoomLabelId}">100%</span>
+                  <button type="button" id="${zoomInBtnId}" class="btn btn-outline" aria-label="Zoom in">+</button>
+                </div>
+              </div>
+            ` : ''}
+            <div id="${previewViewportId}" class="ctms-expense-evidence-preview${isExpenseCategoryViewer ? ' ctms-expense-evidence-preview--scoped' : ''}">
+              <div id="${previewCanvasId}" class="ctms-expense-evidence-preview__canvas">
+                <div id="${previewStatusId}" class="mini ctms-expense-evidence-preview__status" role="status" aria-live="polite">Preparing preview…</div>
+                <iframe id="${iframeId}" title="Evidence preview" class="ctms-expense-evidence-preview__frame"></iframe>
+              </div>
+            </div>
 
-             ${(canDelete || canReturnToQueue) ? `
+             ${isExpenseCategoryViewer ? `
+              <div class="ctms-expense-evidence-actions">
+                <button type="button" id="${rejectExpenseBtnId}" class="btn btn-warn candidate-office-expense-reject">Reject ${escapeHtml(expenseCategoryLabel)}</button>
+              </div>
+            ` : (canDelete || canReturnToQueue) ? `
               <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 ${canReturnToQueue ? `
                   <button type="button"
@@ -359957,7 +360026,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
     try {
       const st = (window.__modalStack && Array.isArray(window.__modalStack)) ? window.__modalStack : null;
       const fr = (st && st.length) ? st[st.length - 1] : null;
-      if (fr && fr.entity === 'timesheets') fr.currentTabKey = 'evidence';
+      if (fr && fr.entity === 'timesheets') fr.currentTabKey = isExpenseCategoryViewer ? 'expenses' : 'evidence';
     } catch {}
   };
 
@@ -360067,6 +360136,8 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       frameEntity: 'timesheet-evidence',
       noParentGate: true,
       forceEdit: true,
+      showSave: !isExpenseCategoryViewer,
+      showApply: false,
       onDismiss
     }
   );
@@ -360089,6 +360160,117 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       }
       return window.confirm(String(opts?.message || opts?.body || 'Are you sure?'));
     };
+
+    if (isExpenseCategoryViewer) {
+      let zoomPercent = 100;
+      const reopenAt = async (nextIndex) => {
+        const boundedIndex = Math.max(0, Math.min(Number(nextIndex), expenseEvidenceItems.length - 1));
+        if (boundedIndex === expenseEvidenceIndex) return;
+        const nextItem = expenseEvidenceItems[boundedIndex];
+        const closed = typeof closeCurrentModalFrameSafely === 'function'
+          ? closeCurrentModalFrameSafely({ expectedKind: 'timesheet-evidence-viewer' })
+          : false;
+        if (!closed) return;
+        await Promise.resolve();
+        await openTimesheetEvidenceViewerExisting(nextItem, { ...viewerOptions, evidenceIndex: boundedIndex });
+      };
+      const hydrateExpenseViewer = () => {
+        const applyZoom = () => {
+          const frame = document.getElementById(iframeId);
+          const canvas = document.getElementById(previewCanvasId);
+          const label = document.getElementById(zoomLabelId);
+          const viewport = document.getElementById(previewViewportId);
+          const baseHeight = Number(viewport?.clientHeight || 520);
+          const scale = zoomPercent / 100;
+          if (canvas) {
+            canvas.style.width = `${Math.max(100, zoomPercent)}%`;
+            canvas.style.height = `${Math.round(baseHeight * Math.max(1, scale))}px`;
+          }
+          if (frame) {
+            frame.style.width = scale >= 1 ? `${100 / scale}%` : '100%';
+            frame.style.height = `${baseHeight}px`;
+            frame.style.transform = `scale(${scale})`;
+          }
+          if (label) label.textContent = `${zoomPercent}%`;
+        };
+
+        const previous = document.getElementById(previousBtnId);
+        if (previous && !previous.__candidateOfficeExpensePreviousWired) {
+          previous.__candidateOfficeExpensePreviousWired = true;
+          previous.addEventListener('click', () => { void reopenAt(expenseEvidenceIndex - 1); });
+        }
+        const next = document.getElementById(nextBtnId);
+        if (next && !next.__candidateOfficeExpenseNextWired) {
+          next.__candidateOfficeExpenseNextWired = true;
+          next.addEventListener('click', () => { void reopenAt(expenseEvidenceIndex + 1); });
+        }
+        const zoomOut = document.getElementById(zoomOutBtnId);
+        if (zoomOut && !zoomOut.__candidateOfficeExpenseZoomWired) {
+          zoomOut.__candidateOfficeExpenseZoomWired = true;
+          zoomOut.addEventListener('click', () => {
+            zoomPercent = Math.max(50, zoomPercent - 25);
+            applyZoom();
+          });
+        }
+        const zoomIn = document.getElementById(zoomInBtnId);
+        if (zoomIn && !zoomIn.__candidateOfficeExpenseZoomWired) {
+          zoomIn.__candidateOfficeExpenseZoomWired = true;
+          zoomIn.addEventListener('click', () => {
+            zoomPercent = Math.min(200, zoomPercent + 25);
+            applyZoom();
+          });
+        }
+
+        const rejectExpense = document.getElementById(rejectExpenseBtnId);
+        if (rejectExpense && !rejectExpense.__candidateOfficeExpenseRejectWired) {
+          rejectExpense.__candidateOfficeExpenseRejectWired = true;
+          rejectExpense.addEventListener('click', async () => {
+            if (rejectExpense.disabled) return;
+            rejectExpense.disabled = true;
+            try {
+              const bridge = window.CloudTMSCandidateOfficeBridge;
+              if (!bridge || typeof bridge.runExpenseCategoryAction !== 'function') {
+                throw new Error('The current expense action is unavailable. Refresh the Timesheet and try again.');
+              }
+              await bridge.runExpenseCategoryAction({
+                context: { ...(viewerOptions.expenseActionContext || {}), expenseEvidenceViewer: true },
+                expenseComponentId: viewerOptions.expenseComponentId || expenseCategory?.expense_component_id,
+                trigger: rejectExpense
+              });
+            } catch (error) {
+              try { window.__toast?.(String(error?.message || 'The expense could not be rejected.')); } catch {}
+            } finally {
+              if (rejectExpense.isConnected) rejectExpense.disabled = false;
+              requestAnimationFrame(hydrateExpenseViewer);
+            }
+          });
+        }
+
+        if (signedUrl) {
+          const link = document.getElementById(downloadLinkId);
+          if (link) {
+            link.href = signedUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.removeAttribute('aria-disabled');
+            link.style.opacity = '';
+            link.style.pointerEvents = '';
+            link.textContent = 'Download';
+          }
+        }
+        if (previewObjectUrl) {
+          const frame = document.getElementById(iframeId);
+          const status = document.getElementById(previewStatusId);
+          if (frame) {
+            frame.style.display = 'block';
+            frame.src = previewObjectUrl;
+          }
+          if (status) status.style.display = 'none';
+        }
+        applyZoom();
+      };
+      hydrateExpenseViewer();
+    }
 
     if (canDelete) {
       const delBtn = document.getElementById(deleteBtnId);
@@ -360262,7 +360444,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
         link.removeAttribute('aria-disabled');
         link.style.opacity = '';
         link.style.pointerEvents = '';
-        link.textContent = 'Open / Download';
+        link.textContent = 'Download';
       }
 
       if (iframe) {
@@ -362907,12 +363089,7 @@ function renderTimesheetOverviewTab(ctx) {
         </div>
       </div>
 
-      ${candidateOverviewHtml ? `
-        <div class="row" data-view-only="true">
-          <label>Candidate</label>
-          <div class="controls" style="width:100%;">${candidateOverviewHtml}</div>
-        </div>
-      ` : ''}
+      ${candidateOverviewHtml ? `<div data-view-only="true">${candidateOverviewHtml}</div>` : ''}
 
       ${routeActionsRowHtml}
     </div>
@@ -373359,6 +373536,81 @@ function renderTimesheetRelatedTab(ctx) {
   `;
 }
 
+function getCurrentTimesheetEvidenceItemsFromModalContext(modalContext) {
+  const mc = (modalContext && typeof modalContext === 'object') ? modalContext : {};
+  const state = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
+  const details = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
+  const row = (mc.data && typeof mc.data === 'object') ? mc.data : {};
+  const arrays = [
+    state.evidence,
+    details.evidence,
+    row.evidence,
+    state.contractWeekStagedEvidence,
+    state.contract_week_staged_evidence,
+    state.stagedEvidence,
+    state.staged_evidence,
+    details.contractWeekStagedEvidence,
+    details.contract_week_staged_evidence,
+    details.stagedEvidence,
+    details.staged_evidence,
+    mc.contractWeekStagedEvidence
+  ].filter(Array.isArray);
+  const current = arrays.find(list => list.length > 0) || arrays[0] || [];
+  return current.filter(item => {
+    if (!item || typeof item !== 'object') return false;
+    if (item.withdrawn_at || item.withdrawn_at_utc || item.is_withdrawn === true || item.historical === true) return false;
+    return true;
+  });
+}
+
+async function openTimesheetExpenseEvidenceViewer(input = {}) {
+  const category = input?.category && typeof input.category === 'object' ? input.category : null;
+  const categoryKey = String(input?.categoryKey || category?.category || '').trim().toUpperCase();
+  const canonicalKinds = new Set(['MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER']);
+  if (!category || !canonicalKinds.has(categoryKey)) {
+    try { window.__toast?.('Refresh the current expense evidence before continuing.'); } catch {}
+    return { ok: false, unavailable: true };
+  }
+  const currentCategoryEvidence = () => getCurrentTimesheetEvidenceItemsFromModalContext(window.modalCtx)
+    .filter(item => String(item?.kind || item?.staged_kind || '').trim().toUpperCase() === categoryKey);
+  let evidenceItems = currentCategoryEvidence();
+  if (!evidenceItems.length) {
+    const timesheetId = String(
+      input?.context?.identity?.timesheet_id ||
+      input?.context?.projection?.current_identity?.timesheet_id ||
+      window.modalCtx?.data?.current_timesheet_id ||
+      window.modalCtx?.data?.timesheet_id ||
+      window.modalCtx?.timesheetDetails?.current_timesheet_id ||
+      window.modalCtx?.timesheetDetails?.timesheet?.timesheet_id ||
+      ''
+    ).trim();
+    if (timesheetId && typeof refreshTimesheetEvidenceIntoModalState === 'function') {
+      try {
+        await refreshTimesheetEvidenceIntoModalState(timesheetId);
+        evidenceItems = currentCategoryEvidence();
+      } catch (error) {
+        console.warn('[TS][EXPENSE][EVIDENCE] current evidence refresh failed', error);
+      }
+    }
+  }
+  if (!evidenceItems.length) {
+    try { window.__toast?.(`No current ${String(category.label || categoryKey).toLowerCase()} evidence is available to view.`); } catch {}
+    return { ok: false, unavailable: true };
+  }
+  await openTimesheetEvidenceViewerExisting(evidenceItems[0], {
+    evidenceItems,
+    evidenceIndex: 0,
+    expenseCategory: category,
+    expenseCategoryKey: categoryKey,
+    expenseActionContext: input.context,
+    expenseComponentId: input.expenseComponentId,
+    trigger: input.trigger
+  });
+  return { ok: true, count: evidenceItems.length };
+}
+
+try { window.openTimesheetExpenseEvidenceViewer = openTimesheetExpenseEvidenceViewer; } catch {}
+
 function getTimesheetEvidenceItemsFromModalContext(modalContext) {
   const mc = (modalContext && typeof modalContext === 'object') ? modalContext : {};
   const state = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
@@ -373884,16 +374136,12 @@ function renderTimesheetEvidenceTab(ctx) {
               data-timesheet-document-state="${escapeHtml(timesheetDocumentState)}"
               data-document-operation-id="${escapeHtml(documentOperationId)}"
               class="${system ? 'system-evidence' : ''}">
-            <td data-ctms-label="Filename">${fileName}</td>
-            <td data-ctms-label="Type">${type}</td>
+            <td data-ctms-label="Evidence"><strong class="ctms-evidence-title">${fileName}</strong><span class="ctms-evidence-meta">${type} · Pages ${pageCount}</span></td>
             <td data-ctms-label="Source">
               <span class="pill">${src}</span>
             </td>
-            <td data-ctms-label="Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
-            <td data-ctms-label="Pages">${pageCount}</td>
-            <td data-ctms-label="Date uploaded">${uploadedDate}</td>
-            <td data-ctms-label="Time">${uploadedTime}</td>
-            <td data-ctms-label="Uploaded by">${uploadedBy}</td>
+            <td data-ctms-label="Manager Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
+            <td data-ctms-label="Uploaded"><strong class="ctms-evidence-uploaded">${uploadedDate}${uploadedTime === '—' ? '' : ` · ${uploadedTime}`}</strong><span class="ctms-evidence-meta">${uploadedBy}</span></td>
             <td data-ctms-label="Actions" style="text-align:right;">
               <div class="ctms-evidence-actions">
                 ${viewBtn}
@@ -373909,9 +374157,7 @@ function renderTimesheetEvidenceTab(ctx) {
       }).join('')
     : `
       <tr>
-        <td colspan="9" class="mini" style="opacity:.85;">
-          No evidence uploaded yet. Drag a file anywhere inside this tab to upload.
-        </td>
+        <td colspan="5" class="mini" style="opacity:.85;">No evidence uploaded yet.</td>
       </tr>
     `;
 
@@ -373920,14 +374166,10 @@ function renderTimesheetEvidenceTab(ctx) {
       <table class="ts-evidence-table ctms-timesheet-evidence-table" style="width:100%; border-collapse:collapse;">
         <thead>
           <tr>
-            <th style="text-align:left;">Filename</th>
-            <th style="text-align:left;">Type</th>
+            <th style="text-align:left;">Evidence</th>
             <th style="text-align:left;">Source</th>
-            <th style="text-align:left;">Approval</th>
-            <th style="text-align:left;">Pages</th>
-            <th style="text-align:left;">Date Uploaded</th>
-            <th style="text-align:left;">Time</th>
-            <th style="text-align:left;">Uploaded by</th>
+            <th style="text-align:left;">Manager Approval</th>
+            <th style="text-align:left;">Uploaded</th>
             <th style="text-align:right;">Actions</th>
           </tr>
         </thead>
@@ -373989,37 +374231,15 @@ function renderTimesheetEvidenceTab(ctx) {
     </section>
   ` : '';
 
-  const policyEvidenceReason = policy ? String(policy.expenseEvidenceDisabledReason || policy.expensesDisabledReason || '') : '';
-  const plannedEvidenceGuidance = expenseEvidenceStorageTarget === 'CONTRACT_WEEK_STAGED_EVIDENCE'
-    ? 'Evidence can be uploaded for this unprocessed week because expenses are being saved as a draft.'
-    : '';
-  const protectedEvidenceGuidance = policy?.requiresAdditionalManualForExpenses
-    ? 'Evidence cannot be uploaded directly for this source row. Use Add Additional Manual if expenses need to be claimed.'
-    : '';
-  const lockBanner = policy
-    ? (canManageEvidence ? plannedEvidenceGuidance : (protectedEvidenceGuidance || policyEvidenceReason || 'Evidence cannot be uploaded for this row because it does not have a supported expenses draft target.'))
-    : (importAuthoritative
-        ? 'Import source evidence is review-only. Use an additional manual timesheet for expenses or extra supporting items.'
-        : (authorised
-            ? 'Payment values are locked because this timesheet is authorised. Evidence files can still be managed if the row is not invoice/document locked.'
-            : (lockReason ? `Evidence changes are locked: ${escapeHtml(lockReason)}` : '')));
-  const hasTimesheetEvidence = evList.some((ev) => String(ev?.kind || ev?.staged_kind || '').trim().toUpperCase() === 'TIMESHEET');
-
   return `
     <div class="tabc ts-evidence-tab"
          data-ts-drop-zone-root="evidence"
          style="height:100%; display:flex; flex-direction:column;">
-      <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:8px;">
-        <div class="mini" style="opacity:.9;">${lockBanner ? lockBanner : 'Evidence file actions do not unlock hours, rates, pay, charge, mileage, travel, accommodation, or other financial values.'}</div>
+      <div class="ctms-evidence-toolbar">
         ${canManageEvidence ? `
           <button type="button" class="btn btn-outline" data-evidence-add="1" data-evidence-upload="1">Add evidence</button>
         ` : ''}
       </div>
-      ${hasTimesheetEvidence ? `
-        <div class="mini" style="margin-bottom:8px;opacity:.92;">
-          To use a different timesheet image, delete this file or return it to the queue first, then add the new file.
-        </div>
-      ` : ''}
 
       ${candidateEvidenceHtml}
 
@@ -374033,11 +374253,6 @@ function renderTimesheetEvidenceTab(ctx) {
       </div>
 
       ${withdrawnHistoryHtml}
-
-      <div class="mini" style="margin-top:10px; opacity:.85; text-align:center;">
-        ${canManageEvidence ? 'Drag a PDF or image anywhere inside this tab to upload new evidence.' : escapeHtml(protectedEvidenceGuidance || policyEvidenceReason || 'Evidence cannot be uploaded for this row because it does not have a supported expenses draft target.')}
-      </div>
-
     </div>
   `;
 }

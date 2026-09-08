@@ -21,6 +21,14 @@ test('existing unassigned contracts still render the contract calendar feed', ()
   assert.doesNotMatch(source, /<Unassigned>/);
 });
 
+test('a new unsaved contract renders the staged candidate calendar without a Contract read', () => {
+  const source = section('async function fetchAndRenderCandidateCalendarForContract', 'function isConsecutiveDailyRun');
+  assert.match(source, /getCandidateCalendarRange\(candidateKey, state\.win\.from, state\.win\.to, 'day'\)/);
+  assert.match(source, /isInteractive: false/);
+  assert.match(source, /renderDayGrid\(gridHost/);
+  assert.doesNotMatch(source, /getContractCalendarRange|getContractCalendar\(/);
+});
+
 test('unassigned timesheets are read-only but retain guarded deletion', () => {
   const source = section('function getCanonicalTimesheetFooterState', 'function setFormReadOnly');
   assert.match(source, /relatedCandidate\.candidate_id/);

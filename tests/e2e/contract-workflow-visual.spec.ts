@@ -7,6 +7,7 @@ const root = resolve(__dirname, '../..');
 const origin = 'https://testmode.arthur-rai.co.uk';
 const localIndex = readFileSync(resolve(root, 'index.html'), 'utf8');
 const localMain = readFileSync(resolve(root, 'js/main.js'), 'utf8');
+const localModalJs = readFileSync(resolve(root, 'js/modal-modernisation.js'), 'utf8');
 const localModalCss = readFileSync(resolve(root, 'css/modal-modernisation.css'), 'utf8');
 const localAuthorisers = readFileSync(resolve(root, 'js/manager-authorisers.js'), 'utf8');
 const marker = `contract-workflow:${createHash('sha256').update(localMain).digest('hex').slice(0, 12)}`;
@@ -25,7 +26,7 @@ const devices = [
 ];
 
 async function installLocalAssets(page: Page) {
-  const counts = { index: 0, main: 0, css: 0, authorisers: 0 };
+  const counts = { index: 0, main: 0, modalJs: 0, css: 0, authorisers: 0 };
   await page.route(`${origin}/**`, async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === '/' || url.pathname === '/index.html') {
@@ -40,6 +41,10 @@ async function installLocalAssets(page: Page) {
       counts.main += 1;
       return route.fulfill({ body: localMain, contentType: 'application/javascript; charset=utf-8', headers: { 'cache-control': 'no-store', 'x-codex-local-asset': marker } });
     }
+    if (url.pathname === '/js/modal-modernisation.js') {
+      counts.modalJs += 1;
+      return route.fulfill({ body: localModalJs, contentType: 'application/javascript; charset=utf-8', headers: { 'cache-control': 'no-store', 'x-codex-local-asset': marker } });
+    }
     if (url.pathname === '/css/modal-modernisation.css') {
       counts.css += 1;
       return route.fulfill({ body: localModalCss, contentType: 'text/css; charset=utf-8', headers: { 'cache-control': 'no-store', 'x-codex-local-asset': marker } });
@@ -51,15 +56,14 @@ async function installLocalAssets(page: Page) {
     return route.continue();
   });
 
-  await page.route('**/api/search/candidates**', (route) => route.fulfill({
-    json: {
-      items: [
-        { id: 'b0000000-0000-4000-8000-000000000001', first_name: 'Amira', last_name: 'Begum', primary_job_title: 'Community Psychiatric Nurse', city: 'Reading' },
-        { id: 'b0000000-0000-4000-8000-000000000002', first_name: 'Daniel', last_name: 'Clarke', primary_job_title: 'Registered Mental Health Nurse', city: 'Bracknell' },
-        { id: 'b0000000-0000-4000-8000-000000000003', first_name: 'Leila', last_name: 'Morgan', primary_job_title: 'Health Visitor', city: 'Slough' }
-      ]
-    }
-  }));
+  await page.route('**/api/search/candidates**', (route) => {
+    const rows = [
+      { id: 'b0000000-0000-4000-8000-000000000001', first_name: 'Amira', last_name: 'Begum', primary_job_title: 'Community Psychiatric Nurse', city: 'Reading' },
+      { id: 'b0000000-0000-4000-8000-000000000002', first_name: 'Daniel', last_name: 'Clarke', primary_job_title: 'Registered Mental Health Nurse', city: 'Bracknell' },
+      { id: 'b0000000-0000-4000-8000-000000000003', first_name: 'Leila', last_name: 'Morgan', primary_job_title: 'Health Visitor', city: 'Slough' }
+    ];
+    return route.fulfill({ json: { rows, items: rows } });
+  });
   return counts;
 }
 
@@ -123,12 +127,14 @@ async function openMockContract(page: Page, overrides: Record<string, unknown> =
       [
         { key: 'main', label: 'Main', title: 'Main' },
         { key: 'rates', label: 'Rates', title: 'Rates' },
-        { key: 'extras', label: 'Additional Rates', title: 'Additional Rates' }
+        { key: 'extras', label: 'Additional Rates', title: 'Additional Rates' },
+        { key: 'calendar', label: 'Calendar', title: 'Calendar' }
       ],
       (key: string) => {
         const ctx = (window as any).modalCtx;
         if (key === 'rates') return (window as any).renderContractRatesTab(ctx);
         if (key === 'extras') return (window as any).renderContractAdditionalRatesTab(ctx);
+        if (key === 'calendar') return (window as any).renderContractCalendarTab(ctx);
         return (window as any).renderContractMainTab(ctx);
       },
       async () => true,
@@ -145,6 +151,228 @@ async function openMockContract(page: Page, overrides: Record<string, unknown> =
   }, { contractOverrides: overrides, requestedMode: openMode });
   await expect(page.locator('#modalTitle')).toContainText(openMode === 'edit' ? 'Edit Contract' : 'View Contract');
 }
+
+test('Contract rates allow natural repeated typing and normalise only after blur', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installLocalAssets(page);
+  await openApp(page);
+  await openMockContract(page, {}, 'edit');
+  await page.locator('#modalTabs button').filter({ hasText: /^\s*Rates\s*$/ }).click();
+
+  for (const name of ['paye_day', 'charge_day']) {
+    const input = page.locator(`#contractRatesTab input[name="${name}"]`);
+    const other = name === 'paye_day'
+      ? page.locator('#contractRatesTab input[name="charge_day"]')
+      : page.locator('#contractRatesTab input[name="paye_day"]');
+
+    await input.click();
+    await input.press('Control+A');
+    await input.pressSequentially('50', { delay: 120 });
+    await expect(input).toHaveValue('50');
+    await other.click();
+    await expect(input).toHaveValue('50.00');
+
+    await input.click();
+    await input.press('Control+A');
+    await input.pressSequentially('50.45', { delay: 120 });
+    await expect(input).toHaveValue('50.45');
+    await other.click();
+    await expect(input).toHaveValue('50.45');
+  }
+});
+
+test('A new unsaved Contract with a staged candidate opens Calendar without an error', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installLocalAssets(page);
+  await page.route('**/api/candidates/b0000000-0000-4000-8000-000000000001/calendar**', (route) => route.fulfill({
+    json: { items: [], contracts: [] }
+  }));
+  await page.route('**/api/candidates/b0000000-0000-4000-8000-000000000001', (route) => route.fulfill({
+    json: { candidate: { id: 'b0000000-0000-4000-8000-000000000001', first_name: 'Amira', last_name: 'Begum', pay_method: 'PAYE' } }
+  }));
+  await openApp(page);
+  await page.evaluate(() => (window as any).openContract(null));
+  await expect(page.locator('#modalTitle')).toContainText('Create Contract');
+  const candidateInput = page.locator('#candidate_name_display');
+  await candidateInput.fill('Amira');
+  await page.locator('#candidateInlineSuggestions .ctms-contract-suggestion').first().click();
+  await expect(candidateInput).toHaveValue(/Begum, Amira/);
+  await page.locator('#modalTabs button').filter({ hasText: /^\s*Calendar\s*$/ }).click();
+
+  await expect(page.locator('#contractCalendarHolder')).toBeVisible();
+  await expect(page.locator('#__calCandidateName')).toContainText('Begum, Amira');
+  await expect(page.locator('#contractDayGrid')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Calendar load failed.', { exact: true })).toHaveCount(0);
+});
+
+test('Contract Related Timesheets opens the supported Timesheets summary', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installLocalAssets(page);
+  const contractId = 'a0000000-0000-4000-8000-000000000001';
+  const relatedUrl = `**/api/related/contract/${contractId}/timesheets**`;
+  const totalRelated = 75;
+  const relatedRequests: Array<{ limit: number; offset: number }> = [];
+  await page.route(relatedUrl, (route) => {
+    const requestUrl = new URL(route.request().url());
+    const limit = Number(requestUrl.searchParams.get('limit') || 20);
+    const offset = Number(requestUrl.searchParams.get('offset') || 0);
+    relatedRequests.push({ limit, offset });
+    const pageEnd = Math.min(totalRelated, offset + limit);
+    const items = Array.from({ length: Math.max(0, pageEnd - offset) }, (_, index) => {
+      const ordinal = offset + index + 1;
+      const suffix = String(ordinal).padStart(12, '0');
+      const candidateName = `Related candidate ${String(ordinal).padStart(3, '0')}`;
+      return {
+        timesheet_id: `c0000000-0000-4000-8000-${suffix}`,
+        contract_week_id: `d0000000-0000-4000-8000-${suffix}`,
+        contract_id: contractId,
+        candidate_id: 'a0000000-0000-4000-8000-000000000002',
+        candidate_name: candidateName,
+        candidate_display_name: candidateName,
+        client_id: 'a0000000-0000-4000-8000-000000000003',
+        client_name: 'Arthur Rai Medical Services',
+        week_ending_date: '2026-09-13',
+        sheet_scope: 'WEEKLY',
+        route_type: 'ELECTRONIC',
+        route_display: 'Electronic',
+        summary_stage: 'UNPROCESSED',
+        tools_stage: 'UNPROCESSED',
+        processing_status: 'UNPROCESSED',
+        total_hours: 0,
+        total_pay_ex_vat: 0,
+        total_charge_ex_vat: 0,
+        margin_ex_vat: 0
+      };
+    });
+    return route.fulfill({
+      json: {
+        total: totalRelated,
+        items
+      }
+    });
+  });
+
+  await openApp(page);
+  await openMockContract(page, {}, 'view');
+  await page.evaluate(({ id, total }) => (window as any).showRelatedMenu(900, 80, { timesheets: total }, 'contract', id), { id: contractId, total: totalRelated });
+  await page.getByText('75 related timesheets', { exact: true }).click();
+
+  await expect(page.getByText('Timesheets', { exact: true }).last()).toBeVisible();
+  await expect(page.getByText('Related candidate 001', { exact: true }).first()).toBeVisible();
+  const summaryBody = page.locator('.summary-body[data-summary-section="timesheets"]');
+  await expect(summaryBody).toBeVisible();
+  await expect.poll(
+    () => summaryBody.evaluate((element) => element.scrollHeight - element.clientHeight),
+    { timeout: 30_000 }
+  ).toBeGreaterThan(500);
+  await summaryBody.evaluate((element) => {
+    element.scrollTop = element.scrollHeight - element.clientHeight;
+    element.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+  await expect.poll(
+    () => relatedRequests.some((request) => request.limit === 50 && request.offset === 50),
+    { timeout: 30_000 }
+  ).toBe(true);
+  const finalRelatedCandidate = page.getByText('Related candidate 075', { exact: true });
+  await expect(finalRelatedCandidate).toHaveCount(1);
+  await finalRelatedCandidate.scrollIntoViewIfNeeded();
+  await expect(finalRelatedCandidate).toBeVisible();
+  await expect(page.getByText('Timesheets could not be loaded', { exact: false })).toHaveCount(0);
+  expect(relatedRequests.some((request) => request.limit === 50 && request.offset === 0)).toBe(true);
+
+  for (const workbench of ['Bulk Process', 'Bulk Authorise']) {
+    await page.getByRole('button', { name: workbench, exact: true }).click();
+    await expect(page.locator('#modalTitle')).toHaveText(workbench, { timeout: 10_000 });
+    await page.locator('#btnCloseModal').click();
+    await expect(page.locator('#modalBack')).toBeHidden();
+  }
+});
+
+test('every Contract Related option opens its correct continuous summary or stays unavailable at zero', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installLocalAssets(page);
+  const contractId = 'a0000000-0000-4000-8000-000000000001';
+  const relatedRequests: Array<{ type: string; limit: number; offset: number }> = [];
+  const relatedRows: Record<string, Record<string, unknown>> = {
+    clients: {
+      id: 'a0000000-0000-4000-8000-000000000003',
+      name: 'Related client record',
+      primary_invoice_email: 'accounts@example.test',
+      invoice_address: '1 Test Street',
+      postcode: 'AA1 1AA',
+      ap_phone: '01234567890'
+    },
+    candidates: {
+      id: 'a0000000-0000-4000-8000-000000000002',
+      first_name: 'Related',
+      last_name: 'Candidate Record',
+      display_name: 'Candidate Record, Related',
+      phone: '07123456789',
+      email: 'candidate@example.test',
+      postcode: 'BB1 1BB',
+      role: 'Nurse'
+    },
+    umbrellas: {
+      id: 'a0000000-0000-4000-8000-000000000004',
+      name: 'Related umbrella record',
+      vat_chargeable: true,
+      bank_name: 'Test Bank',
+      sort_code: '00-00-00',
+      account_number: '00000000',
+      enabled: true
+    }
+  };
+
+  await page.route(`**/api/related/contract/${contractId}/**`, (route) => {
+    const requestUrl = new URL(route.request().url());
+    const type = requestUrl.pathname.split('/').pop() || '';
+    const limit = Number(requestUrl.searchParams.get('limit') || 20);
+    const offset = Number(requestUrl.searchParams.get('offset') || 0);
+    relatedRequests.push({ type, limit, offset });
+    return route.fulfill({
+      json: {
+        total: relatedRows[type] ? 1 : 0,
+        items: relatedRows[type] ? [relatedRows[type]] : []
+      }
+    });
+  });
+
+  await openApp(page);
+  await openMockContract(page, {}, 'view');
+
+  const checks = [
+    { type: 'clients', menu: '1 related client', heading: 'Clients', rowText: 'Related client record' },
+    { type: 'candidates', menu: '1 related candidate', heading: 'Candidates', rowText: 'Candidate Record' },
+    { type: 'umbrellas', menu: '1 related umbrella', heading: 'Umbrellas', rowText: 'Related umbrella record' }
+  ];
+
+  for (const check of checks) {
+    await page.evaluate(
+      ({ id, type }) => (window as any).showRelatedMenu(900, 80, { [type]: 1 }, 'contract', id),
+      { id: contractId, type: check.type }
+    );
+    await page.getByText(check.menu, { exact: true }).click();
+    await expect(page.getByText(check.heading, { exact: true }).last()).toBeVisible();
+    await expect(page.getByText(check.rowText, { exact: false }).first()).toBeVisible();
+    await expect.poll(
+      () => relatedRequests.some((request) => request.type === check.type && request.limit === 50 && request.offset === 0),
+      { timeout: 30_000 }
+    ).toBe(true);
+  }
+
+  const umbrellaReadsBeforeUnavailableCheck = relatedRequests.filter((request) => request.type === 'umbrellas').length;
+  await page.evaluate(({ id }) => (window as any).showRelatedMenu(900, 80, { umbrellas: 0 }, 'contract', id), { id: contractId });
+  const unavailableUmbrellas = page.getByText('0 related umbrellas', { exact: true });
+  await expect(unavailableUmbrellas).toBeVisible();
+  await expect(unavailableUmbrellas).toHaveCSS('cursor', 'default');
+  expect(await unavailableUmbrellas.evaluate((element) => (element as HTMLElement).onclick === null)).toBe(true);
+  await unavailableUmbrellas.click({ force: true });
+  expect(relatedRequests.filter((request) => request.type === 'umbrellas')).toHaveLength(umbrellaReadsBeforeUnavailableCheck);
+});
 
 async function assertProtectedContractControls(page: Page) {
   await expect(page.locator('#contractModalTitleLock')).toBeVisible();
@@ -343,6 +571,7 @@ for (const device of devices) {
 
     expect(counts.index).toBeGreaterThan(0);
     expect(counts.main).toBeGreaterThan(0);
+    expect(counts.modalJs).toBeGreaterThan(0);
     expect(counts.css).toBeGreaterThan(0);
     expect(counts.authorisers).toBeGreaterThan(0);
   });

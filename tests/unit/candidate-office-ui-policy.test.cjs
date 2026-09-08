@@ -151,11 +151,13 @@ test('Candidate confirmations adapt onto the existing CloudTMS modal owner', () 
   assert.match(candidateCss, /#modal:has\(\[data-candidate-office-slot="1"\]\) \.modal-b \{ flex:1 1 auto; min-height:0; overflow:auto;/);
   assert.match(candidateCss, /#modal:has\(\[data-candidate-office-dialog\]\) \{ width:min\(1100px,calc\(100vw - 24px\)\) !important; min-width:0 !important;/);
   assert.match(candidateCss, /\.scrollable-evidence \{ max-width:100%; overflow:auto !important; \}/);
-  assert.match(candidateCss, /\.ts-evidence-table \{ min-width:980px; table-layout:fixed; \}/);
-  assert.match(candidateCss, /\.ts-evidence-table th,[\s\S]*\.ts-evidence-table td \{ padding:8px 12px;/);
-  assert.match(candidateCss, /\.ts-evidence-table td \{ padding:8px 12px; vertical-align:top; white-space:normal; overflow-wrap:anywhere;/);
-  assert.match(candidateCss, /\.ts-evidence-table th:last-child,[\s\S]*width:260px;/);
+  assert.match(candidateCss, /\.ts-evidence-table \{ min-width:820px; table-layout:fixed; \}/);
+  assert.match(candidateCss, /\.ts-evidence-table th,[\s\S]*\.ts-evidence-table td \{ padding:11px 12px;/);
+  assert.match(candidateCss, /\.ts-evidence-table td \{ padding:11px 12px; vertical-align:middle; white-space:normal; overflow-wrap:normal;/);
+  assert.match(candidateCss, /\.ts-evidence-table th:last-child,[\s\S]*width:16%;/);
   assert.match(candidateCss, /\.ctms-timesheet-evidence-table \.ctms-evidence-actions \{ display:flex; flex-wrap:wrap;/);
+  assert.match(candidateCss, /\.ctms-expense-grid__head, \.ctms-expense-grid__row \{ display:grid;/);
+  assert.match(candidateCss, /\.candidate-office-expense-reject \{ width:auto !important;/);
   assert.match(candidateCss, /#modal\.bulk-process-workbench:has\(\[data-candidate-office-slot="1"\]\) #bulkProcessWorkbenchGrid \{ grid-template-columns:1fr !important;/);
   assert.match(candidateCss, /#bulkProcessRightPane \{ grid-row:1; max-height:none !important; \}/);
 });

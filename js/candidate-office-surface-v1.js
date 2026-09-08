@@ -36,6 +36,24 @@
       </article>`).join('')}</div>
     </div>`).join('')}</section>`;
   }
+  function renderExpenseCategoryRow(view, categoryName, { surface = 'SIMPLE_TIMESHEET' } = {}) {
+    const categoryKey = String(categoryName || '').trim().toUpperCase();
+    const categories = (Array.isArray(view?.expense_claims) ? view.expense_claims : [])
+      .flatMap(claim => Array.isArray(claim?.categories) ? claim.categories : []);
+    const category = categories.find(item => String(item?.category || '').toUpperCase() === categoryKey);
+    if (!category) return '';
+    const evidenceCount = Number(category.supporting_evidence_count || 0);
+    const evidence = evidenceCount > 0
+      ? `<button type="button" class="btn btn-outline candidate-office-expense-evidence" data-candidate-office-expense-evidence="${escape(categoryKey)}" data-expense-component-id="${escape(category.expense_component_id)}" data-candidate-office-server-enabled="1" aria-label="View ${escape(evidenceCount)} supporting ${evidenceCount === 1 ? 'file' : 'files'} for ${escape(category.label)}"><span aria-hidden="true">▧</span> View ${escape(evidenceCount)} ${evidenceCount === 1 ? 'file' : 'files'}</button>`
+      : '';
+    const reject = canRenderExpenseCategoryRejection(surface, category, view)
+      ? `<button type="button" class="btn btn-warn candidate-office-expense-reject" data-candidate-office-expense-action="REJECT_EXPENSE_CATEGORY" data-expense-component-id="${escape(category.expense_component_id)}" data-candidate-office-server-enabled="1" aria-label="Reject ${escape(category.label)} expense">Reject ${escape(category.label)}</button>`
+      : '';
+    return `<div class="candidate-office-expense-row-status" data-expense-category-status="${escape(categoryKey)}">
+      <div class="candidate-office-expense-manager"><span class="${statusClass(category.status.tone)}" data-expense-status-code="${escape(category.status.code)}">${escape(category.status.label)}</span></div>
+      <div class="candidate-office-expense-row-action">${evidence}${reject}${!evidence && !reject ? '<span aria-hidden="true">—</span>' : ''}</div>
+    </div>`;
+  }
   const approvedActions = (actions, surface) => (Array.isArray(actions) ? actions : [])
     .filter(action => action?.enabled === true || action?.placeholder === true)
     .filter(action => window.CloudTMSCandidateOfficeUiPolicy?.isButtonApproved(surface, action?.code) === true);
@@ -55,11 +73,11 @@
   function renderCandidateOverviewFragment(view) {
     if (!view) return '';
     const sections = [];
-    if (view.current_submission) {
-      sections.push(`<div class="candidate-office-overview-group"><strong>Submission Status</strong>${renderFields(view.current_submission.fields)}</div>`);
-    }
-    if (Array.isArray(view.expense_claims) && view.expense_claims.length) {
-      sections.push(`<div class="candidate-office-overview-group candidate-office-overview-expenses">${renderExpenseClaims(view)}</div>`);
+    if (view.candidate_submission_applicable === true && view.current_submission) {
+      const fields = view.current_submission.fields || [];
+      const statusField = fields.find(([fieldLabel]) => fieldLabel === 'Status')?.[1] || '';
+      const statusLabel = String(view.current_submission.status?.label || statusField).replace(/^Candidate submission\s+/i, '');
+      sections.push(`<div class="candidate-office-overview-group candidate-office-submission-summary"><strong>Candidate submission</strong><span class="${statusClass(view.current_submission.status?.tone)}">${escape(statusLabel)}</span></div>`);
     }
     if (view.paper) {
       sections.push(`<div class="candidate-office-overview-group"><strong>QR Pack</strong>${renderFields(view.paper.fields)}</div>`);
@@ -98,6 +116,7 @@
     if (variant === 'stage') return renderCandidateStageFragment(view);
     if (variant === 'overview') return renderCandidateOverviewFragment(view);
     if (variant === 'expenses') return renderExpenseClaims(view, { surface, showCategoryActions: true });
+    if (String(variant).startsWith('expense-category:')) return renderExpenseCategoryRow(view, String(variant).slice('expense-category:'.length), { surface });
     if (variant === 'actions') return renderCandidateActionsFragment(view, { surface });
     if (variant === 'issues') return renderCandidateIssuesFragment(view);
     if (variant === 'evidence') return renderCandidateEvidenceFragment(view);

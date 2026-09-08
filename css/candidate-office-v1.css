@@ -12,32 +12,27 @@
 }
 #modal:has([data-candidate-office-slot="1"]) .modal-b { flex:1 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; }
 #modal:has([data-candidate-office-dialog]) { width:min(1100px,calc(100vw - 24px)) !important; min-width:0 !important; max-width:calc(100vw - 24px) !important; }
-/* Keep the established eight-column Evidence table usable on narrow screens.
-   The QR audit card remains responsive while the legacy table scrolls inside
-   its own card instead of being clipped by the modal. */
 #modal:has([data-candidate-office-slot="1"]) .scrollable-evidence { max-width:100%; overflow:auto !important; }
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table { min-width:980px; table-layout:fixed; }
+#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table { min-width:820px; table-layout:fixed; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th,
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td { padding:8px 12px; vertical-align:top; white-space:normal; overflow-wrap:anywhere; word-break:normal; }
+#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td { padding:11px 12px; vertical-align:middle; white-space:normal; overflow-wrap:normal; word-break:normal; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:first-child,
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:first-child { padding-left:14px; width:150px; }
+#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:first-child { padding-left:14px; width:31%; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:nth-child(2),
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:nth-child(2) { width:115px; }
+#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:nth-child(2) { width:13%; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:nth-child(3),
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:nth-child(3) { width:85px; }
+#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:nth-child(3) { width:15%; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:nth-child(4),
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:nth-child(4) { width:60px; }
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:nth-child(5),
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:nth-child(5) { width:125px; }
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:nth-child(6),
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:nth-child(6) { width:72px; }
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:nth-child(7),
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:nth-child(7) { width:110px; }
+#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:nth-child(4) { width:25%; }
 #modal:has([data-candidate-office-slot="1"]) .ts-evidence-table th:last-child,
-#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:last-child { width:260px; padding-right:14px; white-space:normal; }
+#modal:has([data-candidate-office-slot="1"]) .ts-evidence-table td:last-child { width:16%; padding-right:14px; white-space:normal; }
 .ctms-timesheet-evidence-table td { min-width:0; overflow-wrap:anywhere; }
 .ctms-timesheet-evidence-table .ctms-evidence-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; min-width:0; }
-.ctms-timesheet-evidence-table .ctms-evidence-actions .btn { margin:0 !important; max-width:100%; white-space:normal; }
+.ctms-timesheet-evidence-table .ctms-evidence-actions .btn { margin:0 !important; max-width:100%; white-space:nowrap; }
+.ctms-evidence-title, .ctms-evidence-uploaded { display:block; line-height:1.35; }
+.ctms-evidence-meta { display:block; margin-top:4px; color:var(--candidate-office-muted); font-size:11px; line-height:1.35; }
+.ctms-evidence-toolbar { display:flex; justify-content:flex-end; min-height:0; margin-bottom:8px; }
+.ctms-evidence-toolbar:empty { display:none; }
 .ctms-evidence-signature-sheet { display:flex; align-items:center; justify-content:center; width:100%; min-height:150px; padding:0; border:0; border-radius:0; background:transparent; overflow:hidden; }
 .ctms-evidence-signature-sheet img { display:block; width:100%; max-width:100%; height:auto; max-height:240px; object-fit:contain; border:0 !important; background:transparent !important; }
 .ctms-evidence-signature-sheet img.ctms-evidence-signature-ink { filter:url(#ctms-signature-ink-filter); }
@@ -80,6 +75,7 @@
 .candidate-office-issues { margin:7px 0 0; padding-left:18px; }
 .candidate-office-issues li + li { margin-top:6px; }
 .candidate-office-inline-unavailable { color:var(--candidate-office-muted); font-size:11px; }
+.candidate-office-submission-summary { display:block; margin-top:10px; }
 .candidate-office-badge { display:inline-flex; align-items:center; width:max-content; max-width:100%; padding:3px 9px; border-radius:999px; border:1px solid rgba(255,255,255,.16); font-size:11px; font-weight:750; line-height:1.3; white-space:normal; overflow-wrap:anywhere; }
 .candidate-office-badge--success { color:#b9f7d7; background:rgba(31,161,98,.18); border-color:rgba(66,207,136,.46); }
 .candidate-office-badge--danger { color:#ffd2d7; background:rgba(200,49,70,.20); border-color:rgba(255,117,131,.5); }
@@ -111,6 +107,43 @@ td[data-col-key="candidate_submission"] .candidate-office-slot { display:block; 
 .candidate-office-expense-category__actions { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:10px; padding-top:10px; border-top:1px solid var(--candidate-office-line); }
 .candidate-office-expense-category__actions > span { min-width:0; color:var(--candidate-office-muted); font-size:11px; line-height:1.4; }
 .candidate-office-expense-category__actions .btn { flex:0 0 auto; max-width:100%; white-space:normal; }
+.ctms-expense-card { padding:0 !important; overflow:auto; }
+.ctms-expense-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 15px; border-bottom:1px solid var(--candidate-office-line); }
+.ctms-expense-heading > span { color:var(--candidate-office-muted); font-size:11px; }
+.ctms-expense-grid { min-width:940px; overflow:hidden; }
+.ctms-expense-grid__head, .ctms-expense-grid__row { display:grid; grid-template-columns:minmax(140px,1.15fr) minmax(82px,.6fr) minmax(105px,.8fr) minmax(105px,.8fr) minmax(150px,1fr) minmax(230px,1.55fr); align-items:center; }
+.ctms-expense-grid__head { min-height:40px; color:var(--candidate-office-muted); background:rgba(5,16,31,.6); font-size:10px; font-weight:800; letter-spacing:.045em; text-transform:uppercase; }
+.ctms-expense-grid__head > span, .ctms-expense-grid__row > * { min-width:0; padding:9px 12px; }
+.ctms-expense-grid__row { min-height:58px; border-top:1px solid var(--candidate-office-line); }
+.ctms-expense-grid__row > strong { font-size:12px; }
+.ctms-expense-grid__row > .candidate-office-slot { grid-column:5/7; padding:0; }
+.candidate-office-expense-row-status { display:grid; grid-template-columns:minmax(150px,1fr) minmax(230px,1.55fr); align-items:center; min-width:0; }
+.candidate-office-expense-manager, .candidate-office-expense-row-action { min-width:0; padding:9px 12px; }
+.candidate-office-expense-manager { display:flex; align-items:center; }
+.candidate-office-expense-row-action { display:flex; align-items:center; justify-content:flex-start; gap:7px; white-space:nowrap; }
+.candidate-office-expense-evidence { width:auto !important; min-width:0 !important; min-height:34px !important; padding:6px 9px !important; margin:0 !important; white-space:nowrap !important; font-size:11px !important; }
+.candidate-office-expense-evidence > span { font-size:13px; line-height:1; }
+.candidate-office-expense-reject { width:auto !important; min-width:0 !important; min-height:34px !important; padding:6px 10px !important; margin:0 !important; white-space:nowrap !important; font-size:11px !important; }
+.ctms-expense-evidence-viewer .row > .controls { min-width:0; }
+.ctms-expense-evidence-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.ctms-expense-evidence-navigation, .ctms-expense-evidence-zoom { display:flex; align-items:center; gap:8px; }
+.ctms-expense-evidence-navigation > span, .ctms-expense-evidence-zoom > span { min-width:48px; color:var(--candidate-office-muted); font-size:11px; text-align:center; }
+.ctms-expense-evidence-toolbar .btn { min-height:34px !important; padding:6px 10px !important; margin:0 !important; }
+.ctms-expense-evidence-zoom .btn { width:34px !important; min-width:34px !important; padding:4px !important; font-size:17px !important; }
+.ctms-expense-evidence-preview { width:100%; height:520px; overflow:hidden; border:1px solid var(--candidate-office-line); border-radius:8px; background:#02060c; }
+.ctms-expense-evidence-preview--scoped { overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:rgba(112,126,238,.88) rgba(5,13,26,.7); }
+.ctms-expense-evidence-preview__canvas { position:relative; width:100%; height:520px; min-width:100%; min-height:520px; }
+.ctms-expense-evidence-preview__status { box-sizing:border-box; display:grid; place-items:center; width:100%; height:520px; padding:18px; text-align:center; }
+.ctms-expense-evidence-preview__frame { display:none; width:100%; height:520px; border:0; background:#000; transform-origin:top left; }
+.ctms-expense-evidence-preview--scoped::-webkit-scrollbar { width:10px; height:10px; }
+.ctms-expense-evidence-preview--scoped::-webkit-scrollbar-track { border-radius:999px; background:rgba(5,13,26,.7); }
+.ctms-expense-evidence-preview--scoped::-webkit-scrollbar-thumb { min-height:42px; border:2px solid rgba(5,13,26,.78); border-radius:999px; background:linear-gradient(180deg,#7180ee,#5265ca); }
+.ctms-expense-evidence-preview--scoped::-webkit-scrollbar-thumb:hover { background:linear-gradient(180deg,#8794ff,#6476e7); }
+.ctms-expense-evidence-preview--scoped::-webkit-scrollbar-button { display:none; width:0; height:0; }
+.ctms-expense-evidence-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
+#modal.ctms-modern-modal:has(.ctms-expense-evidence-viewer) { width:min(900px,calc(100vw - 24px)) !important; min-width:0 !important; max-width:calc(100vw - 24px) !important; }
+.ctms-expense-money { color:#f4f7fb; font-size:12px; }
+.ctms-expense-grid__row .input { box-sizing:border-box; width:calc(100% - 16px); min-width:0; margin:8px; }
 .candidate-office-inline-note { color:var(--candidate-office-muted); font-size:11px; margin:-3px 0 9px; overflow-wrap:anywhere; }
 .candidate-office-empty { color:var(--candidate-office-muted); font-size:12px; }
 .candidate-office-card__footer { color:var(--candidate-office-muted); font-size:10px; padding:9px 18px; text-align:right; }
@@ -196,6 +229,21 @@ td[data-col-key="candidate_submission"] .candidate-office-slot { display:block; 
 .candidate-reminder-result--warn { border-color:rgba(246,189,82,.5); }
 .candidate-reminder-result--fail { border-color:rgba(255,117,131,.5); }
 @keyframes candidate-office-spin { to { transform:rotate(360deg); } }
+@media (max-width:760px) {
+  .ctms-expense-grid { min-width:0; }
+  .ctms-expense-grid__head { display:none; }
+  .ctms-expense-grid__row { grid-template-columns:minmax(100px,.8fr) minmax(0,1fr); padding:10px 12px; gap:8px 12px; }
+  .ctms-expense-grid__row > * { padding:0; }
+  .ctms-expense-grid__row > strong { grid-column:1/-1; }
+  .ctms-expense-grid__row > .input { width:100%; margin:0; }
+  .ctms-expense-grid__row > .candidate-office-slot { grid-column:1/-1; }
+  .candidate-office-expense-row-status { grid-template-columns:minmax(0,1fr); gap:8px; align-items:center; }
+  .candidate-office-expense-manager, .candidate-office-expense-row-action { padding:0; }
+  .candidate-office-expense-row-action { justify-content:flex-start; }
+  .ctms-expense-evidence-toolbar { align-items:stretch; flex-direction:column; }
+  .ctms-expense-evidence-navigation, .ctms-expense-evidence-zoom { justify-content:center; }
+  .ctms-expense-evidence-preview, .ctms-expense-evidence-preview__canvas, .ctms-expense-evidence-preview__status, .ctms-expense-evidence-preview__frame { height:420px; min-height:420px; }
+}
 @media (max-width:560px) {
   #modal.bulk-process-workbench:has([data-candidate-office-slot="1"]) { width:calc(100vw - 24px) !important; min-width:0 !important; max-width:calc(100vw - 24px) !important; }
   #modal.bulk-process-workbench:has([data-candidate-office-slot="1"]) #bulkProcessWorkbenchGrid { grid-template-columns:1fr !important; min-height:0 !important; }

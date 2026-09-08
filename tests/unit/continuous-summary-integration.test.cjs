@@ -75,10 +75,17 @@ test('continuous sheets retain keyboard, sort and heartbeat reconciliation contr
   assert.match(source, /shouldRestoreFocusedGrid \|\| shouldAutoFocusStartupGrid/);
 });
 
-test('related summary views fetch once and expose bounded virtual pages', () => {
-  assert.match(source, /let relatedListPromise = null/);
-  assert.match(source, /items\.slice\(start, start \+ ps\)/);
-  assert.match(source, /stSec\.hasMore = \(start \+ pageItems\.length\) < total/);
+test('related summary views request each bounded continuous page from the server', () => {
+  assert.match(source, /const relatedListPromises = new Map\(\)/);
+  assert.match(source, /fetchRelated\(srcEntity, srcId, relType, \{/);
+  assert.match(source, /limit: requestedPageSize/);
+  assert.match(source, /offset: requestedOffset/);
+  assert.match(source, /\.finally\(\(\) => relatedListPromises\.delete\(requestKey\)\)/);
+  assert.match(source, /const pageItems = items/);
+  assert.match(source, /stSec\.hasMore = \(requestedOffset \+ pageItems\.length\) < total/);
+  assert.match(source, /const payload = await res\.json\(\)/);
+  assert.match(source, /total: Number\.isFinite\(totalValue\) && totalValue >= 0 \? totalValue : items\.length/);
+  assert.doesNotMatch(source, /items\.slice\(start, start \+ ps\)/);
 });
 
 test('background prefetch stays silent and never paints a loading indicator', () => {

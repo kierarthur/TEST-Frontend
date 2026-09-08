@@ -2827,6 +2827,10 @@
   width: min(1280px, calc(100vw - 40px));
 }
 
+#modal.ctms-modal-timesheet:has([data-candidate-office-surface="SIMPLE_TIMESHEET"]) {
+  width: min(1100px, calc(100vw - 40px));
+}
+
 #modal.ctms-modal-timesheet .ctms-workflow-card,
 #modal.ctms-modal-invoice .ctms-invoice-root > .p-2 {
   border: 1px solid rgba(93, 123, 165, 0.24);

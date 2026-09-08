@@ -20,6 +20,7 @@ test('money fields normalise to two decimals without treating hours or IDs as mo
   assert.match(modalJs, /hour\(\?:s\)\?/);
   assert.match(modalJs, /(?:id\|uuid)/);
   assert.match(modalJs, /document\.addEventListener\('blur'/);
+  assert.match(modalJs, /input\.dataset\.ctmsMoney !== '1' && input !== document\.activeElement/);
 });
 
 test('read-only internal IDs and approved technical copy are suppressed', () => {
