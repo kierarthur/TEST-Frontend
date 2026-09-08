@@ -523,6 +523,30 @@ test('Current Evidence marks approval and keeps older or withdrawn evidence sepa
   assert.match(evidence, /Previous submissions are retained for audit only/);
 });
 
+test('Current Evidence uses role-aware labels without changing supporting evidence approval truth', () => {
+  const main = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
+  const start = main.lastIndexOf('function renderTimesheetEvidenceTab(ctx)');
+  const end = main.indexOf('\nasync function openTimesheetEvidenceUploadDialog', start);
+  const evidence = main.slice(start, end);
+
+  assert.match(evidence, /ev\?\.document_role \|\| meta\.document_role/);
+  assert.match(evidence, /evidenceDocumentRole\(ev\) === 'EXPENSE_MILEAGE_APPROVAL_SUMMARY'/);
+  assert.match(evidence, /if \(isExpenseSummaryEvidence\(ev\)\) return 'Expense summary'/);
+  assert.match(evidence, /if \(isExpenseSummaryEvidence\(ev\)\) return 'Manager approval not required'/);
+  assert.match(evidence, /kind === 'ELECTRONIC_SIGNATURES'/);
+  assert.match(evidence, /'SIGNED_TIMESHEET',[\s\S]*'MANAGER_SIGNATURE',[\s\S]*'CANDIDATE_SIGNATURE'/);
+  assert.match(evidence, /return 'Timesheet signatures'/);
+  assert.match(evidence, /if \(isSignatureApprovalEvidence\(ev\)\) return 'Approval evidence'/);
+
+  const expensePolicy = evidence.indexOf("if (isExpenseSummaryEvidence(ev)) return 'Manager approval not required'");
+  const signaturePolicy = evidence.indexOf("if (isSignatureApprovalEvidence(ev)) return 'Approval evidence'");
+  const ordinaryApproval = evidence.indexOf('boolish(ev?.approved)');
+  assert.ok(expensePolicy >= 0 && expensePolicy < ordinaryApproval);
+  assert.ok(signaturePolicy >= 0 && signaturePolicy < ordinaryApproval);
+  assert.match(evidence, /OTHER: 'Other'/);
+  assert.match(evidence, /return 'Not approved yet'/);
+});
+
 test('Simple Timesheet shows only expense categories owned by that exact Timesheet row', () => {
   const window = load(
     'candidate-office-ui-policy-v1.js',

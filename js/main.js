@@ -373433,8 +373433,37 @@ function renderTimesheetEvidenceTab(ctx) {
     return (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on');
   };
   const upper = (v) => String(v == null ? '' : v).trim().toUpperCase();
+  const evidenceMeta = (ev) => (
+    ev?.meta_json && typeof ev.meta_json === 'object' ? ev.meta_json : {}
+  );
+  const evidenceDocumentRole = (ev) => {
+    const meta = evidenceMeta(ev);
+    return upper(ev?.document_role || meta.document_role || '');
+  };
+  const evidenceComponentKind = (ev) => {
+    const meta = evidenceMeta(ev);
+    return upper(ev?.component_kind || meta.component_kind || '');
+  };
+  const isExpenseSummaryEvidence = (ev) => (
+    evidenceDocumentRole(ev) === 'EXPENSE_MILEAGE_APPROVAL_SUMMARY'
+  );
+  const isSignatureApprovalEvidence = (ev) => {
+    const kind = upper(ev?.kind || ev?.staged_kind || '');
+    const role = evidenceDocumentRole(ev);
+    const componentKind = evidenceComponentKind(ev);
+    return kind === 'ELECTRONIC_SIGNATURES' || [
+      'SIGNED_TIMESHEET',
+      'MANAGER_SIGNATURE',
+      'CANDIDATE_SIGNATURE'
+    ].includes(role) || [
+      'MANAGER_SIGNATURE',
+      'CANDIDATE_SIGNATURE'
+    ].includes(componentKind);
+  };
   const approvalLabel = (ev) => {
-    const meta = (ev?.meta_json && typeof ev.meta_json === 'object') ? ev.meta_json : {};
+    const meta = evidenceMeta(ev);
+    if (isExpenseSummaryEvidence(ev)) return 'Manager approval not required';
+    if (isSignatureApprovalEvidence(ev)) return 'Approval evidence';
     if (
       boolish(ev?.approved) || boolish(ev?.is_approved) ||
       boolish(meta.approved) || boolish(meta.is_approved) ||
@@ -373624,7 +373653,12 @@ function renderTimesheetEvidenceTab(ctx) {
   };
 
   const typeLabel = (ev) => {
-    const k = String(ev?.kind || '').trim().toUpperCase();
+    if (isExpenseSummaryEvidence(ev)) return 'Expense summary';
+    if (['SIGNED_TIMESHEET', 'MANAGER_SIGNATURE', 'CANDIDATE_SIGNATURE'].includes(evidenceDocumentRole(ev))) {
+      return 'Timesheet signatures';
+    }
+
+    const k = upper(ev?.kind || ev?.staged_kind || '');
     if (!k) return 'Unknown';
 
     const map = {
