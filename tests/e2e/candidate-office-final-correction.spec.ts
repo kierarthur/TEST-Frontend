@@ -901,6 +901,11 @@ test('Bulk Authorise keeps the surviving Timesheet selected and redraws its curr
     overflow: 0
   })));
   await captureCandidateOfficeVisual(page, '08b-bulk-authorise-retained-timesheet-production-refresh');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(modal.locator('[data-exp-out="total_pay"]')).toHaveText('£12.50');
+  await expect(modal.locator('input[data-exp-field="travel_pay"]')).toHaveValue('12.50');
+  expect(await modal.evaluate(element => Math.max(0, element.scrollWidth - element.clientWidth))).toBe(0);
+  await expect(page.locator('#btnCloseModal')).toBeVisible();
 });
 
 test('Bulk Authorise returns to a clean parent when rejecting the final category removes the expense-only Timesheet', async ({ page }) => {
@@ -1020,6 +1025,10 @@ test('Bulk Authorise returns to a clean parent when rejecting the final category
     overflow: 0
   })));
   await captureCandidateOfficeVisual(page, '09-bulk-authorise-final-category-timesheet-removed');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('[data-bulk-authorise-empty-selection="1"]')).toHaveText('Select another Timesheet to continue.');
+  expect(await page.locator('#modal').evaluate(element => Math.max(0, element.scrollWidth - element.clientWidth))).toBe(0);
+  await expect(page.locator('#btnCloseModal')).toBeVisible();
 });
 
 test('browser Back discards stale Office state and reloads canonical Timesheet truth', async ({ page }) => {
