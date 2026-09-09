@@ -177860,13 +177860,18 @@ function renderTimesheetExpensesTab(ctx) {
       routeTypeExpense === 'WEEKLY_HEALTHROSTER'
     )
   );
+  const forceOpenProcessedExpenses = !!(
+    boolishExpense(originalCtx.expenses_force_open || originalCtx.expensesForceOpen)
+    && hasRealTimesheetExpense
+  );
   let expensesTabDisabled = editPolicy
     ? editPolicy.expensesTabDisabled === true
     : !hasSupportedExpenseTarget;
   if (additionalManualExpenseSupported) expensesTabDisabled = false;
+  if (forceOpenProcessedExpenses) expensesTabDisabled = false;
   if (trueSourceImportExpense) expensesTabDisabled = true;
   const enabled = editPolicy
-    ? ((policyCanOpenExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
+    ? ((policyCanOpenExpenses || additionalManualExpenseSupported || forceOpenProcessedExpenses) && !expensesTabDisabled)
     : hasSupportedExpenseTarget;
   const canEditExpenseControls = editPolicy
     ? (hasSupportedExpenseTarget && !hardLockedExpense && (policyCanEditExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
