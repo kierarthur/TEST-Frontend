@@ -262726,12 +262726,12 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     return { ok: false, error: 'Bulk Authorise expenses modal is not available.' };
   }
 
-  const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
-  const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : ((activeContext.row && typeof activeContext.row === 'object') ? activeContext.row : null);
-  const activeDetails = (st.active_details && typeof st.active_details === 'object')
+  let activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+  let activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : ((activeContext.row && typeof activeContext.row === 'object') ? activeContext.row : null);
+  let activeDetails = (st.active_details && typeof st.active_details === 'object')
     ? st.active_details
     : ((activeContext.details && typeof activeContext.details === 'object') ? activeContext.details : {});
-  const editability = (typeof classifyBulkAuthoriseEditability === 'function')
+  const classifyExpensesEditability = () => ((typeof classifyBulkAuthoriseEditability === 'function')
     ? classifyBulkAuthoriseEditability({ ...activeContext, row: activeRow, details: activeDetails, state: st.active_ctx?.state, active_ctx: st.active_ctx })
     : {
         canOpenExpenses: false,
@@ -262739,10 +262739,11 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         hasProcessedExpenses: false,
         expensesReadOnly: false,
         isAuthorised: !!activeRow?.is_authorised
-      };
+      });
+  let editability = classifyExpensesEditability();
 
   const expenseStorageTarget = String(editability?.expenseStorageTarget || editability?.expense_storage_target || '').trim().toUpperCase();
-  const expenseAccess = classifyBulkAuthoriseExpensesAccess(editability);
+  let expenseAccess = classifyBulkAuthoriseExpensesAccess(editability);
   const preciseBlockedReason = editability?.requiresAdditionalManualForExpenses === true
     ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
     : (expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
@@ -262754,6 +262755,37 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     if (typeof toast === 'function') toast(reason);
     else if (typeof alert === 'function') alert(reason);
     return { ok: false, error: reason, message: reason };
+  }
+
+  if (expenseAccess.reviewOnly && typeof refreshBulkAuthoriseActiveContext === 'function') {
+    const refreshed = await refreshBulkAuthoriseActiveContext(st, {
+      source: 'expenses_review',
+      row: activeRow,
+      profile: 'editor',
+      context_profile: 'editor',
+      include_evidence: false,
+      authoritative: true,
+      rerender: false
+    });
+    if (!refreshed) {
+      const reason = 'CloudTMS could not load the current expense figures. Please try again.';
+      if (typeof toast === 'function') toast(reason);
+      else if (typeof alert === 'function') alert(reason);
+      return { ok: false, error: reason, message: reason };
+    }
+    activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+    activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : ((activeContext.row && typeof activeContext.row === 'object') ? activeContext.row : null);
+    activeDetails = (st.active_details && typeof st.active_details === 'object')
+      ? st.active_details
+      : ((activeContext.details && typeof activeContext.details === 'object') ? activeContext.details : {});
+    editability = classifyExpensesEditability();
+    expenseAccess = classifyBulkAuthoriseExpensesAccess(editability);
+    if (!activeRow || !expenseAccess.canOpen || !expenseAccess.reviewOnly) {
+      const reason = 'This Timesheet changed while its expenses were loading. Please review it again.';
+      if (typeof toast === 'function') toast(reason);
+      else if (typeof alert === 'function') alert(reason);
+      return { ok: false, error: reason, message: reason };
+    }
   }
 
   const ctx = st.active_ctx;

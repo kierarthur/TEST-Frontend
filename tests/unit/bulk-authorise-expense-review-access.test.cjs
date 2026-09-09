@@ -93,6 +93,11 @@ test('Bulk Authorise opener uses the shared access decision and enforces read-on
   assert.match(source.slice(actionStart, handlerStart), /data-expenses-review-only=/);
   const handler = source.slice(handlerStart, handlerEnd);
   assert.match(handler, /if \(!activeRow \|\| !expenseAccess\.canOpen\)/);
+  assert.match(handler, /if \(expenseAccess\.reviewOnly && typeof refreshBulkAuthoriseActiveContext === 'function'\)/);
+  assert.match(handler, /source: 'expenses_review'/);
+  assert.match(handler, /profile: 'editor'/);
+  assert.match(handler, /authoritative: true/);
+  assert.match(handler, /CloudTMS could not load the current expense figures/);
   assert.match(handler, /expenseAccess\.reviewOnly \|\| editability\.expensesReadOnly/);
   assert.match(handler, /expenses_force_open: !!expenseAccess\.reviewOnly/);
   assert.match(handler, /const readOnlySavedExpenseSource =/);
