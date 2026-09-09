@@ -262853,7 +262853,19 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         parentExpenseState.expensesBaseline ||
         {}
       );
-  const draftSource = parentExpenseState.expensesDraft || parentExpenseState.activeExpensesDraft || parentExpenseState.stagedExpensesDraft || persistedBaselineSource || {};
+  const readOnlySavedExpenseSource = {
+    mileage_units: activeDetails?.tsfin?.mileage_units ?? 0,
+    travel_pay: activeDetails?.tsfin?.travel_pay_ex_vat ?? 0,
+    travel_charge: activeDetails?.tsfin?.travel_charge_ex_vat ?? 0,
+    accommodation_pay: activeDetails?.tsfin?.accommodation_pay_ex_vat ?? 0,
+    accommodation_charge: activeDetails?.tsfin?.accommodation_charge_ex_vat ?? 0,
+    other_pay: activeDetails?.tsfin?.other_pay_ex_vat ?? 0,
+    other_charge: activeDetails?.tsfin?.other_charge_ex_vat ?? 0,
+    note: activeDetails?.tsfin?.expenses_description ?? ''
+  };
+  const draftSource = expenseAccess.reviewOnly
+    ? readOnlySavedExpenseSource
+    : (parentExpenseState.expensesDraft || parentExpenseState.activeExpensesDraft || parentExpenseState.stagedExpensesDraft || persistedBaselineSource || {});
   const draftSeed = normaliseExpenseCanonical(draftSource, normaliseOptions);
   const persistedBaselineSeed = normaliseExpenseCanonical(persistedBaselineSource, normaliseOptions);
   const baselineSeed = normaliseExpenseCanonical(draftSeed, normaliseOptions);
