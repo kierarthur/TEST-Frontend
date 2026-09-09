@@ -61,6 +61,18 @@ test('submitted expenses remain reviewable without editable storage authority', 
   assert.equal(result.reviewOnly, true);
 });
 
+test('explicit read-only view permission survives a missing processed-expense hint', () => {
+  const result = context.classify({
+    canOpenExpenses: true,
+    canViewExpenses: true,
+    hasProcessedExpenses: false,
+    expensesReadOnly: true,
+    expensesActionDisabled: true
+  });
+  assert.equal(result.canOpen, true);
+  assert.equal(result.reviewOnly, true);
+});
+
 test('missing storage authority does not open a row with no submitted expenses', () => {
   const result = context.classify({
     canOpenExpenses: false,
@@ -82,6 +94,7 @@ test('Bulk Authorise opener uses the shared access decision and enforces read-on
   const handler = source.slice(handlerStart, handlerEnd);
   assert.match(handler, /if \(!activeRow \|\| !expenseAccess\.canOpen\)/);
   assert.match(handler, /expenseAccess\.reviewOnly \|\| editability\.expensesReadOnly/);
+  assert.match(handler, /expenses_force_open: !!expenseAccess\.reviewOnly/);
   const expensesRendererStart = source.indexOf('function renderTimesheetExpensesTab(');
   const expensesRendererEnd = source.indexOf('\nfunction resolveTimesheetExpensesModalCtx(', expensesRendererStart);
   const expensesRenderer = source.slice(expensesRendererStart, expensesRendererEnd);

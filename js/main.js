@@ -262102,7 +262102,10 @@ function classifyBulkAuthoriseExpensesAccess(editabilityInput) {
   );
   const canReviewSubmitted = !!(
     editability.canViewExpenses === true
-    && editability.hasProcessedExpenses === true
+    && (
+      editability.hasProcessedExpenses === true
+      || (editability.canOpenExpenses === true && editability.expensesReadOnly === true)
+    )
   );
   return {
     expenseStorageTarget,
@@ -262864,7 +262867,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     supports_unprocessed_expense_draft: editability?.supportsUnprocessedExpenseDraft === true,
     contract_week_id: activeDetails?.contract_week_id || activeDetails?.contract_week?.id || activeRow?.contract_week_id || null,
     expenses_read_only: expensesReadOnly,
-    expenses_force_open: !!hasProcessedExpenses,
+    expenses_force_open: !!expenseAccess.reviewOnly,
     candidateOfficeSurface: 'BULK_AUTHORISE',
     state: {
       ...(ctx?.state || {}),
@@ -263088,7 +263091,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         expense_storage_target: expenseStorageTarget,
         contract_week_id: latestContractWeekId || openedContractWeekId || null,
         expenses_read_only: expensesReadOnly,
-        expenses_force_open: !!hasProcessedExpenses,
+        expenses_force_open: !!expenseAccess.reviewOnly,
         candidateOfficeSurface: 'BULK_AUTHORISE',
         state: {
           ...deep(latestState),
