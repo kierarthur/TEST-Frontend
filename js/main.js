@@ -229814,7 +229814,6 @@ async function handleBulkProcessOpenExpensesModal(state) {
   const rootId = 'bulkProcessExpensesChildRoot';
   const renderTab = () => `
     <div id="${rootId}" class="tabc" style="font-size:11px;line-height:1.16;">
-      <style>#${rootId} .ctms-expense-grid{min-width:0;overflow:visible;}</style>
       ${renderTimesheetExpensesTab(childCtx)}
     </div>
   `;
@@ -262887,6 +262886,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
   const rootId = 'bulkProcessExpensesChildRoot';
   const renderTab = () => `
     <div id="${rootId}" class="tabc" style="font-size:11px;line-height:1.16;">
+      <style>#${rootId} .ctms-expense-grid{min-width:0;overflow:visible;}</style>
       ${renderTimesheetExpensesTab(childCtx)}
     </div>
   `;
