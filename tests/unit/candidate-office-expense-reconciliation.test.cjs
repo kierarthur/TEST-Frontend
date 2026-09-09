@@ -202,3 +202,31 @@ test('Bulk Authorise refreshes the owning dataset before asking the existing Exp
   assert.equal(childRefreshes[0].result, rejectionResult);
   assert.equal(childRefreshes[0].context, context);
 });
+
+test('Bulk Authorise closes stale modal state when the committed rejection cannot reload its dataset', async () => {
+  const state = { active_row_key: 'row-a' };
+  let childRefreshes = 0;
+  let modalDiscards = 0;
+  let summaryRefreshes = 0;
+  const frame = {
+    async __refreshCandidateOfficeExpenseCategory() { childRefreshes += 1; }
+  };
+  const harness = createHarness({ modalCtx: { bulkAuthoriseState: state }, frame });
+  harness.window.refreshBulkAuthoriseDatasetPreservingState = async () => false;
+  harness.window.discardAllModalsAndState = () => { modalDiscards += 1; };
+  harness.window.renderAll = async () => { summaryRefreshes += 1; };
+
+  const outcome = await harness.controllerDependencies.reconcileExpenseCategory(
+    result(),
+    actionContext('BULK_AUTHORISE')
+  );
+
+  assert.equal(childRefreshes, 0, 'stale Expenses child must not redraw from the restored old dataset');
+  assert.equal(modalDiscards, 1);
+  assert.equal(summaryRefreshes, 1);
+  assert.deepEqual({ ...outcome }, {
+    refresh_failed: true,
+    user_message: 'Expense rejected. Bulk Authorise was closed because the latest figures could not be reloaded. Reopen Bulk Authorise to continue.',
+    toast_tone: 'ok'
+  });
+});

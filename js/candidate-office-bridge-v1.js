@@ -803,9 +803,10 @@
     if (context.surface === 'BULK_AUTHORISE') {
       const state = resolveBulkAuthoriseState();
       const rowKey = context.identity?.row_key || context.projection?.current_identity?.row_key || '';
+      let bulkDatasetRefreshed = false;
       if (state && typeof window.refreshBulkAuthoriseDatasetPreservingState === 'function') {
         try {
-          await window.refreshBulkAuthoriseDatasetPreservingState(state, {
+          bulkDatasetRefreshed = (await window.refreshBulkAuthoriseDatasetPreservingState(state, {
             preferredRowKey: rowKey,
             affectedRowKeys: [rowKey, ...(Array.isArray(result?.affected_rows) ? result.affected_rows : [])],
             actionSource: 'reject-expense-category',
@@ -818,10 +819,21 @@
             result,
             actionResult: result,
             rowPatches: Array.isArray(result?.affected_rows) ? result.affected_rows : []
-          });
+          })) !== false;
         } catch (error) {
           console.warn('[CANDIDATE-OFFICE] Bulk Authorise refresh failed after expense rejection', error);
         }
+      }
+      if (!bulkDatasetRefreshed) {
+        try { window.discardAllModalsAndState?.(); } catch {}
+        try { if (typeof window.renderAll === 'function') await window.renderAll(); } catch (error) {
+          console.warn('[CANDIDATE-OFFICE] Timesheet summary refresh failed after closing stale Bulk Authorise', error);
+        }
+        return {
+          refresh_failed: true,
+          user_message: 'Expense rejected. Bulk Authorise was closed because the latest figures could not be reloaded. Reopen Bulk Authorise to continue.',
+          toast_tone: 'ok'
+        };
       }
       const frame = window.__getModalFrame?.();
       if (frame && typeof frame.__refreshCandidateOfficeExpenseCategory === 'function') {
