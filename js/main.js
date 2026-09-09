@@ -229814,6 +229814,7 @@ async function handleBulkProcessOpenExpensesModal(state) {
   const rootId = 'bulkProcessExpensesChildRoot';
   const renderTab = () => `
     <div id="${rootId}" class="tabc" style="font-size:11px;line-height:1.16;">
+      <style>#${rootId} .ctms-expense-grid{min-width:0;overflow:visible;}</style>
       ${renderTimesheetExpensesTab(childCtx)}
     </div>
   `;
@@ -263117,6 +263118,10 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     if (!root || root.dataset.boundBulkAuthoriseExpensesModal === '1') return;
     root.dataset.boundBulkAuthoriseExpensesModal = '1';
     if (expensesReadOnly) {
+      root.querySelectorAll('[data-candidate-office-server-enabled="1"]').forEach((button) => {
+        button.disabled = false;
+        button.removeAttribute('aria-disabled');
+      });
       updateChildDirty();
       return;
     }

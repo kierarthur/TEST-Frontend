@@ -95,6 +95,9 @@ test('Bulk Authorise opener uses the shared access decision and enforces read-on
   assert.match(handler, /if \(!activeRow \|\| !expenseAccess\.canOpen\)/);
   assert.match(handler, /expenseAccess\.reviewOnly \|\| editability\.expensesReadOnly/);
   assert.match(handler, /expenses_force_open: !!expenseAccess\.reviewOnly/);
+  assert.match(handler, /data-candidate-office-server-enabled="1"/);
+  assert.match(handler, /button\.disabled = false/);
+  assert.match(handler, /#\$\{rootId\} \.ctms-expense-grid\{min-width:0;overflow:visible;\}/);
   const expensesRendererStart = source.indexOf('function renderTimesheetExpensesTab(');
   const expensesRendererEnd = source.indexOf('\nfunction resolveTimesheetExpensesModalCtx(', expensesRendererStart);
   const expensesRenderer = source.slice(expensesRendererStart, expensesRendererEnd);
