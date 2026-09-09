@@ -50,12 +50,23 @@ test('no submitted expenses does not bypass the existing MyTMS edit block', () =
   assert.equal(result.reviewOnly, false);
 });
 
-test('missing expense storage authority remains closed', () => {
+test('submitted expenses remain reviewable without editable storage authority', () => {
   const result = context.classify({
     canOpenExpenses: false,
     expensesActionDisabled: true,
     canViewExpenses: true,
     hasProcessedExpenses: true
+  });
+  assert.equal(result.canOpen, true);
+  assert.equal(result.reviewOnly, true);
+});
+
+test('missing storage authority does not open a row with no submitted expenses', () => {
+  const result = context.classify({
+    canOpenExpenses: false,
+    expensesActionDisabled: true,
+    canViewExpenses: true,
+    hasProcessedExpenses: false
   });
   assert.equal(result.canOpen, false);
   assert.equal(result.reviewOnly, false);

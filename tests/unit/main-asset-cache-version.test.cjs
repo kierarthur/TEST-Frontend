@@ -14,7 +14,11 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   const batchAsset = `invoice-batch-modal.js?v=${scriptBuildVersion}`;
   const asyncAsset = 'invoice-async-ui.js?v=20260730-invoice-refs-ward-r13&invoice-ui-notices=20260822-r1';
   const stylesheetAsset = `invoice-batch-modal.css?v=${stylesheetBuildVersion}`;
-  assert.ok(html.includes(`<script src="./js/${mainAsset}"></script>`));
+  const currentMainAsset = mainAsset.replace(
+    '&bulk-expense-review=20260909-r1',
+    '&bulk-expense-review=20260909-r2'
+  );
+  assert.ok(html.includes(`<script src="./js/${currentMainAsset}"></script>`));
   assert.match(html, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
   assert.match(html, /invoice-diagnostic-catalog\.js\?v=20260803-invoice-reference-policy-r2/);
   assert.match(html, /invoice-batch-modal\.js\?v=20260803-invoice-reference-policy-r2/);

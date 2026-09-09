@@ -262096,8 +262096,7 @@ function classifyBulkAuthoriseExpensesAccess(editabilityInput) {
     && editability.expensesTabDisabled !== true
   );
   const canReviewSubmitted = !!(
-    hasStorageTarget
-    && editability.canViewExpenses === true
+    editability.canViewExpenses === true
     && editability.hasProcessedExpenses === true
   );
   return {
