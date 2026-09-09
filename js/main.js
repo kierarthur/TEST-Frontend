@@ -262080,6 +262080,36 @@ async function handleBulkAuthoriseUnsavedChangeGuard(state, nextRowKey, options 
   }
 }
 
+function classifyBulkAuthoriseExpensesAccess(editabilityInput) {
+  const editability = (editabilityInput && typeof editabilityInput === 'object')
+    ? editabilityInput
+    : {};
+  const expenseStorageTarget = String(
+    editability.expenseStorageTarget || editability.expense_storage_target || ''
+  ).trim().toUpperCase();
+  const hasStorageTarget = expenseStorageTarget === 'TSFIN'
+    || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
+  const canOpenDirectly = !!(
+    hasStorageTarget
+    && editability.canOpenExpenses === true
+    && editability.expensesActionDisabled !== true
+    && editability.expensesTabDisabled !== true
+  );
+  const canReviewSubmitted = !!(
+    hasStorageTarget
+    && editability.canViewExpenses === true
+    && editability.hasProcessedExpenses === true
+  );
+  return {
+    expenseStorageTarget,
+    hasStorageTarget,
+    canOpenDirectly,
+    canReviewSubmitted,
+    canOpen: canOpenDirectly || canReviewSubmitted,
+    reviewOnly: !canOpenDirectly && canReviewSubmitted
+  };
+}
+
 function renderBulkAuthoriseActionRow(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -262311,14 +262341,8 @@ function renderBulkAuthoriseActionRow(state) {
     isImportAuthoritativeAction &&
     trimStr(activeRow.current_timesheet_id || activeRow.timesheet_id || activeContext.current_timesheet_id || activeContext.timesheet_id || '')
   );
-  const expenseStorageTarget = trimStr(editability.expenseStorageTarget || editability.expense_storage_target || '').toUpperCase();
-  const expensesHaveStorageTarget = expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
-  const expensesActionDisabled = !!(
-    editability.expensesActionDisabled === true ||
-    editability.expensesTabDisabled === true ||
-    !expensesHaveStorageTarget ||
-    editability.canOpenExpenses === false
-  );
+  const expenseAccess = classifyBulkAuthoriseExpensesAccess(editability);
+  const expenseStorageTarget = expenseAccess.expenseStorageTarget;
   const expensesActionDisabledReason = trimStr(
     editability.requiresAdditionalManualForExpenses === true
       ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
@@ -262332,8 +262356,11 @@ function renderBulkAuthoriseActionRow(state) {
         )
   );
   const pushExpensesAction = () => {
-    if (expensesHaveStorageTarget && editability.canOpenExpenses && !expensesActionDisabled) {
-      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', !busy, '', 'btn btn-outline', 'expenses', expenseStorageTarget === 'CONTRACT_WEEK_DRAFT' ? 'Expenses will be saved as a draft until this week is processed.' : ''));
+    if (expenseAccess.canOpen) {
+      const reviewOnlyAttrs = expenseAccess.reviewOnly
+        ? 'data-expenses-review-only="1" title="Review submitted expenses. Editing remains unavailable."'
+        : '';
+      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', !busy, reviewOnlyAttrs, 'btn btn-outline', 'expenses', expenseStorageTarget === 'CONTRACT_WEEK_DRAFT' ? 'Expenses will be saved as a draft until this week is processed.' : ''));
       return;
     }
     actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', false, '', 'btn btn-outline', 'expenses', expensesActionDisabledReason));
@@ -262708,14 +262735,14 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       };
 
   const expenseStorageTarget = String(editability?.expenseStorageTarget || editability?.expense_storage_target || '').trim().toUpperCase();
-  const canOpenExpenseStorageTarget = expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
+  const expenseAccess = classifyBulkAuthoriseExpensesAccess(editability);
   const preciseBlockedReason = editability?.requiresAdditionalManualForExpenses === true
     ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
     : (expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
         ? 'Expenses will be saved as a draft until this week is processed.'
         : String(editability?.expensesActionDisabledReason || editability?.expensesTabDisabledReason || editability?.expensesDisabledReason || 'Expenses cannot be edited directly for this row.'));
 
-  if (!activeRow || !canOpenExpenseStorageTarget || editability.expensesActionDisabled === true || editability.expensesTabDisabled === true || editability.canOpenExpenses === false) {
+  if (!activeRow || !expenseAccess.canOpen) {
     const reason = String(preciseBlockedReason || 'Expenses cannot be edited directly for this row.');
     if (typeof toast === 'function') toast(reason);
     else if (typeof alert === 'function') alert(reason);
@@ -262758,7 +262785,9 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       note: trimStr(src.note || src.description || '')
     };
   };
-  const expensesReadOnly = !!(editability.expensesReadOnly || !editability.canEditExpenses);
+  const expensesReadOnly = !!(
+    expenseAccess.reviewOnly || editability.expensesReadOnly || !editability.canEditExpenses
+  );
   const hasProcessedExpenses = !!editability.hasProcessedExpenses;
 
   const parseMaybeJson = (value) => {
