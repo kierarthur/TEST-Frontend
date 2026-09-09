@@ -16,7 +16,7 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   const stylesheetAsset = `invoice-batch-modal.css?v=${stylesheetBuildVersion}`;
   const currentMainAsset = mainAsset.replace(
     '&bulk-expense-review=20260909-r1',
-    '&bulk-expense-review=20260909-r8'
+    '&bulk-expense-review=20260909-r9'
   );
   assert.ok(html.includes(`<script src="./js/${currentMainAsset}"></script>`));
   assert.match(html, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);

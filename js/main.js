@@ -262761,8 +262761,8 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     const refreshed = await refreshBulkAuthoriseActiveContext(st, {
       source: 'expenses_review',
       row: activeRow,
-      profile: 'editor',
-      context_profile: 'editor',
+      profile: 'full',
+      context_profile: 'full',
       include_evidence: false,
       authoritative: true,
       rerender: false
