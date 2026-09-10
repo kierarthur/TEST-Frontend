@@ -989,6 +989,12 @@ test('Bulk Authorise returns to a clean parent when rejecting the final category
     state.active_details = {};
     state.active_context = {};
     state.active_ctx = {};
+    // A live rejection can still own the shared loading state while the
+    // child is closing. Force that exact route: the safe closer must fall
+    // back when the shared Close button is temporarily disabled and still
+    // restore all of the Bulk Authorise parent chrome.
+    const closeButton = document.getElementById('btnCloseModal') as HTMLButtonElement | null;
+    if (closeButton) closeButton.disabled = true;
     const frame = (window as any).__getModalFrame?.();
     await frame.__refreshCandidateOfficeExpenseCategory({ rowVanished: true });
   });

@@ -263091,6 +263091,17 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         return { refreshed: false, closed: false };
       }
 
+      const restoreBulkAuthoriseParentTitle = () => {
+        const parent = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        const parentKind = String(parent?.kind || '');
+        if (parentKind !== 'bulk-authorise-workbench' && parentKind !== 'bulk-authorise') return;
+        const title = document.getElementById('modalTitle');
+        if (!title) return;
+        const titleText = title.querySelector(':scope > span');
+        if (titleText) titleText.textContent = 'Bulk Authorise';
+        else title.textContent = 'Bulk Authorise';
+      };
+
       const latestContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
       const latestCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : latestContext;
       const latestRow = (st.active_row && typeof st.active_row === 'object')
@@ -263118,6 +263129,8 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         try { currentFrame._updateButtons && currentFrame._updateButtons(); } catch {}
         if (typeof window.closeCurrentModalFrameSafely === 'function') {
           const closed = window.closeCurrentModalFrameSafely({ expectedKind: 'bulk-authorise-expenses' });
+          restoreBulkAuthoriseParentTitle();
+          setTimeout(restoreBulkAuthoriseParentTitle, 0);
           return { refreshed: false, closed: closed === true };
         }
         try {
