@@ -110,6 +110,52 @@ test('retained Simple Timesheet performs one structural finance refresh after au
   }]);
 });
 
+test('retained Simple Timesheet adopts the refreshed row signature before its structural redraw', async () => {
+  const order = [];
+  const modalCtx = {
+    data: {
+      row_key: 'row-a',
+      timesheet_id: TIMESHEET_ID,
+      current_timesheet_id: TIMESHEET_ID,
+      backend_row_signature: 'before-rejection'
+    },
+    async refreshTimesheetAfterFinanceChange() {
+      order.push(`redraw:${this.data.backend_row_signature}`);
+    }
+  };
+  const refreshedRow = {
+    row_key: 'row-a',
+    timesheet_id: TIMESHEET_ID,
+    current_timesheet_id: TIMESHEET_ID,
+    backend_row_signature: 'after-rejection',
+    row_signature: 'after-rejection',
+    expected_row_signature: 'after-rejection',
+    permission_state_patch_complete: true,
+    priority_badges_patch_complete: true
+  };
+  const harness = createHarness({
+    modalCtx,
+    affectedRefresh: { ok: true, rows: [refreshedRow], flattened_rows: [refreshedRow], removed: [] }
+  });
+  harness.window.applyTimesheetLifecyclePatchToModal = (receivedContext, row) => {
+    order.push(`adopt:${row.backend_row_signature}`);
+    receivedContext.data.backend_row_signature = row.backend_row_signature;
+    receivedContext.data.row_signature = row.row_signature;
+    receivedContext.data.expected_row_signature = row.expected_row_signature;
+    return { applied: true };
+  };
+  harness.window.CloudTMSCandidateOfficeApi.buildIdentity = row => ({
+    row_key: row.row_key,
+    timesheet_id: row.timesheet_id,
+    expected_row_signature: row.expected_row_signature
+  });
+
+  await harness.controllerDependencies.reconcileExpenseCategory(result(), actionContext('SIMPLE_TIMESHEET'));
+
+  assert.deepEqual(order, ['adopt:after-rejection', 'redraw:after-rejection']);
+  assert.equal(modalCtx.data.backend_row_signature, 'after-rejection');
+});
+
 test('deleted expense-only Simple Timesheet closes the stale modal and refreshes the summary', async () => {
   let structuralRefreshes = 0;
   let modalCloses = 0;

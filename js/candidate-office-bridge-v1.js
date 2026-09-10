@@ -730,6 +730,40 @@
       return !!((wantedTimesheetId && removedTimesheetId === wantedTimesheetId) || (wantedRowKey && removedRowKey === wantedRowKey));
     });
   }
+  function currentAffectedTimesheetRow(affectedRefresh, context) {
+    const wantedTimesheetId = identityValue(context?.identity || context?.projection?.current_identity, 'timesheet_id', 'current_timesheet_id');
+    const wantedRowKey = identityValue(context?.identity || context?.projection?.current_identity, 'row_key');
+    const candidates = [
+      ...(Array.isArray(affectedRefresh?.flattened_rows) ? affectedRefresh.flattened_rows : []),
+      ...(Array.isArray(affectedRefresh?.rows) ? affectedRefresh.rows : [])
+    ];
+    return candidates.find((entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      const timesheetId = identityValue(entry, 'timesheet_id', 'current_timesheet_id');
+      const rowKey = identityValue(entry, 'row_key');
+      return !!((wantedTimesheetId && timesheetId === wantedTimesheetId) || (wantedRowKey && rowKey === wantedRowKey));
+    }) || null;
+  }
+  function adoptSimpleTimesheetAffectedIdentity(simpleContext, affectedRefresh, context) {
+    const currentRow = currentAffectedTimesheetRow(affectedRefresh, context);
+    if (!currentRow || typeof window.applyTimesheetLifecyclePatchToModal !== 'function') return false;
+    const timesheetId = identityValue(currentRow, 'timesheet_id', 'current_timesheet_id')
+      || identityValue(context?.identity || context?.projection?.current_identity, 'timesheet_id', 'current_timesheet_id');
+    try {
+      const applied = window.applyTimesheetLifecyclePatchToModal(simpleContext, currentRow, {
+        action: 'reject-expense-category',
+        source: 'candidate-expense-category-rejection-affected-row',
+        requireSignature: true,
+        allowFallback: false,
+        timesheet_id: timesheetId || null,
+        current_timesheet_id: timesheetId || null
+      });
+      return applied?.applied === true;
+    } catch (error) {
+      console.warn('[CANDIDATE-OFFICE] Simple Timesheet identity adoption failed after expense rejection', error);
+      return false;
+    }
+  }
   async function refreshAffectedRows(result, context) {
     const sourceContext = context.surface === 'BULK_PROCESS' ? 'bulk_process' : context.surface === 'BULK_AUTHORISE' ? 'bulk_authorise' : 'timesheet_modal';
     const state = context.surface === 'BULK_AUTHORISE' ? resolveBulkAuthoriseState() : null;
@@ -780,6 +814,13 @@
       const simpleContext = resolveSimpleTimesheetContext();
       if (simpleContext) {
         try {
+          adoptSimpleTimesheetAffectedIdentity(simpleContext, affectedRefresh, context);
+          const refreshedIdentity = typeof window.CloudTMSCandidateOfficeApi?.buildIdentity === 'function'
+            ? window.CloudTMSCandidateOfficeApi.buildIdentity(simpleContext.data || simpleContext.timesheetDetails || context.identity || {})
+            : context.identity;
+          const refreshedContext = { ...context, identity: refreshedIdentity || context.identity };
+          invalidate(refreshedContext);
+          await refetch(refreshedContext);
           await simpleContext.refreshTimesheetAfterFinanceChange({
             silent: true,
             structural: true,
