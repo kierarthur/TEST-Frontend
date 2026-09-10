@@ -835,6 +835,41 @@
           toast_tone: 'ok'
         };
       }
+      if (!rowVanished) {
+        let fullContextRefreshed = false;
+        if (state && typeof window.refreshBulkAuthoriseActiveContext === 'function') {
+          try {
+            const refreshResult = await window.refreshBulkAuthoriseActiveContext(state, {
+              source: 'expenses_review',
+              row: state.active_row,
+              profile: 'full',
+              context_profile: 'full',
+              include_evidence: false,
+              authoritative: true,
+              force: true,
+              bypassCache: true,
+              rerender: false
+            });
+            fullContextRefreshed = refreshResult !== false
+              && refreshResult?.ok !== false
+              && refreshResult?.soft_failure !== true
+              && refreshResult?.evidence_refresh_failed !== true;
+          } catch (error) {
+            console.warn('[CANDIDATE-OFFICE] Bulk Authorise full expense refresh failed after expense rejection', error);
+          }
+        }
+        if (!fullContextRefreshed) {
+          try { window.discardAllModalsAndState?.(); } catch {}
+          try { if (typeof window.renderAll === 'function') await window.renderAll(); } catch (error) {
+            console.warn('[CANDIDATE-OFFICE] Timesheet summary refresh failed after closing stale Bulk Authorise', error);
+          }
+          return {
+            refresh_failed: true,
+            user_message: 'Expense rejected. Bulk Authorise was closed because the latest figures could not be reloaded. Reopen Bulk Authorise to continue.',
+            toast_tone: 'ok'
+          };
+        }
+      }
       const frame = window.__getModalFrame?.();
       if (frame && typeof frame.__refreshCandidateOfficeExpenseCategory === 'function') {
         await frame.__refreshCandidateOfficeExpenseCategory({ result, context, rowVanished });

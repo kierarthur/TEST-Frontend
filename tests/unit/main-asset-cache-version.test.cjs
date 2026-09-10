@@ -16,7 +16,7 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   const stylesheetAsset = `invoice-batch-modal.css?v=${stylesheetBuildVersion}`;
   const currentMainAsset = mainAsset.replace(
     '&bulk-expense-review=20260909-r1',
-    '&bulk-expense-review=20260909-r10'
+    '&bulk-expense-review=20260909-r11'
   );
   assert.ok(html.includes(`<script src="./js/${currentMainAsset}"></script>`));
   assert.match(html, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
@@ -31,7 +31,7 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   assert.match(html, /candidate-office-api-v1\.js\?v=20260906-advanced-expense-r2/);
   assert.match(html, /candidate-office-controller-v1\.js\?v=20260906-advanced-expense-r2/);
   assert.match(html, /candidate-office-surface-v1\.js\?v=20260907-timesheet-layout-r2/);
-  assert.match(html, /candidate-office-bridge-v1\.js\?v=20260907-expense-viewer-r1/);
+  assert.match(html, /candidate-office-bridge-v1\.js\?v=20260910-bulk-expense-refresh-r1/);
   assert.match(html, /candidate-office-bootstrap-v1\.js\?v=20260905-summary-trust-r1/);
   assert.match(html, /candidate-office-v1\.css\?v=20260907-timesheet-layout-r2/);
   assert.match(html, /modal-modernisation\.css\?v=20260907-timesheet-layout-r1/);
