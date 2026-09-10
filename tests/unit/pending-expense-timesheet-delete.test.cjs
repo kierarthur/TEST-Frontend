@@ -139,6 +139,16 @@ test('submitted planned weeks also require rejection before their delete confirm
   assert.match(plannedDelete, /\/api\/candidate-app\/contract-weeks\/\$\{encodeURIComponent\(String\(contractWeekId\)\)\}\/reject/);
 });
 
+test('reason prompts stay interactive when opened over a read-only Timesheet', () => {
+  const promptDefinitions = source.match(/async function openUiPromptModal\(opts = \{\}\) \{[\s\S]*?\n\}/g) || [];
+  assert.equal(promptDefinitions.length, 2);
+  for (const prompt of promptDefinitions) {
+    assert.match(prompt, /noParentGate: true,[\s\S]*forceEdit: true,[\s\S]*showSave: false/);
+    assert.match(prompt, /data-act="uipr-save"/);
+    assert.match(prompt, /data-act="uipr-cancel"/);
+  }
+});
+
 test('planned delete posts the freshly reviewed context and a unique operation id', () => {
   const caller = section(
     'await deletePlannedContractWeek(weekIdX, {',

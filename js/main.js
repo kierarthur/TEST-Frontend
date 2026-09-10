@@ -65974,6 +65974,7 @@ async function openUiPromptModal(opts = {}) {
       {
         kind,
         noParentGate: true,
+        forceEdit: true,
         showSave: false,
         showApply: false,
         onDismiss
@@ -67363,6 +67364,7 @@ async function openUiPromptModal(opts = {}) {
       {
         kind,
         noParentGate: true,
+        forceEdit: true,
         showSave: false,
         showApply: false,
         onDismiss
