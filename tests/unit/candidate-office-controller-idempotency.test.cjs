@@ -188,6 +188,48 @@ test('expense-category rejection uses its dedicated decision modal and category-
   assert.equal(reconciled[0].context.expenseComponentId, componentId);
 });
 
+test('a committed expense rejection reports its safe refresh warning instead of a misleading ordinary success', async () => {
+  const module = loadController();
+  const toasts = [];
+  const controller = module.createCandidateOfficeActionController({
+    api: {
+      invokeOfficeCandidateAction: async () => ({ ok: true, owning_timesheet_deleted: false })
+    },
+    createIdempotencyKey: () => 'expense-refresh-warning-key',
+    ensureFresh: async context => ({
+      projection: context.projection,
+      action: context.action,
+      expenseCategory: context.expenseCategory,
+      expenseConfirmation: context.expenseConfirmation
+    }),
+    reconcileExpenseCategory: async () => ({
+      refresh_failed: true,
+      user_message: 'Expense rejected. Bulk Authorise was closed because the latest figures could not be reloaded. Reopen Bulk Authorise to continue.',
+      toast_tone: 'ok'
+    }),
+    showToast: (message, tone) => toasts.push({ message, tone })
+  });
+  const componentId = '00000000-0000-4000-8000-000000000102';
+  const context = {
+    surface: 'BULK_AUTHORISE',
+    identity: { row_key: 'row-a' },
+    projection: { current_identity: { row_key: 'row-a' } },
+    action: expenseAction(componentId, { generation: 2, expense_component_id: componentId, component_generation: 3, context_digest: 'b'.repeat(64) }),
+    expenseComponentId: componentId,
+    expenseCategory: { expense_component_id: componentId, label: 'Travel', amount: '£4.56' },
+    expenseConfirmation: { empty_timesheet_consequence: 'NONE', will_delete_timesheet: false, supporting_evidence_count: 1 }
+  };
+
+  const result = await controller.runTypedAction(context);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reconciliation.refresh_failed, true);
+  assert.deepEqual(toasts, [{
+    message: 'Expense rejected. Bulk Authorise was closed because the latest figures could not be reloaded. Reopen Bulk Authorise to continue.',
+    tone: 'ok'
+  }]);
+});
+
 test('different expense categories do not share the duplicate-action lock', async () => {
   const module = loadController();
   const pending = [];

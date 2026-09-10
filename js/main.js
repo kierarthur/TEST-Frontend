@@ -65974,6 +65974,7 @@ async function openUiPromptModal(opts = {}) {
       {
         kind,
         noParentGate: true,
+        forceEdit: true,
         showSave: false,
         showApply: false,
         onDismiss
@@ -67363,6 +67364,7 @@ async function openUiPromptModal(opts = {}) {
       {
         kind,
         noParentGate: true,
+        forceEdit: true,
         showSave: false,
         showApply: false,
         onDismiss
@@ -177860,13 +177862,18 @@ function renderTimesheetExpensesTab(ctx) {
       routeTypeExpense === 'WEEKLY_HEALTHROSTER'
     )
   );
+  const forceOpenProcessedExpenses = !!(
+    boolishExpense(originalCtx.expenses_force_open || originalCtx.expensesForceOpen)
+    && hasRealTimesheetExpense
+  );
   let expensesTabDisabled = editPolicy
     ? editPolicy.expensesTabDisabled === true
     : !hasSupportedExpenseTarget;
   if (additionalManualExpenseSupported) expensesTabDisabled = false;
+  if (forceOpenProcessedExpenses) expensesTabDisabled = false;
   if (trueSourceImportExpense) expensesTabDisabled = true;
   const enabled = editPolicy
-    ? ((policyCanOpenExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
+    ? ((policyCanOpenExpenses || additionalManualExpenseSupported || forceOpenProcessedExpenses) && !expensesTabDisabled)
     : hasSupportedExpenseTarget;
   const canEditExpenseControls = editPolicy
     ? (hasSupportedExpenseTarget && !hardLockedExpense && (policyCanEditExpenses || additionalManualExpenseSupported) && !expensesTabDisabled)
@@ -262080,6 +262087,38 @@ async function handleBulkAuthoriseUnsavedChangeGuard(state, nextRowKey, options 
   }
 }
 
+function classifyBulkAuthoriseExpensesAccess(editabilityInput) {
+  const editability = (editabilityInput && typeof editabilityInput === 'object')
+    ? editabilityInput
+    : {};
+  const expenseStorageTarget = String(
+    editability.expenseStorageTarget || editability.expense_storage_target || ''
+  ).trim().toUpperCase();
+  const hasStorageTarget = expenseStorageTarget === 'TSFIN'
+    || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
+  const canOpenDirectly = !!(
+    hasStorageTarget
+    && editability.canOpenExpenses === true
+    && editability.expensesActionDisabled !== true
+    && editability.expensesTabDisabled !== true
+  );
+  const canReviewSubmitted = !!(
+    editability.canViewExpenses === true
+    && (
+      editability.hasProcessedExpenses === true
+      || (editability.canOpenExpenses === true && editability.expensesReadOnly === true)
+    )
+  );
+  return {
+    expenseStorageTarget,
+    hasStorageTarget,
+    canOpenDirectly,
+    canReviewSubmitted,
+    canOpen: canOpenDirectly || canReviewSubmitted,
+    reviewOnly: !canOpenDirectly && canReviewSubmitted
+  };
+}
+
 function renderBulkAuthoriseActionRow(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -262311,14 +262350,8 @@ function renderBulkAuthoriseActionRow(state) {
     isImportAuthoritativeAction &&
     trimStr(activeRow.current_timesheet_id || activeRow.timesheet_id || activeContext.current_timesheet_id || activeContext.timesheet_id || '')
   );
-  const expenseStorageTarget = trimStr(editability.expenseStorageTarget || editability.expense_storage_target || '').toUpperCase();
-  const expensesHaveStorageTarget = expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
-  const expensesActionDisabled = !!(
-    editability.expensesActionDisabled === true ||
-    editability.expensesTabDisabled === true ||
-    !expensesHaveStorageTarget ||
-    editability.canOpenExpenses === false
-  );
+  const expenseAccess = classifyBulkAuthoriseExpensesAccess(editability);
+  const expenseStorageTarget = expenseAccess.expenseStorageTarget;
   const expensesActionDisabledReason = trimStr(
     editability.requiresAdditionalManualForExpenses === true
       ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
@@ -262332,8 +262365,11 @@ function renderBulkAuthoriseActionRow(state) {
         )
   );
   const pushExpensesAction = () => {
-    if (expensesHaveStorageTarget && editability.canOpenExpenses && !expensesActionDisabled) {
-      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', !busy, '', 'btn btn-outline', 'expenses', expenseStorageTarget === 'CONTRACT_WEEK_DRAFT' ? 'Expenses will be saved as a draft until this week is processed.' : ''));
+    if (expenseAccess.canOpen) {
+      const reviewOnlyAttrs = expenseAccess.reviewOnly
+        ? 'data-expenses-review-only="1" title="Review submitted expenses. Editing remains unavailable."'
+        : '';
+      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', !busy, reviewOnlyAttrs, 'btn btn-outline', 'expenses', expenseStorageTarget === 'CONTRACT_WEEK_DRAFT' ? 'Expenses will be saved as a draft until this week is processed.' : ''));
       return;
     }
     actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', false, '', 'btn btn-outline', 'expenses', expensesActionDisabledReason));
@@ -262692,12 +262728,12 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     return { ok: false, error: 'Bulk Authorise expenses modal is not available.' };
   }
 
-  const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
-  const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : ((activeContext.row && typeof activeContext.row === 'object') ? activeContext.row : null);
-  const activeDetails = (st.active_details && typeof st.active_details === 'object')
+  let activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+  let activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : ((activeContext.row && typeof activeContext.row === 'object') ? activeContext.row : null);
+  let activeDetails = (st.active_details && typeof st.active_details === 'object')
     ? st.active_details
     : ((activeContext.details && typeof activeContext.details === 'object') ? activeContext.details : {});
-  const editability = (typeof classifyBulkAuthoriseEditability === 'function')
+  const classifyExpensesEditability = () => ((typeof classifyBulkAuthoriseEditability === 'function')
     ? classifyBulkAuthoriseEditability({ ...activeContext, row: activeRow, details: activeDetails, state: st.active_ctx?.state, active_ctx: st.active_ctx })
     : {
         canOpenExpenses: false,
@@ -262705,21 +262741,53 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         hasProcessedExpenses: false,
         expensesReadOnly: false,
         isAuthorised: !!activeRow?.is_authorised
-      };
+      });
+  let editability = classifyExpensesEditability();
 
   const expenseStorageTarget = String(editability?.expenseStorageTarget || editability?.expense_storage_target || '').trim().toUpperCase();
-  const canOpenExpenseStorageTarget = expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
+  let expenseAccess = classifyBulkAuthoriseExpensesAccess(editability);
   const preciseBlockedReason = editability?.requiresAdditionalManualForExpenses === true
     ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
     : (expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
         ? 'Expenses will be saved as a draft until this week is processed.'
         : String(editability?.expensesActionDisabledReason || editability?.expensesTabDisabledReason || editability?.expensesDisabledReason || 'Expenses cannot be edited directly for this row.'));
 
-  if (!activeRow || !canOpenExpenseStorageTarget || editability.expensesActionDisabled === true || editability.expensesTabDisabled === true || editability.canOpenExpenses === false) {
+  if (!activeRow || !expenseAccess.canOpen) {
     const reason = String(preciseBlockedReason || 'Expenses cannot be edited directly for this row.');
     if (typeof toast === 'function') toast(reason);
     else if (typeof alert === 'function') alert(reason);
     return { ok: false, error: reason, message: reason };
+  }
+
+  if (expenseAccess.reviewOnly && typeof refreshBulkAuthoriseActiveContext === 'function') {
+    const refreshed = await refreshBulkAuthoriseActiveContext(st, {
+      source: 'expenses_review',
+      row: activeRow,
+      profile: 'full',
+      context_profile: 'full',
+      include_evidence: false,
+      authoritative: true,
+      rerender: false
+    });
+    if (!refreshed) {
+      const reason = 'CloudTMS could not load the current expense figures. Please try again.';
+      if (typeof toast === 'function') toast(reason);
+      else if (typeof alert === 'function') alert(reason);
+      return { ok: false, error: reason, message: reason };
+    }
+    activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+    activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : ((activeContext.row && typeof activeContext.row === 'object') ? activeContext.row : null);
+    activeDetails = (st.active_details && typeof st.active_details === 'object')
+      ? st.active_details
+      : ((activeContext.details && typeof activeContext.details === 'object') ? activeContext.details : {});
+    editability = classifyExpensesEditability();
+    expenseAccess = classifyBulkAuthoriseExpensesAccess(editability);
+    if (!activeRow || !expenseAccess.canOpen || !expenseAccess.reviewOnly) {
+      const reason = 'This Timesheet changed while its expenses were loading. Please review it again.';
+      if (typeof toast === 'function') toast(reason);
+      else if (typeof alert === 'function') alert(reason);
+      return { ok: false, error: reason, message: reason };
+    }
   }
 
   const ctx = st.active_ctx;
@@ -262758,7 +262826,9 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       note: trimStr(src.note || src.description || '')
     };
   };
-  const expensesReadOnly = !!(editability.expensesReadOnly || !editability.canEditExpenses);
+  const expensesReadOnly = !!(
+    expenseAccess.reviewOnly || editability.expensesReadOnly || !editability.canEditExpenses
+  );
   const hasProcessedExpenses = !!editability.hasProcessedExpenses;
 
   const parseMaybeJson = (value) => {
@@ -262817,7 +262887,19 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         parentExpenseState.expensesBaseline ||
         {}
       );
-  const draftSource = parentExpenseState.expensesDraft || parentExpenseState.activeExpensesDraft || parentExpenseState.stagedExpensesDraft || persistedBaselineSource || {};
+  const readOnlySavedExpenseSource = {
+    mileage_units: activeDetails?.tsfin?.mileage_units ?? 0,
+    travel_pay: activeDetails?.tsfin?.travel_pay_ex_vat ?? 0,
+    travel_charge: activeDetails?.tsfin?.travel_charge_ex_vat ?? 0,
+    accommodation_pay: activeDetails?.tsfin?.accommodation_pay_ex_vat ?? 0,
+    accommodation_charge: activeDetails?.tsfin?.accommodation_charge_ex_vat ?? 0,
+    other_pay: activeDetails?.tsfin?.other_pay_ex_vat ?? 0,
+    other_charge: activeDetails?.tsfin?.other_charge_ex_vat ?? 0,
+    note: activeDetails?.tsfin?.expenses_description ?? ''
+  };
+  const draftSource = expenseAccess.reviewOnly
+    ? readOnlySavedExpenseSource
+    : (parentExpenseState.expensesDraft || parentExpenseState.activeExpensesDraft || parentExpenseState.stagedExpensesDraft || persistedBaselineSource || {});
   const draftSeed = normaliseExpenseCanonical(draftSource, normaliseOptions);
   const persistedBaselineSeed = normaliseExpenseCanonical(persistedBaselineSource, normaliseOptions);
   const baselineSeed = normaliseExpenseCanonical(draftSeed, normaliseOptions);
@@ -262831,7 +262913,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     supports_unprocessed_expense_draft: editability?.supportsUnprocessedExpenseDraft === true,
     contract_week_id: activeDetails?.contract_week_id || activeDetails?.contract_week?.id || activeRow?.contract_week_id || null,
     expenses_read_only: expensesReadOnly,
-    expenses_force_open: !!hasProcessedExpenses,
+    expenses_force_open: !!expenseAccess.reviewOnly,
     candidateOfficeSurface: 'BULK_AUTHORISE',
     state: {
       ...(ctx?.state || {}),
@@ -262850,6 +262932,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
   const rootId = 'bulkProcessExpensesChildRoot';
   const renderTab = () => `
     <div id="${rootId}" class="tabc" style="font-size:11px;line-height:1.16;">
+      <style>#${rootId} .ctms-expense-grid{min-width:0;overflow:visible;}</style>
       ${renderTimesheetExpensesTab(childCtx)}
     </div>
   `;
@@ -263010,6 +263093,17 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         return { refreshed: false, closed: false };
       }
 
+      const restoreBulkAuthoriseParentTitle = () => {
+        const parent = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        const parentKind = String(parent?.kind || '');
+        if (parentKind !== 'bulk-authorise-workbench' && parentKind !== 'bulk-authorise') return;
+        const title = document.getElementById('modalTitle');
+        if (!title) return;
+        const titleText = title.querySelector(':scope > span');
+        if (titleText) titleText.textContent = 'Bulk Authorise';
+        else title.textContent = 'Bulk Authorise';
+      };
+
       const latestContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
       const latestCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : latestContext;
       const latestRow = (st.active_row && typeof st.active_row === 'object')
@@ -263037,6 +263131,8 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         try { currentFrame._updateButtons && currentFrame._updateButtons(); } catch {}
         if (typeof window.closeCurrentModalFrameSafely === 'function') {
           const closed = window.closeCurrentModalFrameSafely({ expectedKind: 'bulk-authorise-expenses' });
+          restoreBulkAuthoriseParentTitle();
+          setTimeout(restoreBulkAuthoriseParentTitle, 0);
           return { refreshed: false, closed: closed === true };
         }
         try {
@@ -263055,7 +263151,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         expense_storage_target: expenseStorageTarget,
         contract_week_id: latestContractWeekId || openedContractWeekId || null,
         expenses_read_only: expensesReadOnly,
-        expenses_force_open: !!hasProcessedExpenses,
+        expenses_force_open: !!expenseAccess.reviewOnly,
         candidateOfficeSurface: 'BULK_AUTHORISE',
         state: {
           ...deep(latestState),
@@ -263081,6 +263177,10 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     if (!root || root.dataset.boundBulkAuthoriseExpensesModal === '1') return;
     root.dataset.boundBulkAuthoriseExpensesModal = '1';
     if (expensesReadOnly) {
+      root.querySelectorAll('[data-candidate-office-server-enabled="1"]').forEach((button) => {
+        button.disabled = false;
+        button.removeAttribute('aria-disabled');
+      });
       updateChildDirty();
       return;
     }

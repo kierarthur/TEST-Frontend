@@ -110,6 +110,52 @@ test('retained Simple Timesheet performs one structural finance refresh after au
   }]);
 });
 
+test('retained Simple Timesheet adopts the refreshed row signature before its structural redraw', async () => {
+  const order = [];
+  const modalCtx = {
+    data: {
+      row_key: 'row-a',
+      timesheet_id: TIMESHEET_ID,
+      current_timesheet_id: TIMESHEET_ID,
+      backend_row_signature: 'before-rejection'
+    },
+    async refreshTimesheetAfterFinanceChange() {
+      order.push(`redraw:${this.data.backend_row_signature}`);
+    }
+  };
+  const refreshedRow = {
+    row_key: 'row-a',
+    timesheet_id: TIMESHEET_ID,
+    current_timesheet_id: TIMESHEET_ID,
+    backend_row_signature: 'after-rejection',
+    row_signature: 'after-rejection',
+    expected_row_signature: 'after-rejection',
+    permission_state_patch_complete: true,
+    priority_badges_patch_complete: true
+  };
+  const harness = createHarness({
+    modalCtx,
+    affectedRefresh: { ok: true, rows: [refreshedRow], flattened_rows: [refreshedRow], removed: [] }
+  });
+  harness.window.applyTimesheetLifecyclePatchToModal = (receivedContext, row) => {
+    order.push(`adopt:${row.backend_row_signature}`);
+    receivedContext.data.backend_row_signature = row.backend_row_signature;
+    receivedContext.data.row_signature = row.row_signature;
+    receivedContext.data.expected_row_signature = row.expected_row_signature;
+    return { applied: true };
+  };
+  harness.window.CloudTMSCandidateOfficeApi.buildIdentity = row => ({
+    row_key: row.row_key,
+    timesheet_id: row.timesheet_id,
+    expected_row_signature: row.expected_row_signature
+  });
+
+  await harness.controllerDependencies.reconcileExpenseCategory(result(), actionContext('SIMPLE_TIMESHEET'));
+
+  assert.deepEqual(order, ['adopt:after-rejection', 'redraw:after-rejection']);
+  assert.equal(modalCtx.data.backend_row_signature, 'after-rejection');
+});
+
 test('deleted expense-only Simple Timesheet closes the stale modal and refreshes the summary', async () => {
   let structuralRefreshes = 0;
   let modalCloses = 0;
@@ -201,4 +247,96 @@ test('Bulk Authorise refreshes the owning dataset before asking the existing Exp
   assert.equal(childRefreshes[0].rowVanished, true);
   assert.equal(childRefreshes[0].result, rejectionResult);
   assert.equal(childRefreshes[0].context, context);
+});
+
+test('retained Bulk Authorise row reloads full current expense facts before redrawing the Expenses child', async () => {
+  const state = { active_row_key: 'row-a', active_row: { row_key: 'row-a', timesheet_id: TIMESHEET_ID } };
+  const order = [];
+  const contextRefreshes = [];
+  const frame = {
+    async __refreshCandidateOfficeExpenseCategory() { order.push('child'); }
+  };
+  const harness = createHarness({ modalCtx: { bulkAuthoriseState: state }, frame });
+  harness.window.refreshBulkAuthoriseDatasetPreservingState = async () => {
+    order.push('dataset');
+    return true;
+  };
+  harness.window.refreshBulkAuthoriseActiveContext = async (receivedState, options) => {
+    order.push('full-context');
+    contextRefreshes.push({ receivedState, options });
+    return true;
+  };
+
+  await harness.controllerDependencies.reconcileExpenseCategory(result({
+    owning_timesheet_deleted: false,
+    deleted_timesheet_ids: [],
+    retained_timesheet_ids: [TIMESHEET_ID],
+    removed_from_current_timesheet_ids: []
+  }), actionContext('BULK_AUTHORISE'));
+
+  assert.deepEqual(order, ['dataset', 'full-context', 'child']);
+  assert.equal(contextRefreshes[0].receivedState, state);
+  assert.equal(contextRefreshes[0].options.profile, 'full');
+  assert.equal(contextRefreshes[0].options.context_profile, 'full');
+  assert.equal(contextRefreshes[0].options.authoritative, true);
+  assert.equal(contextRefreshes[0].options.force, true);
+  assert.equal(contextRefreshes[0].options.bypassCache, true);
+  assert.equal(contextRefreshes[0].options.rerender, false);
+});
+
+test('retained Bulk Authorise row closes safely when full current expense facts cannot be reloaded', async () => {
+  const state = { active_row_key: 'row-a', active_row: { row_key: 'row-a', timesheet_id: TIMESHEET_ID } };
+  let childRefreshes = 0;
+  let modalDiscards = 0;
+  let summaryRefreshes = 0;
+  const frame = {
+    async __refreshCandidateOfficeExpenseCategory() { childRefreshes += 1; }
+  };
+  const harness = createHarness({ modalCtx: { bulkAuthoriseState: state }, frame });
+  harness.window.refreshBulkAuthoriseDatasetPreservingState = async () => true;
+  harness.window.refreshBulkAuthoriseActiveContext = async () => false;
+  harness.window.discardAllModalsAndState = () => { modalDiscards += 1; };
+  harness.window.renderAll = async () => { summaryRefreshes += 1; };
+
+  const outcome = await harness.controllerDependencies.reconcileExpenseCategory(
+    result(),
+    actionContext('BULK_AUTHORISE')
+  );
+
+  assert.equal(childRefreshes, 0);
+  assert.equal(modalDiscards, 1);
+  assert.equal(summaryRefreshes, 1);
+  assert.deepEqual({ ...outcome }, {
+    refresh_failed: true,
+    user_message: 'Expense rejected. Bulk Authorise was closed because the latest figures could not be reloaded. Reopen Bulk Authorise to continue.',
+    toast_tone: 'ok'
+  });
+});
+
+test('Bulk Authorise closes stale modal state when the committed rejection cannot reload its dataset', async () => {
+  const state = { active_row_key: 'row-a' };
+  let childRefreshes = 0;
+  let modalDiscards = 0;
+  let summaryRefreshes = 0;
+  const frame = {
+    async __refreshCandidateOfficeExpenseCategory() { childRefreshes += 1; }
+  };
+  const harness = createHarness({ modalCtx: { bulkAuthoriseState: state }, frame });
+  harness.window.refreshBulkAuthoriseDatasetPreservingState = async () => false;
+  harness.window.discardAllModalsAndState = () => { modalDiscards += 1; };
+  harness.window.renderAll = async () => { summaryRefreshes += 1; };
+
+  const outcome = await harness.controllerDependencies.reconcileExpenseCategory(
+    result(),
+    actionContext('BULK_AUTHORISE')
+  );
+
+  assert.equal(childRefreshes, 0, 'stale Expenses child must not redraw from the restored old dataset');
+  assert.equal(modalDiscards, 1);
+  assert.equal(summaryRefreshes, 1);
+  assert.deepEqual({ ...outcome }, {
+    refresh_failed: true,
+    user_message: 'Expense rejected. Bulk Authorise was closed because the latest figures could not be reloaded. Reopen Bulk Authorise to continue.',
+    toast_tone: 'ok'
+  });
 });

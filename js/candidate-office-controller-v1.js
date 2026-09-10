@@ -228,15 +228,21 @@
           setTimeout(() => URL.revokeObjectURL(url), 60000);
           result = { ok: true, downloaded: true };
         }
+        let reconciliationOutcome = null;
         if (action.code === 'REJECT_EXPENSE_CATEGORY' && typeof deps.reconcileExpenseCategory === 'function') {
-          await deps.reconcileExpenseCategory(result, context);
+          reconciliationOutcome = await deps.reconcileExpenseCategory(result, context);
         } else {
           await reconcile(result, context);
         }
         finishOperation(key);
         setState(key, 'SUCCEEDED');
-        deps.showToast?.(action.code === 'REJECT_EXPENSE_CATEGORY' ? `${context.expenseCategory?.label || 'Expense'} expense rejected.` : `${action.label} completed.`, 'ok');
-        return { ok: true, result };
+        const reconciliationMessage = String(reconciliationOutcome?.user_message || '').trim();
+        const reconciliationTone = String(reconciliationOutcome?.toast_tone || 'ok').trim() || 'ok';
+        deps.showToast?.(
+          reconciliationMessage || (action.code === 'REJECT_EXPENSE_CATEGORY' ? `${context.expenseCategory?.label || 'Expense'} expense rejected.` : `${action.label} completed.`),
+          reconciliationTone
+        );
+        return { ok: true, result, ...(reconciliationOutcome ? { reconciliation: reconciliationOutcome } : {}) };
       } catch (error) { return handleFailure(error, context, key); }
     }
     async function runReminderBatch(context) {

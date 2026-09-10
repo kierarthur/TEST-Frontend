@@ -730,6 +730,40 @@
       return !!((wantedTimesheetId && removedTimesheetId === wantedTimesheetId) || (wantedRowKey && removedRowKey === wantedRowKey));
     });
   }
+  function currentAffectedTimesheetRow(affectedRefresh, context) {
+    const wantedTimesheetId = identityValue(context?.identity || context?.projection?.current_identity, 'timesheet_id', 'current_timesheet_id');
+    const wantedRowKey = identityValue(context?.identity || context?.projection?.current_identity, 'row_key');
+    const candidates = [
+      ...(Array.isArray(affectedRefresh?.flattened_rows) ? affectedRefresh.flattened_rows : []),
+      ...(Array.isArray(affectedRefresh?.rows) ? affectedRefresh.rows : [])
+    ];
+    return candidates.find((entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      const timesheetId = identityValue(entry, 'timesheet_id', 'current_timesheet_id');
+      const rowKey = identityValue(entry, 'row_key');
+      return !!((wantedTimesheetId && timesheetId === wantedTimesheetId) || (wantedRowKey && rowKey === wantedRowKey));
+    }) || null;
+  }
+  function adoptSimpleTimesheetAffectedIdentity(simpleContext, affectedRefresh, context) {
+    const currentRow = currentAffectedTimesheetRow(affectedRefresh, context);
+    if (!currentRow || typeof window.applyTimesheetLifecyclePatchToModal !== 'function') return false;
+    const timesheetId = identityValue(currentRow, 'timesheet_id', 'current_timesheet_id')
+      || identityValue(context?.identity || context?.projection?.current_identity, 'timesheet_id', 'current_timesheet_id');
+    try {
+      const applied = window.applyTimesheetLifecyclePatchToModal(simpleContext, currentRow, {
+        action: 'reject-expense-category',
+        source: 'candidate-expense-category-rejection-affected-row',
+        requireSignature: true,
+        allowFallback: false,
+        timesheet_id: timesheetId || null,
+        current_timesheet_id: timesheetId || null
+      });
+      return applied?.applied === true;
+    } catch (error) {
+      console.warn('[CANDIDATE-OFFICE] Simple Timesheet identity adoption failed after expense rejection', error);
+      return false;
+    }
+  }
   async function refreshAffectedRows(result, context) {
     const sourceContext = context.surface === 'BULK_PROCESS' ? 'bulk_process' : context.surface === 'BULK_AUTHORISE' ? 'bulk_authorise' : 'timesheet_modal';
     const state = context.surface === 'BULK_AUTHORISE' ? resolveBulkAuthoriseState() : null;
@@ -780,6 +814,13 @@
       const simpleContext = resolveSimpleTimesheetContext();
       if (simpleContext) {
         try {
+          adoptSimpleTimesheetAffectedIdentity(simpleContext, affectedRefresh, context);
+          const refreshedIdentity = typeof window.CloudTMSCandidateOfficeApi?.buildIdentity === 'function'
+            ? window.CloudTMSCandidateOfficeApi.buildIdentity(simpleContext.data || simpleContext.timesheetDetails || context.identity || {})
+            : context.identity;
+          const refreshedContext = { ...context, identity: refreshedIdentity || context.identity };
+          invalidate(refreshedContext);
+          await refetch(refreshedContext);
           await simpleContext.refreshTimesheetAfterFinanceChange({
             silent: true,
             structural: true,
@@ -803,9 +844,10 @@
     if (context.surface === 'BULK_AUTHORISE') {
       const state = resolveBulkAuthoriseState();
       const rowKey = context.identity?.row_key || context.projection?.current_identity?.row_key || '';
+      let bulkDatasetRefreshed = false;
       if (state && typeof window.refreshBulkAuthoriseDatasetPreservingState === 'function') {
         try {
-          await window.refreshBulkAuthoriseDatasetPreservingState(state, {
+          bulkDatasetRefreshed = (await window.refreshBulkAuthoriseDatasetPreservingState(state, {
             preferredRowKey: rowKey,
             affectedRowKeys: [rowKey, ...(Array.isArray(result?.affected_rows) ? result.affected_rows : [])],
             actionSource: 'reject-expense-category',
@@ -818,9 +860,55 @@
             result,
             actionResult: result,
             rowPatches: Array.isArray(result?.affected_rows) ? result.affected_rows : []
-          });
+          })) !== false;
         } catch (error) {
           console.warn('[CANDIDATE-OFFICE] Bulk Authorise refresh failed after expense rejection', error);
+        }
+      }
+      if (!bulkDatasetRefreshed) {
+        try { window.discardAllModalsAndState?.(); } catch {}
+        try { if (typeof window.renderAll === 'function') await window.renderAll(); } catch (error) {
+          console.warn('[CANDIDATE-OFFICE] Timesheet summary refresh failed after closing stale Bulk Authorise', error);
+        }
+        return {
+          refresh_failed: true,
+          user_message: 'Expense rejected. Bulk Authorise was closed because the latest figures could not be reloaded. Reopen Bulk Authorise to continue.',
+          toast_tone: 'ok'
+        };
+      }
+      if (!rowVanished) {
+        let fullContextRefreshed = false;
+        if (state && typeof window.refreshBulkAuthoriseActiveContext === 'function') {
+          try {
+            const refreshResult = await window.refreshBulkAuthoriseActiveContext(state, {
+              source: 'expenses_review',
+              row: state.active_row,
+              profile: 'full',
+              context_profile: 'full',
+              include_evidence: false,
+              authoritative: true,
+              force: true,
+              bypassCache: true,
+              rerender: false
+            });
+            fullContextRefreshed = refreshResult !== false
+              && refreshResult?.ok !== false
+              && refreshResult?.soft_failure !== true
+              && refreshResult?.evidence_refresh_failed !== true;
+          } catch (error) {
+            console.warn('[CANDIDATE-OFFICE] Bulk Authorise full expense refresh failed after expense rejection', error);
+          }
+        }
+        if (!fullContextRefreshed) {
+          try { window.discardAllModalsAndState?.(); } catch {}
+          try { if (typeof window.renderAll === 'function') await window.renderAll(); } catch (error) {
+            console.warn('[CANDIDATE-OFFICE] Timesheet summary refresh failed after closing stale Bulk Authorise', error);
+          }
+          return {
+            refresh_failed: true,
+            user_message: 'Expense rejected. Bulk Authorise was closed because the latest figures could not be reloaded. Reopen Bulk Authorise to continue.',
+            toast_tone: 'ok'
+          };
         }
       }
       const frame = window.__getModalFrame?.();

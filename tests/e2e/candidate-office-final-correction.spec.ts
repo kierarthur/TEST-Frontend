@@ -765,6 +765,279 @@ test('Bulk Authorise expense categories and totals rerender cleanly after one ca
   await captureCandidateOfficeVisual(page, '08-bulk-authorise-settled-after-category-rejection');
 });
 
+test('Bulk Authorise keeps the surviving Timesheet selected and redraws its current categories through the production child refresh', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1100, height: 820 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+  const before = expenseCategoryPresentation({ surface: 'BULK_AUTHORISE' });
+  const after = expenseCategoryPresentation({
+    surface: 'BULK_AUTHORISE',
+    total: '£12.50',
+    categories: [before.expense_claims[0].categories[1]]
+  });
+
+  await page.evaluate(({ before, after, timesheetId }) => {
+    const state: any = {
+      active_row_key: timesheetId,
+      active_row: {
+        row_key: timesheetId,
+        timesheet_id: timesheetId,
+        current_timesheet_id: timesheetId,
+        route_family: 'ELECTRONIC'
+      },
+      active_details: {
+        current_timesheet_id: timesheetId,
+        route_family: 'ELECTRONIC',
+        timesheet: { timesheet_id: timesheetId, route_family: 'ELECTRONIC' },
+        tsfin: {
+          mileage_units: 0,
+          accommodation_pay_ex_vat: 25,
+          accommodation_charge_ex_vat: 25,
+          travel_pay_ex_vat: 12.5,
+          travel_charge_ex_vat: 12.5,
+          other_pay_ex_vat: 0,
+          other_charge_ex_vat: 0
+        }
+      }
+    };
+    state.active_context = {
+      owner_kind: 'BULK_AUTHORISE',
+      candidateOfficeSurface: 'BULK_AUTHORISE',
+      row: state.active_row,
+      details: state.active_details,
+      state: { expensesReadOnly: true }
+    };
+    state.active_ctx = state.active_context;
+    (window as any).__bulkRetainedProofState = state;
+    (window as any).__bulkRetainedView = before;
+    (window as any).__bulkRetainedAfterView = after;
+
+    const bridge = (window as any).CloudTMSCandidateOfficeBridge;
+    const surface = (window as any).CloudTMSCandidateOfficeSurface;
+    (window as any).CloudTMSCandidateOfficeBridge = {
+      ...bridge,
+      slotHtml: (_surface: string, row: any, options: { variant?: string }) => `<div class="candidate-office-slot" data-candidate-office-slot="1" data-candidate-office-surface="BULK_AUTHORISE" data-row-key="${row.row_key}" data-timesheet-id="${row.timesheet_id}" data-candidate-office-hydrated="1">${surface.renderCandidateFragment((window as any).__bulkRetainedView, { surface: 'BULK_AUTHORISE', variant: options.variant })}</div>`
+    };
+    (window as any).classifyBulkAuthoriseEditability = () => ({
+      canOpenExpenses: false,
+      canViewExpenses: true,
+      hasProcessedExpenses: true,
+      expensesReadOnly: true,
+      expenseStorageTarget: 'TSFIN'
+    });
+    (window as any).refreshBulkAuthoriseActiveContext = async () => true;
+
+    (window as any).modalCtx = { entity: 'bulk-authorise', owner_kind: 'BULK_AUTHORISE', bulkAuthoriseState: state };
+    (window as any).showModal(
+      'Bulk Authorise',
+      [{ key: 'main', label: 'Review' }],
+      () => `<div id="bulkAuthoriseRetainedIntegrity"><div data-row-key="${timesheetId}">Current Timesheet</div></div>`,
+      null,
+      false,
+      null,
+      { kind: 'bulk-authorise', noParentGate: true, showSave: false, showApply: false }
+    );
+  }, { before, after, timesheetId: uuid(994) });
+
+  await page.evaluate(async () => {
+    await (window as any).handleBulkAuthoriseOpenExpensesModal((window as any).__bulkRetainedProofState);
+  });
+  const modal = page.locator('#modal');
+  await expect(modal.locator('[data-exp-out="total_pay"]')).toHaveText('£37.50');
+  await expect(modal.locator('input[data-exp-field="travel_pay"]')).toHaveValue('12.50');
+  await expect(modal.locator('input[data-exp-field="accommodation_pay"]')).toHaveValue('25.00');
+
+  await page.evaluate(async () => {
+    const state = (window as any).__bulkRetainedProofState;
+    state.active_details.tsfin = {
+      mileage_units: 0,
+      accommodation_pay_ex_vat: 0,
+      accommodation_charge_ex_vat: 0,
+      travel_pay_ex_vat: 12.5,
+      travel_charge_ex_vat: 12.5,
+      other_pay_ex_vat: 0,
+      other_charge_ex_vat: 0
+    };
+    state.active_context.details = state.active_details;
+    state.active_ctx.details = state.active_details;
+    (window as any).__bulkRetainedView = (window as any).__bulkRetainedAfterView;
+    const frame = (window as any).__getModalFrame?.();
+    await frame.__refreshCandidateOfficeExpenseCategory({ rowVanished: false });
+  });
+
+  await expect(modal).toHaveAttribute('data-ctms-modal-kind', 'bulk-authorise-expenses');
+  await expect(modal.locator('[data-exp-out="total_pay"]')).toHaveText('£12.50');
+  await expect(modal.locator('input[data-exp-field="travel_pay"]')).toHaveValue('12.50');
+  await expect(modal.locator('input[data-exp-field="accommodation_pay"]')).toHaveValue('0.00');
+  await expect(modal.locator('[aria-busy="true"]')).toHaveCount(0);
+  const samples = await page.evaluate(async () => {
+    const observed = [];
+    for (let index = 0; index < 12; index += 1) {
+      const modal = document.getElementById('modal');
+      const totalPay = modal?.querySelector('[data-exp-out="total_pay"]')?.textContent?.trim() || '';
+      const travelPay = (modal?.querySelector('input[data-exp-field="travel_pay"]') as HTMLInputElement | null)?.value || '';
+      const accommodationPay = (modal?.querySelector('input[data-exp-field="accommodation_pay"]') as HTMLInputElement | null)?.value || '';
+      observed.push({
+        kind: modal?.getAttribute('data-ctms-modal-kind') || '',
+        childCount: document.querySelectorAll('#bulkProcessExpensesChildRoot').length,
+        totalPay,
+        travelPay,
+        accommodationPay,
+        busyCount: document.querySelectorAll('#modal [aria-busy="true"]').length,
+        overflow: modal ? Math.max(0, modal.scrollWidth - modal.clientWidth) : -1
+      });
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return observed;
+  });
+  expect(samples).toEqual(Array.from({ length: 12 }, () => ({
+    kind: 'bulk-authorise-expenses',
+    childCount: 1,
+    totalPay: '£12.50',
+    travelPay: '12.50',
+    accommodationPay: '0.00',
+    busyCount: 0,
+    overflow: 0
+  })));
+  await captureCandidateOfficeVisual(page, '08b-bulk-authorise-retained-timesheet-production-refresh');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(modal.locator('[data-exp-out="total_pay"]')).toHaveText('£12.50');
+  await expect(modal.locator('input[data-exp-field="travel_pay"]')).toHaveValue('12.50');
+  expect(await modal.evaluate(element => Math.max(0, element.scrollWidth - element.clientWidth))).toBe(0);
+  await expect(page.locator('#btnCloseModal')).toBeVisible();
+});
+
+test('Bulk Authorise returns to a clean parent when rejecting the final category removes the expense-only Timesheet', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1100, height: 820 });
+  await installPatchedAssets(page);
+  await installOfficeMocks(page);
+  await openPatchedTest(page);
+
+  await page.evaluate(timesheetId => {
+    const state: any = {
+      active_row_key: timesheetId,
+      active_row: {
+        row_key: timesheetId,
+        timesheet_id: timesheetId,
+        current_timesheet_id: timesheetId,
+        route_family: 'ELECTRONIC'
+      },
+      active_details: {
+        current_timesheet_id: timesheetId,
+        route_family: 'ELECTRONIC',
+        timesheet: { timesheet_id: timesheetId, route_family: 'ELECTRONIC' },
+        tsfin: {
+          mileage_units: 0,
+          accommodation_pay_ex_vat: 2.34,
+          accommodation_charge_ex_vat: 2.34,
+          travel_pay_ex_vat: 0,
+          travel_charge_ex_vat: 0,
+          other_pay_ex_vat: 0,
+          other_charge_ex_vat: 0
+        }
+      }
+    };
+    state.active_context = {
+      owner_kind: 'BULK_AUTHORISE',
+      candidateOfficeSurface: 'BULK_AUTHORISE',
+      row: state.active_row,
+      details: state.active_details,
+      state: { expensesReadOnly: true }
+    };
+    state.active_ctx = state.active_context;
+
+    (window as any).classifyBulkAuthoriseEditability = () => ({
+      canOpenExpenses: false,
+      canViewExpenses: true,
+      hasProcessedExpenses: true,
+      expensesReadOnly: true,
+      expenseStorageTarget: 'TSFIN'
+    });
+    (window as any).refreshBulkAuthoriseActiveContext = async () => true;
+
+    const renderParent = () => state.active_row
+      ? `<div id="bulkAuthoriseDeletionIntegrity"><div data-row-key="${timesheetId}">Accommodation · £2.34</div></div>`
+      : '<div id="bulkAuthoriseDeletionIntegrity"><div data-bulk-authorise-empty-selection="1">Select another Timesheet to continue.</div></div>';
+    (window as any).modalCtx = { entity: 'bulk-authorise', owner_kind: 'BULK_AUTHORISE', bulkAuthoriseState: state };
+    (window as any).showModal(
+      'Bulk Authorise',
+      [{ key: 'main', label: 'Review' }],
+      renderParent,
+      null,
+      false,
+      null,
+      { kind: 'bulk-authorise', noParentGate: true, showSave: false, showApply: false }
+    );
+    (window as any).__bulkDeletionProofState = state;
+  }, uuid(995));
+
+  await expect(page.locator('#modalTitle')).toHaveText('Bulk Authorise');
+  await expect(page.locator('[data-row-key]')).toContainText('Accommodation · £2.34');
+
+  await page.evaluate(async () => {
+    await (window as any).handleBulkAuthoriseOpenExpensesModal((window as any).__bulkDeletionProofState);
+  });
+  await expect(page.locator('#modalTitle')).toHaveText('Expenses');
+  await expect(page.locator('#bulkProcessExpensesChildRoot')).toBeVisible();
+
+  await page.evaluate(async () => {
+    const state = (window as any).__bulkDeletionProofState;
+    state.active_row_key = null;
+    state.active_row = null;
+    state.active_details = {};
+    state.active_context = {};
+    state.active_ctx = {};
+    // A live rejection can still own the shared loading state while the
+    // child is closing. Force that exact route: the safe closer must fall
+    // back when the shared Close button is temporarily disabled and still
+    // restore all of the Bulk Authorise parent chrome.
+    const closeButton = document.getElementById('btnCloseModal') as HTMLButtonElement | null;
+    if (closeButton) closeButton.disabled = true;
+    const frame = (window as any).__getModalFrame?.();
+    await frame.__refreshCandidateOfficeExpenseCategory({ rowVanished: true });
+  });
+
+  await expect(page.locator('#modalTitle')).toHaveText('Bulk Authorise');
+  await expect(page.locator('#bulkProcessExpensesChildRoot')).toHaveCount(0);
+  await expect(page.locator('[data-row-key]')).toHaveCount(0);
+  await expect(page.locator('[data-bulk-authorise-empty-selection="1"]')).toHaveText('Select another Timesheet to continue.');
+  await expect(page.locator('#globalLoadingOverlay')).toBeHidden();
+  await expect(page.locator('#modal [aria-busy="true"]')).toHaveCount(0);
+
+  const samples = await page.evaluate(async () => {
+    const observed = [];
+    for (let index = 0; index < 12; index += 1) {
+      const modal = document.getElementById('modal');
+      observed.push({
+        title: document.getElementById('modalTitle')?.textContent?.trim() || '',
+        childCount: document.querySelectorAll('#bulkProcessExpensesChildRoot').length,
+        staleRowCount: document.querySelectorAll('[data-row-key]').length,
+        emptyCount: document.querySelectorAll('[data-bulk-authorise-empty-selection="1"]').length,
+        busyCount: document.querySelectorAll('#modal [aria-busy="true"]').length,
+        overflow: modal ? Math.max(0, modal.scrollWidth - modal.clientWidth) : -1
+      });
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return observed;
+  });
+  expect(samples).toEqual(Array.from({ length: 12 }, () => ({
+    title: 'Bulk Authorise',
+    childCount: 0,
+    staleRowCount: 0,
+    emptyCount: 1,
+    busyCount: 0,
+    overflow: 0
+  })));
+  await captureCandidateOfficeVisual(page, '09-bulk-authorise-final-category-timesheet-removed');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('[data-bulk-authorise-empty-selection="1"]')).toHaveText('Select another Timesheet to continue.');
+  expect(await page.locator('#modal').evaluate(element => Math.max(0, element.scrollWidth - element.clientWidth))).toBe(0);
+  await expect(page.locator('#btnCloseModal')).toBeVisible();
+});
+
 test('browser Back discards stale Office state and reloads canonical Timesheet truth', async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1280, height: 900 });
