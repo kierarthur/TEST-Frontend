@@ -535,7 +535,8 @@ test('expense-category confirmation is accessible, compulsory and states all emp
   });
   dialog = page.locator('[data-candidate-office-dialog="expense-category-rejection"]');
   await expect(dialog).toContainText('remove the now-empty Timesheet from current records');
-  await expect(dialog).toContainText('keeping a record of it in History');
+  await expect(dialog).toContainText('keep it in History');
+  await expect(dialog).toContainText('It will not be permanently deleted');
   await captureCandidateOfficeVisual(page, '05b-confirm-history-retained-empty-expense-timesheet');
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();

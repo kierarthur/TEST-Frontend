@@ -288,7 +288,6 @@
           || fixed.generation !== workflowGeneration
           || agencyAuthorisationState !== 'NOT_AUTHORISED'
           || !['SUBMITTED', 'MANAGER_APPROVED'].includes(state)
-          || isProtected
           || fixed.expense_component_id !== componentId
           || fixed.component_generation !== src.component_generation
           || String(fixed.confirmation_sha256 || '').toLowerCase() !== rejectionConfirmation.confirmation_sha256

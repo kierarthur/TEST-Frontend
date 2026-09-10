@@ -214,6 +214,24 @@ test('expense category rejection authority is accepted only for Candidate Electr
     assert.equal(category.rejection_action.label, 'Reject expense');
   }
 
+  const paidHistory = attachExpenseCategoryRejection(
+    Object.assign(projection('expense-paid-history', UUID_A, []), { expense_claims: [expenseClaim()] }),
+    'ELECTRONIC',
+    'REMOVE_FROM_CURRENT_KEEP_HISTORY'
+  );
+  paidHistory.expense_claims[0].categories[0].protected = true;
+  const paidHistoryCategory = api.normalizeOfficeCandidateProjection(
+    paidHistory,
+    { surface: 'SIMPLE_TIMESHEET' }
+  ).expense_claims[0].categories[0];
+  assert.equal(paidHistoryCategory.protected, true);
+  assert.equal(paidHistoryCategory.agency_authorisation_state, 'NOT_AUTHORISED');
+  assert.equal(paidHistoryCategory.rejection_action.code, 'REJECT_EXPENSE_CATEGORY');
+  assert.equal(
+    paidHistoryCategory.rejection_confirmation.empty_timesheet_consequence,
+    'REMOVE_FROM_CURRENT_KEEP_HISTORY'
+  );
+
   for (const routeFamily of ['MANUAL_NON_QR', 'IMPORT_AUTHORITATIVE']) {
     const input = attachExpenseCategoryRejection(
       Object.assign(projection(`expense-${routeFamily}`, UUID_A, []), { expense_claims: [expenseClaim()] }),

@@ -21,9 +21,9 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   assert.doesNotMatch(html, /invoice-batch-modal\.(?:js|css)\?v=20260728-invoice-v8-presentation-r[123]["']/);
   assert.match(html, /invoice-async-ui\.js\?v=20260730-invoice-refs-ward-r13&invoice-ui-notices=20260822-r1/);
   assert.match(html, /candidate-office-reminder-workspace-v1\.js\?v=20260814-r2/);
-  assert.match(html, /candidate-office-contract-v1\.js\?v=20260906-advanced-expense-r2/);
+  assert.match(html, /candidate-office-contract-v1\.js\?v=20260910-paid-history-r1/);
   assert.match(html, /candidate-office-presenter-v1\.js\?v=20260907-timesheet-layout-r1/);
-  assert.match(html, /candidate-office-modal-v1\.js\?v=20260907-expense-viewer-r1/);
+  assert.match(html, /candidate-office-modal-v1\.js\?v=20260910-paid-history-r1/);
   assert.match(html, /candidate-office-api-v1\.js\?v=20260906-advanced-expense-r2/);
   assert.match(html, /candidate-office-controller-v1\.js\?v=20260906-advanced-expense-r2/);
   assert.match(html, /candidate-office-surface-v1\.js\?v=20260907-timesheet-layout-r2/);

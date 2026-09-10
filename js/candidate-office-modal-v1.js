@@ -325,7 +325,7 @@
     const deleteWarning = emptyTimesheetConsequence === 'PERMANENT_REMOVE'
       ? 'This is the final category on its expense-only Timesheet. Rejecting it will permanently remove the now-empty Timesheet.'
       : emptyTimesheetConsequence === 'REMOVE_FROM_CURRENT_KEEP_HISTORY'
-        ? 'This is the final category on its expense-only Timesheet. Rejecting it will remove the now-empty Timesheet from current records, while keeping a record of it in History.'
+        ? 'This is the final category on its expense-only Timesheet. Rejecting it will remove the now-empty Timesheet from current records and keep it in History. It will not be permanently deleted.'
         : 'Hours and other expense categories on this Timesheet will stay as they are.';
     return openDialog({
       kind: 'expense-category-rejection',
