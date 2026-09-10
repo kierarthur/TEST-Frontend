@@ -333412,7 +333412,18 @@ if (btnTsProcess) {
           );
 
           const refreshDeletePreviewNow = async () => {
-            if (isPlannedOnly) return null;
+            if (isPlannedOnly) {
+              if (!weekIdX) throw new Error('Contract week id missing.');
+              const res = await authFetch(API(`/api/contract-weeks/${encodeURIComponent(String(weekIdX))}/delete-planned`), {
+                method: 'GET'
+              });
+              let body = null;
+              try { body = await res.json(); } catch { body = null; }
+              if (!res.ok || !body || body.ok === false) {
+                throw new Error((body && (body.message || body.error)) || 'Delete preview could not be refreshed.');
+              }
+              return body.preview || body;
+            }
 
             if (!tsIdX) throw new Error('Timesheet id missing.');
 
@@ -333447,7 +333458,7 @@ if (btnTsProcess) {
           // Never trust cached mc.timesheetDeletePreview for real timesheet deletes.
           let freshDpX = null;
           try {
-            freshDpX = isPlannedOnly ? null : await refreshDeletePreviewNow();
+            freshDpX = await refreshDeletePreviewNow();
           } catch (previewError) {
             try {
               if (typeof tsHandleMoved409Modal === 'function') {
@@ -333470,6 +333481,44 @@ if (btnTsProcess) {
           const dpKindX = String((freshDpX && freshDpX.kind) ? freshDpX.kind : '').toUpperCase();
           const dpDecisionX = String((freshDpX && freshDpX.decision) ? freshDpX.decision : '').toUpperCase();
           const dpEligibleX = (freshDpX && typeof freshDpX.eligible === 'boolean') ? freshDpX.eligible : false;
+
+          if (isPlannedOnly && freshDpX?.candidate_submission_rejection_required === true) {
+            const stage = String(freshDpX?.candidate_submission_stage || '').toUpperCase();
+            const statusMessage = stage === 'MANAGER_APPROVED'
+              ? 'This Candidate Submission has already been approved by the manager. It must be rejected before this planned week can be deleted.'
+              : 'This planned week has already been submitted by the candidate. The Candidate Submission must be rejected before this planned week can be deleted.';
+            const choice = await openUiPromptModal({
+              title: 'Reject before deleting',
+              message: [
+                statusMessage,
+                'Rejecting returns this week to the candidate. They will see the reason and must start a new blank claim.',
+                'The planned week will not be deleted by this action.'
+              ].join('\n\n'),
+              label: 'Reason for rejection',
+              placeholder: 'Tell the candidate what needs to be corrected…',
+              confirm_label: 'Reject Candidate Submission',
+              cancel_label: 'Go Back',
+              confirm_class: 'btn btn-warn',
+              cancel_class: 'btn btn-outline',
+              kind: 'timesheet-delete-requires-planned-candidate-rejection',
+              required: true,
+              max_length: 1000,
+              rows: 4
+            });
+            if (!choice?.confirmed) return;
+            try {
+              await rejectPlannedContractWeekCandidateSubmission(String(weekIdX), {
+                expected_context_sha256: freshDpX.context_sha256,
+                reason: String(choice.value || '').trim(),
+                idempotency_key: crypto.randomUUID()
+              });
+              try { toast('Candidate Submission rejected. The planned week has not been deleted.'); } catch {}
+              await refreshFooter();
+            } catch (rejectError) {
+              alert(rejectError?.message || 'The Candidate Submission could not be rejected. No planned week was deleted.');
+            }
+            return;
+          }
 
           if (!isPlannedOnly) {
             if (dpKindX === 'IMPORT_CHILD_ADJUSTMENT') {
@@ -333796,9 +333845,12 @@ if (btnTsProcess) {
           try { mc.__summaryCtx = summaryCtx || null; } catch {}
 
           try {
-               if (isPlannedOnly) {
+             if (isPlannedOnly) {
               if (!weekIdX) throw new Error('Contract week id missing.');
-              await deletePlannedContractWeek(weekIdX);
+              await deletePlannedContractWeek(weekIdX, {
+                expected_context_sha256: freshDpX?.context_sha256,
+                delete_operation_id: crypto.randomUUID()
+              });
             } else {
               if (!tsIdX) throw new Error('Timesheet id missing.');
 
@@ -382257,7 +382309,27 @@ async function allowElectronicAgain(timesheetId, expectedTimesheetId) {
 
 
 
-async function deletePlannedContractWeek(contractWeekId) {
+async function rejectPlannedContractWeekCandidateSubmission(contractWeekId, options = {}) {
+  if (!contractWeekId) throw new Error('contractWeekId is required');
+  const res = await authFetch(API(`/api/candidate-app/contract-weeks/${encodeURIComponent(String(contractWeekId))}/reject`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      expected_context_sha256: String(options.expected_context_sha256 || ''),
+      reason: String(options.reason || ''),
+      idempotency_key: String(options.idempotency_key || '')
+    })
+  });
+  const textBody = await res.text().catch(() => '');
+  let body = null;
+  try { body = textBody ? JSON.parse(textBody) : null; } catch { body = null; }
+  if (!res.ok || body?.ok !== true || body?.candidate_submission_rejected !== true) {
+    throw new Error(body?.message || body?.error || 'The Candidate Submission could not be rejected.');
+  }
+  return body;
+}
+
+async function deletePlannedContractWeek(contractWeekId, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][DELETE][PLANNED]');
   GC('deletePlannedContractWeek');
 
@@ -382277,7 +382349,10 @@ async function deletePlannedContractWeek(contractWeekId) {
     res = await authFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
+      body: JSON.stringify({
+        expected_context_sha256: String(options.expected_context_sha256 || ''),
+        delete_operation_id: String(options.delete_operation_id || '')
+      })
     });
     text = await res.text().catch(() => '');
   } catch (err) {
