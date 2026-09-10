@@ -118,6 +118,42 @@ test('submitted Candidate Timesheets keep Delete visible but route it to rejecti
   assert.match(handler, /new claim begins blank/);
 });
 
+test('submitted planned weeks also require rejection before their delete confirmation', () => {
+  const handler = section(
+    '// ── Delete Timesheet ──',
+    '// OK-only info modal (utility child)'
+  );
+  const plannedDelete = section(
+    'async function rejectPlannedContractWeekCandidateSubmission',
+    'async function renderAll()'
+  );
+  assert.match(handler, /\/api\/contract-weeks\/\$\{encodeURIComponent\(String\(weekIdX\)\)\}\/delete-planned/);
+  assert.match(handler, /freshDpX = await refreshDeletePreviewNow\(\)/);
+  assert.match(handler, /isPlannedOnly && freshDpX\?\.candidate_submission_rejection_required === true/);
+  assert.match(handler, /title: 'Reject before deleting'/);
+  assert.match(handler, /label: 'Reason for rejection'/);
+  assert.match(handler, /The planned week will not be deleted by this action/);
+  assert.match(handler, /rejectPlannedContractWeekCandidateSubmission/);
+  assert.match(handler, /expected_context_sha256: freshDpX\.context_sha256/);
+  assert.match(handler, /Candidate Submission rejected\. The planned week has not been deleted/);
+  assert.match(plannedDelete, /\/api\/candidate-app\/contract-weeks\/\$\{encodeURIComponent\(String\(contractWeekId\)\)\}\/reject/);
+});
+
+test('planned delete posts the freshly reviewed context and a unique operation id', () => {
+  const caller = section(
+    'await deletePlannedContractWeek(weekIdX, {',
+    '} else {'
+  );
+  const deletion = section(
+    'async function deletePlannedContractWeek(contractWeekId, options = {})',
+    'async function renderAll()'
+  );
+  assert.match(caller, /expected_context_sha256: freshDpX\?\.context_sha256/);
+  assert.match(caller, /delete_operation_id: crypto\.randomUUID\(\)/);
+  assert.match(deletion, /expected_context_sha256: String\(options\.expected_context_sha256 \|\| ''\)/);
+  assert.match(deletion, /delete_operation_id: String\(options\.delete_operation_id \|\| ''\)/);
+});
+
 test('the ordinary rejection form warns when a linked expense will be rejected too', () => {
   const modal = fs.readFileSync(path.resolve(__dirname, '../../js/candidate-office-modal-v1.js'), 'utf8');
   const bridge = fs.readFileSync(path.resolve(__dirname, '../../js/candidate-office-bridge-v1.js'), 'utf8');
