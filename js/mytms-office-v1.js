@@ -317,13 +317,15 @@
     return `
       <div class="card">
         <h3 style="margin-top:0;">Activation state</h3>
-        <p class="mini">These controls report the authoritative state. Activation remains externally gated and cannot be enabled from this local Office implementation.</p>
+        <p class="mini">These controls show what is currently available. They cannot be changed here.</p>
         ${fields.map(([name, label]) => `
           <label style="display:flex;gap:8px;align-items:center;margin:8px 0;">
             <input type="checkbox" data-mytms-setting="${name}" data-mytms-activation-readonly="1"
                    ${state.settings?.[name] === true ? 'checked' : ''} disabled />
             <span>${escapeHtml(label)}</span>
-            <span class="mini">${state.settings?.[name] === true ? 'Enabled by controlled authority' : 'Disabled'}</span>
+            <span class="mini">${name === 'push_delivery_enabled'
+              ? 'Available to all agencies'
+              : (state.settings?.[name] === true ? 'Enabled by controlled authority' : 'Disabled')}</span>
           </label>`).join('')}
       </div>`;
   }

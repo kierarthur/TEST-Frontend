@@ -146,6 +146,31 @@
   table-layout: fixed;
 }
 
+#modal.invbatch-modal .invbatch-candidate-section + .invbatch-candidate-section {
+  border-top: 8px solid var(--bg);
+}
+
+#modal.invbatch-modal .invbatch-candidate-section > h3,
+#modal.invbatch-modal .invbatch-candidate-section > p {
+  margin: 0;
+  padding: 10px 12px 0;
+  background: color-mix(in srgb, var(--panel) 92%, var(--bg));
+}
+
+#modal.invbatch-modal .invbatch-candidate-section > p {
+  padding-top: 4px;
+  padding-bottom: 10px;
+  color: var(--muted);
+}
+
+#modal.invbatch-modal .invbatch-source-results {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--bg));
+}
+
 #modal.invbatch-modal .invbatch-col-select { width: 42px; }
 #modal.invbatch-modal .invbatch-col-invoice { width: 118px; }
 #modal.invbatch-modal .invbatch-col-week { width: 116px; }

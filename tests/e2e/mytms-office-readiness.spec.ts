@@ -63,7 +63,7 @@ const settings = {
   provisioning_enabled: false,
   membership_admin_enabled: false,
   google_target_switch_enabled: false,
-  push_delivery_enabled: false,
+  push_delivery_enabled: true,
   invitation_subject: 'Your secure MyTMS invitation',
   invitation_html_sanitized: '<p>Hello {{candidate_name}}</p>',
   invitation_text: 'Hello {{candidate_name}}',
@@ -262,9 +262,19 @@ for (const viewport of [
 
     await modal.getByRole('button', { name: 'Activation state', exact: true }).click();
     await expect(modal.locator('[data-mytms-setting][type="checkbox"]')).toHaveCount(6);
-    for (const checkbox of await modal.locator('[data-mytms-setting][type="checkbox"]').all()) {
+    const activationCheckboxes = modal.locator('[data-mytms-setting][type="checkbox"]');
+    for (const checkbox of await activationCheckboxes.all()) {
       await expect(checkbox).toBeDisabled();
-      await expect(checkbox).not.toBeChecked();
+    }
+    await expect(modal.locator('[data-mytms-setting="push_delivery_enabled"]')).toBeChecked();
+    for (const name of [
+      'invitation_email_enabled',
+      'access_reminder_enabled',
+      'provisioning_enabled',
+      'membership_admin_enabled',
+      'google_target_switch_enabled'
+    ]) {
+      await expect(modal.locator(`[data-mytms-setting="${name}"]`)).not.toBeChecked();
     }
 
     await modal.getByRole('button', { name: 'Invitation email', exact: true }).click();

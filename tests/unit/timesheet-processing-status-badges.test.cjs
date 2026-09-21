@@ -80,3 +80,12 @@ test('badge palette includes every tone and remains readable on compact cards', 
   }
   assert.match(css, /\.ctms-processing-status-badge\{[\s\S]*?white-space:normal/);
 });
+
+test('weekly source validation delay is secondary, filterable and never duplicates Processing Delayed', () => {
+  const reason = 'Candidate payment is waiting for final weekly source validation.';
+  assert.match(main, new RegExp(reason.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(main, /weeklySourceDelayed[\s\S]*?ctms-weekly-source-delay-badge/);
+  assert.match(main, /mainAlreadySaysDelayed[\s\S]*?if \(!mainAlreadySaysDelayed\)/);
+  assert.match(main, /WEEKLY_SOURCE_PAY_WAITING/);
+  assert.match(css, /\.ctms-weekly-source-delay-badge\{/);
+});

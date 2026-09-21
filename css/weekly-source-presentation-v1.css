@@ -1,0 +1,849 @@
+.weekly-source-v1 {
+  --weekly-source-surface: var(--panel, #0b1221);
+  --weekly-source-raised: #111c33;
+  --weekly-source-input: #0f1a2e;
+  --weekly-source-text: var(--text, #f8fafc);
+  --weekly-source-subtle: var(--sub, #a8b3c7);
+  --weekly-source-line: var(--line, #2b3952);
+  --weekly-source-primary: var(--brand, #4f46e5);
+  --weekly-source-positive: var(--ok, #22c55e);
+  --weekly-source-warning: var(--warn, #f59e0b);
+  --weekly-source-danger: var(--fail, #ef4444);
+  color: var(--weekly-source-text);
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+
+.weekly-source-v1,
+.weekly-source-v1 * {
+  box-sizing: border-box;
+}
+
+.weekly-source-v1__categories {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 2px;
+  scrollbar-width: thin;
+}
+
+.weekly-source-v1__category-select {
+  display: none;
+}
+
+.weekly-source-v1__category,
+.weekly-source-v1__middle-tabs > button {
+  min-height: 36px;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: 8px;
+  background: var(--weekly-source-input);
+  color: var(--weekly-source-subtle);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.weekly-source-v1__category {
+  padding: 7px 11px;
+}
+
+.weekly-source-v1__category > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  margin-left: 5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, .14);
+  color: inherit;
+}
+
+.weekly-source-v1__category.is-active,
+.weekly-source-v1__middle-tabs > button.is-active {
+  border-color: #818cf8;
+  background: rgba(79, 70, 229, .22);
+  color: #fff;
+}
+
+.weekly-source-v1__category:focus-visible,
+.weekly-source-v1__middle-tabs > button:focus-visible,
+.weekly-source-v1__select-column input:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.weekly-source-v1__middle-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(82px, 1fr));
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, .45);
+}
+
+.weekly-source-v1__middle-tabs > button {
+  min-height: 32px;
+  padding: 5px 12px;
+  border-color: transparent;
+}
+
+.weekly-source-v1__comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.weekly-source-v1__hours-card {
+  min-width: 0;
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: 10px;
+  background: var(--weekly-source-surface);
+}
+
+.weekly-source-v1__hours-card.is-match {
+  border-color: rgba(34, 197, 94, .82);
+  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, .12);
+}
+
+.weekly-source-v1__hours-card.is-mismatch {
+  border-color: rgba(239, 68, 68, .84);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, .12);
+}
+
+.weekly-source-v1__hours-card.is-waiting {
+  border-color: rgba(245, 158, 11, .84);
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, .12);
+}
+
+.weekly-source-v1__card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--weekly-source-line);
+  background: var(--weekly-source-raised);
+}
+
+.weekly-source-v1__card-heading h3 {
+  min-width: 0;
+  margin: 0;
+  color: var(--weekly-source-text);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.weekly-source-v1__authority,
+.weekly-source-v1__status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: var(--weekly-source-subtle);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: left;
+}
+
+.weekly-source-v1__table-scroll {
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.weekly-source-v1__table {
+  width: 100%;
+  min-width: 650px;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--weekly-source-text);
+  font-size: 12px;
+}
+
+.weekly-source-v1__table th,
+.weekly-source-v1__table td {
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--weekly-source-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.weekly-source-v1__table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #0d1729;
+  color: var(--weekly-source-subtle);
+  font-size: 11px;
+  letter-spacing: .01em;
+}
+
+.weekly-source-v1__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.weekly-source-v1__table tbody tr.is-match td:first-child {
+  box-shadow: inset 3px 0 0 var(--weekly-source-positive);
+}
+
+.weekly-source-v1__table tbody tr.is-mismatch td:first-child {
+  box-shadow: inset 3px 0 0 var(--weekly-source-danger);
+}
+
+.weekly-source-v1__table tbody tr.is-waiting td:first-child {
+  box-shadow: inset 3px 0 0 var(--weekly-source-warning);
+}
+
+.weekly-source-v1__units {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.weekly-source-v1__unit {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  gap: 5px;
+  align-items: center;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: 7px;
+  padding: 2px 6px;
+  background: rgba(148, 163, 184, .06);
+  color: var(--weekly-source-subtle);
+  white-space: nowrap;
+}
+
+.weekly-source-v1__unit strong {
+  color: var(--weekly-source-text);
+  font-weight: 700;
+}
+
+.weekly-source-v1__unit.is-match,
+.weekly-source-v1__status.is-match {
+  border-color: rgba(34, 197, 94, .55);
+  background: rgba(34, 197, 94, .10);
+  color: #bbf7d0;
+}
+
+.weekly-source-v1__unit.is-mismatch,
+.weekly-source-v1__status.is-mismatch {
+  border-color: rgba(239, 68, 68, .58);
+  background: rgba(239, 68, 68, .11);
+  color: #fecaca;
+}
+
+.weekly-source-v1__unit.is-waiting,
+.weekly-source-v1__status.is-waiting,
+.weekly-source-v1__status.is-protected {
+  border-color: rgba(245, 158, 11, .56);
+  background: rgba(245, 158, 11, .10);
+  color: #fde68a;
+}
+
+.weekly-source-v1__empty {
+  color: var(--weekly-source-subtle);
+  opacity: .82;
+}
+
+.weekly-source-v1__row-context {
+  display: block;
+  max-width: 280px;
+  margin-top: 4px;
+  color: var(--weekly-source-subtle);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.weekly-source-v1__notice {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--weekly-source-raised);
+}
+
+.weekly-source-v1__notice strong {
+  font-size: 13px;
+}
+
+.weekly-source-v1__notice span {
+  color: var(--weekly-source-subtle);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.weekly-source-v1__notice.is-mismatch {
+  border-color: rgba(239, 68, 68, .6);
+}
+
+.weekly-source-v1__notice.is-waiting {
+  border-color: rgba(245, 158, 11, .6);
+}
+
+.weekly-source-v1__totals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 8px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: 10px;
+  background: var(--weekly-source-line);
+}
+
+.weekly-source-v1__totals > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  background: var(--weekly-source-raised);
+}
+
+.weekly-source-v1__totals dt {
+  color: var(--weekly-source-subtle);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.weekly-source-v1__totals dd {
+  margin: 0;
+  color: var(--weekly-source-text);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 19px;
+}
+
+.weekly-source-v1__approved-hours-action {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.weekly-source-v1__approved-hours-dialog {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.weekly-source-v1__approved-hours-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--weekly-source-surface);
+}
+
+.weekly-source-v1__approved-hours-card h3 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.weekly-source-v1__approved-hours-fields {
+  display: grid;
+  grid-template-columns: minmax(145px, 1.35fr) repeat(3, minmax(100px, 1fr));
+  gap: 8px;
+}
+
+.weekly-source-v1__approved-hours-fields label,
+.weekly-source-v1__reason,
+.weekly-source-v1__approved-hours-choice label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--weekly-source-subtle);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.weekly-source-v1__approved-hours-fields .input,
+.weekly-source-v1__reason .input,
+.weekly-source-v1__approved-hours-choice .input {
+  width: 100%;
+  min-width: 0;
+}
+
+.weekly-source-v1__approved-hours-choice {
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.weekly-source-v1__approved-hours-submit {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.weekly-source-v1__command-status {
+  min-height: 18px;
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: var(--weekly-source-subtle);
+  background: rgba(148, 163, 184, .08);
+  font-size: 12px;
+}
+
+.weekly-source-v1__command-status.is-error {
+  color: #fecaca;
+  background: rgba(239, 68, 68, .11);
+}
+
+.weekly-source-v1__command-status.is-success {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, .10);
+}
+
+.weekly-source-v1__select-column {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  width: 42px;
+  min-width: 42px;
+  max-width: 42px;
+  padding: 7px 10px !important;
+  background: #0d1729;
+  text-align: center !important;
+}
+
+.weekly-source-v1__select-column input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--weekly-source-primary);
+  cursor: pointer;
+}
+
+@media (max-width: 860px) {
+  .weekly-source-v1__comparison,
+  .weekly-source-v1__totals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .weekly-source-v1__approved-hours-fields,
+  .weekly-source-v1__approved-hours-choice {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Gate 10 — server-driven lifecycle, the two Office decisions, the withdrawal
+   state, invoice movements, and the responsive Bulk shell.
+   24_TIMESHEET_LIFECYCLE_UI_POLICY.json screens 59 (desktop), 60 (390 px
+   phone) and 61 (768 px tablet).  The desktop panes are never squeezed into a
+   narrow column: below 768 px the shell becomes three steps.
+   --------------------------------------------------------------------------- */
+
+.weekly-source-v1__phase-status {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: 8px;
+  background: var(--weekly-source-input);
+  color: var(--weekly-source-subtle);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.weekly-source-v1__reason-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, .14);
+  color: var(--weekly-source-subtle);
+  font-size: 11px;
+  letter-spacing: .02em;
+}
+
+.weekly-source-v1__non-hours-row td:first-child {
+  color: var(--weekly-source-subtle);
+  font-style: italic;
+}
+
+.weekly-source-v1__later-change {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: var(--weekly-source-radius, 10px);
+  background: var(--weekly-source-raised);
+}
+
+.weekly-source-v1__members {
+  display: grid;
+  gap: 12px;
+}
+
+.weekly-source-v1__members.is-cross-contract {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.weekly-source-v1__member {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.weekly-source-v1__member-role {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--weekly-source-subtle);
+}
+
+.weekly-source-v1__member-contract {
+  margin: 0;
+  font-size: 11px;
+  color: var(--weekly-source-subtle);
+  overflow-wrap: anywhere;
+}
+
+.weekly-source-v1__later-change-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.weekly-source-v1__change-set h3,
+.weekly-source-v1__movements h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.weekly-source-v1__change-empty,
+.weekly-source-v1__movements-state {
+  margin: 0;
+  color: var(--weekly-source-subtle);
+  font-size: 12px;
+}
+
+.weekly-source-v1__later-change-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.weekly-source-v1__later-change-actions .btn {
+  min-height: 44px;
+}
+
+.weekly-source-v1__withdrawal {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Invoice movements live in their own region and never inside an hours table. */
+.weekly-source-v1__movements {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px dashed var(--weekly-source-line);
+  border-radius: var(--weekly-source-radius, 10px);
+}
+
+/* --- Bulk shell step model ------------------------------------------------ */
+
+.weekly-source-v1__workspace-steps {
+  display: none;
+  gap: 6px;
+  padding: 2px;
+}
+
+.weekly-source-v1__workspace-step {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid var(--weekly-source-line);
+  border-radius: 8px;
+  background: var(--weekly-source-input);
+  color: var(--weekly-source-subtle);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.weekly-source-v1__workspace-step.is-active {
+  border-color: var(--weekly-source-primary);
+  background: var(--weekly-source-surface);
+  color: var(--weekly-source-text);
+}
+
+.weekly-source-v1__workspace-step:focus-visible,
+.weekly-source-v1__later-change-actions .btn:focus-visible {
+  outline: 2px solid var(--weekly-source-primary);
+  outline-offset: 2px;
+}
+
+.weekly-source-v1__workspace-sticky {
+  display: none;
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding: 8px;
+  border-top: 1px solid var(--weekly-source-line);
+  background: var(--weekly-source-surface);
+}
+
+.weekly-source-v1__workspace-sticky .btn {
+  width: 100%;
+  min-height: 44px;
+}
+
+/* Tablet: the same three steps with the queue collapsed (screen 61). */
+@media (max-width: 1023px) {
+  .weekly-source-v1__workspace-steps {
+    display: flex;
+  }
+
+  .weekly-source-v1__workspace-sticky {
+    display: block;
+  }
+
+  .weekly-source-v1__members.is-cross-contract,
+  .weekly-source-v1__later-change-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-weekly-source-bulk-layout="TABLET"] [data-weekly-source-workspace-pane][data-weekly-source-pane-presented="0"],
+  [data-weekly-source-bulk-layout="PHONE"] [data-weekly-source-workspace-pane][data-weekly-source-pane-presented="0"],
+  [data-weekly-source-bulk-layout="FOLD"] [data-weekly-source-workspace-pane][data-weekly-source-pane-presented="0"],
+  [data-weekly-source-bulk-layout="TABLET"] [data-weekly-source-workspace-pane][hidden],
+  [data-weekly-source-bulk-layout="PHONE"] [data-weekly-source-workspace-pane][hidden],
+  [data-weekly-source-bulk-layout="FOLD"] [data-weekly-source-workspace-pane][hidden] {
+    /* Existing modal-modernisation rules deliberately use !important for the
+       pane layout. The workspace step is the narrower presentation authority,
+       so its hidden state must win without changing the desktop workbench. */
+    display: none !important;
+  }
+
+  /* The desktop workbench is two nested grids: queue + content outside, then
+     evidence + authorisation inside. In stepped layouts the hidden panes must
+     release their grid tracks as well as disappear, otherwise the one selected
+     pane is left in a narrow desktop column. */
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="TABLET"],
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="PHONE"],
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="FOLD"] {
+    display: block !important;
+    min-height: 0 !important;
+  }
+
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="TABLET"] #bulkAuthoriseWorkbenchDivider,
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="PHONE"] #bulkAuthoriseWorkbenchDivider,
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="FOLD"] #bulkAuthoriseWorkbenchDivider {
+    display: none !important;
+  }
+
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="TABLET"] #bulkAuthoriseWorkbenchContent,
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="PHONE"] #bulkAuthoriseWorkbenchContent,
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="FOLD"] #bulkAuthoriseWorkbenchContent {
+    display: block !important;
+    width: 100% !important;
+    max-height: none !important;
+    min-width: 0 !important;
+  }
+
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="TABLET"] [data-weekly-source-workspace-pane][data-weekly-source-pane-presented="1"],
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="PHONE"] [data-weekly-source-workspace-pane][data-weekly-source-pane-presented="1"],
+  #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid[data-weekly-source-bulk-layout="FOLD"] [data-weekly-source-workspace-pane][data-weekly-source-pane-presented="1"] {
+    display: flex !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+}
+
+/* Phone (screen 60): body text grows, cards replace wide tables. */
+@media (max-width: 767px) {
+  .weekly-source-v1__categories {
+    display: none;
+  }
+
+  .weekly-source-v1__category-select {
+    display: grid;
+    gap: 5px;
+    color: var(--weekly-source-subtle);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .weekly-source-v1__category-select select {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--weekly-source-line);
+    border-radius: 8px;
+    background: var(--weekly-source-input);
+    color: var(--weekly-source-text);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .weekly-source-v1 {
+    font-size: 16px;
+  }
+
+  .weekly-source-v1__table th,
+  .weekly-source-v1__table td {
+    font-size: 15px;
+  }
+
+  .weekly-source-v1__later-change {
+    padding: 8px;
+  }
+
+  .weekly-source-v1__later-change-actions {
+    justify-content: stretch;
+  }
+
+  .weekly-source-v1__later-change-actions .btn {
+    flex: 1 1 100%;
+  }
+
+  /* On a phone, source hours are decision cards rather than a clipped wide
+     table. The same semantic cells and statuses are retained for desktop,
+     screen readers and automation. */
+  .weekly-source-v1__table-scroll {
+    overflow: visible;
+  }
+
+  .weekly-source-v1__table {
+    min-width: 0;
+  }
+
+  .weekly-source-v1__table thead {
+    display: none;
+  }
+
+  .weekly-source-v1__table tbody {
+    display: grid;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .weekly-source-v1__table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px;
+    padding: 10px;
+    border: 1px solid var(--weekly-source-line);
+    border-left: 3px solid var(--weekly-source-line);
+    border-radius: 9px;
+    background: var(--weekly-source-raised);
+  }
+
+  .weekly-source-v1__table tbody tr.is-match {
+    border-left-color: var(--weekly-source-positive);
+  }
+
+  .weekly-source-v1__table tbody tr.is-mismatch {
+    border-left-color: var(--weekly-source-danger);
+  }
+
+  .weekly-source-v1__table tbody tr.is-waiting {
+    border-left-color: var(--weekly-source-warning);
+  }
+
+  .weekly-source-v1__table tbody td {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .weekly-source-v1__table tbody td::before {
+    content: attr(data-weekly-source-label);
+    color: var(--weekly-source-subtle);
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
+  .weekly-source-v1__table tbody td:first-child,
+  .weekly-source-v1__table tbody td:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Folding phone.  Nothing may overflow the page at 280 px. */
+@media (max-width: 389px) {
+  .weekly-source-v1__workspace-steps {
+    flex-wrap: wrap;
+  }
+
+  .weekly-source-v1__workspace-step {
+    flex: 1 1 100%;
+    font-size: 14px;
+  }
+
+  .weekly-source-v1__hours-card,
+  .weekly-source-v1__later-change,
+  .weekly-source-v1__movements {
+    padding: 6px;
+  }
+
+  .weekly-source-v1__table th,
+  .weekly-source-v1__table td {
+    padding: 6px 6px;
+    font-size: 14px;
+  }
+
+  .weekly-source-v1__categories,
+  .weekly-source-v1__table-scroll {
+    max-width: 100%;
+  }
+
+}
+
+/* The server's own prose explaining why a proposed entitlement cannot be
+   stated. It is rendered rather than swallowed, so a deliberate refusal never
+   reads as a loading failure. */
+.weekly-source-v1__proposal-detail {
+  display: block;
+  margin-top: 6px;
+  color: var(--weekly-source-subtle);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.weekly-source-v1__moved {
+  display: grid;
+  gap: 8px;
+}
+
+.weekly-source-v1__moved h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+/* A withheld figure is a stated position, not a fault: it never takes the
+   error tone and never shows a number. */
+[data-weekly-source-schedule-withheld="1"] .weekly-source-v1__notice {
+  border-style: dashed;
+}

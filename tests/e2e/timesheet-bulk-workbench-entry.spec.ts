@@ -38,10 +38,27 @@ async function openTimesheets(page: Page) {
 for (const workbench of ['Bulk Process', 'Bulk Authorise']) {
   test(`${workbench} opens from the Timesheets action panel`, async ({ page }) => {
     test.setTimeout(180_000);
+    const pageErrors: string[] = [];
+    const toolErrors: string[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    page.on('console', (message) => {
+      const text = message.text();
+      if (message.type() === 'error' && text.includes('[TOOLS][TIMESHEETS]')) toolErrors.push(text);
+    });
     await openTimesheets(page);
     await page.getByRole('button', { name: workbench, exact: true }).click();
-    await expect(page.locator('#modalTitle')).toHaveText(workbench, { timeout: 15_000 });
+    const modalTitle = workbench === 'Bulk Authorise'
+      ? 'Bulk Timesheet Authorise'
+      : workbench;
+    await expect(page.locator('#modalTitle')).toHaveText(modalTitle, { timeout: 15_000 });
     await expect(page.locator('#modal')).toBeVisible();
+    const workbenchRoot = workbench === 'Bulk Process'
+      ? page.locator('#bulkProcessWorkbenchRoot')
+      : page.locator('#bulkAuthoriseWorkbenchRoot');
+    await expect(workbenchRoot).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator('#modal')).not.toContainText('workbench is not available yet');
+    expect(pageErrors, `${workbench} must not raise a page error`).toEqual([]);
+    expect(toolErrors, `${workbench} must not fail through its Timesheets tool handler`).toEqual([]);
   });
 }
 
@@ -56,7 +73,7 @@ test('Bulk Authorise paints its shell while the saved-preference read is still p
   });
 
   await page.getByRole('button', { name: 'Bulk Authorise', exact: true }).click();
-  await expect(page.locator('#modalTitle')).toHaveText('Bulk Authorise', { timeout: 1_500 });
+  await expect(page.locator('#modalTitle')).toHaveText('Bulk Timesheet Authorise', { timeout: 1_500 });
   await expect(page.locator('#modal')).toBeVisible();
 });
 

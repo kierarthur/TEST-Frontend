@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cloudtms.invalid/contracts/weekly-source-office-presentation-v1.schema.json",
+  "title": "CloudTMS Weekly Source Office Presentation V1",
+  "description": "Server-owned read projection consumed by the Simple Timesheet and Bulk Timesheet Authorise screens. The browser displays these values and performs no financial or source-authority inference.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "scope",
+    "record_version",
+    "freshness",
+    "route",
+    "authority",
+    "submitted_timesheet_available",
+    "submitted_timesheet_complete",
+    "comparison",
+    "approved_rows",
+    "totals",
+    "action_state"
+  ],
+  "properties": {
+    "contract": { "const": "WEEKLY_SOURCE_OFFICE_PRESENTATION_V1" },
+    "scope": { "const": "WEEKLY" },
+    "record_version": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "freshness": { "const": "CURRENT" },
+    "route": {
+      "enum": ["NHSP", "CLIENT_PROVIDED_HOURS", "TIMESHEETS_CHECKED_WITH_CLIENT"]
+    },
+    "authority": {
+      "enum": ["CLIENT_SYSTEM", "SIGNED_TIMESHEET"]
+    },
+    "source_title": { "type": "string", "minLength": 1, "maxLength": 96 },
+    "submitted_title": { "type": "string", "minLength": 1, "maxLength": 96 },
+    "submitted_timesheet_available": { "type": "boolean" },
+    "submitted_timesheet_complete": { "type": "boolean" },
+    "source_expense_policy": {
+      "enum": ["SOURCE_SUPPLIED", "SEPARATE_ADDITIONAL_TIMESHEET"]
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "source_rows", "submitted_rows"],
+      "properties": {
+        "state": {
+          "enum": [
+            "MATCH",
+            "MISMATCH",
+            "NO_TIMESHEET",
+            "WAITING_FOR_COMPLETE_TIMESHEET",
+            "UNAVAILABLE"
+          ]
+        },
+        "source_rows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/hoursRow" }
+        },
+        "submitted_rows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/hoursRow" }
+        },
+        "rows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/comparisonRow" }
+        }
+      }
+    },
+    "approved_rows": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/hoursRow" }
+    },
+    "totals": { "$ref": "#/$defs/totals" },
+    "action_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorise_allowed"],
+      "properties": {
+        "authorise_allowed": { "type": "boolean" },
+        "blocked_reason": { "type": "string", "maxLength": 240 },
+        "manage_approved_hours_allowed": { "type": "boolean" },
+        "manage_approved_hours": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/manageApprovedHours" }
+          ]
+        },
+        "add_additional_expense_timesheet_allowed": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "manage_approved_hours_allowed": { "const": true } },
+            "required": ["manage_approved_hours_allowed"]
+          },
+          "then": {
+            "required": ["manage_approved_hours"],
+            "properties": { "manage_approved_hours": { "$ref": "#/$defs/manageApprovedHours" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "manage_approved_hours_allowed": { "const": false } },
+            "required": ["manage_approved_hours_allowed"]
+          },
+          "then": {
+            "properties": { "manage_approved_hours": { "type": "null" } }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "route": { "enum": ["NHSP", "CLIENT_PROVIDED_HOURS"] } },
+        "required": ["route"]
+      },
+      "then": {
+        "properties": { "authority": { "const": "CLIENT_SYSTEM" } },
+        "required": ["source_expense_policy"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "route": { "const": "TIMESHEETS_CHECKED_WITH_CLIENT" } },
+        "required": ["route"]
+      },
+      "then": {
+        "properties": { "authority": { "const": "SIGNED_TIMESHEET" } }
+      }
+    }
+  ],
+  "$defs": {
+    "additionalUnit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label", "value", "state"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "value": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "state": {
+          "enum": ["MATCH", "MISMATCH", "NO_TIMESHEET", "WAITING", "READY", "PROTECTED"]
+        }
+      }
+    },
+    "hoursRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row_key", "day_date", "hours", "break_text", "state"],
+      "properties": {
+        "row_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "day_date": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "hours": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "break_text": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "additional_units": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/additionalUnit" }
+        },
+        "state": {
+          "enum": ["MATCH", "MISMATCH", "NO_TIMESHEET", "WAITING", "READY", "PROTECTED"]
+        },
+        "status_text": { "type": "string", "maxLength": 160 },
+        "issue_text": { "type": "string", "maxLength": 160 },
+        "context_text": { "type": "string", "maxLength": 240 },
+        "affected": { "type": "boolean" }
+      }
+    },
+    "comparisonRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row_key", "day_date", "state", "source", "submitted"],
+      "properties": {
+        "row_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "day_date": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "state": {
+          "enum": ["MATCH", "MISMATCH", "NO_TIMESHEET", "WAITING", "READY", "PROTECTED"]
+        },
+        "issue_text": { "type": "string", "maxLength": 160 },
+        "source": { "$ref": "#/$defs/hoursRow" },
+        "submitted": { "$ref": "#/$defs/hoursRow" }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete",
+        "charge_excluding_vat",
+        "charge_including_vat",
+        "pay_excluding_vat",
+        "pay_including_vat"
+      ],
+      "properties": {
+        "complete": { "const": true },
+        "charge_excluding_vat": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "charge_including_vat": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "pay_excluding_vat": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "pay_including_vat": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "approvedHoursAction": {
+      "enum": [
+        "APPROVE_PROTECTED_HOURS",
+        "AMEND_PROTECTED_HOURS",
+        "WITHDRAW_PROTECTED_HOURS",
+        "WAIT_FOR_SOURCE",
+        "ACCEPT_SOURCE_AND_RECONCILE",
+        "RECORD_NOT_WORKED"
+      ]
+    },
+    "approvedHoursCommandPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_cycle_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "candidate_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "client_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "contract_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "week_ending_date": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "family_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "work_event_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "evidence_timesheet_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "work_date": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "start_at_local": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "end_at_local": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "break_minutes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "approvedHoursSchedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["work_date", "start_at_local", "end_at_local", "break_minutes"],
+      "properties": {
+        "work_date": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "start_at_local": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "end_at_local": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "break_minutes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "manageApprovedHours": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint", "expected_record_version", "new_item", "items"],
+      "properties": {
+        "endpoint": { "const": "/api/weekly-source/v1/commands" },
+        "expected_record_version": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "new_item": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["allowed", "action", "command_payload"],
+              "properties": {
+                "allowed": { "type": "boolean" },
+                "action": {
+                  "oneOf": [
+                    { "type": "null" },
+                    { "const": "APPROVE_PROTECTED_HOURS" }
+                  ]
+                },
+                "command_payload": { "$ref": "#/$defs/approvedHoursCommandPayload" }
+              }
+            }
+          ]
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["item_id", "work_event_id", "state", "primary_action", "available_actions", "command_payload", "schedule"],
+            "properties": {
+              "item_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "work_event_id": {
+                "oneOf": [
+                  { "type": "null" },
+                  { "type": "string", "minLength": 1, "maxLength": 256 }
+                ]
+              },
+              "state": { "enum": ["WAIT", "ACCEPTED_SOURCE", "NOT_WORKED", "SOURCE"] },
+              "primary_action": {
+                "oneOf": [
+                  { "type": "null" },
+                  { "const": "AMEND_PROTECTED_HOURS" }
+                ]
+              },
+              "available_actions": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "AMEND_PROTECTED_HOURS",
+                    "WITHDRAW_PROTECTED_HOURS",
+                    "WAIT_FOR_SOURCE",
+                    "ACCEPT_SOURCE_AND_RECONCILE",
+                    "RECORD_NOT_WORKED"
+                  ]
+                }
+              },
+              "command_payload": { "$ref": "#/$defs/approvedHoursCommandPayload" },
+              "schedule": { "$ref": "#/$defs/approvedHoursSchedule" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

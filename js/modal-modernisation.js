@@ -1000,9 +1000,12 @@
 
     if (family === 'timesheet') {
       const key = tab || activeTabLabel || 'overview';
+      const weeklySourceLines = key === 'lines' && !!body.querySelector('[data-weekly-source-simple-lines="1"]');
       const content = {
         overview: ['Timesheet overview', 'Review the week, route and available actions.'],
-        lines: ['Hours and shifts', 'Enter each shift and break clearly for the selected week.'],
+        lines: weeklySourceLines
+          ? ['Hours being authorised', 'Review the client system hours and any submitted hours needing attention.']
+          : ['Hours and shifts', 'Enter each shift and break clearly for the selected week.'],
         expenses: ['Expenses', ''],
         evidence: ['Evidence', ''],
         issues: ['Issues', 'Review validation or processing issues for this timesheet.'],

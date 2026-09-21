@@ -1,0 +1,479 @@
+{
+ "schema": "WP12_WEEKLY_SOURCE_INVOICE_EDIT_CONTEXT_FIXTURE_V1",
+ "provenance": {
+  "database": "banking_modal_v2_release813_20260918",
+  "produced_by": "public.weekly_source_invoice_edit_context_v1(jsonb)",
+  "fixture_source": "supabase/verification/15092026_1534_weekly_source_invoice_admission_v1.sql, run in its own transaction and rolled back",
+  "captured_utc": "2026-09-18T08:11:34.000Z"
+ },
+ "source": {
+  "editable": true,
+  "invoice_id": "bbbbe040-affc-4158-9a76-ccd8e93baaf2",
+  "movable_lines": [
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "SOURCE_FIXED_EXPENSE",
+    "work_date": "2026-09-07",
+    "description": "Source expense",
+    "origin_kind": "SOURCE_FIXED_EXPENSE",
+    "end_at_local": "2026-09-07T17:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": "REVERSAL",
+    "invoice_line_id": "98c0285b-4d69-43fc-922f-071bff7bd5f3",
+    "presentation_hash": "9f50fff7995a2e09699ca179bf34b37d2e9c6bad21a0e156a60057b7ef5d3d46",
+    "bound_movement_count": 1,
+    "presentation_line_id": "27b72962-a705-4a0a-a980-c25639b9e4b9",
+    "independently_movable": false,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [],
+    "follows_companion_presentation_line_id": "6d8b09ac-dd48-41a5-852b-c40ab9e08e4e"
+   },
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "SOURCE_FIXED_EXPENSE",
+    "work_date": "2026-09-07",
+    "description": "Source expense",
+    "origin_kind": "SOURCE_FIXED_EXPENSE",
+    "end_at_local": "2026-09-07T18:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": "REPLACEMENT",
+    "invoice_line_id": "4ccca652-351a-435d-8856-f8a95832fc8b",
+    "presentation_hash": "8fcc6461e909186958431dee49caaf841b6cd7d2b201b04edc6056633c1e2429",
+    "bound_movement_count": 1,
+    "presentation_line_id": "609c0b55-408b-40d7-8bef-f9fdcbceb6dd",
+    "independently_movable": false,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [],
+    "follows_companion_presentation_line_id": "670fd375-8ace-445a-a4fd-4704f70827be"
+   },
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "SOURCE_REPLACEMENT",
+    "work_date": "2026-09-07",
+    "description": "Shift · Mon 07 Sep 2026 · 09:00–18:00 · 30 min break",
+    "origin_kind": "GENERIC_TRANSITION",
+    "end_at_local": "2026-09-07T18:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": "REPLACEMENT",
+    "invoice_line_id": "b7f9aee4-4765-48c6-afd4-d5c38b645b1f",
+    "presentation_hash": "59148ade6bcb68e95bfa87fee8bb99befe5d6487ef9d282856246b29031b8991",
+    "bound_movement_count": 1,
+    "presentation_line_id": "670fd375-8ace-445a-a4fd-4704f70827be",
+    "independently_movable": true,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [
+     "609c0b55-408b-40d7-8bef-f9fdcbceb6dd"
+    ],
+    "follows_companion_presentation_line_id": null
+   },
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "GENERATED_HISTORICAL_REVERSAL",
+    "work_date": "2026-09-07",
+    "description": "Shift · Mon 07 Sep 2026 · 09:00–17:00 · 30 min break",
+    "origin_kind": "GENERIC_TRANSITION",
+    "end_at_local": "2026-09-07T17:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": "REVERSAL",
+    "invoice_line_id": "23cb7059-c02d-40bd-9170-4bf604133512",
+    "presentation_hash": "38b68a8a3baeee426201f4507ef420082749f20b6e2c0883e14632ff0605d3a2",
+    "bound_movement_count": 1,
+    "presentation_line_id": "6d8b09ac-dd48-41a5-852b-c40ab9e08e4e",
+    "independently_movable": true,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [
+     "27b72962-a705-4a0a-a980-c25639b9e4b9"
+    ],
+    "follows_companion_presentation_line_id": null
+   },
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "SOURCE_FIXED_EXPENSE",
+    "work_date": "2026-09-07",
+    "description": "Source expense",
+    "origin_kind": "SOURCE_FIXED_EXPENSE",
+    "end_at_local": "2026-09-07T17:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": null,
+    "invoice_line_id": "36063b74-e445-4073-a47e-e917bcaa36ec",
+    "presentation_hash": "460b34b6a5196c47a09abe2e5d1b4a6dab5dc424ba295cac6537115c1a595cc3",
+    "bound_movement_count": 1,
+    "presentation_line_id": "7b74967a-dfaa-4bc5-a8b6-7063b7edbb37",
+    "independently_movable": false,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [],
+    "follows_companion_presentation_line_id": "f58bcf42-62ce-4b9a-8dbf-563cce690009"
+   },
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "SOURCE_ORDINARY",
+    "work_date": "2026-09-07",
+    "description": "Shift · Mon 07 Sep 2026 · 09:00–17:00 · 30 min break",
+    "origin_kind": "GENERIC_TRANSITION",
+    "end_at_local": "2026-09-07T17:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": null,
+    "invoice_line_id": "b5945f11-7719-48a8-b6d3-778c37774a6c",
+    "presentation_hash": "e8ac6fe21c892524f03e940a0a9e76f0742bf6cd072a6f89b18b6cccdf3b45ef",
+    "bound_movement_count": 1,
+    "presentation_line_id": "f58bcf42-62ce-4b9a-8dbf-563cce690009",
+    "independently_movable": true,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [
+     "7b74967a-dfaa-4bc5-a8b6-7063b7edbb37"
+    ],
+    "follows_companion_presentation_line_id": null
+   }
+  ],
+  "report_number": null,
+  "invoice_number": "1000009",
+  "report_numbers": [],
+  "source_cycle_id": "a3000000-0000-4000-8000-000000000001",
+  "document_revision": 13,
+  "compatible_destinations": [
+   {
+    "invoice_id": "5f82143e-9515-4c7e-9193-3de6a1461115",
+    "total_inc_vat": -2,
+    "invoice_number": "1000002",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-12-13"
+   },
+   {
+    "invoice_id": "ca7400c7-503f-4aa2-b512-21bf34aa09a8",
+    "total_inc_vat": 2,
+    "invoice_number": "1000008",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-12-06"
+   },
+   {
+    "invoice_id": "f295ee5a-efff-40b6-a95a-ea9edb77216a",
+    "total_inc_vat": -1.25,
+    "invoice_number": "1000012",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-11-29"
+   },
+   {
+    "invoice_id": "1b1ed5fa-cfb3-4cdc-b7c7-98ed8120ee82",
+    "total_inc_vat": 1.25,
+    "invoice_number": "1000005",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-11-22"
+   },
+   {
+    "invoice_id": "ae25728d-f1a8-4c61-a920-0fa1034338a9",
+    "total_inc_vat": -180,
+    "invoice_number": "1000014",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-11-15"
+   },
+   {
+    "invoice_id": "7c8fa153-bf81-48ea-955d-497d67cb43d9",
+    "total_inc_vat": 180,
+    "invoice_number": "1000010",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-11-08"
+   },
+   {
+    "invoice_id": "202bf116-8438-4f62-9840-381bd0b60879",
+    "total_inc_vat": 180,
+    "invoice_number": "1000003",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-11-01"
+   },
+   {
+    "invoice_id": "435f9253-ebd9-4dc9-9698-76e0c04c35bb",
+    "total_inc_vat": -276,
+    "invoice_number": "1000006",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-10-25"
+   },
+   {
+    "invoice_id": "08a261bf-8215-4cd5-ad92-2e0a8f5ba45f",
+    "total_inc_vat": 276,
+    "invoice_number": "1000011",
+    "report_numbers": [],
+    "document_revision": 6,
+    "finalisation_week_ending": "2026-10-18"
+   },
+   {
+    "invoice_id": "aeb319d5-e8b8-4178-ae6c-6931e905d283",
+    "total_inc_vat": -205.25,
+    "invoice_number": "1000013",
+    "report_numbers": [],
+    "document_revision": 6,
+    "finalisation_week_ending": "2026-10-04"
+   },
+   {
+    "invoice_id": "db43903a-27d8-4e5e-83c0-9b49fe9516b7",
+    "total_inc_vat": 0,
+    "invoice_number": "1000015",
+    "report_numbers": [],
+    "document_revision": 11,
+    "finalisation_week_ending": "2026-09-13"
+   }
+  ],
+  "finalisation_week_ending": "2026-09-27",
+  "is_weekly_source_invoice": true
+ },
+ "destination": {
+  "editable": true,
+  "invoice_id": "bbbbe040-affc-4158-9a76-ccd8e93baaf2",
+  "movable_lines": [
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "SOURCE_FIXED_EXPENSE",
+    "work_date": "2026-09-07",
+    "description": "Source expense",
+    "origin_kind": "SOURCE_FIXED_EXPENSE",
+    "end_at_local": "2026-09-07T17:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": "REVERSAL",
+    "invoice_line_id": "98c0285b-4d69-43fc-922f-071bff7bd5f3",
+    "presentation_hash": "9f50fff7995a2e09699ca179bf34b37d2e9c6bad21a0e156a60057b7ef5d3d46",
+    "bound_movement_count": 1,
+    "presentation_line_id": "27b72962-a705-4a0a-a980-c25639b9e4b9",
+    "independently_movable": false,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [],
+    "follows_companion_presentation_line_id": "6d8b09ac-dd48-41a5-852b-c40ab9e08e4e"
+   },
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "SOURCE_FIXED_EXPENSE",
+    "work_date": "2026-09-07",
+    "description": "Source expense",
+    "origin_kind": "SOURCE_FIXED_EXPENSE",
+    "end_at_local": "2026-09-07T18:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": "REPLACEMENT",
+    "invoice_line_id": "4ccca652-351a-435d-8856-f8a95832fc8b",
+    "presentation_hash": "8fcc6461e909186958431dee49caaf841b6cd7d2b201b04edc6056633c1e2429",
+    "bound_movement_count": 1,
+    "presentation_line_id": "609c0b55-408b-40d7-8bef-f9fdcbceb6dd",
+    "independently_movable": false,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [],
+    "follows_companion_presentation_line_id": "670fd375-8ace-445a-a4fd-4704f70827be"
+   },
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "SOURCE_REPLACEMENT",
+    "work_date": "2026-09-07",
+    "description": "Shift · Mon 07 Sep 2026 · 09:00–18:00 · 30 min break",
+    "origin_kind": "GENERIC_TRANSITION",
+    "end_at_local": "2026-09-07T18:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": "REPLACEMENT",
+    "invoice_line_id": "b7f9aee4-4765-48c6-afd4-d5c38b645b1f",
+    "presentation_hash": "59148ade6bcb68e95bfa87fee8bb99befe5d6487ef9d282856246b29031b8991",
+    "bound_movement_count": 1,
+    "presentation_line_id": "670fd375-8ace-445a-a4fd-4704f70827be",
+    "independently_movable": true,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [
+     "609c0b55-408b-40d7-8bef-f9fdcbceb6dd"
+    ],
+    "follows_companion_presentation_line_id": null
+   },
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "GENERATED_HISTORICAL_REVERSAL",
+    "work_date": "2026-09-07",
+    "description": "Shift · Mon 07 Sep 2026 · 09:00–17:00 · 30 min break",
+    "origin_kind": "GENERIC_TRANSITION",
+    "end_at_local": "2026-09-07T17:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": "REVERSAL",
+    "invoice_line_id": "23cb7059-c02d-40bd-9170-4bf604133512",
+    "presentation_hash": "38b68a8a3baeee426201f4507ef420082749f20b6e2c0883e14632ff0605d3a2",
+    "bound_movement_count": 1,
+    "presentation_line_id": "6d8b09ac-dd48-41a5-852b-c40ab9e08e4e",
+    "independently_movable": true,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [
+     "27b72962-a705-4a0a-a980-c25639b9e4b9"
+    ],
+    "follows_companion_presentation_line_id": null
+   },
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "SOURCE_FIXED_EXPENSE",
+    "work_date": "2026-09-07",
+    "description": "Source expense",
+    "origin_kind": "SOURCE_FIXED_EXPENSE",
+    "end_at_local": "2026-09-07T17:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": null,
+    "invoice_line_id": "36063b74-e445-4073-a47e-e917bcaa36ec",
+    "presentation_hash": "460b34b6a5196c47a09abe2e5d1b4a6dab5dc424ba295cac6537115c1a595cc3",
+    "bound_movement_count": 1,
+    "presentation_line_id": "7b74967a-dfaa-4bc5-a8b6-7063b7edbb37",
+    "independently_movable": false,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [],
+    "follows_companion_presentation_line_id": "f58bcf42-62ce-4b9a-8dbf-563cce690009"
+   },
+   {
+    "candidate": "Finaliser Candidate",
+    "line_kind": "SOURCE_ORDINARY",
+    "work_date": "2026-09-07",
+    "description": "Shift · Mon 07 Sep 2026 · 09:00–17:00 · 30 min break",
+    "origin_kind": "GENERIC_TRANSITION",
+    "end_at_local": "2026-09-07T17:00:00",
+    "break_minutes": 30,
+    "work_event_id": "9b8fa63f-2d48-46f6-8687-3c3475238733",
+    "start_at_local": "2026-09-07T09:00:00",
+    "correction_role": null,
+    "invoice_line_id": "b5945f11-7719-48a8-b6d3-778c37774a6c",
+    "presentation_hash": "e8ac6fe21c892524f03e940a0a9e76f0742bf6cd072a6f89b18b6cccdf3b45ef",
+    "bound_movement_count": 1,
+    "presentation_line_id": "f58bcf42-62ce-4b9a-8dbf-563cce690009",
+    "independently_movable": true,
+    "released_after_dispute": false,
+    "indivisible_presentation": false,
+    "companion_presentation_line_ids": [
+     "7b74967a-dfaa-4bc5-a8b6-7063b7edbb37"
+    ],
+    "follows_companion_presentation_line_id": null
+   }
+  ],
+  "report_number": null,
+  "invoice_number": "1000009",
+  "report_numbers": [],
+  "source_cycle_id": "a3000000-0000-4000-8000-000000000001",
+  "document_revision": 13,
+  "compatible_destinations": [
+   {
+    "invoice_id": "5f82143e-9515-4c7e-9193-3de6a1461115",
+    "total_inc_vat": -2,
+    "invoice_number": "1000002",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-12-13"
+   },
+   {
+    "invoice_id": "ca7400c7-503f-4aa2-b512-21bf34aa09a8",
+    "total_inc_vat": 2,
+    "invoice_number": "1000008",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-12-06"
+   },
+   {
+    "invoice_id": "f295ee5a-efff-40b6-a95a-ea9edb77216a",
+    "total_inc_vat": -1.25,
+    "invoice_number": "1000012",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-11-29"
+   },
+   {
+    "invoice_id": "1b1ed5fa-cfb3-4cdc-b7c7-98ed8120ee82",
+    "total_inc_vat": 1.25,
+    "invoice_number": "1000005",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-11-22"
+   },
+   {
+    "invoice_id": "ae25728d-f1a8-4c61-a920-0fa1034338a9",
+    "total_inc_vat": -180,
+    "invoice_number": "1000014",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-11-15"
+   },
+   {
+    "invoice_id": "7c8fa153-bf81-48ea-955d-497d67cb43d9",
+    "total_inc_vat": 180,
+    "invoice_number": "1000010",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-11-08"
+   },
+   {
+    "invoice_id": "202bf116-8438-4f62-9840-381bd0b60879",
+    "total_inc_vat": 180,
+    "invoice_number": "1000003",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-11-01"
+   },
+   {
+    "invoice_id": "435f9253-ebd9-4dc9-9698-76e0c04c35bb",
+    "total_inc_vat": -276,
+    "invoice_number": "1000006",
+    "report_numbers": [],
+    "document_revision": 4,
+    "finalisation_week_ending": "2026-10-25"
+   },
+   {
+    "invoice_id": "08a261bf-8215-4cd5-ad92-2e0a8f5ba45f",
+    "total_inc_vat": 276,
+    "invoice_number": "1000011",
+    "report_numbers": [],
+    "document_revision": 6,
+    "finalisation_week_ending": "2026-10-18"
+   },
+   {
+    "invoice_id": "aeb319d5-e8b8-4178-ae6c-6931e905d283",
+    "total_inc_vat": -205.25,
+    "invoice_number": "1000013",
+    "report_numbers": [],
+    "document_revision": 6,
+    "finalisation_week_ending": "2026-10-04"
+   },
+   {
+    "invoice_id": "db43903a-27d8-4e5e-83c0-9b49fe9516b7",
+    "total_inc_vat": 0,
+    "invoice_number": "1000015",
+    "report_numbers": [],
+    "document_revision": 11,
+    "finalisation_week_ending": "2026-09-13"
+   }
+  ],
+  "finalisation_week_ending": "2026-09-27",
+  "is_weekly_source_invoice": true
+ }
+}

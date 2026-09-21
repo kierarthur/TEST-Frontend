@@ -1,0 +1,357 @@
+{
+  "nhspPreview": {
+    "ok": true,
+    "file_key": "weekly-source/nhsp/backing-1741227.xlsx",
+    "accept_context": {
+      "file_key": "weekly-source/nhsp/backing-1741227.xlsx",
+      "original_filename": "Backing report 1741227.xlsx",
+      "source_group_id": "11111111-1111-4111-8111-111111111111",
+      "source_cycle_id": "22222222-2222-4222-8222-222222222222",
+      "client_id": "33333333-3333-4333-8333-333333333333",
+      "report_scope_id": "44444444-4444-4444-8444-444444444444",
+      "profile_id": "NHSP_FINAL_BACKING_V1",
+      "cutoff": "Wed 16 Sep 2026 at 15:00",
+      "parser_options": { "profileId": "NHSP_FINAL_BACKING_V1" }
+    },
+    "preview": {
+      "ok": true,
+      "profileId": "NHSP_FINAL_BACKING_V1",
+      "scope": {
+        "trust": "St Mary's NHS Trust",
+        "backingReportNumber": "1741227"
+      },
+      "rows": [
+        {
+          "workerName": "Jane Smith",
+          "date": "2026-09-14",
+          "actual": { "start": "09:00", "end": "17:00", "breakMinutes": 30 },
+          "rowKind": "POSITIVE_SOURCE_SHIFT"
+        },
+        {
+          "workerName": "Alex Reed",
+          "date": "2026-09-15",
+          "actual": { "start": "20:00", "end": "08:00", "breakMinutes": 60 },
+          "rowKind": "FULL_REVERSAL"
+        }
+      ],
+      "fatalErrors": [],
+      "warnings": []
+    }
+  },
+  "healthRosterPreview": {
+    "ok": true,
+    "file_key": "weekly-source/roster/timesheet-export.xlsx",
+    "accept_context": {
+      "file_key": "weekly-source/roster/timesheet-export.xlsx",
+      "original_filename": "Timesheet Export.xlsx",
+      "source_group_id": "51111111-1111-4111-8111-111111111111",
+      "source_cycle_id": "52222222-2222-4222-8222-222222222222",
+      "client_id": "53333333-3333-4333-8333-333333333333",
+      "profile_id": "HEALTHROSTER_WEEKLY_FROM_TO_ACTUAL_V1",
+      "previous_coverage": { "start_local_date": "2026-06-01", "end_local_date": "2026-09-13" },
+      "parser_options": { "profileId": "HEALTHROSTER_WEEKLY_FROM_TO_ACTUAL_V1" }
+    },
+    "preview": {
+      "ok": true,
+      "profileId": "HEALTHROSTER_WEEKLY_FROM_TO_ACTUAL_V1",
+      "rows": [
+        {
+          "staff_name": "Abigail Jones",
+          "work_date": "2026-06-08",
+          "actual_start": "20:00",
+          "actual_end": "08:00",
+          "break_minutes": 60,
+          "row_finalisation_state": "SOURCE_FINALISED_WORKED"
+        },
+        {
+          "staff_name": "Abigail Jones",
+          "work_date": "2026-09-13",
+          "actual_start": "09:00",
+          "actual_end": "17:00",
+          "break_minutes": 30,
+          "row_finalisation_state": "SOURCE_FINALISED_WORKED"
+        }
+      ],
+      "fatalErrors": [],
+      "warnings": []
+    }
+  },
+  "contractChooser": {
+    "candidate": "Jane Smith",
+    "client": "St Mary's NHS Trust",
+    "shift": "Mon 14 Sep 2026 · 09:00-17:00 · 30 min break",
+    "source_role_band": "Band 5",
+    "source_row_ordinal": "17",
+    "accept_payload": {
+      "file_key": "weekly-source/nhsp/backing-1741227.xlsx",
+      "source_group_id": "11111111-1111-4111-8111-111111111111",
+      "source_cycle_id": "22222222-2222-4222-8222-222222222222",
+      "client_id": "33333333-3333-4333-8333-333333333333",
+      "profile_id": "NHSP_FINAL_BACKING_V1"
+    },
+    "choices": [
+      { "contract_id": "contract-1", "role_band": "RGN · Band 5", "site": "Main site", "dates": "1 Jan-31 Dec 2026", "pay_type": "PAYE" },
+      { "contract_id": "contract-2", "role_band": "RGN · Band 5", "site": "Hillcroft House", "dates": "1 Apr-31 Dec 2026", "pay_type": "Umbrella" },
+      { "contract_id": "contract-3", "role_band": "Community Nurse · Band 5", "site": "Newbury", "dates": "1 Jul-31 Dec 2026", "pay_type": "PAYE" }
+    ]
+  },
+  "correctFinal": {
+    "source_label": "Replacement report",
+    "scope_label": "St Mary's NHS Trust · Wed 16 Sep 2026 at 15:00",
+    "current_label": "Report 1741227",
+    "confirmation_text": "I understand this will replace report 1741227 as the final report for this Trust and cutoff.",
+    "command_payload": {
+      "authority_scope_kind": "NHSP_REPORT_SCOPE",
+      "expected_current_final_revision_id": "61111111-1111-4111-8111-111111111111",
+      "expected_final_manifest_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "idempotency_key": "correct-final-fixture-1",
+      "report_scope_id": "44444444-4444-4444-8444-444444444444",
+      "source_cycle_id": "22222222-2222-4222-8222-222222222222"
+    },
+    "replacement_context": {
+      "source_group_id": "11111111-1111-4111-8111-111111111111",
+      "client_id": "33333333-3333-4333-8333-333333333333",
+      "profile_id": "NHSP_FINAL_BACKING_V1",
+      "parser_options": { "profileId": "NHSP_FINAL_BACKING_V1" }
+    },
+    "eligible_replacements": [
+      {
+        "label": "Backing report 1741228 · uploaded 16 Sep 2026 16:10",
+        "replacement_source": { "file_key": "weekly-source/nhsp/backing-1741228.xlsx", "original_filename": "Backing report 1741228.xlsx" }
+      }
+    ],
+    "changes": [
+      { "candidate": "Jane Smith", "day_date": "Mon 14 Sep 2026", "current_final": "09:00-17:00 · 30 min break", "replacement": "09:00-18:00 · 30 min break", "result": "Hours changed" }
+    ],
+    "blockers": [
+      { "candidate": "Alex Reed", "day_date": "Tue 15 Sep 2026", "problem": "This shift is already on an invoice.", "action": "Review the invoice before trying again." }
+    ]
+  },
+  "correctFinalPreview": {
+    "ok": true,
+    "status": "READY_FOR_CONFIRMATION",
+    "correction_session_id": "81111111-1111-4111-8111-111111111111",
+    "changes": [
+      { "candidate": "Jane Smith", "day_date": "Mon 14 Sep 2026", "current_final": "09:00-17:00 (30 min break)", "replacement": "09:00-18:00 (30 min break)", "result": "Changed" }
+    ],
+    "blockers": [],
+    "confirmation_text": "I understand this will replace report 1741227 as the final report for this Trust and cutoff.",
+    "review_context": {
+      "source_cycle_id": "22222222-2222-4222-8222-222222222222",
+      "authority_scope_kind": "NHSP_REPORT_SCOPE",
+      "report_scope_id": "44444444-4444-4444-8444-444444444444",
+      "expected_current_final_revision_id": "61111111-1111-4111-8111-111111111111",
+      "expected_final_manifest_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "correction_session_id": "81111111-1111-4111-8111-111111111111",
+      "replacement_upload_id": "82222222-2222-4222-8222-222222222222",
+      "replacement_projection_publication_id": "83333333-3333-4333-8333-333333333333",
+      "expected_authority_scope_version": 4,
+      "expected_row_manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected_comparison_manifest_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expected_issue_set_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "review_expected_session_version": 3,
+      "expected_session_version": 4,
+      "expected_preview_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review_idempotency_key": "correct-final-fixture-1:review"
+    },
+    "apply_context": {
+      "source_cycle_id": "22222222-2222-4222-8222-222222222222",
+      "authority_scope_kind": "NHSP_REPORT_SCOPE",
+      "report_scope_id": "44444444-4444-4444-8444-444444444444",
+      "expected_current_final_revision_id": "61111111-1111-4111-8111-111111111111",
+      "expected_final_manifest_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "correction_session_id": "81111111-1111-4111-8111-111111111111",
+      "replacement_upload_id": "82222222-2222-4222-8222-222222222222",
+      "replacement_projection_publication_id": "83333333-3333-4333-8333-333333333333",
+      "expected_authority_scope_version": 4,
+      "expected_row_manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected_comparison_manifest_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expected_issue_set_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "review_expected_session_version": 3,
+      "expected_session_version": 4,
+      "expected_preview_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review_idempotency_key": "correct-final-fixture-1:review"
+    }
+  },
+  "correctFinalBlockedPreview": {
+    "ok": true,
+    "status": "BLOCKED",
+    "correction_session_id": "81111111-1111-4111-8111-111111111111",
+    "changes": [],
+    "blockers": [
+      { "candidate": "Alex Reed", "day_date": "Tue 15 Sep 2026", "problem": "This shift is already on an invoice", "action": "Review the invoice before trying again" }
+    ],
+    "confirmation_text": "I understand this will replace report 1741227 as the final report for this Trust and cutoff.",
+    "review_context": {
+      "source_cycle_id": "22222222-2222-4222-8222-222222222222",
+      "authority_scope_kind": "NHSP_REPORT_SCOPE",
+      "report_scope_id": "44444444-4444-4444-8444-444444444444",
+      "expected_current_final_revision_id": "61111111-1111-4111-8111-111111111111",
+      "expected_final_manifest_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "correction_session_id": "81111111-1111-4111-8111-111111111111",
+      "replacement_upload_id": "82222222-2222-4222-8222-222222222222",
+      "replacement_projection_publication_id": "83333333-3333-4333-8333-333333333333",
+      "expected_authority_scope_version": 4,
+      "expected_row_manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected_comparison_manifest_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expected_issue_set_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "review_expected_session_version": 3,
+      "expected_session_version": 4,
+      "expected_preview_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review_idempotency_key": "correct-final-fixture-1:review"
+    },
+    "apply_context": null
+  },
+  "workspace": {
+    "contract": "WEEKLY_SOURCE_IMPORT_WORKSPACE_V1",
+    "workspace_version": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "profile": { "id": "NHSP_FINAL_BACKING_V1", "label": "NHSP backing report", "finalise_label": "Finalise report" },
+    "context": {
+      "cycle_state": "Ready for finalisation",
+      "cycle_tone": "warning",
+      "source_group_id": "11111111-1111-4111-8111-111111111111",
+      "source_cycle_id": "22222222-2222-4222-8222-222222222222",
+      "client_id": "33333333-3333-4333-8333-333333333333",
+      "report_scope_id": "44444444-4444-4444-8444-444444444444",
+      "projection_publication_id": "55555555-5555-4555-8555-555555555555",
+      "controls": [
+        { "key": "source_group", "label": "Source", "value": "nhsp", "options": [{ "value": "nhsp", "label": "NHSP backing report" }] },
+        { "key": "client", "label": "Trust", "value": "33333333-3333-4333-8333-333333333333", "options": [{ "value": "33333333-3333-4333-8333-333333333333", "label": "St Mary's NHS Trust" }] },
+        { "key": "report", "label": "Report number", "value": "1741227" },
+        { "key": "cutoff", "label": "Cutoff", "value": "Wed 16 Sep 2026 at 15:00" }
+      ]
+    },
+    "counts": { "queries": 2, "blockers": 1, "paid_unresolved": 1 },
+    "imports": {
+      "total_count": 2,
+      "rows": [
+        { "row_key": "upload-current", "file": "Backing report 1741227.xlsx", "uploaded": "16 Sep 2026 15:20", "rows": "286", "coverage": "1 Jun-15 Sep 2026", "status": { "text": "Ready to review", "tone": "positive" }, "final_source": "Current", "actions": [{ "label": "Review", "payload": { "detail": { "file": "Backing report 1741227.xlsx", "coverage": "1 Jun-15 Sep 2026" } } }] },
+        { "row_key": "upload-old", "file": "Backing report 1741188.xlsx", "uploaded": "9 Sep 2026 15:18", "rows": "272", "coverage": "1 Jun-8 Sep 2026", "status": { "text": "Superseded", "tone": "neutral" }, "final_source": "Previous", "actions": [{ "label": "View", "payload": { "detail": { "file": "Backing report 1741188.xlsx", "coverage": "1 Jun-8 Sep 2026" } } }] }
+      ]
+    },
+    "queries": {
+      "total_count": 2,
+      "bulk_actions": {
+        "contract": "WEEKLY_SOURCE_BULK_FILTER_SELECTION_V1",
+        "filtered_group_count": 2,
+        "selection_complete": true,
+        "ask_candidates": {
+          "action": "ASK_CANDIDATES",
+          "enabled": true,
+          "eligible_group_count": 1,
+          "selection_proof": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "request": {
+            "actor_user_id": "71111111-1111-4111-8111-111111111111",
+            "source_cycle_id": "22222222-2222-4222-8222-222222222222",
+            "projection_publication_id": "55555555-5555-4555-8555-555555555555",
+            "expected_workspace_version": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "action": "ASK_CANDIDATES",
+            "selection": {
+              "mode": "ALL_FILTERED",
+              "group_keys": [],
+              "excluded_group_keys": [],
+              "incident_ids": [],
+              "filters": { "status": "UNRESOLVED", "candidate": "", "issue": "ALL" },
+              "sort_key": "candidate",
+              "sort_direction": "asc",
+              "selection_proof": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        "send_manager_now": {
+          "action": "SEND_MANAGER_NOW",
+          "enabled": true,
+          "eligible_group_count": 1,
+          "selection_proof": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "request": {
+            "actor_user_id": "71111111-1111-4111-8111-111111111111",
+            "source_cycle_id": "22222222-2222-4222-8222-222222222222",
+            "projection_publication_id": "55555555-5555-4555-8555-555555555555",
+            "expected_workspace_version": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "action": "SEND_MANAGER_NOW",
+            "selection": {
+              "mode": "ALL_FILTERED",
+              "group_keys": [],
+              "excluded_group_keys": [],
+              "incident_ids": [],
+              "filters": { "status": "UNRESOLVED", "candidate": "", "issue": "ALL" },
+              "sort_key": "candidate",
+              "sort_direction": "asc",
+              "selection_proof": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        }
+      },
+      "rows": [
+        {
+          "group_key": "qg_1111111111111111111111111111111111111111111111111111111111111111",
+          "candidate": "Jane Smith",
+          "client": "St Mary's NHS Trust",
+          "issues": "2",
+          "candidate_asked": true,
+          "manager_informed": false,
+          "outreach_eligible": true,
+          "expanded": true,
+          "status": { "text": "Needs Office action", "tone": "danger", "subtext": "Paid - still unresolved", "subtone": "danger" },
+          "age": "Paid 8 days ago",
+          "actions": [{ "label": "View details", "payload": { "detail": { "candidate": "Jane Smith", "client": "St Mary's NHS Trust", "issue": "Hours differ", "status": "Needs Office action" } } }],
+          "accept_system_hours_action": {
+            "label": "Accept system hours",
+            "kind": "COMMAND",
+            "command": "ACCEPT_SYSTEM_HOURS",
+            "enabled": true,
+            "payload": {
+              "actor_user_id": "71111111-1111-4111-8111-111111111111",
+              "source_cycle_id": "22222222-2222-4222-8222-222222222222",
+              "projection_publication_id": "55555555-5555-4555-8555-555555555555",
+              "expected_workspace_version": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "action": "ACCEPT_SYSTEM_HOURS",
+              "selection": {
+                "mode": "EXPLICIT",
+                "group_keys": ["qg_1111111111111111111111111111111111111111111111111111111111111111"],
+                "excluded_group_keys": [],
+                "incident_ids": ["66666666-6666-4666-8666-666666666666", "77777777-7777-4777-8777-777777777777"],
+                "filters": { "status": "UNRESOLVED", "candidate": "", "issue": "ALL" },
+                "sort_key": "candidate",
+                "sort_direction": "asc",
+                "selection_proof": null,
+                "group_selection_proofs": [{
+                  "group_key": "qg_1111111111111111111111111111111111111111111111111111111111111111",
+                  "selection_proof": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                }]
+              }
+            }
+          },
+          "children": [
+            { "incident_id": "66666666-6666-4666-8666-666666666666", "day_date": "Mon 14 Sep 2026", "job_role": "Staff Nurse", "candidate_hours": "09:00-18:00 (30 min break)", "system_hours": "09:00-17:00 (30 min break)", "issue": "Hours differ", "status": { "text": "Waiting for manager", "tone": "warning" }, "accept_eligible": true, "actions": [{ "label": "View details", "payload": { "detail": { "day_date": "Mon 14 Sep 2026", "candidate_hours": "09:00-18:00 (30 min break)", "system_hours": "09:00-17:00 (30 min break)", "issue": "Hours differ" } } }] },
+            { "incident_id": "77777777-7777-4777-8777-777777777777", "day_date": "Tue 15 Sep 2026", "job_role": "Staff Nurse", "candidate_hours": "09:00-17:00 (30 min break)", "system_hours": "Missing or not yet authorised", "issue": "Missing or not yet authorised", "status": { "text": "Waiting for manager", "tone": "warning" }, "accept_eligible": true, "actions": [{ "label": "View details", "payload": { "detail": { "day_date": "Tue 15 Sep 2026", "candidate_hours": "09:00-17:00 (30 min break)", "system_hours": "Missing or not yet authorised", "issue": "Missing or not yet authorised" } } }] }
+          ]
+        }
+      ]
+    },
+    "finalise": {
+      "active_list": "blocked",
+      "source_summary": "Backing report 1741227 · 284 charges · 2 full reversals",
+      "ready": { "total_count": 285, "rows": [] },
+      "blocked": { "total_count": 1, "rows": [{ "row_key": "blocked-1", "candidate": "Alex Reed", "day_date": "Tue 15 Sep 2026", "problem": "Charge does not match", "actions": [{ "label": "Open charge details", "payload": { "detail": { "candidate": "Alex Reed", "day_date": "Tue 15 Sep 2026", "problem": "Charge does not match", "guidance": "Review the matched contract, rates and break allocation, then Recheck.", "commission": "£52.50", "total_cost": "£209.85", "source_charge": "£262.35", "calculated_charge": "£262.34", "difference": "£0.01" } } }] }] },
+      "confirmation_text": "I confirm this is the complete final NHSP backing report for St Mary's NHS Trust, report 1741227, for the cutoff shown.",
+      "confirmation_required": true,
+      "finalise_enabled": false,
+      "tracker": {
+        "title": "Finalisation progress",
+        "cycle_label": "Cutoff Wed 16 Sep 2026 at 15:00",
+        "complete": false,
+        "rows": [
+          { "row_key": "tracker-st-marys", "source": "NHSP", "trust": "St Mary's NHS Trust", "status": { "text": "Final report received", "tone": "positive" }, "detail": "Report 1741227" },
+          { "row_key": "tracker-royal", "source": "NHSP", "trust": "Royal Berkshire NHS Trust", "status": { "text": "Still to complete", "tone": "warning" }, "actions": [{ "label": "No shifts to import", "enabled": true, "command": "NO_SHIFTS_TO_IMPORT", "context": { "trust": "Royal Berkshire NHS Trust", "cutoff": "Wed 16 Sep 2026 at 15:00" }, "payload": { "source_cycle_id": "22222222-2222-4222-8222-222222222222", "source_group_id": "11111111-1111-4111-8111-111111111111", "client_id": "63333333-3333-4333-8333-333333333333", "expected_cycle_version": 3, "attestation_text": "No shifts to import" } }] }
+        ]
+      }
+    },
+    "history": {
+      "total_count": 1,
+      "cycle_filter": "CURRENT_PAY_CYCLE",
+      "cycle_options": [{ "value": "CURRENT_PAY_CYCLE", "label": "Current pay cycle" }, { "value": "PREVIOUS_PAY_CYCLE", "label": "Previous pay cycle" }],
+      "rows": [{ "when": "16 Sep 2026 15:20", "source": "NHSP", "event": "Source file accepted", "by": "Office user", "detail": "Backing report 1741227.xlsx" }]
+    }
+  }
+}

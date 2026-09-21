@@ -226,6 +226,11 @@ body.ctms-summary-proposal .ctms-processing-status-archived{
 body.ctms-summary-proposal .ctms-processing-status-neutral{
   border-color:rgba(148,163,184,.42);background:rgba(30,41,59,.58);color:#d4dbe7
 }
+body.ctms-summary-proposal .ctms-weekly-source-delay-badge{
+  display:inline-flex;align-items:center;justify-content:center;min-height:21px;margin-left:6px;padding:2px 7px;
+  border:1px solid rgba(251,146,60,.48);border-radius:999px;background:rgba(132,69,18,.26);color:#fed7aa;
+  font-size:9px;font-weight:780;line-height:1.2;letter-spacing:.02em;white-space:nowrap
+}
 body.ctms-summary-proposal input[type="checkbox"]{
   -webkit-appearance:none;appearance:none;box-sizing:border-box;position:relative;display:inline-grid;place-content:center;
   width:18px;height:18px;min-width:18px;margin:0;border:1px solid #5d6d88;border-radius:5px;cursor:pointer;

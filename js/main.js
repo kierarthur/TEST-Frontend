@@ -641,6 +641,9 @@ function getVisibleBulkAuthoriseRows(state) {
   const classification = (classificationRaw === 'NHSP' || classificationRaw === 'HR' || classificationRaw === 'TIMESHEETS')
     ? classificationRaw
     : 'TIMESHEETS';
+  const weeklySourceCategory = normaliseBulkAuthoriseWeeklySourceCategory(
+    readFirst(st.weekly_source_category, filters.weekly_source_category, 'STANDARD_TIMESHEETS')
+  );
 
   const q = lower(readFirst(filters.q, filters.search, filters.text, ''));
   const clientId = trimStr(readFirst(filters.client_id, filters.clientId, ''));
@@ -658,6 +661,21 @@ function getVisibleBulkAuthoriseRows(state) {
     const explicit = upper(row?.bulk_authorise_classification || '');
     if (explicit === 'NHSP' || explicit === 'HR' || explicit === 'TIMESHEETS') return explicit;
     return 'TIMESHEETS';
+  };
+
+  const getRowWeeklySourceCategory = (row) => {
+    const explicit = upper(row?.weekly_source_category || '');
+    if (['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT', 'STANDARD_TIMESHEETS'].includes(explicit)) {
+      return explicit;
+    }
+    const api = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+    if (!api || typeof api.findHostPayload !== 'function' || typeof api.buildViewModel !== 'function') return 'STANDARD_TIMESHEETS';
+    const host = api.findHostPayload(row);
+    if (!host) return 'STANDARD_TIMESHEETS';
+    const vm = api.buildViewModel(host);
+    return vm && vm.render_mode === 'WEEKLY_SOURCE'
+      ? normaliseBulkAuthoriseWeeklySourceCategory(vm.category_key)
+      : 'STANDARD_TIMESHEETS';
   };
 
   const getPeriodType = (row) => {
@@ -743,7 +761,7 @@ function getVisibleBulkAuthoriseRows(state) {
   };
 
   const rowMatchesTimesheetFilters = (row) => {
-    if (classification !== 'TIMESHEETS') return true;
+    if (weeklySourceCategory !== 'STANDARD_TIMESHEETS' || classification !== 'TIMESHEETS') return true;
 
     const periodType = getPeriodType(row);
     if (periodType === 'DAILY' && !showDaily) return false;
@@ -784,7 +802,9 @@ function getVisibleBulkAuthoriseRows(state) {
   };
 
   const baseRows = rows.filter((row) => row && typeof row === 'object');
-  const classificationRows = baseRows.filter((row) => getRowClassification(row) === classification);
+  const classificationRows = baseRows.filter((row) => (
+    getRowClassification(row) === classification && getRowWeeklySourceCategory(row) === weeklySourceCategory
+  ));
   const textRows = classificationRows.filter(rowMatchesText);
   const clientFilteredRows = textRows.filter(rowMatchesClient);
   const candidateFilteredRows = clientFilteredRows.filter(rowMatchesCandidate);
@@ -794,11 +814,11 @@ function getVisibleBulkAuthoriseRows(state) {
   const serverClientOptions = Array.isArray(ds.client_option_rows) ? ds.client_option_rows : null;
 
   const candidateOptionRows = serverCandidateOptions
-    ? sortRows(serverCandidateOptions.filter((row) => getRowClassification(row) === classification).filter(rowMatchesText).filter(rowMatchesClient).filter(rowMatchesTimesheetFilters))
+    ? sortRows(serverCandidateOptions.filter((row) => getRowClassification(row) === classification && getRowWeeklySourceCategory(row) === weeklySourceCategory).filter(rowMatchesText).filter(rowMatchesClient).filter(rowMatchesTimesheetFilters))
     : sortRows(textRows.filter(rowMatchesClient).filter(rowMatchesTimesheetFilters));
 
   const clientOptionRows = serverClientOptions
-    ? sortRows(serverClientOptions.filter((row) => getRowClassification(row) === classification).filter(rowMatchesText).filter(rowMatchesCandidate).filter(rowMatchesTimesheetFilters))
+    ? sortRows(serverClientOptions.filter((row) => getRowClassification(row) === classification && getRowWeeklySourceCategory(row) === weeklySourceCategory).filter(rowMatchesText).filter(rowMatchesCandidate).filter(rowMatchesTimesheetFilters))
     : sortRows(textRows.filter(rowMatchesCandidate).filter(rowMatchesTimesheetFilters));
 
   const visibleProcessedEligibleRows = visibleRows.filter((row) => trimStr(row?.bulk_authorise_section || '') === 'processed_eligible');
@@ -116611,12 +116631,20 @@ function buildTimesheetProcessingStatusBadge(row, displayText) {
 function paintTimesheetProcessingStatusCell(td, row, displayText) {
   const text = String(displayText ?? '').trim();
   const badge = buildTimesheetProcessingStatusBadge(row, text);
+  const weeklyDelayReason = 'Candidate payment is waiting for final weekly source validation.';
+  const issueCodes = [
+    ...(Array.isArray(row?.issue_codes) ? row.issue_codes : []),
+    ...(Array.isArray(row?.business_issue_codes) ? row.business_issue_codes : [])
+  ].map((value) => String(value || '').trim());
+  const weeklySourceDelayed = row?.weekly_source_pay_delayed === true
+    || issueCodes.includes(weeklyDelayReason);
   const invoicePaid = row && (
     row.invoice_is_paid === true || String(row.invoice_is_paid).toLowerCase() === 'true'
   );
   const stageNow = String(row?.tools_stage || '').trim().toUpperCase();
 
   td.textContent = '';
+  let target = td;
   if (invoicePaid && stageNow === 'INVOICED' && text) {
     const wrap = document.createElement('div');
     wrap.className = 'cell-right-icon';
@@ -116626,8 +116654,25 @@ function paintTimesheetProcessingStatusCell(td, row, displayText) {
     wrap.appendChild(badge);
     wrap.appendChild(coin);
     td.appendChild(wrap);
+    target = wrap;
   } else {
     td.appendChild(badge);
+  }
+
+  if (weeklySourceDelayed) {
+    const mainAlreadySaysDelayed = normaliseTimesheetProcessingStatusToken(text) === 'PROCESSING_DELAYED'
+      || badge.textContent === 'Processing Delayed';
+    td.title = weeklyDelayReason;
+    td.setAttribute('aria-label', mainAlreadySaysDelayed
+      ? `${badge.textContent}. ${weeklyDelayReason}`
+      : `${badge.textContent}. Delayed. ${weeklyDelayReason}`);
+    if (!mainAlreadySaysDelayed) {
+      const delayed = document.createElement('span');
+      delayed.className = 'ctms-weekly-source-delay-badge';
+      delayed.textContent = 'Delayed';
+      delayed.title = weeklyDelayReason;
+      target.appendChild(delayed);
+    }
   }
 }
 
@@ -126826,6 +126871,10 @@ function openContractSettingsModal() {
   const parentContractFrame = (typeof window.__getModalFrame === 'function')
     ? window.__getModalFrame()
     : null;
+  const parentContractCtx = (parentContractFrame?._ctxRef && typeof parentContractFrame._ctxRef === 'object')
+    ? parentContractFrame._ctxRef
+    : window.modalCtx;
+  const weeklySourceContractSettingsSession = `weekly-source-contract-settings:${Date.now()}:${Math.random()}`;
   const clonePlain = (value) => {
     try {
       return (typeof structuredClone === 'function')
@@ -127500,6 +127549,7 @@ function openContractSettingsModal() {
             <!-- HEALTHROSTER -->
             <div id="contractFlagsHR" style="display:${showHr ? '' : 'none'};">
               <div style="display:grid;grid-template-columns:1fr;gap:8px;">
+                ${isHrCreate ? '' : checkChoice('require_reference_to_pay', 'Reference required before pay', !!eff.require_reference_to_pay, disabledIfInherit)}
                 ${checkChoice('self_bill', 'Self-bill (no invoices sent)', !!eff.self_bill, disabledFinancialAuthority)}
                 ${checkChoice('daily_calc_of_invoices', 'Daily invoice calculation', !!eff.daily_calc_of_invoices, disabledFinancialAuthority)}
                 ${checkChoice('group_nightsat_sunbh', 'Group Night/Sat/Sun/BH', !!eff.group_nightsat_sunbh, disabledFinancialAuthority)}
@@ -127774,7 +127824,10 @@ function openContractSettingsModal() {
     }
 
     if (weekly === 'HEALTHROSTER') {
-      changed = setMainTriBool('require_reference_to_pay', false) || changed;
+      changed = setMainTriBool(
+        'require_reference_to_pay',
+        isHrCreate ? false : !!root.querySelector('input[type="checkbox"][name="require_reference_to_pay"]')?.checked
+      ) || changed;
       changed = setMainTriBool('require_reference_to_invoice', false) || changed;
 
       changed = setMainTriBool('self_bill', !!root.querySelector('input[type="checkbox"][name="self_bill"]')?.checked) || changed;
@@ -127867,6 +127920,16 @@ function openContractSettingsModal() {
 
     // Initial canonicalise WITHOUT dirty
     try { applyFromDOM(root, { initial: true }); } catch {}
+    try {
+      void window.CloudTMSWeeklySourceSettings?.mountContract(
+        root,
+        parentContractCtx,
+        contractId,
+        base?.client_id || parentContractCtx?.formState?.main?.client_id || null,
+        viewOnly,
+        weeklySourceContractSettingsSession
+      );
+    } catch (e) { if (LOGC) console.warn('[CONTRACT_SETTINGS] Weekly source settings failed to load', e); }
   };
 
   showModal(
@@ -127881,6 +127944,11 @@ function openContractSettingsModal() {
       // Contract draft. Persistence still happens only from the parent Save.
       const root = document.getElementById('contractSettingsForm');
       applyFromDOM(root, { initial: false });
+      window.CloudTMSWeeklySourceSettings?.applyContractDraft(
+        root,
+        parentContractCtx,
+        weeklySourceContractSettingsSession
+      );
 
       try {
         // persistCurrentTabState() runs immediately before this callback and may
@@ -140638,6 +140706,7 @@ function renderContractSettingsModal(ctx) {
           <!-- HEALTHROSTER -->
           <div id="contractFlagsHR" style="display:${showHr ? '' : 'none'};">
             <div style="display:grid;grid-template-columns:1fr;gap:8px;">
+              ${hrMode === 'NO_TS' ? '' : checkChoice('require_reference_to_pay', 'Reference required before pay', !!d.require_reference_to_pay)}
               ${checkChoice('self_bill', 'Self-bill (no invoices sent)', !!d.self_bill)}
               ${checkChoice('daily_calc_of_invoices', 'Daily invoice calculation', !!d.daily_calc_of_invoices)}
               ${checkChoice('group_nightsat_sunbh', 'Group Night/Sat/Sun/BH', !!d.group_nightsat_sunbh)}
@@ -146626,6 +146695,7 @@ async function openSearchModal(opts = {}) {
           <option value="VALIDATION_FAILED">Validation failed</option>
           <option value="PAIRED_NEEDS_INVOICING">Paired needs invoicing</option>
           <option value="OVERPAID">Overpaid</option>
+          <option value="WEEKLY_SOURCE_PAY_WAITING">Weekly source validation</option>
         </select>`),
       row('Route', `
         <select name="route_type">
@@ -148413,6 +148483,28 @@ try {
     hasContractWeek: !!details?.contract_week,
     ready_to_pay: (details && typeof details.ready_to_pay === 'boolean') ? details.ready_to_pay : null
   });
+
+  // The fast-open title deliberately uses the stable id while details load.
+  // Once a Weekly Source projection has been proved, replace only that
+  // temporary title with the human identity required by the approved modal.
+  // Ordinary and Daily Timesheet titles keep their existing behaviour.
+  if (details?.weekly_source_presentation && typeof details.weekly_source_presentation === 'object') {
+    const candidateName = String(
+      details?.timesheet?.candidate_name ||
+      details?.timesheet?.candidate_display_name ||
+      baseRow.candidate_name ||
+      baseRow.candidate_display_name ||
+      ''
+    ).trim();
+    if (candidateName) {
+      const resolvedTitle = `Timesheet · ${candidateName}`;
+      const activeFrame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (activeFrame) activeFrame.title = resolvedTitle;
+      const titleHost = document.getElementById('modalTitle');
+      const titleText = titleHost?.querySelector?.(':scope > span') || titleHost;
+      if (titleText) titleText.textContent = resolvedTitle;
+    }
+  }
 } catch (err) {
   if (!isActiveTimesheetModalToken(openToken)) {
     GE();
@@ -150553,7 +150645,18 @@ const renderTab = (key, mergedRow) => {
       return renderTimesheetIssuesTab(ctxForTab);
     }
     case 'finance':  return renderTimesheetFinanceTab(ctxForTab);
-    case 'audit':    return renderTimesheetAuditTab(ctxForTab);
+    case 'audit': {
+      const auditHtml = renderTimesheetAuditTab(ctxForTab);
+      const weeklySourceApi = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+      if (!weeklySourceApi || typeof weeklySourceApi.findHostPayload !== 'function' || typeof weeklySourceApi.buildViewModel !== 'function' || typeof weeklySourceApi.renderInvoiceMovementHistory !== 'function') {
+        return auditHtml;
+      }
+      const host = weeklySourceApi.findHostPayload([ctxForTab.details, ctxForTab.row]);
+      if (!host) return auditHtml;
+      const vm = weeklySourceApi.buildViewModel(host);
+      const movementHtml = weeklySourceApi.renderInvoiceMovementHistory(vm);
+      return movementHtml ? `<div class="tabc">${movementHtml}</div>${auditHtml}` : auditHtml;
+    }
 
     default:
       return `<div class="tabc"><div class="card"><div class="row"><label>Timesheet</label><div class="controls"><span class="mini">Unknown tab: ${key}</span></div></div></div></div>`;
@@ -154281,8 +154384,14 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
 
 
   
+    const weeklySourceCategory = String(baseRow.weekly_source_category || '').trim().toUpperCase();
+    const weeklySourceCandidateName = String(baseRow.candidate_name || baseRow.candidate_display_name || '').trim();
+    const hasWeeklySourceIdentity = !!(
+      weeklySourceCandidateName &&
+      ['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT'].includes(weeklySourceCategory)
+    );
     const title = hasTs
-      ? `Timesheet ${String(tsId).slice(0, 8)}…`
+      ? (hasWeeklySourceIdentity ? `Timesheet · ${weeklySourceCandidateName}` : `Timesheet ${String(tsId).slice(0, 8)}…`)
       : `Weekly timesheet (planned) ${String(weekId).slice(0, 8)}…`;
 
  const hasRelatedId = !!(tsId || weekId);
@@ -172997,6 +173106,11 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     (Object.prototype.hasOwnProperty.call(f, 'classification') ? f.classification : null) ??
     (Object.prototype.hasOwnProperty.call(f, 'classificationRaw') ? f.classificationRaw : null) ??
     null;
+  const weeklySourceCategory = normaliseBulkAuthoriseWeeklySourceCategory(
+    Object.prototype.hasOwnProperty.call(f, 'weekly_source_category')
+      ? f.weekly_source_category
+      : f.weeklySourceCategory
+  );
 
   const showDaily = Object.prototype.hasOwnProperty.call(f, 'show_daily') ? f.show_daily : (Object.prototype.hasOwnProperty.call(f, 'showDaily') ? f.showDaily : true);
   const showWeekly = Object.prototype.hasOwnProperty.call(f, 'show_weekly') ? f.show_weekly : (Object.prototype.hasOwnProperty.call(f, 'showWeekly') ? f.showWeekly : true);
@@ -173018,6 +173132,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
   if (candidateId != null && String(candidateId).trim()) qs.set('candidate_id', String(candidateId).trim());
   if (clientId != null && String(clientId).trim()) qs.set('client_id', String(clientId).trim());
   if (classification) qs.set('classification', classification);
+  qs.set('weekly_source_category', weeklySourceCategory);
   qs.set('show_daily', String(showDaily !== false));
   qs.set('show_weekly', String(showWeekly !== false));
   qs.set('show_manual', String(showManual !== false));
@@ -173034,6 +173149,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     candidate_id: (candidateId != null && String(candidateId).trim()) ? String(candidateId).trim() : '',
     client_id: (clientId != null && String(clientId).trim()) ? String(clientId).trim() : '',
     classification: classification || '',
+    weekly_source_category: weeklySourceCategory,
     show_daily: showDaily !== false,
     show_weekly: showWeekly !== false,
     show_manual: showManual !== false,
@@ -173154,6 +173270,8 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
       'compare_block_required',
       'bulk_process_bucket',
       'bulk_authorise_classification',
+      'weekly_source_category',
+      'weekly_source_presentation',
       'bulk_authorise_section',
       'has_timesheet',
       'is_contract_week_only',
@@ -173400,6 +173518,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     if (!out.stable_row_id) out.stable_row_id = out.timesheet_id || out.contract_week_id || null;
 
     out.bulk_authorise_classification = (out.bulk_authorise_classification != null) ? String(out.bulk_authorise_classification).trim() || null : null;
+    out.weekly_source_category = normaliseBulkAuthoriseWeeklySourceCategory(out.weekly_source_category);
     out.bulk_authorise_section = (out.bulk_authorise_section != null) ? String(out.bulk_authorise_section).trim() || null : null;
     out.route_family = (out.route_family != null) ? String(out.route_family).trim() || null : null;
     out.route_subfamily = (out.route_subfamily != null) ? String(out.route_subfamily).trim() || null : null;
@@ -173652,6 +173771,17 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     const normalizedRows = paddedRows.map(normalizeRow);
     // Archived rows are never active Bulk Authorise candidates. They remain available through the Archived Stage summary.
     const rows = normalizedRows.filter((row) => row.is_archived !== true);
+    const serverWeeklySourceCategoryCounts = (() => {
+      const raw = (json.counts?.by_weekly_source_category && typeof json.counts.by_weekly_source_category === 'object')
+        ? json.counts.by_weekly_source_category
+        : {};
+      const result = {};
+      for (const key of ['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT', 'STANDARD_TIMESHEETS']) {
+        const count = Number(raw[key]);
+        if (Number.isInteger(count) && count >= 0) result[key] = count;
+      }
+      return result;
+    })();
 
     const out = {
       filters: (json.filters && typeof json.filters === 'object') ? {
@@ -173662,6 +173792,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
           const value = String(json.filters.classification == null ? '' : json.filters.classification).trim().toUpperCase();
           return (value === 'TIMESHEETS' || value === 'NHSP' || value === 'HR') ? value : null;
         })(),
+        weekly_source_category: normaliseBulkAuthoriseWeeklySourceCategory(json.filters.weekly_source_category || weeklySourceCategory),
         show_daily: json.filters.show_daily !== false,
         show_weekly: json.filters.show_weekly !== false,
         show_manual: json.filters.show_manual !== false,
@@ -173674,6 +173805,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
         candidate_id: (candidateId != null && String(candidateId).trim()) ? String(candidateId).trim() : null,
         client_id: (clientId != null && String(clientId).trim()) ? String(clientId).trim() : null,
         classification,
+        weekly_source_category: weeklySourceCategory,
         show_daily: showDaily !== false,
         show_weekly: showWeekly !== false,
         show_manual: showManual !== false,
@@ -173691,6 +173823,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
           NHSP: rows.filter((row) => row.bulk_authorise_classification === 'NHSP').length,
           HR: rows.filter((row) => row.bulk_authorise_classification === 'HR').length
         },
+        by_weekly_source_category: serverWeeklySourceCategoryCounts,
         timesheets_by_type: {
           manual: rows.filter((row) => row.bulk_authorise_classification === 'TIMESHEETS' && row.route_family === 'MANUAL_NON_QR').length,
           qr: rows.filter((row) => row.bulk_authorise_classification === 'TIMESHEETS' && row.route_family === 'QR').length,
@@ -177512,6 +177645,44 @@ function renderTimesheetExpensesTab(ctx) {
   const tf   = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : null;
   const cw   = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : null;
 
+  const weeklySourceExpenseApi = (typeof window !== 'undefined')
+    ? window.CloudTMSWeeklySourcePresentationV1
+    : null;
+  const weeklySourceExpenseHost = (
+    weeklySourceExpenseApi && typeof weeklySourceExpenseApi.findHostPayload === 'function'
+  )
+    ? weeklySourceExpenseApi.findHostPayload([details, row, ts, ctx])
+    : null;
+  const weeklySourceExpenseVm = (
+    weeklySourceExpenseHost && typeof weeklySourceExpenseApi?.buildViewModel === 'function'
+  )
+    ? weeklySourceExpenseApi.buildViewModel(weeklySourceExpenseHost)
+    : null;
+
+  // Client-system authority records are never candidate-expense containers.
+  // Keep the ordinary Expenses implementation byte-for-byte on every other
+  // route and show only the explicit server-owned expense policy here.
+  if (weeklySourceExpenseVm?.mount === true && weeklySourceExpenseVm.authority === 'CLIENT_SYSTEM') {
+    if (weeklySourceExpenseVm.render_mode === 'UNAVAILABLE') {
+      return `<div class="tabc">${weeklySourceExpenseApi.renderUnavailable(weeklySourceExpenseVm)}</div>`;
+    }
+    const sourceSupplied = weeklySourceExpenseVm.expense_owner === 'SOURCE_SUPPLIED';
+    return `
+      <div class="tabc" data-weekly-source-expenses-mode="${sourceSupplied ? 'SOURCE_SUPPLIED' : 'SEPARATE_ADDITIONAL_TIMESHEET'}">
+        <div class="card">
+          <div class="row" style="grid-column:1/-1">
+            <label>${sourceSupplied ? 'Client-provided expense' : 'Expenses'}</label>
+            <div class="controls">
+              <span class="mini">${sourceSupplied
+                ? 'This Timesheet uses the expense supplied by the client. Receipt and mileage evidence cannot be added here.'
+                : 'Expenses are held on a separate additional expense Timesheet.'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   const originalCtx = (ctx && typeof ctx === 'object') ? ctx : {};
   const candidateOfficeSurface = String(originalCtx.candidateOfficeSurface || '').trim().toUpperCase();
   const candidateOfficeRow = {
@@ -178197,6 +178368,687 @@ function resolveTimesheetExpensesModalCtx(ctxArg = null) {
 
 
 
+const BULK_AUTHORISE_WEEKLY_SOURCE_CATEGORY_SESSION_KEY = 'cloudtms.bulkAuthorise.weeklySourceCategory.v1';
+
+function normaliseBulkAuthoriseWeeklySourceCategory(value) {
+  const api = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  if (api && typeof api.normaliseCategoryKey === 'function') return api.normaliseCategoryKey(value);
+  const key = String(value == null ? '' : value).trim().toUpperCase();
+  return ['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT', 'STANDARD_TIMESHEETS'].includes(key)
+    ? key
+    : 'STANDARD_TIMESHEETS';
+}
+
+function bulkAuthoriseBackendClassificationForCategory(value) {
+  const api = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  if (api && typeof api.backendClassificationForCategory === 'function') return api.backendClassificationForCategory(value);
+  const category = normaliseBulkAuthoriseWeeklySourceCategory(value);
+  if (category === 'NHSP') return 'NHSP';
+  if (category === 'CLIENT_PROVIDED_HOURS') return 'HR';
+  return 'TIMESHEETS';
+}
+
+function readBulkAuthoriseWeeklySourceCategorySession() {
+  try {
+    return normaliseBulkAuthoriseWeeklySourceCategory(window.sessionStorage.getItem(BULK_AUTHORISE_WEEKLY_SOURCE_CATEGORY_SESSION_KEY));
+  } catch {
+    return 'STANDARD_TIMESHEETS';
+  }
+}
+
+function writeBulkAuthoriseWeeklySourceCategorySession(value) {
+  const category = normaliseBulkAuthoriseWeeklySourceCategory(value);
+  try { window.sessionStorage.setItem(BULK_AUTHORISE_WEEKLY_SOURCE_CATEGORY_SESSION_KEY, category); } catch {}
+  return category;
+}
+
+function resolveBulkAuthoriseWeeklySourcePresentation(state) {
+  const st = (state && typeof state === 'object') ? state : {};
+  const api = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  if (!api || typeof api.findHostPayload !== 'function' || typeof api.buildViewModel !== 'function') return null;
+  const host = api.findHostPayload([
+    st.active_details,
+    st.active_context,
+    st.active_ctx,
+    st.active_row
+  ]);
+  if (!host) return null;
+  return api.buildViewModel(host);
+}
+
+function makeWeeklySourceCommandIdempotencyKey() {
+  try {
+    if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  } catch {}
+  return `weekly-source:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
+function setWeeklySourceApprovedHoursStatus(root, message, tone) {
+  const host = root?.querySelector?.('[data-weekly-source-command-status]') || null;
+  if (!host) return;
+  const textValue = String(message || '').trim();
+  host.textContent = textValue;
+  host.className = textValue
+    ? `weekly-source-v1__command-status${tone ? ` is-${String(tone).trim()}` : ''}`
+    : '';
+}
+
+async function refreshSimpleWeeklySourcePresentation() {
+  const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object')
+    ? window.modalCtx
+    : null;
+  if (!mc || String(mc.entity || '').trim().toLowerCase() !== 'timesheets') return false;
+  const details = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
+  const timesheetId = String(
+    mc.data?.current_timesheet_id ||
+    mc.data?.timesheet_id ||
+    details.current_timesheet_id ||
+    details.timesheet?.current_timesheet_id ||
+    details.timesheet?.timesheet_id ||
+    ''
+  ).trim();
+  if (!timesheetId || typeof fetchTimesheetDetails !== 'function') return false;
+
+  const openToken = mc.openToken;
+  const freshDetails = await fetchTimesheetDetails(timesheetId);
+  if (!freshDetails || typeof freshDetails !== 'object') return false;
+  if (!window.modalCtx || window.modalCtx !== mc || String(mc.entity || '').trim().toLowerCase() !== 'timesheets') return false;
+
+  mc.timesheetDetails = freshDetails;
+  if (freshDetails.timesheet && typeof freshDetails.timesheet === 'object') {
+    mc.data = { ...(mc.data || {}), ...freshDetails.timesheet };
+  }
+  if (typeof classifyTimesheetEditDomains === 'function') {
+    try {
+      mc.timesheetEditDomains = classifyTimesheetEditDomains({
+        row: mc.data || {},
+        details: freshDetails,
+        timesheet: freshDetails.timesheet || null,
+        tsfin: freshDetails.tsfin || null,
+        financial_snapshot: freshDetails.financial_snapshot || null,
+        contract_week: freshDetails.contract_week || null,
+        related: mc.timesheetRelated || {},
+        action_flags: freshDetails.action_flags || null,
+        state: mc.timesheetState || {}
+      });
+    } catch {}
+  }
+  const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+  const preferredTab = String(frame?.currentTabKey || 'lines').trim() || 'lines';
+  if (openToken && typeof safeRerenderTimesheetModal === 'function') {
+    await safeRerenderTimesheetModal(openToken, preferredTab, { refreshTabs: true });
+  }
+  return true;
+}
+
+async function refreshBulkWeeklySourcePresentation(state) {
+  const st = (state && typeof state === 'object') ? state : null;
+  if (!st || typeof refreshBulkAuthoriseActiveContext !== 'function') return false;
+  const refreshed = await refreshBulkAuthoriseActiveContext(st, {
+    source: 'weekly_source_approved_hours',
+    row: st.active_row || null,
+    profile: 'full',
+    context_profile: 'full',
+    include_evidence: true,
+    include_compare: true,
+    authoritative: true,
+    rerender: false
+  });
+  if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
+    await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][WEEKLY-SOURCE-APPROVED-HOURS]');
+  }
+  return refreshed === true;
+}
+
+function openWeeklySourceApprovedHoursModal(options = {}) {
+  const opts = (options && typeof options === 'object') ? options : {};
+  const presentationApi = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  const vm = opts.viewModel;
+  if (
+    !presentationApi ||
+    typeof presentationApi.renderManageApprovedHoursDialog !== 'function' ||
+    typeof presentationApi.buildApprovedHoursCommand !== 'function' ||
+    !vm || vm.mount !== true || vm.manage_approved_hours_allowed !== true || !vm.manage_approved_hours
+  ) return false;
+
+  const modalState = {
+    view_model: vm,
+    surface: String(opts.surface || 'SIMPLE_TIMESHEET').trim().toUpperCase(),
+    busy: false,
+    needs_refresh: false,
+    refresh_reason: ''
+  };
+  const childContext = {
+    entity: 'weekly-source-approved-hours',
+    mode: 'view',
+    weeklySourceApprovedHoursState: modalState
+  };
+  window.modalCtx = childContext;
+  try { if (typeof modalCtx !== 'undefined') modalCtx = childContext; } catch {}
+
+  const renderTab = () => presentationApi.renderManageApprovedHoursDialog(modalState.view_model);
+  const refreshOwner = async () => {
+    if (!modalState.needs_refresh) return;
+    try {
+      if (modalState.surface === 'BULK_AUTHORISE') await refreshBulkWeeklySourcePresentation(opts.bulkState);
+      else await refreshSimpleWeeklySourcePresentation();
+      const message = modalState.refresh_reason === 'CONFLICT'
+        ? 'The Timesheet changed. Review the latest approved hours.'
+        : 'Approved hours updated.';
+      try { if (typeof toast === 'function') toast(message); } catch {}
+    } catch {
+      try { if (typeof toast === 'function') toast('Refresh the Timesheet to see the latest approved hours.'); } catch {}
+    }
+  };
+
+  const closeChild = () => {
+    try {
+      if (typeof window.closeCurrentModalFrameSafely === 'function') {
+        const closed = window.closeCurrentModalFrameSafely({ expectedKind: 'weekly-source-approved-hours' });
+        if (closed === true) return;
+      }
+    } catch {}
+    try {
+      const close = document.getElementById('btnCloseModal');
+      if (close && !close.disabled) close.click();
+    } catch {}
+  };
+  const closeAndRefreshOwner = () => {
+    closeChild();
+    setTimeout(() => { Promise.resolve(refreshOwner()).catch(() => {}); }, 0);
+  };
+
+  const setBusy = (root, busy) => {
+    modalState.busy = busy === true;
+    root?.querySelectorAll?.('button, input, select, textarea').forEach((control) => {
+      control.disabled = modalState.busy;
+    });
+    const close = document.getElementById('btnCloseModal');
+    if (close) close.disabled = modalState.busy;
+  };
+
+  const updateScheduleAvailability = (card) => {
+    const actionSelect = card?.querySelector?.('[data-weekly-source-action-select]') || null;
+    if (!actionSelect || typeof presentationApi.approvedHoursActionAllowsSchedule !== 'function') return;
+    const editable = presentationApi.approvedHoursActionAllowsSchedule(actionSelect.value);
+    card.querySelectorAll('[data-weekly-source-schedule-field]').forEach((input) => {
+      input.disabled = !editable || modalState.busy;
+    });
+  };
+
+  const wire = () => {
+    const root = document.querySelector('[data-weekly-source-manage-dialog="1"]');
+    if (!root || root.dataset.boundWeeklySourceManageDialog === '1') return;
+    root.dataset.boundWeeklySourceManageDialog = '1';
+    root.querySelectorAll('[data-weekly-source-manage-item]').forEach((card) => updateScheduleAvailability(card));
+    root.addEventListener('change', (event) => {
+      const select = event.target?.closest?.('[data-weekly-source-action-select]');
+      if (!select) return;
+      updateScheduleAvailability(select.closest('[data-weekly-source-manage-item]'));
+    });
+    root.addEventListener('click', async (event) => {
+      const direct = event.target?.closest?.('[data-weekly-source-submit-action]') || null;
+      const selected = event.target?.closest?.('[data-weekly-source-submit-selected]') || null;
+      const submit = direct || selected;
+      if (!submit || modalState.busy) return;
+      event.preventDefault();
+      const card = submit.closest('[data-weekly-source-manage-item]');
+      if (!card) return;
+      const itemId = String(card.getAttribute('data-weekly-source-manage-item') || '').trim();
+      const action = direct
+        ? String(direct.getAttribute('data-weekly-source-submit-action') || '').trim()
+        : String(card.querySelector('[data-weekly-source-action-select]')?.value || '').trim();
+      const field = (name) => card.querySelector(`[data-weekly-source-schedule-field="${name}"]`);
+      const edits = {
+        work_date: field('work_date')?.value || '',
+        start_at_local: field('start_at_local')?.value || '',
+        end_at_local: field('end_at_local')?.value || '',
+        break_minutes: field('break_minutes')?.value || '',
+        reason: card.querySelector('[data-weekly-source-reason]')?.value || ''
+      };
+      let command;
+      try {
+        command = presentationApi.buildApprovedHoursCommand(modalState.view_model, {
+          item_id: itemId,
+          action,
+          edits,
+          idempotency_key: makeWeeklySourceCommandIdempotencyKey()
+        });
+      } catch (error) {
+        setWeeklySourceApprovedHoursStatus(root, error?.message || 'Check the details and try again.', 'error');
+        return;
+      }
+
+      setWeeklySourceApprovedHoursStatus(root, 'Saving…', 'working');
+      setBusy(root, true);
+      try {
+        const response = await apiPostJson(command.endpoint, command.body, { action: 'WEEKLY_SOURCE_COMMAND' });
+        if (!response || response.ok !== true) throw new Error('COMMAND_FAILED');
+        modalState.needs_refresh = true;
+        modalState.refresh_reason = 'SUCCESS';
+        setWeeklySourceApprovedHoursStatus(root, 'Approved hours updated.', 'success');
+        setBusy(root, false);
+        closeAndRefreshOwner();
+      } catch (error) {
+        const conflict = Number(error?.status || error?.response?.status || 0) === 409;
+        if (conflict) {
+          modalState.needs_refresh = true;
+          modalState.refresh_reason = 'CONFLICT';
+          setBusy(root, false);
+          closeAndRefreshOwner();
+          return;
+        }
+        setBusy(root, false);
+        root.querySelectorAll('[data-weekly-source-manage-item]').forEach((item) => updateScheduleAvailability(item));
+        setWeeklySourceApprovedHoursStatus(root, 'The change could not be saved. Please try again.', 'error');
+      }
+    });
+  };
+
+  showModal(
+    'Manage approved hours',
+    [{ key: 'main', label: 'Approved hours' }],
+    renderTab,
+    null,
+    false,
+    null,
+    {
+      kind: 'weekly-source-approved-hours',
+      noParentGate: true,
+      showSave: false,
+      stayOpenOnSave: false
+    }
+  );
+  try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
+  return true;
+}
+
+// Gate 10.  Resolve the live Weekly Source view model for whichever surface a
+// delegated click came from.  Both surfaces read the SAME projection through the
+// same owner, so neither surface can present a different phase from the other.
+function resolveWeeklySourceBulkState() {
+  const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+  return [
+    mc.bulkAuthoriseState,
+    mc.bulk_authorise_state,
+    (typeof window !== 'undefined') ? window.__bulkAuthoriseState : null,
+    mc
+  ].find((store) => store && typeof store === 'object') || {};
+}
+
+function resolveWeeklySourceSurfaceViewModel(surface) {
+  const presentationApi = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  if (!presentationApi || typeof presentationApi.findHostPayload !== 'function') return null;
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+  if (String(surface || '').trim().toUpperCase() === 'BULK_AUTHORISE') {
+    return resolveBulkAuthoriseWeeklySourcePresentation(resolveWeeklySourceBulkState());
+  }
+  const host = presentationApi.findHostPayload([mc.timesheetDetails, mc.data]);
+  return host ? presentationApi.buildViewModel(host) : null;
+}
+
+// Gate 10.  A Weekly Source command that refuses says so in plain English, and
+// the server's own sentence is what the Office shows.
+//
+// A refused proposal command carries `detail` as an object with `code`, `reason`
+// and a `message` that is written to be safe to show an Office user — for
+// example `WEEKLY_SOURCE_PROPOSAL_PARTIAL_MOVE_UNSUPPORTED`, which explains that
+// a Contract-to-Contract amendment must move the whole entitlement and that
+// nothing has been proposed. The browser never writes its own version of that
+// explanation, because it does not know the rule and would get it wrong.
+function weeklySourceCommandRefusalMessage(response) {
+  const body = (response && typeof response === 'object') ? response : {};
+  const detail = (body.detail && typeof body.detail === 'object') ? body.detail : null;
+  const candidates = [
+    detail?.message,
+    body.refusal_message,
+    body.message,
+    typeof body.detail === 'string' ? body.detail : null,
+    body.error
+  ];
+  for (const candidate of candidates) {
+    const text = String(candidate == null ? '' : candidate).trim();
+    // A bare machine code is not an explanation; only prose is shown.
+    if (text && /\s/.test(text) && !/^[A-Z0-9_]+$/.test(text)) return text;
+  }
+  return '';
+}
+
+// Gate 10.  The two Office decisions.  One delegated listener serves the Simple
+// Timesheet and the Bulk right pane, because the buttons are rendered by the
+// same owner on both.  The buttons exist only where `proposal.decision` is
+// non-null; this handler re-reads the live view model before posting, so a
+// decision that has since been withdrawn server-side cannot be sent.
+function bindWeeklySourceLaterChangeDecisions() {
+  if (typeof document === 'undefined') return false;
+  if (document.documentElement?.dataset?.boundWeeklySourceDecisions === '1') return false;
+  if (document.documentElement?.dataset) document.documentElement.dataset.boundWeeklySourceDecisions = '1';
+  document.addEventListener('click', async (event) => {
+    const button = event.target?.closest?.('[data-weekly-source-decision]');
+    if (!button || button.disabled) return;
+    event.preventDefault();
+    const presentationApi = window.CloudTMSWeeklySourcePresentationV1;
+    if (!presentationApi || typeof presentationApi.buildLaterChangeDecisionCommand !== 'function') return;
+    const surface = String(button.getAttribute('data-weekly-source-surface') || 'SIMPLE_TIMESHEET').trim().toUpperCase();
+    const decision = String(button.getAttribute('data-weekly-source-decision') || '').trim().toUpperCase();
+    const vm = resolveWeeklySourceSurfaceViewModel(surface);
+    if (!vm || vm.mount !== true) return;
+    const actorUserId = String(
+      window.currentUser?.id || window.CURRENT_USER?.id || window.__currentUserId || ''
+    ).trim();
+    let command;
+    try {
+      command = presentationApi.buildLaterChangeDecisionCommand(vm, {
+        decision,
+        actor_user_id: actorUserId || 'server-resolved',
+        idempotency_key: makeWeeklySourceCommandIdempotencyKey()
+      });
+    } catch (error) {
+      try { toastWarn(error?.message || 'That decision is no longer available.'); } catch {}
+      return;
+    }
+    const controls = Array.from(document.querySelectorAll('[data-weekly-source-decision]'));
+    controls.forEach((control) => { control.disabled = true; });
+    try {
+      // The payload is the server's `command_payload`, posted unchanged, plus
+      // the actor and the chosen decision (WP-11b N3.4).
+      const response = await apiPostJson(command.endpoint, command.body, { action: 'WEEKLY_SOURCE_COMMAND' });
+      if (!response || response.ok !== true) {
+        const refusal = weeklySourceCommandRefusalMessage(response);
+        const failure = new Error(refusal || 'DECISION_FAILED');
+        failure.weeklySourceRefusalShown = !!refusal;
+        throw failure;
+      }
+      if (surface === 'BULK_AUTHORISE') await refreshBulkWeeklySourcePresentation(resolveWeeklySourceBulkState());
+      else await refreshSimpleWeeklySourcePresentation();
+      try { toast('Decision recorded.'); } catch {}
+    } catch (error) {
+      controls.forEach((control) => { control.disabled = false; });
+      // A refusal the server wrote is shown verbatim; only a refusal it did not
+      // explain gets a sentence of ours.
+      const spoken = error?.weeklySourceRefusalShown === true
+        ? String(error.message)
+        : (weeklySourceCommandRefusalMessage(error?.json || error?.response)
+          || 'The decision could not be saved. Refresh and try again.');
+      try { toastWarn(spoken); } catch {}
+    }
+  });
+  return true;
+}
+
+// Gate 10.  `Unauthorise` on a Weekly-Source-MANAGED root is the first
+// authorisation withdrawal and belongs to the Weekly Source withdrawal owner.
+// Every other Timesheet keeps the ordinary owner, whose code path is not
+// touched here at all: this listener returns immediately unless the server has
+// said the root is managed.
+//
+// The Weekly Source command endpoint does not yet carry this action — the
+// installed owner `public.weekly_source_first_authorisation_withdraw_v1` has no
+// broker route (WP-12_NEEDS N2).  Per Part 3 of the briefs the frontend codes
+// to the fixed shape and reports the gap rather than silently routing a managed
+// root through the ordinary owner, which would be the money-unsafe choice.
+const WEEKLY_SOURCE_WITHDRAW_ACTION = 'WITHDRAW_FIRST_AUTHORISATION';
+
+function weeklySourceTrustedRowSignature(ctx) {
+  try {
+    const trusted = (ctx && ctx.__timesheetLifecycleTrusted && typeof ctx.__timesheetLifecycleTrusted === 'object')
+      ? ctx.__timesheetLifecycleTrusted
+      : null;
+    if (!trusted) return '';
+    for (const key of ['backend_row_signature', 'mutation_row_signature', 'row_signature', 'expected_row_signature', 'signature']) {
+      const value = String(trusted[key] == null ? '' : trusted[key]).trim();
+      if (value) return value;
+    }
+  } catch {}
+  return '';
+}
+
+function bindWeeklySourceUnauthoriseRouting() {
+  if (typeof document === 'undefined') return false;
+  if (document.documentElement?.dataset?.boundWeeklySourceUnauthorise === '1') return false;
+  if (document.documentElement?.dataset) document.documentElement.dataset.boundWeeklySourceUnauthorise = '1';
+  document.addEventListener('click', async (event) => {
+    const button = event.target?.closest?.('#btnTsUnauthorise, [data-weekly-source-action="unauthorise"]');
+    if (!button || button.disabled) return;
+    const vm = resolveWeeklySourceSurfaceViewModel('SIMPLE_TIMESHEET');
+    // Not a managed root: leave the ordinary owner entirely alone.
+    if (!vm || vm.mount !== true || vm.managed_root !== true) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    const unauthorise = (vm.unauthorise && typeof vm.unauthorise === 'object') ? vm.unauthorise : null;
+    if (!unauthorise || unauthorise.allowed !== true) {
+      const api = window.CloudTMSWeeklySourcePresentationV1;
+      const message = (api && typeof api.withdrawalRefusalText === 'function')
+        ? api.withdrawalRefusalText(unauthorise)
+        : '';
+      // A PERMANENT refusal is stated as permanent and never as "try again".
+      try { toastWarn(message || 'This Timesheet cannot be unauthorised.'); } catch {}
+      return;
+    }
+
+    const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+    const timesheetId = String(mc.data?.timesheet_id || mc.data?.id || mc.timesheetDetails?.timesheet_id || '').trim();
+    const expectedRowSignature = weeklySourceTrustedRowSignature(mc);
+    if (!timesheetId || !expectedRowSignature) {
+      try { toastWarn('Cannot unauthorise until the latest Timesheet details have been refreshed.'); } catch {}
+      return;
+    }
+    button.disabled = true;
+    try {
+      const response = await apiPostJson('/api/weekly-source/v1/commands', {
+        action: WEEKLY_SOURCE_WITHDRAW_ACTION,
+        payload: {
+          timesheet_id: timesheetId,
+          expected_timesheet_id: timesheetId,
+          expected_row_signature: expectedRowSignature
+        }
+      }, { action: 'WEEKLY_SOURCE_COMMAND' });
+      if (!response || response.ok !== true || response.withdrawn !== true) {
+        throw new Error(String(response?.refusal_message || response?.message || response?.reason || 'WITHDRAWAL_REFUSED'));
+      }
+      await refreshSimpleWeeklySourcePresentation();
+      try {
+        toast((window.CloudTMSWeeklySourcePresentationV1 || {}).WITHDRAWAL_RESULT_COPY
+          || 'Authorisation withdrawn. The Timesheet is awaiting authorisation again and is not eligible for payment.');
+      } catch {}
+    } catch (error) {
+      button.disabled = false;
+      try { toastWarn(String(error?.message || 'The authorisation could not be withdrawn.')); } catch {}
+    }
+  }, true);
+  return true;
+}
+
+// Gate 10.  The responsive Bulk shell.
+//
+// 24_TIMESHEET_LIFECYCLE_UI_POLICY.json screens 60 and 61: on a phone or a
+// folding phone the three desktop panes are NOT squeezed into a narrow column;
+// the workspace becomes three clear steps, Queue, Review and Authorise, and the
+// tablet runs the same three with the queue collapsed.
+//
+// This is applied to the REAL Bulk shell rather than to a fragment: the three
+// existing panes keep their ids, their contents and their keyboard order, and
+// the step model only decides which one is presented. Nothing is removed, so
+// Queue/Attached, Previous/Next, Upload, Attach, thumbnails, removal and return
+// are untouched.
+const WEEKLY_SOURCE_BULK_PANES = Object.freeze([
+  Object.freeze({ id: 'bulkAuthoriseLeftPane', step: 'QUEUE' }),
+  Object.freeze({ id: 'bulkAuthoriseMiddlePane', step: 'REVIEW' }),
+  Object.freeze({ id: 'bulkAuthoriseRightPane', step: 'AUTHORISE' })
+]);
+
+function weeklySourceBulkShellState() {
+  if (typeof window === 'undefined') return null;
+  if (!window.__weeklySourceBulkShell || typeof window.__weeklySourceBulkShell !== 'object') {
+    window.__weeklySourceBulkShell = { step: 'REVIEW', bound: false, observer: null };
+  }
+  return window.__weeklySourceBulkShell;
+}
+
+function applyWeeklySourceBulkShell() {
+  if (typeof document === 'undefined') return false;
+  const api = window.CloudTMSWeeklySourcePresentationV1;
+  const grid = document.getElementById('bulkAuthoriseWorkbenchGrid');
+  if (!api || typeof api.applyBulkWorkspaceStep !== 'function' || !grid) return false;
+  const state = weeklySourceBulkShellState();
+  if (!state) return false;
+  // This function inserts and replaces nodes inside the observed subtree, so
+  // without a re-entrancy guard the MutationObserver below would call it from
+  // inside its own mutation, forever, and hang the workbench.
+  if (state.applying === true) return false;
+  state.applying = true;
+  try {
+    return applyWeeklySourceBulkShellInner(api, grid, state);
+  } finally {
+    state.applying = false;
+  }
+}
+
+function applyWeeklySourceBulkShellInner(api, grid, state) {
+  let tagged = 0;
+  for (const pane of WEEKLY_SOURCE_BULK_PANES) {
+    const element = document.getElementById(pane.id);
+    if (!element) continue;
+    element.setAttribute('data-weekly-source-workspace-pane', pane.step);
+    tagged += 1;
+  }
+  if (tagged === 0) return false;
+
+  if (!grid.previousElementSibling
+      || grid.previousElementSibling.getAttribute('data-weekly-source-workspace-steps') !== '1') {
+    const nav = document.createElement('div');
+    nav.innerHTML = api.renderBulkWorkspaceSteps(state.step, {});
+    const navRoot = nav.firstElementChild;
+    if (navRoot && grid.parentNode) grid.parentNode.insertBefore(navRoot, grid);
+  }
+  const model = api.applyBulkWorkspaceStep(grid, state.step, {});
+  if (model && model.step) state.step = model.step;
+
+  // The tab list is a sibling of the grid, not one of its descendants.  The
+  // presentation helper deliberately owns only the panes inside the grid, so
+  // keep the real visible tabs in step with the model here.  Without this, a
+  // phone user could reach the requested pane but the tab would continue to
+  // announce the previous step.
+  const stepNav = grid.previousElementSibling
+    && grid.previousElementSibling.getAttribute('data-weekly-source-workspace-steps') === '1'
+      ? grid.previousElementSibling
+      : null;
+  if (stepNav) {
+    stepNav.querySelectorAll('[data-weekly-source-workspace-step][role="tab"]').forEach((tab) => {
+      const tabStep = String(tab.getAttribute('data-weekly-source-workspace-step') || '').trim().toUpperCase();
+      const selected = tabStep === state.step;
+      tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+      tab.classList.toggle('is-active', selected);
+    });
+  }
+
+  // The sticky "Continue to …" control names the NEXT step, so it is rebuilt
+  // whenever the step changes. On the last step it renders nothing, and the
+  // placeholder stays so the node is never orphaned.
+  const existingSticky = grid.parentNode
+    ? grid.parentNode.querySelector('[data-weekly-source-workspace-sticky="1"], [data-weekly-source-workspace-sticky-slot="1"]')
+    : null;
+  const stickyMarkup = String(api.renderBulkStickyAction(state.step, {}) || '').trim();
+  // Only touch the DOM when the markup has actually changed. Replacing an
+  // identical node on every pass would churn the subtree for no reason.
+  if (!existingSticky || existingSticky.getAttribute('data-weekly-source-sticky-markup') !== stickyMarkup) {
+    const holder = document.createElement('div');
+    holder.innerHTML = stickyMarkup;
+    const nextSticky = holder.firstElementChild || document.createElement('div');
+    if (!holder.firstElementChild) nextSticky.setAttribute('data-weekly-source-workspace-sticky-slot', '1');
+    nextSticky.setAttribute('data-weekly-source-sticky-markup', stickyMarkup);
+    if (existingSticky) existingSticky.replaceWith(nextSticky);
+    else if (grid.parentNode) grid.parentNode.insertBefore(nextSticky, grid.nextSibling);
+  }
+  return true;
+}
+
+function weeklySourceBulkShellObserve() {
+  const state = weeklySourceBulkShellState();
+  if (!state || typeof MutationObserver !== 'function') return false;
+  // The workbench root does not exist until the workbench opens, and the Bulk
+  // shell paints its grid some time after that. Observing the stable modal
+  // container instead means the step model attaches whenever the grid appears,
+  // however late, and re-attaches on every reopen. The callback is cheap: it
+  // does nothing at all unless a grid exists and is not yet tagged.
+  const container = document.getElementById('modal') || document.body;
+  if (!container || state.observerRoot === container) return false;
+  try { state.observer?.disconnect(); } catch {}
+  state.observer = new MutationObserver(() => {
+    const grid = document.getElementById('bulkAuthoriseWorkbenchGrid');
+    if (!grid) return;
+    if (grid.getAttribute('data-weekly-source-bulk-layout')
+        && grid.querySelector('[data-weekly-source-workspace-pane]')) return;
+    applyWeeklySourceBulkShell();
+  });
+  state.observer.observe(container, { childList: true, subtree: true });
+  state.observerRoot = container;
+  return true;
+}
+
+function bindWeeklySourceBulkShell() {
+  if (typeof document === 'undefined') return false;
+  const state = weeklySourceBulkShellState();
+  if (!state) return false;
+  if (state.bound === true) {
+    // Listeners are bound once; the observer follows the current root.
+    try { weeklySourceBulkShellObserve(); } catch {}
+    applyWeeklySourceBulkShell();
+    return false;
+  }
+  state.bound = true;
+
+  document.addEventListener('click', (event) => {
+    const control = event.target?.closest?.('[data-weekly-source-workspace-step]');
+    if (!control) return;
+    event.preventDefault();
+    const requested = String(control.getAttribute('data-weekly-source-workspace-step') || '').trim().toUpperCase();
+    const live = weeklySourceBulkShellState();
+    if (!live) return;
+    live.step = requested;
+    applyWeeklySourceBulkShell();
+  });
+
+  try {
+    window.addEventListener('resize', () => { applyWeeklySourceBulkShell(); }, { passive: true });
+  } catch {}
+
+  // The Bulk shell re-renders its own panes; re-apply when it does, so the step
+  // model never silently disappears mid-session.
+  try { weeklySourceBulkShellObserve(); } catch {}
+
+  applyWeeklySourceBulkShell();
+  return true;
+}
+
+function bindSimpleWeeklySourceApprovedHoursAction() {
+  // Gate 10.  Both new surfaces are bound from here, the integration point
+  // reconciliation report 04 names, so no other call site in main.js changes.
+  try { bindWeeklySourceLaterChangeDecisions(); } catch (error) {
+    console.warn('[WEEKLY-SOURCE][DECISIONS] bind failed', error);
+  }
+  try { bindWeeklySourceUnauthoriseRouting(); } catch (error) {
+    console.warn('[WEEKLY-SOURCE][UNAUTHORISE] bind failed', error);
+  }
+  try { bindWeeklySourceBulkShell(); } catch (error) {
+    console.warn('[WEEKLY-SOURCE][BULK-SHELL] bind failed', error);
+  }
+  const button = document.querySelector('[data-weekly-source-manage-approved-hours="1"][data-weekly-source-surface="SIMPLE_TIMESHEET"]');
+  if (!button || button.dataset.boundWeeklySourceApprovedHours === '1') return false;
+  button.dataset.boundWeeklySourceApprovedHours = '1';
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    const presentationApi = window.CloudTMSWeeklySourcePresentationV1;
+    const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+    const host = presentationApi?.findHostPayload?.([mc.timesheetDetails, mc.data]);
+    const vm = host ? presentationApi.buildViewModel(host) : null;
+    if (!vm || vm.manage_approved_hours_allowed !== true) return;
+    openWeeklySourceApprovedHoursModal({ surface: 'SIMPLE_TIMESHEET', viewModel: vm });
+  });
+  return true;
+}
+
 async function openBulkAuthoriseWorkbench() {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-AUTH][OPEN]');
   GC('openBulkAuthoriseWorkbench');
@@ -178225,8 +179077,12 @@ async function openBulkAuthoriseWorkbench() {
     show_authorised_invoiced_unissued: false
   };
 
+  const initialWeeklySourceCategory = readBulkAuthoriseWeeklySourceCategorySession();
+  const initialBackendClassification = bulkAuthoriseBackendClassificationForCategory(initialWeeklySourceCategory);
+
   const state = {
-    classification: 'TIMESHEETS',
+    weekly_source_category: initialWeeklySourceCategory,
+    classification: initialBackendClassification,
     filters_toolbar_open: false,
     ordering_toolbar_open: false,
     filters: deep(initialFilters),
@@ -178235,7 +179091,8 @@ async function openBulkAuthoriseWorkbench() {
         q: null,
         candidate_id: null,
         client_id: null,
-        classification: 'TIMESHEETS'
+        classification: initialBackendClassification,
+        weekly_source_category: initialWeeklySourceCategory
       },
       counts: {
         total: 0,
@@ -179510,7 +180367,7 @@ async function openBulkAuthoriseWorkbench() {
   };
 
   showModal(
-    'Bulk Authorise',
+    'Bulk Timesheet Authorise',
     [{ key: 'main', label: 'Bulk Authorise' }],
     renderTab,
     null,
@@ -179645,6 +180502,9 @@ function buildBulkAuthoriseDatasetRequestFilters(state) {
   const classification = (classificationRaw === 'NHSP' || classificationRaw === 'HR' || classificationRaw === 'TIMESHEETS')
     ? classificationRaw
     : 'TIMESHEETS';
+  const weeklySourceCategory = normaliseBulkAuthoriseWeeklySourceCategory(
+    readFirst(st.weekly_source_category, filters.weekly_source_category, 'STANDARD_TIMESHEETS')
+  );
 
   const q = trimStr(readFirst(filters.q, filters.search, filters.text, filters.candidate_text, filters.candidateText, filters.name, ''));
   const candidateId = trimStr(readFirst(filters.candidate_id, filters.candidateId, ''));
@@ -179655,6 +180515,7 @@ function buildBulkAuthoriseDatasetRequestFilters(state) {
     candidate_id: candidateId || null,
     client_id: clientId || null,
     classification,
+    weekly_source_category: weeklySourceCategory,
     show_daily: readBool(readFirst(filters.show_daily, filters.showDaily), true),
     show_weekly: readBool(readFirst(filters.show_weekly, filters.showWeekly), true),
     show_manual: readBool(readFirst(filters.show_manual, filters.showManual), true),
@@ -182980,6 +183841,7 @@ function renderBulkAuthoriseFiltersToolbar(state) {
   const classification = (classificationRaw === 'TIMESHEETS' || classificationRaw === 'NHSP' || classificationRaw === 'HR')
     ? classificationRaw
     : 'TIMESHEETS';
+  const weeklySourceCategory = normaliseBulkAuthoriseWeeklySourceCategory(st.weekly_source_category);
 
   const uniqBy = (rows, keyFn) => {
     const seen = new Set();
@@ -183061,7 +183923,7 @@ function renderBulkAuthoriseFiltersToolbar(state) {
         </div>
       </div>
 
-      ${classification === 'TIMESHEETS'
+      ${weeklySourceCategory === 'STANDARD_TIMESHEETS' && classification === 'TIMESHEETS'
         ? `
           <div class="row" style="margin-top:4px;">
             <label>Timesheets</label>
@@ -183125,50 +183987,19 @@ function renderBulkAuthoriseFiltersToolbar(state) {
 
 function renderBulkAuthoriseClassificationButtons(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
-  const enc = (typeof escapeHtml === 'function')
-    ? escapeHtml
-    : (s) => String(s ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
-
   const st = (state && typeof state === 'object') ? state : {};
-  const classificationRaw = String(st.classification == null ? '' : st.classification).trim().toUpperCase();
-  const classification = (classificationRaw === 'TIMESHEETS' || classificationRaw === 'NHSP' || classificationRaw === 'HR')
-    ? classificationRaw
-    : 'TIMESHEETS';
-
-  const renderButton = (value, label) => {
-    const isActive = classification === value;
-    const activeStyle = isActive
-      ? 'border-color:var(--ok,#22c55e);background:rgba(34,197,94,0.08);color:var(--ok,#22c55e);box-shadow:0 0 0 1px rgba(34,197,94,0.18) inset;font-weight:600;'
-      : '';
-
-    return `
-      <button
-        type="button"
-        class="btn btn-outline"
-        id="bulkAuthoriseClassificationBtn${enc(value)}"
-        data-bulk-authorise-classification-btn="1"
-        data-classification="${enc(value)}"
-        aria-pressed="${isActive ? 'true' : 'false'}"
-        style="${activeStyle}"
-      >${enc(label)}</button>
-    `;
-  };
+  const api = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  const activeCategory = normaliseBulkAuthoriseWeeklySourceCategory(st.weekly_source_category);
+  const counts = (st.dataset?.counts?.by_weekly_source_category && typeof st.dataset.counts.by_weekly_source_category === 'object')
+    ? st.dataset.counts.by_weekly_source_category
+    : {};
+  const tabsHtml = (api && typeof api.renderCategoryTabs === 'function')
+    ? api.renderCategoryTabs(activeCategory, counts)
+    : '';
 
   return htmlWrap(`
     <div class="card" id="bulkAuthoriseClassificationButtonsRoot" style="padding:8px 10px;">
-      <div class="row">
-        <label>Classification</label>
-        <div class="controls" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          ${renderButton('NHSP', 'NHSP')}
-          ${renderButton('HR', 'HR')}
-          ${renderButton('TIMESHEETS', 'Timesheets')}
-        </div>
-      </div>
+      ${tabsHtml}
     </div>
   `);
 }
@@ -183182,10 +184013,6 @@ function bindBulkAuthoriseClassificationButtons(state) {
   root.dataset.boundBulkAuthoriseClassificationButtons = '1';
 
   const trimStr = (value) => String(value == null ? '' : value).trim();
-  const normaliseClassification = (value) => {
-    const raw = trimStr(value).toUpperCase();
-    return (raw === 'TIMESHEETS' || raw === 'NHSP' || raw === 'HR') ? raw : 'TIMESHEETS';
-  };
   const normalisePageSize = (value) => {
     const raw = trimStr(value).toUpperCase();
     if (raw === 'ALL') return 'ALL';
@@ -183212,22 +184039,20 @@ function bindBulkAuthoriseClassificationButtons(state) {
     });
   };
 
-  const buttons = Array.from(root.querySelectorAll('[data-bulk-authorise-classification-btn="1"][data-classification]'));
-  for (const btn of buttons) {
-    if (btn.dataset.boundBulkAuthoriseClassificationButton === '1') continue;
-    btn.dataset.boundBulkAuthoriseClassificationButton = '1';
-    btn.addEventListener('click', async () => {
-      if (st.loading || st.batch_busy) return;
+  const activateCategory = async (categoryValue) => {
+      if (st.loading || st.batch_busy) return false;
 
-      const nextClassification = normaliseClassification(btn.getAttribute('data-classification') || '');
-      if (nextClassification === normaliseClassification(st.classification)) return;
+      const nextCategory = normaliseBulkAuthoriseWeeklySourceCategory(categoryValue || '');
+      const currentCategory = normaliseBulkAuthoriseWeeklySourceCategory(st.weekly_source_category);
+      if (nextCategory === currentCategory) return true;
 
       const okToChange = await resolveDirtyBeforeClassificationChange();
-      if (!okToChange) return;
-      if (st.loading || st.batch_busy) return;
-      if (nextClassification === normaliseClassification(st.classification)) return;
+      if (!okToChange) return false;
+      if (st.loading || st.batch_busy) return false;
+      if (nextCategory === normaliseBulkAuthoriseWeeklySourceCategory(st.weekly_source_category)) return true;
 
-      st.classification = nextClassification;
+      st.weekly_source_category = writeBulkAuthoriseWeeklySourceCategorySession(nextCategory);
+      st.classification = bulkAuthoriseBackendClassificationForCategory(nextCategory);
       st.active_row_key = null;
       st.active_row = null;
       st.active_context = null;
@@ -183286,6 +184111,27 @@ function bindBulkAuthoriseClassificationButtons(state) {
         st.error_text = String(err?.message || err || 'Failed to switch Bulk Authorise classification.');
         await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][CLASSIFICATION][ERROR]');
       }
+      return true;
+  };
+
+  const buttons = Array.from(root.querySelectorAll('[data-weekly-source-category]'));
+  for (const btn of buttons) {
+    if (btn.dataset.boundBulkAuthoriseClassificationButton === '1') continue;
+    btn.dataset.boundBulkAuthoriseClassificationButton = '1';
+    btn.addEventListener('click', async () => {
+      await activateCategory(btn.getAttribute('data-weekly-source-category') || '');
+    });
+  }
+
+  const categorySelect = root.querySelector('[data-weekly-source-category-select]');
+  if (categorySelect && categorySelect.dataset.boundBulkAuthoriseClassificationSelect !== '1') {
+    categorySelect.dataset.boundBulkAuthoriseClassificationSelect = '1';
+    categorySelect.addEventListener('change', async () => {
+      const requested = normaliseBulkAuthoriseWeeklySourceCategory(categorySelect.value || '');
+      const changed = await activateCategory(requested);
+      if (!changed && categorySelect.isConnected) {
+        categorySelect.value = normaliseBulkAuthoriseWeeklySourceCategory(st.weekly_source_category);
+      }
     });
   }
 }
@@ -183301,6 +184147,7 @@ function bindBulkAuthoriseFiltersToolbar(state) {
 
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const classification = String(st.classification == null ? '' : st.classification).trim().toUpperCase();
+  const weeklySourceCategory = normaliseBulkAuthoriseWeeklySourceCategory(st.weekly_source_category);
 
   const getVisibleModel = () => {
     const visible = (typeof getVisibleBulkAuthoriseRows === 'function') ? getVisibleBulkAuthoriseRows(st) : {
@@ -183342,7 +184189,7 @@ function bindBulkAuthoriseFiltersToolbar(state) {
     setValue('bulkAuthoriseToolbarTextInput', trimStr(f.q || ''));
     setValue('bulkAuthoriseToolbarClientSelect', trimStr(f.client_id || ''));
     setValue('bulkAuthoriseToolbarCandidateSelect', trimStr(f.candidate_id || ''));
-    if (classification === 'TIMESHEETS') {
+    if (weeklySourceCategory === 'STANDARD_TIMESHEETS' && classification === 'TIMESHEETS') {
       setChecked('bulkAuthoriseToolbarShowDaily', f.show_daily !== false);
       setChecked('bulkAuthoriseToolbarShowWeekly', f.show_weekly !== false);
       setChecked('bulkAuthoriseToolbarShowManual', f.show_manual !== false);
@@ -183363,7 +184210,7 @@ function bindBulkAuthoriseFiltersToolbar(state) {
       candidate_id: trimStr(document.getElementById('bulkAuthoriseToolbarCandidateSelect')?.value || '')
     };
 
-    if (classification === 'TIMESHEETS') {
+    if (weeklySourceCategory === 'STANDARD_TIMESHEETS' && classification === 'TIMESHEETS') {
       nextFilters.show_daily = readCheckboxOrCurrent('bulkAuthoriseToolbarShowDaily', currentFilters.show_daily !== false);
       nextFilters.show_weekly = readCheckboxOrCurrent('bulkAuthoriseToolbarShowWeekly', currentFilters.show_weekly !== false);
       nextFilters.show_manual = readCheckboxOrCurrent('bulkAuthoriseToolbarShowManual', currentFilters.show_manual !== false);
@@ -183557,6 +184404,18 @@ function renderBulkAuthoriseLists(state) {
   const processedRows = Array.isArray(visibleModel.visible_processed_eligible_rows) ? visibleModel.visible_processed_eligible_rows : [];
   const authorisedRows = Array.isArray(visibleModel.visible_authorised_eligible_rows) ? visibleModel.visible_authorised_eligible_rows : [];
   const reviewRequiredRows = Array.isArray(visibleModel.visible_review_required_rows) ? visibleModel.visible_review_required_rows : [];
+  const weeklySourceApi = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  const weeklySourceCategory = normaliseBulkAuthoriseWeeklySourceCategory(st.weekly_source_category);
+  const weeklySourceRowViewModel = (row) => {
+    if (!weeklySourceApi || typeof weeklySourceApi.findHostPayload !== 'function' || typeof weeklySourceApi.buildViewModel !== 'function') return null;
+    const host = weeklySourceApi.findHostPayload(row);
+    return host ? weeklySourceApi.buildViewModel(host) : null;
+  };
+  const rowCanBeSelectedForSection = (row, sectionName) => {
+    if (sectionName !== 'processed_eligible') return true;
+    const vm = weeklySourceRowViewModel(row);
+    return !(vm && vm.mount) || vm.authorise_allowed === true;
+  };
   const activeRowKey = String(st.active_row_key || '').trim();
   const selectionMap = (st.selected_row_keys_by_section && typeof st.selected_row_keys_by_section === 'object')
     ? st.selected_row_keys_by_section
@@ -183569,7 +184428,7 @@ function renderBulkAuthoriseLists(state) {
     (Array.isArray(selectionMap.authorised_eligible) ? selectionMap.authorised_eligible : [])
       .map((value) => String(value || '').trim()).filter(Boolean)
   );
-  const processedVisibleSet = new Set(processedRows.map((row) => String(row?.row_key || '').trim()).filter(Boolean));
+  const processedVisibleSet = new Set(processedRows.filter((row) => rowCanBeSelectedForSection(row, 'processed_eligible')).map((row) => String(row?.row_key || '').trim()).filter(Boolean));
   const authorisedVisibleSet = new Set(authorisedRows.map((row) => String(row?.row_key || '').trim()).filter(Boolean));
   const processedSelectedCount = Array.from(processedSelectedSet).filter((key) => processedVisibleSet.has(key)).length;
   const authorisedSelectedCount = Array.from(authorisedSelectedSet).filter((key) => authorisedVisibleSet.has(key)).length;
@@ -183709,7 +184568,9 @@ function renderBulkAuthoriseLists(state) {
   const renderRow = (row, sectionName) => {
     const rowKey = String(row?.row_key || '').trim();
     const isActive = rowKey && rowKey === activeRowKey;
-    const isReviewRequired = sectionName === 'processed_review_required';
+    const weeklySourceVm = weeklySourceRowViewModel(row);
+    const weeklySourceBlocked = sectionName === 'processed_eligible' && weeklySourceVm?.mount === true && weeklySourceVm.authorise_allowed !== true;
+    const isReviewRequired = sectionName === 'processed_review_required' || weeklySourceBlocked;
     const sectionSelectedSet = sectionName === 'processed_eligible' ? processedSelectedSet : authorisedSelectedSet;
     const isSelected = !isReviewRequired && sectionSelectedSet.has(rowKey);
 
@@ -183780,14 +184641,16 @@ function renderBulkAuthoriseLists(state) {
               <span>${enc(statusText)}</span>
             </div>
             ${candidateOfficeBadgeHtml}
-            ${isReviewRequired ? '<div class="mini" style="color:#fbbf24;font-weight:650;line-height:1.35;">Possible duplicate expenses — open and review this claim individually.</div>' : ''}
+            ${weeklySourceBlocked
+              ? `<div class="mini" style="color:#fbbf24;font-weight:650;line-height:1.35;">${enc(weeklySourceVm.blocked_reason || 'Open this Timesheet to see what needs attention.')}</div>`
+              : (isReviewRequired ? '<div class="mini" style="color:#fbbf24;font-weight:650;line-height:1.35;">Possible duplicate expenses — open and review this claim individually.</div>' : '')}
             ${evidenceChips.length
               ? `<div class="mini" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:1px;">${evidenceChips.map((chip) => `<span class="bulk-timesheet-evidence-badge${chip.kind === 'TIMESHEET' ? ' bulk-timesheet-evidence-badge--timesheet' : ''}" data-evidence-kind="${enc(chip.kind)}" title="${enc(chip.label)} evidence attached" style="display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,0.16);border-radius:999px;padding:1px 6px;font-size:9px;font-weight:700;letter-spacing:.02em;background:rgba(255,255,255,0.045);color:rgba(255,255,255,0.9);line-height:1.45;">${enc(chip.label)}</span>`).join('')}</div>`
               : ''}
           </div>
 
           <div style="display:flex;align-items:flex-start;justify-content:flex-end;">
-            <span class="pill${sectionName === 'authorised_eligible' ? ' pill-ok' : ''}" style="font-size:10px;padding:2px 7px;${isReviewRequired ? 'border-color:rgba(245,158,11,.55);color:#fbbf24;background:rgba(245,158,11,.10);' : ''}">${enc(isReviewRequired ? 'Review required' : (sectionName === 'processed_eligible' ? 'Processed' : 'Authorised'))}</span>
+            <span class="pill${sectionName === 'authorised_eligible' ? ' pill-ok' : ''}" style="font-size:10px;padding:2px 7px;${isReviewRequired ? 'border-color:rgba(245,158,11,.55);color:#fbbf24;background:rgba(245,158,11,.10);' : ''}">${enc(isReviewRequired ? 'Review required' : (sectionName === 'processed_eligible' ? 'Ready' : 'Authorised'))}</span>
           </div>
         </div>
       </div>
@@ -183798,7 +184661,7 @@ function renderBulkAuthoriseLists(state) {
     const rowsArray = Array.isArray(rowsInSection) ? rowsInSection : [];
     const isReviewSection = sectionName === 'processed_review_required';
     const sectionSelectedSet = sectionName === 'processed_eligible' ? processedSelectedSet : authorisedSelectedSet;
-    const visibleKeys = rowsArray.map((row) => String(row?.row_key || '').trim()).filter(Boolean);
+    const visibleKeys = rowsArray.filter((row) => rowCanBeSelectedForSection(row, sectionName)).map((row) => String(row?.row_key || '').trim()).filter(Boolean);
     const selectedCount = visibleKeys.filter((key) => sectionSelectedSet.has(key)).length;
     const sectionChecked = !!visibleKeys.length && selectedCount === visibleKeys.length;
     const sectionIndeterminate = selectedCount > 0 && selectedCount < visibleKeys.length;
@@ -183815,6 +184678,7 @@ function renderBulkAuthoriseLists(state) {
                   data-section="${enc(sectionName)}"
                   ${sectionChecked ? 'checked' : ''}
                   ${sectionIndeterminate ? 'data-indeterminate="1"' : ''}
+                  ${visibleKeys.length ? '' : 'disabled'}
                   aria-label="Select ${enc(title)}"
                 />`}
             <span>${enc(title)}</span>
@@ -183845,9 +184709,13 @@ function renderBulkAuthoriseLists(state) {
           </div>
         `
         : ''}
-      ${renderSection('processed_eligible', 'Processed Eligible', processedRows)}
-      ${renderSection('authorised_eligible', 'Authorised Eligible', authorisedRows)}
-      ${reviewRequiredRows.length ? renderSection('processed_review_required', 'Review Individually', reviewRequiredRows) : ''}
+      ${renderSection('processed_eligible', weeklySourceCategory === 'STANDARD_TIMESHEETS' ? 'Processed Eligible' : 'Ready to authorise', processedRows)}
+      ${renderSection('authorised_eligible', weeklySourceCategory === 'STANDARD_TIMESHEETS' ? 'Authorised Eligible' : 'Authorised', authorisedRows)}
+      ${reviewRequiredRows.length
+        ? (weeklySourceCategory === 'STANDARD_TIMESHEETS'
+            ? renderSection('processed_review_required', 'Review Individually', reviewRequiredRows)
+            : renderSection('processed_review_required', 'Needs attention', reviewRequiredRows))
+        : ''}
     </div>
   `);
 }
@@ -184003,10 +184871,18 @@ function bindBulkAuthoriseLists(state) {
         visible_processed_eligible_rows: [],
         visible_authorised_eligible_rows: []
       };
+  const canSelectProcessedRow = (row) => {
+    const api = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+    if (!api || typeof api.findHostPayload !== 'function' || typeof api.buildViewModel !== 'function') return true;
+    const host = api.findHostPayload(row);
+    if (!host) return true;
+    const vm = api.buildViewModel(host);
+    return vm.mount !== true || vm.authorise_allowed === true;
+  };
 
   const sectionRowKeys = {
     processed_eligible: Array.isArray(visibleModel.visible_processed_eligible_rows)
-      ? visibleModel.visible_processed_eligible_rows.map((row) => trimStr(row?.row_key || '')).filter(Boolean)
+      ? visibleModel.visible_processed_eligible_rows.filter(canSelectProcessedRow).map((row) => trimStr(row?.row_key || '')).filter(Boolean)
       : [],
     authorised_eligible: Array.isArray(visibleModel.visible_authorised_eligible_rows)
       ? visibleModel.visible_authorised_eligible_rows.map((row) => trimStr(row?.row_key || '')).filter(Boolean)
@@ -184059,8 +184935,9 @@ function bindBulkAuthoriseLists(state) {
 
       const action = trimStr(btnEl.getAttribute('data-bulk-authorise-selected-action') || '');
       const selectedSection = action === 'authorise' ? 'processed_eligible' : (action === 'unauthorise' ? 'authorised_eligible' : '');
+      const selectableKeys = new Set(Array.isArray(sectionRowKeys[selectedSection]) ? sectionRowKeys[selectedSection] : []);
       const selectedKeys = Array.isArray(st.selected_row_keys_by_section?.[selectedSection])
-        ? st.selected_row_keys_by_section[selectedSection].map((key) => trimStr(key)).filter(Boolean)
+        ? st.selected_row_keys_by_section[selectedSection].map((key) => trimStr(key)).filter((key) => !!key && selectableKeys.has(key))
         : [];
       const selectedCount = selectedKeys.length;
       st.selected_row_keys = selectedKeys.slice();
@@ -227940,17 +228817,24 @@ function renderBulkProcessManualEditor(state) {
     frameKind === 'bulk-authorise-workbench' ||
     window.modalCtx?.bulkAuthoriseState === st
   );
+  const manualRouteEditable = bulkAuthoriseContext
+    ? !!(
+        editDomains &&
+        editDomains.canEditHoursSchedule === true &&
+        editDomains.canEditTimesheetData === true
+      )
+    : !!editability.manualNonQrEditable;
   const bulkAuthoriseForceReadOnly = bulkAuthoriseContext && !!(
     stateCtx.bulkAuthoriseForceReadOnly ||
     editability.reviewOnly ||
     editability.isAuthorised ||
-    !editability.manualNonQrEditable
+    !manualRouteEditable
   );
   const isBulkProcessContext = !bulkAuthoriseContext;
   const manualReadOnly = !!(
     editability.reviewOnly ||
     editability.isAuthorised ||
-    !editability.manualNonQrEditable ||
+    !manualRouteEditable ||
     bulkAuthoriseForceReadOnly
   );
   const isManualRoute = (subMode === 'MANUAL') && (sheetScope === 'WEEKLY' || sheetScope === 'DAILY');
@@ -227997,7 +228881,7 @@ function renderBulkProcessManualEditor(state) {
     !isImportAuthoritative &&
     !editability.reviewOnly &&
     !editability.isAuthorised &&
-    editability.manualNonQrEditable
+    manualRouteEditable
   );
   const buildEditorOpts = () => ({
     ctx,
@@ -228038,6 +228922,7 @@ function renderBulkProcessManualEditor(state) {
     wholeInvoiceHint,
     esc: enc,
     fmtYmdDmy,
+    policy: editDomains,
     isBulkProcess: isBulkProcessContext,
     enableWeeklyLineActions: enableBulkAuthoriseWeeklyLineActions,
     forceReadOnly: protectedNoTimesheetManualEditorRow || (isBulkProcessContext ? false : manualReadOnly)
@@ -228106,17 +228991,52 @@ function renderBulkProcessManualEditor(state) {
         #bulkProcessManualEditorRoot .grid th,
         #bulkProcessManualEditorRoot .grid td { padding: 2px 4px; }
         #bulkProcessManualEditorRoot .grid th { font-size: 9px; }
-        #bulkProcessManualEditorRoot .ts-weekly-schedule-wrap { max-width: 100% !important; min-width: 0 !important; overflow-x: hidden !important; }
-        #bulkProcessManualEditorRoot #tsWeeklySchedule { width: 100% !important; min-width: 0 !important; max-width: 100% !important; table-layout: fixed !important; }
+        #bulkProcessManualEditorRoot .ts-weekly-schedule-wrap {
+          max-width: 100% !important;
+          min-width: 0 !important;
+          overflow-x: auto !important;
+          overscroll-behavior-inline: contain;
+        }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule {
+          display: table !important;
+          width: calc(100% - 4px) !important;
+          min-width: 0 !important;
+          max-width: 100% !important;
+          table-layout: fixed !important;
+          border-collapse: collapse !important;
+          border-spacing: 0 !important;
+        }
         #bulkProcessManualEditorRoot #tsWeeklySchedule th,
         #bulkProcessManualEditorRoot #tsWeeklySchedule td {
-          white-space: normal !important;
-          overflow-wrap: anywhere !important;
-          word-break: break-word !important;
-          vertical-align: top;
+          min-width: 0 !important;
+          padding: 2px 1px !important;
+          vertical-align: middle !important;
         }
-        #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(1),
-        #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(2) { font-size: 9px; font-weight: 400; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule th {
+          color: #a9bed8;
+          font-size: 8px !important;
+          line-height: 1.1;
+          white-space: normal !important;
+        }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule td:first-child,
+        #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(2) {
+          font-weight: 700;
+          white-space: nowrap !important;
+        }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule th:first-child,
+        #bulkProcessManualEditorRoot #tsWeeklySchedule td:first-child { padding-right: 3px !important; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(2),
+        #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(2) { padding-left: 3px !important; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-day { width: 28px; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-date { width: 50px; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-ref { width: auto; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-start,
+        #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-end { width: 44px; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-break-start,
+        #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-break-end { width: 46px; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-break-mins { width: 42px; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-paid-hrs { width: 50px; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-actions { width: 58px; }
         #bulkProcessManualEditorRoot #tsWeeklySchedule input[name^="wl_"] {
           width: 100% !important;
           min-width: 0 !important;
@@ -228153,16 +229073,95 @@ function renderBulkProcessManualEditor(state) {
         #bulkProcessManualEditorRoot [data-ts-daily-field="paid_hours"],
         #bulkProcessManualEditorRoot input[name*="paid_hours"],
         #bulkProcessManualEditorRoot input[name*="paidHours"] { min-width: 8.5ch !important; width: 8.5ch !important; max-width: 10.5ch !important; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field] {
+          width: 100% !important;
+          min-width: 0 !important;
+          max-width: none !important;
+          height: 22px;
+          padding: 2px 3px;
+          font-size: 9px;
+        }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="start"],
+        #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="end"],
+        #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_start"],
+        #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_end"] {
+          font-variant-numeric: tabular-nums;
+          letter-spacing: 0;
+        }
         #bulkProcessManualEditorRoot .ts-weekly-paid-hours-head,
-        #bulkProcessManualEditorRoot .ts-weekly-paid-hours-cell { min-width: 72px !important; white-space: nowrap !important; }
+        #bulkProcessManualEditorRoot .ts-weekly-paid-hours-cell { min-width: 0 !important; white-space: nowrap !important; text-align:center; }
         #bulkProcessManualEditorRoot .ts-weekly-line-actions-head,
-        #bulkProcessManualEditorRoot .ts-weekly-line-actions-cell { min-width: 82px !important; width: 82px !important; max-width: 82px !important; padding-left: 4px !important; padding-right: 1px !important; text-align: right !important; white-space: nowrap !important; }
+        #bulkProcessManualEditorRoot .ts-weekly-line-actions-cell { min-width: 0 !important; width: auto !important; max-width: none !important; padding-left: 2px !important; padding-right: 1px !important; text-align: right !important; white-space: nowrap !important; }
         #bulkProcessManualEditorRoot .ts-weekly-line-actions,
         #bulkProcessManualEditorRoot .ts-weekly-schedule-actions { display: inline-flex !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: flex-end !important; gap: 2px !important; max-width: 100% !important; }
-        #bulkProcessManualEditorRoot .ts-weekly-line-btn { min-width: 14px !important; width: 14px !important; height: 14px !important; font-size: 7.5px !important; padding: 0 !important; flex: 0 0 14px !important; }
+        #bulkProcessManualEditorRoot .ts-weekly-line-btn { min-width: 18px !important; width: 18px !important; height: 18px !important; font-size: 8px !important; padding: 0 !important; flex: 0 0 18px !important; }
         #bulkProcessManualEditorRoot #tsDailyReference { min-width: 22ch !important; width: 100% !important; max-width: none !important; }
+        #bulkProcessManualEditorBody > .tabc > .card:first-child {
+          padding: 4px 6px !important;
+        }
+        #bulkProcessManualEditorBody > .tabc > .card:first-child > .row:first-child .mini {
+          display: none !important;
+        }
+        #bulkProcessManualEditorBody > .tabc > .card:nth-child(2) {
+          margin-top: 4px !important;
+          padding: 4px 5px !important;
+        }
+        #bulkProcessManualEditorBody > .tabc > .card:nth-child(2) > .row {
+          gap: 3px !important;
+        }
+        #bulkProcessManualEditorBody > .tabc > .card:nth-child(2) > .row > label {
+          margin-bottom: 1px !important;
+        }
+        @media (min-width: 621px) and (max-width: 900px) {
+          #bulkProcessManualEditorRoot #tsWeeklySchedule {
+            display: table !important;
+            width: 100% !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+          }
+          #bulkProcessManualEditorRoot #tsWeeklySchedule colgroup { display: table-column-group !important; }
+          #bulkProcessManualEditorRoot #tsWeeklySchedule thead { display: table-header-group !important; }
+          #bulkProcessManualEditorRoot #tsWeeklySchedule tbody { display: table-row-group !important; }
+          #bulkProcessManualEditorRoot #tsWeeklySchedule tr { display: table-row !important; padding: 0 !important; }
+          #bulkProcessManualEditorRoot #tsWeeklySchedule th,
+          #bulkProcessManualEditorRoot #tsWeeklySchedule td {
+            display: table-cell !important;
+            width: auto;
+            padding: 2px 1px !important;
+            border-bottom: 1px solid var(--line) !important;
+            white-space: normal !important;
+          }
+          #bulkProcessManualEditorRoot #tsWeeklySchedule td::before { display: none !important; }
+          #bulkProcessManualEditorRoot .ts-weekly-schedule-wrap {
+            max-height: none !important;
+            overflow-x: hidden !important;
+            overflow-y: visible !important;
+          }
+          #bulkProcessManualEditorRoot #tsWeeklySchedule th:first-child,
+          #bulkProcessManualEditorRoot #tsWeeklySchedule td:first-child {
+            position: sticky;
+            left: 0;
+            z-index: 2;
+            background: var(--panel, #0d1a2d);
+          }
+        }
+        @media (max-width: 620px) {
+          #bulkProcessManualEditorRoot #tsWeeklySchedule {
+            min-width: 0 !important;
+            max-width: 100% !important;
+          }
+          #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="start"],
+          #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="end"],
+          #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_start"],
+          #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_end"],
+          #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_mins"] {
+            width: 72px !important;
+            min-width: 72px !important;
+            max-width: 72px !important;
+          }
+        }
       </style>
-      <div id="bulkProcessManualEditorBody" style="margin-top:4px;display:flex;flex-direction:column;gap:5px;max-height:56vh;overflow:auto;overflow-x:auto;padding-right:2px;min-width:0;">
+      <div id="bulkProcessManualEditorBody" style="margin-top:4px;display:flex;flex-direction:column;gap:5px;max-height:56vh;overflow-y:auto;overflow-x:hidden;padding-right:2px;min-width:0;">
         ${protectedNoTimesheetManualEditorRow
           ? `<div class="mini" data-bulk-process-import-expense-readonly="1" style="opacity:.85;display:flex;flex-direction:column;gap:2px;">
                <span>This additional expense-only timesheet schedule is read-only in Bulk Process.</span>
@@ -251614,8 +252613,28 @@ function renderBulkAuthorisePreviewPane(state) {
   const activeDetails = (st.active_details && typeof st.active_details === 'object')
     ? st.active_details
     : ((activeCtx?.details && typeof activeCtx.details === 'object') ? activeCtx.details : null);
+  const weeklySourceApi = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  const weeklySourceVm = resolveBulkAuthoriseWeeklySourcePresentation(st);
+  const weeklySourceMounted = !!(weeklySourceVm && weeklySourceVm.mount);
+  const weeklySourceRowKey = trimStr(activeRow?.row_key || st.active_row_key || activeRow?.timesheet_id || activeCtx?.timesheet_id || '');
+  if (weeklySourceMounted && trimStr(st.weekly_source_middle_pane_row_key || '') !== weeklySourceRowKey) {
+    st.weekly_source_middle_pane_row_key = weeklySourceRowKey;
+    st.weekly_source_middle_pane = weeklySourceVm.default_middle_pane === 'FILES' ? 'FILES' : 'HOURS';
+  }
+  const weeklySourceMiddlePane = trimStr(st.weekly_source_middle_pane || weeklySourceVm?.default_middle_pane || '').toUpperCase() === 'FILES'
+    ? 'FILES'
+    : 'HOURS';
 
-  if (classification === 'TIMESHEETS' && typeof renderBulkProcessPreviewPane === 'function') {
+  if (weeklySourceMounted && weeklySourceMiddlePane === 'HOURS' && weeklySourceApi) {
+    return htmlWrap(`
+      <div id="bulkAuthorisePreviewPaneRoot" class="weekly-source-v1" data-weekly-source-preview="1" style="display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;height:100%;">
+        ${weeklySourceApi.renderMiddlePaneTabs(weeklySourceMiddlePane)}
+        <div style="min-height:0;overflow:auto;flex:1 1 auto;">${weeklySourceApi.renderBulkHoursPane(weeklySourceVm)}</div>
+      </div>
+    `);
+  }
+
+  if ((classification === 'TIMESHEETS' || weeklySourceMounted) && typeof renderBulkProcessPreviewPane === 'function') {
     const activeRowKey = trimStr(activeRow?.row_key || st.active_row_key || activeRow?.timesheet_id || activeCtx?.timesheet_id || '');
     const activeCtxRowKey = trimStr(
       st.__bulkAuthorisePreviewActiveRowKey ||
@@ -251648,7 +252667,14 @@ function renderBulkAuthorisePreviewPane(state) {
     } else if (activeRowKey) {
       st.__bulkAuthorisePreviewActiveRowKey = activeRowKey;
     }
-    return renderBulkProcessPreviewPane(st);
+    const filesPaneHtml = renderBulkProcessPreviewPane(st);
+    if (!weeklySourceMounted || !weeklySourceApi) return filesPaneHtml;
+    return htmlWrap(`
+      <div id="bulkAuthorisePreviewPaneRoot" class="weekly-source-v1" data-weekly-source-preview="1" style="display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;height:100%;">
+        ${weeklySourceApi.renderMiddlePaneTabs(weeklySourceMiddlePane)}
+        <div style="min-height:0;overflow:auto;flex:1 1 auto;">${filesPaneHtml}</div>
+      </div>
+    `);
   }
 
   const mode = trimStr(st.middle_pane_mode || '').toLowerCase() === 'view_all' ? 'view_all' : 'single';
@@ -254189,35 +255215,26 @@ function renderBulkAuthoriseCompactSummary(input = {}) {
     : '';
 
   return htmlWrap(`
-    <div class="card" id="bulkAuthoriseCompactSummaryRoot" style="padding:7px;display:flex;flex-direction:column;gap:8px;min-width:0;">
-      <div class="card" style="margin:0;padding:6px 7px;">
-        <div class="row">
-          <label>Summary</label>
-          <div class="controls" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-            ${deviationMarker}
-            ${stagePills.length ? renderPills(stagePills) : ''}
-          </div>
-        </div>
-        <div class="mini" style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap;">
-          <span><strong>Candidate:</strong> ${enc(candidate)}</span>
-          <span><strong>Client:</strong> ${enc(client)}</span>
-          <span><strong>Week/date:</strong> ${enc(weekDate)}</span>
-          ${jobTitle ? `<span><strong>Job:</strong> ${enc(jobTitle)}</span>` : ''}
+    <div class="card" id="bulkAuthoriseCompactSummaryRoot" style="padding:5px 7px;display:flex;flex-direction:column;gap:4px;min-width:0;">
+      <div class="row" style="gap:6px;">
+        <label>Summary</label>
+        <div class="controls" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
+          ${deviationMarker}
+          ${stagePills.length ? renderPills(stagePills) : ''}
+          ${paymentPillsFiltered.length ? renderPills(paymentPillsFiltered) : ''}
+          ${routePills.length ? renderPills(routePills) : ''}
         </div>
       </div>
-      <div class="card" style="margin:0;padding:6px 7px;">
-        <div class="row">
-          <label>Payment & route</label>
-          <div class="controls" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-            ${paymentPillsFiltered.length ? renderPills(paymentPillsFiltered) : ''}
-            ${routePills.length ? renderPills(routePills) : ''}
-          </div>
-        </div>
-        ${paymentDetailBits.length
-          ? `<div class="mini" style="margin-top:6px;opacity:.84;">${enc(paymentDetailBits.join(' • '))}</div>`
-          : ''
-        }
+      <div class="mini" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <span><strong>Candidate:</strong> ${enc(candidate)}</span>
+        <span><strong>Client:</strong> ${enc(client)}</span>
+        <span><strong>Week/date:</strong> ${enc(weekDate)}</span>
+        ${jobTitle ? `<span><strong>Job:</strong> ${enc(jobTitle)}</span>` : ''}
       </div>
+      ${paymentDetailBits.length
+        ? `<div class="mini" style="opacity:.84;">${enc(paymentDetailBits.join(' • '))}</div>`
+        : ''
+      }
     </div>
   `);
 }
@@ -254681,6 +255698,18 @@ function renderBulkAuthoriseDetailPane(state) {
   const evidence = Array.isArray(activeContext.evidence)
     ? deep(activeContext.evidence)
     : (Array.isArray(details.evidence) ? deep(details.evidence) : []);
+  const weeklySourceApi = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  const weeklySourceVm = resolveBulkAuthoriseWeeklySourcePresentation(st);
+  if (weeklySourceVm && weeklySourceVm.mount && weeklySourceApi) {
+    const detailHtml = weeklySourceVm.render_mode === 'UNAVAILABLE'
+      ? weeklySourceApi.renderUnavailable(weeklySourceVm)
+      : `${weeklySourceApi.renderApprovedHours(weeklySourceVm)}${weeklySourceApi.renderFourTotals(weeklySourceVm)}${weeklySourceVm.blocks_authorisation ? `<div class="weekly-source-v1 weekly-source-v1__notice is-mismatch" role="status"><strong>Not ready to authorise</strong><span>${weeklySourceApi.escapeHtml(weeklySourceVm.blocked_reason)}</span></div>` : ''}`;
+    return htmlWrap(`
+      <div id="bulkAuthoriseRightPaneRoot" class="weekly-source-v1" data-weekly-source-right-pane="1" style="display:flex;flex-direction:column;gap:8px;min-width:0;">
+        ${detailHtml}
+      </div>
+    `);
+  }
 
   let paneCtx = (st.active_ctx && typeof st.active_ctx === 'object')
     ? deep(st.active_ctx)
@@ -254960,6 +255989,8 @@ function renderBulkAuthoriseShell(state) {
   const activeDetails = (st.active_details && typeof st.active_details === 'object')
     ? st.active_details
     : ((activeContext?.details && typeof activeContext.details === 'object') ? activeContext.details : ((activeCtx?.details && typeof activeCtx.details === 'object') ? activeCtx.details : {}));
+  const shellWeeklySourceVm = resolveBulkAuthoriseWeeklySourcePresentation(st);
+  const shellWeeklySourceMounted = !!(shellWeeklySourceVm && shellWeeklySourceVm.mount);
   const activeTs = (activeDetails.timesheet && typeof activeDetails.timesheet === 'object') ? activeDetails.timesheet : {};
   const activeTsfin = (activeDetails.tsfin && typeof activeDetails.tsfin === 'object') ? activeDetails.tsfin : {};
   const activeTsId = trimStr(
@@ -255002,7 +256033,7 @@ function renderBulkAuthoriseShell(state) {
     activeIsImportAuthoritative
   );
   const activePaymentScheduleLockReason = activeIsImportAuthoritative
-    ? 'Import-authoritative rows are review-only here.'
+    ? 'Hours supplied by the client cannot be edited here.'
     : activeEvidenceDocumentLocked
       ? 'Editor is locked because this row is invoiced/document locked.'
       : activePaid
@@ -255013,7 +256044,9 @@ function renderBulkAuthoriseShell(state) {
             ? 'Editor is locked because this row is locked.'
             : '';
   const activeEvidenceLockReason = activeIsImportAuthoritative
-    ? 'Import source evidence is review-only. Use Add additional manual timesheet for expenses or extra supporting items.'
+    ? (shellWeeklySourceVm?.expense_owner === 'SOURCE_SUPPLIED'
+        ? 'Files are view-only for this Timesheet.'
+        : 'Files are view-only here. Use Add additional expense timesheet for a separate expense claim.')
     : activeEvidenceDocumentLocked
       ? 'Evidence is view-only because this row is invoice/document locked.'
       : !activeHasRealTimesheet
@@ -255152,7 +256185,8 @@ function renderBulkAuthoriseShell(state) {
   const dockedViewerOpen = !!(st.bulkAuthoriseDockedEvidenceViewer && st.bulkAuthoriseDockedEvidenceViewer.open);
   const dockedViewerHtml = (typeof renderBulkAuthoriseDockedEvidenceViewer === 'function') ? renderBulkAuthoriseDockedEvidenceViewer(st) : '';
 
-  const evidencePaneHtml = classification === 'TIMESHEETS'
+  const weeklySourceShowsFiles = shellWeeklySourceMounted && String(st.weekly_source_middle_pane || shellWeeklySourceVm.default_middle_pane || '').trim().toUpperCase() === 'FILES';
+  const evidencePaneHtml = ((classification === 'TIMESHEETS' && !shellWeeklySourceMounted) || weeklySourceShowsFiles)
     ? ((typeof renderBulkAuthoriseEvidencePane === 'function')
         ? renderBulkAuthoriseEvidencePane(st)
         : `
@@ -255168,9 +256202,11 @@ function renderBulkAuthoriseShell(state) {
         `)
     : '';
 
-  const summaryStripHtml = (typeof renderBulkProcessSelectedSummaryStrip === 'function')
-    ? renderBulkProcessSelectedSummaryStrip(st)
-    : `
+  const summaryStripHtml = shellWeeklySourceMounted
+    ? ''
+    : ((typeof renderBulkProcessSelectedSummaryStrip === 'function')
+      ? renderBulkProcessSelectedSummaryStrip(st)
+      : `
       <div class="card">
         <div class="row">
           <label>Selected row</label>
@@ -255179,7 +256215,7 @@ function renderBulkAuthoriseShell(state) {
           </div>
         </div>
       </div>
-    `;
+    `);
 
   const hasDedicatedActionRow = (typeof renderBulkAuthoriseActionRow === 'function');
   const actionRowHtml = hasDedicatedActionRow
@@ -255200,7 +256236,7 @@ function renderBulkAuthoriseShell(state) {
         `);
 
   const evidenceLockReason = activeRow ? (activeEvidenceLockReason || '') : '';
-  const evidenceLockHtml = (activeRow && evidenceLockReason && typeof renderReadOnlyLockState === 'function')
+  const evidenceLockHtml = (!shellWeeklySourceMounted && activeRow && evidenceLockReason && typeof renderReadOnlyLockState === 'function')
     ? renderReadOnlyLockState({
         read_only: true,
         shaded: true,
@@ -255217,7 +256253,7 @@ function renderBulkAuthoriseShell(state) {
           ? 'This row is read-only here.'
           : ''
       );
-  const editorLockHtml = (activeRow && editorLockReason && typeof renderReadOnlyLockState === 'function')
+  const editorLockHtml = (!shellWeeklySourceMounted && activeRow && editorLockReason && typeof renderReadOnlyLockState === 'function')
     ? renderReadOnlyLockState({
         read_only: true,
         shaded: true,
@@ -255278,6 +256314,8 @@ function renderBulkAuthoriseShell(state) {
 
       ${filtersToolbarHtml}
 
+      ${!dockedViewerOpen ? classificationHtml : ''}
+
       ${dockedViewerOpen ? `
       <div
         id="bulkAuthoriseWorkbenchGrid"
@@ -255316,7 +256354,6 @@ function renderBulkAuthoriseShell(state) {
         "
       >
         <div id="bulkAuthoriseLeftPane" style="display:flex;flex-direction:column;gap:5px;height:min(78vh,900px);max-height:min(78vh,900px);overflow:hidden;padding-right:2px;min-width:0;min-height:0;">
-          ${classificationHtml}
           ${utilityRowHtml}
           ${orderingToolbarHtml}
           ${listsHtml}
@@ -255783,8 +256820,25 @@ async function bindBulkAuthorisePreviewPane(state) {
   const classificationRaw = upper(st.classification || '');
   const classification = (classificationRaw === 'NHSP' || classificationRaw === 'HR' || classificationRaw === 'HEALTHROSTER') ? classificationRaw : 'TIMESHEETS';
   syncBulkAuthoriseModalCtxToActiveRow(st, { source: 'bindBulkAuthorisePreviewPane' });
+  const weeklySourceVm = resolveBulkAuthoriseWeeklySourcePresentation(st);
+  const weeklySourceMounted = !!(weeklySourceVm && weeklySourceVm.mount);
+  if (weeklySourceMounted) {
+    const previewRoot = document.getElementById('bulkAuthorisePreviewPaneRoot');
+    previewRoot?.querySelectorAll('[data-weekly-source-middle-pane]').forEach((button) => {
+      if (button.dataset.boundWeeklySourceMiddlePane === '1') return;
+      button.dataset.boundWeeklySourceMiddlePane = '1';
+      button.addEventListener('click', async () => {
+        const nextPane = upper(button.getAttribute('data-weekly-source-middle-pane') || '') === 'FILES' ? 'FILES' : 'HOURS';
+        if (nextPane === upper(st.weekly_source_middle_pane || weeklySourceVm.default_middle_pane || '')) return;
+        st.weekly_source_middle_pane = nextPane;
+        await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][WEEKLY-SOURCE-MIDDLE-PANE]');
+      });
+    });
+    const activeWeeklyPane = upper(st.weekly_source_middle_pane || weeklySourceVm.default_middle_pane || 'HOURS');
+    if (activeWeeklyPane !== 'FILES') return;
+  }
 
-  if (classification === 'TIMESHEETS') {
+  if (classification === 'TIMESHEETS' || weeklySourceMounted) {
     const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
     const activeRowKey = trimStr(st.active_row_key || activeRow.row_key || '');
     const resolveOwnerIdentity = () => {
@@ -262195,7 +263249,7 @@ function renderBulkAuthoriseActionRow(state) {
   });
 
   const section = trimStr(activeContext.bulk_authorise_section || activeCtx?.bulk_authorise_section || activeRow.bulk_authorise_section || '');
-  const editability = (typeof classifyBulkAuthoriseEditability === 'function')
+  let editability = (typeof classifyBulkAuthoriseEditability === 'function')
     ? classifyBulkAuthoriseEditability({ row: activeRow, details: activeDetails, state: activeCtx?.state, active_ctx: activeCtx, active_context: activeContext })
     : {
         canAuthorise: !!activeRow.can_bulk_authorise,
@@ -262219,6 +263273,22 @@ function renderBulkAuthoriseActionRow(state) {
         summaryStage: trimStr(activeRow.summary_stage || activeRow.processing_status_display || activeRow.processing_status || ''),
         hasAnyLockBlocker: !!(activeDetails?.tsfin?.locked_by_invoice_id || activeDetails?.tsfin?.paid_at_utc || activeRow.locked)
       };
+  const weeklySourceVm = resolveBulkAuthoriseWeeklySourcePresentation(st);
+  if (weeklySourceVm && weeklySourceVm.mount) {
+    editability = {
+      ...editability,
+      canAuthorise: !!editability.canAuthorise && weeklySourceVm.authorise_allowed === true,
+      // Gate 10.  The Bulk surface had the same asymmetry the Simple Timesheet
+      // had: Authorise consulted the Weekly Source view model and Unauthorise
+      // did not.  On a MANAGED root the control is the first authorisation
+      // withdrawal, and its availability is the server's alone.  Every other
+      // Timesheet in the queue keeps the ordinary narrowing untouched.
+      canUnauthorise: !!editability.canUnauthorise
+        && (weeklySourceVm.managed_root !== true || weeklySourceVm.unauthorise_allowed === true),
+      canSave: false,
+      canEditTimesheetData: false
+    };
+  }
 
   const activeRowKey = trimStr(st.active_row_key || activeRow.row_key || activeContext.row_key || '');
   const resolvedIdentity = (typeof resolveBulkAuthoriseModalIdentity === 'function')
@@ -262339,6 +263409,7 @@ function renderBulkAuthoriseActionRow(state) {
     );
   };
   const isImportAuthoritativeAction = !!(
+    weeklySourceVm?.authority === 'CLIENT_SYSTEM' ||
     editability.isImportAuthoritative === true ||
     String(activeRow.route_family || '').trim().toUpperCase() === 'IMPORT_AUTHORITATIVE' ||
     activeRow.is_import_authoritative === true
@@ -262348,7 +263419,7 @@ function renderBulkAuthoriseActionRow(state) {
     : 'Add additional timesheets';
   const importAdditionalActionEligible = !!(
     isImportAuthoritativeAction &&
-    trimStr(activeRow.current_timesheet_id || activeRow.timesheet_id || activeContext.current_timesheet_id || activeContext.timesheet_id || '')
+    weeklySourceVm?.add_additional_expense_timesheet_allowed === true
   );
   const expenseAccess = classifyBulkAuthoriseExpensesAccess(editability);
   const expenseStorageTarget = expenseAccess.expenseStorageTarget;
@@ -262375,14 +263446,25 @@ function renderBulkAuthoriseActionRow(state) {
     actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', false, '', 'btn btn-outline', 'expenses', expensesActionDisabledReason));
   };
 
+  if (weeklySourceVm?.manage_approved_hours_allowed === true && weeklySourceVm?.manage_approved_hours) {
+    actions.push(buildBtn(
+      'bulkAuthActionRowManageApprovedHoursBtn',
+      'Manage approved hours',
+      !busy && contextReady,
+      'data-weekly-source-manage-approved-hours="1" data-weekly-source-surface="BULK_AUTHORISE"',
+      'btn btn-outline',
+      'weekly-source-approved-hours'
+    ));
+  }
+
   if (section === 'authorised_eligible' || editability.isAuthorised) {
     if (editability.canUnauthorise) {
       actions.push(buildBtn('bulkAuthActionRowUnauthoriseBtn', 'Unauthorise', !busy && contextReady, dirtyActionAttrs, 'btn btn-outline', 'unauthorise'));
     }
-    if (editability.canAddAdditionalManual || importAdditionalActionEligible) {
+    if (isImportAuthoritativeAction ? importAdditionalActionEligible : editability.canAddAdditionalManual) {
       actions.push(buildBtn('bulkAuthActionRowAddAdditionalBtn', addAdditionalLabel, !busy));
     }
-    pushExpensesAction();
+    if (!isImportAuthoritativeAction) pushExpensesAction();
   } else {
     if (editability.canAuthorise) {
       actions.push(buildBtn('bulkAuthActionRowAuthoriseBtn', 'Authorise', !busy && contextReady, dirtyActionAttrs, 'btn btn-primary', 'authorise'));
@@ -262408,10 +263490,10 @@ function renderBulkAuthoriseActionRow(state) {
         unprocessDisabledReason
       ));
     }
-    if (editability.canAddAdditionalManual || importAdditionalActionEligible) {
+    if (isImportAuthoritativeAction ? importAdditionalActionEligible : editability.canAddAdditionalManual) {
       actions.push(buildBtn('bulkAuthActionRowAddAdditionalBtn', addAdditionalLabel, !busy));
     }
-    pushExpensesAction();
+    if (!isImportAuthoritativeAction) pushExpensesAction();
     if (!editability.isAuthorised && editability.canSwitchToManual && (
       candidateOfficeBulkAuthoriseRouteAllowed('SWITCH_TO_MANUAL') ||
       candidateOfficeBulkAuthoriseRouteAllowed('SWITCH_DAILY_TO_MANUAL')
@@ -262905,6 +263987,12 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
   const baselineSeed = normaliseExpenseCanonical(draftSeed, normaliseOptions);
   const childCtx = {
     ...(ctx || {}),
+    // Keep the child editor on the exact Bulk Authorise permission decision
+    // that made the Expenses action available. Reclassifying the partial child
+    // context can otherwise hide ordinary manual Timesheet expenses.
+    policy: editability,
+    editDomains: editability,
+    timesheetEditDomains: editability,
     expenseStorageTarget,
     expense_storage_target: expenseStorageTarget,
     hasContractWeekExpenseDraftTarget: editability?.hasContractWeekExpenseDraftTarget === true,
@@ -263100,8 +264188,8 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         const title = document.getElementById('modalTitle');
         if (!title) return;
         const titleText = title.querySelector(':scope > span');
-        if (titleText) titleText.textContent = 'Bulk Authorise';
-        else title.textContent = 'Bulk Authorise';
+        if (titleText) titleText.textContent = 'Bulk Timesheet Authorise';
+        else title.textContent = 'Bulk Timesheet Authorise';
       };
 
       const latestContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
@@ -282031,6 +283119,16 @@ async function openCandidateRateModal(candidate_id, existing) {
       await refreshClientRoles(selClient.value);
     }
   });
+
+  bindBtn('bulkAuthActionRowManageApprovedHoursBtn', 'boundBulkAuthManageApprovedHours', async () => {
+    const liveVm = resolveBulkAuthoriseWeeklySourcePresentation(st);
+    if (!liveVm || liveVm.manage_approved_hours_allowed !== true || !liveVm.manage_approved_hours) return;
+    openWeeklySourceApprovedHoursModal({
+      surface: 'BULK_AUTHORISE',
+      viewModel: liveVm,
+      bulkState: st
+    });
+  }, { withSpinner: false });
   wireCandidateRateClientSearch(byId('cr_client_search'), byId('cr_client_results'), selClient, {
     editable: parentEditable, load: loadCandidateRateClientChoices,
     onChange: () => selClient.dispatchEvent(new Event('change', { bubbles: true }))
@@ -282812,6 +283910,20 @@ window.modalCtx = {
         }
       } catch (err) {
         await openUiConfirmModal({ title: 'Client settings not saved', message: clientSettingsSaveErrorMessage(err), confirm_label: 'OK', hide_cancel: true });
+        return { ok:false };
+      }
+
+      // Weekly source policies have their own effective-dated authority and
+      // conflict guard. They are saved only after the Client itself exists.
+      try {
+        await window.CloudTMSWeeklySourceSettings?.saveClient(clientId, window.modalCtx);
+      } catch (err) {
+        await openUiConfirmModal({
+          title: 'Weekly source settings not saved',
+          message: String(err?.message || 'The Weekly source settings could not be saved. Your changes are still here.'),
+          confirm_label: 'OK',
+          hide_cancel: true
+        });
         return { ok:false };
       }
 
@@ -298071,6 +299183,9 @@ const saved = await upsertContract(data, data.id || undefined);
 
 const persistedId = saved?.id || saved?.contract?.id || null;
 const persistedContract = saved?.contract || saved || null;
+if (persistedId) {
+  await window.CloudTMSWeeklySourceSettings?.saveContract(persistedId, window.modalCtx);
+}
 const stagedAuthorisers = window.modalCtx?.__stagedManagerAuthoriserPolicy || null;
 if (persistedId && stagedAuthorisers?.policy) {
   const authoriserResponse = await authFetch(API(`/api/contracts/${encodeURIComponent(persistedId)}/manager-authorisers`), {
@@ -301842,8 +302957,9 @@ function canonicalizeClientSettings(input) {
   // ✅ NEW: VERIFY mode means HR validation IS required
   cs.hr_validation_required = true;
 
-  // Hidden + forced
-  cs.pay_reference_required = false;
+  // Weekly Timesheet-authority Roster clients can choose whether a durable
+  // reference is required before pay. The default remains false.
+  cs.pay_reference_required = payRef;
   cs.invoice_reference_required = false;
 
   // Attachments: both user choice
@@ -302017,6 +303133,12 @@ async function openSettings(initialTabKey) {
     currentUserSignatureHtml
   };
 
+  try {
+    await window.CloudTMSWeeklySourceSettings?.loadGlobal(modalCtx);
+  } catch (error) {
+    console.warn('[SETTINGS][WEEKLY_SOURCE] could not load', error);
+  }
+
   if (prevRemDraft && typeof prevRemDraft === 'object') {
     modalCtx.remittanceDraft = prevRemDraft;
   }
@@ -302119,7 +303241,16 @@ async function openSettings(initialTabKey) {
       `);
     }
 
-    return renderSettingsTab(tabKey, rowData);
+    const rendered = renderSettingsTab(tabKey, rowData);
+    if (k === 'main') {
+      setTimeout(() => {
+        try {
+          const root = document.getElementById('settingsForm');
+          if (root) window.CloudTMSWeeklySourceSettings?.mountGlobal(root, modalCtx);
+        } catch {}
+      }, 0);
+    }
+    return rendered;
   };
 
   showModal(
@@ -306047,6 +307178,64 @@ function attachInvoiceModalDelegatedHandlers(modalCtx, rootEl, deps) {
           return;
         }
 
+        case 'inv-move-weekly-source-shift': {
+          // Gate 7 item G7-2 (24 section 12; 25 section 8 Removed).  The unit of
+          // movement is ONE immutable source presentation line, never a work
+          // event: moving by whole work-event id can move more than the Office
+          // selected, and the server now refuses `source_shift_group_id` with
+          // WEEKLY_SOURCE_INVOICE_MOVE_UNKNOWN_FIELD.
+          //
+          // `actor_user_id` is deliberately absent: the broker injects it
+          // (backend\broker\src\weekly-source\routes.js:281) and a browser-supplied
+          // actor would be ignored at best.
+          const sourceContext = invData?.weekly_source_invoice;
+          if (!mc.isEditing || sourceContext?.is_weekly_source_invoice !== true
+              || sourceContext.editable !== true) return;
+          const presentationLineId = String(el.getAttribute('data-presentation-line-id') || '').trim();
+          const presentationHash = String(el.getAttribute('data-presentation-hash') || '').trim().toLowerCase();
+          const selectId = String(el.getAttribute('data-destination-select-id') || '').trim();
+          const destinationSelect = selectId ? document.getElementById(selectId) : null;
+          const selectedOption = destinationSelect?.selectedOptions?.[0] || null;
+          const destinationInvoiceId = String(selectedOption?.value || '').trim();
+          const destinationRevision = Number(selectedOption?.getAttribute('data-document-revision'));
+          const sourceRevision = Number(sourceContext.document_revision);
+          if (!presentationLineId || !/^[0-9a-f]{64}$/.test(presentationHash) || !destinationInvoiceId
+              || !Number.isSafeInteger(destinationRevision) || destinationRevision < 1
+              || !Number.isSafeInteger(sourceRevision) || sourceRevision < 1) {
+            await invoiceModalUiNotice('Choose the unissued invoice that should receive this line.');
+            return;
+          }
+          const destinationLabel = String(selectedOption?.textContent || 'the selected invoice').trim();
+          const confirmed = await invoiceModalUiConfirm({
+            title: 'Move source line?',
+            message: `Move this line to ${destinationLabel}?`,
+            confirmLabel: 'Move line',
+            kind: 'weekly-source-invoice-move-confirm'
+          });
+          if (!confirmed) return;
+          const result = await invoiceModalFetchJson('/api/weekly-source/v1/commands', {
+            method: 'POST',
+            body: JSON.stringify({
+              action: 'MOVE_SOURCE_INVOICE',
+              payload: {
+                source_invoice_id: String(invoice?.id || '').trim(),
+                destination_invoice_id: destinationInvoiceId,
+                presentation_line_id: presentationLineId,
+                expected_presentation_hash: presentationHash,
+                expected_source_document_revision: sourceRevision,
+                expected_destination_document_revision: destinationRevision,
+                reason: 'Moved by Office between unissued self-bill invoices'
+              }
+            })
+          });
+          if (result?.ok !== true || String(result?.status || '').toUpperCase() !== 'MOVED') {
+            throw new Error(result?.message || result?.error || 'The source line could not be moved.');
+          }
+          await safeReload();
+          toast('Source line moved.');
+          return;
+        }
+
         case 'inv-toggle-expand-timesheet': {
           const tsId = String(el.getAttribute('data-timesheet-id') || '').trim();
           if (!tsId) return;
@@ -307656,6 +308845,11 @@ function invoiceModalGetInvoiceData(modalCtx) {
       : (invoice?.header_snapshot_json && typeof invoice.header_snapshot_json === 'object' ? invoice.header_snapshot_json : {});
 
   const items = Array.isArray(d.items) ? d.items : [];
+  const weekly_source_invoice =
+    (d.weekly_source_invoice && typeof d.weekly_source_invoice === 'object'
+      && !Array.isArray(d.weekly_source_invoice))
+      ? d.weekly_source_invoice
+      : { is_weekly_source_invoice: false };
 
   const manifest =
     (d.manifest && typeof d.manifest === 'object')
@@ -307791,6 +308985,7 @@ function invoiceModalGetInvoiceData(modalCtx) {
     invoice,
     header_snapshot_json,
     items,
+    weekly_source_invoice,
     email_summary,
     manifest,
     segments_on_invoice_by_timesheet,
@@ -308974,6 +310169,7 @@ function renderInvoiceModalContent(modalCtx, invoiceData) {
     invoice,
     header_snapshot_json,
     items,
+    weekly_source_invoice,
     email_summary,
     reference_rows,
     timesheet_reference_sources_by_id
@@ -309266,6 +310462,7 @@ const hasRefEdits = (() => {
         <table class="grid mini" style="width:100%;">
           <tbody>
             <tr><td style="width:180px;">Invoice date</td><td class="fw-semibold">${escapeHtml(String(invoiceDate))}</td></tr>
+            ${weekly_source_invoice?.is_weekly_source_invoice === true ? `<tr><td>Backing report</td><td class="fw-semibold">${escapeHtml((Array.isArray(weekly_source_invoice.report_numbers) && weekly_source_invoice.report_numbers.length) ? weekly_source_invoice.report_numbers.join(', ') : String(weekly_source_invoice.report_number || '—'))}</td></tr>` : ''}
             <tr><td>Created</td><td class="fw-semibold">${escapeHtml(String(createdDate))}</td></tr>
             <tr><td>Amount (ex VAT)</td><td class="fw-semibold">${fmtMoneyLocal(totalsToShow.subtotal_ex_vat)}</td></tr>
             <tr><td>Amount (inc VAT)</td><td class="fw-semibold">${fmtMoneyLocal(totalsToShow.total_inc_vat)}</td></tr>
@@ -309289,7 +310486,7 @@ const hasRefEdits = (() => {
           Refs and Ward
         </button>
 
-        ${isEditing ? `
+        ${isEditing && weekly_source_invoice?.is_weekly_source_invoice !== true ? `
           <button type="button" class="btn btn-sm btn-outline-secondary" data-action="inv-add-timesheets" ${addDisabledAttr} ${addDisabledTitle}>
             + Add timesheet
           </button>
@@ -309404,6 +310601,76 @@ function renderInvoiceLinesTable(modalCtx, invoiceData, items) {
     } catch {}
     return `${dow || ''} ${d}/${mo}/${y}`.trim();
   };
+
+  const weeklySource = invData?.weekly_source_invoice;
+  if (weeklySource?.is_weekly_source_invoice === true) {
+    // Gate 7 item G7-2.  `shift_groups` no longer exists: the edit-context owner
+    // returns `movable_lines`, one element per immutable source PRESENTATION
+    // line, each carrying the presentation-line id and the expected
+    // presentation hash the move owner demands
+    // (backend\supabase\repeatable\15092026_1534_weekly_source_invoice_batch_integration_v1.sql:588).
+    const sourceRows = Array.isArray(weeklySource.movable_lines) ? weeklySource.movable_lines : [];
+    const destinations = Array.isArray(weeklySource.compatible_destinations)
+      ? weeklySource.compatible_destinations : [];
+    const canMoveSource = isEditing && weeklySource.editable === true && destinations.length > 0;
+    const sourceBody = sourceRows.map((row) => {
+      const presentationLineId = String(row?.presentation_line_id || '').trim();
+      const presentationHash = String(row?.presentation_hash || '').trim().toLowerCase();
+      const start = String(row?.start_at_local || '').slice(0, 5) || '—';
+      const end = String(row?.end_at_local || '').slice(0, 5) || '—';
+      const breakMinutes = Math.max(0, Number(row?.break_minutes || 0));
+      const selectorId = `weeklySourceMove_${presentationLineId.replace(/[^a-z0-9_-]/gi, '')}`;
+      // A source-fixed expense follows its declared companion and is never
+      // selected on its own; a non-NHSP net presentation binds more than one
+      // movement and moves as one.  Both facts are the server's, not derived.
+      const followsCompanion = String(row?.follows_companion_presentation_line_id || '').trim();
+      const independentlyMovable = row?.independently_movable === true && !followsCompanion;
+      const indivisible = row?.indivisible_presentation === true;
+      const movable = canMoveSource && independentlyMovable
+        && !!presentationLineId && /^[0-9a-f]{64}$/.test(presentationHash);
+      const options = destinations.map(destination => {
+        const label = [
+          destination.invoice_number || 'Draft invoice',
+          destination.finalisation_week_ending ? `week ending ${destination.finalisation_week_ending}` : '',
+          Array.isArray(destination.report_numbers) && destination.report_numbers.length
+            ? `report ${destination.report_numbers.join(', ')}` : ''
+        ].filter(Boolean).join(' · ');
+        return `<option value="${esc(String(destination.invoice_id || ''))}" data-document-revision="${esc(String(destination.document_revision || ''))}">${esc(label)}</option>`;
+      }).join('');
+      const move = movable
+        ? `<div class="d-flex gap-2 justify-content-end"><select class="input" id="${esc(selectorId)}" aria-label="Destination invoice"><option value="">Choose invoice</option>${options}</select><button type="button" class="btn btn-sm btn-outline-secondary" data-action="inv-move-weekly-source-shift" data-presentation-line-id="${esc(presentationLineId)}" data-presentation-hash="${esc(presentationHash)}" data-destination-select-id="${esc(selectorId)}">Move</button></div>`
+        : (isEditing && weeklySource.editable === true
+          ? (followsCompanion
+            ? '<span class="text-muted small">Moves with the line it belongs to</span>'
+            : (destinations.length === 0
+              ? '<span class="text-muted small">No compatible unissued invoice</span>'
+              : '<span class="text-muted small">Cannot be moved on its own</span>'))
+          : '');
+      const hoursCell = (row?.work_date || row?.start_at_local)
+        ? esc(`${start}–${end}`)
+        : '<span class="text-muted small">Client-provided expense</span>';
+      return `<tr data-presentation-line-id="${esc(presentationLineId)}">
+        <td>${row?.work_date ? esc(fmtDowDmy(row?.work_date)) : '—'}</td>
+        <td>${esc(String(row?.candidate || '—'))}</td>
+        <td>${hoursCell}</td>
+        <td>${row?.work_date ? `${breakMinutes.toLocaleString('en-GB')} min` : '—'}</td>
+        <td>${row?.released_after_dispute === true ? '<span class="pill pill-warn">Released after dispute</span>' : '<span class="pill pill-ok">Final source</span>'}${indivisible ? '<span class="pill pill-info">Moves as one line</span>' : ''}</td>
+        ${isEditing ? `<td class="text-end">${move}</td>` : ''}
+      </tr>`;
+    }).join('');
+    const reportNumbers = Array.isArray(weeklySource.report_numbers) && weeklySource.report_numbers.length
+      ? weeklySource.report_numbers.join(', ')
+      : String(weeklySource.report_number || '');
+    return `<div>
+      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+        <div><span class="fw-semibold">Finalised source lines</span>${reportNumbers ? `<span class="text-muted small"> · Backing report ${esc(reportNumbers)}</span>` : ''}</div>
+      </div>
+      <table class="grid" style="width:100%">
+        <thead><tr><th>Date</th><th>Candidate</th><th>Hours</th><th>Break</th><th>Status</th>${isEditing ? '<th class="text-end">Move to another unissued invoice</th>' : ''}</tr></thead>
+        <tbody>${sourceBody || `<tr><td colspan="${isEditing ? 6 : 5}" class="text-muted">No source lines remain on this invoice.</td></tr>`}</tbody>
+      </table>
+    </div>`;
+  }
 
   const isoToHHMM = (iso) => {
     try {
@@ -310251,6 +311518,20 @@ function renderTimesheetLinesTab(ctx) {
   GC('render');
 
   const ts      = details.timesheet || {};
+  const weeklySourcePresentationApi = (typeof window !== 'undefined')
+    ? window.CloudTMSWeeklySourcePresentationV1
+    : null;
+  const weeklySourcePresentationHost = (
+    weeklySourcePresentationApi && typeof weeklySourcePresentationApi.findHostPayload === 'function'
+  )
+    ? weeklySourcePresentationApi.findHostPayload([details, row, ts, ctx])
+    : null;
+  if (weeklySourcePresentationHost) {
+    const weeklySourcePresentationVm = weeklySourcePresentationApi.buildViewModel(weeklySourcePresentationHost);
+    if (weeklySourcePresentationVm?.mount === true) {
+      return weeklySourcePresentationApi.renderSimpleLines(weeklySourcePresentationVm);
+    }
+  }
   const tsId    = row.timesheet_id || ts.timesheet_id || null;
   const segs    = Array.isArray(details.segments) ? details.segments : [];
   const ib      = details.invoiceBreakdown || null;
@@ -317148,7 +318429,8 @@ const applyToolsUiState = () => {
   ['AWAITING_VALIDATION',   'Awaiting validation'],
   ['VALIDATION_FAILED',     'Validation failed'],
   ['PAIRED_NEEDS_INVOICING','Paired needs invoicing'],
-  ['OVERPAID',              'Overpaid']
+  ['OVERPAID',              'Overpaid'],
+  ['WEEKLY_SOURCE_PAY_WAITING','Weekly source validation']
 ];
 
     const issuesCur = String(stFilters.issues_filter || 'ALL').toUpperCase();
@@ -324963,9 +326245,35 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     backendCanAuthorise === true &&
     localCanAuthoriseBase
   );
-  const canonicalCanAuthorise = canonicalCanAuthoriseBase;
+  const weeklySourcePresentationVm = (() => {
+    try {
+      const api = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+      if (!api || typeof api.findHostPayload !== 'function' || typeof api.buildViewModel !== 'function') return null;
+      const host = api.findHostPayload([det, data, ts, cw]);
+      return host ? api.buildViewModel(host) : null;
+    } catch {
+      return null;
+    }
+  })();
+  const canonicalCanAuthorise = !!(
+    canonicalCanAuthoriseBase &&
+    (!weeklySourcePresentationVm?.mount || weeklySourcePresentationVm.authorise_allowed === true)
+  );
   const canonicalShowAuthoriseDisabled = false;
-  const canonicalCanUnauthorise = !!(
+  // Gate 10.  `Unauthorise` on a Weekly-Source-managed root is the FIRST
+  // AUTHORISATION WITHDRAWAL, and its availability is server-evaluated
+  // (04_MODAL_POLICY.json firstAuthorisationWithdrawal.availability).  The
+  // browser computes none of the W1 to W9 checks: it reads the verdict the
+  // withdrawal owner already returned through the Gate 9 projection.
+  //
+  // Every other Timesheet keeps the ordinary owner and the ordinary gate,
+  // unchanged, byte for byte: the narrowing below applies only where the
+  // server says the root is managed.
+  const weeklySourceUnauthorise = (weeklySourcePresentationVm?.mount === true
+    && weeklySourcePresentationVm.managed_root === true)
+    ? (weeklySourcePresentationVm.unauthorise || null)
+    : null;
+  const canonicalCanUnauthoriseBase = !!(
     lifecycleAuthorityComplete &&
     !isArchived &&
     frameMode === 'view' &&
@@ -324974,6 +326282,10 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     isAuthorised &&
     backendCanUnauthorise === true &&
     localCanUnauthorise
+  );
+  const canonicalCanUnauthorise = !!(
+    canonicalCanUnauthoriseBase &&
+    (!weeklySourceUnauthorise || weeklySourceUnauthorise.allowed === true)
   );
   const canonicalCanProcess = !!(
     lifecycleAuthoritySatisfied &&
@@ -325051,8 +326363,28 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     isAuthorised,
     canAuthoriseBase: canonicalCanAuthoriseBase,
     canAuthorise: canonicalCanAuthorise,
+    weeklySourceAuthoriseBlockedReason: weeklySourcePresentationVm?.mount && weeklySourcePresentationVm.authorise_allowed !== true
+      ? String(weeklySourcePresentationVm.blocked_reason || weeklySourcePresentationVm.unavailable_reason || 'This Timesheet is not ready to authorise.')
+      : '',
     showAuthoriseDisabled: canonicalShowAuthoriseDisabled,
     canUnauthorise: canonicalCanUnauthorise,
+    // Gate 10.  Which owner an `Unauthorise` click belongs to, and, where the
+    // server refuses, its own verdict — including whether the refusal is
+    // PERMANENT.  A permanent refusal must never be presented as something to
+    // try again.
+    weeklySourceUnauthoriseOwner: weeklySourceUnauthorise
+      ? 'WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAWAL'
+      : 'ORDINARY_TIMESHEET_UNAUTHORISE',
+    weeklySourceUnauthoriseAllowed: weeklySourceUnauthorise ? weeklySourceUnauthorise.allowed === true : null,
+    weeklySourceUnauthorisePermanent: weeklySourceUnauthorise ? weeklySourceUnauthorise.permanent === true : false,
+    weeklySourceUnauthoriseRefusalCode: weeklySourceUnauthorise ? (weeklySourceUnauthorise.refusal_code || '') : '',
+    weeklySourceUnauthoriseBlockedReason: (weeklySourceUnauthorise && weeklySourceUnauthorise.allowed !== true)
+      ? String((typeof window !== 'undefined'
+          && window.CloudTMSWeeklySourcePresentationV1
+          && typeof window.CloudTMSWeeklySourcePresentationV1.withdrawalRefusalText === 'function')
+        ? (window.CloudTMSWeeklySourcePresentationV1.withdrawalRefusalText(weeklySourceUnauthorise) || '')
+        : '')
+      : '',
     canProcess: canonicalCanProcess,
     canDelete: canonicalCanDelete,
     canUnprocess: finalCanUnprocess,
@@ -331179,6 +332511,9 @@ _tabPromise.then(async () => {
   }
 
   await afterTabRendered();
+  try { bindSimpleWeeklySourceApprovedHoursAction(); } catch (error) {
+    console.warn('[WEEKLY-SOURCE][APPROVED-HOURS] simple action bind failed', error);
+  }
   enhanceRecordModalDom(top);
   focusRecordModalInitially(top);
 }).catch((e) => {
@@ -332763,7 +334098,7 @@ if (btnTsAuthorise) {
   const showBtn = (canAuthoriseNow || showAuthoriseDisabled || lifecycleBusy || lifecycleCriticalBlocked);
   const blockedTitle = showAuthoriseDisabled
     ? 'QR Timesheet has not been signed by manager yet'
-    : lifecycleBlockedReason;
+    : (footerState.weeklySourceAuthoriseBlockedReason || lifecycleBlockedReason);
   const canClickAuthorise = !!(canAuthoriseNow && !showAuthoriseDisabled && !lifecycleBlocked && !top._saving);
 
   styleLifecycleButton(btnTsAuthorise, {
@@ -341217,6 +342552,9 @@ async function apiResolveTimesheetClient(timesheetId, clientId) {
 
 
 async function openImportsModal() {
+  if (window.CloudTMSWeeklySourceImportWorkspaceV1?.open) {
+    return window.CloudTMSWeeklySourceImportWorkspaceV1.open();
+  }
   // Seed a neutral modalCtx for this screen
   window.modalCtx = {
     entity: 'imports',
@@ -347742,6 +349080,7 @@ async function renderClientSettingsUI(settingsObj){
           ${candidateExpenseDeliveryBlock(st)}
           <div style="display:grid;grid-template-columns:1fr;gap:8px;">
             ${refToIssueBlock}
+            ${isCreate ? '' : checkChoice('pay_reference_required', 'Reference required before pay', !!st.pay_reference_required)}
             ${checkChoice('self_bill_no_invoices_sent', 'Self-bill (no invoices sent)', !!st.self_bill_no_invoices_sent)}
             ${checkChoice('daily_calc_of_invoices', 'Daily invoice calculation', !!st.daily_calc_of_invoices)}
             ${checkChoice('group_nightsat_sunbh', 'Group Night/Sat/Sun/BH', !!st.group_nightsat_sunbh)}
@@ -352941,6 +354280,9 @@ async function handleSaveSettings() {
 
   // Collect non-finance settings_defaults fields only (bh_list parsed etc.)
   const payload = collectForm('#settingsForm', true) || {};
+  for (const key of Object.keys(payload)) {
+    if (key.startsWith('weekly_source_') || key.startsWith('source_group_')) delete payload[key];
+  }
 
   // ✅ Never send modal-only id to backend
   try { delete payload.id; } catch {}
@@ -353808,6 +355150,7 @@ async function handleSaveSettings() {
     // Per-user Banking Alert preferences are saved separately below and must never be sent through company settings.
     removeUnsafeBankingSettingsPayloadFields();
     await saveSettings(payload);
+    await window.CloudTMSWeeklySourceSettings?.saveGlobal(modalCtx);
 
     if (bankingAlertPreferencesPatch && typeof bankingAlertPreferencesPatch === 'object') {
       const saveAlertPrefs = (typeof bankingAlertPreferencesSave === 'function')
@@ -353860,6 +355203,7 @@ async function handleSaveSettings() {
     modalCtx.data.id = keepId; // ✅ critical: keep singleton id
 
     modalCtx.finance_windows = JSON.parse(JSON.stringify(freshWindows));
+    try { await window.CloudTMSWeeklySourceSettings?.loadGlobal(modalCtx, true); } catch {}
 
 
     try {
@@ -357196,6 +358540,9 @@ async function fetchTimesheetDetails(timesheetId) {
     contract_week: json.contract_week || null,
     policy: json.policy || null,
     action_flags: (json.action_flags && typeof json.action_flags === 'object') ? json.action_flags : null,
+    weekly_source_presentation: (json.weekly_source_presentation && typeof json.weekly_source_presentation === 'object')
+      ? json.weekly_source_presentation
+      : null,
 
     // ✅ Authoritative payment-state payload for Overview + Financials tabs.
     // Do not reconstruct or fall back to summary-cache economics here.
@@ -361645,6 +362992,14 @@ function renderTimesheetOverviewTab(ctx) {
   const actionFlags = (details.action_flags && typeof details.action_flags === 'object')
     ? details.action_flags
     : {};
+  const weeklySourcePresentationApi = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  const weeklySourcePresentationHost = weeklySourcePresentationApi && typeof weeklySourcePresentationApi.findHostPayload === 'function'
+    ? weeklySourcePresentationApi.findHostPayload([details, row, ts, ctx])
+    : null;
+  const weeklySourcePresentationVm = weeklySourcePresentationHost && typeof weeklySourcePresentationApi.buildViewModel === 'function'
+    ? weeklySourcePresentationApi.buildViewModel(weeklySourcePresentationHost)
+    : null;
+  const clientSourceAuthorityOverview = weeklySourcePresentationVm?.mount === true && weeklySourcePresentationVm.authority === 'CLIENT_SYSTEM';
 
   const candidateOfficeProjectionUiReady = !!(
     typeof window !== 'undefined' &&
@@ -362830,6 +364185,17 @@ function renderTimesheetOverviewTab(ctx) {
   })();
 
   const routeTitle = (() => {
+    if (weeklySourcePresentationVm?.mount === true) {
+      if (weeklySourcePresentationVm.render_mode === 'UNAVAILABLE') {
+        return weeklySourcePresentationVm.unavailable_reason || 'Refresh this Timesheet before continuing.';
+      }
+      if (weeklySourcePresentationVm.authority === 'CLIENT_SYSTEM') {
+        return 'Client-provided hours are used for this Timesheet. Existing files remain available to view.';
+      }
+      if (weeklySourcePresentationVm.authority === 'SIGNED_TIMESHEET') {
+        return 'The completed signed Timesheet decides the hours. Client system hours are used for checks and references.';
+      }
+    }
     if (routeLabel === 'QR') {
       return 'This timesheet is on the QR-only route. Candidate Submission shows the current QR Pack lifecycle.';
     }
@@ -362986,14 +364352,22 @@ function renderTimesheetOverviewTab(ctx) {
     const isWeekly = (sheetScope === 'WEEKLY');
     const isDaily  = (sheetScope === 'DAILY');
 
-    // ✅ NEW: Add additional manual timesheet (always available weekly/daily, not blocked by importAuthoritative)
+    // Source-authority expenses use only the explicit server-owned action.
+    // All other Weekly and Daily rows retain the existing additional-timesheet journey.
+    const weeklyAdditionalTimesheetAllowed = weeklySourcePresentationVm?.mount === true
+      ? weeklySourcePresentationVm.add_additional_expense_timesheet_allowed === true
+      : true;
     if (hasAssignedCandidate && isWeekly && weekId) {
-      const title = 'Create an additional manual adjustment timesheet for this week (use for expenses or corrections without altering the original sheet).';
-      btns.push(`
-        <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="add-additional-manual" title="${enc(title)}">
-          Add additional manual timesheet
-        </button>
-      `);
+      if (weeklyAdditionalTimesheetAllowed) {
+        const title = clientSourceAuthorityOverview
+          ? 'Create a separate expense Timesheet without changing the client-provided work hours.'
+          : 'Create an additional manual adjustment timesheet for this week (use for expenses or corrections without altering the original sheet).';
+        btns.push(`
+          <button type="button" class="pill pill-info" style="${badgeBtnStyle}" data-ts-action="add-additional-manual" title="${enc(title)}">
+            ${clientSourceAuthorityOverview ? 'Add additional expense timesheet' : 'Add additional manual timesheet'}
+          </button>
+        `);
+      }
     }
     if (hasAssignedCandidate && isDaily && tsId) {
       const title = 'Create an additional manual daily timesheet for this shift (use for expenses or corrections without altering the original sheet).';
@@ -365450,8 +366824,14 @@ async function openTimesheet(row) {
       return await realSave();
     };
 
+    const weeklySourceCategory = String(baseRow.weekly_source_category || '').trim().toUpperCase();
+    const weeklySourceCandidateName = String(baseRow.candidate_name || baseRow.candidate_display_name || '').trim();
+    const hasWeeklySourceIdentity = !!(
+      weeklySourceCandidateName &&
+      ['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT'].includes(weeklySourceCategory)
+    );
     const title = hasTs
-      ? `Timesheet ${String(tsId).slice(0, 8)}…`
+      ? (hasWeeklySourceIdentity ? `Timesheet · ${weeklySourceCandidateName}` : `Timesheet ${String(tsId).slice(0, 8)}…`)
       : `Weekly timesheet (planned) ${String(weekId).slice(0, 8)}…`;
 
     const hasRelatedId = !!(tsId || weekId);
@@ -366600,7 +367980,10 @@ function renderWeeklyManualScheduleEditor(opts) {
       (
         isEditMode ||
         isBulkProcess ||
-        (isBulkAuthoriseWorkbench && enableWeeklyLineActions)
+        // The caller computes this flag from the canonical Bulk Authorise
+        // editability policy.  Do not make the safe line controls disappear
+        // merely because the shared child frame has a different frame name.
+        enableWeeklyLineActions
       )
     );
     state.__weeklyScheduleReadOnly = !canEditSchedule;

@@ -23,7 +23,7 @@ test('Bulk Authorise paints its modal before loading the saved sort preference',
   const end = main.indexOf('\nfunction buildBulkAuthoriseDatasetRequestFilters', start);
   assert.ok(start >= 0 && end > start, 'Bulk Authorise opener must be present');
   const opener = main.slice(start, end);
-  const modalOpen = opener.search(/showModal\(\r?\n\s*'Bulk Authorise'/);
+  const modalOpen = opener.search(/showModal\(\r?\n\s*'Bulk Timesheet Authorise'/);
   const preferenceLoad = opener.indexOf('.then(() => loadBulkAuthoriseSortPreference())');
 
   assert.ok(modalOpen >= 0, 'Bulk Authorise modal call must be present');

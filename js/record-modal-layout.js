@@ -93,11 +93,12 @@
       });
     }
     // These labels have one meaning regardless of the workflow that paints them.
-    const labels = { pay_reference_required: 'Reference required to pay', invoice_reference_required: 'Reference required to invoice' };
+    const labels = { pay_reference_required: 'Reference required before pay', invoice_reference_required: 'Reference required to invoice' };
     Object.entries(labels).forEach(([name,label]) => {
       const input = root.querySelector(`[name="${name}"]`), text = input?.nextElementSibling;
       if (text) text.textContent = label;
     });
+    try { global.CloudTMSWeeklySourceSettings?.mountClient(root, ctx); } catch {}
   }
   function mountClient(root, ctx, rawMain, sync) {
     if (!root || root.dataset.recordMounted) return;

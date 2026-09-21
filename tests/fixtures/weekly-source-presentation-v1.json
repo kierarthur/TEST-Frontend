@@ -1,0 +1,2167 @@
+{
+  "ordinaryWeekly": {
+    "sheet_scope": "WEEKLY",
+    "submission_mode": "MANUAL_NON_QR",
+    "timesheet_id": "ordinary-weekly"
+  },
+  "daily": {
+    "sheet_scope": "DAILY",
+    "submission_mode": "ELECTRONIC",
+    "timesheet_id": "daily-timesheet",
+    "weekly_source_presentation": {
+      "scope": "DAILY",
+      "lifecycle": {
+        "ok": true,
+        "note": null,
+        "errors": [],
+        "heading": null,
+        "surface": "OFFICE",
+        "contract": "WEEKLY_SOURCE_OFFICE_LIFECYCLE_V1",
+        "overlays": [],
+        "ui_state": "UI-017",
+        "server_phase": "DAILY",
+        "heading_source": "LEGACY_OWNER",
+        "overlay_states": [],
+        "primary_schedule": null,
+        "permitted_actions": [
+          "EXISTING_DAILY_ACTIONS"
+        ],
+        "right_pane_status": null,
+        "forbidden_inference": "No Contract or Weekly Source assumption"
+      },
+      "applicable": false
+    }
+  },
+  "nhspMatch": {
+    "weekly_source_presentation": {
+      "contract": "WEEKLY_SOURCE_OFFICE_PRESENTATION_V1",
+      "scope": "WEEKLY",
+      "record_version": "nhsp-match-v1",
+      "freshness": "CURRENT",
+      "route": "NHSP",
+      "authority": "CLIENT_SYSTEM",
+      "source_expense_policy": "SEPARATE_ADDITIONAL_TIMESHEET",
+      "submitted_timesheet_available": true,
+      "submitted_timesheet_complete": true,
+      "comparison": {
+        "state": "MATCH",
+        "source_rows": [
+          {
+            "row_key": "source-mon",
+            "day_date": "Mon 7 Sep 2026",
+            "hours": "09:00-17:00",
+            "break_text": "30 min",
+            "state": "MATCH",
+            "additional_units": [
+              {
+                "key": "day",
+                "label": "Day",
+                "value": "7.5 hours",
+                "state": "MATCH"
+              }
+            ]
+          }
+        ],
+        "submitted_rows": [
+          {
+            "row_key": "submitted-mon",
+            "day_date": "Mon 7 Sep 2026",
+            "hours": "09:00-17:00",
+            "break_text": "30 min",
+            "state": "MATCH",
+            "affected": false
+          }
+        ],
+        "rows": []
+      },
+      "approved_rows": [
+        {
+          "row_key": "approved-mon",
+          "day_date": "Mon 7 Sep 2026",
+          "hours": "09:00-17:00",
+          "break_text": "30 min",
+          "state": "MATCH",
+          "status_text": "Ready",
+          "additional_units": [
+            {
+              "key": "day",
+              "label": "Day",
+              "value": "7.5 hours",
+              "state": "MATCH"
+            }
+          ]
+        }
+      ],
+      "totals": {
+        "complete": true,
+        "charge_excluding_vat": "£209.85",
+        "charge_including_vat": "£251.82",
+        "pay_excluding_vat": "£120.00",
+        "pay_including_vat": "£120.00"
+      },
+      "action_state": {
+        "authorise_allowed": true,
+        "blocked_reason": "",
+        "unauthorise": {
+          "reason": "NO_LIVE_ROOT_AUTHORISATION",
+          "available": false,
+          "permanent": true,
+          "retryable": false,
+          "withdrawn": false,
+          "refusal_code": "WEEKLY_SOURCE_UNAUTHORISE_NOT_MANAGED_ROOT",
+          "refusal_nature": "PERMANENT",
+          "authorisation_state": "NEVER_AUTHORISED",
+          "availability_source": "WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAW_AVAILABLE_V1"
+        },
+        "unauthorise_allowed": false
+      },
+      "lifecycle": {
+        "ok": true,
+        "note": null,
+        "errors": [],
+        "heading": "Hours to authorise",
+        "payment": {
+          "ok": true,
+          "state": "NONE",
+          "reason": null,
+          "batches": [],
+          "live_item_count": 0,
+          "voided_item_count": 0
+        },
+        "surface": "OFFICE",
+        "contract": "WEEKLY_SOURCE_OFFICE_LIFECYCLE_V1",
+        "overlays": [],
+        "proposal": {
+          "state": "NONE",
+          "reason": null,
+          "present": false
+        },
+        "ui_state": "UI-001",
+        "schedules": {
+          "approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "submitted": {
+            "available": true,
+            "reason": null,
+            "source": "CANDIDATE_SUBMITTED_SCHEDULE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "submitted-mon",
+                "day_date": "Mon 7 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "MATCH",
+                "affected": false
+              }
+            ]
+          },
+          "processing": {
+            "rows": [],
+            "reason": "NO_PAYMENT_IN_FLIGHT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "current_paid": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "paid_to_date": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "latest_source": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_LATEST_SOURCE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "source-mon",
+                "day_date": "Mon 7 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "MATCH",
+                "additional_units": [
+                  {
+                    "key": "day",
+                    "label": "Day",
+                    "value": "7.5 hours",
+                    "state": "MATCH"
+                  }
+                ],
+                "affected": false
+              }
+            ]
+          },
+          "currently_approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "hours_to_authorise": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_PROPOSED_FIRST_ENTITLEMENT",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "approved-mon",
+                "day_date": "Mon 7 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "MATCH",
+                "status_text": "Ready",
+                "additional_units": [
+                  {
+                    "key": "day",
+                    "label": "Day",
+                    "value": "7.5 hours",
+                    "state": "MATCH"
+                  }
+                ],
+                "affected": false
+              }
+            ]
+          }
+        },
+        "settlement": {
+          "ok": true,
+          "state": "NO_SETTLEMENT",
+          "reason": null,
+          "shifts": [],
+          "batch_count": 0,
+          "settlements": [],
+          "total_hours": 0,
+          "hours_by_bucket": {
+            "bh": 0,
+            "day": 0,
+            "sat": 0,
+            "sun": 0,
+            "night": 0
+          },
+          "settlement_count": 0,
+          "family_booking_id": "G9-T01",
+          "root_timesheet_id": "fa000000-0000-4000-8000-000000000001",
+          "last_settled_at_utc": null,
+          "first_settled_at_utc": null,
+          "member_timesheet_ids": [
+            "fa000000-0000-4000-8000-000000000001"
+          ],
+          "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000001"
+        },
+        "current_head": null,
+        "server_phase": "FIRST_AUTHORISATION_PENDING",
+        "heading_source": "SERVER",
+        "overlay_states": [],
+        "primary_schedule": "hours_to_authorise",
+        "invoice_movements": {
+          "ok": true,
+          "reason": null,
+          "movements": [],
+          "movement_count": 0,
+          "bound_line_count": 0,
+          "invoiced_from_source": false,
+          "ordinary_invoice_line_count": 0
+        },
+        "permitted_actions": [
+          "AUTHORISE"
+        ],
+        "right_pane_status": "Not yet authorised",
+        "authorisation_state": "NEVER_AUTHORISED",
+        "forbidden_inference": "Do not call source approved before Office acts",
+        "member_timesheet_ids": [
+          "fa000000-0000-4000-8000-000000000001"
+        ],
+        "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000001",
+        "authorisation_generations": {
+          "live": 0,
+          "withdrawn": 0
+        }
+      },
+      "applicable": true,
+      "proposal": {
+        "state": "NONE",
+        "reason": null,
+        "present": false
+      },
+      "invoice_movement_history": {
+        "ok": true,
+        "reason": null,
+        "movements": [],
+        "movement_count": 0,
+        "bound_line_count": 0,
+        "invoiced_from_source": false,
+        "ordinary_invoice_line_count": 0
+      }
+    }
+  },
+  "clientSourceMismatch": {
+    "weekly_source_presentation": {
+      "contract": "WEEKLY_SOURCE_OFFICE_PRESENTATION_V1",
+      "scope": "WEEKLY",
+      "record_version": "client-mismatch-v3",
+      "freshness": "CURRENT",
+      "route": "CLIENT_PROVIDED_HOURS",
+      "authority": "CLIENT_SYSTEM",
+      "source_expense_policy": "SEPARATE_ADDITIONAL_TIMESHEET",
+      "submitted_timesheet_available": true,
+      "submitted_timesheet_complete": true,
+      "comparison": {
+        "state": "MISMATCH",
+        "source_rows": [
+          {
+            "row_key": "source-mon",
+            "day_date": "Mon 7 Sep 2026",
+            "hours": "09:00-17:00",
+            "break_text": "30 min",
+            "state": "MATCH",
+            "additional_units": [
+              {
+                "key": "day",
+                "label": "Day",
+                "value": "7.5 hours",
+                "state": "MATCH"
+              }
+            ]
+          },
+          {
+            "row_key": "source-tue",
+            "day_date": "Tue 8 Sep 2026",
+            "hours": "20:00-08:00",
+            "break_text": "30 min",
+            "state": "MISMATCH",
+            "issue_text": "Hours differ",
+            "additional_units": [
+              {
+                "key": "day",
+                "label": "Day",
+                "value": "2 hours",
+                "state": "MATCH"
+              },
+              {
+                "key": "night",
+                "label": "Night",
+                "value": "9.5 hours",
+                "state": "MISMATCH"
+              }
+            ]
+          }
+        ],
+        "submitted_rows": [
+          {
+            "row_key": "submitted-mon",
+            "day_date": "Mon 7 Sep 2026",
+            "hours": "09:00-17:00",
+            "break_text": "30 min",
+            "state": "MATCH",
+            "affected": false
+          },
+          {
+            "row_key": "submitted-tue",
+            "day_date": "Tue 8 Sep 2026",
+            "hours": "20:00-09:00",
+            "break_text": "30 min",
+            "state": "MISMATCH",
+            "issue_text": "Hours differ",
+            "affected": true
+          }
+        ],
+        "rows": []
+      },
+      "approved_rows": [
+        {
+          "row_key": "approved-mon",
+          "day_date": "Mon 7 Sep 2026",
+          "hours": "09:00-17:00",
+          "break_text": "30 min",
+          "state": "MATCH",
+          "status_text": "Ready"
+        },
+        {
+          "row_key": "approved-tue",
+          "day_date": "Tue 8 Sep 2026",
+          "hours": "20:00-08:00",
+          "break_text": "30 min",
+          "state": "MISMATCH",
+          "status_text": "Needs attention"
+        }
+      ],
+      "totals": {
+        "complete": true,
+        "charge_excluding_vat": "£510.00",
+        "charge_including_vat": "£612.00",
+        "pay_excluding_vat": "£300.00",
+        "pay_including_vat": "£300.00"
+      },
+      "action_state": {
+        "authorise_allowed": false,
+        "blocked_reason": "Resolve the hours needing attention before authorising.",
+        "unauthorise": {
+          "reason": "NO_LIVE_ROOT_AUTHORISATION",
+          "available": false,
+          "permanent": true,
+          "retryable": false,
+          "withdrawn": false,
+          "refusal_code": "WEEKLY_SOURCE_UNAUTHORISE_NOT_MANAGED_ROOT",
+          "refusal_nature": "PERMANENT",
+          "authorisation_state": "NEVER_AUTHORISED",
+          "availability_source": "WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAW_AVAILABLE_V1"
+        },
+        "unauthorise_allowed": false
+      },
+      "lifecycle": {
+        "ok": true,
+        "note": null,
+        "errors": [],
+        "heading": "Hours to authorise",
+        "payment": {
+          "ok": true,
+          "state": "NONE",
+          "reason": null,
+          "batches": [],
+          "live_item_count": 0,
+          "voided_item_count": 0
+        },
+        "surface": "OFFICE",
+        "contract": "WEEKLY_SOURCE_OFFICE_LIFECYCLE_V1",
+        "overlays": [],
+        "proposal": {
+          "state": "NONE",
+          "reason": null,
+          "present": false
+        },
+        "ui_state": "UI-003",
+        "schedules": {
+          "approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "submitted": {
+            "available": true,
+            "reason": null,
+            "source": "CANDIDATE_SUBMITTED_SCHEDULE",
+            "row_count": 2,
+            "rows": [
+              {
+                "row_key": "submitted-mon",
+                "day_date": "Mon 7 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "MATCH",
+                "affected": false
+              },
+              {
+                "row_key": "submitted-tue",
+                "day_date": "Tue 8 Sep 2026",
+                "hours": "20:00-09:00",
+                "break_text": "30 min",
+                "state": "MISMATCH",
+                "issue_text": "Hours differ",
+                "affected": true
+              }
+            ]
+          },
+          "processing": {
+            "rows": [],
+            "reason": "NO_PAYMENT_IN_FLIGHT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "current_paid": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "paid_to_date": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "latest_source": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_LATEST_SOURCE",
+            "row_count": 2,
+            "rows": [
+              {
+                "row_key": "source-mon",
+                "day_date": "Mon 7 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "MATCH",
+                "additional_units": [
+                  {
+                    "key": "day",
+                    "label": "Day",
+                    "value": "7.5 hours",
+                    "state": "MATCH"
+                  }
+                ],
+                "affected": false
+              },
+              {
+                "row_key": "source-tue",
+                "day_date": "Tue 8 Sep 2026",
+                "hours": "20:00-08:00",
+                "break_text": "30 min",
+                "state": "MISMATCH",
+                "issue_text": "Hours differ",
+                "additional_units": [
+                  {
+                    "key": "day",
+                    "label": "Day",
+                    "value": "2 hours",
+                    "state": "MATCH"
+                  },
+                  {
+                    "key": "night",
+                    "label": "Night",
+                    "value": "9.5 hours",
+                    "state": "MISMATCH"
+                  }
+                ],
+                "affected": false
+              }
+            ]
+          },
+          "currently_approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "hours_to_authorise": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_PROPOSED_FIRST_ENTITLEMENT",
+            "row_count": 2,
+            "rows": [
+              {
+                "row_key": "approved-mon",
+                "day_date": "Mon 7 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "MATCH",
+                "status_text": "Ready",
+                "affected": false
+              },
+              {
+                "row_key": "approved-tue",
+                "day_date": "Tue 8 Sep 2026",
+                "hours": "20:00-08:00",
+                "break_text": "30 min",
+                "state": "MISMATCH",
+                "status_text": "Needs attention",
+                "affected": false
+              }
+            ]
+          }
+        },
+        "settlement": {
+          "ok": true,
+          "state": "NO_SETTLEMENT",
+          "reason": null,
+          "shifts": [],
+          "batch_count": 0,
+          "settlements": [],
+          "total_hours": 0,
+          "hours_by_bucket": {
+            "bh": 0,
+            "day": 0,
+            "sat": 0,
+            "sun": 0,
+            "night": 0
+          },
+          "settlement_count": 0,
+          "family_booking_id": "G9-T03",
+          "root_timesheet_id": "fa000000-0000-4000-8000-000000000003",
+          "last_settled_at_utc": null,
+          "first_settled_at_utc": null,
+          "member_timesheet_ids": [
+            "fa000000-0000-4000-8000-000000000003"
+          ],
+          "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000003"
+        },
+        "current_head": null,
+        "server_phase": "FIRST_AUTHORISATION_PENDING_MISMATCH",
+        "heading_source": "SERVER",
+        "overlay_states": [],
+        "primary_schedule": "hours_to_authorise",
+        "invoice_movements": {
+          "ok": true,
+          "reason": null,
+          "movements": [],
+          "movement_count": 0,
+          "bound_line_count": 0,
+          "invoiced_from_source": false,
+          "ordinary_invoice_line_count": 0
+        },
+        "permitted_actions": [
+          "AUTHORISE",
+          "PROTECTED_HOURS_REVIEW"
+        ],
+        "right_pane_status": "Mismatch context",
+        "authorisation_state": "NEVER_AUTHORISED",
+        "forbidden_inference": "Do not show every submitted matching row",
+        "member_timesheet_ids": [
+          "fa000000-0000-4000-8000-000000000003"
+        ],
+        "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000003",
+        "authorisation_generations": {
+          "live": 0,
+          "withdrawn": 0
+        }
+      },
+      "applicable": true,
+      "proposal": {
+        "state": "NONE",
+        "reason": null,
+        "present": false
+      },
+      "invoice_movement_history": {
+        "ok": true,
+        "reason": null,
+        "movements": [],
+        "movement_count": 0,
+        "bound_line_count": 0,
+        "invoiced_from_source": false,
+        "ordinary_invoice_line_count": 0
+      }
+    }
+  },
+  "clientSourceNoTimesheet": {
+    "weekly_source_presentation": {
+      "contract": "WEEKLY_SOURCE_OFFICE_PRESENTATION_V1",
+      "scope": "WEEKLY",
+      "record_version": "client-no-timesheet-v1",
+      "freshness": "CURRENT",
+      "route": "CLIENT_PROVIDED_HOURS",
+      "authority": "CLIENT_SYSTEM",
+      "source_expense_policy": "SEPARATE_ADDITIONAL_TIMESHEET",
+      "submitted_timesheet_available": false,
+      "submitted_timesheet_complete": false,
+      "comparison": {
+        "state": "NO_TIMESHEET",
+        "source_rows": [
+          {
+            "row_key": "source-wed",
+            "day_date": "Wed 9 Sep 2026",
+            "hours": "08:00-18:00",
+            "break_text": "30 min",
+            "state": "NO_TIMESHEET"
+          }
+        ],
+        "submitted_rows": [],
+        "rows": []
+      },
+      "approved_rows": [
+        {
+          "row_key": "approved-wed",
+          "day_date": "Wed 9 Sep 2026",
+          "hours": "08:00-18:00",
+          "break_text": "30 min",
+          "state": "READY",
+          "status_text": "Ready"
+        }
+      ],
+      "totals": {
+        "complete": true,
+        "charge_excluding_vat": "£260.00",
+        "charge_including_vat": "£312.00",
+        "pay_excluding_vat": "£150.00",
+        "pay_including_vat": "£150.00"
+      },
+      "action_state": {
+        "authorise_allowed": true,
+        "blocked_reason": "",
+        "unauthorise": {
+          "reason": "NO_LIVE_ROOT_AUTHORISATION",
+          "available": false,
+          "permanent": true,
+          "retryable": false,
+          "withdrawn": false,
+          "refusal_code": "WEEKLY_SOURCE_UNAUTHORISE_NOT_MANAGED_ROOT",
+          "refusal_nature": "PERMANENT",
+          "authorisation_state": "NEVER_AUTHORISED",
+          "availability_source": "WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAW_AVAILABLE_V1"
+        },
+        "unauthorise_allowed": false
+      },
+      "lifecycle": {
+        "ok": true,
+        "note": null,
+        "errors": [],
+        "heading": "Hours to authorise",
+        "payment": {
+          "ok": true,
+          "state": "NONE",
+          "reason": null,
+          "batches": [],
+          "live_item_count": 0,
+          "voided_item_count": 0
+        },
+        "surface": "OFFICE",
+        "contract": "WEEKLY_SOURCE_OFFICE_LIFECYCLE_V1",
+        "overlays": [],
+        "proposal": {
+          "state": "NONE",
+          "reason": null,
+          "present": false
+        },
+        "ui_state": "UI-002",
+        "schedules": {
+          "approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "submitted": {
+            "rows": [],
+            "reason": null,
+            "source": "CANDIDATE_SUBMITTED_SCHEDULE",
+            "available": true,
+            "row_count": null
+          },
+          "processing": {
+            "rows": [],
+            "reason": "NO_PAYMENT_IN_FLIGHT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "current_paid": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "paid_to_date": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "latest_source": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_LATEST_SOURCE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "source-wed",
+                "day_date": "Wed 9 Sep 2026",
+                "hours": "08:00-18:00",
+                "break_text": "30 min",
+                "state": "NO_TIMESHEET",
+                "affected": false
+              }
+            ]
+          },
+          "currently_approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "hours_to_authorise": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_PROPOSED_FIRST_ENTITLEMENT",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "approved-wed",
+                "day_date": "Wed 9 Sep 2026",
+                "hours": "08:00-18:00",
+                "break_text": "30 min",
+                "state": "READY",
+                "status_text": "Ready",
+                "affected": false
+              }
+            ]
+          }
+        },
+        "settlement": {
+          "ok": true,
+          "state": "NO_SETTLEMENT",
+          "reason": null,
+          "shifts": [],
+          "batch_count": 0,
+          "settlements": [],
+          "total_hours": 0,
+          "hours_by_bucket": {
+            "bh": 0,
+            "day": 0,
+            "sat": 0,
+            "sun": 0,
+            "night": 0
+          },
+          "settlement_count": 0,
+          "family_booking_id": "G9-T02",
+          "root_timesheet_id": "fa000000-0000-4000-8000-000000000002",
+          "last_settled_at_utc": null,
+          "first_settled_at_utc": null,
+          "member_timesheet_ids": [
+            "fa000000-0000-4000-8000-000000000002"
+          ],
+          "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000002"
+        },
+        "current_head": null,
+        "server_phase": "FIRST_AUTHORISATION_PENDING_NO_SUBMISSION",
+        "heading_source": "SERVER",
+        "overlay_states": [],
+        "primary_schedule": "hours_to_authorise",
+        "invoice_movements": {
+          "ok": true,
+          "reason": null,
+          "movements": [],
+          "movement_count": 0,
+          "bound_line_count": 0,
+          "invoiced_from_source": false,
+          "ordinary_invoice_line_count": 0
+        },
+        "permitted_actions": [
+          "AUTHORISE"
+        ],
+        "right_pane_status": "Not yet authorised",
+        "authorisation_state": "NEVER_AUTHORISED",
+        "forbidden_inference": "Do not invent Candidate evidence",
+        "member_timesheet_ids": [
+          "fa000000-0000-4000-8000-000000000002"
+        ],
+        "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000002",
+        "authorisation_generations": {
+          "live": 0,
+          "withdrawn": 0
+        }
+      },
+      "applicable": true,
+      "proposal": {
+        "state": "NONE",
+        "reason": null,
+        "present": false
+      },
+      "invoice_movement_history": {
+        "ok": true,
+        "reason": null,
+        "movements": [],
+        "movement_count": 0,
+        "bound_line_count": 0,
+        "invoiced_from_source": false,
+        "ordinary_invoice_line_count": 0
+      }
+    }
+  },
+  "clientSourceProtected": {
+    "weekly_source_presentation": {
+      "contract": "WEEKLY_SOURCE_OFFICE_PRESENTATION_V1",
+      "scope": "WEEKLY",
+      "record_version": "client-protected-v1",
+      "freshness": "CURRENT",
+      "route": "CLIENT_PROVIDED_HOURS",
+      "authority": "CLIENT_SYSTEM",
+      "submitted_timesheet_available": true,
+      "submitted_timesheet_complete": true,
+      "source_expense_policy": "SEPARATE_ADDITIONAL_TIMESHEET",
+      "comparison": {
+        "state": "MISMATCH",
+        "source_rows": [
+          {
+            "row_key": "source-fri",
+            "day_date": "Fri 11 Sep 2026",
+            "hours": "Not included",
+            "break_text": "—",
+            "state": "MISMATCH",
+            "issue_text": "Not included for pay"
+          }
+        ],
+        "submitted_rows": [
+          {
+            "row_key": "submitted-fri",
+            "day_date": "Fri 11 Sep 2026",
+            "hours": "05:00-15:00",
+            "break_text": "60 min",
+            "state": "MISMATCH",
+            "issue_text": "Not in client-provided hours",
+            "affected": true
+          }
+        ]
+      },
+      "approved_rows": [
+        {
+          "row_key": "approved-fri",
+          "day_date": "Fri 11 Sep 2026",
+          "hours": "05:00-15:00",
+          "break_text": "60 min",
+          "state": "PROTECTED",
+          "status_text": "Office-approved hours",
+          "context_text": "Client system: not included · Submitted: 05:00-15:00 (60 min break)"
+        }
+      ],
+      "totals": {
+        "complete": true,
+        "charge_excluding_vat": "£0.00",
+        "charge_including_vat": "£0.00",
+        "pay_excluding_vat": "£180.00",
+        "pay_including_vat": "£180.00"
+      },
+      "action_state": {
+        "authorise_allowed": true,
+        "blocked_reason": "",
+        "manage_approved_hours_allowed": true,
+        "manage_approved_hours": {
+          "endpoint": "/api/weekly-source/v1/commands",
+          "expected_record_version": "client-protected-v1",
+          "new_item": {
+            "allowed": true,
+            "action": "APPROVE_PROTECTED_HOURS",
+            "command_payload": {
+              "source_cycle_id": "source-cycle-2026-09-13",
+              "candidate_id": "candidate-1",
+              "client_id": "client-1",
+              "contract_id": "contract-1",
+              "week_ending_date": "2026-09-13",
+              "evidence_timesheet_id": "timesheet-1"
+            }
+          },
+          "items": [
+            {
+              "item_id": "approved-fri",
+              "work_event_id": "work-event-fri",
+              "state": "WAIT",
+              "primary_action": "AMEND_PROTECTED_HOURS",
+              "available_actions": [
+                "AMEND_PROTECTED_HOURS",
+                "WITHDRAW_PROTECTED_HOURS",
+                "WAIT_FOR_SOURCE",
+                "ACCEPT_SOURCE_AND_RECONCILE",
+                "RECORD_NOT_WORKED"
+              ],
+              "command_payload": {
+                "source_cycle_id": "source-cycle-2026-09-13",
+                "candidate_id": "candidate-1",
+                "client_id": "client-1",
+                "contract_id": "contract-1",
+                "week_ending_date": "2026-09-13",
+                "family_id": "approved-hours-family-1",
+                "work_event_id": "work-event-fri",
+                "evidence_timesheet_id": "timesheet-1",
+                "work_date": "2026-09-11",
+                "start_at_local": "05:00",
+                "end_at_local": "15:00",
+                "break_minutes": 60
+              },
+              "schedule": {
+                "work_date": "2026-09-11",
+                "start_at_local": "05:00",
+                "end_at_local": "15:00",
+                "break_minutes": 60
+              }
+            }
+          ]
+        },
+        "add_additional_expense_timesheet_allowed": true,
+        "unauthorise": {
+          "reason": "NO_LIVE_ROOT_AUTHORISATION",
+          "available": false,
+          "permanent": true,
+          "retryable": false,
+          "withdrawn": false,
+          "refusal_code": "WEEKLY_SOURCE_UNAUTHORISE_NOT_MANAGED_ROOT",
+          "refusal_nature": "PERMANENT",
+          "authorisation_state": "NEVER_AUTHORISED",
+          "availability_source": "WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAW_AVAILABLE_V1"
+        },
+        "unauthorise_allowed": false
+      },
+      "lifecycle": {
+        "ok": true,
+        "note": null,
+        "errors": [],
+        "heading": "Hours to authorise",
+        "payment": {
+          "ok": true,
+          "state": "NONE",
+          "reason": null,
+          "batches": [],
+          "live_item_count": 0,
+          "voided_item_count": 0
+        },
+        "surface": "OFFICE",
+        "contract": "WEEKLY_SOURCE_OFFICE_LIFECYCLE_V1",
+        "overlays": [],
+        "proposal": {
+          "state": "NONE",
+          "reason": null,
+          "present": false
+        },
+        "ui_state": "UI-004",
+        "schedules": {
+          "approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "submitted": {
+            "available": true,
+            "reason": null,
+            "source": "CANDIDATE_SUBMITTED_SCHEDULE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "submitted-fri",
+                "day_date": "Fri 11 Sep 2026",
+                "hours": "05:00-15:00",
+                "break_text": "60 min",
+                "state": "MISMATCH",
+                "issue_text": "Not in client-provided hours",
+                "affected": true
+              }
+            ]
+          },
+          "processing": {
+            "rows": [],
+            "reason": "NO_PAYMENT_IN_FLIGHT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "current_paid": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "paid_to_date": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "latest_source": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_LATEST_SOURCE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "source-fri",
+                "day_date": "Fri 11 Sep 2026",
+                "hours": "Not included",
+                "break_text": "—",
+                "state": "MISMATCH",
+                "issue_text": "Not included for pay",
+                "affected": false
+              }
+            ]
+          },
+          "currently_approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "hours_to_authorise": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_PROPOSED_FIRST_ENTITLEMENT",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "approved-fri",
+                "day_date": "Fri 11 Sep 2026",
+                "hours": "05:00-15:00",
+                "break_text": "60 min",
+                "state": "PROTECTED",
+                "status_text": "Office-approved hours",
+                "context_text": "Client system: not included · Submitted: 05:00-15:00 (60 min break)",
+                "affected": false
+              }
+            ]
+          }
+        },
+        "settlement": {
+          "ok": true,
+          "state": "NO_SETTLEMENT",
+          "reason": null,
+          "shifts": [],
+          "batch_count": 0,
+          "settlements": [],
+          "total_hours": 0,
+          "hours_by_bucket": {
+            "bh": 0,
+            "day": 0,
+            "sat": 0,
+            "sun": 0,
+            "night": 0
+          },
+          "settlement_count": 0,
+          "family_booking_id": "G9-T04",
+          "root_timesheet_id": "fa000000-0000-4000-8000-000000000004",
+          "last_settled_at_utc": null,
+          "first_settled_at_utc": null,
+          "member_timesheet_ids": [
+            "fa000000-0000-4000-8000-000000000004"
+          ],
+          "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000004"
+        },
+        "current_head": null,
+        "server_phase": "FIRST_ALTERNATE_HOURS_PENDING",
+        "heading_source": "SERVER",
+        "overlay_states": [],
+        "primary_schedule": "hours_to_authorise",
+        "invoice_movements": {
+          "ok": true,
+          "reason": null,
+          "movements": [],
+          "movement_count": 0,
+          "bound_line_count": 0,
+          "invoiced_from_source": false,
+          "ordinary_invoice_line_count": 0
+        },
+        "permitted_actions": [
+          "AUTHORISE"
+        ],
+        "right_pane_status": "Office alternate reason available",
+        "authorisation_state": "NEVER_AUTHORISED",
+        "forbidden_inference": "Do not call alternate hours paid",
+        "member_timesheet_ids": [
+          "fa000000-0000-4000-8000-000000000004"
+        ],
+        "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000004",
+        "authorisation_generations": {
+          "live": 0,
+          "withdrawn": 0
+        }
+      },
+      "applicable": true,
+      "proposal": {
+        "state": "NONE",
+        "reason": null,
+        "present": false
+      },
+      "invoice_movement_history": {
+        "ok": true,
+        "reason": null,
+        "movements": [],
+        "movement_count": 0,
+        "bound_line_count": 0,
+        "invoiced_from_source": false,
+        "ordinary_invoice_line_count": 0
+      }
+    }
+  },
+  "clientSourceSuppliedExpense": {
+    "weekly_source_presentation": {
+      "contract": "WEEKLY_SOURCE_OFFICE_PRESENTATION_V1",
+      "scope": "WEEKLY",
+      "record_version": "client-source-expense-v1",
+      "freshness": "CURRENT",
+      "route": "CLIENT_PROVIDED_HOURS",
+      "authority": "CLIENT_SYSTEM",
+      "submitted_timesheet_available": true,
+      "submitted_timesheet_complete": true,
+      "source_expense_policy": "SOURCE_SUPPLIED",
+      "comparison": {
+        "state": "MATCH",
+        "source_rows": [
+          {
+            "row_key": "source-sat",
+            "day_date": "Sat 12 Sep 2026",
+            "hours": "09:00-17:00",
+            "break_text": "30 min",
+            "state": "MATCH"
+          }
+        ],
+        "submitted_rows": [
+          {
+            "row_key": "submitted-sat",
+            "day_date": "Sat 12 Sep 2026",
+            "hours": "09:00-17:00",
+            "break_text": "30 min",
+            "state": "MATCH",
+            "affected": false
+          }
+        ]
+      },
+      "approved_rows": [
+        {
+          "row_key": "approved-sat",
+          "day_date": "Sat 12 Sep 2026",
+          "hours": "09:00-17:00",
+          "break_text": "30 min",
+          "state": "MATCH",
+          "status_text": "Ready"
+        }
+      ],
+      "totals": {
+        "complete": true,
+        "charge_excluding_vat": "£250.00",
+        "charge_including_vat": "£300.00",
+        "pay_excluding_vat": "£160.00",
+        "pay_including_vat": "£160.00"
+      },
+      "action_state": {
+        "authorise_allowed": true,
+        "blocked_reason": "",
+        "manage_approved_hours_allowed": false,
+        "add_additional_expense_timesheet_allowed": false,
+        "unauthorise": {
+          "reason": "NO_LIVE_ROOT_AUTHORISATION",
+          "available": false,
+          "permanent": true,
+          "retryable": false,
+          "withdrawn": false,
+          "refusal_code": "WEEKLY_SOURCE_UNAUTHORISE_NOT_MANAGED_ROOT",
+          "refusal_nature": "PERMANENT",
+          "authorisation_state": "NEVER_AUTHORISED",
+          "availability_source": "WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAW_AVAILABLE_V1"
+        },
+        "unauthorise_allowed": false
+      },
+      "lifecycle": {
+        "ok": true,
+        "note": null,
+        "errors": [],
+        "heading": "Hours to authorise",
+        "payment": {
+          "ok": true,
+          "state": "NONE",
+          "reason": null,
+          "batches": [],
+          "live_item_count": 0,
+          "voided_item_count": 0
+        },
+        "surface": "OFFICE",
+        "contract": "WEEKLY_SOURCE_OFFICE_LIFECYCLE_V1",
+        "overlays": [
+          {
+            "heading": null,
+            "surface": "OFFICE_OVERLAY",
+            "ui_state": "UI-018",
+            "server_phase": "SOURCE_FIXED_EXPENSE",
+            "heading_source": "CONTEXT_PHASE",
+            "primary_schedule": null,
+            "right_pane_status": "Included in four server totals",
+            "allowed_new_actions": [],
+            "forbidden_inference": "Do not create a separate zero-hour expense Timesheet"
+          }
+        ],
+        "proposal": {
+          "state": "NONE",
+          "reason": null,
+          "present": false
+        },
+        "ui_state": "UI-001",
+        "schedules": {
+          "approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "submitted": {
+            "available": true,
+            "reason": null,
+            "source": "CANDIDATE_SUBMITTED_SCHEDULE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "submitted-sat",
+                "day_date": "Sat 12 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "MATCH",
+                "affected": false
+              }
+            ]
+          },
+          "processing": {
+            "rows": [],
+            "reason": "NO_PAYMENT_IN_FLIGHT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "current_paid": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "paid_to_date": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "latest_source": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_LATEST_SOURCE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "source-sat",
+                "day_date": "Sat 12 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "MATCH",
+                "affected": false
+              }
+            ]
+          },
+          "currently_approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "hours_to_authorise": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_PROPOSED_FIRST_ENTITLEMENT",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "approved-sat",
+                "day_date": "Sat 12 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "MATCH",
+                "status_text": "Ready",
+                "affected": false
+              }
+            ]
+          }
+        },
+        "settlement": {
+          "ok": true,
+          "state": "NO_SETTLEMENT",
+          "reason": null,
+          "shifts": [],
+          "batch_count": 0,
+          "settlements": [],
+          "total_hours": 0,
+          "hours_by_bucket": {
+            "bh": 0,
+            "day": 0,
+            "sat": 0,
+            "sun": 0,
+            "night": 0
+          },
+          "settlement_count": 0,
+          "family_booking_id": "G9-T18",
+          "root_timesheet_id": "fa000000-0000-4000-8000-000000000012",
+          "last_settled_at_utc": null,
+          "first_settled_at_utc": null,
+          "member_timesheet_ids": [
+            "fa000000-0000-4000-8000-000000000012"
+          ],
+          "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000012"
+        },
+        "current_head": null,
+        "server_phase": "FIRST_AUTHORISATION_PENDING",
+        "heading_source": "SERVER",
+        "overlay_states": [
+          "UI-018"
+        ],
+        "primary_schedule": "hours_to_authorise",
+        "invoice_movements": {
+          "ok": true,
+          "reason": null,
+          "movements": [],
+          "movement_count": 0,
+          "bound_line_count": 0,
+          "invoiced_from_source": false,
+          "ordinary_invoice_line_count": 0
+        },
+        "permitted_actions": [
+          "AUTHORISE"
+        ],
+        "right_pane_status": "Not yet authorised",
+        "authorisation_state": "NEVER_AUTHORISED",
+        "forbidden_inference": "Do not call source approved before Office acts",
+        "member_timesheet_ids": [
+          "fa000000-0000-4000-8000-000000000012"
+        ],
+        "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000012",
+        "authorisation_generations": {
+          "live": 0,
+          "withdrawn": 0
+        }
+      },
+      "applicable": true,
+      "proposal": {
+        "state": "NONE",
+        "reason": null,
+        "present": false
+      },
+      "invoice_movement_history": {
+        "ok": true,
+        "reason": null,
+        "movements": [],
+        "movement_count": 0,
+        "bound_line_count": 0,
+        "invoiced_from_source": false,
+        "ordinary_invoice_line_count": 0
+      }
+    }
+  },
+  "clientSourceSuppliedExpenseZeroHours": {
+    "weekly_source_presentation": {
+      "contract": "WEEKLY_SOURCE_OFFICE_PRESENTATION_V1",
+      "scope": "WEEKLY",
+      "record_version": "client-source-expense-zero-hours-v1",
+      "freshness": "CURRENT",
+      "route": "CLIENT_PROVIDED_HOURS",
+      "authority": "CLIENT_SYSTEM",
+      "submitted_timesheet_available": false,
+      "submitted_timesheet_complete": false,
+      "source_expense_policy": "SOURCE_SUPPLIED",
+      "comparison": {
+        "state": "NO_TIMESHEET",
+        "source_rows": [
+          {
+            "row_key": "source-expense-only-week",
+            "day_date": "Week ending Sun 13 Sep 2026",
+            "hours": "0",
+            "break_text": "—",
+            "state": "NO_TIMESHEET",
+            "status_text": "Client-provided expense only"
+          }
+        ],
+        "submitted_rows": []
+      },
+      "approved_rows": [
+        {
+          "row_key": "approved-expense-only-week",
+          "day_date": "Week ending Sun 13 Sep 2026",
+          "hours": "0",
+          "break_text": "—",
+          "state": "READY",
+          "status_text": "Client-provided expense only"
+        }
+      ],
+      "totals": {
+        "complete": true,
+        "charge_excluding_vat": "£24.00",
+        "charge_including_vat": "£28.80",
+        "pay_excluding_vat": "£24.00",
+        "pay_including_vat": "£24.00"
+      },
+      "action_state": {
+        "authorise_allowed": true,
+        "blocked_reason": "",
+        "manage_approved_hours_allowed": false,
+        "add_additional_expense_timesheet_allowed": false,
+        "unauthorise": {
+          "reason": "NO_LIVE_ROOT_AUTHORISATION",
+          "available": false,
+          "permanent": true,
+          "retryable": false,
+          "withdrawn": false,
+          "refusal_code": "WEEKLY_SOURCE_UNAUTHORISE_NOT_MANAGED_ROOT",
+          "refusal_nature": "PERMANENT",
+          "authorisation_state": "NEVER_AUTHORISED",
+          "availability_source": "WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAW_AVAILABLE_V1"
+        },
+        "unauthorise_allowed": false
+      },
+      "lifecycle": {
+        "ok": true,
+        "note": null,
+        "errors": [],
+        "heading": "Hours to authorise",
+        "payment": {
+          "ok": true,
+          "state": "NONE",
+          "reason": null,
+          "batches": [],
+          "live_item_count": 0,
+          "voided_item_count": 0
+        },
+        "surface": "OFFICE",
+        "contract": "WEEKLY_SOURCE_OFFICE_LIFECYCLE_V1",
+        "overlays": [
+          {
+            "heading": null,
+            "surface": "OFFICE_OVERLAY",
+            "ui_state": "UI-018",
+            "server_phase": "SOURCE_FIXED_EXPENSE",
+            "heading_source": "CONTEXT_PHASE",
+            "primary_schedule": null,
+            "right_pane_status": "Included in four server totals",
+            "allowed_new_actions": [],
+            "forbidden_inference": "Do not create a separate zero-hour expense Timesheet"
+          }
+        ],
+        "proposal": {
+          "state": "NONE",
+          "reason": null,
+          "present": false
+        },
+        "ui_state": "UI-001",
+        "schedules": {
+          "approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "submitted": {
+            "rows": [
+              {
+                "hours": "09:00-17:00",
+                "state": "SUBMITTED",
+                "row_key": "submitted-all-1",
+                "day_date": "Tue 1 Sep 2026",
+                "break_text": "30 min"
+              }
+            ],
+            "reason": null,
+            "source": "CANDIDATE_SUBMITTED_SCHEDULE",
+            "available": true,
+            "row_count": 1
+          },
+          "processing": {
+            "rows": [],
+            "reason": "NO_PAYMENT_IN_FLIGHT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "current_paid": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "paid_to_date": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "latest_source": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_LATEST_SOURCE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "source-expense-only-week",
+                "day_date": "Week ending Sun 13 Sep 2026",
+                "hours": "0",
+                "break_text": "—",
+                "state": "NO_TIMESHEET",
+                "status_text": "Client-provided expense only",
+                "affected": false
+              }
+            ]
+          },
+          "currently_approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "hours_to_authorise": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_PROPOSED_FIRST_ENTITLEMENT",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "approved-expense-only-week",
+                "day_date": "Week ending Sun 13 Sep 2026",
+                "hours": "0",
+                "break_text": "—",
+                "state": "READY",
+                "status_text": "Client-provided expense only",
+                "affected": false
+              }
+            ]
+          }
+        },
+        "settlement": {
+          "ok": true,
+          "state": "NO_SETTLEMENT",
+          "reason": null,
+          "shifts": [],
+          "batch_count": 0,
+          "settlements": [],
+          "total_hours": 0,
+          "hours_by_bucket": {
+            "bh": 0,
+            "day": 0,
+            "sat": 0,
+            "sun": 0,
+            "night": 0
+          },
+          "settlement_count": 0,
+          "family_booking_id": "G9-T18",
+          "root_timesheet_id": "fa000000-0000-4000-8000-000000000012",
+          "last_settled_at_utc": null,
+          "first_settled_at_utc": null,
+          "member_timesheet_ids": [
+            "fa000000-0000-4000-8000-000000000012"
+          ],
+          "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000012"
+        },
+        "current_head": null,
+        "server_phase": "FIRST_AUTHORISATION_PENDING",
+        "heading_source": "SERVER",
+        "overlay_states": [
+          "UI-018"
+        ],
+        "primary_schedule": "hours_to_authorise",
+        "invoice_movements": {
+          "ok": true,
+          "reason": null,
+          "movements": [],
+          "movement_count": 0,
+          "bound_line_count": 0,
+          "invoiced_from_source": false,
+          "ordinary_invoice_line_count": 0
+        },
+        "permitted_actions": [
+          "AUTHORISE"
+        ],
+        "right_pane_status": "Not yet authorised",
+        "authorisation_state": "NEVER_AUTHORISED",
+        "forbidden_inference": "Do not call source approved before Office acts",
+        "member_timesheet_ids": [
+          "fa000000-0000-4000-8000-000000000012"
+        ],
+        "canonical_timesheet_id": "fa000000-0000-4000-8000-000000000012",
+        "authorisation_generations": {
+          "live": 0,
+          "withdrawn": 0
+        }
+      },
+      "applicable": true,
+      "proposal": {
+        "state": "NONE",
+        "reason": null,
+        "present": false
+      },
+      "invoice_movement_history": {
+        "ok": true,
+        "reason": null,
+        "movements": [],
+        "movement_count": 0,
+        "bound_line_count": 0,
+        "invoiced_from_source": false,
+        "ordinary_invoice_line_count": 0
+      }
+    }
+  },
+  "timesheetCheckedWaiting": {
+    "weekly_source_presentation": {
+      "contract": "WEEKLY_SOURCE_OFFICE_PRESENTATION_V1",
+      "scope": "WEEKLY",
+      "record_version": "checked-waiting-v1",
+      "freshness": "CURRENT",
+      "route": "TIMESHEETS_CHECKED_WITH_CLIENT",
+      "authority": "SIGNED_TIMESHEET",
+      "submitted_timesheet_available": true,
+      "submitted_timesheet_complete": false,
+      "comparison": {
+        "state": "WAITING_FOR_COMPLETE_TIMESHEET",
+        "source_rows": [],
+        "submitted_rows": []
+      },
+      "approved_rows": [],
+      "totals": {
+        "complete": true,
+        "charge_excluding_vat": "£0.00",
+        "charge_including_vat": "£0.00",
+        "pay_excluding_vat": "£0.00",
+        "pay_including_vat": "£0.00"
+      },
+      "action_state": {
+        "authorise_allowed": false,
+        "blocked_reason": "Waiting for the worker and manager to complete the Timesheet.",
+        "unauthorise": {
+          "reason": "NO_LIVE_ROOT_AUTHORISATION",
+          "available": false,
+          "permanent": true,
+          "retryable": false,
+          "withdrawn": false,
+          "refusal_code": "WEEKLY_SOURCE_UNAUTHORISE_NOT_MANAGED_ROOT",
+          "refusal_nature": "PERMANENT",
+          "authorisation_state": "NEVER_AUTHORISED",
+          "availability_source": "WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAW_AVAILABLE_V1"
+        },
+        "unauthorise_allowed": false
+      },
+      "lifecycle": {
+        "ok": true,
+        "note": null,
+        "errors": [],
+        "heading": "Timesheet hours",
+        "payment": {
+          "ok": true,
+          "state": "NONE",
+          "reason": null,
+          "batches": [],
+          "live_item_count": 0,
+          "voided_item_count": 0
+        },
+        "surface": "OFFICE",
+        "contract": "WEEKLY_SOURCE_OFFICE_LIFECYCLE_V1",
+        "overlays": [],
+        "proposal": {
+          "state": "NONE",
+          "reason": null,
+          "present": false
+        },
+        "ui_state": "UI-014",
+        "schedules": {
+          "approved": {
+            "available": true,
+            "reason": null,
+            "source": "CANDIDATE_SUBMITTED_SCHEDULE",
+            "row_count": 0,
+            "rows": []
+          },
+          "submitted": {
+            "rows": [
+              {
+                "hours": "09:00-17:00",
+                "state": "SUBMITTED",
+                "row_key": "submitted-all-1",
+                "day_date": "Tue 1 Sep 2026",
+                "break_text": "30 min"
+              }
+            ],
+            "reason": null,
+            "source": "CANDIDATE_SUBMITTED_SCHEDULE",
+            "available": true,
+            "row_count": 1
+          },
+          "processing": {
+            "rows": [],
+            "reason": "NO_PAYMENT_IN_FLIGHT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "current_paid": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "paid_to_date": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "latest_source": {
+            "rows": [],
+            "reason": "NO_CURRENT_SOURCE_PUBLICATION",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "currently_approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "hours_to_authorise": {
+            "rows": [
+              {
+                "hours": "09:00-17:00",
+                "state": "READY",
+                "row_key": "approved-1",
+                "day_date": "Tue 1 Sep 2026",
+                "break_text": "30 min",
+                "status_text": "Ready"
+              }
+            ],
+            "reason": null,
+            "source": "WEEKLY_SOURCE_PROPOSED_FIRST_ENTITLEMENT",
+            "available": true,
+            "row_count": 1
+          }
+        },
+        "settlement": {
+          "ok": true,
+          "state": "NO_SETTLEMENT",
+          "reason": null,
+          "shifts": [],
+          "batch_count": 0,
+          "settlements": [],
+          "total_hours": 0,
+          "hours_by_bucket": {
+            "bh": 0,
+            "day": 0,
+            "sat": 0,
+            "sun": 0,
+            "night": 0
+          },
+          "settlement_count": 0,
+          "family_booking_id": "G9-T14",
+          "root_timesheet_id": "fa000000-0000-4000-8000-00000000000e",
+          "last_settled_at_utc": null,
+          "first_settled_at_utc": null,
+          "member_timesheet_ids": [
+            "fa000000-0000-4000-8000-00000000000e"
+          ],
+          "canonical_timesheet_id": "fa000000-0000-4000-8000-00000000000e"
+        },
+        "current_head": null,
+        "server_phase": "TIMESHEET_AUTHORITY_MATCH",
+        "heading_source": "SERVER",
+        "overlay_states": [],
+        "primary_schedule": "approved",
+        "invoice_movements": {
+          "ok": true,
+          "reason": null,
+          "movements": [],
+          "movement_count": 0,
+          "bound_line_count": 0,
+          "invoiced_from_source": false,
+          "ordinary_invoice_line_count": 0
+        },
+        "permitted_actions": [
+          "AUTHORISE"
+        ],
+        "right_pane_status": "Reference state",
+        "authorisation_state": "NEVER_AUTHORISED",
+        "forbidden_inference": "Do not replace pay hours with import hours",
+        "member_timesheet_ids": [
+          "fa000000-0000-4000-8000-00000000000e"
+        ],
+        "canonical_timesheet_id": "fa000000-0000-4000-8000-00000000000e",
+        "authorisation_generations": {
+          "live": 0,
+          "withdrawn": 0
+        }
+      },
+      "applicable": true,
+      "proposal": {
+        "state": "NONE",
+        "reason": null,
+        "present": false
+      },
+      "invoice_movement_history": {
+        "ok": true,
+        "reason": null,
+        "movements": [],
+        "movement_count": 0,
+        "bound_line_count": 0,
+        "invoiced_from_source": false,
+        "ordinary_invoice_line_count": 0
+      }
+    }
+  },
+  "timesheetCheckedMismatch": {
+    "weekly_source_presentation": {
+      "contract": "WEEKLY_SOURCE_OFFICE_PRESENTATION_V1",
+      "scope": "WEEKLY",
+      "record_version": "checked-mismatch-v1",
+      "freshness": "CURRENT",
+      "route": "TIMESHEETS_CHECKED_WITH_CLIENT",
+      "authority": "SIGNED_TIMESHEET",
+      "submitted_timesheet_available": true,
+      "submitted_timesheet_complete": true,
+      "comparison": {
+        "state": "MISMATCH",
+        "source_rows": [
+          {
+            "row_key": "client-thu",
+            "day_date": "Thu 10 Sep 2026",
+            "hours": "09:00-16:30",
+            "break_text": "30 min",
+            "state": "MISMATCH",
+            "issue_text": "Hours differ"
+          }
+        ],
+        "submitted_rows": [
+          {
+            "row_key": "signed-thu",
+            "day_date": "Thu 10 Sep 2026",
+            "hours": "09:00-17:00",
+            "break_text": "30 min",
+            "state": "MISMATCH",
+            "issue_text": "Hours differ",
+            "affected": true
+          }
+        ],
+        "rows": []
+      },
+      "approved_rows": [
+        {
+          "row_key": "approved-thu",
+          "day_date": "Thu 10 Sep 2026",
+          "hours": "09:00-17:00",
+          "break_text": "30 min",
+          "state": "READY",
+          "status_text": "Ready"
+        }
+      ],
+      "totals": {
+        "complete": true,
+        "charge_excluding_vat": "£180.00",
+        "charge_including_vat": "£216.00",
+        "pay_excluding_vat": "£105.00",
+        "pay_including_vat": "£105.00"
+      },
+      "action_state": {
+        "authorise_allowed": true,
+        "blocked_reason": "",
+        "unauthorise": {
+          "reason": "NO_LIVE_ROOT_AUTHORISATION",
+          "available": false,
+          "permanent": true,
+          "retryable": false,
+          "withdrawn": false,
+          "refusal_code": "WEEKLY_SOURCE_UNAUTHORISE_NOT_MANAGED_ROOT",
+          "refusal_nature": "PERMANENT",
+          "authorisation_state": "NEVER_AUTHORISED",
+          "availability_source": "WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAW_AVAILABLE_V1"
+        },
+        "unauthorise_allowed": false
+      },
+      "lifecycle": {
+        "ok": true,
+        "note": null,
+        "errors": [],
+        "heading": "Timesheet hours",
+        "payment": {
+          "ok": true,
+          "state": "NONE",
+          "reason": null,
+          "batches": [],
+          "live_item_count": 0,
+          "voided_item_count": 0
+        },
+        "surface": "OFFICE",
+        "contract": "WEEKLY_SOURCE_OFFICE_LIFECYCLE_V1",
+        "overlays": [],
+        "proposal": {
+          "state": "NONE",
+          "reason": null,
+          "present": false
+        },
+        "ui_state": "UI-015",
+        "schedules": {
+          "approved": {
+            "available": true,
+            "reason": null,
+            "source": "CANDIDATE_SUBMITTED_SCHEDULE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "approved-thu",
+                "day_date": "Thu 10 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "READY",
+                "status_text": "Ready",
+                "affected": false
+              }
+            ]
+          },
+          "submitted": {
+            "available": true,
+            "reason": null,
+            "source": "CANDIDATE_SUBMITTED_SCHEDULE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "signed-thu",
+                "day_date": "Thu 10 Sep 2026",
+                "hours": "09:00-17:00",
+                "break_text": "30 min",
+                "state": "MISMATCH",
+                "issue_text": "Hours differ",
+                "affected": true
+              }
+            ]
+          },
+          "processing": {
+            "rows": [],
+            "reason": "NO_PAYMENT_IN_FLIGHT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "current_paid": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "paid_to_date": {
+            "rows": [],
+            "reason": "NO_SETTLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "latest_source": {
+            "available": true,
+            "reason": null,
+            "source": "WEEKLY_SOURCE_LATEST_SOURCE",
+            "row_count": 1,
+            "rows": [
+              {
+                "row_key": "client-thu",
+                "day_date": "Thu 10 Sep 2026",
+                "hours": "09:00-16:30",
+                "break_text": "30 min",
+                "state": "MISMATCH",
+                "issue_text": "Hours differ",
+                "affected": false
+              }
+            ]
+          },
+          "currently_approved": {
+            "rows": [],
+            "reason": "NO_CURRENT_AUTHORISED_ENTITLEMENT",
+            "source": null,
+            "available": false,
+            "row_count": 0
+          },
+          "hours_to_authorise": {
+            "rows": [
+              {
+                "hours": "09:00-18:00",
+                "state": "READY",
+                "row_key": "approved-1",
+                "day_date": "Tue 8 Sep 2026",
+                "break_text": "30 min",
+                "status_text": "Ready"
+              }
+            ],
+            "reason": null,
+            "source": "WEEKLY_SOURCE_PROPOSED_FIRST_ENTITLEMENT",
+            "available": true,
+            "row_count": 1
+          }
+        },
+        "settlement": {
+          "ok": true,
+          "state": "NO_SETTLEMENT",
+          "reason": null,
+          "shifts": [],
+          "batch_count": 0,
+          "settlements": [],
+          "total_hours": 0,
+          "hours_by_bucket": {
+            "bh": 0,
+            "day": 0,
+            "sat": 0,
+            "sun": 0,
+            "night": 0
+          },
+          "settlement_count": 0,
+          "family_booking_id": "G9-T15",
+          "root_timesheet_id": "fa000000-0000-4000-8000-00000000000f",
+          "last_settled_at_utc": null,
+          "first_settled_at_utc": null,
+          "member_timesheet_ids": [
+            "fa000000-0000-4000-8000-00000000000f"
+          ],
+          "canonical_timesheet_id": "fa000000-0000-4000-8000-00000000000f"
+        },
+        "current_head": null,
+        "server_phase": "TIMESHEET_AUTHORITY_MISMATCH",
+        "heading_source": "SERVER",
+        "overlay_states": [],
+        "primary_schedule": "approved",
+        "invoice_movements": {
+          "ok": true,
+          "reason": null,
+          "movements": [],
+          "movement_count": 0,
+          "bound_line_count": 0,
+          "invoiced_from_source": false,
+          "ordinary_invoice_line_count": 0
+        },
+        "permitted_actions": [
+          "EXISTING_MANAGER_EMAIL_JOURNEY"
+        ],
+        "right_pane_status": "Reference withheld",
+        "authorisation_state": "NEVER_AUTHORISED",
+        "forbidden_inference": "Do not query Candidate or use secure manager response page",
+        "member_timesheet_ids": [
+          "fa000000-0000-4000-8000-00000000000f"
+        ],
+        "canonical_timesheet_id": "fa000000-0000-4000-8000-00000000000f",
+        "authorisation_generations": {
+          "live": 0,
+          "withdrawn": 0
+        }
+      },
+      "applicable": true,
+      "proposal": {
+        "state": "NONE",
+        "reason": null,
+        "present": false
+      },
+      "invoice_movement_history": {
+        "ok": true,
+        "reason": null,
+        "movements": [],
+        "movement_count": 0,
+        "bound_line_count": 0,
+        "invoiced_from_source": false,
+        "ordinary_invoice_line_count": 0
+      }
+    }
+  }
+}
