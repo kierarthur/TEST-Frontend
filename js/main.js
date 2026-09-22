@@ -669,18 +669,7 @@ function getVisibleBulkAuthoriseRows(state) {
   };
 
   const getRowWeeklySourceCategory = (row) => {
-    const explicit = upper(row?.weekly_source_category || '');
-    if (['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT', 'STANDARD_TIMESHEETS'].includes(explicit)) {
-      return explicit;
-    }
-    const api = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
-    if (!api || typeof api.findHostPayload !== 'function' || typeof api.buildViewModel !== 'function') return 'STANDARD_TIMESHEETS';
-    const host = api.findHostPayload(row);
-    if (!host) return 'STANDARD_TIMESHEETS';
-    const vm = api.buildViewModel(host);
-    return vm && vm.render_mode === 'WEEKLY_SOURCE'
-      ? normaliseBulkAuthoriseWeeklySourceCategory(vm.category_key)
-      : 'STANDARD_TIMESHEETS';
+    return deriveBulkAuthoriseWeeklySourceCategory(row);
   };
 
   const getPeriodType = (row) => {
@@ -173535,7 +173524,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     if (!out.stable_row_id) out.stable_row_id = out.timesheet_id || out.contract_week_id || null;
 
     out.bulk_authorise_classification = (out.bulk_authorise_classification != null) ? String(out.bulk_authorise_classification).trim() || null : null;
-    out.weekly_source_category = normaliseBulkAuthoriseWeeklySourceCategory(out.weekly_source_category);
+    out.weekly_source_category = deriveBulkAuthoriseWeeklySourceCategory(out);
     out.bulk_authorise_section = (out.bulk_authorise_section != null) ? String(out.bulk_authorise_section).trim() || null : null;
     out.route_family = (out.route_family != null) ? String(out.route_family).trim() || null : null;
     out.route_subfamily = (out.route_subfamily != null) ? String(out.route_subfamily).trim() || null : null;
@@ -173795,7 +173784,9 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
       const result = {};
       for (const key of ['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT', 'STANDARD_TIMESHEETS']) {
         const count = Number(raw[key]);
-        if (Number.isInteger(count) && count >= 0) result[key] = count;
+        result[key] = Number.isInteger(count) && count >= 0
+          ? count
+          : rows.filter((row) => deriveBulkAuthoriseWeeklySourceCategory(row) === key).length;
       }
       return result;
     })();
@@ -178394,6 +178385,33 @@ function normaliseBulkAuthoriseWeeklySourceCategory(value) {
   return ['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT', 'STANDARD_TIMESHEETS'].includes(key)
     ? key
     : 'STANDARD_TIMESHEETS';
+}
+
+function deriveBulkAuthoriseWeeklySourceCategory(row) {
+  const source = (row && typeof row === 'object') ? row : {};
+  const upper = (value) => String(value == null ? '' : value).trim().toUpperCase();
+  const explicit = upper(source.weekly_source_category);
+  if (['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT', 'STANDARD_TIMESHEETS'].includes(explicit)) {
+    return explicit;
+  }
+
+  const api = (typeof window !== 'undefined') ? window.CloudTMSWeeklySourcePresentationV1 : null;
+  if (api && typeof api.findHostPayload === 'function' && typeof api.buildViewModel === 'function') {
+    const host = api.findHostPayload(source);
+    if (host) {
+      const vm = api.buildViewModel(host);
+      if (vm && vm.render_mode === 'WEEKLY_SOURCE') {
+        return normaliseBulkAuthoriseWeeklySourceCategory(vm.category_key);
+      }
+    }
+  }
+
+  const classification = upper(source.bulk_authorise_classification);
+  const routeSubfamily = upper(source.route_subfamily);
+  if (classification === 'NHSP' || routeSubfamily === 'NHSP') return 'NHSP';
+  if (classification === 'HR' || routeSubfamily === 'HEALTHROSTER_NO_TIMESHEET') return 'CLIENT_PROVIDED_HOURS';
+  if (routeSubfamily === 'HEALTHROSTER_TIMESHEET_REQUIRED') return 'TIMESHEETS_CHECKED_WITH_CLIENT';
+  return 'STANDARD_TIMESHEETS';
 }
 
 function bulkAuthoriseBackendClassificationForCategory(value) {

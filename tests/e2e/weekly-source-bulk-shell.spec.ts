@@ -391,27 +391,62 @@ function makeManualNavigationBroker() {
 }
 
 /** A broker that holds one row and commits it exactly once. */
-function makeCommitBroker(weeklySourcePresentation: Record<string, unknown> | null = null) {
+function makeCommitBroker(
+  weeklySourcePresentation: Record<string, unknown> | null = null,
+  options: { omitPresentationCategory?: boolean } = {}
+) {
   const state = {
     authorised: false,
     commitCalls: 0,
     commitBodies: [] as unknown[],
     datasetReads: 0,
-    datasetQueries: [] as string[]
+    datasetQueries: [] as string[],
+    category: 'STANDARD_TIMESHEETS'
   };
-  const currentRow = (params: URLSearchParams) => eligibleRow({
-    weekly_source_category: params.get('weekly_source_category') || 'STANDARD_TIMESHEETS',
-    bulk_authorise_classification: params.get('classification') || 'TIMESHEETS',
-    is_authorised: state.authorised,
-    bulk_authorise_section: state.authorised ? 'authorised_eligible' : 'processed_eligible',
-    can_bulk_authorise: !state.authorised,
-    can_bulk_unauthorise: state.authorised,
-    summary_stage: state.authorised ? 'Authorised' : 'Processed',
-    tools_stage: state.authorised ? 'Authorised' : 'Processed',
-    row_signature: state.authorised ? 'wp12-sig-2' : 'wp12-sig-1',
-    backend_row_signature: state.authorised ? 'wp12-sig-2' : 'wp12-sig-1',
-    weekly_source_presentation: weeklySourcePresentation
-  });
+  const currentRow = (params: URLSearchParams) => {
+    const category = params.get('weekly_source_category') || state.category;
+    const categoryRoute: Record<string, Record<string, string>> = {
+      NHSP: {
+        bulk_authorise_classification: 'NHSP',
+        route_type: 'WEEKLY_NHSP',
+        route_family: 'IMPORT_AUTHORITATIVE',
+        route_subfamily: 'NHSP'
+      },
+      CLIENT_PROVIDED_HOURS: {
+        bulk_authorise_classification: 'HR',
+        route_type: 'WEEKLY_HEALTHROSTER',
+        route_family: 'IMPORT_AUTHORITATIVE',
+        route_subfamily: 'HEALTHROSTER_NO_TIMESHEET'
+      },
+      TIMESHEETS_CHECKED_WITH_CLIENT: {
+        bulk_authorise_classification: 'TIMESHEETS',
+        route_type: 'WEEKLY_HEALTHROSTER',
+        route_family: 'ELECTRONIC',
+        route_subfamily: 'HEALTHROSTER_TIMESHEET_REQUIRED'
+      },
+      STANDARD_TIMESHEETS: {
+        bulk_authorise_classification: 'TIMESHEETS',
+        route_type: 'ELECTRONIC',
+        route_family: 'ELECTRONIC',
+        route_subfamily: 'ELECTRONIC'
+      }
+    };
+    const row = eligibleRow({
+      weekly_source_category: category,
+      ...(categoryRoute[category] || categoryRoute.STANDARD_TIMESHEETS),
+      is_authorised: state.authorised,
+      bulk_authorise_section: state.authorised ? 'authorised_eligible' : 'processed_eligible',
+      can_bulk_authorise: !state.authorised,
+      can_bulk_unauthorise: state.authorised,
+      summary_stage: state.authorised ? 'Authorised' : 'Processed',
+      tools_stage: state.authorised ? 'Authorised' : 'Processed',
+      row_signature: state.authorised ? 'wp12-sig-2' : 'wp12-sig-1',
+      backend_row_signature: state.authorised ? 'wp12-sig-2' : 'wp12-sig-1',
+      weekly_source_presentation: weeklySourcePresentation
+    }) as Record<string, unknown>;
+    if (options.omitPresentationCategory) delete row.weekly_source_category;
+    return row;
+  };
 
   const broker = (pathname: string, method: string, body: unknown) => {
     const [path, query = ''] = pathname.split('?');
@@ -420,10 +455,24 @@ function makeCommitBroker(weeklySourcePresentation: Record<string, unknown> | nu
     if (path === '/api/timesheets/bulk-authorise-dataset') {
       state.datasetReads += 1;
       state.datasetQueries.push(params.toString());
+      state.category = params.get('weekly_source_category') || state.category;
       return { rows: [currentRow(params)], counts: {}, profile: 'list', projection: 'dataset_row' };
     }
     if (path.includes('/bulk-authorise-context')) {
       return contextFor(currentRow(new URLSearchParams()));
+    }
+    if (path === '/api/timesheets/bulk-row-freshness') {
+      const row = currentRow(new URLSearchParams());
+      return {
+        ok: true,
+        outcome: 'CURRENT',
+        changed: false,
+        eligible_for_surface: true,
+        previous_row_key: row.row_key,
+        row_key: row.row_key,
+        target_section: row.bulk_authorise_section || 'processed_eligible',
+        row
+      };
     }
     if (path === '/api/timesheets/bulk-authorise-selected' && method === 'POST') {
       state.commitCalls += 1;
@@ -483,14 +532,14 @@ test.describe('Gate 10 — the real Bulk shell', () => {
 
     const selectCategory = async (name: string, expectedKey: string) => {
       const previousReads = state.datasetReads;
-      const tab = page.getByRole('tab', { name, exact: true });
+      const tab = page.getByRole('tab').filter({ hasText: name });
       await tab.click();
       await expect(tab).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 });
       await expect.poll(() => state.datasetReads).toBeGreaterThan(previousReads);
       expect(state.datasetQueries.at(-1)).toContain(`weekly_source_category=${expectedKey}`);
     };
 
-    await expect(page.getByRole('tab', { name: 'Standard Timesheets', exact: true }))
+    await expect(page.getByRole('tab').filter({ hasText: 'Standard Timesheets' }))
       .toHaveAttribute('aria-selected', 'true');
     await selectCategory('NHSP', 'NHSP');
     await selectCategory('Client-provided hours', 'CLIENT_PROVIDED_HOURS');
@@ -499,6 +548,43 @@ test.describe('Gate 10 — the real Bulk shell', () => {
 
     expect(pageErrors).toEqual([]);
     expect(externalRequests(page), 'the category proof must not leave the machine').toEqual([]);
+  });
+
+  test('the four Timesheet type queues derive from the authoritative live DTO when presentation category is absent', async ({ page }) => {
+    test.setTimeout(60_000);
+    const { broker } = makeCommitBroker(null, { omitPresentationCategory: true });
+
+    await test.step('mount the real Office shell', async () => mountOfficeShell(page, { broker }));
+    await test.step('open the real Bulk Authorise modal', async () => openBulkAuthorise(page));
+
+    for (const name of ['NHSP', 'Client-provided hours', 'Timesheets checked with client', 'Standard Timesheets']) {
+      await test.step(`${name} retains its live DTO row`, async () => {
+        const tab = page.getByRole('tab').filter({ hasText: name });
+        await tab.click();
+        await expect(tab).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 });
+        const expectedClassification = name === 'NHSP' ? 'NHSP' : (name === 'Client-provided hours' ? 'HR' : 'TIMESHEETS');
+        const stateSnapshot = await page.evaluate(() => {
+          const state = (document as any).__bulkAuthoriseLifecycleV2ActiveController?.state
+            || (window as any).modalCtx?.bulkAuthoriseState
+            || {};
+          const row = Array.isArray(state.dataset?.rows) ? state.dataset.rows[0] : null;
+          return {
+            classification: state.classification,
+            weekly_source_category: state.weekly_source_category,
+            row_classification: row?.bulk_authorise_classification || null,
+            row_category: row?.weekly_source_category || null,
+            row_count: Array.isArray(state.dataset?.rows) ? state.dataset.rows.length : -1,
+            filters: state.filters || null,
+            dataset_filters: state.dataset?.filters || null
+          };
+        });
+        expect(stateSnapshot.classification).toBe(expectedClassification);
+        expect(stateSnapshot.row_classification, JSON.stringify(stateSnapshot)).toBe(expectedClassification);
+        await expect(page.locator('#bulkAuthoriseListsRoot')).toContainText('Jane Smith', { timeout: 30_000 });
+      });
+    }
+
+    expect(externalRequests(page), 'the live DTO fallback proof must not leave the machine').toEqual([]);
   });
 
   test('XSG-022: an eligible row can be authorised, and the committed result survives a refresh', async ({ page }) => {
