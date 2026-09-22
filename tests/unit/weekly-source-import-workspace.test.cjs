@@ -83,6 +83,9 @@ test('NHSP upload uses the server-resolved Trust and report scope for acceptance
     assert.equal(result.accept_context.report_scope_id, 'scope-1');
     assert.equal(result.accept_context.client_id, 'client-1');
     assert.equal(result.accept_context.authority_scope_version, 2);
+    assert.equal(workspace._session.workspace.selected.client_id, 'client-1');
+    assert.equal(workspace._session.workspace.selected.report_scope_id, 'scope-1');
+    assert.equal(workspace._session.workspace.selected.projection_publication_id, '');
   } finally {
     globalThis.uploadImportFileToR2 = originalUpload;
     globalThis.authFetch = originalFetch;
@@ -195,6 +198,9 @@ test('Imports preserves Daily as a separate existing journey and contains no imp
   assert.doesNotMatch(html, /nhsp_shifts/i);
   assert.doesNotMatch(html, /source rounding applied/i);
   assert.doesNotMatch(html, /pagination|page size|previous page|next page/i);
+  assert.match(html, /data-ws-action="Review pricing"/);
+  assert.match(html, /&quot;file&quot;:&quot;Backing_report_1741227\.xlsx&quot;/);
+  assert.match(html, /&quot;report_number&quot;:&quot;1741227&quot;/);
 });
 
 test('workspace errors are always plain English and never expose an RPC response', () => {
@@ -261,10 +267,17 @@ test('a durable post-finalisation follow-up uses plain approved-hours wording an
 
 test('NHSP and HealthRoster finalisation use their locked column contracts', () => {
   const nhsp = workspace.renderWorkspace(fixture({ finalise: {
-    active_list: 'ready', ready: { total_count: 1, rows: [{ candidate: 'A', day_date: 'Mon 1 Sep 2026' }] },
+    active_list: 'ready', ready: { total_count: 1, rows: [{
+      candidate: 'A', day_date: 'Mon 1 Sep 2026', actual_hours: '09:00-17:00 (30 min break)',
+      movement: 'Positive', commission: '£10.00', total_cost: '£90.00', invoice_charge: '£100.00',
+      status: { text: 'Ready', tone: 'positive' }
+    }] },
     blocked: { total_count: 0, rows: [] }
   } }), 'finalise');
   for (const label of ['Actual hours','Movement','Commission','Total cost','Invoice charge']) assert.match(nhsp, new RegExp(`>${label}`));
+  for (const value of ['09:00-17:00 (30 min break)','Positive','£10.00','£90.00','£100.00']) {
+    assert.ok(nhsp.includes(value));
+  }
 
   const healthRoster = workspace.renderWorkspace(fixture({
     profile: { id: 'HEALTHROSTER_WEEKLY_FROM_TO_ACTUAL_V1', label: 'HealthRoster Timesheet Export' },

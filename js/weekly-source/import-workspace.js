@@ -354,7 +354,7 @@
 
   function withFallbackDetail(actions, detail) {
     return actions.map((action) => {
-      if (!['Open', 'View details', 'Open charge details', 'Review source details', 'View query'].includes(action.label)) return action;
+      if (!['Open', 'View', 'Review', 'Review pricing', 'View details', 'Open charge details', 'Review source details', 'View query'].includes(action.label)) return action;
       if (Object.keys(asObject(action.payload?.detail || action.payload?.details)).length) return action;
       return { ...action, payload: { ...action.payload, detail } };
     });
@@ -393,10 +393,19 @@
     const isNhsp = workspace.profile.id.startsWith('NHSP_');
     const rows = workspace.imports.rows.map((rowValue) => {
       const row = asObject(rowValue);
+      const detail = {
+        heading: asText(row.file) || 'Source file',
+        file: asText(row.file), uploaded: asText(row.uploaded), rows: asText(row.rows),
+        coverage: asText(row.coverage), report_number: asText(row.report), cutoff: asText(row.cutoff),
+        status: normaliseStatus(row.status).text, final_source: asText(row.final_source)
+      };
+      const actions = withFallbackDetail(
+        normaliseActions(row.actions, ACTIONS.imports), detail
+      );
       const scope = isNhsp
         ? `<td data-label="Report">${escapeHtml(asText(row.report) || 'Not confirmed')}</td><td data-label="Cutoff">${escapeHtml(asText(row.cutoff) || 'Not confirmed')}</td>`
         : `<td data-label="Coverage">${escapeHtml(asText(row.coverage) || '—')}</td>`;
-      return `<tr><td data-label="File">${escapeHtml(asText(row.file) || '—')}</td><td data-label="Uploaded">${escapeHtml(asText(row.uploaded) || '—')}</td><td data-label="Rows">${escapeHtml(asText(row.rows) || '0')}</td>${scope}<td data-label="Status">${renderStatus(row.status)}</td><td data-label="Final source">${escapeHtml(asText(row.final_source) || '—')}</td><td data-label="Actions" class="ws-actions">${renderActions(normaliseActions(row.actions, ACTIONS.imports), workspace.imports.stale, asText(row.row_key || row.file))}</td></tr>`;
+      return `<tr><td data-label="File">${escapeHtml(asText(row.file) || '—')}</td><td data-label="Uploaded">${escapeHtml(asText(row.uploaded) || '—')}</td><td data-label="Rows">${escapeHtml(asText(row.rows) || '0')}</td>${scope}<td data-label="Status">${renderStatus(row.status)}</td><td data-label="Final source">${escapeHtml(asText(row.final_source) || '—')}</td><td data-label="Actions" class="ws-actions">${renderActions(actions, workspace.imports.stale, asText(row.row_key || row.file))}</td></tr>`;
     }).join('');
     const sort = state.sort?.imports || {};
     const sortable = isNhsp
@@ -927,6 +936,18 @@
       profile_id: asText(preview?.preview?.profileId || session.workspace.profile.id),
       parser_options: { profileId: asText(preview?.preview?.profileId || session.workspace.profile.id) }
     };
+    // The server may resolve an NHSP Trust into the exact Client and report
+    // scope only after it has parsed the uploaded workbook.  Preserve that
+    // server-owned selection for the refresh which follows acceptance;
+    // otherwise the Imports row is visible at cycle level while Queries and
+    // Finalise incorrectly reopen with no Trust selected.
+    if (session.workspace?.selected) {
+      session.workspace.selected.source_group_id = acceptContext.source_group_id;
+      session.workspace.selected.source_cycle_id = acceptContext.source_cycle_id;
+      session.workspace.selected.client_id = acceptContext.client_id;
+      session.workspace.selected.report_scope_id = acceptContext.report_scope_id;
+      session.workspace.selected.projection_publication_id = '';
+    }
     root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-preview', { detail: { ...preview, accept_context: acceptContext } }));
     return { ...preview, accept_context: acceptContext };
   }

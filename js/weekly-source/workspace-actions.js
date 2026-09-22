@@ -26,8 +26,9 @@
     ['issue', 'Issue'], ['status', 'Status'], ['age', 'Age'], ['manager', 'Manager'],
     ['manager_contact', 'Manager'], ['candidate_asked_at', 'Candidate asked'],
     ['manager_informed_at', 'Manager informed'], ['next_step', 'Next step'], ['problem', 'Problem'],
-    ['guidance', 'What to do'], ['file', 'File'], ['coverage', 'Coverage'],
-    ['report_number', 'Report number'], ['cutoff', 'Cutoff']
+    ['guidance', 'What to do'], ['file', 'File'], ['uploaded', 'Uploaded'], ['rows', 'Rows'],
+    ['coverage', 'Coverage'], ['report_number', 'Report number'], ['cutoff', 'Cutoff'],
+    ['final_source', 'Final source']
   ]);
   const CHARGE_DETAIL_LABELS = Object.freeze([
     ['commission', 'Commission'], ['total_cost', 'Total cost'], ['source_charge', 'Source charge'],

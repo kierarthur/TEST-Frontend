@@ -170,6 +170,71 @@ test('Imports opens as the shared weekly-source landing view', async ({ page }, 
   await page.screenshot({ path: testInfo.outputPath('imports-tab.png'), fullPage: true });
 });
 
+test('NHSP import review and finalise show the accepted source facts without blank details', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1120, height: 900 });
+  await loadFoundation(page);
+  await page.evaluate(async (workspaceFixture) => {
+    const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.profile = {
+      id: 'NHSP_FINAL_BACKING_V1',
+      label: 'NHSP backing report',
+      finalise_label: 'Finalise report'
+    };
+    payload.imports.rows = [{
+      row_key: 'nhsp-accepted-report',
+      file: 'NHSP_STAGE8_TEST_CLIENT_KIER_ARTHUR_INITIAL.xlsx',
+      uploaded: '22 Sep 2026 10:15',
+      rows: '2',
+      report: '990100001',
+      cutoff: '16 Sep 2026 15:00',
+      status: { text: 'Ready to review', tone: 'positive' },
+      final_source: 'Current',
+      actions: [{ label: 'Review', enabled: true }]
+    }];
+    payload.imports.total_count = 1;
+    payload.finalise.active_list = 'ready';
+    payload.finalise.ready = {
+      total_count: 1,
+      rows: [{
+        row_key: 'nhsp-ready-row',
+        candidate: 'Kier Arthur',
+        day_date: 'Tue 15 Sep 2026',
+        actual_hours: '09:00-17:00 · 30 min break · 7.5 hours',
+        movement: 'Positive',
+        commission: '£10.00',
+        total_cost: '£90.00',
+        invoice_charge: '£100.00',
+        status: { text: 'Ready', tone: 'positive' }
+      }]
+    };
+    payload.finalise.blocked = { total_count: 0, rows: [] };
+    const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
+    await api.open();
+    api._session.workspace = api.normaliseWorkspace(payload);
+    await (window as any).__modalStack.at(-1).setTab('imports');
+  }, fixtures.workspace);
+
+  await page.getByRole('button', { name: 'Review' }).click();
+  await expect(page.getByRole('heading', { name: 'NHSP_STAGE8_TEST_CLIENT_KIER_ARTHUR_INITIAL.xlsx' })).toBeVisible();
+  await expect(page.getByText('22 Sep 2026 10:15', { exact: true })).toBeVisible();
+  await expect(page.getByText('2', { exact: true })).toBeVisible();
+  await expect(page.getByText('990100001', { exact: true })).toBeVisible();
+  await expect(page.getByText('Current', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Close', exact: true }).last().click();
+
+  await page.evaluate(async () => {
+    await (window as any).__modalStack.at(-1).setTab('finalise');
+  });
+  const table = page.locator('.ws-scroll table');
+  await expect(table.getByText('09:00-17:00 · 30 min break · 7.5 hours')).toBeVisible();
+  await expect(table.getByText('Positive', { exact: true })).toBeVisible();
+  await expect(table.getByText('£10.00', { exact: true })).toBeVisible();
+  await expect(table.getByText('£90.00', { exact: true })).toBeVisible();
+  await expect(table.getByText('£100.00', { exact: true })).toBeVisible();
+  await expect(table.getByText('—')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('nhsp-accepted-report-finalise-facts.png'), fullPage: true });
+});
+
 test('Imports keeps signed-Timesheet checks inside the same weekly workspace', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1120, height: 900 });
   await loadFoundation(page);
