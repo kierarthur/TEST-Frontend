@@ -40,6 +40,11 @@ window.BROKER_BASE_URL = window.BROKER_BASE_URL || _defaultBrokerBaseUrl();
 
 const BROKER_BASE_URL = window.BROKER_BASE_URL;
 const API = (path) => `${BROKER_BASE_URL}${path}`;
+// Modular Office journeys are loaded before this legacy application bundle.
+// Publish the one canonical API address helper once main.js establishes the
+// TEST/LIVE broker boundary so those modules never fall back to same-origin
+// `/api` requests on the static frontend host.
+window.API = API;
 
 let SESSION = null;  // {accessToken, user, exp}
 let refreshTimer = 0;

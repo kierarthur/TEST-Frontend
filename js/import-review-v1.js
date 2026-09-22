@@ -2263,5 +2263,8 @@
     reasonText,
     _state: state
   });
-  global.openImportsModal = openImportsModalV1;
+  // Keep the established review journey available to the Weekly Source action
+  // bridge without replacing main.js's public Imports dispatcher.  The public
+  // dispatcher owns the new Weekly Source workspace and already falls back to
+  // the legacy Imports screen when that workspace is not installed.
 })(window);

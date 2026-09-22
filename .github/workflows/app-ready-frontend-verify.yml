@@ -53,6 +53,7 @@ jobs:
             tests/unit/timesheet-processing-status-badges.test.cjs \
             tests/unit/summary-money-format.test.cjs \
             tests/unit/main-asset-cache-version.test.cjs \
+            tests/unit/weekly-source-entrypoint-reachability.test.cjs \
             tests/unit/cloudtms-branding-assets.test.cjs
 
   record-modals:
