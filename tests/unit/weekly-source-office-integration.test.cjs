@@ -113,6 +113,17 @@ test('approved-hours changes use the single Weekly Source command boundary and r
   assert.doesNotMatch(main, /weekly-source\/v1\/commands[^\n]+banking/i);
 });
 
+test('approved-hours action is bound only inside Bulk Authorise', () => {
+  const bulkStart = main.indexOf('function bindBulkAuthoriseActionRow(state)');
+  const bulkEnd = main.indexOf('\nasync function handleBulkAuthoriseOpenExpensesModal(', bulkStart);
+  const rateStart = main.indexOf('async function openCandidateRateModal(candidate_id, existing)');
+  const rateEnd = main.indexOf('\n// ---- Client modal', rateStart);
+  assert.ok(bulkStart >= 0 && bulkEnd > bulkStart);
+  assert.ok(rateStart >= 0 && rateEnd > rateStart);
+  assert.match(main.slice(bulkStart, bulkEnd), /bindBtn\('bulkAuthActionRowManageApprovedHoursBtn'/);
+  assert.doesNotMatch(main.slice(rateStart, rateEnd), /bulkAuthActionRowManageApprovedHoursBtn|boundBulkAuthManageApprovedHours/);
+});
+
 test('Timesheet panes never expose a finalise command or browser financial inputs for approved hours', () => {
   const start = main.indexOf('function openWeeklySourceApprovedHoursModal(options = {})');
   const end = main.indexOf('\nasync function openBulkAuthoriseWorkbench()', start);

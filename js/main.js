@@ -263777,6 +263777,16 @@ function bindBulkAuthoriseActionRow(state) {
     }
   });
 
+  bindBtn('bulkAuthActionRowManageApprovedHoursBtn', 'boundBulkAuthManageApprovedHours', async () => {
+    const liveVm = resolveBulkAuthoriseWeeklySourcePresentation(st);
+    if (!liveVm || liveVm.manage_approved_hours_allowed !== true || !liveVm.manage_approved_hours) return;
+    openWeeklySourceApprovedHoursModal({
+      surface: 'BULK_AUTHORISE',
+      viewModel: liveVm,
+      bulkState: st
+    });
+  }, { withSpinner: false });
+
   root.querySelectorAll('[data-bulk-authorise-route-action]').forEach((btn) => {
     if (btn.dataset.boundBulkAuthRouteAction === '1') return;
     btn.dataset.boundBulkAuthRouteAction = '1';
@@ -283120,15 +283130,6 @@ async function openCandidateRateModal(candidate_id, existing) {
     }
   });
 
-  bindBtn('bulkAuthActionRowManageApprovedHoursBtn', 'boundBulkAuthManageApprovedHours', async () => {
-    const liveVm = resolveBulkAuthoriseWeeklySourcePresentation(st);
-    if (!liveVm || liveVm.manage_approved_hours_allowed !== true || !liveVm.manage_approved_hours) return;
-    openWeeklySourceApprovedHoursModal({
-      surface: 'BULK_AUTHORISE',
-      viewModel: liveVm,
-      bulkState: st
-    });
-  }, { withSpinner: false });
   wireCandidateRateClientSearch(byId('cr_client_search'), byId('cr_client_results'), selClient, {
     editable: parentEditable, load: loadCandidateRateClientChoices,
     onChange: () => selClient.dispatchEvent(new Event('change', { bubbles: true }))
