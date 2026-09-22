@@ -764,7 +764,7 @@
       finalise: { key: 'candidate', direction: 'asc' },
       history: { key: 'when', direction: 'desc' }
     },
-    scrollByTab: Object.create(null), finaliseRetry: null,
+    scrollByTab: Object.create(null), finaliseRetry: null, loadedTab: '',
     rateWarningSelection: new Set(), expandedRateWarning: '',
     groupSelection: { mode: 'NONE', ids: new Set(), exclusions: new Set() }, shiftSelections: new Map(), observer: null
   };
@@ -822,8 +822,8 @@
         const keys = new Set(current.rows.map((row) => asText(row.row_key || row.group_key || row.id)));
         nextPage.rows = [...current.rows, ...nextPage.rows.filter((row) => { const key = asText(row.row_key || row.group_key || row.id); if (!key || keys.has(key)) return false; keys.add(key); return true; })];
       }
-      session.workspace = next; session.loading = false;
-    } catch (error) { if (sequence !== session.requestSequence) return; session.loading = false; session.error = friendlyWorkspaceError(error); }
+      session.workspace = next; session.loadedTab = tab; session.loading = false;
+    } catch (error) { if (sequence !== session.requestSequence) return; session.loadedTab = tab; session.loading = false; session.error = friendlyWorkspaceError(error); }
     repaint();
   }
 
@@ -1145,12 +1145,26 @@
     host.querySelector('[data-ws-history-cycle]')?.addEventListener('change', (event) => { session.workspace.history.cycle_filter = event.target.value; session.scrollByTab.history = 0; loadWorkspace('history'); }); bindInfiniteScroll(host);
   }
 
-  function renderTab(tab) { session.activeTab = TABS.includes(tab) ? tab : 'imports'; const markup = renderWorkspace(session.workspace || emptyWorkspace(), session.activeTab, session); setTimeout(() => wire(session.activeTab), 0); return typeof root.html === 'function' ? root.html(markup) : markup; }
+  function renderTab(tab) {
+    session.activeTab = TABS.includes(tab) ? tab : 'imports';
+    if (session.activeTab !== session.loadedTab && !session.loading) {
+      session.loading = true;
+      setTimeout(() => loadWorkspace(session.activeTab), 0);
+    }
+    const markup = renderWorkspace(session.workspace || emptyWorkspace(), session.activeTab, session);
+    setTimeout(() => wire(session.activeTab), 0);
+    return typeof root.html === 'function' ? root.html(markup) : markup;
+  }
 
   async function open(initialTab = 'imports') {
     const tab = TABS.includes(initialTab) ? initialTab : 'imports';
     session.activeTab = tab; session.loading = true; session.error = '';
-    try { session.workspace = normaliseWorkspace(await requestJson(`${ENDPOINTS.workspace}?tab=${encodeURIComponent(tab)}`)); } catch (error) { session.workspace = emptyWorkspace(); session.error = friendlyWorkspaceError(error); }
+    try {
+      session.workspace = normaliseWorkspace(await requestJson(`${ENDPOINTS.workspace}?tab=${encodeURIComponent(tab)}`));
+      session.loadedTab = tab;
+    } catch (error) {
+      session.workspace = emptyWorkspace(); session.loadedTab = tab; session.error = friendlyWorkspaceError(error);
+    }
     session.loading = false; root.modalCtx = { entity: 'weekly-source-imports', data: {}, weeklySourceState: session };
     if (typeof root.showModal !== 'function') throw new Error('The Imports screen is unavailable.');
     root.showModal('Weekly source imports', tabDescriptors(session.workspace), renderTab, null, false, () => wire(session.activeTab), { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true });

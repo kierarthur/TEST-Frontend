@@ -170,6 +170,47 @@ test('Imports opens as the shared weekly-source landing view', async ({ page }, 
   await page.screenshot({ path: testInfo.outputPath('imports-tab.png'), fullPage: true });
 });
 
+test('switching tabs fetches the selected tab rows instead of reusing a partial workspace', async ({ page }) => {
+  await page.setViewportSize({ width: 1120, height: 900 });
+  await loadFoundation(page);
+  await page.evaluate(async (workspaceFixture) => {
+    const win = window as any;
+    win.__workspaceUrls = [];
+    win.authFetch = async (url: string) => {
+      const requestUrl = String(url);
+      win.__workspaceUrls.push(requestUrl);
+      const payload = JSON.parse(JSON.stringify(workspaceFixture));
+      if (requestUrl.includes('tab=finalise')) {
+        payload.imports.rows = [];
+        payload.imports.total_count = 1;
+      }
+      if (requestUrl.includes('tab=imports')) {
+        payload.imports.rows = [{
+          row_key: 'selected-tab-upload',
+          file: 'SELECTED_TAB_SOURCE.xlsx',
+          uploaded: '22 Sep 2026 19:30',
+          rows: '2',
+          report: '990100001',
+          cutoff: '23 Sep 2026 15:00',
+          status: { text: 'Ready', tone: 'positive' },
+          final_source: '—',
+          actions: [{ label: 'View', enabled: true }]
+        }];
+        payload.imports.total_count = 1;
+      }
+      return { ok: true, json: async () => payload };
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('finalise');
+    await win.__modalStack.at(-1).setTab('imports');
+  }, fixtures.workspace);
+
+  await expect(page.getByText('SELECTED_TAB_SOURCE.xlsx', { exact: true })).toBeVisible();
+  await expect(page.getByText('Nothing matches the current filters.')).toHaveCount(0);
+  const urls = await page.evaluate(() => (window as any).__workspaceUrls);
+  expect(urls.some((url: string) => url.includes('tab=finalise'))).toBe(true);
+  expect(urls.some((url: string) => url.includes('tab=imports'))).toBe(true);
+});
+
 test('NHSP import review and finalise show the accepted source facts without blank details', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1120, height: 900 });
   await loadFoundation(page);
@@ -223,6 +264,7 @@ test('NHSP import review and finalise show the accepted source facts without bla
   await page.getByRole('button', { name: 'Close', exact: true }).last().click();
 
   await page.evaluate(async () => {
+    (window as any).CloudTMSWeeklySourceImportWorkspaceV1._session.loadedTab = 'finalise';
     await (window as any).__modalStack.at(-1).setTab('finalise');
   });
   const table = page.locator('.ws-scroll table');
@@ -323,6 +365,7 @@ test('final NHSP rate warnings use the far-left header selection and require exp
     const api = win.CloudTMSWeeklySourceImportWorkspaceV1;
     await api.open();
     api._session.workspace = api.normaliseWorkspace(payload);
+    api._session.loadedTab = 'finalise';
     await win.__modalStack.at(-1).setTab('finalise');
   }, fixtures.workspace);
   await page.waitForTimeout(50);
@@ -372,6 +415,7 @@ test('pre-final NHSP rate warnings explain the issue without blocking the checki
     const api = win.CloudTMSWeeklySourceImportWorkspaceV1;
     await api.open();
     api._session.workspace = api.normaliseWorkspace(payload);
+    api._session.loadedTab = 'finalise';
     await win.__modalStack.at(-1).setTab('finalise');
   }, fixtures.workspace);
   await page.waitForTimeout(50);
@@ -414,6 +458,7 @@ test('HealthRoster finalisation uses the same simple finalise workspace with the
     const api = win.CloudTMSWeeklySourceImportWorkspaceV1;
     await api.open();
     api._session.workspace = api.normaliseWorkspace(payload);
+    api._session.loadedTab = 'finalise';
     await win.__modalStack.at(-1).setTab('finalise');
   }, fixtures.workspace);
   await expect(page.getByText('HealthRoster final source · week ending 20 Sep 2026')).toBeVisible();
