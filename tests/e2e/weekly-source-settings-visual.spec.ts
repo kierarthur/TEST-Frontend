@@ -180,6 +180,56 @@ test('NHSP Client settings inherit the sole global group and retain editable mes
   expect(externalRequests(page)).toEqual([]);
 });
 
+test('Roster Client source-group selection survives the existing Client-settings repaint', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mountOfficeShell(page);
+  await page.waitForFunction(() => Boolean((window as any).CloudTMSWeeklySourceSettings));
+
+  await page.evaluate(() => {
+    const api = (window as any).CloudTMSWeeklySourceSettings;
+    const host = document.createElement('form');
+    host.id = 'clientSettingsForm';
+    host.innerHTML = `
+      <section data-record-panel="timesheets"><section class="record-settings-card"><h3>Timesheets</h3></section></section>
+      <section data-record-panel="shifts"><section class="record-settings-card"><h3>Shift times</h3></section></section>
+      <section data-record-panel="invoicing"><section class="record-settings-card"><h3>Invoice consolidation</h3></section></section>`;
+    document.body.replaceChildren(host);
+    (window as any).__getModalFrame = () => ({ mode: 'edit', isDirty: false, _updateButtons() {} });
+    const ctx: any = { data: { id: 'roster-client' }, clientSettingsState: { weekly_mode: 'HEALTHROSTER', hr_weekly_behaviour: 'CREATE' } };
+    ctx[api.stateKeys.CLIENT_STATE] = api.normaliseClientPayload({
+      eligible: true,
+      settings_version: 'roster-v1',
+      capabilities: {
+        source_family: 'ROSTER', authority_mode: 'SOURCE_AUTHORITY', document_mode: 'CHECK_ONLY',
+        self_bill_enabled: true, show_query_settings: true, show_completed_pack: true, show_rate_settings: true
+      },
+      settings: { source_group_id: 'roster-a', candidate_queries_enabled: true, manager_queries_enabled: true },
+      source_groups: [
+        { id: 'roster-a', display_name: 'Roster A', source_family: 'ROSTER', active: true },
+        { id: 'roster-b', display_name: 'Roster B', source_family: 'ROSTER', active: true }
+      ]
+    }, ctx);
+    // The established Client settings owner repaints during the bubbling change
+    // event. The Weekly Source capture listener must retain the new selection
+    // before that repaint replaces the select element.
+    host.addEventListener('change', (event) => {
+      if ((event.target as HTMLSelectElement)?.name === 'weekly_source_group_id') api.mountClient(host, ctx);
+    });
+    api.mountClient(host, ctx);
+    (window as any).__rosterClientContext = ctx;
+  });
+
+  const picker = page.locator('[name="weekly_source_group_id"]');
+  await expect(picker).toHaveValue('roster-a');
+  await picker.selectOption('roster-b');
+  await expect(page.locator('[name="weekly_source_group_id"]')).toHaveValue('roster-b');
+  expect(await page.evaluate(() => {
+    const api = (window as any).CloudTMSWeeklySourceSettings;
+    return (window as any).__rosterClientContext[api.stateKeys.CLIENT_STATE].draft.source_group_id;
+  })).toBe('roster-b');
+  expect(externalRequests(page)).toEqual([]);
+});
+
 test('Global Weekly Source settings require Edit mode and expose only one NHSP choice', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mountOfficeShell(page);

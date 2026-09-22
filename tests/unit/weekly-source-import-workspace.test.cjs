@@ -82,7 +82,8 @@ function fixture(overrides = {}) {
       total_count: 1,
       rows: [{
         file: 'Backing_report_1741227.xlsx', uploaded: '15 Sep 2026 09:00', rows: '286',
-        coverage: '1 Jun–6 Sep 2026', status: { text: 'Ready to review', tone: 'positive' },
+        coverage: '1 Jun–6 Sep 2026', report: '1741227', cutoff: '9 Sep 2026 · 15:00',
+        status: { text: 'Ready to review', tone: 'positive' },
         final_source: 'Current', actions: [{ label: 'Review pricing', payload: { upload_id: 'upload-1' } }]
       }]
     },
@@ -153,9 +154,22 @@ test('Imports preserves Daily as a separate existing journey and contains no imp
   const html = workspace.renderWorkspace(fixture(), 'imports');
   assert.match(html, />Daily rota check</);
   assert.match(html, />Upload source file</);
+  assert.match(html, /data-ws-sort="report">Report/);
+  assert.match(html, /data-ws-sort="cutoff">Cutoff/);
+  assert.match(html, />1741227</);
+  assert.doesNotMatch(html, /data-ws-sort="coverage">Coverage/);
   assert.doesNotMatch(html, /nhsp_shifts/i);
   assert.doesNotMatch(html, /source rounding applied/i);
   assert.doesNotMatch(html, /pagination|page size|previous page|next page/i);
+});
+
+test('workspace errors are always plain English and never expose an RPC response', () => {
+  const technical = new Error('RPC weekly_source_office_workspace_v1 failed 400: {"code":"22023","message":"WEEKLY_SOURCE_CYCLE_NOT_FOUND"}');
+  technical.code = '';
+  const message = workspace._test.friendlyWorkspaceError(technical);
+  const html = workspace.renderWorkspace(fixture(), 'imports', { error: message });
+  assert.equal(message, 'This source is still being prepared. Recheck in a moment.');
+  assert.doesNotMatch(html, /RPC|22023|WEEKLY_SOURCE_CYCLE_NOT_FOUND|weekly_source_office_workspace_v1/);
 });
 
 test('Finalisation contains no row-removal checkbox and remains disabled with blockers', () => {

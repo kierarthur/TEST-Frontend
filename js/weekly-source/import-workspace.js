@@ -60,6 +60,17 @@
   const tone = (value, fallback = 'neutral') => TONES.has(asText(value).toLowerCase()) ? asText(value).toLowerCase() : fallback;
   const safeKey = (value) => asText(value).replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'row';
 
+  function friendlyWorkspaceError(value) {
+    const error = value instanceof Error ? value : null;
+    const raw = asText(error?.message || value);
+    const code = asText(error?.code || raw.match(/WEEKLY_SOURCE_[A-Z0-9_]+/)?.[0]).toUpperCase();
+    if (code === 'WEEKLY_SOURCE_CYCLE_NOT_FOUND') return 'This source is still being prepared. Recheck in a moment.';
+    if (code === 'WEEKLY_SOURCE_GROUP_NOT_ACTIVE') return 'This source is no longer available. Choose another source.';
+    if (code === 'WEEKLY_SOURCE_CLIENT_NOT_IN_GROUP') return 'This client is not available for the selected source and week.';
+    if (code === 'WEEKLY_SOURCE_WORKSPACE_CURSOR_STALE') return 'This information has changed. Recheck before continuing.';
+    return 'Weekly source information is temporarily unavailable. Recheck or try again shortly.';
+  }
+
   function normaliseStatus(value) {
     const raw = typeof value === 'string' ? { text: value } : asObject(value);
     return { text: asText(raw.text) || '—', tone: tone(raw.tone), subtext: asText(raw.subtext), subtone: tone(raw.subtone) };
@@ -379,14 +390,20 @@
       return `<tr><td><input type="checkbox" data-ws-import-attention value="${escapeHtml(asText(row.row_key))}" aria-label="Select ${escapeHtml(asText(row.candidate) || 'row')}"></td><td data-label="Candidate">${escapeHtml(asText(row.candidate) || '—')}</td><td data-label="Day/date">${escapeHtml(asText(row.day_date) || '—')}</td><td data-label="What needs attention">${escapeHtml(asText(row.attention) || '—')}</td><td data-label="Reference">${escapeHtml(asText(row.reference) || '—')}</td><td data-label="Status">${renderStatus(row.status)}</td><td data-label="Action" class="ws-actions">${renderActions(actions, false, asText(row.row_key))}</td></tr>`;
     }).join('');
     const journeyPanel = journey.title ? `<section class="ws-import-journey" data-ws-import-journey="${escapeHtml(journey.authority_mode)}"><div class="ws-import-journey__heading"><div><span>Journey</span><strong>${escapeHtml(journey.title)}</strong></div>${journey.attention_count ? `<span class="ws-status ws-status--warning">${journey.attention_count} need attention</span>` : '<span class="ws-status ws-status--positive">Up to date</span>'}</div>${journey.body ? `<p>${escapeHtml(journey.body)}</p>` : ''}${journey.authority_mode === 'TIMESHEET_AUTHORITY' ? `<div class="ws-inner-tabs" role="tablist"><button type="button" role="tab" aria-selected="true">Needs attention (${journey.attention_count})</button><button type="button" role="tab" aria-selected="false">Ready</button><button type="button" role="tab" aria-selected="false">History</button></div><div class="ws-inner-scroll"><table class="grid mini ws-inner-grid"><thead><tr><th><input type="checkbox" data-ws-import-attention-header aria-label="Select all visible rows"></th><th>Candidate</th><th>Day/date</th><th>What needs attention</th><th>Reference</th><th>Status</th><th>Action</th></tr></thead><tbody>${attentionRows || '<tr><td colspan="7" class="ws-empty">No Timesheet checks need attention.</td></tr>'}</tbody></table></div><div class="ws-import-journey__actions"><span data-ws-import-attention-count>0 selected</span><button type="button" class="btn primary" data-ws-import-email-manager disabled>Email manager</button></div>` : ''}</section>` : '';
+    const isNhsp = workspace.profile.id.startsWith('NHSP_');
     const rows = workspace.imports.rows.map((rowValue) => {
       const row = asObject(rowValue);
-      return `<tr><td data-label="File">${escapeHtml(asText(row.file) || '—')}</td><td data-label="Uploaded">${escapeHtml(asText(row.uploaded) || '—')}</td><td data-label="Rows">${escapeHtml(asText(row.rows) || '0')}</td><td data-label="Coverage">${escapeHtml(asText(row.coverage) || '—')}</td><td data-label="Status">${renderStatus(row.status)}</td><td data-label="Final source">${escapeHtml(asText(row.final_source) || '—')}</td><td data-label="Actions" class="ws-actions">${renderActions(normaliseActions(row.actions, ACTIONS.imports), workspace.imports.stale, asText(row.row_key || row.file))}</td></tr>`;
+      const scope = isNhsp
+        ? `<td data-label="Report">${escapeHtml(asText(row.report) || 'Not confirmed')}</td><td data-label="Cutoff">${escapeHtml(asText(row.cutoff) || 'Not confirmed')}</td>`
+        : `<td data-label="Coverage">${escapeHtml(asText(row.coverage) || '—')}</td>`;
+      return `<tr><td data-label="File">${escapeHtml(asText(row.file) || '—')}</td><td data-label="Uploaded">${escapeHtml(asText(row.uploaded) || '—')}</td><td data-label="Rows">${escapeHtml(asText(row.rows) || '0')}</td>${scope}<td data-label="Status">${renderStatus(row.status)}</td><td data-label="Final source">${escapeHtml(asText(row.final_source) || '—')}</td><td data-label="Actions" class="ws-actions">${renderActions(normaliseActions(row.actions, ACTIONS.imports), workspace.imports.stale, asText(row.row_key || row.file))}</td></tr>`;
     }).join('');
     const sort = state.sort?.imports || {};
-    const sortable = [['File','file'],['Uploaded','uploaded'],['Rows','rows'],['Coverage','coverage'],['Status','status'],['Final source','final_source']];
+    const sortable = isNhsp
+      ? [['File','file'],['Uploaded','uploaded'],['Rows','rows'],['Report','report'],['Cutoff','cutoff'],['Status','status'],['Final source','final_source']]
+      : [['File','file'],['Uploaded','uploaded'],['Rows','rows'],['Coverage','coverage'],['Status','status'],['Final source','final_source']];
     const stale = workspace.imports.stale ? '<div class="ws-notice ws-notice--warning" role="status"><span>This information has changed. Recheck before continuing.</span></div>' : '';
-    return `${stale}${journeyPanel}<div class="ws-toolbar"><button type="button" class="btn primary" data-ws-upload${workspace.imports.stale ? ' disabled title="Recheck before uploading another source file."' : ''}>Upload source file</button><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn btn-outline" data-ws-daily>Daily rota check</button><input type="file" data-ws-upload-input hidden accept=".xlsx,.xls,.csv,.htm,.html"><input type="file" data-ws-daily-input hidden accept=".xlsx,.xls,.csv"></div>${renderMobileSort(sortable, sort)}<div class="ws-scroll" data-ws-scroll><table class="grid mini ws-grid"><thead><tr>${sortable.map(([label,key]) => renderSortHeader(label,key,sort)).join('')}<th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="ws-empty">Nothing matches the current filters.</td></tr>'}</tbody></table><div data-ws-sentinel></div></div><div class="ws-sticky-footer"><span>${workspace.imports.total_count} source file${workspace.imports.total_count === 1 ? '' : 's'}</span></div>`;
+    return `${stale}${journeyPanel}<div class="ws-toolbar"><button type="button" class="btn primary" data-ws-upload${workspace.imports.stale ? ' disabled title="Recheck before uploading another source file."' : ''}>Upload source file</button><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn btn-outline" data-ws-daily>Daily rota check</button><input type="file" data-ws-upload-input hidden accept=".xlsx,.xls,.csv,.htm,.html"><input type="file" data-ws-daily-input hidden accept=".xlsx,.xls,.csv"></div>${renderMobileSort(sortable, sort)}<div class="ws-scroll" data-ws-scroll><table class="grid mini ws-grid"><thead><tr>${sortable.map(([label,key]) => renderSortHeader(label,key,sort)).join('')}<th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="${sortable.length + 1}" class="ws-empty">Nothing matches the current filters.</td></tr>`}</tbody></table><div data-ws-sentinel></div></div><div class="ws-sticky-footer"><span>${workspace.imports.total_count} source file${workspace.imports.total_count === 1 ? '' : 's'}</span></div>`;
   }
 
   function renderTick(value, yesLabel, noLabel) {
@@ -797,7 +814,7 @@
         nextPage.rows = [...current.rows, ...nextPage.rows.filter((row) => { const key = asText(row.row_key || row.group_key || row.id); if (!key || keys.has(key)) return false; keys.add(key); return true; })];
       }
       session.workspace = next; session.loading = false;
-    } catch (error) { if (sequence !== session.requestSequence) return; session.loading = false; session.error = asText(error?.message); }
+    } catch (error) { if (sequence !== session.requestSequence) return; session.loading = false; session.error = friendlyWorkspaceError(error); }
     repaint();
   }
 
@@ -875,7 +892,7 @@
       if (!payload) return;
       button.disabled = true;
       try { await issueCommand(button.dataset.wsBulkAction, payload); session.groupSelection = { mode: 'NONE', ids: new Set(), exclusions: new Set() }; await loadWorkspace('queries'); }
-      catch (error) { session.error = asText(error?.message); repaint(); }
+      catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
     }));
     host.querySelector('[data-ws-accept-selected]')?.addEventListener('click', async (event) => {
       const payload = combinedAcceptSystemHoursPayload();
@@ -919,7 +936,27 @@
   }
 
   function bindCommon(host) {
-    host.querySelectorAll('[data-ws-context]').forEach((control) => control.addEventListener('change', () => { const keyMap = { source_group: 'source_group_id', cycle: 'source_cycle_id', client: 'client_id' }; const key = keyMap[control.dataset.wsContext] || control.dataset.wsContext; if (Object.prototype.hasOwnProperty.call(session.workspace.selected, key)) session.workspace.selected[key] = control.value; session.groupSelection = { mode: 'NONE', ids: new Set(), exclusions: new Set() }; session.shiftSelections.clear(); loadWorkspace(session.activeTab); }));
+    host.querySelectorAll('[data-ws-context]').forEach((control) => control.addEventListener('change', () => {
+      const keyMap = { source_group: 'source_group_id', cycle: 'source_cycle_id', client: 'client_id' };
+      const key = keyMap[control.dataset.wsContext] || control.dataset.wsContext;
+      if (Object.prototype.hasOwnProperty.call(session.workspace.selected, key)) session.workspace.selected[key] = control.value;
+      if (key === 'source_group_id') {
+        session.workspace.selected.source_cycle_id = '';
+        session.workspace.selected.client_id = '';
+        session.workspace.selected.report_scope_id = '';
+        session.workspace.selected.projection_publication_id = '';
+      } else if (key === 'source_cycle_id') {
+        session.workspace.selected.client_id = '';
+        session.workspace.selected.report_scope_id = '';
+        session.workspace.selected.projection_publication_id = '';
+      } else if (key === 'client_id') {
+        session.workspace.selected.report_scope_id = '';
+        session.workspace.selected.projection_publication_id = '';
+      }
+      session.groupSelection = { mode: 'NONE', ids: new Set(), exclusions: new Set() };
+      session.shiftSelections.clear();
+      loadWorkspace(session.activeTab);
+    }));
     host.querySelectorAll('[data-ws-recheck]').forEach((button) => button.addEventListener('click', () => loadWorkspace(session.activeTab)));
     host.querySelectorAll('.ws-row-action').forEach((button) => button.addEventListener('click', () => {
       let payload = {}; let context = {};
@@ -948,7 +985,7 @@
     };
     mobileSort?.addEventListener('change', applyMobileSort);
     mobileDirection?.addEventListener('change', applyMobileSort);
-    const uploadInput = host.querySelector('[data-ws-upload-input]'); host.querySelector('[data-ws-upload]')?.addEventListener('click', () => uploadInput?.click()); uploadInput?.addEventListener('change', async () => { const file = uploadInput.files?.[0]; uploadInput.value = ''; try { await uploadSource(file); await loadWorkspace('imports'); } catch (error) { session.error = asText(error?.message); repaint(); } });
+    const uploadInput = host.querySelector('[data-ws-upload-input]'); host.querySelector('[data-ws-upload]')?.addEventListener('click', () => uploadInput?.click()); uploadInput?.addEventListener('change', async () => { const file = uploadInput.files?.[0]; uploadInput.value = ''; try { await uploadSource(file); await loadWorkspace('imports'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); } });
     const dailyInput = host.querySelector('[data-ws-daily-input]'); host.querySelector('[data-ws-daily]')?.addEventListener('click', () => dailyInput?.click()); dailyInput?.addEventListener('change', async () => { const file = dailyInput.files?.[0]; dailyInput.value = ''; if (file && typeof root.handleHrRotaFileDrop === 'function') await root.handleHrRotaFileDrop(file); });
     const attentionHeader = host.querySelector('[data-ws-import-attention-header]');
     const attentionRows = [...host.querySelectorAll('[data-ws-import-attention]')];
@@ -981,7 +1018,7 @@
     const confirmation = host.querySelector('[data-ws-finalise-confirm]'); const action = host.querySelector('[data-ws-finalise]');
     const sync = () => { if (action) action.disabled = !(session.workspace.finalise.finalise_enabled && session.workspace.finalise.rate_warnings.phase !== 'FINAL_AWAITING_ACCEPTANCE' && !session.workspace.finalise.stale && !session.workspace.finalise[session.workspace.finalise.active_list]?.stale && Object.keys(session.workspace.finalise.finalise_payload).length > 0 && session.workspace.finalise.blocked.total_count === 0 && (!session.workspace.finalise.confirmation_required || confirmation?.checked)); };
     confirmation?.addEventListener('change', sync); sync();
-    action?.addEventListener('click', async () => { action.disabled = true; try { session.finaliseRetry = null; await issueCommand('FINALISE_WEEK', session.workspace.finalise.finalise_payload); await loadWorkspace('finalise'); } catch (error) { session.error = asText(error?.message); repaint(); } });
+    action?.addEventListener('click', async () => { action.disabled = true; try { session.finaliseRetry = null; await issueCommand('FINALISE_WEEK', session.workspace.finalise.finalise_payload); await loadWorkspace('finalise'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); } });
     host.querySelector('[data-ws-approved-follow-up]')?.addEventListener('click', async (event) => {
       const button = event.currentTarget;
       let payload = {};
@@ -1007,7 +1044,7 @@
         }
         session.finaliseRetry = null;
         await loadWorkspace('finalise');
-      } catch (error) { session.error = asText(error?.message); repaint(); }
+      } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
     });
     host.querySelector('[data-ws-finalise-retry]')?.addEventListener('click', async (event) => {
       const payload = asObject(session.finaliseRetry);
@@ -1017,7 +1054,7 @@
         await issueCommand('RECOVER_FINALISED_PAY', payload);
         session.finaliseRetry = null;
         await loadWorkspace('finalise');
-      } catch (error) { session.error = asText(error?.message); repaint(); }
+      } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
     });
     const warnings = session.workspace.finalise.rate_warnings;
     const updateRateWarningSelection = () => {
@@ -1059,7 +1096,7 @@
         await issueCommand(request.action, request.payload);
         session.rateWarningSelection.clear();
         await loadWorkspace('finalise');
-      } catch (error) { session.error = asText(error?.message); repaint(); }
+      } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
     });
     host.querySelectorAll('[data-ws-rate-expand]').forEach((button) => button.addEventListener('click', () => {
       session.expandedRateWarning = session.expandedRateWarning === button.dataset.wsRateExpand ? '' : button.dataset.wsRateExpand;
@@ -1090,7 +1127,7 @@
   async function open(initialTab = 'imports') {
     const tab = TABS.includes(initialTab) ? initialTab : 'imports';
     session.activeTab = tab; session.loading = true; session.error = '';
-    try { session.workspace = normaliseWorkspace(await requestJson(`${ENDPOINTS.workspace}?tab=${encodeURIComponent(tab)}`)); } catch (error) { session.workspace = emptyWorkspace(); session.error = asText(error?.message); }
+    try { session.workspace = normaliseWorkspace(await requestJson(`${ENDPOINTS.workspace}?tab=${encodeURIComponent(tab)}`)); } catch (error) { session.workspace = emptyWorkspace(); session.error = friendlyWorkspaceError(error); }
     session.loading = false; root.modalCtx = { entity: 'weekly-source-imports', data: {}, weeklySourceState: session };
     if (typeof root.showModal !== 'function') throw new Error('The Imports screen is unavailable.');
     root.showModal('Weekly source imports', tabDescriptors(session.workspace), renderTab, null, false, () => wire(session.activeTab), { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true });
@@ -1102,7 +1139,7 @@
     open, requestJson, issueCommand, acceptUpload, uploadSource,
     refresh: (tab = session.activeTab) => loadWorkspace(tab),
     clearShiftSelections: () => { session.shiftSelections.clear(); },
-    _test: Object.freeze({ exactAcceptSystemHoursPayload, combinedAcceptSystemHoursPayload }),
+    _test: Object.freeze({ exactAcceptSystemHoursPayload, combinedAcceptSystemHoursPayload, friendlyWorkspaceError }),
     _session: session
   });
 });
