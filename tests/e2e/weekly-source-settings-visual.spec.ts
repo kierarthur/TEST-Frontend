@@ -134,3 +134,89 @@ test('Stage 11: Roster validation keeps Reference required before pay visible an
   await page.locator('#modal').screenshot({ path: testInfo.outputPath('weekly-reference-setting.png') });
   expect(externalRequests(page)).toEqual([]);
 });
+
+test('NHSP Client settings inherit the sole global group and retain editable message choices', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mountOfficeShell(page);
+  await page.waitForFunction(() => Boolean((window as any).CloudTMSWeeklySourceSettings));
+
+  await page.evaluate(() => {
+    const api = (window as any).CloudTMSWeeklySourceSettings;
+    const host = document.createElement('form');
+    host.id = 'clientSettingsForm';
+    host.innerHTML = `
+      <section data-record-panel="timesheets"><section class="record-settings-card"><h3>Timesheets</h3></section></section>
+      <section data-record-panel="shifts"><section class="record-settings-card"><h3>Shift times</h3></section></section>
+      <section data-record-panel="invoicing"><section class="record-settings-card"><h3>Invoice consolidation</h3></section></section>`;
+    document.body.replaceChildren(host);
+    (window as any).__getModalFrame = () => ({ mode: 'edit', isDirty: false, _updateButtons() {} });
+    const ctx: any = { data: { id: 'nhsp-client' }, clientSettingsState: { weekly_mode: 'NHSP' } };
+    ctx[api.stateKeys.CLIENT_STATE] = api.normaliseClientPayload({
+      eligible: true,
+      settings_version: 'nhsp-v1',
+      capabilities: {
+        source_family: 'NHSP', authority_mode: 'SOURCE_AUTHORITY', document_mode: 'CHECK_ONLY',
+        self_bill_enabled: true, show_query_settings: true, show_completed_pack: true, show_rate_settings: true
+      },
+      settings: { candidate_queries_enabled: true, manager_queries_enabled: true },
+      source_groups: [{ id: 'nhsp-group', display_name: 'NHSP', source_family: 'NHSP', active: true }]
+    }, ctx);
+    api.mountClient(host, ctx);
+    (window as any).__nhspClientContext = ctx;
+  });
+
+  await expect(page.locator('[name="weekly_source_group_id"]')).toHaveCount(0);
+  await expect(page.getByText('Ask candidates about differences')).toBeVisible();
+  await expect(page.getByText('Email managers about differences')).toBeVisible();
+  const completed = page.locator('[name="weekly_source_completed_pack_copy_enabled"]');
+  await completed.check();
+  await expect(completed).toBeChecked();
+  await expect(page.locator('[name="weekly_source_completed_pack_recipient"]')).toBeVisible();
+  expect(await page.evaluate(() => {
+    const api = (window as any).CloudTMSWeeklySourceSettings;
+    const state = (window as any).__nhspClientContext[api.stateKeys.CLIENT_STATE];
+    return { sourceGroupId: state.draft.source_group_id, completed: state.draft.completed_pack_copy_enabled };
+  })).toEqual({ sourceGroupId: 'nhsp-group', completed: true });
+  expect(externalRequests(page)).toEqual([]);
+});
+
+test('Global Weekly Source settings require Edit mode and expose only one NHSP choice', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mountOfficeShell(page);
+  await page.waitForFunction(() => Boolean((window as any).CloudTMSWeeklySourceSettings));
+
+  const mount = async (mode: 'view' | 'edit') => page.evaluate((currentMode) => {
+    const api = (window as any).CloudTMSWeeklySourceSettings;
+    let host = document.querySelector('#global-settings-host') as HTMLElement | null;
+    if (!host) {
+      host = document.createElement('main');
+      host.id = 'global-settings-host';
+      document.body.replaceChildren(host);
+    }
+    (window as any).__getModalFrame = () => ({ mode: currentMode, isDirty: false, _updateButtons() {} });
+    const ctx: any = (window as any).__globalSettingsContext || {};
+    ctx[api.stateKeys.GLOBAL_STATE] = ctx[api.stateKeys.GLOBAL_STATE] || {
+      loaded: true, settings_version: 1,
+      baseline: {}, draft: {}, dirty: false, groups_dirty: false,
+      source_groups_baseline: [],
+      source_groups: [
+        api.normaliseSourceGroupDraft({ id: 'nhsp-group', display_name: 'NHSP', source_family: 'NHSP', cutoff_weekday: 3, cutoff_local_time: '15:00', active: true, version: 1 }),
+        api.normaliseSourceGroupDraft({ id: 'roster-group', display_name: 'Roster', source_family: 'ROSTER', cutoff_weekday: 3, cutoff_local_time: '15:00', active: true, version: 1 })
+      ]
+    };
+    (window as any).__globalSettingsContext = ctx;
+    api.mountGlobal(host, ctx);
+  }, mode);
+
+  await mount('view');
+  await expect(page.locator('[data-add-weekly-source-group]')).toBeDisabled();
+  await expect(page.locator('[data-weekly-source-global-settings] input').first()).toBeDisabled();
+  await expect(page.locator('[data-weekly-source-global-settings] select').first()).toBeDisabled();
+
+  await mount('edit');
+  await expect(page.locator('[data-add-weekly-source-group]')).toBeEnabled();
+  await expect(page.locator('[data-weekly-source-global-settings] input').first()).toBeEnabled();
+  await expect(page.locator('option[value="NHSP"]')).toHaveCount(1);
+  await expect(page.locator('option[value="ROSTER"]')).toHaveCount(2);
+  expect(externalRequests(page)).toEqual([]);
+});

@@ -355156,7 +355156,12 @@ async function handleSaveSettings() {
       };
     }
   } catch (e) {
-    alert(e?.message || 'Invalid finance window values');
+    await openUiConfirmModal({
+      title: 'Settings not saved',
+      message: String(e?.message || 'Invalid finance window values'),
+      confirm_label: 'OK',
+      hide_cancel: true
+    });
     return { ok:false };
   }
 
@@ -355202,7 +355207,12 @@ async function handleSaveSettings() {
     }
 
   } catch (e) {
-    alert('Save failed: ' + (e?.message || 'Unknown error'));
+    await openUiConfirmModal({
+      title: 'Settings not saved',
+      message: String(e?.message || 'The settings could not be saved.'),
+      confirm_label: 'OK',
+      hide_cancel: true
+    });
     return { ok:false };
   }
 

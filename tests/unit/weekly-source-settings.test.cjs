@@ -39,10 +39,35 @@ test('Timesheet-authority Weekly settings do not expose the secure query workflo
 });
 
 test('NHSP never exposes a configurable correction presentation', () => {
-  const result = settings.normaliseClientPayload({}, ctx({ weekly_mode: 'NHSP' }));
+  const nhspGroupId = '88888888-8888-4888-8888-888888888888';
+  const result = settings.normaliseClientPayload({
+    source_groups: [{ id: nhspGroupId, source_family: 'NHSP', active: true }]
+  }, ctx({ weekly_mode: 'NHSP' }));
   assert.equal(result.capabilities.show_query_settings, true);
   assert.equal(result.capabilities.show_self_bill_correction, false);
   assert.equal(result.draft.self_bill_correction_presentation, null);
+  assert.equal(result.draft.source_group_id, nhspGroupId);
+  assert.doesNotMatch(settings.clientCards(result).queries, /weekly_source_group_id|Choose a source group/);
+  assert.match(settings.clientCards(result).queries, /Ask candidates about differences/);
+});
+
+test('Roster clients retain the source-group picker', () => {
+  const result = settings.normaliseClientPayload({
+    source_groups: [{ id: '99999999-9999-4999-8999-999999999999', source_family: 'ROSTER', active: true }]
+  }, ctx({ weekly_mode: 'HEALTHROSTER', hr_weekly_behaviour: 'CREATE' }));
+  assert.match(settings.clientCards(result).queries, /weekly_source_group_id/);
+});
+
+test('Global settings offer NHSP on at most one source-group row', () => {
+  const html = settings.globalHtml({
+    draft: {},
+    source_groups: [
+      settings.normaliseSourceGroupDraft({ id: '1', source_family: 'NHSP', display_name: 'NHSP', active: true }),
+      settings.normaliseSourceGroupDraft({ id: '2', source_family: 'ROSTER', display_name: 'Roster', active: true })
+    ]
+  });
+  assert.equal((html.match(/<option value="NHSP"/g) || []).length, 1);
+  assert.equal((html.match(/<option value="ROSTER"/g) || []).length, 2);
 });
 
 test('Roster source authority defaults to full reversal and replacement', () => {
@@ -66,6 +91,27 @@ test('integration hooks remain outside Banking Pay owners and preserve existing 
     fs.readFileSync(path.join(__dirname, '..', '..', 'js', 'weekly-source', 'settings.js'), 'utf8'),
     /banking|workbench|pay_batch|execute_payment/i
   );
+});
+
+test('Weekly Source captures Client settings before the legacy form repaints', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../../js/weekly-source/settings.js'), 'utf8');
+  assert.match(source, /captureClientDraftBeforeLegacyRepaint/);
+  assert.match(source, /addEventListener\?\.\('change', captureClientDraftBeforeLegacyRepaint, true\)/);
+  assert.match(source, /CLIENT_BINDINGS\.set\(root, \{ ctx, state:/);
+});
+
+test('Weekly Source global controls respect View mode', () => {
+  const source = require('node:fs').readFileSync(require('node:path').resolve(__dirname, '../../js/weekly-source/settings.js'), 'utf8');
+  assert.match(source, /\['edit', 'create'\]\.includes\(frame\.mode\)/);
+  assert.match(source, /querySelectorAll\('input,select,button'\)[\s\S]*control\.disabled = true/);
+});
+
+test('Global settings save failures use the CloudTMS modal rather than a native alert', () => {
+  const main = fs.readFileSync(path.resolve(__dirname, '../../js/main.js'), 'utf8');
+  const start = main.indexOf('await window.CloudTMSWeeklySourceSettings?.saveGlobal(modalCtx)');
+  const excerpt = main.slice(start, start + 2500);
+  assert.match(excerpt, /openUiConfirmModal\(\{[\s\S]*title: 'Settings not saved'/);
+  assert.doesNotMatch(excerpt, /alert\(/);
 });
 
 test('Contract settings read effective display values but send only editable override fields', () => {

@@ -5,6 +5,7 @@
   const CLIENT_STATE = '__weeklySourceClientSettings';
   const CONTRACT_STATE = '__weeklySourceContractSettings';
   const GLOBAL_STATE = '__weeklySourceGlobalSettings';
+  const CLIENT_BINDINGS = new WeakMap();
   const CONTRACT_SETTING_KEYS = Object.freeze([
     'effective_from',
     'weekly_rate_classification_method_override',
@@ -59,6 +60,13 @@
       if (frame) { frame.isDirty = true; frame._updateButtons?.(); }
     } catch {}
   };
+
+  function soleActiveNhspGroup(sourceGroups) {
+    const matches = (sourceGroups || []).filter((group) =>
+      upper(group?.source_family) === 'NHSP' && group?.active !== false
+    );
+    return matches.length === 1 ? matches[0] : null;
+  }
 
   function legacyCapability(ctx) {
     const settings = ctx?.clientSettingsState || ctx?.clientSettingsBaseline || {};
@@ -117,7 +125,12 @@
     capabilities.show_self_bill_correction = payload?.capabilities?.show_self_bill_correction == null
       ? capabilities.self_bill_enabled && capabilities.source_family !== 'NHSP'
       : bool(payload.capabilities.show_self_bill_correction);
+    const sourceGroups = Array.isArray(payload?.source_groups) ? clone(payload.source_groups) : [];
     const settings = { ...defaultPolicy(capabilities), ...(payload?.settings || {}) };
+    if (capabilities.source_family === 'NHSP') {
+      const nhspGroup = soleActiveNhspGroup(sourceGroups);
+      settings.source_group_id = nhspGroup?.id || null;
+    }
     return {
       loaded: true,
       eligible: capabilities.eligible,
@@ -125,7 +138,7 @@
       client_id: payload?.client_id || ctx?.data?.id || null,
       settings_version: payload?.settings_version ?? null,
       capabilities,
-      source_groups: Array.isArray(payload?.source_groups) ? clone(payload.source_groups) : [],
+      source_groups: sourceGroups,
       baseline: clone(settings),
       draft: clone(settings),
       dirty: !ctx?.data?.id && capabilities.eligible
@@ -158,7 +171,9 @@
     const matchingGroups = (state.source_groups || []).filter((group) => upper(group.source_family) === upper(c.source_family));
     const groupOptions = [option('', 'Choose a source group', !d.source_group_id)]
       .concat(matchingGroups.map((group) => option(group.id, group.display_name || group.code, d.source_group_id))).join('');
-    let queries = row('Source group', `<select name="weekly_source_group_id">${groupOptions}</select>`);
+    let queries = c.source_family === 'NHSP'
+      ? ''
+      : row('Source group', `<select name="weekly_source_group_id">${groupOptions}</select>`);
     if (c.show_query_settings) {
       queries += check('weekly_source_candidate_queries_enabled', 'Ask candidates about differences', bool(d.candidate_queries_enabled));
       queries += check('weekly_source_manager_queries_enabled', 'Email managers about differences', bool(d.manager_queries_enabled));
@@ -216,7 +231,11 @@
     if (!root || !state) return;
     const get = (name) => root.querySelector(`[name="${name}"]`);
     const draft = state.draft || (state.draft = {});
-    draft.source_group_id = text(get('weekly_source_group_id')?.value) || null;
+    if (upper(state?.capabilities?.source_family) === 'NHSP') {
+      draft.source_group_id = soleActiveNhspGroup(state.source_groups)?.id || null;
+    } else {
+      draft.source_group_id = text(get('weekly_source_group_id')?.value) || null;
+    }
     if (get('weekly_source_candidate_queries_enabled')) draft.candidate_queries_enabled = !!get('weekly_source_candidate_queries_enabled').checked;
     if (get('weekly_source_manager_queries_enabled')) draft.manager_queries_enabled = !!get('weekly_source_manager_queries_enabled').checked;
     draft.manager_query_recipient = draft.manager_queries_enabled ? (text(get('weekly_source_manager_query_recipient')?.value) || null) : null;
@@ -230,6 +249,26 @@
     draft.source_expense_vat_enabled = draft.source_fixed_expenses_enabled && !!get('weekly_source_expense_vat_enabled')?.checked;
     state.dirty = JSON.stringify(state.baseline || {}) !== JSON.stringify(draft);
   }
+
+  // The established Client settings form owns a capture-phase change handler
+  // that can repaint its panels before target-level listeners run. Capture the
+  // Weekly Source draft at the document boundary first, so that repaint keeps
+  // the user's newly selected source group and message settings.
+  function captureClientDraftBeforeLegacyRepaint(event) {
+    const control = event?.target;
+    if (!control?.closest?.('[data-weekly-source-card]')) return;
+    const root = control.closest('#clientSettingsForm');
+    const binding = root && CLIENT_BINDINGS.get(root);
+    const state = binding?.ctx?.[CLIENT_STATE] || binding?.state;
+    if (!root || !state) return;
+    readClientDraft(root, state);
+    signalDirty('weekly-source-client-settings');
+  }
+
+  try {
+    global.document?.addEventListener?.('input', captureClientDraftBeforeLegacyRepaint, true);
+    global.document?.addEventListener?.('change', captureClientDraftBeforeLegacyRepaint, true);
+  } catch {}
 
   function paintClient(root, ctx) {
     const state = ctx?.[CLIENT_STATE];
@@ -264,6 +303,7 @@
 
   function mountClient(root, ctx) {
     if (!root || !ctx) return;
+    CLIENT_BINDINGS.set(root, { ctx, state: ctx[CLIENT_STATE] || null });
     const capability = legacyCapability(ctx);
     if (ctx[CLIENT_STATE]?.loaded) {
       const previous = ctx[CLIENT_STATE].capabilities || {};
@@ -496,10 +536,13 @@
       row('Candidate reminder wait', `<input type="number" min="60" name="weekly_source_candidate_resend_minutes" value="${esc(d.candidate_manual_reminder_cooldown_minutes || 60)}"/><small>minutes</small>`),
       row('Manager link valid for', `<input type="number" min="1" max="30" name="weekly_source_manager_link_days" value="${esc(d.manager_secure_link_days || 7)}"/><small>days</small>`)
     ].join('');
+    const nhspGroupIndex = (state.source_groups || []).findIndex((group) => upper(group.source_family) === 'NHSP');
     const groups = (state.source_groups || []).map((group, index) => `<div class="weekly-source-group-row" data-source-group-index="${index}">
       <input type="hidden" name="source_group_id" value="${esc(group.id || '')}"/>
       <label><span>Name</span><input name="source_group_display_name" value="${esc(group.display_name || '')}"/></label>
-      <label><span>Source</span><select name="source_group_family">${option('NHSP', 'NHSP', group.source_family)}${option('ROSTER', 'Roster', group.source_family)}</select></label>
+      <label><span>Source</span><select name="source_group_family">${
+        (nhspGroupIndex < 0 || nhspGroupIndex === index ? option('NHSP', 'NHSP', group.source_family) : '')
+      }${option('ROSTER', 'Roster', group.source_family)}</select></label>
       <label><span>Cut-off day</span><select name="source_group_cutoff_weekday">${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map((label, value) => option(value, label, Number(group.cutoff_weekday))).join('')}</select></label>
       <label><span>Cut-off time</span><input type="time" name="source_group_cutoff_time" value="${esc(text(group.cutoff_local_time).slice(0,5) || '15:00')}"/></label>
       <label class="source-group-nhsp-heading" ${upper(group.source_family) === 'NHSP' ? '' : 'hidden'}><span>Report heading</span><input name="source_group_heading" value="${esc(group.nhsp_report_heading_name || '')}"/></label>
@@ -582,6 +625,11 @@
         };
         control.addEventListener('input', onChange); control.addEventListener('change', onChange);
       });
+      const frame = global.__getModalFrame?.();
+      const editable = !frame || ['edit', 'create'].includes(frame.mode);
+      if (!editable) {
+        host?.querySelectorAll('input,select,button').forEach((control) => { control.disabled = true; });
+      }
     };
     if (ctx[GLOBAL_STATE]?.loaded) mount(ctx[GLOBAL_STATE]);
     else loadGlobal(ctx).then(mount).catch(() => {});
@@ -592,6 +640,9 @@
     if (!state?.loaded) return null;
     const mounted = global.document?.querySelector?.('[data-weekly-source-global-settings]');
     if (mounted) readGlobal(mounted, state);
+    if ((state.source_groups || []).filter((group) => upper(group.source_family) === 'NHSP').length > 1) {
+      throw new Error('Only one NHSP source group can be used. All NHSP Clients share its cut-off time.');
+    }
     let globalResult = null;
     if (state.dirty) {
       globalResult = await requestJson('/global', {
@@ -609,6 +660,7 @@
 
   const api = Object.freeze({
     legacyCapability, defaultPolicy, normaliseClientPayload, normaliseContractPayload, normaliseSourceGroupDraft,
+    soleActiveNhspGroup, clientCards, globalHtml,
     loadClient, mountClient, saveClient,
     mountContract, applyContractDraft, saveContract,
     loadGlobal, mountGlobal, saveGlobal,

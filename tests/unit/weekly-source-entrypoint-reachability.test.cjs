@@ -49,7 +49,7 @@ test('load order and bridges keep new and established import journeys reachable'
   assert.match(workspace, /data-ws-upload/);
   assert.match(workspace, /data-ws-daily/);
   assert.match(workspace, /root\.handleHrRotaFileDrop/);
-  assert.match(html, /main\.js[^"']*weekly-source-entry=20260922-r2/);
+  assert.match(html, /main\.js[^"']*weekly-source-entry=20260922-r3/);
   assert.match(html, /import-review-v1\.js[^"']*weekly-source-entry=20260922-r1/);
 });
 
