@@ -244,6 +244,8 @@ test('Finalisation contains no row-removal checkbox and remains disabled with bl
   assert.match(html, /Blocked \(1\)/);
   assert.match(html, /Charge does not match/);
   assert.match(html, /data-ws-finalise disabled/);
+  assert.match(html, /data-ws-finalise disabled data-ctms-intentional-lock="1"/);
+  assert.match(html, /data-ws-finalise-confirm disabled data-ctms-intentional-lock="1"/);
   assert.doesNotMatch(html, /data-ws-group-header|data-ws-shift-header/);
   assert.doesNotMatch(html, />Remove|>Exclude|>Ignore/);
 });

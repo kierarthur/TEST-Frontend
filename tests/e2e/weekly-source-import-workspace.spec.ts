@@ -343,6 +343,51 @@ test('Finalise tracker stays simple and no-shifts certification uses the exact s
   });
 });
 
+test('before cutoff deliberately locks finalisation against the shared modal control reset', async ({ page }) => {
+  await page.setViewportSize({ width: 1120, height: 900 });
+  await loadFoundation(page);
+  await page.evaluate(async (workspaceFixture) => {
+    const win = window as any;
+    const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.context.cycle_state = 'Before cutoff';
+    payload.finalise.active_list = 'ready';
+    payload.finalise.ready = { total_count: 2, rows: [] };
+    payload.finalise.blocked = { total_count: 0, rows: [] };
+    payload.finalise.finalise_enabled = false;
+    payload.finalise.finalise_payload = {
+      source_cycle_id: '22222222-2222-4222-8222-222222222222',
+      report_scope_id: '33333333-3333-4333-8333-333333333333'
+    };
+    const api = win.CloudTMSWeeklySourceImportWorkspaceV1;
+    await api.open();
+    api._session.workspace = api.normaliseWorkspace(payload);
+    api._session.loadedTab = 'finalise';
+    await win.__modalStack.at(-1).setTab('finalise');
+
+    // Recreate the shared modal's normal editable-mode pass. Only controls
+    // explicitly marked as policy locks are allowed to remain disabled.
+    document.querySelectorAll('#modalBody input, #modalBody button').forEach((control: any) => {
+      control.disabled = control.dataset.ctmsIntentionalLock === '1';
+    });
+  }, fixtures.workspace);
+
+  const confirmation = page.getByLabel(/I confirm this is the complete final NHSP backing report/);
+  const action = page.getByRole('button', { name: 'Finalise report', exact: true });
+  await expect(confirmation).toBeDisabled();
+  await expect(action).toBeDisabled();
+
+  // The command handler independently refuses the action if another UI layer
+  // ever disturbs the disabled property.
+  await action.evaluate((button: HTMLButtonElement) => {
+    button.disabled = false;
+    button.click();
+  });
+  await page.waitForTimeout(25);
+  const finaliseRequests = await page.evaluate(() => (window as any).__requests.filter((request: any) => request.action === 'FINALISE_WEEK'));
+  expect(finaliseRequests).toEqual([]);
+  await expect(action).toBeDisabled();
+});
+
 test('final NHSP rate warnings use the far-left header selection and require explicit acceptance', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1120, height: 900 });
   await loadFoundation(page);

@@ -738,8 +738,16 @@
     const page = finalise[active];
     const sortable = finaliseColumns(workspace, active === 'blocked').filter(([,key]) => key !== 'actions');
     const stale = page.stale || finalise.stale;
+    const finaliseReady = finalise.finalise_enabled
+      && finalise.rate_warnings.phase !== 'FINAL_AWAITING_ACCEPTANCE'
+      && !stale
+      && Object.keys(finalise.finalise_payload).length > 0
+      && blocked === 0;
+    const confirmationChecked = !finalise.confirmation_required;
+    const intentionalConfirmationLock = finaliseReady ? '' : ' disabled data-ctms-intentional-lock="1"';
+    const intentionalActionLock = finaliseReady && confirmationChecked ? '' : ' disabled data-ctms-intentional-lock="1"';
     const staleNotice = stale ? '<div class="ws-notice ws-notice--warning" role="status"><span>This information has changed. Recheck before continuing.</span></div>' : '';
-    return `${renderFinalisationTracker(workspace)}${renderApprovedHoursFollowUp(finalise, viewState)}${staleNotice}<div class="ws-source-summary">${escapeHtml(finalise.source_summary || 'Current source')}</div>${renderRateWarnings(finalise.rate_warnings, viewState)}<div class="ws-inner-tabs" role="tablist"><button type="button" role="tab" data-ws-finalise-list="ready" aria-selected="${active === 'ready'}">Ready (${ready})</button><button type="button" role="tab" data-ws-finalise-list="blocked" aria-selected="${active === 'blocked'}">Blocked (${blocked})</button></div>${renderMobileSort(sortable, viewState.sort?.finalise || {})}<div class="ws-scroll" data-ws-scroll>${renderFinaliseTable(workspace, page, active === 'blocked', viewState)}<div data-ws-sentinel></div></div><label class="ws-confirm"><input type="checkbox" data-ws-finalise-confirm${finalise.confirmation_required ? '' : ' checked'}${stale ? ' disabled' : ''}><span>${escapeHtml(finalise.confirmation_text || 'I confirm this source is complete for the period shown.')}</span></label><div class="ws-sticky-footer"><span>${ready} ready · ${finalise.rate_warnings.phase === 'READY' ? `${finalise.rate_warnings.accepted_count} rate warnings accepted · ` : ''}${blocked} blocked</span><div><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn primary" data-ws-finalise disabled>${escapeHtml(workspace.profile.finalise_label)}</button></div></div>`;
+    return `${renderFinalisationTracker(workspace)}${renderApprovedHoursFollowUp(finalise, viewState)}${staleNotice}<div class="ws-source-summary">${escapeHtml(finalise.source_summary || 'Current source')}</div>${renderRateWarnings(finalise.rate_warnings, viewState)}<div class="ws-inner-tabs" role="tablist"><button type="button" role="tab" data-ws-finalise-list="ready" aria-selected="${active === 'ready'}">Ready (${ready})</button><button type="button" role="tab" data-ws-finalise-list="blocked" aria-selected="${active === 'blocked'}">Blocked (${blocked})</button></div>${renderMobileSort(sortable, viewState.sort?.finalise || {})}<div class="ws-scroll" data-ws-scroll>${renderFinaliseTable(workspace, page, active === 'blocked', viewState)}<div data-ws-sentinel></div></div><label class="ws-confirm"><input type="checkbox" data-ws-finalise-confirm${confirmationChecked ? ' checked' : ''}${intentionalConfirmationLock}><span>${escapeHtml(finalise.confirmation_text || 'I confirm this source is complete for the period shown.')}</span></label><div class="ws-sticky-footer"><span>${ready} ready · ${finalise.rate_warnings.phase === 'READY' ? `${finalise.rate_warnings.accepted_count} rate warnings accepted · ` : ''}${blocked} blocked</span><div><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn primary" data-ws-finalise${intentionalActionLock}>${escapeHtml(workspace.profile.finalise_label)}</button></div></div>`;
   }
 
   function renderHistory(workspace, state) {
@@ -1043,9 +1051,27 @@
   function bindFinalise(host) {
     host.querySelectorAll('[data-ws-finalise-list]').forEach((button) => button.addEventListener('click', () => { session.workspace.finalise.active_list = button.dataset.wsFinaliseList === 'ready' ? 'ready' : 'blocked'; repaint(); }));
     const confirmation = host.querySelector('[data-ws-finalise-confirm]'); const action = host.querySelector('[data-ws-finalise]');
-    const sync = () => { if (action) action.disabled = !(session.workspace.finalise.finalise_enabled && session.workspace.finalise.rate_warnings.phase !== 'FINAL_AWAITING_ACCEPTANCE' && !session.workspace.finalise.stale && !session.workspace.finalise[session.workspace.finalise.active_list]?.stale && Object.keys(session.workspace.finalise.finalise_payload).length > 0 && session.workspace.finalise.blocked.total_count === 0 && (!session.workspace.finalise.confirmation_required || confirmation?.checked)); };
+    const canFinalise = () => session.workspace.finalise.finalise_enabled
+      && session.workspace.finalise.rate_warnings.phase !== 'FINAL_AWAITING_ACCEPTANCE'
+      && !session.workspace.finalise.stale
+      && !session.workspace.finalise[session.workspace.finalise.active_list]?.stale
+      && Object.keys(session.workspace.finalise.finalise_payload).length > 0
+      && session.workspace.finalise.blocked.total_count === 0
+      && (!session.workspace.finalise.confirmation_required || confirmation?.checked);
+    const sync = () => {
+      if (!action) return;
+      const allowed = canFinalise();
+      action.disabled = !allowed;
+      if (allowed) delete action.dataset.ctmsIntentionalLock;
+      else action.dataset.ctmsIntentionalLock = '1';
+    };
     confirmation?.addEventListener('change', sync); sync();
-    action?.addEventListener('click', async () => { action.disabled = true; try { session.finaliseRetry = null; await issueCommand('FINALISE_WEEK', session.workspace.finalise.finalise_payload); await loadWorkspace('finalise'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); } });
+    action?.addEventListener('click', async () => {
+      if (!canFinalise()) { sync(); return; }
+      action.disabled = true;
+      action.dataset.ctmsIntentionalLock = '1';
+      try { session.finaliseRetry = null; await issueCommand('FINALISE_WEEK', session.workspace.finalise.finalise_payload); await loadWorkspace('finalise'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+    });
     host.querySelector('[data-ws-approved-follow-up]')?.addEventListener('click', async (event) => {
       const button = event.currentTarget;
       let payload = {};
