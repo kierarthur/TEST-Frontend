@@ -65,6 +65,7 @@
     const raw = asText(error?.message || value);
     const code = asText(error?.code || raw.match(/WEEKLY_SOURCE_[A-Z0-9_]+/)?.[0]).toUpperCase();
     if (code === 'WEEKLY_SOURCE_CYCLE_NOT_FOUND') return 'This source is still being prepared. Recheck in a moment.';
+    if (code === 'WEEKLY_SOURCE_CUTOFF_NOT_REACHED') return 'This source can be finalised after the cutoff shown above.';
     if (code === 'WEEKLY_SOURCE_GROUP_NOT_ACTIVE') return 'This source is no longer available. Choose another source.';
     if (code === 'WEEKLY_SOURCE_CLIENT_NOT_IN_GROUP') return 'This client is not available for the selected source and week.';
     if (code === 'WEEKLY_SOURCE_WORKSPACE_CURSOR_STALE') return 'This information has changed. Recheck before continuing.';
@@ -374,8 +375,11 @@
 
   function renderContext(workspace) {
     const fields = workspace.context.controls.map((control) => {
+      const placeholder = !control.value && control.options.length
+        ? `<option value="" selected disabled>${escapeHtml(control.key === 'client' ? `Choose a ${workspace.profile.id.startsWith('NHSP_') ? 'trust' : 'client'}` : `Choose ${control.label.toLowerCase()}`)}</option>`
+        : '';
       const value = control.options.length
-        ? `<select data-ws-context="${escapeHtml(control.key)}" aria-label="${escapeHtml(control.label)}">${control.options.map((option) => `<option value="${escapeHtml(option.value)}"${option.value === control.value ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`
+        ? `<select data-ws-context="${escapeHtml(control.key)}" aria-label="${escapeHtml(control.label)}">${placeholder}${control.options.map((option) => `<option value="${escapeHtml(option.value)}"${option.value === control.value ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`
         : `<span class="ws-context-value">${escapeHtml(control.value || '—')}</span>`;
       return `<div class="ws-context-item"><span class="ws-context-label">${escapeHtml(control.label)}</span>${value}</div>`;
     }).join('');

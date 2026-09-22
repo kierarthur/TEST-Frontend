@@ -212,6 +212,32 @@ test('workspace errors are always plain English and never expose an RPC response
   assert.doesNotMatch(html, /RPC|22023|WEEKLY_SOURCE_CYCLE_NOT_FOUND|weekly_source_office_workspace_v1/);
 });
 
+test('the cutoff refusal explains when finalisation is available', () => {
+  const technical = new Error('WEEKLY_SOURCE_CUTOFF_NOT_REACHED');
+  technical.code = 'WEEKLY_SOURCE_CUTOFF_NOT_REACHED';
+  assert.equal(
+    workspace._test.friendlyWorkspaceError(technical),
+    'This source can be finalised after the cutoff shown above.'
+  );
+});
+
+test('an unresolved NHSP Trust is shown as a choice rather than a false selection', () => {
+  const unresolved = fixture({
+    context: {
+      cycle_state: 'Before cutoff',
+      cycle_tone: 'warning',
+      controls: [
+        { key: 'source_group', label: 'Source', value: 'group-1', options: [{ value: 'group-1', label: 'NHSP backing report' }] },
+        { key: 'client', label: 'Trust', value: '', options: [{ value: 'client-1', label: "St Mary's NHS Trust" }] },
+        { key: 'report', label: 'Report number', value: 'Not confirmed' },
+      ],
+    },
+  });
+  const html = workspace.renderWorkspace(unresolved, 'finalise');
+  assert.match(html, /<option value="" selected disabled>Choose a trust<\/option>/);
+  assert.doesNotMatch(html, /value="client-1" selected/);
+});
+
 test('Finalisation contains no row-removal checkbox and remains disabled with blockers', () => {
   const html = workspace.renderWorkspace(fixture(), 'finalise');
   assert.match(html, /Ready \(282\)/);
