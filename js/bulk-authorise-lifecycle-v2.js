@@ -1481,6 +1481,13 @@
   }
 
   win.bindBulkAuthoriseClassificationButtons = function bindBulkAuthoriseClassificationButtonsV2(state) {
+    // The Weekly Source presentation owns the four user-facing categories
+    // (including the two categories that intentionally share the TIMESHEETS
+    // backend classification). Keep its category binder active, then add the
+    // lifecycle controller's legacy classification bindings when present.
+    if (typeof legacy.bindClassification === 'function') {
+      legacy.bindClassification(state);
+    }
     const controller = controllerFor(state);
     if (!controller) return;
     controller.bindClassificationButtons();

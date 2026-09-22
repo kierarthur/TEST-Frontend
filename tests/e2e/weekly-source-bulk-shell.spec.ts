@@ -392,7 +392,13 @@ function makeManualNavigationBroker() {
 
 /** A broker that holds one row and commits it exactly once. */
 function makeCommitBroker(weeklySourcePresentation: Record<string, unknown> | null = null) {
-  const state = { authorised: false, commitCalls: 0, commitBodies: [] as unknown[], datasetReads: 0 };
+  const state = {
+    authorised: false,
+    commitCalls: 0,
+    commitBodies: [] as unknown[],
+    datasetReads: 0,
+    datasetQueries: [] as string[]
+  };
   const currentRow = (params: URLSearchParams) => eligibleRow({
     weekly_source_category: params.get('weekly_source_category') || 'STANDARD_TIMESHEETS',
     bulk_authorise_classification: params.get('classification') || 'TIMESHEETS',
@@ -413,6 +419,7 @@ function makeCommitBroker(weeklySourcePresentation: Record<string, unknown> | nu
 
     if (path === '/api/timesheets/bulk-authorise-dataset') {
       state.datasetReads += 1;
+      state.datasetQueries.push(params.toString());
       return { rows: [currentRow(params)], counts: {}, profile: 'list', projection: 'dataset_row' };
     }
     if (path.includes('/bulk-authorise-context')) {
@@ -466,6 +473,34 @@ async function waitForStepModel(page: import('@playwright/test').Page) {
 test.use({ storageState: { cookies: [], origins: [] } });
 
 test.describe('Gate 10 — the real Bulk shell', () => {
+  test('the four Timesheet type controls switch the real Bulk Authorise dataset', async ({ page }) => {
+    test.setTimeout(180_000);
+    const pageErrors: string[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    const { broker, state } = makeCommitBroker();
+    await mountOfficeShell(page, { broker });
+    await openBulkAuthorise(page);
+
+    const selectCategory = async (name: string, expectedKey: string) => {
+      const previousReads = state.datasetReads;
+      const tab = page.getByRole('tab', { name, exact: true });
+      await tab.click();
+      await expect(tab).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 });
+      await expect.poll(() => state.datasetReads).toBeGreaterThan(previousReads);
+      expect(state.datasetQueries.at(-1)).toContain(`weekly_source_category=${expectedKey}`);
+    };
+
+    await expect(page.getByRole('tab', { name: 'Standard Timesheets', exact: true }))
+      .toHaveAttribute('aria-selected', 'true');
+    await selectCategory('NHSP', 'NHSP');
+    await selectCategory('Client-provided hours', 'CLIENT_PROVIDED_HOURS');
+    await selectCategory('Timesheets checked with client', 'TIMESHEETS_CHECKED_WITH_CLIENT');
+    await selectCategory('Standard Timesheets', 'STANDARD_TIMESHEETS');
+
+    expect(pageErrors).toEqual([]);
+    expect(externalRequests(page), 'the category proof must not leave the machine').toEqual([]);
+  });
+
   test('XSG-022: an eligible row can be authorised, and the committed result survives a refresh', async ({ page }) => {
     test.setTimeout(240_000);
     const pageErrors: string[] = [];

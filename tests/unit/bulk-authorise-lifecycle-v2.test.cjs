@@ -187,6 +187,22 @@ function installHarness(initialState, overrides = {}) {
   return { win, root, frame, renderReasons, controller: win.__bulkAuthoriseLifecycleV2Test.controllerFor(initialState) };
 }
 
+test('classification binding preserves the Weekly Source four-category owner', () => {
+  const first = row('timesheet:A');
+  const state = stateFor([first], first.row_key);
+  let weeklySourceBindCalls = 0;
+  const { win } = installHarness(state, {
+    bindBulkAuthoriseClassificationButtons(boundState) {
+      weeklySourceBindCalls += 1;
+      assert.equal(boundState, state);
+    }
+  });
+
+  win.bindBulkAuthoriseClassificationButtons(state);
+
+  assert.equal(weeklySourceBindCalls, 1);
+});
+
 test('row navigation preserves checkbox selection and commits one full row context', async () => {
   const first = row('timesheet:A');
   const second = row('timesheet:B');
