@@ -55,6 +55,40 @@ function bulkActions() {
   };
 }
 
+test('NHSP upload uses the server-resolved Trust and report scope for acceptance', async () => {
+  const originalUpload = globalThis.uploadImportFileToR2;
+  const originalFetch = globalThis.authFetch;
+  try {
+    workspace._session.workspace = fixture({
+      profile: { id: 'NHSP_FINAL_BACKING_V1', label: 'NHSP backing report' },
+      context: {
+        source_group_id: 'group-1', source_cycle_id: 'cycle-1',
+        controls: [{ key: 'cutoff', label: 'Cutoff', value: 'Wed 23 Sep 2026 at 15:00' }],
+      },
+      selected: { source_group_id: 'group-1', source_cycle_id: 'cycle-1' },
+    });
+    globalThis.uploadImportFileToR2 = async () => ({ fileKey: 'source/test.xlsx', filename: 'test.xlsx' });
+    globalThis.authFetch = async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        preview: { ok: true, profileId: 'NHSP_FINAL_BACKING_V1' },
+        accept_context: {
+          source_group_id: 'group-1', source_cycle_id: 'cycle-1',
+          report_scope_id: 'scope-1', client_id: 'client-1', authority_scope_version: 2,
+        },
+      }),
+    });
+    const result = await workspace.uploadSource({ name: 'test.xlsx' });
+    assert.equal(result.accept_context.report_scope_id, 'scope-1');
+    assert.equal(result.accept_context.client_id, 'client-1');
+    assert.equal(result.accept_context.authority_scope_version, 2);
+  } finally {
+    globalThis.uploadImportFileToR2 = originalUpload;
+    globalThis.authFetch = originalFetch;
+  }
+});
+
 function fixture(overrides = {}) {
   return workspace.normaliseWorkspace({
     contract: workspace.CONTRACT,

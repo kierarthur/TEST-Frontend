@@ -913,14 +913,16 @@
     if (!file || typeof root.uploadImportFileToR2 !== 'function') throw new Error('File upload is unavailable.');
     const stored = await root.uploadImportFileToR2(file);
     const preview = await requestJson(ENDPOINTS.preview, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ file_key: stored.fileKey, original_filename: stored.filename, source_group_id: session.workspace.selected.source_group_id, source_cycle_id: session.workspace.selected.source_cycle_id, client_id: session.workspace.selected.client_id, parser_options: { profileId: session.workspace.profile.id } }) });
+    const serverContext = asObject(preview?.accept_context);
     const controlValue = (key) => asText(session.workspace.context.controls.find((control) => control.key === key)?.value);
     const acceptContext = {
       file_key: stored.fileKey,
       original_filename: stored.filename,
-      source_group_id: session.workspace.selected.source_group_id,
-      source_cycle_id: session.workspace.selected.source_cycle_id,
-      client_id: session.workspace.selected.client_id,
-      report_scope_id: session.workspace.selected.report_scope_id,
+      source_group_id: asText(serverContext.source_group_id || session.workspace.selected.source_group_id),
+      source_cycle_id: asText(serverContext.source_cycle_id || session.workspace.selected.source_cycle_id),
+      client_id: asText(serverContext.client_id || session.workspace.selected.client_id),
+      report_scope_id: asText(serverContext.report_scope_id || session.workspace.selected.report_scope_id),
+      authority_scope_version: serverContext.authority_scope_version,
       cutoff: controlValue('cutoff'),
       profile_id: asText(preview?.preview?.profileId || session.workspace.profile.id),
       parser_options: { profileId: asText(preview?.preview?.profileId || session.workspace.profile.id) }
