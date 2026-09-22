@@ -5480,6 +5480,12 @@ async function authFetch(input, init = {}) {
 }
 
 
+// Weekly Source modules are loaded before this file and call the same
+// authenticated transport as the rest of Office once their screens mount.
+// Keep one canonical implementation and expose it deliberately for them.
+window.authFetch = authFetch;
+
+
 
 // ===== Auth API calls =====
 
@@ -127433,7 +127439,7 @@ function openContractSettingsModal() {
                 weeklyMode === 'NONE'
                   ? 'Workers submit timesheets without a roster import.'
                   : weeklyMode === 'NHSP'
-                  ? 'The dedicated NHSP Weekly import creates timesheets; workers do not submit them.'
+                  ? 'Candidates may submit their hours for checking. Finalised NHSP hours remain authoritative.'
                   : 'Choose whether roster imports validate worker timesheets or are authoritative for weekly timesheets.'
               }
             </div>
@@ -127926,7 +127932,7 @@ function openContractSettingsModal() {
     // Initial canonicalise WITHOUT dirty
     try { applyFromDOM(root, { initial: true }); } catch {}
     try {
-      void window.CloudTMSWeeklySourceSettings?.mountContract(
+      const weeklySourceMount = window.CloudTMSWeeklySourceSettings?.mountContract(
         root,
         parentContractCtx,
         contractId,
@@ -127934,6 +127940,12 @@ function openContractSettingsModal() {
         viewOnly,
         weeklySourceContractSettingsSession
       );
+      if (weeklySourceMount && typeof weeklySourceMount.catch === 'function') {
+        weeklySourceMount.catch((error) => {
+          console.warn('[CONTRACT_SETTINGS] Weekly source settings failed to load', error);
+          window.__toast?.('Weekly source settings could not be loaded. Close and reopen this Contract.');
+        });
+      }
     } catch (e) { if (LOGC) console.warn('[CONTRACT_SETTINGS] Weekly source settings failed to load', e); }
   };
 
@@ -140646,7 +140658,7 @@ function renderContractSettingsModal(ctx) {
               weeklyMode === 'NONE'
                 ? 'Workers submit timesheets without a roster import.'
                 : weeklyMode === 'NHSP'
-                ? 'The dedicated NHSP Weekly import creates timesheets; workers do not submit them.'
+                ? 'Candidates may submit their hours for checking. Finalised NHSP hours remain authoritative.'
                 : 'Choose whether roster imports validate worker timesheets or are authoritative for weekly timesheets.'
             }
           </div>
@@ -348963,7 +348975,7 @@ async function renderClientSettingsUI(settingsObj){
       (mode === 'NONE')
         ? 'Workers submit timesheets without a roster import.'
       : (mode === 'NHSP')
-        ? 'The dedicated NHSP Weekly import creates timesheets; workers do not submit them.'
+        ? 'Candidates may submit their hours for checking. Finalised NHSP hours remain authoritative.'
       : 'Choose whether roster imports validate worker timesheets or are authoritative for weekly timesheets.';
 
     return `

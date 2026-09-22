@@ -17,7 +17,7 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   const currentMainAsset = mainAsset.replace(
     '&bulk-expense-review=20260909-r1',
     '&bulk-expense-review=20260909-r12&planned-week-delete=20260910-r2'
-  ) + '&weekly-source-entry=20260922-r1';
+  ) + '&weekly-source-entry=20260922-r2';
   assert.ok(html.includes(`<script src="./js/${currentMainAsset}"></script>`));
   assert.match(html, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
   assert.match(html, /invoice-diagnostic-catalog\.js\?v=20260803-invoice-reference-policy-r2/);

@@ -23,6 +23,7 @@ test('the public Imports route reaches Weekly Source and the legacy review canno
 
 test('all Weekly Source modules receive the canonical backend API route after load', () => {
   assert.match(main, /const API = \(path\) => `\$\{BROKER_BASE_URL\}\$\{path\}`;\s*\/\/[\s\S]*window\.API = API;/);
+  assert.match(main, /window\.authFetch\s*=\s*authFetch/);
   for (const source of [workspace, settings, notifications]) {
     assert.match(source, /(?:root|global)\.API/);
   }
@@ -48,6 +49,11 @@ test('load order and bridges keep new and established import journeys reachable'
   assert.match(workspace, /data-ws-upload/);
   assert.match(workspace, /data-ws-daily/);
   assert.match(workspace, /root\.handleHrRotaFileDrop/);
-  assert.match(html, /main\.js[^"']*weekly-source-entry=20260922-r1/);
+  assert.match(html, /main\.js[^"']*weekly-source-entry=20260922-r2/);
   assert.match(html, /import-review-v1\.js[^"']*weekly-source-entry=20260922-r1/);
+});
+
+test('NHSP Office guidance preserves candidate check-hour submission', () => {
+  assert.doesNotMatch(main, /workers do not submit them/);
+  assert.match(main, /Candidates may submit their hours for checking\. Finalised NHSP hours remain authoritative\./);
 });
