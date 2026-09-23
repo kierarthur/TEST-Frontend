@@ -327,7 +327,20 @@
     if (frame?.setTab) Promise.resolve(frame.setTab('main')).catch(() => {});
   }
 
+  function markCompletedChildClean() {
+    const stack = Array.isArray(root.__modalStack) ? root.__modalStack : [];
+    const frame = stack[stack.length - 1];
+    if (!frame || !asText(frame.kind).startsWith('weekly-source-')) return;
+    frame.isDirty = false;
+    frame._snapshot = null;
+    frame._updateButtons?.();
+  }
+
   async function finishAction() {
+    // The shared modal shell treats changes to confirmation controls as form
+    // edits. Once the server has completed the requested action, this child no
+    // longer owns unsaved input and must close without a discard prompt.
+    markCompletedChildClean();
     closeChild();
     await workspaceApi()?.refresh?.();
   }

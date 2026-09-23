@@ -31,6 +31,7 @@ async function loadFoundation(page: import('@playwright/test').Page) {
     win.html = (value: unknown) => String(value ?? '');
     win.API = (path: string) => path;
     win.__requests = [];
+    win.__nativeConfirmCalls = 0;
     win.authFetch = async (url: string, options: Record<string, unknown> = {}) => {
       if (String(url).includes('/commands')) {
         const request = JSON.parse(String((options as any).body || '{}'));
@@ -48,6 +49,9 @@ async function loadFoundation(page: import('@playwright/test').Page) {
     win.showModal = (title: string, tabs: Array<{key:string;label:string}>, render: (key:string) => unknown, _save: unknown, _hasId: unknown, onReturn: (() => void) | null, options: Record<string, unknown> = {}) => {
       const frame: any = {
         kind: options.kind || null,
+        isDirty: false,
+        _snapshot: { data: {} },
+        _updateButtons() {},
         tabs: tabs.slice(),
         currentTabKey: tabs[0]?.key || 'main',
         async setTab(key: string) {
@@ -63,6 +67,10 @@ async function loadFoundation(page: import('@playwright/test').Page) {
       return frame;
     };
     win.closeModal = () => {
+      if (win.__modalStack.at(-1)?.isDirty) {
+        win.__nativeConfirmCalls += 1;
+        return;
+      }
       win.__modalStack.pop();
       const parent = win.__modalStack.at(-1);
       if (parent) parent.setTab(parent.currentTabKey);
@@ -597,7 +605,13 @@ test('preview, contract choice and Correct final source follow deterministic pol
   await expect(page.getByRole('button', { name: 'Accept source file' })).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath('nhsp-ready-finalise.png'), fullPage: true });
 
-  await page.evaluate(() => (window as any).closeModal());
+  await page.evaluate(() => { (window as any).__modalStack.at(-1).isDirty = true; });
+  await page.getByRole('button', { name: 'Accept source file' }).click();
+  await expect(page.locator('#modalBody')).toBeEmpty();
+  expect(await page.evaluate(() => (window as any).__modalStack.length)).toBe(0);
+  expect(await page.evaluate(() => (window as any).__nativeConfirmCalls)).toBe(0);
+  expect(await page.evaluate(() => (window as any).__requests.some((request: any) => request.action === 'UPLOAD_ACCEPT'))).toBe(true);
+
   await page.evaluate((payload) => (window as any).CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({ label: 'Choose contract', payload }), fixtures.contractChooser);
   await page.waitForTimeout(25);
   const choices = page.getByRole('radio');
