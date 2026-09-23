@@ -19,6 +19,10 @@ test('Weekly Source Lines intro follows the server lifecycle heading, not a fixe
   assert.match(modalJs, /\[sourceLifecycleTitle, 'Review the client system hours/);
   assert.doesNotMatch(modalJs, /\['Hours being authorised', 'Review the client system hours/);
 });
+test('Weekly Source sort labels are not classified as primary action buttons', () => {
+  assert.match(modalJs, /button\.matches\('\[data-ws-sort\]'\)/);
+  assert.match(modalJs, /button\.classList\.remove\('ctms-action-danger', 'ctms-action-primary'\)/);
+});
 test('money fields normalise to two decimals without treating hours or IDs as money', () => {
   assert.match(modalJs, /const isMoneyInput = \(input\) =>/);
   assert.match(modalJs, /const fixed = value\.toFixed\(2\)/);

@@ -818,6 +818,12 @@
 
     body.querySelectorAll('button').forEach((button) => {
       if (!(button instanceof HTMLButtonElement)) return;
+      // Column-sort labels are controls, not actions; "Uploaded" must not be
+      // promoted to the purple Upload action by the shared verb matcher.
+      if (button.matches('[data-ws-sort]')) {
+        button.classList.remove('ctms-action-danger', 'ctms-action-primary');
+        return;
+      }
       const text = safeText(button.textContent).replace(/\s+/g, ' ');
       const destructive = /^(?:delete|remove|discard|write off|cancel payment|unprocess|unsnooze)/i.test(text);
       const primary = /^(?:save|next|apply|continue|confirm|send|enqueue|generate selected|issue selected invoices|authorise|process|create|add|upload|attach|resolve|export)/i.test(text);

@@ -85,6 +85,7 @@
 .ws-grid thead th, .ws-inner-grid thead th { position: sticky; z-index: 3; top: 0; background: var(--panel, #0f172a); }
 .ws-grid th:first-child, .ws-grid td:first-child { padding-left: 12px; }
 .ws-grid th:last-child, .ws-grid td:last-child { padding-right: 12px; }
+.ws-import-grid tbody td:first-child { overflow-wrap: anywhere; }
 .ws-grid th button[data-ws-sort] { all: unset; display: inline-flex; min-height: 44px; cursor: pointer; font: inherit; align-items: center; }
 /* The generic modal button rule is loaded later; source-table headings remain flat labels. */
 #modal.ctms-modern-modal .ws-grid th button[data-ws-sort] {
