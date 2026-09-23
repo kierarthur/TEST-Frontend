@@ -22,7 +22,7 @@
   });
   const NON_TECHNICAL_DETAIL_LABELS = Object.freeze([
     ['candidate', 'Candidate'], ['client', 'Client'], ['trust', 'Trust'], ['shift', 'Shift'],
-    ['day_date', 'Day/date'], ['candidate_hours', 'Candidate hours'], ['system_hours', 'System hours'],
+    ['day_date', 'Day/date'], ['candidate_hours', 'Candidate says they worked'], ['system_hours', 'System hours'],
     ['issue', 'Issue'], ['status', 'Status'], ['age', 'Age'], ['manager', 'Manager'],
     ['manager_contact', 'Manager'], ['candidate_asked_at', 'Candidate asked'],
     ['manager_informed_at', 'Manager informed'], ['next_step', 'Next step'], ['problem', 'Problem'],
@@ -200,7 +200,7 @@
 
   function renderDetail(model) {
     const fields = model.fields.map((field) => `<div><span>${escapeHtml(field.label)}</span><strong>${escapeHtml(field.value)}</strong></div>`).join('');
-    const shifts = model.shifts.length ? `<div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Day/date</th><th>Candidate hours</th><th>System hours</th><th>Issue and status</th></tr></thead><tbody>${model.shifts.map((row) => `<tr><td>${escapeHtml(row.day_date || '—')}</td><td>${escapeHtml(row.candidate_hours || '—')}</td><td>${escapeHtml(row.system_hours || '—')}</td><td>${escapeHtml([row.issue, row.status].filter(Boolean).join(' · ') || '—')}</td></tr>`).join('')}</tbody></table></div>` : '';
+    const shifts = model.shifts.length ? `<div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Day/date</th><th>Candidate says they worked</th><th>System hours</th><th>Issue and status</th></tr></thead><tbody>${model.shifts.map((row) => `<tr><td>${escapeHtml(row.day_date || '—')}</td><td>${escapeHtml(row.candidate_hours || '—')}</td><td>${escapeHtml(row.system_hours || '—')}</td><td>${escapeHtml([row.issue, row.status].filter(Boolean).join(' · ') || '—')}</td></tr>`).join('')}</tbody></table></div>` : '';
     return `<div class="ws-child" data-wsa-screen="details">${model.heading ? `<h3>${escapeHtml(model.heading)}</h3>` : ''}${model.body ? `<p>${escapeHtml(model.body)}</p>` : ''}${fields ? `<div class="ws-child-context">${fields}</div>` : ''}${shifts}<div class="ws-child-actions"><button type="button" class="btn primary" data-wsa-close>Close</button></div></div>`;
   }
 

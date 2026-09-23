@@ -94,6 +94,7 @@ test('Queries keeps the two selection planes separate and uses only sticky heade
   const shifts = page.getByRole('checkbox', { name: 'Select all shifts in this group' });
   await expect(outreach).toHaveCount(1);
   await expect(shifts).toHaveCount(1);
+  await expect(page.getByRole('columnheader', { name: 'Candidate says they worked' })).toBeVisible();
   await expect(page.getByRole('button', { name: /select all|unselect all/i })).toHaveCount(0);
 
   const sticky = await shifts.evaluate((input) => {
