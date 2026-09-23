@@ -93,6 +93,14 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+.ws-history-grid th:last-child { width: 40%; }
+.ws-history-detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 .ws-grid th button[data-ws-sort] { all: unset; display: inline-flex; min-height: 44px; cursor: pointer; font: inherit; align-items: center; }
 /* The generic modal button rule is loaded later; source-table headings remain flat labels. */
 #modal.ctms-modern-modal .ws-grid th button[data-ws-sort] {

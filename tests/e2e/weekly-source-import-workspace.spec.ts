@@ -504,6 +504,28 @@ test('Weekly Source sort headings stay flat inside the real modern Office modal'
   expect(filename.fullName).toContain('FORMAT_PRESERVED.xlsx');
 });
 
+test('History keeps the current pay cycle and long details compact but accessible', async ({ page }) => {
+  await loadFoundation(page);
+  await page.evaluate(async () => {
+    const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
+    await api.open();
+    await (window as any).__modalStack.at(-1).setTab('history');
+  });
+  await expect(page.getByRole('combobox', { name: 'Period' })).toHaveValue('CURRENT_PAY_CYCLE');
+  const detail = page.locator('.ws-history-grid .ws-history-detail').first();
+  await expect(detail).toBeVisible();
+  expect(await detail.getAttribute('title')).toContain('Backing report 1741227.xlsx');
+  const measured = await detail.evaluate((node) => ({
+    width: node.getBoundingClientRect().width,
+    contentWidth: node.scrollWidth,
+    wrapping: getComputedStyle(node).overflowWrap,
+    lineClamp: getComputedStyle(node).webkitLineClamp
+  }));
+  expect(measured.contentWidth).toBeLessThanOrEqual(Math.ceil(measured.width));
+  expect(measured.wrapping).toBe('anywhere');
+  expect(measured.lineClamp).toBe('2');
+});
+
 test('before cutoff deliberately locks finalisation against the shared modal control reset', async ({ page }) => {
   await page.setViewportSize({ width: 1120, height: 900 });
   await loadFoundation(page);
