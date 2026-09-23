@@ -18,6 +18,78 @@ test('NHSP preview shows the confirmed Trust, report and cutoff without technica
   assert.doesNotMatch(html, /source_group_id|report_scope_id|manifest|fingerprint|rounding/i);
 });
 
+test('NHSP previously released shifts can be accepted for the shared group without choosing one Trust', () => {
+  const model = actions.normalisePreview({
+    ok: true,
+    file_key: 'weekly-source/test/prefinal.xlsx',
+    preview: {
+      ok: true,
+      profileId: 'NHSP_PREFINAL_RELEASED_V1',
+      rows: [{ candidateName: 'Kier Arthur', shiftDate: '2026-09-08', actualTotal: 2.5 }],
+      fatalErrors: [],
+      warnings: []
+    },
+    accept_context: {
+      file_key: 'weekly-source/test/prefinal.xlsx',
+      original_filename: 'previously-released.xlsx',
+      source_group_id: '11111111-1111-4111-8111-111111111111',
+      source_cycle_id: '22222222-2222-4222-8222-222222222222',
+      client_id: null,
+      report_scope_id: null,
+      profile_id: 'NHSP_PREFINAL_RELEASED_V1'
+    }
+  });
+
+  assert.equal(model.authority_ready, true);
+  assert.equal(model.ok, true);
+  const html = actions.renderPreview(model, { confirmed: true });
+  assert.doesNotMatch(html, /This file cannot be accepted yet/);
+  assert.doesNotMatch(html, /data-wsa-accept disabled/);
+  const payload = actions.buildUploadAcceptancePayload(model, { confirmed: true });
+  assert.equal(Object.hasOwn(payload, 'client_id'), false);
+  assert.equal(Object.hasOwn(payload, 'report_scope_id'), false);
+  assert.equal(payload.profile_id, 'NHSP_PREFINAL_RELEASED_V1');
+});
+
+test('Trust-specific and roster files remain fail-closed without their required scope', () => {
+  const finalModel = actions.normalisePreview({
+    ok: true,
+    file_key: 'weekly-source/test/final.xlsx',
+    preview: {
+      ok: true,
+      profileId: 'NHSP_FINAL_BACKING_V1',
+      reportNumber: '1741227',
+      scope: { trust: "St Mary's NHS Trust" },
+      rows: [{ candidateName: 'Kier Arthur', shiftDate: '2026-09-08' }]
+    },
+    accept_context: {
+      file_key: 'weekly-source/test/final.xlsx',
+      source_group_id: '11111111-1111-4111-8111-111111111111',
+      source_cycle_id: '22222222-2222-4222-8222-222222222222',
+      profile_id: 'NHSP_FINAL_BACKING_V1',
+      cutoff: 'Wed 16 Sep 2026 at 15:00'
+    }
+  });
+  assert.equal(finalModel.ok, false);
+
+  const rosterModel = actions.normalisePreview({
+    ok: true,
+    file_key: 'weekly-source/test/roster.xlsx',
+    preview: {
+      ok: true,
+      profileId: 'HEALTHROSTER_WEEKLY_FROM_TO_ACTUAL_V1',
+      rows: [{ candidateName: 'Kier Arthur', shiftDate: '2026-09-08' }]
+    },
+    accept_context: {
+      file_key: 'weekly-source/test/roster.xlsx',
+      source_group_id: '11111111-1111-4111-8111-111111111111',
+      source_cycle_id: '22222222-2222-4222-8222-222222222222',
+      profile_id: 'HEALTHROSTER_WEEKLY_FROM_TO_ACTUAL_V1'
+    }
+  });
+  assert.equal(rosterModel.ok, false);
+});
+
 test('HealthRoster preview requires a second confirmation when coverage shrinks', () => {
   const model = actions.normalisePreview(fixtures.healthRosterPreview);
   const html = actions.renderPreview(model, {

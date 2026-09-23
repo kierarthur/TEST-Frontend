@@ -193,6 +193,49 @@ test('NHSP imports clearly select the exact pre-final or final file journey', as
   await page.screenshot({ path: testInfo.outputPath('nhsp-import-file-type.png'), fullPage: true });
 });
 
+test('NHSP previously released review accepts the shared group scope without one Trust', async ({ page }) => {
+  await page.setViewportSize({ width: 1120, height: 900 });
+  await loadFoundation(page);
+  const result = await page.evaluate(() => {
+    const actions = (window as any).CloudTMSWeeklySourceWorkspaceActionsV1;
+    const model = actions.normalisePreview({
+      ok: true,
+      file_key: 'mock/previously-released.xlsx',
+      preview: {
+        ok: true,
+        profileId: 'NHSP_PREFINAL_RELEASED_V1',
+        rows: [{ candidateName: 'Kier Arthur', shiftDate: '2026-09-08', actualTotal: 2.5 }],
+        fatalErrors: [],
+        warnings: []
+      },
+      accept_context: {
+        file_key: 'mock/previously-released.xlsx',
+        original_filename: 'previously-released.xlsx',
+        source_group_id: '11111111-1111-4111-8111-111111111111',
+        source_cycle_id: '22222222-2222-4222-8222-222222222222',
+        client_id: null,
+        report_scope_id: null,
+        profile_id: 'NHSP_PREFINAL_RELEASED_V1'
+      }
+    });
+    const payload = actions.buildUploadAcceptancePayload(model, { confirmed: true });
+    return {
+      ok: model.ok,
+      authorityReady: model.authority_ready,
+      hasClientId: Object.hasOwn(payload, 'client_id'),
+      hasReportScopeId: Object.hasOwn(payload, 'report_scope_id'),
+      html: actions.renderPreview(model, { confirmed: true })
+    };
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.authorityReady).toBe(true);
+  expect(result.hasClientId).toBe(false);
+  expect(result.hasReportScopeId).toBe(false);
+  expect(result.html).not.toContain('This file cannot be accepted yet');
+  expect(result.html).not.toContain('data-wsa-accept disabled');
+});
+
 test('switching tabs fetches the selected tab rows instead of reusing a partial workspace', async ({ page }) => {
   await page.setViewportSize({ width: 1120, height: 900 });
   await loadFoundation(page);

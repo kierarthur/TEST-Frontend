@@ -82,6 +82,7 @@
     const scope = asObject(preview.scope);
     const first = asObject(rows[0]);
     const finalReport = profileId === 'NHSP_FINAL_BACKING_V1';
+    const groupWideNhspPrefinal = profileId === 'NHSP_PREFINAL_RELEASED_V1';
     const trust = asText(scope.trust || asArray(scope.trusts)[0] || first.trust || first.clientName || first.client);
     const reportNumber = asText(preview.reportNumber || preview.report_number || scope.backingReportNumber || scope.reportNumber || scope.report_number);
     const cutoff = asText(envelope.accept_context?.cutoff || preview.cutoff || preview.cutoffLabel);
@@ -90,8 +91,16 @@
       .filter((issue) => !/round/i.test(issue.message));
     const acceptContext = asObject(envelope.accept_context);
     const previousCoverage = asObject(acceptContext.previous_coverage || preview.previousCoverage || preview.previous_coverage);
-    const authorityReady = [acceptContext.file_key || envelope.file_key, acceptContext.source_group_id, acceptContext.source_cycle_id, acceptContext.client_id, acceptContext.profile_id || profileId].every((value) => asText(value))
-      && (!finalReport || (!!trust && !!reportNumber && !!cutoff && !!asText(acceptContext.report_scope_id)));
+    const baseAuthorityReady = [
+      acceptContext.file_key || envelope.file_key,
+      acceptContext.source_group_id,
+      acceptContext.source_cycle_id,
+      acceptContext.profile_id || profileId
+    ].every((value) => asText(value));
+    const clientReady = groupWideNhspPrefinal || !!asText(acceptContext.client_id);
+    const finalReportReady = !finalReport
+      || (!!trust && !!reportNumber && !!cutoff && !!asText(acceptContext.report_scope_id));
+    const authorityReady = baseAuthorityReady && clientReady && finalReportReady;
     return {
       ok: envelope.ok === true && preview.ok === true && fatal.length === 0 && authorityReady,
       file_key: asText(envelope.file_key || envelope.accept_context?.file_key),
@@ -154,7 +163,7 @@
       original_filename: asText(context.original_filename || model.filename),
       source_group_id: asText(context.source_group_id),
       source_cycle_id: asText(context.source_cycle_id),
-      client_id: asText(context.client_id),
+      client_id: asText(context.client_id) || undefined,
       report_scope_id: asText(context.report_scope_id) || undefined,
       profile_id: asText(context.profile_id || model.profile_id),
       parser_options: { ...asObject(context.parser_options), profileId: asText(context.profile_id || model.profile_id) }
