@@ -1001,10 +1001,14 @@
     if (family === 'timesheet') {
       const key = tab || activeTabLabel || 'overview';
       const weeklySourceLines = key === 'lines' && !!body.querySelector('[data-weekly-source-simple-lines="1"]');
+      const sourceLifecycleHeading = weeklySourceLines
+        ? body.querySelector('[data-weekly-source-primary] .weekly-source-v1__card-heading h3')
+        : null;
+      const sourceLifecycleTitle = safeText(sourceLifecycleHeading?.textContent) || 'Timesheet hours';
       const content = {
         overview: ['Timesheet overview', 'Review the week, route and available actions.'],
         lines: weeklySourceLines
-          ? ['Hours being authorised', 'Review the client system hours and any submitted hours needing attention.']
+          ? [sourceLifecycleTitle, 'Review the client system hours and any candidate-submitted evidence.']
           : ['Hours and shifts', 'Enter each shift and break clearly for the selected week.'],
         expenses: ['Expenses', ''],
         evidence: ['Evidence', ''],
@@ -1013,6 +1017,12 @@
         audit: ['Audit history', 'Review changes recorded for this timesheet.']
       }[key] || ['Timesheet', 'Review the timesheet details.'];
       intro(body, `timesheet-${key}`, content[0], content[1]);
+      // The server-owned phase title is now the tab's primary heading.  Keep
+      // the card and its authority badge, but do not print the title twice.
+      if (weeklySourceLines && sourceLifecycleHeading && sourceLifecycleTitle === safeText(sourceLifecycleHeading.textContent)) {
+        sourceLifecycleHeading.setAttribute('aria-hidden', 'true');
+        sourceLifecycleHeading.style.display = 'none';
+      }
       const tabRoot = body.querySelector(':scope > .tabc');
       if (tabRoot) tabRoot.classList.add('ctms-timesheet-tab', `ctms-timesheet-${key}`);
       body.querySelectorAll('.tabc > .card, .tabc > [class*="card"]').forEach((card) => card.classList.add('ctms-workflow-card'));

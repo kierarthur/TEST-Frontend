@@ -86,6 +86,34 @@
 .ws-grid th:first-child, .ws-grid td:first-child { padding-left: 12px; }
 .ws-grid th:last-child, .ws-grid td:last-child { padding-right: 12px; }
 .ws-grid th button[data-ws-sort] { all: unset; display: inline-flex; min-height: 44px; cursor: pointer; font: inherit; align-items: center; }
+/* The generic modal button rule is loaded later; source-table headings remain flat labels. */
+#modal.ctms-modern-modal .ws-grid th button[data-ws-sort] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+#modal.ctms-modern-modal .ws-grid th button[data-ws-sort]:hover {
+  border: 0;
+  background: transparent;
+  color: #a9cbff;
+  box-shadow: none;
+}
+#modal.ctms-modern-modal .ws-grid th button[data-ws-sort]:focus-visible {
+  outline: 2px solid #7aa7ff;
+  outline-offset: 3px;
+  border-radius: 2px;
+}
 .ws-grid thead th:has(input[type="checkbox"]), .ws-inner-grid thead th:has(input[type="checkbox"]) { z-index: 6; left: 0; width: 48px; min-width: 48px; text-align: center; }
 .ws-actions { white-space: nowrap; }
 .ws-actions .btn { margin: 2px 4px 2px 0; }

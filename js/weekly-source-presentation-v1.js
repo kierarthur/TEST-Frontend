@@ -1943,7 +1943,7 @@
 
     if (vm.authority === 'CLIENT_SYSTEM') {
       if (vm.comparison_state === 'NO_TIMESHEET') {
-        supportingMarkup = '<div class="weekly-source-v1__notice is-waiting"><strong>No submitted Timesheet available</strong><span>The client system hours can be reviewed while the Timesheet is awaited.</span></div>';
+        supportingMarkup = '<div class="weekly-source-v1__notice is-waiting"><strong>No submitted Timesheet available</strong><span>No candidate-submitted hours are available for comparison.</span></div>';
       } else if (vm.comparison_state === 'MISMATCH') {
         supportingMarkup = renderHoursTable(
           'Submitted hours needing attention',

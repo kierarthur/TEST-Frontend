@@ -14,6 +14,11 @@ test('modal modernisation is additive and does not replace showModal', () => {
   assert.doesNotMatch(modalJs, /function\s+showModal\s*\(/);
   assert.match(modalJs, /window\.__applyCloudTmsModalModernisation = apply/);
 });
+test('Weekly Source Lines intro follows the server lifecycle heading, not a fixed authorise label', () => {
+  assert.match(modalJs, /sourceLifecycleHeading/);
+  assert.match(modalJs, /\[sourceLifecycleTitle, 'Review the client system hours/);
+  assert.doesNotMatch(modalJs, /\['Hours being authorised', 'Review the client system hours/);
+});
 test('money fields normalise to two decimals without treating hours or IDs as money', () => {
   assert.match(modalJs, /const isMoneyInput = \(input\) =>/);
   assert.match(modalJs, /const fixed = value\.toFixed\(2\)/);

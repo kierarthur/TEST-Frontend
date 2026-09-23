@@ -474,6 +474,23 @@ for (const width of [360, 720, 1120]) {
   });
 }
 
+test('Weekly Source sort headings stay flat inside the real modern Office modal', async ({ page }) => {
+  await mountOfficeShell(page);
+  await page.evaluate(() => {
+    const modal = document.getElementById('modal')!;
+    modal.classList.add('ctms-modern-modal');
+    modal.innerHTML = '<div id="modalBody"><table class="grid mini ws-grid"><thead><tr><th><button type="button" data-ws-sort="candidate">Candidate <span aria-hidden="true">↓</span></button></th></tr></thead></table></div>';
+    document.getElementById('modalBack')!.style.display = 'flex';
+  });
+  const header = page.locator('#modal .ws-grid th button[data-ws-sort]');
+  await expect(header).toBeVisible();
+  const appearance = await header.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { border: style.borderTopWidth, background: style.backgroundColor, radius: style.borderRadius, padding: style.paddingLeft };
+  });
+  expect(appearance).toEqual({ border: '0px', background: 'rgba(0, 0, 0, 0)', radius: '0px', padding: '0px' });
+});
+
 test('before cutoff deliberately locks finalisation against the shared modal control reset', async ({ page }) => {
   await page.setViewportSize({ width: 1120, height: 900 });
   await loadFoundation(page);
