@@ -352,6 +352,149 @@ test('NHSP import review and finalise show the accepted source facts without bla
   await page.screenshot({ path: testInfo.outputPath('nhsp-accepted-report-finalise-facts.png'), fullPage: true });
 });
 
+test('one selection reviews separate NHSP backing reports and accepts each exact Trust scope', async ({ page }, testInfo) => {
+  await loadFoundation(page);
+  await page.evaluate(async (workspaceFixture) => {
+    const win = window as any;
+    const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.profile = { id: 'NHSP_FINAL_BACKING_V1', label: 'NHSP', finalise_label: 'Finalise report' };
+    payload.context.cycle_state = 'Ready for finalisation';
+    win.authFetch = async (url: string, options: Record<string, unknown> = {}) => {
+      if (String(url).includes('/uploads/preview')) {
+        const body = JSON.parse(String((options as any).body));
+        win.__requests.push({ action: 'UPLOAD_PREVIEW', payload: body });
+        const trust = body.original_filename.includes('Alpha') ? 'Alpha NHS Trust' : 'Beta NHS Trust';
+        const id = trust.startsWith('Alpha') ? 'a' : 'b';
+        return { ok: true, json: async () => ({
+          ok: true,
+          preview: { ok: true, profileId: 'NHSP_FINAL_BACKING_V1', rows: [{ date: '2026-09-08', start: '09:00', end: '17:00' }], scope: { trust }, reportNumber: `${id}123`, fatalErrors: [], warnings: [] },
+          accept_context: { source_group_id: '11111111-1111-4111-8111-111111111111', source_cycle_id: '22222222-2222-4222-8222-222222222222', client_id: `${id.repeat(8)}-${id.repeat(4)}-4${id.repeat(3)}-8${id.repeat(3)}-${id.repeat(12)}`, report_scope_id: `${id.repeat(8)}-${id.repeat(4)}-4${id.repeat(3)}-9${id.repeat(3)}-${id.repeat(12)}` }
+        }) };
+      }
+      if (String(url).includes('/uploads/accept')) {
+        win.__requests.push({ action: 'UPLOAD_ACCEPT', payload: JSON.parse(String((options as any).body)) });
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      return { ok: true, json: async () => payload };
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open();
+  }, fixtures.workspace);
+
+  const input = page.locator('[data-ws-upload-input]');
+  await expect(input).toHaveAttribute('multiple', '');
+  await input.setInputFiles([
+    { name: 'Alpha backing.xls', mimeType: 'application/vnd.ms-excel', buffer: Buffer.from('alpha') },
+    { name: 'Beta backing.xls', mimeType: 'application/vnd.ms-excel', buffer: Buffer.from('beta') }
+  ]);
+  await expect(page.getByText('Alpha NHS Trust')).toBeVisible();
+  await expect(page.getByText('Beta NHS Trust')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('nhsp-batch-review.png'), fullPage: true });
+  await expect(page.getByRole('button', { name: 'Accept selected reports' })).toBeDisabled();
+  await page.getByLabel('I confirm the selected reports and their Trusts.').check();
+  await page.getByRole('button', { name: 'Accept selected reports' }).click();
+  await expect(page.getByText('2 accepted · 0 selected')).toBeVisible();
+  const accepted = await page.evaluate(() => (window as any).__requests.filter((entry: any) => entry.action === 'UPLOAD_ACCEPT'));
+  const previews = await page.evaluate(() => (window as any).__requests.filter((entry: any) => entry.action === 'UPLOAD_PREVIEW'));
+  expect(previews).toHaveLength(2);
+  expect(previews.every((entry: any) => entry.payload.client_id === null && entry.payload.profile_id === 'NHSP_FINAL_BACKING_V1')).toBe(true);
+  expect(accepted).toHaveLength(2);
+  expect(accepted.map((entry: any) => entry.payload.client_id)).toEqual([
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  ]);
+  expect(accepted.map((entry: any) => entry.payload.report_scope_id)).toEqual([
+    'aaaaaaaa-aaaa-4aaa-9aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-9bbb-bbbbbbbbbbbb'
+  ]);
+});
+
+test('same-Trust NHSP backing reports are held for separate review, not silently superseded', async ({ page }) => {
+  await loadFoundation(page);
+  await page.evaluate(async (workspaceFixture) => {
+    const win = window as any;
+    const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.profile = { id: 'NHSP_FINAL_BACKING_V1', label: 'NHSP', finalise_label: 'Finalise report' };
+    payload.context.cycle_state = 'Ready for finalisation';
+    win.authFetch = async (url: string, options: Record<string, unknown> = {}) => {
+      if (String(url).includes('/uploads/preview')) return { ok: true, json: async () => ({
+        ok: true,
+        preview: { ok: true, profileId: 'NHSP_FINAL_BACKING_V1', rows: [{ date: '2026-09-08' }], scope: { trust: 'Alpha NHS Trust' }, reportNumber: '123', fatalErrors: [], warnings: [] },
+        accept_context: { source_group_id: '11111111-1111-4111-8111-111111111111', source_cycle_id: '22222222-2222-4222-8222-222222222222', client_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', report_scope_id: 'aaaaaaaa-aaaa-4aaa-9aaa-aaaaaaaaaaaa' }
+      }) };
+      if (String(url).includes('/uploads/accept')) throw new Error('Duplicate file must not be accepted');
+      return { ok: true, json: async () => payload };
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open();
+  }, fixtures.workspace);
+  await page.locator('[data-ws-upload-input]').setInputFiles([
+    { name: 'Alpha first.xls', mimeType: 'application/vnd.ms-excel', buffer: Buffer.from('first') },
+    { name: 'Alpha second.xls', mimeType: 'application/vnd.ms-excel', buffer: Buffer.from('second') }
+  ]);
+  await expect(page.getByText(/Upload these separately/)).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Accept selected reports' })).toBeDisabled();
+});
+
+test('a rejected backing report does not prevent a separate valid Trust from being accepted', async ({ page }) => {
+  await loadFoundation(page);
+  await page.evaluate(async (workspaceFixture) => {
+    const win = window as any;
+    const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.profile = { id: 'NHSP_FINAL_BACKING_V1', label: 'NHSP', finalise_label: 'Finalise report' };
+    win.authFetch = async (url: string, options: Record<string, unknown> = {}) => {
+      if (String(url).includes('/uploads/preview')) {
+        const body = JSON.parse(String((options as any).body));
+        if (body.original_filename.includes('invalid')) return { ok: false, status: 409, json: async () => ({ message: 'This file does not contain one clear Trust.' }) };
+        return { ok: true, json: async () => ({
+          ok: true,
+          preview: { ok: true, profileId: 'NHSP_FINAL_BACKING_V1', rows: [{ date: '2026-09-08' }], scope: { trust: 'Valid NHS Trust' }, reportNumber: '101', fatalErrors: [], warnings: [] },
+          accept_context: { source_group_id: '11111111-1111-4111-8111-111111111111', source_cycle_id: '22222222-2222-4222-8222-222222222222', client_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', report_scope_id: 'aaaaaaaa-aaaa-4aaa-9aaa-aaaaaaaaaaaa' }
+        }) };
+      }
+      if (String(url).includes('/uploads/accept')) {
+        win.__requests.push({ action: 'UPLOAD_ACCEPT', payload: JSON.parse(String((options as any).body)) });
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      return { ok: true, json: async () => payload };
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open();
+  }, fixtures.workspace);
+  await page.locator('[data-ws-upload-input]').setInputFiles([
+    { name: 'valid backing.xls', mimeType: 'application/vnd.ms-excel', buffer: Buffer.from('valid') },
+    { name: 'invalid backing.xls', mimeType: 'application/vnd.ms-excel', buffer: Buffer.from('invalid') }
+  ]);
+  await expect(page.getByText('This file does not contain one clear Trust.')).toBeVisible();
+  await expect(page.locator('[data-wsa-batch-select="1"]')).toBeDisabled();
+  await page.getByLabel('I confirm the selected reports and their Trusts.').check();
+  await page.getByRole('button', { name: 'Accept selected reports' }).click();
+  await expect(page.getByText('1 accepted · 0 selected')).toBeVisible();
+  const accepted = await page.evaluate(() => (window as any).__requests.filter((entry: any) => entry.action === 'UPLOAD_ACCEPT'));
+  expect(accepted).toHaveLength(1);
+  expect(accepted[0].payload.client_id).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+});
+
+test('backing-report batch review remains readable without sideways panning on a phone', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await loadFoundation(page);
+  await page.evaluate((preview) => {
+    const actions = (window as any).CloudTMSWeeklySourceWorkspaceActionsV1;
+    actions.openBatchPreview([
+      { filename: 'A very long NHSP backing report file name for Alpha Trust.xls', detail: preview },
+      { filename: 'Another very long NHSP backing report file name for Beta Trust.xls', detail: {
+        ...preview, accept_context: { ...preview.accept_context, original_filename: 'Beta backing.xls' },
+        preview: { ...preview.preview, scope: { trust: 'Beta NHS Trust', backingReportNumber: '1741228' } }
+      } }
+    ]);
+  }, fixtures.nhspPreview);
+  await expect(page.getByText('Beta NHS Trust')).toBeVisible();
+  const sizes = await page.locator('[data-wsa-screen="batch-preview"]').evaluate((node) => ({
+    viewport: document.documentElement.clientWidth,
+    page: document.documentElement.scrollWidth,
+    content: node.scrollWidth,
+    width: node.clientWidth
+  }));
+  expect(sizes.page).toBeLessThanOrEqual(sizes.viewport);
+  expect(sizes.content).toBeLessThanOrEqual(sizes.width);
+  await page.screenshot({ path: testInfo.outputPath('nhsp-batch-review-phone.png'), fullPage: true });
+});
+
 for (const tab of ['imports', 'queries'] as const) {
   test(`${tab} appends the next cursor page on scrolling without numbered pages`, async ({ page }) => {
     await page.setViewportSize({ width: 1700, height: 900 });

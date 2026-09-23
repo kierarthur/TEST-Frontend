@@ -434,7 +434,7 @@
       ? [['File','file'],['Uploaded','uploaded'],['Rows','rows'],['Report','report'],['Cutoff','cutoff'],['Status','status'],['Final source','final_source']]
       : [['File','file'],['Uploaded','uploaded'],['Rows','rows'],['Coverage','coverage'],['Status','status'],['Final source','final_source']];
     const stale = workspace.imports.stale ? '<div class="ws-notice ws-notice--warning" role="status"><span>This information has changed. Recheck before continuing.</span></div>' : '';
-    return `${stale}${journeyPanel}<div class="ws-toolbar">${uploadProfileControl}<button type="button" class="btn primary" data-ws-upload${workspace.imports.stale ? ' disabled title="Recheck before uploading another source file."' : ''}>Upload source file</button><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn btn-outline" data-ws-daily>Daily rota check</button><input type="file" data-ws-upload-input hidden accept=".xlsx,.xls,.csv,.htm,.html"><input type="file" data-ws-daily-input hidden accept=".xlsx,.xls,.csv"></div>${renderMobileSort(sortable, sort)}<div class="ws-scroll" data-ws-scroll><table class="grid mini ws-grid ws-import-grid"><thead><tr>${sortable.map(([label,key]) => renderSortHeader(label,key,sort)).join('')}<th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="${sortable.length + 1}" class="ws-empty">Nothing matches the current filters.</td></tr>`}</tbody></table><div data-ws-sentinel></div></div><div class="ws-sticky-footer"><span>${workspace.imports.total_count} source file${workspace.imports.total_count === 1 ? '' : 's'}</span></div>`;
+    return `${stale}${journeyPanel}<div class="ws-toolbar">${uploadProfileControl}<button type="button" class="btn primary" data-ws-upload${workspace.imports.stale ? ' disabled title="Recheck before uploading another source file."' : ''}>Upload source file</button><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn btn-outline" data-ws-daily>Daily rota check</button><input type="file" data-ws-upload-input hidden accept=".xlsx,.xls,.csv,.htm,.html"${uploadProfileId === 'NHSP_FINAL_BACKING_V1' ? ' multiple' : ''}><input type="file" data-ws-daily-input hidden accept=".xlsx,.xls,.csv"></div>${renderMobileSort(sortable, sort)}<div class="ws-scroll" data-ws-scroll><table class="grid mini ws-grid ws-import-grid"><thead><tr>${sortable.map(([label,key]) => renderSortHeader(label,key,sort)).join('')}<th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="${sortable.length + 1}" class="ws-empty">Nothing matches the current filters.</td></tr>`}</tbody></table><div data-ws-sentinel></div></div><div class="ws-sticky-footer"><span>${workspace.imports.total_count} source file${workspace.imports.total_count === 1 ? '' : 's'}</span></div>`;
   }
 
   function renderTick(value, yesLabel, noLabel) {
@@ -975,12 +975,14 @@
       : 'NHSP_FINAL_BACKING_V1';
   }
 
-  async function uploadSource(file) {
+  async function uploadSource(file, options = {}) {
     if (!file || typeof root.uploadImportFileToR2 !== 'function') throw new Error('File upload is unavailable.');
     const profileId = selectedUploadProfileId();
-    const prefinalNhsp = profileId === 'NHSP_PREFINAL_RELEASED_V1';
+    const nhsp = profileId === 'NHSP_PREFINAL_RELEASED_V1' || profileId === 'NHSP_FINAL_BACKING_V1';
     const stored = await root.uploadImportFileToR2(file);
-    const preview = await requestJson(ENDPOINTS.preview, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ file_key: stored.fileKey, original_filename: stored.filename, source_group_id: session.workspace.selected.source_group_id, source_cycle_id: session.workspace.selected.source_cycle_id, client_id: prefinalNhsp ? null : session.workspace.selected.client_id, profile_id: profileId, parser_options: { profileId } }) });
+    // NHSP final Trust is parsed from each file and bound by the service.
+    // A previously selected Trust must not reject another Trust's report.
+    const preview = await requestJson(ENDPOINTS.preview, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ file_key: stored.fileKey, original_filename: stored.filename, source_group_id: session.workspace.selected.source_group_id, source_cycle_id: session.workspace.selected.source_cycle_id, client_id: nhsp ? null : session.workspace.selected.client_id, profile_id: profileId, parser_options: { profileId } }) });
     const serverContext = asObject(preview?.accept_context);
     const controlValue = (key) => asText(session.workspace.context.controls.find((control) => control.key === key)?.value);
     const acceptContext = {
@@ -1000,15 +1002,40 @@
     // server-owned selection for the refresh which follows acceptance;
     // otherwise the Imports row is visible at cycle level while Queries and
     // Finalise incorrectly reopen with no Trust selected.
-    if (session.workspace?.selected) {
+    if (options.keepSelection !== true && session.workspace?.selected) {
       session.workspace.selected.source_group_id = acceptContext.source_group_id;
       session.workspace.selected.source_cycle_id = acceptContext.source_cycle_id;
       session.workspace.selected.client_id = acceptContext.client_id;
       session.workspace.selected.report_scope_id = acceptContext.report_scope_id;
       session.workspace.selected.projection_publication_id = '';
     }
-    root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-preview', { detail: { ...preview, accept_context: acceptContext } }));
+    if (options.dispatch !== false) root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-preview', { detail: { ...preview, accept_context: acceptContext } }));
     return { ...preview, accept_context: acceptContext };
+  }
+
+  async function uploadSources(files) {
+    const selected = [...files];
+    if (selected.length < 2 || selectedUploadProfileId() !== 'NHSP_FINAL_BACKING_V1') {
+      throw new Error('Select several files only for NHSP final backing reports.');
+    }
+    const results = [];
+    for (const file of selected) {
+      try {
+        results.push({ filename: file.name, detail: await uploadSource(file, { dispatch: false, keepSelection: true }) });
+      } catch (error) {
+        results.push({ filename: file.name, error: asText(error?.message) || 'This file could not be reviewed.' });
+      }
+    }
+    root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-batch-preview', { detail: results }));
+    return results;
+  }
+
+  function selectAcceptedScope(context) {
+    if (!session.workspace?.selected) return;
+    for (const key of ['source_group_id', 'source_cycle_id', 'client_id', 'report_scope_id']) {
+      session.workspace.selected[key] = asText(context?.[key]);
+    }
+    session.workspace.selected.projection_publication_id = '';
   }
 
   async function acceptUpload(payload) {
@@ -1031,6 +1058,8 @@
     });
     host.querySelector('[data-ws-upload-profile]')?.addEventListener('change', (event) => {
       session.uploadProfileId = asText(event.target.value);
+      const input = host.querySelector('[data-ws-upload-input]');
+      if (input) input.multiple = session.uploadProfileId === 'NHSP_FINAL_BACKING_V1';
     });
     host.querySelectorAll('[data-ws-context]').forEach((control) => control.addEventListener('change', () => {
       const keyMap = { source_group: 'source_group_id', cycle: 'source_cycle_id', client: 'client_id' };
@@ -1083,7 +1112,7 @@
     };
     mobileSort?.addEventListener('change', applyMobileSort);
     mobileDirection?.addEventListener('change', applyMobileSort);
-    const uploadInput = host.querySelector('[data-ws-upload-input]'); host.querySelector('[data-ws-upload]')?.addEventListener('click', () => uploadInput?.click()); uploadInput?.addEventListener('change', async () => { const file = uploadInput.files?.[0]; uploadInput.value = ''; try { await uploadSource(file); await loadWorkspace('imports'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); } });
+    const uploadInput = host.querySelector('[data-ws-upload-input]'); host.querySelector('[data-ws-upload]')?.addEventListener('click', () => uploadInput?.click()); uploadInput?.addEventListener('change', async () => { const files = [...(uploadInput.files || [])]; uploadInput.value = ''; if (!files.length) return; try { if (files.length > 1) await uploadSources(files); else await uploadSource(files[0]); await loadWorkspace('imports'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); } });
     const dailyInput = host.querySelector('[data-ws-daily-input]'); host.querySelector('[data-ws-daily]')?.addEventListener('click', () => dailyInput?.click()); dailyInput?.addEventListener('change', async () => { const file = dailyInput.files?.[0]; dailyInput.value = ''; if (file && typeof root.handleHrRotaFileDrop === 'function') await root.handleHrRotaFileDrop(file); });
     const attentionHeader = host.querySelector('[data-ws-import-attention-header]');
     const attentionRows = [...host.querySelectorAll('[data-ws-import-attention]')];
@@ -1269,7 +1298,7 @@
   return Object.freeze({
     CONTRACT, ENDPOINTS, normaliseWorkspace, tabDescriptors, renderWorkspace, selectionSpec,
     normaliseBulkActions, normaliseRateWarnings, buildRateWarningAcceptancePayload, buildOutreachRequest,
-    open, requestJson, issueCommand, acceptUpload, uploadSource,
+    open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
     refresh: (tab = session.activeTab) => loadWorkspace(tab),
     clearShiftSelections: () => { session.shiftSelections.clear(); },
     _test: Object.freeze({ exactAcceptSystemHoursPayload, combinedAcceptSystemHoursPayload, friendlyWorkspaceError }),

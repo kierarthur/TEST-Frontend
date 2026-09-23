@@ -7,6 +7,7 @@
       configurable: false, enumerable: true, writable: false, value: api
     });
     root.addEventListener('cloudtms:weekly-source-preview', (event) => api.openPreview(event.detail));
+    root.addEventListener('cloudtms:weekly-source-batch-preview', (event) => api.openBatchPreview(event.detail));
     root.addEventListener('cloudtms:weekly-source-action', (event) => api.handleAction(event.detail));
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildWeeklySourceWorkspaceActions(root) {
@@ -345,6 +346,95 @@
     await workspaceApi()?.refresh?.();
   }
 
+  function normaliseBatchPreview(details) {
+    const entries = asArray(details).map((entry, index) => {
+      const model = entry?.detail ? normalisePreview(entry.detail) : null;
+      return {
+        index, filename: asText(entry?.filename || model?.filename) || `File ${index + 1}`,
+        model, error: asText(entry?.error), duplicate: false, status: 'PENDING'
+      };
+    });
+    const trusts = new Map();
+    for (const entry of entries) {
+      if (!entry.model?.ok || !entry.model.final_report || !entry.model.trust) continue;
+      const key = `${entry.model.trust.toLocaleLowerCase('en-GB')}|${entry.model.cutoff}`;
+      const group = trusts.get(key) || [];
+      group.push(entry);
+      trusts.set(key, group);
+    }
+    for (const group of trusts.values()) if (group.length > 1) group.forEach((entry) => { entry.duplicate = true; });
+    return entries;
+  }
+
+  function renderBatchPreview(entries, state) {
+    const rows = entries.map((entry) => {
+      const ready = entry.model?.ok && entry.model.final_report && !entry.duplicate && !entry.error;
+      const issue = entry.duplicate
+        ? 'More than one selected backing report belongs to this Trust and cutoff. Upload these separately.'
+        : entry.error || entry.model?.fatal_errors?.[0]?.message
+          || (!ready ? 'This backing report could not be prepared for acceptance.' : '');
+      const status = entry.status === 'ACCEPTED' ? 'Accepted'
+        : entry.status === 'FAILED' ? 'Not accepted'
+          : ready ? 'Ready' : 'Needs attention';
+      return `<div class="ws-batch-report" data-wsa-batch-row="${entry.index}"><label class="ws-batch-report__select"><input type="checkbox" data-wsa-batch-select="${entry.index}"${ready && entry.status !== 'ACCEPTED' && !state.busy ? '' : ' disabled'}${state.selected.has(entry.index) && entry.status !== 'ACCEPTED' ? ' checked' : ''}><span class="ws-batch-report__file">${escapeHtml(entry.filename)}</span></label><div class="ws-batch-report__facts"><span>Trust <strong>${escapeHtml(entry.model?.trust || '—')}</strong></span><span>Report <strong>${escapeHtml(entry.model?.report_number || '—')}</strong></span><span>Cutoff <strong>${escapeHtml(entry.model?.cutoff || '—')}</strong></span><span class="ws-status ws-status--${entry.status === 'ACCEPTED' ? 'positive' : ready && entry.status !== 'FAILED' ? 'info' : 'warning'}">${status}</span></div>${issue || entry.status === 'FAILED' ? `<p class="ws-batch-report__issue">${escapeHtml(plainMessage(entry.error || issue, 'Recheck this file before retrying.'))}</p>` : ''}</div>`;
+    }).join('');
+    const pending = entries.filter((entry) => state.selected.has(entry.index) && entry.status !== 'ACCEPTED' && entry.model?.ok && !entry.duplicate);
+    const accepted = entries.filter((entry) => entry.status === 'ACCEPTED').length;
+    return `<div class="ws-child ws-batch-preview" data-wsa-screen="batch-preview"><p>Review each backing report before accepting it. Each Trust stays separate; no week is finalised here.</p><div class="ws-child-scroll ws-batch-preview__list">${rows}</div><label class="ws-confirm"><input type="checkbox" data-wsa-batch-confirm${state.confirmed ? ' checked' : ''}${pending.length && !state.busy ? '' : ' disabled'}><span>I confirm the selected reports and their Trusts.</span></label><div class="ws-child-actions"><span role="status">${accepted} accepted · ${pending.length} selected</span><button type="button" class="btn btn-outline" data-wsa-batch-close${state.busy ? ' disabled' : ''}>${accepted ? 'Done' : 'Close'}</button><button type="button" class="btn primary" data-wsa-batch-accept${pending.length && state.confirmed && !state.busy ? '' : ' disabled'}>${state.busy ? 'Accepting…' : 'Accept selected reports'}</button></div></div>`;
+  }
+
+  function openBatchPreview(details) {
+    const entries = normaliseBatchPreview(details);
+    const state = {
+      selected: new Set(entries.filter((entry) => entry.model?.ok && entry.model.final_report && !entry.duplicate).map((entry) => entry.index)),
+      confirmed: false, busy: false
+    };
+    const kind = 'weekly-source-batch-preview-v1';
+    const render = () => renderBatchPreview(entries, state);
+    const wire = () => {
+      const host = root.document?.querySelector('[data-wsa-screen="batch-preview"]');
+      if (!host || host.dataset.wsaWired === '1') return;
+      host.dataset.wsaWired = '1';
+      host.querySelectorAll('[data-wsa-batch-select]').forEach((input) => input.addEventListener('change', () => {
+        const index = Number(input.dataset.wsaBatchSelect);
+        input.checked ? state.selected.add(index) : state.selected.delete(index);
+        state.confirmed = false;
+        rerender(kind);
+      }));
+      host.querySelector('[data-wsa-batch-confirm]')?.addEventListener('change', (event) => {
+        state.confirmed = event.target.checked;
+        rerender(kind);
+      });
+      host.querySelector('[data-wsa-batch-close]')?.addEventListener('click', async () => {
+        markCompletedChildClean();
+        closeChild();
+        if (entries.some((entry) => entry.status === 'ACCEPTED')) await workspaceApi()?.refresh?.('imports');
+      });
+      host.querySelector('[data-wsa-batch-accept]')?.addEventListener('click', async () => {
+        if (!state.confirmed || state.busy) return;
+        state.busy = true;
+        rerender(kind);
+        for (const entry of entries) {
+          if (!state.selected.has(entry.index) || entry.status === 'ACCEPTED' || !entry.model?.ok || entry.duplicate) continue;
+          try {
+            await workspaceApi()?.acceptUpload?.(buildUploadAcceptancePayload(entry.model, { confirmed: true }));
+            entry.status = 'ACCEPTED';
+            entry.error = '';
+            state.selected.delete(entry.index);
+            workspaceApi()?.selectAcceptedScope?.(entry.model.accept_context);
+          } catch (error) {
+            entry.status = 'FAILED';
+            entry.error = asText(error?.message) || 'This backing report was not accepted.';
+          }
+        }
+        state.busy = false;
+        state.confirmed = false;
+        rerender(kind);
+      });
+    };
+    return openChild({ title: 'Review backing reports', kind, render, wire });
+  }
+
   function openPreview(detail) {
     const model = normalisePreview(detail);
     const state = { coverage_start: model.coverage_start, coverage_end: model.coverage_end, confirmed: false, busy: false, failed: false, error: '' };
@@ -625,7 +715,7 @@
     CONTRACT, normalisePreview, renderPreview, buildUploadAcceptancePayload,
     normaliseDetail, renderDetail, normaliseContractChooser, renderContractChooser,
     normaliseCorrectFinal, normaliseCorrectFinalPreview, renderCorrectFinal, renderCommandConfirmation,
-    openPreview, handleAction, _plainMessage: plainMessage,
+    openPreview, openBatchPreview, handleAction, _plainMessage: plainMessage,
     _test: Object.freeze({ commandAuthorityAvailable })
   });
 });

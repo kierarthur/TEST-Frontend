@@ -285,6 +285,15 @@
 }
 .ws-file-button { position: relative; width: fit-content; cursor: pointer; }
 .ws-child-actions .btn:disabled { opacity: .55; cursor: not-allowed; }
+.ws-batch-preview__list { display: grid; gap: 8px; padding: 8px; }
+.ws-batch-report { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; }
+.ws-batch-report__select { display: flex; align-items: flex-start; gap: 9px; min-width: 0; font-weight: 650; }
+.ws-batch-report__select input { flex: none; margin-top: 3px; }
+.ws-batch-report__file { min-width: 0; overflow-wrap: anywhere; }
+.ws-batch-report__facts { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 16px; margin: 7px 0 0 24px; }
+.ws-batch-report__facts > span { color: var(--ws-muted-text, #94a3b8); font-size: 12px; }
+.ws-batch-report__facts strong { color: var(--text, #e5edf5); font-weight: 650; }
+.ws-batch-report__issue { margin: 7px 0 0 24px; color: var(--ws-warning-text, #fbbf24); font-size: 12px; }
 
 .weekly-source-settings-fields { display: grid; gap: 10px; }
 .weekly-source-setting-row {
