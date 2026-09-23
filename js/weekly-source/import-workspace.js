@@ -350,7 +350,8 @@
       const enabled = action.enabled && !(stale && mutation);
       const reason = stale && mutation ? 'This information has changed. Recheck before continuing.' : action.reason;
       const reasonId = reason ? safeKey(`${scopeKey || 'action'}-${action.label}-${index + 1}-reason`) : '';
-      return `<button type="button" class="btn btn-outline ws-row-action" data-ws-action="${escapeHtml(action.label)}" data-ws-kind="${escapeHtml(action.kind)}" data-ws-command="${escapeHtml(action.command)}" data-ws-payload="${escapeHtml(JSON.stringify(action.payload))}" data-ws-context="${escapeHtml(JSON.stringify(action.context))}"${enabled ? '' : ' disabled'}${reason ? ` title="${escapeHtml(reason)}" aria-describedby="${escapeHtml(reasonId)}"` : ''}>${escapeHtml(action.label)}</button>${reason ? `<span id="${escapeHtml(reasonId)}" class="sr-only">${escapeHtml(reason)}</span>` : ''}`;
+      const button = `<button type="button" class="btn btn-outline ws-row-action" data-ws-action="${escapeHtml(action.label)}" data-ws-kind="${escapeHtml(action.kind)}" data-ws-command="${escapeHtml(action.command)}" data-ws-payload="${escapeHtml(JSON.stringify(action.payload))}" data-ws-context="${escapeHtml(JSON.stringify(action.context))}"${enabled ? '' : ' disabled'}${reason ? ` aria-describedby="${escapeHtml(reasonId)}"` : ''}>${escapeHtml(action.label)}</button>`;
+      return reason ? `<span class="ws-action-hint" title="${escapeHtml(reason)}" tabindex="0">${button}<span id="${escapeHtml(reasonId)}" class="sr-only">${escapeHtml(reason)}</span></span>` : button;
     }).join('');
   }
 
@@ -927,7 +928,7 @@
   }
 
   function bindQueries(host) {
-    if (root.matchMedia?.('(max-width: 900px)').matches) {
+    if (root.matchMedia?.('(max-width: 1500px)').matches) {
       host.querySelectorAll('.ws-query-filter-menu, .ws-query-actions-menu').forEach((menu) => menu.removeAttribute('open'));
     }
     host.querySelector('[data-ws-actions-summary]')?.addEventListener('click', (event) => {

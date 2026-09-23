@@ -81,7 +81,7 @@ async function loadFoundation(page: import('@playwright/test').Page) {
 }
 
 test('Queries keeps the two selection planes separate and uses only sticky header checkboxes', async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1120, height: 900 });
+  await page.setViewportSize({ width: 1700, height: 900 });
   await loadFoundation(page);
   await page.evaluate(async () => {
     const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
@@ -350,6 +350,74 @@ test('NHSP import review and finalise show the accepted source facts without bla
   await expect(table.getByText('£100.00', { exact: true })).toBeVisible();
   await expect(table.getByText('—')).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('nhsp-accepted-report-finalise-facts.png'), fullPage: true });
+});
+
+for (const tab of ['imports', 'queries'] as const) {
+  test(`${tab} appends the next cursor page on scrolling without numbered pages`, async ({ page }) => {
+    await page.setViewportSize({ width: 1700, height: 900 });
+    await loadFoundation(page);
+    await page.addStyleTag({ content: '.ws-scroll{max-height:180px!important;overflow-y:auto!important}' });
+    await page.evaluate(({ fixture, activeTab }) => {
+      const win = window as any;
+      const first = structuredClone(fixture);
+      const second = structuredClone(fixture);
+      const original = first[activeTab].rows[0];
+      const makeRow = (index: number) => activeTab === 'imports'
+        ? { ...original, row_key: `page-one-${index}`, file: `Page one ${index}.xlsx` }
+        : { ...original, group_key: `page-one-${index}`, candidate: `Page one candidate ${index}`, expanded: false };
+      first[activeTab].rows = Array.from({ length: 30 }, (_, index) => makeRow(index));
+      first[activeTab].total_count = 31;
+      first[activeTab].has_more = true;
+      first[activeTab].next_cursor = 'cursor-page-two';
+      second[activeTab].rows = [activeTab === 'imports'
+        ? { ...original, row_key: 'page-two', file: 'Page two file.xlsx' }
+        : { ...original, group_key: 'page-two', candidate: 'Page two candidate', expanded: false }];
+      second[activeTab].total_count = 31;
+      second[activeTab].has_more = false;
+      second[activeTab].next_cursor = '';
+      win.__cursorRequests = [];
+      win.authFetch = async (url: string) => {
+        const parsed = new URL(String(url), 'https://weekly-source.test/');
+        const cursor = parsed.searchParams.get('cursor') || '';
+        win.__cursorRequests.push({ tab: parsed.searchParams.get('tab'), cursor });
+        return { ok: true, json: async () => cursor === 'cursor-page-two' ? second : first };
+      };
+    }, { fixture: fixtures.workspace, activeTab: tab });
+    await page.evaluate(async (activeTab) => {
+      await (window as any).CloudTMSWeeklySourceImportWorkspaceV1.open();
+      if (activeTab !== 'imports') await (window as any).__modalStack.at(-1).setTab(activeTab);
+    }, tab);
+    const scroll = page.locator(`.ws-workspace[data-ws-tab="${tab}"] [data-ws-scroll]`);
+    await expect(scroll).toBeVisible();
+    await expect(page.getByText(tab === 'imports' ? 'Page one 29.xlsx' : 'Page one candidate 29')).toBeVisible();
+    expect(await page.evaluate(() => (window as any).__cursorRequests.some((request: any) => request.cursor))).toBe(false);
+    await scroll.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    await expect(page.getByText(tab === 'imports' ? 'Page two file.xlsx' : 'Page two candidate', { exact: true })).toBeVisible();
+    const cursorRequests = await page.evaluate(() => (window as any).__cursorRequests.filter((request: any) => request.cursor));
+    expect(cursorRequests).toEqual([{ tab, cursor: 'cursor-page-two' }]);
+    await expect(page.getByText(tab === 'imports' ? 'Page one 0.xlsx' : 'Page one candidate 0', { exact: true })).toHaveCount(1);
+    await expect(page.locator('.ws-workspace').getByRole('navigation', { name: /pagination/i })).toHaveCount(0);
+  });
+}
+
+test('an ineligible candidate reminder stays disabled and explains its cooldown only on hover or focus', async ({ page }) => {
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await loadFoundation(page);
+  await page.evaluate((workspaceFixture) => {
+    const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.queries.rows[0].actions = [
+      { label: 'Open', enabled: true, payload: { detail: { candidate: 'Jane Smith' } } },
+      { label: 'Remind candidate', kind: 'COMMAND', command: 'REMIND_CANDIDATE', enabled: false,
+        reason: 'A reminder can be sent after Wed 23 Sep 2026 22:46.', payload: {} }
+    ];
+    const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
+    document.getElementById('modalBody')!.innerHTML = api.renderWorkspace(api.normaliseWorkspace(payload), 'queries', api._session);
+  }, fixtures.workspace);
+  const reminder = page.getByRole('button', { name: 'Remind candidate' });
+  await expect(reminder).toBeDisabled();
+  await expect(reminder.locator('..')).toHaveAttribute('title', 'A reminder can be sent after Wed 23 Sep 2026 22:46.');
+  expect(await page.locator('.ws-action-hint .sr-only').evaluate(el => el.getBoundingClientRect().width)).toBeLessThanOrEqual(1);
+  expect(await page.locator('.ws-query-scroll').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
 });
 
 test('Imports keeps signed-Timesheet checks inside the same weekly workspace', async ({ page }, testInfo) => {
@@ -835,9 +903,16 @@ test('Stage 11: real Office import modal keeps mobile query controls compact and
   await expect(filters).not.toHaveAttribute('open', '');
   await expect(actions).not.toHaveAttribute('open', '');
   await expect(page.getByRole('button', { name: 'Ask selected candidates' })).toBeHidden();
+  await expect(page.locator('[data-ws-bulk-action="ASK_CANDIDATES"]')).toBeDisabled();
+  await expect(page.locator('[data-ws-bulk-action="SEND_MANAGER_NOW"]')).toBeDisabled();
 
   await page.getByLabel('Select Jane Smith').check();
   await expect(page.locator('[data-ws-actions-summary]')).toContainText('Actions for 1 selected');
+  await expect(page.locator('[data-ws-bulk-action="ASK_CANDIDATES"]')).toBeEnabled();
+  await page.getByLabel('Select Jane Smith').uncheck();
+  await expect(page.locator('[data-ws-bulk-action="ASK_CANDIDATES"]')).toBeDisabled();
+  await expect(page.locator('[data-ws-bulk-action="SEND_MANAGER_NOW"]')).toBeDisabled();
+  await page.getByLabel('Select Jane Smith').check();
   const size = await page.evaluate(() => ({
     client: document.documentElement.clientWidth,
     scroll: document.documentElement.scrollWidth,
@@ -853,6 +928,22 @@ test('Stage 11: real Office import modal keeps mobile query controls compact and
   await expect(page.getByRole('button', { name: 'Send selected to manager now' })).toBeVisible();
   await expect(page.getByRole('button', { name: /select all|unselect all/i })).toHaveCount(0);
   await page.locator('#modal').screenshot({ path: testInfo.outputPath('UI-075-real-query-actions-phone.png') });
+
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await expect(page.locator('.ws-query-grid > tbody > tr[data-ws-group-key]')).toHaveCSS('display', 'grid');
+  await expect(page.locator('.ws-query-grid > tbody > tr[data-ws-group-key] > td.ws-actions').first()).toBeVisible();
+  const intermediate = await page.evaluate(() => {
+    const region = document.querySelector('.ws-query-scroll')!;
+    const actionsCell = document.querySelector('.ws-query-grid > tbody > tr[data-ws-group-key] > td.ws-actions')!;
+    const box = actionsCell.getBoundingClientRect();
+    const row = actionsCell.closest('tr')!.getBoundingClientRect();
+    return { pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      regionOverflow: region.scrollWidth - region.clientWidth, actionRight: box.right, rowRight: row.right };
+  });
+  expect(intermediate.pageOverflow).toBeLessThanOrEqual(1);
+  expect(intermediate.regionOverflow).toBeLessThanOrEqual(1);
+  expect(intermediate.actionRight).toBeLessThanOrEqual(intermediate.rowRight + 1);
+  await page.locator('#modal').screenshot({ path: testInfo.outputPath('UI-075-real-query-actions-intermediate.png') });
 
   expect(errors).toEqual([]);
   expect(externalRequests(page)).toEqual([]);

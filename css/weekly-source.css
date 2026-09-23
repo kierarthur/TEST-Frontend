@@ -7,6 +7,16 @@
   gap: var(--ws-gap);
   min-width: 0;
 }
+.ws-workspace .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 .ws-office-notifications{position:relative;z-index:1200}
 .ws-office-notifications__toggle{display:flex;align-items:center;gap:8px;min-height:34px;padding:6px 10px;border:1px solid var(--line,#334155);border-radius:8px;background:var(--panel,#111827);color:var(--text,#f8fafc);font:inherit;cursor:pointer}
@@ -133,6 +143,7 @@
 .ws-grid thead th:has(input[type="checkbox"]), .ws-inner-grid thead th:has(input[type="checkbox"]) { z-index: 6; left: 0; width: 48px; min-width: 48px; text-align: center; }
 .ws-actions { white-space: nowrap; }
 .ws-actions .btn { margin: 2px 4px 2px 0; }
+.ws-action-hint { display: inline-flex; max-width: 100%; align-items: center; }
 .ws-empty { padding: 32px 12px !important; text-align: center; color: var(--ws-muted-text, #94a3b8); }
 
 .ws-sticky-footer {
@@ -344,7 +355,7 @@
 /* Query results become compact cards before a tablet is narrow enough to
    squeeze or horizontally pan a desktop table. The checkbox at the left of
    the heading remains the single select-all/clear-all control. */
-@media (max-width: 900px) {
+@media (max-width: 1500px) {
   .ws-query-controls { display: grid; grid-template-columns: 1fr; gap: 8px; }
   .ws-query-filter-menu,
   .ws-query-actions-menu { display: block; }
@@ -463,7 +474,19 @@
   .ws-query-grid > tbody > tr[data-ws-group-key] > td:nth-child(9) { grid-area: age; color: var(--ws-muted-text, #94a3b8); font-size: 12px; text-align: right; }
   .ws-query-grid > tbody > tr[data-ws-group-key] > td:nth-child(10) { grid-area: actions; padding-top: 4px; }
   .ws-query-grid > tbody > tr[data-ws-group-key] > td:nth-child(10),
-  .ws-query-shift-grid > tbody > .ws-shift-row > td:nth-child(8) { display: none !important; }
+  .ws-query-shift-grid > tbody > .ws-shift-row > td:nth-child(8) {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+    white-space: normal;
+  }
+  .ws-query-grid > tbody > tr[data-ws-group-key] > td:nth-child(10) .btn,
+  .ws-query-shift-grid > tbody > .ws-shift-row > td:nth-child(8) .btn {
+    width: auto;
+    margin: 0;
+  }
   .ws-query-grid .ws-expand { min-width: 40px; min-height: 40px; border: 1px solid var(--line); border-radius: 8px; }
 
   .ws-query-grid > tbody > .ws-expanded { display: block; margin: 6px 0 12px; }
@@ -533,6 +556,12 @@
   .ws-rate-warning-grid--selectable > tbody > tr[data-ws-rate-warning-row] > td:nth-child(6) { grid-area: action; }
   .ws-rate-warning-drilldown { display: block; margin: 6px 0 12px; }
   .ws-rate-warning-drilldown > td { display: block; padding: 0 !important; border: 0; }
+}
+
+@media (min-width: 700px) and (max-width: 1500px) {
+  .ws-query-filter-menu[open] > .ws-query-filter-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ws-query-actions-menu[open] > .ws-query-action-choices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ws-query-filter-fields > .ws-mobile-sort { grid-column: 1 / -1; }
 }
 
 @media (max-width: 360px) {

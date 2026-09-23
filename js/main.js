@@ -326639,6 +326639,10 @@ function setFormReadOnly(root, ro) {
 // ✅ NEW: keep Candidate "display_name" locked whenever it is blank (even in edit/create mode),
 // because create-mode should not allow manual editing; system generates on save.
 root.querySelectorAll('input, select, textarea, button').forEach((el) => {
+  // The Weekly Source workspace owns its own server-bound action and selection
+  // gates. The parent record modal must not turn initially disabled actions on
+  // before the workspace has a valid selection (or override its later state).
+  if (!ro && el.closest?.('.ws-workspace[data-ws-contract="WEEKLY_SOURCE_IMPORT_WORKSPACE_V1"]')) return;
   const isDisplayOnly = el.id === 'tms_ref_display' || el.id === 'cli_ref_display';
 
 
