@@ -191,7 +191,8 @@ function fixture(overrides = {}) {
       confirmation_text: "I confirm this is the complete final NHSP backing report for St Mary's NHS Trust, report 1741227, for the cutoff shown.",
       confirmation_required: true, finalise_enabled: false,
       tracker: {
-        title: 'Finalisation progress', cycle_label: 'Week ending 13 Sep 2026', complete: false,
+        title: 'Finalisation progress', cycle_label: 'Week ending 13 Sep 2026', cycle_id: 'cycle-1',
+        cycle_options: [{ value: 'cycle-1', label: 'Week ending 13 Sep 2026' }, { value: 'cycle-older', label: 'Week ending 6 Sep 2026' }], complete: false,
         rows: [{ source: 'NHSP', client: "St Mary's NHS Trust", status: { text: 'Still to complete', tone: 'warning' }, actions: [{ label: 'No shifts to import', enabled: false, reason: 'A final report is available.' }] }]
       }
     },
@@ -305,6 +306,9 @@ test('Finalisation tracker is calm and offers no selection controls', () => {
   assert.match(html, /Finalisation progress/);
   assert.match(html, /Week ending 13 Sep 2026/);
   assert.match(html, /St Mary&#39;s NHS Trust/);
+  assert.match(html, /data-ws-tracker-cycle aria-label="Finalisation week"/);
+  assert.match(html, /value="cycle-older">Week ending 6 Sep 2026/);
+  assert.doesNotMatch(html, /data-ws-context="cycle"/);
   assert.doesNotMatch(html, /data-ws-group-header|Select all|Unselect all/);
 });
 

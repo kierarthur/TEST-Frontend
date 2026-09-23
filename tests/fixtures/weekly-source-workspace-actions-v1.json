@@ -340,6 +340,11 @@
       "tracker": {
         "title": "Finalisation progress",
         "cycle_label": "Cutoff Wed 16 Sep 2026 at 15:00",
+        "cycle_id": "22222222-2222-4222-8222-222222222222",
+        "cycle_options": [
+          { "value": "22222222-2222-4222-8222-222222222222", "label": "Week ending 13 Sep 2026" },
+          { "value": "52222222-2222-4222-8222-222222222222", "label": "Week ending 6 Sep 2026" }
+        ],
         "complete": false,
         "rows": [
           { "row_key": "tracker-st-marys", "source": "NHSP", "trust": "St Mary's NHS Trust", "status": { "text": "Final report received", "tone": "positive" }, "detail": "Report 1741227" },

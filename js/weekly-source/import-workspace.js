@@ -102,6 +102,8 @@
     return {
       title: asText(raw.title) || 'Finalisation progress',
       cycle_label: asText(raw.cycle_label),
+      cycle_id: asText(raw.cycle_id),
+      cycle_options: asArray(raw.cycle_options).map((option) => ({ value: asText(option?.value), label: asText(option?.label) })).filter((option) => option.value && option.label),
       complete: raw.complete === true,
       rows: asArray(raw.rows).map((entry, index) => {
         const row = asObject(entry);
@@ -661,12 +663,16 @@
 
   function renderFinalisationTracker(workspace) {
     const tracker = workspace.finalise.tracker;
-    if (!tracker.rows.length) return '';
+    const isNhsp = workspace.profile.id.startsWith('NHSP_');
+    if (!tracker.rows.length && !(isNhsp && tracker.cycle_options.length)) return '';
     const rows = tracker.rows.map((row) => `<tr><td data-label="Source">${escapeHtml(row.source || '—')}</td><td data-label="Trust or client">${escapeHtml(row.client || '—')}</td><td data-label="Status">${renderStatus(row.status)}${row.detail ? `<span class="ws-status-sub">${escapeHtml(row.detail)}</span>` : ''}</td><td data-label="Action" class="ws-actions">${renderActions(row.actions, false, row.row_key)}</td></tr>`).join('');
     const complete = tracker.complete
       ? '<span class="ws-status ws-status--positive">Complete</span>'
       : '<span class="ws-status ws-status--warning">Still to complete</span>';
-    return `<section class="ws-tracker" aria-labelledby="ws-tracker-title"><div class="ws-tracker-heading"><div><h3 id="ws-tracker-title">${escapeHtml(tracker.title)}</h3>${tracker.cycle_label ? `<span>${escapeHtml(tracker.cycle_label)}</span>` : ''}</div>${complete}</div><div class="ws-inner-scroll"><table class="grid mini ws-inner-grid"><thead><tr><th>Source</th><th>Trust or client</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+    const week = isNhsp && tracker.cycle_options.length
+      ? `<label class="ws-tracker-week">Week<select data-ws-tracker-cycle aria-label="Finalisation week">${tracker.cycle_options.map((option) => `<option value="${escapeHtml(option.value)}"${option.value === tracker.cycle_id ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select></label>`
+      : '';
+    return `<section class="ws-tracker" aria-labelledby="ws-tracker-title"><div class="ws-tracker-heading"><div><h3 id="ws-tracker-title">${escapeHtml(tracker.title)}</h3>${!week && tracker.cycle_label ? `<span>${escapeHtml(tracker.cycle_label)}</span>` : ''}</div><div class="ws-tracker-controls">${week}${complete}</div></div><div class="ws-inner-scroll"><table class="grid mini ws-inner-grid"><thead><tr><th>Source</th><th>Trust or client</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="ws-empty">No trusts for this week.</td></tr>'}</tbody></table></div></section>`;
   }
 
   function renderApprovedHoursFollowUp(finalise, viewState) {
@@ -1010,6 +1016,17 @@
   }
 
   function bindCommon(host) {
+    host.querySelector('[data-ws-tracker-cycle]')?.addEventListener('change', (event) => {
+      if (!session.workspace?.selected) return;
+      session.workspace.selected.source_cycle_id = asText(event.target.value);
+      session.workspace.selected.client_id = '';
+      session.workspace.selected.report_scope_id = '';
+      session.workspace.selected.projection_publication_id = '';
+      session.uploadProfileId = '';
+      session.groupSelection = { mode: 'NONE', ids: new Set(), exclusions: new Set() };
+      session.shiftSelections.clear();
+      loadWorkspace(session.activeTab);
+    });
     host.querySelector('[data-ws-upload-profile]')?.addEventListener('change', (event) => {
       session.uploadProfileId = asText(event.target.value);
     });

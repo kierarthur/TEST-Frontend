@@ -172,8 +172,11 @@
 }
 .ws-tracker-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .ws-tracker-heading h3 { margin: 0; font-size: 15px; }
-.ws-tracker-heading > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.ws-tracker-heading > div > span { overflow: hidden; color: var(--ws-muted-text, #94a3b8); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ws-tracker-heading > div:first-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.ws-tracker-heading > div:first-child > span { overflow: hidden; color: var(--ws-muted-text, #94a3b8); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ws-tracker-controls { display: flex; align-items: center; gap: 12px; }
+.ws-tracker-week { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ws-muted-text, #94a3b8); white-space: nowrap; }
+.ws-tracker-week select { width: auto; min-width: 170px; max-width: 230px; height: 32px; padding: 4px 28px 4px 9px; font-size: 12px; color: var(--text, #e2e8f0); background: var(--panel, #0f172a); border: 1px solid var(--line); border-radius: 7px; }
 
 .ws-child {
   display: flex;
@@ -280,6 +283,8 @@
   .ws-actions { white-space: normal; }
   .ws-actions .btn { width: 100%; }
   .ws-tracker-heading { align-items: flex-start; flex-direction: column; }
+  .ws-tracker-controls { width: 100%; flex-wrap: wrap; justify-content: space-between; }
+  .ws-tracker-week select { min-width: 0; max-width: min(230px, 65vw); }
   .ws-child-context { grid-template-columns: 1fr; }
   .ws-child-fieldset { grid-template-columns: 1fr; }
   .ws-child-table { min-width: 680px; }

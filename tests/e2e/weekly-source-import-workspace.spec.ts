@@ -391,6 +391,7 @@ test('Finalise tracker stays simple and no-shifts certification uses the exact s
   await page.waitForTimeout(50);
 
   await expect(page.getByRole('heading', { name: 'Finalisation progress' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Finalisation week' })).toHaveValue('22222222-2222-4222-8222-222222222222');
   await expect(page.getByText('Royal Berkshire NHS Trust')).toBeVisible();
   await expect(page.getByRole('button', { name: 'No shifts to import' })).toBeVisible();
   await expect(page.getByRole('checkbox')).toHaveCount(1);
@@ -416,6 +417,62 @@ test('Finalise tracker stays simple and no-shifts certification uses the exact s
     }
   });
 });
+
+test('NHSP earlier-week filter changes the selected server cycle without changing the locked context bar', async ({ page }) => {
+  await loadFoundation(page);
+  await page.evaluate(() => {
+    const win = window as any;
+    const originalFetch = win.authFetch;
+    win.__cycleRequests = [];
+    win.authFetch = async (url: string, options: any = {}) => {
+      if (String(url).includes('/workspace')) {
+        const request = Object.fromEntries(new URLSearchParams(String(url).split('?')[1] || '').entries());
+        win.__cycleRequests.push(request);
+        const payload = structuredClone(win.__workspaceFixture);
+        if (request.source_cycle_id === '52222222-2222-4222-8222-222222222222') {
+          payload.selected = { source_group_id: '11111111-1111-4111-8111-111111111111', source_cycle_id: request.source_cycle_id };
+          payload.finalise.tracker.cycle_id = request.source_cycle_id;
+          payload.finalise.tracker.cycle_label = 'Week ending 6 Sep 2026';
+        }
+        return { ok: true, json: async () => payload };
+      }
+      return originalFetch(url, options);
+    };
+  });
+  await page.evaluate(async (fixture) => {
+    (window as any).__workspaceFixture = fixture;
+    const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
+    await api.open();
+    await (window as any).__modalStack.at(-1).setTab('finalise');
+  }, fixtures.workspace);
+  await page.getByRole('combobox', { name: 'Finalisation week' }).selectOption('52222222-2222-4222-8222-222222222222');
+  const last = await page.evaluate(() => (window as any).__cycleRequests.at(-1));
+  expect(last.source_cycle_id).toBe('52222222-2222-4222-8222-222222222222');
+  await expect(page.getByRole('combobox', { name: 'Finalisation week' })).toHaveValue('52222222-2222-4222-8222-222222222222');
+  await expect(page.getByRole('combobox', { name: 'Trust' })).toHaveCount(1);
+  await expect(page.locator('.ws-context-bar [data-ws-context="cycle"]')).toHaveCount(0);
+  expect(last.client_id).toBe('');
+  expect(last.report_scope_id).toBe('');
+});
+
+for (const width of [360, 720, 1120]) {
+  test(`NHSP week filter stays compact and usable at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 820 });
+    await loadFoundation(page);
+    await page.evaluate(async () => {
+      const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
+      await api.open();
+      await (window as any).__modalStack.at(-1).setTab('finalise');
+    });
+    await expect(page.getByRole('combobox', { name: 'Finalisation week' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Finalisation progress' })).toBeVisible();
+    const bounds = await page.getByRole('combobox', { name: 'Finalisation week' }).boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: testInfo.outputPath(`nhsp-finalisation-week-${width}.png`), fullPage: true });
+  });
+}
 
 test('before cutoff deliberately locks finalisation against the shared modal control reset', async ({ page }) => {
   await page.setViewportSize({ width: 1120, height: 900 });
