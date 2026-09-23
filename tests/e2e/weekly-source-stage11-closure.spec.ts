@@ -43,6 +43,9 @@ test('Stage 11: candidate dispute is a concise real Office alert', async ({ page
   await expect(page.getByRole('button', { name: 'Open query' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Mark read' })).toBeVisible();
   await page.locator('[data-ws-office-panel]').screenshot({ path: testInfo.outputPath('office-alert.png') });
+  await page.getByRole('button', { name: 'Open query' }).click();
+  await expect(page.getByRole('dialog', { name: 'Weekly source imports' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).CloudTMSWeeklySourceImportWorkspaceV1?._session?.activeTab)).toBe('queries');
   expect(externalRequests(page)).toEqual([]);
 });
 

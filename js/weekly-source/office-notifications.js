@@ -114,7 +114,7 @@
     panel.querySelectorAll('[data-ws-office-open]').forEach((control) => control.addEventListener('click', () => {
       state.open = false;
       repaint();
-      root.WeeklySourceImportWorkspace?.open?.('queries');
+      root.CloudTMSWeeklySourceImportWorkspaceV1?.open?.('queries');
     }));
     panel.querySelectorAll('[data-ws-office-clear]').forEach((control) => control.addEventListener('click', async () => {
       const article = control.closest('[data-ws-office-notice]');

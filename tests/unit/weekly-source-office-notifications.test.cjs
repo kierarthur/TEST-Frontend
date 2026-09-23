@@ -5,6 +5,7 @@ const test = require('node:test');
 
 const root = path.resolve(__dirname, '..', '..');
 const source = fs.readFileSync(path.join(root, 'js', 'weekly-source', 'office-notifications.js'), 'utf8');
+const importWorkspaceSource = fs.readFileSync(path.join(root, 'js', 'weekly-source', 'import-workspace.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 
 test('Office receives the three approved Weekly Source alert kinds through the authenticated route', () => {
@@ -26,7 +27,9 @@ test('manager responses expose the supplied hours without financial wording', ()
 });
 
 test('alerts open the shared Queries workspace and acknowledgement is only mark-read', () => {
-  assert.match(source, /WeeklySourceImportWorkspace\?\.open\?\.\('queries'\)/);
+  assert.match(importWorkspaceSource, /Object\.defineProperty\(root, 'CloudTMSWeeklySourceImportWorkspaceV1'/);
+  assert.match(source, /CloudTMSWeeklySourceImportWorkspaceV1\?\.open\?\.\('queries'\)/);
+  assert.doesNotMatch(source, /root\.WeeklySourceImportWorkspace\?\.open/);
   assert.match(source, /ACKNOWLEDGE_NOTICE/);
   assert.match(source, />Mark read</);
   assert.doesNotMatch(source, />Clear</);

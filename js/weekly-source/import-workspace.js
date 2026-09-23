@@ -1262,6 +1262,7 @@
     session.loading = false; root.modalCtx = { entity: 'weekly-source-imports', data: {}, weeklySourceState: session };
     if (typeof root.showModal !== 'function') throw new Error('The Imports screen is unavailable.');
     root.showModal('Weekly source imports', tabDescriptors(session.workspace), renderTab, null, false, () => wire(session.activeTab), { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true });
+    if (tab !== 'imports') await currentFrame()?.setTab?.(tab);
   }
 
   return Object.freeze({
