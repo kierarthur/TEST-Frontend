@@ -54,7 +54,10 @@ async function mountInvoiceLines(page: import('@playwright/test').Page, weeklySo
     };
     const invoiceData = {
       invoice,
-      items: [],
+      items: (weeklySource.movable_lines || []).map((line: any) => ({
+        invoice_line_id: line.invoice_line_id,
+        timesheet_id: 'affdf717-9e2d-454c-951f-39f3165a6f2f'
+      })),
       segments_by_timesheet: {},
       segments_on_invoice_by_timesheet: {},
       tsfin_id_by_timesheet_id: {},
@@ -87,7 +90,7 @@ async function mountInvoiceLines(page: import('@playwright/test').Page, weeklySo
 
     const body = document.getElementById('modalBody')!;
     const render = eval('renderInvoiceLinesTable');
-    const paint = () => { body.innerHTML = render(modalCtx, invoiceData, []); };
+    const paint = () => { body.innerHTML = render(modalCtx, invoiceData, invoiceData.items); };
     paint();
     eval('attachInvoiceModalDelegatedHandlers')(modalCtx, body, { rerender: paint, reload: async () => {} });
 
@@ -124,6 +127,13 @@ test.describe('Gate 10 — the Office source invoice line move', () => {
     // A source-fixed expense follows its companion and is never selected alone.
     expect(mounted.followsNotices).toBe(companions.length);
     expect(mounted.text).toContain('Finalised source lines');
+    expect(mounted.text).toContain('09:00–17:00');
+    expect(mounted.text).not.toContain('2026-–2026-');
+    expect(mounted.text).toContain('Source expense');
+    expect(await page.locator('[data-action="inv-open-weekly-source-timesheet"]').count()).toBe(movable.length);
+    const sourceExpenseBreaks = await page.locator('tr[data-presentation-line-id]')
+      .filter({ hasText: 'Source expense' }).locator('td:nth-child(4)').allTextContents();
+    expect(sourceExpenseBreaks).toEqual(Array(sourceExpenseBreaks.length).fill('—'));
     // The superseded vocabulary is gone.
     expect(mounted.text).not.toContain('Finalised source shifts');
     expect(pageErrors).toEqual([]);
@@ -142,6 +152,26 @@ test.describe('Gate 10 — the Office source invoice line move', () => {
       expect(control.hash, 'a 64-character lower-case hex hash').toMatch(/^[0-9a-f]{64}$/);
       expect(control.legacy, 'the work-event unit of movement is gone').toBeNull();
     }
+  });
+
+  test('each source presentation line opens its immutable linked Timesheet', async ({ page }) => {
+    await mountOfficeShell(page);
+    await page.waitForFunction(() => typeof (window as any).CloudTMSWeeklySourcePresentationV1 === 'object', null, { timeout: 30_000 });
+    await page.evaluate(() => {
+      (window as any).__openedSourceTimesheet = null;
+      (window as any).openTimesheet = async (row: any) => {
+        (window as any).__openedSourceTimesheet = row;
+      };
+    });
+    await mountInvoiceLines(page);
+    // This shell mounts the real invoice renderer and delegated handler, but
+    // does not lay out the modal frame for a pointer click.
+    await page.locator('[data-action="inv-open-weekly-source-timesheet"]').first()
+      .evaluate((button: HTMLButtonElement) => button.click());
+    expect(await page.evaluate(() => (window as any).__openedSourceTimesheet)).toEqual({
+      id: 'affdf717-9e2d-454c-951f-39f3165a6f2f',
+      timesheet_id: 'affdf717-9e2d-454c-951f-39f3165a6f2f'
+    });
   });
 
   test('a move posts one presentation identity without a source-group or week restriction', async ({ page }) => {

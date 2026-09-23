@@ -307214,6 +307214,17 @@ function attachInvoiceModalDelegatedHandlers(modalCtx, rootEl, deps) {
           return;
         }
 
+        case 'inv-open-weekly-source-timesheet': {
+          const timesheetId = String(el.getAttribute('data-timesheet-id') || '').trim();
+          if (!timesheetId || invData?.weekly_source_invoice?.is_weekly_source_invoice !== true) return;
+          if (computePendingEdits()) {
+            await invoiceModalUiNotice('Save or cancel your invoice changes before opening the Timesheet.');
+            return;
+          }
+          await openTimesheet({ id: timesheetId, timesheet_id: timesheetId });
+          return;
+        }
+
         case 'inv-move-weekly-source-shift': {
           // Gate 7 item G7-2 (24 section 12; 25 section 8 Removed).  The unit of
           // movement is ONE immutable source presentation line, never a work
@@ -310573,6 +310584,13 @@ function fmtLondonTs(iso) {
 
 
 function renderInvoiceLinesTable(modalCtx, invoiceData, items) {
+  // Source presentation times are timestamp-without-time-zone values.  Their
+  // JSON representation begins with the date, so taking the first five
+  // characters would display "2026-" rather than the worked time.
+  const fmtSourceLocalTime = (value) => {
+    const match = String(value || '').match(/(?:^|[T\s])(\d{2}:\d{2})(?::\d{2})?(?:$|[.Z+-])/);
+    return match ? match[1] : '—';
+  };
   const fmtMoneyLocal = (n) => {
     const x = invoiceModalRound2(Number(n || 0));
     return `£${x.toFixed(2)}`;
@@ -310646,14 +310664,18 @@ function renderInvoiceLinesTable(modalCtx, invoiceData, items) {
     // presentation hash the move owner demands
     // (backend\supabase\repeatable\15092026_1534_weekly_source_invoice_batch_integration_v1.sql:588).
     const sourceRows = Array.isArray(weeklySource.movable_lines) ? weeklySource.movable_lines : [];
+    const timesheetByInvoiceLine = new Map((Array.isArray(items) ? items : [])
+      .map(item => [String(item?.invoice_line_id || '').trim(), String(item?.timesheet_id || '').trim()])
+      .filter(([lineId, timesheetId]) => lineId && timesheetId));
     const destinations = Array.isArray(weeklySource.compatible_destinations)
       ? weeklySource.compatible_destinations : [];
     const canMoveSource = isEditing && weeklySource.editable === true && destinations.length > 0;
     const sourceBody = sourceRows.map((row) => {
       const presentationLineId = String(row?.presentation_line_id || '').trim();
+      const timesheetId = timesheetByInvoiceLine.get(String(row?.invoice_line_id || '').trim()) || '';
       const presentationHash = String(row?.presentation_hash || '').trim().toLowerCase();
-      const start = String(row?.start_at_local || '').slice(0, 5) || '—';
-      const end = String(row?.end_at_local || '').slice(0, 5) || '—';
+      const start = fmtSourceLocalTime(row?.start_at_local);
+      const end = fmtSourceLocalTime(row?.end_at_local);
       const breakMinutes = Math.max(0, Number(row?.break_minutes || 0));
       const selectorId = `weeklySourceMove_${presentationLineId.replace(/[^a-z0-9_-]/gi, '')}`;
       // A source-fixed expense follows its declared companion and is never
@@ -310682,15 +310704,18 @@ function renderInvoiceLinesTable(modalCtx, invoiceData, items) {
               ? '<span class="text-muted small">No compatible unissued invoice</span>'
               : '<span class="text-muted small">Cannot be moved on its own</span>'))
           : '');
-      const hoursCell = (row?.work_date || row?.start_at_local)
+      const isSourceExpense = String(row?.line_kind || '').toUpperCase() === 'SOURCE_FIXED_EXPENSE';
+      const hoursCell = isSourceExpense
+        ? '<span class="text-muted small">Source expense</span>'
+        : (row?.work_date || row?.start_at_local)
         ? esc(`${start}–${end}`)
         : '<span class="text-muted small">Client-provided expense</span>';
       return `<tr data-presentation-line-id="${esc(presentationLineId)}">
         <td>${row?.work_date ? esc(fmtDowDmy(row?.work_date)) : '—'}</td>
         <td>${esc(String(row?.candidate || '—'))}</td>
         <td>${hoursCell}</td>
-        <td>${row?.work_date ? `${breakMinutes.toLocaleString('en-GB')} min` : '—'}</td>
-        <td>${row?.released_after_dispute === true ? '<span class="pill pill-warn">Released after dispute</span>' : '<span class="pill pill-ok">Final source</span>'}${indivisible ? '<span class="pill pill-info">Moves as one line</span>' : ''}</td>
+        <td>${!isSourceExpense && row?.work_date ? `${breakMinutes.toLocaleString('en-GB')} min` : '—'}</td>
+        <td>${row?.released_after_dispute === true ? '<span class="pill pill-warn">Released after dispute</span>' : '<span class="pill pill-ok">Final source</span>'}${indivisible ? '<span class="pill pill-info">Moves as one line</span>' : ''}${timesheetId ? `<button type="button" class="btn btn-sm btn-outline-secondary ms-2" data-action="inv-open-weekly-source-timesheet" data-timesheet-id="${esc(timesheetId)}" aria-label="Open related Timesheet for ${esc(String(row?.candidate || 'candidate'))} on ${esc(fmtDowDmy(row?.work_date))}">View Timesheet</button>` : ''}</td>
         ${isEditing ? `<td class="text-end">${move}</td>` : ''}
       </tr>`;
     }).join('');
