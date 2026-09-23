@@ -92,6 +92,49 @@ test('NHSP upload uses the server-resolved Trust and report scope for acceptance
   }
 });
 
+test('NHSP pre-final upload uses the released-shifts profile without narrowing the file to one Trust', async () => {
+  const originalUpload = globalThis.uploadImportFileToR2;
+  const originalFetch = globalThis.authFetch;
+  let requestBody;
+  try {
+    workspace._session.workspace = fixture({
+      profile: { id: 'NHSP_FINAL_BACKING_V1', label: 'NHSP' },
+      context: {
+        cycle_state: 'Before cutoff',
+        source_group_id: 'group-1', source_cycle_id: 'cycle-1',
+        controls: [{ key: 'cutoff', label: 'Cutoff', value: 'Wed 30 Sep 2026 at 15:00' }],
+      },
+      selected: { source_group_id: 'group-1', source_cycle_id: 'cycle-1', client_id: 'client-1' },
+    });
+    workspace._session.uploadProfileId = 'NHSP_PREFINAL_RELEASED_V1';
+    globalThis.uploadImportFileToR2 = async () => ({ fileKey: 'source/released.xlsx', filename: 'released.xlsx' });
+    globalThis.authFetch = async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          preview: { ok: true, profileId: 'NHSP_PREFINAL_RELEASED_V1' },
+          accept_context: {
+            source_group_id: 'group-1', source_cycle_id: 'cycle-1',
+            report_scope_id: null, client_id: null, authority_scope_version: 1,
+          },
+        }),
+      };
+    };
+    await workspace.uploadSource({ name: 'released.xlsx' });
+    assert.equal(requestBody.profile_id, 'NHSP_PREFINAL_RELEASED_V1');
+    assert.equal(requestBody.parser_options.profileId, 'NHSP_PREFINAL_RELEASED_V1');
+    assert.equal(requestBody.client_id, null);
+    assert.equal(workspace._session.workspace.selected.client_id, '');
+    assert.equal(workspace._session.workspace.selected.report_scope_id, '');
+  } finally {
+    workspace._session.uploadProfileId = '';
+    globalThis.uploadImportFileToR2 = originalUpload;
+    globalThis.authFetch = originalFetch;
+  }
+});
+
 function fixture(overrides = {}) {
   return workspace.normaliseWorkspace({
     contract: workspace.CONTRACT,

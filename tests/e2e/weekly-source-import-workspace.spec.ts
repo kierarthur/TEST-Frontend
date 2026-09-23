@@ -170,6 +170,29 @@ test('Imports opens as the shared weekly-source landing view', async ({ page }, 
   await page.screenshot({ path: testInfo.outputPath('imports-tab.png'), fullPage: true });
 });
 
+test('NHSP imports clearly select the exact pre-final or final file journey', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1120, height: 900 });
+  await loadFoundation(page);
+  await page.evaluate(async (workspaceFixture) => {
+    const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.profile = { id: 'NHSP_FINAL_BACKING_V1', label: 'NHSP', finalise_label: 'Finalise report' };
+    payload.context.cycle_state = 'Before cutoff';
+    payload.context.controls[0].options[0].label = 'NHSP';
+    const win = window as any;
+    win.authFetch = async () => ({ ok: true, json: async () => payload });
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open();
+  }, fixtures.workspace);
+
+  const fileType = page.getByLabel('File type');
+  await expect(fileType).toBeVisible();
+  await expect(fileType).toHaveValue('NHSP_PREFINAL_RELEASED_V1');
+  await expect(fileType.locator('option')).toHaveText(['Previously released shifts', 'Final backing report']);
+  await fileType.selectOption('NHSP_FINAL_BACKING_V1');
+  await expect(fileType).toHaveValue('NHSP_FINAL_BACKING_V1');
+  await expect(page.getByLabel('Source', { exact: true })).toHaveText(/NHSP/);
+  await page.screenshot({ path: testInfo.outputPath('nhsp-import-file-type.png'), fullPage: true });
+});
+
 test('switching tabs fetches the selected tab rows instead of reusing a partial workspace', async ({ page }) => {
   await page.setViewportSize({ width: 1120, height: 900 });
   await loadFoundation(page);

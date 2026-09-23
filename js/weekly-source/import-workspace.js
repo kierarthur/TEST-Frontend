@@ -45,6 +45,10 @@
   const RATE_WARNING_CONTRACT = 'NHSP_RATE_WARNING_WORKSPACE_V1';
   const RATE_WARNING_PHASES = new Set(['PREFINAL', 'FINAL_AWAITING_ACCEPTANCE', 'READY']);
   const RATE_WARNING_ACTION = 'ACCEPT_NHSP_SOURCE_CHARGES';
+  const NHSP_UPLOAD_PROFILES = Object.freeze([
+    Object.freeze({ id: 'NHSP_PREFINAL_RELEASED_V1', label: 'Previously released shifts' }),
+    Object.freeze({ id: 'NHSP_FINAL_BACKING_V1', label: 'Final backing report' })
+  ]);
   const MUTATING_ACTIONS = new Set([
     'Review', 'Review pricing', 'Correct final source', 'Remind candidate', 'Accept system hours',
     'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band',
@@ -395,6 +399,16 @@
     }).join('');
     const journeyPanel = journey.title ? `<section class="ws-import-journey" data-ws-import-journey="${escapeHtml(journey.authority_mode)}"><div class="ws-import-journey__heading"><div><span>Journey</span><strong>${escapeHtml(journey.title)}</strong></div>${journey.attention_count ? `<span class="ws-status ws-status--warning">${journey.attention_count} need attention</span>` : '<span class="ws-status ws-status--positive">Up to date</span>'}</div>${journey.body ? `<p>${escapeHtml(journey.body)}</p>` : ''}${journey.authority_mode === 'TIMESHEET_AUTHORITY' ? `<div class="ws-inner-tabs" role="tablist"><button type="button" role="tab" aria-selected="true">Needs attention (${journey.attention_count})</button><button type="button" role="tab" aria-selected="false">Ready</button><button type="button" role="tab" aria-selected="false">History</button></div><div class="ws-inner-scroll"><table class="grid mini ws-inner-grid"><thead><tr><th><input type="checkbox" data-ws-import-attention-header aria-label="Select all visible rows"></th><th>Candidate</th><th>Day/date</th><th>What needs attention</th><th>Reference</th><th>Status</th><th>Action</th></tr></thead><tbody>${attentionRows || '<tr><td colspan="7" class="ws-empty">No Timesheet checks need attention.</td></tr>'}</tbody></table></div><div class="ws-import-journey__actions"><span data-ws-import-attention-count>0 selected</span><button type="button" class="btn primary" data-ws-import-email-manager disabled>Email manager</button></div>` : ''}</section>` : '';
     const isNhsp = workspace.profile.id.startsWith('NHSP_');
+    const uploadProfileId = isNhsp
+      ? (NHSP_UPLOAD_PROFILES.some((profile) => profile.id === state.uploadProfileId)
+        ? state.uploadProfileId
+        : (workspace.context.cycle_state === 'Before cutoff'
+          ? 'NHSP_PREFINAL_RELEASED_V1'
+          : 'NHSP_FINAL_BACKING_V1'))
+      : workspace.profile.id;
+    const uploadProfileControl = isNhsp
+      ? `<label>File type<select data-ws-upload-profile aria-label="File type">${NHSP_UPLOAD_PROFILES.map((profile) => `<option value="${profile.id}"${profile.id === uploadProfileId ? ' selected' : ''}>${profile.label}</option>`).join('')}</select></label>`
+      : '';
     const rows = workspace.imports.rows.map((rowValue) => {
       const row = asObject(rowValue);
       const detail = {
@@ -416,7 +430,7 @@
       ? [['File','file'],['Uploaded','uploaded'],['Rows','rows'],['Report','report'],['Cutoff','cutoff'],['Status','status'],['Final source','final_source']]
       : [['File','file'],['Uploaded','uploaded'],['Rows','rows'],['Coverage','coverage'],['Status','status'],['Final source','final_source']];
     const stale = workspace.imports.stale ? '<div class="ws-notice ws-notice--warning" role="status"><span>This information has changed. Recheck before continuing.</span></div>' : '';
-    return `${stale}${journeyPanel}<div class="ws-toolbar"><button type="button" class="btn primary" data-ws-upload${workspace.imports.stale ? ' disabled title="Recheck before uploading another source file."' : ''}>Upload source file</button><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn btn-outline" data-ws-daily>Daily rota check</button><input type="file" data-ws-upload-input hidden accept=".xlsx,.xls,.csv,.htm,.html"><input type="file" data-ws-daily-input hidden accept=".xlsx,.xls,.csv"></div>${renderMobileSort(sortable, sort)}<div class="ws-scroll" data-ws-scroll><table class="grid mini ws-grid"><thead><tr>${sortable.map(([label,key]) => renderSortHeader(label,key,sort)).join('')}<th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="${sortable.length + 1}" class="ws-empty">Nothing matches the current filters.</td></tr>`}</tbody></table><div data-ws-sentinel></div></div><div class="ws-sticky-footer"><span>${workspace.imports.total_count} source file${workspace.imports.total_count === 1 ? '' : 's'}</span></div>`;
+    return `${stale}${journeyPanel}<div class="ws-toolbar">${uploadProfileControl}<button type="button" class="btn primary" data-ws-upload${workspace.imports.stale ? ' disabled title="Recheck before uploading another source file."' : ''}>Upload source file</button><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn btn-outline" data-ws-daily>Daily rota check</button><input type="file" data-ws-upload-input hidden accept=".xlsx,.xls,.csv,.htm,.html"><input type="file" data-ws-daily-input hidden accept=".xlsx,.xls,.csv"></div>${renderMobileSort(sortable, sort)}<div class="ws-scroll" data-ws-scroll><table class="grid mini ws-grid"><thead><tr>${sortable.map(([label,key]) => renderSortHeader(label,key,sort)).join('')}<th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="${sortable.length + 1}" class="ws-empty">Nothing matches the current filters.</td></tr>`}</tbody></table><div data-ws-sentinel></div></div><div class="ws-sticky-footer"><span>${workspace.imports.total_count} source file${workspace.imports.total_count === 1 ? '' : 's'}</span></div>`;
   }
 
   function renderTick(value, yesLabel, noLabel) {
@@ -777,7 +791,7 @@
       history: { key: 'when', direction: 'desc' }
     },
     scrollByTab: Object.create(null), finaliseRetry: null, loadedTab: '',
-    rateWarningSelection: new Set(), expandedRateWarning: '',
+    rateWarningSelection: new Set(), expandedRateWarning: '', uploadProfileId: '',
     groupSelection: { mode: 'NONE', ids: new Set(), exclusions: new Set() }, shiftSelections: new Map(), observer: null
   };
 
@@ -821,6 +835,20 @@
   function pageFor(tab) { return tab === 'finalise' ? session.workspace?.finalise?.[session.workspace.finalise.active_list] : session.workspace?.[tab]; }
   function repaint() { const frame = currentFrame(); if (frame?.setTab) { frame.tabs = tabDescriptors(session.workspace); Promise.resolve(frame.setTab(session.activeTab)).catch(() => {}); } }
 
+  function defaultUploadProfileId(workspace) {
+    if (!workspace?.profile?.id?.startsWith('NHSP_')) return asText(workspace?.profile?.id);
+    return workspace.context.cycle_state === 'Before cutoff'
+      ? 'NHSP_PREFINAL_RELEASED_V1'
+      : 'NHSP_FINAL_BACKING_V1';
+  }
+
+  function syncUploadProfile(workspace) {
+    const validNhspSelection = NHSP_UPLOAD_PROFILES.some((profile) => profile.id === session.uploadProfileId);
+    if (!workspace.profile.id.startsWith('NHSP_') || !validNhspSelection) {
+      session.uploadProfileId = defaultUploadProfileId(workspace);
+    }
+  }
+
   async function loadWorkspace(tab = session.activeTab, append = false) {
     const sequence = ++session.requestSequence;
     session.loading = !append; session.error = ''; if (session.workspace && !append) repaint();
@@ -834,7 +862,7 @@
         const keys = new Set(current.rows.map((row) => asText(row.row_key || row.group_key || row.id)));
         nextPage.rows = [...current.rows, ...nextPage.rows.filter((row) => { const key = asText(row.row_key || row.group_key || row.id); if (!key || keys.has(key)) return false; keys.add(key); return true; })];
       }
-      session.workspace = next; session.loadedTab = tab; session.loading = false;
+      session.workspace = next; syncUploadProfile(next); session.loadedTab = tab; session.loading = false;
     } catch (error) { if (sequence !== session.requestSequence) return; session.loadedTab = tab; session.loading = false; session.error = friendlyWorkspaceError(error); }
     repaint();
   }
@@ -930,10 +958,21 @@
     updateSelection(host);
   }
 
+  function selectedUploadProfileId() {
+    const workspace = session.workspace || emptyWorkspace();
+    if (!workspace.profile.id.startsWith('NHSP_')) return workspace.profile.id;
+    if (NHSP_UPLOAD_PROFILES.some((profile) => profile.id === session.uploadProfileId)) return session.uploadProfileId;
+    return workspace.context.cycle_state === 'Before cutoff'
+      ? 'NHSP_PREFINAL_RELEASED_V1'
+      : 'NHSP_FINAL_BACKING_V1';
+  }
+
   async function uploadSource(file) {
     if (!file || typeof root.uploadImportFileToR2 !== 'function') throw new Error('File upload is unavailable.');
+    const profileId = selectedUploadProfileId();
+    const prefinalNhsp = profileId === 'NHSP_PREFINAL_RELEASED_V1';
     const stored = await root.uploadImportFileToR2(file);
-    const preview = await requestJson(ENDPOINTS.preview, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ file_key: stored.fileKey, original_filename: stored.filename, source_group_id: session.workspace.selected.source_group_id, source_cycle_id: session.workspace.selected.source_cycle_id, client_id: session.workspace.selected.client_id, parser_options: { profileId: session.workspace.profile.id } }) });
+    const preview = await requestJson(ENDPOINTS.preview, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ file_key: stored.fileKey, original_filename: stored.filename, source_group_id: session.workspace.selected.source_group_id, source_cycle_id: session.workspace.selected.source_cycle_id, client_id: prefinalNhsp ? null : session.workspace.selected.client_id, profile_id: profileId, parser_options: { profileId } }) });
     const serverContext = asObject(preview?.accept_context);
     const controlValue = (key) => asText(session.workspace.context.controls.find((control) => control.key === key)?.value);
     const acceptContext = {
@@ -941,8 +980,8 @@
       original_filename: stored.filename,
       source_group_id: asText(serverContext.source_group_id || session.workspace.selected.source_group_id),
       source_cycle_id: asText(serverContext.source_cycle_id || session.workspace.selected.source_cycle_id),
-      client_id: asText(serverContext.client_id || session.workspace.selected.client_id),
-      report_scope_id: asText(serverContext.report_scope_id || session.workspace.selected.report_scope_id),
+      client_id: asText(Object.hasOwn(serverContext, 'client_id') ? serverContext.client_id : session.workspace.selected.client_id),
+      report_scope_id: asText(Object.hasOwn(serverContext, 'report_scope_id') ? serverContext.report_scope_id : session.workspace.selected.report_scope_id),
       authority_scope_version: serverContext.authority_scope_version,
       cutoff: controlValue('cutoff'),
       profile_id: asText(preview?.preview?.profileId || session.workspace.profile.id),
@@ -971,16 +1010,21 @@
   }
 
   function bindCommon(host) {
+    host.querySelector('[data-ws-upload-profile]')?.addEventListener('change', (event) => {
+      session.uploadProfileId = asText(event.target.value);
+    });
     host.querySelectorAll('[data-ws-context]').forEach((control) => control.addEventListener('change', () => {
       const keyMap = { source_group: 'source_group_id', cycle: 'source_cycle_id', client: 'client_id' };
       const key = keyMap[control.dataset.wsContext] || control.dataset.wsContext;
       if (Object.prototype.hasOwnProperty.call(session.workspace.selected, key)) session.workspace.selected[key] = control.value;
       if (key === 'source_group_id') {
+        session.uploadProfileId = '';
         session.workspace.selected.source_cycle_id = '';
         session.workspace.selected.client_id = '';
         session.workspace.selected.report_scope_id = '';
         session.workspace.selected.projection_publication_id = '';
       } else if (key === 'source_cycle_id') {
+        session.uploadProfileId = '';
         session.workspace.selected.client_id = '';
         session.workspace.selected.report_scope_id = '';
         session.workspace.selected.projection_publication_id = '';
@@ -1191,6 +1235,8 @@
     session.activeTab = tab; session.loading = true; session.error = '';
     try {
       session.workspace = normaliseWorkspace(await requestJson(`${ENDPOINTS.workspace}?tab=${encodeURIComponent(tab)}`));
+      session.uploadProfileId = '';
+      syncUploadProfile(session.workspace);
       session.loadedTab = tab;
     } catch (error) {
       session.workspace = emptyWorkspace(); session.loadedTab = tab; session.error = friendlyWorkspaceError(error);
