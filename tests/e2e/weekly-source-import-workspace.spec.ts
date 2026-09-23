@@ -479,7 +479,7 @@ test('Weekly Source sort headings stay flat inside the real modern Office modal'
   await page.evaluate(() => {
     const modal = document.getElementById('modal')!;
     modal.classList.add('ctms-modern-modal');
-    modal.innerHTML = '<div id="modalBody"><table class="grid mini ws-grid ws-import-grid"><thead><tr><th><button type="button" data-ws-sort="uploaded">Uploaded <span aria-hidden="true">↓</span></button></th><th>Rows</th></tr></thead><tbody><tr><td>NHSP_STAGE8_PREVIOUSLY_RELEASED_KIER_ARTHUR_2026-09-08_FORMAT_PRESERVED.xlsx</td><td>2</td></tr></tbody></table></div>';
+    modal.innerHTML = '<div id="modalBody"><table class="grid mini ws-grid ws-import-grid"><thead><tr><th><button type="button" data-ws-sort="uploaded">Uploaded <span aria-hidden="true">↓</span></button></th><th>Rows</th></tr></thead><tbody><tr><td><span class="ws-import-filename" title="NHSP_STAGE8_PREVIOUSLY_RELEASED_KIER_ARTHUR_2026-09-08_FORMAT_PRESERVED.xlsx">NHSP_STAGE8_PREVIOUSLY_RELEASED_KIER_ARTHUR_2026-09-08_FORMAT_PRESERVED.xlsx</span></td><td>2</td></tr></tbody></table></div>';
     document.getElementById('modalBack')!.style.display = 'flex';
     (window as any).__applyCloudTmsModalModernisation();
   });
@@ -491,13 +491,17 @@ test('Weekly Source sort headings stay flat inside the real modern Office modal'
     return { border: style.borderTopWidth, background: style.backgroundColor, radius: style.borderRadius, padding: style.paddingLeft };
   });
   expect(appearance).toEqual({ border: '0px', background: 'rgba(0, 0, 0, 0)', radius: '0px', padding: '0px' });
-  const filename = await page.locator('#modal .ws-import-grid tbody td:first-child').evaluate((node) => ({
+  const filename = await page.locator('#modal .ws-import-filename').evaluate((node) => ({
     cellWidth: node.getBoundingClientRect().width,
     contentWidth: node.scrollWidth,
-    wrapping: getComputedStyle(node).overflowWrap
+    wrapping: getComputedStyle(node).overflowWrap,
+    lineClamp: getComputedStyle(node).webkitLineClamp,
+    fullName: node.getAttribute('title')
   }));
   expect(filename.contentWidth).toBeLessThanOrEqual(Math.ceil(filename.cellWidth));
   expect(filename.wrapping).toBe('anywhere');
+  expect(filename.lineClamp).toBe('2');
+  expect(filename.fullName).toContain('FORMAT_PRESERVED.xlsx');
 });
 
 test('before cutoff deliberately locks finalisation against the shared modal control reset', async ({ page }) => {

@@ -425,7 +425,8 @@
       const scope = isNhsp
         ? `<td data-label="Report">${escapeHtml(asText(row.report) || 'Not confirmed')}</td><td data-label="Cutoff">${escapeHtml(asText(row.cutoff) || 'Not confirmed')}</td>`
         : `<td data-label="Coverage">${escapeHtml(asText(row.coverage) || '—')}</td>`;
-      return `<tr><td data-label="File">${escapeHtml(asText(row.file) || '—')}</td><td data-label="Uploaded">${escapeHtml(asText(row.uploaded) || '—')}</td><td data-label="Rows">${escapeHtml(asText(row.rows) || '0')}</td>${scope}<td data-label="Status">${renderStatus(row.status)}</td><td data-label="Final source">${escapeHtml(asText(row.final_source) || '—')}</td><td data-label="Actions" class="ws-actions">${renderActions(actions, workspace.imports.stale, asText(row.row_key || row.file))}</td></tr>`;
+      const filename = escapeHtml(asText(row.file) || '—');
+      return `<tr><td data-label="File"><span class="ws-import-filename" title="${filename}">${filename}</span></td><td data-label="Uploaded">${escapeHtml(asText(row.uploaded) || '—')}</td><td data-label="Rows">${escapeHtml(asText(row.rows) || '0')}</td>${scope}<td data-label="Status">${renderStatus(row.status)}</td><td data-label="Final source">${escapeHtml(asText(row.final_source) || '—')}</td><td data-label="Actions" class="ws-actions">${renderActions(actions, workspace.imports.stale, asText(row.row_key || row.file))}</td></tr>`;
     }).join('');
     const sort = state.sort?.imports || {};
     const sortable = isNhsp
