@@ -17,7 +17,7 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   const currentMainAsset = mainAsset.replace(
     '&bulk-expense-review=20260909-r1',
     '&bulk-expense-review=20260909-r12&planned-week-delete=20260910-r2'
-  ) + '&weekly-source-entry=20260922-r3';
+  ) + '&weekly-source-entry=20260922-r3&weekly-source-live-category=20260923-r1&weekly-source-line-evidence=20260924-r1';
   assert.ok(html.includes(`<script src="./js/${currentMainAsset}"></script>`));
   assert.match(html, /invoice-batch-modal\.css\?v=20260729-invoice-v8-flat-table-r5/);
   assert.match(html, /invoice-diagnostic-catalog\.js\?v=20260803-invoice-reference-policy-r2/);
@@ -38,7 +38,7 @@ const mainAsset = 'main.js?v=20260730-invoice-refs-ward-r10&banking-owner-recove
   assert.match(html, /summary-modernisation\.css\?v=20260905-continuous-grid-r4/);
   assert.match(html, /summary-continuous-grid-v1\.js\?v=20260905-r8/);
   assert.match(html, /summary-modernisation\.js\?v=20260822-r2/);
-  assert.match(html, /modal-modernisation\.js\?v=20260907-timesheet-layout-r1/);
+  assert.match(html, /modal-modernisation\.js\?v=20260923-timesheet-layout-r3/);
   assert.match(html, /record-modal-layout\.css\?v=20260829-rate-picker-r1/);
   assert.match(html, /candidate-rate-client-picker=20260829-r2/);
   assert.match(html, /banking-modal-v2=20260830-r5/);
